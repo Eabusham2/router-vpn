@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"router-vpn/internal/mobiletor"
 	"router-vpn/internal/multihoprelay"
 	"strings"
 	"time"
@@ -23,6 +24,23 @@ func (relayCheckOnlyRunner) Start(context.Context, []byte, multihoprelay.Lease) 
 // checkRelayRegistry validates an operator-staged registry with the real pinned
 // core but does not open a tunnel, change routes, or modify live agent state.
 func checkRelayRegistry(registryPath, agentPath string) (int, error) {
+	return checkRelayRegistryWithTorSources(registryPath, agentPath, serverTorSourcesDirectory)
+}
+
+func checkRelayRegistryWithTorSources(registryPath, agentPath, torSources string) (int, error) {
+	return checkRelayRegistryWithPaths(registryPath, agentPath, relayRegistryCheckPaths{
+		torSources: torSources, packagePrefix: "/usr/local", core: "/usr/local/bin/sing-box", temporary: "/run/router-vpn-relay-checks",
+	})
+}
+
+// Only the source directory can be supplied by an operator staging command.
+// The production executable/package paths remain fixed; tests can exercise the
+// identical checker against a real isolated build without installing it.
+type relayRegistryCheckPaths struct {
+	torSources, packagePrefix, core, temporary string
+}
+
+func checkRelayRegistryWithPaths(registryPath, agentPath string, paths relayRegistryCheckPaths) (int, error) {
 	registry, err := readRelayRegistry(registryPath)
 	if err != nil {
 		return 0, errors.New("private staged registry could not be read")
@@ -54,7 +72,18 @@ func checkRelayRegistry(registryPath, agentPath string) (int, error) {
 		return 0, err
 	}
 	defer manager.Close(context.Background())
-	root := "/run/router-vpn-relay-checks"
+	var torBinary *mobiletor.ServerTorBinary
+	torSources := &relayTorExecRunner{sources: paths.torSources}
+	if len(registry.TorExits) != 0 {
+		torBinary, err = mobiletor.VerifyServerTorPackage(paths.packagePrefix)
+		if err != nil {
+			return 0, errors.New("installed native Tor relay package is unavailable")
+		}
+		if info, err := os.Lstat(paths.torSources); err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0700 {
+			return 0, errors.New("private server Tor source directory is unavailable")
+		}
+	}
+	root := paths.temporary
 	if err = validatePrivilegedStateParent(filepath.Join(root, "plan")); err != nil {
 		return 0, err
 	}
@@ -72,22 +101,45 @@ func checkRelayRegistry(registryPath, agentPath string) (int, error) {
 		if err != nil {
 			return 0, err
 		}
-		path := filepath.Join(dir, "sing-box.json")
-		if err = atomicWritePrivilegedState(path, body); err != nil {
+		if err = checkNativeRelayConfig(dir, paths.core, body); err != nil {
 			return 0, err
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		cmd := exec.CommandContext(ctx, "/usr/local/bin/sing-box", "check", "-c", path)
-		cmd.Dir = dir
-		cmd.Stdout = io.Discard
-		cmd.Stderr = io.Discard
-		err = cmd.Run()
-		cancel()
+	}
+	for _, source := range registry.TorExits {
+		policy, err := torSources.source(source, entry.NodeID)
 		if err != nil {
-			return 0, errors.New("bundled relay core rejected a paired exit configuration")
+			return 0, err
+		}
+		// These credentials exist only in a temporary parser input. No SOCKS
+		// listener, Tor child or lease is created by the check command.
+		graph, err := policy.NativeConfig(19950, strings.Repeat("2", 64), strings.Repeat("3", 64))
+		if err != nil || checkNativeRelayConfig(dir, paths.core, []byte(graph)) != nil {
+			return 0, errors.New("bundled relay core rejected a private server Tor configuration")
 		}
 	}
-	return len(registry.Exits), nil
+	for _, source := range registry.TorExits {
+		if _, err := torSources.source(source, entry.NodeID); err != nil || !torBinary.Current() {
+			return 0, errors.New("private server Tor source or package changed during validation")
+		}
+	}
+	return len(registry.Exits) + len(registry.TorExits), nil
+}
+
+func checkNativeRelayConfig(dir, core string, body []byte) error {
+	path := filepath.Join(dir, "sing-box.json")
+	if err := atomicWritePrivilegedState(path, body); err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, core, "check", "-c", path)
+	cmd.Dir = dir
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	if cmd.Run() != nil {
+		return errors.New("bundled relay core rejected a paired exit configuration")
+	}
+	return nil
 }
 
 // Offline checks must use the same layer identity required by a live lease.

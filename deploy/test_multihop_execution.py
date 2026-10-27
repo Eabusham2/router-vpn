@@ -22,6 +22,7 @@ pairing = module('relay_pairing', ROOT/'server/scripts/provision-multihop-relays
 # Keep the new exact private packet pairing gate in the existing release
 # workflow's executable entry point; fixture generation uses real X25519 Go.
 PacketPairing = module('packet_pairing_tests', ROOT/'deploy/test_external_packet_pairing.py').PacketPairing
+ServerTorPairing = module('server_tor_pairing_tests', ROOT/'deploy/test_server_tor_pairing.py').ServerTorPairing
 
 def fixture():
     transport = dict(type='shadowsocks',tag='proxy',server='192.0.2.2',server_port=8388,

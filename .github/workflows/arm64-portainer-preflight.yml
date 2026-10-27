@@ -133,6 +133,13 @@ jobs:
             /usr/local/share/router-vpn/tor/verify.py --prefix /usr/local \
             --platform linux/arm64 --offline-self-test
 
+      - name: Verify installed private Tor provisioning without network access
+        run: |
+          docker run --rm --network none --platform linux/arm64 \
+            --mount "type=bind,src=${PWD},dst=/routervpn-source,readonly" \
+            --entrypoint python3 router-vpn-preflight-agent:arm64 \
+            /routervpn-source/deploy/test_server_tor_pairing.py --installed -v
+
       - name: Prove benchmark and Emergency Stop tooling in ARM64 agent
         run: |
           set -euo pipefail

@@ -26,6 +26,7 @@ import tempfile
 HERE = Path(__file__).resolve().parent
 # Match multihoprelay.MaxRegistryBytes; lease HTTP limits remain unchanged.
 MAX_REGISTRY_BYTES = 32 << 20
+MAX_TOR_SOURCE_BYTES = 64 << 10
 
 def helpers():
     writer = runpy.run_path(str(HERE/'atomic-private-write.py'))
@@ -647,51 +648,291 @@ def registry_bytes(registry):
         raise ValueError('paired registry exceeds its private source bound')
     return body
 
+def compile_tor_source(raw, alias, node):
+    """Only the shared worker compiler decides bridge/DNS policy and hashes."""
+    bad = ValueError('private Tor source failed shared policy compilation')
+    try:
+        source = decode(raw)
+        payload = json.dumps(dict(entry_node_id=node, source=source), allow_nan=False).encode('utf-8')
+        if len(payload) > 128 << 10:
+            raise bad
+        result = subprocess.run(['/usr/local/bin/router-vpn-agent', 'compile-server-tor-source'],
+                                input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                check=True, timeout=20)
+        if not result.stdout or len(result.stdout) > 256 << 10:
+            raise bad
+        compiled = decode(result.stdout)
+        if not isinstance(compiled, dict) or set(compiled) != {'source_json', 'reference'}:
+            raise bad
+        reference, canonical = compiled['reference'], compiled['source_json']
+        if not isinstance(reference, dict) or set(reference) != {'id', 'mode', 'source_sha256', 'dns_policy_sha256'} or not isinstance(canonical, str):
+            raise bad
+        body = canonical.encode('utf-8')
+        if not body or len(body) > MAX_TOR_SOURCE_BYTES or reference.get('id') != alias or reference.get('mode') not in ('tor', 'tor-bridge'):
+            raise bad
+        if any(not isinstance(reference.get(key), str) or not re.fullmatch('[0-9a-f]{64}', reference[key]) for key in ('source_sha256', 'dns_policy_sha256')):
+            raise bad
+        captured = decode(body)
+        if (not isinstance(captured, dict) or captured.get('id') != alias or captured.get('entry_node_id') != node or
+                captured.get('mode') != reference['mode'] or hashlib.sha256(body).hexdigest() != reference['source_sha256']):
+            raise bad
+        return reference, body
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, ValueError, TypeError, KeyError, UnicodeError):
+        raise bad from None
+
+def private_snapshot(path, limit, *, optional=False):
+    """Capture the exact owned file; replacements with equal bytes are stale."""
+    path = Path(os.path.abspath(path))
+    read, _, _ = helpers()
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        if optional:
+            return None
+        raise
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_uid != os.geteuid() or stat.S_IMODE(before.st_mode) != 0o600:
+        raise ValueError('private pairing input must be an owned mode-0600 regular file')
+    body = read(path, limit, private=True)
+    after = path.lstat()
+    identity = lambda info: (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_mode, info.st_uid, info.st_nlink)
+    if identity(before) != identity(after):
+        raise ValueError('private pairing input changed while being captured')
+    return path, body, after, limit
+
+def require_snapshot(snapshot):
+    current = private_snapshot(snapshot[0], snapshot[3])
+    if current[1] != snapshot[1] or not os.path.samestat(current[2], snapshot[2]) or current[2].st_mtime_ns != snapshot[2].st_mtime_ns or current[2].st_ctime_ns != snapshot[2].st_ctime_ns:
+        raise ValueError('private pairing input changed during native validation')
+
+def source_directory(path, *, create=False):
+    path = Path(os.path.abspath(path))
+    _, _, parent = helpers()
+    if create:
+        parent(path / 'source.json')
+    else:
+        for current in (path, *path.parents):
+            try:
+                info = current.lstat()
+            except FileNotFoundError:
+                continue
+            if not stat.S_ISDIR(info.st_mode):
+                raise ValueError('Tor source path must not traverse linked or non-directory ancestors')
+        # A missing directory is valid only until its first source is published.
+        if not path.exists() and not path.is_symlink():
+            return path
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise ValueError('Tor source directory must be an owned mode-0700 directory')
+    return path
+
+def source_directory_snapshot(path):
+    source_directory(path)
+    try:
+        return path.lstat()
+    except FileNotFoundError:
+        return None
+
+def require_source_directory(path, before):
+    current = source_directory_snapshot(path)
+    if before is None and current is not None or before is not None and (current is None or not os.path.samestat(before, current)):
+        raise ValueError('Tor source directory changed during native validation')
+
+def stage_tor_sources(registry, sources, stage, addition):
+    references = registry.get('tor_exits', [])
+    if not references:
+        return {}, []
+    sources = source_directory(sources)
+    _, write, _ = helpers()
+    stage.mkdir(mode=0o700)
+    bodies, snapshots = {}, []
+    for reference in references:
+        digest = reference.get('source_sha256') if isinstance(reference, dict) else None
+        if not isinstance(digest, str) or not re.fullmatch('[0-9a-f]{64}', digest):
+            raise ValueError('Tor registry source reference is not canonical')
+        if digest in bodies:
+            continue
+        selected = addition is not None and digest == addition[0]['source_sha256']
+        snapshot = private_snapshot(sources / (digest + '.json'), MAX_TOR_SOURCE_BYTES, optional=selected)
+        if selected:
+            body = addition[1]
+            if snapshot is not None and snapshot[1] != body:
+                raise ValueError('existing immutable Tor source differs from its canonical selection')
+        else:
+            body = snapshot[1]
+        if snapshot is not None:
+            snapshots.append(snapshot)
+        bodies[digest] = body
+        write(stage / (digest + '.json'), body)
+    return bodies, snapshots
+
+def publish_tor_source(path, body):
+    """Publish one immutable hash-addressed source without replacing any file."""
+    path = Path(os.path.abspath(path))
+    source_directory(path.parent, create=True)
+    descriptor, name = tempfile.mkstemp(prefix='.tor-source-', dir=path.parent)
+    temporary = Path(name)
+    owned, linked = os.fstat(descriptor), False
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, 'wb') as stream:
+            stream.write(body)
+            stream.flush()
+            os.fsync(stream.fileno())
+        owned = temporary.lstat()
+        # The complete source becomes visible before the registry references it.
+        # link() has no replacement mode, unlike a general atomic file writer.
+        os.link(temporary, path, follow_symlinks=False)
+        linked = True
+        if not os.path.samestat(owned, path.lstat()):
+            raise ValueError('Tor source ownership changed during publication')
+        temporary.unlink()
+        directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            try:
+                os.fsync(directory)
+            except OSError:
+                # As with the registry writer, some filesystems do not expose
+                # directory fsync. The exact complete inode is already linked.
+                pass
+        finally:
+            os.close(directory)
+        return path.lstat()
+    except BaseException:
+        if linked:
+            remove_owned_tor_source(path, owned)
+        raise
+    finally:
+        try:
+            if os.path.samestat(temporary.lstat(), owned):
+                temporary.unlink()
+        except FileNotFoundError:
+            pass
+
+def remove_owned_tor_source(path, identity):
+    try:
+        current = path.lstat()
+    except FileNotFoundError:
+        return
+    if stat.S_ISREG(current.st_mode) and os.path.samestat(current, identity) and current.st_size == identity.st_size and current.st_mtime_ns == identity.st_mtime_ns:
+        path.unlink()
+
+def registry_unchanged(path, snapshot):
+    try:
+        if snapshot is not None:
+            require_snapshot(snapshot)
+        elif path.exists() or path.is_symlink():
+            return False
+        return True
+    except (OSError, ValueError, RuntimeError):
+        return False
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--bundle', type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument('--bundle', type=Path)
+    source.add_argument('--tor-source', type=Path, help='private data-only Tor source; shared native compiler preserves its ID and selected DNS')
     parser.add_argument('--exit-id', required=True, help='ID used for this exit in client profiles')
     parser.add_argument('--bundle-profile')
     parser.add_argument('--server-peer-profile', type=Path, help='separate private WG/AWG/OpenVPN server peer JSON; never a client bundle')
     parser.add_argument('--agent-config', type=Path, default=Path('/etc/router-vpn/router-agent.json'))
     parser.add_argument('--registry', type=Path, default=Path('/etc/router-vpn/multihop-relays.json'))
+    parser.add_argument('--tor-sources', type=Path, help='private immutable source directory; defaults to tor-sources beside the registry')
+    parser.add_argument('--dry-run', type=Path, help='write a private validated review plan to this explicit file; leave the registry and sources unchanged')
     parser.add_argument('--listen-ip', required=True, help='entry tunnel IP used by clients for the Router API')
     args = parser.parse_args()
-    read, write, _ = helpers()
+    read, write, parent = helpers()
+    args.registry = Path(os.path.abspath(args.registry))
+    args.agent_config = Path(os.path.abspath(args.agent_config))
+    sources = Path(os.path.abspath(args.tor_sources or args.registry.parent / 'tor-sources'))
+    if args.tor_source is not None and (args.bundle_profile is not None or args.server_peer_profile is not None):
+        raise ValueError('Tor source pairing does not accept a bundle profile or provider peer')
+    if args.dry_run is not None:
+        args.dry_run = Path(os.path.abspath(args.dry_run))
+        protected = [args.registry, args.agent_config, args.bundle, args.tor_source, args.server_peer_profile]
+        if args.dry_run in [Path(os.path.abspath(path)) for path in protected if path is not None] or args.dry_run == sources or sources in args.dry_run.parents:
+            raise ValueError('dry-run output must be separate from live and input files')
+        parent(args.dry_run)
+    agent_snapshot = private_snapshot(args.agent_config, 1 << 20)
+    agent = decode(agent_snapshot[1])
+    input_snapshot = private_snapshot(args.tor_source, MAX_TOR_SOURCE_BYTES) if args.tor_source is not None else None
+    addition = compile_tor_source(input_snapshot[1], args.exit_id, agent.get('node_id')) if input_snapshot is not None else None
     server_peer = decode(read(args.server_peer_profile, 512 << 10)) if args.server_peer_profile is not None else None
-    entries = pair(decode(read(args.bundle, 32 << 20)), args.exit_id, args.bundle_profile, server_peer)
-    agent = decode(read(args.agent_config, 1 << 20))
+    entries = [] if addition is not None else pair(decode(read(args.bundle, 32 << 20)), args.exit_id, args.bundle_profile, server_peer)
     listen = ipaddress.ip_address(literal(args.listen_ip))
     if not listen.is_private or not any(listen in ipaddress.ip_network(n) for n in agent.get('tunnel_cidrs', [])):
         raise ValueError('listen IP must belong to the entry tunnel ranges')
     if any(e.get('node_id') and e['node_id'] == agent.get('node_id') for e in entries):
         raise ValueError('entry and exit must have distinct identities')
-    with registry_lock(args.registry):
-        try:
-            existing_raw = read(args.registry, MAX_REGISTRY_BYTES)
-            registry = decode(existing_raw)
-        except FileNotFoundError:
-            existing_raw = None
+    # Dry-run may inspect a read-only production mount. It takes immutable
+    # snapshots and rechecks them, without creating a lock or source there.
+    lock = contextlib.nullcontext() if args.dry_run is not None else registry_lock(args.registry)
+    with lock:
+        registry_snapshot = private_snapshot(args.registry, MAX_REGISTRY_BYTES, optional=True)
+        if registry_snapshot is None:
             registry = dict(listen_ip=str(listen), first_port=26240, last_port=26271, ttl_seconds=90, exits=[])
+        else:
+            registry = decode(registry_snapshot[1])
         if registry.get('listen_ip') != str(listen):
             raise ValueError('existing registry has a different entry listener')
-        registry['exits'] = [e for e in registry['exits'] if e['id'] != args.exit_id] + entries
-        if len(registry['exits']) > 64:
+        ordinary, tor = registry.get('exits'), registry.get('tor_exits')
+        ordinary = [] if ordinary is None else ordinary
+        tor = [] if tor is None else tor
+        if not isinstance(ordinary, list) or not isinstance(tor, list):
+            raise ValueError('registry exits must be bounded lists')
+        if addition is None:
+            registry['exits'] = [e for e in ordinary if e['id'] != args.exit_id] + entries
+        else:
+            registry['tor_exits'] = [e for e in tor if e['id'] != args.exit_id] + [addition[0]]
+        if len(registry.get('exits') or []) + len(registry.get('tor_exits') or []) > 64:
             raise ValueError('paired exit count exceeds bound')
         body = registry_bytes(registry)
-        with tempfile.TemporaryDirectory(prefix='.relay-pair-', dir=args.registry.parent) as tmp:
+        staging_parent = args.dry_run.parent if args.dry_run is not None else args.registry.parent
+        with tempfile.TemporaryDirectory(prefix='.relay-pair-', dir=staging_parent) as tmp:
             stage = Path(tmp)/'registry.json'
             write(stage, body)
-            subprocess.run(['/usr/local/bin/router-vpn-agent', 'check-multihop-registry', str(stage), str(args.agent_config)],
-                           check=True, timeout=60, stdout=subprocess.DEVNULL)
-            try:
-                now = read(args.registry, MAX_REGISTRY_BYTES)
-            except FileNotFoundError:
-                now = None
-            if now != existing_raw:
+            directory_identity = source_directory_snapshot(sources) if registry.get('tor_exits') else None
+            source_bodies, source_snapshots = stage_tor_sources(registry, sources, Path(tmp)/'tor-sources', addition)
+            command = ['/usr/local/bin/router-vpn-agent', 'check-multihop-registry', str(stage), str(args.agent_config)]
+            if source_bodies:
+                command.append(str(Path(tmp)/'tor-sources'))
+            subprocess.run(command, check=True, timeout=60, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            for snapshot in [agent_snapshot, *source_snapshots, *([input_snapshot] if input_snapshot is not None else [])]:
+                require_snapshot(snapshot)
+            if source_bodies:
+                require_source_directory(sources, directory_identity)
+            if not registry_unchanged(args.registry, registry_snapshot):
                 raise ValueError('registry changed during native validation; no replacement was written')
-            write(args.registry, body)
-    print('Paired',len(entries),'validated transport configurations. No tunnel or service was started.')
+            if args.dry_run is not None:
+                plan = dict(schema=1, kind='routervpn-relay-pairing-plan', entry_node_id=agent['node_id'], registry=registry,
+                            tor_sources={digest: raw.decode('utf-8') for digest, raw in source_bodies.items()})
+                write(args.dry_run, registry_bytes(plan))
+            else:
+                created = None
+                target = sources / (addition[0]['source_sha256'] + '.json') if addition is not None else None
+                try:
+                    if source_bodies:
+                        require_source_directory(sources, directory_identity)
+                    if target is not None and all(snapshot[0] != target for snapshot in source_snapshots):
+                        created = publish_tor_source(target, addition[1])
+                        snapshot = private_snapshot(target, MAX_TOR_SOURCE_BYTES)
+                        if not os.path.samestat(created, snapshot[2]) or snapshot[1] != addition[1]:
+                            raise ValueError('new private Tor source changed before registry publication')
+                        source_snapshots.append(snapshot)
+                    for snapshot in [agent_snapshot, *source_snapshots, *([input_snapshot] if input_snapshot is not None else [])]:
+                        require_snapshot(snapshot)
+                    if not registry_unchanged(args.registry, registry_snapshot):
+                        raise ValueError('registry changed before publication; no replacement was written')
+                    write(args.registry, body)
+                except BaseException:
+                    # An uncertain/changed registry may already reference the
+                    # source. Never undo another owner's adoption or replacement.
+                    if created is not None and registry_unchanged(args.registry, registry_snapshot):
+                        remove_owned_tor_source(target, created)
+                    raise
+    if args.dry_run is not None:
+        print('Validated private pairing plan written. Registry and source files were not changed.')
+    else:
+        print('Paired',1 if addition is not None else len(entries),'validated transport configurations. No tunnel or service was started.')
 
 if __name__ == '__main__':
     try:

@@ -93,6 +93,106 @@ exact readback of deletion; expiry removes abandoned sessions. A Linux agent
 crash terminates its owned child engines. Exit credentials remain in private
 operator files; they are not returned in capability or progress responses.
 
+## Provisioning a private server Tor source
+
+The same operator command can pair a **Tor** or **Tor bridge** source with the
+entry node. This is a separate source reference in `tor_exits`; it does not turn
+a Tor circuit into an ordinary exit with a fixed public address or Router node
+proof. The native worker owns its child process and private listeners inside
+the agent image. Pairing does not bootstrap Tor, create a lease, or change the
+server's default route.
+
+Prepare a mode-0600 JSON file in an operator-owned private directory. Its fields
+come from the selected client path: the exact exit ID, entry node identity,
+bridge selection, DNS policy, and saved Home AdGuard addresses. The authenticated
+discovery reference must match the client's source and DNS hashes before it can
+acquire that source. A different ID, resolver selection, entry, or bridge list
+must be paired deliberately; the client cannot upload a replacement source.
+
+The input shape for a bridge source is:
+
+```json
+{
+  "schema": 1,
+  "id": "saved-tor",
+  "entry_node_id": "REPLACE_WITH_THE_EXACT_64_LOWERCASE_HEX_ENTRY_NODE_ID",
+  "mode": "tor-bridge",
+  "dns": {"mode": "home"},
+  "adguard_ipv4": "192.168.50.133",
+  "tor_bridge": {
+    "transport": "obfs4",
+    "bridges": ["REPLACE_WITH_THE_COMPLETE_AUTHORIZED_BRIDGE_LINE"]
+  }
+}
+```
+
+Replace the example addresses and placeholders with the captured selection.
+For plain Tor, use `"mode": "tor"` and omit `tor_bridge`. Home DNS requires the
+entry's captured private AdGuard address or addresses; it does not substitute a
+public resolver. Add `adguard_ipv6` only when it belongs to that same capture.
+Explicit Custom DNS uses `mode`, `transport`, `address`, `port`, `server_name`,
+and `path` as required by the selected transport. `rescue` is an explicit
+selection. Resolve an application Fastest selection to its actual measured
+resolver before pairing. The operator command delegates all bridge and DNS
+validation and normalization to `mobiletor.NewServerTorPolicy`, the same
+compiler used by the running worker; it has no separate Python resolver rules.
+
+First produce an explicit private review plan:
+
+```sh
+router-vpn-relay-pair \
+  --tor-source /private/selected-tor-source.json \
+  --exit-id saved-tor \
+  --agent-config /private/stage/router-agent.json \
+  --registry /private/stage/multihop-relays.json \
+  --tor-sources /private/stage/tor-sources \
+  --listen-ip ENTRY_PRIVATE_TUNNEL_IP \
+  --dry-run /private/review/tor-pairing-plan.json
+```
+
+The dry run reads and snapshots the current private files, stages the complete
+candidate registry and its referenced sources, verifies the installed Tor
+package, and runs the actual bundled native configuration parser. It writes
+only the explicitly named mode-0600 review plan, which contains private source
+and registry material. It does not create a lock or publish a source in the
+input configuration tree. The plan is for private review; it is not a runtime
+registry file. The terminal reports validation status and counts, without
+bridge lines, resolver credentials, or registry secrets.
+
+After reviewing it, repeat the command without `--dry-run` to publish into the
+chosen staging tree. The command recompiles and validates the current captured
+inputs before publication; a stale review does not authorize replacing newer
+files. The default source directory is `tor-sources` beside `--registry`.
+Production uses `/etc/router-vpn/tor-sources`.
+
+Each source is written as `<canonical source_sha256>.json` with mode 0600 in an
+owned mode-0700 directory. A complete immutable source is published before
+the registry starts referencing it. Existing ordinary exits, other Tor sources,
+and unrelated source files are preserved. Repeating an identical pairing
+reuses its exact source file. Updating a selection changes its source reference;
+old source files are retained for deliberate operator review and recovery.
+If publication fails before the registry changes, cleanup removes only a new
+source still owned by that operation. A replacement owner or a registry that
+already references it is preserved.
+
+An existing private staging tree can also be checked directly:
+
+```sh
+router-vpn-agent check-multihop-registry \
+  /private/stage/multihop-relays.json \
+  /private/stage/router-agent.json \
+  /private/stage/tor-sources
+```
+
+This checker includes ordinary and Tor entries in its validated count. It
+rejects missing or changed sources, wrong entry/source/DNS identities, unsafe
+private files, an unavailable installed Tor package, or native parser failures.
+It does not launch the Tor worker or prove public connectivity. Apply the
+reviewed registry and source tree only through the normal exact-SHA image
+deployment process, then deliberately restart the agent. Live bootstrap,
+selected-path DNS, cancellation, reconnection, and client acceptance remain
+separate runtime checks.
+
 ## Router entry to a paired external proxy exit
 
 The shared native execution path supports privately paired third-party
