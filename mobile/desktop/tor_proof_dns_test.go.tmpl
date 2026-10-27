@@ -1,0 +1,115 @@
+package box
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"testing"
+	"time"
+)
+
+func TestRouterVPNDesktopTorProofResolvesFixedOriginThroughSelectedDNS(t *testing.T) {
+	for _, server := range []bool{false, true} {
+		retirement := "network-reset"
+		if server {
+			retirement = "owner-cancel"
+		}
+		for _, fault := range []string{"none", "resolver-failure", "private-answer", retirement} {
+			t.Run(fmt.Sprintf("server=%t/%s", server, fault), func(t *testing.T) {
+				var f *desktopTorBoxFixture
+				if server {
+					f = newDesktopTorServerFixture(t, false, false).desktopTorBoxFixture
+				} else {
+					f = newDesktopTorBoxFixture(t, nil)
+				}
+				f.socks.badProofDNS.Store(fault == "resolver-failure")
+				f.socks.privateProofDNS.Store(fault == "private-answer")
+				if fault == retirement {
+					f.socks.proofDNSEntered, f.socks.proofDNSRelease = make(chan struct{}), make(chan struct{})
+				}
+				owner := f.capture(t)
+				var err error
+				if server {
+					err = owner.StartServer()
+				} else {
+					err = owner.start(f.child)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if fault == retirement {
+					var release sync.Once
+					defer release.Do(func() { close(f.socks.proofDNSRelease) })
+					done := make(chan error, 1)
+					go func() { _, err := owner.run(f.prover(t)); done <- err }()
+					select {
+					case <-f.socks.proofDNSEntered:
+					case <-time.After(3 * time.Second):
+						t.Fatal("fixed-origin query never reached selected DNS")
+					}
+					if server {
+						// Data cancellation must retain the authenticated entry
+						// until this exact lease DELETE is acknowledged.
+						owner.Cancel()
+					} else {
+						owner.network.InterfaceUpdated(context.Background())
+					}
+					release.Do(func() { close(f.socks.proofDNSRelease) })
+					select {
+					case err = <-done:
+					case <-time.After(3 * time.Second):
+						t.Fatal("retired fixed-origin DNS did not cancel")
+					}
+				} else {
+					_, err = owner.run(f.prover(t))
+				}
+				if fault == "none" {
+					if err != nil || !owner.Healthy() || f.socks.proofDNSCalls.Load() < 1 || f.socks.proofCalls.Load() != 1 || f.socks.hostnameProofCalls.Load() != 0 {
+						t.Fatal("Tor fixed origin bypassed captured resolver or numeric final dial", err)
+					}
+				} else if err == nil || owner.Healthy() || f.socks.proofCalls.Load() != 0 || f.socks.hostnameProofCalls.Load() != 0 {
+					t.Fatal("failed or stale selected DNS reached Tor proof", fault, err)
+				}
+			})
+		}
+	}
+}
+
+// A past successful DNS answer cannot stand in for the selected resolver on a
+// later path proof. This exercises the real Box DNS cache and numeric outbound.
+func TestRouterVPNDesktopTorProofRefreshRejectsCachedResolverSuccess(t *testing.T) {
+	for _, server := range []bool{false, true} {
+		t.Run(fmt.Sprintf("server=%t", server), func(t *testing.T) {
+			var f *desktopTorBoxFixture
+			if server {
+				f = newDesktopTorServerFixture(t, false, false).desktopTorBoxFixture
+			} else {
+				f = newDesktopTorBoxFixture(t, nil)
+			}
+			owner := f.capture(t)
+			var err error
+			if server {
+				err = owner.StartServer()
+			} else {
+				err = owner.start(f.child)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = owner.run(f.prover(t)); err != nil {
+				t.Fatal(err)
+			}
+			before := f.socks.proofDNSCalls.Load()
+			f.socks.badProofDNS.Store(true)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			connection, err := owner.proofDial(ctx, "tcp", "check.torproject.org:443")
+			if connection != nil {
+				connection.Close()
+			}
+			if err == nil || f.socks.proofDNSCalls.Load() <= before || f.socks.proofCalls.Load() != 1 {
+				t.Fatal("cached DNS success bypassed the failed current selected resolver", err)
+			}
+		})
+	}
+}

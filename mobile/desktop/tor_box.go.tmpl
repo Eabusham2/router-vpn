@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
 	"github.com/sagernet/sing-box/option"
@@ -410,11 +411,35 @@ func (r *RouterVPNDesktopTor) proofDial(ctx context.Context, network, address st
 	if owner == nil {
 		return nil, errors.New("desktop Tor final native SOCKS owner is unavailable")
 	}
-	connection, err := owner.DialContext(ctx, network, M.ParseSocksaddr(address))
-	if err != nil || ctx.Err() != nil || !r.live() {
-		return connection, errors.New("desktop Tor final dial failed or became stale")
+	// Keep the fixed HTTPS origin's Host/SNI in Prove, but resolve it using
+	// this same captured TUN's selected DNS policy before dialing Tor. Passing
+	// its hostname to SOCKS would silently select Tor's resolver instead.
+	lookup, cancel := context.WithTimeout(ctx, 5*time.Second)
+	lookup = adapter.WithContext(lookup, &adapter.InboundContext{Inbound: r.policy.Metadata().TUNTag, InboundType: C.TypeTun, Network: "udp", Protocol: "dns"})
+	addresses, err := r.engine.box.dnsRouter.Lookup(lookup, "check.torproject.org", adapter.DNSQueryOptions{DisableCache: true, DisableOptimisticCache: true})
+	lookupErr := lookup.Err()
+	cancel()
+	if err != nil || lookupErr != nil || ctx.Err() != nil || !r.live() {
+		return nil, errors.New("desktop Tor fixed proof origin lost its selected DNS owner")
 	}
-	return connection, nil
+	for _, ip := range addresses {
+		if !routerVPNPublicMeasurementAddress(ip) || ip.Is6() && r.policy.Metadata().IPv6Mode == "off" {
+			continue
+		}
+		if ctx.Err() != nil || !r.live() {
+			return nil, errors.New("desktop Tor proof retired before its numeric dial")
+		}
+		connection, err := owner.DialContext(ctx, network, M.SocksaddrFrom(ip, 443))
+		if ctx.Err() != nil || !r.live() {
+			return connection, errors.New("desktop Tor final dial became stale")
+		}
+		// Preserve a non-nil error-path socket for the enclosing Network's
+		// owned cleanup, instead of forgetting it while retrying an address.
+		if connection != nil {
+			return connection, err
+		}
+	}
+	return nil, errors.New("desktop Tor selected DNS provided no usable proof path")
 }
 
 func (r *RouterVPNDesktopTor) readback() (string, int, int, error) {

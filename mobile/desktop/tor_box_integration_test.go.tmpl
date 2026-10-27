@@ -48,6 +48,13 @@ type desktopTorBoxSOCKS struct {
 	workers                        sync.WaitGroup
 	dnsCalls                       atomic.Int32
 	proofCalls                     atomic.Int32
+	proofDNSCalls                  atomic.Int32
+	hostnameProofCalls             atomic.Int32
+	badProofDNS                    atomic.Bool
+	privateProofDNS                atomic.Bool
+	proofDNSEntered                chan struct{}
+	proofDNSRelease                chan struct{}
+	proofDNSOnce                   sync.Once
 	badDNS                         atomic.Bool
 	proofEntered                   chan struct{}
 	proofRelease                   chan struct{}
@@ -194,13 +201,16 @@ func (s *desktopTorBoxSOCKS) serve(connection net.Conn) error {
 		return err
 	}
 	target := net.JoinHostPort(address, strconv.Itoa(int(binary.BigEndian.Uint16(port[:]))))
-	if target != "check.torproject.org:443" && target != "9.9.9.9:5353" && !dnsmeasure.AllowedPublicAddress(target) {
+	if target != "check.torproject.org:443" && target != "93.184.216.34:443" && target != "9.9.9.9:5353" && !dnsmeasure.AllowedPublicAddress(target) {
 		return errors.New("native request escaped the fixture's frozen destinations")
 	}
 	if _, err := connection.Write([]byte{5, 0, 0, 1, 127, 0, 0, 1, 0, 1}); err != nil {
 		return err
 	}
-	if target == "check.torproject.org:443" {
+	if target == "check.torproject.org:443" || target == "93.184.216.34:443" {
+		if target == "check.torproject.org:443" {
+			s.hostnameProofCalls.Add(1)
+		}
 		s.proofCalls.Add(1)
 		if s.proofEntered != nil {
 			s.proofOnce.Do(func() { close(s.proofEntered) })
@@ -226,13 +236,25 @@ func (s *desktopTorBoxSOCKS) serve(connection net.Conn) error {
 			return err
 		}
 		s.dnsCalls.Add(1)
+		proofQuery := len(query.Question) == 1 && query.Question[0].Name == "check.torproject.org."
+		if proofQuery {
+			s.proofDNSCalls.Add(1)
+			if s.proofDNSEntered != nil {
+				s.proofDNSOnce.Do(func() { close(s.proofDNSEntered) })
+				<-s.proofDNSRelease
+			}
+		}
 		answer := new(mDNS.Msg)
 		answer.SetReply(query)
-		if s.badDNS.Load() || len(query.Question) != 1 ||
+		if s.badDNS.Load() || proofQuery && s.badProofDNS.Load() || len(query.Question) != 1 ||
 			query.Question[0].Name != "example.com." && query.Question[0].Name != "check.torproject.org." && query.Question[0].Name != "speed.cloudflare.com." || query.Question[0].Qtype != mDNS.TypeA {
 			answer.Rcode = mDNS.RcodeServerFailure
 		} else {
-			answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: query.Question[0].Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: net.ParseIP("93.184.216.34")}}
+			ip := net.ParseIP("93.184.216.34")
+			if proofQuery && s.privateProofDNS.Load() {
+				ip = net.ParseIP("192.168.50.1")
+			}
+			answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: query.Question[0].Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: ip}}
 		}
 		if err := desktopTorBoxWriteDNSReply(peer, answer); err != nil {
 			return err
@@ -521,10 +543,10 @@ func (s *desktopTorBoxEntryServer) NewConnection(_ context.Context, conn net.Con
 			s.dnsCalls.Add(1)
 			answer := new(mDNS.Msg)
 			answer.SetReply(query)
-			if s.badDNS.Load() || len(query.Question) != 1 || query.Question[0].Name != "example.com." || query.Question[0].Qtype != mDNS.TypeA {
+			if s.badDNS.Load() || len(query.Question) != 1 || query.Question[0].Name != "example.com." && query.Question[0].Name != "check.torproject.org." || query.Question[0].Qtype != mDNS.TypeA {
 				answer.Rcode = mDNS.RcodeServerFailure
 			} else {
-				answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: "example.com.", Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: net.ParseIP("93.184.216.34")}}
+				answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: query.Question[0].Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: net.ParseIP("93.184.216.34")}}
 			}
 			if err := desktopTorBoxWriteDNSReply(peer, answer); err != nil {
 				return err
