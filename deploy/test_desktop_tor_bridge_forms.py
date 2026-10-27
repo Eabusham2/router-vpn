@@ -13,7 +13,10 @@ from test_desktop_amnezia_forms import block
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG_FILES = ('tor-update-source-catalog.json', 'tor-update-always-source-catalog.json',
                  'tor-update-server-source-catalog.json', 'tor-update-server-always-source-catalog.json',
-                 'tor-update-capabilities.json', 'tor-update-input-lines.json')
+                 'tor-update-capabilities.json', 'tor-update-input-lines.json') + tuple(
+    'tor-update-ordinary-' + protocol + '-' + suffix for protocol in
+    ('wireguard', 'amneziawg', 'socks5', 'http-connect', 'https-connect', 'shadowsocks', 'hysteria2', 'openvpn')
+    for suffix in ('source-catalog.json', 'always-source-catalog.json'))
 
 
 def swift_source(generated):
@@ -50,6 +53,10 @@ def swift_form(directory):
          'result["expected_profile_tokens"] = capture["expected_profile_tokens"]',
          'result["expected_profile_tokens"] = [id: (capture["expected_profile_tokens"] as! [String: String])[id]!]',
          'Entry/source identity dropped'),
+        ('entry-fixed-bridge', ' && !throughEntry', '',
+         'Tor update adopted ordinary-fixed-bypass'),
+        ('mixed-udp', 'return (words.first == "bridge" ? words.dropFirst().first : words.first) == "snowflake"',
+         '_ = words; return false', 'Tor update adopted ordinary-mixed-udp'),
     )
     for name, original, replacement, witness in controls:
         assert generated.count(original) == 1, name
@@ -98,6 +105,10 @@ def linux_form(directory):
          'state.opened = displayed != NULL ? copy_public_source_value_v24(displayed) : NULL;',
          'state.opened = displayed != NULL ? json_node_copy(displayed) : NULL;',
          'cancelled/rejected modal escaped its owned callback'),
+        ('entry-fixed-bridge', ' && !external_path_flag_v4(profile, "multihop_enabled")', '',
+         'Rejected trial identity: ordinary-fixed-bypass'),
+        ('mixed-udp', 'if (g_regex_match_simple("(*UCP)(?i)^\\\\s*(?:bridge\\\\s+)?snowflake(?:\\\\s|$)", line, 0, 0)) udp = TRUE;',
+         '(void)line;', 'Rejected trial identity: ordinary-mixed-udp'),
     )
     include = '#include "routervpn-tor-bridge-v13.inc"'
     assert rendered.count(include) == 1
@@ -134,6 +145,10 @@ def windows_form(directory, shell):
         ('current-source', '$Capture=NewUnifiedExternalCapturedBody @{profile_id=$ID} $Opened $Current',
          '$Capture=NewUnifiedExternalCapturedBody @{profile_id=$ID} $Opened $null', 'Tor update adopted selected'),
         ('opened-catalog', '$Displayed|ConvertTo-Json -Depth 32|ConvertFrom-Json', '$Displayed', 'Tor update adopted display-mutated'),
+        ('entry-fixed-bridge', "-and(-not$Update-or(ExternalPublicValue $Profile 'multihop_enabled' $false) -cne $true)", '',
+         'Tor update adopted ordinary-fixed-bypass'),
+        ('mixed-udp', "if(([string]$Line)-match'^\\s*(?:bridge\\s+)?snowflake(?:\\s|$)')", 'if($false)',
+         'Tor update adopted ordinary-mixed-udp'),
     )
     for name, original, replacement, witness in controls:
         assert source.count(original) == 1, name

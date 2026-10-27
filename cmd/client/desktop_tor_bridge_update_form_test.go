@@ -13,12 +13,31 @@ import (
 	"router-vpn/internal/common"
 )
 
+func torBridgeFormSelections() []string {
+	values := []string{"local", "server"}
+	for _, protocol := range desktopTorOrdinaryTestProtocols {
+		values = append(values, "ordinary-"+protocol)
+	}
+	return values
+}
+
+func torBridgeFormNeedsTCPOnly(selection string) bool {
+	return selection == "ordinary-socks5" || selection == "ordinary-http-connect" || selection == "ordinary-https-connect"
+}
+
+func torBridgeFormPreservedTransport(selection string) string {
+	if strings.HasPrefix(selection, "ordinary-") {
+		return "meek_lite"
+	}
+	return "snowflake"
+}
+
 func TestDesktopTorBridgeUpdateFormCatalog(t *testing.T) {
 	directory := os.Getenv("ROUTERVPN_TOR_FORM_PAYLOADS")
 	if directory == "" {
 		t.Skip("native Tor editor supplies its callback payload directory")
 	}
-	for _, execution := range []string{"local", "server"} {
+	for _, execution := range torBridgeFormSelections() {
 		a, _, _ := torBridgeFormSourceFixture(t, execution)
 		response := httptest.NewRecorder()
 		a.listPublicNodes(response, httptest.NewRequest(http.MethodGet, "/api/nodes", nil))
@@ -67,7 +86,7 @@ func TestDesktopTorBridgeUpdateFormCatalog(t *testing.T) {
 		if !ok {
 			t.Fatal("Tor capability transport is not an object")
 		}
-		if _, tested := torBridgeUpdateInputLines()[transport["id"].(string)]; tested {
+		if _, tested := torBridgeUpdateInputLines()[transport["id"].(string)]; tested || transport["id"] == "custom" {
 			transport["supported"] = true
 			transport["helper"] = "test-only simulated runtime availability"
 			delete(transport, "reason")
@@ -94,7 +113,7 @@ func TestDesktopTorBridgeUpdateFormPayload(t *testing.T) {
 	if directory == "" {
 		t.Skip("native Tor editor supplies its callback payload directory")
 	}
-	for _, execution := range []string{"local", "server"} {
+	for _, execution := range torBridgeFormSelections() {
 		t.Run(execution+"/unchanged-saved-protection", func(t *testing.T) {
 			a, old, entry := torBridgeFormSourceFixture(t, execution)
 			old.KillSwitchPolicy, old.KillSwitch = "always", true
@@ -107,14 +126,21 @@ func TestDesktopTorBridgeUpdateFormPayload(t *testing.T) {
 			if json.Unmarshal(raw, &request) != nil || request.KillSwitchPolicy != "always" || request.Name != old.Name || len(request.ExpectedProfileTokens) != 2 {
 				t.Fatal("actual checkbox and Save did not preserve the saved protection/name/source")
 			}
-			checkTorBridgePreservedUpdate(t, a, old, entry, postTorBridgeUpdate(a, raw), "snowflake", "always")
+			checkTorBridgePreservedUpdate(t, a, old, entry, postTorBridgeUpdate(a, raw), torBridgeFormPreservedTransport(execution), "always")
 			checkTorFormPersistedPath(t, a, old, entry)
 		})
 		for transport := range torBridgeUpdateInputLines() {
 			for _, kill := range []string{"off", "on-connect", "always"} {
 				t.Run(execution+"/"+transport+"/"+kill, func(t *testing.T) {
 					a, old, entry := torBridgeFormSourceFixture(t, execution)
-					raw, err := os.ReadFile(filepath.Join(directory, torBridgeFormFile(execution, transport+"-"+kill+".json")))
+					path := filepath.Join(directory, torBridgeFormFile(execution, transport+"-"+kill+".json"))
+					if transport == "snowflake" && kill != "off" && torBridgeFormNeedsTCPOnly(execution) {
+						if _, err := os.Stat(path); !os.IsNotExist(err) {
+							t.Fatal("native editor emitted a strict request without bounded UDP", err)
+						}
+						return
+					}
+					raw, err := os.ReadFile(path)
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -133,7 +159,11 @@ func TestDesktopTorBridgeUpdateFormPayload(t *testing.T) {
 					for _, relinked := range []string{"tor-edit", "entry", "execution"} {
 						replaced, _, _ := torBridgeFormSourceFixture(t, execution)
 						if relinked == "entry" {
-							replaced.profiles.Profiles[1].APIToken = "replacement-private-entry-token"
+							if replaced.profiles.Profiles[1].External != nil {
+								replaced.profiles.Profiles[1].External.ExpectedPublicIP = "203.0.113.155"
+							} else {
+								replaced.profiles.Profiles[1].APIToken = "replacement-private-entry-token"
+							}
 						} else if relinked == "execution" {
 							replaced.profiles.Profiles[0].MultihopExecution = "server"
 							if execution == "server" {
@@ -155,6 +185,24 @@ func TestDesktopTorBridgeUpdateFormPayload(t *testing.T) {
 func torBridgeFormSourceFixture(t *testing.T, execution string) (*app, common.RouterProfile, common.RouterProfile) {
 	t.Helper()
 	a, old, entry := torBridgeUpdateSourceFixture(t)
+	if protocol, ordinary := strings.CutPrefix(execution, "ordinary-"); ordinary {
+		if protocol == "openvpn" {
+			var err error
+			entry, err = externalProfileFromCreateRequest(desktopOpenVPNCreateFixture(t, common.StartLayerOff))
+			if err != nil {
+				t.Fatal(err)
+			}
+		} else {
+			entry, _ = desktopExternalNativeFixture(t, protocol)
+		}
+		entry.ID, entry.Name = "entry", "Captured ordinary entry"
+		entry.KillSwitchPolicy, entry.KillSwitch = "off", false
+		old.MultihopEntryMode, old.MultihopExecution = protocol, "local"
+		old.DNSMode, old.DNSProtocol, old.DNSHost, old.DNSPort = "custom", "tcp", "9.9.9.9", 5353
+		old.DNSServerName, old.DNSPath = "", ""
+		a.profiles.Profiles = []common.RouterProfile{cloneRouterProfile(old), cloneRouterProfile(entry)}
+		return a, old, entry
+	}
 	if execution != "local" && execution != "server" {
 		t.Fatal("form fixture requires an explicit supported execution")
 	}
@@ -165,8 +213,8 @@ func torBridgeFormSourceFixture(t *testing.T, execution string) (*app, common.Ro
 
 func torBridgeFormFile(execution, suffix string) string {
 	prefix := "tor-update-"
-	if execution == "server" {
-		prefix += "server-"
+	if execution != "local" {
+		prefix += execution + "-"
 	}
 	return prefix + suffix
 }
@@ -187,6 +235,6 @@ func checkTorFormPersistedPath(t *testing.T, a *app, old, entry common.RouterPro
 	actual, _ := json.Marshal(stored.Profiles[1])
 	expected, _ := json.Marshal(entry)
 	if !bytes.Equal(actual, expected) {
-		t.Fatal("native bridge Save changed the persisted private Router entry or credentials")
+		t.Fatal("native bridge Save changed the persisted independent entry or credentials")
 	}
 }

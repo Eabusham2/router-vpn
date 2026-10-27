@@ -192,7 +192,7 @@ func TestDesktopExternalPredecessorCaptureRejectsCrossKindSourceAndPolicy(t *tes
 			changed["adguard_ipv4"] = "10.77.0.53"
 		}
 		if _, err := NewDesktopBridgePolicyWithPredecessor(torHostEncode(t, changed), desktopSession, desktopIsolation, "linux", entry); err == nil {
-			t.Fatal("ordinary provider gained private Router authority", field)
+			t.Fatal("ordinary provider gained strict protection without a projection or private Home authority", field)
 		}
 	}
 	policy, err := NewDesktopBridgePolicyWithPredecessor(torHostEncode(t, exit), desktopSession, desktopIsolation, "linux", entry)

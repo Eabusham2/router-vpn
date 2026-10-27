@@ -10,11 +10,13 @@ import (
 )
 
 // The projection is private runtime metadata, never a saved profile setting.
-// Existing pure compiler callers may omit it; shipping desktop launch wrappers
-// require it for Router predecessors before granting physical firewall access.
+// An ordinary strict predecessor must supply it at compilation, as well as at
+// the shipping wrapper. An Off policy and existing Router pure-compiler callers
+// may omit it; every shipping predecessor wrapper requires the projection.
 // Reconstruction checks the complete graph instead of trusting host metadata.
 func validateDesktopPhysicalEgress(profile map[string]any, predecessor *DesktopPredecessor) error {
 	var expected []mobilemultihop.PhysicalEgress
+	required := false
 	if predecessor != nil && predecessor.IsExternal() {
 		raw, err := json.Marshal(profile)
 		if err != nil {
@@ -24,6 +26,11 @@ func validateDesktopPhysicalEgress(profile map[string]any, predecessor *DesktopP
 		if err != nil {
 			return err
 		}
+		kill, err := desktopBridgeKillPolicy(profile, plan)
+		if err != nil {
+			return err
+		}
+		required = kill != "off"
 		expected, err = predecessor.PhysicalEgress(plan)
 		if err != nil {
 			return err
@@ -31,6 +38,9 @@ func validateDesktopPhysicalEgress(profile map[string]any, predecessor *DesktopP
 	}
 	value, exists := profile["desktop_physical_egress"]
 	if !exists {
+		if required {
+			return errors.New("strict ordinary Tor predecessor requires its exact captured physical egress projection")
+		}
 		return nil
 	}
 	bad := errors.New("desktop Tor physical egress differs from its captured predecessor graph")

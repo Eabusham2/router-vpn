@@ -185,6 +185,29 @@ try {
   $env:HOMEVPN_POLICY_PROFILE_ID='missing'
   $rejected=$false;try{& $script -Action plan -Root $profileRoot -StateRoot $temp -Endpoint '203.0.113.11' -Policy 'off' -HomeLANAccess 'true'|Out-Null}catch{$rejected=$true}
   if(-not$rejected){throw 'Explicit plan arguments bypassed a missing captured policy owner.'}
+
+  # A Local ordinary predecessor never needs a private Router identity to
+  # carry exact strict socket rules. The independent Tor exit owns protection;
+  # the entry and unrelated selected profile deliberately request Off/LAN On.
+  $policyStore.profiles[1]|Add-Member -NotePropertyName node_kind -NotePropertyValue 'external'
+  $policyStore.profiles[1]|Add-Member -NotePropertyName external -NotePropertyValue ([pscustomobject]@{protocol='shadowsocks';expected_public_ip='203.0.113.88';shadowsocks=[pscustomobject]@{server='203.0.113.11';port=8388;method='2022-blake3-aes-256-gcm';password='fixture'}})
+  $policyStore.profiles[2]|Add-Member -NotePropertyName node_kind -NotePropertyValue 'external'
+  $policyStore.profiles[2]|Add-Member -NotePropertyName external -NotePropertyValue ([pscustomobject]@{protocol='tor-bridge'})
+  $env:HOMEVPN_PROFILE_ID='entry';$env:HOMEVPN_POLICY_PROFILE_ID='exit'
+  $env:HOMEVPN_STANDARD_ENGINE='native';$env:HOMEVPN_EXTERNAL_SESSION=('a'*32)
+  $env:HOMEVPN_NATIVE_ENDPOINTS_JSON='["203.0.113.11"]'
+  $env:HOMEVPN_NATIVE_EGRESS_JSON='[{"host":"203.0.113.11","port":8388,"network":"tcp"}]'
+  foreach($policy in @('on-connect','always')){
+    $policyStore.profiles[2].kill_switch_policy=$policy;Write-PolicyStore
+    $strict=(& $script -Action plan -Root $profileRoot -StateRoot $temp -TunnelAlias 'router-vpn-tor'|ConvertFrom-Json)
+    if($strict.policy-cne$policy-or$strict.home_lan_access-or$strict.default_outbound-cne'Block'-or$strict.tunnel_alias-cne'router-vpn-tor'){throw 'Ordinary Tor path borrowed an unrelated protection policy.'}
+    $script:capturedRules=@();Install-AllowRules $strict
+    $outer=@($script:capturedRules|Where-Object{$_.DisplayName-like'Router VPN test native outer *'})
+    if($outer.Count-ne1-or$outer[0].RemoteAddress[0]-cne'203.0.113.11'-or$outer[0].RemotePort-cne'8388'-or$outer[0].Protocol-cne'TCP'){throw 'Ordinary Tor path lost its exact physical socket.'}
+    if(@($script:capturedRules|Where-Object{$_.DisplayName-eq'Router VPN test selected node'-or$_.RemoteAddress-contains'LocalSubnet'-or$_.RemoteAddress-contains'198.51.100.20'-or$_.RemoteAddress-contains'1.1.1.1'}).Count){throw 'Ordinary Tor path opened a broad host, LAN, direct Tor, or public proof exception.'}
+  }
+  $env:HOMEVPN_NATIVE_EGRESS_JSON='[{"host":"203.0.113.11","port":8388,"network":"tcp"},{"host":"1.1.1.1","port":443,"network":"tcp"}]'
+  Assert-PolicyRejected
   foreach($name in $nativeNames){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
   Write-Host 'Windows captured policy-owner plans: direct/router, opposing entry/exit policies, physical endpoint and stale-owner negatives OK'
 

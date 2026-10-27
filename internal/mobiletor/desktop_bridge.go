@@ -172,13 +172,15 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 	if predecessor != nil && predecessor.entryProof() == nil {
 		return nil, errors.New("desktop Tor predecessor lost its typed proof authority")
 	}
-	// Saved entry identifiers are intent, not firewall authority. Dynamic PT
-	// protection is admitted only after the complete Router predecessor has
-	// been independently captured and validated. The native PT owner still
-	// authenticates that Router before opening any transport listener.
+	// Saved entry identifiers are intent, not firewall authority. A protected
+	// predecessor must retain its genuine typed proof and complete native
+	// graph. Ordinary entries additionally require the exact physical socket
+	// projection checked below; a public-address proof never grants private
+	// Router, Home DNS or Server execution authority. The native PT owner
+	// proves either typed entry before opening any transport listener.
 	if kill, _ := desktopBridgeKillPolicy(profile, plan); kill != "off" && (predecessor != nil || !desktopBridgeDirectProtection(plan)) &&
-		!predecessor.IsRouter() {
-		return nil, errors.New("strict desktop Tor protection has no captured Router proof owner")
+		!predecessor.IsRouter() && !predecessor.IsExternal() {
+		return nil, errors.New("strict desktop Tor protection has no captured typed predecessor")
 	}
 	if err := validateDesktopPhysicalEgress(profile, predecessor); err != nil {
 		return nil, err
@@ -402,7 +404,7 @@ func desktopBridgeKillPolicy(profile map[string]any, plan Plan) (string, error) 
 		return "", errors.New("invalid desktop Tor kill switch policy")
 	}
 	if value != "off" && !desktopBridgeDirectProtection(plan) && !desktopBridgeSavedRouterSelection(profile) {
-		return "", errors.New("strict desktop Tor protection requires one fixed obfs4 bridge or its exact captured Local Router predecessor")
+		return "", errors.New("strict desktop Tor protection requires one fixed obfs4 bridge or its exact captured eligible predecessor")
 	}
 	return value, nil
 }

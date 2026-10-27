@@ -135,11 +135,23 @@ static gboolean drive_dialog(gpointer data) {
         check(gtk_combo_box_get_active_id(GTK_COMBO_BOX(trial->kill_widget)) == NULL, "unavailable saved protection silently became Off");
     check(gtk_combo_box_set_active_id(GTK_COMBO_BOX(trial->transport_widget), trial->transport), "requested transport not offered by actual widget");
     if (trial->kill != NULL) check(gtk_combo_box_set_active_id(GTK_COMBO_BOX(trial->kill_widget), trial->kill), "requested protection not offered by actual widget");
-    JsonArray *lines = json_object_get_array_member(json_node_get_object(source_lines), trial->transport);
+    JsonArray *lines = json_object_get_array_member(json_node_get_object(source_lines), g_str_has_prefix(trial->fault, "ordinary-mixed-udp") ? "obfs4" : trial->transport);
     GString *text = g_string_new("");
     for (guint i = 0; i < json_array_get_length(lines); i++) {
         if (i) g_string_append_c(text, '\n');
         g_string_append(text, json_array_get_string_element(lines, i));
+    }
+    if (g_str_has_prefix(trial->fault, "ordinary-mixed-udp")) {
+        JsonArray *udp = json_object_get_array_member(json_node_get_object(source_lines), "snowflake");
+        for (guint i = 0; i < json_array_get_length(udp); i++) {
+            const char *line = json_array_get_string_element(udp, i);
+            check(g_str_has_prefix(line, "Bridge snowflake "), "mixed UDP negative lost its real optional Bridge prefix");
+            g_string_append_c(text, '\n');
+            if (g_str_has_suffix(trial->fault, "-bare")) g_string_append(text, line + strlen("Bridge "));
+            else if (g_str_has_suffix(trial->fault, "-unicode")) {
+                g_string_append(text, "bRiDgE\302\240SnOwFlAkE\302\240"); g_string_append(text, line + strlen("Bridge snowflake "));
+            } else g_string_append(text, line);
+        }
     }
     gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(trial->lines)), g_strcmp0(trial->fault, "empty-lines") == 0 ? "" : text->str, -1);
     g_string_free(text, TRUE);
@@ -191,9 +203,18 @@ static void reset_fixture(App *app, const char *fault) {
         json_object_set_string_member(entry, "node_kind", "external"); json_object_set_string_member(external, "protocol", "socks5");
         json_object_set_object_member(entry, "external", external);
     }
+    if (g_strcmp0(fault, "ordinary-mode") == 0 || g_strcmp0(fault, "ordinary-fixed-bypass") == 0)
+        json_object_set_string_member(profile, "multihop_entry_mode", "unrelated-mode");
+    if (g_strcmp0(fault, "ordinary-public-proof") == 0)
+        json_object_set_string_member(json_object_get_object_member(node_in(displayed, "entry"), "external"), "expected_public_ip", "");
     if (g_strcmp0(fault, "missing-token") == 0) json_object_remove_member(node_in(displayed, "entry"), "profile_token");
     current_catalog = copy_public_source_value_v24(displayed); capabilities = copy_public_source_value_v24(source_capabilities);
     if (g_strcmp0(fault, "no-capability") == 0) json_object_set_boolean_member(json_node_get_object(capabilities), "profile_update_source_preconditions", FALSE);
+    if (g_strcmp0(fault, "ordinary-capability") == 0) {
+        JsonArray *rows = json_object_get_array_member(json_node_get_object(capabilities), "transports");
+        for (guint i = 0; i < json_array_get_length(rows); i++)
+            json_object_set_boolean_member(json_array_get_object_element(rows, i), "strict_external_entry_kill_switch", FALSE);
+    }
     g_object_set_data_full(G_OBJECT(app->window), "router-vpn-source-catalog-v24", displayed, (GDestroyNotify)json_node_free);
     app->selected = "tor-edit";
 }
@@ -232,7 +253,11 @@ static void run_trial(App *app, const char *transport, const char *kill, gboolea
     (void)driver;
     if (trial.followup) { g_source_remove(trial.followup); trial.followup = 0; }
     if (expect_post && !refuse_post) verify_post(&trial);
-    else check(trial.finished && posts == (refuse_post ? 1u : 0u) && refreshes == 0, "cancelled/rejected modal escaped its owned callback");
+    else {
+        gboolean rejected = trial.finished && posts == (refuse_post ? 1u : 0u) && refreshes == 0;
+        if (!rejected) g_printerr("Rejected trial identity: %s\n", fault);
+        check(rejected, "cancelled/rejected modal escaped its owned callback");
+    }
     if (emit) {
         char *name = g_strcmp0(fault, "saved-always") == 0 ? g_strdup_printf("tor-update-%spreserved-protection.json", source_prefix) : g_strdup_printf("tor-update-%s%s-%s.json", source_prefix, transport, kill);
         char *path = g_build_filename(directory, name, NULL);
@@ -252,26 +277,44 @@ int main(int argc, char **argv) {
     check(strstr(obj_string(json_node_get_object(source_capabilities), "test_fixture_runtime_availability"), "simulated") != NULL, "UI fixture must label simulated runtime availability");
     App app = {gtk_window_new(GTK_WINDOW_TOPLEVEL), "tor-edit"}; active_app = &app;
     const char *transports[] = {"obfs4", "meek_lite", "snowflake", "webtunnel"}, *kills[] = {"off", "on-connect", "always"};
-    for (guint execution = 0; execution < 2; execution++) {
-    source_prefix = execution ? "server-" : "";
-    source_catalog = read_fixture(execution ? "tor-update-server-source-catalog.json" : "tor-update-source-catalog.json");
-    source_always = read_fixture(execution ? "tor-update-server-always-source-catalog.json" : "tor-update-always-source-catalog.json");
-    check(g_strcmp0(obj_string(node_in(source_catalog, "tor-edit"), "multihop_execution"), execution ? "server" : "local") == 0,
+    const char *selections[] = {"local", "server", "ordinary-wireguard", "ordinary-amneziawg", "ordinary-socks5", "ordinary-http-connect", "ordinary-https-connect", "ordinary-shadowsocks", "ordinary-hysteria2", "ordinary-openvpn"};
+    for (guint execution = 0; execution < G_N_ELEMENTS(selections); execution++) {
+    const char *selection = selections[execution];
+    gboolean ordinary = g_str_has_prefix(selection, "ordinary-");
+    gboolean tcp_only = g_strcmp0(selection, "ordinary-socks5") == 0 || g_strcmp0(selection, "ordinary-http-connect") == 0 || g_strcmp0(selection, "ordinary-https-connect") == 0;
+    char *prefix = g_strcmp0(selection, "local") == 0 ? g_strdup("") : g_strdup_printf("%s-", selection);
+    source_prefix = prefix;
+    char *catalog_name = g_strdup_printf("tor-update-%ssource-catalog.json", prefix), *always_name = g_strdup_printf("tor-update-%salways-source-catalog.json", prefix);
+    source_catalog = read_fixture(catalog_name); source_always = read_fixture(always_name);
+    g_free(catalog_name); g_free(always_name);
+    check(g_strcmp0(obj_string(node_in(source_catalog, "tor-edit"), "multihop_execution"), g_strcmp0(selection, "server") == 0 ? "server" : "local") == 0,
           "native editor did not receive the actual execution-bound Go source catalog");
-    for (guint t = 0; t < G_N_ELEMENTS(transports); t++) for (guint k = 0; k < G_N_ELEMENTS(kills); k++)
-        run_trial(&app, transports[t], kills[k], TRUE, "none", TRUE, FALSE, TRUE);
-    run_trial(&app, "snowflake", NULL, TRUE, "saved-always", TRUE, FALSE, TRUE);
-    run_trial(&app, "snowflake", NULL, TRUE, "invalid-saved-kill", FALSE, FALSE, FALSE);
-    run_trial(&app, "snowflake", NULL, TRUE, "missing-saved-kill", FALSE, FALSE, FALSE);
+    for (guint t = 0; t < G_N_ELEMENTS(transports); t++) for (guint k = 0; k < G_N_ELEMENTS(kills); k++) {
+        gboolean eligible = !(tcp_only && g_strcmp0(transports[t], "snowflake") == 0 && k > 0);
+        run_trial(&app, transports[t], kills[k], TRUE, eligible ? "none" : "ordinary-udp", eligible, FALSE, eligible);
+    }
+    const char *preserved = ordinary ? "meek_lite" : "snowflake";
+    run_trial(&app, preserved, NULL, TRUE, "saved-always", TRUE, FALSE, TRUE);
+    run_trial(&app, preserved, NULL, TRUE, "invalid-saved-kill", FALSE, FALSE, FALSE);
+    run_trial(&app, preserved, NULL, TRUE, "missing-saved-kill", FALSE, FALSE, FALSE);
     const char *failures[] = {"stale-exit", "stale-entry", "missing-exit", "missing-entry", "selected", "duplicate-entry", "mutated-rendered", "busy-after-open", "nodes-unavailable", "missing-token", "no-capability", "empty-lines", "direct-strict", "compare-strict", "external-entry-strict", "server-direct-strict", "server-external-strict", "controller-refusal"};
-    for (guint i = 0; i < G_N_ELEMENTS(failures); i++) run_trial(&app, "snowflake", "always", TRUE, failures[i], FALSE, FALSE, FALSE);
+    for (guint i = 0; i < G_N_ELEMENTS(failures); i++) run_trial(&app, preserved, "always", TRUE, failures[i], FALSE, FALSE, FALSE);
     const char *unprotected[] = {"compare-off", "server-direct-off", "server-external-off"};
     for (guint i = 0; i < G_N_ELEMENTS(unprotected); i++) run_trial(&app, "obfs4", "off", TRUE, unprotected[i], FALSE, FALSE, FALSE);
-    run_trial(&app, "snowflake", "always", TRUE, "cancel", FALSE, TRUE, FALSE);
+    if (ordinary) {
+        const char *ordinary_failures[] = {"ordinary-mode", "ordinary-public-proof", "ordinary-capability"};
+        for (guint i = 0; i < G_N_ELEMENTS(ordinary_failures); i++) run_trial(&app, "meek_lite", "always", TRUE, ordinary_failures[i], FALSE, FALSE, FALSE);
+        run_trial(&app, "obfs4", "always", TRUE, "ordinary-fixed-bypass", FALSE, FALSE, FALSE);
+        if (tcp_only) {
+            const char *udp_failures[] = {"ordinary-mixed-udp", "ordinary-mixed-udp-bare", "ordinary-mixed-udp-unicode"};
+            for (guint i = 0; i < G_N_ELEMENTS(udp_failures); i++) run_trial(&app, "custom", "always", TRUE, udp_failures[i], FALSE, FALSE, FALSE);
+        }
+    }
+    run_trial(&app, preserved, "always", TRUE, "cancel", FALSE, TRUE, FALSE);
     for (guint t = 0; t < G_N_ELEMENTS(transports); t++) run_trial(&app, transports[t], "off", FALSE, "add", TRUE, FALSE, FALSE);
     reset_fixture(&app, "initial-busy"); idle = FALSE; guint before = dialogs;
     on_linux_tor_bridge_v13(NULL, &app); check(dialogs == before && posts == 0 && status_reads == 1 && diagnostics == 1, "busy application opened a Tor mutation dialog");
-    json_node_free(source_catalog); json_node_free(source_always);
+    json_node_free(source_catalog); json_node_free(source_always); g_free(prefix); source_prefix = NULL;
     }
     gtk_widget_destroy(app.window); g_clear_pointer(&last_body, g_free);
     json_node_free(source_capabilities); json_node_free(source_lines); json_node_free(current_catalog); json_node_free(capabilities);

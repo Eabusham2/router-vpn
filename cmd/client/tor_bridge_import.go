@@ -243,7 +243,7 @@ func preserveTorBridgeEditSettings(existing common.RouterProfile, next common.Ro
 	next.MultihopExecution = existing.MultihopExecution
 	if existing.MultihopEnabled && !intent.Kill {
 		// Editing bridge bytes is not permission to disable the protection
-		// already chosen for this saved Router path. Direct additions/edits
+		// already chosen for this saved entry path. Direct additions/edits
 		// retain their existing single-obfs4 versus dynamic defaults.
 		next.KillSwitchPolicy = existing.KillSwitchPolicy
 		if next.KillSwitchPolicy == "" {
@@ -272,7 +272,7 @@ func normalizeTorBridgeImportPolicy(profile common.RouterProfile) (common.Router
 		}
 	}
 	if requestedKill != "off" && !strictLiteralObfs4 && !profile.MultihopEnabled {
-		return common.RouterProfile{}, errors.New("dynamic bootstrap egress requires the exact saved Local Router entry; Direct meek/Snowflake/WebTunnel/custom or multi-bridge profiles require kill_switch_policy=off")
+		return common.RouterProfile{}, errors.New("dynamic bootstrap egress requires the exact saved eligible predecessor; Direct meek/Snowflake/WebTunnel/custom or multi-bridge profiles require kill_switch_policy=off")
 	}
 	profile.KillSwitchPolicy, profile.KillSwitch = requestedKill, requestedKill != "off"
 	policy, err := externalRuntimePolicy(profile)

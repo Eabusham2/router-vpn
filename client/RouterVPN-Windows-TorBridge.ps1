@@ -419,6 +419,20 @@ function TestUnifiedTorRouterPath($Opened,$Profile){
     $Entries=@((ExternalPublicValue $Opened 'profiles' @())|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq $Entry})
     return $Entries.Count-eq1-and(ExternalPublicValue $Entries[0] 'node_kind' 'router-vpn') -cin@('','router-vpn')-and$null-eq(ExternalPublicValue $Entries[0] 'external' $null)
 }
+function TestUnifiedTorOrdinaryPath($Opened,$Profile,$Body){
+    if($null-eq$Profile-or(ExternalPublicValue $Profile 'multihop_enabled' $false) -cne $true){return $false}
+    $ID=[string](ExternalPublicValue $Profile 'id');$Entry=[string](ExternalPublicValue $Profile 'multihop_entry_id')
+    if(-not$Entry-or$Entry-ceq$ID-or(ExternalPublicValue $Profile 'multihop_exit_id') -cne $ID-or(ExternalPublicValue $Profile 'multihop_execution') -cnotin@('','local')){return $false}
+    $Entries=@((ExternalPublicValue $Opened 'profiles' @())|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq $Entry})
+    if($Entries.Count-ne1-or(ExternalPublicValue $Entries[0] 'node_kind') -cne 'external'){return $false}
+    $External=ExternalPublicValue $Entries[0] 'external' $null;$Protocol=[string](ExternalPublicValue $External 'protocol')
+    if($Protocol-cnotin@('wireguard','amneziawg','socks5','http-connect','https-connect','shadowsocks','hysteria2','openvpn')-or(ExternalPublicValue $Profile 'multihop_entry_mode') -cne $Protocol-or-not(ExternalPublicValue $External 'expected_public_ip')){return $false}
+    if($Protocol-cin@('socks5','http-connect','https-connect')){
+        if([string]$Body.transport-ceq'snowflake'){return $false}
+        foreach($Line in @($Body.bridges)){if(([string]$Line)-match'^\s*(?:bridge\s+)?snowflake(?:\s|$)'){return $false}}
+    }
+    return $true
+}
 function NewUnifiedTorImportBody($Body,$Opened,[bool]$Update,$Capabilities,$Current=$null){
     if([string]$Body.kill_switch_policy-cnotin@('off','on-connect','always')){throw 'Choose a valid kill-switch policy before saving. The saved policy was not replaced with Off.'}
     $Result=@{};foreach($Key in $Body.Keys){$Result[$Key]=$Body[$Key]}
@@ -436,9 +450,10 @@ function NewUnifiedTorImportBody($Body,$Opened,[bool]$Update,$Capabilities,$Curr
     }
     $Rows=@((ExternalPublicValue $Capabilities 'transports' @())|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq [string]$Body.transport})
     if($Rows.Count-ne1){throw 'Refresh Tor transport support before saving.'}
-    $Direct=(ExternalPublicValue $Rows[0] 'strict_kill_switch' $false) -ceq $true-and@($Body.bridges).Count-eq1
+    $Direct=(ExternalPublicValue $Rows[0] 'strict_kill_switch' $false) -ceq $true-and@($Body.bridges).Count-eq1-and(-not$Update-or(ExternalPublicValue $Profile 'multihop_enabled' $false) -cne $true)
     $Router=$Update-and(TestUnifiedTorRouterPath $Opened $Profile)-and(ExternalPublicValue $Rows[0] 'strict_router_entry_kill_switch' $false) -ceq $true
-    if([string]$Body.kill_switch_policy-cne'off'-and-not$Direct-and-not$Router){throw 'This bridge selection needs a saved Router entry using Local or Server execution for strict protection. For a new Direct node, choose Kill switch Off, then configure its entry before enabling protection in Settings.'}
+    $Ordinary=$Update-and(TestUnifiedTorOrdinaryPath $Opened $Profile $Body)-and(ExternalPublicValue $Rows[0] 'strict_external_entry_kill_switch' $false) -ceq $true
+    if([string]$Body.kill_switch_policy-cne'off'-and-not$Direct-and-not$Router-and-not$Ordinary){throw 'Strict protection requires a saved eligible entry. Ordinary entries use Local execution; Snowflake also needs bounded native UDP. Server requires a paired Router. For a new Direct dynamic node, choose Kill switch Off, then configure its entry in Settings.'}
     return $Result
 }
 function ShowUnifiedTorBridgeBuilder{
@@ -479,7 +494,7 @@ function ShowUnifiedTorBridgeBuilder{
             $ID=[string](($Transport.SelectedItem).Tag);$C=$Support.Transports[$ID]
             if($C){
                 $Availability=if([bool]$C.supported){'Available'}else{'Unavailable'}
-                $Strict=if([bool]$C.strict_kill_switch){'Direct with one fixed bridge'}elseif((ExternalPublicValue $C 'strict_router_entry_kill_switch' $false)-ceq$true){'with a saved Router entry using Local or Server execution'}else{'unavailable for this transport'}
+                $Strict=if([bool]$C.strict_kill_switch){'Direct with one fixed bridge'}elseif((ExternalPublicValue $C 'strict_external_entry_kill_switch' $false)-ceq$true){'with an eligible Local entry; Server requires a paired Router'}elseif((ExternalPublicValue $C 'strict_router_entry_kill_switch' $false)-ceq$true){'with a saved Router entry using Local or Server execution'}else{'unavailable for this transport'}
                 $Capability.Text=$Availability+" • strict protection "+$Strict+"`n"+[string]$C.description
                 $Why=[string]$C.reason;if($Why){$Capability.Text+="`nReason: "+$Why}
             }else{$Capability.Text="Support details unavailable for $ID."}

@@ -16,8 +16,8 @@ import (
 func TestTorBridgeCapabilitySeparatesDirectAndRouterProtection(t *testing.T) {
 	t.Setenv("HOMEVPN_ROOT", t.TempDir())
 	for _, row := range torBridgeTransportCapabilities() {
-		if !row.StrictRouterEntryKillSwitch || row.StrictKillSwitch != (row.ID == "obfs4") {
-			t.Fatal("capability conflated protected Router and dynamic Direct paths", row)
+		if !row.StrictRouterEntryKillSwitch || !row.StrictExternalEntryKillSwitch || row.StrictKillSwitch != (row.ID == "obfs4") {
+			t.Fatal("capability conflated protected predecessors and dynamic Direct paths", row)
 		}
 	}
 	w := httptest.NewRecorder()
@@ -25,7 +25,7 @@ func TestTorBridgeCapabilitySeparatesDirectAndRouterProtection(t *testing.T) {
 	a.torBridgeCapabilities(w, httptest.NewRequest(http.MethodGet, "/api/tor-bridge/capabilities", nil))
 	var response map[string]any
 	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &response) != nil ||
-		response["router_entry_strict_kill_switch"] != false || response["supported"] != false {
+		response["router_entry_strict_kill_switch"] != false || response["external_entry_strict_kill_switch"] != false || response["supported"] != false {
 		t.Fatal("unverified runtime advertised executable Router protection", w.Code, w.Body.String())
 	}
 }

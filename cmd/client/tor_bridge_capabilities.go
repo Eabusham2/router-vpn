@@ -10,24 +10,25 @@ import (
 )
 
 type torBridgeTransportCapability struct {
-	ID                          string `json:"id"`
-	Name                        string `json:"name"`
-	Implemented                 bool   `json:"implemented"`
-	Supported                   bool   `json:"supported"`
-	StrictKillSwitch            bool   `json:"strict_kill_switch"`
-	StrictRouterEntryKillSwitch bool   `json:"strict_router_entry_kill_switch"`
-	Helper                      string `json:"helper,omitempty"`
-	Description                 string `json:"description"`
-	Reason                      string `json:"reason,omitempty"`
+	ID                            string `json:"id"`
+	Name                          string `json:"name"`
+	Implemented                   bool   `json:"implemented"`
+	Supported                     bool   `json:"supported"`
+	StrictKillSwitch              bool   `json:"strict_kill_switch"`
+	StrictRouterEntryKillSwitch   bool   `json:"strict_router_entry_kill_switch"`
+	StrictExternalEntryKillSwitch bool   `json:"strict_external_entry_kill_switch"`
+	Helper                        string `json:"helper,omitempty"`
+	Description                   string `json:"description"`
+	Reason                        string `json:"reason,omitempty"`
 }
 
 func torBridgeTransportCapabilities() []torBridgeTransportCapability {
 	rows := []torBridgeTransportCapability{
-		{ID: "obfs4", Name: "obfs4", Implemented: true, StrictKillSwitch: true, StrictRouterEntryKillSwitch: true, Description: "Obfuscates Tor bridge traffic into random-looking traffic and resists active probing; one literal obfs4 bridge supports strict Direct protection, and a captured Local or Server Router entry also protects multiple bridges."},
-		{ID: "meek_lite", Name: "meek", Implemented: true, StrictRouterEntryKillSwitch: true, Description: "Carries Tor through HTTPS/domain-fronting. Strict protection requires a captured Local or Server Router entry; its HTTPS and DNS use that proved entry. Direct dynamic egress still requires Kill Switch Off."},
-		{ID: "snowflake", Name: "Snowflake", Implemented: true, StrictRouterEntryKillSwitch: true, Description: "Uses a broker and short-lived WebRTC proxies. Strict protection requires a captured Local or Server Router entry for broker HTTPS, DNS, STUN and WebRTC traffic. Direct dynamic egress still requires Kill Switch Off."},
-		{ID: "webtunnel", Name: "WebTunnel", Implemented: true, StrictRouterEntryKillSwitch: true, Description: "Makes Tor traffic resemble ordinary HTTPS. Strict protection requires a captured Local or Server Router entry for its HTTPS and DNS; Direct dynamic egress still requires Kill Switch Off."},
-		{ID: "custom", Name: "Auto / Custom Tor bridges", Implemented: true, StrictRouterEntryKillSwitch: true, Description: "Accepts validated obfs4, meek, Snowflake and WebTunnel bridge lines, including mixed families. Strict protection requires a captured Local or Server Router entry unless the selection is one fixed obfs4 bridge; arbitrary torrc directives and executables are rejected."},
+		{ID: "obfs4", Name: "obfs4", Implemented: true, StrictKillSwitch: true, StrictRouterEntryKillSwitch: true, StrictExternalEntryKillSwitch: true, Description: "Obfuscates Tor bridge traffic and resists active probing. One literal bridge supports strict Direct protection. Multiple bridges can use a proved Router entry or a Local ordinary entry with its exact captured physical sockets."},
+		{ID: "meek_lite", Name: "meek", Implemented: true, StrictRouterEntryKillSwitch: true, StrictExternalEntryKillSwitch: true, Description: "Carries Tor through HTTPS/domain-fronting. Strict protection uses the proved Router or Local ordinary entry for HTTPS and DNS. Direct dynamic egress requires Kill Switch Off."},
+		{ID: "snowflake", Name: "Snowflake", Implemented: true, StrictRouterEntryKillSwitch: true, StrictExternalEntryKillSwitch: true, Description: "Uses a broker and short-lived WebRTC proxies. Strict protection carries HTTPS, DNS, STUN and WebRTC through a proved entry with bounded native UDP. Local SOCKS5 and HTTP CONNECT entries cannot provide that UDP authority. Direct dynamic egress requires Kill Switch Off."},
+		{ID: "webtunnel", Name: "WebTunnel", Implemented: true, StrictRouterEntryKillSwitch: true, StrictExternalEntryKillSwitch: true, Description: "Makes Tor traffic resemble ordinary HTTPS. Strict protection uses the proved Router or Local ordinary entry for HTTPS and DNS. Direct dynamic egress requires Kill Switch Off."},
+		{ID: "custom", Name: "Auto / Custom Tor bridges", Implemented: true, StrictRouterEntryKillSwitch: true, StrictExternalEntryKillSwitch: true, Description: "Accepts validated obfs4, meek, Snowflake and WebTunnel bridge lines, including mixed families. Strict protection requires an entry whose captured graph carries every selected transport, unless the selection is one fixed obfs4 bridge. Server execution requires a paired private Router."},
 	}
 
 	cap := torBridgeRuntimeCapability()
@@ -99,6 +100,7 @@ func (a *app) torBridgeCapabilities(w http.ResponseWriter, r *http.Request) {
 		"profile_update_source_preconditions": true,
 		"router_vpn_entry_modes":              a.externalRouterEntryModes(),
 		"external_entry_hop":                  cap.Supported,
+		"external_entry_strict_kill_switch":   cap.Supported,
 		"local_execution":                     cap.Supported,
 		"server_execution":                    server.Supported,
 		"server_execution_reason":             server.Reason,

@@ -49,8 +49,10 @@ func check(_ value: @autoclosure () -> Bool, _ message: String) { checks += 1; i
 let directory = URL(fileURLWithPath: CommandLine.arguments[1])
 func object(_ name: String) throws -> [String: Any] { try JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent(name))) as! [String: Any] }
 let localCatalog = try object("tor-update-source-catalog.json"), caps = try object("tor-update-capabilities.json"), lines = try object("tor-update-input-lines.json")
-for execution in ["local", "server"] {
-let filePrefix = execution == "server" ? "server-" : ""
+let selections = ["local", "server"] + ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].map { "ordinary-" + $0 }
+for execution in selections {
+let ordinary = execution.hasPrefix("ordinary-"), tcpOnly = ["ordinary-socks5", "ordinary-http-connect", "ordinary-https-connect"].contains(execution)
+let filePrefix = execution == "local" ? "" : execution + "-"
 let catalog = try object("tor-update-\(filePrefix)source-catalog.json")
 for (index, id) in ["obfs4", "meek_lite", "snowflake", "webtunnel"].enumerated() {
     for (killIndex, kill) in ["off", "on-connect", "always"].enumerated() {
@@ -59,6 +61,10 @@ for (index, id) in ["obfs4", "meek_lite", "snowflake", "webtunnel"].enumerated()
         active.transportPopup.indexOfSelectedItem = index; active.killSwitchPopup.indexOfSelectedItem = killIndex
         active.bridgeText.string = (lines[id] as! [String]).joined(separator: "\n")
         active.save()
+        if tcpOnly && id == "snowflake" && kill != "off" {
+            check(api.saved == nil, "Strict Snowflake escaped the captured TCP-only predecessor check")
+            continue
+        }
         check(api.saved != nil, "Actual Save rejected valid captured update: "+active.status.stringValue)
         let body = api.saved!
         check(body["id"] as? String == "tor-edit" && body["expected_selected_node_id"] as? String == "tor-edit", "Update target changed")
@@ -73,10 +79,12 @@ let alwaysOwner = Owner(always), alwaysAPI = ProductAPI(always)
 let saved = Form(owner: alwaysOwner, api: alwaysAPI, capabilities: caps)
 saved.updateSelectionChanged()
 check(saved.killSwitchPopup.indexOfSelectedItem == 2 && saved.nameField.stringValue == "Captured Tor exit", "Update checkbox did not load saved Always and name")
-saved.transportPopup.indexOfSelectedItem = 2; saved.bridgeText.string = (lines["snowflake"] as! [String]).joined(separator: "\n")
+saved.transportPopup.indexOfSelectedItem = ordinary ? 1 : 2; saved.bridgeText.string = (lines[ordinary ? "meek_lite" : "snowflake"] as! [String]).joined(separator: "\n")
 saved.save(); check(alwaysAPI.saved?["kill_switch_policy"] as? String == "always", "Actual Save lost untouched saved Always protection")
 try JSONSerialization.data(withJSONObject: alwaysAPI.saved!, options: [.sortedKeys]).write(to: directory.appendingPathComponent("tor-update-\(filePrefix)preserved-protection.json"))
-for fault in ["selected", "exit-token", "entry-token", "missing-entry", "duplicate-exit", "entry-is-external", "compare-path", "server-direct", "server-external-entry", "compare-off", "server-direct-off", "server-external-off", "old-controller", "missing-token", "busy", "retired-owner", "display-mutated", "invalid-saved-policy", "missing-saved-policy"] {
+var faults = ["selected", "exit-token", "entry-token", "missing-entry", "duplicate-exit", "entry-is-external", "compare-path", "server-direct", "server-external-entry", "compare-off", "server-direct-off", "server-external-off", "old-controller", "missing-token", "busy", "retired-owner", "display-mutated", "invalid-saved-policy", "missing-saved-policy"]
+if ordinary { faults += ["ordinary-mode", "ordinary-public-proof", "ordinary-capability", "ordinary-fixed-bypass"]; if tcpOnly { faults += ["ordinary-mixed-udp", "ordinary-mixed-udp-bare", "ordinary-mixed-udp-unicode"] } }
+for fault in faults {
     var opened = catalog, current = catalog, capability = caps
     var profiles = opened["profiles"] as! [[String: Any]]
     switch fault {
@@ -84,7 +92,10 @@ for fault in ["selected", "exit-token", "entry-token", "missing-entry", "duplica
     case "exit-token", "entry-token": var now = profiles; now[fault == "exit-token" ? 0 : 1]["profile_token"] = String(repeating: "a", count: 64); current["profiles"] = now
     case "missing-entry": current["profiles"] = [profiles[0]]
     case "duplicate-exit": current["profiles"] = profiles + [profiles[0]]
-    case "entry-is-external": profiles[1]["node_kind"] = "external"; opened["profiles"] = profiles; current = opened
+    case "entry-is-external":
+        profiles[1]["node_kind"] = "external"
+        if ordinary { var external = profiles[1]["external"] as! [String: Any]; external["protocol"] = "unknown"; profiles[1]["external"] = external }
+        opened["profiles"] = profiles; current = opened
     case "compare-path", "compare-off": profiles[0]["multihop_execution"] = "auto"; opened["profiles"] = profiles; current = opened
     case "server-direct", "server-direct-off": profiles[0]["multihop_execution"] = "server"; profiles[0]["multihop_enabled"] = false; opened["profiles"] = profiles; current = opened
     case "server-external-entry", "server-external-off": profiles[0]["multihop_execution"] = "server"; profiles[1]["node_kind"] = "external"; opened["profiles"] = profiles; current = opened
@@ -92,6 +103,11 @@ for fault in ["selected", "exit-token", "entry-token", "missing-entry", "duplica
     case "missing-token": profiles[0]["profile_token"] = ""; opened["profiles"] = profiles; current = opened
     case "invalid-saved-policy": profiles[0]["kill_switch_policy"] = "unexpected"; opened["profiles"] = profiles; current = opened
     case "missing-saved-policy": profiles[0].removeValue(forKey: "kill_switch_policy"); opened["profiles"] = profiles; current = opened
+    case "ordinary-mode", "ordinary-fixed-bypass": profiles[0]["multihop_entry_mode"] = "unrelated-mode"; opened["profiles"] = profiles; current = opened
+    case "ordinary-public-proof":
+        var external = profiles[1]["external"] as! [String: Any]; external["expected_public_ip"] = ""; profiles[1]["external"] = external
+        opened["profiles"] = profiles; current = opened
+    case "ordinary-capability": capability["transports"] = (capability["transports"] as! [[String: Any]]).map { row -> [String: Any] in var changed = row; changed["strict_external_entry_kill_switch"] = false; return changed }
     default: break
     }
     let owner = Owner(opened), api = ProductAPI(current)
@@ -99,7 +115,16 @@ for fault in ["selected", "exit-token", "entry-token", "missing-entry", "duplica
     if fault == "busy" { owner.busy = true }
     if fault == "retired-owner" { active.productOwner = nil }
     if fault == "display-mutated" { owner.profiles[1]["profile_token"] = String(repeating: "b", count: 64); api.current["profiles"] = owner.profiles }
-    active.transportPopup.indexOfSelectedItem = fault.hasSuffix("-off") ? 0 : 2; active.killSwitchPopup.indexOfSelectedItem = fault.hasSuffix("-off") ? 0 : 2; active.bridgeText.string = (lines[fault.hasSuffix("-off") ? "obfs4" : "snowflake"] as! [String]).joined(separator: "\n")
+    let fixed = fault.hasSuffix("-off") || fault == "ordinary-fixed-bypass"
+    active.transportPopup.indexOfSelectedItem = fixed ? 0 : ordinary ? 1 : 2
+    active.killSwitchPopup.indexOfSelectedItem = fault.hasSuffix("-off") ? 0 : 2
+    active.bridgeText.string = (lines[fixed ? "obfs4" : ordinary ? "meek_lite" : "snowflake"] as! [String]).joined(separator: "\n")
+    if fault.hasPrefix("ordinary-mixed-udp") {
+        var mixed = (lines["snowflake"] as! [String])[0]
+        if fault.hasSuffix("-bare") { mixed = mixed.replacingOccurrences(of: "Bridge ", with: "") }
+        if fault.hasSuffix("-unicode") { mixed = mixed.replacingOccurrences(of: "Bridge snowflake ", with: "bRiDgE\u{00a0}SnOwFlAkE\u{00a0}") }
+        active.transportPopup.indexOfSelectedItem = 4; active.bridgeText.string = ((lines["obfs4"] as! [String]) + [mixed]).joined(separator: "\n")
+    }
     if fault == "invalid-saved-policy" || fault == "missing-saved-policy" { active.updateSelectionChanged(); check(active.killSwitchPopup.indexOfSelectedItem == -1, "Missing/invalid policy became Off") }
     active.save(); check(api.saved == nil, "Tor update adopted "+fault)
 }

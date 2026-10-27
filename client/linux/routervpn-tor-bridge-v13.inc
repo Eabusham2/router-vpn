@@ -37,6 +37,28 @@ static gboolean linux_tor_router_path_v13(LinuxTorBridgeV13 *state, JsonObject *
     return entry != NULL && (!kind[0] || g_strcmp0(kind, "router-vpn") == 0) && !json_object_has_member(entry, "external");
 }
 
+static gboolean linux_tor_ordinary_path_v13(LinuxTorBridgeV13 *state, JsonObject *profile, const char *transport, GPtrArray *bridges) {
+    const char *id = external_path_string_v4(profile, "id"), *entry_id = external_path_string_v4(profile, "multihop_entry_id");
+    const char *execution = external_path_string_v4(profile, "multihop_execution");
+    if (!external_path_flag_v4(profile, "multihop_enabled") || !entry_id[0] || g_strcmp0(id, entry_id) == 0 ||
+        g_strcmp0(id, external_path_string_v4(profile, "multihop_exit_id")) != 0 || (execution[0] && g_strcmp0(execution, "local") != 0)) return FALSE;
+    JsonObject *store = state->opened != NULL && JSON_NODE_HOLDS_OBJECT(state->opened) ? json_node_get_object(state->opened) : NULL;
+    JsonObject *entry = external_source_profile_v24(store, entry_id), *external = external_path_object_v4(entry, "external");
+    const char *mode = external_path_string_v4(external, "protocol");
+    if (g_strcmp0(external_path_string_v4(entry, "node_kind"), "external") != 0 ||
+        g_strcmp0(mode, external_path_string_v4(profile, "multihop_entry_mode")) != 0 || !external_path_string_v4(external, "expected_public_ip")[0]) return FALSE;
+    const char *supported[] = {"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"};
+    gboolean valid = FALSE;
+    for (guint i = 0; i < G_N_ELEMENTS(supported); i++) if (g_strcmp0(mode, supported[i]) == 0) valid = TRUE;
+    if (!valid) return FALSE;
+    gboolean udp = g_strcmp0(transport, "snowflake") == 0;
+    for (guint i = 0; bridges != NULL && i < bridges->len; i++) {
+        const char *line = g_ptr_array_index(bridges, i);
+        if (g_regex_match_simple("(*UCP)(?i)^\\s*(?:bridge\\s+)?snowflake(?:\\s|$)", line, 0, 0)) udp = TRUE;
+    }
+    return !udp || (g_strcmp0(mode, "socks5") != 0 && g_strcmp0(mode, "http-connect") != 0 && g_strcmp0(mode, "https-connect") != 0);
+}
+
 static char *linux_tor_text_v13(GtkWidget *view) {
     GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(view));
     GtkTextIter start, end;
@@ -122,8 +144,9 @@ static void linux_tor_refresh_caps_v13(LinuxTorBridgeV13 *state) {
                 gboolean supported = !json_object_has_member(item, "supported") || json_object_get_boolean_member(item, "supported");
                 gboolean strict = json_object_has_member(item, "strict_kill_switch") && json_object_get_boolean_member(item, "strict_kill_switch");
                 gboolean router_strict = external_path_flag_v4(item, "strict_router_entry_kill_switch");
+                gboolean ordinary_strict = external_path_flag_v4(item, "strict_external_entry_kill_switch");
                 if (summary->len) g_string_append_c(summary, '\n');
-                g_string_append_printf(summary, "%s — %s • strict protection %s", id[0] ? id : "unknown", supported ? "available" : "unavailable", strict ? "Direct with one fixed bridge" : router_strict ? "with a saved Router entry using Local or Server execution" : "unavailable for this transport");
+                g_string_append_printf(summary, "%s — %s • strict protection %s", id[0] ? id : "unknown", supported ? "available" : "unavailable", strict ? "Direct with one fixed bridge" : ordinary_strict ? "with an eligible Local entry; Server requires a paired Router" : router_strict ? "with a saved Router entry using Local or Server execution" : "unavailable for this transport");
                 if (description[0]) g_string_append_printf(summary, "\n  %s", description);
                 if (reason[0]) g_string_append_printf(summary, "\n  Reason: %s", reason);
             }
@@ -181,7 +204,7 @@ static char *linux_tor_payload_v13(LinuxTorBridgeV13 *state, JsonNode *current, 
         JsonObject *row = item != NULL && JSON_NODE_HOLDS_OBJECT(item) ? json_node_get_object(item) : NULL;
         if (g_strcmp0(external_path_string_v4(row, "id"), transport) == 0) { capability = row; matches++; }
     }
-    gboolean direct = external_path_flag_v4(capability, "strict_kill_switch") && bridges->len == 1;
+    gboolean direct = external_path_flag_v4(capability, "strict_kill_switch") && bridges->len == 1 && !external_path_flag_v4(profile, "multihop_enabled");
     gboolean router_path = profile != NULL && linux_tor_router_path_v13(state, profile);
     const char *execution = external_path_string_v4(profile, "multihop_execution");
     if (profile != NULL && ((execution[0] && g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0) ||
@@ -190,8 +213,9 @@ static char *linux_tor_payload_v13(LinuxTorBridgeV13 *state, JsonNode *current, 
         g_ptr_array_unref(bridges); return NULL;
     }
     gboolean router = router_path && external_path_flag_v4(capability, "strict_router_entry_kill_switch");
-    if (matches != 1 || (g_strcmp0(kill, "off") != 0 && !direct && !router)) {
-        if (validation_error != NULL) *validation_error = g_strdup(matches != 1 ? "Refresh Tor transport support before saving." : "This bridge selection needs a saved Router entry using Local or Server execution for strict protection. Save a new Direct node with Kill switch Off, then configure its entry before enabling protection in Settings.");
+    gboolean ordinary = profile != NULL && linux_tor_ordinary_path_v13(state, profile, transport, bridges) && external_path_flag_v4(capability, "strict_external_entry_kill_switch");
+    if (matches != 1 || (g_strcmp0(kill, "off") != 0 && !direct && !router && !ordinary)) {
+        if (validation_error != NULL) *validation_error = g_strdup(matches != 1 ? "Refresh Tor transport support before saving." : "Strict protection requires a saved eligible entry. Ordinary entries use Local execution; Snowflake also needs bounded native UDP. Server requires a paired Router. Save a new Direct dynamic node with Kill switch Off, then configure its entry in Settings.");
         g_ptr_array_unref(bridges); return NULL;
     }
 

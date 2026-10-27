@@ -43,12 +43,28 @@ func torBridgeHasRouterPath(_ opened: [String: Any], profile: [String: Any]) -> 
     return rows.count == 1 && ["", "router-vpn"].contains(rows[0]["node_kind"] as? String ?? "router-vpn") && rows[0]["external"] == nil
 }
 
+func torBridgeHasOrdinaryPath(_ opened: [String: Any], profile: [String: Any], body: [String: Any]) -> Bool {
+    guard profile["multihop_enabled"] as? Bool == true, let id = profile["id"] as? String,
+          profile["multihop_exit_id"] as? String == id, let entry = profile["multihop_entry_id"] as? String,
+          !entry.isEmpty, entry != id, ["", "local"].contains(profile["multihop_execution"] as? String ?? ""),
+          let profiles = opened["profiles"] as? [[String: Any]], let bridges = body["bridges"] as? [String] else { return false }
+    let rows = profiles.filter { $0["id"] as? String == entry }
+    guard rows.count == 1, rows[0]["node_kind"] as? String == "external", let external = rows[0]["external"] as? [String: Any],
+          let mode = external["protocol"] as? String, ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(mode),
+          profile["multihop_entry_mode"] as? String == mode, let publicIP = external["expected_public_ip"] as? String, !publicIP.isEmpty else { return false }
+    let udp = body["transport"] as? String == "snowflake" || bridges.contains {
+        let words = $0.split(whereSeparator: { $0.isWhitespace }).map { $0.lowercased() }
+        return (words.first == "bridge" ? words.dropFirst().first : words.first) == "snowflake"
+    }
+    return !udp || !["socks5", "http-connect", "https-connect"].contains(mode)
+}
+
 func torBridgeImportBody(_ body: [String: Any], opened: [String: Any], update: Bool,
                          capabilities: [String: Any], current: [String: Any]? = nil) throws -> [String: Any] {
     func fail(_ message: String) -> NSError { NSError(domain: "RouterVPN.TorEdit", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
     guard let kill = body["kill_switch_policy"] as? String, ["off", "on-connect", "always"].contains(kill) else { throw fail("Choose a valid kill-switch policy before saving. The saved policy was not replaced with Off.") }
     var result = body
-    var router = false
+    var router = false, ordinary = false, throughEntry = false
     if update {
         guard let version = capabilities["profile_update_source_preconditions"] as? NSNumber,
               CFGetTypeID(version) == CFBooleanGetTypeID(), version.boolValue else { throw fail("Update the local controller before editing this captured Tor node.") }
@@ -57,6 +73,8 @@ func torBridgeImportBody(_ body: [String: Any], opened: [String: Any], update: B
         result["id"] = id; result["expected_selected_node_id"] = capture["expected_selected_node_id"]
         result["expected_profile_tokens"] = capture["expected_profile_tokens"]
         router = torBridgeHasRouterPath(opened, profile: profile)
+        ordinary = torBridgeHasOrdinaryPath(opened, profile: profile, body: body)
+        throughEntry = profile["multihop_enabled"] as? Bool == true
         let execution = profile["multihop_execution"] as? String ?? ""
         guard ["", "local", "server"].contains(execution), execution != "server" || router else {
             throw fail("Tor bridge updates require Local execution or explicit Server execution through a saved Router entry. Compare both requires separate measured candidate paths.")
@@ -64,10 +82,11 @@ func torBridgeImportBody(_ body: [String: Any], opened: [String: Any], update: B
     }
     let rows = (capabilities["transports"] as? [[String: Any]] ?? []).filter { $0["id"] as? String == body["transport"] as? String }
     guard rows.count == 1 else { throw fail("Refresh Tor transport support before saving.") }
-    let direct = rows[0]["strict_kill_switch"] as? Bool == true && (body["bridges"] as? [String])?.count == 1
+    let direct = rows[0]["strict_kill_switch"] as? Bool == true && (body["bridges"] as? [String])?.count == 1 && !throughEntry
     router = router && rows[0]["strict_router_entry_kill_switch"] as? Bool == true
-    guard body["kill_switch_policy"] as? String == "off" || direct || router else {
-        throw fail("This bridge selection needs a saved Router entry using Local or Server execution for strict protection. For a new Direct node, choose Kill switch Off, then configure its entry before enabling protection in Settings.")
+    ordinary = ordinary && rows[0]["strict_external_entry_kill_switch"] as? Bool == true
+    guard body["kill_switch_policy"] as? String == "off" || direct || router || ordinary else {
+        throw fail("Strict protection requires a saved eligible entry. Ordinary entries use Local execution; Snowflake also needs bounded native UDP. Server requires a paired Router. For a new Direct dynamic node, choose Kill switch Off, then configure its entry in Settings.")
     }
     return result
 }
@@ -180,11 +199,12 @@ private final class RouterVPNTorBridgeBuilder: NSWindowController {
         let supported = row["supported"] as? Bool ?? false
         let strict = row["strict_kill_switch"] as? Bool ?? false
         let routerStrict = row["strict_router_entry_kill_switch"] as? Bool ?? false
+        let ordinaryStrict = row["strict_external_entry_kill_switch"] as? Bool ?? false
         let description = row["description"] as? String ?? ""
         let reason = row["reason"] as? String ?? ""
-        let protection = strict ? "Direct with one fixed bridge" : (routerStrict ? "with a saved Router entry using Local or Server execution" : "unavailable for this transport")
+        let protection = strict ? "Direct with one fixed bridge" : (ordinaryStrict ? "with an eligible Local entry; Server requires a paired Router" : (routerStrict ? "with a saved Router entry using Local or Server execution" : "unavailable for this transport"))
         capabilityText.stringValue = "\(supported ? "Available" : "Unavailable") • Strict protection \(protection)\n\(description)\(reason.isEmpty ? "" : "\nReason: \(reason)")"
-        if !strict && killSwitchPopup.indexOfSelectedItem != 0 { status.stringValue = "Strict protection requires a saved Router entry using Local or Server execution. The complete captured path is checked when you save." }
+        if !strict && killSwitchPopup.indexOfSelectedItem != 0 { status.stringValue = "Strict protection requires a saved eligible entry. Ordinary entries use Local; Server requires a paired Router. The complete captured path is checked when you save." }
         else { status.stringValue = "" }
     }
 

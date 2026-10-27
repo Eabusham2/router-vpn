@@ -119,12 +119,21 @@ for platform in ('linux', 'darwin'):
             path.write_text(fake)
             path.chmod(0o700)
         store = root / 'routers.json'
-        store.write_text(json.dumps(dict(selected_id='physical', profiles=[dict(
-            id='physical', endpoint=hosts[0], kill_switch_policy='always', home_lan_access=False)])))
+        # The captured ordinary entry owns physical sockets. The separately
+        # saved Tor exit owns strict protection and LAN policy; the selected
+        # unrelated profile and the entry's independent defaults grant none.
+        store.write_text(json.dumps(dict(selected_id='unrelated', profiles=[dict(
+            id='physical', node_kind='external', endpoint=hosts[0],
+            external=dict(protocol='openvpn', expected_public_ip='203.0.113.88'),
+            kill_switch_policy='off', home_lan_access=True), dict(
+            id='tor-exit', node_kind='external', endpoint='198.51.100.44',
+            external=dict(protocol='tor-bridge'), kill_switch_policy='always', home_lan_access=False,
+            multihop_enabled=True, multihop_entry_id='physical', multihop_exit_id='tor-exit', multihop_execution='local'), dict(
+            id='unrelated', endpoint='198.51.100.99', kill_switch_policy='off', home_lan_access=True)])))
         store.chmod(0o600)
         log = root / 'commands.jsonl'
         env = dict(authority, HOMEVPN_ROOT=str(root), HOMEVPN_PROFILE_ID='physical',
-                   HOMEVPN_POLICY_PROFILE_ID='physical', HOMEVPN_ENDPOINT=hosts[0],
+                   HOMEVPN_POLICY_PROFILE_ID='tor-exit', HOMEVPN_ENDPOINT=hosts[0],
                    HOMEVPN_KILLSWITCH_DRY_RUN='0', PATH=str(binary) + os.pathsep + os.environ['PATH'],
                    ROUTERVPN_EGRESS_COMMAND_LOG=str(log), HOMEVPN_KILLSWITCH_DARWIN_UTUNS='',
                    HOMEVPN_KILLSWITCH_DARWIN_PHYSICAL_INTERFACES='en0')
@@ -136,6 +145,8 @@ for platform in ('linux', 'darwin'):
             state_path = root / 'run' / 'kill-switch.json'
             state = json.loads(state_path.read_text())
             assert state['native_egress'] == tuples and state['endpoint_ips'] == hosts
+            assert state['policy'] == 'always' and state['profile_id'] == 'physical'
+            assert state['policy_profile_id'] == 'tor-exit' and not state['home_lan_access']
             commands = [json.loads(line) for line in log.read_text().splitlines()]
             written = [entry for entry in commands if entry['rules']]
             assert len(written) == 2, commands
@@ -160,6 +171,7 @@ for platform in ('linux', 'darwin'):
             assert reassert() == 0
             assert json.loads(state_path.read_text())['native_egress'] == tuples
             assert release() == 0
+            assert json.loads(state_path.read_text())['native_egress'] == tuples
             for entry in [json.loads(line) for line in log.read_text().splitlines()]:
                 if entry['rules']:
                     check_rules(entry['rules'], platform)
@@ -176,5 +188,21 @@ for platform in ('linux', 'darwin'):
             else:
                 raise AssertionError('corrupt retained tuples widened persistent guard')
             assert log.read_bytes() == before_commands
+
+            # On-connect can release only its captured guard. It must use the
+            # same bounded sockets even when both non-owning profiles allow LAN.
+            state_path.write_bytes(before_state)
+            profiles = json.loads(store.read_text())
+            profiles['profiles'][1]['kill_switch_policy'] = 'on-connect'
+            store.write_text(json.dumps(profiles))
+            os.environ.update(authority)
+            assert apply() == 0
+            state = json.loads(state_path.read_text())
+            assert state['policy'] == 'on-connect' and state['native_egress'] == tuples
+            assert state['policy_profile_id'] == 'tor-exit' and not state['home_lan_access']
+            assert release() == 0 and not state_path.exists()
+            for entry in [json.loads(line) for line in log.read_text().splitlines()]:
+                if entry['rules']:
+                    check_rules(entry['rules'], platform)
 
 print('PASS native tuple parsing and actual nft/PF command boundaries, persisted reassert and malformed-input rejection')

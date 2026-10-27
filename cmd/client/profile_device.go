@@ -308,9 +308,9 @@ func validateExternalDeviceSettings(profile common.RouterProfile) error {
 	return mobilemultihop.ValidateExternalTransport(string(source), string(capture))
 }
 
-// Idle intent cannot borrow Router-only protection from a generic external
-// entry ID. Keep this path-aware check after edits so an unsupported old draft
-// can still be corrected to Off without granting strict runtime authority.
+// Idle intent retains the exact linked transport, not a proof of runtime
+// readiness. Strict ordinary paths still need the independently compiled
+// physical projection and live typed entry proof at connection time.
 func validateExternalDeviceSettingsForPath(profile, entry common.RouterProfile) error {
 	if supported, reason := externalDevicePolicySupportForPath(profile, entry); !supported {
 		return errors.New(reason)
@@ -324,7 +324,21 @@ func validateExternalDeviceSettingsForPath(profile, entry common.RouterProfile) 
 			}
 		}
 		if kill != "off" {
-			return errors.New("Tor through an ordinary external entry currently requires Kill Switch Off; strict entry protection requires its proved Router owner")
+			if err := validateExternalDeviceSettings(entry); err != nil {
+				return err
+			}
+			if profile.External.TorBridge == nil {
+				return errors.New("protected Tor path lost its saved bridge plan")
+			}
+			plan, err := mobiletor.NewPlan(*profile.External.TorBridge)
+			if err != nil {
+				return err
+			}
+			for _, bridge := range plan.Bridges {
+				if bridge.Transport == "snowflake" && (entry.External.Protocol == "socks5" || entry.External.Protocol == "http-connect" || entry.External.Protocol == "https-connect") {
+					return errors.New("protected Snowflake requires a predecessor with bounded native UDP; SOCKS5 and HTTP CONNECT cannot supply that physical authority")
+				}
+			}
 		}
 	}
 	return validateExternalDeviceSettings(profile)

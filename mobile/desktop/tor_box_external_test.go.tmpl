@@ -29,6 +29,7 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/shadowsocks"
+	"github.com/sagernet/sing-box/routervpn/common"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	M "github.com/sagernet/sing/common/metadata"
 )
@@ -108,8 +109,12 @@ func TestRouterVPNDesktopTorOrdinaryEntryPublicProofAndNativeLifecycle(t *testin
 	certificate, roots := desktopTorOrdinaryCertificate(t, "1.1.1.1")
 	wrongCertificate, _ := desktopTorOrdinaryCertificate(t, "1.1.1.1")
 	x509.SetFallbackRoots(roots)
-	for _, defect := range []string{"none", "wrong-ip", "wrong-certificate", "wrong-key", "cancel-pending-proof", "retire-pending-proof"} {
+	for _, defect := range []string{"none", "on-connect", "wrong-ip", "wrong-certificate", "wrong-key", "cancel-pending-proof", "retire-pending-proof"} {
 		t.Run(defect, func(t *testing.T) {
+			kill := "always"
+			if defect == "on-connect" {
+				kill, defect = "on-connect", "none"
+			}
 			server := newDesktopTorBoxEntryServer(t)
 			entered, release := make(chan struct{}), make(chan struct{})
 			var enteredOnce, releaseOnce sync.Once
@@ -153,6 +158,14 @@ func TestRouterVPNDesktopTorOrdinaryEntryPublicProofAndNativeLifecycle(t *testin
 			}
 			password := base64.StdEncoding.EncodeToString([]byte(strings.Repeat(key, 32)))
 			entry := desktopTorOrdinaryEntry(t, password)
+			plan, err := mobiletor.NewPlan(common.ExternalTorBridgeConfig{Transport: "obfs4", Bridges: []string{server.bridgeLine}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			egress, err := entry.PhysicalEgress(plan)
+			if err != nil || len(egress) != 1 || egress[0].Host != "192.0.2.44" || egress[0].Port != 443 || egress[0].Network != "tcp" {
+				t.Fatal("strict native fixture lost its exact outer sockets", egress, err)
+			}
 			register := func(registry *outbound.Registry) {
 				outbound.Register[option.ShadowsocksOutboundOptions](registry, C.TypeShadowsocks, func(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.ShadowsocksOutboundOptions) (adapter.Outbound, error) {
 					if tag != entry.Tag() || options.Server != "192.0.2.44" || options.ServerPort != 443 || options.Password != password || options.Detour != "" {
@@ -164,7 +177,8 @@ func TestRouterVPNDesktopTorOrdinaryEntryPublicProofAndNativeLifecycle(t *testin
 				})
 			}
 			f := newDesktopTorBoxCapturedFixture(t, func(profile map[string]any) {
-				profile["kill_switch_policy"], profile["kill_switch"] = "off", false
+				profile["kill_switch_policy"], profile["kill_switch"] = kill, true
+				profile["desktop_physical_egress"] = egress
 				profile["multihop_enabled"], profile["multihop_entry_id"], profile["multihop_exit_id"] = true, entry.ID(), profile["id"]
 				profile["multihop_entry_mode"], profile["multihop_exit_mode"], profile["multihop_execution"] = entry.Mode(), "tor-bridge", "local"
 				profile["external"].(map[string]any)["tor_bridge"].(map[string]any)["bridges"] = []string{server.bridgeLine}
@@ -211,9 +225,14 @@ func TestRouterVPNDesktopTorOrdinaryEntryPublicProofAndNativeLifecycle(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			if receipt.EntryProof == nil || receipt.EntryProof.EntryKind != mobiletor.ExternalPredecessorProofKind || receipt.EntryProof.EntryID != entry.ID() || receipt.EntryProof.EntrySHA256 != entry.Fingerprint() ||
+			if receipt.Policy.KillSwitchPolicy != kill || entry.IsRouter() || entry.Proof() != nil ||
+				receipt.EntryProof == nil || receipt.EntryProof.EntryKind != mobiletor.ExternalPredecessorProofKind || receipt.EntryProof.EntryID != entry.ID() || receipt.EntryProof.EntrySHA256 != entry.Fingerprint() ||
 				!receipt.Policy.ValidEntryProof(receipt.EntryProof, receipt.EntryProof.CheckedAt, time.Now()) || server.proofCalls.Load() != 2 || server.bridgeCalls.Load() != 1 || server.dnsCalls.Load() != 0 || f.socks.dnsCalls.Load() < 2 || !receipt.Proof.DNSProven || !owner.Healthy() {
 				t.Fatal("ordinary encrypted proof/PT/Tor DNS lost distinct ownership", receipt, server.proofCalls.Load(), server.bridgeCalls.Load(), f.socks.dnsCalls.Load())
+			}
+			owner.network.InterfaceUpdated(context.Background())
+			if owner.Healthy() {
+				t.Fatal("strict ordinary proof survived its captured physical network")
 			}
 			closeDesktopTorBox(t, owner)
 			if owner.Healthy() {

@@ -98,10 +98,14 @@ func TestDesktopTorOrdinaryPublicConnectUsesCapturedProtocolDNSAndProof(t *testi
 }
 
 func TestDesktopTorOrdinaryPublicPreflightRejectsChangedSourceBeforeStop(t *testing.T) {
-	for _, fault := range []string{"selected", "entry-secret", "entry-public-token", "tor-secret", "home", "strict", "conflicting-base", "conflicting-mode", "server", "compare"} {
+	for _, fault := range []string{"selected", "entry-secret", "entry-public-token", "tor-secret", "home", "unsupported-udp", "conflicting-base", "conflicting-mode", "server", "compare"} {
 		t.Run(fault, func(t *testing.T) {
 			f := speedLabTorPipelineFixture(t)
-			entry := desktopTorOrdinaryFixture(t, f, "shadowsocks")
+			protocol := "shadowsocks"
+			if fault == "unsupported-udp" {
+				protocol = "socks5"
+			}
+			entry := desktopTorOrdinaryFixture(t, f, protocol)
 			previous := connectSpeedLabTorPrior(t, f, true)
 			originalDNS, _ := activeDNSRuntimeIdentities.Load(f.a)
 			f.a.mu.Lock()
@@ -109,13 +113,15 @@ func TestDesktopTorOrdinaryPublicPreflightRejectsChangedSourceBeforeStop(t *test
 			candidate.ID = "candidate-tor"
 			f.a.profiles.Profiles = append(f.a.profiles.Profiles, candidate)
 			selected := f.a.profiles.SelectedID
-			q := externalProfileConnectRequest{ProfileID: candidate.ID, EntryID: entry.ID, EntryMode: "shadowsocks", Base: "auto", ExpectedSelectedNodeID: &selected}
+			q := externalProfileConnectRequest{ProfileID: candidate.ID, EntryID: entry.ID, EntryMode: protocol, Base: "auto", ExpectedSelectedNodeID: &selected}
 			q.ExpectedProfileTokens = map[string]string{previous.profileID: publicProfileToken(f.a.profiles.Profiles[0]), candidate.ID: publicProfileToken(candidate), entry.ID: publicProfileToken(entry)}
 			switch fault {
 			case "home":
 				f.a.profiles.Profiles[2].DNSMode = "home"
-			case "strict":
+			case "unsupported-udp":
 				f.a.profiles.Profiles[2].KillSwitchPolicy = "always"
+				f.a.profiles.Profiles[2].External.TorBridge.Transport = "snowflake"
+				f.a.profiles.Profiles[2].External.TorBridge.Bridges = []string{clientSnowflakeBridge}
 			case "conflicting-base":
 				q.Base = "wg"
 			case "conflicting-mode":
@@ -125,7 +131,7 @@ func TestDesktopTorOrdinaryPublicPreflightRejectsChangedSourceBeforeStop(t *test
 			case "entry-public-token":
 				q.ExpectedProfileTokens[entry.ID] = strings.Repeat("f", 64)
 			}
-			if fault == "home" || fault == "strict" {
+			if fault == "home" || fault == "unsupported-udp" {
 				q.ExpectedProfileTokens[candidate.ID] = publicProfileToken(f.a.profiles.Profiles[2])
 			}
 			f.a.mu.Unlock()
