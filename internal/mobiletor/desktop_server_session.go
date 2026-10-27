@@ -15,12 +15,13 @@ import (
 // proof. The no-TUN native worker owns the separate front, PTs, selected DNS,
 // dynamic exit proof and joined child shutdown.
 type ServerTorSession struct {
-	owner    *DesktopControl
-	policy   *ServerTorPolicy
-	socks    string
-	state    atomic.Int32
-	expected map[string][]string // guarded by owner.operation
-	proxy    *TCPProxy           // the exact plain-Tor guard path, if selected
+	owner          *DesktopControl
+	policy         *ServerTorPolicy
+	socks          string
+	state          atomic.Int32
+	expected       map[string][]string // guarded by owner.operation
+	proxy          *TCPProxy           // the exact plain-Tor guard path, if selected
+	paddingClaimed bool                // guarded by owner.operation; one cover owner
 }
 
 func NewServerTorSession(owner *DesktopControl, policy *ServerTorPolicy, socksPort int) (*ServerTorSession, error) {

@@ -79,6 +79,13 @@ func NewMobileServerTorPolicy(options MobileServerTorOptions) (*MobileServerTorP
 	}
 	mode := profile["external"].(map[string]any)["protocol"]
 	source := map[string]any{"schema": 1, "id": profile["id"], "entry_node_id": entry.NodeID(), "mode": mode, "dns": dns}
+	padding, paddingSelected, err := capturedTorPaddingPolicy(profile)
+	if err != nil {
+		return nil, err
+	}
+	if paddingSelected {
+		source["padding"] = padding
+	}
 	if mode == "tor-bridge" {
 		source["tor_bridge"] = map[string]any{"transport": "custom", "bridges": bridges}
 	}

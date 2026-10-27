@@ -33,6 +33,23 @@ only after the required selected-path and DNS proofs. Until that host adoption
 is complete, the shared profile compiler continues rejecting enabled padding.
 The extension alone does not close the all-platform padding requirement.
 
+The standalone server worker now has an owned activation path. Its optional
+private source `padding` object captures `enabled` and `rate_kbps`; the source
+hash changes when that selection changes. It keeps its private application
+front closed until the exact child has passed selected-DNS and routed Tor exit
+proof, and the native padding controller reports a positive channel-cell count.
+Renewals use the recorded proof deadline; an unchanged old proof or stalled
+counter cannot renew cover indefinitely. Configuration changes, source
+replacement, cancellation and expired proof retire the captured owner.
+
+The authenticated server receipt carries the outgoing link-cell count, bytes,
+rate, generation, original observation time and conservative expiry. Clients
+require the selected rate, reject missing or regressed counters, and stop their
+existing data sockets when the last receipt expires even if no new status
+response arrives. They reject unrequested cover when the saved selection is Off.
+These server primitives do not enable a client UI path by themselves; the
+corresponding client compiler and host must preserve and prove that policy.
+
 ## Budget and path ownership
 
 | Property | Enforced contract |
@@ -110,6 +127,13 @@ No replacement generation may start while it remains pending. A host must wait
 within its cancellation bound and retire its Tor owner if draining cannot
 finish; it must never announce completed cancellation from a `stopping` reply.
 Bytes already handed to the transport cannot be recalled by this protocol.
+
+Server shutdown first revokes front admission and joins the controller's
+in-flight bounded operation. Quiescing the exact child lets normal native
+circuit teardown account for any queued ciphertext before `STOP` readback.
+If control cannot acknowledge the drain, shutdown must join that same child
+process. A failed control read is never replaced with a fabricated stopped
+receipt or a different process's state.
 
 ## Executable evidence
 

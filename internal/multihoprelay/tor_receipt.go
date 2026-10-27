@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"math"
 	"net/netip"
 	"time"
 )
@@ -121,25 +122,52 @@ const (
 // There is deliberately no latency/score field: circuit proof is not a probe
 // of the last Tor relay and cannot supply either Compare measurement.
 type TorReceipt struct {
-	Schema          int      `json:"schema"`
-	SessionID       string   `json:"session_id"`
-	OwnerID         string   `json:"owner_id"`
-	Peer            string   `json:"peer"`
-	SourceSHA256    string   `json:"source_sha256"`
-	RegistrySHA256  string   `json:"registry_sha256"`
-	DNSPolicySHA256 string   `json:"dns_policy_sha256"`
-	FrontSHA256     string   `json:"front_sha256"`
-	Nonce           string   `json:"nonce"`
-	Sequence        uint64   `json:"sequence"`
-	HeartbeatAt     int64    `json:"heartbeat_at"`
-	Phase           TorPhase `json:"phase"`
-	Bootstrap       int      `json:"bootstrap"`
-	FrontReady      bool     `json:"front_ready"`
-	TrafficAllowed  bool     `json:"traffic_allowed"`
-	ExitIP          string   `json:"exit_ip,omitempty"`
-	IsTor           bool     `json:"is_tor"`
-	DNSProven       bool     `json:"dns_proven"`
-	ProofAt         int64    `json:"proof_at,omitempty"`
+	Schema          int                `json:"schema"`
+	SessionID       string             `json:"session_id"`
+	OwnerID         string             `json:"owner_id"`
+	Peer            string             `json:"peer"`
+	SourceSHA256    string             `json:"source_sha256"`
+	RegistrySHA256  string             `json:"registry_sha256"`
+	DNSPolicySHA256 string             `json:"dns_policy_sha256"`
+	FrontSHA256     string             `json:"front_sha256"`
+	Nonce           string             `json:"nonce"`
+	Sequence        uint64             `json:"sequence"`
+	HeartbeatAt     int64              `json:"heartbeat_at"`
+	Phase           TorPhase           `json:"phase"`
+	Bootstrap       int                `json:"bootstrap"`
+	FrontReady      bool               `json:"front_ready"`
+	TrafficAllowed  bool               `json:"traffic_allowed"`
+	ExitIP          string             `json:"exit_ip,omitempty"`
+	IsTor           bool               `json:"is_tor"`
+	DNSProven       bool               `json:"dns_proven"`
+	ProofAt         int64              `json:"proof_at,omitempty"`
+	Padding         *TorPaddingReceipt `json:"padding,omitempty"`
+}
+
+// TorPaddingReceipt reports the native outgoing link-cell counter from this
+// exact leased worker. It is not a claim of remote delivery or bidirectional
+// traffic shaping. The containing authenticated receipt binds session, source,
+// nonce and worker identity; these timestamps retain the original control
+// observation instead of relabeling an old cached counter as a fresh one.
+type TorPaddingReceipt struct {
+	Direction    string `json:"direction"`
+	Accounting   string `json:"accounting"`
+	Generation   uint64 `json:"generation"`
+	RateKbps     int    `json:"rate_kbps"`
+	ChannelCells uint64 `json:"channel_cells"`
+	ChannelBytes uint64 `json:"channel_cell_bytes"`
+	ObservedAt   int64  `json:"observed_at"`
+	ExpiresAt    int64  `json:"expires_at"`
+}
+
+func validTorPaddingReceipt(p *TorPaddingReceipt, proof, heartbeat, now time.Time) bool {
+	if p == nil || p.Direction != "outgoing" || p.Accounting != "tor-link-cell" || p.Generation == 0 || p.Generation > math.MaxInt64 || p.RateKbps < 32 || p.RateKbps > 192 || p.ChannelCells == 0 || p.ChannelCells > math.MaxUint64/514 ||
+		p.ChannelBytes < p.ChannelCells*512 || p.ChannelBytes > p.ChannelCells*514 || p.ChannelBytes%2 != 0 || p.ObservedAt <= 0 || p.ExpiresAt <= 0 {
+		return false
+	}
+	observed, expires := time.UnixMilli(p.ObservedAt), time.UnixMilli(p.ExpiresAt)
+	return !observed.After(heartbeat) && now.Sub(observed) <= 5*time.Second && expires.After(now) &&
+		!expires.After(observed.Add(10*time.Second)) && !expires.After(proof.Add(30*time.Second))
 }
 
 // ValidateTorReceipt checks data from an already authenticated, exact native
@@ -159,7 +187,7 @@ func ValidateTorReceipt(receipt TorReceipt, capture TorCapture, challenge string
 	}
 	switch receipt.Phase {
 	case TorPending:
-		if receipt.TrafficAllowed || receipt.ExitIP != "" || receipt.IsTor || receipt.DNSProven || receipt.ProofAt != 0 {
+		if receipt.TrafficAllowed || receipt.ExitIP != "" || receipt.IsTor || receipt.DNSProven || receipt.ProofAt != 0 || receipt.Padding != nil {
 			return bad
 		}
 	case TorReady:
@@ -167,6 +195,9 @@ func ValidateTorReceipt(receipt TorReceipt, capture TorCapture, challenge string
 		proof := time.UnixMilli(receipt.ProofAt)
 		if err != nil || ip.Zone() != "" || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() ||
 			!receipt.TrafficAllowed || receipt.Bootstrap != 100 || !receipt.IsTor || !receipt.DNSProven || receipt.ProofAt == 0 || proof.After(heartbeat) || now.Sub(proof) > 30*time.Second {
+			return bad
+		}
+		if receipt.Padding != nil && !validTorPaddingReceipt(receipt.Padding, proof, heartbeat, now) {
 			return bad
 		}
 	default:

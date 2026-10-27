@@ -22,10 +22,15 @@ import (
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
-func serverTorCommandCapture(t *testing.T, host string) (multihoprelay.TorCapture, *mobiletor.ServerTorPolicy) {
+func serverTorCommandCapture(t *testing.T, host string, padding ...bool) (multihoprelay.TorCapture, *mobiletor.ServerTorPolicy) {
 	t.Helper()
 	node := strings.Repeat("1", 64)
-	policy, err := mobiletor.NewServerTorPolicy(`{"schema":1,"id":"native-tor","entry_node_id":"`+node+`","mode":"tor","dns":{"mode":"home"},"adguard_ipv4":"192.168.50.133"}`, node)
+	selection := map[string]any{"schema": 1, "id": "native-tor", "entry_node_id": node, "mode": "tor", "dns": map[string]any{"mode": "home"}, "adguard_ipv4": "192.168.50.133"}
+	if len(padding) == 1 && padding[0] {
+		selection["padding"] = map[string]any{"enabled": true, "rate_kbps": 192}
+	}
+	encoded, _ := json.Marshal(selection)
+	policy, err := mobiletor.NewServerTorPolicy(string(encoded), node)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,6 +131,13 @@ func TestServerTorNativeCommandJoinsOwnerBeforeAcknowledgingClose(t *testing.T) 
 	}
 }
 func TestServerTorNativeRealNoTUNPendingChildAndCapturedFront(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run("padding-"+strconv.FormatBool(enabled), func(t *testing.T) { serverTorNativePendingChild(t, enabled) })
+	}
+}
+
+func serverTorNativePendingChild(t *testing.T, padding bool) {
+	t.Helper()
 	previous := globalCtx
 	globalCtx = include.Context(t.Context())
 	defer func() { globalCtx = previous }()
@@ -158,7 +170,7 @@ func TestServerTorNativeRealNoTUNPendingChildAndCapturedFront(t *testing.T) {
 	if host == "" {
 		t.Fatal("requires a private local interface for the actual leased front")
 	}
-	c, policy := serverTorCommandCapture(t, host)
+	c, policy := serverTorCommandCapture(t, host, padding)
 	reserve, err := net.Listen("tcp4", net.JoinHostPort(host, "0"))
 	if err != nil {
 		t.Fatal(err)
@@ -179,13 +191,19 @@ func TestServerTorNativeRealNoTUNPendingChildAndCapturedFront(t *testing.T) {
 		t.Fatal(err)
 	}
 	native := owner.(*routerVPNServerTor)
-	if len(native.box.Inbound().Inbounds()) != 0 || native.child.Session().Current() {
+	if len(native.box.Inbound().Inbounds()) != 0 || native.child.Session().Current() || native.padding != nil {
 		t.Fatal("pending native worker started a TUN or enabled Tor networking")
+	}
+	if padding && (native.paddingHealthy() || !native.paddingProofUntil().IsZero()) {
+		t.Fatal("requested native cover manufactured path/DNS proof while networking was disabled")
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
+	if padding && (native.startPadding(ctx) == nil || native.padding != nil || native.front.Allowed() || native.child.Verify(ctx) != nil) {
+		t.Fatal("unproved actual child acquired cover, opened admission, or lost its untouched control owner")
+	}
 	receipt, err := owner.Snapshot(ctx, strings.Repeat("f", 64))
-	if err != nil || multihoprelay.ValidateTorReceipt(receipt, c, strings.Repeat("f", 64), time.Now(), time.Now()) != nil || receipt.Phase != multihoprelay.TorPending || receipt.TrafficAllowed {
+	if err != nil || multihoprelay.ValidateTorReceipt(receipt, c, strings.Repeat("f", 64), time.Now(), time.Now()) != nil || receipt.Phase != multihoprelay.TorPending || receipt.TrafficAllowed || receipt.Padding != nil {
 		t.Fatal("real native pending receipt invalid", err)
 	}
 	connection, err := net.DialTimeout("tcp4", net.JoinHostPort(host, itoaServerTor(c.Port)), time.Second)

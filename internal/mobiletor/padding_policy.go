@@ -6,28 +6,46 @@ import (
 	"router-vpn/internal/common"
 )
 
-// validateTorPaddingPolicy keeps a requested exit policy from becoming only a
-// source digest. The current Tor owner does not implement the application's
-// bounded cover service. Tor's built-in connection/circuit padding is a
-// different policy and cannot satisfy this request by implication.
-//
-// A valid dormant rate remains saved while padding is Off. Zero is the common
-// profile's unset value; neither it nor an absent enabled flag starts padding.
-// This admission boundary is not completion of the native padding requirement.
-func validateTorPaddingPolicy(profile map[string]any) error {
+const PaddingDefaultRateKbps = 192
+
+// TorPaddingPolicy captures the requested outgoing Tor relay-cell cover. It
+// does not authorize activation: the native host must own a fresh path/DNS
+// proof, the exact circuit isolation credentials and the native cell counter.
+// Off retains its saved rate, including zero (unset), without starting cover.
+type TorPaddingPolicy struct {
+	Enabled  bool `json:"enabled"`
+	RateKbps int  `json:"rate_kbps"`
+}
+
+func capturedTorPaddingPolicy(profile map[string]any) (TorPaddingPolicy, bool, error) {
 	requested := false
+	_, selected := profile["daita_enabled"]
+	_, hasRate := profile["daita_rate_kbps"]
 	if raw, exists := profile["daita_enabled"]; exists {
 		var ok bool
 		requested, ok = raw.(bool)
 		if !ok {
-			return errors.New("Tor padding selection must be a boolean")
+			return TorPaddingPolicy{}, false, errors.New("Tor padding selection must be a boolean")
 		}
 	}
 	rate, err := profileInteger(profile, "daita_rate_kbps", 0)
 	if err != nil || rate != 0 && (rate < common.DAITALikeMinRateKbps || rate > common.DAITALikeMaxRateKbps) {
-		return errors.New("Tor padding rate must be an integer of 0 or 32..192 kbps")
+		return TorPaddingPolicy{}, false, errors.New("Tor padding rate must be an integer of 0 or 32..192 kbps")
 	}
-	if requested {
+	if requested && rate == 0 {
+		rate = PaddingDefaultRateKbps
+	}
+	return TorPaddingPolicy{Enabled: requested, RateKbps: rate}, selected || hasRate, nil
+}
+
+// Keep enabled profile admission closed until the compiled shipping native
+// owners can prove and maintain the selected outgoing-cover policy.
+func validateTorPaddingPolicy(profile map[string]any) error {
+	policy, _, err := capturedTorPaddingPolicy(profile)
+	if err != nil {
+		return err
+	}
+	if policy.Enabled {
 		return errors.New("requested Tor padding requires its bounded native circuit owner, which is not implemented for this path")
 	}
 	return nil

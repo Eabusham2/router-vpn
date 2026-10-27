@@ -22,30 +22,34 @@ import (
 )
 
 type routerVPNServerTor struct {
-	ctx             context.Context
-	cancel          context.CancelFunc
-	root            *os.Root
-	capture         multihoprelay.TorCapture
-	policy          *mobiletor.ServerTorPolicy
-	box             *box.Box
-	child           *mobiletor.ServerTorChild
-	network         *routervpnservertor.Network
-	front           *mobiletor.ServerTorFront
-	dns             adapter.DNSRouter
-	dnsManager      adapter.DNSTransportManager
-	dnsOwner        adapter.DNSTransport
-	final           adapter.Outbound
-	proofNetwork    *mobiletor.Network
-	mu              sync.Mutex
-	started         bool
-	closing         bool
-	boxClosed       bool
-	boxCloseError   error
-	proof           mobiletor.Proof
-	sequence        uint64
-	done            chan struct{}
-	expiry          *time.Timer
-	proofGeneration uint64
+	ctx                          context.Context
+	cancel                       context.CancelFunc
+	root                         *os.Root
+	capture                      multihoprelay.TorCapture
+	policy                       *mobiletor.ServerTorPolicy
+	box                          *box.Box
+	child                        *mobiletor.ServerTorChild
+	network                      *routervpnservertor.Network
+	front                        *mobiletor.ServerTorFront
+	dns                          adapter.DNSRouter
+	dnsManager                   adapter.DNSTransportManager
+	dnsOwner                     adapter.DNSTransport
+	final                        adapter.Outbound
+	proofNetwork                 *mobiletor.Network
+	mu                           sync.Mutex
+	started                      bool
+	closing                      bool
+	boxClosed                    bool
+	boxCloseError                error
+	proof                        mobiletor.Proof
+	sequence                     uint64
+	done                         chan struct{}
+	expiry                       *time.Timer
+	proofGeneration              uint64
+	padding                      *mobiletor.PaddingLease
+	paddingUntil                 time.Time
+	socksUsername, socksPassword string
+	closeGate                    chan struct{}
 }
 
 func routerVPNNewServerTor(parent context.Context, root *os.Root, directory string, capture multihoprelay.TorCapture) (result routerVPNTorRelayOwner, failure error) {
@@ -80,7 +84,7 @@ func routerVPNNewServerTorWithBinary(parent context.Context, root *os.Root, dire
 	}
 	owned, cancel := context.WithCancel(service.ContextWithDefaultRegistry(service.ExtendContext(globalCtx)))
 	context.AfterFunc(parent, cancel)
-	n := &routerVPNServerTor{ctx: owned, cancel: cancel, root: root, capture: capture, policy: policy, done: make(chan struct{})}
+	n := &routerVPNServerTor{ctx: owned, cancel: cancel, root: root, capture: capture, policy: policy, done: make(chan struct{}), closeGate: make(chan struct{}, 1)}
 	result = n
 	stage = "isolated SOCKS reservation"
 	initialize, finish := context.WithTimeout(owned, 7*time.Second)
@@ -97,7 +101,8 @@ func routerVPNNewServerTorWithBinary(parent context.Context, root *os.Root, dire
 	if _, err = rand.Read(isolation[:]); err != nil {
 		return result, bad
 	}
-	configuration, err := policy.NativeConfig(port, hex.EncodeToString(isolation[:32]), hex.EncodeToString(isolation[32:]))
+	n.socksUsername, n.socksPassword = hex.EncodeToString(isolation[:32]), hex.EncodeToString(isolation[32:])
+	configuration, err := policy.NativeConfig(port, n.socksUsername, n.socksPassword)
 	clear(isolation[:])
 	if err != nil {
 		return result, bad
@@ -194,14 +199,27 @@ func (n *routerVPNServerTor) run() {
 		n.cancel()
 		return
 	}
+	if err := n.startPadding(initial); err != nil || !n.current() || n.front.Enable() != nil {
+		finish()
+		n.cancel()
+		return
+	}
 	finish()
-	ticker := time.NewTicker(15 * time.Second)
-	defer ticker.Stop()
 	for {
+		delay := 15 * time.Second
+		if n.policy.Padding().Enabled {
+			delay = min(delay, time.Until(n.paddingProofUntil())/2)
+			if delay < 100*time.Millisecond {
+				n.cancel()
+				return
+			}
+		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-n.ctx.Done():
+			timer.Stop()
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			if n.prove(n.ctx) != nil {
 				n.cancel()
 				return
@@ -216,6 +234,7 @@ func (n *routerVPNServerTor) prove(parent context.Context) error {
 	if !n.current() || !n.child.Session().Current() || n.box.RouterVPNServerTorDNSProof(ctx) != nil {
 		return bad
 	}
+	dnsAt := time.Now()
 	proof, err := mobiletor.Prove(ctx, n.capture.Request.SessionID, n.proofNetwork.DialContext)
 	if err != nil || !proof.IsTor || proof.SessionID != n.capture.Request.SessionID || proof.CheckedAt.IsZero() {
 		return bad
@@ -234,13 +253,17 @@ func (n *routerVPNServerTor) prove(parent context.Context) error {
 		n.expiry.Stop()
 	}
 	n.proof = proof
+	n.paddingUntil = dnsAt.Add(30 * time.Second)
+	if expiry := proof.CheckedAt.Add(30 * time.Second); expiry.Before(n.paddingUntil) {
+		n.paddingUntil = expiry
+	}
 	n.proofGeneration++
 	generation := n.proofGeneration
-	n.expiry = time.AfterFunc(time.Until(proof.CheckedAt.Add(30*time.Second)), func() { n.expire(generation) })
-	if n.front.Enable() != nil {
-		n.cancel()
-		return bad
+	expires := proof.CheckedAt.Add(30 * time.Second)
+	if n.policy.Padding().Enabled && n.paddingUntil.Before(expires) {
+		expires = n.paddingUntil
 	}
+	n.expiry = time.AfterFunc(time.Until(expires), func() { n.expire(generation) })
 	return nil
 }
 func (n *routerVPNServerTor) expire(generation uint64) {
@@ -255,7 +278,7 @@ func (n *routerVPNServerTor) trafficDial(ctx context.Context, network, address s
 	proof := n.proof
 	closing := n.closing
 	n.mu.Unlock()
-	if closing || !proof.IsTor || time.Since(proof.CheckedAt) > 30*time.Second {
+	if closing || !proof.IsTor || time.Since(proof.CheckedAt) > 30*time.Second || !n.paddingHealthy() {
 		return nil, net.ErrClosed
 	}
 	return n.finalDial(ctx, network, address)
@@ -312,27 +335,42 @@ func (n *routerVPNServerTor) Snapshot(ctx context.Context, nonce string) (multih
 	if err != nil || string(raw) != n.policy.Source() {
 		return multihoprelay.TorReceipt{}, bad
 	}
+	allowed := n.front.Allowed()
+	var padding *multihoprelay.TorPaddingReceipt
+	if allowed {
+		padding, err = n.paddingReceipt()
+		if err != nil {
+			return multihoprelay.TorReceipt{}, bad
+		}
+	}
 	n.mu.Lock()
-	defer n.mu.Unlock()
 	if n.closing || !n.current() || ctx.Err() != nil {
+		n.mu.Unlock()
 		return multihoprelay.TorReceipt{}, bad
 	}
 	n.sequence++
+	sequence, proof := n.sequence, n.proof
+	n.mu.Unlock()
 	r := multihoprelay.TorReceipt{Schema: 1, SessionID: n.capture.Request.SessionID, OwnerID: n.capture.OwnerID, Peer: n.capture.Peer,
 		SourceSHA256: n.policy.SourceSHA256(), RegistrySHA256: n.capture.RegistrySHA256, DNSPolicySHA256: n.policy.DNSPolicySHA256(), FrontSHA256: n.capture.FrontSHA256(),
-		Nonce: nonce, Sequence: n.sequence, HeartbeatAt: time.Now().UnixMilli(), Phase: multihoprelay.TorPending, FrontReady: true}
-	if n.proof.IsTor {
-		if !n.front.Allowed() || time.Since(n.proof.CheckedAt) > 30*time.Second || bootstrap.Progress != 100 || !bootstrap.CircuitEstablished {
+		Nonce: nonce, Sequence: sequence, HeartbeatAt: time.Now().UnixMilli(), Phase: multihoprelay.TorPending, FrontReady: true}
+	if allowed {
+		if !proof.IsTor || time.Since(proof.CheckedAt) > 30*time.Second || bootstrap.Progress != 100 || !bootstrap.CircuitEstablished {
 			return multihoprelay.TorReceipt{}, bad
 		}
+		r.Padding = padding
 		r.Phase = multihoprelay.TorReady
 		r.TrafficAllowed = true
 		r.Bootstrap = 100
 		r.IsTor = true
 		r.DNSProven = true
-		r.ExitIP = n.proof.IP
-		r.ProofAt = n.proof.CheckedAt.UnixMilli()
+		r.ExitIP = proof.IP
+		r.ProofAt = proof.CheckedAt.UnixMilli()
 	}
+	if !n.current() || ctx.Err() != nil {
+		return multihoprelay.TorReceipt{}, bad
+	}
+	r.HeartbeatAt = time.Now().UnixMilli()
 	return r, nil
 }
 func (n *routerVPNServerTor) Close(ctx context.Context) error {
@@ -349,7 +387,19 @@ func (n *routerVPNServerTor) Close(ctx context.Context) error {
 		n.expiry.Stop()
 	}
 	started := n.started
+	padding := n.padding
 	n.mu.Unlock()
+	if padding != nil {
+		padding.Cancel()
+	}
+	if n.closeGate != nil {
+		select {
+		case n.closeGate <- struct{}{}:
+			defer func() { <-n.closeGate }()
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	if n.front != nil {
 		if err := n.front.Close(ctx); err != nil {
 			return err
@@ -363,6 +413,17 @@ func (n *routerVPNServerTor) Close(ctx context.Context) error {
 		}
 	}
 	if n.child != nil {
+		if padding != nil {
+			if err := padding.Join(ctx); err != nil {
+				return err
+			}
+			// Reset first: native circuit teardown truthfully accounts for an
+			// encrypted pending cell that cannot be removed from a live cipher.
+			// A lost control stream is discharged only by joining this exact
+			// child below, never by pretending that STOP was acknowledged.
+			_ = n.child.Session().Quiesce(ctx)
+			_ = padding.Close(ctx)
+		}
 		if err := n.child.Close(ctx); err != nil {
 			return err
 		}

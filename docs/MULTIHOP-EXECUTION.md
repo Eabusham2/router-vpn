@@ -162,6 +162,19 @@ resolver before pairing. The operator command delegates all bridge and DNS
 validation and normalization to `mobiletor.NewServerTorPolicy`, the same
 compiler used by the running worker; it has no separate Python resolver rules.
 
+If the captured client selection requests outgoing Tor cell cover, include
+`"padding": {"enabled": true, "rate_kbps": 192}`. The rate must be an integer
+from 32 through 192 kbit/s. An omitted or zero enabled rate canonicalizes to
+192; Off preserves a valid saved rate, including zero. Omitting `padding`
+preserves the previous source identity, while an explicit Off/dormant choice
+remains part of the source hash. The server source and client selection must
+compile to the same hash; neither can silently enable, disable or change the
+other's cover policy. This covers outgoing Tor link cells, with transport
+overhead additional; it is not a promise of bidirectional padding. The worker
+requires actual owned native channel counters before opening its application
+front. See [the native Tor cover contract](TOR-PADDING.md) for accounting,
+proof expiry and shutdown behavior.
+
 First produce an explicit private review plan:
 
 ```sh

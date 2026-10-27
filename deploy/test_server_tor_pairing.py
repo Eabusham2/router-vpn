@@ -187,6 +187,54 @@ class ServerTorPairing(unittest.TestCase):
         self.assertEqual(json.loads(self.registry.read_bytes())['exits'], [self.foreign])
         self.assertEqual(self.unrelated.read_bytes(), b'{"private":"preserve-unrelated-source"}')
 
+    def test_padding_roundtrips_actual_compiler_dry_run_and_owned_publication(self):
+        baseline = self.compile(source())
+        retained = {}
+        for index, (enabled, rate) in enumerate(((True, 0), (True, 32), (True, 192), (False, 0), (False, 192))):
+            with self.subTest(enabled=enabled, rate=rate):
+                selected = source()
+                selected['padding'] = dict(enabled=enabled, rate_kbps=rate)
+                self.write(self.input, json.dumps(selected).encode())
+                before = self.registry.read_bytes()
+                plan = self.root/('padding-review-'+str(index)+'.json')
+                self.run_pair(['--dry-run', plan])
+                self.assertEqual(self.registry.read_bytes(), before)
+                self.assertEqual(plan.stat().st_mode & 0o777, 0o600)
+                review = json.loads(plan.read_bytes())
+                reference = review['registry']['tor_exits'][-1]
+                canonical = review['tor_sources'][reference['source_sha256']]
+                expected = dict(enabled=enabled, rate_kbps=192 if enabled and rate == 0 else rate)
+                self.assertEqual(json.loads(canonical)['padding'], expected)
+                self.assertNotEqual(reference['source_sha256'], baseline['reference']['source_sha256'])
+                self.assertEqual(reference['dns_policy_sha256'], baseline['reference']['dns_policy_sha256'])
+                self.run_pair()
+                path = self.sources/(reference['source_sha256']+'.json')
+                self.assertEqual(path.read_bytes(), canonical.encode())
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                if path in retained:
+                    self.assertEqual((path.read_bytes(), path.stat().st_ino), retained[path])
+                retained[path] = path.read_bytes(), path.stat().st_ino
+                for previous, capture in retained.items():
+                    self.assertEqual((previous.read_bytes(), previous.stat().st_ino), capture)
+                registry = json.loads(self.registry.read_bytes())
+                self.assertEqual(registry['exits'], [self.foreign])
+                self.assertEqual(registry['tor_exits'], [self.previous['reference'], reference])
+                self.assertEqual(self.previous_path.stat().st_ino, self.before_inode)
+                self.assertEqual(self.unrelated.read_bytes(), b'{"private":"preserve-unrelated-source"}')
+
+    def test_malformed_padding_cannot_publish_or_leak_private_source(self):
+        for padding in (dict(enabled='true'), dict(enabled=True, rate_kbps=193),
+                        dict(enabled=False, rate_kbps=None),
+                        dict(enabled=True, password='private-padding-secret')):
+            selected = source()
+            selected['padding'] = padding
+            self.write(self.input, json.dumps(selected).encode())
+            with self.assertRaises(ValueError) as failure:
+                self.run_pair()
+            self.assertNotIn('private-padding-secret', str(failure.exception))
+            self.assert_preserved()
+        self.assertEqual(self.checks, 0)
+
     def test_dry_run_writes_only_explicit_private_plan(self):
         plan = self.root/'review'/'pairing-plan.json'
         self.run_pair(['--dry-run', plan])

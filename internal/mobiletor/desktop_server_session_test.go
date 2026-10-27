@@ -27,7 +27,7 @@ type serverTorSessionFixture struct {
 	expected   map[string][]string
 }
 
-func newServerTorSessionFixture(t *testing.T, mode string, mutate func(string, string) string) *serverTorSessionFixture {
+func newServerTorSessionFixture(t *testing.T, mode string, mutate func(string, string) string, policies ...*ServerTorPolicy) *serverTorSessionFixture {
 	t.Helper()
 	f := &serverTorSessionFixture{busySeen: make(chan struct{}, 1)}
 	f.progress.Store(100)
@@ -146,7 +146,11 @@ func newServerTorSessionFixture(t *testing.T, mode string, mutate func(string, s
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { f.owner.Close() })
-	f.session, err = NewServerTorSession(f.owner, serverTorPolicy(t, serverTorSource(mode)), 19950)
+	policy := serverTorPolicy(t, serverTorSource(mode))
+	if len(policies) == 1 {
+		policy = policies[0]
+	}
+	f.session, err = NewServerTorSession(f.owner, policy, 19950)
 	if err != nil {
 		t.Fatal(err)
 	}

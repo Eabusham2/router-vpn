@@ -25,6 +25,9 @@ class ServerTorPreparation(unittest.TestCase):
         content=PREP.copies()
         self.assertIn('cmd/sing-box/routervpn_server_tor_command.go',content)
         self.assertIn('cmd/sing-box/routervpn_server_tor_native.go',content)
+        self.assertIn('cmd/sing-box/routervpn_server_tor_padding.go',content)
+        self.assertIn('routervpn/mobiletor/desktop_server_padding.go',content)
+        self.assertIn('routervpn/mobiletor/padding_lease.go',content)
         self.assertIn('routervpn/servertor/network_owner.go',content)
         self.assertIn('routervpn_server_tor_box.go',content)
         self.assertIn('routervpn-server-tor-pt-notices.json',content)
@@ -41,8 +44,15 @@ class ServerTorPreparation(unittest.TestCase):
                      'RouterVPNServerTorDNSProof(ctx)','mobiletor.Prove(ctx,',
                      'mobiletor.StartServerTorFront(','.Bootstrap(ctx)',
                      'n.proofGeneration++','n.expire(generation)',
+                     'n.startPadding(initial)','padding.Join(ctx)',
                      'n.child.Close(ctx)','n.network.Close(ctx)','n.proofNetwork.Close(ctx)'):
             self.assertIn(gate,native)
+        cover=(ROOT/'mobile/server_tor/padding.go.tmpl').read_text()
+        for gate in ('n.child.Session().PaddingLease(', 'n.paddingProofUntil',
+                     'lease.Start(ctx)', 'lease.Receipt()', 'status.ChannelCells',
+                     'status.Identity.SessionSHA256 != n.capture.OwnerID',
+                     'string(raw) == n.policy.Source()'):
+            self.assertIn(gate,cover)
 
 
 if __name__=='__main__':unittest.main()

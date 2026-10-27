@@ -30,23 +30,25 @@ var errServerTorClient = errors.New("captured Tor server lease is unavailable or
 // dialer. No default resolver, HTTP proxy, physical dialer, or local Tor process
 // exists here. Its receipt is server readiness, never the client's exit proof.
 type ServerTorClient struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	entry     *PredecessorProof
-	policy    *ServerTorPolicy
-	session   string
-	current   func() bool
-	control   *Network
-	data      *Network
-	operation chan struct{}
-	mu        sync.Mutex
-	closing   bool
-	attempt   bool
-	request   multihoprelay.TorRequest
-	lease     multihoprelay.TorLease
-	sequence  uint64
-	ready     bool
-	started   time.Time
+	ctx           context.Context
+	cancel        context.CancelFunc
+	entry         *PredecessorProof
+	policy        *ServerTorPolicy
+	session       string
+	current       func() bool
+	control       *Network
+	data          *Network
+	operation     chan struct{}
+	mu            sync.Mutex
+	closing       bool
+	attempt       bool
+	request       multihoprelay.TorRequest
+	lease         multihoprelay.TorLease
+	sequence      uint64
+	ready         bool
+	started       time.Time
+	padding       *multihoprelay.TorPaddingReceipt
+	paddingExpiry *time.Timer
 }
 
 func NewServerTorClient(parent context.Context, policy *ServerTorPolicy, entry *PredecessorProof, session string, dial DialContext, current func() bool) (*ServerTorClient, error) {
@@ -70,7 +72,7 @@ func NewServerTorClient(parent context.Context, policy *ServerTorPolicy, entry *
 	c.control = control
 	c.data, err = NewNetwork(ctx, func(ctx context.Context, network, address string) (net.Conn, error) {
 		c.mu.Lock()
-		lease, allowed := c.lease, c.ready && !c.closing && c.lease.ExpiresAt.After(time.Now())
+		lease, allowed := c.lease, c.ready && !c.closing && c.lease.ExpiresAt.After(time.Now()) && c.paddingCurrentLocked(time.Now())
 		c.mu.Unlock()
 		if !allowed || !current() || network != "tcp" {
 			return nil, errServerTorClient
@@ -106,13 +108,64 @@ func (c *ServerTorClient) Current() bool {
 		return false
 	}
 	c.mu.Lock()
-	current := !c.closing && c.attempt && c.lease.OwnerID != "" && c.lease.ExpiresAt.After(time.Now())
-	expired := c.lease.OwnerID != "" && !c.lease.ExpiresAt.After(time.Now())
+	now := time.Now()
+	current := !c.closing && c.attempt && c.lease.OwnerID != "" && c.lease.ExpiresAt.After(now) && (!c.ready || c.paddingCurrentLocked(now))
+	expired := c.lease.OwnerID != "" && (!c.lease.ExpiresAt.After(now) || c.ready && !c.paddingCurrentLocked(now))
 	c.mu.Unlock()
 	if expired {
 		c.cancel()
 	}
 	return current
+}
+
+func (c *ServerTorClient) paddingCurrentLocked(now time.Time) bool {
+	return !c.policy.Padding().Enabled || c.padding != nil && c.padding.ExpiresAt > now.UnixMilli() && now.UnixMilli()-c.padding.ObservedAt < 5000
+}
+
+func (c *ServerTorClient) adoptPaddingLocked(receipt multihoprelay.TorReceipt) bool {
+	policy := c.policy.Padding()
+	if receipt.Phase != multihoprelay.TorReady {
+		return receipt.Padding == nil && c.padding == nil
+	}
+	if !policy.Enabled {
+		return receipt.Padding == nil
+	}
+	p := receipt.Padding
+	if p == nil || p.RateKbps != policy.RateKbps {
+		return false
+	}
+	if c.padding != nil && (p.Generation != c.padding.Generation || p.ObservedAt < c.padding.ObservedAt || p.ChannelCells < c.padding.ChannelCells || p.ChannelBytes < c.padding.ChannelBytes) {
+		return false
+	}
+	if c.padding != nil {
+		cells, bytes := p.ChannelCells-c.padding.ChannelCells, p.ChannelBytes-c.padding.ChannelBytes
+		if bytes < cells*512 || bytes > cells*514 {
+			return false
+		}
+	}
+	copy := *p
+	c.padding = &copy
+	if c.paddingExpiry != nil {
+		c.paddingExpiry.Stop()
+	}
+	deadline := time.UnixMilli(copy.ExpiresAt)
+	if observationDeadline := time.UnixMilli(copy.ObservedAt).Add(5 * time.Second); observationDeadline.Before(deadline) {
+		deadline = observationDeadline
+	}
+	c.paddingExpiry = time.AfterFunc(time.Until(deadline), func() { c.expirePadding(&copy) })
+	return true
+}
+
+func (c *ServerTorClient) expirePadding(receipt *multihoprelay.TorPaddingReceipt) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	// An old timer may already be waiting for this lock when a newer nonce
+	// response is adopted. Only that exact still-current receipt can cancel.
+	// The timer already captured the conservative remaining duration. A wall
+	// clock adjustment cannot extend that grant when the timer actually fires.
+	if c.padding == receipt && !c.closing {
+		c.cancel()
+	}
 }
 func (c *ServerTorClient) Ready() bool {
 	if !c.Current() {
@@ -269,7 +322,7 @@ func (c *ServerTorClient) Status(ctx context.Context) (result multihoprelay.TorR
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.closing || c.ctx.Err() != nil || !c.current() || multihoprelay.ValidateTorReceipt(status.Receipt, c.capture(c.lease), nonce, c.started, time.Now()) != nil || status.Receipt.Sequence <= c.sequence || status.Receipt.Phase != c.lease.Phase || c.ready && status.Receipt.Phase != multihoprelay.TorReady {
+	if c.closing || c.ctx.Err() != nil || !c.current() || multihoprelay.ValidateTorReceipt(status.Receipt, c.capture(c.lease), nonce, c.started, time.Now()) != nil || status.Receipt.Sequence <= c.sequence || status.Receipt.Phase != c.lease.Phase || c.ready && status.Receipt.Phase != multihoprelay.TorReady || !c.adoptPaddingLocked(status.Receipt) {
 		return multihoprelay.TorReceipt{}, errServerTorClient
 	}
 	c.sequence, c.ready = status.Receipt.Sequence, status.Receipt.Phase == multihoprelay.TorReady
@@ -348,6 +401,9 @@ func (c *ServerTorClient) Close(ctx context.Context) error {
 	}
 	c.mu.Lock()
 	c.closing, c.ready = true, false
+	if c.paddingExpiry != nil {
+		c.paddingExpiry.Stop()
+	}
 	c.mu.Unlock()
 	c.cancel()
 	if err := c.data.Close(ctx); err != nil {

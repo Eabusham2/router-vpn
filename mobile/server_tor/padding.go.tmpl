@@ -1,0 +1,89 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func (n *routerVPNServerTor) paddingCurrent() bool {
+	if !n.current() || !n.child.Session().Current() {
+		return false
+	}
+	raw, err := routerVPNServerTorRead(n.root, "tor-source.json", 64<<10)
+	return err == nil && string(raw) == n.policy.Source()
+}
+
+func (n *routerVPNServerTor) paddingProofUntil() time.Time {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.closing || !n.proof.IsTor || !n.proof.DNSProven || n.proof.SessionID != n.capture.Request.SessionID {
+		return time.Time{}
+	}
+	return n.paddingUntil
+}
+
+func (n *routerVPNServerTor) startPadding(ctx context.Context) error {
+	policy := n.policy.Padding()
+	if !policy.Enabled {
+		return nil
+	}
+	lease, err := n.child.Session().PaddingLease(n.ctx, mobiletor.PaddingLeaseOptions{
+		SessionSHA256: n.capture.OwnerID, SourceSHA256: n.policy.SourceSHA256(), RateKbps: policy.RateKbps,
+		Username: n.socksUsername, Password: n.socksPassword,
+		Current: n.paddingCurrent, ProofValidUntil: n.paddingProofUntil,
+		Retire: func(error) {
+			n.cancel()
+			// The helper has already joined its monitor before this callback.
+			// Keep the exact child/front/PT owner reachable while shutdown runs.
+			go func() { _ = n.Close(context.Background()) }()
+		},
+	})
+	if err != nil {
+		return err
+	}
+	n.mu.Lock()
+	if n.closing || n.padding != nil || n.ctx.Err() != nil {
+		n.mu.Unlock()
+		lease.Cancel()
+		return errors.New("server Tor padding owner retired during capture")
+	}
+	n.padding = lease
+	n.mu.Unlock()
+	if err := lease.Start(ctx); err != nil {
+		return err
+	}
+	if !lease.Healthy() || !n.paddingCurrent() {
+		return errors.New("server Tor padding did not prove its captured channel owner")
+	}
+	return nil
+}
+
+func (n *routerVPNServerTor) paddingHealthy() bool {
+	if !n.policy.Padding().Enabled {
+		return true
+	}
+	n.mu.Lock()
+	lease := n.padding
+	n.mu.Unlock()
+	return lease != nil && lease.Healthy()
+}
+
+func (n *routerVPNServerTor) paddingReceipt() (*multihoprelay.TorPaddingReceipt, error) {
+	if !n.policy.Padding().Enabled {
+		return nil, nil
+	}
+	n.mu.Lock()
+	lease := n.padding
+	n.mu.Unlock()
+	status, observed, expires, valid := lease.Receipt()
+	if !valid || status.Identity.SessionSHA256 != n.capture.OwnerID || status.Identity.SourceSHA256 != n.policy.SourceSHA256() || status.RateKbps != n.policy.Padding().RateKbps {
+		return nil, errors.New("server Tor padding receipt lost its exact native owner")
+	}
+	return &multihoprelay.TorPaddingReceipt{Direction: "outgoing", Accounting: "tor-link-cell", Generation: status.Identity.Generation,
+		RateKbps: status.RateKbps, ChannelCells: status.ChannelCells, ChannelBytes: status.ChannelBytes,
+		ObservedAt: observed.UnixMilli(), ExpiresAt: expires.UnixMilli()}, nil
+}

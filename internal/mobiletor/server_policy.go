@@ -20,15 +20,17 @@ type ServerTorPolicy struct {
 	dns                             SelectedDNS
 	selected                        string
 	bridges                         []string
+	padding                         TorPaddingPolicy
 }
 
-func (p *ServerTorPolicy) Source() string          { return p.source }
-func (p *ServerTorPolicy) SourceSHA256() string    { return p.sourceSHA256 }
-func (p *ServerTorPolicy) DNSPolicySHA256() string { return p.dnsSHA256 }
-func (p *ServerTorPolicy) ID() string              { return p.id }
-func (p *ServerTorPolicy) EntryNodeID() string     { return p.entry }
-func (p *ServerTorPolicy) Mode() string            { return p.mode }
-func (p *ServerTorPolicy) DNS() SelectedDNS        { return p.dns }
+func (p *ServerTorPolicy) Source() string            { return p.source }
+func (p *ServerTorPolicy) SourceSHA256() string      { return p.sourceSHA256 }
+func (p *ServerTorPolicy) DNSPolicySHA256() string   { return p.dnsSHA256 }
+func (p *ServerTorPolicy) ID() string                { return p.id }
+func (p *ServerTorPolicy) EntryNodeID() string       { return p.entry }
+func (p *ServerTorPolicy) Mode() string              { return p.mode }
+func (p *ServerTorPolicy) DNS() SelectedDNS          { return p.dns }
+func (p *ServerTorPolicy) Padding() TorPaddingPolicy { return p.padding }
 
 func (p *ServerTorPolicy) Plan() (Plan, error) {
 	if p == nil || p.mode != "tor-bridge" {
@@ -45,7 +47,7 @@ func NewServerTorPolicy(source, entryNodeID string) (*ServerTorPolicy, error) {
 	bad := errors.New("invalid private server Tor source")
 	object, err := profileObject(source, 64<<10)
 	if err != nil || !capturedHex(entryNodeID, 32) ||
-		!serverTorFields(object, []string{"schema", "id", "entry_node_id", "mode", "dns"}, []string{"tor_bridge", "adguard_ipv4", "adguard_ipv6"}) {
+		!serverTorFields(object, []string{"schema", "id", "entry_node_id", "mode", "dns"}, []string{"tor_bridge", "adguard_ipv4", "adguard_ipv6", "padding"}) {
 		return nil, bad
 	}
 	schema, err := profileInteger(object, "schema", 0)
@@ -55,6 +57,22 @@ func NewServerTorPolicy(source, entryNodeID string) (*ServerTorPolicy, error) {
 		return nil, bad
 	}
 	canonical := map[string]any{"schema": 1, "id": id, "entry_node_id": entryNodeID, "mode": mode}
+	var padding TorPaddingPolicy
+	if raw, present := object["padding"]; present {
+		selection, ok := raw.(map[string]any)
+		if !ok || !serverTorFields(selection, []string{"enabled"}, []string{"rate_kbps"}) {
+			return nil, bad
+		}
+		profile := map[string]any{"daita_enabled": selection["enabled"]}
+		if rate, exists := selection["rate_kbps"]; exists {
+			profile["daita_rate_kbps"] = rate
+		}
+		padding, _, err = capturedTorPaddingPolicy(profile)
+		if err != nil {
+			return nil, bad
+		}
+		canonical["padding"] = padding
+	}
 	var bridges []string
 	if mode == "tor-bridge" {
 		bridge, ok := object["tor_bridge"].(map[string]any)
@@ -146,7 +164,7 @@ func NewServerTorPolicy(source, entryNodeID string) (*ServerTorPolicy, error) {
 	canonicalJSON, _ := json.Marshal(canonical)
 	dnsJSON, _ := json.Marshal(dnsCapture)
 	selectedJSON, _ := json.Marshal(selected)
-	return &ServerTorPolicy{source: string(canonicalJSON), sourceSHA256: capturedDigest(canonicalJSON), dnsSHA256: capturedDigest(dnsJSON), id: id, entry: entryNodeID, mode: mode, dns: metadata, selected: string(selectedJSON), bridges: bridges}, nil
+	return &ServerTorPolicy{source: string(canonicalJSON), sourceSHA256: capturedDigest(canonicalJSON), dnsSHA256: capturedDigest(dnsJSON), id: id, entry: entryNodeID, mode: mode, dns: metadata, selected: string(selectedJSON), bridges: bridges, padding: padding}, nil
 }
 
 func serverTorFields(object map[string]any, required, optional []string) bool {
