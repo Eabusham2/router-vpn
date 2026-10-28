@@ -1,0 +1,219 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// This is the authenticated front's only application dialer. Its network owns
+// the tracked socket, including every entered Read/Write, until actual cleanup
+// joins. The native proof dialer is separately owned and grants no application
+// bypass. Neither a status request nor a pending control frame extends data.
+type routerVPNServerTorData struct {
+	ctx              context.Context
+	cancel           context.CancelFunc
+	current          func() bool
+	until            func() time.Time
+	dial             mobiletor.DialContext
+	retire           context.CancelFunc
+	network          *mobiletor.Network
+	mu               sync.Mutex
+	started, closing bool
+	done             chan struct{}
+}
+
+func newRouterVPNServerTorData(parent context.Context, current func() bool, until func() time.Time, dial mobiletor.DialContext, retire context.CancelFunc) (*routerVPNServerTorData, error) {
+	if parent == nil || parent.Err() != nil || current == nil || until == nil || dial == nil || retire == nil {
+		return nil, errors.New("server Tor data requires its captured native lifetime")
+	}
+	ctx, cancel := context.WithCancel(parent)
+	o := &routerVPNServerTorData{ctx: ctx, cancel: cancel, current: current, until: until, dial: dial, retire: retire, done: make(chan struct{})}
+	var err error
+	o.network, err = mobiletor.NewNetwork(ctx, o.open, nil)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	return o, nil
+}
+
+func (o *routerVPNServerTorData) healthy() bool {
+	return o != nil && o.ctx.Err() == nil && o.current() && time.Now().Before(o.until())
+}
+
+func (o *routerVPNServerTorData) Begin() error {
+	if !o.healthy() {
+		return net.ErrClosed
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.started || o.closing || o.ctx.Err() != nil {
+		return net.ErrClosed
+	}
+	o.started = true
+	go o.watch()
+	return nil
+}
+
+func (o *routerVPNServerTorData) ready() bool {
+	if !o.healthy() {
+		return false
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.started && !o.closing && o.ctx.Err() == nil
+}
+
+func (o *routerVPNServerTorData) watch() {
+	defer close(o.done)
+	for {
+		remaining := time.Until(o.until())
+		if !o.healthy() || remaining <= 0 {
+			o.cancel()
+			o.retire()
+			return
+		}
+		timer := time.NewTimer(min(100*time.Millisecond, remaining))
+		select {
+		case <-o.ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+func (o *routerVPNServerTorData) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	if ctx == nil || ctx.Err() != nil || network != "tcp" || !o.ready() {
+		return nil, net.ErrClosed
+	}
+	until := o.until()
+	if !time.Now().Before(until) {
+		return nil, net.ErrClosed
+	}
+	operation, cancel := context.WithDeadline(ctx, until)
+	defer cancel()
+	connection, err := o.network.DialContext(operation, network, address)
+	if err != nil {
+		return nil, err
+	}
+	if !o.ready() {
+		_ = connection.Close()
+		return nil, net.ErrClosed
+	}
+	return connection, nil
+}
+
+func (o *routerVPNServerTorData) open(ctx context.Context, network, address string) (net.Conn, error) {
+	if ctx == nil || ctx.Err() != nil || network != "tcp" || !o.ready() {
+		return nil, net.ErrClosed
+	}
+	connection, err := o.dial(ctx, network, address)
+	if connection == nil {
+		return nil, err
+	}
+	tracked := &routerVPNServerTorDataConn{Conn: connection, owner: o, done: make(chan struct{})}
+	if ctx.Err() != nil || !o.ready() {
+		err = errors.Join(err, net.ErrClosed)
+	}
+	return tracked, err
+}
+
+func (o *routerVPNServerTorData) Close(ctx context.Context) error {
+	if o == nil {
+		return nil
+	}
+	if ctx == nil {
+		return errors.New("server Tor data close requires its retained lifetime")
+	}
+	o.mu.Lock()
+	o.closing = true
+	started := o.started
+	o.mu.Unlock()
+	o.cancel()
+	if err := o.network.Close(ctx); err != nil {
+		return err
+	}
+	if started {
+		select {
+		case <-o.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+type routerVPNServerTorDataConn struct {
+	net.Conn
+	owner      *routerVPNServerTorData
+	mu         sync.Mutex
+	closing    bool
+	operations sync.WaitGroup
+	closeOnce  sync.Once
+	done       chan struct{}
+	failure    error
+}
+
+func (c *routerVPNServerTorDataConn) begin() bool {
+	if !c.owner.ready() {
+		c.beginClose()
+		return false
+	}
+	c.mu.Lock()
+	if c.closing {
+		c.mu.Unlock()
+		return false
+	}
+	c.operations.Add(1)
+	c.mu.Unlock()
+	if !c.owner.ready() {
+		c.beginClose()
+		c.operations.Done()
+		return false
+	}
+	return true
+}
+func (c *routerVPNServerTorDataConn) Read(buffer []byte) (int, error) {
+	if !c.begin() {
+		return 0, net.ErrClosed
+	}
+	defer c.operations.Done()
+	n, err := c.Conn.Read(buffer)
+	if !c.owner.ready() {
+		clear(buffer[:n])
+		c.beginClose()
+		return 0, net.ErrClosed
+	}
+	return n, err
+}
+func (c *routerVPNServerTorDataConn) Write(buffer []byte) (int, error) {
+	if !c.begin() {
+		return 0, net.ErrClosed
+	}
+	defer c.operations.Done()
+	n, err := c.Conn.Write(buffer)
+	if !c.owner.ready() {
+		c.beginClose()
+		return n, net.ErrClosed
+	}
+	return n, err
+}
+func (c *routerVPNServerTorDataConn) beginClose() {
+	c.closeOnce.Do(func() {
+		c.mu.Lock()
+		c.closing = true
+		c.mu.Unlock()
+		go func() { c.failure = c.Conn.Close(); c.operations.Wait(); close(c.done) }()
+	})
+}
+func (c *routerVPNServerTorDataConn) Close() error {
+	c.beginClose()
+	<-c.done
+	return c.failure
+}

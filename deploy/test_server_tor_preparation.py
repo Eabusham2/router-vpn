@@ -26,6 +26,8 @@ class ServerTorPreparation(unittest.TestCase):
         self.assertIn('cmd/sing-box/routervpn_server_tor_command.go',content)
         self.assertIn('cmd/sing-box/routervpn_server_tor_native.go',content)
         self.assertIn('cmd/sing-box/routervpn_server_tor_padding.go',content)
+        self.assertIn('cmd/sing-box/routervpn_server_tor_data.go',content)
+        self.assertIn('cmd/sing-box/routervpn_server_tor_data_test.go',content)
         self.assertIn('routervpn/mobiletor/desktop_server_padding.go',content)
         self.assertIn('routervpn/mobiletor/padding_lease.go',content)
         self.assertIn('routervpn/servertor/network_owner.go',content)
@@ -44,13 +46,14 @@ class ServerTorPreparation(unittest.TestCase):
                      'RouterVPNServerTorDNSProof(ctx)','mobiletor.Prove(ctx,',
                      'mobiletor.StartServerTorFront(','.Bootstrap(ctx)',
                      'n.proofGeneration++','n.expire(generation)',
-                     'n.startPadding(initial)','padding.Join(ctx)',
+                     'n.startPadding(initial)','n.data.Begin()','n.data.Close(ctx)','padding.Join(ctx)',
+                     'newRouterVPNServerTorData(owned, n.trafficCurrent, n.trafficUntil, n.finalDial, n.cancel)',
                      'n.child.Close(ctx)','n.network.Close(ctx)','n.proofNetwork.Close(ctx)'):
             self.assertIn(gate,native)
         cover=(ROOT/'mobile/server_tor/padding.go.tmpl').read_text()
         for gate in ('n.child.Session().PaddingLease(', 'n.paddingProofUntil',
-                     'lease.Start(ctx)', 'lease.Receipt()', 'status.ChannelCells',
-                     'status.Identity.SessionSHA256 != n.capture.OwnerID',
+                     'lease.Start(ctx)', 'lease.NativeReceipt()', 'receipt.ChannelCells',
+                     'receipt.SessionSHA256 != n.capture.OwnerID',
                      'string(raw) == n.policy.Source()'):
             self.assertIn(gate,cover)
 

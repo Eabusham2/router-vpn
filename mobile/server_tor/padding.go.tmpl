@@ -56,7 +56,7 @@ func (n *routerVPNServerTor) startPadding(ctx context.Context) error {
 	if err := lease.Start(ctx); err != nil {
 		return err
 	}
-	if !lease.Healthy() || !n.paddingCurrent() {
+	if _, valid := lease.NativeReceipt(); !valid || !n.paddingCurrent() {
 		return errors.New("server Tor padding did not prove its captured channel owner")
 	}
 	return nil
@@ -69,7 +69,8 @@ func (n *routerVPNServerTor) paddingHealthy() bool {
 	n.mu.Lock()
 	lease := n.padding
 	n.mu.Unlock()
-	return lease != nil && lease.Healthy()
+	_, valid := lease.NativeReceipt()
+	return valid
 }
 
 func (n *routerVPNServerTor) paddingReceipt() (*multihoprelay.TorPaddingReceipt, error) {
@@ -79,11 +80,11 @@ func (n *routerVPNServerTor) paddingReceipt() (*multihoprelay.TorPaddingReceipt,
 	n.mu.Lock()
 	lease := n.padding
 	n.mu.Unlock()
-	status, observed, expires, valid := lease.Receipt()
-	if !valid || status.Identity.SessionSHA256 != n.capture.OwnerID || status.Identity.SourceSHA256 != n.policy.SourceSHA256() || status.RateKbps != n.policy.Padding().RateKbps {
+	receipt, valid := lease.NativeReceipt()
+	if !valid || receipt.SessionSHA256 != n.capture.OwnerID || receipt.SourceSHA256 != n.policy.SourceSHA256() || receipt.RateKbps != n.policy.Padding().RateKbps {
 		return nil, errors.New("server Tor padding receipt lost its exact native owner")
 	}
-	return &multihoprelay.TorPaddingReceipt{Direction: "outgoing", Accounting: "tor-link-cell", Generation: status.Identity.Generation,
-		RateKbps: status.RateKbps, ChannelCells: status.ChannelCells, ChannelBytes: status.ChannelBytes,
-		ObservedAt: observed.UnixMilli(), ExpiresAt: expires.UnixMilli()}, nil
+	return &multihoprelay.TorPaddingReceipt{Direction: receipt.Direction, Accounting: receipt.Accounting, Generation: receipt.Generation,
+		RateKbps: receipt.RateKbps, ChannelCells: receipt.ChannelCells, ChannelBytes: receipt.ChannelBytes,
+		ObservedAt: receipt.ObservedAt, ExpiresAt: receipt.ExpiresAt}, nil
 }

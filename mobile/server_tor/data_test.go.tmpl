@@ -1,0 +1,687 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// The fixture doubles only native control replies. The exact PaddingLease,
+// parser, cached grant, server data owner, socket retention and authenticated
+// private TCP front are production implementations. Actual standalone Tor
+// process/SAFECOOKIE/no-TUN gates remain separate tests; no public circuit is
+// claimed by these deterministic data-lifetime cases.
+type serverTorDataControl struct {
+	ctx                          context.Context
+	cancel                       context.CancelFunc
+	native                       *routerVPNServerTor
+	lease                        *mobiletor.PaddingLease
+	control                      *mobiletor.Control
+	proofUntil                   atomic.Int64
+	current                      atomic.Bool
+	blockStatus                  atomic.Bool
+	statusEntered, statusRelease chan struct{}
+	statusOnce, releaseOnce      sync.Once
+	stopCalls                    atomic.Int32
+	renewCalls                   atomic.Int32
+}
+
+func newServerTorDataControl(t *testing.T, grant time.Duration) *serverTorDataControl {
+	t.Helper()
+	capture, policy := serverTorCommandCapture(t, "10.77.0.1", true)
+	ctx, cancel := context.WithCancel(t.Context())
+	f := &serverTorDataControl{ctx: ctx, cancel: cancel, native: &routerVPNServerTor{capture: capture, policy: policy}, statusEntered: make(chan struct{}), statusRelease: make(chan struct{})}
+	f.current.Store(true)
+	f.proofUntil.Store(time.Now().Add(mobiletor.PaddingProofMaxAge).UnixNano())
+	client, peer := net.Pipe()
+	var err error
+	f.control, err = mobiletor.NewControl(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.lease, err = mobiletor.NewPaddingLease(ctx, f.control, mobiletor.PaddingLeaseOptions{SessionSHA256: capture.OwnerID, SourceSHA256: policy.SourceSHA256(), RateKbps: 192,
+		Username: strings.Repeat("a", 64), Password: strings.Repeat("b", 64), Current: f.current.Load,
+		ProofValidUntil: func() time.Time { return time.Unix(0, f.proofUntil.Load()) }, Retire: func(error) { cancel() }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.native.padding = f.lease
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		reader := bufio.NewReader(peer)
+		var until time.Time
+		var cells uint64
+		stopped := false
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				return
+			}
+			fields := strings.Fields(line)
+			if len(fields) == 2 && fields[0] == "ROUTERVPN_PADDING" && fields[1] == "INFO" {
+				_, err = io.WriteString(peer, "250 version=1 direction=outgoing min_rate_kbps=32 max_rate_kbps=192 default_rate_kbps=192 max_ttl_ms=10000 max_pending_cells=1 accounting=tor-link-cell username_hex_lengths=32,64 password_hex_length=64 generation_highwater=6\r\n")
+				if err != nil {
+					return
+				}
+				continue
+			}
+			if len(fields) < 5 || fields[0] != "ROUTERVPN_PADDING" || fields[2] != capture.OwnerID || fields[3] != policy.SourceSHA256() || fields[4] != "7" {
+				t.Error("server control operation substituted captured source/session/generation")
+				return
+			}
+			switch fields[1] {
+			case "START":
+				if len(fields) != 9 || fields[5] != "192" || fields[7] != strings.Repeat("a", 64) || fields[8] != strings.Repeat("b", 64) {
+					t.Error("server native rate or isolation changed")
+					return
+				}
+				requested, err := strconv.Atoi(fields[6])
+				if err != nil || requested < 100 || requested > 10000 {
+					t.Error("invalid requested grant")
+					return
+				}
+				until = time.Now().Add(min(grant, time.Duration(requested)*time.Millisecond))
+			case "RENEW":
+				f.renewCalls.Add(1)
+				if len(fields) != 6 {
+					t.Error("invalid renewal")
+					return
+				}
+				requested, err := strconv.Atoi(fields[5])
+				if err != nil || requested < 100 || requested > 10000 {
+					t.Error("invalid requested renewal")
+					return
+				}
+				until = time.Now().Add(min(grant, time.Duration(requested)*time.Millisecond))
+			case "STATUS":
+				if f.blockStatus.Load() {
+					f.statusOnce.Do(func() { close(f.statusEntered); <-f.statusRelease })
+				}
+			case "STOP":
+				f.stopCalls.Add(1)
+				stopped = true
+			default:
+				t.Error("unexpected server native operation")
+				return
+			}
+			state, reason := "running", "active"
+			expires := time.Until(until).Milliseconds()
+			if stopped || expires <= 0 {
+				state, reason, expires = "stopped", "expired", 0
+			} else {
+				cells++
+			}
+			pending, queued := uint64(0), cells
+			if stopped {
+				reason = "controller"
+			}
+			source := policy.SourceSHA256()
+			reply := fmt.Sprintf("250 version=1 state=%s reason=%s session=%s source=%s generation=7 rate_kbps=192 expires_ms=%d queued_cells=%d queued_cell_bytes=%d channel_cells=%d channel_cell_bytes=%d dropped_cells=0 dropped_cell_bytes=0 pending_cells=%d last_circuit=17\r\n", state, reason, capture.OwnerID, source, expires, queued, queued*514, cells, cells*514, pending)
+			if _, err = io.WriteString(peer, reply); err != nil {
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		f.release()
+		cancel()
+		f.lease.Cancel()
+		_ = f.lease.Join(context.Background())
+		_ = f.lease.Close(context.Background())
+		_ = f.control.Close()
+		_ = peer.Close()
+		<-done
+	})
+	return f
+}
+func (f *serverTorDataControl) release() { f.releaseOnce.Do(func() { close(f.statusRelease) }) }
+func (f *serverTorDataControl) until() time.Time {
+	r, err := f.native.paddingReceipt()
+	if err != nil {
+		return time.Time{}
+	}
+	return minServerTorTime(time.UnixMilli(r.ExpiresAt), time.UnixMilli(r.ObservedAt).Add(mobiletor.PaddingReceiptMaxAge))
+}
+func minServerTorTime(a, b time.Time) time.Time {
+	if a.Before(b) {
+		return a
+	}
+	return b
+}
+func (f *serverTorDataControl) data(t *testing.T, dial mobiletor.DialContext) *routerVPNServerTorData {
+	t.Helper()
+	o, err := newRouterVPNServerTorData(f.ctx, func() bool { return f.current.Load() && f.native.paddingHealthy() }, f.until, dial, f.cancel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.native.data = o
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := o.Close(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	return o
+}
+
+func serverTorDataFront(t *testing.T, f *serverTorDataControl) *mobiletor.ServerTorFront {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	front, err := mobiletor.StartServerTorFront(f.ctx, "127.0.0.1", "127.0.0.1", port, f.native.capture.Username, f.native.capture.Password, f.native.trafficDial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := front.Close(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	return front
+}
+func serverTorDataFrontConnect(t *testing.T, f *serverTorDataControl, front *mobiletor.ServerTorFront, password string) (net.Conn, byte) {
+	t.Helper()
+	c, err := net.DialTimeout("tcp4", front.Address(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err = c.Write([]byte{5, 1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	var reply [2]byte
+	if _, err = io.ReadFull(c, reply[:]); err != nil || reply != [2]byte{5, 2} {
+		t.Fatal("private front refused authentication method", err)
+	}
+	auth := append([]byte{1, byte(len(f.native.capture.Username))}, f.native.capture.Username...)
+	auth = append(auth, byte(len(password)))
+	auth = append(auth, password...)
+	if _, err = c.Write(auth); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = io.ReadFull(c, reply[:]); err != nil {
+		t.Fatal(err)
+	}
+	if reply != [2]byte{1, 0} {
+		return c, 255
+	}
+	request := binary.BigEndian.AppendUint16([]byte{5, 1, 0, 1, 198, 51, 100, 21}, 443)
+	if _, err = c.Write(request); err != nil {
+		t.Fatal(err)
+	}
+	var response [10]byte
+	if _, err = io.ReadFull(c, response[:]); err != nil {
+		t.Fatal(err)
+	}
+	_ = c.SetDeadline(time.Time{})
+	return c, response[1]
+}
+
+func TestServerTorPaddingDataExpiryRetiresAuthenticatedStreamWhileControlDrains(t *testing.T) {
+	f := newServerTorDataControl(t, 1200*time.Millisecond)
+	f.blockStatus.Store(true)
+	peerDone := make(chan struct{})
+	data := f.data(t, func(context.Context, string, string) (net.Conn, error) {
+		connection, peer := net.Pipe()
+		go func() { defer close(peerDone); defer peer.Close(); _, _ = io.Copy(peer, peer) }()
+		return connection, nil
+	})
+	front := serverTorDataFront(t, f)
+	c, code := serverTorDataFrontConnect(t, f, front, strings.Repeat("0", 48))
+	_ = c.Close()
+	if code != 255 {
+		t.Fatal("wrong private front credentials admitted data")
+	}
+	c, code = serverTorDataFrontConnect(t, f, front, f.native.capture.Password)
+	_ = c.Close()
+	if code == 0 {
+		t.Fatal("private front forwarded before actual cover admission")
+	}
+	if data.Begin() == nil {
+		t.Fatal("unstarted native cover acquired data authority")
+	}
+	if err := f.lease.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := data.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := front.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	until := f.until()
+	c, code = serverTorDataFrontConnect(t, f, front, f.native.capture.Password)
+	if code != 0 {
+		t.Fatal("actual owned lease did not admit authenticated data", code)
+	}
+	defer c.Close()
+	if _, err := c.Write([]byte("owned")); err != nil {
+		t.Fatal(err)
+	}
+	body := make([]byte, 5)
+	if _, err := io.ReadFull(c, body); err != nil || string(body) != "owned" {
+		t.Fatal("authenticated front did not traverse its actual owned data socket", err)
+	}
+	read := make(chan error, 1)
+	go func() { _, err := c.Read(make([]byte, 1)); read <- err }()
+	select {
+	case <-f.statusEntered:
+	case <-time.After(time.Second):
+		t.Fatal("control STATUS did not enter")
+	}
+	timer := time.NewTimer(time.Until(until.Add(500 * time.Millisecond)))
+	defer timer.Stop()
+	select {
+	case <-f.ctx.Done():
+	case <-timer.C:
+		t.Fatal("pending control frame extended Server data beyond its actual receipt")
+	}
+	select {
+	case err := <-read:
+		if err == nil {
+			t.Fatal("expired authenticated stream remained readable")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expiry did not cancel already-entered authenticated stream")
+	}
+	select {
+	case <-peerDone:
+	case <-time.After(time.Second):
+		t.Fatal("expiry did not close the exact captured native data socket")
+	}
+	cleanup, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	if err := f.lease.Join(cleanup); !errors.Is(err, context.DeadlineExceeded) {
+		cancel()
+		t.Fatal("control operation was discarded before its framed reply drained", err)
+	}
+	cancel()
+	f.release()
+	if err := f.lease.Join(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.lease.Close(t.Context()); err != nil || f.stopCalls.Load() != 1 {
+		t.Fatal("data expiry did not retain exact native STOP cleanup", err)
+	}
+	if err := front.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := data.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServerTorPaddingDataKeepsAuthenticatedStreamAcrossActualRenewal(t *testing.T) {
+	f := newServerTorDataControl(t, 1600*time.Millisecond)
+	var dials atomic.Int32
+	data := f.data(t, func(context.Context, string, string) (net.Conn, error) {
+		dials.Add(1)
+		connection, peer := net.Pipe()
+		go func() { defer peer.Close(); _, _ = io.Copy(peer, peer) }()
+		return connection, nil
+	})
+	front := serverTorDataFront(t, f)
+	if err := f.lease.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	initial, err := f.native.paddingReceipt()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := data.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	if err := front.Enable(); err != nil {
+		t.Fatal(err)
+	}
+	c, code := serverTorDataFrontConnect(t, f, front, f.native.capture.Password)
+	if code != 0 {
+		t.Fatal("proved authenticated data was rejected", code)
+	}
+	defer c.Close()
+	// Wait beyond the actual first grant. A retained socket must follow fresh
+	// native grants instead of retaining its initial dial's receipt deadline.
+	timer := time.NewTimer(time.Until(time.UnixMilli(initial.ExpiresAt).Add(200 * time.Millisecond)))
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-f.ctx.Done():
+		t.Fatal("fresh native renewal retired a healthy retained data owner")
+	}
+	current, err := f.native.paddingReceipt()
+	if err != nil || current.Generation != initial.Generation || current.ExpiresAt <= initial.ExpiresAt || current.ChannelCells <= initial.ChannelCells || f.renewCalls.Load() == 0 {
+		t.Fatal("test did not cross an actual validated native renewal", err)
+	}
+	_ = c.SetDeadline(time.Now().Add(time.Second))
+	if _, err := c.Write([]byte("renewed")); err != nil {
+		t.Fatal("renewal lost the existing authenticated stream", err)
+	}
+	body := make([]byte, 7)
+	if _, err := io.ReadFull(c, body); err != nil || string(body) != "renewed" || dials.Load() != 1 {
+		t.Fatal("renewal replaced or retired its captured socket", err)
+	}
+}
+
+func TestServerTorPaddingOffDataRetainsOnlyItsRealProofLifetime(t *testing.T) {
+	capture, policy := serverTorCommandCapture(t, "10.77.0.1")
+	native := &routerVPNServerTor{capture: capture, policy: policy}
+	if !native.paddingHealthy() {
+		t.Fatal("Off unexpectedly requires a native cover lease")
+	}
+	if receipt, err := native.paddingReceipt(); err != nil || receipt != nil {
+		t.Fatal("Off fabricated a native cover receipt", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	proofUntil := time.Now().Add(800 * time.Millisecond)
+	data, err := newRouterVPNServerTorData(ctx, native.paddingHealthy, func() time.Time { return proofUntil }, func(request context.Context, _, _ string) (net.Conn, error) {
+		if deadline, ok := request.Deadline(); !ok || !deadline.Equal(proofUntil) {
+			t.Error("Off dial did not retain its actual proof deadline")
+		}
+		connection, peer := net.Pipe()
+		go func() { defer peer.Close(); _, _ = io.Copy(peer, peer) }()
+		return connection, nil
+	}, cancel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	native.data = data
+	t.Cleanup(func() {
+		cleanup, stop := context.WithTimeout(context.Background(), time.Second)
+		defer stop()
+		if err := data.Close(cleanup); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := data.Begin(); err != nil {
+		t.Fatal(err)
+	}
+	request, stop := context.WithCancel(t.Context())
+	connection, err := native.trafficDial(request, "tcp", "198.51.100.21:443")
+	stop()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if _, err := connection.Write([]byte("off")); err != nil {
+		t.Fatal("Off lost its socket when the completed dial request ended", err)
+	}
+	body := make([]byte, 3)
+	if _, err := io.ReadFull(connection, body); err != nil || string(body) != "off" {
+		t.Fatal("Off failed its captured data stream", err)
+	}
+	timer := time.NewTimer(time.Until(proofUntil.Add(500 * time.Millisecond)))
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+	case <-timer.C:
+		t.Fatal("Off traffic outlived its actual path/DNS proof")
+	}
+	if _, err := connection.Write([]byte("expired")); err == nil {
+		t.Fatal("Off proof expiry admitted new data")
+	}
+	if native.padding != nil {
+		t.Fatal("Off created an unrequested native cover lease")
+	}
+}
+
+type serverTorSlowData struct {
+	net.Conn
+	entered, release, closed chan struct{}
+	closeRelease             chan struct{}
+	enterOnce, closeOnce     sync.Once
+	closeError               error
+}
+
+func newServerTorSlowData() *serverTorSlowData {
+	return &serverTorSlowData{entered: make(chan struct{}), release: make(chan struct{}), closed: make(chan struct{})}
+}
+func (c *serverTorSlowData) Read(p []byte) (int, error) {
+	c.enterOnce.Do(func() { close(c.entered) })
+	<-c.release
+	p[0] = 42
+	return 1, nil
+}
+func (c *serverTorSlowData) Write([]byte) (int, error) {
+	c.enterOnce.Do(func() { close(c.entered) })
+	<-c.release
+	return 1, nil
+}
+func (c *serverTorSlowData) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	if c.closeRelease != nil {
+		<-c.closeRelease
+	}
+	return c.closeError
+}
+
+func TestServerTorPaddingDataRetainsDelayedNativeClose(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		t.Run(strconv.FormatBool(failure), func(t *testing.T) {
+			f := newServerTorDataControl(t, 10*time.Second)
+			raw := newServerTorSlowData()
+			raw.closeRelease = make(chan struct{})
+			var once sync.Once
+			release := func() { once.Do(func() { close(raw.closeRelease) }) }
+			defer release()
+			if failure {
+				raw.closeError = errors.New("controlled delayed close failure")
+			}
+			data, err := newRouterVPNServerTorData(f.ctx, func() bool { return f.current.Load() && f.native.paddingHealthy() }, f.until, func(context.Context, string, string) (net.Conn, error) { return raw, nil }, f.cancel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.native.data = data
+			if err := f.lease.Start(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if err := data.Begin(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.native.trafficDial(t.Context(), "tcp", "198.51.100.21:443"); err != nil {
+				t.Fatal(err)
+			}
+			cleanup, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+			err = data.Close(cleanup)
+			cancel()
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("data cleanup released its pending native Close", err)
+			}
+			select {
+			case <-raw.closed:
+			default:
+				t.Fatal("data cleanup did not begin its captured socket Close")
+			}
+			release()
+			if err := data.Close(t.Context()); failure != (err != nil) {
+				t.Fatal("delayed native Close result was discarded", err)
+			}
+			if err := data.Close(t.Context()); failure != (err != nil) {
+				t.Fatal("cleanup retry forgot the exact native Close failure", err)
+			}
+		})
+	}
+}
+
+func TestServerTorPaddingDataRetainsEnteredIOAndFailedNativeClose(t *testing.T) {
+	for _, operation := range []string{"read", "write"} {
+		for _, failure := range []bool{false, true} {
+			t.Run(operation+"/close-failure-"+strconv.FormatBool(failure), func(t *testing.T) {
+				f := newServerTorDataControl(t, 10*time.Second)
+				raw := newServerTorSlowData()
+				if failure {
+					raw.closeError = errors.New("controlled lower close failure")
+				}
+				var once sync.Once
+				release := func() { once.Do(func() { close(raw.release) }) }
+				defer release()
+				data, err := newRouterVPNServerTorData(f.ctx, func() bool { return f.current.Load() && f.native.paddingHealthy() }, f.until, func(context.Context, string, string) (net.Conn, error) { return raw, nil }, f.cancel)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.native.data = data
+				if err := f.lease.Start(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				if err := data.Begin(); err != nil {
+					t.Fatal(err)
+				}
+				connection, err := f.native.trafficDial(t.Context(), "tcp", "198.51.100.21:443")
+				if err != nil {
+					t.Fatal(err)
+				}
+				result := make(chan error, 1)
+				go func() {
+					p := []byte{7}
+					if operation == "read" {
+						n, err := connection.Read(p)
+						if n != 0 || p[0] != 0 || err == nil {
+							result <- errors.New("retired read returned late bytes")
+							return
+						}
+					} else if _, err := connection.Write(p); err == nil {
+						result <- errors.New("retired write returned success")
+						return
+					}
+					result <- nil
+				}()
+				select {
+				case <-raw.entered:
+				case <-time.After(time.Second):
+					t.Fatal("native I/O did not enter")
+				}
+				f.current.Store(false)
+				cleanup, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+				err = data.Close(cleanup)
+				cancel()
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("data cleanup forgot still-entered native I/O", err)
+				}
+				select {
+				case <-raw.closed:
+				default:
+					t.Fatal("data cleanup did not close underlying socket")
+				}
+				select {
+				case <-result:
+					t.Fatal("in-flight native I/O was fabricated as joined")
+				default:
+				}
+				release()
+				if err := <-result; err != nil {
+					t.Fatal(err)
+				}
+				err = data.Close(t.Context())
+				if failure != (err != nil) {
+					t.Fatal("native close failure was not retained", err)
+				}
+				if again := data.Close(t.Context()); failure != (again != nil) {
+					t.Fatal("cleanup retry erased failed close", again)
+				}
+			})
+		}
+	}
+}
+
+func TestServerTorPaddingDataRejectsLateDialAndMissingOrForeignAuthority(t *testing.T) {
+	for _, fault := range []string{"cancelled", "source", "proof"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newServerTorDataControl(t, 10*time.Second)
+			raw := newServerTorSlowData()
+			entered, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			releaseDial := func() { once.Do(func() { close(release) }) }
+			defer releaseDial()
+			data := f.data(t, func(ctx context.Context, _, _ string) (net.Conn, error) {
+				if deadline, ok := ctx.Deadline(); !ok || deadline.After(f.until()) {
+					t.Error("Server native dial omitted its actual receipt deadline")
+				}
+				close(entered)
+				<-release
+				return raw, nil
+			})
+			if err := f.lease.Start(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if err := data.Begin(); err != nil {
+				t.Fatal(err)
+			}
+			result := make(chan error, 1)
+			go func() {
+				c, err := f.native.trafficDial(t.Context(), "tcp", "198.51.100.21:443")
+				if c != nil || err == nil {
+					result <- errors.New("late unproved native socket was adopted")
+					return
+				}
+				result <- nil
+			}()
+			select {
+			case <-entered:
+			case <-time.After(time.Second):
+				t.Fatal("native dial did not enter")
+			}
+			switch fault {
+			case "cancelled":
+				f.cancel()
+			case "source":
+				f.current.Store(false)
+			case "proof":
+				f.proofUntil.Store(time.Now().Add(-time.Second).UnixNano())
+			}
+			releaseDial()
+			if err := <-result; err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-raw.closed:
+			case <-time.After(time.Second):
+				t.Fatal("late socket escaped retained cleanup")
+			}
+		})
+	}
+	for _, fault := range []string{"unstarted", "source", "rate", "owner"} {
+		t.Run("receipt/"+fault, func(t *testing.T) {
+			f := newServerTorDataControl(t, 10*time.Second)
+			if fault != "unstarted" {
+				if err := f.lease.Start(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch fault {
+			case "source":
+				f.native.capture.OwnerID = strings.Repeat("e", 64)
+			case "owner":
+				f.current.Store(false)
+			case "rate":
+				raw := strings.Replace(f.native.policy.Source(), `"rate_kbps":192`, `"rate_kbps":64`, 1)
+				policy, err := mobiletor.NewServerTorPolicy(raw, f.native.capture.Request.EntryNodeID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.native.policy = policy
+			}
+			if receipt, err := f.native.paddingReceipt(); err == nil || receipt != nil {
+				t.Fatal("missing/foreign server native authority published a receipt")
+			}
+		})
+	}
+}

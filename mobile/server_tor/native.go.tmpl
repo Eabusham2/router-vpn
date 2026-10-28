@@ -36,6 +36,7 @@ type routerVPNServerTor struct {
 	dnsOwner                     adapter.DNSTransport
 	final                        adapter.Outbound
 	proofNetwork                 *mobiletor.Network
+	data                         *routerVPNServerTorData
 	mu                           sync.Mutex
 	started                      bool
 	closing                      bool
@@ -154,6 +155,10 @@ func routerVPNNewServerTorWithBinary(parent context.Context, root *os.Root, dire
 		return result, bad
 	}
 	stage = "private authenticated front"
+	n.data, err = newRouterVPNServerTorData(owned, n.trafficCurrent, n.trafficUntil, n.finalDial, n.cancel)
+	if err != nil {
+		return result, bad
+	}
 	n.front, err = mobiletor.StartServerTorFront(owned, capture.Host, capture.Peer, capture.Port, capture.Username, capture.Password, n.trafficDial)
 	if err != nil || initialize.Err() != nil || !n.baseCurrent() {
 		return result, bad
@@ -199,7 +204,7 @@ func (n *routerVPNServerTor) run() {
 		n.cancel()
 		return
 	}
-	if err := n.startPadding(initial); err != nil || !n.current() || n.front.Enable() != nil {
+	if err := n.startPadding(initial); err != nil || !n.current() || n.data.Begin() != nil || n.front.Enable() != nil {
 		finish()
 		n.cancel()
 		return
@@ -274,14 +279,43 @@ func (n *routerVPNServerTor) expire(generation uint64) {
 	}
 }
 func (n *routerVPNServerTor) trafficDial(ctx context.Context, network, address string) (net.Conn, error) {
+	if n == nil || n.data == nil {
+		return nil, net.ErrClosed
+	}
+	return n.data.DialContext(ctx, network, address)
+}
+func (n *routerVPNServerTor) trafficCurrent() bool {
+	if n == nil || !n.current() || !n.child.Session().Current() {
+		return false
+	}
 	n.mu.Lock()
 	proof := n.proof
 	closing := n.closing
 	n.mu.Unlock()
-	if closing || !proof.IsTor || time.Since(proof.CheckedAt) > 30*time.Second || !n.paddingHealthy() {
-		return nil, net.ErrClosed
+	return !closing && proof.IsTor && proof.DNSProven && proof.SessionID == n.capture.Request.SessionID &&
+		!proof.CheckedAt.IsZero() && !proof.CheckedAt.After(time.Now()) && time.Since(proof.CheckedAt) < mobiletor.PaddingProofMaxAge && n.paddingHealthy()
+}
+func (n *routerVPNServerTor) trafficUntil() time.Time {
+	if !n.trafficCurrent() {
+		return time.Time{}
 	}
-	return n.finalDial(ctx, network, address)
+	n.mu.Lock()
+	until, lease := n.proof.CheckedAt.Add(mobiletor.PaddingProofMaxAge), n.padding
+	n.mu.Unlock()
+	if n.policy.Padding().Enabled {
+		receipt, ok := lease.NativeReceipt()
+		if !ok {
+			return time.Time{}
+		}
+		expires := time.UnixMilli(receipt.ExpiresAt)
+		if observedUntil := time.UnixMilli(receipt.ObservedAt).Add(mobiletor.PaddingReceiptMaxAge); observedUntil.Before(expires) {
+			expires = observedUntil
+		}
+		if expires.Before(until) {
+			until = expires
+		}
+	}
+	return until
 }
 func (n *routerVPNServerTor) finalDial(ctx context.Context, network, address string) (net.Conn, error) {
 	if ctx == nil || ctx.Err() != nil || network != "tcp" || !n.current() || !n.child.Session().Current() {
@@ -402,6 +436,11 @@ func (n *routerVPNServerTor) Close(ctx context.Context) error {
 	}
 	if n.front != nil {
 		if err := n.front.Close(ctx); err != nil {
+			return err
+		}
+	}
+	if n.data != nil {
+		if err := n.data.Close(ctx); err != nil {
 			return err
 		}
 	}
