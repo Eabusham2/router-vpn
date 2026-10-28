@@ -28,6 +28,12 @@ func RouterValidateTorProfile(profileJSON string) error {
 	return mobiletor.ValidateProfile(profileJSON)
 }
 
+// This is a pure source check, not a native status read or permission to
+// activate padding. Hosts capture it before staging the corresponding graph.
+func RouterTorPaddingSource(configJSON, profileJSON, sessionID string) (string, error) {
+	return mobiletor.LocalPaddingSourceSHA256(configJSON, profileJSON, sessionID)
+}
+
 // The full entry profile is captured separately from the external node. Its
 // private proof identity must match the compiled native predecessor at Run.
 func RouterCompileTorProfileWithPredecessor(profileJSON, sessionID, predecessorJSON, predecessorProfileJSON string) (string, error) {

@@ -10,6 +10,10 @@ import (
 // proof never grants private Router, Home DNS, or Server execution authority.
 // Native adoption must verify that same source and prove the actual lower path.
 func CompileProfileWithExternalPredecessor(profileJSON, sessionID, sourceConfigJSON, predecessorProfileJSON string) (string, error) {
+	return compileProfileWithExternalPredecessorPolicy(profileJSON, sessionID, sourceConfigJSON, predecessorProfileJSON, false)
+}
+
+func compileProfileWithExternalPredecessorPolicy(profileJSON, sessionID, sourceConfigJSON, predecessorProfileJSON string, paddingCapture bool) (string, error) {
 	entry, err := NewExternalPredecessorProof(predecessorProfileJSON, sourceConfigJSON)
 	if err != nil {
 		return "", err
@@ -18,7 +22,7 @@ func CompileProfileWithExternalPredecessor(profileJSON, sessionID, sourceConfigJ
 	if err != nil || profileString(profile, "multihop_entry_mode") != entry.Protocol() {
 		return "", errors.New("Tor ordinary predecessor mode differs from its captured transport")
 	}
-	compiled, err := compileProfileWithEntryProof(profileJSON, sessionID, entry.Config(), entry.Profile(), true, entry)
+	compiled, err := compileProfileWithEntryProofPolicy(profileJSON, sessionID, entry.Config(), entry.Profile(), true, entry, paddingCapture)
 	if err != nil {
 		return "", err
 	}

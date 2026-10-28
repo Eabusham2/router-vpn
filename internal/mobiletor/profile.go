@@ -149,12 +149,24 @@ func compileProfile(profileJSON, sessionID, predecessorJSON, predecessorProfileJ
 }
 
 func compileProfileWithEntryProof(profileJSON, sessionID, predecessorJSON, predecessorProfileJSON string, captured bool, supplied capturedTorEntryProof) (string, error) {
+	return compileProfileWithEntryProofPolicy(profileJSON, sessionID, predecessorJSON, predecessorProfileJSON, captured, supplied, false)
+}
+
+// The source-capture constructor may reconstruct an enabled policy before
+// admission opens. That pure operation grants no native listener, proof or
+// lease; ordinary callers retain the guarded Local compilation path.
+func compileProfileWithEntryProofPolicy(profileJSON, sessionID, predecessorJSON, predecessorProfileJSON string, captured bool, supplied capturedTorEntryProof, paddingCapture bool) (string, error) {
 	if !profileIdentifier.MatchString(sessionID) {
 		return "", errors.New("Tor requires the captured connection session identity")
 	}
-	profile, bridges, err := capturedTorProfile(profileJSON)
+	profile, bridges, err := capturedTorProfileValues(profileJSON)
 	if err != nil {
 		return "", err
+	}
+	if !paddingCapture {
+		if err := validateTorPaddingPolicy(profile); err != nil {
+			return "", err
+		}
 	}
 	var entry map[string]any
 	var entryProof capturedTorEntryProof
@@ -273,6 +285,27 @@ func compileProfileWithEntryProof(profileJSON, sessionID, predecessorJSON, prede
 	}
 	if entryProof != nil {
 		tor["entry_sha256"] = entryProof.Fingerprint()
+	}
+	padding, _, err := capturedTorPaddingPolicy(profile)
+	if err != nil {
+		return "", err
+	}
+	if padding.Enabled {
+		if !captured || predecessorJSON != "" && entryProof == nil {
+			return "", errors.New("Tor padding requires its complete captured native source")
+		}
+		source := &LocalPaddingSource{Profile: profileJSON, PredecessorProfile: predecessorProfileJSON, PredecessorConfig: predecessorJSON}
+		if ordinary, ok := entryProof.(*ExternalPredecessorProof); ok {
+			source.PredecessorConfig = ordinary.SourceConfig()
+		}
+		// Preserve a canonical map in the compiled graph: struct field order
+		// must not make the independent host/source digest differ on reparse.
+		encoded, _ := json.Marshal(source)
+		retained, err := profileObject(string(encoded), 4<<20)
+		if err != nil {
+			return "", err
+		}
+		tor["padding_source"] = retained
 	}
 	if len(bridges) != 0 {
 		tor["domain_resolver"] = map[string]any{"server": bootstrapDNS}
