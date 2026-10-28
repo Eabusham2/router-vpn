@@ -23,17 +23,19 @@ const (
 // and retain the actual PT/network owner before EnableNetwork, then prove the
 // selected DNS and public Tor path before reporting Connected.
 type DesktopBridgeSession struct {
-	owner    *DesktopControl
-	metadata DesktopBridgeMetadata
-	plan     Plan
-	mode     string
-	proxy    *TCPProxy // guarded by owner.operation; required only for plain Tor
-	state    atomic.Int32
-	expected map[string][]string // guarded by owner.operation
+	owner          *DesktopControl
+	metadata       DesktopBridgeMetadata
+	plan           Plan
+	mode           string
+	proxy          *TCPProxy // guarded by owner.operation; required only for plain Tor
+	state          atomic.Int32
+	expected       map[string][]string // guarded by owner.operation
+	isolation      string
+	paddingClaimed bool // guarded by owner.operation; never transferred or reset
 }
 
 func NewDesktopBridgeSession(owner *DesktopControl, policy *DesktopBridgePolicy) (*DesktopBridgeSession, error) {
-	if owner == nil || owner.control == nil || owner.pid <= 0 || policy == nil || policy.ServerPolicy() != nil || policy.metadata.Execution != "" || !desktopHex(policy.SourceSHA256(), 32) || policy.metadata.ConfigSHA256 != desktopDigest([]byte(policy.config)) {
+	if owner == nil || owner.control == nil || owner.pid <= 0 || policy == nil || policy.ServerPolicy() != nil || policy.metadata.Execution != "" || !desktopHex(policy.SourceSHA256(), 32) || !desktopHex(policy.isolation, 32) || policy.metadata.ConfigSHA256 != desktopDigest([]byte(policy.config)) {
 		return nil, errors.New("desktop Tor session requires its authenticated child and immutable policy")
 	}
 	plan := Plan{}
@@ -52,7 +54,7 @@ func NewDesktopBridgeSession(owner *DesktopControl, policy *DesktopBridgePolicy)
 		return nil, errors.New("desktop Tor child already belongs to a captured or retired session")
 	}
 	owner.claimed = true
-	session := &DesktopBridgeSession{owner: owner, metadata: policy.Metadata(), plan: plan, mode: policy.Mode()}
+	session := &DesktopBridgeSession{owner: owner, metadata: policy.Metadata(), plan: plan, mode: policy.Mode(), isolation: policy.isolation}
 	session.state.Store(desktopSessionClaimed)
 	return session, nil
 }

@@ -119,6 +119,7 @@ func NewDesktopServerTorPolicy(source, session, isolation, targetOS string, pred
 	policy.source, policy.config, policy.server = source, string(encoded), server
 	policy.metadata.SourceSHA256, policy.metadata.ConfigSHA256 = sourceSHA, desktopDigest(encoded)
 	policy.metadata.Execution, policy.metadata.SocksPort = "server", 0
+	policy.metadata.Padding = padding
 	policy.metadata.BootstrapDNSTag = ""
 	policy.metadata.ServerSourceSHA256, policy.metadata.ServerDNSPolicySHA256 = server.SourceSHA256(), server.DNSPolicySHA256()
 	return policy, nil

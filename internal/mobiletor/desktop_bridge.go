@@ -18,6 +18,7 @@ type DesktopBridgePolicy struct {
 	bridges        []string
 	predecessor    *DesktopPredecessor
 	server         *ServerTorPolicy
+	isolation      string
 }
 
 // DesktopBridgeDNS preserves the desktop API for the shared selected resolver.
@@ -44,6 +45,7 @@ type DesktopBridgeMetadata struct {
 	MTUPolicy             string               `json:"mtu_policy"`
 	ConfiguredMTU         int                  `json:"configured_mtu"`
 	JumboTUN              bool                 `json:"jumbo_tun"`
+	Padding               TorPaddingPolicy     `json:"padding"`
 	EntryID               string               `json:"entry_id,omitempty"`
 	EntryMode             string               `json:"entry_mode,omitempty"`
 	EntryTag              string               `json:"entry_tag,omitempty"`
@@ -70,19 +72,21 @@ func (m DesktopBridgeMetadata) AllowMTUOptimization() bool {
 // alone cannot fill it: the native host must own the TUN readback and prove the
 // exact selected DNS plus the public Tor path before setting Healthy.
 type DesktopBridgeProof struct {
-	Schema         int                       `json:"schema"`
-	SessionID      string                    `json:"session_id"`
-	SourceSHA256   string                    `json:"source_sha256"`
-	ConfigSHA256   string                    `json:"config_sha256"`
-	Policy         DesktopBridgeMetadata     `json:"policy"`
-	Proof          Proof                     `json:"proof"`
-	InterfaceName  string                    `json:"interface_name"`
-	InterfaceIndex int                       `json:"interface_index"`
-	EffectiveMTU   int                       `json:"effective_mtu"`
-	Healthy        bool                      `json:"healthy"`
-	HeartbeatAt    int64                     `json:"heartbeat_at"`
-	MTUReadback    *DesktopBridgeMTUReadback `json:"mtu_readback,omitempty"`
-	EntryProof     *DesktopBridgeEntryProof  `json:"entry_proof,omitempty"`
+	Schema         int                        `json:"schema"`
+	SessionID      string                     `json:"session_id"`
+	SourceSHA256   string                     `json:"source_sha256"`
+	ConfigSHA256   string                     `json:"config_sha256"`
+	Policy         DesktopBridgeMetadata      `json:"policy"`
+	Proof          Proof                      `json:"proof"`
+	InterfaceName  string                     `json:"interface_name"`
+	InterfaceIndex int                        `json:"interface_index"`
+	EffectiveMTU   int                        `json:"effective_mtu"`
+	Healthy        bool                       `json:"healthy"`
+	HeartbeatAt    int64                      `json:"heartbeat_at"`
+	MTUReadback    *DesktopBridgeMTUReadback  `json:"mtu_readback,omitempty"`
+	EntryProof     *DesktopBridgeEntryProof   `json:"entry_proof,omitempty"`
+	Padding        *PaddingReceipt            `json:"padding,omitempty"`
+	PaddingProof   *DesktopBridgePaddingProof `json:"padding_proof,omitempty"`
 }
 
 // DesktopBridgeMTUReadback is authority from the same native connection's
@@ -165,6 +169,10 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 		return nil, errors.New("desktop Tor requires an explicit supported native OS")
 	}
 	profile, plan, socksPort, err := desktopBridgeProfile(source)
+	if err != nil {
+		return nil, err
+	}
+	padding, _, err := capturedTorPaddingPolicy(profile)
 	if err != nil {
 		return nil, err
 	}
@@ -318,7 +326,7 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 	metadata := DesktopBridgeMetadata{
 		Schema: 1, NodeID: profileString(profile, "id"), SessionID: sessionID, SourceSHA256: sourceSHA, ConfigSHA256: desktopDigest(encoded),
 		TargetOS: targetOS, FinalTag: ProfileOutboundTag, TUNTag: profileString(tun, "tag"), InterfaceName: profileString(tun, "interface_name"), SocksPort: socksPort,
-		DNS: dns, BootstrapDNSTag: bootstrapDNS, IPv6Mode: ipv6, HomeLANAccess: lan, KillSwitchPolicy: kill, MTUPolicy: mtuPolicy, ConfiguredMTU: mtu, JumboTUN: profile["jumbo_tun"] == true,
+		DNS: dns, BootstrapDNSTag: bootstrapDNS, IPv6Mode: ipv6, HomeLANAccess: lan, KillSwitchPolicy: kill, MTUPolicy: mtuPolicy, ConfiguredMTU: mtu, JumboTUN: profile["jumbo_tun"] == true, Padding: padding,
 	}
 	if predecessor != nil {
 		metadata.EntryID, metadata.EntryMode, metadata.EntryTag = predecessor.ID(), predecessor.mode, predecessor.tag
@@ -334,7 +342,7 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 	for i, bridge := range plan.Bridges {
 		bridges[i] = bridge.Line
 	}
-	return &DesktopBridgePolicy{source: source, config: string(encoded), mode: profile["external"].(map[string]any)["protocol"].(string), metadata: metadata, bridges: bridges, predecessor: predecessor}, nil
+	return &DesktopBridgePolicy{source: source, config: string(encoded), mode: profile["external"].(map[string]any)["protocol"].(string), metadata: metadata, bridges: bridges, predecessor: predecessor, isolation: isolationSecret}, nil
 }
 
 func desktopBridgeProfile(source string) (map[string]any, Plan, int, error) {
