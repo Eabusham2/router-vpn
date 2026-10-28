@@ -124,7 +124,15 @@ for marker in (
 ):
     assert marker in standard_runtime, f"Android standard-exit ownership lost marker: {marker}"
 assert "protocl" not in standard_runtime, "Android standard-exit source contains a misspelled protocol field"
-assert "boolean isActiveOrTransitioning() { return disconnecting.get() || AndroidVpnMutationGuard.isBusy(activity); }" in unified
+# Permission requests own the selection before a native engine exists. Execute
+# the shipping unified controller and ProductActivity callbacks instead of
+# freezing the older two-condition method spelling. The executable gate also
+# rejects removing pending-permission ownership from this decision.
+subprocess.run(
+    [sys.executable, str(ROOT / "test_android_external_permission.py")],
+    cwd=ROOT.parent,
+    check=True,
+)
 # Local disconnect verification must also freeze the Activity bridge before any
 # asynchronous engine operation, and the final callback must report actual success.
 disconnect = unified.split("void disconnect(Callback callback)", 1)[1].split("void disconnectExternal", 1)[0]
@@ -305,7 +313,9 @@ for constructor in (
     "new AndroidMultihopRuntime(",
 ):
     assert constructor not in unified, f"Activity bridge must not construct process-owned VPN engine: {constructor}"
-close_body = unified.split("@Override public void close()", 1)[1].split("}", 1)[0]
+# The transfer branch has its own closing brace. Retain the complete method so
+# cleanup and forbidden process-runtime operations are checked after it too.
+close_body = unified.split("@Override public void close()", 1)[1].split("\n    }", 1)[0]
 assert "clearPending();" in close_body
 for forbidden in ("disconnect", "runtime.", "wireGuard", "amneziaWG", "orchestrator", "multihop", "standardExit"):
     assert forbidden not in close_body, f"Activity close() must not tear down process-owned runtime: {forbidden}"

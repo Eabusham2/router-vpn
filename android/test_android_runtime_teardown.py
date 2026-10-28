@@ -67,7 +67,17 @@ final class LayeredVpnService {
     static CapturedMultihop capturedMultihop(String session){return new CapturedMultihop(session);}
     static String capturedMultihopExecution(String session){if(!session.equals(AndroidHomeStateStore.current.sessionId))throw new IllegalStateException("stale native graph");return selectedOverride.isEmpty()?(AndroidMultihopController.lastExecution.equals("auto")?"server":AndroidMultihopController.lastExecution):selectedOverride;}
     static final AtomicInteger discarded=new AtomicInteger();
-    static boolean discardPreparedSession(Context context,String session){if(!"native-session".equals(session))throw new AssertionError("Discarded wrong session");discarded.incrementAndGet();return true;}
+    static volatile java.util.concurrent.CountDownLatch discardEntered,discardRelease;
+    static boolean discardPreparedSession(Context context,String session){
+        if(!"native-session".equals(session))throw new AssertionError("Discarded wrong session");
+        java.util.concurrent.CountDownLatch entered=discardEntered,release=discardRelease;
+        if(entered!=null){
+            entered.countDown();boolean interrupted=false;
+            while(true){try{release.await();break;}catch(InterruptedException error){interrupted=true;}}
+            if(interrupted)Thread.currentThread().interrupt();
+        }
+        discarded.incrementAndGet();return true;
+    }
     static final AtomicInteger externalReads=new AtomicInteger();static volatile boolean externalHealthy=true;
     static String externalExecutionOverride="";static String externalExecution(String session,String exit){if(!externalHealthy||!"native-session".equals(session)||!"external".equals(exit))throw new IllegalStateException("wrong captured external execution");String execution=AndroidStandardExitController.lastExecution;return externalExecutionOverride.isEmpty()?(execution.equals("auto")?"server":execution.isEmpty()?"local":execution):externalExecutionOverride;}
     static final AtomicInteger torExecutionReads=new AtomicInteger();static String torExecutionOverride="";
@@ -288,7 +298,7 @@ public final class RuntimeTeardownHarness {
         Owner(String kind) {
             this.kind=kind;AndroidTorCompareRuntime.runs=0;AndroidTorCompareRuntime.closes=0;AndroidTorCompareRuntime.cancels=0;AndroidTorCompareRuntime.failRun=false;AndroidTorCompareRuntime.failClose=false;AndroidTorCompareRuntime.chosen="server";AndroidStandardExitStore.saved.clear();AndroidTorProfile.ordinaryPreparations=0;AndroidTorProfile.lastOrdinary=null;AndroidTorProfile.beforePrepared=null;LayeredVpnService.selectedOverride="";LayeredVpnService.serverPins="{}";LayeredVpnService.staleCapture=false;AndroidMultihopController.changedSources.clear();AndroidMultihopController.lastPins="";LayeredVpnService.torReads.set(0);LayeredVpnService.torExecutionReads.set(0);LayeredVpnService.torExecutionOverride="";AndroidStandardExitController.lastExecution="";LayeredVpnService.torHealthy=true;publicProofs.set(0);
             LayeredVpnService.externalReads.set(0);LayeredVpnService.externalHealthy=true;LayeredVpnService.externalExecutionOverride="";
-            LayeredVpnService.discarded.set(0);
+            LayeredVpnService.discarded.set(0);LayeredVpnService.discardEntered=null;LayeredVpnService.discardRelease=null;
             AndroidHomeStateStore.reset(); LayeredVpnService.mtuStarts.set(0); LayeredVpnService.mtuEntered=null;LayeredVpnService.mtuRelease=null;
             multihop="multihop".equals(kind)?new AndroidMultihopRuntime(context,engine):null;
             external=multihop==null?new AndroidStandardExitRuntime(context,engine):null;
@@ -334,7 +344,23 @@ public final class RuntimeTeardownHarness {
         for(String fault:new String[]{"entry-replaced","entry-removed","exit-replaced","exit-removed","cancel"})test("ordinary Tor preparation rejects "+fault,()->{
             try(Owner owner=new Owner("tor")){AndroidStandardExitStore.Entry entry=ordinary("socks5"),exit=torExit();Callback cb=new Callback(1);owner.external.connectOrdinary(entry,exit,"local",cb);cb.awaitEntered();
                 try{if(fault.equals("entry-replaced")){entry.name+=" replacement";AndroidStandardExitStore.saved.put(entry.id,entry);}if(fault.equals("entry-removed"))AndroidStandardExitStore.saved.remove(entry.id);if(fault.equals("exit-replaced")){exit.name+=" replacement";AndroidStandardExitStore.saved.put(exit.id,exit);}if(fault.equals("exit-removed"))AndroidStandardExitStore.saved.remove(exit.id);if(fault.equals("cancel"))owner.disconnect();}finally{cb.release.countDown();}
-                cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0&&!AndroidHomeStateStore.current.connected,"changed ordinary source or cancelled owner reached engine start");check(LayeredVpnService.discarded.get()==1,"failed ordinary preparation leaked its staged session");awaitIdle(owner);
+                cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0&&!AndroidHomeStateStore.current.connected,"changed ordinary source or cancelled owner reached engine start");awaitIdle(owner);check(LayeredVpnService.discarded.get()==1,"failed ordinary preparation leaked its staged session");
+            }
+        });
+        test("ordinary Tor failed preparation retains ownership through staged cleanup",()->{
+            try(Owner owner=new Owner("tor")){
+                AndroidStandardExitStore.Entry entry=ordinary("socks5"),exit=torExit();Callback cb=new Callback(1);
+                LayeredVpnService.discardEntered=new CountDownLatch(1);LayeredVpnService.discardRelease=new CountDownLatch(1);
+                try{
+                    owner.external.connectOrdinary(entry,exit,"local",cb);cb.awaitEntered();
+                    entry.name+=" replacement";AndroidStandardExitStore.saved.put(entry.id,entry);cb.release.countDown();cb.awaitDone();
+                    check(LayeredVpnService.discardEntered.await(3,TimeUnit.SECONDS),"failed preparation never entered staged cleanup");
+                    check(!cb.ok&&LayeredVpnService.discarded.get()==0&&owner.engine.starts.get()==0,"completion callback no longer precedes held staged cleanup");
+                    check(owner.busy(),"unfinished staged cleanup released runtime ownership");
+                    Callback replacement=new Callback(0);owner.external.connectOrdinary(entry,exit,"local",replacement);replacement.awaitDone();
+                    check(!replacement.ok&&AndroidTorProfile.ordinaryPreparations==1,"replacement started before staged cleanup drained");
+                }finally{cb.release.countDown();LayeredVpnService.discardRelease.countDown();}
+                awaitIdle(owner);check(LayeredVpnService.discarded.get()==1,"failed ordinary preparation leaked its staged session");
             }
         });
         for(String fault:new String[]{"source","cancel"})test("ordinary Tor queued request rejects "+fault,()->{
@@ -346,7 +372,7 @@ public final class RuntimeTeardownHarness {
         for(String fault:new String[]{"entry","exit"})test("ordinary Tor late proof rejects changed "+fault,()->{
             try(Owner owner=new Owner("tor")){AndroidStandardExitStore.Entry entry=ordinary("socks5"),exit=torExit();Callback cb=new Callback(3);owner.external.connectOrdinary(entry,exit,"local",cb);cb.awaitEntered();
                 try{AndroidStandardExitStore.Entry changed=fault.equals("entry")?entry:exit;changed.name+=" replaced while proving";AndroidStandardExitStore.saved.put(changed.id,changed);}finally{cb.release.countDown();}
-                cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==1&&owner.engine.stops.get()==1&&!AndroidHomeStateStore.current.connected,"late ordinary proof adopted replaced source");check(LayeredVpnService.mtuStarts.get()==0&&LayeredVpnService.discarded.get()==1,"late ordinary source loss retained MTU or staged owner");awaitIdle(owner);
+                cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==1&&owner.engine.stops.get()==1&&!AndroidHomeStateStore.current.connected,"late ordinary proof adopted replaced source");awaitIdle(owner);check(LayeredVpnService.mtuStarts.get()==0&&LayeredVpnService.discarded.get()==1,"late ordinary source loss retained MTU or staged owner");
             }
         });
         for(String fault:new String[]{"server","auto","duplicate","wrong-exit","tor-entry"})test("ordinary Tor rejects invalid authority "+fault,()->{
@@ -751,7 +777,9 @@ STUBS += '\nfinal class AndroidNativeMAXProfile {\n' + max_modes[0] + '\n' + max
 # Check the shipping budget against both sequential native phases. This stays
 # deterministic without shortening production timers or waiting three minutes.
 execution_source = (ROOT / 'internal/mobilemultihop/runtime.go').read_text()
-execution_timeout = re.search(r'context.WithTimeout\(parent,\s*(\d+)\s*\*\s*time.Second\)', execution_source)
+execution_timeout = re.search(r'(?m)^const executionBaseTimeout\s*=\s*(\d+)\s*\*\s*time.Second\s*$', execution_source)
+if execution_timeout is None:
+    execution_timeout = re.search(r'context.WithTimeout\(parent,\s*(\d+)\s*\*\s*time.Second\)', execution_source)
 proof_source = (ROOT / 'internal/mobilemultihop/external_proof.go').read_text()
 proof_timeout = re.search(r'context.WithTimeout\(r.ctx,\s*(\d+)\s*\*\s*time.Second\)', proof_source)
 assert execution_timeout and proof_timeout, 'shared execution/final proof deadline contract changed'
@@ -793,4 +821,16 @@ with tempfile.TemporaryDirectory(prefix='routervpn-runtime-teardown-') as tmp:
             ordinary_expected={'captured temporary origin':'late temporary ordinary completion entered Last memory after lease release','restored history':'ordinary restored path overwrote Last history or reran Compare','proved runtime publication':'successful ordinary path did not record exactly one proved Last winner'}[label]
             assert ordinary.returncode and ordinary_expected in ordinary.stdout+ordinary.stderr,(label,'ordinary runtime mutation missed expected assertion',ordinary.stdout,ordinary.stderr)
             print('Android ordinary Last runtime negative control rejected: '+label)
+        drain_controls=(
+            ('staged session cleanup','LayeredVpnService.discardPreparedSession(context,preparedSession.sessionId);','/* mutation: staged owner leaked */','failed preparation never entered staged cleanup'),
+            ('unfinished cleanup ownership','if(task!=null&&!task.isDone())return true;','/* mutation: unfinished worker ignored */','unfinished staged cleanup released runtime ownership'),
+        )
+        for label,old,new,expected in drain_controls:
+            assert original.count(old)==1,(label,'missing exact mutation anchor')
+            target.write_text(original.replace(old,new))
+            subprocess.run([javac,'-encoding','UTF-8','-d',str(classes),*[str(p) for p in base.rglob('*.java')]],check=True,timeout=30,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            broken=subprocess.run([java,'-cp',str(classes),'com.eabusham.routervpn.RuntimeTeardownHarness','tor'],timeout=90,capture_output=True,text=True)
+            target.write_text(original)
+            assert broken.returncode and expected in broken.stdout+broken.stderr,(label,'did not reach intended drain assertion',broken.stdout,broken.stderr)
+            print('Android staged cleanup negative control rejected: '+label)
 print('Android actual-runtime teardown behavior: PASS')
