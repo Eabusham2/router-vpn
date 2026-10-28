@@ -15,6 +15,7 @@ import (
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
@@ -46,6 +47,10 @@ type torMTUFixtureOutbound struct {
 	externalConfig      string
 	externalProofs      atomic.Int32
 	externalFailed      atomic.Bool
+	externalProofHook   func(context.Context, string, *mobiletor.ExternalPredecessorProof) (mobiletor.Proof, error)
+	measurementDial     func(context.Context, string, bool, string) (net.Conn, error)
+	publicDNS           atomic.Bool
+	publicLookups       atomic.Int32
 	dnsTarget           string
 	canceled            atomic.Bool
 	dnsCalls            atomic.Int32
@@ -110,7 +115,11 @@ func (o *torMTUFixtureOutbound) DialContext(ctx context.Context, network string,
 			o.dnsCalls.Add(1)
 			answer := new(dns.Msg)
 			answer.SetReply(query)
-			if len(query.Question) != 1 || query.Question[0].Name != "example.com." || query.Question[0].Qtype != dns.TypeA {
+			public := len(query.Question) == 1 && query.Question[0].Name == hopmeasure.PublicHost+"."
+			if public {
+				o.publicLookups.Add(1)
+			}
+			if len(query.Question) != 1 || query.Question[0].Name != "example.com." && !(public && o.publicDNS.Load()) || query.Question[0].Qtype != dns.TypeA && !(public && query.Question[0].Qtype == dns.TypeAAAA) {
 				answer.Rcode = dns.RcodeRefused
 			} else {
 				name, address := query.Question[0].Name, "93.184.216.34"
@@ -122,7 +131,9 @@ func (o *torMTUFixtureOutbound) DialContext(ctx context.Context, network string,
 				case 3:
 					name = "unrelated.example."
 				}
-				answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.ParseIP(address)}}
+				if query.Question[0].Qtype == dns.TypeA {
+					answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.ParseIP(address)}}
+				}
 			}
 			if write(answer) != nil {
 				return
@@ -157,12 +168,18 @@ func (o *torMTUFixtureOutbound) TorExternalPredecessor(profile string) (*mobilet
 func (o *torMTUFixtureOutbound) TorExternalConfig() string { return o.externalConfig }
 func (o *torMTUFixtureOutbound) TorProofWithExternalPredecessor(ctx context.Context, session string, entry *mobiletor.ExternalPredecessorProof) (mobiletor.Proof, error) {
 	o.externalProofs.Add(1)
+	if o.externalProofHook != nil {
+		return o.externalProofHook(ctx, session, entry)
+	}
 	if entry == nil || entry != o.externalEntry || entry.Fingerprint() != o.entrySHA || o.externalFailed.Load() {
 		return mobiletor.Proof{}, errors.New("ordinary fixture proof rejected")
 	}
 	return mobiletor.Proof{SessionID: session, IsTor: o.TorHealthy(session) && ctx.Err() == nil, IP: "198.51.100.7", CheckedAt: time.Now()}, nil
 }
-func (o *torMTUFixtureOutbound) TorMeasurementDial(context.Context, string, bool, string) (net.Conn, error) {
+func (o *torMTUFixtureOutbound) TorMeasurementDial(ctx context.Context, session string, entry bool, address string) (net.Conn, error) {
+	if o.measurementDial != nil {
+		return o.measurementDial(ctx, session, entry, address)
+	}
 	return nil, net.ErrClosed
 }
 func (o *torMTUFixtureOutbound) Close() error {
@@ -350,6 +367,195 @@ func TestRouterTorExternalProofAndMTURetainExactProviderAndSelectedDNS(t *testin
 				t.Fatal("removed native predecessor retained Tor proof or MTU authority")
 			}
 		})
+	}
+}
+
+func torOrdinaryHopFixture(t *testing.T) (*box.Box, *torMTUFixtureOutbound, *box.RouterVPNTorProofRequest, *hopmeasure.Service, *atomic.Bool) {
+	t.Helper()
+	engine, _ := torMTUNativeConfigFixture(t, torMTUOrdinaryConfig(t))
+	final, _ := engine.Outbound().Outbound(mobiletor.ProfileOutboundTag)
+	owned := final.(*torMTUFixtureOutbound)
+	owned.publicDNS.Store(true)
+	proof, err := engine.RouterVPNTorCreateProof(mobiletor.ProfileOutboundTag, "frozen-session", torMTUOrdinaryEntryProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(proof.Cancel)
+	if _, err := proof.Run(); err != nil {
+		t.Fatal(err)
+	}
+	current := new(atomic.Bool)
+	current.Store(true)
+	meter, err := engine.RouterVPNTorHopMeasurement(proof, "tor-exit", current.Load)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := meter.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return engine, owned, proof, meter, current
+}
+
+func torOrdinaryHopStatus(t *testing.T, meter *hopmeasure.Service) hopmeasure.Status {
+	t.Helper()
+	var status hopmeasure.Status
+	raw := meter.StatusJSON()
+	if err := json.Unmarshal([]byte(raw), &status); err != nil {
+		t.Fatal(err)
+	}
+	for _, private := range []string{"captured-provider-secret", "captured-user", "expected_public_ip", "203.0.113.88"} {
+		if strings.Contains(raw, private) {
+			t.Fatal("hop status disclosed an ordinary provider credential or private proof")
+		}
+	}
+	return status
+}
+
+func TestRouterTorOrdinaryHopMeasurementCapturesBothNativeRoutesAndSelectedDNS(t *testing.T) {
+	_, owned, proof, meter, _ := torOrdinaryHopFixture(t)
+	var entryCalls, exitCalls atomic.Int32
+	owned.measurementDial = func(ctx context.Context, session string, entry bool, address string) (net.Conn, error) {
+		if ctx.Err() != nil || session != "frozen-session" || address != "93.184.216.34:443" {
+			t.Errorf("measurement discarded selected DNS or native session: %s %s", session, address)
+		}
+		if entry {
+			entryCalls.Add(1)
+		} else {
+			exitCalls.Add(1)
+		}
+		// Deliberately fail the native dial. The adapter must identify both real
+		// routes without manufacturing successful latency/throughput samples.
+		return nil, net.ErrClosed
+	}
+	const request = "11111111111111111111111111111111"
+	if err := meter.Start(request, 64<<10); err != nil {
+		t.Fatal(err)
+	}
+	if err := meter.Drain(request); err != nil {
+		t.Fatal(err)
+	}
+	status := torOrdinaryHopStatus(t, meter)
+	if status.Stage != "complete" || !status.Complete || !status.Drained || len(status.Results) != 2 || entryCalls.Load() != 1 || exitCalls.Load() != 1 || owned.publicLookups.Load() == 0 || owned.externalProofs.Load() != 6 || !proof.Healthy() {
+		t.Fatalf("ordinary entry or exit lost native measurement ownership: %#v entry=%d exit=%d DNS=%d proof=%d", status, entryCalls.Load(), exitCalls.Load(), owned.publicLookups.Load(), owned.externalProofs.Load())
+	}
+	for index, result := range status.Results {
+		id, role, label := "ordinary-entry", "entry", "Ordinary entry → Cloudflare edge"
+		if index == 1 {
+			id, role, label = "tor-exit", "exit", "Tor circuit → Cloudflare edge"
+		}
+		if result.ID != id || result.Role != role || result.Kind != "public-path" || result.Label != label || result.Ready || result.Failure == "" || result.Idle != nil || result.Download != nil || result.Upload != nil {
+			t.Fatalf("ordinary provider was relabelled as private API/ICMP or acquired fabricated metrics: %#v", result)
+		}
+	}
+}
+
+func TestRouterTorOrdinaryHopMeasurementRejectsChangedProviderAndOwner(t *testing.T) {
+	for _, failure := range []string{"provider-before", "provider-after-entry", "native-predecessor", "current-before", "current-after-entry", "DNS"} {
+		t.Run(failure, func(t *testing.T) {
+			engine, owned, proof, meter, current := torOrdinaryHopFixture(t)
+			var entryCalls, exitCalls atomic.Int32
+			owned.measurementDial = func(_ context.Context, _ string, entry bool, _ string) (net.Conn, error) {
+				if entry {
+					entryCalls.Add(1)
+					if failure == "provider-after-entry" {
+						owned.externalFailed.Store(true)
+					}
+					if failure == "current-after-entry" {
+						current.Store(false)
+					}
+				} else {
+					exitCalls.Add(1)
+				}
+				return nil, net.ErrClosed
+			}
+			switch failure {
+			case "provider-before":
+				owned.externalFailed.Store(true)
+			case "native-predecessor":
+				if err := engine.Outbound().Remove("custom-exit"); err != nil {
+					t.Fatal(err)
+				}
+			case "current-before":
+				current.Store(false)
+			case "DNS":
+				owned.dnsReply.Store(1)
+			}
+			const request = "22222222222222222222222222222222"
+			err := meter.Start(request, 64<<10)
+			if failure == "native-predecessor" || failure == "current-before" {
+				if err == nil || entryCalls.Load() != 0 || exitCalls.Load() != 0 {
+					t.Fatal("retired native measurement acquired an owner", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := meter.Drain(request); err != nil {
+				t.Fatal(err)
+			}
+			status := torOrdinaryHopStatus(t, meter)
+			if failure == "DNS" {
+				if status.Stage != "complete" || len(status.Results) != 2 || owned.publicLookups.Load() == 0 || entryCalls.Load() != 0 || exitCalls.Load() != 0 {
+					t.Fatal("public measurement bypassed the exact selected DNS owner", status)
+				}
+				for _, result := range status.Results {
+					if result.Ready || result.Failure == "" || result.Idle != nil || result.Download != nil || result.Upload != nil {
+						t.Fatal("failed selected DNS became a valid public measurement", result)
+					}
+				}
+				return
+			}
+			if status.Stage != "invalidated" || !status.Complete || !status.Drained || len(status.Results) != 0 || exitCalls.Load() != 0 {
+				t.Fatal("changed provider or host owner retained a partial measurement", status)
+			}
+			if failure == "provider-before" && entryCalls.Load() != 0 || failure != "provider-before" && entryCalls.Load() != 1 {
+				t.Fatal("ordinary provider was not checked at the real measurement boundary")
+			}
+			if failure != "current-after-entry" && !proof.Healthy() {
+				t.Fatal("a failed temporary measurement cancelled the active VPN")
+			}
+		})
+	}
+}
+
+func TestRouterTorOrdinaryHopMeasurementCancellationDrainsProviderProof(t *testing.T) {
+	_, owned, proof, meter, _ := torOrdinaryHopFixture(t)
+	entered, retired := make(chan struct{}), make(chan struct{})
+	owned.externalProofHook = func(ctx context.Context, _ string, _ *mobiletor.ExternalPredecessorProof) (mobiletor.Proof, error) {
+		close(entered)
+		<-ctx.Done()
+		close(retired)
+		return mobiletor.Proof{}, ctx.Err()
+	}
+	var calls atomic.Int32
+	owned.measurementDial = func(context.Context, string, bool, string) (net.Conn, error) {
+		calls.Add(1)
+		return nil, net.ErrClosed
+	}
+	const request = "33333333333333333333333333333333"
+	if err := meter.Start(request, 64<<10); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("ordinary proof was not captured before measurement")
+	}
+	meter.Cancel(request)
+	if err := meter.Drain(request); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-retired:
+	default:
+		t.Fatal("cancellation returned before the captured ordinary proof drained")
+	}
+	status := torOrdinaryHopStatus(t, meter)
+	if status.Stage != "cancelled" || !status.Complete || !status.Drained || len(status.Results) != 0 || calls.Load() != 0 || !proof.Healthy() {
+		t.Fatal("cancelled proof adopted measurements or cancelled the active VPN", status)
 	}
 }
 

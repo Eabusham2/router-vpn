@@ -37,6 +37,10 @@ func (s *Box) RouterVPNTorHopMeasurement(proof *RouterVPNTorProofRequest, exitID
 	if proof.predecessor != nil {
 		id, api, token, node := proof.predecessor.MeasurementIdentity()
 		hops = append(hops, hopmeasure.Hop{ID: id, Role: "entry", Tag: "external-entry", Kind: "private-node", API: api, Token: token, Proof: node})
+	} else if proof.externalPredecessor != nil {
+		// An ordinary provider has no private Router API or credentials. Its
+		// entry result is a routed public response through the captured lower.
+		hops = append(hops, hopmeasure.Hop{ID: proof.externalPredecessor.ID(), Role: "entry", Tag: "external-entry", Kind: "public-path", Label: "Ordinary entry → Cloudflare edge"})
 	}
 	hops = append(hops, hopmeasure.Hop{ID: exitID, Role: "exit", Tag: "custom-exit", Kind: "public-path", Label: "Tor circuit → Cloudflare edge"})
 	return hopmeasure.New(engine, hops)
@@ -90,15 +94,36 @@ func (e *routerVPNTorMeasurementEngine) BeginMeasurement() (func(), error) {
 	}
 	return release, nil
 }
+
+// A provider may change its public exit while the native outbound stays alive.
+// Re-prove the captured ordinary predecessor at each hop boundary and before
+// adopting its result; a prior Tor circuit success cannot bless another entry.
+func (e *routerVPNTorMeasurementEngine) VerifyMeasurement(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil || e.Identity() == "" {
+		return hopmeasure.ErrStale
+	}
+	if e.proof.externalPredecessor == nil {
+		return nil
+	}
+	retained, err := e.proof.prove(ctx)
+	if err != nil || retained.SessionID != e.proof.sessionID || !retained.IsTor || ctx.Err() != nil || e.Identity() == "" {
+		return errors.New("Tor measurement ordinary predecessor proof failed or retired")
+	}
+	return nil
+}
+
 func (e *routerVPNTorMeasurementEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
 	if e.Identity() == "" || ctx.Err() != nil {
 		return nil, errors.New("Tor measurement owner retired")
 	}
 	entry := tag == "external-entry"
-	if tag != "custom-exit" && !entry || entry && e.proof.predecessor == nil {
+	if tag != "custom-exit" && !entry || entry && e.proof.predecessor == nil && e.proof.externalPredecessor == nil {
 		return nil, errors.New("Tor measurement route is unowned")
 	}
 	if address != hopmeasure.PublicAddress {
+		if !entry || e.proof.predecessor == nil {
+			return nil, errors.New("Tor public measurement cannot claim a private entry")
+		}
 		_, api, _, _ := e.proof.predecessor.MeasurementIdentity()
 		if !entry || api != "http://"+address {
 			return nil, errors.New("Tor measurement must use its captured private entry")
