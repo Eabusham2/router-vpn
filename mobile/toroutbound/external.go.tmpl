@@ -18,6 +18,14 @@ func captureTorExternalPredecessor(options Options) (*mobiletor.ExternalPredeces
 	if err != nil || entry.Fingerprint() != options.EntrySHA256 || options.Detour != mobilemultihop.ExternalFinalTag {
 		return nil, "", errors.New("native Tor ordinary predecessor differs from its captured source and route")
 	}
+	if options.PaddingSource != nil {
+		padding, err := captureTorLocalPadding(mobiletor.ProfileOutboundTag, options)
+		if err != nil || padding == nil || options.PaddingSource.Profile != options.ExternalTorProfile ||
+			options.PaddingSource.PredecessorProfile != options.ExternalPredecessorProfile || options.PaddingSource.PredecessorConfig != options.ExternalPredecessorConfig {
+			return nil, "", errors.New("native Tor padding ordinary path differs from its exact captured source")
+		}
+		return entry, padding.capture.Config(), nil
+	}
 	digest, err := mobiletor.ExternalProfileDigest(options.ExternalTorProfile)
 	if err != nil || digest != options.ProfileSHA256 {
 		return nil, "", errors.New("native Tor ordinary path differs from its captured exit policy")

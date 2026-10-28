@@ -45,6 +45,7 @@ def prepare(vendor, *, mobile=True):
         (vendor/('routervpn_external_policy'+('_test' if name.endswith('_test.go') else '')+'.go')).write_bytes(template.read_bytes())
     if mobile:
         (vendor/'routervpn_tor_server_test.go').write_bytes((ROOT/'mobile/externalpolicy/tor_server_test.go.tmpl').read_bytes())
+        (vendor/'routervpn_tor_padding_capture_test.go').write_bytes((ROOT/'mobile/externalpolicy/tor_padding_test.go.tmpl').read_bytes())
         for name in ('external', 'external_test', 'tor', 'tor_test'):
             (vendor/'experimental/libbox'/('routervpn_mtu_'+name+'.go')).write_bytes((ROOT/'mobile/mtu'/(name+'.go.tmpl')).read_bytes())
         (vendor/'experimental/libbox/routervpn_external_policy_bridge_test.go').write_bytes((ROOT/'mobile/externalpolicy/bridge_test.go.tmpl').read_bytes())
@@ -62,6 +63,7 @@ def prepare(vendor, *, mobile=True):
         ('openvpn_remote_test.go', 'routervpn_external_openvpn_remote_test.go'),
         ('openvpn_bridge_test.go', 'routervpn_external_openvpn_bridge_test.go'),
         ('tor_mtu.go', 'routervpn_tor_mtu.go'),
+        ('tor_padding.go', 'routervpn_tor_padding_capture.go'),
         ('tor_mtu_test.go', 'routervpn_tor_mtu_test.go'),
     ):
         (vendor/target).write_bytes((ROOT/'mobile/externalpolicy'/(source+'.tmpl')).read_bytes())

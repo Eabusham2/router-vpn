@@ -48,38 +48,44 @@ func (h *Outbound) TorProofWithExternalPredecessor(ctx context.Context, sessionI
 	return h.torProofWithEntry(ctx, sessionID, predecessor.Fingerprint(), predecessor.Prove)
 }
 
-func (h *Outbound) torProofWithEntry(ctx context.Context, sessionID, fingerprint string, prove func(context.Context, mobiletor.DialContext) error) (proof mobiletor.Proof, failure error) {
+func (h *Outbound) torProofWithEntry(ctx context.Context, sessionID, fingerprint string, prove func(context.Context, mobiletor.DialContext) error) (mobiletor.Proof, error) {
+	if err := h.torProveEntry(ctx, sessionID, fingerprint, prove); err != nil {
+		return mobiletor.Proof{}, err
+	}
+	return h.TorProof(ctx, sessionID)
+}
+
+func (h *Outbound) torProveEntry(ctx context.Context, sessionID, fingerprint string, prove func(context.Context, mobiletor.DialContext) error) (failure error) {
 	if ctx == nil || sessionID == "" || sessionID != h.sessionID {
-		return proof, errors.New("native Tor proof belongs to another VPN session")
+		return errors.New("native Tor proof belongs to another VPN session")
 	}
 	if h.entrySHA256 != "" && (prove == nil || fingerprint != h.entrySHA256) {
-		return proof, errors.New("native Tor proof does not match its captured predecessor")
+		return errors.New("native Tor proof does not match its captured predecessor")
 	}
 	h.mu.Lock()
 	if h.closing || !h.started || h.ctx.Err() != nil {
 		h.mu.Unlock()
-		return proof, net.ErrClosed
+		return net.ErrClosed
 	}
 	if prove != nil && (h.predecessor == "" || h.upstream == nil) {
 		h.mu.Unlock()
-		return proof, errors.New("native Tor has no captured predecessor to prove")
+		return errors.New("native Tor has no captured predecessor to prove")
 	}
 	h.proofWorkers.Add(1)
 	h.mu.Unlock()
 	defer h.proofWorkers.Done()
 	if err := h.upstream.current(); err != nil {
-		return proof, err
+		return err
 	}
 	if prove != nil {
 		network, err := mobiletor.NewNetwork(h.ctx, h.protectedDial, nil)
 		if err != nil {
-			return proof, err
+			return err
 		}
 		// The helper does synchronous HTTP, and this network retains even an
 		// ignored late lower dial. Its complete drain precedes proofWorkers.Done.
 		defer func() {
 			if err := network.Close(context.Background()); err != nil {
-				proof = mobiletor.Proof{}
 				failure = errors.New("native Tor predecessor proof did not drain cleanly")
 				h.mu.Lock()
 				h.proofCloseErr = errors.Join(h.proofCloseErr, failure)
@@ -88,23 +94,62 @@ func (h *Outbound) torProofWithEntry(ctx context.Context, sessionID, fingerprint
 			}
 		}()
 		if err := prove(ctx, network.DialContext); err != nil {
-			return proof, err
+			return err
 		}
 		if err := h.upstream.current(); err != nil {
-			return proof, err
+			return err
 		}
 	}
-	return h.TorProof(ctx, sessionID)
+	return nil
+}
+
+// Padding must authenticate its predecessor before the first dynamic Tor exit
+// proof. It cannot use a synthetic IsTor result merely to break a readiness
+// cycle, nor perform the old SOCKS-hostname proof before selected DNS is bound.
+func (h *Outbound) TorPaddingPredecessorProof(ctx context.Context, sessionID string, private *mobiletor.PredecessorProof, external *mobiletor.ExternalPredecessorProof) error {
+	if h.padding == nil || private != nil && external != nil {
+		return errors.New("Local Tor padding predecessor authority is unavailable or mixed")
+	}
+	if h.externalEntry != nil {
+		if external == nil || external != h.externalEntry || external.Fingerprint() != h.entrySHA256 {
+			return errors.New("Local Tor padding ordinary predecessor source changed")
+		}
+		return h.torProveEntry(ctx, sessionID, external.Fingerprint(), external.Prove)
+	}
+	if external != nil {
+		return errors.New("Local Tor padding cannot replace a private entry with ordinary authority")
+	}
+	if private != nil {
+		return h.torProveEntry(ctx, sessionID, private.Fingerprint(), private.Prove)
+	}
+	return h.torProveEntry(ctx, sessionID, "", nil)
 }
 
 // TorHealthy reports captured owner health only. It makes no DNS, socket or
 // control-protocol request, and cannot manufacture a fresh traffic proof.
 func (h *Outbound) TorHealthy(sessionID string) bool {
+	if !h.torCircuitHealthy(sessionID) {
+		return false
+	}
+	if h.padding == nil {
+		return true
+	}
+	_, err := h.TorPaddingStatus(sessionID)
+	return err == nil
+}
+
+// The padding lease's Current callback must never recurse into its own
+// Healthy method. This lower check owns only the resident circuit and path.
+func (h *Outbound) torCircuitHealthy(sessionID string) bool {
 	if sessionID == "" || sessionID != h.sessionID || h.ctx.Err() != nil {
 		return false
 	}
 	h.mu.Lock()
-	valid := !h.closing && h.failure == nil && h.proof.IsTor && h.proof.SessionID == sessionID && h.application != nil
+	ready := h.proof.IsTor && h.proof.SessionID == sessionID
+	if h.padding != nil {
+		ready = h.circuitReady
+	}
+	valid := !h.closing && h.failure == nil && ready && h.application != nil
 	owner, bridges, proxy := h.lease, h.bridges, h.proxy
 	h.mu.Unlock()
 	if !valid || owner == nil || owner.instance == nil || h.upstream.current() != nil || owner.resident.checkState() != nil {

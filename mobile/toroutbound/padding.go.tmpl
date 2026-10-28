@@ -1,0 +1,483 @@
+package routervpntor
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/netip"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// A proof-only context is created inside this exact native outbound. It can
+// traverse selected DNS before cover readiness without opening application
+// traffic. No exported host flag or mutable selection can grant that bypass.
+type torPaddingProofKey struct{}
+
+type torPaddingProofScope struct {
+	owner   *Outbound
+	ctx     context.Context
+	network *mobiletor.Network
+}
+
+func (h *Outbound) paddingProofScope(ctx context.Context) *torPaddingProofScope {
+	if ctx == nil {
+		return nil
+	}
+	scope, ok := ctx.Value(torPaddingProofKey{}).(*torPaddingProofScope)
+	if !ok || scope.owner != h || scope.ctx == nil || scope.ctx.Err() != nil || scope.network == nil {
+		return nil
+	}
+	return scope
+}
+
+type torLocalPadding struct {
+	capture            *mobiletor.LocalPaddingCapture
+	current            func() bool
+	verify             func(context.Context, mobiletor.DialContext) (mobiletor.Proof, time.Time, error)
+	bound, started     bool
+	username, password string
+	lease              *mobiletor.PaddingLease
+	proof              mobiletor.Proof
+	dnsCheckedAt       time.Time
+	ready              chan struct{}
+}
+
+func captureTorLocalPadding(tag string, options Options) (*torLocalPadding, error) {
+	if options.PaddingSource == nil {
+		return nil, nil
+	}
+	bad := errors.New("native Local Tor padding differs from its complete source and outbound")
+	if tag != mobiletor.ProfileOutboundTag {
+		return nil, bad
+	}
+	capture, err := mobiletor.NewLocalPaddingCapture(options.PaddingSource, options.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	var graph struct {
+		Outbounds []json.RawMessage `json:"outbounds"`
+	}
+	if json.Unmarshal([]byte(capture.Config()), &graph) != nil {
+		return nil, bad
+	}
+	for _, raw := range graph.Outbounds {
+		var header struct{ Type, Tag string }
+		if json.Unmarshal(raw, &header) != nil || header.Tag != tag {
+			continue
+		}
+		var expected Options
+		if header.Type != Type || json.Unmarshal(raw, &expected) != nil {
+			return nil, bad
+		}
+		want, wantErr := json.Marshal(expected)
+		actual, actualErr := json.Marshal(options)
+		if wantErr != nil || actualErr != nil || string(want) != string(actual) {
+			return nil, bad
+		}
+		return &torLocalPadding{capture: capture, ready: make(chan struct{})}, nil
+	}
+	return nil, bad
+}
+
+func (h *Outbound) TorPaddingConfig() string {
+	if h.padding == nil {
+		return ""
+	}
+	return h.padding.capture.Config()
+}
+
+// Bind is one-shot and precedes Run. The full Box has already compared this
+// configuration with its immutable construction snapshot and captured TUN,
+// DNS, predecessor and physical-network owners.
+func (h *Outbound) BindTorPadding(current func() bool, verify func(context.Context, mobiletor.DialContext) (mobiletor.Proof, time.Time, error)) error {
+	if h.padding == nil || current == nil || verify == nil || !current() {
+		return errors.New("native Local Tor padding has no complete captured graph proof")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closing || h.ctx.Err() != nil || h.padding.bound {
+		return errors.New("native Local Tor padding is retired or already bound")
+	}
+	h.padding.current, h.padding.verify, h.padding.bound = current, verify, true
+	return nil
+}
+
+func (h *Outbound) paddingCurrent() bool {
+	if h.padding == nil || !h.torCircuitHealthy(h.sessionID) {
+		return false
+	}
+	h.mu.Lock()
+	current := h.padding.current
+	bound := h.padding.bound && !h.closing
+	h.mu.Unlock()
+	return bound && current != nil && current() && h.ctx.Err() == nil
+}
+
+func (h *Outbound) paddingProofUntil() time.Time {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.padding == nil || h.closing || h.ctx.Err() != nil || h.padding.dnsCheckedAt.IsZero() || !h.padding.proof.DNSProven {
+		return time.Time{}
+	}
+	return h.padding.dnsCheckedAt.Add(mobiletor.PaddingProofMaxAge)
+}
+
+func (h *Outbound) refreshPaddingProof(ctx context.Context) (mobiletor.Proof, error) {
+	if ctx == nil || ctx.Err() != nil || !h.paddingCurrent() {
+		return mobiletor.Proof{}, errors.New("native Local Tor padding proof owner retired")
+	}
+	h.mu.Lock()
+	verify, application := h.padding.verify, h.application
+	h.mu.Unlock()
+	if verify == nil || application == nil {
+		return mobiletor.Proof{}, errors.New("native Local Tor padding proof is unavailable")
+	}
+	proofContext, cancelProof := context.WithCancel(ctx)
+	scope := &torPaddingProofScope{owner: h, ctx: proofContext}
+	proofNetwork, err := mobiletor.NewNetwork(proofContext, application.DialContext, nil)
+	if err != nil {
+		cancelProof()
+		return mobiletor.Proof{}, err
+	}
+	scope.network = proofNetwork
+	proofContext = context.WithValue(proofContext, torPaddingProofKey{}, scope)
+	proof, dnsAt, err := verify(proofContext, proofNetwork.DialContext)
+	// Resolver transports may pool a TCP/DoT/DoH socket whose Dial context
+	// outlives the request. Its private bypass belongs only to this proof's
+	// retained Network, and all of its IO joins before a result is adopted.
+	cancelProof()
+	if closeErr := proofNetwork.Close(context.Background()); closeErr != nil {
+		failure := errors.New("native Local Tor proof sockets did not drain")
+		h.mu.Lock()
+		h.proofCloseErr = errors.Join(h.proofCloseErr, failure)
+		h.mu.Unlock()
+		h.fail(failure)
+		return mobiletor.Proof{}, failure
+	}
+	if err != nil || ctx.Err() != nil || !h.paddingCurrent() {
+		return mobiletor.Proof{}, errors.New("native Local Tor padding could not refresh its actual path and selected DNS")
+	}
+	now := time.Now()
+	ip, parseErr := netip.ParseAddr(proof.IP)
+	if proof.SessionID != h.sessionID || !proof.IsTor || !proof.DNSProven || dnsAt.IsZero() || proof.CheckedAt.IsZero() || dnsAt.After(proof.CheckedAt) || proof.CheckedAt.After(now) ||
+		!dnsAt.Add(mobiletor.PaddingProofMaxAge).After(now.Add(mobiletor.PaddingMinTTL)) || parseErr != nil || ip.Is4In6() || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.String() != proof.IP {
+		return mobiletor.Proof{}, errors.New("native Local Tor padding proof has invalid identity or completion times")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closing || h.ctx.Err() != nil || dnsAt.Before(h.padding.dnsCheckedAt) || proof.CheckedAt.Before(h.padding.proof.CheckedAt) {
+		return mobiletor.Proof{}, errors.New("native Local Tor padding proof retired or regressed")
+	}
+	h.padding.proof, h.padding.dnsCheckedAt = proof, dnsAt
+	return proof, nil
+}
+
+// Start returns only after actual selected-DNS and dynamic exit proof, the
+// exact SOCKS-isolated native START, and positive outgoing channel accounting.
+// Every issued lease stays reachable for checked native quiescence and STOP.
+func (h *Outbound) StartTorPadding(parent context.Context, sessionID string) (proof mobiletor.Proof, failure error) {
+	if parent == nil || sessionID != h.sessionID || h.padding == nil {
+		return proof, errors.New("native Local Tor padding belongs to another session")
+	}
+	select {
+	case <-parent.Done():
+		return proof, parent.Err()
+	case <-h.ctx.Done():
+		return proof, net.ErrClosed
+	case <-h.ready:
+	}
+	if !h.torCircuitHealthy(sessionID) {
+		return proof, errors.New("native Local Tor circuit bootstrap is unavailable")
+	}
+	h.mu.Lock()
+	if h.closing || h.ctx.Err() != nil || !h.padding.bound || h.padding.started {
+		h.mu.Unlock()
+		return proof, errors.New("native Local Tor padding is unavailable or already started")
+	}
+	h.padding.started = true
+	h.proofWorkers.Add(1)
+	owner, username, password := h.lease, h.padding.username, h.padding.password
+	h.mu.Unlock()
+	defer h.proofWorkers.Done()
+	defer func() {
+		if failure != nil {
+			h.fail(failure)
+		}
+	}()
+	ctx, cancel := context.WithCancel(parent)
+	stop := context.AfterFunc(h.ctx, cancel)
+	defer func() { stop(); cancel() }()
+	proof, err := h.refreshPaddingProof(ctx)
+	if err != nil || owner == nil || owner.control == nil {
+		return mobiletor.Proof{}, errors.New("native Local Tor padding initial proof failed")
+	}
+	capture := h.padding.capture
+	lease, err := mobiletor.NewPaddingLease(h.ctx, owner.control, mobiletor.PaddingLeaseOptions{
+		SessionSHA256: capture.SessionSHA256(), SourceSHA256: capture.SourceSHA256(), RateKbps: capture.Policy().RateKbps,
+		Username: username, Password: password, Current: h.paddingCurrent, ProofValidUntil: h.paddingProofUntil,
+		Retire: func(error) { h.fail(errors.New("native Local Tor outgoing padding owner retired")) },
+	})
+	if err != nil {
+		return mobiletor.Proof{}, err
+	}
+	h.mu.Lock()
+	h.padding.lease = lease
+	retired := h.closing || h.ctx.Err() != nil
+	h.mu.Unlock()
+	if retired {
+		lease.Cancel()
+		return mobiletor.Proof{}, net.ErrClosed
+	}
+	if err := lease.Start(ctx); err != nil {
+		return mobiletor.Proof{}, errors.New("native Local Tor outgoing padding failed to start")
+	}
+	if _, err := h.TorPaddingStatus(sessionID); err != nil || ctx.Err() != nil {
+		return mobiletor.Proof{}, errors.New("native Local Tor padding retired before proof delivery")
+	}
+	h.mu.Lock()
+	if h.closing || h.ctx.Err() != nil || ctx.Err() != nil {
+		h.mu.Unlock()
+		return mobiletor.Proof{}, net.ErrClosed
+	}
+	h.proofWorkers.Add(2)
+	close(h.padding.ready)
+	h.mu.Unlock()
+	go h.maintainPaddingProof()
+	go h.maintainPaddingTraffic()
+	return proof, nil
+}
+
+// Application expiry never waits for the controller's detached framed reply.
+// A cached grant can only last until its actual native expiry, freshness bound
+// and completed proof deadline; this independent worker cancels data sockets
+// at that bound while the control worker remains retained for joined cleanup.
+func (h *Outbound) maintainPaddingTraffic() {
+	defer h.proofWorkers.Done()
+	for {
+		if h.ctx.Err() != nil {
+			return
+		}
+		h.mu.Lock()
+		lease := h.padding.lease
+		h.mu.Unlock()
+		if lease == nil {
+			h.fail(errors.New("native Local Tor padding lost its data lease"))
+			return
+		}
+		_, observed, until, valid := lease.Receipt()
+		if !valid || observed.IsZero() || !h.paddingCurrent() {
+			if h.ctx.Err() == nil {
+				h.fail(errors.New("native Local Tor padding data lease expired"))
+			}
+			return
+		}
+		if freshness := observed.Add(mobiletor.PaddingReceiptMaxAge); freshness.Before(until) {
+			until = freshness
+		}
+		remaining := time.Until(until)
+		if remaining <= 0 {
+			h.fail(errors.New("native Local Tor padding data lease expired"))
+			return
+		}
+		// A path/native owner may retire before the grant deadline. Neither
+		// polling nor a newer status reply can extend an older native grant.
+		timer := time.NewTimer(min(remaining, 100*time.Millisecond))
+		select {
+		case <-h.ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+func (h *Outbound) maintainPaddingProof() {
+	defer h.proofWorkers.Done()
+	timer := time.NewTicker(5 * time.Second)
+	defer timer.Stop()
+	for {
+		select {
+		case <-h.ctx.Done():
+			return
+		case <-timer.C:
+		}
+		until := h.paddingProofUntil().Add(-mobiletor.PaddingMinTTL)
+		if cap := time.Now().Add(20 * time.Second); cap.Before(until) {
+			until = cap
+		}
+		ctx, cancel := context.WithDeadline(h.ctx, until)
+		_, err := h.refreshPaddingProof(ctx)
+		cancel()
+		if err != nil {
+			if h.ctx.Err() == nil {
+				h.fail(errors.New("native Local Tor padding lost its fresh path or selected-DNS proof"))
+			}
+			return
+		}
+	}
+}
+
+// TorPaddingStatus performs no control command, socket or resolver operation.
+// It validates a copied cache against actual proof completions and the current
+// complete native graph; old snapshots cannot extend either deadline.
+func (h *Outbound) TorPaddingStatus(sessionID string) (*mobiletor.NativePaddingProofStatus, error) {
+	if sessionID != h.sessionID || h.ctx.Err() != nil {
+		return nil, errors.New("native Local Tor padding status belongs to a retired session")
+	}
+	if h.padding == nil {
+		return nil, nil
+	}
+	if !h.paddingCurrent() {
+		return nil, errors.New("native Local Tor padding graph is no longer current")
+	}
+	h.mu.Lock()
+	lease, proof, dnsAt := h.padding.lease, h.padding.proof, h.padding.dnsCheckedAt
+	h.mu.Unlock()
+	if lease == nil {
+		return nil, errors.New("native Local Tor padding has no active native lease")
+	}
+	receipt, valid := lease.NativeReceipt()
+	if !valid {
+		return nil, errors.New("native Local Tor outgoing padding receipt is unavailable or expired")
+	}
+	status := &mobiletor.NativePaddingProofStatus{Receipt: receipt, PathCheckedAt: proof.CheckedAt.UnixMilli(), DNSCheckedAt: dnsAt.UnixMilli()}
+	capture := h.padding.capture
+	if err := mobiletor.ValidateNativePaddingStatus(status, capture.Policy(), capture.SessionSHA256(), capture.SourceSHA256(), time.Now()); err != nil || !h.paddingCurrent() {
+		return nil, errors.New("native Local Tor padding proof or accounting expired")
+	}
+	return status, nil
+}
+
+func (h *Outbound) paddingTrafficReady(ctx context.Context) error {
+	if ctx != nil && ctx.Value(torPaddingProofKey{}) != nil {
+		if h.paddingProofScope(ctx) != nil {
+			return nil
+		}
+		return net.ErrClosed
+	}
+	if h.padding == nil {
+		return nil
+	}
+	if ctx == nil {
+		return errors.New("native Local Tor padding traffic has no captured lifetime")
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-h.ctx.Done():
+		return net.ErrClosed
+	case <-h.padding.ready:
+	}
+	_, err := h.TorPaddingStatus(h.sessionID)
+	return err
+}
+
+func (h *Outbound) CloseTor(ctx context.Context, sessionID string) error {
+	if sessionID != h.sessionID {
+		return errors.New("native Local Tor cleanup belongs to another session")
+	}
+	return h.closeWithContext(ctx)
+}
+
+// Existing application streams retain the same gate as newly opened ones.
+// Native lease expiry also cancels the owning Network and joins its in-flight
+// IO; no cached connection may keep writing while a health timer catches up.
+type torPaddingConnection struct {
+	net.Conn
+	owner    *Outbound
+	scope    *torPaddingProofScope
+	mu       sync.Mutex
+	closing  bool
+	workers  sync.WaitGroup
+	once     sync.Once
+	closed   chan struct{}
+	closeErr error
+}
+
+// Install the gate inside application Network's socket ownership. Closing the
+// Network must join the very Read/Write calls seen by application or DNS pools,
+// not only the underlying TCP Close or an untracked outer wrapper.
+func (h *Outbound) paddingOwnedConnection(ctx context.Context, connection net.Conn) net.Conn {
+	if connection == nil || h.padding == nil {
+		return connection
+	}
+	var scope *torPaddingProofScope
+	if ctx != nil {
+		scope, _ = ctx.Value(torPaddingProofKey{}).(*torPaddingProofScope)
+	}
+	return &torPaddingConnection{Conn: connection, owner: h, scope: scope, closed: make(chan struct{})}
+}
+
+func (c *torPaddingConnection) begin() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closing {
+		return net.ErrClosed
+	}
+	c.workers.Add(1)
+	return nil
+}
+
+func (c *torPaddingConnection) current() error {
+	if c.owner == nil {
+		return net.ErrClosed
+	}
+	if c.scope != nil {
+		if c.scope.owner != c.owner || c.scope.ctx.Err() != nil || !c.owner.paddingCurrent() {
+			return net.ErrClosed
+		}
+		return nil
+	}
+	if _, err := c.owner.TorPaddingStatus(c.owner.sessionID); err != nil {
+		c.owner.fail(errors.New("native Local Tor padding retired an application stream"))
+		return net.ErrClosed
+	}
+	return nil
+}
+
+func (c *torPaddingConnection) Read(data []byte) (int, error) {
+	if err := c.begin(); err != nil {
+		return 0, err
+	}
+	defer c.workers.Done()
+	if err := c.current(); err != nil {
+		return 0, err
+	}
+	n, err := c.Conn.Read(data)
+	if currentErr := c.current(); currentErr != nil {
+		return 0, currentErr
+	}
+	return n, err
+}
+
+func (c *torPaddingConnection) Write(data []byte) (int, error) {
+	if err := c.begin(); err != nil {
+		return 0, err
+	}
+	defer c.workers.Done()
+	if err := c.current(); err != nil {
+		return 0, err
+	}
+	n, err := c.Conn.Write(data)
+	if currentErr := c.current(); currentErr != nil {
+		return n, currentErr
+	}
+	return n, err
+}
+
+func (c *torPaddingConnection) Close() error {
+	c.once.Do(func() {
+		c.mu.Lock()
+		c.closing = true
+		c.mu.Unlock()
+		c.closeErr = c.Conn.Close()
+		c.workers.Wait()
+		close(c.closed)
+	})
+	<-c.closed
+	return c.closeErr
+}

@@ -52,6 +52,7 @@ type RouterVPNTorProofRequest struct {
 	canceled            atomic.Bool
 	capture             routerVPNTorProofCapture
 	server              torServerProofOwner
+	padding             torLocalPaddingOwner
 }
 
 func (s *Box) RouterVPNTorCreateProof(outboundTag, sessionID, predecessorJSON string) (*RouterVPNTorProofRequest, error) {
@@ -83,6 +84,10 @@ func (s *Box) RouterVPNTorCreateProof(outboundTag, sessionID, predecessorJSON st
 		return nil, err
 	}
 	if err := request.bindExternal(); err != nil {
+		request.Cancel()
+		return nil, err
+	}
+	if err := request.bindPadding(); err != nil {
 		request.Cancel()
 		return nil, err
 	}
@@ -152,15 +157,23 @@ func (r *RouterVPNTorProofRequest) Run() (result string, failure error) {
 	}
 	ctx, cancel := context.WithTimeout(r.ctx, 3*time.Minute)
 	defer cancel()
-	proof, err := r.prove(ctx)
+	var proof mobiletor.Proof
+	var err error
+	if r.padding != nil {
+		proof, err = r.padding.StartTorPadding(ctx, r.sessionID)
+	} else {
+		proof, err = r.prove(ctx)
+	}
 	if err != nil {
 		return "", err
 	}
-	if r.canceled.Load() || ctx.Err() != nil || !r.currentNative() || proof.SessionID != r.sessionID || !proof.IsTor {
+	if r.canceled.Load() || ctx.Err() != nil || !r.currentNative() || proof.SessionID != r.sessionID || !proof.IsTor || r.padding != nil && !proof.DNSProven {
 		return "", errors.New("native Tor proof belongs to a retired outbound")
 	}
-	proof.DNSProven = false
-	if r.capture != nil {
+	if r.padding == nil {
+		proof.DNSProven = false
+	}
+	if r.capture != nil && r.padding == nil {
 		if err := r.capture.DNSProof(ctx); err != nil {
 			return "", errors.New("native Tor selected DNS failed proof")
 		}
@@ -246,6 +259,11 @@ func (r *RouterVPNTorProofRequest) Close() error {
 	}
 	r.Cancel()
 	if r.server == nil {
+		if r.padding != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			return r.padding.CloseTor(ctx, r.sessionID)
+		}
 		// Local cancellation is drained by the existing checked native service
 		// close. It owns no remote lease and needs no new shutdown operation.
 		return nil

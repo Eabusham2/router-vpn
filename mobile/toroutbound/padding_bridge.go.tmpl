@@ -1,0 +1,10 @@
+package libbox
+
+import "errors"
+
+func (r *RouterTorProofRequest) PaddingStatusJSON() (string, error) {
+	if r == nil || r.request == nil {
+		return "", errors.New("native Local Tor padding status is unavailable")
+	}
+	return r.request.PaddingStatusJSON()
+}

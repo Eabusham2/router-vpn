@@ -34,13 +34,14 @@ const closeTimeout = 15 * time.Second
 
 type Options struct {
 	option.DialerOptions
-	Bridges                    []string `json:"bridges"`
-	SessionID                  string   `json:"session_id"`
-	ProfileSHA256              string   `json:"profile_sha256,omitempty"`
-	EntrySHA256                string   `json:"entry_sha256,omitempty"`
-	ExternalPredecessorProfile string   `json:"external_predecessor_profile,omitempty"`
-	ExternalPredecessorConfig  string   `json:"external_predecessor_config,omitempty"`
-	ExternalTorProfile         string   `json:"external_tor_profile,omitempty"`
+	Bridges                    []string                      `json:"bridges"`
+	SessionID                  string                        `json:"session_id"`
+	ProfileSHA256              string                        `json:"profile_sha256,omitempty"`
+	EntrySHA256                string                        `json:"entry_sha256,omitempty"`
+	ExternalPredecessorProfile string                        `json:"external_predecessor_profile,omitempty"`
+	ExternalPredecessorConfig  string                        `json:"external_predecessor_config,omitempty"`
+	ExternalTorProfile         string                        `json:"external_tor_profile,omitempty"`
+	PaddingSource              *mobiletor.LocalPaddingSource `json:"padding_source,omitempty"`
 }
 
 func RegisterOutbound(registry *outbound.Registry) {
@@ -69,6 +70,7 @@ type Outbound struct {
 	resident       *resident
 	mu             sync.Mutex
 	started        bool
+	circuitReady   bool
 	closing        bool
 	closeTimedOut  bool
 	ready          chan struct{}
@@ -83,6 +85,7 @@ type Outbound struct {
 	proxy          *mobiletor.TCPProxy
 	application    *mobiletor.Network
 	proof          mobiletor.Proof
+	padding        *torLocalPadding
 	failure        error
 	proofCloseErr  error
 	closeErr       error
@@ -111,6 +114,10 @@ func NewOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag
 		}
 	}
 	externalEntry, externalConfig, err := captureTorExternalPredecessor(options)
+	if err != nil {
+		return nil, err
+	}
+	padding, err := captureTorLocalPadding(tag, options)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +158,7 @@ func NewOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag
 	}
 	h := &Outbound{Adapter: outbound.NewAdapterWithDialerOptions(Type, tag, []string{N.NetworkTCP}, options.DialerOptions),
 		ctx: owned, cancel: cancel, plan: plan, directory: directory, sessionID: options.SessionID, predecessor: options.Detour, lower: lower, resident: processResident,
-		networkCapture: networkCapture, entrySHA256: options.EntrySHA256, externalEntry: externalEntry, externalConfig: externalConfig,
+		networkCapture: networkCapture, entrySHA256: options.EntrySHA256, externalEntry: externalEntry, externalConfig: externalConfig, padding: padding,
 		ready: make(chan struct{}), workerDone: make(chan struct{}), closeDone: make(chan struct{})}
 	h.parentStop = context.AfterFunc(ctx, h.beginClose)
 	return h, nil
@@ -326,7 +333,8 @@ func (h *Outbound) run() {
 		return
 	}
 	local := &loopbackDialer{address: state.SOCKSAddress}
-	client := socks.NewClient(local, M.ParseSocksaddr(state.SOCKSAddress), socks.Version5, hex.EncodeToString(secret[:32]), hex.EncodeToString(secret[32:]))
+	username, password := hex.EncodeToString(secret[:32]), hex.EncodeToString(secret[32:])
+	client := socks.NewClient(local, M.ParseSocksaddr(state.SOCKSAddress), socks.Version5, username, password)
 	application, err := mobiletor.NewNetwork(h.ctx, func(ctx context.Context, network, address string) (net.Conn, error) {
 		if network != N.NetworkTCP && network != "tcp4" && network != "tcp6" {
 			return nil, errors.New("native Tor exit carries only TCP")
@@ -335,7 +343,8 @@ func (h *Outbound) run() {
 		if !destination.IsValid() || destination.Port == 0 {
 			return nil, errors.New("native Tor application destination is invalid")
 		}
-		return client.DialContext(ctx, N.NetworkTCP, destination)
+		connection, err := client.DialContext(ctx, N.NetworkTCP, destination)
+		return h.paddingOwnedConnection(ctx, connection), err
 	}, nil)
 	if err != nil {
 		h.fail(err)
@@ -343,11 +352,17 @@ func (h *Outbound) run() {
 	}
 	h.mu.Lock()
 	h.application = application
+	if h.padding != nil {
+		h.padding.username, h.padding.password = username, password
+	}
 	h.mu.Unlock()
-	proof, err := mobiletor.Prove(boot, h.sessionID, application.DialContext)
-	if err != nil {
-		h.fail(err)
-		return
+	var proof mobiletor.Proof
+	if h.padding == nil {
+		proof, err = mobiletor.Prove(boot, h.sessionID, application.DialContext)
+		if err != nil {
+			h.fail(err)
+			return
+		}
 	}
 	h.mu.Lock()
 	if h.closing || h.ctx.Err() != nil {
@@ -355,6 +370,7 @@ func (h *Outbound) run() {
 		return
 	}
 	h.proof = proof
+	h.circuitReady = true
 	h.mu.Unlock()
 	h.readyOnce.Do(func() { close(h.ready) })
 	// Status is a native handle query, not a control command. Normal session
@@ -432,6 +448,22 @@ func (h *Outbound) TorProof(ctx context.Context, sessionID string) (mobiletor.Pr
 		return mobiletor.Proof{}, net.ErrClosed
 	case <-h.ready:
 	}
+	if h.padding != nil {
+		select {
+		case <-ctx.Done():
+			return mobiletor.Proof{}, ctx.Err()
+		case <-h.ctx.Done():
+			return mobiletor.Proof{}, net.ErrClosed
+		case <-h.padding.ready:
+		}
+		if _, err := h.TorPaddingStatus(sessionID); err != nil {
+			return mobiletor.Proof{}, err
+		}
+		h.mu.Lock()
+		proof := h.padding.proof
+		h.mu.Unlock()
+		return proof, nil
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.closing || h.ctx.Err() != nil {
@@ -453,13 +485,40 @@ func (h *Outbound) DialContext(ctx context.Context, network string, destination 
 	if N.NetworkName(network) != N.NetworkTCP {
 		return nil, errors.New("native Tor exit carries only TCP")
 	}
+	if ctx != nil && ctx.Value(torPaddingProofKey{}) != nil {
+		scope := h.paddingProofScope(ctx)
+		if scope == nil || !h.paddingCurrent() {
+			return nil, net.ErrClosed
+		}
+		return scope.network.DialContext(ctx, N.NetworkTCP, destination.String())
+	}
 	if _, err := h.TorProof(ctx, h.sessionID); err != nil {
+		return nil, err
+	}
+	if err := h.paddingTrafficReady(ctx); err != nil {
 		return nil, err
 	}
 	h.mu.Lock()
 	application := h.application
 	h.mu.Unlock()
-	return application.DialContext(ctx, N.NetworkTCP, destination.String())
+	if h.padding != nil {
+		status, err := h.TorPaddingStatus(h.sessionID)
+		if err != nil {
+			return nil, err
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, time.UnixMilli(status.Receipt.ExpiresAt))
+		defer cancel()
+	}
+	connection, err := application.DialContext(ctx, N.NetworkTCP, destination.String())
+	if connection != nil && h.padding != nil {
+		if _, currentErr := h.TorPaddingStatus(h.sessionID); currentErr != nil || ctx.Err() != nil {
+			h.fail(errors.New("native Local Tor padding retired during an application dial"))
+			_ = connection.Close()
+			return nil, errors.New("native Local Tor application dial lost its captured lease or proof")
+		}
+	}
+	return connection, err
 }
 
 func (h *Outbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {

@@ -1,0 +1,52 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"net"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// TorPaddingExitProof refreshes the dynamic Tor exit through the selected
+// native DNS route and a literal final SOCKS destination. Passing the origin
+// name to SOCKS would silently substitute Tor's resolver for the user's DNS.
+func (c *routerVPNTorCapturedOwner) TorPaddingExitProof(ctx context.Context, sessionID string, dial mobiletor.DialContext) (mobiletor.Proof, error) {
+	if c == nil || c.engine == nil || c.Identity() == "" || ctx == nil || ctx.Err() != nil || dial == nil {
+		return mobiletor.Proof{}, errors.New("Local Tor padding exit proof has no captured native graph")
+	}
+	e := c.engine
+	return mobiletor.Prove(ctx, sessionID, func(ctx context.Context, network, address string) (net.Conn, error) {
+		if network != "tcp" || address != "check.torproject.org:443" || ctx.Err() != nil || c.Identity() == "" {
+			return nil, errors.New("Local Tor padding proof attempted an unowned destination")
+		}
+		lookup, cancel := context.WithTimeout(ctx, 5*time.Second)
+		lookup = adapter.WithContext(lookup, &adapter.InboundContext{Inbound: e.tunTag, InboundType: C.TypeTun, Network: "udp", Protocol: "dns"})
+		addresses, err := e.box.dnsRouter.Lookup(lookup, "check.torproject.org", adapter.DNSQueryOptions{LookupStrategy: c.dnsStrategy, DisableCache: true, DisableOptimisticCache: true})
+		lookupErr := lookup.Err()
+		cancel()
+		if err != nil || lookupErr != nil || ctx.Err() != nil || c.Identity() == "" {
+			return nil, errors.New("Local Tor padding proof lost its selected DNS")
+		}
+		for _, ip := range addresses {
+			if !routerVPNPublicMeasurementAddress(ip) || c.dnsStrategy == C.DomainStrategyIPv4Only && ip.Is6() || c.dnsStrategy == C.DomainStrategyIPv6Only && ip.Is4() {
+				continue
+			}
+			if ctx.Err() != nil || c.Identity() == "" {
+				return nil, errors.New("Local Tor padding proof retired before its final dial")
+			}
+			connection, err := dial(ctx, network, net.JoinHostPort(ip.String(), "443"))
+			if ctx.Err() != nil || c.Identity() == "" {
+				return connection, errors.New("Local Tor padding final dial changed native owner")
+			}
+			// Return even error-path sockets to Prove's joined close owner.
+			if connection != nil {
+				return connection, err
+			}
+		}
+		return nil, errors.New("Local Tor padding selected DNS returned no usable public path")
+	})
+}

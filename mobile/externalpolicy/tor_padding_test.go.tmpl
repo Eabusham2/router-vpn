@@ -1,0 +1,257 @@
+package box
+
+import (
+	"bufio"
+	"context"
+	"crypto/tls"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/routervpntor"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+type localPaddingDNSFixture struct {
+	outbound.Adapter
+	N.Dialer
+	ctx              context.Context
+	workers          sync.WaitGroup
+	mu               sync.Mutex
+	closed           bool
+	fault            string
+	queries, origins atomic.Int32
+}
+
+func (f *localPaddingDNSFixture) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if ctx.Err() != nil || f.ctx.Err() != nil || network != "tcp" || destination.String() != "9.9.9.9:5353" {
+		return nil, errors.New("padding DNS escaped its exact selected route")
+	}
+	f.mu.Lock()
+	if f.closed {
+		f.mu.Unlock()
+		return nil, net.ErrClosed
+	}
+	f.workers.Add(1)
+	f.mu.Unlock()
+	client, server := net.Pipe()
+	stop := context.AfterFunc(f.ctx, func() { _ = client.Close(); _ = server.Close() })
+	go func() {
+		defer f.workers.Done()
+		defer stop()
+		defer server.Close()
+		peer := &mDNS.Conn{Conn: server}
+		for {
+			query, err := peer.ReadMsg()
+			if err != nil {
+				return
+			}
+			f.queries.Add(1)
+			answer := new(mDNS.Msg)
+			answer.SetReply(query)
+			if len(query.Question) != 1 {
+				answer.Rcode = mDNS.RcodeRefused
+			} else {
+				name := query.Question[0].Name
+				if name == "check.torproject.org." {
+					f.origins.Add(1)
+				}
+				if name != "example.com." && name != "check.torproject.org." || f.fault == "dns" {
+					answer.Rcode = mDNS.RcodeServerFailure
+				} else if query.Question[0].Qtype == mDNS.TypeA {
+					ip := "203.0.113.42"
+					if f.fault == "private" {
+						ip = "10.77.0.1"
+					}
+					answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 3600}, A: net.ParseIP(ip)}}
+				}
+			}
+			if peer.WriteMsg(answer) != nil {
+				return
+			}
+		}
+	}()
+	return client, nil
+}
+
+func (f *localPaddingDNSFixture) Close() error {
+	f.mu.Lock()
+	f.closed = true
+	f.mu.Unlock()
+	f.workers.Wait()
+	return nil
+}
+
+func TestRouterTorLocalPaddingNativeSelectedDNSAndTLSProof(t *testing.T) {
+	// Isolate the normal platform trust cache. Production Prove still uses
+	// certificate-chain and hostname verification without a verifier override.
+	if os.Getenv("ROUTERVPN_LOCAL_PADDING_TLS_CHILD") != "1" {
+		executable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		command := exec.Command(executable, "-test.run=^TestRouterTorLocalPaddingNativeSelectedDNSAndTLSProof$", "-test.v")
+		command.Env = append(os.Environ(), "ROUTERVPN_LOCAL_PADDING_TLS_CHILD=1")
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("actual selected-DNS/TLS child failed: %v\n%s", err, output)
+		}
+		t.Log(string(output))
+		return
+	}
+	certificate := mobileServerNativeRoots(t)
+	for _, fault := range []string{"success", "dns", "private", "wrong-hostname", "untrusted", "not-tor", "replacement"} {
+		t.Run(fault, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			profile := `{"id":"padding-exit","node_kind":"external","external":{"protocol":"tor"},"dns_mode":"custom","dns_protocol":"tcp","dns_host":"9.9.9.9","dns_port":5353,"ipv6_mode":"off","daita_enabled":true,"daita_rate_kbps":64}`
+			source, err := mobiletor.NewLocalPaddingCapture(&mobiletor.LocalPaddingSource{Profile: profile}, "native-padding-proof")
+			if err != nil {
+				t.Fatal(err)
+			}
+			inbounds := inbound.NewRegistry()
+			inbound.Register[option.TunInboundOptions](inbounds, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+				return &mobileServerNativeTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag)}, nil
+			})
+			var final *localPaddingDNSFixture
+			outbounds := outbound.NewRegistry()
+			outbound.Register[routervpntor.Options](outbounds, "routervpn-tor", func(owned context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ routervpntor.Options) (adapter.Outbound, error) {
+				final = &localPaddingDNSFixture{Adapter: outbound.NewAdapter("routervpn-tor", tag, []string{N.NetworkTCP}, nil), ctx: owned, fault: fault}
+				return final, nil
+			})
+			dnsRegistry := dns.NewTransportRegistry()
+			DNST.RegisterTCP(dnsRegistry)
+			ctx = Context(ctx, inbounds, outbounds, endpoint.NewRegistry(), dnsRegistry, boxService.NewRegistry(), certificateRegistry())
+			options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(source.Config()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			options.Log = &option.LogOptions{Disabled: true}
+			if C.DomainStrategy(options.DNS.Strategy) != C.DomainStrategyIPv4Only {
+				t.Fatal("compiled padding fixture lost selected IPv4 DNS policy", options.DNS.Strategy)
+			}
+			instance, err := New(Options{Context: ctx, Options: options})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				cancel()
+				if err := instance.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			if err := instance.Start(); err != nil {
+				t.Fatal(err)
+			}
+			captured, err := routerVPNTorCaptureProof(instance)
+			if err != nil {
+				t.Fatal(err)
+			}
+			owner, ok := captured.(*routerVPNTorCapturedOwner)
+			if !ok || !owner.ServerGraph(source.Config()) || owner.Identity() == "" {
+				t.Fatal("actual native TUN/DNS graph was not captured")
+			}
+			var changed map[string]any
+			_ = json.Unmarshal([]byte(source.Config()), &changed)
+			changed["dns"].(map[string]any)["final"] = "routervpn-tor-bootstrap"
+			raw, _ := json.Marshal(changed)
+			if owner.ServerGraph(string(raw)) {
+				t.Fatal("changed DNS graph acquired native padding source authority")
+			}
+			var dials atomic.Int32
+			var workers sync.WaitGroup
+			selectedCertificate := certificate
+			if fault == "wrong-hostname" {
+				selectedCertificate = mobileServerNativeCertificate(t, "unrelated.example", &certificate)
+			}
+			if fault == "untrusted" {
+				selectedCertificate = mobileServerNativeCertificate(t, "check.torproject.org", nil)
+			}
+			dial := func(ctx context.Context, network, address string) (net.Conn, error) {
+				dials.Add(1)
+				if network != "tcp" || address != "203.0.113.42:443" {
+					return nil, errors.New("proof bypassed selected DNS or public numeric target")
+				}
+				if fault == "replacement" {
+					cancel()
+				}
+				client, server := net.Pipe()
+				workers.Add(1)
+				go func() {
+					defer workers.Done()
+					defer server.Close()
+					secure := tls.Server(server, &tls.Config{Certificates: []tls.Certificate{selectedCertificate}, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}})
+					_ = secure.SetDeadline(time.Now().Add(5 * time.Second))
+					if secure.Handshake() != nil {
+						return
+					}
+					request, err := http.ReadRequest(bufio.NewReader(secure))
+					if err != nil {
+						return
+					}
+					defer request.Body.Close()
+					if request.Method != "GET" || request.Host != "check.torproject.org" || request.URL.Path != "/api/ip" {
+						t.Error("proof changed authenticated origin")
+						return
+					}
+					body := `{"IsTor":true,"IP":"203.0.113.77"}`
+					if fault == "not-tor" {
+						body = strings.Replace(body, "true", "false", 1)
+					}
+					_, _ = fmt.Fprintf(secure, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+					_, _ = io.Copy(io.Discard, secure)
+				}()
+				return client, nil
+			}
+			proof, err := owner.TorPaddingExitProof(ctx, "native-padding-proof", dial)
+			if fault != "success" {
+				if err == nil || proof.IsTor {
+					t.Fatal("invalid DNS/TLS/path was accepted")
+				}
+				if (fault == "dns" || fault == "private") && dials.Load() != 0 {
+					t.Fatal("invalid resolver result reached TLS")
+				}
+				workers.Wait()
+				return
+			}
+			queries := final.origins.Load()
+			if err != nil || !proof.IsTor || proof.IP != "203.0.113.77" || queries < 1 || dials.Load() != 1 {
+				t.Fatal("actual selected-DNS/TLS proof did not complete", err, proof, final.origins.Load(), dials.Load())
+			}
+			if _, err := owner.TorPaddingExitProof(ctx, "native-padding-proof", dial); err != nil {
+				t.Fatal(err)
+			}
+			// The captured native router may issue more than one wire query for
+			// one lookup. A new proof must issue new selected-route queries even
+			// with a long TTL, not depend on a fixed internal query count.
+			if final.origins.Load() <= queries || dials.Load() != 2 {
+				t.Fatal("renewal relabeled cached DNS or exit proof as fresh")
+			}
+			workers.Wait()
+		})
+	}
+}

@@ -19,9 +19,10 @@ import (
 // The retained proof owns the complete graph, not merely the Tor final tag.
 // Only an authorized MTU transaction may replace its captured TUN pointer.
 type routerVPNTorCapturedOwner struct {
-	engine   *routerVPNExternalNativeEngine
-	mtu      atomic.Pointer[RouterVPNTorMTULease]
-	activity routerVPNExternalActivity
+	engine      *routerVPNExternalNativeEngine
+	mtu         atomic.Pointer[RouterVPNTorMTULease]
+	activity    routerVPNExternalActivity
+	dnsStrategy C.DomainStrategy
 }
 
 func (c *routerVPNTorCapturedOwner) Identity() string {
@@ -102,7 +103,7 @@ func init() {
 		if err != nil {
 			return nil, err
 		}
-		return &routerVPNTorCapturedOwner{engine: engine}, nil
+		return &routerVPNTorCapturedOwner{engine: engine, dnsStrategy: C.DomainStrategy(compiled.DNS.Strategy)}, nil
 	}
 }
 

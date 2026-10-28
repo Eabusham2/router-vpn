@@ -1,0 +1,86 @@
+//go:build routervpn_tor_native_test
+
+package routervpntor
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-box/routervpn/nativetor"
+	"github.com/sagernet/sing/common/control"
+	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/filemanager"
+)
+
+type paddingConstructorNetwork struct{ *torTestNetwork }
+
+func (*paddingConstructorNetwork) AutoDetectInterface() bool                { return false }
+func (*paddingConstructorNetwork) AutoRedirectOutputMarkFunc() control.Func { return nil }
+func (*paddingConstructorNetwork) AutoRedirectOutputMark() uint32           { return 0 }
+
+// Exercise the shipping outbound constructor against the pinned C ABI. This
+// deliberately does not start Tor or manufacture a circuit/proof receipt.
+func TestNativeTorLocalPaddingConstructorRetainsCompleteSource(t *testing.T) {
+	if nativetor.ABI() != nativetor.RequiredABI || nativetor.Version() != nativetor.RequiredVersion {
+		t.Fatal("Local padding constructor did not link the actual pinned C ABI")
+	}
+	previous := processResident
+	processResident = &resident{}
+	t.Cleanup(func() { processResident = previous })
+	directory := filepath.Join(canonicalTorTemp(t), "private-tor")
+	if err := SetStateDirectory(directory); err != nil {
+		t.Fatal(err)
+	}
+	for _, ordinary := range []bool{false, true} {
+		source := &mobiletor.LocalPaddingSource{Profile: localPaddingTestProfile}
+		session := "local-padding-session"
+		if ordinary {
+			source.Profile = strings.Replace(torOrdinaryExitProfile, "{", `{"daita_enabled":true,"daita_rate_kbps":64,`, 1)
+			source.PredecessorProfile, source.PredecessorConfig = torOrdinaryEntryProfile, torOrdinaryEntryConfig
+			session = "ordinary-session"
+		}
+		capture, err := mobiletor.NewLocalPaddingCapture(source, session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var graph struct{ Outbounds []json.RawMessage }
+		if err := json.Unmarshal([]byte(capture.Config()), &graph); err != nil {
+			t.Fatal(err)
+		}
+		var options Options
+		for _, raw := range graph.Outbounds {
+			var header struct{ Tag string }
+			if json.Unmarshal(raw, &header) == nil && header.Tag == mobiletor.ProfileOutboundTag {
+				if err := json.Unmarshal(raw, &options); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		if options.PaddingSource == nil {
+			t.Fatal("compiled source omitted native Local padding")
+		}
+		f := newTorCaptureFixture(t, options.Detour)
+		service.MustRegister[adapter.NetworkManager](f.ctx, &paddingConstructorNetwork{f.network})
+		ctx := filemanager.WithDefault(f.ctx, directory, directory, os.Getuid(), os.Getgid())
+		actual, err := NewOutbound(ctx, nil, nil, mobiletor.ProfileOutboundTag, options)
+		if err != nil {
+			t.Fatal("captured padding source did not reach native constructor", ordinary, err)
+		}
+		h := actual.(*Outbound)
+		if h.padding == nil || h.padding.capture.SourceSHA256() != capture.SourceSHA256() || h.directory != directory || h.TorHealthy(session) || h.padding.started || (h.externalEntry != nil) != ordinary {
+			t.Fatal("native constructor changed source, predecessor, state or admission")
+		}
+		if err := h.Close(); err != nil {
+			t.Fatal("unstarted native padding did not close its exact owner", err)
+		}
+		options.PaddingSource.Profile = strings.Replace(source.Profile, "64", "96", 1)
+		if stale, err := NewOutbound(ctx, nil, nil, mobiletor.ProfileOutboundTag, options); err == nil || stale != nil {
+			t.Fatal("actual native constructor admitted changed selected padding")
+		}
+	}
+}

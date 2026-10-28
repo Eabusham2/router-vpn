@@ -31,12 +31,24 @@ func (h *Outbound) cleanup() {
 	h.mu.Lock()
 	owner, bridges, proxy, application := h.lease, h.bridges, h.proxy, h.application
 	cleanupError := h.proofCloseErr
+	var padding *mobiletor.PaddingLease
+	if h.padding != nil {
+		padding = h.padding.lease
+	}
 	h.mu.Unlock()
+	if padding != nil {
+		// Join framed control work before quiescing native ciphertext. A
+		// cancellation alone never permits reuse of this resident generation.
+		cleanupError = errors.Join(cleanupError, padding.Join(context.Background()))
+	}
 	if application != nil {
 		cleanupError = errors.Join(cleanupError, application.Close(context.Background()))
 	}
 	if owner != nil {
 		cleanupError = errors.Join(cleanupError, owner.control.Quiesce(context.Background()))
+	}
+	if padding != nil {
+		cleanupError = errors.Join(cleanupError, padding.Close(context.Background()))
 	}
 	if bridges != nil {
 		// Tor's inventories exclude connections marked for close. Real PT

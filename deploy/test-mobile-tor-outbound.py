@@ -60,14 +60,14 @@ def main():
     run([args.go, 'test', '-mod=readonly', '-ldflags=-checklinkname=0', '-run', '^$', './experimental/libbox'],
         vendor, environment, args.output, 'libbox-host-api')
     run([args.go, 'test', '-mod=readonly', '-race', '-count=1', '-ldflags=-checklinkname=0',
-         '-run', '^TestRouterTorProof', '-timeout=60s', '.'],
+         '-run', '^TestRouterTor(Proof|LocalPadding|UnrequestedLocalPadding)', '-timeout=60s', '.'],
         vendor, environment, args.output, 'captured-proof-request')
     environment = environment.copy()
     environment['CGO_LDFLAGS'] = '-L'+str(library.parent)+' -Wl,-rpath,'+str(library.parent)+' -lroutervpn_tor'
     for late in ('pt', 'plain'):
         environment['ROUTERVPN_TOR_TEST_LATE'] = late
         run([args.go, 'test', '-mod=readonly', '-race', '-count=1', '-timeout=120s',
-             '-tags', 'routervpn_tor_native_test', '-run', '^TestNativeTorOutboundReusesResidentOnlyAfterRealPTDrain$',
+             '-tags', 'routervpn_tor_native_test', '-run', '^TestNativeTor(OutboundReusesResidentOnlyAfterRealPTDrain|LocalPaddingConstructorRetainsCompleteSource)$',
              '-v', './protocol/routervpntor'],
             vendor, environment, args.output, 'real-native-'+late+'-session-drain')
     if sha(library) != native_hash or sources != {str(path.relative_to(ROOT)): sha(path) for path in PREP.inputs()}:

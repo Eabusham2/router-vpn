@@ -1,0 +1,791 @@
+package routervpntor
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+const localPaddingTestProfile = `{"id":"local-padding-exit","node_kind":"external","external":{"protocol":"tor"},"dns_mode":"custom","dns_protocol":"tcp","dns_host":"9.9.9.9","daita_enabled":true,"daita_rate_kbps":64}`
+
+func localPaddingOptions(t *testing.T) Options {
+	t.Helper()
+	capture, err := mobiletor.NewLocalPaddingCapture(&mobiletor.LocalPaddingSource{Profile: localPaddingTestProfile}, "local-padding-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var graph struct {
+		Outbounds []json.RawMessage `json:"outbounds"`
+	}
+	if json.Unmarshal([]byte(capture.Config()), &graph) != nil {
+		t.Fatal("source descriptor did not compile its native graph")
+	}
+	var options Options
+	if len(graph.Outbounds) != 1 || json.Unmarshal(graph.Outbounds[0], &options) != nil {
+		t.Fatal("native padding graph lost its sole final owner")
+	}
+	return options
+}
+
+func TestTorLocalPaddingConstructorRejectsReplacedCapturedOptions(t *testing.T) {
+	options := localPaddingOptions(t)
+	owner, err := captureTorLocalPadding(mobiletor.ProfileOutboundTag, options)
+	if err != nil || owner == nil || owner.capture.Policy().RateKbps != 64 {
+		t.Fatal("valid source did not reach guarded native capture", err)
+	}
+	for _, fault := range []string{"profile", "session", "entry", "detour", "bridges", "resolver", "source", "tag"} {
+		t.Run(fault, func(t *testing.T) {
+			copy, tag := localPaddingOptions(t), mobiletor.ProfileOutboundTag
+			switch fault {
+			case "profile":
+				copy.ProfileSHA256 = strings.Repeat("a", 64)
+			case "session":
+				copy.SessionID = "invalid session"
+			case "entry":
+				copy.EntrySHA256 = strings.Repeat("b", 64)
+			case "detour":
+				copy.Detour = "unowned"
+			case "bridges":
+				copy.Bridges = []string{"obfs4 198.51.100.1:443"}
+			case "resolver":
+				copy.BindInterface = "replacement-network"
+			case "source":
+				copy.PaddingSource.Profile = strings.Replace(localPaddingTestProfile, "64", "192", 1)
+			case "tag":
+				tag = "replacement"
+			}
+			if value, err := captureTorLocalPadding(tag, copy); err == nil || value != nil {
+				t.Fatal("changed native outbound acquired captured padding authority")
+			}
+		})
+	}
+}
+
+// This peer tests the real authenticated control parser and resident lifecycle.
+// It is an explicit native-IO boundary double, not evidence of a public Tor
+// circuit or physical channel traffic; pinned C circuit accounting has its own
+// executable native package tests.
+type localPaddingPeer struct {
+	mu                                  sync.Mutex
+	instance                            *residentFixture
+	actions                             []string
+	session, source, username, password string
+	rate                                int
+	channel                             uint64
+	state                               string
+	expires                             time.Time
+	quiesced                            bool
+	startEntered                        chan struct{}
+	startRelease                        chan struct{}
+	gateAction                          string
+	startOnce                           sync.Once
+	badStop                             bool
+	initialTTL                          time.Duration
+}
+
+func newLocalPaddingPeer(t *testing.T) *localPaddingPeer {
+	t.Helper()
+	f := &localPaddingPeer{instance: newResidentFixture(t), startEntered: make(chan struct{})}
+	go func() {
+		reader := bufio.NewReader(f.instance.peer)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				return
+			}
+			fields := strings.Fields(line)
+			if len(fields) == 0 {
+				t.Error("empty control operation")
+				return
+			}
+			f.mu.Lock()
+			f.actions = append(f.actions, strings.Join(fields[:min(2, len(fields))], " "))
+			var response string
+			switch fields[0] {
+			case "SETCONF":
+				f.quiesced = true
+				response = "250 OK\r\n"
+			case "SIGNAL":
+				response = "250 OK\r\n"
+			case "GETCONF":
+				for _, key := range fields[1:] {
+					value := ""
+					switch key {
+					case "DisableNetwork":
+						value = "1"
+					case "__ReloadTorrcOnSIGHUP", "SocksPort", "UseBridges":
+						value = "0"
+					}
+					response += "250-" + key + "=" + value + "\r\n"
+				}
+				response += "250 OK\r\n"
+			case "GETINFO":
+				for _, key := range fields[1:] {
+					response += "250-" + key + "=\r\n"
+				}
+				response += "250 OK\r\n"
+			case "ROUTERVPN_PADDING":
+				if len(fields) < 2 {
+					f.mu.Unlock()
+					t.Error("missing padding operation")
+					return
+				}
+				action := fields[1]
+				if action == "INFO" {
+					response = "250 version=1 direction=outgoing min_rate_kbps=32 max_rate_kbps=192 default_rate_kbps=192 max_ttl_ms=10000 max_pending_cells=1 accounting=tor-link-cell username_hex_lengths=32,64 password_hex_length=64 generation_highwater=6\r\n"
+					break
+				}
+				if len(fields) < 5 || fields[4] != "7" {
+					f.mu.Unlock()
+					t.Error("changed native generation")
+					return
+				}
+				if action == "START" {
+					if len(fields) != 9 {
+						f.mu.Unlock()
+						t.Error("missing native isolation")
+						return
+					}
+					f.session, f.source, f.username, f.password = fields[2], fields[3], fields[7], fields[8]
+					f.rate, _ = strconv.Atoi(fields[5])
+					f.channel, f.state = 1, "running"
+					ttl, _ := strconv.Atoi(fields[6])
+					f.expires = time.Now().Add(time.Duration(ttl) * time.Millisecond)
+					if f.initialTTL > 0 && f.initialTTL < time.Duration(ttl)*time.Millisecond {
+						f.expires = time.Now().Add(f.initialTTL)
+					}
+				} else if fields[2] != f.session || fields[3] != f.source {
+					f.mu.Unlock()
+					t.Error("changed native session/source")
+					return
+				} else if action == "STOP" {
+					if !f.quiesced {
+						f.mu.Unlock()
+						t.Error("STOP preceded native quiescence")
+						return
+					}
+					f.state = "stopped"
+					if f.badStop {
+						response = "250 malformed-stop-receipt\r\n"
+						break
+					}
+				} else if action == "RENEW" {
+					ttl, _ := strconv.Atoi(fields[5])
+					f.expires = time.Now().Add(time.Duration(ttl) * time.Millisecond)
+					f.channel++
+				} else if action == "STATUS" {
+					if f.state == "running" {
+						f.channel++
+					}
+				} else {
+					f.mu.Unlock()
+					t.Error("unexpected padding action")
+					return
+				}
+				expires, reason := int64(0), "controller"
+				if f.state == "running" {
+					expires = time.Until(f.expires).Milliseconds()
+					reason = "active"
+				}
+				response = fmt.Sprintf("250 version=1 state=%s reason=%s session=%s source=%s generation=7 rate_kbps=%d expires_ms=%d queued_cells=%d queued_cell_bytes=%d channel_cells=%d channel_cell_bytes=%d dropped_cells=0 dropped_cell_bytes=0 pending_cells=0 last_circuit=17\r\n", f.state, reason, f.session, f.source, f.rate, expires, f.channel, f.channel*514, f.channel, f.channel*514)
+			default:
+				f.mu.Unlock()
+				t.Error("unexpected native control family")
+				return
+			}
+			gate := f.startRelease
+			isStart := len(fields) > 1 && fields[0] == "ROUTERVPN_PADDING" && (fields[1] == "START" && f.gateAction == "" || fields[1] == f.gateAction)
+			f.mu.Unlock()
+			if isStart {
+				f.startOnce.Do(func() { close(f.startEntered) })
+				if gate != nil {
+					<-gate
+				}
+			}
+			if _, err := io.WriteString(f.instance.peer, response); err != nil {
+				return
+			}
+		}
+	}()
+	return f
+}
+
+func localPaddingOutbound(t *testing.T, finalDial ...mobiletor.DialContext) (*Outbound, *localPaddingPeer, *atomic.Int32) {
+	t.Helper()
+	options := localPaddingOptions(t)
+	padding, err := captureTorLocalPadding(mobiletor.ProfileOutboundTag, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newTorCaptureFixture(t, "")
+	ctx, cancel := context.WithCancel(f.ctx)
+	captured, err := captureTorUpstream(ctx, mobiletor.ProfileOutboundTag, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := newLocalPaddingPeer(t)
+	r := &resident{start: func([]string) (nativeInstance, error) { return peer.instance, nil }}
+	lease, err := r.acquire(ctx, filepath.Join(t.TempDir(), "tor-state"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy, err := mobiletor.StartTCPProxy(ctx, func(context.Context, string, string) (net.Conn, error) {
+		return nil, errors.New("unexpected underlay dial")
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dials := new(atomic.Int32)
+	var h *Outbound
+	application, err := mobiletor.NewNetwork(ctx, func(ctx context.Context, network, address string) (net.Conn, error) {
+		dials.Add(1)
+		if len(finalDial) != 0 {
+			connection, err := finalDial[0](ctx, network, address)
+			return h.paddingOwnedConnection(ctx, connection), err
+		}
+		return nil, errors.New("fixture final dial")
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h = &Outbound{Adapter: outbound.NewAdapter(Type, mobiletor.ProfileOutboundTag, []string{N.NetworkTCP}, nil), ctx: ctx, cancel: cancel, sessionID: options.SessionID,
+		upstream: captured, resident: r, lease: lease, proxy: proxy, application: application, padding: padding, started: true, circuitReady: true,
+		ready: make(chan struct{}), workerDone: make(chan struct{}), closeDone: make(chan struct{})}
+	h.readyOnce.Do(func() { close(h.ready) })
+	close(h.workerDone)
+	h.padding.username, h.padding.password = strings.Repeat("c", 64), strings.Repeat("d", 64)
+	t.Cleanup(func() { _ = h.Close(); cancel() })
+	return h, peer, dials
+}
+
+func localPaddingProof(h *Outbound, calls *atomic.Int32) func(context.Context, mobiletor.DialContext) (mobiletor.Proof, time.Time, error) {
+	return func(ctx context.Context, _ mobiletor.DialContext) (mobiletor.Proof, time.Time, error) {
+		calls.Add(1)
+		if h.paddingProofScope(ctx) == nil || h.paddingTrafficReady(ctx) != nil {
+			return mobiletor.Proof{}, time.Time{}, errors.New("proof lacks exact native bypass")
+		}
+		dns := time.Now().UTC()
+		return mobiletor.Proof{SessionID: h.sessionID, IP: "203.0.113.9", IsTor: true, DNSProven: true, CheckedAt: time.Now().UTC()}, dns, nil
+	}
+}
+
+func TestTorLocalPaddingOwnsInitialProofTrafficGateReceiptAndNativeDrain(t *testing.T) {
+	h, peer, dials := localPaddingOutbound(t)
+	var proofs atomic.Int32
+	if err := h.BindTorPadding(func() bool { return true }, localPaddingProof(h, &proofs)); err != nil {
+		t.Fatal(err)
+	}
+	blocked, stop := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	if c, err := h.DialContext(blocked, "tcp", M.ParseSocksaddr("1.1.1.1:443")); err == nil || c != nil || dials.Load() != 0 {
+		t.Fatal("application bypassed requested unstarted padding")
+	}
+	stop()
+	if h.TorHealthy(h.sessionID) {
+		t.Fatal("unstarted requested padding appeared healthy")
+	}
+	proof, err := h.StartTorPadding(t.Context(), h.sessionID)
+	if err != nil || !proof.IsTor || !proof.DNSProven || proofs.Load() != 1 {
+		t.Fatal("captured proof did not precede native readiness", err)
+	}
+	status, err := h.TorPaddingStatus(h.sessionID)
+	if err != nil || status.Receipt.ChannelCells == 0 || status.Receipt.RateKbps != 64 || status.Receipt.SourceSHA256 != h.padding.capture.SourceSHA256() || !h.TorHealthy(h.sessionID) {
+		t.Fatal("actual native receipt did not own connected health", err)
+	}
+	peer.mu.Lock()
+	bound := peer.session == h.padding.capture.SessionSHA256() && peer.source == h.padding.capture.SourceSHA256() && peer.username == h.padding.username && peer.password == h.padding.password && peer.rate == 64
+	peer.mu.Unlock()
+	if !bound {
+		t.Fatal("native START did not use exact application SOCKS isolation/source/rate")
+	}
+	if _, err := h.StartTorPadding(t.Context(), h.sessionID); err == nil {
+		t.Fatal("same native padding owner started twice")
+	}
+	if _, err := h.DialContext(t.Context(), "tcp", M.ParseSocksaddr("1.1.1.1:443")); err == nil || dials.Load() != 1 {
+		t.Fatal("ready traffic did not reach captured final dial")
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	peer.mu.Lock()
+	state := peer.state
+	actions := append([]string(nil), peer.actions...)
+	peer.mu.Unlock()
+	if state != "stopped" || h.TorHealthy(h.sessionID) {
+		t.Fatal("native cancellation lost acknowledged STOP", actions)
+	}
+	h.resident.mu.Lock()
+	active, retired := h.resident.active, h.resident.retired
+	h.resident.mu.Unlock()
+	if active != nil || retired {
+		t.Fatal("verified resident drain did not allow safe reuse")
+	}
+}
+
+func TestTorLocalPaddingCannotRenewFromCachedExitOrFailedSelectedDNS(t *testing.T) {
+	for _, fault := range []string{"stale-dns", "future-path", "wrong-session", "not-tor", "missing-dns", "private-exit", "failed"} {
+		t.Run(fault, func(t *testing.T) {
+			h, peer, _ := localPaddingOutbound(t)
+			var calls atomic.Int32
+			good := localPaddingProof(h, &calls)
+			verify := func(ctx context.Context, dial mobiletor.DialContext) (mobiletor.Proof, time.Time, error) {
+				proof, dns, err := good(ctx, dial)
+				switch fault {
+				case "stale-dns":
+					dns = time.Now().Add(-31 * time.Second)
+				case "future-path":
+					proof.CheckedAt = time.Now().Add(time.Second)
+				case "wrong-session":
+					proof.SessionID = "replacement"
+				case "not-tor":
+					proof.IsTor = false
+				case "missing-dns":
+					proof.DNSProven = false
+				case "private-exit":
+					proof.IP = "10.77.0.1"
+				case "failed":
+					err = errors.New("private-resolver-secret")
+				}
+				return proof, dns, err
+			}
+			if err := h.BindTorPadding(func() bool { return true }, verify); err != nil {
+				t.Fatal(err)
+			}
+			if proof, err := h.StartTorPadding(t.Context(), h.sessionID); err == nil || proof.IsTor || strings.Contains(err.Error(), "secret") {
+				t.Fatal("invalid fresh proof started cover", err)
+			}
+			if err := h.Close(); err != nil {
+				t.Fatal(err)
+			}
+			peer.mu.Lock()
+			started := peer.session != ""
+			peer.mu.Unlock()
+			if started {
+				t.Fatal("failed path/DNS proof issued native START")
+			}
+		})
+	}
+}
+
+func TestTorLocalPaddingFreshProofRefreshAndExpiryRemainNativeOwned(t *testing.T) {
+	h, _, _ := localPaddingOutbound(t)
+	var calls atomic.Int32
+	if err := h.BindTorPadding(func() bool { return true }, localPaddingProof(h, &calls)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.StartTorPadding(t.Context(), h.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	before, err := h.TorPaddingStatus(h.sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(7 * time.Second)
+	for calls.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
+	after, err := h.TorPaddingStatus(h.sessionID)
+	if err != nil || calls.Load() < 2 || after.PathCheckedAt <= before.PathCheckedAt || after.DNSCheckedAt <= before.DNSCheckedAt || after.Receipt.ChannelCells <= before.Receipt.ChannelCells || after.Receipt.Generation != before.Receipt.Generation {
+		t.Fatal("control renewal did not retain actual refreshed proof and accounting", err)
+	}
+	h.mu.Lock()
+	h.padding.dnsCheckedAt = time.Now().Add(-31 * time.Second)
+	h.mu.Unlock()
+	if _, err := h.TorPaddingStatus(h.sessionID); err == nil || h.TorHealthy(h.sessionID) {
+		t.Fatal("cached exit proof extended expired DNS authority")
+	}
+	if c, err := h.DialContext(t.Context(), "tcp", M.ParseSocksaddr("1.1.1.1:443")); err == nil || c != nil {
+		t.Fatal("expired padding granted application traffic")
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTorLocalPaddingCancelJoinsIssuedControlBeforeResidentReuse(t *testing.T) {
+	h, peer, _ := localPaddingOutbound(t)
+	var proofs atomic.Int32
+	peer.mu.Lock()
+	peer.startRelease = make(chan struct{})
+	gate := peer.startRelease
+	peer.mu.Unlock()
+	var gateOnce sync.Once
+	defer gateOnce.Do(func() { close(gate) })
+	if err := h.BindTorPadding(func() bool { return true }, localPaddingProof(h, &proofs)); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := h.StartTorPadding(t.Context(), h.sessionID); done <- err }()
+	<-peer.startEntered
+	h.CancelTor(h.sessionID)
+	select {
+	case <-h.closeDone:
+		t.Fatal("cancel forgot issued native control reply")
+	default:
+	}
+	if _, err := h.resident.acquire(t.Context(), h.resident.directory); err == nil {
+		t.Fatal("replacement acquired still-owned native generation")
+	}
+	gateOnce.Do(func() { close(gate) })
+	if err := <-done; err == nil {
+		t.Fatal("canceled native START reported ready")
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal("framed control did not drain after canceled START", err)
+	}
+	peer.mu.Lock()
+	state := peer.state
+	peer.mu.Unlock()
+	if state != "stopped" {
+		t.Fatal("cancelled issued lease lost native STOP acknowledgement")
+	}
+}
+
+func TestTorLocalPaddingFailedNativeDrainQuarantinesResident(t *testing.T) {
+	h, peer, _ := localPaddingOutbound(t)
+	var proofs atomic.Int32
+	if err := h.BindTorPadding(func() bool { return true }, localPaddingProof(h, &proofs)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.StartTorPadding(t.Context(), h.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	peer.mu.Lock()
+	peer.badStop = true
+	peer.mu.Unlock()
+	if err := h.Close(); err == nil {
+		t.Fatal("malformed native STOP was treated as drained")
+	}
+	if _, err := h.resident.acquire(t.Context(), h.resident.directory); !errors.Is(err, errRetired) {
+		t.Fatal("unconfirmed native ciphertext owner was reusable", err)
+	}
+}
+
+func TestTorLocalPaddingExistingStreamsRejectExpiredProofWithoutWaitingForWatcher(t *testing.T) {
+	for _, operation := range []string{"write", "read"} {
+		t.Run(operation, func(t *testing.T) {
+			client, peer := net.Pipe()
+			defer peer.Close()
+			h, _, _ := localPaddingOutbound(t, func(context.Context, string, string) (net.Conn, error) { return client, nil })
+			var proofs atomic.Int32
+			if err := h.BindTorPadding(func() bool { return true }, localPaddingProof(h, &proofs)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.StartTorPadding(t.Context(), h.sessionID); err != nil {
+				t.Fatal(err)
+			}
+			connection, err := h.DialContext(t.Context(), "tcp", M.ParseSocksaddr("1.1.1.1:443"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.mu.Lock()
+			h.padding.dnsCheckedAt = time.Now().Add(-31 * time.Second)
+			h.mu.Unlock()
+			var n int
+			if operation == "write" {
+				n, err = connection.Write([]byte("must-not-escape"))
+			} else {
+				n, err = connection.Read(make([]byte, 1))
+			}
+			if err == nil || n != 0 {
+				t.Fatal("expired padding admitted application IO before the health watcher")
+			}
+			if err := h.Close(); err != nil {
+				t.Fatal(err)
+			}
+			var data [16]byte
+			if n, err := peer.Read(data[:]); n != 0 || err != io.EOF {
+				t.Fatal("retired connection sent data or failed to close", n, err)
+			}
+		})
+	}
+}
+
+func TestTorLocalPaddingProofPoolsCannotRetainAnExpiredBypass(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	h, _, dials := localPaddingOutbound(t, func(context.Context, string, string) (net.Conn, error) { return client, nil })
+	var pooled net.Conn
+	var detached context.Context
+	type poolProofKey struct{}
+	verify := func(ctx context.Context, _ mobiletor.DialContext) (mobiletor.Proof, time.Time, error) {
+		if ctx.Value(poolProofKey{}) != nil {
+			detached = context.WithoutCancel(ctx)
+			var err error
+			pooled, err = h.DialContext(detached, "tcp", M.ParseSocksaddr("9.9.9.9:5353"))
+			if err != nil {
+				return mobiletor.Proof{}, time.Time{}, err
+			}
+		}
+		dns := time.Now().UTC()
+		return mobiletor.Proof{SessionID: h.sessionID, IP: "203.0.113.9", IsTor: true, DNSProven: true, CheckedAt: time.Now().UTC()}, dns, nil
+	}
+	if err := h.BindTorPadding(func() bool { return true }, verify); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.StartTorPadding(t.Context(), h.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	// Startup cancels its own parent after returning. Exercise a subsequent
+	// proof whose caller remains live so that only proof-local cleanup can
+	// retire the resolver pool and its detached bypass context.
+	refresh, cancelRefresh := context.WithCancel(context.WithValue(t.Context(), poolProofKey{}, true))
+	defer cancelRefresh()
+	if _, err := h.refreshPaddingProof(refresh); err != nil {
+		t.Fatal(err)
+	}
+	if refresh.Err() != nil {
+		t.Fatal("completed proof canceled its still-owned caller")
+	}
+	if pooled == nil || dials.Load() != 1 {
+		t.Fatal("proof did not acquire its explicit native socket")
+	}
+	peerRead := make(chan error, 1)
+	go func() {
+		var data [32]byte
+		n, err := peer.Read(data[:])
+		if n != 0 || err != io.EOF {
+			peerRead <- fmt.Errorf("proof completion left a native pool socket live: %d bytes, %v", n, err)
+			return
+		}
+		peerRead <- nil
+	}()
+	if n, err := pooled.Write([]byte("must-not-use-old-proof")); err == nil || n != 0 {
+		t.Fatal("resolver pool retained a completed proof bypass")
+	}
+	if connection, err := h.DialContext(detached, "tcp", M.ParseSocksaddr("9.9.9.9:5353")); err == nil || connection != nil || dials.Load() != 1 {
+		t.Fatal("detached old proof context created another socket")
+	}
+	if !h.TorHealthy(h.sessionID) {
+		t.Fatal("retiring the proof pool incorrectly canceled the valid VPN")
+	}
+	select {
+	case err := <-peerRead:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("proof completion left a native pool socket live")
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type localPaddingSlowIO struct {
+	net.Conn
+	entered, release, closeEntered chan struct{}
+	closeOnce                      sync.Once
+}
+
+func (c *localPaddingSlowIO) Read([]byte) (int, error) {
+	close(c.entered)
+	<-c.release
+	return 0, net.ErrClosed
+}
+func (c *localPaddingSlowIO) Write([]byte) (int, error) {
+	close(c.entered)
+	<-c.release
+	return 0, net.ErrClosed
+}
+func (c *localPaddingSlowIO) Close() error {
+	c.closeOnce.Do(func() { close(c.closeEntered) })
+	return c.Conn.Close()
+}
+
+func TestTorLocalPaddingResidentWaitsForApplicationIOAfterRawClose(t *testing.T) {
+	for _, operation := range []string{"read", "write"} {
+		t.Run(operation, func(t *testing.T) {
+			client, peer := net.Pipe()
+			defer peer.Close()
+			raw := &localPaddingSlowIO{Conn: client, entered: make(chan struct{}), release: make(chan struct{}), closeEntered: make(chan struct{})}
+			var releaseOnce sync.Once
+			releaseIO := func() { releaseOnce.Do(func() { close(raw.release) }) }
+			defer releaseIO()
+			h, _, _ := localPaddingOutbound(t, func(context.Context, string, string) (net.Conn, error) { return raw, nil })
+			var proofs atomic.Int32
+			if err := h.BindTorPadding(func() bool { return true }, localPaddingProof(h, &proofs)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.StartTorPadding(t.Context(), h.sessionID); err != nil {
+				t.Fatal(err)
+			}
+			connection, err := h.DialContext(t.Context(), "tcp", M.ParseSocksaddr("1.1.1.1:443"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() {
+				var err error
+				if operation == "write" {
+					_, err = connection.Write([]byte("owned"))
+				} else {
+					_, err = connection.Read(make([]byte, 4))
+				}
+				done <- err
+			}()
+			<-raw.entered
+			h.mu.Lock()
+			application := h.application
+			h.mu.Unlock()
+			h.CancelTor(h.sessionID)
+			<-raw.closeEntered
+			// Observe the actual retained Network owner while the entered
+			// Read/Write is still held. An immediate resident check alone can
+			// race ahead of an incorrectly early asynchronous native close.
+			closing, cancelClose := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			err = application.Close(closing)
+			cancelClose()
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("native application Network released before its entered IO joined", err)
+			}
+			select {
+			case <-h.closeDone:
+				t.Fatal("native resident released before its entered application IO joined")
+			default:
+			}
+			h.resident.mu.Lock()
+			owned := h.resident.active == h.lease
+			h.resident.mu.Unlock()
+			if !owned {
+				t.Fatal("raw Close released native resident before wrapper IO returned")
+			}
+			releaseIO()
+			if err := <-done; err == nil {
+				t.Fatal("retired IO reported success")
+			}
+			if err := h.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestTorLocalPaddingLateDialCannotAdoptAnExpiredOrReplacedSource(t *testing.T) {
+	for _, fault := range []string{"expired", "replaced"} {
+		t.Run(fault, func(t *testing.T) {
+			client, peer := net.Pipe()
+			defer peer.Close()
+			entered, release := make(chan struct{}), make(chan struct{})
+			var deadline time.Time
+			h, _, _ := localPaddingOutbound(t, func(ctx context.Context, _ string, _ string) (net.Conn, error) {
+				deadline, _ = ctx.Deadline()
+				close(entered)
+				<-release
+				return client, nil
+			})
+			var current atomic.Bool
+			current.Store(true)
+			var proofs atomic.Int32
+			if err := h.BindTorPadding(current.Load, localPaddingProof(h, &proofs)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.StartTorPadding(t.Context(), h.sessionID); err != nil {
+				t.Fatal(err)
+			}
+			status, err := h.TorPaddingStatus(h.sessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() {
+				connection, err := h.DialContext(t.Context(), "tcp", M.ParseSocksaddr("1.1.1.1:443"))
+				if connection != nil {
+					t.Error("late native dial published a stale application socket")
+					_ = connection.Close()
+				}
+				done <- err
+			}()
+			<-entered
+			if deadline.IsZero() || deadline.After(time.UnixMilli(status.Receipt.ExpiresAt)) {
+				t.Fatal("native application dial outlived its actual grant")
+			}
+			if fault == "expired" {
+				h.mu.Lock()
+				h.padding.dnsCheckedAt = time.Now().Add(-31 * time.Second)
+				h.mu.Unlock()
+			} else {
+				current.Store(false)
+			}
+			close(release)
+			if err := <-done; err == nil {
+				t.Fatal("retired late dial reported success")
+			}
+			if err := h.Close(); err != nil {
+				t.Fatal(err)
+			}
+			var data [1]byte
+			if _, err := peer.Read(data[:]); err != io.EOF {
+				t.Fatal("late rejected socket remained open", err)
+			}
+		})
+	}
+}
+
+func TestTorLocalPaddingExpiryClosesDataWhileControlReplyRemainsOwned(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	h, control, _ := localPaddingOutbound(t, func(context.Context, string, string) (net.Conn, error) { return client, nil })
+	control.mu.Lock()
+	control.initialTTL = 700 * time.Millisecond
+	control.gateAction = "RENEW"
+	control.startRelease = make(chan struct{})
+	gate := control.startRelease
+	control.mu.Unlock()
+	var gateOnce sync.Once
+	defer gateOnce.Do(func() { close(gate) })
+	var proofs atomic.Int32
+	if err := h.BindTorPadding(func() bool { return true }, localPaddingProof(h, &proofs)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.StartTorPadding(t.Context(), h.sessionID); err != nil {
+		t.Fatal(err)
+	}
+	connection, err := h.DialContext(t.Context(), "tcp", M.ParseSocksaddr("1.1.1.1:443"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := connection.Write([]byte("must-not-outlive-grant")); done <- err }()
+	select {
+	case <-control.startEntered:
+	case <-time.After(time.Second):
+		t.Fatal("control renewal did not reach its held reply")
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expired stream reported success")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("application expiry waited for the blocked control frame")
+	}
+	select {
+	case <-h.closeDone:
+		t.Fatal("data expiry discarded still-owned framed control operation")
+	default:
+	}
+	gateOnce.Do(func() { close(gate) })
+	if err := h.Close(); err != nil {
+		t.Fatal("independent data expiry broke native framed cleanup", err)
+	}
+	var data [32]byte
+	if n, err := peer.Read(data[:]); n != 0 || err != io.EOF {
+		t.Fatal("expired pending write sent bytes or retained native socket", n, err)
+	}
+}
