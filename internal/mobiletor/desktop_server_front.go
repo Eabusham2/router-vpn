@@ -33,6 +33,28 @@ type ServerTorFront struct {
 	workers            sync.WaitGroup
 	done               chan struct{}
 	stop               func() bool
+	comparison         ServerTorComparisonFront
+}
+
+// ServerTorComparisonFront is installed once, before forwarding is enabled.
+// Its own exact native owner retains and drains measurement operations; the
+// front owns only the authenticated client sockets and their entered workers.
+type ServerTorComparisonFront interface {
+	Serve(context.Context, net.Conn) error
+	Cancel()
+}
+
+func (f *ServerTorFront) SetComparison(owner ServerTorComparisonFront) error {
+	if f == nil || owner == nil {
+		return errServerLastRelay
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closing || f.ctx.Err() != nil || f.allowed.Load() || f.comparison != nil {
+		return errServerLastRelay
+	}
+	f.comparison = owner
+	return nil
 }
 
 func StartServerTorFront(ctx context.Context, host, peer string, port int, username, password string, dial DialContext) (*ServerTorFront, error) {
@@ -128,6 +150,16 @@ func (f *ServerTorFront) serve(client net.Conn) {
 		_ = proxyReply(client, 2)
 		return
 	}
+	if address == serverLastRelayAddress {
+		f.mu.Lock()
+		comparison := f.comparison
+		f.mu.Unlock()
+		if comparison == nil || proxyReply(client, 0) != nil {
+			return
+		}
+		_ = comparison.Serve(f.ctx, client)
+		return
+	}
 	remote, err := f.network.DialContext(f.ctx, "tcp", address)
 	if err != nil || remote == nil {
 		_ = proxyReply(client, 1)
@@ -190,7 +222,7 @@ func (f *ServerTorFront) handshake(c net.Conn) (string, error) {
 		return "", bad
 	}
 	var req [4]byte
-	if _, err := io.ReadFull(c, req[:]); err != nil || req[0] != 5 || req[1] != 1 || req[2] != 0 {
+	if _, err := io.ReadFull(c, req[:]); err != nil || req[0] != 5 || req[1] != 1 && req[1] != serverLastRelayCommand || req[2] != 0 {
 		_ = proxyReply(c, 7)
 		return "", bad
 	}
@@ -236,7 +268,17 @@ func (f *ServerTorFront) handshake(c net.Conn) (string, error) {
 	if port == 0 {
 		return "", bad
 	}
-	return net.JoinHostPort(host, strconv.Itoa(int(port))), nil
+	address := net.JoinHostPort(host, strconv.Itoa(int(port)))
+	if req[1] == serverLastRelayCommand {
+		if req[3] != 3 || address != serverLastRelayAddress {
+			_ = proxyReply(c, 8)
+			return "", bad
+		}
+	} else if serverLastRelayReserved(host) {
+		_ = proxyReply(c, 2)
+		return "", bad
+	}
+	return address, nil
 }
 
 func serverTorDomain(host string) bool {
@@ -268,12 +310,16 @@ func (f *ServerTorFront) retire() {
 	}
 	f.closing = true
 	f.allowed.Store(false)
+	comparison := f.comparison
 	clients := make([]net.Conn, 0, len(f.clients))
 	for c := range f.clients {
 		clients = append(clients, c)
 	}
 	f.mu.Unlock()
 	f.cancel()
+	if comparison != nil {
+		comparison.Cancel()
+	}
 	if err := f.listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
 		f.recordFailure()
 	}

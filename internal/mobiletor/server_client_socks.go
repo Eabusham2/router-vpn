@@ -17,12 +17,20 @@ import (
 // The calling Network owns its cleanup; retained DNS owners must be able to
 // retry a failed native Close instead of losing the captured socket here.
 func dialServerTorSOCKS(parent context.Context, front, username, password, destination string, dial DialContext) (connection net.Conn, failure error) {
+	return dialServerTorCommand(parent, front, username, password, destination, 1, dial)
+}
+
+func dialServerTorCommand(parent context.Context, front, username, password, destination string, command byte, dial DialContext) (connection net.Conn, failure error) {
 	host, portText, err := net.SplitHostPort(destination)
 	port, portErr := strconv.Atoi(portText)
 	if parent == nil || parent.Err() != nil || dial == nil || err != nil || portErr != nil || port < 1 || port > 65535 || host == "" || len(host) > 253 || !capturedHex(username, 24) || !capturedHex(password, 24) || username == password {
 		return nil, errServerTorClient
 	}
-	request := []byte{5, 1, 0}
+	if command != 1 && command != serverLastRelayCommand || command == serverLastRelayCommand && destination != serverLastRelayAddress ||
+		command == 1 && serverLastRelayReserved(host) {
+		return nil, errServerTorClient
+	}
+	request := []byte{5, command, 0}
 	if address, err := netip.ParseAddr(host); err == nil {
 		address = address.Unmap()
 		if address.Zone() != "" || !address.IsGlobalUnicast() || address.IsPrivate() || address.IsLoopback() {
