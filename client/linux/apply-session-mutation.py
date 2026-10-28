@@ -44,8 +44,9 @@ base.SPECS[name] = (
 # All earlier guards remain in the hardened target; exact source hashes and
 # insertion text continue to reject unreviewed drift.
 # Saved ordinary Tor entries reopen through the reviewed protocol-aware helper.
+# Tor Compare admission and its explanatory labels also follow these insertions.
 # Those additions follow every insertion below; their guard positions are intact.
-base.SPECS['routervpn-gtk-product-v4.c'] = ('1cd845b815f07cc17b1461f0b428f2c9a09ad2c08cce879b69f494f516045b71',
+base.SPECS['routervpn-gtk-product-v4.c'] = ('4d790ba1a63041a4e035dbb48a3098fcf0e1a948b21cf58b17768570ac8aa529',
  [(84,
    84,
    [],
