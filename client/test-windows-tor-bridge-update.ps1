@@ -1,5 +1,8 @@
-param([string]$Root=(Split-Path $PSScriptRoot -Parent),[Parameter(Mandatory=$true)][string]$Output)
+param([string]$Root='',[Parameter(Mandatory=$true)][string]$Output)
 $ErrorActionPreference='Stop';Set-StrictMode -Version 2
+# Windows PowerShell 5.1 does not reliably populate PSScriptRoot while it
+# evaluates parameter defaults. Resolve the fixture root in the script body.
+if([string]::IsNullOrEmpty($Root)){$Root=Split-Path $PSScriptRoot -Parent}
 $Source=Get-Content -Raw -Encoding UTF8 (Join-Path $Root 'client/RouterVPN-Windows-TorBridge.ps1')
 $Ast=[ScriptBlock]::Create($Source).Ast
 foreach($Prefix in @('function TestUnifiedExternalMutationIdle','function GetUnifiedTorUpdateProfile')){
