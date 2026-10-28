@@ -206,8 +206,10 @@ static void reset_fixture(App *app, const char *fault) {
     if (g_strcmp0(fault, "invalid-saved-kill") == 0) json_object_set_string_member(profile, "kill_switch_policy", "unavailable-policy");
     if (g_strcmp0(fault, "missing-saved-kill") == 0) json_object_remove_member(profile, "kill_switch_policy");
     if (g_strcmp0(fault, "direct-strict") == 0) json_object_set_boolean_member(profile, "multihop_enabled", FALSE);
-    if (g_strcmp0(fault, "compare-strict") == 0 || g_strcmp0(fault, "compare-off") == 0)
+    if (g_strcmp0(fault, "compare-strict") == 0 || g_strcmp0(fault, "compare-off") == 0) {
         json_object_set_string_member(profile, "multihop_execution", "auto");
+        json_object_set_boolean_member(profile, "multihop_enabled", FALSE);
+    }
     if (g_strcmp0(fault, "server-direct-strict") == 0 || g_strcmp0(fault, "server-direct-off") == 0) {
         json_object_set_string_member(profile, "multihop_execution", "server");
         json_object_set_boolean_member(profile, "multihop_enabled", FALSE);
@@ -299,7 +301,7 @@ int main(int argc, char **argv) {
     check(strstr(obj_string(json_node_get_object(source_capabilities), "test_fixture_runtime_availability"), "simulated") != NULL, "UI fixture must label simulated runtime availability");
     App app = {gtk_window_new(GTK_WINDOW_TOPLEVEL), "tor-edit"}; active_app = &app;
     const char *transports[] = {"obfs4", "meek_lite", "snowflake", "webtunnel", "tor"}, *kills[] = {"off", "on-connect", "always"};
-    const char *selections[] = {"local", "server", "ordinary-wireguard", "ordinary-amneziawg", "ordinary-socks5", "ordinary-http-connect", "ordinary-https-connect", "ordinary-shadowsocks", "ordinary-hysteria2", "ordinary-openvpn"};
+    const char *selections[] = {"local", "server", "auto", "ordinary-wireguard", "ordinary-amneziawg", "ordinary-socks5", "ordinary-http-connect", "ordinary-https-connect", "ordinary-shadowsocks", "ordinary-hysteria2", "ordinary-openvpn"};
     for (guint plain = 0; plain < 2; plain++) for (guint execution = 0; execution < G_N_ELEMENTS(selections); execution++) {
     const char *selection = selections[execution];
     gboolean ordinary = g_str_has_prefix(selection, "ordinary-");
@@ -309,7 +311,7 @@ int main(int argc, char **argv) {
     char *catalog_name = g_strdup_printf("tor-update-%ssource-catalog.json", prefix), *always_name = g_strdup_printf("tor-update-%salways-source-catalog.json", prefix);
     source_catalog = read_fixture(catalog_name); source_always = read_fixture(always_name);
     g_free(catalog_name); g_free(always_name);
-    check(g_strcmp0(obj_string(node_in(source_catalog, "tor-edit"), "multihop_execution"), g_strcmp0(selection, "server") == 0 ? "server" : "local") == 0,
+    check(g_strcmp0(obj_string(node_in(source_catalog, "tor-edit"), "multihop_execution"), ordinary ? "local" : selection) == 0,
           "native editor did not receive the actual execution-bound Go source catalog");
     for (guint t = 0; t < G_N_ELEMENTS(transports); t++) for (guint k = 0; k < G_N_ELEMENTS(kills); k++) {
         gboolean eligible = !(tcp_only && g_strcmp0(transports[t], "snowflake") == 0 && k > 0);

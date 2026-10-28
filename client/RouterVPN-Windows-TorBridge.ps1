@@ -68,6 +68,16 @@ function NewUnifiedExternalCapturedBody($Body,$Opened,$Current=$null){
         $EntryID=[string](ExternalPublicValue $Body 'entry_id')
         if(-not $EntryID -and (ExternalPublicValue $Exits[0] 'multihop_enabled' $false) -ceq $true){$EntryID=[string](ExternalPublicValue $Exits[0] 'multihop_entry_id')}
         if($EntryID){if($EntryID -ceq $ID){throw 'External entry and exit must be different nodes.'};$IDs+=@($EntryID)}
+        $Protocol=[string](ExternalPublicValue (ExternalPublicValue $Exits[0] 'external' $null) 'protocol')
+        $Execution=[string](ExternalPublicValue $Body 'execution' (ExternalPublicValue $Exits[0] 'multihop_execution' 'local'))
+        if($Protocol-cin@('tor','tor-bridge')-and$Execution-cin@('server','auto')){
+            $Entries=@($Profiles|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq $EntryID})
+            $Explicit=[string](ExternalPublicValue $Body 'entry_id')
+            if(-not$EntryID-or$Entries.Count-ne1-or(ExternalPublicValue $Entries[0] 'node_kind' 'router-vpn') -cnotin@('','router-vpn')-or$null-ne(ExternalPublicValue $Entries[0] 'external' $null)-or
+               (-not$Explicit-and((ExternalPublicValue $Exits[0] 'multihop_enabled' $false) -cne $true-or(ExternalPublicValue $Exits[0] 'multihop_exit_id') -cne $ID))){
+                throw 'Tor Server / Compare requires the captured private Router VPN entry. Direct and ordinary entries use Local.'
+            }
+        }
     }
     $Tokens=[System.Collections.Hashtable]::new([StringComparer]::Ordinal)
     foreach($NodeID in $IDs){
@@ -169,11 +179,12 @@ function NewUnifiedExternalPathBody($Captured,[string]$EntryID,[string]$Executio
     }
     if($Execution -cne 'local'){
         $External=ExternalPublicValue $Matches[0] 'external' $null;$Protocol=[string](ExternalPublicValue $External 'protocol')
-        if($Protocol -cnotin @('wireguard','amneziawg','shadowsocks','hysteria2','socks5','http-connect','https-connect','openvpn')){throw 'Server / Compare requires a supported authenticated external transport.'}
-        if((ExternalPublicValue $External 'has_response_probe' $false) -isnot [bool] -or (ExternalPublicValue $External 'has_response_probe' $false) -cne $true){throw 'Server / Compare requires this external node HTTPS response probe.'}
+        $Tor=$Protocol-cin@('tor','tor-bridge')
+        if(-not$Tor-and$Protocol -cnotin @('wireguard','amneziawg','shadowsocks','hysteria2','socks5','http-connect','https-connect','openvpn')){throw 'Server / Compare requires a supported authenticated external transport.'}
+        if(-not$Tor-and((ExternalPublicValue $External 'has_response_probe' $false) -isnot [bool] -or (ExternalPublicValue $External 'has_response_probe' $false) -cne $true)){throw 'Server / Compare requires this external node HTTPS response probe.'}
         if($Protocol -cin @('wireguard','amneziawg') -and ((ExternalPublicValue $External 'has_server_peer' $false) -isnot [bool] -or (ExternalPublicValue $External 'has_server_peer' $false) -cne $true)){throw 'WireGuard / AmneziaWG Server / Compare requires a separately provisioned server peer.'}
         if($Protocol -ceq 'openvpn' -and ((ExternalPublicValue $External 'has_openvpn_pairing' $false) -isnot [bool] -or (ExternalPublicValue $External 'has_openvpn_pairing' $false) -cne $true)){throw 'OpenVPN Server / Compare requires private pairing with independent provider credentials.'}
-        if($Direct -or [string](ExternalPublicValue $Entries[0] 'node_kind' 'router-vpn') -cne 'router-vpn'){throw 'Server / Compare requires a Router VPN entry.'}
+        if($Direct-or(ExternalPublicValue $Entries[0] 'node_kind' 'router-vpn') -cnotin@('','router-vpn')-or$null-ne(ExternalPublicValue $Entries[0] 'external' $null)){throw 'Server / Compare requires a private Router VPN entry.'}
     }
     $Body=NewUnifiedExternalConnectBody $Captured $EntryID $Execution $Direct
     if($null-ne$EntryMode){
@@ -229,7 +240,7 @@ function ShowUnifiedExternalPath([string]$ProfileID='',[bool]$RequireEntry=$fals
 <TextBlock Text="Router entry mode" Margin="0,14,0,4"/><ComboBox Name="PathEntryMode" DisplayMemberPath="name" SelectedValuePath="id"/>
 <TextBlock Text="The exact selected mode and the entry node's saved Start Layer are used. Compatibility and path proof are checked before Connected." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,6,0,0"/>
 <TextBlock Text="External execution" Margin="0,14,0,4"/><ComboBox Name="PathExecution"><ComboBoxItem Content="Local — exit runs on this device" Tag="local"/><ComboBoxItem Content="Server — exit runs on Router entry" Tag="server"/><ComboBoxItem Content="Compare both — lowest valid average" Tag="auto"/></ComboBox>
-<TextBlock Text="Server / Compare requires a Router entry, an authenticated external exit, and its saved HTTPS response probe. WireGuard / AmneziaWG also needs a separately provisioned server peer. Pairing and actual path proof are checked when connecting. Direct uses Local. A successful connection saves this node's choice." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,12"/>
+<TextBlock Text="Server / Compare uses a paired private Router entry. Tor compares last-relay HTTP and the same external-server HTTP response on each path. Other external exits need their saved HTTPS response probe; WireGuard / AmneziaWG also needs a separately provisioned server peer. Direct and ordinary entries use Local. A successful connection saves this node's choice." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,12"/>
 <TextBlock Name="PathReadiness" TextWrapping="Wrap" Foreground="#A8B6D5"/><TextBlock Name="PathError" TextWrapping="Wrap" Foreground="#FFCC8A" Margin="0,8"/>
 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="PathConnect" Content="Connect selected path" Padding="12,8"/><Button Name="PathCancel" Content="Cancel" Padding="12,8" Margin="8,0,0,0"/></StackPanel>
 </StackPanel></ScrollViewer></Window>
@@ -257,7 +268,8 @@ function ShowUnifiedExternalPath([string]$ProfileID='',[bool]$RequireEntry=$fals
         if(-not [string]$Entry.SelectedValue){$Execution.SelectedIndex=0;$Execution.IsEnabled=$false}
         $Entry.Add_SelectionChanged($UpdatePathEntry)
         $HasProbe=[bool](ExternalPublicValue (ExternalPublicValue $Captured 'external' $null) 'has_response_probe' $false)
-        $Dialog.FindName('PathReadiness').Text=if($HasProbe){'HTTPS response probe saved; server pairing and native proof remain pending.'}else{'No HTTPS response probe saved. Import or create a provisioned external node before choosing Server / Compare.'}
+        $IsTor=(ExternalPublicValue (ExternalPublicValue $Captured 'external' $null) 'protocol') -cin@('tor','tor-bridge')
+        $Dialog.FindName('PathReadiness').Text=if($IsTor){'Tor uses its native last-relay proof and one shared external target. Private pairing, selected DNS and path proof are checked when connecting.'}elseif($HasProbe){'HTTPS response probe saved; server pairing and native proof remain pending.'}else{'No HTTPS response probe saved. Import or create a provisioned external node before choosing Server / Compare.'}
         $Dialog.FindName('PathCancel').Add_Click({$Dialog.Close()})
         $Dialog.FindName('PathConnect').Add_Click({
             try{
@@ -415,7 +427,7 @@ function TestUnifiedTorRouterPath($Opened,$Profile){
     if($null-eq$Profile-or(ExternalPublicValue $Profile 'multihop_enabled' $false) -cne $true){return $false}
     $ID=[string](ExternalPublicValue $Profile 'id');$Entry=[string](ExternalPublicValue $Profile 'multihop_entry_id')
     $Execution=[string](ExternalPublicValue $Profile 'multihop_execution')
-    if(-not$Entry-or$Entry-ceq$ID-or(ExternalPublicValue $Profile 'multihop_exit_id') -cne $ID-or$Execution-cnotin@('','local','server')){return $false}
+    if(-not$Entry-or$Entry-ceq$ID-or(ExternalPublicValue $Profile 'multihop_exit_id') -cne $ID-or$Execution-cnotin@('','local','server','auto')){return $false}
     $Entries=@((ExternalPublicValue $Opened 'profiles' @())|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq $Entry})
     return $Entries.Count-eq1-and(ExternalPublicValue $Entries[0] 'node_kind' 'router-vpn') -cin@('','router-vpn')-and$null-eq(ExternalPublicValue $Entries[0] 'external' $null)
 }
@@ -449,7 +461,7 @@ function NewUnifiedTorImportBody($Body,$Opened,[bool]$Update,$Capabilities,$Curr
         $Capture=NewUnifiedExternalCapturedBody @{profile_id=$ID} $Opened $Current
         $Result.id=$ID;$Result.expected_selected_node_id=$Capture.expected_selected_node_id;$Result.expected_profile_tokens=$Capture.expected_profile_tokens
         $Execution=[string](ExternalPublicValue $Profile 'multihop_execution')
-        if($Execution-cnotin@('','local','server')-or($Execution-ceq'server'-and-not(TestUnifiedTorRouterPath $Opened $Profile))){throw 'Tor bridge updates require Local execution or explicit Server execution through a saved Router entry. Compare both requires separate measured candidate paths.'}
+        if($Execution-cnotin@('','local','server','auto')-or($Execution-cin@('server','auto')-and-not(TestUnifiedTorRouterPath $Opened $Profile))){throw 'Tor Server / Compare requires the same captured private Router entry. Direct and ordinary entries use Local.'}
     }
     $Rows=@((ExternalPublicValue $Capabilities 'transports' @())|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq [string]$Body.transport})
     if($Rows.Count-ne1){throw 'Refresh Tor transport support before saving.'}

@@ -260,6 +260,32 @@ int main(int argc,char **argv){
     body=external_captured_body_v24(source_body,saved_source,NULL,&error);check(body!=NULL,"Explicit entry did not override saved entry");g_free(body);json_node_free(saved_source);count++;
     body=external_captured_body_v24(source_body,source_root,NULL,&error);check(body!=NULL,"Detached capture failed");JsonNode *detached=parse_json(body);g_free(body);
     check(json_object_get_size(json_object_get_object_member(json_node_get_object(detached),"expected_profile_tokens"))==2,"Source capture omitted node ownership");json_node_free(detached);g_free(source_body);count++;
+    /* Tor captures its own relay proof; the native form must never require or invent an ordinary provider probe. */
+    const char *compare_tor_protocols[]={"tor","tor-bridge"};
+    for(guint ti=0;ti<G_N_ELEMENTS(compare_tor_protocols);ti++)for(guint ei=0;ei<G_N_ELEMENTS(executions);ei++){
+        char *private_json=g_strdup_printf("{\"selected_id\":\"exit\",\"profiles\":[{\"id\":\"exit\",\"profile_token\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"node_kind\":\"external\",\"external\":{\"protocol\":\"%s\",\"has_response_probe\":false},\"multihop_enabled\":true,\"multihop_entry_id\":\"entry\",\"multihop_exit_id\":\"exit\",\"multihop_execution\":\"%s\"},{\"id\":\"entry\",\"profile_token\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"node_kind\":\"router-vpn\"}]}",compare_tor_protocols[ti],executions[ei]);
+        JsonNode *tor_store=parse_json(private_json);g_free(private_json);JsonObject *tor_exit=external_source_profile_v24(json_node_get_object(tor_store),"exit");
+        char *path=external_path_mode_body_v4(tor_exit,tor_store,"entry",executions[ei],FALSE,"wg",entry_modes,&error);check(path!=NULL,error?error:"Tor path was rejected without an ordinary response probe");
+        body=external_captured_body_v24(path,tor_store,tor_store,&error);check(body!=NULL,error?error:"Tor exact path source was rejected");g_free(path);root=parse_json(body);obj=json_node_get_object(root);
+        check(g_strcmp0(obj_string(obj,"execution"),executions[ei])==0&&g_strcmp0(obj_string(obj,"entry_mode"),"wg")==0&&json_object_get_size(json_object_get_object_member(obj,"expected_profile_tokens"))==2,"Tor path changed execution, entry mode or source");json_node_free(root);g_free(body);count++;
+        char *saved=json_external_hop_body("exit","",executions[ei],FALSE);
+        body=external_captured_body_v24(saved,tor_store,tor_store,&error);check(body!=NULL,"Tor primary Connect lost its private entry");g_free(body);count++;
+        for(guint fault=0;fault<9;fault++){
+            JsonNode *opened=copy_public_source_value_v24(tor_store),*current=copy_public_source_value_v24(tor_store);JsonObject *now=json_node_get_object(current);JsonArray *rows=json_object_get_array_member(now,"profiles");
+            if(fault<2)json_object_set_string_member(json_array_get_object_element(rows,fault==0?1:0),"profile_token","cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc");
+            if(fault==2)json_object_set_string_member(now,"selected_id","entry");
+            if(fault==3)json_array_remove_element(rows,1);
+            if(fault==4)json_array_add_element(rows,copy_public_source_value_v24(json_array_get_element(rows,1)));
+            if(fault==5)json_object_set_string_member(json_array_get_object_element(rows,1),"node_kind","external");
+            if(fault==6){JsonObject *foreign=json_object_new();json_object_set_string_member(foreign,"protocol","socks5");json_object_set_object_member(json_array_get_object_element(rows,1),"external",foreign);}
+            if(fault==7)json_object_set_boolean_member(json_array_get_object_element(rows,0),"multihop_enabled",FALSE);
+            if(fault==8)json_object_set_string_member(json_array_get_object_element(rows,0),"multihop_exit_id","another-exit");
+            if(fault>=5){json_node_free(opened);opened=copy_public_source_value_v24(current);}
+            if(ei!=0||fault<5){body=external_captured_body_v24(saved,opened,current,&error);check(body==NULL,"Tor saved path adopted a missing, stale or foreign Router entry");g_free(error);error=NULL;count++;}
+            json_node_free(opened);json_node_free(current);
+        }
+        g_free(saved);json_node_free(tor_store);
+    }
     char *mode=external_entry_mode_v4(captured,mode_entry,"",entry_modes,&error);check(mode!=NULL&&g_strcmp0(mode,"awg2-fast")==0,"Entry saved AWG base changed");g_free(mode);count++;
     json_object_set_string_member(mode_entry,"base_tunnel","wg");json_object_set_string_member(captured,"base_tunnel","awg");
     mode=external_entry_mode_v4(captured,mode_entry,"",entry_modes,&error);check(mode!=NULL&&g_strcmp0(mode,"wg")==0,"Exit base overrode selected entry WG");g_free(mode);count++;

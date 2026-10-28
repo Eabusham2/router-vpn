@@ -50,7 +50,7 @@ let directory = URL(fileURLWithPath: CommandLine.arguments[1])
 func object(_ name: String) throws -> [String: Any] { try JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent(name))) as! [String: Any] }
 let localCatalog = try object("tor-update-source-catalog.json"), caps = try object("tor-update-capabilities.json"), lines = try object("tor-update-input-lines.json")
 let fixedSets = try object("tor-fixed-input-sets.json")
-let baseSelections = ["local", "server"] + ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].map { "ordinary-" + $0 }
+let baseSelections = ["local", "server", "auto"] + ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].map { "ordinary-" + $0 }
 for execution in baseSelections + baseSelections.map({ "plain-" + $0 }) {
 let plain = execution.hasPrefix("plain-"), path = plain ? String(execution.dropFirst(6)) : execution
 let ordinary = path.hasPrefix("ordinary-"), tcpOnly = ["ordinary-socks5", "ordinary-http-connect", "ordinary-https-connect"].contains(path)
@@ -105,7 +105,7 @@ for fault in faults {
         profiles[1]["node_kind"] = "external"
         if ordinary { var external = profiles[1]["external"] as! [String: Any]; external["protocol"] = "unknown"; profiles[1]["external"] = external }
         opened["profiles"] = profiles; current = opened
-    case "compare-path", "compare-off": profiles[0]["multihop_execution"] = "auto"; opened["profiles"] = profiles; current = opened
+    case "compare-path", "compare-off": profiles[0]["multihop_execution"] = "auto"; profiles[0]["multihop_enabled"] = false; opened["profiles"] = profiles; current = opened
     case "server-direct", "server-direct-off": profiles[0]["multihop_execution"] = "server"; profiles[0]["multihop_enabled"] = false; opened["profiles"] = profiles; current = opened
     case "server-external-entry", "server-external-off": profiles[0]["multihop_execution"] = "server"; profiles[1]["node_kind"] = "external"; opened["profiles"] = profiles; current = opened
     case "old-controller": capability["profile_update_source_preconditions"] = false

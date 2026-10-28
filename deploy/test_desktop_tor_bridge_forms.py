@@ -11,7 +11,7 @@ import tempfile
 from test_desktop_amnezia_forms import block
 
 ROOT = Path(__file__).resolve().parents[1]
-SELECTIONS = ('local', 'server') + tuple('ordinary-' + protocol for protocol in
+SELECTIONS = ('local', 'server', 'auto') + tuple('ordinary-' + protocol for protocol in
     ('wireguard', 'amneziawg', 'socks5', 'http-connect', 'https-connect', 'shadowsocks', 'hysteria2', 'openvpn'))
 SELECTIONS += tuple('plain-' + selection for selection in SELECTIONS)
 CATALOG_FILES = ('tor-update-capabilities.json', 'tor-update-input-lines.json', 'tor-fixed-input-sets.json') + tuple(
@@ -40,7 +40,7 @@ def swift_form(directory):
     generated = transform.split("tor_class = r'''", 1)[1].split("\n'''", 1)[0]
     source, binary = directory / 'tor-form.swift', directory / 'tor-form'
     source.write_text(swift_source(generated))
-    subprocess.run(['swiftc', '-swift-version', '5', str(source), '-o', str(binary)], check=True, timeout=120)
+    subprocess.run(['swiftc', '-swift-version', '5', '-module-cache-path', str(directory/'module-cache'), str(source), '-o', str(binary)], check=True, timeout=120)
     subprocess.run([str(binary), str(directory)], check=True, timeout=60)
     controls = (
         ('saved-protection',
@@ -70,7 +70,7 @@ def swift_form(directory):
         for filename in CATALOG_FILES: shutil.copyfile(directory / filename, negative / filename)
         changed, executable = negative / 'tor-form.swift', negative / 'tor-form'
         changed.write_text(swift_source(generated.replace(original, replacement)))
-        subprocess.run(['swiftc', '-swift-version', '5', str(changed), '-o', str(executable)], check=True, timeout=120)
+        subprocess.run(['swiftc', '-swift-version', '5', '-module-cache-path', str(directory/'module-cache'), str(changed), '-o', str(executable)], check=True, timeout=120)
         result = subprocess.run([str(executable), str(negative)], capture_output=True, text=True, timeout=60)
         if result.returncode == 0 or witness not in result.stdout + result.stderr:
             raise AssertionError(name + ' mutation missed its actual Swift assertion: ' + result.stdout + result.stderr)

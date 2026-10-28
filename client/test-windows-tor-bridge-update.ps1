@@ -66,7 +66,7 @@ function Log($Message){}
 function RefreshProduct{}
 function Control($ID){if($ID-cne'UnifiedNodeCombo'){throw 'Unexpected rendered control'};return $script:Rendered}
 $LocalRaw=$Raw
-$Selections=@('local','server')+@('wireguard','amneziawg','socks5','http-connect','https-connect','shadowsocks','hysteria2','openvpn'|ForEach-Object{'ordinary-'+$_})
+$Selections=@('local','server','auto')+@('wireguard','amneziawg','socks5','http-connect','https-connect','shadowsocks','hysteria2','openvpn'|ForEach-Object{'ordinary-'+$_})
 $Selections+=@($Selections|ForEach-Object{'plain-'+$_})
 foreach($Execution in $Selections){
     $Plain=$Execution.StartsWith('plain-');$Selection=if($Plain){$Execution.Substring(6)}else{$Execution}
@@ -111,10 +111,10 @@ foreach($Fault in $Faults){
         'missing-entry'{$script:Current.profiles=@($script:Current.profiles[0])}
         'duplicate-exit'{$script:Current.profiles+=@($script:Current.profiles[0])}
         'entry-is-external'{$Opened.profiles[1].node_kind='external';if($Ordinary){$Opened.profiles[1].external.protocol='unknown'};$script:Current=$Opened}
-        'compare-path'{$Opened.profiles[0].multihop_execution='auto';$script:Current=$Opened}
+        'compare-path'{$Opened.profiles[0].multihop_execution='auto';$Opened.profiles[0].multihop_enabled=$false;$script:Current=$Opened}
         'server-direct'{$Opened.profiles[0].multihop_execution='server';$Opened.profiles[0].multihop_enabled=$false;$script:Current=$Opened}
         'server-external-entry'{$Opened.profiles[0].multihop_execution='server';$Opened.profiles[1].node_kind='external';$script:Current=$Opened}
-        'compare-off'{$Opened.profiles[0].multihop_execution='auto';$script:Current=$Opened}
+        'compare-off'{$Opened.profiles[0].multihop_execution='auto';$Opened.profiles[0].multihop_enabled=$false;$script:Current=$Opened}
         'server-direct-off'{$Opened.profiles[0].multihop_execution='server';$Opened.profiles[0].multihop_enabled=$false;$script:Current=$Opened}
         'server-external-off'{$Opened.profiles[0].multihop_execution='server';$Opened.profiles[1].node_kind='external';$script:Current=$Opened}
         'old-controller'{$Support.Root=@{profile_update_source_preconditions=$false;transports=$Capabilities.transports}}

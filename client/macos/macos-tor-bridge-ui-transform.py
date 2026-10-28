@@ -37,7 +37,7 @@ func torBridgeUpdateProfile(_ opened: [String: Any]) -> [String: Any]? {
 func torBridgeHasRouterPath(_ opened: [String: Any], profile: [String: Any]) -> Bool {
     guard profile["multihop_enabled"] as? Bool == true, let id = profile["id"] as? String,
           profile["multihop_exit_id"] as? String == id, let entry = profile["multihop_entry_id"] as? String,
-          !entry.isEmpty, entry != id, ["", "local", "server"].contains(profile["multihop_execution"] as? String ?? ""),
+          !entry.isEmpty, entry != id, ["", "local", "server", "auto"].contains(profile["multihop_execution"] as? String ?? ""),
           let profiles = opened["profiles"] as? [[String: Any]] else { return false }
     let rows = profiles.filter { $0["id"] as? String == entry }
     return rows.count == 1 && ["", "router-vpn"].contains(rows[0]["node_kind"] as? String ?? "router-vpn") && rows[0]["external"] == nil
@@ -82,8 +82,8 @@ func torBridgeImportBody(_ body: [String: Any], opened: [String: Any], update: B
         ordinary = torBridgeHasOrdinaryPath(opened, profile: profile, body: body)
         throughEntry = profile["multihop_enabled"] as? Bool == true
         let execution = profile["multihop_execution"] as? String ?? ""
-        guard ["", "local", "server"].contains(execution), execution != "server" || router else {
-            throw fail("Tor bridge updates require Local execution or explicit Server execution through a saved Router entry. Compare both requires separate measured candidate paths.")
+        guard ["", "local", "server", "auto"].contains(execution), !["server", "auto"].contains(execution) || router else {
+            throw fail("Tor Server / Compare requires the same captured private Router entry. Direct and ordinary entries use Local.")
         }
     }
     let rows = (capabilities["transports"] as? [[String: Any]] ?? []).filter { $0["id"] as? String == body["transport"] as? String }

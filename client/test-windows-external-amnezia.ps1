@@ -273,6 +273,32 @@ $SavedOnly.profiles[0]|Add-Member NoteProperty multihop_enabled $true -Force
 $SavedOnly.profiles[0]|Add-Member NoteProperty multihop_entry_id 'captured-entry' -Force
 $SavedBody=NewUnifiedExternalCapturedBody (NewUnifiedExternalConnectBody $Captured '' 'local' $false) $SavedOnly
 Check ($SavedBody.expected_profile_tokens['captured-entry'] -ceq ('b'*64)) 'Saved entry was omitted from primary source capture.';$Count++
+# Tor owns its last-relay probe; no ordinary provider response URL may be invented.
+foreach($TorProtocol in @('tor','tor-bridge')){foreach($TorExecution in @('local','server','auto')){
+    $TorProfile=[pscustomobject]@{id='captured-exit';profile_token=('a'*64);node_kind='external';external=[pscustomobject]@{protocol=$TorProtocol;has_response_probe=$false;has_server_peer=$false;has_openvpn_pairing=$false};multihop_enabled=$true;multihop_entry_id='captured-entry';multihop_exit_id='captured-exit';multihop_execution=$TorExecution}
+    $TorEntry=[pscustomobject]@{id='captured-entry';profile_token=('b'*64);node_kind='router-vpn'}
+    $TorStore=[pscustomobject]@{selected_id='captured-exit';profiles=@($TorProfile,$TorEntry)}
+    $TorPath=NewUnifiedExternalPathBody $TorProfile 'captured-entry' $TorExecution $false @($TorStore.profiles) 'wg' $EntryModes
+    $TorBody=NewUnifiedExternalCapturedBody $TorPath $TorStore $TorStore
+    Check ($TorBody.execution-ceq$TorExecution-and$TorBody.entry_mode-ceq'wg'-and$TorBody.expected_profile_tokens.Count-eq2) 'Tor path changed execution, exact entry mode or source capture.';$Count++
+    $TorSaved=NewUnifiedExternalCapturedBody (NewUnifiedExternalConnectBody $TorProfile '' $TorExecution $false) $TorStore $TorStore
+    Check ($TorSaved.execution-ceq$TorExecution-and$TorSaved.expected_profile_tokens['captured-entry']-ceq('b'*64)) 'Tor primary Connect lost its saved private entry.';$Count++
+    foreach($Fault in @('entry-token','exit-token','selected','missing','duplicate','ordinary','foreign-private','direct','wrong-exit')){
+        $TorOpened=$TorStore|ConvertTo-Json -Depth 16|ConvertFrom-Json;$TorCurrent=$TorStore|ConvertTo-Json -Depth 16|ConvertFrom-Json
+        if($Fault-ceq'entry-token'){$TorCurrent.profiles[1].profile_token='c'*64}
+        if($Fault-ceq'exit-token'){$TorCurrent.profiles[0].profile_token='c'*64}
+        if($Fault-ceq'selected'){$TorCurrent.selected_id='captured-entry'}
+        if($Fault-ceq'missing'){$TorCurrent.profiles=@($TorCurrent.profiles[0])}
+        if($Fault-ceq'duplicate'){$TorCurrent.profiles+=@($TorCurrent.profiles[1])}
+        if($Fault-ceq'ordinary'){$TorOpened.profiles[1].node_kind='external';$TorCurrent=$TorOpened}
+        if($Fault-ceq'foreign-private'){$TorOpened.profiles[1]|Add-Member NoteProperty external ([pscustomobject]@{protocol='socks5'});$TorCurrent=$TorOpened}
+        if($Fault-ceq'direct'){$TorOpened.profiles[0].multihop_enabled=$false;$TorCurrent=$TorOpened}
+        if($Fault-ceq'wrong-exit'){$TorOpened.profiles[0].multihop_exit_id='another-exit';$TorCurrent=$TorOpened}
+        if($TorExecution-ceq'local'-and$Fault-cin@('ordinary','foreign-private','direct','wrong-exit')){continue}
+        $Rejected=$false;try{[void](NewUnifiedExternalCapturedBody (NewUnifiedExternalConnectBody $TorProfile '' $TorExecution $false) $TorOpened $TorCurrent)}catch{$Rejected=$true}
+        Check $Rejected ('Tor saved path adopted '+$Fault);$Count++
+    }
+}}
 $SavedOnly.profiles[0].multihop_entry_id='missing-entry'
 $DirectBody=NewUnifiedExternalCapturedBody (NewUnifiedExternalConnectBody $Captured '' 'local' $true) $SavedOnly
 Check ($DirectBody.expected_profile_tokens.Count -eq 1) 'Explicit Direct reused a stale saved entry.';$Count++

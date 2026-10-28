@@ -31,7 +31,7 @@ static gboolean linux_tor_router_path_v13(LinuxTorBridgeV13 *state, JsonObject *
     const char *id = external_path_string_v4(profile, "id"), *entry_id = external_path_string_v4(profile, "multihop_entry_id");
     const char *execution = external_path_string_v4(profile, "multihop_execution");
     if (!external_path_flag_v4(profile, "multihop_enabled") || !entry_id[0] || g_strcmp0(id, entry_id) == 0 ||
-        g_strcmp0(id, external_path_string_v4(profile, "multihop_exit_id")) != 0 || (execution[0] && g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0)) return FALSE;
+        g_strcmp0(id, external_path_string_v4(profile, "multihop_exit_id")) != 0 || (execution[0] && g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0 && g_strcmp0(execution, "auto") != 0)) return FALSE;
     JsonObject *store = state->opened != NULL && JSON_NODE_HOLDS_OBJECT(state->opened) ? json_node_get_object(state->opened) : NULL;
     JsonObject *entry = external_source_profile_v24(store, entry_id);
     const char *kind = external_path_string_v4(entry, "node_kind");
@@ -225,9 +225,9 @@ static char *linux_tor_payload_v13(LinuxTorBridgeV13 *state, JsonNode *current, 
     gboolean direct = external_path_flag_v4(capability, "strict_kill_switch") && fixed && !external_path_flag_v4(profile, "multihop_enabled");
     gboolean router_path = profile != NULL && linux_tor_router_path_v13(state, profile);
     const char *execution = external_path_string_v4(profile, "multihop_execution");
-    if (profile != NULL && ((execution[0] && g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0) ||
-                            (g_strcmp0(execution, "server") == 0 && !router_path))) {
-        if (validation_error != NULL) *validation_error = g_strdup("Tor bridge updates require Local execution or explicit Server execution through a saved Router entry. Compare both requires separate measured candidate paths.");
+    if (profile != NULL && ((execution[0] && g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0 && g_strcmp0(execution, "auto") != 0) ||
+                            ((g_strcmp0(execution, "server") == 0 || g_strcmp0(execution, "auto") == 0) && !router_path))) {
+        if (validation_error != NULL) *validation_error = g_strdup("Tor Server / Compare requires the same captured private Router entry. Direct and ordinary entries use Local.");
         g_ptr_array_unref(bridges); return NULL;
     }
     gboolean router = router_path && external_path_flag_v4(capability, "strict_router_entry_kill_switch");

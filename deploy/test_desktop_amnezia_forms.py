@@ -308,6 +308,34 @@ for mode in entryModes { for choice in ["local", "server", "auto"] {
     check(body["entry_mode"] as? String == id && body["profile_id"] as? String == "exit" && body["entry_id"] as? String == "entry" && body["execution"] as? String == choice, "Exact Router entry mode changed")
     try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]).write(to: output.appendingPathComponent("entry-mode-"+id+"-"+choice+".json")); count += 1
 } }
+// Execute the same source capture used by primary Connect and the path dialog.
+for proto in ["tor", "tor-bridge"] { for execution in ["local", "server", "auto"] {
+    let tor: [String: Any] = ["id": "exit", "node_kind": "external", "profile_token": String(repeating: "a", count: 64),
+        "external": ["protocol": proto, "has_response_probe": false, "has_server_peer": false, "has_openvpn_pairing": false],
+        "multihop_enabled": true, "multihop_entry_id": "entry", "multihop_exit_id": "exit", "multihop_execution": execution]
+    let entry: [String: Any] = ["id": "entry", "node_kind": "router-vpn", "profile_token": String(repeating: "b", count: 64)]
+    let opened: [String: Any] = ["selected_id": "exit", "profiles": [tor, entry]]
+    let prepared = try externalPathConnectBody(captured: tor, entryID: "entry", execution: execution, direct: false, current: [tor, entry], entryMode: "wg", entryModes: entryModes)
+    let body = try externalCapturedBody(prepared, opened: opened, current: opened)
+    check(body["execution"] as? String == execution && body["entry_mode"] as? String == "wg" && (body["expected_profile_tokens"] as? [String: String])?.count == 2, "Tor path changed execution, entry mode or captured source"); count += 1
+    let saved = try externalConnectBody(profile: tor, execution: execution)
+    let primary = try externalCapturedBody(saved, opened: opened, current: opened)
+    check(primary["execution"] as? String == execution && (primary["expected_profile_tokens"] as? [String: String])?["entry"] == entry["profile_token"] as? String, "Tor primary Connect lost its private entry"); count += 1
+    for fault in ["entry-token", "exit-token", "selected", "missing", "duplicate", "ordinary", "foreign-private", "direct", "wrong-exit"] {
+        var capturedStore = opened, current = opened, rows = [tor, entry]
+        if fault == "entry-token" || fault == "exit-token" { rows[fault == "entry-token" ? 1 : 0]["profile_token"] = String(repeating: "c", count: 64) }
+        if fault == "selected" { current["selected_id"] = "entry" }
+        if fault == "missing" { rows.removeLast() }
+        if fault == "duplicate" { rows.append(entry) }
+        if fault == "ordinary" { rows[1]["node_kind"] = "external" }
+        if fault == "foreign-private" { rows[1]["external"] = ["protocol": "socks5"] }
+        if fault == "direct" { rows[0]["multihop_enabled"] = false }
+        if fault == "wrong-exit" { rows[0]["multihop_exit_id"] = "another-exit" }
+        current["profiles"] = rows
+        if ["ordinary", "foreign-private", "direct", "wrong-exit"].contains(fault) { capturedStore = current; if execution == "local" { continue } }
+        check(rejects { _ = try externalCapturedBody(saved, opened: capturedStore, current: current) }, "Tor saved path adopted "+fault); count += 1
+    }
+} }
 let sourceBody = try externalConnectBody(profile: captured, entryID: "entry", execution: "local")
 let capturedBody = try externalCapturedBody(sourceBody, opened: sourceStore, current: sourceStore)
 for changed in ["exit", "entry", "selected", "missing", "duplicate"] {
@@ -448,7 +476,7 @@ print("PASS shipping Swift external serialization, node identity and captured di
     path = directory/'main.swift'
     path.write_text(test)
     binary = directory/'swift-form'
-    subprocess.run(['swiftc', '-swift-version', '6', str(path), '-o', str(binary)], check=True, timeout=120)
+    subprocess.run(['swiftc', '-swift-version', '6', '-module-cache-path', str(directory/'module-cache'), str(path), '-o', str(binary)], check=True, timeout=120)
     subprocess.run([str(binary), str(directory)], check=True, timeout=30)
 
 

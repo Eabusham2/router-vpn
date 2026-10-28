@@ -53,6 +53,17 @@ static char *external_captured_body_v24(const char *body, JsonNode *opened, Json
         entry = external_path_string_v4(request, "entry_id");
         if (!entry[0] && external_path_flag_v4(exit, "multihop_enabled")) entry = external_path_string_v4(exit, "multihop_entry_id");
         if (entry[0] && g_strcmp0(entry, id) == 0) message = "External entry and exit must be different nodes.";
+        const char *protocol = external_path_string_v4(external_path_object_v4(exit, "external"), "protocol");
+        const char *execution = external_path_string_v4(request, "execution");
+        if (!execution[0]) execution = external_path_string_v4(exit, "multihop_execution");
+        if ((g_strcmp0(protocol, "tor") == 0 || g_strcmp0(protocol, "tor-bridge") == 0) &&
+            (g_strcmp0(execution, "server") == 0 || g_strcmp0(execution, "auto") == 0)) {
+            JsonObject *source = external_source_profile_v24(store, entry);
+            const char *kind = external_path_string_v4(source, "node_kind");
+            if (source == NULL || (kind[0] && g_strcmp0(kind, "router-vpn") != 0) || json_object_has_member(source, "external") ||
+                (!external_path_string_v4(request, "entry_id")[0] && (!external_path_flag_v4(exit, "multihop_enabled") || g_strcmp0(external_path_string_v4(exit, "multihop_exit_id"), id) != 0)))
+                message = "Tor Server / Compare requires the captured private Router VPN entry. Direct and ordinary entries use Local.";
+        }
     }
     JsonObject *tokens = json_object_new();
     const char *ids[] = {id, selected, entry};

@@ -15,7 +15,7 @@ import (
 )
 
 func torBridgeFormSelections() []string {
-	values := []string{"local", "server"}
+	values := []string{"local", "server", "auto"}
 	for _, protocol := range desktopTorOrdinaryTestProtocols {
 		values = append(values, "ordinary-"+protocol)
 	}
@@ -299,8 +299,8 @@ func torBridgeFormSourceFixture(t *testing.T, execution string) (*app, common.Ro
 		a.profiles.Profiles = []common.RouterProfile{cloneRouterProfile(old), cloneRouterProfile(entry)}
 		return a, old, entry
 	}
-	if execution != "local" && execution != "server" {
-		t.Fatal("form fixture requires an explicit supported execution")
+	if execution != "local" && execution != "server" && execution != "auto" {
+		t.Fatal("form fixture requires a supported saved execution")
 	}
 	old.MultihopExecution = execution
 	a.profiles.Profiles[0] = cloneRouterProfile(old)

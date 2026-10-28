@@ -256,11 +256,12 @@ static char *external_path_current_body_v4(JsonObject *captured,JsonNode *curren
     if(message==NULL&&g_strcmp0(execution,"local")!=0){
         const char *protocol=external_path_string_v4(after,"protocol"),*kind=external_path_string_v4(entry,"node_kind");
         gboolean packet=g_strcmp0(protocol,"wireguard")==0||g_strcmp0(protocol,"amneziawg")==0;
-        if(!packet&&g_strcmp0(protocol,"shadowsocks")!=0&&g_strcmp0(protocol,"hysteria2")!=0&&g_strcmp0(protocol,"socks5")!=0&&g_strcmp0(protocol,"http-connect")!=0&&g_strcmp0(protocol,"https-connect")!=0&&g_strcmp0(protocol,"openvpn")!=0)message="Server / Compare requires a supported authenticated external transport.";
-        else if(!external_path_flag_v4(after,"has_response_probe"))message="Server / Compare requires this external node's HTTPS response probe.";
+        gboolean tor=g_strcmp0(protocol,"tor")==0||g_strcmp0(protocol,"tor-bridge")==0;
+        if(!tor&&!packet&&g_strcmp0(protocol,"shadowsocks")!=0&&g_strcmp0(protocol,"hysteria2")!=0&&g_strcmp0(protocol,"socks5")!=0&&g_strcmp0(protocol,"http-connect")!=0&&g_strcmp0(protocol,"https-connect")!=0&&g_strcmp0(protocol,"openvpn")!=0)message="Server / Compare requires a supported authenticated external transport.";
+        else if(!tor&&!external_path_flag_v4(after,"has_response_probe"))message="Server / Compare requires this external node's HTTPS response probe.";
         else if(packet&&!external_path_flag_v4(after,"has_server_peer"))message="WireGuard / AmneziaWG Server / Compare requires a separately provisioned server peer.";
         else if(g_strcmp0(protocol,"openvpn")==0&&!external_path_flag_v4(after,"has_openvpn_pairing"))message="OpenVPN Server / Compare requires private pairing with independent provider credentials.";
-        else if(direct||(kind[0]&&g_strcmp0(kind,"router-vpn")!=0))message="Server / Compare requires a Router VPN entry.";
+        else if(direct||(kind[0]&&g_strcmp0(kind,"router-vpn")!=0)||json_object_has_member(entry,"external"))message="Server / Compare requires a private Router VPN entry.";
     }
     if(message!=NULL){if(error!=NULL)*error=g_strdup(message);return NULL;}
     char *body=json_external_hop_body(id,entry_id,execution,direct);
@@ -403,8 +404,10 @@ static void linux_external_path_dialog_v4(App *app, gboolean require_entry) {
     LinuxExternalEntryModeV4 mode_state={.profiles=profiles,.mode=entry_mode,.execution=execution};
     g_signal_connect(entry,"changed",G_CALLBACK(external_entry_changed_v4),&mode_state);external_entry_changed_v4(GTK_COMBO_BOX(entry),&mode_state);
     GtkWidget *mode_note=gtk_label_new("The exact selected mode and the entry node's saved Start Layer are used. Compatibility and path proof are checked before Connected.");gtk_label_set_line_wrap(GTK_LABEL(mode_note),TRUE);gtk_label_set_xalign(GTK_LABEL(mode_note),0.0f);
-    GtkWidget *note=gtk_label_new("Server / Compare requires a Router entry, an authenticated external exit, and its saved HTTPS response probe. WireGuard / AmneziaWG also needs a separately provisioned server peer. Pairing and actual path proof are checked when connecting. Direct uses Local. A successful connection saves this node's choice.");gtk_label_set_line_wrap(GTK_LABEL(note),TRUE);gtk_label_set_xalign(GTK_LABEL(note),0.0f);
-    GtkWidget *probe=gtk_label_new(has_probe?"HTTPS response probe saved; server pairing and native proof remain pending.":"No HTTPS response probe saved. Import or create a provisioned external node before choosing Server / Compare.");gtk_label_set_line_wrap(GTK_LABEL(probe),TRUE);gtk_label_set_xalign(GTK_LABEL(probe),0.0f);
+    GtkWidget *note=gtk_label_new("Server / Compare uses a paired private Router entry. Tor compares last-relay HTTP and the same external-server HTTP response on each path. Other external exits need their saved HTTPS response probe; WireGuard / AmneziaWG also needs a separately provisioned server peer. Direct and ordinary entries use Local. A successful connection saves this node's choice.");gtk_label_set_line_wrap(GTK_LABEL(note),TRUE);gtk_label_set_xalign(GTK_LABEL(note),0.0f);
+    const char *exit_protocol=external_path_string_v4(external,"protocol");
+    gboolean is_tor=g_strcmp0(exit_protocol,"tor")==0||g_strcmp0(exit_protocol,"tor-bridge")==0;
+    GtkWidget *probe=gtk_label_new(is_tor?"Tor uses its native last-relay proof and one shared external target. Private pairing, selected DNS and path proof are checked when connecting.":has_probe?"HTTPS response probe saved; server pairing and native proof remain pending.":"No HTTPS response probe saved. Import or create a provisioned external node before choosing Server / Compare.");gtk_label_set_line_wrap(GTK_LABEL(probe),TRUE);gtk_label_set_xalign(GTK_LABEL(probe),0.0f);
     GtkWidget *error=gtk_label_new("");gtk_label_set_line_wrap(GTK_LABEL(error),TRUE);gtk_label_set_xalign(GTK_LABEL(error),0.0f);
     gtk_box_pack_start(GTK_BOX(box),gtk_label_new("Entry"),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),entry,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),gtk_label_new("Router entry mode"),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),entry_mode,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),mode_note,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),gtk_label_new("External execution"),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),execution,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),note,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),probe,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),error,FALSE,FALSE,0);
     gtk_box_pack_start(GTK_BOX(gtk_dialog_get_content_area(GTK_DIALOG(dialog))),box,TRUE,TRUE,0);gtk_widget_show_all(dialog);

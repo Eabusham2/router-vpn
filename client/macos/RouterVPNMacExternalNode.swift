@@ -92,6 +92,17 @@ func externalCapturedBody(_ body: [String: Any], opened: [String: Any], current:
             guard entry != id else { throw fail("External entry and exit must be different nodes.") }
             ids.insert(entry)
         }
+        let protocolID = (exits[0]["external"] as? [String: Any])?["protocol"] as? String ?? ""
+        let execution = body["execution"] as? String ?? exits[0]["multihop_execution"] as? String ?? "local"
+        if ["tor", "tor-bridge"].contains(protocolID), ["server", "auto"].contains(execution) {
+            let entries = profiles.filter { $0["id"] as? String == entry }
+            let explicit = body["entry_id"] as? String ?? ""
+            guard !entry.isEmpty, entries.count == 1,
+                  ["", "router-vpn"].contains(entries[0]["node_kind"] as? String ?? "router-vpn"), entries[0]["external"] == nil,
+                  !explicit.isEmpty || (exits[0]["multihop_enabled"] as? Bool == true && exits[0]["multihop_exit_id"] as? String == id) else {
+                throw fail("Tor Server / Compare requires the captured private Router VPN entry. Direct and ordinary entries use Local.")
+            }
+        }
     }
     var tokens: [String: String] = [:]
     for nodeID in ids {
@@ -177,11 +188,12 @@ func externalPathConnectBody(captured: [String: Any], entryID: String, execution
     if execution != "local" {
         let ext = matches[0]["external"] as? [String: Any] ?? [:]
         let protocolID = ext["protocol"] as? String ?? ""
-        guard ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"].contains(protocolID) else { throw fail("Server / Compare requires a supported authenticated external transport.") }
-        guard ext["has_response_probe"] as? Bool == true else { throw fail("Server / Compare requires this external node's HTTPS response probe.") }
+        let tor = ["tor", "tor-bridge"].contains(protocolID)
+        guard tor || ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"].contains(protocolID) else { throw fail("Server / Compare requires a supported authenticated external transport.") }
+        guard tor || ext["has_response_probe"] as? Bool == true else { throw fail("Server / Compare requires this external node's HTTPS response probe.") }
         guard !["wireguard", "amneziawg"].contains(protocolID) || ext["has_server_peer"] as? Bool == true else { throw fail("WireGuard / AmneziaWG Server / Compare requires a separately provisioned server peer.") }
         guard protocolID != "openvpn" || ext["has_openvpn_pairing"] as? Bool == true else { throw fail("OpenVPN Server / Compare requires private pairing with independent provider credentials.") }
-        guard !direct, entries[0]["node_kind"] as? String ?? "router-vpn" == "router-vpn" else { throw fail("Server / Compare requires a Router VPN entry.") }
+        guard !direct, ["", "router-vpn"].contains(entries[0]["node_kind"] as? String ?? "router-vpn"), entries[0]["external"] == nil else { throw fail("Server / Compare requires a private Router VPN entry.") }
     }
     var body = try externalConnectBody(profile: captured, entryID: entryID, execution: execution, direct: direct)
     if let entryMode {
@@ -326,9 +338,10 @@ extension ProductWindowController {
             changed.changed(); defer { withExtendedLifetime(changed) {} }
             let hasProbe = (captured["external"] as? [String: Any])?["has_response_probe"] as? Bool == true
             let panel = NSAlert(); panel.messageText = "External path: \(captured["name"] as? String ?? profileID)"
-            panel.informativeText = "Server / Compare requires a Router entry, an authenticated external exit, and its saved HTTPS response probe. WireGuard / AmneziaWG also needs a separately provisioned server peer. Pairing and actual path proof are checked when connecting. Direct uses Local. A successful connection saves this node's choice."
+            panel.informativeText = "Server / Compare uses a paired private Router entry. Tor compares last-relay HTTP and the same external-server HTTP response on each path. Other external exits need their saved HTTPS response probe; WireGuard / AmneziaWG also needs a separately provisioned server peer. Direct and ordinary entries use Local. A successful connection saves this node's choice."
             panel.addButton(withTitle: "Connect selected path"); panel.addButton(withTitle: "Cancel")
-            let note = NSTextField(wrappingLabelWithString: hasProbe ? "HTTPS response probe saved; server pairing and native proof remain pending." : "No HTTPS response probe saved. Import or create a provisioned external node before choosing Server / Compare.")
+            let isTor = ["tor", "tor-bridge"].contains((captured["external"] as? [String: Any])?["protocol"] as? String ?? "")
+            let note = NSTextField(wrappingLabelWithString: isTor ? "Tor uses its native last-relay proof and one shared external target. Private pairing, selected DNS and path proof are checked when connecting." : hasProbe ? "HTTPS response probe saved; server pairing and native proof remain pending." : "No HTTPS response probe saved. Import or create a provisioned external node before choosing Server / Compare.")
             note.textColor = .secondaryLabelColor
             let error = NSTextField(wrappingLabelWithString: ""); error.textColor = .systemRed
             let modeNote = NSTextField(wrappingLabelWithString: "The exact selected mode and the entry node's saved Start Layer are used. Compatibility and path proof are checked before Connected.")
