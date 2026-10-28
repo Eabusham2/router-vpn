@@ -35,6 +35,9 @@ func (q *externalProfileConnectRequest) UnmarshalJSON(data []byte) error {
 	if err != nil {
 		return err
 	}
+	if err := validateComparisonRequestJSON(fields); err != nil {
+		return err
+	}
 	for name := range fields {
 		for _, canonical := range []string{"expected_selected_node_id", "expected_profile_tokens"} {
 			if name != canonical && strings.EqualFold(name, canonical) {

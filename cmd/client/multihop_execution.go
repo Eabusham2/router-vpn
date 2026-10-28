@@ -46,6 +46,7 @@ func routeExecution(q multihopConnectRequest) (routechoice.Execution, error) {
 
 type routeComparisonProgress struct {
 	ID                  string                    `json:"id"`
+	RequestID           string                    `json:"request_id,omitempty"`
 	Stage               string                    `json:"stage"`
 	Measurements        []routechoice.Measurement `json:"measurements"`
 	Complete            bool                      `json:"complete"`

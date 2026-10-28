@@ -61,7 +61,7 @@ func speedLabTorCompareFixture(t *testing.T, protocol, prior, trial string) (*de
 
 func speedLabTorCompareRequest(f *desktopTorPublicComparisonFixture) speedLabRequest {
 	return speedLabRequest{Scope: "temporary", Topology: "external", NodeID: f.a.profiles.Profiles[0].ID,
-		EntryID: "captured", EntryMode: "wg", Base: "auto", Execution: "auto"}
+		EntryID: "captured", EntryMode: "wg", Base: "auto", Execution: "auto", ComparisonRequestID: strings.Repeat("d", 32)}
 }
 
 func speedLabTorCompareRestore(t *testing.T, f *desktopTorPublicComparisonFixture, snapshot speedLabTemporarySnapshot) {
@@ -117,6 +117,9 @@ func TestSpeedLabTorCompareRestoresOriginalProvedExecutionWithoutReselection(t *
 					t.Fatal("shipping temporary Compare failed", err)
 				}
 				winner := f.launch
+				if progress := comparisonProgress(f.a); progress.RequestID != q.ComparisonRequestID || progress.ID == progress.RequestID {
+					t.Fatal("temporary progress belongs to a different or substituted request", progress)
+				}
 				if path.Execution != "server" || path.ExternalProtocol != protocol || path.Comparison == nil || path.Comparison.Final == nil || path.Comparison.Final.ScoreMS == nil || *path.Comparison.Final.ScoreMS != 20 ||
 					path.LastNodeMeasurement != "tor-last-relay-http" || path.ExternalMeasurement != "same-captured-endpoint-http" || len(f.probes) != 3 || len(f.launches) != 3 || snapshot.Owner.runtime != winner.command {
 					t.Fatal("temporary Compare lost its measured native winner or mislabeled the operands", path)

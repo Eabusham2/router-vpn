@@ -37,7 +37,7 @@ func (a *app) torBridgeCompareSelectionOwned(w http.ResponseWriter, profile comm
 		stop := context.AfterFunc(runtime.requestContext, cancel)
 		defer stop()
 	}
-	progress := &comparisonOwner{value: routeComparisonProgress{ID: id, Stage: "starting", Measurements: []routechoice.Measurement{},
+	progress := &comparisonOwner{value: routeComparisonProgress{ID: id, RequestID: q.ComparisonRequestID, Stage: "starting", Measurements: []routechoice.Measurement{},
 		LastNodeMeasurement: "tor-last-relay-http", ExternalMeasurement: "same-captured-endpoint-http"}}
 	desktopComparisons.Store(a, progress)
 	finish := func(failure error, execution string) {

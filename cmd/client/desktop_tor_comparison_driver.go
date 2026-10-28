@@ -76,6 +76,9 @@ func cloneDesktopTorConnectRequest(q externalProfileConnectRequest) externalProf
 }
 
 func desktopTorRequestedExecution(profile common.RouterProfile, q externalProfileConnectRequest) (string, error) {
+	if !validComparisonRequestID(q.ComparisonRequestID) {
+		return "", errors.New("Tor comparison request identity is malformed")
+	}
 	direct := strings.TrimSpace(q.EntryID) == "" && !profile.MultihopEnabled
 	if q.Direct != nil {
 		direct = *q.Direct

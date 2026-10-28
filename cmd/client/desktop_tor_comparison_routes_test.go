@@ -73,7 +73,7 @@ func TestDesktopTorPublicCompareKeepsPreferenceAndRestoresExactWinner(t *testing
 				p.DNSMode, p.DNSProtocol, p.DNSHost = "home", "udp", ""
 				p.DNSPort = 53
 				original, entry := cloneRouterProfile(*p), cloneRouterProfile(f.a.profiles.Profiles[1])
-				q := externalProfileConnectRequest{ProfileID: p.ID}
+				q := externalProfileConnectRequest{ProfileID: p.ID, ComparisonRequestID: strings.Repeat("c", 32)}
 				if route == "external" {
 					p.MultihopExecution = "local"
 					q.Execution = "auto" // Explicit Compare overrides the saved Local preference.
@@ -109,7 +109,7 @@ func TestDesktopTorPublicCompareKeepsPreferenceAndRestoresExactWinner(t *testing
 					t.Fatal("Startup Last did not retain the actual winner", err)
 				}
 				progress := comparisonProgress(f.a)
-				if !progress.Complete || progress.Stage != "selected" || progress.Execution != "server" || len(progress.Measurements) != 2 || progress.Failure != "" {
+				if !progress.Complete || progress.Stage != "selected" || progress.Execution != "server" || len(progress.Measurements) != 2 || progress.Failure != "" || progress.RequestID != q.ComparisonRequestID || progress.ID == progress.RequestID {
 					t.Fatal("public comparison progress did not finish truthfully", progress)
 				}
 				winner := f.launch

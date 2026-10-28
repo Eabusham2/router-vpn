@@ -33,7 +33,7 @@ func speedLabTorRequest(q speedLabRequest, profile common.RouterProfile) externa
 	// choice represented by an empty entry. Do not revive the node's saved hop.
 	entryID := strings.TrimSpace(q.EntryID)
 	direct := entryID == ""
-	return externalProfileConnectRequest{ProfileID: profile.ID, EntryID: entryID, EntryMode: q.EntryMode, Base: q.Base, Direct: &direct, Execution: q.Execution}
+	return externalProfileConnectRequest{ProfileID: profile.ID, EntryID: entryID, EntryMode: q.EntryMode, Base: q.Base, Direct: &direct, Execution: q.Execution, ComparisonRequestID: q.ComparisonRequestID}
 }
 
 func (prepared *speedLabTorPreparation) releaseUnused() error {

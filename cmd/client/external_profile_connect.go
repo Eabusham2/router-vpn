@@ -28,6 +28,7 @@ type externalProfileConnectRequest struct {
 	Base                   string            `json:"base"`
 	Direct                 *bool             `json:"direct,omitempty"`
 	Execution              string            `json:"execution,omitempty"`
+	ComparisonRequestID    string            `json:"comparison_request_id,omitempty"`
 	ExpectedSelectedNodeID *string           `json:"expected_selected_node_id,omitempty"`
 	ExpectedProfileTokens  map[string]string `json:"expected_profile_tokens,omitempty"`
 }

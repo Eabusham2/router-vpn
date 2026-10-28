@@ -90,7 +90,7 @@ func (a *app) startPreparedSpeedLabTorComparison(q speedLabRequest, profile comm
 			driver.selections[execution], driver.prepared[execution] = candidate.selection, candidate
 		}
 	}
-	progress := &comparisonOwner{value: routeComparisonProgress{ID: id, Stage: "starting", Measurements: []routechoice.Measurement{},
+	progress := &comparisonOwner{value: routeComparisonProgress{ID: id, RequestID: q.ComparisonRequestID, Stage: "starting", Measurements: []routechoice.Measurement{},
 		LastNodeMeasurement: "tor-last-relay-http", ExternalMeasurement: "same-captured-endpoint-http"}}
 	desktopComparisons.Store(a, progress)
 	var active routechoice.Session

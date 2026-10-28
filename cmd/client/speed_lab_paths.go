@@ -27,6 +27,7 @@ type speedLabRequest struct {
 	Base                   string            `json:"base,omitempty"`
 	ExitMode               string            `json:"exit_mode,omitempty"`
 	Execution              string            `json:"execution,omitempty"`
+	ComparisonRequestID    string            `json:"comparison_request_id,omitempty"`
 	CustomLayers           []string          `json:"custom_layers,omitempty"`
 	DurationMode           string            `json:"duration_mode,omitempty"`
 	MinSeconds             float64           `json:"min_seconds,omitempty"`
