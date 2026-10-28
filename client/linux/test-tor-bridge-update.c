@@ -245,7 +245,7 @@ static void verify_post(Trial *trial) {
     check(g_strcmp0(obj_string(body, "kill_switch_policy"), expected_kill) == 0, "actual protection changed before Save");
     check(g_strcmp0(obj_string(body, "name"), trial->update ? "Captured Tor exit" : "") == 0, "Update did not preserve the captured name before any user edit");
     check(json_object_get_size(body) == (trial->update ? 7u : 4u), "bridge form copied unrelated controls or private node settings");
-    const char *forbidden[] = {"profile_id", "entry_id", "entry_mode", "base", "direct", "execution", "api_token", "private_key", "external"};
+    const char *forbidden[] = {"profile_id", "entry_id", "entry_mode", "base", "direct", "execution", "api_token", "private_key", "external", "comparison_request_id"};
     for (guint i = 0; i < G_N_ELEMENTS(forbidden); i++) check(!json_object_has_member(body, forbidden[i]), "Tor import escaped its bridge-only edit contract");
     if (trial->update) {
         check(node_reads == 1 && g_strcmp0(obj_string(body, "id"), "tor-edit") == 0 && g_strcmp0(obj_string(body, "expected_selected_node_id"), "tor-edit") == 0, "Update lost its opened source identity");

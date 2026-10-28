@@ -267,7 +267,18 @@ int main(int argc,char **argv){
         JsonNode *tor_store=parse_json(private_json);g_free(private_json);JsonObject *tor_exit=external_source_profile_v24(json_node_get_object(tor_store),"exit");
         char *path=external_path_mode_body_v4(tor_exit,tor_store,"entry",executions[ei],FALSE,"wg",entry_modes,&error);check(path!=NULL,error?error:"Tor path was rejected without an ordinary response probe");
         body=external_captured_body_v24(path,tor_store,tor_store,&error);check(body!=NULL,error?error:"Tor exact path source was rejected");g_free(path);root=parse_json(body);obj=json_node_get_object(root);
-        check(g_strcmp0(obj_string(obj,"execution"),executions[ei])==0&&g_strcmp0(obj_string(obj,"entry_mode"),"wg")==0&&json_object_get_size(json_object_get_object_member(obj,"expected_profile_tokens"))==2,"Tor path changed execution, entry mode or source");json_node_free(root);g_free(body);count++;
+        check(g_strcmp0(obj_string(obj,"execution"),executions[ei])==0&&g_strcmp0(obj_string(obj,"entry_mode"),"wg")==0&&json_object_get_size(json_object_get_object_member(obj,"expected_profile_tokens"))==2,"Tor path changed execution, entry mode or source");
+        g_autofree char *nonce=g_strdup(linux_comparison_string_v25(obj,"comparison_request_id"));
+        if(strcmp(executions[ei],"auto")==0){
+            check(linux_comparison_id_v25(nonce),"Tor auto omitted its captured nonce");
+            char *again=external_captured_body_v24(body,tor_store,tor_store,&error);check(again!=NULL,"Nonce-preserving source validation failed");JsonNode *repeat=parse_json(again);check(g_strcmp0(linux_comparison_string_v25(json_node_get_object(repeat),"comparison_request_id"),nonce)==0,"Repeated source validation changed the request nonce");json_node_free(repeat);g_free(again);count++;
+            json_object_remove_member(obj,"comparison_request_id");char *plain=json_to_string(root,FALSE);again=external_captured_body_v24(plain,tor_store,tor_store,&error);g_free(plain);check(again!=NULL,"Fresh Tor request failed");repeat=parse_json(again);check(g_strcmp0(linux_comparison_string_v25(json_node_get_object(repeat),"comparison_request_id"),nonce)!=0,"New Tor request reused old nonce");json_node_free(repeat);g_free(again);count++;
+        }else check(nonce==NULL,"Concrete Tor execution received Compare nonce");
+        const char *malformed[]={"\"\"","\"BAD\"","\"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\"","1","true","null","{}","[]"};
+        for(guint ni=0;ni<G_N_ELEMENTS(malformed);ni++){
+            JsonNode*bad=parse_json(malformed[ni]);json_object_set_member(obj,"comparison_request_id",bad);char*invalid=json_to_string(root,FALSE);char*unexpected=external_captured_body_v24(invalid,tor_store,tor_store,&error);check(unexpected==NULL,"Malformed or unrelated Compare nonce was accepted");g_free(invalid);g_free(error);error=NULL;count++;
+        }
+        json_node_free(root);g_free(body);count++;
         char *saved=json_external_hop_body("exit","",executions[ei],FALSE);
         body=external_captured_body_v24(saved,tor_store,tor_store,&error);check(body!=NULL,"Tor primary Connect lost its private entry");g_free(body);count++;
         for(guint fault=0;fault<9;fault++){

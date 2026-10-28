@@ -1,3 +1,5 @@
+#include "routervpn-comparison-progress-v25.h"
+
 /* Capture public opaque revisions; private credentials stay in the controller. */
 static gboolean external_source_id_v24(const char *id) {
     if (id == NULL || !id[0] || strlen(id) > 64) return FALSE;
@@ -84,6 +86,20 @@ static char *external_captured_body_v24(const char *body, JsonNode *opened, Json
         }
         json_object_set_string_member(tokens, ids[i], token);
     }
+    if (message == NULL) {
+        const char *protocol = external_path_string_v4(external_path_object_v4(exit, "external"), "protocol");
+        gboolean compare = !external_path_flag_v4(request, "direct") &&
+            (g_strcmp0(protocol, "tor") == 0 || g_strcmp0(protocol, "tor-bridge") == 0) &&
+            g_strcmp0(external_path_string_v4(request, "execution"), "auto") == 0;
+        gboolean has_nonce = json_object_has_member(request, "comparison_request_id");
+        const char *nonce = linux_comparison_string_v25(request, "comparison_request_id");
+        if (has_nonce && (!compare || !linux_comparison_id_v25(nonce)))
+            message = "The captured comparison request identity is invalid. Nothing was connected.";
+        else if (compare && !has_nonce) {
+            g_autofree char *created = linux_comparison_new_id_v25();
+            json_object_set_string_member(request, "comparison_request_id", created);
+        }
+    }
     if (message != NULL) {
         json_object_unref(tokens);
         if (error != NULL) *error = g_strdup(message);
@@ -130,7 +146,7 @@ static char *external_primary_captured_body_v24(JsonNode *opened, const char *id
         if (error != NULL) *error = g_strdup("The current node catalog is unavailable. Nothing was connected.");
         return NULL;
     }
-    return external_captured_body_v24(plain, opened, current, error);
+    return external_captured_body_v24(captured, opened, current, error);
 }
 
 static char *external_primary_body_v24(App *app, const char *id, gboolean direct, char **error) {

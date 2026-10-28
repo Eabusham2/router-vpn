@@ -54,7 +54,7 @@ def linux_form(directory):
         'static void linux_speed_lab_refresh_controls_v12(',
         'static char *linux_speed_lab_request_body_v12(',
     ))
-    callback = block(source, 'static void linux_speed_lab_run_v12(')
+    callback = block(source, 'static void linux_speed_lab_stop_comparison_v25(') + '\n' + block(source, 'static void linux_speed_lab_run_v12(')
     program = r'''
 #include <gtk/gtk.h>
 #include <json-glib/json-glib.h>
@@ -72,6 +72,11 @@ static const char *staged_entry="", *staged_exit="", *staged_mode="shadowsocks",
 static gboolean linux_profile_selection_v11(gboolean*enabled,char**entry,char**exit,char**mode,char**entry_mode){*enabled=staged_enabled;*entry=g_strdup(staged_entry);*exit=g_strdup(staged_exit);*mode=g_strdup(staged_mode);*entry_mode=g_strdup(staged_entry_mode);return staged_enabled;}
 static char *linux_multihop_execution_choice_v1(void){return g_strdup(staged_execution);}
 METHODS
+/* This form-only fixture owns no HTTP worker. The separate actual progress
+ * transport gate exercises the same stop helper with live owned sockets. */
+typedef struct RVHttpJobV16 RVHttpJobV16;
+static void rv_http_cancel_v16(RVHttpJobV16*job){g_assert(job==NULL);}
+static void rv_http_free_v16(RVHttpJobV16*job){g_assert(job==NULL);}
 static char *captured;
 static void linux_speed_lab_start_v12(LinuxSpeedLabV12*s,gboolean options){g_assert(!options);g_free(captured);captured=linux_speed_lab_request_body_v12(s);}
 CALLBACK
@@ -114,6 +119,11 @@ int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Expected fixt
   for(guint mi=0;mi<json_array_get_length(modes);mi++)for(guint ei=0;ei<3;ei++){
    const char*mode=obj_string(json_array_get_object_element(modes,mi),"id");choose(s.entry_mode,mode);choose(s.execution,executions[ei]);char*name=g_strdup_printf("speed-lab-%s-%s-%s",tor_protocols[ti],mode,executions[ei]);emit(&s,argv[1],name);g_free(name);
    check(linux_speed_lab_request_timeout_v19(&s,captured)==(ei==2?960000L:110000L),"Captured Tor Run used unrelated or insufficient HTTP budget");
+   JsonNode*nonce_request=parse_json(captured);JsonObject*nonce_object=json_node_get_object(nonce_request);
+   const char*nonce=linux_comparison_string_v25(nonce_object,"comparison_request_id");
+   if(ei==2){check(linux_comparison_id_v25(nonce),"Temporary Tor-auto omitted its captured nonce");char*again=linux_speed_lab_request_body_v12(&s);JsonNode*fresh=parse_json(again);check(g_strcmp0(linux_comparison_string_v25(json_node_get_object(fresh),"comparison_request_id"),nonce)!=0,"A new temporary test reused an old nonce");json_node_free(fresh);g_free(again);}
+   else check(nonce==NULL,"Concrete Tor test received a Compare nonce");
+   json_node_free(nonce_request);
   }
   choose(s.entry_mode,"wg");
   const char*fields[]={"tor_server_execution","tor_compare_execution"};
@@ -156,7 +166,7 @@ int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Expected fixt
 '''.replace('STRUCT', struct).replace('METHODS', methods).replace('\nCALLBACK\n', '\n'+callback+'\n')
     path = directory/'speed-lab.c'; path.write_text(program)
     flags = subprocess.check_output(['pkg-config','--cflags','--libs','gtk+-3.0','json-glib-1.0'], text=True).split()
-    subprocess.run(['gcc','-Wall','-Wextra','-Werror',str(path),'-o',str(directory/'speed-lab')]+flags, check=True)
+    subprocess.run(['gcc','-Wall','-Wextra','-Werror','-I'+str(ROOT/'client/linux'),str(path),'-o',str(directory/'speed-lab')]+flags, check=True)
     subprocess.run(['xvfb-run','-a',str(directory/'speed-lab'),str(directory)],check=True,timeout=60)
     subprocess.run([sys.executable,str(ROOT/'client/linux/test-multihop-profiles-v22.py')],check=True,timeout=90)
 

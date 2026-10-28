@@ -47,3 +47,4 @@ echo 'Linux shipping GTK rendered layout acceptance: PASS'
 python3 "$(dirname "${BASH_SOURCE[0]}")/test-linux-speed-lab-ui.py" "$PACKAGE/router-vpn-app"
 
 python3 "$(dirname "${BASH_SOURCE[0]}")/test-linux-http-job.py"
+python3 "$(dirname "${BASH_SOURCE[0]}")/test-linux-comparison-progress.py"

@@ -23,13 +23,16 @@ int main(int argc,char **argv) {
     if(argc!=2 || curl_global_init(CURL_GLOBAL_DEFAULT)!=CURLE_OK)return 2;
     int mode=atoi(argv[1]);
     const char *paths[]={"/api/ok","/api/slow","/api/large","/api/redirect","/api/slow","/api/error","/api/read","/api/connection/speed-test","/api/multihop/connect"};
-    if(mode<0||mode>8)return 3;
+    if(mode<0||mode>14)return 3;
     char *body=strdup("{\"owned\":true}");
-    RVHttpJobV16 *job=mode==6?rv_http_start_method_v17(paths[mode],"",4000,"read",1):rv_http_start_v16(paths[mode],body,mode==4?120:4000,"test");
+    RVHttpJobV16 *job=mode>=11?rv_http_start_comparison_progress_v25():mode>=9?rv_http_start_tor_comparison_v25(body,"Tor compare"):
+        mode==6?rv_http_start_method_v17(paths[mode],"",4000,"read",1):rv_http_start_v16(paths[mode],body,mode==4?120:4000,"test");
     memset(body,'x',strlen(body));free(body); /* Caller storage does not survive. */
     if(job==NULL)return 4;
     double start=now();
-    if(mode==1) {
+    if(mode>=9 && mode<=10 && (job->timeout_ms!=540000L||job->get||!job->connecting||strcmp(job->url,"http://127.0.0.1:8788/api/external-profile/connect")!=0))return 17;
+    if(mode>=11 && (job->timeout_ms!=2000L||!job->get||job->connecting||job->response_limit!=32768||strcmp(job->url,"http://127.0.0.1:8788/api/multihop/status")!=0))return 18;
+    if(mode==1 || mode==10) {
         usleep(150000);rv_http_cancel_v16(job);
         while(!rv_http_ready_v16(job)&&now()-start<2)usleep(1000);
         if(!rv_http_ready_v16(job)||now()-start>0.8||job->result!=CURLE_ABORTED_BY_CALLBACK)return 5;
@@ -41,6 +44,11 @@ int main(int argc,char **argv) {
         if(mode==3 && (job->result!=CURLE_OK||job->status!=302))return 9;
         if(mode==4 && job->result!=CURLE_OPERATION_TIMEDOUT)return 10;
         if(mode==5 && (job->result!=CURLE_OK||job->status!=409))return 11;
+        if(mode==9 && (job->result!=CURLE_OK||job->status!=200||strcmp(job->response,"{\"ok\":true}")!=0))return 19;
+        if(mode==11 && (job->result!=CURLE_OK||job->status!=200||strcmp(job->response,"{\"get\":true}")!=0))return 20;
+        if(mode==12 && (job->result!=CURLE_WRITE_ERROR||job->length>32768))return 21;
+        if(mode==13 && (job->result!=CURLE_OK||job->status!=302))return 22;
+        if(mode==14 && (job->result!=CURLE_OPERATION_TIMEDOUT||now()-start<1.5||now()-start>3))return 23;
     }
     if(mode==6 && (job->result!=CURLE_OK||job->status!=200||!job->get||job->connecting||strcmp(job->response,"{\"get\":true}")!=0))return 14;
     if(mode==7 && (job->result!=CURLE_OK||job->connecting))return 15;
@@ -48,6 +56,8 @@ int main(int argc,char **argv) {
     rv_http_free_v16(job);
     if(rv_http_start_v16("https://example.invalid", "{}", 1000,"bad")!=NULL)return 12;
     if(rv_http_start_v16("/api/ok", "{}", 0,"bad")!=NULL)return 13;
+    if(rv_http_start_v16("/api/ok", "{}", 300001,"bad")!=NULL)return 24;
+    if(rv_http_start_v16("/api/external-profile/connect", "{}", 540000,"uncaptured")!=NULL)return 25;
     curl_global_cleanup();printf("shipping HTTP worker scenario %d: PASS\n",mode);return 0;
 }
 '''
@@ -62,9 +72,28 @@ def main():
             pass
         def do_GET(self):
             received.append(self.path)
-            if self.path != '/api/read' or int(self.headers.get('Content-Length','0')) != 0:
+            if self.path not in ('/api/read','/api/multihop/status') or int(self.headers.get('Content-Length','0')) != 0:
                 failures.append('read method/body contract changed')
-            self.send_response(200);self.send_header('Content-Length','12');self.end_headers();self.wfile.write(b'{"get":true}')
+            if self.server.case == 14:
+                self.wait_for_close()
+                return
+            content = b'x' * 65536 if self.server.case == 12 else b'{"get":true}'
+            try:
+                self.send_response(302 if self.server.case == 13 else 200)
+                self.send_header('Location','http://127.0.0.1:8788/redirect-target')
+                self.send_header('Content-Length',str(len(content)));self.end_headers();self.wfile.write(content)
+            except (BrokenPipeError,ConnectionResetError):
+                pass
+        def wait_for_close(self):
+            end = time.monotonic() + 3
+            while time.monotonic() < end:
+                try:
+                    closed = select.select([self.connection], [], [], .02)[0] and not self.connection.recv(1, socket.MSG_PEEK)
+                except ConnectionResetError:
+                    closed = True
+                if closed:
+                    cancelled.append(self.path)
+                    return
         def do_POST(self):
             self.connection.settimeout(2)
             n = int(self.headers.get('Content-Length', '0'))
@@ -72,16 +101,9 @@ def main():
             received.append(self.path)
             if body != b'{"owned":true}':
                 failures.append('caller body was not captured')
-            if self.path == '/api/slow':
-                end = time.monotonic() + 3
-                while time.monotonic() < end:
-                    try:
-                        closed = select.select([self.connection], [], [], .02)[0] and not self.connection.recv(1, socket.MSG_PEEK)
-                    except ConnectionResetError:
-                        closed = True
-                    if closed:
-                        cancelled.append(self.path)
-                        return
+            if self.path == '/api/slow' or self.server.case == 10:
+                self.wait_for_close()
+                return
             status, content = 200, b'{"ok":true}'
             if self.path == '/api/large': content = b'x' * (3 << 20)
             if self.path == '/api/redirect': status = 302
@@ -104,13 +126,14 @@ def main():
             src.write_text(C_TEST)
             flags = shlex.split(subprocess.check_output(['pkg-config', '--cflags', '--libs', 'libcurl'], text=True))
             subprocess.run(['gcc', '-std=c11', '-Wall', '-Wextra', '-Werror', '-pthread', '-I'+str(ROOT/'client/linux'), str(src), '-o', str(binary), *flags], check=True, timeout=30)
-            for case in range(9):
+            for case in range(15):
+                server.case = case
                 subprocess.run([str(binary), str(case)], check=True, timeout=8, env=dict(os.environ, http_proxy='http://127.0.0.1:1', ALL_PROXY='http://127.0.0.1:1'))
         end = time.monotonic()+1
-        while len(cancelled)<2 and time.monotonic()<end:time.sleep(.02)
-        assert len(received)==9 and len(cancelled)==2 and not failures, (received,cancelled,failures)
+        while len(cancelled)<4 and time.monotonic()<end:time.sleep(.02)
+        assert len(received)==15 and len(cancelled)==4 and not failures, (received,cancelled,failures)
         assert '/redirect-target' not in received
-        print('Bounded worker, immutable request, no proxies/redirects, cancellation and timeout: PASS')
+        print('Owned HTTP worker: 15 actual loopback cases; generic 300s cap, captured Tor 540s, streaming 32KiB progress, cancellation and timeout: PASS')
     finally:
         server.shutdown();server.server_close();thread.join(timeout=2)
 

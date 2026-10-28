@@ -15,6 +15,7 @@ DNS_INC="$ROOT/client/linux/routervpn-dns-measurement-v1.inc"
 DEVICE_INC="$ROOT/client/linux/routervpn-device-settings-v1.inc"
 SHUTDOWN_INC="$ROOT/client/linux/routervpn-controller-shutdown-v1.inc"
 EXTERNAL_SOURCE_INC="$ROOT/client/linux/routervpn-external-source-v24.inc"
+COMPARISON_HEADER="$ROOT/client/linux/routervpn-comparison-progress-v25.h"
 TELEMETRY_INC="$ROOT/client/linux/routervpn-telemetry-v9.inc"
 SPEED_LAB_INC="$ROOT/client/linux/routervpn-speed-lab-v12.inc"
 SPEED_LAB_PATH_INC="$ROOT/client/linux/routervpn-speed-lab-path-v19.inc"
@@ -25,7 +26,7 @@ V3="$ROOT/client/linux/routervpn-gtk-product-v3.c"
 CORE="$ROOT/client/linux/routervpn-gtk-product.c"
 SESSION_MUTATION="$ROOT/client/linux/apply-session-mutation.py"
 START_LAYER_SETTINGS="$ROOT/client/linux/apply-start-layer-settings.py"
-SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$SHUTDOWN_INC" "$EXTERNAL_SOURCE_INC" "$DEVICE_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC" "$V4" "$V3" "$CORE" "$START_LAYER_SETTINGS")
+SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$SHUTDOWN_INC" "$EXTERNAL_SOURCE_INC" "$COMPARISON_HEADER" "$DEVICE_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC" "$V4" "$V3" "$CORE" "$START_LAYER_SETTINGS")
 BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-linux-v10.XXXXXX")
 EMBEDDED_V4="$BUILD_DIR/routervpn-gtk-product-v4-embedded.c"
 BUILD_SRC="$BUILD_DIR/routervpn-gtk-product-v10-shipping.c"
@@ -40,7 +41,7 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 for pkg in gtk+-3.0 libcurl json-glib-1.0; do
   pkg-config --exists "$pkg" || { echo "Missing native Linux app build dependency: $pkg" >&2; exit 2; }
 done
-for source in "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$SHUTDOWN_INC" "$EXTERNAL_SOURCE_INC" "$DEVICE_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC"; do
+for source in "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$SHUTDOWN_INC" "$EXTERNAL_SOURCE_INC" "$COMPARISON_HEADER" "$DEVICE_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC"; do
   [[ -s "$source" ]] || { echo "Missing Linux shipping include: $source" >&2; exit 2; }
 done
 mkdir -p "$(dirname "$OUT")"

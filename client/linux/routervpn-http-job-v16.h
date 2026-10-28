@@ -14,11 +14,11 @@
 #include <string.h>
 
 #define RV_HTTP_LIMIT_V16 (2u * 1024u * 1024u)
-typedef struct {
+typedef struct RVHttpJobV16 {
     pthread_t thread;
     atomic_int cancelled, ready;
     char *url, *body, *label, *response;
-    size_t length;
+    size_t length, response_limit;
     long timeout_ms, status;
     CURLcode result;
     int connecting, get;
@@ -26,8 +26,8 @@ typedef struct {
 
 static size_t rv_http_receive_v16(void *data, size_t size, size_t count, void *opaque) {
     RVHttpJobV16 *job = opaque;
-    if (atomic_load(&job->cancelled) || job->length > RV_HTTP_LIMIT_V16 ||
-        (size != 0 && count > (RV_HTTP_LIMIT_V16 - job->length) / size)) return 0;
+    if (atomic_load(&job->cancelled) || job->length > job->response_limit ||
+        (size != 0 && count > (job->response_limit - job->length) / size)) return 0;
     size_t length = size * count;
     char *next = realloc(job->response, job->length + length + 1);
     if (next == NULL) return 0;
@@ -86,11 +86,11 @@ done:
     return NULL;
 }
 
-static RVHttpJobV16 *rv_http_start_method_v17(const char *path, const char *body, long timeout_ms, const char *label, int get) {
+static RVHttpJobV16 *rv_http_start_bounded_v25(const char *path, const char *body, long timeout_ms, long maximum_ms, size_t response_limit, const char *label, int get) {
     static const char base[] = "http://127.0.0.1:8788";
     if (path == NULL || strncmp(path, "/api/", 5) != 0 || strlen(path) > 256 ||
         strchr(path, '\r') != NULL || strchr(path, '\n') != NULL ||
-        body == NULL || strlen(body) > RV_HTTP_LIMIT_V16 || timeout_ms < 1 || timeout_ms > 300000) return NULL;
+        body == NULL || strlen(body) > RV_HTTP_LIMIT_V16 || timeout_ms < 1 || timeout_ms > maximum_ms || response_limit < 1 || response_limit > RV_HTTP_LIMIT_V16) return NULL;
     RVHttpJobV16 *job = calloc(1, sizeof(*job));
     if (job == NULL) return NULL;
     atomic_init(&job->cancelled, 0);
@@ -99,6 +99,7 @@ static RVHttpJobV16 *rv_http_start_method_v17(const char *path, const char *body
     job->body = strdup(body);
     job->label = strdup(label != NULL ? label : "Request");
     job->timeout_ms = timeout_ms;
+    job->response_limit = response_limit;
     const char *action = strrchr(path, '/');
     job->get = get != 0;
     job->connecting = !job->get && (strcmp(action, "/connect") == 0 || strcmp(action, "/connect-logical") == 0 || strncmp(path, "/api/strategy/", 14) == 0 || strcmp(path, "/api/auto") == 0);
@@ -107,6 +108,21 @@ static RVHttpJobV16 *rv_http_start_method_v17(const char *path, const char *body
         return job;
     free(job->url); free(job->body); free(job->label); free(job);
     return NULL;
+}
+
+/* The general action budget remains 300 seconds. The sole longer public
+ * request is selected only for a source-captured Tor comparison by the GTK
+ * dispatcher; this helper cannot target another endpoint or method. */
+static RVHttpJobV16 *rv_http_start_method_v17(const char *path, const char *body, long timeout_ms, const char *label, int get) {
+    return rv_http_start_bounded_v25(path, body, timeout_ms, 300000L, RV_HTTP_LIMIT_V16, label, get);
+}
+
+static inline RVHttpJobV16 *rv_http_start_tor_comparison_v25(const char *body, const char *label) {
+    return rv_http_start_bounded_v25("/api/external-profile/connect", body, 540000L, 540000L, RV_HTTP_LIMIT_V16, label, 0);
+}
+
+static inline RVHttpJobV16 *rv_http_start_comparison_progress_v25(void) {
+    return rv_http_start_bounded_v25("/api/multihop/status", "", 2000L, 2000L, 32768u, "Comparison progress", 1);
 }
 
 static RVHttpJobV16 *rv_http_start_v16(const char *path, const char *body, long timeout_ms, const char *label) {

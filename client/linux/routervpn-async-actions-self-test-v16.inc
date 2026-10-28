@@ -84,8 +84,20 @@ static int linux_async_actions_self_test_v16(void) {
     g_object_ref(app.window); /* Retain only to inspect shutdown ownership. */
     gtk_widget_show_all(app.window);
     LinuxAsyncProbeV16 probe = {.app = &app, .base = g_object_get_data(G_OBJECT(app.window), "linux-unified-v8")};
-    probe.source = g_timeout_add(25, linux_async_probe_v16, &probe);
-    gtk_main();
+    /* Match the real application's profile load and subsequent map refresh.
+     * An empty view must first remain unable to submit an unrelated path. */
+    gtk_button_clicked(GTK_BUTTON(probe.base->connect));
+    LinuxAsyncActionsV16 *initial = linux_async_state_v16(&app);
+    if (initial == NULL || initial->primary != NULL) {
+        probe.failure = 11;
+        while (g_source_remove_by_user_data(probe.base)) {}
+        gtk_widget_destroy(app.window);
+    } else {
+        refresh_profiles(&app);
+        linux_unified_refresh_v8(probe.base);
+        probe.source = g_timeout_add(25, linux_async_probe_v16, &probe);
+        gtk_main();
+    }
     LinuxAsyncActionsV16 *s = linux_async_state_v16(&app);
     if (s == NULL || !s->closed || s->primary != NULL || s->stop != NULL || s->poll != 0) probe.failure = 10;
     for (int i = 0; i < 10; i++) {
