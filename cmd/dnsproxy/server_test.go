@@ -261,15 +261,13 @@ func TestDNSProxyCancellationJoinsLocalWorkersAndH3Owner(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resolver.Close()
-	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	// Use the production TCP-first reservation. Windows can assign UDP an
+	// ephemeral port that is reserved against a later explicit TCP bind.
+	udp, tcp, err := listenDNSProxy("127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer udp.Close()
-	tcp, err := net.Listen("tcp4", udp.LocalAddr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
 	defer tcp.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -337,15 +335,11 @@ func TestDNSProxyCancellationJoinsLocalWorkersAndH3Owner(t *testing.T) {
 }
 
 func TestDNSProxyListenerFailureCancelsOtherListener(t *testing.T) {
-	udp, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	udp, tcp, err := listenDNSProxy("127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	tcp, err := net.Listen("tcp4", udp.LocalAddr().String())
-	if err != nil {
-		_ = udp.Close()
-		t.Fatal(err)
-	}
+	defer udp.Close()
 	defer tcp.Close()
 	resolver, err := newDNSResolver(upstream{Protocol: "udp", Server: "192.0.2.53", Port: 53}, nil)
 	if err != nil {
