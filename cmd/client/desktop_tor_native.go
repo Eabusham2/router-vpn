@@ -31,6 +31,9 @@ type desktopTorRuntime struct {
 	pathMu                sync.Mutex
 	pathGeneration        uint64
 	pathFailed            bool
+	comparison            *desktopTorComparisonClient
+	comparisonGeneration  uint64
+	comparisonPrevious    *mobiletor.DesktopTorCompareStatus
 	mtu                   *desktopMTUSession
 	mtuAuthority          desktopTorMTUAuthority
 	mtuReadback           *mobiletor.DesktopBridgeMTUReadback
@@ -541,6 +544,7 @@ func desktopTorMailbox(name string) bool {
 		"dns-status.json", "dns-request.json", "dns-cancel.json", ".dns-status.json.pending",
 		"mtu-status.json", "mtu-request.json", "mtu-commit.json", "mtu-cancel.json", ".mtu-status.json.pending",
 		"path-status.json", "path-request.json", "path-cancel.json", ".path-status.json.pending",
+		"tor-compare-request.json", "tor-compare-cancel.json", "tor-compare-status.json", ".tor-compare-status.json.pending",
 		"mtu-transition.json", ".mtu-transition.json.pending":
 		return true
 	}
@@ -566,7 +570,7 @@ func cleanupDesktopTorLaunch(launch *desktopNodeLaunch) error {
 	}
 	entries, err := directory.ReadDir(64)
 	_ = directory.Close()
-	if err != nil && !errors.Is(err, io.EOF) || len(entries) > 32 {
+	if err != nil && !errors.Is(err, io.EOF) || len(entries) > 40 {
 		return errors.New("Tor cleanup has an unbounded workspace")
 	}
 	observed := map[string]os.FileInfo{}

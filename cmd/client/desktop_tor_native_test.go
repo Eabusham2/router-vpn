@@ -195,11 +195,13 @@ func TestDesktopTorProcessFixture(t *testing.T) {
 	dnsTick := desktopTorDNSChildFixture(kind, directory, expected, write)
 	mtuTick := desktopTorMTUChildFixture(kind, directory, expected, &proof, write)
 	pathTick := desktopTorPathChildFixture(kind, directory, expected, write)
+	comparisonTick := desktopTorComparisonChildFixture(kind, publisher.root, expected, write)
 	for {
 		desktopTorFixturePublicationBarrier(kind, expected)
 		dnsTick()
 		mtuTick()
 		pathTick()
+		comparisonTick()
 		proof.HeartbeatAt = time.Now().UnixMilli()
 		write("proof.json", proof)
 		raw, err := os.ReadFile(filepath.Join(directory, "stop.json"))
