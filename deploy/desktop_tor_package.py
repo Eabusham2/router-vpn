@@ -295,6 +295,19 @@ class TCPControl(SERVER.Control):
             raise ValueError('Desktop Tor accepted an incorrect control authentication or rejected its owner')
 
 
+def wait_owned_process(process, target, timeout):
+    code = process.wait(timeout=timeout)
+    if target.startswith('windows/'):
+        # CPython keeps the Windows process HANDLE after wait(), releasing it
+        # only when Popen is finalized. Release this exact, already joined
+        # child before verifying relocation cleanup; never close a live owner.
+        handle = getattr(process, '_handle', None)
+        if handle is None:
+            raise ValueError('Desktop Tor joined process lost its owned Windows handle')
+        handle.Close()
+    return code
+
+
 def offline_self_test(binary, target):
     require_host(target)
     binary = Path(binary).absolute()
@@ -365,7 +378,7 @@ def offline_self_test(binary, target):
                     raise ValueError('Desktop Tor padding altered its disabled owner')
                 owner.close()
                 owner = None
-                if process.wait(timeout=5) != 0:
+                if wait_owned_process(process, target, timeout=5) != 0:
                     raise ValueError('Desktop Tor did not exit with its owning controller')
             finally:
                 if owner is not None:
@@ -373,10 +386,14 @@ def offline_self_test(binary, target):
                 if process.poll() is None:
                     process.terminate()
                     try:
-                        process.wait(timeout=5)
+                        wait_owned_process(process, target, timeout=5)
                     except subprocess.TimeoutExpired:
                         process.kill()
-                        process.wait(timeout=5)
+                        wait_owned_process(process, target, timeout=5)
+                elif target.startswith('windows/'):
+                    # An early process exit may have been observed by poll()
+                    # before the normal owner-close path reached wait().
+                    wait_owned_process(process, target, timeout=5)
     if digest(read_regular(binary, MAX_BINARY)) != before:
         raise ValueError('Desktop Tor executable changed during offline verification')
     return offline_receipt()

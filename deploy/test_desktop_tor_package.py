@@ -89,6 +89,30 @@ def read_tests():
 
 def metadata_tests():
     read_tests()
+    for target in V.TARGETS:
+        for exit_code in (0, 7):
+            events = []
+            handle = SimpleNamespace(Close=lambda: events.append('close'))
+            def wait(timeout):
+                check(timeout == 5, 'owned wait keeps its existing bound')
+                events.append('joined')
+                return exit_code
+            process = SimpleNamespace(wait=wait, _handle=handle)
+            check(V.wait_owned_process(process, target, 5) == exit_code, 'owned wait preserves actual exit status')
+            check(events == (['joined', 'close'] if target.startswith('windows/') else ['joined']),
+                  'Windows native handle closes only after the exact process joins')
+    events = []
+    def held(timeout):
+        raise V.subprocess.TimeoutExpired('owned fixture', timeout)
+    process = SimpleNamespace(wait=held, _handle=SimpleNamespace(Close=lambda: events.append('closed-live-owner')))
+    try:
+        V.wait_owned_process(process, 'windows/arm64', 5)
+    except V.subprocess.TimeoutExpired:
+        check(events == [], 'timed-out live owner retains its native handle')
+    else:
+        raise AssertionError('Owned process timeout was swallowed')
+    reject(lambda: V.wait_owned_process(SimpleNamespace(wait=lambda timeout: 0), 'windows/amd64', 5),
+           'joined Windows process with no captured handle')
     # Exercise the import table independently of package checksums. Tor's
     # Windows path matcher needs the OS Shlwapi library, while its crypto and
     # event libraries must remain static and unknown side-loaded DLLs forbidden.
