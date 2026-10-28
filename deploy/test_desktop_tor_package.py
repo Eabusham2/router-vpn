@@ -12,6 +12,7 @@ import json
 import shutil
 import struct
 import tempfile
+from types import SimpleNamespace
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,7 +40,55 @@ def reject(operation, label):
     raise AssertionError('Desktop Tor gate accepted ' + label)
 
 
+def read_tests():
+    with tempfile.TemporaryDirectory(prefix='desktop-tor-read-') as temporary:
+        path = Path(temporary).resolve() / 'owned.bin'
+        raw = b'captured native payload'
+        path.write_bytes(raw)
+        check(V.read_regular(path, 4096) == raw, 'actual owned file read')
+        real = path.lstat()
+        fields = ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+        def snapshot(**changes):
+            values = {key: getattr(real, key) for key in fields}
+            values.update(changes)
+            return SimpleNamespace(**values)
+        # Windows CPython may expose creation time by path and change time by
+        # handle for this exact same file. Both independent timelines are stable.
+        opened = snapshot(st_ctime_ns=real.st_ctime_ns + 10_000_000)
+        with patch.object(V.os, 'fstat', side_effect=[opened, opened]):
+            check(V.read_regular(path, 4096) == raw, 'stable Windows path/handle timestamp semantics')
+        for field in fields:
+            changed = copy.copy(opened)
+            setattr(changed, field, getattr(changed, field) + 1)
+            with patch.object(V.os, 'fstat', side_effect=[opened, changed]):
+                reject(lambda: V.read_regular(path, 4096), 'changed open handle ' + field)
+        foreign = snapshot(st_ino=real.st_ino + 1)
+        with patch.object(V.os, 'fstat', side_effect=[foreign, foreign]):
+            reject(lambda: V.read_regular(path, 4096), 'replaced file before open')
+        # Replace the final pathname metadata independently of the still-open
+        # file. Identity, size, timestamps and reparse-point ownership remain
+        # mandatory even when an attacker supplies the same byte length.
+        original_lstat = Path.lstat
+        for changes in ({'st_ino': real.st_ino + 1}, {'st_size': real.st_size + 1},
+                        {'st_mtime_ns': real.st_mtime_ns + 1}, {'st_ctime_ns': real.st_ctime_ns + 1},
+                        {'st_file_attributes': 0x400}):
+            observations = 0
+            def lstat(candidate, *args, **kwargs):
+                nonlocal observations
+                if candidate == path:
+                    observations += 1
+                    if observations > 1:
+                        return snapshot(**changes)
+                return original_lstat(candidate, *args, **kwargs)
+            with patch.object(Path, 'lstat', lstat):
+                reject(lambda: V.read_regular(path, 4096), 'changed pathname ' + repr(changes))
+        reject(lambda: V.read_regular(path, len(raw) - 1), 'oversized native payload')
+        path.write_bytes(b'')
+        reject(lambda: V.read_regular(path, 4096), 'empty native payload')
+
+
 def metadata_tests():
+    read_tests()
     # Exercise the import table independently of package checksums. Tor's
     # Windows path matcher needs the OS Shlwapi library, while its crypto and
     # event libraries must remain static and unknown side-loaded DLLs forbidden.

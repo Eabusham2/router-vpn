@@ -113,7 +113,13 @@ def read_regular(path, maximum):
         after = os.fstat(source.fileno())
     current = path.lstat()
     identity = lambda v: (v.st_dev, v.st_ino, v.st_mode, v.st_size, v.st_mtime_ns, v.st_ctime_ns)
-    if identity(before) != identity(after) or identity(after) != identity(current) or len(raw) != before.st_size:
+    # CPython on Windows can expose birth time through lstat's ctime and
+    # metadata-change time through fstat's ctime (python/cpython#157671).
+    # Compare each API's own before/after observations, retaining the strict
+    # cross-API file identity and size checks instead of dropping timestamps.
+    if (identity(before) != identity(current) or identity(opened) != identity(after) or
+            not os.path.samestat(after, current) or unsafe(current) or not stat.S_ISREG(after.st_mode) or
+            len(raw) != before.st_size or len(raw) != after.st_size):
         raise ValueError('Desktop Tor payload changed while reading')
     return raw
 
