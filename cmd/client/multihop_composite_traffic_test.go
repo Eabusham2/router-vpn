@@ -8,7 +8,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -305,7 +304,8 @@ func nativeCompositeReferenceProcess(t *testing.T, binary, nodeID, mode, host st
 	}
 	command := exec.Command(binary, "-test.run=^TestDesktopCompositeReferencePeer$", "-test.timeout=180s")
 	command.Env = append(os.Environ(), "ROUTERVPN_COMPOSITE_REFERENCE_CONFIG="+path)
-	command.Stderr = io.Discard
+	var stdout, stderr desktopTorFixtureOutput
+	command.Stderr = &stderr
 	input, err := command.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -340,6 +340,11 @@ func nativeCompositeReferenceProcess(t *testing.T, binary, nodeID, mode, host st
 				}
 				seen = true
 				ready <- value
+			} else {
+				// Reference failures can precede readiness or terminate a later
+				// encrypted lane. Preserve their bounded diagnostics separately
+				// from the private readiness record and its generated assets.
+				_, _ = stdout.Write(append(scanner.Bytes(), '\n'))
 			}
 		}
 		if err := scanner.Err(); err != nil {
@@ -364,6 +369,9 @@ func nativeCompositeReferenceProcess(t *testing.T, binary, nodeID, mode, host st
 		case err := <-readFailure:
 			t.Error(err)
 		default:
+		}
+		if t.Failed() {
+			t.Logf("isolated composite reference process status: %v; stdout:\n%s\nstderr:\n%s", command.ProcessState, stdout.String(), stderr.String())
 		}
 	})
 	select {
