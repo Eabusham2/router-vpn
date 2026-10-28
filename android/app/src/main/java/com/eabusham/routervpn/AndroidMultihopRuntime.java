@@ -18,6 +18,8 @@ final class AndroidMultihopRuntime implements AutoCloseable {
     }
 
     private static final long START_TIMEOUT_MS = 20000L;
+    private static final long EXECUTION_TIMEOUT_MS = 120000L;
+    private static final long PQ_START_TIMEOUT_MS = 30000L;
     private static final long STOP_TIMEOUT_MS = 8000L;
     private static final int PROBE_TIMEOUT_MS = 5000;
     private final Context context;
@@ -38,6 +40,19 @@ final class AndroidMultihopRuntime implements AutoCloseable {
     private String activeExecution = "";
     private String activeHomeSession = "";
     private AndroidMultihopController.Source activeEntrySource, activeExitSource;
+
+    /** Native dependency endpoints start before the separate shared execution
+     * controller. Each captured PQ/MAX hop may consume its own initial-key
+     * deadline; both waits belong to this one Android startup, in order. */
+    static long startTimeoutMillis(String execution, String entryMode, String exitMode) {
+        if(!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalArgumentException("Invalid multihop execution.");
+        long budget="local".equals(execution)?START_TIMEOUT_MS:EXECUTION_TIMEOUT_MS;
+        for(String mode:new String[]{entryMode,exitMode}) {
+            if(NativeSingBoxController.nativePQFamily(mode)||AndroidNativeMAXProfile.isMode(mode))budget+=PQ_START_TIMEOUT_MS;
+        }
+        return budget;
+    }
+
 
     /** Never persisted or rebuilt from selected labels: one proved owner plus its exact sources. */
     static final class RestoreCapture {
@@ -266,8 +281,9 @@ final class AndroidMultihopRuntime implements AutoCloseable {
                 started = true;
                 singBox.start(prepared.session);
             }
-            long deadline = System.currentTimeMillis() + ("local".equals(execution) ? START_TIMEOUT_MS : 120000L);
-            while (System.currentTimeMillis() < deadline) {
+            long startupNanos=java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(startTimeoutMillis(execution,entryMode,prepared.exitMode));
+            long startedAt=System.nanoTime();
+            while (System.nanoTime()-startedAt < startupNanos) {
                 if (Thread.currentThread().isInterrupted() || closed.get()) throw new InterruptedException("Multihop start cancelled.");
                 String state = singBox.getState();
                 if ("UP".equals(state)) break;

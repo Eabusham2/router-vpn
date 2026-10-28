@@ -326,7 +326,7 @@ for executable_contract in (
     "test_android_profile_selection_consumers.py",
     "test_android_connection_profiles.py",
     "test_android_mode_orchestrator.py",
-    "test_android_startup_policy.py", "test_android_multihop_startup_last.py",
+    "test_android_startup_policy.py", "test_android_multihop_startup_last.py", "test_android_multihop_startup_deadline.py",
     "test_android_runtime_teardown.py",
     "test_android_service_stop_confirmation.py",
     "test_android_mutation_idle_proof.py",

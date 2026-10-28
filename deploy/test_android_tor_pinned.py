@@ -33,10 +33,12 @@ def inputs():
     extra += [ROOT/'android'/name for name in ('max_preparation_test_boundary.py','test_android_max_dns_owner.py','test_android_max_preparation.py','test_android_max_host_paths.py','test_android_max_service.py')]
     extra += [JAVA/(name+'.java') for name in ('AndroidMAXDNSOwner','AndroidMAXProfilePreparation','AndroidTorProfile','AndroidTorSession','AndroidTorCompareRuntime','AndroidTorPaddingReceipt','AndroidStandardExitStore','AndroidStandardExitRuntime','AndroidStandardExitController','AndroidDirectStandardExitController','AndroidHomeStateStore','AndroidSessionRevalidator','LayeredVpnService','AndroidStartLayerRelay','StandardExitActivity')]
     extra += [JAVA/(name+'.java') for name in ('AndroidStartupPolicy','AndroidMultihopRuntime','AndroidUnifiedConnectionController','AndroidMTUMeasurementGate','AndroidConnectionSelection','AndroidConnectionProfileStore','AndroidNodeStore','AndroidProfileSelection','AndroidPrivateFileStore')]
-    extra += [ROOT/'android'/name for name in ('test_android_tor_compare.py','test_android_startup_policy.py','test_android_multihop_startup_last.py','test_android_multihop_restore.py','test_android_external_permission.py','test_android_speed_lab_restore.py')]
+    extra += [ROOT/'android'/name for name in ('test_android_tor_compare.py','test_android_startup_policy.py','test_android_multihop_startup_last.py','test_android_multihop_startup_deadline.py','test_android_multihop_restore.py','test_android_external_permission.py','test_android_speed_lab_restore.py')]
     # Startup Last consumes the same raw JSON export before JSONObject can
     # collapse ambiguous receipts; its native parser is part of this proof.
     extra += [ROOT/'mobile/routervpn_openvpn.go', *[path for path in (ROOT/'internal/nativeopenvpn').glob('*.go') if not path.name.endswith('_test.go')]]
+    # The outer host deadline is checked against these real sequential native phases.
+    extra += [ROOT/path for path in ('internal/mobilepq/controller.go','internal/mobilepq/peer.go','mobile/pq/endpoint.go.tmpl','internal/mobilemultihop/runtime.go')]
     return sorted(set(M.inputs()+HOST.inputs()+extra))
 
 

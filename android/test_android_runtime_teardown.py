@@ -24,6 +24,8 @@ import java.io.File;
 import java.util.Collections;
 import java.util.List;
 import java.util.Arrays;
+import java.util.Set;
+import java.util.HashSet;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class NativeSingBoxController {
@@ -739,6 +741,12 @@ composite_source = (JAVA / 'AndroidNativeCompositeProfile.java').read_text()
 composite_predicate = re.findall(r'(?ms)^    static boolean isMode\(String mode\) \{\n.*?^    \}', composite_source)
 assert len(composite_predicate) == 1, 'missing exact composite transport predicate'
 STUBS += '\nfinal class AndroidNativeCompositeProfile {\n' + composite_predicate[0] + '\n}\n'
+max_source = (JAVA / 'AndroidNativeMAXProfile.java').read_text()
+max_modes = re.search(r'(?s)    private static final Set<String> MODES\s*=.*?;', max_source)
+max_predicate = re.search(r'    static boolean isMode\(String mode\) \{[^\n]+\}', max_source)
+assert max_modes and max_predicate, 'missing actual complete MAX transport predicate'
+STUBS += '\nfinal class AndroidNativeMAXProfile {\n' + max_modes[0] + '\n' + max_predicate[0] + '\n}\n'
+
 
 # Check the shipping budget against both sequential native phases. This stays
 # deterministic without shortening production timers or waiting three minutes.
