@@ -20,7 +20,28 @@ SOURCES = dict(T.SOURCES)
 SOURCES.pop("com/eabusham/routervpn/AndroidExternalSession.java")
 SOURCES["io/nekohasekai/libbox/RouterMTU.java"] = "package io.nekohasekai.libbox;public class RouterMTU {}"
 SOURCES["io/nekohasekai/libbox/RouterMTUPlatform.java"] = "package io.nekohasekai.libbox;public interface RouterMTUPlatform {}"
-SOURCES["com/eabusham/routervpn/AndroidMTUSession.java"] = SOURCES["com/eabusham/routervpn/AndroidMTUSession.java"].replace("public void activateExternal(AndroidExternalSession external){}", "public int externalStarts,closes,closeFailures;public AndroidExternalSession activatedExternal;public void activateExternal(AndroidExternalSession external){externalStarts++;activatedExternal=external;}").replace("public void close()throws Exception{}", 'public void close()throws Exception{closes++;if(closeFailures>0){closeFailures--;throw new IllegalStateException("unfinished MTU native cleanup");}}')
+
+
+def replace_boundary(source, old, new, label):
+    if source.count(old) != 1:
+        raise AssertionError(f"Missing unique fixture boundary: {label}")
+    return source.replace(old, new)
+
+
+mtu_source = replace_boundary(
+    SOURCES["com/eabusham/routervpn/AndroidMTUSession.java"],
+    "public void activateExternal(AndroidExternalSession external){}",
+    "public int externalStarts,closes,closeFailures;public AndroidExternalSession activatedExternal;public void activateExternal(AndroidExternalSession external){externalStarts++;activatedExternal=external;}",
+    "external MTU activation",
+)
+# The shared Tor boundary already tracks close attempts and pending native
+# cleanup. Preserve it while adding this fixture's retryable MTU failure.
+SOURCES["com/eabusham/routervpn/AndroidMTUSession.java"] = replace_boundary(
+    mtu_source,
+    "public void close()throws Exception{closeCalls++;",
+    'public void close()throws Exception{closeCalls++;closes++;if(closeFailures>0){closeFailures--;throw new IllegalStateException("unfinished MTU native cleanup");}',
+    "retryable external MTU cleanup",
+)
 SOURCES["com/eabusham/routervpn/AndroidHomeStateStore.java"] = SOURCES["com/eabusham/routervpn/AndroidHomeStateStore.java"].replace("s!=null&&s==value&&!emergency", "s!=null&&s.sessionId.equals(value.sessionId)&&s.activeExternalId.equals(value.activeExternalId)&&!emergency")
 SOURCES["android/content/Context.java"] = SOURCES["android/content/Context.java"].replace("public java.io.File getFilesDir(){return null;}", "public java.io.File files;public java.io.File getFilesDir(){return files;}")
 SOURCES["android/content/Context.java"] = SOURCES["android/content/Context.java"].replace("public Object getSystemService(String name){return null;}", "public Object getSystemService(String name){return name.equals(NOTIFICATION_SERVICE)?new android.app.NotificationManager():new android.net.ConnectivityManager();}")
