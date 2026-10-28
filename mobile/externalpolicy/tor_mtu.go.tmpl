@@ -132,6 +132,8 @@ func (s *Box) RouterVPNTorClaimMTU(proof *RouterVPNTorProofRequest, config, prof
 	var authority string
 	if proof.server != nil {
 		authority, err = mobiletor.ServerMTUAuthority(config, profileJSON, proof.sessionID, proof.predecessor)
+	} else if proof.externalPredecessor != nil {
+		authority, err = mobiletor.MTUAuthorityWithExternalPredecessor(config, profileJSON, proof.sessionID, proof.externalPredecessor)
 	} else {
 		authority, err = mobiletor.MTUAuthorityWithPredecessor(config, profileJSON, proof.sessionID, proof.predecessor)
 	}
@@ -265,7 +267,7 @@ func (l *RouterVPNTorMTULease) Verify(parent context.Context, dial func(context.
 	if dial == nil {
 		return errors.New("Tor MTU has no bound system-TUN dialer")
 	}
-	retained, err := l.proof.owner.TorProofWithPredecessor(ctx, l.proof.sessionID, l.proof.predecessor)
+	retained, err := l.proof.prove(ctx)
 	if err != nil || retained.SessionID != l.proof.sessionID || !retained.IsTor || !l.Healthy() {
 		return errors.New("Tor MTU predecessor or native circuit proof failed")
 	}

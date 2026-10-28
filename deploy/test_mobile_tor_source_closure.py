@@ -51,23 +51,33 @@ def main():
             raise AssertionError('Mobile Tor changed the shared lease validator: '+source.name)
     result = compile_sources(content, args.go,
                              '^Test(TorProfilePreservesSavedResolverAndDynamicSession|'
-                             'PredecessorFingerprintBindsCompleteCapturedEntry|TorJumbo|MobileServerTor|ServerTorRetained|PaddingControl|PaddingLease)')
+                             'PredecessorFingerprintBindsCompleteCapturedEntry|ExternalPredecessor|MobileExternalTor|TorJumbo|MobileServerTor|ServerTorRetained|PaddingControl|PaddingLease)')
     if result.returncode:
         raise RuntimeError('Actual mobile Tor generated closure failed:\n'+result.stdout)
     print(result.stdout.strip())
     # Execute the real copy function with the one intended filter removed.
-    # The resulting package must fail compilation on the leaked desktop-only
-    # predecessor dependency, rather than passing because only markers match.
+    # The generated scope validator must reject the actual leaked host files.
+    # Ordinary predecessor policy now shares the complete multihop closure;
+    # missing that dependency is no longer a valid negative-control oracle.
     source = inspect.getsource(PREP.copies)
     guard = "            if name == 'mobiletor' and path.name.startswith('desktop_'):\n                continue\n"
     if source.count(guard) != 1:
         raise AssertionError('Mobile Tor copy boundary changed')
     namespace = dict(PREP.__dict__)
     exec(compile(source.replace(guard, ''), '<desktop-copy-defect>', 'exec'), namespace)
-    broken = compile_sources(namespace['copies'](), args.go, '^$')
-    if broken.returncode == 0 or 'router-vpn/internal/mobilemultihop' not in broken.stdout:
-        raise AssertionError('Leaked desktop dependency was not rejected by actual Go compilation:\n'+broken.stdout)
-    print('PASS: exact mobile source/test closure and intended desktop-copy compiler rejection')
+    try:
+        namespace['copies']()
+    except ValueError as failure:
+        if 'desktop owner' not in str(failure):
+            raise
+    else:
+        raise AssertionError('Leaked desktop owners were not rejected by actual preparation')
+    missing = dict(content)
+    missing.pop('routervpn/mobiletor/external_predecessor.go')
+    broken = compile_sources(missing, args.go, '^$')
+    if broken.returncode == 0 or 'undefined: ExternalPredecessorProof' not in broken.stdout:
+        raise AssertionError('Missing ordinary predecessor source was not rejected by actual Go compilation:\n'+broken.stdout)
+    print('PASS: exact mobile source/test closure, desktop-copy rejection and missing ordinary proof compiler rejection')
 
 
 if __name__ == '__main__':

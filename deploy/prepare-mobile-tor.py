@@ -16,7 +16,8 @@ OWNER = 'routervpn-tor-source.json'
 # closed, standard-library policy set is also used by full Libbox preparation;
 # standalone Tor tests must compile those same bytes instead of a protocol copy.
 LEASE_PACKAGES = ('multihoprelay', 'applexray', 'awgpolicy', 'mobilepq',
-                  'nativecomposite', 'nativeopenvpn', 'nativesip003')
+                  'nativecomposite', 'nativeopenvpn', 'nativesip003',
+                  'mobilemultihop', 'routechoice', 'hopmeasure', 'mobileperf')
 spec = importlib.util.spec_from_file_location('routervpn_native_tor_pack', ROOT/'deploy/prepare-mobile-torpack.py')
 TORPACK = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(TORPACK)
@@ -24,8 +25,8 @@ spec.loader.exec_module(TORPACK)
 
 def mobile_policy_sources():
     # Desktop launch/control owners are compiled by prepare-desktop-external.
-    # Their complete Router predecessor requires the desktop multihop closure;
-    # the mobile Tor package retains only its actual shared policy and tests.
+    # Ordinary predecessors share the exact external-policy compiler, but
+    # process/control wrappers remain desktop-only. No host controls are copied.
     return [path for path in (ROOT/'internal/mobiletor').glob('*.go')
             if not path.name.startswith('desktop_')]
 
@@ -69,6 +70,7 @@ def rewrite(data):
         ('router-vpn/internal/awgpolicy', MODULE+'/routervpn/awgpolicy'),
         ('router-vpn/internal/nativeopenvpn', MODULE+'/routervpn/nativeopenvpn'),
         ('router-vpn/internal/multihoprelay', MODULE+'/experimental/libbox/routervpn/multihoprelay'),
+        ('router-vpn/internal/mobilemultihop', MODULE+'/experimental/libbox/routervpn/mobilemultihop'),
         ('router-vpn/mobile/torpt', MODULE+'/routervpn/torpt'),
     ):
         data = data.replace(('"'+source).encode(), ('"'+target).encode())
@@ -126,7 +128,15 @@ def copies():
         if path.is_file() and (path.name.startswith('LICENSE') or path.name in ('UPSTREAM.json', 'SOURCE_LOCK.json', 'go.mod', 'go.sum', 'README.md')):
             notices[str(path.relative_to(ROOT))] = path.read_text()
     result['routervpn/tornotices/source-notices.json'] = (json.dumps(notices, indent=2, sort_keys=True)+'\n').encode()
+    verify_policy_scope(result)
     return result
+
+
+def verify_policy_scope(content):
+    expected = {'routervpn/mobiletor/'+path.name for path in mobile_policy_sources()}
+    actual = {name for name in content if name.startswith('routervpn/mobiletor/')}
+    if actual != expected or any(Path(name).name.startswith('desktop_') for name in actual):
+        raise ValueError('Mobile Tor copied a desktop owner or omitted shared policy source')
 
 
 def insert_once(text, anchor, addition):

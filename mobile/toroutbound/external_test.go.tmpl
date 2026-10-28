@@ -1,0 +1,190 @@
+package routervpntor
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+const torOrdinaryEntryProfile = `{"id":"ordinary-entry","node_kind":"external","external":{"protocol":"socks5","expected_public_ip":"203.0.113.88","socks5":{"host":"198.51.100.20","port":1080,"username":"captured-user","password":"captured-provider-secret"}},"dns_mode":"custom","dns_protocol":"tcp","dns_host":"9.9.9.9","dns_port":53,"home_lan_access":false,"ipv6_mode":"off","mtu_policy":"auto"}`
+const torOrdinaryEntryConfig = `{"inbounds":[{"type":"tun","tag":"tun-in","address":["172.29.91.1/30","fd29:91::1/126"],"mtu":1280,"auto_route":true,"strict_route":true}],"outbounds":[{"type":"socks","tag":"custom-exit","server":"198.51.100.20","server_port":1080,"version":"5","username":"captured-user","password":"captured-provider-secret"}],"route":{"final":"custom-exit","auto_detect_interface":true}}`
+const torOrdinaryExitProfile = `{"id":"tor-exit","node_kind":"external","external":{"protocol":"tor"},"dns_mode":"custom","dns_protocol":"tcp","dns_host":"9.9.9.9","dns_port":53,"home_lan_access":false,"ipv6_mode":"off","mtu_policy":"auto","multihop_enabled":true,"multihop_entry_id":"ordinary-entry","multihop_exit_id":"tor-exit","multihop_entry_mode":"socks5","multihop_exit_mode":"tor","multihop_execution":"local"}`
+
+func torOrdinaryOptions(t *testing.T) (Options, string) {
+	t.Helper()
+	config, err := mobiletor.CompileProfileWithExternalPredecessor(torOrdinaryExitProfile, "ordinary-session", torOrdinaryEntryConfig, torOrdinaryEntryProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var graph struct{ Outbounds []json.RawMessage }
+	if err := json.Unmarshal([]byte(config), &graph); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range graph.Outbounds {
+		var tagged struct{ Tag string }
+		_ = json.Unmarshal(raw, &tagged)
+		if tagged.Tag == mobiletor.ProfileOutboundTag {
+			var options Options
+			if err := json.Unmarshal(raw, &options); err != nil {
+				t.Fatal(err)
+			}
+			return options, config
+		}
+	}
+	t.Fatal("compiled graph omitted native Tor")
+	return Options{}, ""
+}
+
+func TestTorExternalConstructorCapturesOriginalSourceAndCompleteExpectedGraph(t *testing.T) {
+	options, config := torOrdinaryOptions(t)
+	entry, expected, err := captureTorExternalPredecessor(options)
+	if err != nil || entry == nil || expected != config || !entry.MatchesProfile(torOrdinaryEntryProfile) || entry.Fingerprint() != options.EntrySHA256 {
+		t.Fatal("native constructor lost exact original source or independently reconstructed graph", err)
+	}
+	if _, err := mobiletor.NewPredecessorProof(entry.Profile()); err == nil {
+		t.Fatal("ordinary provider was accepted as private Router authority")
+	}
+	for _, mutation := range []string{"missing-profile", "missing-source", "missing-exit", "credentials", "dns", "fixed-policy", "entry-digest", "exit-digest", "detour", "server"} {
+		t.Run(mutation, func(t *testing.T) {
+			changed := options
+			switch mutation {
+			case "missing-profile":
+				changed.ExternalPredecessorProfile = ""
+			case "missing-source":
+				changed.ExternalPredecessorConfig = ""
+			case "missing-exit":
+				changed.ExternalTorProfile = ""
+			case "credentials":
+				changed.ExternalPredecessorConfig = strings.Replace(changed.ExternalPredecessorConfig, "captured-provider-secret", "other-provider-secret", 1)
+			case "dns":
+				changed.ExternalPredecessorProfile = strings.Replace(changed.ExternalPredecessorProfile, "9.9.9.9", "8.8.8.8", 1)
+			case "fixed-policy":
+				changed.ExternalPredecessorProfile = strings.Replace(changed.ExternalPredecessorProfile, `"mtu_policy":"auto"`, `"mtu_policy":"fixed","manual_mtu":1400`, 1)
+			case "entry-digest":
+				changed.EntrySHA256 = strings.Repeat("0", 64)
+			case "exit-digest":
+				changed.ProfileSHA256 = strings.Repeat("0", 64)
+			case "detour":
+				changed.Detour = "replacement"
+			case "server":
+				changed.ExternalTorProfile = strings.Replace(changed.ExternalTorProfile, `"multihop_execution":"local"`, `"multihop_execution":"server"`, 1)
+			}
+			owner, graph, err := captureTorExternalPredecessor(changed)
+			if err == nil || owner != nil || graph != "" || strings.Contains(err.Error(), "secret") {
+				t.Fatal("changed ordinary source gained native authority or leaked credentials", err)
+			}
+		})
+	}
+}
+
+func torOrdinaryProofFixture(t *testing.T, dial func(context.Context, string, M.Socksaddr) (net.Conn, error)) *Outbound {
+	t.Helper()
+	options, _ := torOrdinaryOptions(t)
+	entry, config, err := captureTorExternalPredecessor(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newTorCaptureFixture(t, options.Detour)
+	ctx, cancel := context.WithCancel(f.ctx)
+	t.Cleanup(cancel)
+	captured, err := captureTorUpstream(ctx, mobiletor.ProfileOutboundTag, options.Detour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &Outbound{Adapter: outbound.NewAdapter(Type, mobiletor.ProfileOutboundTag, []string{N.NetworkTCP}, []string{options.Detour}), ctx: ctx, cancel: cancel,
+		sessionID: options.SessionID, predecessor: options.Detour, entrySHA256: entry.Fingerprint(), externalEntry: entry, externalConfig: config,
+		upstream: captured, lower: torProofLower{dial: dial}, resident: &resident{}, started: true, ready: make(chan struct{}), workerDone: make(chan struct{}), closeDone: make(chan struct{})}
+	// No C Tor worker or successful circuit is invented in this lower-owner test.
+	close(h.workerDone)
+	t.Cleanup(func() { _ = h.Close() })
+	return h
+}
+
+func TestTorExternalProofRejectsPrivateOrReplacementAuthorityBeforeDial(t *testing.T) {
+	var dials atomic.Int32
+	h := torOrdinaryProofFixture(t, func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+		dials.Add(1)
+		return nil, errors.New("unowned provider dial")
+	})
+	if owner, err := h.TorExternalPredecessor(torOrdinaryEntryProfile); err != nil || owner != h.externalEntry {
+		t.Fatal("exact native source did not retain its owner", err)
+	}
+	changed := strings.Replace(torOrdinaryEntryProfile, "captured-provider-secret", "replacement-secret", 1)
+	if owner, err := h.TorExternalPredecessor(changed); err == nil || owner != nil {
+		t.Fatal("mutable provider credentials replaced native authority")
+	}
+	if _, err := h.TorProofWithPredecessor(context.Background(), h.sessionID, nil); err == nil {
+		t.Fatal("missing private proof bypassed ordinary provider")
+	}
+	replacement, err := mobiletor.NewExternalPredecessorProof(torOrdinaryEntryProfile, torOrdinaryEntryConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range []*mobiletor.ExternalPredecessorProof{nil, replacement} {
+		if _, err := h.TorProofWithExternalPredecessor(context.Background(), h.sessionID, candidate); err == nil {
+			t.Fatal("a different proof owner reached the native predecessor")
+		}
+	}
+	if dials.Load() != 0 {
+		t.Fatal("rejected authority opened a socket")
+	}
+}
+
+func TestTorExternalProofUsesOnlyCapturedLowerAndRetainsCanceledDial(t *testing.T) {
+	dialEntered, dialRelease := make(chan struct{}), make(chan struct{})
+	late := &torProofSlowClose{entered: make(chan struct{}), release: make(chan struct{})}
+	h := torOrdinaryProofFixture(t, func(_ context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+		if network != "tcp" || destination.String() != "1.1.1.1:443" {
+			t.Error("ordinary public-address proof escaped its captured lower or used private Router /health")
+		}
+		close(dialEntered)
+		<-dialRelease
+		return late, nil
+	})
+	result := make(chan error, 1)
+	go func() {
+		proof, err := h.TorProofWithExternalPredecessor(context.Background(), h.sessionID, h.externalEntry)
+		if proof.IsTor {
+			t.Error("ordinary provider fabricated final Tor proof")
+		}
+		result <- err
+	}()
+	<-dialEntered
+	h.CancelTor(h.sessionID)
+	select {
+	case <-h.closeDone:
+		t.Fatal("cancellation released a pending provider dial")
+	default:
+	}
+	close(dialRelease)
+	<-late.entered
+	select {
+	case <-result:
+		t.Fatal("proof forgot its blocked predecessor Close")
+	case <-h.closeDone:
+		t.Fatal("native owner forgot its blocked predecessor Close")
+	default:
+	}
+	close(late.release)
+	if err := <-result; err == nil || strings.Contains(err.Error(), "secret") {
+		t.Fatal("failed ordinary close became successful or exposed a credential", err)
+	}
+	select {
+	case <-h.closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("native owner did not join its ordinary proof worker")
+	}
+	if err := h.Close(); err == nil || strings.Contains(err.Error(), "secret") || late.writes.Load() != 0 {
+		t.Fatal("canceled ordinary proof lost sticky failure or wrote after retirement", err)
+	}
+}

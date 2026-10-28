@@ -34,6 +34,11 @@ func RouterCompileTorProfileWithPredecessor(profileJSON, sessionID, predecessorJ
 	return mobiletor.CompileProfileWithPredecessor(profileJSON, sessionID, predecessorJSON, predecessorProfileJSON)
 }
 
+// Ordinary-provider source remains separate from private Router credentials.
+func RouterCompileTorProfileWithExternalPredecessor(profileJSON, sessionID, sourceConfigJSON, predecessorProfileJSON string) (string, error) {
+	return mobiletor.CompileProfileWithExternalPredecessor(profileJSON, sessionID, sourceConfigJSON, predecessorProfileJSON)
+}
+
 type RouterTorProofRequest struct {
 	request *box.RouterVPNTorProofRequest
 }

@@ -34,10 +34,13 @@ const closeTimeout = 15 * time.Second
 
 type Options struct {
 	option.DialerOptions
-	Bridges       []string `json:"bridges"`
-	SessionID     string   `json:"session_id"`
-	ProfileSHA256 string   `json:"profile_sha256,omitempty"`
-	EntrySHA256   string   `json:"entry_sha256,omitempty"`
+	Bridges                    []string `json:"bridges"`
+	SessionID                  string   `json:"session_id"`
+	ProfileSHA256              string   `json:"profile_sha256,omitempty"`
+	EntrySHA256                string   `json:"entry_sha256,omitempty"`
+	ExternalPredecessorProfile string   `json:"external_predecessor_profile,omitempty"`
+	ExternalPredecessorConfig  string   `json:"external_predecessor_config,omitempty"`
+	ExternalTorProfile         string   `json:"external_tor_profile,omitempty"`
 }
 
 func RegisterOutbound(registry *outbound.Registry) {
@@ -57,6 +60,8 @@ type Outbound struct {
 	sessionID      string
 	predecessor    string
 	entrySHA256    string
+	externalEntry  *mobiletor.ExternalPredecessorProof
+	externalConfig string
 	upstream       *torUpstreamCapture
 	lower          N.Dialer
 	networkCapture *torNetworkCapture
@@ -105,8 +110,11 @@ func NewOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag
 			return nil, errors.New("native Tor requires its exact captured predecessor digest and route")
 		}
 	}
+	externalEntry, externalConfig, err := captureTorExternalPredecessor(options)
+	if err != nil {
+		return nil, err
+	}
 	var plan mobiletor.Plan
-	var err error
 	if len(options.Bridges) != 0 {
 		plan, err = mobiletor.NewPlan(common.ExternalTorBridgeConfig{Transport: "custom", Bridges: append([]string(nil), options.Bridges...)})
 		if err != nil {
@@ -143,7 +151,7 @@ func NewOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag
 	}
 	h := &Outbound{Adapter: outbound.NewAdapterWithDialerOptions(Type, tag, []string{N.NetworkTCP}, options.DialerOptions),
 		ctx: owned, cancel: cancel, plan: plan, directory: directory, sessionID: options.SessionID, predecessor: options.Detour, lower: lower, resident: processResident,
-		networkCapture: networkCapture, entrySHA256: options.EntrySHA256,
+		networkCapture: networkCapture, entrySHA256: options.EntrySHA256, externalEntry: externalEntry, externalConfig: externalConfig,
 		ready: make(chan struct{}), workerDone: make(chan struct{}), closeDone: make(chan struct{})}
 	h.parentStop = context.AfterFunc(ctx, h.beginClose)
 	return h, nil

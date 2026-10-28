@@ -27,10 +27,13 @@ import (
 
 type torMTUFixtureOptions struct {
 	option.DialerOptions
-	Bridges       []string `json:"bridges"`
-	SessionID     string   `json:"session_id"`
-	ProfileSHA256 string   `json:"profile_sha256,omitempty"`
-	EntrySHA256   string   `json:"entry_sha256,omitempty"`
+	Bridges                    []string `json:"bridges"`
+	SessionID                  string   `json:"session_id"`
+	ProfileSHA256              string   `json:"profile_sha256,omitempty"`
+	EntrySHA256                string   `json:"entry_sha256,omitempty"`
+	ExternalPredecessorProfile string   `json:"external_predecessor_profile,omitempty"`
+	ExternalPredecessorConfig  string   `json:"external_predecessor_config,omitempty"`
+	ExternalTorProfile         string   `json:"external_tor_profile,omitempty"`
 }
 type torMTUFixtureOutbound struct {
 	outbound.Adapter
@@ -39,6 +42,10 @@ type torMTUFixtureOutbound struct {
 	cancel              context.CancelFunc
 	session             string
 	entrySHA            string
+	externalEntry       *mobiletor.ExternalPredecessorProof
+	externalConfig      string
+	externalProofs      atomic.Int32
+	externalFailed      atomic.Bool
 	dnsTarget           string
 	canceled            atomic.Bool
 	dnsCalls            atomic.Int32
@@ -136,8 +143,22 @@ func (o *torMTUFixtureOutbound) CancelTor(session string) {
 	}
 }
 func (o *torMTUFixtureOutbound) TorProofWithPredecessor(ctx context.Context, session string, entry *mobiletor.PredecessorProof) (mobiletor.Proof, error) {
-	if o.entrySHA != "" && entry.Fingerprint() != o.entrySHA {
+	if o.externalEntry != nil || o.entrySHA != "" && entry.Fingerprint() != o.entrySHA {
 		return mobiletor.Proof{}, errors.New("fixture circuit belongs to another captured entry")
+	}
+	return mobiletor.Proof{SessionID: session, IsTor: o.TorHealthy(session) && ctx.Err() == nil, IP: "198.51.100.7", CheckedAt: time.Now()}, nil
+}
+func (o *torMTUFixtureOutbound) TorExternalPredecessor(profile string) (*mobiletor.ExternalPredecessorProof, error) {
+	if o.externalEntry == nil || !o.externalEntry.MatchesProfile(profile) {
+		return nil, errors.New("ordinary fixture source changed")
+	}
+	return o.externalEntry, nil
+}
+func (o *torMTUFixtureOutbound) TorExternalConfig() string { return o.externalConfig }
+func (o *torMTUFixtureOutbound) TorProofWithExternalPredecessor(ctx context.Context, session string, entry *mobiletor.ExternalPredecessorProof) (mobiletor.Proof, error) {
+	o.externalProofs.Add(1)
+	if entry == nil || entry != o.externalEntry || entry.Fingerprint() != o.entrySHA || o.externalFailed.Load() {
+		return mobiletor.Proof{}, errors.New("ordinary fixture proof rejected")
 	}
 	return mobiletor.Proof{SessionID: session, IsTor: o.TorHealthy(session) && ctx.Err() == nil, IP: "198.51.100.7", CheckedAt: time.Now()}, nil
 }
@@ -168,8 +189,22 @@ func torMTUNativeConfigFixture(t *testing.T, raw string) (*box.Box, string) {
 	t.Helper()
 	registry := include.OutboundRegistry()
 	outbound.Register[torMTUFixtureOptions](registry, "routervpn-tor", func(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options torMTUFixtureOptions) (adapter.Outbound, error) {
+		var external *mobiletor.ExternalPredecessorProof
+		var config string
+		if options.ExternalPredecessorProfile != "" {
+			var err error
+			external, err = mobiletor.NewExternalPredecessorProof(options.ExternalPredecessorProfile, options.ExternalPredecessorConfig)
+			if err != nil {
+				return nil, err
+			}
+			config, err = mobiletor.CompileProfileWithExternalPredecessor(options.ExternalTorProfile, options.SessionID, options.ExternalPredecessorConfig, options.ExternalPredecessorProfile)
+			if err != nil {
+				return nil, err
+			}
+		}
 		owned, cancel := context.WithCancel(ctx)
-		return &torMTUFixtureOutbound{Adapter: outbound.NewAdapter("routervpn-tor", tag, []string{N.NetworkTCP}, nil), ctx: owned, cancel: cancel, session: options.SessionID, entrySHA: options.EntrySHA256}, nil
+		return &torMTUFixtureOutbound{Adapter: outbound.NewAdapter("routervpn-tor", tag, []string{N.NetworkTCP}, nil), ctx: owned, cancel: cancel, session: options.SessionID, entrySHA: options.EntrySHA256,
+			externalEntry: external, externalConfig: config}, nil
 	})
 	// This peer stands in for the private network beyond the encrypted entry.
 	// The shipping DNS router and UDP/TCP transport still select their own detour.
@@ -190,6 +225,132 @@ func torMTUNativeConfigFixture(t *testing.T, raw string) (*box.Box, string) {
 	}
 	t.Cleanup(func() { _ = engine.Close() })
 	return engine, raw
+}
+
+const torMTUOrdinaryEntryProfile = `{"id":"ordinary-entry","node_kind":"external","external":{"protocol":"socks5","expected_public_ip":"203.0.113.88","socks5":{"host":"198.51.100.20","port":1080,"username":"captured-user","password":"captured-provider-secret"}},"dns_mode":"custom","dns_protocol":"tcp","dns_host":"9.9.9.9","dns_port":53,"home_lan_access":false,"ipv6_mode":"off","mtu_policy":"auto"}`
+const torMTUOrdinaryEntryConfig = `{"inbounds":[{"type":"tun","tag":"tun-in","address":["172.29.91.1/30","fd29:91::1/126"],"mtu":1280,"auto_route":true,"strict_route":true}],"outbounds":[{"type":"socks","tag":"custom-exit","server":"198.51.100.20","server_port":1080,"version":"5","username":"captured-user","password":"captured-provider-secret"}],"route":{"final":"custom-exit","auto_detect_interface":true}}`
+const torMTUOrdinaryExitProfile = `{"id":"tor-exit","node_kind":"external","external":{"protocol":"tor"},"dns_mode":"custom","dns_protocol":"tcp","dns_host":"9.9.9.9","dns_port":53,"home_lan_access":false,"ipv6_mode":"off","mtu_policy":"auto","multihop_enabled":true,"multihop_entry_id":"ordinary-entry","multihop_exit_id":"tor-exit","multihop_entry_mode":"socks5","multihop_exit_mode":"tor","multihop_execution":"local"}`
+
+func torMTUOrdinaryConfig(t *testing.T) string {
+	t.Helper()
+	config, err := mobiletor.CompileProfileWithExternalPredecessor(torMTUOrdinaryExitProfile, "frozen-session", torMTUOrdinaryEntryConfig, torMTUOrdinaryEntryProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return config
+}
+
+func TestRouterTorExternalProofRejectsActualGraphChangedAfterSourceCapture(t *testing.T) {
+	for _, changed := range []string{"credentials", "resolver", "route", "mtu", "proxy-only", "missing-profile", "changed-profile"} {
+		t.Run(changed, func(t *testing.T) {
+			config := torMTUOrdinaryConfig(t)
+			var graph map[string]any
+			if err := json.Unmarshal([]byte(config), &graph); err != nil {
+				t.Fatal(err)
+			}
+			profile := torMTUOrdinaryEntryProfile
+			switch changed {
+			case "credentials":
+				for _, raw := range graph["outbounds"].([]any) {
+					out := raw.(map[string]any)
+					if out["tag"] == "custom-exit" {
+						out["password"] = "other-provider-secret"
+					}
+				}
+			case "resolver":
+				graph["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["server"] = "8.8.8.8"
+			case "route":
+				graph["route"].(map[string]any)["rules"] = []any{}
+			case "mtu":
+				graph["inbounds"].([]any)[0].(map[string]any)["mtu"] = 1400
+			case "proxy-only":
+				graph["inbounds"] = []any{map[string]any{"type": "mixed", "tag": "proxy-only", "listen": "127.0.0.1", "listen_port": 18080}}
+			case "missing-profile":
+				profile = ""
+			case "changed-profile":
+				profile = strings.Replace(profile, "captured-provider-secret", "changed-provider-secret", 1)
+			}
+			data, _ := json.Marshal(graph)
+			engine, _ := torMTUNativeConfigFixture(t, string(data))
+			proof, err := engine.RouterVPNTorCreateProof(mobiletor.ProfileOutboundTag, "frozen-session", profile)
+			if err == nil {
+				defer proof.Cancel()
+				var raw string
+				raw, err = proof.Run()
+				if raw != "" || proof.Healthy() {
+					t.Fatal("changed graph published an ordinary Tor proof")
+				}
+			}
+			if err == nil || strings.Contains(err.Error(), "secret") {
+				t.Fatal("changed graph acquired native authority or leaked credentials", err)
+			}
+			final, _ := engine.Outbound().Outbound(mobiletor.ProfileOutboundTag)
+			owned := final.(*torMTUFixtureOutbound)
+			if owned.externalProofs.Load() != 0 || owned.dnsCalls.Load() != 0 {
+				t.Fatal("rejected source reached live proof or DNS")
+			}
+		})
+	}
+}
+
+func TestRouterTorExternalProofAndMTURetainExactProviderAndSelectedDNS(t *testing.T) {
+	for _, failure := range []string{"none", "provider", "DNS"} {
+		t.Run(failure, func(t *testing.T) {
+			config := torMTUOrdinaryConfig(t)
+			engine, _ := torMTUNativeConfigFixture(t, config)
+			final, _ := engine.Outbound().Outbound(mobiletor.ProfileOutboundTag)
+			owned := final.(*torMTUFixtureOutbound)
+			owned.externalFailed.Store(failure == "provider")
+			if failure == "DNS" {
+				owned.dnsReply.Store(1)
+			}
+			proof, err := engine.RouterVPNTorCreateProof(mobiletor.ProfileOutboundTag, "frozen-session", torMTUOrdinaryEntryProfile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer proof.Cancel()
+			raw, err := proof.Run()
+			if failure != "none" {
+				if err == nil || raw != "" || proof.Healthy() || !owned.canceled.Load() {
+					t.Fatal("failed provider/DNS proof appeared connected", err)
+				}
+				if failure == "provider" && owned.dnsCalls.Load() != 0 {
+					t.Fatal("selected DNS ran before required ordinary provider proof")
+				}
+				return
+			}
+			var result mobiletor.Proof
+			if err != nil || json.Unmarshal([]byte(raw), &result) != nil || !result.DNSProven || !result.IsTor || !proof.Healthy() || owned.externalProofs.Load() != 1 || owned.dnsCalls.Load() == 0 || strings.Contains(raw, "secret") {
+				t.Fatal("exact provider or selected Tor DNS lost native proof ownership", err)
+			}
+			lease, err := engine.RouterVPNTorClaimMTU(proof, config, torMTUOrdinaryExitProfile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lease.Close()
+			if !lease.Healthy() || lease.Config() != config || !strings.Contains(lease.Authority(), `"source_kind":"tor"`) || strings.Contains(lease.Authority(), "expected_public_ip") {
+				t.Fatal("ordinary Tor MTU lost captured entry or fabricated static Tor exit identity")
+			}
+			// A retest must re-prove the retained ordinary predecessor before the
+			// system-TUN probe. The final circuit's old success is insufficient.
+			owned.externalFailed.Store(true)
+			var systemDials atomic.Int32
+			err = lease.Verify(context.Background(), func(context.Context, string, string) (net.Conn, error) {
+				systemDials.Add(1)
+				return nil, errors.New("unowned system route")
+			})
+			if err == nil || owned.externalProofs.Load() != 2 || systemDials.Load() != 0 {
+				t.Fatal("MTU retest bypassed current ordinary provider proof", err)
+			}
+			owned.externalFailed.Store(false)
+			if err := engine.Outbound().Remove("custom-exit"); err != nil {
+				t.Fatal(err)
+			}
+			if proof.Healthy() || lease.Healthy() {
+				t.Fatal("removed native predecessor retained Tor proof or MTU authority")
+			}
+		})
+	}
 }
 
 func TestRouterTorHomeDNSUsesOnlyCapturedPrivateEntry(t *testing.T) {

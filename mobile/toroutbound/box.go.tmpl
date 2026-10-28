@@ -18,6 +18,13 @@ type torProofOwner interface {
 	TorHealthy(string) bool
 }
 
+type torExternalProofOwner interface {
+	torProofOwner
+	TorExternalPredecessor(string) (*mobiletor.ExternalPredecessorProof, error)
+	TorProofWithExternalPredecessor(context.Context, string, *mobiletor.ExternalPredecessorProof) (mobiletor.Proof, error)
+	TorExternalConfig() string
+}
+
 // Full mobile preparation installs this capture hook at package initialization.
 // Standalone Tor builds retain their original proof API without importing the
 // larger TUN/measurement runtime. A full capture must prove its selected DNS
@@ -32,17 +39,19 @@ var routerVPNTorCaptureProof func(*Box) (routerVPNTorProofCapture, error)
 // RouterVPNTorProofRequest captures one Box, actual outbound and VPN session.
 // Cancel never consults a mutable host service or a replacement outbound.
 type RouterVPNTorProofRequest struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	owner       torProofOwner
-	current     func() bool
-	sessionID   string
-	predecessor *mobiletor.PredecessorProof
-	started     atomic.Bool
-	succeeded   atomic.Bool
-	canceled    atomic.Bool
-	capture     routerVPNTorProofCapture
-	server      torServerProofOwner
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	owner               torProofOwner
+	current             func() bool
+	sessionID           string
+	predecessor         *mobiletor.PredecessorProof
+	externalPredecessor *mobiletor.ExternalPredecessorProof
+	externalOwner       torExternalProofOwner
+	started             atomic.Bool
+	succeeded           atomic.Bool
+	canceled            atomic.Bool
+	capture             routerVPNTorProofCapture
+	server              torServerProofOwner
 }
 
 func (s *Box) RouterVPNTorCreateProof(outboundTag, sessionID, predecessorJSON string) (*RouterVPNTorProofRequest, error) {
@@ -73,7 +82,22 @@ func (s *Box) RouterVPNTorCreateProof(outboundTag, sessionID, predecessorJSON st
 		request.Cancel()
 		return nil, err
 	}
+	if err := request.bindExternal(); err != nil {
+		request.Cancel()
+		return nil, err
+	}
 	return request, nil
+}
+
+func (r *RouterVPNTorProofRequest) bindExternal() error {
+	if r.externalPredecessor == nil {
+		return nil
+	}
+	capture, captured := r.capture.(torServerProofCapture)
+	if r.externalOwner == nil || !captured || capture == nil || !capture.ServerGraph(r.externalOwner.TorExternalConfig()) || !capture.EntryCurrent() {
+		return errors.New("Tor ordinary path requires its complete source-bound native TUN and selected DNS")
+	}
+	return nil
 }
 
 func newRouterTorProofRequest(ctx context.Context, outbound adapter.Outbound, sessionID, predecessorJSON string, current func() bool) (*RouterVPNTorProofRequest, error) {
@@ -82,15 +106,36 @@ func newRouterTorProofRequest(ctx context.Context, outbound adapter.Outbound, se
 		return nil, errors.New("native Tor proof does not belong to this VPN session")
 	}
 	var predecessor *mobiletor.PredecessorProof
+	var externalPredecessor *mobiletor.ExternalPredecessorProof
+	var externalOwner torExternalProofOwner
 	if predecessorJSON != "" {
 		var err error
 		predecessor, err = mobiletor.NewPredecessorProof(predecessorJSON)
 		if err != nil {
-			return nil, err
+			var supported bool
+			externalOwner, supported = owner.(torExternalProofOwner)
+			if !supported || outbound.Type() != "routervpn-tor" {
+				return nil, err
+			}
+			externalPredecessor, err = externalOwner.TorExternalPredecessor(predecessorJSON)
+			if err != nil || externalPredecessor == nil || !externalPredecessor.MatchesProfile(predecessorJSON) {
+				return nil, errors.New("native Tor ordinary proof lost its exact captured source")
+			}
 		}
 	}
 	owned, cancel := context.WithCancel(ctx)
-	return &RouterVPNTorProofRequest{ctx: owned, cancel: cancel, owner: owner, current: current, sessionID: sessionID, predecessor: predecessor}, nil
+	return &RouterVPNTorProofRequest{ctx: owned, cancel: cancel, owner: owner, current: current, sessionID: sessionID, predecessor: predecessor,
+		externalPredecessor: externalPredecessor, externalOwner: externalOwner}, nil
+}
+
+func (r *RouterVPNTorProofRequest) prove(ctx context.Context) (mobiletor.Proof, error) {
+	if r.externalPredecessor != nil {
+		if r.predecessor != nil || r.externalOwner == nil {
+			return mobiletor.Proof{}, errors.New("native Tor mixed private and ordinary predecessor authority")
+		}
+		return r.externalOwner.TorProofWithExternalPredecessor(ctx, r.sessionID, r.externalPredecessor)
+	}
+	return r.owner.TorProofWithPredecessor(ctx, r.sessionID, r.predecessor)
 }
 
 func (r *RouterVPNTorProofRequest) Run() (result string, failure error) {
@@ -107,7 +152,7 @@ func (r *RouterVPNTorProofRequest) Run() (result string, failure error) {
 	}
 	ctx, cancel := context.WithTimeout(r.ctx, 3*time.Minute)
 	defer cancel()
-	proof, err := r.owner.TorProofWithPredecessor(ctx, r.sessionID, r.predecessor)
+	proof, err := r.prove(ctx)
 	if err != nil {
 		return "", err
 	}

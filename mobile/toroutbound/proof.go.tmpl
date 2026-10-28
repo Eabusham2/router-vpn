@@ -20,10 +20,39 @@ func (h *Outbound) CancelTor(sessionID string) {
 }
 
 func (h *Outbound) TorProofWithPredecessor(ctx context.Context, sessionID string, predecessor *mobiletor.PredecessorProof) (proof mobiletor.Proof, failure error) {
+	if h.externalEntry != nil {
+		return proof, errors.New("native Tor ordinary predecessor cannot use private Router proof")
+	}
+	if predecessor == nil {
+		return h.torProofWithEntry(ctx, sessionID, "", nil)
+	}
+	return h.torProofWithEntry(ctx, sessionID, predecessor.Fingerprint(), predecessor.Prove)
+}
+
+// TorExternalPredecessor returns only the native constructor's immutable owner.
+// A host-supplied provider profile cannot select another graph or mint private
+// Router authority. Both ordinary and Tor exits still require live proof.
+func (h *Outbound) TorExternalPredecessor(profileJSON string) (*mobiletor.ExternalPredecessorProof, error) {
+	if h.externalEntry == nil || !h.externalEntry.MatchesProfile(profileJSON) || h.externalEntry.Fingerprint() != h.entrySHA256 {
+		return nil, errors.New("native Tor ordinary predecessor source changed")
+	}
+	return h.externalEntry, nil
+}
+
+func (h *Outbound) TorExternalConfig() string { return h.externalConfig }
+
+func (h *Outbound) TorProofWithExternalPredecessor(ctx context.Context, sessionID string, predecessor *mobiletor.ExternalPredecessorProof) (mobiletor.Proof, error) {
+	if predecessor == nil || predecessor != h.externalEntry || predecessor.Fingerprint() != h.entrySHA256 {
+		return mobiletor.Proof{}, errors.New("native Tor ordinary proof belongs to another captured provider")
+	}
+	return h.torProofWithEntry(ctx, sessionID, predecessor.Fingerprint(), predecessor.Prove)
+}
+
+func (h *Outbound) torProofWithEntry(ctx context.Context, sessionID, fingerprint string, prove func(context.Context, mobiletor.DialContext) error) (proof mobiletor.Proof, failure error) {
 	if ctx == nil || sessionID == "" || sessionID != h.sessionID {
 		return proof, errors.New("native Tor proof belongs to another VPN session")
 	}
-	if h.entrySHA256 != "" && (predecessor == nil || predecessor.Fingerprint() != h.entrySHA256) {
+	if h.entrySHA256 != "" && (prove == nil || fingerprint != h.entrySHA256) {
 		return proof, errors.New("native Tor proof does not match its captured predecessor")
 	}
 	h.mu.Lock()
@@ -31,7 +60,7 @@ func (h *Outbound) TorProofWithPredecessor(ctx context.Context, sessionID string
 		h.mu.Unlock()
 		return proof, net.ErrClosed
 	}
-	if predecessor != nil && (h.predecessor == "" || h.upstream == nil) {
+	if prove != nil && (h.predecessor == "" || h.upstream == nil) {
 		h.mu.Unlock()
 		return proof, errors.New("native Tor has no captured predecessor to prove")
 	}
@@ -41,7 +70,7 @@ func (h *Outbound) TorProofWithPredecessor(ctx context.Context, sessionID string
 	if err := h.upstream.current(); err != nil {
 		return proof, err
 	}
-	if predecessor != nil {
+	if prove != nil {
 		network, err := mobiletor.NewNetwork(h.ctx, h.protectedDial, nil)
 		if err != nil {
 			return proof, err
@@ -58,7 +87,7 @@ func (h *Outbound) TorProofWithPredecessor(ctx context.Context, sessionID string
 				h.fail(failure)
 			}
 		}()
-		if err := predecessor.Prove(ctx, network.DialContext); err != nil {
+		if err := prove(ctx, network.DialContext); err != nil {
 			return proof, err
 		}
 		if err := h.upstream.current(); err != nil {

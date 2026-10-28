@@ -116,10 +116,22 @@ func MTUAuthority(config, profileJSON, sessionID string) (string, error) {
 // successful native proof. An inherited Jumbo or Fixed interface remains owned
 // by that entry without rewriting the saved exit's Auto/Default preference.
 func MTUAuthorityWithPredecessor(config, profileJSON, sessionID string, predecessor *PredecessorProof) (string, error) {
+	if predecessor == nil {
+		return torMTUAuthority(config, profileJSON, sessionID, nil, true)
+	}
 	return torMTUAuthority(config, profileJSON, sessionID, predecessor, true)
 }
 
-func torMTUAuthority(config, profileJSON, sessionID string, predecessor *PredecessorProof, captured bool) (string, error) {
+// MTUAuthorityWithExternalPredecessor binds the same single interface to an
+// already-proved ordinary provider without manufacturing private Router proof.
+func MTUAuthorityWithExternalPredecessor(config, profileJSON, sessionID string, predecessor *ExternalPredecessorProof) (string, error) {
+	if predecessor == nil {
+		return "", errors.New("Tor ordinary MTU requires its proved captured predecessor")
+	}
+	return torMTUAuthority(config, profileJSON, sessionID, predecessor, true)
+}
+
+func torMTUAuthority(config, profileJSON, sessionID string, predecessor capturedTorEntryProof, captured bool) (string, error) {
 	profile, err := profileObject(profileJSON, 256<<10)
 	if err != nil || profile["node_kind"] != "external" || !profileIdentifier.MatchString(profileString(profile, "id")) {
 		return "", errors.New("Tor MTU requires the captured external profile")
@@ -175,13 +187,13 @@ func torMTUAuthority(config, profileJSON, sessionID string, predecessor *Predece
 			continue
 		}
 		if predecessor != nil {
-			if !captured || profile["multihop_enabled"] != true || profile["multihop_entry_id"] != predecessor.id ||
+			if !captured || profile["multihop_enabled"] != true || profile["multihop_entry_id"] != predecessor.capturedID() ||
 				profile["multihop_exit_id"] != profile["id"] || profile["multihop_exit_mode"] != external["protocol"] ||
 				(profileString(profile, "multihop_execution") != "" && profileString(profile, "multihop_execution") != "local") ||
 				!profileIdentifier.MatchString(profileString(outbound, "detour")) || outbound["entry_sha256"] != predecessor.Fingerprint() {
 				return "", errors.New("Tor MTU predecessor differs from its proved captured entry")
 			}
-			entry = predecessor.mtu
+			entry = predecessor.capturedMTU()
 		} else if captured && (profile["multihop_enabled"] == true || profileString(outbound, "detour") != "" || outbound["entry_sha256"] != nil) {
 			return "", errors.New("Tor MTU requires its proved captured predecessor")
 		}

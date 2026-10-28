@@ -32,7 +32,7 @@ func SelectDesktopBridgeDNS(source, entryJSON string, idle bool) (DesktopBridgeD
 			// manufacturing a Router proof. Connect separately captures and
 			// recompiles the full native graph before proving this provider.
 			var protocol string
-			entry, protocol, _, err = desktopExternalPredecessorProfile(entryJSON)
+			entry, protocol, _, err = externalPredecessorProfile(entryJSON)
 			if err != nil || profile["multihop_entry_mode"] != protocol {
 				return DesktopBridgeDNS{}, errors.New("Tor DNS requires its exact ordinary predecessor protocol and public identity")
 			}

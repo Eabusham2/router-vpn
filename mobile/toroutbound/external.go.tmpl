@@ -1,0 +1,30 @@
+package routervpntor
+
+import (
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// The constructor reconstructs ordinary transport authority from original
+// source. A later proof request can retain this owner; it cannot replace its
+// credentials, DNS, selected protocol, MTU, or exit with a mutable host profile.
+func captureTorExternalPredecessor(options Options) (*mobiletor.ExternalPredecessorProof, string, error) {
+	if options.ExternalPredecessorProfile == "" && options.ExternalPredecessorConfig == "" && options.ExternalTorProfile == "" {
+		return nil, "", nil
+	}
+	entry, err := mobiletor.NewExternalPredecessorProof(options.ExternalPredecessorProfile, options.ExternalPredecessorConfig)
+	if err != nil || entry.Fingerprint() != options.EntrySHA256 || options.Detour != mobilemultihop.ExternalFinalTag {
+		return nil, "", errors.New("native Tor ordinary predecessor differs from its captured source and route")
+	}
+	digest, err := mobiletor.ExternalProfileDigest(options.ExternalTorProfile)
+	if err != nil || digest != options.ProfileSHA256 {
+		return nil, "", errors.New("native Tor ordinary path differs from its captured exit policy")
+	}
+	config, err := mobiletor.CompileProfileWithExternalPredecessor(options.ExternalTorProfile, options.SessionID, options.ExternalPredecessorConfig, options.ExternalPredecessorProfile)
+	if err != nil {
+		return nil, "", err
+	}
+	return entry, config, nil
+}
