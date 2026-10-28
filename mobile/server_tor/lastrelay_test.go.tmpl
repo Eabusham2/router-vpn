@@ -1,0 +1,23 @@
+package main
+
+import (
+	"strconv"
+	"strings"
+	"testing"
+)
+
+func TestServerTorComparisonDestinationHasNoOrdinaryDNSFallback(t *testing.T) {
+	token := "1." + strings.Repeat("a", 32) + "." + strings.Repeat("b", 32) + ".lastrelay.routervpn.invalid:1"
+	for _, address := range []string{"1.1.1.1:443", "1.0.0.1:443", token, strings.Replace(token, "1.", strconv.FormatUint(1<<63-1, 10)+".", 1)} {
+		if !routerVPNServerComparisonDestination(address) {
+			t.Fatal("captured numeric target or canonical token rejected", address)
+		}
+	}
+	for _, address := range []string{"example.com:443", "1.1.1.1:80", "9.9.9.9:443", "127.0.0.1:443", "lastrelay.routervpn.invalid:1",
+		strings.Replace(token, "1.", "0.", 1), strings.Replace(token, "1.", "01.", 1), strings.Replace(token, "1.", "9223372036854775808.", 1), strings.Replace(token, "aaaa", "AAAA", 1),
+		strings.Replace(token, ".invalid:1", ".invalid.:1", 1), strings.Replace(token, ".invalid:1", ".invalid:443", 1), strings.Replace(token, ".routervpn.", ".other.", 1), token + "\r\nCONNECT example.com:443"} {
+		if routerVPNServerComparisonDestination(address) {
+			t.Fatal("unowned destination reached reserved final dial", address)
+		}
+	}
+}

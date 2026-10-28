@@ -49,6 +49,9 @@ type ServerTorClient struct {
 	started       time.Time
 	padding       *multihoprelay.TorPaddingReceipt
 	paddingExpiry *time.Timer
+	dial          DialContext
+	comparison    *ServerTorComparison
+	stoppedOwner  string
 }
 
 func NewServerTorClient(parent context.Context, policy *ServerTorPolicy, entry *PredecessorProof, session string, dial DialContext, current func() bool) (*ServerTorClient, error) {
@@ -56,7 +59,7 @@ func NewServerTorClient(parent context.Context, policy *ServerTorPolicy, entry *
 		return nil, errServerTorClient
 	}
 	ctx, cancel := context.WithCancel(parent)
-	c := &ServerTorClient{ctx: ctx, cancel: cancel, entry: entry, policy: policy, session: session, current: current, operation: make(chan struct{}, 1)}
+	c := &ServerTorClient{ctx: ctx, cancel: cancel, entry: entry, policy: policy, session: session, current: current, dial: dial, operation: make(chan struct{}, 1)}
 	// Cleanup keeps this exact entry alive until DELETE is acknowledged. User
 	// cancellation closes data immediately but cannot cancel its own cleanup.
 	control, err := NewNetwork(context.WithoutCancel(parent), func(ctx context.Context, network, address string) (net.Conn, error) {
@@ -401,11 +404,15 @@ func (c *ServerTorClient) Close(ctx context.Context) error {
 	}
 	c.mu.Lock()
 	c.closing, c.ready = true, false
+	comparison := c.comparison
 	if c.paddingExpiry != nil {
 		c.paddingExpiry.Stop()
 	}
 	c.mu.Unlock()
 	c.cancel()
+	if comparison != nil {
+		comparison.Cancel()
+	}
 	if err := c.data.Close(ctx); err != nil {
 		return err
 	}
@@ -430,7 +437,16 @@ func (c *ServerTorClient) Close(ctx context.Context) error {
 		}
 		c.mu.Lock()
 		c.attempt = false
+		c.stoppedOwner = c.lease.OwnerID
 		c.mu.Unlock()
+	}
+	// Measurement CLOSE can require the exact native join after an ambiguous
+	// control reply. DELETE must be allowed to establish that witness first;
+	// otherwise candidate stop and measurement cleanup would wait on each other.
+	if comparison != nil {
+		if err := comparison.Close(ctx); err != nil {
+			return err
+		}
 	}
 	return c.control.Close(ctx)
 }

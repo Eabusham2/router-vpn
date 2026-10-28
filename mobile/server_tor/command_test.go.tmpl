@@ -191,7 +191,8 @@ func serverTorNativePendingChild(t *testing.T, padding bool) {
 		t.Fatal(err)
 	}
 	native := owner.(*routerVPNServerTor)
-	if len(native.box.Inbound().Inbounds()) != 0 || native.child.Session().Current() || native.padding != nil || native.data == nil || native.data.ready() {
+	if len(native.box.Inbound().Inbounds()) != 0 || native.child.Session().Current() || native.padding != nil || native.data == nil || native.data.ready() ||
+		native.comparison == nil || native.comparisonData == nil || native.comparisonData.ready() || native.child.Joined() {
 		t.Fatal("pending native worker started a TUN or enabled Tor networking")
 	}
 	if padding && (native.paddingHealthy() || !native.paddingProofUntil().IsZero()) {
@@ -202,6 +203,11 @@ func serverTorNativePendingChild(t *testing.T, padding bool) {
 	if connection, err := native.trafficDial(ctx, "tcp", "198.51.100.21:443"); err == nil || connection != nil {
 		t.Fatal("unproved actual native Server worker admitted application data")
 	}
+	for _, address := range []string{"1.1.1.1:443", "1." + strings.Repeat("a", 32) + "." + strings.Repeat("b", 32) + ".lastrelay.routervpn.invalid:1"} {
+		if connection, err := native.comparisonFinalDial(ctx, "tcp", address); err == nil || connection != nil {
+			t.Fatal("unproved actual native child admitted comparison bytes")
+		}
+	}
 	// A receipt-shaped value cannot turn the actual disabled child into a data
 	// owner, including when cover is Off. Restore the untouched pending proof
 	// before the ordinary negative bootstrap/receipt checks below.
@@ -209,7 +215,7 @@ func serverTorNativePendingChild(t *testing.T, padding bool) {
 	before := native.proof
 	native.proof = mobiletor.Proof{SessionID: c.Request.SessionID, IsTor: true, DNSProven: true, CheckedAt: time.Now()}
 	native.mu.Unlock()
-	if native.trafficCurrent() || !native.trafficUntil().IsZero() || native.data.Begin() == nil {
+	if native.trafficCurrent() || !native.trafficUntil().IsZero() || native.data.Begin() == nil || native.comparisonCurrent() || native.comparisonData.Begin() == nil {
 		t.Fatal("disabled real native child borrowed a fabricated proof for data admission")
 	}
 	native.mu.Lock()

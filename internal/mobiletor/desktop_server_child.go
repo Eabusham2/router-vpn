@@ -165,6 +165,22 @@ func (p *ServerTorChild) Alive() bool {
 		return true
 	}
 }
+
+// Joined is an independent witness for ambiguous measurement-control cleanup.
+// The signal closes only after this exact foreground child's Cmd.Wait returns;
+// a closed front, lost control socket or merely expired lease is insufficient.
+func (p *ServerTorChild) Joined() bool {
+	if p == nil || p.command == nil || p.done == nil {
+		return false
+	}
+	select {
+	case <-p.done:
+		return p.command.Process != nil && p.command.Process.Pid > 0 && p.command.ProcessState != nil &&
+			p.command.ProcessState.Pid() == p.command.Process.Pid
+	default:
+		return false
+	}
+}
 func (p *ServerTorChild) Session() *ServerTorSession { return p.session }
 func (p *ServerTorChild) Verify(ctx context.Context) error {
 	if p == nil || ctx == nil || ctx.Err() != nil || !p.Alive() || !p.currentFiles() || p.control == nil {

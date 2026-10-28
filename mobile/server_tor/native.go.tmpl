@@ -37,12 +37,16 @@ type routerVPNServerTor struct {
 	final                        adapter.Outbound
 	proofNetwork                 *mobiletor.Network
 	data                         *routerVPNServerTorData
+	comparison                   *mobiletor.ServerTorLastRelay
+	comparisonData               *routerVPNServerTorData
 	mu                           sync.Mutex
 	started                      bool
 	closing                      bool
 	boxClosed                    bool
 	boxCloseError                error
 	proof                        mobiletor.Proof
+	dnsProofAt                   time.Time
+	proofGate                    chan struct{}
 	sequence                     uint64
 	done                         chan struct{}
 	expiry                       *time.Timer
@@ -85,7 +89,7 @@ func routerVPNNewServerTorWithBinary(parent context.Context, root *os.Root, dire
 	}
 	owned, cancel := context.WithCancel(service.ContextWithDefaultRegistry(service.ExtendContext(globalCtx)))
 	context.AfterFunc(parent, cancel)
-	n := &routerVPNServerTor{ctx: owned, cancel: cancel, root: root, capture: capture, policy: policy, done: make(chan struct{}), closeGate: make(chan struct{}, 1)}
+	n := &routerVPNServerTor{ctx: owned, cancel: cancel, root: root, capture: capture, policy: policy, done: make(chan struct{}), closeGate: make(chan struct{}, 1), proofGate: make(chan struct{}, 1)}
 	result = n
 	stage = "isolated SOCKS reservation"
 	initialize, finish := context.WithTimeout(owned, 7*time.Second)
@@ -163,6 +167,10 @@ func routerVPNNewServerTorWithBinary(parent context.Context, root *os.Root, dire
 	if err != nil || initialize.Err() != nil || !n.baseCurrent() {
 		return result, bad
 	}
+	stage = "captured last-relay comparison front"
+	if err = n.prepareComparison(); err != nil {
+		return result, bad
+	}
 	return result, nil
 }
 func (n *routerVPNServerTor) baseCurrent() bool {
@@ -204,7 +212,7 @@ func (n *routerVPNServerTor) run() {
 		n.cancel()
 		return
 	}
-	if err := n.startPadding(initial); err != nil || !n.current() || n.data.Begin() != nil || n.front.Enable() != nil {
+	if err := n.startPadding(initial); err != nil || !n.current() || n.data.Begin() != nil || n.comparisonData.Begin() != nil || n.front.Enable() != nil {
 		finish()
 		n.cancel()
 		return
@@ -236,6 +244,12 @@ func (n *routerVPNServerTor) prove(parent context.Context) error {
 	bad := errors.New("server Tor selected path did not prove")
 	ctx, cancel := context.WithTimeout(parent, 25*time.Second)
 	defer cancel()
+	select {
+	case n.proofGate <- struct{}{}:
+		defer func() { <-n.proofGate }()
+	case <-ctx.Done():
+		return bad
+	}
 	if !n.current() || !n.child.Session().Current() || n.box.RouterVPNServerTorDNSProof(ctx) != nil {
 		return bad
 	}
@@ -258,6 +272,7 @@ func (n *routerVPNServerTor) prove(parent context.Context) error {
 		n.expiry.Stop()
 	}
 	n.proof = proof
+	n.dnsProofAt = dnsAt
 	n.paddingUntil = dnsAt.Add(30 * time.Second)
 	if expiry := proof.CheckedAt.Add(30 * time.Second); expiry.Before(n.paddingUntil) {
 		n.paddingUntil = expiry
@@ -426,6 +441,9 @@ func (n *routerVPNServerTor) Close(ctx context.Context) error {
 	if padding != nil {
 		padding.Cancel()
 	}
+	if n.comparison != nil {
+		n.comparison.Cancel()
+	}
 	if n.closeGate != nil {
 		select {
 		case n.closeGate <- struct{}{}:
@@ -441,6 +459,11 @@ func (n *routerVPNServerTor) Close(ctx context.Context) error {
 	}
 	if n.data != nil {
 		if err := n.data.Close(ctx); err != nil {
+			return err
+		}
+	}
+	if n.comparisonData != nil {
+		if err := n.comparisonData.Close(ctx); err != nil {
 			return err
 		}
 	}
@@ -464,6 +487,13 @@ func (n *routerVPNServerTor) Close(ctx context.Context) error {
 			_ = padding.Close(ctx)
 		}
 		if err := n.child.Close(ctx); err != nil {
+			return err
+		}
+	}
+	// The exact child join discharges an ambiguous issued native frame. Do
+	// not demand that acknowledgment before stopping the child that supplies it.
+	if n.comparison != nil {
+		if err := n.comparison.Close(ctx); err != nil {
 			return err
 		}
 	}

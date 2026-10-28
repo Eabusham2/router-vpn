@@ -27,7 +27,7 @@ connection. A relay that cannot serve it rejects the stream; it receives no
 measurement or score. The client must validate the bounded complete HTTP
 response and EOF.
 
-The future candidate driver retains the chosen external TCP/TLS connection
+The candidate handle retains the chosen external TCP/TLS connection
 before measuring. It measures the last-relay HTTP request and, separately, one
 external HTTP request through that same captured circuit. Both clocks belong to
 the client and run from request transmission through complete valid response.
@@ -36,6 +36,62 @@ elapsed time cannot replace either operand. The user's formula remains
 `(last_node_response_time + external_server_response_time) / 2`.
 
 Protocol reference: [Tor opening streams specification](https://spec.torproject.org/tor-spec/opening-streams.html).
+
+## Authenticated Server candidate
+
+`ServerTorClient.OpenLastRelay` implements the common captured comparison
+handle for Server execution. The shipping Server outbound on desktop and
+mobile delegates only after its full native Box, private entry, selected DNS,
+and existing Tor lease have been proved. The full client Box source identity
+and the authenticated Server policy source remain separate captured values.
+
+The no-TUN Server worker installs a private comparison handler on its existing
+exact-peer, authenticated lease front. This uses a distinct SOCKS command
+(`0xf0`), never an ordinary CONNECT to a magic hostname. Ordinary CONNECT to
+the reserved namespace is rejected independently by the front. A missing
+handler, invalid private operation, or expired capability has no DNS or normal
+outbound fallback.
+
+The private protocol has bounded, strictly parsed request/response frames for
+open, control, probe, verify, and close. Every frame names the immutable lease,
+source, registry, DNS policy, handle, selected target, and a fresh one-use
+challenge. Only the two approved numeric HTTPS comparison endpoints can be
+selected. The Server opens that actual Tor SOCKS connection and derives its
+native ANCHOR using the connection's real local socket address and the owned
+SOCKS isolation. The resulting circuit and relay path remain fixed across both
+operands; verification rejects a replacement stream or path.
+
+After admission, the open stream carries end-to-end TLS and HTTP bytes to the
+client. The separate probe stream carries the actual relay-local HTTP request
+and response. The client validates the external TLS identity, complete HTTP
+responses, native identities, and exact probe byte counts. It measures each
+HTTP request through its own complete valid response. No Server control-frame
+timestamp or Server-local duration enters either score.
+
+Both the client and the native Server require fresh selected-DNS and Tor path
+proof. Their captured proof lifetime is at most 30 seconds; the independent
+native one-use probe grant remains at most 10 seconds. The Server's ordinary
+data-expiry owner also gates the measurement socket's entered reads and writes,
+including when a control request is still finishing. Control forwarding allows
+only INFO, CAPTURE, STATUS, and CLOSE for this exact retained anchor. It cannot
+select a different native controller or forward general Tor commands.
+
+Measurement Close retains issued control work, entered socket I/O, the native
+probe, and its external anchor until their actual cleanup is acknowledged. It
+does not stop the entire candidate on success. An ambiguous native response
+keeps ownership pending. Whole-candidate teardown can still send the exact
+authenticated lease DELETE, join the actual Server child, and retry comparison
+cleanup using that independently verified stop acknowledgment. A closed socket,
+expired wait, or a replacement owner's stop is insufficient.
+
+The executable tests exercise real loopback front authentication, TLS and HTTP
+byte transfer, target and ownership rejection, nonce reuse, pending-command
+cancellation, independent expiry, and retained I/O cleanup. Their native reply
+fixture is deliberately separate from the actual pinned C test suite below.
+The generated Server worker tests also start the verified client-only Tor
+binary with networking disabled and check that neither an invented proof nor
+a private probe token can enable unproved traffic. These tests do not establish
+physical-device, off-LAN, or public Tor network acceptance.
 
 ## Native ownership
 

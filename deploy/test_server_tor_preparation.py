@@ -28,6 +28,10 @@ class ServerTorPreparation(unittest.TestCase):
         self.assertIn('cmd/sing-box/routervpn_server_tor_padding.go',content)
         self.assertIn('cmd/sing-box/routervpn_server_tor_data.go',content)
         self.assertIn('cmd/sing-box/routervpn_server_tor_data_test.go',content)
+        self.assertIn('cmd/sing-box/routervpn_server_tor_lastrelay.go',content)
+        self.assertIn('cmd/sing-box/routervpn_server_tor_lastrelay_test.go',content)
+        self.assertIn('routervpn/mobiletor/desktop_server_lastrelay.go',content)
+        self.assertIn('routervpn/mobiletor/server_lastrelay_client.go',content)
         self.assertIn('routervpn/mobiletor/desktop_server_padding.go',content)
         self.assertIn('routervpn/mobiletor/padding_lease.go',content)
         self.assertIn('routervpn/servertor/network_owner.go',content)
@@ -56,6 +60,18 @@ class ServerTorPreparation(unittest.TestCase):
                      'receipt.SessionSHA256 != n.capture.OwnerID',
                      'string(raw) == n.policy.Source()'):
             self.assertIn(gate,cover)
+
+    def test_comparison_uses_exact_native_front_and_no_dns_token_fallback(self):
+        native=(ROOT/'mobile/server_tor/native.go.tmpl').read_text()
+        comparison=(ROOT/'mobile/server_tor/lastrelay.go.tmpl').read_text()
+        for gate in ('n.prepareComparison()', 'n.comparisonData.Begin()', 'n.comparisonData.Close(ctx)',
+                     'n.comparison.Close(ctx)', 'n.dnsProofAt = dnsAt', 'n.proofGate <- struct{}{}'):
+            self.assertIn(gate,native)
+        self.assertLess(native.index('n.child.Close(ctx)'),native.index('n.comparison.Close(ctx)'))
+        for gate in ('mobiletor.NewServerTorLastRelay(', 'n.front.SetComparison(', 'NativeJoined: n.child.Joined',
+                     'n.comparisonData.DialContext', 'n.final.DialContext(', 'string(raw) == n.policy.Source()'):
+            self.assertIn(gate,comparison)
+        self.assertNotIn('n.dns.Lookup(',comparison)
 
 
 if __name__=='__main__':unittest.main()

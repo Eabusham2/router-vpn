@@ -148,6 +148,20 @@ func (o *ServerTorOutbound) Current() bool {
 	client := o.captured()
 	return client != nil && client.Current()
 }
+
+// The complete native Box supplies its own immutable source and DNS witness;
+// the client separately derives authenticated Server source/lease identities.
+func (o *ServerTorOutbound) TorCreateComparison(ctx context.Context, capture mobiletor.ComparisonCapture, target string) (mobiletor.Comparison, error) {
+	client := o.captured()
+	meta := o.Metadata()
+	if ctx == nil || ctx.Err() != nil || client == nil || capture.Current == nil || capture.DNSProof == nil ||
+		capture.SessionID != meta.SessionID || capture.SourceSHA256 != meta.SourceSHA256 || !capture.Current() || !o.dataCurrent() {
+		return nil, errors.New("Tor Server comparison lost its exact native Box and selected-DNS owner")
+	}
+	current := capture.Current
+	capture.Current = func() bool { return o.captured() == client && o.dataCurrent() && current() }
+	return client.OpenLastRelay(ctx, capture, target)
+}
 func (o *ServerTorOutbound) ProvePredecessor(ctx context.Context) (*mobiletor.DesktopBridgeEntryProof, error) {
 	client := o.captured()
 	if client == nil {

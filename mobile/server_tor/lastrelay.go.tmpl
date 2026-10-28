@@ -1,0 +1,90 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"net"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+func (n *routerVPNServerTor) prepareComparison() error {
+	var err error
+	n.comparisonData, err = newRouterVPNServerTorData(n.ctx, n.comparisonCurrent, n.trafficUntil, n.comparisonFinalDial, n.cancel)
+	if err != nil {
+		return err
+	}
+	n.comparison, err = mobiletor.NewServerTorLastRelay(n.ctx, n.child.Session(), n.capture, mobiletor.ServerTorLastRelayOptions{
+		Dial: n.comparisonData.DialContext, Current: n.comparisonCurrent, Prove: n.comparisonProof, NativeJoined: n.child.Joined,
+		SOCKSUsername: n.socksUsername, SOCKSPassword: n.socksPassword,
+	})
+	if err != nil {
+		return err
+	}
+	return n.front.SetComparison(n.comparison)
+}
+
+func (n *routerVPNServerTor) comparisonCurrent() bool {
+	if n == nil || n.root == nil || !n.trafficCurrent() {
+		return false
+	}
+	raw, err := routerVPNServerTorRead(n.root, "tor-source.json", 64<<10)
+	return err == nil && string(raw) == n.policy.Source()
+}
+
+func (n *routerVPNServerTor) comparisonProof(ctx context.Context) (time.Time, time.Time, error) {
+	if !n.comparisonCurrent() || n.prove(ctx) != nil || !n.comparisonCurrent() {
+		return time.Time{}, time.Time{}, errors.New("server comparison lost selected-DNS or path proof")
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.proof.CheckedAt, n.dnsProofAt, nil
+}
+
+// Only this private measurement owner can call the reserved name directly on
+// the captured final Tor SOCKS object. Ordinary client/proof names continue to
+// use finalDial's selected-DNS router. The C extension separately proves the
+// one-use token, exact native isolation, anchor, circuit and absolute expiry.
+func (n *routerVPNServerTor) comparisonFinalDial(ctx context.Context, network, address string) (net.Conn, error) {
+	if ctx == nil || ctx.Err() != nil || network != "tcp" || !n.comparisonCurrent() || !routerVPNServerComparisonDestination(address) {
+		return nil, net.ErrClosed
+	}
+	connection, err := n.final.DialContext(ctx, "tcp", M.ParseSocksaddr(address))
+	if !n.comparisonCurrent() || ctx.Err() != nil {
+		return connection, net.ErrClosed
+	}
+	return connection, err
+}
+
+func routerVPNServerComparisonDestination(address string) bool {
+	if address == "1.1.1.1:443" || address == "1.0.0.1:443" {
+		return true
+	}
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || port != "1" {
+		return false
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) != 6 || parts[3] != "lastrelay" || parts[4] != "routervpn" || parts[5] != "invalid" {
+		return false
+	}
+	generation, err := strconv.ParseUint(parts[0], 10, 63)
+	if err != nil || generation == 0 || strconv.FormatUint(generation, 10) != parts[0] {
+		return false
+	}
+	for _, part := range parts[1:3] {
+		if len(part) != 32 {
+			return false
+		}
+		for _, c := range part {
+			if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+				return false
+			}
+		}
+	}
+	return true
+}

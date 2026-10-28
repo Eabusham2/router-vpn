@@ -1,0 +1,32 @@
+package routervpntor
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func (o *ServerOutbound) TorCreateComparison(ctx context.Context, capture mobiletor.ComparisonCapture, target string) (mobiletor.Comparison, error) {
+	if o == nil || ctx == nil || ctx.Err() != nil || capture.Current == nil || capture.DNSProof == nil || capture.SessionID != o.policy.SessionID() || !o.TorHealthy(capture.SessionID) || !capture.Current() {
+		return nil, errors.New("Tor Server comparison requires its exact native Box and selected-DNS owner")
+	}
+	// bindServer already compared policy.Config() through the actual native
+	// ServerGraph canonicalization and retained that full Box in dataCurrent.
+	// The Box's normalized source hash is intentionally distinct from both
+	// raw compiler JSON and the private Server policy/registry source hash.
+	o.mu.Lock()
+	client := o.client
+	o.mu.Unlock()
+	if client == nil {
+		return nil, errors.New("Tor Server comparison has no retained private lease")
+	}
+	current := capture.Current
+	capture.Current = func() bool {
+		o.mu.Lock()
+		same := o.client == client
+		o.mu.Unlock()
+		return same && o.TorHealthy(capture.SessionID) && current()
+	}
+	return client.OpenLastRelay(ctx, capture, target)
+}

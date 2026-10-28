@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"os"
+	"os/exec"
 	"sync"
 	"testing"
 	"time"
@@ -38,7 +39,7 @@ func TestServerTorRealChildStartsDisabledAndConcurrentVerifyClose(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !child.Alive() || child.Session().Current() || child.Verify(ctx) != nil {
+	if !child.Alive() || child.Joined() || child.Session().Current() || child.Verify(ctx) != nil {
 		t.Fatal("actual standalone Tor lost its disabled authenticated owner")
 	}
 	var workers sync.WaitGroup
@@ -55,7 +56,17 @@ func TestServerTorRealChildStartsDisabledAndConcurrentVerifyClose(t *testing.T) 
 		t.Fatal(err)
 	}
 	workers.Wait()
-	if child.Alive() || child.Verify(ctx) == nil {
+	if child.Alive() || !child.Joined() || child.Verify(ctx) == nil {
 		t.Fatal("closed standalone child was reused")
+	}
+}
+
+func TestServerTorChildJoinRequiresActualStartedAndWaitedProcess(t *testing.T) {
+	done := make(chan struct{})
+	close(done)
+	for _, child := range []*ServerTorChild{nil, {}, {done: done}, {done: done, command: &exec.Cmd{}}} {
+		if child.Joined() {
+			t.Fatal("an empty child or closed bookkeeping channel fabricated native join")
+		}
 	}
 }
