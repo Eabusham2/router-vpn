@@ -1,6 +1,6 @@
 param(
     [string]$Root = (Split-Path $PSScriptRoot -Parent),
-    [ValidateSet('shipping','capture-two-modes','load-fallback','connect-fallback','entry-capture-fallback','entry-load-fallback','entry-connect-fallback')][string]$Mutation = 'shipping'
+    [ValidateSet('shipping','capture-two-modes','load-fallback','connect-fallback','entry-capture-fallback','entry-load-fallback','entry-connect-fallback','startup-deadline')][string]$Mutation = 'shipping'
 )
 $ErrorActionPreference='Stop'
 # The real launcher composes these sources before opening WPF. Exercise that
@@ -46,7 +46,7 @@ try{
         $Helpers+=(ShippingFunction $ProfileSettingsSource $Name).Replace('[System.Windows.Window]','[object]').Replace('$PSScriptRoot','$FixtureStateRoot')+"`n"
     }
     $Connect=(ShippingFunction $ProductSource 'UnifiedConnect')
-    $Choice=(ShippingFunction $ProductSource 'MultihopExitModeChoice')+"`n"+(ShippingFunction $ProductSource 'MultihopEntryModeChoice')
+    $Choice=(ShippingFunction $ProductSource 'MultihopExitModeChoice')+"`n"+(ShippingFunction $ProductSource 'MultihopEntryModeChoice')+"`n"+(ShippingFunction $ProductSource 'UnifiedMultihopStartupTimeout')
     switch($Mutation){
         'capture-two-modes'{$Helpers=ReplaceOnce $Helpers '$result.multihop_exit_mode=[string]$exitMode.SelectedItem.Tag' '$result.multihop_exit_mode=if($exitMode.SelectedIndex-eq1){''hysteria2''}else{''shadowsocks''}'}
         'load-fallback'{$Helpers=ReplaceOnce $Helpers '$exitMode.SelectedIndex=-1' '$exitMode.SelectedIndex=0'}
@@ -54,6 +54,7 @@ try{
         'entry-capture-fallback'{$Helpers=ReplaceOnce $Helpers '$result.multihop_entry_mode=[string]$entryMode.SelectedItem.Tag' '$result.multihop_entry_mode="wg"'}
         'entry-load-fallback'{$Helpers=ReplaceOnce $Helpers '$entryMode.SelectedIndex=-1' '$entryMode.SelectedIndex=0'}
         'entry-connect-fallback'{$Connect=ReplaceOnce $Connect 'entry_mode=(MultihopEntryModeChoice)' 'entry_mode="wg"'}
+        'startup-deadline'{$Connect=ReplaceOnce $Connect '$Timeout=UnifiedMultihopStartupTimeout $Body' '$Timeout=200'}
     }
     . ([ScriptBlock]::Create($Helpers))
     . ([ScriptBlock]::Create($Choice))
@@ -170,7 +171,7 @@ public sealed class ProfileModeOwner {
     $script:ConnectBody=$null
     function StartUnifiedApiAsync($Label,$Path,$Method,$Body,$Timeout,$Success,$Failure,$Finally){
         Check ($Path-ceq'/api/multihop/connect'-and$Method-ceq'POST') 'Main Connect changed its endpoint'
-        $script:ConnectBody=($Body|ConvertTo-Json -Depth 8)|ConvertFrom-Json;return $true
+        $script:ConnectTimeout=$Timeout;$script:ConnectBody=($Body|ConvertTo-Json -Depth 8)|ConvertFrom-Json;return $true
     }
     for($i=0;$i-lt$ExpectedEntries.Count;$i++){for($e=0;$e-lt3;$e++){
         $toggle.IsChecked=$true;$entry.SelectedValue='entry "private"';$exit.SelectedValue='exit "private"'
@@ -180,6 +181,11 @@ public sealed class ProfileModeOwner {
         Check ((@($body.PSObject.Properties.Name|Sort-Object)-join',')-ceq'base,entry_id,entry_mode,execution,exit_id,exit_mode') 'Main Connect copied private fields or omitted graph choices'
         Check ($body.entry_mode-ceq$ExpectedEntries[$i]-and$body.exit_mode-ceq$ExpectedModes[$i%$ExpectedModes.Count]-and$body.execution-ceq$ExpectedExecutions[$e]) 'Main Connect replaced the captured entry, exit or execution'
         Check ($body.entry_id-ceq'entry "private"'-and$body.exit_id-ceq'exit "private"'-and$body.base-ceq'auto') 'Main Connect replaced exact identities or saved base fallback'
+        $KeyModes=@('wg-pq','awg2-pq','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg')
+        $Phases=0;if(-not$ExpectedEntries[$i]-or$ExpectedEntries[$i]-cin$KeyModes){$Phases+=120};if($ExpectedModes[$i%$ExpectedModes.Count]-cin$KeyModes){$Phases+=120}
+        $ExpectedTimeout=if($ExpectedExecutions[$e]-ceq'auto'-and$Phases-gt0){210+$Phases}else{200}
+        Check ($script:ConnectTimeout-eq$ExpectedTimeout) 'Main Connect lost the captured native startup deadline'
+
     }}
     foreach($i in @(-1,$ExpectedEntries.Count,100)){
         $MultihopEntryModeCombo.SelectedIndex=$i;$script:ConnectBody=$null;UnifiedConnect

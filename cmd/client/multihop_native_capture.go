@@ -202,10 +202,14 @@ func (c *nativeMultihopCapture) validate(sel multihopSelection) error {
 }
 
 func captureNativeMultihopForApp(a *app, sel multihopSelection, modes []string) (multihopSelection, error) {
-	if _, err := verifyBundledNative(desktopAmneziaPackageRoot()); err != nil {
+	return captureNativeMultihopForAppContext(a.connectionOperationContextOrBackground(), a, sel, modes)
+}
+
+func captureNativeMultihopForAppContext(parent context.Context, a *app, sel multihopSelection, modes []string) (multihopSelection, error) {
+	if _, err := verifyBundledNativeContext(parent, desktopAmneziaPackageRoot()); err != nil {
 		return sel, err
 	}
-	ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
 	return captureNativeMultihopSelection(ctx, clientRoot(a), sel, modes, func(ctx context.Context, host string) ([]netip.Addr, error) {
 		return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
@@ -216,7 +220,7 @@ func captureNativeMultihopForApp(a *app, sel multihopSelection, modes []string) 
 // Prove both exact nodes through their distinct captured lanes before treating
 // a native local connection (including a temporary Speed Lab path) as ready.
 func (a *app) proveNativeMultihop(sel multihopSelection, command *exec.Cmd) error {
-	ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), nativeMultihopProofTimeout(sel))
 	defer cancel()
 	return proveNativeMultihopCapture(ctx, sel, func() bool { return a.ownsConnectionRuntime(command) }, proveMultihopLaneNodeContext)
 }

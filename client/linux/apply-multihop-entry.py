@@ -37,7 +37,8 @@ static void linux_multihop_execution_changed_v1(GtkComboBox *combo, gpointer dat
 '''),
         ('    json_builder_set_member_name(builder, "exit_mode"); json_builder_add_string_value(builder, mode);\n',
          '    json_builder_set_member_name(builder, "exit_mode"); json_builder_add_string_value(builder, mode);\n'
-         '    json_builder_set_member_name(builder, "entry_mode"); json_builder_add_string_value(builder, gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->entry_mode)));\n'),
+         '    const char *entry_mode = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->entry_mode));\n'
+         '    json_builder_set_member_name(builder, "entry_mode"); json_builder_add_string_value(builder, entry_mode);\n'),
         ('    state.execution = gtk_combo_box_text_new();\n', '''    state.entry_mode = gtk_combo_box_text_new();
     char *saved_entry_mode = linux_multihop_entry_choice_v23();
     linux_multihop_entry_choices_v23(state.entry_mode, NULL, saved_entry_mode); g_free(saved_entry_mode);

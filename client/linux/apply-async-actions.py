@@ -85,7 +85,7 @@ static void linux_unified_custom_builder_v8(LinuxUnifiedV8 *state) {
         text = text[:start] + '''    if (!routervpn_require_mutation_idle(state->app, "starting multihop")) {
         g_free(payload); json_node_free(payload_root); g_object_unref(gen); g_object_unref(builder); return;
     }
-    guint64 request = linux_async_request_v17(state->app, "/api/multihop/connect", payload, 180000, "Multihop exact exit-node path proof", FALSE);
+    guint64 request = linux_async_request_v17(state->app, "/api/multihop/connect", payload, linux_multihop_startup_timeout_v23(entry_mode, mode, execution), "Multihop exact exit-node path proof", FALSE);
     if (request != 0) {
         append_diag(state->app, "Multihop request queued; Connected still requires exact exit-node path proof. Use Disconnect on the map to stop.");
         gtk_dialog_response(GTK_DIALOG(state->dialog), GTK_RESPONSE_CLOSE);

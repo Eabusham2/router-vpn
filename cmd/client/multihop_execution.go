@@ -452,7 +452,7 @@ func (o *desktopRelayOwner) requestControl(ctx context.Context, method string, o
 	}
 	// This proxy's route is entry-wg (native) or the owned split interface (Linux),
 	// not the entry server's SOCKS daemon. The server sees the actual tunnel peer.
-	client, closeIdle, err := newMultihopLaneHTTPClient(multihopEntryProofProxy, 8*time.Second)
+	client, closeIdle, err := newMultihopLaneHTTPClient(multihopEntryProofProxy, o.controlTimeout(method))
 	if err != nil {
 		return err
 	}
@@ -639,7 +639,10 @@ func (a *app) runMultihopExecution(w http.ResponseWriter, r *http.Request, sel m
 		return
 	}
 	parent := a.connectionOperationContextOrBackground()
-	ctx, cancel := context.WithTimeout(parent, 180*time.Second)
+	started := time.Now()
+	// Bound the operation before any source/network capture; the exact frozen
+	// modes below can only shorten this maximum, never restart its clock.
+	ctx, cancel := context.WithTimeout(parent, desktopMultihopMaximumTimeout)
 	defer cancel()
 	stop := context.AfterFunc(r.Context(), cancel)
 	defer stop()
@@ -657,12 +660,17 @@ func (a *app) runMultihopExecution(w http.ResponseWriter, r *http.Request, sel m
 		modes = []string{"shadowsocks", "hysteria2"}
 	}
 	if retainedNativeMultihopSelected() {
-		sel, err = captureNativeMultihopForApp(a, sel, modes)
+		sel, err = captureNativeMultihopForAppContext(ctx, a, sel, modes)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 	}
+	startupBudget, totalBudget := desktopMultihopStartupBudgets(sel, modes, execution)
+	// Capture/preflight time belongs to this operation; deriving the budget
+	// after source capture must not reset the original request's deadline.
+	ctx, cancelDeadline := context.WithDeadline(ctx, started.Add(totalBudget))
+	defer cancelDeadline()
 	if err := ctx.Err(); err != nil {
 		http.Error(w, "comparison cancelled before native capture completed", http.StatusConflict)
 		return
@@ -700,10 +708,10 @@ func (a *app) runMultihopExecution(w http.ResponseWriter, r *http.Request, sel m
 				candidates = append(candidates, routechoice.Candidate{Execution: kind, Transport: mode, EntryID: sel.Entry.ID, ExitID: sel.Exit.ID})
 			}
 		}
-		result, active, err = routechoice.Compare(ctx, candidates, driver, routechoice.Options{Targets: comparisonTargets, StartupTimeout: 25 * time.Second, ProbeTimeout: 2500 * time.Millisecond, CleanupTimeout: 15 * time.Second, Preferred: routechoice.Local, Notify: notify})
+		result, active, err = routechoice.Compare(ctx, candidates, driver, routechoice.Options{Targets: comparisonTargets, StartupTimeout: startupBudget, ProbeTimeout: 2500 * time.Millisecond, CleanupTimeout: 15 * time.Second, Preferred: routechoice.Local, Notify: notify})
 	} else {
 		c := routechoice.Candidate{Execution: execution, Transport: sel.ExitMode, EntryID: sel.Entry.ID, ExitID: sel.Exit.ID}
-		start, cancelStart := context.WithTimeout(ctx, 25*time.Second)
+		start, cancelStart := context.WithTimeout(ctx, startupBudget)
 		active, err = driver.Open(start, c)
 		cancelStart()
 		if err == nil {

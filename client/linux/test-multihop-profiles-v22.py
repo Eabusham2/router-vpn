@@ -108,7 +108,15 @@ static gboolean api_request(const char*path,const char*method,const char*body,lo
  else{check(FALSE,"Unexpected API route");}
  out->data=g_strdup(response);out->len=strlen(response);g_free(allocated);return TRUE;
 }
-static void post_and_log(App*a,const char*path,const char*body,long timeout,const char*label){(void)a;(void)timeout;(void)label;check(strcmp(path,"/api/multihop/connect")==0,"Profile Connect changed endpoint");connected_count++;g_free(connected_body);connected_body=g_strdup(body);}
+static void post_and_log(App*a,const char*path,const char*body,long timeout,const char*label){
+ (void)a;(void)label;check(strcmp(path,"/api/multihop/connect")==0,"Profile Connect changed endpoint");
+ const char*key_modes[]={"wg-pq","awg2-pq","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"};
+ long phases=wanted_entry_mode[0]?0:120000;
+ for(guint i=0;i<G_N_ELEMENTS(key_modes);i++){if(strcmp(wanted_entry_mode,key_modes[i])==0)phases+=120000;if(strcmp(wanted_mode,key_modes[i])==0)phases+=120000;}
+ long expected=strcmp(wanted_execution,"auto")==0&&phases>0?210000+phases:180000;
+ check(timeout==expected,"Connect lost its captured native startup deadline");
+ connected_count++;g_free(connected_body);connected_body=g_strdup(body);
+}
 CHOICES
 METHODS
 HOPS
@@ -155,11 +163,24 @@ int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Missing fixtu
 '''.replace('\nCHOICES\n', '\n'+choices+'\n').replace('\nMETHODS\n', '\n'+methods+'\n').replace('\nHOPS\n', '\n'+hops+'\n')
     with tempfile.TemporaryDirectory(prefix='routervpn-gtk-multihop-profiles-') as temporary:
         directory = Path(temporary)
-        source = directory/'profiles.c'
-        source.write_text(program)
         flags = subprocess.check_output(['pkg-config','--cflags','--libs','gtk+-3.0','json-glib-1.0'],text=True).split()
-        subprocess.run(['gcc','-Wall','-Wextra','-Werror',str(source),'-o',str(directory/'profiles')]+flags,check=True)
-        subprocess.run(['xvfb-run','-a',str(directory/'profiles'),str(directory)],check=True,timeout=60)
+        phase = 'long phases = 4 * (alternatives * entry_phase + linux_multihop_initial_key_ms_v23(exit));'
+        assert program.count(phase) == 1
+        variants = {'shipping': program,
+                    'missing-entry': program.replace(phase, 'long phases = 4 * (alternatives * entry_phase * 0 + linux_multihop_initial_key_ms_v23(exit));'),
+                    'missing-final-recheck': program.replace(phase, 'long phases = 2 * (alternatives * entry_phase + linux_multihop_initial_key_ms_v23(exit));')}
+        for name, variant in variants.items():
+            source, binary = directory/(name+'.c'), directory/name
+            source.write_text(variant)
+            subprocess.run(['gcc','-Wall','-Wextra','-Werror',str(source),'-o',str(binary)]+flags,check=True)
+            result = subprocess.run(['xvfb-run','-a',str(binary),str(directory)],text=True,capture_output=True,timeout=60)
+            output = result.stdout + result.stderr
+            if name == 'shipping':
+                assert result.returncode == 0, output
+                print(output.strip())
+            else:
+                assert result.returncode != 0 and 'Connect lost its captured native startup deadline' in output, output
+                print('GTK captured startup control '+name+': rejected')
 
 
 if __name__ == '__main__':

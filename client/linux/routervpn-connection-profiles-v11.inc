@@ -471,7 +471,7 @@ static void linux_profile_connect_v11(GtkButton *button, gpointer data) {
     JsonGenerator *gen = json_generator_new();
     json_generator_set_root(gen, root);
     char *body = json_generator_to_data(gen, NULL);
-    post_and_log(state->app, "/api/multihop/connect", body, 180000, "Loaded connection-profile multihop");
+    post_and_log(state->app, "/api/multihop/connect", body, linux_multihop_startup_timeout_v23(entry_mode, mode, execution), "Loaded connection-profile multihop");
     g_free(body);
     g_object_unref(gen);
     json_node_free(root);

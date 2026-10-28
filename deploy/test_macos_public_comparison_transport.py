@@ -79,6 +79,10 @@ def run_case(directory, mutation):
         old = 'let activeSession = comparisonSession ?? session'
         assert api.count(old) == 1
         api = api.replace(old, 'let activeSession = session')
+    elif mutation == 'native-shared-session':
+        old = 'let activeSession = comparisonSession ?? session'
+        assert api.count(old) == 1
+        api = api.replace(old, 'let activeSession = req.url?.path == "/api/multihop/connect" ? session : comparisonSession ?? session')
     elif mutation == 'missing-close':
         old = 'defer { comparisonSession?.invalidateAndCancel() }'
         assert api.count(old) == 1
@@ -155,8 +159,21 @@ do{_ = try api.request(endpoint,method:"GET",body:captured,timeout:540);fail("Wr
 check(observations.count==before,"Invalid extended request launched native HTTP")
 _ = try api.request("/api/status",timeout:1)
 check(observations.last!.resource==300,"Dedicated session cleanup broke the shared ordinary transport")
-print("Public macOS Tor comparison: actual540s session, ordinary300s ceiling, captured body, redirects and ownership PASS")
-'''.replace('DELEGATE_SOURCE', delegate).replace('API_SOURCE', api)
+let nativePath="/api/multihop/connect"
+let native:[String:Any]=["entry_id":"entry","exit_id":"exit","base":"wg","entry_mode":"wg-pq","exit_mode":"max-quic-awg","execution":"auto"]
+let nativeData=try? api.request(nativePath,method:"POST",body:native,timeout:450)
+check(nativeData != nil,"Captured native comparison lost its initial-key deadline")
+let nativeObserved=observations.last!
+check(nativeObserved.resource==450&&nativeObserved.request==450,"Captured native comparison retained the ordinary resource ceiling")
+check((try JSONSerialization.jsonObject(with:nativeObserved.body!) as! NSDictionary).isEqual(to:native),"Native extended request changed the captured graph")
+wait({wasInvalidated(nativeObserved)},"Native comparison retained its dedicated session")
+let nativeBefore=observations.count
+for key in ["entry_id","exit_id","entry_mode","exit_mode","execution"]{var invalid=native;invalid.removeValue(forKey:key);do{_ = try api.request(nativePath,method:"POST",body:invalid,timeout:450);fail("Incomplete native graph gained an extended session")}catch{}}
+for pair in [("entry_id","exit"),("entry_mode","WG-PQ"),("exit_mode","unavailable"),("execution","local")]{var invalid=native;invalid[pair.0]=pair.1;do{_ = try api.request(nativePath,method:"POST",body:invalid,timeout:450);fail("Changed native graph gained an extended session")}catch{}}
+for deadline in [330.0,540.0]{do{_ = try api.request(nativePath,method:"POST",body:native,timeout:deadline);fail("Native graph accepted a different startup budget")}catch{}}
+check(observations.count==nativeBefore,"Invalid native graph launched extended HTTP")
+print("Public macOS comparisons: actual Tor540s and native450s sessions, ordinary300s ceiling, captured bodies, redirects and ownership PASS")
+'''.replace('DELEGATE_SOURCE', delegate).replace('API_SOURCE', '\n'.join(block(source, marker) for marker in ('enum RouterVPNNodeEntryModes {', 'enum RouterVPNNodeExitModes {', 'enum RouterVPNMultihopStartup {')) + '\n' + api)
     main = fixture / 'main.swift'
     main.write_text(program)
     try:
@@ -172,6 +189,7 @@ print("Public macOS Tor comparison: actual540s session, ordinary300s ceiling, ca
         else:
             expected = {'shared-session': 'five-minute session ceiling',
                         'missing-close': 'Completed comparison retained',
+                        'native-shared-session': 'Captured native comparison retained the ordinary resource ceiling',
                         'redirect': 'Captured comparison followed a redirect'}[mutation]
             assert result.returncode != 0 and expected in result.stdout, mutation + ': ' + result.stdout
             print('Public comparison transport control ' + mutation + ': rejected', flush=True)
@@ -184,7 +202,7 @@ def main():
     parser.add_argument('--shipping-only', action='store_true')
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='routervpn-macos-public-comparison-') as temporary:
-        for mutation in (['shipping'] if args.shipping_only else ['shipping', 'shared-session', 'missing-close', 'redirect']):
+        for mutation in (['shipping'] if args.shipping_only else ['shipping', 'shared-session', 'native-shared-session', 'missing-close', 'redirect']):
             run_case(Path(temporary), mutation)
 
 

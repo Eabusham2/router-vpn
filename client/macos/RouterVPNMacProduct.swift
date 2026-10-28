@@ -66,6 +66,20 @@ enum RouterVPNNodeExitModes {
     }
 }
 
+enum RouterVPNMultihopStartup {
+    static func requestTimeout(entryMode: String, exitMode: String, execution: String) -> TimeInterval {
+        guard execution == "auto" else { return 180 }
+        let initialKeyModes = ["wg-pq", "awg2-pq", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"]
+        // A blank entry delegates to the saved control profile. Its resolved
+        // raw mode may own an initial-key phase; the controller captures it.
+        let entry: TimeInterval = entryMode.isEmpty || initialKeyModes.contains(entryMode) ? 30 : 0
+        let exit: TimeInterval = initialKeyModes.contains(exitMode) ? 30 : 0
+        let alternatives: TimeInterval = exitMode == "auto" ? 2 : 1
+        let phases = 4 * (alternatives * entry + exit)
+        return phases == 0 ? 180 : 210 + phases
+    }
+}
+
 func productDNSPolicyBody(captured: [String: Any]?, displayedProfileID: String, fields: [String: Any]) throws -> [String: Any] {
     guard let captured, !displayedProfileID.isEmpty,
           let profileID = captured["profile_id"] as? String, profileID == displayedProfileID,
@@ -94,7 +108,7 @@ final class ProductAPI {
     init() {
         let c = URLSessionConfiguration.ephemeral
         c.timeoutIntervalForRequest = 8
-        // Candidate/connection transactions use bounded 180–240 second calls;
+        // Ordinary transactions retain their shared resource ceiling;
         // each request and perform() still enforce their explicit deadline.
         c.timeoutIntervalForResource = 300
         c.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
@@ -123,23 +137,35 @@ final class ProductAPI {
     }
     private func capturedComparisonSession(_ req: URLRequest, timeout: TimeInterval) throws -> URLSession? {
         guard timeout > 300 else { return nil }
-        // Only the already captured Tor Compare action receives a longer
-        // resource budget. URLRequest's timeout alone does not extend the
-        // ordinary session's total 300-second resource ceiling.
-        guard timeout == 540, req.url == routerVPNProductBaseURL.appendingPathComponent("api/external-profile/connect"),
-              req.httpMethod == "POST", let bytes = req.httpBody,
-              let body = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any],
-              body["execution"] as? String == "auto", let id = body["profile_id"] as? String, !id.isEmpty,
-              body["expected_selected_node_id"] is String,
-              let tokens = body["expected_profile_tokens"] as? [String: String], tokens[id] != nil,
-              tokens.allSatisfy({ !$0.key.isEmpty && $0.value.utf8.count == 64 && $0.value.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) }),
-              let requestID = body["comparison_request_id"] as? String, requestID.utf8.count == 32,
-              requestID.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
-            throw NSError(domain: "RouterVPNMac", code: 1, userInfo: [NSLocalizedDescriptionKey: "The extended request deadline requires a captured Tor comparison."])
+        // URLRequest's timeout does not extend the shared 300-second resource
+        // ceiling. Only an exact captured comparison owns a longer session.
+        guard req.httpMethod == "POST", let bytes = req.httpBody,
+              let body = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any] else {
+            throw NSError(domain: "RouterVPNMac", code: 1, userInfo: [NSLocalizedDescriptionKey: "The extended request deadline requires a captured comparison."])
         }
-        if let direct = body["direct"] {
-            guard let value = direct as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID(), !value.boolValue else {
-                throw NSError(domain: "RouterVPNMac", code: 1, userInfo: [NSLocalizedDescriptionKey: "Tor comparison requires a captured Router entry."])
+        if req.url == routerVPNProductBaseURL.appendingPathComponent("api/multihop/connect") {
+            guard body["execution"] as? String == "auto",
+                  let entryID = body["entry_id"] as? String, !entryID.isEmpty,
+                  let exitID = body["exit_id"] as? String, !exitID.isEmpty, entryID != exitID,
+                  let entryMode = body["entry_mode"] as? String, RouterVPNNodeEntryModes.index(for: entryMode) != nil,
+                  let exitMode = body["exit_mode"] as? String, RouterVPNNodeExitModes.index(for: exitMode) != nil,
+                  timeout == RouterVPNMultihopStartup.requestTimeout(entryMode: entryMode, exitMode: exitMode, execution: "auto") else {
+                throw NSError(domain: "RouterVPNMac", code: 1, userInfo: [NSLocalizedDescriptionKey: "The multihop deadline does not match its captured graph."])
+            }
+        } else {
+            guard timeout == 540, req.url == routerVPNProductBaseURL.appendingPathComponent("api/external-profile/connect"),
+                  body["execution"] as? String == "auto", let id = body["profile_id"] as? String, !id.isEmpty,
+                  body["expected_selected_node_id"] is String,
+                  let tokens = body["expected_profile_tokens"] as? [String: String], tokens[id] != nil,
+                  tokens.allSatisfy({ !$0.key.isEmpty && $0.value.utf8.count == 64 && $0.value.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) }),
+                  let requestID = body["comparison_request_id"] as? String, requestID.utf8.count == 32,
+                  requestID.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+                throw NSError(domain: "RouterVPNMac", code: 1, userInfo: [NSLocalizedDescriptionKey: "The extended request deadline requires a captured Tor comparison."])
+            }
+            if let direct = body["direct"] {
+                guard let value = direct as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID(), !value.boolValue else {
+                    throw NSError(domain: "RouterVPNMac", code: 1, userInfo: [NSLocalizedDescriptionKey: "Tor comparison requires a captured Router entry."])
+                }
             }
         }
         let configuration = URLSessionConfiguration.ephemeral
@@ -388,8 +414,8 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         multihopProgressTask?.cancel(); multihopProgressTask = nil
         multihopProgressSession?.invalidateAndCancel(); multihopProgressSession = nil
     }
-    func startMultihopProgress() {
-        beginMultihopProgress(requestID: nil, timeout: 195, update: nil)
+    func startMultihopProgress(timeout: TimeInterval = 180) {
+        beginMultihopProgress(requestID: nil, timeout: timeout + 15, update: nil)
     }
     func startCapturedComparisonProgress(requestID: String?, timeout: TimeInterval, update: (([String: Any], String) -> Void)? = nil) -> UUID? {
         guard let requestID, requestID.utf8.count == 32,
@@ -521,9 +547,10 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         guard let exitMode = RouterVPNNodeExitModes.id(at: multihopExitModePopup.indexOfSelectedItem) else { appendHelp("Select a supported exit transport."); return }
         let execution = multihopExecutionChoice()
         let base = multihopBaseChoice()
+        let timeout = RouterVPNMultihopStartup.requestTimeout(entryMode: entryMode, exitMode: exitMode, execution: execution)
         multihopComparisonLabel.stringValue = execution == "auto" ? "Comparing local and server paths; timed-out probes are excluded…" : "Starting \(execution) multihop…"
-        startMultihopProgress(); let progressOwner = multihopProgressGeneration
-        asyncAction { defer { DispatchQueue.main.async { self.stopCapturedComparisonProgress(progressOwner) } }; return String(data: try self.api.request("/api/multihop/connect", method: "POST", body: ["entry_id": entryID, "exit_id": exitID, "base": base, "entry_mode": entryMode, "exit_mode": exitMode, "execution": execution], timeout: 180), encoding: .utf8) ?? "Multihop connected" }
+        startMultihopProgress(timeout: timeout); let progressOwner = multihopProgressGeneration
+        asyncAction { defer { DispatchQueue.main.async { self.stopCapturedComparisonProgress(progressOwner) } }; return String(data: try self.api.request("/api/multihop/connect", method: "POST", body: ["entry_id": entryID, "exit_id": exitID, "base": base, "entry_mode": entryMode, "exit_mode": exitMode, "execution": execution], timeout: timeout), encoding: .utf8) ?? "Multihop connected" }
     }
     func multihopBaseChoice() -> String { ["auto", "wg", "awg"][max(0, min(basePopup.indexOfSelectedItem, 2))] }
     func selectedNodeID() -> String? {

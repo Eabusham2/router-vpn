@@ -237,6 +237,17 @@ function SetUnifiedAsyncUI([bool]$Busy,[string]$Label=''){
     }
     $B=Control 'UnifiedConnectButton';if($null-ne$B){$B.IsEnabled=$true;if($Busy){$B.Content=if($Label-match'(?i)connect|auto|custom|multihop|external'){'Cancel / Disconnect'}else{$Label}}}
 }
+function UnifiedMultihopStartupTimeout($Body){
+    if([string]$Body.execution-cne'auto'){return 200}
+    $InitialKeyModes=@('wg-pq','awg2-pq','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg')
+    # Empty entry mode delegates to a saved graph that may own an initial key.
+    $Entry=if(-not[string]$Body.entry_mode-or([string]$Body.entry_mode)-cin$InitialKeyModes){30}else{0}
+    $Exit=if(([string]$Body.exit_mode)-cin$InitialKeyModes){30}else{0}
+    $Alternatives=if([string]$Body.exit_mode-ceq'auto'){2}else{1}
+    $Phases=4*($Alternatives*$Entry+$Exit)
+    if($Phases-eq0){return 200}
+    return 210+$Phases
+}
 function StartUnifiedApiAsync([string]$Label,[string]$Path,[string]$Method='GET',$Body=$null,[int]$Timeout=180,[scriptblock]$OnSuccess=$null,[scriptblock]$OnFailure=$null,[scriptblock]$OnFinally=$null,[scriptblock]$OnComparison=$null){
     if($script:UnifiedAsyncClosed){return $false}
     if(UnifiedAsyncBusy){Log ("$Label refused: another Router VPN action is still running.");return $false}
@@ -527,7 +538,7 @@ function UnifiedConnect{
         }elseif((Control 'UnifiedMultihop').IsChecked){
             $Entry=[string]$MultihopEntryCombo.SelectedValue;$Exit=[string]$MultihopExitCombo.SelectedValue
             if(-not$Entry-or-not$Exit-or$Entry-eq$Exit){throw 'Multihop requires different entry and exit nodes.'}
-            $Path='/api/multihop/connect';$Body=@{entry_id=$Entry;exit_id=$Exit;base=(BaseChoice);entry_mode=(MultihopEntryModeChoice);exit_mode=(MultihopExitModeChoice)};$Body.execution=[string](Control 'UnifiedExecution').SelectedItem.Tag;$Timeout=200;$Label='Connecting multihop…'
+            $Path='/api/multihop/connect';$Body=@{entry_id=$Entry;exit_id=$Exit;base=(BaseChoice);entry_mode=(MultihopEntryModeChoice);exit_mode=(MultihopExitModeChoice)};$Body.execution=[string](Control 'UnifiedExecution').SelectedItem.Tag;$Timeout=UnifiedMultihopStartupTimeout $Body;$Label='Connecting multihop…'
         }else{
                 $ID=[string]$ModeCombo.SelectedValue;if(-not$ID){$ID='smart-auto'}
                 if($ID-eq'custom:new'){ShowUnifiedCustomBuilder;return}

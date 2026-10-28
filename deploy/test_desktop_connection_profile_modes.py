@@ -48,9 +48,9 @@ def run(command, *, negative=False):
 def windows(shell):
     command = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                str(ROOT / "client/test-windows-connection-profile-modes.ps1")]
-    for mutation in ("shipping", "capture-two-modes", "load-fallback", "connect-fallback", "entry-capture-fallback", "entry-load-fallback", "entry-connect-fallback"):
+    for mutation in ("shipping", "capture-two-modes", "load-fallback", "connect-fallback", "entry-capture-fallback", "entry-load-fallback", "entry-connect-fallback", "startup-deadline"):
         run(command + ["-Mutation", mutation], negative=mutation != "shipping")
-    print("WPF exit/entry capture, load-default and Connect-default negatives: 6 rejected")
+    print("WPF exit/entry capture, load/Connect defaults and startup deadline negatives: 7 rejected")
 
 
 SWIFT_BOUNDARIES = r'''
@@ -81,7 +81,7 @@ import Foundation
 @MainActor final class Window { var contentView: NSView? = NSView() }
 @MainActor final class Field { var stringValue = ""; var string = "" }
 @MainActor final class ProductAPI {
-    var calls: [(path: String, body: [String: Any])] = []
+    var calls: [(path: String, body: [String: Any], timeout: TimeInterval)] = []
     var loaded: [String: Any] = [:]
     var busy = false
     var failLoad = false, malformedLoad = false
@@ -102,7 +102,7 @@ import Foundation
         // JSON round trip models the actual controller boundary, including
         // quoted identities, Boolean types, and array preservation.
         let decoded = try JSONSerialization.jsonObject(with: JSONSerialization.data(withJSONObject: body)) as! [String: Any]
-        calls.append((path, decoded))
+        calls.append((path, decoded, timeout))
         if path.hasSuffix("/load") {
             if failLoad { throw NSError(domain: "fixture", code: 1, userInfo: [NSLocalizedDescriptionKey: "Load response timed out"]) }
             if malformedLoad { return Data("[]".utf8) }
@@ -139,7 +139,8 @@ SWIFT_PRODUCT = r'''
     var routerIDs: [String] = []
     PRODUCT_PROPERTIES
     var multihopProgressGeneration = UUID()
-    func startMultihopProgress() {}
+    var progressTimeout: TimeInterval = 0
+    func startMultihopProgress(timeout: TimeInterval = 180) { progressTimeout = timeout }
     var stoppedProgress: [UUID] = []
     func stopCapturedComparisonProgress(_ owner: UUID?) { if let owner { stoppedProgress.append(owner) } }
     func stopMultihopProgress() {}
@@ -270,6 +271,10 @@ for (i, entryMode) in expectedEntries.enumerated() {
         DispatchQueue.background.run()
         check(owner.api.calls.count == before + 1, "main Connect lost its captured request")
         let call = owner.api.calls.last!
+        let keyModes = ["wg-pq", "awg2-pq", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"]
+        let phases = (entryMode.isEmpty || keyModes.contains(entryMode) ? 120 : 0) + (keyModes.contains(expectedModes[i % expectedModes.count]) ? 120 : 0)
+        let expectedTimeout: TimeInterval = execution == "auto" && phases > 0 ? TimeInterval(210 + phases) : 180
+        check(call.timeout == expectedTimeout && owner.progressTimeout == expectedTimeout, "Connect or progress lost the captured native startup deadline")
         check(call.path == "/api/multihop/connect" && Set(call.body.keys) == Set(["entry_id", "exit_id", "base", "entry_mode", "exit_mode", "execution"]), "main Connect copied private fields or omitted graph choices")
         check(call.body["entry_mode"] as? String == entryMode && call.body["exit_mode"] as? String == expectedModes[i % expectedModes.count] && call.body["execution"] as? String == execution, "main Connect replaced captured entry, exit or execution")
         check(call.body["entry_id"] as? String == entryID && call.body["exit_id"] as? String == exitID && call.body["base"] as? String == "auto", "main Connect replaced exact identities or saved base fallback")
@@ -531,7 +536,7 @@ def swift_source():
     for endpoint in ("save", "update"):
         assert f'connectionProfilePOST("/api/connection-profile/setup/{endpoint}", body: connectionProfileSnapshot(' in profiles
     assert 'try applyLoadedConnectionProfile(payload)' in profiles
-    catalog = block(product, "enum RouterVPNNodeExitModes {") + "\n" + block(product, "enum RouterVPNNodeEntryModes {")
+    catalog = block(product, "enum RouterVPNNodeExitModes {") + "\n" + block(product, "enum RouterVPNNodeEntryModes {") + "\n" + block(product, "enum RouterVPNMultihopStartup {")
     declarations = profiles[profiles.index("private let macConnectionModeKey"):profiles.index("private struct MacConnectionProfileList")]
     declarations += block(profiles, "private struct MacConnectionCustomPreset:")
     declarations += "\n" + block(settings, "private struct MacConnectionPresetMirror:")
@@ -585,6 +590,7 @@ def macos(directory):
             'let entryMode = "wg"'),
         "main-entry-connect": replace_once(source, '"entry_mode": entryMode', '"entry_mode": "wg"'),
         "main-progress-owner": replace_once(source, 'self.stopCapturedComparisonProgress(progressOwner)', 'self.stopCapturedComparisonProgress(self.multihopProgressGeneration)'),
+        "main-startup-deadline": replace_once(source, '"execution": execution], timeout: timeout)', '"execution": execution], timeout: 180)'),
         "unsupported-entry-load": replace_once(source,
             'selection.entryMode.flatMap({ RouterVPNNodeEntryModes.index(for: $0) }) != nil,', 'true,'),
         "unsupported-load": replace_once(source,

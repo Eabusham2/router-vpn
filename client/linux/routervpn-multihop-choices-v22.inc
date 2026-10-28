@@ -33,6 +33,24 @@ static gboolean linux_multihop_execution_supported_v22(const char *execution) {
     return g_strcmp0(execution, "local") == 0 || g_strcmp0(execution, "server") == 0 || g_strcmp0(execution, "auto") == 0;
 }
 
+static long linux_multihop_initial_key_ms_v23(const char *mode) {
+    const char *modes[] = {"wg-pq", "awg2-pq", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"};
+    for (guint i = 0; i < G_N_ELEMENTS(modes); i++) {
+        if (g_strcmp0(mode, modes[i]) == 0) return 30000;
+    }
+    return 0;
+}
+
+static long linux_multihop_startup_timeout_v23(const char *entry, const char *exit, const char *execution) {
+    if (g_strcmp0(execution, "auto") != 0) return 180000;
+    /* A blank entry delegates to the saved control graph; allow its possible
+     * initial-key phase until the controller resolves that exact raw mode. */
+    long entry_phase = entry == NULL || !entry[0] ? 30000 : linux_multihop_initial_key_ms_v23(entry);
+    long alternatives = g_strcmp0(exit, "auto") == 0 ? 2 : 1;
+    long phases = 4 * (alternatives * entry_phase + linux_multihop_initial_key_ms_v23(exit));
+    return phases == 0 ? 180000 : 210000 + phases;
+}
+
 static gboolean linux_multihop_exit_advertised_v22(JsonArray *catalog, const char *mode) {
     if (!linux_multihop_exit_supported_v22(mode)) return FALSE;
     guint matches = 0;
