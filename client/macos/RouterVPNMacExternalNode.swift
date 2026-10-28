@@ -116,7 +116,22 @@ func externalCapturedBody(_ body: [String: Any], opened: [String: Any], current:
     var result = body
     result["expected_selected_node_id"] = selected; result["expected_profile_tokens"] = tokens
     if let current { try externalValidateCapturedBody(result, current: current) }
+    let protocolID = (exits[0]["external"] as? [String: Any])?["protocol"] as? String ?? ""
+    if body["direct"] as? Bool != true, ["tor", "tor-bridge"].contains(protocolID), body["execution"] as? String == "auto" {
+        let nonce = body["comparison_request_id"] ?? UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        guard let requestID = nonce as? String, requestID.utf8.count == 32,
+              requestID.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+            throw fail("The captured Tor comparison request identity is invalid.")
+        }
+        result["comparison_request_id"] = requestID
+    } else if body["comparison_request_id"] != nil {
+        throw fail("A comparison request identity belongs only to a captured Tor Compare connection.")
+    }
     return result
+}
+
+func externalConnectionTimeout(_ body: [String: Any]) -> TimeInterval {
+    body["comparison_request_id"] as? String != nil && body["execution"] as? String == "auto" ? 540 : 180
 }
 
 func externalPathIdentity(_ profile: [String: Any]) -> [String: Any] {
@@ -366,9 +381,12 @@ extension ProductWindowController {
                         entryMode: selectedMode, entryModes: entryModes)
                     body = try externalCapturedBody(prepared, opened: store, current: current)
                 } catch let failure { error.stringValue = failure.localizedDescription; continue }
+                let timeout = externalConnectionTimeout(body)
+                let progressOwner = startCapturedComparisonProgress(requestID: body["comparison_request_id"] as? String, timeout: timeout)
                 asyncAction {
+                    defer { DispatchQueue.main.async { self.stopCapturedComparisonProgress(progressOwner) } }
                     try self.requireMutationIdle("starting an external selected path")
-                    return String(data: try self.api.request("/api/external-profile/connect", method: "POST", body: body, timeout: 180), encoding: .utf8) ?? "External selected path connected"
+                    return String(data: try self.api.request("/api/external-profile/connect", method: "POST", body: body, timeout: timeout), encoding: .utf8) ?? "External selected path connected"
                 }
                 return
             }

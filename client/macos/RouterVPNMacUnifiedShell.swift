@@ -438,13 +438,16 @@ extension ProductWindowController {
                 do {
                     let opened: [String: Any] = ["selected_id": selectedID, "profiles": profiles]
                     let body = try externalCapturedBody(externalConnectBody(profile: profile, execution: externalSavedExecution(profile)), opened: opened)
+                    let timeout = externalConnectionTimeout(body)
+                    let progressOwner = startCapturedComparisonProgress(requestID: body["comparison_request_id"] as? String, timeout: timeout)
                     asyncAction {
+                        defer { DispatchQueue.main.async { self.stopCapturedComparisonProgress(progressOwner) } }
                         try self.requireMutationIdle("starting an external saved path")
                         guard let capabilities = try self.api.json("/api/external-profile/capabilities", timeout: 5) as? [String: Any],
                               let current = try self.api.json("/api/nodes", timeout: 5) as? [String: Any] else { throw NSError(domain: "RouterVPN.ExternalNode", code: 1) }
                         try externalRequireSourceCapability(capabilities)
                         try externalValidateCapturedBody(body, current: current)
-                        return String(data: try self.api.request("/api/external-profile/connect", method: "POST", body: body, timeout: 180), encoding: .utf8) ?? "External exit connected"
+                        return String(data: try self.api.request("/api/external-profile/connect", method: "POST", body: body, timeout: timeout), encoding: .utf8) ?? "External exit connected"
                     }
                 } catch { appendHelp(error.localizedDescription) }
                 return

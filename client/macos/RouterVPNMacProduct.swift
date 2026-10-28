@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import CoreFoundation
 import MapKit
 
 let routerVPNProductBaseURL = URL(string: "http://127.0.0.1:8788")!
@@ -161,6 +162,8 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     var multihopProgressDeadline = Date.distantPast
     var multihopProgressLastID = ""
     var multihopProgressOldID = ""
+    var multihopProgressExpectedID: String?
+    var multihopProgressUpdate: (([String: Any], String) -> Void)?
     let multihopComparisonLabel = NSTextField(wrappingLabelWithString: "Compare: (last-node response time + external-server response time) / 2; either timeout rejects the candidate.")
     let dnsModePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let dnsProtocolPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -265,14 +268,31 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
 
     func stopMultihopProgress() {
         multihopProgressGeneration = UUID()
+        multihopProgressExpectedID = nil; multihopProgressUpdate = nil
+        multihopProgressDeadline = .distantPast
         multihopProgressTimer?.invalidate(); multihopProgressTimer = nil
         multihopProgressTask?.cancel(); multihopProgressTask = nil
         multihopProgressSession?.invalidateAndCancel(); multihopProgressSession = nil
     }
     func startMultihopProgress() {
+        beginMultihopProgress(requestID: nil, timeout: 195, update: nil)
+    }
+    func startCapturedComparisonProgress(requestID: String?, timeout: TimeInterval, update: (([String: Any], String) -> Void)? = nil) -> UUID? {
+        guard let requestID, requestID.utf8.count == 32,
+              requestID.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+              timeout.isFinite, timeout > 0, timeout <= 960 else { return nil }
+        beginMultihopProgress(requestID: requestID, timeout: timeout, update: update)
+        return multihopProgressGeneration
+    }
+    func stopCapturedComparisonProgress(_ owner: UUID?) {
+        guard let owner, multihopProgressGeneration == owner else { return }
+        stopMultihopProgress()
+    }
+    private func beginMultihopProgress(requestID: String?, timeout: TimeInterval, update: (([String: Any], String) -> Void)?) {
         stopMultihopProgress()
         multihopProgressOldID = multihopProgressLastID
-        multihopProgressDeadline = Date().addingTimeInterval(195)
+        multihopProgressExpectedID = requestID; multihopProgressUpdate = update
+        multihopProgressDeadline = Date().addingTimeInterval(timeout)
         let configuration = URLSessionConfiguration.ephemeral
         configuration.connectionProxyDictionary = [:]
         configuration.httpShouldSetCookies = false
@@ -287,7 +307,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         guard window?.isVisible == true, Date() < multihopProgressDeadline else { stopMultihopProgress(); return }
         guard multihopProgressTask == nil, let session = multihopProgressSession else { return }
         let generation = multihopProgressGeneration
-        var request = URLRequest(url: URL(string: "http://127.0.0.1:8788/api/multihop/status")!)
+        var request = URLRequest(url: routerVPNProductBaseURL.appendingPathComponent("api/multihop/status"))
         request.timeoutInterval = 2
         request.cachePolicy = .reloadIgnoringLocalCacheData
         let task = session.dataTask(with: request) { [weak self] data, response, error in
@@ -297,10 +317,20 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
             DispatchQueue.main.async {
                 guard let self, self.multihopProgressGeneration == generation else { return }
                 self.multihopProgressTask = nil
+                guard self.window?.isVisible == true, Date() < self.multihopProgressDeadline else { self.stopCapturedComparisonProgress(generation); return }
                 guard let payload, let comparison = payload["comparison"] as? [String: Any],
-                      let id = comparison["id"] as? String, !id.isEmpty, id != self.multihopProgressOldID else { return }
-                self.multihopComparisonLabel.stringValue = self.multihopComparisonSummary(payload)
-                if comparison["complete"] as? Bool == true { self.stopMultihopProgress() }
+                      let id = comparison["id"] as? String, !id.isEmpty else { return }
+                if let requestID = self.multihopProgressExpectedID {
+                    guard comparison["request_id"] as? String == requestID,
+                          comparison["last_node_measurement"] as? String == "tor-last-relay-http",
+                          comparison["external_measurement"] as? String == "same-captured-endpoint-http" else { return }
+                } else if id == self.multihopProgressOldID { return }
+                let summary = self.multihopComparisonSummary(payload)
+                self.multihopComparisonLabel.stringValue = summary
+                self.multihopProgressUpdate?(payload, summary)
+                if let complete = comparison["complete"] as? NSNumber, CFGetTypeID(complete) == CFBooleanGetTypeID(), complete.boolValue {
+                    self.stopCapturedComparisonProgress(generation)
+                }
             }
         }
         multihopProgressTask = task
@@ -346,6 +376,10 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
             return "Compare: (last-node response time + external-server response time) / 2; either timeout rejects the candidate."
         }
         var lines = ["Execution: \(status["execution"] as? String ?? "none") • \(comparison["stage"] as? String ?? "starting")"]
+        if comparison["last_node_measurement"] as? String == "tor-last-relay-http",
+           comparison["external_measurement"] as? String == "same-captured-endpoint-http" {
+            lines.append("Tor response times: (last-relay HTTP + the same external-server HTTP response) / 2. A timeout or invalid proof excludes that candidate.")
+        }
         for item in comparison["measurements"] as? [[String: Any]] ?? [] {
             let candidate = item["candidate"] as? [String: Any] ?? [:]
             let name = "\(candidate["execution"] as? String ?? "") / \(candidate["transport"] as? String ?? "")"
@@ -371,8 +405,8 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         let execution = multihopExecutionChoice()
         let base = multihopBaseChoice()
         multihopComparisonLabel.stringValue = execution == "auto" ? "Comparing local and server paths; timed-out probes are excluded…" : "Starting \(execution) multihop…"
-        startMultihopProgress()
-        asyncAction { defer { DispatchQueue.main.async { self.stopMultihopProgress() } }; return String(data: try self.api.request("/api/multihop/connect", method: "POST", body: ["entry_id": entryID, "exit_id": exitID, "base": base, "entry_mode": entryMode, "exit_mode": exitMode, "execution": execution], timeout: 180), encoding: .utf8) ?? "Multihop connected" }
+        startMultihopProgress(); let progressOwner = multihopProgressGeneration
+        asyncAction { defer { DispatchQueue.main.async { self.stopCapturedComparisonProgress(progressOwner) } }; return String(data: try self.api.request("/api/multihop/connect", method: "POST", body: ["entry_id": entryID, "exit_id": exitID, "base": base, "entry_mode": entryMode, "exit_mode": exitMode, "execution": execution], timeout: 180), encoding: .utf8) ?? "Multihop connected" }
     }
     func multihopBaseChoice() -> String { ["auto", "wg", "awg"][max(0, min(basePopup.indexOfSelectedItem, 2))] }
     func selectedNodeID() -> String? {

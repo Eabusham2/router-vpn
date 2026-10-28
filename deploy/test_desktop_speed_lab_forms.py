@@ -176,7 +176,7 @@ def swift_form(directory):
         '    private func validateCapturedSelection(', '    private func applyCapturedSelection(',
         '    private func applyPathDefaults(', '    private func setEntryModeDefault(',
         '    @objc private func pathChanged(', '    private func loadOptions(',
-        '    @objc private func refreshControls(', '    private func bindCapturedProfiles(', '    private func requestBody(',
+        '    @objc private func refreshControls(', '    private func stopSpeedLabComparisonProgress(', '    private func bindCapturedProfiles(', '    private func requestBody(',
         '    private func hopSummary(', '    @objc private func runSpeedLab(',
     )).replace('@objc ', '').replace('private func ', 'func ')
     program = r'''
@@ -204,6 +204,7 @@ final class ProductWindowController {
  var connectionProfileSelection:RouterVPNConnectionProfileSelection?
  var connectionProfileSelectionGeneration=UUID()
  var routerIDs:[String]=[],multihopNodeIDs:[String]=[],profiles:[[String:Any]]=[],multihopNodeTokens:[String:String]=[:]
+ func stopCapturedComparisonProgress(_ owner:UUID?) {}
  PROFILE_CAPTURE
 }
 final class Form {
@@ -215,6 +216,7 @@ final class Form {
  let daita=Button(),jumbo=Button(),encrypted=Button(),obfuscated=Button(),runButton=Button();let detail=TextArea()
  var nodes:[[String:Any]]=[],entryModes:[[String:Any]]=[],executions:[[String:Any]]=[]
  var capturedProfileTokens:[String:String]=[:]
+ var comparisonProgressOwner:UUID?
  var supportedEntryModes:[String]=[],exitModes:[String]=[],currentPath:[String:Any]=[:]
  var updatingChoices=false,closed=false,optionsReady=false,cancelled=false,loadingOptions=false
  var request:Request?;var captured:[String:Any]?;var capturedTimeout:TimeInterval=0;var options=Data();var deferOptions=false;var pendingOptions:((Result<Data,Error>)->Void)?
@@ -266,6 +268,8 @@ for proto in ["tor", "tor-bridge"] {
  for mode in f.entryModes {for execution in ["local","server","auto"]{
   let id=mode["id"] as! String;choose(f.entryMode,id);choose(f.execution,execution);try emit("speed-lab-"+proto+"-"+id+"-"+execution)
   check(f.capturedTimeout == (execution=="auto" ? 960 : 104),"Actual Tor Run used an unrelated or insufficient HTTP budget")
+  if execution == "auto" { check((f.captured?["comparison_request_id"] as? String)?.range(of:"^[a-f0-9]{32}$",options:.regularExpression) != nil,"Tor Speed Lab omitted its request nonce") }
+  else { check(f.captured?["comparison_request_id"] == nil,"Local/Server test received a Compare nonce") }
  }}
  choose(f.entryMode,"wg")
  for execution in ["server","auto"] {for bad:Any in [false,NSNull(),"true",1]{

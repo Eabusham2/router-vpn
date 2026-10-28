@@ -88,7 +88,7 @@ def run_case(directory, mutation):
     server=ThreadingHTTPServer(('127.0.0.1',0),Handler);server.daemon_threads=True
     thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     source=(ROOT/'client/macos/RouterVPNMacSpeedLab.swift').read_text()
-    methods=block(source,'    private func performLocalRequest(')+'\n'+block(source,'    func windowWillClose(')
+    methods='\n'.join(block(source, marker) for marker in ('    private func stopSpeedLabComparisonProgress(', '    private func startSpeedLabComparisonProgress(', '    private func performLocalRequest(', '    func windowWillClose('))
     methods=methods.replace('private func ','func ')
     if mutation=='missing-cancel':methods=methods.replace('request?.cancel(); request = nil','request = nil')
     if mutation=='missing-owner':methods=methods.replace('guard let self, !self.closed, self.generation == owner else { return }','guard let self else { return }; _ = owner')
@@ -106,7 +106,15 @@ import FoundationNetworking
 let routerVPNProductBaseURL=URL(string:CommandLine.arguments[1])!
 let fixture=URL(fileURLWithPath:CommandLine.arguments[2],isDirectory:true)
 final class Field{var title="";var stringValue="";var string=""}
+final class Product {
+ var owner:UUID?;var requestID:String?;var callback:(([String:Any],String)->Void)?;var starts=0;var stops=0
+ func startCapturedComparisonProgress(requestID:String?,timeout:TimeInterval,update:(([String:Any],String)->Void)?=nil)->UUID?{
+  guard let requestID else{return nil};owner=UUID();self.requestID=requestID;callback=update;starts+=1;return owner
+ }
+ func stopCapturedComparisonProgress(_ captured:UUID?){if let captured,owner==captured{owner=nil;requestID=nil;callback=nil;stops+=1}}
+}
 final class Owner {
+ let product:Product?=Product();var comparisonProgressOwner:UUID?
  var closed=false,cancelled=false,loadingOptions=false;var generation:UInt64=0;var request:RouterVPNMacSpeedLabTransport?
  let runButton=Field(),status=Field(),detail=Field();var updates=0
  func refreshControls(){}
@@ -134,9 +142,20 @@ for scenario in ["headers","stream"] {
  if callbacks != 1{fail("Late native callbacks completed a rejected owner again")};task.cancel();boundary.invalidateAndCancel()
 }
 let notice=Notification(name:Notification.Name("fixture-close"))
-let old=Owner();try old.performLocalRequest("/api/speed-lab/run",body:["test_case":"close"],timeout:8){_ in old.updates+=1}
+let old=Owner();let requestID=String(repeating:"a",count:32)
+try old.performLocalRequest("/api/speed-lab/run",body:["test_case":"close","scope":"temporary","topology":"external","execution":"auto","comparison_request_id":requestID],timeout:8){_ in old.updates+=1}
 wait({exists("started")},"Old native request did not reach loopback")
+guard let capturedProgress=old.product?.callback,old.product?.requestID==requestID else{fail("Native Speed Lab transport did not retain its exact comparison observer")}
+capturedProgress(["comparison":["request_id":String(repeating:"b",count:32)]],"foreign")
+if !old.detail.string.isEmpty{fail("Foreign comparison updated Speed Lab")}
+capturedProgress(["comparison":["request_id":requestID,"complete":false]],"owned Tor HTTP progress")
+if old.detail.string != "owned Tor HTTP progress"{fail("Captured comparison did not update active Speed Lab")}
+old.cancelled=true;capturedProgress(["comparison":["request_id":requestID]],"cancelled")
+if old.detail.string != "owned Tor HTTP progress"{fail("Cancelled Speed Lab accepted comparison progress")};old.cancelled=false
 old.windowWillClose(notice)
+capturedProgress(["comparison":["request_id":requestID]],"closed")
+if old.product?.callback != nil || old.comparisonProgressOwner != nil || old.detail.string != "owned Tor HTTP progress"{fail("Closed Speed Lab retained or revived its comparison callback")}
+old.status.stringValue=""
 let replacement=Owner();var replacementResult:Result<Data,Error>?
 try replacement.performLocalRequest("/api/speed-lab/run",body:["test_case":"replacement"],timeout:8){result in replacement.updates+=1;replacementResult=result}
 wait({exists("replacement-started")},"Replacement request did not start")
@@ -185,6 +204,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix='router-vpn-macos-speed-lab-transport-') as temporary:
         directory=Path(temporary)
         for mutation in (['shipping'] if args.shipping_only else ['shipping','missing-cancel','missing-owner','missing-size-completion']):run_case(directory,mutation)
+    subprocess.run([os.environ.get('PYTHON','python3'),str(ROOT/'deploy/test_macos_comparison_progress.py')]+(['--shipping-only'] if args.shipping_only else []),check=True)
     print('macOS shipping Speed Lab transport and captured dialog lifecycle: PASS',flush=True)
 
 

@@ -124,6 +124,7 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
     private let runButton = NSButton(title: "Run Speed Lab", target: nil, action: nil)
     private var nodes: [[String: Any]] = []
     private var capturedProfileTokens: [String: String] = [:]
+    private var comparisonProgressOwner: UUID?
     private var entryModes: [[String: Any]] = []
     private var supportedEntryModes: [String] = []
     private var exitModes: [String] = []
@@ -321,12 +322,31 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
         refreshControls()
     }
 
+    private func stopSpeedLabComparisonProgress() {
+        let owner = comparisonProgressOwner; comparisonProgressOwner = nil
+        product?.stopCapturedComparisonProgress(owner)
+    }
+    private func startSpeedLabComparisonProgress(_ body: [String: Any]?, owner: UInt64, timeout: TimeInterval) {
+        guard let body, body["scope"] as? String == "temporary", body["topology"] as? String == "external",
+              body["execution"] as? String == "auto", let requestID = body["comparison_request_id"] as? String else { return }
+        comparisonProgressOwner = product?.startCapturedComparisonProgress(requestID: requestID, timeout: timeout) { [weak self] payload, text in
+            guard let self, !self.closed, !self.cancelled, self.generation == owner, self.request != nil,
+                  let comparison = payload["comparison"] as? [String: Any], comparison["request_id"] as? String == requestID else { return }
+            if comparison["complete"] as? Bool == true {
+                self.status.stringValue = (comparison["failure"] as? String ?? "").isEmpty ?
+                    "Tor comparison complete; throughput testing and captured-path restoration continue…" : "Tor comparison failed; captured-path restoration continues…"
+            } else { self.status.stringValue = "Comparing Local and Server Tor paths…" }
+            self.detail.string = text
+        }
+    }
     private func performLocalRequest(_ path: String, body: [String: Any]?, timeout: TimeInterval, completion: @escaping (Result<Data, Error>) -> Void) throws {
         guard !closed, request == nil, let url = URL(string: path, relativeTo: routerVPNProductBaseURL)?.absoluteURL else { throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "Another Speed Lab request is active."]) }
+        stopSpeedLabComparisonProgress()
         generation &+= 1; let owner = generation; cancelled = false
         let transport = try RouterVPNMacSpeedLabTransport(url: url, body: body, timeout: timeout) { [weak self] result in
             DispatchQueue.main.async {
                 guard let self, !self.closed, self.generation == owner else { return }
+                self.stopSpeedLabComparisonProgress()
                 self.request = nil; self.loadingOptions = false
                 self.runButton.title = "Run Speed Lab"
                 self.refreshControls()
@@ -338,7 +358,9 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
                 completion(result)
             }
         }
-        request = transport; transport.start(); refreshControls()
+        request = transport
+        if path == "/api/speed-lab/run" { startSpeedLabComparisonProgress(body, owner: owner, timeout: timeout) }
+        transport.start(); refreshControls()
     }
 
     private func loadOptions() {
@@ -427,6 +449,9 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
             tokens[id] = captured
         }
         body["expected_selected_node_id"] = capturedSelection.selectedNodeID; body["expected_profile_tokens"] = tokens
+        if RouterVPNMacSpeedLabPathPolicy.torCompareRequest(body, nodes: nodes) {
+            body["comparison_request_id"] = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        }
         return body
     }
 
@@ -486,7 +511,7 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
     @objc private func runSpeedLab() {
         guard !closed else { return }
         if let request {
-            if !loadingOptions { cancelled = true; request.cancel(); status.stringValue = "Cancelling test request…"; refreshControls() }
+            if !loadingOptions { cancelled = true; stopSpeedLabComparisonProgress(); request.cancel(); status.stringValue = "Cancelling test request…"; refreshControls() }
             return
         }
         guard optionsReady else { return }
@@ -527,7 +552,7 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
     }
 
     func windowWillClose(_ notification: Notification) {
-        closed = true; generation &+= 1; cancelled = true; request?.cancel(); request = nil
+        closed = true; generation &+= 1; cancelled = true; stopSpeedLabComparisonProgress(); request?.cancel(); request = nil
     }
     @objc private func closePanel() { close() }
 

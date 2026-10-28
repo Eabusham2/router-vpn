@@ -138,7 +138,10 @@ SWIFT_PRODUCT = r'''
     var profiles: [[String: Any]] = []
     var routerIDs: [String] = []
     PRODUCT_PROPERTIES
+    var multihopProgressGeneration = UUID()
     func startMultihopProgress() {}
+    var stoppedProgress: [UUID] = []
+    func stopCapturedComparisonProgress(_ owner: UUID?) { if let owner { stoppedProgress.append(owner) } }
     func stopMultihopProgress() {}
     func refreshModes() {}
     func refreshLive() {}
@@ -260,6 +263,7 @@ for (i, entryMode) in expectedEntries.enumerated() {
         choose(i % expectedModes.count, e); owner.multihopEntryModePopup.selectItem(at: i)
         let before = owner.api.calls.count
         owner.connectMultihop()
+        let progressOwner = owner.multihopProgressGeneration
         check(owner.api.calls.count == before, "Connect posted before its deferred owner ran")
         // Replacing the displayed value cannot rewrite the already captured body.
         owner.multihopEntryModePopup.selectItem(at: (i + 1) % expectedEntries.count)
@@ -269,6 +273,9 @@ for (i, entryMode) in expectedEntries.enumerated() {
         check(call.path == "/api/multihop/connect" && Set(call.body.keys) == Set(["entry_id", "exit_id", "base", "entry_mode", "exit_mode", "execution"]), "main Connect copied private fields or omitted graph choices")
         check(call.body["entry_mode"] as? String == entryMode && call.body["exit_mode"] as? String == expectedModes[i % expectedModes.count] && call.body["execution"] as? String == execution, "main Connect replaced captured entry, exit or execution")
         check(call.body["entry_id"] as? String == entryID && call.body["exit_id"] as? String == exitID && call.body["base"] as? String == "auto", "main Connect replaced exact identities or saved base fallback")
+        owner.multihopProgressGeneration = UUID()
+        DispatchQueue.main.run()
+        check(owner.stoppedProgress.last == progressOwner, "Delayed Connect finalizer captured the replacement comparison owner")
         DispatchQueue.clear()
     }
 }
@@ -577,6 +584,7 @@ def macos(directory):
             'let entryMode = try (multihop ? RouterVPNNodeEntryModes.require(index: multihopEntryModePopup.indexOfSelectedItem) : "")',
             'let entryMode = "wg"'),
         "main-entry-connect": replace_once(source, '"entry_mode": entryMode', '"entry_mode": "wg"'),
+        "main-progress-owner": replace_once(source, 'self.stopCapturedComparisonProgress(progressOwner)', 'self.stopCapturedComparisonProgress(self.multihopProgressGeneration)'),
         "unsupported-entry-load": replace_once(source,
             'selection.entryMode.flatMap({ RouterVPNNodeEntryModes.index(for: $0) }) != nil,', 'true,'),
         "unsupported-load": replace_once(source,

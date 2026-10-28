@@ -73,7 +73,7 @@ for id in ["obfs4", "meek_lite", "snowflake", "webtunnel", "tor"] {
         check(body["id"] as? String == "tor-edit" && body["expected_selected_node_id"] as? String == "tor-edit", "Update target changed")
         check((body["expected_profile_tokens"] as? [String: String])?.count == 2, "Entry/source identity dropped")
         check(body["transport"] as? String == id && body["kill_switch_policy"] as? String == kill, "Transport/protection changed")
-        for key in ["profile_id", "entry_id", "entry_mode", "direct", "execution", "api_token", "dns_mode"] { check(body[key] == nil, "Copied unrelated field "+key) }
+        for key in ["profile_id", "entry_id", "entry_mode", "direct", "execution", "comparison_request_id", "api_token", "dns_mode"] { check(body[key] == nil, "Copied unrelated field "+key) }
         try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]).write(to: directory.appendingPathComponent("tor-update-\(filePrefix)\(id)-\(kill).json"))
     }
 }

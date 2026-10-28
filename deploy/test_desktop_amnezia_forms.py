@@ -318,6 +318,17 @@ for proto in ["tor", "tor-bridge"] { for execution in ["local", "server", "auto"
     let prepared = try externalPathConnectBody(captured: tor, entryID: "entry", execution: execution, direct: false, current: [tor, entry], entryMode: "wg", entryModes: entryModes)
     let body = try externalCapturedBody(prepared, opened: opened, current: opened)
     check(body["execution"] as? String == execution && body["entry_mode"] as? String == "wg" && (body["expected_profile_tokens"] as? [String: String])?.count == 2, "Tor path changed execution, entry mode or captured source"); count += 1
+    if execution == "auto" {
+        let requestID = body["comparison_request_id"] as? String ?? ""
+        check(requestID.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil, "Tor Compare omitted its request nonce")
+        check(try externalCapturedBody(body, opened: opened, current: opened)["comparison_request_id"] as? String == requestID, "Source validation changed an existing request nonce")
+        check(try externalCapturedBody(prepared, opened: opened, current: opened)["comparison_request_id"] as? String != requestID, "A new Tor request reused a previous nonce")
+        for bad: Any in [String(repeating: "A", count: 32), "short", 123] {
+            var malformed = prepared; malformed["comparison_request_id"] = bad
+            check(rejects { _ = try externalCapturedBody(malformed, opened: opened, current: opened) }, "Malformed Tor request nonce passed captured source validation")
+        }
+    } else { check(body["comparison_request_id"] == nil, "Local/Server path received a Compare nonce") }
+    check(externalConnectionTimeout(body) == (execution == "auto" ? 540 : 180), "Captured public Tor request has the wrong HTTP budget")
     let saved = try externalConnectBody(profile: tor, execution: execution)
     let primary = try externalCapturedBody(saved, opened: opened, current: opened)
     check(primary["execution"] as? String == execution && (primary["expected_profile_tokens"] as? [String: String])?["entry"] == entry["profile_token"] as? String, "Tor primary Connect lost its private entry"); count += 1
@@ -421,7 +432,7 @@ check(menu.menu!.items.isEmpty, "Partial catalog exposed misaligned private iden
     func bool(forKey: String) -> Bool { reads += 1; return true }
 }
 final class DispatchAPI {
-    var body: [String: Any]?; var path = ""
+    var body: [String: Any]?; var path = ""; var timeout: Double = 0
     var catalog: [String: Any] = [:]; var capability: Any = true
     func json(_ path: String, timeout: Double) throws -> Any {
         if path == "/api/external-profile/capabilities" { return ["profile_source_preconditions": capability] }
@@ -429,7 +440,7 @@ final class DispatchAPI {
         throw NSError(domain: "fixture", code: 404)
     }
     func request(_ path: String, method: String, body: [String: Any], timeout: Double) throws -> Data {
-        self.path = path; self.body = body; return Data("{}".utf8)
+        self.path = path; self.body = body; self.timeout = timeout; return Data("{}".utf8)
     }
 }
 @MainActor final class DispatchForm {
@@ -437,6 +448,11 @@ final class DispatchAPI {
     let api = DispatchAPI(); var pending: (() throws -> String)?
     let unifiedMultihopEnabledKey = "unrelated-router-choice"
     var routerConnections = 0; var idle = true; var error = ""
+    var progressRequest: String?; var progressOwner: UUID?
+    func startCapturedComparisonProgress(requestID: String?, timeout: Double) -> UUID? {
+        guard let requestID else { return nil }; progressRequest = requestID; progressOwner = UUID(); return progressOwner
+    }
+    func stopCapturedComparisonProgress(_ owner: UUID?) { if let owner, progressOwner == owner { progressOwner = nil } }
     func appendHelp(_ text: String) { error = text }
     func connectMultihop() { routerConnections += 1 }
     func requireMutationIdle(_ action: String) throws { if !idle { throw NSError(domain: "fixture", code: 409) } }
@@ -453,6 +469,18 @@ for choice in ["local", "server", "auto"] {
     _ = try dispatch.pending!()
     check(dispatch.api.path == "/api/external-profile/connect" && dispatch.api.body?["profile_id"] as? String == "captured-exit" && dispatch.api.body?["execution"] as? String == choice, "Asynchronous external dispatch changed its captured node/choice"); count += 1
 }
+for proto in ["tor", "tor-bridge"] { for execution in ["local", "server", "auto"] {
+    let dispatch = DispatchForm()
+    let tor: [String: Any] = ["id": "exit", "node_kind": "external", "profile_token": String(repeating: "a", count: 64), "external": ["protocol": proto],
+        "multihop_enabled": true, "multihop_entry_id": "entry", "multihop_exit_id": "exit", "multihop_execution": execution]
+    dispatch.profiles = [tor, ["id": "entry", "node_kind": "router-vpn", "profile_token": String(repeating: "b", count: 64)]]
+    dispatch.connect(); check(dispatch.pending != nil, "Actual Tor primary callback did not capture its source")
+    _ = try dispatch.pending!()
+    check(dispatch.api.timeout == (execution == "auto" ? 540 : 180), "Actual Tor primary used an unrelated HTTP budget")
+    if execution == "auto" { check(dispatch.progressRequest == dispatch.api.body?["comparison_request_id"] as? String && dispatch.progressRequest?.count == 32, "Primary observer borrowed a different request nonce") }
+    else { check(dispatch.progressOwner == nil && dispatch.api.body?["comparison_request_id"] == nil, "Concrete execution started a Compare observer") }
+    count += 1
+} }
 let invalidDispatch = DispatchForm(); invalidDispatch.profiles = [["id": "captured-exit", "profile_token": String(repeating: "a", count: 64), "node_kind": "external", "multihop_execution": "invalid"]]; invalidDispatch.connect()
 check(invalidDispatch.pending == nil && invalidDispatch.routerConnections == 0, "Invalid external execution fell through to Router Connect"); count += 1
 let staleDispatch = DispatchForm(); staleDispatch.profiles = [["id": "captured-exit", "profile_token": String(repeating: "a", count: 64), "node_kind": "external", "multihop_execution": "server"]]; staleDispatch.connect(); staleDispatch.idle = false
