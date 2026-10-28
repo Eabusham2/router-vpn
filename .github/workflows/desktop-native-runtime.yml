@@ -183,11 +183,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tor_args=()
+          # macOS Bash 3.2 treats an empty array as unset under nounset.
+          runtime_args=('${{ matrix.target }}' 'dist/native-runtime/${{ matrix.slug }}')
           if [[ '${{ matrix.target }}' == windows/* ]]; then
-            tor_args+=(--tor-compiled dist/tor-compiled/windows-amd64)
+            runtime_args+=(--tor-compiled dist/tor-compiled/windows-amd64)
           fi
-          python3 deploy/build-native-runtime.py '${{ matrix.target }}' 'dist/native-runtime/${{ matrix.slug }}' "${tor_args[@]}"
+          python3 deploy/build-native-runtime.py "${runtime_args[@]}"
           python3 deploy/test_desktop_tor_package.py --package 'dist/native-runtime/${{ matrix.slug }}' --target '${{ matrix.target }}' --within-native
           python3 deploy/test_desktop_native_bundle.py 'dist/native-runtime/${{ matrix.slug }}' '${{ matrix.target }}'
           python3 deploy/test_native_runtime_delivery.py --bundle 'dist/native-runtime/${{ matrix.slug }}' --target '${{ matrix.target }}'
