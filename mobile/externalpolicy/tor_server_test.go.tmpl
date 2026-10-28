@@ -15,7 +15,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -25,7 +24,6 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -84,31 +82,54 @@ type mobileServerNativeFixture struct {
 	badPadding                                              atomic.Int32
 	allowPending                                            atomic.Bool
 	entryQueries, exitQueries, publicChecks, dataStreams    atomic.Int32
+	publicTLSHandshakes                                     atomic.Int32
 	putEntered, putRelease                                  chan struct{}
 	putOnce                                                 sync.Once
 }
 
-func mobileServerNativeRoots(t *testing.T) tls.Certificate {
+func mobileServerNativeCertificate(t *testing.T, hostname string, issuer *tls.Certificate) tls.Certificate {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	template := &x509.Certificate{SerialNumber: big.NewInt(24601), Subject: pkix.Name{CommonName: "owned Tor test root"},
-		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true,
-		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, DNSNames: []string{"check.torproject.org"}}
-	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, DNSNames: []string{hostname}}
+	parent, signer := template, any(key)
+	if issuer == nil {
+		template.IsCA = true
+		template.KeyUsage |= x509.KeyUsageCertSign
+	} else {
+		template.SerialNumber = big.NewInt(24602)
+		parent, err = x509.ParseCertificate(issuer.Certificate[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		signer = issuer.PrivateKey
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, parent, &key.PublicKey, signer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	directory := t.TempDir()
-	root := filepath.Join(directory, "root.pem")
-	if err := os.WriteFile(root, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600); err != nil {
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+func mobileServerNativeRoots(t *testing.T) tls.Certificate {
+	t.Helper()
+	certificate := mobileServerNativeCertificate(t, "check.torproject.org", nil)
+	root, err := x509.ParseCertificate(certificate.Certificate[0])
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("SSL_CERT_FILE", root)
-	t.Setenv("SSL_CERT_DIR", directory)
-	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+	roots := x509.NewCertPool()
+	roots.AddCert(root)
+	// Darwin uses its platform trust store rather than SSL_CERT_FILE. This
+	// isolated child uses Go's cross-platform test roots while the production
+	// proof still performs its normal certificate-chain and hostname checks.
+	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
+	x509.SetFallbackRoots(roots)
+	return certificate
 }
 
 func newMobileServerNativeFixture(t *testing.T, certificate tls.Certificate, mode string, home bool, changeGraph func(map[string]any), paddingRate ...int) *mobileServerNativeFixture {
@@ -466,6 +487,7 @@ func (f *mobileServerNativeFixture) socks(connection net.Conn) error {
 		if err := secure.Handshake(); err != nil {
 			return err
 		}
+		f.publicTLSHandshakes.Add(1)
 		request, err := http.ReadRequest(bufio.NewReader(secure))
 		if err != nil {
 			return err
@@ -552,7 +574,7 @@ func TestRouterTorServerNativeLeaseAndProof(t *testing.T) {
 					if err != nil || json.Unmarshal([]byte(raw), &proof) != nil || !proof.IsTor || !proof.DNSProven || proof.SessionID != mobileServerNativeSession || !request.Healthy() {
 						t.Fatal("actual native client proof failed", raw, err)
 					}
-					if f.publicChecks.Load() != 1 || home && (f.entryQueries.Load() == 0 || f.exitQueries.Load() != 0) || !home && (f.exitQueries.Load() == 0 || f.entryQueries.Load() != 0) {
+					if f.publicChecks.Load() != 1 || f.publicTLSHandshakes.Load() != 1 || home && (f.entryQueries.Load() == 0 || f.exitQueries.Load() != 0) || !home && (f.exitQueries.Load() == 0 || f.entryQueries.Load() != 0) {
 						t.Fatal("client proof or selected DNS used another path")
 					}
 					connection, err := f.owner.DialContext(context.Background(), "tcp", M.ParseSocksaddr("8.8.8.8:443"))
@@ -590,9 +612,27 @@ func TestRouterTorServerNativeLeaseAndProof(t *testing.T) {
 			}
 		}
 	}
-	for _, failure := range []string{"node", "source", "dns", "tls", "socks", "padding-missing", "padding-rate", "padding-counter", "padding-expired"} {
+	for _, failure := range []string{"node", "source", "dns", "tls", "tls-hostname", "tls-untrusted", "socks", "padding-missing", "padding-rate", "padding-counter", "padding-expired"} {
 		t.Run("reject/"+failure, func(t *testing.T) {
-			f := newMobileServerNativeFixture(t, certificate, "tor", false, nil, 64)
+			serverCertificate := certificate
+			if failure == "tls-hostname" {
+				serverCertificate = mobileServerNativeCertificate(t, "wrong-tor.example", &certificate)
+			} else if failure == "tls-untrusted" {
+				serverCertificate = mobileServerNativeCertificate(t, "check.torproject.org", nil)
+			}
+			if failure == "tls-hostname" || failure == "tls-untrusted" {
+				leaf, err := x509.ParseCertificate(serverCertificate.Certificate[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = leaf.Verify(x509.VerifyOptions{DNSName: "check.torproject.org"})
+				var hostnameError x509.HostnameError
+				var trustError x509.UnknownAuthorityError
+				if failure == "tls-hostname" && !errors.As(err, &hostnameError) || failure == "tls-untrusted" && !errors.As(err, &trustError) {
+					t.Fatal("certificate fixture did not exercise the intended verification failure", err)
+				}
+			}
+			f := newMobileServerNativeFixture(t, serverCertificate, "tor", false, nil, 64)
 			switch failure {
 			case "node":
 				f.badNode.Store(true)
@@ -617,6 +657,11 @@ func TestRouterTorServerNativeLeaseAndProof(t *testing.T) {
 			raw, err := request.Run()
 			if err == nil || raw != "" || request.Healthy() {
 				t.Fatal("failed native proof became Connected", failure)
+			}
+			if failure == "tls-hostname" || failure == "tls-untrusted" {
+				if f.publicChecks.Load() != 1 || f.publicTLSHandshakes.Load() != 0 {
+					t.Fatal("native proof did not reject the invalid certificate during TLS", err)
+				}
 			}
 			if (failure == "node" || failure == "source") && f.methodCount("PUT") != 0 {
 				t.Fatal("wrong identity/source acquired a lease")
