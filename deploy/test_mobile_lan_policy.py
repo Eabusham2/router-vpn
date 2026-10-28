@@ -7,7 +7,40 @@ import subprocess
 import tempfile
 import unittest
 ROOT=Path(__file__).resolve().parents[1]
+
+def external_lan_boundary(provider):
+    preparation=provider.split('private func prepareExternalLibbox(',1)[1].split('private func ',1)[0]
+    launch=provider.split('private func startExternalLibbox(',1)[1].split('private func ',1)[0]
+    intersection='tunnelProtocol.excludeLocalNetworks == ((entry["home_lan_access"] as? Bool ?? true) && (selectedProfile["home_lan_access"] as? Bool ?? true))'
+    # Both Tor-entry and ordinary-entry preparation must combine the captured
+    # policies before returning any graph to either Compare or direct launch.
+    branches=preparation.split('} else if let entryData = provider["external_entry_bundle"] {')
+    assert len(branches)==2, 'both captured entry preparation branches are required'
+    for branch in branches:
+        assert branch.count(intersection)==1, 'captured entry lost its LAN intersection'
+        assert 'effectiveStrict = strict || strictKillSwitchRequested(entry)' in branch
+        assert '!effectiveStrict || (tunnelProtocol.includeAllNetworks && tunnelProtocol.enforceRoutes &&' in branch
+    capture='let prepared = try prepareExternalLibbox(provider: provider, selectedProfile: selectedProfile, strict: strict)'
+    assert launch.count(capture)==1, 'external startup must prepare its exact captured policies'
+    assert launch.index(capture)<launch.index('try beginTorComparison(profile: selectedProfile, entry: prepared,')
+    assert launch.index(capture)<launch.index('engine.start(')
+    assert 'effectiveStrict = prepared.strict' in launch
+    assert launch.count('engine.start(files: files, strict: effectiveStrict')==2
+    return intersection
+
 class Tests(unittest.TestCase):
+    def test_external_preparation_cannot_bypass_either_captured_policy(self):
+        provider=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
+        intersection=external_lan_boundary(provider)
+        prefix=provider.index('private func prepareExternalLibbox(')
+        suffix=provider.index('private func startExternalLibbox(',prefix)
+        for match in re.finditer(re.escape(intersection),provider[prefix:suffix]):
+            position=prefix+match.start()
+            broken=provider[:position]+provider[position:].replace(intersection,'true',1)
+            with self.assertRaises(AssertionError):external_lan_boundary(broken)
+        broken=provider.replace('let prepared = try prepareExternalLibbox(provider: provider, selectedProfile: selectedProfile, strict: strict)',
+                                'let prepared = try prepareExternalLibbox(provider: provider, selectedProfile: selectedProfile, strict: false)',1)
+        with self.assertRaises(AssertionError):external_lan_boundary(broken)
     def test_mobile_policy_runs_before_any_engine_start(self):
         provider=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
         body=provider.split('private func startMultihop(',1)[1].split('private func multihopWireGuardEndpoint(',1)[0]
@@ -45,10 +78,7 @@ class Tests(unittest.TestCase):
         preflight=preflights[0]
         capturedEntryCondition=' && (provider["tor_entry_bundle"] != nil || provider["external_entry_bundle"] != nil)'
         self.assertIn(capturedEntryCondition,preflight)
-        externalBody=provider.split('private func startExternalLibbox(',1)[1].split('private func ',1)[0]
-        intersection='tunnelProtocol.excludeLocalNetworks == ((entry["home_lan_access"] as? Bool ?? true) && (selectedProfile["home_lan_access"] as? Bool ?? true))'
-        self.assertIn(intersection,externalBody)
-        self.assertLess(externalBody.index(intersection),externalBody.index('engine.start('))
+        external_lan_boundary(provider)
         source='''import Foundation
 struct TunnelProtocol { var excludeLocalNetworks: Bool }
 func preflight(_ engine: String, _ allowLAN: Bool, _ exclusion: Bool, _ capturedEntry: String?) -> Bool {

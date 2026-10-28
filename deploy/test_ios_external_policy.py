@@ -353,7 +353,7 @@ def main():
         command = ['swiftc', '-swift-version', '6', '-module-cache-path', str(work / 'module-cache'), '-I', str(work), '-L', str(work), '-lWireGuardKit', '-lLibbox']
         if platform.system() != 'Darwin':
             command += ['-lNetwork']
-        command += ['-Xlinker', '-rpath', '-Xlinker', str(work), str(ROOT / 'ios/RouterVPN/PacketTunnel/IOSStartLayer.swift'), str(ROOT / 'ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift'), str(code), '-o', str(work / 'tests')]
+        command += ['-Xlinker', '-rpath', '-Xlinker', str(work), str(ROOT / 'ios/RouterVPN/App/IOSMultihopExecution.swift'), str(ROOT / 'ios/RouterVPN/PacketTunnel/IOSStartLayer.swift'), str(ROOT / 'ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift'), str(code), '-o', str(work / 'tests')]
         subprocess.run(command, check=True, timeout=120)
         subprocess.run([str(work / 'tests'), str(compiler)], check=True, timeout=90)
 
