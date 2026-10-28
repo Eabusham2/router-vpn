@@ -205,6 +205,7 @@ def main():
         directory=Path(temporary)
         for mutation in (['shipping'] if args.shipping_only else ['shipping','missing-cancel','missing-owner','missing-size-completion']):run_case(directory,mutation)
     subprocess.run([os.environ.get('PYTHON','python3'),str(ROOT/'deploy/test_macos_comparison_progress.py')]+(['--shipping-only'] if args.shipping_only else []),check=True)
+    subprocess.run([os.environ.get('PYTHON','python3'),str(ROOT/'deploy/test_macos_public_comparison_transport.py')]+(['--shipping-only'] if args.shipping_only else []),check=True)
     print('macOS shipping Speed Lab transport and captured dialog lifecycle: PASS',flush=True)
 
 

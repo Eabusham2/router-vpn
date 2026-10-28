@@ -82,6 +82,13 @@ func productDNSPolicyBody(captured: [String: Any]?, displayedProfileID: String, 
     return body
 }
 
+private final class ProductComparisonTransportDelegate: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        completionHandler(nil)
+    }
+}
+
 final class ProductAPI {
     private let session: URLSession
     init() {
@@ -95,6 +102,7 @@ final class ProductAPI {
         session = URLSession(configuration: c)
     }
     func request(_ path: String, method: String = "GET", body: [String: Any]? = nil, timeout: TimeInterval = 15) throws -> Data {
+        try validateTimeout(timeout)
         guard let url = URL(string: path, relativeTo: routerVPNProductBaseURL) else { throw NSError(domain: "RouterVPNMac", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid local API path"]) }
         var req = URLRequest(url: url); req.httpMethod = method; req.timeoutInterval = timeout; req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         req.setValue("application/json", forHTTPHeaderField: "Accept")
@@ -102,14 +110,53 @@ final class ProductAPI {
         return try perform(req, timeout: timeout)
     }
     func requestRaw(_ path: String, body: Data, timeout: TimeInterval = 15) throws -> Data {
+        try validateTimeout(timeout)
         guard let url = URL(string: path, relativeTo: routerVPNProductBaseURL) else { throw NSError(domain: "RouterVPNMac", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid local API path"]) }
         var req = URLRequest(url: url); req.httpMethod = "POST"; req.timeoutInterval = timeout; req.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData; req.httpBody = body
         req.setValue("application/json", forHTTPHeaderField: "Accept"); req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         return try perform(req, timeout: timeout)
     }
+    private func validateTimeout(_ timeout: TimeInterval) throws {
+        guard timeout.isFinite, timeout > 0, timeout <= 540 else {
+            throw NSError(domain: "RouterVPNMac", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid local request deadline."])
+        }
+    }
+    private func capturedComparisonSession(_ req: URLRequest, timeout: TimeInterval) throws -> URLSession? {
+        guard timeout > 300 else { return nil }
+        // Only the already captured Tor Compare action receives a longer
+        // resource budget. URLRequest's timeout alone does not extend the
+        // ordinary session's total 300-second resource ceiling.
+        guard timeout == 540, req.url == routerVPNProductBaseURL.appendingPathComponent("api/external-profile/connect"),
+              req.httpMethod == "POST", let bytes = req.httpBody,
+              let body = (try? JSONSerialization.jsonObject(with: bytes)) as? [String: Any],
+              body["execution"] as? String == "auto", let id = body["profile_id"] as? String, !id.isEmpty,
+              body["expected_selected_node_id"] is String,
+              let tokens = body["expected_profile_tokens"] as? [String: String], tokens[id] != nil,
+              tokens.allSatisfy({ !$0.key.isEmpty && $0.value.utf8.count == 64 && $0.value.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) }),
+              let requestID = body["comparison_request_id"] as? String, requestID.utf8.count == 32,
+              requestID.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+            throw NSError(domain: "RouterVPNMac", code: 1, userInfo: [NSLocalizedDescriptionKey: "The extended request deadline requires a captured Tor comparison."])
+        }
+        if let direct = body["direct"] {
+            guard let value = direct as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID(), !value.boolValue else {
+                throw NSError(domain: "RouterVPNMac", code: 1, userInfo: [NSLocalizedDescriptionKey: "Tor comparison requires a captured Router entry."])
+            }
+        }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = timeout
+        configuration.timeoutIntervalForResource = timeout
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        configuration.connectionProxyDictionary = [:]
+        configuration.httpShouldSetCookies = false
+        configuration.urlCache = nil
+        return URLSession(configuration: configuration, delegate: ProductComparisonTransportDelegate(), delegateQueue: nil)
+    }
     private func perform(_ req: URLRequest, timeout: TimeInterval) throws -> Data {
+        let comparisonSession = try capturedComparisonSession(req, timeout: timeout)
+        let activeSession = comparisonSession ?? session
+        defer { comparisonSession?.invalidateAndCancel() }
         let sem = DispatchSemaphore(value: 0); var data = Data(); var code = 0; var err: Error?
-        let task = session.dataTask(with: req) { d, r, e in data = d ?? Data(); code = (r as? HTTPURLResponse)?.statusCode ?? 0; err = e; sem.signal() }
+        let task = activeSession.dataTask(with: req) { d, r, e in data = d ?? Data(); code = (r as? HTTPURLResponse)?.statusCode ?? 0; err = e; sem.signal() }
         task.resume()
         if sem.wait(timeout: .now() + timeout + 2) == .timedOut { task.cancel(); throw NSError(domain: "RouterVPNMac", code: 2, userInfo: [NSLocalizedDescriptionKey: "Local controller request timed out"]) }
         if let err { throw err }
