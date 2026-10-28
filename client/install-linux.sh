@@ -4,7 +4,7 @@ set -euo pipefail
 BUNDLE=${1:-$(pwd)}
 [[ -f "$BUNDLE/client.json" && -f "$BUNDLE/routers.json" && -d "$BUNDLE/generated" ]] || { echo 'Run from the extracted router-vpn-client-bundle folder.'; exit 1; }
 apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools resolvconf nftables git make gcc libc6-dev golang-go curl python3 tar cmake clang pkg-config libsodium-dev cargo rustc tor
+DEBIAN_FRONTEND=noninteractive apt-get install -y wireguard-tools resolvconf nftables iproute2 passwd util-linux git make gcc libc6-dev golang-go curl python3 tar cmake clang pkg-config libsodium-dev cargo rustc tor
 "$BUNDLE/client/install-xray.sh"
 ROOT=/opt/router-vpn-client
 mkdir -p "$ROOT" "$ROOT/bin" "$ROOT/client" /usr/local/bin /usr/local/lib /usr/local/sbin

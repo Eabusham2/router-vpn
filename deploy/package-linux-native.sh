@@ -86,6 +86,7 @@ cat > "$dir/install-router-vpn.sh" <<'SH'
 set -euo pipefail
 [[ ${EUID:-$(id -u)} -eq 0 ]] || { echo 'Run with sudo.' >&2; exit 1; }
 SRC=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+bash "$SRC/client/install-linux-system-tools.sh" --install "$SRC/router-vpn-app"
 ROOT=/opt/router-vpn-client
 mkdir -p "$ROOT" /usr/local/bin /usr/share/applications /usr/share/icons/hicolor/256x256/apps
 
@@ -149,15 +150,21 @@ The app starts the sibling router-vpn-client only when no controller is already 
 only that owned process. The generic archive contains no linked home node; link/import node data
 separately. Router VPN is MIT-licensed; see LICENSE.
 
-Runtime desktop dependencies: GTK3, libcurl and json-glib. Tunnel engines/tools are installed by
-the normal Router VPN Linux runtime setup; unsupported mode checks remain unavailable/grey rather
-than being substituted with a fake compatibility path.
+The installer checks the actual native GUI's linked libraries and the system tools required for
+networking and strict protection before replacing application files. On Debian/Ubuntu it installs
+missing dependencies using the configured package repositories: GTK3, libcurl, json-glib, Python 3,
+nftables, iproute2, passwd, util-linux and libc-bin. Other distributions can provide the same tools
+with their package manager before installation. No VPN engine is compiled during this setup.
+
+Direct-folder launches need these same system dependencies. Run
+bash client/install-linux-system-tools.sh --check ./router-vpn-app to check them without installing.
 TXT
 
 "$ROOT/deploy/package-xray-runtime.sh" "linux/$ARCH" "$dir"
 "$ROOT/deploy/package-amnezia-runtime.sh" "linux/$ARCH" "$dir"
 "$ROOT/deploy/package-native-runtime.sh" "linux/$ARCH" "$dir"
 python3 "$ROOT/deploy/test_linux_runtime_install.py" --package "$dir"
+bash "$dir/client/install-linux-system-tools.sh" --check "$dir/router-vpn-app"
 python3 "$ROOT/server/scripts/source_provenance.py" "$dir" --family "linux-$ARCH"
 tar -C "$work" -czf "$OUT/$name.tar.gz" "$name"
 python3 "$ROOT/deploy/native-runtime-bundle.py" verify-package "linux/$ARCH" "$OUT/$name.tar.gz"
