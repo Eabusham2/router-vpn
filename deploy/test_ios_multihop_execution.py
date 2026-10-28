@@ -124,8 +124,61 @@ SWIFT = r'''
    reject("standalone Tor cannot borrow another entry receipt"){_ = try IOSMultihopExecution.Source(configuration:config,digest:digest)}
   }
  }
+ static func ordinaryTorExecutions()throws {
+  let session=UUID().uuidString,request=String(repeating:"c",count:32),hold=String(repeating:"d",count:32)
+  for mode in ["wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"] {for kind in ["tor","tor-bridge"] {
+   var config=try torConfiguration("local",kind,mode),exitRoot=try JSONSerialization.jsonObject(with:config["bundle"] as! Data) as! [String:Any]
+   var exits=exitRoot["routerProfiles"] as! [[String:Any]];exits[0]["dns_mode"]="custom";exits[0]["dns_protocol"]="tcp";exits[0]["dns_host"]="9.9.9.9"
+   exitRoot["routerProfiles"]=exits;config["bundle"]=try JSONSerialization.data(withJSONObject:exitRoot,options:.sortedKeys)
+   let entry:[String:Any]=["id":"entry","node_kind":"external","router_api":"","api_token":"","node_proof_id":"",
+    "external":["protocol":mode,"expected_public_ip":"203.0.113.88",mode.replacingOccurrences(of:"-",with:"_"):["password":"exact ordinary credential"]],
+    "dns_mode":"custom","dns_protocol":"tcp","dns_host":"9.9.9.9","dns_port":5353,"mtu_policy":"fixed","manual_mtu":1380,"home_lan_access":false,"ipv6_mode":"off"]
+   let entryRoot:[String:Any]=["selectedRouterID":"entry","routerProfiles":[entry]]
+   config["tor_entry_bundle"]=try JSONSerialization.data(withJSONObject:entryRoot,options:.sortedKeys)
+   let source=try IOSMultihopExecution.Source(configuration:config,digest:digest),required=try IOSMultihopExecution.requiresCapture(configuration:config)
+   check("ordinary Tor captures Local with exact imported entry mode",required && source.requested=="local" && source.entryMode==mode && source.exitMode==kind)
+   let receipt=try IOSMultihopExecution.Capture(source:source,execution:"local",session:session,request:request),bytes=try receipt.encoded()
+   let restored=try IOSMultihopExecution.restoredCapture(option:String(decoding:bytes,as:UTF8.self) as NSString,source:source,mtuHold:hold)
+   check("ordinary Tor restores the proved execution without private Router pins",restored==receipt && restored?.pins == .empty)
+   IOSPrivateJSONStore.value=nil;try IOSStartupLastChoice.record(configuration:config,receipt:receipt,digest:digest)
+   let startup=try IOSStartupLastChoice.restored(configuration:config,digest:digest)
+   check("ordinary Tor Last keeps source and Local without copying credentials",startup?.source==source && startup?.execution=="local" && !String(decoding:IOSPrivateJSONStore.value!,as:UTF8.self).contains("credential"))
+   for field in ["credential","public-ip","dns","mtu","lan","ipv6","bootstrap"] {
+    var changed=config,profile=entry
+    switch field {
+    case "credential":var ext=profile["external"] as! [String:Any];ext[mode.replacingOccurrences(of:"-",with:"_")]=["password":"replacement ordinary credential"];profile["external"]=ext
+    case "public-ip":var ext=profile["external"] as! [String:Any];ext["expected_public_ip"]="203.0.113.99";profile["external"]=ext
+    case "dns":profile["dns_port"]=8853
+    case "mtu":profile["manual_mtu"]=1400
+    case "lan":profile["home_lan_access"]=true
+    case "ipv6":profile["ipv6_mode"]="on"
+    default:profile["dns_bootstrap"]=["server":["protocol":"tcp","server":"9.9.9.9","port":5353],"query":"resolver.example.test"]
+    }
+    changed["tor_entry_bundle"]=try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[profile]],options:.sortedKeys)
+    let replacement=try IOSMultihopExecution.Source(configuration:changed,digest:digest)
+    reject("ordinary Tor receipt cannot move to changed "+field){_ = try IOSMultihopExecution.Capture.decode(bytes,source:replacement)}
+    let stale=try IOSStartupLastChoice.restored(configuration:changed,digest:digest)
+    check("ordinary Tor Last ignores changed "+field,stale==nil)
+   }
+   for fault in ["server","auto","private-api","private-token","private-proof","wrong-mode","missing-ip"] {
+    var changed=config,profile=entry,exit=exits[0]
+    switch fault {
+    case "server","auto":exit["multihop_execution"]=fault
+    case "private-api":profile["router_api"]="http://10.8.0.1:8787"
+    case "private-token":profile["api_token"]="unowned private authority"
+    case "private-proof":profile["node_proof_id"]=String(repeating:"a",count:64)
+    case "wrong-mode":exit["multihop_entry_mode"]="another-mode"
+    default:var ext=profile["external"] as! [String:Any];ext["expected_public_ip"]="";profile["external"]=ext
+    }
+    changed["tor_entry_bundle"]=try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[profile]],options:.sortedKeys)
+    changed["bundle"]=try JSONSerialization.data(withJSONObject:["selectedRouterID":"exit","routerProfiles":[exit]],options:.sortedKeys)
+    reject("ordinary Tor cannot acquire private or changed source authority "+fault){_ = try IOSMultihopExecution.Source(configuration:changed,digest:digest)}
+   }
+  }}
+ }
  static func main()throws{
   try torExecutions()
+  try ordinaryTorExecutions()
   let session=UUID().uuidString,request=String(repeating:"d",count:32),hold=String(repeating:"e",count:32)
   for entry in ["wg","awg2-strong","reality-xhttp","max-quic-awg"] {for requested in ["local","server","auto"]{
    let config=try source(requested,entry),before=try IOSMultihopExecution.Source(configuration:config,digest:digest)

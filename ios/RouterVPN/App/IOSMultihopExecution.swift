@@ -50,7 +50,17 @@ enum IOSMultihopExecution {
             let tor = external && ["tor", "tor-bridge"].contains((exitProfile["external"] as? [String: Any])?["protocol"] as? String ?? "")
             let entryKey = tor ? "tor_entry_bundle" : (external ? "external_entry_bundle" : "entryBundle")
             guard let entry = configuration[entryKey] as? Data else { throw issue() }
-            let entryProfile = try Self.profile(entry, kind: "router-vpn")
+            let ordinaryEntry = tor ? try? Self.profile(entry, kind: "external") : nil
+            let entryProfile = try ordinaryEntry ?? Self.profile(entry, kind: "router-vpn")
+            if let ordinaryEntry {
+                guard IOSMultihopExecution.torSelection(exitProfile) == "local",
+                      let transport = ordinaryEntry["external"] as? [String: Any],
+                      let kind = transport["protocol"] as? String,
+                      ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(kind),
+                      exitProfile["multihop_entry_mode"] as? String == kind,
+                      let expected = transport["expected_public_ip"] as? String, !expected.isEmpty,
+                      ["node_proof_id", "router_api", "api_token"].allSatisfy({ ordinaryEntry[$0] == nil || ordinaryEntry[$0] is NSNull || ordinaryEntry[$0] as? String == "" }) else { throw issue() }
+            }
             guard exitProfile["multihop_enabled"] as? Bool == true,
                   let exitID = exitProfile["id"] as? String, let entryID = entryProfile["id"] as? String,
                   exitID != entryID, exitProfile["multihop_exit_id"] as? String == exitID,

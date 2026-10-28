@@ -168,20 +168,45 @@ enum RouterVPNExternalExitBuilder {
                   restoredExecution == nil || (throughEntry && restoredExecution == execution) else {
                 throw error("Tor requires its saved Local or Server execution; the retained choice must match this exact path.")
             }
-            guard throughEntry == (predecessorProfile != nil), throughEntry == !predecessorFiles.isEmpty else { throw error("Tor entry graph does not match the frozen node selection.") }
+            guard throughEntry == (predecessorProfile != nil), throughEntry || predecessorFiles.isEmpty else { throw error("Tor entry graph does not match the frozen node selection.") }
             var predecessor = ""
             var predecessorTag: String?
             var proofProfile: String?
+            var ordinaryPredecessor = false
             if let predecessorProfile {
                 guard string(profile["multihop_exit_id"]) == string(profile["id"]),
                       string(profile["multihop_exit_mode"]) == protocolName,
                       string(profile["multihop_entry_id"]) == string(predecessorProfile["id"]),
-                      predecessorProfile["node_kind"] as? String == "router-vpn",
-                      string(predecessorProfile["node_proof_id"]).range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
-                      let source = predecessorFiles["sing-box.json"], let text = String(data: source, encoding: .utf8),
-                      let config = try JSONSerialization.jsonObject(with: source) as? [String: Any],
-                      let final = (config["route"] as? [String: Any])?["final"] as? String, !final.isEmpty else {
-                    throw error("Tor requires the selected entry's complete graph and private node identity.")
+                      string(predecessorProfile["id"]) != string(profile["id"]) else {
+                    throw error("Tor entry graph belongs to another captured node or transport.")
+                }
+                if predecessorProfile["node_kind"] as? String == "external" {
+                    guard execution == "local", predecessorFiles.isEmpty,
+                          let imported = predecessorProfile["external"] as? [String: Any],
+                          let kind = imported["protocol"] as? String, ordinaryProtocols.contains(kind),
+                          profile["multihop_entry_mode"] as? String == kind else {
+                        throw error("An ordinary Tor entry requires Local execution and its exact imported protocol.")
+                    }
+                    try IOSStartLayer.validateExternal(profile: predecessorProfile)
+                    _ = try publicLiteralIP(string(imported["expected_public_ip"]), label: "entry public proof IP")
+                    let custom = try customExit(external: imported, protocolName: kind)
+                    let endpoint = ["wireguard", "amneziawg", "openvpn"].contains(kind)
+                    // Retain the original transport graph. The typed native
+                    // constructor validates and compiles this entry's saved
+                    // DNS, bootstrap, MTU and device policy independently.
+                    let original = try rawConfiguration(external: imported, protocolName: kind,
+                                                        endpoints: endpoint ? [custom] : [], outbounds: endpoint ? [] : [custom])
+                    predecessor = String(decoding: original, as: UTF8.self)
+                    predecessorTag = "custom-exit"; ordinaryPredecessor = true
+                } else {
+                    guard predecessorProfile["node_kind"] as? String == "router-vpn",
+                          string(predecessorProfile["node_proof_id"]).range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
+                          let source = predecessorFiles["sing-box.json"], let text = String(data: source, encoding: .utf8),
+                          let config = try JSONSerialization.jsonObject(with: source) as? [String: Any],
+                          let final = (config["route"] as? [String: Any])?["final"] as? String, !final.isEmpty else {
+                        throw error("Tor requires the selected entry's complete graph and private node identity.")
+                    }
+                    predecessor = text; predecessorTag = final
                 }
                 // A single system TUN cannot obey two conflicting fixed sizes.
                 // Preserve the entry's already validated MTU unless Tor explicitly
@@ -190,7 +215,6 @@ enum RouterVPNExternalExitBuilder {
                 let exitPolicy = string(profile["mtu_policy"])
                 if ["manual", "fixed"].contains(entryPolicy), ["manual", "fixed"].contains(exitPolicy),
                    int(predecessorProfile["manual_mtu"]) != int(profile["manual_mtu"]) { throw error("Tor and its entry select different fixed sizes for the same VPN interface.") }
-                predecessor = text; predecessorTag = final
                 proofProfile = String(decoding: try JSONSerialization.data(withJSONObject: predecessorProfile, options: [.sortedKeys]), as: UTF8.self)
             }
             let sessionID = UUID().uuidString.lowercased()
@@ -200,6 +224,8 @@ enum RouterVPNExternalExitBuilder {
             let encoded: String
             if execution == "server" {
                 encoded = LibboxRouterCompileServerTorProfileWithPredecessor(capturedSource, sessionID, predecessor, proofProfile ?? "", &failure)
+            } else if ordinaryPredecessor {
+                encoded = LibboxRouterCompileTorProfileWithExternalPredecessor(capturedSource, sessionID, predecessor, proofProfile ?? "", &failure)
             } else {
                 encoded = LibboxRouterCompileTorProfileWithPredecessor(capturedSource, sessionID, predecessor, proofProfile ?? "", &failure)
             }
@@ -224,6 +250,13 @@ enum RouterVPNExternalExitBuilder {
                 }
             } else if tor["detour"] as? String != predecessorTag {
                 throw error("Tor compiler changed the captured predecessor route.")
+            }
+            if ordinaryPredecessor {
+                guard tor["external_tor_profile"] as? String == capturedSource,
+                      try sameJSON(tor["external_predecessor_profile"] as? String, proofProfile),
+                      try sameJSON(tor["external_predecessor_config"] as? String, predecessor) else {
+                    throw error("Tor compiler changed the captured ordinary entry source or preferences.")
+                }
             }
             var files = predecessorFiles; files["sing-box.json"] = data
             return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: "", files: files, torSessionID: sessionID, torPredecessorProfile: proofProfile, torProfileJSON: capturedSource, torExecution: throughEntry ? execution : nil)
@@ -283,6 +316,18 @@ enum RouterVPNExternalExitBuilder {
         } else if !predecessorFiles.isEmpty { throw error("External startup cannot discard an unowned predecessor graph.") }
         if ["wireguard", "amneziawg", "openvpn"].contains(protocolName) { endpoints.append(custom) } else { outbounds.append(custom) }
 
+        let data = try rawConfiguration(external: external, protocolName: protocolName, endpoints: endpoints, outbounds: outbounds)
+        let policy = try RouterVPNExternalPolicy.compile(config: String(decoding: data, as: UTF8.self), profile: profile,
+                                                        protocolName: protocolName, expectedPublicIP: expected,
+                                                        entry: predecessorProfile, entryTag: entryTag, predecessorConfig: predecessorConfig,
+                                                        restoredExecution: restoredExecution)
+        var files = predecessorFiles; files["sing-box.json"] = Data(policy.config.utf8)
+        return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: expected,
+                                            files: files, policy: policy)
+    }
+
+    private static func rawConfiguration(external: [String: Any], protocolName: String,
+                                         endpoints: [[String: Any]], outbounds: [[String: Any]]) throws -> Data {
         let mtu = externalMTU(external: external, protocolName: protocolName)
         let tun: [String: Any] = [
             "type": "tun", "tag": "tun-in",
@@ -299,13 +344,14 @@ enum RouterVPNExternalExitBuilder {
         ]
         let data = try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
         guard !data.isEmpty, data.count <= 4 * 1024 * 1024 else { throw error("iOS external Libbox config exceeds safety limit.") }
-        let policy = try RouterVPNExternalPolicy.compile(config: String(decoding: data, as: UTF8.self), profile: profile,
-                                                        protocolName: protocolName, expectedPublicIP: expected,
-                                                        entry: predecessorProfile, entryTag: entryTag, predecessorConfig: predecessorConfig,
-                                                        restoredExecution: restoredExecution)
-        var files = predecessorFiles; files["sing-box.json"] = Data(policy.config.utf8)
-        return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: expected,
-                                            files: files, policy: policy)
+        return data
+    }
+
+    private static func sameJSON(_ captured: String?, _ original: String?) throws -> Bool {
+        guard let captured, let original,
+              let lhs = try JSONSerialization.jsonObject(with: Data(captured.utf8)) as? [String: Any],
+              let rhs = try JSONSerialization.jsonObject(with: Data(original.utf8)) as? [String: Any] else { return false }
+        return try JSONSerialization.data(withJSONObject: lhs, options: [.sortedKeys]) == JSONSerialization.data(withJSONObject: rhs, options: [.sortedKeys])
     }
 
     private static func customExit(external: [String: Any], protocolName: String) throws -> [String: Any] {

@@ -766,6 +766,45 @@ final class CompletionState: @unchecked Sendable {
             check("Server source cannot change its selected execution before proof",done.wait() && done.values()==(1,1) && torState.current()==nil)
             owner.stop()
         }
+        for kind in ["tor","tor-bridge"] {for mode in ["wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"] {
+            let entry:[String:Any]=["id":"entry","node_kind":"external","router_api":"","api_token":"","node_proof_id":"",
+                "external":["protocol":mode,"expected_public_ip":"203.0.113.88",mode.replacingOccurrences(of:"-",with:"_"):["password":"exact ordinary credential"]],
+                "dns_mode":"custom","dns_protocol":"tcp","dns_host":"9.9.9.9","dns_port":5353,"mtu_policy":"fixed","manual_mtu":1380]
+            let selected:[String:Any]=["id":"captured-tor","node_kind":"external","external":["protocol":kind,"expected_public_ip":""],
+                "multihop_enabled":true,"multihop_execution":"local","multihop_entry_id":"entry","multihop_entry_mode":mode,"multihop_exit_id":"captured-tor","multihop_exit_mode":kind]
+            let configuration:[String:Any]=["engine":"external-libbox","mode":"external-"+kind,
+                "bundle":try JSONSerialization.data(withJSONObject:["selectedRouterID":"captured-tor","routerProfiles":[selected]]),
+                "tor_entry_bundle":try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[entry]]),"tor_entry_mode":mode]
+            let source=try IOSMultihopExecution.Source(configuration:configuration){_ in String(repeating:"a",count:64)}
+            for fault in ["stable","private-token","wrong-protocol","missing-public-ip","lost-proof"] {
+                state.configure();torState.configure();LibboxHopTestState.shared.configure();LibboxDNSTestState.shared.configure();MTUActivationFixture.shared.configure()
+                let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState()
+                try owner.start(files:torFiles,strict:true)
+                var capturedEntry=entry
+                if fault=="private-token" {capturedEntry["api_token"]="unowned private authority"}
+                if fault=="wrong-protocol" {var ext=capturedEntry["external"] as! [String:Any];ext["protocol"]="foreign";capturedEntry["external"]=ext}
+                if fault=="missing-public-ip" {var ext=capturedEntry["external"] as! [String:Any];ext["expected_public_ip"]="";capturedEntry["external"]=ext}
+                let profile=String(decoding:try JSONSerialization.data(withJSONObject:selected),as:UTF8.self)
+                let predecessor=String(decoding:try JSONSerialization.data(withJSONObject:capturedEntry),as:UTF8.self)
+                owner.proveTor(sessionID:UUID().uuidString,profile:profile,predecessorProfile:predecessor,completion:done.finish)
+                check("ordinary Tor proof delivery completes before binding",done.wait() && done.values()==(1,0))
+                try owner.enableExternalHopMeasurement(exitID:"captured-tor")
+                try owner.enableExternalDNSMeasurement(exitID:"captured-tor")
+                try owner.activateTorMTU()
+                if fault=="lost-proof" {torState.current()!.cancel()}
+                var refused=false;do{try owner.bindTorExecutionSource(source)}catch{refused=true}
+                check("ordinary Tor binds only the current typed Local proof",refused == (fault != "stable"))
+                let request=String(repeating:"d",count:32),snapshot=owner.multihopExecutionSnapshot(request:request)
+                if fault=="stable" {
+                    let receipt=try snapshot.map{try IOSMultihopExecution.Capture.decode($0,source:source,request:request)}
+                    check("ordinary Tor retained receipt uses actual Local native owner",receipt?.execution=="local" && receipt?.source==source && receipt?.pins == .empty)
+                    torState.current()!.cancel()
+                    check("lost ordinary Tor proof immediately revokes restoration",owner.multihopExecutionSnapshot(request:request)==nil)
+                } else {check("invalid ordinary Tor cannot expose a restore receipt",snapshot==nil)}
+                owner.stop()
+                check("ordinary Tor stop retires exact proof and receipt",torState.current()!.cancelCount()>0 && owner.multihopExecutionSnapshot(request:request)==nil)
+            }
+        }}
         for action in ["stable","cancel-proof","delete-retry","reconnect-retry","mtu-retry","hop-retry","dns-retry","native-retry"] {
             torState.configure(block:action=="cancel-proof",closeFailures:action=="delete-retry" ? 2:(action=="reconnect-retry" ? 1:0))
             MTUActivationFixture.shared.configure(failures:action=="mtu-retry" ? 1:0)
@@ -1113,6 +1152,7 @@ def main():
         assert bad.returncode != 0 and 'FAIL: foreign request cannot cancel current work' in bad.stdout+bad.stderr, 'Foreign cancellation negative control did not fail at the ownership assertion'
         print('Negative control: a foreign cancellation reaching the native owner is rejected')
         for label, before, after, expected in (
+            ('ordinary-tor-proof-binding', '            if entry["node_kind"] as? String == "router-vpn" { return true }', '            if entry["node_kind"] as? String == "router-vpn" { return true }; return false', 'ordinary Tor binds only the current typed Local proof'),
             ('server-delete-required', '            try proof.close()', '            // missing exact lease DELETE', 'Server DELETE precedes native Box closure'),
             ('server-delete-acknowledged', '            try proof.close()', '            try? proof.close()', 'pending DELETE keeps exact native Box and files'),
             ('server-measurement-drain', '            if let drainFailure { throw drainFailure }', '            _ = drainFailure', 'measurement drain precedes DELETE and keeps the exact entry'),

@@ -350,9 +350,68 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
    try check("failed restore rolls back default visible LAN policy",encoded(model.bundle!)==before && model.homeLANAccess==lan && model.homeLANCIDRs==ranges && lan && ranges.isEmpty)
   }
  }
+ static func ordinaryEntry(_ mode:String)throws->ClientBundle {
+  var p=try profile();p.id="ordinary-entry";p.name="Ordinary imported entry";p.endpoint="198.51.100.8"
+  var ext:[String:Any]=["protocol":mode,"expected_public_ip":"203.0.113.88"]
+  let field=mode.replacingOccurrences(of:"-",with:"_")
+  switch mode {
+  case "wireguard","amneziawg":
+   var packet:[String:Any]=["endpoint":"198.51.100.8:51820","private_key":Data(repeating:11,count:32).base64EncodedString(),"peer_public_key":Data(repeating:12,count:32).base64EncodedString(),"preshared_key":Data(repeating:13,count:32).base64EncodedString(),"addresses":["10.91.0.2/32","fd91::2/128"],"allowed_ips":["0.0.0.0/0","::/0"],"dns":[],"mtu":1380]
+   if mode=="amneziawg" {packet["parameters"]=["jc":"3","jmin":"40","jmax":"900","s1":"56","s2":"48","s3":"24","s4":"32","h1":"10000000-19999999","h2":"20000000-29999999","h3":"30000000-39999999","h4":"40000000-49999999"]}
+   ext[field]=packet
+  case "openvpn":ext[field]=["config":"client\ndev tun\nproto udp\nremote 198.51.100.8 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint "+String(repeating:"ab",count:32)+"\n","username":" exact entry user ","password":"NEVER_COPY_ORDINARY_CREDENTIAL"]
+  case "socks5","http-connect","https-connect":
+   var proxy:[String:Any]=["host":"198.51.100.8","port":8443,"username":" exact entry user ","password":"NEVER_COPY_ORDINARY_CREDENTIAL"]
+   if mode=="https-connect" {proxy["tls_server_name"]="entry.example.test"}
+   ext[field]=proxy
+  case "shadowsocks":ext[field]=["server":"198.51.100.8","port":8388,"method":"aes-256-gcm","password":"NEVER_COPY_ORDINARY_CREDENTIAL"]
+  default:ext[field]=["server":"198.51.100.8","port":8443,"tls_server_name":"entry.example.test","password":"NEVER_COPY_ORDINARY_CREDENTIAL"]
+  }
+  p.external=try JSONDecoder().decode(ExternalNodeConfig.self,from:json(ext))
+  p.dnsBootstrap=ExternalDNSBootstrap(server:.init(type:"tcp",server:"9.9.9.9",serverPort:5353))
+  p.dnsHost="entry-resolver.example.test"
+  return bundle(p)
+ }
+ static func ordinaryTorProfiles()throws {
+  for mode in IOSConnectionSafePreferences.ordinaryExternalModes.sorted() {for kind in ["tor","obfs4"] {
+   var p=try profile(kind);graph(&p);p.multihopEntryID="ordinary-entry";p.multihopEntryMode=mode
+   let model=try reset(p),lower=try ordinaryEntry(mode);try IOSNodeBundleStore.shared.save(lower)
+   let actions=ProfileActions(model);actions.name="Complete ordinary Tor path";actions.add()
+   try check("ordinary Tor Add preserves graph with imported entry mode",actions.profiles.count==1 && actions.profiles[0].preferences?.multihopEntryMode==mode && actions.profiles[0].preferences?.multihopEntryID=="ordinary-entry" && actions.profiles[0].preferences?.multihopExecution=="local")
+   let saved=actions.profiles[0],preferences=saved.preferences!,stored=IOSPrivateJSONStore.bytes!
+   let clear=String(decoding:stored,as:UTF8.self)
+   try check("ordinary Tor connection profile keeps only private node references",!clear.contains("NEVER_COPY_ORDINARY_CREDENTIAL") && !clear.contains("private_key") && !clear.contains("entry-resolver.example.test") && !clear.contains("NEVER_COPY_NODE_ASSET"))
+   var changed=p;changed.multihopEnabled=false;changed.multihopEntryMode="wg";changed.dnsHost="149.112.112.112";changed.manualMTU=1400
+   try replaceLinked(changed);try selectOther(model)
+   let nodes=IOSNodeBundleStore.shared.records,entryBytes=IOSNodeBundleStore.shared.bundleData(containing:"ordinary-entry",current:nil)
+   let savedEntry=try JSONDecoder().decode(ClientBundle.self,from:entryBytes!)
+   actions.load()
+   try check("ordinary Tor Load restores exact complete selected policy",actions.status.hasPrefix("Loaded") && model.selectedNodeProfile?.multihopEntryMode==mode && IOSConnectionProfileStore.snapshot(model:model,name:"Readback").preferences==preferences)
+   let captured=try model.iosMultihopEntryBundle(for:model.bundle!)
+   try check("ordinary Tor Load preserves exact linked entry",captured.routerProfiles==savedEntry.routerProfiles && captured.apiToken.isEmpty && captured.nodeProofID.isEmpty)
+   try check("ordinary Tor Load preserves node-owned credentials and DNS bootstrap",captured.routerProfiles[0].external==lower.routerProfiles[0].external && captured.routerProfiles[0].dnsBootstrap==lower.routerProfiles[0].dnsBootstrap)
+   try check("ordinary Tor Load leaves predecessor private record untouched",IOSNodeBundleStore.shared.bundleData(containing:"ordinary-entry",current:nil)==entryBytes)
+   for fault in ["server","auto","home","missing-entry"] {
+    try selectOther(model)
+    var envelope=try JSONDecoder().decode(IOSConnectionProfileEnvelope.self,from:stored)
+    if fault=="server" || fault=="auto" {envelope.profiles[0].preferences?.multihopExecution=fault}
+    if fault=="home" {envelope.profiles[0].preferences?.dnsMode="home"}
+    if fault=="missing-entry" {envelope.profiles[0].preferences?.multihopEntryID="unlinked-entry"}
+    IOSPrivateJSONStore.bytes=try encoded(envelope)
+    let before=try encoded(model.bundle!),privateNodes=IOSNodeBundleStore.shared.records,records=IOSPrivateJSONStore.bytes
+    try reject("ordinary Tor profile cannot acquire "+fault){_ = try IOSConnectionProfileStore.load(model:model,id:saved.id)}
+    try check("invalid ordinary Tor restore is transactional "+fault,encoded(model.bundle!)==before && IOSNodeBundleStore.shared.records==privateNodes && IOSPrivateJSONStore.bytes==records)
+   }
+   IOSPrivateJSONStore.bytes=stored;_ = try IOSConnectionProfileStore.load(model:model,id:saved.id)
+   actions.name="Updated ordinary Tor";actions.update()
+   try check("ordinary Tor Update keeps same private references",actions.status.hasPrefix("Updated") && actions.profiles[0].id==saved.id && actions.profiles[0].preferences==preferences)
+   actions.delete()
+   try check("ordinary Tor Delete preserves node credentials",actions.profiles.isEmpty && IOSNodeBundleStore.shared.bundleData(containing:"ordinary-entry",current:nil)==entryBytes && nodes.keys.allSatisfy{IOSNodeBundleStore.shared.records[$0] != nil})
+  }}
+ }
  static func main(){
   defer{RouterVPNTorTestClose();UserDefaults.standard.removePersistentDomain(forName:UserDefaults.suite)}
-  do{try matrix();try legacyAndDefaults();try nativeRejections();try restoreRejections();try transactionFailures();try visiblePolicyAdoption();print("Apple whole Tor connection profiles: PASS (\(checks) shipping callbacks/store/import/native validation checks)")}
+  do{try matrix();try legacyAndDefaults();try nativeRejections();try restoreRejections();try transactionFailures();try visiblePolicyAdoption();try ordinaryTorProfiles();print("Apple whole Tor connection profiles: PASS (\(checks) shipping callbacks/store/import/native validation checks)")}
   catch{FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1)}
  }
 }

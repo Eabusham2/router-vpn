@@ -105,7 +105,8 @@ for header in headers:
     for symbol in ('LibboxRouterTorNativeABI', 'LibboxRouterTorNativeVersion', 'LibboxRouterTorSourceNotices'):
         assert symbol in header.read_text(), str(header)
     for symbol in ('LibboxRouterCompileTorProfile', 'LibboxRouterValidateTorProfile',
-                   'LibboxRouterCompileTorProfileWithPredecessor', 'LibboxRouterTorSetStateDirectory',
+                   'LibboxRouterCompileTorProfileWithPredecessor', 'LibboxRouterCompileTorProfileWithExternalPredecessor',
+                   'LibboxRouterTorSetStateDirectory',
                    'LibboxRouterTorCreateProof', 'LibboxRouterTorCreateProofWithPredecessor',
                    'LibboxRouterTorProofRequest'):
         assert symbol in header.read_text(), str(header)

@@ -483,7 +483,7 @@ private enum IOSConnectionProfileStore {
                   [entry, exit].allSatisfy({ $0.range(of: "\\A[A-Za-z0-9._-]{1,128}\\z", options: .regularExpression) != nil }),
                   let mode = p.multihopExitMode,
                   (external ? IOSConnectionSafePreferences.externalModes : IOSConnectionSafePreferences.routerHopModes).contains(mode),
-                  IOSConnectionSafePreferences.routerHopModes.union(external && !tor ? IOSConnectionSafePreferences.ordinaryExternalModes : []).contains(p.multihopEntryMode ?? "wg") else {
+                  IOSConnectionSafePreferences.routerHopModes.union(external ? IOSConnectionSafePreferences.ordinaryExternalModes : []).contains(p.multihopEntryMode ?? "wg") else {
                 throw issue("Saved multihop requires distinct linked entry/exit ids and a supported exit transport.")
             }
         }

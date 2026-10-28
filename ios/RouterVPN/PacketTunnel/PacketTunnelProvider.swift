@@ -1153,13 +1153,24 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                   selectedProfile["multihop_enabled"] as? Bool == true,
                   let entryRoot = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let mode = provider["tor_entry_mode"] as? String,
-                  mode == (selectedProfile["multihop_entry_mode"] as? String ?? "wg"),
-                  RouterVPNExternalExitBuilder.torEntryModes.contains(mode) else { throw tunnelError(58, "Tor lost its captured entry bundle or transport.") }
+                  mode == (selectedProfile["multihop_entry_mode"] as? String ?? "wg") else { throw tunnelError(58, "Tor lost its captured entry bundle or transport.") }
             let entry = try selectedRouterProfile(entryRoot)
-            guard entry["id"] as? String == selectedProfile["multihop_entry_id"] as? String,
-                  entry["node_kind"] as? String == "router-vpn" else { throw tunnelError(58, "Tor entry bundle selected another node.") }
-            let compiled = try compileLibbox(provider: ["rawProfileID": mode], root: entryRoot, selectedProfile: entry)
-            entryFiles = compiled.files; entryProfile = entry
+            guard entry["id"] as? String == selectedProfile["multihop_entry_id"] as? String else { throw tunnelError(58, "Tor entry bundle selected another node.") }
+            if entry["node_kind"] as? String == "external" {
+                guard RouterVPNExternalExitBuilder.ordinaryProtocols.contains(mode),
+                      (entry["external"] as? [String: Any])?["protocol"] as? String == mode,
+                      ["", "local"].contains(selectedProfile["multihop_execution"] as? String ?? "local") else {
+                    throw tunnelError(58, "Ordinary Tor entries require their exact captured protocol and Local execution.")
+                }
+                try IOSStartLayer.validateExternal(profile: entry)
+            } else {
+                guard entry["node_kind"] as? String == "router-vpn", RouterVPNExternalExitBuilder.torEntryModes.contains(mode) else {
+                    throw tunnelError(58, "Tor requires the captured entry's supported native transport.")
+                }
+                let compiled = try compileLibbox(provider: ["rawProfileID": mode], root: entryRoot, selectedProfile: entry)
+                entryFiles = compiled.files
+            }
+            entryProfile = entry
             effectiveStrict = strict || strictKillSwitchRequested(entry)
             guard let tunnelProtocol = protocolConfiguration as? NETunnelProviderProtocol,
                   !effectiveStrict || (tunnelProtocol.includeAllNetworks && tunnelProtocol.enforceRoutes &&

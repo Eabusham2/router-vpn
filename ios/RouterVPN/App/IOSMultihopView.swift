@@ -4,8 +4,8 @@ import SwiftUI
 @MainActor
 extension RouterVPNModel {
     static let ordinaryExternalHopProtocols: Set<String> = ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]
-    /// Return the complete *entry's* private bundle, never the selected exit's
-    /// raw files with a different display id. Capture before suspension/start.
+    /// Return the complete entry bundle, never the selected exit's raw files
+    /// with a different display id. Capture before suspension/start.
     func iosMultihopEntryBundle(for exitBundle: ClientBundle) throws -> ClientBundle {
         if let selected = IOSDNSRuntimePolicy.selectedProfile(in: exitBundle), selected.normalizedNodeKind == "external",
            Self.ordinaryExternalHopProtocols.contains(selected.external?.protocolName ?? "") {
@@ -28,9 +28,13 @@ extension RouterVPNModel {
             }
         }
         let entryMode = exit.multihopEntryMode ?? "wg"
+        var entry = try JSONDecoder().decode(ClientBundle.self, from: data)
+        if torExit, entry.routerProfiles.filter({ $0.id == entryID }).count == 1,
+           entry.routerProfiles.first(where: { $0.id == entryID })?.normalizedNodeKind == "external" {
+            return try iosOrdinaryExternalEntryBundle(for: exitBundle)
+        }
         guard IOSRuntimeSelector.multihopModeIDs.contains(entryMode) else { throw iosMultihopError("Unknown saved entry transport.") }
         let entryAsset = IOSNativeMAXProfile.modeIDs.contains(entryMode) ? (entryMode.hasSuffix("-awg") ? "awg.conf" : "wg.conf") : ["wg", "wg-pq"].contains(entryMode) ? "wg.conf" : (["awg2-fast", "awg2-strong", "awg2-pq"].contains(entryMode) ? "awg.conf" : (["reality-vision", "reality-pq-vision", "reality-xhttp"].contains(entryMode) ? "xray.json" : "sing-box.json"))
-        var entry = try JSONDecoder().decode(ClientBundle.self, from: data)
         guard entry.routerProfiles.filter({ $0.id == entryID }).count == 1,
               let profile = entry.routerProfiles.first(where: { $0.id == entryID }),
               profile.normalizedNodeKind == "router-vpn",
@@ -66,10 +70,12 @@ extension RouterVPNModel {
     }
 
     private func iosOrdinaryExternalEntryBundle(for exitBundle: ClientBundle) throws -> ClientBundle {
+        let tor = ["tor", "tor-bridge"].contains(IOSDNSRuntimePolicy.selectedProfile(in: exitBundle)?.external?.protocolName ?? "")
         guard let exit = IOSDNSRuntimePolicy.selectedProfile(in: exitBundle), exit.normalizedNodeKind == "external",
-              let exitMode = exit.external?.protocolName, Self.ordinaryExternalHopProtocols.contains(exitMode),
+              let exitMode = exit.external?.protocolName, tor || Self.ordinaryExternalHopProtocols.contains(exitMode),
               exit.multihopEnabled == true, exit.multihopExitID == exit.id, exit.multihopExitMode == exitMode,
-              ["local", "server", "auto"].contains(exit.multihopExecution ?? "local"), exit.external?.expectedPublicIP.isEmpty == false,
+              (tor ? ["local"] : ["local", "server", "auto"]).contains(exit.multihopExecution ?? "local"),
+              exit.external?.expectedPublicIP.isEmpty == tor,
               let entryID = exit.multihopEntryID, entryID != exit.id, let mode = exit.multihopEntryMode,
               let data = IOSNodeBundleStore.shared.bundleData(containing: entryID, current: bundle),
               data.count <= 32 * 1024 * 1024 else {
@@ -80,7 +86,13 @@ extension RouterVPNModel {
               let profile = entry.routerProfiles.first(where: { $0.id == entryID }) else {
             throw iosMultihopError("The captured entry bundle no longer selects exactly one linked node.")
         }
-        try IOSExternalExecution.require(selection: exit.multihopExecution ?? "local", entry: profile, exit: exit)
+        if tor {
+            guard profile.normalizedNodeKind == "external", (profile.nodeProofID ?? "").isEmpty,
+                  profile.routerAPI.isEmpty, profile.apiToken.isEmpty,
+                  !["", "home"].contains(profile.dnsMode ?? "home"), !["", "home"].contains(exit.dnsMode ?? "home") else {
+                throw iosMultihopError("An ordinary Tor entry uses Local execution and its own public proof. Choose explicit DNS for both nodes; Home AdGuard and Server require a paired Router VPN entry.")
+            }
+        } else { try IOSExternalExecution.require(selection: exit.multihopExecution ?? "local", entry: profile, exit: exit) }
         let capturedEntry = try JSONSerialization.jsonObject(with: JSONEncoder().encode(profile)) as! [String: Any]
         guard exit.external?.matchesStartLayer(exit.startLayer) == true else {
             throw iosMultihopError("The selected external exit layer no longer matches its private provisioned transport.")
@@ -183,7 +195,7 @@ struct IOSMultihopView: View {
     @StateObject private var viaEntry = IOSViaEntryLatency()
     private var nodes: [RouterProfile] {
         model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" ||
-            (ordinaryExitProtocol != nil && $0.normalizedNodeKind == "external" && RouterVPNModel.ordinaryExternalHopProtocols.contains($0.external?.protocolName ?? "")) }
+            ((ordinaryExitProtocol != nil || torExitProtocol != nil) && $0.normalizedNodeKind == "external" && RouterVPNModel.ordinaryExternalHopProtocols.contains($0.external?.protocolName ?? "")) }
     }
     private var exitNodes: [RouterProfile] {
         model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" ||
@@ -255,14 +267,16 @@ struct IOSMultihopView: View {
                         LabeledContent("Exit transport", value: torExitProtocol == "tor" ? "Tor" : "Tor with saved bridges")
                         Picker("Execution", selection: $execution) {
                             Text("Local — Tor on this device").tag("local")
-                            Text("Server — Tor on entry node").tag("server")
-                            if !["local", "server"].contains(execution) {
-                                Text("Choose Local or Server").tag(execution)
+                            if externalEntryProtocol == nil {
+                                Text("Server — Tor on entry node").tag("server")
+                            }
+                            if !(externalEntryProtocol == nil ? ["local", "server"] : ["local"]).contains(execution) {
+                                Text(externalEntryProtocol == nil ? "Choose Local or Server" : "Saved choice requires a Router VPN entry").tag(execution)
                             }
                         }
                         Text("Tor connects through the selected entry. The app verifies that entry and the current Tor circuit before completing the connection. Tor carries TCP traffic; choose TCP, DoT or DoH for its exit DNS.")
                             .font(.caption).foregroundStyle(.secondary)
-                        Text("Server requires matching Tor and DNS settings on your Router VPN entry.")
+                        Text("Ordinary imported entries use Local and explicit DNS on both nodes. Home AdGuard and Server require a paired Router VPN entry; Server also requires matching Tor and DNS settings there.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else if let ordinaryExitProtocol {
                         LabeledContent("Exit transport", value: ordinaryExitProtocol)

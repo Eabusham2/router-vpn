@@ -579,7 +579,6 @@ final class RouterVPNLibboxEngine {
                   let selected = try? JSONSerialization.jsonObject(with: Data(profile.utf8)) as? [String: Any],
                   selected["multihop_enabled"] as? Bool == true,
                   selected["id"] as? String == source.exitID, entry["id"] as? String == source.entryID,
-                  entry["node_kind"] as? String == "router-vpn",
                   selected["multihop_entry_id"] as? String == source.entryID,
                   selected["multihop_exit_id"] as? String == source.exitID,
                   selected["multihop_entry_mode"] as? String == source.entryMode,
@@ -587,6 +586,16 @@ final class RouterVPNLibboxEngine {
                   RouterVPNLibboxEngine.torExecutionSelection(selected) == source.requested,
                   let external = selected["external"] as? [String: Any], external["protocol"] as? String == source.exitMode,
                   ["tor", "tor-bridge"].contains(source.exitMode) else { return false }
+            if entry["node_kind"] as? String == "router-vpn" { return true }
+            // The same native request proved the typed ordinary predecessor
+            // and the Tor/DNS path. It may retain Local execution, but its
+            // public-address proof never acquires private Router authority.
+            guard execution == "local", entry["node_kind"] as? String == "external",
+                  let imported = entry["external"] as? [String: Any],
+                  imported["protocol"] as? String == source.entryMode,
+                  ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(source.entryMode),
+                  let expected = imported["expected_public_ip"] as? String, !expected.isEmpty,
+                  ["node_proof_id", "router_api", "api_token"].allSatisfy({ entry[$0] == nil || entry[$0] is NSNull || entry[$0] as? String == "" }) else { return false }
             return true
         }
         func run() {

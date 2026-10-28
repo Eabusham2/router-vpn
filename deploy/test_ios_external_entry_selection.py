@@ -90,6 +90,39 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
    try reject("foreign protocol rejected before persistence"){try model.saveIOSMultihop(enabled:true,entryID:"entry",exitID:"exit",exitMode:"unregistered",entryMode:entryProtocol)}
    try check("failed save leaves selected bundle intact",model.writes==writes && model.bundle?.routerProfiles==before?.routerProfiles)
   }}
+  for mode in protocols {for kind in ["tor","tor-bridge"] {
+   var predecessor=try profile("ordinary-tor-entry","external",mode);predecessor.apiToken=""
+   var exit=try profile("tor-exit","external",kind);exit.apiToken="";exit.external?.socks5=nil;exit.external?.expectedPublicIP=""
+   if kind=="tor-bridge" {exit.external?.torBridge=ExternalTorBridgeConfig(transport:"obfs4",bridges:["obfs4 198.51.100.9:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=Y2VydA iat-mode=0"])}
+   exit.multihopEnabled=true;exit.multihopEntryID=predecessor.id;exit.multihopEntryMode=mode;exit.multihopExitID=exit.id;exit.multihopExitMode=kind;exit.multihopExecution="local"
+   let model=RouterVPNModel(),entry=bundle(predecessor),selected=bundle(exit);model.bundle=selected
+   IOSNodeBundleStore.shared.nodes=[predecessor.id:try encoded(entry),exit.id:try encoded(selected)]
+   let captured=try model.iosMultihopEntryBundle(for:selected)
+   try check("ordinary Tor selection captures exact node and complete policy",captured.routerProfiles==entry.routerProfiles && captured.selectedRouterID==predecessor.id && captured.apiToken.isEmpty && captured.routerAPI.isEmpty && captured.nodeProofID.isEmpty)
+   try model.saveIOSMultihop(enabled:true,entryID:predecessor.id,exitID:exit.id,exitMode:kind,execution:"local",entryMode:mode)
+   try check("ordinary Tor saves exact native entry and Local choice",model.bundle?.routerProfiles[0].multihopEntryMode==mode && model.bundle?.routerProfiles[0].multihopExecution=="local")
+   let frozen=try encoded(model.bundle!),writes=model.writes,records=IOSNodeBundleStore.shared.nodes
+   for fault in ["server","auto","entry-home","exit-home","private-api","private-token","private-proof","wrong-mode","missing-proof"] {
+    var badEntry=predecessor,badExit=exit,requested="local",entryMode=mode
+    switch fault {
+    case "server","auto":requested=fault
+    case "entry-home":badEntry.dnsMode="home"
+    case "exit-home":badExit.dnsMode="home"
+    case "private-api":badEntry.routerAPI="http://10.8.0.1:8787"
+    case "private-token":badEntry.apiToken="unowned private token"
+    case "private-proof":badEntry.nodeProofID=String(repeating:"a",count:64)
+    case "wrong-mode":entryMode=mode=="socks5" ? "wireguard":"socks5"
+    default:badEntry.external?.expectedPublicIP=""
+    }
+    model.bundle=try JSONDecoder().decode(ClientBundle.self,from:frozen)
+    if fault=="exit-home" {model.bundle=bundle(badExit)}
+    IOSNodeBundleStore.shared.nodes=[predecessor.id:try encoded(bundle(badEntry)),exit.id:try encoded(bundle(badExit))]
+    let selectedBefore=try encoded(model.bundle!)
+    try reject("ordinary Tor rejects incompatible captured authority "+fault){try model.saveIOSMultihop(enabled:true,entryID:predecessor.id,exitID:exit.id,exitMode:kind,execution:requested,entryMode:entryMode)}
+    try check("failed ordinary Tor save keeps current configuration",model.writes==writes && encoded(model.bundle!)==selectedBefore)
+   }
+   IOSNodeBundleStore.shared.nodes=records
+  }}
   let entry=bundle(try profile("entry","router-vpn")),model=RouterVPNModel()
   var exit=try profile("exit","external");exit.multihopEnabled=true;exit.multihopEntryID="entry";exit.multihopEntryMode="wg";exit.multihopExitID="exit";exit.multihopExitMode="socks5";exit.multihopExecution="local"
   model.bundle=bundle(exit);IOSNodeBundleStore.shared.nodes=["entry":try JSONEncoder().encode(entry)]

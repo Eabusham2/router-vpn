@@ -24,6 +24,7 @@ APP = ROOT / 'ios/RouterVPN/App'
 TUN = ROOT / 'ios/RouterVPN/PacketTunnel'
 EXTRA_EVIDENCE_SOURCES = ()
 GRAPH_EVIDENCE = {'schema': 1, 'graphs': 348, 'home_dns_combinations': 285,
+    'ordinary_tor_graphs': 48,
     'ordinary_external_graphs': 456, 'external_execution_graphs': 912, 'external_exit_layer_graphs': 144,
     'mapped_openvpn_graphs': 171, 'mapped_openvpn_layer_graphs': 342, 'profile_policy_combinations': 320,
     'public_tor_traffic': False, 'native_handles': 'boundary doubles'}
@@ -56,6 +57,7 @@ GO = replace_once(GO, ' case "compile":value,err=mobilemultihop.CompilePQProfile
  case "tor":value,err=mobiletor.CompileProfile(r.Config,r.Node,r.Source)
  case "tor-validate":err=mobiletor.ValidateProfile(r.Config);value="checked"
  case "tor-with-predecessor":value,err=mobiletor.CompileProfileWithPredecessor(r.Config,r.Node,r.Source,r.Policy)
+ case "tor-with-external-predecessor":value,err=mobiletor.CompileProfileWithExternalPredecessor(r.Config,r.Node,r.Source,r.Policy)
  case "tor-server-with-predecessor":value,err=mobiletor.CompileServerProfileWithPredecessor(r.Config,r.Node,r.Source,r.Policy)
  case "tor-server-mtu-authority":var predecessor *mobiletor.PredecessorProof;predecessor,err=mobiletor.NewPredecessorProof(r.Source);if err==nil{value,err=mobiletor.ServerMTUAuthority(r.Config,r.Policy,r.Node,predecessor)}
  case "tor-mtu-authority":var predecessor *mobiletor.PredecessorProof;if r.Source!=""{predecessor,err=mobiletor.NewPredecessorProof(r.Source)};if err==nil{value,err=mobiletor.MTUAuthorityWithPredecessor(r.Config,r.Policy,r.Node,predecessor)}
@@ -112,6 +114,9 @@ public func LibboxRouterValidateTorProfile(_ profile:String,_ error:inout NSErro
 }
 public func LibboxRouterCompileTorProfileWithPredecessor(_ profile:String,_ session:String,_ predecessor:String,_ predecessorProfile:String,_ error:inout NSError?)->String {
  result(&error,["Op":"tor-with-predecessor","Config":profile,"Node":session,"Source":predecessor,"Policy":predecessorProfile])
+}
+public func LibboxRouterCompileTorProfileWithExternalPredecessor(_ profile:String,_ session:String,_ predecessor:String,_ predecessorProfile:String,_ error:inout NSError?)->String {
+ result(&error,["Op":"tor-with-external-predecessor","Config":profile,"Node":session,"Source":predecessor,"Policy":predecessorProfile])
 }
 public func LibboxRouterCompileServerTorProfileWithPredecessor(_ profile:String,_ session:String,_ predecessor:String,_ predecessorProfile:String,_ error:inout NSError?)->String {
  result(&error,["Op":"tor-server-with-predecessor","Config":profile,"Node":session,"Source":predecessor,"Policy":predecessorProfile])
@@ -293,7 +298,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
  func linkNodeBundle(_ data:Data)throws {_ = try JSONDecoder().decode(ClientBundle.self,from:data);saved=data;writes+=1}
 }
 @main struct Tests {
- @MainActor static var checks=0,graphs=0,homeGraphs=0,policyCases=0,externalGraphs=0,executionGraphs=0,externalLayerGraphs=0,mappedOpenVPNGraphs=0,mappedOpenVPNLayerGraphs=0,sessions=Set<String>()
+ @MainActor static var checks=0,graphs=0,homeGraphs=0,policyCases=0,externalGraphs=0,ordinaryTorGraphs=0,executionGraphs=0,externalLayerGraphs=0,mappedOpenVPNGraphs=0,mappedOpenVPNLayerGraphs=0,sessions=Set<String>()
  static let modes=["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg","ss-v2ray","split","max","naive-h2","naive-h3"]
  static let kinds=["tor","obfs4","meek_lite","snowflake","webtunnel","custom"]
  static let layers=["off","aes-256-gcm","aes-256-gcm+xor-whitening"]
@@ -659,6 +664,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   try policies(maximum,composite)
   try jumboCapacity(maximum,composite)
   try negatives(maximum,composite)
+  try ordinaryTorPredecessors()
   try ordinaryExternalEntry(maximum,composite)
   try importedAmneziaCreation()
   try responseProbeCreation()
@@ -666,10 +672,68 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   try openVPNPairingCreation(maximum,composite)
   try openVPNResponseProbesCreation();try openVPNStartLayersCreation()
   try ordinaryExternalPredecessors(maximum,composite)
-  print("Apple Tor profile creation and complete provider assembly: PASS (\(graphs) Tor, \(homeGraphs) Home DNS, \(externalGraphs) ordinary external, \(executionGraphs) external Server/Compare, \(externalLayerGraphs) separate exit-layer graphs, \(mappedOpenVPNGraphs) mapped OpenVPN and \(mappedOpenVPNLayerGraphs) per-remote layered graphs, \(policyCases) independent profile-policy combinations, \(checks) checks; shipping Swift/real Go; OS and FFI handles doubled)")
+  print("Apple Tor profile creation and complete provider assembly: PASS (\(graphs) Tor, \(homeGraphs) Home DNS, \(ordinaryTorGraphs) ordinary-to-Tor, \(externalGraphs) ordinary external, \(executionGraphs) external Server/Compare, \(externalLayerGraphs) separate exit-layer graphs, \(mappedOpenVPNGraphs) mapped OpenVPN and \(mappedOpenVPNLayerGraphs) per-remote layered graphs, \(policyCases) independent profile-policy combinations, \(checks) checks; shipping Swift/real Go; OS and FFI handles doubled)")
  }
  @MainActor static func main() {
   do{try run()}catch{FileHandle.standardError.write(Data(("FAIL Apple Tor: "+error.localizedDescription+"\n").utf8));exit(1)}
+ }
+ @MainActor static func ordinaryTorPredecessors()throws {
+  let protocols=["wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
+  for mode in protocols {
+   let model=RouterVPNModel()
+   let openVPN="client\ndev tun\nproto udp\nremote 198.51.100.8 1194\nremote 198.51.100.9 443 tcp\nremote-random\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint "+String(repeating:"ab",count:32)+"\n"
+   try model.createIOSExternalNode(protocolName:mode,name:"Ordinary Tor predecessor",server:"198.51.100.8",port:51820,expectedPublicIP:"203.0.113.88",username:" exact user ",password:" exact password ",method:"aes-256-gcm",secret:" exact transport secret ",tlsServerName:mode=="http-connect" ? "":"entry.example.test",wgPrivateKey:key(11),wgPeerPublicKey:key(12),wgPresharedKey:key(13),wgAddresses:["10.91.0.2/32","fd91::2/128"],wgAllowedIPs:["0.0.0.0/0","::/0"],wgDNS:[],wgMTU:1380,openVPNConfig:mode=="openvpn" ? openVPN:"",wgKeepalive:29,awgParameters:mode=="amneziawg" ? ["jc":"3","jmin":"40","jmax":"900","s1":"56","s2":"48","s3":"24","s4":"32","h1":"10000000-19999999","h2":"20000000-29999999","h3":"30000000-39999999","h4":"40000000-49999999"]:[:])
+   var entry=(try object(model.saved!)["routerProfiles"] as! [[String:Any]])[0]
+   entry["dns_mode"]="custom";entry["dns_protocol"]="tcp";entry["dns_host"]="entry-resolver.example.test";entry["dns_port"]=5353
+   entry["dns_bootstrap"]=["server":["type":"tcp","tag":"external-dns-bootstrap","server":"9.9.9.9","server_port":5353,"detour":"custom-exit"],"query":["server":"external-dns-bootstrap","strategy":"ipv4_only","timeout":"2300ms","disable_cache":true]]
+   entry["mtu_policy"]="fixed";entry["manual_mtu"]=1380;entry["home_lan_access"]=false;entry["ipv6_mode"]="off";entry["kill_switch_policy"]="always"
+   let entryRoot:[String:Any]=["selectedRouterID":entry["id"]!,"routerProfiles":[entry],"profiles":[:]]
+   let provider:[String:Any]=["tor_entry_bundle":try json(entryRoot),"tor_entry_mode":mode]
+   for kind in kinds {
+    var exit=try tor(kind)
+    exit["multihop_enabled"]=true;exit["multihop_entry_id"]=entry["id"];exit["multihop_entry_mode"]=mode
+    exit["multihop_exit_id"]=exit["id"];exit["multihop_exit_mode"]=kind=="tor" ? "tor":"tor-bridge";exit["multihop_execution"]="local"
+    let owner=ProviderPreparation(),prepared=try owner.prepare(provider:provider,selectedProfile:exit,strict:true),runtime=prepared.runtime
+    let graph=try object(runtime.files["sing-box.json"]!),final=try tagged(graph,"routervpn-tor-exit")
+    let original=try object(Data((final["external_predecessor_config"] as! String).utf8))
+    try check("ordinary Tor provider keeps exact source without private assets",prepared.predecessor.isEmpty && json(prepared.profile!)==json(entry) && Set(runtime.files.keys)==["sing-box.json"])
+    try check("ordinary Tor uses the typed captured source compiler",json(object(Data((final["external_predecessor_profile"] as! String).utf8)))==json(entry) && final["external_tor_profile"] as? String==runtime.torProfileJSON && runtime.torExecution=="local")
+    try check("ordinary source is raw dual-family transport",original["dns"]==nil && (original["inbounds"] as! [[String:Any]])[0]["address"] as? [String]==["172.29.94.1/30","fd29:94::1/126"] && (original["route"] as! [String:Any])["final"] as? String=="custom-exit")
+    try check("Tor final routes through exact ordinary native owner",final["detour"] as? String=="custom-exit" && tagged(graph,"custom-exit")["type"] as? String==tagged(original,"custom-exit")["type"] as? String)
+    try check("ordinary proof identity is frozen separately from dynamic Tor",runtime.expectedPublicIP.isEmpty && object(Data(runtime.torPredecessorProfile!.utf8))["node_kind"] as? String=="external" && (object(Data(runtime.torPredecessorProfile!.utf8))["external"] as! [String:Any])["expected_public_ip"] as? String=="203.0.113.88")
+    try check("ordinary Tor has exact execution receipt",owner.multihopExecutionSource?.entryID==entry["id"] as? String && owner.multihopExecutionSource?.entryMode==mode && owner.multihopExecutionSource?.requested=="local")
+    let tun=(graph["inbounds"] as! [[String:Any]])[0],dns=(graph["dns"] as! [String:Any])["servers"] as! [[String:Any]]
+    let rules=(graph["route"] as! [String:Any])["rules"] as! [[String:Any]]
+    try check("ordinary Tor preserves one fixed interface and IPv6 policy",tun["mtu"] as? Int==1380 && rules.contains{$0["ip_version"] as? Int==6 && $0["action"] as? String=="reject"} && (graph["dns"] as! [String:Any])["strategy"] as? String=="ipv4_only")
+    try check("ordinary Tor retains explicit entry DNS bootstrap",dns.contains{$0["tag"] as? String=="external-dns-bootstrap" && $0["server"] as? String=="9.9.9.9" && $0["server_port"] as? Int==5353 && $0["detour"] as? String=="custom-exit"})
+    let selected=dns.first{$0["tag"] as? String=="routervpn-tor-dns"}
+    try check("selected Tor resolver is captured through the Tor final",selected?["server"] as? String==exit["dns_host"] as? String && selected?["server_port"] as? Int==exit["dns_port"] as? Int && selected?["detour"] as? String=="routervpn-tor-exit")
+    let restored=ProviderPreparation();restored.restoredMultihopExecution="local"
+    let rebuilt=try restored.prepare(provider:provider,selectedProfile:exit,strict:true)
+    try check("ordinary Tor restoration keeps Local and frozen entry policy",rebuilt.runtime.torExecution=="local" && json(object(Data(rebuilt.runtime.torPredecessorProfile!.utf8)))==json(entry))
+    for fault in ["server","auto","exit-home","entry-home","private-proof","private-api","private-token","mode","identity","static-tor","fixed-size","wrong-slot","mixed-slot"] {
+     var changedExit=exit,changedEntry=entry,changedProvider=provider
+     switch fault {
+     case "server","auto":changedExit["multihop_execution"]=fault
+     case "exit-home":changedExit["dns_mode"]="home"
+     case "entry-home":changedEntry["dns_mode"]="home"
+     case "private-proof":changedEntry["node_proof_id"]=String(repeating:"a",count:64)
+     case "private-api":changedEntry["router_api"]="http://10.77.0.1:8787"
+     case "private-token":changedEntry["api_token"]="foreign private token"
+     case "mode":changedProvider["tor_entry_mode"]="foreign"
+     case "identity":var imported=changedEntry["external"] as! [String:Any];imported["expected_public_ip"]="";changedEntry["external"]=imported
+     case "static-tor":var imported=changedExit["external"] as! [String:Any];imported["expected_public_ip"]="203.0.113.9";changedExit["external"]=imported
+     case "fixed-size":changedEntry["manual_mtu"]=1390
+     case "wrong-slot":changedProvider.removeValue(forKey:"tor_entry_bundle");changedProvider["external_entry_bundle"]=provider["tor_entry_bundle"]
+     default:changedProvider["external_entry_bundle"]=provider["tor_entry_bundle"]
+     }
+     if changedProvider["tor_entry_bundle"] != nil {changedProvider["tor_entry_bundle"]=try json(["selectedRouterID":changedEntry["id"]!,"routerProfiles":[changedEntry],"profiles":[:]])}
+     reject("ordinary Tor cannot substitute authority or source "+mode+"/"+kind+"/"+fault){_ = try ProviderPreparation().prepare(provider:changedProvider,selectedProfile:changedExit,strict:true)}
+    }
+    ordinaryTorGraphs+=1
+   }
+  }
+  try check("complete ordinary predecessor Tor graph matrix",ordinaryTorGraphs==48)
  }
  @MainActor static func ordinaryExternalEntry(_ maximum:[String:Any],_ composite:[String:Any])throws {
   let model=RouterVPNModel()
