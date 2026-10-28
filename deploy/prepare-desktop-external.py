@@ -40,7 +40,8 @@ PT_NAMESPACES = ('routervpn/torpt/', 'routervpn/desktoppt/')
 PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_test.go.tmpl',
                 'tor_pt_entry_traffic_test.go.tmpl', 'tor_network.go.tmpl', 'tor_network_test.go.tmpl',
                 'tor_server.go.tmpl', 'tor_plain_test.go.tmpl', 'tor_local.go.tmpl', 'tor_local_test.go.tmpl',
-                'tor_physical.go.tmpl', 'tor_physical_test.go.tmpl')
+                'tor_physical.go.tmpl', 'tor_physical_test.go.tmpl',
+                'tor_physical_source_unix_test.go.tmpl')
 BOX_TEMPLATES = {
     'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go',
     'tor_box_lastrelay.go.tmpl': 'routervpn_desktop_tor_box_lastrelay.go',
@@ -155,7 +156,8 @@ def pt_copies():
     for name in PT_TEMPLATES:
         path = ROOT/'mobile/desktop'/name
         raw = path.read_bytes()
-        if path.is_symlink() or not raw.startswith(b'package routervpndesktoppt\n'):
+        prefix = (b'//go:build linux || darwin\n\n' if name == 'tor_physical_source_unix_test.go.tmpl' else b'')
+        if path.is_symlink() or not raw.startswith(prefix+b'package routervpndesktoppt\n'):
             raise ValueError('Desktop PT adapter package boundary changed')
         content['routervpn/desktoppt/'+name.removesuffix('.tmpl')] = raw
     for name, relative in BOX_TEMPLATES.items():
@@ -406,7 +408,9 @@ def prepare(vendor, go='go', *, env=None):
     # no embedded Tor implementation or C package is installed here.
     for package in PURE:
         for path in sorted((ROOT/'internal'/package).glob('*.go')):
-            if path.name.endswith('_test.go') and not (package == 'mobiletor' and path.name == 'desktop_socket_broker_test.go'):
+            if path.name.endswith('_test.go') and not (package == 'mobiletor' and path.name in (
+                    'desktop_socket_broker_test.go', 'desktop_socket_source_unix_test.go',
+                    'desktop_socket_source_privileged_test.go')):
                 continue
             raw = path.read_bytes()
             for name in PURE:

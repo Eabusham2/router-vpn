@@ -97,6 +97,7 @@ def inputs():
                              ROOT/'deploy/build-mobile-pq.py', ROOT/'deploy/prepare-desktop-rosenpass.py',
                              ROOT/'deploy/setup-desktop-native-toolchain.py',
                              ROOT/'deploy/install-desktop-windows-toolchain.py',
+                             ROOT/'deploy/test_desktop_socket_uid.py',
                              *sorted((ROOT/'mobile/rosenpass').glob('Cargo.*')),
                              *sorted((ROOT/'mobile/rosenpass').glob('*.h')),
                              *sorted((ROOT/'mobile/rosenpass').glob('*.c')),
@@ -495,6 +496,9 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './routervpn/mobiletor', '-run', '^TestDesktopSocket',
                  '-count=1', '-timeout=60s'], cwd=source, env=env, timeout=120)
+            if target.startswith(('linux/', 'darwin/')):
+                run([sys.executable, ROOT/'deploy/test_desktop_socket_uid.py', source],
+                    env=env, timeout=300)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './route', '-run', '^TestRouterVPNDesktopTorNetwork',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)

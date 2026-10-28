@@ -1,0 +1,91 @@
+//go:build linux || darwin
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"os"
+	"sync/atomic"
+	"syscall"
+	"testing"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// The same actual native lower/DNS/UDP composition used by the ordinary socket
+// owner now imports a supplied kernel socket. The separate privileged shared
+// suite proves forked UID + SCM_RIGHTS identity; no PF state is simulated here.
+type desktopPhysicalSourceFixture struct {
+	*desktopPhysicalPolicyFixture
+	created atomic.Int32
+	joined  atomic.Bool
+}
+
+func (p *desktopPhysicalSourceFixture) CreateSocket(ctx context.Context, q mobiletor.DesktopSocketCreation) (mobiletor.DesktopSocketCreated, error) {
+	if ctx.Err() != nil {
+		return mobiletor.DesktopSocketCreated{}, ctx.Err()
+	}
+	family, kind := syscall.AF_INET6, syscall.SOCK_STREAM
+	if q.Binding.LocalAddress.Is4() {
+		family = syscall.AF_INET
+	}
+	if q.Network == "udp" {
+		kind = syscall.SOCK_DGRAM
+	}
+	fd, err := syscall.Socket(family, kind, 0)
+	if err != nil {
+		return mobiletor.DesktopSocketCreated{}, err
+	}
+	syscall.CloseOnExec(fd)
+	p.created.Add(1)
+	return mobiletor.DesktopSocketCreated{Creation: q, File: os.NewFile(uintptr(fd), "native-fixture-created-socket")}, nil
+}
+
+func (p *desktopPhysicalSourceFixture) Cancel() {}
+
+func (p *desktopPhysicalSourceFixture) Close(context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if len(p.grants) != 0 {
+		return errors.New("native source cannot release an identity with live grants")
+	}
+	p.joined.Store(true)
+	return nil
+}
+
+func TestRouterVPNDesktopTorPTPhysicalImportedSourceCarriesActualSelectedDNSAndTCPUDP(t *testing.T) {
+	f := newDesktopPhysicalFixture(t, false)
+	if err := f.broker.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	capture, err := f.network.PhysicalCapture()
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := &desktopPhysicalSourceFixture{desktopPhysicalPolicyFixture: f.policy}
+	options := testNetworkOptions()
+	f.broker, err = mobiletor.NewDesktopSocketBroker(f.f.ctx, capture, source, func() bool {
+		return f.network.Matches(options.SessionID, options.SourceSHA256) && f.f.active.Load()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.network.BindPhysicalBroker(f.broker); err != nil {
+		t.Fatal(err)
+	}
+	f.ctx, err = f.network.Activate(options.SessionID, options.SourceSHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desktopPhysicalVerifyNativePath(t, f)
+	if source.created.Load() < 3 {
+		t.Fatal("actual native DNS/TCP/UDP bypassed captured kernel creator")
+	}
+	if err := f.broker.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !source.joined.Load() {
+		t.Fatal("actual native owner did not join its socket creator")
+	}
+}

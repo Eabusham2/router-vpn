@@ -89,7 +89,8 @@ class DesktopPTPreparation(unittest.TestCase):
         # These real entry-routed PT exchanges belong to the same generated
         # native package selected by the mandatory shipping build gate.
         for name in ('tor_pt_entry_peers_test.go.tmpl', 'tor_pt_entry_traffic_test.go.tmpl',
-                     'tor_physical.go.tmpl', 'tor_physical_test.go.tmpl'):
+                     'tor_physical.go.tmpl', 'tor_physical_test.go.tmpl',
+                     'tor_physical_source_unix_test.go.tmpl'):
             self.assertIn(name, PREP.PT_TEMPLATES)
         traffic = (self.vendor/'routervpn/desktoppt/tor_pt_entry_traffic_test.go').read_text()
         for name in ('MeekTLS', 'WebTunnelTLS', 'SnowflakeTraffic'):
@@ -137,6 +138,8 @@ class DesktopPTPreparation(unittest.TestCase):
                              (ROOT/'internal/mobiletor/desktop_lastrelay.go').read_bytes())
             self.assertEqual(generated['routervpn/mobiletor/desktop_socket_broker_test.go'],
                              (ROOT/'internal/mobiletor/desktop_socket_broker_test.go').read_bytes())
+            for name in ('desktop_socket_source_unix_test.go', 'desktop_socket_source_privileged_test.go'):
+                self.assertEqual(generated['routervpn/mobiletor/'+name], (ROOT/'internal/mobiletor'/name).read_bytes())
             for relative, raw in PREP.comparison_client_contract().items():
                 self.assertEqual(generated[relative], raw)
 

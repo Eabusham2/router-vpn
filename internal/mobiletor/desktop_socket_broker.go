@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
+	"os"
 	"strings"
 	"sync"
 	"syscall"
@@ -97,6 +98,7 @@ type DesktopSocketBroker struct {
 	capture    DesktopSocketCapture
 	owner      DesktopSocketKernelOwner
 	policy     DesktopSocketPolicy
+	source     DesktopSocketSource
 	current    func() bool
 	mu         sync.Mutex
 	closing    bool
@@ -121,6 +123,7 @@ type desktopSocket struct {
 	conn        net.Conn
 	packet      net.PacketConn
 	keeper      *desktopSocketKeeper
+	sourceFile  *os.File
 	local       netip.AddrPort
 	peers       map[netip.AddrPort]*desktopSocketPeer
 	operation   chan struct{}
@@ -173,6 +176,7 @@ func NewDesktopSocketBroker(parent context.Context, capture DesktopSocketCapture
 	ctx, cancel := context.WithCancel(parent)
 	b := &DesktopSocketBroker{ctx: ctx, cancel: cancel, capture: capture, owner: owner, policy: policy, current: current,
 		sockets: make(map[*desktopSocket]struct{}), joined: make(chan struct{}), monitor: make(chan struct{})}
+	b.source, _ = policy.(DesktopSocketSource)
 	b.parentStop = context.AfterFunc(parent, b.Cancel)
 	go b.monitorOwned()
 	return b, nil
@@ -282,6 +286,9 @@ func (b *DesktopSocketBroker) DialContext(ctx context.Context, network, address 
 	if err := s.prepare(operation); err != nil {
 		return nil, err
 	}
+	if err := s.create(operation); err != nil {
+		return nil, err
+	}
 	control := func(controlCtx context.Context, actualNetwork, actualAddress string, raw syscall.RawConn) error {
 		if controlCtx.Err() != nil || !b.Current() || actualAddress != remote.String() {
 			return net.ErrClosed
@@ -299,7 +306,12 @@ func (b *DesktopSocketBroker) DialContext(ctx context.Context, network, address 
 		_, err = s.permit(controlCtx, remote)
 		return err
 	}
-	connection, err := desktopSocketDialTCP(operation, network, remote, control)
+	var connection net.Conn
+	if b.source == nil {
+		connection, err = desktopSocketDialTCP(operation, network, remote, control)
+	} else {
+		connection, err = desktopSocketImportTCP(operation, network, remote, s.sourceFile, control)
+	}
 	s.mu.Lock()
 	s.conn = connection
 	s.mu.Unlock()
@@ -339,6 +351,9 @@ func (b *DesktopSocketBroker) openPacket(ctx context.Context, network string, re
 	if err := s.prepare(operation); err != nil {
 		return nil, err
 	}
+	if err := s.create(operation); err != nil {
+		return nil, err
+	}
 	listener := net.ListenConfig{Control: func(actualNetwork, _ string, raw syscall.RawConn) error {
 		if operation.Err() != nil || !b.Current() {
 			return net.ErrClosed
@@ -348,7 +363,12 @@ func (b *DesktopSocketBroker) openPacket(ctx context.Context, network string, re
 		}
 		return desktopSocketExclusive(raw)
 	}}
-	packet, err := listener.ListenPacket(operation, network, netip.AddrPortFrom(s.binding.LocalAddress, 0).String())
+	var packet net.PacketConn
+	if b.source == nil {
+		packet, err = listener.ListenPacket(operation, network, netip.AddrPortFrom(s.binding.LocalAddress, 0).String())
+	} else {
+		packet, err = desktopSocketImportPacket(operation, network, s.sourceFile, s.binding.LocalAddress, listener.Control)
+	}
 	s.mu.Lock()
 	s.packet = packet
 	s.mu.Unlock()
@@ -559,6 +579,9 @@ func (b *DesktopSocketBroker) Cancel() {
 	}
 	b.mu.Unlock()
 	b.cancel()
+	if b.source != nil {
+		b.source.Cancel()
+	}
 	for _, socket := range sockets {
 		socket.stop()
 	}
@@ -567,6 +590,17 @@ func (b *DesktopSocketBroker) Cancel() {
 			b.workers.Wait()
 			for _, socket := range sockets {
 				<-socket.done
+			}
+			if b.source != nil {
+				for {
+					ctx, cancel := context.WithTimeout(context.Background(), desktopSocketControlWait)
+					err := b.source.Close(ctx)
+					cancel()
+					if err == nil {
+						break
+					}
+					time.Sleep(100 * time.Millisecond)
+				}
 			}
 			<-b.monitor
 			close(b.joined)
@@ -647,6 +681,15 @@ func (s *desktopSocket) drain() {
 	if s.keeper != nil {
 		for {
 			if err := s.keeper.Close(); err == nil {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	if s.sourceFile != nil {
+		for {
+			err := s.sourceFile.Close()
+			if err == nil || errors.Is(err, os.ErrClosed) {
 				break
 			}
 			time.Sleep(100 * time.Millisecond)

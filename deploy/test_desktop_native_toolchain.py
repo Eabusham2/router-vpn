@@ -35,6 +35,60 @@ def file(path, data=b'tool', executable=False):
     return path
 
 
+class NativeSocketUIDGate(unittest.TestCase):
+    def test_matching_unix_hosts_require_uid_gate_and_windows_remains_unchanged(self):
+        class CompilerBoundary(Exception):
+            pass
+
+        for target in ('linux/amd64', 'linux/arm64', 'darwin/amd64', 'darwin/arm64',
+                       'windows/amd64', 'windows/arm64'):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                source = root/'core'
+                (source/'cmd/sing-box').mkdir(parents=True)
+                system, arch = target.split('/')
+                env = {'GOOS': system, 'GOARCH': arch, 'CGO_LDFLAGS': '', 'GOTOOLCHAIN': N.TOOLCHAIN}
+                calls = []
+
+                def run(command, **kwargs):
+                    args = [str(value) for value in command]
+                    calls.append(args)
+                    if args == ['go', 'env', 'GOVERSION']:
+                        return N.TOOLCHAIN
+                    if args[:2] == ['go', 'build']:
+                        raise CompilerBoundary()
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_socket_uid.py'):
+                        self.assertIn(system, ('linux', 'darwin'))
+                        self.assertEqual(args[2:], [str(source.resolve())])
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertLessEqual(kwargs['timeout'], 300)
+                        return ''
+                    if args[:2] in (['go', 'test'], ['go', 'mod']):
+                        return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_hysteria2_deadlines_pinned.py'):
+                        return ''
+                    self.fail('Unexpected native command before build: '+repr(args))
+
+                def stage_cronet(_source, stage, actual, _env):
+                    library = N.library_name(actual)
+                    if library:
+                        file(stage/library, b'captured fixture library')
+
+                with patch.object(N, 'environment', return_value=env), patch.object(N, 'run', side_effect=run), \
+                     patch.object(N.platform, 'system', return_value={'darwin': 'Darwin', 'linux': 'Linux', 'windows': 'Windows'}[system]), \
+                     patch.object(N.platform, 'machine', return_value='x86_64' if arch == 'amd64' else 'arm64'), \
+                     patch.object(N, 'pristine'), patch.object(N.PQ, 'verify', return_value={'native_static_libs': []}), \
+                     patch.object(N.POLICY, 'prepare_native'), patch.object(N.PERFORMANCE, 'prepare'), \
+                     patch.object(N.OPENVPN, 'prepare'), patch.object(N.BUFFERS, 'prepare'), \
+                     patch.object(N.EXTERNAL, 'prepare'), patch.object(N.POLICY.AMNEZIA, 'verify'), \
+                     patch.object(N, 'stage_cronet', side_effect=stage_cronet):
+                    with self.assertRaises(CompilerBoundary):
+                        N.build(target, root/'output', source=source, xray=root/'xray', pq=root/'pq')
+                uid = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_socket_uid.py')]
+                self.assertEqual(len(uid), 0 if system == 'windows' else 1)
+                self.assertIn(ROOT/'deploy/test_desktop_socket_uid.py', N.inputs())
+
+
 class NativeSetup(unittest.TestCase):
     def exercise(self, target, actual_host=None, fault=''):
         system, arch = actual_host or tuple(target.split('/'))

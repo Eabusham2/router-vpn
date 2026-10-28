@@ -198,6 +198,11 @@ func desktopPhysicalDNS(t *testing.T, fixture *desktopPhysicalFixture, detour st
 
 func TestRouterVPNDesktopTorPTPhysicalNativeLowerCarriesActualSelectedDNSAndTCPUDP(t *testing.T) {
 	f := newDesktopPhysicalFixture(t, true)
+	desktopPhysicalVerifyNativePath(t, f)
+}
+
+func desktopPhysicalVerifyNativePath(t *testing.T, f *desktopPhysicalFixture) {
+	t.Helper()
 	dnsAddress := desktopPhysicalDNS(t, f, PhysicalOutboundTag)
 	owner, err := NewPlain(f.ctx, *f.f.options.DomainResolver, nil, f.network.Current)
 	if err != nil {
