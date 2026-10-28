@@ -45,12 +45,24 @@ and package-integrity checks remain enforced. Hosted execution and exact-SHA
 publication of the new source are still pending; the last release read remains
 the 12-asset `745b3e41` prerelease.
 
-Local Tor padding is still unfinished. Published shared/desktop foundations
-bind native cover counters and rates to a captured session, source, real paired
-DNS/exit proof and expiry; enabled Local admission remains closed until native
-refresh, receipt adoption and drain are complete. Tor Compare, the direct
-dynamic-transport strict-protection boundary, broader graph parity, the full
-current release and physical/private acceptance remain separate obligations.
+Desktop Local outgoing Tor padding is enabled in `5e6aa4a7`. The actual final
+outbound and selected-DNS transport wait for fresh proofs and native accounting;
+retained streams expire independently of pending control replies, and cleanup
+joins proof/application I/O before releasing its owner. Transactional settings,
+native composition and controller/editor race suites pass. The guarded mobile
+runtime/API is published in `057957b7`; mobile hosts, actual enabled graph
+coverage and public admission remain held for a coherent feature commit.
+An independent review also found a Server Tor retained-stream expiry gap,
+which is being repaired. Apple Tor/external cancellation callback ownership is
+fixed in `06a19480` with deterministic regressions.
+
+The exact `18a77fd5` desktop Amnezia workflow passes on Windows, macOS and Linux.
+The separate Windows native contract's WFP enforcement step also passes at
+that SHA. The later isolated Android policy
+and Apple Jumbo fixture repairs are published in `c71ccbe3` and `799cab98`.
+These results do not establish a new complete package/image release. Tor
+Compare, direct dynamic-transport strict protection, broader graph parity,
+the full current release and physical/private acceptance remain obligations.
 No live router, AdGuard, Portainer deployment or signing change has occurred.
 
 ## October 27 source checkpoint (historical)
