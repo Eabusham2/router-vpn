@@ -64,6 +64,9 @@ func finalClose(t *testing.T, instance *Instance) {
 	if count(3) != 1 || count(4) != 0 {
 		t.Fatal("native owner was not joined exactly once")
 	}
+	if !instance.Joined() {
+		t.Fatal("successful native join did not acknowledge its exact released owner")
+	}
 	if exited, _, err := instance.Status(); !exited || !errors.Is(err, ErrReleased) {
 		t.Fatal("released native handle fabricated an exit code or remained usable")
 	}
@@ -169,6 +172,21 @@ func TestActualCgoLoaderChild(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// A live handle query must not initiate shutdown or enter the native API.
+	// This also rejects treating an exited-but-unjoined C invocation as joined.
+	var absent *Instance
+	if absent.Joined() || (&Instance{}).Joined() {
+		t.Fatal("missing native invocation fabricated a successful join")
+	}
+	before := [5]int{count(0), count(1), count(2), count(3), count(4)}
+	for iteration := 0; iteration < 64; iteration++ {
+		if instance.Joined() {
+			t.Fatal("unjoined native handle was discharged by a memory query")
+		}
+	}
+	if after := [5]int{count(0), count(1), count(2), count(3), count(4)}; after != before {
+		t.Fatal("native join query mutated invocation ownership")
+	}
 	if scenario == "exit-code" {
 		if exited, code, err := instance.Status(); !exited || code != 17 || err != nil {
 			t.Fatal("native failure code was rewritten")
@@ -190,6 +208,9 @@ func TestActualCgoLoaderChild(t *testing.T) {
 			if err := instance.Close(ctx); err == nil {
 				t.Fatal("failed native join released ownership")
 			}
+			if instance.Joined() {
+				t.Fatal("failed native join fabricated a completed owner")
+			}
 		}
 		if count(2) != 1 || count(4) != 1 {
 			t.Fatal("failed close did not retain sticky native quarantine")
@@ -205,6 +226,9 @@ func TestActualCgoLoaderChild(t *testing.T) {
 		cancel()
 		if !errors.Is(err, context.DeadlineExceeded) || count(4) != 1 {
 			t.Fatal("close timeout released native ownership")
+		}
+		if instance.Joined() {
+			t.Fatal("close timeout acknowledged an unfinished native join")
 		}
 		if other, err := Start([]string{"tor"}); other != nil || err == nil {
 			t.Fatal("timed-out invocation was replaced")
@@ -279,7 +303,7 @@ func TestActualCgoLoaderChild(t *testing.T) {
 	if _, err := connection.Write([]byte("retired")); err == nil {
 		t.Fatal("retired owning socket still usable")
 	}
-	if descriptorCount(t) != settled {
-		t.Fatal("FileConn conversion or native close leaked a descriptor")
+	if got := descriptorCount(t); got != settled {
+		t.Fatalf("FileConn conversion or native close leaked a descriptor: got %d, want %d", got, settled)
 	}
 }

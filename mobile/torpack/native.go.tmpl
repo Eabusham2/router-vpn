@@ -159,6 +159,23 @@ func (i *Instance) Status() (exited bool, code int, err error) {
 	return
 }
 
+// Joined is a bounded memory-only acknowledgement for this exact invocation.
+// A native exit status, a close request, or an expired caller does not prove
+// that the C thread and handle were joined. Failed joins remain quarantined.
+func (i *Instance) Joined() bool {
+	if i == nil {
+		return false
+	}
+	select {
+	case <-i.closeDone:
+		i.mu.Lock()
+		defer i.mu.Unlock()
+		return i.released && i.closeErr == nil
+	default:
+		return false
+	}
+}
+
 // Close requests final process shutdown immediately and waits only for ctx.
 // Deadline/cancellation does not release the handle, cancel a native thread, or
 // allow restart. The retained owner continues bounded native joins. A later

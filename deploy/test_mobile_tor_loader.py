@@ -62,6 +62,9 @@ def main(go):
             'leaked FileConn original descriptor': ('native.go', 'closeErr := file.Close()', 'closeErr := error(nil)'),
             'NUL-truncated C argument': ('native.go', 'strings.IndexByte(argument, 0) >= 0', 'strings.IndexByte(argument, 0) >= len(argument)'),
             'premature release on native timeout': ('backend.go', 'case 1:\n\t\treturn false, nil', 'case 1:\n\t\treturn true, nil'),
+            'failed join acknowledged as complete': ('native.go', 'return i.released && i.closeErr == nil', 'return true'),
+            'exit status substituted for joined handle': ('native.go', 'default:\n\t\treturn false\n\t}\n}\n\n// Close requests',
+                'default:\n\t\texited, _, _ := i.Status()\n\t\treturn exited\n\t}\n}\n\n// Close requests'),
         }
         for name, (file, before, after) in mutations.items():
             value = sources[file]
