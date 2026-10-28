@@ -9,6 +9,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: windows-product-diagnostic-v2-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   native-runtimes:
     name: Build and verify complete native runtimes
