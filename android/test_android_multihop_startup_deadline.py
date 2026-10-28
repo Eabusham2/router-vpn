@@ -30,9 +30,10 @@ TESTS = r'''
    check(NativeSingBoxController.nativeMultihopEntry(entry)&&NativeSingBoxController.nativeMultihopEntry(exit),"deadline fixture listed an unsupported private transport");
    int initialKeys=(NativeSingBoxController.nativePQFamily(entry)||AndroidNativeMAXProfile.isMode(entry)?1:0)+(NativeSingBoxController.nativePQFamily(exit)||AndroidNativeMAXProfile.isMode(exit)?1:0);
    long nativeBudget=PQ_BUDGET*initialKeys,budget=AndroidMultihopRuntime.startTimeoutMillis(execution,entry,exit);
-   long executionMinimum=execution.equals("local")?7500L:EXECUTION_BUDGET;
+   long remoteBudget=execution.equals("local")?0:((NativeSingBoxController.nativePQFamily(exit)||AndroidNativeMAXProfile.isMode(exit))?PQ_BUDGET*(execution.equals("auto")?2:1):0);
+   long executionMinimum=execution.equals("local")?7500L:EXECUTION_BUDGET+remoteBudget;
    check(budget>nativeBudget+executionMinimum,"host deadline undercuts sequential native work: "+entry+"/"+exit+"/"+execution);
-   check(budget<=180000L,"startup deadline lost its bound");
+   check(budget<=240000L,"startup deadline lost its bound");
    if(initialKeys==0)check(budget==(execution.equals("local")?20000L:120000L),"ordinary non-PQ startup budget changed");cases++;
   }
   rejected("unknown execution deadline",()->AndroidMultihopRuntime.startTimeoutMillis("invented","wg","wg"));
@@ -78,9 +79,9 @@ def main():
     if not jar.is_file():
         raise RuntimeError('Actual Android JSON library required')
     pq_source = (ROOT / 'internal/mobilepq/controller.go').read_text()
-    pq_budget = re.search(r'timeout\s*:\s*(\d+)\s*\*\s*time.Second', pq_source)
+    pq_budget = re.search(r'const InitialKeyTimeout\s*=\s*(\d+)\s*\*\s*time.Second', pq_source)
     execution_source = (ROOT / 'internal/mobilemultihop/runtime.go').read_text()
-    execution_budget = re.search(r'context.WithTimeout\(parent,\s*(\d+)\s*\*\s*time.Second\)', execution_source)
+    execution_budget = re.search(r'const executionBaseTimeout\s*=\s*(\d+)\s*\*\s*time.Second', execution_source)
     assert pq_budget and execution_budget, 'shared native startup budget changed'
     # Verify the actual ordering that makes these budgets sequential. MAX's
     # Java hostname preflight occurs before submission and is not added here.
@@ -142,6 +143,7 @@ def main():
         original = target.read_text()
         controls = (
             ('premature outer deadline', 'startTimeoutMillis(execution,entryMode,prepared.exitMode)', '("local".equals(execution)?START_TIMEOUT_MS:EXECUTION_TIMEOUT_MS)', 'legitimate delayed native PQ startup was cut off by the outer deadline'),
+            ('Server final recheck phase', '(\"auto\".equals(execution)?2:1)', '1', 'host deadline undercuts sequential native work'),
             ('second native dependency', 'new String[]{entryMode,exitMode}', 'new String[]{entryMode}', 'host deadline undercuts sequential native work'),
         )
         for label, before, after, expected in controls:

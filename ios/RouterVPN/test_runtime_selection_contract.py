@@ -137,7 +137,7 @@ if platform.system() == 'Darwin':
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_provider_runtime_driver.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_owned_strategy_app.py')], check=True, timeout=300)
     for speed_lab_contract in ['test_ios_speed_lab_ownership.py', 'test_ios_speed_lab_external_paths.py',
-                               'test_ios_speed_lab_tunnel.py', 'test_ios_multihop_execution.py',
+                               'test_ios_speed_lab_tunnel.py', 'test_ios_multihop_execution.py', 'test_ios_multihop_startup_deadline.py',
                                'test_ios_via_entry_candidates.py']:
         subprocess.run([sys.executable, str(root / 'deploy' / speed_lab_contract)], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_native_base_selection.py')], check=True, timeout=150)

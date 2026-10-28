@@ -12,6 +12,10 @@ import (
  "time"
 )
 
+// InitialKeyTimeout bounds one captured native peer's initial key exchange.
+// Hosts include this phase in their startup budgets; it never extends rekeys.
+const InitialKeyTimeout = 30 * time.Second
+
 var (
  ErrPending=errors.New("post-quantum exchange is not ready")
  ErrExpired=errors.New("post-quantum key expired")
@@ -50,7 +54,7 @@ type Controller struct{
 func New(ctx context.Context,protocol Protocol,target Target,dial Dial)(*Controller,error){
  if ctx==nil||protocol==nil||target==nil||dial==nil{return nil,errors.New("PQ requires captured protocol, peer and transport owners")}
  child,cancel:=context.WithCancel(ctx)
- return &Controller{ctx:child,cancel:cancel,protocol:protocol,target:target,dial:dial,done:make(chan struct{}),initial:make(chan struct{}),timeout:30*time.Second},nil
+ return &Controller{ctx:child,cancel:cancel,protocol:protocol,target:target,dial:dial,done:make(chan struct{}),initial:make(chan struct{}),timeout:InitialKeyTimeout},nil
 }
 func(c *Controller)Start()error{
  c.mu.Lock()

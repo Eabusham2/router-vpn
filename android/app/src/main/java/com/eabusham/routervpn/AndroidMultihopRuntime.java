@@ -50,6 +50,11 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         for(String mode:new String[]{entryMode,exitMode}) {
             if(NativeSingBoxController.nativePQFamily(mode)||AndroidNativeMAXProfile.isMode(mode))budget+=PQ_START_TIMEOUT_MS;
         }
+        // Server creates a second exit owner after the local native graph.
+        // Compare creates it again for its mandatory final winner recheck.
+        if(!"local".equals(execution)&&(NativeSingBoxController.nativePQFamily(exitMode)||AndroidNativeMAXProfile.isMode(exitMode))) {
+            budget+=("auto".equals(execution)?2:1)*PQ_START_TIMEOUT_MS;
+        }
         return budget;
     }
 

@@ -223,7 +223,11 @@ func (s *server) multihopRelay(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid relay request", 400)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	budget := 8 * time.Second
+	if r.Method == http.MethodPut {
+		budget = multihoprelay.AcquisitionTimeout(q.ExitMode)
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), budget)
 	defer cancel()
 	if r.Method == http.MethodPost {
 		if r.URL.RawQuery != "" {

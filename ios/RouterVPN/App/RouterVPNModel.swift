@@ -555,17 +555,24 @@ final class RouterVPNModel: ObservableObject {
             launchOptions[IOSMultihopExecution.startupLaunchKey] = String(decoding: encoded, as: UTF8.self) as NSString
         }
         let options: [String: NSObject]? = launchOptions.isEmpty ? nil : launchOptions
+        let startupTimeout: TimeInterval
+        if selection.engine == .multihop {
+            startupTimeout = try IOSMultihopExecution.startupTimeout(
+                execution: IOSDNSRuntimePolicy.selectedProfile(in: bundle)?.multihopExecution ?? "local",
+                entryMode: selection.multihopEntryMode ?? "wg", exitMode: selection.rawProfileID)
+        } else { startupTimeout = 10 }
         try manager.connection.startVPNTunnel(options: options)
         connected = false
         activeEngine = selection.engine.rawValue
         activeRawProfile = selection.rawProfileID
-        return await waitForConnection(manager, attempts: selection.engine == .multihop ? ((selectedRouterProfile?.multihopExecution ?? "local") == "local" ? 100 : 480) : 40)
+        return await waitForConnection(manager, timeout: startupTimeout)
     }
 
-    private func waitForConnection(_ manager: NETunnelProviderManager, attempts: Int) async -> Bool {
+    private func waitForConnection(_ manager: NETunnelProviderManager, timeout: TimeInterval) async -> Bool {
         let generation = iosConnectGeneration
+        let deadline = ProcessInfo.processInfo.systemUptime + timeout
         var sawConnecting = false
-        for _ in 0..<attempts {
+        while ProcessInfo.processInfo.systemUptime < deadline {
             guard iosConnectGeneration == generation, !userDisconnectInProgress, !Task.isCancelled else { return false }
             switch manager.connection.status {
             case .connected: return true
@@ -581,7 +588,7 @@ final class RouterVPNModel: ObservableObject {
                 try? await Task.sleep(for: .milliseconds(250))
             }
         }
-        return manager.connection.status == .connected
+        return iosConnectGeneration == generation && !userDisconnectInProgress && !Task.isCancelled && manager.connection.status == .connected
     }
 
     func iosInvalidateStrategyIdentity() {

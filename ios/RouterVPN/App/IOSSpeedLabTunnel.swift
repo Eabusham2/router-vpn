@@ -230,7 +230,12 @@ import Foundation
         }
         try manager.connection.startVPNTunnel(options: options)
         let tor = ["external-tor", "external-tor-bridge"].contains(identity.rawProfile)
-        let deadline = ProcessInfo.processInfo.systemUptime + (tor ? 210 : 130)
+        var restoreTimeout: TimeInterval = tor ? 210 : 130
+        if identity.engine == "multihop-libbox", let multihopExecution {
+            restoreTimeout = max(130, 10 + (try IOSMultihopExecution.startupTimeout(execution: multihopExecution.execution,
+                entryMode: multihopExecution.source.entryMode, exitMode: multihopExecution.source.exitMode)))
+        }
+        let deadline = ProcessInfo.processInfo.systemUptime + restoreTimeout
         var sawTransition = false
         while ProcessInfo.processInfo.systemUptime < deadline {
             try model.iosSpeedLabOwnership.require(owner)

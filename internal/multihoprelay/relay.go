@@ -486,6 +486,10 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 		}
 		return Lease{}, errors.New("server exit engine failed to start")
 	}
+	// Authentication may wait for the captured native PQ initial-key phase.
+	// Lease lifetime starts only when that owner is actually ready; otherwise a
+	// legitimate slow startup could return an already-expired short-TTL lease.
+	lease.ExpiresAt = m.now().Add(time.Duration(m.cfg.TTLSeconds) * time.Second)
 	m.leases[key] = &live{Lease: lease, peer: peer, p: process}
 	return lease, nil
 }

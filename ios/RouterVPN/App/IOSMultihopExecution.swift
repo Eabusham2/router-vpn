@@ -7,6 +7,19 @@ enum IOSMultihopExecution {
     static let launchKey = "routervpn_speed_lab_execution"
     static let startupLaunchKey = "routervpn_startup_execution"
 
+    /// The local native graph starts before the shared execution controller.
+    /// Server creates a further native exit; Compare creates it a second time
+    /// for the required final proof. Only captured Rosenpass-backed modes add
+    /// their existing 30-second initial-key phase.
+    static func startupTimeout(execution: String, entryMode: String, exitMode: String) throws -> TimeInterval {
+        guard ["local", "server", "auto"].contains(execution) else { throw issue() }
+        let initialKeyModes: Set<String> = ["wg-pq", "awg2-pq", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"]
+        let entry: TimeInterval = initialKeyModes.contains(entryMode) ? 30 : 0
+        let exit: TimeInterval = initialKeyModes.contains(exitMode) ? 30 : 0
+        let remoteCount: TimeInterval = execution == "local" ? 0 : (execution == "auto" ? 2 : 1)
+        return (execution == "local" ? 25 : 120) + entry + exit + remoteCount * exit
+    }
+
     /// Tor entry paths preserve their proved Local/Server execution separately
     /// from a saved Compare preference. Ordinary
     /// external Local has no selector/lease owner; its Server/Compare family

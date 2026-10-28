@@ -373,6 +373,25 @@ func (s *trial) Close(context.Context) error {
 
 type driver struct{ owner *Controller }
 
+const executionBaseTimeout = 100 * time.Second
+
+// The native local graph has already started before this controller runs.
+// Only Server acquisition starts another captured exit. Compare may start
+// that exit once for measurement and once for the final repeated proof.
+func (c *Controller) executionBudgets() (time.Duration, time.Duration) {
+	startup, total := 15*time.Second, executionBaseTimeout
+	if c.meta.Execution == "local" {
+		return startup, total
+	}
+	initial := multihoprelay.NativeStartupAllowance(c.meta.ExitMode)
+	startup += initial
+	total += initial
+	if c.meta.Execution == "auto" {
+		total += initial
+	}
+	return startup, total
+}
+
 func (d driver) Open(ctx context.Context, candidate routechoice.Candidate) (routechoice.Session, error) {
 	c := d.owner
 	if e := c.requireValid(); e != nil {
@@ -411,7 +430,8 @@ func (c *Controller) Run(parent context.Context, engine Engine) error {
 		c.mu.Unlock()
 		return errors.New("multihop controller cannot be reused")
 	}
-	ctx, cancel := context.WithTimeout(parent, 100*time.Second)
+	startupBudget, totalBudget := c.executionBudgets()
+	ctx, cancel := context.WithTimeout(parent, totalBudget)
 	c.cancel = cancel
 	c.runDone = make(chan struct{})
 	done := c.runDone
@@ -423,12 +443,12 @@ func (c *Controller) Run(parent context.Context, engine Engine) error {
 	var active routechoice.Session
 	var result routechoice.Result
 	var err error
-	options := routechoice.Options{Targets: Targets, StartupTimeout: 15 * time.Second, ProbeTimeout: 2500 * time.Millisecond, CleanupTimeout: 10 * time.Second, Preferred: routechoice.Local, Notify: c.event}
+	options := routechoice.Options{Targets: Targets, StartupTimeout: startupBudget, ProbeTimeout: 2500 * time.Millisecond, CleanupTimeout: 10 * time.Second, Preferred: routechoice.Local, Notify: c.event}
 	if c.meta.Execution == "auto" {
 		result, active, err = routechoice.Compare(ctx, []routechoice.Candidate{c.candidate(routechoice.Local), c.candidate(routechoice.Server)}, driver{c}, options)
 	} else {
 		candidate := c.candidate(routechoice.Execution(c.meta.Execution))
-		child, stop := context.WithTimeout(ctx, 15*time.Second)
+		child, stop := context.WithTimeout(ctx, startupBudget)
 		active, err = (driver{c}).Open(child, candidate)
 		stop()
 		if err == nil {
