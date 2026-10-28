@@ -321,13 +321,27 @@ def table_exists() -> bool:
         return False
 
 
-def render_rules(endpoint_ips: list[ipaddress._BaseAddress], lan_access: bool, replace: bool, native_egress=None) -> str:
+def render_rules(endpoint_ips: list[ipaddress._BaseAddress], lan_access: bool, replace: bool, native_egress=None,
+                 *, socket_broker: bool = False, socket_capture: tuple[str, str] | None = None) -> str:
+    comment = ""
+    if socket_broker:
+        if endpoint_ips or native_egress is not None:
+            raise RuntimeError("socket broker baseline cannot contain destination-wide exemptions")
+        marker = "inactive"
+        if socket_capture is not None:
+            session, source = socket_capture
+            if not re.fullmatch(r"[a-f0-9]{32}", session) or not re.fullmatch(r"[a-f0-9]{64}", source):
+                raise RuntimeError("socket broker baseline has no captured source identity")
+            marker = session + ":" + source
+        comment = f' comment "routervpn-owned-baseline:{marker}";'
+    elif socket_capture is not None:
+        raise RuntimeError("socket broker identity cannot annotate an ordinary endpoint policy")
     lines: list[str] = []
     if replace:
         lines.append(f"delete table inet {TABLE}")
     lines += [
         f"add table inet {TABLE}",
-        f"add chain inet {TABLE} output {{ type filter hook output priority -310; policy drop; }}",
+        f"add chain inet {TABLE} output {{ type filter hook output priority -310; policy drop;{comment} }}",
         f"add rule inet {TABLE} output oifname \"lo\" accept",
         f"add rule inet {TABLE} output oifname {{ \"wg\", \"awg\", \"router-vpn\" }} accept",
         f"add rule inet {TABLE} output ip protocol udp udp sport 68 udp dport 67 accept",
@@ -527,7 +541,10 @@ def apply(*, retained_state: dict[str, Any] | None = None) -> int:
     else:
         endpoint_ips, native_egress = retained
     lan_access = bool(control_profile.get("home_lan_access", False))
-    rules = render_rules(endpoint_ips, lan_access, replace=table_exists() if os.environ.get("HOMEVPN_KILLSWITCH_DRY_RUN") != "1" else False, native_egress=native_egress)
+    socket_capture = ((os.environ["HOMEVPN_TOR_SESSION"], os.environ["HOMEVPN_TOR_SOURCE_SHA256"])
+                      if socket_broker and retained_state is None else None)
+    rules = render_rules(endpoint_ips, lan_access, replace=table_exists() if os.environ.get("HOMEVPN_KILLSWITCH_DRY_RUN") != "1" else False,
+                         native_egress=native_egress, socket_broker=socket_broker, socket_capture=socket_capture)
     if os.environ.get("HOMEVPN_KILLSWITCH_DRY_RUN") != "1":
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, prefix="router-vpn-killswitch-", suffix=".nft") as f:
             f.write(rules)

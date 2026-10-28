@@ -108,6 +108,7 @@ with tempfile.TemporaryDirectory(prefix='router-vpn-tor-socket-guard-') as td:
         assert state['native_socket_broker'] is True and state['endpoint'] == '' and state['endpoint_ips'] == []
         assert 'native_egress' not in state
         assert len(written) == 2 and all('policy drop' in text for text in written)
+        assert all('comment "routervpn-owned-baseline:' + 'a' * 32 + ':' + 'b' * 64 + '"' in text for text in written)
         assert all('198.51.100.40' not in text and ' daddr ' not in text and 'meta skuid' not in text for text in written)
         # The native guardian, never this launcher, will admit expiring exact
         # socket tuples after independent kernel ownership readback.
@@ -147,6 +148,7 @@ with tempfile.TemporaryDirectory(prefix='router-vpn-tor-socket-guard-') as td:
             assert mod.reassert() == 0
         restored = json.loads(state_path.read_text())
         assert restored['endpoint_ips'] == [] and restored['native_socket_broker'] is True
+        assert all('comment "routervpn-owned-baseline:inactive"' in text for text in written[-2:])
         assert all(' daddr ' not in text and 'meta skuid' not in text for text in written)
         count = len(written)
         for poison in ({'native_socket_broker': False}, {'endpoint_ips': ['198.51.100.40']},
@@ -162,6 +164,19 @@ with tempfile.TemporaryDirectory(prefix='router-vpn-tor-socket-guard-') as td:
         write_private_json(state_path, restored)
         assert mod.release() == 0 and state_path.exists(), 'Always guard was removed by ordinary disconnect'
         resolver.assert_not_called()
+
+for endpoints, tuples, capture, protected in (
+        ([mod.ipaddress.ip_address('203.0.113.1')], None, ('a' * 32, 'b' * 64), True),
+        ([], [], ('a' * 32, 'b' * 64), True),
+        ([], None, ('A' * 32, 'b' * 64), True),
+        ([], None, ('a' * 32, ''), True),
+        ([], None, ('a' * 32, 'b' * 64), False)):
+    try:
+        mod.render_rules(endpoints, False, False, tuples, socket_broker=protected, socket_capture=capture)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError('captured baseline marker accepted a different firewall authority')
 
 with tempfile.TemporaryDirectory(prefix='router-vpn-killswitch-') as td:
     root=pathlib.Path(td);(root/'run').mkdir();
