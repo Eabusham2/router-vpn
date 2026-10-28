@@ -24,7 +24,11 @@ func TestRouterTorAppleGeneratedGraphs(t *testing.T) {
 		t.Fatal("the real pinned C Tor ABI is required even for configuration checks")
 	}
 	state := t.TempDir()
-	if err := RouterTorSetStateDirectory(filepath.Join(state, "tor-state")); err != nil {
+	privateState := os.Getenv("ROUTERVPN_IOS_TOR_STATE")
+	if privateState == "" {
+		privateState = filepath.Join(state, "tor-state")
+	}
+	if err := RouterTorSetStateDirectory(privateState); err != nil {
 		t.Fatal(err)
 	}
 	missing := os.Getenv("ROUTERVPN_IOS_TOR_MISSING_ENGINE") == "1"

@@ -163,6 +163,59 @@ assert args[1:]==['--native-package',os.environ['TOR_PACKAGE'],'--android-aar',o
                 if fault!='missing':graph.write_text(json.dumps(body))
                 with self.assertRaises(ValueError):GATE.matrix(root)
 
+    def populate_padding(self, root):
+        def write(name, mode, kind, rate, ordinary):
+            selected=dict(id='tor-exit',node_kind='external',daita_enabled=True,daita_rate_kbps=rate,
+                          multihop_execution='local',multihop_enabled=mode!='direct',
+                          external=dict(protocol='tor' if kind=='tor' else 'tor-bridge'))
+            if kind!='tor':selected['external']['tor_bridge']=dict(transport=kind)
+            source={}
+            if mode!='direct':
+                selected.update(multihop_entry_mode=mode,multihop_entry_id='captured-entry')
+                entry=dict(id='captured-entry',node_kind='external' if ordinary else 'router-vpn')
+                if ordinary:entry['external']=dict(protocol=mode)
+                source.update(predecessor_profile=json.dumps(entry),predecessor_config='{"route":{}}')
+            source['profile']=json.dumps(selected)
+            owner=dict(type='routervpn-tor',tag='routervpn-tor-exit',session_id='captured',padding_source=source)
+            (root/name).write_text(json.dumps(dict(outbounds=[owner])))
+        for index,(mode,kind,rate) in enumerate(itertools.product(('direct',*GATE.MODES),('tor','obfs4'),(0,32,64,192))):
+            write(f'padding-{index:03d}.json',mode,kind,rate,False)
+        for index,(mode,kind,rate) in enumerate(itertools.product(GATE.ORDINARY_MODES.values(),('tor','obfs4'),(0,32,64,192)),8):
+            write(f'ordinary-padding-{index:03d}.json',mode,kind,rate,True)
+
+    def test_enabled_padding_matrix_requires_every_source_family_and_rate(self):
+        faults=('missing','empty','linked','extra','repeat','disabled','typed-rate','missing-source','entry-id','private-authority','server')
+        for fault in faults:
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary);self.populate_padding(root);GATE.padding_matrix(root)
+                self.assertEqual(len(list(root.iterdir())),224)
+                path=root/'ordinary-padding-008.json'
+                graph=json.loads(path.read_text());source=graph['outbounds'][0]['padding_source']
+                selected=json.loads(source['profile']);entry=json.loads(source['predecessor_profile'])
+                if fault=='missing':path.unlink()
+                elif fault=='empty':path.write_text('')
+                elif fault=='linked':path.unlink();path.symlink_to(root/'ordinary-padding-009.json')
+                elif fault=='extra':(root/'unexpected.json').write_text('{}')
+                elif fault=='repeat':path.write_bytes((root/'ordinary-padding-009.json').read_bytes())
+                else:
+                    if fault=='disabled':selected['daita_enabled']=False
+                    elif fault=='typed-rate':selected['daita_rate_kbps']='64'
+                    elif fault=='missing-source':source.pop('predecessor_config')
+                    elif fault=='entry-id':selected['multihop_entry_id']='replacement'
+                    elif fault=='private-authority':entry['node_kind']='router-vpn'
+                    elif fault=='server':selected['multihop_execution']='server'
+                    source['profile']=json.dumps(selected);source['predecessor_profile']=json.dumps(entry)
+                    path.write_text(json.dumps(graph))
+                with self.assertRaises(ValueError):GATE.padding_matrix(root)
+
+    def test_enabled_native_gate_checks_actual_constructors_and_captured_sources(self):
+        native=GATE.PADDING_TEMPLATE.read_text()
+        for marker in ('len(entries) != 224','CheckConfig(string(data))','CheckConfig(string(bad))',
+                       'RouterTorPaddingSource','routervpn-missing-tor-engine','daita_rate_kbps','RouterTorSetStateDirectory'):
+            self.assertIn(marker,native)
+        self.assertIn(GATE.JAVA/'AndroidTorPaddingReceipt.java',GATE.inputs())
+        self.assertIn(GATE.PADDING_TEMPLATE,GATE.inputs())
+
     def test_linked_matrix_root_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             root=Path(temporary);graphs=root/'graphs';graphs.mkdir();self.populate(graphs)
@@ -174,12 +227,13 @@ assert args[1:]==['--native-package',os.environ['TOR_PACKAGE'],'--android-aar',o
         before=GATE.digest();read=Path.read_bytes
         for relative in ('android/app/src/main/java/com/eabusham/routervpn/AndroidTorProfile.java',
                          'android/app/src/main/java/com/eabusham/routervpn/AndroidTorSession.java',
+                         'android/app/src/main/java/com/eabusham/routervpn/AndroidTorPaddingReceipt.java',
                          'android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java',
                          'android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java',
                          'android/test_android_tor_profile.py','android/test_android_tor_server_profile.py','android/test_android_tor_session.py',
                          'android/test_android_tor_form.py','android/test_android_start_layer_relay_lifecycle.py',
                          'deploy/native_tor_graph_host.py','deploy/test_native_tor_graph_host.py',
-                         'mobile/routervpn_tor_android_graph_test.go.tmpl'):
+                         'mobile/routervpn_tor_android_graph_test.go.tmpl','mobile/routervpn_tor_android_padding_graph_test.go.tmpl'):
             changed=ROOT/relative;self.assertIn(changed,paths)
             with mock.patch.object(Path,'read_bytes',lambda path:read(path)+(b'\nchanged fixture\n' if path==changed else b'')):
                 self.assertNotEqual(before,GATE.digest())
@@ -214,6 +268,7 @@ assert args[1:]==['--native-package',os.environ['TOR_PACKAGE'],'--android-aar',o
         self.assertIn('"$OPENVPN_SHA" "$ANDROID_TOR_GRAPH_SHA"',shell)
         for symbol in ('routerCompileTorProfile','routerValidateTorProfile','routerCompileTorProfileWithPredecessor',
                        'routerCompileTorProfileWithExternalPredecessor',
+                       'routerTorPaddingSource','java.lang.String paddingStatusJSON() throws java.lang.Exception;',
                        'routerTorSetStateDirectory','routerTorCreateProof',
                        'routerTorCreateProofWithPredecessor','routerStrategyDNSProof','routerStrategyCloseService',
                        'RouterTorProofRequest','java.lang.String run() throws java.lang.Exception;',
@@ -241,7 +296,7 @@ assert args[1:]==['--native-package',os.environ['TOR_PACKAGE'],'--android-aar',o
         self.assertIn('with_gvisor,with_openvpn,with_naive_outbound',source)
         self.assertIn('with_naive_outbound,routervpn_tor_native_test',source)
         self.assertIn('env=HOST.environment(go,library,clang)',source)
-        self.assertIn("'^TestRouterTorAndroidGeneratedGraphs$'",source)
+        self.assertIn("'^TestRouterTorAndroidGeneratedGraphs$|^TestRouterTorAndroidLocalPaddingGraphs$'",source)
         native=GATE.TEMPLATE.read_text()
         for marker in ('len(entries) != 738','CheckConfig(string(data))','CheckConfig(string(bad))',
                        'routervpn-missing-tor-engine','RouterTorSetStateDirectory'):

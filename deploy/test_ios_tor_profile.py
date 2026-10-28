@@ -28,6 +28,10 @@ GRAPH_EVIDENCE = {'schema': 1, 'graphs': 396, 'home_dns_combinations': 285,
     'ordinary_external_graphs': 456, 'external_execution_graphs': 912, 'external_exit_layer_graphs': 144,
     'mapped_openvpn_graphs': 171, 'mapped_openvpn_layer_graphs': 342, 'profile_policy_combinations': 320,
     'public_tor_traffic': False, 'native_handles': 'boundary doubles'}
+PADDING_EVIDENCE = {'schema': 1, 'execution': 'local', 'padding_enabled': True,
+    'graphs': 528, 'private_graphs': 456, 'direct_graphs': 8, 'ordinary_graphs': 64,
+    'rates_kbps': [0, 32, 64, 192], 'entry_layers': ['off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening'],
+    'public_tor_traffic': False, 'native_handles': 'boundary doubles'}
 
 
 def load(name, relative):
@@ -56,6 +60,8 @@ xray_fixture = A.GO_HELPER[A.GO_HELPER.index(' case "test-xray":'):A.GO_HELPER.i
 GO = replace_once(GO, ' case "compile":value,err=mobilemultihop.CompilePQProfile(r.Mode,r.Files,r.Node)', r'''
  case "tor":value,err=mobiletor.CompileProfile(r.Config,r.Node,r.Source)
  case "tor-validate":err=mobiletor.ValidateProfile(r.Config);value="checked"
+ case "tor-padding-source":value,err=RouterTorPaddingSource(r.Config,r.Policy,r.Node)
+ case "canonical-config-sha":var graph map[string]any;err=json.Unmarshal([]byte(r.Config),&graph);if err==nil{var encoded []byte;encoded,err=json.Marshal(graph);if err==nil{sum:=sha256.Sum256(encoded);value=hex.EncodeToString(sum[:])}}
  case "tor-with-predecessor":value,err=mobiletor.CompileProfileWithPredecessor(r.Config,r.Node,r.Source,r.Policy)
  case "tor-with-external-predecessor":value,err=mobiletor.CompileProfileWithExternalPredecessor(r.Config,r.Node,r.Source,r.Policy)
  case "tor-server-with-predecessor":value,err=mobiletor.CompileServerProfileWithPredecessor(r.Config,r.Node,r.Source,r.Policy)
@@ -94,6 +100,10 @@ RESPONSE_BINDING = _openvpn_binding[_response_binding_start:_openvpn_binding.ind
 _start_layers_binding_start = _openvpn_binding.index('func RouterValidateExternalOpenVPNStartLayers(')
 START_LAYERS_BINDING = _openvpn_binding[_start_layers_binding_start:_openvpn_binding.index('\n}', _start_layers_binding_start) + 2]
 GO += '\n' + RESPONSE_BINDING + '\n' + START_LAYERS_BINDING + '\n'
+_tor_binding = (ROOT / 'mobile/toroutbound/bridge.go.tmpl').read_text()
+_padding_binding_start = _tor_binding.index('func RouterTorPaddingSource(')
+PADDING_BINDING = _tor_binding[_padding_binding_start:_tor_binding.index('\n}', _padding_binding_start) + 2]
+GO += '\n' + PADDING_BINDING + '\n'
 
 # A real Swift module makes canImport(Libbox) select every shipping native
 # compiler branch. The serialized subprocess implements only the FFI boundary.
@@ -111,6 +121,9 @@ public func LibboxRouterCompileTorProfile(_ profile:String,_ session:String,_ pr
 }
 public func LibboxRouterValidateTorProfile(_ profile:String,_ error:inout NSError?)->Bool {
  result(&error,["Op":"tor-validate","Config":profile]) == "checked"
+}
+public func LibboxRouterTorPaddingSource(_ config:String,_ profile:String,_ session:String,_ error:inout NSError?)->String {
+ result(&error,["Op":"tor-padding-source","Config":config,"Policy":profile,"Node":session])
 }
 public func LibboxRouterCompileTorProfileWithPredecessor(_ profile:String,_ session:String,_ predecessor:String,_ predecessorProfile:String,_ error:inout NSError?)->String {
  result(&error,["Op":"tor-with-predecessor","Config":profile,"Node":session,"Source":predecessor,"Policy":predecessorProfile])
@@ -298,7 +311,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
  func linkNodeBundle(_ data:Data)throws {_ = try JSONDecoder().decode(ClientBundle.self,from:data);saved=data;writes+=1}
 }
 @main struct Tests {
- @MainActor static var checks=0,graphs=0,homeGraphs=0,policyCases=0,externalGraphs=0,ordinaryTorGraphs=0,executionGraphs=0,externalLayerGraphs=0,mappedOpenVPNGraphs=0,mappedOpenVPNLayerGraphs=0,sessions=Set<String>()
+ @MainActor static var checks=0,graphs=0,paddingGraphs=0,homeGraphs=0,policyCases=0,externalGraphs=0,ordinaryTorGraphs=0,executionGraphs=0,externalLayerGraphs=0,mappedOpenVPNGraphs=0,mappedOpenVPNLayerGraphs=0,sessions=Set<String>()
  static let modes=["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg","ss-v2ray","split","max","naive-h2","naive-h3"]
  static let kinds=["tor","obfs4","meek_lite","snowflake","webtunnel","custom"]
  static let layers=["off","aes-256-gcm","aes-256-gcm+xor-whitening"]
@@ -378,8 +391,9 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   let profile:[String:Any]=["schema_version":4,"id":"entry","name":"Captured entry","node_kind":"router-vpn","node_proof_id":node,"endpoint":host,"router_api":api,"api_token":"entry-private-token","adguard_ipv4":"192.168.50.133","adguard_ipv6":"fd77:77::1","socks_host":"10.77.0.1","socks_port":1080,"socks_username":"","socks_password":"","dns_mode":"doh","dns_host":"9.9.9.9","dns_port":443,"dns_server_name":"entry-dns.example.test","dns_path":"/entry-query","home_lan_access":false,"ipv6_mode":"off","kill_switch_policy":"strict","mtu_policy":"fixed","manual_mtu":1380,"daita_enabled":true,"start_layer":layer,"base_tunnel":"wg","base_fallback":false]
   return ["bundleVersion":4,"profileSchemaVersion":4,"nodeProofId":node,"selectedRouterID":"entry","routerProfiles":[profile],"profiles":assets]
  }
- @MainActor static func verify(_ kind:String,_ mode:String,_ layer:String,_ maximum:[String:Any],_ composite:[String:Any])throws {
+ @MainActor static func verify(_ kind:String,_ mode:String,_ layer:String,_ maximum:[String:Any],_ composite:[String:Any],paddingRate:Int?=nil)throws {
   var selected=try tor(kind),provider:[String:Any]=[:],baseline:[String:Data]=[:],entry:[String:Any]?
+  if let paddingRate {selected["daita_enabled"]=true;selected["daita_rate_kbps"]=paddingRate}
   let owner=ProviderPreparation()
   if mode != "direct" {
    entry=try root(mode,layer,maximum,composite);baseline=try owner.entry(entry!,mode)
@@ -399,7 +413,9 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   try check("one TUN and one Tor",(graph["inbounds"] as! [[String:Any]]).count==1 && (graph["outbounds"] as! [[String:Any]]).filter{$0["type"] as? String=="routervpn-tor"}.count==1)
   try check("Tor keeps dynamic exit semantics",runtime.expectedPublicIP.isEmpty && (graph["route"] as! [String:Any])["final"] as? String=="routervpn-tor-exit")
   try check("Tor keeps bridge order and plain emptiness",out["bridges"] as? [String]==lines(kind))
-  try check("private proof credentials stay outside Tor outbound",!text(out).contains("entry-private-token") && out["node_proof_id"]==nil && out["router_api"]==nil)
+  var transport=out
+  if paddingRate != nil {transport.removeValue(forKey:"padding_source")}
+  try check("private proof credentials stay inside their captured source",!text(transport).contains("entry-private-token") && out["node_proof_id"]==nil && out["router_api"]==nil)
   try check("strict selected route policy",prepared.strict && (graph["inbounds"] as! [[String:Any]])[0]["mtu"] as? Int==1380)
   let dns=graph["dns"] as! [String:Any],servers=dns["servers"] as! [[String:Any]]
   let exitDNS=servers.first{$0["tag"] as? String=="routervpn-tor-dns"}!,bootstrap=servers.first{$0["tag"] as? String=="routervpn-tor-bootstrap"}!
@@ -447,13 +463,58 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    try check("native Tor binds the exact captured entry",out["entry_sha256"] as? String==bridge(["Op":"predecessor-fingerprint","Config":runtime.torPredecessorProfile!]))
   }
   try check("source profiles remain immutable",json(selected)==before && entry.map{try! json($0)}==oldEntry)
-  if let output=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_TOR_GRAPHS"] {
+  if let paddingRate {
+   try paddingCapture(runtime,selected,mode,layer,kind,paddingRate,baseline["sing-box.json"])
+  }else if let output=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_TOR_GRAPHS"] {
    let directory=URL(fileURLWithPath:output).appendingPathComponent([mode,layer,kind].joined(separator:"-"))
    try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:false)
    for (name,data) in runtime.files {try data.write(to:directory.appendingPathComponent(name))}
    try json(["mode":mode,"layer":layer,"transport":kind,"session":sid]).write(to:directory.appendingPathComponent("fixture.json"))
   }
-  graphs+=1
+  if paddingRate==nil {graphs+=1}
+ }
+ @MainActor static func paddingCapture(_ runtime:RouterVPNExternalExitRuntime,_ selected:[String:Any],_ mode:String,_ layer:String,_ kind:String,_ rate:Int,_ predecessor:Data?=nil)throws {
+  let data=runtime.files["sing-box.json"]!,raw=String(decoding:data,as:UTF8.self),profile=runtime.torProfileJSON!,session=runtime.torSessionID!
+  let graph=try object(data),out=try tagged(graph,"routervpn-tor-exit"),source=out["padding_source"] as! [String:Any]
+  try check("enabled Local capture keeps exact selected source and rate",source["profile"] as? String==profile && json(object(Data(profile.utf8)))==json(selected) && selected["daita_enabled"] as? Bool==true && selected["daita_rate_kbps"] as? Int==rate && (mode=="direct" ? runtime.torExecution==nil:runtime.torExecution=="local"))
+  if mode=="direct" {
+   try check("direct padding has no borrowed predecessor",source["predecessor_profile"]==nil && source["predecessor_config"]==nil)
+  }else {
+   let capturedProfile=source["predecessor_profile"] as? String
+   try check("padding retains complete predecessor source "+mode,capturedProfile != nil && source["predecessor_config"] is String && (mode.hasPrefix("external-") ? json(object(Data(capturedProfile!.utf8)))==json(object(Data(runtime.torPredecessorProfile!.utf8))):capturedProfile==runtime.torPredecessorProfile))
+   if let predecessor {try check("padding retains exact entry graph bytes",source["predecessor_config"] as? String==String(decoding:predecessor,as:UTF8.self))}
+  }
+  var failure:NSError?
+  let expected=LibboxRouterTorPaddingSource(raw,profile,session,&failure)
+  try check("actual padding source API binds the full canonical graph",failure==nil && expected.count==64 && expected==bridge(["Op":"canonical-config-sha","Config":raw]))
+  try check("formatting cannot change compiled padding identity",expected==bridge(["Op":"tor-padding-source","Config":text(graph),"Policy":profile,"Node":session]))
+  for fault in ["source-profile","source-entry","lost-source","config","selected-policy","selected-session","owner-session","execution","foreign-credential"] {
+   var changed=try object(data),rows=changed["outbounds"] as! [[String:Any]],selection=selected,selectedSession=session
+   let index=rows.firstIndex{$0["tag"] as? String=="routervpn-tor-exit"}!
+   var captured=rows[index]["padding_source"] as! [String:Any]
+   switch fault {
+   case "source-profile":var value=selected;value["daita_rate_kbps"]=rate==32 ? 64:32;captured["profile"]=try text(value)
+   case "source-entry":captured["predecessor_config"]="{}"
+   case "lost-source":rows[index].removeValue(forKey:"padding_source")
+   case "config":var route=changed["route"] as! [String:Any];route["auto_detect_interface"]=false;changed["route"]=route
+   case "selected-policy":selection["daita_enabled"]=false
+   case "selected-session":selectedSession="replacement-padding-owner"
+   case "owner-session":rows[index]["session_id"]="replacement-padding-owner"
+   case "execution":selection["multihop_execution"]="server"
+   default:
+    if let encoded=captured["predecessor_profile"] as? String {var value=try object(Data(encoded.utf8));value["api_token"]="foreign-private-token";captured["predecessor_profile"]=try text(value)}
+    else {captured["predecessor_profile"]="{\"api_token\":\"foreign-private-token\"}"}
+   }
+   if fault != "lost-source" {rows[index]["padding_source"]=captured};changed["outbounds"]=rows
+   reject("padding source API rejects changed capture "+mode+"/"+fault){_ = try bridge(["Op":"tor-padding-source","Config":text(changed),"Policy":text(selection),"Node":selectedSession])}
+  }
+  if let output=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_LOCAL_PADDING_GRAPHS"] {
+   let directory=URL(fileURLWithPath:output).appendingPathComponent([mode,layer,kind,String(rate)].joined(separator:"-"))
+   try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:false)
+   for (name,data) in runtime.files {try data.write(to:directory.appendingPathComponent(name))}
+   try json(["mode":mode,"layer":layer,"transport":kind,"rate_kbps":rate,"session":session,"source_sha256":expected]).write(to:directory.appendingPathComponent("fixture.json"))
+  }
+  paddingGraphs+=1
  }
  @MainActor static func homeDNS(_ maximum:[String:Any],_ composite:[String:Any])throws {
   for mode in modes {for layer in layers {for transport in ["udp","tcp","tls","https","h3"] {
@@ -641,6 +702,11 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    return
   }
   let maximum=try object(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[2]))),composite=try object(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[3])))
+  if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_PADDING_ONLY"]=="1" {
+   try enabledPadding(maximum,composite)
+   print("Apple Local Tor padding: PASS (\(paddingGraphs) separate shipping Swift/Go graphs; \(checks) checks; native handles and OS boundaries doubled)")
+   return
+  }
   if let output=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_ENTRY_GRAPHS"] {
    for mode in modes {for layer in layers {
     let selected=try root(mode,layer,maximum,composite),files=try ProviderPreparation().entry(selected,mode)
@@ -665,6 +731,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   try jumboCapacity(maximum,composite)
   try negatives(maximum,composite)
   try ordinaryTorPredecessors()
+  try enabledPadding(maximum,composite)
   try ordinaryExternalEntry(maximum,composite)
   try importedAmneziaCreation()
   try responseProbeCreation()
@@ -672,12 +739,21 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   try openVPNPairingCreation(maximum,composite)
   try openVPNResponseProbesCreation();try openVPNStartLayersCreation()
   try ordinaryExternalPredecessors(maximum,composite)
-  print("Apple Tor profile creation and complete provider assembly: PASS (\(graphs) Tor, \(homeGraphs) Home DNS, \(ordinaryTorGraphs) ordinary-to-Tor, \(externalGraphs) ordinary external, \(executionGraphs) external Server/Compare, \(externalLayerGraphs) separate exit-layer graphs, \(mappedOpenVPNGraphs) mapped OpenVPN and \(mappedOpenVPNLayerGraphs) per-remote layered graphs, \(policyCases) independent profile-policy combinations, \(checks) checks; shipping Swift/real Go; OS and FFI handles doubled)")
+  print("Apple Tor profile creation and complete provider assembly: PASS (\(graphs) Tor, \(homeGraphs) Home DNS, \(ordinaryTorGraphs) ordinary-to-Tor, \(paddingGraphs) separate Local padding, \(externalGraphs) ordinary external, \(executionGraphs) external Server/Compare, \(externalLayerGraphs) separate exit-layer graphs, \(mappedOpenVPNGraphs) mapped OpenVPN and \(mappedOpenVPNLayerGraphs) per-remote layered graphs, \(policyCases) independent profile-policy combinations, \(checks) checks; shipping Swift/real Go; OS and FFI handles doubled)")
+ }
+ @MainActor static func enabledPadding(_ maximum:[String:Any],_ composite:[String:Any])throws {
+  for kind in ["tor","obfs4"] {for rate in [0,32,64,192] {
+   try verify(kind,"direct","off",maximum,composite,paddingRate:rate)
+   for mode in modes {for layer in layers {try verify(kind,mode,layer,maximum,composite,paddingRate:rate)}}
+  }}
+  try check("complete direct and private enabled padding matrix",paddingGraphs==464)
+  try ordinaryTorPredecessors(padding:true)
+  try check("complete enabled padding matrix",paddingGraphs==528)
  }
  @MainActor static func main() {
   do{try run()}catch{FileHandle.standardError.write(Data(("FAIL Apple Tor: "+error.localizedDescription+"\n").utf8));exit(1)}
  }
- @MainActor static func ordinaryTorPredecessors()throws {
+ @MainActor static func ordinaryTorPredecessors(padding:Bool=false)throws {
   let protocols=["wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
   for mode in protocols {
    let model=RouterVPNModel()
@@ -689,10 +765,12 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    entry["mtu_policy"]="fixed";entry["manual_mtu"]=1380;entry["home_lan_access"]=false;entry["ipv6_mode"]="off";entry["kill_switch_policy"]="always"
    let entryRoot:[String:Any]=["selectedRouterID":entry["id"]!,"routerProfiles":[entry],"profiles":[:]]
    let provider:[String:Any]=["tor_entry_bundle":try json(entryRoot),"tor_entry_mode":mode]
-   for kind in kinds {
+   for kind in (padding ? ["tor","obfs4"]:kinds) {for rate in (padding ? [0,32,64,192]:[-1]) {
     var exit=try tor(kind)
+    if padding {exit["daita_enabled"]=true;exit["daita_rate_kbps"]=rate}
     exit["multihop_enabled"]=true;exit["multihop_entry_id"]=entry["id"];exit["multihop_entry_mode"]=mode
     exit["multihop_exit_id"]=exit["id"];exit["multihop_exit_mode"]=kind=="tor" ? "tor":"tor-bridge";exit["multihop_execution"]="local"
+    let savedExit=try json(exit),savedEntry=try json(entryRoot)
     let owner=ProviderPreparation(),prepared=try owner.prepare(provider:provider,selectedProfile:exit,strict:true),runtime=prepared.runtime
     let graph=try object(runtime.files["sing-box.json"]!),final=try tagged(graph,"routervpn-tor-exit")
     let original=try object(Data((final["external_predecessor_config"] as! String).utf8))
@@ -730,17 +808,20 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
      if changedProvider["tor_entry_bundle"] != nil {changedProvider["tor_entry_bundle"]=try json(["selectedRouterID":changedEntry["id"]!,"routerProfiles":[changedEntry],"profiles":[:]])}
      reject("ordinary Tor cannot substitute authority or source "+mode+"/"+kind+"/"+fault){_ = try ProviderPreparation().prepare(provider:changedProvider,selectedProfile:changedExit,strict:true)}
     }
-    if let output=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_TOR_GRAPHS"] {
+    try check("ordinary padding retains immutable source credentials and policy",json(exit)==savedExit && json(entryRoot)==savedEntry)
+    if padding {
+     try paddingCapture(runtime,exit,"external-"+mode,"off",kind,rate,Data((final["external_predecessor_config"] as! String).utf8))
+    }else if let output=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_TOR_GRAPHS"] {
      let capturedMode="external-"+mode
      let directory=URL(fileURLWithPath:output).appendingPathComponent([capturedMode,"off",kind].joined(separator:"-"))
      try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:false)
      for (name,data) in runtime.files {try data.write(to:directory.appendingPathComponent(name))}
      try json(["mode":capturedMode,"layer":"off","transport":kind,"session":runtime.torSessionID!]).write(to:directory.appendingPathComponent("fixture.json"))
     }
-    ordinaryTorGraphs+=1
-   }
+    if !padding {ordinaryTorGraphs+=1}
+   }}
   }
-  try check("complete ordinary predecessor Tor graph matrix",ordinaryTorGraphs==48)
+  if !padding {try check("complete ordinary predecessor Tor graph matrix",ordinaryTorGraphs==48)}
  }
  @MainActor static func ordinaryExternalEntry(_ maximum:[String:Any],_ composite:[String:Any])throws {
   let model=RouterVPNModel()
@@ -1180,10 +1261,16 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--padding-output', type=Path)
+    parser.add_argument('--padding-only', action='store_true')
     parser.add_argument('--entry-output', type=Path)
     parser.add_argument('--entry-only', action='store_true')
     parser.add_argument('--openvpn-probes-only', action='store_true')
     args = parser.parse_args()
+    if args.padding_only and (args.output or args.entry_output or args.entry_only or args.openvpn_probes_only):
+        raise ValueError('--padding-only cannot produce unrelated graph evidence')
+    if args.padding_output and (args.entry_only or args.openvpn_probes_only or EXTRA_EVIDENCE_SOURCES):
+        raise ValueError('--padding-output requires the complete Local padding fixture')
     if args.openvpn_probes_only and (args.output or args.entry_output or args.entry_only or os.environ.get('ROUTERVPN_IOS_EXTERNAL_GRAPHS')):
         raise ValueError('--openvpn-probes-only cannot produce complete graph evidence')
     if args.entry_only and args.output:
@@ -1200,6 +1287,8 @@ def main():
             raise RuntimeError(tool + ' is required')
     if args.output and (not args.output.is_dir() or any(args.output.iterdir()) or args.output.is_symlink()):
         raise ValueError('--output must be an existing empty owned directory')
+    if args.padding_output and (not args.padding_output.is_dir() or any(args.padding_output.iterdir()) or args.padding_output.is_symlink()):
+        raise ValueError('--padding-output must be an existing empty owned directory')
     if args.entry_output and (not args.entry_output.is_dir() or any(args.entry_output.iterdir()) or args.entry_output.is_symlink()):
         raise ValueError('--entry-output must be an existing empty owned directory')
     if args.entry_only and not args.entry_output:
@@ -1236,6 +1325,8 @@ def main():
         subprocess.run(command, check=True, timeout=180)
         environment = dict(os.environ)
         environment.pop('ROUTERVPN_IOS_OPENVPN_PROBES_ONLY', None)
+        environment.pop('ROUTERVPN_IOS_PADDING_ONLY', None)
+        environment.pop('ROUTERVPN_IOS_LOCAL_PADDING_GRAPHS', None)
         environment['ROUTERVPN_OPENVPN_CLIENT_FIXTURE'] = str(ROOT / 'deploy/fixtures/external-openvpn-client.json')
         environment['ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE'] = str(ROOT / 'deploy/fixtures/external-openvpn-multihost-client.json')
         environment['ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE'] = str(ROOT / 'deploy/fixtures/external-openvpn-multihost-layered-aes-client.json')
@@ -1244,6 +1335,10 @@ def main():
             environment['ROUTERVPN_IOS_OPENVPN_PROBES_ONLY'] = '1'
         if args.output:
             environment['ROUTERVPN_IOS_TOR_GRAPHS'] = str(args.output.resolve())
+        if args.padding_output:
+            environment['ROUTERVPN_IOS_LOCAL_PADDING_GRAPHS'] = str(args.padding_output.resolve())
+        if args.padding_only:
+            environment['ROUTERVPN_IOS_PADDING_ONLY'] = '1'
         if args.entry_output:
             environment['ROUTERVPN_IOS_ENTRY_GRAPHS'] = str(args.entry_output.resolve())
         if args.entry_only:
@@ -1252,7 +1347,7 @@ def main():
         # additional per-remote layer captures and their strict native checks.
         # Only this whole-fixture wall budget grows; native proof, cancellation
         # and bounded-close deadlines remain in their unchanged runtime tests.
-        fixture_budget = 180 if args.entry_only or args.openvpn_probes_only else 240
+        fixture_budget = 180 if args.entry_only or args.openvpn_probes_only else 360
         subprocess.run([str(work / 'tests'), str(compiler), str(maximum), str(composite)], env=environment, check=True, timeout=fixture_budget)
         if args.openvpn_probes_only:
             original = 'return nativeopenvpn.ValidateResponseProbesJSON(profileJSON, probesJSON)'
@@ -1277,11 +1372,16 @@ def main():
             if rejected_layers.returncode == 0 or 'raw per-remote Start Layers reject ambiguity' not in rejected_layers.stderr:
                 raise AssertionError('Missing raw layer-map validation control escaped: ' + rejected_layers.stderr[-1500:])
             print('Apple OpenVPN copied-binding negative control: missing raw layer-map validation rejected')
+        if args.output or args.padding_output:
+            inputs = [Path(__file__), *EXTRA_EVIDENCE_SOURCES, ROOT / 'mobile/routervpn_openvpn.go', ROOT / 'mobile/toroutbound/bridge.go.tmpl', APP / 'IOSExternalNodeBuilderView.swift', TUN / 'PacketTunnelProvider.swift', *sources]
         if args.output:
-            inputs = [Path(__file__), *EXTRA_EVIDENCE_SOURCES, ROOT / 'mobile/routervpn_openvpn.go', APP / 'IOSExternalNodeBuilderView.swift', TUN / 'PacketTunnelProvider.swift', *sources]
             report = dict(GRAPH_EVIDENCE,
                 sources={str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs})
             (args.output / 'source-evidence.json').write_text(json.dumps(report, sort_keys=True, indent=2) + '\n')
+        if args.padding_output:
+            report = dict(PADDING_EVIDENCE,
+                sources={str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs})
+            (args.padding_output / 'source-evidence.json').write_text(json.dumps(report, sort_keys=True, indent=2) + '\n')
 
 
 if __name__ == '__main__':

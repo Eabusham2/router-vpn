@@ -18,6 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 ENGINE = ROOT / 'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift'
 spec = importlib.util.spec_from_file_location('apple_dns_boundary', ROOT / 'deploy/test_ios_dns_measurement.py')
 DNS = importlib.util.module_from_spec(spec); spec.loader.exec_module(DNS)
+spec = importlib.util.spec_from_file_location('apple_crypto_boundary', ROOT / 'deploy/test_ios_physical_path.py')
+CRYPTO = importlib.util.module_from_spec(spec); spec.loader.exec_module(CRYPTO)
 LIBBOX = r'''
 import Foundation
 #if !canImport(ObjectiveC)
@@ -204,8 +206,9 @@ public final class LibboxTorTestState: @unchecked Sendable {
     private var request: LibboxRouterTorProofRequest?
     private var roots: [String] = []
     private var closeFailures = 0
-    public func configure(block: Bool = false, payload: String? = nil, nativeError: Bool = false, closeFailures:Int = 0) { lock.lock(); self.block=block; self.payload=payload; self.nativeError=nativeError; self.closeFailures=closeFailures; request=nil; lock.unlock() }
-    public func make(_ session: String, server:LibboxCommandServer) -> LibboxRouterTorProofRequest { lock.lock(); defer { lock.unlock() }; let value=LibboxRouterTorProofRequest(session,block,payload,nativeError,server,closeFailures); request=value; return value }
+    private var padding = ""
+    public func configure(block: Bool = false, payload: String? = nil, nativeError: Bool = false, closeFailures:Int = 0, padding:String = "") { lock.lock(); self.block=block; self.payload=payload; self.nativeError=nativeError; self.closeFailures=closeFailures; self.padding=padding; request=nil; lock.unlock() }
+    public func make(_ session: String, server:LibboxCommandServer) -> LibboxRouterTorProofRequest { lock.lock(); defer { lock.unlock() }; let value=LibboxRouterTorProofRequest(session,block,payload,nativeError,server,closeFailures,padding); request=value; return value }
     public func current() -> LibboxRouterTorProofRequest? { lock.lock(); defer { lock.unlock() }; return request }
     public func saveRoot(_ path: String) { lock.lock(); roots.append(path); lock.unlock() }
     public func stateRoots() -> [String] { lock.lock(); defer { lock.unlock() }; return roots }
@@ -217,9 +220,10 @@ public final class LibboxRouterTorProofRequest {
     private var cancels = 0, proved = false
     private let server:LibboxCommandServer
     private var closeFailures:Int, closes=0, acknowledged=false, entryRetired=false
+    private var padding:String, paddingError=false
     private let release = DispatchSemaphore(value:0)
     public let entered = DispatchSemaphore(value:0)
-    init(_ session: String, _ block: Bool, _ payload: String?, _ nativeError: Bool, _ server:LibboxCommandServer, _ closeFailures:Int) { self.session=session;self.block=block;self.payload=payload;self.nativeError=nativeError;self.server=server;self.closeFailures=closeFailures }
+    init(_ session: String, _ block: Bool, _ payload: String?, _ nativeError: Bool, _ server:LibboxCommandServer, _ closeFailures:Int, _ padding:String) { self.session=session;self.block=block;self.payload=payload;self.nativeError=nativeError;self.server=server;self.closeFailures=closeFailures;self.padding=padding }
     // gobind v0.1.12: nonnull NSString plus NSErrorPointer, not Swift throws.
     public func run(_ failure: NSErrorPointer) -> String {
         entered.signal()
@@ -237,6 +241,8 @@ public final class LibboxRouterTorProofRequest {
     public func cancel() { lock.lock(); cancels+=1;lock.unlock();release.signal() }
     public func cancelCount() -> Int { lock.lock();defer {lock.unlock()};return cancels }
     public func healthy() -> Bool { lock.lock();defer{lock.unlock()};return cancels==0 && proved }
+    public func configurePadding(_ text:String, fail:Bool=false){lock.lock();padding=text;paddingError=fail;lock.unlock()}
+    public func paddingStatusJSON(_ failure:NSErrorPointer)->String{lock.lock();defer{lock.unlock()};if paddingError{failure?.pointee=NSError(domain:"NativePaddingStatus",code:1)};return padding}
     public func dnsSession() -> String { session }
     public func configureClose(failures:Int) { lock.lock();closeFailures=failures;lock.unlock() }
     public func retireEntry() { lock.lock();entryRetired=true;lock.unlock() }
@@ -257,6 +263,12 @@ public func LibboxRouterTorSetStateDirectory(_ path:String,_ failure:UnsafeMutab
 }
 public func LibboxRouterTorCreateProof(_ server:LibboxCommandServer,_ tag:String,_ session:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterTorProofRequest? { LibboxTorTestState.shared.make(session,server:server) }
 public func LibboxRouterTorCreateProofWithPredecessor(_ server:LibboxCommandServer,_ tag:String,_ session:String,_ profile:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterTorProofRequest? { LibboxTorTestState.shared.make(session,server:server) }
+// The native compiler/source boundary is doubled here. The native graph gates
+// separately reconstruct and validate the full exit and predecessor sources.
+public func LibboxRouterTorPaddingSource(_ config:String,_ profile:String,_ session:String,_ failure:NSErrorPointer)->String {
+    guard let value=try? JSONSerialization.jsonObject(with:Data(profile.utf8)) as? [String:Any] else{failure?.pointee=NSError(domain:"PaddingSourceFixture",code:1);return ""}
+    return value["daita_enabled"] as? Bool==true ? String(repeating:"b",count:64):""
+}
 public final class LibboxExternalTestState: @unchecked Sendable {
     public static let shared = LibboxExternalTestState()
     private let lock = NSLock()
@@ -707,6 +719,103 @@ final class CompletionState: @unchecked Sendable {
             check("external compiler bytes cannot be silently rewritten",rejected)
         }
         let torState=LibboxTorTestState.shared
+        let paddingProfile=torProfile.dropLast()+",\"daita_enabled\":true,\"daita_rate_kbps\":64}"
+        let paddingSession="f23e19720ad035b32b52db1cd4c22f294256ed705f38d54fd58d073dc3baba64"
+        func paddingValue(_ now:Date = Date())->[String:Any] {
+            let t=Int64((now.timeIntervalSince1970*1000).rounded(.down))
+            return ["path_checked_at":t-100,"dns_checked_at":t-200,"receipt":[
+                "direction":"outgoing","accounting":"tor-link-cell","session_sha256":paddingSession,"source_sha256":String(repeating:"b",count:64),
+                "generation":7,"rate_kbps":64,"channel_cells":2,"channel_cell_bytes":1028,"observed_at":t-50,"expires_at":t+9000]]
+        }
+        func paddingText(_ value:[String:Any])throws->String{String(decoding:try JSONSerialization.data(withJSONObject:value),as:UTF8.self)}
+        do {
+            let now=Date(),value=paddingValue(now),text=try paddingText(value)
+            let policy=try RouterVPNTorPaddingReceipt.Policy.capture(config:torConfig,profile:String(paddingProfile),sessionID:"tor-session",execution:"local")
+            let initial=try policy.validate(text,previous:nil,now:now)
+            check("padding capture hashes the exact session independently",policy.sessionSHA256==paddingSession && policy.rate==64 && policy.enabled)
+            check("padding accepts its actual observed counters",initial?.cells==2 && initial?.bytes==1028)
+            let same=try policy.validate(text,previous:initial,now:now)
+            check("reading a receipt never renews its timestamps",same==initial)
+            let t=Int64((now.timeIntervalSince1970*1000).rounded(.down))
+            let faults:[(String,Any)] = [
+                ("direction","incoming"),("accounting","delivered-bytes"),("session_sha256",String(repeating:"a",count:64)),("source_sha256",String(repeating:"a",count:64)),
+                ("generation",0),("generation",true),("generation",1.5),("generation",UInt64(Int64.max)+1),("rate_kbps",192),("rate_kbps","64"),
+                ("channel_cells",0),("channel_cells",UInt64.max),("channel_cell_bytes",1023),("channel_cell_bytes",1027),("channel_cell_bytes",1030),
+                ("observed_at",t+1),("observed_at",t-5001),("expires_at",t),("expires_at",t+10001),("observed_at",false),("expires_at",Int64.max)]
+            for (key,bad) in faults {
+                var changed=value,receipt=value["receipt"] as! [String:Any];receipt[key]=bad;changed["receipt"]=receipt
+                var rejected=false;do{_ = try policy.validate(paddingText(changed),previous:nil,now:now)}catch{rejected=true}
+                check("padding receipt rejects invalid "+key+":"+String(describing:bad),rejected)
+            }
+            for (key,bad) in [("dns_checked_at",t),("path_checked_at",t+1),("dns_checked_at",t-30001),("path_checked_at",Int64(0))] {
+                var changed=value;changed[key]=bad
+                var rejected=false;do{_ = try policy.validate(paddingText(changed),previous:nil,now:now)}catch{rejected=true}
+                check("padding receipt rejects invalid proof completion "+key,rejected)
+            }
+            for fault in ["generation","cells","bytes","observed","dns","path","missing","extra","cached"] {
+                var changed=value,receipt=value["receipt"] as! [String:Any]
+                switch fault {
+                case "generation":receipt["generation"]=8
+                case "cells":receipt["channel_cells"]=1;receipt["channel_cell_bytes"]=514
+                case "bytes":receipt["channel_cell_bytes"]=1024
+                case "observed":receipt["observed_at"]=t-51
+                case "dns":changed["dns_checked_at"]=t-201
+                case "path":changed["path_checked_at"]=t-101
+                case "missing":receipt.removeValue(forKey:"generation")
+                case "extra":receipt["delivered"]=true
+                default:break
+                }
+                changed["receipt"]=receipt
+                var rejected=false;do{_ = try policy.validate(paddingText(changed),previous:initial,now:fault=="cached" ? now.addingTimeInterval(6):now)}catch{rejected=true}
+                check("padding progress rejects "+fault,rejected)
+            }
+            for execution in ["local","server"] {
+                let off=try RouterVPNTorPaddingReceipt.Policy.capture(config:torConfig,profile:torProfile,sessionID:"tor-session",execution:execution)
+                let absent=try off.validate("",previous:nil,now:now)
+                check("Off and Server own no Local receipt",absent==nil)
+                var rejected=false;do{_ = try off.validate(text,previous:nil,now:now)}catch{rejected=true}
+                check("Off and Server reject a hidden Local padding owner",rejected)
+            }
+            for rate in ["31","193","-1","true","null","\"64\"","64.5"] {
+                let invalid=String(paddingProfile).replacingOccurrences(of:"\"daita_rate_kbps\":64",with:"\"daita_rate_kbps\":"+rate)
+                var rejected=false;do{_ = try RouterVPNTorPaddingReceipt.Policy.capture(config:torConfig,profile:invalid,sessionID:"tor-session",execution:"local")}catch{rejected=true}
+                check("padding capture rejects invalid selected rate "+rate,rejected)
+            }
+        }
+        for invalid in [false,true] {
+            torState.configure(padding:invalid ? "":try paddingText(paddingValue()))
+            let provider=PacketTunnelProvider(),owner=RouterVPNLibboxEngine(tunnel:provider),done=CompletionState()
+            try owner.start(files:torFiles,strict:true)
+            owner.proveTor(sessionID:"tor-session",profile:String(paddingProfile),completion:done.finish)
+            check("enabled padding requires its retained native receipt",done.wait() && done.values()==(1,invalid ? 1:0))
+            if !invalid {
+                try owner.activateTorMTU()
+                let request=torState.current()!
+                request.configurePadding(try paddingText(paddingValue()),fail:true)
+                var rejected=false;do{try owner.activateTorMTU()}catch{rejected=true}
+                check("padding native error cannot be hidden by nonempty receipt",rejected)
+                request.configurePadding(try paddingText(paddingValue()))
+                rejected=false;do{try owner.activateTorMTU()}catch{rejected=true}
+                check("a rejected receipt cannot revive its old native owner",rejected && request.cancelCount()>0)
+                let deadline=Date().addingTimeInterval(3)
+                while provider.count()==0 && Date()<deadline{Thread.sleep(forTimeInterval:0.01)}
+                check("padding receipt loss retires the exact Apple owner",provider.count()>0)
+            }
+            owner.stop()
+        }
+        do {
+            torState.configure(padding:try paddingText(paddingValue()))
+            let provider=PacketTunnelProvider(),owner=RouterVPNLibboxEngine(tunnel:provider),done=CompletionState()
+            try owner.start(files:torFiles,strict:true)
+            owner.proveTor(sessionID:"tor-session",profile:String(paddingProfile),completion:done.finish)
+            check("padding health fixture starts with a valid receipt",done.wait() && done.values()==(1,0))
+            let request=torState.current()!;request.configurePadding("{}")
+            check("native healthy alone cannot represent a valid receipt",request.healthy())
+            let deadline=Date().addingTimeInterval(3)
+            while provider.count()==0 && Date()<deadline{Thread.sleep(forTimeInterval:0.01)}
+            check("padding timer validates receipts independently of native healthy flag",provider.count()>0 && request.cancelCount()>0)
+            owner.stop()
+        }
         do {
             torState.configure(nativeError:true)
             let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState()
@@ -1138,6 +1247,11 @@ def main():
         subprocess.run([swift,'-swift-version','6','-emit-module','-emit-library','-module-name','Libbox',str(stub),
                         '-emit-module-path',str(tmp/'Libbox.swiftmodule'),'-o',str(lib)],check=True,timeout=60)
         args=[swift,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(tmp),str(ROOT/'ios/RouterVPN/App/IOSMultihopExecution.swift'),str(binding),str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNDNSMeasurementSession.swift')]
+        if platform.system() != 'Darwin':
+            crypto = tmp/'CryptoKit.swift'; crypto.write_text(CRYPTO.LINUX_CRYPTO)
+            subprocess.run([swift,'-swift-version','6','-emit-module','-emit-library','-module-name','CryptoKit',str(crypto),'-lcrypto','-o',str(tmp/'libCryptoKit.so')],cwd=tmp,check=True,timeout=60)
+            args += ['-lCryptoKit']
+        args += [str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNTorPaddingReceipt.swift')]
         subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(ENGINE),str(harness),'-o',str(tmp/'test')],check=True,timeout=90)
         subprocess.run([str(tmp/'test')],env=environment,check=True,timeout=25)
         subprocess.run([str(tmp/'test'),'--external-close'],env=environment,check=True,timeout=25)
@@ -1154,6 +1268,8 @@ def main():
         assert bad.returncode != 0 and 'FAIL: foreign request cannot cancel current work' in bad.stdout+bad.stderr, 'Foreign cancellation negative control did not fail at the ownership assertion'
         print('Negative control: a foreign cancellation reaching the native owner is rejected')
         for label, before, after, expected in (
+            ('padding-receipt-required', '                    paddingReceipt = try padding.validate(text, previous: paddingReceipt, now: Date())', '                    _ = text', 'enabled padding requires its retained native receipt'),
+            ('padding-health-required', '            guard let owner, current(owner), !healthy(), current(owner) else { return }', '            guard let owner, current(owner), !request.healthy(), current(owner) else { return }', 'padding timer validates receipts independently of native healthy flag'),
             ('ordinary-tor-proof-binding', '            if entry["node_kind"] as? String == "router-vpn" { return true }', '            if entry["node_kind"] as? String == "router-vpn" { return true }; return false', 'ordinary Tor binds only the current typed Local proof'),
             ('server-delete-required', '            try proof.close()', '            // missing exact lease DELETE', 'Server DELETE precedes native Box closure'),
             ('server-delete-acknowledged', '            try proof.close()', '            try? proof.close()', 'pending DELETE keeps exact native Box and files'),

@@ -67,7 +67,7 @@ func TestMobileExternalTorCompilesExactOrdinarySourceAndDistinctPolicies(t *test
 }
 
 func TestMobileExternalTorRejectsMixedAuthorityAndChangedOwners(t *testing.T) {
-	for _, fault := range []string{"home", "server", "compare", "entry-id", "exit-id", "entry-mode", "entry-private", "entry-secret", "fixed-conflict", "local-padding"} {
+	for _, fault := range []string{"home", "server", "compare", "entry-id", "exit-id", "entry-mode", "entry-private", "entry-secret", "fixed-conflict", "malformed-padding", "excessive-padding"} {
 		t.Run(fault, func(t *testing.T) {
 			exit, entry, graph := mobileExternalTorSelection(t, "socks5")
 			switch fault {
@@ -90,8 +90,11 @@ func TestMobileExternalTorRejectsMixedAuthorityAndChangedOwners(t *testing.T) {
 			case "fixed-conflict":
 				entry["mtu_policy"], entry["manual_mtu"] = "fixed", 1400
 				exit["mtu_policy"], exit["manual_mtu"] = "fixed", 1450
-			case "local-padding":
+			case "malformed-padding":
+				exit["daita_enabled"] = "true"
+			case "excessive-padding":
 				exit["daita_enabled"] = true
+				exit["daita_rate_kbps"] = 193
 			}
 			compiled, err := CompileProfileWithExternalPredecessor(torHostEncode(t, exit), "ordinary-tor-session", torHostEncode(t, graph), torHostEncode(t, entry))
 			if err == nil || compiled != "" || strings.Contains(err.Error(), "unowned-private-credential") || strings.Contains(err.Error(), "another-provider-password") {

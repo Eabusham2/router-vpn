@@ -140,7 +140,7 @@ private struct IOSLastRuntime:Codable {let routerID:String,rawProfileID:String,l
  let model:RouterVPNModel
  var loadedProfile:RouterProfile?,homeLANAccess=true,killSwitchPolicy="off",ipv6Mode="on",baseTunnel="auto",baseFallback=false
  var startLayer="off",autoRequireEncrypted=false,autoRequireObfuscation=false,mtuPolicy="auto",manualMTU=""
- var daitaEnabled=false,jumboTUN=false,startupMode="smart-auto",autoConnect=false,status=""
+ var daitaEnabled=false,jumboTUN=false,startupMode="smart-auto",autoConnect=false,torPaddingRate="192",loadedTorEntry:Data?,status=""
  init(_ model:RouterVPNModel){self.model=model}
  // SHIPPING_SETTINGS
 }

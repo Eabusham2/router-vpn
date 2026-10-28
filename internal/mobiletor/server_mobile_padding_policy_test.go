@@ -56,12 +56,15 @@ func TestMobileServerTorPaddingBindsSavedSourceNativeOwnerAndMTU(t *testing.T) {
 						t.Fatal("different saved rate acquired the proved Server MTU authority")
 					}
 					for _, predecessor := range []string{"", options.EntryConfig} {
-						if config, err := CompileProfile(options.Profile, options.SessionID, predecessor); err == nil || config != "" || !strings.Contains(err.Error(), "padding") {
+						if config, err := CompileProfile(options.Profile, options.SessionID, predecessor); err == nil || config != "" {
 							t.Fatal("enabled Server source acquired a Local runtime", err)
 						}
 					}
 					if _, err := CompileProfileWithPredecessor(options.Profile, options.SessionID, options.EntryConfig, options.EntryProfile); err == nil {
 						t.Fatal("enabled Server source bypassed the actual Server compiler")
+					}
+					if local, err := NewLocalPaddingCapture(&LocalPaddingSource{Profile: options.Profile, PredecessorProfile: options.EntryProfile, PredecessorConfig: options.EntryConfig}, options.SessionID); err == nil || local != nil {
+						t.Fatal("enabled Server cover borrowed a Local native lease source")
 					}
 					if options.Profile != torHostEncode(t, profile) {
 						t.Fatal("Server compilation changed the immutable saved cover source")

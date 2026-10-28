@@ -45,15 +45,10 @@ func capturedTorPaddingPolicy(profile map[string]any) (TorPaddingPolicy, bool, e
 	return TorPaddingPolicy{Enabled: requested, RateKbps: rate}, selected || hasRate, nil
 }
 
-// Keep enabled profile admission closed until the compiled shipping native
-// owners can prove and maintain the selected outgoing-cover policy.
+// Native Local and Server owners bind this policy to fresh path/DNS proof,
+// exact isolation credentials, an acknowledged lease and actual accounting.
+// This validates saved values; it cannot itself grant runtime authority.
 func validateTorPaddingPolicy(profile map[string]any) error {
-	policy, _, err := capturedTorPaddingPolicy(profile)
-	if err != nil {
-		return err
-	}
-	if policy.Enabled {
-		return errors.New("requested Tor padding requires its bounded native circuit owner, which is not implemented for this path")
-	}
-	return nil
+	_, _, err := capturedTorPaddingPolicy(profile)
+	return err
 }

@@ -42,6 +42,11 @@ SOURCES["io/nekohasekai/libbox/Libbox.java"] = SOURCES["io/nekohasekai/libbox/Li
  public static volatile java.util.concurrent.CountDownLatch dnsRelease;
  public static CommandServer passedServer;public static RouterTorProofRequest passedProof;
  public static String passedSource,passedCapture;public static int externalCalls;
+ public static String routerTorPaddingSource(String config,String profile,String session)throws Exception{
+  org.json.JSONObject captured=new org.json.JSONObject(profile);
+  if(!"exact-complete-config".equals(config)||!"session-owned".equals(session)||!"exit-owned".equals(captured.getString("id"))||captured.optBoolean("daita_enabled",false))throw new IllegalStateException("MTU fixture only owns its captured padding-Off graph");
+  return "";
+ }
  public static RouterTorProofRequest routerTorCreateProof(CommandServer core,String tag,String session){torCreated=new RouterTorProofRequest(core,session,"");return torCreated;}
  public static RouterTorProofRequest routerTorCreateProofWithPredecessor(CommandServer core,String tag,String session,String predecessor){torCreated=new RouterTorProofRequest(core,session,predecessor);return torCreated;}
  public static void routerStrategyDNSProof(CommandServer core)throws Exception{if(torCreated.server!=core||!torCreated.healthy())throw new IllegalStateException("wrong native Tor owner");}
@@ -177,7 +182,7 @@ def main():
         app = root / "com/eabusham/routervpn"
         (app / "Main.java").write_text(M.HARNESS)
         (app / "TorMTUTest.java").write_text(HARNESS)
-        for name in ("AndroidMTUSession", "AndroidMTUMeasurementGate", "AndroidTorSession", "AndroidNumericAddress", "AndroidMTUDialog"):
+        for name in ("AndroidMTUSession", "AndroidMTUMeasurementGate", "AndroidTorSession", "AndroidTorPaddingReceipt", "AndroidNumericAddress", "AndroidMTUDialog"):
             shutil.copyfile(JAVA / (name + ".java"), app / (name + ".java"))
         compile_args = ["javac", "--release", "17", "-encoding", "UTF-8", "-cp", str(jar), "-d", str(root / "classes"), *map(str, root.rglob("*.java"))]
         run_args = ["java", "-cp", os.pathsep.join((str(root / "classes"), str(jar))), "com.eabusham.routervpn.TorMTUTest"]

@@ -32,8 +32,8 @@ func localPaddingDigest(data string) string {
 }
 
 // NewLocalPaddingCapture reconstructs only enabled Local selections, including
-// ordinary providers without private Router or Home DNS authority. This is
-// also used while the public compiler remains guarded during native wiring.
+// ordinary providers without private Router or Home DNS authority. Both the
+// native constructor and host receipt validation use this independent capture.
 func NewLocalPaddingCapture(source *LocalPaddingSource, sessionID string) (*LocalPaddingCapture, error) {
 	bad := errors.New("Local Tor padding requires its complete captured source and policy")
 	if source == nil || !profileIdentifier.MatchString(sessionID) {

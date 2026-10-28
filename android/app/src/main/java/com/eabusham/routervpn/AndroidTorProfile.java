@@ -70,7 +70,7 @@ final class AndroidTorProfile {
         JSONObject result = saved.torPolicy == null ? new JSONObject() : new JSONObject(saved.torPolicy.toString());
         for (String[] group : new String[][] {
                 {"dns_mode", "dns_protocol", "dns_host", "dns_port", "dns_server_name", "dns_path"},
-                {"ipv6_mode"}, {"home_lan_access", "home_lan_cidrs"}, {"mtu_policy", "manual_mtu"}, {"jumbo_tun"}}) {
+                {"ipv6_mode"}, {"home_lan_access", "home_lan_cidrs"}, {"mtu_policy", "manual_mtu"}, {"jumbo_tun"}, {"daita_enabled", "daita_rate_kbps"}}) {
             boolean changed = false;
             for (String key : group) {
                 if (initial.has(key) != edited.has(key) || !String.valueOf(initial.opt(key)).equals(String.valueOf(edited.opt(key)))) changed = true;
@@ -378,6 +378,7 @@ final class AndroidTorProfile {
             }
         }
         if (owners != 1 || graph.getJSONArray("inbounds").length() != 1 || !"tun".equals(graph.getJSONArray("inbounds").getJSONObject(0).getString("type"))) throw new IllegalStateException("Tor requires one owned runtime and one VPN interface.");
+        if("local".equals(execution))Libbox.routerTorPaddingSource(config,capturedProfile.toString(),sessionId);
         return metadata;
     }
 

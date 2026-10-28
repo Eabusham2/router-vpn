@@ -1,0 +1,80 @@
+package libbox
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// These are unchanged shipping Java/Go outputs. Constructors must adopt the
+// selected source and rate; no test starts a TUN or invents native traffic.
+func TestRouterTorAndroidLocalPaddingGraphs(t *testing.T) {
+	root := os.Getenv("ROUTERVPN_ANDROID_LOCAL_PADDING_GRAPHS")
+	if root == "" {
+		t.Skip("run the complete enabled Android Local padding matrix")
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 224 {
+		t.Fatalf("exact enabled Android padding matrix unavailable: %v (%d files)", err, len(entries))
+	}
+	state := os.Getenv("ROUTERVPN_ANDROID_TOR_STATE")
+	if state == "" {
+		state = filepath.Join(t.TempDir(), "tor-state")
+	}
+	if err := RouterTorSetStateDirectory(state); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		t.Run(entry.Name(), func(t *testing.T) {
+			if !entry.Type().IsRegular() || filepath.Ext(entry.Name()) != ".json" {
+				t.Fatal("unowned enabled padding graph")
+			}
+			data, err := os.ReadFile(filepath.Join(root, entry.Name()))
+			if err != nil || len(data) == 0 || len(data) > 4<<20 {
+				t.Fatal("empty or oversized enabled padding graph")
+			}
+			if err := CheckConfig(string(data)); err != nil {
+				t.Fatal("actual native constructor rejected enabled padding", err)
+			}
+			var graph map[string]any
+			if err := json.Unmarshal(data, &graph); err != nil {
+				t.Fatal(err)
+			}
+			var owner map[string]any
+			for _, raw := range graph["outbounds"].([]any) {
+				if row := raw.(map[string]any); row["type"] == "routervpn-tor" {
+					if owner != nil {
+						t.Fatal("enabled padding acquired a second native owner")
+					}
+					owner = row
+				}
+			}
+			if owner == nil {
+				t.Fatal("enabled padding lost its unique native owner")
+			}
+			source := owner["padding_source"].(map[string]any)
+			profile, session := source["profile"].(string), owner["session_id"].(string)
+			if expected, err := RouterTorPaddingSource(string(data), profile, session); err != nil || len(expected) != 64 {
+				t.Fatal("actual generated host API lost complete native source identity", err)
+			}
+			owner["type"] = "routervpn-missing-tor-engine"
+			bad, _ := json.Marshal(graph)
+			if err := CheckConfig(string(bad)); err == nil {
+				t.Fatal("enabled padding accepted a missing native engine")
+			}
+			owner["type"] = "routervpn-tor"
+			var selected map[string]any
+			if err := json.Unmarshal([]byte(profile), &selected); err != nil {
+				t.Fatal(err)
+			}
+			selected["daita_rate_kbps"] = 96
+			replaced, _ := json.Marshal(selected)
+			source["profile"] = string(replaced)
+			bad, _ = json.Marshal(graph)
+			if err := CheckConfig(string(bad)); err == nil {
+				t.Fatal("native constructor accepted padding source replaced after capture")
+			}
+		})
+	}
+}

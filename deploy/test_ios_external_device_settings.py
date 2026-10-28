@@ -43,22 +43,30 @@ def member(source, signature):
 SWIFT = r'''
 import Foundation
 import Libbox
+enum IOSRuntimeSelectionError:Error{case unsupportedMode(String)}
 enum IOSDNSRuntimePolicy {
  // SELECTED_PROFILE
 }
 @MainActor final class RouterVPNModel {
- var bundle:ClientBundle?,profileMutationBlocked=false,imports=0,failImport=false
+ var bundle:ClientBundle?,profileMutationBlocked=false,imports=0,failImport=false,separateEntry=false
  func importBundle(_ data:Data)throws {
   if failImport {throw NSError(domain:"DeviceStoreWrite",code:1)}
   let prepared=try JSONDecoder().decode(ClientBundle.self,from:data)
   bundle=prepared;imports+=1
  }
+ func iosMultihopEntryBundle(for source:ClientBundle)throws->ClientBundle {
+  guard let selected=IOSDNSRuntimePolicy.selectedProfile(in:source)else{throw CancellationError()}
+  let entries=source.routerProfiles.filter{$0.id==selected.multihopEntryID && $0.id != selected.id}
+  guard entries.count==1 else{throw CancellationError()}
+  var captured=source;captured.selectedRouterID=entries[0].id;if separateEntry{captured.routerProfiles=entries};return captured
+ }
+ // CAPTURE_ENTRY
 }
 @MainActor final class Settings {
  let model:RouterVPNModel
  var homeLANAccess=true,killSwitchPolicy="off",ipv6Mode="on",baseTunnel="auto",baseFallback=false,startLayer="off"
  var autoRequireEncrypted=false,autoRequireObfuscation=false,mtuPolicy="auto",manualMTU="",daitaEnabled=false,jumboTUN=false
- var startupMode="smart-auto",autoConnect=false,loadedProfile:RouterProfile?,status=""
+ var startupMode="smart-auto",autoConnect=false,loadedProfile:RouterProfile?,loadedTorEntry:Data?,torPaddingRate="192",status=""
  init(_ model:RouterVPNModel){self.model=model}
  // SETTINGS_METHODS
 }
@@ -225,8 +233,53 @@ enum IOSDNSRuntimePolicy {
  }
  static func main(){
   defer{RouterVPNTorTestClose()}
-  do{try saveMatrix();try invalidDrafts();try nativeRejections();try torJumboNativePolicy();try torJumboEditor();print("Apple external device settings: PASS (\(checks) shipping editor/model checks with real native ordinary/Tor transport-policy validation)")}
+  do{try saveMatrix();try invalidDrafts();try nativeRejections();try torJumboNativePolicy();try torJumboEditor();try torPaddingEditor();print("Apple external device settings: PASS (\(checks) shipping editor/model checks with real native ordinary/Tor transport-policy validation)")}
   catch{FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1)}
+ }
+ static func torPaddingEditor()throws {
+  for kind in ["tor","tor-bridge"] {for execution in ["local","server"] {for rate in [32,64,192] {for enabled in [false,true] {for separate in [false,true] {
+   var p=try profile(kind);p.multihopExecution=execution;p.daitaEnabled=false;p.daitaRateKbps=96
+   let model=RouterVPNModel();model.separateEntry=separate;model.bundle=try bundle(p);let before=model.bundle!,editor=Settings(model);editor.load()
+   try check("Tor padding loads exact saved rate",!editor.daitaEnabled && editor.torPaddingRate=="96")
+   editor.daitaEnabled=enabled;editor.torPaddingRate=String(rate);editor.saveExternalDevicePolicy()
+   var expected=p;expected.mtuPolicy="manual";expected.homeLANAccess=editor.homeLANAccess;expected.killSwitchPolicy=editor.killSwitchPolicy;expected.killSwitch=true;expected.ipv6Mode=editor.ipv6Mode
+   expected.daitaEnabled=enabled;expected.daitaRateKbps=enabled ? rate:96
+   try check("Tor padding atomically saves enabled and selected rate "+kind+execution+String(rate)+String(enabled),model.imports==1 && model.bundle!.routerProfiles[1]==expected && editor.loadedProfile==expected)
+   try check("Tor padding leaves other credentials and entry policy exact",model.bundle!.routerProfiles[0]==before.routerProfiles[0] && model.bundle!.routerProfiles[2]==before.routerProfiles[2] && model.bundle!.profiles==before.profiles)
+   editor.load();editor.daitaEnabled=false;editor.torPaddingRate="discarded while Off";editor.saveExternalDevicePolicy()
+   try check("Tor Off preserves dormant rate",model.imports==2 && model.bundle!.routerProfiles[1].daitaEnabled==false && model.bundle!.routerProfiles[1].daitaRateKbps==expected.daitaRateKbps)
+  }}}}}
+  for rate in [Int?.none,0] {
+   var p=try profile("tor");p.daitaEnabled=false;p.daitaRateKbps=rate
+   let model=RouterVPNModel();model.bundle=try bundle(p);let editor=Settings(model);editor.load()
+   try check("Tor unset rate displays bounded default",editor.torPaddingRate=="192")
+   editor.saveExternalDevicePolicy();try check("Off retains exact unset or zero rate",model.imports==1 && model.bundle!.routerProfiles[1].daitaRateKbps==rate)
+   editor.daitaEnabled=true;editor.saveExternalDevicePolicy();try check("Tor On persists bounded default",model.imports==2 && model.bundle!.routerProfiles[1].daitaRateKbps==192)
+  }
+  for value in ["31","193","-1","64.5","","true","999999999999999999999999"] {
+   let model=RouterVPNModel();model.bundle=try bundle(profile("tor"));let before=try encoded(model.bundle!),editor=Settings(model);editor.load();editor.daitaEnabled=true;editor.torPaddingRate=value;editor.saveExternalDevicePolicy()
+   try check("invalid padding rate cannot mutate profile "+value,model.imports==0 && encoded(model.bundle!)==before)
+  }
+  for fault in ["busy","selected","exit-policy","entry-credential","entry-policy","entry-assets","entry-missing","entry-duplicate","store"] {
+   let model=RouterVPNModel();model.bundle=try bundle(profile("tor"));let editor=Settings(model);editor.load();editor.daitaEnabled=false;editor.torPaddingRate="64"
+   switch fault {
+   case "busy":model.profileMutationBlocked=true
+   case "selected":model.bundle!.selectedRouterID="other-node"
+   case "exit-policy":model.bundle!.routerProfiles[1].dnsHost="8.8.8.8"
+   case "entry-credential":model.bundle!.routerProfiles[2].apiToken="replacement private token"
+   case "entry-policy":model.bundle!.routerProfiles[2].ipv6Mode=model.bundle!.routerProfiles[2].ipv6Mode=="off" ? "on":"off"
+   case "entry-assets":model.bundle!.profiles["wg"]=["wg.conf":"replacement private entry bytes"]
+   case "entry-missing":model.bundle!.routerProfiles.removeLast()
+   case "entry-duplicate":model.bundle!.routerProfiles.append(model.bundle!.routerProfiles[2])
+   default:model.failImport=true
+   }
+   let before=try encoded(model.bundle!);editor.saveExternalDevicePolicy()
+   try check("Tor padding rejects changed or failed owner "+fault,model.imports==0 && encoded(model.bundle!)==before)
+  }
+  for kind in protocols where !kind.hasPrefix("tor") {
+   let model=RouterVPNModel();model.bundle=try bundle(profile(kind));let before=model.bundle!.routerProfiles[1],editor=Settings(model);editor.load();editor.daitaEnabled=false;editor.torPaddingRate="bad";editor.saveExternalDevicePolicy()
+   try check("ordinary node cannot adopt hidden Tor padding controls",model.imports==1 && model.bundle!.routerProfiles[1].daitaEnabled==before.daitaEnabled && model.bundle!.routerProfiles[1].daitaRateKbps==before.daitaRateKbps)
+  }
  }
 }
 '''
@@ -235,7 +288,7 @@ enum IOSDNSRuntimePolicy {
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--shipping-only', action='store_true')
-    parser.add_argument('--mutation', action='append', choices=['active-write', 'stale-source', 'native-validation', 'historical-mtu', 'jumbo-load', 'jumbo-save'])
+    parser.add_argument('--mutation', action='append', choices=['active-write', 'stale-source', 'native-validation', 'historical-mtu', 'jumbo-load', 'jumbo-save', 'padding-rate', 'padding-entry'])
     args = parser.parse_args()
     swift, go = shutil.which('swiftc'), shutil.which('go')
     if not swift or not go: raise RuntimeError('swiftc and go are required')
@@ -247,6 +300,7 @@ def main():
         'static func profile(', 'static func amneziaParameters(', 'static func openVPNConfig('])
     fixtures = fixtures.replace('profile(', 'ordinaryProfile(')
     source = SWIFT.replace(' // SETTINGS_METHODS', methods).replace(' // SELECTED_PROFILE', selected).replace(' // TRANSPORT_FIXTURES', fixtures)
+    source = source.replace(' // CAPTURE_ENTRY', member((APP / 'RouterVPNModelExternal.swift').read_text(), 'func externalTorEntryData('))
     policy = (APP / 'IOSDevicePolicySettings.swift').read_text()
     assert 'Button("Save device policy for next connection") { saveExternalDevicePolicy() }' in view
     assert 'if torNode {\n                            Toggle("Jumbo virtual interface (9000)", isOn: $jumboTUN)' in view
@@ -277,6 +331,8 @@ def main():
             ('historical-mtu', 'policy', 'profile.mtuPolicy = mtuPolicy; profile.manualMTU = fixed', 'profile.mtuPolicy = mtuPolicy; profile.manualMTU = source.effectiveMTU ?? fixed', 'native device save wireguard/auto'),
             ('jumbo-load', 'source', '            jumboTUN = policy.jumboTUN', '            jumboTUN = false', 'valid native Tor Jumbo preserves saved preference'),
             ('jumbo-save', 'source', '        draft.jumboTUN = jumboTUN', '', 'Tor Jumbo editor saves exact visible choice'),
+            ('padding-rate', 'source', 'draft.torPaddingRate = torPaddingRate', 'draft.torPaddingRate = torPaddingRate == "64" ? "192" : torPaddingRate', 'Tor padding atomically saves enabled and selected rate'),
+            ('padding-entry', 'source', 'guard let loadedTorEntry, let currentEntry = try? model.externalTorEntryData(source: bundle), currentEntry == loadedTorEntry else', 'guard true else', 'Tor padding rejects changed or failed owner entry-credential'),
         ):
             if args.mutation and name not in args.mutation: continue
             original = source if target == 'source' else policy

@@ -40,9 +40,9 @@ func CompileProfileWithPredecessor(profileJSON, sessionID, predecessorJSON, pred
 
 // ValidateProfile checks an idle saved node without claiming a runnable graph
 // or replacing its unresolved Home default with a public resolver. A bounded
-// cover selection can be saved for Server execution before choosing its entry;
-// Local compilation still rejects it. Connection compilation and live proof
-// remain mandatory after the private entry is captured.
+// cover selection can be saved before choosing an entry. Connection compilation
+// still requires the complete captured source, and the native owner must prove
+// selected DNS, the actual path and outgoing cover before admitting traffic.
 func ValidateProfile(profileJSON string) error {
 	profile, _, err := capturedTorProfileValues(profileJSON)
 	if err != nil {
@@ -75,8 +75,8 @@ func capturedTorProfile(profileJSON string) (map[string]any, []string, error) {
 }
 
 // capturedTorProfileValues validates saved fields without granting runtime
-// cover authority. Only idle validation and the separately captured private
-// Server compiler may use it; Local/Desktop owners retain the guarded wrapper.
+// cover authority. Saved profiles and captured native compilers use the same
+// typed values; every runtime retains its own proof and lease admission.
 func capturedTorProfileValues(profileJSON string) (map[string]any, []string, error) {
 	profile, err := profileObject(profileJSON, 256*1024)
 	if err != nil || profile["node_kind"] != "external" || !profileIdentifier.MatchString(profileString(profile, "id")) {
@@ -152,9 +152,8 @@ func compileProfileWithEntryProof(profileJSON, sessionID, predecessorJSON, prede
 	return compileProfileWithEntryProofPolicy(profileJSON, sessionID, predecessorJSON, predecessorProfileJSON, captured, supplied, false)
 }
 
-// The source-capture constructor may reconstruct an enabled policy before
-// admission opens. That pure operation grants no native listener, proof or
-// lease; ordinary callers retain the guarded Local compilation path.
+// Source reconstruction and public compilation preserve the same complete
+// enabled policy. Neither operation grants a native listener, proof or lease.
 func compileProfileWithEntryProofPolicy(profileJSON, sessionID, predecessorJSON, predecessorProfileJSON string, captured bool, supplied capturedTorEntryProof, paddingCapture bool) (string, error) {
 	if !profileIdentifier.MatchString(sessionID) {
 		return "", errors.New("Tor requires the captured connection session identity")

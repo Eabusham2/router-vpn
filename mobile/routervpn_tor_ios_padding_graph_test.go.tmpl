@@ -1,0 +1,121 @@
+package libbox
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// Keep the enabled matrix separate from all 738 established Local/Server
+// cases. Each graph is unchanged shipping Swift/Go output with an independently
+// captured full-source identity. Constructors run; no VPN or circuit starts.
+func TestRouterTorAppleLocalPaddingGraphs(t *testing.T) {
+	root := os.Getenv("ROUTERVPN_IOS_LOCAL_PADDING_GRAPHS")
+	if root == "" {
+		t.Skip("run the complete enabled Apple Local padding matrix")
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 529 {
+		t.Fatalf("exact enabled Apple padding matrix unavailable: %v (%d entries)", err, len(entries))
+	}
+	if RouterTorNativeABI() != 1 || RouterTorNativeVersion() != "tor 0.4.9.14" {
+		t.Fatal("the real pinned C Tor ABI is required for padding configuration checks")
+	}
+	state := t.TempDir()
+	privateState := os.Getenv("ROUTERVPN_IOS_TOR_STATE")
+	if privateState == "" {
+		privateState = filepath.Join(state, "tor-state")
+	}
+	if err := RouterTorSetStateDirectory(privateState); err != nil {
+		t.Fatal(err)
+	}
+	missing := os.Getenv("ROUTERVPN_IOS_TOR_MISSING_ENGINE") == "1"
+	count := 0
+	for _, entry := range entries {
+		if entry.Name() == "source-evidence.json" && entry.Type().IsRegular() {
+			continue
+		}
+		count++
+		t.Run(entry.Name(), func(t *testing.T) {
+			if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+				t.Fatal("unowned Apple padding graph directory")
+			}
+			folder := filepath.Join(root, entry.Name())
+			path := filepath.Join(folder, "sing-box.json")
+			info, err := os.Lstat(path)
+			if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > 4<<20 {
+				t.Fatal("empty, oversized or unowned Apple padding graph")
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var fixture struct {
+				Session string `json:"session"`
+				Source  string `json:"source_sha256"`
+				Rate    int    `json:"rate_kbps"`
+			}
+			metadata, err := os.ReadFile(filepath.Join(folder, "fixture.json"))
+			if err != nil || json.Unmarshal(metadata, &fixture) != nil || len(fixture.Source) != 64 {
+				t.Fatal("missing independent Apple source identity")
+			}
+			var graph map[string]any
+			if err := json.Unmarshal(data, &graph); err != nil {
+				t.Fatal(err)
+			}
+			var owner map[string]any
+			for _, raw := range graph["outbounds"].([]any) {
+				row := raw.(map[string]any)
+				if row["type"] == "routervpn-tor" {
+					if owner != nil {
+						t.Fatal("enabled padding acquired a second native owner")
+					}
+					owner = row
+				} else if row["type"] == "routervpn-server-tor" {
+					t.Fatal("Local padding acquired Server authority")
+				}
+			}
+			if owner == nil || owner["session_id"] != fixture.Session {
+				t.Fatal("enabled padding lost its captured native owner")
+			}
+			source := owner["padding_source"].(map[string]any)
+			profile := source["profile"].(string)
+			if expected, err := RouterTorPaddingSource(string(data), profile, fixture.Session); err != nil || expected != fixture.Source {
+				t.Fatal("native source API differs from the independently captured host identity", err)
+			}
+			var selected map[string]any
+			if err := json.Unmarshal([]byte(profile), &selected); err != nil || selected["daita_enabled"] != true || selected["daita_rate_kbps"] != float64(fixture.Rate) {
+				t.Fatal("native padding changed the captured enabled rate")
+			}
+			applySetupOptions(&SetupOptions{BasePath: folder, WorkingPath: folder, TempPath: state, LogMaxLines: 100})
+			err = CheckConfig(string(data))
+			if missing {
+				if err == nil || !strings.Contains(err.Error(), "unknown outbound type: routervpn-tor") {
+					t.Fatalf("missing Tor registration accepted unchanged enabled graph: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal("actual native constructor rejected enabled Apple padding", err)
+			}
+			// A valid replacement rate still belongs to a different captured graph.
+			// Neither a caller's outer checksum nor a source's own assertion grants
+			// the constructor permission to replace the selected owner.
+			selected["daita_rate_kbps"] = 96
+			replaced, _ := json.Marshal(selected)
+			source["profile"] = string(replaced)
+			bad, _ := json.Marshal(graph)
+			if err := CheckConfig(string(bad)); err == nil {
+				t.Fatal("native constructor accepted padding source replaced after capture")
+			}
+			if _, err := RouterTorPaddingSource(string(bad), profile, fixture.Session); err == nil {
+				t.Fatal("native source API accepted a replaced source with the original saved policy")
+			}
+		})
+	}
+	if count != 528 {
+		t.Fatalf("expected 528 separate enabled Apple padding graphs, checked %d", count)
+	}
+}

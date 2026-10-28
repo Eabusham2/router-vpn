@@ -149,7 +149,7 @@ def main():
         subprocess.run(run_args, check=True, timeout=25)
         for name, old, new, label in (
             ("AndroidExternalSession.java", "owned = request == proof && healthy();", "owned = true;", "external late factory"),
-            ("AndroidTorSession.java", "owned = request == proof && healthy();", "owned = true;", "Tor late factory"),
+            ("AndroidTorSession.java", "owned = owned && request == proof && proved && !cancelled && current();", "owned = true;", "Tor late factory"),
             ("LayeredVpnService.java", "generation == lifecycle.get() && commandServer == server && hopMeasurement == null", "commandServer == server && hopMeasurement == null", "native generation adoption"),
             ("LayeredVpnService.java", "service.hopMeasurement!=probe||", "", "captured request owner"),
             ("LayeredVpnService.java", 'throw new IllegalStateException("Hop measurement teardown has not drained.");', "", "retained native drain"),

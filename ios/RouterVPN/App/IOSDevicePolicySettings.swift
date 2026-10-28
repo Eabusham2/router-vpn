@@ -9,6 +9,8 @@ struct IOSDevicePolicySettings: Equatable {
     var mtuPolicy: String
     var manualMTU: String
     var jumboTUN: Bool
+    var torPaddingEnabled: Bool
+    var torPaddingRate: String
 
     init(profile: RouterProfile) {
         homeLANAccess = profile.homeLANAccess ?? true
@@ -22,6 +24,8 @@ struct IOSDevicePolicySettings: Equatable {
         mtuPolicy = mtu == "fixed" ? "manual" : mtu.isEmpty ? "auto" : mtu
         manualMTU = profile.manualMTU.map(String.init) ?? ""
         jumboTUN = profile.jumboTUN ?? false
+        torPaddingEnabled = profile.daitaEnabled ?? false
+        torPaddingRate = String((profile.daitaRateKbps ?? 0) == 0 ? 192 : profile.daitaRateKbps!)
     }
 
     func applying(to source: RouterProfile) throws -> RouterProfile {
@@ -48,6 +52,17 @@ struct IOSDevicePolicySettings: Equatable {
         profile.ipv6Mode = ipv6Mode
         profile.mtuPolicy = mtuPolicy; profile.manualMTU = fixed
         if tor, jumboTUN != (source.jumboTUN ?? false) { profile.jumboTUN = jumboTUN }
+        if tor {
+            if torPaddingEnabled != (source.daitaEnabled ?? false) { profile.daitaEnabled = torPaddingEnabled }
+            if torPaddingEnabled {
+                guard let rate = Int(torPaddingRate.trimmingCharacters(in: .whitespacesAndNewlines)), (32...192).contains(rate) else {
+                    throw issue("Tor padding rate must be an integer from 32 through 192 kbps.")
+                }
+                profile.daitaRateKbps = rate
+            }
+            // Off keeps the exact dormant rate, including an unset/default
+            // value. Ordinary nodes never adopt these Tor-only controls.
+        }
         return profile
     }
 

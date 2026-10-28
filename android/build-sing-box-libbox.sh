@@ -130,7 +130,7 @@ verify_aar() {
       echo 'combined libbox AAR external proof request has the wrong owned-lifecycle API' >&2; return 1
     }
   done
-  for symbol in routerTorNativeABI routerTorNativeVersion routerTorSourceNotices routerCompileTorProfile routerValidateTorProfile routerCompileTorProfileWithPredecessor routerCompileTorProfileWithExternalPredecessor routerTorSetStateDirectory routerTorCreateProof routerTorCreateProofWithPredecessor routerStrategyDNSProof routerStrategyCloseService; do
+  for symbol in routerTorNativeABI routerTorNativeVersion routerTorSourceNotices routerCompileTorProfile routerValidateTorProfile routerCompileTorProfileWithPredecessor routerCompileTorProfileWithExternalPredecessor routerTorPaddingSource routerTorSetStateDirectory routerTorCreateProof routerTorCreateProofWithPredecessor routerStrategyDNSProof routerStrategyCloseService; do
     grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing native Tor API $symbol" >&2; return 1; }
   done
   for symbol in routerCheckMAXProfile routerCreateMAXProfileRequest routerCompileMAXProfile; do
@@ -149,7 +149,7 @@ verify_aar() {
     }
   done
   javap -classpath "$classes" io.nekohasekai.libbox.RouterTorProofRequest >"$tmp/router-tor-proof.javap"
-  for signature in 'java.lang.String run() throws java.lang.Exception;' 'void cancel();' 'boolean healthy();'; do
+  for signature in 'java.lang.String run() throws java.lang.Exception;' 'java.lang.String paddingStatusJSON() throws java.lang.Exception;' 'void cancel();' 'boolean healthy();'; do
     grep -Fq "$signature" "$tmp/router-tor-proof.javap" || {
       echo 'combined libbox AAR RouterTorProofRequest has the wrong captured-owner API' >&2
       return 1

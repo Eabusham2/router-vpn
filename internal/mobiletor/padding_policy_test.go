@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestTorPaddingPolicyRejectsLocalRuntimeOrMalformedRequest(t *testing.T) {
+func TestTorPaddingPolicyRequiresCompleteSourceAndRejectsMalformedRequest(t *testing.T) {
 	cases := []struct {
 		name   string
 		values map[string]any
@@ -45,7 +45,7 @@ func TestTorPaddingPolicyRejectsLocalRuntimeOrMalformedRequest(t *testing.T) {
 				}
 				if err := ValidateProfile(source); strings.HasPrefix(test.name, "requested-") {
 					if err != nil {
-						t.Fatal("idle Tor validation discarded a bounded Server cover selection", err)
+						t.Fatal("idle Tor validation discarded a bounded native cover selection", err)
 					}
 				} else if err == nil || !strings.Contains(err.Error(), "padding") {
 					t.Fatal("idle Tor validation silently accepted malformed padding", err)
@@ -53,8 +53,17 @@ func TestTorPaddingPolicyRejectsLocalRuntimeOrMalformedRequest(t *testing.T) {
 				entry := torHomeEntry()
 				torHomePair(profile, entry)
 				paired := torHostEncode(t, profile)
-				if config, err := CompileProfileWithPredecessor(paired, "padding-source-session", torHostBase(t), torHostEncode(t, entry)); err == nil || config != "" || !strings.Contains(err.Error(), "padding") {
-					t.Fatal("paired Tor compiler substituted predecessor protection for requested exit padding", err)
+				config, err := CompileProfileWithPredecessor(paired, "padding-source-session", torHostBase(t), torHostEncode(t, entry))
+				if strings.HasPrefix(test.name, "requested-") {
+					if err != nil || config == "" {
+						t.Fatal("complete captured source did not compile requested native padding", err)
+					}
+					capture, err := NewLocalPaddingCapture(&LocalPaddingSource{Profile: paired, PredecessorProfile: torHostEncode(t, entry), PredecessorConfig: torHostBase(t)}, "padding-source-session")
+					if err != nil || capture.Config() != config {
+						t.Fatal("paired Tor compiler lost independent complete padding source", err)
+					}
+				} else if err == nil || config != "" || !strings.Contains(err.Error(), "padding") {
+					t.Fatal("paired Tor compiler admitted malformed padding", err)
 				}
 				if paired != torHostEncode(t, profile) {
 					t.Fatal("rejected Tor padding changed the captured source")

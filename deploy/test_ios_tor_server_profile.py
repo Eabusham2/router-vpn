@@ -102,7 +102,7 @@ extension Tests {
    let owner=ProviderPreparation();owner.restoredMultihopExecution=restored
    reject("Server cannot adopt another restored execution"){_ = try owner.prepare(provider:provider,selectedProfile:selected,strict:true)}
   }
-  for fault in ["compare","missing-entry","ordinary-entry","wrong-entry-id","entry-proof","wrong-exit-mode","wrong-exit-id","fixed-conflict","padding-local","padding-type","padding-rate-type","padding-rate-small","padding-rate-large"] {
+  for fault in ["compare","missing-entry","ordinary-entry","wrong-entry-id","entry-proof","wrong-exit-mode","wrong-exit-id","fixed-conflict","padding-changed-execution","padding-type","padding-rate-type","padding-rate-small","padding-rate-large"] {
    var changed=selected,changedSource=source,changedEntry=entry,changedProvider=provider
    switch fault {
    case "compare":changed["multihop_execution"]="auto"
@@ -113,20 +113,27 @@ extension Tests {
    case "wrong-exit-mode":changed["multihop_exit_mode"]="tor"
    case "wrong-exit-id":changed["multihop_exit_id"]="another-exit"
    case "fixed-conflict":changed["manual_mtu"]=1390
-   case "padding-local":changed["multihop_execution"]="local";changed["daita_enabled"]=true;changed["daita_rate_kbps"]=64
+   case "padding-changed-execution":changed["multihop_execution"]="local";changed["daita_enabled"]=true;changed["daita_rate_kbps"]=64
    case "padding-rate-type":changed["daita_enabled"]=true;changed["daita_rate_kbps"]="64"
    case "padding-rate-small":changed["daita_enabled"]=true;changed["daita_rate_kbps"]=31
    case "padding-rate-large":changed["daita_enabled"]=true;changed["daita_rate_kbps"]=193
    default:changed["daita_enabled"]="false"
    }
    if ["ordinary-entry","wrong-entry-id","entry-proof"].contains(fault) {changedSource["routerProfiles"]=[changedEntry];changedProvider["tor_entry_bundle"]=try json(changedSource)}
-   reject("Server rejects "+fault){_ = try ProviderPreparation().prepare(provider:changedProvider,selectedProfile:changed,strict:true)}
+   let owner=ProviderPreparation()
+   if fault=="padding-changed-execution" {owner.restoredMultihopExecution="server"}
+   reject("Server rejects "+fault){_ = try owner.prepare(provider:changedProvider,selectedProfile:changed,strict:true)}
   }
   var standalone=selected;standalone["multihop_enabled"]=false
   reject("Server has no ambient standalone fallback"){_ = try RouterVPNExternalExitBuilder.build(profile:standalone)}
   var dormant=selected;dormant["daita_enabled"]=false;dormant["daita_rate_kbps"]=192
   let runtime=try ProviderPreparation().prepare(provider:provider,selectedProfile:dormant,strict:true).runtime
   try check("Server preserves valid dormant padding without enabling it",runtime.torProfileJSON==text(dormant))
+  var local=selected;local["multihop_execution"]="local";local["daita_enabled"]=true;local["daita_rate_kbps"]=64
+  let localOwner=ProviderPreparation();localOwner.restoredMultihopExecution="local"
+  let localRuntime=try localOwner.prepare(provider:provider,selectedProfile:local,strict:true).runtime
+  let localGraph=try object(localRuntime.files["sing-box.json"]!)
+  try check("explicit enabled Local retains its own source rather than Server authority",localRuntime.torExecution=="local" && tagged(localGraph,"routervpn-tor-exit")["type"] as? String=="routervpn-tor" && bridge(["Op":"tor-padding-source","Config":text(localGraph),"Policy":localRuntime.torProfileJSON!,"Node":localRuntime.torSessionID!]).count==64)
  }
 }
 '''

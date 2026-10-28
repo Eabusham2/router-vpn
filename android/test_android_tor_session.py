@@ -18,6 +18,9 @@ B = importlib.util.module_from_spec(spec); spec.loader.exec_module(B)
 SOURCES = dict(B.STUBS)
 SOURCES.pop('org/json/JSONObject.java')
 SOURCES.pop('com/eabusham/routervpn/AndroidTorSession.java')
+# External proof/measurement fixtures inherit this map while compiling the
+# real TorSession. Keep its new source-bound validator real in those callers.
+SOURCES['com/eabusham/routervpn/AndroidTorPaddingReceipt.java'] = (JAVA/'AndroidTorPaddingReceipt.java').read_text()
 SOURCES['com/eabusham/routervpn/AndroidMTUSession.java'] = SOURCES['com/eabusham/routervpn/AndroidMTUSession.java'].replace('public void activateTor(AndroidTorSession tor){}', 'public int torStarts;public AndroidTorSession activatedTor;public void activateTor(AndroidTorSession tor){torStarts++;activatedTor=tor;}')
 SOURCES['com/eabusham/routervpn/AndroidMTUSession.java'] = SOURCES['com/eabusham/routervpn/AndroidMTUSession.java'].replace('public void established(int mtu)throws Exception{}', 'public int establishedMTU;public void established(int mtu)throws Exception{establishedMTU=mtu;}')
 SOURCES['android/net/VpnService.java'] = SOURCES['android/net/VpnService.java'].replace('public class Builder {', 'public static int requestedMTU,establishments;public class Builder {').replace('setMtu(int n){return this;}', 'setMtu(int n){requestedMTU=n;return this;}').replace('public android.os.ParcelFileDescriptor establish(){return null;}', 'public android.os.ParcelFileDescriptor establish(){establishments++;return new android.os.ParcelFileDescriptor();}')
@@ -32,6 +35,7 @@ final class AndroidTorProfile {
  static String execution(org.json.JSONObject metadata)throws Exception{return metadata.optString("execution","local");}
  static org.json.JSONObject session(String c,String m,String s,String mode)throws Exception{return new org.json.JSONObject(m);}
  static String strictText(byte[] b)throws Exception{return new String(b,java.nio.charset.StandardCharsets.UTF_8);}
+ static String digest(byte[] b)throws Exception{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(b));}
 }'''
 SOURCES['android/content/Context.java'] = SOURCES['android/content/Context.java'].replace('return null;} public android.content.pm.PackageManager', '''return new SharedPreferences(){public Editor edit(){return new Editor(){public Editor putString(String a,String b){return this;}public void apply(){}};}};} public android.content.pm.PackageManager''')
 SOURCES['android/content/Context.java'] = SOURCES['android/content/Context.java'].replace("public java.io.File getFilesDir(){return null;}", "public java.io.File files;public java.io.File getFilesDir(){return files;}").replace("public Object getSystemService(String name){return null;}", "public Object getSystemService(String name){return name.equals(NOTIFICATION_SERVICE)?new android.app.NotificationManager():new android.net.ConnectivityManager();}")
@@ -49,22 +53,24 @@ import java.util.concurrent.*;import java.util.concurrent.atomic.*;import org.js
 public class RouterTorProofRequest {
  public final CommandServer server;public final String session,predecessor;
  public final AtomicInteger cancels=new AtomicInteger(),closes=new AtomicInteger();public volatile boolean alive=true,ran,ignoreCancellation,pendingClose;
- public volatile String response;public volatile CountDownLatch entered,release;
+ public volatile String response,paddingResponse="";public volatile boolean paddingFailure;public int paddingReads;public volatile CountDownLatch entered,release;public Runnable cancelBoundary;
  public RouterTorProofRequest(CommandServer s,String id,String p){server=s;session=id;predecessor=p;}
  public String run()throws Exception {if(entered!=null){entered.countDown();release.await();}ran=true;
   if(!alive&&!ignoreCancellation)throw new IllegalStateException("cancelled");
   return response!=null?response:new JSONObject().put("session_id",session).put("is_tor",true).put("dns_proven",true).put("ip","8.8.4.4").put("checked_at",Instant.now().toString()).toString();}
- public void cancel(){cancels.incrementAndGet();if(!ignoreCancellation){alive=false;if(release!=null)release.countDown();if(Libbox.dnsRelease!=null)Libbox.dnsRelease.countDown();}}
+ public void cancel(){cancels.incrementAndGet();if(cancelBoundary!=null)cancelBoundary.run();if(!ignoreCancellation){alive=false;if(release!=null)release.countDown();if(Libbox.dnsRelease!=null)Libbox.dnsRelease.countDown();}}
  public boolean healthy(){return alive&&ran;}
+ public String paddingStatusJSON(){paddingReads++;if(paddingFailure)throw new IllegalStateException("native padding status unavailable");return paddingResponse;}
  public interface CloseBoundary{void run()throws Exception;}public CloseBoundary closeBoundary;
  public void close()throws Exception{closes.incrementAndGet();alive=false;if(closeBoundary!=null)closeBoundary.run();if(pendingClose)throw new IllegalStateException("Tor lease DELETE is unacknowledged");}
 }'''
 LIBBOX = SOURCES['io/nekohasekai/libbox/Libbox.java']
 LIBBOX = LIBBOX.replace('public static void routerStrategyCloseService(CommandServer server)throws Exception{}', 'public static void routerStrategyCloseService(CommandServer server)throws Exception{checkedCloses++;if(failClose)throw new IllegalStateException("unconfirmed native drain");}')
 LIBBOX = LIBBOX[:-1] + r'''
- public static volatile RouterTorProofRequest next,created;public static volatile int dnsCalls,checkedCloses;
+ public static volatile RouterTorProofRequest next,created;public static volatile int dnsCalls,checkedCloses,sourceCalls;public static String sourceResult="b".repeat(64);public static boolean sourceFailure;
  public static volatile boolean failClose,dnsFailure;public static volatile java.util.concurrent.CountDownLatch factoryEntered,factoryRelease,dnsEntered,dnsRelease;
- public static void reset(){next=null;created=null;dnsCalls=0;checkedCloses=0;failClose=false;dnsFailure=false;factoryEntered=null;factoryRelease=null;dnsEntered=null;dnsRelease=null;}
+ public static void reset(){next=null;created=null;dnsCalls=0;checkedCloses=0;sourceCalls=0;sourceFailure=false;sourceResult="b".repeat(64);failClose=false;dnsFailure=false;factoryEntered=null;factoryRelease=null;dnsEntered=null;dnsRelease=null;}
+ public static String routerTorPaddingSource(String config,String profile,String session)throws Exception{sourceCalls++;if(sourceFailure||!config.equals("exact-config")||!session.equals("session-owned")||!new org.json.JSONObject(profile).getString("id").equals("exit-owned"))throw new IllegalStateException("source capture mismatch");return new org.json.JSONObject(profile).optBoolean("daita_enabled",false)?sourceResult:"";}
  public static RouterTorProofRequest routerTorCreateProof(CommandServer s,String tag,String id)throws Exception{return make(s,tag,id,"");}
  public static RouterTorProofRequest routerTorCreateProofWithPredecessor(CommandServer s,String tag,String id,String p)throws Exception{return make(s,tag,id,p);}
  private static RouterTorProofRequest make(CommandServer s,String tag,String id,String p)throws Exception{
@@ -87,7 +93,8 @@ public final class TorSessionHarness {
  static final class Fixture implements AndroidTorSession.Owner {
   CommandServer server=new CommandServer(null,null);volatile CommandServer currentServer=server;volatile String network="wifi-1";volatile AndroidTorSession session;
   Fixture(boolean predecessor)throws Exception{this(predecessor,"local");}
-  Fixture(boolean predecessor,String execution)throws Exception{JSONObject m=new JSONObject().put("session_id","session-owned").put("external_id","exit-owned").put("execution",execution);if(predecessor)m.put("predecessor_profile",new JSONObject().put("id","private-entry").put("api_token","captured-private-token"));m.put("tor_profile",new JSONObject().put("id","exit-owned"));session=new AndroidTorSession(m,"exact-config",server,this);}
+  Fixture(boolean predecessor,String execution)throws Exception{this(predecessor,execution,null,null);}
+  Fixture(boolean predecessor,String execution,Boolean enabled,Integer rate)throws Exception{JSONObject m=new JSONObject().put("session_id","session-owned").put("external_id","exit-owned").put("execution",execution);if(predecessor)m.put("predecessor_profile",new JSONObject().put("id","private-entry").put("api_token","captured-private-token"));JSONObject profile=new JSONObject().put("id","exit-owned");if(enabled!=null)profile.put("daita_enabled",enabled);if(rate!=null)profile.put("daita_rate_kbps",rate);m.put("tor_profile",profile);session=new AndroidTorSession(m,"exact-config",server,this);}
   public boolean current(AndroidTorSession s,CommandServer c){return s==session&&c==currentServer;}
   public String network(){return network;}
   RouterTorProofRequest blocked(boolean ignore){RouterTorProofRequest r=new RouterTorProofRequest(server,"session-owned","");r.entered=new CountDownLatch(1);r.release=new CountDownLatch(1);r.ignoreCancellation=ignore;Libbox.next=r;return r;}
@@ -104,6 +111,92 @@ public final class TorSessionHarness {
    check(f.session.execution("session-owned","exit-owned").equals(execution),"Tor returned Local for a captured Server receipt");rejected(()->f.session.execution("other","exit-owned"));rejected(()->f.session.execution("session-owned","other"));
    rejected(()->f.session.result("other","exit-owned"));rejected(()->f.session.result("session-owned","other"));rejected(f.session::prove);
    Libbox.created.alive=false;check(!f.session.healthy(),"dead native owner stayed healthy");check(Libbox.dnsCalls==1,"health started another proof");}
+ }
+ static JSONObject paddingStatus(long now,int rate)throws Exception{
+  return new JSONObject().put("path_checked_at",now).put("dns_checked_at",now).put("receipt",new JSONObject()
+   .put("direction","outgoing").put("accounting","tor-link-cell")
+   .put("session_sha256",AndroidTorProfile.digest("session-owned".getBytes(java.nio.charset.StandardCharsets.UTF_8))).put("source_sha256","b".repeat(64))
+   .put("generation",1).put("rate_kbps",rate).put("channel_cells",10).put("channel_cell_bytes",5140).put("observed_at",now).put("expires_at",now+5000));
+ }
+ static AndroidTorPaddingReceipt paddingValidator(String policy)throws Exception{return new AndroidTorPaddingReceipt("exact-config",new JSONObject(policy).put("id","exit-owned").toString(),"session-owned","local");}
+ static void paddingReceipts()throws Exception{
+  final long now=1800000000000L;
+  for(int saved:new int[]{0,32,64,192}){
+   Libbox.reset();AndroidTorPaddingReceipt owner=paddingValidator("{\"daita_enabled\":true,\"daita_rate_kbps\":"+saved+"}");int rate=saved==0?192:saved;
+   JSONObject status=paddingStatus(now,rate);owner.accept(status.toString(),now);owner.accept(status.toString(),now+1000);
+   check(Libbox.sourceCalls==1,"receipt refresh reconstructed or changed native source authority");
+   JSONObject next=paddingStatus(now+2000,rate);next.getJSONObject("receipt").put("channel_cells",11).put("channel_cell_bytes",5654);owner.accept(next.toString(),now+2000);
+   rejected(()->owner.accept(next.toString(),now+7000));rejected(()->owner.accept(paddingStatus(now+7000,rate).toString(),now+7000));
+  }
+  for(String fault:new String[]{"missing","malformed","oversized","extra","extra-receipt","missing-field","direction","accounting","source","session","rate","rate-string","rate-fraction","rate-floating","generation-zero","generation-negative","generation-string","generation-overflow","cells-zero","cells-overflow","bytes-low","bytes-high","bytes-odd","bytes-string","observed-zero","observed-future","observed-stale","expired","long-ttl","proof-expiry","dns-zero","dns-newer","path-future","path-string","receipt-not-object"}){
+   Libbox.reset();AndroidTorPaddingReceipt owner=paddingValidator("{\"daita_enabled\":true,\"daita_rate_kbps\":64}");JSONObject status=paddingStatus(now,64),receipt=status.getJSONObject("receipt");String text=null;
+   switch(fault){
+    case "missing":text="";break;case "malformed":text="{";break;case "oversized":text=" ".repeat(4097);break;
+    case "extra":status.put("invented_proof",true);break;case "extra-receipt":receipt.put("trusted",true);break;case "missing-field":receipt.remove("accounting");break;
+    case "direction":receipt.put("direction","both");break;case "accounting":receipt.put("accounting","UDP-bytes");break;
+    case "source":receipt.put("source_sha256","c".repeat(64));break;case "session":receipt.put("session_sha256","c".repeat(64));break;
+    case "rate":receipt.put("rate_kbps",192);break;case "rate-string":receipt.put("rate_kbps","64");break;case "rate-fraction":receipt.put("rate_kbps",64.5);break;case "rate-floating":text=status.toString().replace("\"rate_kbps\":64","\"rate_kbps\":64.0");break;
+    case "generation-zero":receipt.put("generation",0);break;case "generation-negative":receipt.put("generation",-1);break;case "generation-string":receipt.put("generation","1");break;case "generation-overflow":text=status.toString().replace("\"generation\":1","\"generation\":9223372036854775808");break;
+    case "cells-zero":receipt.put("channel_cells",0);break;case "cells-overflow":receipt.put("channel_cells",Long.MAX_VALUE);break;case "bytes-low":receipt.put("channel_cell_bytes",5118);break;case "bytes-high":receipt.put("channel_cell_bytes",5142);break;case "bytes-odd":receipt.put("channel_cell_bytes",5139);break;case "bytes-string":receipt.put("channel_cell_bytes","5140");break;
+    case "observed-zero":receipt.put("observed_at",0);break;case "observed-future":receipt.put("observed_at",now+1);break;case "observed-stale":receipt.put("observed_at",now-5001);break;
+    case "expired":receipt.put("expires_at",now);break;case "long-ttl":receipt.put("expires_at",now+10001);break;case "proof-expiry":status.put("dns_checked_at",now-25001);break;
+    case "dns-zero":status.put("dns_checked_at",0);break;case "dns-newer":status.put("path_checked_at",now-1);break;case "path-future":status.put("path_checked_at",now+1);break;case "path-string":status.put("path_checked_at","1800000000000");break;case "receipt-not-object":status.put("receipt","unowned");break;
+   }
+   final String changed=text==null?status.toString():text;rejected(()->owner.accept(changed,now));rejected(()->owner.accept(paddingStatus(now,64).toString(),now));
+  }
+  for(String changed:new String[]{"generation","cells","bytes","observed","path","dns"}){
+   Libbox.reset();AndroidTorPaddingReceipt owner=paddingValidator("{\"daita_enabled\":true,\"daita_rate_kbps\":64}");JSONObject first=paddingStatus(now,64);owner.accept(first.toString(),now);
+   JSONObject next=paddingStatus(now+1000,64),receipt=next.getJSONObject("receipt");
+   if(changed.equals("generation"))receipt.put("generation",2);
+   if(changed.equals("cells"))receipt.put("channel_cells",9).put("channel_cell_bytes",4626);
+   if(changed.equals("bytes"))receipt.put("channel_cell_bytes",5120);
+   if(changed.equals("observed"))receipt.put("observed_at",now-1);
+   if(changed.equals("path"))next.put("path_checked_at",now-1).put("dns_checked_at",now-1);
+   if(changed.equals("dns"))next.put("dns_checked_at",now-1);
+   rejected(()->owner.accept(next.toString(),now+1000));
+  }
+  for(String policy:new String[]{"{}","{\"daita_enabled\":false}","{\"daita_enabled\":false,\"daita_rate_kbps\":64}"}){
+   Libbox.reset();AndroidTorPaddingReceipt off=paddingValidator(policy);off.accept("",now);rejected(()->off.accept(paddingStatus(now,64).toString(),now));
+  }
+  for(String policy:new String[]{"{\"daita_enabled\":\"true\"}","{\"daita_enabled\":null}","{\"daita_rate_kbps\":31}","{\"daita_rate_kbps\":193}","{\"daita_rate_kbps\":\"64\"}","{\"daita_rate_kbps\":64.5}"}){Libbox.reset();rejected(()->paddingValidator(policy));check(Libbox.sourceCalls==0,"malformed saved padding reached native compilation");}
+  for(String source:new String[]{"","x","B".repeat(64),"b".repeat(63)}){Libbox.reset();Libbox.sourceResult=source;rejected(()->paddingValidator("{\"daita_enabled\":true}"));}
+  Libbox.reset();Libbox.sourceFailure=true;rejected(()->paddingValidator("{\"daita_enabled\":true}"));
+ }
+ static void paddingOwnership()throws Exception{
+  for(boolean entry:new boolean[]{false,true})for(int rate:new int[]{0,32,64,192}){
+   Libbox.reset();Fixture f=new Fixture(entry,"local",true,rate);RouterTorProofRequest proof=new RouterTorProofRequest(f.server,"session-owned",entry?"captured-private-token":"");Libbox.next=proof;proof.paddingResponse=paddingStatus(System.currentTimeMillis(),rate==0?192:rate).toString();f.session.prove();
+   check(f.session.healthy()&&proof.paddingReads==3&&Libbox.dnsCalls==1&&Libbox.sourceCalls==1,"enabled padding missed before/after-DNS or cached health receipt validation");
+   proof.paddingFailure=true;check(!f.session.healthy(),"failed native status stayed Connected");check(proof.cancels.get()==1&&f.session.dataCancelled(),"failed receipt did not immediately revoke its native data owner");proof.paddingFailure=false;check(!f.session.healthy(),"failed status resurrected its retired host proof");rejected(()->f.session.result("session-owned","exit-owned"));
+  }
+  Libbox.reset();Fixture server=new Fixture(true,"server",true,64);server.session.prove();check(server.session.healthy()&&Libbox.sourceCalls==0,"Server cover borrowed Local source/receipt authority");Libbox.created.paddingResponse=paddingStatus(System.currentTimeMillis(),64).toString();check(!server.session.healthy(),"Local receipt replaced Server lease authority");
+  for(String failure:new String[]{"missing","changed-source","failed-status"}){
+   Libbox.reset();Fixture f=new Fixture(false,"local",true,64);RouterTorProofRequest proof=new RouterTorProofRequest(f.server,"session-owned","");Libbox.next=proof;
+   if(failure.equals("changed-source")){JSONObject status=paddingStatus(System.currentTimeMillis(),64);status.getJSONObject("receipt").put("source_sha256","c".repeat(64));proof.paddingResponse=status.toString();}
+   if(failure.equals("failed-status"))proof.paddingFailure=true;
+   rejected(f.session::prove);check(!f.session.healthy()&&Libbox.dnsCalls==0,"invalid initial padding authority reached DNS/Connected");check(proof.cancels.get()==1&&f.session.dataCancelled(),"invalid initial receipt did not immediately revoke its native data owner");
+  }
+  for(String change:new String[]{"missing","expired","generation","source","api"}){
+   Libbox.reset();Fixture f=new Fixture(false,"local",true,64);RouterTorProofRequest proof=new RouterTorProofRequest(f.server,"session-owned","");Libbox.next=proof;proof.paddingResponse=paddingStatus(System.currentTimeMillis(),64).toString();Libbox.dnsEntered=new CountDownLatch(1);Libbox.dnsRelease=new CountDownLatch(1);
+   Job job=new Job(f);waitFor(Libbox.dnsEntered);JSONObject changed=paddingStatus(System.currentTimeMillis(),64);
+   if(change.equals("expired"))changed.getJSONObject("receipt").put("expires_at",System.currentTimeMillis()-1);
+   if(change.equals("generation"))changed.getJSONObject("receipt").put("generation",2);
+   if(change.equals("source"))changed.getJSONObject("receipt").put("source_sha256","c".repeat(64));
+   proof.paddingResponse=change.equals("missing")?"":changed.toString();proof.paddingFailure=change.equals("api");Libbox.dnsRelease.countDown();job.finish(true);check(!f.session.healthy(),"DNS completion adopted changed padding lease: "+change);check(proof.cancels.get()==1&&f.session.dataCancelled(),"post-DNS receipt rejection left its native data owner alive: "+change);
+  }
+  for(String route:new String[]{"healthy","result","execution","hop","dns","mtu-profile","mtu"}){
+   Libbox.reset();Fixture f=new Fixture(false,"local",true,64);RouterTorProofRequest proof=new RouterTorProofRequest(f.server,"session-owned","");Libbox.next=proof;proof.paddingResponse=paddingStatus(System.currentTimeMillis(),64).toString();f.session.prove();
+   Fixture replacement=new Fixture(false,"local",true,64);RouterTorProofRequest next=new RouterTorProofRequest(replacement.server,"session-owned","");Libbox.next=next;next.paddingResponse=paddingStatus(System.currentTimeMillis(),64).toString();replacement.session.prove();
+   proof.cancelBoundary=()->check(!Thread.holdsLock(f.session),"native cancellation ran under the session monitor: "+route);proof.paddingFailure=true;
+   if(route.equals("healthy"))check(!f.session.healthy(),"failed receipt remained healthy");
+   else rejected(()->{switch(route){case "result":f.session.result("session-owned","exit-owned");break;case "execution":f.session.execution("session-owned","exit-owned");break;case "hop":f.session.newHopMeasurement();break;case "dns":f.session.newDNSMeasurement();break;case "mtu-profile":f.session.mtuProfile();break;case "mtu":f.session.newMTU(null);break;}});
+   check(proof.cancels.get()==1&&f.session.dataCancelled(),"receipt caller did not cancel its captured request: "+route);
+   check(next.cancels.get()==0&&replacement.session.healthy(),"receipt rejection cancelled a replacement native request: "+route);
+   proof.paddingFailure=false;proof.alive=true;check(!f.session.healthy(),"cancelled host revived after native status recovery: "+route);
+  }
+  Libbox.reset();Fixture f=new Fixture(false,"local",true,64);RouterTorProofRequest proof=new RouterTorProofRequest(f.server,"session-owned","");Libbox.next=proof;proof.paddingResponse=paddingStatus(System.currentTimeMillis(),64).toString();f.session.prove();
+  LayeredVpnService service=new LayeredVpnService();android.os.ParcelFileDescriptor tun=new android.os.ParcelFileDescriptor();field("torOwner").setBoolean(service,true);field("commandServer").set(service,f.server);field("torSession").set(service,f.session);field("tunDescriptor").set(service,tun);field("state").set(service,"UP");
+  proof.pendingClose=true;rejected(()->close(service));check(!f.session.healthy()&&Libbox.checkedCloses==0&&!tun.closed&&field("torSession").get(service)==f.session,"unjoined Local padding released native Box or TUN");
+  proof.pendingClose=false;close(service);check(proof.closes.get()==2&&Libbox.checkedCloses==1&&tun.closed,"Local padding drain did not retry its captured owner before Box/TUN");service.onDestroy();
  }
  static void responses()throws Exception{
   for(String field:new String[]{"session","false","typed","dns-missing","dns-false","dns-typed","private4","private6","loopback","hostname","legacy","mapped","empty","stale","future","extra","missing","oversized"}){
@@ -254,7 +347,7 @@ public final class TorSessionHarness {
    if(changed.equals("live"))check(mtu.activatedTor==f.session,"MTU borrowed another circuit proof");service.onDestroy();AndroidHomeStateStore.emergency=false;
   }
  }
- public static void main(String[] args)throws Exception{try{successes();responses();cancellation();retainedClose();retainedServerLeaseClose();retainedMeasurementsBeforeLease();cleanupPhysicalAuthority();physicalNetwork();retainedRelayClose();failedCapacityTeardown();configuredOSInterface();automaticMTU();System.out.println("Android captured Tor proof/service lifecycle: PASS "+checks+" checks (native and OS handles doubled)");}catch(Throwable failure){failure.printStackTrace();System.exit(1);}}
+ public static void main(String[] args)throws Exception{try{successes();paddingReceipts();paddingOwnership();responses();cancellation();retainedClose();retainedServerLeaseClose();retainedMeasurementsBeforeLease();cleanupPhysicalAuthority();physicalNetwork();retainedRelayClose();failedCapacityTeardown();configuredOSInterface();automaticMTU();System.out.println("Android captured Tor proof/service lifecycle: PASS "+checks+" checks (native and OS handles doubled)");}catch(Throwable failure){failure.printStackTrace();System.exit(1);}}
 }'''
 
 
@@ -265,7 +358,7 @@ def main():
         folder=Path(directory)
         for name,source in SOURCES.items():
             path=folder/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_text(source)
-        for name in ('AndroidTorSession','AndroidNumericAddress','LayeredVpnService'):
+        for name in ('AndroidTorSession','AndroidTorPaddingReceipt','AndroidNumericAddress','LayeredVpnService'):
             shutil.copyfile(JAVA/(name+'.java'),folder/'com/eabusham/routervpn'/(name+'.java'))
         (folder/'com/eabusham/routervpn/TorSessionHarness.java').write_text(HARNESS)
         sources=list(map(str,folder.rglob('*.java')));classes=folder/'classes'
@@ -273,7 +366,20 @@ def main():
         run_args=['java','-cp',os.pathsep.join((str(classes),str(jar))),'com.eabusham.routervpn.TorSessionHarness']
         subprocess.run(compile_args,check=True,timeout=45);subprocess.run(run_args,check=True,timeout=20)
         controls=[('AndroidTorSession.java','''            if (cancelled || !current() || !captured.healthy()) throw unavailable();
-            result = response;''','''            result = response;''','DNS completion owner check'),
+            padding.accept(captured.paddingStatusJSON(),System.currentTimeMillis());
+            result = response;''','''            padding.accept(captured.paddingStatusJSON(),System.currentTimeMillis());
+            result = response;''','DNS completion owner check'),
+                  ('AndroidTorPaddingReceipt.java','||!sourceSHA.equals(receipt.get("source_sha256"))','','compiled padding source binding'),
+                  ('AndroidTorPaddingReceipt.java','||expires<=now','','padding expiry'),
+                  ('AndroidTorPaddingReceipt.java','generation!=previous.generation||','false||','stable padding lease generation'),
+                  ('AndroidTorPaddingReceipt.java','if(!text.isEmpty())throw unavailable();','if(false)throw unavailable();','Off rejects an unrequested padding owner'),
+                  ('AndroidTorSession.java','''            padding.accept(captured.paddingStatusJSON(),System.currentTimeMillis());
+            result = response;''','''            result = response;''','post-DNS padding lease admission'),
+                  ('AndroidTorSession.java','padding.accept(captured.paddingStatusJSON(), System.currentTimeMillis());','','cached health padding lease validation'),
+                  ('AndroidTorSession.java','''        captured.cancel();
+        return false;''','''        return false;''','receipt rejection revokes captured native data'),
+                  ('AndroidTorSession.java','''            rejectCaptured(captured);
+            throw invalid;''','''            throw invalid;''','initial proof failure revokes captured native data'),
                   ('LayeredVpnService.java','Libbox.routerStrategyCloseService(commandServer);','commandServer.closeService();','checked native close'),
                   ('LayeredVpnService.java','capturedTor.close();','capturedTor.cancel();','Tor Server lease acknowledgement before native close'),
                   ('LayeredVpnService.java','captured.bindSocket(borrowed.getFileDescriptor());','','captured physical network binding'),

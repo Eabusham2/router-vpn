@@ -15,10 +15,12 @@ struct IOSProfileSettingsView: View {
     @State private var mtuPolicy = "auto"
     @State private var manualMTU = ""
     @State private var daitaEnabled = false
+    @State private var torPaddingRate = "192"
     @State private var jumboTUN = false
     @State private var startupMode = "smart-auto"
     @State private var autoConnect = false
     @State private var loadedProfile: RouterProfile?
+    @State private var loadedTorEntry: Data?
     @State private var status = ""
     @State private var showingConnectionProfiles = false
 
@@ -52,6 +54,12 @@ struct IOSProfileSettingsView: View {
                         if torNode {
                             Toggle("Jumbo virtual interface (9000)", isOn: $jumboTUN)
                             Text("Tor carries TCP streams through this virtual interface; 9000 is not a measured Internet packet limit. Jumbo disables Auto MTU and Retest. Fixed MTU must also be 9000, and the captured entry must be compatible.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Toggle("Bounded outgoing Tor padding", isOn: $daitaEnabled)
+                            if daitaEnabled {
+                                TextField("Padding rate 32–192 kbps", text: $torPaddingRate).keyboardType(.numberPad)
+                            }
+                            Text("Local sends padding from this device; Server sends it from the selected entry server. The captured circuit must have fresh path and selected-DNS proof before padding starts. Off preserves the saved rate. The rate describes outgoing Tor link cells, not delivered traffic or both directions.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Button("Save device policy for next connection") { saveExternalDevicePolicy() }
@@ -149,6 +157,7 @@ struct IOSProfileSettingsView: View {
 
     private func load() {
         loadedProfile = nil
+        loadedTorEntry = nil
         guard let p = selectedProfile() else { status = "Pair/import and select a Router VPN node first. Connection profiles remain available above."; return }
         guard ["router-vpn", "external"].contains(p.normalizedNodeKind) else { status = "This node has no supported settings."; return }
         do { startupMode = try IOSStartupPolicy.mode(p.startupMode) }
@@ -163,6 +172,12 @@ struct IOSProfileSettingsView: View {
             homeLANAccess = policy.homeLANAccess; killSwitchPolicy = policy.killSwitchPolicy
             ipv6Mode = policy.ipv6Mode; mtuPolicy = policy.mtuPolicy; manualMTU = policy.manualMTU
             jumboTUN = policy.jumboTUN
+            daitaEnabled = policy.torPaddingEnabled; torPaddingRate = policy.torPaddingRate
+            if ["tor", "tor-bridge"].contains(p.external?.protocolName ?? ""), p.multihopEnabled == true {
+                // The entry may live in its own private node bundle. Capture
+                // the same complete source used by startup, including assets.
+                if let bundle = model.bundle { loadedTorEntry = try? model.externalTorEntryData(source: bundle) }
+            }
             return
         }
         homeLANAccess = p.homeLANAccess ?? true
@@ -188,16 +203,25 @@ struct IOSProfileSettingsView: View {
               bundle.routerProfiles.filter({ $0.id == selected.id }).count == 1 else {
             status = "The selected node changed. Reopen Settings before saving device policy."; return
         }
+        if ["tor", "tor-bridge"].contains(selected.external?.protocolName ?? ""), selected.multihopEnabled == true {
+            guard let loadedTorEntry, let currentEntry = try? model.externalTorEntryData(source: bundle), currentEntry == loadedTorEntry else {
+                status = "The Tor entry changed. Reopen Settings before saving device policy."; return
+            }
+        }
         var draft = IOSDevicePolicySettings(profile: selected)
         draft.homeLANAccess = homeLANAccess; draft.killSwitchPolicy = killSwitchPolicy
         draft.ipv6Mode = ipv6Mode; draft.mtuPolicy = mtuPolicy; draft.manualMTU = manualMTU
         draft.jumboTUN = jumboTUN
+        draft.torPaddingEnabled = daitaEnabled; draft.torPaddingRate = torPaddingRate
         do {
             let prepared = try draft.applying(to: selected)
             try IOSExternalExecution.validateDeviceDraft(prepared)
             bundle.routerProfiles[index] = prepared
             try model.importBundle(JSONEncoder().encode(bundle))
-            loadedProfile = selectedProfile()
+            // A private entry bundle can also contain this exit. Refresh the
+            // accepted transaction's full capture so a second Save remains
+            // valid without adopting later edits made outside this form.
+            load()
             status = "Device policy saved for the next connection. The native path must still prove its DNS, entry and exit."
         } catch { status = "Device policy rejected: \(error.localizedDescription)" }
     }

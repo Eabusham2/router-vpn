@@ -8,6 +8,7 @@ Set ROUTERVPN_ANDROID_TOR_GRAPHS to an empty directory for the native parser gat
 """
 from pathlib import Path
 import importlib.util
+import json
 import os
 import shutil
 import subprocess
@@ -393,10 +394,42 @@ HARNESS = prefix + r'''
    check(Files.exists(folder.resolve(AndroidKillSwitchPolicy.SESSION_MARKER))==enabled&&source.equals(AndroidStandardExitStore.snapshot(saved)),"Tor protection staging changed saved policy or explicit Off");
   }
  }
+ static void paddingPaths(Path dir,String certificate)throws Exception{
+  int padded=0;
+  for(String mode:new String[]{"direct","wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg","ss-v2ray","split","max","naive-h2","naive-h3"})for(String kind:new String[]{"tor","obfs4"})for(int rate:new int[]{0,32,64,192}){
+   Path app=Files.createTempDirectory(dir,"padding-");JSONObject predecessor=mode.equals("direct")?null:entry(mode,"off",certificate);File file=predecessor==null?null:save(dir,predecessor);
+   AndroidStandardExitStore.Entry saved=tor(kind,"doh");saved.torPolicy.put("daita_enabled",true).put("daita_rate_kbps",rate);String snapshot=AndroidStandardExitStore.snapshot(saved);byte[] entryBefore=file==null?null:Files.readAllBytes(file.toPath());
+   NativeSingBoxController.SessionInfo info=AndroidTorProfile.prepare(new Context(app.toFile()),file,saved,mode);Path staged=app.resolve("layered-sessions").resolve(info.sessionId);
+   String raw=Files.readString(staged.resolve("sing-box.json")),metadata=Files.readString(staged.resolve(AndroidTorProfile.SESSION_FILE));JSONObject graph=new JSONObject(raw),meta=AndroidTorProfile.session(raw,metadata,info.sessionId,info.modeId),profile=meta.getJSONObject("tor_profile");
+   check(profile.getBoolean("daita_enabled")&&profile.getInt("daita_rate_kbps")==rate,"Local Tor padding changed its saved/default rate");
+   JSONObject source=byTag(graph,AndroidTorProfile.OUTBOUND).getJSONObject("padding_source");
+   check(same(new JSONObject(source.getString("profile")),profile),"native padding source lost the captured selected Tor policy");
+   String expected=io.nekohasekai.libbox.Libbox.routerTorPaddingSource(raw,profile.toString(),info.sessionId);
+   check(expected.matches("[0-9a-f]{64}")&&expected.equals(io.nekohasekai.libbox.Libbox.routerTorPaddingSource(new JSONObject(raw).toString(),profile.toString(),info.sessionId)),"canonical padding source digest differs across formatting");
+   check(snapshot.equals(AndroidStandardExitStore.snapshot(saved))&&(file==null||Arrays.equals(entryBefore,Files.readAllBytes(file.toPath()))),"padding preparation rewrote saved credentials or policy");
+   for(String fault:new String[]{"source-profile","source-entry","lost-source","config","metadata-policy","metadata-session"}){
+    JSONObject changed=new JSONObject(raw),owner=new JSONObject(metadata),outbound=byTag(changed,AndroidTorProfile.OUTBOUND);JSONObject captured=outbound.getJSONObject("padding_source");
+    if(fault.equals("source-profile"))captured.put("profile",new JSONObject(captured.getString("profile")).put("daita_rate_kbps",rate==32?64:32).toString());
+    if(fault.equals("source-entry"))captured.put("predecessor_config","{}");
+    if(fault.equals("lost-source"))outbound.remove("padding_source");
+    if(fault.equals("config"))changed.getJSONObject("route").put("auto_detect_interface",false);
+    if(fault.equals("metadata-policy"))owner.getJSONObject("tor_profile").put("daita_enabled",false);
+    if(fault.equals("metadata-session"))outbound.put("session_id","different-padding-owner");
+    owner.put("config_sha256",AndroidTorProfile.digest(changed.toString().getBytes(StandardCharsets.UTF_8)));
+    boolean rejected=false;try{AndroidTorProfile.session(changed.toString(),owner.toString(),info.sessionId,info.modeId);}catch(Exception expectedFailure){rejected=true;}
+    check(rejected,"recomputed outer hash admitted changed padding source: "+mode+"/"+fault);
+   }
+   String output=System.getenv("ROUTERVPN_ANDROID_LOCAL_PADDING_GRAPHS");if(output!=null&&!output.isEmpty())Files.writeString(Path.of(output).resolve(String.format("padding-%03d.json",padded)),raw,StandardOpenOption.CREATE_NEW);
+   padded++;
+  }
+  check(padded==160,"Local padding direct/private entry and rate matrix incomplete");
+  System.out.println("Android Local Tor padding compiler: PASS ("+padded+" shipping Java/Go captures; "+checks+" source/policy/session checks; actual production admission)");
+ }
  public static void main(String[] args)throws Exception{
   Path dir=Path.of(args[0]);fixtures=load(Path.of(System.getenv("ROUTERVPN_MAX_MULTIHOP_FIXTURES")));
   compositeEntry=load(Path.of(System.getenv("ROUTERVPN_COMPOSITE_ENTRY")));compositeExit=load(Path.of(System.getenv("ROUTERVPN_COMPOSITE_EXIT")));
   String certificate=io.nekohasekai.libbox.Libbox.testCertificate("entry.example.test");
+  if(args.length>1&&args[1].equals("padding-only")){paddingPaths(dir,certificate);return;}
   if(args.length>1&&args[1].equals("capacity-only")){jumboPaths(dir,certificate);return;}
   for(String kind:KINDS){
    verify(dir,"direct","off",kind,"tcp",certificate);
@@ -412,6 +445,9 @@ HARNESS = prefix + r'''
 GO = P.GO.replace('"router-vpn/internal/mobileperf"', '"router-vpn/internal/mobileperf";"router-vpn/internal/mobiletor";privateparse "router-vpn/internal/nativeopenvpn"', 1)
 GO = GO.replace('case "xray-policy":', '''case "private-node-json":err=privateparse.ValidatePrivateNodeJSON(r.Config);value="checked"
  case "tor-validate":err=mobiletor.ValidateProfile(r.Config);value="validated"
+ case "tor-padding-source":
+  var input struct{Profile string;Session string};err=json.Unmarshal([]byte(r.Config),&input)
+  if err==nil{value,err=mobiletor.LocalPaddingSourceSHA256(r.Policy,input.Profile,input.Session)}
  case "tor-external-profile-captured":
   var input struct{Profile string;Session string;Entry string};err=json.Unmarshal([]byte(r.Config),&input)
   if err==nil{value,err=mobiletor.CompileProfileWithExternalPredecessor(input.Profile,input.Session,r.Policy,input.Entry)}
@@ -438,6 +474,12 @@ final class AndroidOpenVPN {static void validateResponseProbes(AndroidStandardEx
  static JSONObject endpoint(AndroidStandardExitStore.Entry e,String value){throw new AssertionError("Tor must not invoke OpenVPN");}
 }
 '''
+
+
+def build_padding_policy(go_dir, native):
+    """Exercise complete enabled captures through the production compiler."""
+    subprocess.run(["go", "build", "-o", str(native), str(go_dir / "main.go")],
+                   cwd=ROOT, check=True, timeout=90)
 
 
 def run():
@@ -478,6 +520,7 @@ def run():
   return call("tor-profile",new JSONObject().put("Profile",profile).put("Session",session).toString(),predecessor);
  }
  public static void routerValidateTorProfile(String profile)throws Exception{call("tor-validate",profile,"");}
+ public static String routerTorPaddingSource(String config,String profile,String session)throws Exception{return call("tor-padding-source",new JSONObject().put("Profile",profile).put("Session",session).toString(),config);}
  public static String routerCompileTorProfileWithPredecessor(String profile,String session,String predecessor,String entry)throws Exception{
   torCalls++;lastTorPredecessor=predecessor;
   return call("tor-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);
@@ -524,14 +567,20 @@ def run():
                     raise AssertionError("Capacity mutation was not rejected: "+label+"\n"+result.stderr)
                 target.write_text(original)
             print("Android Tor capacity negative controls: 2 rejected by real compiler/host preparation")
+            subprocess.run(["javac","--release","17","-encoding","UTF-8","-proc:none","-cp",str(work/"classes")+os.pathsep+str(jar),"-d",str(work/"classes"),str(target)],check=True,timeout=45)
+        if 'if(args.length>1&&args[1].equals("padding-only"))' in HARNESS:
+            enabled = work / "padding-policy"
+            build_padding_policy(go_dir, enabled)
+            subprocess.run(run_args+["padding-only"],env=dict(os.environ,ROUTERVPN_GO_POLICY_TEST=str(enabled)),check=True,timeout=180)
 
 
 def main():
-    output = os.environ.get("ROUTERVPN_ANDROID_TOR_GRAPHS")
-    if output:
-        folder = Path(output)
-        if folder.is_symlink() or not folder.is_dir() or any(folder.iterdir()):
-            raise RuntimeError("Tor parser fixtures require an existing empty owned directory")
+    for variable in ("ROUTERVPN_ANDROID_TOR_GRAPHS", "ROUTERVPN_ANDROID_LOCAL_PADDING_GRAPHS"):
+        output = os.environ.get(variable)
+        if output:
+            folder = Path(output)
+            if folder.is_symlink() or not folder.is_dir() or any(folder.iterdir()):
+                raise RuntimeError("Tor parser fixtures require an existing empty owned directory")
     P.run = run
     C.main()
 

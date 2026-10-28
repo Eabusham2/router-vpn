@@ -504,6 +504,9 @@ final class RouterVPNLibboxEngine {
             ownershipLock.unlock(); completion(error("Tor proof has no captured native session")); return
         }
         let generation = ownershipGeneration
+        let padding: RouterVPNTorPaddingReceipt.Policy
+        do { padding = try .capture(config: configContent, profile: profile, sessionID: sessionID, execution: execution) }
+        catch { ownershipLock.unlock(); completion(error); return }
         var failure: NSError?
         let request: LibboxRouterTorProofRequest?
         if let predecessorProfile {
@@ -513,7 +516,7 @@ final class RouterVPNLibboxEngine {
         }
         guard let request, failure == nil else { ownershipLock.unlock(); completion(failure ?? error("Tor proof could not capture its native owner")); return }
         let delivery = TorProofDelivery(owner: self, server: owned, generation: generation, sessionID: sessionID,
-            config: configContent, profile: profile, predecessorProfile: predecessorProfile, execution: execution, request: request, completion: completion)
+            config: configContent, profile: profile, predecessorProfile: predecessorProfile, execution: execution, padding: padding, request: request, completion: completion)
         torProofDelivery = delivery
         ownershipLock.unlock()
         DispatchQueue.global(qos: .userInitiated).async { delivery.run() }
@@ -537,17 +540,20 @@ final class RouterVPNLibboxEngine {
         private let profile: String
         private let predecessorProfile: String?
         private let execution: String
+        private let padding: RouterVPNTorPaddingReceipt.Policy
         private let lock = NSLock()
+        private var paddingReceipt: RouterVPNTorPaddingReceipt?
         private var callback: ((Error?) -> Void)?
         private var started = false
         private var cancelled = false
         private var proved = false
         init(owner: RouterVPNLibboxEngine, server: LibboxCommandServer, generation: UUID, sessionID: String,
-             config: String, profile: String, predecessorProfile: String?, execution: String, request: LibboxRouterTorProofRequest, completion: @escaping (Error?) -> Void) {
+             config: String, profile: String, predecessorProfile: String?, execution: String, padding: RouterVPNTorPaddingReceipt.Policy, request: LibboxRouterTorProofRequest, completion: @escaping (Error?) -> Void) {
             self.owner = owner; self.server = server; self.generation = generation; self.sessionID = sessionID
             self.request = request; self.callback = completion
             self.config = config; self.profile = profile
             self.predecessorProfile = predecessorProfile; self.execution = execution
+            self.padding = padding
         }
         private func current(_ owner: RouterVPNLibboxEngine) -> Bool {
             owner.ownershipLock.lock(); defer { owner.ownershipLock.unlock() }
@@ -572,7 +578,7 @@ final class RouterVPNLibboxEngine {
             try request.close()
         }
         func provedExecution() -> String? {
-            guard let owner, current(owner), request.healthy() else { return nil }
+            guard let owner, current(owner), healthy() else { return nil }
             lock.lock(); let valid = proved && !cancelled; lock.unlock()
             return valid ? execution : nil
         }
@@ -631,7 +637,7 @@ final class RouterVPNLibboxEngine {
                 let dnsProved = LibboxRouterStrategyDNSProof(server, &dnsFailure)
                 if let dnsFailure { throw dnsFailure }
                 guard dnsProved, current(owner) else { throw retired() }
-                guard request.healthy() else { throw retired() }
+                guard healthy() else { throw retired() }
                 let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
                 timer.schedule(deadline: .now() + 1, repeating: 1)
                 timer.setEventHandler { [self] in checkHealth() }
@@ -647,20 +653,42 @@ final class RouterVPNLibboxEngine {
             } catch { finish(error) }
         }
         private func checkHealth() {
-            guard let owner, current(owner), !request.healthy(), current(owner) else { return }
+            guard let owner, current(owner), !healthy(), current(owner) else { return }
             owner.tunnel?.nativeLibboxFailure(owner, error: retired())
         }
+        private func healthy() -> Bool {
+            guard let owner, current(owner), request.healthy() else { return false }
+            // This native API reads memory only. Serialize its snapshot with
+            // prior host observations so concurrent measurement/health callers
+            // cannot compare receipts in reverse order or renew a cached one.
+            lock.lock()
+            var valid = !cancelled
+            var receiptFailed = false
+            if valid {
+                var failure: NSError?
+                let text = request.paddingStatusJSON(&failure)
+                do {
+                    if let failure { throw failure }
+                    paddingReceipt = try padding.validate(text, previous: paddingReceipt, now: Date())
+                } catch { valid = false; receiptFailed = true }
+            }
+            lock.unlock()
+            // A rejected receipt permanently revokes this exact request. A
+            // later apparently valid snapshot cannot revive its old lease.
+            if receiptFailed { cancel() }
+            return valid && current(owner) && request.healthy()
+        }
         func makeHopMeasurement(exitID: String) throws -> LibboxRouterHopMeasurement {
-            guard let owner, current(owner), request.healthy() else { throw retired() }
+            guard let owner, current(owner), healthy() else { throw retired() }
             var failure: NSError?
             guard let probe = LibboxRouterTorCreateHopMeasurement(server, request, exitID, &failure), failure == nil else {
                 throw failure ?? retired()
             }
-            guard current(owner), request.healthy() else { try probe.close(); throw retired() }
+            guard current(owner), healthy() else { try probe.close(); throw retired() }
             return probe
         }
         func makeDNSMeasurement(exitID: String) throws -> LibboxRouterDNSMeasurement {
-            guard let owner, current(owner), request.healthy() else { throw retired() }
+            guard let owner, current(owner), healthy() else { throw retired() }
             var failure: NSError?
             guard let probe = LibboxRouterTorCreateDNSMeasurement(server, request, exitID, &failure), failure == nil else {
                 throw failure ?? retired()
@@ -668,10 +696,10 @@ final class RouterVPNLibboxEngine {
             return probe
         }
         func activateMTU() throws {
-            guard let owner, current(owner), request.healthy() else { throw retired() }
+            guard let owner, current(owner), healthy() else { throw retired() }
             let delivery = MTUFailureDelivery(owner: owner, generation: generation)
             try owner.platform.mtu.activateTor(server: server, proof: request, config: config, profile: profile) { message in delivery.fail(message) }
-            guard current(owner), request.healthy() else { owner.platform.mtu.stop(); throw retired() }
+            guard current(owner), healthy() else { owner.platform.mtu.stop(); throw retired() }
         }
         private func retired() -> NSError {
             NSError(domain: "RouterVPN.Tor", code: 2, userInfo: [NSLocalizedDescriptionKey: "Tor exit proof is invalid or belongs to a retired session."])

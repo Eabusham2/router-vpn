@@ -28,7 +28,7 @@ func localPaddingSourceFixture(t *testing.T, family string) *LocalPaddingSource 
 	return source
 }
 
-func TestLocalPaddingSourceBindsCompleteCompiledPathWithoutOpeningAdmission(t *testing.T) {
+func TestLocalPaddingSourceBindsCompletePublicCompilationAndNativeIdentity(t *testing.T) {
 	for _, family := range []string{"direct", "router", "wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"} {
 		t.Run(family, func(t *testing.T) {
 			source := localPaddingSourceFixture(t, family)
@@ -54,9 +54,17 @@ func TestLocalPaddingSourceBindsCompleteCompiledPathWithoutOpeningAdmission(t *t
 			if sha, err := LocalPaddingSourceSHA256(string(formatted), source.Profile, "padding-source-session"); err != nil || sha != capture.SourceSHA256() {
 				t.Fatal("formatting changed canonical native source authority", err)
 			}
-			// This source foundation cannot enable an incomplete shipping host.
-			if config, err := CompileProfileWithPredecessor(source.Profile, "padding-source-session", source.PredecessorConfig, source.PredecessorProfile); err == nil || config != "" {
-				t.Fatal("source reconstruction prematurely opened Local padding admission")
+			var config string
+			if family == "direct" || family == "router" {
+				config, err = CompileProfileWithPredecessor(source.Profile, "padding-source-session", source.PredecessorConfig, source.PredecessorProfile)
+			} else {
+				config, err = CompileProfileWithExternalPredecessor(source.Profile, "padding-source-session", source.PredecessorConfig, source.PredecessorProfile)
+			}
+			if err != nil || config != capture.Config() {
+				t.Fatal("public native compilation differs from its independently captured padding source", err)
+			}
+			if raw, err := CompileProfile(source.Profile, "padding-source-session", source.PredecessorConfig); err == nil || raw != "" {
+				t.Fatal("legacy compilation without complete source acquired Local padding authority")
 			}
 		})
 	}

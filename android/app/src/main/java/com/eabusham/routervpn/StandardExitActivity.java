@@ -234,10 +234,14 @@ public final class StandardExitActivity extends Activity {
         EditText mtu=field("Manual interface MTU, 1280–9000 (blank uses automatic)",false);mtu.setInputType(InputType.TYPE_CLASS_NUMBER);if("manual".equals(policy.optString("mtu_policy"))||"fixed".equals(policy.optString("mtu_policy")))mtu.setText(Integer.toString(policy.optInt("manual_mtu",0)));form.addView(mtu);
         CheckBox jumbo=new CheckBox(this);jumbo.setText("Jumbo virtual interface (9000)");jumbo.setChecked(policy.optBoolean("jumbo_tun",false));form.addView(jumbo);
         form.addView(text("Jumbo sets the VPN interface to 9000 while Tor's TCP transport still segments traffic. It disables Auto MTU and Retest; a Fixed MTU must also be 9000.",13,false));
+        CheckBox padding=new CheckBox(this);padding.setText("Outgoing Tor padding");padding.setChecked(policy.optBoolean("daita_enabled",false));form.addView(padding);
+        EditText paddingRate=field("Padding rate, 32–192 kbps (blank uses 192 when On)",false);paddingRate.setInputType(InputType.TYPE_CLASS_NUMBER);
+        int savedRate=policy.optInt("daita_rate_kbps",0);if(savedRate!=0)paddingRate.setText(Integer.toString(savedRate));form.addView(paddingRate);
+        form.addView(text("Adds outgoing Tor link cells at the selected bounded rate. It uses the captured Tor path and stops if its path or DNS proof expires.",13,false));
         final ExternalStartupControls startup=new ExternalStartupControls(form,saved);
         final ExternalProtectionControls protection=new ExternalProtectionControls(form,policy);
         final JSONObject initialEditor;
-        try{initialEditor=readTorEditorPolicy(dns,homeDNS,dnsHost,dnsPort,dnsName,dnsPath,ipv6,blockLAN,lan,mtu,jumbo);}
+        try{initialEditor=readTorEditorPolicy(dns,homeDNS,dnsHost,dnsPort,dnsName,dnsPath,ipv6,blockLAN,lan,mtu,jumbo,padding,paddingRate);}
         catch(Exception invalid){toast("The saved Tor settings could not be restored safely.");return;}
         form.addView(text("Home AdGuard uses the paired Router VPN entry you select; leave its address blank to use that entry's saved AdGuard. Direct Tor needs an explicitly selected TCP, DoT, DoH or Rescue resolver. Application traffic stays on Tor. Saved default Tor protection requires Android Always-on VPN and Block connections without VPN.",13,false));
         TextView error=text("",13,false);form.addView(error);ScrollView scroll=new ScrollView(this);scroll.addView(form);
@@ -249,22 +253,24 @@ public final class StandardExitActivity extends Activity {
                 AndroidStandardExitStore.Entry entry=saved==null?new AndroidStandardExitStore.Entry():AndroidStandardExitStore.copy(saved);entry.name=name.getText().toString();entry.protocol=protocol;
                 entry.torBridges.clear();entry.torTransport="";
                 if("tor-bridge".equals(protocol)){entry.torTransport=AndroidTorProfile.TRANSPORTS[transport.getSelectedItemPosition()];String block=bridges.getText().toString();if(block.length()>65536)throw new IllegalArgumentException("Bridge block exceeds its bound.");for(String line:block.split("\\r?\\n")){String value=line.trim();if(!value.isEmpty())entry.torBridges.add(value);}if(entry.torBridges.isEmpty()||entry.torBridges.size()>8)throw new IllegalArgumentException("Enter one to eight bridge lines.");}
-                JSONObject edited=readTorEditorPolicy(dns,homeDNS,dnsHost,dnsPort,dnsName,dnsPath,ipv6,blockLAN,lan,mtu,jumbo);
+                JSONObject edited=readTorEditorPolicy(dns,homeDNS,dnsHost,dnsPort,dnsName,dnsPath,ipv6,blockLAN,lan,mtu,jumbo,padding,paddingRate);
                 entry.torPolicy=AndroidTorProfile.editedPolicy(saved,initialEditor,edited);
                 entry.torPolicy=protection.apply(entry.torPolicy);
                 startup.apply(entry);
                 if(saved==null)exitStore.save(entry);else exitStore.saveIfUnchanged(entry,storedSource);refresh();toast("Saved "+entry.name);dialog.dismiss();
-            }catch(Exception invalid){error.setText("Save failed. Check the complete bridge lines, selected DNS endpoint, private LAN ranges and MTU. The saved profile was not changed.");}
+            }catch(Exception invalid){error.setText("Save failed. Check the complete bridge lines, selected DNS endpoint, private LAN ranges, MTU and padding rate. The saved profile was not changed.");}
         }));
         dialog.setOnDismissListener(ignored->bridges.setText(""));dialog.show();
     }
 
     private static JSONObject readTorEditorPolicy(Spinner dns,Spinner homeDNS,EditText host,EditText port,EditText name,EditText path,
-            Spinner ipv6,CheckBox blockLAN,EditText lan,EditText mtu,CheckBox jumbo)throws Exception{
+            Spinner ipv6,CheckBox blockLAN,EditText lan,EditText mtu,CheckBox jumbo,CheckBox padding,EditText paddingRate)throws Exception{
         int selectedDNS=dns.getSelectedItemPosition();JSONObject p=new JSONObject().put("dns_mode",selectedDNS==0?"home":selectedDNS==1?"rescue":"custom");
         if(selectedDNS!=1){String protocol=selectedDNS==0?new String[]{"udp","tcp","dot","doh","doh3"}[homeDNS.getSelectedItemPosition()]:new String[]{"","","tcp","dot","doh"}[selectedDNS];p.put("dns_protocol",protocol).put("dns_host",host.getText().toString().trim());String portText=port.getText().toString().trim();p.put("dns_port",portText.isEmpty()?0:Integer.parseInt(portText));if("dot".equals(protocol)||"doh".equals(protocol)||"doh3".equals(protocol))p.put("dns_server_name",name.getText().toString().trim());if("doh".equals(protocol)||"doh3".equals(protocol))p.put("dns_path",path.getText().toString().trim());}
         p.put("ipv6_mode",new String[]{"off","auto","on"}[ipv6.getSelectedItemPosition()]).put("home_lan_access",!blockLAN.isChecked()).put("home_lan_cidrs",new JSONArray(csv(lan.getText().toString())));
-        String mtuText=mtu.getText().toString().trim();p.put("mtu_policy",mtuText.isEmpty()?"auto":"manual");if(!mtuText.isEmpty())p.put("manual_mtu",Integer.parseInt(mtuText));p.put("jumbo_tun",jumbo.isChecked());return p;
+        String mtuText=mtu.getText().toString().trim();p.put("mtu_policy",mtuText.isEmpty()?"auto":"manual");if(!mtuText.isEmpty())p.put("manual_mtu",Integer.parseInt(mtuText));p.put("jumbo_tun",jumbo.isChecked());
+        String rateText=paddingRate.getText().toString().trim();int rate=rateText.isEmpty()?0:Integer.parseInt(rateText);if(rate!=0&&(rate<32||rate>192))throw new IllegalArgumentException("Choose a padding rate from 32 to 192 kbps.");
+        p.put("daita_enabled",padding.isChecked()).put("daita_rate_kbps",rate);return p;
     }
 
     private Spinner choice(String[] values){Spinner spinner=new Spinner(this);ArrayAdapter<String> adapter=new ArrayAdapter<>(this,android.R.layout.simple_spinner_item,values);adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);spinner.setAdapter(adapter);return spinner;}

@@ -18,7 +18,11 @@ func TestRouterTorAndroidGeneratedGraphs(t *testing.T) {
 	if err != nil || len(entries) != 738 {
 		t.Fatalf("exact Android Tor matrix unavailable: %v (%d files)", err, len(entries))
 	}
-	if err = RouterTorSetStateDirectory(filepath.Join(t.TempDir(), "tor-state")); err != nil {
+	state := os.Getenv("ROUTERVPN_ANDROID_TOR_STATE")
+	if state == "" {
+		state = filepath.Join(t.TempDir(), "tor-state")
+	}
+	if err = RouterTorSetStateDirectory(state); err != nil {
 		t.Fatal(err)
 	}
 	for _, entry := range entries {

@@ -214,6 +214,7 @@ public final class TorFormHarness {
  static Spinner spinner(AlertDialog dialog,String first){for(View view:views(dialog.view))if(view instanceof Spinner&&first.equals(((Spinner)view).getAdapter().getItem(0)))return (Spinner)view;throw new AssertionError("Missing choice: "+first);}
  static CheckBox lan(AlertDialog dialog){for(View view:views(dialog.view))if(view instanceof CheckBox)return (CheckBox)view;throw new AssertionError("Missing LAN policy");}
  static CheckBox jumbo(AlertDialog dialog){for(View view:views(dialog.view))if(view instanceof CheckBox&&((CheckBox)view).getText().toString().equals("Jumbo virtual interface (9000)"))return (CheckBox)view;throw new AssertionError("Missing Tor Jumbo policy");}
+ static CheckBox padding(AlertDialog dialog){for(View view:views(dialog.view))if(view instanceof CheckBox&&((CheckBox)view).getText().toString().equals("Outgoing Tor padding"))return (CheckBox)view;throw new AssertionError("Missing Tor outgoing padding policy");}
  static String displayed(View root){StringBuilder result=new StringBuilder();for(View view:views(root))if(view instanceof TextView)result.append(((TextView)view).getText()).append('\n');return result.toString();}
  static StandardExitActivity activity(Path directory,Bundle state)throws Exception{Context.nextFiles=directory.toFile();Files.createDirectories(directory);StandardExitActivity result=new StandardExitActivity();result.onCreate(state);return result;}
  static AndroidStandardExitStore store(StandardExitActivity activity)throws Exception{return (AndroidStandardExitStore)get(activity,"exitStore");}
@@ -224,7 +225,7 @@ public final class TorFormHarness {
    boolean rejected=false;try{io.nekohasekai.libbox.Libbox.routerCompileTorProfile(profile.toString(),"form-roundtrip","");}catch(Exception expected){rejected=true;}
    check(rejected,"unresolved Home draft silently compiled with another resolver");return profile.toString();
   }
-  return io.nekohasekai.libbox.Libbox.routerCompileTorProfile(profile.toString(),"form-roundtrip","");
+  return io.nekohasekai.libbox.Libbox.routerCompileTorProfileWithPredecessor(profile.toString(),"form-roundtrip","","");
  }
  static boolean same(String a,String b)throws Exception{return io.nekohasekai.libbox.Libbox.testSameJSON(a,b);}
  static AlertDialog form(StandardExitActivity activity,AndroidStandardExitStore.Entry entry)throws Exception{invoke(activity,"showTorForm",entry==null?"tor":entry.protocol,entry);return AlertDialog.last;}
@@ -297,6 +298,58 @@ public final class TorFormHarness {
    dialog=form(activity,renamed);jumbo(dialog).setChecked(false);dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
    check(!dialog.showing,"valid Tor Jumbo disable rejected");AndroidStandardExitStore.Entry disabled=store(activity).get(selected.id);expected.put("jumbo_tun",false);check(same(expected.toString(),disabled.torPolicy.toString()),"disabling Jumbo changed its captured MTU preference");compiled(disabled);
   }
+ }
+ static final String PADDING_RATE="Padding rate, 32–192 kbps (blank uses 192 when On)";
+ static void paddingPolicyEdits()throws Exception{
+  for(String kind:new String[]{"tor","obfs4"})for(Boolean enabled:new Boolean[]{null,false,true})for(Integer rate:new Integer[]{null,0,32,64,192}){
+   StandardExitActivity activity=activity(Files.createTempDirectory(root,"padding-form-"),null);AndroidStandardExitStore.Entry selected=tor(kind,"doh");
+   if(enabled!=null)selected.torPolicy.put("daita_enabled",enabled);if(rate!=null)selected.torPolicy.put("daita_rate_kbps",rate);store(activity).save(selected);String original=AndroidStandardExitStore.snapshot(selected);
+   AlertDialog dialog=form(activity,selected);check(padding(dialog).isChecked()==Boolean.TRUE.equals(enabled),"Tor padding editor changed the captured enable choice");
+   check(field(dialog,PADDING_RATE).getText().toString().equals(rate==null||rate==0?"":rate.toString()),"Tor padding editor changed selected or dormant rate");
+   field(dialog,"Display name").setText("Renamed outgoing-padding choice");dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+   AndroidStandardExitStore.Entry renamed=store(activity).get(selected.id);check(!dialog.showing&&same(selected.torPolicy.toString(),renamed.torPolicy.toString()),"name-only edit rewrote absent/default/dormant Tor padding");
+   dialog=form(activity,renamed);padding(dialog).setChecked(!Boolean.TRUE.equals(enabled));dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+   AndroidStandardExitStore.Entry toggled=store(activity).get(selected.id);JSONObject expected=new JSONObject(selected.torPolicy.toString()).put("daita_enabled",!Boolean.TRUE.equals(enabled)).put("daita_rate_kbps",rate==null?0:rate);
+   check(!dialog.showing&&same(expected.toString(),toggled.torPolicy.toString()),"padding toggle changed DNS, MTU, protection or its dormant rate");
+   dialog=form(activity,toggled);int next=rate!=null&&rate==64?32:64;field(dialog,PADDING_RATE).setText(Integer.toString(next));dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+   AndroidStandardExitStore.Entry changed=store(activity).get(selected.id);expected.put("daita_rate_kbps",next);check(!dialog.showing&&same(expected.toString(),changed.torPolicy.toString()),"padding rate edit changed another complete policy group");
+   check(original.equals(AndroidStandardExitStore.snapshot(selected)),"padding form mutated its saved input capture");
+   for(String invalid:new String[]{"31","193","-1","64.5","true","2147483648"}){
+    dialog=form(activity,changed);field(dialog,PADDING_RATE).setText(invalid);dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+    check(dialog.showing&&same(changed.torPolicy.toString(),store(activity).get(selected.id).torPolicy.toString()),"invalid outgoing padding rate replaced saved policy: "+invalid);dialog.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();
+   }
+  }
+ }
+ static void paddingCompiler()throws Exception{
+  int captures=0;
+  for(String kind:new String[]{"tor","obfs4"})for(int rate:new int[]{0,32,64,192}){
+   StandardExitActivity activity=activity(Files.createTempDirectory(root,"padding-compiled-form-"),null);AndroidStandardExitStore.Entry selected=tor(kind,"doh");store(activity).save(selected);
+   AlertDialog dialog=form(activity,selected);padding(dialog).setChecked(true);field(dialog,PADDING_RATE).setText(rate==0?"":Integer.toString(rate));dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+   AndroidStandardExitStore.Entry saved=store(activity).get(selected.id);String raw=compiled(saved);JSONObject profile=AndroidTorProfile.profile(saved),owner=torOwner(new JSONObject(raw));
+   check(!dialog.showing&&same(owner.getJSONObject("padding_source").getString("profile"),profile.toString()),"saved editor choice failed real captured Local padding compilation");
+   check(io.nekohasekai.libbox.Libbox.routerTorPaddingSource(raw,profile.toString(),"form-roundtrip").matches("[0-9a-f]{64}"),"saved editor padding has no independently reconstructed source");captures++;
+  }
+  for(String kind:List.of("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"))for(String torKind:new String[]{"tor","obfs4"})for(int rate:new int[]{0,32,64,192}){
+   Path directory=Files.createTempDirectory(root,"ordinary-padding-");AndroidStandardExitStore.Entry entry=ordinary(kind),exit=tor(torKind,"doh");entry.policy=policy("custom","tcp").put("dns_host","9.9.9.9");exit.torPolicy.put("daita_enabled",true).put("daita_rate_kbps",rate);
+   String before=AndroidStandardExitStore.snapshot(entry),exitBefore=AndroidStandardExitStore.snapshot(exit);NativeSingBoxController.SessionInfo session=AndroidTorProfile.prepareOrdinary(new Context(directory.toFile()),entry,exit,"local");Path folder=directory.resolve("layered-sessions").resolve(session.sessionId);
+   String raw=Files.readString(folder.resolve("sing-box.json")),metadata=Files.readString(folder.resolve(AndroidTorProfile.SESSION_FILE));JSONObject meta=AndroidTorProfile.session(raw,metadata,session.sessionId,session.modeId),graph=new JSONObject(raw),owner=torOwner(graph),source=owner.getJSONObject("padding_source");
+   check(same(source.getString("profile"),meta.getJSONObject("tor_profile").toString())&&same(source.getString("predecessor_profile"),meta.getJSONObject("predecessor_profile").toString()),"ordinary padding replaced captured selected or entry policy");
+   check(source.getString("predecessor_config").equals(owner.getString("external_predecessor_config"))&&meta.getJSONObject("predecessor_profile").getString("node_kind").equals("external"),"ordinary padding source borrowed private Router authority or changed credentials");
+   check(io.nekohasekai.libbox.Libbox.routerTorPaddingSource(raw,meta.getJSONObject("tor_profile").toString(),session.sessionId).matches("[0-9a-f]{64}"),"ordinary padding exact source capture failed");
+   check(before.equals(AndroidStandardExitStore.snapshot(entry))&&exitBefore.equals(AndroidStandardExitStore.snapshot(exit)),"padding capture mutated saved ordinary credentials");
+   for(String fault:new String[]{"padding-policy","padding-entry","padding-config","padding-missing","route"}){
+    JSONObject changed=new JSONObject(raw),changedMeta=new JSONObject(metadata),changedOwner=torOwner(changed),capture=changedOwner.getJSONObject("padding_source");
+    if(fault.equals("padding-policy"))capture.put("profile",new JSONObject(capture.getString("profile")).put("daita_rate_kbps",rate==32?64:32).toString());
+    if(fault.equals("padding-entry"))capture.put("predecessor_profile",new JSONObject(capture.getString("predecessor_profile")).put("id","different-provider").toString());
+    if(fault.equals("padding-config"))capture.put("predecessor_config","{}");if(fault.equals("padding-missing"))changedOwner.remove("padding_source");if(fault.equals("route"))changed.getJSONObject("route").put("final","custom-exit");
+    changedMeta.put("config_sha256",AndroidTorProfile.digest(changed.toString().getBytes(StandardCharsets.UTF_8)));
+    rejectOrdinary(()->AndroidTorProfile.session(changed.toString(),changedMeta.toString(),session.sessionId,session.modeId),"padding source tampering "+kind+"/"+fault);
+   }
+   String output=System.getenv("ROUTERVPN_ANDROID_LOCAL_PADDING_GRAPHS");if(output!=null&&!output.isEmpty())Files.writeString(Path.of(output).resolve(String.format("ordinary-padding-%03d.json",captures)),raw,StandardOpenOption.CREATE_NEW);
+   captures++;
+  }
+  check(captures==72,"padding editor/direct/eight ordinary transport/rate matrix incomplete");
+  System.out.println("Android Local Tor padding form/compiler: PASS ("+captures+" real captured graphs, "+checks+" checks; actual production admission)");
  }
  static void newFormAndRejections()throws Exception{
   StandardExitActivity activity=activity(Files.createTempDirectory(root,"create-"),null);AlertDialog dialog=form(activity,null);
@@ -784,17 +837,18 @@ public final class TorFormHarness {
   }
  }
 
- public static void main(String[] args)throws Exception{root=Path.of(args[0]);if(args.length>1&&args[1].equals("ordinary-tor-only")){ordinaryTorProfiles();return;}roundtrips();independentPolicyEdits();jumboPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();ordinaryTorProfiles();ordinaryTorUI();externalExecutionForm();packetExecutionForms();openVPNExecutionForms();openVPNResponseMaps();openVPNLayerMaps();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();startupSettings();protectionSettings();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
+ public static void main(String[] args)throws Exception{root=Path.of(args[0]);if(args.length>1&&args[1].equals("padding-only")){paddingCompiler();return;}if(args.length>1&&args[1].equals("ordinary-tor-only")){ordinaryTorProfiles();return;}roundtrips();independentPolicyEdits();jumboPolicyEdits();paddingPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();ordinaryTorProfiles();ordinaryTorUI();externalExecutionForm();packetExecutionForms();openVPNExecutionForms();openVPNResponseMaps();openVPNLayerMaps();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();startupSettings();protectionSettings();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
 }
 '''
 
 
 def main():
-    output = os.environ.get("ROUTERVPN_ANDROID_ORDINARY_TOR_GRAPHS")
-    if output:
-        folder = Path(output)
-        if folder.is_symlink() or not folder.is_dir() or any(folder.iterdir()):
-            raise RuntimeError("Ordinary Tor parser fixtures require an existing empty owned directory")
+    for variable in ("ROUTERVPN_ANDROID_ORDINARY_TOR_GRAPHS", "ROUTERVPN_ANDROID_LOCAL_PADDING_GRAPHS"):
+        output = os.environ.get(variable)
+        if output:
+            folder = Path(output)
+            if folder.is_symlink() or not folder.is_dir() or any(folder.iterdir()):
+                raise RuntimeError("Ordinary Tor parser fixtures require an existing empty owned directory")
     jar = Path(os.environ.get("ANDROID_JSON_JAR", "/usr/share/java/com.android.json.jar"))
     if not jar.is_file():
         raise RuntimeError("Android JSON implementation required")
@@ -842,6 +896,7 @@ def main():
                 text = text.replace(" public static String routerCompilePQProfile(", r'''
  public static String routerCompileTorProfile(String profile,String session,String predecessor)throws Exception{return call("tor-profile",new JSONObject().put("Profile",profile).put("Session",session).toString(),predecessor);}
  public static void routerValidateTorProfile(String profile)throws Exception{call("tor-validate",profile,"");}
+ public static String routerTorPaddingSource(String config,String profile,String session)throws Exception{return call("tor-padding-source",new JSONObject().put("Profile",profile).put("Session",session).toString(),config);}
  public static String routerCompileTorProfileWithPredecessor(String profile,String session,String predecessor,String entry)throws Exception{return call("tor-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);}
  public static String routerCompileTorProfileWithExternalPredecessor(String profile,String session,String predecessor,String entry)throws Exception{return call("tor-external-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);}
  public static String routerCompileServerTorProfileWithPredecessor(String profile,String session,String predecessor,String entry)throws Exception{return call("tor-server-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);}
@@ -883,6 +938,14 @@ def main():
         # These controls establish that the Activity/Go checks fail for the
         # original behavior; neither working source nor positive classes change.
         controls = (
+            ("tor-padding-choice", "StandardExitActivity.java",
+             'p.put("daita_enabled",padding.isChecked())',
+             'p.put("daita_enabled",false)',
+             "padding toggle changed DNS, MTU, protection or its dormant rate"),
+            ("tor-padding-rate", "StandardExitActivity.java",
+             '.put("daita_rate_kbps",rate);return p;',
+             '.put("daita_rate_kbps",0);return p;',
+             "padding rate edit changed another complete policy group"),
             ("openvpn-layer-raw", "AndroidOpenVPN.java",
              'Libbox.routerValidateExternalOpenVPNStartLayers(profile.toString(), entry.openVPNResponseProbes.toString(), raw, mode);',
              '// omitted raw layer map validation before JSON conversion',
@@ -963,6 +1026,9 @@ def main():
             if rejected.returncode == 0 or failure not in rejected.stderr:
                 raise AssertionError("Original Tor form defect did not fail its executable check: " + label + "\n" + rejected.stderr)
         print(f"Android Tor form: all {len(controls)} original-source negative controls rejected")
+        enabled=work/"padding-policy"
+        T.build_padding_policy(go_dir,enabled)
+        subprocess.run(["java","-cp",str(work/"classes")+os.pathsep+str(jar),"com.eabusham.routervpn.TorFormHarness",str(data),"padding-only"],env=dict(environment,ROUTERVPN_GO_POLICY_TEST=str(enabled)),check=True,timeout=120)
 
 
 if __name__ == "__main__":

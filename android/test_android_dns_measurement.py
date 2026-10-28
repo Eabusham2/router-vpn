@@ -137,7 +137,7 @@ def main():
   run_args=["java","-cp",os.pathsep.join((str(root/"classes"),str(jar))),"com.eabusham.routervpn.ExternalDNSMeasurementTest"]
   subprocess.run(compile_args,check=True,timeout=45);subprocess.run(run_args,check=True,timeout=30)
   for name,old,new,label in (
-   ("AndroidTorSession.java","dnsOwned = request == proof && healthy();","dnsOwned = true;","Tor late DNS factory"),
+   ("AndroidTorSession.java","dnsOwned = dnsOwned && request == proof && proved && !cancelled && current();","dnsOwned = true;","Tor late DNS factory"),
    ("AndroidExternalSession.java","dnsOwned = request == proof && healthy();","dnsOwned = true;","external late DNS factory"),
    ("LayeredVpnService.java","service.dnsMeasurement!=probe||","","exact retained DNS owner"),
    ("AndroidDNSMeasurementReceipt.java",'!session.equals(text(status,"session_id",128))||',"","DNS session receipt binding"),

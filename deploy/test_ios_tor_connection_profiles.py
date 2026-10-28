@@ -162,11 +162,11 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
  static func replaceLinked(_ p:RouterProfile)throws {try IOSNodeBundleStore.shared.save(bundle(p))}
  static func selectOther(_ model:RouterVPNModel)throws{try model.importBundle(encoded(bundle(profile("obfs4",id:"other-tor"))))}
  static func matrix()throws {
-  for transport in bridgeLines.keys.sorted(){for dns in ["custom","dot","doh","home"]{for mtu in ["auto","default","fixed","jumbo"]{for execution in ["direct","local","server"]{
+  for transport in bridgeLines.keys.sorted(){for dns in ["custom","dot","doh","home"]{for mtu in ["auto","default","fixed","jumbo"]{for execution in ["direct","local","server"]{for cover in [false,true]{
    var p=try profile(transport)
    if dns != "custom"{p.dnsMode=dns;p.dnsProtocol=dns=="dot" ? "tls":dns=="doh" ? "https":"udp";p.dnsHost=dns=="home" ? "192.168.50.133":"9.9.9.9";p.dnsPort=dns=="home" ? 5353:4443;p.dnsServerName="resolver.example.test";p.dnsPath="/saved-query"}
    p.mtuPolicy=mtu=="jumbo" ? "auto":mtu;p.manualMTU=mtu=="fixed" ? 1380:0;p.jumboTUN=mtu=="jumbo"
-   p.daitaEnabled=execution=="server";p.daitaRateKbps=execution=="server" ? 64:192
+   p.daitaEnabled=cover;p.daitaRateKbps=cover ? 64:192
    if dns=="home" || execution != "direct"{graph(&p,execution=="server" ? "server":"local")}
    let model=try reset(p),actions=ProfileActions(model),nodeWrites=IOSNodeBundleStore.shared.writes
    let runtime=try JSONDecoder().decode(ClientBundle.self,from:model.externalRuntimeBundleData(source:model.bundle!,profile:model.selectedNodeProfile!))
@@ -204,7 +204,7 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
    let selected=try encoded(model.bundle!),privateRecords=IOSNodeBundleStore.shared.records
    actions.delete()
    try check("visible Delete only removes saved connection",actions.profiles.isEmpty && encoded(model.bundle!)==selected && IOSNodeBundleStore.shared.records==privateRecords)
-  }}}}
+  }}}}}
  }
  static func legacyAndDefaults()throws {
   for schema in 1...4 {

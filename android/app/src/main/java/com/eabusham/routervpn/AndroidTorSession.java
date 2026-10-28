@@ -24,6 +24,7 @@ final class AndroidTorSession {
     private final String predecessor, network, config, profile, execution;
     private final CommandServer server;
     private final Owner owner;
+    private final AndroidTorPaddingReceipt padding;
     private RouterTorProofRequest request;
     private boolean cancelled, proved, started;
     private String result = "";
@@ -35,6 +36,7 @@ final class AndroidTorSession {
         this.profile = metadata.getJSONObject("tor_profile").toString();
         this.execution = AndroidTorProfile.execution(metadata);
         if (config == null || config.isEmpty() || !externalID.equals(new JSONObject(profile).getString("id"))) throw unavailable();
+        this.padding = new AndroidTorPaddingReceipt(config, profile, sessionID, execution);
         this.predecessor = metadata.has("predecessor_profile") ? metadata.getJSONObject("predecessor_profile").toString() : "";
         this.server = server;
         this.owner = owner;
@@ -58,6 +60,15 @@ final class AndroidTorSession {
             admitted = !cancelled && current();
         }
         if (!admitted) { captured.cancel(); captured.close(); throw unavailable(); }
+        try {
+            proveCaptured(captured, began);
+        } catch (Exception invalid) {
+            rejectCaptured(captured);
+            throw invalid;
+        }
+    }
+
+    private void proveCaptured(RouterTorProofRequest captured, Instant began) throws Exception {
         String response = captured.run();
         if (response == null || response.getBytes(StandardCharsets.UTF_8).length > 4096) throw unavailable();
         JSONObject proof = new JSONObject(response);
@@ -72,59 +83,103 @@ final class AndroidTorSession {
                 || bytes.length == 4 && ((bytes[0] & 255) == 0 || (bytes[0] & 255) >= 224)) throw unavailable();
         Instant checked = Instant.parse(proof.getString("checked_at"));
         if (checked.isBefore(began.minusSeconds(1)) || checked.isAfter(Instant.now().plusSeconds(30))) throw unavailable();
-        synchronized (this) { if (cancelled || !current() || !captured.healthy()) throw unavailable(); }
+        synchronized (this) { if (cancelled || !current() || !captured.healthy()) throw unavailable(); padding.accept(captured.paddingStatusJSON(),System.currentTimeMillis()); }
         // This uncached request uses the exact Box's selected DNS router. The
         // Tor request remains cancellable while the DNS traffic is in flight.
         Libbox.routerStrategyDNSProof(server);
         synchronized (this) {
             if (cancelled || !current() || !captured.healthy()) throw unavailable();
+            padding.accept(captured.paddingStatusJSON(),System.currentTimeMillis());
             result = response;
             proved = true;
         }
     }
 
-    synchronized boolean healthy() { return proved && !cancelled && request != null && current() && request.healthy(); }
-
-    synchronized String result(String session, String external) throws Exception {
-        if (!sessionID.equals(session) || !externalID.equals(external) || !healthy()) throw unavailable();
-        return result;
+    boolean healthy() {
+        final RouterTorProofRequest captured;
+        synchronized (this) {
+            if (!proved || cancelled || request == null) return false;
+            captured = request;
+            try {
+                if (!current() || !captured.healthy()) throw unavailable();
+                // Keep these memory-only native reads serialized so concurrent
+                // health callers cannot adopt a newer receipt before an older one.
+                padding.accept(captured.paddingStatusJSON(), System.currentTimeMillis());
+                return true;
+            } catch (Exception invalid) {
+                cancelled = true;
+                proved = false;
+                result = "";
+            }
+        }
+        // Native data revocation is immediate and outside the session monitor.
+        captured.cancel();
+        return false;
     }
 
-    synchronized String execution(String session, String external) throws Exception {
+    /** Revoke this exact native data owner immediately. Its separate Close
+     * retains and joins workers; cancellation never runs under this monitor. */
+    private void rejectCaptured(RouterTorProofRequest captured) {
+        synchronized (this) {
+            if (request != captured || cancelled) return;
+            cancelled = true;
+            proved = false;
+            result = "";
+        }
+        captured.cancel();
+    }
+
+    private synchronized RouterTorProofRequest provedRequest() throws Exception {
+        if (!proved || cancelled || request == null || !current()) throw unavailable();
+        return request;
+    }
+
+    String result(String session, String external) throws Exception {
+        if (!sessionID.equals(session) || !externalID.equals(external) || !healthy()) throw unavailable();
+        synchronized (this) {
+            provedRequest();
+            return result;
+        }
+    }
+
+    String execution(String session, String external) throws Exception {
         result(session, external);
         return execution;
     }
 
     RouterHopMeasurement newHopMeasurement() throws Exception {
-        final RouterTorProofRequest proof;
-        synchronized (this) { if (!healthy()) throw unavailable(); proof = request; }
+        if (!healthy()) throw unavailable();
+        final RouterTorProofRequest proof = provedRequest();
         RouterHopMeasurement measurement = Libbox.routerTorCreateHopMeasurement(server, proof, externalID);
         if (measurement == null) throw unavailable();
-        final boolean owned;
-        synchronized (this) { owned = request == proof && healthy(); }
+        boolean owned = healthy();
+        synchronized (this) { owned = owned && request == proof && proved && !cancelled && current(); }
         if (!owned) { measurement.close(); throw unavailable(); }
         return measurement;
     }
 
     RouterDNSMeasurement newDNSMeasurement() throws Exception {
-        final RouterTorProofRequest proof;
-        synchronized (this) { if (!healthy()) throw unavailable(); proof = request; }
+        if (!healthy()) throw unavailable();
+        final RouterTorProofRequest proof = provedRequest();
         RouterDNSMeasurement measurement = Libbox.routerTorCreateDNSMeasurement(server, proof, externalID);
         if (measurement == null) throw unavailable();
-        final boolean dnsOwned;
-        synchronized (this) { dnsOwned = request == proof && healthy(); }
+        boolean dnsOwned = healthy();
+        synchronized (this) { dnsOwned = dnsOwned && request == proof && proved && !cancelled && current(); }
         if (!dnsOwned) { measurement.close(); throw unavailable(); }
         return measurement;
     }
 
-    synchronized JSONObject mtuProfile() throws Exception {
+    JSONObject mtuProfile() throws Exception {
         if (!healthy()) throw unavailable();
-        return new JSONObject(profile);
+        synchronized (this) {
+            provedRequest();
+            return new JSONObject(profile);
+        }
     }
 
     RouterMTU newMTU(RouterMTUPlatform platform) throws Exception {
-        final RouterTorProofRequest proof;
-        synchronized (this) { if (!healthy()) throw unavailable(); proof = request; }
+        if (!healthy()) throw unavailable();
+        final RouterTorProofRequest proof = provedRequest();
         // The MTU adapter first adopts this handle, then rechecks ownership and
         // retains it if its drain fails. Never abandon a late constructor here.
         RouterMTU mtu = Libbox.newRouterTorMTU(server, platform, proof, config, profile);
@@ -138,7 +193,8 @@ final class AndroidTorSession {
         if (captured != null) captured.cancel();
     }
 
-    /** Keep the captured entry alive until its Server lease acknowledges DELETE. */
+    /** Keep the captured native entry until padding workers drain and, for
+     * Server execution, the owned lease acknowledges DELETE. */
     void close() throws Exception {
         cancel();
         final RouterTorProofRequest captured;
