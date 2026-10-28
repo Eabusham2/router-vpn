@@ -1,18 +1,67 @@
 # Current implementation status
 
-Updated October 27, 2026 (UTC). This file describes committed source
+Updated October 28, 2026 (UTC). This file describes committed source
 and remaining delivery work. The binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
 ## Current continuation
 
+The October 28 continuation started at `dbff30e8`, 231 commits ahead of the
+historical published `745b3e41` release. Personal/project context and the named
+private sources were retrieved. The complete numbered audit 1–356/C1–C7 and
+the original August 11, 13, 14 and 16 user passages were read separately; the
+numbered assistant audit is not presented as 356 verbatim user messages. The
+[October 28 evidence ledger](CONTINUATION-EVIDENCE-2026-10-28.md) records exact
+source provenance, requirement refinements, tests and verified pushes.
+
+Ordinary imported WireGuard, AmneziaWG, SOCKS5, HTTP CONNECT, HTTPS CONNECT,
+Shadowsocks, Hysteria2 and bounded OpenVPN profiles now reach Local Tor on both
+mobile hosts as well as desktop. Apple and Android retain the typed entry,
+selected transport/DNS/device policy, complete profiles, Startup Last and
+Speed Lab restoration. Native per-hop measurements identify the ordinary entry
+and Tor exit separately. Compatible proxy Jumbo capacity is preserved without
+pretending it is a fresh path MTU measurement.
+
+The complete pinned native parser gate passed locally for **738 configurations
+on each mobile host**: 348 Router/direct Local, 48 ordinary Local and 342
+Server. Each host also rejected all 738 missing-engine controls (`e5b2d191`).
+The composition includes the real pinned Xray, OpenVPN and C Tor code. Apple
+shipping Swift/Go assembly passed 41,233 checks and Server assembly 6,824.
+These gates start no VPN/public Tor circuit and do not replace Xcode/APK builds
+or physical networking. The earlier missing-DSO/LLVM limitation is resolved.
+
+Android manual VPN permission now has an exact process-owned request, saved
+selection digest and unique prompt identity (`a1c91d7b`). Rotation transfers
+the valid owner; cancellation, stale Bundle replay, selection changes and late
+results cannot start a replacement path. Permission, startup, profile and Speed
+Lab suites retain negative ownership controls.
+
+Current native-build repairs include production-Go-compatible Tor fixtures,
+Windows static Tor dependencies, portable Server TLS test trust, TCP-first DNS
+fixtures, macOS Bash argument handling and Windows path/handle timestamp
+comparison (`37950ee3` through `a5876568`). Same-file, timestamp, size, reparse
+and package-integrity checks remain enforced. Hosted execution and exact-SHA
+publication of the new source are still pending; the last release read remains
+the 12-asset `745b3e41` prerelease.
+
+Local Tor padding is still unfinished. Published shared/desktop foundations
+bind native cover counters and rates to a captured session, source, real paired
+DNS/exit proof and expiry; enabled Local admission remains closed until native
+refresh, receipt adoption and drain are complete. Tor Compare, the direct
+dynamic-transport strict-protection boundary, broader graph parity, the full
+current release and physical/private acceptance remain separate obligations.
+No live router, AdGuard, Portainer deployment or signing change has occurred.
+
+## October 27 source checkpoint (historical)
+
 The October 27 continuation started at `936516e5`, preserving the newer source
 and pending work instead of restoring the historical `745b3e41` release. Its
 separate [evidence ledger](CONTINUATION-EVIDENCE-2026-10-27.md) records original
 source recovery limits, each verified push, focused tests and unfinished
-source/live obligations. The complete original requirement transcripts were
-not retrieved; their scope remains binding.
+source/live obligations. At that checkpoint the complete original requirement
+transcripts had not been retrieved. The recovery and native-matrix observations
+in the current continuation above supersede those historical limitations.
 
 Ordinary external entries now reach desktop Local Tor through the public
 Connect path, complete-profile persistence, Startup Last, bridge/settings

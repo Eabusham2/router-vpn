@@ -48,7 +48,7 @@ Private transcripts and credentials stay outside the public repository. Source
 titles and message dates above provide continuity without publishing the raw
 private history.
 
-## Verified changes through `ab7bf7f7`
+## Verified changes through `e5b2d191`
 
 Every commit below was published on its current `main` parent without force.
 A fresh remote reference read verified each result, and the local Git tree was
@@ -71,6 +71,12 @@ to their actual toolchain and runtime; they do not certify a packaged device.
 | [`ab145b54`](https://github.com/Eabusham2/router-vpn/commit/ab145b54be998e549297c6c9e7a6f04c1f8fcbdf) | Preserve compatible imported proxy Jumbo capacity, including a proxy predecessor of Tor, without enlarging packet transports. | The old compiler reproduced the ordinary-entry mismatch. Shared external/Tor race regressions and the actual pinned native constructor pass. Five proxy families, inherited choices, fixed conflicts, malformed booleans and raw packet rejection are covered. MTU 9000 is virtual interface capacity, never a fresh PMTU result. |
 | [`28ebd790`](https://github.com/Eabusham2/router-vpn/commit/28ebd790f5c4171e0012f3adccd01e4cc99338d5) | Cancel superseded diagnostic matrices on the same branch. | Parsed workflow comparison retains every trigger, permission, platform, job and step; three existing workflow audits pass. This prevents future accumulation, not proof that older queued runs were manually cancelled. |
 | [`ab7bf7f7`](https://github.com/Eabusham2/router-vpn/commit/ab7bf7f7c4cbb5a94b97968957a0f66a6afc63c9) | Use production TCP-first listener reservation in two DNS cancellation fixtures. | Actual Windows failure identified UDP-first ports rejected by TCP. Production already reserved correctly. Focused real local H3/socket ownership tests pass three race runs; Windows execution of this new commit remains pending. |
+| [`82292d1d`](https://github.com/Eabusham2/router-vpn/commit/82292d1df96a51659050285947b9d7b03421f8a8) | Add shared immutable native padding receipts and exact source/session/rate/counter/freshness validation. | Padding receipt/control/lease race suites and the generated mobile copy closure pass, including missing-source and desktop-copy rejection. Enabled Local admission stays closed until host integration is complete. |
+| [`a1c91d7b`](https://github.com/Eabusham2/router-vpn/commit/a1c91d7ba8296ca74a93eed5b43ed51268b7e6d3) | Bind Android VPN permission to the exact process-owned request and saved selection, with unique prompt codes, rotation transfer and terminal cancellation. | Shipping permission 3,361 checks/seven rejected mutations; startup 1,362/three; Speed Lab restore 1,709/fourteen; profiles 2,177 checks/179 cases plus lost-update mutation. The session mutation audit passes. Physical Android permission UI remains separate. |
+| [`ee1e60ea`](https://github.com/Eabusham2/router-vpn/commit/ee1e60ea7144093512d9141456a410e3ab3d2539) | Capture desktop padding policy, exact standalone native owner and separate paired DNS/exit proof lifetime. | Desktop policy/session/padding and controller native-proof/Server-cover suites pass with race detection. One lease claim binds private SOCKS isolation; stale, changed or regressing receipts fail. Enabled Local admission remains closed. |
+| [`15b988c6`](https://github.com/Eabusham2/router-vpn/commit/15b988c654160a2d85f1e154a4947aea91683729) | Keep the native runtime argument array nonempty for macOS Bash under `set -u`. | Actual Darwin diagnostic failed on the empty optional array. Executing the revised workflow shell with argument capture validates all six desktop targets; three workflow audits pass. Actual macOS execution remains pending. |
+| [`a5876568`](https://github.com/Eabusham2/router-vpn/commit/a587656821e45b9f129800acdf734504f19089cc) | Compare Tor package metadata within each path/handle API while preserving cross-API file identity. | Actual Windows ARM64 diagnostic failed the old cross-API timestamp comparison. CPython 3.12.10 source and upstream issue 157671 establish distinct Windows ctime meanings. All 273 package checks pass; the old reader fails the new stable-file regression, and removing handle-tamper protection is rejected. Current Windows execution remains pending. |
+| [`e5b2d191`](https://github.com/Eabusham2/router-vpn/commit/e5b2d1916c7e6f606db3996cc503300afe67bf4b) | Expand both shipping mobile native parser gates to all 738 captured graphs, including ordinary predecessors and OpenVPN. | Each complete gate passed against the pinned native Xray/OpenVPN/C Tor composition and rejected all 738 missing-engine controls. Apple shipping provider/Server assembly passed 41,233/6,824 checks. Contract suites and Tor shipping audit pass. No VPN or public circuit was started; SDK builds and devices remain distinct. |
 
 ## Requirement ledger refinement
 
@@ -79,13 +85,13 @@ specific stale source assessments, not whole requirement families.
 
 | Original identifiers / later request | Shipping paths and evidence | Actual remaining gate |
 |---|---|---|
-| 111–119, complete profiles/startup; later full connection-profile correction | Android schema-5 store and Apple complete profile store now retain ordinary-entry Local Tor, source kind, exact protocol, policy and node references. Speed Lab uses the correct captured entry slot and execution. | New exact-SHA packages; real permission/restart/restoration acceptance. The separate manual Android pending-permission supersession issue is being repaired, not considered closed by these profile tests. |
+| 111–119, complete profiles/startup; later full connection-profile correction | Android schema-5 store and Apple complete profile store now retain ordinary-entry Local Tor, source kind, exact protocol, policy and node references. Speed Lab uses the correct captured entry slot and execution. The manual Android pending-permission supersession/replay issue is repaired and independently tested in `a1c91d7b`. | New exact-SHA packages; real permission/restart/restoration acceptance. |
 | 149–169, modes/DNS; later explicit resolver policy | Shared external compiler and Tor native owners preserve each imported transport, selected DNS/bootstrap and private-vs-public proof authority. | Full requested graph parity, live selected-resolver traffic and provider checks. Ordinary providers still cannot impersonate a private Home resolver path. |
 | 200–213 and 337, kill switch/lifecycle | Existing native physical-egress and cancellation owners are preserved; ordinary mobile source changes carry their own protection request. | Actual platform leak/transition tests; direct dynamic Tor transport strict protection remains a source boundary. |
 | 214–224 and 336; August 13–14 external node/hop/exit additions | Desktop and both mobile hosts now admit the eight implemented ordinary import families before Local Tor. New mobile per-hop measurement identifies public entry and Tor exit independently. | Exact-SHA native matrices/packages; live paths and broader requested graph compositions. Tor Compare still needs distinct valid last-node/external inputs, winner recheck and restoration. |
 | 225–241, compatible Jumbo/MTU/measurements; August 16 retest correction | Shared ordinary proxy Jumbo compilation now preserves virtual TUN capacity and immutable policy while retaining packet endpoint MTUs. Native owner reconstruction and MTU authority agree. | Physical MTU/throughput, Retest/Cancel/network-transition acceptance. Raw-packet admission is not weakened to manufacture Jumbo support. |
 | 321–326, wider packaging/Portable targets | Current `deploy/build-client.sh` retains qualified ARMv7, FreeBSD, OpenBSD, NetBSD, DragonFly and illumos controller/helper builds in addition to the ten core native packages. | Current CI/package validation where feasible. Controller/helper artifacts are not relabeled as additional full native applications or substituted for the core ten. |
-| 342 and later bounded-padding settings | Server Tor already has owned bounded native cover; shared native control and lease infrastructure exist. | Local desktop/mobile Tor padding still requires complete post-DNS/proof admission, periodic freshness, receipt/counter validation and drain integration. A rejected enabled request is unfinished. |
+| 342 and later bounded-padding settings | Server Tor already has owned bounded native cover. Shared native receipts and the captured desktop lease now validate source/session/rate, actual counters, paired proof lifetime and freshness; Local enabled admission is still closed. | Local desktop/mobile Tor padding still requires complete post-DNS/proof admission, periodic freshness, host receipt adoption and drain integration. A rejected enabled request is unfinished. |
 | C5–C7, 348, 352–354 | Generic secret-free application delivery, separate private node linking, packaged licensing, image-only production and authenticated mutations remain required. | Exact-SHA package/image/compose publication plus private deployment/administration acceptance. No production server build fallback or Docker socket access is authorized. |
 
 ## Native gates, release and live evidence
@@ -96,15 +102,19 @@ The subsequent changes address observed failures while preserving their
 negative tests. Native Windows Tor cross compilation succeeded in diagnostic
 run [40608694158](https://github.com/Eabusham2/router-vpn/actions/runs/40608694158);
 its Windows AMD64 job then exposed the separate DNS fixture failure fixed above.
+Its Darwin AMD64 job exposed the empty-array Bash failure fixed in `15b988c6`,
+and Windows ARM64 exposed the file-metadata API mismatch fixed in `a5876568`.
+These observed failures are not reported as current native successes.
 
 The mobile host graph inventory is 348 existing Local/direct + 342 Server +
-48 new ordinary-entry graphs per platform. The expanded 738-graph native gate
-is under verification at this checkpoint. Its first actual run exposed a
-missing OpenVPN build tag and an incomplete local Xray preparation, not a reason
-to remove those graphs or weaken constructors. The full pinned composition is
-being exercised before that gate revision is published. A verified native Tor
-DSO and the required Go/LLVM/Swift toolchains are now available locally; the
-previous ledger's missing-tool limitation no longer describes this workspace.
+48 new ordinary-entry graphs per platform. Both complete 738-graph native gates
+passed before publication in `e5b2d191`, with all 738 missing-engine controls
+per host. Their first actual runs exposed a missing OpenVPN build tag and an
+incomplete local Xray preparation; both were corrected without removing graphs
+or weakening constructors. The full pinned composition was exercised with the
+verified C Tor DSO and required Go/LLVM/Swift toolchains. The previous ledger's
+missing-tool limitation no longer describes this workspace. The native gate
+does not start a VPN or public Tor circuit and is not an Apple SDK/device test.
 
 The last release collection read still returned the
 [`745b3e41` prerelease](https://github.com/Eabusham2/router-vpn/releases/tag/router-vpn-sha-745b3e41e5a78d734391976af9b7cd0637660a0b)
