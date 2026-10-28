@@ -436,13 +436,14 @@ func desktopBridgeKillPolicy(profile map[string]any, plan Plan) (string, error) 
 		return "", errors.New("invalid desktop Tor kill switch policy")
 	}
 	if value != "off" && !desktopBridgeDirectProtection(plan) && !desktopBridgeSavedRouterSelection(profile) {
-		return "", errors.New("strict desktop Tor protection requires one fixed obfs4 bridge or its exact captured eligible predecessor")
+		return "", errors.New("strict desktop Tor protection requires one to eight captured literal obfs4 bridges or its exact captured eligible predecessor")
 	}
 	return value, nil
 }
 
 func desktopBridgeDirectProtection(plan Plan) bool {
-	return len(plan.Bridges) == 1 && plan.Bridges[0].Transport == "obfs4"
+	_, err := DesktopDirectPhysicalEgress(plan)
+	return err == nil
 }
 
 // Idle editors can retain a Local or Server Router choice without a connection.

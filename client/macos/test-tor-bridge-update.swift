@@ -49,6 +49,7 @@ func check(_ value: @autoclosure () -> Bool, _ message: String) { checks += 1; i
 let directory = URL(fileURLWithPath: CommandLine.arguments[1])
 func object(_ name: String) throws -> [String: Any] { try JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent(name))) as! [String: Any] }
 let localCatalog = try object("tor-update-source-catalog.json"), caps = try object("tor-update-capabilities.json"), lines = try object("tor-update-input-lines.json")
+let fixedSets = try object("tor-fixed-input-sets.json")
 let baseSelections = ["local", "server"] + ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].map { "ordinary-" + $0 }
 for execution in baseSelections + baseSelections.map({ "plain-" + $0 }) {
 let plain = execution.hasPrefix("plain-"), path = plain ? String(execution.dropFirst(6)) : execution
@@ -154,4 +155,34 @@ newForm.save(); check(api.saved == nil, "Plain Tor Direct borrowed strict Router
 newForm.killSwitchPopup.indexOfSelectedItem = 0; newForm.save()
 check(api.saved?["transport"] as? String == "tor" && (api.saved?["bridges"] as? [String])?.isEmpty == true && api.reads == 0, "Plain Tor Add did not preserve its empty bridge contract")
 try JSONSerialization.data(withJSONObject: api.saved!, options: [.sortedKeys]).write(to: directory.appendingPathComponent("tor-create-plain.json"))
+for transport in ["obfs4", "custom"] {
+    for count in [1, 2, 8] {
+        for (killIndex, kill) in ["off", "on-connect", "always"].enumerated() where killIndex > 0 {
+            let owner = Owner(localCatalog), api = ProductAPI(localCatalog)
+            let form = Form(owner: owner, api: api, capabilities: caps)
+            form.updateSelected.state = .off; form.transportPopup.indexOfSelectedItem = form.transportIDs.firstIndex(of: transport)!
+            let bridges = fixedSets[String(count)] as! [String]
+            form.bridgeText.string = bridges.joined(separator: "\n"); form.killSwitchPopup.indexOfSelectedItem = killIndex
+            form.save()
+            check(api.saved != nil, "Direct fixed bridge set was rejected: " + form.status.stringValue)
+            check(api.saved?["transport"] as? String == transport && api.saved?["kill_switch_policy"] as? String == kill && api.saved?["bridges"] as? [String] == bridges, "Direct fixed bridge credentials or strict policy changed")
+            check(api.saved?["id"] == nil && api.saved?["expected_profile_tokens"] == nil && api.reads == 0, "Direct fixed Add borrowed a selected predecessor")
+            try JSONSerialization.data(withJSONObject: api.saved!, options: [.sortedKeys]).write(to: directory.appendingPathComponent("tor-create-fixed-\(transport)-\(count)-\(kill).json"))
+        }
+    }
+}
+for dynamic in ["meek_lite", "snowflake", "webtunnel"] {
+    let owner = Owner(localCatalog), api = ProductAPI(localCatalog)
+    let form = Form(owner: owner, api: api, capabilities: caps)
+    form.updateSelected.state = .off; form.transportPopup.indexOfSelectedItem = form.transportIDs.firstIndex(of: "custom")!
+    form.bridgeText.string = ((fixedSets["1"] as! [String]) + (lines[dynamic] as! [String])).joined(separator: "\n")
+    form.killSwitchPopup.indexOfSelectedItem = 2; form.save()
+    check(api.saved == nil && api.reads == 0, "Direct custom set admitted dynamic bridge " + dynamic)
+}
+let oversizedOwner = Owner(localCatalog), oversizedAPI = ProductAPI(localCatalog)
+let oversized = Form(owner: oversizedOwner, api: oversizedAPI, capabilities: caps)
+oversized.updateSelected.state = .off; oversized.transportPopup.indexOfSelectedItem = oversized.transportIDs.firstIndex(of: "custom")!
+oversized.bridgeText.string = ((fixedSets["8"] as! [String]) + (fixedSets["1"] as! [String])).joined(separator: "\n")
+oversized.killSwitchPopup.indexOfSelectedItem = 2; oversized.save()
+check(oversizedAPI.saved == nil, "Direct fixed set exceeded its eight-bridge bound")
 print("Swift actual Tor editor capture/callback: \(checks) checks PASS")

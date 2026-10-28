@@ -169,6 +169,7 @@ func TestProfileDeviceTorStrictPolicyUsesActualCapturedBridgePlan(t *testing.T) 
 		"snowflake": {clientSnowflakeBridge},
 		"webtunnel": {clientWebTunnelBridge},
 		"multiple":  {clientTorBridge, strings.Replace(clientTorBridge, "203.0.113.44", "203.0.113.45", 1)},
+		"mixed":     {clientTorBridge, clientSnowflakeBridge},
 	}
 	for plan, bridges := range plans {
 		for _, policy := range []string{"off", "on-connect", "always"} {
@@ -180,8 +181,8 @@ func TestProfileDeviceTorStrictPolicyUsesActualCapturedBridgePlan(t *testing.T) 
 				q["kill_switch_policy"] = policy
 				before := cloneRouterProfileStore(a.profiles)
 				w := postDeviceSettingsForTest(a, bytes.NewReader(deviceSettingsBodyForTest(t, q)))
-				if plan != "obfs4" && policy != "off" {
-					if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "one fixed obfs4 bridge") || !reflect.DeepEqual(before, a.profiles) {
+				if plan != "obfs4" && plan != "multiple" && policy != "off" {
+					if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "one to eight captured literal obfs4 bridges") || !reflect.DeepEqual(before, a.profiles) {
 						t.Fatalf("uncontrolled PT egress bypassed strict Tor policy: %d %s", w.Code, w.Body.String())
 					}
 				} else if w.Code != http.StatusOK || !reflect.DeepEqual(before.Profiles[3].External, a.profiles.Profiles[3].External) {

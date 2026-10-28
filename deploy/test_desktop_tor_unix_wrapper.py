@@ -215,6 +215,30 @@ class Fixture:
         self.set_input("tor-profile.json", profile)
         self.set_input("tor-capture.json", capture)
 
+    def fixed_obfs4(self, count=2, policy="always", transport="custom", shared=False, ipv6_first=False) -> None:
+        lines, egress = [], []
+        for index in range(count):
+            host = f"2001:db8::{index + 40:x}" if (index % 2 == 1) != ipv6_first else f"203.0.113.{index + 40}"
+            port = 8443 + index
+            if shared and index == 1:
+                host, port = egress[0]["host"], egress[0]["port"]
+            endpoint = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+            lines.append(f"obfs4 {endpoint} {index:040X} cert=Y2VydA iat-mode=0")
+            row = {"host": host, "port": port, "network": "tcp"}
+            if row not in egress:
+                egress.append(row)
+        self.endpoint = egress[0]["host"]
+        profile = json.loads(self.inputs["tor-profile.json"])
+        profile.update({"node_kind": "external", "endpoint": self.endpoint, "kill_switch_policy": policy,
+                        "kill_switch": policy != "off", "home_lan_access": False,
+                        "external": {"protocol": "tor-bridge", "tor_bridge": {
+                            "transport": transport, "bridges": lines, "socks_port": 19475}},
+                        "desktop_physical_egress": egress})
+        self.env.update({"HOMEVPN_ENDPOINT": self.endpoint, "HOMEVPN_EXTERNAL_SESSION": self.env["HOMEVPN_TOR_SESSION"],
+                         "HOMEVPN_NATIVE_ENDPOINTS_JSON": json.dumps(list(dict.fromkeys(row["host"] for row in egress)), separators=(",", ":")),
+                         "HOMEVPN_NATIVE_EGRESS_JSON": json.dumps(egress, separators=(",", ":"))})
+        self.set_input("tor-profile.json", profile)
+
     def plain_tor(self) -> None:
         profile = json.loads(self.inputs["tor-profile.json"])
         profile["external"] = {"protocol": "tor"}
@@ -327,6 +351,72 @@ class UnixTorWrapper(unittest.TestCase):
 
     def test_actual_exec_inputs_order_and_private_retention(self):
         self.assert_success()
+
+    def test_fixed_obfs4_sets_retain_all_source_tuples_before_exec(self):
+        for count in range(1, 9):
+            for policy in ("on-connect", "always"):
+                with self.subTest(count=count, policy=policy), tempfile.TemporaryDirectory(prefix="routervpn-tor-fixed-") as directory:
+                    fixture = Fixture(Path(directory))
+                    fixture.fixed_obfs4(count, policy, "obfs4" if count % 2 else "custom", ipv6_first=count % 2 == 1)
+                    self.assert_success(fixture)
+        self.fixture.fixed_obfs4(2, shared=True)
+        self.assertEqual(len(json.loads(self.fixture.inputs["tor-profile.json"])["external"]["tor_bridge"]["bridges"]), 2)
+        self.assertEqual(len(json.loads(self.fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"])), 1)
+        self.assert_success()
+
+    def test_fixed_obfs4_source_cannot_be_replaced_by_matching_untrusted_tuples(self):
+        for fault in ("port", "udp", "resolver", "extra", "partial", "order", "hosts-order", "missing-projection", "missing-arrays",
+                      "private-source", "dynamic-source", "changed-source", "source-count", "credentials-after-capture", "session", "role"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(prefix="routervpn-tor-fixed-negative-") as directory:
+                fixture = Fixture(Path(directory))
+                fixture.fixed_obfs4()
+                profile = json.loads(fixture.inputs["tor-profile.json"])
+                rows = profile["desktop_physical_egress"]
+                if fault == "port": rows[1]["port"] = 53
+                elif fault == "udp": rows[1]["network"] = "udp"
+                elif fault == "resolver": rows[1]["host"] = "9.9.9.9"
+                elif fault == "extra": rows.append({"host": "8.8.8.8", "port": 53, "network": "tcp"})
+                elif fault == "partial": rows.pop()
+                elif fault == "order": rows.reverse(); fixture.endpoint = rows[0]["host"]; fixture.env["HOMEVPN_ENDPOINT"] = fixture.endpoint
+                elif fault == "missing-projection": del profile["desktop_physical_egress"]
+                elif fault == "private-source":
+                    profile["external"]["tor_bridge"]["bridges"][1] = profile["external"]["tor_bridge"]["bridges"][1].replace("2001:db8::29", "fd00::29")
+                    rows[1]["host"] = "fd00::29"
+                elif fault == "dynamic-source": profile["external"]["tor_bridge"]["bridges"][1] = "meek_lite 192.0.2.2:443 url=https://front.example/ front=front.example"
+                elif fault == "changed-source": profile["external"]["tor_bridge"]["bridges"][1] = profile["external"]["tor_bridge"]["bridges"][1].replace(":8444", ":9444")
+                elif fault == "source-count": profile["external"]["tor_bridge"]["bridges"] *= 5
+                elif fault == "session": fixture.env["HOMEVPN_EXTERNAL_SESSION"] = "f" * 32
+                elif fault == "role": fixture.env["HOMEVPN_PROFILE_ID"] = "foreign-entry"
+                fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"] = json.dumps(rows, separators=(",", ":"))
+                hosts = list(dict.fromkeys(row["host"] for row in rows))
+                if fault == "hosts-order": hosts.reverse()
+                fixture.env["HOMEVPN_NATIVE_ENDPOINTS_JSON"] = json.dumps(hosts, separators=(",", ":"))
+                if fault == "missing-arrays": fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"] = ""
+                fixture.set_input("tor-profile.json", profile)
+                if fault == "credentials-after-capture":
+                    (fixture.runtime / "tor-profile.json").write_text(fixture.inputs["tor-profile.json"].replace("cert=Y2VydA", "cert=Y2hhbmdlZA", 1))
+                result, events, _ = fixture.run()
+                self.assertNotEqual(result.returncode, 0, fault)
+                self.assertNotIn("protect", [item["kind"] for item in events], fault)
+                self.assertNotIn("native-admission", [item["kind"] for item in events], fault)
+
+    def test_fixed_source_guard_has_an_executable_negative_control(self):
+        self.fixture.fixed_obfs4()
+        profile = json.loads(self.fixture.inputs["tor-profile.json"])
+        profile["desktop_physical_egress"][1]["port"] = 9444
+        self.fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"] = json.dumps(profile["desktop_physical_egress"], separators=(",", ":"))
+        self.fixture.set_input("tor-profile.json", profile)
+        result, events, _ = self.fixture.run()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(events, [])
+        verifier = self.fixture.scripts / "tor-prelaunch-witness.py"
+        source = verifier.read_text()
+        guard = 'if direct is not None and (egress != direct or addresses != list(dict.fromkeys(row["host"] for row in direct))):'
+        self.assertEqual(source.count(guard), 1)
+        verifier.write_text(source.replace(guard, "if False:"))
+        result, events, _ = self.fixture.run()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("protect", [item["kind"] for item in events], "Removed source guard did not expose the intended tuple substitution.")
 
     def test_plain_tor_retains_empty_guard_or_exact_predecessor(self):
         for path in ("direct", "router", "ordinary", "server"):

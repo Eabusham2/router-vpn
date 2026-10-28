@@ -157,7 +157,7 @@ func TestTorBridgeRuntimeSourceKeepsStrictDynamicBootstrapBoundary(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), "strict desktop Tor protection requires one fixed obfs4 bridge") {
+	if !strings.Contains(string(raw), "strict desktop Tor protection requires one to eight captured literal obfs4 bridges") {
 		t.Fatal("captured policy dropped its physical egress boundary")
 	}
 	raw, err = os.ReadFile("desktop_tor_prepare.go")

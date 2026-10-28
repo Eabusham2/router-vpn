@@ -208,6 +208,39 @@ try {
   }
   $env:HOMEVPN_NATIVE_EGRESS_JSON='[{"host":"203.0.113.11","port":8388,"network":"tcp"},{"host":"1.1.1.1","port":443,"network":"tcp"}]'
   Assert-PolicyRejected
+
+  # All Direct obfs4 bridges are captured TCP sockets. Exercise the real
+  # policy selection and rule builder for IPv4/IPv6 sets, including the full
+  # eight-line limit. The unrelated selected profile must grant no DNS/LAN or
+  # all-port exception and may not supply the physical endpoint.
+  $env:HOMEVPN_PROFILE_ID='exit';$env:HOMEVPN_POLICY_PROFILE_ID='exit'
+  foreach($count in @(1,2,8)){
+    $fixed=@();$fixedHosts=@()
+    for($i=0;$i-lt$count;$i++){
+      $address=if(($i+$count)%2){'2001:db8::'+[string](50+$i)}else{'198.51.100.'+[string](50+$i)}
+      $fixedHosts+=,$address
+      $fixed+=,[ordered]@{host=$address;port=8443+$i;network='tcp'}
+    }
+    $policyStore.profiles[2].endpoint=$fixedHosts[0]
+    $env:HOMEVPN_NATIVE_ENDPOINTS_JSON=ConvertTo-Json -InputObject @($fixedHosts) -Compress
+    $env:HOMEVPN_NATIVE_EGRESS_JSON=ConvertTo-Json -InputObject @($fixed) -Depth 10 -Compress
+    foreach($policy in @('on-connect','always')){
+      $policyStore.profiles[2].kill_switch_policy=$policy;Write-PolicyStore
+      $strict=(& $script -Action plan -Root $profileRoot -StateRoot $temp -TunnelAlias 'router-vpn-tor'|ConvertFrom-Json)
+      if($strict.endpoint-cne$fixedHosts[0]-or$strict.policy-cne$policy-or$strict.home_lan_access-or$strict.default_outbound-cne'Block'){throw 'Direct Tor captured policy or primary endpoint changed.'}
+      $script:capturedRules=@();Install-AllowRules $strict
+      $outer=@($script:capturedRules|Where-Object{$_.DisplayName-like'Router VPN test native outer *'})
+      if($outer.Count-ne$count){throw 'Direct Tor lost a captured bridge socket.'}
+      for($i=0;$i-lt$count;$i++){
+        if(@($outer[$i].RemoteAddress).Count-ne1-or$outer[$i].RemoteAddress[0]-cne$fixed[$i].host-or$outer[$i].RemotePort-cne[string]$fixed[$i].port-or$outer[$i].Protocol-cne'TCP'){throw 'Direct Tor firewall rule widened or substituted a captured bridge tuple.'}
+      }
+      if(@($script:capturedRules|Where-Object{$_.DisplayName-eq'Router VPN test selected node'-or$_.RemoteAddress-contains'LocalSubnet'-or$_.RemoteAddress-contains'203.0.113.30'-or$_.RemoteAddress-contains'1.1.1.1'-or$_.RemoteAddress-contains'9.9.9.9'}).Count){throw 'Direct Tor opened a host-wide, unrelated, LAN or DNS exception.'}
+      $beforeReads=$script:firewallReads
+      $rejected=$false;$strict.native_egress[0].network='icmp'
+      try{Install-AllowRules $strict}catch{$rejected=$true}
+      if(-not$rejected-or$script:firewallReads-ne$beforeReads){throw 'Changed retained Direct tuple reached the firewall before validation.'}
+    }
+  }
   foreach($name in $nativeNames){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
   Write-Host 'Windows captured policy-owner plans: direct/router, opposing entry/exit policies, physical endpoint and stale-owner negatives OK'
 

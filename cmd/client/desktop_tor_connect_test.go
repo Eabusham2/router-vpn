@@ -114,8 +114,28 @@ func newDesktopTorConnectFixture(t *testing.T) *desktopTorConnectFixture {
 				vars["HOMEVPN_PROFILE_ID"] != entry.entry.ID || vars["HOMEVPN_EXTERNAL_SESSION"] != launch.tor.expected.SessionID {
 				t.Fatal("predecessor's captured physical firewall tuples did not reach the wrapper", got, want, planErr, err)
 			}
-		} else if vars["HOMEVPN_NATIVE_EGRESS_JSON"] != "" || vars["HOMEVPN_EXTERNAL_SESSION"] != "" {
-			t.Fatal("Direct borrowed a Router physical route")
+		} else {
+			raw, readErr := readDesktopRuntimeFile(launch, "tor-profile.json", desktopTorInputLimit("tor-profile.json"))
+			var staged common.RouterProfile
+			if readErr != nil || json.Unmarshal(raw, &staged) != nil {
+				t.Fatal("Direct lost its captured source", readErr)
+			}
+			plan, planErr := desktopTorTransportPlan(staged)
+			want, fixedErr := mobiletor.DesktopDirectPhysicalEgress(plan)
+			if planErr != nil {
+				t.Fatal(planErr)
+			}
+			if fixedErr != nil {
+				if vars["HOMEVPN_NATIVE_EGRESS_JSON"] != "" || vars["HOMEVPN_EXTERNAL_SESSION"] != "" {
+					t.Fatal("dynamic Direct borrowed fixed or Router physical authority")
+				}
+			} else {
+				var got []mobilemultihop.PhysicalEgress
+				if json.Unmarshal([]byte(vars["HOMEVPN_NATIVE_EGRESS_JSON"]), &got) != nil || !reflect.DeepEqual(got, want) ||
+					vars["HOMEVPN_PROFILE_ID"] != launch.profileID || vars["HOMEVPN_EXTERNAL_SESSION"] != launch.tor.expected.SessionID || launch.tor.expected.EntryID != "" {
+					t.Fatal("fixed Direct lost exact source-derived TCP tuples", got, want)
+				}
+			}
 		}
 		expected, _ := json.Marshal(launch.tor.expected)
 		command := exec.Command(os.Args[0], "-test.run=^TestDesktopTorProcessFixture$")

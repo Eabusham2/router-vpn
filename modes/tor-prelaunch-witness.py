@@ -87,6 +87,43 @@ def physical_tuples(value):
     return result
 
 
+def direct_obfs4_tuples(profile):
+    """Reconstruct fixed Direct sockets from hashed source, never child output."""
+    external = profile["external"]
+    config = external.get("tor_bridge")
+    if external["protocol"] != "tor-bridge" or type(config) is not dict:
+        return None
+    lines = config.get("bridges")
+    if type(lines) is not list or not 1 <= len(lines) <= 8:
+        raise ValueError("Direct bridge source exceeds its captured bound")
+    if config.get("transport") not in {"obfs4", "custom"}:
+        return None
+    result, seen_lines, seen_tuples = [], set(), set()
+    for line in lines:
+        if type(line) is not str or len(line) > 8192 or any(c in line for c in "\r\n\x00"):
+            raise ValueError("Direct bridge source is not a bounded normalized line")
+        words = line.split()
+        if not words or words[0] != "obfs4":
+            return None
+        if (len(words) < 4 or " ".join(words) != line or line in seen_lines
+                or not re.fullmatch(r"[0-9A-F]{40}", words[2])):
+            raise ValueError("Direct obfs4 source lost its exact normalized identity")
+        match = re.fullmatch(r"(\[[0-9a-f:]+\]|[0-9.]+):([1-9][0-9]{0,4})", words[1])
+        if match is None:
+            raise ValueError("Direct obfs4 source lost its literal socket")
+        host = physical_address(match[1].strip("[]"))
+        address, port = ipaddress.ip_address(host), int(match[2])
+        private = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
+        if port > 65535 or any(address in ipaddress.ip_network(prefix) for prefix in private):
+            raise ValueError("Direct obfs4 source is not a public literal socket")
+        seen_lines.add(line)
+        key = (host, port)
+        if key not in seen_tuples:
+            seen_tuples.add(key)
+            result.append({"host": host, "port": port, "network": "tcp"})
+    return result
+
+
 def validate_launch(target: str, bridge_endpoint: str | None = None, tor_binary: str | None = None) -> None:
     """Bind the pre-protection environment to the hashed native capture."""
     session = os.environ.get("HOMEVPN_TOR_SESSION", "")
@@ -186,9 +223,23 @@ def validate_launch(target: str, bridge_endpoint: str | None = None, tor_binary:
                 physical_address(external.get("expected_public_ip"))
             elif entry["profile"].get("node_kind") != "router-vpn":
                 raise ValueError("Router proof schema cannot admit an ordinary predecessor")
+        elif (len(inputs["tor-capture.json"]) > 16 << 10 or physical != policy
+              or profile.get("multihop_enabled", False) is not False
+              or bridge_endpoint is not None and endpoint != bridge_endpoint):
+            raise ValueError("direct Tor acquired an unowned physical predecessor")
+        direct = None if via_entry else direct_obfs4_tuples(profile)
+        if not via_entry and protocol == "tor-bridge":
+            kill = profile.get("kill_switch_policy", "")
+            flag = profile.get("kill_switch", False)
+            if type(kill) is not str or kill not in {"", "off", "on-connect", "always"} or type(flag) is not bool:
+                raise ValueError("Direct Tor protection lost its captured type")
+            if (kill in {"on-connect", "always"} or not kill and flag) and direct is None:
+                raise ValueError("dynamic Direct Tor cannot acquire strict physical authority")
+        if via_entry or direct is not None:
             address_raw = os.environ.get("HOMEVPN_NATIVE_ENDPOINTS_JSON", "")
             egress_raw = os.environ.get("HOMEVPN_NATIVE_EGRESS_JSON", "")
-            if len(address_raw) > 1024 or len(egress_raw) > 4096:
+            if (os.environ.get("HOMEVPN_EXTERNAL_SESSION") != session
+                    or len(address_raw) > 1024 or len(egress_raw) > 4096):
                 raise ValueError("physical environment exceeds its bound")
             addresses = exact_json(address_raw.encode())
             if (type(addresses) is not list or not 1 <= len(addresses) <= 16
@@ -207,10 +258,9 @@ def validate_launch(target: str, bridge_endpoint: str | None = None, tor_binary:
             projected = physical_tuples(profile.get("desktop_physical_egress"))
             if projected != egress:
                 raise ValueError("physical tuples differ from the captured graph projection")
-        elif (len(inputs["tor-capture.json"]) > 16 << 10 or physical != policy
-              or profile.get("multihop_enabled", False) is not False
-              or bridge_endpoint is not None and endpoint != bridge_endpoint
-              or "desktop_physical_egress" in profile
+            if direct is not None and (egress != direct or addresses != list(dict.fromkeys(row["host"] for row in direct))):
+                raise ValueError("Direct obfs4 tuples differ from the complete captured bridge source")
+        elif ("desktop_physical_egress" in profile
               or os.environ.get("HOMEVPN_NATIVE_ENDPOINTS_JSON") or os.environ.get("HOMEVPN_NATIVE_EGRESS_JSON")
               or os.environ.get("HOMEVPN_EXTERNAL_SESSION")):
             raise ValueError("direct Tor acquired an unowned physical predecessor")

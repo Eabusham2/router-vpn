@@ -321,6 +321,28 @@ function New-ServerWitnessFixture {
   $fixture.Tor='';$fixture.LaunchTorBinary=''
   return $fixture
 }
+function New-FixedWitnessFixture([int]$Count=2,[string]$Policy='always',[string]$Transport='custom',[switch]$Shared,[switch]$IPv6First){
+  $fixture=New-WitnessFixture
+  $lines=@();$egress=@();$hosts=@()
+  for($index=0;$index-lt$Count;$index++){
+    $v6=(($index%2)-eq1)-ne[bool]$IPv6First
+    $hostValue=if($v6){'2001:db8::'+($index+40).ToString('x')}else{'203.0.113.'+[string]($index+40)}
+    $portValue=8443+$index
+    if($Shared-and$index-eq1){$hostValue=$egress[0].host;$portValue=$egress[0].port}
+    $endpoint=if($hostValue.Contains(':')){'['+$hostValue+']:'+[string]$portValue}else{$hostValue+':'+[string]$portValue}
+    $lines+=@('obfs4 '+$endpoint+' '+$index.ToString('X40')+' cert=Y2VydA iat-mode=0')
+    if(-not($Shared-and$index-eq1)){$egress+=@([ordered]@{host=$hostValue;port=$portValue;network='tcp'})}
+    if($hosts-cnotcontains$hostValue){$hosts+=@($hostValue)}
+  }
+  $profile=[ordered]@{id='captured-tor-node';node_kind='external';endpoint=$hosts[0];kill_switch_policy=$Policy;kill_switch=($Policy-cne'off');home_lan_access=$false
+    external=[ordered]@{protocol='tor-bridge';tor_bridge=[ordered]@{transport=$Transport;bridges=$lines;socks_port=19475}};desktop_physical_egress=$egress}
+  $fixture.Bridge=$hosts[0];$fixture.Environment['HOMEVPN_ENDPOINT']=$hosts[0]
+  $fixture.Environment['HOMEVPN_EXTERNAL_SESSION']='a'*32
+  $fixture.Environment['HOMEVPN_NATIVE_ENDPOINTS_JSON']=ConvertTo-Json -InputObject @($hosts) -Compress
+  $fixture.Environment['HOMEVPN_NATIVE_EGRESS_JSON']=ConvertTo-Json -InputObject @($egress) -Depth 8 -Compress
+  Set-WitnessContent $fixture 'tor-profile.json' ($profile|ConvertTo-Json -Depth 16 -Compress)
+  return $fixture
+}
 function Invoke-WitnessWriter($Fixture,$State,[string]$Action='up'){
   Write-RouterVPNTorPrelaunchFailure -Action $Action -Root $Fixture.Root -RuntimeDir $Fixture.Runtime -Session ('a'*32) -TorBinary $Fixture.Tor -BridgeEndpoint $Fixture.Bridge -CapturedEnvironment $Fixture.Environment -LaunchState $State
 }
@@ -408,6 +430,60 @@ function Assert-CaptureRejected($Fixture,[string]$Name){
   Check ($null -ne $failure) ('Unowned Tor physical capture was accepted: '+$Name)
   $failure=$null;try{Invoke-WitnessWriter $Fixture (Fresh-WitnessState)}catch{$failure=Unwrap $_}
   Check ($null -ne $failure -and -not(Test-Path -LiteralPath (Join-Path $Fixture.Runtime 'prelaunch-failed.json'))) ('Invalid physical capture obtained a no-native witness: '+$Name)
+}
+function Assert-FixedPhysicalCapture {
+  foreach($count in 1..8){foreach($policy in @('on-connect','always')){
+    $fixture=New-FixedWitnessFixture -Count $count -Policy $policy -Transport $(if($count%2){'obfs4'}else{'custom'}) -IPv6First:($count%2-eq1)
+    $identity=Read-CapturedIdentity $fixture
+    Check (-not$identity.via_entry-and-not$identity.server-and$identity.egress.Count-eq$count-and$identity.profile.external.tor_bridge.bridges.Count-eq$count) 'Fixed Direct capture lost its complete bridge set or borrowed an entry.'
+    Check (@($identity.egress|Where-Object{$_.network-cne'tcp'}).Count-eq0) 'Fixed Direct gained a UDP exception.'
+    Assert-MainWitness -Failure 'normal' -Expected $false -CapturedFixture $fixture
+  }}
+  $fixture=New-FixedWitnessFixture -Shared
+  $identity=Read-CapturedIdentity $fixture
+  Check ($identity.egress.Count-eq1-and$identity.profile.external.tor_bridge.bridges.Count-eq2) 'Socket deduplication discarded a distinct relay credential.'
+  Assert-MainWitness -Failure 'normal' -Expected $false -CapturedFixture $fixture
+  foreach($fault in @('port','udp','resolver','extra','partial','order','hosts-order','missing-projection','missing-arrays','private-source','dynamic-source','changed-source','source-count','credentials-after-capture','session','role','duplicate-source-key')){
+    $fixture=New-FixedWitnessFixture
+    $profile=$fixture.Content['tor-profile.json']|ConvertFrom-Json
+    $rows=@($profile.desktop_physical_egress)
+    switch($fault){
+      'port'{$rows[1].port=53}
+      'udp'{$rows[1].network='udp'}
+      'resolver'{$rows[1].host='9.9.9.9'}
+      'extra'{$rows+=@([pscustomobject]@{host='8.8.8.8';port=53;network='tcp'})}
+      'partial'{$rows=@($rows[0])}
+      'order'{$rows=@($rows[1],$rows[0]);$fixture.Bridge=$rows[0].host;$fixture.Environment['HOMEVPN_ENDPOINT']=$fixture.Bridge}
+      'private-source'{$profile.external.tor_bridge.bridges[1]=$profile.external.tor_bridge.bridges[1].Replace('2001:db8::29','fd00::29');$rows[1].host='fd00::29'}
+      'dynamic-source'{$profile.external.tor_bridge.bridges[1]='meek_lite 192.0.2.2:443 url=https://front.example/ front=front.example'}
+      'changed-source'{$profile.external.tor_bridge.bridges[1]=$profile.external.tor_bridge.bridges[1].Replace(':8444',':9444')}
+      'source-count'{$profile.external.tor_bridge.bridges=@($profile.external.tor_bridge.bridges)*5}
+      'session'{$fixture.Environment['HOMEVPN_EXTERNAL_SESSION']='f'*32}
+      'role'{$fixture.Environment['HOMEVPN_PROFILE_ID']='foreign-entry'}
+    }
+    $profile.desktop_physical_egress=$rows
+    if($fault-ceq'missing-projection'){$profile.PSObject.Properties.Remove('desktop_physical_egress')}
+    $fixture.Environment['HOMEVPN_NATIVE_EGRESS_JSON']=ConvertTo-Json -InputObject @($rows) -Depth 8 -Compress
+    $hosts=@($rows|ForEach-Object{$_.host}|Select-Object -Unique)
+    if($fault-ceq'hosts-order'){$hosts=@($hosts[1],$hosts[0])}
+    $fixture.Environment['HOMEVPN_NATIVE_ENDPOINTS_JSON']=ConvertTo-Json -InputObject @($hosts) -Compress
+    if($fault-ceq'missing-arrays'){$fixture.Environment['HOMEVPN_NATIVE_EGRESS_JSON']=''}
+    $raw=$profile|ConvertTo-Json -Depth 16 -Compress
+    if($fault-ceq'duplicate-source-key'){$raw=$raw.Replace('"transport":"custom"','"transport":"obfs4","transport":"custom"')}
+    Set-WitnessContent $fixture 'tor-profile.json' $raw
+    if($fault-ceq'credentials-after-capture'){$fixture.Content['tor-profile.json']=$raw.Replace('cert=Y2VydA','cert=Y2hhbmdlZA');[IO.File]::WriteAllText((Join-Path $fixture.Runtime 'tor-profile.json'),$fixture.Content['tor-profile.json'])}
+    Assert-CaptureRejected $fixture ('fixed-'+$fault)
+    Assert-MainWitness -Failure 'normal' -Expected $false -CapturedFixture $fixture -RejectCapture
+  }
+  $fixture=New-FixedWitnessFixture
+  $profile=$fixture.Content['tor-profile.json']|ConvertFrom-Json;$profile.desktop_physical_egress[1].port=9444
+  $fixture.Environment['HOMEVPN_NATIVE_EGRESS_JSON']=ConvertTo-Json -InputObject @($profile.desktop_physical_egress) -Depth 8 -Compress
+  Set-WitnessContent $fixture 'tor-profile.json' ($profile|ConvertTo-Json -Depth 16 -Compress)
+  Assert-CaptureRejected $fixture 'fixed-source-port'
+  $changed=$captureSource.Replace('if($directJSON -cne $egressRaw -or $hostsJSON -cne $endpointRaw)','if($false)')
+  Check ($changed-cne$captureSource) 'Fixed source negative control missed the shipping independent projection guard.'
+  . ([scriptblock]::Create($changed))
+  try{Detect-Defect {Assert-CaptureRejected $fixture 'fixed-source-port'} 'Unowned Tor physical capture was accepted: fixed-source-port'}finally{. ([scriptblock]::Create($captureSource))}
 }
 function Assert-ServerPhysicalCapture {
   $fixture=New-ServerWitnessFixture
@@ -704,6 +780,7 @@ function Assert-PhysicalCapture {
 try{
   $global:TorWitnessFirewall=New-Object 'System.Collections.Generic.List[string]'
   if(-not $ServerOnly){
+    Assert-FixedPhysicalCapture
     Assert-PhysicalCapture
     Assert-ExternalPhysicalCapture
   }

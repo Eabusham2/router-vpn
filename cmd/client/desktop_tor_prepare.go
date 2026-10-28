@@ -129,7 +129,25 @@ func stageDesktopTorInputsWithPredecessor(root string, policy, profile common.Ro
 	if err != nil {
 		return result, err
 	}
+	plan, err := desktopTorTransportPlan(policyCopy)
+	if err != nil {
+		return result, err
+	}
+	var egress []mobilemultihop.PhysicalEgress
 	if predecessor != nil {
+		if predecessor.native == nil {
+			return result, errors.New("Tor physical policy has no captured predecessor graph")
+		}
+		egress, err = predecessor.native.PhysicalEgress(plan)
+		if err != nil {
+			return result, err
+		}
+	} else {
+		// Only a complete fixed obfs4 plan grants Direct tuple authority.
+		// Dynamic or plain Direct remains Off-only in the shared compiler.
+		egress, _ = mobiletor.DesktopDirectPhysicalEgress(plan)
+	}
+	if predecessor != nil || len(egress) != 0 {
 		// RouterProfile stores the exit protocol once. Add the compiler's
 		// explicit graph identity only to the runtime copy, preserving the
 		// captured effective policy and explicit disabled LAN access.
@@ -137,20 +155,11 @@ func stageDesktopTorInputsWithPredecessor(root string, policy, profile common.Ro
 		if err = json.Unmarshal(profileRaw, &fields); err != nil {
 			return result, err
 		}
-		fields["multihop_exit_mode"], err = json.Marshal(policyCopy.External.Protocol)
-		if err != nil {
-			return result, err
-		}
-		if predecessor.native == nil {
-			return result, errors.New("Tor physical policy has no captured predecessor graph")
-		}
-		plan, err := desktopTorTransportPlan(policyCopy)
-		if err != nil {
-			return result, err
-		}
-		egress, err := predecessor.native.PhysicalEgress(plan)
-		if err != nil {
-			return result, err
+		if predecessor != nil {
+			fields["multihop_exit_mode"], err = json.Marshal(policyCopy.External.Protocol)
+			if err != nil {
+				return result, err
+			}
 		}
 		// This runtime-only projection is covered by the same private profile
 		// digest as the selected policy. Both launch wrappers compare it with
@@ -314,8 +323,8 @@ func prepareTorBridgeCommand(a *app, policy, profile common.RouterProfile) (comm
 }
 
 func desktopTorCapturedPhysicalEgress(launch *desktopNodeLaunch) ([]mobilemultihop.PhysicalEgress, error) {
-	if launch == nil || launch.tor == nil || launch.tor.predecessor == nil || launch.tor.predecessor.native == nil {
-		return nil, errors.New("Tor physical egress has no captured predecessor")
+	if launch == nil || launch.tor == nil {
+		return nil, errors.New("Tor physical egress has no captured source")
 	}
 	raw, err := readDesktopRuntimeFile(launch, "tor-profile.json", desktopTorInputLimit("tor-profile.json"))
 	if err != nil || desktopTorDigest(raw) != launch.tor.inputs["tor-profile.json"].digest {
@@ -332,7 +341,19 @@ func desktopTorCapturedPhysicalEgress(launch *desktopNodeLaunch) ([]mobilemultih
 	if err != nil {
 		return nil, err
 	}
-	return launch.tor.predecessor.native.PhysicalEgress(plan)
+	if entry := launch.tor.predecessor; entry != nil {
+		if entry.native == nil {
+			return nil, errors.New("Tor physical egress lost its captured predecessor")
+		}
+		return entry.native.PhysicalEgress(plan)
+	}
+	egress, err := mobiletor.DesktopDirectPhysicalEgress(plan)
+	if err != nil && launch.tor.expected.KillSwitchPolicy == "off" {
+		// Plain and dynamic Direct have no fixed physical projection. This
+		// never turns their saved Off selection into a protected path.
+		return nil, nil
+	}
+	return egress, err
 }
 
 // An empty physical bridge plan is meaningful only for explicit plain Tor. It
@@ -366,15 +387,15 @@ func desktopTorLaunchEnvironment(base []string, root string, prepared torBridgeR
 		if owner.expected.EntryID != "" {
 			return nil, errors.New("Tor launch lost its captured predecessor")
 		}
-		return environment, nil
-	}
-	entry := owner.predecessor
-	if entry.native == nil || owner.expected.EntryID != profileID || owner.expected.EntryMode != entry.mode || owner.expected.EntryAssetsSHA256 != entry.assetsSHA256 {
+	} else if entry := owner.predecessor; entry.native == nil || owner.expected.EntryID != profileID || owner.expected.EntryMode != entry.mode || owner.expected.EntryAssetsSHA256 != entry.assetsSHA256 {
 		return nil, errors.New("Tor launch environment differs from its captured predecessor")
 	}
 	egress, err := desktopTorCapturedPhysicalEgress(launch)
 	if err != nil {
 		return nil, err
+	}
+	if len(egress) == 0 {
+		return environment, nil
 	}
 	hosts, seen, found := []string{endpoint}, map[string]bool{endpoint: true}, false
 	for _, tuple := range egress {
@@ -387,7 +408,7 @@ func desktopTorLaunchEnvironment(base []string, root string, prepared torBridgeR
 		}
 	}
 	if !found {
-		return nil, errors.New("Tor physical endpoint does not belong to its captured predecessor graph")
+		return nil, errors.New("Tor physical endpoint does not belong to its captured source graph")
 	}
 	hostJSON, err := json.Marshal(hosts)
 	if err != nil {

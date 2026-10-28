@@ -16,7 +16,7 @@ import (
 func TestTorBridgeCapabilitySeparatesDirectAndRouterProtection(t *testing.T) {
 	t.Setenv("HOMEVPN_ROOT", t.TempDir())
 	for _, row := range torBridgeTransportCapabilities() {
-		if !row.StrictRouterEntryKillSwitch || !row.StrictExternalEntryKillSwitch || row.StrictKillSwitch != (row.ID == "obfs4") {
+		if !row.StrictRouterEntryKillSwitch || !row.StrictExternalEntryKillSwitch || row.StrictKillSwitch != (row.ID == "obfs4" || row.ID == "custom") {
 			t.Fatal("capability conflated protected predecessors and dynamic Direct paths", row)
 		}
 	}

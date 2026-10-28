@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SELECTIONS = ('local', 'server') + tuple('ordinary-' + protocol for protocol in
     ('wireguard', 'amneziawg', 'socks5', 'http-connect', 'https-connect', 'shadowsocks', 'hysteria2', 'openvpn'))
 SELECTIONS += tuple('plain-' + selection for selection in SELECTIONS)
-CATALOG_FILES = ('tor-update-capabilities.json', 'tor-update-input-lines.json') + tuple(
+CATALOG_FILES = ('tor-update-capabilities.json', 'tor-update-input-lines.json', 'tor-fixed-input-sets.json') + tuple(
     'tor-update-' + (selection + '-' if selection != 'local' else '') + suffix
     for selection in SELECTIONS for suffix in ('source-catalog.json', 'always-source-catalog.json'))
 
@@ -60,6 +60,8 @@ def swift_form(directory):
          '_ = words; return false', 'Tor update adopted ordinary-mixed-udp'),
         ('plain-lines', 'guard bridges.isEmpty else', 'guard true else',
          'Tor update adopted plain-lines'),
+        ('direct-fixed-source', 'return (words.first == "bridge" ? words.dropFirst().first : words.first) == "obfs4"',
+         '_ = words; return true', 'Direct custom set admitted dynamic bridge meek_lite'),
     )
     for name, original, replacement, witness in controls:
         assert generated.count(original) == 1, name
@@ -114,6 +116,8 @@ def linux_form(directory):
          '(void)line;', 'Rejected trial identity: ordinary-mixed-udp'),
         ('plain-lines', '(plain && bridges->len != 0) || ', '',
          'Rejected trial identity: plain-lines'),
+        ('direct-fixed-source', 'fixed = kind != NULL && g_ascii_strcasecmp(kind, "obfs4") == 0;',
+         '(void)kind; fixed = TRUE;', 'Rejected trial identity: fixed-mixed-meek_lite'),
     )
     include = '#include "routervpn-tor-bridge-v13.inc"'
     assert rendered.count(include) == 1
@@ -156,6 +160,8 @@ def windows_form(directory, shell):
          'Tor update adopted ordinary-mixed-udp'),
         ('plain-lines', 'if($Plain-and$BridgeCount-ne0)', 'if($false)',
          'Tor update adopted plain-lines'),
+        ('direct-fixed-source', "if($Kind-ine'obfs4'){$Fixed=$false}", 'if($false){$Fixed=$false}',
+         'Direct custom set admitted dynamic bridge meek_lite'),
     )
     for name, original, replacement, witness in controls:
         assert source.count(original) == 1, name

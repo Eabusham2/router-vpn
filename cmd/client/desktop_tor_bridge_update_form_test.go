@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -119,6 +120,17 @@ func TestDesktopTorBridgeUpdateFormCatalog(t *testing.T) {
 	if err = os.WriteFile(filepath.Join(directory, "tor-update-input-lines.json"), lines, 0600); err != nil {
 		t.Fatal(err)
 	}
+	fixed := map[string][]string{}
+	for _, count := range []int{1, 2, 8} {
+		fixed[fmt.Sprint(count)] = desktopDirectBridgeLines(count)
+	}
+	lines, err = json.MarshalIndent(fixed, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(directory, "tor-fixed-input-sets.json"), lines, 0600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestDesktopTorBridgeUpdateFormPayload(t *testing.T) {
@@ -150,6 +162,47 @@ func TestDesktopTorBridgeUpdateFormPayload(t *testing.T) {
 			t.Fatal("Plain Tor Add changed an existing private node")
 		}
 	})
+	for _, transport := range []string{"obfs4", "custom"} {
+		for _, count := range []int{1, 2, 8} {
+			for _, kill := range []string{"on-connect", "always"} {
+				t.Run(fmt.Sprintf("new-fixed/%s/%d/%s", transport, count, kill), func(t *testing.T) {
+					a, old, entry := torBridgeFormSourceFixture(t, "local")
+					raw, err := os.ReadFile(filepath.Join(directory, fmt.Sprintf("tor-create-fixed-%s-%d-%s.json", transport, count, kill)))
+					if err != nil {
+						t.Fatal(err)
+					}
+					var request torBridgeImportRequest
+					if json.Unmarshal(raw, &request) != nil || request.Transport != transport || request.KillSwitchPolicy != kill || request.ID != "" || request.ExpectedSelectedNodeID != nil || len(request.ExpectedProfileTokens) != 0 || len(request.Bridges) != count {
+						t.Fatal("actual fixed Direct Add borrowed an update identity or changed its complete bridge selection")
+					}
+					lines := desktopDirectBridgeLines(count)
+					for i := range lines {
+						if request.Bridges[i] != lines[i] {
+							t.Fatal("actual fixed Direct Add substituted bridge credentials or source order")
+						}
+					}
+					response := postTorBridgeUpdate(a, raw)
+					if response.Code != http.StatusOK || len(a.profiles.Profiles) != 3 {
+						t.Fatal("actual fixed Direct Add failed", response.Code, response.Body.String())
+					}
+					added := a.profiles.Profiles[2]
+					if added.External == nil || added.External.Protocol != "tor-bridge" || added.External.TorBridge == nil || added.External.TorBridge.Transport != transport || len(added.External.TorBridge.Bridges) != count || added.MultihopEnabled || !added.KillSwitch || added.KillSwitchPolicy != kill || a.cmd != nil || a.state.Connected {
+						t.Fatal("fixed Direct Add changed its complete policy or invented a running connection")
+					}
+					for i := range lines {
+						if added.External.TorBridge.Bridges[i] != lines[i] {
+							t.Fatal("fixed Direct import did not preserve every captured bridge credential")
+						}
+					}
+					before, _ := json.Marshal([]common.RouterProfile{old, entry})
+					after, _ := json.Marshal(a.profiles.Profiles[:2])
+					if !bytes.Equal(before, after) {
+						t.Fatal("fixed Direct Add changed an existing private node")
+					}
+				})
+			}
+		}
+	}
 	for _, execution := range torBridgeFormSelections() {
 		t.Run(execution+"/unchanged-saved-protection", func(t *testing.T) {
 			a, old, entry := torBridgeFormSourceFixture(t, execution)

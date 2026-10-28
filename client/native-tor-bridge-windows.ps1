@@ -156,10 +156,57 @@ function Get-RouterVPNTorCaptureIdentity {
     if($endpoint -cne '' -or $BridgeEndpoint -cne '' -or $null -eq $killPolicy -or $killPolicy.Value -isnot [string] -or $killPolicy.Value -cne 'off' -or
        ($null -ne $kill -and ($kill.Value -isnot [bool] -or $kill.Value))){throw 'Direct plain Tor requires explicit Off protection and no invented guard endpoint.'}
   }elseif([string]::IsNullOrWhiteSpace($endpoint) -or (-not $viaEntry -and $endpoint -cne $BridgeEndpoint)){throw 'Tor capture lost its actual physical endpoint.'}
+  # Fixed Direct authority comes only from the complete hashed bridge source.
+  # Do not infer sockets from native output, a first bridge, or an entry label.
+  $fixedDirect=$false;$directEgress=@();$directHosts=@()
+  if(-not $viaEntry -and $protocol -ceq 'tor-bridge' -and $null -ne $bridgeSelection -and $bridgeSelection.Value -is [pscustomobject]){
+    $bridgeConfig=$bridgeSelection.Value
+    $bridgeFields=@($bridgeConfig.PSObject.Properties.Name)
+    $linesProperty=$bridgeConfig.PSObject.Properties['bridges']
+    $transportProperty=$bridgeConfig.PSObject.Properties['transport']
+    if($null -eq $linesProperty -or $linesProperty.Value -isnot [Array] -or $linesProperty.Value.Count -lt 1 -or $linesProperty.Value.Count -gt 8){throw 'Direct bridge source exceeds its captured bound.'}
+    if($null -ne $transportProperty -and $transportProperty.Value -is [string] -and $transportProperty.Value -cin @('obfs4','custom')){
+      $fixedDirect=$true;$lineSet=@{};$tupleSet=@{};$hostSet=@{}
+      foreach($line in $linesProperty.Value){
+        if($line -isnot [string] -or $line.Length -gt 8192 -or $line.Contains([string][char]0) -or $line.Contains("`r") -or $line.Contains("`n")){throw 'Direct bridge source is not a bounded normalized line.'}
+        $words=@($line -split '\s+')
+        if($words.Count -eq 0 -or $words[0] -cne 'obfs4'){$fixedDirect=$false;break}
+        if($words.Count -lt 4 -or ($words -join ' ') -cne $line -or $lineSet.ContainsKey($line) -or $words[2] -cnotmatch '\A[0-9A-F]{40}\z'){throw 'Direct obfs4 source lost its exact normalized identity.'}
+        $socket=[regex]::Match($words[1],'\A(?<host>\[[0-9a-f:]+\]|[0-9.]+):(?<port>[1-9][0-9]{0,4})\z')
+        if(-not $socket.Success){throw 'Direct obfs4 source lost its literal socket.'}
+        $hostValue=$socket.Groups['host'].Value.Trim('[',']');$portValue=[int]$socket.Groups['port'].Value
+        $address=$null
+        if($portValue -gt 65535 -or -not [Net.IPAddress]::TryParse($hostValue,[ref]$address) -or $address.ToString() -cne $hostValue){throw 'Direct obfs4 source lost its canonical literal socket.'}
+        $bytes=$address.GetAddressBytes()
+        $private=if($bytes.Length -eq 4){$bytes[0] -eq 10 -or ($bytes[0] -eq 172 -and $bytes[1] -ge 16 -and $bytes[1] -le 31) -or ($bytes[0] -eq 192 -and $bytes[1] -eq 168)}else{($bytes[0] -band 254) -eq 252}
+        if($private){throw 'Direct obfs4 source is not a public literal socket.'}
+        $lineSet[$line]=$true;$key=$hostValue+'|'+[string]$portValue
+        if(-not $tupleSet.ContainsKey($key)){$tupleSet[$key]=$true;$directEgress+=@([ordered]@{host=$hostValue;port=$portValue;network='tcp'})}
+        if(-not $hostSet.ContainsKey($hostValue)){$hostSet[$hostValue]=$true;$directHosts+=@($hostValue)}
+      }
+      if($fixedDirect){
+        $socks=$bridgeConfig.PSObject.Properties['socks_port']
+        if($bridgeFields.Count -ne 3 -or @($bridgeFields|Where-Object{$_ -cnotin @('transport','bridges','socks_port')}).Count -ne 0 -or
+           $null -eq $socks -or ($socks.Value -isnot [int] -and $socks.Value -isnot [long]) -or $socks.Value -lt 1024 -or $socks.Value -gt 65535){throw 'Direct bridge source lost its captured configuration shape.'}
+        $canonical=([ordered]@{transport=$transportProperty.Value;bridges=@($linesProperty.Value);socks_port=$socks.Value}|ConvertTo-Json -Depth 8 -Compress)
+        $bridgeKeys=@([regex]::Matches($profileCapture.raw,'"(?:\\.|[^"\\])*"')|Where-Object{
+          $_.Value -ceq '"tor_bridge"' -and $profileCapture.raw.Substring($_.Index+$_.Length) -match '^\s*:'
+        })
+        $bridgeSource=[regex]::Matches($profileCapture.raw,('"tor_bridge":'+[regex]::Escape($canonical)+'(?=[,}])'))
+        if($bridgeKeys.Count -ne 1 -or $bridgeSource.Count -ne 1 -or $bridgeSource[0].Index -ne $bridgeKeys[0].Index){throw 'Direct bridge source is ambiguous or differs from its exact captured bytes.'}
+      }
+    }
+  }
+  if(-not $viaEntry -and $protocol -ceq 'tor-bridge'){
+    $kill=$profile.PSObject.Properties['kill_switch'];$killPolicy=$profile.PSObject.Properties['kill_switch_policy']
+    if(($null -ne $kill -and $kill.Value -isnot [bool]) -or ($null -ne $killPolicy -and ($killPolicy.Value -isnot [string] -or $killPolicy.Value -cnotin @('','off','on-connect','always')))){throw 'Direct Tor protection lost its captured type.'}
+    $strict=($null -ne $killPolicy -and $killPolicy.Value -cin @('on-connect','always')) -or (($null -eq $killPolicy -or $killPolicy.Value -ceq '') -and $null -ne $kill -and $kill.Value)
+    if($strict -and -not $fixedDirect){throw 'Dynamic Direct Tor cannot acquire strict physical authority.'}
+  }
   $endpointRaw=[string]$CapturedEnvironment['HOMEVPN_NATIVE_ENDPOINTS_JSON']
   $egressRaw=[string]$CapturedEnvironment['HOMEVPN_NATIVE_EGRESS_JSON']
   $hasArrays=$endpointRaw.Length -gt 0 -or $egressRaw.Length -gt 0
-  if($viaEntry -and -not $hasArrays){throw 'Tor Router predecessor requires its exact physical egress tuples.'}
+  if(($viaEntry -or $fixedDirect) -and -not $hasArrays){throw 'Tor path requires its exact physical egress tuples.'}
   $addresses=@($endpoint);$egress=@()
   if($plainDirect){$addresses=@()}
   if($hasArrays){
@@ -196,7 +243,7 @@ function Get-RouterVPNTorCaptureIdentity {
   }
   if($hasArrays -and $hosts.Count -ne $addresses.Count){throw 'Tor physical egress omitted a captured endpoint.'}
   $projection=$profile.PSObject.Properties['desktop_physical_egress']
-  if($viaEntry){
+  if($viaEntry -or $fixedDirect){
     if($null -eq $projection -or $null -eq $projection.Value -or $projection.Value -isnot [Array]){throw 'Tor Router entry lacks its captured physical graph projection.'}
     # Consume every complete JSON string before identifying this key, so an
     # escaped key-shaped string inside a credential cannot be confused with a
@@ -209,6 +256,11 @@ function Get-RouterVPNTorCaptureIdentity {
     $rawProjectionValid=$projectionKeys.Count -eq 1 -and $projectionTuples.Count -eq 1 -and
       $projectionTuples[0].Index -eq $projectionKeys[0].Index -and $projectionTuples[0].Groups['tuples'].Value -ceq $egressRaw
     if(-not $rawProjectionValid){throw 'Tor physical graph projection differs from its exact captured tuples.'}
+    if($fixedDirect){
+      $directJSON=ConvertTo-Json -InputObject @($directEgress) -Depth 8 -Compress
+      $hostsJSON=ConvertTo-Json -InputObject @($directHosts) -Compress
+      if($directJSON -cne $egressRaw -or $hostsJSON -cne $endpointRaw){throw 'Direct obfs4 tuples differ from the complete captured bridge source.'}
+    }
   }elseif($null -ne $projection -or $hasArrays -or [string]$CapturedEnvironment['HOMEVPN_EXTERNAL_SESSION']){
     throw 'Direct Tor acquired an unowned physical predecessor projection.'
   }

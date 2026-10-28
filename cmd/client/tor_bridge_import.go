@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobiletor"
 )
 
 type torBridgeImportRequest struct {
@@ -256,7 +257,7 @@ func preserveTorBridgeEditSettings(existing common.RouterProfile, next common.Ro
 	if existing.MultihopEnabled && !intent.Kill {
 		// Editing bridge bytes is not permission to disable the protection
 		// already chosen for this saved entry path. Direct additions/edits
-		// retain their existing single-obfs4 versus dynamic defaults.
+		// retain their existing fixed-obfs4 versus dynamic defaults.
 		next.KillSwitchPolicy = existing.KillSwitchPolicy
 		if next.KillSwitchPolicy == "" {
 			next.KillSwitchPolicy = "off"
@@ -275,8 +276,9 @@ func normalizeTorBridgeImportPolicy(profile common.RouterProfile) (common.Router
 	if err := common.NormalizeRouterProfile(&profile); err != nil {
 		return common.RouterProfile{}, errors.New("invalid Tor bridge profile: " + err.Error())
 	}
-	cfg := profile.External.TorBridge
-	strictLiteralObfs4 := cfg != nil && cfg.Transport == "obfs4" && len(cfg.Bridges) == 1
+	plan, planErr := desktopTorTransportPlan(profile)
+	_, egressErr := mobiletor.DesktopDirectPhysicalEgress(plan)
+	strictLiteralObfs4 := planErr == nil && egressErr == nil
 	if requestedKill == "" {
 		requestedKill = "off"
 		if strictLiteralObfs4 {
@@ -284,7 +286,7 @@ func normalizeTorBridgeImportPolicy(profile common.RouterProfile) (common.Router
 		}
 	}
 	if requestedKill != "off" && !strictLiteralObfs4 && !profile.MultihopEnabled {
-		return common.RouterProfile{}, errors.New("dynamic bootstrap egress requires the exact saved eligible predecessor; Direct meek/Snowflake/WebTunnel/custom or multi-bridge profiles require kill_switch_policy=off")
+		return common.RouterProfile{}, errors.New("dynamic bootstrap egress requires the exact saved eligible predecessor; Direct plain/meek/Snowflake/WebTunnel or mixed dynamic bridge profiles require kill_switch_policy=off")
 	}
 	profile.KillSwitchPolicy, profile.KillSwitch = requestedKill, requestedKill != "off"
 	policy, err := externalRuntimePolicy(profile)

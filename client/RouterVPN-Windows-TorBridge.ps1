@@ -453,7 +453,13 @@ function NewUnifiedTorImportBody($Body,$Opened,[bool]$Update,$Capabilities,$Curr
     }
     $Rows=@((ExternalPublicValue $Capabilities 'transports' @())|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq [string]$Body.transport})
     if($Rows.Count-ne1){throw 'Refresh Tor transport support before saving.'}
-    $Direct=(ExternalPublicValue $Rows[0] 'strict_kill_switch' $false) -ceq $true-and@($Body.bridges).Count-eq1-and(-not$Update-or(ExternalPublicValue $Profile 'multihop_enabled' $false) -cne $true)
+    $Fixed=[string]$Body.transport-cin@('obfs4','custom')-and$BridgeCount-ge1-and$BridgeCount-le8
+    foreach($Line in @($Body.bridges)){
+        $Words=@(([string]$Line).Trim() -split '\s+')
+        $Kind=if($Words.Count-gt1-and$Words[0]-ieq'Bridge'){$Words[1]}elseif($Words.Count-gt0){$Words[0]}else{''}
+        if($Kind-ine'obfs4'){$Fixed=$false}
+    }
+    $Direct=(ExternalPublicValue $Rows[0] 'strict_kill_switch' $false) -ceq $true-and$Fixed-and(-not$Update-or(ExternalPublicValue $Profile 'multihop_enabled' $false) -cne $true)
     $Router=$Update-and(TestUnifiedTorRouterPath $Opened $Profile)-and(ExternalPublicValue $Rows[0] 'strict_router_entry_kill_switch' $false) -ceq $true
     $Ordinary=$Update-and(TestUnifiedTorOrdinaryPath $Opened $Profile $Body)-and(ExternalPublicValue $Rows[0] 'strict_external_entry_kill_switch' $false) -ceq $true
     if([string]$Body.kill_switch_policy-cne'off'-and-not$Direct-and-not$Router-and-not$Ordinary){throw 'Strict protection requires a saved eligible entry. Ordinary entries use Local execution; Snowflake also needs bounded native UDP. Server requires a paired Router. For a new Direct dynamic node, choose Kill switch Off, then configure its entry in Settings.'}
@@ -497,7 +503,7 @@ function ShowUnifiedTorBridgeBuilder{
             $ID=[string](($Transport.SelectedItem).Tag);$C=$Support.Transports[$ID]
             if($C){
                 $Availability=if([bool]$C.supported){'Available'}else{'Unavailable'}
-                $Strict=if([bool]$C.strict_kill_switch){'Direct with one fixed bridge'}elseif((ExternalPublicValue $C 'strict_external_entry_kill_switch' $false)-ceq$true){'with an eligible Local entry; Server requires a paired Router'}elseif((ExternalPublicValue $C 'strict_router_entry_kill_switch' $false)-ceq$true){'with a saved Router entry using Local or Server execution'}else{'unavailable for this transport'}
+                $Strict=if([bool]$C.strict_kill_switch){'Direct with 1–8 literal obfs4 bridges'}elseif((ExternalPublicValue $C 'strict_external_entry_kill_switch' $false)-ceq$true){'with an eligible Local entry; Server requires a paired Router'}elseif((ExternalPublicValue $C 'strict_router_entry_kill_switch' $false)-ceq$true){'with a saved Router entry using Local or Server execution'}else{'unavailable for this transport'}
                 $Capability.Text=$Availability+" • strict protection "+$Strict+"`n"+[string]$C.description
                 $Why=[string]$C.reason;if($Why){$Capability.Text+="`nReason: "+$Why}
             }else{$Capability.Text="Support details unavailable for $ID."}

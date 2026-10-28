@@ -31,6 +31,7 @@ $Raw=Get-Content -Raw (Join-Path $Output 'tor-update-source-catalog.json')
 $Opened=$Raw|ConvertFrom-Json;$script:Current=$Raw|ConvertFrom-Json
 $Capabilities=Get-Content -Raw (Join-Path $Output 'tor-update-capabilities.json')|ConvertFrom-Json
 $InputLines=Get-Content -Raw (Join-Path $Output 'tor-update-input-lines.json')|ConvertFrom-Json
+$FixedSets=Get-Content -Raw (Join-Path $Output 'tor-fixed-input-sets.json')|ConvertFrom-Json
 $TransportIDs=@($XML.SelectNodes('//*[@Name="TorTransport"]/*')|ForEach-Object{[string]$_.Tag})
 if($TransportIDs-cnotcontains'tor'){throw 'Shipping transport selector omitted Plain Tor'}
 $Name=[pscustomobject]@{Text='Native Tor update'};$Transport=[pscustomobject]@{Items=@($TransportIDs|ForEach-Object{[pscustomobject]@{Tag=$_}});SelectedIndex=0}
@@ -153,5 +154,27 @@ Check ($null-eq$Saved) 'Plain Tor Direct borrowed strict Router authority'
 $Kill.SelectedIndex=0;$Button.IsEnabled=$true;&$Save
 Check ($null-ne$Saved-and$Saved.transport-ceq'tor'-and@($Saved.bridges).Count-eq0-and$NodeReads-eq$BeforeReads) 'Plain Tor Add did not preserve its empty bridge contract'
 [IO.File]::WriteAllText((Join-Path $Output 'tor-create-plain.json'),($Saved|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))
+foreach($ID in @('obfs4','custom')){
+    foreach($Count in @(1,2,8)){
+        foreach($Policy in @('on-connect','always')){
+            $Transport.SelectedIndex=$TransportIDs.IndexOf($ID);$Kill.SelectedIndex=@('off','on-connect','always').IndexOf($Policy)
+            $Bridges=@($FixedSets.([string]$Count));$Lines.Text=$Bridges-join"`n"
+            $script:Saved=$null;$Button.IsEnabled=$true;&$Save
+            Check ($null-ne$Saved) ('Direct fixed bridge set was rejected: '+$Status.Text)
+            Check ($Saved.transport-ceq$ID-and$Saved.kill_switch_policy-ceq$Policy-and($Saved.bridges-join"`n")-ceq($Bridges-join"`n")) 'Direct fixed bridge credentials or strict policy changed'
+            Check (-not$Saved.ContainsKey('id')-and-not$Saved.ContainsKey('expected_profile_tokens')-and$NodeReads-eq$BeforeReads) 'Direct fixed Add borrowed a selected predecessor'
+            [IO.File]::WriteAllText((Join-Path $Output ('tor-create-fixed-'+$ID+'-'+$Count+'-'+$Policy+'.json')),($Saved|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))
+        }
+    }
+}
+foreach($Dynamic in @('meek_lite','snowflake','webtunnel')){
+    $Transport.SelectedIndex=$TransportIDs.IndexOf('custom');$Kill.SelectedIndex=2
+    $Lines.Text=(@($FixedSets.'1')+@($InputLines.$Dynamic))-join"`n"
+    $script:Saved=$null;$Button.IsEnabled=$true;&$Save
+    Check ($null-eq$Saved-and$NodeReads-eq$BeforeReads) ('Direct custom set admitted dynamic bridge '+$Dynamic)
+}
+$Transport.SelectedIndex=$TransportIDs.IndexOf('custom');$Kill.SelectedIndex=2
+$Lines.Text=(@($FixedSets.'8')+@($FixedSets.'1'))-join"`n";$script:Saved=$null;$Button.IsEnabled=$true;&$Save
+Check ($null-eq$Saved) 'Direct fixed set exceeded its eight-bridge bound'
 if($NativeWPF){$D.Close()}
 Write-Host "Windows actual Tor editor callbacks: $script:Checks checks PASS; WPF=$NativeWPF"

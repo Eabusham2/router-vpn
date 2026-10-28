@@ -88,7 +88,11 @@ func torBridgeImportBody(_ body: [String: Any], opened: [String: Any], update: B
     }
     let rows = (capabilities["transports"] as? [[String: Any]] ?? []).filter { $0["id"] as? String == body["transport"] as? String }
     guard rows.count == 1 else { throw fail("Refresh Tor transport support before saving.") }
-    let direct = rows[0]["strict_kill_switch"] as? Bool == true && (body["bridges"] as? [String])?.count == 1 && !throughEntry
+    let fixed = ["obfs4", "custom"].contains(transport) && (1...8).contains(bridges.count) && bridges.allSatisfy {
+        let words = $0.split(whereSeparator: { $0.isWhitespace }).map { $0.lowercased() }
+        return (words.first == "bridge" ? words.dropFirst().first : words.first) == "obfs4"
+    }
+    let direct = rows[0]["strict_kill_switch"] as? Bool == true && fixed && !throughEntry
     router = router && rows[0]["strict_router_entry_kill_switch"] as? Bool == true
     ordinary = ordinary && rows[0]["strict_external_entry_kill_switch"] as? Bool == true
     guard body["kill_switch_policy"] as? String == "off" || direct || router || ordinary else {
@@ -208,7 +212,7 @@ private final class RouterVPNTorBridgeBuilder: NSWindowController {
         let ordinaryStrict = row["strict_external_entry_kill_switch"] as? Bool ?? false
         let description = row["description"] as? String ?? ""
         let reason = row["reason"] as? String ?? ""
-        let protection = strict ? "Direct with one fixed bridge" : (ordinaryStrict ? "with an eligible Local entry; Server requires a paired Router" : (routerStrict ? "with a saved Router entry using Local or Server execution" : "unavailable for this transport"))
+        let protection = strict ? "Direct with 1–8 literal obfs4 bridges" : (ordinaryStrict ? "with an eligible Local entry; Server requires a paired Router" : (routerStrict ? "with a saved Router entry using Local or Server execution" : "unavailable for this transport"))
         capabilityText.stringValue = "\(supported ? "Available" : "Unavailable") • Strict protection \(protection)\n\(description)\(reason.isEmpty ? "" : "\nReason: \(reason)")"
         if !strict && killSwitchPopup.indexOfSelectedItem != 0 { status.stringValue = "Strict protection requires a saved eligible entry. Ordinary entries use Local; Server requires a paired Router. The complete captured path is checked when you save." }
         else { status.stringValue = "" }

@@ -12,7 +12,7 @@ typedef struct { char *data; size_t size; } Buffer;
 static guint checks, posts, node_reads, status_reads, refreshes, diagnostics, dialogs;
 static gboolean idle = TRUE, unavailable_nodes = FALSE, refuse_post = FALSE;
 static char *last_body;
-static JsonNode *source_catalog, *source_always, *source_capabilities, *source_lines, *current_catalog, *capabilities;
+static JsonNode *source_catalog, *source_always, *source_capabilities, *source_lines, *source_fixed_sets, *current_catalog, *capabilities;
 static const char *directory, *source_prefix;
 static App *active_app;
 
@@ -144,11 +144,18 @@ static gboolean drive_dialog(gpointer data) {
         check(gtk_combo_box_get_active_id(GTK_COMBO_BOX(trial->kill_widget)) == NULL, "unavailable saved protection silently became Off");
     check(gtk_combo_box_set_active_id(GTK_COMBO_BOX(trial->transport_widget), trial->transport), "requested transport not offered by actual widget");
     if (trial->kill != NULL) check(gtk_combo_box_set_active_id(GTK_COMBO_BOX(trial->kill_widget), trial->kill), "requested protection not offered by actual widget");
-    JsonArray *lines = json_object_get_array_member(json_node_get_object(source_lines), g_str_has_prefix(trial->fault, "ordinary-mixed-udp") || g_strcmp0(trial->fault, "plain-lines") == 0 ? "obfs4" : trial->transport);
+    const char *fixed_count = g_str_has_prefix(trial->fault, "fixed-") ? trial->fault + strlen("fixed-") : NULL;
+    gboolean fixed_mixed = g_str_has_prefix(trial->fault, "fixed-mixed-");
+    JsonArray *lines = fixed_count != NULL ? json_object_get_array_member(json_node_get_object(source_fixed_sets), fixed_mixed ? "1" : g_strcmp0(fixed_count, "oversized") == 0 ? "8" : fixed_count) :
+        json_object_get_array_member(json_node_get_object(source_lines), g_str_has_prefix(trial->fault, "ordinary-mixed-udp") || g_strcmp0(trial->fault, "plain-lines") == 0 ? "obfs4" : trial->transport);
     GString *text = g_string_new("");
     for (guint i = 0; i < json_array_get_length(lines); i++) {
         if (i) g_string_append_c(text, '\n');
         g_string_append(text, json_array_get_string_element(lines, i));
+    }
+    if (fixed_mixed || g_strcmp0(trial->fault, "fixed-oversized") == 0) {
+        JsonArray *extra = fixed_mixed ? json_object_get_array_member(json_node_get_object(source_lines), trial->fault + strlen("fixed-mixed-")) : json_object_get_array_member(json_node_get_object(source_fixed_sets), "1");
+        for (guint i = 0; i < json_array_get_length(extra); i++) { g_string_append_c(text, '\n'); g_string_append(text, json_array_get_string_element(extra, i)); }
     }
     if (g_str_has_prefix(trial->fault, "ordinary-mixed-udp")) {
         JsonArray *udp = json_object_get_array_member(json_node_get_object(source_lines), "snowflake");
@@ -249,6 +256,12 @@ static void verify_post(Trial *trial) {
         }
     } else {
         check(node_reads == 0 && !json_object_has_member(body, "id") && !json_object_has_member(body, "expected_profile_tokens") && !json_object_has_member(body, "expected_selected_node_id"), "Add silently became an update of the selected Tor node");
+        if (g_str_has_prefix(trial->fault, "fixed-")) {
+            JsonArray *expected = json_object_get_array_member(json_node_get_object(source_fixed_sets), trial->fault + strlen("fixed-"));
+            JsonArray *actual = json_object_get_array_member(body, "bridges");
+            check(actual != NULL && json_array_get_length(actual) == json_array_get_length(expected), "Direct fixed Add changed its complete bridge list");
+            for (guint i = 0; i < json_array_get_length(expected); i++) check(g_strcmp0(json_array_get_string_element(actual, i), json_array_get_string_element(expected, i)) == 0, "Direct fixed Add substituted captured bridge credentials or order");
+        }
     }
     json_node_free(posted);
 }
@@ -268,7 +281,7 @@ static void run_trial(App *app, const char *transport, const char *kill, gboolea
         check(rejected, "cancelled/rejected modal escaped its owned callback");
     }
     if (emit) {
-        char *name = !update ? g_strdup("tor-create-plain.json") : g_strcmp0(fault, "saved-always") == 0 ? g_strdup_printf("tor-update-%spreserved-protection.json", source_prefix) : g_strdup_printf("tor-update-%s%s-%s.json", source_prefix, transport, kill);
+        char *name = !update ? (g_str_has_prefix(fault, "fixed-") ? g_strdup_printf("tor-create-fixed-%s-%s-%s.json", transport, fault + strlen("fixed-"), kill) : g_strdup("tor-create-plain.json")) : g_strcmp0(fault, "saved-always") == 0 ? g_strdup_printf("tor-update-%spreserved-protection.json", source_prefix) : g_strdup_printf("tor-update-%s%s-%s.json", source_prefix, transport, kill);
         char *path = g_build_filename(directory, name, NULL);
         check(g_file_set_contents(path, last_body, -1, NULL) && g_chmod(path, 0600) == 0, "actual callback payload could not be saved privately");
         g_free(path); g_free(name);
@@ -282,7 +295,7 @@ static JsonNode *read_fixture(const char *name) {
 }
 int main(int argc, char **argv) {
     gtk_init(&argc, &argv); check(argc == 2, "expected private Go fixture directory"); directory = argv[1];
-    source_capabilities = read_fixture("tor-update-capabilities.json"); source_lines = read_fixture("tor-update-input-lines.json");
+    source_capabilities = read_fixture("tor-update-capabilities.json"); source_lines = read_fixture("tor-update-input-lines.json"); source_fixed_sets = read_fixture("tor-fixed-input-sets.json");
     check(strstr(obj_string(json_node_get_object(source_capabilities), "test_fixture_runtime_availability"), "simulated") != NULL, "UI fixture must label simulated runtime availability");
     App app = {gtk_window_new(GTK_WINDOW_TOPLEVEL), "tor-edit"}; active_app = &app;
     const char *transports[] = {"obfs4", "meek_lite", "snowflake", "webtunnel", "tor"}, *kills[] = {"off", "on-connect", "always"};
@@ -324,12 +337,19 @@ int main(int argc, char **argv) {
     }
     run_trial(&app, preserved, "always", TRUE, "cancel", FALSE, TRUE, FALSE);
     for (guint t = 0; t < G_N_ELEMENTS(transports); t++) run_trial(&app, transports[t], "off", FALSE, "add", TRUE, FALSE, g_strcmp0(transports[t], "tor") == 0);
+    if (plain == 0 && execution == 0) {
+        const char *fixed_transports[] = {"obfs4", "custom"}, *fixed_counts[] = {"fixed-1", "fixed-2", "fixed-8"};
+        for (guint t = 0; t < G_N_ELEMENTS(fixed_transports); t++) for (guint n = 0; n < G_N_ELEMENTS(fixed_counts); n++) for (guint k = 1; k < G_N_ELEMENTS(kills); k++)
+            run_trial(&app, fixed_transports[t], kills[k], FALSE, fixed_counts[n], TRUE, FALSE, TRUE);
+        const char *mixed[] = {"fixed-mixed-meek_lite", "fixed-mixed-snowflake", "fixed-mixed-webtunnel", "fixed-oversized"};
+        for (guint i = 0; i < G_N_ELEMENTS(mixed); i++) run_trial(&app, "custom", "always", FALSE, mixed[i], FALSE, FALSE, FALSE);
+    }
     reset_fixture(&app, "initial-busy"); idle = FALSE; guint before = dialogs;
     on_linux_tor_bridge_v13(NULL, &app); check(dialogs == before && posts == 0 && status_reads == 1 && diagnostics == 1, "busy application opened a Tor mutation dialog");
     json_node_free(source_catalog); json_node_free(source_always); g_free(prefix); source_prefix = NULL;
     }
     gtk_widget_destroy(app.window); g_clear_pointer(&last_body, g_free);
-    json_node_free(source_capabilities); json_node_free(source_lines); json_node_free(current_catalog); json_node_free(capabilities);
+    json_node_free(source_capabilities); json_node_free(source_lines); json_node_free(source_fixed_sets); json_node_free(current_catalog); json_node_free(capabilities);
     g_print("Actual GTK Tor dialog/Update/Save/Cancel callbacks: %u checks across %u dialogs PASS\n", checks, dialogs);
     return 0;
 }

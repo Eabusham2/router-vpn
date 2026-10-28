@@ -367,6 +367,15 @@ class TorCapturedImportAuditTests(unittest.TestCase):
         self.reject(IMPORT, "if err := validateExternalDeviceSettingsForPath(merged, entry); err != nil {", "if err := error(nil); err != nil {")
         self.reject(IMPORT, "if matches != 1 {", "if matches < 1 {")
 
+    def test_direct_fixed_sets_require_the_complete_revalidated_source_projection(self):
+        for original, replacement in (
+            ("plan, planErr := desktopTorTransportPlan(profile)", "plan, planErr := mobiletor.Plan{}, error(nil)"),
+            ("_, egressErr := mobiletor.DesktopDirectPhysicalEgress(plan)", "_, egressErr := plan, error(nil)"),
+            ("strictLiteralObfs4 := planErr == nil && egressErr == nil", "strictLiteralObfs4 := planErr == nil || egressErr == nil"),
+        ):
+            with self.subTest(original=original):
+                self.reject(IMPORT, original, replacement)
+
     def test_source_revision_and_identity_guards_must_precede_adoption(self):
         for original, replacement in (
             ("if err := a.validateExternalProfileExpectedProfilesLocked(expected, existing); err != nil {", "if err := error(nil); err != nil {"),

@@ -151,7 +151,7 @@ static void linux_tor_refresh_caps_v13(LinuxTorBridgeV13 *state) {
                 gboolean router_strict = external_path_flag_v4(item, "strict_router_entry_kill_switch");
                 gboolean ordinary_strict = external_path_flag_v4(item, "strict_external_entry_kill_switch");
                 if (summary->len) g_string_append_c(summary, '\n');
-                g_string_append_printf(summary, "%s — %s • strict protection %s", id[0] ? id : "unknown", supported ? "available" : "unavailable", strict ? "Direct with one fixed bridge" : ordinary_strict ? "with an eligible Local entry; Server requires a paired Router" : router_strict ? "with a saved Router entry using Local or Server execution" : "unavailable for this transport");
+                g_string_append_printf(summary, "%s — %s • strict protection %s", id[0] ? id : "unknown", supported ? "available" : "unavailable", strict ? "Direct with 1–8 literal obfs4 bridges" : ordinary_strict ? "with an eligible Local entry; Server requires a paired Router" : router_strict ? "with a saved Router entry using Local or Server execution" : "unavailable for this transport");
                 if (description[0]) g_string_append_printf(summary, "\n  %s", description);
                 if (reason[0]) g_string_append_printf(summary, "\n  Reason: %s", reason);
             }
@@ -210,7 +210,19 @@ static char *linux_tor_payload_v13(LinuxTorBridgeV13 *state, JsonNode *current, 
         JsonObject *row = item != NULL && JSON_NODE_HOLDS_OBJECT(item) ? json_node_get_object(item) : NULL;
         if (g_strcmp0(external_path_string_v4(row, "id"), transport) == 0) { capability = row; matches++; }
     }
-    gboolean direct = external_path_flag_v4(capability, "strict_kill_switch") && bridges->len == 1 && !external_path_flag_v4(profile, "multihop_enabled");
+    gboolean fixed = (g_strcmp0(transport, "obfs4") == 0 || g_strcmp0(transport, "custom") == 0) && bridges->len >= 1 && bridges->len <= 8;
+    for (guint i = 0; fixed && i < bridges->len; i++) {
+        gchar **words = g_strsplit_set(g_ptr_array_index(bridges, i), " \t\r\n", -1);
+        const char *kind = NULL; gboolean prefix = FALSE;
+        for (guint j = 0; words[j] != NULL; j++) {
+            if (words[j][0] == '\0') continue;
+            if (kind == NULL && !prefix && g_ascii_strcasecmp(words[j], "bridge") == 0) { prefix = TRUE; continue; }
+            kind = words[j]; break;
+        }
+        fixed = kind != NULL && g_ascii_strcasecmp(kind, "obfs4") == 0;
+        g_strfreev(words);
+    }
+    gboolean direct = external_path_flag_v4(capability, "strict_kill_switch") && fixed && !external_path_flag_v4(profile, "multihop_enabled");
     gboolean router_path = profile != NULL && linux_tor_router_path_v13(state, profile);
     const char *execution = external_path_string_v4(profile, "multihop_execution");
     if (profile != NULL && ((execution[0] && g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0) ||
