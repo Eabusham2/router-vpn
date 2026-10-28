@@ -34,6 +34,7 @@ type desktopTorPaddingBoxChild struct {
 	zero, wrongSource, pending   atomic.Bool
 	entered                      chan struct{}
 	once                         sync.Once
+	comparison                   func(string) (string, bool)
 	shortGrantMillis             atomic.Int64
 	blockStatus                  atomic.Bool
 	statusEntered, statusRelease chan struct{}
@@ -63,6 +64,14 @@ func newDesktopTorPaddingBoxChild(t *testing.T, child *desktopTorBoxChild) *desk
 				return
 			}
 			fields := strings.Fields(line)
+			if f.comparison != nil {
+				if reply, handled := f.comparison(strings.TrimSpace(line)); handled {
+					if _, err := io.WriteString(peer, reply); err != nil {
+						return
+					}
+					continue
+				}
+			}
 			if len(fields) == 2 && fields[0] == "ROUTERVPN_PADDING" && fields[1] == "INFO" {
 				_, err = io.WriteString(peer, "250 version=1 direction=outgoing min_rate_kbps=32 max_rate_kbps=192 default_rate_kbps=192 max_ttl_ms=10000 max_pending_cells=1 accounting=tor-link-cell username_hex_lengths=32,64 password_hex_length=64 generation_highwater=6\r\n")
 				if err != nil {

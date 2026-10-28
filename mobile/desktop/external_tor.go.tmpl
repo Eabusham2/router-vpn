@@ -142,6 +142,7 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 	var dnsFiles *routerVPNDesktopDNSFiles
 	var mtuFiles *routerVPNDesktopMTUFiles
 	var pathFiles *routerVPNDesktopPathFiles
+	var comparisonFiles *routerVPNTorComparisonFiles
 	var transitions <-chan routerVPNTorMTUTransitionRequest
 	if native, ok := owner.(routerVPNTorTransitionOwner); ok {
 		transitions = native.MTUTransitions()
@@ -264,6 +265,13 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 					break
 				}
 			}
+			if native, ok := owner.(routerVPNTorComparisonOwner); ok {
+				comparisonFiles, err = routerVPNOpenTorComparison(routerVPNTorOutputFiles(files), native, session, metadata.SourceSHA256, metadata.ConfigSHA256)
+				if err != nil {
+					failure, stopping = routerVPNTorFailure, true
+					break
+				}
+			}
 			if routerVPNTorRefreshReadback(owner, &receipt) != nil || receipt.MTUReadback != nil || routerVPNTorRefreshPadding(owner, &receipt, started, time.Now()) != nil {
 				failure, stopping = routerVPNTorFailure, true
 				break
@@ -289,6 +297,10 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 			}
 			if connected {
 				pathFiles.signalCancellation()
+				if err := comparisonFiles.tick(); err != nil {
+					failure, stopping = routerVPNTorFailure, true
+					break
+				}
 				if !routerVPNTorLifetimeCurrent(owner) {
 					failure, stopping = routerVPNTorFailure, true
 					break
@@ -337,6 +349,7 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 	if cancelMaintenance != nil {
 		cancelMaintenance()
 	}
+	comparisonFiles.cancelPending()
 	owner.Cancel()
 	if maintenance != nil {
 		<-maintenance
@@ -361,6 +374,17 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 	for {
 		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
 		err := owner.Close(cleanup)
+		stop()
+		if err == nil {
+			break
+		}
+		progress.Stage = "cleanup-pending"
+		_ = files.publish("progress.json", progress)
+		<-tick.C
+	}
+	for {
+		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		err := comparisonFiles.close(cleanup)
 		stop()
 		if err == nil {
 			break

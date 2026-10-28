@@ -60,6 +60,8 @@ type desktopTorBoxSOCKS struct {
 	proofRelease                   chan struct{}
 	proofOnce                      sync.Once
 	serverUsername, serverPassword string
+	comparison                     func(net.Conn, string) (bool, error)
+	serverComparison               func(net.Conn, string) error
 }
 
 func desktopTorBoxWriteDNSReply(peer *mDNS.Conn, answer *mDNS.Msg) error {
@@ -169,7 +171,7 @@ func (s *desktopTorBoxSOCKS) serve(connection net.Conn) error {
 	if _, err := io.ReadFull(connection, command[:]); err != nil {
 		return err
 	}
-	if command[0] != 5 || command[1] != 1 || command[2] != 0 {
+	if command[0] != 5 || command[2] != 0 || command[1] != 1 && (command[1] != 0xf0 || s.serverComparison == nil) {
 		return errors.New("native Tor requested an unsupported SOCKS operation")
 	}
 	var address string
@@ -201,6 +203,14 @@ func (s *desktopTorBoxSOCKS) serve(connection net.Conn) error {
 		return err
 	}
 	target := net.JoinHostPort(address, strconv.Itoa(int(binary.BigEndian.Uint16(port[:]))))
+	if command[1] == 0xf0 {
+		return s.serverComparison(connection, target)
+	}
+	if s.comparison != nil {
+		if handled, err := s.comparison(connection, target); handled {
+			return err
+		}
+	}
 	if target != "check.torproject.org:443" && target != "93.184.216.34:443" && target != "9.9.9.9:5353" && !dnsmeasure.AllowedPublicAddress(target) {
 		return errors.New("native request escaped the fixture's frozen destinations")
 	}

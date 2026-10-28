@@ -1,0 +1,563 @@
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	mDNS "github.com/miekg/dns"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// This fixture exercises the complete production native constructor, public
+// proof/comparison methods, real SAFECOOKIE child, Box and selected DNS. Only
+// the device TUN and remote Tor daemon are local doubles. Its deliberately
+// unknown CAPTURE cannot be drained by a closed control socket: the real child
+// remains alive until the production process owner kills and joins it.
+type routerVPNTorWholeTUN struct {
+	inbound.Adapter
+	mu                     sync.Mutex
+	name                   string
+	mtu                    int
+	ready, closed, claimed bool
+	guard                  func() bool
+}
+
+func (t *routerVPNTorWholeTUN) Start(stage adapter.StartStage) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if stage == adapter.StartStateStarted {
+		t.ready = true
+	}
+	return nil
+}
+func (t *routerVPNTorWholeTUN) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.closed = true
+	return nil
+}
+func (t *routerVPNTorWholeTUN) RouterVPNDesktopMTU(guard func() bool) (string, int, int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.ready || t.closed || t.claimed || guard == nil || !guard() {
+		return "", 0, 0, errors.New("unowned fixture TUN")
+	}
+	t.claimed, t.guard = true, guard
+	return t.name, 711, t.mtu, nil
+}
+func (t *routerVPNTorWholeTUN) RouterVPNDesktopMTUInterface() (string, int, int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.ready || t.closed || !t.claimed || !t.guard() {
+		return "", 0, 0, errors.New("retired fixture TUN")
+	}
+	return t.name, 711, t.mtu, nil
+}
+
+func routerVPNTorWholeTrustedChild(t *testing.T) bool {
+	t.Helper()
+	if os.Getenv("ROUTERVPN_TOR_WHOLE_FIXTURE") != "" {
+		return false
+	}
+	dir := t.TempDir()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	ca := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Router VPN whole-owner isolated test CA"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+	caDER, err := x509.CreateCertificate(rand.Reader, ca, ca, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(2), NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), DNSNames: []string{"check.torproject.org"}, IPAddresses: []net.IP{net.ParseIP("1.1.1.1")}, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	certDER, err := x509.CreateCertificate(rand.Reader, leaf, ca, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, block := range map[string]*pem.Block{"ca.pem": {Type: "CERTIFICATE", Bytes: caDER}, "cert.pem": {Type: "CERTIFICATE", Bytes: certDER}, "key.pem": {Type: "EC PRIVATE KEY", Bytes: private}} {
+		if err := os.WriteFile(filepath.Join(dir, name), pem.EncodeToMemory(block), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestRouterVPNDesktopTorComparisonWholeOwnerUnknownCapture$", "-test.timeout=20s")
+	command.Env = append(os.Environ(), "ROUTERVPN_TOR_WHOLE_FIXTURE="+dir, "GODEBUG=x509usefallbackroots=1")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("actual whole native owner failed: %v\n%s", err, output)
+	}
+	return true
+}
+
+func TestRouterVPNDesktopTorComparisonWholeOwnerUnknownCapture(t *testing.T) {
+	if routerVPNTorWholeTrustedChild(t) {
+		return
+	}
+	ca, err := os.ReadFile(filepath.Join(os.Getenv("ROUTERVPN_TOR_WHOLE_FIXTURE"), "ca.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(ca) {
+		t.Fatal("bad isolated fixture CA")
+	}
+	x509.SetFallbackRoots(pool)
+	t.Setenv("ROUTERVPN_NATIVE_TOR_FIXTURE", "1")
+	t.Setenv("ROUTERVPN_NATIVE_TOR_FIXTURE_MODE", "lastrelay-unknown")
+	f := routerVPNNewTorFileFixture(t)
+	binaryPath, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binaryPath, err = filepath.EvalSymlinks(binaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+	var profile map[string]any
+	if json.Unmarshal([]byte(f.inputs.Policy().Profile()), &profile) != nil {
+		t.Fatal("bad captured source")
+	}
+	profile["external"].(map[string]any)["tor_bridge"].(map[string]any)["socks_port"] = port
+	profileJSON, _ := json.Marshal(profile)
+	inputs, err := mobiletor.NewDesktopBridgeCapture(string(profileJSON), routerVPNTorTestSession, routerVPNTorTestIsolation, runtime.GOOS, binaryPath, f.directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.inputs, f.binary = inputs, binaryPath
+	for name, raw := range map[string]string{"tor-profile.json": string(profileJSON), "tor-capture.json": inputs.JSON(), "torrc": inputs.Torrc(), "tor-defaults": inputs.Defaults(), "sing-box.json": inputs.Policy().Config()} {
+		if err := os.WriteFile(filepath.Join(f.directory, name), []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := inputs.Digests()
+	f.environment = map[string]string{"HOMEVPN_TOR_SESSION": routerVPNTorTestSession, "HOMEVPN_TOR_SOURCE_SHA256": d.SourceSHA256, "HOMEVPN_TOR_PROFILE_SHA256": d.ProfileSHA256, "HOMEVPN_TOR_CAPTURE_SHA256": d.CaptureSHA256, "HOMEVPN_TOR_TORRC_SHA256": d.TorrcSHA256, "HOMEVPN_TOR_DEFAULTS_SHA256": d.DefaultsSHA256, "HOMEVPN_TOR_CONFIG_SHA256": d.ConfigSHA256}
+	_, digest, err := routerVPNHashTorBinary(binaryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.environment["HOMEVPN_TOR_BINARY_SHA256"] = digest
+	files := f.open(t)
+	binaryOwner, err := routerVPNCaptureTorBinary(binaryPath, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbounds := include.InboundRegistry()
+	var tun *routerVPNTorWholeTUN
+	inbound.Register[option.TunInboundOptions](inbounds, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options option.TunInboundOptions) (adapter.Inbound, error) {
+		name := options.InterfaceName
+		if name == "" {
+			name = "utun811"
+		}
+		tun = &routerVPNTorWholeTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag), name: name, mtu: int(options.MTU)}
+		return tun, nil
+	})
+	ctx := box.Context(context.Background(), inbounds, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	owner, err := routerVPNNewTorNative(ctx, files, binaryOwner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := owner.(*routerVPNTorNative)
+	defer func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := n.Close(cleanup); err != nil {
+			t.Error("actual native shutdown did not drain", err)
+		}
+		if n.process.command != nil && !n.process.exited() {
+			_ = n.process.command.Process.Kill()
+			select {
+			case <-n.process.done:
+			case <-time.After(time.Second):
+				t.Error("fixture emergency process cleanup did not join")
+			}
+			// A mutation that reverses production close order still must not
+			// leak its fixture Box after the exact test child has been joined.
+			final, stop := context.WithTimeout(context.Background(), time.Second)
+			_ = n.Close(final)
+			stop()
+		}
+	}()
+	if err := n.Start(); err != nil {
+		t.Fatalf("real SAFECOOKIE/native Box startup failed at %s: %v", n.Stage(), err)
+	}
+	proof, err := n.Run()
+	if err != nil || !proof.Proof.IsTor || !proof.Proof.DNSProven || !n.Healthy() {
+		t.Fatalf("actual selected-DNS/TLS proof failed: %+v %v", proof, err)
+	}
+	comparison, err := n.CreateComparison("https://1.1.1.1/cdn-cgi/trace")
+	if err != nil || comparison == nil {
+		t.Fatal("actual native comparison capture", err)
+	}
+	operation, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := comparison.Prepare(operation); err != nil {
+		t.Fatal("actual retained TLS/ANCHOR preparation", err)
+	}
+	if comparison.Identity() == "" {
+		t.Fatal("actual prepared comparison omitted identity")
+	}
+	if elapsed, err := comparison.ProbeLast(operation); err == nil || elapsed != 0 {
+		t.Fatal("ambiguous native CAPTURE fabricated a score", elapsed, err)
+	}
+	if n.process.exited() || n.process.session.NativeJoined() {
+		t.Fatal("control failure was mistaken for actual child join")
+	}
+	if _, err := os.Stat(filepath.Join(f.directory, "tor-data", "capture-observed")); err != nil {
+		t.Fatal("unknown CAPTURE was not actually entered", err)
+	}
+	short, stop := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	if err := comparison.Close(short); err == nil {
+		stop()
+		t.Fatal("ambiguous native CAPTURE drained before its actual child joined")
+	}
+	stop()
+	if n.process.exited() {
+		t.Fatal("comparison-only close stopped the VPN child")
+	}
+	cleanup, stop := context.WithTimeout(context.Background(), 3*time.Second)
+	err = n.Close(cleanup)
+	stop()
+	if err != nil {
+		t.Fatal("whole native owner waited for comparison before joining its child", err)
+	}
+	if !n.process.session.NativeJoined() || !n.process.exited() || !n.boxClosed || n.Stage() != "closed" {
+		t.Fatal("whole native owner acknowledged before exact child/Box join")
+	}
+	tun.mu.Lock()
+	closed := tun.closed
+	tun.mu.Unlock()
+	if !closed {
+		t.Fatal("whole close omitted the actual Box TUN")
+	}
+	if err := comparison.Close(context.Background()); err != nil {
+		t.Fatal("same retained comparison did not drain after actual native join", err)
+	}
+	if entries, err := os.ReadDir(filepath.Join(f.directory, "tor-data")); err != nil || len(entries) != 0 {
+		t.Fatal("actual child workspace was released before complete cleanup", entries, err)
+	}
+}
+
+type routerVPNTorWholePeer struct {
+	policy      *mobiletor.DesktopBridgePolicy
+	certificate tls.Certificate
+	mu          sync.Mutex
+	anchors     map[string]string
+}
+
+func routerVPNTorWholeFixtureChild(directory string) int {
+	profile, err := os.ReadFile(filepath.Join(directory, "tor-profile.json"))
+	if err != nil {
+		return 90
+	}
+	policy, err := mobiletor.NewDesktopBridgePolicy(string(profile), routerVPNTorTestSession, routerVPNTorTestIsolation, runtime.GOOS)
+	if err != nil {
+		return 91
+	}
+	certdir := os.Getenv("ROUTERVPN_TOR_WHOLE_FIXTURE")
+	certificate, err := tls.LoadX509KeyPair(filepath.Join(certdir, "cert.pem"), filepath.Join(certdir, "key.pem"))
+	if err != nil {
+		return 92
+	}
+	peer := &routerVPNTorWholePeer{policy: policy, certificate: certificate, anchors: make(map[string]string)}
+	socks, err := net.Listen("tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(policy.Metadata().SocksPort)))
+	if err != nil {
+		return 93
+	}
+	defer socks.Close()
+	go func() {
+		for {
+			c, e := socks.Accept()
+			if e != nil {
+				return
+			}
+			go func() { defer c.Close(); _ = peer.serve(c) }()
+		}
+	}()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		return 94
+	}
+	defer listener.Close()
+	cookie := bytes.Repeat([]byte{0x91}, 32)
+	for name, raw := range map[string][]byte{"tor-control.cookie": cookie, "tor-control.port": []byte("PORT=" + listener.Addr().String() + "\n")} {
+		if os.WriteFile(filepath.Join(directory, name+".tmp"), raw, 0600) != nil || os.Rename(filepath.Join(directory, name+".tmp"), filepath.Join(directory, name)) != nil {
+			return 95
+		}
+	}
+	control, err := listener.Accept()
+	if err != nil {
+		return 96
+	}
+	defer control.Close()
+	reader := bufio.NewReader(control)
+	configuration := map[string][]string{"DisableNetwork": {"1"}, "__ReloadTorrcOnSIGHUP": {"0"}, "SocksPort": {"0"}, "UseBridges": {"0"}}
+	pattern := regexp.MustCompile(`([A-Za-z0-9_]+)=("(?:\\.|[^"\\])*"|[^ ]+)`)
+	var clientHash []byte
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			break
+		}
+		command := strings.TrimSuffix(line, "\r\n")
+		reply := "250 OK\r\n"
+		switch {
+		case strings.HasPrefix(command, "AUTHCHALLENGE SAFECOOKIE "):
+			nonce, e := hex.DecodeString(strings.TrimPrefix(command, "AUTHCHALLENGE SAFECOOKIE "))
+			if e != nil || len(nonce) != 32 {
+				return 97
+			}
+			serverNonce := bytes.Repeat([]byte{0x47}, 32)
+			transcript := append(append(append([]byte(nil), cookie...), nonce...), serverNonce...)
+			server := hmac.New(sha256.New, []byte("Tor safe cookie authentication server-to-controller hash"))
+			server.Write(transcript)
+			client := hmac.New(sha256.New, []byte("Tor safe cookie authentication controller-to-server hash"))
+			client.Write(transcript)
+			clientHash = client.Sum(nil)
+			reply = "250 AUTHCHALLENGE SERVERHASH=" + hex.EncodeToString(server.Sum(nil)) + " SERVERNONCE=" + hex.EncodeToString(serverNonce) + "\r\n"
+		case strings.HasPrefix(command, "AUTHENTICATE "):
+			value, e := hex.DecodeString(strings.TrimPrefix(command, "AUTHENTICATE "))
+			if e != nil || !hmac.Equal(value, clientHash) {
+				return 98
+			}
+		case strings.HasPrefix(command, "SETCONF "):
+			seen := map[string]bool{}
+			for _, m := range pattern.FindAllStringSubmatch(strings.TrimPrefix(command, "SETCONF "), -1) {
+				value := m[2]
+				if strings.HasPrefix(value, `"`) {
+					value, err = strconv.Unquote(value)
+					if err != nil {
+						return 99
+					}
+				}
+				if !seen[m[1]] {
+					configuration[m[1]] = nil
+					seen[m[1]] = true
+				}
+				configuration[m[1]] = append(configuration[m[1]], value)
+			}
+		case strings.HasPrefix(command, "GETCONF "):
+			var lines []string
+			for _, key := range strings.Fields(strings.TrimPrefix(command, "GETCONF ")) {
+				values := configuration[key]
+				if len(values) == 0 {
+					values = []string{""}
+				}
+				for _, v := range values {
+					lines = append(lines, "250-"+key+"="+v)
+				}
+			}
+			reply = strings.Join(lines, "\r\n") + "\r\n250 OK\r\n"
+		case strings.HasPrefix(command, "GETINFO "):
+			var lines []string
+			for _, key := range strings.Fields(strings.TrimPrefix(command, "GETINFO ")) {
+				value := ""
+				switch key {
+				case "process/pid":
+					value = strconv.Itoa(os.Getpid())
+				case "net/listeners/control":
+					value = strconv.Quote(listener.Addr().String())
+				case "net/listeners/socks":
+					if configuration["SocksPort"][0] != "0" {
+						value = strconv.Quote(socks.Addr().String())
+					}
+				case "status/bootstrap-phase":
+					value = "NOTICE BOOTSTRAP PROGRESS=100 TAG=done SUMMARY=Done"
+				case "status/circuit-established":
+					value = "1"
+				}
+				lines = append(lines, "250-"+key+"="+value)
+			}
+			reply = strings.Join(lines, "\r\n") + "\r\n250 OK\r\n"
+		case command == "ROUTERVPN_LASTRELAY INFO":
+			reply = "250 version=1 transport=begindir min_ttl_ms=100 max_ttl_ms=10000 max_response_bytes=8192 generation_highwater=0\r\n"
+		case strings.HasPrefix(command, "ROUTERVPN_LASTRELAY ANCHOR "):
+			p := strings.Fields(command)
+			if len(p) != 10 {
+				return 100
+			}
+			session := sha256.Sum256([]byte(policy.Metadata().SessionID))
+			client, target := net.JoinHostPort(p[6], p[7]), net.JoinHostPort(p[8], p[9])
+			peer.mu.Lock()
+			actual := peer.anchors[client]
+			peer.mu.Unlock()
+			if p[2] != hex.EncodeToString(session[:]) || p[3] != policy.Metadata().SourceSHA256 || p[4] != routerVPNTorTestSession || p[5] != routerVPNTorTestIsolation || actual != target {
+				return 101
+			}
+			reply = fmt.Sprintf("250 version=1 session=%s source=%s anchor=111 circuit=222 exit=%s path_sha256=%s client_ip=%s client_port=%s target_ip=%s target_port=%s\r\n", p[2], p[3], strings.Repeat("4", 40), strings.Repeat("5", 64), p[6], p[7], p[8], p[9])
+		case strings.HasPrefix(command, "ROUTERVPN_LASTRELAY CAPTURE "):
+			if os.WriteFile(filepath.Join(directory, "tor-data", "capture-observed"), []byte("native frame was received; result deliberately ambiguous"), 0600) != nil {
+				return 102
+			}
+			_, _ = io.WriteString(control, "250 malformed-capture-receipt\r\n")
+			_ = control.Close()
+			for {
+				time.Sleep(time.Second)
+			} // Only exact production child shutdown can discharge this CAPTURE.
+		case command == "TAKEOWNERSHIP" || command == "SIGNAL RELOAD" || command == "SIGNAL CLEARDNSCACHE":
+		default:
+			return 103
+		}
+		if _, err := io.WriteString(control, reply); err != nil {
+			break
+		}
+	}
+	return 0
+}
+
+func (p *routerVPNTorWholePeer) serve(raw net.Conn) error {
+	_ = raw.SetDeadline(time.Now().Add(15 * time.Second))
+	var header [2]byte
+	if _, err := io.ReadFull(raw, header[:]); err != nil {
+		return err
+	}
+	methods := make([]byte, int(header[1]))
+	if _, err := io.ReadFull(raw, methods); err != nil {
+		return err
+	}
+	if header[0] != 5 || !bytes.Contains(methods, []byte{2}) {
+		return errors.New("SOCKS isolation missing")
+	}
+	if _, err := raw.Write([]byte{5, 2}); err != nil {
+		return err
+	}
+	if _, err := io.ReadFull(raw, header[:]); err != nil {
+		return err
+	}
+	user := make([]byte, int(header[1]))
+	if _, err := io.ReadFull(raw, user); err != nil {
+		return err
+	}
+	var size [1]byte
+	if _, err := io.ReadFull(raw, size[:]); err != nil {
+		return err
+	}
+	password := make([]byte, int(size[0]))
+	if _, err := io.ReadFull(raw, password); err != nil {
+		return err
+	}
+	if header[0] != 1 || string(user) != routerVPNTorTestSession || string(password) != routerVPNTorTestIsolation {
+		return errors.New("wrong SOCKS owner")
+	}
+	if _, err := raw.Write([]byte{1, 0}); err != nil {
+		return err
+	}
+	var command [4]byte
+	if _, err := io.ReadFull(raw, command[:]); err != nil {
+		return err
+	}
+	if command[0] != 5 || command[1] != 1 || command[2] != 0 {
+		return errors.New("unsupported SOCKS command")
+	}
+	var host string
+	switch command[3] {
+	case 1, 4:
+		count := 4
+		if command[3] == 4 {
+			count = 16
+		}
+		ip := make([]byte, count)
+		if _, err := io.ReadFull(raw, ip); err != nil {
+			return err
+		}
+		host = net.IP(ip).String()
+	default:
+		return errors.New("selected DNS bypassed by SOCKS hostname")
+	}
+	var port [2]byte
+	if _, err := io.ReadFull(raw, port[:]); err != nil {
+		return err
+	}
+	target := net.JoinHostPort(host, strconv.Itoa(int(binary.BigEndian.Uint16(port[:]))))
+	if target != "9.9.9.9:5353" && target != "93.184.216.34:443" && target != "1.1.1.1:443" {
+		return errors.New("unexpected outbound target")
+	}
+	if _, err := raw.Write([]byte{5, 0, 0, 1, 127, 0, 0, 1, 0, 1}); err != nil {
+		return err
+	}
+	if target == "9.9.9.9:5353" {
+		peer := &mDNS.Conn{Conn: raw}
+		for {
+			query, err := peer.ReadMsg()
+			if err != nil {
+				return err
+			}
+			answer := new(mDNS.Msg)
+			answer.SetReply(query)
+			for _, q := range query.Question {
+				if q.Qtype == mDNS.TypeA {
+					answer.Answer = append(answer.Answer, &mDNS.A{Hdr: mDNS.RR_Header{Name: q.Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 0}, A: net.ParseIP("93.184.216.34")})
+				}
+			}
+			time.Sleep(20 * time.Millisecond)
+			if err := peer.WriteMsg(answer); err != nil {
+				return err
+			}
+		}
+	}
+	if target == "1.1.1.1:443" {
+		p.mu.Lock()
+		p.anchors[raw.RemoteAddr().String()] = target
+		p.mu.Unlock()
+		defer func() { p.mu.Lock(); delete(p.anchors, raw.RemoteAddr().String()); p.mu.Unlock() }()
+	}
+	secure := tls.Server(raw, &tls.Config{Certificates: []tls.Certificate{p.certificate}, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}})
+	if err := secure.Handshake(); err != nil {
+		return err
+	}
+	request, err := http.ReadRequest(bufio.NewReader(secure))
+	if err != nil {
+		return err
+	}
+	request.Body.Close()
+	if target != "93.184.216.34:443" || request.Host != "check.torproject.org" || request.Method != "GET" || request.URL.RequestURI() != "/api/ip" {
+		return errors.New("unexpected proof request")
+	}
+	body := `{"IsTor":true,"IP":"203.0.113.19"}`
+	_, err = fmt.Fprintf(secure, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+	return err
+}

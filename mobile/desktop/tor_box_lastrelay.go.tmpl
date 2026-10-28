@@ -1,0 +1,836 @@
+package box
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/protocol/socks"
+	"github.com/sagernet/sing/protocol/socks/socks5"
+)
+
+var errDesktopTorComparison = errors.New("desktop Tor comparison lost its retained native path or one-use measurement")
+
+type routerVPNDesktopTorComparisonSession interface {
+	routerVPNDesktopTorSession
+	LastRelaySOCKS() (string, string, string, error)
+	LookupLastRelayAnchor(context.Context, net.Conn, netip.AddrPort) (mobiletor.LastRelayLocatedAnchor, error)
+	LastRelayProbe(context.Context, mobiletor.LastRelayAnchor) (*mobiletor.LastRelayProbe, error)
+	NativeJoined() bool
+}
+
+type routerVPNDesktopTorServerComparisonFactory interface {
+	TorCreateComparison(context.Context, mobiletor.ComparisonCapture, string) (mobiletor.Comparison, error)
+}
+
+// RouterVPNDesktopTorComparison owns one retained external stream and one
+// last-relay probe on the exact proved native Box. It never starts/stops the
+// VPN itself, replaces a TUN or chooses a different endpoint for a candidate.
+// Every nonnil result, including constructor failure, must be closed.
+type RouterVPNDesktopTorComparison struct {
+	owner                      *RouterVPNDesktopTor
+	policy                     *mobiletor.DesktopBridgePolicy
+	metadata                   mobiletor.DesktopBridgeMetadata
+	session                    routerVPNDesktopTorComparisonSession
+	server                     routerVPNDesktopTorServerComparisonFactory
+	remote                     mobiletor.Comparison
+	remoteIdentity             string
+	ctx                        context.Context
+	cancel                     context.CancelFunc
+	target, boxID, ownerID     string
+	tun                        routerVPNDesktopTorTUN
+	inbound                    adapter.Inbound
+	name                       string
+	index, mtu                 int
+	revision                   uint64
+	mu                         sync.Mutex
+	closeMu                    chan struct{}
+	busy, prepareUsed          bool
+	prepared, lastUsed         bool
+	lastComplete, externalUsed bool
+	cancelled, closed          bool
+	workers                    sync.WaitGroup
+	joined                     chan struct{}
+	joinOnce                   sync.Once
+	releaseActivity            func()
+	network                    *mobiletor.Network
+	raw                        net.Conn
+	rawClose                   *routerVPNDesktopComparisonClose
+	external                   *mobiletor.LastRelayExternalStream
+	probe                      *mobiletor.LastRelayProbe
+	scope                      *routervpndesktoppt.LocalTorProof
+	anchor                     mobiletor.LastRelayLocatedAnchor
+	capture                    mobiletor.LastRelayAnchorCapture
+	identity                   string
+	holds                      int
+	expiry                     *time.Timer
+}
+
+func (r *RouterVPNDesktopTor) CreateComparison(target string) (mobiletor.Comparison, error) {
+	if r == nil || !r.started.Load() {
+		return nil, errDesktopTorComparison
+	}
+	if r.server != nil {
+		factory, ok := any(r.server).(routerVPNDesktopTorServerComparisonFactory)
+		if !ok || r.session != r.server || !r.LifetimeCurrent() {
+			return nil, errDesktopTorComparison
+		}
+		comparison, err := r.newCapturedComparison(target, nil, factory)
+		if comparison == nil {
+			return nil, err
+		}
+		return comparison, err
+	}
+	// Only the actual standalone authenticated child reaches this public
+	// constructor. A similar metadata record or private fixture is not enough.
+	session, ok := r.session.(*mobiletor.DesktopBridgeSession)
+	if !ok {
+		return nil, errDesktopTorComparison
+	}
+	comparison, err := r.createComparison(target, session)
+	if comparison == nil {
+		return nil, err
+	}
+	return comparison, err
+}
+
+func (r *RouterVPNDesktopTor) createComparison(target string, session routerVPNDesktopTorComparisonSession) (*RouterVPNDesktopTorComparison, error) {
+	if r == nil || session == nil || !mobiletor.DesktopTorCompareTarget(target) || r.server != nil || r.session != session || !r.LifetimeCurrent() || session.NativeJoined() {
+		return nil, errDesktopTorComparison
+	}
+	if _, _, _, err := session.LastRelaySOCKS(); err != nil {
+		return nil, err
+	}
+	return r.newCapturedComparison(target, session, nil)
+}
+
+func (r *RouterVPNDesktopTor) newCapturedComparison(target string, session routerVPNDesktopTorComparisonSession, server routerVPNDesktopTorServerComparisonFactory) (*RouterVPNDesktopTorComparison, error) {
+	if !mobiletor.DesktopTorCompareTarget(target) || !r.LifetimeCurrent() || (session == nil) == (server == nil) {
+		return nil, errDesktopTorComparison
+	}
+	release, err := r.activity.beginMeasurement()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(r.ctx)
+	c := &RouterVPNDesktopTorComparison{owner: r, policy: r.policy, metadata: r.policy.Metadata(), session: session, server: server, ctx: ctx, cancel: cancel, target: target,
+		releaseActivity: release, closeMu: make(chan struct{}, 1), joined: make(chan struct{})}
+	var nonce [32]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		cancel()
+		release()
+		return nil, errDesktopTorComparison
+	}
+	if !r.interfaceMu.TryRLock() {
+		cancel()
+		release()
+		return nil, errDesktopTorComparison
+	}
+	if !r.engine.mu.TryRLock() {
+		r.interfaceMu.RUnlock()
+		cancel()
+		release()
+		return nil, errDesktopTorComparison
+	}
+	c.boxID = r.engine.identityLocked()
+	c.tun, c.name, c.index, c.mtu, c.revision = r.tun, r.name, r.index, r.mtu, r.mtuRevision
+	c.inbound = r.engine.tun
+	r.engine.mu.RUnlock()
+	r.interfaceMu.RUnlock()
+	c.ownerID = fmt.Sprintf("%s:%p:%p:%x", c.boxID, r, r.session, nonce)
+	clear(nonce[:])
+	r.mu.Lock()
+	admitted := !r.closing && c.boxID != "" && c.nativeCurrent() && r.comparison.CompareAndSwap(nil, c)
+	r.mu.Unlock()
+	if !admitted {
+		cancel()
+		release()
+		return nil, errDesktopTorComparison
+	}
+	if !c.nativeCurrent() {
+		c.Cancel()
+		return c, errDesktopTorComparison
+	}
+	return c, nil
+}
+
+// This is memory-only and never waits for a native reader replacement. An
+// in-progress replacement disqualifies this round instead of borrowing its
+// eventual TUN. The retained activity prevents an authorized MTU transaction.
+func (c *RouterVPNDesktopTorComparison) nativeCurrent() bool {
+	if c == nil || c.owner == nil || c.server == nil && (c.session == nil || c.session.NativeJoined()) {
+		return false
+	}
+	r := c.owner
+	if !r.readerLifetimeCurrent() || !r.started.Load() || !r.proved.Load() || r.policy != c.policy || r.policy.Metadata() != c.metadata || r.session == nil || r.session.Metadata() != c.metadata || !r.session.Current() || !r.paddingHealthy() {
+		return false
+	}
+	if c.server == nil && (r.server != nil || r.session != c.session || r.pt == nil || !r.pt.LifetimeCurrent()) || c.server != nil && (r.server == nil || r.session != r.server || any(r.server) != c.server) || !r.interfaceMu.TryRLock() {
+		return false
+	}
+	defer r.interfaceMu.RUnlock()
+	if !r.engine.mu.TryRLock() {
+		return false
+	}
+	defer r.engine.mu.RUnlock()
+	return r.engine.identityLocked() == c.boxID && r.engine.tun == c.inbound && r.tun == c.tun && r.name == c.name && r.index == c.index && r.mtu == c.mtu && r.mtuRevision == c.revision
+}
+
+func (c *RouterVPNDesktopTorComparison) available() bool {
+	if c == nil || c.ctx.Err() != nil || c.owner.comparison.Load() != c || !c.nativeCurrent() {
+		return false
+	}
+	c.mu.Lock()
+	valid := !c.cancelled && !c.closed && (c.capture.DNSCheckedAt.IsZero() || c.capture.DNSCheckedAt.Add(30*time.Second).After(time.Now()))
+	c.mu.Unlock()
+	return valid
+}
+
+func (c *RouterVPNDesktopTorComparison) operation(parent context.Context, budget time.Duration, prepare bool) (context.Context, func(), error) {
+	if parent == nil || parent.Err() != nil || !c.available() {
+		return nil, nil, errDesktopTorComparison
+	}
+	c.mu.Lock()
+	if c.busy || c.cancelled || c.closed || prepare && c.prepareUsed || !prepare && !c.prepared {
+		c.mu.Unlock()
+		return nil, nil, errDesktopTorComparison
+	}
+	c.busy = true
+	if prepare {
+		c.prepareUsed = true
+	}
+	c.workers.Add(1)
+	c.mu.Unlock()
+	until := time.Now().Add(budget)
+	if deadline, ok := parent.Deadline(); ok && deadline.Before(until) {
+		until = deadline
+	}
+	ctx, cancel := context.WithDeadline(c.ctx, until)
+	stop := context.AfterFunc(parent, cancel)
+	return ctx, func() {
+		stop()
+		cancel()
+		c.mu.Lock()
+		c.busy = false
+		c.mu.Unlock()
+		c.workers.Done()
+	}, nil
+}
+
+func (c *RouterVPNDesktopTorComparison) Prepare(parent context.Context) (failure error) {
+	ctx, release, err := c.operation(parent, 60*time.Second, true)
+	if err != nil {
+		return err
+	}
+	defer release()
+	defer func() {
+		if failure != nil {
+			c.Cancel()
+		}
+	}()
+	if err := c.owner.VerifyCurrentPath(ctx); err != nil || !c.available() {
+		return errDesktopTorComparison
+	}
+	if c.server != nil {
+		return c.prepareServer(ctx)
+	}
+	proofContext, scope, err := c.owner.paddingProofContext(ctx)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.scope = scope
+	c.mu.Unlock()
+	if err := c.owner.engine.DNSProof(proofContext, c.owner.policy.Metadata().TUNTag); err != nil || !c.available() {
+		return errDesktopTorComparison
+	}
+	dnsAt := time.Now()
+	c.mu.Lock()
+	c.capture.DNSCheckedAt = dnsAt
+	c.expiry = time.AfterFunc(time.Until(dnsAt.Add(mobiletor.ComparisonProofMaxAge)), c.expire)
+	c.mu.Unlock()
+	if scope != nil {
+		if err := scope.Close(ctx); err != nil {
+			return err
+		}
+	}
+	address, username, password, err := c.session.LastRelaySOCKS()
+	if err != nil {
+		return err
+	}
+	network, err := mobiletor.NewNetwork(c.owner.ctx, func(dialContext context.Context, network, requested string) (net.Conn, error) {
+		if network != "tcp4" || requested != address || !c.available() {
+			return nil, errDesktopTorComparison
+		}
+		raw, err := (&net.Dialer{}).DialContext(dialContext, "tcp4", address)
+		if raw == nil {
+			return nil, err
+		}
+		return &routerVPNDesktopComparisonConnection{Conn: raw, owner: c}, err
+	}, nil)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	c.network = network
+	c.mu.Unlock()
+	target, _ := netip.ParseAddrPort(strings.TrimSuffix(strings.TrimPrefix(c.target, "https://"), "/cdn-cgi/trace") + ":443")
+	raw, err := c.dialSOCKS(ctx, target.String(), address, username, password)
+	c.mu.Lock()
+	c.raw = raw
+	c.mu.Unlock()
+	if err != nil || raw == nil || !c.available() {
+		return errDesktopTorComparison
+	}
+	external, err := mobiletor.NewLastRelayExternalStream(c.owner.ctx, raw, c.target, c.available)
+	c.mu.Lock()
+	c.external = external
+	c.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if err := external.Prepare(ctx); err != nil || !c.available() {
+		return errDesktopTorComparison
+	}
+	anchor, err := c.lookupAnchor(ctx, raw, target)
+	if err != nil || !c.available() || !dnsAt.Add(30*time.Second).After(time.Now()) {
+		return errDesktopTorComparison
+	}
+	pathAt := time.Now()
+	capture := mobiletor.LastRelayAnchorCapture{OwnerID: c.ownerID, SessionSHA256: anchor.SessionSHA256, SourceSHA256: anchor.SourceSHA256,
+		AnchorStream: anchor.AnchorStream, Circuit: anchor.Circuit, ExitFingerprint: anchor.ExitFingerprint, PathSHA256: anchor.PathSHA256,
+		SOCKSUsername: username, SOCKSPassword: password, DNSCheckedAt: dnsAt, PathCheckedAt: pathAt}
+	identity := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%s:%s:%s:%d:%d:%s:%s:%s:%s", c.ownerID, c.owner.policy.Metadata().SessionID,
+		c.owner.policy.SourceSHA256(), c.owner.policy.Metadata().ConfigSHA256, c.target, anchor.AnchorStream, anchor.Circuit,
+		anchor.ExitFingerprint, anchor.PathSHA256, anchor.Client, anchor.Target)))
+	c.mu.Lock()
+	if c.cancelled || c.closed || ctx.Err() != nil {
+		c.mu.Unlock()
+		return errDesktopTorComparison
+	}
+	c.anchor, c.capture, c.identity, c.prepared = anchor, capture, hex.EncodeToString(identity[:]), true
+	c.mu.Unlock()
+	if !c.available() {
+		return errDesktopTorComparison
+	}
+	return nil
+}
+
+func (c *RouterVPNDesktopTorComparison) prepareServer(ctx context.Context) error {
+	meta := c.owner.policy.Metadata()
+	capture := mobiletor.ComparisonCapture{OwnerID: c.ownerID, SourceSHA256: meta.SourceSHA256, SessionID: meta.SessionID,
+		Current: c.available, DNSProof: func(query context.Context) error {
+			if query == nil || query.Err() != nil || !c.available() {
+				return errDesktopTorComparison
+			}
+			if err := c.owner.engine.DNSProof(query, meta.TUNTag); err != nil || !c.available() {
+				return errDesktopTorComparison
+			}
+			return nil
+		}}
+	remote, err := c.server.TorCreateComparison(c.owner.ctx, capture, c.target)
+	c.mu.Lock()
+	c.remote = remote
+	c.mu.Unlock()
+	if err != nil || remote == nil || !c.available() {
+		return errDesktopTorComparison
+	}
+	if err := remote.Prepare(ctx); err != nil || !c.available() {
+		return errDesktopTorComparison
+	}
+	identity := remote.Identity()
+	if identity == "" || len(identity) > 512 || strings.ContainsAny(identity, "\x00\r\n") {
+		return errDesktopTorComparison
+	}
+	digest := sha256.Sum256([]byte(c.ownerID + ":" + meta.SourceSHA256 + ":" + meta.ConfigSHA256 + ":" + c.target + ":" + identity))
+	c.mu.Lock()
+	if c.cancelled || c.closed || ctx.Err() != nil {
+		c.mu.Unlock()
+		return errDesktopTorComparison
+	}
+	c.remoteIdentity, c.identity, c.prepared = identity, hex.EncodeToString(digest[:]), true
+	c.mu.Unlock()
+	if !c.available() || remote.Identity() != identity {
+		return errDesktopTorComparison
+	}
+	return nil
+}
+
+// ANCHOR is a framed control operation with its own short drain deadline. An
+// action cancellation cannot abandon that reply for another native command.
+func (c *RouterVPNDesktopTorComparison) lookupAnchor(parent context.Context, raw net.Conn, target netip.AddrPort) (mobiletor.LastRelayLocatedAnchor, error) {
+	if parent == nil || parent.Err() != nil || !c.available() {
+		return mobiletor.LastRelayLocatedAnchor{}, errDesktopTorComparison
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	anchor, err := c.session.LookupLastRelayAnchor(ctx, raw, target)
+	if err != nil || parent.Err() != nil || !c.available() {
+		return mobiletor.LastRelayLocatedAnchor{}, errDesktopTorComparison
+	}
+	return anchor, nil
+}
+
+func (c *RouterVPNDesktopTorComparison) Identity() string {
+	if !c.available() {
+		return ""
+	}
+	c.mu.Lock()
+	prepared, identity, remote, remoteIdentity := c.prepared, c.identity, c.remote, c.remoteIdentity
+	c.mu.Unlock()
+	if !prepared || remote != nil && remote.Identity() != remoteIdentity {
+		return ""
+	}
+	return identity
+}
+
+func (c *RouterVPNDesktopTorComparison) Verify(parent context.Context) (failure error) {
+	ctx, release, err := c.operation(parent, 10*time.Second, false)
+	if err != nil {
+		return err
+	}
+	defer release()
+	defer func() {
+		if failure != nil {
+			c.Cancel()
+		}
+	}()
+	return c.verify(ctx)
+}
+
+func (c *RouterVPNDesktopTorComparison) verify(ctx context.Context) error {
+	if err := c.owner.VerifyCurrentPath(ctx); err != nil || !c.available() {
+		return errDesktopTorComparison
+	}
+	if c.server != nil {
+		c.mu.Lock()
+		remote, identity := c.remote, c.remoteIdentity
+		c.mu.Unlock()
+		if remote == nil || remote.Verify(ctx) != nil || remote.Identity() != identity || !c.available() {
+			return errDesktopTorComparison
+		}
+		return nil
+	}
+	c.mu.Lock()
+	raw, before, external := c.raw, c.anchor, c.external
+	c.mu.Unlock()
+	if external == nil || !external.Healthy() {
+		return errDesktopTorComparison
+	}
+	anchor, err := c.lookupAnchor(ctx, raw, before.Target)
+	if err != nil || anchor != before || !c.available() {
+		return errDesktopTorComparison
+	}
+	return nil
+}
+
+func (c *RouterVPNDesktopTorComparison) ProbeLast(parent context.Context) (elapsed time.Duration, failure error) {
+	ctx, release, err := c.operation(parent, 10*time.Second, false)
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+	defer func() {
+		if failure != nil {
+			c.Cancel()
+			elapsed = 0
+		}
+	}()
+	c.mu.Lock()
+	if c.lastUsed {
+		c.mu.Unlock()
+		return 0, errDesktopTorComparison
+	}
+	c.lastUsed = true
+	c.mu.Unlock()
+	if err := c.verify(ctx); err != nil {
+		return 0, err
+	}
+	if c.server != nil {
+		c.mu.Lock()
+		remote := c.remote
+		c.mu.Unlock()
+		elapsed, err := remote.ProbeLast(ctx)
+		if err != nil || elapsed <= 0 || c.verify(ctx) != nil {
+			return 0, errors.Join(errDesktopTorComparison, err)
+		}
+		c.mu.Lock()
+		c.lastComplete = true
+		c.mu.Unlock()
+		return elapsed, nil
+	}
+	probe, err := c.session.LastRelayProbe(c.ctx, c)
+	c.mu.Lock()
+	c.probe = probe
+	c.mu.Unlock()
+	if err != nil || probe == nil {
+		return 0, errDesktopTorComparison
+	}
+	elapsed, err = probe.Run(ctx)
+	if err != nil || elapsed <= 0 || !c.available() {
+		return 0, errors.Join(errDesktopTorComparison, err)
+	}
+	if err := c.verify(ctx); err != nil {
+		return 0, err
+	}
+	c.mu.Lock()
+	c.lastComplete = true
+	c.mu.Unlock()
+	return elapsed, nil
+}
+
+func (c *RouterVPNDesktopTorComparison) ProbeExternal(parent context.Context, target string) (elapsed time.Duration, failure error) {
+	ctx, release, err := c.operation(parent, 10*time.Second, false)
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+	defer func() {
+		if failure != nil {
+			c.Cancel()
+			elapsed = 0
+		}
+	}()
+	c.mu.Lock()
+	if target != c.target || !c.lastComplete || c.externalUsed {
+		c.mu.Unlock()
+		return 0, errDesktopTorComparison
+	}
+	c.externalUsed = true
+	external, remote := c.external, c.remote
+	c.mu.Unlock()
+	if err := c.verify(ctx); err != nil {
+		return 0, err
+	}
+	if c.server != nil {
+		elapsed, err = remote.ProbeExternal(ctx, target)
+	} else {
+		elapsed, err = external.Measure(ctx, target)
+	}
+	if err != nil || elapsed <= 0 || !c.available() {
+		return 0, errDesktopTorComparison
+	}
+	if err := c.verify(ctx); err != nil {
+		return 0, err
+	}
+	return elapsed, nil
+}
+
+// Capture is the strict shared probe's memory-only adapter. Source, isolation,
+// anchor and proof completion times were derived from the actual native owner.
+func (c *RouterVPNDesktopTorComparison) Capture() (mobiletor.LastRelayAnchorCapture, error) {
+	if c.server != nil || !c.available() {
+		return mobiletor.LastRelayAnchorCapture{}, errDesktopTorComparison
+	}
+	c.mu.Lock()
+	capture, prepared, external := c.capture, c.prepared, c.external
+	c.mu.Unlock()
+	if !prepared || external == nil || !external.Healthy() {
+		return mobiletor.LastRelayAnchorCapture{}, errDesktopTorComparison
+	}
+	return capture, nil
+}
+
+func (c *RouterVPNDesktopTorComparison) Retain() (mobiletor.LastRelayAnchorHold, error) {
+	if _, err := c.Capture(); err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cancelled || c.closed {
+		return nil, errDesktopTorComparison
+	}
+	c.holds++
+	return &routerVPNDesktopComparisonHold{owner: c}, nil
+}
+
+type routerVPNDesktopComparisonHold struct {
+	owner *RouterVPNDesktopTorComparison
+	once  sync.Once
+}
+
+func (h *routerVPNDesktopComparisonHold) Close(context.Context) error {
+	h.once.Do(func() { h.owner.mu.Lock(); h.owner.holds--; h.owner.mu.Unlock() })
+	return nil
+}
+
+func (c *RouterVPNDesktopTorComparison) NativeJoined() bool {
+	return c != nil && c.session != nil && c.session.NativeJoined()
+}
+
+func (c *RouterVPNDesktopTorComparison) DialProbe(ctx context.Context, destination string) (net.Conn, error) {
+	if _, err := c.Capture(); err != nil {
+		return nil, err
+	}
+	// The shared probe constructs and checks the exact nonce destination. This
+	// additional guard never permits an ordinary hostname or direct DNS lookup.
+	host, port, err := net.SplitHostPort(destination)
+	parts := strings.Split(host, ".")
+	generation := uint64(0)
+	if len(parts) == 6 {
+		generation, _ = strconv.ParseUint(parts[0], 10, 63)
+	}
+	validNonce := func(value string) bool {
+		raw, err := hex.DecodeString(value)
+		return err == nil && len(raw) == 16 && hex.EncodeToString(raw) == value
+	}
+	if err != nil || port != "1" || len(parts) != 6 || generation == 0 || strconv.FormatUint(generation, 10) != parts[0] || !validNonce(parts[1]) || !validNonce(parts[2]) || strings.Join(parts[3:], ".") != "lastrelay.routervpn.invalid" {
+		return nil, errDesktopTorComparison
+	}
+	address, username, password, err := c.session.LastRelaySOCKS()
+	if err != nil {
+		return nil, err
+	}
+	return c.dialSOCKS(ctx, destination, address, username, password)
+}
+
+func (c *RouterVPNDesktopTorComparison) dialSOCKS(ctx context.Context, destination, address, username, password string) (net.Conn, error) {
+	c.mu.Lock()
+	network := c.network
+	c.mu.Unlock()
+	if network == nil || ctx == nil || ctx.Err() != nil || !c.available() {
+		return nil, errDesktopTorComparison
+	}
+	raw, err := network.DialRetainedContext(ctx, "tcp4", address)
+	if raw == nil || err != nil {
+		return raw, errDesktopTorComparison
+	}
+	until := time.Now().Add(10 * time.Second)
+	if deadline, ok := ctx.Deadline(); ok && deadline.Before(until) {
+		until = deadline
+	}
+	if err := raw.SetDeadline(until); err != nil {
+		return raw, err
+	}
+	interrupted := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() { _ = raw.SetDeadline(time.Now()); close(interrupted) })
+	_, err = socks.ClientHandshake5(raw, socks5.CommandConnect, M.ParseSocksaddr(destination), username, password)
+	if !stop() {
+		<-interrupted
+	}
+	if err != nil || ctx.Err() != nil || !c.available() {
+		return raw, errDesktopTorComparison
+	}
+	if err := raw.SetDeadline(time.Time{}); err != nil {
+		return raw, err
+	}
+	return raw, nil
+}
+
+func (c *RouterVPNDesktopTorComparison) Cancel() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.cancelled = true
+	probe, remote := c.probe, c.remote
+	c.mu.Unlock()
+	c.cancel()
+	if probe != nil {
+		probe.Cancel()
+	}
+	if remote != nil {
+		remote.Cancel()
+	}
+	// The anchor remains retained until native CLOSE or the exact child join.
+	// Cancelling the relay measurement alone must not sever that circuit first.
+}
+
+func (c *RouterVPNDesktopTorComparison) expire() {
+	// Revoking the action context interrupts active TLS/HTTP and probe I/O.
+	// An idle anchor stays retained until CLOSE or the exact child join.
+	c.Cancel()
+}
+
+func (c *RouterVPNDesktopTorComparison) Close(ctx context.Context) error {
+	if c == nil {
+		return nil
+	}
+	if ctx == nil {
+		return mobiletor.ErrLastRelayTeardown
+	}
+	c.Cancel()
+	select {
+	case c.closeMu <- struct{}{}:
+		defer func() { <-c.closeMu }()
+	case <-ctx.Done():
+		return mobiletor.ErrLastRelayTeardown
+	}
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	prepared, network, external, scope := c.prepared, c.network, c.external, c.scope
+	c.mu.Unlock()
+	// A still-running Prepare has no native probe. Close its socket/proof
+	// scope to release a blocked handshake before joining its counted worker.
+	if !prepared {
+		if external != nil {
+			external.Cancel()
+		}
+		if err := c.closeRaw(ctx); err != nil {
+			return mobiletor.ErrLastRelayTeardown
+		}
+		if scope != nil {
+			if err := scope.Close(ctx); err != nil {
+				return mobiletor.ErrLastRelayTeardown
+			}
+		}
+	}
+	c.joinOnce.Do(func() { go func() { c.workers.Wait(); close(c.joined) }() })
+	select {
+	case <-c.joined:
+	case <-ctx.Done():
+		return mobiletor.ErrLastRelayTeardown
+	}
+	c.mu.Lock()
+	probe, remote := c.probe, c.remote
+	network, external, scope = c.network, c.external, c.scope
+	c.mu.Unlock()
+	if remote != nil {
+		if err := remote.Close(ctx); err != nil {
+			return mobiletor.ErrLastRelayTeardown
+		}
+	}
+	if probe != nil {
+		if err := probe.Close(ctx); err != nil {
+			return mobiletor.ErrLastRelayTeardown
+		}
+	}
+	c.mu.Lock()
+	holds := c.holds
+	c.mu.Unlock()
+	if holds != 0 {
+		return mobiletor.ErrLastRelayTeardown
+	}
+	if scope != nil {
+		if err := scope.Close(ctx); err != nil {
+			return mobiletor.ErrLastRelayTeardown
+		}
+	}
+	if external != nil {
+		if err := external.Close(ctx); err != nil {
+			return mobiletor.ErrLastRelayTeardown
+		}
+	}
+	if err := c.closeRaw(ctx); err != nil {
+		return mobiletor.ErrLastRelayTeardown
+	}
+	if network != nil {
+		if err := network.Close(ctx); err != nil {
+			return mobiletor.ErrLastRelayTeardown
+		}
+	}
+	c.mu.Lock()
+	c.closed = true
+	timer := c.expiry
+	c.mu.Unlock()
+	if timer != nil {
+		timer.Stop()
+	}
+	c.releaseActivity()
+	c.owner.comparison.CompareAndSwap(c, nil)
+	return nil
+}
+
+type routerVPNDesktopComparisonClose struct {
+	done chan struct{}
+	err  error
+}
+
+func (c *RouterVPNDesktopTorComparison) closeRaw(ctx context.Context) error {
+	c.mu.Lock()
+	raw := c.raw
+	if raw == nil {
+		c.mu.Unlock()
+		return nil
+	}
+	if c.rawClose == nil {
+		attempt := &routerVPNDesktopComparisonClose{done: make(chan struct{})}
+		c.rawClose = attempt
+		go func() { attempt.err = raw.Close(); close(attempt.done) }()
+	}
+	attempt := c.rawClose
+	c.mu.Unlock()
+	select {
+	case <-attempt.done:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if attempt.err != nil {
+		c.mu.Lock()
+		if c.rawClose == attempt {
+			c.rawClose = nil
+		}
+		c.mu.Unlock()
+		return attempt.err
+	}
+	return nil
+}
+
+// The tracking wrapper is inside Network ownership. Even a native Close that
+// returns before an entered Read/Write cannot release the retained comparison.
+type routerVPNDesktopComparisonConnection struct {
+	net.Conn
+	owner   *RouterVPNDesktopTorComparison
+	mu      sync.Mutex
+	closing bool
+	workers sync.WaitGroup
+}
+
+func (c *routerVPNDesktopComparisonConnection) enter() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closing || !c.owner.available() {
+		return errDesktopTorComparison
+	}
+	c.workers.Add(1)
+	return nil
+}
+func (c *routerVPNDesktopComparisonConnection) Read(b []byte) (int, error) {
+	if err := c.enter(); err != nil {
+		return 0, err
+	}
+	defer c.workers.Done()
+	n, err := c.Conn.Read(b)
+	if !c.owner.available() {
+		return 0, errDesktopTorComparison
+	}
+	return n, err
+}
+func (c *routerVPNDesktopComparisonConnection) Write(b []byte) (int, error) {
+	if err := c.enter(); err != nil {
+		return 0, err
+	}
+	defer c.workers.Done()
+	n, err := c.Conn.Write(b)
+	if !c.owner.available() {
+		return 0, errDesktopTorComparison
+	}
+	return n, err
+}
+func (c *routerVPNDesktopComparisonConnection) Close() error {
+	c.mu.Lock()
+	c.closing = true
+	c.mu.Unlock()
+	err := c.Conn.Close()
+	if err != nil && !errors.Is(err, net.ErrClosed) {
+		return err
+	}
+	c.workers.Wait()
+	return nil
+}

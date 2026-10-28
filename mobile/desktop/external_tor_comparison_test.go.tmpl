@@ -1,0 +1,560 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// These tests exercise the actual private mailbox and command lifecycle. The
+// measurement interface is an explicit double; the real TCP/TLS/last-relay
+// operands are separately exercised by the prepared native Box tests.
+type desktopTorComparisonHandleFixture struct {
+	mu                             sync.Mutex
+	id                             string
+	ready, cancelled, closed       bool
+	prepareEntered, prepareRelease chan struct{}
+	closeEntered, closeRelease     chan struct{}
+	prepareOnce, closeOnce         sync.Once
+	requireJoin                    *atomic.Bool
+	last, external                 time.Duration
+	calls                          []string
+}
+
+func (h *desktopTorComparisonHandleFixture) Prepare(ctx context.Context) error {
+	h.mu.Lock()
+	h.calls = append(h.calls, "prepare")
+	h.mu.Unlock()
+	if h.prepareEntered != nil {
+		h.prepareOnce.Do(func() { close(h.prepareEntered) })
+		<-h.prepareRelease
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if ctx.Err() != nil || h.cancelled {
+		return context.Canceled
+	}
+	h.ready = true
+	return nil
+}
+func (h *desktopTorComparisonHandleFixture) Identity() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if !h.ready || h.cancelled || h.closed {
+		return ""
+	}
+	return h.id
+}
+func (h *desktopTorComparisonHandleFixture) Verify(ctx context.Context) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.calls = append(h.calls, "verify")
+	if ctx.Err() != nil || !h.ready || h.cancelled {
+		return context.Canceled
+	}
+	return nil
+}
+func (h *desktopTorComparisonHandleFixture) ProbeLast(ctx context.Context) (time.Duration, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.calls = append(h.calls, "last")
+	if ctx.Err() != nil || h.cancelled {
+		return 0, context.Canceled
+	}
+	return h.last, nil
+}
+func (h *desktopTorComparisonHandleFixture) ProbeExternal(ctx context.Context, target string) (time.Duration, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.calls = append(h.calls, "external:"+target)
+	if ctx.Err() != nil || h.cancelled {
+		return 0, context.Canceled
+	}
+	return h.external, nil
+}
+func (h *desktopTorComparisonHandleFixture) Cancel() { h.mu.Lock(); h.cancelled = true; h.mu.Unlock() }
+func (h *desktopTorComparisonHandleFixture) Close(ctx context.Context) error {
+	h.mu.Lock()
+	h.calls = append(h.calls, "close")
+	h.mu.Unlock()
+	if h.closeEntered != nil {
+		h.closeOnce.Do(func() { close(h.closeEntered) })
+		select {
+		case <-h.closeRelease:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if h.requireJoin != nil && !h.requireJoin.Load() {
+		return mobiletor.ErrLastRelayTeardown
+	}
+	h.mu.Lock()
+	h.closed = true
+	h.mu.Unlock()
+	return nil
+}
+
+type desktopTorComparisonMailboxOwner struct {
+	mu      sync.Mutex
+	handles []*desktopTorComparisonHandleFixture
+	next    *desktopTorComparisonHandleFixture
+	targets []string
+	empty   bool
+	failure error
+}
+
+func (o *desktopTorComparisonMailboxOwner) CreateComparison(target string) (mobiletor.Comparison, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.empty {
+		return nil, o.failure
+	}
+	h := o.next
+	if h == nil {
+		h = &desktopTorComparisonHandleFixture{id: fmt.Sprintf("%064x", len(o.handles)+1), last: 17 * time.Millisecond, external: 23 * time.Millisecond}
+	}
+	o.next = nil
+	o.handles = append(o.handles, h)
+	o.targets = append(o.targets, target)
+	return h, nil
+}
+
+func desktopTorComparisonMailbox(t *testing.T) (string, *routerVPNTorComparisonFiles, *desktopTorComparisonMailboxOwner) {
+	t.Helper()
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	files, err := routerVPNOpenExternalFiles(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { files.root.Close() })
+	owner := &desktopTorComparisonMailboxOwner{}
+	mailbox, err := routerVPNOpenTorComparison(files, owner, strings.Repeat("a", 32), strings.Repeat("b", 64), strings.Repeat("c", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return directory, mailbox, owner
+}
+func desktopTorComparisonInput(t *testing.T, dir, name string, request mobiletor.DesktopTorCompareRequest) {
+	t.Helper()
+	raw, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+}
+func desktopTorComparisonRequestFor(f *routerVPNTorComparisonFiles, generation, sequence uint64, action string) mobiletor.DesktopTorCompareRequest {
+	r := f.base
+	r.Generation, r.Sequence, r.RequestID, r.Action, r.Target = generation, sequence, strings.Repeat("d", 32), action, "https://1.1.1.1/cdn-cgi/trace"
+	r.ExpiresAt = time.Now().Add(min(r.Budget(), 2*time.Second)).UnixMilli()
+	return r
+}
+func desktopTorComparisonComplete(t *testing.T, f *routerVPNTorComparisonFiles) mobiletor.DesktopTorCompareStatus {
+	t.Helper()
+	until := time.Now().Add(3 * time.Second)
+	for {
+		if err := f.tick(); err != nil {
+			t.Fatal(err)
+		}
+		wire := desktopTorComparisonWire(t, f)
+		if f.record.Complete {
+			return wire
+		}
+		if time.Now().After(until) {
+			t.Fatal("native comparison action did not finish", f.record)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func desktopTorComparisonWire(t *testing.T, f *routerVPNTorComparisonFiles) mobiletor.DesktopTorCompareStatus {
+	t.Helper()
+	raw, err := f.files.read(mobiletor.DesktopTorCompareStatusFile, mobiletor.DesktopTorCompareFileLimit)
+	if err != nil {
+		t.Fatal("native receipt missing", err)
+	}
+	// The real published cmd/client function and exact JSON decoder are copied
+	// by the preparer into test-only files, with their source in provenance.
+	record, err := desktopTorComparisonStatus(raw)
+	if err != nil {
+		t.Fatal("actual controller rejected native wire receipt", err, string(raw))
+	}
+	return record
+}
+
+func TestRouterVPNDesktopTorComparisonMailboxSequencesActualHandleAndResponseOperands(t *testing.T) {
+	dir, f, owner := desktopTorComparisonMailbox(t)
+	if _, err := os.Stat(filepath.Join(dir, mobiletor.DesktopTorCompareStatusFile)); !os.IsNotExist(err) {
+		t.Fatal("idle mailbox manufactured a prepared owner")
+	}
+	identity := ""
+	for i, action := range []string{"prepare", "verify", "last", "external", "close"} {
+		request := desktopTorComparisonRequestFor(f, 3, uint64(i+1), action)
+		desktopTorComparisonInput(t, dir, mobiletor.DesktopTorCompareRequestFile, request)
+		if err := f.tick(); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, mobiletor.DesktopTorCompareStatusFile))
+		if err != nil {
+			t.Fatal("start not published before consumption", err)
+		}
+		var started mobiletor.DesktopTorCompareStatus
+		if json.Unmarshal(raw, &started) != nil || started.DesktopTorCompareRequest != request {
+			t.Fatal("start receipt changed request identity")
+		}
+		record := desktopTorComparisonComplete(t, f)
+		if record.DesktopTorCompareRequest != request || record.Failed || record.StopRequired || record.Cancelled || record.Drained != (action == "close") {
+			t.Fatal("native phase/result ownership changed", record)
+		}
+		if i == 0 {
+			identity = record.IdentitySHA256
+		}
+		if identity == "" || record.IdentitySHA256 != identity {
+			t.Fatal("native identity changed across actions", record)
+		}
+		want := int64(0)
+		if action == "last" {
+			want = int64(17 * time.Millisecond)
+		}
+		if action == "external" {
+			want = int64(23 * time.Millisecond)
+		}
+		if record.ResponseNS != want {
+			t.Fatal("IPC/setup/close elapsed substituted for native operand", record.ResponseNS, want)
+		}
+		if _, err := os.Stat(filepath.Join(dir, mobiletor.DesktopTorCompareRequestFile)); !os.IsNotExist(err) {
+			t.Fatal("completed exact input not retired", err)
+		}
+	}
+	if len(owner.handles) != 1 || f.handle != nil || len(owner.targets) != 1 {
+		t.Fatal("round constructed replacement handles")
+	}
+	request := desktopTorComparisonRequestFor(f, 7, 1, "prepare")
+	desktopTorComparisonInput(t, dir, mobiletor.DesktopTorCompareRequestFile, request)
+	if record := desktopTorComparisonComplete(t, f); record.Failed || record.Generation != 7 {
+		t.Fatal("skipped unused generations were rejected", record)
+	}
+	if err := f.close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterVPNDesktopTorComparisonMailboxPreservesPreexistingCancelAndActualWorkerDrain(t *testing.T) {
+	for _, preexisting := range []bool{true, false} {
+		t.Run(fmt.Sprint(preexisting), func(t *testing.T) {
+			dir, f, owner := desktopTorComparisonMailbox(t)
+			request := desktopTorComparisonRequestFor(f, 1, 1, "prepare")
+			if preexisting {
+				desktopTorComparisonInput(t, dir, mobiletor.DesktopTorCompareCancelFile, request)
+			} else {
+				owner.next = &desktopTorComparisonHandleFixture{id: strings.Repeat("e", 64), prepareEntered: make(chan struct{}), prepareRelease: make(chan struct{})}
+			}
+			desktopTorComparisonInput(t, dir, mobiletor.DesktopTorCompareRequestFile, request)
+			if err := f.tick(); err != nil {
+				t.Fatal(err)
+			}
+			if preexisting {
+				wire := desktopTorComparisonWire(t, f)
+				if len(owner.handles) != 0 || !wire.Complete || !wire.Cancelled || wire.Drained {
+					t.Fatal("preexisting cancel started native work", f.record)
+				}
+				if f.matchesNext(desktopTorComparisonRequestFor(f, 2, 1, "prepare")) {
+					t.Fatal("empty cancelled round skipped exact Close")
+				}
+				desktopTorComparisonInput(t, dir, mobiletor.DesktopTorCompareRequestFile, desktopTorComparisonRequestFor(f, 1, 2, "close"))
+				if record := desktopTorComparisonComplete(t, f); !record.Drained || record.Failed || record.Action != "close" {
+					t.Fatal("unused cancelled round could not acknowledge exact Close", record)
+				}
+				return
+			}
+			h := owner.handles[0]
+			var once sync.Once
+			defer once.Do(func() { close(h.prepareRelease) })
+			select {
+			case <-h.prepareEntered:
+			case <-time.After(time.Second):
+				t.Fatal("prepare did not start")
+			}
+			desktopTorComparisonInput(t, dir, mobiletor.DesktopTorCompareCancelFile, request)
+			if err := f.tick(); err != nil {
+				t.Fatal(err)
+			}
+			if f.record.Complete || f.record.Drained || !f.record.Cancelled || f.record.ResponseNS != 0 || f.handle == nil {
+				t.Fatal("cancel pretended to drain native worker", f.record)
+			}
+			wire := desktopTorComparisonWire(t, f)
+			if wire.Complete || wire.Cancelled || wire.Failed || wire.StopRequired {
+				t.Fatal("pending cancellation was published as a terminal result", wire)
+			}
+			if f.matchesNext(desktopTorComparisonRequestFor(f, 2, 1, "prepare")) {
+				t.Fatal("unfinished worker lost exclusive round")
+			}
+			once.Do(func() { close(h.prepareRelease) })
+			record := desktopTorComparisonComplete(t, f)
+			if !record.Cancelled || record.Drained || record.ResponseNS != 0 {
+				t.Fatal("cancelled late success was retained", record)
+			}
+			closeRequest := desktopTorComparisonRequestFor(f, 1, 2, "close")
+			desktopTorComparisonInput(t, dir, mobiletor.DesktopTorCompareRequestFile, closeRequest)
+			if record := desktopTorComparisonComplete(t, f); !record.Drained || record.Failed {
+				t.Fatal("same cancelled handle could not drain", record)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorComparisonMailboxLatePreviousCancelCannotAbandonClose(t *testing.T) {
+	dir, f, owner := desktopTorComparisonMailbox(t)
+	prepare := desktopTorComparisonRequestFor(f, 1, 1, "prepare")
+	desktopTorComparisonInput(t, dir, mobiletor.DesktopTorCompareRequestFile, prepare)
+	desktopTorComparisonComplete(t, f)
+	h := owner.handles[0]
+	h.closeEntered, h.closeRelease = make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	defer once.Do(func() { close(h.closeRelease) })
+	closeRequest := desktopTorComparisonRequestFor(f, 1, 2, "close")
+	desktopTorComparisonInput(t, dir, mobiletor.DesktopTorCompareRequestFile, closeRequest)
+	if err := f.tick(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-h.closeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("close did not enter")
+	}
+	desktopTorComparisonInput(t, dir, mobiletor.DesktopTorCompareCancelFile, prepare)
+	if err := f.tick(); err != nil {
+		t.Fatal(err)
+	}
+	if f.record.Complete || f.record.Drained {
+		t.Fatal("stale previous cancel acknowledged unfinished close")
+	}
+	once.Do(func() { close(h.closeRelease) })
+	if record := desktopTorComparisonComplete(t, f); record.Failed || !record.Drained || record.IdentitySHA256 == "" {
+		t.Fatal("late cancel killed cleanup context or identity", record)
+	}
+}
+
+func TestRouterVPNDesktopTorComparisonMailboxRejectsForeignMalformedAndReplayedRequests(t *testing.T) {
+	for name, mutate := range map[string]func(*mobiletor.DesktopTorCompareRequest){
+		"session": func(r *mobiletor.DesktopTorCompareRequest) { r.SessionID = strings.Repeat("e", 32) }, "source": func(r *mobiletor.DesktopTorCompareRequest) { r.SourceSHA256 = strings.Repeat("e", 64) },
+		"config": func(r *mobiletor.DesktopTorCompareRequest) { r.ConfigSHA256 = strings.Repeat("e", 64) }, "sequence": func(r *mobiletor.DesktopTorCompareRequest) { r.Sequence = 2 },
+		"zero-generation": func(r *mobiletor.DesktopTorCompareRequest) { r.Generation = 0 }, "action": func(r *mobiletor.DesktopTorCompareRequest) { r.Action = "last" },
+		"request": func(r *mobiletor.DesktopTorCompareRequest) { r.RequestID = strings.Repeat("D", 32) }, "target": func(r *mobiletor.DesktopTorCompareRequest) { r.Target = "https://example.com/" },
+		"expired": func(r *mobiletor.DesktopTorCompareRequest) { r.ExpiresAt = time.Now().Add(-time.Second).UnixMilli() }, "unbounded": func(r *mobiletor.DesktopTorCompareRequest) { r.ExpiresAt = time.Now().Add(time.Hour).UnixMilli() },
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir, f, owner := desktopTorComparisonMailbox(t)
+			request := desktopTorComparisonRequestFor(f, 1, 1, "prepare")
+			mutate(&request)
+			desktopTorComparisonInput(t, dir, mobiletor.DesktopTorCompareRequestFile, request)
+			if err := f.tick(); err != nil {
+				t.Fatal(err)
+			}
+			if len(owner.handles) != 0 || f.record.Generation != 0 || len(f.inputs) != 0 {
+				t.Fatal("malformed request acquired native authority", name)
+			}
+		})
+	}
+	for _, extra := range []string{`,"unknown":true`, `,"schema":1`} {
+		t.Run(extra, func(t *testing.T) {
+			dir, f, owner := desktopTorComparisonMailbox(t)
+			request := desktopTorComparisonRequestFor(f, 1, 1, "prepare")
+			raw, _ := json.Marshal(request)
+			raw = append(append(raw[:len(raw)-1], extra...), '}')
+			os.WriteFile(filepath.Join(dir, mobiletor.DesktopTorCompareRequestFile), raw, 0600)
+			if err := f.tick(); err != nil {
+				t.Fatal(err)
+			}
+			if len(owner.handles) != 0 {
+				t.Fatal("unknown or duplicate JSON acquired native owner")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorComparisonMailboxRetainsReplacedInputAndPendingNativeJoin(t *testing.T) {
+	dir, f, owner := desktopTorComparisonMailbox(t)
+	h := &desktopTorComparisonHandleFixture{id: strings.Repeat("e", 64), prepareEntered: make(chan struct{}), prepareRelease: make(chan struct{})}
+	owner.next = h
+	request := desktopTorComparisonRequestFor(f, 1, 1, "prepare")
+	desktopTorComparisonInput(t, dir, mobiletor.DesktopTorCompareRequestFile, request)
+	if err := f.tick(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-h.prepareEntered:
+	case <-time.After(time.Second):
+		t.Fatal("prepare did not enter")
+	}
+	path := filepath.Join(dir, mobiletor.DesktopTorCompareRequestFile)
+	if err := os.Rename(path, path+".original"); err != nil {
+		t.Fatal(err)
+	}
+	desktopTorComparisonInput(t, dir, mobiletor.DesktopTorCompareRequestFile, request)
+	if err := f.tick(); err == nil || f.handle == nil {
+		t.Fatal("same-byte replacement input retired its owner")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("foreign replacement input was deleted")
+	}
+	close(h.prepareRelease)
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path+".original", path); err != nil {
+		t.Fatal(err)
+	}
+	joined := &atomic.Bool{}
+	h.requireJoin = joined
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := f.close(ctx); err == nil || f.handle == nil || f.record.Drained {
+		t.Fatal("unjoined native owner was forgotten")
+	}
+	joined.Store(true)
+	if err := f.close(ctx); err != nil || f.handle != nil || f.record.Drained {
+		t.Fatal("exact joined owner failed retained retry", err)
+	}
+	if wire := desktopTorComparisonWire(t, f); !wire.Complete || !wire.Cancelled || wire.Drained || wire.Action != "prepare" {
+		t.Fatal("whole stop fabricated an unissued Close receipt", wire)
+	}
+}
+
+func TestRouterVPNDesktopTorComparisonMailboxEmptyFailureAndExpiredWorkerKeepWireContract(t *testing.T) {
+	for _, kind := range []string{"empty-failure", "expired-worker"} {
+		t.Run(kind, func(t *testing.T) {
+			dir, f, owner := desktopTorComparisonMailbox(t)
+			request := desktopTorComparisonRequestFor(f, 1, 1, "prepare")
+			if kind == "empty-failure" {
+				owner.empty, owner.failure = true, errors.New("native constructor failed before ownership")
+			} else {
+				owner.next = &desktopTorComparisonHandleFixture{id: strings.Repeat("e", 64), prepareEntered: make(chan struct{}), prepareRelease: make(chan struct{})}
+				request.ExpiresAt = time.Now().Add(30 * time.Millisecond).UnixMilli()
+			}
+			desktopTorComparisonInput(t, dir, mobiletor.DesktopTorCompareRequestFile, request)
+			if err := f.tick(); err != nil {
+				t.Fatal(err)
+			}
+			if kind == "expired-worker" {
+				h := owner.handles[0]
+				var once sync.Once
+				defer once.Do(func() { close(h.prepareRelease) })
+				select {
+				case <-h.prepareEntered:
+				case <-time.After(time.Second):
+					t.Fatal("expiry fixture did not enter")
+				}
+				for time.Now().UnixMilli() <= request.ExpiresAt {
+					time.Sleep(time.Millisecond)
+				}
+				if err := f.tick(); err != nil {
+					t.Fatal(err)
+				}
+				wire := desktopTorComparisonWire(t, f)
+				if wire.Complete || wire.Failed || wire.Cancelled || wire.Drained || f.handle == nil {
+					t.Fatal("expiry acknowledged an entered worker", wire)
+				}
+				once.Do(func() { close(h.prepareRelease) })
+			}
+			record := desktopTorComparisonComplete(t, f)
+			if !record.Complete || !record.Failed || record.Drained || record.ResponseNS != 0 {
+				t.Fatal("failed Prepare changed wire semantics", record)
+			}
+			if f.matchesNext(desktopTorComparisonRequestFor(f, 2, 1, "prepare")) {
+				t.Fatal("failed round was replaced without exact Close")
+			}
+			desktopTorComparisonInput(t, dir, mobiletor.DesktopTorCompareRequestFile, desktopTorComparisonRequestFor(f, 1, 2, "close"))
+			if record := desktopTorComparisonComplete(t, f); !record.Drained || record.Failed || record.Action != "close" {
+				t.Fatal("failed round could not drain exact Close", record)
+			}
+		})
+	}
+}
+
+type desktopTorComparisonCommandFixture struct {
+	*routerVPNTorCommandFixture
+	mailbox *desktopTorComparisonMailboxOwner
+	joined  atomic.Bool
+}
+
+func (f *desktopTorComparisonCommandFixture) CreateComparison(target string) (mobiletor.Comparison, error) {
+	h, err := f.mailbox.CreateComparison(target)
+	if h != nil {
+		h.(*desktopTorComparisonHandleFixture).requireJoin = &f.joined
+	}
+	return h, err
+}
+func (f *desktopTorComparisonCommandFixture) Close(ctx context.Context) error {
+	if err := f.routerVPNTorCommandFixture.Close(ctx); err != nil {
+		return err
+	}
+	f.joined.Store(true)
+	return nil
+}
+
+func TestRouterVPNDesktopTorCommandExposesComparisonAndStopsPathBeforeRetryingDrain(t *testing.T) {
+	f := routerVPNNewTorFileFixture(t)
+	owner := &desktopTorComparisonCommandFixture{routerVPNTorCommandFixture: routerVPNNewTorCommandFixture(t, f, false), mailbox: &desktopTorComparisonMailboxOwner{}}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- routerVPNRunTor(ctx, f.directory, routerVPNTorTestSession, f.binary, f.getenv, func(context.Context, *routerVPNTorFiles, *routerVPNTorBinary) (routerVPNTorOwner, error) {
+			return owner, nil
+		})
+	}()
+	proof := routerVPNTorReadProofFixture(t, f)
+	request := mobiletor.DesktopTorCompareRequest{Schema: 1, SessionID: proof.SessionID, SourceSHA256: proof.SourceSHA256, ConfigSHA256: proof.ConfigSHA256, Generation: 1, RequestID: strings.Repeat("d", 32), Sequence: 1, Action: "prepare", Target: "https://1.1.1.1/cdn-cgi/trace", ExpiresAt: time.Now().Add(2 * time.Second).UnixMilli()}
+	read := func(matches func(mobiletor.DesktopTorCompareStatus) bool) mobiletor.DesktopTorCompareStatus {
+		until := time.Now().Add(4 * time.Second)
+		for {
+			raw, err := os.ReadFile(filepath.Join(f.directory, mobiletor.DesktopTorCompareStatusFile))
+			var record mobiletor.DesktopTorCompareStatus
+			if err == nil {
+				record, err = desktopTorComparisonStatus(raw)
+				if err != nil {
+					t.Fatal("actual command published a receipt rejected by its controller", err)
+				}
+			}
+			if err == nil && matches(record) {
+				return record
+			}
+			if time.Now().After(until) {
+				t.Fatal("actual Tor command omitted comparison receipt", record, err)
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+	desktopTorComparisonInput(t, f.directory, mobiletor.DesktopTorCompareRequestFile, request)
+	read(func(r mobiletor.DesktopTorCompareStatus) bool { return r.Sequence == 1 && r.Complete })
+	request.Sequence, request.Action, request.ExpiresAt = 2, "close", time.Now().Add(2*time.Second).UnixMilli()
+	desktopTorComparisonInput(t, f.directory, mobiletor.DesktopTorCompareRequestFile, request)
+	record := read(func(r mobiletor.DesktopTorCompareStatus) bool { return r.Sequence == 2 && r.Complete })
+	if !record.Failed || !record.StopRequired || record.Drained || owner.joined.Load() {
+		t.Fatal("failed cleanup manufactured stopped path", record)
+	}
+	desktopExternalStopFile(t, f.directory, proof.SessionID, proof.SourceSHA256)
+	if err := desktopExternalWait(t, done); err != nil {
+		t.Fatal(err)
+	}
+	routerVPNTorCheckStoppedFixture(t, f)
+	record = read(func(r mobiletor.DesktopTorCompareStatus) bool { return r.Drained })
+	if !owner.joined.Load() || record.StopRequired || !record.Complete || record.ResponseNS != 0 {
+		t.Fatal("command did not join old native owner before retry", record)
+	}
+}

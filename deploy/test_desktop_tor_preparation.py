@@ -93,6 +93,9 @@ class DesktopPTPreparation(unittest.TestCase):
         traffic = (self.vendor/'routervpn/desktoppt/tor_pt_entry_traffic_test.go').read_text()
         for name in ('MeekTLS', 'WebTunnelTLS', 'SnowflakeTraffic'):
             self.assertIn('func TestRouterVPNDesktopTorPTEntryCarriesReal'+name+'(', traffic)
+        self.assertEqual(PREP.BOX_TEMPLATES.get('tor_box_lastrelay.go.tmpl'), 'routervpn_desktop_tor_box_lastrelay.go')
+        self.assertEqual(PREP.BOX_TEMPLATES.get('tor_box_lastrelay_test.go.tmpl'), 'routervpn_desktop_tor_box_lastrelay_test.go')
+        self.assertEqual(PREP.BOX_TEMPLATES.get('tor_box_lastrelay_server_test.go.tmpl'), 'routervpn_desktop_tor_box_lastrelay_server_test.go')
         for name, relative in {**PREP.BOX_TEMPLATES, **PREP.ROUTE_TEMPLATES}.items():
             self.assertEqual((self.vendor/relative).read_bytes(),
                              (ROOT/'mobile/desktop'/name).read_bytes())
@@ -114,7 +117,7 @@ class DesktopPTPreparation(unittest.TestCase):
 
     def test_shipping_preparer_calls_selective_pipeline_without_mobile_tor(self):
         captured = dict(os.environ, GOTOOLCHAIN='local', GOWORK='off', GOENV='off')
-        with patch.object(PREP, 'prepare_desktop_pt') as selective, patch.object(PREP, 'write'), \
+        with patch.object(PREP, 'prepare_desktop_pt') as selective, patch.object(PREP, 'write') as writes, \
              patch.object(PREP.MTU, 'prepare'), patch.object(PREP.DESKTOP_MTU, 'prepare'), \
              patch.object(PREP.STRATEGY, 'prepare'), patch.object(PREP.EXTERNAL, 'prepare'), \
              patch.object(PREP, 'prepare_network_startup') as startup, \
@@ -123,6 +126,32 @@ class DesktopPTPreparation(unittest.TestCase):
             PREP.prepare(self.vendor, GO, env=captured)
             selective.assert_called_once_with(self.vendor.resolve(), GO, env=captured)
             startup.assert_called_once_with(self.vendor.resolve())
+            generated = {call.args[1]: call.args[2] for call in writes.call_args_list}
+            for name in ('external_tor_comparison.go.tmpl', 'external_tor_comparison_test.go.tmpl',
+                         'external_tor_comparison_whole_test.go.tmpl'):
+                self.assertEqual(generated['cmd/sing-box/routervpn_'+name.removesuffix('.tmpl')],
+                                 (ROOT/'mobile/desktop'/name).read_bytes())
+            self.assertEqual(generated['routervpn/mobiletor/desktop_lastrelay.go'],
+                             (ROOT/'internal/mobiletor/desktop_lastrelay.go').read_bytes())
+            for relative, raw in PREP.comparison_client_contract().items():
+                self.assertEqual(generated[relative], raw)
+
+    def test_native_receipts_compile_the_actual_published_controller_contract(self):
+        source = ROOT/'cmd/client/desktop_tor_comparison_native.go'
+        exact = ROOT/'cmd/client/multihop_exact_json.go'
+        self.assertIn(source, PREP.inputs())
+        self.assertIn(exact, PREP.inputs())
+        generated = PREP.comparison_client_contract()
+        validator = source.read_text().split('func desktopTorComparisonStatus(', 1)[1].split('func (c *desktopTorComparisonClient) read(', 1)[0]
+        self.assertIn(('func desktopTorComparisonStatus('+validator).encode(), generated['cmd/sing-box/routervpn_tor_controller_status_test.go'])
+        self.assertEqual(generated['cmd/sing-box/routervpn_tor_controller_json_test.go'], exact.read_bytes().replace(
+            b'"router-vpn/internal/multihoprelay"', b'"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"'))
+        read = Path.read_text
+        def changed(path, *args, **kwargs):
+            text = read(path, *args, **kwargs)
+            return text.replace('func desktopTorComparisonStatus(', 'func removedTorStatus(') if path == source else text
+        with patch.object(Path, 'read_text', changed), self.assertRaisesRegex(ValueError, 'receipt contract seam'):
+            PREP.comparison_client_contract()
 
     def test_native_network_startup_joins_exact_callbacks_and_preserves_repeat_preparation(self):
         self.prepare()

@@ -1,0 +1,482 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"math"
+	"os"
+	"regexp"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+var routerVPNTorComparisonDigest = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+type routerVPNTorComparisonOwner interface {
+	CreateComparison(string) (mobiletor.Comparison, error)
+}
+
+// The command retains the same actual native object across all actions. File
+// checks happen outside the HTTP timer; they never become response-time data.
+type routerVPNTorNativeComparison struct {
+	owner      *routerVPNTorNative
+	tor        *box.RouterVPNDesktopTor
+	process    *routerVPNTorProcess
+	comparison mobiletor.Comparison
+}
+
+func (n *routerVPNTorNative) CreateComparison(target string) (mobiletor.Comparison, error) {
+	if n == nil || !n.LifetimeCurrent() || n.files.current() != nil {
+		return nil, routerVPNTorFailure
+	}
+	n.mu.Lock()
+	tor, process, closed := n.tor, n.process, n.boxClosed
+	n.mu.Unlock()
+	if closed || tor == nil {
+		return nil, routerVPNTorFailure
+	}
+	comparison, err := tor.CreateComparison(target)
+	if comparison == nil {
+		return nil, err
+	}
+	handle := &routerVPNTorNativeComparison{owner: n, tor: tor, process: process, comparison: comparison}
+	if err != nil || !handle.current() || n.files.current() != nil {
+		handle.Cancel()
+		return handle, routerVPNTorFailure
+	}
+	return handle, nil
+}
+
+func (c *routerVPNTorNativeComparison) current() bool {
+	if c == nil || c.owner == nil || c.comparison == nil || c.owner.ctx.Err() != nil || c.process != nil && c.process.exited() {
+		return false
+	}
+	c.owner.mu.Lock()
+	current := !c.owner.boxClosed && c.owner.tor == c.tor && c.owner.process == c.process
+	c.owner.mu.Unlock()
+	return current && c.tor.LifetimeCurrent()
+}
+
+func (c *routerVPNTorNativeComparison) checked() bool {
+	return c.current() && c.owner.files.current() == nil
+}
+
+func (c *routerVPNTorNativeComparison) Prepare(ctx context.Context) error {
+	if !c.checked() {
+		return routerVPNTorFailure
+	}
+	if err := c.comparison.Prepare(ctx); err != nil || !c.checked() {
+		c.Cancel()
+		return routerVPNTorFailure
+	}
+	return nil
+}
+func (c *routerVPNTorNativeComparison) Identity() string {
+	if !c.current() {
+		return ""
+	}
+	return c.comparison.Identity()
+}
+func (c *routerVPNTorNativeComparison) Verify(ctx context.Context) error {
+	if !c.checked() {
+		return routerVPNTorFailure
+	}
+	if err := c.comparison.Verify(ctx); err != nil || !c.checked() {
+		c.Cancel()
+		return routerVPNTorFailure
+	}
+	return nil
+}
+func (c *routerVPNTorNativeComparison) ProbeLast(ctx context.Context) (time.Duration, error) {
+	if !c.checked() {
+		return 0, routerVPNTorFailure
+	}
+	elapsed, err := c.comparison.ProbeLast(ctx)
+	if err != nil || elapsed <= 0 || !c.checked() {
+		c.Cancel()
+		return 0, errors.Join(routerVPNTorFailure, err)
+	}
+	return elapsed, nil
+}
+func (c *routerVPNTorNativeComparison) ProbeExternal(ctx context.Context, target string) (time.Duration, error) {
+	if !c.checked() {
+		return 0, routerVPNTorFailure
+	}
+	elapsed, err := c.comparison.ProbeExternal(ctx, target)
+	if err != nil || elapsed <= 0 || !c.checked() {
+		c.Cancel()
+		return 0, errors.Join(routerVPNTorFailure, err)
+	}
+	return elapsed, nil
+}
+func (c *routerVPNTorNativeComparison) Cancel() {
+	if c != nil && c.comparison != nil {
+		c.comparison.Cancel()
+	}
+}
+func (c *routerVPNTorNativeComparison) Close(ctx context.Context) error {
+	if c == nil || c.comparison == nil {
+		return nil
+	}
+	// Cleanup remains attached to the exact old owner after source retirement,
+	// process stop or a workspace rename. It never consults a replacement path.
+	return c.comparison.Close(ctx)
+}
+
+type routerVPNTorComparisonInput struct {
+	info   os.FileInfo
+	digest [32]byte
+}
+type routerVPNTorComparisonOutcome struct {
+	elapsed  time.Duration
+	identity string
+	err      error
+}
+
+// The command loop alone owns request sequencing and publication. Its worker
+// can perform a bounded network action, but cannot consume input, publish a
+// stale result or replace the retained comparison while that action drains.
+type routerVPNTorComparisonFiles struct {
+	files     *routerVPNExternalFiles
+	owner     routerVPNTorComparisonOwner
+	base      mobiletor.DesktopTorCompareRequest
+	record    mobiletor.DesktopTorCompareStatus
+	previous  mobiletor.DesktopTorCompareRequest
+	handle    mobiletor.Comparison
+	inputs    map[string]routerVPNTorComparisonInput
+	done      chan routerVPNTorComparisonOutcome
+	cancel    context.CancelFunc
+	deadline  time.Time
+	terminal  bool
+	highwater uint64
+	closing   bool
+}
+
+func routerVPNOpenTorComparison(files *routerVPNExternalFiles, owner routerVPNTorComparisonOwner, session, source, config string) (*routerVPNTorComparisonFiles, error) {
+	if files == nil || owner == nil || !routerVPNExternalSession.MatchString(session) || !routerVPNTorComparisonDigest.MatchString(source) || !routerVPNTorComparisonDigest.MatchString(config) {
+		return nil, routerVPNTorFailure
+	}
+	return &routerVPNTorComparisonFiles{files: files, owner: owner, inputs: make(map[string]routerVPNTorComparisonInput),
+		base: mobiletor.DesktopTorCompareRequest{Schema: mobiletor.DesktopTorCompareSchema, SessionID: session, SourceSHA256: source, ConfigSHA256: config}}, nil
+}
+
+func (f *routerVPNTorComparisonFiles) identity(r mobiletor.DesktopTorCompareRequest) bool {
+	return r.Schema == f.base.Schema && r.SessionID == f.base.SessionID && r.SourceSHA256 == f.base.SourceSHA256 && r.ConfigSHA256 == f.base.ConfigSHA256
+}
+
+func (f *routerVPNTorComparisonFiles) read(name string, matches func(mobiletor.DesktopTorCompareRequest) bool) (mobiletor.DesktopTorCompareRequest, bool) {
+	raw, err := f.files.read(name, mobiletor.DesktopTorCompareFileLimit)
+	if err != nil {
+		return mobiletor.DesktopTorCompareRequest{}, false
+	}
+	if _, err := applexray.Object(raw); err != nil {
+		return mobiletor.DesktopTorCompareRequest{}, false
+	}
+	var request mobiletor.DesktopTorCompareRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || !f.identity(request) || !matches(request) {
+		return mobiletor.DesktopTorCompareRequest{}, false
+	}
+	info, err := f.files.root.Lstat(name)
+	if err != nil {
+		return mobiletor.DesktopTorCompareRequest{}, false
+	}
+	again, err := f.files.read(name, mobiletor.DesktopTorCompareFileLimit)
+	if err != nil || !bytes.Equal(raw, again) {
+		return mobiletor.DesktopTorCompareRequest{}, false
+	}
+	input := routerVPNTorComparisonInput{info: info, digest: sha256.Sum256(raw)}
+	if old, ok := f.inputs[name]; ok && (!os.SameFile(old.info, info) || old.digest != input.digest) {
+		return mobiletor.DesktopTorCompareRequest{}, false
+	}
+	f.inputs[name] = input
+	return request, true
+}
+
+func (f *routerVPNTorComparisonFiles) inputsCurrent() bool {
+	for name, input := range f.inputs {
+		info, err := f.files.root.Lstat(name)
+		raw, readErr := f.files.read(name, mobiletor.DesktopTorCompareFileLimit)
+		if err != nil || readErr != nil || !os.SameFile(info, input.info) || sha256.Sum256(raw) != input.digest {
+			return false
+		}
+	}
+	return true
+}
+
+func (f *routerVPNTorComparisonFiles) retire() error {
+	if !f.inputsCurrent() {
+		return routerVPNTorFailure
+	}
+	for name := range f.inputs {
+		if err := f.files.root.Remove(name); err != nil {
+			return routerVPNTorFailure
+		}
+		delete(f.inputs, name)
+	}
+	return nil
+}
+
+func (f *routerVPNTorComparisonFiles) publish() error {
+	if f.record.Generation == 0 {
+		return nil
+	}
+	// Cancellation/expiry can be known while an actual worker or native frame
+	// still drains. Preserve those facts internally, but the controller's
+	// terminal flags describe a joined action, never merely its cancellation.
+	wire := f.record
+	if !wire.Complete {
+		wire.Cancelled, wire.Failed, wire.StopRequired, wire.Drained, wire.ResponseNS = false, false, false, false, 0
+	}
+	return f.files.publish(mobiletor.DesktopTorCompareStatusFile, wire)
+}
+
+func (f *routerVPNTorComparisonFiles) cancelAction(cancelled bool) {
+	if f == nil {
+		return
+	}
+	if cancelled {
+		f.record.Cancelled = true
+	}
+	f.record.ResponseNS = 0
+	f.terminal = true
+	if f.handle != nil {
+		f.handle.Cancel()
+	}
+	// A cleanup action keeps its own bounded wait even after measurement
+	// cancellation. Otherwise a delayed cancel would prevent native drainage.
+	if f.cancel != nil && f.record.Action != mobiletor.DesktopTorCompareClose {
+		f.cancel()
+	}
+}
+
+func (f *routerVPNTorComparisonFiles) cancellation() error {
+	if f == nil || f.record.Generation == 0 {
+		return nil
+	}
+	_, exists := f.read(mobiletor.DesktopTorCompareCancelFile, func(request mobiletor.DesktopTorCompareRequest) bool {
+		return request == f.record.DesktopTorCompareRequest || f.previous.Generation != 0 && request == f.previous
+	})
+	if exists {
+		f.cancelAction(true)
+		if err := f.publish(); err != nil {
+			return err
+		}
+		// A completed action can acquire a later cancel before Close arrives.
+		// Retire only that captured file before admitting the next sequence.
+		if f.done == nil && f.record.Complete {
+			return f.retire()
+		}
+	}
+	return nil
+}
+
+func (f *routerVPNTorComparisonFiles) matchesNext(request mobiletor.DesktopTorCompareRequest) bool {
+	if f.closing || request.Validate(time.Now()) != nil {
+		return false
+	}
+	if request.Action == mobiletor.DesktopTorComparePrepare {
+		return f.handle == nil && (f.record.Generation == 0 || f.record.Drained) && request.Generation > f.highwater && request.Sequence == 1
+	}
+	old := f.record.DesktopTorCompareRequest
+	unused := f.handle == nil && f.terminal && old.Action == mobiletor.DesktopTorComparePrepare && request.Action == mobiletor.DesktopTorCompareClose
+	return (f.handle != nil || unused) && f.record.Complete && !f.record.Drained && old.Sequence != math.MaxUint64 &&
+		request.Generation == old.Generation && request.RequestID == old.RequestID && request.Target == old.Target && request.Sequence == old.Sequence+1 &&
+		(!f.terminal || request.Action == mobiletor.DesktopTorCompareClose)
+}
+
+func (f *routerVPNTorComparisonFiles) start(request mobiletor.DesktopTorCompareRequest) error {
+	f.previous = f.record.DesktopTorCompareRequest
+	identity := f.record.IdentitySHA256
+	if request.Action == mobiletor.DesktopTorComparePrepare {
+		identity = ""
+		f.terminal = false
+		f.highwater = request.Generation
+	}
+	f.record = mobiletor.DesktopTorCompareStatus{DesktopTorCompareRequest: request, IdentitySHA256: identity}
+	f.deadline = time.UnixMilli(request.ExpiresAt)
+	// A visible exact start receipt acknowledges input publication before any
+	// consumed file can disappear. The worker never writes this pathname.
+	if err := f.publish(); err != nil {
+		return err
+	}
+	if err := f.cancellation(); err != nil {
+		return err
+	}
+	if f.record.Cancelled && request.Action != mobiletor.DesktopTorCompareClose {
+		f.record.Complete = true
+		if err := f.publish(); err != nil {
+			return err
+		}
+		return f.retire()
+	}
+	if request.Action == mobiletor.DesktopTorComparePrepare {
+		handle, err := f.owner.CreateComparison(request.Target)
+		f.handle = handle // retain nonnil failed constructors too
+		if err != nil || handle == nil {
+			f.record.Complete, f.record.Failed, f.terminal = true, true, true
+			if handle != nil {
+				handle.Cancel()
+			}
+			if err := f.publish(); err != nil {
+				return err
+			}
+			return f.retire()
+		}
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), f.deadline)
+	f.cancel = cancel
+	done := make(chan routerVPNTorComparisonOutcome, 1)
+	f.done = done
+	handle := f.handle
+	go func() {
+		outcome := routerVPNTorComparisonOutcome{}
+		switch request.Action {
+		case mobiletor.DesktopTorComparePrepare:
+			outcome.err = handle.Prepare(ctx)
+		case mobiletor.DesktopTorCompareVerify:
+			outcome.err = handle.Verify(ctx)
+		case mobiletor.DesktopTorCompareLast:
+			outcome.elapsed, outcome.err = handle.ProbeLast(ctx)
+		case mobiletor.DesktopTorCompareExternal:
+			outcome.elapsed, outcome.err = handle.ProbeExternal(ctx, request.Target)
+		case mobiletor.DesktopTorCompareClose:
+			if handle != nil {
+				outcome.err = handle.Close(ctx)
+			}
+		default:
+			outcome.err = routerVPNTorFailure
+		}
+		if request.Action != mobiletor.DesktopTorCompareClose {
+			outcome.identity = handle.Identity()
+		}
+		if ctx.Err() != nil && outcome.err == nil {
+			outcome.err = ctx.Err()
+		}
+		done <- outcome
+	}()
+	return nil
+}
+
+func (f *routerVPNTorComparisonFiles) complete(outcome routerVPNTorComparisonOutcome) error {
+	f.done = nil
+	if f.cancel != nil {
+		f.cancel()
+		f.cancel = nil
+	}
+	if !f.inputsCurrent() {
+		f.cancelAction(true)
+		return routerVPNTorFailure
+	}
+	f.record.Complete = true
+	if f.record.Action == mobiletor.DesktopTorCompareClose {
+		if outcome.err == nil {
+			f.record.Drained = true
+			f.handle = nil
+		} else {
+			f.record.Failed, f.record.StopRequired, f.terminal = true, true, true
+		}
+	} else if outcome.err != nil || f.record.Cancelled || !time.Now().Before(f.deadline) || !routerVPNTorComparisonDigest.MatchString(outcome.identity) || f.record.IdentitySHA256 != "" && outcome.identity != f.record.IdentitySHA256 {
+		f.record.Failed = outcome.err != nil || !f.record.Cancelled
+		f.record.StopRequired = errors.Is(outcome.err, mobiletor.ErrLastRelayTeardown)
+		f.cancelAction(f.record.Cancelled)
+	} else {
+		f.record.IdentitySHA256 = outcome.identity
+		if f.record.Action == mobiletor.DesktopTorCompareLast || f.record.Action == mobiletor.DesktopTorCompareExternal {
+			if outcome.elapsed <= 0 || outcome.elapsed > 10*time.Second {
+				f.record.Failed = true
+				f.cancelAction(false)
+			} else {
+				f.record.ResponseNS = int64(outcome.elapsed)
+			}
+		} else if outcome.elapsed != 0 {
+			f.record.Failed = true
+			f.cancelAction(false)
+		}
+	}
+	if err := f.publish(); err != nil {
+		return err
+	}
+	return f.retire()
+}
+
+func (f *routerVPNTorComparisonFiles) tick() error {
+	if f == nil {
+		return nil
+	}
+	if !f.inputsCurrent() {
+		f.cancelAction(true)
+		return routerVPNTorFailure
+	}
+	if err := f.cancellation(); err != nil {
+		return err
+	}
+	if f.done != nil {
+		if !time.Now().Before(f.deadline) {
+			f.record.Failed = true
+			f.cancelAction(false)
+		}
+		select {
+		case outcome := <-f.done:
+			return f.complete(outcome)
+		default:
+			return f.publish()
+		}
+	}
+	if request, ok := f.read(mobiletor.DesktopTorCompareRequestFile, f.matchesNext); ok {
+		return f.start(request)
+	}
+	return nil
+}
+
+func (f *routerVPNTorComparisonFiles) cancelPending() {
+	if f != nil {
+		f.closing = true
+		f.cancelAction(true)
+	}
+}
+
+// Called after whole-path stop has independently joined the exact child. A
+// failed native CLOSE is retried on the retained handle; no replacement handle
+// or closed-control observation can acknowledge the unfinished comparison.
+func (f *routerVPNTorComparisonFiles) close(ctx context.Context) error {
+	if f == nil {
+		return nil
+	}
+	f.cancelPending()
+	if f.done != nil {
+		select {
+		case outcome := <-f.done:
+			if err := f.complete(outcome); err != nil {
+				return err
+			}
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if f.handle != nil {
+		if err := f.handle.Close(ctx); err != nil {
+			f.record.StopRequired = true
+			_ = f.publish()
+			return err
+		}
+		f.handle = nil
+	}
+	if f.record.Generation != 0 {
+		f.record.Complete, f.record.Cancelled, f.record.ResponseNS, f.record.StopRequired = true, true, 0, false
+		// Whole-path stop has its own checked receipt and process join. It
+		// cannot turn a Prepare/Last request into an unissued Close action.
+		f.record.Drained = f.record.Action == mobiletor.DesktopTorCompareClose
+	}
+	if err := f.publish(); err != nil {
+		return err
+	}
+	return f.retire()
+}

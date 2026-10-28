@@ -50,7 +50,7 @@ type RouterVPNDesktopTor struct {
 	name                        string
 	index, mtu                  int
 	mu                          sync.Mutex
-	interfaceMu                 sync.Mutex
+	interfaceMu                 sync.RWMutex
 	startUsed, runUsed, closing bool
 	session                     routerVPNDesktopTorSession
 	proofNetwork                *mobiletor.Network
@@ -69,6 +69,7 @@ type RouterVPNDesktopTor struct {
 	mtuLease                    atomic.Pointer[RouterVPNDesktopTorMTULease]
 	mtuRevision                 uint64
 	mtuTransition               uint64
+	comparison                  atomic.Pointer[RouterVPNDesktopTorComparison]
 }
 
 // RouterVPNDesktopTorCreate is single-use for this exact service generation.
@@ -489,8 +490,8 @@ func (r *RouterVPNDesktopTor) proofDial(ctx context.Context, network, address st
 }
 
 func (r *RouterVPNDesktopTor) readback() (string, int, int, error) {
-	r.interfaceMu.Lock()
-	defer r.interfaceMu.Unlock()
+	r.interfaceMu.RLock()
+	defer r.interfaceMu.RUnlock()
 	return r.readbackLocked()
 }
 
@@ -554,6 +555,9 @@ func (r *RouterVPNDesktopTor) Cancel() {
 	if r != nil && r.retired.CompareAndSwap(false, true) {
 		r.proved.Store(false)
 		r.cancel()
+		if comparison := r.comparison.Load(); comparison != nil {
+			comparison.Cancel()
+		}
 		if padding := r.padding.Load(); padding != nil {
 			padding.Cancel()
 		}
@@ -578,6 +582,19 @@ func (r *RouterVPNDesktopTor) Close(ctx context.Context) error {
 	mtuLease := r.mtuLease.Load()
 	r.mu.Unlock()
 	r.Cancel()
+	// A failed comparison CLOSE may need this exact remote child stopped.
+	// Whole-path teardown must revoke and join its owned Server lease before
+	// retrying comparison cleanup, just as the command joins a Local child.
+	if r.server != nil {
+		if err := r.server.CloseLease(ctx); err != nil {
+			return err
+		}
+	}
+	if comparison := r.comparison.Load(); comparison != nil {
+		if err := comparison.Close(ctx); err != nil {
+			return err
+		}
+	}
 	if padding := r.padding.Load(); padding != nil {
 		// The command retains and joins the exact Tor process before calling
 		// Close. This join accounts for control work, not a substitute native

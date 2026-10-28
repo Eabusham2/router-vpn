@@ -31,11 +31,33 @@ type DesktopBridgeSession struct {
 	state          atomic.Int32
 	expected       map[string][]string // guarded by owner.operation
 	isolation      string
-	paddingClaimed bool          // guarded by owner.operation; never transferred or reset
-	padding        *PaddingLease // guarded by owner.operation; retained through native drain
+	paddingClaimed bool            // guarded by owner.operation; never transferred or reset
+	padding        *PaddingLease   // guarded by owner.operation; retained through native drain
+	nativeJoined   <-chan struct{} // immutable exact Cmd.Wait and output-reader join witness
 }
 
 func NewDesktopBridgeSession(owner *DesktopControl, policy *DesktopBridgePolicy) (*DesktopBridgeSession, error) {
+	return newDesktopBridgeSession(owner, policy, nil)
+}
+
+// NewDesktopBridgeSessionWithNativeJoin is used by the standalone process
+// owner only after successful Start. The receive-only witness closes after
+// Cmd.Wait and its output readers have joined; controller closure or an exit
+// observation cannot replace it. Older callers retain ordinary session APIs
+// but cannot construct comparison probes without that independent witness.
+func NewDesktopBridgeSessionWithNativeJoin(owner *DesktopControl, policy *DesktopBridgePolicy, joined <-chan struct{}) (*DesktopBridgeSession, error) {
+	if joined == nil {
+		return nil, errors.New("desktop Tor comparison requires its exact native join witness")
+	}
+	select {
+	case <-joined:
+		return nil, errors.New("desktop Tor native child is already joined")
+	default:
+	}
+	return newDesktopBridgeSession(owner, policy, joined)
+}
+
+func newDesktopBridgeSession(owner *DesktopControl, policy *DesktopBridgePolicy, joined <-chan struct{}) (*DesktopBridgeSession, error) {
 	if owner == nil || owner.control == nil || owner.pid <= 0 || policy == nil || policy.ServerPolicy() != nil || policy.metadata.Execution != "" || !desktopHex(policy.SourceSHA256(), 32) || !desktopHex(policy.isolation, 32) || policy.metadata.ConfigSHA256 != desktopDigest([]byte(policy.config)) {
 		return nil, errors.New("desktop Tor session requires its authenticated child and immutable policy")
 	}
@@ -55,7 +77,7 @@ func NewDesktopBridgeSession(owner *DesktopControl, policy *DesktopBridgePolicy)
 		return nil, errors.New("desktop Tor child already belongs to a captured or retired session")
 	}
 	owner.claimed = true
-	session := &DesktopBridgeSession{owner: owner, metadata: policy.Metadata(), plan: plan, mode: policy.Mode(), isolation: policy.isolation}
+	session := &DesktopBridgeSession{owner: owner, metadata: policy.Metadata(), plan: plan, mode: policy.Mode(), isolation: policy.isolation, nativeJoined: joined}
 	session.state.Store(desktopSessionClaimed)
 	return session, nil
 }

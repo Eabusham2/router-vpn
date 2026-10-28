@@ -175,9 +175,9 @@ func (p *routerVPNTorProcess) authenticate(parent context.Context) error {
 	}
 	defer clear(cookie)
 	p.mu.Lock()
-	command := p.command
+	command, joined := p.command, p.done
 	p.mu.Unlock()
-	if command == nil || command.Process == nil {
+	if command == nil || command.Process == nil || joined == nil {
 		return routerVPNTorFailure
 	}
 	var dialer net.Dialer
@@ -195,7 +195,7 @@ func (p *routerVPNTorProcess) authenticate(parent context.Context) error {
 	if p.exited() || ctx.Err() != nil || p.files.current() != nil {
 		return routerVPNTorFailure
 	}
-	p.session, err = mobiletor.NewDesktopBridgeSession(control, p.files.inputs.Policy())
+	p.session, err = mobiletor.NewDesktopBridgeSessionWithNativeJoin(control, p.files.inputs.Policy(), joined)
 	if err != nil {
 		return routerVPNTorFailure
 	}

@@ -62,6 +62,9 @@ func routerVPNTorFixtureChild() int {
 	_, _ = os.Stdout.Write(bytes.Repeat([]byte("private-tor-stdout\n"), 8192))
 	_, _ = os.Stderr.Write(bytes.Repeat([]byte("private-tor-stderr\n"), 8192))
 	mode := os.Getenv("ROUTERVPN_NATIVE_TOR_FIXTURE_MODE")
+	if mode == "lastrelay-unknown" {
+		return routerVPNTorWholeFixtureChild(directory)
+	}
 	if mode == "early-exit" {
 		return 17
 	}
@@ -253,7 +256,7 @@ func TestRouterVPNDesktopTorProcessOwnsAuthenticatedActualChildAndPrivateCleanup
 	if err := p.authenticate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if p.exited() || p.control == nil || p.session == nil || p.control.PID() != p.command.Process.Pid {
+	if p.exited() || p.control == nil || p.session == nil || p.session.NativeJoined() || p.control.PID() != p.command.Process.Pid {
 		t.Fatal("native control did not capture its actual child")
 	}
 	if err := p.launch(ctx); err == nil {
@@ -274,8 +277,8 @@ func TestRouterVPNDesktopTorProcessOwnsAuthenticatedActualChildAndPrivateCleanup
 	if err := p.close(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if !p.exited() {
-		t.Fatal("control closure was confused with actual process exit")
+	if !p.exited() || !p.session.NativeJoined() {
+		t.Fatal("control closure was confused with actual process/output-reader join")
 	}
 	if err := p.cleanup(); err != nil {
 		t.Fatal(err)
@@ -336,7 +339,7 @@ func TestRouterVPNDesktopTorProcessCloseWaitsForActualExitAndPreservesCookieRepl
 	short, stop := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	err := p.close(short)
 	stop()
-	if err == nil || p.exited() {
+	if err == nil || p.exited() || p.session.NativeJoined() {
 		t.Fatal("native process close inferred exit from retired control", err)
 	}
 	if err := p.cleanup(); err == nil {

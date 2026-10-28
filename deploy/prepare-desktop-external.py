@@ -42,6 +42,9 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'tor_server.go.tmpl', 'tor_plain_test.go.tmpl', 'tor_local.go.tmpl', 'tor_local_test.go.tmpl')
 BOX_TEMPLATES = {
     'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go',
+    'tor_box_lastrelay.go.tmpl': 'routervpn_desktop_tor_box_lastrelay.go',
+    'tor_box_lastrelay_test.go.tmpl': 'routervpn_desktop_tor_box_lastrelay_test.go',
+    'tor_box_lastrelay_server_test.go.tmpl': 'routervpn_desktop_tor_box_lastrelay_server_test.go',
     'tor_box_padding.go.tmpl': 'routervpn_desktop_tor_box_padding.go',
     'tor_box_padding_test.go.tmpl': 'routervpn_desktop_tor_box_padding_test.go',
     'tor_box_test.go.tmpl': 'routervpn_desktop_tor_box_test.go',
@@ -96,6 +99,7 @@ def inputs():
              ROOT/'mobile/toroutbound/padding_box.go.tmpl', ROOT/'mobile/toroutbound/padding_box_test.go.tmpl',
              ROOT/'deploy/prepare-desktop-mtu.py', ROOT/'deploy/prepare-mobile-tor.py',
              ROOT/'deploy/test_desktop_tor_preparation.py',
+             ROOT/'cmd/client/desktop_tor_comparison_native.go', ROOT/'cmd/client/multihop_exact_json.go',
              ROOT/'mobile/toroutbound/network.go.tmpl', ROOT/'mobile/toroutbound/upstream.go.tmpl',
              ROOT/'mobile/toroutbound/dns_adapter.go.tmpl', *pt_inputs(),
              *sorted((ROOT/'mobile/desktop').glob('*.tmpl'))]
@@ -369,8 +373,31 @@ def prepare_desktop_pt(vendor, go='go', *, env=None):
         files={name: hashlib.sha256(raw).hexdigest() for name, raw in sorted(content.items())}), indent=2, sort_keys=True)+'\n').encode())
 
 
+def comparison_client_contract():
+    """Compile the actual controller receipt decoder beside native IPC tests.
+
+    These are test-only files. No second validator or permissive boundary is
+    maintained: changes to either shipping source enter native provenance and
+    every emitted fixture receipt is checked by the actual client function.
+    """
+    source = (ROOT/'cmd/client/desktop_tor_comparison_native.go').read_text()
+    start = 'func desktopTorComparisonStatus(raw []byte) (mobiletor.DesktopTorCompareStatus, error) {'
+    end = 'func (c *desktopTorComparisonClient) read(cleanup bool) (mobiletor.DesktopTorCompareStatus, error) {'
+    if source.count(start) != 1 or source.count(end) != 1:
+        raise ValueError('Desktop Tor controller receipt contract seam changed')
+    begin, finish = source.index(start), source.index(end)
+    if finish <= begin:
+        raise ValueError('Desktop Tor controller receipt contract order changed')
+    status = ('package main\n\nimport (\n "encoding/hex"\n "errors"\n "'+MODULE+'/routervpn/mobiletor"\n)\n\n'+source[begin:finish]).encode()
+    exact = (ROOT/'cmd/client/multihop_exact_json.go').read_bytes().replace(
+        b'"router-vpn/internal/multihoprelay"', ('"'+MODULE+'/experimental/libbox/routervpn/multihoprelay"').encode())
+    return {'cmd/sing-box/routervpn_tor_controller_status_test.go': status,
+            'cmd/sing-box/routervpn_tor_controller_json_test.go': exact}
+
+
 def prepare(vendor, go='go', *, env=None):
     vendor = checked_vendor(vendor)
+    controller_contract = comparison_client_contract()
     prepare_desktop_pt(vendor, go, env=env)
     # These pure policy types are shared by the Box's external and Tor proof
     # ownership code. The selective PT owner above shares this one Go runtime;
@@ -402,6 +429,8 @@ def prepare(vendor, go='go', *, env=None):
     templates = [*sorted((ROOT/'mobile/desktop').glob('external*.go.tmpl')), *sorted((ROOT/'mobile/desktop').glob('mtu*.go.tmpl'))]
     for template in templates:
         write(vendor, 'cmd/sing-box/routervpn_'+template.name.removesuffix('.tmpl'), template.read_bytes())
+    for relative, raw in controller_contract.items():
+        write(vendor, relative, raw)
     print('Desktop native external proof source:', digest())
 
 

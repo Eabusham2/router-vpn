@@ -1,0 +1,689 @@
+package box
+
+import (
+	"bufio"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+const desktopTorComparisonTarget = "https://1.1.1.1/cdn-cgi/trace"
+const desktopTorComparisonRequest = "GET /tor/robots.txt HTTP/1.0\r\n\r\n"
+const desktopTorComparisonRobots = "User-agent: *\r\nDisallow: /\r\n"
+
+// Only the Tor peer/control registry and TUN are doubles. The prepared Box,
+// exact selected DNS router, actual SOCKS framing, TLS certificate/host check,
+// HTTP parsing, native receipt parser, owned sockets and close joins are real.
+type desktopTorComparisonPeer struct {
+	*desktopTorBoxChild
+	boxFixture   *desktopTorBoxFixture
+	padding      *desktopTorPaddingBoxChild
+	control      *mobiletor.Control
+	mu           sync.Mutex
+	anchors      map[string]string
+	fields       map[string]string
+	highwater    uint64
+	until        time.Time
+	nonce        string
+	joined       atomic.Bool
+	pathSwap     atomic.Bool
+	badAnchor    atomic.Bool
+	badClose     atomic.Bool
+	badResponse  atomic.Bool
+	wrongTLS     atomic.Bool
+	externals    atomic.Int32
+	lastRequests atomic.Int32
+	lastEntered  chan struct{}
+	lastRelease  chan struct{}
+	lastOnce     sync.Once
+	certificate  tls.Certificate
+}
+
+func newDesktopTorComparisonPeer(t *testing.T, f *desktopTorBoxFixture, certificate tls.Certificate, padding bool) *desktopTorComparisonPeer {
+	t.Helper()
+	p := &desktopTorComparisonPeer{desktopTorBoxChild: f.child, boxFixture: f, anchors: make(map[string]string), certificate: certificate}
+	if padding {
+		p.padding = newDesktopTorPaddingBoxChild(t, f.child)
+		p.control = p.padding.control
+		p.padding.comparison = p.command
+	} else {
+		client, server := net.Pipe()
+		var err error
+		p.control, err = mobiletor.NewControl(client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			reader := bufio.NewReader(server)
+			for {
+				line, err := reader.ReadString('\n')
+				if err != nil {
+					return
+				}
+				reply, ok := p.command(strings.TrimSpace(line))
+				if !ok {
+					return
+				}
+				if _, err = io.WriteString(server, reply); err != nil {
+					return
+				}
+			}
+		}()
+		t.Cleanup(func() {
+			client.Close()
+			server.Close()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Error("comparison control peer did not join")
+			}
+		})
+	}
+	f.socks.comparison = p.serve
+	return p
+}
+func (p *desktopTorComparisonPeer) PaddingLease(ctx context.Context, options mobiletor.PaddingLeaseOptions) (*mobiletor.PaddingLease, error) {
+	if p.padding == nil {
+		return nil, errors.New("fixture has no padding lease")
+	}
+	return p.padding.PaddingLease(ctx, options)
+}
+func (p *desktopTorComparisonPeer) LastRelaySOCKS() (string, string, string, error) {
+	if !p.Current() || p.joined.Load() {
+		return "", "", "", net.ErrClosed
+	}
+	return p.boxFixture.socks.listener.Addr().String(), p.meta.SessionID, desktopTorBoxIsolation, nil
+}
+func (p *desktopTorComparisonPeer) NativeJoined() bool { return p.joined.Load() }
+func (p *desktopTorComparisonPeer) LookupLastRelayAnchor(ctx context.Context, raw net.Conn, target netip.AddrPort) (mobiletor.LastRelayLocatedAnchor, error) {
+	if raw == nil || raw.RemoteAddr().String() != p.boxFixture.socks.listener.Addr().String() {
+		return mobiletor.LastRelayLocatedAnchor{}, errors.New("foreign SOCKS owner")
+	}
+	client, err := netip.ParseAddrPort(raw.LocalAddr().String())
+	if err != nil {
+		return mobiletor.LastRelayLocatedAnchor{}, err
+	}
+	session := sha256.Sum256([]byte(p.meta.SessionID))
+	return p.control.LookupLastRelayAnchor(ctx, mobiletor.LastRelayAnchorLocator{SessionSHA256: hex.EncodeToString(session[:]), SourceSHA256: p.meta.SourceSHA256, SOCKSUsername: p.meta.SessionID, SOCKSPassword: desktopTorBoxIsolation, Client: client, Target: target})
+}
+func (p *desktopTorComparisonPeer) LastRelayProbe(ctx context.Context, anchor mobiletor.LastRelayAnchor) (*mobiletor.LastRelayProbe, error) {
+	return mobiletor.NewLastRelayProbe(ctx, p.control, anchor)
+}
+
+func (p *desktopTorComparisonPeer) command(command string) (string, bool) {
+	parts := strings.Fields(command)
+	if len(parts) < 2 || parts[0] != "ROUTERVPN_LASTRELAY" {
+		return "", false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	bad := func() (string, bool) { return "551 unavailable captured fixture owner\r\n", true }
+	session := sha256.Sum256([]byte(p.meta.SessionID))
+	sessionText := hex.EncodeToString(session[:])
+	if parts[1] == "INFO" {
+		return fmt.Sprintf("250 version=1 transport=begindir min_ttl_ms=100 max_ttl_ms=10000 max_response_bytes=8192 generation_highwater=%d\r\n", p.highwater), true
+	}
+	if parts[1] == "ANCHOR" {
+		if len(parts) != 10 || parts[2] != sessionText || parts[3] != p.meta.SourceSHA256 || parts[4] != p.meta.SessionID || parts[5] != desktopTorBoxIsolation {
+			return bad()
+		}
+		client, target := net.JoinHostPort(parts[6], parts[7]), net.JoinHostPort(parts[8], parts[9])
+		if p.anchors[client] != target {
+			return bad()
+		}
+		source, path := p.meta.SourceSHA256, strings.Repeat("5", 64)
+		if p.badAnchor.Load() {
+			source = strings.Repeat("f", 64)
+		}
+		if p.pathSwap.Load() {
+			path = strings.Repeat("6", 64)
+		}
+		return fmt.Sprintf("250 version=1 session=%s source=%s anchor=111 circuit=222 exit=%s path_sha256=%s client_ip=%s client_port=%s target_ip=%s target_port=%s\r\n", sessionText, source, strings.Repeat("4", 40), path, parts[6], parts[7], parts[8], parts[9]), true
+	}
+	if parts[1] == "CAPTURE" {
+		if len(parts) != 10 || parts[2] != sessionText || parts[3] != p.meta.SourceSHA256 || parts[6] != "111" || parts[7] != p.meta.SessionID || parts[8] != desktopTorBoxIsolation || len(p.anchors) != 1 {
+			return bad()
+		}
+		generation, err := strconv.ParseUint(parts[4], 10, 64)
+		ttl, terr := strconv.Atoi(parts[5])
+		if err != nil || terr != nil || generation <= p.highwater || ttl < 100 || ttl > 10000 {
+			return bad()
+		}
+		p.highwater, p.nonce, p.until = generation, parts[9], time.Now().Add(time.Duration(ttl)*time.Millisecond)
+		address := parts[4] + "." + parts[9][:32] + "." + parts[9][32:] + ".lastrelay.routervpn.invalid"
+		p.fields = map[string]string{"version": "1", "state": "armed", "reason": "captured", "session": sessionText, "source": p.meta.SourceSHA256, "generation": parts[4], "anchor": "111", "circuit": "222", "stream": "0", "relay_stream": "0", "end_reason": "0", "exit": strings.Repeat("4", 40), "path_sha256": strings.Repeat("5", 64), "address": address, "port": "1", "expires_ms": parts[5], "request_bytes": "0", "response_bytes": "0"}
+	} else {
+		if len(parts) != 6 || p.fields == nil || parts[2] != sessionText || parts[3] != p.meta.SourceSHA256 || parts[4] != p.fields["generation"] || parts[5] != p.nonce {
+			return bad()
+		}
+		if parts[1] == "CLOSE" {
+			if p.badClose.Load() {
+				return bad()
+			}
+			p.fields["state"], p.fields["reason"], p.fields["expires_ms"] = "stopped", "controller", "0"
+		} else if parts[1] != "STATUS" {
+			return bad()
+		}
+	}
+	if p.fields["state"] != "stopped" {
+		p.fields["expires_ms"] = strconv.FormatInt(max(time.Until(p.until).Milliseconds(), 1), 10)
+	}
+	var fields []string
+	for _, key := range []string{"version", "state", "reason", "session", "source", "generation", "anchor", "circuit", "stream", "relay_stream", "end_reason", "exit", "path_sha256", "address", "port", "expires_ms", "request_bytes", "response_bytes"} {
+		fields = append(fields, key+"="+p.fields[key])
+	}
+	return "250 " + strings.Join(fields, " ") + "\r\n", true
+}
+
+func (p *desktopTorComparisonPeer) serve(raw net.Conn, target string) (bool, error) {
+	if target == "1.1.1.1:443" || target == "1.0.0.1:443" {
+		return true, p.serveExternal(raw, target, true)
+	}
+	if strings.HasSuffix(target, ".lastrelay.routervpn.invalid:1") {
+		return true, p.serveProbe(raw, target, true)
+	}
+	return false, nil
+}
+func desktopTorComparisonSOCKSReply(raw net.Conn, enabled bool) error {
+	if !enabled {
+		return nil
+	}
+	_, err := raw.Write([]byte{5, 0, 0, 1, 127, 0, 0, 1, 0, 1})
+	return err
+}
+func (p *desktopTorComparisonPeer) serveExternal(raw net.Conn, target string, socks bool) error {
+	p.externals.Add(1)
+	if err := desktopTorComparisonSOCKSReply(raw, socks); err != nil {
+		return err
+	}
+	secure := tls.Server(raw, &tls.Config{Certificates: []tls.Certificate{p.certificate}, MinVersion: tls.VersionTLS12, NextProtos: []string{"http/1.1"}})
+	p.mu.Lock()
+	p.anchors[raw.RemoteAddr().String()] = target
+	p.mu.Unlock()
+	defer func() { p.mu.Lock(); delete(p.anchors, raw.RemoteAddr().String()); p.mu.Unlock() }()
+	if err := secure.Handshake(); err != nil {
+		return err
+	}
+	request, err := http.ReadRequest(bufio.NewReader(secure))
+	if err != nil {
+		return err
+	}
+	if request.Method != "GET" || request.URL.RequestURI() != "/cdn-cgi/trace" || request.Host != strings.TrimSuffix(target, ":443") {
+		return errors.New("external target changed")
+	}
+	request.Body.Close()
+	time.Sleep(20 * time.Millisecond)
+	body := "ip=203.0.113.18\nhttp=http/1.1\n"
+	_, err = fmt.Fprintf(secure, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+	if err == nil {
+		_, err = io.Copy(io.Discard, secure)
+	}
+	return err
+}
+func (p *desktopTorComparisonPeer) serveProbe(raw net.Conn, target string, socks bool) error {
+	p.mu.Lock()
+	valid := p.fields != nil && p.fields["state"] == "armed" && target == p.fields["address"]+":1" && len(p.anchors) == 1
+	if valid {
+		p.fields["state"], p.fields["stream"], p.fields["relay_stream"] = "connected", "333", "7"
+	}
+	p.mu.Unlock()
+	if !valid {
+		return errors.New("reserved probe destination was reused or unowned")
+	}
+	if err := desktopTorComparisonSOCKSReply(raw, socks); err != nil {
+		return err
+	}
+	request := make([]byte, len(desktopTorComparisonRequest))
+	n, err := io.ReadFull(raw, request)
+	p.mu.Lock()
+	p.fields["request_bytes"] = strconv.Itoa(n)
+	p.mu.Unlock()
+	if err != nil || string(request) != desktopTorComparisonRequest {
+		return errors.New("probe request changed")
+	}
+	p.lastRequests.Add(1)
+	if p.lastEntered != nil {
+		p.lastOnce.Do(func() { close(p.lastEntered) })
+	}
+	if p.lastRelease != nil {
+		<-p.lastRelease
+	}
+	time.Sleep(20 * time.Millisecond)
+	body := desktopTorComparisonRobots
+	if p.badResponse.Load() {
+		body = "not the relay robots response"
+	}
+	response := fmt.Sprintf("HTTP/1.0 200 OK\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+	n, err = io.WriteString(raw, response)
+	p.mu.Lock()
+	p.fields["response_bytes"], p.fields["state"], p.fields["reason"], p.fields["end_reason"] = strconv.Itoa(n), "ended", "relay-end", "6"
+	p.mu.Unlock()
+	return err
+}
+
+// The child process installs a fixture CA as the normal X509 trust store. This
+// preserves the unmodified public helper's ordinary host/certificate checks on
+// Windows/macOS/Linux and never injects InsecureSkipVerify or a public trust API.
+func desktopTorComparisonCertificate(t *testing.T) tls.Certificate {
+	t.Helper()
+	dir := os.Getenv("ROUTERVPN_TOR_COMPARISON_FIXTURE")
+	ca, err := os.ReadFile(filepath.Join(dir, "ca.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(ca) {
+		t.Fatal("invalid fixture CA")
+	}
+	x509.SetFallbackRoots(pool)
+	certificate, err := tls.LoadX509KeyPair(filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return certificate
+}
+func desktopTorComparisonTrustedChild(t *testing.T) bool {
+	t.Helper()
+	if os.Getenv("ROUTERVPN_TOR_COMPARISON_FIXTURE") != "" {
+		return false
+	}
+	dir := t.TempDir()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	ca := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Router VPN isolated native comparison fixture"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+	caDER, err := x509.CreateCertificate(rand.Reader, ca, ca, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(2), NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), IPAddresses: []net.IP{net.ParseIP("1.1.1.1"), net.ParseIP("1.0.0.1")}, DNSNames: []string{"check.torproject.org"}, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	certDER, err := x509.CreateCertificate(rand.Reader, leaf, ca, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, block := range map[string]*pem.Block{"ca.pem": {Type: "CERTIFICATE", Bytes: caDER}, "cert.pem": {Type: "CERTIFICATE", Bytes: certDER}, "key.pem": {Type: "EC PRIVATE KEY", Bytes: private}} {
+		if err := os.WriteFile(filepath.Join(dir, name), pem.EncodeToMemory(block), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command := exec.Command(os.Args[0], "-test.run=^"+t.Name()+"$", "-test.timeout=50s")
+	command.Env = append(os.Environ(), "ROUTERVPN_TOR_COMPARISON_FIXTURE="+dir, "GODEBUG=x509usefallbackroots=1")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("actual comparison TLS/Box subprocess failed: %v\n%s", err, output)
+	}
+	return true
+}
+
+func TestRouterVPNDesktopTorComparisonNative(t *testing.T) {
+	if desktopTorComparisonTrustedChild(t) {
+		return
+	}
+	certificate := desktopTorComparisonCertificate(t)
+	for _, padding := range []bool{false, true} {
+		for _, fault := range []string{"none", "dns", "anchor-source", "path-change", "native-tun", "native-generation", "wrong-target", "bad-response", "close-needs-join", "cancel-last", "readback-overlap"} {
+			t.Run(fmt.Sprintf("padding=%t/%s", padding, fault), func(t *testing.T) {
+				f := newDesktopTorBoxFixture(t, func(profile map[string]any) {
+					if padding {
+						profile["daita_enabled"], profile["daita_rate_kbps"] = true, 64
+					}
+				})
+				peer := newDesktopTorComparisonPeer(t, f, certificate, padding)
+				owner := f.capture(t)
+				if err := owner.start(peer); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := owner.run(f.prover(t)); err != nil {
+					t.Fatal(err)
+				}
+				if got, err := owner.CreateComparison(desktopTorComparisonTarget); err == nil || got != nil {
+					t.Fatal("public constructor admitted a doubled child")
+				}
+				comparison, err := owner.createComparison(desktopTorComparisonTarget, peer)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					peer.joined.Store(true)
+					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+					defer cancel()
+					if err := comparison.Close(ctx); err != nil {
+						t.Error("retained comparison failed cleanup", err)
+					}
+				}()
+				if second, err := owner.createComparison(desktopTorComparisonTarget, peer); err == nil || second != nil {
+					t.Fatal("second comparison replaced retained owner")
+				}
+				beforeDNS := f.socks.dnsCalls.Load()
+				peer.badAnchor.Store(fault == "anchor-source")
+				f.socks.badDNS.Store(fault == "dns")
+				ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+				defer cancel()
+				err = comparison.Prepare(ctx)
+				if fault == "dns" || fault == "anchor-source" {
+					if err == nil || comparison.Identity() != "" {
+						t.Fatal("unproved source/DNS prepared", fault, err)
+					}
+					return
+				}
+				if err != nil || comparison.Identity() == "" || peer.externals.Load() != 1 || f.socks.dnsCalls.Load() <= beforeDNS {
+					t.Fatal("retained selected DNS/TLS anchor failed", err, peer.externals.Load())
+				}
+				identity := comparison.Identity()
+				if err := comparison.Prepare(ctx); err == nil {
+					t.Fatal("one-use anchor was prepared twice")
+				}
+				if err := comparison.Verify(ctx); err != nil {
+					t.Fatal(err)
+				}
+				switch fault {
+				case "path-change":
+					peer.pathSwap.Store(true)
+				case "native-tun":
+					owner.interfaceMu.Lock()
+					owner.mtuRevision++
+					owner.interfaceMu.Unlock()
+				case "native-generation":
+					owner.network.InterfaceUpdated(context.Background())
+				case "bad-response":
+					peer.badResponse.Store(true)
+				case "close-needs-join":
+					peer.badClose.Store(true)
+				case "readback-overlap":
+					entered, release := make(chan struct{}), make(chan struct{})
+					var enteredOnce, releaseOnce sync.Once
+					defer releaseOnce.Do(func() { close(release) })
+					f.tun.mu.Lock()
+					previous := f.tun.guard
+					f.tun.guard = func() bool {
+						enteredOnce.Do(func() { close(entered) })
+						<-release
+						return previous()
+					}
+					f.tun.mu.Unlock()
+					done := make(chan error, 1)
+					go func() { done <- owner.VerifyCurrentPath(ctx) }()
+					select {
+					case <-entered:
+					case <-time.After(time.Second):
+						t.Fatal("actual native interface readback did not enter")
+					}
+					if comparison.Identity() != identity || !comparison.available() {
+						t.Fatal("overlapping read-only native verification retired the captured comparison")
+					}
+					releaseOnce.Do(func() { close(release) })
+					select {
+					case err := <-done:
+						if err != nil {
+							t.Fatal("concurrent actual interface readback failed", err)
+						}
+					case <-time.After(time.Second):
+						t.Fatal("actual native interface readback did not join")
+					}
+				}
+				if fault == "cancel-last" {
+					peer.lastEntered, peer.lastRelease = make(chan struct{}), make(chan struct{})
+					var once sync.Once
+					defer once.Do(func() { close(peer.lastRelease) })
+					done := make(chan error, 1)
+					go func() {
+						elapsed, err := comparison.ProbeLast(ctx)
+						if elapsed != 0 {
+							done <- errors.New("cancelled last returned measurement")
+							return
+						}
+						done <- err
+					}()
+					select {
+					case <-peer.lastEntered:
+					case <-time.After(3 * time.Second):
+						t.Fatal("last relay never entered real request")
+					}
+					comparison.Cancel()
+					once.Do(func() { close(peer.lastRelease) })
+					select {
+					case err := <-done:
+						if err == nil {
+							t.Fatal("cancelled last succeeded")
+						}
+					case <-time.After(3 * time.Second):
+						t.Fatal("last cancellation did not return")
+					}
+					if peer.externals.Load() != 1 {
+						t.Fatal("cancel rebuilt external anchor")
+					}
+					return
+				}
+				last, err := comparison.ProbeLast(ctx)
+				if fault == "path-change" || fault == "native-tun" || fault == "native-generation" || fault == "bad-response" || fault == "close-needs-join" {
+					if err == nil || last != 0 {
+						t.Fatal("foreign/invalid last operand retained", fault, last, err)
+					}
+					if fault == "close-needs-join" {
+						short, stop := context.WithTimeout(context.Background(), 100*time.Millisecond)
+						closeErr := comparison.Close(short)
+						stop()
+						if closeErr == nil {
+							t.Fatal("closed controller impersonated joined native child")
+						}
+						peer.joined.Store(true)
+						if err := comparison.Close(ctx); err != nil {
+							t.Fatal("exact native join did not discharge retired probe", err)
+						}
+					}
+					return
+				}
+				if err != nil || last < 15*time.Millisecond || last > time.Second {
+					t.Fatal("real last response lost write/body duration", last, err)
+				}
+				target := desktopTorComparisonTarget
+				if fault == "wrong-target" {
+					target = "https://1.0.0.1/cdn-cgi/trace"
+				}
+				external, err := comparison.ProbeExternal(ctx, target)
+				if fault == "wrong-target" {
+					if err == nil || external != 0 {
+						t.Fatal("external selected another endpoint", external, err)
+					}
+					return
+				}
+				if err != nil || external < 15*time.Millisecond || external > time.Second || comparison.Identity() != identity || peer.externals.Load() != 1 || peer.lastRequests.Load() != 1 {
+					t.Fatal("paired operands rebuilt path or lost actual responses", last, external, err)
+				}
+				if err := comparison.Close(ctx); err != nil {
+					t.Fatal(err)
+				}
+				if owner.comparison.Load() != nil || comparison.Identity() != "" {
+					t.Fatal("drained comparison retained activity or live identity")
+				}
+				if !owner.Healthy() {
+					t.Fatal("comparison cleanup stopped original VPN")
+				}
+			})
+		}
+	}
+}
+
+type desktopTorComparisonBlockedIO struct {
+	net.Conn
+	entered, release chan struct{}
+	once             sync.Once
+	failClose        atomic.Bool
+}
+
+func (c *desktopTorComparisonBlockedIO) Read([]byte) (int, error) {
+	c.once.Do(func() { close(c.entered) })
+	<-c.release
+	return 0, io.EOF
+}
+func (c *desktopTorComparisonBlockedIO) Close() error {
+	if c.failClose.CompareAndSwap(true, false) {
+		return errors.New("fixture native Close is not yet acknowledged")
+	}
+	return c.Conn.Close()
+}
+
+func desktopTorComparisonOwnedFixture(t *testing.T) (*desktopTorBoxFixture, *RouterVPNDesktopTor, *desktopTorComparisonPeer, *RouterVPNDesktopTorComparison) {
+	t.Helper()
+	f := newDesktopTorBoxFixture(t, nil)
+	peer := newDesktopTorComparisonPeer(t, f, tls.Certificate{}, false)
+	owner := f.capture(t)
+	if err := owner.start(peer); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.run(f.prover(t)); err != nil {
+		t.Fatal(err)
+	}
+	comparison, err := owner.createComparison(desktopTorComparisonTarget, peer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := comparison.Close(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	return f, owner, peer, comparison
+}
+
+func TestRouterVPNDesktopTorComparisonCloseRetainsEnteredIOEvenAfterNativeJoin(t *testing.T) {
+	for _, joined := range []bool{false, true} {
+		t.Run(fmt.Sprint(joined), func(t *testing.T) {
+			_, owner, peer, c := desktopTorComparisonOwnedFixture(t)
+			raw, other := net.Pipe()
+			defer other.Close()
+			blocked := &desktopTorComparisonBlockedIO{Conn: raw, entered: make(chan struct{}), release: make(chan struct{})}
+			var release sync.Once
+			defer release.Do(func() { close(blocked.release) })
+			network, err := mobiletor.NewNetwork(owner.ctx, func(context.Context, string, string) (net.Conn, error) {
+				return &routerVPNDesktopComparisonConnection{Conn: blocked, owner: c}, nil
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			connection, err := network.DialRetainedContext(t.Context(), "tcp4", "127.0.0.1:1")
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.network, c.raw = network, connection
+			readDone := make(chan struct{})
+			go func() { defer close(readDone); var b [1]byte; _, _ = connection.Read(b[:]) }()
+			select {
+			case <-blocked.entered:
+			case <-time.After(time.Second):
+				t.Fatal("wrapped socket never entered actual I/O")
+			}
+			if joined {
+				peer.joined.Store(true)
+			}
+			short, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+			err = c.Close(short)
+			cancel()
+			if err == nil || owner.comparison.Load() != c {
+				t.Fatal("raw Close or native join released entered application I/O", joined, err)
+			}
+			if next, err := owner.createComparison(desktopTorComparisonTarget, peer); err == nil || next != nil {
+				t.Fatal("pending I/O permitted replacement comparison")
+			}
+			release.Do(func() { close(blocked.release) })
+			select {
+			case <-readDone:
+			case <-time.After(time.Second):
+				t.Fatal("released read worker did not join")
+			}
+			if err := c.Close(t.Context()); err != nil || owner.comparison.Load() != nil {
+				t.Fatal("same retained owner did not finish drainage", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorComparisonRetainsErrorSocketsAndRetriesNativeClose(t *testing.T) {
+	for _, fault := range []string{"dial-error", "handshake-error", "close-error"} {
+		t.Run(fault, func(t *testing.T) {
+			_, owner, _, c := desktopTorComparisonOwnedFixture(t)
+			raw, other := net.Pipe()
+			defer other.Close()
+			blocked := &desktopTorComparisonBlockedIO{Conn: raw}
+			blocked.failClose.Store(fault == "close-error")
+			network, err := mobiletor.NewNetwork(owner.ctx, func(context.Context, string, string) (net.Conn, error) {
+				var native net.Conn = raw
+				if fault == "close-error" {
+					native = blocked
+				}
+				wrapped := &routerVPNDesktopComparisonConnection{Conn: native, owner: c}
+				if fault == "dial-error" {
+					return wrapped, errors.New("fixture returned socket with failed dial")
+				}
+				return wrapped, nil
+			}, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.network = network
+			if fault == "handshake-error" {
+				go func() {
+					var greeting [4]byte
+					_, _ = io.ReadFull(other, greeting[:3])
+					_, _ = other.Write([]byte{5, 255})
+				}()
+			}
+			var connection net.Conn
+			if fault == "close-error" {
+				connection, err = network.DialRetainedContext(t.Context(), "tcp4", "127.0.0.1:1")
+			} else {
+				address, user, password, _ := c.session.LastRelaySOCKS()
+				connection, err = c.dialSOCKS(t.Context(), "1.1.1.1:443", address, user, password)
+			}
+			if connection == nil || fault != "close-error" && err == nil {
+				t.Fatal("actual error-path socket was forgotten", fault, err)
+			}
+			c.raw = connection
+			if fault == "close-error" {
+				short, cancel := context.WithTimeout(context.Background(), time.Second)
+				err = c.Close(short)
+				cancel()
+				if err == nil || owner.comparison.Load() != c {
+					t.Fatal("failed native Close discharged retained socket", err)
+				}
+			}
+			if err := c.Close(t.Context()); err != nil || owner.comparison.Load() != nil {
+				t.Fatal("retained error socket did not close on retry", err)
+			}
+		})
+	}
+}
