@@ -48,7 +48,7 @@ Private transcripts and credentials stay outside the public repository. Source
 titles and message dates above provide continuity without publishing the raw
 private history.
 
-## Verified changes through `a0b54f49`
+## Verified changes through `1ff69540`
 
 Every commit below was published on its current `main` parent without force.
 A fresh remote reference read verified each result, and the local Git tree was
@@ -101,6 +101,15 @@ to their actual toolchain and runtime; they do not certify a packaged device.
 | [`e234aa0a`](https://github.com/Eabusham2/router-vpn/commit/e234aa0abe0832a0e380ddc5ddf86f121d57ae1f) | Require the exact captured-source, status and lifecycle APIs in every cached Apple Libbox header. | All 15 cache/build contract tests pass against the pinned gomobile declaration spelling, including wrong NSError shape, wrong request owner, missing method and absent-header rejection. Actual Xcode builds remain separate. |
 | [`a0b54f49`](https://github.com/Eabusham2/router-vpn/commit/a0b54f496b1f763dd8096bf84f3cb0bfed6a902e) | Enable owned Local outgoing Tor padding on Android and Apple, including native source/receipt validation, transactional settings, complete profiles and immediate exact-request cancellation. | Complete Android runtime contract passes. Final Android lifecycle passes 1,205 checks/21 mutations; hop 150/5 and DNS 261/7. Apple host delivery passes 1,062/1,063 checks across four variants, with ten defect controls; settings 711/eight, startup 274/twelve and connection profiles 15,220/five. Expanded exact-source native matrices below pass. Platform packages and physical traffic remain separate. |
 
+### Retained measurement lifetimes and fixed Direct bridge protection
+
+| Published commit | Concrete change | Focused evidence and limits |
+|---|---|---|
+| [`9c8b92fe`](https://github.com/Eabusham2/router-vpn/commit/9c8b92fec36c6bdc0c0b2e01740161d01440c29c) | Expose a memory-only `Joined()` acknowledgment for the exact embedded Tor invocation. | All 14 Cgo loader lifecycle cases and seven executable defect controls pass. A timed-out or failed join, an exited but unjoined process and a replacement owner cannot acknowledge this invocation's cleanup. The fixture executes the actual Go/C ABI wrapper with a controlled native C implementation; it does not establish a public Tor path. |
+| [`f327b0b6`](https://github.com/Eabusham2/router-vpn/commit/f327b0b6db811541f99c79cde42626496f135856) | Check a Tor or ordinary-external native monitor's exact command ownership and claim its connection transaction atomically. | The Windows Startup Last failure in run `40618331049`, job `122586077216`, led first to a fixture Stop transaction correction. Repeated local race testing then exposed the production stale-monitor transaction race. Three repeated startup/profile/Stop/monitor suites pass in 50.332s; two executable old-owner/unsynchronized-capture mutations reject. A retired monitor can no longer briefly block the replacement's immediate connection action. New hosted Windows execution remains a separate gate. |
+| [`000b205b`](https://github.com/Eabusham2/router-vpn/commit/000b205b690fba2c84c1770a0f91118e7fb82b04) | Measure a fresh external HTTP response on one retained, certificate-verified TLS stream. | Real local TLS and HTTP peers cover valid responses, untrusted roots, wrong hostnames, changed targets, redirects, closed/empty/truncated/oversized responses, cancellation during entered I/O and retryable failed close. Go 1.24.13 repeated race tests, the shipping Go 1.26.3 package and generated source closure pass; all five executable protection mutations reject on the published source. Timing starts with the HTTP request and ends after the complete validated response, excluding TLS preparation and cleanup. The helper cannot dial, resolve, redirect or reconnect. Its fixed external measurement targets are not a DNS policy override. Native circuit binding and public Compare activation are still separate unfinished work. |
+| [`1ff69540`](https://github.com/Eabusham2/router-vpn/commit/1ff695407a72bfc5d427d1b58bb1e023c664a666) | Preserve desktop Direct strict protection for complete sets of one to eight literal obfs4 bridges, including all-obfs4 Custom selections. | The compiler reconstructs every TCP tuple from complete normalized source, retains all credentials and deduplicates only identical sockets. Both launch wrappers independently check the same hashed source and exact physical projection. Shared/controller race suites pass; 32 Unix wrapper tests, 2,837 Windows wrapper checks and actual nft/PF/Windows rule builders retain exact ports and cleanup. Shipping form callbacks pass 4,126 Swift, 3,518 PowerShell and 28,048 GTK checks; each rejects seven executable mutations and replays accepted payloads through the Go importer. GTK exercises actual dialogs under Xvfb; Swift uses value-only AppKit boundaries, and local PowerShell 5.1 array behavior is simulated rather than claimed as an actual Windows run. Plain Tor and dynamic PT Direct strict protection remain unfinished. |
+
 ## Requirement ledger refinement
 
 The earlier ledger's broader rows remain in force. These refinements close
@@ -110,7 +119,7 @@ specific stale source assessments, not whole requirement families.
 |---|---|---|
 | 111–119, complete profiles/startup; later full connection-profile correction | Android schema-5 store and Apple complete profile store now retain ordinary-entry Local Tor, source kind, exact protocol, policy and node references. Speed Lab uses the correct captured entry slot and execution. The manual Android pending-permission supersession/replay issue is repaired and independently tested in `a1c91d7b`. | New exact-SHA packages; real permission/restart/restoration acceptance. |
 | 149–169, modes/DNS; later explicit resolver policy | Shared external compiler and Tor native owners preserve each imported transport, selected DNS/bootstrap and private-vs-public proof authority. | Full requested graph parity, live selected-resolver traffic and provider checks. Ordinary providers still cannot impersonate a private Home resolver path. |
-| 200–213 and 337, kill switch/lifecycle | Existing native physical-egress and cancellation owners are preserved; ordinary mobile source changes carry their own protection request. | Actual platform leak/transition tests; direct dynamic Tor transport strict protection remains a source boundary. |
+| 200–213 and 337, kill switch/lifecycle | Existing native physical-egress and cancellation owners are preserved; ordinary mobile source changes carry their own protection request. Desktop Direct sets of 1–8 fixed obfs4 bridges now use complete source-derived TCP exceptions in `1ff69540`. `f327b0b6` keeps retired monitors out of replacement connection transactions. | Actual platform leak/transition tests; direct dynamic Tor transport strict protection remains a source boundary. |
 | 214–224 and 336; August 13–14 external node/hop/exit additions | Desktop and both mobile hosts now admit the eight implemented ordinary import families before Local Tor. New mobile per-hop measurement identifies public entry and Tor exit independently. | Exact-SHA native matrices/packages; live paths and broader requested graph compositions. Tor Compare still needs distinct valid last-node/external inputs, winner recheck and restoration. |
 | 225–241, compatible Jumbo/MTU/measurements; August 16 retest correction | Shared ordinary proxy Jumbo compilation now preserves virtual TUN capacity and immutable policy while retaining packet endpoint MTUs. Native owner reconstruction and MTU authority agree. | Physical MTU/throughput, Retest/Cancel/network-transition acceptance. Raw-packet admission is not weakened to manufacture Jumbo support. |
 | 321–326, wider packaging/Portable targets | Current `deploy/build-client.sh` retains qualified ARMv7, FreeBSD, OpenBSD, NetBSD, DragonFly and illumos controller/helper builds in addition to the ten core native packages. | Current CI/package validation where feasible. Controller/helper artifacts are not relabeled as additional full native applications or substituted for the core ten. |
@@ -150,6 +159,13 @@ cases. Apple rejects all 1,266 missing-engine cases and 528 changed-source cases
 Both final runs match their before/after source, prepared copy, module and
 native package identities; Apple checks 866 source inputs. No failed source
 snapshot was relabeled as a new run.
+
+After the measurement and fixed-bridge changes, the exact `1ff69540` Actions
+query returned 26 runs. The source publication/secret, repository, weighted,
+Setup Center status/admin and profile traversal gates had passed; native and
+authoritative release jobs were still queued, pending or running. Earlier
+`f327b0b6` jobs include superseded cancellations. These observations do not
+establish a completed release for either commit.
 
 The complete local Go package run passed the controller (251.815s) and shared
 packages. Its isolated relay container-context fixture encountered a local
