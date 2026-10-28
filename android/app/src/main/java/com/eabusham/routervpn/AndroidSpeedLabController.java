@@ -20,6 +20,7 @@ final class AndroidSpeedLabController {
         String scope="current", topology="router", mode="smart-auto", exitMode="shadowsocks", durationMode="auto";
         AndroidNodeStore.Node node,entry,exit;
         AndroidStandardExitStore.Entry standardExit;
+        AndroidStandardExitStore.Entry ordinaryEntry;
         List<String> customLayers=Collections.emptyList();
         double minSeconds=4,maxSeconds=12;
         boolean externalDirect=true;
@@ -51,10 +52,15 @@ final class AndroidSpeedLabController {
         if(!java.util.Arrays.asList("current","temporary").contains(q.scope))throw new IllegalArgumentException("Choose Current path or Temporary config.");
         if("temporary".equals(q.scope)&&!java.util.Arrays.asList("router","multihop","external","system-direct").contains(q.topology))throw new IllegalArgumentException("Choose a supported temporary topology.");
         if("temporary".equals(q.scope)&&("multihop".equals(q.topology)||"external".equals(q.topology))&&!java.util.Arrays.asList("local","server","auto").contains(q.execution))throw new IllegalArgumentException("Choose Local, Server, or Compare both for the exact test path.");
-        q.node=input.node;q.entry=input.entry;q.exit=input.exit;q.standardExit=input.standardExit==null?null:AndroidStandardExitStore.copy(input.standardExit);
+        q.node=input.node;q.entry=input.entry;q.exit=input.exit;q.standardExit=input.standardExit==null?null:AndroidStandardExitStore.copy(input.standardExit);q.ordinaryEntry=input.ordinaryEntry==null?null:AndroidStandardExitStore.copy(input.ordinaryEntry);
         q.customLayers=input.customLayers==null?Collections.emptyList():Collections.unmodifiableList(new ArrayList<>(input.customLayers));
         AndroidSpeedLab.DurationPolicy time=AndroidSpeedLab.DurationPolicy.normalize(input.durationMode,input.minSeconds,input.maxSeconds);q.durationMode=time.mode;q.minSeconds=time.minSeconds;q.maxSeconds=time.maxSeconds;
-        if("temporary".equals(q.scope)&&("multihop".equals(q.topology)||"external".equals(q.topology)&&!q.externalDirect)&&!NativeSingBoxController.nativeMultihopEntry(q.entryMode))throw new IllegalArgumentException("Choose the exact saved native entry mode.");
+        if(q.ordinaryEntry!=null){
+            if(!"temporary".equals(q.scope)||!"external".equals(q.topology)||q.externalDirect||q.entry!=null||q.standardExit==null
+                    ||!AndroidTorProfile.isTor(q.standardExit.protocol)||!AndroidExternalPolicy.supports(q.ordinaryEntry.protocol)
+                    ||q.ordinaryEntry.id.equals(q.standardExit.id)||!"local".equals(q.execution)
+                    ||!q.entryMode.equals(AndroidExternalPolicy.protocol(q.ordinaryEntry.protocol)))throw new IllegalArgumentException("Choose a distinct ordinary entry and exact Local Tor path.");
+        }else if("temporary".equals(q.scope)&&("multihop".equals(q.topology)||"external".equals(q.topology)&&!q.externalDirect)&&!NativeSingBoxController.nativeMultihopEntry(q.entryMode))throw new IllegalArgumentException("Choose the exact saved native entry mode.");
         return q;
     }
     private static String digest(File file)throws Exception{return AndroidTorProfile.digest(AndroidPrivateFileStore.read(file,AndroidNodeStore.MAX_BUNDLE));}
@@ -83,7 +89,8 @@ final class AndroidSpeedLabController {
                         if(captured.standardExit==null)throw new IllegalArgumentException("Choose a stored custom exit.");
                         AndroidStandardExitStore.validate(captured.standardExit);
                         AndroidStandardExitStore.validateExecution(captured.standardExit,!captured.externalDirect,captured.execution);
-                        if(!captured.externalDirect)captureNode(sources,captured.entry);
+                        if(captured.ordinaryEntry!=null){AndroidStandardExitStore.validate(captured.ordinaryEntry);requireOrdinaryCurrent(captured);}
+                        else if(!captured.externalDirect)captureNode(sources,captured.entry);
                     }
                 }
                 if("temporary".equals(captured.scope))original=connection.captureRestorePoint();
@@ -99,7 +106,7 @@ final class AndroidSpeedLabController {
         LayeredVpnService.quiesceMTUForSpeedLab(error->activity.runOnUiThread(()->{
             if(!current(owner)||mtuLease!=lease||!quiesced.compareAndSet(false,true))return;
             if(error!=null){finish(ownedCallback,null,error);return;}
-            try{for(Map.Entry<File,String> source:sources.entrySet())if(!source.getValue().equals(digest(source.getKey())))throw new IllegalStateException("The captured Speed Lab node changed while MTU work was draining.");}
+            try{for(Map.Entry<File,String> source:sources.entrySet())if(!source.getValue().equals(digest(source.getKey())))throw new IllegalStateException("The captured Speed Lab node changed while MTU work was draining.");requireOrdinaryCurrent(captured);}
             catch(Throwable changed){finish(ownedCallback,null,changed);return;}
             runOwned(captured,ownedCallback,owner);
         }));
@@ -131,6 +138,7 @@ final class AndroidSpeedLabController {
     private void startTemporary(Request request,Callback callback,long owner){
         try{
             if(!connection.idleCurrent(idle))throw new IllegalStateException("A newer connection decision cancelled this temporary test.");
+            requireOrdinaryCurrent(request);
             for(Map.Entry<File,String> source:capturedFiles.entrySet())if(!source.getValue().equals(digest(source.getKey())))throw new IllegalStateException("A captured test node changed before startup.");
             if(cancelled){complete(callback,null,cancelled());return;}
             if("system-direct".equals(request.topology)){callback.progress("Testing raw Android system Internet; the captured original path will be restored…");measure(request,callback);return;}
@@ -140,6 +148,7 @@ final class AndroidSpeedLabController {
                 public void validate()throws Exception{
                     if(!current(owner)||cancelled||completionStarted||!connection.idleCurrent(idle))throw new IllegalStateException("The captured temporary permission request was cancelled or replaced.");
                     for(Map.Entry<File,String> source:capturedFiles.entrySet())if(!source.getValue().equals(digest(source.getKey())))throw new IllegalStateException("The captured test node changed while Android permission was pending.");
+                    requireOrdinaryCurrent(request);
                 }
                 public void owned(String homeSession){
                     if(!current(owner)||completionStarted)return;
@@ -161,7 +170,7 @@ final class AndroidSpeedLabController {
             switch(request.topology){
                 case "router":String mode=request.mode;if("custom".equals(mode))mode="custom:speed-lab";connection.connectNode(request.node,mode,request.customLayers,bridge);break;
                 case "multihop":connection.connectMultihop(request.entry,request.exit,request.exitMode,request.execution,request.entryMode,bridge);break;
-                case "external":connection.connectExternal(request.entry,request.standardExit,request.externalDirect,request.entryMode,request.execution,bridge);break;
+                case "external":if(request.ordinaryEntry!=null)connection.connectOrdinaryTor(request.ordinaryEntry,request.standardExit,request.execution,bridge);else connection.connectExternal(request.entry,request.standardExit,request.externalDirect,request.entryMode,request.execution,bridge);break;
                 default:throw new IllegalArgumentException("Unsupported Android Speed Lab topology: "+request.topology);
             }
         }catch(Throwable error){complete(callback,null,error);}
@@ -271,13 +280,22 @@ final class AndroidSpeedLabController {
         if("router".equals(q.topology))return q.node.id.equals(state.activeNodeId)&&!"multihop".equals(state.logicalMode)&&!"external".equals(state.logicalMode);
         if("multihop".equals(q.topology))return "multihop".equals(state.logicalMode)&&q.entry.id.equals(state.activeEntryId)&&q.exit.id.equals(state.activeExitId)&&q.exitMode.equals(state.runtimeMode)&&q.entryMode.equals(state.activeEntryMode);
         if(!"external".equals(state.logicalMode)||!q.standardExit.id.equals(state.activeExternalId)||!q.standardExit.protocol.equals(state.activeExternalProtocol)
-                ||!(q.externalDirect?state.activeEntryId.isEmpty():q.entry.id.equals(state.activeEntryId)&&q.entryMode.equals(state.activeEntryMode)))return false;
+                ||!(q.externalDirect?state.activeEntryId.isEmpty():(q.ordinaryEntry!=null?q.ordinaryEntry.id:q.entry.id).equals(state.activeEntryId)&&q.entryMode.equals(state.activeEntryMode)))return false;
         try{
+            requireOrdinaryCurrent(q);
+            if(!connection.capturedOrdinaryEntryMatches(state,q.ordinaryEntry))return false;
             String selected=connection.capturedExternalExecution(state,q.execution);
             if(!java.util.Arrays.asList("local","server").contains(selected))return false;
             if(temporaryExecution.isEmpty())temporaryExecution=selected;
             return temporaryExecution.equals(selected);
         }catch(Exception changed){return false;}
+    }
+
+    private void requireOrdinaryCurrent(Request request)throws Exception{
+        if(request.ordinaryEntry==null)return;
+        AndroidStandardExitStore store=new AndroidStandardExitStore(activity);
+        if(!AndroidStandardExitStore.snapshot(request.ordinaryEntry).equals(AndroidStandardExitStore.snapshot(store.get(request.ordinaryEntry.id)))
+                ||!AndroidStandardExitStore.snapshot(request.standardExit).equals(AndroidStandardExitStore.snapshot(store.get(request.standardExit.id))))throw new IllegalStateException("A captured ordinary Tor test node changed or was removed.");
     }
 
     private static AndroidNodeStore.Node find(List<AndroidNodeStore.Node>nodes,String id){if(nodes==null||id==null)return null;for(AndroidNodeStore.Node node:nodes)if(node!=null&&id.equals(node.id))return node;return null;}

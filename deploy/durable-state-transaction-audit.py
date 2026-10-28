@@ -13,11 +13,11 @@ V1 = HERE / "durable-state-transaction-audit-v1.py"
 source = V1.read_text(encoding="utf-8")
 
 old_android = '    "AndroidPrivateFileStore.read(file, MAX_STORE)",\n'
-new_android = '''    "SCHEMA_VERSION=4",\n    'FILE_NAME="connection-profiles-v4.json", LEGACY_FILE_NAME="connection-profiles-v1.json"',\n    "AndroidPrivateFileStore.read(source, MAX_STORE)",\n    "AndroidPrivateFileStore.remove(legacyFile, MAX_STORE)",\n'''
+new_android = '''    "SCHEMA_VERSION=5",\n    'FILE_NAME="connection-profiles-v4.json", LEGACY_FILE_NAME="connection-profiles-v1.json"',\n    "AndroidPrivateFileStore.read(source, MAX_STORE)",\n    "AndroidPrivateFileStore.remove(legacyFile, MAX_STORE)",\n'''
 if source.count(old_android) == 1:
     source = source.replace(old_android, new_android, 1)
 elif all(marker in source for marker in (
-    '    "SCHEMA_VERSION=4",',
+    '    "SCHEMA_VERSION=5",',
     'FILE_NAME="connection-profiles-v4.json", LEGACY_FILE_NAME="connection-profiles-v1.json"',
     '    "AndroidPrivateFileStore.read(source, MAX_STORE)",',
     '    "AndroidPrivateFileStore.remove(legacyFile, MAX_STORE)",',

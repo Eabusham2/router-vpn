@@ -93,7 +93,10 @@ MULTIHOP=r'''final class AndroidMultihopRuntime {
 MULTIHOP=MULTIHOP.replace('// MULTIHOP_CAPTURE_TYPES',P.MULTIHOP_CAPTURE_TYPES)
 
 EXTRA=r'''
-final class AndroidExternalPolicy {static boolean supports(String s){return true;}}
+final class AndroidExternalPolicy {
+ static boolean supports(String s){return List.of("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn").contains(s);}
+ static String protocol(String s){return s.equals("http")?"http-connect":s.equals("https")?"https-connect":s;}
+}
 final class AndroidStartLayer {static final String OFF="off",AES="aes-256-gcm",AES_XOR="aes-256-gcm+xor-whitening";}
 final class AndroidMTUDialog {static void show(android.app.Activity a){}}
 final class AndroidConnectionProfilesDialog {static void show(android.app.Activity a,AndroidNodeStore n,AndroidStandardExitStore s,Runnable r){}}
@@ -103,7 +106,7 @@ final class AndroidForwardingMaster {AndroidForwardingMaster(android.app.Activit
 final class AndroidViaEntryLatencyProbe {AndroidViaEntryLatencyProbe(android.app.Activity a,AndroidRuntimeRegistry r,AndroidTelemetry t){}boolean isBusy(){return false;}}
 final class AndroidProductOnboarding {static void showIfNeeded(android.app.Activity a){}}
 final class AndroidConnectionProfileStore {
- static final String SELECTED_KIND="selected_kind",SELECTED_ID="selected_id",MULTI_ON="multihop_on",MULTI_ENTRY="multihop_entry",MULTI_EXIT="multihop_exit",MULTI_MODE="multihop_exit_mode";
+ static final String SELECTED_KIND="selected_kind",SELECTED_ID="selected_id",MULTI_ON="multihop_on",MULTI_ENTRY="multihop_entry",MULTI_EXIT="multihop_exit",MULTI_MODE="multihop_exit_mode",MULTI_ENTRY_KIND="multihop_entry_kind";
  final Context context;final AndroidNodeStore nodes;final AndroidStandardExitStore exits;
  AndroidConnectionProfileStore(Context c,AndroidNodeStore n,AndroidStandardExitStore e){context=c;nodes=n;exits=e;}
  android.content.SharedPreferences prefs(){return context.getSharedPreferences("router-vpn-unified",0);}
@@ -111,7 +114,9 @@ final class AndroidConnectionProfileStore {
  static String normalizeExecution(String s){if(!List.of("local","server","auto").contains(s))throw new IllegalArgumentException("bad execution");return s;}
  static String normalizeEntryMode(String s){if(!NativeSingBoxController.nativeMultihopEntry(s))throw new IllegalArgumentException("bad entry mode");return s;}
  static void requireEntryMode(AndroidNodeStore.Node n,String mode){if(n==null)throw new IllegalStateException("missing entry");normalizeEntryMode(mode);}
- static void validateExternalGraph(AndroidStandardExitStore.Entry e,AndroidNodeStore.Node n,String mode,String execution){AndroidStandardExitStore.validate(e);AndroidStandardExitStore.validateExecution(e,n!=null,execution);}
+ // The store and compiler have their own executable suites. Here only source
+ // storage/runtime are doubled; currentExternalPath and kind parsing ship intact.
+ static void validateExternalGraph(AndroidStandardExitStore.Entry e,AndroidNodeStore.Node n,AndroidStandardExitStore.Entry ordinary,String mode,String execution){AndroidStandardExitStore.validate(e);AndroidStandardExitStore.validateExecution(e,n!=null,execution);if(ordinary!=null&&(n!=null||!AndroidExternalPolicy.supports(ordinary.protocol)||!AndroidTorProfile.isTor(e.protocol)||ordinary.id.equals(e.id)||!execution.equals("local")||!mode.equals(AndroidExternalPolicy.protocol(ordinary.protocol))))throw new IllegalArgumentException("invalid ordinary startup graph");}
  // SHIPPING_EXTERNAL_SELECTION
 }
 '''
@@ -135,13 +140,13 @@ public final class StartupTest {
  static void resetProcess()throws Exception{for(String name:new String[]{"coldLaunchClaimed","pending"}){var f=AndroidStartupPolicy.class.getDeclaredField(name);f.setAccessible(true);if(name.equals("pending"))f.set(null,null);else f.setBoolean(null,false);}}
  static JSONObject bundle(String id)throws Exception{return new JSONObject().put("fixture_store_id",id).put("selectedRouterID","router").put("routerProfiles",new JSONArray().put(new JSONObject().put("id","router").put("home_lan_access",true).put("dns_mode","home").put("private_key","SECRET_PROFILE_BYTES"))).put("profiles",new JSONObject().put("wg",new JSONObject().put("wg.conf","SECRET_NATIVE_BYTES"))).put("modes",new JSONArray().put(new JSONObject().put("id","wg")));}
  static final class Fixture {
-  final Path dir;final Activity activity;final AndroidNodeStore nodes;AndroidUnifiedConnectionController controller;final Callback cb=new Callback();
+  final Path dir;final Activity activity;final AndroidNodeStore nodes;AndroidUnifiedConnectionController controller;final Callback cb=new Callback();AndroidStartupPolicy.Attempt captured;
   Fixture(Path parent)throws Exception{resetProcess();dir=Files.createTempDirectory(parent,"case-");Context.nextFiles=dir.toFile();Context.preferences.clear();Context.connectivity=new ConnectivityManager();AndroidNodeStore.nodes.clear();AndroidNodeStore.active=FIRST;AndroidNodeStore.imports=0;AndroidRuntimeRegistry.instance=new AndroidRuntimeRegistry();AndroidVpnMutationGuard.busy=false;VpnService.needsPermission=true;AndroidPrivateFileStore.failWrite=false;
    activity=new Activity();nodes=new AndroidNodeStore(activity);for(String id:List.of(FIRST,ENTRY,EXIT)){Path file=dir.resolve(id+".json");Files.writeString(file,bundle(id).toString());AndroidNodeStore.nodes.add(new AndroidNodeStore.Node(id,file.toFile()));}controller=new AndroidUnifiedConnectionController(activity,nodes);prefs().edit().putString("selected_kind","router-vpn").putString("selected_id",FIRST).putString("mode","base-raw").apply();}
   SharedPreferences prefs(){return activity.getSharedPreferences("router-vpn-unified",0);}
   JSONObject root()throws Exception{return new JSONObject(Files.readString(nodes.file(FIRST).toPath()));}
   void policy(String mode,Boolean auto)throws Exception{JSONObject root=root(),p=AndroidProfileSelection.selectedRouterProfile(root);if(mode==null)p.remove("startup_mode");else p.put("startup_mode",mode);if(auto==null)p.remove("auto_connect");else p.put("auto_connect",auto);Files.writeString(nodes.file(FIRST).toPath(),root.toString());}
-  AndroidStartupPolicy.Attempt capture()throws Exception{return AndroidStartupPolicy.coldLaunch(activity,nodes,controller,false);}
+  AndroidStartupPolicy.Attempt capture()throws Exception{captured=AndroidStartupPolicy.coldLaunch(activity,nodes,controller,false);return captured;}
   Bundle request()throws Exception{AndroidStartupPolicy.Attempt a=capture();check(a!=null,"enabled startup not captured");controller.connectStartup(a,cb);Bundle out=new Bundle();controller.savePending(out);check(controller.isStartupPending(),"startup lost pending permission owner");return out;}
   void allow(){controller.onActivityResult(AndroidUnifiedConnectionController.PREPARE_UNIFIED,Activity.RESULT_OK);}
   int starts(){return AndroidRuntimeRegistry.instance.orchestrator.starts+AndroidRuntimeRegistry.instance.multihop.starts;}
@@ -209,7 +214,36 @@ public final class StartupTest {
    if(restore)f.restore(state);f.allow();check(!f.cb.ok&&AndroidRuntimeRegistry.instance.standardExit.starts==0&&f.starts()==0,"stale external startup accepted: "+change+"/"+restore);
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);defaults(root);permission(root);changes(root);graph(root);receipts(root);settings(root);activity(root);externalStartup(root);System.out.println("Android startup: "+checks+" shipping policy, Activity, Settings, permission and receipt checks PASS");}
+ static AndroidStandardExitStore.Entry ordinary(Fixture f,String protocol,String mode){
+  AndroidStandardExitStore.Entry exit=external(f,"tor-bridge",mode,true,"local");exit.policy="explicit selected Tor DNS";AndroidStandardExitStore.saved.put(exit.id,AndroidStandardExitStore.copy(exit));
+  AndroidStandardExitStore.Entry entry=new AndroidStandardExitStore.Entry();entry.id=ENTRY;entry.protocol=protocol;entry.secret="ORDINARY_PRIVATE_SOURCE";entry.policy="distinct ordinary selected DNS";AndroidStandardExitStore.saved.put(entry.id,AndroidStandardExitStore.copy(entry));
+  f.prefs().edit().putString("multihop_entry_kind","external").putString("multihop_entry_mode",AndroidExternalPolicy.protocol(protocol)).apply();return entry;
+ }
+ static void ordinaryStartup(Path root)throws Exception{
+  for(String protocol:List.of("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"))for(String mode:List.of("smart-auto","auto","last"))for(boolean rotate:new boolean[]{false,true}){
+   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry entry=ordinary(f,protocol,mode);String router=Files.readString(f.nodes.file(ENTRY).toPath());Bundle state=f.request();
+   check(f.captured.multihop()&&f.captured.entry==null&&f.captured.ordinaryEntry!=null&&f.captured.ordinaryEntry.id.equals(ENTRY)&&f.captured.ordinaryEntry!=entry,"startup did not capture a separate immutable ordinary entry");
+   check(!state.values.toString().contains(entry.secret)&&!state.values.toString().contains(entry.policy)&&!state.values.toString().contains("explicit selected Tor DNS"),"ordinary private sources leaked into Activity state");
+   if(rotate){state.putString("multihop_entry_mode_pending","wg");state.putBoolean("routervpn.pending.external_direct",true);f.restore(state);}f.allow();AndroidStandardExitRuntime runtime=AndroidRuntimeRegistry.instance.standardExit;
+   check(f.cb.ok&&runtime.starts==1&&runtime.ordinaryEntry!=null&&runtime.ordinaryEntry.id.equals(ENTRY)&&runtime.ordinaryEntry.protocol.equals(protocol)&&runtime.ordinaryEntry.secret.equals(entry.secret)&&runtime.entry==null&&runtime.exit.protocol.equals("tor-bridge")&&runtime.execution.equals("local"),"ordinary startup substituted Router/direct/execution/credentials: "+protocol+"/"+mode+"/"+rotate);
+   check(f.starts()==0&&Files.readString(f.nodes.file(ENTRY).toPath()).equals(router),"ordinary startup used or rewrote colliding Router identity");f.allow();check(runtime.starts==1,"duplicate ordinary startup permission started twice");
+  }
+  for(String change:List.of("entry-key","entry-policy","entry-protocol","entry-identity","entry-removed","exit-key","captured-key","kind","entry-id","execution","direct","mode","idle","foreign-vpn"))for(boolean rotate:new boolean[]{false,true}){
+   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry entry=ordinary(f,"socks5","last");Bundle state=f.request();
+   if(change.equals("entry-key"))entry.secret="replacement ordinary private source";if(change.equals("entry-policy"))entry.policy="replacement ordinary policy";if(change.equals("entry-protocol"))entry.protocol="http";if(change.equals("entry-identity"))entry.expectedPublicIp="1.1.1.1";AndroidStandardExitStore.saved.put(entry.id,AndroidStandardExitStore.copy(entry));
+   if(change.equals("entry-removed"))AndroidStandardExitStore.saved.remove(entry.id);if(change.equals("exit-key")){var exit=AndroidStandardExitStore.saved.get("saved-exit");exit.secret="replacement Tor source";}if(change.equals("captured-key"))f.captured.ordinaryEntry.secret="mutable captured source";
+   if(change.equals("kind"))f.prefs().edit().putString("multihop_entry_kind","router-vpn").apply();if(change.equals("entry-id"))f.prefs().edit().putString("multihop_entry",FIRST).apply();if(change.equals("execution"))f.prefs().edit().putString("multihop_execution","server").apply();if(change.equals("direct"))f.prefs().edit().putBoolean("multihop_on",false).apply();if(change.equals("mode"))f.prefs().edit().putString("multihop_entry_mode","wg").apply();if(change.equals("idle"))AndroidHomeStateStore.advancePathGeneration(f.activity);if(change.equals("foreign-vpn"))Context.connectivity.vpn=true;
+   if(rotate)f.restore(state);f.allow();check(!f.cb.ok&&AndroidRuntimeRegistry.instance.standardExit.starts==0&&f.starts()==0,"stale ordinary startup capture started: "+change+"/"+rotate);
+  }
+  for(String invalid:List.of("server","auto","unknown-kind","router-kind","unknown-mode","same-id","private-router-selection")){
+   Fixture f=new Fixture(root);ordinary(f,"socks5","auto");
+   if(invalid.equals("server")||invalid.equals("auto"))f.prefs().edit().putString("multihop_execution",invalid).apply();
+   if(invalid.equals("unknown-kind"))f.prefs().edit().putString("multihop_entry_kind","unknown").apply();if(invalid.equals("router-kind"))f.prefs().edit().putString("multihop_entry_kind","router-vpn").apply();if(invalid.equals("unknown-mode"))f.prefs().edit().putString("multihop_entry_mode","wg").apply();if(invalid.equals("same-id"))f.prefs().edit().putString("multihop_entry","saved-exit").apply();
+   if(invalid.equals("private-router-selection")){f.policy("auto",true);f.prefs().edit().putString("selected_kind","router-vpn").putString("selected_id",FIRST).putString("multihop_exit",EXIT).putString("multihop_entry_mode","wg").apply();}
+   boolean rejected=false;try{f.capture();}catch(Exception expected){rejected=true;}check(rejected&&f.starts()==0&&AndroidRuntimeRegistry.instance.standardExit.starts==0,"invalid ordinary startup acquired private authority: "+invalid);
+  }
+ }
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);defaults(root);permission(root);changes(root);graph(root);receipts(root);settings(root);activity(root);externalStartup(root);ordinaryStartup(root);System.out.println("Android startup: "+checks+" shipping policy, Activity, Settings, permission and receipt checks PASS");}
 }
 '''
 
@@ -227,6 +261,8 @@ def main():
     ui['org/amnezia/awg/backend/Tunnel.java']='package org.amnezia.awg.backend;public interface Tunnel{enum State{UP,DOWN}}'
     boundaries=P.BOUNDARIES.replace('import android.content.Context;', 'import android.content.Context;import android.content.SharedPreferences;')
     for name in ('AndroidStartupPolicy','AndroidHomeStateStore'):boundaries=replace_class(boundaries,name,'')
+    if 'final class AndroidExternalPolicy ' in boundaries:boundaries=replace_class(boundaries,'AndroidExternalPolicy','')
+    if 'final class AndroidConnectionProfileStore ' in boundaries:boundaries=replace_class(boundaries,'AndroidConnectionProfileStore','')
     boundaries=replace_class(boundaries,'AndroidNodeStore',NODE);boundaries=replace_class(boundaries,'AndroidModeOrchestrator',ORCHESTRATOR);boundaries=replace_class(boundaries,'AndroidMultihopRuntime',MULTIHOP)
     boundaries=boundaries.replace('final class NativeWireGuardController {}','final class NativeWireGuardController {com.wireguard.android.backend.Tunnel.State getState(){return com.wireguard.android.backend.Tunnel.State.DOWN;}}').replace('final class NativeAmneziaWGController {}','final class NativeAmneziaWGController {org.amnezia.awg.backend.Tunnel.State getState(){return org.amnezia.awg.backend.Tunnel.State.DOWN;}}')
     boundaries=boundaries.replace('static byte[] read(File f,int max)', 'static boolean failWrite;static void write(File f,byte[] b,int max)throws Exception{if(failWrite)throw new IOException("injected durable failure");if(b.length==0||b.length>max)throw new IllegalArgumentException("bounded private write");Path t=Files.createTempFile(f.getParentFile().toPath(),"staged-",".json");Files.write(t,b);Files.move(t,f.toPath(),StandardCopyOption.REPLACE_EXISTING,StandardCopyOption.ATOMIC_MOVE);}static byte[] read(File f,int max)')
@@ -235,7 +271,7 @@ def main():
         methods.append(re.findall(r'(?ms)^    static boolean '+name+r'\(String mode\) \{\n.*?^    \}',native)[0])
     composite=re.findall(r'(?ms)^    static boolean isMode\(String mode\) \{\n.*?^    \}',(JAVA/'AndroidNativeCompositeProfile.java').read_text())[0]
     profiles=(JAVA/'AndroidConnectionProfileStore.java').read_text();selection=[]
-    for signature in ('    static final class ExternalSelection {','    synchronized ExternalSelection currentExternalPath('):
+    for signature in ('    private static String normalizeEntryKind(', '    private static String normalizeOrdinaryMode(', '    static final class ExternalSelection {','    synchronized ExternalSelection currentExternalPath('):
         start=profiles.index(signature);at=profiles.index('{',start);depth=1;end=at+1
         while depth:
             depth+=(profiles[end]=='{')-(profiles[end]=='}');end+=1
@@ -261,6 +297,7 @@ def main():
         controls=(
             ('AndroidUnifiedConnectionController.java','startup.requireCurrent(activity,nodeStore,this);startup.dispatched();','startup.dispatched();','stale startup capture started'),
             ('AndroidStartupPolicy.java','if(!Arrays.equals(captured.getValue(),AndroidPrivateFileStore.read(current,AndroidNodeStore.MAX_BUNDLE)))','if(false&&!Arrays.equals(captured.getValue(),AndroidPrivateFileStore.read(current,AndroidNodeStore.MAX_BUNDLE)))','stale startup capture started'),
+            ('AndroidStartupPolicy.java','if(ordinaryEntry!=null&&(!ordinaryEntrySnapshot.equals(AndroidStandardExitStore.snapshot(ordinaryEntry))','if(false&&ordinaryEntry!=null&&(!ordinaryEntrySnapshot.equals(AndroidStandardExitStore.snapshot(ordinaryEntry))','stale ordinary startup capture started: captured-key'),
         )
         for name,old,new,assertion in controls:
             target=app/name;original=target.read_text();assert original.count(old)==1,(name,old);target.write_text(original.replace(old,new));subprocess.run(compile,check=True,timeout=45,stdout=subprocess.PIPE,stderr=subprocess.PIPE);broken=subprocess.run(run,timeout=35,capture_output=True,text=True);target.write_text(original)

@@ -130,7 +130,7 @@ verify_aar() {
       echo 'combined libbox AAR external proof request has the wrong owned-lifecycle API' >&2; return 1
     }
   done
-  for symbol in routerTorNativeABI routerTorNativeVersion routerTorSourceNotices routerCompileTorProfile routerValidateTorProfile routerCompileTorProfileWithPredecessor routerTorSetStateDirectory routerTorCreateProof routerTorCreateProofWithPredecessor routerStrategyDNSProof routerStrategyCloseService; do
+  for symbol in routerTorNativeABI routerTorNativeVersion routerTorSourceNotices routerCompileTorProfile routerValidateTorProfile routerCompileTorProfileWithPredecessor routerCompileTorProfileWithExternalPredecessor routerTorSetStateDirectory routerTorCreateProof routerTorCreateProofWithPredecessor routerStrategyDNSProof routerStrategyCloseService; do
     grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing native Tor API $symbol" >&2; return 1; }
   done
   for symbol in routerCheckMAXProfile routerCreateMAXProfileRequest routerCompileMAXProfile; do

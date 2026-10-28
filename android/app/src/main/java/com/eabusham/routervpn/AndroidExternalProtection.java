@@ -36,6 +36,21 @@ final class AndroidExternalProtection {
 
     static boolean entryRequested(JSONObject entry) throws Exception {
         if (entry == null) return false;
+        Object kind = entry.opt("node_kind");
+        if (kind != null && !"router-vpn".equals(kind) && !"external".equals(kind)) {
+            throw new IllegalArgumentException("The captured entry has an invalid node kind.");
+        }
+        if ("external".equals(kind)) {
+            // Ordinary predecessors retain the direct profile's legacy strict
+            // default. The independent Tor choice cannot remove that protection.
+            // Native compilation validates the complete source; keep the kind
+            // and canonical protocol typed here instead of borrowing Router defaults.
+            Object protocol = entry.getJSONObject("external").opt("protocol");
+            if (!Arrays.asList("wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn").contains(protocol)) {
+                throw new IllegalArgumentException("The captured ordinary entry lost its external transport identity.");
+            }
+            return requested(entry, true);
+        }
         // Preserve the predecessor's established strict policy independently.
         if (entry.has("kill_switch") && !(entry.get("kill_switch") instanceof Boolean)) {
             throw new IllegalArgumentException("The captured entry has an invalid kill switch.");

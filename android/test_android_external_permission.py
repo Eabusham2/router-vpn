@@ -23,7 +23,7 @@ MULTIHOP_CAPTURE_TYPES = r'''
 BOUNDARIES = r'''package com.eabusham.routervpn;
 import android.content.Context;import java.io.*;import java.util.*;import java.nio.file.*;import java.nio.charset.*;import org.json.*;
 final class AndroidPrivateFileStore {static byte[] read(File f,int max)throws Exception{byte[] b=Files.readAllBytes(f.toPath());if(b.length==0||b.length>max)throw new IllegalArgumentException("bounded private input required");return b;}}
-final class AndroidTorProfile {static boolean isTor(String p){return "tor".equals(p)||"tor-bridge".equals(p);}static String strictText(byte[] b)throws Exception{return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(b)).toString();}static String digest(byte[] b)throws Exception{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(b));}}
+final class AndroidTorProfile {static String compileOrdinary(AndroidStandardExitStore.Entry entry,AndroidStandardExitStore.Entry exit,String session,String execution){if(!AndroidExternalPolicy.supports(entry.protocol)||!isTor(exit.protocol)||entry.id.equals(exit.id)||!execution.equals("local"))throw new IllegalArgumentException("invalid ordinary Tor selection");return "{}";}static boolean isTor(String p){return "tor".equals(p)||"tor-bridge".equals(p);}static String strictText(byte[] b)throws Exception{return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(b)).toString();}static String digest(byte[] b)throws Exception{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(b));}}
 final class AndroidVpnMutationGuard {static boolean busy;static boolean isBusy(Context c){return busy;}}
 final class AndroidHomeStateStore {static final class Snapshot{boolean connected;long pathGeneration;String sessionId="",phase="off",pathProof="not-run",logicalMode="",runtimeMode="",fallback="",activeNodeId="",activeEntryId="",activeExitId="",activeEntryMode="",activeExternalId="",activeExternalProtocol="";}static Snapshot current=new Snapshot();static Snapshot snapshot(Context c){return current;}static long advancePathGeneration(Context c){return ++current.pathGeneration;}}
 final class AndroidNodeStore {
@@ -34,12 +34,20 @@ final class AndroidNodeStore {
 }
 final class AndroidStandardExitStore {
  static final Map<String,Entry> saved=new HashMap<>();
- static final class Entry {String id="saved-exit",protocol="openvpn",secret="private-endpoint-key",policy="captured-home",expectedPublicIp="8.8.4.4";String startupMode="smart-auto",responseMap="";boolean autoConnect;}
+ static final class Entry {String id="saved-exit",name="Saved external",protocol="openvpn",secret="private-endpoint-key",policy="captured-home",expectedPublicIp="8.8.4.4";String startupMode="smart-auto",responseMap="";boolean autoConnect;}
  AndroidStandardExitStore(Context c){}List<Entry> list()throws Exception{List<Entry> list=new ArrayList<>();for(Entry e:saved.values())list.add(copy(e));return list;}Entry get(String id)throws Exception{Entry e=saved.get(id);if(e==null)throw new IllegalArgumentException("missing exit");return copy(e);}
  static void validateExecution(Entry e,boolean entry,String execution){if(!List.of("local","server","auto").contains(execution)||!execution.equals("local")&&(!entry||!(e.protocol.equals("shadowsocks")||e.protocol.equals("openvpn")&&!e.responseMap.isEmpty()||AndroidTorProfile.isTor(e.protocol)&&execution.equals("server"))))throw new IllegalArgumentException("unowned execution");}
  static void validate(Entry e){if(e==null||e.id.isEmpty())throw new IllegalArgumentException("missing saved exit");}
- static Entry copy(Entry e){Entry x=new Entry();x.id=e.id;x.protocol=e.protocol;x.secret=e.secret;x.policy=e.policy;x.expectedPublicIp=e.expectedPublicIp;x.startupMode=e.startupMode;x.autoConnect=e.autoConnect;x.responseMap=e.responseMap;return x;}
- static String snapshot(Entry e)throws Exception{return new JSONObject().put("startup_mode",e.startupMode).put("auto_connect",e.autoConnect).put("id",e.id).put("protocol",e.protocol).put("secret",e.secret).put("policy",e.policy).put("expected",e.expectedPublicIp).put("openvpn_response_probes",e.responseMap).toString();}
+ static Entry copy(Entry e){Entry x=new Entry();x.id=e.id;x.name=e.name;x.protocol=e.protocol;x.secret=e.secret;x.policy=e.policy;x.expectedPublicIp=e.expectedPublicIp;x.startupMode=e.startupMode;x.autoConnect=e.autoConnect;x.responseMap=e.responseMap;return x;}
+ static String snapshot(Entry e)throws Exception{return new JSONObject().put("startup_mode",e.startupMode).put("auto_connect",e.autoConnect).put("id",e.id).put("name",e.name).put("protocol",e.protocol).put("secret",e.secret).put("policy",e.policy).put("expected",e.expectedPublicIp).put("openvpn_response_probes",e.responseMap).toString();}
+}
+final class AndroidExternalPolicy {
+ static boolean supports(String p){return List.of("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn").contains(p);}
+ static String protocol(String p){return p.equals("http")?"http-connect":p.equals("https")?"https-connect":p;}
+}
+final class AndroidConnectionProfileStore {
+ static final class ExternalSelection{final AndroidNodeStore.Node entry;final AndroidStandardExitStore.Entry ordinaryEntry,exit;final String entryMode,execution;
+ ExternalSelection(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry ordinaryEntry,AndroidStandardExitStore.Entry exit,String mode,String execution){this.entry=entry;this.ordinaryEntry=ordinaryEntry;this.exit=exit;entryMode=mode;this.execution=execution;}boolean direct(){return entry==null&&ordinaryEntry==null;}}
 }
 final class NativeWireGuardController {}final class NativeAmneziaWGController {}final class NativeXrayController {}
 final class NativeSingBoxController {
@@ -65,7 +73,9 @@ final class AndroidMultihopRuntime {
 }
 final class AndroidStandardExitRuntime {
  interface Callback{void progress(String s);void finished(boolean ok,String s);default void owned(String id){}}
- int starts;String mode,execution="local",selected="local";File entry;AndroidStandardExitStore.Entry exit;
+ int starts;String mode,execution="local",selected="local";File entry;AndroidStandardExitStore.Entry exit,ordinaryEntry;
+ AndroidStandardExitStore.Entry capturedOrdinaryEntry(AndroidHomeStateStore.Snapshot s){return ordinaryEntry==null?null:AndroidStandardExitStore.copy(ordinaryEntry);}
+ void connectOrdinary(AndroidStandardExitStore.Entry a,AndroidStandardExitStore.Entry e,String execution,Callback cb){starts++;ordinaryEntry=AndroidStandardExitStore.copy(a);entry=null;exit=e;mode=AndroidExternalPolicy.protocol(a.protocol);this.execution=execution;selected=execution;cb.finished(true,"owned ordinary entry");}
  String capturedRequestedExecution(AndroidHomeStateStore.Snapshot s){return execution;}String capturedExternalExecution(AndroidHomeStateStore.Snapshot s){return selected;}
  void restoreCaptured(File f,AndroidStandardExitStore.Entry e,String mode,String execution,String winner,Callback cb){connect(f,e,mode,execution,cb);selected=winner;}
  void connect(File f,AndroidStandardExitStore.Entry e,String m,String execution,Callback cb){this.execution=execution;selected=execution.equals("auto")?"server":execution;connect(f,e,m,cb);}
@@ -82,7 +92,7 @@ final class AndroidRuntimeRegistry {
 // Startup has its own shipping-policy/permission fixture. This suite never
 // creates a startup capture or records a single-Router proof.
 final class AndroidStartupPolicy {
- static final class Attempt {String nonce="",mode="",source="",lastRaw="",entryMode="wg",exitMode="",execution="local";AndroidNodeStore.Node node,entry,exit;AndroidStandardExitStore.Entry external;boolean external(){return external!=null;}boolean multihop(){return entry!=null;}void requireCurrent(Context c,AndroidNodeStore n,AndroidUnifiedConnectionController o){throw new AssertionError("unexpected startup capture");}void dispatched(){}void cancel(){}}
+ static final class Attempt {String nonce="",mode="",source="",lastRaw="",entryMode="wg",exitMode="",execution="local";AndroidNodeStore.Node node,entry,exit;AndroidStandardExitStore.Entry external,ordinaryEntry;boolean external(){return external!=null;}boolean multihop(){return entry!=null;}void requireCurrent(Context c,AndroidNodeStore n,AndroidUnifiedConnectionController o){throw new AssertionError("unexpected startup capture");}void dispatched(){}void cancel(){}}
  static Attempt restore(String nonce){return null;}static void cancelPending(){}static boolean recordProven(Context c,AndroidNodeStore n,File f,String session,String raw,String source){return false;}
 }
 '''
@@ -141,7 +151,30 @@ public class ExternalPermissionTest {
   }
   Fixture pending=new Fixture(root);pending.request("wg",false);Callback rejected=new Callback();pending.controller.connectExternal(pending.entry,pending.exit,false,"max",rejected);check(rejected.completions==1&&!rejected.ok,"new request overwrote pending external permission");pending.allow();check(pending.callback.ok&&pending.runtime().mode.equals("wg"),"second request replaced the original permission owner");
  }
- public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);allModes(root);directAndFrozen(root);execution(root);changes(root);System.out.println("Android external permission: "+checks+" checks; all19 entries, ten exit protocols, restored/cancelled/stale requests");}
+ static AndroidStandardExitStore.Entry ordinary(Fixture f,String protocol){AndroidStandardExitStore.Entry entry=new AndroidStandardExitStore.Entry();entry.id=f.entry.id;entry.protocol=protocol;entry.secret="independent-provider-credential";entry.policy="selected-provider-policy";AndroidStandardExitStore.saved.put(entry.id,AndroidStandardExitStore.copy(entry));f.exit.protocol="tor-bridge";f.save();return entry;}
+ static void ordinaryPaths(Path root)throws Exception{
+  for(String protocol:List.of("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"))for(boolean restored:new boolean[]{false,true}){
+   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry entry=ordinary(f,protocol);String source=AndroidStandardExitStore.snapshot(entry);
+   f.controller.connectExternal(new AndroidConnectionProfileStore.ExternalSelection(null,entry,f.exit,AndroidExternalPolicy.protocol(protocol),"local"),f.callback);
+   Bundle state=new Bundle();f.controller.savePending(state);check(f.runtime().starts==0&&f.activity.permissionRequest==AndroidUnifiedConnectionController.PREPARE_UNIFIED,"ordinary Tor bypassed VPN permission");
+   check(state.getString("routervpn.pending.ordinary_entry","").equals(entry.id)&&!state.containsKey("routervpn.pending.entry"),"ordinary path borrowed colliding Router identity");
+   check(!state.values.toString().contains(entry.secret)&&!state.values.toString().contains(entry.policy),"ordinary credentials leaked into saved Activity state");
+   if(restored)f.restore(state);entry.secret="changed caller object";f.allow();
+   check(f.callback.ok&&f.runtime().starts==1&&f.runtime().entry==null&&f.runtime().ordinaryEntry!=null&&source.equals(AndroidStandardExitStore.snapshot(f.runtime().ordinaryEntry)),"ordinary permission lost exact frozen provider source");
+   check(f.runtime().mode.equals(AndroidExternalPolicy.protocol(protocol))&&f.runtime().execution.equals("local"),"ordinary permission changed exact transport or Local execution");
+  }
+  for(String fault:List.of("entry-source","exit-source","remove-entry","remove-exit","kind","direct","mode","execution","digest","legacy","denied","busy","closed")){
+   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry entry=ordinary(f,"socks5");f.controller.connectOrdinaryTor(entry,f.exit,"local",f.callback);Bundle state=new Bundle();f.controller.savePending(state);
+   if(fault.equals("entry-source")){entry.secret+=" changed";AndroidStandardExitStore.saved.put(entry.id,entry);}if(fault.equals("exit-source")){f.exit.secret+=" changed";f.save();}
+   if(fault.equals("remove-entry"))AndroidStandardExitStore.saved.remove(entry.id);if(fault.equals("remove-exit"))AndroidStandardExitStore.saved.remove(f.exit.id);
+   if(fault.equals("kind")){state.values.remove("routervpn.pending.ordinary_entry");state.putString("routervpn.pending.entry",entry.id);}if(fault.equals("direct"))state.putBoolean("routervpn.pending.external_direct",true);
+   if(fault.equals("mode"))state.putString("multihop_entry_mode_pending","wg");if(fault.equals("execution"))state.putString("multihop_execution_pending","server");if(fault.equals("digest"))state.putString("external_entry_digest_pending","0".repeat(64));if(fault.equals("legacy"))state.values.remove("external_request_digest_pending");
+   f.restore(state);if(fault.equals("denied"))f.controller.onActivityResult(AndroidUnifiedConnectionController.PREPARE_UNIFIED,0);else{if(fault.equals("busy"))AndroidVpnMutationGuard.busy=true;if(fault.equals("closed"))f.controller.close();f.allow();}
+   check(f.runtime().starts==0&&!f.callback.ok,"ordinary permission adopted changed source, kind or owner: "+fault);
+  }
+  for(String execution:List.of("server","auto")){Fixture f=new Fixture(root);AndroidStandardExitStore.Entry entry=ordinary(f,"socks5");f.controller.connectOrdinaryTor(entry,f.exit,execution,f.callback);check(f.runtime().starts==0&&!f.callback.ok&&f.callback.completions==1,"ordinary provider acquired private server authority");}
+ }
+ public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);allModes(root);directAndFrozen(root);execution(root);changes(root);ordinaryPaths(root);System.out.println("Android external permission: "+checks+" checks; all19 Router entries, eight ordinary Tor entries, restored/cancelled/stale requests");}
 }
 '''
 

@@ -45,6 +45,7 @@ final class AndroidSpeedLabDialog {
     private Button run,cancel;
     private List<AndroidNodeStore.Node> nodeValues=new ArrayList<>();
     private List<AndroidStandardExitStore.Entry> exitValues=new ArrayList<>();
+    private List<AndroidStandardExitStore.Entry> ordinaryEntryValues=new ArrayList<>();
     private List<ModeOption> modeValues=new ArrayList<>();
     private AndroidConnectionProfileStore.ExternalSelection savedExternalSelection;
     private boolean restoringChoices;
@@ -60,7 +61,7 @@ final class AndroidSpeedLabDialog {
         TextView eyebrow=text("SPEED LAB",12,true);eyebrow.setTextColor(Color.rgb(102,217,239));root.addView(eyebrow);TextView title=text("Router VPN path performance",26,true);root.addView(title);TextView sub=text("Real HTTPS throughput + idle, download-loaded and upload-loaded latency. Current path is default; Temporary tests a chosen path, then restores your original connection after fresh proof.",12,false);sub.setTextColor(Color.rgb(160,178,205));root.addView(sub);
         LinearLayout cards=row();cards.addView(metric("IDLE LATENCY",idle=text("-- ms",23,true),idleDetail=text("p90 / max / jitter",10,false)),weight());cards.addView(metric("DOWNLOAD",download=text("-- Mbps",23,true),downloadDetail=text("loaded -- ms",10,false)),weight());cards.addView(metric("UPLOAD",upload=text("-- Mbps",23,true),uploadDetail=text("loaded -- ms",10,false)),weight());root.addView(cards,margin(0,dp(12),0,0));
 
-        scope=spinner(new String[]{"Current path","Temporary config"});topology=spinner(new String[]{"System direct","Router VPN node","Multihop","External exit / hop"});topology.setSelection(1);node=spinner(new String[]{});entry=spinner(new String[]{});exit=spinner(new String[]{});standardExit=spinner(new String[]{});mode=spinner(new String[]{});exitMode=spinner(new String[]{"Shadowsocks","Hysteria2"});entryMode=spinner(new String[]{});execution=spinner(new String[]{"Local","Server","Compare both"});durationMode=spinner(new String[]{"Auto timing","Custom timing"});layers=new EditText(activity);layers.setHint("CUSTOM layers, comma-separated");layers.setTextColor(Color.WHITE);layers.setHintTextColor(Color.rgb(120,140,170));externalDirect=new CheckBox(activity);externalDirect.setText("Direct external exit (off = Router entry → external exit)");externalDirect.setTextColor(Color.WHITE);externalDirect.setChecked(true);
+        scope=spinner(new String[]{"Current path","Temporary config"});topology=spinner(new String[]{"System direct","Router VPN node","Multihop","External exit / hop"});topology.setSelection(1);node=spinner(new String[]{});entry=spinner(new String[]{});exit=spinner(new String[]{});standardExit=spinner(new String[]{});mode=spinner(new String[]{});exitMode=spinner(new String[]{"Shadowsocks","Hysteria2"});entryMode=spinner(new String[]{});execution=spinner(new String[]{"Local","Server","Compare both"});durationMode=spinner(new String[]{"Auto timing","Custom timing"});layers=new EditText(activity);layers.setHint("CUSTOM layers, comma-separated");layers.setTextColor(Color.WHITE);layers.setHintTextColor(Color.rgb(120,140,170));externalDirect=new CheckBox(activity);externalDirect.setText("Direct external exit (off = saved entry → external exit)");externalDirect.setTextColor(Color.WHITE);externalDirect.setChecked(true);
         root.addView(field("Test",scope));root.addView(field("Topology",topology));root.addView(field("Node / exit",node));root.addView(field("Entry",entry));root.addView(field("Exit",exit));root.addView(field("Stored custom exit",standardExit));root.addView(field("Mode",mode));root.addView(field("Entry transport",entryMode));root.addView(field("Multihop exit transport",exitMode));root.addView(field("Execution",execution));root.addView(field("CUSTOM layers",layers));root.addView(externalDirect);
 
         LinearLayout timing=row();timing.addView(durationMode,new LinearLayout.LayoutParams(0,dp(48),.32f));minLabel=text("Min 4 s",11,true);maxLabel=text("Max 12 s",11,true);minTime=new SeekBar(activity);maxTime=new SeekBar(activity);minTime.setMax(59);maxTime.setMax(59);minTime.setProgress(3);maxTime.setProgress(11);LinearLayout minBox=new LinearLayout(activity);minBox.setOrientation(LinearLayout.VERTICAL);minBox.addView(minLabel);minBox.addView(minTime);LinearLayout maxBox=new LinearLayout(activity);maxBox.setOrientation(LinearLayout.VERTICAL);maxBox.addView(maxLabel);maxBox.addView(maxTime);timing.addView(minBox,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,.34f));timing.addView(maxBox,new LinearLayout.LayoutParams(0,LinearLayout.LayoutParams.WRAP_CONTENT,.34f));root.addView(timing,margin(0,dp(8),0,0));
@@ -73,9 +74,9 @@ final class AndroidSpeedLabDialog {
         AdapterView.OnItemSelectedListener changed=new AdapterView.OnItemSelectedListener(){public void onNothingSelected(AdapterView<?>p){}public void onItemSelected(AdapterView<?>p,View v,int position,long id){
             if(restoringChoices)return;
             if(p==standardExit){AndroidStandardExitStore.Entry selected=selectedExternal();String identity=selected==null?"":selected.id;if(!identity.equals(displayedExternalID)){displayedExternalID=identity;applyExternalDefaults();}}
-            if(p==topology&&displayedTopology!=topology.getSelectedItemPosition()){displayedTopology=topology.getSelectedItemPosition();if(displayedTopology==3)applyExternalDefaults();}
+            if(p==topology&&displayedTopology!=topology.getSelectedItemPosition()){displayedTopology=topology.getSelectedItemPosition();if(displayedTopology==3)applyExternalDefaults();else{refreshEntryChoices();refreshEntryModes();}}
             if(p==node)refreshModes();if(p==exit)refreshExitModes();
-            if(p==entry){AndroidNodeStore.Node selected=selectedNode(entry);String identity=selected==null?"":selected.id;if(!identity.equals(displayedEntryID)){displayedEntryID=identity;refreshEntryModes(savedEntryMode());}}
+            if(p==entry){String identity=selectedEntryIdentity();if(!identity.equals(displayedEntryID)){displayedEntryID=identity;refreshEntryModes(savedEntryMode());}}
             refreshControls();
         }};scope.setOnItemSelectedListener(changed);topology.setOnItemSelectedListener(changed);node.setOnItemSelectedListener(changed);exit.setOnItemSelectedListener(changed);entry.setOnItemSelectedListener(changed);standardExit.setOnItemSelectedListener(changed);mode.setOnItemSelectedListener(changed);durationMode.setOnItemSelectedListener(changed);
         externalDirect.setOnCheckedChangeListener((b,on)->{if(restoringChoices)return;if(on)execution.setSelection(0);refreshControls();});
@@ -102,13 +103,14 @@ final class AndroidSpeedLabDialog {
         finally{restoringChoices=false;}
         applyExternalDefaults();
         AndroidStandardExitStore.Entry selected=selectedExternal();displayedExternalID=selected==null?"":selected.id;
-        AndroidNodeStore.Node selectedEntry=selectedNode(entry);displayedEntryID=selectedEntry==null?"":selectedEntry.id;displayedTopology=topology.getSelectedItemPosition();
+        displayedEntryID=selectedEntryIdentity();displayedTopology=topology.getSelectedItemPosition();
     }
 
     private String savedEntryMode(){
-        AndroidStandardExitStore.Entry selected=selectedExternal();AndroidNodeStore.Node selectedEntry=selectedNode(entry);
-        return savedExternalSelection!=null&&selected!=null&&selectedEntry!=null&&savedExternalSelection.entry!=null
-                &&savedExternalSelection.exit.id.equals(selected.id)&&savedExternalSelection.entry.id.equals(selectedEntry.id)?savedExternalSelection.entryMode:"";
+        AndroidStandardExitStore.Entry selected=selectedExternal();
+        if(savedExternalSelection==null||selected==null||!savedExternalSelection.exit.id.equals(selected.id))return "";
+        String identity=savedExternalSelection.ordinaryEntry!=null?"external:"+savedExternalSelection.ordinaryEntry.id:savedExternalSelection.entry!=null?"router-vpn:"+savedExternalSelection.entry.id:"";
+        return identity.equals(selectedEntryIdentity())?savedExternalSelection.entryMode:"";
     }
 
     private void applyExternalDefaults(){
@@ -117,13 +119,17 @@ final class AndroidSpeedLabDialog {
             AndroidStandardExitStore.Entry selected=selectedExternal();
             AndroidConnectionProfileStore.ExternalSelection saved=savedExternalSelection!=null&&selected!=null&&savedExternalSelection.exit.id.equals(selected.id)?savedExternalSelection:null;
             externalDirect.setChecked(saved==null||saved.direct());
+            refreshEntryChoices();
             if(saved!=null&&!saved.direct()){
-                int index=-1;for(int i=0;i<nodeValues.size();i++)if(nodeValues.get(i).id.equals(saved.entry.id))index=i;
+                int index=-1;
+                if(saved.ordinaryEntry!=null){for(int i=0;i<ordinaryEntryValues.size();i++)if(ordinaryEntryValues.get(i).id.equals(saved.ordinaryEntry.id))index=nodeValues.size()+i;}
+                else for(int i=0;i<nodeValues.size();i++)if(nodeValues.get(i).id.equals(saved.entry.id))index=i;
                 entry.setSelection(index);
             }
-            String requested=saved==null?"local":saved.execution;int executionIndex=java.util.Arrays.asList("local","server","auto").indexOf(requested);execution.setSelection(executionIndex);
+            String requested=saved==null?"local":saved.execution;
             refreshEntryModes(savedEntryMode());
-            AndroidNodeStore.Node selectedEntry=selectedNode(entry);displayedEntryID=selectedEntry==null?"":selectedEntry.id;
+            int executionIndex=java.util.Arrays.asList("local","server","auto").indexOf(requested);execution.setSelection(executionIndex);
+            displayedEntryID=selectedEntryIdentity();
         }finally{restoringChoices=false;}
         refreshControls();
     }
@@ -131,12 +137,33 @@ final class AndroidSpeedLabDialog {
     private void refreshModes(){modeValues.clear();modeValues.add(new ModeOption("smart-auto","SMART AUTO"));modeValues.add(new ModeOption("auto","AUTO"));modeValues.add(new ModeOption("all","ALL / strongest available"));modeValues.add(new ModeOption("custom","CUSTOM layers"));AndroidNodeStore.Node n=selectedNode(node);if(n!=null)try{JSONObject root=readBundle(n);JSONArray logical=root.optJSONArray("logicalModes");if(logical!=null)for(int i=0;i<logical.length();i++){JSONObject m=logical.optJSONObject(i);if(m==null)continue;String id=m.optString("id","").trim();if(id.isEmpty()||"auto".equals(id)||"smart-auto".equals(id)||"custom".equals(id)||"all".equals(id))continue;modeValues.add(new ModeOption(id,m.optString("name",id)));}}catch(Exception ignored){}ArrayAdapter<ModeOption>a=new ArrayAdapter<>(activity,android.R.layout.simple_spinner_dropdown_item,modeValues);mode.setAdapter(a);}
 
     private void refreshEntryModes(){refreshEntryModes(selectedEntryMode());}
+    private void refreshEntryChoices(){
+        String previous=selectedEntryIdentity();boolean prior=restoringChoices;restoringChoices=true;
+        try{
+            List<String> labels=new ArrayList<>();List<String> identities=new ArrayList<>();ordinaryEntryValues=new ArrayList<>();
+            for(AndroidNodeStore.Node value:nodeValues){labels.add(value.name+" • Router VPN");identities.add("router-vpn:"+value.id);}
+            AndroidStandardExitStore.Entry selected=selectedExternal();
+            if(topology.getSelectedItemPosition()==3&&selected!=null&&AndroidTorProfile.isTor(selected.protocol))for(AndroidStandardExitStore.Entry value:exitValues)
+                if(!value.id.equals(selected.id)&&AndroidExternalPolicy.supports(value.protocol)){ordinaryEntryValues.add(value);labels.add(value.name+" • "+value.protocol);identities.add("external:"+value.id);}
+            set(entry,labels.toArray(new String[0]));int index=identities.indexOf(previous);if(index>=0)entry.setSelection(index);
+        }finally{restoringChoices=prior;}
+    }
+    private AndroidStandardExitStore.Entry selectedOrdinaryEntry(){
+        int index=entry.getSelectedItemPosition()-nodeValues.size();
+        return topology.getSelectedItemPosition()==3&&index>=0&&index<ordinaryEntryValues.size()?ordinaryEntryValues.get(index):null;
+    }
+    private String selectedEntryIdentity(){
+        AndroidStandardExitStore.Entry ordinary=selectedOrdinaryEntry();if(ordinary!=null)return "external:"+ordinary.id;
+        AndroidNodeStore.Node router=selectedNode(entry);return router==null?"":"router-vpn:"+router.id;
+    }
     private void refreshEntryModes(String previous){
         AndroidNodeStore.Node selected=selectedNode(entry);
         try{
-            List<NativeSingBoxController.ModeInfo> values=connection.supportedNativeEntryModes(selected);String[] labels=new String[values.size()];
+            AndroidStandardExitStore.Entry ordinary=selectedOrdinaryEntry();
+            List<NativeSingBoxController.ModeInfo> values=ordinary!=null?Collections.singletonList(new NativeSingBoxController.ModeInfo(AndroidExternalPolicy.protocol(ordinary.protocol),ordinary.protocol)):connection.supportedNativeEntryModes(selected);String[] labels=new String[values.size()];
             for(int i=0;i<values.size();i++)labels[i]=values.get(i).name;
             entryMode.setTag(values);set(entryMode,labels);
+            int priorExecution=execution.getSelectedItemPosition();set(execution,ordinary!=null?new String[]{"Local"}:new String[]{"Local","Server","Compare both"});execution.setSelection(ordinary!=null?0:Math.max(0,Math.min(2,priorExecution)));
             if(!previous.isEmpty()){int preferredIndex=-1;for(int i=0;i<values.size();i++)if(values.get(i).id.equals(previous)){preferredIndex=i;break;}entryMode.setSelection(preferredIndex);}
         }catch(Exception changed){entryMode.setTag(Collections.emptyList());set(entryMode,new String[]{});status.setText("The selected entry modes are unavailable; select a valid saved node.");}
     }
@@ -145,7 +172,7 @@ final class AndroidSpeedLabDialog {
 
     private void refreshControls(){boolean temporary=scope.getSelectedItemPosition()==1;topology.setEnabled(temporary);node.setEnabled(temporary);entry.setEnabled(temporary);exit.setEnabled(temporary);standardExit.setEnabled(temporary);mode.setEnabled(temporary);exitMode.setEnabled(temporary);entryMode.setEnabled(temporary);execution.setEnabled(temporary);layers.setEnabled(temporary);externalDirect.setEnabled(temporary);boolean customTime=durationMode.getSelectedItemPosition()==1;minTime.setEnabled(customTime);maxTime.setEnabled(customTime);int top=topology.getSelectedItemPosition();entry.setVisibility(temporary&&(top==2||top==3&&!externalDirect.isChecked())?View.VISIBLE:View.GONE);exit.setVisibility(temporary&&top==2?View.VISIBLE:View.GONE);exitMode.setVisibility(temporary&&top==2?View.VISIBLE:View.GONE);entryMode.setVisibility(temporary&&(top==2||top==3&&!externalDirect.isChecked())?View.VISIBLE:View.GONE);execution.setVisibility(temporary&&(top==2||top==3&&!externalDirect.isChecked())?View.VISIBLE:View.GONE);standardExit.setVisibility(temporary&&top==3?View.VISIBLE:View.GONE);externalDirect.setVisibility(temporary&&top==3?View.VISIBLE:View.GONE);node.setVisibility(temporary&&top==1?View.VISIBLE:View.GONE);mode.setVisibility(temporary&&top==1?View.VISIBLE:View.GONE);layers.setVisibility(temporary&&top==1&&selectedMode().equals("custom")?View.VISIBLE:View.GONE);}
 
-    private void run(){AndroidSpeedLabController.Request q=new AndroidSpeedLabController.Request();q.scope=scope.getSelectedItemPosition()==0?"current":"temporary";q.durationMode=durationMode.getSelectedItemPosition()==0?"auto":"custom";q.minSeconds=minTime.getProgress()+1;q.maxSeconds=maxTime.getProgress()+1;if("temporary".equals(q.scope)){String[]tops={"system-direct","router","multihop","external"};q.topology=tops[Math.max(0,Math.min(3,topology.getSelectedItemPosition()))];q.node=selectedNode(node);q.entry=selectedNode(entry);q.exit=selectedNode(exit);q.standardExit=selectedExternal();q.externalDirect=externalDirect.isChecked();q.mode=selectedMode();q.exitMode=selectedExitMode();q.entryMode="external".equals(q.topology)&&q.externalDirect?"":selectedEntryMode();q.execution="external".equals(q.topology)&&q.externalDirect?"local":selectedExecution();if("custom".equals(q.mode)){List<String>values=new ArrayList<>();for(String x:layers.getText().toString().split(",")){String v=x.trim().toLowerCase(Locale.US);if(!v.isEmpty())values.add(v);}q.customLayers=values;}}
+    private void run(){AndroidSpeedLabController.Request q=new AndroidSpeedLabController.Request();q.scope=scope.getSelectedItemPosition()==0?"current":"temporary";q.durationMode=durationMode.getSelectedItemPosition()==0?"auto":"custom";q.minSeconds=minTime.getProgress()+1;q.maxSeconds=maxTime.getProgress()+1;if("temporary".equals(q.scope)){String[]tops={"system-direct","router","multihop","external"};q.topology=tops[Math.max(0,Math.min(3,topology.getSelectedItemPosition()))];q.node=selectedNode(node);q.ordinaryEntry="external".equals(q.topology)&&!externalDirect.isChecked()?selectedOrdinaryEntry():null;q.entry=q.ordinaryEntry==null?selectedNode(entry):null;q.exit=selectedNode(exit);q.standardExit=selectedExternal();q.externalDirect=externalDirect.isChecked();q.mode=selectedMode();q.exitMode=selectedExitMode();q.entryMode="external".equals(q.topology)&&q.externalDirect?"":selectedEntryMode();q.execution="external".equals(q.topology)&&q.externalDirect?"local":selectedExecution();if("custom".equals(q.mode)){List<String>values=new ArrayList<>();for(String x:layers.getText().toString().split(",")){String v=x.trim().toLowerCase(Locale.US);if(!v.isEmpty())values.add(v);}q.customLayers=values;}}
         run.setEnabled(false);cancel.setEnabled(true);status.setText("Capturing the original connection, proving the test path and measuring…");detail.setText("Temporary tests restore the exact original connection after all traffic drains. Cancel joins cleanup before restoration.");controller.run(q,new AndroidSpeedLabController.Callback(){public void progress(String message){activity.runOnUiThread(()->{if(dialog!=null&&dialog.isShowing())status.setText(message);});}public void finished(AndroidSpeedLab.Result result,Throwable error){activity.runOnUiThread(()->{run.setEnabled(true);cancel.setEnabled(false);if(error!=null){status.setText(error instanceof java.util.concurrent.CancellationException?"Speed Lab cancelled":"Speed Lab stopped");detail.setText(safe(error));return;}if(result==null){status.setText("Speed Lab returned no result");return;}idle.setText(String.format(Locale.US,"%.1f ms",result.idle.medianMs));download.setText(String.format(Locale.US,"%.1f Mbps",result.download.mbps));upload.setText(String.format(Locale.US,"%.1f Mbps",result.upload.mbps));idleDetail.setText(result.idle.detail());downloadDetail.setText(String.format(Locale.US,"loaded %.1f ms • +%.1f bloat • p90 %.1f",result.download.loadedLatency.medianMs,result.download.bufferbloatMs,result.download.loadedLatency.p90Ms));uploadDetail.setText(String.format(Locale.US,"loaded %.1f ms • +%.1f bloat • p90 %.1f",result.upload.loadedLatency.medianMs,result.upload.bufferbloatMs,result.upload.loadedLatency.p90Ms));StringBuilder hopText=new StringBuilder();String nativeHops=controller.nativeHops();if(!nativeHops.isEmpty())hopText.append(nativeHops).append("\n");List<AndroidSpeedLabHopMeter.Hop>hops=controller.hops();if(!hops.isEmpty()){hopText.append("PER-HOP — SAME PROVED GRAPH\n");for(AndroidSpeedLabHopMeter.Hop hop:hops)hopText.append(hop.summary()).append('\n');}String hopError=controller.hopError();if(hopError!=null&&!hopError.trim().isEmpty())hopText.append("Per-hop warning: ").append(hopError.trim()).append('\n');try{String json=result.json().toString(2);detail.setText(hopText.length()==0?json:hopText+"\nFULL RESULT\n"+json);}catch(Exception ignored){detail.setText(hopText.length()==0?result.summary():hopText+"\n"+result.summary());}status.setText("Finished • "+result.pathIdentity+" • real HTTPS throughput + loaded latency"+(hops.isEmpty()?"":" • "+hops.size()+" hop measurements"));});}});}
 
     private String selectedExecution(){int choice=execution.getSelectedItemPosition();return choice>=0&&choice<3?new String[]{"local","server","auto"}[choice]:"";}

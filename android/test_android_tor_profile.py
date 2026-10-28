@@ -17,6 +17,16 @@ ROOT = Path(__file__).resolve().parents[1]
 JAVA = ROOT / "android/app/src/main/java/com/eabusham/routervpn"
 EXTRA_SOURCES = ()
 EXTRA_LIBBOX = ""
+EXTERNAL_BOUNDARY = r'''
+final class AndroidExternalPolicy {
+ static boolean supports(String value){return false;}
+ static String protocol(String value){return value;}
+ static JSONObject captureTorPredecessor(AndroidStandardExitStore.Entry value){throw new AssertionError("ordinary entry is outside this Router-entry fixture");}
+ static NativeSingBoxController.SessionInfo prepare(android.content.Context c,java.io.File f,AndroidStandardExitStore.Entry e,String m){throw new AssertionError("ordinary exit is outside this Tor fixture");}
+ static NativeSingBoxController.SessionInfo prepare(android.content.Context c,java.io.File f,AndroidStandardExitStore.Entry e,String m,String x){throw new AssertionError("ordinary exit is outside this Tor fixture");}
+ static NativeSingBoxController.SessionInfo prepare(android.content.Context c,java.io.File f,AndroidStandardExitStore.Entry e,String m,String x,String r){throw new AssertionError("ordinary exit is outside this Tor fixture");}
+}
+'''
 spec = importlib.util.spec_from_file_location("tor_composite_fixture", ROOT / "android/test_android_composite_multihop.py")
 C = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(C)
@@ -402,6 +412,9 @@ HARNESS = prefix + r'''
 GO = P.GO.replace('"router-vpn/internal/mobileperf"', '"router-vpn/internal/mobileperf";"router-vpn/internal/mobiletor";privateparse "router-vpn/internal/nativeopenvpn"', 1)
 GO = GO.replace('case "xray-policy":', '''case "private-node-json":err=privateparse.ValidatePrivateNodeJSON(r.Config);value="checked"
  case "tor-validate":err=mobiletor.ValidateProfile(r.Config);value="validated"
+ case "tor-external-profile-captured":
+  var input struct{Profile string;Session string;Entry string};err=json.Unmarshal([]byte(r.Config),&input)
+  if err==nil{value,err=mobiletor.CompileProfileWithExternalPredecessor(input.Profile,input.Session,r.Policy,input.Entry)}
  case "tor-profile-captured":
   var input struct{Profile string;Session string;Entry string};err=json.Unmarshal([]byte(r.Config),&input)
   if err==nil{value,err=mobiletor.CompileProfileWithPredecessor(input.Profile,input.Session,r.Policy,input.Entry)}
@@ -447,7 +460,7 @@ def run():
                 methods += next(line for line in source.splitlines() if "private static String hex(byte[] data)" in line)
                 constants = "\n".join(line for line in source.splitlines() if any(part in line for part in ("private static final String NODE_PROOF_DOMAIN =", "static final int MAX_PROFILE_SCHEMA =", "static final int MAX_BUNDLE =")))
                 start, end = text.index("final class AndroidNodeStore {"), text.index("final class AndroidKillSwitchPolicy {")
-                text = text[:start] + "final class AndroidNodeStore {\n" + constants + "\n" + methods + "\n}\n" + text[end:] + TOR_BOUNDARIES
+                text = text[:start] + "final class AndroidNodeStore {\n" + constants + "\n" + methods + "\n}\n" + text[end:] + TOR_BOUNDARIES + EXTERNAL_BOUNDARY
                 text = text.replace("import org.json.JSONObject;", "import org.json.JSONObject; import org.json.JSONArray; import java.security.MessageDigest; import java.nio.charset.StandardCharsets; import android.util.Base64;")
             if path.endswith("/Libbox.java"):
                 begin = text.index(" private static String call(")
@@ -467,6 +480,10 @@ def run():
  public static String routerCompileTorProfileWithPredecessor(String profile,String session,String predecessor,String entry)throws Exception{
   torCalls++;lastTorPredecessor=predecessor;
   return call("tor-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);
+ }
+ public static String routerCompileTorProfileWithExternalPredecessor(String profile,String session,String predecessor,String entry)throws Exception{
+  torCalls++;lastTorPredecessor=predecessor;
+  return call("tor-external-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);
  }
  public static String routerCompileServerTorProfileWithPredecessor(String profile,String session,String predecessor,String entry)throws Exception{
   torCalls++;lastTorPredecessor=predecessor;

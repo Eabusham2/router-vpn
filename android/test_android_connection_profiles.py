@@ -95,6 +95,13 @@ final class AndroidTorProfile {
  static String digest(byte[] bytes)throws Exception{return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));}
  // Compiler boundary only. The actual Tor form/profile tests exercise shared Go validation.
  static void validate(AndroidStandardExitStore.Entry exit)throws Exception{AndroidConnectionProfilePolicy.external(exit.torPolicy,exit.protocol);if("tor-bridge".equals(exit.protocol)&&exit.torBridges.isEmpty())throw new IllegalArgumentException("missing bridge");}
+ // Persistence boundary only: real ordinary graph compilation and immutable
+ // native source matching execute in test_android_tor_profile.py/form.py.
+ static Runnable afterOrdinaryValidation;
+ static String compileOrdinary(AndroidStandardExitStore.Entry entry,AndroidStandardExitStore.Entry exit,String session,String execution)throws Exception{
+  if(!AndroidExternalPolicy.supports(entry.protocol)||!isTor(exit.protocol)||entry.id.equals(exit.id)||!execution.equals("local")||!session.equals("selection-validation"))throw new IllegalArgumentException("unowned ordinary Tor capture");
+  AndroidExternalPolicy.checkPolicy(entry.policy);validate(exit);Runnable hook=afterOrdinaryValidation;if(hook!=null)hook.run();return "{}";
+ }
 }
 final class AndroidExternalPolicy {
  EXTERNAL_POLICY_FIELDS
@@ -116,9 +123,10 @@ final class ProductConnectSurface extends Context {
  final View killSwitch=new View(),autoRequirementsHint=new View();private String externalProtectionID="",externalProtectionSource="";
  static final class Probe{boolean isBusy(){return false;}}final Probe viaEntryProbe=new Probe();
  static final class Connection{
-  int starts;boolean direct;AndroidNodeStore.Node entry;AndroidStandardExitStore.Entry exit;String mode,execution;
+  int starts;boolean direct;AndroidNodeStore.Node entry;AndroidStandardExitStore.Entry ordinaryEntry,exit;String mode,execution;
   boolean cancelStartupPending(){return false;}boolean isActiveOrTransitioning(){return false;}void disconnect(Object callback){throw new AssertionError("unexpected disconnect");}
   void connectExternal(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,boolean direct,String mode,String execution,Object callback){starts++;this.entry=entry;this.exit=exit;this.direct=direct;this.mode=mode;this.execution=execution;}
+  void connectExternal(AndroidConnectionProfileStore.ExternalSelection path,Object callback){if(path.ordinaryEntry!=null){starts++;ordinaryEntry=path.ordinaryEntry;exit=path.exit;mode=path.entryMode;execution=path.execution;direct=false;}else connectExternal(path.entry,path.exit,path.direct(),path.entryMode,path.execution,callback);}
   void connectMultihop(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String mode,String execution,String entryMode,Object callback){throw new AssertionError("external selection became Router multihop");}
   void connect(String mode,List<String> layers,Object callback){throw new AssertionError("external selection used unrelated active Router");}
  }final Connection connection=new Connection();
@@ -184,12 +192,70 @@ public final class ConnectionProfilesHarness {
   void changeExternal(String id)throws Exception{AndroidStandardExitStore.Entry e=exits.get(id);JSONObject p=AndroidTorProfile.isTor(e.protocol)?e.torPolicy:e.policy;p.put("dns_host","9.9.9.9").put("manual_mtu",1280).put("home_lan_access",true);exits.save(e);}
   void otherSelection()throws Exception{nodes.select(second.id);prefs.edit().putString("selected_kind","router-vpn").putString("selected_id",second.id).putString("mode","auto").putBoolean("multihop_on",false).putString("custom_presets","[{\"name\":\"other\",\"layers\":[\"hysteria2\"]}]").commit();}
   JSONObject rows()throws Exception{return new JSONObject(text(rows));}JSONObject row()throws Exception{return rows().getJSONArray("profiles").getJSONObject(0);}
-  void row(JSONObject value)throws Exception{Files.writeString(rows.toPath(),new JSONObject().put("schema_version",4).put("profiles",new JSONArray().put(value)).toString());}
+  void row(JSONObject value)throws Exception{Files.writeString(rows.toPath(),new JSONObject().put("schema_version",5).put("profiles",new JSONArray().put(value)).toString());}
  }
  static final class State {
   final Map<String,byte[]> files=new TreeMap<>();final Map<String,Map<String,?>> preferences=new TreeMap<>();
   State(Fixture f)throws Exception{try(var paths=Files.walk(f.context.getFilesDir().toPath())){for(Path p:paths.filter(Files::isRegularFile).toList())files.put(p.toString(),Files.readAllBytes(p));}for(var e:f.context.preferences.entrySet())preferences.put(e.getKey(),e.getValue().getAll());}
   void same(Fixture f,String label)throws Exception{State after=new State(f);check(files.keySet().equals(after.files.keySet()),label+" files");for(String key:files.keySet())check(Arrays.equals(files.get(key),after.files.get(key)),label+" byte rollback "+key);check(preferences.equals(after.preferences),label+" all preference rollback");}
+ }
+ static AndroidStandardExitStore.Entry ordinary(String protocol,String id)throws Exception{
+  AndroidStandardExitStore.Entry e=external(id,false);e.protocol=protocol;e.startupMode="auto";e.autoConnect=true;e.policy.put("kill_switch",true).put("kill_switch_policy","always");
+  e.tlsServerName="ordinary.example.test";e.method="2022-blake3-aes-256-gcm";e.secret=Base64.getEncoder().encodeToString("S".repeat(32).getBytes(StandardCharsets.UTF_8));
+  if(protocol.equals("wireguard")||protocol.equals("amneziawg")){
+   e.wgPrivateKey=Base64.getEncoder().encodeToString("x".repeat(32).getBytes(StandardCharsets.UTF_8));e.wgPeerPublicKey=Base64.getEncoder().encodeToString("p".repeat(32).getBytes(StandardCharsets.UTF_8));e.wgAddresses.addAll(List.of("10.93.0.2/32","fd93::2/128"));e.wgAllowedIps.addAll(List.of("0.0.0.0/0","::/0"));e.wgMtu=1360;e.wgKeepalive=25;
+   if(protocol.equals("amneziawg"))e.awgParameters=new JSONObject().put("jc","3").put("jmin","40").put("jmax","900").put("s1","15").put("s2","16").put("s3","32").put("s4","32").put("h1","100-110").put("h2","200-210").put("h3","300-310").put("h4","400-410");
+  }
+  if(protocol.equals("openvpn")){JSONObject source=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE")))).getJSONObject("external"),inline=source.getJSONObject("openvpn");e.openVPNConfig=inline.getString("config");e.username=inline.getString("username");e.password=inline.getString("password");e.expectedPublicIp=source.getString("expected_public_ip");e.openVPNPairing=new JSONObject(source.getJSONObject("openvpn_pairing").toString());e.openVPNResponseProbes=new JSONObject(source.getJSONObject("openvpn_response_probes").toString());}
+  return e;
+ }
+ static void ordinaryTorRoundtrip(Path root)throws Exception{
+  for(String protocol:List.of("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn")){
+   Fixture f=new Fixture(root);var entry=ordinary(protocol,"ordinary-"+protocol);f.exits.save(entry);var exit=f.exits.get("external-b");exit.startupMode="last";exit.autoConnect=true;exit.torPolicy.put("manual_mtu",1320);f.exits.save(exit);
+   String originalEntry=AndroidStandardExitStore.snapshot(entry),originalExit=AndroidStandardExitStore.snapshot(exit),routerBytes=text(f.first.file);f.store.selectOrdinaryTorPath(exit,entry);var saved=f.store.add("Ordinary "+protocol+" to Tor");JSONObject row=f.row();
+   check(f.rows().getInt("schema_version")==5&&row.getString("multihop_entry_kind").equals("external")&&row.getString("multihop_entry_mode").equals(AndroidExternalPolicy.protocol(protocol)),"ordinary schema/kind/canonical transport not captured");
+   check(row.getJSONObject("ordinary_entry_policy").getInt("manual_mtu")==1360&&row.getJSONObject("external_policy").getInt("manual_mtu")==1320&&!row.has("entry_policy")&&!row.has("entry_profile_id"),"ordinary entry policy mixed with exit or private Router policy");
+   String serialized=text(f.rows);for(String secret:List.of("fixture-api-","fixture-socks-","fixture-private-","openvpn_pairing","openvpn_response_probes","wg_private_key","tor_bridges","api_token"))check(!serialized.contains(secret),"ordinary profile copied private source: "+secret);
+   for(String secret:List.of(entry.secret,entry.wgPrivateKey,entry.openVPNConfig))if(!secret.isEmpty())check(!serialized.contains(secret),"ordinary profile copied transport credentials");
+   f.changeExternal(entry.id);f.changeExternal(exit.id);f.otherSelection();f.store.load(saved.id);var selected=f.store.currentExternalPath(exit.id);
+   check(!selected.direct()&&selected.entry==null&&selected.ordinaryEntry.id.equals(entry.id)&&selected.entryMode.equals(AndroidExternalPolicy.protocol(protocol))&&selected.execution.equals("local"),"ordinary profile became Router/direct/another execution");
+   check(originalEntry.equals(AndroidStandardExitStore.snapshot(selected.ordinaryEntry))&&originalExit.equals(AndroidStandardExitStore.snapshot(selected.exit)),"ordinary complete policies/startup/credentials did not restore separately");
+   check(text(f.first.file).equals(routerBytes)&&f.nodes.activeId().equals(f.second.id),"ordinary load altered unrelated private Router owner");
+   ProductConnectSurface ui=new ProductConnectSurface(f);ui.pressConnect();check(ui.connection.starts==1&&!ui.connection.direct&&ui.connection.entry==null&&ui.connection.ordinaryEntry.id.equals(entry.id)&&ui.connection.exit.id.equals(exit.id),"map Connect dropped loaded ordinary predecessor");
+   f.store.selectExternalPath(f.exits.get(exit.id),null,"wg");f.store.update(saved.id,"Direct Tor");row=f.row();check(row.getString("multihop_entry_kind").equals("router-vpn")&&!row.has("ordinary_entry_policy"),"Update retained orphaned ordinary policy");
+   f.otherSelection();f.store.load(saved.id);check(f.store.currentExternalPath(exit.id).direct(),"direct Update revived ordinary predecessor");f.store.delete(saved.id);check(f.store.list().isEmpty()&&f.exits.get(entry.id).id.equals(entry.id),"Delete removed linked ordinary credentials");
+  }
+  Fixture collision=new Fixture(root);var entry=ordinary("socks5",collision.first.id);collision.exits.save(entry);var exit=collision.exits.get("external-b");String router=text(collision.first.file);collision.store.selectOrdinaryTorPath(exit,entry);var saved=collision.store.add("Same text, separate identity");entry.password="current referenced password";entry.policy.put("manual_mtu",1400);collision.exits.save(entry);collision.otherSelection();collision.store.load(saved.id);var path=collision.store.currentExternalPath(exit.id);
+  check(path.entry==null&&path.ordinaryEntry.id.equals(collision.first.id)&&path.ordinaryEntry.password.equals("current referenced password")&&path.ordinaryEntry.policy.getInt("manual_mtu")==1360&&text(collision.first.file).equals(router),"same-ID ordinary restore borrowed Router authority or replaced referenced credentials");
+ }
+ static void ordinaryTorInvalid(Path root)throws Exception{
+  for(String bad:List.of("missing-kind","router-kind","unknown-kind","kind-type","missing-entry","same-id","wrong-mode","protocol","identity","entry-secret","entry-mtu","entry-policy","entry-startup","router-policy","home","server","compare","wrong-exit","downgraded-schema")){
+   Fixture f=new Fixture(root);var entry=f.exits.get("external-a");var exit=f.exits.get("external-b");f.store.selectOrdinaryTorPath(exit,entry);var saved=f.store.add("Ordinary path");JSONObject row=f.row();
+   switch(bad){case "missing-kind":row.remove("multihop_entry_kind");break;case "router-kind":row.put("multihop_entry_kind","router-vpn");break;case "unknown-kind":row.put("multihop_entry_kind","other");break;case "kind-type":row.put("multihop_entry_kind",true);break;
+    case "missing-entry":row.put("multihop_entry_id","missing");break;case "same-id":row.put("multihop_entry_id",exit.id);break;case "wrong-mode":row.put("multihop_entry_mode","http-connect");break;case "protocol":row.put("ordinary_entry_protocol","http");break;case "identity":row.put("ordinary_entry_public_ip","203.0.113.10");break;
+    case "entry-secret":row.getJSONObject("ordinary_entry_policy").put("password","wrong-owner");break;case "entry-mtu":row.getJSONObject("ordinary_entry_policy").put("manual_mtu",9001);break;case "entry-policy":row.put("ordinary_entry_policy",JSONObject.NULL);break;case "entry-startup":row.remove("ordinary_entry_startup");break;case "router-policy":row.put("entry_policy",new JSONObject().put("home_lan_access",true));break;
+    case "home":row.getJSONObject("external_policy").put("dns_mode","home");break;case "server":row.put("multihop_execution","server");break;case "compare":row.put("multihop_execution","auto");break;case "wrong-exit":row.put("external_protocol","socks5").put("multihop_exit_mode","socks5");break;
+   }
+   f.row(row);if(bad.equals("downgraded-schema"))Files.writeString(f.rows.toPath(),f.rows().put("schema_version",4).toString());State before=new State(f);int writes=AndroidPrivateFileStore.writes;rejected(()->f.store.load(saved.id),bad);before.same(f,"ordinary invalid "+bad);check(writes==AndroidPrivateFileStore.writes,"invalid ordinary profile wrote before rejection: "+bad);
+  }
+ }
+ static void ordinaryTorRollback(Path root)throws Exception{
+  for(String fault:List.of("entry-write","exit-write","preferences","rollback")){
+   Fixture f=new Fixture(root);f.store.selectOrdinaryTorPath(f.exits.get("external-b"),f.exits.get("external-a"));var saved=f.store.add("Ordinary transaction");f.changeExternal("external-a");f.changeExternal("external-b");f.otherSelection();State before=new State(f);
+   if(fault.equals("preferences")||fault.equals("rollback"))f.prefs.failures=fault.equals("rollback")?2:1;
+   else{AndroidPrivateFileStore.failPath=new File(f.context.getFilesDir(),"standard-exits.json").getAbsolutePath();if(fault.equals("entry-write"))AndroidPrivateFileStore.failures=1;else{var count=new java.util.concurrent.atomic.AtomicInteger();AndroidPrivateFileStore.beforeWrite=()->{if(count.incrementAndGet()==2)AndroidPrivateFileStore.failures=1;};}}
+   try{Exception error=rejected(()->f.store.load(saved.id),fault);before.same(f,"ordinary two-row "+fault);check(error.getMessage().contains(fault.equals("rollback")?"rollback is incomplete":"prior connection state was restored"),"ordinary rollback status inaccurate");}
+   finally{AndroidPrivateFileStore.failures=0;AndroidPrivateFileStore.failPath="";AndroidPrivateFileStore.beforeWrite=null;}
+  }
+  Fixture f=new Fixture(root);var entry=f.exits.get("external-a");var exit=f.exits.get("external-b");f.store.selectOrdinaryTorPath(exit,entry);var saved=f.store.add("Captured source");f.changeExternal(entry.id);f.changeExternal(exit.id);f.otherSelection();Map<String,?> preferences=f.prefs.getAll();
+  AndroidTorProfile.afterOrdinaryValidation=()->{AndroidTorProfile.afterOrdinaryValidation=null;try{var current=f.exits.get(entry.id);current.password="concurrently edited private source";f.exits.save(current);}catch(Exception error){throw new IllegalStateException(error);}};
+  try{rejected(()->f.store.load(saved.id),"source changed during pure graph validation");check(f.exits.get(entry.id).password.equals("concurrently edited private source")&&f.exits.get(entry.id).policy.getInt("manual_mtu")==1280&&preferences.equals(f.prefs.getAll()),"validation failure overwrote a newer ordinary source or selected stale path");}finally{AndroidTorProfile.afterOrdinaryValidation=null;}
+  State before=new State(f);f.prefs.failures=1;rejected(()->f.store.selectOrdinaryTorPath(f.exits.get(exit.id),f.exits.get(entry.id)),"ordinary selection commit failure");before.same(f,"ordinary selection rollback");
+  var stale=f.exits.get(entry.id);var changed=f.exits.get(entry.id);changed.password="later private source";f.exits.save(changed);before=new State(f);rejected(()->f.store.selectOrdinaryTorPath(f.exits.get(exit.id),stale),"stale ordinary selection source");before.same(f,"stale ordinary selection");
+ }
+ static void ordinarySchemaMigration(Path root)throws Exception{
+  for(int schema:new int[]{2,3,4}){Fixture f=new Fixture(root);f.store.selectExternalPath(f.exits.get("external-b"),f.first,"wg");var saved=f.store.add("Legacy private entry");JSONObject rows=f.rows();rows.put("schema_version",schema);rows.getJSONArray("profiles").getJSONObject(0).remove("multihop_entry_kind");Files.writeString(f.rows.toPath(),rows.toString());f.otherSelection();f.store.load(saved.id);var path=f.store.currentExternalPath("external-b");check(f.rows().getInt("schema_version")==5&&path.ordinaryEntry==null&&path.entry.id.equals(f.first.id),"legacy Router entry was reinterpreted during schema migration");}
+  Fixture future=new Fixture(root);future.store.add("Future schema");Files.writeString(future.rows.toPath(),future.rows().put("schema_version",6).toString());State before=new State(future);rejected(()->future.store.list(),"future profile schema");before.same(future,"future schema must not rewrite");
  }
  static void externalRoundtrip(Path root,boolean tor)throws Exception{
   Fixture f=new Fixture(root);String exit=tor?"external-b":"external-a";f.store.selectExternalPath(f.exits.get(exit),f.first,"hysteria2");
@@ -329,7 +395,7 @@ public final class ConnectionProfilesHarness {
    .put("dns_bootstrap",new JSONObject().put("server",new JSONObject().put("type","tls").put("tag","bootstrap").put("server","9.9.9.9").put("server_port",8853).put("detour","custom-exit").put("tls",new JSONObject().put("enabled",true).put("server_name","resolver.example").put("certificate",new JSONArray().put("public-certificate")))).put("query",new JSONObject().put("server","bootstrap").put("strategy","prefer_ipv4").put("disable_cache",true).put("rewrite_ttl",7).put("timeout","2300ms")));
   f.exits.save(exit);f.store.selectExternalPath(exit,null,"wg");var saved=f.store.add("Evidence");JSONObject captured=f.row().getJSONObject("external_policy");check(!captured.has("effective_mtu")&&captured.getJSONObject("dns_bootstrap").toString().equals(exit.policy.getJSONObject("dns_bootstrap").toString())&&captured.getJSONArray("dns_results").length()==1,"capture complete DNS evidence, omit stale MTU");f.changeExternal(exit.id);f.store.load(saved.id);check(!f.exits.get(exit.id).policy.has("effective_mtu"),"restore cannot resurrect stale MTU proof");
   JSONObject old=f.row();old.remove("external_policy");old.remove("external_startup");old.remove("external_protocol");old.remove("external_public_ip");old.put("multihop_exit_mode","shadowsocks");f.row(old);f.changeExternal(exit.id);String current=AndroidStandardExitStore.snapshot(f.exits.get(exit.id));f.otherSelection();f.store.load(saved.id);check(AndroidStandardExitStore.snapshot(f.exits.get(exit.id)).equals(current),"legacy external profile remains selection-only");
-  Files.delete(f.rows.toPath());Files.writeString(f.context.getFilesDir().toPath().resolve("connection-profiles-v1.json"),new JSONObject().put("schema_version",1).put("profiles",new JSONArray().put(old)).toString());f.otherSelection();f.store.load(saved.id);check(f.rows().getInt("schema_version")==4&&!Files.exists(f.context.getFilesDir().toPath().resolve("connection-profiles-v1.json"))&&AndroidStandardExitStore.snapshot(f.exits.get(exit.id)).equals(current),"schema1 path migration preserves selection-only external semantics");
+  Files.delete(f.rows.toPath());Files.writeString(f.context.getFilesDir().toPath().resolve("connection-profiles-v1.json"),new JSONObject().put("schema_version",1).put("profiles",new JSONArray().put(old)).toString());f.otherSelection();f.store.load(saved.id);check(f.rows().getInt("schema_version")==5&&!Files.exists(f.context.getFilesDir().toPath().resolve("connection-profiles-v1.json"))&&AndroidStandardExitStore.snapshot(f.exits.get(exit.id)).equals(current),"schema1 path migration preserves selection-only external semantics");
  }
  static void activeSelectionEdges(Path root)throws Exception{
   Fixture f=new Fixture(root);f.store.selectExternalPath(f.exits.get("external-a"),f.first,"wg");var r=f.store.add("captured entry");f.changeNode(f.first);f.nodes.select(f.first.id);f.store.load(r.id);check(f.nodes.activeId().equals(f.first.id)&&text(new File(f.context.getFilesDir(),AndroidNodeStore.ACTIVE_BUNDLE)).equals(text(f.first.file))&&profile(f.first).getString("start_layer").equals("aes-256-gcm+xor-whitening"),"entry that was already active receives restored policy in its active copy");
@@ -395,7 +461,7 @@ public final class ConnectionProfilesHarness {
   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=f.exits.get("external-a");exit.policy.put("kill_switch","false");rejected(()->f.exits.save(exit),"string kill switch");
   exit.policy.put("kill_switch",false).put("kill_switch_policy","unknown");rejected(()->f.exits.save(exit),"unknown kill policy");
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}quickProtection(root);if(args.length>1){System.out.println("Android captured quick protection: "+checks+" checks passed");return;}externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);torExecutionProfiles(root);torPaddingProfiles(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);torJumboProfiles(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}quickProtection(root);if(args.length>1){System.out.println("Android captured quick protection: "+checks+" checks passed");return;}ordinaryTorRoundtrip(root);ordinaryTorInvalid(root);ordinaryTorRollback(root);ordinarySchemaMigration(root);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);torExecutionProfiles(root);torPaddingProfiles(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);torJumboProfiles(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
 }
 '''
 
@@ -421,7 +487,7 @@ def main():
         app.mkdir(parents=True)
         for name in ("AndroidExternalProtection", "AndroidKillSwitchPolicy", "AndroidConnectionProfileStore", "AndroidConnectionProfilePolicy", "AndroidNodeStore", "AndroidStandardExitStore", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidExternalAmnezia", "AndroidOpenVPN"):
             shutil.copyfile(JAVA / (name + ".java"), app / (name + ".java"))
-        methods = "\n".join(method("AndroidExternalPolicy.java", signature) for signature in ("static boolean supports(", "static void checkPolicy("))
+        methods = "\n".join(method("AndroidExternalPolicy.java", signature) for signature in ("static boolean supports(", "static String protocol(", "static void checkPolicy("))
         policy_source = (JAVA / "AndroidExternalPolicy.java").read_text(encoding="utf-8")
         policy_fields = policy_source[policy_source.index("    private static final Set<String> POLICY"):policy_source.index("\n\n    static boolean supports", policy_source.index("    private static final Set<String> POLICY"))]
         (app / "Boundaries.java").write_text(BOUNDARIES.replace("EXTERNAL_METHODS", methods).replace("EXTERNAL_POLICY_FIELDS", policy_fields), encoding="utf-8")

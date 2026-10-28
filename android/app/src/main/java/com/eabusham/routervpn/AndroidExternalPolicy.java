@@ -193,6 +193,16 @@ final class AndroidExternalPolicy {
         Captured(String source,String capture){this.source=source;this.capture=capture;}
     }
 
+    /** Original ordinary source for a Tor predecessor, before policy compilation. */
+    static JSONObject captureTorPredecessor(AndroidStandardExitStore.Entry entry) throws Exception {
+        if (entry == null || !supports(entry.protocol)) throw new IllegalArgumentException("Choose a saved ordinary external entry.");
+        Captured captured = capture(AndroidStandardExitStore.copy(entry), null, "external", null, "local");
+        JSONObject selection = new JSONObject(captured.capture);
+        JSONObject profile = selection.getJSONObject("profile");
+        if (selection.has("dns_bootstrap")) profile.put("dns_bootstrap", selection.getJSONObject("dns_bootstrap"));
+        return new JSONObject().put("profile", profile).put("config", captured.source);
+    }
+
     private static Captured capture(AndroidStandardExitStore.Entry exit,JSONObject entry,String entryMode,AndroidExternalEntry captured,String execution)throws Exception{
         AndroidStandardExitStore.validate(exit);
         AndroidStandardExitStore.validateExecution(exit,entry!=null,execution);

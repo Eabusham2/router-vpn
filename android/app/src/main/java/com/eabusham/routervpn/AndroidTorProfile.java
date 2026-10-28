@@ -127,6 +127,78 @@ final class AndroidTorProfile {
         return prepare(context, entryFile, selected, entryMode, "local");
     }
 
+    /** Pure compilation used by saved-path validation and actual native staging. */
+    static String compileOrdinary(AndroidStandardExitStore.Entry entry, AndroidStandardExitStore.Entry exit,
+            String sessionID, String execution) throws Exception {
+        return ordinary(entry, exit, sessionID, execution).getString("config");
+    }
+
+    private static JSONObject ordinary(AndroidStandardExitStore.Entry selectedEntry, AndroidStandardExitStore.Entry selectedExit,
+            String sessionID, String execution) throws Exception {
+        AndroidStandardExitStore.Entry entry = AndroidStandardExitStore.copy(selectedEntry);
+        AndroidStandardExitStore.Entry exit = AndroidStandardExitStore.copy(selectedExit);
+        AndroidStandardExitStore.validate(entry);
+        AndroidStandardExitStore.validate(exit);
+        if (!AndroidExternalPolicy.supports(entry.protocol) || !isTor(exit.protocol) || entry.id.equals(exit.id)
+                || !"local".equals(execution)) throw new IllegalArgumentException("An ordinary external entry requires a distinct Tor exit and Local execution.");
+        JSONObject captured = AndroidExternalPolicy.captureTorPredecessor(entry);
+        JSONObject predecessor = captured.getJSONObject("profile");
+        String mode = AndroidExternalPolicy.protocol(entry.protocol);
+        JSONObject selected = profile(exit).put("multihop_enabled", true).put("multihop_entry_id", entry.id)
+                .put("multihop_exit_id", exit.id).put("multihop_entry_mode", mode)
+                .put("multihop_exit_mode", exit.protocol).put("multihop_execution", execution);
+        String source = captured.getString("config"), sourceProfile = predecessor.toString();
+        String config = Libbox.routerCompileTorProfileWithExternalPredecessor(selected.toString(), sessionID, source, sourceProfile);
+        if (!bounded(config, MAX_CONFIG)) throw new IllegalStateException("Tor did not compile the complete captured ordinary path.");
+        JSONObject owner = null;
+        JSONArray outputs = new JSONObject(config).getJSONArray("outbounds");
+        for (int index = 0; index < outputs.length(); index++) if (OUTBOUND.equals(outputs.getJSONObject(index).optString("tag"))) {
+            if (owner != null) throw new IllegalStateException("Tor ordinary path has more than one captured owner.");
+            owner = outputs.getJSONObject(index);
+        }
+        if (owner == null || !sameJSON(new JSONObject(owner.getString("external_tor_profile")), selected)
+                || !sameJSON(new JSONObject(owner.getString("external_predecessor_profile")), predecessor)
+                || !sameJSON(new JSONObject(owner.getString("external_predecessor_config")), new JSONObject(source)))
+            throw new IllegalStateException("Tor compiler changed its captured ordinary source.");
+        return new JSONObject().put("config", config).put("profile", selected).put("predecessor", predecessor)
+                .put("entry_mode", mode).put("predecessor_config_sha256", digest(owner.getString("external_predecessor_config").getBytes(StandardCharsets.UTF_8)));
+    }
+
+    static NativeSingBoxController.SessionInfo prepareOrdinary(Context context, AndroidStandardExitStore.Entry selectedEntry,
+            AndroidStandardExitStore.Entry selectedExit, String execution) throws Exception {
+        String entrySnapshot = AndroidStandardExitStore.snapshot(selectedEntry);
+        String exitSnapshot = AndroidStandardExitStore.snapshot(selectedExit);
+        String sessionID = UUID.randomUUID().toString();
+        JSONObject captured = ordinary(selectedEntry, selectedExit, sessionID, execution);
+        String config = captured.getString("config");
+        JSONObject metadata = new JSONObject().put("version", 1).put("session_id", sessionID)
+                .put("external_id", selectedExit.id).put("protocol", selectedExit.protocol)
+                .put("config_sha256", digest(config.getBytes(StandardCharsets.UTF_8)))
+                .put("entry_mode", captured.getString("entry_mode")).put("execution", execution)
+                .put("tor_profile", captured.getJSONObject("profile"))
+                .put("predecessor_profile", captured.getJSONObject("predecessor"))
+                .put("predecessor_config_sha256", captured.getString("predecessor_config_sha256"));
+        String text = metadata.toString(), mode = "standard-" + selectedExit.protocol;
+        if (!bounded(text, MAX_METADATA)) throw new IllegalStateException("Tor ordinary session metadata exceeds its bound.");
+        RouterPQNative.install();
+        Libbox.checkConfig(config);
+        session(config, text, sessionID, mode);
+        if (Thread.currentThread().isInterrupted() || !entrySnapshot.equals(AndroidStandardExitStore.snapshot(selectedEntry))
+                || !exitSnapshot.equals(AndroidStandardExitStore.snapshot(selectedExit))) throw new IllegalStateException("Ordinary Tor preparation was cancelled or a captured node changed.");
+        File root = new File(context.getFilesDir(), "layered-sessions").getCanonicalFile();
+        if (!root.isDirectory() && !root.mkdirs()) throw new IllegalStateException("Cannot create private Tor session storage.");
+        File[] sessions = root.listFiles(File::isDirectory);
+        if (sessions == null || sessions.length >= 32) throw new IllegalStateException("Private VPN session storage is unavailable or full.");
+        File folder = new File(root, sessionID);
+        if (!folder.mkdir()) throw new IllegalStateException("Cannot create the captured Tor session.");
+        try {
+            if (AndroidExternalProtection.torCapture(metadata)) AndroidPrivateFileStore.write(new File(folder, AndroidKillSwitchPolicy.SESSION_MARKER), new byte[]{'1', '\n'}, 16);
+            AndroidPrivateFileStore.write(new File(folder, "sing-box.json"), config.getBytes(StandardCharsets.UTF_8), MAX_CONFIG);
+            AndroidPrivateFileStore.write(new File(folder, SESSION_FILE), text.getBytes(StandardCharsets.UTF_8), MAX_METADATA);
+            return new NativeSingBoxController.SessionInfo(sessionID, mode, null);
+        } catch (Throwable failure) { removeSession(folder); throw failure; }
+    }
+
     static NativeSingBoxController.SessionInfo prepare(Context context, File entryFile,
             AndroidStandardExitStore.Entry selected, String entryMode, String execution) throws Exception {
         AndroidStandardExitStore.Entry exit = AndroidStandardExitStore.copy(selected);
@@ -288,6 +360,20 @@ final class AndroidTorProfile {
                         throw new IllegalStateException("Tor Server lost its captured entry, source or lease owner.");
                 } else if (output.has("detour") != metadata.has("predecessor_profile")) {
                     throw new IllegalStateException("Tor outbound lost its captured entry owner.");
+                }
+                if (metadata.has("predecessor_profile") && "external".equals(metadata.getJSONObject("predecessor_profile").optString("node_kind"))) {
+                    JSONObject predecessor = metadata.getJSONObject("predecessor_profile");
+                    if (!"local".equals(execution) || !"custom-exit".equals(output.optString("detour"))
+                            || !sameJSON(new JSONObject(output.getString("external_tor_profile")), capturedProfile)
+                            || !sameJSON(new JSONObject(output.getString("external_predecessor_profile")), predecessor)
+                            || !digest(output.getString("external_predecessor_config").getBytes(StandardCharsets.UTF_8)).equals(metadata.getString("predecessor_config_sha256"))
+                            || !metadata.getString("entry_mode").equals(predecessor.getJSONObject("external").getString("protocol")))
+                        throw new IllegalStateException("Tor ordinary path lost its captured provider source or selected mode.");
+                    String expected = Libbox.routerCompileTorProfileWithExternalPredecessor(output.getString("external_tor_profile"), sessionId,
+                            output.getString("external_predecessor_config"), output.getString("external_predecessor_profile"));
+                    if (!sameJSON(new JSONObject(expected), graph)) throw new IllegalStateException("Tor ordinary native graph changed after capture.");
+                } else if (output.has("external_tor_profile") || output.has("external_predecessor_profile") || output.has("external_predecessor_config")) {
+                    throw new IllegalStateException("Tor ordinary source has no captured provider owner.");
                 }
             }
         }

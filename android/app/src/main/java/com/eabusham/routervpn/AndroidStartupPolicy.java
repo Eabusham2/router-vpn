@@ -28,7 +28,7 @@ final class AndroidStartupPolicy {
     private static final int MAX_LAST=4096;
     private static final String[] CHOICES={"smart-auto","auto","last","manual"};
     private static final String[] SELECTION_KEYS={"selected_kind","selected_id","mode","custom_presets",
-            "multihop_on","multihop_entry","multihop_exit","multihop_exit_mode","multihop_entry_mode","multihop_execution"};
+            "multihop_on","multihop_entry","multihop_exit","multihop_exit_mode","multihop_entry_mode","multihop_entry_kind","multihop_execution"};
     private static boolean coldLaunchClaimed;
     private static Attempt pending;
 
@@ -36,8 +36,8 @@ final class AndroidStartupPolicy {
         final String nonce=UUID.randomUUID().toString().replace("-", "");
         final String mode, source, lastRaw, entryMode, exitMode, execution;
         final AndroidNodeStore.Node node, entry, exit;
-        final AndroidStandardExitStore.Entry external;
-        private final String nodeKind, externalSnapshot;
+        final AndroidStandardExitStore.Entry external, ordinaryEntry;
+        private final String nodeKind, externalSnapshot, ordinaryEntrySnapshot;
         private final String selectedID, activeID;
         private final AndroidHomeStateStore.Snapshot idle;
         private final Map<String,Object> preferences;
@@ -48,18 +48,28 @@ final class AndroidStartupPolicy {
                         String entryMode, String exitMode, String execution, String source, String lastRaw,
                         String selectedID, String activeID, AndroidHomeStateStore.Snapshot idle,
                         Map<String,Object> preferences, Map<String,byte[]> files)throws Exception {
+            this(mode,node,entry,exit,external,null,entryMode,exitMode,execution,source,lastRaw,selectedID,activeID,idle,preferences,files);
+        }
+
+        private Attempt(String mode, AndroidNodeStore.Node node, AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, AndroidStandardExitStore.Entry external,
+                        AndroidStandardExitStore.Entry ordinaryEntry, String entryMode, String exitMode, String execution, String source, String lastRaw,
+                        String selectedID, String activeID, AndroidHomeStateStore.Snapshot idle,
+                        Map<String,Object> preferences, Map<String,byte[]> files)throws Exception {
+            if(ordinaryEntry!=null&&(entry!=null||external==null||ordinaryEntry.id.equals(external.id)))throw new IllegalArgumentException("Startup must retain two distinct ordinary path owners.");
             this.mode=mode;this.node=node;this.entry=entry;this.exit=exit;this.entryMode=entryMode;this.exitMode=exitMode;
             this.execution=execution;this.source=source;this.lastRaw=lastRaw;this.selectedID=selectedID;this.activeID=activeID;
             this.idle=idle;this.preferences=Collections.unmodifiableMap(new LinkedHashMap<>(preferences));
             this.external=external==null?null:AndroidStandardExitStore.copy(external);
             this.nodeKind=external==null?"router-vpn":"external";
             this.externalSnapshot=external==null?"":AndroidStandardExitStore.snapshot(this.external);
+            this.ordinaryEntry=ordinaryEntry==null?null:AndroidStandardExitStore.copy(ordinaryEntry);
+            this.ordinaryEntrySnapshot=ordinaryEntry==null?"":AndroidStandardExitStore.snapshot(this.ordinaryEntry);
             Map<String,byte[]> copy=new LinkedHashMap<>();
             for(Map.Entry<String,byte[]> value:files.entrySet())copy.put(value.getKey(),value.getValue().clone());
             this.files=Collections.unmodifiableMap(copy);
         }
 
-        boolean multihop(){return entry!=null;}
+        boolean multihop(){return entry!=null||ordinaryEntry!=null;}
         boolean external(){return external!=null;}
 
         void requireCurrent(Context context, AndroidNodeStore nodes, AndroidUnifiedConnectionController connection)throws Exception {
@@ -77,6 +87,9 @@ final class AndroidStartupPolicy {
             if(external!=null&&(!externalSnapshot.equals(AndroidStandardExitStore.snapshot(external))
                     ||!externalSnapshot.equals(AndroidStandardExitStore.snapshot(new AndroidStandardExitStore(context).get(selectedID)))))
                 throw new IllegalStateException("The selected external startup profile or its credentials changed.");
+            if(ordinaryEntry!=null&&(!ordinaryEntrySnapshot.equals(AndroidStandardExitStore.snapshot(ordinaryEntry))
+                    ||!ordinaryEntrySnapshot.equals(AndroidStandardExitStore.snapshot(new AndroidStandardExitStore(context).get(ordinaryEntry.id)))))
+                throw new IllegalStateException("The captured ordinary startup entry or its credentials changed.");
             for(Map.Entry<String,byte[]> captured:files.entrySet()){
                 File current=nodes.file(captured.getKey());
                 if(!Arrays.equals(captured.getValue(),AndroidPrivateFileStore.read(current,AndroidNodeStore.MAX_BUNDLE)))
@@ -128,6 +141,7 @@ final class AndroidStartupPolicy {
         Map<String,byte[]> files=new LinkedHashMap<>();files.put(node.id,bytes);
         AndroidNodeStore.Node entry=null,exit=null;String entryMode="wg",exitMode="",execution="local";
         if(prefs.getBoolean("multihop_on",false)){
+            if(!"router-vpn".equals(prefs.getString("multihop_entry_kind","router-vpn")))throw new IllegalStateException("An ordinary startup entry cannot be interpreted as a private Router node.");
             entry=requiredNode(nodes,prefs.getString("multihop_entry",""));
             exit=requiredNode(nodes,prefs.getString("multihop_exit",""));
             if(entry.id.equals(exit.id))throw new IllegalStateException("Saved startup multihop requires two different nodes.");
@@ -158,7 +172,7 @@ final class AndroidStartupPolicy {
             throw new IllegalStateException("The external startup selection changed while its complete path was captured.");
         Map<String,byte[]> files=new LinkedHashMap<>();
         if(path.entry!=null)files.put(path.entry.id,AndroidPrivateFileStore.read(path.entry.file,AndroidNodeStore.MAX_BUNDLE));
-        Attempt capture=new Attempt(saved.startupMode,null,path.entry,null,saved,path.entryMode,saved.protocol,path.execution,"","",selected,nodes.activeId(),idle,preferences,files);
+        Attempt capture=new Attempt(saved.startupMode,null,path.entry,null,saved,path.ordinaryEntry,path.entryMode,saved.protocol,path.execution,"","",selected,nodes.activeId(),idle,preferences,files);
         synchronized(AndroidStartupPolicy.class){if(pending!=null)throw new IllegalStateException("Another startup permission request is pending.");pending=capture;}
         try{capture.requireCurrent(context,nodes,connection);return capture;}catch(Exception changed){capture.cancel();throw changed;}
     }

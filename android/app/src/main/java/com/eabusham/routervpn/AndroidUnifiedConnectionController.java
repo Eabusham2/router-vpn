@@ -20,6 +20,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     static final int PREPARE_UNIFIED = 7605;
     private static final String STATE_PENDING="routervpn.pending",STATE_MODE="routervpn.pending.mode",STATE_LAYERS="routervpn.pending.layers",STATE_NODE="routervpn.pending.node",STATE_ENTRY="routervpn.pending.entry",STATE_EXIT="routervpn.pending.exit",STATE_EXIT_MODE="routervpn.pending.exit_mode",STATE_STANDARD_EXIT="routervpn.pending.standard_exit",STATE_EXTERNAL_DIRECT="routervpn.pending.external_direct";
     private static final String STATE_STARTUP="routervpn.pending.startup_nonce";
+    private static final String STATE_ORDINARY_ENTRY="routervpn.pending.ordinary_entry";
 
     private final Activity activity;
     private final AndroidNodeStore nodeStore;
@@ -37,6 +38,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     private List<String> pendingLayers = Collections.emptyList();
     private AndroidNodeStore.Node pendingNode, pendingEntry, pendingExit;
     private AndroidStandardExitStore.Entry pendingStandardExit;
+    private AndroidStandardExitStore.Entry pendingOrdinaryEntry;
     private boolean pendingExternalDirect;
     private String pendingExitMode = "";
     private String pendingExecution = "local";
@@ -76,6 +78,13 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         return selected;
     }
 
+    boolean capturedOrdinaryEntryMatches(AndroidHomeStateStore.Snapshot owner,AndroidStandardExitStore.Entry expected)throws Exception{
+        if(!samePath(owner,AndroidHomeStateStore.snapshot(activity)))return false;
+        AndroidStandardExitStore.Entry captured=runtime.standardExit.capturedOrdinaryEntry(owner);
+        return (expected==null?captured==null:captured!=null&&externalDigest(expected).equals(externalDigest(captured)))
+                &&samePath(owner,AndroidHomeStateStore.snapshot(activity));
+    }
+
     boolean isStartupPending(){return pendingStartup!=null&&pendingCallback!=null;}
     boolean cancelStartupPending(){
         if(!isStartupPending())return false;
@@ -95,11 +104,11 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         pendingMode=capture.external()?"external":capture.multihop()?"multihop":capture.mode;pendingLayers=Collections.emptyList();
         pendingEntry=capture.entry;pendingExit=capture.exit;pendingEntryMode=capture.entryMode;
         pendingExitMode=capture.exitMode;pendingExecution=capture.execution;
-        pendingStandardExit=null;pendingExternalDirect=false;
+        pendingStandardExit=null;pendingOrdinaryEntry=null;pendingExternalDirect=false;
         if(capture.external()){
-            pendingStandardExit=AndroidStandardExitStore.copy(capture.external);pendingExternalDirect=capture.entry==null;
-            pendingExternalDigest=externalDigest(pendingStandardExit);pendingEntryDigest=pendingExternalDirect?"":entryDigest(capture.entry);
-            pendingExternalRequestDigest=externalRequestDigest(pendingExternalDirect,pendingEntryMode,pendingEntryDigest,pendingExternalDigest,pendingExecution);
+            pendingStandardExit=AndroidStandardExitStore.copy(capture.external);pendingOrdinaryEntry=capture.ordinaryEntry==null?null:AndroidStandardExitStore.copy(capture.ordinaryEntry);pendingExternalDirect=capture.entry==null&&pendingOrdinaryEntry==null;
+            pendingExternalDigest=externalDigest(pendingStandardExit);pendingEntryDigest=pendingOrdinaryEntry!=null?externalDigest(pendingOrdinaryEntry):pendingExternalDirect?"":entryDigest(capture.entry);
+            pendingExternalRequestDigest=pendingOrdinaryEntry!=null?ordinaryRequestDigest(pendingEntryMode,pendingEntryDigest,pendingExternalDigest,pendingExecution):externalRequestDigest(pendingExternalDirect,pendingEntryMode,pendingEntryDigest,pendingExternalDigest,pendingExecution);
         }
     }
 
@@ -110,13 +119,21 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         final String topology, execution, selectedExecution, source;
         final AndroidNodeStore.Node node, entry, exit;
         final AndroidStandardExitStore.Entry external;
+        final AndroidStandardExitStore.Entry ordinaryEntry;
         final java.util.Map<File,String> files;
         final String externalDigest;
+        final String ordinaryEntryDigest;
         final AndroidMultihopRuntime.RestoreCapture multihopCapture;
         RestorePoint(AndroidHomeStateStore.Snapshot home,String topology,AndroidNodeStore.Node node,
                      AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,AndroidStandardExitStore.Entry external,
                      String execution,String selectedExecution,String source,java.util.Map<File,String> files,String externalDigest,AndroidMultihopRuntime.RestoreCapture multihopCapture){
+            this(home,topology,node,entry,exit,external,null,execution,selectedExecution,source,files,externalDigest,"",multihopCapture);
+        }
+        RestorePoint(AndroidHomeStateStore.Snapshot home,String topology,AndroidNodeStore.Node node,
+                     AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,AndroidStandardExitStore.Entry external,AndroidStandardExitStore.Entry ordinaryEntry,
+                     String execution,String selectedExecution,String source,java.util.Map<File,String> files,String externalDigest,String ordinaryEntryDigest,AndroidMultihopRuntime.RestoreCapture multihopCapture){
             this.home=home;this.topology=topology;this.node=node;this.entry=entry;this.exit=exit;this.external=external;
+            this.ordinaryEntry=ordinaryEntry;this.ordinaryEntryDigest=ordinaryEntryDigest;
             this.execution=execution;this.selectedExecution=selectedExecution;this.source=source;this.files=Collections.unmodifiableMap(new java.util.LinkedHashMap<>(files));this.externalDigest=externalDigest;
             this.multihopCapture=multihopCapture;
         }
@@ -131,8 +148,8 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
             return new RestorePoint(home,"off",null,null,null,null,"","","",Collections.emptyMap(),"",null);
         }
         if(!"connected".equals(home.phase)||!"passed".equals(home.pathProof)||home.sessionId.isEmpty())throw new IllegalStateException("The original path requires fresh connection proof before testing another path.");
-        String topology="router",execution="",selectedExecution="",source="",savedExternal="";
-        AndroidNodeStore.Node node=null,entry=null,exit=null;AndroidStandardExitStore.Entry external=null;
+        String topology="router",execution="",selectedExecution="",source="",savedExternal="",savedOrdinary="";
+        AndroidNodeStore.Node node=null,entry=null,exit=null;AndroidStandardExitStore.Entry external=null,ordinaryEntry=null;
         AndroidMultihopRuntime.RestoreCapture multihopCapture=null;
         java.util.Map<File,String> files=new java.util.LinkedHashMap<>();
         if("multihop".equals(home.logicalMode)){
@@ -151,12 +168,17 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
             external=AndroidStandardExitStore.copy(exitStore.get(home.activeExternalId));AndroidStandardExitStore.validate(external);
             if(!home.activeExternalProtocol.equals(external.protocol))throw new IllegalStateException("The active external protocol changed.");
             savedExternal=externalDigest(external);
-            if(!home.activeEntryId.isEmpty()){entry=requiredNode(home.activeEntryId);files.put(entry.file,entryDigest(entry));}
+            ordinaryEntry=runtime.standardExit.capturedOrdinaryEntry(home);
+            if(ordinaryEntry!=null){
+                savedOrdinary=externalDigest(ordinaryEntry);
+                if(!"local".equals(execution)||!"local".equals(selectedExecution)||!home.activeEntryId.equals(ordinaryEntry.id)
+                        ||!savedOrdinary.equals(externalDigest(exitStore.get(ordinaryEntry.id))))throw new IllegalStateException("The original ordinary entry changed before capture.");
+            }else if(!home.activeEntryId.isEmpty()){entry=requiredNode(home.activeEntryId);files.put(entry.file,entryDigest(entry));}
         }else{
             node=requiredNode(home.activeNodeId);source=orchestrator.captureSource(node.file,home.sessionId,home.runtimeMode);files.put(node.file,entryDigest(node));
         }
         if(!samePath(home,AndroidHomeStateStore.snapshot(activity))||multihopCapture!=null&&!multihop.captureCurrent(multihopCapture))throw new IllegalStateException("The original connection changed while its restoration state was captured.");
-        return new RestorePoint(home,topology,node,entry,exit,external,execution,selectedExecution,source,files,savedExternal,multihopCapture);
+        return new RestorePoint(home,topology,node,entry,exit,external,ordinaryEntry,execution,selectedExecution,source,files,savedExternal,savedOrdinary,multihopCapture);
     }
 
     boolean restorePointCurrent(RestorePoint point){
@@ -190,6 +212,10 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         }
         for(java.util.Map.Entry<File,String> file:point.files.entrySet())if(!file.getValue().equals(AndroidTorProfile.digest(AndroidPrivateFileStore.read(file.getKey(),AndroidNodeStore.MAX_BUNDLE))))throw new IllegalStateException("An original node changed; automatic restoration was cancelled.");
         if(point.external!=null&&!point.externalDigest.equals(externalDigest(exitStore.get(point.external.id))))throw new IllegalStateException("The original external profile changed; automatic restoration was cancelled.");
+        if(point.ordinaryEntry!=null){
+            if(point.entry!=null||!"local".equals(point.execution)||!"local".equals(point.selectedExecution))throw new IllegalStateException("The original ordinary Tor execution changed.");
+            requireOrdinaryCapture(point.ordinaryEntry,point.external,point.home.activeEntryMode,point.execution,point.ordinaryEntryDigest,point.externalDigest);
+        }
     }
     void restoreCaptured(RestorePoint point,AndroidHomeStateStore.Snapshot idle,Callback callback){
         try{if(point==null||!point.connected()||!idleCurrent(idle))throw new IllegalStateException("A newer connection decision prevents automatic restoration.");validateRestorePoint(point);}
@@ -209,6 +235,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
             });return;
         }
         if("external".equals(point.topology)){
+            if(point.ordinaryEntry!=null){connectOrdinaryTor(point.ordinaryEntry,point.external,point.execution,guarded);return;}
             if(point.entry==null||point.execution.isEmpty()||"local".equals(point.execution)){connectExternal(point.entry,point.external,point.entry==null,point.home.activeEntryMode,guarded);return;}
             if(VpnService.prepare(activity)!=null){callback.finished(false,"Android VPN permission changed; grant permission before restoring the original external path.");return;}
             try{guarded.validate();}catch(Exception changed){callback.finished(false,safe(changed));return;}
@@ -231,6 +258,9 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         if("multihop".equals(point.topology))return "multihop".equals(now.logicalMode)&&point.home.runtimeMode.equals(now.runtimeMode)&&point.home.activeEntryId.equals(now.activeEntryId)&&point.home.activeExitId.equals(now.activeExitId)&&point.home.activeEntryMode.equals(now.activeEntryMode)&&multihop.restoredMatches(point.multihopCapture,point.entry,point.exit,now);
         boolean same="external".equals(now.logicalMode)&&point.home.activeExternalId.equals(now.activeExternalId)&&point.home.activeExternalProtocol.equals(now.activeExternalProtocol)&&point.home.activeEntryId.equals(now.activeEntryId)&&point.home.activeEntryMode.equals(now.activeEntryMode);
         if(!same)return false;
+        try{AndroidStandardExitStore.Entry restored=runtime.standardExit.capturedOrdinaryEntry(now);
+            if(point.ordinaryEntry==null?restored!=null:restored==null||!point.ordinaryEntryDigest.equals(externalDigest(restored)))return false;
+        }catch(Exception stale){return false;}
         if(!point.execution.isEmpty())try{return point.execution.equals(runtime.standardExit.capturedRequestedExecution(now))&&point.selectedExecution.equals(runtime.standardExit.capturedExternalExecution(now));}catch(Exception stale){return false;}
         return true;
     }
@@ -287,7 +317,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         if(pendingCallback!=null){callback.finished(false,"Finish or cancel the current Android permission request first.");return;}
         pendingMode = mode == null || mode.trim().isEmpty() ? "smart-auto" : mode.trim().toLowerCase();
         pendingLayers = layers == null ? Collections.emptyList() : new ArrayList<>(layers);
-        pendingEntry = null; pendingExit = null; pendingStandardExit=null; pendingExternalDirect=false; pendingExitMode = ""; pendingCallback = callback;
+        pendingEntry = null; pendingExit = null; pendingStandardExit=null; pendingOrdinaryEntry=null; pendingExternalDirect=false; pendingExitMode = ""; pendingCallback = callback;
         requestPermission("Router VPN " + displayMode(pendingMode));
     }
 
@@ -304,11 +334,33 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         if (entry == null || exit == null || entry.id.equals(exit.id)) { callback.finished(false, "Multihop requires two different stored nodes."); return; }
         if (exitMode == null || exitMode.trim().isEmpty()) { callback.finished(false, "Choose a supported multihop exit transport."); return; }
         if (isActiveOrTransitioning()) { callback.finished(false, "Disconnect the current Router VPN session before multihop."); return; }
-        pendingNode=null;pendingStandardExit=null;pendingExternalDirect=false;pendingMode="multihop";pendingLayers=Collections.emptyList();pendingEntry=entry;pendingExit=exit;pendingExitMode=exitMode.trim();pendingExecution=execution;pendingEntryMode=entryMode;pendingCallback=callback;
+        pendingNode=null;pendingStandardExit=null;pendingOrdinaryEntry=null;pendingExternalDirect=false;pendingMode="multihop";pendingLayers=Collections.emptyList();pendingEntry=entry;pendingExit=exit;pendingExitMode=exitMode.trim();pendingExecution=execution;pendingEntryMode=entryMode;pendingCallback=callback;
         requestPermission("Router VPN multihop");
     }
 
     /** Uses the existing proven Android custom-exit runtime under the same VPN-permission owner. */
+    void connectExternal(AndroidConnectionProfileStore.ExternalSelection path,Callback callback){
+        if(path==null){callback.finished(false,"Choose a stored external path first.");return;}
+        if(path.ordinaryEntry!=null)connectOrdinaryTor(path.ordinaryEntry,path.exit,path.execution,callback);
+        else connectExternal(path.entry,path.exit,path.direct(),path.entryMode,path.execution,callback);
+    }
+
+    void connectOrdinaryTor(AndroidStandardExitStore.Entry entry,AndroidStandardExitStore.Entry exit,String execution,Callback callback){
+        if(isActiveOrTransitioning()){callback.finished(false,"Disconnect the current VPN before selecting an ordinary Tor path.");return;}
+        if(pendingCallback!=null){callback.finished(false,"Finish or cancel the current Android VPN permission request first.");return;}
+        try{
+            AndroidStandardExitStore.Entry capturedEntry=AndroidStandardExitStore.copy(entry),capturedExit=AndroidStandardExitStore.copy(exit);
+            String mode=AndroidExternalPolicy.protocol(capturedEntry.protocol),entryDigest=externalDigest(capturedEntry),exitDigest=externalDigest(capturedExit);
+            requireOrdinaryCapture(capturedEntry,capturedExit,mode,execution,entryDigest,exitDigest);
+            AndroidTorProfile.compileOrdinary(capturedEntry,capturedExit,"permission-validation",execution);
+            pendingNode=null;pendingMode="external";pendingLayers=Collections.emptyList();pendingEntry=null;pendingExit=null;pendingExitMode="";
+            pendingOrdinaryEntry=capturedEntry;pendingStandardExit=capturedExit;pendingExternalDirect=false;pendingEntryMode=mode;
+            pendingExternalDigest=exitDigest;pendingEntryDigest=entryDigest;pendingExternalRequestDigest=ordinaryRequestDigest(mode,entryDigest,exitDigest,execution);
+            pendingExecution=execution;pendingCallback=callback;
+            requestPermission(capturedEntry.name+" → "+capturedExit.name+" via Local Tor");
+        }catch(Exception invalid){clearPending();callback.finished(false,"The saved ordinary Tor path changed or could not be captured: "+safe(invalid));}
+    }
+
     void connectExternal(AndroidNodeStore.Node entry, AndroidStandardExitStore.Entry exit, boolean direct, Callback callback) {
         connectExternal(entry,exit,direct,"wg",callback);
     }
@@ -330,7 +382,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
             requireExternalCapture(entry,captured,direct,entryDigest,exitDigest);
             requestDigest=externalRequestDigest(direct,direct?"wg":entryMode,entryDigest,exitDigest,execution);
         }catch(Exception invalid){callback.finished(false,"The saved external selection changed or could not be captured; select the path again.");return;}
-        pendingNode=null;pendingMode="external";pendingLayers=Collections.emptyList();pendingEntry=direct?null:entry;pendingExit=null;pendingExitMode="";pendingStandardExit=captured;pendingExternalDirect=direct;pendingEntryMode=direct?"wg":entryMode;pendingExternalDigest=exitDigest;pendingEntryDigest=entryDigest;pendingExternalRequestDigest=requestDigest;pendingExecution=execution;pendingCallback=callback;
+        pendingNode=null;pendingMode="external";pendingLayers=Collections.emptyList();pendingEntry=direct?null:entry;pendingOrdinaryEntry=null;pendingExit=null;pendingExitMode="";pendingStandardExit=captured;pendingExternalDirect=direct;pendingEntryMode=direct?"wg":entryMode;pendingExternalDigest=exitDigest;pendingEntryDigest=entryDigest;pendingExternalRequestDigest=requestDigest;pendingExecution=execution;pendingCallback=callback;
         requestPermission(direct?"direct "+exit.protocol+" custom exit":"Router VPN entry → "+exit.protocol+" custom exit");
     }
 
@@ -347,6 +399,14 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     private static String externalDigest(AndroidStandardExitStore.Entry exit)throws Exception{return AndroidTorProfile.digest(AndroidStandardExitStore.snapshot(exit).getBytes(StandardCharsets.UTF_8));}
     private static String entryDigest(AndroidNodeStore.Node entry)throws Exception{if(entry==null||entry.file==null)throw new IllegalArgumentException("A captured entry is required.");return AndroidTorProfile.digest(AndroidPrivateFileStore.read(entry.file,AndroidNodeStore.MAX_BUNDLE));}
     private static String externalRequestDigest(boolean direct,String mode,String entry,String exit,String execution)throws Exception{return AndroidTorProfile.digest(("routervpn-external-permission-v2\n"+direct+"\n"+mode+"\n"+entry+"\n"+exit+"\n"+execution).getBytes(StandardCharsets.UTF_8));}
+    private static String ordinaryRequestDigest(String mode,String entry,String exit,String execution)throws Exception{return AndroidTorProfile.digest(("routervpn-external-permission-v3\nexternal\n"+mode+"\n"+entry+"\n"+exit+"\n"+execution).getBytes(StandardCharsets.UTF_8));}
+    private void requireOrdinaryCapture(AndroidStandardExitStore.Entry entry,AndroidStandardExitStore.Entry exit,String mode,String execution,String entryDigest,String exitDigest)throws Exception{
+        AndroidStandardExitStore.validate(entry);AndroidStandardExitStore.validate(exit);
+        if(!AndroidExternalPolicy.supports(entry.protocol)||!AndroidTorProfile.isTor(exit.protocol)||entry.id.equals(exit.id)
+                ||!mode.equals(AndroidExternalPolicy.protocol(entry.protocol))||!"local".equals(execution))throw new IllegalStateException("The ordinary Tor path lost its selected entry, exit or Local execution.");
+        if(!entryDigest.matches("[0-9a-f]{64}")||!entryDigest.equals(externalDigest(entry))||!entryDigest.equals(externalDigest(exitStore.get(entry.id)))
+                ||!exitDigest.matches("[0-9a-f]{64}")||!exitDigest.equals(externalDigest(exit))||!exitDigest.equals(externalDigest(exitStore.get(exit.id))))throw new IllegalStateException("The captured ordinary Tor node changed.");
+    }
     private void requireExternalCapture(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,boolean direct,String nodeDigest,String exitDigest)throws Exception{
         if(exit==null||!exitDigest.matches("[0-9a-f]{64}")||!exitDigest.equals(externalDigest(exit))||!exitDigest.equals(externalDigest(exitStore.get(exit.id))))throw new IllegalStateException("The captured external profile changed.");
         if(direct){if(!nodeDigest.isEmpty())throw new IllegalStateException("A direct external path acquired another entry.");}
@@ -364,6 +424,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         if(pendingStartup!=null)out.putString(STATE_STARTUP,pendingStartup.nonce);
         if(pendingNode!=null)out.putString(STATE_NODE,pendingNode.id);if(pendingEntry!=null)out.putString(STATE_ENTRY,pendingEntry.id);if(pendingExit!=null)out.putString(STATE_EXIT,pendingExit.id);out.putString(STATE_EXIT_MODE,pendingExitMode);out.putString("multihop_execution_pending",pendingExecution);out.putString("multihop_entry_mode_pending",pendingEntryMode);
         if(pendingStandardExit!=null)out.putString(STATE_STANDARD_EXIT,pendingStandardExit.id);out.putBoolean(STATE_EXTERNAL_DIRECT,pendingExternalDirect);
+        if(pendingOrdinaryEntry!=null)out.putString(STATE_ORDINARY_ENTRY,pendingOrdinaryEntry.id);
         if("external".equals(pendingMode)){out.putString("external_profile_digest_pending",pendingExternalDigest);out.putString("external_entry_digest_pending",pendingEntryDigest);out.putString("external_request_digest_pending",pendingExternalRequestDigest);}
     }
 
@@ -374,12 +435,33 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
             catch(Exception stale){clearPending();if(captured!=null)captured.cancel();callback.finished(false,"Automatic startup was not restored: "+safe(stale));}
             return;
         }
-        if(in==null||!in.getBoolean(STATE_PENDING,false))return;String mode=in.getString(STATE_MODE,"");if(mode==null||mode.trim().isEmpty())return;pendingMode=mode.trim();ArrayList<String>layers=in.getStringArrayList(STATE_LAYERS);pendingLayers=layers==null?Collections.emptyList():new ArrayList<>(layers);pendingNode=findNode(in.getString(STATE_NODE,""));pendingEntry=findNode(in.getString(STATE_ENTRY,""));pendingExit=findNode(in.getString(STATE_EXIT,""));pendingEntryMode=in.getString("multihop_entry_mode_pending","wg");if(!NativeSingBoxController.nativeMultihopEntry(pendingEntryMode)){clearPending();callback.finished(false,"Pending entry mode is invalid.");return;}pendingExecution=in.getString("multihop_execution_pending","local");if(!java.util.Arrays.asList("local","server","auto").contains(pendingExecution)){clearPending();callback.finished(false,"Pending multihop execution is invalid.");return;}pendingExitMode=in.getString(STATE_EXIT_MODE,"");if(pendingExitMode==null)pendingExitMode="";pendingStandardExit=findStandardExit(in.getString(STATE_STANDARD_EXIT,""));pendingExternalDirect=in.getBoolean(STATE_EXTERNAL_DIRECT,false);
+        if(in==null||!in.getBoolean(STATE_PENDING,false))return;
+        String mode=in.getString(STATE_MODE,"");if(mode==null||mode.trim().isEmpty())return;pendingMode=mode.trim();
+        ArrayList<String>layers=in.getStringArrayList(STATE_LAYERS);pendingLayers=layers==null?Collections.emptyList():new ArrayList<>(layers);
+        pendingNode=findNode(in.getString(STATE_NODE,""));pendingEntry=findNode(in.getString(STATE_ENTRY,""));pendingExit=findNode(in.getString(STATE_EXIT,""));
+        pendingOrdinaryEntry=findStandardExit(in.getString(STATE_ORDINARY_ENTRY,""));pendingEntryMode=in.getString("multihop_entry_mode_pending","wg");
+        if(in.containsKey(STATE_ORDINARY_ENTRY)&&(!"external".equals(pendingMode)||pendingOrdinaryEntry==null||pendingEntry!=null)
+                ||pendingOrdinaryEntry==null&&!NativeSingBoxController.nativeMultihopEntry(pendingEntryMode)){clearPending();callback.finished(false,"Pending entry mode or kind is invalid.");return;}
+        pendingExecution=in.getString("multihop_execution_pending","local");if(!java.util.Arrays.asList("local","server","auto").contains(pendingExecution)){clearPending();callback.finished(false,"Pending multihop execution is invalid.");return;}
+        pendingExitMode=in.getString(STATE_EXIT_MODE,"");if(pendingExitMode==null)pendingExitMode="";
+        pendingStandardExit=findStandardExit(in.getString(STATE_STANDARD_EXIT,""));pendingExternalDirect=in.getBoolean(STATE_EXTERNAL_DIRECT,false);
         if("multihop".equals(pendingMode)&&(pendingEntry==null||pendingExit==null||pendingEntry.id.equals(pendingExit.id)||pendingExitMode.isEmpty())){clearPending();callback.finished(false,"Pending multihop permission state could not be restored safely; choose the hops again.");return;}
-        if("external".equals(pendingMode)&&(pendingStandardExit==null||(!pendingExternalDirect&&pendingEntry==null))){clearPending();callback.finished(false,"Pending external Speed Lab path disappeared before Android VPN permission completed.");return;}
+        if("external".equals(pendingMode)&&(pendingStandardExit==null||(!pendingExternalDirect&&pendingEntry==null&&pendingOrdinaryEntry==null)||pendingExternalDirect&&pendingOrdinaryEntry!=null)){clearPending();callback.finished(false,"Pending external Speed Lab path disappeared before Android VPN permission completed.");return;}
         if("external".equals(pendingMode)){
             pendingExternalDigest=in.getString("external_profile_digest_pending","");pendingEntryDigest=in.getString("external_entry_digest_pending","");pendingExternalRequestDigest=in.getString("external_request_digest_pending","");
-            try{requireExternalCapture(pendingEntry,pendingStandardExit,pendingExternalDirect,pendingEntryDigest,pendingExternalDigest);AndroidStandardExitStore.validateExecution(pendingStandardExit,!pendingExternalDirect,pendingExecution);if(!pendingExternalRequestDigest.equals(externalRequestDigest(pendingExternalDirect,pendingEntryMode,pendingEntryDigest,pendingExternalDigest,pendingExecution)))throw new IllegalStateException("The external request identity changed.");pendingStandardExit=AndroidStandardExitStore.copy(pendingStandardExit);}
+            try{
+                final String expected;
+                if(pendingOrdinaryEntry!=null){
+                    requireOrdinaryCapture(pendingOrdinaryEntry,pendingStandardExit,pendingEntryMode,pendingExecution,pendingEntryDigest,pendingExternalDigest);
+                    expected=ordinaryRequestDigest(pendingEntryMode,pendingEntryDigest,pendingExternalDigest,pendingExecution);
+                    pendingOrdinaryEntry=AndroidStandardExitStore.copy(pendingOrdinaryEntry);
+                }else{
+                    requireExternalCapture(pendingEntry,pendingStandardExit,pendingExternalDirect,pendingEntryDigest,pendingExternalDigest);
+                    AndroidStandardExitStore.validateExecution(pendingStandardExit,!pendingExternalDirect,pendingExecution);
+                    expected=externalRequestDigest(pendingExternalDirect,pendingEntryMode,pendingEntryDigest,pendingExternalDigest,pendingExecution);
+                }
+                if(!pendingExternalRequestDigest.equals(expected))throw new IllegalStateException("The external request identity changed.");pendingStandardExit=AndroidStandardExitStore.copy(pendingStandardExit);
+            }
             catch(Exception changed){clearPending();callback.finished(false,"The captured external permission request changed; select the path again.");return;}
         }
         if(!"multihop".equals(pendingMode)&&!"external".equals(pendingMode)&&in.containsKey(STATE_NODE)&&pendingNode==null){clearPending();callback.finished(false,"Pending test node disappeared before Android VPN permission completed.");return;}
@@ -428,14 +510,17 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     private void requestPermission(String label) { Intent permission=VpnService.prepare(activity);if(permission==null){startPending();return;}if(pendingCallback!=null)pendingCallback.progress("Waiting for Android VPN permission for "+label+"…");activity.startActivityForResult(permission,PREPARE_UNIFIED); }
 
     private void startPending() {
-        final String mode=pendingMode;final List<String>layers=new ArrayList<>(pendingLayers);final AndroidNodeStore.Node node=pendingNode,entry=pendingEntry,exit=pendingExit;final AndroidStandardExitStore.Entry standardExit=pendingStandardExit;final boolean externalDirect=pendingExternalDirect;final String entryMode=pendingEntryMode;final String execution=pendingExecution;final String exitMode=pendingExitMode;final String externalDigest=pendingExternalDigest,entryDigest=pendingEntryDigest;final Callback callback=pendingCallback;final AndroidStartupPolicy.Attempt startup=pendingStartup;clearPending();if(callback==null)return;
+        final String mode=pendingMode;final List<String>layers=new ArrayList<>(pendingLayers);final AndroidNodeStore.Node node=pendingNode,entry=pendingEntry,exit=pendingExit;final AndroidStandardExitStore.Entry standardExit=pendingStandardExit,ordinaryEntry=pendingOrdinaryEntry;final boolean externalDirect=pendingExternalDirect;final String entryMode=pendingEntryMode;final String execution=pendingExecution;final String exitMode=pendingExitMode;final String externalDigest=pendingExternalDigest,entryDigest=pendingEntryDigest;final Callback callback=pendingCallback;final AndroidStartupPolicy.Attempt startup=pendingStartup;clearPending();if(callback==null)return;
         try{if(isActiveOrTransitioning())throw new IllegalStateException("Another path owns the pending connection.");callback.validate();if(startup!=null){startup.requireCurrent(activity,nodeStore,this);startup.dispatched();}}catch(Exception stale){if(startup!=null)startup.cancel();callback.finished(false,safe(stale));return;}
         if("multihop".equals(mode)){if(entry==null||exit==null||entry.id.equals(exit.id)||exitMode.isEmpty()){callback.finished(false,"Multihop selection expired; choose entry and exit again.");return;}multihop.connect(entry,exit,exitMode,execution,entryMode,new AndroidMultihopRuntime.Callback(){@Override public void owned(String session){activity.runOnUiThread(()->callback.owned(session));}@Override public void progress(String message){activity.runOnUiThread(()->callback.progress(message));}@Override public void finished(boolean ok,String message){activity.runOnUiThread(()->callback.finished(ok,message));}});return;}
         if("external".equals(mode)){
-            try{if(isActiveOrTransitioning())throw new IllegalStateException("Another VPN owns the current path.");requireExternalCapture(entry,standardExit,externalDirect,entryDigest,externalDigest);if(!externalDirect&&!NativeSingBoxController.nativeMultihopEntry(entryMode))throw new IllegalArgumentException("The captured entry mode changed.");}
+            try{if(isActiveOrTransitioning())throw new IllegalStateException("Another VPN owns the current path.");
+                if(ordinaryEntry!=null){if(externalDirect||entry!=null)throw new IllegalStateException("The captured ordinary entry kind changed.");requireOrdinaryCapture(ordinaryEntry,standardExit,entryMode,execution,entryDigest,externalDigest);}
+                else{requireExternalCapture(entry,standardExit,externalDirect,entryDigest,externalDigest);if(!externalDirect&&!NativeSingBoxController.nativeMultihopEntry(entryMode))throw new IllegalArgumentException("The captured entry mode changed.");}
+            }
             catch(Exception changed){callback.finished(false,"The captured external path changed during Android permission; select it again.");return;}
             AndroidStandardExitRuntime.Callback bridge=new AndroidStandardExitRuntime.Callback(){@Override public void owned(String homeSession){activity.runOnUiThread(()->callback.owned(homeSession));}@Override public void progress(String message){activity.runOnUiThread(()->callback.progress(message));}@Override public void finished(boolean ok,String message){activity.runOnUiThread(()->callback.finished(ok,message));}};
-            if(externalDirect)runtime.standardExit.connectDirect(standardExit,bridge);else runtime.standardExit.connect(entry.file,standardExit,entryMode,execution,bridge);return;
+            if(ordinaryEntry!=null)runtime.standardExit.connectOrdinary(ordinaryEntry,standardExit,execution,bridge);else if(externalDirect)runtime.standardExit.connectDirect(standardExit,bridge);else runtime.standardExit.connect(entry.file,standardExit,entryMode,execution,bridge);return;
         }
         final File bundle;try{bundle=node!=null?node.file:activeBundle();if(bundle==null||!bundle.isFile()||bundle.length()<=0)throw new IllegalStateException("Requested Router VPN node bundle is missing.");}catch(Exception error){callback.finished(false,safe(error));return;}
         AndroidModeOrchestrator.Callback bridge=new AndroidModeOrchestrator.Callback(){@Override public void owned(String session){activity.runOnUiThread(()->callback.owned(session));}@Override public void proved(String session,String raw,String source){if(node==null||startup!=null)AndroidStartupPolicy.recordProven(activity,nodeStore,bundle,session,raw,source);}@Override public void progress(String message){activity.runOnUiThread(()->callback.progress(message));}@Override public void finished(boolean ok,String modeId,String message){activity.runOnUiThread(()->callback.finished(ok,message));}};
@@ -445,7 +530,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     private AndroidNodeStore.Node findNode(String id){if(id==null||id.isEmpty())return null;try{for(AndroidNodeStore.Node node:nodeStore.list())if(id.equals(node.id))return node;}catch(Exception ignored){}return null;}
     private AndroidStandardExitStore.Entry findStandardExit(String id){if(id==null||id.isEmpty())return null;try{return exitStore.get(id);}catch(Exception ignored){return null;}}
     private File activeBundle() throws Exception {String id=nodeStore.activeId();if(id==null||id.trim().isEmpty())throw new IllegalStateException("Pair/import and select a Router VPN node first.");File file=nodeStore.file(id);if(file==null||!file.isFile()||file.length()<=0)throw new IllegalStateException("Selected Router VPN node bundle is missing.");return file;}
-    private void clearPending(){pendingStartup=null;pendingEntryMode="wg";pendingExecution="local";pendingMode="";pendingLayers=Collections.emptyList();pendingNode=null;pendingEntry=null;pendingExit=null;pendingStandardExit=null;pendingExternalDirect=false;pendingExitMode="";pendingExternalDigest="";pendingEntryDigest="";pendingExternalRequestDigest="";pendingCallback=null;}
+    private void clearPending(){pendingStartup=null;pendingEntryMode="wg";pendingExecution="local";pendingMode="";pendingLayers=Collections.emptyList();pendingNode=null;pendingEntry=null;pendingExit=null;pendingStandardExit=null;pendingOrdinaryEntry=null;pendingExternalDirect=false;pendingExitMode="";pendingExternalDigest="";pendingEntryDigest="";pendingExternalRequestDigest="";pendingCallback=null;}
     private static String displayMode(String mode){if("smart-auto".equals(mode))return"SMART AUTO";if("auto".equals(mode))return"AUTO";if("multihop".equals(mode))return"multihop";if("external".equals(mode))return"external exit";if(mode.startsWith("custom:"))return"CUSTOM";return mode.toUpperCase();}
     private static String safe(Throwable error){String value=error==null?"":error.getMessage();return value==null||value.trim().isEmpty()?"Router VPN connection error":value.trim();}
     @Override public void close(){clearPending();}

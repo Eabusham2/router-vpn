@@ -15,7 +15,7 @@ settings = read("AndroidProfileSettingsDialog.java")
 node_store = read("AndroidNodeStore.java")
 
 for marker in (
-    'SCHEMA_VERSION=4',
+    'SCHEMA_VERSION=5',
     'FILE_NAME="connection-profiles-v4.json"',
     'LEGACY_FILE_NAME="connection-profiles-v1.json"',
     'schema < 1 || schema > SCHEMA_VERSION',
@@ -35,7 +35,12 @@ for marker in (
     'snapshotPreferences()', 'restorePreferences(originalPreferences)',
     '"external_policy"', '"entry_policy"', '"exit_policy"',
     'requireExternalIdentity', 'selectExternalPath', 'currentExternalPath',
-    'AndroidConnectionProfilePolicy.external', 'exits.save(updatedExternal)', 'exits.save(originalExternal)',
+    'AndroidConnectionProfilePolicy.external', 'exits.saveIfUnchanged(updatedExternal', 'restoreExternal(originalExternal,updatedExternal)',
+    '"multihop_entry_kind"', '"ordinary_entry_protocol"', '"ordinary_entry_public_ip"',
+    '"ordinary_entry_policy"', '"ordinary_entry_startup"', 'requireOrdinaryIdentity', 'selectOrdinaryTorPath',
+    'return entry==null&&ordinaryEntry==null', 'AndroidTorProfile.compileOrdinary(ordinaryEntry,exit,"selection-validation",execution)',
+    'exits.saveIfUnchanged(updatedOrdinary', 'restoreExternal(originalOrdinary,updatedOrdinary)',
+    'if(!ours.equals(current))', 'exits.saveIfUnchanged(original,ours)',
     'nodes.importBundle(originalBundle)',
     'requireIdle("saving a connection profile")', 'requireIdle("loading a connection profile")',
     'requireIdle("updating a connection profile")', 'requireIdle("deleting a connection profile")',
@@ -64,7 +69,7 @@ assert 'profile.remove(key)' in stage, "Loading saved choices must also restore 
 
 product = read('ProductActivity.java')
 activity = read('StandardExitActivity.java')
-assert 'connection.connectExternal(path.entry,path.exit,path.direct(),path.entryMode,path.execution,callback())' in product
+assert 'connection.connectExternal(path,callback())' in product
 assert 'if(openSelectedExternal(true))return;' in product
 assert 'rememberExternalPath(entry,exit,entryMode)' in activity
 assert 'selectExternalPath(exit,entry,mode,pendingExecution)' in activity

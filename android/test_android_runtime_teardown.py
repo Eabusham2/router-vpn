@@ -117,6 +117,9 @@ final class AndroidMultihopController {
     }
 }
 final class AndroidStandardExitStore {
+    static final java.util.Map<String,Entry> saved=new java.util.concurrent.ConcurrentHashMap<>();
+    AndroidStandardExitStore(Context c){} Entry get(String id){Entry e=saved.get(id);if(e==null)throw new IllegalArgumentException("missing captured provider");return copy(e);}
+    static String snapshot(Entry e){return e.id+"\n"+e.name+"\n"+e.protocol+"\n"+e.expectedPublicIp;}
     static final class Entry {
         String id="external", name="external", protocol="socks5", expectedPublicIp="1.1.1.1";
     }
@@ -124,8 +127,12 @@ final class AndroidStandardExitStore {
     static void validate(Entry entry){}
     static void validateExecution(Entry entry,boolean hasEntry,String execution){if(!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalArgumentException("execution");}
 }
-final class AndroidTorProfile {static boolean isTor(String protocol){return "tor".equals(protocol)||"tor-bridge".equals(protocol);}}
-final class AndroidExternalPolicy {static volatile String entryVersion="captured-entry";static String entryDigest(File file){return entryVersion;}
+final class AndroidTorProfile {
+ static int ordinaryPreparations;static AndroidStandardExitStore.Entry lastOrdinary;static Runnable beforePrepared;
+ static boolean isTor(String protocol){return "tor".equals(protocol)||"tor-bridge".equals(protocol);}
+ static NativeSingBoxController.SessionInfo prepareOrdinary(Context c,AndroidStandardExitStore.Entry entry,AndroidStandardExitStore.Entry exit,String execution){if(!execution.equals("local")||!isTor(exit.protocol))throw new AssertionError("ordinary boundary acquired private authority");ordinaryPreparations++;lastOrdinary=AndroidStandardExitStore.copy(entry);if(beforePrepared!=null)beforePrepared.run();return new NativeSingBoxController.SessionInfo();}
+}
+final class AndroidExternalPolicy {static String protocol(String p){return p.equals("http")?"http-connect":p.equals("https")?"https-connect":p;}static volatile String entryVersion="captured-entry";static String entryDigest(File file){return entryVersion;}
     // PRODUCTION_EXTERNAL_PREDICATE
 }
 final class AndroidStandardExitController {
@@ -240,7 +247,7 @@ public final class RuntimeTeardownHarness {
         final AndroidMultihopRuntime multihop; final AndroidStandardExitRuntime external;
         final String kind;
         Owner(String kind) {
-            this.kind=kind;LayeredVpnService.selectedOverride="";LayeredVpnService.serverPins="{}";LayeredVpnService.staleCapture=false;AndroidMultihopController.changedSources.clear();AndroidMultihopController.lastPins="";LayeredVpnService.torReads.set(0);LayeredVpnService.torExecutionReads.set(0);LayeredVpnService.torExecutionOverride="";AndroidStandardExitController.lastExecution="";LayeredVpnService.torHealthy=true;publicProofs.set(0);
+            this.kind=kind;AndroidStandardExitStore.saved.clear();AndroidTorProfile.ordinaryPreparations=0;AndroidTorProfile.lastOrdinary=null;AndroidTorProfile.beforePrepared=null;LayeredVpnService.selectedOverride="";LayeredVpnService.serverPins="{}";LayeredVpnService.staleCapture=false;AndroidMultihopController.changedSources.clear();AndroidMultihopController.lastPins="";LayeredVpnService.torReads.set(0);LayeredVpnService.torExecutionReads.set(0);LayeredVpnService.torExecutionOverride="";AndroidStandardExitController.lastExecution="";LayeredVpnService.torHealthy=true;publicProofs.set(0);
             LayeredVpnService.externalReads.set(0);LayeredVpnService.externalHealthy=true;
             LayeredVpnService.discarded.set(0);
             AndroidHomeStateStore.reset(); LayeredVpnService.mtuStarts.set(0); LayeredVpnService.mtuEntered=null;LayeredVpnService.mtuRelease=null;
@@ -270,8 +277,44 @@ public final class RuntimeTeardownHarness {
         while(owner.busy()&&System.nanoTime()<deadline)Thread.sleep(5);
         check(!owner.busy(),"worker did not release ownership after completion");
     }
+    static AndroidStandardExitStore.Entry ordinary(String protocol){AndroidStandardExitStore.Entry value=new AndroidStandardExitStore.Entry();value.id="ordinary-entry";value.protocol=protocol;value.name="provider-only source";AndroidStandardExitStore.saved.put(value.id,AndroidStandardExitStore.copy(value));return value;}
+    static AndroidStandardExitStore.Entry torExit(){AndroidStandardExitStore.Entry value=new AndroidStandardExitStore.Entry();value.protocol="tor-bridge";value.expectedPublicIp="";AndroidStandardExitStore.saved.put(value.id,AndroidStandardExitStore.copy(value));return value;}
+    static void ordinaryTorTests(){
+        for(String protocol:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"})test("ordinary "+protocol+" → Tor owns native preparation and proof",()->{
+            try(Owner owner=new Owner("tor")){AndroidStandardExitStore.Entry entry=ordinary(protocol),exit=torExit();String source=AndroidStandardExitStore.snapshot(entry);Callback cb=new Callback(0);owner.external.connectOrdinary(entry,exit,"local",cb);cb.awaitDone();
+                check(cb.ok&&owner.engine.starts.get()==1&&AndroidTorProfile.ordinaryPreparations==1,"ordinary path failed to launch its one captured native graph");
+                AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.current;
+                check(home.activeEntryId.equals(entry.id)&&home.activeEntryMode.equals(AndroidExternalPolicy.protocol(protocol))&&home.activeExternalId.equals(exit.id),"ordinary native owner changed typed path identity");
+                check(LayeredVpnService.torReads.get()>=2&&LayeredVpnService.mtuStarts.get()==1&&publicProofs.get()==0,"ordinary Tor bypassed native proof or MTU ownership");
+                AndroidStandardExitStore.Entry captured=owner.external.capturedOrdinaryEntry(home);check(source.equals(AndroidStandardExitStore.snapshot(captured)),"ordinary runtime failed exact source capture");captured.name="caller mutation";check(source.equals(AndroidStandardExitStore.snapshot(owner.external.capturedOrdinaryEntry(home))),"ordinary runtime exposed mutable source authority");
+                check(owner.external.capturedExternalExecution(home).equals("local")&&owner.external.capturedRequestedExecution(home).equals("local"),"ordinary runtime borrowed server execution");
+                owner.disconnect();awaitIdle(owner);boolean rejected=false;try{owner.external.capturedOrdinaryEntry(home);}catch(Exception expected){rejected=true;}check(rejected,"closed ordinary proof still authorized source capture");
+            }
+        });
+        for(String fault:new String[]{"entry-replaced","entry-removed","exit-replaced","exit-removed","cancel"})test("ordinary Tor preparation rejects "+fault,()->{
+            try(Owner owner=new Owner("tor")){AndroidStandardExitStore.Entry entry=ordinary("socks5"),exit=torExit();Callback cb=new Callback(1);owner.external.connectOrdinary(entry,exit,"local",cb);cb.awaitEntered();
+                try{if(fault.equals("entry-replaced")){entry.name+=" replacement";AndroidStandardExitStore.saved.put(entry.id,entry);}if(fault.equals("entry-removed"))AndroidStandardExitStore.saved.remove(entry.id);if(fault.equals("exit-replaced")){exit.name+=" replacement";AndroidStandardExitStore.saved.put(exit.id,exit);}if(fault.equals("exit-removed"))AndroidStandardExitStore.saved.remove(exit.id);if(fault.equals("cancel"))owner.disconnect();}finally{cb.release.countDown();}
+                cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0&&!AndroidHomeStateStore.current.connected,"changed ordinary source or cancelled owner reached engine start");check(LayeredVpnService.discarded.get()==1,"failed ordinary preparation leaked its staged session");awaitIdle(owner);
+            }
+        });
+        for(String fault:new String[]{"source","cancel"})test("ordinary Tor queued request rejects "+fault,()->{
+            try(Owner owner=new Owner("tor")){AndroidStandardExitStore.Entry entry=ordinary("socks5"),exit=torExit();java.lang.reflect.Field field=AndroidStandardExitRuntime.class.getDeclaredField("executor");field.setAccessible(true);java.util.concurrent.ExecutorService executor=(java.util.concurrent.ExecutorService)field.get(owner.external);
+                CountDownLatch occupied=new CountDownLatch(1),release=new CountDownLatch(1);executor.submit(()->{occupied.countDown();try{release.await();}catch(InterruptedException e){Thread.currentThread().interrupt();}});check(occupied.await(3,TimeUnit.SECONDS),"ordinary queue was not held");
+                Callback cb=new Callback(0);try{owner.external.connectOrdinary(entry,exit,"local",cb);if(fault.equals("source")){entry.name+=" replaced";AndroidStandardExitStore.saved.put(entry.id,entry);}else owner.disconnect();}finally{release.countDown();}cb.awaitDone();check(!cb.ok&&AndroidTorProfile.ordinaryPreparations==0&&owner.engine.starts.get()==0,"changed queued source reached native preparation");awaitIdle(owner);
+            }
+        });
+        for(String fault:new String[]{"entry","exit"})test("ordinary Tor late proof rejects changed "+fault,()->{
+            try(Owner owner=new Owner("tor")){AndroidStandardExitStore.Entry entry=ordinary("socks5"),exit=torExit();Callback cb=new Callback(3);owner.external.connectOrdinary(entry,exit,"local",cb);cb.awaitEntered();
+                try{AndroidStandardExitStore.Entry changed=fault.equals("entry")?entry:exit;changed.name+=" replaced while proving";AndroidStandardExitStore.saved.put(changed.id,changed);}finally{cb.release.countDown();}
+                cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==1&&owner.engine.stops.get()==1&&!AndroidHomeStateStore.current.connected,"late ordinary proof adopted replaced source");check(LayeredVpnService.mtuStarts.get()==0&&LayeredVpnService.discarded.get()==1,"late ordinary source loss retained MTU or staged owner");awaitIdle(owner);
+            }
+        });
+        for(String fault:new String[]{"server","auto","duplicate","wrong-exit","tor-entry"})test("ordinary Tor rejects invalid authority "+fault,()->{
+            try(Owner owner=new Owner("tor")){AndroidStandardExitStore.Entry entry=ordinary("socks5"),exit=torExit();if(fault.equals("duplicate"))exit.id=entry.id;if(fault.equals("wrong-exit"))exit.protocol="socks5";if(fault.equals("tor-entry"))entry.protocol="tor";Callback cb=new Callback(0);owner.external.connectOrdinary(entry,exit,fault.equals("server")||fault.equals("auto")?fault:"local",cb);cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0&&AndroidTorProfile.ordinaryPreparations==0,"ordinary input acquired unavailable path authority");}
+        });
+    }
     static void tests(String kind) {
-        if("tor".equals(kind))torTests();
+        if("tor".equals(kind)){torTests();ordinaryTorTests();}
         if("external".equals(kind))externalTests();
         {
             test(kind+" temporary cleanup retains its exact Home owner",()->{

@@ -13,14 +13,6 @@ spec = importlib.util.spec_from_file_location("tor_server_capture", ROOT / "andr
 T = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(T)
 T.EXTRA_SOURCES = ("AndroidStandardExitController",)
-T.TOR_BOUNDARIES += r'''
-final class AndroidExternalPolicy {
- static boolean supports(String protocol){return false;}
- static NativeSingBoxController.SessionInfo prepare(android.content.Context c,java.io.File f,AndroidStandardExitStore.Entry e,String mode)throws Exception{throw new AssertionError("Tor used ordinary external preparation");}
- static NativeSingBoxController.SessionInfo prepare(android.content.Context c,java.io.File f,AndroidStandardExitStore.Entry e,String mode,String execution,String restored)throws Exception{throw new AssertionError("Tor used ordinary external preparation");}
-}
-'''
-
 T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
  interface Attempt {void run()throws Exception;}
  static void rejection(Attempt task,String reason)throws Exception{boolean failed=false;try{task.run();}catch(Exception expected){failed=true;}check(failed,"Tor Server accepted "+reason);}

@@ -170,6 +170,7 @@ final class AndroidConnectionProfileStore {
  AndroidConnectionProfileStore(android.content.Context c,AndroidNodeStore nodes,AndroidStandardExitStore exits){context=c;}
  void selectExternalPath(AndroidStandardExitStore.Entry exit,AndroidNodeStore.Node entry,String mode){selected.put(context.getFilesDir().toString(),exit.id+"|"+(entry==null?"":entry.id)+"|"+mode);}
  void selectExternalPath(AndroidStandardExitStore.Entry exit,AndroidNodeStore.Node entry,String mode,String execution){selectExternalPath(exit,entry,mode);executions.put(context.getFilesDir().toString(),execution);}
+ void selectOrdinaryTorPath(AndroidStandardExitStore.Entry exit,AndroidStandardExitStore.Entry entry){selected.put(context.getFilesDir().toString(),exit.id+"|external:"+entry.id+"|"+AndroidExternalPolicy.protocol(entry.protocol));executions.put(context.getFilesDir().toString(),"local");}
 }
 final class AndroidVpnMutationGuard {static boolean busy;static boolean isBusy(android.content.Context c){return busy;}}
 final class AndroidHomeStateStore {
@@ -178,8 +179,9 @@ final class AndroidHomeStateStore {
 }
 final class AndroidStandardExitRuntime {
  interface Callback{void progress(String value);void finished(boolean success,String value);}
- int starts;String mode="",execution="local";java.io.File entry;AndroidStandardExitStore.Entry exit;
+ int starts;String mode="",execution="local";java.io.File entry;AndroidStandardExitStore.Entry exit,ordinaryEntry;
  void connectDirect(AndroidStandardExitStore.Entry value,Callback cb){starts++;exit=value;mode="external";}
+ void connectOrdinary(AndroidStandardExitStore.Entry entry,AndroidStandardExitStore.Entry value,String selected,Callback cb){starts++;ordinaryEntry=entry;exit=value;mode=AndroidExternalPolicy.protocol(entry.protocol);execution=selected;}
  void connect(java.io.File file,AndroidStandardExitStore.Entry value,String selected,Callback cb){starts++;entry=file;exit=value;mode=selected;}
  void connect(java.io.File file,AndroidStandardExitStore.Entry value,String selected,String execution,Callback cb){connect(file,value,selected,cb);this.execution=execution;}
  volatile int disconnects;String disconnectedSession="";boolean disconnectFails,disconnectReplaced;volatile Thread disconnectThread;java.util.concurrent.CountDownLatch disconnectEntered,disconnectRelease;
@@ -379,6 +381,66 @@ public final class TorFormHarness {
   if(kind.equals("shadowsocks")){e.method="2022-blake3-aes-256-gcm";e.secret=key;}if(kind.equals("hysteria2"))e.secret="private-hy2-password";e.tlsServerName="exit.example.test";
   if(kind.equals("openvpn")){e.username=" private OpenVPN user ";e.password=" private OpenVPN password ";e.openVPNConfig="client\ndev tun\nproto udp\nremote 203.0.113.20 443\nremote 203.0.113.21 1194 tcp-client\nauth-user-pass\nremote-cert-tls server\n<ca>\n-----BEGIN CERTIFICATE-----\nfixture-only\n-----END CERTIFICATE-----\n</ca>\n";}
   return e;
+ }
+ static JSONObject torOwner(JSONObject graph)throws Exception{
+  JSONObject owner=null;JSONArray rows=graph.getJSONArray("outbounds");
+  for(int i=0;i<rows.length();i++)if(AndroidTorProfile.OUTBOUND.equals(rows.getJSONObject(i).optString("tag"))){check(owner==null,"ordinary Tor duplicated native owner");owner=rows.getJSONObject(i);}
+  check(owner!=null,"ordinary Tor native owner is absent");return owner;
+ }
+ interface OrdinaryAttempt{void run()throws Exception;}
+ static void rejectOrdinary(OrdinaryAttempt attempt,String reason)throws Exception{boolean rejected=false;try{attempt.run();}catch(Exception expected){rejected=true;}check(rejected,"ordinary Tor accepted "+reason);}
+ static void ordinaryTorProfiles()throws Exception{
+  int index=0;
+  for(String kind:List.of("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"))for(String torKind:Arrays.asList(KINDS)){
+   Path directory=Files.createTempDirectory(root,"ordinary-tor-profile-");Context context=new Context(directory.toFile());
+   AndroidStandardExitStore.Entry entry=ordinary(kind),exit=tor(torKind,new String[]{"tcp","dot","doh"}[index++%3]);
+   entry.policy=policy("custom","tcp").put("dns_host","9.9.9.9").put("dns_port",5353).put("kill_switch",false).put("kill_switch_policy","off");
+   exit.torPolicy.put("kill_switch",false).put("kill_switch_policy","off");
+   String entrySource=AndroidStandardExitStore.snapshot(entry),exitSource=AndroidStandardExitStore.snapshot(exit);
+   NativeSingBoxController.SessionInfo session=AndroidTorProfile.prepareOrdinary(context,entry,exit,"local");Path folder=directory.resolve("layered-sessions").resolve(session.sessionId);
+   String config=Files.readString(folder.resolve("sing-box.json")),raw=Files.readString(folder.resolve(AndroidTorProfile.SESSION_FILE));
+   JSONObject graph=new JSONObject(config),meta=AndroidTorProfile.session(config,raw,session.sessionId,session.modeId),owner=torOwner(graph);
+   check(session.modeId.equals("standard-"+exit.protocol)&&owner.getString("detour").equals("custom-exit"),"ordinary Tor fell back to a direct path or private entry");
+   JSONObject captured=AndroidExternalPolicy.captureTorPredecessor(entry),profile=meta.getJSONObject("tor_profile"),predecessor=meta.getJSONObject("predecessor_profile");
+   check(predecessor.getString("node_kind").equals("external")&&predecessor.getString("id").equals(entry.id)&&!predecessor.has("agent_token")&&!predecessor.has("node_proof_id"),"ordinary provider borrowed private Router authority");
+   check(same(predecessor.toString(),owner.getString("external_predecessor_profile"))&&same(captured.getString("config"),owner.getString("external_predecessor_config")),"ordinary Tor substituted source transport credentials or original source");
+   check(meta.getString("predecessor_config_sha256").equals(AndroidTorProfile.digest(owner.getString("external_predecessor_config").getBytes(StandardCharsets.UTF_8))),"ordinary Tor lost canonical source checksum");
+   check(profile.getString("multihop_entry_id").equals(entry.id)&&profile.getString("multihop_exit_id").equals(exit.id)&&profile.getString("multihop_entry_mode").equals(AndroidExternalPolicy.protocol(kind))&&profile.getString("multihop_execution").equals("local"),"ordinary Tor changed captured roles or execution");
+   check(graph.getJSONArray("inbounds").length()==1&&graph.getJSONArray("inbounds").getJSONObject(0).getInt("mtu")==1360,"ordinary Tor lost selected single-TUN MTU");
+   JSONObject dns=graph.getJSONObject("dns");boolean selectedDNS=false;
+   for(int i=0;i<dns.getJSONArray("servers").length();i++){JSONObject resolver=dns.getJSONArray("servers").getJSONObject(i);if(dns.getString("final").equals(resolver.optString("tag"))){selectedDNS=true;check(resolver.getString("server").equals("149.112.112.112")&&resolver.getString("detour").equals(AndroidTorProfile.OUTBOUND),"ordinary Tor DNS bypassed selected exit");}}
+   check(selectedDNS&&!Files.exists(folder.resolve(AndroidKillSwitchPolicy.SESSION_MARKER)),"ordinary Tor failed captured protection Off");
+   check(entrySource.equals(AndroidStandardExitStore.snapshot(entry))&&exitSource.equals(AndroidStandardExitStore.snapshot(exit)),"ordinary Tor preparation rewrote saved nodes");
+   for(String fault:List.of("source","profile","credentials","dns","route","mtu","detour","server","mode","lost-owner")){
+    JSONObject changed=new JSONObject(config),metadata=new JSONObject(raw),out=torOwner(changed);
+    switch(fault){
+     case "source":out.put("external_predecessor_config",out.getString("external_predecessor_config")+" ");break;
+     case "profile":metadata.getJSONObject("predecessor_profile").put("id","other-provider");break;
+     case "credentials":JSONObject source=new JSONObject(out.getString("external_predecessor_config"));source.put("experimental",new JSONObject().put("changed",true));out.put("external_predecessor_config",source.toString());metadata.put("predecessor_config_sha256",AndroidTorProfile.digest(source.toString().getBytes(StandardCharsets.UTF_8)));break;
+     case "dns":changed.getJSONObject("dns").put("final","selected-dns");break;
+     case "route":changed.getJSONObject("route").put("final","custom-exit");break;
+     case "mtu":changed.getJSONArray("inbounds").getJSONObject(0).put("mtu",1500);break;
+     case "detour":out.put("detour","proxy");break;
+     case "server":metadata.put("execution","server");break;
+     case "mode":metadata.put("entry_mode","wg");break;
+     case "lost-owner":metadata.remove("predecessor_profile");break;
+    }
+    String altered=changed.toString();metadata.put("config_sha256",AndroidTorProfile.digest(altered.getBytes(StandardCharsets.UTF_8)));
+    rejectOrdinary(()->AndroidTorProfile.session(altered,metadata.toString(),session.sessionId,session.modeId),"changed captured "+fault+" for "+kind);
+   }
+   String output=System.getenv("ROUTERVPN_ANDROID_ORDINARY_TOR_GRAPHS");
+   if(output!=null)Files.writeString(Path.of(output).resolve("ordinary-"+torKind+"-"+kind+".json"),config,StandardOpenOption.CREATE_NEW);
+  }
+  AndroidStandardExitStore.Entry entry=ordinary("socks5"),exit=tor("obfs4","tcp");entry.policy=policy("custom","tcp");
+  for(String execution:List.of("server","auto","compare",""))rejectOrdinary(()->AndroidTorProfile.compileOrdinary(entry,exit,"ordinary-invalid",execution),"private execution without Router entry: "+execution);
+  AndroidStandardExitStore.Entry home=AndroidStandardExitStore.copy(exit);home.torPolicy.put("dns_mode","home");rejectOrdinary(()->AndroidTorProfile.compileOrdinary(entry,home,"ordinary-home","local"),"Home DNS without private Router identity");
+  AndroidStandardExitStore.Entry sameID=AndroidStandardExitStore.copy(exit);sameID.id=entry.id;rejectOrdinary(()->AndroidTorProfile.compileOrdinary(entry,sameID,"ordinary-duplicate","local"),"same entry/exit identity");
+  for(String mutation:List.of("entry","exit","cancel")){
+   Path directory=Files.createTempDirectory(root,"ordinary-tor-stale-");AndroidStandardExitStore.Entry a=AndroidStandardExitStore.copy(entry),b=AndroidStandardExitStore.copy(exit);
+   io.nekohasekai.libbox.Libbox.afterCheck=()->{if(mutation.equals("entry"))a.password+=" replacement";else if(mutation.equals("exit"))b.name+=" replacement";else Thread.currentThread().interrupt();};
+   try{rejectOrdinary(()->AndroidTorProfile.prepareOrdinary(new Context(directory.toFile()),a,b,"local"),"stale preparation "+mutation);}finally{io.nekohasekai.libbox.Libbox.afterCheck=null;Thread.interrupted();}
+   check(!Files.exists(directory.resolve("layered-sessions")),"stale ordinary Tor preparation staged private material");
+  }
  }
  static void ordinaryHomeDrafts()throws Exception{
   for(String kind:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"})for(String mode:new String[]{"missing","","home"}){
@@ -697,12 +759,42 @@ public final class TorFormHarness {
    }
   }
  }
- public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();independentPolicyEdits();jumboPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();externalExecutionForm();packetExecutionForms();openVPNExecutionForms();openVPNResponseMaps();openVPNLayerMaps();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();startupSettings();protectionSettings();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
+ static void ordinaryTorUI()throws Exception{
+  for(String protocol:List.of("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"))for(boolean selectionOnly:new boolean[]{false,true})for(boolean restored:new boolean[]{false,true}){
+   Path directory=Files.createTempDirectory(root,"ordinary-tor-ui-");StandardExitActivity picker=activity(directory,null);AndroidNodeStore.Node collision=node(directory);
+   AndroidStandardExitStore.Entry entry=ordinary(protocol),exit=tor("obfs4","doh");entry.id=collision.id;entry.policy=policy("custom","tcp");store(picker).save(entry);store(picker).save(exit);
+   String entrySource=AndroidStandardExitStore.snapshot(entry),exitSource=AndroidStandardExitStore.snapshot(exit);
+   if(selectionOnly)picker.intent.putExtra(StandardExitActivity.EXTRA_SELECT_PATH,true);
+   invoke(picker,"chooseEntry",exit);AlertDialog choices=AlertDialog.last;
+   check(choices.itemsVisible()&&choices.items.length==2&&choices.items[0].contains("Router VPN")&&choices.items[1].contains(protocol),"ordinary Tor picker omitted typed entry or hid choices");choices.clickItem(1);
+   check(AndroidConnectionProfileStore.selected.get(directory.toString()).equals(exit.id+"|external:"+entry.id+"|"+AndroidExternalPolicy.protocol(protocol))&&AndroidConnectionProfileStore.executions.get(directory.toString()).equals("local"),"ordinary Tor selection persisted another entry kind or mode");
+   if(selectionOnly){check(picker.finished&&picker.permission==null&&AndroidRuntimeRegistry.get(picker).standardExit.starts==0,"ordinary selection-only requested permission or started native engine");continue;}
+   check(picker.permissionRequest==2101&&AndroidRuntimeRegistry.get(picker).standardExit.starts==0,"ordinary Tor picker bypassed VPN permission");Bundle state=new Bundle();picker.onSaveInstanceState(state);
+   check(state.getString("pending_ordinary_entry","").equals(entry.id)&&state.getString("pending_entry","").isEmpty()&&(entry.password.isEmpty()||!state.values.toString().contains(entry.password))&&!state.values.toString().contains("cert=Y2VydA"),"ordinary permission lost typed references or exposed private data");
+   if(restored)picker=activity(directory,state);picker.onActivityResult(2101,Activity.RESULT_OK,null);AndroidStandardExitRuntime runtime=AndroidRuntimeRegistry.get(picker).standardExit;
+   check(runtime.starts==1&&runtime.entry==null&&runtime.ordinaryEntry!=null&&entrySource.equals(AndroidStandardExitStore.snapshot(runtime.ordinaryEntry))&&exitSource.equals(AndroidStandardExitStore.snapshot(runtime.exit))&&runtime.execution.equals("local"),"ordinary UI permission substituted source or borrowed colliding private entry");
+  }
+  for(String fault:List.of("entry","exit","removed","kind","mode","server","direct","digest","denied","busy")){
+   Path directory=Files.createTempDirectory(root,"ordinary-tor-permission-");StandardExitActivity picker=activity(directory,null);AndroidNodeStore.Node collision=node(directory);
+   AndroidStandardExitStore.Entry entry=ordinary("socks5"),exit=tor("obfs4","doh");entry.id=collision.id;entry.policy=policy("custom","tcp");store(picker).save(entry);store(picker).save(exit);invoke(picker,"requestOrdinaryTor",entry,exit);Bundle state=new Bundle();picker.onSaveInstanceState(state);
+   if(fault.equals("entry")){entry.password+=" replacement";store(picker).save(entry);}if(fault.equals("exit")){exit.name+=" replacement";store(picker).save(exit);}if(fault.equals("removed"))store(picker).remove(entry.id);
+   if(fault.equals("kind")){state.values.remove("pending_ordinary_entry");state.putString("pending_entry",entry.id);}if(fault.equals("mode"))state.putString("pending_entry_mode","wg");if(fault.equals("server"))state.putString("pending_execution","server");if(fault.equals("direct"))state.putBoolean("pending_direct",true);if(fault.equals("digest"))state.putString("pending_entry_digest","0".repeat(64));
+   picker=activity(directory,state);if(fault.equals("busy"))AndroidVpnMutationGuard.busy=true;picker.onActivityResult(2101,fault.equals("denied")?0:Activity.RESULT_OK,null);AndroidVpnMutationGuard.busy=false;
+   check(AndroidRuntimeRegistry.get(picker).standardExit.starts==0&&get(picker,"pendingOrdinaryEntry")==null,"ordinary UI permission accepted changed source, kind or execution: "+fault);
+  }
+ }
+
+ public static void main(String[] args)throws Exception{root=Path.of(args[0]);if(args.length>1&&args[1].equals("ordinary-tor-only")){ordinaryTorProfiles();return;}roundtrips();independentPolicyEdits();jumboPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();ordinaryTorProfiles();ordinaryTorUI();externalExecutionForm();packetExecutionForms();openVPNExecutionForms();openVPNResponseMaps();openVPNLayerMaps();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();startupSettings();protectionSettings();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
 }
 '''
 
 
 def main():
+    output = os.environ.get("ROUTERVPN_ANDROID_ORDINARY_TOR_GRAPHS")
+    if output:
+        folder = Path(output)
+        if folder.is_symlink() or not folder.is_dir() or any(folder.iterdir()):
+            raise RuntimeError("Ordinary Tor parser fixtures require an existing empty owned directory")
     jar = Path(os.environ.get("ANDROID_JSON_JAR", "/usr/share/java/com.android.json.jar"))
     if not jar.is_file():
         raise RuntimeError("Android JSON implementation required")
@@ -745,10 +837,13 @@ def main():
                 begin = text.index(" private static String call(")
                 end = text.index(" public static String routerCompilePQProfile(", begin)
                 text = text[:begin] + T.P.PIPE_CALL + text[end:]
+                text = text.replace(" public static boolean rejectConfig;", " public static Runnable afterCheck;\n public static boolean rejectConfig;")
+                text = text.replace("new JSONObject(c);}", "new JSONObject(c);if(afterCheck!=null)afterCheck.run();}")
                 text = text.replace(" public static String routerCompilePQProfile(", r'''
  public static String routerCompileTorProfile(String profile,String session,String predecessor)throws Exception{return call("tor-profile",new JSONObject().put("Profile",profile).put("Session",session).toString(),predecessor);}
  public static void routerValidateTorProfile(String profile)throws Exception{call("tor-validate",profile,"");}
  public static String routerCompileTorProfileWithPredecessor(String profile,String session,String predecessor,String entry)throws Exception{return call("tor-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);}
+ public static String routerCompileTorProfileWithExternalPredecessor(String profile,String session,String predecessor,String entry)throws Exception{return call("tor-external-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);}
  public static String routerCompileServerTorProfileWithPredecessor(String profile,String session,String predecessor,String entry)throws Exception{return call("tor-server-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);}
  public static String routerCompileExternalPolicy(String config,String capture)throws Exception{return call("external-policy",config,capture);}
  public static void routerValidatePrivateNodeJSON(String raw)throws Exception{call("private-node-json",raw,"");}
@@ -781,6 +876,9 @@ def main():
         data.mkdir()
         environment = dict(os.environ, ROUTERVPN_GO_POLICY_TEST=str(native), ROUTERVPN_OPENVPN_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-aes-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-xor-client.json'))
         subprocess.run(["java", "-cp", str(work / "classes") + os.pathsep + str(jar), "com.eabusham.routervpn.TorFormHarness", str(data)], env=environment, check=True, timeout=120)
+        # Export only the unchanged positive shipping graphs. Mutated copies
+        # exercise guard rejection and must never replace native parser input.
+        environment.pop("ROUTERVPN_ANDROID_ORDINARY_TOR_GRAPHS", None)
         # Reintroduce each actual defect only in isolated compiled fixtures.
         # These controls establish that the Activity/Go checks fail for the
         # original behavior; neither working source nor positive classes change.

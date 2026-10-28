@@ -178,7 +178,7 @@ if "AES-256-GCM + XOR whitening — unavailable on this Android build" in androi
     errors.append("Android settings still advertise the retired pre-relay AES+XOR unavailable state")
 android_store = require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
-    "SCHEMA_VERSION=4", "connection-profiles-v4.json", "connection-profiles-v1.json", "MAX_PROFILES=64", "POLICY_KEYS", "requireIdle",
+    "SCHEMA_VERSION=5", "connection-profiles-v4.json", "connection-profiles-v1.json", "MAX_PROFILES=64", "POLICY_KEYS", "requireIdle",
     "home_lan_access", "kill_switch_policy", "ipv6_mode", "auto_require_encrypted", "auto_require_obfuscation",
     "mtu_policy", "dns_mode", "dns_protocol", "multihop_enabled", "multihop_entry_id", "multihop_exit_id",
     "node_kind", "node_id", "custom_layers", "Connection profile contains non-whitelisted node data",
