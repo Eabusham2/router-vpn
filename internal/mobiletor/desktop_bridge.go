@@ -198,9 +198,6 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 	if err := validateDesktopPhysicalEgress(profile, predecessor); err != nil {
 		return nil, err
 	}
-	if profile["daita_enabled"] == true {
-		return nil, errors.New("desktop Tor cannot discard a requested padding policy; its authenticated native implementation is still required")
-	}
 	var root, tun, selected map[string]any
 	if predecessor == nil {
 		selected, _, err = torSelectedDNS(profile, nil, false)
@@ -287,6 +284,17 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 		}
 	}
 	sourceSHA := desktopDigest(sourceBytes)
+	if padding.Enabled {
+		// Application sockets and selected-DNS exchanges must observe the
+		// actual native lease. The proof owner alone receives a short-lived
+		// private bypass, whose sockets drain before application admission.
+		socks["type"], socks["source_sha256"], socks["rate_kbps"] = DesktopTorPaddingOutboundType, sourceSHA, padding.RateKbps
+		selected["tag"] = DesktopTorPaddingDNSUpstreamTag
+		dns := root["dns"].(map[string]any)
+		servers := dns["servers"].([]any)
+		dns["servers"] = append(servers, map[string]any{"type": DesktopTorPaddingDNSType, "tag": profileDNS,
+			"upstream_tag": DesktopTorPaddingDNSUpstreamTag, "outbound_tag": ProfileOutboundTag, "session_id": sessionID, "source_sha256": sourceSHA})
+	}
 	// This exact Box service retires the native physical/PT generation on
 	// every network reset, including resets whose addresses are unchanged.
 	services, _ := root["services"].([]any)
@@ -376,14 +384,11 @@ func desktopBridgeProfile(source string) (map[string]any, Plan, int, error) {
 	}
 	normalized, _ := json.Marshal(profile)
 	var bridges []string
-	if profileString(profile, "multihop_execution") == "server" && desktopBridgeSavedRouterSelection(profile) {
-		// Idle validation and DNS selection may retain Server cover intent.
-		// Only the dedicated Server factory can build this execution; it binds
-		// the full private predecessor and actual bounded cover receipts.
-		profile, bridges, err = capturedTorProfileValues(string(normalized))
-	} else {
-		profile, bridges, err = capturedTorProfile(string(normalized))
-	}
+	// The desktop host captures this exact padding selection into the child
+	// session and requires its real native lease plus fresh DNS/exit receipts.
+	// Server execution still has its separate private-entry compiler below;
+	// parsing saved values alone grants neither execution nor proof authority.
+	profile, bridges, err = capturedTorProfileValues(string(normalized))
 	if err != nil {
 		return nil, Plan{}, 0, err
 	}

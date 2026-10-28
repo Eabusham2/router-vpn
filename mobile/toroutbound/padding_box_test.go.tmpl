@@ -1,0 +1,219 @@
+package box
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type torBoxPaddingFixture struct {
+	*torBoxFixture
+	config                    string
+	bound                     func(context.Context, mobiletor.DialContext) (mobiletor.Proof, time.Time, error)
+	current                   func() bool
+	starts, snapshots, closes atomic.Int32
+	status                    *mobiletor.NativePaddingProofStatus
+	statusError               bool
+	closeGate                 <-chan struct{}
+	closeEntered              chan struct{}
+}
+
+func (f *torBoxPaddingFixture) TorPaddingConfig() string { return f.config }
+func (f *torBoxPaddingFixture) TorPaddingPredecessorProof(ctx context.Context, session string, private *mobiletor.PredecessorProof, external *mobiletor.ExternalPredecessorProof) error {
+	if external != nil {
+		return errors.New("fixture has no ordinary predecessor")
+	}
+	_, err := f.TorProofWithPredecessor(ctx, session, private)
+	return err
+}
+func (f *torBoxPaddingFixture) BindTorPadding(current func() bool, verify func(context.Context, mobiletor.DialContext) (mobiletor.Proof, time.Time, error)) error {
+	if f.bound != nil || !current() {
+		return errors.New("changed native proof binding")
+	}
+	f.bound, f.current = verify, current
+	return nil
+}
+func (f *torBoxPaddingFixture) StartTorPadding(ctx context.Context, session string) (mobiletor.Proof, error) {
+	f.starts.Add(1)
+	if f.bound == nil || session != f.session || !f.current() {
+		return mobiletor.Proof{}, errors.New("missing native padding capture")
+	}
+	proof, dns, err := f.bound(ctx, nil)
+	if err != nil {
+		return mobiletor.Proof{}, err
+	}
+	f.status = &mobiletor.NativePaddingProofStatus{Receipt: &mobiletor.PaddingReceipt{Direction: "outgoing", Accounting: "tor-link-cell", SessionSHA256: strings.Repeat("a", 64), SourceSHA256: strings.Repeat("b", 64), Generation: 7, RateKbps: 64, ChannelCells: 1, ChannelBytes: 514, ObservedAt: time.Now().UnixMilli(), ExpiresAt: time.Now().Add(time.Second).UnixMilli()}, PathCheckedAt: proof.CheckedAt.UnixMilli(), DNSCheckedAt: dns.UnixMilli()}
+	return proof, nil
+}
+func (f *torBoxPaddingFixture) TorPaddingStatus(session string) (*mobiletor.NativePaddingProofStatus, error) {
+	f.snapshots.Add(1)
+	if session != f.session || f.statusError {
+		return nil, errors.New("native receipt expired")
+	}
+	return f.status, nil
+}
+func (f *torBoxPaddingFixture) CloseTor(ctx context.Context, session string) error {
+	f.closes.Add(1)
+	if session != f.session {
+		return errors.New("replacement session cleanup")
+	}
+	if f.closeEntered != nil {
+		select {
+		case <-f.closeEntered:
+		default:
+			close(f.closeEntered)
+		}
+	}
+	if f.closeGate != nil {
+		select {
+		case <-f.closeGate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+type torBoxPaddingCapture struct {
+	torBoxDNSCapture
+	graph       string
+	full        bool
+	pathCalls   atomic.Int32
+	pathFailure bool
+}
+
+func (c *torBoxPaddingCapture) ServerGraph(config string) bool {
+	return c.full && config == c.graph && c.Identity() != ""
+}
+func (c *torBoxPaddingCapture) EntryCurrent() bool { return c.Identity() != "" }
+func (c *torBoxPaddingCapture) TorPaddingExitProof(ctx context.Context, session string, _ mobiletor.DialContext) (mobiletor.Proof, error) {
+	c.pathCalls.Add(1)
+	if ctx.Err() != nil || c.calls.Load() == 0 || c.pathFailure || c.Identity() == "" {
+		return mobiletor.Proof{}, errors.New("fresh dynamic exit proof failed")
+	}
+	return mobiletor.Proof{SessionID: session, IsTor: true, IP: "203.0.113.42", CheckedAt: time.Now().UTC()}, nil
+}
+
+func TestRouterTorLocalPaddingRequiresCompleteGraphAndFreshDNSExitBeforeConnected(t *testing.T) {
+	for _, fault := range []string{"success", "missing-capture", "wrong-graph", "missing-tun", "dns", "path", "stale-entry", "stale-dns", "stale-exit"} {
+		t.Run(fault, func(t *testing.T) {
+			base := newTorBoxFixture(t, "captured")
+			f := &torBoxPaddingFixture{torBoxFixture: base, config: "complete-captured-source"}
+			var current atomic.Bool
+			current.Store(true)
+			r, err := newRouterTorProofRequest(t.Context(), f, f.session, "", current.Load)
+			if err != nil {
+				t.Fatal(err)
+			}
+			capture := &torBoxPaddingCapture{graph: f.config, full: true}
+			capture.valid.Store(true)
+			r.capture = capture
+			switch fault {
+			case "missing-capture":
+				r.capture = nil
+			case "wrong-graph":
+				capture.graph = "another-source"
+			case "missing-tun":
+				capture.full = false
+			case "dns":
+				capture.prove = func(context.Context) error { return errors.New("private-DNS-secret") }
+			case "path":
+				capture.pathFailure = true
+			case "stale-entry":
+				base.prove = func(context.Context, string, *mobiletor.PredecessorProof) (mobiletor.Proof, error) {
+					current.Store(false)
+					return mobiletor.Proof{SessionID: f.session, IsTor: true}, nil
+				}
+			case "stale-dns":
+				capture.prove = func(context.Context) error { current.Store(false); return nil }
+			case "stale-exit":
+				capture.prove = func(context.Context) error { capture.valid.Store(false); return nil }
+			}
+			if err = r.bindPadding(); fault == "missing-capture" || fault == "wrong-graph" || fault == "missing-tun" {
+				if err == nil || f.bound != nil {
+					t.Fatal("unowned or partial graph granted padding source authority")
+				}
+				r.Cancel()
+				return
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			raw, err := r.Run()
+			if fault != "success" {
+				if err == nil || raw != "" || r.Healthy() || strings.Contains(err.Error(), "secret") {
+					t.Fatal("failed fresh proof reached Connected or exposed details", err)
+				}
+				return
+			}
+			var proof map[string]any
+			if json.Unmarshal([]byte(raw), &proof) != nil || len(proof) != 5 || proof["ip"] != "203.0.113.42" || proof["dns_proven"] != true || base.calls.Load() != 1 || capture.calls.Load() != 1 || capture.pathCalls.Load() != 1 || !r.Healthy() {
+				t.Fatal("initial proof reused cached exit or changed connection proof schema", err)
+			}
+			status, err := r.PaddingStatusJSON()
+			if err != nil || status == "" || !strings.Contains(status, "path_checked_at") || base.calls.Load() != 1 || capture.calls.Load() != 1 || capture.pathCalls.Load() != 1 {
+				t.Fatal("status failed or issued another network proof", err)
+			}
+			f.statusError = true
+			if status, err := r.PaddingStatusJSON(); err == nil || status != "" {
+				t.Fatal("expired padding status remained available")
+			}
+			r.Cancel()
+			if status, err := r.PaddingStatusJSON(); err == nil || status != "" {
+				t.Fatal("canceled retained request exposed active padding")
+			}
+		})
+	}
+}
+
+func TestRouterTorLocalPaddingCloseRetainsExactRequestUntilNativeDrain(t *testing.T) {
+	old := &torBoxPaddingFixture{torBoxFixture: newTorBoxFixture(t, "old"), config: "old-source", closeEntered: make(chan struct{})}
+	replacement := &torBoxPaddingFixture{torBoxFixture: newTorBoxFixture(t, "replacement"), config: "new-source"}
+	r, err := newRouterTorProofRequest(t.Context(), old, old.session, "", func() bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.padding = old
+	gate := make(chan struct{})
+	old.closeGate = gate
+	done := make(chan error, 1)
+	go func() { done <- r.Close() }()
+	<-old.closeEntered
+	if old.cancels.Load() != 1 || replacement.cancels.Load() != 0 || replacement.closes.Load() != 0 || r.Healthy() {
+		t.Fatal("Local padding cancellation reached replacement owner")
+	}
+	select {
+	case <-done:
+		t.Fatal("request Close forgot pending native drain")
+	default:
+	}
+	close(gate)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if old.closes.Load() != 1 || replacement.closes.Load() != 0 {
+		t.Fatal("retained Close lost exact native owner")
+	}
+}
+
+func TestRouterTorUnrequestedLocalPaddingStatusRemainsEmpty(t *testing.T) {
+	f := newTorBoxFixture(t, "off")
+	r, err := newRouterTorProofRequest(t.Context(), f, f.session, "", func() bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.bindPadding(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if status, err := r.PaddingStatusJSON(); err != nil || status != "" {
+		t.Fatal("Off acquired a Local native receipt", err)
+	}
+}

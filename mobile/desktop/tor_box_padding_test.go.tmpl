@@ -1,0 +1,465 @@
+package box
+
+import (
+	"bufio"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// This doubles only Tor's control replies, alongside the existing private
+// fixed-origin fixture. The prepared Box, captured DNS router, authenticated
+// SOCKS outbound, PT owner, native lease/control parser and all worker cleanup
+// are real. SAFECOOKIE/child identity and actual compiled C cell scheduling
+// have their independent executable gates; these replies are not live traffic.
+type desktopTorPaddingBoxChild struct {
+	*desktopTorBoxChild
+	control                      *mobiletor.Control
+	claimed                      atomic.Bool
+	lease                        *mobiletor.PaddingLease
+	starts, stops                atomic.Int32
+	zero, wrongSource, pending   atomic.Bool
+	entered                      chan struct{}
+	once                         sync.Once
+	shortGrantMillis             atomic.Int64
+	blockStatus                  atomic.Bool
+	statusEntered, statusRelease chan struct{}
+	statusOnce, releaseOnce      sync.Once
+}
+
+func newDesktopTorPaddingBoxChild(t *testing.T, child *desktopTorBoxChild) *desktopTorPaddingBoxChild {
+	t.Helper()
+	client, peer := net.Pipe()
+	control, err := mobiletor.NewControl(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &desktopTorPaddingBoxChild{desktopTorBoxChild: child, control: control, entered: make(chan struct{}), statusEntered: make(chan struct{}), statusRelease: make(chan struct{})}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		reader := bufio.NewReader(peer)
+		sum := sha256.Sum256([]byte(child.meta.SessionID))
+		session, source := hex.EncodeToString(sum[:]), child.meta.SourceSHA256
+		var until time.Time
+		var cells, queued uint64
+		state, reason := "running", "active"
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				return
+			}
+			fields := strings.Fields(line)
+			if len(fields) == 2 && fields[0] == "ROUTERVPN_PADDING" && fields[1] == "INFO" {
+				_, err = io.WriteString(peer, "250 version=1 direction=outgoing min_rate_kbps=32 max_rate_kbps=192 default_rate_kbps=192 max_ttl_ms=10000 max_pending_cells=1 accounting=tor-link-cell username_hex_lengths=32,64 password_hex_length=64 generation_highwater=6\r\n")
+				if err != nil {
+					return
+				}
+				continue
+			}
+			if len(fields) < 5 || fields[0] != "ROUTERVPN_PADDING" || fields[2] != session || fields[3] != source || fields[4] != "7" {
+				t.Error("desktop native padding command changed captured source/session/generation")
+				return
+			}
+			switch fields[1] {
+			case "START":
+				if len(fields) != 9 || fields[5] != strconv.Itoa(child.meta.Padding.RateKbps) || fields[7] != child.meta.SessionID || fields[8] != desktopTorBoxIsolation {
+					t.Error("desktop native padding command changed selected rate or SOCKS isolation")
+					return
+				}
+				ttl, err := strconv.Atoi(fields[6])
+				if err != nil || ttl < 100 || ttl > 10000 {
+					t.Error("invalid native lease bound")
+					return
+				}
+				until = time.Now().Add(time.Duration(ttl) * time.Millisecond)
+				if shorter := f.shortGrantMillis.Load(); shorter > 0 {
+					until = time.Now().Add(time.Duration(shorter) * time.Millisecond)
+				}
+				f.starts.Add(1)
+				f.once.Do(func() { close(f.entered) })
+			case "RENEW":
+				if len(fields) != 6 {
+					t.Error("invalid native renewal")
+					return
+				}
+				ttl, err := strconv.Atoi(fields[5])
+				if err != nil || ttl < 100 || ttl > 10000 {
+					t.Error("invalid renewal bound")
+					return
+				}
+				until = time.Now().Add(time.Duration(ttl) * time.Millisecond)
+			case "STOP":
+				f.stops.Add(1)
+				state, reason = "stopped", "controller"
+				if f.pending.Load() {
+					state = "stopping"
+					queued = cells + 1
+				}
+			case "STATUS":
+				if f.blockStatus.Load() {
+					f.statusOnce.Do(func() { close(f.statusEntered); <-f.statusRelease })
+				}
+			default:
+				t.Error("unexpected native padding operation")
+				return
+			}
+			pending := uint64(0)
+			expires := time.Until(until).Milliseconds()
+			if state == "running" {
+				if !f.zero.Load() {
+					cells++
+					queued = cells
+				}
+			} else {
+				expires = 0
+				if f.pending.Load() {
+					state, pending = "stopping", 1
+				} else {
+					state, cells = "stopped", queued
+				}
+			}
+			actualSource := source
+			if f.wrongSource.Load() {
+				actualSource = strings.Repeat("f", 64)
+			}
+			reply := fmt.Sprintf("250 version=1 state=%s reason=%s session=%s source=%s generation=7 rate_kbps=%d expires_ms=%d queued_cells=%d queued_cell_bytes=%d channel_cells=%d channel_cell_bytes=%d dropped_cells=0 dropped_cell_bytes=0 pending_cells=%d last_circuit=17\r\n", state, reason, session, actualSource, child.meta.Padding.RateKbps, expires, queued, queued*514, cells, cells*514, pending)
+			if _, err := io.WriteString(peer, reply); err != nil {
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		f.releaseOnce.Do(func() { close(f.statusRelease) })
+		if f.lease != nil {
+			f.lease.Cancel()
+			_ = f.lease.Join(context.Background())
+			_ = f.lease.Close(context.Background())
+		}
+		_ = control.Close()
+		_ = peer.Close()
+		<-done
+	})
+	return f
+}
+
+func TestRouterVPNDesktopTorPaddingExpiryClosesDataWhileControlReplyDrains(t *testing.T) {
+	f, owner, child := desktopTorPaddingBoxFixture(t)
+	child.shortGrantMillis.Store(1200)
+	child.blockStatus.Store(true)
+	if _, err := owner.run(f.prover(t)); err != nil {
+		t.Fatal(err)
+	}
+	leaseReceipt, _, err := owner.PaddingSnapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := owner.engine.routes[owner.policy.Metadata().FinalTag]
+	stream, err := final.DialContext(t.Context(), "tcp", M.ParseSocksaddr("93.184.216.34:443"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	read := make(chan error, 1)
+	go func() { _, err := stream.Read(make([]byte, 1)); read <- err }()
+	select {
+	case <-child.statusEntered:
+	case <-time.After(time.Second):
+		t.Fatal("actual framed control operation did not enter")
+	}
+	// The real control operation remains blocked. Data must retire using its
+	// cached receipt deadline, independently of that operation's five seconds.
+	deadline := time.UnixMilli(leaseReceipt.ExpiresAt).Add(500 * time.Millisecond)
+	timer := time.NewTimer(time.Until(deadline))
+	defer timer.Stop()
+	select {
+	case <-owner.ctx.Done():
+	case <-timer.C:
+		t.Fatal("pending control reply extended the native data receipt")
+	}
+	select {
+	case err := <-read:
+		if err == nil {
+			t.Fatal("expired data read completed successfully")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("receipt expiry did not cancel an already-entered data read")
+	}
+	child.releaseOnce.Do(func() { close(child.statusRelease) })
+	if owner.Healthy() {
+		t.Fatal("expired native data lease retained Connected health")
+	}
+}
+
+func (f *desktopTorPaddingBoxChild) PaddingLease(ctx context.Context, options mobiletor.PaddingLeaseOptions) (*mobiletor.PaddingLease, error) {
+	if !f.claimed.CompareAndSwap(false, true) || !f.Current() {
+		return nil, errors.New("fixture child already claimed or retired")
+	}
+	options.Username, options.Password = f.meta.SessionID, desktopTorBoxIsolation
+	lease, err := mobiletor.NewPaddingLease(ctx, f.control, options)
+	f.lease = lease
+	return lease, err
+}
+
+func desktopTorPaddingBoxFixture(t *testing.T) (*desktopTorBoxFixture, *RouterVPNDesktopTor, *desktopTorPaddingBoxChild) {
+	t.Helper()
+	f := newDesktopTorBoxFixture(t, func(p map[string]any) { p["daita_enabled"], p["daita_rate_kbps"] = true, 64 })
+	owner := f.capture(t)
+	child := newDesktopTorPaddingBoxChild(t, f.child)
+	if err := owner.start(child); err != nil {
+		t.Fatal(err)
+	}
+	return f, owner, child
+}
+
+func TestRouterVPNDesktopTorPaddingRequiresActualLeaseAndFreshProvedDNS(t *testing.T) {
+	f, owner, child := desktopTorPaddingBoxFixture(t)
+	if owner.Healthy() || child.starts.Load() != 0 {
+		t.Fatal("padding activated before path/DNS proof")
+	}
+	initial, err := owner.run(f.prover(t))
+	if err != nil || !owner.Healthy() || child.starts.Load() != 1 || initial.Padding == nil || initial.PaddingProof == nil {
+		t.Fatal("proved path did not acquire real native lease", err)
+	}
+	if err := initial.Policy.ValidatePaddingProof(initial.Padding, initial.PaddingProof, owner.createdAt, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if initial.Padding.RateKbps != 64 || initial.Padding.Generation != 7 || f.socks.dnsCalls.Load() < 1 || f.socks.proofDNSCalls.Load() < 1 || f.socks.proofCalls.Load() != 1 {
+		t.Fatal("native padding bypassed captured policy or path proofs")
+	}
+	beforeDNS, beforePath := f.socks.dnsCalls.Load(), f.socks.proofCalls.Load()
+	before := *initial.PaddingProof
+	if err := owner.refreshPaddingProof(t.Context(), f.prover(t)); err != nil {
+		t.Fatal(err)
+	}
+	_, fresh, err := owner.PaddingSnapshot()
+	if err != nil || !fresh.DNSCheckedAt.After(before.DNSCheckedAt) || !fresh.Proof.CheckedAt.After(before.Proof.CheckedAt) || f.socks.dnsCalls.Load() <= beforeDNS || f.socks.proofCalls.Load() <= beforePath || *initial.PaddingProof != before {
+		t.Fatal("refresh borrowed cached proof or mutated initial evidence", err)
+	}
+	fresh.Proof.SessionID = "changed"
+	if _, _, err := owner.PaddingSnapshot(); err != nil {
+		t.Fatal("snapshot exposed mutable host witness", err)
+	}
+	// A real MTU transaction holds this lock. Native status reads must remain
+	// responsive and must not call engine.Identity through a lease callback.
+	owner.engine.mu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := owner.PaddingSnapshot()
+		if err == nil && !owner.LifetimeCurrent() {
+			err = errors.New("bounded lifetime lost current padding")
+		}
+		done <- err
+	}()
+	select {
+	case err = <-done:
+	case <-time.After(time.Second):
+		err = errors.New("padding snapshot blocked on native MTU lock")
+	}
+	owner.engine.mu.Unlock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner.Cancel()
+	if owner.Healthy() || owner.LifetimeCurrent() {
+		t.Fatal("cancelled cover retained native health")
+	}
+	if err := child.lease.Close(t.Context()); err != nil || child.stops.Load() != 1 {
+		t.Fatal("owned control failed actual STOP acknowledgement", err)
+	}
+	if err := owner.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterVPNDesktopTorPaddingCannotStartWithoutDNSExitOrChild(t *testing.T) {
+	for _, fault := range []string{"dns", "proof-dns", "exit", "missing-controller", "foreign-receipt"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newDesktopTorBoxFixture(t, func(p map[string]any) { p["daita_enabled"], p["daita_rate_kbps"] = true, 64 })
+			owner := f.capture(t)
+			child := newDesktopTorPaddingBoxChild(t, f.child)
+			var session routerVPNDesktopTorSession = child
+			if fault == "missing-controller" {
+				session = f.child
+			}
+			if err := owner.start(session); err != nil {
+				t.Fatal(err)
+			}
+			f.socks.badDNS.Store(fault == "dns")
+			f.socks.badProofDNS.Store(fault == "proof-dns")
+			child.wrongSource.Store(fault == "foreign-receipt")
+			prove := f.prover(t)
+			if fault == "exit" {
+				prove = func(context.Context, string, mobiletor.DialContext) (mobiletor.Proof, error) {
+					return mobiletor.Proof{}, errors.New("fixed origin rejected")
+				}
+			}
+			if _, err := owner.run(prove); err == nil || owner.Healthy() {
+				t.Fatal("unproved path retained padding", fault, err)
+			}
+			if fault != "foreign-receipt" && child.starts.Load() != 0 {
+				t.Fatal("failed proof still enabled native cover", fault)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorPaddingCancelledActivationCannotReportConnected(t *testing.T) {
+	f, owner, child := desktopTorPaddingBoxFixture(t)
+	child.zero.Store(true)
+	done := make(chan error, 1)
+	go func() { _, err := owner.run(f.prover(t)); done <- err }()
+	select {
+	case <-child.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("real native START was not observed")
+	}
+	owner.Cancel()
+	select {
+	case err := <-done:
+		if err == nil || owner.Healthy() {
+			t.Fatal("cancelled zero-cell activation became healthy")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancelled activation did not join")
+	}
+	if err := child.lease.Close(t.Context()); err != nil || child.stops.Load() != 1 {
+		t.Fatal("cancelled START lost exact native cleanup", err)
+	}
+}
+
+func TestRouterVPNDesktopTorPaddingFreshnessAndOwnerCannotBeBorrowed(t *testing.T) {
+	for _, fault := range []string{"dns-refresh", "expired-proof", "network-reset", "native-owner", "child"} {
+		t.Run(fault, func(t *testing.T) {
+			f, owner, _ := desktopTorPaddingBoxFixture(t)
+			if _, err := owner.run(f.prover(t)); err != nil {
+				t.Fatal(err)
+			}
+			switch fault {
+			case "dns-refresh":
+				before := owner.paddingProof.Load()
+				f.socks.badDNS.Store(true)
+				if err := owner.refreshPaddingProof(t.Context(), f.prover(t)); err == nil || owner.paddingProof.Load() != before {
+					t.Fatal("failed current DNS installed a fresh padding proof")
+				}
+				owner.Cancel()
+			case "expired-proof":
+				old := *owner.paddingProof.Load()
+				old.DNSCheckedAt = time.Now().Add(-31 * time.Second)
+				owner.paddingProof.Store(&old)
+			case "network-reset":
+				owner.network.InterfaceUpdated(context.Background())
+			case "native-owner":
+				owner.engine.box.outbound.Remove(owner.policy.Metadata().FinalTag)
+			case "child":
+				f.child.active.Store(false)
+			}
+			if _, _, err := owner.PaddingSnapshot(); err == nil || owner.Healthy() || owner.LifetimeCurrent() {
+				t.Fatal("retired path borrowed native cover", fault)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorPaddingWorkerRetiresOnFailedFreshSelectedDNS(t *testing.T) {
+	f, owner, child := desktopTorPaddingBoxFixture(t)
+	if _, err := owner.run(f.prover(t)); err != nil {
+		t.Fatal(err)
+	}
+	previous, before := owner.paddingProof.Load(), f.socks.dnsCalls.Load()
+	f.socks.badDNS.Store(true)
+	// Exercise the shipping ten-second refresh schedule. Its old proof is
+	// still valid for thirty seconds, so expiry cannot mask a missing worker
+	// or a failure to retire immediately after this fresh routed query fails.
+	select {
+	case <-owner.ctx.Done():
+	case <-time.After(20 * time.Second):
+		t.Fatal("failed fresh selected DNS did not retire the retained native padding worker")
+	}
+	if f.socks.dnsCalls.Load() <= before || owner.paddingProof.Load() != previous || owner.Healthy() {
+		t.Fatal("failed refresh was not attempted through selected DNS or installed replacement authority")
+	}
+	if err := child.lease.Close(t.Context()); err != nil || child.stops.Load() != 1 {
+		t.Fatal("failed refresh did not retain exact STOP cleanup", err)
+	}
+}
+
+func TestRouterVPNDesktopTorPaddingGatesRealStreamsAndPooledDNSProofContexts(t *testing.T) {
+	f, owner, _ := desktopTorPaddingBoxFixture(t)
+	final := owner.engine.routes[owner.policy.Metadata().FinalTag]
+	destination := M.ParseSocksaddr("93.184.216.34:443")
+	if connection, err := final.DialContext(t.Context(), "tcp", destination); err == nil || connection != nil {
+		t.Fatal("ordinary traffic opened before its actual padding lease")
+	}
+	if err := owner.engine.DNSProof(t.Context(), owner.policy.Metadata().TUNTag); err == nil || f.socks.dnsCalls.Load() != 0 {
+		t.Fatal("unproved application DNS borrowed a proof bypass")
+	}
+	var capturedProofContext context.Context
+	prove := f.prover(t)
+	_, err := owner.run(func(ctx context.Context, session string, dial mobiletor.DialContext) (mobiletor.Proof, error) {
+		capturedProofContext = context.WithoutCancel(ctx)
+		// The proof has already established the real selected DNS transport.
+		// Ordinary exchanges must still fail even if it now has a pooled socket.
+		before := f.socks.dnsCalls.Load()
+		if err := owner.engine.DNSProof(t.Context(), owner.policy.Metadata().TUNTag); err == nil || f.socks.dnsCalls.Load() != before {
+			t.Error("pooled proof DNS connection admitted application queries before padding")
+		}
+		if connection, err := final.DialContext(t.Context(), "tcp", destination); err == nil || connection != nil {
+			t.Error("ordinary traffic borrowed the in-flight native proof context")
+		}
+		return prove(ctx, session, dial)
+	})
+	if err != nil || !owner.Healthy() {
+		t.Fatal("owned proof could not activate the gated native path", err)
+	}
+	if connection, err := final.DialContext(capturedProofContext, "tcp", destination); err == nil || connection != nil {
+		t.Fatal("completed proof token became ordinary healthy-traffic authority")
+	}
+	if err := owner.engine.DNSProof(capturedProofContext, owner.policy.Metadata().TUNTag); err == nil {
+		t.Fatal("completed proof token retained a pooled DNS bypass")
+	}
+	if err := owner.engine.DNSProof(t.Context(), owner.policy.Metadata().TUNTag); err != nil {
+		t.Fatal("active lease blocked actual application DNS", err)
+	}
+	writer, err := final.DialContext(t.Context(), "tcp", destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	reader, err := final.DialContext(t.Context(), "tcp", destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if n, err := reader.Write([]byte{42}); n != 1 || err != nil {
+		t.Fatal("proved application path did not traverse captured native SOCKS", n, err)
+	}
+	// Revoke application admission independently of native-control polling.
+	// Existing streams must check the captured witness on each I/O, rather
+	// than relying on the next command heartbeat or socket-close timer.
+	owner.proved.Store(false)
+	if n, err := writer.Write([]byte{42}); n != 0 || err == nil {
+		t.Fatal("existing native stream wrote after its proved admission retired", n, err)
+	}
+	buffer := make([]byte, 64)
+	if n, err := reader.Read(buffer); n != 0 || err == nil {
+		t.Fatal("existing native stream delivered bytes after admission retired", n, err)
+	}
+	if err := owner.engine.DNSProof(t.Context(), owner.policy.Metadata().TUNTag); err == nil {
+		t.Fatal("pooled application DNS survived retired native admission")
+	}
+	owner.Cancel()
+}

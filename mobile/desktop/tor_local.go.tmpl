@@ -1,0 +1,478 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"net"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/dns"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/socks"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+type LocalTorOptions struct {
+	Server       string `json:"server"`
+	ServerPort   uint16 `json:"server_port"`
+	Version      string `json:"version"`
+	Username     string `json:"username"`
+	Password     string `json:"password"`
+	SourceSHA256 string `json:"source_sha256"`
+	RateKbps     int    `json:"rate_kbps"`
+}
+
+func RegisterLocalTor(registry *outbound.Registry) {
+	outbound.Register[LocalTorOptions](registry, mobiletor.DesktopTorPaddingOutboundType, NewLocalTorOutbound)
+}
+
+// LocalTorOutbound is the real final TUN path for selected Local padding. It
+// retains the pinned native SOCKS implementation, but cannot open application
+// streams before the actual native lease is ready or after its proof expires.
+// DNS exchanges use the same gate, including when their transport pools a
+// connection established by an earlier proof.
+type LocalTorOutbound struct {
+	outbound.Adapter
+	ctx              context.Context
+	cancel           context.CancelFunc
+	options          LocalTorOptions
+	raw              adapter.Outbound
+	network          *mobiletor.Network
+	mu               sync.Mutex
+	bound            bool
+	closing          bool
+	current, traffic func() bool
+	expires          func() time.Time
+	parentStop       func() bool
+	proofs           map[*LocalTorProof]struct{}
+	workers          sync.WaitGroup
+	joinOnce         sync.Once
+	joined           chan struct{}
+}
+
+func NewLocalTorOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options LocalTorOptions) (adapter.Outbound, error) {
+	if ctx == nil || ctx.Err() != nil || tag != mobiletor.ProfileOutboundTag || options.Server != "127.0.0.1" || options.ServerPort < 1024 || options.Version != "5" ||
+		!networkSessionID.MatchString(options.Username) || !networkSourceID.MatchString(options.Password) || !networkSourceID.MatchString(options.SourceSHA256) || options.RateKbps < mobiletor.PaddingMinRateKbps || options.RateKbps > mobiletor.PaddingMaxRateKbps {
+		return nil, errors.New("desktop Tor padding requires its exact isolated native TCP owner")
+	}
+	owned, cancel := context.WithCancel(ctx)
+	raw, err := socks.NewOutbound(owned, router, logger, tag, option.SOCKSOutboundOptions{ServerOptions: option.ServerOptions{Server: options.Server, ServerPort: options.ServerPort}, Version: "5", Username: options.Username, Password: options.Password, Network: option.NetworkList("tcp")})
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	o := &LocalTorOutbound{Adapter: outbound.NewAdapter(mobiletor.DesktopTorPaddingOutboundType, tag, []string{"tcp"}, nil), ctx: owned, cancel: cancel, options: options, raw: raw, proofs: map[*LocalTorProof]struct{}{}, joined: make(chan struct{})}
+	o.network, err = mobiletor.NewNetwork(owned, o.dial, nil)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	return o, nil
+}
+
+func (o *LocalTorOutbound) dial(ctx context.Context, network, address string) (net.Conn, error) {
+	if network != "tcp" || !o.permitted(ctx) {
+		return nil, net.ErrClosed
+	}
+	connection, err := o.raw.DialContext(ctx, network, M.ParseSocksaddr(address))
+	if connection == nil {
+		return nil, err
+	}
+	proof, _ := ctx.Value(localTorProofKey{}).(*LocalTorProof)
+	// The retained Network must own the tracking wrapper itself. An outer
+	// wrapper would let raw Close finish while its Read/Write still executes.
+	tracked := &localTorConnection{Conn: connection, owner: o, proof: proof, done: make(chan struct{})}
+	if !o.permitted(ctx) {
+		err = errors.Join(err, net.ErrClosed)
+	}
+	return tracked, err
+}
+
+func (o *LocalTorOutbound) Bind(parent context.Context, policy *mobiletor.DesktopBridgePolicy, current, traffic func() bool, expires func() time.Time) error {
+	if o == nil || parent == nil || parent.Err() != nil || policy == nil || current == nil || traffic == nil || expires == nil || !current() {
+		return net.ErrClosed
+	}
+	meta := policy.Metadata()
+	manager := service.FromContext[adapter.OutboundManager](o.ctx)
+	if manager == nil {
+		return net.ErrClosed
+	}
+	actual, found := manager.Outbound(o.Tag())
+	if !found || actual != o || meta.Execution != "" || !meta.Padding.Enabled || meta.Padding.RateKbps != o.options.RateKbps || meta.SourceSHA256 != o.options.SourceSHA256 || meta.SessionID != o.options.Username || meta.SocksPort != int(o.options.ServerPort) {
+		return errors.New("desktop Tor padding gate differs from its captured native source")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.bound || o.closing || o.ctx.Err() != nil {
+		return net.ErrClosed
+	}
+	o.current, o.traffic, o.expires, o.bound = current, traffic, expires, true
+	o.parentStop = context.AfterFunc(parent, o.cancel)
+	return nil
+}
+
+// Current is only this bound owner's lifetime, not its path or padding proof.
+// Its callbacks are evaluated outside the mutex to keep manager teardown free
+// of a gate-lock/manager-lock cycle.
+func (o *LocalTorOutbound) Current() bool {
+	if o == nil {
+		return false
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.bound && !o.closing && o.ctx.Err() == nil
+}
+
+func (o *LocalTorOutbound) available() bool {
+	if !o.Current() {
+		return false
+	}
+	return o.current()
+}
+
+type localTorProofKey struct{}
+
+// LocalTorProof owns only the temporary native DNS/exit proof sockets. The
+// token is a Go context capability, never a profile field or client request.
+// Its own lifetime prevents a pooled proof connection retaining a bypass.
+type LocalTorProof struct {
+	owner   *LocalTorOutbound
+	ctx     context.Context
+	cancel  context.CancelFunc
+	stop    func() bool
+	network *mobiletor.Network
+	active  atomic.Bool
+}
+
+func (o *LocalTorOutbound) ProofContext(parent context.Context) (context.Context, *LocalTorProof, error) {
+	if parent == nil || parent.Err() != nil || !o.available() {
+		return nil, nil, net.ErrClosed
+	}
+	ctx, cancel := context.WithCancel(parent)
+	p := &LocalTorProof{owner: o, ctx: ctx, cancel: cancel}
+	p.stop = context.AfterFunc(o.ctx, cancel)
+	var err error
+	p.network, err = mobiletor.NewNetwork(ctx, o.dial, nil)
+	if err != nil {
+		p.stop()
+		cancel()
+		return nil, nil, err
+	}
+	p.active.Store(true)
+	o.mu.Lock()
+	if o.closing || o.ctx.Err() != nil {
+		o.mu.Unlock()
+		_ = p.Close(context.Background())
+		return nil, nil, net.ErrClosed
+	}
+	o.proofs[p] = struct{}{}
+	o.mu.Unlock()
+	return context.WithValue(ctx, localTorProofKey{}, p), p, nil
+}
+
+func (p *LocalTorProof) valid(o *LocalTorOutbound) bool {
+	return p != nil && p.owner == o && p.active.Load() && p.ctx.Err() == nil
+}
+
+func (p *LocalTorProof) Close(ctx context.Context) error {
+	if p == nil {
+		return nil
+	}
+	p.active.Store(false)
+	p.cancel()
+	p.stop()
+	if err := p.network.Close(ctx); err != nil {
+		return err
+	}
+	p.owner.mu.Lock()
+	delete(p.owner.proofs, p)
+	p.owner.mu.Unlock()
+	return nil
+}
+
+func (o *LocalTorOutbound) permitted(ctx context.Context) bool {
+	if ctx == nil || ctx.Err() != nil || !o.available() {
+		return false
+	}
+	if proof, _ := ctx.Value(localTorProofKey{}).(*LocalTorProof); proof != nil {
+		return proof.valid(o)
+	}
+	return o.traffic()
+}
+
+func (o *LocalTorOutbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if network != "tcp" || !destination.IsValid() || destination.Port == 0 || !o.permitted(ctx) {
+		return nil, net.ErrClosed
+	}
+	proof, _ := ctx.Value(localTorProofKey{}).(*LocalTorProof)
+	owner := o.network
+	if proof != nil {
+		owner = proof.network
+	} else {
+		until := o.expires()
+		if !time.Now().Before(until) {
+			return nil, net.ErrClosed
+		}
+		// This is the actual receipt deadline. Network transfers a successful
+		// socket's lifetime before this temporary dial context is cancelled.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithDeadline(ctx, until)
+		defer cancel()
+	}
+	connection, err := owner.DialContext(ctx, network, destination.String())
+	if err != nil {
+		return nil, err
+	}
+	if !o.permitted(ctx) {
+		_ = connection.Close()
+		return nil, net.ErrClosed
+	}
+	return connection, nil
+}
+
+func (*LocalTorOutbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("desktop Tor padding carries TCP only")
+}
+
+type localTorConnection struct {
+	net.Conn
+	owner      *LocalTorOutbound
+	proof      *LocalTorProof
+	mu         sync.Mutex
+	closing    bool
+	operations sync.WaitGroup
+	closeOnce  sync.Once
+	done       chan struct{}
+	failure    error
+}
+
+func (c *localTorConnection) current() bool {
+	return c.owner.available() && (c.proof != nil && c.proof.valid(c.owner) || c.proof == nil && c.owner.traffic())
+}
+func (c *localTorConnection) begin() bool {
+	if !c.current() {
+		c.beginClose()
+		return false
+	}
+	c.mu.Lock()
+	if c.closing {
+		c.mu.Unlock()
+		return false
+	}
+	c.operations.Add(1)
+	c.mu.Unlock()
+	if !c.current() {
+		c.beginClose()
+		c.operations.Done()
+		return false
+	}
+	return true
+}
+func (c *localTorConnection) Read(buffer []byte) (int, error) {
+	if !c.begin() {
+		return 0, net.ErrClosed
+	}
+	defer c.operations.Done()
+	n, err := c.Conn.Read(buffer)
+	if !c.current() {
+		clear(buffer[:n])
+		c.beginClose()
+		return 0, net.ErrClosed
+	}
+	return n, err
+}
+func (c *localTorConnection) Write(buffer []byte) (int, error) {
+	if !c.begin() {
+		return 0, net.ErrClosed
+	}
+	defer c.operations.Done()
+	n, err := c.Conn.Write(buffer)
+	if !c.current() {
+		c.beginClose()
+		return n, net.ErrClosed
+	}
+	return n, err
+}
+
+func (c *localTorConnection) beginClose() {
+	c.closeOnce.Do(func() {
+		c.mu.Lock()
+		c.closing = true
+		c.mu.Unlock()
+		go func() {
+			c.failure = c.Conn.Close()
+			c.operations.Wait()
+			close(c.done)
+		}()
+	})
+}
+
+func (c *localTorConnection) Close() error {
+	c.beginClose()
+	<-c.done
+	return c.failure
+}
+
+func (o *LocalTorOutbound) beginDNS(parent context.Context) (context.Context, func(), error) {
+	if !o.permitted(parent) {
+		return nil, nil, net.ErrClosed
+	}
+	o.mu.Lock()
+	if o.closing || o.ctx.Err() != nil {
+		o.mu.Unlock()
+		return nil, nil, net.ErrClosed
+	}
+	o.workers.Add(1)
+	o.mu.Unlock()
+	ctx, cancel := context.WithCancel(parent)
+	stop := context.AfterFunc(o.ctx, cancel)
+	var once sync.Once
+	finish := func() { once.Do(func() { stop(); cancel(); o.workers.Done() }) }
+	if !o.permitted(ctx) {
+		finish()
+		return nil, nil, net.ErrClosed
+	}
+	return ctx, finish, nil
+}
+
+func (o *LocalTorOutbound) Cancel() {
+	if o != nil {
+		o.cancel()
+	}
+}
+func (o *LocalTorOutbound) CloseOwned(ctx context.Context) error {
+	if o == nil {
+		return nil
+	}
+	if ctx == nil {
+		return errors.New("desktop Tor padding gate close requires its retained lifetime")
+	}
+	o.Cancel()
+	o.mu.Lock()
+	o.closing = true
+	stop := o.parentStop
+	proofs := make([]*LocalTorProof, 0, len(o.proofs))
+	for proof := range o.proofs {
+		proofs = append(proofs, proof)
+	}
+	o.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
+	o.joinOnce.Do(func() { go func() { o.workers.Wait(); close(o.joined) }() })
+	var failure error
+	for _, proof := range proofs {
+		failure = errors.Join(failure, proof.Close(ctx))
+	}
+	failure = errors.Join(failure, o.network.Close(ctx))
+	select {
+	case <-o.joined:
+	case <-ctx.Done():
+		failure = errors.Join(failure, ctx.Err())
+	}
+	return failure
+}
+func (o *LocalTorOutbound) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return o.CloseOwned(ctx)
+}
+
+type LocalTorDNSOptions struct {
+	UpstreamTag  string `json:"upstream_tag"`
+	OutboundTag  string `json:"outbound_tag"`
+	SessionID    string `json:"session_id"`
+	SourceSHA256 string `json:"source_sha256"`
+}
+
+func RegisterLocalTorDNS(registry *dns.TransportRegistry) {
+	dns.RegisterTransport[LocalTorDNSOptions](registry, mobiletor.DesktopTorPaddingDNSType, NewLocalTorDNS)
+}
+
+type LocalTorDNS struct {
+	dns.TransportAdapter
+	ctx      context.Context
+	options  LocalTorDNSOptions
+	owner    *LocalTorOutbound
+	upstream adapter.DNSTransport
+	ready    atomic.Bool
+}
+
+func NewLocalTorDNS(ctx context.Context, _ log.ContextLogger, tag string, options LocalTorDNSOptions) (adapter.DNSTransport, error) {
+	if ctx == nil || ctx.Err() != nil || tag != "routervpn-tor-dns" || options.UpstreamTag != mobiletor.DesktopTorPaddingDNSUpstreamTag || options.OutboundTag != mobiletor.ProfileOutboundTag || !networkSessionID.MatchString(options.SessionID) || !networkSourceID.MatchString(options.SourceSHA256) {
+		return nil, errors.New("desktop Tor padding DNS requires its exact selected transport")
+	}
+	return &LocalTorDNS{TransportAdapter: dns.NewTransportAdapter(mobiletor.DesktopTorPaddingDNSType, tag, []string{options.UpstreamTag}), ctx: ctx, options: options}, nil
+}
+
+func (d *LocalTorDNS) Start(stage adapter.StartStage) error {
+	if stage != adapter.StartStateStart {
+		return nil
+	}
+	transports := service.FromContext[adapter.DNSTransportManager](d.ctx)
+	outbounds := service.FromContext[adapter.OutboundManager](d.ctx)
+	if transports == nil || outbounds == nil {
+		return net.ErrClosed
+	}
+	upstream, found := transports.Transport(d.options.UpstreamTag)
+	raw, present := outbounds.Outbound(d.options.OutboundTag)
+	owner, ok := raw.(*LocalTorOutbound)
+	if !found || upstream == nil || !present || !ok || owner.options.Username != d.options.SessionID || owner.options.SourceSHA256 != d.options.SourceSHA256 {
+		return errors.New("desktop Tor padding DNS lost its captured native owner")
+	}
+	d.upstream, d.owner = upstream, owner
+	d.ready.Store(true)
+	return nil
+}
+func (d *LocalTorDNS) Reset() {
+	if d.ready.Load() {
+		d.owner.Cancel()
+	}
+}
+func (d *LocalTorDNS) Close() error {
+	if d.ready.Swap(false) {
+		d.owner.Cancel()
+	}
+	return nil
+}
+func (d *LocalTorDNS) begin(ctx context.Context) (context.Context, func(), error) {
+	if !d.ready.Load() || d.ctx.Err() != nil {
+		return nil, nil, net.ErrClosed
+	}
+	return d.owner.beginDNS(ctx)
+}
+func (d *LocalTorDNS) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS.Msg, error) {
+	operation, finish, err := d.begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
+	response, err := d.upstream.Exchange(operation, message)
+	if !d.ready.Load() || !d.owner.permitted(operation) {
+		return nil, net.ErrClosed
+	}
+	return response, err
+}
+func (d *LocalTorDNS) ExchangeAsync(ctx context.Context, message *mDNS.Msg, callback func(*mDNS.Msg, error)) {
+	operation, finish, err := d.begin(ctx)
+	if err != nil {
+		callback(nil, err)
+		return
+	}
+	go func() {
+		defer finish()
+		response, err := d.upstream.Exchange(operation, message)
+		if !d.ready.Load() || !d.owner.permitted(operation) {
+			response, err = nil, net.ErrClosed
+		}
+		callback(response, err)
+	}()
+}

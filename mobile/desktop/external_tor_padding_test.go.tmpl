@@ -1,0 +1,151 @@
+package main
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type desktopTorPaddingCommandFixture struct {
+	*routerVPNTorCommandFixture
+	receipt *mobiletor.PaddingReceipt
+	witness *mobiletor.DesktopBridgePaddingProof
+	failure error
+	calls   int
+}
+
+func (f *desktopTorPaddingCommandFixture) PaddingSnapshot() (*mobiletor.PaddingReceipt, *mobiletor.DesktopBridgePaddingProof, error) {
+	f.calls++
+	return f.receipt, f.witness, f.failure
+}
+
+func desktopTorCommandPaddingFixture(t *testing.T) (*desktopTorPaddingCommandFixture, time.Time, time.Time) {
+	t.Helper()
+	f := routerVPNNewTorFileFixture(t)
+	base := routerVPNNewTorCommandFixture(t, f, false)
+	now, started := time.Now().Truncate(time.Millisecond), time.Now().Add(-40*time.Second)
+	// Exercise the independent command receipt boundary. The full native
+	// fixture separately proves control I/O and actual traffic admission.
+	base.proof.Policy.Padding = mobiletor.TorPaddingPolicy{Enabled: true, RateKbps: 192}
+	base.proof.Proof.CheckedAt = started
+	base.proof.HeartbeatAt = now.UnixMilli()
+	owner := &desktopTorPaddingCommandFixture{routerVPNTorCommandFixture: base}
+	sessionHash := sha256.Sum256([]byte(base.proof.SessionID))
+	owner.receipt = &mobiletor.PaddingReceipt{Direction: "outgoing", Accounting: "tor-link-cell", SessionSHA256: hex.EncodeToString(sessionHash[:]),
+		SourceSHA256: base.proof.SourceSHA256, Generation: 7, RateKbps: 192, ChannelCells: 16, ChannelBytes: 16 * 514,
+		ObservedAt: now.Add(-time.Millisecond).UnixMilli(), ExpiresAt: now.Add(4 * time.Second).UnixMilli()}
+	owner.witness = &mobiletor.DesktopBridgePaddingProof{DNSCheckedAt: now.Add(-2 * time.Millisecond),
+		Proof: mobiletor.Proof{SessionID: base.proof.SessionID, IP: "203.0.113.19", IsTor: true, DNSProven: true, CheckedAt: now.Add(-time.Millisecond)}}
+	t.Cleanup(func() { owner.Cancel(); _ = owner.measurement.Close() })
+	return owner, started, now
+}
+
+func TestRouterVPNDesktopTorCommandPaddingRetainsActualSnapshotWithoutRefreshingInitialProof(t *testing.T) {
+	owner, started, now := desktopTorCommandPaddingFixture(t)
+	proof := owner.proof
+	if routerVPNTorValidProof(proof, proof.Policy, started, now) {
+		t.Fatal("enabled padding connected before its native receipt")
+	}
+	if err := routerVPNTorRefreshPadding(owner, &proof, started, now); err != nil {
+		t.Fatal(err)
+	}
+	if !routerVPNTorValidProof(proof, proof.Policy, started, now) || proof.Proof != owner.proof.Proof || proof.HeartbeatAt != owner.proof.HeartbeatAt || proof.InterfaceIndex != owner.proof.InterfaceIndex {
+		t.Fatal("native padding snapshot changed the initial proof or interface")
+	}
+	owner.receipt.ChannelCells++
+	owner.receipt.ChannelBytes += 514
+	owner.witness.Proof.IP = "203.0.113.20"
+	if proof.Padding.ChannelCells != 16 || proof.PaddingProof.Proof.IP != "203.0.113.19" {
+		t.Fatal("published proof aliases mutable snapshot memory")
+	}
+	if err := routerVPNTorRefreshPadding(owner, &proof, started, now); err != nil || proof.Padding.ChannelCells != 17 || proof.Proof != owner.proof.Proof {
+		t.Fatal("real progress could not advance independently", err)
+	}
+	if err := routerVPNTorRefreshPadding(owner, &proof, started, now.Add(6*time.Second)); err == nil {
+		t.Fatal("copying an old snapshot manufactured lease freshness")
+	}
+}
+
+func TestRouterVPNDesktopTorCommandPaddingRejectsMissingForeignStaleAndRegressedOwner(t *testing.T) {
+	for _, kind := range []string{"missing-host", "missing-receipt", "missing-proof", "source", "session", "rate", "zero-cells", "expired", "old-observation", "no-dns", "old-dns", "wrong-proof-session", "generation", "counters", "observation", "dns-regression", "error", "cancelled"} {
+		t.Run(kind, func(t *testing.T) {
+			owner, started, now := desktopTorCommandPaddingFixture(t)
+			proof := owner.proof
+			if err := routerVPNTorRefreshPadding(owner, &proof, started, now); err != nil {
+				t.Fatal(err)
+			}
+			var captured routerVPNTorOwner = owner
+			switch kind {
+			case "missing-host":
+				captured = owner.routerVPNTorCommandFixture
+			case "missing-receipt":
+				owner.receipt = nil
+			case "missing-proof":
+				owner.witness = nil
+			case "source":
+				owner.receipt.SourceSHA256 = strings.Repeat("f", 64)
+			case "session":
+				owner.receipt.SessionSHA256 = strings.Repeat("f", 64)
+			case "rate":
+				owner.receipt.RateKbps = 64
+			case "zero-cells":
+				owner.receipt.ChannelCells, owner.receipt.ChannelBytes = 0, 0
+			case "expired":
+				owner.receipt.ExpiresAt = now.UnixMilli()
+			case "old-observation":
+				owner.receipt.ObservedAt = now.Add(-6 * time.Second).UnixMilli()
+			case "no-dns":
+				owner.witness.Proof.DNSProven = false
+			case "old-dns":
+				owner.witness.DNSCheckedAt = now.Add(-31 * time.Second)
+			case "wrong-proof-session":
+				owner.witness.Proof.SessionID = strings.Repeat("f", 32)
+			case "generation":
+				owner.receipt.Generation++
+			case "counters":
+				owner.receipt.ChannelCells--
+				owner.receipt.ChannelBytes = owner.receipt.ChannelCells * 514
+			case "observation":
+				owner.receipt.ObservedAt--
+			case "dns-regression":
+				owner.witness.DNSCheckedAt = owner.witness.DNSCheckedAt.Add(-time.Millisecond)
+			case "error":
+				owner.failure = errors.New("native observation retired")
+			case "cancelled":
+				owner.Cancel()
+			}
+			before := *proof.Padding
+			if err := routerVPNTorRefreshPadding(captured, &proof, started, now); err == nil || *proof.Padding != before {
+				t.Fatal("invalid snapshot changed retained proof", kind, err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorCommandOffAndServerCannotBorrowLocalPadding(t *testing.T) {
+	for _, execution := range []string{"off", "server"} {
+		owner, started, now := desktopTorCommandPaddingFixture(t)
+		proof := owner.proof
+		if err := routerVPNTorRefreshPadding(owner, &proof, started, now); err != nil {
+			t.Fatal(err)
+		}
+		if execution == "off" {
+			proof.Policy.Padding.Enabled = false
+		} else {
+			proof.Policy.Execution = "server"
+		}
+		if err := routerVPNTorRefreshPadding(owner, &proof, started, now); err == nil {
+			t.Fatal("unrequested Local padding receipt accepted", execution)
+		}
+		proof.Padding, proof.PaddingProof = nil, nil
+		calls := owner.calls
+		if err := routerVPNTorRefreshPadding(owner, &proof, started, now); err != nil || owner.calls != calls {
+			t.Fatal("Off or Server borrowed a Local native padding owner", execution, err)
+		}
+	}
+}

@@ -39,9 +39,11 @@ PT_OWNER = 'routervpn-desktop-tor-source.json'
 PT_NAMESPACES = ('routervpn/torpt/', 'routervpn/desktoppt/')
 PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_test.go.tmpl',
                 'tor_pt_entry_traffic_test.go.tmpl', 'tor_network.go.tmpl', 'tor_network_test.go.tmpl',
-                'tor_server.go.tmpl', 'tor_plain_test.go.tmpl')
+                'tor_server.go.tmpl', 'tor_plain_test.go.tmpl', 'tor_local.go.tmpl', 'tor_local_test.go.tmpl')
 BOX_TEMPLATES = {
     'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go',
+    'tor_box_padding.go.tmpl': 'routervpn_desktop_tor_box_padding.go',
+    'tor_box_padding_test.go.tmpl': 'routervpn_desktop_tor_box_padding_test.go',
     'tor_box_test.go.tmpl': 'routervpn_desktop_tor_box_test.go',
     'tor_box_integration_test.go.tmpl': 'routervpn_desktop_tor_box_integration_test.go',
     'tor_box_external_test.go.tmpl': 'routervpn_desktop_tor_box_external_test.go',
@@ -91,6 +93,7 @@ def desktop_pt_notices():
 def inputs():
     files = [Path(__file__).resolve(), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(), *RELAY.OPENVPN_REMOTE.inputs(),
              ROOT/'mobile/toroutbound/box.go.tmpl', ROOT/'mobile/toroutbound/box_test.go.tmpl',
+             ROOT/'mobile/toroutbound/padding_box.go.tmpl', ROOT/'mobile/toroutbound/padding_box_test.go.tmpl',
              ROOT/'deploy/prepare-desktop-mtu.py', ROOT/'deploy/prepare-mobile-tor.py',
              ROOT/'deploy/test_desktop_tor_preparation.py',
              ROOT/'mobile/toroutbound/network.go.tmpl', ROOT/'mobile/toroutbound/upstream.go.tmpl',
@@ -192,6 +195,18 @@ def pt_registry_source(source):
     end = source.index('\n}\n', start)
     if registered not in source[start:end]:
         raise ValueError('Desktop Tor Server must belong to the outbound registry')
+    for function, anchor, name in (
+            ('RegisterLocalTor', '\troutervpndesktoppt.RegisterServerTor(registry)', 'func OutboundRegistry() *outbound.Registry {'),
+            ('RegisterLocalTorDNS', '\ttransport.RegisterTCP(registry)', 'func DNSTransportRegistry() *dns.TransportRegistry {')):
+        registered = '\troutervpndesktoppt.'+function+'(registry)'
+        marker = 'routervpndesktoppt.'+function+'('
+        if marker in source and (source.count(marker) != 1 or source.count(registered) != 1):
+            raise ValueError('Desktop Tor Local padding registration differs')
+        source = TOR.insert_once(source, anchor, registered)
+        start = source.index(name)
+        end = source.index('\n}\n', start)
+        if registered not in source[start:end]:
+            raise ValueError('Desktop Tor Local padding must belong to its native registry')
     return source.encode()
 
 
@@ -374,6 +389,9 @@ def prepare(vendor, go='go', *, env=None):
         write(vendor, 'experimental/libbox/routervpn/dnsmeasure/'+path.name, path.read_bytes())
     for name in ('box.go', 'box_test.go'):
         write(vendor, 'routervpn_tor'+('_test' if name.endswith('_test.go') else '')+'.go',
+              (ROOT/'mobile/toroutbound'/(name+'.tmpl')).read_bytes())
+    for name in ('padding_box.go', 'padding_box_test.go'):
+        write(vendor, 'routervpn_tor_padding'+('_test' if name.endswith('_test.go') else '')+'.go',
               (ROOT/'mobile/toroutbound'/(name+'.tmpl')).read_bytes())
     MTU.prepare(vendor, mobile=False)
     DESKTOP_MTU.prepare(vendor)

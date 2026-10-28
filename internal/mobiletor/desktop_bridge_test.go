@@ -301,8 +301,8 @@ func TestDesktopBridgeIdleHomeIsNotRunnableAndInvalidPolicyDoesNotFallback(t *te
 	}
 }
 
-func TestDesktopBridgeDoesNotDiscardUnimplementedSelections(t *testing.T) {
-	for _, key := range []string{"multihop_enabled", "daita_enabled"} {
+func TestDesktopBridgeDoesNotDiscardUnownedSelections(t *testing.T) {
+	for _, key := range []string{"multihop_enabled"} {
 		p := desktopProfile()
 		p[key] = true
 		if policy, err := NewDesktopBridgePolicy(torHostEncode(t, p), desktopSession, desktopIsolation, "linux"); err == nil || policy != nil {

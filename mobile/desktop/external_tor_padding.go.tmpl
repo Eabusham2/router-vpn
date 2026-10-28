@@ -1,0 +1,58 @@
+package main
+
+import (
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// Snapshots perform no network/control exchange and never wait for the native
+// reader lock. The MTU admission loop must keep cancellation responsive while
+// a retained worker replaces that reader.
+type routerVPNTorPaddingOwner interface {
+	PaddingSnapshot() (*mobiletor.PaddingReceipt, *mobiletor.DesktopBridgePaddingProof, error)
+}
+
+func (n *routerVPNTorNative) PaddingSnapshot() (*mobiletor.PaddingReceipt, *mobiletor.DesktopBridgePaddingProof, error) {
+	if n == nil || !n.LifetimeCurrent() || n.files.current() != nil {
+		return nil, nil, routerVPNTorFailure
+	}
+	n.mu.Lock()
+	tor := n.tor
+	n.mu.Unlock()
+	receipt, proof, err := tor.PaddingSnapshot()
+	if err != nil || !n.LifetimeCurrent() {
+		return nil, nil, routerVPNTorFailure
+	}
+	return receipt, proof, nil
+}
+
+func routerVPNTorRefreshPadding(owner routerVPNTorOwner, proof *mobiletor.DesktopBridgeProof, started, now time.Time) error {
+	if proof == nil || !routerVPNTorLifetimeCurrent(owner) {
+		return routerVPNTorFailure
+	}
+	meta := proof.Policy
+	if !meta.Padding.Enabled || meta.Execution == "server" {
+		return meta.ValidatePaddingProof(proof.Padding, proof.PaddingProof, started, now)
+	}
+	padding, ok := owner.(routerVPNTorPaddingOwner)
+	if !ok {
+		return routerVPNTorFailure
+	}
+	receipt, witness, err := padding.PaddingSnapshot()
+	// The lease worker can finish a real observation during this bounded
+	// read. Validate at completion, never label that newer sample as future.
+	if completed := time.Now(); completed.After(now) {
+		now = completed
+	}
+	if err != nil || !routerVPNTorLifetimeCurrent(owner) ||
+		meta.ValidatePaddingProof(receipt, witness, started, now) != nil ||
+		mobiletor.ValidateDesktopPaddingProgress(proof.Padding, receipt, proof.PaddingProof, witness) != nil {
+		return routerVPNTorFailure
+	}
+	// Retain copies: later native observations cannot mutate a queued command
+	// result or an already published base proof through a shared pointer.
+	receiptCopy, witnessCopy := *receipt, *witness
+	proof.Padding, proof.PaddingProof = &receiptCopy, &witnessCopy
+	return nil
+}

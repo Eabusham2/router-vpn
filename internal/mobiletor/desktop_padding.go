@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+const (
+	DesktopTorPaddingOutboundType   = "routervpn-desktop-tor-padding"
+	DesktopTorPaddingDNSType        = "routervpn-desktop-tor-padding-dns"
+	DesktopTorPaddingDNSUpstreamTag = "routervpn-tor-dns-transport"
+)
+
 // DesktopBridgePaddingProof keeps repeated path/DNS verification separate from
 // the immutable initial connection proof. Each observation belongs to the same
 // captured native source; its deadline uses the older completed measurement.
@@ -90,5 +96,6 @@ func (s *DesktopBridgeSession) PaddingLease(parent context.Context, options Padd
 		return nil, err
 	}
 	s.paddingClaimed = true
+	s.padding = lease
 	return lease, nil
 }

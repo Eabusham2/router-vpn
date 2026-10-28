@@ -1,0 +1,197 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"net"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+type localTorTestOutbound struct {
+	adapter.Outbound
+	dial func(context.Context) (net.Conn, error)
+}
+
+func (o *localTorTestOutbound) DialContext(ctx context.Context, _ string, _ M.Socksaddr) (net.Conn, error) {
+	return o.dial(ctx)
+}
+
+// Raw Close deliberately returns before an entered I/O call. The real owner
+// must retain the tracking wrapper until that call also exits.
+type localTorSlowIO struct {
+	net.Conn
+	entered, release, closed chan struct{}
+	enterOnce, closeOnce     sync.Once
+}
+
+func newLocalTorSlowIO() *localTorSlowIO {
+	return &localTorSlowIO{entered: make(chan struct{}), release: make(chan struct{}), closed: make(chan struct{})}
+}
+func (c *localTorSlowIO) Read(buffer []byte) (int, error) {
+	c.enterOnce.Do(func() { close(c.entered) })
+	<-c.release
+	buffer[0] = 42
+	return 1, nil
+}
+func (c *localTorSlowIO) Write([]byte) (int, error) {
+	c.enterOnce.Do(func() { close(c.entered) })
+	<-c.release
+	return 1, nil
+}
+func (c *localTorSlowIO) Close() error {
+	c.closeOnce.Do(func() { close(c.closed) })
+	return nil
+}
+
+func newLocalTorTestOwner(t *testing.T, raw adapter.Outbound, until time.Time) *LocalTorOutbound {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	o := &LocalTorOutbound{ctx: ctx, cancel: cancel, raw: raw, bound: true, current: func() bool { return true }, traffic: func() bool { return true },
+		expires: func() time.Time { return until }, proofs: map[*LocalTorProof]struct{}{}, joined: make(chan struct{})}
+	var err error
+	o.network, err = mobiletor.NewNetwork(ctx, o.dial, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := o.CloseOwned(ctx); err != nil {
+			t.Error(err)
+		}
+	})
+	return o
+}
+
+func TestRouterVPNDesktopTorLocalGateRetainsEnteredIOAfterRawClose(t *testing.T) {
+	for _, scope := range []string{"application", "proof"} {
+		for _, operation := range []string{"read", "write"} {
+			t.Run(scope+"/"+operation, func(t *testing.T) {
+				raw := newLocalTorSlowIO()
+				var release sync.Once
+				releaseIO := func() { release.Do(func() { close(raw.release) }) }
+				defer releaseIO()
+				o := newLocalTorTestOwner(t, &localTorTestOutbound{dial: func(context.Context) (net.Conn, error) { return raw, nil }}, time.Now().Add(time.Minute))
+				ctx := t.Context()
+				closeOwned := o.CloseOwned
+				if scope == "proof" {
+					var proof *LocalTorProof
+					var err error
+					ctx, proof, err = o.ProofContext(ctx)
+					if err != nil {
+						t.Fatal(err)
+					}
+					closeOwned = proof.Close
+				}
+				connection, err := o.DialContext(ctx, "tcp", M.ParseSocksaddr("198.51.100.7:443"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				result := make(chan error, 1)
+				go func() {
+					buffer := []byte{17}
+					if operation == "read" {
+						n, err := connection.Read(buffer)
+						if n != 0 || buffer[0] != 0 || err == nil {
+							result <- errors.New("retired read delivered late bytes")
+							return
+						}
+					} else if _, err := connection.Write(buffer); err == nil {
+						result <- errors.New("retired write reported healthy completion")
+						return
+					}
+					result <- nil
+				}()
+				select {
+				case <-raw.entered:
+				case <-time.After(time.Second):
+					t.Fatal("actual tracked I/O did not enter")
+				}
+				deadline, cancel := context.WithTimeout(t.Context(), 25*time.Millisecond)
+				err = closeOwned(deadline)
+				cancel()
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("cleanup forgot an entered I/O after raw Close", err)
+				}
+				select {
+				case <-raw.closed:
+				default:
+					t.Fatal("cleanup did not cancel the actual underlying socket")
+				}
+				select {
+				case <-result:
+					t.Fatal("blocked I/O was fabricated as joined")
+				default:
+				}
+				releaseIO()
+				if err := <-result; err != nil {
+					t.Fatal(err)
+				}
+				if err := closeOwned(t.Context()); err != nil {
+					t.Fatal("retained cleanup failed after actual I/O completion", err)
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopTorLocalGateBoundsAndRejectsLateNativeDial(t *testing.T) {
+	for _, fault := range []string{"expired", "replaced-owner"} {
+		t.Run(fault, func(t *testing.T) {
+			raw := newLocalTorSlowIO()
+			until := time.Now().Add(time.Second)
+			entered, release := make(chan context.Context, 1), make(chan struct{})
+			var once sync.Once
+			releaseDial := func() { once.Do(func() { close(release) }) }
+			defer releaseDial()
+			o := newLocalTorTestOwner(t, &localTorTestOutbound{dial: func(ctx context.Context) (net.Conn, error) { entered <- ctx; <-release; return raw, nil }}, until)
+			var current atomic.Bool
+			current.Store(true)
+			o.current = current.Load
+			result := make(chan error, 1)
+			go func() {
+				connection, err := o.DialContext(t.Context(), "tcp", M.ParseSocksaddr("198.51.100.7:443"))
+				if connection != nil || err == nil {
+					result <- errors.New("late unproved dial was adopted")
+					return
+				}
+				result <- nil
+			}()
+			var ctx context.Context
+			select {
+			case ctx = <-entered:
+			case <-time.After(2 * time.Second):
+				t.Fatal("native dial did not enter")
+			}
+			deadline, bounded := ctx.Deadline()
+			if !bounded || !deadline.Equal(until) {
+				t.Fatal("native dial replaced the actual receipt expiry")
+			}
+			if fault == "expired" {
+				select {
+				case <-ctx.Done():
+				case <-time.After(2 * time.Second):
+					t.Fatal("actual receipt deadline did not cancel pending dial")
+				}
+			} else {
+				current.Store(false)
+			}
+			releaseDial()
+			if err := <-result; err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-raw.closed:
+			case <-time.After(time.Second):
+				t.Fatal("late native socket was not retained and closed")
+			}
+		})
+	}
+}

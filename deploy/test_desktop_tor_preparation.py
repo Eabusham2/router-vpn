@@ -346,6 +346,8 @@ class DesktopPTPreparation(unittest.TestCase):
         imported = '\t"'+PREP.MODULE+'/routervpn/desktoppt"'
         registered = '\troutervpndesktoppt.RegisterNetworkOwner(registry)'
         server_registered = '\troutervpndesktoppt.RegisterServerTor(registry)'
+        local_registered = '\troutervpndesktoppt.RegisterLocalTor(registry)'
+        dns_registered = '\troutervpndesktoppt.RegisterLocalTorDNS(registry)'
         forms = [
             generated.replace(imported, imported+'\n'+imported),
             generated.replace(registered, registered+'\n'+registered),
@@ -357,6 +359,12 @@ class DesktopPTPreparation(unittest.TestCase):
             generated.replace(server_registered, server_registered+'\n'+server_registered),
             generated.replace(server_registered, server_registered.replace('(registry)', '(foreignRegistry)')),
             generated.replace(server_registered, '')+'\nfunc foreign() {\n'+server_registered+'\n}\n',
+            generated.replace(local_registered, local_registered+'\n'+local_registered),
+            generated.replace(local_registered, local_registered.replace('(registry)', '(foreignRegistry)')),
+            generated.replace(local_registered, '')+'\nfunc foreign() {\n'+local_registered+'\n}\n',
+            generated.replace(dns_registered, dns_registered+'\n'+dns_registered),
+            generated.replace(dns_registered, dns_registered.replace('(registry)', '(foreignRegistry)')),
+            generated.replace(dns_registered, '')+'\nfunc foreign() {\n'+dns_registered+'\n}\n',
             ORIGINALS['include/registry.go'].decode()+'\n// '+PREP.MODULE+'/protocol/routervpntor\n',
         ]
         for source in forms:

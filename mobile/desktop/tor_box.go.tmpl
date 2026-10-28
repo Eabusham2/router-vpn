@@ -54,6 +54,10 @@ type RouterVPNDesktopTor struct {
 	startUsed, runUsed, closing bool
 	session                     routerVPNDesktopTorSession
 	proofNetwork                *mobiletor.Network
+	createdAt                   time.Time
+	padding                     atomic.Pointer[mobiletor.PaddingLease]
+	paddingProof                atomic.Pointer[mobiletor.DesktopBridgePaddingProof]
+	paddingGate                 *routervpndesktoppt.LocalTorOutbound
 	workers                     sync.WaitGroup
 	joined                      chan struct{}
 	joinOnce                    sync.Once
@@ -106,7 +110,7 @@ func (s *Box) RouterVPNDesktopTorCreate(policy *mobiletor.DesktopBridgePolicy) (
 			cancel()
 		}
 	}()
-	owner = &RouterVPNDesktopTor{ctx: ctx, cancel: cancel, policy: policy, engine: engine, network: observer, joined: make(chan struct{})}
+	owner = &RouterVPNDesktopTor{ctx: ctx, cancel: cancel, policy: policy, engine: engine, network: observer, joined: make(chan struct{}), createdAt: time.Now()}
 	tun, ok := engine.tun.(routerVPNDesktopTorTUN)
 	if !ok {
 		return nil, errors.New("desktop Tor TUN has no native interface readback")
@@ -132,6 +136,13 @@ func (s *Box) RouterVPNDesktopTorCreate(policy *mobiletor.DesktopBridgePolicy) (
 			return nil, errors.New("Tor Server capture retired during admission")
 		}
 		return owner, nil
+	}
+	if meta.Padding.Enabled {
+		gate, ok := engine.routes[meta.FinalTag].(*routervpndesktoppt.LocalTorOutbound)
+		if !ok || gate == nil {
+			return nil, errors.New("desktop Tor padding requires its real final traffic and DNS gate")
+		}
+		owner.paddingGate = gate
 	}
 	resolver := option.DomainResolveOptions{Server: meta.BootstrapDNSTag}
 	if meta.IPv6Mode == "off" {
@@ -298,6 +309,11 @@ func (r *RouterVPNDesktopTor) start(session routerVPNDesktopTorSession) (failure
 		return err
 	}
 	r.started.Store(true)
+	if r.paddingGate != nil {
+		if err := r.paddingGate.Bind(r.ctx, r.policy, r.paddingCaptureCurrent, r.paddingTrafficCurrent, r.paddingTrafficUntil); err != nil {
+			return err
+		}
+	}
 	if !r.live() {
 		return errors.New("desktop Tor network enable completed after retirement")
 	}
@@ -362,13 +378,25 @@ func (r *RouterVPNDesktopTor) run(prove func(context.Context, string, mobiletor.
 			return result, err
 		}
 	}
-	if err := r.engine.DNSProof(ctx, r.policy.Metadata().TUNTag); err != nil {
+	proofContext, scope, err := r.paddingProofContext(ctx)
+	if err != nil {
 		return result, err
 	}
+	if scope != nil {
+		defer func() {
+			if err := scope.Close(context.Background()); err != nil {
+				result, failure = mobiletor.DesktopBridgeProof{}, errors.New("desktop Tor private proof scope did not drain")
+			}
+		}()
+	}
+	if err := r.engine.DNSProof(proofContext, r.policy.Metadata().TUNTag); err != nil {
+		return result, err
+	}
+	dnsCheckedAt := time.Now()
 	if !r.live() {
 		return result, errors.New("desktop Tor selected DNS proof became stale")
 	}
-	proofNetwork, err := mobiletor.NewNetwork(ctx, r.proofDial, nil)
+	proofNetwork, err := mobiletor.NewNetwork(proofContext, r.proofDial, nil)
 	if err != nil {
 		return result, err
 	}
@@ -382,7 +410,7 @@ func (r *RouterVPNDesktopTor) run(prove func(context.Context, string, mobiletor.
 			result, failure = mobiletor.DesktopBridgeProof{}, errors.New("desktop Tor proof socket cleanup is not confirmed")
 		}
 	}()
-	proof, err := prove(ctx, r.policy.Metadata().SessionID, proofNetwork.DialContext)
+	proof, err := prove(proofContext, r.policy.Metadata().SessionID, proofNetwork.DialContext)
 	if err != nil || proof.SessionID != r.policy.Metadata().SessionID || !proof.IsTor || proof.CheckedAt.IsZero() {
 		return result, errors.New("desktop Tor did not prove its current public exit")
 	}
@@ -395,12 +423,30 @@ func (r *RouterVPNDesktopTor) run(prove func(context.Context, string, mobiletor.
 	}
 	proof.DNSProven = true
 	meta := r.policy.Metadata()
+	if scope != nil {
+		if err := proofNetwork.Close(ctx); err != nil {
+			return result, err
+		}
+		if err := scope.Close(ctx); err != nil {
+			return result, err
+		}
+	}
+	if err := r.startPadding(ctx, &mobiletor.DesktopBridgePaddingProof{Proof: proof, DNSCheckedAt: dnsCheckedAt}, prove); err != nil {
+		return result, err
+	}
+	if name, index, mtu, err = r.readback(); err != nil || ctx.Err() != nil || !r.live() {
+		return result, errors.New("desktop Tor native interface changed during padding admission")
+	}
 	r.proved.Store(true)
 	if !r.Healthy() {
 		return result, errors.New("desktop Tor proof completed after cancellation")
 	}
+	padding, paddingProof, err := r.PaddingSnapshot()
+	if err != nil {
+		return result, err
+	}
 	return mobiletor.DesktopBridgeProof{Schema: 1, SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Policy: meta, Proof: proof,
-		EntryProof: entryProof, InterfaceName: name, InterfaceIndex: index, EffectiveMTU: mtu, Healthy: true, HeartbeatAt: time.Now().UnixMilli()}, nil
+		EntryProof: entryProof, Padding: padding, PaddingProof: paddingProof, InterfaceName: name, InterfaceIndex: index, EffectiveMTU: mtu, Healthy: true, HeartbeatAt: time.Now().UnixMilli()}, nil
 }
 
 func (r *RouterVPNDesktopTor) proofDial(ctx context.Context, network, address string) (net.Conn, error) {
@@ -459,7 +505,9 @@ func (r *RouterVPNDesktopTor) readbackLocked() (string, int, int, error) {
 	return name, index, mtu, nil
 }
 
-func (r *RouterVPNDesktopTor) Healthy() bool { return r != nil && r.proved.Load() && r.live() }
+func (r *RouterVPNDesktopTor) Healthy() bool {
+	return r != nil && r.proved.Load() && r.live() && r.paddingHealthy()
+}
 
 // LifetimeCurrent is a bounded cancellation/liveness check, never a graph or
 // interface proof. The command can observe Stop/reset while a real native TUN
@@ -467,7 +515,7 @@ func (r *RouterVPNDesktopTor) Healthy() bool { return r != nil && r.proved.Load(
 // VerifyCurrentPath and the actual interface readback.
 func (r *RouterVPNDesktopTor) LifetimeCurrent() bool {
 	return r != nil && r.proved.Load() && r.readerLifetimeCurrent() && r.started.Load() &&
-		r.session != nil && r.session.Current()
+		r.session != nil && r.session.Current() && r.paddingHealthy()
 }
 
 func (r *RouterVPNDesktopTor) VerifyCurrentPath(ctx context.Context) error {
@@ -506,6 +554,12 @@ func (r *RouterVPNDesktopTor) Cancel() {
 	if r != nil && r.retired.CompareAndSwap(false, true) {
 		r.proved.Store(false)
 		r.cancel()
+		if padding := r.padding.Load(); padding != nil {
+			padding.Cancel()
+		}
+		if r.paddingGate != nil {
+			r.paddingGate.Cancel()
+		}
 	}
 }
 
@@ -524,6 +578,19 @@ func (r *RouterVPNDesktopTor) Close(ctx context.Context) error {
 	mtuLease := r.mtuLease.Load()
 	r.mu.Unlock()
 	r.Cancel()
+	if padding := r.padding.Load(); padding != nil {
+		// The command retains and joins the exact Tor process before calling
+		// Close. This join accounts for control work, not a substitute native
+		// STOP receipt; DesktopBridgeSession.Quiesce owns that barrier.
+		if err := padding.Join(ctx); err != nil {
+			return err
+		}
+	}
+	if r.paddingGate != nil {
+		if err := r.paddingGate.CloseOwned(ctx); err != nil {
+			return err
+		}
+	}
 	if mtuLease != nil {
 		mtuLease.Close()
 	}

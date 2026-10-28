@@ -67,8 +67,13 @@ func TestDesktopServerTorPaddingCannotGrantLocalOrForeignEntryAuthority(t *testi
 		profile := desktopEntryExit(entry)
 		profile["multihop_execution"], profile["daita_enabled"], profile["daita_rate_kbps"] = execution, true, 64
 		source := torHostEncode(t, profile)
-		if _, err := NewDesktopBridgePolicyWithPredecessor(source, desktopSession, desktopIsolation, "linux", entry); err == nil {
-			t.Fatal("Local factory admitted unowned cover or Server execution")
+		local, err := NewDesktopBridgePolicyWithPredecessor(source, desktopSession, desktopIsolation, "linux", entry)
+		if execution == "" || execution == "local" {
+			if err != nil || local.Metadata().Padding != (TorPaddingPolicy{Enabled: true, RateKbps: 64}) || local.Metadata().Execution != "" || local.ServerPolicy() != nil {
+				t.Fatal("captured Local cover acquired another execution owner", err)
+			}
+		} else if err == nil {
+			t.Fatal("Local factory admitted Server or Compare execution")
 		}
 		if _, err := NewDesktopServerTorPolicy(source, desktopSession, desktopIsolation, "linux", nil); err == nil {
 			t.Fatal("saved cover granted missing entry authority")

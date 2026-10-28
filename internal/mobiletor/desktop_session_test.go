@@ -25,7 +25,7 @@ type desktopSessionFixture struct {
 	address    atomic.Value
 }
 
-func newDesktopSessionFixture(t *testing.T, alter func(string, string, int) string) *desktopSessionFixture {
+func newDesktopSessionFixture(t *testing.T, alter func(string, string, int) string, edits ...func(map[string]any)) *desktopSessionFixture {
 	t.Helper()
 	f := &desktopSessionFixture{busySeen: make(chan struct{}, 1)}
 	admitted, quiescing := false, false
@@ -107,7 +107,11 @@ func newDesktopSessionFixture(t *testing.T, alter func(string, string, int) stri
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { f.owner.Close() })
-	f.session, err = NewDesktopBridgeSession(f.owner, desktopPolicy(t, desktopProfile(), "linux"))
+	profile := desktopProfile()
+	for _, edit := range edits {
+		edit(profile)
+	}
+	f.session, err = NewDesktopBridgeSession(f.owner, desktopPolicy(t, profile, "linux"))
 	if err != nil {
 		t.Fatal(err)
 	}

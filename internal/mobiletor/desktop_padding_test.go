@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestDesktopPaddingRetainsOffRateWithoutOpeningAdmission(t *testing.T) {
+func TestDesktopPaddingRetainsExactLocalSelection(t *testing.T) {
 	for _, rate := range []int{0, 32, 64, 192} {
 		profile := desktopProfile()
 		profile["daita_enabled"], profile["daita_rate_kbps"] = false, rate
@@ -17,8 +17,34 @@ func TestDesktopPaddingRetainsOffRateWithoutOpeningAdmission(t *testing.T) {
 			t.Fatal("Off discarded the saved cover rate")
 		}
 		profile["daita_enabled"] = true
-		if _, err := NewDesktopBridgePolicy(torHostEncode(t, profile), desktopSession, desktopIsolation, "linux"); err == nil {
-			t.Fatal("disabled desktop foundation admitted cover before its shipping host")
+		enabled, err := NewDesktopBridgePolicy(torHostEncode(t, profile), desktopSession, desktopIsolation, "linux")
+		wanted := rate
+		if wanted == 0 {
+			wanted = 192
+		}
+		if err != nil || enabled.Metadata().Padding != (TorPaddingPolicy{Enabled: true, RateKbps: wanted}) || enabled.SourceSHA256() == policy.SourceSHA256() {
+			t.Fatal("Local desktop policy lost its selected rate or independent source identity", err)
+		}
+		graph, err := profileObject(enabled.Config(), 4<<20)
+		if err != nil {
+			t.Fatal(err)
+		}
+		final := graph["outbounds"].([]any)[0].(map[string]any)
+		if final["type"] != DesktopTorPaddingOutboundType || final["source_sha256"] != enabled.SourceSHA256() || final["username"] != desktopSession {
+			t.Fatal("enabled desktop padding lost its real native traffic gate")
+		}
+		var dnsGate, selected bool
+		for _, raw := range graph["dns"].(map[string]any)["servers"].([]any) {
+			server := raw.(map[string]any)
+			if server["tag"] == profileDNS {
+				dnsGate = server["type"] == DesktopTorPaddingDNSType && server["upstream_tag"] == DesktopTorPaddingDNSUpstreamTag && server["source_sha256"] == enabled.SourceSHA256()
+			}
+			if server["tag"] == DesktopTorPaddingDNSUpstreamTag {
+				selected = server["type"] == "tcp" && server["server"] == "9.9.9.9" && server["detour"] == ProfileOutboundTag
+			}
+		}
+		if !dnsGate || !selected {
+			t.Fatal("padding replaced selected DNS or omitted its native exchange gate")
 		}
 	}
 }
@@ -46,10 +72,7 @@ func TestDesktopPaddingSessionBindsActualControlIsolationAndSingleClaim(t *testi
 		}
 		status := paddingTestReplace(paddingTestStatus(state), "source", source)
 		return paddingTestReply(paddingTestReplace(status, "session", session))
-	})
-	// Exercise this disabled foundation's internal control boundary directly;
-	// the public saved-profile compiler still rejects enabled Local cover.
-	f.session.metadata.Padding = TorPaddingPolicy{Enabled: true, RateKbps: 192}
+	}, func(profile map[string]any) { profile["daita_enabled"], profile["daita_rate_kbps"] = true, 192 })
 	source, session = f.session.metadata.SourceSHA256, desktopDigest([]byte(desktopSession))
 	until := time.Now().Add(PaddingProofMaxAge)
 	var retired atomic.Bool
@@ -101,8 +124,9 @@ func TestDesktopPaddingSessionBindsActualControlIsolationAndSingleClaim(t *testi
 func TestDesktopPaddingCannotStartWithoutFreshPathAndDNSWitness(t *testing.T) {
 	for _, fault := range []string{"off", "owner", "proof"} {
 		t.Run(fault, func(t *testing.T) {
-			f := newDesktopSessionFixture(t, nil)
-			f.session.metadata.Padding = TorPaddingPolicy{Enabled: fault != "off", RateKbps: 64}
+			f := newDesktopSessionFixture(t, nil, func(profile map[string]any) {
+				profile["daita_enabled"], profile["daita_rate_kbps"] = fault != "off", 64
+			})
 			f.start(t)
 			before := len(f.wire.snapshot())
 			options := PaddingLeaseOptions{SessionSHA256: desktopDigest([]byte(desktopSession)), SourceSHA256: f.session.metadata.SourceSHA256,
@@ -127,6 +151,91 @@ func TestDesktopPaddingCannotStartWithoutFreshPathAndDNSWitness(t *testing.T) {
 				t.Fatal("unproved cover sent a native command")
 			}
 		})
+	}
+}
+
+func TestDesktopPaddingQuiescenceWaitsForIdleAndExactNativeDrain(t *testing.T) {
+	var source, session string
+	var stopped atomic.Bool
+	var stopSeen atomic.Bool
+	f := newDesktopSessionFixture(t, func(command, reply string, _ int) string {
+		if command == "ROUTERVPN_PADDING INFO" {
+			return paddingTestReply(paddingTestCapability)
+		}
+		if !strings.HasPrefix(command, "ROUTERVPN_PADDING ") {
+			return reply
+		}
+		state := "running"
+		if strings.HasPrefix(command, "ROUTERVPN_PADDING STOP ") {
+			stopSeen.Store(true)
+		}
+		stopping, drained := stopSeen.Load(), stopped.Load()
+		if stopping {
+			state = "stopping"
+			if drained {
+				state = "stopped"
+			}
+		}
+		status := paddingTestStatus(state)
+		if stopping {
+			status = paddingTestReplace(status, "queued_cells", "3")
+			status = paddingTestReplace(status, "queued_cell_bytes", "1542")
+			status = paddingTestReplace(status, "channel_cells", "2")
+			status = paddingTestReplace(status, "channel_cell_bytes", "1028")
+			if drained {
+				status = paddingTestReplace(status, "dropped_cells", "1")
+				status = paddingTestReplace(status, "dropped_cell_bytes", "514")
+			}
+		}
+		status = paddingTestReplace(status, "session", session)
+		return paddingTestReply(paddingTestReplace(status, "source", source))
+	}, func(profile map[string]any) { profile["daita_enabled"], profile["daita_rate_kbps"] = true, 192 })
+	f.start(t)
+	f.mutation.Store(1)
+	source, session = f.session.metadata.SourceSHA256, desktopDigest([]byte(desktopSession))
+	until := time.Now().Add(PaddingProofMaxAge)
+	lease, err := f.session.PaddingLease(t.Context(), PaddingLeaseOptions{SessionSHA256: session, SourceSHA256: source, RateKbps: 192,
+		Current: func() bool { return true }, ProofValidUntil: func() time.Time { return until }, Retire: func(error) {}})
+	if err != nil || lease.Start(t.Context()) != nil {
+		t.Fatal("owned control lease did not start", err)
+	}
+	f.busy.Store(true)
+	result := make(chan error, 1)
+	go func() { result <- f.session.Quiesce(t.Context()) }()
+	select {
+	case <-f.busySeen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("real native idle barrier was not observed")
+	}
+	if stopSeen.Load() || f.session.Current() || lease.Healthy() {
+		t.Fatal("padding reused a retiring owner or skipped native idle drain")
+	}
+	f.busy.Store(false)
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for !stopSeen.Load() {
+		select {
+		case err := <-result:
+			t.Fatal("quiescence completed before exact STOP", err)
+		case <-deadline.C:
+			t.Fatal("exact native STOP was not issued after idle")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if f.session.state.Load() == desktopSessionQuiesced {
+		t.Fatal("pending ciphertext was acknowledged as drained")
+	}
+	stopped.Store(true)
+	select {
+	case err := <-result:
+		if err != nil || f.session.state.Load() != desktopSessionQuiesced {
+			t.Fatal("actual zero-pending receipt did not complete quiescence", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("acknowledged native padding drain did not join")
+	}
+	if err := lease.Close(t.Context()); err != nil {
+		t.Fatal("session failed to retain and close its exact lease", err)
 	}
 }
 

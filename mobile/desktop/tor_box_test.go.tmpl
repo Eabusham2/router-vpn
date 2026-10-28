@@ -190,6 +190,7 @@ func newDesktopTorBoxCapturedFixture(t *testing.T, edit func(map[string]any), pr
 	outbounds := outbound.NewRegistry()
 	socks.RegisterOutbound(outbounds)
 	routervpndesktoppt.RegisterServerTor(outbounds)
+	routervpndesktoppt.RegisterLocalTor(outbounds)
 	shadowsocks.RegisterOutbound(outbounds)
 	for _, register := range registrations {
 		register(outbounds)
@@ -199,6 +200,7 @@ func newDesktopTorBoxCapturedFixture(t *testing.T, edit func(map[string]any), pr
 	DNST.RegisterUDP(dnsRegistry)
 	DNST.RegisterTLS(dnsRegistry)
 	DNST.RegisterHTTPS(dnsRegistry)
+	routervpndesktoppt.RegisterLocalTorDNS(dnsRegistry)
 	services := boxService.NewRegistry()
 	routervpndesktoppt.RegisterNetworkOwner(services)
 	ctx, cancel := context.WithCancel(context.Background())

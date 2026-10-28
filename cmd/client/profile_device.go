@@ -18,7 +18,7 @@ import (
 )
 
 // Imported nodes share device policy without acquiring the Router-only base,
-// Start Layer or forwarding fields from a disabled settings form. Tor Server
+// Start Layer or forwarding fields from a disabled settings form. Tor
 // cover traffic has a separate captured capability and atomic preference pair.
 type profileDeviceSettings struct {
 	ProfileID             string `json:"profile_id"`
@@ -91,8 +91,6 @@ func externalDevicePolicySupport(profile common.RouterProfile) (bool, string) {
 			return false, "Tor entry device settings require the exact saved Local or Server entry, exit and native mode."
 		case !profile.MultihopEnabled && desktopTorExecution(profile.MultihopExecution) != "local":
 			return false, "Direct Tor device settings require Local execution."
-		case profile.DAITAEnabled && desktopTorExecution(profile.MultihopExecution) != "server":
-			return false, "Tor common device settings cannot discard saved padding; outgoing Tor cover traffic requires Server execution through a captured private Router entry."
 		default:
 			return true, ""
 		}
@@ -124,8 +122,11 @@ func profileDeviceJumboSupported(profile common.RouterProfile) bool {
 }
 
 func profileDeviceTorCoverSelection(profile common.RouterProfile) bool {
-	return profile.External != nil && desktopTorProtocol(profile.External.Protocol) &&
-		profile.MultihopEnabled && profile.MultihopExecution == "server"
+	if profile.External == nil || !desktopTorProtocol(profile.External.Protocol) {
+		return false
+	}
+	execution := desktopTorExecution(profile.MultihopExecution)
+	return execution == "local" || execution == "server" && profile.MultihopEnabled
 }
 
 func profileDeviceTorCoverSupported(profile, entry common.RouterProfile) bool {
@@ -175,9 +176,13 @@ func writeProfileDeviceSettings(w http.ResponseWriter, profile, entry common.Rou
 		}
 	}
 	coverSupported := profileDeviceTorCoverSupported(profile, entry)
-	coverNote := "Outgoing Tor cover traffic requires Tor Server execution through a captured private Router entry. Saved cover preferences are preserved while unavailable."
+	coverNote := "Outgoing Tor cover traffic requires a captured Local path or a private Router Server path. Saved cover preferences are preserved while unavailable."
 	if coverSupported {
-		coverNote = "Outgoing Tor cover traffic adds bounded relay cells from the selected server. It is not bidirectional DAITA. Budget: 32–192 kbit/s; 0 keeps the native default of 192. Saving is a preference; the authenticated server source and fresh cover receipt must still be proved on Connect."
+		if desktopTorExecution(profile.MultihopExecution) == "server" {
+			coverNote = "Outgoing Tor cover traffic adds bounded relay cells from the selected server. It is not bidirectional DAITA. Budget: 32–192 kbit/s; 0 keeps the native default of 192. Saving is a preference; the authenticated server source and fresh cover receipt must still be proved on Connect."
+		} else {
+			coverNote = "Outgoing Tor cover traffic adds bounded relay cells from this device. It is not bidirectional DAITA. Budget: 32–192 kbit/s; 0 keeps the native default of 192. Saving is a preference; the captured path, selected DNS and fresh cover receipt must still be proved on Connect and renewed while connected."
+		}
 	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
@@ -234,7 +239,7 @@ func applyProfileDeviceSettings(profile common.RouterProfile, request profileDev
 		}
 		changed := *request.DAITAEnabled != profile.DAITAEnabled || rate != profile.DAITARateKbps
 		if changed && !profileDeviceTorCoverSelection(profile) {
-			return profile, errors.New("this captured device editor can change outgoing Tor cover traffic only for a saved Server path")
+			return profile, errors.New("this captured device editor can change outgoing Tor cover traffic only for a saved Local or private Router Server path")
 		}
 		updated.DAITAEnabled, updated.DAITARateKbps = *request.DAITAEnabled, rate
 	}

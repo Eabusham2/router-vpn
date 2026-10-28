@@ -19,9 +19,12 @@ func desktopTorTransitionFollows(previous *mobiletor.DesktopBridgeMTUTransition,
 	return next.TransitionID > previous.TransitionID && next.FromHeartbeatAt > previous.FromHeartbeatAt && next.StartedAt >= previous.StartedAt
 }
 
-func noteDesktopTorStrictHeartbeat(owner *desktopTorRuntime, proof desktopTorProof) {
+func noteDesktopTorStrictHeartbeat(owner *desktopTorRuntime, proof desktopTorProof) error {
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
+	if err := noteDesktopTorPaddingLocked(owner, proof, time.Now()); err != nil {
+		return err
+	}
 	if proof.HeartbeatAt > owner.lastProofHeartbeat {
 		owner.lastProofHeartbeat = proof.HeartbeatAt
 	}
@@ -29,6 +32,21 @@ func noteDesktopTorStrictHeartbeat(owner *desktopTorRuntime, proof desktopTorPro
 		owner.mtuRetiredTransition = transition.TransitionID
 		owner.mtuTransition = nil
 	}
+	return nil
+}
+
+func noteDesktopTorPaddingLocked(owner *desktopTorRuntime, proof desktopTorProof, now time.Time) error {
+	if err := owner.expected.ValidatePaddingProof(proof.Padding, proof.PaddingProof, owner.started, now); err != nil {
+		return err
+	}
+	if err := mobiletor.ValidateDesktopPaddingProgress(owner.paddingReceipt, proof.Padding, owner.paddingProof, proof.PaddingProof); err != nil {
+		return err
+	}
+	if proof.Padding != nil {
+		receipt, witness := *proof.Padding, *proof.PaddingProof
+		owner.paddingReceipt, owner.paddingProof = &receipt, &witness
+	}
+	return nil
 }
 
 // A transition receipt is only a bounded explanation for a paused heartbeat.
@@ -61,7 +79,8 @@ func acceptDesktopTorMTUTransition(owner *desktopTorRuntime, transition mobileto
 	// advance the live reader or refresh the connection's heartbeat.
 	adopted := *owner.adopted
 	captured := &desktopTorRuntime{expected: expected, started: owner.started, adopted: &adopted,
-		mtu: session, mtuAuthority: authority, mtuReadback: owner.mtuReadback}
+		mtu: session, mtuAuthority: authority, mtuReadback: owner.mtuReadback,
+		paddingReceipt: owner.paddingReceipt, paddingProof: owner.paddingProof}
 	owner.mu.Unlock()
 	session.mu.Lock()
 	active := session.generation == transition.Generation && (session.active == transition.RequestID || session.restoreMTU != 0)
@@ -69,7 +88,7 @@ func acceptDesktopTorMTUTransition(owner *desktopTorRuntime, transition mobileto
 	if !active {
 		return false
 	}
-	base, err := validateDesktopTorProof(baseRaw, captured, time.UnixMilli(transition.FromHeartbeatAt))
+	base, err := validateDesktopTorProofAt(baseRaw, captured, time.UnixMilli(transition.FromHeartbeatAt), now)
 	if err != nil || base.HeartbeatAt != transition.FromHeartbeatAt || base.MTUReadback == nil || *base.MTUReadback != transition.From {
 		return false
 	}
@@ -81,6 +100,9 @@ func acceptDesktopTorMTUTransition(owner *desktopTorRuntime, transition mobileto
 	if !desktopTorTransitionFollows(owner.mtuTransition, transition) {
 		return false
 	}
+	if noteDesktopTorPaddingLocked(owner, base, now) != nil {
+		return false
+	}
 	copy := transition
 	owner.mtuTransition = &copy
 	return true
@@ -90,6 +112,8 @@ func (a *app) desktopTorMTUTransitionPending(launch *desktopNodeLaunch) bool {
 	if launch == nil || launch.tor == nil || a.desktopTorCurrent(launch) != nil {
 		return false
 	}
+	launch.tor.proofMu.Lock()
+	defer launch.tor.proofMu.Unlock()
 	raw, err := readDesktopRuntimeFile(launch, "mtu-transition.json", 8192)
 	var transition mobiletor.DesktopBridgeMTUTransition
 	if err != nil || decodeRelayControlJSON(raw, &transition) != nil {

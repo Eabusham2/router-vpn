@@ -27,7 +27,7 @@ func TestRouterVPNDesktopTorMTUTransitionPublishesBaseBeforeAdmission(t *testing
 	owner := routerVPNNewTorCommandFixture(t, f, false)
 	now := time.UnixMilli(owner.proof.HeartbeatAt + 1)
 	request := routerVPNTorMTUTransitionRequest{context: context.Background(), receipt: desktopTorTransitionReceipt(owner.proof, now), result: make(chan error, 1), finished: make(chan struct{})}
-	proof, transition, err := routerVPNTorAdmitTransition(files, request, owner.proof, 0, now)
+	proof, transition, err := routerVPNTorAdmitTransition(files, request, owner.proof, 0, owner.proof.Proof.CheckedAt, now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestRouterVPNDesktopTorMTUTransitionPublishesBaseBeforeAdmission(t *testing
 	if routerVPNTorTransitionKeepsAlive(&transition, newer, now.Add(4*time.Second)) {
 		t.Fatal("old transition survived a later strict heartbeat")
 	}
-	if _, _, err := routerVPNTorAdmitTransition(files, request, proof, transition.TransitionID, now); err == nil {
+	if _, _, err := routerVPNTorAdmitTransition(files, request, proof, transition.TransitionID, owner.proof.Proof.CheckedAt, now); err == nil {
 		t.Fatal("transition identity replayed")
 	}
 }
@@ -74,7 +74,7 @@ func TestRouterVPNDesktopTorMTUTransitionRejectsForeignExpiredAndReplacedAdmissi
 		now := time.UnixMilli(owner.proof.HeartbeatAt + 1)
 		request := routerVPNTorMTUTransitionRequest{context: context.Background(), receipt: desktopTorTransitionReceipt(owner.proof, now), result: make(chan error, 1), finished: make(chan struct{})}
 		mutate(&request.receipt)
-		if _, _, err := routerVPNTorAdmitTransition(files, request, owner.proof, 0, now); err == nil {
+		if _, _, err := routerVPNTorAdmitTransition(files, request, owner.proof, 0, owner.proof.Proof.CheckedAt, now); err == nil {
 			t.Fatal("malformed transition admitted", i)
 		}
 		if _, err := os.Stat(filepath.Join(f.directory, "mtu-transition.json")); !os.IsNotExist(err) {
@@ -89,7 +89,7 @@ func TestRouterVPNDesktopTorMTUTransitionRejectsForeignExpiredAndReplacedAdmissi
 	if err := os.WriteFile(filepath.Join(f.directory, "mtu-transition.json"), []byte(`{"replacement":true}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := routerVPNTorAdmitTransition(files, request, owner.proof, 0, now); err == nil {
+	if _, _, err := routerVPNTorAdmitTransition(files, request, owner.proof, 0, owner.proof.Proof.CheckedAt, now); err == nil {
 		t.Fatal("transition overwrote an unowned receipt")
 	}
 }

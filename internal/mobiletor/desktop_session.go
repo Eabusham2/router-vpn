@@ -31,7 +31,8 @@ type DesktopBridgeSession struct {
 	state          atomic.Int32
 	expected       map[string][]string // guarded by owner.operation
 	isolation      string
-	paddingClaimed bool // guarded by owner.operation; never transferred or reset
+	paddingClaimed bool          // guarded by owner.operation; never transferred or reset
+	padding        *PaddingLease // guarded by owner.operation; retained through native drain
 }
 
 func NewDesktopBridgeSession(owner *DesktopControl, policy *DesktopBridgePolicy) (*DesktopBridgeSession, error) {
@@ -342,6 +343,14 @@ func (s *DesktopBridgeSession) Quiesce(parent context.Context) (failure error) {
 	defer s.retireOnFailure(&failure)
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
+	// Revocation is immediate, but a framed padding control reply still owns
+	// the stream until its worker joins. Disabling Tor and acknowledging the
+	// exact STOP then prove native drain; cancellation alone cannot do either.
+	if s.padding != nil {
+		if err := s.padding.Join(ctx); err != nil {
+			return err
+		}
+	}
 	if err := s.owner.verifyProcess(ctx); err != nil {
 		return err
 	}
@@ -362,6 +371,11 @@ func (s *DesktopBridgeSession) Quiesce(parent context.Context) (failure error) {
 			return err
 		}
 		if idle {
+			if s.padding != nil {
+				if err := s.padding.Close(ctx); err != nil {
+					return err
+				}
+			}
 			if ctx.Err() != nil || s.owner.closed.Load() {
 				return errors.New("desktop Tor quiescence completed after cancellation")
 			}

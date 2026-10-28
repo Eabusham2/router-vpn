@@ -202,7 +202,19 @@ func desktopPredecessorGraph(profile map[string]any, sessionID string, predecess
 	if profileString(profile, "multihop_entry_mode") != predecessor.mode {
 		return nil, nil, nil, errors.New("desktop Tor entry graph belongs to another saved mode")
 	}
-	normalized, err := json.Marshal(profile)
+	// The shared compiler supplies only this desktop graph's TUN, DNS and
+	// typed predecessor. Its embedded Tor leaf is replaced with the exact
+	// isolated standalone SOCKS owner below. The immutable desktop metadata
+	// and original source retain the requested padding; its native child lease
+	// owns that policy, independently of any predecessor cover service.
+	lowered := make(map[string]any, len(profile))
+	for key, value := range profile {
+		lowered[key] = value
+	}
+	if lowered["daita_enabled"] == true {
+		lowered["daita_enabled"] = false
+	}
+	normalized, err := json.Marshal(lowered)
 	if err != nil {
 		return nil, nil, nil, err
 	}

@@ -1,0 +1,83 @@
+package box
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type torLocalPaddingOwner interface {
+	TorPaddingConfig() string
+	TorPaddingPredecessorProof(context.Context, string, *mobiletor.PredecessorProof, *mobiletor.ExternalPredecessorProof) error
+	BindTorPadding(func() bool, func(context.Context, mobiletor.DialContext) (mobiletor.Proof, time.Time, error)) error
+	StartTorPadding(context.Context, string) (mobiletor.Proof, error)
+	TorPaddingStatus(string) (*mobiletor.NativePaddingProofStatus, error)
+	CloseTor(context.Context, string) error
+}
+
+type torLocalPaddingCapture interface {
+	torServerProofCapture
+	TorPaddingExitProof(context.Context, string, mobiletor.DialContext) (mobiletor.Proof, error)
+}
+
+func (r *RouterVPNTorProofRequest) bindPadding() error {
+	owner, supported := r.owner.(torLocalPaddingOwner)
+	if !supported || owner.TorPaddingConfig() == "" {
+		return nil
+	}
+	capture, captured := r.capture.(torLocalPaddingCapture)
+	if r.server != nil || !captured || capture == nil || !capture.ServerGraph(owner.TorPaddingConfig()) || !capture.EntryCurrent() || !r.currentNative() {
+		return errors.New("Local Tor padding requires its exact complete native graph, TUN and selected DNS")
+	}
+	verify := func(ctx context.Context, dial mobiletor.DialContext) (mobiletor.Proof, time.Time, error) {
+		bad := errors.New("Local Tor padding lost its captured predecessor, selected DNS or final exit proof")
+		if ctx == nil || ctx.Err() != nil || r.canceled.Load() || !r.currentNative() {
+			return mobiletor.Proof{}, time.Time{}, bad
+		}
+		// Re-prove the actual private or ordinary lower path without requiring
+		// a cached or synthetic Tor exit before selected DNS can be validated.
+		if err := owner.TorPaddingPredecessorProof(ctx, r.sessionID, r.predecessor, r.externalPredecessor); err != nil || ctx.Err() != nil || !r.currentNative() {
+			return mobiletor.Proof{}, time.Time{}, bad
+		}
+		if err := capture.DNSProof(ctx); err != nil || ctx.Err() != nil || !r.currentNative() {
+			return mobiletor.Proof{}, time.Time{}, bad
+		}
+		dnsAt := time.Now().UTC()
+		proof, err := capture.TorPaddingExitProof(ctx, r.sessionID, dial)
+		if err != nil || proof.SessionID != r.sessionID || !proof.IsTor || ctx.Err() != nil || r.canceled.Load() || !r.currentNative() {
+			return mobiletor.Proof{}, time.Time{}, bad
+		}
+		proof.DNSProven = true
+		return proof, dnsAt, nil
+	}
+	current := func() bool { return !r.canceled.Load() && r.ctx.Err() == nil && r.currentNative() }
+	if err := owner.BindTorPadding(current, verify); err != nil {
+		return err
+	}
+	r.padding = owner
+	return nil
+}
+
+// PaddingStatusJSON is a memory-only read of the retained proof request.
+// Initial connection proof keeps its original five-field schema. Off and
+// Server paths cannot borrow this Local native lease or its source identity.
+func (r *RouterVPNTorProofRequest) PaddingStatusJSON() (string, error) {
+	if r == nil || !r.Healthy() {
+		return "", errors.New("Local Tor padding status requires its retained successful native proof")
+	}
+	if r.padding == nil {
+		return "", nil
+	}
+	status, err := r.padding.TorPaddingStatus(r.sessionID)
+	if err != nil || status == nil || !r.Healthy() {
+		return "", errors.New("Local Tor padding status expired or changed owner")
+	}
+	data, err := json.Marshal(status)
+	if err != nil {
+		return "", errors.New("Local Tor padding status could not be encoded")
+	}
+	return string(data), nil
+}

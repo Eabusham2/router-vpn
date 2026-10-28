@@ -126,7 +126,7 @@ func routerVPNTorLifetimeCurrent(owner routerVPNTorOwner) bool {
 // permission for the worker to begin replacement. The main loop is the sole
 // writer of these outputs, including during slow native reader construction.
 func routerVPNTorAdmitTransition(files *routerVPNTorFiles, request routerVPNTorMTUTransitionRequest,
-	proof mobiletor.DesktopBridgeProof, previousID uint64, now time.Time) (mobiletor.DesktopBridgeProof, mobiletor.DesktopBridgeMTUTransition, error) {
+	proof mobiletor.DesktopBridgeProof, previousID uint64, started, now time.Time) (mobiletor.DesktopBridgeProof, mobiletor.DesktopBridgeMTUTransition, error) {
 	value := request.receipt
 	meta := files.inputs.Policy().Metadata()
 	if request.context == nil || request.context.Err() != nil || request.result == nil || request.finished == nil || files.current() != nil ||
@@ -135,7 +135,7 @@ func routerVPNTorAdmitTransition(files *routerVPNTorFiles, request routerVPNTorM
 		value.From.Generation != value.Generation || value.From.RequestID != value.RequestID || value.TargetMTU < 1280 || value.TargetMTU > 9000 ||
 		value.StartedAt < now.Add(-mobiletor.DesktopBridgeHeartbeatMaxAge).UnixMilli() || value.StartedAt > now.Add(time.Second).UnixMilli() ||
 		value.ExpiresAt <= now.UnixMilli() || value.ExpiresAt <= value.StartedAt || value.ExpiresAt-value.StartedAt > mobiletor.DesktopBridgeMTUTransitionLimit.Milliseconds() ||
-		value.FromHeartbeatAt != 0 || now.UnixMilli() <= proof.HeartbeatAt || routerVPNTorAdoptReadback(&proof, &value.From) != nil {
+		value.FromHeartbeatAt != 0 || now.UnixMilli() <= proof.HeartbeatAt || meta.ValidatePaddingProof(proof.Padding, proof.PaddingProof, started, now) != nil || routerVPNTorAdoptReadback(&proof, &value.From) != nil {
 		return proof, value, routerVPNTorFailure
 	}
 	proof.HeartbeatAt = now.UnixMilli()
@@ -156,6 +156,7 @@ func routerVPNTorTransitionKeepsAlive(value *mobiletor.DesktopBridgeMTUTransitio
 type routerVPNTorMaintenance struct {
 	version   uint64
 	proof     mobiletor.DesktopBridgeProof
+	started   time.Time
 	heartbeat bool
 	err       error
 }
@@ -176,7 +177,7 @@ func routerVPNTorMaintain(ctx context.Context, owner routerVPNTorOwner, files *r
 		verify, cancel := context.WithTimeout(ctx, mobiletor.DesktopBridgeHeartbeatMaxAge)
 		err := owner.VerifyCurrentPath(verify)
 		cancel()
-		if err != nil || ctx.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(owner, &result.proof) != nil {
+		if err != nil || ctx.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(owner, &result.proof) != nil || routerVPNTorRefreshPadding(owner, &result.proof, result.started, time.Now()) != nil {
 			result.err = routerVPNTorFailure
 		}
 	}

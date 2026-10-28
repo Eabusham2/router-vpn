@@ -38,6 +38,8 @@ type desktopTorRuntime struct {
 	mtuTransition         *mobiletor.DesktopBridgeMTUTransition
 	mtuRetiredTransition  uint64
 	lastProofHeartbeat    int64
+	paddingReceipt        *mobiletor.PaddingReceipt
+	paddingProof          *mobiletor.DesktopBridgePaddingProof
 	expected              mobiletor.DesktopBridgeMetadata
 	digests               mobiletor.DesktopBridgeInputDigests
 	profileToken          string
@@ -60,19 +62,21 @@ type desktopTorInput struct {
 }
 
 type desktopTorProof struct {
-	Schema         int                                 `json:"schema"`
-	SessionID      string                              `json:"session_id"`
-	SourceSHA256   string                              `json:"source_sha256"`
-	ConfigSHA256   string                              `json:"config_sha256"`
-	Policy         mobiletor.DesktopBridgeMetadata     `json:"policy"`
-	Proof          mobiletor.Proof                     `json:"proof"`
-	InterfaceName  string                              `json:"interface_name"`
-	InterfaceIndex int                                 `json:"interface_index"`
-	EffectiveMTU   int                                 `json:"effective_mtu"`
-	Healthy        bool                                `json:"healthy"`
-	HeartbeatAt    int64                               `json:"heartbeat_at"`
-	MTUReadback    *mobiletor.DesktopBridgeMTUReadback `json:"mtu_readback,omitempty"`
-	EntryProof     *mobiletor.DesktopBridgeEntryProof  `json:"entry_proof,omitempty"`
+	Schema         int                                  `json:"schema"`
+	SessionID      string                               `json:"session_id"`
+	SourceSHA256   string                               `json:"source_sha256"`
+	ConfigSHA256   string                               `json:"config_sha256"`
+	Policy         mobiletor.DesktopBridgeMetadata      `json:"policy"`
+	Proof          mobiletor.Proof                      `json:"proof"`
+	InterfaceName  string                               `json:"interface_name"`
+	InterfaceIndex int                                  `json:"interface_index"`
+	EffectiveMTU   int                                  `json:"effective_mtu"`
+	Healthy        bool                                 `json:"healthy"`
+	HeartbeatAt    int64                                `json:"heartbeat_at"`
+	MTUReadback    *mobiletor.DesktopBridgeMTUReadback  `json:"mtu_readback,omitempty"`
+	EntryProof     *mobiletor.DesktopBridgeEntryProof   `json:"entry_proof,omitempty"`
+	Padding        *mobiletor.PaddingReceipt            `json:"padding,omitempty"`
+	PaddingProof   *mobiletor.DesktopBridgePaddingProof `json:"padding_proof,omitempty"`
 }
 
 type desktopTorProgress struct {
@@ -106,6 +110,13 @@ func desktopTorDigest(raw []byte) string {
 }
 
 func validateDesktopTorProof(raw []byte, owner *desktopTorRuntime, now time.Time) (desktopTorProof, error) {
+	return validateDesktopTorProofAt(raw, owner, now, now)
+}
+
+// A bounded MTU transition may retain its historical interface admission, but
+// padding always requires a currently observed native lease and fresh proofs.
+// The two clocks can differ only in that transition's explicit reader path.
+func validateDesktopTorProofAt(raw []byte, owner *desktopTorRuntime, now, paddingNow time.Time) (desktopTorProof, error) {
 	var proof desktopTorProof
 	bad := errors.New("native Tor proof is stale or differs from its captured policy, process or path")
 	if owner == nil || len(raw) == 0 || len(raw) > 64<<10 || decodeRelayControlJSON(raw, &proof) != nil {
@@ -121,6 +132,10 @@ func validateDesktopTorProof(raw []byte, owner *desktopTorRuntime, now time.Time
 		return proof, bad
 	}
 	if !expected.ValidEntryProof(proof.EntryProof, owner.started, now) {
+		return proof, bad
+	}
+	if expected.ValidatePaddingProof(proof.Padding, proof.PaddingProof, owner.started, paddingNow) != nil ||
+		mobiletor.ValidateDesktopPaddingProgress(owner.paddingReceipt, proof.Padding, owner.paddingProof, proof.PaddingProof) != nil {
 		return proof, bad
 	}
 	if proof.InterfaceIndex <= 0 || proof.InterfaceName == "" || len(proof.InterfaceName) > 64 || proof.EffectiveMTU < 1280 || proof.EffectiveMTU > 9000 || expected.InterfaceName != "" && proof.InterfaceName != expected.InterfaceName {
@@ -193,7 +208,7 @@ func (a *app) readDesktopTorProof(launch *desktopNodeLaunch) (desktopTorProof, e
 		err = a.desktopTorCurrent(launch)
 	}
 	if err == nil {
-		noteDesktopTorStrictHeartbeat(launch.tor, proof)
+		err = noteDesktopTorStrictHeartbeat(launch.tor, proof)
 	}
 	return proof, err
 }

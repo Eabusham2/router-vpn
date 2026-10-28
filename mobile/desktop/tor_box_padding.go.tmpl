@@ -1,0 +1,297 @@
+package box
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type routerVPNDesktopTorPaddingSession interface {
+	PaddingLease(context.Context, mobiletor.PaddingLeaseOptions) (*mobiletor.PaddingLease, error)
+}
+
+// Padding callbacks cannot wait on the native engine or reader locks: an
+// acknowledged MTU transaction may hold those while the command publishes a
+// fresh native receipt. The immutable manager identities, physical generation,
+// PT lifetime and exact authenticated child still have to belong to this owner.
+// Full control, DNS, exit and interface verification is performed separately.
+func (r *RouterVPNDesktopTor) paddingCaptureCurrent() bool {
+	return r != nil && r.readerLifetimeCurrent() && r.started.Load() && r.server == nil &&
+		r.pt != nil && r.pt.LifetimeCurrent() && r.session != nil && r.session.Current() && r.serverEntryCurrent()
+}
+
+func (r *RouterVPNDesktopTor) paddingOwnerCurrent() bool {
+	return r.paddingCaptureCurrent() && r.paddingGate != nil && r.paddingGate.Current()
+}
+
+func (r *RouterVPNDesktopTor) paddingTrafficCurrent() bool {
+	return r != nil && r.proved.Load() && r.paddingOwnerCurrent() && r.paddingHealthy()
+}
+
+// Application I/O is bounded by the older of the actual grant and its native
+// observation freshness. Merely reading this cache never extends either.
+func (r *RouterVPNDesktopTor) paddingTrafficUntil() time.Time {
+	if r == nil || !r.paddingOwnerCurrent() {
+		return time.Time{}
+	}
+	receipt, ok := r.padding.Load().NativeReceipt()
+	if !ok {
+		return time.Time{}
+	}
+	expires := time.UnixMilli(receipt.ExpiresAt)
+	if observedUntil := time.UnixMilli(receipt.ObservedAt).Add(mobiletor.PaddingReceiptMaxAge); observedUntil.Before(expires) {
+		expires = observedUntil
+	}
+	return expires
+}
+
+func (r *RouterVPNDesktopTor) paddingProofContext(ctx context.Context) (context.Context, *routervpndesktoppt.LocalTorProof, error) {
+	if r.paddingGate == nil {
+		return ctx, nil, nil
+	}
+	return r.paddingGate.ProofContext(ctx)
+}
+
+func (r *RouterVPNDesktopTor) paddingProofUntil() time.Time {
+	if r == nil || r.policy == nil {
+		return time.Time{}
+	}
+	until, err := r.policy.Metadata().PaddingProofUntil(r.paddingProof.Load(), r.createdAt, time.Now())
+	if err != nil {
+		return time.Time{}
+	}
+	return until
+}
+
+func (r *RouterVPNDesktopTor) paddingHealthy() bool {
+	if r == nil || r.policy == nil {
+		return false
+	}
+	meta := r.policy.Metadata()
+	if !meta.Padding.Enabled || meta.Execution == "server" {
+		return r.padding.Load() == nil && r.paddingProof.Load() == nil
+	}
+	lease := r.padding.Load()
+	_, healthy := lease.NativeReceipt()
+	return healthy
+}
+
+// PaddingSnapshot returns observations made by the real control worker. Reading
+// it performs no I/O and never advances an observation or proof deadline. The
+// command can publish these same snapshots during an owned TUN replacement.
+func (r *RouterVPNDesktopTor) PaddingSnapshot() (*mobiletor.PaddingReceipt, *mobiletor.DesktopBridgePaddingProof, error) {
+	bad := errors.New("desktop Tor padding has no current captured native receipt")
+	if r == nil || r.policy == nil {
+		return nil, nil, bad
+	}
+	meta := r.policy.Metadata()
+	if !meta.Padding.Enabled || meta.Execution == "server" {
+		if r.padding.Load() != nil || r.paddingProof.Load() != nil {
+			return nil, nil, bad
+		}
+		return nil, nil, nil
+	}
+	lease := r.padding.Load()
+	if lease == nil || !r.paddingOwnerCurrent() {
+		return nil, nil, bad
+	}
+	// A renewal may use a proof installed between these reads. Retry against
+	// that exact newer witness; never compare its grant with an older deadline.
+	for attempt := 0; attempt < 3; attempt++ {
+		proof := r.paddingProof.Load()
+		receipt, ok := lease.NativeReceipt()
+		if proof != r.paddingProof.Load() {
+			continue
+		}
+		if !ok || proof == nil || !r.paddingOwnerCurrent() || meta.ValidatePaddingProof(receipt, proof, r.createdAt, time.Now()) != nil {
+			return nil, nil, bad
+		}
+		captured := *proof
+		return receipt, &captured, nil
+	}
+	return nil, nil, bad
+}
+
+func (r *RouterVPNDesktopTor) startPadding(ctx context.Context, proof *mobiletor.DesktopBridgePaddingProof,
+	prove func(context.Context, string, mobiletor.DialContext) (mobiletor.Proof, error)) error {
+	meta := r.policy.Metadata()
+	if !meta.Padding.Enabled || meta.Execution == "server" {
+		return nil
+	}
+	if ctx == nil || ctx.Err() != nil || prove == nil || !r.live() || !r.paddingOwnerCurrent() {
+		return errors.New("desktop Tor padding lost its proved native owner before admission")
+	}
+	if _, err := meta.PaddingProofUntil(proof, r.createdAt, time.Now()); err != nil {
+		return err
+	}
+	owner, ok := r.session.(routerVPNDesktopTorPaddingSession)
+	if !ok {
+		return errors.New("desktop Tor child has no authenticated native padding owner")
+	}
+	captured := *proof
+	r.paddingProof.Store(&captured)
+	session := sha256.Sum256([]byte(meta.SessionID))
+	lease, err := owner.PaddingLease(r.ctx, mobiletor.PaddingLeaseOptions{
+		SessionSHA256: hex.EncodeToString(session[:]), SourceSHA256: meta.SourceSHA256, RateKbps: meta.Padding.RateKbps,
+		Current: r.paddingOwnerCurrent, ProofValidUntil: r.paddingProofUntil, Retire: func(error) { r.Cancel() },
+	})
+	if err != nil {
+		return err
+	}
+	// Retain failed START attempts too: they may already have reached the
+	// child. Its session owns STOP/idle acknowledgement and the command owns
+	// the actual process join before private files or protection are released.
+	r.padding.Store(lease)
+	if err := lease.Start(ctx); err != nil {
+		return err
+	}
+	if _, _, err := r.PaddingSnapshot(); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	if r.closing || r.ctx.Err() != nil || !r.paddingOwnerCurrent() {
+		r.mu.Unlock()
+		return errors.New("desktop Tor padding admission finished after retirement")
+	}
+	r.workers.Add(2)
+	r.mu.Unlock()
+	go func() {
+		defer r.workers.Done()
+		if err := r.refreshPadding(prove); err != nil {
+			r.Cancel()
+		}
+	}()
+	go func() {
+		defer r.workers.Done()
+		r.watchPaddingExpiry()
+	}()
+	return nil
+}
+
+// Control replies have an independent bounded drain lifetime. They cannot
+// postpone cancellation of application sockets at the actual cached expiry.
+func (r *RouterVPNDesktopTor) watchPaddingExpiry() {
+	for {
+		remaining := time.Until(r.paddingTrafficUntil())
+		if remaining <= 0 {
+			r.Cancel()
+			return
+		}
+		timer := time.NewTimer(min(100*time.Millisecond, remaining))
+		select {
+		case <-r.ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+// The immutable initial connection proof remains unchanged. Every renewal is
+// limited by a separately completed selected-DNS and fixed-origin exit proof;
+// replaying a heartbeat or merely starting this worker grants no extra time.
+func (r *RouterVPNDesktopTor) refreshPadding(prove func(context.Context, string, mobiletor.DialContext) (mobiletor.Proof, error)) error {
+	for {
+		until := r.paddingProofUntil()
+		remaining := time.Until(until)
+		if remaining <= 0 || !r.paddingOwnerCurrent() {
+			return errors.New("desktop Tor padding proof expired before refresh")
+		}
+		timer := time.NewTimer(min(10*time.Second, remaining/2))
+		select {
+		case <-r.ctx.Done():
+			timer.Stop()
+			return r.ctx.Err()
+		case <-timer.C:
+		}
+		// A pending refresh never extends the old proof. If it cannot finish
+		// by that deadline, both the native grant and this owner retire.
+		ctx, cancel := context.WithDeadline(r.ctx, until)
+		err := r.refreshPaddingProof(ctx, prove)
+		cancel()
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func (r *RouterVPNDesktopTor) refreshPaddingProof(ctx context.Context,
+	prove func(context.Context, string, mobiletor.DialContext) (mobiletor.Proof, error)) (failure error) {
+	if ctx == nil || ctx.Err() != nil || prove == nil || !r.live() || !r.paddingHealthy() {
+		return errors.New("desktop Tor padding refresh belongs to a retired native graph")
+	}
+	if _, err := r.session.Verify(ctx); err != nil {
+		return err
+	}
+	if r.policy.Predecessor() != nil {
+		if _, err := r.pt.ProvePredecessor(ctx); err != nil {
+			return err
+		}
+	}
+	proofContext, scope, err := r.paddingProofContext(ctx)
+	if err != nil {
+		return err
+	}
+	if scope != nil {
+		defer func() {
+			if err := scope.Close(context.Background()); err != nil {
+				failure = errors.New("desktop Tor padding refresh scope did not drain")
+			}
+		}()
+	}
+	if err := r.engine.DNSProof(proofContext, r.policy.Metadata().TUNTag); err != nil {
+		return err
+	}
+	dnsCheckedAt := time.Now()
+	if ctx.Err() != nil || !r.live() {
+		return errors.New("desktop Tor padding selected-DNS refresh became stale")
+	}
+	network, err := mobiletor.NewNetwork(proofContext, r.proofDial, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		// The refresh worker stays counted until every native socket has
+		// joined; a failed drain prevents the new proof from being retained.
+		if err := network.Close(context.Background()); err != nil {
+			failure = errors.New("desktop Tor padding refresh sockets did not drain")
+		}
+	}()
+	proof, err := prove(proofContext, r.policy.Metadata().SessionID, network.DialContext)
+	if err != nil {
+		return err
+	}
+	if err := network.Close(ctx); err != nil {
+		return err
+	}
+	if scope != nil {
+		if err := scope.Close(ctx); err != nil {
+			return err
+		}
+	}
+	if _, err := r.session.Verify(ctx); err != nil {
+		return err
+	}
+	if _, _, _, err := r.readback(); err != nil || ctx.Err() != nil || !r.live() || !r.paddingHealthy() {
+		return errors.New("desktop Tor padding refresh lost its captured native interface")
+	}
+	proof.DNSProven = true
+	captured := &mobiletor.DesktopBridgePaddingProof{Proof: proof, DNSCheckedAt: dnsCheckedAt}
+	if _, err := r.policy.Metadata().PaddingProofUntil(captured, r.createdAt, time.Now()); err != nil {
+		return err
+	}
+	previous := r.paddingProof.Load()
+	if previous == nil || captured.DNSCheckedAt.Before(previous.DNSCheckedAt) || captured.Proof.CheckedAt.Before(previous.Proof.CheckedAt) {
+		return errors.New("desktop Tor padding refresh proof regressed")
+	}
+	if !r.paddingOwnerCurrent() || ctx.Err() != nil {
+		return errors.New("desktop Tor padding refresh completed after retirement")
+	}
+	r.paddingProof.Store(captured)
+	return nil
+}

@@ -48,7 +48,7 @@ func routerVPNTorValidProof(proof mobiletor.DesktopBridgeProof, metadata mobilet
 	if err != nil || !address.IsGlobalUnicast() || address.IsPrivate() || address.IsLoopback() || address.IsLinkLocalUnicast() || address.String() != proof.Proof.IP {
 		return false
 	}
-	return proof.Schema == 1 && proof.SessionID == metadata.SessionID && proof.SourceSHA256 == metadata.SourceSHA256 && proof.ConfigSHA256 == metadata.ConfigSHA256 && proof.Policy == metadata && proof.Healthy && proof.MTUReadback == nil && metadata.ValidEntryProof(proof.EntryProof, started, timeNow) && proof.Proof.SessionID == metadata.SessionID && proof.Proof.IsTor && proof.Proof.DNSProven &&
+	return proof.Schema == 1 && proof.SessionID == metadata.SessionID && proof.SourceSHA256 == metadata.SourceSHA256 && proof.ConfigSHA256 == metadata.ConfigSHA256 && proof.Policy == metadata && proof.Healthy && proof.MTUReadback == nil && metadata.ValidEntryProof(proof.EntryProof, started, timeNow) && metadata.ValidatePaddingProof(proof.Padding, proof.PaddingProof, started, timeNow) == nil && proof.Proof.SessionID == metadata.SessionID && proof.Proof.IsTor && proof.Proof.DNSProven &&
 		!proof.Proof.CheckedAt.IsZero() && !proof.Proof.CheckedAt.Before(started.Add(-time.Second)) && !proof.Proof.CheckedAt.After(timeNow.Add(time.Second)) && proof.HeartbeatAt >= proof.Proof.CheckedAt.UnixMilli() && proof.HeartbeatAt >= timeNow.Add(-mobiletor.DesktopBridgeHeartbeatMaxAge).UnixMilli() && proof.HeartbeatAt <= timeNow.Add(time.Second).UnixMilli() &&
 		proof.InterfaceName != "" && len(proof.InterfaceName) <= 64 && strings.IndexFunc(proof.InterfaceName, func(r rune) bool { return r <= 0x20 || r == 0x7f }) < 0 && proof.InterfaceIndex > 0 && proof.EffectiveMTU == metadata.ConfiguredMTU && proof.EffectiveMTU >= 1280 && proof.EffectiveMTU <= 9000 && (metadata.InterfaceName == "" || proof.InterfaceName == metadata.InterfaceName)
 }
@@ -138,6 +138,7 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 	finished, connected, stopping := false, false, false
 	var receipt mobiletor.DesktopBridgeProof
 	var heartbeat time.Time
+	var paddingPublished time.Time
 	var dnsFiles *routerVPNDesktopDNSFiles
 	var mtuFiles *routerVPNDesktopMTUFiles
 	var pathFiles *routerVPNDesktopPathFiles
@@ -176,13 +177,20 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 				failure, stopping = routerVPNTorFailure, true
 				break
 			}
-			next, admitted, err := routerVPNTorAdmitTransition(files, request, receipt, transitionID, now)
+			if routerVPNTorRefreshPadding(owner, &receipt, started, now) != nil {
+				request.respond(routerVPNTorFailure)
+				failure, stopping = routerVPNTorFailure, true
+				break
+			}
+			now = time.Now()
+			next, admitted, err := routerVPNTorAdmitTransition(files, request, receipt, transitionID, started, now)
 			if err != nil {
 				request.respond(routerVPNTorFailure)
 				failure, stopping = routerVPNTorFailure, true
 				break
 			}
 			receipt, heartbeat, transition, transitionID = next, now, &admitted, admitted.TransitionID
+			paddingPublished = now
 			transitionDone = request.finished
 			proofVersion++
 			request.respond(nil)
@@ -209,8 +217,14 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 				break
 			}
 			if result.heartbeat {
+				now := time.Now()
+				if routerVPNTorRefreshPadding(owner, &result.proof, started, now) != nil ||
+					mobiletor.ValidateDesktopPaddingProgress(receipt.Padding, result.proof.Padding, receipt.PaddingProof, result.proof.PaddingProof) != nil {
+					failure, stopping = routerVPNTorFailure, true
+					break
+				}
 				receipt = result.proof
-				heartbeat = time.Now()
+				heartbeat, paddingPublished = now, now
 				receipt.HeartbeatAt = heartbeat.UnixMilli()
 				if files.publish("proof.json", receipt) != nil {
 					failure, stopping = routerVPNTorFailure, true
@@ -250,11 +264,12 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 					break
 				}
 			}
-			if routerVPNTorRefreshReadback(owner, &receipt) != nil || receipt.MTUReadback != nil {
+			if routerVPNTorRefreshReadback(owner, &receipt) != nil || receipt.MTUReadback != nil || routerVPNTorRefreshPadding(owner, &receipt, started, time.Now()) != nil {
 				failure, stopping = routerVPNTorFailure, true
 				break
 			}
 			heartbeat = time.Now()
+			paddingPublished = heartbeat
 			receipt.HeartbeatAt = heartbeat.UnixMilli()
 			if files.publish("proof.json", receipt) != nil {
 				failure, stopping = routerVPNTorFailure, true
@@ -279,6 +294,16 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 					break
 				}
 				now := time.Now()
+				// A reader transition pauses the ordinary heartbeat, not the
+				// native padding lease. Publish only its actual fresh snapshot;
+				// retain the same base heartbeat and transition deadline.
+				if transition != nil && receipt.HeartbeatAt == transition.FromHeartbeatAt && metadata.Padding.Enabled && metadata.Execution == "" && now.Sub(paddingPublished) >= 500*time.Millisecond {
+					if routerVPNTorRefreshPadding(owner, &receipt, started, now) != nil || files.publish("proof.json", receipt) != nil {
+						failure, stopping = routerVPNTorFailure, true
+						break
+					}
+					paddingPublished = now
+				}
 				if transition != nil && receipt.HeartbeatAt == transition.FromHeartbeatAt && now.UnixMilli() >= transition.ExpiresAt ||
 					time.Since(heartbeat) >= mobiletor.DesktopBridgeHeartbeatMaxAge && !routerVPNTorTransitionKeepsAlive(transition, receipt, now) {
 					failure, stopping = routerVPNTorFailure, true
@@ -289,7 +314,7 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 					cancelMaintenance = cancel
 					completed := make(chan routerVPNTorMaintenance, 1)
 					maintenance = completed
-					captured := routerVPNTorMaintenance{version: proofVersion, proof: receipt, heartbeat: transitionDone == nil && time.Since(heartbeat) >= 500*time.Millisecond}
+					captured := routerVPNTorMaintenance{version: proofVersion, proof: receipt, started: started, heartbeat: transitionDone == nil && time.Since(heartbeat) >= 500*time.Millisecond}
 					go func() { completed <- routerVPNTorMaintain(ctx, owner, files, dnsFiles, mtuFiles, pathFiles, captured) }()
 				}
 			} else {

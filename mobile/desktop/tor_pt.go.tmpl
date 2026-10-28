@@ -333,6 +333,14 @@ func (o *Owner) Current() bool {
 	return o != nil && o.ready.Load() && o.current() == nil
 }
 
+// LifetimeCurrent observes only this retained PT lifetime. The Box separately
+// checks its immutable native managers; a padding lease uses both bounded
+// witnesses while an owned MTU replacement holds the engine identity lock.
+// Fresh DNS, circuit and interface proofs still use Current and the real graph.
+func (o *Owner) LifetimeCurrent() bool {
+	return o != nil && o.ready.Load() && !o.retired.Load() && o.ctx != nil && o.ctx.Err() == nil
+}
+
 func (o *Owner) current() error {
 	if o == nil {
 		return net.ErrClosed
