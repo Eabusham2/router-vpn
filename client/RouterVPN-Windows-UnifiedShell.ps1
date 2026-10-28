@@ -97,12 +97,13 @@ function UnifiedMultihopValue($Object,[string]$Name,$Default=$null){
     if($Object-is[System.Collections.IDictionary]){if($Object.Contains($Name)){return $Object[$Name]};return $Default}
     $Property=$Object.PSObject.Properties[$Name];if($null-ne$Property){return $Property.Value};return $Default
 }
-function RefreshUnifiedMultihopComparison($Status){
-    $ComparisonForID=UnifiedMultihopValue $Status 'comparison';$script:UnifiedComparisonLastID=[string](UnifiedMultihopValue $ComparisonForID 'id' '')
-    $Label=Control 'UnifiedComparisonText';if($null-eq$Label){return}
+function GetUnifiedMultihopComparisonText($Status){
     $Comparison=UnifiedMultihopValue $Status 'comparison'
-    if($null-eq$Comparison){$Label.Text='Compare: (last-node response time + external-server response time) / 2. Either timeout excludes the candidate.';return}
+    if($null-eq$Comparison){return 'Compare: (last-node response time + external-server response time) / 2. Either timeout excludes the candidate.'}
     $Lines=@('Execution: '+[string](UnifiedMultihopValue $Status 'execution' 'none')+' | '+[string](UnifiedMultihopValue $Comparison 'stage' 'starting'))
+    if((UnifiedMultihopValue $Comparison 'last_node_measurement')-ceq'tor-last-relay-http'-and(UnifiedMultihopValue $Comparison 'external_measurement')-ceq'same-captured-endpoint-http'){
+        $Lines+= 'Tor response times: (last-relay HTTP + the same external-server HTTP response) / 2. A timeout or invalid proof excludes that candidate.'
+    }
     foreach($M in @(UnifiedMultihopValue $Comparison 'measurements' @())){
         $C=UnifiedMultihopValue $M 'candidate';$Name=[string](UnifiedMultihopValue $C 'execution' '')+' / '+[string](UnifiedMultihopValue $C 'transport' '')
         $Last=UnifiedMultihopValue $M 'last_node_ms';$External=UnifiedMultihopValue $M 'external_ms';$Score=UnifiedMultihopValue $M 'score_ms'
@@ -111,12 +112,43 @@ function RefreshUnifiedMultihopComparison($Status){
         }else{$Lines+=($Name+': rejected — '+[string](UnifiedMultihopValue $M 'failure' 'probe failed'))}
     }
     $Failure=[string](UnifiedMultihopValue $Comparison 'failure' '');if($Failure){$Lines+=$Failure}
-    $Label.Text=$Lines-join[Environment]::NewLine
+    return $Lines-join[Environment]::NewLine
+}
+function RefreshUnifiedMultihopComparison($Status){
+    $Comparison=UnifiedMultihopValue $Status 'comparison';$script:UnifiedComparisonLastID=[string](UnifiedMultihopValue $Comparison 'id' '')
+    $Label=Control 'UnifiedComparisonText';if($null-ne$Label){$Label.Text=GetUnifiedMultihopComparisonText $Status}
+}
+function UnifiedCapturedComparisonRequestID([string]$Path,[string]$Method,$Body){
+    $ID=UnifiedMultihopValue $Body 'comparison_request_id' $null
+    if($null-eq$ID){return ''}
+    if($ID-isnot[string]-or$ID-cnotmatch'\A[a-f0-9]{32}\z'-or$Method.ToUpperInvariant()-cne'POST'-or(UnifiedMultihopValue $Body 'execution')-cne'auto'){
+        throw 'The captured Tor comparison request identity is invalid.'
+    }
+    $Allowed=$Path-ceq'/api/external-profile/connect'-and(UnifiedMultihopValue $Body 'profile_id' '')
+    if($Path-ceq'/api/speed-lab/run'){$Allowed=(UnifiedMultihopValue $Body 'scope')-ceq'temporary'-and(UnifiedMultihopValue $Body 'topology')-ceq'external'-and(UnifiedMultihopValue $Body 'node_id' '')-and(UnifiedMultihopValue $Body 'entry_id' '')}
+    if(-not$Allowed){throw 'This request cannot own Tor comparison progress.'}
+    return $ID
+}
+function UnifiedCapturedComparisonTimeout([string]$Path,[string]$ID,[int]$Timeout){
+    if($ID){if($Path-ceq'/api/speed-lab/run'){return 960};return 540}
+    return $Timeout
+}
+function UnifiedCapturedComparisonStatus($Status,[string]$RequestID){
+    $Comparison=UnifiedMultihopValue $Status 'comparison'
+    return $null-ne$Comparison-and(UnifiedMultihopValue $Comparison 'request_id')-ceq$RequestID-and
+        (UnifiedMultihopValue $Comparison 'last_node_measurement')-ceq'tor-last-relay-http'-and
+        (UnifiedMultihopValue $Comparison 'external_measurement')-ceq'same-captured-endpoint-http'
 }
 # Independent read-only observer: bounded body, no proxy/redirects, no node secrets.
 $script:UnifiedComparisonLastID=''
 $script:UnifiedComparisonOldID=''
 $script:UnifiedComparisonWatching=$false
+$script:UnifiedComparisonGeneration=''
+$script:UnifiedComparisonTaskGeneration=''
+$script:UnifiedComparisonExpectedID=''
+$script:UnifiedComparisonCallback=$null
+$script:UnifiedComparisonDeadline=[DateTime]::MinValue
+$script:UnifiedComparisonCompleting=$false
 $script:UnifiedComparisonTask=$null
 $script:UnifiedComparisonRequest=$null
 $script:UnifiedComparisonCts=$null
@@ -131,42 +163,63 @@ $script:UnifiedComparisonPoller=New-Object Windows.Threading.DispatcherTimer
 $script:UnifiedComparisonPoller.Interval=[TimeSpan]::FromMilliseconds(100)
 function StopUnifiedComparisonProgress {
     $script:UnifiedComparisonWatching=$false
+    $script:UnifiedComparisonGeneration=[Guid]::NewGuid().ToString('N')
+    $script:UnifiedComparisonExpectedID='';$script:UnifiedComparisonCallback=$null
+    $script:UnifiedComparisonDeadline=[DateTime]::MinValue
     try{if($null-ne$script:UnifiedComparisonCts){$script:UnifiedComparisonCts.Cancel()}}catch{}
 }
-function StartUnifiedComparisonProgress {
+function StartUnifiedComparisonProgress([string]$RequestID='',[int]$Timeout=180,[scriptblock]$OnProgress=$null) {
     StopUnifiedComparisonProgress
+    if($RequestID-and$RequestID-cnotmatch'\A[a-f0-9]{32}\z'){throw 'Invalid captured comparison request identity.'}
     $script:UnifiedComparisonOldID=$script:UnifiedComparisonLastID
+    $script:UnifiedComparisonExpectedID=$RequestID;$script:UnifiedComparisonCallback=$OnProgress
+    $script:UnifiedComparisonDeadline=[DateTime]::UtcNow.AddSeconds([Math]::Max(1,$Timeout))
     $script:UnifiedComparisonWatching=$true
     $script:UnifiedComparisonNext=[DateTime]::MinValue
     $script:UnifiedComparisonPoller.Start()
 }
+function UnifiedComparisonProgressOwned([string]$RequestID){
+    return $RequestID-and$script:UnifiedAsyncActive-and-not$script:UnifiedAsyncClosed-and-not$script:UnifiedAsyncCancelled-and
+        $script:UnifiedComparisonWatching-and$script:UnifiedComparisonExpectedID-ceq$RequestID
+}
 function PollUnifiedComparisonProgress {
-    if($script:UnifiedAsyncClosed -or $script:UnifiedAsyncCancelled -or -not(UnifiedAsyncBusy)){StopUnifiedComparisonProgress}
-    if($null-ne$script:UnifiedComparisonTask -and $script:UnifiedComparisonTask.IsCompleted){
-        $Response=$null
+    if($script:UnifiedComparisonCompleting){return}
+    if($script:UnifiedAsyncClosed-or$script:UnifiedAsyncCancelled-or-not(UnifiedAsyncBusy)-or[DateTime]::UtcNow-ge$script:UnifiedComparisonDeadline){StopUnifiedComparisonProgress}
+    if($null-ne$script:UnifiedComparisonTask-and$script:UnifiedComparisonTask.IsCompleted){
+        $Task=$script:UnifiedComparisonTask;$Request=$script:UnifiedComparisonRequest;$Cts=$script:UnifiedComparisonCts
+        $Generation=$script:UnifiedComparisonTaskGeneration;$Response=$null
+        $script:UnifiedComparisonCompleting=$true
         try{
-            $Response=$script:UnifiedComparisonTask.GetAwaiter().GetResult()
+            $Response=$Task.GetAwaiter().GetResult()
             $Text=$Response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-            if($script:UnifiedComparisonWatching -and -not$script:UnifiedAsyncClosed -and $Response.IsSuccessStatusCode){
-                $Status=$Text|ConvertFrom-Json
-                $Comparison=UnifiedMultihopValue $Status 'comparison'
-                $ID=[string](UnifiedMultihopValue $Comparison 'id' '')
-                if($ID -and $ID-ne$script:UnifiedComparisonOldID){RefreshUnifiedMultihopComparison $Status}
+            if($script:UnifiedComparisonWatching-and-not$script:UnifiedAsyncClosed-and$Generation-ceq$script:UnifiedComparisonGeneration-and$Response.IsSuccessStatusCode-and[Text.Encoding]::UTF8.GetByteCount($Text)-le32768){
+                $Status=$Text|ConvertFrom-Json;$Comparison=UnifiedMultihopValue $Status 'comparison'
+                $ID=UnifiedMultihopValue $Comparison 'id' ''
+                $Matches=if($script:UnifiedComparisonExpectedID){UnifiedCapturedComparisonStatus $Status $script:UnifiedComparisonExpectedID}else{$ID-cne$script:UnifiedComparisonOldID}
+                if($ID-is[string]-and$ID-and$Matches){
+                    RefreshUnifiedMultihopComparison $Status
+                    $Callback=$script:UnifiedComparisonCallback
+                    if($null-ne$Callback){&$Callback $Status (GetUnifiedMultihopComparisonText $Status)}
+                    $Complete=UnifiedMultihopValue $Comparison 'complete' $false
+                    if($Complete-is[bool]-and$Complete-and$Generation-ceq$script:UnifiedComparisonGeneration){StopUnifiedComparisonProgress}
+                }
             }
         }catch{}finally{
-            if($null-ne$Response){$Response.Dispose()}
-            if($null-ne$script:UnifiedComparisonRequest){$script:UnifiedComparisonRequest.Dispose()}
-            if($null-ne$script:UnifiedComparisonCts){$script:UnifiedComparisonCts.Dispose()}
-            $script:UnifiedComparisonTask=$null;$script:UnifiedComparisonRequest=$null;$script:UnifiedComparisonCts=$null
-            $script:UnifiedComparisonNext=[DateTime]::UtcNow.AddMilliseconds(500)
+            if($null-ne$Response){$Response.Dispose()};if($null-ne$Request){$Request.Dispose()};if($null-ne$Cts){$Cts.Dispose()}
+            if([object]::ReferenceEquals($Task,$script:UnifiedComparisonTask)){
+                $script:UnifiedComparisonTask=$null;$script:UnifiedComparisonRequest=$null;$script:UnifiedComparisonCts=$null
+                $script:UnifiedComparisonNext=[DateTime]::UtcNow.AddMilliseconds(500)
+            }
+            $script:UnifiedComparisonCompleting=$false
         }
     }
     if(-not$script:UnifiedComparisonWatching){if($null-eq$script:UnifiedComparisonTask){$script:UnifiedComparisonPoller.Stop()};return}
-    if($null-eq$script:UnifiedComparisonTask -and [DateTime]::UtcNow-ge$script:UnifiedComparisonNext){
+    if($null-eq$script:UnifiedComparisonTask-and[DateTime]::UtcNow-ge$script:UnifiedComparisonNext){
         try{
             $script:UnifiedComparisonRequest=[System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get,'http://127.0.0.1:8788/api/multihop/status')
             $script:UnifiedComparisonCts=[System.Threading.CancellationTokenSource]::new()
             $script:UnifiedComparisonCts.CancelAfter([TimeSpan]::FromSeconds(2))
+            $script:UnifiedComparisonTaskGeneration=$script:UnifiedComparisonGeneration
             $script:UnifiedComparisonTask=$script:UnifiedComparisonClient.SendAsync($script:UnifiedComparisonRequest,$script:UnifiedComparisonCts.Token)
         }catch{
             StopUnifiedComparisonProgress
@@ -184,7 +237,7 @@ function SetUnifiedAsyncUI([bool]$Busy,[string]$Label=''){
     }
     $B=Control 'UnifiedConnectButton';if($null-ne$B){$B.IsEnabled=$true;if($Busy){$B.Content=if($Label-match'(?i)connect|auto|custom|multihop|external'){'Cancel / Disconnect'}else{$Label}}}
 }
-function StartUnifiedApiAsync([string]$Label,[string]$Path,[string]$Method='GET',$Body=$null,[int]$Timeout=180,[scriptblock]$OnSuccess=$null,[scriptblock]$OnFailure=$null,[scriptblock]$OnFinally=$null){
+function StartUnifiedApiAsync([string]$Label,[string]$Path,[string]$Method='GET',$Body=$null,[int]$Timeout=180,[scriptblock]$OnSuccess=$null,[scriptblock]$OnFailure=$null,[scriptblock]$OnFinally=$null,[scriptblock]$OnComparison=$null){
     if($script:UnifiedAsyncClosed){return $false}
     if(UnifiedAsyncBusy){Log ("$Label refused: another Router VPN action is still running.");return $false}
     $script:UnifiedAsyncActive=$true
@@ -199,6 +252,8 @@ function StartUnifiedApiAsync([string]$Label,[string]$Path,[string]$Method='GET'
             'DELETE' {[System.Net.Http.HttpMethod]::Delete}
             default {throw "Unsupported asynchronous HTTP method: $Method"}
         }
+        $ComparisonID=UnifiedCapturedComparisonRequestID $Path $Method $Body
+        $Timeout=UnifiedCapturedComparisonTimeout $Path $ComparisonID $Timeout
         $Uri=([string]$BaseUrl).TrimEnd('/')+$Path
         $Req=[System.Net.Http.HttpRequestMessage]::new($Verb,$Uri)
         if($null-ne$Body){
@@ -210,7 +265,7 @@ function StartUnifiedApiAsync([string]$Label,[string]$Path,[string]$Method='GET'
         $script:UnifiedAsyncRequest=$Req;$script:UnifiedAsyncCts=$Cts;$script:UnifiedAsyncSuccess=$OnSuccess;$script:UnifiedAsyncFailure=$OnFailure;$script:UnifiedAsyncFinally=$OnFinally
         $script:UnifiedAsyncLabel=$Label;$script:UnifiedAsyncCancelled=$false;$script:UnifiedAsyncDisconnectAfterCancel=$false
         $script:UnifiedAsyncTask=$script:UnifiedAsyncClient.SendAsync($Req,$Cts.Token)
-        if($Path-eq'/api/multihop/connect'){StartUnifiedComparisonProgress}
+        if($ComparisonID-or$Path-ceq'/api/multihop/connect'){StartUnifiedComparisonProgress $ComparisonID $Timeout $OnComparison}
         SetUnifiedAsyncUI $true $Label
         $script:UnifiedAsyncPoller.Start()
         return $true

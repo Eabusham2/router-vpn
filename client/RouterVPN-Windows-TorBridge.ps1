@@ -98,6 +98,14 @@ function NewUnifiedExternalCapturedBody($Body,$Opened,$Current=$null){
     }
     $Result=@{};foreach($Key in $Body.Keys){$Result[$Key]=$Body[$Key]}
     $Result.expected_selected_node_id=$Selected;$Result.expected_profile_tokens=$Tokens
+    $ExplicitExecution=ExternalPublicValue $Body 'execution' $null
+    $IsTor=(ExternalPublicValue (ExternalPublicValue $Exits[0] 'external' $null) 'protocol') -cin @('tor','tor-bridge')
+    $RequestID=ExternalPublicValue $Body 'comparison_request_id' $null
+    if(-not$Direct-and$IsTor-and$ExplicitExecution-ceq'auto'){
+        if($null-eq$RequestID){$RequestID=[Guid]::NewGuid().ToString('N')}
+        if($RequestID-isnot[string]-or$RequestID-cnotmatch'\A[a-f0-9]{32}\z'){throw 'The captured Tor comparison request identity is invalid.'}
+        $Result.comparison_request_id=$RequestID
+    }elseif($null-ne$RequestID){throw 'A comparison request identity belongs only to a captured Tor Compare connection.'}
     return $Result
 }
 function NewUnifiedExternalPrimaryBody($Profile,$Opened,[bool]$Direct=$false,[bool]$RequireSelected=$true){

@@ -193,6 +193,7 @@ function ShowUnifiedSpeedLab{
    $tokens[$id]=$captured[$id]
   }
   $Payload.expected_selected_node_id=[string]$CapturedSpeedLabSelection.selectedNodeID;$Payload.expected_profile_tokens=$tokens
+  if(SpeedLabTorCompareRequest $Payload){$Payload.comparison_request_id=[Guid]::NewGuid().ToString('N')}
   return $Payload
  }
  function NewSpeedLabRequest{
@@ -273,7 +274,16 @@ function ShowUnifiedSpeedLab{
    $payload=NewSpeedLabRequest;$duration=SelectedTag $DurationMode
    $timeout=SpeedLabRequestTimeout $payload
    if(SpeedLabTorCompareRequest $payload){$Status.Text='Comparing Local and Server Tor paths…';$Detail.Text='Each candidate measures Tor last-relay HTTP and the same external-server HTTP response. The lowest valid average is rechecked before throughput testing; the captured connection is restored afterward.'}
+   $comparisonRequestID=[string](SpeedLabValue $payload 'comparison_request_id')
+   $Comparison={param($Progress,[string]$Text)
+    if([string]$D.Tag-cne'owned-run'-or-not(UnifiedComparisonProgressOwned $comparisonRequestID)){return}
+    $Record=SpeedLabValue $Progress 'comparison' $null
+    if((SpeedLabValue $Record 'request_id')-cne$comparisonRequestID){return}
+    $Status.Text=if((SpeedLabValue $Record 'complete' $false)-ceq$true){if(SpeedLabValue $Record 'failure'){'Tor comparison failed; captured-path restoration continues…'}else{'Tor comparison complete; throughput testing and captured-path restoration continue…'}}else{'Comparing Local and Server Tor paths…'}
+    $Detail.Text=$Text
+   }.GetNewClosure()
    $Success={param($R)
+    if([string]$D.Tag-cne'owned-run'){return}
     $S=$R.summary;$M=$R.measurement
     $D.FindName('IdleBig').Text=('{0:N1} ms'-f[double]$S.idle_ms);$D.FindName('DownBig').Text=('{0:N1} Mbps'-f[double]$S.download_mbps);$D.FindName('UpBig').Text=('{0:N1} Mbps'-f[double]$S.upload_mbps)
     $D.FindName('IdleDetail').Text=('p90 {0:N1} • max {1:N1} • jitter {2:N1} ms'-f[double]$M.idle_latency.p90_ms,[double]$M.idle_latency.max_ms,[double]$M.idle_latency.jitter_ms)
@@ -289,9 +299,9 @@ function ShowUnifiedSpeedLab{
     $Json=$R|ConvertTo-Json -Depth 12;if($HopLines.Count){$Detail.Text="PER-HOP — SAME PROVED GRAPH$([Environment]::NewLine)"+($HopLines-join[Environment]::NewLine)+"$([Environment]::NewLine)$([Environment]::NewLine)FULL RESULT$([Environment]::NewLine)"+$Json}else{$Detail.Text=$Json}
     $hopSuffix=if($HopLines.Count){' • '+$HopLines.Count+' hop measurements'}else{''};$Status.Text=('Finished • {0} / {1} • {2}{3}'-f[string]$R.path.scope,[string]$R.path.topology,[string]$M.provider,$hopSuffix)
    }.GetNewClosure()
-   $Failure={param($E)$Detail.Text=$E;$Status.Text='Speed Lab failed closed; see details.'}.GetNewClosure()
-   $Finally={$Run.IsEnabled=$true;$Advanced.IsEnabled=$true;$D.Tag='ready';RefreshProduct;RefreshUnifiedTelemetry}.GetNewClosure()
-   if(-not(StartUnifiedApiAsync 'Running Speed Lab…' '/api/speed-lab/run' 'POST' $payload $timeout $Success $Failure $Finally)){$Run.IsEnabled=$true;$Advanced.IsEnabled=$true;$D.Tag='ready'}
+   $Failure={param($E)if([string]$D.Tag-cne'owned-run'){return};$Detail.Text=$E;$Status.Text='Speed Lab failed closed; see details.'}.GetNewClosure()
+   $Finally={if([string]$D.Tag-cne'owned-run'){return};$Run.IsEnabled=$true;$Advanced.IsEnabled=$true;$D.Tag='ready';RefreshProduct;RefreshUnifiedTelemetry}.GetNewClosure()
+   if(-not(StartUnifiedApiAsync 'Running Speed Lab…' '/api/speed-lab/run' 'POST' $payload $timeout $Success $Failure $Finally $Comparison)){$Run.IsEnabled=$true;$Advanced.IsEnabled=$true;$D.Tag='ready'}
   }catch{$Detail.Text=$_.Exception.Message;$Status.Text='Speed Lab failed closed; see details.';$Run.IsEnabled=$true;$Advanced.IsEnabled=$true;$D.Tag='ready'}
  })
  [void]$D.ShowDialog()

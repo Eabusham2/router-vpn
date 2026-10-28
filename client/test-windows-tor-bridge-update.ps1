@@ -85,7 +85,7 @@ foreach($ID in @('obfs4','meek_lite','snowflake','webtunnel','tor')){
         Check ($null-ne$Saved) ('Actual Tor Save rejected valid update: '+$Status.Text)
         Check ($Saved.id-ceq'tor-edit'-and$Saved.expected_selected_node_id-ceq'tor-edit'-and$Saved.expected_profile_tokens.Count-eq2) 'Update lost captured Tor and entry identities'
         Check ($Saved.transport-ceq$ID-and$Saved.kill_switch_policy-ceq$Policy-and-not$Button.IsEnabled) 'Update changed selection or allowed stale repeated Save'
-        foreach($Forbidden in @('profile_id','entry_id','entry_mode','direct','execution','api_token','dns_mode')){Check (-not$Saved.ContainsKey($Forbidden)) ('Bridge form copied unrelated setting '+$Forbidden)}
+        foreach($Forbidden in @('profile_id','entry_id','entry_mode','direct','execution','comparison_request_id','api_token','dns_mode')){Check (-not$Saved.ContainsKey($Forbidden)) ('Bridge form copied unrelated setting '+$Forbidden)}
         [IO.File]::WriteAllText((Join-Path $Output ('tor-update-'+$FilePrefix+$ID+'-'+$Policy+'.json')),($Saved|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))
     }
 }

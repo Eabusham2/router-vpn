@@ -281,6 +281,18 @@ foreach($TorProtocol in @('tor','tor-bridge')){foreach($TorExecution in @('local
     $TorPath=NewUnifiedExternalPathBody $TorProfile 'captured-entry' $TorExecution $false @($TorStore.profiles) 'wg' $EntryModes
     $TorBody=NewUnifiedExternalCapturedBody $TorPath $TorStore $TorStore
     Check ($TorBody.execution-ceq$TorExecution-and$TorBody.entry_mode-ceq'wg'-and$TorBody.expected_profile_tokens.Count-eq2) 'Tor path changed execution, exact entry mode or source capture.';$Count++
+    if($TorExecution-ceq'auto'){
+        Check ($TorBody.comparison_request_id-cmatch'\A[a-f0-9]{32}\z') 'Tor Compare path omitted its captured request nonce.'
+        $Again=NewUnifiedExternalCapturedBody $TorBody $TorStore $TorStore
+        Check ($Again.comparison_request_id-ceq$TorBody.comparison_request_id) 'Repeated source validation changed the same request nonce.'
+        $FreshBody=NewUnifiedExternalCapturedBody $TorPath $TorStore $TorStore
+        Check ($FreshBody.comparison_request_id-cne$TorBody.comparison_request_id) 'A new Tor connection reused another request nonce.'
+        foreach($BadNonce in @(('A'*32),'short',123)){
+            $Bad=$TorPath.Clone();$Bad.comparison_request_id=$BadNonce;$Rejected=$false
+            try{[void](NewUnifiedExternalCapturedBody $Bad $TorStore $TorStore)}catch{$Rejected=$true}
+            Check $Rejected 'Malformed Tor request nonce passed the captured source builder.'
+        }
+    }else{Check (-not$TorBody.ContainsKey('comparison_request_id')) 'Local/Server path received a Compare nonce.'}
     $TorSaved=NewUnifiedExternalCapturedBody (NewUnifiedExternalConnectBody $TorProfile '' $TorExecution $false) $TorStore $TorStore
     Check ($TorSaved.execution-ceq$TorExecution-and$TorSaved.expected_profile_tokens['captured-entry']-ceq('b'*64)) 'Tor primary Connect lost its saved private entry.';$Count++
     foreach($Fault in @('entry-token','exit-token','selected','missing','duplicate','ordinary','foreign-private','direct','wrong-exit')){

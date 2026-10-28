@@ -2,7 +2,7 @@ param([Parameter(Mandatory=$true)][string]$ProductSource)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 $Ast=[ScriptBlock]::Create($ProductSource).Ast
-foreach($Name in @('UnifiedMultihopValue','RefreshUnifiedMultihopComparison')) {
+foreach($Name in @('UnifiedMultihopValue','GetUnifiedMultihopComparisonText','RefreshUnifiedMultihopComparison')) {
  $Functions=@($Ast.FindAll({param($N) $N-is[System.Management.Automation.Language.FunctionDefinitionAst] -and $N.Name-eq$Name},$true))
  if($Functions.Count-ne1){throw "Missing composed comparison function: $Name"}
  . ([ScriptBlock]::Create($Functions[0].Extent.Text))
@@ -12,6 +12,8 @@ function Control([string]$Name){if($Name-eq'UnifiedComparisonText'){return $scri
 $valid=@{candidate=@{execution='server';transport='shadowsocks'};eligible=$true;last_node_ms=20;external_ms=40;score_ms=30}
 RefreshUnifiedMultihopComparison @{execution='server';comparison=@{id='one';stage='selected';measurements=@($valid)}}
 if($script:ComparisonTestLabel.Text-notmatch '20[.,]0 \+ 40[.,]0.*30[.,]0 ms'){throw 'Valid comparison not displayed'}
+RefreshUnifiedMultihopComparison @{execution='local';comparison=@{id='tor';stage='selected';last_node_measurement='tor-last-relay-http';external_measurement='same-captured-endpoint-http';measurements=@($valid)}}
+if($script:ComparisonTestLabel.Text-notlike '*last-relay HTTP*same external-server HTTP*'-or$script:ComparisonTestLabel.Text-match'(?i)icmp|ping'){throw 'Tor response measurements were mislabeled.'}
 foreach($Failure in @('last-node timeout','external timeout','stale session')) {
  $bad=@{candidate=@{execution='local';transport='shadowsocks'};eligible=$false;failure=$Failure}
  RefreshUnifiedMultihopComparison @{comparison=@{id='two';stage='measured';measurements=@($bad)}}

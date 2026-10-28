@@ -7,7 +7,7 @@ $source = Get-Content -LiteralPath (Join-Path $Root 'client/RouterVPN-Windows-Un
 $extra = [regex]::Match($source, '(?ms)^    \$extraState = @''\r?\n(.*?)\r?\n''@')
 if (-not $extra.Success) { throw 'Shipping async source block not found.' }
 $ast = [ScriptBlock]::Create($extra.Groups[1].Value).Ast
-$names = @('UnifiedAsyncBusy','SetUnifiedAsyncUI','StartUnifiedApiAsync','CancelUnifiedApiAsync','CompleteUnifiedApiAsync','StartUnifiedComparisonProgress','StopUnifiedComparisonProgress')
+$names = @('UnifiedAsyncBusy','UnifiedMultihopValue','GetUnifiedMultihopComparisonText','RefreshUnifiedMultihopComparison','UnifiedCapturedComparisonRequestID','UnifiedCapturedComparisonTimeout','UnifiedCapturedComparisonStatus','SetUnifiedAsyncUI','StartUnifiedApiAsync','CancelUnifiedApiAsync','CompleteUnifiedApiAsync','StartUnifiedComparisonProgress','StopUnifiedComparisonProgress','UnifiedComparisonProgressOwned','PollUnifiedComparisonProgress')
 foreach ($name in $names) {
     $nodes = @($ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name}, $true))
     if ($nodes.Count -ne 1) { throw "Expected one shipping function: $name" }
@@ -15,7 +15,7 @@ foreach ($name in $names) {
 }
 function Assert([bool]$Value, [string]$Message) { if (-not $Value) { throw $Message } }
 function Log([string]$Text) { $script:Messages.Add($Text) }
-function Control([string]$Name) { if (-not $script:Controls.ContainsKey($Name)) { $script:Controls[$Name] = [pscustomobject]@{IsEnabled=$true;Content='Connect'} }; return $script:Controls[$Name] }
+function Control([string]$Name) { if (-not $script:Controls.ContainsKey($Name)) { $script:Controls[$Name] = [pscustomobject]@{IsEnabled=$true;Content='Connect';Text=''} }; return $script:Controls[$Name] }
 function CancelUnifiedRefreshAsync { return $false }
 function RefreshProduct { $script:Refreshes++ }
 function Reset-Fixture {
@@ -33,7 +33,17 @@ function Reset-Fixture {
     # Only their timer/transport dependencies are doubled; no observer request
     # or VPN connection is made by this isolated lifecycle suite.
     $script:UnifiedComparisonWatching=$false; $script:UnifiedComparisonCts=$null
+    $script:UnifiedComparisonGeneration='';$script:UnifiedComparisonTaskGeneration='';$script:UnifiedComparisonExpectedID='';$script:UnifiedComparisonCallback=$null
+    $script:UnifiedComparisonTask=$null;$script:UnifiedComparisonRequest=$null;$script:UnifiedComparisonCompleting=$false;$script:UnifiedComparisonDeadline=[DateTime]::MinValue
     $script:UnifiedComparisonLastID='old-comparison'; $script:UnifiedComparisonOldID=''
+    $script:ProgressCallbacks=0;$script:ProgressText=''
+    $script:UnifiedComparisonClient=[pscustomobject]@{Sends=0;Pending=$null;LastPath='';LastMethod='';SeenCts=$null}
+    $script:UnifiedComparisonClient|Add-Member ScriptMethod SendAsync {
+        param($Request,$Token)
+        $this.Sends++;$this.LastPath=$Request.RequestUri.AbsoluteUri;$this.LastMethod=$Request.Method.Method;$this.SeenCts=$script:UnifiedComparisonCts
+        $this.Pending=New-Object 'System.Threading.Tasks.TaskCompletionSource[System.Net.Http.HttpResponseMessage]'
+        return $this.Pending.Task
+    }
     $script:UnifiedComparisonNext=[DateTime]::MinValue
     $script:UnifiedComparisonPoller=[pscustomobject]@{Starts=0;Stops=0}
     $script:UnifiedComparisonPoller | Add-Member ScriptMethod Start {$this.Starts++}
@@ -153,6 +163,92 @@ Assert (-not $script:UnifiedComparisonWatching -and $observerCts.IsCancellationR
 $observerCts.Dispose();$script:UnifiedComparisonCts=$null
 Write-Host 'PASS repeated comparison observer cancellation is idempotent'
 
+# Real emitted observer/control methods with an explicit private HTTP transport
+# boundary. No public Tor circuits or synthetic network success are claimed.
+function Tor-Body([string]$RequestID,[bool]$Speed=$false){
+    if($Speed){return @{scope='temporary';topology='external';node_id='tor';entry_id='private';execution='auto';comparison_request_id=$RequestID}}
+    return @{profile_id='tor';execution='auto';comparison_request_id=$RequestID}
+}
+function Progress-Value([string]$RequestID,[bool]$Complete=$false){
+    return @{execution='local';comparison=@{id='opaque-native-progress';request_id=$RequestID;stage='measured';complete=$Complete;last_node_measurement='tor-last-relay-http';external_measurement='same-captured-endpoint-http';measurements=@(@{candidate=@{execution='local';transport='tor'};eligible=$true;last_node_ms=20;external_ms=40;score_ms=30})}}
+}
+function Finish-Progress($Value,[string]$Prefix=''){
+    $r=[System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::OK)
+    $r.Content=[System.Net.Http.StringContent]::new($Prefix+($Value|ConvertTo-Json -Depth 12 -Compress))
+    [void]$script:UnifiedComparisonClient.Pending.TrySetResult($r)
+    PollUnifiedComparisonProgress
+}
+$nonce='a'*32;$nextNonce='b'*32
+foreach($speed in @($false,$true)){
+    Reset-Fixture
+    $path=if($speed){'/api/speed-lab/run'}else{'/api/external-profile/connect'}
+    $body=Tor-Body $nonce $speed
+    Assert ((UnifiedCapturedComparisonTimeout $path (UnifiedCapturedComparisonRequestID $path 'POST' $body) 180)-eq$(if($speed){960}else{540})) 'Captured Tor comparison used the wrong bounded HTTP budget.'
+    Assert (StartUnifiedApiAsync 'Tor Compare' $path 'POST' $body 180 $null $null $null {param($status,$text)$script:ProgressCallbacks++;$script:ProgressText=$text}) 'Captured Tor comparison did not start.'
+    Assert ($script:UnifiedComparisonWatching-and$script:UnifiedComparisonExpectedID-ceq$nonce) 'Tor request did not retain its exact observer identity.'
+    PollUnifiedComparisonProgress
+    Assert ($script:UnifiedComparisonClient.LastPath-ceq'http://127.0.0.1:8788/api/multihop/status'-and$script:UnifiedComparisonClient.LastMethod-ceq'GET') 'Observer escaped the read-only loopback status endpoint.'
+    foreach($fault in @('wrong-request','missing-request','wrong-last','wrong-external','oversized')){
+        $value=Progress-Value $nonce
+        switch($fault){
+            'wrong-request'{$value.comparison.request_id=$nextNonce}
+            'missing-request'{$value.comparison.Remove('request_id')}
+            'wrong-last'{$value.comparison.last_node_measurement='icmp'}
+            'wrong-external'{$value.comparison.external_measurement='different-endpoint'}
+        }
+        Finish-Progress $value $(if($fault-ceq'oversized'){' '*32769}else{''})
+        Assert ($script:ProgressCallbacks-eq0-and-not(Control 'UnifiedComparisonText').Text) ('Foreign/malformed comparison reached UI: '+$fault)
+        $script:UnifiedComparisonNext=[DateTime]::MinValue;PollUnifiedComparisonProgress
+    }
+    Finish-Progress (Progress-Value $nonce)
+    Assert ($script:ProgressCallbacks-eq1-and$script:ProgressText-like'*last-relay HTTP*same external-server HTTP*'-and$script:ProgressText-like'*30.0 ms*') 'Exact Tor progress did not render its actual HTTP measurements.'
+    $script:UnifiedComparisonNext=[DateTime]::MinValue;PollUnifiedComparisonProgress
+    Finish-Progress (Progress-Value $nonce $true)
+    Assert ($script:ProgressCallbacks-eq2-and-not$script:UnifiedComparisonWatching-and$null-eq$script:UnifiedComparisonCallback-and(UnifiedAsyncBusy)) 'Comparison completion incorrectly ended throughput/connection work or retained its callback.'
+    [void](Finish-Response);CompleteUnifiedApiAsync
+}
+Write-Host 'PASS Tor Connect and Speed Lab exact request, truthful measurement labels, bounded observer and terminal ownership'
+
+foreach($fault in @('uppercase','short','number','local','unrelated-path','current-scope')){
+    Reset-Fixture;$path='/api/speed-lab/run';$body=Tor-Body $nonce $true
+    switch($fault){'uppercase'{$body.comparison_request_id='A'*32};'short'{$body.comparison_request_id='a'};'number'{$body.comparison_request_id=7};'local'{$body.execution='local'};'unrelated-path'{$path='/api/profiles'};'current-scope'{$body.scope='current'}}
+    Assert (-not(StartUnifiedApiAsync 'Invalid comparison' $path 'POST' $body 180)) ('Invalid request identity reached transport: '+$fault)
+    Assert ($script:UnifiedAsyncClient.Sends-eq0-and-not(UnifiedAsyncBusy)-and-not$script:UnifiedComparisonWatching) 'Invalid comparison retained an owner or sent a request.'
+}
+Write-Host 'PASS malformed/non-Tor request correlation is rejected before transport'
+
+Reset-Fixture
+[void](StartUnifiedApiAsync 'First Tor' '/api/external-profile/connect' 'POST' (Tor-Body $nonce) 180 $null $null $null {param($s,$t)$script:ProgressCallbacks+=100})
+PollUnifiedComparisonProgress;$oldPending=$script:UnifiedComparisonClient.Pending;$oldCts=$script:UnifiedComparisonCts
+[void](CancelUnifiedApiAsync $false);[void](Finish-Response);CompleteUnifiedApiAsync
+Assert $oldCts.IsCancellationRequested 'Cancelled comparison did not revoke its exact observer socket.'
+[void](StartUnifiedApiAsync 'Replacement Tor' '/api/external-profile/connect' 'POST' (Tor-Body $nextNonce) 180 $null $null $null {param($s,$t)$script:ProgressCallbacks++;$script:ProgressText=$t})
+# Even a stale task that happens to return the replacement nonce cannot change
+# the replacement action: the task carries its separately captured generation.
+$r=[System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]::OK);$r.Content=[System.Net.Http.StringContent]::new(((Progress-Value $nextNonce)|ConvertTo-Json -Depth 12 -Compress));[void]$oldPending.TrySetResult($r)
+PollUnifiedComparisonProgress
+Assert ($script:ProgressCallbacks-eq0-and$script:UnifiedComparisonWatching-and$script:UnifiedComparisonExpectedID-ceq$nextNonce) 'Late prior-generation response mutated or stopped the replacement observer.'
+$script:UnifiedComparisonNext=[DateTime]::MinValue;PollUnifiedComparisonProgress;Finish-Progress (Progress-Value $nextNonce)
+Assert ($script:ProgressCallbacks-eq1) 'Current replacement observer could not progress after old resources drained.'
+$script:UnifiedComparisonNext=[DateTime]::MinValue;PollUnifiedComparisonProgress;$ownerCts=$script:UnifiedComparisonCts
+$script:UnifiedAsyncClosed=$true;PollUnifiedComparisonProgress;Finish-Progress (Progress-Value $nextNonce)
+Assert ($script:ProgressCallbacks-eq1-and-not$script:UnifiedComparisonWatching-and$null-eq$script:UnifiedComparisonCallback) 'Closed window accepted a late comparison callback.'
+[void](CancelUnifiedApiAsync $false);[void](Finish-Response);CompleteUnifiedApiAsync
+Write-Host 'PASS exact observer generation survives old completion and close cancels its retained UI callback'
+
+Reset-Fixture
+[void](StartUnifiedApiAsync 'Tor Compare' '/api/external-profile/connect' 'POST' (Tor-Body $nonce) 180 $null $null $null {
+    param($s,$t);$script:ProgressCallbacks++;StartUnifiedComparisonProgress ('b'*32) 540 {param($s,$t)$script:ProgressCallbacks+=10}
+})
+PollUnifiedComparisonProgress;Finish-Progress (Progress-Value $nonce $true)
+Assert ($script:ProgressCallbacks-eq1-and$script:UnifiedComparisonWatching-and$script:UnifiedComparisonExpectedID-ceq$nextNonce) 'Old terminal callback stopped a replacement observer generation.'
+$script:UnifiedComparisonNext=[DateTime]::MinValue;PollUnifiedComparisonProgress;Finish-Progress (Progress-Value $nextNonce)
+Assert ($script:ProgressCallbacks-eq11) 'Nested replacement observer callback lost ownership.'
+$script:UnifiedComparisonDeadline=[DateTime]::UtcNow.AddMilliseconds(-1);PollUnifiedComparisonProgress
+Assert (-not$script:UnifiedComparisonWatching-and$null-eq$script:UnifiedComparisonCallback) 'Expired observer retained progress authority.'
+[void](Finish-Response);CompleteUnifiedApiAsync
+Write-Host 'PASS terminal callback replacement and bounded observer expiry preserve exact ownership'
+
 # Parse the emitted handlers, not just the transformer that contains them as strings.
 $handlers=[regex]::Match($source, '(?ms)^    \$handlers = @''\r?\n(.*?)\r?\n''@')
 Assert $handlers.Success 'Shipping handler block missing'
@@ -160,4 +256,4 @@ $tokens=$null;$errors=$null
 [void][System.Management.Automation.Language.Parser]::ParseInput($handlers.Groups[1].Value,[ref]$tokens,[ref]$errors)
 Assert ($errors.Count -eq 0) ('Shipping event-handler parse failed: '+(($errors|ForEach-Object Message)-join '; '))
 Write-Host 'PASS generated window event handlers parse'
-Write-Host 'Windows async action regression tests: PASS (9 groups)'
+Write-Host 'Windows async action regression tests: PASS (13 groups)'
