@@ -24,7 +24,7 @@ T.SWIFT = T.SWIFT[:start] + r'''
   try check("Server includes every supported private predecessor",Set(modes)==RouterVPNExternalExitBuilder.torEntryModes)
   for mode in modes {for layer in layers {for kind in kinds {try serverVerify(kind,mode,layer,maximum,composite)}}}
   try check("complete Server graph matrix",graphs==342)
-  try serverHome(maximum,composite);try serverNegative(maximum,composite)
+  try serverHome(maximum,composite);try serverComparedLeaves(maximum,composite);try serverNegative(maximum,composite)
   print("Apple Tor Server: PASS (\(graphs) shipping Swift/Go graphs; \(checks) checks; native handles and OS boundaries doubled)")
  }
 ''' + T.SWIFT[end:]
@@ -102,10 +102,10 @@ extension Tests {
    let owner=ProviderPreparation();owner.restoredMultihopExecution=restored
    reject("Server cannot adopt another restored execution"){_ = try owner.prepare(provider:provider,selectedProfile:selected,strict:true)}
   }
-  for fault in ["compare","missing-entry","ordinary-entry","wrong-entry-id","entry-proof","wrong-exit-mode","wrong-exit-id","fixed-conflict","padding-changed-execution","padding-type","padding-rate-type","padding-rate-small","padding-rate-large"] {
+  for fault in ["unresolved-compare","missing-entry","ordinary-entry","wrong-entry-id","entry-proof","wrong-exit-mode","wrong-exit-id","fixed-conflict","padding-changed-execution","padding-type","padding-rate-type","padding-rate-small","padding-rate-large"] {
    var changed=selected,changedSource=source,changedEntry=entry,changedProvider=provider
    switch fault {
-   case "compare":changed["multihop_execution"]="auto"
+   case "unresolved-compare":changed["multihop_execution"]="auto"
    case "missing-entry":changedProvider.removeValue(forKey:"tor_entry_bundle")
    case "ordinary-entry":changedEntry["node_kind"]="external"
    case "wrong-entry-id":changedEntry["id"]="other"
@@ -134,6 +134,28 @@ extension Tests {
   let localRuntime=try localOwner.prepare(provider:provider,selectedProfile:local,strict:true).runtime
   let localGraph=try object(localRuntime.files["sing-box.json"]!)
   try check("explicit enabled Local retains its own source rather than Server authority",localRuntime.torExecution=="local" && tagged(localGraph,"routervpn-tor-exit")["type"] as? String=="routervpn-tor" && bridge(["Op":"tor-padding-source","Config":text(localGraph),"Policy":localRuntime.torProfileJSON!,"Node":localRuntime.torSessionID!]).count==64)
+ }
+ @MainActor static func serverComparedLeaves(_ maximum:[String:Any],_ composite:[String:Any])throws {
+  var compared=0
+  for mode in modes {for layer in layers {for kind in ["tor","obfs4"] {for execution in ["local","server"] {
+   var selected=try serverSelection(kind,mode)
+   selected["multihop_execution"]="auto";selected["daita_enabled"]=true;selected["daita_rate_kbps"]=64
+   let original=try text(selected),source=try root(mode,layer,maximum,composite),entry=(source["routerProfiles"] as! [[String:Any]])[0]
+   let owner=ProviderPreparation();owner.restoredMultihopExecution=execution
+   let prepared=try owner.prepare(provider:["tor_entry_bundle":json(source),"tor_entry_mode":mode],selectedProfile:selected,strict:true),runtime=prepared.runtime
+   let leaf=try IOSMultihopExecution.torLeaf(selected,execution:execution),graph=try object(runtime.files["sing-box.json"]!),out=try tagged(graph,"routervpn-tor-exit")
+   try check("Compare leaf keeps immutable saved auto and exact entry authority",runtime.torSourceProfileJSON==original && runtime.torProfileJSON==text(leaf) && runtime.torPredecessorProfile==text(entry) && owner.multihopExecutionSource?.requested=="auto" && text(selected)==original)
+   try check("Compare lowers only its execution selector",IOSMultihopExecution.torLeafMatches(source:original,leaf:runtime.torProfileJSON!,execution:execution) && runtime.torExecution==execution && out["type"] as? String==(execution=="server" ? "routervpn-server-tor":"routervpn-tor") && prepared.strict)
+   let nativeProfile=execution=="server" ? out["profile"] as? String:(out["padding_source"] as? [String:Any])?["profile"] as? String
+   try check("Compare concrete native owner receives selected source and session",nativeProfile==runtime.torProfileJSON && out["session_id"] as? String==runtime.torSessionID && UUID(uuidString:runtime.torSessionID!) != nil)
+   let authority=try bridge(["Op":execution=="server" ? "tor-server-mtu-authority":"tor-padding-source","Config":String(decoding:runtime.files["sing-box.json"]!,as:UTF8.self),"Policy":runtime.torProfileJSON!,"Node":runtime.torSessionID!,"Source":runtime.torPredecessorProfile!])
+   try check("Compare compiles the actual concrete native policy",execution=="server" ? (try object(Data(authority.utf8)))["source_kind"] as? String=="tor":authority.count==64)
+   var changed=leaf;changed["dns_host"]="198.51.100.53"
+   try check("Compare source rejects a changed selected resolver",!IOSMultihopExecution.torLeafMatches(source:original,leaf:try text(changed),execution:execution))
+   compared+=1
+  }}}}
+  try check("all private entry modes and Start Layers lower to both Tor leaves",compared==228)
+  print("Apple saved Compare source: PASS (\(compared) actual Swift/Go concrete leaf compilations)")
  }
 }
 '''

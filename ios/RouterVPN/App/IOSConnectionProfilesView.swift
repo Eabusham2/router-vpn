@@ -435,7 +435,7 @@ private enum IOSConnectionProfileStore {
                     if preferences.multihopEnabled {
                         guard preferences.multihopExitID == record.nodeID, preferences.multihopExitMode == protocolName,
                               preferences.multihopEntryMode != nil,
-                              (tor ? ["local", "server"] : ["local", "server", "auto"]).contains(preferences.multihopExecution ?? "local"),
+                              ["local", "server", "auto"].contains(preferences.multihopExecution ?? "local"),
                               tor || (preferences.multihopExecution ?? "local") == "local" || ExternalNodeConfig.serverExecutionProtocols.contains(protocolName) else {
                             throw issue("Saved external multihop must retain this exact exit and a compatible execution choice.")
                         }

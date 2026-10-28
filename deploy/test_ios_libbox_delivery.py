@@ -876,6 +876,38 @@ final class CompletionState: @unchecked Sendable {
             check("Server source cannot change its selected execution before proof",done.wait() && done.values()==(1,1) && torState.current()==nil)
             owner.stop()
         }
+        for execution in ["local","server"] {
+            let original=torServerProfile.replacingOccurrences(of:"\"server\"",with:"\"auto\"")
+            let leaf=torServerProfile.replacingOccurrences(of:"\"server\"",with:"\""+execution+"\"")
+            state.configure();torState.configure();LibboxHopTestState.shared.configure();LibboxDNSTestState.shared.configure();MTUActivationFixture.shared.configure()
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState()
+            try owner.start(files:execution=="server" ? torServerFiles:torFiles,strict:true)
+            check("unproved Tor cannot export comparison handles",owner.torComparisonNative()==nil)
+            owner.proveTor(sessionID:UUID().uuidString,profile:leaf,predecessorProfile:torEntryProfile,sourceProfile:original,completion:done.finish)
+            check("Compare proof retains original auto and exact leaf",done.wait() && done.values()==(1,0))
+            let captured=owner.torComparisonNative()
+            check("Compare exports only the exact retained server and proof",captured?.0 === state.currentServer() && captured?.1 === torState.current())
+            let exit=try JSONSerialization.jsonObject(with:Data(original.utf8)) as! [String:Any],entry=try JSONSerialization.jsonObject(with:Data(torEntryProfile.utf8)) as! [String:Any]
+            let configuration:[String:Any]=["engine":"external-libbox","mode":"external-tor","bundle":try JSONSerialization.data(withJSONObject:["selectedRouterID":"captured-tor","routerProfiles":[exit]]),"tor_entry_bundle":try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[entry]]),"tor_entry_mode":"wg"]
+            let source=try IOSMultihopExecution.Source(configuration:configuration){_ in String(repeating:"a",count:64)}
+            try owner.enableExternalHopMeasurement(exitID:"captured-tor");try owner.enableExternalDNSMeasurement(exitID:"captured-tor");try owner.activateTorMTU();try owner.bindTorExecutionSource(source)
+            let request=String(repeating:"c",count:32),snapshot=try IOSMultihopExecution.Capture.decode(owner.multihopExecutionSnapshot(request:request)!,source:source,request:request)
+            check("Compare restoration receipt preserves original auto and proved leaf",snapshot.source.requested=="auto" && snapshot.execution==execution && snapshot.pins == .empty)
+            owner.stop();check("retired Tor cannot export comparison handles",owner.torComparisonNative()==nil)
+            for field in ["dns_host","ipv6_mode","home_lan_access","manual_mtu","multihop_entry_id","external"] {
+                state.configure();torState.configure()
+                let changedOwner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),rejected=CompletionState()
+                try changedOwner.start(files:execution=="server" ? torServerFiles:torFiles,strict:true)
+                var wrong=try JSONSerialization.jsonObject(with:Data(leaf.utf8)) as! [String:Any]
+                if field=="external"{wrong[field]=["protocol":"tor-bridge","expected_public_ip":""]}
+                else if field=="home_lan_access"{wrong[field]=false}
+                else if field=="manual_mtu"{wrong[field]=1380}
+                else{wrong[field]="changed"}
+                changedOwner.proveTor(sessionID:UUID().uuidString,profile:String(decoding:try JSONSerialization.data(withJSONObject:wrong),as:UTF8.self),predecessorProfile:torEntryProfile,sourceProfile:original,completion:rejected.finish)
+                check("Compare source mutation is rejected before native proof",rejected.wait() && rejected.values()==(1,1) && torState.current()==nil && changedOwner.torComparisonNative()==nil)
+                changedOwner.stop()
+            }
+        }
         for kind in ["tor","tor-bridge"] {for mode in ["wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"] {
             let entry:[String:Any]=["id":"entry","node_kind":"external","router_api":"","api_token":"","node_proof_id":"",
                 "external":["protocol":mode,"expected_public_ip":"203.0.113.88",mode.replacingOccurrences(of:"-",with:"_"):["password":"exact ordinary credential"]],
@@ -1275,7 +1307,8 @@ def main():
             ('server-delete-acknowledged', '            try proof.close()', '            try? proof.close()', 'pending DELETE keeps exact native Box and files'),
             ('server-measurement-drain', '            if let drainFailure { throw drainFailure }', '            _ = drainFailure', 'measurement drain precedes DELETE and keeps the exact entry'),
             ('server-retirement-blocks-replacement', '        try Self.torServerRetirement.requireAvailable()', '        // missing retired Server owner', 'unacknowledged old lease blocks a replacement owner'),
-            ('server-captured-execution', '              Self.torExecutionSelection(capturedProfile) == execution,', '              true,', 'Server source cannot change its selected execution before proof'),
+            ('server-captured-execution', '              Self.torExecutionSelection(capturedProfile) == execution,\n              IOSMultihopExecution.torLeafMatches(source: sourceProfile ?? profile, leaf: profile, execution: execution),', '              true,', 'Server source cannot change its selected execution before proof'),
+            ('tor-compare-source', '              IOSMultihopExecution.torLeafMatches(source: sourceProfile ?? profile, leaf: profile, execution: execution),', '              true,', 'Compare source mutation is rejected before native proof'),
         ):
             assert text.count(before)==1,label
             broken.write_text(text.replace(before,after,1))

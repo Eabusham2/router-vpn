@@ -494,12 +494,13 @@ final class RouterVPNLibboxEngine {
         return "local"
     }
 
-    func proveTor(sessionID: String, profile: String, predecessorProfile: String? = nil, completion: @escaping (Error?) -> Void) {
+    func proveTor(sessionID: String, profile: String, predecessorProfile: String? = nil, sourceProfile: String? = nil, completion: @escaping (Error?) -> Void) {
         ownershipLock.lock()
         guard let owned = server, torOwned, let execution = torExecution, torProofDelivery == nil, !permanentlyStopped,
               !profile.isEmpty, profile.utf8.count <= 4 * 1024 * 1024,
               let capturedProfile = try? JSONSerialization.jsonObject(with: Data(profile.utf8)) as? [String: Any],
               Self.torExecutionSelection(capturedProfile) == execution,
+              IOSMultihopExecution.torLeafMatches(source: sourceProfile ?? profile, leaf: profile, execution: execution),
               execution != "server" || (capturedProfile["multihop_enabled"] as? Bool == true && predecessorProfile != nil) else {
             ownershipLock.unlock(); completion(error("Tor proof has no captured native session")); return
         }
@@ -516,10 +517,23 @@ final class RouterVPNLibboxEngine {
         }
         guard let request, failure == nil else { ownershipLock.unlock(); completion(failure ?? error("Tor proof could not capture its native owner")); return }
         let delivery = TorProofDelivery(owner: self, server: owned, generation: generation, sessionID: sessionID,
-            config: configContent, profile: profile, predecessorProfile: predecessorProfile, execution: execution, padding: padding, request: request, completion: completion)
+            config: configContent, profile: profile, sourceProfile: sourceProfile ?? profile, predecessorProfile: predecessorProfile, execution: execution, padding: padding, request: request, completion: completion)
         torProofDelivery = delivery
         ownershipLock.unlock()
         DispatchQueue.global(qos: .userInitiated).async { delivery.run() }
+    }
+
+    /// Memory-only access to the exact proved native handles. It does not
+    /// reconstruct a request from selected UI state or a public exit address.
+    func torComparisonNative() -> (LibboxCommandServer, LibboxRouterTorProofRequest)? {
+        ownershipLock.lock()
+        let delivery = torProofDelivery, owned = server, generation = ownershipGeneration
+        let available = !permanentlyStopped && !starting && torOwned && multihop == nil && externalPolicy == nil
+        ownershipLock.unlock()
+        guard available, let delivery, let owned, let result = delivery.comparisonNative(), result.0 === owned else { return nil }
+        ownershipLock.lock(); defer { ownershipLock.unlock() }
+        guard generation == ownershipGeneration, server === owned, torProofDelivery === delivery, !permanentlyStopped else { return nil }
+        return result
     }
 
     private static func torExecutionSelection(_ profile: [String: Any]) -> String {
@@ -538,6 +552,7 @@ final class RouterVPNLibboxEngine {
         private let request: LibboxRouterTorProofRequest
         private let config: String
         private let profile: String
+        private let sourceProfile: String
         private let predecessorProfile: String?
         private let execution: String
         private let padding: RouterVPNTorPaddingReceipt.Policy
@@ -548,10 +563,10 @@ final class RouterVPNLibboxEngine {
         private var cancelled = false
         private var proved = false
         init(owner: RouterVPNLibboxEngine, server: LibboxCommandServer, generation: UUID, sessionID: String,
-             config: String, profile: String, predecessorProfile: String?, execution: String, padding: RouterVPNTorPaddingReceipt.Policy, request: LibboxRouterTorProofRequest, completion: @escaping (Error?) -> Void) {
+             config: String, profile: String, sourceProfile: String, predecessorProfile: String?, execution: String, padding: RouterVPNTorPaddingReceipt.Policy, request: LibboxRouterTorProofRequest, completion: @escaping (Error?) -> Void) {
             self.owner = owner; self.server = server; self.generation = generation; self.sessionID = sessionID
             self.request = request; self.callback = completion
-            self.config = config; self.profile = profile
+            self.config = config; self.profile = profile; self.sourceProfile = sourceProfile
             self.predecessorProfile = predecessorProfile; self.execution = execution
             self.padding = padding
         }
@@ -583,10 +598,11 @@ final class RouterVPNLibboxEngine {
             return valid ? execution : nil
         }
         func matches(_ source: IOSMultihopExecution.Source) -> Bool {
-            guard source.requested == execution, provedExecution() == execution,
+            guard (source.requested == "auto" || source.requested == execution), provedExecution() == execution,
+                  IOSMultihopExecution.torLeafMatches(source: sourceProfile, leaf: profile, execution: execution),
                   let predecessorProfile,
                   let entry = try? JSONSerialization.jsonObject(with: Data(predecessorProfile.utf8)) as? [String: Any],
-                  let selected = try? JSONSerialization.jsonObject(with: Data(profile.utf8)) as? [String: Any],
+                  let selected = try? JSONSerialization.jsonObject(with: Data(sourceProfile.utf8)) as? [String: Any],
                   selected["multihop_enabled"] as? Bool == true,
                   selected["id"] as? String == source.exitID, entry["id"] as? String == source.entryID,
                   selected["multihop_entry_id"] as? String == source.entryID,
@@ -600,7 +616,7 @@ final class RouterVPNLibboxEngine {
             // The same native request proved the typed ordinary predecessor
             // and the Tor/DNS path. It may retain Local execution, but its
             // public-address proof never acquires private Router authority.
-            guard execution == "local", entry["node_kind"] as? String == "external",
+            guard execution == "local", source.requested == "local", entry["node_kind"] as? String == "external",
                   let imported = entry["external"] as? [String: Any],
                   imported["protocol"] as? String == source.entryMode,
                   ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(source.entryMode),
@@ -677,6 +693,10 @@ final class RouterVPNLibboxEngine {
             // later apparently valid snapshot cannot revive its old lease.
             if receiptFailed { cancel() }
             return valid && current(owner) && request.healthy()
+        }
+        func comparisonNative() -> (LibboxCommandServer, LibboxRouterTorProofRequest)? {
+            guard let owner, current(owner), provedExecution() == execution else { return nil }
+            return (server, request)
         }
         func makeHopMeasurement(exitID: String) throws -> LibboxRouterHopMeasurement {
             guard let owner, current(owner), healthy() else { throw retired() }

@@ -83,7 +83,7 @@ SWIFT = r'''
     let stale=try IOSStartupLastChoice.restored(configuration:changed,digest:digest)
     check("Tor durable Last ignores replaced source "+field,stale==nil)
    }
-   for fault in ["missing-entry","ordinary-entry","wrong-mode","wrong-entry-mode","mixed-ordinary-entry","mixed-router-entry","fixed-exit","wrong-entry-id","wrong-exit-id","compare","disabled","duplicate-exit"] {
+   for fault in ["missing-entry","ordinary-entry","wrong-mode","wrong-entry-mode","mixed-ordinary-entry","mixed-router-entry","fixed-exit","wrong-entry-id","wrong-exit-id","invalid-execution","disabled","duplicate-exit"] {
     var changed=config,body=try JSONSerialization.jsonObject(with:config["bundle"] as! Data) as! [String:Any]
     var nodes=body["routerProfiles"] as! [[String:Any]],selected=nodes[0]
     switch fault {
@@ -98,13 +98,13 @@ SWIFT = r'''
     case "fixed-exit":var ext=selected["external"] as! [String:Any];ext["expected_public_ip"]="203.0.113.9";selected["external"]=ext
     case "wrong-entry-id":selected["multihop_entry_id"]="replacement-entry"
     case "wrong-exit-id":selected["multihop_exit_id"]="replacement-exit"
-    case "compare":selected["multihop_execution"]="auto"
+    case "invalid-execution":selected["multihop_execution"]="both"
     case "disabled":selected["multihop_enabled"]=false
     default:nodes.append(selected)
     }
     nodes[0]=selected;body["routerProfiles"]=nodes;changed["bundle"]=try JSONSerialization.data(withJSONObject:body,options:.sortedKeys)
     reject("Tor execution capture rejects "+fault){_ = try IOSMultihopExecution.Source(configuration:changed,digest:digest)}
-    if fault=="compare" {reject("Tor Compare cannot request a receipt"){_ = try IOSMultihopExecution.requiresCapture(configuration:changed)}}
+    if fault=="invalid-execution" {reject("invalid Tor execution cannot request a receipt"){_ = try IOSMultihopExecution.requiresCapture(configuration:changed)}}
    }
   }}}
   for kind in ["tor","tor-bridge"] {
@@ -176,7 +176,35 @@ SWIFT = r'''
    }
   }}
  }
+ static func torComparedExecutions()throws {
+  let session=UUID().uuidString,request=String(repeating:"c",count:32),hold=String(repeating:"d",count:32)
+  for kind in ["tor","tor-bridge"] {for entry in ["wg","awg2-strong","reality-xhttp","max-quic-awg"] {for execution in ["local","server"] {
+   let configuration=try torConfiguration("auto",kind,entry),source=try IOSMultihopExecution.Source(configuration:configuration,digest:digest)
+   let root=try JSONSerialization.jsonObject(with:configuration["bundle"] as! Data) as! [String:Any],original=(root["routerProfiles"] as! [[String:Any]])[0]
+   let leaf=try IOSMultihopExecution.torLeaf(original,execution:execution)
+   let sourceText=String(decoding:try JSONSerialization.data(withJSONObject:original,options:.sortedKeys),as:UTF8.self),leafText=String(decoding:try JSONSerialization.data(withJSONObject:leaf,options:.sortedKeys),as:UTF8.self)
+   check("Compare lowers only an immutable concrete leaf",original["multihop_execution"] as? String=="auto" && leaf["multihop_execution"] as? String==execution && IOSMultihopExecution.torLeafMatches(source:sourceText,leaf:leafText,execution:execution))
+   check("Compare cannot relabel another actual execution",!IOSMultihopExecution.torLeafMatches(source:sourceText,leaf:leafText,execution:execution=="local" ? "server":"local"))
+   let receipt=try IOSMultihopExecution.Capture(source:source,execution:execution,session:session,request:request),bytes=try receipt.encoded()
+   let restored=try IOSMultihopExecution.restoredCapture(option:String(decoding:bytes,as:UTF8.self) as NSString,source:source,mtuHold:hold)
+   check("Speed Lab restores concrete Tor winner with original auto source",restored?.source.requested=="auto" && restored?.execution==execution && restored?.pins == .empty)
+   IOSPrivateJSONStore.value=nil
+   try IOSStartupLastChoice.record(configuration:configuration,receipt:receipt,digest:digest)
+   let last=try IOSStartupLastChoice.restored(configuration:configuration,digest:digest)
+   check("Startup Last retains concrete Tor winner without changing auto",last?.source==source && last?.execution==execution)
+   for field in ["dns_mode","ipv6_mode","home_lan_access","manual_mtu","multihop_entry_id","multihop_exit_id","external"] {
+    var wrong=leaf
+    if field=="external" {wrong[field]=["protocol":kind,"expected_public_ip":"","tor_bridge":["bridges":["other private bridge"]]]}
+    else if field=="home_lan_access" {wrong[field]=false}
+    else if field=="manual_mtu" {wrong[field]=1280}
+    else {wrong[field]="replacement"}
+    let altered=String(decoding:try JSONSerialization.data(withJSONObject:wrong,options:.sortedKeys),as:UTF8.self)
+    check("Compare leaf rejects changed frozen policy "+field,!IOSMultihopExecution.torLeafMatches(source:sourceText,leaf:altered,execution:execution))
+   }
+  }}}
+ }
  static func main()throws{
+  try torComparedExecutions()
   try torExecutions()
   try ordinaryTorExecutions()
   let session=UUID().uuidString,request=String(repeating:"d",count:32),hold=String(repeating:"e",count:32)

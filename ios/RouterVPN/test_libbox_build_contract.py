@@ -29,6 +29,7 @@ print('Pinned Apple Libbox build contract OK')
 # source-marker tests alone did not expose that mismatch.
 import os
 import plistlib
+import re
 import subprocess
 import tempfile
 import textwrap
@@ -106,6 +107,134 @@ class AppleCachedTorPaddingABI(unittest.TestCase):
                 result = self.check_headers(device=TOR_PADDING_HEADER.replace(signature, ''))
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('Tor proof ownership API changed', result.stderr)
+
+    def test_no_generated_header_cannot_pass(self):
+        self.assertNotEqual(self.check_headers(device=None, simulator=None).returncode, 0)
+
+
+TOR_COMPARE_HEADER = '''
+@protocol LibboxRouterTorCompareCandidate <NSObject>
+- (void)cancel;
+- (BOOL)close:(NSError* _Nullable* _Nullable)error;
+- (BOOL)current;
+- (LibboxRouterTorProofRequest* _Nullable)proof;
+- (LibboxCommandServer* _Nullable)server;
+- (BOOL)start:(NSError* _Nullable* _Nullable)error;
+@end
+@protocol LibboxRouterTorCompareHost <NSObject>
+- (BOOL)current;
+- (id<LibboxRouterTorCompareCandidate> _Nullable)newCandidate:(NSString* _Nullable)execution target:(NSString* _Nullable)target;
+- (void)progress:(NSString* _Nullable)stage execution:(NSString* _Nullable)execution;
+@end
+@interface LibboxRouterTorCompare : NSObject <goSeqRefInterface> {
+}
+- (void)cancel;
+- (BOOL)close:(NSError* _Nullable* _Nullable)error;
+- (NSString* _Nonnull)execution;
+- (BOOL)keep:(NSError* _Nullable* _Nullable)error;
+- (NSString* _Nonnull)resultJSON;
+- (BOOL)run:(NSError* _Nullable* _Nullable)error;
+@end
+@interface LibboxRouterTorCompareCandidate : NSObject <goSeqRefInterface, LibboxRouterTorCompareCandidate> {
+}
+- (void)cancel;
+- (BOOL)close:(NSError* _Nullable* _Nullable)error;
+- (BOOL)current;
+- (LibboxRouterTorProofRequest* _Nullable)proof;
+- (LibboxCommandServer* _Nullable)server;
+- (BOOL)start:(NSError* _Nullable* _Nullable)error;
+@end
+@interface LibboxRouterTorCompareHost : NSObject <goSeqRefInterface, LibboxRouterTorCompareHost> {
+}
+- (BOOL)current;
+- (id<LibboxRouterTorCompareCandidate> _Nullable)newCandidate:(NSString* _Nullable)execution target:(NSString* _Nullable)target;
+- (void)progress:(NSString* _Nullable)stage execution:(NSString* _Nullable)execution;
+@end
+FOUNDATION_EXPORT LibboxRouterTorCompare* _Nullable LibboxRouterTorNewCompare(id<LibboxRouterTorCompareHost> _Nullable host, NSString* _Nullable entryID, NSString* _Nullable exitID, NSString* _Nullable transport, NSString* _Nullable captureSHA256, NSError* _Nullable* _Nullable error);
+'''
+
+
+def cached_tor_compare_verifier(source):
+    block = source.split("<<'PYHEAD'\n", 1)[1].split('\nPYHEAD', 1)[0]
+    start = block.index("    assert content.count('FOUNDATION_EXPORT LibboxRouterTorCompare*")
+    end = block.index("    assert 'LibboxNewRouterMultihop'", start)
+    prefix = block[:block.index("    for symbol in ('LibboxRouterCompileExternalPolicy'")]
+    return prefix + block[start:end]
+
+
+class AppleCachedTorCompareABI(unittest.TestCase):
+    def check_headers(self, device=TOR_COMPARE_HEADER, simulator=TOR_COMPARE_HEADER):
+        with tempfile.TemporaryDirectory(prefix='apple-compare-abi-') as temporary:
+            root = Path(temporary)
+            for name, content in (('ios-arm64', device), ('ios-arm64-simulator', simulator)):
+                if content is not None:
+                    header = root/name/'Libbox.framework/Headers/Libbox.objc.h'
+                    header.parent.mkdir(parents=True)
+                    header.write_text(content)
+            return subprocess.run(['python3', '-c', cached_tor_compare_verifier(p), str(root)],
+                                  text=True, capture_output=True, timeout=15)
+
+    def assert_rejected_in_each_slice(self, header, reason):
+        for slice_name in ('device', 'simulator'):
+            with self.subTest(slice=slice_name):
+                result = self.check_headers(**{slice_name: header})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(reason, result.stderr)
+
+    def test_pinned_generated_compare_owners_pass_in_each_slice(self):
+        result = self.check_headers()
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+
+    def test_factory_requires_capture_owner_and_error_protocol(self):
+        signature = TOR_COMPARE_HEADER.split('FOUNDATION_EXPORT ', 1)[1]
+        for changed in ('', signature.replace('captureSHA256', 'foreignSHA256'),
+                        signature.replace('LibboxRouterTorCompareHost', 'LibboxRouterTorCompareCandidate'),
+                        signature.replace('NSError* _Nullable* _Nullable error', 'NSError* _Nullable error')):
+            with self.subTest(changed=changed):
+                self.assert_rejected_in_each_slice(
+                    TOR_COMPARE_HEADER.replace('FOUNDATION_EXPORT '+signature, 'FOUNDATION_EXPORT '+changed),
+                    'Tor comparison captured-owner factory changed')
+
+    def test_every_consumed_selector_is_required_on_its_exact_owner(self):
+        owners = re.findall(r'^@(?:protocol|interface) LibboxRouterTorCompare[^\n]*\n.*?^@end',
+                            TOR_COMPARE_HEADER, re.M|re.S)
+        self.assertEqual(len(owners), 5)
+        for owner in owners:
+            for signature in (line for line in owner.splitlines() if line.startswith('- (')):
+                with self.subTest(owner=owner.splitlines()[0], signature=signature):
+                    changed = owner.replace(signature, '')
+                    self.assert_rejected_in_each_slice(TOR_COMPARE_HEADER.replace(owner, changed),
+                                                       'Tor comparison ownership selector changed')
+
+    def test_methods_on_unrelated_owner_do_not_satisfy_callback_protocol(self):
+        owners = re.findall(r'^@(?:protocol|interface) LibboxRouterTorCompare[^\n]*\n.*?^@end',
+                            TOR_COMPARE_HEADER, re.M|re.S)
+        for owner in owners:
+            with self.subTest(owner=owner.splitlines()[0]):
+                signature = next(line for line in owner.splitlines() if line.startswith('- ('))
+                foreign = '\n@interface ForeignOwner : NSObject {\n}\n'+signature+'\n@end\n'
+                changed = TOR_COMPARE_HEADER.replace(owner, owner.replace(signature, ''))+foreign
+                self.assert_rejected_in_each_slice(changed, 'Tor comparison ownership selector changed')
+
+    def test_missing_or_duplicate_owner_cannot_satisfy_generated_contract(self):
+        owners = re.findall(r'^@(?:protocol|interface) LibboxRouterTorCompare[^\n]*\n.*?^@end',
+                            TOR_COMPARE_HEADER, re.M|re.S)
+        for owner in owners:
+            for header in (TOR_COMPARE_HEADER.replace(owner, ''), TOR_COMPARE_HEADER+'\n'+owner+'\n'):
+                with self.subTest(owner=owner.splitlines()[0], duplicate=header.count(owner)==2):
+                    self.assert_rejected_in_each_slice(header, 'Tor comparison generated owner missing or ambiguous')
+
+    def test_changed_native_error_or_target_selector_is_rejected(self):
+        for before, after in (
+                ('- (BOOL)keep:(NSError* _Nullable* _Nullable)error;', '- (void)keep;'),
+                ('- (BOOL)close:(NSError* _Nullable* _Nullable)error;', '- (void)close;'),
+                ('- (BOOL)start:(NSError* _Nullable* _Nullable)error;', '- (BOOL)start:(NSError* _Nullable)error;'),
+                ('newCandidate:(NSString* _Nullable)execution target:(NSString* _Nullable)target;',
+                 'newCandidate:(NSString* _Nullable)execution;'),
+                ('- (NSString* _Nonnull)resultJSON;', '- (BOOL)resultJSON;')):
+            with self.subTest(selector=before):
+                self.assert_rejected_in_each_slice(TOR_COMPARE_HEADER.replace(before, after),
+                                                   'Tor comparison ownership selector changed')
 
     def test_no_generated_header_cannot_pass(self):
         self.assertNotEqual(self.check_headers(device=None, simulator=None).returncode, 0)

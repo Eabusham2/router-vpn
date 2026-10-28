@@ -118,6 +118,28 @@ for header in headers:
                       '- (NSString* _Nonnull)paddingStatusJSON:(NSError* _Nullable* _Nullable)error;'):
         assert signature in tor_request.group(1), 'Tor proof ownership API changed: '+signature
     assert 'LibboxRouterOpenVPNEndpoint' in header.read_text(), str(header)
+    assert content.count('FOUNDATION_EXPORT LibboxRouterTorCompare* _Nullable LibboxRouterTorNewCompare(id<LibboxRouterTorCompareHost> _Nullable host, NSString* _Nullable entryID, NSString* _Nullable exitID, NSString* _Nullable transport, NSString* _Nullable captureSHA256, NSError* _Nullable* _Nullable error);') == 1, 'Tor comparison captured-owner factory changed'
+    # Each cached slice must expose the exact generated selectors consumed by
+    # the Swift host. A similarly named method on another owner is insufficient.
+    tor_round_methods=('- (void)cancel;', '- (BOOL)close:(NSError* _Nullable* _Nullable)error;',
+                       '- (NSString* _Nonnull)execution;', '- (BOOL)keep:(NSError* _Nullable* _Nullable)error;',
+                       '- (NSString* _Nonnull)resultJSON;', '- (BOOL)run:(NSError* _Nullable* _Nullable)error;')
+    tor_candidate_methods=('- (void)cancel;', '- (BOOL)close:(NSError* _Nullable* _Nullable)error;',
+                           '- (BOOL)current;', '- (LibboxRouterTorProofRequest* _Nullable)proof;',
+                           '- (LibboxCommandServer* _Nullable)server;', '- (BOOL)start:(NSError* _Nullable* _Nullable)error;')
+    tor_host_methods=('- (BOOL)current;',
+                      '- (id<LibboxRouterTorCompareCandidate> _Nullable)newCandidate:(NSString* _Nullable)execution target:(NSString* _Nullable)target;',
+                      '- (void)progress:(NSString* _Nullable)stage execution:(NSString* _Nullable)execution;')
+    for declaration,signatures in (
+            ('@interface LibboxRouterTorCompare : NSObject <goSeqRefInterface> {',tor_round_methods),
+            ('@protocol LibboxRouterTorCompareCandidate <NSObject>',tor_candidate_methods),
+            ('@interface LibboxRouterTorCompareCandidate : NSObject <goSeqRefInterface, LibboxRouterTorCompareCandidate> {',tor_candidate_methods),
+            ('@protocol LibboxRouterTorCompareHost <NSObject>',tor_host_methods),
+            ('@interface LibboxRouterTorCompareHost : NSObject <goSeqRefInterface, LibboxRouterTorCompareHost> {',tor_host_methods)):
+        owners=re.findall(r'^'+re.escape(declaration)+r'\n(.*?)^@end',content,re.M|re.S)
+        assert len(owners)==1, 'Tor comparison generated owner missing or ambiguous: '+declaration
+        for signature in signatures:
+            assert owners[0].splitlines().count(signature)==1, 'Tor comparison ownership selector changed: '+declaration+' '+signature
     assert 'LibboxNewRouterMultihop' in header.read_text(), str(header)
     assert 'LibboxNewRouterMultihopWithEntryStartLayer' in header.read_text(), str(header)
     assert "LibboxNewRouterMultihopWithStartLayers" in header.read_text(), str(header)

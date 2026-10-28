@@ -33,6 +33,7 @@ jobs:
           python3 deploy/test_ios_composite_multihop_pinned_contract.py
           python3 deploy/test_ios_tor_profile.py
           python3 deploy/test_ios_tor_server_profile.py
+          python3 deploy/test_ios_tor_compare.py
           python3 deploy/test_ios_mtu_client.py
           python3 deploy/test_ios_libbox_delivery.py
           python3 deploy/test_ios_naive_multihop.py

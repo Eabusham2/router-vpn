@@ -49,7 +49,7 @@ struct RouterVPNExternalPolicy {let executionRequested:String?}
  func start(files:[String:Data],strict:Bool)throws{started=true}
  func start(files:[String:Data],strict:Bool,externalPolicy:RouterVPNExternalPolicy)throws{started=true;externalStarted=true}
  func stop(){stops += 1;started=false}
- func proveTor(sessionID:String,profile:String,predecessorProfile:String?,completion:@escaping(Error?)->Void){precondition(owner.pathProofGuard != nil);owner.torSession=sessionID;owner.torProfile=profile;owner.proofCallback=completion}
+ func proveTor(sessionID:String,profile:String,predecessorProfile:String?,sourceProfile:String?,completion:@escaping(Error?)->Void){precondition(owner.pathProofGuard != nil);owner.torSession=sessionID;owner.torProfile=profile;owner.proofCallback=completion}
  func proveExternal(completion:@escaping(Error?)->Void){precondition(owner.pathProofGuard != nil && externalStarted);owner.nativeExternalProof=true;owner.proofCallback=completion}
  func enableExternalHopMeasurement(exitID:String)throws{precondition(owner.pathProofGuard != nil);measurements.append(exitID);owner.duringMeasurement?();if owner.measurementFails{throw NSError(domain:"MeasurementFixture",code:1)}}
  func enableExternalDNSMeasurement(exitID:String)throws{guard owner.pathProofGuard != nil else{throw NSError(domain:"DNSFixture",code:2)};precondition(measurements==[exitID] && (owner.nativeExternalProof || owner.torSession != nil));dnsMeasurements.append(exitID);owner.duringDNS?();if owner.dnsFails{throw NSError(domain:"DNSFixture",code:1)}}
@@ -62,7 +62,7 @@ enum IOSStartLayer {static func validateExternal(profile:[String:Any])throws{};s
 enum RouterVPNExternalExitBuilder {
  static let torEntryModes:Set<String>=["wg"]
  static let ordinaryProtocols:Set<String>=["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2"]
- struct Runtime {let expectedPublicIP="203.0.113.1";let files:[String:Data]=["sing-box.json":Data("{}".utf8)];var torSessionID:String?;var torPredecessorProfile:String?;var torProfileJSON:String?;var torExecution:String?;var policy:RouterVPNExternalPolicy?}
+ struct Runtime {let expectedPublicIP="203.0.113.1";let files:[String:Data]=["sing-box.json":Data("{}".utf8)];var torSessionID:String?;var torPredecessorProfile:String?;var torProfileJSON:String?;var torSourceProfileJSON:String?;var torExecution:String?;var policy:RouterVPNExternalPolicy?}
  static func build(profile:[String:Any],predecessorFiles:[String:Data],predecessorProfile:[String:Any]?,restoredExecution:String?)throws->Runtime{Runtime(torSessionID:profile["tor"] as? Bool == true ? "captured-tor-session":nil,torProfileJSON:profile["tor"] as? Bool == true ? "exact compiled Tor profile":nil,torExecution:profile["tor"] as? Bool == true ? profile["multihop_execution"] as? String:nil,policy:profile["native"] as? Bool == true ? RouterVPNExternalPolicy(executionRequested:profile["multihop_execution"] as? String):nil)}
 }
 enum RouterVPNMTUPolicy {static func libbox(_ files:[String:Data],profile:[String:Any])throws->[String:Data]{files}}
@@ -99,6 +99,7 @@ final class NETunnelProviderProtocol {var includeAllNetworks=true;var enforceRou
  func proveSelectedNode(url:URL,expectedNodeID:String,proxyPort:Int?,completionHandler:@escaping(Error?)->Void){precondition(pathProofGuard != nil);proofCallback=completionHandler}
  func proveExternalExit(expectedPublicIP:String,proxyPort:Int,completion:@escaping(Error?)->Void){precondition(pathProofGuard != nil);proofCallback=completion}
  func beginExternal(tor:Bool=false,native:Bool=false,execution:String?=nil,_ done:@escaping(Error?)->Void)throws{multihopExecutionSource=execution.map{IOSMultihopExecution.Source(requested:$0)};var profile:[String:Any]=["id":"saved-exit","tor":tor,"native":native,"external":["protocol":tor ? "tor":"socks5"]];if let execution{profile["multihop_execution"]=execution};try startExternalLibbox(provider:[:],selectedProfile:profile,strict:true,completionHandler:done)}
+ private func beginTorComparison(profile:[String:Any],entry:ExternalLibboxInputs,completion:@escaping(Error?)->Void)throws{throw IOSMultihopExecution.issue()}
  func strictKillSwitchRequested(_ profile:[String:Any])->Bool{profile["strict"] as? Bool == true}
  func selectedRouterProfile(_ root:[String:Any])throws->[String:Any]{root}
  func suppliedNodeProof(root:[String:Any],selectedProfile:[String:Any])throws->String{String(repeating:"a",count:64)}
@@ -209,7 +210,9 @@ def fixture(source):
     # The next method has an annotation; do not accidentally capture it.
     external=external.split('\n    @discardableResult',1)[0]
     release=method(source,'releasePathProofGuard')
-    return PRELUDE+tail+'\n'+external+'\n'+release+'\n func testRelease(_ value:NetworkProofGuard){releasePathProofGuard(value)}\n'+TEST
+    inputs=source[source.index('    private struct ExternalLibboxInputs {'):source.index('    private func prepareExternalLibbox(')]
+    preparation=method(source,'prepareExternalLibbox')
+    return PRELUDE+tail+'\n'+inputs+preparation+'\n'+external+'\n'+release+'\n func testRelease(_ value:NetworkProofGuard){releasePathProofGuard(value)}\n'+TEST
 
 def main():
     source=PROVIDER.read_text()
@@ -224,10 +227,12 @@ def main():
              '                            throw self.tunnelError(57, "Tor path changed during execution receipt activation.")\n'
              '                        }', '', 'Tor receipt final ownership'),
         ]
+        external = method(source, 'startExternalLibbox')
         for old,new,label in mutations:
-            if source.count(old)!=1:
+            if external.count(old)!=1:
                 raise AssertionError('Missing unique mutation boundary: '+label)
-            code.write_text(fixture(source.replace(old,new)))
+            changed = source.replace(external, external.replace(old, new, 1), 1)
+            code.write_text(fixture(changed))
             subprocess.run(compile_args,check=True,timeout=30)
             result=subprocess.run([str(binary)],capture_output=True,text=True,timeout=10)
             if result.returncode==0:

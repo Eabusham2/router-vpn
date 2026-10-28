@@ -236,14 +236,21 @@ def provider_source():
         if following is None:
             raise ValueError('Unbounded production method: ' + name)
         return source[begin:begin + 1 + following.start()]
-    external = method('startExternalLibbox')
-    boundary = '        let engine = RouterVPNLibboxEngine(tunnel: self); libboxEngine = engine'
-    if external.count(boundary) != 1:
-        raise ValueError('Tor engine boundary changed')
-    external = external[:external.index(boundary)]
-    external = replace_once(external, 'private func startExternalLibbox(', 'func assemble(')
-    external = replace_once(external, ', completionHandler: @escaping (Error?) -> Void) throws {', ') throws -> Prepared {')
-    external += '        return Prepared(runtime: runtime, strict: effectiveStrict, predecessor: entryFiles, profile: entryProfile)\n    }\n'
+    # Execute the shipping entry/policy preparation unchanged, then the real
+    # concrete leaf builder. The separate Compare host gate executes the new
+    # public branch and actual callback ownership across sequential engines.
+    inputs = source[source.index('    private struct ExternalLibboxInputs {'):source.index('    private func prepareExternalLibbox(')]
+    preparation = method('prepareExternalLibbox')
+    external = r'''    func assemble(provider: [String: Any], selectedProfile: [String: Any], strict: Bool) throws -> Prepared {
+        let prepared = try prepareExternalLibbox(provider: provider, selectedProfile: selectedProfile, strict: strict)
+        let runtime = try RouterVPNExternalExitBuilder.build(profile: selectedProfile, predecessorFiles: prepared.files,
+            predecessorProfile: prepared.profile, restoredExecution: restoredMultihopExecution)
+        guard (runtime.policy?.executionRequested != nil || runtime.torExecution != nil) == (multihopExecutionSource != nil) else {
+            throw IOSMultihopExecution.issue()
+        }
+        return Prepared(runtime: runtime, strict: prepared.strict, predecessor: prepared.files, profile: prepared.profile)
+    }
+'''
     compilation = source[source.index('    private struct LibboxCompilation {'):source.index('    private func compileLibbox(')]
     domain = re.search(r'(?m)^    private static let nodeProofDomain = .+$', source)
     if domain is None:
@@ -277,7 +284,7 @@ def provider_source():
  }
 '''
     support = replace_once(support, ' // SHIPPING_NODE_PROOF_DOMAIN', domain.group(0).replace('private static', 'static', 1))
-    return support + compilation + ''.join(method(name) for name in (
+    return support + compilation + inputs + preparation + ''.join(method(name) for name in (
         'compileLibbox', 'performanceFiles', 'multihopWireGuardEndpoint',
         'nativeAmneziaEndpoint', 'selectedRouterProfile', 'wireGuardLikeProfile',
         'layeredProfile', 'strictKillSwitchRequested', 'suppliedNodeProof',

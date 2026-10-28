@@ -55,6 +55,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let strategyOwnerLock = NSLock()
     private var providerStrategy: RouterVPNProviderStrategy?
     private var strategyDriver: StrategyRuntimeDriver?
+    private let torCompareOwnerLock = NSLock()
+    private var torCompareOwner: RouterVPNTorCompare?
+    private var torCompareGuard: NetworkProofGuard?
+    private var torCompareDraining = false
     private let maxStartOwnerLock = NSLock()
     private var maxStartOwner: RouterVPNMAXStart?
     private var maxStartGeneration = UUID()
@@ -82,7 +86,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         if messageData.count <= 128,
            let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
            request == ["operation": "multihop-progress"] {
-            completionHandler(libboxEngine?.multihopProgress()); return
+            completionHandler(currentTorComparison()?.progressData() ?? libboxEngine?.multihopProgress()); return
         }
         if messageData.count <= 256,
            let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
@@ -135,7 +139,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     func beginLibboxSettings(epoch: String) { networkSettingsOwner?.begin(epoch: epoch) }
     func retireLibboxSettings(epoch: String) { networkSettingsOwner?.retire(epoch: epoch) }
-    func isStrategySettings(epoch: String) -> Bool { currentProviderStrategy()?.isCurrent(epoch) == true }
+    func isStrategySettings(epoch: String) -> Bool {
+        currentProviderStrategy()?.isCurrent(epoch) == true || currentTorComparison()?.ownsSettingsEpoch(epoch) == true
+    }
 
     func applyLibboxSettings(_ settings: NEPacketTunnelNetworkSettings, epoch: String) throws {
         guard let owner = networkSettingsOwner else { throw tunnelError(70, "The provider has no network settings owner.") }
@@ -150,6 +156,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     func nativeLibboxSettingsInvalidated(epoch: String) {
+        if let comparison = currentTorComparison(), comparison.ownsSettingsEpoch(epoch) {
+            comparison.cancel()
+            cancelTunnelWithError(tunnelError(70, "Tor comparison settings changed during the captured path."))
+            return
+        }
         if let strategy = currentProviderStrategy() {
             strategy.invalidate(epoch: epoch)
         } else if let engine = libboxEngine, engine.settingsEpoch == epoch {
@@ -158,6 +169,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     func nativeLibboxFailure(_ engine: RouterVPNLibboxEngine, error: Error) {
+        if let comparison = currentTorComparison(), comparison.nativeFailure(engine) { return }
         if let strategy = currentProviderStrategy() {
             strategy.invalidate(epoch: engine.settingsEpoch)
             return
@@ -453,6 +465,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         forwardingChannel?.invalidate()
         retireTelemetry()
         do {
+            torCompareOwnerLock.lock()
+            let comparisonAvailable = torCompareOwner == nil && !torCompareDraining
+            torCompareOwnerLock.unlock()
+            guard comparisonAvailable else { throw tunnelError(71, "The previous Tor comparison still owns native cleanup.") }
             maxStartOwnerLock.lock()
             guard maxStartOwner == nil, !maxStartDraining else { maxStartOwnerLock.unlock(); throw RouterVPNMAXPreparation.issue() }
             let generation = UUID(); maxStartGeneration = generation
@@ -1141,7 +1157,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         var result = files; result["sing-box.json"] = Data(compiled.utf8); return result
     }
 
-    private func startExternalLibbox(provider: [String: Any], selectedProfile: [String: Any], strict: Bool, completionHandler: @escaping (Error?) -> Void) throws {
+    private struct ExternalLibboxInputs {
+        let files: [String: Data]
+        let profile: [String: Any]?
+        let strict: Bool
+    }
+
+    private func prepareExternalLibbox(provider: [String: Any], selectedProfile: [String: Any], strict: Bool) throws -> ExternalLibboxInputs {
         try IOSStartLayer.validateExternal(profile: selectedProfile)
         var entryFiles: [String: Data] = [:]
         var entryProfile: [String: Any]?
@@ -1203,6 +1225,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         } else if provider["tor_entry_mode"] != nil || provider["external_entry_mode"] != nil || selectedProfile["multihop_enabled"] as? Bool == true {
             throw tunnelError(58, "Saved external multihop cannot start without its captured entry.")
         }
+        return ExternalLibboxInputs(files: entryFiles, profile: entryProfile, strict: effectiveStrict)
+    }
+
+    private func startExternalLibbox(provider: [String: Any], selectedProfile: [String: Any], strict: Bool, completionHandler: @escaping (Error?) -> Void) throws {
+        let prepared = try prepareExternalLibbox(provider: provider, selectedProfile: selectedProfile, strict: strict)
+        let entryFiles = prepared.files, entryProfile = prepared.profile, effectiveStrict = prepared.strict
+        let externalProtocol = (selectedProfile["external"] as? [String: Any])?["protocol"] as? String ?? ""
+        if ["tor", "tor-bridge"].contains(externalProtocol), selectedProfile["multihop_execution"] as? String == "auto", restoredMultihopExecution == nil {
+            try beginTorComparison(profile: selectedProfile, entry: prepared, completion: completionHandler)
+            return
+        }
         let runtime = try RouterVPNExternalExitBuilder.build(profile: selectedProfile, predecessorFiles: entryFiles, predecessorProfile: entryProfile,
                                                             restoredExecution: restoredMultihopExecution)
         guard (runtime.policy?.executionRequested != nil || runtime.torExecution != nil) == (multihopExecutionSource != nil) else {
@@ -1223,7 +1256,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 releasePathProofGuard(externalPathGuard)
                 throw tunnelError(58, "Tor proof lost its exact compiled profile.")
             }
-            prove = { engine.proveTor(sessionID: sessionID, profile: profile, predecessorProfile: runtime.torPredecessorProfile, completion: $0) }
+            prove = { engine.proveTor(sessionID: sessionID, profile: profile, predecessorProfile: runtime.torPredecessorProfile, sourceProfile: runtime.torSourceProfileJSON, completion: $0) }
         } else if runtime.policy != nil {
             prove = { engine.proveExternal(completion: $0) }
         } else {
@@ -1285,6 +1318,104 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
     }
 
+    private func currentTorComparison() -> RouterVPNTorCompare? {
+        torCompareOwnerLock.lock(); defer { torCompareOwnerLock.unlock() }; return torCompareOwner
+    }
+
+    private func torComparisonAvailable(_ comparison: RouterVPNTorCompare) -> Bool {
+        torCompareOwnerLock.lock()
+        let matches = torCompareOwner === comparison && !torCompareDraining
+        let guardState = torCompareGuard
+        torCompareOwnerLock.unlock()
+        return matches && guardState != nil && currentPathProofGuard() === guardState
+    }
+
+    private func beginTorComparison(profile: [String: Any], entry: ExternalLibboxInputs,
+                                    completion: @escaping (Error?) -> Void) throws {
+        guard let source = multihopExecutionSource, source.requested == "auto", let predecessor = entry.profile,
+              predecessor["node_kind"] as? String == "router-vpn", libboxEngine == nil else { throw IOSMultihopExecution.issue() }
+        let sourceData = try JSONEncoder().encode(source)
+        let captureSHA256 = SHA256.hash(data: sourceData).map { String(format: "%02x", $0) }.joined()
+        let comparison = try RouterVPNTorCompare(source: source,
+            profile: JSONSerialization.data(withJSONObject: profile, options: [.sortedKeys]),
+            entryProfile: JSONSerialization.data(withJSONObject: predecessor, options: [.sortedKeys]),
+            entryFiles: entry.files, strict: entry.strict, mtuHold: initialMTUHold, captureSHA256: captureSHA256,
+            makeEngine: { [weak self] epoch in
+                guard let self else { throw IOSMultihopExecution.issue() }
+                return RouterVPNLibboxEngine(tunnel: self, strategyEpoch: epoch)
+            }, available: { [weak self] owner in self?.torComparisonAvailable(owner) == true },
+            ownsEngine: { [weak self] owner, engine in
+                guard let self else { return false }
+                self.torCompareOwnerLock.lock(); defer { self.torCompareOwnerLock.unlock() }
+                return self.torCompareOwner === owner && !self.torCompareDraining && self.libboxEngine === engine
+            }, install: { [weak self] owner, engine in
+                guard let self, self.torComparisonAvailable(owner) else { throw IOSMultihopExecution.issue() }
+                self.torCompareOwnerLock.lock()
+                guard self.torCompareOwner === owner, !self.torCompareDraining, self.libboxEngine == nil else {
+                    self.torCompareOwnerLock.unlock(); throw IOSMultihopExecution.issue()
+                }
+                self.libboxEngine = engine
+                self.torCompareOwnerLock.unlock()
+                // A previous engine has already completed its real teardown.
+                // Keep non-nil route protection and the round's physical guard.
+                // A distinct native settings token rejects late OS callbacks.
+                self.beginLibboxSettings(epoch: engine.settingsEpoch)
+                guard self.torComparisonAvailable(owner) else { throw IOSMultihopExecution.issue() }
+            }, release: { [weak self] owner, engine in
+                guard let self else { return }
+                self.torCompareOwnerLock.lock()
+                if self.torCompareOwner === owner, self.libboxEngine === engine { self.libboxEngine = nil }
+                self.torCompareOwnerLock.unlock()
+            }, activate: { [weak self] owner, engine in
+                guard let self else { throw IOSMultihopExecution.issue() }
+                func requireCurrent() throws {
+                    guard self.torComparisonAvailable(owner), self.libboxEngine === engine,
+                          owner.ownsSettingsEpoch(engine.settingsEpoch), engine.torComparisonNative() != nil else { throw IOSMultihopExecution.issue() }
+                }
+                try requireCurrent()
+                try engine.enableExternalHopMeasurement(exitID: source.exitID)
+                try requireCurrent()
+                try engine.enableExternalDNSMeasurement(exitID: source.exitID)
+                try requireCurrent()
+                try engine.activateTorMTU()
+                try requireCurrent()
+                try engine.bindTorExecutionSource(source)
+                try requireCurrent()
+            }, completion: { [weak self] owner, error in
+                guard let self else { completion(IOSMultihopExecution.issue()); return }
+                if let error {
+                    self.torCompareOwnerLock.lock()
+                    let matches = self.torCompareOwner === owner
+                    // A whole-provider stop retains admission through its
+                    // queued native cleanup, even if Run has just drained its
+                    // trial. Only that stop callback may release its owner.
+                    let canRelease = matches && owner.isDrained && !self.torCompareDraining
+                    let guardState = canRelease ? self.torCompareGuard : nil
+                    if matches {
+                        if canRelease { self.torCompareOwner = nil; self.torCompareGuard = nil }
+                        else { self.torCompareDraining = true }
+                    }
+                    self.torCompareOwnerLock.unlock()
+                    if let guardState { self.releasePathProofGuard(guardState) }
+                    completion(error)
+                } else {
+                    guard self.torComparisonAvailable(owner) else { completion(IOSMultihopExecution.issue()); return }
+                    completion(nil)
+                }
+            })
+        torCompareOwnerLock.lock()
+        guard torCompareOwner == nil, !torCompareDraining, libboxEngine == nil else {
+            torCompareOwnerLock.unlock(); throw IOSMultihopExecution.issue()
+        }
+        torCompareOwner = comparison
+        torCompareOwnerLock.unlock()
+        let guardState = armNetworkProofGuard()
+        torCompareOwnerLock.lock()
+        if torCompareOwner === comparison { torCompareGuard = guardState }
+        torCompareOwnerLock.unlock()
+        comparison.start()
+    }
+
     @discardableResult
     private func armNetworkProofGuard() -> NetworkProofGuard {
         let monitor = NWPathMonitor()
@@ -1310,6 +1441,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         pathProofGuard = nil
         pathProofOwnerLock.unlock()
         monitor?.cancel()
+        currentTorComparison()?.cancel()
         libboxEngine?.invalidateMultihop()
         forwardingChannel?.invalidate()
         retireTelemetry(guardState)
@@ -1367,6 +1499,46 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func finishOwnedStop(completion: @escaping () -> Void) {
+        if let comparison = currentTorComparison() {
+            torCompareOwnerLock.lock()
+            guard torCompareOwner === comparison else { torCompareOwnerLock.unlock(); completion(); return }
+            torCompareDraining = true
+            let capturedEngine = libboxEngine
+            torCompareOwnerLock.unlock()
+            comparison.cancelAndDrain { [weak self] error in
+                guard let self else { completion(); return }
+                self.torCompareOwnerLock.lock()
+                let matches = self.torCompareOwner === comparison
+                self.torCompareOwnerLock.unlock()
+                guard matches else { completion(); return }
+                guard error == nil else {
+                    self.writeLibboxLog("The captured Tor comparison still owns native cleanup; replacement remains blocked.")
+                    completion(); return
+                }
+                // Keep/Close transfers measurement ownership only. A real
+                // provider stop must separately join its captured adopted
+                // engine, retaining the provider's admission block throughout.
+                do { try capturedEngine?.stopCheckedForStrategy() }
+                catch {
+                    self.writeLibboxLog("The captured Tor engine has not finished native shutdown; replacement remains blocked.")
+                    completion(); return
+                }
+                self.torCompareOwnerLock.lock()
+                let ownsStop = self.torCompareOwner === comparison &&
+                    (self.libboxEngine == nil || self.libboxEngine === capturedEngine)
+                self.torCompareOwnerLock.unlock()
+                guard ownsStop else { completion(); return }
+                self.finishNativeStop {
+                    self.torCompareOwnerLock.lock()
+                    if self.torCompareOwner === comparison {
+                        self.torCompareOwner = nil; self.torCompareGuard = nil; self.torCompareDraining = false
+                    }
+                    self.torCompareOwnerLock.unlock()
+                    completion()
+                }
+            }
+            return
+        }
         if let strategy = currentProviderStrategy() {
             let epoch = strategy.currentEpoch
             strategy.stop()
@@ -1407,6 +1579,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 guard let self else { completionHandler(); return }
                 self.finishOwnedStop(completion: completionHandler)
             }
+        } else if currentTorComparison() != nil {
+            finishOwnedStop(completion: completionHandler)
         } else { libboxEngine?.pause(); completionHandler() }
     }
     override func wake() {

@@ -162,12 +162,12 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
  static func replaceLinked(_ p:RouterProfile)throws {try IOSNodeBundleStore.shared.save(bundle(p))}
  static func selectOther(_ model:RouterVPNModel)throws{try model.importBundle(encoded(bundle(profile("obfs4",id:"other-tor"))))}
  static func matrix()throws {
-  for transport in bridgeLines.keys.sorted(){for dns in ["custom","dot","doh","home"]{for mtu in ["auto","default","fixed","jumbo"]{for execution in ["direct","local","server"]{for cover in [false,true]{
+  for transport in bridgeLines.keys.sorted(){for dns in ["custom","dot","doh","home"]{for mtu in ["auto","default","fixed","jumbo"]{for execution in ["direct","local","server","auto"]{for cover in [false,true]{
    var p=try profile(transport)
    if dns != "custom"{p.dnsMode=dns;p.dnsProtocol=dns=="dot" ? "tls":dns=="doh" ? "https":"udp";p.dnsHost=dns=="home" ? "192.168.50.133":"9.9.9.9";p.dnsPort=dns=="home" ? 5353:4443;p.dnsServerName="resolver.example.test";p.dnsPath="/saved-query"}
    p.mtuPolicy=mtu=="jumbo" ? "auto":mtu;p.manualMTU=mtu=="fixed" ? 1380:0;p.jumboTUN=mtu=="jumbo"
    p.daitaEnabled=cover;p.daitaRateKbps=cover ? 64:192
-   if dns=="home" || execution != "direct"{graph(&p,execution=="server" ? "server":"local")}
+   if dns=="home" || execution != "direct"{graph(&p,["server","auto"].contains(execution) ? execution:"local")}
    let model=try reset(p),actions=ProfileActions(model),nodeWrites=IOSNodeBundleStore.shared.writes
    let runtime=try JSONDecoder().decode(ClientBundle.self,from:model.externalRuntimeBundleData(source:model.bundle!,profile:model.selectedNodeProfile!))
    try check("linked node and runtime handoff preserve exact cover without Router sink",model.selectedNodeProfile?.daitaEnabled==p.daitaEnabled && model.selectedNodeProfile?.daitaRateKbps==p.daitaRateKbps && runtime.routerProfiles[0].daitaEnabled==p.daitaEnabled && runtime.routerProfiles[0].daitaRateKbps==p.daitaRateKbps && runtime.routerProfiles[0].daitaHost==nil && runtime.routerProfiles[0].daitaPort==nil)
@@ -266,9 +266,9 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
   }
  }
  static func restoreRejections()throws {
-  for fault in ["protocol","fixed-ip","foreign-node","bridge-owner","bridge-port","bridge-malformed","node-read","node-write","profile-read","missing-entry","external-entry","server-missing-entry","server-external-entry","compare","saved-dns","saved-jumbo","connected","transitioning","disconnecting"] {
+  for fault in ["protocol","fixed-ip","foreign-node","bridge-owner","bridge-port","bridge-malformed","node-read","node-write","profile-read","missing-entry","external-entry","server-missing-entry","server-external-entry","invalid-execution","saved-dns","saved-jumbo","connected","transitioning","disconnecting"] {
    var p=try profile("obfs4")
-   if ["missing-entry","external-entry","server-missing-entry","server-external-entry","compare"].contains(fault){graph(&p,fault.hasPrefix("server-") ? "server":"local")}
+   if ["missing-entry","external-entry","server-missing-entry","server-external-entry","invalid-execution"].contains(fault){graph(&p,fault.hasPrefix("server-") ? "server":"local")}
    let model=try reset(p),saved=try IOSConnectionProfileStore.add(model:model,name:"Captured graph")
    var linked=p
    if fault=="protocol"{linked.external?.protocolName="tor";linked.external?.torBridge=nil}
@@ -284,10 +284,10 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
    if fault=="node-write"{store.failWrite=true}
    if fault=="profile-read"{IOSPrivateJSONStore.failRead=true}
    if fault=="missing-entry" || fault=="server-missing-entry"{store.records.removeValue(forKey:"router-"+String(repeating:"a",count:64))}
-   if ["external-entry","server-external-entry","compare","saved-dns","saved-jumbo"].contains(fault){
+   if ["external-entry","server-external-entry","invalid-execution","saved-dns","saved-jumbo"].contains(fault){
     var envelope=try JSONDecoder().decode(IOSConnectionProfileEnvelope.self,from:IOSPrivateJSONStore.bytes!)
     if fault=="external-entry" || fault=="server-external-entry"{envelope.profiles[0].preferences?.multihopEntryID="other-tor";envelope.profiles[0].preferences?.multihopEntryMode="wireguard"}
-    if fault=="compare"{envelope.profiles[0].preferences?.multihopExecution="auto"}
+    if fault=="invalid-execution"{envelope.profiles[0].preferences?.multihopExecution="both"}
     if fault=="saved-dns"{envelope.profiles[0].preferences?.dnsProtocol="udp"}
     if fault=="saved-jumbo"{envelope.profiles[0].preferences?.jumboTUN=true}
     IOSPrivateJSONStore.bytes=try encoded(envelope)

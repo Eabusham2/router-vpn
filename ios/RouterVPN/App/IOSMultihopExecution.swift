@@ -7,7 +7,8 @@ enum IOSMultihopExecution {
     static let launchKey = "routervpn_speed_lab_execution"
     static let startupLaunchKey = "routervpn_startup_execution"
 
-    /// Tor entry paths preserve their explicit Local/Server execution. Ordinary
+    /// Tor entry paths preserve their proved Local/Server execution separately
+    /// from a saved Compare preference. Ordinary
     /// external Local has no selector/lease owner; its Server/Compare family
     /// retains the separately proved runtime winner.
     static func requiresCapture(configuration: [String: Any]) throws -> Bool {
@@ -16,7 +17,7 @@ enum IOSMultihopExecution {
         guard let data = configuration["bundle"] as? Data else { throw issue() }
         let selected = try Source.profile(data, kind: "external")
         if let external = selected["external"] as? [String: Any], ["tor", "tor-bridge"].contains(external["protocol"] as? String ?? "") {
-            guard ["local", "server"].contains(torSelection(selected)) else { throw issue() }
+            guard ["local", "server", "auto"].contains(torSelection(selected)) else { throw issue() }
             return selected["multihop_enabled"] as? Bool == true
         }
         return ["server", "auto"].contains(selected["multihop_execution"] as? String ?? "local")
@@ -25,6 +26,33 @@ enum IOSMultihopExecution {
     private static func torSelection(_ profile: [String: Any]) -> String {
         let execution = profile["multihop_execution"] as? String ?? "local"
         return execution.isEmpty ? "local" : execution
+    }
+
+    /// Lower only the execution selector of this immutable saved Tor profile.
+    /// The native compiler still rejects unresolved auto; this copy is never
+    /// written back to the node or used to replace a different saved source.
+    static func torLeaf(_ profile: [String: Any], execution: String) throws -> [String: Any] {
+        let requested = torSelection(profile)
+        guard ["local", "server"].contains(execution), ["local", "server", "auto"].contains(requested),
+              requested == "auto" || requested == execution,
+              profile["node_kind"] as? String == "external",
+              let external = profile["external"] as? [String: Any],
+              ["tor", "tor-bridge"].contains(external["protocol"] as? String ?? ""),
+              requested != "auto" || profile["multihop_enabled"] as? Bool == true else { throw issue() }
+        var leaf = profile
+        if requested == "auto" { leaf["multihop_execution"] = execution }
+        return leaf
+    }
+
+    static func torLeafMatches(source: String, leaf: String, execution: String) -> Bool {
+        guard !source.isEmpty, source.utf8.count <= 4 * 1024 * 1024,
+              !leaf.isEmpty, leaf.utf8.count <= 4 * 1024 * 1024,
+              let original = try? JSONSerialization.jsonObject(with: Data(source.utf8)) as? [String: Any],
+              let actual = try? JSONSerialization.jsonObject(with: Data(leaf.utf8)) as? [String: Any],
+              let expected = try? torLeaf(original, execution: execution),
+              let before = try? JSONSerialization.data(withJSONObject: expected, options: [.sortedKeys]),
+              let after = try? JSONSerialization.data(withJSONObject: actual, options: [.sortedKeys]) else { return false }
+        return before == after
     }
 
     struct Source: Codable, Equatable, Sendable {
@@ -72,7 +100,7 @@ enum IOSMultihopExecution {
                 if tor {
                     guard configuration["external_entry_bundle"] == nil, configuration["external_entry_mode"] == nil,
                           configuration["tor_entry_mode"] as? String == exitProfile["multihop_entry_mode"] as? String,
-                          ["local", "server"].contains(IOSMultihopExecution.torSelection(exitProfile)),
+                          ["local", "server", "auto"].contains(IOSMultihopExecution.torSelection(exitProfile)),
                           ["tor", "tor-bridge"].contains(exitMode),
                           let selected = exitProfile["external"] as? [String: Any], selected["protocol"] as? String == exitMode,
                           selected["expected_public_ip"] as? String == "" else { throw issue() }
@@ -129,8 +157,7 @@ enum IOSMultihopExecution {
             [bundleSHA256, entrySHA256].allSatisfy { $0.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil } &&
             [entryID, exitID].allSatisfy { !$0.isEmpty && $0.utf8.count <= 128 && !$0.contains("\u{0}") } && entryID != exitID &&
             [entryMode, exitMode].allSatisfy { $0.range(of: "^[a-z0-9][a-z0-9-]{0,95}$", options: .regularExpression) != nil } &&
-            ["local", "server", "auto"].contains(requested) &&
-            (!["tor", "tor-bridge"].contains(exitMode) || ["local", "server"].contains(requested))
+            ["local", "server", "auto"].contains(requested)
         }
 
         fileprivate static func profile(_ data: Data, kind expected: String) throws -> [String: Any] {

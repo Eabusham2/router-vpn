@@ -123,6 +123,21 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
    }
    IOSNodeBundleStore.shared.nodes=records
   }}
+  for kind in ["tor","tor-bridge"] {for execution in ["local","server","auto"] {
+   let predecessor=try profile("private-tor-entry","router-vpn"),entry=bundle(predecessor)
+   var exit=try profile("private-tor-exit","external",kind);exit.apiToken="";exit.external?.socks5=nil;exit.external?.expectedPublicIP=""
+   if kind=="tor-bridge"{exit.external?.torBridge=ExternalTorBridgeConfig(transport:"obfs4",bridges:["obfs4 198.51.100.9:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=Y2VydA iat-mode=0"])}
+   let original=bundle(exit),model=RouterVPNModel();model.bundle=original
+   let entryBytes=try encoded(entry)
+   IOSNodeBundleStore.shared.nodes=[predecessor.id:entryBytes,exit.id:try encoded(original)]
+   try model.saveIOSMultihop(enabled:true,entryID:predecessor.id,exitID:exit.id,exitMode:kind,execution:execution,entryMode:"wg")
+   let captured=try model.iosMultihopEntryBundle(for:model.bundle!)
+   try check("private Tor editor saves exact Local Server or Compare selection",model.bundle?.routerProfiles[0].multihopExecution==execution && model.bundle?.routerProfiles[0].external==exit.external && captured.routerProfiles==entry.routerProfiles && IOSNodeBundleStore.shared.nodes[predecessor.id]==entryBytes)
+   let saved=try encoded(model.bundle!),writes=model.writes,records=IOSNodeBundleStore.shared.nodes
+   model.profileMutationBlocked=true
+   try reject("active private Tor graph cannot be edited"){try model.saveIOSMultihop(enabled:true,entryID:predecessor.id,exitID:exit.id,exitMode:kind,execution:"auto",entryMode:"wg")}
+   try check("blocked private Tor save preserves source and node credentials",model.writes==writes && encoded(model.bundle!)==saved && IOSNodeBundleStore.shared.nodes==records)
+  }}
   let entry=bundle(try profile("entry","router-vpn")),model=RouterVPNModel()
   var exit=try profile("exit","external");exit.multihopEnabled=true;exit.multihopEntryID="entry";exit.multihopEntryMode="wg";exit.multihopExitID="exit";exit.multihopExitMode="socks5";exit.multihopExecution="local"
   model.bundle=bundle(exit);IOSNodeBundleStore.shared.nodes=["entry":try JSONEncoder().encode(entry)]

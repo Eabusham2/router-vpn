@@ -23,8 +23,8 @@ extension RouterVPNModel {
             throw iosMultihopError("The saved multihop entry/exit is missing or no longer linked. Choose the graph again.")
         }
         if torExit {
-            guard ["local", "server"].contains(exit.multihopExecution ?? "local"), exit.external?.expectedPublicIP.isEmpty == true else {
-                throw iosMultihopError("This saved Tor circuit requires Local or Server execution and its dynamic exit proof.")
+            guard ["local", "server", "auto"].contains(exit.multihopExecution ?? "local"), exit.external?.expectedPublicIP.isEmpty == true else {
+                throw iosMultihopError("This saved Tor circuit requires Local, Server or Compare both and its dynamic exit proof.")
             }
         }
         let entryMode = exit.multihopEntryMode ?? "wg"
@@ -269,14 +269,19 @@ struct IOSMultihopView: View {
                             Text("Local — Tor on this device").tag("local")
                             if externalEntryProtocol == nil {
                                 Text("Server — Tor on entry node").tag("server")
+                                Text("Compare both — lower valid average").tag("auto")
                             }
-                            if !(externalEntryProtocol == nil ? ["local", "server"] : ["local"]).contains(execution) {
-                                Text(externalEntryProtocol == nil ? "Choose Local or Server" : "Saved choice requires a Router VPN entry").tag(execution)
+                            if !(externalEntryProtocol == nil ? ["local", "server", "auto"] : ["local"]).contains(execution) {
+                                Text(externalEntryProtocol == nil ? "Choose Local, Server or Compare both" : "Saved choice requires a Router VPN entry").tag(execution)
                             }
                         }
                         Text("Tor connects through the selected entry. The app verifies that entry and the current Tor circuit before completing the connection. Tor carries TCP traffic; choose TCP, DoT or DoH for its exit DNS.")
                             .font(.caption).foregroundStyle(.secondary)
-                        Text("Ordinary imported entries use Local and explicit DNS on both nodes. Home AdGuard and Server require a paired Router VPN entry; Server also requires matching Tor and DNS settings there.")
+                        if externalEntryProtocol == nil {
+                            Text("Compare uses (last-relay HTTP response time + external HTTPS response time) / 2 on each candidate's retained circuit. Both candidates use one randomly selected external endpoint. A failed probe rejects that candidate; the winner repeats both probes before connection completes.")
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                        Text("Ordinary imported entries use Local and explicit DNS on both nodes. Home AdGuard and Server require a paired Router VPN entry; Server and Compare also require matching Tor and DNS settings there.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else if let ordinaryExitProtocol {
                         LabeledContent("Exit transport", value: ordinaryExitProtocol)

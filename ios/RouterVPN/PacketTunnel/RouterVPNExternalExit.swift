@@ -147,6 +147,7 @@ struct RouterVPNExternalExitRuntime {
     var torSessionID: String? = nil
     var torPredecessorProfile: String? = nil
     var torProfileJSON: String? = nil
+    var torSourceProfileJSON: String? = nil
     var torExecution: String? = nil
     var policy: RouterVPNExternalPolicy? = nil
 }
@@ -163,11 +164,16 @@ enum RouterVPNExternalExitBuilder {
         let protocolName = string(external["protocol"]).lowercased()
         if protocolName == "tor" || protocolName == "tor-bridge" {
             let throughEntry = profile["multihop_enabled"] as? Bool ?? false
-            let execution = string(profile["multihop_execution"]).isEmpty ? "local" : string(profile["multihop_execution"])
-            guard ["local", "server"].contains(execution), execution != "server" || throughEntry,
-                  restoredExecution == nil || (throughEntry && restoredExecution == execution) else {
-                throw error("Tor requires its saved Local or Server execution; the retained choice must match this exact path.")
+            let requested = string(profile["multihop_execution"]).isEmpty ? "local" : string(profile["multihop_execution"])
+            let execution = restoredExecution ?? requested
+            guard ["local", "server", "auto"].contains(requested), ["local", "server"].contains(execution),
+                  execution != "server" || throughEntry,
+                  requested != "auto" || (throughEntry && predecessorProfile?["node_kind"] as? String == "router-vpn"),
+                  restoredExecution == nil || (throughEntry && (requested == "auto" || restoredExecution == requested)) else {
+                throw error("Tor Compare requires its captured private entry and an owned concrete candidate; restoration must match the saved path.")
             }
+            let sourceProfile = String(decoding: try JSONSerialization.data(withJSONObject: profile, options: [.sortedKeys]), as: UTF8.self)
+            let profile = try IOSMultihopExecution.torLeaf(profile, execution: execution)
             guard throughEntry == (predecessorProfile != nil), throughEntry || predecessorFiles.isEmpty else { throw error("Tor entry graph does not match the frozen node selection.") }
             var predecessor = ""
             var predecessorTag: String?
@@ -259,7 +265,7 @@ enum RouterVPNExternalExitBuilder {
                 }
             }
             var files = predecessorFiles; files["sing-box.json"] = data
-            return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: "", files: files, torSessionID: sessionID, torPredecessorProfile: proofProfile, torProfileJSON: capturedSource, torExecution: throughEntry ? execution : nil)
+            return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: "", files: files, torSessionID: sessionID, torPredecessorProfile: proofProfile, torProfileJSON: capturedSource, torSourceProfileJSON: sourceProfile, torExecution: throughEntry ? execution : nil)
         }
         guard ordinaryProtocols.contains(protocolName) else {
             throw error("Unsupported iOS external protocol \(protocolName).")

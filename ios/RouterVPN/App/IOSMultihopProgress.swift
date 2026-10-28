@@ -32,7 +32,8 @@ extension RouterVPNModel {
                       self.selectedNodeProfile?.id == nodeID, self.connected || self.tunnelTransitioning,
                       let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
                 var lines = ["Multihop: \(value["stage"] as? String ?? "pending") • \(value["execution"] as? String ?? "comparing")"]
-                let lastLabel = value["last_node_measurement"] as? String == "https-response-time" ? "node HTTPS response" : "last-node response"
+                let lastKind = value["last_node_measurement"] as? String
+                let lastLabel = lastKind == "tor-relay-http-response-time" ? "last-relay HTTP response" : (lastKind == "https-response-time" ? "node HTTPS response" : "last-node response")
                 let externalLabel = value["external_measurement"] as? String == "https-response-time" ? "external HTTPS response" : "external response"
                 for item in value["measurements"] as? [[String: Any]] ?? [] {
                     let candidate = item["candidate"] as? [String: Any] ?? [:]
