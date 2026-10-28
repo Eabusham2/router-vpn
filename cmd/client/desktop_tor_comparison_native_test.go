@@ -133,7 +133,13 @@ func desktopTorComparisonChildFixture(kind string, root *os.Root, expected mobil
 
 func desktopTorComparisonFixture(t *testing.T, kind string) (*app, *desktopNodeLaunch, *desktopTorComparisonClient) {
 	t.Helper()
-	a, launch, _ := desktopTorRunningFixture(t, kind)
+	a, launch, comparison, _ := desktopTorComparisonFixtureWithControl(t, kind)
+	return a, launch, comparison
+}
+
+func desktopTorComparisonFixtureWithControl(t *testing.T, kind string) (*app, *desktopNodeLaunch, *desktopTorComparisonClient, string) {
+	t.Helper()
+	a, launch, control := desktopTorRunningFixture(t, kind)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if _, err := a.waitDesktopTorProof(ctx, launch); err != nil {
@@ -150,7 +156,7 @@ func desktopTorComparisonFixture(t *testing.T, kind string) (*app, *desktopNodeL
 		_ = requestDesktopTorStop(ctx, a, launch, launch.command)
 		_ = c.Close(ctx)
 	})
-	return a, launch, c
+	return a, launch, c, control
 }
 
 func releaseDesktopTorComparisonFixture(t *testing.T, launch *desktopNodeLaunch) {
@@ -291,12 +297,13 @@ func TestDesktopTorComparisonCloseWaitExpiryCannotRetirePendingNativeClose(t *te
 }
 
 func TestDesktopTorComparisonCleanupFollowsOnlyCapturedDirectory(t *testing.T) {
-	_, launch, c := desktopTorComparisonFixture(t, "tor-compare-good")
+	_, launch, c, control := desktopTorComparisonFixtureWithControl(t, "tor-compare-directory-retire")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := c.Prepare(ctx); err != nil {
 		t.Fatal(err)
 	}
+	pauseDesktopTorFixturePublications(t, ctx, launch, control)
 	original := launch.directory
 	if err := os.Rename(original, original+"-retired"); err != nil {
 		t.Fatal(err)

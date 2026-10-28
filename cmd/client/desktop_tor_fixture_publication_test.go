@@ -52,7 +52,7 @@ func desktopTorFixturePauseIdentity(expected mobiletor.DesktopBridgeMetadata) st
 // The private acknowledgement lives outside the directory about to be renamed.
 // The real child remains alive until its parent explicitly releases or kills it.
 func desktopTorFixturePublicationBarrier(kind string, expected mobiletor.DesktopBridgeMetadata) {
-	if kind != "proof-directory-retire" {
+	if kind != "proof-directory-retire" && kind != "tor-compare-directory-retire" {
 		return
 	}
 	control := os.Getenv("ROUTERVPN_TOR_TEST_RELEASE")
