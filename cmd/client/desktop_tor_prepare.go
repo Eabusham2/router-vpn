@@ -34,6 +34,7 @@ type desktopTorConnectRuntime struct {
 	runtime    func(string, common.RouterProfile, common.RouterProfile, *desktopTorPredecessorCapture) (torBridgeRuntime, error)
 	preflight  desktopExternalPreflightCommand
 	command    func(*app, torBridgeRuntime, []string) (*exec.Cmd, error)
+	comparison func(*app, *desktopNodeLaunch, string) (mobiletor.Comparison, error)
 }
 
 func captureDesktopTorExecutable(path string) (string, error) {

@@ -82,7 +82,7 @@ func newDesktopTorConnectFixture(t *testing.T) *desktopTorConnectFixture {
 	f.driver.command = func(_ *app, prepared torBridgeRuntime, environment []string) (*exec.Cmd, error) {
 		f.commands++
 		launch := prepared.Launch
-		if launch != f.launch || f.preflight != 2 {
+		if launch != f.launch || f.preflight != 2*f.commands {
 			t.Fatal("child was prepared before both native admission checks")
 		}
 		vars := map[string]string{}

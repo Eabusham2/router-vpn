@@ -66,6 +66,21 @@ func desktopTorComparisonChildFixture(kind string, root *os.Root, expected mobil
 			case mobiletor.DesktopTorCompareClose:
 				record.Drained = true
 			}
+			if strings.HasPrefix(kind, "tor-compare-driver") && record.Action == mobiletor.DesktopTorCompareLast {
+				record.ResponseNS = int64(40 * time.Millisecond)
+				if expected.Execution == "server" {
+					record.ResponseNS = int64(10 * time.Millisecond)
+				}
+				if kind == "tor-compare-driver-failed" || kind == "tor-compare-driver-local-failed" && expected.Execution != "server" {
+					record.Failed, record.ResponseNS = true, 0
+				}
+			}
+			if strings.HasPrefix(kind, "tor-compare-driver") && record.Action == mobiletor.DesktopTorCompareExternal {
+				record.ResponseNS = int64(20 * time.Millisecond)
+				if expected.Execution == "server" {
+					record.ResponseNS = int64(30 * time.Millisecond)
+				}
+			}
 		}
 		published := record
 		if record.Complete && record.Action == mobiletor.DesktopTorCompareLast {
