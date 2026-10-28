@@ -84,6 +84,10 @@ type Outbound struct {
 	bridges        *torpt.Bridges
 	proxy          *mobiletor.TCPProxy
 	application    *mobiletor.Network
+	socksAddress   string
+	socksUsername  string
+	socksPassword  string
+	comparison     *torComparison
 	proof          mobiletor.Proof
 	padding        *torLocalPadding
 	failure        error
@@ -352,6 +356,9 @@ func (h *Outbound) run() {
 	}
 	h.mu.Lock()
 	h.application = application
+	// Comparison anchors require the same real isolation even when cover
+	// traffic is Off. These values never come from a host or saved profile.
+	h.socksAddress, h.socksUsername, h.socksPassword = state.SOCKSAddress, username, password
 	if h.padding != nil {
 		h.padding.username, h.padding.password = username, password
 	}

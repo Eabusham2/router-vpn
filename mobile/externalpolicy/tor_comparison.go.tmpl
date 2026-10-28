@@ -1,0 +1,70 @@
+package box
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"sync/atomic"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func init() {
+	routerVPNTorCaptureComparison = func(s *Box, proof *RouterVPNTorProofRequest) (mobiletor.ComparisonCapture, func(), error) {
+		bad := errors.New("Tor comparison requires the exact retained full graph, native TUN and selected DNS")
+		if s == nil || proof == nil || !proof.Healthy() || s.routerVPNTorOptions == "" {
+			return mobiletor.ComparisonCapture{}, nil, bad
+		}
+		owner, ok := proof.capture.(*routerVPNTorCapturedOwner)
+		if !ok || owner == nil || owner.engine == nil || owner.engine.box != s {
+			return mobiletor.ComparisonCapture{}, nil, bad
+		}
+		actual, selected := s.outbound.Outbound(mobiletor.ProfileOutboundTag)
+		if !selected || actual == nil || any(actual) != any(proof.owner) {
+			return mobiletor.ComparisonCapture{}, nil, bad
+		}
+		source, identity := s.routerVPNTorOptions, owner.Identity()
+		if identity == "" {
+			return mobiletor.ComparisonCapture{}, nil, bad
+		}
+		release, err := owner.activity.beginMeasurement()
+		if err != nil {
+			return mobiletor.ComparisonCapture{}, nil, err
+		}
+		var retired atomic.Bool
+		current := func() bool {
+			return !retired.Load() && proof.ctx.Err() == nil && proof.succeeded.Load() && !proof.canceled.Load() &&
+				proof.currentNative() && owner.Identity() == identity && s.routerVPNTorOptions == source
+		}
+		end := func() {
+			if retired.CompareAndSwap(false, true) {
+				release()
+			}
+		}
+		if !current() {
+			end()
+			return mobiletor.ComparisonCapture{}, nil, bad
+		}
+		digest := sha256.Sum256([]byte(source))
+		capture := mobiletor.ComparisonCapture{OwnerID: identity, SourceSHA256: hex.EncodeToString(digest[:]), SessionID: proof.sessionID, Current: current,
+			DNSProof: func(ctx context.Context) error {
+				if ctx == nil || ctx.Err() != nil || !current() {
+					return bad
+				}
+				// Retain the private/ordinary entry's existing proof boundary.
+				// The Tor final proof stays immutable; this does not invent a new
+				// TorProject timestamp for the comparison or change its score.
+				retained, err := proof.prove(ctx)
+				if err != nil || retained.SessionID != proof.sessionID || !retained.IsTor || !current() {
+					return bad
+				}
+				if err := owner.DNSProof(ctx); err != nil || ctx.Err() != nil || !current() {
+					return bad
+				}
+				return nil
+			},
+		}
+		return capture, end, nil
+	}
+}

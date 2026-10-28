@@ -1,0 +1,106 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type torComparisonBridgeFixture struct {
+	entered, release chan struct{}
+	current          atomic.Bool
+	closed           atomic.Bool
+	closePending     atomic.Bool
+	elapsed          time.Duration
+}
+
+func (f *torComparisonBridgeFixture) Prepare(ctx context.Context) error {
+	if f.entered != nil {
+		close(f.entered)
+		<-ctx.Done()
+		<-f.release
+		return ctx.Err()
+	}
+	return nil
+}
+func (f *torComparisonBridgeFixture) Identity() string {
+	if f.current.Load() && !f.closed.Load() {
+		return "captured-native-owner"
+	}
+	return ""
+}
+func (f *torComparisonBridgeFixture) Verify(context.Context) error { return nil }
+func (f *torComparisonBridgeFixture) ProbeLast(context.Context) (time.Duration, error) {
+	return f.elapsed, nil
+}
+func (f *torComparisonBridgeFixture) ProbeExternal(context.Context, string) (time.Duration, error) {
+	return f.elapsed, nil
+}
+func (f *torComparisonBridgeFixture) Cancel() { f.closed.Store(true) }
+func (f *torComparisonBridgeFixture) Close(context.Context) error {
+	if f.closePending.Load() {
+		return mobiletor.ErrLastRelayTeardown
+	}
+	return nil
+}
+
+func torComparisonBridge(t *testing.T, f *torComparisonBridgeFixture) *RouterTorComparison {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	f.current.Store(true)
+	return &RouterTorComparison{request: f, ctx: ctx, cancel: cancel, current: f.current.Load}
+}
+
+func TestRouterTorComparisonBindingPreservesExactPositiveNanoseconds(t *testing.T) {
+	for _, elapsed := range []time.Duration{1, 1234567, 12 * time.Second, -1, 0, 13 * time.Second} {
+		f := &torComparisonBridgeFixture{elapsed: elapsed}
+		r := torComparisonBridge(t, f)
+		value, err := r.ProbeLastNanos()
+		valid := elapsed > 0 && elapsed <= 12*time.Second
+		if valid && (err != nil || value != int64(elapsed)) || !valid && (err == nil || value != 0) {
+			t.Fatal("binding rounded, fabricated or accepted invalid duration", elapsed, value, err)
+		}
+		if !valid && !f.closed.Load() {
+			t.Fatal("invalid native duration did not revoke its own comparison")
+		}
+	}
+	if value, err := RouterTorCreateComparison(nil, nil, "https://1.1.1.1/cdn-cgi/trace"); err == nil || value != nil {
+		t.Fatal("missing native VPN proof minted a comparison")
+	}
+}
+
+func TestRouterTorComparisonBindingCancelDoesNotWaitForEnteredPreparation(t *testing.T) {
+	f := &torComparisonBridgeFixture{entered: make(chan struct{}), release: make(chan struct{})}
+	r := torComparisonBridge(t, f)
+	done := make(chan error, 1)
+	go func() { done <- r.Prepare() }()
+	<-f.entered
+	canceled := make(chan struct{})
+	go func() { r.Cancel(); close(canceled) }()
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("Cancel waited for blocked native preparation")
+	}
+	if !f.closed.Load() || r.Identity() != "" {
+		t.Fatal("canceled binding retained measurement authority")
+	}
+	f.closePending.Store(true)
+	if !errors.Is(r.Close(), mobiletor.ErrLastRelayTeardown) {
+		t.Fatal("binding forgot unfinished exact native cleanup")
+	}
+	f.current.Store(false)
+	close(f.release)
+	if err := <-done; err == nil {
+		t.Fatal("cancelled preparation returned late success")
+	}
+	f.closePending.Store(false)
+	if r.Close() != nil {
+		t.Fatal("old binding could not retry cleanup after replacement")
+	}
+}

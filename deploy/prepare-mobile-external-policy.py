@@ -44,6 +44,8 @@ def prepare(vendor, *, mobile=True):
         template=ROOT/'mobile/externalpolicy'/(name+'.tmpl')
         (vendor/('routervpn_external_policy'+('_test' if name.endswith('_test.go') else '')+'.go')).write_bytes(template.read_bytes())
     if mobile:
+        (vendor/'routervpn_tor_comparison_capture.go').write_bytes((ROOT/'mobile/externalpolicy/tor_comparison.go.tmpl').read_bytes())
+        (vendor/'routervpn_tor_comparison_capture_test.go').write_bytes((ROOT/'mobile/externalpolicy/tor_comparison_test.go.tmpl').read_bytes())
         (vendor/'routervpn_tor_server_test.go').write_bytes((ROOT/'mobile/externalpolicy/tor_server_test.go.tmpl').read_bytes())
         (vendor/'routervpn_tor_padding_capture_test.go').write_bytes((ROOT/'mobile/externalpolicy/tor_padding_test.go.tmpl').read_bytes())
         for name in ('external', 'external_test', 'tor', 'tor_test'):

@@ -1,0 +1,299 @@
+package box_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+var torComparisonCaptureFixtures sync.Map
+
+type torFullComparisonFixture struct {
+	capture          mobiletor.ComparisonCapture
+	ctx              context.Context
+	cancel           context.CancelFunc
+	prepared, closed atomic.Bool
+	retain           atomic.Bool
+	ownerJoined      func() bool
+}
+
+func (o *torMTUFixtureOutbound) TorCreateComparison(ctx context.Context, capture mobiletor.ComparisonCapture, target string) (mobiletor.Comparison, error) {
+	if capture.SessionID != o.session || capture.Current == nil || !capture.Current() || target != "https://1.1.1.1/cdn-cgi/trace" {
+		return nil, errors.New("invalid complete Box capture")
+	}
+	owned, cancel := context.WithCancel(ctx)
+	f := &torFullComparisonFixture{capture: capture, ctx: owned, cancel: cancel}
+	torComparisonCaptureFixtures.Store(o, f)
+	return f, nil
+}
+func (f *torFullComparisonFixture) Prepare(ctx context.Context) error {
+	if err := f.capture.DNSProof(ctx); err != nil {
+		return err
+	}
+	f.prepared.Store(true)
+	return nil
+}
+func (f *torFullComparisonFixture) Identity() string {
+	if f.prepared.Load() && !f.closed.Load() && f.ctx.Err() == nil && f.capture.Current() {
+		return f.capture.SourceSHA256
+	}
+	return ""
+}
+func (f *torFullComparisonFixture) Verify(context.Context) error {
+	if f.Identity() == "" {
+		return errors.New("stale capture")
+	}
+	return nil
+}
+func (f *torFullComparisonFixture) ProbeLast(context.Context) (time.Duration, error) {
+	return time.Millisecond, nil
+}
+func (f *torFullComparisonFixture) ProbeExternal(context.Context, string) (time.Duration, error) {
+	return time.Millisecond, nil
+}
+func (f *torFullComparisonFixture) Cancel() { f.closed.Store(true); f.cancel() }
+func (f *torFullComparisonFixture) Close(context.Context) error {
+	f.Cancel()
+	if f.retain.Load() && (f.ownerJoined == nil || !f.ownerJoined()) {
+		return mobiletor.ErrLastRelayTeardown
+	}
+	return nil
+}
+
+func TestRouterTorComparisonActivityDoesNotBlockActualBoxShutdown(t *testing.T) {
+	engine, _ := torMTUNativeFixture(t)
+	// Activate the real outbound manager's lifecycle, without opening a host
+	// OS TUN. Box.Close must call the installed native boundary's actual Close.
+	if err := engine.Outbound().Start(adapter.StartStateInitialize); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := engine.RouterVPNTorCreateProof(mobiletor.ProfileOutboundTag, "frozen-session", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = proof.Run(); err != nil {
+		t.Fatal(err)
+	}
+	comparison, err := engine.RouterVPNTorCreateComparison(proof, "https://1.1.1.1/cdn-cgi/trace")
+	if err != nil || comparison == nil {
+		t.Fatal(err)
+	}
+	if err = comparison.Prepare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	out, _ := engine.Outbound().Outbound(mobiletor.ProfileOutboundTag)
+	owner := out.(*torMTUFixtureOutbound)
+	native, _ := torComparisonCaptureFixtures.Load(owner)
+	captured := native.(*torFullComparisonFixture)
+	defer torComparisonCaptureFixtures.Delete(owner)
+	// This boundary fixture acknowledges comparison cleanup only after the
+	// actual Box has called its captured outbound's Close. The real embedded
+	// Outbound/lease/native join dependency is covered by the adapter suite.
+	captured.ownerJoined = func() bool { return owner.ctx.Err() != nil }
+	captured.retain.Store(true)
+	if comparison.Close(context.Background()) == nil {
+		t.Fatal("comparison released native activity before its owner closed")
+	}
+	done := make(chan error, 1)
+	go func() { done <- engine.Close() }()
+	select {
+	case err = <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("actual Box waited for comparison activity before closing its native owner")
+	}
+	if !captured.ownerJoined() || comparison.Identity() != "" || comparison.Close(context.Background()) != nil {
+		t.Fatal("actual Box shutdown failed to retire and drain the captured comparison")
+	}
+}
+
+func TestRouterTorComparisonCapturesRealFullTUNDNSAndActivity(t *testing.T) {
+	for _, ordinary := range []bool{false, true} {
+		t.Run(map[bool]string{false: "direct", true: "ordinary-provider"}[ordinary], func(t *testing.T) {
+			engine, raw := torMTUNativeFixture(t)
+			profile := ""
+			if ordinary {
+				engine, raw = torMTUNativeConfigFixture(t, torMTUOrdinaryConfig(t))
+				profile = torMTUOrdinaryEntryProfile
+			}
+			proof, err := engine.RouterVPNTorCreateProof(mobiletor.ProfileOutboundTag, "frozen-session", profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = proof.Run(); err != nil {
+				t.Fatal(err)
+			}
+			out, _ := engine.Outbound().Outbound(mobiletor.ProfileOutboundTag)
+			owner := out.(*torMTUFixtureOutbound)
+			before := owner.dnsCalls.Load()
+			comparison, err := engine.RouterVPNTorCreateComparison(proof, "https://1.1.1.1/cdn-cgi/trace")
+			if err != nil || comparison == nil {
+				t.Fatal(err)
+			}
+			native, _ := torComparisonCaptureFixtures.Load(owner)
+			captured := native.(*torFullComparisonFixture)
+			defer torComparisonCaptureFixtures.Delete(owner)
+			if captured.capture.OwnerID == "" || len(captured.capture.SourceSHA256) != 64 || captured.capture.SessionID != "frozen-session" {
+				t.Fatal("full construction source/session was omitted")
+			}
+			if err = comparison.Prepare(context.Background()); err != nil || owner.dnsCalls.Load() <= before || comparison.Identity() != captured.capture.SourceSHA256 {
+				t.Fatal("captured actual DNS did not run before measurement", err)
+			}
+			if second, err := engine.RouterVPNTorCreateComparison(proof, "https://1.1.1.1/cdn-cgi/trace"); err == nil || second != nil {
+				t.Fatal("two comparisons acquired the same TUN activity")
+			}
+			mtuProfile := torMTUFrozenProfile
+			if ordinary {
+				mtuProfile = torMTUOrdinaryExitProfile
+			}
+			lease, err := engine.RouterVPNTorClaimMTU(proof, raw, mtuProfile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lease.Close()
+			inbound, err := lease.Inbound()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = lease.ChangeMTU(context.Background(), inbound, 1400); err == nil {
+				t.Fatal("MTU replaced the TUN during a retained comparison")
+			}
+			captured.retain.Store(true)
+			if comparison.Close(context.Background()) == nil {
+				t.Fatal("pending native close released TUN activity")
+			}
+			if second, err := engine.RouterVPNTorCreateComparison(proof, "https://1.1.1.1/cdn-cgi/trace"); err == nil || second != nil {
+				t.Fatal("unfinished comparison allowed replacement")
+			}
+			captured.retain.Store(false)
+			if comparison.Close(context.Background()) != nil || !proof.Healthy() {
+				t.Fatal("measurement drain stopped the whole proved path")
+			}
+			second, err := engine.RouterVPNTorCreateComparison(proof, "https://1.1.1.1/cdn-cgi/trace")
+			if err != nil || second == nil {
+				t.Fatal("completed activity drain did not permit next capture", err)
+			}
+			if second.Close(context.Background()) != nil {
+				t.Fatal("second comparison close failed")
+			}
+		})
+	}
+}
+
+func TestRouterTorComparisonRejectsDifferentBoxAndRetiredActualTUN(t *testing.T) {
+	engine, _ := torMTUNativeFixture(t)
+	replacement, _ := torMTUNativeFixture(t)
+	proof, err := engine.RouterVPNTorCreateProof(mobiletor.ProfileOutboundTag, "frozen-session", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = proof.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if value, err := replacement.RouterVPNTorCreateComparison(proof, "https://1.1.1.1/cdn-cgi/trace"); err == nil || value != nil {
+		t.Fatal("replacement Box borrowed a proved owner")
+	}
+	comparison, err := engine.RouterVPNTorCreateComparison(proof, "https://1.1.1.1/cdn-cgi/trace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = comparison.Prepare(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	inbound := engine.Inbound().Inbounds()[0]
+	if err = engine.Inbound().Remove(inbound.Tag()); err != nil {
+		t.Fatal(err)
+	}
+	if comparison.Identity() != "" {
+		t.Fatal("removed actual TUN retained comparison identity")
+	}
+	if elapsed, err := comparison.ProbeLast(context.Background()); err == nil || elapsed != 0 {
+		t.Fatal("retired TUN received a score")
+	}
+	if comparison.Close(context.Background()) != nil {
+		t.Fatal("retired TUN prevented old captured cleanup")
+	}
+	out, _ := replacement.Outbound().Outbound(mobiletor.ProfileOutboundTag)
+	if out.(*torMTUFixtureOutbound).canceled.Load() {
+		t.Fatal("old cleanup canceled replacement native path")
+	}
+}
+
+func TestRouterTorComparisonSourceChangesWithFullDNSAndInterfacePolicy(t *testing.T) {
+	seen := make(map[string]bool)
+	for _, profile := range []string{torMTUFrozenProfile, strings.Replace(torMTUFrozenProfile, `"home_lan_access":false`, `"home_lan_access":true`, 1), strings.Replace(torMTUFrozenProfile, `"mtu_policy":"auto"`, `"mtu_policy":"fixed","manual_mtu":1400`, 1)} {
+		raw, err := mobiletor.CompileProfile(profile, "frozen-session", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		engine, _ := torMTUNativeConfigFixture(t, raw)
+		proof, err := engine.RouterVPNTorCreateProof(mobiletor.ProfileOutboundTag, "frozen-session", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = proof.Run(); err != nil {
+			t.Fatal(err)
+		}
+		comparison, err := engine.RouterVPNTorCreateComparison(proof, "https://1.1.1.1/cdn-cgi/trace")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = comparison.Prepare(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		digest := comparison.Identity()
+		if digest == "" || seen[digest] {
+			t.Fatal("full graph policy was replaced by a tag-only or cached source hash")
+		}
+		seen[digest] = true
+		if comparison.Close(context.Background()) != nil {
+			t.Fatal("capture close failed")
+		}
+	}
+}
+
+func TestRouterTorComparisonRejectsAnotherProvedTorOwnerInTheSameBox(t *testing.T) {
+	raw, err := mobiletor.CompileProfile(torMTUFrozenProfile, "frozen-session", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var graph map[string]any
+	if json.Unmarshal([]byte(raw), &graph) != nil {
+		t.Fatal("invalid fixture graph")
+	}
+	var alternate map[string]any
+	for _, value := range graph["outbounds"].([]any) {
+		out := value.(map[string]any)
+		if out["tag"] == mobiletor.ProfileOutboundTag {
+			encoded, _ := json.Marshal(out)
+			_ = json.Unmarshal(encoded, &alternate)
+		}
+	}
+	if alternate == nil {
+		t.Fatal("fixture lost its actual final Tor owner")
+	}
+	alternate["tag"] = "unselected-tor"
+	graph["outbounds"] = append(graph["outbounds"].([]any), alternate)
+	encoded, _ := json.Marshal(graph)
+	engine, _ := torMTUNativeConfigFixture(t, string(encoded))
+	proof, err := engine.RouterVPNTorCreateProof("unselected-tor", "frozen-session", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = proof.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if comparison, err := engine.RouterVPNTorCreateComparison(proof, "https://1.1.1.1/cdn-cgi/trace"); err == nil || comparison != nil {
+		t.Fatal("another proved Tor outbound borrowed the selected path's source/TUN/DNS authority")
+	}
+}

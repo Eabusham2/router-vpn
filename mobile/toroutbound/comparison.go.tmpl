@@ -1,0 +1,695 @@
+package routervpntor
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/protocol/socks"
+	"github.com/sagernet/sing/protocol/socks/socks5"
+)
+
+var errTorComparison = errors.New("Tor comparison lost its captured native path, source or retained anchor")
+
+type torComparisonExternal interface {
+	Prepare(context.Context) error
+	Measure(context.Context, string) (time.Duration, error)
+	TargetAddress() netip.AddrPort
+	LocalAddress() string
+	Healthy() bool
+	Cancel()
+	Close(context.Context) error
+}
+
+type torComparisonOptions struct {
+	dial     func(context.Context, string, string) (net.Conn, error)
+	external func(context.Context, net.Conn, string, func() bool) (torComparisonExternal, error)
+}
+
+// torComparison belongs to one concrete resident lease, complete native Box
+// capture and selected endpoint. Its primary TLS anchor remains open through
+// both operands; LastRelayProbe holds only an extra reference to that anchor.
+// Neither a native circuit ID supplied by a caller nor a recent circuit list
+// can mint this authority.
+type torComparison struct {
+	host                                                          *Outbound
+	lease                                                         *lease
+	application                                                   *mobiletor.Network
+	capture                                                       mobiletor.ComparisonCapture
+	ownerID, sessionSHA, target, socksAddress, username, password string
+	targetAddress                                                 netip.AddrPort
+	ctx                                                           context.Context
+	cancel                                                        context.CancelFunc
+	options                                                       torComparisonOptions
+	network                                                       *mobiletor.Network
+	mu                                                            sync.Mutex
+	busy, preparing, prepared, lastUsed, lastDone, externalUsed   bool
+	closing, joined                                               bool
+	anchor                                                        mobiletor.LastRelayLocatedAnchor
+	dnsAt, pathAt                                                 time.Time
+	external                                                      torComparisonExternal
+	probe                                                         *mobiletor.LastRelayProbe
+	sockets                                                       []net.Conn
+	holds                                                         int
+	workers                                                       sync.WaitGroup
+	closeOnce                                                     sync.Once
+	closeDone                                                     chan struct{}
+	watchDone                                                     chan struct{}
+	stopOwner                                                     func() bool
+}
+
+var _ mobiletor.Comparison = (*torComparison)(nil)
+var _ mobiletor.LastRelayAnchor = (*torComparison)(nil)
+
+func (h *Outbound) TorCreateComparison(parent context.Context, capture mobiletor.ComparisonCapture, target string) (mobiletor.Comparison, error) {
+	request, err := h.newComparison(parent, capture, target, torComparisonOptions{})
+	if request == nil {
+		return nil, err
+	}
+	return request, err
+}
+
+func (h *Outbound) newComparison(parent context.Context, capture mobiletor.ComparisonCapture, target string, options torComparisonOptions) (*torComparison, error) {
+	if h == nil || parent == nil || parent.Err() != nil || capture.Current == nil || capture.DNSProof == nil || !capture.Current() ||
+		capture.OwnerID == "" || len(capture.OwnerID) > 512 || strings.ContainsAny(capture.OwnerID, "\x00\r\n") ||
+		!torComparisonHex(capture.SourceSHA256, 64) || capture.SessionID != h.sessionID || !h.TorHealthy(capture.SessionID) {
+		return nil, errTorComparison
+	}
+	var targetAddress netip.AddrPort
+	switch target {
+	case "https://1.1.1.1/cdn-cgi/trace":
+		targetAddress = netip.MustParseAddrPort("1.1.1.1:443")
+	case "https://1.0.0.1/cdn-cgi/trace":
+		targetAddress = netip.MustParseAddrPort("1.0.0.1:443")
+	default:
+		return nil, errTorComparison
+	}
+	h.mu.Lock()
+	owner := h.lease
+	if h.closing || h.ctx.Err() != nil || h.comparison != nil || owner == nil || owner.control == nil || h.application == nil ||
+		!torComparisonHex(h.socksUsername, 32, 64) || !torComparisonHex(h.socksPassword, 64) {
+		h.mu.Unlock()
+		return nil, errTorComparison
+	}
+	if _, supported := owner.instance.(interface{ Joined() bool }); !supported {
+		h.mu.Unlock()
+		return nil, errors.New("Tor comparison requires its exact native close-join witness")
+	}
+	address, err := netip.ParseAddrPort(h.socksAddress)
+	if err != nil || !address.Addr().IsLoopback() || address.Port() < 1024 || address.String() != h.socksAddress {
+		h.mu.Unlock()
+		return nil, errTorComparison
+	}
+	ctx, cancel := context.WithCancel(parent)
+	identity := sha256.Sum256([]byte(capture.SessionID))
+	c := &torComparison{host: h, lease: owner, application: h.application, capture: capture,
+		ownerID: fmt.Sprintf("%s/%p/%p", capture.OwnerID, h, owner), sessionSHA: hex.EncodeToString(identity[:]), target: target, targetAddress: targetAddress,
+		socksAddress: h.socksAddress, username: h.socksUsername, password: h.socksPassword, ctx: ctx, cancel: cancel, options: options,
+		closeDone: make(chan struct{}), watchDone: make(chan struct{})}
+	if c.options.dial == nil {
+		local := &loopbackDialer{address: c.socksAddress}
+		c.options.dial = func(ctx context.Context, network, address string) (net.Conn, error) {
+			return local.DialContext(ctx, network, M.ParseSocksaddr(address))
+		}
+	}
+	if c.options.external == nil {
+		c.options.external = func(ctx context.Context, raw net.Conn, target string, current func() bool) (torComparisonExternal, error) {
+			return mobiletor.NewLastRelayExternalStream(ctx, raw, target, current)
+		}
+	}
+	// Added while the same lock excludes beginClose. The retained comparison
+	// releases this worker only after all native and socket ownership drains.
+	h.proofWorkers.Add(1)
+	h.comparison = c
+	h.mu.Unlock()
+	c.network, err = mobiletor.NewNetwork(ctx, func(ctx context.Context, network, address string) (net.Conn, error) {
+		if network != "tcp" || address != c.socksAddress || !c.current() {
+			return nil, errTorComparison
+		}
+		raw, err := c.options.dial(ctx, network, address)
+		if raw == nil {
+			return nil, err
+		}
+		// This wrapper is inside Network retention, so an entered handshake,
+		// TLS or HTTP read cannot release native ownership merely because the
+		// underlying Close returned before that read unwound.
+		return &torComparisonConnection{Conn: raw, owner: c}, err
+	}, nil)
+	if err != nil {
+		close(c.watchDone)
+		c.Cancel()
+		return c, err
+	}
+	c.stopOwner = context.AfterFunc(h.ctx, c.Cancel)
+	go c.watch()
+	if !c.current() {
+		c.Cancel()
+		return c, errTorComparison
+	}
+	return c, nil
+}
+
+func torComparisonHex(value string, lengths ...int) bool {
+	data, err := hex.DecodeString(value)
+	if err != nil || hex.EncodeToString(data) != value {
+		return false
+	}
+	for _, size := range lengths {
+		if len(value) == size {
+			return true
+		}
+	}
+	return false
+}
+
+// current reads only captured memory. Native status/control and real DNS are
+// checked explicitly by Prepare/Verify; data I/O also retains the existing
+// padding admission guard. No watcher can refresh a proof timestamp.
+func (c *torComparison) current() bool {
+	if c == nil || c.ctx.Err() != nil || c.host.ctx.Err() != nil || !c.capture.Current() {
+		return false
+	}
+	h := c.host
+	h.mu.Lock()
+	valid := !h.closing && h.failure == nil && h.comparison == c && h.lease == c.lease && h.application == c.application &&
+		h.sessionID == c.capture.SessionID && h.socksAddress == c.socksAddress && h.socksUsername == c.username && h.socksPassword == c.password
+	ready := h.proof.IsTor && h.proof.SessionID == c.capture.SessionID
+	if h.padding != nil {
+		ready = h.circuitReady
+	}
+	h.mu.Unlock()
+	if !valid || !ready || h.upstream.current() != nil || h.networkCapture != nil && h.networkCapture.current() != nil || c.NativeJoined() {
+		return false
+	}
+	return true
+}
+
+func (c *torComparison) dataCurrent() bool {
+	if !c.current() {
+		return false
+	}
+	if c.host.padding != nil {
+		_, err := c.host.TorPaddingStatus(c.capture.SessionID)
+		return err == nil && c.current()
+	}
+	return true
+}
+
+func (c *torComparison) watch() {
+	defer close(c.watchDone)
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.ctx.Done():
+			c.Cancel()
+			return
+		case <-ticker.C:
+			c.mu.Lock()
+			dnsAt := c.dnsAt
+			c.mu.Unlock()
+			if !c.current() || !dnsAt.IsZero() && !dnsAt.Add(mobiletor.ComparisonProofMaxAge).After(time.Now()) {
+				c.Cancel()
+				return
+			}
+		}
+	}
+}
+
+type torComparisonResult struct {
+	elapsed time.Duration
+	err     error
+}
+
+func (c *torComparison) operate(parent context.Context, kind string, action func(context.Context) (time.Duration, error)) (time.Duration, error) {
+	if c == nil || parent == nil || parent.Err() != nil || !c.current() {
+		return 0, errTorComparison
+	}
+	c.mu.Lock()
+	if c.closing || c.busy || kind == "prepare" && c.preparing || kind != "prepare" && !c.prepared ||
+		kind == "last" && c.lastUsed || kind == "external" && (c.externalUsed || !c.lastDone) {
+		c.mu.Unlock()
+		return 0, errTorComparison
+	}
+	switch kind {
+	case "prepare":
+		c.preparing = true
+	case "last":
+		c.lastUsed = true
+	case "external":
+		c.externalUsed = true
+	}
+	c.busy = true
+	c.workers.Add(1)
+	c.mu.Unlock()
+	ctx, cancel := context.WithTimeout(c.ctx, 20*time.Second)
+	defer cancel()
+	stop := context.AfterFunc(parent, cancel)
+	defer stop()
+	result := make(chan torComparisonResult, 1)
+	go func() {
+		elapsed, err := action(ctx)
+		if err != nil || ctx.Err() != nil || parent.Err() != nil || !c.current() {
+			err, elapsed = errTorComparison, 0
+			c.Cancel()
+		}
+		c.mu.Lock()
+		c.busy = false
+		c.mu.Unlock()
+		c.workers.Done()
+		result <- torComparisonResult{elapsed, err}
+	}()
+	select {
+	case value := <-result:
+		if parent.Err() != nil || !c.current() {
+			c.Cancel()
+			return 0, errTorComparison
+		}
+		return value.elapsed, value.err
+	case <-parent.Done():
+		c.Cancel()
+		return 0, errTorComparison
+	case <-c.ctx.Done():
+		c.Cancel()
+		return 0, errTorComparison
+	case <-ctx.Done():
+		c.Cancel()
+		return 0, errTorComparison
+	}
+}
+
+func (c *torComparison) Prepare(ctx context.Context) error {
+	_, err := c.operate(ctx, "prepare", func(operation context.Context) (time.Duration, error) {
+		if !c.host.TorHealthy(c.capture.SessionID) || c.capture.DNSProof(operation) != nil || !c.current() || operation.Err() != nil {
+			return 0, errTorComparison
+		}
+		// These timestamps record real completion; initial Tor proof remains
+		// immutable and is not rerun merely to make comparison look fresh.
+		c.mu.Lock()
+		c.dnsAt = time.Now().UTC()
+		c.mu.Unlock()
+		raw, err := c.dialSOCKS(operation, c.targetAddress.String())
+		if err != nil || raw == nil {
+			return 0, errTorComparison
+		}
+		external, err := c.options.external(c.ctx, raw, c.target, c.current)
+		c.mu.Lock()
+		c.external = external
+		c.mu.Unlock()
+		if err != nil || external == nil || external.Prepare(operation) != nil || !external.Healthy() || !c.current() {
+			return 0, errTorComparison
+		}
+		located, err := c.lookup(operation)
+		if err != nil {
+			return 0, err
+		}
+		c.mu.Lock()
+		c.anchor, c.pathAt = located, time.Now().UTC()
+		c.prepared = true
+		c.mu.Unlock()
+		probe, err := mobiletor.NewLastRelayProbe(c.ctx, c.lease.control, c)
+		c.mu.Lock()
+		c.probe = probe
+		c.mu.Unlock()
+		if err != nil || probe == nil || !c.current() {
+			return 0, errTorComparison
+		}
+		return 0, nil
+	})
+	return err
+}
+
+func (c *torComparison) lookup(ctx context.Context) (mobiletor.LastRelayLocatedAnchor, error) {
+	c.mu.Lock()
+	external := c.external
+	c.mu.Unlock()
+	if !c.current() || external == nil || !external.Healthy() || external.TargetAddress() != c.targetAddress {
+		return mobiletor.LastRelayLocatedAnchor{}, errTorComparison
+	}
+	client, err := netip.ParseAddrPort(external.LocalAddress())
+	if err != nil || !client.Addr().IsLoopback() || client.String() != external.LocalAddress() {
+		return mobiletor.LastRelayLocatedAnchor{}, errTorComparison
+	}
+	// Issued control frames have their own bounded drain lifetime. The caller
+	// may stop waiting, but cannot abandon a reply and reuse that control stream.
+	command, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	located, err := c.lease.control.LookupLastRelayAnchor(command, mobiletor.LastRelayAnchorLocator{
+		SessionSHA256: c.sessionSHA, SourceSHA256: c.capture.SourceSHA256, SOCKSUsername: c.username, SOCKSPassword: c.password,
+		Client: client, Target: c.targetAddress,
+	})
+	if err != nil || ctx.Err() != nil || !c.current() || !external.Healthy() {
+		return mobiletor.LastRelayLocatedAnchor{}, errTorComparison
+	}
+	return located, nil
+}
+
+func (c *torComparison) verify(ctx context.Context) error {
+	if !c.current() || !c.host.TorHealthy(c.capture.SessionID) {
+		return errTorComparison
+	}
+	located, err := c.lookup(ctx)
+	if err != nil {
+		return err
+	}
+	c.mu.Lock()
+	expected, dnsAt := c.anchor, c.dnsAt
+	c.mu.Unlock()
+	if located != expected || !dnsAt.Add(mobiletor.ComparisonProofMaxAge).After(time.Now()) || ctx.Err() != nil || !c.current() {
+		return errTorComparison
+	}
+	return nil
+}
+
+func (c *torComparison) Verify(ctx context.Context) error {
+	_, err := c.operate(ctx, "verify", func(ctx context.Context) (time.Duration, error) { return 0, c.verify(ctx) })
+	return err
+}
+
+func (c *torComparison) ProbeLast(ctx context.Context) (time.Duration, error) {
+	return c.operate(ctx, "last", func(ctx context.Context) (time.Duration, error) {
+		if err := c.verify(ctx); err != nil {
+			return 0, err
+		}
+		c.mu.Lock()
+		probe := c.probe
+		c.mu.Unlock()
+		if probe == nil {
+			return 0, errTorComparison
+		}
+		elapsed, err := probe.Run(ctx)
+		if err != nil || elapsed <= 0 || c.verify(ctx) != nil {
+			return 0, errTorComparison
+		}
+		c.mu.Lock()
+		c.lastDone = true
+		c.mu.Unlock()
+		return elapsed, nil
+	})
+}
+
+func (c *torComparison) ProbeExternal(ctx context.Context, target string) (time.Duration, error) {
+	if c == nil || target != c.target {
+		if c != nil {
+			c.Cancel()
+		}
+		return 0, errTorComparison
+	}
+	return c.operate(ctx, "external", func(ctx context.Context) (time.Duration, error) {
+		if err := c.verify(ctx); err != nil {
+			return 0, err
+		}
+		c.mu.Lock()
+		external := c.external
+		c.mu.Unlock()
+		elapsed, err := external.Measure(ctx, target)
+		if err != nil || elapsed <= 0 || c.verify(ctx) != nil {
+			return 0, errTorComparison
+		}
+		return elapsed, nil
+	})
+}
+
+func (c *torComparison) Identity() string {
+	if c == nil || !c.current() {
+		return ""
+	}
+	c.mu.Lock()
+	prepared, external, dnsAt := c.prepared, c.external, c.dnsAt
+	c.mu.Unlock()
+	if !prepared || external == nil || !external.Healthy() || !dnsAt.Add(mobiletor.ComparisonProofMaxAge).After(time.Now()) {
+		return ""
+	}
+	return c.ownerID + "/" + c.capture.SourceSHA256 + "/" + c.target
+}
+
+func (c *torComparison) Capture() (mobiletor.LastRelayAnchorCapture, error) {
+	if c.Identity() == "" {
+		return mobiletor.LastRelayAnchorCapture{}, errTorComparison
+	}
+	c.mu.Lock()
+	anchor, pathAt, dnsAt := c.anchor, c.pathAt, c.dnsAt
+	c.mu.Unlock()
+	return mobiletor.LastRelayAnchorCapture{OwnerID: c.ownerID, SessionSHA256: c.sessionSHA, SourceSHA256: c.capture.SourceSHA256,
+		AnchorStream: anchor.AnchorStream, Circuit: anchor.Circuit, ExitFingerprint: anchor.ExitFingerprint, PathSHA256: anchor.PathSHA256,
+		SOCKSUsername: c.username, SOCKSPassword: c.password, PathCheckedAt: pathAt, DNSCheckedAt: dnsAt}, nil
+}
+
+type torComparisonHold struct {
+	owner *torComparison
+	once  sync.Once
+}
+
+func (c *torComparison) Retain() (mobiletor.LastRelayAnchorHold, error) {
+	if c.Identity() == "" {
+		return nil, errTorComparison
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closing || c.ctx.Err() != nil {
+		return nil, errTorComparison
+	}
+	c.holds++
+	return &torComparisonHold{owner: c}, nil
+}
+
+func (h *torComparisonHold) Close(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil {
+		return mobiletor.ErrLastRelayTeardown
+	}
+	h.once.Do(func() { h.owner.mu.Lock(); h.owner.holds--; h.owner.mu.Unlock() })
+	return nil
+}
+
+func (c *torComparison) NativeJoined() bool {
+	if c == nil || c.lease == nil || c.lease.instance == nil {
+		return false
+	}
+	witness, supported := c.lease.instance.(interface{ Joined() bool })
+	return supported && witness.Joined()
+}
+
+func (c *torComparison) DialProbe(ctx context.Context, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	parts := strings.Split(host, ".")
+	if err != nil || port != "1" || len(parts) != 6 || strings.Join(parts[3:], ".") != "lastrelay.routervpn.invalid" ||
+		!torComparisonHex(parts[1], 32) || !torComparisonHex(parts[2], 32) {
+		return nil, errTorComparison
+	}
+	generation, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || generation < 1 || strconv.FormatInt(generation, 10) != parts[0] {
+		return nil, errTorComparison
+	}
+	return c.dialSOCKS(ctx, address)
+}
+
+func (c *torComparison) dialSOCKS(ctx context.Context, address string) (net.Conn, error) {
+	if ctx == nil || ctx.Err() != nil || !c.dataCurrent() {
+		return nil, errTorComparison
+	}
+	raw, err := c.network.DialRetainedContext(ctx, "tcp", c.socksAddress)
+	if raw != nil {
+		c.mu.Lock()
+		c.sockets = append(c.sockets, raw)
+		c.mu.Unlock()
+	}
+	if err != nil || raw == nil || !c.dataCurrent() || ctx.Err() != nil {
+		return raw, errTorComparison
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	if end, ok := ctx.Deadline(); ok && end.Before(deadline) {
+		deadline = end
+	}
+	if raw.SetDeadline(deadline) != nil {
+		return raw, errTorComparison
+	}
+	// The raw socket is already retained before the handshake. socks.Client's
+	// convenience dial closes and drops nonnil error sockets; it cannot be used
+	// at this ownership boundary.
+	_, err = socks.ClientHandshake5(raw, socks5.CommandConnect, M.ParseSocksaddr(address), c.username, c.password)
+	if err != nil || ctx.Err() != nil || !c.dataCurrent() || raw.SetDeadline(time.Time{}) != nil {
+		return raw, errTorComparison
+	}
+	return raw, nil
+}
+
+func (c *torComparison) Cancel() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	c.closing = true
+	c.cancel()
+	external, probe := c.external, c.probe
+	c.mu.Unlock()
+	if probe != nil {
+		probe.Cancel()
+	}
+	if external != nil {
+		external.Cancel()
+	}
+	c.closeOnce.Do(func() { go c.cleanup() })
+}
+
+func (c *torComparison) cleanup() {
+	<-c.watchDone
+	// Cancelled network owners close their raw sockets before waiting for a
+	// caller's operation. Late dials remain retained and are retried below.
+	workersDone := make(chan struct{})
+	go func() { c.workers.Wait(); close(workersDone) }()
+	for {
+		c.mu.Lock()
+		probe, external := c.probe, c.external
+		sockets := append([]net.Conn(nil), c.sockets...)
+		c.mu.Unlock()
+		joined := false
+		select {
+		case <-workersDone:
+			joined = true
+		default:
+		}
+		wait, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if probe != nil && probe.Close(wait) != nil {
+			joined = false
+			c.quarantineClosingOwner()
+		}
+		if external != nil && external.Close(wait) != nil {
+			joined = false
+		}
+		for _, socket := range sockets {
+			if err := socket.Close(); err != nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
+				joined = false
+			}
+		}
+		if c.network != nil && c.network.Close(wait) != nil {
+			joined = false
+		}
+		cancel()
+		c.mu.Lock()
+		joined = joined && c.holds == 0
+		c.mu.Unlock()
+		if joined {
+			break
+		}
+		timer := time.NewTimer(10 * time.Millisecond)
+		<-timer.C
+	}
+	if c.stopOwner != nil {
+		c.stopOwner()
+	}
+	c.host.mu.Lock()
+	if c.host.comparison == c {
+		c.host.comparison = nil
+	}
+	c.host.mu.Unlock()
+	c.mu.Lock()
+	c.joined = true
+	c.mu.Unlock()
+	c.host.proofWorkers.Done()
+	close(c.closeDone)
+}
+
+// Whole-outbound shutdown waits for this comparison's worker before it may
+// release the resident lease. If the native grant cannot acknowledge drain,
+// start that exact resident's final join independently of the worker wait.
+// Measurement-only cancellation keeps a healthy selected VPN running; only
+// the already-closing captured outbound may take this irreversible path.
+// Quarantine retains the lease, sockets and proof worker until real joins
+// complete. It never treats the close request or native exit as completion.
+func (c *torComparison) quarantineClosingOwner() {
+	c.host.mu.Lock()
+	closing := c.host.comparison == c && c.host.lease == c.lease &&
+		(c.host.closing || c.host.ctx.Err() != nil)
+	c.host.mu.Unlock()
+	if closing && !c.NativeJoined() {
+		c.lease.quarantine()
+	}
+}
+
+func (c *torComparison) Close(ctx context.Context) error {
+	if c == nil {
+		return nil
+	}
+	if ctx == nil {
+		return mobiletor.ErrLastRelayTeardown
+	}
+	c.Cancel()
+	select {
+	case <-c.closeDone:
+		return nil
+	case <-ctx.Done():
+		return mobiletor.ErrLastRelayTeardown
+	}
+}
+
+type torComparisonConnection struct {
+	net.Conn
+	owner           *torComparison
+	mu              sync.Mutex
+	closeMu         sync.Mutex
+	closing, closed bool
+	workers         sync.WaitGroup
+}
+
+func (c *torComparisonConnection) begin() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closing || !c.owner.dataCurrent() {
+		return net.ErrClosed
+	}
+	c.workers.Add(1)
+	return nil
+}
+func (c *torComparisonConnection) Read(buffer []byte) (int, error) {
+	if err := c.begin(); err != nil {
+		return 0, err
+	}
+	defer c.workers.Done()
+	n, err := c.Conn.Read(buffer)
+	if !c.owner.dataCurrent() {
+		return 0, net.ErrClosed
+	}
+	return n, err
+}
+func (c *torComparisonConnection) Write(buffer []byte) (int, error) {
+	if err := c.begin(); err != nil {
+		return 0, err
+	}
+	defer c.workers.Done()
+	n, err := c.Conn.Write(buffer)
+	if !c.owner.dataCurrent() {
+		return n, net.ErrClosed
+	}
+	return n, err
+}
+func (c *torComparisonConnection) Close() error {
+	c.closeMu.Lock()
+	defer c.closeMu.Unlock()
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return nil
+	}
+	c.closing = true
+	c.mu.Unlock()
+	err := c.Conn.Close()
+	if err != nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
+		return errors.New("Tor comparison socket remains owned")
+	}
+	c.workers.Wait()
+	c.mu.Lock()
+	c.closed = true
+	c.mu.Unlock()
+	return nil
+}

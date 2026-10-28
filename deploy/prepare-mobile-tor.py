@@ -115,6 +115,10 @@ def copies():
         result['routervpn/torpt/'+relative] = rewrite(path.read_bytes()) if path.suffix == '.go' else path.read_bytes()
     mapped = {'box.go.tmpl': 'routervpn_tor.go',
               'box_test.go.tmpl': 'routervpn_tor_test.go',
+              'comparison_box.go.tmpl': 'routervpn_tor_comparison.go',
+              'comparison_box_test.go.tmpl': 'routervpn_tor_comparison_test.go',
+              'comparison_bridge.go.tmpl': 'experimental/libbox/routervpn_tor_comparison.go',
+              'comparison_bridge_test.go.tmpl': 'experimental/libbox/routervpn_tor_comparison_test.go',
               'padding_box.go.tmpl': 'routervpn_tor_padding.go',
               'padding_box_test.go.tmpl': 'routervpn_tor_padding_test.go',
               'padding_bridge.go.tmpl': 'experimental/libbox/routervpn_tor_padding.go',

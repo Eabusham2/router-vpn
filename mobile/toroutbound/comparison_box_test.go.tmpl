@@ -1,0 +1,133 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type torBoxComparisonFixture struct {
+	*torBoxFixture
+	result  *torComparisonHandleFixture
+	failure bool
+}
+
+func (f *torBoxComparisonFixture) TorCreateComparison(ctx context.Context, capture mobiletor.ComparisonCapture, target string) (mobiletor.Comparison, error) {
+	if ctx.Err() != nil || capture.SourceSHA256 != strings.Repeat("a", 64) || capture.SessionID != f.session || target != "https://1.1.1.1/cdn-cgi/trace" {
+		return nil, errors.New("wrong captured boundary")
+	}
+	if f.failure {
+		return f.result, errors.New("retained constructor failure")
+	}
+	return f.result, nil
+}
+
+type torComparisonHandleFixture struct {
+	valid           atomic.Bool
+	cancels, closes atomic.Int32
+	closePending    atomic.Bool
+	prepare         func(context.Context) error
+	last            func(context.Context) (time.Duration, error)
+}
+
+func (f *torComparisonHandleFixture) Prepare(ctx context.Context) error {
+	if f.prepare != nil {
+		return f.prepare(ctx)
+	}
+	return nil
+}
+func (f *torComparisonHandleFixture) Identity() string {
+	if f.valid.Load() {
+		return "exact-native-comparison"
+	}
+	return ""
+}
+func (f *torComparisonHandleFixture) Verify(context.Context) error { return nil }
+func (f *torComparisonHandleFixture) ProbeLast(ctx context.Context) (time.Duration, error) {
+	if f.last != nil {
+		return f.last(ctx)
+	}
+	return time.Millisecond, nil
+}
+func (f *torComparisonHandleFixture) ProbeExternal(context.Context, string) (time.Duration, error) {
+	return 2 * time.Millisecond, nil
+}
+func (f *torComparisonHandleFixture) Cancel() { f.cancels.Add(1); f.valid.Store(false) }
+func (f *torComparisonHandleFixture) Close(context.Context) error {
+	f.closes.Add(1)
+	if f.closePending.Load() {
+		return mobiletor.ErrLastRelayTeardown
+	}
+	return nil
+}
+
+func TestRouterTorComparisonBoxRetainsPartialOwnerAndActivityUntilDrain(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		t.Run(map[bool]string{false: "success", true: "constructor-partial"}[partial], func(t *testing.T) {
+			previous := routerVPNTorCaptureComparison
+			defer func() { routerVPNTorCaptureComparison = previous }()
+			core := &torComparisonHandleFixture{}
+			core.valid.Store(true)
+			owner := &torBoxComparisonFixture{torBoxFixture: newTorBoxFixture(t, "comparison-session"), result: core, failure: partial}
+			proof, err := newRouterTorProofRequest(context.Background(), owner, owner.session, "", func() bool { return true })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = proof.Run(); err != nil {
+				t.Fatal(err)
+			}
+			var current atomic.Bool
+			current.Store(true)
+			var released atomic.Int32
+			routerVPNTorCaptureComparison = func(*Box, *RouterVPNTorProofRequest) (mobiletor.ComparisonCapture, func(), error) {
+				return mobiletor.ComparisonCapture{OwnerID: "complete-box", SourceSHA256: strings.Repeat("a", 64), SessionID: owner.session, Current: current.Load, DNSProof: func(context.Context) error { return nil }}, func() { released.Add(1) }, nil
+			}
+			value, err := (&Box{}).RouterVPNTorCreateComparison(proof, "https://1.1.1.1/cdn-cgi/trace")
+			if value == nil || (err != nil) != partial || released.Load() != 0 {
+				t.Fatal("partial comparison or activity owner was lost", err)
+			}
+			core.closePending.Store(true)
+			if value.Close(context.Background()) == nil || released.Load() != 0 {
+				t.Fatal("unfinished native cleanup released captured activity")
+			}
+			current.Store(false)
+			core.closePending.Store(false)
+			if value.Close(context.Background()) != nil || value.Close(context.Background()) != nil || released.Load() != 1 || owner.cancels.Load() != 0 {
+				t.Fatal("old comparison cleanup reached whole VPN or double-released activity")
+			}
+		})
+	}
+}
+
+func TestRouterTorComparisonBoxRejectsLateResultsWithoutStoppingReplacement(t *testing.T) {
+	previous := routerVPNTorCaptureComparison
+	defer func() { routerVPNTorCaptureComparison = previous }()
+	core := &torComparisonHandleFixture{}
+	core.valid.Store(true)
+	owner := &torBoxComparisonFixture{torBoxFixture: newTorBoxFixture(t, "comparison-session"), result: core}
+	proof, _ := newRouterTorProofRequest(context.Background(), owner, owner.session, "", func() bool { return true })
+	if _, err := proof.Run(); err != nil {
+		t.Fatal(err)
+	}
+	var current atomic.Bool
+	current.Store(true)
+	routerVPNTorCaptureComparison = func(*Box, *RouterVPNTorProofRequest) (mobiletor.ComparisonCapture, func(), error) {
+		return mobiletor.ComparisonCapture{OwnerID: "box", SourceSHA256: strings.Repeat("a", 64), SessionID: owner.session, Current: current.Load, DNSProof: func(context.Context) error { return nil }}, func() {}, nil
+	}
+	value, err := (&Box{}).RouterVPNTorCreateComparison(proof, "https://1.1.1.1/cdn-cgi/trace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	core.last = func(context.Context) (time.Duration, error) { current.Store(false); return time.Millisecond, nil }
+	if elapsed, err := value.ProbeLast(context.Background()); err == nil || elapsed != 0 || core.cancels.Load() == 0 || owner.cancels.Load() != 0 {
+		t.Fatal("late score or comparison cancellation crossed whole-session ownership")
+	}
+	if value.Close(context.Background()) != nil {
+		t.Fatal("retired owner could not drain")
+	}
+}

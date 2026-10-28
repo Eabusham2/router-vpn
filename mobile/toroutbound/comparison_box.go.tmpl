@@ -1,0 +1,144 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type torComparisonOwner interface {
+	TorCreateComparison(context.Context, mobiletor.ComparisonCapture, string) (mobiletor.Comparison, error)
+}
+
+// Only the full native preparation can install this capture. A standalone
+// proxy graph, a tag-only proof or a caller's source hash cannot grant it.
+var routerVPNTorCaptureComparison func(*Box, *RouterVPNTorProofRequest) (mobiletor.ComparisonCapture, func(), error)
+
+type RouterVPNTorComparison struct {
+	request mobiletor.Comparison
+	ctx     context.Context
+	cancel  context.CancelFunc
+	capture mobiletor.ComparisonCapture
+	release func()
+	once    sync.Once
+}
+
+var _ mobiletor.Comparison = (*RouterVPNTorComparison)(nil)
+
+func (s *Box) RouterVPNTorCreateComparison(proof *RouterVPNTorProofRequest, target string) (*RouterVPNTorComparison, error) {
+	if s == nil || proof == nil || !proof.Healthy() || routerVPNTorCaptureComparison == nil {
+		return nil, errors.New("Tor comparison requires its complete successful native proof")
+	}
+	owner, supported := proof.owner.(torComparisonOwner)
+	if !supported {
+		return nil, errors.New("Tor comparison native owner is unavailable")
+	}
+	capture, release, err := routerVPNTorCaptureComparison(s, proof)
+	if err != nil || release == nil || capture.Current == nil || !capture.Current() {
+		if release != nil {
+			release()
+		}
+		return nil, errors.New("Tor comparison lost its captured source, TUN or DNS")
+	}
+	ctx, cancel := context.WithCancel(proof.ctx)
+	request, err := owner.TorCreateComparison(ctx, capture, target)
+	if request == nil {
+		cancel()
+		release()
+		if err == nil {
+			err = errors.New("Tor comparison returned no retained owner")
+		}
+		return nil, err
+	}
+	result := &RouterVPNTorComparison{request: request, ctx: ctx, cancel: cancel, capture: capture, release: release}
+	if err != nil || !capture.Current() {
+		result.Cancel()
+		if err == nil {
+			err = errors.New("Tor comparison changed during capture")
+		}
+	}
+	return result, err
+}
+
+func (r *RouterVPNTorComparison) current() bool {
+	return r != nil && r.request != nil && r.ctx.Err() == nil && r.capture.Current != nil && r.capture.Current()
+}
+func (r *RouterVPNTorComparison) Prepare(ctx context.Context) error {
+	if !r.current() {
+		return errors.New("Tor comparison is no longer owned")
+	}
+	err := r.request.Prepare(ctx)
+	if err != nil || !r.current() {
+		r.Cancel()
+		return errors.New("Tor comparison preparation failed or changed owner")
+	}
+	return nil
+}
+func (r *RouterVPNTorComparison) Identity() string {
+	if !r.current() {
+		return ""
+	}
+	return r.request.Identity()
+}
+func (r *RouterVPNTorComparison) Verify(ctx context.Context) error {
+	if !r.current() {
+		return errors.New("Tor comparison is no longer owned")
+	}
+	err := r.request.Verify(ctx)
+	if err != nil || !r.current() {
+		r.Cancel()
+		return errors.New("Tor comparison verification failed or changed owner")
+	}
+	return nil
+}
+func (r *RouterVPNTorComparison) ProbeLast(ctx context.Context) (time.Duration, error) {
+	if !r.current() {
+		return 0, errors.New("Tor comparison is no longer owned")
+	}
+	elapsed, err := r.request.ProbeLast(ctx)
+	if err != nil || elapsed <= 0 || !r.current() {
+		r.Cancel()
+		return 0, errors.New("Tor comparison last-relay result is invalid or stale")
+	}
+	return elapsed, nil
+}
+func (r *RouterVPNTorComparison) ProbeExternal(ctx context.Context, target string) (time.Duration, error) {
+	if !r.current() {
+		return 0, errors.New("Tor comparison is no longer owned")
+	}
+	elapsed, err := r.request.ProbeExternal(ctx, target)
+	if err != nil || elapsed <= 0 || !r.current() {
+		r.Cancel()
+		return 0, errors.New("Tor comparison external result is invalid or stale")
+	}
+	return elapsed, nil
+}
+func (r *RouterVPNTorComparison) Cancel() {
+	if r == nil {
+		return
+	}
+	r.cancel()
+	if r.request != nil {
+		r.request.Cancel()
+	}
+}
+func (r *RouterVPNTorComparison) Close(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	r.Cancel()
+	if r.request != nil {
+		if err := r.request.Close(ctx); err != nil {
+			return err
+		}
+	}
+	r.once.Do(func() {
+		if r.release != nil {
+			r.release()
+		}
+	})
+	return nil
+}
