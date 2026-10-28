@@ -347,6 +347,16 @@ final class RouterVPNModel: ObservableObject {
                 selectedLogicalMode = selection.logicalModeID; selectedMode = selection.rawProfileID
                 message = "Connected • \(engineName(selection)) • selected-node proof passed"
                 await refreshTunnelStatus()
+                if connected, IOSSpeedLabContext.owner == nil, !iosSpeedLabOwnership.active {
+                    do {
+                        let configuration = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration
+                        try await rememberIOSMultihopExecution(manager: manager, source: bundle,
+                                                              entry: configuration?["entryBundle"] as? Data, generation: generation)
+                    } catch {
+                        guard iosConnectGeneration == generation, connected, !userDisconnectInProgress else { return }
+                        message += " • previous execution could not be saved for Last"
+                    }
+                }
             } else {
                 connected = false
                 message = "The captured multihop graph did not complete both node proofs."
@@ -532,7 +542,19 @@ final class RouterVPNModel: ObservableObject {
             }
         }
         let mtuHold = IOSMTUMeasurementGate.current
-        let options: [String: NSObject]? = mtuHold.isEmpty ? nil : ["routervpn_mtu_hold": mtuHold as NSString]
+        var launchOptions: [String: NSObject] = mtuHold.isEmpty ? [:] : ["routervpn_mtu_hold": mtuHold as NSString]
+        // Cold Startup Last keeps the previously proved execution separately
+        // from the saved Compare preference. This historical choice grants no
+        // live authority: PacketTunnel must create and prove a fresh graph.
+        if IOSSpeedLabContext.startupAdmission != nil,
+           (try? IOSStartupPolicy.mode(IOSDNSRuntimePolicy.selectedProfile(in: bundle)?.startupMode)) == "last",
+           let saved = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
+           (try? IOSMultihopExecution.requiresCapture(configuration: saved)) == true,
+           let previous = try? IOSStartupLastChoice.restored(configuration: saved, digest: Self.iosStrategyDigest),
+           let encoded = try? previous.encoded() {
+            launchOptions[IOSMultihopExecution.startupLaunchKey] = String(decoding: encoded, as: UTF8.self) as NSString
+        }
+        let options: [String: NSObject]? = launchOptions.isEmpty ? nil : launchOptions
         try manager.connection.startVPNTunnel(options: options)
         connected = false
         activeEngine = selection.engine.rawValue

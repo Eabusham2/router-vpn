@@ -6,6 +6,7 @@ doubles. Policy, app async ownership, IPC parsing, selection and provider state
 transitions are production Swift; no physical-device behavior is claimed.
 """
 from pathlib import Path
+import argparse
 import importlib.util
 import os
 import shutil
@@ -79,10 +80,20 @@ enum NEVPNStatus { case invalid, disconnected, connecting, connected, reassertin
     weak var manager: NETunnelProviderManager?
     var owner: RouterVPNProviderStrategy?
     var starts = 0, stops = 0, messages = 0
+    var executionSource: IOSMultihopExecution.Source?, selectedExecution = "", comparisons = 0
+    var launchOptions: [String: NSObject]?
     var corruptStatus = false
     override func startVPNTunnel(options: [String: NSObject]?) throws {
         if let c = (manager?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
            ["external-libbox", "multihop-libbox"].contains(c["engine"] as? String ?? "") {
+            launchOptions = options
+            if c["engine"] as? String == "multihop-libbox" {
+                let source = try IOSMultihopExecution.Source(configuration: c, digest: RouterVPNModel.iosStrategyDigest)
+                executionSource = source
+                let retained = try IOSMultihopExecution.restoredStartupChoice(option: options?[IOSMultihopExecution.startupLaunchKey], source: source)
+                if source.requested == "auto" && retained == nil { comparisons += 1 }
+                selectedExecution = retained?.execution ?? (source.requested == "auto" ? IOSMTUControl.winner : source.requested)
+            }
             starts += 1; status = .connected; connectedDate = Date(); RuntimeTrace.shared.vpn(true)
             return
         }
@@ -147,7 +158,7 @@ enum IOSRuntimeSelector {
     }
     static func runnableModes(in bundle: ClientBundle) -> [LogicalMode] { bundle.logicalModes }
     static func selectMultihop(bundle: ClientBundle, rawProfileID: String?) throws -> IOSRuntimeSelection {
-        guard let raw = rawProfileID, IOSNativeMAXProfile.modeIDs.contains(raw) else { throw IOSStrategyWire.failure("separate multihop fixture") }
+        guard let raw = rawProfileID ?? IOSDNSRuntimePolicy.selectedProfile(in: bundle)?.multihopExitMode else { throw IOSStrategyWire.failure("separate multihop fixture") }
         let selected = try selectRaw(bundle: bundle, rawProfileID: raw)
         return IOSRuntimeSelection(engine: .multihop, logicalModeID: selected.logicalModeID, rawProfileID: raw, files: selected.files)
     }
@@ -158,14 +169,31 @@ enum IOSRuntimeSelectionError: LocalizedError {
 }
 @MainActor enum IOSMTUMeasurementGate { static var current = "" }
 @MainActor enum IOSMTUControl {
+    static var winner = "server"
+    static var hook: ((NETunnelProviderSession, String, Data) async throws -> Data)?
     static func withHold<T>(model: RouterVPNModel, operation: @MainActor () async throws -> T) async throws -> T { try await operation() }
     static func send(_ connection: NETunnelProviderSession, operation: String, request: String, session: String) async throws -> Data {
-        throw IOSStrategyWire.failure("External Last IPC is covered by the startup fixture")
+        guard operation == "speed-lab-execution", session.isEmpty, connection.status == .connected,
+              let source = connection.executionSource else { throw IOSStrategyWire.failure("Private graph proof boundary is unavailable") }
+        let pq = ["wg-pq", "awg2-pq", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"].contains(source.exitMode)
+        let packet = pq || ["wg", "awg2-fast", "awg2-strong"].contains(source.exitMode)
+        var fields: [String: String] = [:]
+        if connection.selectedExecution == "server" && packet {
+            fields["expected_packet_public_key"] = Data(repeating: 7, count: 32).base64EncodedString()
+            if pq { fields["expected_pq_client_identity"] = String(repeating: "c", count: 64) }
+        }
+        let pins = try IOSMultihopExecution.ServerIdentityPins(json: String(decoding: JSONEncoder().encode(fields), as: UTF8.self), source: source, execution: connection.selectedExecution)
+        let receipt = try IOSMultihopExecution.Capture(source: source, execution: connection.selectedExecution, session: UUID().uuidString, request: request, pins: pins).encoded()
+        return try await hook?(connection, request, receipt) ?? receipt
     }
 }
 @MainActor enum IOSPrivateJSONStore {
-    static func read(_ filename: String, maximumBytes: Int) throws -> Data? { nil }
-    static func write(_ data: Data, filename: String, maximumBytes: Int) throws {}
+    static var value: Data?, failWrite = false
+    static func read(_ filename: String, maximumBytes: Int) throws -> Data? { value }
+    static func write(_ data: Data, filename: String, maximumBytes: Int) throws {
+        guard !failWrite, data.count <= maximumBytes else { throw IOSStrategyWire.failure("Historical receipt write failed") }
+        value = data
+    }
 }
 @MainActor final class FixturePreferences {
     static let standard = FixturePreferences()
@@ -281,6 +309,8 @@ func maxAppFixture(_ mode: String, role: String? = nil) throws -> ClientBundle {
         func fresh() throws -> RouterVPNModel {
             RuntimeTrace.shared.reset(); NETunnelProviderManager.stored = []; NETunnelProviderManager.saveHook = nil
             NETunnelProviderManager.failLoad = false
+            IOSPrivateJSONStore.value = nil; IOSPrivateJSONStore.failWrite = false
+            IOSMTUControl.hook = nil; IOSMTUControl.winner = "server"; FixturePreferences.standard.values = [:]
             let value = RouterVPNModel(); value.bundle = try fixture(); return value
         }
         var model = try fresh(); RuntimeTrace.shared.fail("wg")
@@ -462,6 +492,103 @@ func maxAppFixture(_ mode: String, role: String? = nil) throws -> ClientBundle {
                 check("MAX multihop changed captured entry or LAN prevents start " + change, session.starts == 0 && !model.connected)
             }
         }
+        func privateGraph(_ raw: String = "wg") throws -> RouterVPNModel {
+            let value = try fresh()
+            var entry = try fixture(), exit = try fixture()
+            if IOSNativeMAXProfile.modeIDs.contains(raw) { exit = try maxAppFixture(raw, role: "exit") }
+            entry.selectedRouterID = "entry"; entry.routerProfiles[0].id = "entry"; entry.routerProfiles[0].apiToken = "distinct entry credential"
+            entry.nodeProofID = String(repeating: "b", count: 64); entry.routerProfiles[0].nodeProofID = entry.nodeProofID
+            exit.selectedRouterID = "exit"; exit.routerProfiles[0].id = "exit"; exit.routerProfiles[0].apiToken = "distinct exit credential"
+            exit.routerProfiles[0].multihopEnabled = true; exit.routerProfiles[0].multihopEntryID = "entry"
+            exit.routerProfiles[0].multihopExitID = "exit"; exit.routerProfiles[0].multihopEntryMode = "wg"
+            exit.routerProfiles[0].multihopExitMode = raw; exit.routerProfiles[0].multihopExecution = "auto"
+            exit.routerProfiles[0].startupMode = "manual"; exit.routerProfiles[0].autoConnect = false
+            value.bundle = exit; value.entryBundle = entry; value.auto = false
+            return value
+        }
+        for raw in ["wg", "awg2-fast", "max-quic-awg"] { for winner in ["local", "server"] {
+            model = try privateGraph(raw); IOSMTUControl.winner = winner
+            await model.connect(rawProfileID: raw); model.recordIOSLastRuntime()
+            check("private Router fixture reaches the proved native boundary", model.connected)
+            check("private Router proof records complete Last choice", model.connected && IOSPrivateJSONStore.value != nil)
+            let history = IOSPrivateJSONStore.value!, rawHistory = FixturePreferences.standard.values
+            let saved = model.bundle!, entry = model.entryBundle!
+            let recordText = String(decoding: history, as: UTF8.self)
+            check("private Router Last stores no credentials or live owner", !recordText.contains("credential") && !recordText.contains("session_id") && !recordText.contains("request_id") && !recordText.contains("healthy"))
+            for mode in ["last", "auto", "smart-auto"] {
+                model = try privateGraph(raw); model.bundle = saved; model.entryBundle = entry
+                model.bundle?.routerProfiles[0].startupMode = mode; model.bundle?.routerProfiles[0].autoConnect = true
+                model.entryBundle?.routerProfiles[0].startupMode = "last"; model.entryBundle?.routerProfiles[0].autoConnect = true
+                model.bundle?.routerProfiles[0].effectiveMTU = 1440
+                IOSPrivateJSONStore.value = history; FixturePreferences.standard.values = rawHistory
+                IOSMTUControl.winner = winner == "server" ? "local" : "server"
+                await model.applyIOSStartupPolicyIfNeeded()
+                let session = NETunnelProviderManager.stored[0].connection as! NETunnelProviderSession
+                check("private Router Last retains the proved leaf without Compare", model.connected && session.starts == 1 && session.comparisons == (mode == "last" ? 0 : 1) && session.selectedExecution == (mode == "last" ? winner : IOSMTUControl.winner))
+                check("private Router Last preserves saved auto and ordinary launch ownership", model.bundle?.routerProfiles[0].multihopExecution == "auto" && session.launchOptions?[IOSMultihopExecution.launchKey] == nil && session.launchOptions?["routervpn_mtu_hold"] == nil)
+                if mode == "last" {
+                    let option = session.launchOptions?[IOSMultihopExecution.startupLaunchKey]
+                    let choice = try IOSMultihopExecution.restoredStartupChoice(option: option, source: session.executionSource!)
+                    check("private Router Last carries canonical public identity pins", (choice?.pins.packetPublicKey != nil) == (winner == "server") && (choice?.pins.pqClientIdentity != nil) == (winner == "server" && raw == "max-quic-awg"))
+                }
+            }
+        }}
+        model = try privateGraph(); await model.connect(rawProfileID: "wg"); model.recordIOSLastRuntime()
+        let history = IOSPrivateJSONStore.value!, rawHistory = FixturePreferences.standard.values, saved = model.bundle!, entry = model.entryBundle!
+        for fault in ["missing", "corrupt", "exit-key", "exit-asset", "entry-key", "entry-asset", "dns", "mtu", "ipv6", "kill-switch", "entry-mode"] {
+            model = try privateGraph(); model.bundle = saved; model.entryBundle = entry
+            model.bundle?.routerProfiles[0].startupMode = "last"; model.bundle?.routerProfiles[0].autoConnect = true
+            IOSPrivateJSONStore.value = fault == "missing" ? nil : (fault == "corrupt" ? Data("{}".utf8) : history)
+            FixturePreferences.standard.values = rawHistory
+            switch fault {
+            case "exit-key": model.bundle?.routerProfiles[0].apiToken = "changed exit"
+            case "exit-asset": model.bundle?.profiles["wg"]?["wg.conf"] = Data("changed exit bytes".utf8).base64EncodedString()
+            case "entry-key": model.entryBundle?.routerProfiles[0].apiToken = "changed entry"
+            case "entry-asset": model.entryBundle?.profiles["wg"]?["wg.conf"] = Data("changed entry bytes".utf8).base64EncodedString()
+            case "dns": model.bundle?.routerProfiles[0].dnsMode = "custom"
+            case "mtu": model.bundle?.routerProfiles[0].manualMTU = 1390
+            case "ipv6": model.bundle?.routerProfiles[0].ipv6Mode = "off"
+            case "kill-switch": model.bundle?.routerProfiles[0].killSwitch = false
+            case "entry-mode": model.bundle?.routerProfiles[0].multihopEntryMode = "awg2-fast"
+            default: break
+            }
+            await model.applyIOSStartupPolicyIfNeeded()
+            let session = NETunnelProviderManager.stored[0].connection as! NETunnelProviderSession
+            check("private Router changed Last uses saved fresh selection " + fault, model.connected && session.comparisons == 1 && session.launchOptions?[IOSMultihopExecution.startupLaunchKey] == nil)
+        }
+        for fault in ["request", "health", "pins", "entry", "generation", "date", "saved-policy", "saved-source", "test-owner", "write"] {
+            model = try privateGraph(); let captured = model
+            IOSPrivateJSONStore.failWrite = fault == "write"
+            IOSMTUControl.hook = { session, request, receipt in
+                switch fault {
+                case "entry": captured.entryBundle?.routerProfiles[0].apiToken = "changed during receipt"
+                case "generation": captured.iosConnectGeneration = UUID()
+                case "date": session.connectedDate = Date(timeIntervalSince1970: 0)
+                case "saved-policy": (session.manager?.protocolConfiguration as! NETunnelProviderProtocol).excludeLocalNetworks = true
+                case "saved-source": (session.manager?.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration?["entryBundle"] = Data("replacement source".utf8)
+                case "test-owner": _ = try captured.iosSpeedLabOwnership.begin(onSuperseded: {})
+                case "write": break
+                default:
+                    var object = try JSONSerialization.jsonObject(with: receipt) as! [String: Any]
+                    if fault == "request" { object["request_id"] = String(repeating: "f", count: 32) }
+                    if fault == "health" { object["healthy"] = false }
+                    if fault == "pins" { object["server_identity_pins"] = ["expected_packet_public_key": "noncanonical"] }
+                    return try JSONSerialization.data(withJSONObject: object)
+                }
+                return receipt
+            }
+            await model.connect(rawProfileID: "wg")
+            check("private Router Last rejects stale proof or owner " + fault, IOSPrivateJSONStore.value == nil)
+            if fault == "write" { check("private Router history write failure preserves the proved VPN", model.connected) }
+        }
+        for late in [false, true] {
+            model = try privateGraph(); let captured = model
+            let token = try model.iosSpeedLabOwnership.begin(onSuperseded: {})
+            if late { NETunnelProviderManager.saveHook = { captured.iosSpeedLabOwnership.finish(token) } }
+            await IOSSpeedLabContext.$owner.withValue(token) { await captured.connect(rawProfileID: "wg") }
+            check("private Router temporary and late completion never saves Last", model.connected && IOSPrivateJSONStore.value == nil)
+            model.iosSpeedLabOwnership.finish(token)
+        }
         print("iOS app + provider owned strategies: PASS (\(checks) executable checks)")
     }
 }
@@ -470,7 +597,7 @@ func maxAppFixture(_ mode: String, role: String? = nil) throws -> ClientBundle {
 def strip_imports(text):
     return '\n'.join(line for line in text.splitlines() if not line.startswith(('import ', '@preconcurrency import ')))
 
-def main():
+def main(negative=True, selected_mutations=None):
     swift = shutil.which('swiftc')
     if not swift:
         raise SystemExit('swiftc required for shipping app/provider strategy tests')
@@ -505,19 +632,33 @@ def main():
         file.write_text(source)
         subprocess.run([swift, '-swift-version', '6', '-parse-as-library', str(file), '-o', str(binary)], check=True, timeout=150)
         subprocess.run([str(binary), str(compiler), str(fixture), str(multihop)], check=True, timeout=40)
+        if not negative:
+            return
         for label, before, after, expected in [
             ('premature connection', 'connected = status.isProven', 'connected = true', 'node proof alone cannot connect'),
             ('runtime epoch collapse', 'runtimeEpoch: status.runtimeEpoch)', 'runtimeEpoch: status.providerSession)', 'same mode fresh runtime invalidates measurement'),
             ('cancel generation lost', 'iosConnectGeneration = UUID(); iosStrategyTaskActive = false;', 'iosStrategyTaskActive = false;', 'cancel revokes pending generation'),
             ('mutable source accepted', 'try iosStrategySource(current) == iosStrategySource(source)', '!current.selectedRouterID.isEmpty', 'changed source before preference readback prevents start'),
             ('mutable MAX entry accepted', 'guard try encoder.encode(iosMultihopEntryBundle(for: bundle)) == capturedEntry else', 'guard !capturedEntry.isEmpty else', 'MAX multihop changed captured entry or LAN prevents start entry-token'),
+            ('private Last record omitted', 'try await rememberIOSMultihopExecution(manager: manager, source: bundle,\n                                                              entry: configuration?["entryBundle"] as? Data, generation: generation)', 'throw IOSMultihopExecution.issue()', 'private Router proof records complete Last choice'),
+            ('private Last reruns Compare', 'if IOSSpeedLabContext.startupAdmission != nil,\n           (try? IOSStartupPolicy.mode', 'if false,\n           (try? IOSStartupPolicy.mode', 'private Router Last retains the proved leaf without Compare'),
+            ('private Last entry replaced', 'return try encoder.encode(iosMultihopEntryBundle(for: current))', 'return entry', 'private Router Last rejects stale proof or owner entry'),
         ]:
+            if selected_mutations and label not in selected_mutations:
+                continue
             assert source.count(before) == 1, label
             file.write_text(source.replace(before, after))
             subprocess.run([swift, '-swift-version', '6', '-parse-as-library', str(file), '-o', str(binary)], check=True, timeout=150)
             result = subprocess.run([str(binary), str(compiler), str(fixture), str(multihop)], capture_output=True, text=True, timeout=40)
             assert result.returncode != 0 and expected in result.stderr, label + ': ' + result.stderr[-3000:]
-        print('Negative controls: premature connection, reused epoch, lost cancel owner, mutable source and replaced MAX entry are rejected')
+        print('Negative controls: premature connection, reused epoch, lost cancel owner, mutable source, replaced MAX entry and private Router Last defects are rejected')
 
 if __name__ == '__main__':
-    main()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--shipping-only', action='store_true')
+    parser.add_argument('--mutation', action='append', choices=[
+        'premature connection', 'runtime epoch collapse', 'cancel generation lost',
+        'mutable source accepted', 'mutable MAX entry accepted', 'private Last record omitted',
+        'private Last reruns Compare', 'private Last entry replaced'])
+    args = parser.parse_args()
+    main(negative=not args.shipping_only, selected_mutations=args.mutation)

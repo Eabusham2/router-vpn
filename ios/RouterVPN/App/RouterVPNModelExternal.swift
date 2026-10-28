@@ -225,7 +225,7 @@ extension RouterVPNModel {
             if connected {
                 message = (tor ? "Connected • Tor • current circuit exit verified" : "Connected • external \(protocolName) • \(ordinary ? "selected DNS and " : "")exact exit verified: \(expected)") + (capturedEntry == nil ? "" : " • captured entry verified") + (strict ? " • strict route lockdown" : "")
                 if selectingExecution, IOSSpeedLabContext.owner == nil, !iosSpeedLabOwnership.active {
-                    do { try await rememberIOSExternalExecution(manager: manager, source: bundle, entry: capturedEntry, generation: generation) }
+                    do { try await rememberIOSMultihopExecution(manager: manager, source: bundle, entry: capturedEntry, generation: generation) }
                     catch {
                         guard iosConnectGeneration == generation, connected, !iosUserDisconnectInProgress else { return }
                         message += " • previous execution could not be saved for Last"
@@ -241,8 +241,11 @@ extension RouterVPNModel {
         }
     }
 
-    private func rememberIOSExternalExecution(manager: NETunnelProviderManager, source: ClientBundle,
-                                              entry: Data?, generation: UUID) async throws {
+    /// Shared by private Router graphs and external paths. The provider's
+    /// fresh receipt and both exact saved sources must still own the session
+    /// when the optional historical execution choice is written.
+    func rememberIOSMultihopExecution(manager: NETunnelProviderManager, source: ClientBundle,
+                                     entry: Data?, generation: UUID) async throws {
         guard let connection = manager.connection as? NETunnelProviderSession,
               let connectedDate = connection.connectedDate,
               let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
@@ -250,6 +253,13 @@ extension RouterVPNModel {
         let captured = try IOSStartupCapture(bundle: source, entry: entry, generation: generation)
         let executionSource = try IOSMultihopExecution.Source(configuration: configuration, digest: Self.iosStrategyDigest)
         let strict = proto.includeAllNetworks, enforced = proto.enforceRoutes, lan = proto.excludeLocalNetworks
+        func currentEntry(_ current: ClientBundle) throws -> Data? {
+            if configuration["engine"] as? String == "multihop-libbox" {
+                let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+                return try encoder.encode(iosMultihopEntryBundle(for: current))
+            }
+            return try externalTorEntryData(source: current)
+        }
         func requireCurrent() throws {
             try Task.checkCancellation()
             guard connected, iosConnectGeneration == generation, !iosUserDisconnectInProgress,
@@ -260,7 +270,7 @@ extension RouterVPNModel {
                   saved.includeAllNetworks == strict, saved.enforceRoutes == enforced, saved.excludeLocalNetworks == lan,
                   let now = saved.providerConfiguration,
                   try IOSMultihopExecution.Source(configuration: now, digest: Self.iosStrategyDigest) == executionSource,
-                  try IOSStartupCapture(bundle: current, entry: externalTorEntryData(source: current), generation: iosConnectGeneration) == captured else {
+                  try IOSStartupCapture(bundle: current, entry: currentEntry(current), generation: iosConnectGeneration) == captured else {
                 throw CancellationError()
             }
         }

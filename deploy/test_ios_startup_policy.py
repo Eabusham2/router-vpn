@@ -413,7 +413,7 @@ def source():
         'var selectedNodeProfile:', 'var selectedNodeIsExternal:', 'var selectedExternalProtocol:',
         'var selectedExternalSupportedOnIOS:', 'func connectSelectedExternal()',
         'func connectSelectedExternal(startupAdmission:',
-        'private func rememberIOSExternalExecution(',
+        'func rememberIOSMultihopExecution(',
         'private func requireExternalPreparation(', 'func externalTorEntryData(',
         'func externalRuntimeBundleData(', 'private func externalStrict(',
         'private func waitExternalConnection(')]
