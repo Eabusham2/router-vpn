@@ -130,10 +130,77 @@ final class RouterAnnotation: NSObject, MKAnnotation {
     }
 }
 
-private final class MultihopProgressTransportDelegate: NSObject, URLSessionTaskDelegate {
+private final class MultihopProgressTransportDelegate: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    private static let limit = 32768
+    private let lock = NSLock()
+    private var active: URLSessionDataTask?
+    private var response: URLResponse?
+    private var received = Data()
+    private var completion: ((Data?, URLResponse?, Error?) -> Void)?
+
+    // Register before resume. One observer has one current task; a delayed
+    // delegate callback from an earlier poll cannot clear its replacement.
+    func capture(_ task: URLSessionDataTask, completion: @escaping (Data?, URLResponse?, Error?) -> Void) -> Bool {
+        let expected = routerVPNProductBaseURL.appendingPathComponent("api/multihop/status")
+        guard task.originalRequest?.url == expected, task.originalRequest?.httpMethod == "GET", task.state == .suspended else { return false }
+        lock.lock(); defer { lock.unlock() }
+        guard active == nil else { return false }
+        active = task; response = nil; received.removeAll(keepingCapacity: false); self.completion = completion
+        return true
+    }
+
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
         completionHandler(nil)
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        lock.lock()
+        guard active === dataTask else { lock.unlock(); completionHandler(.cancel); return }
+        let expected = routerVPNProductBaseURL.appendingPathComponent("api/multihop/status")
+        let valid = self.response == nil && (response as? HTTPURLResponse)?.statusCode == 200 && response.url == expected
+        let oversized = response.expectedContentLength > Int64(Self.limit)
+        if valid && !oversized { self.response = response }
+        lock.unlock()
+        completionHandler(valid && !oversized ? .allow : .cancel)
+        if !valid || oversized { finish(dataTask, error: Self.rejected(), cancel: true) }
+    }
+
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive bytes: Data) {
+        lock.lock()
+        guard active === dataTask else { lock.unlock(); return }
+        let oversized = bytes.count > Self.limit - received.count
+        let valid = response != nil && !oversized
+        if valid { received.append(bytes) }
+        lock.unlock()
+        if !valid { finish(dataTask, error: Self.rejected(), cancel: true) }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        finish(task, error: error, cancel: false)
+    }
+
+    func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
+        lock.lock(); let task = active; lock.unlock()
+        if let task { finish(task, error: error ?? URLError(.cancelled), cancel: true) }
+    }
+
+    private func finish(_ task: URLSessionTask, error: Error?, cancel: Bool) {
+        lock.lock()
+        guard let owned = active, owned === task else { lock.unlock(); return }
+        let failure = error ?? (response == nil ? Self.rejected() : nil)
+        let body = failure == nil ? received : nil
+        let reply = response, callback = completion
+        active = nil; response = nil; completion = nil; received.removeAll(keepingCapacity: false)
+        lock.unlock()
+        if cancel { owned.cancel() }
+        callback?(body, reply, failure)
+    }
+
+    private static func rejected() -> NSError {
+        NSError(domain: "RouterVPN.ComparisonProgress", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Local comparison progress exceeded its size or response bounds."])
     }
 }
 
@@ -305,12 +372,14 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     }
     func pollMultihopProgress() {
         guard window?.isVisible == true, Date() < multihopProgressDeadline else { stopMultihopProgress(); return }
-        guard multihopProgressTask == nil, let session = multihopProgressSession else { return }
+        guard multihopProgressTask == nil, let session = multihopProgressSession,
+              let transport = session.delegate as? MultihopProgressTransportDelegate else { return }
         let generation = multihopProgressGeneration
         var request = URLRequest(url: routerVPNProductBaseURL.appendingPathComponent("api/multihop/status"))
         request.timeoutInterval = 2
         request.cachePolicy = .reloadIgnoringLocalCacheData
-        let task = session.dataTask(with: request) { [weak self] data, response, error in
+        let task = session.dataTask(with: request)
+        let captured = transport.capture(task) { [weak self] data, response, error in
             let status = (response as? HTTPURLResponse)?.statusCode
             let payload: [String: Any]? = error == nil && status == 200 && (data?.count ?? 32769) <= 32768 ?
                 data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } : nil
@@ -333,6 +402,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
                 }
             }
         }
+        guard captured else { task.cancel(); return }
         multihopProgressTask = task
         task.resume()
     }

@@ -3,8 +3,9 @@
 
 The window/label surfaces are small headless substitutes. The URLSession,
 redirect delegate, source-correlated observer and owner cleanup are extracted
-from the shipping source, including executable negative controls. The existing
-32KiB check is a completed-body bound; this test does not claim streaming caps.
+from the shipping source, including executable negative controls. Header and
+streaming limits are exercised against incomplete real replies; controlled
+longer transport deadlines prevent timeout from impersonating a size rejection.
 """
 from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -82,8 +83,39 @@ def run_case(directory, mutation):
                     (fixture / ('served-' + mode)).write_text('ready')
                     return
                 raw = json.dumps(value).encode()
+                if mode in ('header-held', 'stream-held'):
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    if mode == 'header-held':
+                        self.send_header('Content-Length', str(2 * 1024 * 1024))
+                    else:
+                        self.send_header('Transfer-Encoding', 'chunked')
+                    self.end_headers()
+                    try:
+                        if mode == 'header-held':
+                            self.wfile.write(b'{'); self.wfile.flush()
+                        else:
+                            for _ in range(5):
+                                chunk = b' ' * 8192
+                                self.wfile.write(('%x\r\n' % len(chunk)).encode() + chunk + b'\r\n')
+                                self.wfile.flush()
+                        (fixture / ('started-' + mode)).write_text('ready')
+                        until = time.monotonic() + 5
+                        while time.monotonic() < until:
+                            readable, _, _ = select.select([self.connection], [], [], .01)
+                            if readable and self.connection.recv(1, socket.MSG_PEEK) == b'':
+                                (fixture / ('cancelled-' + mode)).write_text('closed')
+                                return
+                        errors.append(mode + ' was buffered until timeout or EOF')
+                    except (BrokenPipeError, ConnectionResetError):
+                        (fixture / ('cancelled-' + mode)).write_text('closed')
+                    self.close_connection = True
+                    return
                 if mode == 'oversized':
                     raw = b' ' * 32769 + raw
+                elif mode == 'exact-limit':
+                    assert len(raw) < 32768
+                    raw = b' ' * (32768 - len(raw)) + raw
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
                 self.send_header('Content-Length', str(len(raw)))
@@ -123,6 +155,14 @@ def run_case(directory, mutation):
                '    private func beginMultihopProgress(', '    func pollMultihopProgress(',
                '    func multihopComparisonSummary(']
     methods = '\n'.join(block(source, marker) for marker in markers).replace('private func ', 'func ')
+    # Keep real sockets, delegate callbacks and ownership. Length rejection
+    # must finish while a 30-second transport remains open, not win accidentally
+    # through the production two-second timeout. No production timeout changes.
+    for before, after in (('configuration.timeoutIntervalForRequest = 2', 'configuration.timeoutIntervalForRequest = 30'),
+                          ('configuration.timeoutIntervalForResource = 2', 'configuration.timeoutIntervalForResource = 30'),
+                          ('request.timeoutInterval = 2', 'request.timeoutInterval = 30')):
+        assert methods.count(before) == 1, before
+        methods = methods.replace(before, after)
     mutations = {
         'missing-request': ('guard comparison["request_id"] as? String == requestID,', 'guard !requestID.isEmpty,'),
         'missing-generation': ('guard let self, self.multihopProgressGeneration == generation else { return }', 'guard let self else { return }'),
@@ -132,6 +172,15 @@ def run_case(directory, mutation):
         old, new = mutations[mutation]
         assert methods.count(old) == 1, mutation
         methods = methods.replace(old, new)
+    delegate_mutations = {
+        'missing-header-bound': ('let oversized = response.expectedContentLength > Int64(Self.limit)', 'let oversized = false'),
+        'missing-stream-bound': ('let oversized = bytes.count > Self.limit - received.count', 'let oversized = false'),
+        'missing-task-owner': ('guard let owned = active, owned === task else { lock.unlock(); return }', 'guard let owned = active else { lock.unlock(); return }'),
+    }
+    if mutation in delegate_mutations:
+        old, new = delegate_mutations[mutation]
+        assert delegate.count(old) == 1, mutation
+        delegate = delegate.replace(old, new)
     # Arrival evidence observes the real queued completion immediately before
     # its unchanged owner guard. It replaces a timing assumption in the stale
     # completion regression; none of the production branches are copied.
@@ -166,6 +215,41 @@ func exists(_ name:String)->Bool{FileManager.default.fileExists(atPath:fixture.a
 func flag(_ name:String){try! Data("ready".utf8).write(to:fixture.appendingPathComponent(name),options:.atomic)}
 func phase(_ mode:String,_ requestID:String,_ complete:Bool=false){try! JSONSerialization.data(withJSONObject:["mode":mode,"request_id":requestID,"complete":complete]).write(to:fixture.appendingPathComponent("phase"),options:.atomic)}
 let first=String(repeating:"a",count:32),second=String(repeating:"b",count:32)
+// Reuse the actual delegate across native suspended tasks. A late callback
+// from the prior poll must neither deliver nor clear the second task. The
+// loopback cases below independently exercise actual socket cancellation.
+do {
+ let transport=MultihopProgressTransportDelegate(),session=URLSession(configuration:.ephemeral)
+ let endpoint=routerVPNProductBaseURL.appendingPathComponent("api/multihop/status")
+ for path in ["api/disconnect","api/multihop/status?foreign=1"] {
+  let task=session.dataTask(with:routerVPNProductBaseURL.appendingPathComponent(path))
+  check(!transport.capture(task){_,_,_ in fail("Foreign transport task completed")},"Foreign transport endpoint was captured");task.cancel()
+ }
+ var post=URLRequest(url:endpoint);post.httpMethod="POST"
+ let wrongMethod=session.dataTask(with:post)
+ check(!transport.capture(wrongMethod){_,_,_ in fail("Foreign transport method completed")},"Foreign transport method was captured");wrongMethod.cancel()
+ let old=session.dataTask(with:endpoint),replacement=session.dataTask(with:endpoint)
+ var oldCalls=0,newCalls=0;var received:Data?
+ check(transport.capture(old){data,_,error in oldCalls+=1;check(error==nil&&data==Data("first".utf8),"First delegate task lost its response")},"First delegate task was not captured")
+ check(!transport.capture(replacement){_,_,_ in fail("Concurrent transport task completed")},"Concurrent delegate task replaced its active owner")
+ let response=HTTPURLResponse(url:endpoint,statusCode:200,httpVersion:"HTTP/1.1",headerFields:["Content-Length":"32768"])!
+ transport.urlSession(session,dataTask:old,didReceive:response){check($0 == .allow,"Valid first response was rejected")}
+ transport.urlSession(session,dataTask:old,didReceive:Data("first".utf8))
+ transport.urlSession(session,task:old,didCompleteWithError:nil)
+ check(oldCalls==1,"First transport did not release after completion")
+ check(transport.capture(replacement){data,_,error in newCalls+=1;check(error==nil,"Replacement delegate task failed");received=data},"Completed transport retained its old owner")
+ transport.urlSession(session,dataTask:old,didReceive:Data("late".utf8))
+ transport.urlSession(session,dataTask:old,didReceive:response){check($0 == .cancel,"Late old headers were accepted")}
+ transport.urlSession(session,task:old,didCompleteWithError:URLError(.cancelled))
+ check(oldCalls==1&&newCalls==0,"Late delegate completion changed its replacement task")
+ transport.urlSession(session,dataTask:replacement,didReceive:response){check($0 == .allow,"Exact-limit response headers were rejected")}
+ let bounded=Data(repeating:32,count:32768)
+ transport.urlSession(session,dataTask:replacement,didReceive:bounded)
+ transport.urlSession(session,task:replacement,didCompleteWithError:nil)
+ transport.urlSession(session,task:replacement,didCompleteWithError:nil)
+ check(newCalls==1&&received==bounded,"Exact-limit delegate body or one-shot completion failed")
+ old.cancel();replacement.cancel();session.invalidateAndCancel()
+}
 let owner=Product();var callbacks=0;var latest=""
 for id in ["",String(repeating:"A",count:32),"short"]{
  check(owner.startCapturedComparisonProgress(requestID:id,timeout:540)==nil&&owner.multihopProgressSession==nil,"Malformed request gained comparison progress authority")
@@ -178,6 +262,20 @@ for mode in ["wrong-request","missing-request","wrong-last","wrong-external","ov
  check(callbacks==0&&owner.multihopComparisonLabel.stringValue.isEmpty,"Foreign or malformed progress reached the captured UI: "+mode)
  owner.stopCapturedComparisonProgress(capture)
 }
+for mode in ["header-held","stream-held"]{
+ phase(mode,first)
+ let capture=owner.startCapturedComparisonProgress(requestID:first,timeout:540){_,_ in callbacks+=1000}
+ check(capture != nil,"Bounded transport did not capture its request")
+ wait({exists("cancelled-"+mode)&&owner.multihopProgressTask==nil},"Oversized incomplete response did not stop before timeout: "+mode)
+ check(callbacks==0&&owner.multihopComparisonLabel.stringValue.isEmpty,"Oversized incomplete data reached the observer")
+ owner.stopCapturedComparisonProgress(capture)
+}
+phase("exact-limit",first,true)
+let boundedOwner=Product();var boundedCallbacks=0
+let boundedCapture=boundedOwner.startCapturedComparisonProgress(requestID:first,timeout:540){_,_ in boundedCallbacks+=1}
+wait({boundedCallbacks==1},"Exactly 32768 bytes of valid progress were rejected")
+check(boundedOwner.multihopProgressSession==nil&&boundedOwner.multihopProgressTask==nil,"Exact-limit completion retained its transport")
+boundedOwner.stopCapturedComparisonProgress(boundedCapture)
 phase("valid",first,true)
 let firstOwner=owner.startCapturedComparisonProgress(requestID:first,timeout:540){_,text in callbacks+=1;latest=text}
 wait({callbacks==1},"Exact native HTTP status did not reach observer")
@@ -232,7 +330,10 @@ print("Actual Swift comparison HTTP nonce, generation, redirect, bounds, replace
         else:
             expected = {'missing-request': 'Foreign or malformed progress reached',
                         'missing-generation': 'Late old completion changed',
-                        'unowned-stop': 'Old captured stop cancelled replacement HTTP'}[mutation]
+                        'unowned-stop': 'Old captured stop cancelled replacement HTTP',
+                        'missing-header-bound': 'Oversized incomplete response did not stop before timeout: header-held',
+                        'missing-stream-bound': 'Oversized incomplete response did not stop before timeout: stream-held',
+                        'missing-task-owner': 'Replacement delegate task failed'}[mutation]
             assert result.returncode != 0 and expected in result.stdout, mutation + ': ' + result.stdout
             print('Actual comparison control ' + mutation + ': rejected at its ownership assertion', flush=True)
     finally:
@@ -245,7 +346,8 @@ def main():
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='routervpn-macos-comparison-progress-') as temporary:
         directory = Path(temporary)
-        for mutation in (['shipping'] if args.shipping_only else ['shipping', 'missing-request', 'missing-generation', 'unowned-stop']):
+        for mutation in (['shipping'] if args.shipping_only else ['shipping', 'missing-request', 'missing-generation', 'unowned-stop',
+                                                                'missing-header-bound', 'missing-stream-bound', 'missing-task-owner']):
             run_case(directory, mutation)
     print('macOS exact captured comparison progress: PASS', flush=True)
 
