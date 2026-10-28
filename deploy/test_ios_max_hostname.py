@@ -200,8 +200,8 @@ func capturedRoutes(_ fixtures:[String:Any])throws->[[String:Any]]{
  let exit=try renamed(fixture((fixtures["exit"] as! [String:Any])["max-quic-awg"] as! [String:Any],"max-quic-awg","aes-256-gcm","exit.example"),"exit")
  var multi=try changedBundle(exit){_,node in node["multihop_enabled"]=true;node["multihop_entry_id"]="entry";node["multihop_exit_id"]="exit";node["multihop_entry_mode"]="max-tls-wg";node["multihop_exit_mode"]="max-quic-awg"}
  multi["engine"]="multihop-libbox";multi["entryBundle"]=entry["bundle"]
- let tor:[String:Any]=["id":"tor-exit","node_kind":"external","external":["protocol":"tor"],"multihop_enabled":true,"multihop_entry_id":"entry","multihop_entry_mode":"max-tls-wg"]
- let external:[String:Any]=["engine":"external-libbox","bundle":try json(["selectedRouterID":"tor-exit","routerProfiles":[tor],"profiles":[String:String]()]),"tor_entry_bundle":entry["bundle"]!,"tor_entry_mode":"max-tls-wg"]
+ let tor:[String:Any]=["id":"tor-exit","node_kind":"external","external":["protocol":"tor","expected_public_ip":""],"multihop_enabled":true,"multihop_entry_id":"entry","multihop_exit_id":"tor-exit","multihop_entry_mode":"max-tls-wg","multihop_exit_mode":"tor"]
+ let external:[String:Any]=["engine":"external-libbox","mode":"external-tor","bundle":try json(["selectedRouterID":"tor-exit","routerProfiles":[tor],"profiles":[String:String]()]),"tor_entry_bundle":entry["bundle"]!,"tor_entry_mode":"max-tls-wg"]
  return try [checked(entry),checked(multi),checked(external)]
 }
 @main struct Tests {
@@ -395,6 +395,24 @@ __PRODUCTION__
   p.stopTunnel(with:.userInitiated){stop.receive(nil)}
   try check("actual provider Stop closes its sole native owner",stop.done.wait(timeout:.now()+5) == .success && p.trace.counts().1==1)
   p.trace.prove(NSError(domain:"late-proof",code:1));try check("late proof cannot republish completion",started.result().0==1)
+ }
+ // The Tor predecessor is also an execution-receipt source. Keep the complete
+ // valid capture above, and prove malformed variants cannot reach DNS or the
+ // native dispatch boundary instead of weakening the production validator.
+ for fault in ["missing-mode","wrong-exit-id","wrong-exit-mode","static-tor-exit","unknown-execution"] {
+  var input=routes[2]
+  if fault=="missing-mode"{input.removeValue(forKey:"mode")}
+  else{input=try changedBundle(input){_,node in
+   switch fault {
+   case "wrong-exit-id":node["multihop_exit_id"]="other-exit"
+   case "wrong-exit-mode":node["multihop_exit_mode"]="tor-bridge"
+   case "static-tor-exit":var external=node["external"] as! [String:Any];external["expected_public_ip"]="203.0.113.88";node["external"]=external
+   default:node["multihop_execution"]="unknown"
+   }
+  }}
+  let p=PacketTunnelProvider(),result=Outcome(),queries=DNSSDTest.shared.counts().0,captures=NetworkTest.shared.counts().0
+  p.configure(input);p.startTunnel{result.receive($0)}
+  try check("invalid Tor execution source cannot start MAX preparation: "+fault,result.done.wait(timeout:.now()+3) == .success && !result.result().1 && p.trace.counts().0==0 && DNSSDTest.shared.counts().0==queries && NetworkTest.shared.counts().0==captures)
  }
  DNSSDTest.shared.configure(hold:true,block:true);NetworkTest.shared.set()
  let pending=PacketTunnelProvider(),start=Outcome(),stopped=Outcome();pending.configure(good);pending.startTunnel{start.receive($0)}
