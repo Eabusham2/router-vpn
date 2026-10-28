@@ -61,6 +61,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     static final String ACTION_STOP = "com.eabusham.routervpn.LAYERED_STOP";
     static final String EXTRA_SESSION_ID = "session_id";
     static final String EXTRA_HOME_SESSION_ID = "external_home_session_id";
+    static final String EXTRA_TOR_COMPARISON = "tor_comparison_session_id";
     static final String EXTRA_MODE_ID = "mode_id";
 
     private static final String TAG = "RouterVPN-Libbox";
@@ -190,6 +191,154 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private volatile io.nekohasekai.libbox.RouterHopMeasurement hopMeasurement;
     private volatile io.nekohasekai.libbox.RouterDNSMeasurement dnsMeasurement;
     private volatile AndroidTorSession torSession;
+    private volatile TorCompareTrial torCompareTrial;
+    private static final Object TOR_COMPARE_LOCK = new Object();
+    private static TorCompareTrial reservedTorCompare;
+    interface TorCompareCurrent { boolean current(); }
+
+    /** One candidate keeps its exact service/start generation through native
+     * shutdown. A late start intent cannot borrow a newer comparison owner. */
+    static final class TorCompareTrial {
+        final NativeSingBoxController.SessionInfo prepared;
+        final String externalID, execution;
+        final AndroidMAXDNSOwner.Physical physical;
+        final TorCompareCurrent owner;
+        private volatile LayeredVpnService service;
+        private volatile long generation;
+        private volatile boolean submitted, seen, finished, cancelled, closed, kept, stopping;
+        private volatile String failure = "";
+        private volatile RuntimeException stopFailure;
+        private volatile CommandServer provedServer;
+        private volatile AndroidTorSession provedTor;
+        private final Object closeLock = new Object();
+        private final java.util.concurrent.CountDownLatch stopped = new java.util.concurrent.CountDownLatch(1);
+
+        private TorCompareTrial(NativeSingBoxController.SessionInfo prepared, String externalID, String execution,
+                                AndroidMAXDNSOwner.Physical physical, TorCompareCurrent owner) {
+            this.prepared=prepared;this.externalID=externalID;this.execution=execution;this.physical=physical;this.owner=owner;
+        }
+        static TorCompareTrial reserve(NativeSingBoxController.SessionInfo prepared, String externalID, String execution,
+                                       AndroidMAXDNSOwner.Physical physical, TorCompareCurrent owner) {
+            if(prepared==null||externalID==null||externalID.isEmpty()||!java.util.Arrays.asList("local","server").contains(execution)
+                    ||physical==null||owner==null||!owner.current())throw new IllegalStateException("Tor comparison lost its captured candidate.");
+            synchronized(TOR_COMPARE_LOCK){
+                if(reservedTorCompare!=null&&!reservedTorCompare.closed)throw new IllegalStateException("The preceding Tor candidate has not drained.");
+                TorCompareTrial result=new TorCompareTrial(prepared,externalID,execution,physical,owner);
+                reservedTorCompare=result;return result;
+            }
+        }
+        void submit() {
+            synchronized(this){if(cancelled||closed||submitted||!owner.current())throw new IllegalStateException("Tor comparison launch was cancelled.");submitted=true;}
+        }
+        private boolean bind(LayeredVpnService value){
+            synchronized(this){
+                if(seen||closed||cancelled||!submitted||!owner.current())return false;
+                // A delayed private Intent must not revoke another native
+                // owner before the executor gets a chance to reject it.
+                if(value.executor.isShutdown()||value.torCompareTrial!=null||value.commandServer!=null||value.activeSession!=null
+                        ||value.torOwner||value.externalOwner||"STARTING".equals(value.state)
+                        ||"UP".equals(value.state)||"STOPPING".equals(value.state)) {
+                    failure="Another native owner replaced the Tor comparison candidate.";
+                    cancelled=true;return false;
+                }
+                service=value;generation=value.lifecycle.incrementAndGet();seen=true;
+                value.explicitStop=false;value.torCompareTrial=this;return true;
+            }
+        }
+        private void finished(boolean success,String reason){
+            if(success){
+                LayeredVpnService captured=service;AndroidTorSession tor=captured==null?null:captured.torSession;
+                if(captured==null||tor==null||!prepared.sessionId.equals(tor.sessionID)||!externalID.equals(tor.externalID))reason="Tor comparison did not retain its native proof.";
+                else{provedServer=captured.commandServer;provedTor=tor;}
+            }
+            if(reason!=null&&!reason.isEmpty())failure=reason;
+            finished=true;
+        }
+        String failure(){return failure.isEmpty()&&closed&&!kept?"The Tor candidate has already stopped.":failure;}
+        boolean current(){
+            AndroidTorSession captured=provedTor;
+            return captured!=null&&retainedCurrent()&&captured.comparisonCurrent()&&captured==provedTor&&retainedCurrent();
+        }
+        private boolean retainedCurrent(){
+            LayeredVpnService captured=service;AndroidTorSession tor=provedTor;CommandServer server=provedServer;
+            return !cancelled&&!closed&&owner.current()&&captured!=null&&currentService.get()==captured&&tor!=null&&server!=null&&finished
+                    &&generation==captured.lifecycle.get()&&!captured.explicitStop&&"UP".equals(captured.state)
+                    &&(kept||captured.torCompareTrial==this)&&captured.commandServer==server&&captured.torSession==tor
+                    &&captured.activeSession!=null&&prepared.sessionId.equals(captured.activeSession.getName())
+                    &&physical.network.equals(captured.torPhysicalNetwork);
+        }
+        CommandServer server(){return current()?provedServer:null;}
+        io.nekohasekai.libbox.RouterTorProofRequest proof(){
+            if(!current())return null;try{return provedTor.comparisonProof();}catch(Exception changed){return null;}
+        }
+        void cancel(){
+            synchronized(this){if(kept)return;cancelled=true;}
+            LayeredVpnService captured=service;
+            if(captured!=null&&captured.torCompareTrial==this){
+                captured.lifecycle.compareAndSet(generation,generation+1);
+                captured.executionProved=false;
+                captured.executionHandler.removeCallbacks(captured.executionWatch);
+                captured.executionHandler.removeCallbacks(captured.performanceWatch);
+                AndroidTorSession tor=captured.torSession;
+                if(tor!=null&&prepared.sessionId.equals(tor.sessionID))tor.cancel();
+                AndroidMAXProfilePreparation.Adopted max=captured.maxSession;
+                if(max!=null&&captured.activeSession!=null&&prepared.sessionId.equals(captured.activeSession.getName()))max.cancel();
+            }
+        }
+        private void requestStop(){
+            final LayeredVpnService captured=service;
+            synchronized(this){if(closed||kept||stopping||stopFailure!=null||captured==null)return;stopping=true;}
+            try{captured.executor.execute(()->{
+                try{captured.closeTorCompareTrial(this,"");}
+                catch(RuntimeException pending){stopFailure=pending;}
+                finally{stopping=false;}
+            });}catch(RuntimeException unavailable){stopFailure=unavailable;stopping=false;}
+        }
+        void abortUnsubmitted(){
+            synchronized(this){if(submitted||seen)return;cancelled=true;finished=true;}
+            completeClose();
+        }
+        void close() throws Exception {
+            synchronized(closeLock){closeRetained();}
+        }
+        private void closeRetained() throws Exception {
+            if(kept||closed)return;
+            cancel();
+            synchronized(this){
+                // Revocation precedes removing the registry. Every comparison
+                // Intent is explicitly marked, so a late delivery cannot enter
+                // the ordinary launch path after this unseen owner is gone.
+                if(!seen){finished=true;completeClose();return;}
+                if(!stopping)stopFailure=null;
+            }
+            long deadline=System.nanoTime()+25_000_000_000L;boolean interrupted=Thread.interrupted();
+            try{
+                while(!closed){
+                    requestStop();
+                    RuntimeException pending=stopFailure;if(pending!=null)throw pending;
+                    long remaining=deadline-System.nanoTime();if(remaining<=0)throw new IllegalStateException("The exact Tor candidate teardown is still pending.");
+                    try{stopped.await(Math.min(remaining,100_000_000L),java.util.concurrent.TimeUnit.NANOSECONDS);}
+                    catch(InterruptedException ignored){interrupted=true;}
+                }
+            }finally{if(interrupted)Thread.currentThread().interrupt();}
+        }
+        void keep() throws Exception {
+            if(!retainedCurrent())throw new IllegalStateException("The proved Tor winner changed before adoption.");
+            LayeredVpnService captured=service;
+            synchronized(captured.lock){
+                synchronized(this){
+                    if(!retainedCurrent()||captured.torCompareTrial!=this)throw new IllegalStateException("The Tor winner lost its native service.");
+                    kept=true;captured.torCompareTrial=null;
+                }
+            }
+            synchronized(TOR_COMPARE_LOCK){if(reservedTorCompare==this)reservedTorCompare=null;}
+        }
+        private void completeClose(){
+            closed=true;provedServer=null;provedTor=null;
+            synchronized(TOR_COMPARE_LOCK){if(reservedTorCompare==this)reservedTorCompare=null;}
+            stopped.countDown();
+        }
+    }
     private static final class TorCleanup {
         final AndroidTorSession tor;
         final CommandServer server;
@@ -434,7 +583,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     }};
     private volatile ParcelFileDescriptor tunDescriptor;
     private AndroidStartLayerRelay startLayerRelay;
-    private File activeSession;
+    private volatile File activeSession;
     private String activeMode = "";
     private String activeConfig = "";
     private volatile String state = "DOWN";
@@ -468,25 +617,55 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         }
         if (!ACTION_START.equals(action)) return Service.START_NOT_STICKY;
 
-        startForeground(NOTIFICATION_ID, buildNotification("Starting layered VPN…"));
         final String sessionId = intent.getStringExtra(EXTRA_SESSION_ID);
         final String modeId = intent.getStringExtra(EXTRA_MODE_ID);
         final String maxOwner = intent.getStringExtra(AndroidMAXProfilePreparation.EXTRA_OWNER);
         final String homeSession = intent.getStringExtra(EXTRA_HOME_SESSION_ID);
-        final long generation = lifecycle.incrementAndGet();
-        explicitStop = false;
+        final String comparisonSession = intent.getStringExtra(EXTRA_TOR_COMPARISON);
+        TorCompareTrial trial;
+        synchronized(TOR_COMPARE_LOCK){trial=reservedTorCompare!=null&&reservedTorCompare.prepared.sessionId.equals(sessionId)?reservedTorCompare:null;}
+        final long generation;
+        if(comparisonSession!=null){
+            if(!comparisonSession.equals(sessionId)||trial==null||!trial.bind(this)){
+                rejectTorComparisonStart(startId);return Service.START_NOT_STICKY;
+            }
+            generation=trial.generation;
+        }else{
+            boolean reserved; synchronized(TOR_COMPARE_LOCK){reserved=reservedTorCompare!=null;}
+            if(reserved){rejectTorComparisonStart(startId);return Service.START_NOT_STICKY;}
+            generation=lifecycle.incrementAndGet();explicitStop=false;
+        }
+        startForeground(NOTIFICATION_ID, buildNotification("Starting layered VPN…"));
         executor.execute(() -> startLayered(sessionId, modeId, generation, maxOwner, homeSession));
         return Service.START_NOT_STICKY;
     }
 
+    private void rejectTorComparisonStart(int startId){
+        // A cancelled startForegroundService delivery still has to satisfy
+        // Android's foreground-start contract. Never touch a retained path;
+        // stopSelf(startId) also cannot stop a later framework start command.
+        if(commandServer==null&&activeSession==null&&torCompareTrial==null
+                &&!("UP".equals(state)||"STARTING".equals(state)||"STOPPING".equals(state))){
+            startForeground(NOTIFICATION_ID,buildNotification("Cancelled Tor comparison…"));
+            stopForeground(STOP_FOREGROUND_REMOVE);stopSelf(startId);
+        }
+    }
+
     private void startLayered(String sessionId, String modeId, long generation, String maxOwner, String homeSession) {
+        TorCompareTrial comparison=torCompareTrial;
+        if(comparison!=null&&!comparison.prepared.sessionId.equals(sessionId))comparison=null;
+        final TorCompareTrial capturedComparison=comparison;
+        final boolean rejected;
         synchronized (lock) {
-            if (generation != lifecycle.get() || explicitStop || "STARTING".equals(state) || "UP".equals(state) || torOwner || externalOwner) {
-                AndroidMAXProfilePreparation.discardPrepared(sessionId,maxOwner);
-                discardPreparedSession(this,sessionId);
-                return;
-            }
-            publish("STARTING", modeId, "");
+            rejected=generation != lifecycle.get() || explicitStop || capturedComparison!=null&&(capturedComparison.cancelled||!capturedComparison.owner.current())
+                    || "STARTING".equals(state) || "UP".equals(state) || torOwner || externalOwner;
+            if(!rejected)publish("STARTING", modeId, "");
+        }
+        if(rejected){
+            AndroidMAXProfilePreparation.discardPrepared(sessionId,maxOwner);
+            discardPreparedSession(this,sessionId);
+            if(capturedComparison!=null){capturedComparison.finished(false,"Tor candidate was cancelled before native startup.");closeTorCompareTrial(capturedComparison,"");}
+            return;
         }
         AndroidMAXProfilePreparation.Adopted preparedMAX = null;
         try {
@@ -603,9 +782,12 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             Libbox.checkConfig(config);
             String torNetwork = torMetadata == null ? "" : executionNetworkIdentity();
             if (torMetadata != null && (torNetwork.isEmpty() || "[]".equals(torNetwork))) throw new IllegalStateException("Tor requires the captured underlying network before startup.");
-            Network torPhysical = torMetadata == null ? null : connectivity.getActiveNetwork();
+            Network torPhysical = torMetadata == null ? null : capturedComparison==null?connectivity.getActiveNetwork():capturedComparison.physical.network;
             if (torMetadata != null && (torPhysical == null || connectivity.getNetworkCapabilities(torPhysical) == null
                     || connectivity.getNetworkCapabilities(torPhysical).hasTransport(NetworkCapabilities.TRANSPORT_VPN))) throw new IllegalStateException("Tor requires an owned physical network before the VPN starts.");
+            if(capturedComparison!=null&&(torMetadata==null||!capturedComparison.physical.current(true)||!capturedComparison.owner.current()
+                    ||!capturedComparison.execution.equals(AndroidTorProfile.execution(torMetadata))||!capturedComparison.externalID.equals(torMetadata.getString("external_id"))))
+                throw new IllegalStateException("Tor comparison candidate differs from its captured source or physical network.");
             String externalNetwork = externalMetadata == null ? "" : executionNetworkIdentity();
             Network externalPhysical = externalMetadata == null ? null : connectivity.getActiveNetwork();
             if (externalMetadata != null && (externalNetwork.isEmpty() || "[]".equals(externalNetwork) || externalPhysical == null
@@ -709,13 +891,16 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 performanceActive = performanceServices > 0;
                 executionProved=true;publish("UP",modeId,"");
             }
+            if(capturedComparison!=null)capturedComparison.finished(true,"");
             if (performanceActive) executionHandler.post(performanceWatch);
             updateForeground("Layered VPN active: " + modeId);
         } catch (RevokedException revoked) {
             Log.w(TAG, revoked.getMessage());
+            if(capturedComparison!=null)capturedComparison.finished(false,revoked.getMessage());
             shutdown("REVOKED", revoked.getMessage());
         } catch (Throwable error) {
             Log.e(TAG, "Layered VPN start failed", error);
+            if(capturedComparison!=null)capturedComparison.finished(false,safeMessage(error));
             shutdown("FAILED", safeMessage(error));
         } finally {
             if (preparedMAX != null && maxSession != preparedMAX) preparedMAX.cancel();
@@ -828,6 +1013,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             }
             activeSession = null;
             activeConfig = "";
+            TorCompareTrial trial=torCompareTrial;torCompareTrial=null;
+            if(trial!=null&&!trial.kept)trial.completeClose();
         }
         if(currentService.get()==this)currentService.clear();
         AndroidHomeStateStore.failedPolicyExternal(this,home,"The captured external VPN service stopped; reconnect to prove the path.",true);
@@ -841,6 +1028,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     }
 
     private void shutdown(String terminalState, String error) {
+        TorCompareTrial trial=torCompareTrial;
+        if(trial!=null&&!trial.kept){closeTorCompareTrial(trial,error);return;}
         String mode;
         File session;
         AndroidHomeStateStore.Snapshot home;
@@ -865,6 +1054,32 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         if (session != null) deleteTree(session);
         stopForeground(STOP_FOREGROUND_REMOVE);
         stopSelf();
+    }
+
+    /** Stop only this round's candidate. Trials keep the same service and
+     * pending Home owner; normal Stop/revocation still retires the service. */
+    private void closeTorCompareTrial(TorCompareTrial trial,String failure) {
+        if(trial.kept||trial.closed)return;
+        trial.cancel();
+        File session;
+        synchronized(lock){
+            if(torCompareTrial!=trial){
+                if(trial.provedServer==null&&trial.finished){trial.completeClose();return;}
+                throw new IllegalStateException("The retained Tor candidate no longer owns its service cleanup.");
+            }
+            if(activeSession!=null&&!trial.prepared.sessionId.equals(activeSession.getName()))
+                throw new IllegalStateException("An old Tor comparison cannot close a replacement session.");
+            session=activeSession;
+            publish("STOPPING",activeMode,failure==null?"":failure);
+            closeCoreLocked();
+            activeSession=null;activeMode="";activeConfig="";torCompareTrial=null;
+            publish("DOWN","",failure==null?"":failure);
+        }
+        if(session!=null)deleteTree(session);
+        else discardPreparedSession(this,trial.prepared.sessionId);
+        trial.completeClose();
+        if(explicitStop){stopForeground(STOP_FOREGROUND_REMOVE);stopSelf();}
+        else updateForeground("Comparing Tor Local and Server execution…");
     }
 
     private void closeCoreLocked() {

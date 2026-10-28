@@ -76,8 +76,8 @@ for marker in (
     "boolean interrupted=Thread.interrupted();",
     "singBox.stop();",
     "STOP_TIMEOUT_MS",
-    "if(terminal(singBox.getState()))return true;",
-    "return terminal(singBox.getState());",
+    "if(terminal(singBox.getState()))return drainTorComparison(comparison);",
+    "return terminal(singBox.getState())&&drainTorComparison(comparison);",
     "finally{if(interrupted)Thread.currentThread().interrupt();}",
 ):
     assert marker in stop, f"standard-exit teardown proof missing: {marker}"

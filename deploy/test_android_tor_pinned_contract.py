@@ -227,6 +227,8 @@ assert args[1:]==['--native-package',os.environ['TOR_PACKAGE'],'--android-aar',o
         before=GATE.digest();read=Path.read_bytes
         for relative in ('android/app/src/main/java/com/eabusham/routervpn/AndroidTorProfile.java',
                          'android/app/src/main/java/com/eabusham/routervpn/AndroidTorSession.java',
+                         'android/app/src/main/java/com/eabusham/routervpn/AndroidTorCompareRuntime.java',
+                         'android/test_android_tor_compare.py',
                          'android/app/src/main/java/com/eabusham/routervpn/AndroidTorPaddingReceipt.java',
                          'android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java',
                          'android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java',

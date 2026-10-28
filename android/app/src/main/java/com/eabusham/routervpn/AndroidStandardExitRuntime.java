@@ -33,6 +33,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
     private String externalNativeSession="",externalHomeSession="",externalID="";
     private String requestedExecution="local";
     private AndroidStandardExitStore.Entry activeOrdinaryEntry;
+    private AndroidTorCompareRuntime torComparison;
 
     AndroidStandardExitRuntime(Context context,NativeSingBoxController singBox){
         this.context=context.getApplicationContext();
@@ -114,29 +115,71 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             }
             cb.owned(capturedHome.sessionId);
             cb.progress(direct?"Preparing direct "+exit.protocol+" custom exit with its captured protection policy…":"Preparing "+entryMode+" entry → "+exit.protocol+" custom exit…");
-            NativeSingBoxController.SessionInfo session=ordinaryEntry!=null?AndroidTorProfile.prepareOrdinary(context,ordinaryEntry,exit,execution)
-                    :direct?directBuilder.prepare(exit):builder.prepare(entry,exit,entryMode,execution,restoredExecution);
-            preparedSession=session;
-            if(Thread.currentThread().isInterrupted()||closed.get())throw new InterruptedException("Custom exit cancelled.");
-            cb.progress("Starting one Android VpnService custom-exit graph…");
-            synchronized(this){
-                if(disconnectRequested||closed.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Custom exit cancelled before engine launch.");
-                if(ordinaryEntry!=null){requireOrdinaryCurrent(ordinaryEntry,exit,capturedEntry);activeOrdinaryEntry=AndroidStandardExitStore.copy(ordinaryEntry);}
-                // A partially published start still owns cleanup when launch throws.
-                if(tor){torNativeSession=session.sessionId;torHomeSession=capturedHome.sessionId;torExternalID=exit.id;}
-                if(policy){externalNativeSession=session.sessionId;externalHomeSession=capturedHome.sessionId;externalID=exit.id;}
-                started=true;releasePrepared=false;
-                if(policy)singBox.startExternal(session,capturedHome.sessionId);else singBox.start(session);
-            }
-            long deadline=System.currentTimeMillis()+startTimeoutMillis(tor,execution);
-            while(System.currentTimeMillis()<deadline){
+            NativeSingBoxController.SessionInfo session;
+            if(tor&&!direct&&ordinaryEntry==null&&"auto".equals(execution)&&restoredExecution.isEmpty()){
+                final AndroidHomeStateStore.Snapshot roundHome=capturedHome;
+                final String exitSource=AndroidStandardExitStore.snapshot(exit);
+                AndroidTorCompareRuntime comparison=new AndroidTorCompareRuntime(context,entry,exit,entryMode,
+                        roundHome.sessionId,capturedEntry,new AndroidTorCompareRuntime.Owner(){
+                    @Override public boolean current(){
+                        synchronized(AndroidStandardExitRuntime.this){
+                            AndroidHomeStateStore.Snapshot now=AndroidHomeStateStore.snapshot(context);
+                            return !disconnectRequested&&!closed.get()&&!revalidationTeardown
+                                    &&roundHome.sessionId.equals(now.sessionId)&&roundHome.pathGeneration==now.pathGeneration
+                                    &&roundHome.activeExternalId.equals(now.activeExternalId)
+                                    &&roundHome.activeEntryId.equals(now.activeEntryId)&&roundHome.activeEntryMode.equals(now.activeEntryMode)
+                                    &&!AndroidHomeStateStore.emergencyDisconnectPending(context);
+                        }
+                    }
+                    @Override public void requireSource()throws Exception{
+                        if(!current()||!capturedEntry.equals(AndroidExternalPolicy.entryDigest(entry)))
+                            throw new IllegalStateException("The captured Tor entry or Home owner changed during comparison.");
+                        AndroidStandardExitStore.Entry saved=new AndroidStandardExitStore(context).get(exit.id);
+                        if(saved==null||!exitSource.equals(AndroidStandardExitStore.snapshot(saved)))
+                            throw new IllegalStateException("The captured Tor exit changed during comparison.");
+                    }
+                    @Override public void launch(NativeSingBoxController.SessionInfo candidate)throws Exception{
+                        requireSource();
+                        synchronized(AndroidStandardExitRuntime.this){
+                            if(!current())throw new InterruptedException("Tor comparison was cancelled before native launch.");
+                            torNativeSession=candidate.sessionId;torHomeSession=roundHome.sessionId;torExternalID=exit.id;
+                        }
+                        singBox.startTorComparison(candidate);
+                    }
+                    @Override public void progress(String message){cb.progress(message);}
+                });
+                synchronized(this){
+                    if(disconnectRequested||closed.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Tor comparison cancelled before ownership capture.");
+                    torComparison=comparison;started=true;releasePrepared=false;
+                }
+                session=comparison.run();preparedSession=session;
+                comparison.close();
+                synchronized(this){if(torComparison==comparison)torComparison=null;}
+            }else{
+                session=ordinaryEntry!=null?AndroidTorProfile.prepareOrdinary(context,ordinaryEntry,exit,execution)
+                        :direct?directBuilder.prepare(exit):builder.prepare(entry,exit,entryMode,execution,restoredExecution);
+                preparedSession=session;
                 if(Thread.currentThread().isInterrupted()||closed.get())throw new InterruptedException("Custom exit cancelled.");
-                String state=singBox.getState();
-                if("UP".equals(state))break;
-                if("FAILED".equals(state)||"REVOKED".equals(state))throw new IllegalStateException(nonEmpty(singBox.getError(),"Embedded custom-exit engine entered "+state+"."));
-                Thread.sleep(250L);
+                cb.progress("Starting one Android VpnService custom-exit graph…");
+                synchronized(this){
+                    if(disconnectRequested||closed.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Custom exit cancelled before engine launch.");
+                    if(ordinaryEntry!=null){requireOrdinaryCurrent(ordinaryEntry,exit,capturedEntry);activeOrdinaryEntry=AndroidStandardExitStore.copy(ordinaryEntry);}
+                    // A partially published start still owns cleanup when launch throws.
+                    if(tor){torNativeSession=session.sessionId;torHomeSession=capturedHome.sessionId;torExternalID=exit.id;}
+                    if(policy){externalNativeSession=session.sessionId;externalHomeSession=capturedHome.sessionId;externalID=exit.id;}
+                    started=true;releasePrepared=false;
+                    if(policy)singBox.startExternal(session,capturedHome.sessionId);else singBox.start(session);
+                }
+                long deadline=System.currentTimeMillis()+startTimeoutMillis(tor,execution);
+                while(System.currentTimeMillis()<deadline){
+                    if(Thread.currentThread().isInterrupted()||closed.get())throw new InterruptedException("Custom exit cancelled.");
+                    String state=singBox.getState();
+                    if("UP".equals(state))break;
+                    if("FAILED".equals(state)||"REVOKED".equals(state))throw new IllegalStateException(nonEmpty(singBox.getError(),"Embedded custom-exit engine entered "+state+"."));
+                    Thread.sleep(250L);
+                }
+                if(!"UP".equals(singBox.getState()))throw new IllegalStateException("Embedded custom-exit engine did not reach UP before timeout.");
             }
-            if(!"UP".equals(singBox.getState()))throw new IllegalStateException("Embedded custom-exit engine did not reach UP before timeout.");
             cb.progress(tor?"The captured Tor circuit, entry and selected DNS passed; checking current ownership…":"Captured entry, selected DNS and public exit passed; checking current ownership…");
             String observed=tor?capturedTorExit(capturedHome):capturedExternalExit(capturedHome);
             String selectedExecution=capturedExternalExecution(capturedHome);
@@ -353,10 +396,10 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             disconnectRequested=true;revalidationTeardown=true;teardownInProgress=true;
             if(workerThread!=null)workerThread.interrupt();
             AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
-            owns="external".equals(home.logicalMode)||singBox.getMode().startsWith("standard-");
+            owns=torComparison!=null||"external".equals(home.logicalMode)||singBox.getMode().startsWith("standard-");
         }
-        if(owns&&runtimeBusy(singBox.getState()))stopEmbeddedAndProve();
-        synchronized(this){teardownInProgress=owns&&runtimeBusy(singBox.getState());}
+        boolean stopped=!owns||stopEmbeddedAndProve();
+        synchronized(this){teardownInProgress=!stopped;}
         // Queued attempts must observe closed and complete normally; cancelling
         // their Future would claim completion before worker cleanup finished.
         executor.shutdown();
@@ -364,18 +407,28 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
 
     private boolean stopEmbeddedAndProve(){
         boolean interrupted=Thread.interrupted();
+        final AndroidTorCompareRuntime comparison;
+        synchronized(this){comparison=torComparison;}
+        if(comparison!=null)comparison.cancel();
         try{
             singBox.stop();
             long deadline=System.currentTimeMillis()+STOP_TIMEOUT_MS;
             while(System.currentTimeMillis()<deadline){
-                if(terminal(singBox.getState()))return true;
+                if(terminal(singBox.getState()))return drainTorComparison(comparison);
                 try{Thread.sleep(150L);}catch(InterruptedException error){interrupted=true;}
             }
-            return terminal(singBox.getState());
+            return terminal(singBox.getState())&&drainTorComparison(comparison);
         }catch(RuntimeException error){
             // Neither a failed stop request nor a failed state read proves DOWN.
             return false;
         }finally{if(interrupted)Thread.currentThread().interrupt();}
+    }
+
+    private boolean drainTorComparison(AndroidTorCompareRuntime comparison){
+        if(comparison==null)return true;
+        try{comparison.close();}catch(Exception pending){return false;}
+        synchronized(this){if(torComparison==comparison)torComparison=null;}
+        return true;
     }
 
     private static boolean terminal(String state){

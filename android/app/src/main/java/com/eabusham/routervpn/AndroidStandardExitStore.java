@@ -344,8 +344,7 @@ final class AndroidStandardExitStore {
     static void validateExecution(Entry exit,boolean hasEntry,String execution)throws Exception{
         if(!Arrays.asList("local","server","auto").contains(execution))throw new IllegalArgumentException("Choose Local, Server, or Compare both.");
         if(exit!=null&&AndroidTorProfile.isTor(exit.protocol)){
-            if("auto".equals(execution))throw new IllegalArgumentException("Tor Compare both requires independent last-node and external response measurements; select Local or Server.");
-            if("server".equals(execution)&&!hasEntry)throw new IllegalArgumentException("Tor Server requires a captured Router VPN entry with a matching private Tor source.");
+            if(!"local".equals(execution)&&!hasEntry)throw new IllegalArgumentException("Tor Server and Compare both require a captured Router VPN entry with a matching private Tor source.");
             return;
         }
         if(!"local".equals(execution)){

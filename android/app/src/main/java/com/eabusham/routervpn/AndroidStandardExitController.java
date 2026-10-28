@@ -24,8 +24,11 @@ final class AndroidStandardExitController {
         AndroidStandardExitStore.validate(exit);
         AndroidStandardExitStore.validateExecution(exit,entryBundle!=null,execution);
         if(AndroidTorProfile.isTor(exit.protocol)){
-            if(!restoredExecution.isEmpty()&&!execution.equals(restoredExecution))throw new IllegalArgumentException("The proved Tor execution differs from its captured restoration choice.");
-            return AndroidTorProfile.prepare(context,entryBundle,exit,entryMode,execution);
+            String leaf=restoredExecution.isEmpty()?execution:restoredExecution;
+            if(!java.util.Arrays.asList("local","server").contains(leaf)
+                    ||!restoredExecution.isEmpty()&&!"auto".equals(execution)&&!execution.equals(restoredExecution))
+                throw new IllegalArgumentException("The proved Tor execution differs from its captured restoration choice.");
+            return AndroidTorProfile.prepare(context,entryBundle,exit,entryMode,leaf);
         }
         if("local".equals(execution)&&restoredExecution.isEmpty())return prepare(entryBundle,exit,entryMode);
         return AndroidExternalPolicy.prepare(context,entryBundle,exit,entryMode,execution,restoredExecution);

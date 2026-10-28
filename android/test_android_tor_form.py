@@ -389,14 +389,14 @@ public final class TorFormHarness {
  static void dialogAndPermission()throws Exception{
   Context context=new Context(root.toFile());AlertDialog negative=new AlertDialog.Builder(context).setMessage("Explainer").setItems(new String[]{"Hidden"},(d,w)->{throw new AssertionError("hidden item executed");}).show();
   check(!negative.itemsVisible(),"dialog double ignores Android message/list exclusivity");boolean hidden=false;try{negative.clickItem(0);}catch(IllegalStateException expected){hidden=true;}check(hidden,"hidden-list negative control cannot reject an item");negative.dismiss();
-  for(String execution:new String[]{"local","server"})for(String mode:ALL){
+  for(String execution:new String[]{"local","server","auto"})for(String mode:ALL){
    Path directory=Files.createTempDirectory(root,"permission-");StandardExitActivity activity=activity(directory,null);AndroidNodeStore.Node node=node(directory);AndroidStandardExitStore.Entry selected=tor("custom","doh");store(activity).save(selected);
    invoke(activity,"showExitActions",selected);AlertDialog actions=AlertDialog.last;check(actions.itemsVisible()&&actions.items.length==5&&actions.items[3].equals("Compare DNS on this connected path"),"saved Tor actions are hidden");
    check(!displayed(actions.customTitle).contains("cert=Y2VydA"),"actions header exposed bridge credentials");actions.clickItem(1);
    AlertDialog entries=AlertDialog.last;check(entries.itemsVisible()&&entries.items.length==1,"entry choices are hidden");entries.clickItem(0);
    AlertDialog modes=AlertDialog.last;check(modes.itemsVisible()&&modes.items.length==19,"exact native mode choices missing or duplicated");int index=-1;
    for(int i=0;i<modes.items.length;i++)if(modes.items[i].endsWith("["+mode+"]"))index=i;check(index>=0,"entry mode not selectable: "+mode);modes.clickItem(index);
-   AlertDialog choices=AlertDialog.last;check(choices.itemsVisible()&&Arrays.equals(choices.items,new String[]{"Local","Server"}),"Tor execution choices are hidden or use unproved Compare");choices.clickItem(execution.equals("server")?1:0);
+   AlertDialog choices=AlertDialog.last;check(choices.itemsVisible()&&Arrays.equals(choices.items,new String[]{"Local","Server","Compare both"}),"Tor execution choices omit the captured comparison");choices.clickItem(Arrays.asList("local","server","auto").indexOf(execution));
    check(activity.permission!=null&&activity.permissionRequest==2101&&mode.equals(get(activity,"pendingEntryMode")),"permission handoff changed selected entry mode");
    Bundle state=new Bundle();activity.onSaveInstanceState(state);check(state.getString("pending_entry_digest","").matches("[0-9a-f]{64}")&&state.getString("pending_exit_digest","").matches("[0-9a-f]{64}"),"permission state lacks exact source digests");
    check(!state.values.toString().contains("cert=Y2VydA")&&!state.values.toString().contains("/selected-query"),"saved Activity state contains private bridge/DNS configuration");

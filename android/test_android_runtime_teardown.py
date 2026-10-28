@@ -42,6 +42,7 @@ final class NativeSingBoxController {
         starts.incrementAndGet(); state = startState; mode = "standard-test";
         if (failStart) throw new IllegalStateException("start failed after engine ownership publication");
     }
+    void startTorComparison(SessionInfo session){start(session);}
     void startExternal(SessionInfo session,String homeSession) {
         if(!homeSession.equals(AndroidHomeStateStore.current.sessionId))throw new AssertionError("Native launch lost its exact Home owner");
         start(session);
@@ -139,8 +140,17 @@ final class AndroidStandardExitController {
     static volatile String lastEntryMode="",lastProtocol="",lastExecution="";
     AndroidStandardExitController(Context c) {}
     NativeSingBoxController.SessionInfo prepare(File f, AndroidStandardExitStore.Entry e) { return new NativeSingBoxController.SessionInfo(); }
-    NativeSingBoxController.SessionInfo prepare(File f, AndroidStandardExitStore.Entry e,String mode,String execution,String restored){lastExecution=execution;return prepare(f,e,mode);}
+    NativeSingBoxController.SessionInfo prepare(File f, AndroidStandardExitStore.Entry e,String mode,String execution,String restored){lastExecution=restored.isEmpty()?execution:restored;return prepare(f,e,mode);}
     NativeSingBoxController.SessionInfo prepare(File f, AndroidStandardExitStore.Entry e,String mode) {lastEntryMode=mode;lastProtocol=e.protocol;return prepare(f,e); }
+}
+// This unrelated runtime suite keeps the coordinator as an explicit boundary.
+// Actual Compare host/service lifecycle is executed by test_android_tor_compare.py.
+final class AndroidTorCompareRuntime {
+ interface Owner{boolean current();void requireSource()throws Exception;void launch(NativeSingBoxController.SessionInfo s)throws Exception;void progress(String s);}
+ static int runs,closes,cancels;static boolean failRun,failClose;static String chosen="server";private final Owner owner;
+ AndroidTorCompareRuntime(Context c,File f,AndroidStandardExitStore.Entry e,String m,String h,String d,Owner o){owner=o;}
+ NativeSingBoxController.SessionInfo run()throws Exception{runs++;owner.requireSource();NativeSingBoxController.SessionInfo s=new NativeSingBoxController.SessionInfo();owner.launch(s);LayeredVpnService.torExecutionOverride=chosen;if(failRun)throw new Exception("comparison probes failed");return s;}
+ void cancel(){cancels++;}void close()throws Exception{closes++;if(failClose)throw new Exception("comparison native owner still retained");}
 }
 final class AndroidDirectStandardExitController {
     static volatile String lastProtocol="";
@@ -214,6 +224,7 @@ import java.net.HttpURLConnection;
 import java.net.Proxy;
 import java.net.URL;
 import java.net.URLConnection;
+import java.io.File;
 import java.net.URLStreamHandler;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
@@ -247,7 +258,7 @@ public final class RuntimeTeardownHarness {
         final AndroidMultihopRuntime multihop; final AndroidStandardExitRuntime external;
         final String kind;
         Owner(String kind) {
-            this.kind=kind;AndroidStandardExitStore.saved.clear();AndroidTorProfile.ordinaryPreparations=0;AndroidTorProfile.lastOrdinary=null;AndroidTorProfile.beforePrepared=null;LayeredVpnService.selectedOverride="";LayeredVpnService.serverPins="{}";LayeredVpnService.staleCapture=false;AndroidMultihopController.changedSources.clear();AndroidMultihopController.lastPins="";LayeredVpnService.torReads.set(0);LayeredVpnService.torExecutionReads.set(0);LayeredVpnService.torExecutionOverride="";AndroidStandardExitController.lastExecution="";LayeredVpnService.torHealthy=true;publicProofs.set(0);
+            this.kind=kind;AndroidTorCompareRuntime.runs=0;AndroidTorCompareRuntime.closes=0;AndroidTorCompareRuntime.cancels=0;AndroidTorCompareRuntime.failRun=false;AndroidTorCompareRuntime.failClose=false;AndroidTorCompareRuntime.chosen="server";AndroidStandardExitStore.saved.clear();AndroidTorProfile.ordinaryPreparations=0;AndroidTorProfile.lastOrdinary=null;AndroidTorProfile.beforePrepared=null;LayeredVpnService.selectedOverride="";LayeredVpnService.serverPins="{}";LayeredVpnService.staleCapture=false;AndroidMultihopController.changedSources.clear();AndroidMultihopController.lastPins="";LayeredVpnService.torReads.set(0);LayeredVpnService.torExecutionReads.set(0);LayeredVpnService.torExecutionOverride="";AndroidStandardExitController.lastExecution="";LayeredVpnService.torHealthy=true;publicProofs.set(0);
             LayeredVpnService.externalReads.set(0);LayeredVpnService.externalHealthy=true;
             LayeredVpnService.discarded.set(0);
             AndroidHomeStateStore.reset(); LayeredVpnService.mtuStarts.set(0); LayeredVpnService.mtuEntered=null;LayeredVpnService.mtuRelease=null;
@@ -313,8 +324,23 @@ public final class RuntimeTeardownHarness {
             try(Owner owner=new Owner("tor")){AndroidStandardExitStore.Entry entry=ordinary("socks5"),exit=torExit();if(fault.equals("duplicate"))exit.id=entry.id;if(fault.equals("wrong-exit"))exit.protocol="socks5";if(fault.equals("tor-entry"))entry.protocol="tor";Callback cb=new Callback(0);owner.external.connectOrdinary(entry,exit,fault.equals("server")||fault.equals("auto")?fault:"local",cb);cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0&&AndroidTorProfile.ordinaryPreparations==0,"ordinary input acquired unavailable path authority");}
         });
     }
+    static void torCompareRuntimeTests(){
+        for(String selected:new String[]{"local","server"})test("Tor Compare owns the proved "+selected+" leaf and original auto preference",()->{
+            try(Owner owner=new Owner("tor")){AndroidTorCompareRuntime.chosen=selected;AndroidStandardExitStore.Entry exit=torExit();Callback cb=new Callback(0);owner.external.connect(new File("a".repeat(32)+".json"),exit,"max-tls-awg","auto",cb);cb.awaitDone();
+                check(cb.ok&&AndroidTorCompareRuntime.runs==1&&owner.engine.starts.get()==1,"Tor auto did not use captured coordinator");check(owner.external.capturedRequestedExecution(AndroidHomeStateStore.current).equals("auto")&&owner.external.capturedExternalExecution(AndroidHomeStateStore.current).equals(selected),"Tor preference/actual execution conflated");check(LayeredVpnService.mtuStarts.get()==1&&cb.ownerCalls==1,"trial or unproved owner adopted Connected/MTU");owner.disconnect();awaitIdle(owner);}
+        });
+        for(String selected:new String[]{"local","server"})test("Tor auto restoration retains "+selected+" without rerunning selection",()->{
+            try(Owner owner=new Owner("tor")){Callback cb=new Callback(0);owner.external.restoreCaptured(new File("a".repeat(32)+".json"),torExit(),"reality-xhttp","auto",selected,cb);cb.awaitDone();check(cb.ok&&AndroidTorCompareRuntime.runs==0&&AndroidStandardExitController.lastExecution.equals(selected),"restoration reran Compare or changed leaf");check(owner.external.capturedRequestedExecution(AndroidHomeStateStore.current).equals("auto"),"restoration discarded original preference");owner.disconnect();awaitIdle(owner);}
+        });
+        test("Tor Compare partial failure stops and joins its exact owner",()->{
+            try(Owner owner=new Owner("tor")){AndroidTorCompareRuntime.failRun=true;Callback cb=new Callback(0);owner.external.connect(new File("a".repeat(32)+".json"),torExit(),"wg","auto",cb);cb.awaitDone();check(!cb.ok&&owner.engine.stops.get()>0&&AndroidTorCompareRuntime.cancels>0&&AndroidTorCompareRuntime.closes>0&&!AndroidHomeStateStore.current.connected,"partial Compare lost native cleanup");awaitIdle(owner);}
+        });
+        test("Tor Compare unacknowledged drain remains busy until retry",()->{
+            try(Owner owner=new Owner("tor")){AndroidTorCompareRuntime.failRun=true;AndroidTorCompareRuntime.failClose=true;Callback cb=new Callback(0);owner.external.connect(new File("a".repeat(32)+".json"),torExit(),"wg","auto",cb);cb.awaitDone();check(!cb.ok&&owner.busy()&&!AndroidHomeStateStore.current.connected,"failed Compare drain released runtime");AndroidTorCompareRuntime.failClose=false;owner.disconnect();awaitIdle(owner);}
+        });
+    }
     static void tests(String kind) {
-        if("tor".equals(kind)){torTests();ordinaryTorTests();}
+        if("tor".equals(kind)){torTests();ordinaryTorTests();torCompareRuntimeTests();}
         if("external".equals(kind))externalTests();
         {
             test(kind+" temporary cleanup retains its exact Home owner",()->{

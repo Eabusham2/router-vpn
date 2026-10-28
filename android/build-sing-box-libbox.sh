@@ -130,8 +130,26 @@ verify_aar() {
       echo 'combined libbox AAR external proof request has the wrong owned-lifecycle API' >&2; return 1
     }
   done
-  for symbol in routerTorNativeABI routerTorNativeVersion routerTorSourceNotices routerCompileTorProfile routerValidateTorProfile routerCompileTorProfileWithPredecessor routerCompileTorProfileWithExternalPredecessor routerTorPaddingSource routerTorSetStateDirectory routerTorCreateProof routerTorCreateProofWithPredecessor routerStrategyDNSProof routerStrategyCloseService; do
+  for symbol in routerTorNativeABI routerTorNativeVersion routerTorSourceNotices routerCompileTorProfile routerValidateTorProfile routerCompileTorProfileWithPredecessor routerCompileTorProfileWithExternalPredecessor routerTorPaddingSource routerTorSetStateDirectory routerTorCreateProof routerTorCreateProofWithPredecessor routerTorNewCompare routerStrategyDNSProof routerStrategyCloseService; do
     grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing native Tor API $symbol" >&2; return 1; }
+  done
+  javap -classpath "$classes" io.nekohasekai.libbox.RouterTorCompare >"$tmp/router-tor-compare.javap"
+  for signature in 'void run() throws java.lang.Exception;' 'java.lang.String execution();' 'java.lang.String resultJSON();' 'void keep() throws java.lang.Exception;' 'void cancel();' 'void close() throws java.lang.Exception;'; do
+    grep -Fq "$signature" "$tmp/router-tor-compare.javap" || {
+      echo 'combined libbox AAR Tor comparison has the wrong transfer/drain API' >&2; return 1
+    }
+  done
+  javap -classpath "$classes" io.nekohasekai.libbox.RouterTorCompareHost >"$tmp/router-tor-compare-host.javap"
+  for signature in 'boolean current();' 'io.nekohasekai.libbox.RouterTorCompareCandidate newCandidate(java.lang.String, java.lang.String);' 'void progress(java.lang.String, java.lang.String);'; do
+    grep -Fq "$signature" "$tmp/router-tor-compare-host.javap" || {
+      echo 'combined libbox AAR Tor comparison has the wrong captured-host API' >&2; return 1
+    }
+  done
+  javap -classpath "$classes" io.nekohasekai.libbox.RouterTorCompareCandidate >"$tmp/router-tor-compare-candidate.javap"
+  for signature in 'boolean current();' 'void start() throws java.lang.Exception;' 'io.nekohasekai.libbox.CommandServer server();' 'io.nekohasekai.libbox.RouterTorProofRequest proof();' 'void cancel();' 'void close() throws java.lang.Exception;'; do
+    grep -Fq "$signature" "$tmp/router-tor-compare-candidate.javap" || {
+      echo 'combined libbox AAR Tor comparison has the wrong native-candidate API' >&2; return 1
+    }
   done
   for symbol in routerCheckMAXProfile routerCreateMAXProfileRequest routerCompileMAXProfile; do
     grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing owned MAX API $symbol" >&2; return 1; }

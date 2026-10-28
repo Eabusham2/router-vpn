@@ -79,7 +79,9 @@ def main():
     controller=(JAVA/'AndroidMultihopController.java').read_text()
     validator=controller[controller.index('    static String validatedServerIdentityPins('):controller.index('    private static void applyServerIdentityPins(')]
     stubs['com/eabusham/routervpn/AndroidMultihopController.java']='package com.eabusham.routervpn;import org.json.*;import android.util.Base64;final class AndroidMultihopController{'+validator+'}'
-    stubs['com/eabusham/routervpn/NativeSingBoxController.java']='package com.eabusham.routervpn;final class NativeSingBoxController{static boolean nativeWireGuardFamily(String m){return java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(m);}static boolean nativePQFamily(String m){return java.util.Arrays.asList("wg-pq","awg2-pq").contains(m);}}'
+    # Retain the shared native SessionInfo boundary used by the whole service.
+    native=stubs['com/eabusham/routervpn/NativeSingBoxController.java']
+    stubs['com/eabusham/routervpn/NativeSingBoxController.java']=native[:-1]+'static boolean nativeWireGuardFamily(String m){return java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(m);}static boolean nativePQFamily(String m){return java.util.Arrays.asList("wg-pq","awg2-pq").contains(m);}}'
     stubs['com/eabusham/routervpn/AndroidNativeMAXProfile.java']='package com.eabusham.routervpn;final class AndroidNativeMAXProfile{static boolean isMode(String m){return java.util.Arrays.asList("max-tls-wg","max-quic-wg","max-tls-awg","max-quic-awg").contains(m);}}'
     stubs['android/util/Base64.java']='package android.util;public class Base64{public static final int DEFAULT=0,NO_WRAP=2;public static byte[] decode(String s,int flags){return java.util.Base64.getMimeDecoder().decode(s);}public static String encodeToString(byte[] b,int flags){return java.util.Base64.getEncoder().encodeToString(b);}}'
     with tempfile.TemporaryDirectory(prefix='routervpn-multihop-restore-') as directory:

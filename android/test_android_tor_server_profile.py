@@ -51,7 +51,7 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
   AndroidStandardExitController controller=new AndroidStandardExitController(context);
   rejection(()->controller.prepare(file,e,"shadowsocks","server","local"),"a different restored execution");
   rejection(()->controller.prepare(file,e,"shadowsocks","local","server"),"Server receipt on Local selection");
-  rejection(()->controller.prepare(file,e,"shadowsocks","auto","server"),"Compare without two independent measurements");
+  rejection(()->controller.prepare(file,e,"shadowsocks","auto",""),"unresolved Compare without a proved concrete execution");
   rejection(()->controller.prepare(null,e,"shadowsocks","server",""),"Server without private entry");
   check(sessions(app)==0,"rejected execution staged a session");
   for(String fault:new String[]{"direct-padding","compare-padding","enabled-type","rate-type","rate-small","rate-large"}){
@@ -96,6 +96,15 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
    check(sessions(cancelled)==0,"stale Server captured private staging");
   }
  }
+ static void restoreCompare(Path dir,String certificate)throws Exception{
+  for(String execution:new String[]{"local","server"}){
+   Path app=Files.createTempDirectory(dir,"compare-restored-");Context context=new Context(app.toFile());JSONObject source=entry("shadowsocks","off",certificate);File file=save(dir,source);byte[] entryBefore=Files.readAllBytes(file.toPath());AndroidStandardExitStore.Entry selected=tor("obfs4","doh");String exitBefore=AndroidStandardExitStore.snapshot(selected);
+   NativeSingBoxController.SessionInfo prepared=new AndroidStandardExitController(context).prepare(file,selected,"shadowsocks","auto",execution);Path folder=app.resolve("layered-sessions").resolve(prepared.sessionId);String raw=Files.readString(folder.resolve("sing-box.json"));JSONObject capture=AndroidTorProfile.session(raw,Files.readString(folder.resolve(AndroidTorProfile.SESSION_FILE)),prepared.sessionId,prepared.modeId),out=byTag(new JSONObject(raw),AndroidTorProfile.OUTBOUND);
+   check(AndroidTorProfile.execution(capture).equals(execution)&&capture.getJSONObject("tor_profile").getString("multihop_execution").equals(execution),"restored Compare changed proved concrete execution");
+   check(out.getString("type").equals(execution.equals("server")?"routervpn-server-tor":"routervpn-tor"),"restored Compare launched the wrong native owner");
+   check(Arrays.equals(entryBefore,Files.readAllBytes(file.toPath()))&&exitBefore.equals(AndroidStandardExitStore.snapshot(selected)),"restored Compare changed saved source");
+  }
+ }
  static void serverHome(Path dir,String certificate)throws Exception{
   for(String transport:new String[]{"udp","tcp","dot","doh","doh3"}){
    Path app=Files.createTempDirectory(dir,"server-home-");JSONObject source=entry("shadowsocks","off",certificate);
@@ -112,7 +121,7 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
   Path dir=Path.of(args[0]);fixtures=load(Path.of(System.getenv("ROUTERVPN_MAX_MULTIHOP_FIXTURES")));compositeEntry=load(Path.of(System.getenv("ROUTERVPN_COMPOSITE_ENTRY")));compositeExit=load(Path.of(System.getenv("ROUTERVPN_COMPOSITE_EXIT")));
   String certificate=io.nekohasekai.libbox.Libbox.testCertificate("entry.example.test");
   for(String kind:KINDS)for(String mode:ALL)for(int i=0;i<LAYERS.length;i++)server(dir,mode,LAYERS[i],kind,new String[]{"tcp","dot","doh"}[i],certificate);
-  check(graphs==342,"Tor Server entry/Start Layer/bridge matrix incomplete");serverNegative(dir,certificate);serverHome(dir,certificate);
+  check(graphs==342,"Tor Server entry/Start Layer/bridge matrix incomplete");serverNegative(dir,certificate);restoreCompare(dir,certificate);serverHome(dir,certificate);
   System.out.println("Android Tor Server: PASS ("+graphs+" shipping Java/Go graphs; "+checks+" checks; native traffic separate)");
  }
 }

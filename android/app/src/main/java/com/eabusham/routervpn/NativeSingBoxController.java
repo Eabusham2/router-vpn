@@ -497,21 +497,26 @@ final class NativeSingBoxController {
     }
 
     void start(SessionInfo session) {
-        start(session, "");
+        start(session, "", false);
+    }
+
+    void startTorComparison(SessionInfo session) {
+        start(session, "", true);
     }
 
     void startExternal(SessionInfo session, String homeSession) {
         if (homeSession == null || homeSession.isEmpty()) throw new IllegalArgumentException("External launch has no captured Home owner.");
-        start(session, homeSession);
+        start(session, homeSession, false);
     }
 
-    private void start(SessionInfo session, String homeSession) {
+    private void start(SessionInfo session, String homeSession, boolean torComparison) {
         try { if (session.maxPreparation != null) session.maxPreparation.beforeSubmit(session.sessionId, session.modeId); }
         catch (Exception stale) {
             if (session.maxPreparation != null) session.maxPreparation.close();
             throw new IllegalStateException("Complete MAX preparation is stale or cancelled; no VPN was started.");
         }
         Intent intent = new Intent(context, LayeredVpnService.class).setAction(LayeredVpnService.ACTION_START).putExtra(LayeredVpnService.EXTRA_SESSION_ID, session.sessionId).putExtra(LayeredVpnService.EXTRA_MODE_ID, session.modeId);
+        if (torComparison) intent.putExtra(LayeredVpnService.EXTRA_TOR_COMPARISON, session.sessionId);
         if (!homeSession.isEmpty()) intent.putExtra(LayeredVpnService.EXTRA_HOME_SESSION_ID, homeSession);
         if (session.maxPreparation != null) intent.putExtra(AndroidMAXProfilePreparation.EXTRA_OWNER, session.maxPreparation.identity);
         try {

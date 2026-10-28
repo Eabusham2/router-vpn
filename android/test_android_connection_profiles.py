@@ -292,7 +292,7 @@ public final class ConnectionProfilesHarness {
   }
  }
  static void torExecutionProfiles(Path root)throws Exception{
-  for(String protocol:List.of("tor","tor-bridge"))for(String execution:List.of("local","server")){
+  for(String protocol:List.of("tor","tor-bridge"))for(String execution:List.of("local","server","auto")){
    Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=f.exits.get("external-b");exit.protocol=protocol;if(protocol.equals("tor")){exit.torBridges.clear();exit.torTransport="";}f.exits.save(exit);
    f.store.selectExternalPath(exit,f.first,"hysteria2",execution);var saved=f.store.add("Captured Tor "+execution);String source=AndroidStandardExitStore.snapshot(exit);
    for(String secret:List.of("fixture-api-","fixture-socks-","fixture-private-","api_token","tor_bridge"))check(!text(f.rows).contains(secret),"Tor connection profile duplicated private source material");

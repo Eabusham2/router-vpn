@@ -140,7 +140,7 @@ public final class SpeedLabRestoreTest {
   }
  }
  static void exactExternalWinner(Path root)throws Exception{
-  for(String kind:new String[]{"external-shadowsocks","external-openvpn"})for(String selected:new String[]{"local","server"})for(String topology:new String[]{"router","multihop","external","system-direct"}){
+  for(String kind:new String[]{"external-shadowsocks","external-openvpn","external-tor","external-tor-bridge"})for(String selected:new String[]{"local","server"})for(String topology:new String[]{"router","multihop","external","system-direct"}){
    Fixture f=new Fixture(root,kind,topology);AndroidStandardExitRuntime owner=AndroidRuntimeRegistry.instance.standardExit;owner.execution="auto";owner.selected=selected;
    f.start();f.quiesce();f.measured();f.complete();check(f.result.error==null,"external winner restoration failed");f.originalRestored();
    check(owner.execution.equals("auto")&&owner.selected.equals(selected)&&RuntimeBoundary.restoredExecution.equals(selected)&&owner.restoredResponseMap.equals(f.external.responseMap),"external Compare was rerun instead of restoring its proved winner");
@@ -276,8 +276,8 @@ public final class SpeedLabRestoreTest {
  static android.widget.Spinner spinner(AndroidSpeedLabDialog dialog,String name)throws Exception{java.lang.reflect.Field field=AndroidSpeedLabDialog.class.getDeclaredField(name);field.setAccessible(true);return (android.widget.Spinner)field.get(dialog);}
  static android.widget.Button runButton(AndroidSpeedLabDialog dialog)throws Exception{java.lang.reflect.Field field=AndroidSpeedLabDialog.class.getDeclaredField("run");field.setAccessible(true);return (android.widget.Button)field.get(dialog);}
  static void externalUI(Path root)throws Exception{
-  for(String requested:new String[]{"local","server","auto"}){
-   Fixture f=new Fixture(root,"router","external");f.external.protocol="shadowsocks";AndroidStandardExitStore.saved.put(f.external.id,AndroidStandardExitStore.copy(f.external));
+  for(String protocol:new String[]{"shadowsocks","tor","tor-bridge"})for(String requested:new String[]{"local","server","auto"}){
+   Fixture f=new Fixture(root,"router","external");f.external.protocol=protocol;AndroidStandardExitStore.saved.put(f.external.id,AndroidStandardExitStore.copy(f.external));
    JSONObject profiles=new JSONObject();JSONArray modes=new JSONArray();for(String mode:new String[]{"wg","max-quic-awg","reality-xhttp"}){profiles.put(mode,new JSONObject());modes.put(new JSONObject().put("id",mode).put("name",mode));}Files.writeString(f.first.file.toPath(),new JSONObject().put("profiles",profiles).put("modes",modes).toString());
    AndroidConnectionProfileStore.saved=new AndroidConnectionProfileStore.ExternalSelection(f.first,AndroidStandardExitStore.copy(f.external),"reality-xhttp","auto");
    android.content.Context.speedPreferences.put("selected_kind","external");android.content.Context.speedPreferences.put("selected_id",f.external.id);
@@ -291,7 +291,7 @@ public final class SpeedLabRestoreTest {
    check(runtime.execution.equals(requested)&&runtime.selected.equals(requested.equals("auto")?"server":requested)&&AndroidHomeStateStore.current.activeEntryMode.equals("reality-xhttp"),"Actual Speed Lab Run substituted Local or a different entry mode");
    AndroidSpeedLab.drained(false);waitFor(()->!f.controller.isRunning(),"UI external cleanup never finished");f.originalRestored();check(saved.equals(android.content.Context.speedPreferences),"Temporary external choices rewrote saved path");android.app.AlertDialog.last.dismiss();
   }
-  Fixture invalid=new Fixture(root,"router","external");invalid.request.execution="auto";invalid.start();check(invalid.result.error!=null&&LayeredVpnService.quiesce==null&&RuntimeBoundary.stops==0&&AndroidHomeStateStore.current.sessionId.equals(invalid.originalSession),"Unsupported Tor comparison stopped the original path");
+  Fixture invalid=new Fixture(root,"router","external");invalid.request.execution="auto";invalid.request.externalDirect=true;invalid.start();check(invalid.result.error!=null&&LayeredVpnService.quiesce==null&&RuntimeBoundary.stops==0&&AndroidHomeStateStore.current.sessionId.equals(invalid.originalSession),"Direct Tor comparison without a private entry stopped the original path");
  }
  @SuppressWarnings("unchecked") static List<AndroidStandardExitStore.Entry> ordinaryChoices(AndroidSpeedLabDialog ui)throws Exception{var field=AndroidSpeedLabDialog.class.getDeclaredField("ordinaryEntryValues");field.setAccessible(true);return (List<AndroidStandardExitStore.Entry>)field.get(ui);}
  static void ordinaryUI(Path root)throws Exception{

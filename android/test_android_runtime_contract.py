@@ -305,6 +305,7 @@ for executable_contract in (
     "test_android_tor_server_profile.py",
     "test_android_tor_form.py",
     "test_android_tor_session.py",
+    "test_android_tor_compare.py",
     "test_android_external_policy.py",
     "test_android_external_protection.py",
     "test_android_external_entries.py",

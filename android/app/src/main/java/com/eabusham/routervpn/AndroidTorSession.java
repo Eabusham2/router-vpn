@@ -147,6 +147,20 @@ final class AndroidTorSession {
         return execution;
     }
 
+    /** The shared comparison coordinator receives this exact proved request;
+     * it constructs and retains its partial native measurement handle in Go. */
+    synchronized boolean comparisonCurrent() {
+        return proved && !cancelled && request != null && owner.current(this, server);
+    }
+
+    synchronized RouterTorProofRequest comparisonProof() throws Exception {
+        if (!comparisonCurrent()) throw unavailable();
+        // The shared Go factory verifies this exact native proof again. Do
+        // not perform platform network reads during a Go Current callback;
+        // the retained service and comparison network watchers own those.
+        return request;
+    }
+
     RouterHopMeasurement newHopMeasurement() throws Exception {
         if (!healthy()) throw unavailable();
         final RouterTorProofRequest proof = provedRequest();
