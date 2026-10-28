@@ -34,18 +34,29 @@ def populate(folder, execution='local'):
         if execution == 'server':
             owner = dict(type='routervpn-server-tor', tag='routervpn-tor-exit', session_id='captured-session',
                          profile='{}', entry_config='{}', entry_profile='{}')
+        elif mode.startswith('external-'):
+            protocol = mode.removeprefix('external-')
+            owner.update(tag='routervpn-tor-exit', detour='custom-exit',
+                external_tor_profile=json.dumps(dict(id='tor-exit', multihop_enabled=True,
+                    multihop_entry_id='ordinary-entry', multihop_entry_mode=protocol, multihop_exit_id='tor-exit',
+                    multihop_exit_mode='tor' if kind == 'tor' else 'tor-bridge', multihop_execution='local')),
+                external_predecessor_profile=json.dumps(dict(id='ordinary-entry', node_kind='external',
+                    external=dict(protocol=protocol, expected_public_ip='203.0.113.88'))),
+                external_predecessor_config=json.dumps(dict(route=dict(final='custom-exit'))))
         (entry/'sing-box.json').write_text(json.dumps({'outbounds': [owner]}))
         if mode in ('naive-h2', 'naive-h3', 'hysteria2'):
             (entry/'trust.pem').write_text('exact test-only trust asset')
         if mode in ('reality-vision', 'reality-pq-vision', 'reality-xhttp'):
             (entry/'xray.json').write_text('{}')
-    report = dict(schema=1, graphs=348 if execution == 'local' else 342,
+    report = dict(schema=1, graphs=396 if execution == 'local' else 342,
                   home_dns_combinations=285 if execution == 'local' else 5,
                   profile_policy_combinations=320, public_tor_traffic=False,
                   native_handles='boundary doubles',
                   sources={str(path.relative_to(ROOT)): GATE.sha(path) for path in GATE.host_sources(execution)})
     if execution == 'server':
         report['execution'] = execution
+    else:
+        report.update(router_tor_graphs=348, ordinary_tor_graphs=48)
     (folder/'source-evidence.json').write_text(json.dumps(report))
 
 
@@ -57,7 +68,7 @@ class AppleTorNativeGate(unittest.TestCase):
         for mutation in mutations:
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary); folder = root/'graphs'; folder.mkdir(); populate(folder)
-                self.assertEqual(len(GATE.require_matrix(folder)), 805)
+                self.assertEqual(len(GATE.require_matrix(folder)), 901)
                 entry = folder/'naive-h3-aes-256-gcm-snowflake'
                 graph = entry/'sing-box.json'
                 if mutation == 'missing': graph.unlink()
@@ -106,6 +117,46 @@ class AppleTorNativeGate(unittest.TestCase):
         self.assertIn(b'socks.RegisterOutbound', changed)
         for source in (changed, REGISTRY+REGISTRY, REGISTRY.replace(b'routervpntor.RegisterOutbound', b'other.RegisterOutbound')):
             with self.assertRaises(ValueError): GATE.missing_tor_registry(source)
+
+    def test_ordinary_tor_matrix_retains_all_original_graphs_and_exact_source_roles(self):
+        self.assertIn('with_openvpn', GATE.TAGS.split(','))
+        self.assertEqual(len(GATE.cases()), 396)
+        self.assertEqual(len(GATE.cases('server')), 342)
+        self.assertEqual(sum(name.startswith('external-') for name in GATE.cases()), 48)
+        faults = ('missing-count', 'wrong-router-count', 'missing-ordinary', 'missing-profile', 'wrong-kind',
+                  'wrong-protocol', 'wrong-entry', 'wrong-mode', 'private-api', 'private-token', 'server',
+                  'unknown-source', 'foreign-route', 'borrowed-private')
+        for fault in faults:
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as temporary:
+                folder = Path(temporary); populate(folder)
+                graph = folder/'external-socks5-off-tor/sing-box.json'
+                body = json.loads(graph.read_text()); owner = body['outbounds'][0]
+                entry = json.loads(owner['external_predecessor_profile'])
+                selected = json.loads(owner['external_tor_profile'])
+                if fault in ('missing-count', 'wrong-router-count'):
+                    report = json.loads((folder/'source-evidence.json').read_text())
+                    if fault == 'missing-count': del report['ordinary_tor_graphs']
+                    else: report['router_tor_graphs'] = 342
+                    (folder/'source-evidence.json').write_text(json.dumps(report))
+                elif fault == 'missing-ordinary': graph.unlink()
+                elif fault == 'missing-profile': del owner['external_predecessor_profile']
+                elif fault == 'wrong-kind': entry['node_kind'] = 'router-vpn'
+                elif fault == 'wrong-protocol': entry['external']['protocol'] = 'wireguard'
+                elif fault == 'wrong-entry': selected['multihop_entry_id'] = 'foreign-entry'
+                elif fault == 'wrong-mode': selected['multihop_entry_mode'] = 'wireguard'
+                elif fault == 'private-api': entry['router_api'] = 'http://10.77.0.1:8787'
+                elif fault == 'private-token': entry['api_token'] = 'unowned-private-credential'
+                elif fault == 'server': selected['multihop_execution'] = 'server'
+                elif fault == 'unknown-source': owner['external_predecessor_config'] = 'null'
+                elif fault == 'foreign-route': owner['external_predecessor_config'] = json.dumps(dict(route=dict(final='direct')))
+                else:
+                    private = folder/'wg-off-tor/sing-box.json'
+                    private.write_text(json.dumps(body))
+                if fault != 'missing-profile': owner['external_predecessor_profile'] = json.dumps(entry)
+                owner['external_tor_profile'] = json.dumps(selected)
+                if fault != 'missing-ordinary': graph.write_text(json.dumps(body))
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    GATE.require_matrix(folder)
 
     def test_server_matrix_rejects_local_owner_and_changed_private_inputs(self):
         for fault in ('local', 'extra-owner', 'entry', 'option', 'source', 'execution', 'direct', 'session'):

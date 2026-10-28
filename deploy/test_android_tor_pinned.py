@@ -22,6 +22,9 @@ TEMPLATE=ROOT/'mobile/routervpn_tor_android_graph_test.go.tmpl'
 MODES=('wg','awg2-fast','awg2-strong','wg-pq','awg2-pq','shadowsocks','hysteria2','naive-h2','naive-h3','reality-vision','reality-pq-vision','reality-xhttp','ss-v2ray','split','max','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg')
 KINDS=('tor','obfs4','meek_lite','snowflake','webtunnel','custom')
 LAYERS=('off','aes-256-gcm','aes-256-gcm+xor-whitening')
+ORDINARY_MODES={'wireguard':'wireguard','amneziawg':'amneziawg','socks5':'socks5',
+                'http':'http-connect','https':'https-connect','shadowsocks':'shadowsocks',
+                'hysteria2':'hysteria2','openvpn':'openvpn'}
 
 
 def inputs():
@@ -42,11 +45,39 @@ def matrix(folder):
     expected={f'{kind}-{mode}-{layer}.json' for kind,mode,layer in itertools.product(KINDS,MODES,LAYERS)}
     expected.update(f'{kind}-direct-off.json' for kind in KINDS)
     expected.update(f'server-{kind}-{mode}-{layer}.json' for kind,mode,layer in itertools.product(KINDS,MODES,LAYERS))
+    ordinary={f'ordinary-{kind}-{mode}.json':(kind,protocol)
+              for kind,(mode,protocol) in itertools.product(KINDS,ORDINARY_MODES.items())}
+    expected.update(ordinary)
     actual=set()
     for path in folder.iterdir():
         if path.is_symlink() or not path.is_file() or not 0<path.stat().st_size<=4*1024*1024:raise ValueError('Unsafe Android Tor graph')
         actual.add(path.name)
     if actual!=expected:raise ValueError('Android Tor matrix missing or changed: '+str(sorted(actual^expected)))
+    for name,(kind,protocol) in ordinary.items():
+        graph=json.loads((folder/name).read_bytes())
+        if not isinstance(graph,dict) or not isinstance(graph.get('outbounds'),list):
+            raise ValueError('Android ordinary Tor graph has no native outbounds: '+name)
+        owners=[out for out in graph['outbounds'] if isinstance(out,dict) and out.get('type') in ('routervpn-tor','routervpn-server-tor')]
+        if (len(owners)!=1 or owners[0].get('type')!='routervpn-tor'
+                or owners[0].get('tag')!='routervpn-tor-exit' or owners[0].get('detour')!='custom-exit'
+                or not isinstance(owners[0].get('session_id'),str) or not owners[0]['session_id']):
+            raise ValueError('Android ordinary Tor graph lost its unique Local owner: '+name)
+        owner=owners[0]
+        fields=('external_tor_profile','external_predecessor_profile','external_predecessor_config')
+        if any(not isinstance(owner.get(key),str) or not isinstance(json.loads(owner[key]),dict) for key in fields):
+            raise ValueError('Android ordinary Tor graph lost its typed source inputs: '+name)
+        selected,predecessor,source=(json.loads(owner[key]) for key in fields)
+        external=predecessor.get('external',{})
+        if (predecessor.get('node_kind')!='external' or not isinstance(external,dict)
+                or external.get('protocol')!=protocol or not external.get('expected_public_ip')
+                or any(predecessor.get(key) not in ('',None) for key in ('node_proof_id','router_api','api_token','agent_token'))
+                or selected.get('multihop_execution')!='local' or selected.get('multihop_enabled') is not True
+                or selected.get('multihop_entry_id')!=predecessor.get('id') or not predecessor.get('id')
+                or selected.get('multihop_entry_mode')!=protocol
+                or selected.get('multihop_exit_id')!=selected.get('id') or not selected.get('id')
+                or selected.get('multihop_exit_mode')!=('tor' if kind=='tor' else 'tor-bridge')
+                or not isinstance(source.get('route'),dict) or source['route'].get('final')!='custom-exit'):
+            raise ValueError('Android ordinary Tor graph changed its captured role or acquired private authority: '+name)
 
 
 def verify_prepared(vendor):
@@ -95,14 +126,22 @@ def run(vendor,package,go,clang=None):
                 if path.is_symlink() or not path.is_file() or not path.name.startswith('server-') or (graphs/path.name).exists():
                     raise ValueError('Server graph does not have its own capture identity')
                 path.rename(graphs/path.name)
+            ordinary_graphs=work/'ordinary-graphs';ordinary_graphs.mkdir()
+            ordinary_env=profile_env.copy();ordinary_env.pop('ROUTERVPN_ANDROID_TOR_GRAPHS',None)
+            ordinary_env['ROUTERVPN_ANDROID_ORDINARY_TOR_GRAPHS']=str(ordinary_graphs)
+            subprocess.run([sys.executable,str(ROOT/'android/test_android_tor_form.py')],cwd=ROOT,env=ordinary_env,check=True,timeout=600)
+            for path in ordinary_graphs.iterdir():
+                if path.is_symlink() or not path.is_file() or not path.name.startswith('ordinary-') or (graphs/path.name).exists():
+                    raise ValueError('Ordinary graph does not have its own captured source identity')
+                path.rename(graphs/path.name)
             matrix(graphs)
-            subprocess.run([go,'test','-mod=readonly','-ldflags=-checklinkname=0','-tags','with_quic,with_wireguard,with_gvisor,with_naive_outbound,routervpn_tor_native_test','./experimental/libbox','-run','^TestRouterTorAndroidGeneratedGraphs$','-count=1','-timeout=120s','-v'],cwd=vendor,env=env,check=True,timeout=600)
+            subprocess.run([go,'test','-mod=readonly','-ldflags=-checklinkname=0','-tags','with_quic,with_wireguard,with_gvisor,with_openvpn,with_naive_outbound,routervpn_tor_native_test','./experimental/libbox','-run','^TestRouterTorAndroidGeneratedGraphs$','-count=1','-timeout=120s','-v'],cwd=vendor,env=env,check=True,timeout=600)
         if before!=digest() or native!=hashlib.sha256(library.read_bytes()).hexdigest():raise ValueError('Android or native Tor source changed during validation')
         T.TORPACK.PACKAGE.verify(package,'host-test')
         verify_prepared(vendor)
     finally:
         if target.exists() and target.read_bytes()==data:target.unlink()
-    print('Android Tor: all 690 captured Local/Server graphs and 690 missing-engine controls passed the exact native parser; no VPN started.')
+    print('Android Tor: all 738 captured graphs (348 Router/direct Local, 48 ordinary Local, 342 Server) and 738 missing-engine controls passed the exact native parser; no VPN started.')
 
 
 if __name__=='__main__':

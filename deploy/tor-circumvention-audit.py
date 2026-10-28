@@ -753,8 +753,8 @@ need("android/test_android_runtime_contract.py", '"test_android_tor_profile.py"'
      '"test_android_tor_form.py"', '"test_android_tor_session.py"',
      '"test_android_external_session.py"',
      '"test_android_start_layer_relay_lifecycle.py"')
-need("deploy/test_android_tor_pinned.py", "with_naive_outbound", "TestRouterTorAndroidGeneratedGraphs",
-     "all 690 captured Local/Server graphs and 690 missing-engine controls")
+need("deploy/test_android_tor_pinned.py", "with_naive_outbound", "with_openvpn", "TestRouterTorAndroidGeneratedGraphs",
+     "all 738 captured graphs (348 Router/direct Local, 48 ordinary Local, 342 Server) and 738 missing-engine controls")
 forbid(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitStore.java",
     "Tor obfs4 bridge is unavailable on Android",

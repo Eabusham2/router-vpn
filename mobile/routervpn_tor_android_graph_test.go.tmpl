@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-// Graphs come from the actual Android profile, store and native entry compiler.
+// Graphs come from the actual Android profile, form, store and native entry compiler.
 // CheckConfig constructs/closes native owners; this test never starts a VPN.
 func TestRouterTorAndroidGeneratedGraphs(t *testing.T) {
 	root := os.Getenv("ROUTERVPN_ANDROID_TOR_GRAPHS")
@@ -15,7 +15,7 @@ func TestRouterTorAndroidGeneratedGraphs(t *testing.T) {
 		t.Skip("run deploy/test_android_tor_pinned.py for the exact Android matrix")
 	}
 	entries, err := os.ReadDir(root)
-	if err != nil || len(entries) != 690 {
+	if err != nil || len(entries) != 738 {
 		t.Fatalf("exact Android Tor matrix unavailable: %v (%d files)", err, len(entries))
 	}
 	if err = RouterTorSetStateDirectory(filepath.Join(t.TempDir(), "tor-state")); err != nil {

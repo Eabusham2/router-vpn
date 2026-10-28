@@ -23,8 +23,8 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / 'ios/RouterVPN/App'
 TUN = ROOT / 'ios/RouterVPN/PacketTunnel'
 EXTRA_EVIDENCE_SOURCES = ()
-GRAPH_EVIDENCE = {'schema': 1, 'graphs': 348, 'home_dns_combinations': 285,
-    'ordinary_tor_graphs': 48,
+GRAPH_EVIDENCE = {'schema': 1, 'graphs': 396, 'home_dns_combinations': 285,
+    'router_tor_graphs': 348, 'ordinary_tor_graphs': 48,
     'ordinary_external_graphs': 456, 'external_execution_graphs': 912, 'external_exit_layer_graphs': 144,
     'mapped_openvpn_graphs': 171, 'mapped_openvpn_layer_graphs': 342, 'profile_policy_combinations': 320,
     'public_tor_traffic': False, 'native_handles': 'boundary doubles'}
@@ -729,6 +729,13 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
      }
      if changedProvider["tor_entry_bundle"] != nil {changedProvider["tor_entry_bundle"]=try json(["selectedRouterID":changedEntry["id"]!,"routerProfiles":[changedEntry],"profiles":[:]])}
      reject("ordinary Tor cannot substitute authority or source "+mode+"/"+kind+"/"+fault){_ = try ProviderPreparation().prepare(provider:changedProvider,selectedProfile:changedExit,strict:true)}
+    }
+    if let output=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_TOR_GRAPHS"] {
+     let capturedMode="external-"+mode
+     let directory=URL(fileURLWithPath:output).appendingPathComponent([capturedMode,"off",kind].joined(separator:"-"))
+     try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:false)
+     for (name,data) in runtime.files {try data.write(to:directory.appendingPathComponent(name))}
+     try json(["mode":capturedMode,"layer":"off","transport":kind,"session":runtime.torSessionID!]).write(to:directory.appendingPathComponent("fixture.json"))
     }
     ordinaryTorGraphs+=1
    }

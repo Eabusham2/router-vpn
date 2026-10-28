@@ -33,7 +33,7 @@ func TestRouterTorAppleGeneratedGraphs(t *testing.T) {
 		root, execution, owner string
 		count                  int
 	}{
-		{root, "local", "routervpn-tor", 348},
+		{root, "local", "routervpn-tor", 396},
 		{serverRoot, "server", "routervpn-server-tor", 342},
 	} {
 		entries, err := os.ReadDir(matrix.root)
@@ -94,7 +94,7 @@ func TestRouterTorAppleGeneratedGraphs(t *testing.T) {
 			})
 		}
 	}
-	if count != 690 {
-		t.Fatalf("expected 690 Apple Local and Server graphs, checked %d", count)
+	if count != 738 {
+		t.Fatalf("expected 738 Apple Local and Server graphs, checked %d", count)
 	}
 }

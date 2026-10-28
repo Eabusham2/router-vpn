@@ -26,13 +26,15 @@ TEMPLATE = ROOT/'mobile/routervpn_tor_ios_graph_test.go.tmpl'
 FIXTURE = ROOT/'deploy/test_ios_tor_profile.py'
 SERVER_FIXTURE = ROOT/'deploy/test_ios_tor_server_profile.py'
 TEST = 'TestRouterTorAppleGeneratedGraphs'
-TAGS = 'with_quic,with_wireguard,with_gvisor,with_naive_outbound,routervpn_tor_native_test'
+TAGS = 'with_quic,with_wireguard,with_gvisor,with_openvpn,with_naive_outbound,routervpn_tor_native_test'
 MODES = ('wg', 'awg2-fast', 'awg2-strong', 'wg-pq', 'awg2-pq', 'shadowsocks',
          'hysteria2', 'naive-h2', 'naive-h3', 'reality-vision', 'reality-pq-vision',
          'reality-xhttp', 'ss-v2ray', 'split', 'max', 'max-tls-wg', 'max-tls-awg',
          'max-quic-wg', 'max-quic-awg')
 KINDS = ('tor', 'obfs4', 'meek_lite', 'snowflake', 'webtunnel', 'custom')
 LAYERS = ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening')
+ORDINARY_MODES = ('wireguard', 'amneziawg', 'socks5', 'http-connect', 'https-connect',
+                  'shadowsocks', 'hysteria2', 'openvpn')
 
 
 def module(name: str, relative: str):
@@ -89,6 +91,7 @@ def cases(execution: str = 'local') -> dict[str, tuple[str, str, str]]:
     values = [(mode, layer, kind) for mode, layer, kind in itertools.product(MODES, LAYERS, KINDS)]
     if execution == 'local':
         values += [('direct', 'off', kind) for kind in KINDS]
+        values += [('external-'+mode, 'off', kind) for mode, kind in itertools.product(ORDINARY_MODES, KINDS)]
     return {'-'.join(value): value for value in values}
 
 
@@ -107,7 +110,7 @@ def require_matrix(folder: Path, execution: str = 'local') -> dict[str, str]:
     if folder.is_symlink() or not folder.is_dir():
         raise ValueError('Apple Tor matrix requires an owned directory')
     expected = cases(execution)
-    count = 342 if execution == 'server' else 348
+    count = 342 if execution == 'server' else 396
     if len(expected) != count or {path.name for path in folder.iterdir()} != set(expected) | {'source-evidence.json'}:
         raise ValueError(f'Apple Tor {execution} matrix must contain exactly {count} named graphs and source evidence')
     report = json.loads(regular(folder/'source-evidence.json'))
@@ -115,6 +118,7 @@ def require_matrix(folder: Path, execution: str = 'local') -> dict[str, str]:
     if (report.get('schema') != 1 or report.get('graphs') != count
             or report.get('home_dns_combinations') != (5 if execution == 'server' else 285)
             or (report.get('execution') != 'server' if execution == 'server' else report.get('profile_policy_combinations') != 320)
+            or (execution == 'local' and (report.get('router_tor_graphs') != 348 or report.get('ordinary_tor_graphs') != 48))
             or report.get('public_tor_traffic') is not False
             or report.get('native_handles') != 'boundary doubles' or report.get('sources') != hashes):
         raise ValueError('Apple Tor export is stale or has different source ownership')
@@ -148,6 +152,27 @@ def require_matrix(folder: Path, execution: str = 'local') -> dict[str, str]:
                     or any(not isinstance(owner.get(key), str) or not isinstance(json.loads(owner[key]), dict)
                            for key in ('profile', 'entry_config', 'entry_profile'))):
                 raise ValueError('Apple Server graph lost its exact private source inputs: '+name)
+        elif mode.startswith('external-'):
+            owner = owners[0]
+            fields = ('external_tor_profile', 'external_predecessor_profile', 'external_predecessor_config')
+            if (owner.get('tag') != 'routervpn-tor-exit' or owner.get('detour') != 'custom-exit'
+                    or any(not isinstance(owner.get(key), str) or not isinstance(json.loads(owner[key]), dict) for key in fields)):
+                raise ValueError('Apple ordinary Tor graph lost its exact typed source inputs: '+name)
+            selected, predecessor, source = (json.loads(owner[key]) for key in fields)
+            external = predecessor.get('external', {})
+            protocol = mode.removeprefix('external-')
+            if (predecessor.get('node_kind') != 'external' or not isinstance(external, dict)
+                    or external.get('protocol') != protocol or not external.get('expected_public_ip')
+                    or any(predecessor.get(key) not in ('', None) for key in ('node_proof_id', 'router_api', 'api_token'))
+                    or selected.get('multihop_execution') != 'local' or selected.get('multihop_enabled') is not True
+                    or selected.get('multihop_entry_id') != predecessor.get('id') or not predecessor.get('id')
+                    or selected.get('multihop_entry_mode') != protocol
+                    or selected.get('multihop_exit_id') != selected.get('id') or not selected.get('id')
+                    or selected.get('multihop_exit_mode') != ('tor' if kind == 'tor' else 'tor-bridge')
+                    or not isinstance(source.get('route'), dict) or source['route'].get('final') != 'custom-exit'):
+                raise ValueError('Apple ordinary Tor graph changed its captured role or acquired private authority: '+name)
+        elif any(key in owners[0] for key in ('external_tor_profile', 'external_predecessor_profile', 'external_predecessor_config')):
+            raise ValueError('Apple private or direct Tor graph acquired an ordinary predecessor: '+name)
         for asset, content in data.items():
             result[name+'/'+asset] = hashlib.sha256(content).hexdigest()
     return result
@@ -209,7 +234,7 @@ def run_native(command: list[str], vendor: Path, env: dict[str, str], log: Path)
         if event.get('Action') == 'pass' and event.get('Test', '').startswith(TEST+'/'):
             passed.add(event['Test'][len(TEST)+1:])
     if passed != native_cases():
-        raise ValueError('Native parser did not execute every one of the 690 Apple Local and Server configurations')
+        raise ValueError('Native parser did not execute every one of the 738 Apple Local and Server configurations')
 
 
 def run(vendor: Path, package: Path, go: str, graphs: Path | None = None,
@@ -263,10 +288,10 @@ def run(vendor: Path, package: Path, go: str, graphs: Path | None = None,
             stream.write(data)
         try:
             run_native(command, vendor, env, logs/'native-positive.jsonl')
-            print('PASS Apple Tor: 690 shipping Local and Server configurations accepted by real native engines', flush=True)
+            print('PASS Apple Tor: 738 shipping Local and Server configurations accepted by real native engines', flush=True)
             negative = dict(env, ROUTERVPN_IOS_TOR_MISSING_ENGINE='1')
             run_native(command[:2]+['-overlay', str(overlay)]+command[2:], vendor, negative, logs/'native-missing-engine.jsonl')
-            print('PASS Apple Tor: all 690 unchanged configurations reject missing Tor registration', flush=True)
+            print('PASS Apple Tor: all 738 unchanged configurations reject missing Tor registration', flush=True)
             if (source_hashes() != before or sha(library) != native or require_matrix(graphs) != graph_hashes
                     or require_matrix(server_graphs, 'server') != server_hashes
                     or registry.read_bytes() != registry_source
@@ -280,7 +305,8 @@ def run(vendor: Path, package: Path, go: str, graphs: Path | None = None,
                           graph_sha256=graph_hashes, server_graph_sha256=server_hashes,
                           registry_sha256=hashlib.sha256(registry_source).hexdigest(),
                           missing_registry_sha256=hashlib.sha256(absent).hexdigest(),
-                          verified=dict(apple_graphs=690, local_graphs=348, server_graphs=342, missing_engine_controls=690,
+                          verified=dict(apple_graphs=738, local_graphs=396, router_local_graphs=348, ordinary_local_graphs=48,
+                                        server_graphs=342, missing_engine_controls=738,
                                         exact_c_tor_abi=True, native_config_constructor=True,
                                         vpn_started=False, public_tor_traffic=False, apple_sdk_build=False))
             (logs/'apple-tor-native-evidence.json').write_text(json.dumps(report, indent=2, sort_keys=True)+'\n')

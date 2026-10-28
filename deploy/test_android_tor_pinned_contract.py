@@ -105,12 +105,21 @@ assert args[1:]==['--native-package',os.environ['TOR_PACKAGE'],'--android-aar',o
             (root/f'{kind}-{mode}-{layer}.json').write_text('{}')
             (root/f'server-{kind}-{mode}-{layer}.json').write_text('{}')
         for kind in GATE.KINDS:(root/f'{kind}-direct-off.json').write_text('{}')
+        for kind,(mode,protocol) in itertools.product(GATE.KINDS,GATE.ORDINARY_MODES.items()):
+            owner=dict(type='routervpn-tor',tag='routervpn-tor-exit',detour='custom-exit',session_id='captured-session',
+                external_tor_profile=json.dumps(dict(id='tor-exit',multihop_enabled=True,
+                    multihop_entry_id='ordinary-entry',multihop_entry_mode=protocol,multihop_exit_id='tor-exit',
+                    multihop_exit_mode='tor' if kind=='tor' else 'tor-bridge',multihop_execution='local')),
+                external_predecessor_profile=json.dumps(dict(id='ordinary-entry',node_kind='external',
+                    external=dict(protocol=protocol,expected_public_ip='203.0.113.88'))),
+                external_predecessor_config=json.dumps(dict(route=dict(final='custom-exit'))))
+            (root/f'ordinary-{kind}-{mode}.json').write_text(json.dumps(dict(outbounds=[owner])))
 
     def test_matrix_requires_every_named_branch_and_no_extra_entry(self):
         for mutation in ('missing','empty','large','directory','link','extra','different-name'):
             with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as temporary:
                 root=Path(temporary);self.populate(root);GATE.matrix(root)
-                self.assertEqual(len(list(root.iterdir())),690)
+                self.assertEqual(len(list(root.iterdir())),738)
                 path=root/'snowflake-max-quic-awg-aes-256-gcm.json'
                 if mutation=='missing':path.unlink()
                 elif mutation=='empty':path.write_text('')
@@ -120,6 +129,38 @@ assert args[1:]==['--native-package',os.environ['TOR_PACKAGE'],'--android-aar',o
                 elif mutation=='link':path.unlink();path.symlink_to(root/'tor-direct-off.json')
                 elif mutation=='extra':(root/'349.json').write_text('{}')
                 else:path.rename(root/'snowflake-unknown-aes-256-gcm.json')
+                with self.assertRaises(ValueError):GATE.matrix(root)
+
+    def test_ordinary_matrix_preserves_all_transports_and_captured_authority(self):
+        faults=('missing','old-graph','missing-profile','wrong-kind','wrong-protocol','wrong-entry','wrong-mode',
+                'private-api','private-token','private-agent','server','unknown-source','foreign-route','empty-session','second-owner')
+        for fault in faults:
+            with self.subTest(fault=fault),tempfile.TemporaryDirectory() as temporary:
+                root=Path(temporary);self.populate(root);GATE.matrix(root)
+                names={path.name for path in root.iterdir()}
+                self.assertEqual(sum(name.startswith('ordinary-') for name in names),48)
+                self.assertEqual(sum(name.startswith('server-') for name in names),342)
+                self.assertEqual(sum(not name.startswith(('ordinary-','server-')) for name in names),348)
+                graph=root/'ordinary-tor-socks5.json';body=json.loads(graph.read_text());owner=body['outbounds'][0]
+                entry=json.loads(owner['external_predecessor_profile']);selected=json.loads(owner['external_tor_profile'])
+                if fault=='missing':graph.unlink()
+                elif fault=='old-graph':body={}
+                elif fault=='missing-profile':del owner['external_predecessor_profile']
+                elif fault=='wrong-kind':entry['node_kind']='router-vpn'
+                elif fault=='wrong-protocol':entry['external']['protocol']='wireguard'
+                elif fault=='wrong-entry':selected['multihop_entry_id']='foreign-entry'
+                elif fault=='wrong-mode':selected['multihop_entry_mode']='wireguard'
+                elif fault=='private-api':entry['router_api']='http://10.77.0.1:8787'
+                elif fault=='private-token':entry['api_token']='unowned-private-credential'
+                elif fault=='private-agent':entry['agent_token']='unowned-private-credential'
+                elif fault=='server':selected['multihop_execution']='server'
+                elif fault=='unknown-source':owner['external_predecessor_config']='null'
+                elif fault=='foreign-route':owner['external_predecessor_config']=json.dumps(dict(route=dict(final='direct')))
+                elif fault=='empty-session':owner['session_id']=''
+                else:body['outbounds'].append(owner.copy())
+                if fault!='missing-profile':owner['external_predecessor_profile']=json.dumps(entry)
+                owner['external_tor_profile']=json.dumps(selected)
+                if fault!='missing':graph.write_text(json.dumps(body))
                 with self.assertRaises(ValueError):GATE.matrix(root)
 
     def test_linked_matrix_root_is_rejected(self):
@@ -172,6 +213,7 @@ assert args[1:]==['--native-package',os.environ['TOR_PACKAGE'],'--android-aar',o
         self.assertLess(shell.index('ANDROID_TOR_GRAPH_SHA='),shell.index('if [[ -s "$AAR"'))
         self.assertIn('"$OPENVPN_SHA" "$ANDROID_TOR_GRAPH_SHA"',shell)
         for symbol in ('routerCompileTorProfile','routerValidateTorProfile','routerCompileTorProfileWithPredecessor',
+                       'routerCompileTorProfileWithExternalPredecessor',
                        'routerTorSetStateDirectory','routerTorCreateProof',
                        'routerTorCreateProofWithPredecessor','routerStrategyDNSProof','routerStrategyCloseService',
                        'RouterTorProofRequest','java.lang.String run() throws java.lang.Exception;',
@@ -196,11 +238,12 @@ assert args[1:]==['--native-package',os.environ['TOR_PACKAGE'],'--android-aar',o
         for script in ('test_android_tor_profile.py','test_android_tor_session.py','deploy/test_android_tor_pinned_contract.py','deploy/test_native_tor_graph_host.py'):
             self.assertIn('"'+script+'"',runtime)
         source=(ROOT/'deploy/test_android_tor_pinned.py').read_text()
+        self.assertIn('with_gvisor,with_openvpn,with_naive_outbound',source)
         self.assertIn('with_naive_outbound,routervpn_tor_native_test',source)
         self.assertIn('env=HOST.environment(go,library,clang)',source)
         self.assertIn("'^TestRouterTorAndroidGeneratedGraphs$'",source)
         native=GATE.TEMPLATE.read_text()
-        for marker in ('len(entries) != 690','CheckConfig(string(data))','CheckConfig(string(bad))',
+        for marker in ('len(entries) != 738','CheckConfig(string(data))','CheckConfig(string(bad))',
                        'routervpn-missing-tor-engine','RouterTorSetStateDirectory'):
             self.assertIn(marker,native)
 
