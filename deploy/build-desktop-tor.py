@@ -95,6 +95,14 @@ def environment(work, target, compiler=None):
                    RC=str(bin_directory / 'x86_64-w64-mingw32-windres'),
                    NM=str(bin_directory / 'x86_64-w64-mingw32-nm'),
                    WINDRES=str(bin_directory / 'x86_64-w64-mingw32-windres'))
+        # pkg-config reads target metadata; it is a build-host tool, unlike
+        # clang/ar. Select it explicitly so Autoconf does not flag its normal
+        # unprefixed fallback as a foreign compiler. compile_sources confines
+        # its search to the freshly built target dependencies below.
+        pkg_config = shutil.which('pkg-config')
+        if not pkg_config:
+            raise ValueError('Windows Tor compilation requires a host pkg-config metadata reader')
+        env['PKG_CONFIG'] = pkg_config
         env['PATH'] = str(bin_directory) + os.pathsep + env.get('PATH', '')
         env['LDFLAGS'] = '-static -Wl,--dynamicbase -Wl,--nxcompat -Wl,--high-entropy-va -Wl,--gc-sections'
     return env
@@ -113,11 +121,16 @@ def compile_sources(work, sources, target, jobs, compiler):
     windows = target.startswith('windows/')
     openssl = 'mingw64' if windows else 'darwin64-x86_64-cc' if target.endswith('amd64') else 'darwin64-arm64-cc'
     host = ['--host=x86_64-w64-mingw32'] if windows else []
-    run(['perl', 'Configure', openssl, 'no-shared', 'no-module', 'no-dso', 'no-tests', 'no-apps',
+    # OpenSSL treats a final executable's -static flag as a request to disable
+    # threads. Build its static archives with no-shared and explicit threads;
+    # retain the original -static environment for Tor's final link below.
+    openssl_env = dict(env)
+    openssl_env['LDFLAGS'] = shlex.join(flag for flag in shlex.split(env['LDFLAGS']) if flag != '-static')
+    run(['perl', 'Configure', openssl, 'threads', 'no-shared', 'no-module', 'no-dso', 'no-tests', 'no-apps',
          '--prefix=' + str(prefix), '--libdir=lib', '--openssldir=/routervpn/no-system-openssl-config'],
-        sources['openssl'], env, work / 'openssl-configure.log')
-    run(['make', '-j' + str(jobs), 'build_libs'], sources['openssl'], env, work / 'openssl-build.log')
-    run(['make', 'install_dev'], sources['openssl'], env, work / 'openssl-install.log')
+        sources['openssl'], openssl_env, work / 'openssl-configure.log')
+    run(['make', '-j' + str(jobs), 'build_libs'], sources['openssl'], openssl_env, work / 'openssl-build.log')
+    run(['make', 'install_dev'], sources['openssl'], openssl_env, work / 'openssl-install.log')
     run(['./autogen.sh'], sources['libevent'], env, work / 'libevent-autogen.log')
     run(['./configure', *host, '--prefix=' + str(prefix), '--libdir=' + str(prefix / 'lib'),
          '--disable-shared', '--enable-static', '--disable-openssl', '--disable-libevent-regress', '--disable-samples'],

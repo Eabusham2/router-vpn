@@ -38,7 +38,8 @@ BUILD_INPUTS = frozenset(('deploy/build-desktop-tor.py', 'deploy/desktop_tor_pac
     'mobile/tor/routervpn_padding.c', 'mobile/tor/routervpn_padding.h', 'mobile/tor/test_routervpn_padding.c'))
 SYSTEM_DLLS = frozenset(('advapi32.dll', 'bcrypt.dll', 'crypt32.dll', 'gdi32.dll',
     'iphlpapi.dll', 'kernel32.dll', 'msvcrt.dll', 'ntdll.dll', 'secur32.dll', 'shell32.dll',
-    'user32.dll', 'userenv.dll', 'ws2_32.dll'))
+    # The pinned Tor Windows path/glob code imports PathMatchSpecA from the OS.
+    'shlwapi.dll', 'user32.dll', 'userenv.dll', 'ws2_32.dll'))
 APPLE_LIBRARIES = frozenset(('/usr/lib/libSystem.B.dylib', '/usr/lib/libresolv.9.dylib'))
 CAPABILITY = ('250 version=1 direction=outgoing min_rate_kbps=32 max_rate_kbps=192 '
     'default_rate_kbps=192 max_ttl_ms=10000 max_pending_cells=1 accounting=tor-link-cell '

@@ -40,6 +40,20 @@ def reject(operation, label):
 
 
 def metadata_tests():
+    # Exercise the import table independently of package checksums. Tor's
+    # Windows path matcher needs the OS Shlwapi library, while its crypto and
+    # event libraries must remain static and unknown side-loaded DLLs forbidden.
+    for library in ('SHLWAPI.dll', 'libssl-3.dll', 'libcrypto-3.dll',
+                    'libevent.dll', 'libwinpthread-1.dll', 'shlwapi-extra.dll'):
+        raw = bytearray(FIXTURE.image('windows/amd64'))
+        start = raw.index(b'KERNEL32.dll\0')
+        encoded = library.encode('ascii') + b'\0'
+        raw[start:start + len(encoded)] = encoded
+        if library == 'SHLWAPI.dll':
+            check(V.executable_identity(raw, 'windows/amd64')['libraries'] == ['shlwapi.dll'],
+                  'pinned Tor Windows OS path matcher rejected')
+        else:
+            reject(lambda: V.executable_identity(raw, 'windows/amd64'), 'dynamic dependency ' + library)
     with tempfile.TemporaryDirectory(prefix='desktop-tor-boundaries-') as temporary:
         root = Path(temporary).resolve()
         for target in V.TARGETS:
