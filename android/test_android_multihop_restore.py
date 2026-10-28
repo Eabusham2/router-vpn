@@ -21,20 +21,53 @@ public final class MultihopRestoreTest {
  static AndroidHomeStateStore.Snapshot home(){AndroidHomeStateStore.Snapshot s=new AndroidHomeStateStore.Snapshot();s.connected=true;s.pathGeneration=17;s.phase="connected";s.pathProof="passed";s.sessionId="captured-home";s.logicalMode="multihop";s.runtimeMode="max-quic-awg";s.activeEntryMode="reality-xhttp";s.activeEntryId="entry";s.activeExitId="exit";return s;}
  static String pins()throws Exception{return new JSONObject().put("expected_packet_public_key",java.util.Base64.getEncoder().encodeToString(new byte[]{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32})).put("expected_pq_client_identity","ab".repeat(32)).toString();}
  static JSONObject progress(String selected)throws Exception{return new JSONObject().put("stage","selected").put("complete",true).put("execution",selected).put("measurements",new JSONArray());}
- static final class Fixture {
-  final LayeredVpnService service=new LayeredVpnService();final RouterMultihop plan=new RouterMultihop();final android.net.ConnectivityManager connectivity=new android.net.ConnectivityManager();final JSONObject metadata;
+ static final class Fixture implements AutoCloseable {
+  final LayeredVpnService service=new LayeredVpnService();final RouterMultihop plan=new RouterMultihop();final AndroidMTUSession mtu=new AndroidMTUSession(service,owner->{});final android.net.ConnectivityManager connectivity=new android.net.ConnectivityManager();final JSONObject metadata;
   Fixture(String requested,String selected,boolean nativeOwner)throws Exception{
    AndroidHomeStateStore.value=home();AndroidHomeStateStore.emergency=false;set(service,"multihopHomeOwner",home());set(service,"currentService",new java.lang.ref.WeakReference<>(service));
-   set(service,"state","UP");set(service,"activeConfig","captured-config");set(service,"activeSession",new File("captured-native-session"));set(service,"commandServer",new CommandServer(service,service));set(service,"executionProved",true);set(service,"hopMeasurement",new RouterHopMeasurement());set(service,"connectivity",connectivity);
+   set(service,"state","UP");set(service,"mtuSession",mtu);set(service,"mtuMetadata","captured-mtu-policy");set(service,"activeConfig","captured-config");set(service,"activeSession",new File("captured-native-session"));set(service,"commandServer",new CommandServer(service,service));set(service,"executionProved",true);set(service,"hopMeasurement",new RouterHopMeasurement());set(service,"connectivity",connectivity);
    Method network=LayeredVpnService.class.getDeclaredMethod("executionNetworkIdentity");network.setAccessible(true);set(service,"executionNetwork",network.invoke(service));
    metadata=new JSONObject().put("execution",requested).put("entry_mode","reality-xhttp").put("exit_mode","max-quic-awg");metadata();plan.progress=progress(selected).toString();plan.pins=selected.equals("server")?pins():"{}";set(service,"executionController",nativeOwner?plan:null);
   }
   void metadata()throws Exception{set(service,"multihopMetadata",metadata.toString());}
   LayeredVpnService.CapturedMultihop receipt()throws Exception{return LayeredVpnService.capturedMultihop("captured-home");}
   String capture()throws Exception{return receipt().execution;}
+  java.util.concurrent.ExecutorService executor()throws Exception{return (java.util.concurrent.ExecutorService)get(service,"executor");}
+  void drain()throws Exception{executor().submit(()->{}).get(3,java.util.concurrent.TimeUnit.SECONDS);}
+  public void close()throws Exception{var e=executor();e.shutdownNow();if(!e.awaitTermination(3,java.util.concurrent.TimeUnit.SECONDS))throw new AssertionError("owned service executor did not drain");}
  }
  interface Mutation{void change(Fixture fixture)throws Exception;}
  static void reject(String name,Mutation mutation)throws Exception{Fixture f=new Fixture("auto","server",true);mutation.change(f);boolean rejected=false;try{f.capture();}catch(Exception expected){rejected=true;}check(rejected,"stale or invalid native winner accepted: "+name);}
+ static void mtuOwnership()throws Exception{
+  for(String selected:List.of("local","server"))try(Fixture f=new Fixture("auto",selected,true)){
+   var owner=f.receipt();LayeredVpnService.startMultihopAutomaticMTU(owner);f.drain();
+   check(f.mtu.activations==1&&f.mtu.core==get(f.service,"commandServer")&&f.mtu.config.equals("captured-config")&&f.mtu.metadata.equals("captured-mtu-policy"),"multihop MTU did not retain exact proved native objects");
+  }
+  Map<String,Mutation> changes=new LinkedHashMap<>();
+  changes.put("retired-plan",f->f.plan.alive=false);changes.put("Home-generation",f->AndroidHomeStateStore.value=homeWithNewGeneration());changes.put("Home-replacement",f->AndroidHomeStateStore.value.sessionId="new-owner");
+  changes.put("changed-core",f->set(f.service,"commandServer",new CommandServer(f.service,f.service)));changes.put("native-session",f->set(f.service,"activeSession",new File("replacement-native-session")));
+  changes.put("changed-config",f->set(f.service,"activeConfig","replacement-config"));changes.put("changed-mtu",f->set(f.service,"mtuSession",new AndroidMTUSession(f.service,owner->{})));changes.put("changed-mtu-policy",f->set(f.service,"mtuMetadata","replacement-mtu-policy"));
+  changes.put("stopped",f->set(f.service,"explicitStop",true));changes.put("native-generation",f->((AtomicLong)get(f.service,"lifecycle")).incrementAndGet());changes.put("lost-service",f->set(f.service,"currentService",new java.lang.ref.WeakReference<LayeredVpnService>(null)));
+  for(var change:changes.entrySet())for(boolean queued:new boolean[]{false,true})try(Fixture f=new Fixture("auto","server",true)){
+   var owner=f.receipt();var entered=new java.util.concurrent.CountDownLatch(1);var release=new java.util.concurrent.CountDownLatch(1);
+   if(queued){f.executor().execute(()->{entered.countDown();try{release.await();}catch(InterruptedException expected){Thread.currentThread().interrupt();}});check(entered.await(3,java.util.concurrent.TimeUnit.SECONDS),"MTU queue did not retain its old owner");LayeredVpnService.startMultihopAutomaticMTU(owner);}
+   try{
+    change.getValue().change(f);if(!queued){boolean rejected=false;try{LayeredVpnService.startMultihopAutomaticMTU(owner);}catch(Exception expected){rejected=true;}check(rejected,"stale multihop MTU admission accepted: "+change.getKey());}
+   }finally{release.countDown();f.drain();}
+   check(f.mtu.activations==0,"queued multihop MTU ignored retirement: "+change.getKey());AndroidMTUSession replacement=(AndroidMTUSession)get(f.service,"mtuSession");check(replacement.activations==0,"old multihop receipt activated replacement TUN");
+  }
+  for(boolean queued:new boolean[]{false,true})try(Fixture old=new Fixture("auto","server",true)){
+   var owner=old.receipt();var entered=new java.util.concurrent.CountDownLatch(1);var release=new java.util.concurrent.CountDownLatch(1);
+   if(queued){old.executor().execute(()->{entered.countDown();try{release.await();}catch(InterruptedException expected){Thread.currentThread().interrupt();}});check(entered.await(3,java.util.concurrent.TimeUnit.SECONDS),"old service queue did not block");LayeredVpnService.startMultihopAutomaticMTU(owner);}
+   try(Fixture replacement=new Fixture("auto","server",true)){
+    try{if(!queued){boolean rejected=false;try{LayeredVpnService.startMultihopAutomaticMTU(owner);}catch(Exception expected){rejected=true;}check(rejected,"old multihop receipt selected a replacement global service");}}finally{release.countDown();old.drain();replacement.drain();}
+    check(old.mtu.activations==0&&replacement.mtu.activations==0,"old multihop receipt started a replacement service or TUN");
+   }
+  }
+  try(Fixture f=new Fixture("auto","server",true)){
+   set(f.service,"mtuSession",null);LayeredVpnService.startMultihopAutomaticMTU(f.receipt());f.drain();check(f.mtu.activations==0,"absent optional MTU owner acquired another TUN");
+  }
+ }
  public static void main(String[] args)throws Exception{
   for(String policy:new String[]{"local","server","auto"})for(String selected:new String[]{"local","server"}){
    if(!policy.equals("auto")&&!policy.equals(selected))continue;Fixture f=new Fixture(policy,selected,true);check(f.capture().equals(selected),"valid selected route changed");check(f.metadata.getString("execution").equals(policy),"capture changed saved requested choice");check(f.plan.runs==0,"capture reran comparison or fabricated a fresh proof");check(f.receipt().serverIdentityPins.equals(f.plan.pins),"captured pins lost their exact winner");check(f.receipt().matchesHome(AndroidHomeStateStore.value),"receipt lost home identity");check(f.receipt().sameOwner(f.receipt()),"same owned capture changed");
@@ -59,7 +92,9 @@ public final class MultihopRestoreTest {
   mutations.put("session-during-pins",f->f.plan.onPins=()->{try{set(f.service,"activeSession",new File("replacement"));}catch(Exception e){throw new AssertionError(e);}});
   mutations.put("home-mode-during-pins",f->f.plan.onPins=()->{AndroidHomeStateStore.Snapshot changed=home();changed.runtimeMode="wg-pq";AndroidHomeStateStore.value=changed;});
   mutations.put("native-health-during-pins",f->f.plan.onPins=()->f.plan.alive=false);
-  for(var mutation:mutations.entrySet())reject(mutation.getKey(),mutation.getValue());
+  mutations.put("mtu-during-pins",f->f.plan.onPins=()->{try{set(f.service,"mtuSession",new AndroidMTUSession(f.service,owner->{}));}catch(Exception e){throw new AssertionError(e);}});
+  mutations.put("mtu-policy-during-pins",f->f.plan.onPins=()->{try{set(f.service,"mtuMetadata","replacement-mtu-policy");}catch(Exception e){throw new AssertionError(e);}});
+  for(var mutation:mutations.entrySet())reject(mutation.getKey(),mutation.getValue());mtuOwnership();
   System.out.println("Android native multihop winner capture: "+checks+" whole-service checks; retained Box/lease/Home/network ownership and no score reuse");
  }
  static AndroidHomeStateStore.Snapshot homeWithNewGeneration(){AndroidHomeStateStore.Snapshot s=home();s.pathGeneration++;return s;}
@@ -70,6 +105,9 @@ def main():
     jar=Path(os.environ.get('ANDROID_JSON_JAR','/usr/share/java/com.android.json.jar'))
     if not jar.is_file():raise RuntimeError('Actual Android JSON library required')
     stubs=dict(T.STUBS);stubs.pop('org/json/JSONObject.java')
+    mtu=stubs['com/eabusham/routervpn/AndroidMTUSession.java']
+    old='public void activate(io.nekohasekai.libbox.CommandServer c,String config,String metadata){}';assert mtu.count(old)==1
+    stubs['com/eabusham/routervpn/AndroidMTUSession.java']=mtu.replace(old,'public int activations;public io.nekohasekai.libbox.CommandServer core;public String config,metadata;public void activate(io.nekohasekai.libbox.CommandServer c,String config,String metadata){activations++;core=c;this.config=config;this.metadata=metadata;}')
     stubs['android/net/ConnectivityManager.java']='''package android.net;public class ConnectivityManager {
  public Network network=new Network();public Network[] getAllNetworks(){return new Network[]{network};}public Network getActiveNetwork(){return network;}public NetworkCapabilities getNetworkCapabilities(Network n){return new NetworkCapabilities();}public LinkProperties getLinkProperties(Network n){return new LinkProperties();}
  public int getConnectionOwnerUid(int p,java.net.InetSocketAddress a,java.net.InetSocketAddress b){return 1;}public void registerDefaultNetworkCallback(NetworkCallback c){}public void unregisterNetworkCallback(NetworkCallback c){}
@@ -102,5 +140,16 @@ def main():
             if rejected.returncode==0 or 'AssertionError' not in rejected.stderr:raise AssertionError(label+' negative control escaped')
             target.write_text(source)
         print('Android retained multihop winner: four ownership negative controls rejected')
+        controls=(
+            ('if(!owner.sameOwner(capturedMultihop(service,owner.homeSession)))','if(false&&!owner.sameOwner(capturedMultihop(service,owner.homeSession)))','stale multihop MTU admission accepted: retired-plan'),
+            ('||!owner.sameOwner(capturedMultihop(service,owner.homeSession)))return;','||false)return;','queued multihop MTU ignored retirement: retired-plan'),
+            ('&&mtu==other.mtu','&&true','stale multihop MTU admission accepted: changed-mtu'),
+        )
+        for old,new,expected in controls:
+            assert source.count(old)==1,(old,'exact owned MTU mutation missing');target.write_text(source.replace(old,new));subprocess.run(compile,check=True,timeout=45,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            broken=subprocess.run(run,capture_output=True,text=True,timeout=30);target.write_text(source)
+            assert broken.returncode and expected in broken.stderr,('owned MTU mutation did not reach intended assertion',old,broken.stdout,broken.stderr)
+            print('Android exact multihop MTU mutation rejected: '+expected)
+
 
 if __name__=='__main__':main()

@@ -88,6 +88,30 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         LayeredVpnService service=currentService.get();if(service==null)return;
         service.scheduleAutomaticMTU(service.externalSession,service.torSession);
     }
+    /** The completed graph owns this activation; a delayed caller cannot
+     * select a replacement service or its TUN through the global reference. */
+    static void startMultihopAutomaticMTU(CapturedMultihop owner)throws Exception{
+        if(owner==null)throw new IllegalStateException("The proved multihop MTU owner is missing.");
+        LayeredVpnService service=owner.service;
+        final AndroidMTUSession captured;final String metadata;
+        synchronized(service.lock){
+            if(!owner.sameOwner(capturedMultihop(service,owner.homeSession)))throw new IllegalStateException("The multihop owner changed before MTU activation.");
+            captured=owner.mtu;metadata=owner.mtuMetadata;
+            if(captured==null||metadata==null||metadata.isEmpty())return;
+            service.executor.execute(()->{
+                synchronized(service.lock){
+                    try{
+                        if(service.mtuSession!=captured||!metadata.equals(service.mtuMetadata)
+                                ||!owner.sameOwner(capturedMultihop(service,owner.homeSession)))return;
+                    }catch(Exception retired){return;}
+                }
+                // The service executor serializes native setup/teardown. Even
+                // a late stop retains these exact old objects; no replacement
+                // core, configuration or MTU session is read after the check.
+                captured.activate(owner.server,owner.config,metadata);
+            });
+        }
+    }
     static void startExternalAutomaticMTU(String session,String external,String home){
         LayeredVpnService service=currentService.get();if(service==null)return;
         synchronized(service.lock){
@@ -376,14 +400,16 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         private final LayeredVpnService service;
         private final CommandServer server;
         private final io.nekohasekai.libbox.RouterMultihop plan;
+        private final AndroidMTUSession mtu;
         private final File session;
         private final long generation;
-        private final String config, metadata;
+        private final String config, metadata, mtuMetadata;
         private CapturedMultihop(LayeredVpnService service, AndroidHomeStateStore.Snapshot home, CommandServer server,
                                  io.nekohasekai.libbox.RouterMultihop plan, File session, long generation,
-                                 String config, String metadata, String execution, String serverIdentityPins) {
+                                 String config, String metadata, AndroidMTUSession mtu, String mtuMetadata, String execution, String serverIdentityPins) {
             this.service=service;this.server=server;this.plan=plan;this.session=session;this.generation=generation;
             this.config=config;this.metadata=metadata;this.execution=execution;this.serverIdentityPins=serverIdentityPins;
+            this.mtu=mtu;this.mtuMetadata=mtuMetadata;
             homeSession=home.sessionId;pathGeneration=home.pathGeneration;entryId=home.activeEntryId;exitId=home.activeExitId;
             entryMode=home.activeEntryMode;exitMode=home.runtimeMode;
         }
@@ -394,8 +420,9 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                     &&entryMode.equals(home.activeEntryMode)&&exitMode.equals(home.runtimeMode);
         }
         boolean sameOwner(CapturedMultihop other) {
-            return other!=null&&service==other.service&&server==other.server&&plan==other.plan&&session==other.session
+            return other!=null&&service==other.service&&server==other.server&&plan==other.plan&&session==other.session&&mtu==other.mtu
                     &&generation==other.generation&&config.equals(other.config)&&metadata.equals(other.metadata)
+                    &&java.util.Objects.equals(mtuMetadata,other.mtuMetadata)
                     &&homeSession.equals(other.homeSession)&&pathGeneration==other.pathGeneration
                     &&entryId.equals(other.entryId)&&exitId.equals(other.exitId)&&entryMode.equals(other.entryMode)&&exitMode.equals(other.exitMode)
                     &&execution.equals(other.execution)&&serverIdentityPins.equals(other.serverIdentityPins);
@@ -406,10 +433,13 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         return capturedMultihop(homeSession).execution;
     }
     static CapturedMultihop capturedMultihop(String homeSession) throws Exception {
-        LayeredVpnService service=currentService.get();
+        return capturedMultihop(currentService.get(),homeSession);
+    }
+    private static CapturedMultihop capturedMultihop(LayeredVpnService service,String homeSession) throws Exception {
         if(service==null||homeSession==null||homeSession.isEmpty())throw new IllegalStateException("The original multihop service is unavailable.");
         synchronized(service.lock){
             long generation=service.lifecycle.get();CommandServer server=service.commandServer;
+            AndroidMTUSession mtu=service.mtuSession;String mtuMetadata=service.mtuMetadata;
             File nativeSession=service.activeSession;String config=service.activeConfig,metadataSource=service.multihopMetadata;
             AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(service),owner=service.multihopHomeOwner;
             if(owner==null||!homeSession.equals(home.sessionId)||!homeSession.equals(owner.sessionId)||owner.pathGeneration!=home.pathGeneration
@@ -437,13 +467,14 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             AndroidHomeStateStore.Snapshot after=AndroidHomeStateStore.snapshot(service);
             if(currentService.get()!=service||service.explicitStop||!"UP".equals(service.state)||!service.executionProved||generation!=service.lifecycle.get()
                     ||server!=service.commandServer||owner!=service.multihopHomeOwner||plan!=service.executionController
+                    ||mtu!=service.mtuSession||!java.util.Objects.equals(mtuMetadata,service.mtuMetadata)
                     ||nativeSession!=service.activeSession||!config.equals(service.activeConfig)||!metadataSource.equals(service.multihopMetadata)
                     ||!after.connected||!home.sessionId.equals(after.sessionId)||home.pathGeneration!=after.pathGeneration
                     ||!home.activeEntryId.equals(after.activeEntryId)||!home.activeExitId.equals(after.activeExitId)
                     ||!home.activeEntryMode.equals(after.activeEntryMode)||!home.runtimeMode.equals(after.runtimeMode)
                     ||!"connected".equals(after.phase)||!"passed".equals(after.pathProof)||!"multihop".equals(after.logicalMode)
                     ||!service.executionNetwork.equals(service.executionNetworkIdentity())||plan!=null&&!plan.healthy())throw new IllegalStateException("Multihop changed during route capture.");
-            return new CapturedMultihop(service,home,server,plan,nativeSession,generation,config,metadataSource,selected,pins);
+            return new CapturedMultihop(service,home,server,plan,nativeSession,generation,config,metadataSource,mtu,mtuMetadata,selected,pins);
         }
     }
     static String hopMeasurementRequest(String operation,String id) throws Exception {

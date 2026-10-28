@@ -80,6 +80,7 @@ final class LayeredVpnService {
     }
     static void startTorAutomaticMTU(String session,String exit,String home){startExternalAutomaticMTU(session,exit,home);}
     static volatile java.util.concurrent.CountDownLatch mtuEntered, mtuRelease;
+    static void startMultihopAutomaticMTU(CapturedMultihop owner)throws Exception{if(owner==null||!owner.sameOwner(capturedMultihop(owner.homeSession)))throw new IllegalStateException("retired exact MTU owner");startAutomaticMTU();}
     static void startAutomaticMTU() {
         if (!AndroidHomeStateStore.current.connected) throw new AssertionError("MTU started before path proof adoption");
         java.util.concurrent.CountDownLatch entered=mtuEntered, release=mtuRelease;
@@ -100,6 +101,7 @@ final class AndroidNodeStore {
 }
 final class AndroidMultihopController {
     static java.util.Set<String> changedSources=new java.util.HashSet<>();static String lastPins="";
+    static Source captureSource(File file,byte[] expected){if(expected==null||expected.length==0)throw new IllegalStateException("missing historical source");Source source=new Source(file);source.require(file);return source;}
     static String validatedServerIdentityPins(String execution,String mode,String pins){if(pins==null)throw new IllegalStateException("pins absent");return pins;}
     static final class Source {final File file;final String digest;Source(File file){this.file=file;digest=file.getPath();}void require(File candidate){if(!file.equals(candidate)||changedSources.contains(file.getPath()))throw new IllegalStateException("changed captured node");}boolean same(Source other){return other!=null&&file.equals(other.file)&&digest.equals(other.digest);}}
     static final class Prepared {
@@ -160,6 +162,13 @@ final class AndroidDirectStandardExitController {
 // Actual record serialization and source validation run in the startup suite.
 // This boundary checks the shipping runtime's proof/transaction/call ordering.
 final class AndroidStartupPolicy {
+ static final class MultihopLast{}
+ static MultihopLast prepareMultihopExecution(Context c,AndroidNodeStore.Node a,AndroidNodeStore.Node b,String entryMode,String exitMode,String requested,AndroidMultihopController.Source entry,AndroidMultihopController.Source exit){
+  if(Thread.holdsLock(runtimeLock)||Thread.holdsLock(AndroidHomeStateStore.class))throw new AssertionError("private multihop Last preparation ran under adoption lock");entry.require(a.file);exit.require(b.file);return new MultihopLast();
+ }
+ static boolean recordMultihopExecution(Context c,MultihopLast last,AndroidHomeStateStore.Snapshot home,String selected,String pins){
+  if(last==null)return false;if(!Thread.holdsLock(runtimeLock)||home!=AndroidHomeStateStore.current||!home.connected||!java.util.List.of("local","server").contains(selected))throw new AssertionError("multihop Last write lost exact adoption");return true;
+ }
  static Object runtimeLock;static int prepared,writes;static ExternalLast last;static Runnable onPrepare;
  static final class ExternalLast{final String protocol,entryMode,requested,selected,digest;ExternalLast(String p,String m,String r,String s,String d){protocol=p;entryMode=m;requested=r;selected=s;digest=d;}}
  static void reset(Object owner){runtimeLock=owner;prepared=0;writes=0;last=null;onPrepare=null;}
@@ -281,7 +290,7 @@ public final class RuntimeTeardownHarness {
             AndroidHomeStateStore.reset(); LayeredVpnService.mtuStarts.set(0); LayeredVpnService.mtuEntered=null;LayeredVpnService.mtuRelease=null;
             multihop="multihop".equals(kind)?new AndroidMultihopRuntime(context,engine):null;
             external=multihop==null?new AndroidStandardExitRuntime(context,engine):null;
-            AndroidStartupPolicy.reset(external);
+            AndroidStartupPolicy.reset(runtime());
         }
         Object runtime() { return multihop!=null?multihop:external; }
         void connect(Callback cb) {

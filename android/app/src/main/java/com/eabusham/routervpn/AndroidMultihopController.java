@@ -77,6 +77,19 @@ final class AndroidMultihopController {
         }
     }
 
+    /** Capture today's validated bytes for a historical startup choice. The
+     * receipt never supplies a native owner or a source that bypasses storage. */
+    static Source captureSource(File file, byte[] expectedBytes) throws Exception {
+        if (expectedBytes == null || expectedBytes.length == 0 || expectedBytes.length > MAX_BUNDLE) {
+            throw new IllegalArgumentException("Startup Last has no bounded captured node source.");
+        }
+        LoadedBundle current = new LoadedBundle(file);
+        if (!current.source.digest.equals(sourceDigest(expectedBytes))) {
+            throw new IllegalStateException("The startup node source changed during capture.");
+        }
+        return current.source;
+    }
+
     private static final class EntryPrivate {
         final String host, username, password;
         final int port;

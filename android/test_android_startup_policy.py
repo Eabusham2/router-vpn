@@ -45,6 +45,13 @@ spec=importlib.util.spec_from_file_location('startup_permission_boundaries',ROOT
 P=importlib.util.module_from_spec(spec);spec.loader.exec_module(P)
 
 
+def block(source,signature):
+    start=source.index(signature);at=source.index('{',start);depth=1;end=at+1
+    while depth:
+        depth+=(source[end]=='{')-(source[end]=='}');end+=1
+    return source[start:end]
+
+
 def replace_class(source,name,replacement):
     start=source.index('final class '+name+' ')
     at=source.index('{',start);depth=1;end=at+1
@@ -107,9 +114,10 @@ ORCHESTRATOR=r'''final class AndroidModeOrchestrator {
 MULTIHOP=r'''final class AndroidMultihopRuntime {
  // MULTIHOP_CAPTURE_TYPES
  interface Callback{void progress(String s);void finished(boolean ok,String s);default void owned(String id){}}
- int starts;String entryID="",exitID="",entryMode="",exitMode="",execution="";
+ int starts,lastStarts;String entryID="",exitID="",entryMode="",exitMode="",execution="",selected="",pins="";
  void connect(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode,String execution,String entry,Callback cb){starts++;entryID=a.id;exitID=b.id;entryMode=entry;exitMode=mode;this.execution=execution;cb.owned(AndroidHomeStateStore.beginMultihop(new Context(),a.id,b.id,mode,entry));AndroidHomeStateStore.connectedMultihop(new Context(),a.id,b.id,mode,entry);cb.finished(true,"proved captured graph");}
  String activeExecution(){return execution;}String activeSelectedExecution(){return execution.equals("auto")?"server":execution;}
+ void connectLast(AndroidNodeStore.Node a,AndroidNodeStore.Node b,StartupCapture capture,AndroidHomeStateStore.Snapshot idle,Callback cb){try{capture.require(a,b);AndroidHomeStateStore.Snapshot current=AndroidHomeStateStore.snapshot(new Context());if(idle.connected||current.connected||!idle.sessionId.equals(current.sessionId)||idle.pathGeneration!=current.pathGeneration||!idle.phase.equals(current.phase))throw new IllegalStateException("changed startup idle owner");lastStarts++;selected=capture.selected;pins=capture.serverIdentityPins;connect(a,b,capture.exitMode,capture.policy,capture.entryMode,cb);}catch(Exception changed){cb.finished(false,changed.toString());}}
  void restoreCaptured(AndroidNodeStore.Node a,AndroidNodeStore.Node b,RestoreCapture capture,AndroidHomeStateStore.Snapshot idle,Callback cb){}
  RestoreCapture captureRestore(AndroidNodeStore.Node a,AndroidNodeStore.Node b,AndroidHomeStateStore.Snapshot home)throws Exception{throw new IllegalStateException("startup fixture cannot capture an old native graph");}boolean captureCurrent(RestoreCapture capture){return false;}boolean restoredMatches(RestoreCapture capture,AndroidNodeStore.Node a,AndroidNodeStore.Node b,AndroidHomeStateStore.Snapshot home){return false;}
  boolean disconnectAndDrainCaptured(String s){return true;}boolean isConnected(){return starts>0;}boolean isActiveOrTransitioning(){return false;}
@@ -117,7 +125,7 @@ MULTIHOP=r'''final class AndroidMultihopRuntime {
  void disconnect(){}List<NativeSingBoxController.ModeInfo> listSupportedExitModes(File f){return Collections.emptyList();}
 }
 '''
-MULTIHOP=MULTIHOP.replace('// MULTIHOP_CAPTURE_TYPES',P.MULTIHOP_CAPTURE_TYPES)
+MULTIHOP=MULTIHOP.replace('// MULTIHOP_CAPTURE_TYPES',P.MULTIHOP_CAPTURE_TYPES.replace(' static final class StartupCapture{}',' // SHIPPING_STARTUP_CAPTURE'))
 
 EXTRA=r'''
 final class AndroidExternalPolicy {
@@ -206,8 +214,59 @@ public final class StartupTest {
   }
   for(String state:new String[]{"foreign","unknown","busy"}){Fixture f=new Fixture(root);f.policy("auto",true);if(state.equals("foreign"))Context.connectivity.vpn=true;if(state.equals("unknown"))Context.connectivity=null;if(state.equals("busy"))AndroidVpnMutationGuard.busy=true;boolean failed=false;try{f.capture();}catch(Exception expected){failed=true;}check(failed&&f.starts()==0,"initial occupied/unknown VPN was automatically replaced: "+state);}
  }
+ static AndroidNodeStore.Node node(Fixture f,String id){for(var n:f.nodes.list())if(n.id.equals(id))return n;throw new AssertionError("missing fixture node");}
+ static void routerPath(Fixture f,String entryMode,String exitMode,String requested)throws Exception{
+  f.policy("auto",false);f.prefs().edit().putBoolean("multihop_on",true).putString("multihop_entry_kind","router-vpn").putString("multihop_entry",ENTRY).putString("multihop_exit",EXIT).putString("multihop_entry_mode",entryMode).putString("multihop_exit_mode",exitMode).putString("multihop_execution",requested).apply();
+ }
+ static String pins(String selected,String mode)throws Exception{
+  boolean pq=NativeSingBoxController.nativePQFamily(mode)||AndroidNativeMAXProfile.isMode(mode),packet=NativeSingBoxController.nativeWireGuardFamily(mode)||pq;JSONObject value=new JSONObject();
+  if(selected.equals("server")&&packet){byte[] publicKey=new byte[32];Arrays.fill(publicKey,(byte)7);value.put("expected_packet_public_key",java.util.Base64.getEncoder().encodeToString(publicKey));if(pq)value.put("expected_pq_client_identity","2".repeat(64));}return value.toString();
+ }
+ static AndroidStartupPolicy.MultihopLast prepareRouterLast(Fixture f)throws Exception{
+  var a=node(f,ENTRY);var b=node(f,EXIT);var prefs=f.prefs();return AndroidStartupPolicy.prepareMultihopExecution(f.activity,a,b,prefs.getString("multihop_entry_mode",""),prefs.getString("multihop_exit_mode",""),prefs.getString("multihop_execution",""),AndroidMultihopController.captureSource(a.file,Files.readAllBytes(a.file.toPath())),AndroidMultihopController.captureSource(b.file,Files.readAllBytes(b.file.toPath())));
+ }
+ static AndroidHomeStateStore.Snapshot routerOwner(Fixture f,boolean prove){
+  String mode=f.prefs().getString("multihop_exit_mode",""),entry=f.prefs().getString("multihop_entry_mode","");AndroidHomeStateStore.beginMultihop(f.activity,ENTRY,EXIT,mode,entry);
+  if(prove)AndroidHomeStateStore.connectedMultihop(f.activity,ENTRY,EXIT,mode,entry);return AndroidHomeStateStore.snapshot(f.activity);
+ }
+ static void saveRouterLast(Fixture f,String selected)throws Exception{
+  var prepared=prepareRouterLast(f);check(prepared!=null,"complete private graph did not prepare Last source identity");check(AndroidStartupPolicy.recordMultihopExecution(f.activity,prepared,routerOwner(f,true),selected,pins(selected,f.prefs().getString("multihop_exit_mode",""))),"proved private graph did not persist Last execution");
+ }
+ static void enableRouterLast(Fixture f)throws Exception{f.policy("last",true);AndroidHomeStateStore.disconnected(f.activity);resetProcess();}
+ static void routerLastReceipts(Path root)throws Exception{
+  for(String entry:List.of("wg","awg2-strong","max-quic-awg"))for(String exit:List.of("wg","awg2-fast","wg-pq","awg2-pq","shadowsocks","max-tls-wg","naive-h3","reality-xhttp"))for(String selected:List.of("local","server"))for(boolean rotate:new boolean[]{false,true}){
+   Fixture f=new Fixture(root);routerPath(f,entry,exit,"auto");saveRouterLast(f,selected);Path path=f.dir.resolve("startup-multihop-last-v1.json");String raw=Files.readString(path);JSONObject receipt=new JSONObject(raw);
+   check(receipt.length()==6&&receipt.getInt("schema")==1&&receipt.getString("entry_id").equals(ENTRY)&&receipt.getString("exit_id").equals(EXIT)&&receipt.getString("path_sha256").matches("[0-9a-f]{64}")&&receipt.getString("selected_execution").equals(selected)&&receipt.getString("server_identity_pins").equals(pins(selected,exit)),"private Last receipt lost complete identity or public constraints");
+   check(!raw.contains("SECRET_")&&!raw.contains("lease")&&!raw.contains("session")&&!raw.contains("score")&&!raw.contains("private_key"),"private Last retained private credentials, proof or measurement");
+   enableRouterLast(f);Bundle state=f.request();var captured=f.captured.lastMultihop;check(captured!=null&&captured.policy.equals("auto")&&captured.selected.equals(selected)&&captured.serverIdentityPins.equals(pins(selected,exit)),"cold Last did not capture actual selected leaf and public identity");
+   if(rotate){state.putString("multihop_execution_pending",selected.equals("local")?"server":"local");state.putString("multihop_entry_mode_pending","wg");f.restore(state);}f.allow();var runtime=AndroidRuntimeRegistry.instance.multihop;
+   check(f.cb.ok&&runtime.lastStarts==1&&runtime.starts==1&&runtime.execution.equals("auto")&&runtime.selected.equals(selected)&&runtime.pins.equals(pins(selected,exit)),"Router Last reran Compare or changed its historical winner");
+   check(runtime.entryID.equals(ENTRY)&&runtime.exitID.equals(EXIT)&&runtime.entryMode.equals(entry)&&runtime.exitMode.equals(exit)&&Files.readString(path).equals(raw),"Router Last changed graph or overwrote historical receipt");f.allow();check(runtime.starts==1,"late Last permission started a second graph");
+  }
+  Fixture missing=new Fixture(root);routerPath(missing,"wg","wg-pq","auto");enableRouterLast(missing);boolean rejected=false;try{missing.capture();}catch(Exception expected){rejected=true;}check(rejected&&missing.starts()==0,"Router Last without historical choice reran Compare");
+  for(String fault:List.of("selected-dns","selected-key","entry-dns","entry-key","entry-native","exit-dns","exit-key","exit-native","entry-mode","exit-mode","entry-id","exit-id","selected-id","requested","receipt-entry","receipt-exit","receipt-source","receipt-leaf","receipt-extra","receipt-missing","pins-missing","pins-extra","pins-key","pins-pq","pins-duplicate","pins-space")){
+   Fixture f=new Fixture(root);routerPath(f,"max-tls-awg","wg-pq",fault.equals("requested")?"local":"auto");saveRouterLast(f,fault.equals("requested")?"local":"server");Path file=f.dir.resolve("startup-multihop-last-v1.json");JSONObject receipt=new JSONObject(Files.readString(file));enableRouterLast(f);
+   for(String role:List.of("selected","entry","exit"))if(fault.startsWith(role+"-")){String id=role.equals("selected")?FIRST:role.equals("entry")?ENTRY:EXIT;JSONObject bundle=new JSONObject(Files.readString(f.nodes.file(id).toPath()));if(fault.endsWith("dns"))AndroidProfileSelection.selectedRouterProfile(bundle).put("dns_mode","rescue");if(fault.endsWith("key"))AndroidProfileSelection.selectedRouterProfile(bundle).put("private_key","changed private key");if(fault.endsWith("native"))bundle.getJSONObject("profiles").getJSONObject("wg").put("wg.conf","replacement generated graph");Files.writeString(f.nodes.file(id).toPath(),bundle.toString());}
+   if(fault.equals("entry-mode"))f.prefs().edit().putString("multihop_entry_mode","wg").apply();if(fault.equals("exit-mode"))f.prefs().edit().putString("multihop_exit_mode","awg2-pq").apply();if(fault.equals("entry-id"))f.prefs().edit().putString("multihop_entry",FIRST).apply();if(fault.equals("exit-id"))f.prefs().edit().putString("multihop_exit",FIRST).apply();if(fault.equals("selected-id")){f.prefs().edit().putString("selected_id",ENTRY).apply();AndroidNodeStore.active=ENTRY;JSONObject changed=new JSONObject(Files.readString(f.nodes.file(ENTRY).toPath()));AndroidProfileSelection.selectedRouterProfile(changed).put("startup_mode","last").put("auto_connect",true);Files.writeString(f.nodes.file(ENTRY).toPath(),changed.toString());}if(fault.equals("requested"))f.prefs().edit().putString("multihop_execution","auto").apply();
+   if(fault.equals("receipt-entry"))receipt.put("entry_id",FIRST);if(fault.equals("receipt-exit"))receipt.put("exit_id",FIRST);if(fault.equals("receipt-source"))receipt.put("path_sha256","0".repeat(64));if(fault.equals("receipt-leaf"))receipt.put("selected_execution","auto");if(fault.equals("receipt-extra"))receipt.put("lease","stale");if(fault.equals("receipt-missing"))receipt.remove("server_identity_pins");
+   if(fault.startsWith("pins-")){JSONObject pins=new JSONObject(receipt.getString("server_identity_pins"));if(fault.equals("pins-missing"))pins.remove("expected_packet_public_key");if(fault.equals("pins-extra"))pins.put("private_key","invalid");if(fault.equals("pins-key"))pins.put("expected_packet_public_key","bad");if(fault.equals("pins-pq"))pins.put("expected_pq_client_identity","0".repeat(64));String raw=pins.toString();if(fault.equals("pins-duplicate"))raw=raw.substring(0,raw.length()-1)+",\"expected_pq_client_identity\":\""+"2".repeat(64)+"\"}";if(fault.equals("pins-space"))raw=" "+raw;receipt.put("server_identity_pins",raw);}
+   Files.writeString(file,receipt.toString());boolean stale=false;try{f.capture();}catch(Exception expected){stale=true;}check(stale&&f.starts()==0,"changed private Last source or receipt accepted: "+fault);
+  }
+  for(String fault:RAW_FAULTS){Fixture f=new Fixture(root);routerPath(f,"wg","wg-pq","auto");saveRouterLast(f,"server");Path file=f.dir.resolve("startup-multihop-last-v1.json");Files.writeString(file,corruptReceipt(new JSONObject(Files.readString(file)),"selected_execution",fault));enableRouterLast(f);boolean stale=false;try{f.capture();}catch(Exception expected){stale=true;}check(stale,"ambiguous private Last receipt accepted: "+fault);}
+  for(String fault:List.of("unproved","superseded","generation","emergency","selection","source","speed-lab","wrong-leaf","wrong-pins","write-failure")){
+   Fixture f=new Fixture(root);routerPath(f,"wg","wg-pq",fault.equals("wrong-leaf")?"local":"auto");Object lease=fault.equals("speed-lab")?AndroidMTUMeasurementGate.acquire():null;AndroidStartupPolicy.MultihopLast record;
+   try{if(fault.equals("source")){var a=node(f,ENTRY);var b=node(f,EXIT);var source=AndroidMultihopController.captureSource(a.file,Files.readAllBytes(a.file.toPath()));Files.writeString(a.file.toPath(),bundle(ENTRY).put("new-captured-value",true).toString());record=AndroidStartupPolicy.prepareMultihopExecution(f.activity,a,b,"wg","wg-pq","auto",source,AndroidMultihopController.captureSource(b.file,Files.readAllBytes(b.file.toPath())));}else record=prepareRouterLast(f);}finally{if(lease!=null)AndroidMTUMeasurementGate.release(lease);}
+   var home=routerOwner(f,!fault.equals("unproved"));if(fault.equals("superseded"))routerOwner(f,true);if(fault.equals("generation"))AndroidHomeStateStore.advancePathGeneration(f.activity);if(fault.equals("emergency"))AndroidHomeStateStore.warning(f.activity,"Emergency Disconnect requested; retained");if(fault.equals("selection"))f.prefs().edit().putString("multihop_entry_mode","awg2-fast").apply();if(fault.equals("write-failure"))AndroidPrivateFileStore.failWrite=true;
+   check(!AndroidStartupPolicy.recordMultihopExecution(f.activity,record,home,"server",fault.equals("wrong-pins")?"{}":pins("server","wg-pq"))&&!Files.exists(f.dir.resolve("startup-multihop-last-v1.json")),"unowned private Last receipt persisted: "+fault);
+  }
+  for(String fault:List.of("entry","exit","selected","selection","idle","replacement"))for(boolean rotate:new boolean[]{false,true}){
+   Fixture f=new Fixture(root);routerPath(f,"max-quic-awg","max-tls-wg","auto");saveRouterLast(f,"server");enableRouterLast(f);Bundle state=f.request();
+   if(fault.equals("entry")||fault.equals("exit")||fault.equals("selected")){String id=fault.equals("entry")?ENTRY:fault.equals("exit")?EXIT:FIRST;Files.writeString(f.nodes.file(id).toPath(),bundle(id).put("new-native-source",true).toString());}if(fault.equals("selection"))f.prefs().edit().putString("multihop_exit_mode","wg-pq").apply();if(fault.equals("idle"))AndroidHomeStateStore.advancePathGeneration(f.activity);if(fault.equals("replacement"))routerOwner(f,true);
+   if(rotate)f.restore(state);f.allow();check(!f.cb.ok&&f.starts()==0&&AndroidRuntimeRegistry.instance.multihop.lastStarts==0,"stale private Last permission launched: "+fault);
+  }
+ }
  static void graph(Path root)throws Exception{
-  for(String mode:new String[]{"smart-auto","auto","last"})for(String execution:new String[]{"local","server","auto"}){Fixture f=new Fixture(root);f.policy(mode,true);f.prefs().edit().putBoolean("multihop_on",true).putString("multihop_entry",ENTRY).putString("multihop_exit",EXIT).putString("multihop_entry_mode","max-tls-awg").putString("multihop_exit_mode","shadowsocks").putString("multihop_execution",execution).apply();Bundle state=f.request();state.putString("routervpn.pending.mode","auto");state.putString("multihop_entry_mode_pending","wg");state.putString("multihop_execution_pending","local");f.restore(state);f.allow();AndroidMultihopRuntime m=AndroidRuntimeRegistry.instance.multihop;check(f.cb.ok&&m.starts==1&&AndroidRuntimeRegistry.instance.orchestrator.starts==0&&m.entryID.equals(ENTRY)&&m.exitID.equals(EXIT)&&m.entryMode.equals("max-tls-awg")&&m.exitMode.equals("shadowsocks")&&m.execution.equals(execution),"startup or restored Bundle substituted its captured graph");}
+  for(String mode:new String[]{"smart-auto","auto","last"})for(String execution:new String[]{"local","server","auto"}){Fixture f=new Fixture(root);f.policy(mode,true);f.prefs().edit().putBoolean("multihop_on",true).putString("multihop_entry",ENTRY).putString("multihop_exit",EXIT).putString("multihop_entry_mode","max-tls-awg").putString("multihop_exit_mode","shadowsocks").putString("multihop_execution",execution).apply();if(mode.equals("last")&&execution.equals("auto")){saveRouterLast(f,"server");enableRouterLast(f);}Bundle state=f.request();state.putString("routervpn.pending.mode","auto");state.putString("multihop_entry_mode_pending","wg");state.putString("multihop_execution_pending","local");f.restore(state);f.allow();AndroidMultihopRuntime m=AndroidRuntimeRegistry.instance.multihop;check(f.cb.ok&&m.starts==1&&AndroidRuntimeRegistry.instance.orchestrator.starts==0&&m.entryID.equals(ENTRY)&&m.exitID.equals(EXIT)&&m.entryMode.equals("max-tls-awg")&&m.exitMode.equals("shadowsocks")&&m.execution.equals(execution),"startup or restored Bundle substituted its captured graph");}
   Fixture incomplete=new Fixture(root);incomplete.policy("auto",true);incomplete.prefs().edit().putBoolean("multihop_on",true).apply();boolean failed=false;try{incomplete.capture();}catch(Exception expected){failed=true;}check(failed&&incomplete.starts()==0,"incomplete multihop silently became single-hop startup");
  }
  static void receipts(Path root)throws Exception{
@@ -339,7 +398,7 @@ public final class StartupTest {
    boolean rejected=false;try{f.capture();}catch(Exception expected){rejected=true;}check(rejected&&f.starts()==0&&AndroidRuntimeRegistry.instance.standardExit.starts==0,"invalid ordinary startup acquired private authority: "+invalid);
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);defaults(root);missingExternalLast(root);permission(root);changes(root);graph(root);receipts(root);strictReceipts(root);settings(root);activity(root);externalLastReceipts(root);externalStartup(root);ordinaryStartup(root);System.out.println("Android startup: "+checks+" shipping policy, Activity, Settings, permission and receipt checks PASS");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);defaults(root);missingExternalLast(root);permission(root);changes(root);graph(root);receipts(root);strictReceipts(root);routerLastReceipts(root);settings(root);activity(root);externalLastReceipts(root);externalStartup(root);ordinaryStartup(root);System.out.println("Android startup: "+checks+" shipping policy, Activity, Settings, permission and receipt checks PASS");}
 }
 '''
 
@@ -356,7 +415,8 @@ def main():
     ui['com/wireguard/android/backend/Tunnel.java']='package com.wireguard.android.backend;public interface Tunnel{enum State{UP,DOWN}}'
     ui['org/amnezia/awg/backend/Tunnel.java']='package org.amnezia.awg.backend;public interface Tunnel{enum State{UP,DOWN}}'
     ui['io/nekohasekai/libbox/Libbox.java']=PRIVATE_JSON_JAVA
-    boundaries=P.BOUNDARIES.replace('import android.content.Context;', 'import android.content.Context;import android.content.SharedPreferences;')
+    ui['android/util/Base64.java']='package android.util;public final class Base64{public static final int DEFAULT=0,NO_WRAP=2;public static byte[] decode(String raw,int flags){return java.util.Base64.getMimeDecoder().decode(raw);}public static String encodeToString(byte[] raw,int flags){return java.util.Base64.getEncoder().encodeToString(raw);}}'
+    boundaries=P.BOUNDARIES.replace('import android.content.Context;', 'import android.content.Context;import android.content.SharedPreferences;import android.util.Base64;')
     # Receipt ownership covers every externally authenticated protocol. The
     # runtime/graph suites compile actual provider/pairing admission; this
     # boundary marks a fully validated response contract without minting one.
@@ -367,7 +427,16 @@ def main():
     for name in ('AndroidStartupPolicy','AndroidHomeStateStore'):boundaries=replace_class(boundaries,name,'')
     if 'final class AndroidExternalPolicy ' in boundaries:boundaries=replace_class(boundaries,'AndroidExternalPolicy','')
     if 'final class AndroidConnectionProfileStore ' in boundaries:boundaries=replace_class(boundaries,'AndroidConnectionProfileStore','')
-    boundaries=replace_class(boundaries,'AndroidNodeStore',NODE);boundaries=replace_class(boundaries,'AndroidModeOrchestrator',ORCHESTRATOR);boundaries=replace_class(boundaries,'AndroidMultihopRuntime',MULTIHOP)
+    boundaries=replace_class(boundaries,'AndroidNodeStore',NODE);boundaries=replace_class(boundaries,'AndroidModeOrchestrator',ORCHESTRATOR)
+    runtime=(JAVA/'AndroidMultihopRuntime.java').read_text()
+    startup_capture=block(runtime,'    static final class StartupCapture {')+'\n'+block(runtime,'    static StartupCapture startupCapture(')
+    boundaries=replace_class(boundaries,'AndroidMultihopRuntime',MULTIHOP.replace(' // SHIPPING_STARTUP_CAPTURE',startup_capture))
+    controller=(JAVA/'AndroidMultihopController.java').read_text()
+    source_methods='\n'.join(block(controller,signature) for signature in ('    static final class Source {','    private static final class LoadedBundle {','    static Source captureSource(', '    static String validatedServerIdentityPins(', '    private static String sourceDigest(', '    private static byte[] readBundleBytes('))
+    boundaries+='\nfinal class AndroidMultihopController{private static final int MAX_BUNDLE=32*1024*1024;'+source_methods+'\n}\n'
+    max_source=(JAVA/'AndroidNativeMAXProfile.java').read_text()
+    modes=max_source[max_source.index('    private static final Set<String> MODES'):max_source.index(';',max_source.index('    private static final Set<String> MODES'))+1]
+    boundaries+='\nfinal class AndroidNativeMAXProfile{'+modes+block(max_source,'    static boolean isMode(')+'}\n'
     boundaries=boundaries.replace('final class NativeWireGuardController {}','final class NativeWireGuardController {com.wireguard.android.backend.Tunnel.State getState(){return com.wireguard.android.backend.Tunnel.State.DOWN;}}').replace('final class NativeAmneziaWGController {}','final class NativeAmneziaWGController {org.amnezia.awg.backend.Tunnel.State getState(){return org.amnezia.awg.backend.Tunnel.State.DOWN;}}')
     boundaries=boundaries.replace('static byte[] read(File f,int max)', 'static boolean failWrite;static void write(File f,byte[] b,int max)throws Exception{if(failWrite)throw new IOException("injected durable failure");if(b.length==0||b.length>max)throw new IllegalArgumentException("bounded private write");Path t=Files.createTempFile(f.getParentFile().toPath(),"staged-",".json");Files.write(t,b);Files.move(t,f.toPath(),StandardCopyOption.REPLACE_EXISTING,StandardCopyOption.ATOMIC_MOVE);}static byte[] read(File f,int max)')
     native=(JAVA/'NativeSingBoxController.java').read_text();methods=[]
@@ -404,6 +473,10 @@ def main():
         run=['java','-Dfixture.privatejson='+str(validator),'-cp',os.pathsep.join((str(root/'classes'),str(jar))),'com.eabusham.routervpn.StartupTest',str(root/'data')]
         (root/'data').mkdir();subprocess.run(compile,check=True,timeout=45);subprocess.run(run,check=True,timeout=60)
         controls=(
+            ('AndroidUnifiedConnectionController.java','if(startup!=null&&startup.lastMultihop!=null)','if(false&&startup!=null&&startup.lastMultihop!=null)','Router Last reran Compare or changed its historical winner'),
+            ('AndroidStartupPolicy.java','.put("selected_sha256",profileIdentity(selected))','.put("selected_sha256","unbound")','changed private Last source or receipt accepted: selected-dns'),
+            ('AndroidStartupPolicy.java','.put("exit_sha256",profileIdentity(exit))','.put("exit_sha256","unbound")','changed private Last source or receipt accepted: exit-dns'),
+            ('AndroidStartupPolicy.java','if(AndroidMTUMeasurementGate.held()||entry==null','if(false||entry==null','unowned private Last receipt persisted: speed-lab'),
             ('AndroidStartupPolicy.java','io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(raw);','/* mutation: raw duplicate and trailing validation omitted */','ambiguous single-node Last receipt accepted: duplicate-schema'),
             ('AndroidStartupPolicy.java','!(schema instanceof Integer||schema instanceof Long)||((Number)schema).longValue()!=1','object.getInt("schema")!=1','ambiguous single-node Last receipt accepted: schema-text'),
             ('AndroidStartupPolicy.java','if(!(object.opt(key) instanceof String))','if(false&&!(object.opt(key) instanceof String))','ambiguous single-node Last receipt accepted: wrong-text'),
@@ -411,8 +484,8 @@ def main():
             ('AndroidStartupPolicy.java','lastExecution=lastExternalExecution(context,path.entry.id,files.get(path.entry.id),saved,path.entryMode,path.execution);','lastExecution="server";','external Last without a source-bound winner reran Compare'),
             ('AndroidStartupPolicy.java','.put("exit",external)','.put("exit",exit.id)','changed external Last source or receipt was accepted: exit-dns'),
             ('AndroidStartupPolicy.java','.put("entry_sha256",profileIdentity(bundle))','.put("entry_sha256","unbound")','changed external Last source or receipt was accepted: entry-dns'),
-            ('AndroidStartupPolicy.java','.put("execution",requested)','.put("execution","auto")','changed external Last source or receipt was accepted: requested'),
-            ('AndroidStartupPolicy.java','||!capturedHome.sessionId.equals(home.sessionId)\n                        ||capturedHome.pathGeneration!=home.pathGeneration','||false','unowned or uncommitted external Last receipt persisted: superseded'),
+            ('AndroidStartupPolicy.java','.put("entry_mode",mode).put("execution",requested)','.put("entry_mode",mode).put("execution","auto")','changed external Last source or receipt was accepted: requested'),
+            ('AndroidStartupPolicy.java','||!capturedHome.sessionId.equals(home.sessionId)\n                        ||capturedHome.pathGeneration!=home.pathGeneration||!home.connected||!"connected".equals(home.phase)||!"passed".equals(home.pathProof)\n                        ||!"external".equals(home.logicalMode)','||false||!home.connected||!"connected".equals(home.phase)||!"passed".equals(home.pathProof)\n                        ||!"external".equals(home.logicalMode)','unowned or uncommitted external Last receipt persisted: superseded'),
             ('AndroidStartupPolicy.java','if(AndroidMTUMeasurementGate.held()||entryFile==null','if(false||entryFile==null','unowned or uncommitted external Last receipt persisted: speed-lab'),
             ('AndroidUnifiedConnectionController.java','startup.requireCurrent(activity,nodeStore,this);startup.dispatched();','startup.dispatched();','stale startup capture started'),
             ('AndroidStartupPolicy.java','if(!Arrays.equals(captured.getValue(),AndroidPrivateFileStore.read(current,AndroidNodeStore.MAX_BUNDLE)))','if(false&&!Arrays.equals(captured.getValue(),AndroidPrivateFileStore.read(current,AndroidNodeStore.MAX_BUNDLE)))','stale startup capture started'),

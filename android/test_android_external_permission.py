@@ -9,12 +9,13 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
-JAVA = ROOT / "android/app/src/main/java/com/eabusham/routervpn"
+JAVA = ROOT / 'android/app/src/main/java/com/eabusham/routervpn'
 spec = importlib.util.spec_from_file_location("external_permission_widgets", ROOT / "android/test_android_tor_form.py")
 T = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(T)
 
 MULTIHOP_CAPTURE_TYPES = r'''
+ static final class StartupCapture{}
  static final class CapturedSource {final File file;final String digest;CapturedSource(File file)throws Exception{this.file=file.getCanonicalFile();digest=AndroidTorProfile.digest(AndroidPrivateFileStore.read(file,AndroidNodeStore.MAX_BUNDLE));}void require(File other)throws Exception{if(!file.equals(other.getCanonicalFile())||!digest.equals(AndroidTorProfile.digest(AndroidPrivateFileStore.read(other,AndroidNodeStore.MAX_BUNDLE))))throw new IllegalStateException("changed captured source");}}
  static final class CapturedOwner {final String homeSession,entryId,exitId,entryMode,exitMode,pins;final long generation;CapturedOwner(AndroidHomeStateStore.Snapshot home,String pins){homeSession=home.sessionId;generation=home.pathGeneration;entryId=home.activeEntryId;exitId=home.activeExitId;entryMode=home.activeEntryMode;exitMode=home.runtimeMode;this.pins=pins;}boolean matchesHome(AndroidHomeStateStore.Snapshot home){return home.connected&&homeSession.equals(home.sessionId)&&generation==home.pathGeneration&&entryId.equals(home.activeEntryId)&&exitId.equals(home.activeExitId)&&entryMode.equals(home.activeEntryMode)&&exitMode.equals(home.runtimeMode);}}
  static final class RestoreCapture {final String policy,selected;final CapturedOwner owner;final CapturedSource entrySource,exitSource;RestoreCapture(String policy,String selected,AndroidHomeStateStore.Snapshot home,AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String pins)throws Exception{this.policy=policy;this.selected=selected;owner=new CapturedOwner(home,pins);entrySource=new CapturedSource(entry.file);exitSource=new CapturedSource(exit.file);}void require(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit)throws Exception{if(!owner.entryId.equals(entry.id)||!owner.exitId.equals(exit.id))throw new IllegalStateException("wrong captured nodes");entrySource.require(entry.file);exitSource.require(exit.file);}}
@@ -69,7 +70,7 @@ final class AndroidMultihopRuntime {
  int starts;
  // MULTIHOP_CAPTURE_TYPES
  interface Callback{void progress(String s);void finished(boolean ok,String s);default void owned(String id){}}
- String activeExecution(){return "local";}String activeSelectedExecution(){return "local";}void restoreCaptured(AndroidNodeStore.Node a,AndroidNodeStore.Node b,RestoreCapture capture,AndroidHomeStateStore.Snapshot idle,Callback cb){}
+ String activeExecution(){return "local";}String activeSelectedExecution(){return "local";}void connectLast(AndroidNodeStore.Node a,AndroidNodeStore.Node b,StartupCapture capture,AndroidHomeStateStore.Snapshot idle,Callback cb){throw new AssertionError("ordinary permission cannot dispatch historical multihop");}void restoreCaptured(AndroidNodeStore.Node a,AndroidNodeStore.Node b,RestoreCapture capture,AndroidHomeStateStore.Snapshot idle,Callback cb){}
  RestoreCapture captureRestore(AndroidNodeStore.Node a,AndroidNodeStore.Node b,AndroidHomeStateStore.Snapshot home)throws Exception{throw new IllegalStateException("multihop not owned by this external fixture");}boolean captureCurrent(RestoreCapture capture){return false;}boolean restoredMatches(RestoreCapture capture,AndroidNodeStore.Node a,AndroidNodeStore.Node b,AndroidHomeStateStore.Snapshot home){return false;}boolean disconnectAndDrainCaptured(String session){return true;}
  boolean isConnected(){return false;}boolean isActiveOrTransitioning(){return false;}String activeEntryId(){return "";}String activeExitId(){return "";}String activeEntryMode(){return "";}String activeExitMode(){return "";}
  void disconnect(){}void connect(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode,String execution,String entry,Callback cb){starts++;cb.finished(true,"proved captured multihop");}List<NativeSingBoxController.ModeInfo> listSupportedExitModes(File f){return Collections.emptyList();}
@@ -95,7 +96,7 @@ final class AndroidRuntimeRegistry {
 // Startup has its own shipping-policy/permission fixture. This suite never
 // creates a startup capture or records a single-Router proof.
 final class AndroidStartupPolicy {
- static final class Attempt {String nonce="",mode="",source="",lastRaw="",lastExecution="",entryMode="wg",exitMode="",execution="local";AndroidNodeStore.Node node,entry,exit;AndroidStandardExitStore.Entry external,ordinaryEntry;boolean external(){return external!=null;}boolean multihop(){return entry!=null;}void requireCurrent(Context c,AndroidNodeStore n,AndroidUnifiedConnectionController o){throw new AssertionError("unexpected startup capture");}void dispatched(){}void cancel(){}}
+ static final class Attempt {String nonce="",mode="",source="",lastRaw="",lastExecution="",entryMode="wg",exitMode="",execution="local";AndroidNodeStore.Node node,entry,exit;AndroidStandardExitStore.Entry external,ordinaryEntry;AndroidMultihopRuntime.StartupCapture lastMultihop;AndroidHomeStateStore.Snapshot idleOwner(){throw new AssertionError("unexpected startup idle capture");}boolean external(){return external!=null;}boolean multihop(){return entry!=null;}void requireCurrent(Context c,AndroidNodeStore n,AndroidUnifiedConnectionController o){throw new AssertionError("unexpected startup capture");}void dispatched(){}void cancel(){}}
  static Attempt restore(String nonce){return null;}static void cancelPending(){}static boolean recordProven(Context c,AndroidNodeStore n,File f,String session,String raw,String source){return false;}
 }
 '''

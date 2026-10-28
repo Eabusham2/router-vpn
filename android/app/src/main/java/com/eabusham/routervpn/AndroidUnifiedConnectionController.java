@@ -573,7 +573,13 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         Exception invalid=null;try{requirePendingIdentity();}catch(Exception stale){invalid=stale;}
         clearPending();if(callback==null)return;
         try{if(invalid!=null)throw invalid;AndroidConnectionSelection.requireCurrent(activity,nodeStore,permission.selection);if(isActiveOrTransitioning())throw new IllegalStateException("Another path owns the pending connection.");callback.validate();if(startup!=null){startup.requireCurrent(activity,nodeStore,this);startup.dispatched();}}catch(Exception stale){if(startup!=null)startup.cancel();callback.finished(false,safe(stale));return;}
-        if("multihop".equals(mode)){if(entry==null||exit==null||entry.id.equals(exit.id)||exitMode.isEmpty()){callback.finished(false,"Multihop selection expired; choose entry and exit again.");return;}multihop.connect(entry,exit,exitMode,execution,entryMode,new AndroidMultihopRuntime.Callback(){@Override public void owned(String session){activity.runOnUiThread(()->callback.owned(session));}@Override public void progress(String message){activity.runOnUiThread(()->callback.progress(message));}@Override public void finished(boolean ok,String message){activity.runOnUiThread(()->callback.finished(ok,message));}});return;}
+        if("multihop".equals(mode)){
+            if(entry==null||exit==null||entry.id.equals(exit.id)||exitMode.isEmpty()){callback.finished(false,"Multihop selection expired; choose entry and exit again.");return;}
+            AndroidMultihopRuntime.Callback bridge=new AndroidMultihopRuntime.Callback(){@Override public void owned(String session){activity.runOnUiThread(()->callback.owned(session));}@Override public void progress(String message){activity.runOnUiThread(()->callback.progress(message));}@Override public void finished(boolean ok,String message){activity.runOnUiThread(()->callback.finished(ok,message));}};
+            if(startup!=null&&startup.lastMultihop!=null)multihop.connectLast(entry,exit,startup.lastMultihop,startup.idleOwner(),bridge);
+            else multihop.connect(entry,exit,exitMode,execution,entryMode,bridge);
+            return;
+        }
         if("external".equals(mode)){
             try{if(isActiveOrTransitioning())throw new IllegalStateException("Another VPN owns the current path.");
                 if(ordinaryEntry!=null){if(externalDirect||entry!=null)throw new IllegalStateException("The captured ordinary entry kind changed.");requireOrdinaryCapture(ordinaryEntry,standardExit,entryMode,execution,entryDigest,externalDigest);}

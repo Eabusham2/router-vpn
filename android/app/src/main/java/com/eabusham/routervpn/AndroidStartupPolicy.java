@@ -24,7 +24,7 @@ import java.util.UUID;
 /** One cold-process startup decision. Permission state contains only its nonce;
  * exact private sources remain in this process and must still match at launch. */
 final class AndroidStartupPolicy {
-    private static final String PREFS="router-vpn-unified", LAST_FILE="startup-last-v1.json", EXTERNAL_LAST_FILE="startup-tor-last-v1.json";
+    private static final String PREFS="router-vpn-unified", LAST_FILE="startup-last-v1.json", EXTERNAL_LAST_FILE="startup-tor-last-v1.json", MULTIHOP_LAST_FILE="startup-multihop-last-v1.json";
     // Retain the original receipt filename for upgrades. Its complete path
     // digest already binds the exact exit protocol and all private sources.
     private static final int MAX_LAST=4096;
@@ -37,6 +37,7 @@ final class AndroidStartupPolicy {
         final String mode, source, lastRaw, lastExecution, entryMode, exitMode, execution;
         final AndroidNodeStore.Node node, entry, exit;
         final AndroidStandardExitStore.Entry external, ordinaryEntry;
+        final AndroidMultihopRuntime.StartupCapture lastMultihop;
         private final String nodeKind, externalSnapshot, ordinaryEntrySnapshot;
         private final String selectedID, activeID;
         private final AndroidHomeStateStore.Snapshot idle;
@@ -62,9 +63,17 @@ final class AndroidStartupPolicy {
                         AndroidStandardExitStore.Entry ordinaryEntry, String entryMode, String exitMode, String execution, String source, String lastRaw,
                         String selectedID, String activeID, AndroidHomeStateStore.Snapshot idle,
                         Map<String,Object> preferences, Map<String,byte[]> files,String lastExecution)throws Exception {
+            this(mode,node,entry,exit,external,ordinaryEntry,entryMode,exitMode,execution,source,lastRaw,selectedID,activeID,idle,preferences,files,lastExecution,null);
+        }
+
+        private Attempt(String mode, AndroidNodeStore.Node node, AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, AndroidStandardExitStore.Entry external,
+                        AndroidStandardExitStore.Entry ordinaryEntry, String entryMode, String exitMode, String execution, String source, String lastRaw,
+                        String selectedID, String activeID, AndroidHomeStateStore.Snapshot idle,
+                        Map<String,Object> preferences, Map<String,byte[]> files,String lastExecution,AndroidMultihopRuntime.StartupCapture lastMultihop)throws Exception {
             if(ordinaryEntry!=null&&(entry!=null||external==null||ordinaryEntry.id.equals(external.id)))throw new IllegalArgumentException("Startup must retain two distinct ordinary path owners.");
             this.mode=mode;this.node=node;this.entry=entry;this.exit=exit;this.entryMode=entryMode;this.exitMode=exitMode;
             this.execution=execution;this.source=source;this.lastRaw=lastRaw;this.lastExecution=lastExecution;this.selectedID=selectedID;this.activeID=activeID;
+            this.lastMultihop=lastMultihop;
             this.idle=idle;this.preferences=Collections.unmodifiableMap(new LinkedHashMap<>(preferences));
             this.external=external==null?null:AndroidStandardExitStore.copy(external);
             this.nodeKind=external==null?"router-vpn":"external";
@@ -78,6 +87,7 @@ final class AndroidStartupPolicy {
 
         boolean multihop(){return entry!=null||ordinaryEntry!=null;}
         boolean external(){return external!=null;}
+        AndroidHomeStateStore.Snapshot idleOwner(){return idle;}
 
         void requireCurrent(Context context, AndroidNodeStore nodes, AndroidUnifiedConnectionController connection)throws Exception {
             synchronized(AndroidStartupPolicy.class){
@@ -102,6 +112,7 @@ final class AndroidStartupPolicy {
                 if(!Arrays.equals(captured.getValue(),AndroidPrivateFileStore.read(current,AndroidNodeStore.MAX_BUNDLE)))
                     throw new IllegalStateException("A captured startup node or path policy changed; choose Connect again.");
             }
+            if(lastMultihop!=null)lastMultihop.require(entry,exit);
             requireNoVPN(context);
             if(!connection.idleCurrent(idle))throw new IllegalStateException("A newer VPN owner replaced the startup decision.");
         }
@@ -161,7 +172,9 @@ final class AndroidStartupPolicy {
         }
         String source=bundle.toString();
         String last="last".equals(mode)&&entry==null?lastRaw(context,node.id,bundle):"";
-        Attempt capture=new Attempt(mode,node,entry,exit,null,entryMode,exitMode,execution,source,last,selected,nodes.activeId(),idle,preferences,files);
+        AndroidMultihopRuntime.StartupCapture lastMultihop="last".equals(mode)&&entry!=null&&"auto".equals(execution)
+                ?lastMultihop(context,node.id,bytes,entry,files.get(entry.id),exit,files.get(exit.id),entryMode,exitMode,execution):null;
+        Attempt capture=new Attempt(mode,node,entry,exit,null,null,entryMode,exitMode,execution,source,last,selected,nodes.activeId(),idle,preferences,files,"",lastMultihop);
         synchronized(AndroidStartupPolicy.class){if(pending!=null)throw new IllegalStateException("Another startup permission request is pending.");pending=capture;}
         try{capture.requireCurrent(context,nodes,connection);return capture;}catch(Exception changed){capture.cancel();throw changed;}
     }
@@ -227,6 +240,91 @@ final class AndroidStartupPolicy {
                 return true;
             }
         }catch(Exception unavailable){return false;}
+    }
+
+    /** Complete source identity prepared outside the native/Home adoption.
+     * The final selected leaf and public Server constraints come only from the
+     * exact fresh native capture; this record owns no native session or lease. */
+    static final class MultihopLast {
+        private final String entryID,exitID,entryMode,exitMode,requested,pathSHA;
+        private final Map<String,Object> preferences;
+        private MultihopLast(String entryID,String exitID,String entryMode,String exitMode,String requested,String pathSHA,Map<String,Object> preferences){
+            this.entryID=entryID;this.exitID=exitID;this.entryMode=entryMode;this.exitMode=exitMode;this.requested=requested;this.pathSHA=pathSHA;
+            this.preferences=Collections.unmodifiableMap(new LinkedHashMap<>(preferences));
+        }
+    }
+
+    static MultihopLast prepareMultihopExecution(Context context,AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,
+                                                String entryMode,String exitMode,String requested,
+                                                AndroidMultihopController.Source entrySource,AndroidMultihopController.Source exitSource){
+        try{
+            if(AndroidMTUMeasurementGate.held()||entry==null||exit==null||entry.id.equals(exit.id)||entrySource==null||exitSource==null
+                    ||!NativeSingBoxController.nativeMultihopEntry(entryMode)||exitMode==null||exitMode.isEmpty()
+                    ||!Arrays.asList("local","server","auto").contains(requested))return null;
+            Map<String,Object> preferences=selectionPreferences(context);SharedPreferences prefs=prefs(context);
+            AndroidNodeStore nodes=new AndroidNodeStore(context);String selected=prefs.getString("selected_id",nodes.activeId());
+            if(!"router-vpn".equals(prefs.getString("selected_kind","router-vpn"))||selected==null||selected.isEmpty()||!selected.equals(nodes.activeId())
+                    ||!prefs.getBoolean("multihop_on",false)||!"router-vpn".equals(prefs.getString("multihop_entry_kind","router-vpn"))
+                    ||!entry.id.equals(prefs.getString("multihop_entry",""))||!exit.id.equals(prefs.getString("multihop_exit",""))
+                    ||!entryMode.equals(prefs.getString("multihop_entry_mode","wg"))||!exitMode.equals(prefs.getString("multihop_exit_mode",""))
+                    ||!requested.equals(prefs.getString("multihop_execution","local")))return null;
+            entrySource.require(nodes.file(entry.id));exitSource.require(nodes.file(exit.id));
+            if(!entrySource.file.equals(entry.file.getCanonicalFile())||!exitSource.file.equals(exit.file.getCanonicalFile())||entrySource.file.equals(exitSource.file))return null;
+            byte[] entryBytes=AndroidPrivateFileStore.read(entrySource.file,AndroidNodeStore.MAX_BUNDLE),exitBytes=AndroidPrivateFileStore.read(exitSource.file,AndroidNodeStore.MAX_BUNDLE);
+            if(!entrySource.digest.equals(AndroidTorProfile.digest(entryBytes))||!exitSource.digest.equals(AndroidTorProfile.digest(exitBytes)))return null;
+            byte[] selectedBytes=AndroidPrivateFileStore.read(nodes.file(selected),AndroidNodeStore.MAX_BUNDLE);
+            String identity=multihopPathIdentity(selected,selectedBytes,entry.id,entryBytes,exit.id,exitBytes,entryMode,exitMode,requested);
+            if(!preferences.equals(selectionPreferences(context))||!selected.equals(nodes.activeId()))return null;
+            return new MultihopLast(entry.id,exit.id,entryMode,exitMode,requested,identity,preferences);
+        }catch(Exception unavailable){return null;}
+    }
+
+    /** Write only inside the exact runtime's fresh Connected adoption. Pins
+     * constrain a later authenticated catalog; they are not a reused lease,
+     * proof, key pair, or cached performance result. */
+    static boolean recordMultihopExecution(Context context,MultihopLast record,AndroidHomeStateStore.Snapshot capturedHome,String selected,String pins){
+        try{
+            if(record==null||!Arrays.asList("local","server").contains(selected)||!"auto".equals(record.requested)&&!record.requested.equals(selected))return false;
+            String canonicalPins=AndroidMultihopController.validatedServerIdentityPins(selected,record.exitMode,pins);
+            if(!canonicalPins.equals(pins))return false;
+            synchronized(AndroidHomeStateStore.class){
+                AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
+                if(capturedHome==null||capturedHome.sessionId.isEmpty()||!capturedHome.sessionId.equals(home.sessionId)
+                        ||capturedHome.pathGeneration!=home.pathGeneration||!home.connected||!"connected".equals(home.phase)||!"passed".equals(home.pathProof)
+                        ||!"multihop".equals(home.logicalMode)||!record.entryID.equals(home.activeEntryId)||!record.exitID.equals(home.activeExitId)
+                        ||!record.exitID.equals(home.activeNodeId)||!record.entryMode.equals(home.activeEntryMode)||!record.exitMode.equals(home.runtimeMode)
+                        ||!home.activeExternalId.isEmpty()||AndroidHomeStateStore.emergencyDisconnectPending(context)
+                        ||!record.preferences.equals(selectionPreferences(context)))return false;
+                JSONObject receipt=new JSONObject().put("schema",1).put("entry_id",record.entryID).put("exit_id",record.exitID)
+                        .put("path_sha256",record.pathSHA).put("selected_execution",selected).put("server_identity_pins",canonicalPins);
+                AndroidPrivateFileStore.write(new File(context.getApplicationContext().getFilesDir(),MULTIHOP_LAST_FILE),receipt.toString().getBytes(StandardCharsets.UTF_8),MAX_LAST);
+                return true;
+            }
+        }catch(Exception unavailable){return false;}
+    }
+
+    private static AndroidMultihopRuntime.StartupCapture lastMultihop(Context context,String selectedID,byte[] selectedBytes,
+                                                                    AndroidNodeStore.Node entry,byte[] entryBytes,AndroidNodeStore.Node exit,byte[] exitBytes,
+                                                                    String entryMode,String exitMode,String requested)throws Exception{
+        try{
+            JSONObject receipt=lastObject(context,MULTIHOP_LAST_FILE,"entry_id","exit_id","path_sha256","selected_execution","server_identity_pins");
+            if(!entry.id.equals(receipt.getString("entry_id"))||!exit.id.equals(receipt.getString("exit_id"))
+                    ||!multihopPathIdentity(selectedID,selectedBytes,entry.id,entryBytes,exit.id,exitBytes,entryMode,exitMode,requested).equals(receipt.getString("path_sha256")))
+                throw new IllegalArgumentException("The saved Last graph no longer matches its complete private sources.");
+            String selected=receipt.getString("selected_execution"),pins=receipt.getString("server_identity_pins");
+            io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(pins);
+            return AndroidMultihopRuntime.startupCapture(entry,exit,exitMode,requested,entryMode,selected,pins,entryBytes,exitBytes);
+        }catch(Exception missing){throw new IllegalStateException("Startup Last has no matching proved multihop execution. Choose Connect to run Compare both for this saved path.");}
+    }
+
+    private static String multihopPathIdentity(String selectedID,byte[] selectedBytes,String entryID,byte[] entryBytes,String exitID,byte[] exitBytes,
+                                               String entryMode,String exitMode,String requested)throws Exception{
+        JSONObject selected=new JSONObject(AndroidTorProfile.strictText(selectedBytes)),entry=new JSONObject(AndroidTorProfile.strictText(entryBytes)),exit=new JSONObject(AndroidTorProfile.strictText(exitBytes));
+        AndroidNodeStore.validateBundle(selected);AndroidNodeStore.validateBundle(entry);AndroidNodeStore.validateBundle(exit);
+        JSONObject identity=new JSONObject().put("selected_id",selectedID).put("selected_sha256",profileIdentity(selected))
+                .put("entry_id",entryID).put("entry_sha256",profileIdentity(entry)).put("exit_id",exitID).put("exit_sha256",profileIdentity(exit))
+                .put("entry_mode",entryMode).put("exit_mode",exitMode).put("execution",requested);
+        return AndroidTorProfile.digest(canonical(identity).getBytes(StandardCharsets.UTF_8));
     }
 
     /** Immutable, secret-free record prepared without native/Home locks. The
