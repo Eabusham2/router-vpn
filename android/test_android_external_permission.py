@@ -95,7 +95,7 @@ final class AndroidRuntimeRegistry {
 // Startup has its own shipping-policy/permission fixture. This suite never
 // creates a startup capture or records a single-Router proof.
 final class AndroidStartupPolicy {
- static final class Attempt {String nonce="",mode="",source="",lastRaw="",entryMode="wg",exitMode="",execution="local";AndroidNodeStore.Node node,entry,exit;AndroidStandardExitStore.Entry external,ordinaryEntry;boolean external(){return external!=null;}boolean multihop(){return entry!=null;}void requireCurrent(Context c,AndroidNodeStore n,AndroidUnifiedConnectionController o){throw new AssertionError("unexpected startup capture");}void dispatched(){}void cancel(){}}
+ static final class Attempt {String nonce="",mode="",source="",lastRaw="",lastExecution="",entryMode="wg",exitMode="",execution="local";AndroidNodeStore.Node node,entry,exit;AndroidStandardExitStore.Entry external,ordinaryEntry;boolean external(){return external!=null;}boolean multihop(){return entry!=null;}void requireCurrent(Context c,AndroidNodeStore n,AndroidUnifiedConnectionController o){throw new AssertionError("unexpected startup capture");}void dispatched(){}void cancel(){}}
  static Attempt restore(String nonce){return null;}static void cancelPending(){}static boolean recordProven(Context c,AndroidNodeStore n,File f,String session,String raw,String source){return false;}
 }
 '''
