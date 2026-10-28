@@ -2,13 +2,18 @@ package routervpndesktoppt
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"regexp"
 	"sync"
+	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	boxService "github.com/sagernet/sing-box/adapter/service"
 	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/service"
 )
 
 const (
@@ -17,8 +22,9 @@ const (
 )
 
 type CaptureOptions struct {
-	SessionID    string `json:"session_id"`
-	SourceSHA256 string `json:"source_sha256"`
+	SessionID      string `json:"session_id"`
+	SourceSHA256   string `json:"source_sha256"`
+	PhysicalBroker bool   `json:"physical_broker,omitempty"`
 }
 
 var (
@@ -31,8 +37,9 @@ func RegisterNetworkOwner(registry *boxService.Registry) {
 }
 
 // NetworkOwner is the network-reset observer belonging to one exact Box and
-// Tor session. It opens no socket and owns no process. Its child context is the
-// parent of that session's physical capture, PT workers and proof operations.
+// Tor session. Its optional explicit broker is retained through real kernel
+// permit/socket cleanup. The child context is the parent of that session's
+// physical capture, PT workers and proof operations.
 // A reset retires that context even when interface names/addresses stay equal.
 type NetworkOwner struct {
 	mu        sync.Mutex
@@ -42,6 +49,9 @@ type NetworkOwner struct {
 	ready     bool
 	activated bool
 	retired   bool
+	networkID string
+	broker    *mobiletor.DesktopSocketBroker
+	physical  *PhysicalOutbound
 }
 
 var (
@@ -55,7 +65,12 @@ func NewNetworkOwner(ctx context.Context, _ log.ContextLogger, tag string, optio
 		return nil, errors.New("desktop Tor network observer requires its exact tag, live Box context and captured session/source")
 	}
 	owned, cancel := context.WithCancel(ctx)
-	return &NetworkOwner{ctx: owned, cancel: cancel, capture: options}, nil
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		cancel()
+		return nil, err
+	}
+	return &NetworkOwner{ctx: owned, cancel: cancel, capture: options, networkID: hex.EncodeToString(nonce[:])}, nil
 }
 
 func (*NetworkOwner) Type() string { return NetworkOwnerType }
@@ -93,13 +108,68 @@ func (n *NetworkOwner) Matches(sessionID, sourceSHA256 string) bool {
 // Physical capture must begin only after receiving this exact child context.
 func (n *NetworkOwner) Activate(sessionID, sourceSHA256 string) (context.Context, error) {
 	n.mu.Lock()
+	required, broker, physical, capture := n.capture.PhysicalBroker, n.broker, n.physical, n.brokerCapture()
+	n.mu.Unlock()
+	if required && (broker == nil || physical == nil || !broker.Matches(capture)) {
+		return nil, errors.New("desktop Tor required physical broker is not bound to this native generation")
+	}
+	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.retired || !n.ready || n.activated || n.ctx == nil || n.ctx.Err() != nil ||
 		n.capture.SessionID != sessionID || n.capture.SourceSHA256 != sourceSHA256 {
 		return nil, errors.New("desktop Tor network capture is not ready, does not match, or was already activated")
 	}
+	if n.capture.PhysicalBroker && (n.broker != broker || n.physical != physical) {
+		return nil, errors.New("desktop Tor required physical broker is not bound to this native generation")
+	}
 	n.activated = true
-	return n.ctx, nil
+	return context.WithValue(n.ctx, desktopPhysicalContextKey{}, n), nil
+}
+
+func (n *NetworkOwner) brokerCapture() mobiletor.DesktopSocketCapture {
+	return mobiletor.DesktopSocketCapture{SessionID: n.capture.SessionID, SourceSHA256: n.capture.SourceSHA256, NetworkID: n.networkID}
+}
+
+// PhysicalCapture is memory-only preparation for a privileged OS adapter. It
+// grants no socket authority and never enables the public strict-mode guard.
+func (n *NetworkOwner) PhysicalCapture() (mobiletor.DesktopSocketCapture, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.capture.PhysicalBroker || n.retired || n.activated || n.ctx.Err() != nil {
+		return mobiletor.DesktopSocketCapture{}, errors.New("desktop Tor physical capture is unavailable")
+	}
+	return n.brokerCapture(), nil
+}
+
+// BindPhysicalBroker consumes an independently provisioned broker once. The
+// actual native outbound object, complete source and network nonce must all
+// agree; a JSON flag or printed tuple cannot manufacture this capability.
+func (n *NetworkOwner) BindPhysicalBroker(broker *mobiletor.DesktopSocketBroker) error {
+	if broker == nil {
+		return errors.New("desktop Tor physical capability is missing")
+	}
+	manager := service.FromContext[adapter.OutboundManager](n.ctx)
+	if manager == nil {
+		return errors.New("desktop Tor physical native manager is missing")
+	}
+	selected, found := manager.Outbound(PhysicalOutboundTag)
+	physical, ok := selected.(*PhysicalOutbound)
+	if !found || !ok {
+		return errors.New("desktop Tor physical outbound is not its native implementation")
+	}
+	if !broker.Matches(n.brokerCapture()) {
+		return errors.New("desktop Tor physical broker belongs to another capture")
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.capture.PhysicalBroker || n.retired || n.activated || n.broker != nil || n.ctx.Err() != nil {
+		return errors.New("desktop Tor physical broker belongs to another or retired capture")
+	}
+	if err := physical.bind(n, broker); err != nil {
+		return err
+	}
+	n.broker, n.physical = broker, physical
+	return nil
 }
 
 func (n *NetworkOwner) Current() bool {
@@ -113,24 +183,35 @@ func (n *NetworkOwner) Current() bool {
 
 func (n *NetworkOwner) InterfaceUpdated(_ context.Context) {
 	n.mu.Lock()
-	defer n.mu.Unlock()
 	// Box initialization may discover interfaces before admission. No PT
 	// socket/capture is owned yet; a later activation captures the new state.
 	if !n.activated {
+		n.mu.Unlock()
 		return
 	}
 	n.retired = true
 	n.ready = false
 	n.cancel()
+	broker := n.broker
+	n.mu.Unlock()
+	if broker != nil {
+		broker.Cancel()
+	}
 }
 
 func (n *NetworkOwner) Close() error {
 	n.mu.Lock()
-	defer n.mu.Unlock()
 	n.retired = true
 	n.ready = false
 	if n.cancel != nil {
 		n.cancel()
+	}
+	broker := n.broker
+	n.mu.Unlock()
+	if broker != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		return broker.Close(ctx)
 	}
 	return nil
 }

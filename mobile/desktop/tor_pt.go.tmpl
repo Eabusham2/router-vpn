@@ -36,6 +36,7 @@ type Owner struct {
 	plain         bool
 	proxy         *mobiletor.TCPProxy
 	lower         N.Dialer
+	broker        *mobiletor.DesktopSocketBroker
 	network       *torNetworkCapture
 	upstream      *torUpstreamCapture
 	entry         *mobiletor.DesktopPredecessor
@@ -102,6 +103,16 @@ func newNativeOwner(ctx context.Context, plan mobiletor.Plan, resolver option.Do
 	}
 	options := option.DialerOptions{}
 	options.DomainResolver = &resolver
+	physicalBroker, err := physicalBrokerFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if physicalBroker != nil {
+		if predecessor != nil {
+			return nil, errors.New("desktop physical broker cannot replace a captured predecessor")
+		}
+		options.Detour = PhysicalOutboundTag
+	}
 	if predecessor != nil {
 		options.Detour = predecessor.Tag()
 	}
@@ -123,8 +134,13 @@ func newCapturedOwner(ctx context.Context, plan mobiletor.Plan, options option.D
 }
 
 func captureOwner(ctx context.Context, plan mobiletor.Plan, options option.DialerOptions, current func() bool, lower N.Dialer, predecessor *mobiletor.DesktopPredecessor, plain bool) (*Owner, error) {
+	physicalBroker, physicalErr := physicalBrokerFromContext(ctx)
+	if physicalErr != nil {
+		return nil, physicalErr
+	}
+	physicalDetour := physicalBroker != nil && predecessor == nil && options.Detour == PhysicalOutboundTag
 	if ctx == nil || ctx.Err() != nil || current == nil || !current() || lower == nil || options.DomainResolver == nil || options.DomainResolver.Server == "" ||
-		(predecessor == nil && options.Detour != "") || (predecessor != nil && options.Detour != predecessor.Tag()) {
+		(predecessor == nil && options.Detour != "" && !physicalDetour) || (predecessor != nil && options.Detour != predecessor.Tag()) || (physicalBroker != nil && !physicalDetour) {
 		return nil, errors.New("desktop Tor PT physical capture is missing or retired")
 	}
 	lines := make([]string, len(plan.Bridges))
@@ -149,7 +165,7 @@ func captureOwner(ctx context.Context, plan mobiletor.Plan, options option.Diale
 		cancel()
 		return nil, err
 	}
-	if predecessor != nil {
+	if predecessor != nil || physicalDetour {
 		// Force the native detour to retain its actual object now. Matching the
 		// manager again is insufficient if its first lazy lookup acquired a
 		// replacement owner under the same label before admission.
@@ -174,7 +190,7 @@ func captureOwner(ctx context.Context, plan mobiletor.Plan, options option.Diale
 		cancel()
 		return nil, err
 	}
-	owner := &Owner{ctx: owned, cancel: cancel, plan: verified, plain: plain, lower: lower, network: capture, upstream: upstream, entry: predecessor, options: network, physical: current,
+	owner := &Owner{ctx: owned, cancel: cancel, plan: verified, plain: plain, lower: lower, broker: physicalBroker, network: capture, upstream: upstream, entry: predecessor, options: network, physical: current,
 		startDone: make(chan struct{}), watchDone: make(chan struct{}), entryJoined: make(chan struct{})}
 	owner.options.Resolve = owner.resolve
 	if predecessor != nil {
@@ -345,7 +361,7 @@ func (o *Owner) current() error {
 	if o == nil {
 		return net.ErrClosed
 	}
-	if o.retired.Load() || o.ctx.Err() != nil || !o.physical() || o.network.current() != nil || o.upstream.current() != nil {
+	if o.retired.Load() || o.ctx.Err() != nil || !o.physical() || o.network.current() != nil || o.upstream.current() != nil || (o.broker != nil && !o.broker.Current()) {
 		o.retire()
 		return errors.New("desktop Tor PT physical network, resolver or native owner retired")
 	}
@@ -357,6 +373,9 @@ func (o *Owner) retire() {
 	o.ready.Store(false)
 	o.entryProved.Store(false)
 	o.cancel()
+	if o.broker != nil {
+		o.broker.Cancel()
+	}
 }
 
 func (o *Owner) operation(ctx context.Context) error {
@@ -465,6 +484,11 @@ func (o *Owner) Close(ctx context.Context) error {
 		return errors.New("desktop Tor PT close requires a bounded caller context")
 	}
 	o.retire()
+	if o.broker != nil {
+		if err := o.broker.Close(ctx); err != nil {
+			return err
+		}
+	}
 	o.mu.Lock()
 	o.closing = true
 	if !o.started {

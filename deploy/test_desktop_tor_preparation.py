@@ -88,7 +88,8 @@ class DesktopPTPreparation(unittest.TestCase):
                              (ROOT/'mobile/desktop'/name).read_bytes())
         # These real entry-routed PT exchanges belong to the same generated
         # native package selected by the mandatory shipping build gate.
-        for name in ('tor_pt_entry_peers_test.go.tmpl', 'tor_pt_entry_traffic_test.go.tmpl'):
+        for name in ('tor_pt_entry_peers_test.go.tmpl', 'tor_pt_entry_traffic_test.go.tmpl',
+                     'tor_physical.go.tmpl', 'tor_physical_test.go.tmpl'):
             self.assertIn(name, PREP.PT_TEMPLATES)
         traffic = (self.vendor/'routervpn/desktoppt/tor_pt_entry_traffic_test.go').read_text()
         for name in ('MeekTLS', 'WebTunnelTLS', 'SnowflakeTraffic'):
@@ -110,6 +111,7 @@ class DesktopPTPreparation(unittest.TestCase):
                          (ROOT/'mobile/toroutbound/dns_adapter.go.tmpl').read_bytes())
         registry = (self.vendor/'include/registry.go').read_text()
         self.assertEqual(registry.count('routervpndesktoppt.RegisterNetworkOwner(registry)'), 1)
+        self.assertEqual(registry.count('routervpndesktoppt.RegisterPhysicalOutbound(registry)'), 1)
         self.assertEqual((self.vendor/'route/network.go').read_text().count(PREP.NETWORK_DISPATCH), 1)
         record = json.loads((self.vendor/PREP.PT_OWNER).read_bytes())
         self.assertEqual(record['files'], {name: hashlib.sha256(raw).hexdigest() for name, raw in content.items()})
@@ -133,6 +135,8 @@ class DesktopPTPreparation(unittest.TestCase):
                                  (ROOT/'mobile/desktop'/name).read_bytes())
             self.assertEqual(generated['routervpn/mobiletor/desktop_lastrelay.go'],
                              (ROOT/'internal/mobiletor/desktop_lastrelay.go').read_bytes())
+            self.assertEqual(generated['routervpn/mobiletor/desktop_socket_broker_test.go'],
+                             (ROOT/'internal/mobiletor/desktop_socket_broker_test.go').read_bytes())
             for relative, raw in PREP.comparison_client_contract().items():
                 self.assertEqual(generated[relative], raw)
 

@@ -454,6 +454,7 @@ class WindowsDependencyDelivery(unittest.TestCase):
                         expected = {
                             './cmd/sing-box': '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU)',
                             './routervpn/desktoppt': '^Test(RouterVPNDesktopTorPT|DesktopTorNetworkOwner)',
+                            './routervpn/mobiletor': '^TestDesktopSocket',
                             './route': '^TestRouterVPNDesktopTorNetwork',
                             '.': '^TestRouterVPNDesktopTor',
                         }

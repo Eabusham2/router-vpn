@@ -39,7 +39,8 @@ PT_OWNER = 'routervpn-desktop-tor-source.json'
 PT_NAMESPACES = ('routervpn/torpt/', 'routervpn/desktoppt/')
 PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_test.go.tmpl',
                 'tor_pt_entry_traffic_test.go.tmpl', 'tor_network.go.tmpl', 'tor_network_test.go.tmpl',
-                'tor_server.go.tmpl', 'tor_plain_test.go.tmpl', 'tor_local.go.tmpl', 'tor_local_test.go.tmpl')
+                'tor_server.go.tmpl', 'tor_plain_test.go.tmpl', 'tor_local.go.tmpl', 'tor_local_test.go.tmpl',
+                'tor_physical.go.tmpl', 'tor_physical_test.go.tmpl')
 BOX_TEMPLATES = {
     'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go',
     'tor_box_lastrelay.go.tmpl': 'routervpn_desktop_tor_box_lastrelay.go',
@@ -201,6 +202,7 @@ def pt_registry_source(source):
         raise ValueError('Desktop Tor Server must belong to the outbound registry')
     for function, anchor, name in (
             ('RegisterLocalTor', '\troutervpndesktoppt.RegisterServerTor(registry)', 'func OutboundRegistry() *outbound.Registry {'),
+            ('RegisterPhysicalOutbound', '\troutervpndesktoppt.RegisterLocalTor(registry)', 'func OutboundRegistry() *outbound.Registry {'),
             ('RegisterLocalTorDNS', '\ttransport.RegisterTCP(registry)', 'func DNSTransportRegistry() *dns.TransportRegistry {')):
         registered = '\troutervpndesktoppt.'+function+'(registry)'
         marker = 'routervpndesktoppt.'+function+'('
@@ -404,7 +406,7 @@ def prepare(vendor, go='go', *, env=None):
     # no embedded Tor implementation or C package is installed here.
     for package in PURE:
         for path in sorted((ROOT/'internal'/package).glob('*.go')):
-            if path.name.endswith('_test.go'):
+            if path.name.endswith('_test.go') and not (package == 'mobiletor' and path.name == 'desktop_socket_broker_test.go'):
                 continue
             raw = path.read_bytes()
             for name in PURE:

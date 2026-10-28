@@ -1,0 +1,147 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+const PhysicalOutboundType = "routervpn-desktop-tor-physical"
+const PhysicalOutboundTag = "routervpn-tor-physical-egress"
+
+type desktopPhysicalContextKey struct{}
+
+type PhysicalOutboundOptions struct {
+	SessionID    string `json:"session_id"`
+	SourceSHA256 string `json:"source_sha256"`
+}
+
+func RegisterPhysicalOutbound(registry *outbound.Registry) {
+	outbound.Register[PhysicalOutboundOptions](registry, PhysicalOutboundType, NewPhysicalOutbound)
+}
+
+// PhysicalOutbound is the only native lower path for a bound dynamic physical
+// broker. The same explicit detour must be present in every captured bootstrap
+// DNS transport; the existing complete dependency capture verifies that before
+// any PT starts. It has no default dialer, resolver or JSON-created capability.
+type PhysicalOutbound struct {
+	outbound.Adapter
+	ctx     context.Context
+	options PhysicalOutboundOptions
+	mu      sync.Mutex
+	network *NetworkOwner
+	broker  *mobiletor.DesktopSocketBroker
+	closed  bool
+}
+
+func NewPhysicalOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options PhysicalOutboundOptions) (adapter.Outbound, error) {
+	if ctx == nil || ctx.Err() != nil || tag != PhysicalOutboundTag || !networkSessionID.MatchString(options.SessionID) || !networkSourceID.MatchString(options.SourceSHA256) {
+		return nil, errors.New("desktop physical outbound requires its exact captured native source")
+	}
+	return &PhysicalOutbound{Adapter: outbound.NewAdapter(PhysicalOutboundType, tag, []string{"tcp", "udp"}, nil), ctx: ctx, options: options}, nil
+}
+
+func (o *PhysicalOutbound) bind(network *NetworkOwner, broker *mobiletor.DesktopSocketBroker) error {
+	if network == nil || broker == nil || network.capture.SessionID != o.options.SessionID || network.capture.SourceSHA256 != o.options.SourceSHA256 {
+		return errors.New("desktop physical outbound does not match its captured broker")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed || o.network != nil || o.ctx.Err() != nil {
+		return errors.New("desktop physical outbound was already bound or retired")
+	}
+	o.network, o.broker = network, broker
+	return nil
+}
+
+func (o *PhysicalOutbound) current(ctx context.Context) (*mobiletor.DesktopSocketBroker, error) {
+	if ctx == nil || ctx.Err() != nil || o.ctx.Err() != nil {
+		return nil, net.ErrClosed
+	}
+	o.mu.Lock()
+	network, broker, closed := o.network, o.broker, o.closed
+	o.mu.Unlock()
+	if closed || network == nil || broker == nil || ctx.Value(desktopPhysicalContextKey{}) != network || !network.Current() || !broker.Matches(network.brokerCapture()) {
+		return nil, errors.New("desktop physical socket has no exact native scope")
+	}
+	manager := service.FromContext[adapter.OutboundManager](o.ctx)
+	if manager == nil {
+		return nil, net.ErrClosed
+	}
+	selected, found := manager.Outbound(PhysicalOutboundTag)
+	if !found || selected != o {
+		return nil, errors.New("desktop physical outbound was replaced")
+	}
+	return broker, nil
+}
+
+func (o *PhysicalOutbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	broker, err := o.current(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if destination.IsDomain() || !destination.IsValid() || destination.Port == 0 {
+		return nil, errors.New("desktop physical outbound never falls back to host DNS")
+	}
+	return broker.DialContext(ctx, network, destination.String())
+}
+
+func (o *PhysicalOutbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	broker, err := o.current(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if destination.IsDomain() || !destination.IsValid() {
+		return nil, errors.New("desktop physical packets require an exact numeric family")
+	}
+	return broker.ListenPacket(ctx, "udp", destination.String())
+}
+
+func (o *PhysicalOutbound) Close() error {
+	o.mu.Lock()
+	o.closed = true
+	broker := o.broker
+	o.mu.Unlock()
+	if broker == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return broker.Close(ctx)
+}
+
+func physicalBrokerFromContext(ctx context.Context) (*mobiletor.DesktopSocketBroker, error) {
+	if ctx == nil {
+		return nil, net.ErrClosed
+	}
+	network, _ := ctx.Value(desktopPhysicalContextKey{}).(*NetworkOwner)
+	if network == nil {
+		return nil, nil
+	}
+	network.mu.Lock()
+	required, broker, physical, retired := network.capture.PhysicalBroker, network.broker, network.physical, network.retired
+	network.mu.Unlock()
+	if !required {
+		if broker != nil || physical != nil {
+			return nil, errors.New("uncaptured desktop physical broker")
+		}
+		return nil, nil
+	}
+	if retired || broker == nil || physical == nil {
+		return nil, errors.New("required desktop physical broker is unavailable")
+	}
+	actual, err := physical.current(ctx)
+	if err != nil || actual != broker {
+		return nil, errors.New("desktop physical broker lost its native owner")
+	}
+	return broker, nil
+}

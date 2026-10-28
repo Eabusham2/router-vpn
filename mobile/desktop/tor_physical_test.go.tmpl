@@ -1,0 +1,372 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// Real native detour/DNS constructors and actual loopback TCP/UDP are retained.
+// The privileged firewall/identity operations are the stated test boundary;
+// these tests do not install any policy on the host or enable strict admission.
+type desktopPhysicalPolicyFixture struct {
+	owner    mobiletor.DesktopSocketKernelOwner
+	live     atomic.Bool
+	mu       sync.Mutex
+	requests []mobiletor.DesktopSocketGrant
+	grants   map[string]mobiletor.DesktopSocketGrant
+}
+
+func newDesktopPhysicalPolicyFixture() *desktopPhysicalPolicyFixture {
+	p := &desktopPhysicalPolicyFixture{owner: mobiletor.DesktopSocketKernelOwner{Kind: "unix-isolated-uid", IdentitySHA256: strings.Repeat("c", 64), Generation: 1, ProcessID: uint32(os.Getpid())}, grants: make(map[string]mobiletor.DesktopSocketGrant)}
+	p.live.Store(true)
+	return p
+}
+func (p *desktopPhysicalPolicyFixture) Owner() (mobiletor.DesktopSocketKernelOwner, error) {
+	return p.owner, nil
+}
+func (p *desktopPhysicalPolicyFixture) Current(mobiletor.DesktopSocketCapture, mobiletor.DesktopSocketKernelOwner) bool {
+	return p.live.Load()
+}
+func (p *desktopPhysicalPolicyFixture) Select(_ context.Context, _ mobiletor.DesktopSocketCapture, _ string, remote netip.AddrPort) (mobiletor.DesktopSocketBinding, error) {
+	if !remote.Addr().Is4() {
+		return mobiletor.DesktopSocketBinding{}, errors.New("fixture permits IPv4 loopback only")
+	}
+	return mobiletor.DesktopSocketBinding{Owner: p.owner, InterfaceName: "fixture-loopback", InterfaceIndex: 1, LocalAddress: netip.MustParseAddr("127.0.0.1")}, nil
+}
+func (p *desktopPhysicalPolicyFixture) Bind(ctx context.Context, _ mobiletor.DesktopSocketCapture, _ mobiletor.DesktopSocketBinding, _ string, raw syscall.RawConn) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return raw.Control(func(uintptr) {})
+}
+func (p *desktopPhysicalPolicyFixture) Grant(_ context.Context, q mobiletor.DesktopSocketGrant) (mobiletor.DesktopSocketReceipt, error) {
+	if !q.Remote.Addr().IsLoopback() {
+		return mobiletor.DesktopSocketReceipt{}, errors.New("fixture denied public network")
+	}
+	p.mu.Lock()
+	p.requests = append(p.requests, q)
+	p.grants[q.SocketID+q.Remote.String()] = q
+	p.mu.Unlock()
+	now := time.Now()
+	return mobiletor.DesktopSocketReceipt{Grant: q, ObservedAt: now.UnixMilli(), ExpiresAt: now.Add(10 * time.Second).UnixMilli()}, nil
+}
+func (p *desktopPhysicalPolicyFixture) Revoke(_ context.Context, q mobiletor.DesktopSocketGrant) error {
+	p.mu.Lock()
+	delete(p.grants, q.SocketID+q.Remote.String())
+	p.mu.Unlock()
+	return nil
+}
+
+type desktopPhysicalFixture struct {
+	f        *desktopPTFixture
+	manager  *desktopPTEntryManager
+	network  *NetworkOwner
+	outbound *PhysicalOutbound
+	broker   *mobiletor.DesktopSocketBroker
+	policy   *desktopPhysicalPolicyFixture
+	ctx      context.Context
+}
+
+func newDesktopPhysicalFixture(t *testing.T, activate bool) *desktopPhysicalFixture {
+	t.Helper()
+	f := newDesktopPTFixture(t)
+	manager := &desktopPTEntryManager{}
+	service.MustRegister[adapter.OutboundManager](f.ctx, manager)
+	options := testNetworkOptions()
+	options.PhysicalBroker = true
+	created, err := NewNetworkOwner(f.ctx, nil, NetworkOwnerTag, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	network := created.(*NetworkOwner)
+	physicalRaw, err := NewPhysicalOutbound(f.ctx, nil, nil, PhysicalOutboundTag, PhysicalOutboundOptions{SessionID: options.SessionID, SourceSHA256: options.SourceSHA256})
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical := physicalRaw.(*PhysicalOutbound)
+	manager.replace(physical)
+	if err := network.Start(adapter.StartStateStarted); err != nil {
+		t.Fatal(err)
+	}
+	capture, err := network.PhysicalCapture()
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := newDesktopPhysicalPolicyFixture()
+	broker, err := mobiletor.NewDesktopSocketBroker(f.ctx, capture, policy, func() bool { return network.Matches(options.SessionID, options.SourceSHA256) && f.active.Load() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := network.Close(); err != nil {
+			t.Error(err)
+		}
+		if err := physical.Close(); err != nil {
+			t.Error(err)
+		}
+		wait, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := broker.Close(wait); err != nil {
+			t.Error(err)
+		}
+	})
+	fixture := &desktopPhysicalFixture{f: f, manager: manager, network: network, outbound: physical, broker: broker, policy: policy}
+	if activate {
+		if err := network.BindPhysicalBroker(broker); err != nil {
+			t.Fatal(err)
+		}
+		fixture.ctx, err = network.Activate(options.SessionID, options.SourceSHA256)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return fixture
+}
+
+func desktopPhysicalDNS(t *testing.T, fixture *desktopPhysicalFixture, detour string) string {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var count atomic.Int32
+	server := &mDNS.Server{Listener: listener, Net: "tcp", Handler: mDNS.HandlerFunc(func(w mDNS.ResponseWriter, q *mDNS.Msg) {
+		count.Add(1)
+		r := new(mDNS.Msg)
+		r.SetReply(q)
+		for _, question := range q.Question {
+			if question.Qtype == mDNS.TypeA {
+				r.Answer = append(r.Answer, &mDNS.A{Hdr: mDNS.RR_Header{Name: question.Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 300}, A: net.IPv4(127, 0, 0, 1)})
+			}
+		}
+		_ = w.WriteMsg(r)
+	})}
+	go func() { _ = server.ActivateAndServe() }()
+	t.Cleanup(func() { _ = server.Shutdown() })
+	address := M.ParseSocksaddr(listener.Addr().String())
+	options := option.RemoteDNSServerOptions{DNSServerAddressOptions: option.DNSServerAddressOptions{Server: address.Addr.String(), ServerPort: address.Port}}
+	options.Detour = detour
+	selected, err := transport.NewTCP(fixture.f.ctx, nil, "bootstrap", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.f.dns.replace("bootstrap", selected)
+	if err := selected.Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = selected.Close() })
+	fixture.f.router.lookup = func(ctx context.Context, name string, query adapter.DNSQueryOptions) ([]netip.Addr, error) {
+		if query.Transport != selected {
+			return nil, errors.New("native query changed selected DNS")
+		}
+		q := new(mDNS.Msg)
+		q.SetQuestion(mDNS.Fqdn(name), mDNS.TypeA)
+		r, err := query.Transport.Exchange(ctx, q)
+		if err != nil {
+			return nil, err
+		}
+		var addresses []netip.Addr
+		for _, answer := range r.Answer {
+			if a, ok := answer.(*mDNS.A); ok {
+				address, _ := netip.AddrFromSlice(a.A)
+				addresses = append(addresses, address.Unmap())
+			}
+		}
+		return addresses, nil
+	}
+	return listener.Addr().String()
+}
+
+func TestRouterVPNDesktopTorPTPhysicalNativeLowerCarriesActualSelectedDNSAndTCPUDP(t *testing.T) {
+	f := newDesktopPhysicalFixture(t, true)
+	dnsAddress := desktopPhysicalDNS(t, f, PhysicalOutboundTag)
+	owner, err := NewPlain(f.ctx, *f.f.options.DomainResolver, nil, f.network.Current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeDesktopPT(t, owner) })
+	if err := owner.Start(); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	result := make(chan error, 1)
+	go func() {
+		peer, err := listener.Accept()
+		if err != nil {
+			result <- err
+			return
+		}
+		defer peer.Close()
+		data := make([]byte, 9)
+		_, err = io.ReadFull(peer, data)
+		if err == nil && string(data) != "real-path" {
+			err = errors.New("wrong relay bytes")
+		}
+		result <- err
+	}()
+	_, port, _ := net.SplitHostPort(listener.Addr().String())
+	connection, err := owner.dial(f.ctx, "tcp", "captured-relay.invalid:"+port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.Write([]byte("real-path")); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	packet, err := owner.packets(f.ctx, "udp4", "0.0.0.0:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer peer.Close()
+	if _, err := packet.WriteTo([]byte("owned-ICE"), peer.LocalAddr()); err != nil {
+		t.Fatal(err)
+	}
+	_ = peer.SetReadDeadline(time.Now().Add(time.Second))
+	data := make([]byte, 16)
+	n, from, err := peer.ReadFrom(data)
+	if err != nil || string(data[:n]) != "owned-ICE" || from.String() != packet.LocalAddr().String() {
+		t.Fatal("native packet callback lost actual UDP ownership", err)
+	}
+	if err := packet.Close(); err != nil {
+		t.Fatal(err)
+	}
+	f.policy.mu.Lock()
+	requests := append([]mobiletor.DesktopSocketGrant(nil), f.policy.requests...)
+	f.policy.mu.Unlock()
+	foundDNS, foundTCP, foundUDP := false, false, false
+	for _, q := range requests {
+		if q.Capture != f.broker.Capture() {
+			t.Fatal("native lower socket changed source/network capture")
+		}
+		if q.Network == "tcp" && q.Remote.String() == dnsAddress {
+			foundDNS = true
+		}
+		if q.Network == "tcp" && q.Remote.String() == listener.Addr().String() {
+			foundTCP = true
+		}
+		if q.Network == "udp" && q.Remote.String() == peer.LocalAddr().String() {
+			foundUDP = true
+		}
+	}
+	if !foundDNS || !foundTCP || !foundUDP {
+		t.Fatal("selected DNS or real TCP/UDP bypassed physical broker", requests)
+	}
+	closeDesktopPT(t, owner)
+	f.policy.mu.Lock()
+	remaining := len(f.policy.grants)
+	f.policy.mu.Unlock()
+	if remaining != 0 {
+		t.Fatal("native owner acknowledged cleanup before physical permits drained")
+	}
+}
+
+func TestRouterVPNDesktopTorPTPhysicalRequiredCapabilityCannotFallBack(t *testing.T) {
+	for _, fault := range []string{"missing-broker", "wrong-source", "wrong-network", "second-bind", "host-context", "DNS-bypass", "outbound-replaced", "network-reset"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newDesktopPhysicalFixture(t, false)
+			options := testNetworkOptions()
+			switch fault {
+			case "missing-broker":
+				if _, err := f.network.Activate(options.SessionID, options.SourceSHA256); err == nil {
+					t.Fatal("required capability fell back to physical default")
+				}
+				return
+			case "wrong-source", "wrong-network":
+				capture := f.broker.Capture()
+				if fault == "wrong-source" {
+					capture.SourceSHA256 = strings.Repeat("d", 64)
+				} else {
+					capture.NetworkID = strings.Repeat("d", 32)
+				}
+				wrong, err := mobiletor.NewDesktopSocketBroker(context.Background(), capture, newDesktopPhysicalPolicyFixture(), func() bool { return true })
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer wrong.Close(context.Background())
+				if err := f.network.BindPhysicalBroker(wrong); err == nil {
+					t.Fatal("foreign broker was bound")
+				}
+				return
+			}
+			if err := f.network.BindPhysicalBroker(f.broker); err != nil {
+				t.Fatal(err)
+			}
+			if fault == "second-bind" {
+				if err := f.network.BindPhysicalBroker(f.broker); err == nil {
+					t.Fatal("native broker rebound")
+				}
+				return
+			}
+			ctx, err := f.network.Activate(options.SessionID, options.SourceSHA256)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.ctx = ctx
+			if fault == "DNS-bypass" {
+				f.f.dns.replace("bootstrap", desktopPTRemote("bootstrap", "", "127.0.0.1"))
+				if owner, err := NewPlain(ctx, *f.f.options.DomainResolver, nil, f.network.Current); err == nil || owner != nil {
+					t.Fatal("selected bootstrap DNS escaped captured broker")
+				}
+				return
+			}
+			if fault == "outbound-replaced" {
+				f.manager.replace(&desktopPTEntryOutbound{Adapter: outbound.NewAdapter(PhysicalOutboundType, PhysicalOutboundTag, []string{"tcp", "udp"}, nil), desktopPTLower: f.f.lower})
+			}
+			if fault == "network-reset" {
+				f.network.InterfaceUpdated(context.Background())
+			}
+			if fault == "host-context" {
+				ctx = context.Background()
+			}
+			controlled, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer controlled.Close()
+			if conn, err := f.outbound.DialContext(ctx, "tcp", M.ParseSocksaddr(controlled.Addr().String())); err == nil || conn != nil {
+				if conn != nil {
+					_ = conn.Close()
+				}
+				t.Fatal("uncaptured physical scope reached a socket")
+			}
+			f.policy.mu.Lock()
+			count := len(f.policy.requests)
+			f.policy.mu.Unlock()
+			if count != 0 {
+				t.Fatal("rejected capability created a physical permit")
+			}
+		})
+	}
+}
