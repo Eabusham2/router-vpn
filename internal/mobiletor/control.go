@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -20,6 +21,9 @@ type Control struct {
 	reader    *bufio.Reader
 	mu        sync.Mutex
 	operation sync.Mutex
+	// A probe retains this claim until its native stream and anchor hold drain.
+	// A competing constructor must not wait for (or interrupt) an issued frame.
+	lastRelayProbe atomic.Pointer[LastRelayProbe]
 }
 
 func NewControl(conn net.Conn) (*Control, error) {
