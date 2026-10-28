@@ -17,6 +17,13 @@ type TorPaddingPolicy struct {
 	RateKbps int  `json:"rate_kbps"`
 }
 
+// CapturedTorPaddingPolicy validates the saved outgoing-cover choice without
+// granting permission to start it. Each host must still bind the resulting
+// policy to its actual native control, path, DNS and isolation owners.
+func CapturedTorPaddingPolicy(profile map[string]any) (TorPaddingPolicy, bool, error) {
+	return capturedTorPaddingPolicy(profile)
+}
+
 func capturedTorPaddingPolicy(profile map[string]any) (TorPaddingPolicy, bool, error) {
 	requested := false
 	_, selected := profile["daita_enabled"]
