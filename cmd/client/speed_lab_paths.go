@@ -40,25 +40,28 @@ type speedLabRequest struct {
 }
 
 type speedLabPath struct {
-	Scope            string    `json:"scope"`
-	Topology         string    `json:"topology"`
-	Temporary        bool      `json:"temporary"`
-	NodeID           string    `json:"node_id,omitempty"`
-	NodeName         string    `json:"node_name,omitempty"`
-	EntryID          string    `json:"entry_id,omitempty"`
-	EntryName        string    `json:"entry_name,omitempty"`
-	EntryMode        string    `json:"entry_mode,omitempty"`
-	ExitID           string    `json:"exit_id,omitempty"`
-	ExitName         string    `json:"exit_name,omitempty"`
-	RequestedMode    string    `json:"requested_mode,omitempty"`
-	RuntimeMode      string    `json:"runtime_mode,omitempty"`
-	LogicalMode      string    `json:"logical_mode,omitempty"`
-	Base             string    `json:"base,omitempty"`
-	ExitMode         string    `json:"exit_mode,omitempty"`
-	Execution        string    `json:"execution,omitempty"`
-	ExternalProtocol string    `json:"external_protocol,omitempty"`
-	StartedAt        time.Time `json:"started_at,omitempty"`
-	Description      string    `json:"description"`
+	Scope               string              `json:"scope"`
+	Topology            string              `json:"topology"`
+	Temporary           bool                `json:"temporary"`
+	NodeID              string              `json:"node_id,omitempty"`
+	NodeName            string              `json:"node_name,omitempty"`
+	EntryID             string              `json:"entry_id,omitempty"`
+	EntryName           string              `json:"entry_name,omitempty"`
+	EntryMode           string              `json:"entry_mode,omitempty"`
+	ExitID              string              `json:"exit_id,omitempty"`
+	ExitName            string              `json:"exit_name,omitempty"`
+	RequestedMode       string              `json:"requested_mode,omitempty"`
+	RuntimeMode         string              `json:"runtime_mode,omitempty"`
+	LogicalMode         string              `json:"logical_mode,omitempty"`
+	Base                string              `json:"base,omitempty"`
+	ExitMode            string              `json:"exit_mode,omitempty"`
+	Execution           string              `json:"execution,omitempty"`
+	Comparison          *routechoice.Result `json:"comparison,omitempty"`
+	LastNodeMeasurement string              `json:"last_node_measurement,omitempty"`
+	ExternalMeasurement string              `json:"external_measurement,omitempty"`
+	ExternalProtocol    string              `json:"external_protocol,omitempty"`
+	StartedAt           time.Time           `json:"started_at,omitempty"`
+	Description         string              `json:"description"`
 }
 
 type speedLabPathIdentity struct {

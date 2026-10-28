@@ -30,6 +30,11 @@ type desktopTorComparisonDriver struct {
 	selections map[routechoice.Execution]*desktopTorSelection
 	candidates []routechoice.Candidate
 	last       *desktopTorComparisonSession
+	// Temporary tests capture and preflight candidates before suspending their
+	// previous VPN. The same driver retains the exact temporary runtime owner.
+	temporary       *speedLabTemporaryOwner
+	prepared        map[routechoice.Execution]*speedLabTorPreparation
+	prepareFailures map[routechoice.Execution]error
 }
 
 type desktopTorComparisonSession struct {
@@ -140,6 +145,9 @@ func (d *desktopTorComparisonDriver) current() error {
 	}
 	d.app.mu.Lock()
 	err := desktopTorOperationCurrentLocked(d.app, d.operation, d.selected)
+	if err == nil && d.temporary != nil && (!d.app.speedLabOwnerCurrentLocked(d.temporary) || d.app.cmd != d.temporary.runtime) {
+		err = errors.New("Tor comparison lost its captured temporary runtime owner")
+	}
 	d.app.mu.Unlock()
 	if err != nil {
 		return err
@@ -169,6 +177,14 @@ func (d *desktopTorComparisonDriver) OpenTarget(ctx context.Context, candidate r
 	if err := d.current(); err != nil {
 		return nil, err
 	}
+	if failure := d.prepareFailures[candidate.Execution]; failure != nil {
+		for _, captured := range d.candidates {
+			if candidate == captured {
+				return nil, failure
+			}
+		}
+		return nil, errors.New("Tor comparison cannot substitute a failed captured candidate")
+	}
 	selection := d.selections[candidate.Execution]
 	if selection == nil || candidate.ExitID != d.profile.ID || candidate.EntryID != selection.predecessor.entry.ID || candidate.Transport != selection.policy.External.Protocol {
 		return nil, errors.New("Tor comparison cannot substitute a captured candidate")
@@ -188,9 +204,23 @@ func (d *desktopTorComparisonDriver) OpenTarget(ctx context.Context, candidate r
 	if capability := runtime.capability(); !capability.Supported {
 		return nil, errors.New(capability.Reason)
 	}
-	command, prelaunch, err := prepareTorBridgeCommandWithRuntime(d.app, selection.policy, d.profile, selection.predecessor, runtime)
-	if err != nil {
-		return nil, err
+	var command *exec.Cmd
+	var prelaunch *torBridgePrelaunch
+	var err error
+	if prepared := d.prepared[candidate.Execution]; prepared != nil {
+		if prepared.selection != selection || prepared.temporary != d.temporary {
+			return nil, errors.New("Tor comparison candidate differs from its preflight owner")
+		}
+		if err := prepared.current(d.app, true); err != nil {
+			return nil, err
+		}
+		delete(d.prepared, candidate.Execution)
+		command, prelaunch = prepared.command, prepared.prelaunch
+	} else {
+		command, prelaunch, err = prepareTorBridgeCommandWithRuntime(d.app, selection.policy, d.profile, selection.predecessor, runtime)
+		if err != nil {
+			return nil, err
+		}
 	}
 	session := &desktopTorComparisonSession{driver: d, candidate: candidate, selection: selection, command: command, prelaunch: prelaunch, target: target}
 	d.last = session // The caller must retain even a partially started result.
@@ -211,11 +241,14 @@ func (d *desktopTorComparisonDriver) OpenTarget(ctx context.Context, candidate r
 	}
 	a, launch := d.app, prelaunch.workspace
 	a.mu.Lock()
-	if a.cmd != nil {
+	if a.cmd != nil || d.temporary != nil && (!a.speedLabOwnerCurrentLocked(d.temporary) || d.temporary.runtime != nil) {
 		a.mu.Unlock()
 		return session, errors.New("Tor comparison cannot replace a different active native command")
 	}
 	a.cmd = command
+	if d.temporary != nil {
+		d.temporary.runtime = command
+	}
 	a.state.Mode, a.state.LogicalMode, a.state.RuntimeMode = "external-node", "external-node", launch.mode
 	a.state.Base, a.state.RouterID = desktopExternalEntryBase(selection.predecessor.mode), d.profile.ID
 	a.state.Connected, a.state.Phase, a.state.LastError = false, "compare:"+string(candidate.Execution)+":proving-tor", ""
@@ -346,6 +379,7 @@ func (s *desktopTorComparisonSession) Close(ctx context.Context) error {
 		}
 	}
 	defer s.cleanup.Unlock()
+	defer s.driver.releaseStoppedTemporary(s.command)
 	s.mu.Lock()
 	closed := s.closed
 	s.mu.Unlock()
@@ -414,4 +448,18 @@ func (s *desktopTorComparisonSession) Close(ctx context.Context) error {
 	s.closed = true
 	s.mu.Unlock()
 	return nil
+}
+
+// Native stop can clear app.cmd even when a later cleanup step fails. Reconcile
+// only this captured Speed Lab owner's exact command; a replacement owner or
+// another non-nil process must never be adopted after an asynchronous close.
+func (d *desktopTorComparisonDriver) releaseStoppedTemporary(command *exec.Cmd) {
+	if d == nil || d.app == nil || d.temporary == nil || command == nil {
+		return
+	}
+	d.app.mu.Lock()
+	defer d.app.mu.Unlock()
+	if d.app.speedLabOwnerCurrentLocked(d.temporary) && d.temporary.runtime == command && d.app.cmd == nil {
+		d.temporary.runtime = nil
+	}
 }

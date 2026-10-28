@@ -15,6 +15,7 @@ import (
 // original stored source separately from the approved temporary overrides;
 // neither native preflight nor a failed trial may rewrite the previous owner.
 type speedLabTorPreparation struct {
+	comparison     *speedLabTorComparisonPreparation
 	selection      *desktopTorSelection
 	command        *exec.Cmd
 	prelaunch      *torBridgePrelaunch
@@ -36,6 +37,13 @@ func speedLabTorRequest(q speedLabRequest, profile common.RouterProfile) externa
 }
 
 func (prepared *speedLabTorPreparation) releaseUnused() error {
+	if prepared != nil && prepared.comparison != nil {
+		var failure error
+		for _, candidate := range prepared.comparison.paths {
+			failure = errors.Join(failure, candidate.releaseUnused())
+		}
+		return failure
+	}
 	if prepared == nil || prepared.prelaunch == nil || prepared.command != nil && prepared.command.Process != nil {
 		return nil
 	}
@@ -45,6 +53,13 @@ func (prepared *speedLabTorPreparation) releaseUnused() error {
 }
 
 func (prepared *speedLabTorPreparation) current(a *app, applied bool) error {
+	if prepared != nil && prepared.comparison != nil {
+		for _, candidate := range prepared.comparison.paths {
+			if err := candidate.current(a, applied); err != nil {
+				return err
+			}
+		}
+	}
 	if prepared == nil || prepared.selection == nil || prepared.prelaunch == nil || prepared.command == nil || prepared.operation == nil {
 		return errors.New("Tor Speed Lab has no captured prepared operation")
 	}
@@ -85,6 +100,15 @@ func (a *app) prepareSpeedLabTorPathWithRuntime(q speedLabRequest, profile commo
 	a.mu.Unlock()
 	if !exists || operation == nil || !owned || owner == nil || liveMeasurementProfileToken(speedLabProfileOverrides(original, q)) != liveMeasurementProfileToken(profile) {
 		return nil, errors.New("Tor Speed Lab preview does not belong to the captured node and temporary policy")
+	}
+	if restored == nil {
+		execution, err := desktopTorRequestedExecution(original, speedLabTorRequest(q, original))
+		if err != nil {
+			return nil, err
+		}
+		if execution == "auto" {
+			return a.prepareSpeedLabTorComparison(q, profile, driver)
+		}
 	}
 	before := a.speedLabTorPrelaunchCheck(original)
 	var selection *desktopTorSelection
@@ -141,6 +165,9 @@ func (a *app) startPreparedSpeedLabTorPath(q speedLabRequest, profile common.Rou
 	selection := prepared.selection
 	if liveMeasurementProfileToken(profile) != liveMeasurementProfileToken(selection.profile) {
 		return path, errors.New("Tor temporary profile changed after native preparation")
+	}
+	if prepared.comparison != nil {
+		return a.startPreparedSpeedLabTorComparison(q, profile, prepared)
 	}
 	base := "tor"
 	if selection.predecessor != nil {

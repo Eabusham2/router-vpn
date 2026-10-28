@@ -57,6 +57,17 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 			node["has_response_probe"] = p.External.ResponseProbe != nil || len(p.External.OpenVPNResponseProbes) != 0
 			node["has_server_peer"] = p.External.ServerPeer != nil
 			node["has_openvpn_pairing"] = p.External.OpenVPNPairing != nil
+			if desktopTorProtocol(p.External.Protocol) {
+				// A dynamic Tor exit uses its retained circuit's last-relay
+				// probe, never a fabricated fixed-node response_probe. Keep
+				// Compare eligibility separate from Server-only availability.
+				candidate := cloneRouterProfile(p)
+				candidate.MultihopExecution = "auto"
+				node["tor_compare_execution"] = torBridgeProfileRuntimeCapability(candidate).Supported
+				candidate.MultihopExecution = "server"
+				node["tor_server_execution"] = torBridgeProfileRuntimeCapability(candidate).Supported
+				node["tor_compare_requires_paired_source"] = true
+			}
 		}
 		nodes = append(nodes, node)
 	}
@@ -90,6 +101,14 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 		current["entry_mode"], current["execution"] = graph.EntryMode, graph.Execution
 	}
 	if raw, exists := desktopNodeOwners.Load(a); exists && st.Connected && st.Mode == "external-node" {
+		if launch, ok := raw.(*desktopNodeLaunch); ok && launch != nil && launch.command == command && launch.profileID == st.RouterID && launch.tor != nil {
+			if proof, err := a.readDesktopTorProof(launch); err == nil {
+				current["exit_id"], current["execution"] = launch.profileID, desktopTorExecution(proof.Policy.Execution)
+				if proof.Policy.EntryID != "" {
+					current["entry_id"], current["entry_mode"] = proof.Policy.EntryID, proof.Policy.EntryMode
+				}
+			}
+		}
 		if launch, ok := raw.(*desktopNodeLaunch); ok && launch != nil && launch.command == command && launch.profileID == st.RouterID && launch.external != nil {
 			current["exit_id"] = launch.profileID
 			if !launch.external.direct {

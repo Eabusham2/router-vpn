@@ -612,6 +612,12 @@ func (a *app) startDesktopExternalAutomaticMTU(launch *desktopNodeLaunch) {
 	if owner == nil {
 		return
 	}
+	// Fixed/Jumbo policies and retired captures do not have an automatic
+	// optimization to start. Reject them before a background worker can claim
+	// operationMu and briefly block the user's next connection transaction.
+	if _, err := captureDesktopMTUSnapshot(a, launch); err != nil {
+		return
+	}
 	go func() {
 		// Connect still holds operationMu while it publishes the monitor. Do not
 		// let a quick first candidate race that original connection transaction.
