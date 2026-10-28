@@ -50,18 +50,37 @@ outbound and selected-DNS transport wait for fresh proofs and native accounting;
 retained streams expire independently of pending control replies, and cleanup
 joins proof/application I/O before releasing its owner. Transactional settings,
 native composition and controller/editor race suites pass. The guarded mobile
-runtime/API is published in `057957b7`; mobile hosts, actual enabled graph
-coverage and public admission remain held for a coherent feature commit.
-An independent review also found a Server Tor retained-stream expiry gap,
-which is being repaired. Apple Tor/external cancellation callback ownership is
-fixed in `06a19480` with deterministic regressions.
+runtime/API is published in `057957b7`, which also closes the missing native
+proof-field dependency exposed by CI on the intermediate `5e6aa4a7` commit.
+Mobile Local admission, native receipts and settings are enabled in `a0b54f49`.
+Android immediately cancels its exact retained request on receipt failure,
+without holding the Session monitor or touching a replacement request. Apple
+validates the same source/session/rate/freshness contract. Complete profiles,
+entry credentials and MTU ownership are preserved transactionally.
+
+The added enabled matrices pass through the actual pinned native parser:
+**224 Android and 528 Apple configurations**, in addition to each host's original
+738. Added cases cover plain Tor and obfs4 at default/32/64/192 rates; they are
+not every possible transport/rate/layer cross-product. Missing-engine and
+changed-source controls all reject, and final source/package snapshots match.
+The complete Android runtime gate passes, as do the Apple host/settings/profile
+fixtures. The pinned parser's nil/empty bridge representation is reconciled in
+`49932886` without relaxing source or nonempty bridge checks.
+
+Actual DoT/HTTP/2 DoH pool renewal, stale-token cleanup and certificate rejection
+are covered in `15b67f3e`. Server retained-stream expiry is repaired in `576385d7`:
+open authenticated streams expire even while a control reply is pending, healthy
+renewal preserves the stream, and teardown retains entered I/O and failed closes.
+Apple Tor/external cancellation callback ownership is fixed in `06a19480`.
+Cached Apple frameworks must expose the exact ownership APIs (`e234aa0a`).
 
 The exact `18a77fd5` desktop Amnezia workflow passes on Windows, macOS and Linux.
 The separate Windows native contract's WFP enforcement step also passes at
-that SHA. The later isolated Android policy
-and Apple Jumbo fixture repairs are published in `c71ccbe3` and `799cab98`.
-These results do not establish a new complete package/image release. Tor
-Compare, direct dynamic-transport strict protection, broader graph parity,
+that SHA. The later isolated Android policy and Apple Jumbo fixture repairs are published in `c71ccbe3` and `799cab98`.
+The repaired Tor audit mutations and Android ordinary-entry summary fixture are
+published in `943aa117`/`d2bc4f7b`; the hosted recovered map-first UI gate passes
+at `d2bc4f7b`. These results do not establish a new complete package/image release.
+Tor Compare, direct dynamic-transport strict protection, broader graph parity,
 the full current release and physical/private acceptance remain obligations.
 No live router, AdGuard, Portainer deployment or signing change has occurred.
 
@@ -519,8 +538,8 @@ Box tests cover these boundaries, while physical TUN and network acceptance
 remain separate. Virtual capacity does not assert 9000-byte packets on the
 underlying network. Captured Router-entry Local Tor graphs now preserve their
 private entry, selected DNS transport and independent native ownership. Tor
-Compare, exit-side desktop Tor padding
-and Direct dynamic-bridge strict protection remain requirements to implement.
+Compare and Direct dynamic-bridge strict protection remain requirements to implement.
+Local outgoing Tor padding is enabled on desktop and mobile as recorded above.
 
 The Tor server lease prerequisite now has a separate asynchronous lifecycle
 with peer/session/source/DNS binding, a restart-bound acquisition challenge,

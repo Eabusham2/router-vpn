@@ -48,7 +48,7 @@ Private transcripts and credentials stay outside the public repository. Source
 titles and message dates above provide continuity without publishing the raw
 private history.
 
-## Verified changes through `057957b7`
+## Verified changes through `a0b54f49`
 
 Every commit below was published on its current `main` parent without force.
 A fresh remote reference read verified each result, and the local Git tree was
@@ -90,9 +90,16 @@ to their actual toolchain and runtime; they do not certify a packaged device.
 | [`18a77fd5`](https://github.com/Eabusham2/router-vpn/commit/18a77fd5647634a8464f7cdf9b9bcdff5bbe6c31) | Resolve the Windows Tor form fixture root after parameter binding. | Actual PowerShell callbacks pass 3,478 checks, six rejected mutations and the Go importer locally. The exact-SHA desktop Amnezia workflow then passes all three Windows/macOS/Linux jobs. |
 | [`c71ccbe3`](https://github.com/Eabusham2/router-vpn/commit/c71ccbe3879f2b0f8f5513a8b04364093696e592) | Avoid replacing the actual Android external-policy class with an inherited Tor fixture stub. | An isolated current-main source copy passes all 2,025 ordinary external graphs and 18,747 checks. The pending padding feature was excluded from this repair's commit and verification. |
 | [`799cab98`](https://github.com/Eabusham2/router-vpn/commit/799cab98fc7d0620dc2d20050a7a407b78446f8c) | Use transport-compatible Apple Jumbo positives and explicit invalid packet/fixed-size negatives. | Isolated current-main shipping editor/native policy tests pass 489 checks and six rejected mutations. No production Jumbo validation was weakened. |
-| [`5e6aa4a7`](https://github.com/Eabusham2/router-vpn/commit/5e6aa4a7d41dc2c661e977223ecc8910856c8e33) | Enable bounded outgoing Local Tor padding through the desktop's actual application and selected-DNS paths, with transactional settings. | Actual pinned native Box, private command, PT/data owner and route race suites pass. Root controller/editor race suite passes in 129.575s; shared policy/real Tor child tests and all 18 preparation tests pass. Native PQ archive, platform release builds and physical/public-network cover acceptance are not established by these local runs. |
+| [`5e6aa4a7`](https://github.com/Eabusham2/router-vpn/commit/5e6aa4a7d41dc2c661e977223ecc8910856c8e33) | Enable bounded outgoing Local Tor padding through the desktop's actual application and selected-DNS paths, with transactional settings. | Focused working-tree native Box, private command, PT/data owner, route and controller/editor race suites passed, with the companion mobile proof API present. Exact `5e6aa4a7` Linux CI subsequently exposed that the companion `RouterVPNTorProofRequest.padding` field was absent from that intermediate commit; `057957b7` publishes that dependency. Current combined native composition passes. Native PQ archive, platform release builds and physical/public-network cover acceptance remain separate. |
 | [`06a19480`](https://github.com/Eabusham2/router-vpn/commit/06a194800c6dd39d49d39ba1f6334651e3e709d8) | Make claimed Apple Tor/external proof cancellation win the completion callback transaction. | Exact shipping finish/cancel methods pass 64 held-native-Cancel races per class, plus completed-before-cancel cases. Both former-defect mutations fail at the intended callback assertion. The actual external execution owner passes 131 checks. |
 | [`057957b7`](https://github.com/Eabusham2/router-vpn/commit/057957b7cc2224d49641360b0b52a1016cf6cac1) | Add guarded mobile native padding API, actual proof refresh, per-stream ownership and independent native-grant expiry. | Real pinned DSO constructors and generated Libbox linkage pass. Protocol and actual Box DNS/TLS/proof/MTU race suites pass. Four integration mutations fail the intended expiry, late-dial, completed-proof-pool and in-flight-I/O assertions. Public mobile admission remains closed until host and enabled-graph coverage joins it. |
+| [`943aa117`](https://github.com/Eabusham2/router-vpn/commit/943aa117191f79837e38f99f2cebf61bf68990a9) | Retarget desktop Tor maintenance mutations to the actual padding-aware failure and adoption guards. | All 36 audit tests and the complete recovered map-first UI gate pass locally. The hosted map-first gate also passes at `d2bc4f7b`; no rejection condition was removed. |
+| [`15b67f3e`](https://github.com/Eabusham2/router-vpn/commit/15b67f3ecd56426ca709a9bb91c08a4a80a958db) | Exercise actual selected DoT and HTTP/2 DoH pools across initial proof, two refreshes and ordinary reconnection. | Actual pinned transports, verified TLS and wire DNS pass with race detection. Untrusted certificates, stale proof tokens and retained old pools reject; removing cleanup fails both transport cases. Final Tor circuit/control are explicit doubles, not public-network evidence. |
+| [`d2bc4f7b`](https://github.com/Eabusham2/router-vpn/commit/d2bc4f7b70bcbcf2f3dfc564d30212a059bcf124) | Bring the Android import boundary into agreement with ordinary entries and test their displayed identities across Local/Server/Compare. | 66 actual shipping callback/store/policy checks and five rejected mutations pass. The complete Android runtime contract later passes with this repair. |
+| [`49932886`](https://github.com/Eabusham2/router-vpn/commit/49932886bc0269ea89fd76d37ba43bd14da571d7) | Accept the pinned native parser's equivalent nil/empty bridge vector for plain Tor padding. | The actual-parser regression fails before the fix and passes after it. Full source/hash remains unchanged; a nonempty unselected bridge and eight option-corruption cases still reject. Complete Local padding protocol race suite passes in 6.933s. |
+| [`576385d7`](https://github.com/Eabusham2/router-vpn/commit/576385d73a2a13d2bc253f1753ff1cd972c470e9) | Expire already-open authenticated Server Tor data streams independently of a pending control reply. | Native Server race suites pass in 5.832s/1.042s, including actual child tests without skips. Off, healthy renewal on the same stream, blocked STATUS expiry, late dial, disabled child, entered I/O and delayed/failed Close are covered. Missing-expiry and premature-join mutations fail the intended assertions. Native PQ and physical/public-network acceptance remain separate. |
+| [`e234aa0a`](https://github.com/Eabusham2/router-vpn/commit/e234aa0abe0832a0e380ddc5ddf86f121d57ae1f) | Require the exact captured-source, status and lifecycle APIs in every cached Apple Libbox header. | All 15 cache/build contract tests pass against the pinned gomobile declaration spelling, including wrong NSError shape, wrong request owner, missing method and absent-header rejection. Actual Xcode builds remain separate. |
+| [`a0b54f49`](https://github.com/Eabusham2/router-vpn/commit/a0b54f496b1f763dd8096bf84f3cb0bfed6a902e) | Enable owned Local outgoing Tor padding on Android and Apple, including native source/receipt validation, transactional settings, complete profiles and immediate exact-request cancellation. | Complete Android runtime contract passes. Final Android lifecycle passes 1,205 checks/21 mutations; hop 150/5 and DNS 261/7. Apple host delivery passes 1,062/1,063 checks across four variants, with ten defect controls; settings 711/eight, startup 274/twelve and connection profiles 15,220/five. Expanded exact-source native matrices below pass. Platform packages and physical traffic remain separate. |
 
 ## Requirement ledger refinement
 
@@ -107,7 +114,7 @@ specific stale source assessments, not whole requirement families.
 | 214–224 and 336; August 13–14 external node/hop/exit additions | Desktop and both mobile hosts now admit the eight implemented ordinary import families before Local Tor. New mobile per-hop measurement identifies public entry and Tor exit independently. | Exact-SHA native matrices/packages; live paths and broader requested graph compositions. Tor Compare still needs distinct valid last-node/external inputs, winner recheck and restoration. |
 | 225–241, compatible Jumbo/MTU/measurements; August 16 retest correction | Shared ordinary proxy Jumbo compilation now preserves virtual TUN capacity and immutable policy while retaining packet endpoint MTUs. Native owner reconstruction and MTU authority agree. | Physical MTU/throughput, Retest/Cancel/network-transition acceptance. Raw-packet admission is not weakened to manufacture Jumbo support. |
 | 321–326, wider packaging/Portable targets | Current `deploy/build-client.sh` retains qualified ARMv7, FreeBSD, OpenBSD, NetBSD, DragonFly and illumos controller/helper builds in addition to the ten core native packages. | Current CI/package validation where feasible. Controller/helper artifacts are not relabeled as additional full native applications or substituted for the core ten. |
-| 342 and later bounded-padding settings | Desktop Local outgoing Tor padding is enabled in `5e6aa4a7`: the actual final outbound and selected-DNS transport gate traffic on the native lease, bind the full source and SOCKS isolation, renew real proofs, expire retained streams independently of pending control I/O, and join proof/application I/O before releasing ownership. The guarded mobile runtime/API is published in `057957b7`. | Mobile host adoption, real enabled Apple/Android parser coverage and public admission remain held for a coherent feature commit. DoT/DoH proof-pool reconnection is being exercised against the actual transports. A newly identified Server Tor retained-stream expiry gap is being repaired; it is not closed by earlier cover tests. Platform packages and live cover acceptance remain separate. |
+| 342 and later bounded-padding settings | Desktop Local outgoing Tor padding and its companion native proof dependency are published in `5e6aa4a7`/`057957b7`; Android and Apple host adoption, settings and public Local admission are enabled in `a0b54f49`. Actual selected DoT/DoH pool renewal is covered in `15b67f3e`. Server retained-stream expiry is repaired in `576385d7`. Native leases bind full source, session and isolation, require real DNS/path proofs, expire data independently of control replies, and retain cleanup until entered I/O joins. | Current platform packages and physical/public-network cover acceptance. The explicit added matrices below do not represent every transport/rate/layer cross-product. |
 | C5–C7, 348, 352–354 | Generic secret-free application delivery, separate private node linking, packaged licensing, image-only production and authenticated mutations remain required. | Exact-SHA package/image/compose publication plus private deployment/administration acceptance. No production server build fallback or Docker socket access is authorized. |
 
 ## Native gates, release and live evidence
@@ -131,6 +138,27 @@ or weakening constructors. The full pinned composition was exercised with the
 verified C Tor DSO and required Go/LLVM/Swift toolchains. The previous ledger's
 missing-tool limitation no longer describes this workspace. The native gate
 does not start a VPN or public Tor circuit and is not an Apple SDK/device test.
+
+The final mobile activation retains those 738 cases per host and adds **224
+Android** and **528 Apple** enabled Local configurations. The added matrix
+covers plain Tor and obfs4 at default/32/64/192 rates, direct/private/ordinary
+entries, and the explicitly enumerated Apple entry-layer combinations. The
+original matrix retains all six Tor/PT kinds; these counts are not a claim to
+have exercised every possible transport/rate/layer combination. Android rejects
+738 original missing-engine cases plus 448 enabled missing-engine/changed-source
+cases. Apple rejects all 1,266 missing-engine cases and 528 changed-source cases.
+Both final runs match their before/after source, prepared copy, module and
+native package identities; Apple checks 866 source inputs. No failed source
+snapshot was relabeled as a new run.
+
+The complete local Go package run passed the controller (251.815s) and shared
+packages. Its isolated relay container-context fixture encountered a local
+ancestor VCS discovery error; that one fixture passed separately in 5.337s with
+`GOFLAGS=-buildvcs=false`, matching the Docker COPY context's absence of VCS
+metadata. No production build or source protection was changed for that local
+fixture condition. The complete Android runtime contract passed; the final
+receipt-cancellation revision was also independently rerun through its lifecycle,
+hop and DNS suites before the refreshed native identity gates.
 
 The last release collection read still returned the
 [`745b3e41` prerelease](https://github.com/Eabusham2/router-vpn/releases/tag/router-vpn-sha-745b3e41e5a78d734391976af9b7cd0637660a0b)
