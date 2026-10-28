@@ -352,7 +352,27 @@ final class AndroidModeOrchestrator {
     }
     private boolean startWg(File bundle)throws Exception{CountDownLatch latch=new CountDownLatch(1);final Tunnel.State[]state={Tunnel.State.DOWN};final Throwable[]error={null};wg.connectManaged(bundle,(s,m,e)->{state[0]=s;error[0]=e;latch.countDown();});boolean completed=latch.await(20,TimeUnit.SECONDS);if(error[0]!=null)rethrowCancellation(error[0]);return completed&&error[0]==null&&state[0]==Tunnel.State.UP;}
     private boolean startAwg(File bundle,String rawProfileID)throws Exception{CountDownLatch latch=new CountDownLatch(1);final org.amnezia.awg.backend.Tunnel.State[]state={org.amnezia.awg.backend.Tunnel.State.DOWN};final Throwable[]error={null};awg.connectManaged(bundle,rawProfileID,(s,m,e)->{state[0]=s;error[0]=e;latch.countDown();});boolean completed=latch.await(20,TimeUnit.SECONDS);if(error[0]!=null)rethrowCancellation(error[0]);return completed&&error[0]==null&&state[0]==org.amnezia.awg.backend.Tunnel.State.UP;}
-    private boolean startLibbox(File bundle,String id)throws Exception{NativeSingBoxController.SessionInfo session=sing.prepareSession(bundle,id);checkedBundle(bundle);sing.start(session);long end=System.currentTimeMillis()+20000L;while(System.currentTimeMillis()<end){checkSelection();String s=sing.getState();if("UP".equals(s))return true;if("FAILED".equals(s)||"REVOKED".equals(s))return false;Thread.sleep(200);}return false;}
+    static long libboxStartupTimeoutMillis(String id) {
+        // One captured single-node PQ/MAX owner can use its native 30-second
+        // initial-key phase. Raw Xray MAX and PQ REALITY have no Rosenpass phase.
+        boolean initialKey = java.util.Arrays.asList("wg-pq", "awg2-pq", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg").contains(id);
+        return 20_000L + (initialKey ? 30_000L : 0L);
+    }
+    private boolean startLibbox(File bundle,String id)throws Exception{
+        NativeSingBoxController.SessionInfo session=sing.prepareSession(bundle,id);
+        checkedBundle(bundle);
+        final long timeout=TimeUnit.MILLISECONDS.toNanos(libboxStartupTimeoutMillis(id));
+        final long started=System.nanoTime();
+        sing.start(session);
+        while(System.nanoTime()-started<timeout){
+            checkSelection();
+            String state=sing.getState();
+            if("UP".equals(state))return true;
+            if("FAILED".equals(state)||"REVOKED".equals(state))return false;
+            Thread.sleep(200);
+        }
+        return false;
+    }
     private boolean startXray(File bundle,String id)throws Exception{NativeXrayController.SessionInfo session=xray.prepareSession(bundle,id);checkedBundle(bundle);xray.start(session);long end=System.currentTimeMillis()+25000L;while(System.currentTimeMillis()<end){checkSelection();String s=xray.getState();if("UP".equals(s))return true;if("FAILED".equals(s)||"REVOKED".equals(s))return false;Thread.sleep(200);}return false;}
 
     private boolean revoked(Candidate c){return(c.kind==Kind.LIBBOX&&"REVOKED".equals(sing.getState()))||(c.kind==Kind.XRAY&&"REVOKED".equals(xray.getState()));}
