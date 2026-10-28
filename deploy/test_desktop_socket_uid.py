@@ -10,6 +10,7 @@ from pathlib import Path
 import argparse
 import hashlib
 import importlib.util
+import json
 import os
 import platform
 import signal
@@ -77,17 +78,38 @@ def privilege_tool():
     return str(path)
 
 
+def compiler_toolchain(source, go, env):
+    # The launcher on PATH may be older than the toolchain selected by the
+    # native build. Resolve that selection before disabling Go's dispatch;
+    # setting local on the launcher first silently switches back to its Go.
+    identity = json.loads(run([go, 'env', '-json', 'GOROOT', 'GOVERSION'],
+                              cwd=source, env=env))
+    if not isinstance(identity, dict) or any(not isinstance(identity.get(key), str) or
+            not identity[key] for key in ('GOROOT', 'GOVERSION')):
+        raise ValueError('The UID fixture did not resolve its selected Go toolchain')
+    root = Path(identity['GOROOT'])
+    compiler = root/'bin/go'
+    if not root.is_absolute() or not compiler.is_file() or not os.access(compiler, os.X_OK):
+        raise ValueError('The UID fixture selected Go executable is unavailable')
+    captured = dict(env, GOTOOLCHAIN='local', GOROOT=str(root))
+    verified = json.loads(run([compiler, 'env', '-json', 'GOROOT', 'GOVERSION'],
+                             cwd=source, env=captured))
+    if verified != identity:
+        raise ValueError('The UID fixture selected Go toolchain changed before compilation')
+    return compiler, captured
+
+
 def execute(source, go='go', *, env=None):
     if platform.system() not in ('Linux', 'Darwin'):
         raise ValueError('The privileged Unix creator fixture requires a matching Linux/macOS host')
     source, before = checked_sources(source)
     captured = dict(os.environ if env is None else env)
-    captured['GOTOOLCHAIN'] = 'local'
     captured['GOWORK'] = 'off'
     host = 'darwin' if platform.system() == 'Darwin' else 'linux'
     if captured.get('GOOS', host) != host:
         raise ValueError('The privileged socket fixture cannot execute a cross-compiled binary')
     sudo = privilege_tool()
+    go, captured = compiler_toolchain(source, go, captured)
     with tempfile.TemporaryDirectory(prefix='routervpn-uid-gate-') as directory:
         binary = Path(directory)/'owned-socket-uid.test'
         run([go, 'test', '-c', '-race', '-mod=readonly', '-tags=routervpn_privileged',

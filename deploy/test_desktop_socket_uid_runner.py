@@ -4,6 +4,7 @@ from pathlib import Path
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import tempfile
 import unittest
@@ -31,6 +32,11 @@ class OwnedUIDRunner(unittest.TestCase):
         target.mkdir(parents=True)
         for path in (ROOT/'internal/mobiletor').glob('desktop_socket_*.go'):
             (target/path.name).write_bytes(path.read_bytes())
+        self.toolchain = Path(self.temp.name)/'selected toolchain'
+        self.compiler = self.toolchain/'bin/go'
+        self.compiler.parent.mkdir(parents=True)
+        self.compiler.write_bytes(b'compiler boundary fixture')
+        self.compiler.chmod(0o755)
         self.addCleanup(patch.stopall)
         patch.object(GATE.PREP, 'checked_vendor', side_effect=lambda source: Path(source).resolve()).start()
         patch.object(GATE.platform, 'system', return_value='Linux').start()
@@ -42,7 +48,20 @@ class OwnedUIDRunner(unittest.TestCase):
         def run(command, **kwargs):
             args = [str(value) for value in command]
             calls.append((args, kwargs))
-            if args[:2] == ['/captured/go', 'test']:
+            if args[1:] == ['env', '-json', 'GOROOT', 'GOVERSION']:
+                self.assertEqual(kwargs['cwd'], self.source.resolve())
+                self.assertEqual(kwargs['env']['GOWORK'], 'off')
+                if args[0] == '/captured/go':
+                    self.assertEqual(kwargs['env']['GOTOOLCHAIN'], 'go1.26.3')
+                    if fault == 'toolchain-absent': self.compiler.unlink()
+                    return json.dumps({'GOROOT': 'relative/toolchain' if fault == 'toolchain-relative' else str(self.toolchain),
+                                       'GOVERSION': 'go1.26.3'})
+                self.assertEqual(args[0], str(self.compiler))
+                self.assertEqual(kwargs['env']['GOTOOLCHAIN'], 'local')
+                self.assertEqual(kwargs['env']['GOROOT'], str(self.toolchain))
+                return json.dumps({'GOROOT': str(self.toolchain),
+                                   'GOVERSION': 'go1.24.13' if fault == 'toolchain-changed' else 'go1.26.3'})
+            if args[:2] == [str(self.compiler), 'test']:
                 self.assertIn('-c', args)
                 self.assertIn('-race', args)
                 self.assertIn('-mod=readonly', args)
@@ -80,18 +99,24 @@ class OwnedUIDRunner(unittest.TestCase):
             return passed()
 
         with patch.object(GATE, 'run', side_effect=run), contextlib.redirect_stdout(io.StringIO()):
-            GATE.execute(self.source, '/captured/go', env={'GOOS': 'linux', 'GOTOOLCHAIN': 'ambient'})
+            GATE.execute(self.source, '/captured/go', env={'GOOS': 'linux', 'GOTOOLCHAIN': 'go1.26.3'})
         return calls
 
     def test_exact_source_is_compiled_before_only_privileged_fixture_executes(self):
         calls = self.execute()
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 4)
 
     def test_nonroot_build_compiles_normally_before_bounded_noprompt_sudo(self):
         with patch.object(GATE, 'privilege_tool', return_value='/usr/bin/sudo'):
             calls = self.execute('sudo')
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 4)
         self.assertEqual(calls[0][0][0], '/captured/go')
+        self.assertEqual(calls[2][0][0], str(self.compiler))
+
+    def test_selected_toolchain_must_remain_exact_before_compiling(self):
+        for fault in ('toolchain-relative', 'toolchain-changed', 'toolchain-absent'):
+            with self.subTest(fault=fault), self.assertRaises(ValueError):
+                self.execute(fault)
 
     def test_missing_privilege_is_a_failure_before_compilation(self):
         with patch.object(GATE, 'privilege_tool', side_effect=ValueError('missing privilege')), patch.object(GATE, 'run') as run:
