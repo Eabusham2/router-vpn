@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"runtime"
 	"syscall"
 	"time"
 )
@@ -48,7 +49,15 @@ func desktopSocketSourceRaw(file *os.File, network string, address netip.Addr) (
 			return
 		}
 		listening, readErr := syscall.GetsockoptInt(fd, syscall.SOL_SOCKET, syscall.SO_ACCEPTCONN)
-		if readErr != nil || listening != 0 {
+		// Darwin defines SO_ACCEPTCONN but does not expose it in sogetoptlock.
+		// Its TCP listen paths bind an ephemeral port before becoming listeners,
+		// so the mandatory unbound tuple check below also rejects every listener.
+		// Only that specific unsupported-option error may use this readback.
+		if readErr != nil && !(runtime.GOOS == "darwin" && errors.Is(readErr, syscall.ENOPROTOOPT)) {
+			result = errors.Join(errors.New("desktop socket creator listening state could not be read"), readErr)
+			return
+		}
+		if readErr == nil && listening != 0 {
 			result = errors.New("desktop socket creator returned a listening socket")
 			return
 		}

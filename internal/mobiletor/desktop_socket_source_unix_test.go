@@ -364,6 +364,54 @@ func TestDesktopSocketSourceRejectsKernelStateWithoutPermit(t *testing.T) {
 	}
 }
 
+func TestDesktopSocketSourceRawUnboundAndImplicitListener(t *testing.T) {
+	for _, address := range []string{"127.0.0.1", "::1"} {
+		for _, state := range []string{"tcp", "udp", "implicit-listener"} {
+			t.Run(address+"/"+state, func(t *testing.T) {
+				remote := netip.MustParseAddr(address)
+				family, kind, network := syscall.AF_INET6, syscall.SOCK_STREAM, "tcp"
+				if remote.Is4() {
+					family = syscall.AF_INET
+				}
+				if state == "udp" {
+					kind, network = syscall.SOCK_DGRAM, "udp"
+				}
+				fd, err := syscall.Socket(family, kind, 0)
+				if err != nil {
+					t.Fatal(err)
+				}
+				file := os.NewFile(uintptr(fd), "actual-socket-admission")
+				defer file.Close()
+				if state == "implicit-listener" {
+					// No Bind call: the native listen operation itself must allocate
+					// a tuple, including on Darwin where SO_ACCEPTCONN is unavailable.
+					if err := syscall.Listen(fd, 1); err != nil {
+						t.Fatal(err)
+					}
+					local, err := desktopSocketLocal(fd)
+					if err != nil || local.Port() == 0 {
+						t.Fatal("actual listener did not acquire its kernel tuple", local, err)
+					}
+				}
+				raw, actual, err := desktopSocketSourceRaw(file, network, remote)
+				if state == "implicit-listener" {
+					if err == nil || raw != nil || actual != "" {
+						t.Fatal("listener without explicit Bind passed socket admission", err)
+					}
+				} else {
+					want := network + "6"
+					if remote.Is4() {
+						want = network + "4"
+					}
+					if err != nil || raw == nil || actual != want {
+						t.Fatal("actual unbound socket was rejected", actual, err)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestDesktopSocketSourceLateReplyRetainedUntilCreatorJoined(t *testing.T) {
 	for _, action := range []string{"cancel", "source-replaced"} {
 		t.Run(action, func(t *testing.T) {
