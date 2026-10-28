@@ -56,6 +56,7 @@ func newDesktopTorConnectFixture(t *testing.T) *desktopTorConnectFixture {
 	}
 	sessionTrackers.Store(a, &sessionTracker{a: a})
 	f := &desktopTorConnectFixture{a: a}
+	admission := make(map[*desktopNodeLaunch]int)
 	tor := installFakeExecutable(t, t.TempDir(), "tor")
 	native := installFakeExecutable(t, t.TempDir(), "native")
 	f.driver.capability = func() standardExitCapability { return standardExitCapability{Supported: true} }
@@ -73,8 +74,9 @@ func newDesktopTorConnectFixture(t *testing.T) *desktopTorConnectFixture {
 		if executable != native || f.launch == nil || directory != f.launch.directory || ctx.Err() != nil {
 			t.Fatal("native preflight lost its captured inputs", args)
 		}
-		if f.preflight%2 == 1 && !reflect.DeepEqual(args, []string{"routervpn-tor", "--help"}) ||
-			f.preflight%2 == 0 && !reflect.DeepEqual(args, []string{"check", "-D", directory, "-c", filepath.Join(directory, "sing-box.json")}) {
+		admission[f.launch]++
+		if admission[f.launch] == 1 && !reflect.DeepEqual(args, []string{"routervpn-tor", "--help"}) ||
+			admission[f.launch] == 2 && !reflect.DeepEqual(args, []string{"check", "-D", directory, "-c", filepath.Join(directory, "sing-box.json")}) || admission[f.launch] > 2 {
 			t.Fatal("native admission did not exercise both capability and configuration checks", args)
 		}
 		return nil
@@ -82,7 +84,7 @@ func newDesktopTorConnectFixture(t *testing.T) *desktopTorConnectFixture {
 	f.driver.command = func(_ *app, prepared torBridgeRuntime, environment []string) (*exec.Cmd, error) {
 		f.commands++
 		launch := prepared.Launch
-		if launch != f.launch || f.preflight != 2*f.commands {
+		if launch != f.launch || admission[launch] != 2 {
 			t.Fatal("child was prepared before both native admission checks")
 		}
 		vars := map[string]string{}
