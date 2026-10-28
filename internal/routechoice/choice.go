@@ -53,6 +53,16 @@ type Session interface {
 type Driver interface {
 	Open(context.Context, Candidate) (Session, error)
 }
+
+// TargetDriver prepares a path that needs the selected external endpoint before
+// its last-node probe. A Tor implementation, for example, retains a verified
+// external stream and probes the final relay of that stream's exact circuit.
+// Compare supplies the same approved target to every trial and final recheck.
+// An OpenTarget failure never falls back to Open or to a different target.
+type TargetDriver interface {
+	Driver
+	OpenTarget(context.Context, Candidate, string) (Session, error)
+}
 type Event struct {
 	Stage     string
 	Candidate Candidate
@@ -179,10 +189,16 @@ func notify(o Options, stage string, c Candidate, m *Measurement) {
 		o.Notify(Event{Stage: stage, Candidate: c, Result: m})
 	}
 }
-func open(ctx context.Context, d Driver, c Candidate, o Options) (Session, error) {
+func open(ctx context.Context, d Driver, c Candidate, target string, o Options) (Session, error) {
 	child, cancel := context.WithTimeout(ctx, o.StartupTimeout)
 	defer cancel()
-	s, err := d.Open(child, c)
+	var s Session
+	var err error
+	if targeted, ok := d.(TargetDriver); ok {
+		s, err = targeted.OpenTarget(child, c, target)
+	} else {
+		s, err = d.Open(child, c)
+	}
 	if err != nil || child.Err() != nil || s == nil {
 		if cleanErr := closeSession(s, o); cleanErr != nil {
 			return s, cleanErr
@@ -231,7 +247,7 @@ func Compare(ctx context.Context, candidates []Candidate, d Driver, o Options) (
 			return result, nil, err
 		}
 		notify(o, "starting", c, nil)
-		s, startErr := open(ctx, d, c, o)
+		s, startErr := open(ctx, d, c, result.Target, o)
 		if errors.Is(startErr, ErrTeardown) {
 			return result, s, startErr
 		}
@@ -269,7 +285,7 @@ func Compare(ctx context.Context, candidates []Candidate, d Driver, o Options) (
 		}
 		c := m.Candidate
 		notify(o, "activating", c, &m)
-		s, startErr := open(ctx, d, c, o)
+		s, startErr := open(ctx, d, c, result.Target, o)
 		if errors.Is(startErr, ErrTeardown) {
 			return result, s, startErr
 		}
