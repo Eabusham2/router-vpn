@@ -25,6 +25,9 @@ import platform
 import subprocess
 import sys
 if platform.system() == 'Darwin':
-    subprocess.run([sys.executable, str(root.parents[1] / 'deploy/test_ios_libbox_delivery.py')], check=True, timeout=180)
+    # This aggregate runs twelve independently bounded Swift compilations and
+    # their lifecycle/negative controls. Preserve each child deadline instead
+    # of terminating the whole suite at one former three-minute compile budget.
+    subprocess.run([sys.executable, str(root.parents[1] / 'deploy/test_ios_libbox_delivery.py')], check=True, timeout=1800)
     subprocess.run([sys.executable, str(root.parents[1] / 'deploy/test_native_hop_measurement.py')], check=True, timeout=180)
 print('Router VPN iOS Libbox bridge source contract OK')
