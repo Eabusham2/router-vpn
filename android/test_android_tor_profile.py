@@ -460,7 +460,8 @@ def run():
                 methods += next(line for line in source.splitlines() if "private static String hex(byte[] data)" in line)
                 constants = "\n".join(line for line in source.splitlines() if any(part in line for part in ("private static final String NODE_PROOF_DOMAIN =", "static final int MAX_PROFILE_SCHEMA =", "static final int MAX_BUNDLE =")))
                 start, end = text.index("final class AndroidNodeStore {"), text.index("final class AndroidKillSwitchPolicy {")
-                text = text[:start] + "final class AndroidNodeStore {\n" + constants + "\n" + methods + "\n}\n" + text[end:] + TOR_BOUNDARIES + EXTERNAL_BOUNDARY
+                external_boundary = "" if "AndroidExternalPolicy" in EXTRA_SOURCES else EXTERNAL_BOUNDARY
+                text = text[:start] + "final class AndroidNodeStore {\n" + constants + "\n" + methods + "\n}\n" + text[end:] + TOR_BOUNDARIES + external_boundary
                 text = text.replace("import org.json.JSONObject;", "import org.json.JSONObject; import org.json.JSONArray; import java.security.MessageDigest; import java.nio.charset.StandardCharsets; import android.util.Base64;")
             if path.endswith("/Libbox.java"):
                 begin = text.index(" private static String call(")
