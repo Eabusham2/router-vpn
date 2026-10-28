@@ -188,7 +188,7 @@ if "protocl" in standard_runtime:
 
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedConnectionController.java",
-    "boolean isActiveOrTransitioning() { return disconnecting.get() || AndroidVpnMutationGuard.isBusy(activity); }",
+    "boolean isActiveOrTransitioning() { return pendingCallback!=null || disconnecting.get() || AndroidVpnMutationGuard.isBusy(activity); }",
     "disconnecting.compareAndSet(false,true)",
     "callback.finished(success,",
 )

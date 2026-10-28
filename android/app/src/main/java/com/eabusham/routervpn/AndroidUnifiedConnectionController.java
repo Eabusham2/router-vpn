@@ -17,10 +17,25 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /** Activity-owned UI bridge over app-process-owned VPN engines. */
 final class AndroidUnifiedConnectionController implements AutoCloseable {
     interface Callback { void progress(String message); void finished(boolean ok, String message); default void owned(String homeSession) {} default void superseded() {} default void validate() throws Exception {} }
-    static final int PREPARE_UNIFIED = 7605;
+    // Activity request codes use only the lower 16 bits. This reserved range is
+    // disjoint from import/via-entry and legacy native screens. Never reuse a
+    // code in this process: a cancelled prompt may return after its successor.
+    static final int PREPARE_UNIFIED = 0x4000;
+    private static int nextPermissionCode=PREPARE_UNIFIED;
     private static final String STATE_PENDING="routervpn.pending",STATE_MODE="routervpn.pending.mode",STATE_LAYERS="routervpn.pending.layers",STATE_NODE="routervpn.pending.node",STATE_ENTRY="routervpn.pending.entry",STATE_EXIT="routervpn.pending.exit",STATE_EXIT_MODE="routervpn.pending.exit_mode",STATE_STANDARD_EXIT="routervpn.pending.standard_exit",STATE_EXTERNAL_DIRECT="routervpn.pending.external_direct";
     private static final String STATE_STARTUP="routervpn.pending.startup_nonce";
     private static final String STATE_ORDINARY_ENTRY="routervpn.pending.ordinary_entry";
+    private static final String STATE_PERMISSION="routervpn.pending.permission_nonce",STATE_SELECTION="routervpn.pending.selection_digest";
+
+    /** Process-owned receipt; Bundle carries only its nonce and choice digest. */
+    private static final class PermissionOwner {
+        final String nonce=java.util.UUID.randomUUID().toString().replace("-","");
+        final String selection,request;
+        final int requestCode;
+        Object attachment;
+        PermissionOwner(String selection,String request,int requestCode,Object attachment){this.selection=selection;this.request=request;this.requestCode=requestCode;this.attachment=attachment;}
+    }
+    private static PermissionOwner permissionOwner;
 
     private final Activity activity;
     private final AndroidNodeStore nodeStore;
@@ -46,6 +61,9 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     private String pendingExternalDigest = "", pendingEntryDigest = "", pendingExternalRequestDigest = "";
     private Callback pendingCallback;
     private AndroidStartupPolicy.Attempt pendingStartup;
+    private final Object permissionAttachment=new Object();
+    private PermissionOwner pendingPermission;
+    private boolean pendingSaved;
 
     AndroidUnifiedConnectionController(Activity activity, AndroidNodeStore nodeStore) {
         this.activity = activity;
@@ -60,7 +78,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         multihop = runtime.multihop;
     }
 
-    boolean isActiveOrTransitioning() { return disconnecting.get() || AndroidVpnMutationGuard.isBusy(activity); }
+    boolean isActiveOrTransitioning() { return pendingCallback!=null || disconnecting.get() || AndroidVpnMutationGuard.isBusy(activity); }
     boolean isConnected() { return AndroidHomeStateStore.snapshot(activity).connected; }
     boolean isMultihopConnected() { return multihop.isConnected(); }
     String activeMultihopEntryId() { return multihop.activeEntryId(); }
@@ -86,6 +104,8 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     }
 
     boolean isStartupPending(){return pendingStartup!=null&&pendingCallback!=null;}
+    boolean isPermissionPending(){return pendingCallback!=null;}
+    boolean cancelPermissionPending(){return cancelPending(pendingCallback);}
     boolean cancelStartupPending(){
         if(!isStartupPending())return false;
         AndroidStartupPolicy.Attempt captured=pendingStartup;Callback callback=pendingCallback;
@@ -93,7 +113,8 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     }
 
     void connectStartup(AndroidStartupPolicy.Attempt capture,Callback callback){
-        try{prepareStartup(capture,callback);requestPermission(capture.external()?"saved external startup path":capture.multihop()?"saved startup multihop":"startup "+displayMode(capture.mode));}
+        if(pendingCallback!=null){callback.finished(false,"Finish or cancel the current Android permission request first.");return;}
+        try{String selection=AndroidConnectionSelection.digest(activity,nodeStore);prepareStartup(capture,callback);requestPermission(capture.external()?"saved external startup path":capture.multihop()?"saved startup multihop":"startup "+displayMode(capture.mode),selection);}
         catch(Exception rejected){clearPending();if(capture!=null)capture.cancel();callback.finished(false,safe(rejected));}
     }
 
@@ -301,8 +322,9 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     void connect(String mode, List<String> layers, Callback callback) {
         if(pendingCallback!=null){callback.finished(false,"Finish or cancel the current Android permission request first.");return;}
         if (isActiveOrTransitioning()) { callback.finished(false, "Disconnect the current Router VPN session or let its transition finish first."); return; }
-        try { activeBundle(); } catch (Exception error) { callback.finished(false, safe(error)); return; }
-        pendingNode = null; prepareSingleNode(mode,layers,callback);
+        final String selection;
+        try { selection=AndroidConnectionSelection.digest(activity,nodeStore);activeBundle(); } catch (Exception error) { callback.finished(false, safe(error)); return; }
+        pendingNode = null; prepareSingleNode(mode,layers,callback,selection);
     }
 
     /** Explicit/test-only node connection that never mutates AndroidNodeStore.activeId(). */
@@ -310,15 +332,17 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         if(pendingCallback!=null){callback.finished(false,"Finish or cancel the current Android permission request first.");return;}
         if(node==null||node.file==null||!node.file.isFile()||node.file.length()<=0){callback.finished(false,"Choose a valid stored Router VPN node first.");return;}
         if (isActiveOrTransitioning()) { callback.finished(false, "Disconnect the current Router VPN session or let its transition finish first."); return; }
-        pendingNode=node; prepareSingleNode(mode,layers,callback);
+        final String selection;
+        try{selection=AndroidConnectionSelection.digest(activity,nodeStore);}catch(Exception error){callback.finished(false,safe(error));return;}
+        pendingNode=node; prepareSingleNode(mode,layers,callback,selection);
     }
 
-    private void prepareSingleNode(String mode,List<String>layers,Callback callback){
+    private void prepareSingleNode(String mode,List<String>layers,Callback callback,String selection){
         if(pendingCallback!=null){callback.finished(false,"Finish or cancel the current Android permission request first.");return;}
         pendingMode = mode == null || mode.trim().isEmpty() ? "smart-auto" : mode.trim().toLowerCase();
         pendingLayers = layers == null ? Collections.emptyList() : new ArrayList<>(layers);
         pendingEntry = null; pendingExit = null; pendingStandardExit=null; pendingOrdinaryEntry=null; pendingExternalDirect=false; pendingExitMode = ""; pendingCallback = callback;
-        requestPermission("Router VPN " + displayMode(pendingMode));
+        requestPermission("Router VPN " + displayMode(pendingMode),selection);
     }
 
     void connectMultihop(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, Callback callback) {
@@ -334,8 +358,10 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         if (entry == null || exit == null || entry.id.equals(exit.id)) { callback.finished(false, "Multihop requires two different stored nodes."); return; }
         if (exitMode == null || exitMode.trim().isEmpty()) { callback.finished(false, "Choose a supported multihop exit transport."); return; }
         if (isActiveOrTransitioning()) { callback.finished(false, "Disconnect the current Router VPN session before multihop."); return; }
+        final String selection;
+        try{selection=AndroidConnectionSelection.digest(activity,nodeStore);}catch(Exception error){callback.finished(false,safe(error));return;}
         pendingNode=null;pendingStandardExit=null;pendingOrdinaryEntry=null;pendingExternalDirect=false;pendingMode="multihop";pendingLayers=Collections.emptyList();pendingEntry=entry;pendingExit=exit;pendingExitMode=exitMode.trim();pendingExecution=execution;pendingEntryMode=entryMode;pendingCallback=callback;
-        requestPermission("Router VPN multihop");
+        requestPermission("Router VPN multihop",selection);
     }
 
     /** Uses the existing proven Android custom-exit runtime under the same VPN-permission owner. */
@@ -349,6 +375,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         if(isActiveOrTransitioning()){callback.finished(false,"Disconnect the current VPN before selecting an ordinary Tor path.");return;}
         if(pendingCallback!=null){callback.finished(false,"Finish or cancel the current Android VPN permission request first.");return;}
         try{
+            String selection=AndroidConnectionSelection.digest(activity,nodeStore);
             AndroidStandardExitStore.Entry capturedEntry=AndroidStandardExitStore.copy(entry),capturedExit=AndroidStandardExitStore.copy(exit);
             String mode=AndroidExternalPolicy.protocol(capturedEntry.protocol),entryDigest=externalDigest(capturedEntry),exitDigest=externalDigest(capturedExit);
             requireOrdinaryCapture(capturedEntry,capturedExit,mode,execution,entryDigest,exitDigest);
@@ -357,7 +384,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
             pendingOrdinaryEntry=capturedEntry;pendingStandardExit=capturedExit;pendingExternalDirect=false;pendingEntryMode=mode;
             pendingExternalDigest=exitDigest;pendingEntryDigest=entryDigest;pendingExternalRequestDigest=ordinaryRequestDigest(mode,entryDigest,exitDigest,execution);
             pendingExecution=execution;pendingCallback=callback;
-            requestPermission(capturedEntry.name+" → "+capturedExit.name+" via Local Tor");
+            requestPermission(capturedEntry.name+" → "+capturedExit.name+" via Local Tor",selection);
         }catch(Exception invalid){clearPending();callback.finished(false,"The saved ordinary Tor path changed or could not be captured: "+safe(invalid));}
     }
 
@@ -375,15 +402,16 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         if(!direct&&!NativeSingBoxController.nativeMultihopEntry(entryMode)){callback.finished(false,"Choose the exact saved native Router VPN entry mode.");return;}
         if(isActiveOrTransitioning()){callback.finished(false,"Disconnect the current Router VPN session before a custom-exit test.");return;}
         if(pendingCallback!=null){callback.finished(false,"Finish or cancel the current Android VPN permission request first.");return;}
-        final AndroidStandardExitStore.Entry captured;final String exitDigest,entryDigest,requestDigest;
+        final AndroidStandardExitStore.Entry captured;final String exitDigest,entryDigest,requestDigest,selection;
         try{
+            selection=AndroidConnectionSelection.digest(activity,nodeStore);
             captured=AndroidStandardExitStore.copy(exit);AndroidStandardExitStore.validate(captured);AndroidStandardExitStore.validateExecution(captured,!direct,execution);
             exitDigest=externalDigest(captured);entryDigest=direct?"":entryDigest(entry);
             requireExternalCapture(entry,captured,direct,entryDigest,exitDigest);
             requestDigest=externalRequestDigest(direct,direct?"wg":entryMode,entryDigest,exitDigest,execution);
         }catch(Exception invalid){callback.finished(false,"The saved external selection changed or could not be captured; select the path again.");return;}
         pendingNode=null;pendingMode="external";pendingLayers=Collections.emptyList();pendingEntry=direct?null:entry;pendingOrdinaryEntry=null;pendingExit=null;pendingExitMode="";pendingStandardExit=captured;pendingExternalDirect=direct;pendingEntryMode=direct?"wg":entryMode;pendingExternalDigest=exitDigest;pendingEntryDigest=entryDigest;pendingExternalRequestDigest=requestDigest;pendingExecution=execution;pendingCallback=callback;
-        requestPermission(direct?"direct "+exit.protocol+" custom exit":"Router VPN entry → "+exit.protocol+" custom exit");
+        requestPermission(direct?"direct "+exit.protocol+" custom exit":"Router VPN entry → "+exit.protocol+" custom exit",selection);
     }
 
     List<NativeSingBoxController.ModeInfo> supportedNativeEntryModes(AndroidNodeStore.Node entry)throws Exception{
@@ -419,7 +447,8 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     }
 
     void savePending(Bundle out) {
-        if (out == null || pendingCallback == null || pendingMode.isEmpty()) return;
+        if (out == null || pendingCallback == null || pendingMode.isEmpty() || !ownsPermission(pendingPermission,permissionAttachment)) return;
+        out.putString(STATE_PERMISSION,pendingPermission.nonce);out.putString(STATE_SELECTION,pendingPermission.selection);pendingSaved=true;
         out.putBoolean(STATE_PENDING,true);out.putString(STATE_MODE,pendingMode);out.putStringArrayList(STATE_LAYERS,new ArrayList<>(pendingLayers));
         if(pendingStartup!=null)out.putString(STATE_STARTUP,pendingStartup.nonce);
         if(pendingNode!=null)out.putString(STATE_NODE,pendingNode.id);if(pendingEntry!=null)out.putString(STATE_ENTRY,pendingEntry.id);if(pendingExit!=null)out.putString(STATE_EXIT,pendingExit.id);out.putString(STATE_EXIT_MODE,pendingExitMode);out.putString("multihop_execution_pending",pendingExecution);out.putString("multihop_entry_mode_pending",pendingEntryMode);
@@ -429,14 +458,19 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     }
 
     void restorePending(Bundle in, Callback callback) {
+        if(pendingCallback!=null){callback.finished(false,"Another Android permission request already owns this screen.");return;}
+        if(in==null||!in.getBoolean(STATE_PENDING,false))return;
+        try{
+            pendingPermission=restorePermission(in.getString(STATE_PERMISSION,""),in.getString(STATE_SELECTION,""),permissionAttachment);
+            AndroidConnectionSelection.requireCurrent(activity,nodeStore,pendingPermission.selection);
+        }catch(Exception stale){clearPending();callback.finished(false,"The saved Android permission owner is no longer current: "+safe(stale));return;}
         if(in!=null&&in.containsKey(STATE_STARTUP)){
             AndroidStartupPolicy.Attempt captured=AndroidStartupPolicy.restore(in.getString(STATE_STARTUP,""));
-            try{prepareStartup(captured,callback);callback.progress("Waiting for Android VPN permission for the exact captured startup path…");}
+            try{prepareStartup(captured,callback);requirePendingIdentity();callback.progress("Waiting for Android VPN permission for the exact captured startup path…");}
             catch(Exception stale){clearPending();if(captured!=null)captured.cancel();callback.finished(false,"Automatic startup was not restored: "+safe(stale));}
             return;
         }
-        if(in==null||!in.getBoolean(STATE_PENDING,false))return;
-        String mode=in.getString(STATE_MODE,"");if(mode==null||mode.trim().isEmpty())return;pendingMode=mode.trim();
+        String mode=in.getString(STATE_MODE,"");if(mode==null||mode.trim().isEmpty()){clearPending();callback.finished(false,"The pending Android connection mode is missing.");return;}pendingMode=mode.trim();
         ArrayList<String>layers=in.getStringArrayList(STATE_LAYERS);pendingLayers=layers==null?Collections.emptyList():new ArrayList<>(layers);
         pendingNode=findNode(in.getString(STATE_NODE,""));pendingEntry=findNode(in.getString(STATE_ENTRY,""));pendingExit=findNode(in.getString(STATE_EXIT,""));
         pendingOrdinaryEntry=findStandardExit(in.getString(STATE_ORDINARY_ENTRY,""));pendingEntryMode=in.getString("multihop_entry_mode_pending","wg");
@@ -465,7 +499,16 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
             catch(Exception changed){clearPending();callback.finished(false,"The captured external permission request changed; select the path again.");return;}
         }
         if(!"multihop".equals(pendingMode)&&!"external".equals(pendingMode)&&in.containsKey(STATE_NODE)&&pendingNode==null){clearPending();callback.finished(false,"Pending test node disappeared before Android VPN permission completed.");return;}
+        try{requirePendingIdentity();}catch(Exception stale){clearPending();callback.finished(false,"The captured Android permission request changed: "+safe(stale));return;}
         pendingCallback=callback;callback.progress("Waiting for Android VPN permission for restored "+displayMode(pendingMode)+" request…");
+    }
+
+    /** Returning from a permission screen never rearms startup or rereads a new
+     * requested path. A changed saved choice retires only this pending owner. */
+    void resumePending(){
+        Callback callback=pendingCallback;if(callback==null)return;
+        try{requirePendingIdentity();AndroidConnectionSelection.requireCurrent(activity,nodeStore,pendingPermission.selection);}
+        catch(Exception stale){if(pendingCallback!=callback)return;if(pendingStartup!=null)pendingStartup.cancel();clearPending();callback.finished(false,safe(stale));}
     }
 
     void disconnect(Callback callback) {
@@ -505,13 +548,31 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         },"routervpn-external-test-disconnect").start();
     }
 
-    boolean onActivityResult(int requestCode, int resultCode) { if(requestCode!=PREPARE_UNIFIED)return false;Callback cb=pendingCallback;if(resultCode!=Activity.RESULT_OK){if(pendingStartup!=null)pendingStartup.cancel();clearPending();if(cb!=null)cb.finished(false,"Android VPN permission was not granted; Router VPN stayed disconnected.");return true;}startPending();return true; }
+    boolean onActivityResult(int requestCode, int resultCode) {
+        if(requestCode<PREPARE_UNIFIED||requestCode>0xffff)return false;
+        if(!ownsPermission(pendingPermission,permissionAttachment)||pendingCallback==null||requestCode!=pendingPermission.requestCode)return true;
+        Callback callback=pendingCallback;
+        if(resultCode!=Activity.RESULT_OK){if(pendingStartup!=null)pendingStartup.cancel();clearPending();callback.finished(false,"Android VPN permission was not granted; Router VPN stayed disconnected.");return true;}
+        startPending();return true;
+    }
 
-    private void requestPermission(String label) { Intent permission=VpnService.prepare(activity);if(permission==null){startPending();return;}if(pendingCallback!=null)pendingCallback.progress("Waiting for Android VPN permission for "+label+"…");activity.startActivityForResult(permission,PREPARE_UNIFIED); }
+    private void requestPermission(String label,String selection) {
+        Callback callback=pendingCallback;if(callback==null)return;
+        try{
+            AndroidConnectionSelection.requireCurrent(activity,nodeStore,selection);
+            Intent permission=VpnService.prepare(activity);
+            pendingPermission=createPermission(selection,pendingIdentity(),permission!=null,permissionAttachment);
+            if(permission==null){startPending();return;}
+            callback.progress("Waiting for Android VPN permission for "+label+"…");
+            if(pendingCallback==callback&&ownsPermission(pendingPermission,permissionAttachment))activity.startActivityForResult(permission,pendingPermission.requestCode);
+        }catch(Exception rejected){if(pendingCallback!=callback)return;if(pendingStartup!=null)pendingStartup.cancel();clearPending();callback.finished(false,safe(rejected));}
+    }
 
     private void startPending() {
-        final String mode=pendingMode;final List<String>layers=new ArrayList<>(pendingLayers);final AndroidNodeStore.Node node=pendingNode,entry=pendingEntry,exit=pendingExit;final AndroidStandardExitStore.Entry standardExit=pendingStandardExit,ordinaryEntry=pendingOrdinaryEntry;final boolean externalDirect=pendingExternalDirect;final String entryMode=pendingEntryMode;final String execution=pendingExecution;final String exitMode=pendingExitMode;final String externalDigest=pendingExternalDigest,entryDigest=pendingEntryDigest;final Callback callback=pendingCallback;final AndroidStartupPolicy.Attempt startup=pendingStartup;clearPending();if(callback==null)return;
-        try{if(isActiveOrTransitioning())throw new IllegalStateException("Another path owns the pending connection.");callback.validate();if(startup!=null){startup.requireCurrent(activity,nodeStore,this);startup.dispatched();}}catch(Exception stale){if(startup!=null)startup.cancel();callback.finished(false,safe(stale));return;}
+        final String mode=pendingMode;final List<String>layers=new ArrayList<>(pendingLayers);final AndroidNodeStore.Node node=pendingNode,entry=pendingEntry,exit=pendingExit;final AndroidStandardExitStore.Entry standardExit=pendingStandardExit,ordinaryEntry=pendingOrdinaryEntry;final boolean externalDirect=pendingExternalDirect;final String entryMode=pendingEntryMode;final String execution=pendingExecution;final String exitMode=pendingExitMode;final String externalDigest=pendingExternalDigest,entryDigest=pendingEntryDigest;final Callback callback=pendingCallback;final AndroidStartupPolicy.Attempt startup=pendingStartup;final PermissionOwner permission=pendingPermission;
+        Exception invalid=null;try{requirePendingIdentity();}catch(Exception stale){invalid=stale;}
+        clearPending();if(callback==null)return;
+        try{if(invalid!=null)throw invalid;AndroidConnectionSelection.requireCurrent(activity,nodeStore,permission.selection);if(isActiveOrTransitioning())throw new IllegalStateException("Another path owns the pending connection.");callback.validate();if(startup!=null){startup.requireCurrent(activity,nodeStore,this);startup.dispatched();}}catch(Exception stale){if(startup!=null)startup.cancel();callback.finished(false,safe(stale));return;}
         if("multihop".equals(mode)){if(entry==null||exit==null||entry.id.equals(exit.id)||exitMode.isEmpty()){callback.finished(false,"Multihop selection expired; choose entry and exit again.");return;}multihop.connect(entry,exit,exitMode,execution,entryMode,new AndroidMultihopRuntime.Callback(){@Override public void owned(String session){activity.runOnUiThread(()->callback.owned(session));}@Override public void progress(String message){activity.runOnUiThread(()->callback.progress(message));}@Override public void finished(boolean ok,String message){activity.runOnUiThread(()->callback.finished(ok,message));}});return;}
         if("external".equals(mode)){
             try{if(isActiveOrTransitioning())throw new IllegalStateException("Another VPN owns the current path.");
@@ -530,8 +591,39 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     private AndroidNodeStore.Node findNode(String id){if(id==null||id.isEmpty())return null;try{for(AndroidNodeStore.Node node:nodeStore.list())if(id.equals(node.id))return node;}catch(Exception ignored){}return null;}
     private AndroidStandardExitStore.Entry findStandardExit(String id){if(id==null||id.isEmpty())return null;try{return exitStore.get(id);}catch(Exception ignored){return null;}}
     private File activeBundle() throws Exception {String id=nodeStore.activeId();if(id==null||id.trim().isEmpty())throw new IllegalStateException("Pair/import and select a Router VPN node first.");File file=nodeStore.file(id);if(file==null||!file.isFile()||file.length()<=0)throw new IllegalStateException("Selected Router VPN node bundle is missing.");return file;}
-    private void clearPending(){pendingStartup=null;pendingEntryMode="wg";pendingExecution="local";pendingMode="";pendingLayers=Collections.emptyList();pendingNode=null;pendingEntry=null;pendingExit=null;pendingStandardExit=null;pendingOrdinaryEntry=null;pendingExternalDirect=false;pendingExitMode="";pendingExternalDigest="";pendingEntryDigest="";pendingExternalRequestDigest="";pendingCallback=null;}
+    private String pendingIdentity()throws Exception{
+        JSONObject captured=new JSONObject().put("mode",pendingMode).put("layers",new JSONArray(pendingLayers))
+                .put("node",pendingNode==null?"":pendingNode.id).put("entry",pendingEntry==null?"":pendingEntry.id).put("exit",pendingExit==null?"":pendingExit.id)
+                .put("ordinary_entry",pendingOrdinaryEntry==null?"":pendingOrdinaryEntry.id).put("external_exit",pendingStandardExit==null?"":pendingStandardExit.id)
+                .put("direct",pendingExternalDirect).put("entry_mode",pendingEntryMode).put("exit_mode",pendingExitMode).put("execution",pendingExecution)
+                .put("external_request",pendingExternalRequestDigest).put("startup",pendingStartup==null?"":pendingStartup.nonce);
+        return AndroidTorProfile.digest(captured.toString().getBytes(StandardCharsets.UTF_8));
+    }
+    private void requirePendingIdentity()throws Exception{
+        if(!ownsPermission(pendingPermission,permissionAttachment)||!pendingPermission.request.equals(pendingIdentity()))
+            throw new IllegalStateException("The captured Android permission owner was cancelled, consumed or changed.");
+    }
+    private static synchronized PermissionOwner createPermission(String selection,String request,boolean prompt,Object attachment){
+        if(permissionOwner!=null&&permissionOwner.attachment!=null)throw new IllegalStateException("Another screen owns Android VPN permission. Finish or cancel it first.");
+        if(prompt&&nextPermissionCode>0xffff)throw new IllegalStateException("Android permission request identities are exhausted. Reopen the app in a new process before connecting.");
+        return permissionOwner=new PermissionOwner(selection,request,prompt?nextPermissionCode++:0,attachment);
+    }
+    private static synchronized PermissionOwner restorePermission(String nonce,String selection,Object attachment){
+        if(permissionOwner==null||permissionOwner.attachment!=null||!permissionOwner.nonce.equals(nonce)||!permissionOwner.selection.equals(selection))
+            throw new IllegalStateException("The saved Android permission request cannot replace its current owner.");
+        permissionOwner.attachment=attachment;return permissionOwner;
+    }
+    private static synchronized boolean ownsPermission(PermissionOwner captured,Object attachment){return captured!=null&&permissionOwner==captured&&captured.attachment==attachment;}
+    private static synchronized void releasePermission(PermissionOwner captured,Object attachment,boolean transfer){
+        if(!ownsPermission(captured,attachment))return;
+        if(transfer)captured.attachment=null;else permissionOwner=null;
+    }
+    private void clearPending(){releasePermission(pendingPermission,permissionAttachment,false);pendingPermission=null;pendingSaved=false;pendingStartup=null;pendingEntryMode="wg";pendingExecution="local";pendingMode="";pendingLayers=Collections.emptyList();pendingNode=null;pendingEntry=null;pendingExit=null;pendingStandardExit=null;pendingOrdinaryEntry=null;pendingExternalDirect=false;pendingExitMode="";pendingExternalDigest="";pendingEntryDigest="";pendingExternalRequestDigest="";pendingCallback=null;}
     private static String displayMode(String mode){if("smart-auto".equals(mode))return"SMART AUTO";if("auto".equals(mode))return"AUTO";if("multihop".equals(mode))return"multihop";if("external".equals(mode))return"external exit";if(mode.startsWith("custom:"))return"CUSTOM";return mode.toUpperCase();}
     private static String safe(Throwable error){String value=error==null?"":error.getMessage();return value==null||value.trim().isEmpty()?"Router VPN connection error":value.trim();}
-    @Override public void close(){clearPending();}
+    @Override public void close(){
+        if(pendingSaved&&!activity.isFinishing()){releasePermission(pendingPermission,permissionAttachment,true);pendingPermission=null;}
+        else if(pendingStartup!=null)pendingStartup.cancel();
+        clearPending();
+    }
 }

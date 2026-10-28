@@ -124,7 +124,7 @@ final class ProductConnectSurface extends Context {
  static final class Probe{boolean isBusy(){return false;}}final Probe viaEntryProbe=new Probe();
  static final class Connection{
   int starts;boolean direct;AndroidNodeStore.Node entry;AndroidStandardExitStore.Entry ordinaryEntry,exit;String mode,execution;
-  boolean cancelStartupPending(){return false;}boolean isActiveOrTransitioning(){return false;}void disconnect(Object callback){throw new AssertionError("unexpected disconnect");}
+  boolean cancelStartupPending(){return false;}boolean cancelPermissionPending(){return false;}boolean isActiveOrTransitioning(){return false;}void disconnect(Object callback){throw new AssertionError("unexpected disconnect");}
   void connectExternal(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,boolean direct,String mode,String execution,Object callback){starts++;this.entry=entry;this.exit=exit;this.direct=direct;this.mode=mode;this.execution=execution;}
   void connectExternal(AndroidConnectionProfileStore.ExternalSelection path,Object callback){if(path.ordinaryEntry!=null){starts++;ordinaryEntry=path.ordinaryEntry;exit=path.exit;mode=path.entryMode;execution=path.execution;direct=false;}else connectExternal(path.entry,path.exit,path.direct(),path.entryMode,path.execution,callback);}
   void connectMultihop(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String mode,String execution,String entryMode,Object callback){throw new AssertionError("external selection became Router multihop");}

@@ -172,7 +172,7 @@ public final class SpeedLabRestoreTest {
    if(stage.equals("cleanup")){RuntimeBoundary.holdStop=true;RuntimeBoundary.stopEntered=false;}else android.net.VpnService.needsPermission=true;AndroidSpeedLab.drained(false);
    if(stage.equals("cleanup"))waitFor(()->RuntimeBoundary.stopEntered,"temporary cleanup was not captured");else waitFor(()->f.activity.permissionRequest!=0,"ordinary restoration never requested renewed permission");
    String id=source.startsWith("entry")?f.originalOrdinary.id:f.external.id;if(source.endsWith("removed"))AndroidStandardExitStore.saved.remove(id);else if(source.endsWith("policy"))AndroidStandardExitStore.saved.get(id).policy="changed during original restore";else AndroidStandardExitStore.saved.get(id).secret="replacement original private source";
-   if(stage.equals("cleanup")){RuntimeBoundary.holdStop=false;RuntimeBoundary.stopRelease.countDown();}else{android.net.VpnService.needsPermission=false;f.connection.onActivityResult(AndroidUnifiedConnectionController.PREPARE_UNIFIED,Activity.RESULT_OK);}f.complete();
+   if(stage.equals("cleanup")){RuntimeBoundary.holdStop=false;RuntimeBoundary.stopRelease.countDown();}else{android.net.VpnService.needsPermission=false;f.connection.onActivityResult(f.activity.permissionRequest,Activity.RESULT_OK);}f.complete();
    check(f.result.error!=null&&f.result.result==null&&RuntimeBoundary.starts==1&&!AndroidHomeStateStore.current.connected,"changed ordinary original was restored or kept a successful result: "+stage+"/"+source);
   }
   for(String change:List.of("key","policy","kind","execution")){
@@ -243,8 +243,21 @@ public final class SpeedLabRestoreTest {
  static void permissionCapture(Path root)throws Exception{
   for(String topology:new String[]{"router","multihop","external"}){
    Fixture f=new Fixture(root,"router",topology);android.net.VpnService.needsPermission=true;f.start();f.quiesce();waitFor(()->f.activity.permissionRequest!=0,"permission boundary never reached");
-   Files.writeString(f.first.file.toPath(),"changed test credentials during permission");android.net.VpnService.needsPermission=false;f.connection.onActivityResult(AndroidUnifiedConnectionController.PREPARE_UNIFIED,Activity.RESULT_OK);f.complete();
+   Files.writeString(f.first.file.toPath(),"changed test credentials during permission");android.net.VpnService.needsPermission=false;f.connection.onActivityResult(f.activity.permissionRequest,Activity.RESULT_OK);f.complete();
    check(f.result.error!=null&&RuntimeBoundary.starts==0&&AndroidSpeedLab.starts==0,"permission completion used changed test profile: "+topology);f.originalRestored();
+  }
+ }
+ static void permissionSelection(Path root)throws Exception{
+  for(String topology:List.of("router","multihop","external","ordinary"))for(boolean changed:new boolean[]{false,true}){
+   Fixture f=new Fixture(root,"router",topology.equals("ordinary")?"external":topology);if(topology.equals("ordinary"))f.ordinaryTemporary("socks5");
+   android.content.Context.speedPreferences.put("selected_kind","router-vpn");android.content.Context.speedPreferences.put("selected_id",f.original.id);android.content.Context.speedPreferences.put("mode","custom:Saved original");android.content.Context.speedPreferences.put("custom_presets","SAVED_LAYERS_DIFFERENT_FROM_TEST");
+   Map<String,String> saved=new HashMap<>(android.content.Context.speedPreferences);android.net.VpnService.needsPermission=true;f.start();f.quiesce();waitFor(()->f.activity.permissionRequest!=0,"temporary permission boundary never reached");
+   check(f.connection.isPermissionPending()&&f.connection.isActiveOrTransitioning()&&RuntimeBoundary.starts==0,"temporary permission owner was invisible to Product busy/cancel");
+   if(changed)android.content.Context.speedPreferences.put("mode","user replacement choice");else android.content.Context.speedPreferences.put("map_theme","dark");
+   android.net.VpnService.needsPermission=false;f.connection.onActivityResult(f.activity.permissionRequest,Activity.RESULT_OK);
+   if(!changed)f.measured();f.complete();f.originalRestored();
+   if(changed)check(f.result.error!=null&&f.result.result==null&&RuntimeBoundary.starts==0&&AndroidSpeedLab.starts==0&&android.content.Context.speedPreferences.get("mode").equals("user replacement choice"),"changed saved choice launched temporary test or overwrote user choice");
+   else{check(f.result.error==null&&f.result.result!=null&&RuntimeBoundary.starts==1,"temporary path was required to equal saved selection");android.content.Context.speedPreferences.remove("map_theme");check(saved.equals(android.content.Context.speedPreferences),"permission-approved temporary path rewrote saved selection");}
   }
  }
  static void uiCancellation(Path root)throws Exception{
@@ -297,7 +310,7 @@ public final class SpeedLabRestoreTest {
   }
   android.app.AlertDialog.last.dismiss();
  }
- public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);matrix(root);externalUI(root);ordinaryUI(root);ordinaryRestoration(root);ordinaryRestoreChanges(root);exactMultihopWinner(root);exactExternalWinner(root);exactTorExecution(root);cancellation(root);stale(root);multihopPins(root);permissionCapture(root);uiCancellation(root);System.out.println("Shipping Android Speed Lab restoration: "+checks+" checks; captured winners,40 ordinary graph restores,8-protocol typed picker,cleanup/permission source changes,8 cancellation phases and newer-user ownership");}
+ public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);matrix(root);externalUI(root);ordinaryUI(root);ordinaryRestoration(root);ordinaryRestoreChanges(root);exactMultihopWinner(root);exactExternalWinner(root);exactTorExecution(root);cancellation(root);stale(root);multihopPins(root);permissionCapture(root);permissionSelection(root);uiCancellation(root);System.out.println("Shipping Android Speed Lab restoration: "+checks+" checks; captured winners,40 ordinary graph restores,8-protocol typed picker,cleanup/permission source changes,saved/test selection separation,8 cancellation phases and newer-user ownership");}
 }
 '''
 
@@ -310,8 +323,8 @@ def replace_class(text, name, replacement):
 def main():
     jar=Path(os.environ.get('ANDROID_JSON_JAR','/usr/share/java/com.android.json.jar'))
     ui=dict(P.T.UI)
-    ui['android/content/Context.java']=ui['android/content/Context.java'].replace('public SharedPreferences getSharedPreferences(String name,int mode){return (key,fallback)->fallback;}', 'public static final java.util.Map<String,String> speedPreferences=new java.util.HashMap<>();public SharedPreferences getSharedPreferences(String name,int mode){return (key,fallback)->speedPreferences.getOrDefault(key,fallback);}')
-    ui['android/content/SharedPreferences.java']='package android.content;public interface SharedPreferences{String getString(String key,String fallback);}'
+    ui['android/content/Context.java']=ui['android/content/Context.java'].replace('public SharedPreferences getSharedPreferences(String name,int mode){return (key,fallback)->fallback;}', 'public static final java.util.Map<String,String> speedPreferences=new java.util.HashMap<>();public SharedPreferences getSharedPreferences(String name,int mode){return new SharedPreferences(){public String getString(String key,String fallback){return speedPreferences.getOrDefault(key,fallback);}public java.util.Map<String,?> getAll(){return new java.util.LinkedHashMap<>(speedPreferences);}};}')
+    ui['android/content/SharedPreferences.java']='package android.content;public interface SharedPreferences{String getString(String key,String fallback);java.util.Map<String,?> getAll();}'
     # AdapterView.INVALID_POSITION represents an unavailable saved selection;
     # it must stay unselected instead of implicitly choosing another entry mode.
     ui['android/widget/Spinner.java']=ui['android/widget/Spinner.java'].replace('if(value<0||adapter==null||value>=adapter.getCount())','if(value < -1||adapter==null||value>=adapter.getCount())').replace('if(listener!=null)listener.onItemSelected(this,null,position,position);','if(listener!=null){if(position<0)listener.onNothingSelected(this);else listener.onItemSelected(this,null,position,position);}')
@@ -343,7 +356,7 @@ def main():
             p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(body)
         app=root/'com/eabusham/routervpn';app.mkdir(parents=True)
         (app/'Boundaries.java').write_text(boundaries);(app/'SpeedLabRestoreTest.java').write_text(HARNESS)
-        for name in ('AndroidUnifiedConnectionController.java','AndroidSpeedLabController.java','AndroidMTUMeasurementGate.java','AndroidSpeedLabDialog.java'):
+        for name in ('AndroidConnectionSelection.java','AndroidUnifiedConnectionController.java','AndroidSpeedLabController.java','AndroidMTUMeasurementGate.java','AndroidSpeedLabDialog.java'):
             shutil.copyfile(JAVA/name,app/name)
         compile=['javac','--release','17','-encoding','UTF-8','-proc:none','-cp',str(jar),'-d',str(root/'classes'),*map(str,root.rglob('*.java'))]
         run=['java','-cp',os.pathsep.join((str(root/'classes'),str(jar))),'com.eabusham.routervpn.SpeedLabRestoreTest',str(root/'data')]

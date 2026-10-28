@@ -27,8 +27,6 @@ final class AndroidStartupPolicy {
     private static final String PREFS="router-vpn-unified", LAST_FILE="startup-last-v1.json";
     private static final int MAX_LAST=4096;
     private static final String[] CHOICES={"smart-auto","auto","last","manual"};
-    private static final String[] SELECTION_KEYS={"selected_kind","selected_id","mode","custom_presets",
-            "multihop_on","multihop_entry","multihop_exit","multihop_exit_mode","multihop_entry_mode","multihop_entry_kind","multihop_execution"};
     private static boolean coldLaunchClaimed;
     private static Attempt pending;
 
@@ -248,8 +246,7 @@ final class AndroidStartupPolicy {
     }
 
     private static Map<String,Object> selectionPreferences(Context context){
-        Map<String,?> all=prefs(context).getAll();Map<String,Object> result=new LinkedHashMap<>();
-        for(String key:SELECTION_KEYS)if(all.containsKey(key))result.put(key,all.get(key));return result;
+        return AndroidConnectionSelection.preferences(context);
     }
 
     private static AndroidNodeStore.Node requiredNode(AndroidNodeStore nodes,String id)throws Exception{
