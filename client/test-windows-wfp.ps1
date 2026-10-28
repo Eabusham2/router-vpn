@@ -275,7 +275,9 @@ public sealed class RouterVPNWfpDatagramEcho : IDisposable {
     readonly UdpClient socket;
     readonly Thread worker;
     public RouterVPNWfpDatagramEcho(string address, int port) {
-        IPAddress ip = IPAddress.Parse(address); socket = new UdpClient(new IPEndPoint(ip, port));
+        IPAddress ip = IPAddress.Parse(address); socket = new UdpClient(ip.AddressFamily);
+        try { socket.Client.Bind(new IPEndPoint(ip, port)); }
+        catch { socket.Close(); throw; }
         worker = new Thread(delegate() {
             try {
                 while (true) {
@@ -475,6 +477,31 @@ try {
     return $process
 }
 
+function New-FixtureEndpointPair([string]$Address,[scriptblock]$OpenDatagram={param($IP,$Port) New-Object RouterVPNWfpDatagramEcho($IP,$Port)}) {
+    # Windows TCP and UDP exclusions differ. Reserve both protocols before
+    # adopting an endpoint so the kernel assertions still exercise the same
+    # address/port with opposite TCP/UDP permissions. Retry only allocation
+    # collisions, before installing any product filter, and drain partial owners.
+    for($attempt=0;$attempt -lt 8;$attempt++) {
+        $tcp=$null;$udp=$null
+        try {
+            $tcp=New-Object RouterVPNWfpEcho($Address)
+            $udp=& $OpenDatagram $Address $tcp.Port
+            if($null -eq $udp -or $udp -isnot [RouterVPNWfpDatagramEcho]) { throw 'The fixture did not reserve its captured UDP listener.' }
+            return [pscustomobject]@{TCP=$tcp;UDP=$udp}
+        } catch {
+            $failure=$_.Exception
+            if($null -ne $udp) { $udp.Dispose() }
+            if($null -ne $tcp) { $tcp.Dispose() }
+            while($null -ne $failure.InnerException) { $failure=$failure.InnerException }
+            if($failure -isnot [Net.Sockets.SocketException] -or
+               $failure.SocketErrorCode -notin @([Net.Sockets.SocketError]::AddressAlreadyInUse,[Net.Sockets.SocketError]::AccessDenied) -or
+               $attempt -eq 7) { throw }
+        }
+    }
+    throw 'The fixture could not reserve its bounded TCP/UDP pair.'
+}
+
 $foreignName='RouterVPN-WFP-fixture-foreign-'+[Guid]::NewGuid().ToString('N')
 $scope=App-Scope $child
 $servers=@();$datagrams=@();$streams=@();$active=$null;$lease=$null;$staticPlan=$null;$staticLease=$null;$leaseProcess=$null
@@ -484,9 +511,11 @@ try {
     # This rule intentionally grants the fixture executable outbound access.
     # Product WFP operations must neither delete it nor let it bypass the deny.
     $null=New-NetFirewallRule -Name $foreignName -DisplayName $foreignName -Program $child -Direction Outbound -Action Allow -Profile Any
-    foreach($address in @('127.0.0.1','::1')) { $servers+=New-Object RouterVPNWfpEcho($address);$servers+=New-Object RouterVPNWfpEcho($address) }
+    foreach($address in @('127.0.0.1','127.0.0.1','::1','::1')) {
+        $pair=New-FixtureEndpointPair $address
+        $servers+=$pair.TCP;$datagrams+=$pair.UDP
+    }
     foreach($entry in @(@('127.0.0.1',$servers[0].Port),@('127.0.0.1',$servers[1].Port),@('::1',$servers[2].Port),@('::1',$servers[3].Port))) {
-        $datagrams+=New-Object RouterVPNWfpDatagramEcho($entry[0],$entry[1])
         Check ((Probe $child $entry[0] $entry[1]) -eq 0) 'The isolated server is not reachable before enforcement.'
         Check ((Probe $child $entry[0] $entry[1] 'udp') -eq 0) 'The isolated datagram server is not reachable before enforcement.'
     }
