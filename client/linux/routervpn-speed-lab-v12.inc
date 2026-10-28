@@ -414,9 +414,10 @@ static void linux_speed_lab_start_v12(LinuxSpeedLabV12 *s, gboolean options) {
     if (!options) {
         s->request_body = linux_speed_lab_request_body_v12(s);
         if(s->request_body==NULL){linux_speed_lab_release_request_v12(s);linux_speed_lab_refresh_controls_v12(NULL,s);return;}
-        if (strcmp(linux_speed_lab_active_id_v12(s->duration_mode), "custom") == 0)
-            s->request_timeout = MAX(90000L, (long)(gtk_range_get_value(GTK_RANGE(s->max_time))*2000.0 + 80000.0));
-        gtk_label_set_text(GTK_LABEL(s->status), "Proving path and testing throughput/loaded latency… Cancel or Close stops this request.");
+        s->request_timeout = linux_speed_lab_request_timeout_v19(s, s->request_body);
+        gboolean tor_compare = linux_speed_lab_tor_compare_request_v19(s, s->request_body);
+        gtk_label_set_text(GTK_LABEL(s->status), tor_compare ? "Comparing Local and Server Tor paths… Cancel or Close stops this request." : "Proving path and testing throughput/loaded latency… Cancel or Close stops this request.");
+        if (tor_compare) gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail)), "Each candidate measures Tor last-relay HTTP and the same external-server HTTP response. The lowest valid average is rechecked before throughput testing; the captured connection is restored afterward.", -1);
         GtkWidget *metrics[] = {s->idle,s->download,s->upload,s->idle_detail,s->download_detail,s->upload_detail};
         for (guint i=0; i<G_N_ELEMENTS(metrics); i++) gtk_label_set_text(GTK_LABEL(metrics[i]), "--");
     } else gtk_label_set_text(GTK_LABEL(s->status), "Loading test options…");

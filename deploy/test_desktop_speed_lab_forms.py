@@ -107,6 +107,29 @@ int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Expected fixt
  json_object_set_boolean_member(node,"has_openvpn_pairing",FALSE);reject(&s);json_object_set_boolean_member(node,"has_openvpn_pairing",TRUE);
  JsonArray*nodes=linux_speed_lab_catalog_v19(&s,"nodes");json_array_add_object_element(nodes,json_object_ref(node));reject(&s);json_array_remove_element(nodes,json_array_get_length(nodes)-1);
  json_object_set_string_member(node,"multihop_entry_id","removed-entry");linux_speed_lab_defaults_v19(&s);check(strcmp(linux_speed_lab_active_id_v12(s.entry),"removed-entry")==0,"Unavailable entry became Direct");reject(&s);json_object_set_string_member(node,"multihop_entry_id","entry");linux_speed_lab_defaults_v19(&s);
+ const char*tor_protocols[]={"tor","tor-bridge"};
+ for(guint ti=0;ti<G_N_ELEMENTS(tor_protocols);ti++){
+  char*tor_id=g_strdup_printf("speed-%s",tor_protocols[ti]);choose(s.node,tor_id);choose(s.entry,"entry");JsonObject*tor=linux_speed_lab_find_v19(&s,"nodes",tor_id);g_free(tor_id);
+  check(!linux_speed_lab_flag_v19(tor,"has_response_probe"),"Tor fixture invented ordinary provider probe");
+  for(guint mi=0;mi<json_array_get_length(modes);mi++)for(guint ei=0;ei<3;ei++){
+   const char*mode=obj_string(json_array_get_object_element(modes,mi),"id");choose(s.entry_mode,mode);choose(s.execution,executions[ei]);char*name=g_strdup_printf("speed-lab-%s-%s-%s",tor_protocols[ti],mode,executions[ei]);emit(&s,argv[1],name);g_free(name);
+   check(linux_speed_lab_request_timeout_v19(&s,captured)==(ei==2?960000L:110000L),"Captured Tor Run used unrelated or insufficient HTTP budget");
+  }
+  choose(s.entry_mode,"wg");
+  const char*fields[]={"tor_server_execution","tor_compare_execution"};
+  for(guint ei=0;ei<2;ei++)for(guint bad=0;bad<4;bad++){
+   choose(s.execution,ei==0?"server":"auto");
+   if(bad==0)json_object_set_boolean_member(tor,fields[ei],FALSE);else if(bad==1)json_object_remove_member(tor,fields[ei]);else if(bad==2)json_object_set_string_member(tor,fields[ei],"true");else json_object_set_int_member(tor,fields[ei],1);
+   reject(&s);json_object_set_boolean_member(tor,fields[ei],TRUE);
+  }
+  choose(s.execution,"auto");json_object_set_boolean_member(tor,"tor_compare_requires_paired_source",FALSE);reject(&s);json_object_set_boolean_member(tor,"tor_compare_requires_paired_source",TRUE);
+  json_object_set_boolean_member(tor,"tor_server_execution",FALSE);g_clear_pointer(&captured,g_free);gtk_button_clicked(GTK_BUTTON(s.run));check(captured!=NULL,"Compare incorrectly required both runtime candidates");json_object_set_boolean_member(tor,"tor_server_execution",TRUE);
+  choose(s.entry,"");choose(s.execution,"auto");reject(&s);choose(s.entry,"external-entry");choose(s.execution,"auto");reject(&s);choose(s.entry,"entry");choose(s.execution,"auto");
+  JsonObject*lower=linux_speed_lab_find_v19(&s,"nodes","entry");json_object_set_string_member(lower,"external_protocol","socks5");reject(&s);json_object_set_string_member(lower,"external_protocol","");
+  char*token=g_strdup(obj_string(tor,"profile_token"));json_object_set_string_member(tor,"profile_token","ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");reject(&s);json_object_set_string_member(tor,"profile_token",token);g_free(token);
+  token=g_strdup(obj_string(lower,"profile_token"));json_object_set_string_member(lower,"profile_token","ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");reject(&s);json_object_set_string_member(lower,"profile_token",token);g_free(token);
+ }
+ choose(s.node,"exit");
  choose(s.topology,"multihop");choose(s.entry,"entry");choose(s.exit,"exit-router");choose(s.entry_mode,"");for(guint j=0;j<3;j++){choose(s.execution,executions[j]);char*name=g_strdup_printf("speed-lab-multihop-%s",executions[j]);emit(&s,argv[1],name);g_free(name);}
  JsonArray*exit_modes=linux_speed_lab_catalog_v19(&s,"supported_exit_modes");check(exit_modes!=NULL&&json_array_get_length(exit_modes)==19,"Reduced Router exit catalog");
  for(guint i=0;i<json_array_get_length(exit_modes);i++){const char*mode=json_array_get_string_element(exit_modes,i);choose(s.exit_mode,mode);for(guint j=0;j<3;j++){choose(s.execution,executions[j]);char*name=g_strdup_printf("speed-lab-multihop-%s-%s",mode,executions[j]);emit(&s,argv[1],name);g_free(name);}}
@@ -191,13 +214,14 @@ final class Form {
  let minTime=Field(),maxTime=Field(),layers=Field(),idle=Field(),download=Field(),upload=Field(),idleDetail=Field(),downloadDetail=Field(),uploadDetail=Field(),status=Field()
  let daita=Button(),jumbo=Button(),encrypted=Button(),obfuscated=Button(),runButton=Button();let detail=TextArea()
  var nodes:[[String:Any]]=[],entryModes:[[String:Any]]=[],executions:[[String:Any]]=[]
+ var capturedProfileTokens:[String:String]=[:]
  var supportedEntryModes:[String]=[],exitModes:[String]=[],currentPath:[String:Any]=[:]
  var updatingChoices=false,closed=false,optionsReady=false,cancelled=false,loadingOptions=false
- var request:Request?;var captured:[String:Any]?;var options=Data();var deferOptions=false;var pendingOptions:((Result<Data,Error>)->Void)?
+ var request:Request?;var captured:[String:Any]?;var capturedTimeout:TimeInterval=0;var options=Data();var deferOptions=false;var pendingOptions:((Result<Data,Error>)->Void)?
  init(_ product:ProductWindowController){self.product=product;self.capturedSelection=RouterVPNMacSpeedLabPathPolicy.activeSelection(product.captureConnectionProfileSelection());self.selectionGeneration=product.connectionProfileSelectionGeneration}
  func performLocalRequest(_ path:String,body:[String:Any]?,timeout:TimeInterval,completion:@escaping(Result<Data,Error>)->Void)throws{
   if path=="/api/speed-lab/options"{if deferOptions{pendingOptions=completion}else{loadingOptions=false;completion(.success(options))}}
-  else {precondition(path=="/api/speed-lab/run"&&body != nil);captured=body}
+  else {precondition(path=="/api/speed-lab/run"&&body != nil);captured=body;capturedTimeout=timeout}
  }
  func initializeExitModes(){EXIT_INITIALIZER}
  func finishOptions(){let completion=pendingOptions;pendingOptions=nil;loadingOptions=false;completion?(.success(options))}
@@ -223,7 +247,7 @@ check(f.entryModes.count==19,"Reduced raw entry catalog")
 check(f.supportedEntryModes==RouterVPNNodeEntryModes.choices.map{$0.id}.filter{!$0.isEmpty},"Main and native entry mode catalogs differ")
 check(f.exitModes==RouterVPNNodeExitModes.choices.map{$0.id},"UI and native exit catalogs differ")
 func emit(_ name:String)throws{f.captured=nil;f.runSpeedLab();check(f.captured != nil,f.detail.string);check(f.captured!["expected_selected_node_id"] as? String==f.capturedSelection.selectedNodeID,"Run lost its captured main selection");let tokens=f.captured!["expected_profile_tokens"] as? [String:String] ?? [:];for id in [f.capturedSelection.selectedNodeID]+["node_id","entry_id","exit_id"].compactMap({f.captured![$0] as? String}) where !id.isEmpty{check(tokens[id]?.count==64,"Run omitted exact identity for "+id)};try JSONSerialization.data(withJSONObject:f.captured!,options:[.sortedKeys]).write(to:output.appendingPathComponent(name+".json"))}
-func reject(){f.captured=nil;f.runSpeedLab();check(f.captured==nil,"Invalid selection reached controller")}
+func reject(_ label:String="",line:UInt=#line){f.captured=nil;f.runSpeedLab();check(f.captured==nil,"Invalid selection reached controller at \(line): \(label)")}
 try emit("speed-lab-current");choose(f.scope,"temporary")
 for m in f.entryModes{let id=m["id"] as! String;for execution in ["local","server","auto"]{choose(f.entryMode,id);choose(f.execution,execution);try emit("speed-lab-external-"+id+"-"+execution)}}
 choose(f.entry,"");f.pathChanged(f.entry);check(f.selected(f.execution)=="local","Direct retained Server");try emit("speed-lab-external-direct");choose(f.execution,"server");reject()
@@ -235,6 +259,30 @@ f.nodes[exitIndex]["has_response_probe"]=false;reject();f.nodes[exitIndex]["has_
 f.nodes[exitIndex]["has_openvpn_pairing"]=false;reject();f.nodes[exitIndex]["has_openvpn_pairing"]=true
 f.nodes.append(f.nodes[exitIndex]);reject();f.nodes.removeLast()
 f.nodes[exitIndex]["multihop_entry_id"]="removed-entry";f.applyPathDefaults();check(f.selected(f.entry)=="removed-entry","Unavailable saved entry became Direct");reject();f.nodes[exitIndex]["multihop_entry_id"]="entry";f.applyPathDefaults()
+for proto in ["tor", "tor-bridge"] {
+ choose(f.node,"speed-"+proto);f.pathChanged(f.node);choose(f.entry,"entry")
+ let index=f.nodes.firstIndex(where:{$0["id"] as? String=="speed-"+proto})!
+ check(f.nodes[index]["has_response_probe"] as? Bool==false,"Tor fixture invented ordinary provider probe")
+ for mode in f.entryModes {for execution in ["local","server","auto"]{
+  let id=mode["id"] as! String;choose(f.entryMode,id);choose(f.execution,execution);try emit("speed-lab-"+proto+"-"+id+"-"+execution)
+  check(f.capturedTimeout == (execution=="auto" ? 960 : 104),"Actual Tor Run used an unrelated or insufficient HTTP budget")
+ }}
+ choose(f.entryMode,"wg")
+ for execution in ["server","auto"] {for bad:Any in [false,NSNull(),"true",1]{
+  let field=execution=="auto" ? "tor_compare_execution" : "tor_server_execution"
+  f.nodes[index][field]=bad;choose(f.execution,execution);reject(field+"="+String(describing:bad));f.nodes[index][field]=true
+ }}
+ choose(f.execution,"auto");f.nodes[index]["tor_compare_requires_paired_source"]=false;reject();f.nodes[index]["tor_compare_requires_paired_source"]=true
+ f.nodes[index]["tor_server_execution"]=false;f.captured=nil;f.runSpeedLab();check(f.captured != nil,"Compare incorrectly required both runtime candidates");f.nodes[index]["tor_server_execution"]=true
+ choose(f.entry,"");f.pathChanged(f.entry);choose(f.execution,"auto");reject()
+ choose(f.entry,"external-entry");f.pathChanged(f.entry);choose(f.execution,"auto");reject()
+ choose(f.entry,"entry");f.pathChanged(f.entry);choose(f.execution,"auto")
+ let entryIndex=f.nodes.firstIndex(where:{$0["id"] as? String=="entry"})!
+ f.nodes[entryIndex]["external_protocol"]="socks5";reject();f.nodes[entryIndex]["external_protocol"]=""
+ let token=f.nodes[index]["profile_token"]!;f.nodes[index]["profile_token"]=String(repeating:"f",count:64);reject();f.nodes[index]["profile_token"]=token
+ let entryToken=f.nodes[entryIndex]["profile_token"]!;f.nodes[entryIndex]["profile_token"]=String(repeating:"f",count:64);reject();f.nodes[entryIndex]["profile_token"]=entryToken
+}
+choose(f.node,"exit");f.pathChanged(f.node)
 choose(f.topology,"multihop");f.pathChanged(f.topology);choose(f.entry,"entry");choose(f.exit,"exit-router")
 for execution in ["local","server","auto"]{choose(f.execution,execution);try emit("speed-lab-multihop-"+execution)}
 for exitMode in f.exitModes{choose(f.exitMode,exitMode);for execution in ["local","server","auto"]{choose(f.execution,execution);try emit("speed-lab-multihop-"+exitMode+"-"+execution)}}

@@ -20,6 +20,18 @@ private enum RouterVPNMacSpeedLabPathPolicy {
         let matches = values.filter { $0["id"] as? String == id }
         return matches.count == 1 ? matches[0] : nil
     }
+    static func captureProfileTokens(_ nodes: [[String: Any]]) throws -> [String: String] {
+        var tokens: [String: String] = [:]
+        for node in nodes {
+            guard let id = node["id"] as? String, !id.isEmpty, tokens[id] == nil,
+                  let token = node["profile_token"] as? String, token.count == 64,
+                  token.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+                throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "A Speed Lab node has no unique source identity. Reopen Speed Lab."])
+            }
+            tokens[id] = token
+        }
+        return tokens
+    }
     static func kind(_ node: [String: Any]?) -> String { node == nil ? "" : (node?["node_kind"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "router-vpn" }
     static func entryMode(_ node: [String: Any]?, _ entry: [String: Any]?) -> String {
         guard kind(entry) == "router-vpn" else { return "" }
@@ -28,12 +40,31 @@ private enum RouterVPNMacSpeedLabPathPolicy {
         if !["wg", "awg"].contains(base) { base = node?["base_tunnel"] as? String ?? "" }
         return base == "awg" ? "awg2-fast" : "wg"
     }
-    static func serverReady(_ node: [String: Any]) -> Bool {
-        guard node["has_response_probe"] as? Bool == true else { return false }
+    static func serverReady(_ node: [String: Any], execution: String) -> Bool {
         let proto = node["external_protocol"] as? String ?? ""
+        if ["tor", "tor-bridge"].contains(proto) {
+            guard ["server", "auto"].contains(execution) else { return false }
+            let field = execution == "auto" ? "tor_compare_execution" : "tor_server_execution"
+            guard let enabled = node[field] as? NSNumber, CFGetTypeID(enabled) == CFBooleanGetTypeID(), enabled.boolValue else { return false }
+            if execution == "auto" {
+                guard let paired = node["tor_compare_requires_paired_source"] as? NSNumber, CFGetTypeID(paired) == CFBooleanGetTypeID(), paired.boolValue else { return false }
+            }
+            return true
+        }
+        guard node["has_response_probe"] as? Bool == true else { return false }
         if ["wireguard", "amneziawg"].contains(proto) { return node["has_server_peer"] as? Bool == true }
         if proto == "openvpn" { return node["has_openvpn_pairing"] as? Bool == true }
         return ["shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"].contains(proto)
+    }
+    static func torCompareRequest(_ body: [String: Any], nodes: [[String: Any]]) -> Bool {
+        guard body["scope"] as? String == "temporary", body["topology"] as? String == "external", body["execution"] as? String == "auto",
+              let node = find(nodes, body["node_id"] as? String ?? "") else { return false }
+        return ["tor", "tor-bridge"].contains(node["external_protocol"] as? String ?? "")
+    }
+    static func requestTimeout(_ body: [String: Any], nodes: [[String: Any]]) -> TimeInterval {
+        if torCompareRequest(body, nodes: nodes) { return 960 }
+        let seconds = body["duration_mode"] as? String == "custom" ? (body["max_seconds"] as? NSNumber)?.doubleValue ?? 12 : 12
+        return max(100, seconds * 2 + 80)
     }
     static func validate(nodes: [[String: Any]], entryModes: [[String: Any]], executions: [[String: Any]],
                          topology: String, nodeID: String, entryID: String, exitID: String, entryMode: String, execution: String) throws {
@@ -48,7 +79,9 @@ private enum RouterVPNMacSpeedLabPathPolicy {
             if !entryID.isEmpty && (entry == nil || entryID == nodeID) { try reject("Select a different linked entry, or Direct.") }
             if kind(entry) == "router-vpn" {
                 if find(entryModes, entryMode) == nil { try reject("Select a supported Router entry mode.") }
-                if execution != "local" && !serverReady(node) { try reject("Server/Compare requires this exit's response probe and independent server pairing where required.") }
+                if execution != "local", ["tor", "tor-bridge"].contains(node["external_protocol"] as? String ?? ""),
+                   !(entry?["external_protocol"] as? String ?? "").isEmpty || entry?["external"] != nil { try reject("Tor Server/Compare requires a private Router entry source.") }
+                if execution != "local" && !serverReady(node, execution: execution) { try reject("Tor Server/Compare requires advertised native support and a paired private Router entry. Other exits require their response probe and separate server pairing.") }
             } else if execution != "local" { try reject("Direct and ordinary external entry paths use Local execution.") }
         } else { try reject("Select a supported test topology.") }
         if !["local", "server", "auto"].contains(execution) || find(executions, execution) == nil { try reject("Select Local, Server, or Compare both from current capabilities.") }
@@ -90,6 +123,7 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
     private let detail = NSTextView()
     private let runButton = NSButton(title: "Run Speed Lab", target: nil, action: nil)
     private var nodes: [[String: Any]] = []
+    private var capturedProfileTokens: [String: String] = [:]
     private var entryModes: [[String: Any]] = []
     private var supportedEntryModes: [String] = []
     private var exitModes: [String] = []
@@ -316,8 +350,10 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
                     let data = try result.get()
                     guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw NSError(domain: "RouterVPNSpeedLab", code: 1) }
                     try self.validateCapturedSelection(root)
+                    let capturedNodes = root["nodes"] as? [[String: Any]] ?? []
+                    let capturedTokens = try RouterVPNMacSpeedLabPathPolicy.captureProfileTokens(capturedNodes)
                     self.updatingChoices = true
-                    self.nodes = root["nodes"] as? [[String: Any]] ?? []
+                    self.nodes = capturedNodes; self.capturedProfileTokens = capturedTokens
                     self.entryModes = root["router_vpn_entry_modes"] as? [[String: Any]] ?? []
                     self.supportedEntryModes = root["supported_entry_modes"] as? [String] ?? []
                     self.exitModes = root["supported_exit_modes"] as? [String] ?? []
@@ -384,10 +420,11 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
         var tokens: [String: String] = [:]
         for id in ids where !id.isEmpty {
             guard let record = RouterVPNMacSpeedLabPathPolicy.find(nodes, id), let token = record["profile_token"] as? String,
+                let captured = capturedProfileTokens[id], token == captured,
                 token.count == 64, token.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
-                throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "A test node has no current identity. Reopen Speed Lab before running this path."])
+                throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "A test node was removed, relinked, or has no captured identity. Reopen Speed Lab before running this path."])
             }
-            tokens[id] = token
+            tokens[id] = captured
         }
         body["expected_selected_node_id"] = capturedSelection.selectedNodeID; body["expected_profile_tokens"] = tokens
         return body
@@ -454,11 +491,15 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
         }
         guard optionsReady else { return }
         do {
-            let body = try requestBody(); let maxSeconds = selected(durationMode) == "custom" ? maxTime.doubleValue : 12
+            let body = try requestBody()
             status.stringValue = "Building/proving path and measuring…"; detail.string = "Speed Lab running. The controller restores the complete captured path after a temporary test."
             for field in [idle,download,upload,idleDetail,downloadDetail,uploadDetail] { field.stringValue = "--" }
             runButton.title = "Cancel test"
-            try performLocalRequest("/api/speed-lab/run", body: body, timeout: max(100, maxSeconds * 2 + 80)) { [weak self] result in
+            if RouterVPNMacSpeedLabPathPolicy.torCompareRequest(body, nodes: nodes) {
+                status.stringValue = "Comparing Local and Server Tor paths…"
+                detail.string = "Each candidate measures Tor last-relay HTTP and the same external-server HTTP response. The lowest valid average is rechecked before throughput testing; the captured connection is restored afterward."
+            }
+            try performLocalRequest("/api/speed-lab/run", body: body, timeout: RouterVPNMacSpeedLabPathPolicy.requestTimeout(body, nodes: nodes)) { [weak self] result in
                 guard let self else { return }
                 do {
                 let data = try result.get()

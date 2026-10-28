@@ -250,12 +250,35 @@ static void linux_speed_lab_path_changed_v19(GtkComboBox *changed, gpointer data
     linux_speed_lab_refresh_controls_v12(NULL, s);
 }
 
-static gboolean linux_speed_lab_server_ready_v19(JsonObject *node) {
-    if (!linux_speed_lab_flag_v19(node, "has_response_probe")) return FALSE;
+static gboolean linux_speed_lab_server_ready_v19(JsonObject *node, const char *execution) {
     const char *protocol = obj_string(node, "external_protocol");
+    if (strcmp(protocol, "tor") == 0 || strcmp(protocol, "tor-bridge") == 0) {
+        if (strcmp(execution, "auto") == 0) return linux_speed_lab_flag_v19(node, "tor_compare_execution") && linux_speed_lab_flag_v19(node, "tor_compare_requires_paired_source");
+        return strcmp(execution, "server") == 0 && linux_speed_lab_flag_v19(node, "tor_server_execution");
+    }
+    if (!linux_speed_lab_flag_v19(node, "has_response_probe")) return FALSE;
     if (strcmp(protocol, "wireguard") == 0 || strcmp(protocol, "amneziawg") == 0) return linux_speed_lab_flag_v19(node, "has_server_peer");
     if (strcmp(protocol, "openvpn") == 0) return linux_speed_lab_flag_v19(node, "has_openvpn_pairing");
     return strcmp(protocol, "shadowsocks") == 0 || strcmp(protocol, "hysteria2") == 0 || strcmp(protocol, "socks5") == 0 || strcmp(protocol, "http-connect") == 0 || strcmp(protocol, "https-connect") == 0;
+}
+
+static gboolean linux_speed_lab_tor_compare_request_v19(LinuxSpeedLabV12 *s, const char *body) {
+    g_autoptr(JsonNode) raw = body != NULL ? parse_json(body) : NULL;
+    if (raw == NULL || !JSON_NODE_HOLDS_OBJECT(raw)) return FALSE;
+    JsonObject *request = json_node_get_object(raw);
+    if (strcmp(obj_string(request, "scope"), "temporary") != 0 || strcmp(obj_string(request, "topology"), "external") != 0 || strcmp(obj_string(request, "execution"), "auto") != 0) return FALSE;
+    JsonObject *node = linux_speed_lab_find_v19(s, "nodes", obj_string(request, "node_id"));
+    const char *protocol = obj_string(node, "external_protocol");
+    return strcmp(protocol, "tor") == 0 || strcmp(protocol, "tor-bridge") == 0;
+}
+
+static long linux_speed_lab_request_timeout_v19(LinuxSpeedLabV12 *s, const char *body) {
+    if (linux_speed_lab_tor_compare_request_v19(s, body)) return 960000L;
+    g_autoptr(JsonNode) raw = body != NULL ? parse_json(body) : NULL;
+    JsonObject *request = raw != NULL && JSON_NODE_HOLDS_OBJECT(raw) ? json_node_get_object(raw) : NULL;
+    if (strcmp(obj_string(request, "duration_mode"), "custom") == 0)
+        return MAX(90000L, (long)(json_object_get_double_member(request, "max_seconds") * 2000.0 + 80000.0));
+    return 110000L;
 }
 
 static const char *linux_speed_lab_path_error_v19(LinuxSpeedLabV12 *s) {
@@ -279,7 +302,10 @@ static const char *linux_speed_lab_path_error_v19(LinuxSpeedLabV12 *s) {
         if (entryID[0] != '\0' && (entry == NULL || entry == node)) return "Select a different linked entry, or Direct.";
         if (strcmp(linux_speed_lab_kind_v19(entry), "router-vpn") == 0) {
             if (linux_speed_lab_find_v19(s, "router_vpn_entry_modes", linux_speed_lab_active_id_v12(s->entry_mode)) == NULL) return "Select a supported Router entry mode.";
-            if (strcmp(execution, "local") != 0 && !linux_speed_lab_server_ready_v19(node)) return "Server/Compare requires this exit's response probe and independent server pairing where required.";
+            const char *protocol = obj_string(node, "external_protocol");
+            if (strcmp(execution, "local") != 0 && (strcmp(protocol, "tor") == 0 || strcmp(protocol, "tor-bridge") == 0) &&
+                (obj_string(entry, "external_protocol")[0] || json_object_has_member(entry, "external"))) return "Tor Server/Compare requires a private Router entry source.";
+            if (strcmp(execution, "local") != 0 && !linux_speed_lab_server_ready_v19(node, execution)) return "Tor Server/Compare requires advertised native support and a paired private Router entry. Other exits require their response probe and separate server pairing.";
         } else if (strcmp(execution, "local") != 0) return "Direct and ordinary external entry paths use Local execution.";
     } else return "Select a supported test topology.";
     if (strcmp(execution, "local") != 0 && strcmp(execution, "server") != 0 && strcmp(execution, "auto") != 0) return "Select Local, Server, or Compare both.";

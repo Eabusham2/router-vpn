@@ -64,7 +64,7 @@ function UnifiedAsyncBusy{return $false}
 function RefreshProduct{}
 function RefreshUnifiedTelemetry{}
 $script:Captured=$null
-function StartUnifiedApiAsync($Label,$Path,$Method,$Body,$Timeout,$Success,$Failure,$Finally){Check ($Path-eq'/api/speed-lab/run'-and$Method-eq'POST') 'Unexpected native Run endpoint.';$script:Captured=$Body;if($null-ne$Finally){&$Finally};return $true}
+function StartUnifiedApiAsync($Label,$Path,$Method,$Body,$Timeout,$Success,$Failure,$Finally){Check ($Path-eq'/api/speed-lab/run'-and$Method-eq'POST') 'Unexpected native Run endpoint.';$script:Captured=$Body;$script:CapturedTimeout=$Timeout;if($null-ne$Finally){&$Finally};return $true}
 & $Initializer $Opt
 Check ($Node.SelectedValue-ceq'exit'-and$Entry.SelectedValue-ceq'entry'-and$EntryMode.SelectedValue-ceq'awg2-strong'-and$Execution.SelectedValue-ceq'auto') 'Saved external path was replaced by unrelated defaults.'
 Check ($SpeedLabOptions.router_vpn_entry_modes.Count-eq19) 'Entry mode catalog was reduced.'
@@ -85,6 +85,28 @@ $ExitValue=SpeedLabFind 'nodes' 'exit';$ExitValue.has_response_probe=$false;Reje
 $ExitValue.has_openvpn_pairing=$false;Reject 'missing independent OpenVPN pairing';$ExitValue.has_openvpn_pairing=$true
 $Original=$SpeedLabOptions.nodes;$SpeedLabOptions.nodes=@($Original)+@($ExitValue);Reject 'duplicate exit identity';$SpeedLabOptions.nodes=$Original
 $ExitValue.multihop_entry_id='removed-entry';SetSpeedLabDefaults;Check ($Entry.SelectedValue-ceq'removed-entry') 'Unavailable saved entry silently became Direct.';Reject 'removed saved entry';$ExitValue.multihop_entry_id='entry';SetSpeedLabDefaults
+foreach($TorProtocol in @('tor','tor-bridge')){
+ $Node.SelectedValue='speed-'+$TorProtocol;SpeedLabPathChanged 'node';$Entry.SelectedValue='entry'
+ $TorNode=SpeedLabFind 'nodes' ('speed-'+$TorProtocol)
+ Check (-not$TorNode.has_response_probe) 'Tor fixture invented an ordinary provider response probe.'
+ foreach($M in $SpeedLabOptions.router_vpn_entry_modes){foreach($E in @('local','server','auto')){
+  $EntryMode.SelectedValue=[string]$M.id;$Execution.SelectedValue=$E;Emit ('speed-lab-'+$TorProtocol+'-'+$M.id+'-'+$E)
+  Check ($script:CapturedTimeout-eq$(if($E-ceq'auto'){960}else{110})) 'Actual Tor Run used an unrelated or insufficient HTTP budget.'
+ }}
+ $EntryMode.SelectedValue='wg'
+ foreach($E in @('server','auto')){foreach($Bad in @($false,$null,'true',1)){
+  $Field=if($E-ceq'auto'){'tor_compare_execution'}else{'tor_server_execution'};$TorNode.$Field=$Bad;$Execution.SelectedValue=$E;Reject ('Tor capability '+$Field);$TorNode.$Field=$true
+ }}
+ $Execution.SelectedValue='auto';$TorNode.tor_compare_requires_paired_source=$false;Reject 'Tor comparison pairing contract';$TorNode.tor_compare_requires_paired_source=$true
+ $TorNode.tor_server_execution=$false;$script:Captured=$null;&$RunCallback;Check ($null-ne$script:Captured) 'Compare incorrectly required both runtime candidates.';$TorNode.tor_server_execution=$true
+ $Entry.SelectedValue='';SpeedLabPathChanged 'entry';$Execution.SelectedValue='auto';Reject 'Tor Direct Compare'
+ $Entry.SelectedValue='external-entry';SpeedLabPathChanged 'entry';$Execution.SelectedValue='auto';Reject 'Tor ordinary Compare'
+ $Entry.SelectedValue='entry';SpeedLabPathChanged 'entry';$Execution.SelectedValue='auto'
+ $TorEntry=SpeedLabFind 'nodes' 'entry';$TorEntry.external_protocol='socks5';Reject 'Tor mixed private source';$TorEntry.external_protocol=''
+ $OldTorToken=$TorNode.profile_token;$TorNode.profile_token='f'*64;Reject 'Tor exit relink';$TorNode.profile_token=$OldTorToken
+ $OldEntryToken=$TorEntry.profile_token;$TorEntry.profile_token='f'*64;Reject 'Tor entry relink';$TorEntry.profile_token=$OldEntryToken
+}
+$Node.SelectedValue='exit';SpeedLabPathChanged 'node'
 $Topology.SelectedValue='multihop';SpeedLabPathChanged 'topology';$Entry.SelectedValue='entry';$Exit.SelectedValue='exit-router'
 foreach($E in @('local','server','auto')){$Execution.SelectedValue=$E;Emit ('speed-lab-multihop-'+$E)}
 Check ((@($ExitMode.Items|ForEach-Object{[string]$_.Tag})-join',')-ceq(@($SpeedLabOptions.supported_exit_modes)-join',')) 'UI and native exit catalogs differ.'

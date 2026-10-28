@@ -43,6 +43,19 @@ func desktopSpeedLabFormApp(t *testing.T) *app {
 	ordinary.ID, ordinary.Name = "external-entry", "External entry"
 	a := &app{profiles: common.RouterProfileStore{SchemaVersion: common.RouterProfileSchemaVersion, SelectedID: profile.ID,
 		Profiles: []common.RouterProfile{profile, entry, ordinary, exit}}, state: state{Mode: "off", Phase: "off"}}
+	for _, protocol := range []string{"tor", "tor-bridge"} {
+		tor := existingTorImportProfile("speed-" + protocol)
+		tor.Name = "Captured " + protocol + " exit"
+		tor.MultihopEnabled, tor.MultihopEntryID, tor.MultihopExitID = true, entry.ID, tor.ID
+		tor.MultihopEntryMode, tor.MultihopExecution = "wg", "auto"
+		if protocol == "tor" {
+			tor.External.Protocol, tor.External.TorBridge = "tor", nil
+		}
+		if err := common.NormalizeRouterProfile(&tor); err != nil {
+			t.Fatal(err)
+		}
+		a.profiles.Profiles = append(a.profiles.Profiles, tor)
+	}
 	raw, err := os.ReadFile(filepath.Join("..", "..", "configs", "client", "modes.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +77,29 @@ func TestDesktopSpeedLabPathFormCatalog(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatal("native Speed Lab options failed")
 	}
-	if err := os.WriteFile(filepath.Join(directory, "speed-lab-options.json"), response.Body.Bytes(), 0600); err != nil {
+	// This exercises form admission, not installation. Real capability
+	// derivation is tested separately; the idle fixture labels its simulated
+	// runtime availability and retains the actual projected source revisions.
+	var options map[string]any
+	if json.Unmarshal(response.Body.Bytes(), &options) != nil {
+		t.Fatal("Speed Lab options did not encode JSON")
+	}
+	options["test_fixture_runtime_availability"] = "simulated: idle native Speed Lab form only"
+	for _, value := range options["nodes"].([]any) {
+		node := value.(map[string]any)
+		if node["external_protocol"] == "tor" || node["external_protocol"] == "tor-bridge" {
+			node["tor_compare_execution"], node["tor_server_execution"] = true, true
+			node["tor_compare_requires_paired_source"] = true
+			if node["has_response_probe"] != false {
+				t.Fatal("Tor fixture invented an ordinary provider response probe")
+			}
+		}
+	}
+	catalog, err := json.Marshal(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "speed-lab-options.json"), catalog, 0600); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -149,6 +184,39 @@ func TestDesktopSpeedLabPathFormPayload(t *testing.T) {
 					t.Fatal("native execution changed", err)
 				}
 			})
+		}
+	}
+	for _, protocol := range []string{"tor", "tor-bridge"} {
+		for _, mode := range a.externalRouterEntryModes() {
+			for _, execution := range []string{"local", "server", "auto"} {
+				t.Run(protocol+"/"+mode["id"]+"/"+execution, func(t *testing.T) {
+					request, fields := read("speed-lab-" + protocol + "-" + mode["id"] + "-" + execution)
+					tor, ok := profileByID(a.profiles.Profiles, "speed-"+protocol)
+					if !ok || request.Scope != "temporary" || request.Topology != "external" || request.NodeID != tor.ID || request.EntryID != "entry" || request.EntryMode != mode["id"] || request.Execution != execution || request.ExitID != "" || request.Base != "" {
+						t.Fatal("native Tor Speed Lab changed its captured path")
+					}
+					entry, kind, direct, err := speedLabExternalEntry(a.profiles.Profiles, tor, request)
+					if err != nil || direct || kind != "router-vpn" || entry.ID != "entry" {
+						t.Fatal("native Tor form lost its private predecessor", err)
+					}
+					selected, err := desktopExternalEntryMode(tor, entry, request.EntryMode, request.Base)
+					if err != nil || selected != mode["id"] {
+						t.Fatal("native Tor form changed its exact entry mode", err)
+					}
+					chosen, err := externalExecutionChoice(tor, request.Execution, false)
+					if err != nil || chosen != execution {
+						t.Fatal("native Tor form changed execution", err)
+					}
+					if len(request.ExpectedProfileTokens) != 3 || request.ExpectedProfileTokens[tor.ID] != publicProfileToken(tor) || request.ExpectedProfileTokens[entry.ID] != publicProfileToken(entry) {
+						t.Fatal("native Tor form omitted main selection or source-bound entry/exit")
+					}
+					for _, forbidden := range []string{"tor_compare_execution", "response_probe", "api_token", "dns_mode", "start_layer"} {
+						if _, exists := fields[forbidden]; exists {
+							t.Fatal("native form copied source authority into an execution request", forbidden)
+						}
+					}
+				})
+			}
 		}
 	}
 	for _, name := range []string{"speed-lab-external-direct", "speed-lab-external-entry"} {
