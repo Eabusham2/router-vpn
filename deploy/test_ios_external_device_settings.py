@@ -84,7 +84,8 @@ enum IOSDNSRuntimePolicy {
   }
   var p=try JSONDecoder().decode(RouterProfile.self,from:json(value))
   p.startupMode="last";p.autoConnect=true;p.autoRequireEncrypted=true;p.autoRequireObfuscation=true
-  p.killSwitch=true;p.killSwitchPolicy="always";p.daitaEnabled=true;p.daitaHost="192.0.2.40";p.daitaPort=4444;p.daitaRateKbps=160;p.jumboTUN=true
+  p.killSwitch=true;p.killSwitchPolicy="always";p.daitaEnabled=true;p.daitaHost="192.0.2.40";p.daitaPort=4444;p.daitaRateKbps=160
+  p.jumboTUN=false
   p.multihopEnabled=true;p.multihopEntryID="paired-entry";p.multihopEntryMode="wg";p.multihopExitID=p.id;p.multihopExitMode=kind;p.multihopExecution="local"
   p.effectiveMTU=9000;p.effectiveMTUSource="historic-only";p.effectiveMTUPathKey="old-path";p.effectiveMTUTestedAt="2000-01-01T00:00:00Z"
   p.dnsMode="doh";p.dnsProtocol="https";p.dnsHost="resolver.example.test";p.dnsServerName="resolver.example.test";p.dnsPort=444;p.dnsPath="/exact-query"
@@ -158,14 +159,15 @@ enum IOSDNSRuntimePolicy {
   }
  }
  static func nativeRejections()throws {
-  for fault in ["wireguard-key","wireguard-mtu","openvpn","tor-identity","lan"] {
+  for fault in ["wireguard-key","wireguard-mtu","wireguard-jumbo","proxy-jumbo-fixed","openvpn","tor-identity","lan"] {
    let kind=fault.hasPrefix("wireguard") ? "wireguard":fault=="openvpn" ? "openvpn":fault=="tor-identity" ? "tor":"socks5"
    var raw=try JSONSerialization.jsonObject(with:encoded(profile(kind))) as! [String:Any]
-   if fault.hasPrefix("wireguard") {var ext=raw["external"] as! [String:Any],packet=ext["wireguard"] as! [String:Any];if fault=="wireguard-key"{packet["private_key"]="wrong"}else{packet["mtu"]=1200};ext["wireguard"]=packet;raw["external"]=ext}
+   if ["wireguard-key","wireguard-mtu"].contains(fault) {var ext=raw["external"] as! [String:Any],packet=ext["wireguard"] as! [String:Any];if fault=="wireguard-key"{packet["private_key"]="wrong"}else{packet["mtu"]=1200};ext["wireguard"]=packet;raw["external"]=ext}
+   if fault=="wireguard-jumbo" || fault=="proxy-jumbo-fixed"{raw["jumbo_tun"]=true}
    if fault=="openvpn"{var ext=raw["external"] as! [String:Any],packet=ext["openvpn"] as! [String:Any];packet["config"]="client\ndev tun\nremote 198.51.100.8 1194\nscript-security 3\nup /tmp/unowned\n";ext["openvpn"]=packet;raw["external"]=ext}
    if fault=="tor-identity"{raw["api_token"]="foreign node token"}
    if fault=="lan"{raw["home_lan_cidrs"]=["0.0.0.0/0"]}
-   let invalid=try JSONDecoder().decode(RouterProfile.self,from:json(raw)),model=RouterVPNModel();model.bundle=try bundle(invalid);let before=try encoded(model.bundle!),editor=Settings(model);editor.load();editor.homeLANAccess=false;editor.mtuPolicy="auto";editor.saveExternalDevicePolicy()
+   let invalid=try JSONDecoder().decode(RouterProfile.self,from:json(raw)),model=RouterVPNModel();model.bundle=try bundle(invalid);let before=try encoded(model.bundle!),editor=Settings(model);editor.load();editor.homeLANAccess=false;editor.mtuPolicy=fault=="proxy-jumbo-fixed" ? "manual":"auto";editor.saveExternalDevicePolicy()
    try check("real native validator rejects "+fault,model.imports==0 && encoded(model.bundle!)==before && editor.status.hasPrefix("Device policy rejected:"))
   }
   // Idle drafts may retain unresolved Home until their real Router entry is
@@ -205,10 +207,12 @@ enum IOSDNSRuntimePolicy {
    try check("Tor Jumbo toggle restores exact Auto or Default choice "+mode,model.imports==2 && model.bundle!.routerProfiles[1]==expected)
   }}
   for kind in protocols where !kind.hasPrefix("tor") {
-   let p=try profile(kind),model=RouterVPNModel();model.bundle=try bundle(p);let editor=Settings(model);editor.load()
-   try check("ordinary hidden Jumbo loads unchanged "+kind,editor.jumboTUN)
-   editor.jumboTUN=false;editor.saveExternalDevicePolicy()
-   try check("ordinary editor cannot mutate its hidden Jumbo flag "+kind,model.imports==1 && model.bundle!.routerProfiles[1].jumboTUN==true)
+   var p=try profile(kind);p.jumboTUN = !["wireguard","amneziawg","openvpn"].contains(kind)
+   if p.jumboTUN==true{p.mtuPolicy="manual";p.manualMTU=9000}
+   let model=RouterVPNModel();model.bundle=try bundle(p);let editor=Settings(model);editor.load()
+   try check("ordinary hidden Jumbo loads unchanged "+kind,editor.jumboTUN==(p.jumboTUN ?? false))
+   editor.jumboTUN = !editor.jumboTUN;editor.saveExternalDevicePolicy()
+   try check("ordinary editor cannot mutate its hidden Jumbo flag "+kind,model.imports==1 && model.bundle!.routerProfiles[1].jumboTUN==p.jumboTUN)
   }
   for fault in ["active","stale","store"] {
    let model=RouterVPNModel();model.bundle=try bundle(profile("tor"));let editor=Settings(model);editor.load();editor.mtuPolicy="auto";editor.jumboTUN=true
