@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"router-vpn/internal/mobiletor"
+	"router-vpn/internal/routechoice"
 )
 
 func speedLabTorCompareFixture(t *testing.T, protocol, prior, trial string) (*desktopTorPublicComparisonFixture, *desktopNodeLaunch) {
@@ -179,6 +180,14 @@ func TestSpeedLabTorCompareFailedFinalFallsBackAndInvalidCandidatesReceiveNoScor
 				}
 			} else if err != nil || path.Execution != "local" || len(f.probes) != 4 || path.Comparison == nil || path.Comparison.Final == nil || !path.Comparison.Final.Eligible {
 				t.Fatal("failed final Server trial did not repeat both operands through fallback Local", path, err)
+			}
+			if trial == "tor-compare-driver-final-failure" {
+				progress := comparisonProgress(f.a)
+				for _, measurements := range [][]routechoice.Measurement{path.Comparison.Measurements, progress.Measurements} {
+					if len(measurements) != 2 || measurements[1].Eligible || measurements[1].ScoreMS != nil || measurements[1].Failure == "" {
+						t.Fatal("temporary fallback retained the failed final Server candidate's obsolete score", measurements)
+					}
+				}
 			}
 			count := len(f.probes)
 			speedLabTorCompareRestore(t, f, snapshot)

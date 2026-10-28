@@ -145,6 +145,10 @@ func TestDesktopTorPublicCompareFailureLeavesSavedConnectionUnchanged(t *testing
 				if response.Code != http.StatusOK || !f.a.state.Connected || desktopTorExecution(f.launch.tor.expected.Execution) != "local" || len(f.launches) != 4 || f.a.profiles.Profiles[0].MultihopExecution != "auto" {
 					t.Fatal("public comparison did not recheck the next eligible winner", response.Code, response.Body.String())
 				}
+				progress := comparisonProgress(f.a)
+				if len(progress.Measurements) != 2 || progress.Measurements[1].Eligible || progress.Measurements[1].ScoreMS != nil || progress.Measurements[1].Failure == "" {
+					t.Fatal("public fallback kept the failed final Server candidate's old score", progress)
+				}
 				stopDesktopTorLifecycleFixture(t, f.a)
 				return
 			}

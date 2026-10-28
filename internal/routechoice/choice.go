@@ -279,6 +279,17 @@ func Compare(ctx context.Context, candidates []Candidate, d Driver, o Options) (
 		}
 		return *a.ScoreMS < *b.ScoreMS
 	})
+	// A final failure retires the earlier score. The result and observers must
+	// agree on which candidates remain eligible when a slower survivor wins.
+	disqualify := func(failed Measurement) {
+		for i := range result.Measurements {
+			if result.Measurements[i].Candidate == failed.Candidate {
+				result.Measurements[i] = failed
+				break
+			}
+		}
+		notify(o, "activation-failed", failed.Candidate, &failed)
+	}
 	for _, m := range eligible {
 		if err = ctx.Err(); err != nil {
 			return result, nil, err
@@ -286,19 +297,19 @@ func Compare(ctx context.Context, candidates []Candidate, d Driver, o Options) (
 		c := m.Candidate
 		notify(o, "activating", c, &m)
 		s, startErr := open(ctx, d, c, result.Target, o)
-		if errors.Is(startErr, ErrTeardown) {
-			return result, s, startErr
-		}
 		if startErr != nil {
-			notify(o, "activation-failed", c, nil)
+			disqualify(Measurement{Candidate: c, Failure: "candidate reactivation failed or timed out"})
+			if errors.Is(startErr, ErrTeardown) {
+				return result, s, startErr
+			}
 			continue
 		}
 		final := measure(ctx, c, s, result.Target, o)
 		if !final.Eligible {
+			disqualify(final)
 			if err = closeSession(s, o); err != nil {
 				return result, s, err
 			}
-			notify(o, "activation-failed", c, &final)
 			continue
 		}
 		result.Winner = &c

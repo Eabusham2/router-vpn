@@ -260,6 +260,21 @@ func TestRouterTorCompareRoundFailedFinalRechecksNextValidCandidate(t *testing.T
 	if r.Execution() != "local" || len(h.paths) != 4 || h.paths[2].alive.Load() || h.paths[3].lastCalls.Load() != 1 || h.paths[3].externalCalls.Load() != 1 {
 		t.Fatal("failed final activation retained an old trial score")
 	}
+	var result routechoice.Result
+	if err := json.Unmarshal([]byte(r.ResultJSON()), &result); err != nil {
+		t.Fatal("failed-final fallback omitted its captured result", err)
+	}
+	if len(result.Measurements) != 2 || result.Winner == nil || result.Winner.Execution != routechoice.Local || result.Final == nil || !result.Final.Eligible || result.Final.ScoreMS == nil {
+		t.Fatal("failed-final fallback lost the newly proved Local result", r.ResultJSON())
+	}
+	for _, measurement := range result.Measurements {
+		if measurement.Candidate.Execution == routechoice.Server && (measurement.Eligible || measurement.ScoreMS != nil || measurement.Failure == "") {
+			t.Fatal("failed-final candidate still published an eligible trial score", r.ResultJSON())
+		}
+		if measurement.Candidate.Execution == routechoice.Local && (!measurement.Eligible || measurement.ScoreMS == nil) {
+			t.Fatal("fallback discarded the surviving candidate's score", r.ResultJSON())
+		}
+	}
 }
 
 func TestRouterTorCompareRoundRetainsPartialFactoryAndCloseFailures(t *testing.T) {

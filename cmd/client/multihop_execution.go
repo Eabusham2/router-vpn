@@ -60,6 +60,25 @@ type comparisonOwner struct {
 	value routeComparisonProgress
 }
 
+func (owner *comparisonOwner) observe(event routechoice.Event) {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	owner.value.Stage = event.Stage
+	if event.Result == nil || event.Result.Candidate != event.Candidate {
+		return
+	}
+	if event.Stage == "measured" {
+		owner.value.Measurements = append(owner.value.Measurements, *event.Result)
+	} else if event.Stage == "activation-failed" {
+		for i := range owner.value.Measurements {
+			if owner.value.Measurements[i].Candidate == event.Candidate {
+				owner.value.Measurements[i] = *event.Result
+				break
+			}
+		}
+	}
+}
+
 var desktopComparisons sync.Map
 
 func comparisonProgress(a *app) routeComparisonProgress {
@@ -664,14 +683,7 @@ func (a *app) runMultihopExecution(w http.ResponseWriter, r *http.Request, sel m
 			progress.value.Stage = "failed"
 		}
 	}
-	notify := func(event routechoice.Event) {
-		progress.mu.Lock()
-		defer progress.mu.Unlock()
-		progress.value.Stage = event.Stage
-		if event.Stage == "measured" && event.Result != nil {
-			progress.value.Measurements = append(progress.value.Measurements, *event.Result)
-		}
-	}
+	notify := progress.observe
 	sessionTrackerFor(a).declareRequest("multihop", sel.Base)
 	if err = a.stopModeWithIntent(true); err != nil {
 		finish("previous session teardown failed")

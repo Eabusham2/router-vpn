@@ -92,14 +92,7 @@ func (a *app) torBridgeCompareSelectionOwned(w http.ResponseWriter, profile comm
 	}
 	options := routechoice.Options{Targets: append([]string(nil), comparisonTargets...), StartupTimeout: 2 * time.Minute,
 		ProbeTimeout: 10 * time.Second, CleanupTimeout: 30 * time.Second, Preferred: routechoice.Local,
-		Notify: func(event routechoice.Event) {
-			progress.mu.Lock()
-			progress.value.Stage = event.Stage
-			if event.Stage == "measured" && event.Result != nil {
-				progress.value.Measurements = append(progress.value.Measurements, *event.Result)
-			}
-			progress.mu.Unlock()
-		}}
+		Notify: progress.observe}
 	result, active, err := routechoice.Compare(ctx, driver.candidates, driver, options)
 	if err != nil {
 		failed(err, active, http.StatusBadGateway)
