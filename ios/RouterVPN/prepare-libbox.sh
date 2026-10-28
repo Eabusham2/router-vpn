@@ -106,10 +106,17 @@ for header in headers:
         assert symbol in header.read_text(), str(header)
     for symbol in ('LibboxRouterCompileTorProfile', 'LibboxRouterValidateTorProfile',
                    'LibboxRouterCompileTorProfileWithPredecessor', 'LibboxRouterCompileTorProfileWithExternalPredecessor',
+                   'LibboxRouterTorPaddingSource',
                    'LibboxRouterTorSetStateDirectory',
                    'LibboxRouterTorCreateProof', 'LibboxRouterTorCreateProofWithPredecessor',
                    'LibboxRouterTorProofRequest'):
         assert symbol in header.read_text(), str(header)
+    assert 'FOUNDATION_EXPORT NSString* _Nonnull LibboxRouterTorPaddingSource(NSString* _Nullable configJSON, NSString* _Nullable profileJSON, NSString* _Nullable sessionID, NSError* _Nullable* _Nullable error);' in content, 'Tor padding captured-source API changed'
+    tor_request=re.search(r'@interface LibboxRouterTorProofRequest : NSObject .*?\n(.*?)@end',content,re.S)
+    assert tor_request, 'Missing native Tor proof owner'
+    for signature in ('- (void)cancel;', '- (BOOL)healthy;', '- (NSString* _Nonnull)run:(NSError* _Nullable* _Nullable)error;',
+                      '- (NSString* _Nonnull)paddingStatusJSON:(NSError* _Nullable* _Nullable)error;'):
+        assert signature in tor_request.group(1), 'Tor proof ownership API changed: '+signature
     assert 'LibboxRouterOpenVPNEndpoint' in header.read_text(), str(header)
     assert 'LibboxNewRouterMultihop' in header.read_text(), str(header)
     assert 'LibboxNewRouterMultihopWithEntryStartLayer' in header.read_text(), str(header)

@@ -35,6 +35,82 @@ import textwrap
 import unittest
 
 
+# These declarations were generated with the pinned gomobile v0.1.12 from the
+# actual Go function/method signatures. String/error results deliberately use
+# NSError**; a marker or a no-error status getter cannot substitute for this ABI.
+TOR_PADDING_HEADER = '''
+@interface LibboxRouterTorProofRequest : NSObject <goSeqRefInterface> {
+}
+- (void)cancel;
+- (BOOL)healthy;
+- (NSString* _Nonnull)run:(NSError* _Nullable* _Nullable)error;
+- (NSString* _Nonnull)paddingStatusJSON:(NSError* _Nullable* _Nullable)error;
+@end
+FOUNDATION_EXPORT NSString* _Nonnull LibboxRouterTorPaddingSource(NSString* _Nullable configJSON, NSString* _Nullable profileJSON, NSString* _Nullable sessionID, NSError* _Nullable* _Nullable error);
+'''
+
+
+def cached_tor_padding_verifier(source):
+    block = source.split("<<'PYHEAD'\n", 1)[1].split('\nPYHEAD', 1)[0]
+    start = block.index("    assert 'FOUNDATION_EXPORT NSString* _Nonnull LibboxRouterTorPaddingSource(")
+    end = block.index("    assert 'LibboxRouterOpenVPNEndpoint'", start)
+    # Execute the new checks verbatim inside the shipping per-slice header loop.
+    # Other independently tested APIs are outside this focused boundary fixture.
+    prefix = block[:block.index("    for symbol in ('LibboxRouterCompileExternalPolicy'")]
+    return prefix + block[start:end]
+
+
+class AppleCachedTorPaddingABI(unittest.TestCase):
+    def check_headers(self, device=TOR_PADDING_HEADER, simulator=TOR_PADDING_HEADER, source=p):
+        with tempfile.TemporaryDirectory(prefix='apple-padding-abi-') as temporary:
+            root = Path(temporary)
+            for name, content in (('ios-arm64', device), ('ios-arm64-simulator', simulator)):
+                if content is not None:
+                    header = root/name/'Libbox.framework/Headers/Libbox.objc.h'
+                    header.parent.mkdir(parents=True)
+                    header.write_text(content)
+            return subprocess.run(['python3', '-c', cached_tor_padding_verifier(source), str(root)],
+                                  text=True, capture_output=True, timeout=15)
+
+    def test_pinned_generated_declarations_pass_in_each_slice(self):
+        result = self.check_headers()
+        self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+
+    def test_old_or_changed_source_factory_is_rejected(self):
+        signature = TOR_PADDING_HEADER.split('FOUNDATION_EXPORT ', 1)[1]
+        for changed in ('', signature.replace('profileJSON', 'foreignJSON'),
+                        signature.replace('NSError* _Nullable* _Nullable error', 'NSError* _Nullable error')):
+            with self.subTest(changed=changed):
+                header = TOR_PADDING_HEADER.replace('FOUNDATION_EXPORT '+signature, 'FOUNDATION_EXPORT '+changed)
+                result = self.check_headers(device=header)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Tor padding captured-source API changed', result.stderr)
+
+    def test_status_requires_exact_retained_request_and_error_protocol(self):
+        signature = '- (NSString* _Nonnull)paddingStatusJSON:(NSError* _Nullable* _Nullable)error;'
+        for changed in ('', '- (NSString* _Nonnull)paddingStatusJSON;',
+                        signature.replace('NSString* _Nonnull', 'BOOL'),
+                        signature.replace('NSError* _Nullable* _Nullable', 'NSError* _Nullable')):
+            with self.subTest(changed=changed):
+                header = TOR_PADDING_HEADER.replace(signature, changed)
+                result = self.check_headers(simulator=header)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Tor proof ownership API changed', result.stderr)
+        header = TOR_PADDING_HEADER.replace('@end', '@end\n@interface ForeignRequest : NSObject <goSeqRefInterface> {\n}\n'+signature+'\n@end')
+        header = header.replace(signature+'\n@end', '@end', 1)
+        self.assertNotEqual(self.check_headers(simulator=header).returncode, 0)
+
+    def test_retained_proof_lifecycle_methods_remain_required(self):
+        for signature in ('- (void)cancel;', '- (BOOL)healthy;', '- (NSString* _Nonnull)run:(NSError* _Nullable* _Nullable)error;'):
+            with self.subTest(signature=signature):
+                result = self.check_headers(device=TOR_PADDING_HEADER.replace(signature, ''))
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Tor proof ownership API changed', result.stderr)
+
+    def test_no_generated_header_cannot_pass(self):
+        self.assertNotEqual(self.check_headers(device=None, simulator=None).returncode, 0)
+
+
 def verification_script(source):
     name = '      - name: Verify exact pin slices and generated API\n'
     step = source.split(name, 1)[1].split('\n      - ', 1)[0]
