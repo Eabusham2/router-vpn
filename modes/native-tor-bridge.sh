@@ -58,6 +58,9 @@ if [[ "$ACTION" == check ]]; then exit 0; fi
 # Install the captured client protection before the native TUN or Tor starts.
 # Linux uses router-vpn, already permitted by the strict helper; Darwin's
 # existing watcher admits only the newly observed routed utun.
+# A dynamic Direct Linux capture installs only the DROP baseline here. Its
+# native Initialize factory later starts the privileged socket guardian, whose
+# exact isolated-UID/full-tuple permits never become host-wide exemptions.
 HOMEVPN_ROOT="$ROOT" HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_POLICY_PROFILE_ID="$POLICY_PROFILE_ID" HOMEVPN_ENDPOINT="$HOMEVPN_ENDPOINT" \
   python3 "$SCRIPT_DIR/kill-switch-platform.py" apply
 

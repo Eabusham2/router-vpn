@@ -14,6 +14,7 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -256,6 +257,44 @@ def retained_native_policy(state: dict[str, Any], endpoint: str):
     return addresses, validate_native_egress(state["native_egress"], addresses)
 
 
+def native_socket_broker_policy(profile: dict[str, Any], runtime_id: str, control_id: str,
+                               retained_state: dict[str, Any] | None) -> bool:
+    """Select a closed baseline, never grant authority from a helper's output.
+
+    The native Linux guardian independently verifies this DROP chain and owns
+    every short-lived UID/full-socket-tuple exception. A retained Always policy
+    restores only this empty baseline; it cannot resurrect a former guardian.
+    """
+    marker = os.environ.get("HOMEVPN_TOR_PHYSICAL_BROKER", "")
+    retained = retained_state is not None and "native_socket_broker" in retained_state
+    if not marker and not retained:
+        return False
+    failure = RuntimeError("native socket protection requires its captured direct Linux Tor policy")
+    if not sys.platform.startswith("linux"):
+        raise failure
+    external = profile.get("external")
+    if (runtime_id != control_id or profile.get("node_kind") != "external"
+            or type(external) is not dict or external.get("protocol") not in {"tor", "tor-bridge"}
+            or profile.get("multihop_enabled", False) is not False
+            or policy_value(profile) not in {"on-connect", "always"}):
+        raise failure
+    if retained:
+        if (retained_state.get("native_socket_broker") is not True
+                or retained_state.get("endpoint") != ""
+                or retained_state.get("endpoint_ips") != [] or "native_egress" in retained_state):
+            raise failure
+    else:
+        if (marker != "1" or os.environ.get("HOMEVPN_STANDARD_ENGINE") != "native"
+                or not re.fullmatch(r"[0-9a-f]{32}", os.environ.get("HOMEVPN_TOR_SESSION", ""))
+                or not re.fullmatch(r"[0-9a-f]{64}", os.environ.get("HOMEVPN_TOR_SOURCE_SHA256", ""))):
+            raise failure
+    if (os.environ.get("HOMEVPN_NATIVE_ENDPOINTS_JSON") or os.environ.get("HOMEVPN_NATIVE_EGRESS_JSON")
+            or os.environ.get("HOMEVPN_EXTERNAL_SESSION")
+            or not retained and os.environ.get("HOMEVPN_ENDPOINT", "")):
+        raise failure
+    return True
+
+
 def nft_prefix() -> list[str]:
     nft = shutil.which("nft")
     if nft is None:
@@ -477,9 +516,12 @@ def apply(*, retained_state: dict[str, Any] | None = None) -> int:
         return 0
     if not sys.platform.startswith("linux"):
         raise RuntimeError(f"strict kill switch is not implemented for {sys.platform}; refusing protected connect")
-    endpoint = os.environ.get("HOMEVPN_ENDPOINT") or str(runtime_profile.get("endpoint") or "")
-    retained = retained_native_policy(retained_state, endpoint) if retained_state is not None else None
-    if retained is None:
+    socket_broker = native_socket_broker_policy(control_profile, runtime_id, control_id, retained_state)
+    endpoint = "" if socket_broker else os.environ.get("HOMEVPN_ENDPOINT") or str(runtime_profile.get("endpoint") or "")
+    retained = retained_native_policy(retained_state, endpoint) if retained_state is not None and not socket_broker else None
+    if socket_broker:
+        endpoint_ips, native_egress = [], None
+    elif retained is None:
         endpoint_ips = captured_endpoint_ips(endpoint)
         native_egress = captured_native_egress(endpoint_ips)
     else:
@@ -510,6 +552,8 @@ def apply(*, retained_state: dict[str, Any] | None = None) -> int:
     }
     if native_egress is not None:
         state["native_egress"] = native_egress
+    if socket_broker:
+        state["native_socket_broker"] = True
     write_state(root, state)
     print(f"strict kill switch {policy} applied for physical entry {endpoint}", file=sys.stderr)
     return 0
@@ -585,6 +629,8 @@ def reassert() -> int:
     os.environ["HOMEVPN_ENDPOINT"] = str(runtime_profile.get("endpoint") or state.get("endpoint") or "")
     os.environ.pop("HOMEVPN_NATIVE_ENDPOINTS_JSON", None)
     os.environ.pop("HOMEVPN_NATIVE_EGRESS_JSON", None)
+    os.environ.pop("HOMEVPN_TOR_PHYSICAL_BROKER", None)
+    os.environ.pop("HOMEVPN_EXTERNAL_SESSION", None)
     return apply(retained_state=state)
 
 

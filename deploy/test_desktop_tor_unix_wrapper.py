@@ -35,7 +35,7 @@ OBSERVED_ENV = (
     "HOMEVPN_ROOT", "HOMEVPN_PROFILE_ID", "HOMEVPN_POLICY_PROFILE_ID",
     "HOMEVPN_ENDPOINT", "HOMEVPN_NATIVE_ENDPOINTS_JSON", "HOMEVPN_NATIVE_EGRESS_JSON", "HOMEVPN_EXTERNAL_SESSION",
     "HOMEVPN_STANDARD_ENGINE", "HOMEVPN_NATIVE_CONTROLLER", "HOMEVPN_NATIVE_PACKAGE",
-    "HOMEVPN_TOR_SESSION", *DIGEST_KEYS, "ROUTERVPN_WRAPPER_LITERAL", "ROUTERVPN_WRAPPER_EMPTY",
+    "HOMEVPN_TOR_SESSION", "HOMEVPN_TOR_PHYSICAL_BROKER", *DIGEST_KEYS, "ROUTERVPN_WRAPPER_LITERAL", "ROUTERVPN_WRAPPER_EMPTY",
 )
 
 
@@ -166,6 +166,7 @@ class Fixture:
             "HOMEVPN_ENDPOINT": self.endpoint, "HOMEVPN_NATIVE_ENDPOINTS_JSON": "", "HOMEVPN_NATIVE_EGRESS_JSON": "", "HOMEVPN_EXTERNAL_SESSION": "",
             "HOMEVPN_NATIVE_CONTROLLER": str(self.controller), "HOMEVPN_NATIVE_PACKAGE": str(self.package),
             "HOMEVPN_TOR_SESSION": "a" * 32,
+            "HOMEVPN_TOR_PHYSICAL_BROKER": "",
             "HOMEVPN_TOR_SOURCE_SHA256": source_sha,
             "HOMEVPN_TOR_BINARY_SHA256": sha(self.tor),
             "ROUTERVPN_WRAPPER_LITERAL": "λ 中 $() & | ' \" value=exact\nsecond line",
@@ -249,6 +250,26 @@ class Fixture:
             profile["kill_switch_policy"], profile["kill_switch"] = "off", False
             self.env["HOMEVPN_ENDPOINT"] = ""
         self.set_input("tor-profile.json", profile)
+
+    def physical_broker(self, transport="tor") -> None:
+        self.plain_tor()
+        profile = json.loads(self.inputs["tor-profile.json"])
+        profile.update({"node_kind": "external", "kill_switch_policy": "always", "kill_switch": True})
+        if transport != "tor":
+            lines = {"meek": "meek_lite 192.0.2.1:443 url=https://front.example/ front=front.example",
+                     "snowflake": "snowflake 192.0.2.2:443 url=https://broker.example/ front=front.example",
+                     "webtunnel": "webtunnel 192.0.2.3:443 url=https://bridge.example/secret"}
+            selected = list(lines.values()) if transport == "mixed" else [lines[transport]]
+            profile["external"] = {"protocol": "tor-bridge", "tor_bridge": {"transport": "custom", "bridges": selected}}
+        self.env["HOMEVPN_TOR_PHYSICAL_BROKER"] = "1"
+        graph = json.loads(self.inputs["sing-box.json"])
+        graph["services"][0]["physical_broker"] = True
+        graph["outbounds"] = [{"type": "routervpn-desktop-tor-physical", "tag": "routervpn-tor-physical-egress",
+                               "session_id": self.env["HOMEVPN_TOR_SESSION"], "source_sha256": self.env["HOMEVPN_TOR_SOURCE_SHA256"]}]
+        graph["dns"] = {"servers": [{"tag": "routervpn-tor-bootstrap", "type": "tcp", "server": "9.9.9.9",
+                                      "server_port": 53, "detour": "routervpn-tor-physical-egress"}]}
+        self.set_input("tor-profile.json", profile)
+        self.set_input("sing-box.json", graph)
 
     def external_entry(self, protocol: str = "shadowsocks") -> None:
         self.router_entry()
@@ -351,6 +372,55 @@ class UnixTorWrapper(unittest.TestCase):
 
     def test_actual_exec_inputs_order_and_private_retention(self):
         self.assert_success()
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux isolated socket guardian")
+    def test_dynamic_direct_installs_only_its_captured_broker_baseline(self):
+        for transport in ("tor", "meek", "snowflake", "webtunnel", "mixed"):
+            with self.subTest(transport=transport), tempfile.TemporaryDirectory(prefix="dynamic-tor-wrapper-") as directory:
+                fixture = Fixture(Path(directory))
+                fixture.physical_broker(transport)
+                self.assert_success(fixture)
+                result, events, _ = fixture.run("check")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertNotIn("protect", [row["kind"] for row in events])
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux isolated socket guardian")
+    def test_dynamic_direct_rejects_mixed_authority_before_protection(self):
+        faults = ("marker", "marker-type", "off", "entry", "endpoint", "wide-host", "wide-tuple", "external-session",
+                  "fixed-projection", "observer", "observer-type", "foreign-session", "foreign-source", "unknown-field",
+                  "missing-outbound", "bootstrap-detour", "missing-bootstrap", "duplicate-bootstrap", "platform")
+        for fault in faults:
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(prefix="dynamic-tor-reject-") as directory:
+                fixture = Fixture(Path(directory))
+                fixture.physical_broker()
+                profile = json.loads(fixture.inputs["tor-profile.json"])
+                graph = json.loads(fixture.inputs["sing-box.json"])
+                capture = json.loads(fixture.inputs["tor-capture.json"])
+                if fault == "marker": fixture.env["HOMEVPN_TOR_PHYSICAL_BROKER"] = ""
+                elif fault == "marker-type": fixture.env["HOMEVPN_TOR_PHYSICAL_BROKER"] = "true"
+                elif fault == "off": profile["kill_switch_policy"] = "off"
+                elif fault == "entry": profile["multihop_enabled"] = True
+                elif fault == "endpoint": fixture.env["HOMEVPN_ENDPOINT"] = "203.0.113.44"
+                elif fault == "wide-host": fixture.env["HOMEVPN_NATIVE_ENDPOINTS_JSON"] = '["203.0.113.44"]'
+                elif fault == "wide-tuple": fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"] = '[{"host":"203.0.113.44","port":443,"network":"tcp"}]'
+                elif fault == "external-session": fixture.env["HOMEVPN_EXTERNAL_SESSION"] = fixture.env["HOMEVPN_TOR_SESSION"]
+                elif fault == "fixed-projection": profile["desktop_physical_egress"] = []
+                elif fault == "observer": graph["services"][0].pop("physical_broker")
+                elif fault == "observer-type": graph["services"][0]["physical_broker"] = 1
+                elif fault == "foreign-session": graph["outbounds"][0]["session_id"] = "c" * 32
+                elif fault == "foreign-source": graph["outbounds"][0]["source_sha256"] = "d" * 64
+                elif fault == "unknown-field": graph["outbounds"][0]["server"] = "203.0.113.44"
+                elif fault == "missing-outbound": graph["outbounds"] = []
+                elif fault == "bootstrap-detour": graph["dns"]["servers"][0]["detour"] = "direct"
+                elif fault == "missing-bootstrap": graph["dns"]["servers"] = []
+                elif fault == "duplicate-bootstrap": graph["dns"]["servers"] *= 2
+                elif fault == "platform": capture["target_os"] = "darwin"
+                fixture.set_input("tor-profile.json", profile)
+                fixture.set_input("sing-box.json", graph)
+                fixture.set_input("tor-capture.json", capture)
+                result, events, _ = fixture.run()
+                self.assertNotEqual(result.returncode, 0, fault)
+                self.assertFalse(any(row["kind"] in {"protect", "native-admission"} for row in events), fault)
 
     def test_fixed_obfs4_sets_retain_all_source_tuples_before_exec(self):
         for count in range(1, 9):

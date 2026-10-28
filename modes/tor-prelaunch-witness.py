@@ -130,6 +130,10 @@ def validate_launch(target: str, bridge_endpoint: str | None = None, tor_binary:
     source = os.environ.get("HOMEVPN_TOR_SOURCE_SHA256", "")
     physical = os.environ.get("HOMEVPN_PROFILE_ID", "")
     policy = os.environ.get("HOMEVPN_POLICY_PROFILE_ID", "")
+    broker_marker = os.environ.get("HOMEVPN_TOR_PHYSICAL_BROKER", "")
+    if broker_marker not in {"", "1"}:
+        raise ValueError("invalid native physical broker marker")
+    socket_broker = broker_marker == "1"
     if (not re.fullmatch(r"[a-f0-9]{32}", session) or not re.fullmatch(r"[a-f0-9]{64}", source)
             or os.environ.get("HOMEVPN_STANDARD_ENGINE") != "native"
             or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", physical)
@@ -185,7 +189,15 @@ def validate_launch(target: str, bridge_endpoint: str | None = None, tor_binary:
               or not re.fullmatch(r"[a-f0-9]{64}", os.environ.get("HOMEVPN_TOR_BINARY_SHA256", ""))):
             raise ValueError("Local Tor lost its captured executable identity")
         endpoint = os.environ.get("HOMEVPN_ENDPOINT", "")
-        if not via_entry and protocol == "tor":
+        if socket_broker:
+            if (sys.platform != "linux" or via_entry or server or physical != policy
+                    or profile.get("node_kind") != "external"
+                    or profile.get("multihop_enabled", False) is not False
+                    or profile.get("kill_switch_policy") not in {"on-connect", "always"}
+                    or type(profile.get("kill_switch", False)) is not bool
+                    or endpoint or bridge_endpoint not in {None, ""}):
+                raise ValueError("physical broker lost its captured protected direct Linux source")
+        elif not via_entry and protocol == "tor":
             if (endpoint or bridge_endpoint not in {None, ""}
                     or profile.get("kill_switch_policy") != "off"
                     or profile.get("kill_switch", False) is not False):
@@ -233,9 +245,14 @@ def validate_launch(target: str, bridge_endpoint: str | None = None, tor_binary:
             flag = profile.get("kill_switch", False)
             if type(kill) is not str or kill not in {"", "off", "on-connect", "always"} or type(flag) is not bool:
                 raise ValueError("Direct Tor protection lost its captured type")
-            if (kill in {"on-connect", "always"} or not kill and flag) and direct is None:
+            if (kill in {"on-connect", "always"} or not kill and flag) and direct is None and not socket_broker:
                 raise ValueError("dynamic Direct Tor cannot acquire strict physical authority")
-        if via_entry or direct is not None:
+        if socket_broker:
+            if (direct is not None or "desktop_physical_egress" in profile
+                    or os.environ.get("HOMEVPN_NATIVE_ENDPOINTS_JSON") or os.environ.get("HOMEVPN_NATIVE_EGRESS_JSON")
+                    or os.environ.get("HOMEVPN_EXTERNAL_SESSION")):
+                raise ValueError("dynamic physical broker cannot acquire a destination-wide exemption")
+        elif via_entry or direct is not None:
             address_raw = os.environ.get("HOMEVPN_NATIVE_ENDPOINTS_JSON", "")
             egress_raw = os.environ.get("HOMEVPN_NATIVE_EGRESS_JSON", "")
             if (os.environ.get("HOMEVPN_EXTERNAL_SESSION") != session
@@ -271,6 +288,21 @@ def validate_launch(target: str, bridge_endpoint: str | None = None, tor_binary:
         if (len(owners) != 1 or owners[0].get("tag") != "routervpn-tor-physical"
                 or owners[0].get("session_id") != session or owners[0].get("source_sha256") != source):
             raise ValueError("native graph network identity changed")
+        if (owners[0].get("physical_broker", False) is not socket_broker):
+            raise ValueError("native graph physical factory does not match its captured protection")
+        if socket_broker:
+            physical_outbounds = [item for item in graph.get("outbounds", [])
+                                  if type(item) is dict and item.get("type") == "routervpn-desktop-tor-physical"]
+            expected_physical = {"type": "routervpn-desktop-tor-physical", "tag": "routervpn-tor-physical-egress",
+                                 "session_id": session, "source_sha256": source}
+            if physical_outbounds != [expected_physical]:
+                raise ValueError("native physical outbound has another source or authority")
+            dns = graph.get("dns")
+            servers = dns.get("servers") if type(dns) is dict else None
+            bootstrap = ([item for item in servers if type(item) is dict and item.get("tag") == "routervpn-tor-bootstrap"]
+                         if type(servers) is list else [])
+            if len(bootstrap) != 1 or bootstrap[0].get("detour") != expected_physical["tag"]:
+                raise ValueError("selected bootstrap DNS bypassed its physical socket owner")
         if verifier.verify_directory(root, target) != directory or not os.path.samestat(before, directory.lstat()):
             raise ValueError("private launch directory changed during capture")
     finally:

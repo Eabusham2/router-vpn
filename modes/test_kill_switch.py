@@ -77,6 +77,92 @@ assert '192.168.0.0/16' not in rules
 rules_lan=mod.render_rules([mod.ipaddress.ip_address('203.0.113.7')],True,False)
 assert '192.168.0.0/16' in rules_lan and 'fc00::/7' in rules_lan
 
+# The dynamic Tor guardian's baseline owns no public destination exemption.
+# Exercise the actual apply/reassert paths and saved Always policy while only
+# replacing nft execution; no fixture command can alter the host firewall.
+with tempfile.TemporaryDirectory(prefix='router-vpn-tor-socket-guard-') as td:
+    root = pathlib.Path(td)
+    (root / 'run').mkdir(mode=0o700)
+    selected = {'id': 'dynamic-tor', 'node_kind': 'external', 'endpoint': '198.51.100.40',
+                'external': {'protocol': 'tor'}, 'kill_switch_policy': 'always',
+                'kill_switch': True, 'home_lan_access': False, 'multihop_enabled': False}
+    store = {'selected_id': selected['id'], 'profiles': [selected]}
+    write_private_json(root / 'routers.json', store)
+    env = {'HOMEVPN_ROOT': str(root), 'HOMEVPN_PROFILE_ID': selected['id'],
+           'HOMEVPN_POLICY_PROFILE_ID': selected['id'], 'HOMEVPN_STANDARD_ENGINE': 'native',
+           'HOMEVPN_TOR_SESSION': 'a' * 32, 'HOMEVPN_TOR_SOURCE_SHA256': 'b' * 64,
+           'HOMEVPN_TOR_PHYSICAL_BROKER': '1', 'HOMEVPN_ENDPOINT': '',
+           'HOMEVPN_NATIVE_ENDPOINTS_JSON': '', 'HOMEVPN_NATIVE_EGRESS_JSON': '',
+           'HOMEVPN_EXTERNAL_SESSION': '', 'HOMEVPN_KILLSWITCH_DRY_RUN': '0'}
+    written = []
+    def observe_nft(arguments, **_):
+        if '-f' in arguments:
+            written.append(pathlib.Path(arguments[arguments.index('-f') + 1]).read_text())
+        return subprocess.CompletedProcess(arguments, 0, '', '')
+    with mock.patch.dict(os.environ, env), mock.patch.object(mod.sys, 'platform', 'linux'), \
+            mock.patch.object(mod, 'table_exists', return_value=False), \
+            mock.patch.object(mod, 'run_nft', side_effect=observe_nft), mock.patch('socket.getaddrinfo') as resolver:
+        assert mod.apply() == 0
+        state_path = root / 'run' / 'kill-switch.json'
+        state = json.loads(state_path.read_text())
+        assert state['native_socket_broker'] is True and state['endpoint'] == '' and state['endpoint_ips'] == []
+        assert 'native_egress' not in state
+        assert len(written) == 2 and all('policy drop' in text for text in written)
+        assert all('198.51.100.40' not in text and ' daddr ' not in text and 'meta skuid' not in text for text in written)
+        # The native guardian, never this launcher, will admit expiring exact
+        # socket tuples after independent kernel ownership readback.
+        before = state_path.read_bytes()
+        count = len(written)
+        for override in ({'HOMEVPN_TOR_PHYSICAL_BROKER': 'true'},
+                         {'HOMEVPN_TOR_SESSION': 'A' * 32},
+                         {'HOMEVPN_TOR_SOURCE_SHA256': ''},
+                         {'HOMEVPN_STANDARD_ENGINE': 'stock'},
+                         {'HOMEVPN_ENDPOINT': '198.51.100.40'},
+                         {'HOMEVPN_NATIVE_ENDPOINTS_JSON': '["198.51.100.40"]'},
+                         {'HOMEVPN_NATIVE_EGRESS_JSON': '[{"host":"198.51.100.40","port":443,"network":"tcp"}]'},
+                         {'HOMEVPN_EXTERNAL_SESSION': 'a' * 32}):
+            with mock.patch.dict(os.environ, override):
+                try:
+                    mod.apply()
+                except RuntimeError:
+                    pass
+                else:
+                    raise AssertionError('unowned dynamic Tor baseline reached nft: ' + str(override))
+            assert len(written) == count and state_path.read_bytes() == before
+        for edit in ({'multihop_enabled': True}, {'node_kind': 'router-vpn'},
+                     {'external': {'protocol': 'shadowsocks'}}):
+            write_private_json(root / 'routers.json', {'selected_id': selected['id'], 'profiles': [{**selected, **edit}]})
+            try:
+                mod.apply()
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError('another saved source acquired dynamic Tor guard')
+            assert len(written) == count and state_path.read_bytes() == before
+        write_private_json(root / 'routers.json', store)
+        # Reboot has no native session or guardian. Only the empty DROP policy
+        # can be restored, even with the saved node's nonempty display endpoint.
+        with mock.patch.dict(os.environ, {'HOMEVPN_TOR_SESSION': '', 'HOMEVPN_TOR_SOURCE_SHA256': '',
+                                         'HOMEVPN_TOR_PHYSICAL_BROKER': '', 'HOMEVPN_ENDPOINT': '198.51.100.40'}):
+            assert mod.reassert() == 0
+        restored = json.loads(state_path.read_text())
+        assert restored['endpoint_ips'] == [] and restored['native_socket_broker'] is True
+        assert all(' daddr ' not in text and 'meta skuid' not in text for text in written)
+        count = len(written)
+        for poison in ({'native_socket_broker': False}, {'endpoint_ips': ['198.51.100.40']},
+                       {'endpoint': '198.51.100.40'}, {'native_egress': []}):
+            write_private_json(state_path, {**restored, **poison})
+            try:
+                mod.reassert()
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError('corrupt retained guardian baseline widened policy')
+            assert len(written) == count
+        write_private_json(state_path, restored)
+        assert mod.release() == 0 and state_path.exists(), 'Always guard was removed by ordinary disconnect'
+        resolver.assert_not_called()
+
 with tempfile.TemporaryDirectory(prefix='router-vpn-killswitch-') as td:
     root=pathlib.Path(td);(root/'run').mkdir();
     store={'selected_id':'node','profiles':[{'id':'node','endpoint':'203.0.113.7','kill_switch_policy':'on-connect','home_lan_access':False}]}
