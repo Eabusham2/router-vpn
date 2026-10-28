@@ -86,8 +86,8 @@ class TorMaintenanceAuditTests(unittest.TestCase):
             ("context.WithTimeout(ctx, mobiletor.DesktopBridgeHeartbeatMaxAge)", "context.WithCancel(ctx)"),
             ("context.WithTimeout(ctx, mobiletor.DesktopBridgeHeartbeatMaxAge)",
              "context.WithTimeout(context.Background(), mobiletor.DesktopBridgeHeartbeatMaxAge)"),
-            ("if err != nil || ctx.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(owner, &result.proof) != nil {",
-             "_ = err\n\t\tif ctx.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(owner, &result.proof) != nil {"),
+            ("if err != nil || ctx.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(owner, &result.proof) != nil",
+             "_ = err\n\t\tif ctx.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(owner, &result.proof) != nil"),
         ):
             with self.subTest(replacement=replacement):
                 self.reject(WORKER, original, replacement)
@@ -112,8 +112,8 @@ class TorMaintenanceAuditTests(unittest.TestCase):
         ):
             with self.subTest(original=original):
                 self.reject(COMMAND, original, replacement)
-        original = "if result.heartbeat {\n\t\t\t\treceipt = result.proof"
-        self.reject(COMMAND, original, "if result.heartbeat {\n\t\t\t\treceipt = receipt")
+        original = "receipt = result.proof\n\t\t\t\theartbeat, paddingPublished = now, now"
+        self.reject(COMMAND, original, "receipt = receipt\n\t\t\t\theartbeat, paddingPublished = now, now")
 
     def test_teardown_cancels_and_joins_actual_worker_before_native_close(self):
         for original, replacement in (
