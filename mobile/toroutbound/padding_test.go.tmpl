@@ -17,9 +17,12 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	SJ "github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
 )
 
 const localPaddingTestProfile = `{"id":"local-padding-exit","node_kind":"external","external":{"protocol":"tor"},"dns_mode":"custom","dns_protocol":"tcp","dns_host":"9.9.9.9","daita_enabled":true,"daita_rate_kbps":64}`
@@ -74,6 +77,38 @@ func TestTorLocalPaddingConstructorRejectsReplacedCapturedOptions(t *testing.T) 
 				t.Fatal("changed native outbound acquired captured padding authority")
 			}
 		})
+	}
+}
+
+func TestTorLocalPaddingAcceptsExactNativeParsedEmptyBridgeSelection(t *testing.T) {
+	capture, err := mobiletor.NewLocalPaddingCapture(&mobiletor.LocalPaddingSource{Profile: localPaddingTestProfile}, "local-padding-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var graph struct{ Outbounds []json.RawMessage }
+	if err := json.Unmarshal([]byte(capture.Config()), &graph); err != nil || len(graph.Outbounds) != 1 {
+		t.Fatal("plain Tor fixture lost its one native owner", err)
+	}
+	registry := outbound.NewRegistry()
+	RegisterOutbound(registry)
+	ctx := service.ContextWith[option.OutboundOptionsRegistry](t.Context(), registry)
+	parsed, err := SJ.UnmarshalExtendedContext[option.Outbound](ctx, graph.Outbounds[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, ok := parsed.Options.(*Options)
+	if !ok || len(actual.Bridges) != 0 {
+		t.Fatal("native parser changed the plain Tor bridge selection")
+	}
+	if actual.Bridges != nil || localPaddingOptions(t).Bridges == nil {
+		t.Fatal("fixture no longer exercises the pinned empty-vector representation boundary")
+	}
+	if owner, err := captureTorLocalPadding(parsed.Tag, *actual); err != nil || owner == nil || owner.capture.SourceSHA256() != capture.SourceSHA256() {
+		t.Fatal("actual native parser lost the exact plain Tor padding source", err)
+	}
+	actual.Bridges = []string{"unselected-bridge"}
+	if owner, err := captureTorLocalPadding(parsed.Tag, *actual); err == nil || owner != nil {
+		t.Fatal("a nonempty unselected bridge acquired plain Tor padding authority")
 	}
 }
 

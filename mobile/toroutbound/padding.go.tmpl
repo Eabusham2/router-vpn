@@ -73,6 +73,13 @@ func captureTorLocalPadding(tag string, options Options) (*torLocalPadding, erro
 		if header.Type != Type || json.Unmarshal(raw, &expected) != nil {
 			return nil, bad
 		}
+		// The pinned native option parser represents an empty JSON vector as
+		// nil. Both mean plain Tor; retain the original complete source/hash
+		// while comparing this one equivalent representation. Nonempty bridge
+		// selections and every other option must still match exactly.
+		if len(expected.Bridges) == 0 && len(options.Bridges) == 0 {
+			expected.Bridges, options.Bridges = nil, nil
+		}
 		want, wantErr := json.Marshal(expected)
 		actual, actualErr := json.Marshal(options)
 		if wantErr != nil || actualErr != nil || string(want) != string(actual) {
