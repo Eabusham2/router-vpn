@@ -87,6 +87,48 @@ func TestTorExternalConstructorCapturesOriginalSourceAndCompleteExpectedGraph(t 
 	}
 }
 
+func TestTorExternalConstructorRetainsCapturedProxyJumbo(t *testing.T) {
+	profile := strings.Replace(torOrdinaryEntryProfile, `"mtu_policy":"auto"`, `"mtu_policy":"auto","jumbo_tun":true`, 1)
+	var original map[string]any
+	if err := json.Unmarshal([]byte(torOrdinaryEntryConfig), &original); err != nil {
+		t.Fatal(err)
+	}
+	canonicalSource, err := json.Marshal(original)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := mobiletor.CompileProfileWithExternalPredecessor(torOrdinaryExitProfile, "ordinary-jumbo", torOrdinaryEntryConfig, profile)
+	if err != nil {
+		t.Fatal("ordinary proxy Jumbo did not compile", err)
+	}
+	var graph struct{ Outbounds []json.RawMessage }
+	if err := json.Unmarshal([]byte(config), &graph); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range graph.Outbounds {
+		var options Options
+		if err := json.Unmarshal(raw, &options); err != nil {
+			t.Fatal(err)
+		}
+		if options.SessionID != "ordinary-jumbo" {
+			continue
+		}
+		entry, rebuilt, err := captureTorExternalPredecessor(options)
+		if err != nil || entry == nil || rebuilt != config || !entry.MatchesProfile(profile) || entry.SourceConfig() != string(canonicalSource) {
+			t.Fatal("native Jumbo constructor lost its exact original source", err)
+		}
+		if _, mtu, err := mobiletor.MTUInterface(rebuilt); err != nil || mtu != 9000 {
+			t.Fatal("native Jumbo constructor discarded virtual interface capacity", mtu, err)
+		}
+		options.ExternalPredecessorProfile = torOrdinaryEntryProfile
+		if entry, rebuilt, err := captureTorExternalPredecessor(options); err == nil || entry != nil || rebuilt != "" {
+			t.Fatal("a changed Jumbo selection reused the captured native owner")
+		}
+		return
+	}
+	t.Fatal("compiled Jumbo graph lost its Tor owner")
+}
+
 func torOrdinaryProofFixture(t *testing.T, dial func(context.Context, string, M.Socksaddr) (net.Conn, error)) *Outbound {
 	t.Helper()
 	options, _ := torOrdinaryOptions(t)

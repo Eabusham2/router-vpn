@@ -965,6 +965,23 @@ func externalMTUPolicyWithPacketEnvelope(tun, exit, entry, profile, entryProfile
 			return 0, 0, "", err
 		}
 	}
+	jumbo, err := externalJumboPreference(profile)
+	if err != nil {
+		return 0, 0, "", err
+	}
+	entryJumbo, err := externalJumboPreference(entryProfile)
+	if err != nil {
+		return 0, 0, "", err
+	}
+	packetInterface := func(endpoint map[string]any) bool {
+		return endpoint["type"] == "wireguard" || endpoint["type"] == AmneziaType || endpoint["type"] == PQType || endpoint["type"] == externalOpenVPNType
+	}
+	if entryJumbo && (entry == nil || packetInterface(entry)) {
+		return 0, 0, "", errors.New("Jumbo applies to the shared proxy TUN, not an entry packet interface")
+	}
+	if (jumbo || entryJumbo) && packetInterface(exit) {
+		return 0, 0, "", errors.New("Jumbo requires a compatible proxy TUN, not a raw packet exit")
+	}
 	if entry != nil {
 		if entry["type"] == "wireguard" || entry["type"] == AmneziaType || entry["type"] == externalOpenVPNType {
 			entryMTU = 1280
@@ -990,6 +1007,15 @@ func externalMTUPolicyWithPacketEnvelope(tun, exit, entry, profile, entryProfile
 	}
 	if fixed != 0 {
 		mtu, policy = fixed, "fixed"
+	}
+	if jumbo || entryJumbo {
+		if fixed != 0 && fixed != 9000 {
+			return 0, 0, "", errors.New("Jumbo conflicts with the saved fixed MTU of the shared proxy TUN")
+		}
+		// Virtual proxy capacity is not a demonstrated path packet size. The
+		// captured packet entry keeps its own MTU and the live optimizer keeps
+		// the original Auto/Default selection and separate proof requirement.
+		mtu = 9000
 	}
 	if exit["type"] == "wireguard" || exit["type"] == AmneziaType {
 		exitMTU := 1280
@@ -1086,6 +1112,18 @@ func externalMTUPolicyWithPacketEnvelope(tun, exit, entry, profile, entryProfile
 	// enter this calculation. An Auto owner must measure the live path later.
 	tun["mtu"] = mtu
 	return
+}
+
+func externalJumboPreference(profile map[string]any) (bool, error) {
+	raw, present := profile["jumbo_tun"]
+	if !present {
+		return false, nil
+	}
+	value, ok := raw.(bool)
+	if !ok {
+		return false, errors.New("external Jumbo policy must be a saved boolean")
+	}
+	return value, nil
 }
 
 func externalOptionalString(profile map[string]any, key string) (string, error) {
