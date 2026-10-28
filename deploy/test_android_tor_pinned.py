@@ -34,6 +34,9 @@ def inputs():
     extra += [JAVA/(name+'.java') for name in ('AndroidMAXDNSOwner','AndroidMAXProfilePreparation','AndroidTorProfile','AndroidTorSession','AndroidTorCompareRuntime','AndroidTorPaddingReceipt','AndroidStandardExitStore','AndroidStandardExitRuntime','AndroidStandardExitController','AndroidDirectStandardExitController','AndroidHomeStateStore','AndroidSessionRevalidator','LayeredVpnService','AndroidStartLayerRelay','StandardExitActivity')]
     extra += [JAVA/(name+'.java') for name in ('AndroidStartupPolicy','AndroidUnifiedConnectionController','AndroidMTUMeasurementGate','AndroidConnectionSelection','AndroidConnectionProfileStore','AndroidNodeStore','AndroidProfileSelection','AndroidPrivateFileStore')]
     extra += [ROOT/'android'/name for name in ('test_android_tor_compare.py','test_android_startup_policy.py','test_android_external_permission.py','test_android_speed_lab_restore.py')]
+    # Startup Last consumes the same raw JSON export before JSONObject can
+    # collapse ambiguous receipts; its native parser is part of this proof.
+    extra += [ROOT/'mobile/routervpn_openvpn.go', *[path for path in (ROOT/'internal/nativeopenvpn').glob('*.go') if not path.name.endswith('_test.go')]]
     return sorted(set(M.inputs()+HOST.inputs()+extra))
 
 

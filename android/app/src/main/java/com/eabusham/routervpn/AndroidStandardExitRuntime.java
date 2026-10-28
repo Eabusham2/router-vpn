@@ -88,11 +88,11 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         AndroidHomeStateStore.Snapshot initialHome=AndroidHomeStateStore.snapshot(context);
         // Capture test ownership before asynchronous work. A late callback after
         // Speed Lab releases its lease must not bless a temporary path as Last.
-        boolean rememberTor=restoredExecution.isEmpty()&&!AndroidMTUMeasurementGate.held();
-        active=executor.submit(()->run(entryBundle,capturedOrdinary,captured,direct,entryMode,execution,restoredExecution,capturedEntry,initialHome,rememberTor,cb));
+        boolean rememberExternal=restoredExecution.isEmpty()&&!AndroidMTUMeasurementGate.held();
+        active=executor.submit(()->run(entryBundle,capturedOrdinary,captured,direct,entryMode,execution,restoredExecution,capturedEntry,initialHome,rememberExternal,cb));
     }
 
-    private void run(File entry,AndroidStandardExitStore.Entry ordinaryEntry,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode,String execution,String restoredExecution,String capturedEntry,AndroidHomeStateStore.Snapshot initialHome,boolean rememberTor,Callback cb){
+    private void run(File entry,AndroidStandardExitStore.Entry ordinaryEntry,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode,String execution,String restoredExecution,String capturedEntry,AndroidHomeStateStore.Snapshot initialHome,boolean rememberExternal,Callback cb){
         boolean started=false,sessionStarted=false,releasePrepared=true;
         NativeSingBoxController.SessionInfo preparedSession=null;
         boolean tor=AndroidTorProfile.isTor(exit.protocol);
@@ -186,8 +186,8 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             cb.progress(tor?"The captured Tor circuit, entry and selected DNS passed; checking current ownership…":"Captured entry, selected DNS and public exit passed; checking current ownership…");
             String observed=tor?capturedTorExit(capturedHome):capturedExternalExit(capturedHome);
             String selectedExecution=capturedExternalExecution(capturedHome);
-            AndroidStartupPolicy.TorLast last=rememberTor&&tor&&!direct&&ordinaryEntry==null
-                    ?AndroidStartupPolicy.prepareTorExecution(context,entry,exit,entryMode,execution,selectedExecution,capturedEntry):null;
+            AndroidStartupPolicy.ExternalLast last=rememberExternal&&!direct&&ordinaryEntry==null
+                    ?AndroidStartupPolicy.prepareExternalExecution(context,entry,exit,entryMode,execution,selectedExecution,capturedEntry):null;
             synchronized(this){
                 if(disconnectRequested||closed.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Custom exit cancelled before Connected adoption.");
                 if(ordinaryEntry!=null)requireOrdinaryCurrent(ordinaryEntry,exit,capturedEntry);
@@ -195,11 +195,12 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                 if(tor){
                     capturedTorExit(capturedHome);
                     if(!AndroidHomeStateStore.connectedTorExternal(context,capturedHome,observed))throw new IllegalStateException("The captured Tor session changed before Connected adoption.");
-                    AndroidStartupPolicy.recordTorExecution(context,last,capturedHome);
+                    AndroidStartupPolicy.recordExternalExecution(context,last,capturedHome);
                     LayeredVpnService.startTorAutomaticMTU(torNativeSession,torExternalID,capturedHome.sessionId);
                 }else{
                     capturedExternalExit(capturedHome);
                     if(!AndroidHomeStateStore.connectedPolicyExternal(context,capturedHome,observed))throw new IllegalStateException("The captured external session changed before Connected adoption.");
+                    AndroidStartupPolicy.recordExternalExecution(context,last,capturedHome);
                     LayeredVpnService.startExternalAutomaticMTU(externalNativeSession,externalID,capturedHome.sessionId);
                 }
             }

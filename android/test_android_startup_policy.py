@@ -12,6 +12,33 @@ import re
 import subprocess
 import tempfile
 
+PRIVATE_JSON_GO='''package main
+import (
+ "io"
+ "os"
+ libbox "router-vpn/mobile"
+)
+func main() {
+ raw,err:=io.ReadAll(io.LimitReader(os.Stdin,4097))
+ if err!=nil || len(raw)>4096 || libbox.RouterValidatePrivateNodeJSON(string(raw))!=nil { os.Exit(1) }
+}
+'''
+PRIVATE_JSON_JAVA=r'''package io.nekohasekai.libbox;
+import java.nio.charset.StandardCharsets;import java.util.concurrent.TimeUnit;
+public final class Libbox {
+ public static void routerValidatePrivateNodeJSON(String raw)throws Exception{
+  Process child=new ProcessBuilder(System.getProperty("fixture.privatejson")).start();
+  try{
+   child.getOutputStream().write(raw.getBytes(StandardCharsets.UTF_8));child.getOutputStream().close();
+   if(!child.waitFor(5,TimeUnit.SECONDS)||child.exitValue()!=0)throw new IllegalArgumentException("unambiguous raw receipt required");
+  }finally{
+   child.getInputStream().close();child.getErrorStream().close();child.getOutputStream().close();
+   if(child.isAlive()){child.destroyForcibly();if(!child.waitFor(5,TimeUnit.SECONDS))throw new IllegalStateException("private parser child did not drain");}
+  }
+ }
+}
+'''
+
 ROOT=Path(__file__).resolve().parents[1]
 JAVA=ROOT/'android/app/src/main/java/com/eabusham/routervpn'
 spec=importlib.util.spec_from_file_location('startup_permission_boundaries',ROOT/'android/test_android_external_permission.py')
@@ -136,6 +163,7 @@ import android.app.*;import android.content.*;import android.os.*;import android
 public final class StartupTest {
  static int checks;static void check(boolean v,String msg){checks++;if(!v)throw new AssertionError(msg);}
  static final String FIRST="a".repeat(32),ENTRY="b".repeat(32),EXIT="c".repeat(32);
+ static final List<String> EXTERNAL_PROTOCOLS=List.of("tor","tor-bridge","wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn");
  static class Callback implements AndroidUnifiedConnectionController.Callback {int completions;boolean ok;String message="";public void progress(String m){message=m;}public void finished(boolean ok,String m){this.ok=ok;message=m;completions++;}}
  static void resetProcess()throws Exception{var owner=AndroidUnifiedConnectionController.class.getDeclaredField("permissionOwner");owner.setAccessible(true);owner.set(null,null);for(String name:new String[]{"coldLaunchClaimed","pending"}){var f=AndroidStartupPolicy.class.getDeclaredField(name);f.setAccessible(true);if(name.equals("pending"))f.set(null,null);else f.setBoolean(null,false);}}
  static JSONObject bundle(String id)throws Exception{return new JSONObject().put("fixture_store_id",id).put("selectedRouterID","router").put("routerProfiles",new JSONArray().put(new JSONObject().put("id","router").put("home_lan_access",true).put("dns_mode","home").put("private_key","SECRET_PROFILE_BYTES"))).put("profiles",new JSONObject().put("wg",new JSONObject().put("wg.conf","SECRET_NATIVE_BYTES"))).put("modes",new JSONArray().put(new JSONObject().put("id","wg")));}
@@ -188,6 +216,30 @@ public final class StartupTest {
   for(String change:new String[]{"dns","key","raw","extra","legacy"}){resetProcess();String original=Files.readString(saved);JSONObject changed=new JSONObject(original);JSONObject bundle=f.root();if(change.equals("dns"))AndroidProfileSelection.selectedRouterProfile(bundle).put("dns_mode","rescue");if(change.equals("key"))AndroidProfileSelection.selectedRouterProfile(bundle).put("private_key","replacement");if(change.equals("raw"))changed.put("raw_id","../wg");if(change.equals("extra"))changed.put("secret","invalid");if(change.equals("legacy"))changed.remove("profile_sha256");Files.writeString(f.nodes.file(FIRST).toPath(),bundle.toString());Files.writeString(saved,changed.toString());AndroidStartupPolicy.Attempt stale=f.capture();check(stale.lastRaw.isEmpty(),"changed or unbound last receipt was accepted: "+change);stale.cancel();Files.writeString(saved,original);}
   for(String kind:new String[]{"test-node","unproved","superseded","write-failure"}){Fixture x=new Fixture(root);VpnService.needsPermission=false;AndroidModeOrchestrator o=AndroidRuntimeRegistry.instance.orchestrator;if(kind.equals("unproved"))o.rejectProof=true;if(kind.equals("superseded"))o.changeBeforeReceipt=true;if(kind.equals("write-failure"))AndroidPrivateFileStore.failWrite=true;if(kind.equals("test-node"))x.controller.connectNode(AndroidNodeStore.nodes.get(0),"auto",List.of(),x.cb);else x.controller.connect("auto",List.of(),x.cb);check(!Files.exists(x.dir.resolve("startup-last-v1.json")),"temporary, failed, stale or uncommitted proof entered last memory: "+kind);}
  }
+ static final List<String> RAW_FAULTS=List.of("schema-text","schema-decimal","duplicate-schema","duplicate-value","duplicate-identical","duplicate-escaped","trailing-object","trailing-array","wrong-text","null-text");
+ static String corruptReceipt(JSONObject receipt,String field,String fault)throws Exception{
+  if(fault.equals("schema-text"))receipt.put("schema","1");if(fault.equals("wrong-text"))receipt.put(field,1);if(fault.equals("null-text"))receipt.put(field,JSONObject.NULL);
+  String raw=receipt.toString();if(fault.equals("schema-decimal"))return raw.replace("\"schema\":1","\"schema\":1.0");
+  if(fault.equals("duplicate-schema"))return raw.substring(0,raw.length()-1)+",\"schema\":1}";
+  if(fault.startsWith("duplicate-")){
+   String key=fault.equals("duplicate-escaped")?field.substring(0,1)+"\\"+String.format("u%04x",(int)field.charAt(1))+field.substring(2):field;
+   String value=fault.equals("duplicate-value")?(field.equals("raw_id")?"awg2-fast":"local"):receipt.getString(field);
+   return raw.substring(0,raw.length()-1)+",\""+key+"\":"+JSONObject.quote(value)+"}";
+  }
+  if(fault.equals("trailing-object"))return raw+"{}";if(fault.equals("trailing-array"))return raw+"[]";return raw;
+ }
+ static void strictReceipts(Path root)throws Exception{
+  for(String fault:RAW_FAULTS){
+   Fixture f=new Fixture(root);f.policy("smart-auto",false);VpnService.needsPermission=false;f.controller.connect("auto",List.of(),f.cb);Path file=f.dir.resolve("startup-last-v1.json");check(f.cb.ok&&Files.isRegularFile(file),"strict raw receipt setup failed");
+   Files.writeString(file,corruptReceipt(new JSONObject(Files.readString(file)),"raw_id",fault));AndroidHomeStateStore.disconnected(f.activity);resetProcess();f.policy("last",true);var attempt=f.capture();
+   check(attempt.lastRaw.isEmpty(),"ambiguous single-node Last receipt accepted: "+fault);attempt.cancel();
+  }
+  for(String protocol:List.of("tor","shadowsocks","openvpn"))for(String fault:RAW_FAULTS){
+   Fixture f=new Fixture(root);var exit=external(f,protocol,"auto",true,"auto");check(AndroidStartupPolicy.recordExternalExecution(f.activity,preparedExternalLast(f,exit,"auto","server"),externalOwner(f,exit,true)),"strict external receipt setup failed");
+   Path file=f.dir.resolve("startup-tor-last-v1.json");Files.writeString(file,corruptReceipt(new JSONObject(Files.readString(file)),"selected_execution",fault));enableExternalLast(f,exit);boolean rejected=false;try{f.capture();}catch(Exception expected){rejected=true;}
+   check(rejected,"ambiguous external Last receipt accepted: "+fault);
+  }
+ }
  static <T> List<T> widgets(android.view.View root,Class<T> type){List<T> result=new ArrayList<>();if(type.isInstance(root))result.add(type.cast(root));if(root instanceof LinearLayout)for(android.view.View child:((LinearLayout)root).children)result.addAll(widgets(child,type));return result;}
  static void settings(Path root)throws Exception{
   Fixture f=new Fixture(root);AndroidProfileSettingsDialog.show(f.activity,f.nodes,()->{});AlertDialog dialog=AlertDialog.last;List<Spinner> spinners=widgets(dialog.view,Spinner.class);Spinner startup=null;for(Spinner s:spinners)if(s.getAdapter().getItem(0).toString().startsWith("SMART AUTO"))startup=s;CheckBox auto=null;for(CheckBox c:widgets(dialog.view,CheckBox.class))if(c.getText().toString().startsWith("Auto-connect once"))auto=c;check(startup!=null&&auto!=null&&startup.getSelectedItemPosition()==0&&!auto.isChecked(),"Settings has no real default startup/opt-in controls");auto.setChecked(true);startup.setSelection(2);dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();JSONObject p=AndroidProfileSelection.selectedRouterProfile(f.root());check(p.getString("startup_mode").equals("last")&&p.getBoolean("auto_connect"),"Settings did not persist explicit startup controls");
@@ -196,48 +248,49 @@ public final class StartupTest {
  static void activity(Path root)throws Exception{
   Fixture f=new Fixture(root);f.policy("auto",true);StartupActivity first=new StartupActivity();first.onCreate(null);check(first.connection.isStartupPending()&&first.permissionRequest>=AndroidUnifiedConnectionController.PREPARE_UNIFIED,"shipping onCreate did not execute startup");first.importDecision="held-import";Bundle state=new Bundle();first.onSaveInstanceState(state);first.connection.close();StartupActivity rotated=new StartupActivity();rotated.onCreate(state);check(rotated.connection.isStartupPending()&&rotated.permission==null&&rotated.importDecision.equals("held-import"),"Activity rotation lost pending startup or existing import lifecycle");rotated.connection.onActivityResult(first.permissionRequest,Activity.RESULT_OK);check(AndroidRuntimeRegistry.instance.orchestrator.starts==1,"restored Activity did not start its captured request once");AndroidHomeStateStore.disconnected(f.activity);StartupActivity reopened=new StartupActivity();reopened.onCreate(null);check(!reopened.connection.isStartupPending()&&reopened.permission==null&&AndroidRuntimeRegistry.instance.orchestrator.starts==1,"same process reopen rearmed automatic connection");
  }
- static AndroidStandardExitStore.Entry external(Fixture f,String protocol,String mode,boolean hopped,String execution){AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.protocol=protocol;e.startupMode=mode;e.autoConnect=true;AndroidStandardExitStore.saved.clear();AndroidStandardExitStore.saved.put(e.id,AndroidStandardExitStore.copy(e));f.prefs().edit().putString("selected_kind","external").putString("selected_id",e.id).putBoolean("multihop_on",hopped).putString("multihop_entry",hopped?ENTRY:"").putString("multihop_exit",hopped?e.id:"").putString("multihop_exit_mode",protocol).putString("multihop_entry_mode",hopped?"max-tls-awg":"wg").putString("multihop_execution",execution).apply();return e;}
- static void missingTorLast(Path root)throws Exception{
-  Fixture f=new Fixture(root);external(f,"tor","last",true,"auto");boolean rejected=false;try{f.capture();}catch(Exception expected){rejected=true;}
-  check(rejected,"Tor Last without a source-bound winner reran Compare");
+ static AndroidStandardExitStore.Entry external(Fixture f,String protocol,String mode,boolean hopped,String execution){AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.protocol=protocol;e.responseMap=AndroidTorProfile.isTor(protocol)?"":"prevalidated exact provider response and pairing contract";e.startupMode=mode;e.autoConnect=true;AndroidStandardExitStore.saved.clear();AndroidStandardExitStore.saved.put(e.id,AndroidStandardExitStore.copy(e));f.prefs().edit().putString("selected_kind","external").putString("selected_id",e.id).putBoolean("multihop_on",hopped).putString("multihop_entry",hopped?ENTRY:"").putString("multihop_exit",hopped?e.id:"").putString("multihop_exit_mode",protocol).putString("multihop_entry_mode",hopped?"max-tls-awg":"wg").putString("multihop_execution",execution).apply();return e;}
+ static void missingExternalLast(Path root)throws Exception{
+  for(String protocol:EXTERNAL_PROTOCOLS){Fixture f=new Fixture(root);external(f,protocol,"last",true,"auto");boolean rejected=false;try{f.capture();}catch(Exception expected){rejected=true;}
+  check(rejected,"external Last without a source-bound winner reran Compare: "+protocol);}
  }
- static AndroidStartupPolicy.TorLast preparedTorLast(Fixture f,AndroidStandardExitStore.Entry exit,String requested,String selected)throws Exception{
-  return AndroidStartupPolicy.prepareTorExecution(f.activity,f.nodes.file(ENTRY),exit,"max-tls-awg",requested,selected,AndroidTorProfile.digest(Files.readAllBytes(f.nodes.file(ENTRY).toPath())));
+ static AndroidStartupPolicy.ExternalLast preparedExternalLast(Fixture f,AndroidStandardExitStore.Entry exit,String requested,String selected)throws Exception{
+  return AndroidStartupPolicy.prepareExternalExecution(f.activity,f.nodes.file(ENTRY),exit,"max-tls-awg",requested,selected,AndroidTorProfile.digest(Files.readAllBytes(f.nodes.file(ENTRY).toPath())));
  }
- static AndroidHomeStateStore.Snapshot torOwner(Fixture f,AndroidStandardExitStore.Entry exit,boolean prove){
-  AndroidHomeStateStore.beginTorExternal(f.activity,exit.id,exit.name,exit.protocol,ENTRY,"max-tls-awg");var owner=AndroidHomeStateStore.snapshot(f.activity);
-  if(prove)check(AndroidHomeStateStore.connectedTorExternal(f.activity,owner,"8.8.4.4"),"test owner did not adopt proof");return owner;
+ static AndroidHomeStateStore.Snapshot externalOwner(Fixture f,AndroidStandardExitStore.Entry exit,boolean prove){
+  boolean tor=AndroidTorProfile.isTor(exit.protocol);
+  if(tor)AndroidHomeStateStore.beginTorExternal(f.activity,exit.id,exit.name,exit.protocol,ENTRY,"max-tls-awg");else AndroidHomeStateStore.beginPolicyExternal(f.activity,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,ENTRY,"max-tls-awg");var owner=AndroidHomeStateStore.snapshot(f.activity);
+  if(prove)check(tor?AndroidHomeStateStore.connectedTorExternal(f.activity,owner,"8.8.4.4"):AndroidHomeStateStore.connectedPolicyExternal(f.activity,owner,"8.8.4.4"),"test owner did not adopt proof");return owner;
  }
- static void enableTorLast(Fixture f,AndroidStandardExitStore.Entry exit)throws Exception{
+ static void enableExternalLast(Fixture f,AndroidStandardExitStore.Entry exit)throws Exception{
   exit.startupMode="last";exit.autoConnect=true;AndroidStandardExitStore.saved.put(exit.id,AndroidStandardExitStore.copy(exit));
   JSONObject source=new JSONObject(Files.readString(f.nodes.file(ENTRY).toPath()));AndroidProfileSelection.selectedRouterProfile(source).put("startup_mode","manual").put("auto_connect",false);Files.writeString(f.nodes.file(ENTRY).toPath(),source.toString());
   AndroidHomeStateStore.disconnected(f.activity);resetProcess();
  }
- static void torLastReceipts(Path root)throws Exception{
-  for(String protocol:List.of("tor","tor-bridge"))for(String selected:List.of("local","server"))for(boolean rotate:new boolean[]{false,true}){
+ static void externalLastReceipts(Path root)throws Exception{
+  for(String protocol:EXTERNAL_PROTOCOLS)for(String selected:List.of("local","server"))for(boolean rotate:new boolean[]{false,true}){
    Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=external(f,protocol,"smart-auto",true,"auto");exit.autoConnect=false;AndroidStandardExitStore.saved.put(exit.id,AndroidStandardExitStore.copy(exit));
-   var prepared=preparedTorLast(f,exit,"auto",selected);check(prepared!=null,"current selected Tor path did not prepare a Last receipt");var home=torOwner(f,exit,true);
-   check(AndroidStartupPolicy.recordTorExecution(f.activity,prepared,home),"proved Tor execution was not persisted");Path file=f.dir.resolve("startup-tor-last-v1.json");String bytes=Files.readString(file);JSONObject receipt=new JSONObject(bytes);
-   check(receipt.length()==5&&receipt.getInt("schema")==1&&receipt.getString("entry_id").equals(ENTRY)&&receipt.getString("exit_id").equals(exit.id)&&receipt.getString("selected_execution").equals(selected)&&receipt.getString("path_sha256").matches("[0-9a-f]{64}"),"Tor Last receipt is not complete and source-bound");
-   check(!bytes.contains("SECRET_")&&!bytes.contains(exit.secret)&&!bytes.contains("score")&&!bytes.contains("private_key"),"Tor Last receipt leaked credentials or retained a stale measurement");
-   enableTorLast(f,exit);Bundle saved=f.request();check(f.captured.execution.equals("auto")&&f.captured.lastExecution.equals(selected),"Last lost saved Compare or exact proved execution");
+   var prepared=preparedExternalLast(f,exit,"auto",selected);check(prepared!=null,"current selected external path did not prepare a Last receipt");var home=externalOwner(f,exit,true);
+   check(AndroidStartupPolicy.recordExternalExecution(f.activity,prepared,home),"proved external execution was not persisted");Path file=f.dir.resolve("startup-tor-last-v1.json");String bytes=Files.readString(file);JSONObject receipt=new JSONObject(bytes);
+   check(receipt.length()==5&&receipt.getInt("schema")==1&&receipt.getString("entry_id").equals(ENTRY)&&receipt.getString("exit_id").equals(exit.id)&&receipt.getString("selected_execution").equals(selected)&&receipt.getString("path_sha256").matches("[0-9a-f]{64}"),"external Last receipt is not complete and source-bound");
+   check(!bytes.contains("SECRET_")&&!bytes.contains(exit.secret)&&!bytes.contains("score")&&!bytes.contains("private_key"),"external Last receipt leaked credentials or retained a stale measurement");
+   enableExternalLast(f,exit);Bundle saved=f.request();check(f.captured.execution.equals("auto")&&f.captured.lastExecution.equals(selected),"Last lost saved Compare or exact proved execution");
    if(rotate){saved.putString("multihop_execution_pending",selected.equals("local")?"server":"local");f.restore(saved);}f.allow();AndroidStandardExitRuntime runtime=AndroidRuntimeRegistry.instance.standardExit;
-   check(f.cb.ok&&runtime.starts==1&&runtime.restores==1&&runtime.execution.equals("auto")&&runtime.selected.equals(selected),"Tor Last reran Compare or restored the wrong execution");
+   check(f.cb.ok&&runtime.starts==1&&runtime.restores==1&&runtime.execution.equals("auto")&&runtime.selected.equals(selected),"external Last reran Compare or restored the wrong execution");
    check(Files.readString(file).equals(bytes)&&!saved.values.toString().contains(exit.secret),"Last dispatch rewrote historical receipt or leaked private source");
   }
-  for(String fault:List.of("entry-dns","entry-key","entry-native","exit-dns","exit-key","entry-mode","receipt-entry","receipt-exit","receipt-leaf","receipt-source","receipt-extra","receipt-schema","receipt-missing","requested")){
-   Fixture f=new Fixture(root);String requested=fault.equals("requested")?"local":"auto";var exit=external(f,"tor-bridge","auto",true,requested);var prepared=preparedTorLast(f,exit,requested,requested.equals("local")?"local":"server");check(AndroidStartupPolicy.recordTorExecution(f.activity,prepared,torOwner(f,exit,true)),"stale-case setup did not persist");Path file=f.dir.resolve("startup-tor-last-v1.json");JSONObject receipt=new JSONObject(Files.readString(file));enableTorLast(f,exit);
+  for(String protocol:EXTERNAL_PROTOCOLS)for(String fault:List.of("entry-dns","entry-key","entry-native","exit-dns","exit-key","exit-pairing","entry-mode","receipt-entry","receipt-exit","receipt-leaf","receipt-source","receipt-extra","receipt-schema","receipt-missing","requested")){
+   Fixture f=new Fixture(root);String requested=fault.equals("requested")?"local":"auto";var exit=external(f,protocol,"auto",true,requested);var prepared=preparedExternalLast(f,exit,requested,requested.equals("local")?"local":"server");check(AndroidStartupPolicy.recordExternalExecution(f.activity,prepared,externalOwner(f,exit,true)),"stale-case setup did not persist");Path file=f.dir.resolve("startup-tor-last-v1.json");JSONObject receipt=new JSONObject(Files.readString(file));enableExternalLast(f,exit);
    JSONObject source=new JSONObject(Files.readString(f.nodes.file(ENTRY).toPath()));if(fault.equals("entry-dns"))AndroidProfileSelection.selectedRouterProfile(source).put("dns_mode","rescue");if(fault.equals("entry-key"))AndroidProfileSelection.selectedRouterProfile(source).put("private_key","REPLACED");if(fault.equals("entry-native"))source.getJSONObject("profiles").getJSONObject("wg").put("wg.conf","REPLACED");Files.writeString(f.nodes.file(ENTRY).toPath(),source.toString());
-   if(fault.equals("exit-dns"))exit.policy="new selected resolver";if(fault.equals("exit-key"))exit.secret="new bridge credential";AndroidStandardExitStore.saved.put(exit.id,AndroidStandardExitStore.copy(exit));if(fault.equals("entry-mode"))f.prefs().edit().putString("multihop_entry_mode","wg").apply();
+   if(fault.equals("exit-dns"))exit.policy="new selected resolver";if(fault.equals("exit-key"))exit.secret="new provider credential";if(fault.equals("exit-pairing"))exit.responseMap="changed authenticated provider contract";AndroidStandardExitStore.saved.put(exit.id,AndroidStandardExitStore.copy(exit));if(fault.equals("entry-mode"))f.prefs().edit().putString("multihop_entry_mode","wg").apply();
    if(fault.equals("receipt-entry"))receipt.put("entry_id",FIRST);if(fault.equals("receipt-exit"))receipt.put("exit_id","other");if(fault.equals("receipt-leaf"))receipt.put("selected_execution","auto");if(fault.equals("receipt-source"))receipt.put("path_sha256","0".repeat(64));if(fault.equals("receipt-extra"))receipt.put("score",0);if(fault.equals("receipt-schema"))receipt.put("schema",0);if(fault.equals("receipt-missing"))receipt.remove("path_sha256");if(fault.equals("requested"))f.prefs().edit().putString("multihop_execution","auto").apply();Files.writeString(file,receipt.toString());
-   boolean rejected=false;try{f.capture();}catch(Exception expected){rejected=true;}check(rejected&&f.starts()==0&&AndroidRuntimeRegistry.instance.standardExit.starts==0,"changed Tor Last source or receipt was accepted: "+fault);
+   boolean rejected=false;try{f.capture();}catch(Exception expected){rejected=true;}check(rejected&&f.starts()==0&&AndroidRuntimeRegistry.instance.standardExit.starts==0,"changed external Last source or receipt was accepted: "+fault);
   }
-  for(String fault:List.of("unproved","superseded","generation","emergency","selected","native-digest","exit-source","request-leaf","speed-lab","write-failure")){
-   Fixture f=new Fixture(root);var exit=external(f,"tor","auto",true,"auto");String digest=AndroidTorProfile.digest(Files.readAllBytes(f.nodes.file(ENTRY).toPath()));
+  for(String protocol:EXTERNAL_PROTOCOLS)for(String fault:List.of("unproved","superseded","generation","emergency","selected","native-digest","exit-source","request-leaf","speed-lab","write-failure")){
+   Fixture f=new Fixture(root);var exit=external(f,protocol,"auto",true,"auto");String digest=AndroidTorProfile.digest(Files.readAllBytes(f.nodes.file(ENTRY).toPath()));
    if(fault.equals("native-digest"))digest="0".repeat(64);if(fault.equals("exit-source"))exit.secret="not saved";Object lease=null;if(fault.equals("speed-lab"))lease=AndroidMTUMeasurementGate.acquire();
-   var prepared=AndroidStartupPolicy.prepareTorExecution(f.activity,f.nodes.file(ENTRY),exit,"max-tls-awg",fault.equals("request-leaf")?"local":"auto","server",digest);if(lease!=null)AndroidMTUMeasurementGate.release(lease);
-   var home=torOwner(f,exit,!fault.equals("unproved"));if(fault.equals("superseded"))torOwner(f,exit,true);if(fault.equals("generation"))AndroidHomeStateStore.advancePathGeneration(f.activity);if(fault.equals("selected"))f.prefs().edit().putString("selected_id","other").apply();if(fault.equals("emergency"))AndroidHomeStateStore.warning(f.activity,"Emergency Disconnect requested; retained");if(fault.equals("write-failure"))AndroidPrivateFileStore.failWrite=true;
-   check(!AndroidStartupPolicy.recordTorExecution(f.activity,prepared,home)&&!Files.exists(f.dir.resolve("startup-tor-last-v1.json")),"unowned or uncommitted Tor Last receipt persisted: "+fault);
+   var prepared=AndroidStartupPolicy.prepareExternalExecution(f.activity,f.nodes.file(ENTRY),exit,"max-tls-awg",fault.equals("request-leaf")?"local":"auto","server",digest);if(lease!=null)AndroidMTUMeasurementGate.release(lease);
+   var home=externalOwner(f,exit,!fault.equals("unproved"));if(fault.equals("superseded"))externalOwner(f,exit,true);if(fault.equals("generation"))AndroidHomeStateStore.advancePathGeneration(f.activity);if(fault.equals("selected"))f.prefs().edit().putString("selected_id","other").apply();if(fault.equals("emergency"))AndroidHomeStateStore.warning(f.activity,"Emergency Disconnect requested; retained");if(fault.equals("write-failure"))AndroidPrivateFileStore.failWrite=true;
+   check(!AndroidStartupPolicy.recordExternalExecution(f.activity,prepared,home)&&!Files.exists(f.dir.resolve("startup-tor-last-v1.json")),"unowned or uncommitted external Last receipt persisted: "+fault);
   }
  }
  static void externalStartup(Path root)throws Exception{
@@ -250,7 +303,7 @@ public final class StartupTest {
    check(f.cb.ok&&runtime.starts==1&&runtime.execution.equals("server")&&runtime.mode.equals("max-tls-awg")&&runtime.exit.protocol.equals(protocol)&&runtime.exit.secret.equals(e.secret),"Tor startup replaced captured Server execution or source");
   }
   for(String change:new String[]{"key","dns","startup","removed","kind","selected","entry-bytes","entry-mode","execution","direct","idle","foreign-vpn"})for(boolean restore:new boolean[]{false,true}){
-   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry e=external(f,"shadowsocks","last",true,"auto");Bundle state=f.request();
+   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry e=external(f,"shadowsocks","auto",true,"auto");Bundle state=f.request();
    if(change.equals("key"))e.secret="changed";if(change.equals("dns"))e.policy="changed-dns";if(change.equals("startup"))e.autoConnect=false;AndroidStandardExitStore.saved.put(e.id,AndroidStandardExitStore.copy(e));
    if(change.equals("removed"))AndroidStandardExitStore.saved.clear();if(change.equals("kind"))f.prefs().edit().putString("selected_kind","router-vpn").apply();if(change.equals("selected"))f.prefs().edit().putString("selected_id",FIRST).apply();if(change.equals("entry-bytes"))Files.writeString(f.nodes.file(ENTRY).toPath(),"changed");
    if(change.equals("entry-mode"))f.prefs().edit().putString("multihop_entry_mode","wg").apply();if(change.equals("execution"))f.prefs().edit().putString("multihop_execution","local").apply();if(change.equals("direct"))f.prefs().edit().putBoolean("multihop_on",false).apply();if(change.equals("idle"))AndroidHomeStateStore.advancePathGeneration(f.activity);if(change.equals("foreign-vpn"))Context.connectivity.vpn=true;
@@ -286,7 +339,7 @@ public final class StartupTest {
    boolean rejected=false;try{f.capture();}catch(Exception expected){rejected=true;}check(rejected&&f.starts()==0&&AndroidRuntimeRegistry.instance.standardExit.starts==0,"invalid ordinary startup acquired private authority: "+invalid);
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);defaults(root);missingTorLast(root);permission(root);changes(root);graph(root);receipts(root);settings(root);activity(root);torLastReceipts(root);externalStartup(root);ordinaryStartup(root);System.out.println("Android startup: "+checks+" shipping policy, Activity, Settings, permission and receipt checks PASS");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);defaults(root);missingExternalLast(root);permission(root);changes(root);graph(root);receipts(root);strictReceipts(root);settings(root);activity(root);externalLastReceipts(root);externalStartup(root);ordinaryStartup(root);System.out.println("Android startup: "+checks+" shipping policy, Activity, Settings, permission and receipt checks PASS");}
 }
 '''
 
@@ -302,7 +355,14 @@ def main():
     ui['android/net/ConnectivityManager.java']='package android.net;public final class ConnectivityManager {public boolean vpn;final Network physical=new Network(),other=new Network();public Network getActiveNetwork(){return physical;}public Network[] getAllNetworks(){return vpn?new Network[]{physical,other}:new Network[]{physical};}public NetworkCapabilities getNetworkCapabilities(Network n){return new NetworkCapabilities(vpn&&n==other);}}'
     ui['com/wireguard/android/backend/Tunnel.java']='package com.wireguard.android.backend;public interface Tunnel{enum State{UP,DOWN}}'
     ui['org/amnezia/awg/backend/Tunnel.java']='package org.amnezia.awg.backend;public interface Tunnel{enum State{UP,DOWN}}'
+    ui['io/nekohasekai/libbox/Libbox.java']=PRIVATE_JSON_JAVA
     boundaries=P.BOUNDARIES.replace('import android.content.Context;', 'import android.content.Context;import android.content.SharedPreferences;')
+    # Receipt ownership covers every externally authenticated protocol. The
+    # runtime/graph suites compile actual provider/pairing admission; this
+    # boundary marks a fully validated response contract without minting one.
+    old='e.protocol.equals("shadowsocks")||e.protocol.equals("openvpn")&&!e.responseMap.isEmpty()||AndroidTorProfile.isTor(e.protocol)'
+    assert boundaries.count(old)==1
+    boundaries=boundaries.replace(old,'AndroidExternalPolicy.supports(e.protocol)&&!e.responseMap.isEmpty()||AndroidTorProfile.isTor(e.protocol)')
     boundaries=boundaries.replace('int starts;String mode,execution=', 'int starts,restores;String mode,execution=').replace('winner,Callback cb){connect(f,e,mode,execution,cb);selected=winner;}', 'winner,Callback cb){restores++;connect(f,e,mode,execution,cb);selected=winner;}')
     for name in ('AndroidStartupPolicy','AndroidHomeStateStore'):boundaries=replace_class(boundaries,name,'')
     if 'final class AndroidExternalPolicy ' in boundaries:boundaries=replace_class(boundaries,'AndroidExternalPolicy','')
@@ -328,30 +388,38 @@ def main():
         extracted.append(product[start:end])
     resume=product.split('    @Override protected void onResume(',1)[1].split('\n    @Override',1)[0]
     assert 'applyStartupPolicy(' not in resume and 'coldLaunch(' not in resume, 'resume must never rearm startup'
-    with tempfile.TemporaryDirectory(prefix='routervpn-startup-') as directory:
+    with tempfile.TemporaryDirectory(prefix='routervpn-startup-') as directory, tempfile.TemporaryDirectory(prefix='.startup-json-',dir=ROOT) as validator_directory:
         root=Path(directory)
+        # The exact exported gomobile parser, not a permissive JSON test double,
+        # sees raw duplicates/trailing content before Android JSONObject does.
+        validator_source=Path(validator_directory)/'main.go';validator_source.write_text(PRIVATE_JSON_GO)
+        validator=root/('private-json.exe' if os.name=='nt' else 'private-json')
+        subprocess.run(['go','build','-o',str(validator),str(validator_source)],cwd=ROOT,check=True,timeout=120)
         for path,source in ui.items():target=root/path;target.parent.mkdir(parents=True,exist_ok=True);target.write_text(source)
         app=root/'com/eabusham/routervpn';app.mkdir(parents=True)
         (app/'Boundaries.java').write_text(boundaries);(app/'StartupTest.java').write_text(HARNESS);(app/'StartupActivity.java').write_text(ACTIVITY.replace(' // SHIPPING_ACTIVITY_METHODS','\n'.join(extracted)))
         names=('AndroidMTUMeasurementGate.java','AndroidConnectionSelection.java','AndroidStartupPolicy.java','AndroidUnifiedConnectionController.java','AndroidHomeStateStore.java','AndroidProfileSelection.java','AndroidProfileSettingsDialog.java')
         for name in names:(app/name).write_bytes((JAVA/name).read_bytes())
         compile=['javac','--release','17','-encoding','UTF-8','-proc:none','-cp',str(jar),'-d',str(root/'classes'),*map(str,root.rglob('*.java'))]
-        run=['java','-cp',os.pathsep.join((str(root/'classes'),str(jar))),'com.eabusham.routervpn.StartupTest',str(root/'data')]
-        (root/'data').mkdir();subprocess.run(compile,check=True,timeout=45);subprocess.run(run,check=True,timeout=35)
+        run=['java','-Dfixture.privatejson='+str(validator),'-cp',os.pathsep.join((str(root/'classes'),str(jar))),'com.eabusham.routervpn.StartupTest',str(root/'data')]
+        (root/'data').mkdir();subprocess.run(compile,check=True,timeout=45);subprocess.run(run,check=True,timeout=60)
         controls=(
-            ('AndroidUnifiedConnectionController.java','execution,startup.lastExecution,bridge','execution,"local",bridge','Tor Last reran Compare or restored the wrong execution'),
-            ('AndroidStartupPolicy.java','lastExecution=lastTorExecution(context,path.entry.id,files.get(path.entry.id),saved,path.entryMode,path.execution);','lastExecution="server";','Tor Last without a source-bound winner reran Compare'),
-            ('AndroidStartupPolicy.java','.put("exit",external)','.put("exit",exit.id)','changed Tor Last source or receipt was accepted: exit-dns'),
-            ('AndroidStartupPolicy.java','.put("entry_sha256",profileIdentity(bundle))','.put("entry_sha256","unbound")','changed Tor Last source or receipt was accepted: entry-dns'),
-            ('AndroidStartupPolicy.java','.put("execution",requested)','.put("execution","auto")','changed Tor Last source or receipt was accepted: requested'),
-            ('AndroidStartupPolicy.java','||!capturedHome.sessionId.equals(home.sessionId)\n                        ||capturedHome.pathGeneration!=home.pathGeneration','||false','unowned or uncommitted Tor Last receipt persisted: superseded'),
-            ('AndroidStartupPolicy.java','if(AndroidMTUMeasurementGate.held()||entryFile==null','if(false||entryFile==null','unowned or uncommitted Tor Last receipt persisted: speed-lab'),
+            ('AndroidStartupPolicy.java','io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(raw);','/* mutation: raw duplicate and trailing validation omitted */','ambiguous single-node Last receipt accepted: duplicate-schema'),
+            ('AndroidStartupPolicy.java','!(schema instanceof Integer||schema instanceof Long)||((Number)schema).longValue()!=1','object.getInt("schema")!=1','ambiguous single-node Last receipt accepted: schema-text'),
+            ('AndroidStartupPolicy.java','if(!(object.opt(key) instanceof String))','if(false&&!(object.opt(key) instanceof String))','ambiguous single-node Last receipt accepted: wrong-text'),
+            ('AndroidUnifiedConnectionController.java','execution,startup.lastExecution,bridge','execution,"local",bridge','external Last reran Compare or restored the wrong execution'),
+            ('AndroidStartupPolicy.java','lastExecution=lastExternalExecution(context,path.entry.id,files.get(path.entry.id),saved,path.entryMode,path.execution);','lastExecution="server";','external Last without a source-bound winner reran Compare'),
+            ('AndroidStartupPolicy.java','.put("exit",external)','.put("exit",exit.id)','changed external Last source or receipt was accepted: exit-dns'),
+            ('AndroidStartupPolicy.java','.put("entry_sha256",profileIdentity(bundle))','.put("entry_sha256","unbound")','changed external Last source or receipt was accepted: entry-dns'),
+            ('AndroidStartupPolicy.java','.put("execution",requested)','.put("execution","auto")','changed external Last source or receipt was accepted: requested'),
+            ('AndroidStartupPolicy.java','||!capturedHome.sessionId.equals(home.sessionId)\n                        ||capturedHome.pathGeneration!=home.pathGeneration','||false','unowned or uncommitted external Last receipt persisted: superseded'),
+            ('AndroidStartupPolicy.java','if(AndroidMTUMeasurementGate.held()||entryFile==null','if(false||entryFile==null','unowned or uncommitted external Last receipt persisted: speed-lab'),
             ('AndroidUnifiedConnectionController.java','startup.requireCurrent(activity,nodeStore,this);startup.dispatched();','startup.dispatched();','stale startup capture started'),
             ('AndroidStartupPolicy.java','if(!Arrays.equals(captured.getValue(),AndroidPrivateFileStore.read(current,AndroidNodeStore.MAX_BUNDLE)))','if(false&&!Arrays.equals(captured.getValue(),AndroidPrivateFileStore.read(current,AndroidNodeStore.MAX_BUNDLE)))','stale startup capture started'),
             ('AndroidStartupPolicy.java','if(ordinaryEntry!=null&&(!ordinaryEntrySnapshot.equals(AndroidStandardExitStore.snapshot(ordinaryEntry))','if(false&&ordinaryEntry!=null&&(!ordinaryEntrySnapshot.equals(AndroidStandardExitStore.snapshot(ordinaryEntry))','stale ordinary startup capture started: captured-key'),
         )
         for name,old,new,assertion in controls:
-            target=app/name;original=target.read_text();assert original.count(old)==1,(name,old);target.write_text(original.replace(old,new));subprocess.run(compile,check=True,timeout=45,stdout=subprocess.PIPE,stderr=subprocess.PIPE);broken=subprocess.run(run,timeout=35,capture_output=True,text=True);target.write_text(original)
+            target=app/name;original=target.read_text();assert original.count(old)==1,(name,old);target.write_text(original.replace(old,new));subprocess.run(compile,check=True,timeout=45,stdout=subprocess.PIPE,stderr=subprocess.PIPE);broken=subprocess.run(run,timeout=60,capture_output=True,text=True);target.write_text(original)
             assert broken.returncode and assertion in broken.stderr,'startup negative control was not rejected at the intended assertion: '+name+'\n'+broken.stdout+broken.stderr
             print('Android startup negative control rejected: '+name)
 

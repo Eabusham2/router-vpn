@@ -238,6 +238,7 @@ assert args[1:]==['--native-package',os.environ['TOR_PACKAGE'],'--android-aar',o
                          'android/app/src/main/java/com/eabusham/routervpn/AndroidProfileSelection.java',
                          'android/app/src/main/java/com/eabusham/routervpn/AndroidPrivateFileStore.java',
                          'android/test_android_startup_policy.py',
+                         'mobile/routervpn_openvpn.go','internal/nativeopenvpn/pairing.go',
                          'android/test_android_external_permission.py','android/test_android_speed_lab_restore.py',
                          'android/app/src/main/java/com/eabusham/routervpn/AndroidTorPaddingReceipt.java',
                          'android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java',

@@ -67,7 +67,7 @@ final class LayeredVpnService {
     static final AtomicInteger discarded=new AtomicInteger();
     static boolean discardPreparedSession(Context context,String session){if(!"native-session".equals(session))throw new AssertionError("Discarded wrong session");discarded.incrementAndGet();return true;}
     static final AtomicInteger externalReads=new AtomicInteger();static volatile boolean externalHealthy=true;
-    static String externalExecution(String session,String exit){return "local";}
+    static String externalExecutionOverride="";static String externalExecution(String session,String exit){if(!externalHealthy||!"native-session".equals(session)||!"external".equals(exit))throw new IllegalStateException("wrong captured external execution");String execution=AndroidStandardExitController.lastExecution;return externalExecutionOverride.isEmpty()?(execution.equals("auto")?"server":execution.isEmpty()?"local":execution):externalExecutionOverride;}
     static final AtomicInteger torExecutionReads=new AtomicInteger();static String torExecutionOverride="";
     static String torExecution(String session,String exit){torExecutionReads.incrementAndGet();if(!torHealthy||!"native-session".equals(session)||!"external".equals(exit))throw new IllegalStateException("wrong captured Tor execution");return torExecutionOverride.isEmpty()?(AndroidStandardExitController.lastExecution.isEmpty()?"local":AndroidStandardExitController.lastExecution):torExecutionOverride;}
     static String externalExitIP(String session,String exit){externalReads.incrementAndGet();if(!externalHealthy||!"native-session".equals(session)||!"external".equals(exit))throw new IllegalStateException("wrong captured external owner");return "1.1.1.1";}
@@ -160,17 +160,17 @@ final class AndroidDirectStandardExitController {
 // Actual record serialization and source validation run in the startup suite.
 // This boundary checks the shipping runtime's proof/transaction/call ordering.
 final class AndroidStartupPolicy {
- static Object runtimeLock;static int prepared,writes;static TorLast last;static Runnable onPrepare;
- static final class TorLast{final String entryMode,requested,selected,digest;TorLast(String m,String r,String s,String d){entryMode=m;requested=r;selected=s;digest=d;}}
+ static Object runtimeLock;static int prepared,writes;static ExternalLast last;static Runnable onPrepare;
+ static final class ExternalLast{final String protocol,entryMode,requested,selected,digest;ExternalLast(String p,String m,String r,String s,String d){protocol=p;entryMode=m;requested=r;selected=s;digest=d;}}
  static void reset(Object owner){runtimeLock=owner;prepared=0;writes=0;last=null;onPrepare=null;}
- static TorLast prepareTorExecution(Context c,File file,AndroidStandardExitStore.Entry exit,String mode,String requested,String selected,String digest){
+ static ExternalLast prepareExternalExecution(Context c,File file,AndroidStandardExitStore.Entry exit,String mode,String requested,String selected,String digest){
   if(Thread.holdsLock(runtimeLock)||Thread.holdsLock(AndroidHomeStateStore.class))throw new AssertionError("private Last preparation ran under native/Home lock");
-  if(file==null||!AndroidTorProfile.isTor(exit.protocol)||!java.util.List.of("local","server").contains(selected)||LayeredVpnService.torReads.get()==0)throw new AssertionError("Last preparation has no captured native proof");
-  prepared++;if(onPrepare!=null)onPrepare.run();return new TorLast(mode,requested,selected,digest);
+  boolean tor=AndroidTorProfile.isTor(exit.protocol);if(file==null||!tor&&!AndroidExternalPolicy.supports(exit.protocol)||!java.util.List.of("local","server").contains(selected)||(tor?LayeredVpnService.torReads.get():LayeredVpnService.externalReads.get())==0)throw new AssertionError("Last preparation has no captured native proof");
+  prepared++;if(onPrepare!=null)onPrepare.run();return new ExternalLast(exit.protocol,mode,requested,selected,digest);
  }
- static boolean recordTorExecution(Context c,TorLast record,AndroidHomeStateStore.Snapshot owner){
+ static boolean recordExternalExecution(Context c,ExternalLast record,AndroidHomeStateStore.Snapshot owner){
   if(record==null)return false;
-  if(!Thread.holdsLock(runtimeLock)||owner!=AndroidHomeStateStore.current||!owner.connected||!owner.phase.equals("connected")||!LayeredVpnService.torHealthy)return false;
+  if(!Thread.holdsLock(runtimeLock)||owner!=AndroidHomeStateStore.current||!owner.connected||!owner.phase.equals("connected")||!(AndroidTorProfile.isTor(record.protocol)?LayeredVpnService.torHealthy:LayeredVpnService.externalHealthy))return false;
   writes++;last=record;return true;
  }
 }
@@ -276,7 +276,7 @@ public final class RuntimeTeardownHarness {
         final String kind;
         Owner(String kind) {
             this.kind=kind;AndroidTorCompareRuntime.runs=0;AndroidTorCompareRuntime.closes=0;AndroidTorCompareRuntime.cancels=0;AndroidTorCompareRuntime.failRun=false;AndroidTorCompareRuntime.failClose=false;AndroidTorCompareRuntime.chosen="server";AndroidStandardExitStore.saved.clear();AndroidTorProfile.ordinaryPreparations=0;AndroidTorProfile.lastOrdinary=null;AndroidTorProfile.beforePrepared=null;LayeredVpnService.selectedOverride="";LayeredVpnService.serverPins="{}";LayeredVpnService.staleCapture=false;AndroidMultihopController.changedSources.clear();AndroidMultihopController.lastPins="";LayeredVpnService.torReads.set(0);LayeredVpnService.torExecutionReads.set(0);LayeredVpnService.torExecutionOverride="";AndroidStandardExitController.lastExecution="";LayeredVpnService.torHealthy=true;publicProofs.set(0);
-            LayeredVpnService.externalReads.set(0);LayeredVpnService.externalHealthy=true;
+            LayeredVpnService.externalReads.set(0);LayeredVpnService.externalHealthy=true;LayeredVpnService.externalExecutionOverride="";
             LayeredVpnService.discarded.set(0);
             AndroidHomeStateStore.reset(); LayeredVpnService.mtuStarts.set(0); LayeredVpnService.mtuEntered=null;LayeredVpnService.mtuRelease=null;
             multihop="multihop".equals(kind)?new AndroidMultihopRuntime(context,engine):null;
@@ -381,9 +381,42 @@ public final class RuntimeTeardownHarness {
                 if(fault.equals("direct"))owner.connect(cb);else if(fault.equals("ordinary"))owner.external.connectOrdinary(ordinary("socks5"),torExit(),"local",cb);else owner.external.connect(new File("a".repeat(32)+".json"),torExit(),"wg","auto",cb);cb.awaitDone();check(AndroidStartupPolicy.prepared==0&&AndroidStartupPolicy.writes==0,"unproved or unrelated Tor path entered Last receipt");if(cb.ok)owner.disconnect();awaitIdle(owner);}
         });
     }
+    static void ordinaryLastRuntimeTests(){
+        for(String protocol:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"})for(String selected:new String[]{"local","server"}){
+            test(protocol+" Last records the exact fresh "+selected+" winner",()->{
+                try(Owner owner=new Owner("external")){AndroidStandardExitStore.Entry exit=new AndroidStandardExitStore.Entry();exit.protocol=protocol;LayeredVpnService.externalExecutionOverride=selected;Callback cb=new Callback(0);
+                    owner.external.connect(new File("a".repeat(32)+".json"),exit,"max-quic-awg","auto",cb);cb.awaitDone();
+                    check(cb.ok&&AndroidStartupPolicy.prepared==1&&AndroidStartupPolicy.writes==1,"successful ordinary path did not record exactly one proved Last winner");var record=AndroidStartupPolicy.last;
+                    check(record.protocol.equals(protocol)&&record.selected.equals(selected)&&record.requested.equals("auto")&&record.entryMode.equals("max-quic-awg")&&record.digest.equals(AndroidExternalPolicy.entryVersion),"ordinary Last receipt changed source or execution");
+                    check(publicProofs.get()==0&&LayeredVpnService.externalReads.get()>=4,"Last receipt replaced native selected DNS/proof");owner.disconnect();awaitIdle(owner);}
+            });
+            test(protocol+" Last restores "+selected+" without a second chooser or history write",()->{
+                try(Owner owner=new Owner("external")){AndroidStandardExitStore.Entry exit=new AndroidStandardExitStore.Entry();exit.protocol=protocol;Callback cb=new Callback(0);
+                    owner.external.restoreCaptured(new File("a".repeat(32)+".json"),exit,"max-tls-wg","auto",selected,cb);cb.awaitDone();
+                    check(cb.ok&&AndroidStartupPolicy.prepared==0&&AndroidStartupPolicy.writes==0&&AndroidStandardExitController.lastExecution.equals(selected),"ordinary restored path overwrote Last history or reran Compare");
+                    check(owner.external.capturedRequestedExecution(AndroidHomeStateStore.current).equals("auto")&&owner.external.capturedExternalExecution(AndroidHomeStateStore.current).equals(selected),"ordinary Last restoration lost requested and actual selection");owner.disconnect();awaitIdle(owner);}
+            });
+        }
+        for(String protocol:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"})for(String fault:new String[]{"proof","direct","temporary"})test(protocol+" Last excludes "+fault,()->{
+            try(Owner owner=new Owner("external")){AndroidStandardExitStore.Entry exit=new AndroidStandardExitStore.Entry();exit.protocol=protocol;Callback cb=new Callback(0);
+                if(fault.equals("proof"))LayeredVpnService.externalHealthy=false;Object lease=fault.equals("temporary")?AndroidMTUMeasurementGate.acquire():null;
+                try{if(fault.equals("direct"))owner.external.connectDirect(exit,cb);else owner.external.connect(new File("a".repeat(32)+".json"),exit,"wg","auto",cb);cb.awaitDone();}finally{if(lease!=null)AndroidMTUMeasurementGate.release(lease);}
+                check(AndroidStartupPolicy.prepared==0&&AndroidStartupPolicy.writes==0,"unproved or temporary ordinary path entered Last memory");if(cb.ok)owner.disconnect();awaitIdle(owner);}
+        });
+        test("ordinary Last captures temporary origin before queued startup",()->{
+            try(Owner owner=new Owner("external")){var field=AndroidStandardExitRuntime.class.getDeclaredField("executor");field.setAccessible(true);var executor=(java.util.concurrent.ExecutorService)field.get(owner.external);CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);
+                executor.submit(()->{entered.countDown();try{release.await();}catch(Exception e){throw new AssertionError(e);}});check(entered.await(3,TimeUnit.SECONDS),"queued ordinary temporary owner did not block");Object lease=AndroidMTUMeasurementGate.acquire();Callback cb=new Callback(0);
+                try{owner.external.connect(new File("a".repeat(32)+".json"),new AndroidStandardExitStore.Entry(),"wg","auto",cb);}finally{AndroidMTUMeasurementGate.release(lease);release.countDown();}cb.awaitDone();
+                check(cb.ok&&AndroidStartupPolicy.prepared==0&&AndroidStartupPolicy.writes==0,"late temporary ordinary completion entered Last memory after lease release");owner.disconnect();awaitIdle(owner);}
+        });
+        test("ordinary Last source preparation remains outside native teardown lock",()->{
+            try(Owner owner=new Owner("external")){CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);AndroidStartupPolicy.onPrepare=()->{entered.countDown();boolean interrupted=false;while(true)try{release.await();break;}catch(InterruptedException e){interrupted=true;}if(interrupted)Thread.currentThread().interrupt();};Callback cb=new Callback(0);
+                owner.external.connect(new File("a".repeat(32)+".json"),new AndroidStandardExitStore.Entry(),"wg","auto",cb);check(entered.await(3,TimeUnit.SECONDS),"ordinary Last preparation did not enter");try{owner.disconnect();check(!AndroidHomeStateStore.current.connected&&AndroidStartupPolicy.writes==0,"ordinary Disconnect waited on private Last preparation");}finally{release.countDown();}cb.awaitDone();check(!cb.ok&&AndroidStartupPolicy.writes==0,"retired ordinary source preparation blessed a late owner");awaitIdle(owner);}
+        });
+    }
     static void tests(String kind) {
         if("tor".equals(kind)){torTests();ordinaryTorTests();torCompareRuntimeTests();torLastRuntimeTests();}
-        if("external".equals(kind))externalTests();
+        if("external".equals(kind)){externalTests();ordinaryLastRuntimeTests();}
         {
             test(kind+" temporary cleanup retains its exact Home owner",()->{
                 try(Owner owner=new Owner(kind)){Callback cb=new Callback(0);owner.connect(cb);cb.awaitDone();check(cb.ok&&cb.ownerCalls==1&&cb.homeOwner.equals(AndroidHomeStateStore.current.sessionId),"runtime did not expose its exact captured Home owner");
@@ -727,16 +760,20 @@ with tempfile.TemporaryDirectory(prefix='routervpn-runtime-teardown-') as tmp:
     if not TARGETS or 'tor' in TARGETS:
         target=pkg/'AndroidStandardExitRuntime.java';original=target.read_text()
         controls=(
-            ('captured temporary origin','boolean rememberTor=restoredExecution.isEmpty()&&!AndroidMTUMeasurementGate.held();','boolean rememberTor=restoredExecution.isEmpty();','late temporary Tor completion entered Last memory after lease release'),
-            ('restored history','boolean rememberTor=restoredExecution.isEmpty()&&!AndroidMTUMeasurementGate.held();','boolean rememberTor=!AndroidMTUMeasurementGate.held();','Tor restored path overwrote Last history or reran Compare'),
-            ('proved runtime publication','AndroidStartupPolicy.recordTorExecution(context,last,capturedHome);','/* mutation: actual proved winner not persisted */','successful Tor path did not record exactly one proved Last winner'),
+            ('captured temporary origin','boolean rememberExternal=restoredExecution.isEmpty()&&!AndroidMTUMeasurementGate.held();','boolean rememberExternal=restoredExecution.isEmpty();','late temporary Tor completion entered Last memory after lease release'),
+            ('restored history','boolean rememberExternal=restoredExecution.isEmpty()&&!AndroidMTUMeasurementGate.held();','boolean rememberExternal=!AndroidMTUMeasurementGate.held();','Tor restored path overwrote Last history or reran Compare'),
+            ('proved runtime publication','AndroidStartupPolicy.recordExternalExecution(context,last,capturedHome);','/* mutation: actual proved winner not persisted */','successful Tor path did not record exactly one proved Last winner'),
         )
         for label,old,new,expected in controls:
-            assert original.count(old)==1,(label,'missing exact mutation anchor')
+            assert original.count(old)==(2 if label=='proved runtime publication' else 1),(label,'missing exact mutation anchor')
             target.write_text(original.replace(old,new))
             subprocess.run([javac,'-encoding','UTF-8','-d',str(classes),*[str(p) for p in base.rglob('*.java')]],check=True,timeout=30,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
             broken=subprocess.run([java,'-cp',str(classes),'com.eabusham.routervpn.RuntimeTeardownHarness','tor'],timeout=90,capture_output=True,text=True)
             target.write_text(original)
             assert broken.returncode and expected in broken.stdout+broken.stderr,(label,'did not reach intended runtime assertion',broken.stdout,broken.stderr)
             print('Android Tor Last runtime negative control rejected: '+label)
+            ordinary=subprocess.run([java,'-cp',str(classes),'com.eabusham.routervpn.RuntimeTeardownHarness','external'],timeout=90,capture_output=True,text=True)
+            ordinary_expected={'captured temporary origin':'late temporary ordinary completion entered Last memory after lease release','restored history':'ordinary restored path overwrote Last history or reran Compare','proved runtime publication':'successful ordinary path did not record exactly one proved Last winner'}[label]
+            assert ordinary.returncode and ordinary_expected in ordinary.stdout+ordinary.stderr,(label,'ordinary runtime mutation missed expected assertion',ordinary.stdout,ordinary.stderr)
+            print('Android ordinary Last runtime negative control rejected: '+label)
 print('Android actual-runtime teardown behavior: PASS')

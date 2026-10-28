@@ -24,7 +24,9 @@ import java.util.UUID;
 /** One cold-process startup decision. Permission state contains only its nonce;
  * exact private sources remain in this process and must still match at launch. */
 final class AndroidStartupPolicy {
-    private static final String PREFS="router-vpn-unified", LAST_FILE="startup-last-v1.json", TOR_LAST_FILE="startup-tor-last-v1.json";
+    private static final String PREFS="router-vpn-unified", LAST_FILE="startup-last-v1.json", EXTERNAL_LAST_FILE="startup-tor-last-v1.json";
+    // Retain the original receipt filename for upgrades. Its complete path
+    // digest already binds the exact exit protocol and all private sources.
     private static final int MAX_LAST=4096;
     private static final String[] CHOICES={"smart-auto","auto","last","manual"};
     private static boolean coldLaunchClaimed;
@@ -178,9 +180,9 @@ final class AndroidStartupPolicy {
         Map<String,byte[]> files=new LinkedHashMap<>();
         if(path.entry!=null)files.put(path.entry.id,AndroidPrivateFileStore.read(path.entry.file,AndroidNodeStore.MAX_BUNDLE));
         String lastExecution="";
-        if("last".equals(saved.startupMode)&&path.entry!=null&&AndroidTorProfile.isTor(saved.protocol)&&"auto".equals(path.execution)){
-            lastExecution=lastTorExecution(context,path.entry.id,files.get(path.entry.id),saved,path.entryMode,path.execution);
-            if(lastExecution.isEmpty())throw new IllegalStateException("Startup Last has no matching proved Tor execution. Choose Connect to run Compare both for this saved path.");
+        if("last".equals(saved.startupMode)&&path.entry!=null&&"auto".equals(path.execution)){
+            lastExecution=lastExternalExecution(context,path.entry.id,files.get(path.entry.id),saved,path.entryMode,path.execution);
+            if(lastExecution.isEmpty())throw new IllegalStateException("Startup Last has no matching proved external execution. Choose Connect to run Compare both for this saved path.");
         }
         Attempt capture=new Attempt(saved.startupMode,null,path.entry,null,saved,path.ordinaryEntry,path.entryMode,saved.protocol,path.execution,"","",selected,nodes.activeId(),idle,preferences,files,lastExecution);
         synchronized(AndroidStartupPolicy.class){if(pending!=null)throw new IllegalStateException("Another startup permission request is pending.");pending=capture;}
@@ -231,19 +233,19 @@ final class AndroidStartupPolicy {
      * private stores have their own mutation locks and must never be read while
      * holding the runtime adoption transaction. This choice is historical;
      * it is neither current path proof nor a cached measurement. */
-    static final class TorLast {
+    static final class ExternalLast {
         private final String entryID,exitID,protocol,entryMode,record;
         private final Map<String,Object> preferences;
-        private TorLast(String entryID,AndroidStandardExitStore.Entry exit,String entryMode,JSONObject record,Map<String,Object> preferences){
+        private ExternalLast(String entryID,AndroidStandardExitStore.Entry exit,String entryMode,JSONObject record,Map<String,Object> preferences){
             this.entryID=entryID;exitID=exit.id;protocol=exit.protocol;this.entryMode=entryMode;this.record=record.toString();
             this.preferences=Collections.unmodifiableMap(new LinkedHashMap<>(preferences));
         }
     }
 
-    static TorLast prepareTorExecution(Context context,File entryFile,AndroidStandardExitStore.Entry capturedExit,
+    static ExternalLast prepareExternalExecution(Context context,File entryFile,AndroidStandardExitStore.Entry capturedExit,
                                        String entryMode,String requested,String selected,String entryDigest){
         try{
-            if(AndroidMTUMeasurementGate.held()||entryFile==null||capturedExit==null||!AndroidTorProfile.isTor(capturedExit.protocol)
+            if(AndroidMTUMeasurementGate.held()||entryFile==null||capturedExit==null||!AndroidTorProfile.isTor(capturedExit.protocol)&&!AndroidExternalPolicy.supports(capturedExit.protocol)
                     ||!Arrays.asList("local","server").contains(selected)||!Arrays.asList("local","server","auto").contains(requested)
                     ||!"auto".equals(requested)&&!requested.equals(selected))return null;
             Map<String,Object> preferences=selectionPreferences(context);
@@ -257,16 +259,16 @@ final class AndroidStartupPolicy {
             byte[] entry=AndroidPrivateFileStore.read(entryFile,AndroidNodeStore.MAX_BUNDLE);
             if(entryDigest==null||!entryDigest.equals(AndroidTorProfile.digest(entry)))return null;
             JSONObject record=new JSONObject().put("schema",1).put("entry_id",path.entry.id).put("exit_id",capturedExit.id)
-                    .put("path_sha256",torPathIdentity(path.entry.id,entry,capturedExit,entryMode,requested)).put("selected_execution",selected);
+                    .put("path_sha256",externalPathIdentity(path.entry.id,entry,capturedExit,entryMode,requested)).put("selected_execution",selected);
             if(!preferences.equals(selectionPreferences(context)))return null;
-            return new TorLast(path.entry.id,capturedExit,entryMode,record,preferences);
+            return new ExternalLast(path.entry.id,capturedExit,entryMode,record,preferences);
         }catch(Exception unavailable){return null;}
     }
 
     /** Called only inside the exact runtime's Connected adoption. Temporary and
      * restored paths never prepare a record. No store or native call can wait
      * under this Home lock; Disconnect cannot bless an earlier owner. */
-    static boolean recordTorExecution(Context context,TorLast record,AndroidHomeStateStore.Snapshot capturedHome){
+    static boolean recordExternalExecution(Context context,ExternalLast record,AndroidHomeStateStore.Snapshot capturedHome){
         try{
             if(record==null)return false;
             synchronized(AndroidHomeStateStore.class){
@@ -277,24 +279,24 @@ final class AndroidStartupPolicy {
                         ||!record.entryID.equals(home.activeEntryId)||!record.entryMode.equals(home.activeEntryMode)
                         ||AndroidHomeStateStore.emergencyDisconnectPending(context)||AndroidHomeStateStore.actualExitForCurrentSession(context).isEmpty()
                         ||!record.preferences.equals(selectionPreferences(context)))return false;
-                AndroidPrivateFileStore.write(new File(context.getApplicationContext().getFilesDir(),TOR_LAST_FILE),record.record.getBytes(StandardCharsets.UTF_8),MAX_LAST);
+                AndroidPrivateFileStore.write(new File(context.getApplicationContext().getFilesDir(),EXTERNAL_LAST_FILE),record.record.getBytes(StandardCharsets.UTF_8),MAX_LAST);
                 return true;
             }
         }catch(Exception unavailable){return false;}
     }
 
-    private static String lastTorExecution(Context context,String entryID,byte[] entry,AndroidStandardExitStore.Entry exit,String mode,String requested){
+    private static String lastExternalExecution(Context context,String entryID,byte[] entry,AndroidStandardExitStore.Entry exit,String mode,String requested){
         try{
-            JSONObject saved=new JSONObject(AndroidTorProfile.strictText(AndroidPrivateFileStore.read(new File(context.getApplicationContext().getFilesDir(),TOR_LAST_FILE),MAX_LAST)));
+            JSONObject saved=lastObject(context,EXTERNAL_LAST_FILE,"entry_id","exit_id","path_sha256","selected_execution");
             String selected=saved.getString("selected_execution");
-            if(saved.length()!=5||saved.getInt("schema")!=1||!entryID.equals(saved.getString("entry_id"))||!exit.id.equals(saved.getString("exit_id"))
-                    ||!torPathIdentity(entryID,entry,exit,mode,requested).equals(saved.getString("path_sha256"))
+            if(!entryID.equals(saved.getString("entry_id"))||!exit.id.equals(saved.getString("exit_id"))
+                    ||!externalPathIdentity(entryID,entry,exit,mode,requested).equals(saved.getString("path_sha256"))
                     ||!Arrays.asList("local","server").contains(selected))return "";
             return selected;
         }catch(Exception absentOrStale){return "";}
     }
 
-    private static String torPathIdentity(String entryID,byte[] entry,AndroidStandardExitStore.Entry exit,String mode,String requested)throws Exception{
+    private static String externalPathIdentity(String entryID,byte[] entry,AndroidStandardExitStore.Entry exit,String mode,String requested)throws Exception{
         JSONObject bundle=new JSONObject(AndroidTorProfile.strictText(entry));AndroidNodeStore.validateBundle(bundle);
         JSONObject external=new JSONObject(AndroidStandardExitStore.snapshot(exit));
         external.remove("startup_mode");external.remove("auto_connect");
@@ -305,13 +307,24 @@ final class AndroidStartupPolicy {
 
     private static String lastRaw(Context context,String nodeID,JSONObject bundle){
         try{
-            File file=new File(context.getApplicationContext().getFilesDir(),LAST_FILE);
-            JSONObject saved=new JSONObject(AndroidTorProfile.strictText(AndroidPrivateFileStore.read(file,MAX_LAST)));
+            JSONObject saved=lastObject(context,LAST_FILE,"node_id","profile_sha256","raw_id");
             String raw=saved.getString("raw_id");
-            if(saved.length()!=4||saved.getInt("schema")!=1||!nodeID.equals(saved.getString("node_id"))
+            if(!nodeID.equals(saved.getString("node_id"))
                     ||!profileIdentity(bundle).equals(saved.getString("profile_sha256"))||!raw.matches("[a-z0-9][a-z0-9-]{0,95}"))return "";
             return raw;
         }catch(Exception absentOrStale){return "";}
+    }
+
+    private static JSONObject lastObject(Context context,String name,String...strings)throws Exception{
+        String raw=AndroidTorProfile.strictText(AndroidPrivateFileStore.read(new File(context.getApplicationContext().getFilesDir(),name),MAX_LAST));
+        // JSONObject otherwise collapses duplicate keys and coerces scalar
+        // types. Use the same raw parser as the private node store first.
+        io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(raw);
+        JSONObject object=new JSONObject(raw);Object schema=object.opt("schema");
+        if(object.length()!=strings.length+1||!(schema instanceof Integer||schema instanceof Long)||((Number)schema).longValue()!=1)
+            throw new IllegalArgumentException("Invalid historical connection receipt schema.");
+        for(String key:strings)if(!(object.opt(key) instanceof String))throw new IllegalArgumentException("Historical connection receipt requires exact text fields.");
+        return object;
     }
 
     private static String profileIdentity(JSONObject source)throws Exception {
