@@ -29,7 +29,9 @@ BUILD_INPUTS = frozenset(('deploy/build-server-tor.py', 'deploy/build-mobile-tor
                           'server/scripts/server_tor_package.py', 'mobile/torpack/sources.json',
                           'deploy/apply-tor-padding.py', 'mobile/tor/padding-source-lock.json',
                           'mobile/tor/padding-integration.patch', 'mobile/tor/routervpn_padding.c',
-                          'mobile/tor/routervpn_padding.h', 'mobile/tor/test_routervpn_padding.c'))
+                          'mobile/tor/routervpn_padding.h', 'mobile/tor/test_routervpn_padding.c',
+                          'mobile/tor/routervpn_lastrelay.c', 'mobile/tor/routervpn_lastrelay.h',
+                          'mobile/tor/test_routervpn_lastrelay.c'))
 STATIC_DEPENDENCIES = frozenset(('libssl.a', 'libcrypto.a', 'libevent.a', 'libz.a'))
 SERVER_KEY = b'Tor safe cookie authentication server-to-controller hash'
 CLIENT_KEY = b'Tor safe cookie authentication controller-to-server hash'
@@ -148,7 +150,38 @@ def offline_receipt():
             'process_and_listener_identity': True, 'disabled_network_retained': True,
             'pt_socket_configuration': True, 'owning_controller_exit': True,
             'owned_padding_capability': True, 'padding_rejected_while_disabled': True,
-            'padding_without_owner_rejected': True}
+            'padding_without_owner_rejected': True, 'owned_lastrelay_capability': True,
+            'lastrelay_rejected_while_disabled': True, 'lastrelay_without_owner_rejected': True}
+
+
+def lastrelay_offline_check(owner, *, owning):
+    """Execute the private prerequisite with networking disabled throughout.
+
+    The result proves a compiled owner-only capability and rejects absent
+    anchors. It does not claim a public circuit, HTTP response, or latency.
+    """
+    capability = ('250 version=1 transport=begindir min_ttl_ms=100 '
+                  'max_ttl_ms=10000 max_response_bytes=8192 generation_highwater=0')
+    if not owning:
+        if owner.command('ROUTERVPN_LASTRELAY INFO') != [
+                '551 Last-relay probe requires its owning controller']:
+            raise ValueError('Tor last-relay capability accepted a non-owning controller')
+        return
+    if owner.success('GETCONF DisableNetwork') != ['250 DisableNetwork=1']:
+        raise ValueError('Tor last-relay offline check requires disabled networking')
+    if owner.success('ROUTERVPN_LASTRELAY INFO') != [capability]:
+        raise ValueError('Tor last-relay native capability is missing or changed')
+    identity = 'a' * 64 + ' ' + 'b' * 64
+    isolation = 'c' * 64 + ' ' + 'd' * 64
+    anchor = 'ROUTERVPN_LASTRELAY ANCHOR ' + identity + ' ' + isolation + ' 127.0.0.1 41000 1.1.1.1 443'
+    if owner.command(anchor) != ['551 Last-relay anchor is absent, ambiguous or retired']:
+        raise ValueError('Tor last-relay discovery accepted an absent disabled anchor')
+    capture = 'ROUTERVPN_LASTRELAY CAPTURE ' + identity + ' 1 10000 1 ' + isolation + ' ' + 'e' * 64
+    if owner.command(capture) != ['551 Last-relay capture is not eligible or current']:
+        raise ValueError('Tor last-relay capture ignored disabled networking')
+    if (owner.success('ROUTERVPN_LASTRELAY INFO') != [capability] or
+            owner.success('GETCONF DisableNetwork') != ['250 DisableNetwork=1']):
+        raise ValueError('Tor last-relay rejection changed the disabled owner or generation')
 
 
 def valid_hash(value):
@@ -190,14 +223,18 @@ def verify(prefix, target, source_root=None):
                             patch_sha256=inputs['mobile/tor/padding-integration.patch'])
     if (not isinstance(padding, dict) or type(padding.get('version')) is not int or
             padding != expected_padding or record.get('padding_native_tests') is not True or
+            record.get('lastrelay_native_tests') is not True or
             inputs['mobile/tor/padding-source-lock.json'] != digest(raw_padding) or
             type(padding_lock.get('schema')) is not int or padding_lock.get('schema') != 1 or
             type(padding_lock.get('version')) is not int or padding_lock.get('version') != 1 or
             padding_lock.get('tor_commit') != expected_padding['tor_commit'] or
             padding_lock.get('patch_sha256') != expected_padding['patch_sha256'] or
-            not isinstance(padding_lock.get('copies'), dict) or len(padding_lock['copies']) != 3):
+            not isinstance(padding_lock.get('copies'), dict) or len(padding_lock['copies']) != 6 or
+            padding_lock.get('extensions') != {'circuit_cover': 1, 'last_relay_probe': 1} or
+            any(type(version) is not int for version in padding_lock['extensions'].values())):
         raise ValueError('Standalone Tor outgoing padding receipt is incomplete')
-    for name in ('routervpn_padding.c', 'routervpn_padding.h', 'test_routervpn_padding.c'):
+    for name in ('routervpn_padding.c', 'routervpn_padding.h', 'test_routervpn_padding.c',
+                 'routervpn_lastrelay.c', 'routervpn_lastrelay.h', 'test_routervpn_lastrelay.c'):
         path = 'mobile/tor/' + name
         entry = padding_lock.get('copies', {}).get(path)
         if not isinstance(entry, dict) or entry.get('sha256') != inputs[path]:
@@ -362,6 +399,7 @@ def offline_self_test(binary, target):
                     wrong.close()
                 owner = Control(control_path)
                 owner.authenticate(cookie_path)
+                lastrelay_offline_check(owner, owning=False)
                 if owner.command('ROUTERVPN_PADDING INFO') != ['551 Padding requires the owning controller']:
                     raise ValueError('Standalone Tor padding accepted a non-owning controller')
                 info = owner.success('GETINFO process/pid net/listeners/control net/listeners/socks net/listeners/dns net/listeners/trans traffic/read traffic/written')
@@ -379,6 +417,7 @@ def offline_self_test(binary, target):
                               '250-Bridge=obfs4 192.0.2.1:443', '250 DisableNetwork=1']:
                     raise ValueError('Standalone Tor did not retain the owned PT socket configuration')
                 owner.success('TAKEOWNERSHIP')
+                lastrelay_offline_check(owner, owning=True)
                 capability = owner.success('ROUTERVPN_PADDING INFO')
                 if capability != ['250 version=1 direction=outgoing min_rate_kbps=32 max_rate_kbps=192 '
                                   'default_rate_kbps=192 max_ttl_ms=10000 max_pending_cells=1 '

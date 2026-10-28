@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Apply the versioned circuit-cover extension to the exact pinned Tor source.
+"""Apply the versioned native extensions to the exact pinned Tor source.
+
+The existing lock filename now covers both circuit cover and the private
+last-relay BEGIN_DIR prerequisite. Shared relay/control hooks have one exact
+final state; the extensions cannot be independently overlaid or certified.
 
 The embedding and standalone builders use this same function. A changed,
 partially patched, linked or merely similar upstream source is never accepted.
@@ -52,7 +56,9 @@ def lock():
         raise ValueError('Tor padding and the native source lock must advance together')
     if sha(PATCH) != value['patch_sha256']:
         raise ValueError('Tor padding integration patch checksum differs from its lock')
-    if len(value['files']) != 9 or len(value['copies']) != 3:
+    if len(value['files']) != 11 or len(value['copies']) != 6 or \
+            value.get('extensions') != {'circuit_cover': 1, 'last_relay_probe': 1} or \
+            any(type(version) is not int for version in value['extensions'].values()):
         raise ValueError('Tor padding source closure is incomplete')
     for name, record in value['copies'].items():
         if sha(regular(ROOT, name)) != record['sha256']:

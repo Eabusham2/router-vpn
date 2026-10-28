@@ -27,17 +27,94 @@
    /* Timestamp for transmission */
    channel_timestamp_xmit(chan);
    /* Update the counter */
+--- a/src/core/or/connection_edge.c
++++ b/src/core/or/connection_edge.c
+@@ -69,6 +69,7 @@
+ #include "core/or/circuituse.h"
+ #include "core/or/circuitpadding.h"
+ #include "core/or/connection_edge.h"
++#include "feature/control/routervpn_lastrelay.h"
+ #include "core/or/congestion_control_flow.h"
+ #include "core/or/conflux_util.h"
+ #include "core/or/circuitstats.h"
+@@ -1096,6 +1097,7 @@
+ void
+ connection_ap_about_to_close(entry_connection_t *entry_conn)
+ {
++  routervpn_lastrelay_connection_closed(entry_conn);
+   circuit_t *circ;
+   edge_connection_t *edge_conn = ENTRY_TO_EDGE_CONN(entry_conn);
+   connection_t *conn = ENTRY_TO_CONN(entry_conn);
+@@ -1637,6 +1639,10 @@
+                                origin_circuit_t *circ,
+                                int reason)
+ {
++  if (conn->routervpn_lastrelay) {
++    routervpn_lastrelay_fail(conn, "no-retry");
++    return -1;
++  }
+   control_event_stream_status(conn, STREAM_EVENT_FAILED_RETRIABLE, reason);
+   ENTRY_TO_CONN(conn)->timestamp_last_read_allowed = time(NULL);
+ 
+@@ -2166,12 +2172,23 @@
+   connection_t *base_conn = ENTRY_TO_CONN(conn);
+   time_t now = time(NULL);
+   rewrite_result_t rr;
++  int routervpn_private = routervpn_lastrelay_attach(conn, circ, cpath);
++  if (routervpn_private != -2)
++    return routervpn_private;
+ 
+   /* First we'll do the rewrite part.  Let's see if we get a reasonable
+    * answer.
+    */
+   memset(&rr, 0, sizeof(rr));
+   connection_ap_handshake_rewrite(conn,&rr);
++
++  /* A mapped alias is never a last-relay capability. Consume the reserved
++   * namespace after mapping too, before DNS or ordinary circuit selection. */
++  if (routervpn_lastrelay_reserved(socks->address)) {
++    conn->routervpn_lastrelay = 1;
++    connection_mark_unattached_ap(conn, END_STREAM_REASON_CANT_ATTACH);
++    return -1;
++  }
+ 
+   if (rr.should_close) {
+     /* connection_ap_handshake_rewrite told us to close the connection:
+@@ -3472,6 +3489,11 @@
+      * Make sure its path length is anonymous, or that we're in a
+      * non-anonymous mode. */
+     assert_circ_anonymity_ok(circ, options);
++  } else if (begin_type == RELAY_COMMAND_BEGIN_DIR && ap_conn->routervpn_lastrelay) {
++    if (!routervpn_lastrelay_current(ap_conn))
++      return -1;
++    assert_circ_anonymity_ok(circ, options);
++    ap_conn->may_use_optimistic_data = 0;
+   } else if (begin_type == RELAY_COMMAND_BEGIN_DIR) {
+     /* This connection is a begindir directory connection.
+      * Look at the linked directory connection to access the directory purpose.
+--- a/src/core/or/entry_connection_st.h
++++ b/src/core/or/entry_connection_st.h
+@@ -77,6 +77,8 @@
+   /** True iff this stream should use a BEGIN_DIR relay command to establish
+    * itself rather than BEGIN (either via onehop or via a whole circuit). */
+   unsigned int use_begindir:1;
++  /* Private captured BEGIN_DIR stream; never eligible for ordinary retry. */
++  unsigned int routervpn_lastrelay:1;
+ 
+   /** For AP connections only. If 1, and we fail to reach the chosen exit,
+    * stop requiring it. */
 --- a/src/core/or/relay.c
 +++ b/src/core/or/relay.c
-@@ -78,6 +78,7 @@
+@@ -78,6 +78,8 @@
  #include "core/or/policies.h"
  #include "core/or/reasons.h"
  #include "core/or/relay.h"
 +#include "feature/control/routervpn_padding.h"
++#include "feature/control/routervpn_lastrelay.h"
  #include "core/crypto/relay_crypto.h"
  #include "feature/rend/rendcommon.h"
  #include "feature/nodelist/describe.h"
-@@ -652,6 +653,8 @@
+@@ -652,6 +654,8 @@
      cell_direction = CELL_DIRECTION_IN;
    }
  
@@ -46,7 +123,41 @@
    log_debug(LD_OR,"delivering %d cell %s.", relay_command,
              cell_direction == CELL_DIRECTION_OUT ? "forward" : "backward");
  
-@@ -2686,6 +2689,7 @@
+@@ -2083,6 +2087,20 @@
+   tor_assert(msg);
+   tor_assert(circ);
+ 
++  relay_msg_t routervpn_message;
++  if (conn && conn->base_.type == CONN_TYPE_AP &&
++      EDGE_TO_ENTRY_CONN(conn)->routervpn_lastrelay) {
++    if (routervpn_lastrelay_receive(conn, msg, circ, layer_hint) < 0)
++      return 0;
++    if (msg->command == RELAY_COMMAND_CONNECTED) {
++      /* The directory-stream specification requires ignoring its body. */
++      routervpn_message = *msg;
++      routervpn_message.length = 0;
++      routervpn_message.body = NULL;
++      msg = &routervpn_message;
++    }
++  }
++
+ //  log_fn(LOG_DEBUG,"command %d stream %d", rh.command, rh.stream_id);
+   num_seen++;
+   log_debug(domain, "Now seen %d relay cells here (command %d, stream %d).",
+@@ -2410,6 +2428,12 @@
+     buf_add(entry_conn->pending_optimistic_data, payload, length);
+   }
+ 
++  if (entry_conn && entry_conn->routervpn_lastrelay &&
++      routervpn_lastrelay_send(conn, payload, length) < 0) {
++    /* The private owner already revoked and closed this exact stream. */
++    return 0;
++  }
++
+   /* Send a data cell. This handles the circuit package window. */
+   if (connection_edge_send_command(conn, RELAY_COMMAND_DATA,
+                                    payload, length) < 0 ) {
+@@ -2686,6 +2710,7 @@
  static inline void
  packed_cell_free_unchecked(packed_cell_t *cell)
  {
@@ -54,7 +165,7 @@
    --total_cells_allocated;
    tor_free(cell);
  }
-@@ -2760,6 +2764,7 @@
+@@ -2760,6 +2785,7 @@
    copy->inserted_timestamp = monotime_coarse_get_stamp();
  
    cell_queue_append(queue, copy);
@@ -64,41 +175,45 @@
  /** Initialize <b>queue</b> as an empty cell queue. */
 --- a/src/feature/control/control.c
 +++ b/src/feature/control/control.c
-@@ -46,6 +46,7 @@
+@@ -46,6 +46,8 @@
  #include "feature/control/control.h"
  #include "feature/control/control_auth.h"
  #include "feature/control/control_cmd.h"
 +#include "feature/control/routervpn_padding.h"
++#include "feature/control/routervpn_lastrelay.h"
  #include "feature/control/control_events.h"
  #include "feature/control/control_proto.h"
  #include "feature/hs/hs_common.h"
-@@ -232,6 +233,7 @@
+@@ -232,6 +234,8 @@
  {
    tor_assert(conn);
  
 +  routervpn_padding_owner_closed(conn);
++  routervpn_lastrelay_owner_closed(conn);
    conn->event_mask = 0;
    control_update_global_event_mask();
  
-@@ -621,6 +623,7 @@
+@@ -621,6 +625,8 @@
  void
  control_free_all(void)
  {
 +  routervpn_padding_free_all();
++  routervpn_lastrelay_free_all();
    control_auth_free_all();
    control_events_free_all();
    control_cmd_free_all();
 --- a/src/feature/control/control_cmd.c
 +++ b/src/feature/control/control_cmd.c
-@@ -28,6 +28,7 @@
+@@ -28,6 +28,8 @@
  #include "feature/control/control.h"
  #include "feature/control/control_auth.h"
  #include "feature/control/control_cmd.h"
 +#include "feature/control/routervpn_padding.h"
++#include "feature/control/routervpn_lastrelay.h"
  #include "feature/control/control_hs.h"
  #include "feature/control/control_events.h"
  #include "feature/control/control_getinfo.h"
-@@ -486,6 +487,18 @@
+@@ -486,6 +488,28 @@
    return 0;
  }
  
@@ -114,82 +229,101 @@
 +  return routervpn_padding_command(conn, args);
 +}
 +
++static const control_cmd_syntax_t routervpn_lastrelay_syntax = {
++  .min_args = 1, .max_args = 9,
++};
++static int
++handle_control_routervpn_lastrelay(control_connection_t *conn,
++                                  const control_cmd_args_t *args)
++{
++  return routervpn_lastrelay_command(conn, args);
++}
++
  static const control_cmd_syntax_t takeownership_syntax = {
    .max_args = UINT_MAX, // This should probably become zero. XXXXX
  };
-@@ -522,6 +535,7 @@
+@@ -522,6 +546,8 @@
  {
    (void)args;
  
 +  routervpn_padding_owner_closed(conn);
++  routervpn_lastrelay_owner_closed(conn);
    conn->is_owning_control_connection = 0;
  
    log_info(LD_CONTROL, "Control connection %d has dropped ownership of this "
-@@ -2176,6 +2190,7 @@
+@@ -2176,6 +2202,8 @@
    ONE_LINE(saveconf, 0),
    ONE_LINE(signal, 0),
    ONE_LINE(takeownership, 0),
 +  ONE_LINE(routervpn_padding, CMD_FL_WIPE),
++  ONE_LINE(routervpn_lastrelay, CMD_FL_WIPE),
    ONE_LINE(dropownership, 0),
    ONE_LINE(mapaddress, 0),
    ONE_LINE(getinfo, 0),
-@@ -2233,6 +2248,11 @@
+@@ -2233,6 +2261,13 @@
    } else {
      if (BUG(err))
        tor_free(err);
 +    /* A configuration/lifecycle operation retires captured cover before
 +     * the operation or its reply. Re-enabling needs a new proved generation. */
 +    if (!strcmp(def->name, "setconf") || !strcmp(def->name, "resetconf") ||
-+        !strcmp(def->name, "+loadconf") || !strcmp(def->name, "signal"))
++        !strcmp(def->name, "+loadconf") || !strcmp(def->name, "signal")) {
 +      routervpn_padding_invalidate();
++      routervpn_lastrelay_invalidate();
++    }
      if (def->handler(conn, parsed_args))
        rv = 0;
  
 --- a/src/feature/control/include.am
 +++ b/src/feature/control/include.am
-@@ -10,6 +10,7 @@
+@@ -10,6 +10,8 @@
  	src/feature/control/control_auth.c	\
  	src/feature/control/control_bootstrap.c	\
  	src/feature/control/control_cmd.c	\
 +	src/feature/control/routervpn_padding.c	\
++	src/feature/control/routervpn_lastrelay.c	\
  	src/feature/control/control_hs.c	\
  	src/feature/control/control_events.c	\
  	src/feature/control/control_fmt.c	\
-@@ -27,6 +28,7 @@
+@@ -27,6 +29,8 @@
  	src/feature/control/control.h			\
  	src/feature/control/control_auth.h		\
  	src/feature/control/control_cmd.h		\
 +	src/feature/control/routervpn_padding.h		\
++	src/feature/control/routervpn_lastrelay.h		\
  	src/feature/control/control_hs.h		\
  	src/feature/control/control_cmd_args_st.h	\
  	src/feature/control/control_connection_st.h	\
 --- a/src/test/include.am
 +++ b/src/test/include.am
-@@ -141,6 +141,7 @@
+@@ -141,6 +141,8 @@
  	src/test/test_channel.c \
  	src/test/test_channelpadding.c \
  	src/test/test_circuitpadding.c \
 +	src/test/test_routervpn_padding.c \
++	src/test/test_routervpn_lastrelay.c \
  	src/test/test_channeltls.c \
  	src/test/test_checkdir.c \
  	src/test/test_circuitlist.c \
 --- a/src/test/test.c
 +++ b/src/test/test.c
-@@ -601,6 +601,7 @@
+@@ -601,6 +601,8 @@
    { "checkdir/", checkdir_tests },
    { "circuitbuild/", circuitbuild_tests },
    { "circuitpadding/", circuitpadding_tests },
 +  { "routervpn_padding/", routervpn_padding_tests },
++  { "routervpn_lastrelay/", routervpn_lastrelay_tests },
    { "circuitlist/", circuitlist_tests },
    { "circuitmux/", circuitmux_tests },
    { "circuitmux_ewma/", circuitmux_ewma_tests },
 --- a/src/test/test.h
 +++ b/src/test/test.h
-@@ -97,6 +97,7 @@
+@@ -97,6 +97,8 @@
  extern struct testcase_t channel_tests[];
  extern struct testcase_t channelpadding_tests[];
  extern struct testcase_t circuitpadding_tests[];
 +extern struct testcase_t routervpn_padding_tests[];
++extern struct testcase_t routervpn_lastrelay_tests[];
  extern struct testcase_t channeltls_tests[];
  extern struct testcase_t checkdir_tests[];
  extern struct testcase_t circuitbuild_tests[];

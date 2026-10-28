@@ -128,7 +128,7 @@ def compile_sources(work, source, target, jobs):
     run(['./configure', *CONFIGURE, '--with-openssl-dir=' + str(prefix), '--with-libevent-dir=' + str(prefix),
          '--with-zlib-dir=' + str(prefix)], directory=source['tor'], env=env, log=work / 'tor-configure.log')
     run(['make', '-j' + str(jobs), 'src/app/tor', 'src/test/test'], directory=source['tor'], env=env, log=work / 'tor-build.log')
-    run(['./src/test/test', 'routervpn_padding/..', 'relaycrypt/..', 'cellqueue/..'],
+    run(['./src/test/test', 'routervpn_padding/..', 'routervpn_lastrelay/..', 'relaycrypt/..', 'cellqueue/..'],
         directory=source['tor'], env=env, log=work / 'tor-padding-native-tests.log', timeout=30)
     PADDING.verify(source['tor'])
     binary = source['tor'] / 'src/app/tor'
@@ -159,6 +159,7 @@ def package(binary, source, work, stage, target, lock, libraries, env):
                   build_inputs=source_records, sources=lock['sources'],
                   process_source_sha256=unpatched_process(source['tor'], lock),
                   padding_extension=PADDING.verify(source['tor']), padding_native_tests=True,
+                  lastrelay_native_tests=True,
                   embedded_process_patches=False, dependency_linkage='static', static_dependencies=libraries,
                   executable=dict(path=VERIFY.EXECUTABLE, sha256=ARCHIVES.sha(destination),
                                   size=destination.stat().st_size, **VERIFY.elf_identity(destination.read_bytes(), target)),

@@ -38,7 +38,8 @@ cannot be consumed as a completed package. Each actual Windows runner validates
 the entire source/file closure, executes the tests, then seals its own platform
 receipt. Linux and macOS compile and execute on their actual architecture.
 
-The native test selectors are `routervpn_padding/..`, `relaycrypt/..`, and
+The native test selectors are `routervpn_padding/..`, `routervpn_lastrelay/..`,
+`relaycrypt/..`, and
 `cellqueue/..`. The separate test executable is CI material and never enters the
 installed native payload. Tor's Linux test executable may use the host C loader;
 the installed Tor executable still requires fully static linkage.

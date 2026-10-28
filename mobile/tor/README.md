@@ -7,6 +7,12 @@ import grammar and never launches a process.
 
 ## Native ownership
 
+The pinned native source also contains the captured last-relay `BEGIN_DIR`
+prerequisite. It shares the exact final patch/source lock with circuit cover;
+see [the last-relay probe contract](../../docs/TOR-LAST-RELAY-PROBE.md). Its
+owner-only capability and offline native tests do not by themselves enable
+public Local / Server / Compare behavior.
+
 A mobile process starts exactly one resident Tor thread. The generated resident
 arguments contain no bridge credentials, no PT bindings, no active SOCKS port,
 and `DisableNetwork=1`. The caller claims one preauthenticated Unix socketpair

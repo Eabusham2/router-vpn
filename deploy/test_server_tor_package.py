@@ -118,7 +118,11 @@ def package_checks(prefix, target, source_root, temporary):
     for replacement in (False, 1, 'true'):
         receipt('fabricated native cell tests', lambda value, data=replacement: value.update(padding_native_tests=data),
                 'outgoing padding receipt is incomplete')
+        receipt('fabricated native last-relay tests', lambda value, data=replacement: value.update(lastrelay_native_tests=data),
+                'outgoing padding receipt is incomplete')
         receipt('fabricated native capability proof', lambda value, data=replacement: value['offline_self_test'].update(owned_padding_capability=data),
+                'offline control receipt is incomplete')
+        receipt('fabricated last-relay capability proof', lambda value, data=replacement: value['offline_self_test'].update(owned_lastrelay_capability=data),
                 'offline control receipt is incomplete')
     receipt('changed outgoing scope', lambda value: value['padding_extension'].update(direction='bidirectional'),
             'outgoing padding receipt is incomplete')

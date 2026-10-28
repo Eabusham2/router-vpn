@@ -1,5 +1,13 @@
 {
   "copies": {
+    "mobile/tor/routervpn_lastrelay.c": {
+      "sha256": "f51b8e6a2954626c8008c7b0c833da5dca1cbb8a9c88bc80e2b2d51cf26f1f74",
+      "target": "src/feature/control/routervpn_lastrelay.c"
+    },
+    "mobile/tor/routervpn_lastrelay.h": {
+      "sha256": "9efd6af249afef0cbdb1313809766b43040073859f72736c388e9cda54305099",
+      "target": "src/feature/control/routervpn_lastrelay.h"
+    },
     "mobile/tor/routervpn_padding.c": {
       "sha256": "1c55f2c4e6a290d570345332af5f6aa284541251795d1722965bcf5a39ddf044",
       "target": "src/feature/control/routervpn_padding.c"
@@ -8,10 +16,18 @@
       "sha256": "eb486e64eada57742cb2749d9c84f1d7566f771fa10d23200a22d45ff3f08468",
       "target": "src/feature/control/routervpn_padding.h"
     },
+    "mobile/tor/test_routervpn_lastrelay.c": {
+      "sha256": "9052087bbaf451b1396ff85b584e196ce6ec1ca1e4d429299776a5c210f6c866",
+      "target": "src/test/test_routervpn_lastrelay.c"
+    },
     "mobile/tor/test_routervpn_padding.c": {
       "sha256": "580b2abdb3cff38cb0a2effb211774fe29c3dd63ad0c3b5b5f6aaad943aea929",
       "target": "src/test/test_routervpn_padding.c"
     }
+  },
+  "extensions": {
+    "circuit_cover": 1,
+    "last_relay_probe": 1
   },
   "files": {
     "src/core/or/cell_queue_st.h": {
@@ -22,36 +38,44 @@
       "original": "518c3b50ee7a2784fabb16d3ba83d6aa6310aad757e403b5e93bde180ffb5e72",
       "patched": "5b88f9aa8efe63a26aa27bb12ce8c5180e9665d31b37a2965c4b90c8f036c6c5"
     },
+    "src/core/or/connection_edge.c": {
+      "original": "9da06b2657de46ecf4e8b9f84fa7f5f506f96128447733707fd81e399c5487dd",
+      "patched": "803599bf26af4fb160190a71209db65f6d3b02f225d2e3388423b338ff78d2f2"
+    },
+    "src/core/or/entry_connection_st.h": {
+      "original": "95ad9a93093b74eaa0659e7ec6f380964b271cee1d6a34efa408498e0839c8fa",
+      "patched": "931a3360c04e60c197115f6e65ffdf8abb6bdddadb56a0e83253d8ccfc1a9183"
+    },
     "src/core/or/relay.c": {
       "original": "faafc82b3c72f3be7a7048142068233b762ab70d477b7d3a2d6824d49c9cbf4d",
-      "patched": "5a6668fa80afbe3e4fe49b8076eb502ab451d3e345406a756259759b62d59ab0"
+      "patched": "262a721f1a56743bcb04a360281d3cf93daeba5713c53ef9c851fe35a038a89f"
     },
     "src/feature/control/control.c": {
       "original": "5c7862dd9724a1132340de626a9ae625f860a3aed9d60e0a3a30c048cf13a910",
-      "patched": "a32182b9b0058e6747970fd45f16e4708dc6530d055a9c9304557e1b73263545"
+      "patched": "1c931c8ef19f2e2d93237a49dbd7d3942f128b4e5f5f78daa95bc4109aca2a5f"
     },
     "src/feature/control/control_cmd.c": {
       "original": "7aeba9c49738554d7072529481f37474967f2d3b49cff0c3619e94243a6cdd1b",
-      "patched": "5fe2b9010d181e778d948f7ca7ca8236347d26b2990ee52c272208ef053b844a"
+      "patched": "8aa506f7522ed8add6ca407c3b1644615dd17ad611388dec74bcebc78bddea46"
     },
     "src/feature/control/include.am": {
       "original": "1e9cc8e777f2f1e122666be9f09c8d20a1e08b9a1911b3c755c05519bb992f99",
-      "patched": "a1768e9868e753c67da671c159498a78d4a0986204cf5fc1eece4865650c8819"
+      "patched": "8396586f81d511bed3991be5dc817dea7f16e3229f7c2a2aaf0a650776cd2fe2"
     },
     "src/test/include.am": {
       "original": "298cc20d30c6dd34deebcb6035428055fcf4ecb98db1df4160b521e6f944242a",
-      "patched": "261623e20540207b9e69a8a604f5692f356c2a2fd3b37b564a4878a99b96903c"
+      "patched": "df3c91164c272ebb3f18068c99de8dbb893b16d941c13d44d216ab917077536a"
     },
     "src/test/test.c": {
       "original": "44150137bad7b908169c4809f96c1e2a9d9d005a89c3f44ce1a1032b253254b7",
-      "patched": "3ccaa6951edaa13e63dc1b91dff3ed92b6c7682626e83bdc9b1b39e5c693297f"
+      "patched": "73a1800104ebe38f14a770cb1838b1299aa52d2345adb8ba2f515344fa6a86a8"
     },
     "src/test/test.h": {
       "original": "5512153a0547fcac406bc30b6f8120dafd52aea41b80d25398c5b415a1bb304f",
-      "patched": "75447e79d2ff90d034ad01bc99ffec7ccde53a424167f0d84c81a9ad91f9f825"
+      "patched": "0dbf6645e9137fc053f87bd31d996e93fec4a0b496caae725a3f070be513ae17"
     }
   },
-  "patch_sha256": "1532ed4dac8e979dad28d34fe84e9b7c7f72afeaddfb5b45d8b8e0464fe2d235",
+  "patch_sha256": "a79840ff6dcd14de527c304e6dda1270a2910f3f0dae4aa942b8f507cc12a746",
   "schema": 1,
   "tor_commit": "4a522a3ca491c6c04d4a44cb006b92101c42efc1",
   "version": 1

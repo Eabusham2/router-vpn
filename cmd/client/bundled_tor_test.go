@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
@@ -57,7 +58,7 @@ func bundledTorFixture(t *testing.T, target string) (string, bundledTorReceipt) 
 	}
 	r.Compiler.Version, r.Compiler.Target = "metadata fixture only", executable
 	r.NativeTests.Passed = true
-	r.NativeTests.Selectors = []string{"routervpn_padding/..", "relaycrypt/..", "cellqueue/.."}
+	r.NativeTests.Selectors = []string{"routervpn_padding/..", "routervpn_lastrelay/..", "relaycrypt/..", "cellqueue/.."}
 	r.NativeTests.SHA256 = strings.Repeat("2", 64)
 	var lock struct {
 		Process map[string]struct {
@@ -198,6 +199,43 @@ func TestBundledTorRejectsRehashedSourceLock(t *testing.T) {
 	writeBundledTorFixture(t, directory, r)
 	if _, err := verifyBundledTorPayload(directory, "linux/amd64"); err == nil {
 		t.Fatal("rehashing an unpinned Tor source lock bypassed captured source admission")
+	}
+}
+
+func TestBundledTorWindowsPinnedSystemImport(t *testing.T) {
+	for _, library := range []string{"SHLWAPI.dll", "libssl-3.dll", "libcrypto-3.dll", "libevent.dll", "libwinpthread-1.dll", "shlwapi-extra.dll"} {
+		t.Run(library, func(t *testing.T) {
+			directory, receipt := bundledTorFixture(t, "windows/amd64")
+			name := filepath.Join(directory, bundledTorBinaryName("windows/amd64"))
+			raw, err := os.ReadFile(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			start := bytes.Index(raw, []byte("KERNEL32.dll\x00"))
+			if start < 0 || start+len(library)+1 > len(raw) {
+				t.Fatal("independent PE fixture lost its import-name table")
+			}
+			copy(raw[start:], append([]byte(library), 0))
+			identity, err := bundledTorExecutableIdentity(raw, "windows/amd64")
+			if library != "SHLWAPI.dll" {
+				if err == nil {
+					t.Fatal("unowned runtime or lookalike DLL was accepted")
+				}
+				return
+			}
+			if err != nil || !reflect.DeepEqual(identity.Libraries, []string{"shlwapi.dll"}) {
+				t.Fatalf("pinned Windows OS import was rejected: %+v %v", identity, err)
+			}
+			if err := os.WriteFile(name, raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+			receipt.Identity = identity
+			receipt.Files[filepath.Base(name)] = bundledNativeFile{Size: int64(len(raw)), SHA256: bundledTorDigest(raw)}
+			writeBundledTorFixture(t, directory, receipt)
+			if _, err := verifyBundledTorPayload(directory, "windows/amd64"); err != nil {
+				t.Fatal("actual package admission disagrees with the pinned OS import", err)
+			}
+		})
 	}
 }
 

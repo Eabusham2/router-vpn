@@ -78,6 +78,12 @@ static void close_final(uint64_t handle) {
 static void verify_idle(int fd) {
     command(fd, "SETCONF DisableNetwork=1 SocksPort=0 UseBridges=0 Bridge ClientTransportPlugin\r\n", "250 OK\r\n");
     command(fd, "SIGNAL CLEARDNSCACHE\r\n", "250 OK\r\n");
+    command(fd, "ROUTERVPN_LASTRELAY INFO\r\n",
+        "250 version=1 transport=begindir min_ttl_ms=100 max_ttl_ms=10000 max_response_bytes=8192 generation_highwater=0\r\n");
+    command(fd, "ROUTERVPN_LASTRELAY ANCHOR aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd 127.0.0.1 41000 1.1.1.1 443\r\n",
+        "551 Last-relay anchor is absent, ambiguous or retired\r\n");
+    command(fd, "ROUTERVPN_LASTRELAY CAPTURE aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 1 10000 1 cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\r\n",
+        "551 Last-relay capture is not eligible or current\r\n");
     command(fd, "ROUTERVPN_PADDING INFO\r\n",
         "250 version=1 direction=outgoing min_rate_kbps=32 max_rate_kbps=192 default_rate_kbps=192 max_ttl_ms=10000 max_pending_cells=1 accounting=tor-link-cell username_hex_lengths=32,64 password_hex_length=64 generation_highwater=0\r\n");
     command(fd, "ROUTERVPN_PADDING START aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 1 192 10000 cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\r\n",

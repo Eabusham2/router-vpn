@@ -26,7 +26,7 @@ import (
 const bundledTorVersion = "0.4.9.14"
 const bundledTorRevision = "4a522a3ca491c6c04d4a44cb006b92101c42efc1"
 const bundledTorSourceSHA = "ca52ffdbda44d1554c6ac0cadd7ce84bca2c1e1f46f5ca6c5aaab1d34bf0459f"
-const bundledTorPaddingSHA = "723765b37c2e81a86d9444374a58b2fcd8b777a59ce554f215646285feae9b90"
+const bundledTorPaddingSHA = "011dc1e4c3e3b60fcc3b72ec180252cff3003c37b03fbed132f2fe58e2cf8be5"
 const bundledTorMaxBytes = 64 << 20
 
 var bundledTorRecords = []string{"TOR-RUNTIME.json", "TOR-SOURCE-LOCK.json", "TOR-PADDING-SOURCE-LOCK.json", "TOR-LICENSES.json"}
@@ -36,6 +36,7 @@ var bundledTorInputs = []string{
 	"deploy/install-desktop-windows-toolchain.py", "mobile/torpack/sources.json",
 	"deploy/apply-tor-padding.py", "mobile/tor/padding-source-lock.json", "mobile/tor/padding-integration.patch",
 	"mobile/tor/routervpn_padding.c", "mobile/tor/routervpn_padding.h", "mobile/tor/test_routervpn_padding.c",
+	"mobile/tor/routervpn_lastrelay.c", "mobile/tor/routervpn_lastrelay.h", "mobile/tor/test_routervpn_lastrelay.c",
 }
 
 type bundledTorIdentity struct {
@@ -115,7 +116,8 @@ func bundledTorOfflineReceipt() map[string]any {
 	return map[string]any{"scope": "offline-disabled-network-loopback-control", "version": "tor " + bundledTorVersion,
 		"safecookie": true, "incorrect_authentication_rejected": true, "process_and_listener_identity": true,
 		"disabled_network_retained": true, "pt_socket_configuration": true, "owning_controller_exit": true,
-		"owned_padding_capability": true, "padding_rejected_while_disabled": true, "padding_without_owner_rejected": true}
+		"owned_padding_capability": true, "padding_rejected_while_disabled": true, "padding_without_owner_rejected": true,
+		"owned_lastrelay_capability": true, "lastrelay_rejected_while_disabled": true, "lastrelay_without_owner_rejected": true}
 }
 
 // debug/pe.ImportedLibraries is unimplemented in the pinned Go toolchain.
@@ -333,7 +335,7 @@ func bundledTorExecutableIdentity(raw []byte, target string) (bundledTorIdentity
 		}
 		allowed := map[string]bool{"advapi32.dll": true, "bcrypt.dll": true, "crypt32.dll": true, "gdi32.dll": true,
 			"iphlpapi.dll": true, "kernel32.dll": true, "msvcrt.dll": true, "ntdll.dll": true, "secur32.dll": true,
-			"shell32.dll": true, "user32.dll": true, "userenv.dll": true, "ws2_32.dll": true}
+			"shell32.dll": true, "shlwapi.dll": true, "user32.dll": true, "userenv.dll": true, "ws2_32.dll": true}
 		api := regexp.MustCompile(`^(?:api|ext)-ms-win-[a-z0-9-]+-l\d+-\d+-\d+\.dll$`)
 		for index, library := range libraries {
 			library = strings.ToLower(library)
@@ -370,7 +372,7 @@ func verifyBundledTorPayload(directory, target string) (string, error) {
 		data[name] = raw
 	}
 	var receipt bundledTorReceipt
-	if decodeRelayControlJSON(data["TOR-RUNTIME.json"], &receipt) != nil || receipt.Schema != 1 || receipt.Runtime != "tor-routervpn" || receipt.Version != bundledTorVersion || receipt.Revision != bundledTorRevision || receipt.Target != target || receipt.Executable != executable || receipt.Execution != execution || receipt.SourceSHA != bundledTorSourceSHA || receipt.PaddingSHA != bundledTorPaddingSHA || receipt.PaddingVersion != 1 || bundledTorDigest(data["TOR-SOURCE-LOCK.json"]) != bundledTorSourceSHA || bundledTorDigest(data["TOR-PADDING-SOURCE-LOCK.json"]) != bundledTorPaddingSHA || !receipt.NativeTests.Passed || !nativeDigest(receipt.NativeTests.SHA256) || !reflect.DeepEqual(receipt.NativeTests.Selectors, []string{"routervpn_padding/..", "relaycrypt/..", "cellqueue/.."}) || !reflect.DeepEqual(receipt.Offline, bundledTorOfflineReceipt()) {
+	if decodeRelayControlJSON(data["TOR-RUNTIME.json"], &receipt) != nil || receipt.Schema != 1 || receipt.Runtime != "tor-routervpn" || receipt.Version != bundledTorVersion || receipt.Revision != bundledTorRevision || receipt.Target != target || receipt.Executable != executable || receipt.Execution != execution || receipt.SourceSHA != bundledTorSourceSHA || receipt.PaddingSHA != bundledTorPaddingSHA || receipt.PaddingVersion != 1 || bundledTorDigest(data["TOR-SOURCE-LOCK.json"]) != bundledTorSourceSHA || bundledTorDigest(data["TOR-PADDING-SOURCE-LOCK.json"]) != bundledTorPaddingSHA || !receipt.NativeTests.Passed || !nativeDigest(receipt.NativeTests.SHA256) || !reflect.DeepEqual(receipt.NativeTests.Selectors, []string{"routervpn_padding/..", "routervpn_lastrelay/..", "relaycrypt/..", "cellqueue/.."}) || !reflect.DeepEqual(receipt.Offline, bundledTorOfflineReceipt()) {
 		return "", bad
 	}
 	if len(receipt.Inputs) != len(bundledTorInputs) {

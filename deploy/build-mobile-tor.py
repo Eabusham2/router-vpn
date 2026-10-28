@@ -153,20 +153,27 @@ def main():
         env['ASAN_OPTIONS'] = 'halt_on_error=1:detect_leaks=1'
         env['UBSAN_OPTIONS'] = 'halt_on_error=1:print_stacktrace=1'
     compiler = shlex.split(env.get('CC', 'cc'))
+    # Only the executable host gate enables upstream test objects. Android and
+    # Apple package builders retain CONFIGURE's client-only, no-unit-test flags.
+    native_configure = [flag for flag in CONFIGURE if flag != '--disable-unittests']
     if not args.negative_control:
         patch_workqueue(source)
         PADDING.apply(source)
     run(['./autogen.sh'], source, env, output / 'autogen.log')
-    run(['./configure'] + CONFIGURE, source, env, output / 'configure.log')
+    run(['./configure'] + native_configure, source, env, output / 'configure.log')
     run(['make', '-j' + str(args.jobs), 'libtor.a'], source, env, output / 'make.log', 900)
     if args.negative_control:
         negative_control(source, output, compiler, flags, env)
         patch_workqueue(source)
         PADDING.apply(source)
         run(['./autogen.sh'], source, env, output / 'autogen-patched.log')
-        run(['./configure'] + CONFIGURE, source, env, output / 'configure-patched.log')
+        run(['./configure'] + native_configure, source, env, output / 'configure-patched.log')
         run(['make', '-j' + str(args.jobs), 'libtor.a'], source, env, output / 'make-patched.log', 900)
     PADDING.verify(source)
+    run(['make', '-j' + str(args.jobs), 'src/test/test'], source, env,
+        output / 'native-tests-build.log', 900)
+    run(['./src/test/test', 'routervpn_padding/..', 'routervpn_lastrelay/..',
+         'relaycrypt/..', 'cellqueue/..'], source, env, output / 'native-extensions.log', 30)
     binary = compile_fixture(source, output, compiler, flags, 'native_host_test', env)
     run_scenarios(binary, output, env)
     if not args.sanitize:
@@ -182,6 +189,7 @@ def main():
         'tor_repository': TOR_REPOSITORY, 'tor_commit': TOR_COMMIT,
         'workqueue_original_sha256': WORKQUEUE_ORIGINAL, 'workqueue_patched_sha256': WORKQUEUE_PATCHED,
         'padding_extension': PADDING.verify(source),
+        'padding_native_tests': True, 'lastrelay_native_tests': True,
         'sanitizers': ['address', 'undefined', 'leak'] if args.sanitize else [],
         'negative_control_verified': args.negative_control,
         'go_control_verified': not args.sanitize,

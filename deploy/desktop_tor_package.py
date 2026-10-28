@@ -25,17 +25,18 @@ TARGETS = ('linux/amd64', 'linux/arm64', 'darwin/amd64', 'darwin/arm64', 'window
 VERSION = '0.4.9.14'
 REVISION = '4a522a3ca491c6c04d4a44cb006b92101c42efc1'
 SOURCE_SHA256 = 'ca52ffdbda44d1554c6ac0cadd7ce84bca2c1e1f46f5ca6c5aaab1d34bf0459f'
-PADDING_SHA256 = '723765b37c2e81a86d9444374a58b2fcd8b777a59ce554f215646285feae9b90'
+PADDING_SHA256 = '011dc1e4c3e3b60fcc3b72ec180252cff3003c37b03fbed132f2fe58e2cf8be5'
 RECEIPT, SOURCE, PADDING, LICENSES = 'TOR-RUNTIME.json', 'TOR-SOURCE-LOCK.json', 'TOR-PADDING-SOURCE-LOCK.json', 'TOR-LICENSES.json'
 MAX_BINARY, MAX_RECORD, MAX_LICENSES = 64 << 20, 32 << 10, 256 << 10
-TEST_SELECTORS = ('routervpn_padding/..', 'relaycrypt/..', 'cellqueue/..')
+TEST_SELECTORS = ('routervpn_padding/..', 'routervpn_lastrelay/..', 'relaycrypt/..', 'cellqueue/..')
 STATIC_LIBRARIES = frozenset(('libssl.a', 'libcrypto.a', 'libevent.a', 'libz.a'))
 BUILD_INPUTS = frozenset(('deploy/build-desktop-tor.py', 'deploy/desktop_tor_package.py',
     'deploy/build-server-tor.py', 'server/scripts/server_tor_package.py',
     'deploy/build-mobile-tor-package.py', 'deploy/install-desktop-windows-toolchain.py',
     'mobile/torpack/sources.json', 'deploy/apply-tor-padding.py',
     'mobile/tor/padding-source-lock.json', 'mobile/tor/padding-integration.patch',
-    'mobile/tor/routervpn_padding.c', 'mobile/tor/routervpn_padding.h', 'mobile/tor/test_routervpn_padding.c'))
+    'mobile/tor/routervpn_padding.c', 'mobile/tor/routervpn_padding.h', 'mobile/tor/test_routervpn_padding.c',
+    'mobile/tor/routervpn_lastrelay.c', 'mobile/tor/routervpn_lastrelay.h', 'mobile/tor/test_routervpn_lastrelay.c'))
 SYSTEM_DLLS = frozenset(('advapi32.dll', 'bcrypt.dll', 'crypt32.dll', 'gdi32.dll',
     'iphlpapi.dll', 'kernel32.dll', 'msvcrt.dll', 'ntdll.dll', 'secur32.dll', 'shell32.dll',
     # The pinned Tor Windows path/glob code imports PathMatchSpecA from the OS.
@@ -340,6 +341,7 @@ def offline_self_test(binary, target):
                     wrong.close()
                 owner = TCPControl(address)
                 owner.authenticate(cookie)
+                SERVER.lastrelay_offline_check(owner, owning=False)
                 if owner.command('ROUTERVPN_PADDING INFO') != ['551 Padding requires the owning controller']:
                     raise ValueError('Desktop Tor padding accepted a non-owning controller')
                 actual = owner.success('GETINFO process/pid net/listeners/control net/listeners/socks net/listeners/dns net/listeners/trans traffic/read traffic/written')
@@ -355,6 +357,7 @@ def offline_self_test(binary, target):
                     '250-UseBridges=1', '250-ClientTransportPlugin=obfs4 socks5 127.0.0.1:1', '250-Bridge=obfs4 192.0.2.1:443', '250 DisableNetwork=1']:
                     raise ValueError('Desktop Tor did not retain its owned PT socket configuration')
                 owner.success('TAKEOWNERSHIP')
+                SERVER.lastrelay_offline_check(owner, owning=True)
                 if owner.success('ROUTERVPN_PADDING INFO') != [CAPABILITY]:
                     raise ValueError('Desktop Tor outgoing padding extension is missing or changed')
                 start = 'ROUTERVPN_PADDING START ' + 'a' * 64 + ' ' + 'b' * 64 + ' 1 192 10000 ' + 'c' * 64 + ' ' + 'd' * 64
