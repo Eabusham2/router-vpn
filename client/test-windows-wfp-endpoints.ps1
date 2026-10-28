@@ -48,14 +48,28 @@ foreach($address in @('127.0.0.1','::1')) {
     } finally { if($null -ne $pair) { $pair.UDP.Dispose();$pair.TCP.Dispose() } }
     Check-Drained $address $state.Ports.ToArray()
 
-    $state=[pscustomobject]@{Calls=0;Ports=(New-Object 'Collections.Generic.List[int]')}
+    $state=[pscustomobject]@{Calls=0;Attempts=0;BlockedPort=0;Ports=(New-Object 'Collections.Generic.List[int]')}
     $deny={param($IP,$Port)
         $state.Calls++;$state.Ports.Add($Port)
         throw (New-Object Net.Sockets.SocketException([int][Net.Sockets.SocketError]::AccessDenied))
     }.GetNewClosure()
+    # A TCP collision consumes an allocator attempt before OpenDatagram runs.
+    # Hold one real port occupied to exercise that path on every runner, then
+    # count all chosen ports rather than only the successful TCP reservations.
+    $occupied=New-Object Net.Sockets.TcpListener([Net.IPAddress]::Parse($address),0)
+    $occupied.ExclusiveAddressUse=$true
+    $choose={
+        $state.Attempts++
+        if($state.Attempts -eq 1) { $state.BlockedPort } else { Get-Random -Minimum 1024 -Maximum 65536 }
+    }.GetNewClosure()
     $failed=$false
-    try { $null=New-FixtureEndpointPair $address $deny } catch { $failed=$true }
-    Assert ($failed -and $state.Calls -eq 32) 'Reservation failure was hidden or retried beyond its bound.'
+    try {
+        $occupied.Start();$state.BlockedPort=$occupied.LocalEndpoint.Port
+        try { $null=New-FixtureEndpointPair $address $deny $choose } catch { $failed=$true }
+    } finally { $occupied.Stop() }
+    Assert ($failed -and $state.Attempts -eq 32) 'Reservation failure was hidden or retried beyond its bound.'
+    Assert ($state.Calls -gt 0 -and $state.Calls -lt $state.Attempts) 'The held TCP collision did not consume an attempt before UDP allocation.'
+    Assert (-not $state.Ports.Contains($state.BlockedPort)) 'The held TCP reservation reached UDP allocation.'
     Check-Drained $address $state.Ports.ToArray()
 
     $state=[pscustomobject]@{Calls=0;Ports=(New-Object 'Collections.Generic.List[int]')}
