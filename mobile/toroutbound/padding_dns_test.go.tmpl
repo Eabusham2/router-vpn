@@ -1,0 +1,336 @@
+package routervpntor
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	stdTLS "crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/binary"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	stdLog "log"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	boxTLS "github.com/sagernet/sing-box/common/tls"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+const paddingDNSName = "selected-padding-dns.example.test"
+
+// This fixture runs the pinned DoT and HTTP/2 DoH transports, verified TLS,
+// wire DNS and real proof-scope/Network cleanup. Only the final Tor circuit
+// dial and its native control peer are doubled; no public resolver is used.
+type paddingDNSConnection struct {
+	net.Conn
+	token  context.Context
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (c *paddingDNSConnection) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(func() { close(c.closed) })
+	return err
+}
+
+type paddingDNSLower struct {
+	selected, listener string
+	mu                 sync.Mutex
+	connections        []*paddingDNSConnection
+}
+
+func (l *paddingDNSLower) dial(ctx context.Context, network, address string) (net.Conn, error) {
+	if network != "tcp" || address != l.selected {
+		return nil, errors.New("DNS left its exact selected Tor destination")
+	}
+	connection, err := (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "tcp", l.listener)
+	if err != nil {
+		return connection, err
+	}
+	captured := &paddingDNSConnection{Conn: connection, token: context.WithoutCancel(ctx), closed: make(chan struct{})}
+	l.mu.Lock()
+	l.connections = append(l.connections, captured)
+	l.mu.Unlock()
+	return captured, nil
+}
+
+func (l *paddingDNSLower) snapshot() []*paddingDNSConnection {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]*paddingDNSConnection(nil), l.connections...)
+}
+
+func paddingDNSCertificate(t *testing.T) (stdTLS.Certificate, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	certificate := &x509.Certificate{SerialNumber: big.NewInt(42), Subject: pkix.Name{CommonName: "Selected native DNS fixture"},
+		DNSNames: []string{paddingDNSName}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour),
+		BasicConstraintsValid: true, IsCA: true, KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, certificate, certificate, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return stdTLS.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+func paddingDNSReply(query *mDNS.Msg) (*mDNS.Msg, error) {
+	if len(query.Question) != 1 || (query.Question[0].Qtype != mDNS.TypeA && query.Question[0].Qtype != mDNS.TypeAAAA) || query.Question[0].Qclass != mDNS.ClassINET {
+		return nil, errors.New("selected DNS received a different wire query")
+	}
+	response := new(mDNS.Msg)
+	response.SetReply(query)
+	response.Compress = true
+	response.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: query.Question[0].Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 0}, A: net.IPv4(203, 0, 113, 9)}}
+	if query.Question[0].Qtype == mDNS.TypeAAAA {
+		response.Answer = []mDNS.RR{&mDNS.AAAA{Hdr: mDNS.RR_Header{Name: query.Question[0].Name, Rrtype: mDNS.TypeAAAA, Class: mDNS.ClassINET, Ttl: 0}, AAAA: net.ParseIP("2001:db8::9")}}
+	}
+	return response, nil
+}
+
+func paddingDNSEndpoint(t *testing.T, protocol string, certificate stdTLS.Certificate, queries, handshakes *atomic.Int32) string {
+	t.Helper()
+	if protocol == "https" {
+		var seen sync.Map
+		server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.TLS == nil || !r.TLS.HandshakeComplete || r.TLS.ServerName != paddingDNSName || r.ProtoMajor != 2 || r.Method != http.MethodPost || r.Host != paddingDNSName+":4443" || r.URL.Path != "/captured-dns-query" || r.Header.Get("Content-Type") != DNST.MimeType {
+				http.Error(w, "selected encrypted DNS request changed", http.StatusBadRequest)
+				return
+			}
+			if _, exists := seen.LoadOrStore(r.RemoteAddr, true); !exists {
+				handshakes.Add(1)
+			}
+			wire, err := io.ReadAll(io.LimitReader(r.Body, 4097))
+			var query mDNS.Msg
+			if err != nil || len(wire) > 4096 || query.Unpack(wire) != nil {
+				http.Error(w, "invalid DNS wire message", http.StatusBadRequest)
+				return
+			}
+			response, err := paddingDNSReply(&query)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			wire, err = response.Pack()
+			if err != nil {
+				http.Error(w, "response encoding failed", http.StatusInternalServerError)
+				return
+			}
+			queries.Add(1)
+			w.Header().Set("Content-Type", DNST.MimeType)
+			_, _ = w.Write(wire)
+		}))
+		server.EnableHTTP2 = true
+		server.TLS = &stdTLS.Config{Certificates: []stdTLS.Certificate{certificate}, NextProtos: []string{"h2"}}
+		server.Config.ErrorLog = stdLog.New(io.Discard, "", 0)
+		server.StartTLS()
+		t.Cleanup(server.Close)
+		return server.Listener.Addr().String()
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var clients sync.Map
+	var workers sync.WaitGroup
+	workers.Add(1)
+	go func() {
+		defer workers.Done()
+		for {
+			raw, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			clients.Store(raw, true)
+			workers.Add(1)
+			go func() {
+				defer workers.Done()
+				defer clients.Delete(raw)
+				defer raw.Close()
+				connection := stdTLS.Server(raw, &stdTLS.Config{Certificates: []stdTLS.Certificate{certificate}})
+				if connection.HandshakeContext(t.Context()) != nil || connection.ConnectionState().ServerName != paddingDNSName {
+					return
+				}
+				handshakes.Add(1)
+				for {
+					query, err := DNST.ReadMessage(connection)
+					if err != nil {
+						return
+					}
+					response, err := paddingDNSReply(query)
+					if err != nil {
+						return
+					}
+					queries.Add(1)
+					wire, err := response.Pack()
+					if err != nil {
+						return
+					}
+					frame := make([]byte, 2+len(wire))
+					binary.BigEndian.PutUint16(frame[:2], uint16(len(wire)))
+					copy(frame[2:], wire)
+					if n, err := connection.Write(frame); err != nil || n != len(frame) {
+						return
+					}
+				}
+			}()
+		}
+	}()
+	t.Cleanup(func() {
+		_ = listener.Close()
+		clients.Range(func(key, _ any) bool { _ = key.(net.Conn).Close(); return true })
+		workers.Wait()
+	})
+	return listener.Addr().String()
+}
+
+func TestTorLocalPaddingEncryptedDNSPoolsReconnectAfterProofScope(t *testing.T) {
+	for _, scenario := range []struct {
+		protocol  string
+		untrusted bool
+	}{{"tls", false}, {"https", false}, {"tls", true}, {"https", true}} {
+		protocol, name := scenario.protocol, scenario.protocol
+		if scenario.untrusted {
+			name += "-untrusted"
+		}
+		t.Run(name, func(t *testing.T) {
+			certificate, trustedPEM := paddingDNSCertificate(t)
+			if scenario.untrusted {
+				_, trustedPEM = paddingDNSCertificate(t)
+			}
+			var queries, handshakes atomic.Int32
+			port := 853
+			if protocol == "https" {
+				port = 4443
+			}
+			lower := &paddingDNSLower{selected: fmt.Sprintf("9.9.9.9:%d", port), listener: paddingDNSEndpoint(t, protocol, certificate, &queries, &handshakes)}
+			h, _, dials := localPaddingOutbound(t, lower.dial)
+			var profile map[string]any
+			if json.Unmarshal([]byte(localPaddingTestProfile), &profile) != nil {
+				t.Fatal("invalid fixture profile")
+			}
+			profile["dns_protocol"], profile["dns_port"], profile["dns_server_name"] = protocol, port, paddingDNSName
+			profile["dns_path"] = "/captured-dns-query"
+			encoded, _ := json.Marshal(profile)
+			capture, err := mobiletor.NewLocalPaddingCapture(&mobiletor.LocalPaddingSource{Profile: string(encoded)}, h.sessionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.padding.capture = capture
+			logger := log.NewNOPFactory().NewLogger("padding-selected-dns")
+			tlsConfig, err := boxTLS.NewSTDClient(t.Context(), logger, "9.9.9.9", option.OutboundTLSOptions{Enabled: true, ServerName: paddingDNSName, Certificate: []string{trustedPEM}, ALPN: []string{"h2"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var selected adapter.DNSTransport
+			if protocol == "tls" {
+				selected = DNST.NewTLSRaw(logger, dns.NewTransportAdapter(C.DNSTypeTLS, "routervpn-tor-dns", nil), h, M.ParseSocksaddr(lower.selected), tlsConfig)
+			} else {
+				selected = DNST.NewHTTPSRaw(dns.NewTransportAdapter(C.DNSTypeHTTPS, "routervpn-tor-dns", nil), logger, h,
+					&url.URL{Scheme: "https", Host: paddingDNSName + ":4443", Path: "/captured-dns-query"}, http.Header{}, M.ParseSocksaddr(lower.selected), tlsConfig)
+			}
+			t.Cleanup(func() { _ = selected.Close() })
+			var sequence atomic.Int32
+			exchange := func(ctx context.Context) error {
+				query := new(mDNS.Msg)
+				query.SetQuestion(fmt.Sprintf("proof-%d.example.test.", sequence.Add(1)), mDNS.TypeA)
+				response, err := selected.Exchange(ctx, query)
+				if err != nil {
+					return err
+				}
+				if response == nil || response.Rcode != mDNS.RcodeSuccess || len(response.Answer) != 1 || response.Answer[0].Header().Name != query.Question[0].Name {
+					return errors.New("selected DNS returned a different proof query")
+				}
+				return nil
+			}
+			verify := func(ctx context.Context, _ mobiletor.DialContext) (mobiletor.Proof, time.Time, error) {
+				if h.paddingProofScope(ctx) == nil {
+					return mobiletor.Proof{}, time.Time{}, errors.New("selected DNS lost its exact proof scope")
+				}
+				if err := exchange(ctx); err != nil {
+					t.Logf("selected encrypted DNS exchange failed: %v", err)
+					return mobiletor.Proof{}, time.Time{}, err
+				}
+				dnsAt := time.Now().UTC()
+				return mobiletor.Proof{SessionID: h.sessionID, IP: "203.0.113.9", IsTor: true, DNSProven: true, CheckedAt: time.Now().UTC()}, dnsAt, nil
+			}
+			if err := h.BindTorPadding(func() bool { return true }, verify); err != nil {
+				t.Fatal(err)
+			}
+			for round := 0; round < 3; round++ {
+				previousQueries, previousHandshakes := queries.Load(), handshakes.Load()
+				caller, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+				defer cancel()
+				if round == 0 {
+					_, err = h.StartTorPadding(caller, h.sessionID)
+				} else {
+					_, err = h.refreshPaddingProof(caller)
+				}
+				if scenario.untrusted {
+					if err == nil || caller.Err() != nil || queries.Load() != 0 || h.TorHealthy(h.sessionID) {
+						t.Fatal("selected encrypted DNS accepted an untrusted certificate or skipped its bounded TLS failure", err, caller.Err(), queries.Load())
+					}
+					return
+				}
+				if err != nil || caller.Err() != nil {
+					t.Fatalf("selected %s pool failed proof scope %d: %v / %v (queries=%d handshakes=%d dials=%d)", protocol, round, err, caller.Err(), queries.Load(), handshakes.Load(), dials.Load())
+				}
+				if queries.Load() <= previousQueries || handshakes.Load() <= previousHandshakes {
+					t.Fatalf("proof scope %d reused an expired encrypted DNS connection: queries=%d handshakes=%d", round, queries.Load(), handshakes.Load())
+				}
+				for _, connection := range lower.snapshot() {
+					select {
+					case <-connection.closed:
+					default:
+						t.Fatal("completed encrypted DNS proof retained a pooled socket")
+					}
+					before := dials.Load()
+					if reopened, err := h.DialContext(connection.token, "tcp", M.ParseSocksaddr(lower.selected)); err == nil || reopened != nil || dials.Load() != before {
+						t.Fatal("detached encrypted DNS proof token created a new socket")
+					}
+					if n, err := connection.Write([]byte("expired-proof")); err == nil || n != 0 {
+						t.Fatal("completed encrypted DNS scope retained a writable socket")
+					}
+				}
+			}
+			ordinary, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+			defer cancel()
+			previousQueries, previousHandshakes := queries.Load(), handshakes.Load()
+			if err := exchange(ordinary); err != nil || queries.Load() <= previousQueries || handshakes.Load() <= previousHandshakes || !h.TorHealthy(h.sessionID) {
+				t.Fatal("ordinary encrypted DNS could not reconnect after proof cleanup", err, queries.Load(), handshakes.Load())
+			}
+			if err := selected.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := h.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
