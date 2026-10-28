@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,6 +29,74 @@ def forbid(path: str, *markers: str) -> None:
     for marker in markers:
         if marker in body:
             errors.append(f"{path}: forbidden {marker!r}")
+
+
+def java_tokens(source: str) -> tuple[str, ...]:
+    # Comments and literal contents cannot stand in for an executable guard or
+    # move a call across a method/monitor boundary. Behavioral ownership is also
+    # exercised by android/test_android_tor_session.py against the actual class.
+    pattern = r'//[^\n]*|/\*[\s\S]*?\*/|"""[\s\S]*?"""|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\d+|==|!=|<=|>=|&&|\|\||[^\s]'
+    return tuple(token for token in re.findall(pattern, source)
+                 if not token.startswith(("//", "/*")))
+
+
+def java_at(tokens: tuple[str, ...], marker: str) -> int:
+    expected = java_tokens(marker)
+    matches = [i for i in range(len(tokens) - len(expected) + 1)
+               if tokens[i:i + len(expected)] == expected]
+    if len(matches) != 1:
+        raise ValueError(f"expected one executable occurrence of {marker!r}")
+    return matches[0]
+
+
+def java_block(tokens: tuple[str, ...], marker: str) -> tuple[tuple[str, ...], int, int]:
+    start = java_at(tokens, marker) + len(java_tokens(marker))
+    if tokens[start:start + 1] != ("{",):
+        raise ValueError(f"expected a block immediately after {marker!r}")
+    depth = 1
+    for end in range(start + 1, len(tokens)):
+        depth += (tokens[end] == "{") - (tokens[end] == "}")
+        if depth == 0:
+            return tokens[start + 1:end], start, end
+    raise ValueError(f"unterminated executable block after {marker!r}")
+
+
+def need_android_tor_health() -> None:
+    path = "android/app/src/main/java/com/eabusham/routervpn/AndroidTorSession.java"
+    try:
+        source = java_tokens(read(path))
+        current, _, _ = java_block(source, "private boolean current()")
+        java_at(current, "return owner.current(this, server) && network.equals(owner.network());")
+        health, _, _ = java_block(source, "boolean healthy()")
+        locked, _, lock_end = java_block(health, "synchronized (this)")
+        admission = java_at(locked, "if (!proved || cancelled || request == null) return false;")
+        capture = java_at(locked, "captured = request;")
+        checked, _, _ = java_block(locked, "try")
+        guard = java_at(checked, "if (!current() || !captured.healthy()) throw unavailable();")
+        padding = java_at(checked, "padding.accept(captured.paddingStatusJSON(), System.currentTimeMillis());")
+        success = java_at(checked, "return true;")
+        if not (admission < capture < java_at(locked, "try") and guard < padding < success):
+            raise ValueError("health must admit its captured owner and receipt before reporting success")
+        rejected, _, _ = java_block(locked, "catch (Exception invalid)")
+        java_at(rejected, 'cancelled = true; proved = false; result = "";')
+        if "cancel" in locked or "close" in locked:
+            raise ValueError("native revocation must run outside the session monitor")
+        java_at(health[lock_end + 1:], "captured.cancel(); return false;")
+
+        proof, _, _ = java_block(source, "private void proveCaptured(RouterTorProofRequest captured, Instant began) throws Exception")
+        dns = java_at(proof, "Libbox.routerStrategyDNSProof(server);")
+        before, _, _ = java_block(proof[:dns], "synchronized (this)")
+        after, _, _ = java_block(proof[dns:], "synchronized (this)")
+        for boundary in (before, after):
+            guard = java_at(boundary, "if (cancelled || !current() || !captured.healthy()) throw unavailable();")
+            padding = java_at(boundary, "padding.accept(captured.paddingStatusJSON(), System.currentTimeMillis());")
+            if guard >= padding:
+                raise ValueError("DNS proof must retain the captured native and receipt owner")
+        adopted = java_at(after, "result = response; proved = true;")
+        if padding >= adopted:
+            raise ValueError("DNS completion cannot adopt a proof before its receipt")
+    except (ValueError, IndexError) as error:
+        errors.append(f"{path}: captured Tor health/DNS ownership: {error}")
 
 
 contract = json.loads(read("client/unified-control-center-v2.json") or "{}")
@@ -219,9 +288,8 @@ need(
 need(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidTorSession.java",
     "Libbox.routerTorCreateProofWithPredecessor",
-    "Libbox.routerStrategyDNSProof(server)",
-    "request.healthy()",
 )
+need_android_tor_health()
 
 # Windows x64 owns a real pinned Tor + PT + full-device wrapper and the WPF form
 # is capability-gated through the controller. Windows ARM64/missing-runtime cases
