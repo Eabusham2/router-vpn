@@ -1,0 +1,599 @@
+package libbox
+
+import (
+	"context"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/routechoice"
+)
+
+// RouterTorCompareHost owns one native VPN transition and its immutable saved
+// source/network identity. NewCandidate only captures an owner; Start performs
+// its blocking work after Go has retained that owner. The host never starts a
+// second system VPN. Current and Progress must be bounded, memory-only calls.
+type RouterTorCompareHost interface {
+	Current() bool
+	NewCandidate(execution, target string) RouterTorCompareCandidate
+	Progress(stage, execution string)
+}
+
+// A candidate is one concrete service/extension generation. Close confirms
+// whole-engine teardown and is idempotent, including during an unfinished
+// Start. Cancel must promptly revoke that exact generation without waiting for
+// its startup callback or consulting a replacement service.
+type RouterTorCompareCandidate interface {
+	Current() bool
+	Start() error
+	Server() *CommandServer
+	Proof() *RouterTorProofRequest
+	Cancel()
+	Close() error
+}
+
+type routerTorCompareFactory func(RouterTorCompareCandidate, string, string) (*RouterTorComparison, func() bool, error)
+
+// RouterTorCompare runs the shared, sequential Local/Server selection. The
+// saved preference remains auto; ResultJSON and Execution record its proved
+// winner. Keep drains only measurement ownership and transfers that winner to
+// the host. Before Keep, Cancel/Close still own every partial candidate.
+type RouterTorCompare struct {
+	host              RouterTorCompareHost
+	entry, exit, mode string
+	source            string
+	ctx               context.Context
+	cancel            context.CancelFunc
+	options           routechoice.Options
+	factory           routerTorCompareFactory
+	mu                sync.Mutex
+	started, finished bool
+	keeping, kept     bool
+	result            routechoice.Result
+	failure           error
+	active            *routerTorCompareSession
+	done              chan struct{}
+	closeMu           chan struct{}
+}
+
+func RouterTorNewCompare(host RouterTorCompareHost, entryID, exitID, transport, captureSHA256 string) (*RouterTorCompare, error) {
+	return newRouterTorCompare(host, entryID, exitID, transport, captureSHA256, routechoice.Options{
+		Targets:      []string{"https://1.1.1.1/cdn-cgi/trace", "https://1.0.0.1/cdn-cgi/trace"},
+		ProbeTimeout: 12 * time.Second, StartupTimeout: 2 * time.Minute, CleanupTimeout: 30 * time.Second,
+	}, routerTorCompareNative)
+}
+
+func newRouterTorCompare(host RouterTorCompareHost, entry, exit, mode, source string, options routechoice.Options, factory routerTorCompareFactory) (*RouterTorCompare, error) {
+	identity := func(value string, limit int) bool {
+		return value != "" && len(value) <= limit && !strings.ContainsAny(value, "\x00\r\n")
+	}
+	digest, err := hex.DecodeString(source)
+	if host == nil || !host.Current() || !identity(entry, 128) || !identity(exit, 128) || entry == exit || !identity(mode, 96) ||
+		err != nil || len(digest) != 32 || hex.EncodeToString(digest) != source || factory == nil {
+		return nil, errors.New("Tor comparison requires one captured private entry, exit and native transition")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	r := &RouterTorCompare{host: host, entry: entry, exit: exit, mode: mode, source: source, ctx: ctx, cancel: cancel,
+		options: options, factory: factory, done: make(chan struct{}), closeMu: make(chan struct{}, 1)}
+	r.options.Notify = func(event routechoice.Event) { r.host.Progress(event.Stage, string(event.Candidate.Execution)) }
+	return r, nil
+}
+
+func routerTorCompareNative(path RouterTorCompareCandidate, execution, target string) (*RouterTorComparison, func() bool, error) {
+	server, proof := path.Server(), path.Proof()
+	current := func() bool {
+		return path.Current() && server != nil && proof != nil && proof.request != nil && path.Server() == server && path.Proof() == proof &&
+			proof.request.ComparisonExecution() == execution
+	}
+	if !current() {
+		return nil, current, errors.New("Tor comparison candidate does not own its advertised native execution")
+	}
+	// Keep the partial object in Go even when construction returns an error.
+	// A Java object-plus-exception return cannot preserve that ownership.
+	request, err := RouterTorCreateComparison(server, proof, target)
+	return request, current, err
+}
+
+func (r *RouterTorCompare) current() bool {
+	return r != nil && r.ctx.Err() == nil && r.host != nil && r.host.Current()
+}
+
+func (r *RouterTorCompare) watch() {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		r.mu.Lock()
+		kept := r.kept
+		r.mu.Unlock()
+		if kept {
+			return
+		}
+		select {
+		case <-r.ctx.Done():
+			return
+		case <-ticker.C:
+			if !r.current() {
+				r.Cancel()
+				return
+			}
+		}
+	}
+}
+
+func (r *RouterTorCompare) Run() error {
+	if r == nil || !r.current() {
+		return errors.New("Tor comparison is unavailable")
+	}
+	r.mu.Lock()
+	if r.started || r.finished || r.ctx.Err() != nil {
+		r.mu.Unlock()
+		return errors.New("Tor comparison is stale or already used")
+	}
+	r.started = true
+	r.mu.Unlock()
+	defer close(r.done)
+	go r.watch()
+	ctx, cancel := context.WithTimeout(r.ctx, 10*time.Minute)
+	defer cancel()
+	local := routechoice.Candidate{Execution: routechoice.Local, Transport: r.mode, EntryID: r.entry, ExitID: r.exit}
+	server := local
+	server.Execution = routechoice.Server
+	result, selected, err := routechoice.Compare(ctx, []routechoice.Candidate{local, server}, routerTorCompareDriver{r}, r.options)
+	active, _ := selected.(*routerTorCompareSession)
+	if err == nil && (active == nil || !active.current() || result.Winner == nil || result.Final == nil || !result.Final.Eligible || !r.current()) {
+		err = errors.New("Tor comparison final winner lost its captured owner")
+	}
+	r.mu.Lock()
+	r.result, r.failure, r.finished = result, err, true
+	// The driver retains a partial owner even if a platform Start ignored its
+	// deadline. Never overwrite it with a nil result from cancelled selection.
+	if active != nil {
+		r.active = active
+	}
+	r.mu.Unlock()
+	if err != nil {
+		r.Cancel()
+	}
+	return err
+}
+
+func (r *RouterTorCompare) ResultJSON() string {
+	if r == nil {
+		return ""
+	}
+	r.mu.Lock()
+	result, finished := r.result, r.finished
+	r.mu.Unlock()
+	if !finished {
+		return ""
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil || len(encoded) > 16384 {
+		return ""
+	}
+	return string(encoded)
+}
+
+func (r *RouterTorCompare) Execution() string {
+	if r == nil {
+		return ""
+	}
+	r.mu.Lock()
+	active, winner, valid, kept := r.active, r.result.Winner, r.finished && r.failure == nil, r.kept
+	r.mu.Unlock()
+	if !valid || active == nil || winner == nil || !r.current() || !active.pathCurrent() || !kept && !active.current() {
+		return ""
+	}
+	return string(winner.Execution)
+}
+
+// Keep must complete before the host publishes Connected or starts automatic
+// MTU work. A concurrent cancellation wins unless transfer already completed;
+// afterwards the ordinary native host owns the VPN, not this round object.
+func (r *RouterTorCompare) Keep() error {
+	if r == nil || !r.current() {
+		return errors.New("Tor comparison is unavailable")
+	}
+	r.mu.Lock()
+	if r.kept {
+		r.mu.Unlock()
+		return nil
+	}
+	active := r.active
+	if !r.finished || r.failure != nil || r.keeping || active == nil || r.ctx.Err() != nil {
+		r.mu.Unlock()
+		return errors.New("Tor comparison has no current final winner")
+	}
+	r.keeping = true
+	r.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	err := active.keep(ctx)
+	cancel()
+	current := r.current() && active.pathCurrent()
+	r.mu.Lock()
+	r.keeping = false
+	if err == nil && r.active == active && r.ctx.Err() == nil && current {
+		r.kept = true
+	} else if err == nil {
+		err = errors.New("Tor comparison winner changed during transfer")
+	}
+	r.mu.Unlock()
+	if err != nil {
+		r.Cancel()
+	}
+	return err
+}
+
+func (r *RouterTorCompare) Cancel() {
+	r.cancelOwned()
+}
+
+// The transfer check and cancellation claim are one transaction. If Close
+// claims cancellation first, Keep cannot succeed afterwards; if Keep won,
+// this obsolete round must not continue into candidate teardown.
+func (r *RouterTorCompare) cancelOwned() bool {
+	if r == nil {
+		return false
+	}
+	r.mu.Lock()
+	if r.kept {
+		r.mu.Unlock()
+		return false
+	}
+	r.cancel()
+	active := r.active
+	r.mu.Unlock()
+	if active != nil {
+		active.cancel()
+	}
+	return true
+}
+
+func (r *RouterTorCompare) Close() error {
+	if r == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return r.close(ctx)
+}
+
+func (r *RouterTorCompare) close(ctx context.Context) error {
+	if !r.cancelOwned() {
+		return nil
+	}
+	select {
+	case r.closeMu <- struct{}{}:
+		defer func() { <-r.closeMu }()
+	case <-ctx.Done():
+		return routechoice.ErrTeardown
+	}
+	r.mu.Lock()
+	if !r.started && !r.finished {
+		r.finished = true
+		close(r.done)
+	}
+	active := r.active
+	r.mu.Unlock()
+	if active != nil && active.Close(ctx) != nil {
+		return routechoice.ErrTeardown
+	}
+	select {
+	case <-r.done:
+	case <-ctx.Done():
+		return routechoice.ErrTeardown
+	}
+	r.mu.Lock()
+	active = r.active
+	r.mu.Unlock()
+	if active != nil && active.Close(ctx) != nil {
+		return routechoice.ErrTeardown
+	}
+	return nil
+}
+
+type routerTorCompareDriver struct{ round *RouterTorCompare }
+
+func (d routerTorCompareDriver) Open(context.Context, routechoice.Candidate) (routechoice.Session, error) {
+	return nil, errors.New("Tor comparison requires its shared captured external target")
+}
+func (d routerTorCompareDriver) OpenTarget(ctx context.Context, candidate routechoice.Candidate, target string) (routechoice.Session, error) {
+	r := d.round
+	if !r.current() || ctx.Err() != nil {
+		return nil, errors.New("Tor comparison opening is cancelled")
+	}
+	r.mu.Lock()
+	busy := r.active != nil
+	r.mu.Unlock()
+	if busy {
+		return nil, routechoice.ErrTeardown
+	}
+	path := r.host.NewCandidate(string(candidate.Execution), target)
+	if path == nil {
+		return nil, errors.New("Tor comparison host could not capture the candidate")
+	}
+	s := &routerTorCompareSession{round: r, candidate: candidate, target: target, path: path, openDone: make(chan struct{}), closeMu: make(chan struct{}, 1)}
+	r.mu.Lock()
+	r.active = s
+	r.mu.Unlock()
+	go s.start(ctx)
+	select {
+	case <-s.openDone:
+		s.mu.Lock()
+		err := s.openErr
+		s.mu.Unlock()
+		if err != nil || !s.current() {
+			return s, errors.New("Tor comparison candidate failed startup or changed owner")
+		}
+		return s, nil
+	case <-ctx.Done():
+		s.cancel()
+		return s, ctx.Err()
+	case <-r.ctx.Done():
+		s.cancel()
+		return s, r.ctx.Err()
+	}
+}
+
+type routerTorCompareSession struct {
+	round            *RouterTorCompare
+	candidate        routechoice.Candidate
+	target           string
+	path             RouterTorCompareCandidate
+	mu               sync.Mutex
+	native           *RouterTorComparison
+	nativeCurrent    func() bool
+	identity         string
+	openErr          error
+	openDone         chan struct{}
+	cancelOnce       sync.Once
+	cancelDone       chan struct{}
+	closeMu          chan struct{}
+	pathClose        chan struct{}
+	pathCloseErr     error
+	pathCloseEarly   bool
+	closed, canceled bool
+}
+
+func (s *routerTorCompareSession) start(ctx context.Context) {
+	defer close(s.openDone)
+	stop := context.AfterFunc(ctx, s.cancel)
+	defer stop()
+	err := s.path.Start()
+	if err == nil && (ctx.Err() != nil || !s.round.current() || !s.path.Current()) {
+		err = errors.New("Tor candidate startup lost its native owner")
+	}
+	if err == nil {
+		native, current, failure := s.round.factory(s.path, string(s.candidate.Execution), s.target)
+		s.mu.Lock()
+		s.native, s.nativeCurrent = native, current
+		canceled := s.canceled
+		s.mu.Unlock()
+		if canceled && native != nil {
+			native.Cancel()
+		}
+		err = failure
+		if err == nil && (native == nil || current == nil || !current() || canceled) {
+			err = errors.New("Tor candidate returned no captured comparison")
+		}
+		if err == nil {
+			err = native.request.Prepare(ctx)
+		}
+		if err == nil && (!native.active() || !current() || !s.round.current() || ctx.Err() != nil) {
+			err = errors.New("Tor candidate changed while preparing its retained anchor")
+		}
+		if err == nil {
+			identity := native.Identity()
+			if identity == "" {
+				err = errors.New("Tor candidate omitted its native comparison identity")
+			} else {
+				s.mu.Lock()
+				s.identity = identity
+				s.mu.Unlock()
+			}
+		}
+	}
+	s.mu.Lock()
+	s.openErr = err
+	s.mu.Unlock()
+	if err != nil {
+		s.cancel()
+	}
+}
+
+func (s *routerTorCompareSession) pathCurrent() bool {
+	s.mu.Lock()
+	current, canceled, closed := s.nativeCurrent, s.canceled, s.closed
+	s.mu.Unlock()
+	return !canceled && !closed && s.round.current() && s.path.Current() && current != nil && current()
+}
+func (s *routerTorCompareSession) current() bool {
+	if !s.pathCurrent() {
+		return false
+	}
+	s.mu.Lock()
+	native, identity := s.native, s.identity
+	s.mu.Unlock()
+	return identity != "" && native != nil && native.Identity() == identity
+}
+func (s *routerTorCompareSession) Identity() string {
+	if !s.current() {
+		return ""
+	}
+	s.mu.Lock()
+	identity := s.identity
+	s.mu.Unlock()
+	return s.round.source + "/" + string(s.candidate.Execution) + "/" + identity
+}
+func (s *routerTorCompareSession) Verify(ctx context.Context) error {
+	if !s.current() {
+		return errors.New("Tor comparison path is no longer current")
+	}
+	s.mu.Lock()
+	native := s.native
+	s.mu.Unlock()
+	err := native.request.Verify(ctx)
+	if err != nil || ctx.Err() != nil || !s.current() {
+		return errors.New("Tor comparison path proof failed or expired")
+	}
+	return nil
+}
+func (s *routerTorCompareSession) ProbeLast(ctx context.Context) (time.Duration, error) {
+	return s.probe(ctx, "")
+}
+func (s *routerTorCompareSession) ProbeExternal(ctx context.Context, target string) (time.Duration, error) {
+	if target == "" || target != s.target {
+		return 0, errors.New("Tor comparison external target changed")
+	}
+	return s.probe(ctx, target)
+}
+func (s *routerTorCompareSession) probe(ctx context.Context, target string) (time.Duration, error) {
+	if !s.current() {
+		return 0, errors.New("Tor comparison probe lost its native owner")
+	}
+	s.mu.Lock()
+	native := s.native
+	s.mu.Unlock()
+	var value time.Duration
+	var err error
+	if target == "" {
+		value, err = native.request.ProbeLast(ctx)
+	} else {
+		value, err = native.request.ProbeExternal(ctx, target)
+	}
+	if err != nil || value <= 0 || ctx.Err() != nil || !s.current() {
+		return 0, errors.New("Tor comparison received no valid current response time")
+	}
+	return value, nil
+}
+
+func (s *routerTorCompareSession) cancel() {
+	s.mu.Lock()
+	s.canceled = true
+	native := s.native
+	s.mu.Unlock()
+	if native != nil {
+		native.Cancel()
+	}
+	s.cancelOnce.Do(func() {
+		done := make(chan struct{})
+		s.mu.Lock()
+		s.cancelDone = done
+		s.mu.Unlock()
+		go func() { s.path.Cancel(); close(done) }()
+	})
+}
+
+func (s *routerTorCompareSession) closePath(ctx context.Context) error {
+	s.mu.Lock()
+	if s.pathClose == nil {
+		s.pathClose = make(chan struct{})
+		select {
+		case <-s.openDone:
+			s.pathCloseEarly = false
+		default:
+			s.pathCloseEarly = true
+		}
+		done := s.pathClose
+		go func() { err := s.path.Close(); s.mu.Lock(); s.pathCloseErr = err; s.mu.Unlock(); close(done) }()
+	}
+	done := s.pathClose
+	s.mu.Unlock()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return routechoice.ErrTeardown
+	}
+	s.mu.Lock()
+	err := s.pathCloseErr
+	if err != nil {
+		s.pathClose = nil
+	}
+	s.mu.Unlock()
+	return err
+}
+
+func (s *routerTorCompareSession) Close(ctx context.Context) error {
+	s.cancel()
+	select {
+	case s.closeMu <- struct{}{}:
+		defer func() { <-s.closeMu }()
+	case <-ctx.Done():
+		return routechoice.ErrTeardown
+	}
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
+		return nil
+	}
+	// Start native whole-owner close before joining a pending Start or probe;
+	// native close is what unblocks their captured I/O and ambiguous grants.
+	if err := s.closePath(ctx); err != nil {
+		return routechoice.ErrTeardown
+	}
+	select {
+	case <-s.openDone:
+	case <-ctx.Done():
+		return routechoice.ErrTeardown
+	}
+	s.mu.Lock()
+	early := s.pathCloseEarly
+	if early {
+		s.pathClose = nil
+	}
+	s.mu.Unlock()
+	if early {
+		if err := s.closePath(ctx); err != nil {
+			return routechoice.ErrTeardown
+		}
+	}
+	s.mu.Lock()
+	native, cancelDone := s.native, s.cancelDone
+	s.mu.Unlock()
+	if cancelDone != nil {
+		select {
+		case <-cancelDone:
+		case <-ctx.Done():
+			return routechoice.ErrTeardown
+		}
+	}
+	if native != nil && native.request.Close(ctx) != nil {
+		return routechoice.ErrTeardown
+	}
+	if s.path.Current() {
+		return routechoice.ErrTeardown
+	}
+	s.mu.Lock()
+	s.closed = true
+	s.mu.Unlock()
+	s.round.mu.Lock()
+	if s.round.active == s {
+		s.round.active = nil
+	}
+	s.round.mu.Unlock()
+	return nil
+}
+
+func (s *routerTorCompareSession) keep(ctx context.Context) error {
+	if !s.current() {
+		return errors.New("Tor winner is no longer current")
+	}
+	s.mu.Lock()
+	native := s.native
+	s.mu.Unlock()
+	if err := native.request.Verify(ctx); err != nil || !s.current() {
+		return errors.New("Tor winner changed before measurement cleanup")
+	}
+	native.Cancel()
+	if err := native.request.Close(ctx); err != nil {
+		return err
+	}
+	if ctx.Err() != nil || !s.pathCurrent() {
+		return errors.New("Tor winner changed during measurement cleanup")
+	}
+	return nil
+}

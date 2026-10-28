@@ -1,0 +1,477 @@
+package libbox
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/routechoice"
+)
+
+type torRoundHostFixture struct {
+	current   atomic.Bool
+	mu        sync.Mutex
+	paths     []*torRoundPathFixture
+	configure func(*torRoundPathFixture)
+	overlap   bool
+}
+
+func (h *torRoundHostFixture) Current() bool           { return h.current.Load() }
+func (h *torRoundHostFixture) Progress(string, string) {}
+func (h *torRoundHostFixture) NewCandidate(execution, target string) RouterTorCompareCandidate {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, old := range h.paths {
+		if old.alive.Load() {
+			h.overlap = true
+		}
+	}
+	p := &torRoundPathFixture{host: h, index: len(h.paths), execution: execution, target: target,
+		startEntered: make(chan struct{}), cancelEntered: make(chan struct{}), closeEntered: make(chan struct{})}
+	p.last, p.external = 8*time.Millisecond, 12*time.Millisecond
+	if execution == "server" {
+		p.last, p.external = 2*time.Millisecond, 4*time.Millisecond
+	}
+	if h.configure != nil {
+		h.configure(p)
+	}
+	h.paths = append(h.paths, p)
+	return p
+}
+
+type torRoundPathFixture struct {
+	host                                                   *torRoundHostFixture
+	index                                                  int
+	execution, target                                      string
+	alive, canceled                                        atomic.Bool
+	startEntered, cancelEntered, closeEntered              chan struct{}
+	startHold, closeHold                                   <-chan struct{}
+	startOnce, cancelOnce, closeOnce                       sync.Once
+	starts, closes, nativeCloses, lastCalls, externalCalls atomic.Int32
+	closeFailures, nativeCloseFailures                     atomic.Int32
+	last, external                                         time.Duration
+	startErr, factoryErr, lastErr, externalErr             error
+	prepare                                                func(context.Context) error
+	onLast                                                 func()
+	lateStart                                              bool
+}
+
+func (p *torRoundPathFixture) Current() bool {
+	return p.host.Current() && p.alive.Load() && !p.canceled.Load()
+}
+func (p *torRoundPathFixture) Server() *CommandServer        { return nil }
+func (p *torRoundPathFixture) Proof() *RouterTorProofRequest { return nil }
+func (p *torRoundPathFixture) Start() error {
+	p.starts.Add(1)
+	p.startOnce.Do(func() { close(p.startEntered) })
+	if p.startHold != nil {
+		<-p.startHold
+	}
+	if p.startErr != nil {
+		return p.startErr
+	}
+	if !p.lateStart && p.canceled.Load() {
+		return errors.New("captured start canceled")
+	}
+	p.alive.Store(true)
+	return nil
+}
+func (p *torRoundPathFixture) Cancel() {
+	p.canceled.Store(true)
+	p.cancelOnce.Do(func() { close(p.cancelEntered) })
+}
+func (p *torRoundPathFixture) Close() error {
+	p.closes.Add(1)
+	p.closeOnce.Do(func() { close(p.closeEntered) })
+	if p.closeHold != nil {
+		<-p.closeHold
+	}
+	if p.closeFailures.Add(-1) >= 0 {
+		return errors.New("actual path close remains pending")
+	}
+	p.alive.Store(false)
+	return nil
+}
+
+type torRoundProbeFixture struct {
+	path            *torRoundPathFixture
+	ready, canceled atomic.Bool
+}
+
+func (f *torRoundProbeFixture) Prepare(ctx context.Context) error {
+	if f.path.prepare != nil {
+		if err := f.path.prepare(ctx); err != nil {
+			return err
+		}
+	}
+	f.ready.Store(true)
+	return nil
+}
+func (f *torRoundProbeFixture) Identity() string {
+	if !f.ready.Load() || f.canceled.Load() || !f.path.Current() {
+		return ""
+	}
+	return fmt.Sprintf("native-complete-box-%d", f.path.index)
+}
+func (f *torRoundProbeFixture) Verify(context.Context) error {
+	if f.Identity() == "" {
+		return errors.New("retired comparison")
+	}
+	return nil
+}
+func (f *torRoundProbeFixture) ProbeLast(ctx context.Context) (time.Duration, error) {
+	f.path.lastCalls.Add(1)
+	if f.path.onLast != nil {
+		f.path.onLast()
+	}
+	return f.path.last, f.path.lastErr
+}
+func (f *torRoundProbeFixture) ProbeExternal(ctx context.Context, target string) (time.Duration, error) {
+	f.path.externalCalls.Add(1)
+	if target != f.path.target {
+		return 0, errors.New("changed target")
+	}
+	return f.path.external, f.path.externalErr
+}
+func (f *torRoundProbeFixture) Cancel() { f.canceled.Store(true) }
+func (f *torRoundProbeFixture) Close(context.Context) error {
+	f.path.nativeCloses.Add(1)
+	f.Cancel()
+	if f.path.nativeCloseFailures.Add(-1) >= 0 {
+		return errors.New("measurement join remains pending")
+	}
+	return nil
+}
+
+func torRoundFixture(t *testing.T, configure func(*torRoundPathFixture)) (*RouterTorCompare, *torRoundHostFixture) {
+	t.Helper()
+	h := &torRoundHostFixture{configure: configure}
+	h.current.Store(true)
+	factory := func(path RouterTorCompareCandidate, execution, target string) (*RouterTorComparison, func() bool, error) {
+		p := path.(*torRoundPathFixture)
+		if p.execution != execution || p.target != target {
+			return nil, nil, errors.New("changed factory capture")
+		}
+		probe := &torRoundProbeFixture{path: p}
+		ctx, cancel := context.WithCancel(context.Background())
+		request := &RouterTorComparison{request: probe, ctx: ctx, cancel: cancel, current: p.Current}
+		return request, p.Current, p.factoryErr
+	}
+	r, err := newRouterTorCompare(h, "private-entry", "tor-exit", "wg+tor", strings.Repeat("a", 64), routechoice.Options{
+		Targets:      []string{"https://1.1.1.1/cdn-cgi/trace", "https://1.0.0.1/cdn-cgi/trace"},
+		ProbeTimeout: 100 * time.Millisecond, StartupTimeout: 200 * time.Millisecond, CleanupTimeout: 100 * time.Millisecond}, factory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if err := r.close(ctx); err != nil {
+			t.Error("test left retained native comparison", err)
+		}
+	})
+	return r, h
+}
+
+func TestRouterTorCompareRoundUsesSameTargetStrictAverageAndFinalRepeat(t *testing.T) {
+	r, h := torRoundFixture(t, nil)
+	if err := r.Run(); err != nil {
+		t.Fatal(err)
+	}
+	var result routechoice.Result
+	if json.Unmarshal([]byte(r.ResultJSON()), &result) != nil || result.Winner == nil || result.Winner.Execution != routechoice.Server || result.Final == nil || !result.Final.Eligible {
+		t.Fatal("missing actual winner", r.ResultJSON())
+	}
+	if len(result.Measurements) != 2 || result.Measurements[0].ScoreMS == nil || *result.Measurements[0].ScoreMS != 10 || result.Measurements[1].ScoreMS == nil || *result.Measurements[1].ScoreMS != 3 {
+		t.Fatal("changed user average", r.ResultJSON())
+	}
+	if len(h.paths) != 3 || h.overlap {
+		t.Fatal("candidate overlap or missing final recheck", len(h.paths), h.overlap)
+	}
+	for i, p := range h.paths {
+		if p.target != result.Target || p.lastCalls.Load() != 1 || p.externalCalls.Load() != 1 {
+			t.Fatal("candidate used another target or omitted fresh operand", i)
+		}
+		if i < 2 && (p.alive.Load() || p.closes.Load() != 1 || p.nativeCloses.Load() != 1) {
+			t.Fatal("trial path or measurement was not drained", i)
+		}
+	}
+	if err := r.Keep(); err != nil {
+		t.Fatal(err)
+	}
+	if r.Execution() != "server" || h.paths[2].nativeCloses.Load() != 1 || h.paths[2].closes.Load() != 0 || !h.paths[2].alive.Load() {
+		t.Fatal("Keep failed to transfer only the proved selected VPN")
+	}
+	r.Cancel()
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if h.paths[2].closes.Load() != 0 || h.paths[2].canceled.Load() {
+		t.Fatal("old round cleanup stopped an adopted winner")
+	}
+	_ = h.paths[2].Close() // the ordinary host now owns final disconnection
+}
+
+func TestRouterTorCompareRoundFailuresHaveNoScoreAndBothInvalidHaveNoWinner(t *testing.T) {
+	for _, both := range []bool{false, true} {
+		t.Run(fmt.Sprint(both), func(t *testing.T) {
+			r, h := torRoundFixture(t, func(p *torRoundPathFixture) {
+				if both || p.execution == "local" {
+					p.last = 0
+					p.lastErr = errors.New("real response unavailable")
+				}
+			})
+			err := r.Run()
+			var result routechoice.Result
+			if json.Unmarshal([]byte(r.ResultJSON()), &result) != nil {
+				t.Fatal("invalid result")
+			}
+			if result.Measurements[0].Eligible || result.Measurements[0].ScoreMS != nil {
+				t.Fatal("invalid candidate received a zero score")
+			}
+			if both {
+				if err == nil || result.Winner != nil || r.Execution() != "" || r.Keep() == nil || len(h.paths) != 2 {
+					t.Fatal("invalid candidates acquired a winner")
+				}
+			} else {
+				if err != nil || r.Execution() != "server" || len(h.paths) != 3 {
+					t.Fatal("valid survivor or its repeat missing", err)
+				}
+			}
+		})
+	}
+}
+
+func TestRouterTorCompareRoundFailedFinalRechecksNextValidCandidate(t *testing.T) {
+	r, h := torRoundFixture(t, func(p *torRoundPathFixture) {
+		if p.index == 2 {
+			p.externalErr = errors.New("final path changed")
+		}
+	})
+	if err := r.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if r.Execution() != "local" || len(h.paths) != 4 || h.paths[2].alive.Load() || h.paths[3].lastCalls.Load() != 1 || h.paths[3].externalCalls.Load() != 1 {
+		t.Fatal("failed final activation retained an old trial score")
+	}
+}
+
+func TestRouterTorCompareRoundRetainsPartialFactoryAndCloseFailures(t *testing.T) {
+	for _, kind := range []string{"factory", "path-close", "measurement-close"} {
+		t.Run(kind, func(t *testing.T) {
+			r, h := torRoundFixture(t, func(p *torRoundPathFixture) {
+				if p.index == 0 {
+					switch kind {
+					case "factory":
+						p.factoryErr = errors.New("partial factory failure")
+					case "path-close":
+						p.closeFailures.Store(1)
+					case "measurement-close":
+						p.nativeCloseFailures.Store(1)
+					}
+				}
+			})
+			err := r.Run()
+			if kind == "factory" {
+				if err != nil || len(h.paths) != 3 || h.paths[0].nativeCloses.Load() != 1 || h.paths[0].closes.Load() != 1 {
+					t.Fatal("partial native handle was lost", err)
+				}
+			} else {
+				if !errors.Is(err, routechoice.ErrTeardown) || len(h.paths) != 1 || r.Keep() == nil {
+					t.Fatal("unfinished cleanup allowed another candidate", err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				if r.close(ctx) != nil || h.paths[0].alive.Load() || h.paths[0].nativeCloses.Load() == 0 {
+					t.Fatal("old exact owner could not retry cleanup")
+				}
+			}
+		})
+	}
+}
+
+func TestRouterTorCompareRoundCancellationDoesNotWaitForStartupOrLoseLateOwner(t *testing.T) {
+	startRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(startRelease) })
+	r, h := torRoundFixture(t, func(p *torRoundPathFixture) {
+		if p.index == 0 {
+			p.startHold = startRelease
+			p.lateStart = true
+		}
+	})
+	done := make(chan error, 1)
+	go func() { done <- r.Run() }()
+	var p *torRoundPathFixture
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		h.mu.Lock()
+		if len(h.paths) > 0 {
+			p = h.paths[0]
+		}
+		h.mu.Unlock()
+		if p != nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if p == nil {
+		t.Fatal("candidate was not captured before its blocking start")
+	}
+	<-p.startEntered
+	canceled := make(chan struct{})
+	go func() { r.Cancel(); close(canceled) }()
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("Cancel waited on native startup")
+	}
+	select {
+	case <-p.closeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("native whole close was deferred until blocked Start returned")
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, routechoice.ErrTeardown) {
+			t.Fatal("unfinished Start lost ownership", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled round did not return bounded teardown state")
+	}
+	if len(h.paths) != 1 {
+		t.Fatal("another candidate replaced pending startup")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	if r.close(ctx) == nil {
+		t.Fatal("early native close discharged unfinished startup")
+	}
+	cancel()
+	releaseOnce.Do(func() { close(startRelease) })
+	ctx, cancel = context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := r.close(ctx); err != nil || p.alive.Load() || p.closes.Load() < 2 {
+		t.Fatal("late startup was not closed again by its retained exact owner", err, p.closes.Load())
+	}
+}
+
+func TestRouterTorCompareRoundNativePreparationCancelJoinsWholePathFirst(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	defer once.Do(func() { close(release) })
+	r, h := torRoundFixture(t, func(p *torRoundPathFixture) {
+		if p.index == 0 {
+			p.prepare = func(ctx context.Context) error { close(entered); <-ctx.Done(); <-release; return ctx.Err() }
+		}
+	})
+	done := make(chan error, 1)
+	go func() { done <- r.Run() }()
+	<-entered
+	r.Cancel()
+	h.mu.Lock()
+	p := h.paths[0]
+	h.mu.Unlock()
+	select {
+	case <-p.closeEntered:
+	case <-time.After(time.Second):
+		t.Fatal("native preparation prevented whole-owner stop")
+	}
+	once.Do(func() { close(release) })
+	if err := <-done; err == nil {
+		t.Fatal("cancelled native preparation returned a successful round")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := r.close(ctx); err != nil || p.nativeCloses.Load() == 0 {
+		t.Fatal("late native preparation handle was dropped", err)
+	}
+}
+
+func TestRouterTorCompareRoundRejectsChangedSourceAndKeepFailure(t *testing.T) {
+	t.Run("source", func(t *testing.T) {
+		r, h := torRoundFixture(t, nil)
+		h.configure = func(p *torRoundPathFixture) { p.onLast = func() { h.current.Store(false) } }
+		if r.Run() == nil || r.Execution() != "" || r.Keep() == nil {
+			t.Fatal("stale source was adopted")
+		}
+	})
+	t.Run("measurement-drain", func(t *testing.T) {
+		r, h := torRoundFixture(t, func(p *torRoundPathFixture) {
+			if p.index == 2 {
+				p.nativeCloseFailures.Store(1)
+			}
+		})
+		if r.Run() != nil || r.Keep() == nil {
+			t.Fatal("unconfirmed final measurement join was adopted")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		if r.close(ctx) != nil || h.paths[2].alive.Load() {
+			t.Fatal("failed winner transfer lost its whole native owner")
+		}
+	})
+}
+
+func TestRouterTorCompareRoundCannotUseCallerLabelsWithoutActualNativeProof(t *testing.T) {
+	h := &torRoundHostFixture{}
+	h.current.Store(true)
+	p := h.NewCandidate("server", "https://1.1.1.1/cdn-cgi/trace")
+	if p.Start() != nil {
+		t.Fatal("fixture failed")
+	}
+	if value, _, err := routerTorCompareNative(p, "server", "https://1.1.1.1/cdn-cgi/trace"); err == nil || value != nil {
+		t.Fatal("caller label granted authenticated Server execution")
+	}
+	_ = p.Close()
+	if r, err := RouterTorNewCompare(h, "same", "same", "wg+tor", strings.Repeat("a", 64)); err == nil || r != nil {
+		t.Fatal("duplicate entry/exit admitted")
+	}
+	r, err := RouterTorNewCompare(h, "private-entry", "tor-exit", "wg+tor", strings.Repeat("a", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Close() != nil || r.Run() == nil || r.Execution() != "" {
+		t.Fatal("closed unused round was reused")
+	}
+}
+
+func TestRouterTorCompareRoundKeepAndCloseShareOneOwnershipTransfer(t *testing.T) {
+	// Both callers race from the same completed real coordinator state. We do
+	// not assume which one the scheduler chooses. A successful Keep must always
+	// preserve the native winner; a successful cancellation must prevent Keep.
+	for attempt := 0; attempt < 256; attempt++ {
+		r, h := torRoundFixture(t, nil)
+		if err := r.Run(); err != nil {
+			t.Fatal(err)
+		}
+		winner := h.paths[2]
+		begin := make(chan struct{})
+		kept, closed := make(chan error, 1), make(chan error, 1)
+		go func() { <-begin; kept <- r.Keep() }()
+		go func() {
+			<-begin
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			closed <- r.close(ctx)
+		}()
+		close(begin)
+		keepErr, closeErr := <-kept, <-closed
+		if closeErr != nil {
+			t.Fatal("concurrent exact-owner close failed", closeErr)
+		}
+		if keepErr == nil {
+			if !winner.alive.Load() || winner.canceled.Load() || winner.closes.Load() != 0 {
+				t.Fatal("Close stopped the winner after Keep transferred it")
+			}
+			_ = winner.Close()
+		} else if winner.alive.Load() || winner.closes.Load() == 0 {
+			t.Fatal("cancellation won but failed to retain and close its native owner")
+		}
+	}
+}

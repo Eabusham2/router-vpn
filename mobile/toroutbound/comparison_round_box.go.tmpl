@@ -1,0 +1,27 @@
+package box
+
+import "github.com/sagernet/sing-box/routervpn/mobiletor"
+
+// ComparisonExecution is derived from the proved native owner. A host's saved
+// auto preference or caller-supplied candidate label cannot turn a Local path
+// into an authenticated Server path.
+func (r *RouterVPNTorProofRequest) ComparisonExecution() string {
+	if r == nil || !r.Healthy() {
+		return ""
+	}
+	owner, native := r.owner.(interface{ Type() string })
+	if !native {
+		return ""
+	}
+	switch owner.Type() {
+	case "routervpn-tor":
+		if r.server == nil {
+			return "local"
+		}
+	case mobiletor.ServerTorClientType:
+		if r.server != nil {
+			return "server"
+		}
+	}
+	return ""
+}

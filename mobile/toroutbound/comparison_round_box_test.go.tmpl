@@ -1,0 +1,86 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type torRoundServerProofFixture struct {
+	*torBoxFixture
+	graph string
+	bound bool
+}
+
+func (f *torRoundServerProofFixture) TorServerConfig() string { return f.graph }
+func (f *torRoundServerProofFixture) BindTorServer(entry *mobiletor.PredecessorProof, current, source func() bool) error {
+	if entry == nil || !current() || !source() {
+		return errors.New("missing private source")
+	}
+	f.bound = true
+	return nil
+}
+func (f *torRoundServerProofFixture) CloseTor(context.Context, string) error { return nil }
+
+type torRoundProofCapture struct{ graph string }
+
+func (f *torRoundProofCapture) Identity() string               { return "captured-complete-box" }
+func (f *torRoundProofCapture) DNSProof(context.Context) error { return nil }
+func (f *torRoundProofCapture) ServerGraph(graph string) bool  { return graph == f.graph }
+func (f *torRoundProofCapture) EntryCurrent() bool             { return true }
+
+func TestRouterTorCompareActualLeafRequiresHealthyBoundNativeProof(t *testing.T) {
+	local := newTorBoxFixture(t, "local-session")
+	proof, err := newRouterTorProofRequest(context.Background(), local, local.session, "", func() bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proof.ComparisonExecution() != "" {
+		t.Fatal("unproved native leaf became a candidate")
+	}
+	if _, err = proof.Run(); err != nil || proof.ComparisonExecution() != "local" {
+		t.Fatal("actual Local leaf was not retained", err)
+	}
+	proof.Cancel()
+	if proof.ComparisonExecution() != "" {
+		t.Fatal("retired Local leaf retained candidate authority")
+	}
+	for _, correctGraph := range []bool{false, true} {
+		server := &torRoundServerProofFixture{torBoxFixture: newTorBoxFixture(t, "server-session"), graph: "exact-native-graph"}
+		server.Adapter = outbound.NewAdapter(mobiletor.ServerTorClientType, "tor-final", []string{"tcp"}, nil)
+		profile := `{"id":"private-entry","node_kind":"router-vpn","node_proof_id":"` + strings.Repeat("a", 64) + `","router_api":"http://10.77.0.1:8787","api_token":"captured-private-token"}`
+		proof, err = newRouterTorProofRequest(context.Background(), server, server.session, profile, func() bool { return true })
+		if err != nil {
+			t.Fatal(err)
+		}
+		capture := &torRoundProofCapture{graph: "different-native-graph"}
+		if correctGraph {
+			capture.graph = server.graph
+		}
+		proof.capture = capture
+		if _, err = proof.Run(); err != nil {
+			t.Fatal(err)
+		}
+		if proof.ComparisonExecution() != "" {
+			t.Fatal("unbound Server label was accepted as Local or authenticated Server")
+		}
+		err = proof.bindServer(server)
+		if correctGraph {
+			if err != nil || !server.bound || proof.ComparisonExecution() != "server" {
+				t.Fatal("correct private native Server binding failed", err)
+			}
+		} else {
+			if err == nil || server.bound || proof.ComparisonExecution() != "" {
+				t.Fatal("changed full source acquired Server candidate authority")
+			}
+		}
+		proof.Cancel()
+		if proof.ComparisonExecution() != "" {
+			t.Fatal("retired Server proof retained candidate authority")
+		}
+	}
+}
