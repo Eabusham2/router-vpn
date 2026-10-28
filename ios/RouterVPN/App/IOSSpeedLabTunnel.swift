@@ -276,7 +276,9 @@ import Foundation
     private static func readExecution(_ manager: NETunnelProviderManager, model: RouterVPNModel,
                                       identity: IOSSessionIdentity, owner: UUID) async throws -> IOSMultihopExecution.Capture {
         try model.iosSpeedLabOwnership.require(owner)
-        let entryKey = identity.engine == "external-libbox" ? "external_entry_bundle" : "entryBundle"
+        let entryKey = identity.engine == "external-libbox"
+            ? (["external-tor", "external-tor-bridge"].contains(identity.rawProfile) ? "tor_entry_bundle" : "external_entry_bundle")
+            : "entryBundle"
         guard model.activeSessionIdentity == identity, model.connected,
               let connection = manager.connection as? NETunnelProviderSession,
               connection.status == .connected, connection.connectedDate == identity.connectedAt,

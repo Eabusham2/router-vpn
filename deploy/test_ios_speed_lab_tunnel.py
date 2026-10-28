@@ -111,7 +111,7 @@ typealias NETunnelProviderSession=Connection
  static var checks=0
  static func check(_ text:String,_ value:@autoclosure()->Bool){guard value()else{fatalError("FAIL: "+text)};checks+=1}
  static func rejected(_ text:String,_ action:()async throws->Void)async{do{try await action();fatalError("FAIL: "+text)}catch{checks+=1}}
- static func fresh(_ engine:String="libbox",_ raw:String="awg2-fast",_ strategy:Bool=false,_ entry:Bool=false,_ packetCompare:Bool=false)throws->(RouterVPNModel,NETunnelProviderManager,UUID){
+ static func fresh(_ engine:String="libbox",_ raw:String="awg2-fast",_ strategy:Bool=false,_ entry:Bool=false,_ packetCompare:Bool=false,_ torExecution:String="local")throws->(RouterVPNModel,NETunnelProviderManager,UUID){
   Trace.values=[];FixtureClock.value=0;NETunnelProviderManager.hook=nil;NETunnelProviderManager.allReadHook=nil
   NETunnelProviderManager.allReads=0;NETunnelProviderManager.allReadFailures=0
   IOSMTUMeasurementGate.current=String(repeating:"a",count:32);IOSMTUControl.healthy=true
@@ -124,9 +124,13 @@ typealias NETunnelProviderSession=Connection
   if engine=="external-libbox" {
    let kind=String(raw.dropFirst("external-".count))
    var external:[String:Any]=["protocol":kind,"response_probe":["url":"https://198.51.100.8/response","server_name":"node.example.test"]]
-   if ["wireguard","amneziawg"].contains(kind){external["server_peer"]=["public_key":"bBq3qZ0192YFNiixFZqNRUwTqYBvfydnB3GJrDJliAg=","addresses":["10.94.0.3/32","fd94::3/128"],"mtu":1360,"persistent_keepalive_interval":25];external[kind]=["private_key":"exact captured local peer credential","endpoint":"198.51.100.8:51820"]}
+   if ["tor","tor-bridge"].contains(kind){
+    external=["protocol":kind,"expected_public_ip":""]
+    if kind=="tor-bridge" {external["tor_bridge"]=["transport":"obfs4","bridges":["obfs4 198.51.100.9:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=Y2VydA iat-mode=0"]]}
+    m.connection.execution=torExecution
+   }else if ["wireguard","amneziawg"].contains(kind){external["server_peer"]=["public_key":"bBq3qZ0192YFNiixFZqNRUwTqYBvfydnB3GJrDJliAg=","addresses":["10.94.0.3/32","fd94::3/128"],"mtu":1360,"persistent_keepalive_interval":25];external[kind]=["private_key":"exact captured local peer credential","endpoint":"198.51.100.8:51820"]}
    else{external["shadowsocks"]=["server":"198.51.100.8","password":"exact external credentials"]}
-   let selected:[String:Any]=["id":"exit","node_kind":"external","external":external,"multihop_enabled":entry,"multihop_entry_id":"entry","multihop_exit_id":"exit","multihop_entry_mode":"max-tls-awg","multihop_exit_mode":kind,"multihop_execution":kind=="shadowsocks" || packetCompare ? "auto":"local"]
+   let selected:[String:Any]=["id":"exit","node_kind":"external","external":external,"multihop_enabled":entry,"multihop_entry_id":"entry","multihop_exit_id":"exit","multihop_entry_mode":"max-tls-awg","multihop_exit_mode":kind,"multihop_execution":["tor","tor-bridge"].contains(kind) ? torExecution : kind=="shadowsocks" || packetCompare ? "auto":"local"]
    source=try JSONSerialization.data(withJSONObject:["selectedRouterID":"exit","routerProfiles":[selected]])
   }else{
    source=engine=="multihop-libbox" ? try JSONSerialization.data(withJSONObject:["selectedRouterID":"exit","routerProfiles":[["id":"exit","node_kind":"router-vpn","multihop_enabled":true,"multihop_entry_id":"entry","multihop_exit_id":"exit","multihop_entry_mode":"awg2-strong","multihop_exit_mode":raw,"multihop_execution":"auto"]],"profiles":["private-credential":"captured encrypted assets"]]) : Data("exact private profiles; DNS DoH; MTU Auto; execution Compare both".utf8)
@@ -151,6 +155,18 @@ typealias NETunnelProviderSession=Connection
   return(model,m,owner)
  }
  static func main()async throws {
+  for kind in ["tor","tor-bridge"] {for execution in ["local","server"] {
+   do {
+    let (model,m,owner)=try fresh("external-libbox","external-"+kind,false,true,false,execution),before=model.activeSessionIdentity!
+    let captured=try await IOSSpeedLabTunnel.capture(model:model,owner:owner)
+    try await captured.stopOriginal(model:model,owner:owner)
+    check("captured Tor stop retains exact execution before a temporary test",m.connection.stops==1 && !model.connected)
+    try await captured.restore(model:model,owner:owner,reconnect:true)
+    let config=(m.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+    let source=try IOSMultihopExecution.Source(configuration:config,digest:RouterVPNModel.iosStrategyDigest)
+    check("captured Tor restoration retains exact slot and proved Local or Server",model.activeSessionIdentity?.entryBundleData==before.entryBundleData && model.activeSessionIdentity?.entryMode==before.entryMode && source.requested==execution && m.connection.execution==execution && m.connection.starts==1 && config["external_entry_bundle"]==nil)
+   } catch {fatalError("FAIL: captured Tor restoration reads its exact entry slot: "+error.localizedDescription)}
+  }}
   for (engine,raw,strategy,entry,packetCompare) in [("libbox","awg2-fast",true,false,false),("wireguard","wg",false,false,false),("multihop-libbox","max-tls-awg",false,true,false),("multihop-libbox","wg",false,true,false),("multihop-libbox","wg-pq",false,true,false),("multihop-libbox","awg2-pq",false,true,false),("external-libbox","external-amneziawg",false,true,false),("external-libbox","external-tor",false,true,false),("external-libbox","external-shadowsocks",false,true,false),("external-libbox","external-wireguard",false,true,true),("external-libbox","external-amneziawg",false,true,true)]{
    let (model,m,owner)=try fresh(engine,raw,strategy,entry,packetCompare),before=model.activeSessionIdentity!
    try await IOSSpeedLabContext.$owner.withValue(owner){
@@ -334,6 +350,11 @@ def main():
                 assert result.returncode != 0 and negative in result.stdout+result.stderr, 'Pin ownership negative did not fail at the expected assertion'
                 print('Apple Speed Lab negative control rejected: '+negative)
         compile_and_run(source)
+        tor_slot='''let entryKey = identity.engine == "external-libbox"
+            ? (["external-tor", "external-tor-bridge"].contains(identity.rawProfile) ? "tor_entry_bundle" : "external_entry_bundle")
+            : "entryBundle"'''
+        assert source.count(tor_slot)==1
+        compile_and_run(source.replace(tor_slot,'let entryKey = identity.engine == "external-libbox" ? "external_entry_bundle" : "entryBundle"',1),'captured Tor restoration reads its exact entry slot')
         before='current.execution == multihopExecution.execution, current.pins == multihopExecution.pins else'
         assert source.count(before)==1
         compile_and_run(source.replace(before,'current.execution == multihopExecution.execution else',1),'changed Server identity cannot pause original')
