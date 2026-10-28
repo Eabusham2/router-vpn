@@ -61,6 +61,8 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           foreach($shell in @('pwsh','powershell.exe')){
+            & $shell -NoProfile -ExecutionPolicy Bypass -File client/test-windows-wfp-endpoints.ps1 -SourceRoot $env:GITHUB_WORKSPACE
+            if($LASTEXITCODE -ne 0){throw "Windows WFP endpoint reservation failed in $shell"}
             & $shell -NoProfile -ExecutionPolicy Bypass -File client/test-windows-wfp.ps1 -SourceRoot $env:GITHUB_WORKSPACE
             if($LASTEXITCODE -ne 0){throw "Windows WFP kernel enforcement failed in $shell"}
           }

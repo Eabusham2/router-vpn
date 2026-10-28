@@ -249,8 +249,10 @@ public sealed class RouterVPNWfpEcho : IDisposable {
     readonly List<TcpClient> clients = new List<TcpClient>();
     bool closed;
     public int Port { get { return ((IPEndPoint)listener.LocalEndpoint).Port; } }
-    public RouterVPNWfpEcho(string address) {
-        listener = new TcpListener(IPAddress.Parse(address), 0); listener.Start();
+    public RouterVPNWfpEcho(string address) : this(address, 0) { }
+    public RouterVPNWfpEcho(string address, int port) {
+        listener = new TcpListener(IPAddress.Parse(address), port);
+        try { listener.Start(); } catch { listener.Stop(); throw; }
         worker = new Thread(Accept); worker.IsBackground = true; worker.Start();
     }
     void Accept() {
@@ -477,15 +479,20 @@ try {
     return $process
 }
 
-function New-FixtureEndpointPair([string]$Address,[scriptblock]$OpenDatagram={param($IP,$Port) New-Object RouterVPNWfpDatagramEcho($IP,$Port)}) {
+function New-FixtureEndpointPair([string]$Address,[scriptblock]$OpenDatagram={param($IP,$Port) New-Object RouterVPNWfpDatagramEcho($IP,$Port)},[scriptblock]$ChoosePort={Get-Random -Minimum 1024 -Maximum 65536}) {
     # Windows TCP and UDP exclusions differ. Reserve both protocols before
     # adopting an endpoint so the kernel assertions still exercise the same
     # address/port with opposite TCP/UDP permissions. Retry only allocation
     # collisions, before installing any product filter, and drain partial owners.
-    for($attempt=0;$attempt -lt 8;$attempt++) {
+    # The TCP ephemeral allocator can return adjacent ports in a large UDP
+    # exclusion range. Sample the full unprivileged range independently instead
+    # of repeatedly asking that allocator for the next inaccessible UDP port.
+    for($attempt=0;$attempt -lt 32;$attempt++) {
         $tcp=$null;$udp=$null
         try {
-            $tcp=New-Object RouterVPNWfpEcho($Address)
+            $port=[int](& $ChoosePort)
+            if($port -lt 1024 -or $port -gt 65535) { throw 'The fixture selected an invalid unprivileged port.' }
+            $tcp=New-Object RouterVPNWfpEcho($Address,$port)
             $udp=& $OpenDatagram $Address $tcp.Port
             if($null -eq $udp -or $udp -isnot [RouterVPNWfpDatagramEcho]) { throw 'The fixture did not reserve its captured UDP listener.' }
             return [pscustomobject]@{TCP=$tcp;UDP=$udp}
@@ -496,7 +503,7 @@ function New-FixtureEndpointPair([string]$Address,[scriptblock]$OpenDatagram={pa
             while($null -ne $failure.InnerException) { $failure=$failure.InnerException }
             if($failure -isnot [Net.Sockets.SocketException] -or
                $failure.SocketErrorCode -notin @([Net.Sockets.SocketError]::AddressAlreadyInUse,[Net.Sockets.SocketError]::AccessDenied) -or
-               $attempt -eq 7) { throw }
+               $attempt -eq 31) { throw }
         }
     }
     throw 'The fixture could not reserve its bounded TCP/UDP pair.'
