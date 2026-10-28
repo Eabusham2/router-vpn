@@ -10,6 +10,18 @@ import (
 	"time"
 )
 
+// The public Disconnect handler owns operationMu throughout teardown. Fixture
+// callers of the internal hold-protection variant must preserve that same
+// transaction, so the live runtime monitor cannot race stop and Startup Last.
+func stopDesktopTorLifecycleFixture(t *testing.T, a *app) {
+	t.Helper()
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	if err := a.stopModeWithIntent(true); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // The real native reader ignores an incomplete O_EXCL input until it contains
 // the exact three-field request for its captured owner. An unparseable prefix
 // is not a native crash, and a complete foreign input is not an owned Stop.

@@ -50,9 +50,7 @@ func TestDesktopTorOrdinaryStartupLastAndCompleteSetupRetainExactEntry(t *testin
 					t.Fatal("Startup Last copied credentials", secret)
 				}
 			}
-			if err := f.a.stopModeWithIntent(true); err != nil {
-				t.Fatal(err)
-			}
+			stopDesktopTorLifecycleFixture(t, f.a)
 			capture, err := f.a.captureStartupPolicy()
 			if err != nil || capture == nil || capture.entryMode != protocol || capture.entryToken != startupProfileToken(entry) {
 				t.Fatal("Startup Last did not capture the exact imported entry", err)
@@ -64,9 +62,7 @@ func TestDesktopTorOrdinaryStartupLastAndCompleteSetupRetainExactEntry(t *testin
 			if !connected || f.launch == first || f.launch.tor.expected.SessionID == first.tor.expected.SessionID || f.launch.tor.expected.EntryMode != protocol || f.launch.tor.expected.EntryProofKind != mobiletor.ExternalPredecessorProofKind || f.launch.tor.expected.EntrySHA256 != first.tor.expected.EntrySHA256 || f.launch.tor.expected.KillSwitchPolicy != "always" {
 				t.Fatal("Startup Last failed to freshly prove the exact ordinary path")
 			}
-			if err := f.a.stopModeWithIntent(true); err != nil {
-				t.Fatal(err)
-			}
+			stopDesktopTorLifecycleFixture(t, f.a)
 			// Use the same setup route and disabled Router-only controls as all
 			// three native complete-profile forms. The selected Tor node supplies
 			// its actual saved graph, including the raw imported entry protocol.
@@ -123,9 +119,7 @@ func TestDesktopTorOrdinaryStartupLastAndCompleteSetupRetainExactEntry(t *testin
 			if response.Code != http.StatusOK || f.launch.tor.expected.DNS.Address != "1.0.0.1" || f.launch.tor.expected.DNS.Port != 5354 || f.launch.tor.expected.EntryMode != protocol {
 				t.Fatal("loaded complete profile did not reach the shipping native capture", response.Code, response.Body.String())
 			}
-			if err := f.a.stopModeWithIntent(true); err != nil {
-				t.Fatal(err)
-			}
+			stopDesktopTorLifecycleFixture(t, f.a)
 			response = postSetup(t, f.a, "/api/connection-profile/setup/delete", map[string]any{"id": saved.Profile.ID})
 			if response.Code != http.StatusOK {
 				t.Fatal("complete setup Delete failed", response.Code, response.Body.String())
@@ -305,9 +299,7 @@ func TestDesktopTorOrdinaryDeviceAndBridgeEditsReachTheCapturedNativePath(t *tes
 					f.launch.tor.expected.HomeLANAccess || f.launch.tor.expected.IPv6Mode != "off" {
 					t.Fatal("idle ordinary edits did not reach native capture and proof", response.Code, response.Body.String())
 				}
-				if err := f.a.stopModeWithIntent(true); err != nil {
-					t.Fatal(err)
-				}
+				stopDesktopTorLifecycleFixture(t, f.a)
 			})
 		}
 	}

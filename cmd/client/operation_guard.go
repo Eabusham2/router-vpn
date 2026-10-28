@@ -218,6 +218,22 @@ func (a *app) ownsConnectionRuntime(cmd *exec.Cmd) bool {
 	return owned
 }
 
+// Claim only while this exact child remains current. A separate owner read and
+// TryLock lets an old monitor acquire the transaction after Disconnect, briefly
+// rejecting the replacement's Startup Last or profile action. TryLock cannot
+// block while holding a.mu, preserving the transaction lock order.
+func (a *app) claimRuntimeMonitorOperation(command *exec.Cmd) (func(), bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if command == nil || a.cmd != command {
+		return nil, false
+	}
+	if !a.operationMu.TryLock() {
+		return nil, true
+	}
+	return a.operationMu.Unlock, true
+}
+
 func (a *app) stopOwnedConnectionRuntime(cmd *exec.Cmd) error {
 	if a.ownsConnectionRuntime(cmd) {
 		return a.stopMode()

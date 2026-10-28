@@ -632,15 +632,19 @@ func (a *app) monitorDesktopExternalRuntime(launch *desktopNodeLaunch) {
 			if _, err := a.readDesktopExternalProof(launch); err == nil {
 				continue
 			}
-			if !a.operationMu.TryLock() {
+			release, current := a.claimRuntimeMonitorOperation(launch.command)
+			if !current {
+				return
+			}
+			if release == nil {
 				continue
 			}
 			if !a.ownsConnectionRuntime(launch.command) {
-				a.operationMu.Unlock()
+				release()
 				return
 			}
 			if _, err := a.readDesktopExternalProof(launch); err == nil {
-				a.operationMu.Unlock()
+				release()
 				continue
 			}
 			// A failed native proof retires measured DNS even when the physical
@@ -655,7 +659,7 @@ func (a *app) monitorDesktopExternalRuntime(launch *desktopNodeLaunch) {
 			a.state.Connected, a.state.Phase, a.state.LastError = false, "failed", message
 			a.mu.Unlock()
 			sessionTrackerFor(a).markRequestFailure(message)
-			a.operationMu.Unlock()
+			release()
 			return
 		}
 	}()

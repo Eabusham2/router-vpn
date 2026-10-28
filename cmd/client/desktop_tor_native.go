@@ -652,15 +652,19 @@ func (a *app) monitorDesktopTorRuntime(launch *desktopNodeLaunch) {
 			if a.desktopTorMonitorCurrent(launch) {
 				continue
 			}
-			if !a.operationMu.TryLock() {
+			release, current := a.claimRuntimeMonitorOperation(launch.command)
+			if !current {
+				return
+			}
+			if release == nil {
 				continue
 			}
 			if !a.ownsConnectionRuntime(launch.command) {
-				a.operationMu.Unlock()
+				release()
 				return
 			}
 			if a.desktopTorMonitorCurrent(launch) {
-				a.operationMu.Unlock()
+				release()
 				continue
 			}
 			// Automatic proof/network retirement cannot preserve a completed
@@ -675,7 +679,7 @@ func (a *app) monitorDesktopTorRuntime(launch *desktopNodeLaunch) {
 			a.state.Connected, a.state.Phase, a.state.LastError = false, "failed", message
 			a.mu.Unlock()
 			sessionTrackerFor(a).markRequestFailure(message)
-			a.operationMu.Unlock()
+			release()
 			return
 		}
 	}()

@@ -101,9 +101,7 @@ func TestDesktopTorSavedChoiceDrivesStartupLastAndCompleteProfiles(t *testing.T)
 					t.Fatal("Startup Last copied private material", secret)
 				}
 			}
-			if err := f.a.stopModeWithIntent(true); err != nil {
-				t.Fatal(err)
-			}
+			stopDesktopTorLifecycleFixture(t, f.a)
 			capture, err := f.a.captureStartupPolicy()
 			if err != nil || capture == nil {
 				t.Fatal("saved path could not be captured for Startup Last", err)
@@ -112,9 +110,7 @@ func TestDesktopTorSavedChoiceDrivesStartupLastAndCompleteProfiles(t *testing.T)
 			if !f.a.state.Connected || f.launch == first || f.launch.tor.expected.SessionID == first.tor.expected.SessionID || f.launch.tor.expected.EntryID != first.tor.expected.EntryID || f.launch.tor.expected.EntryMode != first.tor.expected.EntryMode || f.launch.tor.expected.Execution != first.tor.expected.Execution || f.launch.tor.expected.DNS != first.tor.expected.DNS {
 				t.Fatal("Startup Last did not freshly prove the saved path")
 			}
-			if err := f.a.stopModeWithIntent(true); err != nil {
-				t.Fatal(err)
-			}
+			stopDesktopTorLifecycleFixture(t, f.a)
 			response = desktopTorProfileRequest(t, f, "/api/connection-profile/save", map[string]any{"name": "Saved proved Tor choice", "mode": "external"})
 			var record struct {
 				Profile connectionProfileRecord `json:"profile"`
