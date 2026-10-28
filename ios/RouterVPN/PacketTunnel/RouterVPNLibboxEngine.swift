@@ -386,8 +386,11 @@ final class RouterVPNLibboxEngine {
             return owner.server === server && owner.ownershipGeneration == generation && owner.externalProofDelivery === self && !owner.permanentlyStopped
         }
         private func finish(_ error: Error?) {
-            lock.lock(); let callback = self.callback; self.callback = nil; lock.unlock()
-            callback?(error)
+            lock.lock()
+            let delivered = cancelled ? (error ?? retired()) : error
+            let callback = self.callback; self.callback = nil
+            lock.unlock()
+            callback?(delivered)
         }
         func cancel() {
             lock.lock(); cancelled = true; lock.unlock()
@@ -552,10 +555,11 @@ final class RouterVPNLibboxEngine {
         }
         private func finish(_ error: Error?) {
             lock.lock()
-            if error == nil && !cancelled { proved = true }
+            let delivered: Error? = cancelled ? (error ?? NSError(domain: "RouterVPN.Tor", code: 1, userInfo: [NSLocalizedDescriptionKey: "Tor connection was cancelled."])) : error
+            if delivered == nil { proved = true }
             let callback = self.callback; self.callback = nil
             lock.unlock()
-            callback?(error)
+            callback?(delivered)
         }
         func cancel() {
             lock.lock(); cancelled = true; proved = false; lock.unlock()

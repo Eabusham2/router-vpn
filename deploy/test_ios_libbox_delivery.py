@@ -11,6 +11,7 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -1123,6 +1124,7 @@ def main():
     swift = shutil.which('swiftc')
     if swift is None:
         raise SystemExit('swiftc required to compile the shipping concurrency boundary')
+    subprocess.run([sys.executable,str(ROOT/'deploy/test_ios_proof_cancel_delivery.py')],check=True,timeout=180)
     with tempfile.TemporaryDirectory(prefix='routervpn-libbox-delivery-') as tmp:
         tmp = Path(tmp)
         stub, harness = tmp/'Libbox.swift', tmp/'Harness.swift'
