@@ -109,11 +109,14 @@ func compileRetainedNativeMultihopLaunch(sel multihopSelection, descriptor *desk
 }
 
 func preflightRetainedNativeMultihop(ctx context.Context, binary string, launch *desktopNodeLaunch, run desktopExternalPreflightCommand) (failure error) {
-	if launch == nil || launch.external != nil || len(launch.config) == 0 || run == nil || !filepath.IsAbs(binary) {
+	if ctx == nil || launch == nil || launch.external != nil || len(launch.config) == 0 || run == nil || !filepath.IsAbs(binary) {
 		return errors.New("native multihop preflight requires its exact executable and graph")
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	directory, err := newPrivateRuntimeDir(launch.root, "native-node")
 	if err != nil {
 		return err
@@ -145,9 +148,16 @@ func preflightRetainedNativeMultihop(ctx context.Context, binary string, launch 
 }
 
 func prepareOwnedNativeMultihopCommand(a *app, sel multihopSelection, descriptor *desktopExecutionDescriptor) (launch *desktopNodeLaunch, failure error) {
-	launch, failure = preflightOwnedNativeMultihopCommand(a, sel, descriptor)
+	return prepareOwnedNativeMultihopCommandContext(a.connectionOperationContextOrBackground(), a, sel, descriptor)
+}
+
+func prepareOwnedNativeMultihopCommandContext(ctx context.Context, a *app, sel multihopSelection, descriptor *desktopExecutionDescriptor) (launch *desktopNodeLaunch, failure error) {
+	launch, failure = preflightOwnedNativeMultihopCommandContext(ctx, a, sel, descriptor)
 	if failure != nil {
 		return launch, failure
+	}
+	if failure = ctx.Err(); failure != nil {
+		return launch, errors.Join(failure, retireUnstartedNativeMultihop(launch))
 	}
 	if failure = stageOwnedNativeMultihopCommand(a, sel, launch); failure != nil {
 		failure = errors.Join(failure, retireUnstartedNativeMultihop(launch))
@@ -156,7 +166,11 @@ func prepareOwnedNativeMultihopCommand(a *app, sel multihopSelection, descriptor
 }
 
 func preflightOwnedNativeMultihopCommand(a *app, sel multihopSelection, descriptor *desktopExecutionDescriptor) (launch *desktopNodeLaunch, failure error) {
-	binary, err := verifyBundledNative(desktopAmneziaPackageRoot())
+	return preflightOwnedNativeMultihopCommandContext(a.connectionOperationContextOrBackground(), a, sel, descriptor)
+}
+
+func preflightOwnedNativeMultihopCommandContext(ctx context.Context, a *app, sel multihopSelection, descriptor *desktopExecutionDescriptor) (launch *desktopNodeLaunch, failure error) {
+	binary, err := verifyBundledNativeContext(ctx, desktopAmneziaPackageRoot())
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +185,7 @@ func preflightOwnedNativeMultihopCommand(a *app, sel multihopSelection, descript
 			failure = errors.Join(failure, retireUnstartedNativeMultihop(launch))
 		}
 	}()
-	if err := preflightRetainedNativeMultihop(a.connectionOperationContextOrBackground(), binary, launch, runDesktopExternalPreflightCommand); err != nil {
+	if err := preflightRetainedNativeMultihop(ctx, binary, launch, runDesktopExternalPreflightCommand); err != nil {
 		return launch, err
 	}
 	return launch, nil

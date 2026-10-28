@@ -350,7 +350,7 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 		descriptor = &desktopExecutionDescriptor{Execution: "server", Lease: lease}
 		s.relay = &desktopRelayOwner{app: d.a, entry: sel.Entry, expected: lease, request: q, localPacketPublic: localPacketPublic, serverPacketPublic: sel.serverPacketPublic, localPQIdentity: localPQIdentity, serverPQIdentity: sel.serverPQIdentity}
 	}
-	s.command, s.descriptorDir, s.native, err = desktopExecutionCommand(d.a, sel, descriptor)
+	s.command, s.descriptorDir, s.native, err = desktopExecutionCommandContext(ctx, d.a, sel, descriptor)
 	if err != nil {
 		return s, err
 	}

@@ -142,19 +142,28 @@ def retained_native_multihop_platform(platform: str) -> bool:
                         "verifyBundledNative", "nativeMultihopEnvironment", "HOMEVPN_POLICY_PROFILE_ID",
                         "proveMultihopLaneNodeContext", "captureNativeMultihopSelection")
         and all_markers("cmd/client/multihop_native_launch.go",
-                        "preflightOwnedNativeMultihopCommand(a, sel, descriptor)",
-                        "verifyBundledNative(desktopAmneziaPackageRoot())",
+                        "prepareOwnedNativeMultihopCommandContext(a.connectionOperationContextOrBackground(), a, sel, descriptor)",
+                        "preflightOwnedNativeMultihopCommandContext(ctx, a, sel, descriptor)",
+                        "verifyBundledNativeContext(ctx, desktopAmneziaPackageRoot())",
                         "compileRetainedNativeMultihopLaunch(sel, descriptor)",
                         "sel.Native.validate(sel) != nil",
                         "compileDesktopExecutionConfig(data, *descriptor, sel)",
                         'inbound["auto_route"] != true || inbound["strict_route"] != true',
-                        "preflightRetainedNativeMultihop(a.connectionOperationContextOrBackground(), binary, launch, runDesktopExternalPreflightCommand)",
+                        "preflightRetainedNativeMultihop(ctx, binary, launch, runDesktopExternalPreflightCommand)",
                         "stageOwnedNativeMultihopCommand(a, sel, launch)",
                         "stageDesktopNodeLaunch(a, launch)",
                         "nativeNodeMTUEnvironment(nativeMultihopEnvironment(launch.root, sel), launch.mtuSession, launch.configSHA256)",
                         "registerNativeMultihopDNSRuntime(a, sel, launch.command)",
                         "!a.ownsConnectionRuntime(launch.command)",
                         "physicalNetworkIdentity() != network", "current != launch")
+        and all_markers("cmd/client/multihop_execution.go",
+                        "desktopExecutionCommandContext(ctx, d.a, sel, descriptor)")
+        and all_markers("cmd/client/multihop_execution_config.go",
+                        "prepareOwnedNativeMultihopCommandContext(ctx, a, sel, d)")
+        and all_markers("cmd/client/bundled_native.go",
+                        "verifyBundledNativeContext(context.Background(), root)",
+                        "verifyBundledNativeVersion(ctx, binary, directory, receipt.Policy)",
+                        "context.WithTimeout(ctx, 10*time.Second)")
         and all_markers("cmd/client/desktop_node_native.go", "func stageDesktopNodeLaunch",
                         "receipt.ConfigSHA256 != configSHA256", "captureDesktopRuntimeDirectory(launch, directory)",
                         'writeDesktopRuntimeFile(launch, "sing-box.json", launch.config, false)', helper)

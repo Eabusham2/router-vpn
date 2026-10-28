@@ -102,7 +102,11 @@ class NativeShippingAuditTests(unittest.TestCase):
 
     def test_both_platforms_require_retained_source_policy_and_runtime_owner(self):
         mutations = (
-            ("cmd/client/multihop_native_launch.go", "verifyBundledNative(desktopAmneziaPackageRoot())", "findUnverifiedEngine()"),
+            ("cmd/client/multihop_native_launch.go", "verifyBundledNativeContext(ctx, desktopAmneziaPackageRoot())", "findUnverifiedEngine()"),
+            ("cmd/client/multihop_native_launch.go", "preflightRetainedNativeMultihop(ctx, binary, launch, runDesktopExternalPreflightCommand)", "preflightRetainedNativeMultihop(context.Background(), binary, launch, runDesktopExternalPreflightCommand)"),
+            ("cmd/client/multihop_execution.go", "desktopExecutionCommandContext(ctx, d.a, sel, descriptor)", "desktopExecutionCommand(d.a, sel, descriptor)"),
+            ("cmd/client/multihop_execution_config.go", "prepareOwnedNativeMultihopCommandContext(ctx, a, sel, d)", "prepareOwnedNativeMultihopCommand(a, sel, d)"),
+            ("cmd/client/bundled_native.go", "context.WithTimeout(ctx, 10*time.Second)", "context.WithTimeout(context.Background(), 10*time.Second)"),
             ("cmd/client/multihop_native_launch.go", "sel.Native.validate(sel) != nil", "false"),
             ("cmd/client/multihop_native_launch.go", 'inbound["auto_route"] != true || inbound["strict_route"] != true', "false"),
             ("cmd/client/multihop_native_launch.go", "compileDesktopExecutionConfig(data, *descriptor, sel)", "compileUnrelatedServer(data)"),

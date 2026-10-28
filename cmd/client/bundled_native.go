@@ -158,6 +158,18 @@ func verifyNativePayload(directory string, receipt bundledNativeReceipt) error {
 }
 
 func verifyBundledNative(root string) (string, error) {
+	return verifyBundledNativeContext(context.Background(), root)
+}
+
+// A candidate owns its verification child as well as its later config check.
+// Ordinary callers retain the existing independent version-check deadline.
+func verifyBundledNativeContext(ctx context.Context, root string) (string, error) {
+	if ctx == nil {
+		return "", errors.New("native runtime verification requires an owner context")
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	root, err := filepath.Abs(root)
 	if err != nil {
 		return "", err
@@ -215,13 +227,23 @@ func verifyBundledNative(root string) (string, error) {
 	if !backend {
 		return "", errors.New("native engine lacks its pinned AmneziaWG backend")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return verifyBundledNativeVersion(ctx, binary, directory, receipt.Policy)
+}
+
+func verifyBundledNativeVersion(ctx context.Context, binary, directory, policy string) (string, error) {
+	if ctx == nil {
+		return "", errors.New("native version verification requires an owner context")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, binary, "version")
 	cmd.Dir = directory
 	cmd.Env = nativeLibraryEnvironment(os.Environ(), directory)
 	output, err := cmd.Output()
-	if err != nil || len(output) > 8192 || !strings.HasPrefix(string(output), "sing-box version 1.14.1-routervpn-native."+receipt.Policy+"\n") {
+	if err != nil || ctx.Err() != nil || len(output) > 8192 || !strings.HasPrefix(string(output), "sing-box version 1.14.1-routervpn-native."+policy+"\n") {
 		return "", errors.New("native engine failed its exact build version check")
 	}
 	return binary, nil

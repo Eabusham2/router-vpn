@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -251,6 +252,16 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 }
 
 func desktopExecutionCommand(a *app, sel multihopSelection, d *desktopExecutionDescriptor) (*exec.Cmd, string, *desktopNodeLaunch, error) {
+	return desktopExecutionCommandContext(a.connectionOperationContextOrBackground(), a, sel, d)
+}
+
+func desktopExecutionCommandContext(ctx context.Context, a *app, sel multihopSelection, d *desktopExecutionDescriptor) (*exec.Cmd, string, *desktopNodeLaunch, error) {
+	if ctx == nil {
+		return nil, "", nil, errors.New("multihop command requires its candidate context")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, "", nil, err
+	}
 	if runtime.GOOS == "linux" && sel.Native == nil {
 		cmd := multihopCommand(a, sel)
 		if d == nil {
@@ -279,7 +290,7 @@ func desktopExecutionCommand(a *app, sel multihopSelection, d *desktopExecutionD
 		cmd.Args = append(cmd.Args, path)
 		return cmd, dir, nil, nil
 	}
-	launch, err := prepareOwnedNativeMultihopCommand(a, sel, d)
+	launch, err := prepareOwnedNativeMultihopCommandContext(ctx, a, sel, d)
 	if err != nil {
 		return nil, "", launch, err
 	}
