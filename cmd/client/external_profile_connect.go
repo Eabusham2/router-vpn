@@ -128,6 +128,7 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) externalProfileConnectWithRuntime(w http.ResponseWriter, r *http.Request, driver externalConnectRuntime) {
+	driver.tor.requestContext = r.Context()
 	_, finish, guardErr := a.beginConnectionOperation()
 	if guardErr != nil {
 		http.Error(w, guardErr.Error(), http.StatusConflict)
@@ -205,10 +206,12 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 		if retained != "" {
 			direct := q.Direct != nil && *q.Direct || q.Direct == nil && q.EntryID == ""
 			selected, err := externalExecutionChoice(externalProfile, q.Execution, direct)
-			if err != nil || desktopTorExecution(retained) == "" || retained != selected {
+			if err != nil || desktopTorExecution(retained) == "" || retained != selected && selected != "auto" ||
+				startup == nil || a.retainedExternalStartupExecution(startup) != retained {
 				http.Error(w, "retained Tor execution differs from the captured Local or Server selection", http.StatusConflict)
 				return
 			}
+			driver.tor.startupExecution = retained
 		}
 		// Keep the exact request through Tor capture and native preflight. Its
 		// entry, Direct choice and source revisions must not be replaced by a

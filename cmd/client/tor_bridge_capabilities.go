@@ -51,6 +51,16 @@ func torBridgeTransportCapabilities() []torBridgeTransportCapability {
 func torBridgeProfileRuntimeCapability(profile common.RouterProfile) standardExitCapability {
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 	cap := torBridgeRuntimeCapabilityForExecution(root, profile.MultihopExecution)
+	if profile.MultihopExecution == "auto" {
+		local := torBridgeRuntimeCapabilityForExecution(root, "local")
+		server := torBridgeRuntimeCapabilityForExecution(root, "server")
+		cap = local
+		// A missing candidate receives no score. A valid other candidate may
+		// still win after the same final two-probe recheck.
+		if !cap.Supported && server.Supported {
+			cap = server
+		}
+	}
 	if profile.External != nil && desktopTorProtocol(profile.External.Protocol) {
 		cap.Protocol = profile.External.Protocol
 	}
@@ -110,7 +120,10 @@ func (a *app) torBridgeCapabilities(w http.ResponseWriter, r *http.Request) {
 		"server_execution":                    server.Supported,
 		"server_execution_reason":             server.Reason,
 		"server_requires_paired_source":       true,
-		"compare_execution":                   false,
+		"compare_execution":                   available,
+		"compare_requires_paired_source":      true,
+		"last_node_measurement":               "tor-last-relay-http",
+		"external_measurement":                "same-captured-endpoint-http",
 		"dynamic_exit":                        true,
 		"transports":                          torBridgeTransportCapabilities(),
 		"truth":                               "the pluggable transport evades censorship; Tor's proved ntor-v3 circuit is the encrypted final path",

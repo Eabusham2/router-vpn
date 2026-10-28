@@ -309,7 +309,7 @@ func TestDesktopTorPublicConnectCapturesDirectSavedAndExplicitRouterPath(t *test
 }
 
 func TestDesktopTorPublicConnectRejectsSelectionBeforePreparation(t *testing.T) {
-	for _, fault := range []string{"direct-entry", "direct-mode", "direct-wg-base", "unknown-base", "unknown-mode", "server-direct", "server-ordinary", "compare", "missing-entry", "same-node", "external-entry", "wrong-saved-exit", "stale-token"} {
+	for _, fault := range []string{"direct-entry", "direct-mode", "direct-wg-base", "unknown-base", "unknown-mode", "server-direct", "server-ordinary", "compare-ordinary", "compare-direct", "missing-entry", "same-node", "external-entry", "wrong-saved-exit", "stale-token"} {
 		t.Run(fault, func(t *testing.T) {
 			f := newDesktopTorConnectFixture(t)
 			profile := &f.a.profiles.Profiles[0]
@@ -338,8 +338,13 @@ func TestDesktopTorPublicConnectRejectsSelectionBeforePreparation(t *testing.T) 
 			case "server-ordinary":
 				q.Execution = "server"
 				f.a.profiles.Profiles[1].NodeKind = "external"
-			case "compare":
+			case "compare-ordinary":
 				q.Execution = "auto"
+				f.a.profiles.Profiles[1].NodeKind = "external"
+			case "compare-direct":
+				q.Execution = "auto"
+				direct := true
+				q.Direct = &direct
 			case "missing-entry":
 				q.EntryID = "missing"
 			case "same-node":

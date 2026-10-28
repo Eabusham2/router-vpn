@@ -31,6 +31,7 @@ func (a *app) torBridgeConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *app) torBridgeConnectWithRuntime(w http.ResponseWriter, r *http.Request, driver desktopTorConnectRuntime) {
+	driver.requestContext = r.Context()
 	_, finish, guardErr := a.beginConnectionOperation()
 	if guardErr != nil {
 		http.Error(w, guardErr.Error(), http.StatusConflict)
@@ -96,11 +97,30 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 	if lookup == nil {
 		lookup = desktopTorEndpointLookup
 	}
-	selection, err := captureDesktopTorSelection(a, profile, q, lookup)
+	execution, err := desktopTorRequestedExecution(profile, q)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if execution == "auto" && driver.startupExecution == "" {
+		a.torBridgeCompareSelectionOwned(w, profile, q, startup, driver)
+		return
+	}
+	capturedRequest := cloneDesktopTorConnectRequest(q)
+	if driver.startupExecution != "" {
+		if startup == nil || a.retainedExternalStartupExecution(startup) != driver.startupExecution ||
+			desktopTorExecution(driver.startupExecution) == "" || execution != "auto" && execution != driver.startupExecution {
+			http.Error(w, "retained Tor execution differs from its captured Startup Last proof", http.StatusConflict)
+			return
+		}
+		capturedRequest.Execution = driver.startupExecution
+	}
+	selection, err := captureDesktopTorSelection(a, profile, capturedRequest, lookup)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	selection.preference = execution
 	if driver.capability == nil {
 		driver.capability = func() standardExitCapability { return desktopTorPolicyRuntimeCapability(selection.policy) }
 	}
@@ -262,7 +282,11 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 
 	a.monitorDesktopTorRuntime(prelaunch.workspace)
 	a.startDesktopExternalAutomaticMTU(prelaunch.workspace)
+	writeDesktopTorConnectedResponse(w, selection, retainedProof, nil)
+}
 
+func writeDesktopTorConnectedResponse(w http.ResponseWriter, selection *desktopTorSelection, retainedProof desktopTorProof, comparison any) {
+	policy, profile := selection.policy, selection.profile
 	transport, transportPath := "tor", "authenticated native guard proxy"
 	if policy.External.TorBridge != nil {
 		transport = strings.TrimSpace(policy.External.TorBridge.Transport)
@@ -282,7 +306,7 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	response := map[string]any{
 		"ok":                true,
 		"mode":              "external-node",
 		"profile_id":        profile.ID,
@@ -294,7 +318,7 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 		"entry_mode":        entryMode,
 		"execution":         desktopTorExecution(retainedProof.Policy.Execution),
 		"choice_saved":      true,
-		"actual_public_ip":  actualIP,
+		"actual_public_ip":  retainedProof.Proof.IP,
 		"actual_exit_proof": "tor-project-is-tor-passed",
 		"dns_mode":          policy.DNSMode,
 		"interface_name":    retainedProof.InterfaceName,
@@ -302,5 +326,12 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 		"interface_mtu":     retainedProof.EffectiveMTU,
 		"mtu_source":        "native-interface-readback",
 		"route":             route,
-	})
+	}
+	response["execution_preference"] = selection.preference
+	if comparison != nil {
+		response["comparison"] = comparison
+		response["last_node_measurement"] = "tor-last-relay-http"
+		response["external_measurement"] = "same-captured-endpoint-http"
+	}
+	_ = json.NewEncoder(w).Encode(response)
 }

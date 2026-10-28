@@ -151,7 +151,7 @@ func TestProfileDeviceTorCoverSavedPairReachesCapturedCompiler(t *testing.T) {
 }
 
 func TestProfileDeviceTorCoverRejectsInvalidPairAndChangedOwner(t *testing.T) {
-	for _, fault := range []string{"flag-null", "flag-string", "rate-null", "rate-string", "rate-bool", "rate-fraction", "rate-low", "rate-high", "rate-negative", "missing-flag", "missing-rate", "duplicate", "compare", "direct", "ordinary-entry", "missing-entry", "stale-entry", "stale-rate", "selected", "busy", "failed-write"} {
+	for _, fault := range []string{"flag-null", "flag-string", "rate-null", "rate-string", "rate-bool", "rate-fraction", "rate-low", "rate-high", "rate-negative", "missing-flag", "missing-rate", "duplicate", "compare-ordinary", "direct", "ordinary-entry", "missing-entry", "stale-entry", "stale-rate", "selected", "busy", "failed-write"} {
 		t.Run(fault, func(t *testing.T) {
 			a := profileDeviceTorCoverApp(t, "tor")
 			capture := getDeviceSettingsForTest(t, a)
@@ -180,8 +180,10 @@ func TestProfileDeviceTorCoverRejectsInvalidPairAndChangedOwner(t *testing.T) {
 				delete(request, "daita_enabled")
 			case "missing-rate":
 				delete(request, "daita_rate_kbps")
-			case "compare":
+			case "compare-ordinary":
 				a.profiles.Profiles[0].MultihopExecution = "auto"
+				a.profiles.Profiles[1].NodeKind = "external"
+				a.profiles.Profiles[1].External = &common.ExternalNodeConfig{Protocol: "socks5"}
 			case "direct":
 				a.profiles.Profiles[0].MultihopEnabled = false
 			case "ordinary-entry":
@@ -200,7 +202,7 @@ func TestProfileDeviceTorCoverRejectsInvalidPairAndChangedOwner(t *testing.T) {
 			case "failed-write":
 				a.cfg.ProfilesFile = t.TempDir()
 			}
-			if fault == "compare" || fault == "direct" || fault == "ordinary-entry" || fault == "missing-entry" {
+			if fault == "compare-ordinary" || fault == "direct" || fault == "ordinary-entry" || fault == "missing-entry" {
 				current := getDeviceSettingsForTest(t, a)
 				if current.TorCoverSupported {
 					t.Fatal("unsupported cover path acquired editor capability")

@@ -35,6 +35,11 @@ type desktopTorConnectRuntime struct {
 	preflight  desktopExternalPreflightCommand
 	command    func(*app, torBridgeRuntime, []string) (*exec.Cmd, error)
 	comparison func(*app, *desktopNodeLaunch, string) (mobiletor.Comparison, error)
+	// These are owned controller inputs, never decoded HTTP fields. Startup
+	// Last may restore a verified winner while preserving the saved Compare
+	// preference; a cancelled HTTP comparison cannot adopt a late result.
+	startupExecution string
+	requestContext   context.Context
 }
 
 func captureDesktopTorExecutable(path string) (string, error) {

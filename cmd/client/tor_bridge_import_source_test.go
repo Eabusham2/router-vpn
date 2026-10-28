@@ -155,7 +155,7 @@ func checkTorBridgePreservedUpdate(t *testing.T, a *app, old, entry common.Route
 }
 
 func TestTorBridgeImportCapturedRouterUpdatesPreserveGraphAndProtection(t *testing.T) {
-	for _, execution := range []string{"local", "server"} {
+	for _, execution := range []string{"local", "server", "auto"} {
 		for _, mode := range []string{"wg", "awg2-strong", "naive-h3", "max-quic-awg"} {
 			for transport := range torBridgeUpdateInputLines() {
 				for _, kill := range []string{"off", "on-connect", "always"} {
@@ -269,7 +269,7 @@ func TestTorBridgeImportSourceJSONRejectsAmbiguousDowngrades(t *testing.T) {
 }
 
 func TestTorBridgeImportSavedGraphCannotBeSubstituted(t *testing.T) {
-	for _, change := range []string{"server-ordinary", "compare", "wrong-exit", "unknown-mode", "missing-entry", "external-entry"} {
+	for _, change := range []string{"server-ordinary", "compare-ordinary", "wrong-exit", "unknown-mode", "missing-entry", "external-entry"} {
 		t.Run(change, func(t *testing.T) {
 			a, _, _ := torBridgeUpdateSourceFixture(t)
 			switch change {
@@ -277,8 +277,10 @@ func TestTorBridgeImportSavedGraphCannotBeSubstituted(t *testing.T) {
 				a.profiles.Profiles[0].MultihopExecution = "server"
 				a.profiles.Profiles[1].NodeKind = "external"
 				a.profiles.Profiles[1].External = &common.ExternalNodeConfig{Protocol: "socks5"}
-			case "compare":
+			case "compare-ordinary":
 				a.profiles.Profiles[0].MultihopExecution = "auto"
+				a.profiles.Profiles[1].NodeKind = "external"
+				a.profiles.Profiles[1].External = &common.ExternalNodeConfig{Protocol: "socks5"}
 			case "wrong-exit":
 				a.profiles.Profiles[0].MultihopExitID = "other"
 			case "unknown-mode":

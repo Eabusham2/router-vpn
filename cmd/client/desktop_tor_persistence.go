@@ -38,6 +38,7 @@ type desktopTorChoiceAdoption struct {
 	operation context.Context
 	selected  string
 	startup   startupSelection
+	intent    context.Context
 }
 
 func desktopTorOperationCurrentLocked(a *app, operation context.Context, selected string) error {
@@ -72,6 +73,14 @@ func desktopTorSavedChoiceProfile(current common.RouterProfile, selection *deskt
 	}
 	updated := cloneRouterProfile(current)
 	updated.MultihopEnabled, updated.MultihopExecution = entry != nil, execution
+	if selection.preference == "auto" {
+		if entry == nil || entry.native == nil || !entry.native.IsRouter() {
+			return common.RouterProfile{}, errors.New("Tor Compare preference requires its proved private Router path")
+		}
+		updated.MultihopExecution = "auto"
+	} else if selection.preference != "" && selection.preference != execution {
+		return common.RouterProfile{}, errors.New("Tor saved preference differs from its captured execution")
+	}
 	updated.MultihopEntryID, updated.MultihopExitID, updated.MultihopEntryMode = "", "", ""
 	if entry == nil {
 		if expected.EntryID != "" || expected.EntryMode != "" || policy.MultihopEntryID != "" || policy.MultihopExitID != "" || policy.MultihopEntryMode != "" {
@@ -91,6 +100,10 @@ var errDesktopTorChoiceSave = errors.New("Tor proved path choice could not be sa
 func (a *app) commitDesktopTorChoice(selection *desktopTorSelection, launch *desktopNodeLaunch, q externalProfileConnectRequest, startup *startupPolicyCapture, operation context.Context, selected, actualIP string) (*desktopTorChoiceAdoption, error) {
 	if selection == nil || launch == nil || launch.tor == nil {
 		return nil, errors.New("Tor choice has no captured native owner")
+	}
+	requested, err := desktopTorRequestedExecution(selection.profile, q)
+	if err != nil || selection.preference != "" && requested != selection.preference {
+		return nil, errors.New("Tor saved execution preference changed after the request was captured")
 	}
 	proof, err := a.readDesktopTorProof(launch)
 	if err != nil {
@@ -126,6 +139,9 @@ func (a *app) commitDesktopTorChoice(selection *desktopTorSelection, launch *des
 	if err := desktopTorOperationCurrentLocked(a, operation, selected); err != nil {
 		return nil, err
 	}
+	if selection.adoption != nil && selection.adoption.Err() != nil {
+		return nil, errors.New("Tor comparison was cancelled before saving its proved choice")
+	}
 	previous := cloneRouterProfileStore(a.profiles)
 	updated.UseCount++
 	updated.LastUsedAt, updated.PublicIP = time.Now().UTC().Format(time.RFC3339), actualIP
@@ -147,7 +163,7 @@ func (a *app) commitDesktopTorChoice(selection *desktopTorSelection, launch *des
 	if entry.ID != "" {
 		last.EntryID, last.EntryToken = entry.ID, startupExternalProfileToken(entry)
 	}
-	return &desktopTorChoiceAdoption{launch: launch, choice: choice, operation: operation, selected: selected,
+	return &desktopTorChoiceAdoption{launch: launch, choice: choice, operation: operation, selected: selected, intent: selection.adoption,
 		startup: startupSelection{RouterID: updated.ID, RuntimeMode: launch.mode, LogicalMode: "external-node", Base: a.state.Base,
 			ProfileToken: startupExternalProfileToken(updated), UpdatedAt: time.Now().UTC(), External: last}}, nil
 }
@@ -155,6 +171,9 @@ func (a *app) commitDesktopTorChoice(selection *desktopTorSelection, launch *des
 func (saved *desktopTorChoiceAdoption) currentLocked(a *app) error {
 	if saved == nil || saved.launch == nil || saved.launch.tor == nil || saved.choice == nil {
 		return errors.New("Tor saved choice has no captured adoption owner")
+	}
+	if saved.intent != nil && saved.intent.Err() != nil {
+		return errors.New("Tor saved choice belongs to a cancelled comparison")
 	}
 	if err := desktopTorOperationCurrentLocked(a, saved.operation, saved.selected); err != nil {
 		return err

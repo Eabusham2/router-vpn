@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"strings"
 
@@ -17,6 +18,10 @@ type desktopTorSelection struct {
 	policy       common.RouterProfile
 	profileToken string
 	predecessor  *desktopTorPredecessorCapture
+	// The saved preference may be Compare, while policy always names the
+	// concrete Local or Server path that this native owner actually runs.
+	preference string
+	adoption   context.Context
 }
 
 // Empty execution is the historical Local capture. Server is always explicit;
@@ -80,7 +85,7 @@ func captureDesktopTorSelection(a *app, profile common.RouterProfile, q external
 	}
 	policy.MultihopEnabled, policy.MultihopEntryID, policy.MultihopExitID = !direct, "", ""
 	policy.MultihopEntryMode, policy.MultihopExecution = "", execution
-	selection := &desktopTorSelection{profile: profile, policy: policy, profileToken: desktopTorSourceIdentityToken(profile)}
+	selection := &desktopTorSelection{profile: profile, policy: policy, profileToken: desktopTorSourceIdentityToken(profile), preference: execution}
 	entry := common.RouterProfile{}
 	if !direct {
 		if !validProfileID(entryID) || entryID == profile.ID {
@@ -130,6 +135,9 @@ func captureDesktopTorSelection(a *app, profile common.RouterProfile, q external
 func (selection *desktopTorSelection) currentLocked(a *app) error {
 	if selection == nil || a == nil || selection.profileToken == "" {
 		return errors.New("Tor selection has no captured source owner")
+	}
+	if selection.adoption != nil && selection.adoption.Err() != nil {
+		return errors.New("Tor captured adoption operation was cancelled")
 	}
 	profile, found := a.profileByIDLocked(selection.profile.ID)
 	if !found || desktopTorSourceIdentityToken(profile) != selection.profileToken {

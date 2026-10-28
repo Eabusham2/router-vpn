@@ -116,6 +116,7 @@ func newDesktopTorComparisonDriver(a *app, profile common.RouterProfile, request
 		if entry == nil || entry.native == nil || !entry.native.IsRouter() {
 			return nil, errors.New("Tor Compare requires independently captured Local and authenticated Server paths through the same private Router")
 		}
+		selection.preference = "auto"
 		driver.selections[execution] = selection
 		driver.candidates = append(driver.candidates, routechoice.Candidate{Execution: execution, Transport: profile.External.Protocol, EntryID: entry.entry.ID, ExitID: profile.ID})
 	}

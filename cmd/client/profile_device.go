@@ -86,9 +86,9 @@ func externalDevicePolicySupport(profile common.RouterProfile) (bool, string) {
 		// native predecessor and authenticates it before any PT can start.
 		switch {
 		case profile.MultihopEnabled && (!validProfileID(profile.MultihopEntryID) || profile.MultihopEntryID == profile.ID ||
-			profile.MultihopExitID != profile.ID || desktopTorExecution(profile.MultihopExecution) == "" ||
+			profile.MultihopExitID != profile.ID || desktopTorExecution(profile.MultihopExecution) == "" && profile.MultihopExecution != "auto" ||
 			profile.MultihopEntryMode != "" && !mobilemultihop.NodeMultihopEntryMode(profile.MultihopEntryMode) && !desktopExternalNativeProtocol(profile.MultihopEntryMode)):
-			return false, "Tor entry device settings require the exact saved Local or Server entry, exit and native mode."
+			return false, "Tor entry device settings require the exact saved Local, Server or Compare entry, exit and native mode."
 		case !profile.MultihopEnabled && desktopTorExecution(profile.MultihopExecution) != "local":
 			return false, "Direct Tor device settings require Local execution."
 		default:
@@ -106,8 +106,8 @@ func externalDevicePolicySupportForPath(profile, entry common.RouterProfile) (bo
 		if entry.ID != profile.MultihopEntryID {
 			return false, "Tor entry device settings require the same linked node; reopen Settings after relinking it."
 		}
-		if profile.MultihopExecution == "server" && (entry.External != nil || entry.NodeKind != "" && entry.NodeKind != "router-vpn") {
-			return false, "Tor Server device settings require the captured private Router entry."
+		if (profile.MultihopExecution == "server" || profile.MultihopExecution == "auto") && (entry.External != nil || entry.NodeKind != "" && entry.NodeKind != "router-vpn") {
+			return false, "Tor Server and Compare device settings require the captured private Router entry."
 		}
 		if _, err := desktopTorEntryMode(profile, entry, "", ""); err != nil {
 			return false, err.Error()
@@ -126,7 +126,7 @@ func profileDeviceTorCoverSelection(profile common.RouterProfile) bool {
 		return false
 	}
 	execution := desktopTorExecution(profile.MultihopExecution)
-	return execution == "local" || execution == "server" && profile.MultihopEnabled
+	return execution == "local" || (execution == "server" || profile.MultihopExecution == "auto") && profile.MultihopEnabled
 }
 
 func profileDeviceTorCoverSupported(profile, entry common.RouterProfile) bool {
@@ -178,7 +178,9 @@ func writeProfileDeviceSettings(w http.ResponseWriter, profile, entry common.Rou
 	coverSupported := profileDeviceTorCoverSupported(profile, entry)
 	coverNote := "Outgoing Tor cover traffic requires a captured Local path or a private Router Server path. Saved cover preferences are preserved while unavailable."
 	if coverSupported {
-		if desktopTorExecution(profile.MultihopExecution) == "server" {
+		if profile.MultihopExecution == "auto" {
+			coverNote = "Outgoing Tor cover traffic runs on each measured candidate and the retained winner. It is not bidirectional DAITA. Budget: 32–192 kbit/s; 0 keeps the native default of 192. Both Local and Server require selected DNS and a fresh cover receipt; Compare preserves this exact preference."
+		} else if desktopTorExecution(profile.MultihopExecution) == "server" {
 			coverNote = "Outgoing Tor cover traffic adds bounded relay cells from the selected server. It is not bidirectional DAITA. Budget: 32–192 kbit/s; 0 keeps the native default of 192. Saving is a preference; the authenticated server source and fresh cover receipt must still be proved on Connect."
 		} else {
 			coverNote = "Outgoing Tor cover traffic adds bounded relay cells from this device. It is not bidirectional DAITA. Budget: 32–192 kbit/s; 0 keeps the native default of 192. Saving is a preference; the captured path, selected DNS and fresh cover receipt must still be proved on Connect and renewed while connected."
@@ -285,6 +287,18 @@ func validateExternalDeviceSettings(profile common.RouterProfile) error {
 		return errors.New(reason)
 	}
 	if desktopTorProtocol(profile.External.Protocol) {
+		if profile.MultihopExecution == "auto" {
+			// An idle Compare preference must validate both concrete policies.
+			// It never enters a native compiler or becomes a claimed winner.
+			for _, execution := range []string{"local", "server"} {
+				candidate := cloneRouterProfile(profile)
+				candidate.MultihopExecution = execution
+				if err := validateExternalDeviceSettings(candidate); err != nil {
+					return err
+				}
+			}
+			return nil
+		}
 		// Pass the exact runtime preferences and private owners to the shipping
 		// Tor parser. Idle Home may remain unresolved; this never grants a
 		// runnable resolver, modifies bridge credentials, or reuses MTU history.

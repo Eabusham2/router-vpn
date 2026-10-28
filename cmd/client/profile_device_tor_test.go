@@ -194,13 +194,15 @@ func TestProfileDeviceTorStrictPolicyUsesActualCapturedBridgePlan(t *testing.T) 
 }
 
 func TestProfileDeviceTorUnsupportedGraphRemainsExplicit(t *testing.T) {
-	for _, option := range []string{"Compare Router-entry", "missing Router-entry", "external Router-entry", "Direct Server padding"} {
+	for _, option := range []string{"Compare ordinary-entry", "missing Router-entry", "external Router-entry", "Direct Server padding"} {
 		t.Run(option, func(t *testing.T) {
 			a := deviceSettingsTestApp(t, "tor-bridge", option != "Direct Server padding")
 			a.profiles.Profiles[3].DAITAEnabled = option == "Direct Server padding"
 			switch option {
-			case "Compare Router-entry":
+			case "Compare ordinary-entry":
 				a.profiles.Profiles[3].MultihopExecution = "auto"
+				a.profiles.Profiles[1].NodeKind = "external"
+				a.profiles.Profiles[1].External = &common.ExternalNodeConfig{Protocol: "socks5"}
 			case "missing Router-entry":
 				a.profiles.Profiles[3].MultihopEntryID = "missing-router"
 			case "external Router-entry":
@@ -212,10 +214,10 @@ func TestProfileDeviceTorUnsupportedGraphRemainsExplicit(t *testing.T) {
 			before := cloneRouterProfileStore(a.profiles)
 			capture := getDeviceSettingsForTest(t, a)
 			label := map[string]string{
-				"Compare Router-entry":  "exact saved Local or Server entry",
-				"missing Router-entry":  "same linked node",
-				"external Router-entry": "complete imported transport and public identity",
-				"Direct Server padding": "Direct Tor device settings require Local execution",
+				"Compare ordinary-entry": "captured private Router entry",
+				"missing Router-entry":   "same linked node",
+				"external Router-entry":  "complete imported transport and public identity",
+				"Direct Server padding":  "Direct Tor device settings require Local execution",
 			}[option]
 			if capture.DevicePolicySupported || !strings.Contains(capture.DevicePolicyReason, label) {
 				t.Fatal("unsupported saved Tor graph acquired common device capability")
