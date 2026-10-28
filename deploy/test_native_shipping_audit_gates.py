@@ -283,6 +283,12 @@ class CapturedTorDNSAuditTests(unittest.TestCase):
         scope["captured_tor_dns_policy"]()
         self.assertEqual(errors, [])
         mutations = (
+            ("cmd/client/tor_bridge_runtime.go", 'return protocol == "tor" || protocol == "tor-bridge"', 'return protocol == "tor-bridge"'),
+            ("cmd/client/tor_bridge_runtime.go", 'return protocol == "tor" || protocol == "tor-bridge"', 'return protocol == "tor"'),
+            ("cmd/client/dns_policy_external.go", "if desktopTorProtocol(profile.External.Protocol)", 'if profile.External.Protocol == "tor-bridge"'),
+            ("cmd/client/desktop_tor_prepare.go", "desktopTorProtocol(policy.External.Protocol)", 'policy.External.Protocol == "tor-bridge"'),
+            ("cmd/client/external_profile_connect.go", 'case "tor", "tor-bridge":', 'case "tor-bridge":'),
+            ("cmd/client/external_profile_connect.go", "if desktopTorProtocol(externalProfile.External.Protocol)", 'if externalProfile.External.Protocol == "tor-bridge"'),
             ("cmd/client/dns_policy_external.go", "_, err := capturedTorBridgeDNS(profile, entry, true)", "_, err := selectedTorBridgeDNS(profile)"),
             ("cmd/client/dns_policy_external.go", "profile = cloneRouterProfile(profile)", "profile = common.RouterProfile{}"),
             ("cmd/client/dns_policy_external.go", "profile.MultihopEntryMode = mode", "profile.MultihopEntryMode = unrelatedMode"),

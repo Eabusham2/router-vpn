@@ -320,7 +320,10 @@ need(
     'endpoint["type"] as? String == "openvpn-client"',
     'endpoint["system"] as? Bool == false',
     'endpoint["detour"] == nil',
-    'LibboxRouterCompileTorProfileWithPredecessor(String(decoding: source, as: UTF8.self), sessionID, predecessor, proofProfile ?? "", &failure)',
+    'let capturedSource = String(decoding: source, as: UTF8.self)',
+    'LibboxRouterCompileServerTorProfileWithPredecessor(capturedSource, sessionID, predecessor, proofProfile ?? "", &failure)',
+    'LibboxRouterCompileTorProfileWithExternalPredecessor(capturedSource, sessionID, predecessor, proofProfile ?? "", &failure)',
+    'LibboxRouterCompileTorProfileWithPredecessor(capturedSource, sessionID, predecessor, proofProfile ?? "", &failure)',
     "torPredecessorProfile: proofProfile",
     'tor["session_id"] as? String == sessionID',
 )

@@ -124,8 +124,10 @@ def captured_tor_dns_policy() -> None:
                 return
             position = following
 
+    function("cmd/client/tor_bridge_runtime.go", "desktopTorProtocol",
+             'return protocol == "tor" || protocol == "tor-bridge"')
     function("cmd/client/dns_policy_external.go", "validateDesktopExternalDNSPolicy",
-             'if profile.External.Protocol == "tor-bridge"',
+             'if desktopTorProtocol(profile.External.Protocol)',
              "_, err := capturedTorBridgeDNS(profile, entry, true)", "return err",
              "mobilemultihop.ValidateExternalDNS(string(raw), entryJSON)")
     function("cmd/client/dns_policy_external.go", "capturedTorBridgeDNS",
@@ -135,10 +137,10 @@ def captured_tor_dns_policy() -> None:
              "return mobiletor.SelectDesktopBridgeDNS(string(raw), entryJSON, idle)")
     function("cmd/client/desktop_tor_prepare.go", "desktopTorRuntimePolicyJSON",
              "json.Marshal(runtimeWire(policy))", 'fields["home_lan_access"]',
-             'policy.External.Protocol == "tor-bridge"',
+             'desktopTorProtocol(policy.External.Protocol)',
              'fields["multihop_exit_mode"], _ = json.Marshal(policy.External.Protocol)')
     function("cmd/client/external_profile_connect.go", "externalDNSPolicyForPath",
-             'case "tor-bridge":', "direct && entry.ID !=", '!direct && entry.ID == ""',
+             'case "tor", "tor-bridge":', "direct && entry.ID !=", '!direct && entry.ID == ""',
              "_, err = capturedTorBridgeDNS(policy, entry, false)",
              "if err != nil", "return common.RouterProfile{}, err")
     function("cmd/client/tor_bridge_routes.go", "torBridgeConnectCapturedOwned",
@@ -148,7 +150,7 @@ def captured_tor_dns_policy() -> None:
              "a.validateExternalProfileExpectedProfilesLocked(q, profile)",
              "a.torBridgeConnectSelectionOwned(w, profile, q, nil, driver)")
     function("cmd/client/external_profile_connect.go", "externalProfileConnectOwned",
-             'if externalProfile.External.Protocol == "tor-bridge"',
+             'if desktopTorProtocol(externalProfile.External.Protocol)',
              "a.torBridgeConnectSelectionOwned(w, externalProfile, q, startup, driver.tor)")
     selection = function("cmd/client/desktop_tor_selection.go", "captureDesktopTorSelection",
              "profile = cloneRouterProfile(profile)", "direct = *q.Direct",
