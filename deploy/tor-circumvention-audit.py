@@ -215,12 +215,14 @@ def need_desktop_tor_import() -> None:
         add_policy = go_contract_at(route, "profile, err = normalizeTorBridgeImportPolicy(profile)")
         if update_call >= add_policy:
             raise ValueError("saved path must merge before Direct Add policy validation")
-        direct = go_contract_block(source, "func normalizeTorBridgeImportPolicy(")
+        dispatch = go_contract_block(source, "func normalizeTorBridgeImportPolicy(")
+        go_contract_at(dispatch, "return normalizeTorBridgeImportPolicyForOS(profile, runtime.GOOS)")
+        direct = go_contract_block(source, "func normalizeTorBridgeImportPolicyForOS(")
         normalize = go_contract_at(direct, "if err := common.NormalizeRouterProfile(&profile); err != nil")
         plan = go_contract_at(direct, "plan, planErr := desktopTorTransportPlan(profile)")
         projection = go_contract_at(direct, "_, egressErr := mobiletor.DesktopDirectPhysicalEgress(plan)")
         fixed = go_contract_at(direct, "strictLiteralObfs4 := planErr == nil && egressErr == nil")
-        rejected_direct = go_contract_block(direct, 'if requestedKill != "off" && !strictLiteralObfs4 && !profile.MultihopEnabled')
+        rejected_direct = go_contract_block(direct, 'if requestedKill != "off" && !strictLiteralObfs4 && !profile.MultihopEnabled && targetOS != "linux"')
         go_contract_at(rejected_direct, "return common.RouterProfile{}, errors.New(")
         policy = go_contract_at(direct, "policy, err := externalRuntimePolicy(profile)")
         translated = go_contract_at(direct, "if _, err := standardExitFromExternalProfile(policy); err != nil")
@@ -365,7 +367,8 @@ need(
 )
 need(
     "internal/mobiletor/desktop_bridge.go",
-    "strict desktop Tor protection requires one to eight captured literal obfs4 bridges",
+    'physicalBroker := predecessor == nil && targetOS == "linux" && kill != "off" && !desktopBridgeDirectProtection(plan)',
+    "strict desktop Tor protection has no captured typed predecessor",
     "routervpn-desktop-tor-network", "BootstrapDNSTag", "ConfiguredMTU",
 )
 need(

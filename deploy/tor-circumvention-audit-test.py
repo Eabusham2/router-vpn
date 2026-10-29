@@ -360,9 +360,13 @@ class TorCapturedImportAuditTests(unittest.TestCase):
                 self.reject(IMPORT, original, '// '+original)
         self.reject(IMPORT, "next.KillSwitchPolicy = existing.KillSwitchPolicy", "/* protection reset */")
 
-    def test_direct_dynamic_strict_admission_still_requires_a_real_saved_path(self):
-        self.reject(IMPORT, 'if requestedKill != "off" && !strictLiteralObfs4 && !profile.MultihopEnabled {',
+    def test_direct_dynamic_strict_admission_requires_its_platform_owner_or_real_saved_path(self):
+        self.reject(IMPORT, 'if requestedKill != "off" && !strictLiteralObfs4 && !profile.MultihopEnabled && targetOS != "linux" {',
                     'if requestedKill != "off" && !strictLiteralObfs4 && false {')
+        self.reject(IMPORT, 'return normalizeTorBridgeImportPolicyForOS(profile, runtime.GOOS)',
+                    'return normalizeTorBridgeImportPolicyForOS(profile, "linux")')
+        self.reject(IMPORT, 'if requestedKill != "off" && !strictLiteralObfs4 && !profile.MultihopEnabled && targetOS != "linux" {',
+                    'if requestedKill != "off" && !strictLiteralObfs4 && !profile.MultihopEnabled && targetOS == "linux" {')
         self.reject(IMPORT, "if supported, reason := externalDevicePolicySupportForPath(merged, entry); !supported {", "if supported, reason := true, \"\"; !supported {")
         self.reject(IMPORT, "if err := validateExternalDeviceSettingsForPath(merged, entry); err != nil {", "if err := error(nil); err != nil {")
         self.reject(IMPORT, "if matches != 1 {", "if matches < 1 {")

@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobiletor"
 )
 
 const clientTorBridge = "obfs4 203.0.113.44:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=abcdefghijklmnopqrstuvwxyz iat-mode=0"
@@ -153,14 +155,35 @@ func TestTorBridgeControllerRequiresDynamicTorProofBeforeConnected(t *testing.T)
 }
 
 func TestTorBridgeRuntimeSourceKeepsStrictDynamicBootstrapBoundary(t *testing.T) {
-	raw, err := os.ReadFile("../../internal/mobiletor/desktop_bridge.go")
-	if err != nil {
-		t.Fatal(err)
+	for _, target := range []string{"linux", "darwin", "windows"} {
+		for _, kill := range []string{"off", "on-connect", "always"} {
+			profile := clientTorProfile(clientSnowflakeBridge, clientWebTunnelBridge)
+			profile.External.TorBridge.Transport = "custom"
+			profile.KillSwitchPolicy, profile.KillSwitch = kill, kill != "off"
+			profile.DNSMode, profile.DNSProtocol, profile.DNSHost, profile.DNSPort = "custom", "tcp", "9.9.9.9", 53
+			if err := common.NormalizeRouterProfile(&profile); err != nil {
+				t.Fatal(err)
+			}
+			source, err := json.Marshal(profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy, err := mobiletor.NewDesktopBridgePolicy(string(source), strings.Repeat("1", 32), strings.Repeat("2", 64), target)
+			if target != "linux" && kill != "off" {
+				if err == nil || policy != nil {
+					t.Fatal("strict dynamic graph borrowed Linux authority", target, kill)
+				}
+				continue
+			}
+			if err != nil || policy == nil {
+				t.Fatal("captured native policy failed", target, kill, err)
+			}
+			if policy.PhysicalBroker() != (kill != "off") || policy.Metadata().KillSwitchPolicy != kill {
+				t.Fatal("dynamic graph lost exact socket-owner admission", target, kill)
+			}
+		}
 	}
-	if !strings.Contains(string(raw), "strict desktop Tor protection requires one to eight captured literal obfs4 bridges") {
-		t.Fatal("captured policy dropped its physical egress boundary")
-	}
-	raw, err = os.ReadFile("desktop_tor_prepare.go")
+	raw, err := os.ReadFile("desktop_tor_prepare.go")
 	if err != nil {
 		t.Fatal(err)
 	}

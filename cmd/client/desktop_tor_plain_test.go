@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -29,7 +30,7 @@ func TestDesktopTorPlainImportAndExplicitProtocolUpdate(t *testing.T) {
 		`{"transport":"tor","bridges":["` + torImportObfs4Bridge + `"]}`,
 		`{"transport":"tor","bridges":[""]}`,
 		`{"transport":"tor","bridges":[],"socks_port":19951}`,
-		`{"transport":"tor","bridges":[],"kill_switch_policy":"always"}`,
+		`{"transport":"tor","bridges":[],"kill_switch_policy":"unowned"}`,
 	} {
 		before := cloneRouterProfileStore(a.profiles)
 		response = httptest.NewRecorder()
@@ -37,6 +38,26 @@ func TestDesktopTorPlainImportAndExplicitProtocolUpdate(t *testing.T) {
 		if response.Code < 400 || !reflect.DeepEqual(a.profiles, before) {
 			t.Fatal("plain import discarded a bridge or accepted unowned policy", response.Code)
 		}
+	}
+	for _, policy := range []string{"on-connect", "always"} {
+		t.Run("direct-"+policy, func(t *testing.T) {
+			candidate := torImportTestApp(t, filepath.Join(t.TempDir(), "profiles.json"))
+			response := httptest.NewRecorder()
+			candidate.torBridgeImport(response, httptest.NewRequest(http.MethodPost, "/api/tor-bridge/import", strings.NewReader(`{"transport":"tor","bridges":[],"kill_switch_policy":"`+policy+`"}`)))
+			if runtime.GOOS != "linux" {
+				if response.Code != http.StatusBadRequest || len(candidate.profiles.Profiles) != 0 || !strings.Contains(response.Body.String(), "Linux native socket owner") {
+					t.Fatal("plain Tor borrowed another platform's physical owner", response.Code, response.Body.String())
+				}
+				return
+			}
+			if response.Code != http.StatusOK || len(candidate.profiles.Profiles) != 1 {
+				t.Fatal("Linux plain Tor rejected its captured protection policy", response.Code, response.Body.String())
+			}
+			stored := candidate.profiles.Profiles[0]
+			if stored.External.Protocol != "tor" || stored.External.TorBridge != nil || stored.KillSwitchPolicy != policy || !stored.KillSwitch || stored.DNSMode != "home" || stored.DNSHost != "" || candidate.state.Connected || candidate.cmd != nil {
+				t.Fatal("idle strict plain import changed selected policy or invented a proved path")
+			}
+		})
 	}
 	for _, execution := range []string{"local", "server"} {
 		t.Run(execution, func(t *testing.T) {

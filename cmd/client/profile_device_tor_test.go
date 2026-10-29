@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -181,12 +182,25 @@ func TestProfileDeviceTorStrictPolicyUsesActualCapturedBridgePlan(t *testing.T) 
 				q["kill_switch_policy"] = policy
 				before := cloneRouterProfileStore(a.profiles)
 				w := postDeviceSettingsForTest(a, bytes.NewReader(deviceSettingsBodyForTest(t, q)))
-				if plan != "obfs4" && plan != "multiple" && policy != "off" {
-					if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "one to eight captured literal obfs4 bridges") || !reflect.DeepEqual(before, a.profiles) {
+				dynamic := plan != "obfs4" && plan != "multiple" && policy != "off"
+				if dynamic && runtime.GOOS != "linux" {
+					if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "Linux native socket owner") || !reflect.DeepEqual(before, a.profiles) {
 						t.Fatalf("uncontrolled PT egress bypassed strict Tor policy: %d %s", w.Code, w.Body.String())
 					}
+					return
 				} else if w.Code != http.StatusOK || !reflect.DeepEqual(before.Profiles[3].External, a.profiles.Profiles[3].External) {
 					t.Fatalf("supported captured plan or credentials were replaced: %d %s", w.Code, w.Body.String())
+				}
+				saved := a.profiles.Profiles[3]
+				prepared, err := stageDesktopTorInputs(clientRoot(a), saved, saved,
+					installFakeExecutable(t, t.TempDir(), "tor"), installFakeExecutable(t, t.TempDir(), "native"))
+				if err != nil {
+					t.Fatal("accepted device policy did not reach the captured native compiler", err)
+				}
+				t.Cleanup(func() { _ = cleanupDesktopTorLaunch(prepared.Launch); _ = prepared.Launch.directoryRoot.Close() })
+				meta := prepared.Launch.tor.expected
+				if meta.PhysicalBroker != dynamic || meta.KillSwitchPolicy != policy || meta.EntryID != "" || saved.KillSwitchPolicy != policy || saved.KillSwitch != (policy != "off") || a.state.Connected || a.cmd != nil {
+					t.Fatal("saved Tor policy did not retain its exact native owner or invented a connection", meta)
 				}
 			})
 		}
