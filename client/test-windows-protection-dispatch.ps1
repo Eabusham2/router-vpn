@@ -50,7 +50,10 @@ func main(){
  fmt.Println(os.Getenv(key))
 }
 '@,[Text.UTF8Encoding]::new($false))
-  $compiler=(Get-Command $Go -CommandType Application -ErrorAction Stop).Source
+  # Native Windows may return every matching PATH installation. Preserve
+  # command resolution order and invoke one executable, never an array joined
+  # into a path (the hosted runner also retains its older Go installation).
+  $compiler=[string]@(Get-Command $Go -CommandType Application -ErrorAction Stop)[0].Source
   $env:GOOS=(& $compiler env GOHOSTOS).Trim();if($LASTEXITCODE -ne 0){throw 'Could not select fixture host OS.'}
   $env:GOARCH=(& $compiler env GOHOSTARCH).Trim();if($LASTEXITCODE -ne 0){throw 'Could not select fixture host architecture.'}
   $env:CGO_ENABLED='0'
