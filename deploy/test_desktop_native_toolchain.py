@@ -63,7 +63,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['GOOS'], system)
                         self.assertLessEqual(kwargs['timeout'], 300)
                         return ''
-                    if len(args) > 1 and args[1] in (str(ROOT/'deploy/test_desktop_windows_identity.py'), str(ROOT/'deploy/test_desktop_windows_wfp.py')):
+                    if len(args) > 1 and args[1] in (str(ROOT/'deploy/test_desktop_windows_identity.py'), str(ROOT/'deploy/test_desktop_windows_wfp.py'), str(ROOT/'deploy/test_desktop_windows_traffic.py')):
                         self.assertEqual(system, 'windows')
                         self.assertEqual(args[2:], [str(source.resolve())])
                         self.assertEqual(kwargs['env']['GOOS'], system)
@@ -107,6 +107,9 @@ class NativeSocketUIDGate(unittest.TestCase):
                 wfp = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_windows_wfp.py')]
                 self.assertEqual(len(wfp), 1 if system == 'windows' else 0)
                 self.assertIn(ROOT/'deploy/test_desktop_windows_wfp.py', N.inputs())
+                traffic = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_windows_traffic.py')]
+                self.assertEqual(len(traffic), 1 if system == 'windows' else 0)
+                self.assertIn(ROOT/'deploy/test_desktop_windows_traffic.py', N.inputs())
                 guardian = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_linux_guardian.py')]
                 self.assertEqual(len(guardian), 1 if system == 'linux' else 0)
                 self.assertIn(ROOT/'deploy/test_desktop_linux_guardian.py', N.inputs())

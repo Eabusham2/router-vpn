@@ -68,6 +68,23 @@ omitted. Tests do not change the host's Firewall profiles or other applications'
 network policy. Production negative controls must fail their intended assertion;
 a compiler error, missing capability, timeout or skipped test is not accepted.
 
+`deploy/test_desktop_windows_traffic.py` adds the actual TCP/UDP IPv4/IPv6
+transfer and renewal cases. A copied executable with a different independently
+read AppID hosts the local peers; the subject's scoped rules therefore cannot
+accidentally exempt its own listener. The gate also rejects ordinary-token
+traffic, holds a native control operation while a real Winsock send is already
+backpressured, checks independent data expiry and retained source handle/port
+ownership, and kills a separate process to inspect BFE dynamic-object rundown.
+The crash case deliberately exercises BFE lifecycle without creating an orphan
+test account; isolated-token cleanup has its own identity and traffic cases.
+These are required tests, not a claim that a particular Windows run has passed.
+
+The same runner exercises read-only DHCP capture for an actual IPv4 adapter and
+rejects missing, substituted or malformed lease records. The factory helper
+selects by the captured interface index, never by adapter enumeration order.
+Static IPv4 adds no renewal server, and IPv6-only execution does not call this
+IPv4 API. No DNS lookup, adapter change, route change or DHCP request is made.
+
 The WFP baseline gate by itself does not prove connected socket traffic or the
 shipping Windows wrapper/factory composition. Those gates and the complete
 native integration remain required before Windows strict Direct dynamic Tor
@@ -83,3 +100,4 @@ Microsoft primary references:
 - [Application and user conditions](https://learn.microsoft.com/windows/win32/fwp/permitting-and-blocking-applications-and-users)
 - [User-mode ALE endpoint inspection](https://learn.microsoft.com/windows/win32/api/fwpsu/nf-fwpsu-fwpsaleendpointgetbyid0)
 - [Winsock socket duplication](https://learn.microsoft.com/windows/win32/api/winsock2/nf-winsock2-wsaduplicatesocketw)
+- [IPv4 adapter and DHCP lease readback](https://learn.microsoft.com/windows/win32/api/iphlpapi/nf-iphlpapi-getadaptersinfo)

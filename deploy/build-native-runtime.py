@@ -100,6 +100,7 @@ def inputs():
                              ROOT/'deploy/test_desktop_socket_uid.py',
                              ROOT/'deploy/test_desktop_windows_identity.py',
                              ROOT/'deploy/test_desktop_windows_wfp.py',
+                             ROOT/'deploy/test_desktop_windows_traffic.py',
                              ROOT/'deploy/test_desktop_linux_guardian.py',
                              ROOT/'deploy/test_linux_guardian_namespace.py',
                              *sorted((ROOT/'mobile/rosenpass').glob('Cargo.*')),
@@ -507,6 +508,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 run([sys.executable, ROOT/'deploy/test_desktop_windows_identity.py', source],
                     env=env, timeout=600)
                 run([sys.executable, ROOT/'deploy/test_desktop_windows_wfp.py', source],
+                    env=env, timeout=600)
+                run([sys.executable, ROOT/'deploy/test_desktop_windows_traffic.py', source],
                     env=env, timeout=600)
             if target.startswith('linux/'):
                 run([sys.executable, ROOT/'deploy/test_desktop_linux_guardian.py', source],
