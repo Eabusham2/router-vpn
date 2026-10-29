@@ -626,7 +626,8 @@ func TestDesktopSocketWindowsIdentityRejectsUnjoinedDuplicate(t *testing.T) {
 	creation := desktopWindowsIdentityTestCreation(t, p, "udp", "127.0.0.1")
 	result := desktopWindowsIdentityTestCreate(t, p, creation)
 	raw, _ := desktopWindowsIdentityTestBind(t, result.Native, creation.Binding.LocalAddress)
-	if _, err := p.InspectSocket(p.ctx, creation); err != nil {
+	inspection, err := p.InspectSocket(p.ctx, creation)
+	if err != nil {
 		t.Fatal("post-bind proof before held duplicate", err)
 	}
 	extra, err := desktopWindowsNativeDuplicate(raw)
@@ -642,12 +643,33 @@ func TestDesktopSocketWindowsIdentityRejectsUnjoinedDuplicate(t *testing.T) {
 	if err := p.ReleaseSocket(p.ctx, creation); err == nil || !strings.Contains(err.Error(), "ALE endpoint has not independently retired") {
 		t.Fatal("retirement ignored a real unjoined duplicate of the ALE endpoint", err)
 	}
+	if err := p.call(p.ctx, false, func() error {
+		properties, _, err := p.api.endpointProperties(p.engine, inspection.EndpointID)
+		if err != nil || properties.EndpointID != inspection.EndpointID || properties.TokenModifiedID != inspection.TokenModifiedID {
+			return errors.Join(err, errors.New("held duplicate no longer independently preserves the same kernel endpoint"))
+		}
+		return nil
+	}); err != nil {
+		t.Fatal("live duplicate did not retain independently queryable ownership", err)
+	}
 	if err := extra.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if err := desktopWindowsIdentityTestRelease(p, creation); err != nil {
 		t.Fatal("closed duplicate did not permit independent endpoint retirement", err)
 	}
+	var lookupErr error
+	if err := p.call(p.ctx, false, func() error {
+		_, _, lookupErr = p.api.endpointProperties(p.engine, inspection.EndpointID)
+		return nil
+	}); err != nil {
+		t.Fatal("could not independently read retired endpoint status", err)
+	}
+	var status syscall.Errno
+	if !errors.As(lookupErr, &status) || status != syscall.Errno(1168) {
+		t.Fatal("retirement did not return the actual user-mode ERROR_NOT_FOUND status", lookupErr)
+	}
+	t.Logf("retired ALE endpoint has independent native status=%d (%#x)", status, status)
 }
 
 func TestDesktopSocketWindowsIdentityRejectsTokenStatisticsReplacement(t *testing.T) {

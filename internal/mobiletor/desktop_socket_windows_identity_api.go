@@ -94,11 +94,14 @@ var desktopWindowsIdentityAPIs struct {
 }
 
 const (
-	desktopWindowsAccountDisabled  = uint32(2)
-	desktopWindowsUserNotFound     = syscall.Errno(2221)
-	desktopWindowsUserExists       = syscall.Errno(2224)
-	desktopWindowsNoToken          = syscall.Errno(1008)
-	desktopWindowsEndpointNotFound = syscall.Errno(0x80320008) // FWP_E_NOT_FOUND
+	desktopWindowsAccountDisabled = uint32(2)
+	desktopWindowsUserNotFound    = syscall.Errno(2221)
+	desktopWindowsUserExists      = syscall.Errno(2224)
+	desktopWindowsNoToken         = syscall.Errno(1008)
+	// FwpsAleEndpointGetById0 is the user-mode ALE query. It reports
+	// ERROR_NOT_FOUND for a retired endpoint, not the Fwpm object-management
+	// FWP_E_NOT_FOUND HRESULT. No other lookup error proves retirement.
+	desktopWindowsEndpointNotFound = syscall.Errno(1168) // ERROR_NOT_FOUND
 )
 
 func desktopWindowsIdentityNativeAPI() (*desktopWindowsIdentityAPI, error) {
@@ -483,7 +486,7 @@ func (a *desktopWindowsIdentityAPI) endpointProperties(engine syscall.Handle, en
 		defer a.freeWFP.Call(uintptr(unsafe.Pointer(&properties)))
 	}
 	if status != 0 {
-		return desktopWindowsALEProperties{}, nil, syscall.Errno(status)
+		return desktopWindowsALEProperties{}, nil, fmt.Errorf("Windows ALE endpoint lookup status %#x: %w", status, syscall.Errno(status))
 	}
 	if properties == nil || properties.EndpointID != endpoint || properties.TokenModifiedID == 0 || properties.AppID.Size < 2 || properties.AppID.Size > 65536 || properties.AppID.Data == nil {
 		return desktopWindowsALEProperties{}, nil, errors.New("Windows ALE readback lacks its independent owner properties")
