@@ -11,6 +11,7 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include "routervpn-controller-auth-v1.h"
 
 #define ROUTER_VPN_BASE_URL "http://127.0.0.1:8788"
 #define ROUTER_VPN_PRODUCT_CONTRACT 2
@@ -51,6 +52,8 @@ typedef struct {
     pid_t controller_pid;
     gboolean owns_controller;
     char controller_owner[33];
+    char controller_access[65];
+    int controller_lifetime_fd;
     gpointer controller_shutdown;
     gboolean suppress_router_change;
     char *package_root;
@@ -86,6 +89,8 @@ static gboolean api_request(const char *path, const char *method, const char *bo
     struct curl_slist *headers = NULL;
     headers = curl_slist_append(headers, "Accept: application/json");
     if (body != NULL) headers = curl_slist_append(headers, "Content-Type: application/json");
+    RVControllerAuth authentication;rv_controller_auth_capture(&authentication);
+    if(authentication.header[0])headers=curl_slist_append(headers,authentication.header);
     memset(out, 0, sizeof(*out));
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_PROXY, "");
@@ -109,13 +114,6 @@ static gboolean api_request(const char *path, const char *method, const char *bo
     g_free(url);
     curl_slist_free_all(headers);
     curl_easy_cleanup(curl);
-    return ok;
-}
-
-static gboolean api_ready(void) {
-    Buffer out = {0};
-    gboolean ok = api_request("/api/status", "GET", NULL, 900, &out, NULL);
-    free(out.data);
     return ok;
 }
 
@@ -629,49 +627,7 @@ static gboolean resolve_package_root(App *app, const char *argv0) {
 }
 
 #include "routervpn-controller-shutdown-v1.inc"
-
-static gboolean ensure_controller(App *app, char **error_out) {
-    if (api_ready()) return TRUE;
-    char *controller = g_build_filename(app->package_root, "router-vpn-client", NULL);
-    char *config = g_build_filename(app->package_root, "client.json", NULL);
-    if (access(controller, X_OK) != 0 || access(config, R_OK) != 0) {
-        if (error_out != NULL) *error_out = g_strdup("Router VPN GTK must stay beside router-vpn-client and client.json in its package.");
-        g_free(controller); g_free(config); return FALSE;
-    }
-    if (!controller_owner_token_create(app->controller_owner)) {
-        if (error_out != NULL) *error_out = g_strdup("Could not create the local controller launch identity");
-        g_free(controller); g_free(config); return FALSE;
-    }
-    pid_t pid = fork();
-    if (pid < 0) {
-        if (error_out != NULL) *error_out = g_strdup("Could not fork local controller");
-        g_free(controller); g_free(config); return FALSE;
-    }
-    if (pid == 0) {
-        if (setenv("HOMEVPN_ROOT", app->package_root, 1) != 0 ||
-            setenv("HOMEVPN_CLIENT_CONFIG", config, 1) != 0 ||
-            setenv("HOMEVPN_NATIVE_APP", "linux-gtk-product", 1) != 0 ||
-            setenv("HOMEVPN_CONTROLLER_OWNER", app->controller_owner, 1) != 0 ||
-            chdir(app->package_root) != 0) _exit(126);
-        execl(controller, controller, (char *)NULL);
-        _exit(127);
-    }
-    app->controller_pid = pid;
-    app->owns_controller = TRUE;
-    g_free(controller); g_free(config);
-    for (int i = 0; i < 60; i++) {
-        if (controller_child_observe(pid) != 0) {
-            int status = 0;
-            if (waitpid(pid, &status, WNOHANG) == pid) { app->owns_controller=FALSE;app->controller_pid=0; }
-            break;
-        }
-        if (api_ready()) return TRUE;
-        g_usleep(200000);
-    }
-    if (app->owns_controller) { shutdown_controller(app); gtk_main(); }
-    if (error_out != NULL) *error_out = g_strdup("Local Router VPN controller did not become ready on 127.0.0.1:8788.");
-    return FALSE;
-}
+#include "routervpn-controller-launch-v1.inc"
 
 static void on_destroy(GtkWidget *widget, gpointer data) {
     (void)widget;

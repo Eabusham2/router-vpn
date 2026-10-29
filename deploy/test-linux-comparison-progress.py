@@ -125,6 +125,7 @@ static LinuxSpeedLabV12 *replacement_speed;
 static gboolean speed_replace_callback;
 static void replace_speed(App*app){(void)app;if(!speed_replace_callback)return;speed_replace_callback=FALSE;check(replacement_speed->request_body==NULL&&replacement_speed->comparison_progress==NULL,"Old temporary resources were not retired before slot release");start_speed(replacement_speed,replacement_id);}
 int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Expected fixture directory");directory=argv[1];check(curl_global_init(CURL_GLOBAL_DEFAULT)==CURLE_OK,"libcurl initialization failed");
+    check(rv_controller_auth_publish(42,"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),"captured controller auth failed");
     (void)linux_multihop_execution_choice_v1;(void)linux_multihop_store_execution_v1;(void)linux_multihop_entry_choice_v23;(void)linux_multihop_store_entry_v23;
     (void)linux_async_connecting_v16;(void)linux_async_stopping_v16;(void)linux_async_dispatch_v16;
     App app={0};init_app(&app);
@@ -227,6 +228,8 @@ def run_case(work, name):
 
         def do_POST(self):
             try:
+                if self.headers.get('Authorization') != 'Bearer ' + 'a' * 64:
+                    raise AssertionError('Captured Speed Lab/action controller credential missing')
                 hits.append(self.path)
                 size = int(self.headers.get('Content-Length', '0'))
                 value = json.loads(self.rfile.read(size))
@@ -242,6 +245,8 @@ def run_case(work, name):
 
         def do_GET(self):
             try:
+                if self.headers.get('Authorization') != 'Bearer ' + 'a' * 64:
+                    raise AssertionError('Captured progress controller credential missing')
                 hits.append(self.path)
                 if self.path != '/api/multihop/status':
                     raise AssertionError('Redirect or foreign URL followed: '+self.path)
@@ -280,7 +285,7 @@ def run_case(work, name):
     thread.start()
     try:
         include = fixture/'include'; include.mkdir()
-        for path in ('routervpn-async-actions-v16.inc','routervpn-http-job-v16.h','routervpn-comparison-progress-v25.h'):
+        for path in ('routervpn-async-actions-v16.inc','routervpn-http-job-v16.h','routervpn-comparison-progress-v25.h','routervpn-controller-auth-v1.h'):
             (include/path).write_bytes((ROOT/'client/linux'/path).read_bytes())
         source = program()
         if name != 'baseline':

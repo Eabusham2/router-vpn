@@ -10,6 +10,8 @@ typedef struct {
     App *app;
     pid_t process;
     char owner[33];
+    char access[65];
+    RVControllerAuth authentication;
     GtkWidget *dialog;
     guint timer;
     pthread_t worker;
@@ -131,6 +133,7 @@ static void *controller_shutdown_worker(void *data) {
     if(curl!=NULL){
         char *body=g_strdup_printf("{\"schema\":1,\"process_id\":%ld,\"owner_token\":\"%s\"}",(long)shutdown->process,shutdown->owner);
         struct curl_slist *headers=NULL;headers=curl_slist_append(headers,"Content-Type: application/json");headers=curl_slist_append(headers,"Accept: application/json");
+        if(shutdown->authentication.header[0])headers=curl_slist_append(headers,shutdown->authentication.header);
         curl_easy_setopt(curl,CURLOPT_URL,ROUTER_VPN_BASE_URL "/api/controller/shutdown");
         curl_easy_setopt(curl,CURLOPT_PROXY,"");curl_easy_setopt(curl,CURLOPT_NOPROXY,"*");curl_easy_setopt(curl,CURLOPT_NOSIGNAL,1L);
         curl_easy_setopt(curl,CURLOPT_CONNECTTIMEOUT_MS,2000L);curl_easy_setopt(curl,CURLOPT_TIMEOUT_MS,35000L);
@@ -146,7 +149,7 @@ static void *controller_shutdown_worker(void *data) {
 
 static gboolean controller_shutdown_current(RVControllerShutdown *shutdown) {
     App *app=shutdown->app;
-    return app->controller_shutdown==shutdown&&app->owns_controller&&app->controller_pid==shutdown->process&&strcmp(app->controller_owner,shutdown->owner)==0;
+    return app->controller_shutdown==shutdown&&app->owns_controller&&app->controller_pid==shutdown->process&&strcmp(app->controller_owner,shutdown->owner)==0&&strcmp(app->controller_access,shutdown->access)==0;
 }
 
 static void controller_shutdown_message(RVControllerShutdown *shutdown,const char *message) {
@@ -162,7 +165,7 @@ static void controller_shutdown_release(RVControllerShutdown *shutdown,gboolean 
     gboolean owned_slot=app->controller_shutdown==shutdown;
     if(owned_slot)app->controller_shutdown=NULL;
     if(shutdown->dialog!=NULL)gtk_widget_destroy(shutdown->dialog);
-    free(shutdown->response.data);memset(shutdown->owner,0,sizeof(shutdown->owner));g_free(shutdown);
+    free(shutdown->response.data);memset(shutdown->owner,0,sizeof(shutdown->owner));memset(shutdown->access,0,sizeof(shutdown->access));memset(&shutdown->authentication,0,sizeof(shutdown->authentication));g_free(shutdown);
     if(completed){
         if(app->window!=NULL)gtk_widget_destroy(app->window);
         if(gtk_main_level()>0)gtk_main_quit();
@@ -189,6 +192,9 @@ static gboolean controller_shutdown_tick(gpointer data) {
         int status=0;pid_t joined;
         do{joined=waitpid(shutdown->process,&status,WNOHANG);}while(joined<0&&errno==EINTR);
         if(joined==shutdown->process&&WIFEXITED(status)&&WEXITSTATUS(status)==0&&controller_shutdown_current(shutdown)){
+            rv_controller_auth_clear(shutdown->process,shutdown->access);
+            if(shutdown->app->controller_lifetime_fd>2)close(shutdown->app->controller_lifetime_fd);
+            shutdown->app->controller_lifetime_fd=0;memset(shutdown->app->controller_access,0,sizeof(shutdown->app->controller_access));
             shutdown->app->owns_controller=FALSE;shutdown->app->controller_pid=0;memset(shutdown->app->controller_owner,0,sizeof(shutdown->app->controller_owner));
             controller_shutdown_release(shutdown,TRUE);return G_SOURCE_REMOVE;
         }
@@ -210,6 +216,7 @@ static void shutdown_controller(App *app) {
     if(!app->owns_controller||app->controller_pid<=0||app->controller_shutdown!=NULL)return;
     RVControllerShutdown *shutdown=g_new0(RVControllerShutdown,1);shutdown->app=app;shutdown->process=app->controller_pid;
     g_strlcpy(shutdown->owner,app->controller_owner,sizeof(shutdown->owner));atomic_init(&shutdown->ready,FALSE);
+    g_strlcpy(shutdown->access,app->controller_access,sizeof(shutdown->access));(void)rv_controller_auth_from(&shutdown->authentication,shutdown->process,shutdown->access);
     app->controller_shutdown=shutdown;
     atomic_store_explicit(&controller_exit_pending,TRUE,memory_order_release);
     shutdown->dialog=gtk_message_dialog_new(app->window!=NULL?GTK_WINDOW(app->window):NULL,0,GTK_MESSAGE_INFO,GTK_BUTTONS_NONE,"Closing Router VPN");

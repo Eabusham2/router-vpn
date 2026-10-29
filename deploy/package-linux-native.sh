@@ -10,6 +10,13 @@ case "$ARCH" in
   *) echo "Unsupported Linux architecture: $ARCH" >&2; exit 2 ;;
 esac
 
+# A matching host must execute the actual privilege boundary before its native
+# controller is built. A cross-compile cannot certify that host's authority.
+host_arch=$(uname -m)
+case "$host_arch" in x86_64|amd64) host_arch=amd64 ;; aarch64|arm64) host_arch=arm64 ;; esac
+[[ $(uname -s) == Linux && "$host_arch" == "$goarch" ]] || { echo 'Native Linux packaging requires a matching execution host.' >&2; exit 1; }
+python3 "$ROOT/deploy/test_linux_controller_privilege.py" --go "$(command -v go)"
+
 name="RouterVPN-linux-$ARCH"
 work="$OUT/work-$ARCH"
 dir="$work/$name"
@@ -87,41 +94,7 @@ set -euo pipefail
 [[ ${EUID:-$(id -u)} -eq 0 ]] || { echo 'Run with sudo.' >&2; exit 1; }
 SRC=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 bash "$SRC/client/install-linux-system-tools.sh" --install "$SRC/router-vpn-app"
-ROOT=/opt/router-vpn-client
-mkdir -p "$ROOT" /usr/local/bin /usr/share/applications /usr/share/icons/hicolor/256x256/apps
-
-# Refresh immutable application/runtime material without replacing private
-# install-once node state on an upgrade.
-for path in modes client; do
-  rm -rf "$ROOT/$path"
-  cp -a "$SRC/$path" "$ROOT/$path"
-done
-bash "$SRC/client/install-bundled-desktop-runtime.sh" "$SRC" "$ROOT"
-for file in client.json modes.json logical-modes.json router-vpn-client router-vpn-dns router-vpn-start-layer-relay router-vpn-update router-vpn-app RouterVPN.ico router-vpn.png MODES.md CLIENT.md SECURITY.md LICENSE DNS-PROXY-NOTICES.json ROUTER-VPN-SOURCE.json; do
-  [[ -e "$SRC/$file" ]] && cp -a "$SRC/$file" "$ROOT/$file"
-done
-chmod 755 "$ROOT/router-vpn-client" "$ROOT/router-vpn-dns" "$ROOT/router-vpn-start-layer-relay" "$ROOT/router-vpn-update" "$ROOT/router-vpn-app" "$ROOT/modes/"*.sh
-if [[ ! -f "$ROOT/routers.json" ]]; then
-  install -m 600 "$SRC/routers.json" "$ROOT/routers.json"
-fi
-if [[ ! -d "$ROOT/generated" ]]; then
-  cp -a "$SRC/generated" "$ROOT/generated"
-fi
-
-install -m 644 "$SRC/router-vpn.png" /usr/share/icons/hicolor/256x256/apps/router-vpn.png
-install -m 644 "$SRC/router-vpn.desktop" /usr/share/applications/router-vpn.desktop
-cat >/usr/local/bin/router-vpn <<'LAUNCH'
-#!/usr/bin/env sh
-if [ -x /opt/router-vpn-client/router-vpn-update ]; then
-  /opt/router-vpn-client/router-vpn-update --download --json >/dev/null 2>&1 &
-fi
-exec /opt/router-vpn-client/router-vpn-app "$@"
-LAUNCH
-chmod 755 /usr/local/bin/router-vpn
-command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database /usr/share/applications || true
-command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -f -t /usr/share/icons/hicolor || true
-printf '%s\n' 'Router VPN installed. Open Router VPN from the desktop application menu or run: router-vpn'
-printf '%s\n' 'Verified exact-SHA update packages are checked/staged automatically; existing linked nodes are preserved.'
+python3 "$SRC/client/install-linux-native.py" "$SRC"
 SH
 chmod 755 "$dir/install-router-vpn.sh"
 
@@ -141,31 +114,40 @@ accepts only immutable exact-SHA releases whose RouterVPN-RELEASE.json package d
 a newer archive, and never overwrites the currently running installation. Distribution package
 managers remain authoritative when Router VPN is installed through one.
 
-You can also run ./router-vpn-app or ./start-router-vpn.sh directly from the extracted folder. This
-is a native GTK3 application that talks only to the loopback Router VPN controller API. It does not
+The installed GUI stays under your desktop user. Its administrator request starts only the fixed,
+root-owned controller; credentials travel through an anonymous pipe, and every privileged API call
+is authenticated. Closing the GUI requests owned tunnel cleanup before its controller exits.
+
+Always protection is reasserted before network managers start. The installer supplies a dedicated
+early systemd service and dependency drop-ins; it does not start an unauthenticated boot controller.
+For local emergency recovery, run sudo router-vpn-killswitch-recovery and review the saved policy.
+
+This is a native GTK3 application that talks only to the loopback Router VPN controller API. It does not
 open or embed a website/WebView.
 
-The app starts the sibling router-vpn-client only when no controller is already listening on
-127.0.0.1:8788. If it starts that controller, closing the app issues an emergency stop and stops
-only that owned process. The generic archive contains no linked home node; link/import node data
-separately. Router VPN is MIT-licensed; see LICENSE.
+The app verifies its own controller identity before sending API credentials to 127.0.0.1:8788.
+An unrelated listener is rejected. The generic archive contains no linked home node; link/import
+node data separately. Installation/upgrade stages verified files before promotion, preserves private
+node state, and refuses an upgrade while the application is still running. Router VPN is MIT-licensed; see LICENSE.
 
 The installer checks the actual native GUI's linked libraries and the system tools required for
 networking and strict protection before replacing application files. On Debian/Ubuntu it installs
 missing dependencies using the configured package repositories: GTK3, libcurl, json-glib, Python 3,
-nftables, iproute2, passwd, util-linux and libc-bin. Other distributions can provide the same tools
+nftables, iproute2, passwd, util-linux, libc-bin, pkexec/polkit and systemd. Other distributions can provide the same tools
 with their package manager before installation. No VPN engine is compiled during this setup.
 
-Direct-folder launches need these same system dependencies. Run
-bash client/install-linux-system-tools.sh --check ./router-vpn-app to check them without installing.
+To check an extracted package's system dependencies before installation, run
+bash client/install-linux-system-tools.sh --check ./router-vpn-app. The normal desktop-user tunnel
+launch uses the installed, protected controller and its administrator authorization.
 TXT
 
 "$ROOT/deploy/package-xray-runtime.sh" "linux/$ARCH" "$dir"
 "$ROOT/deploy/package-amnezia-runtime.sh" "linux/$ARCH" "$dir"
 "$ROOT/deploy/package-native-runtime.sh" "linux/$ARCH" "$dir"
-python3 "$ROOT/deploy/test_linux_runtime_install.py" --package "$dir"
-bash "$dir/client/install-linux-system-tools.sh" --check "$dir/router-vpn-app"
 python3 "$ROOT/server/scripts/source_provenance.py" "$dir" --family "linux-$ARCH"
+python3 "$ROOT/deploy/test_linux_runtime_install.py" --package "$dir"
+python3 "$ROOT/deploy/test_linux_native_install.py" --package "$dir"
+bash "$dir/client/install-linux-system-tools.sh" --check "$dir/router-vpn-app"
 tar -C "$work" -czf "$OUT/$name.tar.gz" "$name"
 python3 "$ROOT/deploy/native-runtime-bundle.py" verify-package "linux/$ARCH" "$OUT/$name.tar.gz"
 archive_list="$work/archive-members.txt"
@@ -187,7 +169,7 @@ fi
 grep -Fq 'Exec=/usr/local/bin/router-vpn' "$dir/router-vpn.desktop"
 grep -Fq 'Icon=router-vpn' "$dir/router-vpn.desktop"
 grep -Fq 'StartupWMClass=router-vpn-app' "$dir/router-vpn.desktop"
-grep -Fq '[[ ! -f "$ROOT/routers.json" ]]' "$dir/install-router-vpn.sh"
+grep -Fq 'python3 "$SRC/client/install-linux-native.py" "$SRC"' "$dir/install-router-vpn.sh"
 
 python3 "$ROOT/deploy/check-generic-package-secrets.py" "$OUT"
 (

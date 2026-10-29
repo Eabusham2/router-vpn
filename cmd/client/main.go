@@ -43,6 +43,7 @@ type state struct {
 
 type app struct {
 	cfg               common.ClientConfig
+	localController   *linuxOwnedController
 	modes             []common.Mode
 	profiles          common.RouterProfileStore
 	mu                sync.Mutex
@@ -57,6 +58,12 @@ type app struct {
 }
 
 func main() {
+	ownedController, err := prepareLinuxOwnedController(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer ownedController.close()
 	if handled, err := mtuOwnerUtility(os.Args[1:]); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -77,6 +84,10 @@ func main() {
 			os.Exit(1)
 		}
 		return
+	}
+	if err = validateLinuxOwnedStartup(ownedController); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 	// Package verification is a read-only utility. Only normal application
 	// startup may migrate client configuration or prepare a Windows catalog.
@@ -122,6 +133,11 @@ func main() {
 	} else if !filepath.IsAbs(c.ProfilesFile) {
 		c.ProfilesFile = filepath.Join(configDir, c.ProfilesFile)
 	}
+	if ownedController != nil {
+		if err = validateLinuxOwnedConfiguration(c); err != nil {
+			log.Fatal(err)
+		}
+	}
 	if _, err = os.Stat(configPath); errors.Is(err, os.ErrNotExist) {
 		if err = persistClientConfig(configPath, c); err != nil {
 			log.Fatal(err)
@@ -137,7 +153,7 @@ func main() {
 		log.Fatal(err)
 	}
 
-	a := &app{cfg: c, modes: modes, state: state{Mode: "off", Phase: "off"}}
+	a := &app{cfg: c, localController: ownedController, modes: modes, state: state{Mode: "off", Phase: "off"}}
 	if err = a.loadProfiles(); err != nil {
 		log.Fatal(err)
 	}

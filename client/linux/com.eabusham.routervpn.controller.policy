@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN" "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Router VPN</vendor>
+  <action id="com.eabusham.routervpn.controller">
+    <description>Start the Router VPN connection controller</description>
+    <message>Administrator authentication is required to manage this device's VPN tunnel and protection.</message>
+    <icon_name>router-vpn</icon_name>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/opt/router-vpn-client/router-vpn-client</annotate>
+    <annotate key="org.freedesktop.policykit.exec.argv1">--linux-owned-controller</annotate>
+  </action>
+</policyconfig>

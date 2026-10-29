@@ -16,7 +16,7 @@ check_tools() {
     command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
   done
   # The privileged socket guardian uses these exact system-owned paths.
-  for tool in /usr/sbin/nft /usr/sbin/useradd /usr/sbin/userdel /usr/sbin/nologin; do
+  for tool in /usr/sbin/nft /usr/sbin/useradd /usr/sbin/userdel /usr/sbin/nologin /usr/bin/pkexec /usr/bin/systemctl; do
     [[ -f "$tool" && -x "$tool" ]] || missing+=("$tool")
   done
   if command -v ldd >/dev/null 2>&1; then
@@ -36,7 +36,7 @@ printf 'Missing Linux runtime dependency: %s\n' "${missing[@]}" >&2
 if [[ "$ACTION" != --install ]]; then exit 1; fi
 [[ ${EUID:-$(id -u)} -eq 0 ]] || { echo 'Run the installer with sudo to install system dependencies.' >&2; exit 1; }
 if ! command -v apt-get >/dev/null 2>&1 || ! command -v apt-cache >/dev/null 2>&1; then
-  echo 'Install Python 3, nftables, iproute2, shadow account tools, nologin, GTK3, libcurl and json-glib with your distribution package manager, then run this installer again.' >&2
+  echo 'Install Python 3, nftables, iproute2, shadow account tools, nologin, pkexec/polkit, systemd, GTK3, libcurl and json-glib with your distribution package manager, then run this installer again.' >&2
   exit 1
 fi
 
@@ -57,8 +57,9 @@ select_package() {
 }
 gtk=$(select_package libgtk-3-0t64 libgtk-3-0)
 curl=$(select_package libcurl4t64 libcurl4)
+polkit=$(select_package pkexec policykit-1)
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-  python3 nftables iproute2 passwd util-linux libc-bin "$gtk" "$curl" libjson-glib-1.0-0
+  python3 nftables iproute2 passwd util-linux libc-bin "$polkit" systemd "$gtk" "$curl" libjson-glib-1.0-0
 check_tools
 if (( ${#missing[@]} != 0 )); then
   printf 'Linux runtime dependency remains unavailable: %s\n' "${missing[@]}" >&2

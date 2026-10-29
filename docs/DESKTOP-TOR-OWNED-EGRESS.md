@@ -168,10 +168,13 @@ UID; they never guess that identity reuse is safe. Old-owner cleanup removes
 only its captured rule/set identities and preserves a replacement session.
 
 The Linux source requires root, nftables, `useradd`, `userdel`, and `nologin` in
-the trusted system locations checked by the installer and runtime. A normal
-installed user's authenticated controller-to-privileged-launch path needs its
-own installed-app validation. Kernel namespace results alone do not establish
-that user-facing launch, a public Tor circuit, or device acceptance.
+the trusted system locations checked by the installer and runtime. The native
+installed GUI now uses a fixed polkit-authorized controller, anonymous
+credentials/lifetime input, authenticated local API, and retained installation
+locks; see [native installation and permissions](LINUX-NATIVE-INSTALL.md).
+Its separate fixed-install namespace and real GTK callback tests supplement
+the socket guardian tests. These results do not establish an interactive
+authorization prompt, a public Tor circuit, or physical-device acceptance.
 
 ## Remaining platform boundaries
 

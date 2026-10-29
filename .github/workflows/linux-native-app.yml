@@ -14,6 +14,8 @@ on:
       - 'deploy/test_desktop_dns_settings.py'
       - 'deploy/test_desktop_quick_dns.py'
       - 'deploy/test_linux_dns_measurement.py'
+      - 'deploy/test_linux_controller_privilege.py'
+      - 'deploy/test_linux_native_install.py'
       - 'deploy/materialize-desktop-icons.py'
       - 'cmd/client/**'
       - 'cmd/dnsproxy/**'
@@ -36,6 +38,8 @@ on:
       - 'deploy/test_desktop_dns_settings.py'
       - 'deploy/test_desktop_quick_dns.py'
       - 'deploy/test_linux_dns_measurement.py'
+      - 'deploy/test_linux_controller_privilege.py'
+      - 'deploy/test_linux_native_install.py'
       - 'deploy/materialize-desktop-icons.py'
       - 'cmd/client/**'
       - 'cmd/dnsproxy/**'
@@ -85,7 +89,7 @@ jobs:
       - name: Install native GUI build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libgtk-3-dev libcurl4-openssl-dev libjson-glib-dev pkg-config file xvfb xauth nftables iproute2 passwd util-linux
+          sudo apt-get install -y --no-install-recommends libgtk-3-dev libcurl4-openssl-dev libjson-glib-dev pkg-config file xvfb xauth nftables iproute2 passwd util-linux pkexec
       - name: Desktop icon generator self-test
         run: python3 deploy/materialize-desktop-icons.py --self-test
       - name: Native routed candidate selection and cancellation

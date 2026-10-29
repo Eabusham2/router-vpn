@@ -14,6 +14,8 @@ MTU_INC="$ROOT/client/linux/routervpn-mtu-v20.inc"
 DNS_INC="$ROOT/client/linux/routervpn-dns-measurement-v1.inc"
 DEVICE_INC="$ROOT/client/linux/routervpn-device-settings-v1.inc"
 SHUTDOWN_INC="$ROOT/client/linux/routervpn-controller-shutdown-v1.inc"
+CONTROLLER_AUTH_HEADER="$ROOT/client/linux/routervpn-controller-auth-v1.h"
+CONTROLLER_LAUNCH_INC="$ROOT/client/linux/routervpn-controller-launch-v1.inc"
 EXTERNAL_SOURCE_INC="$ROOT/client/linux/routervpn-external-source-v24.inc"
 COMPARISON_HEADER="$ROOT/client/linux/routervpn-comparison-progress-v25.h"
 TELEMETRY_INC="$ROOT/client/linux/routervpn-telemetry-v9.inc"
@@ -26,7 +28,7 @@ V3="$ROOT/client/linux/routervpn-gtk-product-v3.c"
 CORE="$ROOT/client/linux/routervpn-gtk-product.c"
 SESSION_MUTATION="$ROOT/client/linux/apply-session-mutation.py"
 START_LAYER_SETTINGS="$ROOT/client/linux/apply-start-layer-settings.py"
-SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$SHUTDOWN_INC" "$EXTERNAL_SOURCE_INC" "$COMPARISON_HEADER" "$DEVICE_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC" "$V4" "$V3" "$CORE" "$START_LAYER_SETTINGS")
+SHIPPED=("$SRC" "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$SHUTDOWN_INC" "$CONTROLLER_AUTH_HEADER" "$CONTROLLER_LAUNCH_INC" "$EXTERNAL_SOURCE_INC" "$COMPARISON_HEADER" "$DEVICE_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC" "$V4" "$V3" "$CORE" "$START_LAYER_SETTINGS")
 BUILD_DIR=$(mktemp -d "${TMPDIR:-/tmp}/router-vpn-linux-v10.XXXXXX")
 EMBEDDED_V4="$BUILD_DIR/routervpn-gtk-product-v4-embedded.c"
 BUILD_SRC="$BUILD_DIR/routervpn-gtk-product-v10-shipping.c"
@@ -41,7 +43,7 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 for pkg in gtk+-3.0 libcurl json-glib-1.0; do
   pkg-config --exists "$pkg" || { echo "Missing native Linux app build dependency: $pkg" >&2; exit 2; }
 done
-for source in "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$SHUTDOWN_INC" "$EXTERNAL_SOURCE_INC" "$COMPARISON_HEADER" "$DEVICE_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC"; do
+for source in "$ONBOARDING_INC" "$HOME_INC" "$SETTINGS_INC" "$CANDIDATES_INC" "$AUTO_REQ_INC" "$UNIFIED_INC" "$MTU_INC" "$DNS_INC" "$SHUTDOWN_INC" "$CONTROLLER_AUTH_HEADER" "$CONTROLLER_LAUNCH_INC" "$EXTERNAL_SOURCE_INC" "$COMPARISON_HEADER" "$DEVICE_INC" "$TELEMETRY_INC" "$SPEED_LAB_INC" "$SPEED_LAB_PATH_INC" "$GLOBE_INC" "$RESPONSIVE_INC"; do
   [[ -s "$source" ]] || { echo "Missing Linux shipping include: $source" >&2; exit 2; }
 done
 mkdir -p "$(dirname "$OUT")"
@@ -212,6 +214,16 @@ text = text.replace(speed_test_seam, '\n'.join([
     '    }', speed_test_seam]), 1)
 
 # Keep the real-widget layout test in the same compiled shipping entrypoint.
+# It renders the actual controls without authorizing a tunnel controller. The
+# dedicated privileged-launch gate verifies that separate installed boundary.
+# Closing local request admission also prevents this visual test from attaching
+# to a foreign loopback controller if one appears after the runner's preflight.
+layout_launch_old = '    if (!ensure_controller(&app, &error)) {'
+layout_launch_new = '''    gboolean layout_only = argc == 2 && strcmp(argv[1], "--layout-self-test") == 0;
+    if (layout_only) atomic_store_explicit(&controller_exit_pending, TRUE, memory_order_release);
+    if (!layout_only && !ensure_controller(&app, &error)) {'''
+if text.count(layout_launch_old) != 1: raise SystemExit('Linux rendered-layout launch seam drifted')
+text = text.replace(layout_launch_old, layout_launch_new, 1)
 loop_old = '    gtk_main();\n    g_free(app.package_root);'
 loop_new = '''    if (argc > 1 && strcmp(argv[1], "--layout-self-test") == 0) {
         int layout_result = linux_responsive_self_test_v15(&app);

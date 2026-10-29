@@ -91,8 +91,6 @@ func registerStrategyRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/strategy/auto", a.strategyAuto)
 	h.HandleFunc("/api/strategy/smart-auto", a.strategySmartAuto)
 	h.HandleFunc("/api/strategy/custom", a.strategyCustom)
-	go a.recordLastSuccessfulRuntime()
-	scheduleStartupPolicy(a)
 }
 
 func (t *sessionTracker) strategyEvent(kind, message string) {
@@ -606,11 +604,16 @@ func (a *app) loadStartupSelection() (startupSelection, error) {
 	return selection, nil
 }
 
-func (a *app) recordLastSuccessfulRuntime() {
+func (a *app) recordLastSuccessfulRuntime(ctx context.Context) {
 	ticker := time.NewTicker(750 * time.Millisecond)
 	defer ticker.Stop()
 	lastKey := ""
-	for range ticker.C {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 		a.mu.Lock()
 		st := a.state
 		profile, profileOK := a.profileByIDLocked(st.RouterID)

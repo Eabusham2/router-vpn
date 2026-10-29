@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "routervpn-controller-auth-v1.h"
 
 #define RV_HTTP_LIMIT_V16 (2u * 1024u * 1024u)
 typedef struct RVHttpJobV16 {
@@ -22,6 +23,7 @@ typedef struct RVHttpJobV16 {
     long timeout_ms, status;
     CURLcode result;
     int connecting, get;
+    RVControllerAuth authentication;
 } RVHttpJobV16;
 
 static size_t rv_http_receive_v16(void *data, size_t size, size_t count, void *opaque) {
@@ -48,6 +50,11 @@ static void *rv_http_work_v16(void *opaque) {
     if (easy == NULL || multi == NULL) goto done;
     headers = curl_slist_append(NULL, "Content-Type: application/json");
     if (headers == NULL) goto done;
+    if(job->authentication.header[0]){
+        struct curl_slist *authenticated=curl_slist_append(headers,job->authentication.header);
+        if(authenticated==NULL)goto done;
+        headers=authenticated;
+    }
 #define RV_SET(option, value) do { if (curl_easy_setopt(easy, option, value) != CURLE_OK) goto done; } while (0)
     RV_SET(CURLOPT_URL, job->url);
     RV_SET(CURLOPT_PROXY, "");
@@ -99,6 +106,7 @@ static RVHttpJobV16 *rv_http_start_bounded_v25(const char *path, const char *bod
     job->body = strdup(body);
     job->label = strdup(label != NULL ? label : "Request");
     job->timeout_ms = timeout_ms;
+    rv_controller_auth_capture(&job->authentication);
     job->response_limit = response_limit;
     const char *action = strrchr(path, '/');
     job->get = get != 0;
@@ -141,6 +149,6 @@ static void rv_http_free_v16(RVHttpJobV16 *job) {
     if (job == NULL) return;
     rv_http_cancel_v16(job);
     (void)pthread_join(job->thread, NULL);
-    free(job->url); free(job->body); free(job->label); free(job->response); free(job);
+    free(job->url); free(job->body); free(job->label); free(job->response); memset(&job->authentication,0,sizeof(job->authentication)); free(job);
 }
 #endif

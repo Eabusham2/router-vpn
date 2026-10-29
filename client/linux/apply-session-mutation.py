@@ -267,5 +267,14 @@ def apply(src, dst):
 
 base.apply = apply
 
+# The authenticated native launch adds captured credentials before these
+# existing session guards. Their exact text and rejection behavior are retained.
+name = "routervpn-gtk-product.c"
+_, changes = base.SPECS[name]
+base.SPECS[name] = (
+    '64c2473b72558d039e36fb7928ef7ed5971ede3df4a500ed0cde19f1c91210bf',
+    [(i1 -2, i2 -2, old, new) for i1, i2, old, new in changes],
+)
+
 if __name__ == "__main__":
     base.main()

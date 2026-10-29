@@ -58,6 +58,7 @@ typedef struct {
     char *request_body;
     char *request_error;
     Buffer response;
+    RVControllerAuth authentication;
 } LinuxSpeedLabV12;
 
 /* Only the worker touches response storage until complete is published. All
@@ -91,6 +92,7 @@ static gpointer linux_speed_lab_worker_v12(gpointer opaque) {
     char *url = g_strdup_printf("%s%s", ROUTER_VPN_BASE_URL, path);
     struct curl_slist *headers = curl_slist_append(NULL, "Accept: application/json");
     if (!s->loading_options) headers = curl_slist_append(headers, "Content-Type: application/json");
+    if(s->authentication.header[0])headers=curl_slist_append(headers,s->authentication.header);
     curl_easy_setopt(curl, CURLOPT_URL, url);
     curl_easy_setopt(curl, CURLOPT_PROXY, "");
     curl_easy_setopt(curl, CURLOPT_NOPROXY, "*");
@@ -476,6 +478,7 @@ static void linux_speed_lab_start_v12(LinuxSpeedLabV12 *s, gboolean options) {
     s->loading_options = options;
     s->request_ok = FALSE;
     s->request_timeout = options ? 10000L : 110000L;
+    rv_controller_auth_capture(&s->authentication);
     if (!options) {
         s->request_body = linux_speed_lab_request_body_v12(s);
         if(s->request_body==NULL){linux_speed_lab_release_request_v12(s);linux_speed_lab_refresh_controls_v12(NULL,s);return;}
@@ -548,7 +551,7 @@ static void linux_speed_lab_open_v12(GtkButton *button,gpointer data){
     linux_speed_lab_time_v12(NULL,s);
     gtk_dialog_run(GTK_DIALOG(s->dialog));
     if (!s->closed) gtk_widget_destroy(s->dialog);
-    g_free(s);
+    memset(&s->authentication,0,sizeof(s->authentication));g_free(s);
 }
 
 static void linux_install_speed_lab_v12(App *app){

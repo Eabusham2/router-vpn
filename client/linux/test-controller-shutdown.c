@@ -33,9 +33,31 @@ static void fixture_response(int fd,int status,const char *body) {
     (void)fixture_send(fd,header,(size_t)n);(void)fixture_send(fd,body,strlen(body));
 }
 
+static char *fixture_header(const char *request,const char *name) {
+    char *key=g_strdup_printf("\r\n%s: ",name);const char *value=strcasestr(request,key);g_free(key);
+    if(value==NULL)return NULL;
+    value=strchr(value+2,':');if(value==NULL)return NULL;value+=2;
+    const char *end=strstr(value,"\r\n");return end!=NULL?g_strndup(value,(gsize)(end-value)):NULL;
+}
+
+static void fixture_launch_exec(App *app) {
+    if(g_strcmp0(getenv("RV_CONTROLLER_TEST_SCENARIO"),"auth-cancel")==0)_exit(126);
+    char *controller=g_build_filename(app->package_root,"router-vpn-client",NULL);
+    if(setenv("HOMEVPN_ROOT",app->package_root,1)!=0)_exit(126);
+    execl(controller,controller,(char*)NULL);_exit(127);
+}
+
 static int fixture_controller(void) {
-    const char *scenario=getenv("RV_CONTROLLER_TEST_SCENARIO"),*owner=getenv("HOMEVPN_CONTROLLER_OWNER"),*root=getenv("HOMEVPN_ROOT"),*control=getenv("RV_CONTROLLER_TEST_FD");
-    if(scenario==NULL||root==NULL||control==NULL||!controller_owner_token_valid(owner))return 91;
+    const char *scenario=getenv("RV_CONTROLLER_TEST_SCENARIO"),*root=getenv("HOMEVPN_ROOT"),*control=getenv("RV_CONTROLLER_TEST_FD");
+    if(scenario==NULL||root==NULL||control==NULL)return 91;
+    char frame[385];size_t length=0;
+    while(length<sizeof(frame)-1){ssize_t n=read(STDIN_FILENO,frame+length,1);if(n<0&&errno==EINTR)continue;if(n!=1)return 90;if(frame[length++]=='\n')break;}
+    frame[length]='\0';JsonNode *identity=parse_json(frame);
+    if(identity==NULL||!JSON_NODE_HOLDS_OBJECT(identity))return 89;
+    JsonObject *launch=json_node_get_object(identity);char owner[33],access[65];
+    g_strlcpy(owner,obj_string(launch,"owner_token"),sizeof(owner));g_strlcpy(access,obj_string(launch,"access_token"),sizeof(access));
+    json_node_free(identity);memset(frame,0,sizeof(frame));
+    if(!controller_owner_token_valid(owner)||!rv_controller_secret_valid(access)||strcmp(owner,getenv("HOMEVPN_CONTROLLER_OWNER"))==0)return 88;
     int control_fd=atoi(control);
     int server=socket(AF_INET,SOCK_STREAM,0);if(server<0)return 92;
     int reuse=1;(void)setsockopt(server,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));
@@ -43,9 +65,10 @@ static int fixture_controller(void) {
     if(bind(server,(struct sockaddr*)&address,sizeof(address))!=0||listen(server,4)!=0){close(server);return 93;}
     int posts=0;
     for(;;){
-        fd_set input;FD_ZERO(&input);FD_SET(server,&input);FD_SET(control_fd,&input);int maximum=server>control_fd?server:control_fd;
+        fd_set input;FD_ZERO(&input);FD_SET(server,&input);FD_SET(control_fd,&input);FD_SET(STDIN_FILENO,&input);int maximum=server>control_fd?server:control_fd;
         if(select(maximum+1,&input,NULL,NULL,NULL)<0){if(errno==EINTR)continue;return 94;}
         if(FD_ISSET(control_fd,&input)){char command;ssize_t ignored=read(control_fd,&command,1);(void)ignored;close(server);return 0;}
+        if(FD_ISSET(STDIN_FILENO,&input)){char extra;ssize_t n=read(STDIN_FILENO,&extra,1);close(server);return n==0?0:87;}
         int client=accept(server,NULL,NULL);if(client<0)continue;
         struct timeval timeout={2,0};(void)setsockopt(client,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
         char request[8193];size_t used=0;char *body=NULL;size_t need=0;
@@ -57,6 +80,25 @@ static int fixture_controller(void) {
             if(used>=(size_t)(body-request)+need)break;
         }
         if(body==NULL||used<(size_t)(body-request)+need){close(client);continue;}
+        char *authorization=fixture_header(request,"Authorization");
+        if(strncmp(request,"GET /api/controller/identity ",29)==0){
+            char *challenge=fixture_header(request,"X-RouterVPN-Challenge");
+            if(challenge==NULL||!controller_owner_token_valid(challenge)||authorization==NULL){g_free(challenge);g_free(authorization);close(client);return 86;}
+            char *message=g_strdup_printf("routervpn-controller-identity-request\n%s",challenge);
+            char *mac=g_compute_hmac_for_string(G_CHECKSUM_SHA256,(const guchar*)access,64,message,-1);
+            char *expected_auth=g_strdup_printf("RouterVPN-Identity %s",mac);g_free(message);g_free(mac);
+            if(strcmp(authorization,expected_auth)!=0||strstr(request,access)!=NULL){g_free(expected_auth);g_free(authorization);g_free(challenge);close(client);return 85;}
+            g_free(expected_auth);g_free(authorization);
+            message=g_strdup_printf("routervpn-controller-identity-response\n%ld\n%s",(long)getpid(),challenge);
+            mac=g_compute_hmac_for_string(G_CHECKSUM_SHA256,(const guchar*)access,64,message,-1);g_free(message);
+            if(strcmp(scenario,"wrong-proof")==0)mac[0]=mac[0]=='a'?'b':'a';
+            if(strcmp(scenario,"wrong-challenge")==0)challenge[0]=challenge[0]=='a'?'b':'a';
+            char *reply=g_strdup_printf("{\"schema\":1,\"process_id\":%ld,\"challenge\":\"%s\",\"proof\":\"%s\"}",(long)getpid()+(strcmp(scenario,"wrong-pid")==0?1:0),challenge,mac);
+            fixture_response(client,200,reply);g_free(reply);g_free(mac);g_free(challenge);close(client);continue;
+        }
+        char *expected_auth=g_strdup_printf("Bearer %s",access);
+        gboolean authorized=authorization!=NULL&&strcmp(authorization,expected_auth)==0;g_free(authorization);g_free(expected_auth);
+        if(!authorized){fixture_response(client,403,"{}");close(client);return 84;}
         if(strncmp(request,"GET /api/status ",16)==0){fixture_response(client,200,"{\"connected\":false}");close(client);continue;}
         char *expected=g_strdup_printf("{\"schema\":1,\"process_id\":%ld,\"owner_token\":\"%s\"}",(long)getpid(),owner);
         if(strncmp(request,"POST /api/controller/shutdown ",30)!=0||need!=strlen(expected)||memcmp(body,expected,need)!=0){g_free(expected);fixture_response(client,400,"{}");close(client);close(server);return 95;}
@@ -131,6 +173,15 @@ int main(int argc,char **argv){
     check(prctl(PR_SET_CHILD_SUBREAPER,1)==0,"fixture retains its buffered-response writer child");
     receipt_checks();
     App app={0};app.package_root=g_strdup(argv[2]);fixture_window(&app);
+    if(strcmp(scenario,"occupied")==0){
+        int listener=socket(AF_INET,SOCK_STREAM,0);check(listener>=0,"foreign listener created");
+        int reuse=1;(void)setsockopt(listener,SOL_SOCKET,SO_REUSEADDR,&reuse,sizeof(reuse));
+        struct sockaddr_in address;memset(&address,0,sizeof(address));address.sin_family=AF_INET;address.sin_port=htons(8788);address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
+        check(bind(listener,(struct sockaddr*)&address,sizeof(address))==0&&listen(listener,1)==0,"foreign listener owns local port");
+        char *error=NULL;check(!controller_launch_owned(&app,&error,fixture_launch_exec,500)&&!app.owns_controller&&app.controller_pid==0,"occupied port is never adopted or stopped");g_free(error);
+        RVControllerAuth capture;rv_controller_auth_capture(&capture);check(capture.process==0&&capture.header[0]=='\0',"foreign listener never receives controller credential");
+        close(listener);gtk_widget_destroy(app.window);g_free(app.package_root);curl_global_cleanup();printf("GTK shutdown %s: %u checks PASS\n",scenario,checks);return 0;
+    }
     if(strcmp(scenario,"foreign")==0){
         app.controller_pid=getpid();gboolean handled=TRUE;g_signal_emit_by_name(app.window,"delete-event",NULL,&handled);
         check(!handled&&app.controller_shutdown==NULL&&!app.owns_controller,"non-owned controller receives no shutdown request");
@@ -139,10 +190,18 @@ int main(int argc,char **argv){
     int control[2];check(pipe(control)==0,"fixture control pipe created");fixture_control_read=control[0];fixture_control_write=control[1];char descriptor[32];snprintf(descriptor,sizeof(descriptor),"%d",control[0]);
     check(setenv("RV_CONTROLLER_TEST_SCENARIO",scenario,1)==0&&setenv("RV_CONTROLLER_TEST_FD",descriptor,1)==0,"controlled subprocess environment ready");
     check(setenv("HOMEVPN_CONTROLLER_OWNER","ffffffffffffffffffffffffffffffff",1)==0,"foreign inherited owner installed for negative control");
-    char *error=NULL;check(ensure_controller(&app,&error),error!=NULL?error:"actual launcher started controlled child");g_free(error);
+    gboolean reject_launch=strcmp(scenario,"wrong-proof")==0||strcmp(scenario,"wrong-pid")==0||strcmp(scenario,"wrong-challenge")==0||strcmp(scenario,"auth-cancel")==0;
+    char *error=NULL;gboolean launched=controller_launch_owned(&app,&error,fixture_launch_exec,reject_launch?700:5000);
+    if(reject_launch){
+        check(!launched&&!app.owns_controller&&app.controller_pid==0&&app.controller_lifetime_fd==0,"unproved or cancelled child is joined before launch failure");
+        RVControllerAuth capture;rv_controller_auth_capture(&capture);check(capture.process==0&&capture.header[0]=='\0'&&app.controller_access[0]=='\0',"failed identity never publishes bearer secret");
+        g_free(error);gtk_widget_destroy(app.window);g_free(app.package_root);curl_global_cleanup();printf("GTK shutdown %s: %u checks PASS\n",scenario,checks);return 0;
+    }
+    check(launched,error!=NULL?error:"actual launcher started controlled child");g_free(error);
     pid_t child=app.controller_pid;fixture_owned_child=app.owns_controller?child:0;char captured[33];g_strlcpy(captured,app.controller_owner,sizeof(captured));
     check(app.owns_controller&&child>0&&child!=getpid()&&controller_child_observe(child)==0,"launcher owns exact unreaped child");
     check(strcmp(captured,"ffffffffffffffffffffffffffffffff")!=0,"launcher replaced inherited nonce");
+    Buffer authenticated={0};check(api_request("/api/status","GET",NULL,900,&authenticated,NULL),"ordinary read uses the authenticated captured controller");free(authenticated.data);
     FixtureHeartbeat beat={.app=&app};guint timer=g_timeout_add(10,heartbeat,&beat);
     gboolean handled=FALSE;g_signal_emit_by_name(app.window,"delete-event",NULL,&handled);
     check(handled&&app.controller_shutdown!=NULL&&app.window!=NULL,"delete callback keeps UI while cleanup is pending");

@@ -24,7 +24,8 @@ def run(command, *, timeout=45, expected_failure=None):
 
 
 def compile_fixture(directory, change=None):
-    for name in ('test-controller-shutdown.c', 'routervpn-gtk-product.c', 'routervpn-controller-shutdown-v1.inc'):
+    for name in ('test-controller-shutdown.c', 'routervpn-gtk-product.c', 'routervpn-controller-shutdown-v1.inc',
+                 'routervpn-controller-auth-v1.h', 'routervpn-controller-launch-v1.inc'):
         shutil.copyfile(SOURCE / name, directory / name)
     helper = directory / 'routervpn-controller-shutdown-v1.inc'
     if change is not None:
@@ -57,7 +58,8 @@ def test(negative=True):
         source = root / 'source'
         source.mkdir()
         binary = compile_fixture(source)
-        scenarios = ('foreign', 'pending', 'delay-exit', 'exit-during-body', 'wrong-owner', 'duplicate', 'lost-receipt', 'abnormal-exit', 'replace-owner')
+        scenarios = ('foreign', 'occupied', 'wrong-proof', 'wrong-pid', 'wrong-challenge', 'auth-cancel',
+                     'pending', 'delay-exit', 'exit-during-body', 'wrong-owner', 'duplicate', 'lost-receipt', 'abnormal-exit', 'replace-owner')
         for scenario in scenarios:
             exercise(binary, scenario, root)
         if negative:

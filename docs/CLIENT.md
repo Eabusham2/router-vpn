@@ -89,6 +89,15 @@ Legacy/full-bundle installer paths remain available for recovery, but the curren
 
 ## Linux
 
+Use the package's `sudo ./install-router-vpn.sh`, then open the installed app
+from the desktop menu as your normal user and approve its administrator request.
+The GTK GUI stays unprivileged; its fixed controller owns the tunnel and
+authenticates every local API call. Installation preserves private nodes and
+uses verified staging, locking and rollback. The installed early service
+reasserts Always protection before supported network managers start. See
+[native Linux installation and permissions](LINUX-NATIVE-INSTALL.md) for
+dependencies, upgrades, emergency recovery and the exact test boundaries.
+
 Linux x64/ARM64 packages contain the native GTK application. Linux source includes nftables kill-switch handling, real multihop, native external-node direct/composed paths and the owned Tor bridge runtime. The current native external runtime supports the same eight ordinary protocol families as Windows/macOS, including bounded inline OpenVPN inside one owned packet runtime. Legacy helper restrictions and the current external-node API are separate contracts.
 
 Live distro/runtime integration, DNS/IPv4/IPv6, leak-negative and custom-exit testing remain release gates.

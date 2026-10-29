@@ -40,6 +40,10 @@ type startupExternalSelection struct {
 
 func (a *app) captureStartupPolicy() (*startupPolicyCapture, error) {
 	a.mu.Lock()
+	if a.controllerClosingLocked() {
+		a.mu.Unlock()
+		return nil, nil
+	}
 	p, ok := a.profileByIDLocked(a.profiles.SelectedID)
 	p = cloneRouterProfile(p)
 	entry, _ := a.profileByIDLocked(p.MultihopEntryID)
@@ -86,7 +90,7 @@ func (a *app) captureStartupPolicy() (*startupPolicyCapture, error) {
 // currentLocked checks settings and source references, not measurements or use
 // counters that the current connection may update independently.
 func (capture *startupPolicyCapture) currentLocked(a *app) error {
-	if capture == nil || a.closing || a.profiles.SelectedID != capture.profile.ID {
+	if capture == nil || a.controllerClosingLocked() || a.profiles.SelectedID != capture.profile.ID {
 		return errors.New("scheduled startup selection was retired")
 	}
 	p, ok := a.profileByIDLocked(capture.profile.ID)

@@ -50,7 +50,7 @@ func (a *app) beginMutationOperation(r *http.Request) (func(), error) {
 		return nil, errors.New("another Router VPN connection or settings transaction is already in progress")
 	}
 	a.mu.Lock()
-	closing := a.closing
+	closing := a.controllerClosingLocked()
 	busy := profileSettingsBusy(a.state.Connected, a.state.Phase)
 	a.mu.Unlock()
 	if closing {
@@ -97,7 +97,7 @@ func (a *app) beginConnectionTransaction() (context.Context, func(), error) {
 		return nil, nil, errors.New("another Router VPN connection or settings transaction is already in progress")
 	}
 	a.mu.Lock()
-	closing := a.closing
+	closing := a.controllerClosingLocked()
 	busy := profileSettingsBusy(a.state.Connected, a.state.Phase)
 	a.mu.Unlock()
 	if closing {
@@ -126,7 +126,7 @@ func (a *app) beginConnectionTransaction() (context.Context, func(), error) {
 	// out, while this second check protects against any independent state change.
 	invalidateDesktopDNSResults(a)
 	a.mu.Lock()
-	if a.closing || profileSettingsBusy(a.state.Connected, a.state.Phase) {
+	if a.controllerClosingLocked() || profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		a.mu.Unlock()
 		a.operationMu.Unlock()
 		return nil, nil, errors.New("Router VPN state changed while validating private connection runtime")

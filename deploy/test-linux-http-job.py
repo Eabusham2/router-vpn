@@ -21,6 +21,8 @@ C_TEST = r'''
 static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC,&t); return t.tv_sec+t.tv_nsec/1e9; }
 int main(int argc,char **argv) {
     if(argc!=2 || curl_global_init(CURL_GLOBAL_DEFAULT)!=CURLE_OK)return 2;
+    static const char secret[]="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    if(!rv_controller_auth_publish(42,secret))return 26;
     int mode=atoi(argv[1]);
     const char *paths[]={"/api/ok","/api/slow","/api/large","/api/redirect","/api/slow","/api/error","/api/read","/api/connection/speed-test","/api/multihop/connect"};
     if(mode<0||mode>14)return 3;
@@ -29,6 +31,8 @@ int main(int argc,char **argv) {
         mode==6?rv_http_start_method_v17(paths[mode],"",4000,"read",1):rv_http_start_v16(paths[mode],body,mode==4?120:4000,"test");
     memset(body,'x',strlen(body));free(body); /* Caller storage does not survive. */
     if(job==NULL)return 4;
+    rv_controller_auth_clear(42,secret);
+    if(!rv_controller_auth_publish(43,"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"))return 27;
     double start=now();
     if(mode>=9 && mode<=10 && (job->timeout_ms!=540000L||job->get||!job->connecting||strcmp(job->url,"http://127.0.0.1:8788/api/external-profile/connect")!=0))return 17;
     if(mode>=11 && (job->timeout_ms!=2000L||!job->get||job->connecting||job->response_limit!=32768||strcmp(job->url,"http://127.0.0.1:8788/api/multihop/status")!=0))return 18;
@@ -72,6 +76,8 @@ def main():
             pass
         def do_GET(self):
             received.append(self.path)
+            if self.headers.get('Authorization') != 'Bearer ' + 'a' * 64:
+                failures.append('read credential was omitted or taken from replacement owner')
             if self.path not in ('/api/read','/api/multihop/status') or int(self.headers.get('Content-Length','0')) != 0:
                 failures.append('read method/body contract changed')
             if self.server.case == 14:
@@ -99,6 +105,8 @@ def main():
             n = int(self.headers.get('Content-Length', '0'))
             body = self.rfile.read(n) if 0 <= n < 65536 else b''
             received.append(self.path)
+            if self.headers.get('Authorization') != 'Bearer ' + 'a' * 64:
+                failures.append('action credential was omitted or taken from replacement owner')
             if body != b'{"owned":true}':
                 failures.append('caller body was not captured')
             if self.path == '/api/slow' or self.server.case == 10:

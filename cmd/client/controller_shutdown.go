@@ -77,7 +77,11 @@ func validControllerOwnerToken(value string) bool {
 func (a *app) controllerClosing() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.closing
+	return a.controllerClosingLocked()
+}
+
+func (a *app) controllerClosingLocked() bool {
+	return a.closing || a.localController.retired()
 }
 
 func (c *controllerShutdown) begin() {
@@ -217,7 +221,14 @@ func (c *controllerShutdown) shutdownHTTP(w http.ResponseWriter, r *http.Request
 }
 
 func runClientHTTP(a *app, address string, handler http.Handler) error {
-	closing := newControllerShutdown(a, os.Getenv(controllerOwnerEnvironment))
+	ownerToken := os.Getenv(controllerOwnerEnvironment)
+	if a.localController != nil {
+		if address != linuxOwnedControllerAddress {
+			return errors.New("the native controller requires its fixed loopback listener")
+		}
+		ownerToken = a.localController.ownerToken
+	}
+	closing := newControllerShutdown(a, ownerToken)
 	signals := make(chan os.Signal, 4)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(signals)
@@ -231,11 +242,32 @@ func runClientHTTP(a *app, address string, handler http.Handler) error {
 }
 
 func serveClientHTTP(closing *controllerShutdown, listener net.Listener, handler http.Handler, signals <-chan os.Signal) error {
-	server := &http.Server{Handler: closing.handler(handler)}
+	var ownerDone <-chan struct{}
+	if closing.a.localController != nil {
+		ownerDone = closing.a.localController.ownerDone
+	}
+	// Route registration is passive. Only a bound listener with a live owner
+	// may schedule automatic startup, and a prior EOF must not even enter Serve.
+	if closing.a.controllerClosing() {
+		_ = listener.Close()
+		closing.begin()
+		<-closing.done
+		return nil
+	}
+	scheduleStartupPolicy(closing.a)
+	go closing.a.recordLastSuccessfulRuntime(closing.operations)
+	server := &http.Server{Handler: closing.a.localController.handler(closing.handler(handler))}
+	if closing.a.localController != nil {
+		server.ReadHeaderTimeout = 5 * time.Second
+		server.IdleTimeout = 30 * time.Second
+		server.MaxHeaderBytes = 16 << 10
+	}
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(listener) }()
 	var serveErr error
 	select {
+	case <-ownerDone:
+		closing.begin()
 	case <-signals:
 		closing.begin()
 	case <-closing.exit:
