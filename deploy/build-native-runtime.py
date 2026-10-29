@@ -98,6 +98,7 @@ def inputs():
                              ROOT/'deploy/setup-desktop-native-toolchain.py',
                              ROOT/'deploy/install-desktop-windows-toolchain.py',
                              ROOT/'deploy/test_desktop_socket_uid.py',
+                             ROOT/'deploy/test_desktop_windows_identity.py',
                              ROOT/'deploy/test_desktop_linux_guardian.py',
                              ROOT/'deploy/test_linux_guardian_namespace.py',
                              *sorted((ROOT/'mobile/rosenpass').glob('Cargo.*')),
@@ -501,6 +502,9 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             if target.startswith(('linux/', 'darwin/')):
                 run([sys.executable, ROOT/'deploy/test_desktop_socket_uid.py', source],
                     env=env, timeout=300)
+            if target.startswith('windows/'):
+                run([sys.executable, ROOT/'deploy/test_desktop_windows_identity.py', source],
+                    env=env, timeout=600)
             if target.startswith('linux/'):
                 run([sys.executable, ROOT/'deploy/test_desktop_linux_guardian.py', source],
                     env=env, timeout=300)

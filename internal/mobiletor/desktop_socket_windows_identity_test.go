@@ -1,0 +1,580 @@
+//go:build windows && routervpn_windows_identity
+
+package mobiletor
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"net"
+	"net/netip"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+	"unsafe"
+)
+
+// These are actual local Windows account, token, Winsock and WFP operations.
+// They do not install any firewall permit, connect a socket, or change an
+// existing account. Lack of elevation/BFE/IPv6 is a failed required gate, not a
+// skipped identity proof. Every created account is fresh and expires atomically.
+func desktopWindowsIdentityTestNew(t *testing.T) *DesktopWindowsSocketIdentity {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	p, err := NewDesktopWindowsSocketIdentity(ctx, desktopSocketFixtureCapture())
+	if p != nil {
+		t.Cleanup(func() {
+			defer cancel()
+			cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+			defer stop()
+			if err := p.Close(cleanup); err != nil {
+				t.Error("isolated Windows identity did not join and retire", err)
+				// A deliberately broken production mutant must still retire only
+				// its exact test-owned handles and account. This recovery is never
+				// used as an acceptance result or a production cleanup substitute.
+				if recoveryErr := desktopWindowsIdentityTestRecover(p); recoveryErr != nil {
+					t.Error("isolated test-owned recovery failed", recoveryErr)
+				}
+			}
+		})
+	} else {
+		t.Cleanup(cancel)
+	}
+	if err != nil {
+		t.Fatal("actual Windows isolated identity preparation", err)
+	}
+	return p
+}
+
+func desktopWindowsIdentityTestRecover(p *DesktopWindowsSocketIdentity) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return p.call(ctx, true, func() error {
+		for id, record := range p.sockets {
+			if record.returned != nil {
+				if err := record.returned.Close(); err != nil {
+					return err
+				}
+			}
+			if record.original != nil {
+				if err := record.original.Close(); err != nil {
+					return err
+				}
+			}
+			delete(p.sockets, id)
+		}
+		if p.token != 0 {
+			if err := p.token.Close(); err != nil {
+				return err
+			}
+			p.token = 0
+		}
+		if p.engine != 0 {
+			status, _, _ := p.api.engineClose.Call(uintptr(p.engine))
+			if status != 0 {
+				return syscall.Errno(status)
+			}
+			p.engine = 0
+		}
+		if p.account != "" {
+			account, err := p.api.account(p.account)
+			if errors.Is(err, desktopWindowsUserNotFound) {
+				p.account = ""
+				return nil
+			}
+			if err != nil || account.Comment != p.marker || (len(p.sid) != 0 && !bytes.Equal(p.sid, account.SID)) {
+				return errors.Join(err, errors.New("test recovery refused another account identity"))
+			}
+			if err := p.api.disableAccount(p.account, account); err != nil {
+				return err
+			}
+			name, _ := syscall.UTF16PtrFromString(p.account)
+			status, _, _ := p.api.userDelete.Call(0, uintptr(unsafe.Pointer(name)))
+			if status != 0 {
+				return syscall.Errno(status)
+			}
+			if _, err := p.api.account(p.account); !errors.Is(err, desktopWindowsUserNotFound) {
+				return errors.New("test recovery could not confirm owned account removal")
+			}
+			p.account = ""
+		}
+		return nil
+	})
+}
+
+func desktopWindowsIdentityTestRelease(p *DesktopWindowsSocketIdentity, creation DesktopSocketCreation) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		err := p.ReleaseSocket(ctx, creation)
+		if err == nil || !strings.Contains(err.Error(), "ALE endpoint has not independently retired") {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return errors.Join(err, ctx.Err())
+		case <-time.After(20 * time.Millisecond):
+		}
+	}
+}
+
+func desktopWindowsIdentityTestCreation(t *testing.T, p *DesktopWindowsSocketIdentity, network, address string) DesktopSocketCreation {
+	t.Helper()
+	owner, err := p.Owner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	local := netip.MustParseAddr(address)
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var binding DesktopSocketBinding
+	for _, iface := range interfaces {
+		addresses, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, candidate := range addresses {
+			prefix, err := netip.ParsePrefix(candidate.String())
+			if err == nil && prefix.Addr() == local {
+				binding = DesktopSocketBinding{Owner: owner, InterfaceName: iface.Name, InterfaceIndex: uint32(iface.Index), LocalAddress: local}
+			}
+		}
+	}
+	if binding.InterfaceIndex == 0 {
+		t.Fatal("required Windows loopback address has no real interface", address)
+	}
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		t.Fatal(err)
+	}
+	return DesktopSocketCreation{Capture: p.capture, Binding: binding, SocketID: hex.EncodeToString(id[:]), Network: network}
+}
+
+func desktopWindowsIdentityTestCreate(t *testing.T, p *DesktopWindowsSocketIdentity, creation DesktopSocketCreation) DesktopSocketCreated {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(p.ctx, 5*time.Second)
+	defer cancel()
+	result, err := p.CreateSocket(ctx, creation)
+	if result.Native != nil {
+		t.Cleanup(func() {
+			if err := result.Native.Close(); err != nil {
+				t.Error("close transferred identity socket", err)
+			}
+			if err := desktopWindowsIdentityTestRelease(p, creation); err != nil {
+				t.Error("release retained identity socket", err)
+			}
+		})
+	}
+	if err != nil || result.Native == nil || result.File != nil || result.Creation != creation {
+		t.Fatal("actual isolated Winsock creation", err)
+	}
+	return result
+}
+
+func desktopWindowsIdentityTestBind(t *testing.T, native DesktopSocketNative, local netip.Addr) (syscall.RawConn, netip.AddrPort) {
+	t.Helper()
+	raw, err := native.SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := desktopSocketExclusive(raw); err != nil {
+		t.Fatal(err)
+	}
+	var result error
+	var bound netip.AddrPort
+	err = raw.Control(func(handle uintptr) {
+		fd := syscall.Handle(handle)
+		var target syscall.Sockaddr
+		if local.Is4() {
+			target = &syscall.SockaddrInet4{Addr: local.As4()}
+		} else {
+			target = &syscall.SockaddrInet6{Addr: local.As16()}
+			if result = syscall.SetsockoptInt(fd, syscall.IPPROTO_IPV6, syscall.IPV6_V6ONLY, 1); result != nil {
+				return
+			}
+		}
+		if result = syscall.Bind(fd, target); result != nil {
+			return
+		}
+		bound, result = desktopSocketLocal(fd)
+	})
+	if err != nil || result != nil || !bound.IsValid() {
+		t.Fatal("actual isolated socket bind", err, result)
+	}
+	return raw, bound
+}
+
+func desktopWindowsIdentityTestAccount(t *testing.T, p *DesktopWindowsSocketIdentity) desktopWindowsAccount {
+	t.Helper()
+	var account desktopWindowsAccount
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := p.call(ctx, true, func() error {
+		var err error
+		account, err = p.api.account(p.account)
+		return err
+	}); err != nil {
+		t.Fatal("independent account readback", err)
+	}
+	return account
+}
+
+func TestDesktopSocketWindowsIdentitySDKLayout(t *testing.T) {
+	var properties desktopWindowsALEProperties
+	if unsafe.Sizeof(properties) != 104 || unsafe.Offsetof(properties.Protocol) != 44 || unsafe.Offsetof(properties.LocalPort) != 46 || unsafe.Offsetof(properties.RemotePort) != 48 || unsafe.Offsetof(properties.TokenModifiedID) != 56 || unsafe.Offsetof(properties.AppID) != 88 {
+		t.Fatal("FWPS_ALE_ENDPOINT_PROPERTIES0 no longer matches the 64-bit Windows SDK")
+	}
+	var user desktopWindowsUser2
+	if unsafe.Sizeof(user) != 152 || unsafe.Offsetof(user.Flags) != 40 || unsafe.Offsetof(user.AuthFlags) != 56 || unsafe.Offsetof(user.Expires) != 104 || unsafe.Offsetof(user.LogonHours) != 120 || unsafe.Offsetof(user.LogonServer) != 136 {
+		t.Fatal("USER_INFO_2 no longer matches the 64-bit Windows SDK")
+	}
+	var token desktopWindowsTokenStatistics
+	if unsafe.Sizeof(token) != 56 || unsafe.Offsetof(token.ModifiedID) != 48 {
+		t.Fatal("TOKEN_STATISTICS no longer matches the Windows SDK")
+	}
+	if _, err := desktopWindowsALEAddress(2, [16]byte{}); err == nil {
+		t.Fatal("unknown native address family was accepted")
+	}
+}
+
+func TestDesktopSocketWindowsIdentityBoundKernelEndpoints(t *testing.T) {
+	for _, address := range []string{"127.0.0.1", "::1"} {
+		for _, network := range []string{"tcp", "udp"} {
+			t.Run(network+"-"+address, func(t *testing.T) {
+				p := desktopWindowsIdentityTestNew(t)
+				creation := desktopWindowsIdentityTestCreation(t, p, network, address)
+				result := desktopWindowsIdentityTestCreate(t, p, creation)
+				account := desktopWindowsIdentityTestAccount(t, p)
+				if account.Flags&desktopWindowsAccountDisabled == 0 || account.Expires != p.expires || int64(account.Expires) > time.Now().Add(2*time.Minute).Unix() || account.Comment != p.marker {
+					t.Fatal("created account lacks independently verified disabled/expiry ownership")
+				}
+				processToken, err := syscall.OpenCurrentProcessToken()
+				if err != nil {
+					t.Fatal(err)
+				}
+				processSID, processStatistics, tokenErr := desktopWindowsTokenIdentity(processToken)
+				closeErr := processToken.Close()
+				if tokenErr != nil || closeErr != nil || bytes.Equal(processSID, p.sid) || processStatistics.ModifiedID == p.statistics.ModifiedID {
+					t.Fatal("isolated socket identity reused the ordinary host token", tokenErr, closeErr)
+				}
+				copySID, err := p.SID()
+				if err != nil || !bytes.Equal(copySID, account.SID) {
+					t.Fatal("SID did not match independent account readback", err)
+				}
+				copySID[0] ^= 0xff
+				again, err := p.SID()
+				if err != nil || !bytes.Equal(again, account.SID) {
+					t.Fatal("caller could mutate captured SID authority", err)
+				}
+				raw, err := result.Native.SyscallConn()
+				if err != nil {
+					t.Fatal(err)
+				}
+				family := "6"
+				if creation.Binding.LocalAddress.Is4() {
+					family = "4"
+				}
+				matched, err := p.MatchSocket(p.ctx, creation.Capture, creation.Binding, network+family, raw)
+				if err != nil || matched != creation {
+					t.Fatal("exact transferred unbound handle did not match", err)
+				}
+				if _, err := p.InspectSocket(p.ctx, creation); err == nil {
+					t.Fatal("unbound socket acquired a post-bind ALE proof")
+				}
+				_, bound := desktopWindowsIdentityTestBind(t, result.Native, creation.Binding.LocalAddress)
+				inspection, err := p.InspectSocket(p.ctx, creation)
+				if err != nil {
+					t.Fatal("actual post-bind ALE endpoint/token proof", err)
+				}
+				protocol, nativeFamily := uint8(syscall.IPPROTO_TCP), syscall.AF_INET6
+				if network == "udp" {
+					protocol = syscall.IPPROTO_UDP
+				}
+				if family == "4" {
+					nativeFamily = syscall.AF_INET
+				}
+				if inspection.EndpointID == 0 || inspection.TokenModifiedID != p.statistics.ModifiedID || inspection.Local != bound || inspection.Remote.Port() != 0 || !inspection.Remote.Addr().IsUnspecified() || inspection.Protocol != protocol || inspection.Family != nativeFamily || !bytes.Equal(inspection.AppID, p.appID) {
+					t.Fatal("ALE proof failed to match actual isolated token and complete tuple", inspection)
+				}
+				retained, err := desktopWindowsALEEndpoint(inspection.Raw)
+				transferred, otherErr := desktopWindowsALEEndpoint(raw)
+				if err != nil || otherErr != nil || retained != inspection.EndpointID || transferred != retained {
+					t.Fatal("socket duplication replaced the original ALE endpoint", err, otherErr)
+				}
+			})
+		}
+	}
+}
+
+func TestDesktopSocketWindowsIdentityRejectsOrdinaryTokenSocket(t *testing.T) {
+	p := desktopWindowsIdentityTestNew(t)
+	creation := desktopWindowsIdentityTestCreation(t, p, "tcp", "127.0.0.1")
+	ordinary, err := desktopWindowsNativeTestSocket("tcp", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ordinary.Close() })
+	raw, _ := ordinary.SyscallConn()
+	if _, err := p.MatchSocket(p.ctx, creation.Capture, creation.Binding, "tcp4", raw); err == nil {
+		t.Fatal("ordinary host socket passed isolated transferred-handle matching")
+	}
+	duplicate, err := desktopWindowsNativeDuplicate(raw)
+	if duplicate != nil {
+		t.Cleanup(func() { _ = duplicate.Close() })
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	desktopWindowsIdentityTestBind(t, duplicate, creation.Binding.LocalAddress)
+	endpoint, err := desktopWindowsALEEndpoint(raw)
+	if err != nil {
+		t.Fatal("ordinary socket must supply a real ALE endpoint for negative control", err)
+	}
+	properties, _, err := p.api.endpointProperties(p.engine, endpoint)
+	if err != nil || properties.TokenModifiedID == p.statistics.ModifiedID {
+		t.Fatal("ordinary endpoint negative control was not independently distinguished", err)
+	}
+	// Deliberately put false transfer metadata around the real ordinary-token
+	// socket. The independent kernel token check must still reject it.
+	if err := p.call(p.ctx, false, func() error {
+		p.sockets[creation.SocketID] = &desktopWindowsIdentitySocket{creation: creation, original: ordinary, returned: duplicate, handedOut: true}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = duplicate.Close()
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := p.ReleaseSocket(cleanup, creation); err != nil {
+			t.Error(err)
+		}
+	})
+	if _, err := p.InspectSocket(p.ctx, creation); err == nil || !strings.Contains(err.Error(), "captured isolated token") {
+		t.Fatal("false transfer metadata bypassed independent ordinary-token rejection", err)
+	}
+}
+
+func TestDesktopSocketWindowsIdentityRejectsTupleAndCaptureReplacement(t *testing.T) {
+	p := desktopWindowsIdentityTestNew(t)
+	creation := desktopWindowsIdentityTestCreation(t, p, "tcp", "127.0.0.1")
+	result := desktopWindowsIdentityTestCreate(t, p, creation)
+	raw, _ := result.Native.SyscallConn()
+	for _, change := range []func(*DesktopSocketCreation){
+		func(c *DesktopSocketCreation) { c.Capture.SessionID = strings.Repeat("b", 32) },
+		func(c *DesktopSocketCreation) { c.Capture.SourceSHA256 = strings.Repeat("c", 64) },
+		func(c *DesktopSocketCreation) { c.Capture.NetworkID = strings.Repeat("d", 32) },
+		func(c *DesktopSocketCreation) { c.Binding.Owner.Generation++ },
+	} {
+		wrong := creation
+		change(&wrong)
+		if _, err := p.MatchSocket(p.ctx, wrong.Capture, wrong.Binding, "tcp4", raw); err == nil {
+			t.Fatal("replacement capture/owner matched an old native socket")
+		}
+		if _, err := p.InspectSocket(p.ctx, wrong); err == nil {
+			t.Fatal("replacement capture/owner inspected an old native socket")
+		}
+	}
+	if duplicate, err := p.CreateSocket(p.ctx, creation); err == nil || duplicate.Native != nil {
+		t.Fatal("duplicate socket identity was reused", err)
+	}
+	desktopWindowsIdentityTestBind(t, result.Native, creation.Binding.LocalAddress)
+	wrong := creation
+	wrong.Binding.LocalAddress = netip.MustParseAddr("127.0.0.2")
+	if err := p.call(p.ctx, false, func() error {
+		p.sockets[creation.SocketID].creation = wrong
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, inspectErr := p.InspectSocket(p.ctx, wrong)
+	if err := p.call(p.ctx, false, func() error {
+		p.sockets[creation.SocketID].creation = creation
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if inspectErr == nil || !strings.Contains(inspectErr.Error(), "bound family, protocol, or local tuple") {
+		t.Fatal("metadata changed the independently read bound tuple", inspectErr)
+	}
+}
+
+func TestDesktopSocketWindowsIdentityRetainsTransferredSocketUntilRelease(t *testing.T) {
+	p := desktopWindowsIdentityTestNew(t)
+	creation := desktopWindowsIdentityTestCreation(t, p, "udp", "127.0.0.1")
+	result := desktopWindowsIdentityTestCreate(t, p, creation)
+	_, bound := desktopWindowsIdentityTestBind(t, result.Native, creation.Binding.LocalAddress)
+	if err := p.ReleaseSocket(p.ctx, creation); err == nil {
+		t.Fatal("source retired while the transferred socket remained open")
+	}
+	cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := p.Close(cleanup); err == nil || !strings.Contains(err.Error(), "unretired sockets") {
+		t.Fatal("identity was released before its transferred descriptor", err)
+	}
+	if p.Current(creation.Capture, creation.Binding.Owner) {
+		t.Fatal("closing identity remained current")
+	}
+	raw, err := result.Native.SyscallConn()
+	if err != nil {
+		t.Fatal("failed cleanup discarded transferred ownership", err)
+	}
+	var actual netip.AddrPort
+	var nativeErr error
+	if err := raw.Control(func(handle uintptr) { actual, nativeErr = desktopSocketLocal(syscall.Handle(handle)) }); err != nil || nativeErr != nil || actual != bound {
+		t.Fatal("failed cleanup changed the retained local tuple", err, nativeErr)
+	}
+	accountName := p.account
+	if err := result.Native.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ReleaseSocket(cleanup, creation); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.Close(cleanup); err != nil {
+		t.Fatal("retryable identity cleanup", err)
+	}
+	if _, err := p.api.account(accountName); !errors.Is(err, desktopWindowsUserNotFound) {
+		t.Fatal("owned account survived confirmed descriptor retirement", err)
+	}
+}
+
+func TestDesktopSocketWindowsIdentityRetainsLateCreationUntilJoin(t *testing.T) {
+	p := desktopWindowsIdentityTestNew(t)
+	creation := desktopWindowsIdentityTestCreation(t, p, "tcp", "127.0.0.1")
+	started, release := make(chan struct{}), make(chan struct{})
+	acquired := make(chan DesktopSocketNative, 1)
+	ctx, cancel := context.WithCancel(p.ctx)
+	t.Cleanup(cancel)
+	result := make(chan DesktopSocketCreated, 1)
+	failure := make(chan error, 1)
+	go func() {
+		created, err := p.createSocket(ctx, creation, func(family, kind, protocol int) (DesktopSocketNative, error) {
+			close(started)
+			<-release
+			socket, err := p.api.createUnderToken(p.token, p.sid, p.statistics, family, kind, protocol)
+			acquired <- socket
+			return socket, err
+		})
+		result <- created
+		failure <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("held native creation did not start")
+	}
+	cancel()
+	select {
+	case created := <-result:
+		if created.Native != nil || <-failure == nil {
+			close(release)
+			t.Fatal("cancelled uncompleted acquisition escaped as a transferred socket")
+		}
+	case <-time.After(time.Second):
+		close(release)
+		t.Fatal("creation ignored explicit cancellation")
+	}
+	short, stop := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	err := p.Close(short)
+	stop()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		close(release)
+		t.Fatal("identity cleanup bypassed the actual held native operation", err)
+	}
+	close(release)
+	var socket DesktopSocketNative
+	select {
+	case socket = <-acquired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("released native creation never joined")
+	}
+	if socket == nil {
+		t.Fatal("late resource control did not create a real isolated socket")
+	}
+	cleanup, finish := context.WithTimeout(context.Background(), 5*time.Second)
+	defer finish()
+	if err := p.Close(cleanup); err != nil {
+		t.Fatal("late never-transferred socket was not retired after joining", err)
+	}
+	if _, err := socket.SyscallConn(); !errors.Is(err, net.ErrClosed) {
+		t.Fatal("late original socket leaked after identity cleanup", err)
+	}
+}
+
+func TestDesktopSocketWindowsIdentityRetainsPartialCreationError(t *testing.T) {
+	p := desktopWindowsIdentityTestNew(t)
+	creation := desktopWindowsIdentityTestCreation(t, p, "udp", "127.0.0.1")
+	var original DesktopSocketNative
+	created, err := p.createSocket(p.ctx, creation, func(family, kind, protocol int) (DesktopSocketNative, error) {
+		var err error
+		original, err = p.api.createUnderToken(p.token, p.sid, p.statistics, family, kind, protocol)
+		return original, errors.Join(err, errors.New("controlled failure after actual socket acquisition"))
+	})
+	if err == nil || created.Native != nil || original == nil {
+		t.Fatal("partial native acquisition control did not fail with retained ownership", err)
+	}
+	cleanup, finish := context.WithTimeout(context.Background(), 5*time.Second)
+	defer finish()
+	if err := p.Close(cleanup); err != nil {
+		t.Fatal("partial creation error stranded its owned resource", err)
+	}
+	if _, err := original.SyscallConn(); !errors.Is(err, net.ErrClosed) {
+		t.Fatal("partial native acquisition leaked its original handle", err)
+	}
+}
+
+func TestDesktopSocketWindowsIdentityRejectsUnjoinedDuplicate(t *testing.T) {
+	p := desktopWindowsIdentityTestNew(t)
+	creation := desktopWindowsIdentityTestCreation(t, p, "udp", "127.0.0.1")
+	result := desktopWindowsIdentityTestCreate(t, p, creation)
+	raw, _ := desktopWindowsIdentityTestBind(t, result.Native, creation.Binding.LocalAddress)
+	if _, err := p.InspectSocket(p.ctx, creation); err != nil {
+		t.Fatal("post-bind proof before held duplicate", err)
+	}
+	extra, err := desktopWindowsNativeDuplicate(raw)
+	if extra != nil {
+		t.Cleanup(func() { _ = extra.Close() })
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := result.Native.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.ReleaseSocket(p.ctx, creation); err == nil || !strings.Contains(err.Error(), "ALE endpoint has not independently retired") {
+		t.Fatal("retirement ignored a real unjoined duplicate of the ALE endpoint", err)
+	}
+	if err := extra.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := desktopWindowsIdentityTestRelease(p, creation); err != nil {
+		t.Fatal("closed duplicate did not permit independent endpoint retirement", err)
+	}
+}
+
+func TestDesktopSocketWindowsIdentityRejectsTokenStatisticsReplacement(t *testing.T) {
+	p := desktopWindowsIdentityTestNew(t)
+	creation := desktopWindowsIdentityTestCreation(t, p, "tcp", "127.0.0.1")
+	result := desktopWindowsIdentityTestCreate(t, p, creation)
+	desktopWindowsIdentityTestBind(t, result.Native, creation.Binding.LocalAddress)
+	var verifyErr error
+	if err := p.call(p.ctx, false, func() error {
+		original := p.statistics
+		p.statistics.ModifiedID++
+		verifyErr = p.verifyIdentity()
+		p.statistics = original
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if verifyErr == nil || !strings.Contains(verifyErr.Error(), "kernel identity") {
+		t.Fatal("caller token statistics replaced actual GetTokenInformation authority", verifyErr)
+	}
+}
