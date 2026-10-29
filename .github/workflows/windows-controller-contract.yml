@@ -13,6 +13,10 @@ on:
       - 'cmd/windows-app-launcher/**'
       - 'cmd/portable-launcher/**'
       - 'deploy/test_windows_controller*'
+      - 'client/RouterVPN-Windows-ControllerTransport.cs'
+      - 'client/test-windows-controller-transport.ps1'
+      - 'deploy/test_windows_gui_transport.py'
+      - 'deploy/fixtures/windows-controller-transport/**'
       - 'deploy/test_desktop_windows_wfp.py'
       - 'deploy/test_desktop_windows_identity.py'
       - 'deploy/install-desktop-windows-toolchain.py'
@@ -28,6 +32,10 @@ on:
       - 'cmd/windows-app-launcher/**'
       - 'cmd/portable-launcher/**'
       - 'deploy/test_windows_controller*'
+      - 'client/RouterVPN-Windows-ControllerTransport.cs'
+      - 'client/test-windows-controller-transport.ps1'
+      - 'deploy/test_windows_gui_transport.py'
+      - 'deploy/fixtures/windows-controller-transport/**'
       - 'deploy/test_desktop_windows_wfp.py'
       - 'deploy/test_desktop_windows_identity.py'
       - 'deploy/install-desktop-windows-toolchain.py'
@@ -82,6 +90,32 @@ jobs:
         run: |
           python deploy/test_windows_controller_bridge.py
           if ($LASTEXITCODE -ne 0) { throw 'Captured Windows GUI bridge gate failed' }
+      - name: Native GUI pipe transport in PowerShell 5.1 and 7
+        if: ${{ success() || failure() }}
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($shell in @('powershell.exe', 'pwsh')) {
+            python deploy/test_windows_gui_transport.py --shell $shell
+            if ($LASTEXITCODE -ne 0) { throw "Native GUI pipe transport gate failed in $shell" }
+          }
+          # Build once with the shipping Framework compiler, then load the same
+          # production DLL in both runtimes. Independent recompilation cannot
+          # establish compatibility of the packaged assembly.
+          $owned = Join-Path $env:RUNNER_TEMP ('routervpn-ui-framework-' + [guid]::NewGuid().ToString('N'))
+          [void](New-Item -ItemType Directory -Path $owned -ErrorAction Stop)
+          try {
+            $assembly = Join-Path $owned 'RouterVPN.ControllerTransport.dll'
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/test-windows-controller-transport.ps1 -CompileAssembly $assembly
+            if ($LASTEXITCODE -ne 0) { throw 'Framework controller transport compilation failed' }
+            foreach ($shell in @('powershell.exe', 'pwsh')) {
+              & $shell -NoProfile -ExecutionPolicy Bypass -File client/test-windows-controller-transport.ps1 -LoadAssembly $assembly
+              if ($LASTEXITCODE -ne 0) { throw "The Framework transport DLL failed to load in $shell" }
+            }
+          } finally {
+            Remove-Item -LiteralPath $owned -Recurse -Force -ErrorAction Stop
+          }
       - name: Actual original-user GUI Job and binary pipe ownership
         if: ${{ success() || failure() }}
         shell: pwsh
