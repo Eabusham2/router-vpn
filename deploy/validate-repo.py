@@ -169,12 +169,32 @@ for required in (
 
 client_main = text("cmd/client/main.go")
 for required in (
-    "a.testHealth(p)", "PathProbeURL", "transport.Proxy = nil", "validateSelectedNodeProof(p, body)",
+    "a.testStartedModeHealth(startupCtx, p, native)", "PathProbeURL", "transport.Proxy = nil", "validateSelectedNodeProof(p, body)",
     "selected-router path proof failed", "http://10.77.0.1:8787/health", "NodeProofID",
     "newStagedBundle(", "nodeProofIDFromWGConfig(wgData)", "p.NodeProofID = derivedNodeID",
 ):
     if required not in client_main:
         error(f"client selected-path proof contract missing: {required}")
+node_startup = text("cmd/client/desktop_node_startup.go")
+for required in (
+    "return a.testHealthContext(parent, profile)",
+    "latency, err := a.testHealthContext(ctx, profile)",
+    "multihoprelay.NativeStartupAllowance(launch.mode)",
+    "owned != launch", "readDesktopNodeMTU(launch)",
+    "if ownershipErr := current(); ownershipErr != nil",
+):
+    if required not in node_startup:
+        error(f"desktop captured startup/path proof contract missing: {required}")
+node_startup_test = text("cmd/client/desktop_node_startup_test.go")
+for required in (
+    "TestDesktopNodeStartupCapturedNativePhasePrecedesOrdinaryProof",
+    "TestDesktopNodeStartupDeadlineDoesNotExtendOrdinaryOrSteadyHealth",
+    "TestDesktopNodeStartupReadinessKeepsExactReceiptCancellationAndOwner",
+    "TestDesktopNodeStartupFinalProofRetainsShortBudgetAndRejectsLateOwners",
+    "TestDesktopNodeStartupActualChildReadinessAndCancellation",
+):
+    if required not in node_startup_test:
+        error(f"desktop startup/path proof executable coverage missing: {required}")
 node_proof = text("cmd/client/node_proof.go")
 for required in (
     "router-vpn-private-agent-v1", "router-vpn-node-proof-v1\\n", "generated", "wg.conf",
