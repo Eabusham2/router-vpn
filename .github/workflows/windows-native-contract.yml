@@ -16,7 +16,9 @@ on:
 
 concurrency:
   group: windows-native-contract-${{ github.ref }}
-  cancel-in-progress: true
+  # Finish the active native diagnostic; GitHub retains only the newest pending
+  # head. Frequent coherent commits must not starve the actual kernel fixtures.
+  cancel-in-progress: false
 
 permissions:
   contents: read

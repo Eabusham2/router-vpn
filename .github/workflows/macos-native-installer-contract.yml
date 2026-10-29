@@ -56,7 +56,9 @@ permissions:
 
 concurrency:
   group: macos-owned-controller-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Finish the active native diagnostic; GitHub keeps only the newest pending
+  # run. Required release/native jobs still verify their own exact source SHA.
+  cancel-in-progress: false
 
 jobs:
   owned-controller:
