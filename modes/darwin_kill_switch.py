@@ -47,7 +47,7 @@ def render_owned_pf_rules(lan_access: bool, capture: tuple[str, str] | None) -> 
     label = owned_label('baseline\0'+session+'\0'+source)
     lines = [f'pass out all tag "{reset}" no state']
     if capture is not None:
-        lines.append(f'anchor "physical/{session}" out')
+        lines.append(f'anchor "p{session}" out')
     # Nonquick permitted packets continue through later foreign block rules.
     # Only an unmatched packet takes quick deny, before a foreign pass can
     # override protection. Stateful/translation intersections are refused by
@@ -109,11 +109,23 @@ def _owned_no_translation(anchor: str) -> None:
         raise RuntimeError('native macOS protection intersects foreign translation state')
 
 
-def owned_pf_preflight(previous: dict[str, Any]) -> None:
-    global_rules = run_pf(['-s', 'rules']).stdout.strip()
-    if not (global_rules+'\n').startswith('anchor "com.apple/*" all\n'):
+def _owned_system_filters(text: str) -> None:
+    # The exact stock normalization prefix precedes the first filter. It has
+    # no pass authority; foreign child filters and translations are still
+    # checked independently. Do not ignore other scrub actions or reorder
+    # an earlier filter into a position after our required system dispatch.
+    filters = '\n'.join(row.strip() for row in text.splitlines() if row.strip())
+    filters = filters.removeprefix('scrub-anchor "com.apple/*" all fragment reassemble\n')
+    if not (filters+'\n').startswith('anchor "com.apple/*" all\n'):
         raise RuntimeError('native macOS protection requires the existing system PF anchor dispatch')
-    _owned_compatible_filters(global_rules)
+    _owned_compatible_filters(filters)
+
+
+def owned_pf_preflight(previous: dict[str, Any]) -> None:
+    _owned_system_filters(run_pf(['-s', 'rules']).stdout)
+    for anchor in (OWNED_PF_ANCHOR+'/physical', OWNED_PF_ANCHOR+'/physical/*'):
+        if run_pf(['-a', anchor, '-s', 'rules']).stdout.strip():
+            raise RuntimeError('native macOS protection retains an earlier nested physical owner; exact prior-owner recovery is required')
     for anchor in ('', OWNED_PF_ANCHOR, OWNED_PF_ANCHOR+'/*'):
         _owned_no_translation(anchor)
     for root in run_pf(['-s', 'Anchors']).stdout.split():

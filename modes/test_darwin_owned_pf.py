@@ -93,7 +93,7 @@ class OwnedDarwinPF(unittest.TestCase):
         self.assertNotIn('a'*32, json.dumps(state))
         self.assertNotIn('b'*64, json.dumps(state))
         active = self.rules[P.OWNED_PF_ANCHOR]
-        self.assertIn('anchor "physical/'+'a'*32+'" out', active)
+        self.assertIn('anchor "p'+'a'*32+'" out', active)
         self.assertNotIn(' user ', active)
         self.assertNotIn('utun', active)
         self.assertNotIn('198.51.100.44', active)
@@ -246,11 +246,26 @@ en1: flags=8863<UP,BROADCAST,RUNNING,MULTICAST> mtu 1500
 
 
 class DarwinStatefulComposition(unittest.TestCase):
+    def test_stock_scrub_dispatch_preserves_first_filter_and_negative_controls(self):
+        anchor = 'anchor "com.apple/*" all\n'
+        scrub = 'scrub-anchor "com.apple/*" all fragment reassemble\n'
+        for raw in (anchor, scrub+anchor, scrub+anchor+'block out on utun42 all\n'):
+            with self.subTest(valid=raw):
+                P._owned_system_filters(raw)
+        for raw in ('', scrub, anchor.replace(' all', ' out'),
+                    'pass out all no state\n'+anchor,
+                    scrub.replace('com.apple', 'foreign')+anchor,
+                    scrub.replace('reassemble', 'crop')+anchor,
+                    scrub+scrub+anchor, anchor+scrub,
+                    scrub+anchor+'pass out all keep state\n'):
+            with self.subTest(invalid=raw), self.assertRaises(RuntimeError):
+                P._owned_system_filters(raw)
+
     def test_root_owned_and_foreign_translation_or_stateful_owners_are_rejected(self):
         spec = importlib.util.spec_from_file_location('darwin_owned_composition_test', HERE/'darwin_kill_switch.py')
         policy = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(policy)
-        for fault in ('none', 'root-nat', 'owned-nat', 'owned-child-nat', 'root-anchor-nat', 'root-anchor-in-state', 'foreign-out-state', 'earlier-filter'):
+        for fault in ('none', 'root-nat', 'owned-nat', 'owned-child-nat', 'root-anchor-nat', 'root-anchor-in-state', 'foreign-out-state', 'earlier-filter', 'legacy-slot', 'legacy-generation'):
             seen = []
             def run(arguments, **kwargs):
                 seen.append(arguments)
@@ -266,6 +281,9 @@ class DarwinStatefulComposition(unittest.TestCase):
                         output = 'pass out all keep state\n' if fault == 'foreign-out-state' else 'block out on utun43 all\n'
                     elif anchor == 'com.apple/000.before' and fault == 'earlier-filter':
                         output = 'pass out all no state\n'
+                    elif (anchor == policy.OWNED_PF_ANCHOR+'/physical' and fault == 'legacy-slot'
+                          or anchor == policy.OWNED_PF_ANCHOR+'/physical/*' and fault == 'legacy-generation'):
+                        output = 'block out on lo0 all\n'
                 elif command == ['-s', 'Anchors']:
                     output = 'com.apple\nforeign\n' if not anchor else '000.before\n000.router-vpn\nzzz.foreign\n'
                 elif command == ['-s', 'nat']:

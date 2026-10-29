@@ -200,7 +200,7 @@ func NewDesktopDarwinSocketPolicy(ctx context.Context, capture DesktopSocketCapt
 	defer cancelReadback()
 	expectedOwner := desktopDarwinOwnerForPID(capture, p.uid, p.account, p.owner.Generation, uint32(command.Process.Pid))
 	expectedBaseline, baselineErr := desktopDarwinPFCanonical(readback, desktopDarwinPFBaseline(capture, options))
-	expectedPointer, pointerErr := desktopDarwinPFCanonical(readback, fmt.Sprintf("anchor \"%s\" out\n", capture.NetworkID))
+	expectedPointer, pointerErr := desktopDarwinPFCanonical(readback, desktopDarwinPFPointer(capture))
 	// Prepare carries metadata, never borrowed proof. Independently compile the
 	// captured baseline/pointer and compare the still-empty generation before
 	// admitting any native socket or trusting the helper's monitor.

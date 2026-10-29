@@ -31,7 +31,7 @@ SPEC = importlib.util.spec_from_file_location('darwin_guardian_uid', ROOT/'deplo
 UID = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UID)
 
-CASES = ('PFCompiler', 'ProtectedPathAuthority', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'SocketRetirementReusesCapacity',
+CASES = ('PFCompiler', 'PFSystemDispatch', 'PFAnchorPaths', 'ProtectedPathAuthority', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'SocketRetirementReusesCapacity',
          'RetainedTunnel', 'BothOwnersCrashCannotReuseTuple', 'ForeignBlockAndLaterPass',
          'RejectsForeignStatefulDirections', 'BlockedControlRetainsSourcePort',
          'FinishRequiresDescriptorRetirement', 'FloatingStateRetirement',
@@ -168,6 +168,19 @@ def root_fixture(source_binary: Path, expected_digest: str, case=None):
         # This runs the real Go mode/ACL ancestry check before any kernel
         # fixture mutation. Do not relax /var/run's system permissions.
         system([str(binary), 'routervpn-darwin-fixture-preflight'])
+        # The complete -a path has a 63-byte loader bound. These shortened
+        # random fixture namespaces are captured only after proving neither
+        # already belongs to another filter owner, even if its rules are empty.
+        planned = {f'com.apple/{prefix}{nonce[:12]}' for prefix in ('000.t-', 'zzz.t-')}
+        present, _ = system(['/sbin/pfctl', '-a', 'com.apple', '-s', 'Anchors'])
+        present = {'com.apple/'+value.removeprefix('com.apple/') for value in present.split()}
+        if planned & present:
+            raise ValueError('A planned native PF fixture namespace already has an owner')
+        for anchor in sorted(planned):
+            rules, _ = system(['/sbin/pfctl', '-a', anchor, '-s', 'rules'])
+            children, _ = system(['/sbin/pfctl', '-a', anchor, '-s', 'Anchors'])
+            if rules.strip() or children.strip():
+                raise ValueError('A planned native PF fixture namespace is not independently empty')
         before, _ = system(['/sbin/ifconfig', 'lo0'])
         existing = set()
         for field in before.split():

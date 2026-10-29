@@ -32,6 +32,10 @@ type desktopDarwinFixture struct {
 
 var desktopDarwinTestFixture desktopDarwinFixture
 
+func desktopDarwinTestForeignNamespace() string {
+	return "com.apple/zzz.t-" + desktopDarwinTestFixture.Nonce[:12]
+}
+
 // Compile the actual shipping Go and Python baselines, including device-wide
 // production rules, using pfctl -n only. The native fixture never loads them.
 // Traffic tests below load only their fresh loopback-scoped rules.
@@ -87,6 +91,120 @@ func TestDesktopDarwinGuardianKernelPFCompiler(t *testing.T) {
 		}
 	}
 	parse("complete scoped socket rules", policy.render(), true)
+}
+
+func TestDesktopDarwinGuardianKernelPFSystemDispatch(t *testing.T) {
+	if os.Geteuid() != 0 || desktopDarwinTestFixture.Nonce == "" {
+		t.Fatal("actual captured Darwin system-dispatch fixture is required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	actual, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-s", "rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := desktopDarwinPFValidateSystemFilters(actual); err != nil {
+		t.Fatal("actual system PF normalization/filter dispatch was not proved", err)
+	}
+	anchor := "anchor \"com.apple/*\" all\n"
+	scrub := "scrub-anchor \"com.apple/*\" all fragment reassemble\n"
+	for _, valid := range []string{anchor, scrub + anchor, scrub + anchor + "block out on utun42 all\n"} {
+		if err := desktopDarwinPFValidateSystemFilters([]byte(valid)); err != nil {
+			t.Fatal("stock PF normalization changed the required first-filter dispatch", valid, err)
+		}
+	}
+	for _, invalid := range []string{"", scrub, strings.ReplaceAll(anchor, " all", " out"),
+		"pass out all no state\n" + anchor,
+		strings.ReplaceAll(scrub, "com.apple", "foreign") + anchor,
+		strings.ReplaceAll(scrub, "reassemble", "crop") + anchor,
+		scrub + scrub + anchor, anchor + scrub, scrub + anchor + "pass out all keep state\n"} {
+		if err := desktopDarwinPFValidateSystemFilters([]byte(invalid)); err == nil {
+			t.Fatal("Darwin system normalization bypassed the captured first-filter or state boundary", invalid)
+		}
+	}
+}
+
+func TestDesktopDarwinGuardianKernelPFAnchorPaths(t *testing.T) {
+	if os.Geteuid() != 0 || desktopDarwinTestFixture.Nonce == "" {
+		t.Fatal("actual captured Darwin anchor fixture is required")
+	}
+	capture := desktopSocketFixtureCapture()
+	slot, generation := desktopDarwinPFSlot(capture), desktopDarwinPFGeneration(capture)
+	if len(slot) > desktopDarwinPFAnchorPathLimit || len(generation) > desktopDarwinPFAnchorPathLimit {
+		t.Fatal("captured PF slot/generation exceeded the actual whole-path loader bound", slot, generation)
+	}
+	for _, changed := range []DesktopSocketCapture{
+		{SessionID: strings.Repeat("a", 32), SourceSHA256: capture.SourceSHA256, NetworkID: capture.NetworkID},
+		{SessionID: capture.SessionID, SourceSHA256: strings.Repeat("b", 64), NetworkID: capture.NetworkID},
+		{SessionID: capture.SessionID, SourceSHA256: capture.SourceSHA256, NetworkID: strings.Repeat("c", 32)},
+	} {
+		if desktopDarwinPFGeneration(changed) == generation {
+			t.Fatal("Darwin sibling PF generation borrowed another complete capture")
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	before, err := desktopDarwinPFRead(ctx, desktopDarwinPFNamespace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := desktopDarwinPFNamespace + "/physical"
+	legacyChild := legacy + "/legacy"
+	owned := []string{slot, generation, legacyChild, legacy}
+	t.Cleanup(func() {
+		cleanup, cancelCleanup := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancelCleanup()
+		for _, anchor := range owned {
+			if _, err := desktopDarwinCommand(cleanup, "/sbin/pfctl", nil, "-a", anchor, "-F", "rules"); err != nil {
+				t.Error("native PF anchor fixture did not clear its exact owned rules", anchor, err)
+				continue
+			}
+			if actual, err := desktopDarwinPFRead(cleanup, anchor); err != nil || actual != "" {
+				t.Error("native PF anchor fixture lost its exact absent readback", anchor, actual, err)
+			}
+		}
+	})
+	// The complete leaf and slot paths go through the actual loader, not only
+	// pfctl -n at the shorter parent. These unreferenced fixture rules are
+	// limited to newly owned loopback aliases and never affect host egress.
+	rules := fmt.Sprintf("block drop out on lo0 inet to %s label \"rvpn-native-anchor-bound\"\n", desktopDarwinTestFixture.Addresses[1])
+	expected, err := desktopDarwinPFCanonical(ctx, rules)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := desktopDarwinPFLoad(ctx, generation, rules); err != nil {
+		t.Fatal("actual full-generation PF path did not load", err)
+	}
+	if actual, err := desktopDarwinPFRead(ctx, generation); err != nil || actual != expected {
+		t.Fatal("actual full-generation PF path lost its exact readback", actual, err)
+	}
+	pointer, err := desktopDarwinPFCanonical(ctx, desktopDarwinPFPointer(capture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := desktopDarwinPFLoad(ctx, slot, pointer+"\n"); err != nil {
+		t.Fatal("actual full-session PF slot did not load its exact sibling pointer", err)
+	}
+	if actual, err := desktopDarwinPFRead(ctx, slot); err != nil || actual != pointer {
+		t.Fatal("actual full-session PF slot lost its exact sibling readback", actual, err)
+	}
+	if actual, err := desktopDarwinPFRead(ctx, desktopDarwinPFNamespace); err != nil || actual != before {
+		t.Fatal("loading captured PF children rewrote their parent policy", actual, err)
+	}
+	for _, anchor := range []string{legacy, legacyChild} {
+		if err := desktopDarwinPFLoad(ctx, anchor, rules); err != nil {
+			t.Fatal(err)
+		}
+		if err := desktopDarwinPFRejectLegacyLayout(ctx); err == nil || !strings.Contains(err.Error(), "earlier nested physical owner") {
+			t.Fatal("earlier PF ownership was silently reinterpreted as a sibling generation", err)
+		}
+		if actual, err := desktopDarwinPFRead(ctx, anchor); err != nil || actual != expected {
+			t.Fatal("rejecting an earlier PF owner removed its recovery rules", actual, err)
+		}
+		if _, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", anchor, "-F", "rules"); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func TestDesktopDarwinGuardianKernelProtectedPathAuthority(t *testing.T) {
@@ -217,7 +335,7 @@ func init() {
 	if !addresses[0].Is4() || !addresses[1].Is4() || !addresses[0].IsLoopback() || !addresses[1].IsLoopback() || !addresses[2].Is6() || !addresses[3].Is6() || !addresses[2].IsPrivate() || !addresses[3].IsPrivate() {
 		os.Exit(88)
 	}
-	desktopDarwinPFNamespace = "com.apple/000.routervpn-test-" + desktopDarwinTestFixture.Nonce
+	desktopDarwinPFNamespace = "com.apple/000.t-" + desktopDarwinTestFixture.Nonce[:12]
 	desktopDarwinPFTestScope = fmt.Sprintf("on lo0 to { %s, %s }", addresses[1], addresses[3])
 	desktopDarwinPFTestAddresses = append([]netip.Addr(nil), addresses...)
 	desktopDarwinIdentities = filepath.Join(filepath.Dir(executable), "identities")
@@ -261,8 +379,8 @@ func desktopDarwinFixtureCleanup() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	foreign := "com.apple/zzz.routervpn-test-" + desktopDarwinTestFixture.Nonce
-	if err := desktopDarwinPFLoad(ctx, foreign, "\n"); err != nil {
+	foreign := desktopDarwinTestForeignNamespace()
+	if _, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", foreign, "-F", "rules"); err != nil {
 		return err
 	}
 	if actual, err := desktopDarwinPFRead(ctx, foreign); err != nil || actual != "" {
@@ -278,20 +396,20 @@ func desktopDarwinFixtureCleanup() error {
 		if value == "" {
 			continue
 		}
-		if !regexp.MustCompile(`^physical(?:/[0-9a-f]{32}){0,2}$`).MatchString(value) {
+		if !regexp.MustCompile(`^(?:p[0-9a-f]{32}|g[A-Za-z0-9_-]{32}|physical(?:/[0-9a-f]{32}){0,2}|physical/legacy)$`).MatchString(value) {
 			return errors.New("fixture cleanup found an unowned PF descendant")
 		}
 		anchors = append(anchors, desktopDarwinPFNamespace+"/"+value)
 	}
 	for index := len(anchors) - 1; index >= 0; index-- {
-		if err := desktopDarwinPFLoad(ctx, anchors[index], "\n"); err != nil {
+		if _, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", anchors[index], "-F", "rules"); err != nil {
 			return err
 		}
 		if actual, err := desktopDarwinPFRead(ctx, anchors[index]); err != nil || actual != "" {
 			return errors.Join(err, errors.New("fixture child rules remained"))
 		}
 	}
-	if err := desktopDarwinPFLoad(ctx, desktopDarwinPFNamespace, "\n"); err != nil {
+	if _, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", desktopDarwinPFNamespace, "-F", "rules"); err != nil {
 		return err
 	}
 	entries, err := os.ReadDir(desktopDarwinIdentities)
@@ -766,7 +884,7 @@ func TestDesktopDarwinGuardianKernelForeignBlockAndLaterPass(t *testing.T) {
 	}
 	defer connection.Close()
 	desktopDarwinExchange(t, connection)
-	foreign := "com.apple/zzz.routervpn-test-" + desktopDarwinTestFixture.Nonce
+	foreign := desktopDarwinTestForeignNamespace()
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
@@ -813,7 +931,7 @@ func TestDesktopDarwinGuardianKernelRejectsForeignStatefulDirections(t *testing.
 	for _, direction := range []string{"in", "out"} {
 		t.Run(direction, func(t *testing.T) {
 			policy := desktopDarwinKernelPolicy(t, nil)
-			foreign := "com.apple/zzz.routervpn-test-" + desktopDarwinTestFixture.Nonce
+			foreign := desktopDarwinTestForeignNamespace()
 			defer func() {
 				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 				defer cancel()
@@ -981,7 +1099,7 @@ func TestDesktopDarwinGuardianKernelStaleCaptureAndReplacement(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	replacement := fmt.Sprintf(`anchor "%s" out`+"\n", stale.NetworkID)
+	replacement := desktopDarwinPFPointer(stale)
 	replacement, err = desktopDarwinPFCanonical(ctx, replacement)
 	if err != nil {
 		t.Fatal(err)

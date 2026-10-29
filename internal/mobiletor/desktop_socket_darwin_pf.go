@@ -23,6 +23,26 @@ import (
 var desktopDarwinPFNamespace = "com.apple/000.router-vpn"
 var desktopDarwinPFTestScope = ""
 
+// The Darwin/BSD pfctl loader copies its complete -a path into the 64-byte
+// pf_anchor.name before loading rules, even though the kernel path is larger.
+// Keep both independently mutable anchors as short siblings. The generation
+// name binds every original capture field, so reusing a NetworkID in another
+// session cannot make an old cleanup target that session's leaf.
+const desktopDarwinPFAnchorPathLimit = 63
+
+func desktopDarwinPFSlot(c DesktopSocketCapture) string {
+	return desktopDarwinPFNamespace + "/p" + c.SessionID
+}
+
+func desktopDarwinPFGeneration(c DesktopSocketCapture) string {
+	digest := sha256.Sum256([]byte("router-vpn/darwin/pf-generation/v2\x00" + c.SessionID + "\x00" + c.SourceSHA256 + "\x00" + c.NetworkID))
+	return desktopDarwinPFNamespace + "/g" + base64.RawURLEncoding.EncodeToString(digest[:24])
+}
+
+func desktopDarwinPFPointer(c DesktopSocketCapture) string {
+	return fmt.Sprintf("anchor \"/%s\" out\n", desktopDarwinPFGeneration(c))
+}
+
 type desktopDarwinPFPermit struct {
 	Grant   DesktopSocketGrant
 	Expires time.Time
@@ -60,12 +80,12 @@ func desktopDarwinPFBaseline(c DesktopSocketCapture, o DesktopDarwinSocketOption
 	if desktopDarwinPFTestScope != "" {
 		// The native fixture never installs a device-wide pass or deny. Even a
 		// missing-UID mutation is limited to its newly created loopback peers.
-		return fmt.Sprintf("pass out %s tag \"%s\" no state\nanchor \"physical/%s\" out\nblock drop out quick %s ! tagged \"%s\" label \"%s\"\n",
+		return fmt.Sprintf("pass out %s tag \"%s\" no state\nanchor \"p%s\" out\nblock drop out quick %s ! tagged \"%s\" label \"%s\"\n",
 			desktopDarwinPFTestScope, reset, c.SessionID, desktopDarwinPFTestScope, allowed, label)
 	}
 	lines := []string{
 		fmt.Sprintf("pass out all tag \"%s\" no state", reset),
-		fmt.Sprintf("anchor \"physical/%s\" out", c.SessionID),
+		fmt.Sprintf("anchor \"p%s\" out", c.SessionID),
 		fmt.Sprintf("pass out on lo0 all tag \"%s\" no state", allowed),
 		fmt.Sprintf("pass out inet proto udp from any port 68 to 255.255.255.255 port 67 tag \"%s\" no state", allowed),
 		fmt.Sprintf("pass out inet6 proto udp from any port 546 to any port 547 tag \"%s\" no state", allowed),
@@ -109,6 +129,9 @@ func desktopDarwinPFRead(ctx context.Context, anchor string) (string, error) {
 }
 
 func desktopDarwinPFLoad(ctx context.Context, anchor string, rules string) error {
+	if anchor == "" || len(anchor) > desktopDarwinPFAnchorPathLimit {
+		return errors.New("Darwin PF load path exceeds the native loader's captured anchor bound")
+	}
 	_, err := desktopDarwinCommand(ctx, "/sbin/pfctl", []byte(rules), "-a", anchor, "-f", "-")
 	if err != nil {
 		return fmt.Errorf("Darwin scoped PF load for anchor %q (%d input bytes): %w", anchor, len(rules), err)
@@ -117,6 +140,19 @@ func desktopDarwinPFLoad(ctx context.Context, anchor string, rules string) error
 }
 
 var desktopDarwinPFAnchorName = regexp.MustCompile(`^[A-Za-z0-9_.:-]+$`)
+
+func desktopDarwinPFRejectLegacyLayout(ctx context.Context) error {
+	for _, anchor := range []string{desktopDarwinPFNamespace + "/physical", desktopDarwinPFNamespace + "/physical/*"} {
+		rules, err := desktopDarwinPFRead(ctx, anchor)
+		if err != nil {
+			return err
+		}
+		if rules != "" {
+			return errors.New("Darwin PF retains an earlier nested physical owner; exact prior-owner recovery is required")
+		}
+	}
+	return nil
+}
 
 func desktopDarwinPFStatelessFilters(rules string) error {
 	for _, line := range strings.Split(rules, "\n") {
@@ -152,20 +188,38 @@ func desktopDarwinPFNoTranslation(ctx context.Context, anchor string) error {
 	return nil
 }
 
+func desktopDarwinPFValidateSystemFilters(raw []byte) error {
+	readback := desktopDarwinPFRulesText(raw)
+	filters := readback
+	// Stock macOS prints its normalization anchor before the filter anchor.
+	// This exact fragment-reassembly dispatch does not admit a filter flow.
+	// Only this single observed system prefix is separated; foreign children
+	// still undergo complete filter/translation checks below, and an unknown
+	// scrub action, earlier filter, duplicate prefix or changed dispatch fails.
+	const scrub = "scrub-anchor \"com.apple/*\" all fragment reassemble\n"
+	filters = strings.TrimPrefix(filters, scrub)
+	if !strings.HasPrefix(filters+"\n", "anchor \"com.apple/*\" all\n") {
+		if len(readback) > 4096 {
+			readback = readback[:4096] + "[truncated]"
+		}
+		return fmt.Errorf("Darwin physical policy requires the captured system PF anchor dispatch; actual rules: %q", readback)
+	}
+	return desktopDarwinPFStatelessFilters(filters)
+}
+
 func desktopDarwinPFGlobal(ctx context.Context) error {
 	info, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-s", "info")
 	if err != nil || !regexp.MustCompile(`(?m)^Status:\s+Enabled\b`).Match(info) {
 		return errors.New("Darwin physical policy lost PF enablement")
 	}
 	global, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-s", "rules")
-	if err != nil || !strings.HasPrefix(desktopDarwinPFRulesText(global)+"\n", "anchor \"com.apple/*\" all\n") {
-		readback := desktopDarwinPFRulesText(global)
-		if len(readback) > 4096 {
-			readback = readback[:4096] + "[truncated]"
-		}
-		return errors.Join(err, fmt.Errorf("Darwin physical policy requires the captured system PF anchor dispatch; actual rules: %q", readback))
+	if err != nil {
+		return errors.Join(err, errors.New("Darwin physical policy could not read the captured system PF anchor dispatch"))
 	}
-	if err := desktopDarwinPFStatelessFilters(desktopDarwinPFRulesText(global)); err != nil {
+	if err := desktopDarwinPFValidateSystemFilters(global); err != nil {
+		return err
+	}
+	if err := desktopDarwinPFRejectLegacyLayout(ctx); err != nil {
 		return err
 	}
 	// Translation outside or inside our filter namespace can create a state
@@ -275,9 +329,9 @@ func desktopDarwinNewPF(capture DesktopSocketCapture, uid uint32, account string
 		return nil, err
 	}
 	p := &desktopDarwinPF{Capture: capture, UID: uid, Account: account, Baseline: baseline,
-		Slot:    desktopDarwinPFNamespace + "/physical/" + capture.SessionID,
+		Slot:    desktopDarwinPFSlot(capture),
 		permits: make(map[string]desktopDarwinPFPermit)}
-	p.Anchor = p.Slot + "/" + capture.NetworkID
+	p.Anchor = desktopDarwinPFGeneration(capture)
 	p.Physical, err = desktopDarwinCaptureStateInterfaces()
 	if err != nil {
 		return nil, err
@@ -285,7 +339,7 @@ func desktopDarwinNewPF(capture DesktopSocketCapture, uid uint32, account string
 	if err := desktopDarwinRetirePhysicalStates(ctx, p.Physical); err != nil {
 		return nil, err
 	}
-	p.Pointer, err = desktopDarwinPFCanonical(ctx, fmt.Sprintf("anchor \"%s\" out\n", capture.NetworkID))
+	p.Pointer, err = desktopDarwinPFCanonical(ctx, desktopDarwinPFPointer(capture))
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +362,8 @@ func desktopDarwinNewPF(capture DesktopSocketCapture, uid uint32, account string
 
 func (p *desktopDarwinPF) valid() bool {
 	return p != nil && p.Capture.valid() && p.UID >= 0x40000000 && p.UID < 0x80000000 &&
-		p.Slot == desktopDarwinPFNamespace+"/physical/"+p.Capture.SessionID && p.Anchor == p.Slot+"/"+p.Capture.NetworkID &&
+		p.Slot == desktopDarwinPFSlot(p.Capture) && p.Anchor == desktopDarwinPFGeneration(p.Capture) &&
+		len(p.Slot) <= desktopDarwinPFAnchorPathLimit && len(p.Anchor) <= desktopDarwinPFAnchorPathLimit &&
 		p.Baseline != "" && p.Pointer != "" && strings.HasPrefix(p.Account, "_rvpnt_") && desktopSocketHex(strings.TrimPrefix(p.Account, "_rvpnt_"), 20)
 }
 
@@ -472,8 +527,8 @@ func (p *desktopDarwinPF) close(ctx context.Context) error {
 	if !p.valid() {
 		return errors.New("Darwin PF cleanup has no captured source")
 	}
-	// The leaf includes the fresh network nonce. A replacement may change the
-	// parent slot, but cannot acquire this old leaf's identity. Never clear or
+	// The leaf binds the full session, source and fresh network nonce. A
+	// replacement may change the slot, but cannot acquire this old leaf's identity. Never clear or
 	// rewrite that replacement slot or the household/system PF ruleset.
 	if err := desktopDarwinPFLoad(ctx, p.Anchor, "\n"); err != nil {
 		return err
