@@ -1,0 +1,863 @@
+package box
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	HTTP "github.com/sagernet/sing-box/protocol/http"
+	"github.com/sagernet/sing-box/protocol/shadowsocks"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// This composition retains the original compiler, derived Box, native lower
+// outbound, broker sockets, selected DNS router, normal certificate validation
+// and unmodified shared proof. Only privileged OS permit/identity operations
+// and the TUN device are fixtures. A local proxy terminates the selected remote
+// protocols; it never dials any public or private remote address. These results
+// are not a kernel firewall, physical-device or private deployment acceptance.
+const desktopExternalIntegrationDNS = "192.168.50.53:5353"
+const desktopExternalIntegrationIP = "203.0.113.88"
+const desktopExternalIntegrationUser = "captured-native-user"
+const desktopExternalIntegrationPassword = "captured-native-password"
+
+// Policy and lifecycle source are deliberately separate: the broker exercises
+// its ordinary real socket implementation while the OS constructor is an
+// explicit boundary. The source cannot supply or fabricate connected sockets.
+type desktopExternalIntegrationKernel struct {
+	source   *desktopExternalIntegrationSource
+	local    netip.Addr
+	remote   netip.AddrPort
+	index    uint32
+	name     string
+	deny     atomic.Bool
+	mu       sync.Mutex
+	grants   map[string]mobiletor.DesktopSocketGrant
+	requests int
+}
+
+type desktopExternalIntegrationSource struct {
+	capture                 mobiletor.DesktopSocketCapture
+	owner                   mobiletor.DesktopSocketKernelOwner
+	kernel                  *desktopExternalIntegrationKernel
+	live, cancelled, closed atomic.Bool
+	mu                      sync.Mutex
+	name                    string
+	index                   uint32
+	binds, retires          int
+}
+
+func (p *desktopExternalIntegrationKernel) Owner() (mobiletor.DesktopSocketKernelOwner, error) {
+	return p.source.owner, nil
+}
+func (p *desktopExternalIntegrationKernel) Current(c mobiletor.DesktopSocketCapture, o mobiletor.DesktopSocketKernelOwner) bool {
+	return p.source.live.Load() && c == p.source.capture && o == p.source.owner
+}
+func (p *desktopExternalIntegrationKernel) Select(ctx context.Context, c mobiletor.DesktopSocketCapture, network string, remote netip.AddrPort) (mobiletor.DesktopSocketBinding, error) {
+	if ctx.Err() != nil || !p.Current(c, p.source.owner) || network != "tcp" || remote != p.remote || p.deny.Load() {
+		return mobiletor.DesktopSocketBinding{}, errors.New("local composition source denied another path")
+	}
+	return mobiletor.DesktopSocketBinding{Owner: p.source.owner, InterfaceName: p.name, InterfaceIndex: p.index, LocalAddress: p.local}, nil
+}
+func (p *desktopExternalIntegrationKernel) Bind(ctx context.Context, c mobiletor.DesktopSocketCapture, b mobiletor.DesktopSocketBinding, network string, raw syscall.RawConn) error {
+	if ctx.Err() != nil || !p.Current(c, b.Owner) || b.LocalAddress != p.local || b.InterfaceName != p.name || b.InterfaceIndex != p.index || network != "tcp4" || raw == nil {
+		return errors.New("local composition binding lost its captured source")
+	}
+	return raw.Control(func(uintptr) {})
+}
+func (p *desktopExternalIntegrationKernel) Grant(ctx context.Context, q mobiletor.DesktopSocketGrant) (mobiletor.DesktopSocketReceipt, error) {
+	if ctx.Err() != nil || !p.Current(q.Capture, q.Binding.Owner) || q.Network != "tcp" || q.Remote != p.remote || q.Local.Addr() != p.local || q.Local.Port() == 0 || p.deny.Load() {
+		return mobiletor.DesktopSocketReceipt{}, errors.New("local composition source refused a different grant")
+	}
+	p.mu.Lock()
+	p.requests++
+	p.grants[q.SocketID] = q
+	p.mu.Unlock()
+	now := time.Now()
+	return mobiletor.DesktopSocketReceipt{Grant: q, ObservedAt: now.UnixMilli(), ExpiresAt: now.Add(10 * time.Second).UnixMilli()}, nil
+}
+func (p *desktopExternalIntegrationKernel) Revoke(_ context.Context, q mobiletor.DesktopSocketGrant) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if owned, ok := p.grants[q.SocketID]; ok && (owned.Capture != q.Capture || owned.Binding != q.Binding || owned.Local != q.Local || owned.Remote != q.Remote) {
+		return errors.New("local composition revoke changed ownership")
+	}
+	delete(p.grants, q.SocketID)
+	return nil
+}
+func (p *desktopExternalIntegrationKernel) grantedPeer(address net.Addr) bool {
+	peer, err := netip.ParseAddrPort(address.String())
+	if err != nil {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, grant := range p.grants {
+		if grant.Local == peer && grant.Remote == p.remote {
+			return true
+		}
+	}
+	return false
+}
+func (*desktopExternalIntegrationSource) CreateSocket(context.Context, mobiletor.DesktopSocketCreation) (mobiletor.DesktopSocketCreated, error) {
+	return mobiletor.DesktopSocketCreated{}, errors.New("the composition OS boundary cannot fabricate a socket")
+}
+func (s *desktopExternalIntegrationSource) Cancel() { s.cancelled.Store(true); s.live.Store(false) }
+func (s *desktopExternalIntegrationSource) Close(ctx context.Context) error {
+	s.Cancel()
+	s.kernel.mu.Lock()
+	remaining := len(s.kernel.grants)
+	s.kernel.mu.Unlock()
+	if ctx.Err() != nil || remaining != 0 {
+		return errors.New("local composition source closed before actual broker grants joined")
+	}
+	s.closed.Store(true)
+	return nil
+}
+func (s *desktopExternalIntegrationSource) BindTunnel(ctx context.Context, c mobiletor.DesktopSocketCapture, name string, index uint32) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ctx.Err() != nil || !s.live.Load() || c != s.capture || name == "" || index == 0 || s.name != "" {
+		return errors.New("local TUN binding is not current")
+	}
+	s.name, s.index = name, index
+	s.binds++
+	return nil
+}
+func (s *desktopExternalIntegrationSource) RetireTunnel(ctx context.Context, c mobiletor.DesktopSocketCapture, name string, index uint32) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ctx.Err() != nil || !s.live.Load() || c != s.capture || name != s.name || index != s.index {
+		return errors.New("local TUN retirement is not current")
+	}
+	s.name, s.index = "", 0
+	s.retires++
+	return nil
+}
+
+// Each child has private, temporary trust roots. The production proof receives
+// no custom TLS configuration and must verify both the chain and literal IP.
+type desktopExternalIntegrationCA struct {
+	root *x509.Certificate
+	key  *ecdsa.PrivateKey
+	der  []byte
+}
+
+func newDesktopExternalIntegrationCA(t *testing.T) *desktopExternalIntegrationCA {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := &x509.Certificate{SerialNumber: big.NewInt(96101), Subject: pkix.Name{CommonName: "isolated external composition root"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+	der, err := x509.CreateCertificate(rand.Reader, root, root, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &desktopExternalIntegrationCA{root, key, der}
+}
+func (ca *desktopExternalIntegrationCA) certificate(t *testing.T, valid bool) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(96102), Subject: pkix.Name{CommonName: "captured external composition peer"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, DNSNames: []string{"captured-proxy.example"}}
+	if valid {
+		leaf.IPAddresses = []net.IP{net.ParseIP("1.1.1.1")}
+	} else {
+		leaf.IPAddresses = []net.IP{net.ParseIP("1.0.0.1")}
+	}
+	der, err := x509.CreateCertificate(rand.Reader, leaf, ca.root, &key.PublicKey, ca.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der, ca.der}, PrivateKey: key}
+}
+
+// The peer accepts only the two selected upper destinations. The native lower
+// path must reach this exact local listener under a preexisting broker grant.
+type desktopExternalIntegrationPeer struct {
+	listener                                                                                    net.Listener
+	kernel                                                                                      *desktopExternalIntegrationKernel
+	protocol                                                                                    string
+	certificate, proxyCertificate                                                               tls.Certificate
+	badDNS, badIP, badAuth                                                                      bool
+	mu                                                                                          sync.Mutex
+	closing                                                                                     bool
+	connections                                                                                 map[net.Conn]bool
+	workers                                                                                     sync.WaitGroup
+	accepted, dnsQueries, tlsHandshakes, publicRequests, publicAttempts, authFailures, bypassed atomic.Int32
+	failure                                                                                     string
+	publicEntered, publicRelease                                                                chan struct{}
+	publicOnce                                                                                  sync.Once
+	ctx                                                                                         context.Context
+	cancel                                                                                      context.CancelFunc
+}
+
+func (p *desktopExternalIntegrationPeer) start(t *testing.T) {
+	t.Helper()
+	var serveSS func(net.Conn) error
+	if p.protocol == "shadowsocks" {
+		password := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+		if p.badAuth {
+			password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{8}, 32))
+		}
+		ss, err := shadowaead_2022.NewServiceWithPassword("2022-blake3-aes-256-gcm", password, 60, p, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		serveSS = func(c net.Conn) error {
+			return ss.NewConnection(p.ctx, c, M.Metadata{Source: M.SocksaddrFromNet(c.RemoteAddr())})
+		}
+	}
+	p.workers.Add(1)
+	go func() {
+		defer p.workers.Done()
+		for {
+			c, err := p.listener.Accept()
+			if err != nil {
+				return
+			}
+			p.mu.Lock()
+			if p.closing {
+				p.mu.Unlock()
+				c.Close()
+				return
+			}
+			p.connections[c] = true
+			p.workers.Add(1)
+			p.mu.Unlock()
+			go func() {
+				defer p.workers.Done()
+				defer func() { c.Close(); p.mu.Lock(); delete(p.connections, c); p.mu.Unlock() }()
+				if !p.kernel.grantedPeer(c.RemoteAddr()) {
+					p.bypassed.Add(1)
+					return
+				}
+				p.accepted.Add(1)
+				_ = c.SetDeadline(time.Now().Add(12 * time.Second))
+				if serveSS != nil {
+					p.recordFailure(serveSS(c))
+				} else {
+					p.recordFailure(p.connect(c))
+				}
+			}()
+		}
+	}()
+}
+func (p *desktopExternalIntegrationPeer) recordFailure(err error) {
+	if err != nil {
+		p.mu.Lock()
+		p.failure = err.Error()
+		p.mu.Unlock()
+	}
+}
+func (p *desktopExternalIntegrationPeer) diagnostic() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return fmt.Sprintf("accepted=%d dns=%d tls=%d public=%d attempts=%d peer=%s", p.accepted.Load(), p.dnsQueries.Load(), p.tlsHandshakes.Load(), p.publicRequests.Load(), p.publicAttempts.Load(), p.failure)
+}
+func (p *desktopExternalIntegrationPeer) close() {
+	p.mu.Lock()
+	p.closing = true
+	p.cancel()
+	for c := range p.connections {
+		_ = c.Close()
+	}
+	p.mu.Unlock()
+	_ = p.listener.Close()
+	p.workers.Wait()
+}
+func (p *desktopExternalIntegrationPeer) connect(c net.Conn) error {
+	if p.protocol == "https-connect" {
+		secure := tls.Server(c, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{p.proxyCertificate}, NextProtos: []string{"http/1.1"}})
+		if err := secure.HandshakeContext(p.ctx); err != nil {
+			return err
+		}
+		c = secure
+	}
+	reader := bufio.NewReader(c)
+	request, err := http.ReadRequest(reader)
+	if err != nil {
+		return err
+	}
+	defer request.Body.Close()
+	expected := "Basic " + base64.StdEncoding.EncodeToString([]byte(desktopExternalIntegrationUser+":"+desktopExternalIntegrationPassword))
+	if request.Method != http.MethodConnect || request.Header.Get("Proxy-Authorization") != expected || p.badAuth {
+		p.authFailures.Add(1)
+		_, _ = io.WriteString(c, "HTTP/1.1 407 Proxy Authentication Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+		return errors.New("native proxy credentials changed")
+	}
+	target := request.Host
+	if target != desktopExternalIntegrationDNS && target != "1.1.1.1:443" {
+		return errors.New("native proxy escaped selected destinations")
+	}
+	if _, err = io.WriteString(c, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
+		return err
+	}
+	return p.serve(&desktopExternalBufferedConn{Conn: c, reader: reader}, target)
+}
+
+type desktopExternalBufferedConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+func (c *desktopExternalBufferedConn) Read(b []byte) (int, error) { return c.reader.Read(b) }
+func (p *desktopExternalIntegrationPeer) NewConnection(_ context.Context, c net.Conn, m M.Metadata) error {
+	return p.serve(c, m.Destination.String())
+}
+func (*desktopExternalIntegrationPeer) NewPacketConnection(context.Context, N.PacketConn, M.Metadata) error {
+	return errors.New("composition peer denies unrequested UDP")
+}
+func (*desktopExternalIntegrationPeer) NewError(context.Context, error) {}
+func (p *desktopExternalIntegrationPeer) serve(c net.Conn, target string) error {
+	if target == desktopExternalIntegrationDNS {
+		peer := &mDNS.Conn{Conn: c}
+		for {
+			q, err := peer.ReadMsg()
+			if err != nil {
+				return err
+			}
+			if len(q.Question) != 1 || q.Question[0].Name != "example.com." || q.Question[0].Qtype != mDNS.TypeA {
+				return errors.New("native selected DNS question changed")
+			}
+			p.dnsQueries.Add(1)
+			answer := new(mDNS.Msg)
+			answer.SetReply(q)
+			ip := net.IPv4(93, 184, 216, 34)
+			if p.badDNS {
+				ip = net.IPv4(192, 168, 50, 1)
+			}
+			answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: q.Question[0].Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: ip}}
+			if err = peer.WriteMsg(answer); err != nil {
+				return err
+			}
+		}
+	}
+	if target != "1.1.1.1:443" {
+		return errors.New("native encrypted peer escaped captured proof target")
+	}
+	p.publicAttempts.Add(1)
+	secure := tls.Server(c, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{p.certificate}, NextProtos: []string{"http/1.1"}})
+	if err := secure.HandshakeContext(p.ctx); err != nil {
+		return err
+	}
+	p.tlsHandshakes.Add(1)
+	request, err := http.ReadRequest(bufio.NewReader(secure))
+	if err != nil {
+		return err
+	}
+	defer request.Body.Close()
+	nonce := request.URL.Query().Get("routervpn_proof")
+	decoded, nonceErr := hex.DecodeString(nonce)
+	if request.Method != http.MethodGet || request.Host != "1.1.1.1" || request.URL.Path != "/cdn-cgi/trace" || len(request.URL.Query()) != 1 || nonceErr != nil || len(decoded) != 16 || request.Header.Get("Authorization") != "" {
+		return errors.New("native public proof changed its nonce, method, target or credential scope")
+	}
+	p.publicRequests.Add(1)
+	if p.publicEntered != nil {
+		p.publicOnce.Do(func() { close(p.publicEntered) })
+		select {
+		case <-p.publicRelease:
+		case <-p.ctx.Done():
+			return p.ctx.Err()
+		}
+	}
+	ip := desktopExternalIntegrationIP
+	if p.badIP {
+		ip = "203.0.113.89"
+	}
+	body := "ip=" + ip + "\n"
+	_, err = fmt.Fprintf(secure, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+	return err
+}
+
+type desktopExternalIntegrationFixture struct {
+	box                             *Box
+	policy                          *mobilemultihop.DesktopExternalPolicy
+	originalSource, originalCapture string
+	network                         *routervpndesktoppt.ExternalNetworkOwner
+	tun                             *desktopTorBoxTUN
+	source                          *desktopExternalIntegrationSource
+	kernel                          *desktopExternalIntegrationKernel
+	peer                            *desktopExternalIntegrationPeer
+	proof                           *RouterVPNExternalProofRequest
+}
+
+func desktopExternalIntegrationAddress(t *testing.T) (net.Interface, netip.Addr) {
+	t.Helper()
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addresses, err := iface.Addrs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, raw := range addresses {
+			prefix, err := netip.ParsePrefix(raw.String())
+			if err == nil && prefix.Addr().Is4() && prefix.Addr().IsGlobalUnicast() {
+				return iface, prefix.Addr()
+			}
+		}
+	}
+	t.Fatal("ordinary composition requires an existing local non-loopback IPv4 interface")
+	return net.Interface{}, netip.Addr{}
+}
+func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalIntegrationCA, protocol, fault string) *desktopExternalIntegrationFixture {
+	t.Helper()
+	iface, address := desktopExternalIntegrationAddress(t)
+	listener, err := net.Listen("tcp4", net.JoinHostPort(address.String(), "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := listener.Addr().(*net.TCPAddr).AddrPort()
+	ctx, cancel := context.WithCancel(context.Background())
+	f := &desktopExternalIntegrationFixture{}
+	f.source = &desktopExternalIntegrationSource{owner: mobiletor.DesktopSocketKernelOwner{Kind: "unix-isolated-uid", IdentitySHA256: strings.Repeat("c", 64), Generation: 1, ProcessID: uint32(os.Getpid())}}
+	f.source.live.Store(true)
+	f.kernel = &desktopExternalIntegrationKernel{source: f.source, local: address, remote: remote, index: uint32(iface.Index), name: iface.Name, grants: make(map[string]mobiletor.DesktopSocketGrant)}
+	f.source.kernel = f.kernel
+	f.peer = &desktopExternalIntegrationPeer{listener: listener, kernel: f.kernel, protocol: protocol, certificate: ca.certificate(t, true), proxyCertificate: ca.certificate(t, true), connections: make(map[net.Conn]bool), ctx: ctx, cancel: cancel}
+	switch fault {
+	case "dns":
+		f.peer.badDNS = true
+	case "exit":
+		f.peer.badIP = true
+	case "credential":
+		f.peer.badAuth = true
+	case "tls-name":
+		f.peer.certificate = ca.certificate(t, false)
+	case "tls-root":
+		f.peer.certificate = newDesktopExternalIntegrationCA(t).certificate(t, true)
+	case "lower-denied":
+		f.kernel.deny.Store(true)
+	case "held-proof":
+		f.peer.publicEntered = make(chan struct{})
+		f.peer.publicRelease = make(chan struct{})
+	}
+	t.Cleanup(f.peer.close)
+	transport := map[string]any{"type": "http", "tag": mobilemultihop.ExternalFinalTag, "server": address.String(), "server_port": int(remote.Port()), "username": desktopExternalIntegrationUser, "password": desktopExternalIntegrationPassword}
+	settings := map[string]any{"host": address.String(), "port": int(remote.Port()), "username": desktopExternalIntegrationUser, "password": desktopExternalIntegrationPassword}
+	private := map[string]any{"protocol": protocol, "expected_public_ip": desktopExternalIntegrationIP, strings.ReplaceAll(protocol, "-", "_"): settings}
+	if protocol == "https-connect" {
+		transport["tls"] = map[string]any{"enabled": true, "server_name": "captured-proxy.example"}
+		settings["tls_server_name"] = "captured-proxy.example"
+	}
+	if protocol == "shadowsocks" {
+		password := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+		transport = map[string]any{"type": "shadowsocks", "tag": mobilemultihop.ExternalFinalTag, "server": address.String(), "server_port": int(remote.Port()), "method": "2022-blake3-aes-256-gcm", "password": password}
+		private["shadowsocks"] = map[string]any{"server": address.String(), "port": int(remote.Port()), "method": "2022-blake3-aes-256-gcm", "password": password}
+	}
+	profile := map[string]any{"id": "selected-external-native", "node_kind": "external", "external": private, "dns_mode": "custom", "dns_protocol": "tcp", "dns_host": "192.168.50.53", "dns_port": 5353, "mtu_policy": "auto", "home_lan_access": false, "ipv6_mode": "off", "kill_switch_policy": "always"}
+	capture := map[string]any{"schema": 1, "exit_id": profile["id"], "protocol": protocol, "expected_public_ip": desktopExternalIntegrationIP, "profile": profile}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.93.1/30", "fd29:93::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "outbounds": []any{transport}, "route": map[string]any{"final": mobilemultihop.ExternalFinalTag, "auto_detect_interface": true}}
+	raw, _ := json.Marshal(graph)
+	captured, _ := json.Marshal(capture)
+	f.originalSource, f.originalCapture = string(raw), string(captured)
+	original, err := mobilemultihop.NewExternalPolicy(f.originalSource, f.originalCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.policy, err = mobilemultihop.NewDesktopExternalPolicy(original, desktopTorBoxSession, runtime.GOOS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ins := inbound.NewRegistry()
+	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options option.TunInboundOptions) (adapter.Inbound, error) {
+		f.tun = &desktopTorBoxTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag), name: options.InterfaceName, index: 741, mtu: int(options.MTU)}
+		return f.tun, nil
+	})
+	outs := outbound.NewRegistry()
+	HTTP.RegisterOutbound(outs)
+	shadowsocks.RegisterOutbound(outs)
+	routervpndesktoppt.RegisterExternalPhysicalOutbound(outs)
+	dnsRegistry := dns.NewTransportRegistry()
+	DNST.RegisterTCP(dnsRegistry)
+	DNST.RegisterUDP(dnsRegistry)
+	services := boxService.NewRegistry()
+	routervpndesktoppt.RegisterExternalNetworkOwner(services)
+	ctx = Context(ctx, ins, outs, endpoint.NewRegistry(), dnsRegistry, services, certificate.NewRegistry())
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(f.policy.Config()))
+	if err != nil {
+		t.Fatal("real native policy parser", err)
+	}
+	options.Log = &option.LogOptions{Disabled: true}
+	f.box, err = New(Options{Context: ctx, Options: options})
+	if err != nil {
+		t.Fatal("real native Box", err)
+	}
+	t.Cleanup(func() {
+		if f.proof != nil {
+			if err := f.proof.Close(); err != nil {
+				t.Error("real shared proof did not join", err)
+			}
+		}
+		if err := f.box.Close(); err != nil {
+			t.Error("real external Box did not join", err)
+		}
+		if !f.source.closed.Load() {
+			t.Error("real Box discarded the OS source before joined cleanup")
+		}
+		if f.peer.bypassed.Load() != 0 {
+			t.Error("physical proxy received bytes without a preexisting broker grant")
+		}
+	})
+	service, ok := f.box.service.Get(mobilemultihop.DesktopExternalNetworkTag)
+	if !ok {
+		t.Fatal("real physical service missing")
+	}
+	f.network, ok = service.(*routervpndesktoppt.ExternalNetworkOwner)
+	if !ok {
+		t.Fatal("real physical service type changed")
+	}
+	if err = f.network.PrepareExternalPhysicalBroker(f.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		f.tun.mu.Lock()
+		started := f.tun.ready || f.tun.claimed
+		f.tun.mu.Unlock()
+		if started {
+			t.Error("physical factory ran after TUN startup")
+		}
+		f.source.capture = capture
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, f.kernel, current)
+		return broker, f.source, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.peer.start(t)
+	if err = f.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal("real native startup", err)
+	}
+	f.proof, err = f.box.RouterVPNDesktopExternalCreateProof(f.policy)
+	if err != nil {
+		t.Fatal("real native shared proof construction", err)
+	}
+	if f.proof.Healthy() {
+		t.Fatal("preparation fabricated successful proof")
+	}
+	return f
+}
+func (f *desktopExternalIntegrationFixture) prove(t *testing.T) {
+	t.Helper()
+	raw, err := f.proof.Run()
+	var result mobilemultihop.ExternalProofResult
+	if err != nil || json.Unmarshal([]byte(raw), &result) != nil {
+		t.Fatal("unmodified native shared proof failed", err, raw, f.peer.diagnostic())
+	}
+	meta := f.policy.Metadata()
+	if result.Schema != 1 || result.SessionID != meta.SessionID || result.SourceSHA256 != meta.OriginalSourceSHA256 || result.ConfigSHA256 != meta.OriginalConfigSHA256 || result.ExitID != "selected-external-native" || result.IP != desktopExternalIntegrationIP || !result.DNSProven || result.EntryProven || result.CheckedAt <= 0 || !f.proof.Healthy() || !f.network.Current() {
+		t.Fatal("real proof changed original authority or lost derived native ownership", result)
+	}
+	if f.peer.dnsQueries.Load() == 0 || f.peer.tlsHandshakes.Load() != 1 || f.peer.publicRequests.Load() != 1 || f.peer.accepted.Load() < 2 || f.peer.bypassed.Load() != 0 {
+		t.Fatal("real selected DNS or public TLS skipped the captured lower path", f.peer.dnsQueries.Load(), f.peer.tlsHandshakes.Load(), f.peer.publicRequests.Load(), f.peer.accepted.Load())
+	}
+	if err = f.proof.VerifyCurrentPath(); err != nil {
+		t.Fatal("real proof did not retain its exact generation", err)
+	}
+}
+
+// Replacing the OS reader is the sole transaction seam. The real native
+// inbound manager performs all stages, teardown, serialization, cancellation
+// rollback and publication; the shipping lease retains its actual returned
+// reader and physical retirement/rebind acknowledgments around the operation.
+func (f *desktopExternalIntegrationFixture) replacement(callback func(adapter.StartStage) error, adopted **desktopTorMTUCandidate, restored **desktopTorMTUCandidate) func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) {
+	return func(ctx context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+		reader, ok := expected.(routerVPNDesktopTorTUN)
+		if !ok {
+			return expected, errors.New("fixture received another reader family")
+		}
+		name, index, oldMTU, err := reader.RouterVPNDesktopMTUInterface()
+		if err != nil {
+			return expected, err
+		}
+		makeReader := func(value, nextIndex int) *desktopTorMTUCandidate {
+			return &desktopTorMTUCandidate{desktopTorBoxTUN: &desktopTorBoxTUN{Adapter: inbound.NewAdapter(C.TypeTun, expected.Tag()), name: name, index: nextIndex, mtu: value, claimed: true, guard: f.proof.engine.physical.current}}
+		}
+		candidate, rollback := makeReader(mtu, index+1), makeReader(oldMTU, index+2)
+		candidate.afterStart = callback
+		*adopted, *restored = candidate, rollback
+		return f.box.inbound.RouterVPNReplaceTun(ctx, expected, candidate, rollback)
+	}
+}
+
+func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("ordinary native physical admission currently requires Linux")
+	}
+	const marker = "ROUTERVPN_DESKTOP_EXTERNAL_COMPOSITION_CHILD"
+	if os.Getenv(marker) != "1" {
+		executable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		defer cancel()
+		// A broad shipping selector must not run unrelated tests in this child
+		// before its isolated trust root is installed. Preserve only an exact
+		// caller-requested suffix for this parent's own focused subtests.
+		selector := "^TestRouterVPNDesktopExternalPhysicalIntegration$"
+		requested := flag.Lookup("test.run").Value.String()
+		if strings.HasPrefix(requested, selector+"/") {
+			selector = requested
+		}
+		command := exec.CommandContext(ctx, executable, "-test.run="+selector, "-test.v", "-test.timeout=80s")
+		command.Env = append(os.Environ(), marker+"=1")
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("actual external composition child failed: %v\n%s", err, output)
+		}
+		t.Log(string(output))
+		return
+	}
+	ca := newDesktopExternalIntegrationCA(t)
+	directory := t.TempDir()
+	rootPath := filepath.Join(directory, "fixture-ca.pem")
+	if err := os.WriteFile(rootPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.der}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", rootPath)
+	t.Setenv("SSL_CERT_DIR", directory)
+	for _, protocol := range []string{"http-connect", "https-connect", "shadowsocks"} {
+		t.Run(protocol+"/proof-and-mtu", func(t *testing.T) {
+			f := newDesktopExternalIntegrationFixture(t, ca, protocol, "")
+			f.prove(t)
+			lease, err := f.box.RouterVPNExternalClaimMTU(f.proof, f.originalSource, f.originalCapture)
+			if err != nil {
+				t.Fatal("real successful proof did not grant MTU lease", err)
+			}
+			defer lease.Close()
+			var authority map[string]any
+			if json.Unmarshal([]byte(lease.Authority()), &authority) != nil || len(authority) != 6 || authority["source_sha256"] != f.policy.Metadata().SourceSHA256 || authority["id"] != "selected-external-native" || authority["expected_public_ip"] != desktopExternalIntegrationIP || authority["mtu_policy"] != "auto" || lease.Config() != f.policy.Config() {
+				t.Fatal("MTU authority relabeled or lost original policy fields", authority)
+			}
+			if second, err := f.box.RouterVPNExternalClaimMTU(f.proof, f.originalSource, f.originalCapture); err == nil || second != nil {
+				t.Fatal("one proof granted two MTU owners")
+			}
+			original, err := lease.Inbound()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var candidate, rollback *desktopTorMTUCandidate
+			current, err := lease.changeMTU(context.Background(), original, 1400, f.replacement(nil, &candidate, &rollback))
+			if err != nil || current != candidate || current == original {
+				t.Fatal("real native candidate was not published", err)
+			}
+			name, index, mtu, err := lease.ClaimDesktopTUN(func() bool { return true })
+			if err != nil || name != "router-vpn" || index != 742 || mtu != 1400 || !lease.Healthy() {
+				t.Fatal("native candidate lost captured readback", name, index, mtu, err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			returned, err := lease.changeMTU(ctx, current, 1500, f.replacement(func(stage adapter.StartStage) error {
+				if stage == adapter.StartStateStarted {
+					cancel()
+				}
+				return nil
+			}, &candidate, &rollback))
+			if err == nil || returned != rollback || returned == current || returned == candidate {
+				t.Fatal("cancelled operation failed to retain the exact native rollback", err)
+			}
+			actual, ok := f.box.inbound.Get("tun-in")
+			if !ok || actual != rollback {
+				t.Fatal("MTU lease adopted a reader not published by the actual native manager")
+			}
+			name, index, mtu, err = lease.ClaimDesktopTUN(func() bool { return true })
+			if err != nil || name != "router-vpn" || index != 744 || mtu != 1400 || !lease.Healthy() || !f.proof.Healthy() || !f.network.Current() {
+				t.Fatal("cancelled MTU operation destroyed its valid rollback connection", name, index, mtu, err)
+			}
+			f.source.mu.Lock()
+			binds, retires, boundIndex := f.source.binds, f.source.retires, f.source.index
+			f.source.mu.Unlock()
+			if binds != 3 || retires != 2 || boundIndex != 744 {
+				t.Fatal("native candidate or cancellation bypassed exact physical retire/rebind", binds, retires, boundIndex)
+			}
+			if err = f.proof.engine.DNSProof(context.Background(), "tun-in"); err != nil {
+				t.Fatal("restored connection lost actual selected DNS", err)
+			}
+			if err = mobilemultihop.ProveExternalPublicIP(context.Background(), f.proof.engine.Dial, mobilemultihop.ExternalFinalTag, desktopExternalIntegrationIP); err != nil {
+				t.Fatal("restored connection lost actual authenticated public proof path", err)
+			}
+			if f.peer.publicRequests.Load() != 2 || !f.proof.Healthy() {
+				t.Fatal("rollback reused an old successful network result")
+			}
+			called := false
+			if _, err = lease.changeMTU(context.Background(), original, 1450, func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) { called = true; return nil, nil }); err == nil || called {
+				t.Fatal("retired original reader mutated its replacement")
+			}
+		})
+		for _, fault := range []string{"dns", "exit", "credential", "tls-name", "tls-root", "lower-denied"} {
+			t.Run(protocol+"/reject/"+fault, func(t *testing.T) {
+				f := newDesktopExternalIntegrationFixture(t, ca, protocol, fault)
+				raw, err := f.proof.Run()
+				if err == nil || raw != "" || f.proof.Healthy() || f.network.Current() || !f.source.cancelled.Load() {
+					t.Fatal("invalid actual DNS/TLS/credential/physical path acquired proof", fault, raw, err)
+				}
+				if _, err = f.box.RouterVPNExternalClaimMTU(f.proof, f.originalSource, f.originalCapture); err == nil {
+					t.Fatal("failed actual proof acquired MTU authority")
+				}
+				if fault == "dns" && (f.peer.dnsQueries.Load() == 0 || f.peer.publicAttempts.Load() != 0) {
+					t.Fatal("public proof bypassed failed selected DNS")
+				}
+				if (fault == "tls-name" || fault == "tls-root") && (f.peer.dnsQueries.Load() == 0 || f.peer.publicAttempts.Load() != 1 || f.peer.publicRequests.Load() != 0) {
+					t.Fatal("invalid certificate carried private proof request bytes")
+				}
+				if fault == "exit" && (f.peer.dnsQueries.Load() == 0 || f.peer.tlsHandshakes.Load() != 1 || f.peer.publicRequests.Load() != 1) {
+					t.Fatal("wrong-exit negative never reached the real authenticated public proof", f.peer.diagnostic())
+				}
+				if fault == "credential" && (f.peer.accepted.Load() == 0 || f.peer.dnsQueries.Load() != 0 || f.peer.publicAttempts.Load() != 0) {
+					t.Fatal("credential negative never reached the actual proxy authentication boundary", f.peer.diagnostic())
+				}
+				if fault == "lower-denied" && f.peer.accepted.Load() != 0 {
+					t.Fatal("denied lower path connected through a default dialer")
+				}
+			})
+		}
+	}
+	for _, afterPublication := range []bool{false, true} {
+		name := "network-reset-during-mtu"
+		if afterPublication {
+			name = "network-reset-after-native-publication"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newDesktopExternalIntegrationFixture(t, ca, "http-connect", "")
+			f.prove(t)
+			lease, err := f.box.RouterVPNExternalClaimMTU(f.proof, f.originalSource, f.originalCapture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lease.Close()
+			initial, err := lease.Inbound()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var candidate, rollback *desktopTorMTUCandidate
+			var transaction context.Context
+			replace := f.replacement(func(stage adapter.StartStage) error {
+				if stage == adapter.StartStateStarted && !afterPublication {
+					f.network.InterfaceUpdated(context.Background())
+					// Join the real captured cancellation before returning this entered
+					// startup stage. No scheduler delay is used to guess propagation.
+					select {
+					case <-transaction.Done():
+					case <-time.After(3 * time.Second):
+						return errors.New("native network cancellation did not reach the entered transaction")
+					}
+				}
+				return nil
+			}, &candidate, &rollback)
+			current, err := lease.changeMTU(context.Background(), initial, 1400, func(ctx context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+				transaction = ctx
+				result, changeErr := replace(ctx, expected, mtu)
+				if afterPublication {
+					f.network.InterfaceUpdated(context.Background())
+				}
+				return result, changeErr
+			})
+			if err == nil || lease.Healthy() || f.proof.Healthy() || f.network.Current() {
+				t.Fatal("real network cancellation resurrected a candidate or rollback", err)
+			}
+			actual, exists := f.box.inbound.Get("tun-in")
+			if !afterPublication {
+				if current != nil || exists || actual != nil {
+					t.Fatal("retired physical generation kept a replacement reader")
+				}
+			} else {
+				// Returning the exact published reader on a failed adoption preserves
+				// cleanup ownership; it cannot become a healthy connection or permit.
+				if current != candidate || !exists || actual != candidate {
+					t.Fatal("late network cancellation discarded or changed the actual published cleanup owner")
+				}
+				if _, _, _, readErr := candidate.RouterVPNDesktopMTUInterface(); readErr == nil {
+					t.Fatal("late network cancellation left a usable native reader")
+				}
+			}
+			f.source.mu.Lock()
+			binds := f.source.binds
+			f.source.mu.Unlock()
+			if binds != 1 {
+				t.Fatal("retired physical generation reacquired TUN authority")
+			}
+		})
+	}
+	t.Run("network-reset-during-real-proof", func(t *testing.T) {
+		f := newDesktopExternalIntegrationFixture(t, ca, "http-connect", "held-proof")
+		result := make(chan error, 1)
+		go func() {
+			raw, err := f.proof.Run()
+			if raw != "" {
+				err = errors.New("cancelled proof published data")
+			}
+			result <- err
+		}()
+		select {
+		case <-f.peer.publicEntered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("actual TLS proof never reached controlled peer")
+		}
+		f.network.InterfaceUpdated(context.Background())
+		close(f.peer.publicRelease)
+		select {
+		case err := <-result:
+			if err == nil || f.proof.Healthy() || f.network.Current() {
+				t.Fatal("cancelled real network result was adopted")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("cancelled real TLS proof did not join")
+		}
+	})
+	if t.Failed() {
+		return
+	}
+	t.Log("Original compiler -> derived Box -> real lower sockets -> selected DNS -> verified TLS public proof and actual native-manager MTU rollback passed. OS permit identity and TUN creation remain explicit separate kernel-test boundaries.")
+}

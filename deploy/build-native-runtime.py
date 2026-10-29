@@ -536,7 +536,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                  '-ldflags=-checklinkname=0', './route', '-run', '^TestRouterVPNDesktopTorNetwork',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', '.', '-run', '^TestRouterVPNDesktopTor',
+                 '-ldflags=-checklinkname=0', '.', '-run', '^TestRouterVPNDesktop(Tor|External)',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
         ldflags = '-s -w -buildid= -checklinkname=0 -X github.com/sagernet/sing-box/constant.Version='+marker(policy)
         if library_name(target):

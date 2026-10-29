@@ -1,0 +1,441 @@
+package box
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/netip"
+	"os"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	HTTP "github.com/sagernet/sing-box/protocol/http"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	SJ "github.com/sagernet/sing/common/json"
+)
+
+// The compiler, parser, Box, native managers, lower outbound, service, broker,
+// proof construction and cancellation are real. The explicit fixture boundary
+// is the privileged OS source and TUN; it refuses all public socket traffic and
+// cannot produce a successful exit/DNS proof or a kernel acceptance claim.
+type desktopExternalBoxSource struct {
+	capture                 mobiletor.DesktopSocketCapture
+	owner                   mobiletor.DesktopSocketKernelOwner
+	live, cancelled, closed atomic.Bool
+	mu                      sync.Mutex
+	name                    string
+	index                   uint32
+	binds, retires          int
+	failBind, failRetire    bool
+}
+
+func newDesktopExternalBoxSource() *desktopExternalBoxSource {
+	s := &desktopExternalBoxSource{owner: mobiletor.DesktopSocketKernelOwner{Kind: "unix-isolated-uid", IdentitySHA256: strings.Repeat("c", 64), Generation: 1, ProcessID: uint32(os.Getpid())}}
+	s.live.Store(true)
+	return s
+}
+func (s *desktopExternalBoxSource) Owner() (mobiletor.DesktopSocketKernelOwner, error) {
+	return s.owner, nil
+}
+func (s *desktopExternalBoxSource) Current(c mobiletor.DesktopSocketCapture, o mobiletor.DesktopSocketKernelOwner) bool {
+	return s.live.Load() && c == s.capture && o == s.owner
+}
+func (*desktopExternalBoxSource) Select(context.Context, mobiletor.DesktopSocketCapture, string, netip.AddrPort) (mobiletor.DesktopSocketBinding, error) {
+	return mobiletor.DesktopSocketBinding{}, errors.New("native Box lifetime fixture refuses public sockets")
+}
+func (*desktopExternalBoxSource) Bind(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopSocketBinding, string, syscall.RawConn) error {
+	return errors.New("native Box lifetime fixture refuses public sockets")
+}
+func (*desktopExternalBoxSource) Grant(context.Context, mobiletor.DesktopSocketGrant) (mobiletor.DesktopSocketReceipt, error) {
+	return mobiletor.DesktopSocketReceipt{}, errors.New("native Box lifetime fixture refuses public sockets")
+}
+func (*desktopExternalBoxSource) Revoke(context.Context, mobiletor.DesktopSocketGrant) error {
+	return nil
+}
+func (*desktopExternalBoxSource) CreateSocket(context.Context, mobiletor.DesktopSocketCreation) (mobiletor.DesktopSocketCreated, error) {
+	return mobiletor.DesktopSocketCreated{}, errors.New("native Box lifetime fixture refuses public sockets")
+}
+func (s *desktopExternalBoxSource) Cancel() { s.cancelled.Store(true); s.live.Store(false) }
+func (s *desktopExternalBoxSource) Close(context.Context) error {
+	s.Cancel()
+	s.closed.Store(true)
+	return nil
+}
+func (s *desktopExternalBoxSource) BindTunnel(ctx context.Context, capture mobiletor.DesktopSocketCapture, name string, index uint32) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ctx.Err() != nil || !s.Current(capture, s.owner) || s.failBind || name == "" || index == 0 || s.name != "" {
+		return errors.New("fixture rejected another physical TUN binding")
+	}
+	s.name, s.index = name, index
+	s.binds++
+	return nil
+}
+func (s *desktopExternalBoxSource) RetireTunnel(ctx context.Context, capture mobiletor.DesktopSocketCapture, name string, index uint32) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if ctx.Err() != nil || !s.Current(capture, s.owner) || s.failRetire || name != s.name || index != s.index {
+		return errors.New("fixture rejected another physical TUN retirement")
+	}
+	s.name, s.index = "", 0
+	s.retires++
+	return nil
+}
+
+type desktopExternalBoxFixture struct {
+	box                             *Box
+	policy                          *mobilemultihop.DesktopExternalPolicy
+	originalSource, originalCapture string
+	network                         *routervpndesktoppt.ExternalNetworkOwner
+	tun                             *desktopTorBoxTUN
+	source                          *desktopExternalBoxSource
+}
+
+func newDesktopExternalBoxFixture(t *testing.T, edit func(map[string]any)) *desktopExternalBoxFixture {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("ordinary physical Box admission currently requires Linux")
+	}
+	const source = `{"inbounds":[{"type":"tun","tag":"tun-in","interface_name":"router-vpn","address":["172.29.93.1/30","fd29:93::1/126"],"mtu":1280,"auto_route":true,"strict_route":true,"stack":"system"}],"outbounds":[{"type":"http","tag":"custom-exit","server":"192.168.50.7","server_port":8443,"username":"captured-user","password":"captured-secret"}],"route":{"final":"custom-exit","auto_detect_interface":true}}`
+	const capture = `{"schema":1,"exit_id":"selected-exit","protocol":"http-connect","expected_public_ip":"203.0.113.88","profile":{"id":"selected-exit","node_kind":"external","external":{"protocol":"http-connect","expected_public_ip":"203.0.113.88","http_connect":{"host":"192.168.50.7","port":8443,"username":"captured-user","password":"captured-secret"}},"dns_mode":"custom","dns_protocol":"tcp","dns_host":"192.168.50.53","dns_port":5353,"mtu_policy":"auto","home_lan_access":false,"ipv6_mode":"off","kill_switch_policy":"always"}}`
+	original, err := mobilemultihop.NewExternalPolicy(source, capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewDesktopExternalPolicy(original, desktopTorBoxSession, runtime.GOOS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &desktopExternalBoxFixture{policy: policy, originalSource: source, originalCapture: capture, source: newDesktopExternalBoxSource()}
+	raw := policy.Config()
+	if edit != nil {
+		var graph map[string]any
+		if err := json.Unmarshal([]byte(raw), &graph); err != nil {
+			t.Fatal(err)
+		}
+		edit(graph)
+		encoded, err := json.Marshal(graph)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw = string(encoded)
+	}
+	ins := inbound.NewRegistry()
+	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options option.TunInboundOptions) (adapter.Inbound, error) {
+		f.tun = &desktopTorBoxTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag), name: options.InterfaceName, index: 721, mtu: int(options.MTU)}
+		return f.tun, nil
+	})
+	outs := outbound.NewRegistry()
+	HTTP.RegisterOutbound(outs)
+	routervpndesktoppt.RegisterExternalPhysicalOutbound(outs)
+	dnsRegistry := dns.NewTransportRegistry()
+	DNST.RegisterTCP(dnsRegistry)
+	DNST.RegisterUDP(dnsRegistry)
+	services := boxService.NewRegistry()
+	routervpndesktoppt.RegisterExternalNetworkOwner(services)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ctx = Context(ctx, ins, outs, endpoint.NewRegistry(), dnsRegistry, services, certificate.NewRegistry())
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(raw))
+	if err != nil {
+		t.Fatal("actual native policy parser", err)
+	}
+	options.Log = &option.LogOptions{Disabled: true}
+	f.box, err = New(Options{Context: ctx, Options: options})
+	if err != nil {
+		t.Fatal("actual native Box construction", err)
+	}
+	t.Cleanup(func() {
+		if err := f.box.Close(); err != nil {
+			t.Error("actual external Box did not join", err)
+		}
+	})
+	owned, ok := f.box.service.Get(mobilemultihop.DesktopExternalNetworkTag)
+	if !ok {
+		t.Fatal("actual external network service is absent")
+	}
+	f.network, ok = owned.(*routervpndesktoppt.ExternalNetworkOwner)
+	if !ok {
+		t.Fatal("actual external network service has another type")
+	}
+	return f
+}
+
+func (f *desktopExternalBoxFixture) start(t *testing.T) {
+	t.Helper()
+	if err := f.network.PrepareExternalPhysicalBroker(f.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		f.tun.mu.Lock()
+		ready := f.tun.ready || f.tun.claimed
+		f.tun.mu.Unlock()
+		if ready {
+			t.Error("physical source was created after TUN activation")
+		}
+		f.source.capture = capture
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, f.source, current)
+		return broker, f.source, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal("actual native initialization", err)
+	}
+}
+
+func (f *desktopExternalBoxFixture) proof(t *testing.T) *RouterVPNExternalProofRequest {
+	t.Helper()
+	f.start(t)
+	proof, err := f.box.RouterVPNDesktopExternalCreateProof(f.policy)
+	if err != nil {
+		t.Fatal("actual external Box proof construction", err)
+	}
+	if proof.Healthy() || !f.tun.claimed || f.source.binds != 1 || !f.network.Current() {
+		t.Fatal("physical preparation fabricated a successful proof or omitted actual TUN binding")
+	}
+	t.Cleanup(func() {
+		if err := proof.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return proof
+}
+
+func TestRouterVPNDesktopExternalPhysicalBoxRejectsChangedDerivedGraph(t *testing.T) {
+	for _, field := range []string{"credential", "selected-dns", "lan", "mtu", "physical-source"} {
+		t.Run(field, func(t *testing.T) {
+			f := newDesktopExternalBoxFixture(t, func(graph map[string]any) {
+				switch field {
+				case "credential":
+					graph["outbounds"].([]any)[0].(map[string]any)["password"] = "foreign-secret"
+				case "selected-dns":
+					found := false
+					for _, value := range graph["dns"].(map[string]any)["servers"].([]any) {
+						server := value.(map[string]any)
+						if server["tag"] == mobilemultihop.ExternalDNSTag {
+							server["server_port"] = float64(5354)
+							found = true
+						}
+					}
+					if !found {
+						t.Fatal("selected DNS fixture is absent")
+					}
+				case "lan":
+					graph["route"].(map[string]any)["rules"] = []any{}
+				case "mtu":
+					graph["inbounds"].([]any)[0].(map[string]any)["mtu"] = float64(1392)
+				case "physical-source":
+					graph["services"].([]any)[0].(map[string]any)["source_sha256"] = strings.Repeat("f", 64)
+				}
+			})
+			if err := f.box.RouterVPNDesktopExternalPreparePhysical(f.policy); err == nil {
+				t.Fatal("changed complete native graph acquired a physical factory", field)
+			}
+			if proof, err := f.box.RouterVPNDesktopExternalCreateProof(f.policy); err == nil || proof != nil {
+				t.Fatal("changed complete native graph acquired proof", field)
+			}
+			if f.tun.ready || f.tun.claimed {
+				t.Fatal("rejected physical source activated the TUN")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopExternalPhysicalBoxRequiresPreparedStartedOwner(t *testing.T) {
+	f := newDesktopExternalBoxFixture(t, nil)
+	if proof, err := f.box.RouterVPNDesktopExternalCreateProof(f.policy); err == nil || proof != nil {
+		t.Fatal("unstarted JSON acquired external proof")
+	}
+	if err := f.box.RouterVPNStrategyStart(); err == nil {
+		t.Fatal("unprepared JSON started a protected external path")
+	}
+	if f.tun.ready || f.tun.claimed {
+		t.Fatal("unprepared native service reached TUN startup")
+	}
+
+	g := newDesktopExternalBoxFixture(t, nil)
+	if err := g.box.RouterVPNDesktopExternalPreparePhysical(g.policy); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.box.RouterVPNDesktopExternalPreparePhysical(g.policy); err == nil {
+		t.Fatal("physical factory was replaced")
+	}
+	if proof, err := g.box.RouterVPNDesktopExternalCreateProof(g.policy); err == nil || proof != nil {
+		t.Fatal("prepared but unstarted factory acquired proof")
+	}
+}
+
+func TestRouterVPNDesktopExternalPhysicalBoxRetainsExactPolicyAndDerivedIdentity(t *testing.T) {
+	f := newDesktopExternalBoxFixture(t, nil)
+	f.start(t)
+	foreign, err := mobilemultihop.NewDesktopExternalPolicy(f.policy.OriginalPolicy(), desktopTorBoxSession, runtime.GOOS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if foreign.Config() != f.policy.Config() {
+		t.Fatal("same-source policy fixture drifted")
+	}
+	if proof, err := f.box.RouterVPNDesktopExternalCreateProof(foreign); err == nil || proof != nil {
+		t.Fatal("same bytes replaced the prepared native policy owner")
+	}
+	proof, err := f.box.RouterVPNDesktopExternalCreateProof(f.policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proof.Close()
+	if _, err := f.box.RouterVPNExternalCreateProof(f.originalSource, f.originalCapture, desktopTorBoxSession); err == nil {
+		t.Fatal("original proof entry accepted a differently derived native graph")
+	}
+	if second, err := f.box.RouterVPNDesktopExternalCreateProof(f.policy); err == nil || second != nil {
+		t.Fatal("native physical activation was reused")
+	}
+	meta := f.policy.Metadata()
+	if meta.ConfigSHA256 == meta.OriginalConfigSHA256 || !f.network.Current() || proof.engine.Identity() == "" || proof.Healthy() {
+		t.Fatal("actual and original proof identities were conflated")
+	}
+}
+
+func TestRouterVPNDesktopExternalPhysicalBoxRejectsTUNReadbackAndBinding(t *testing.T) {
+	for _, fault := range []string{"name", "index", "mtu", "binding"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newDesktopExternalBoxFixture(t, nil)
+			f.start(t)
+			f.tun.mu.Lock()
+			switch fault {
+			case "name":
+				f.tun.name = "foreign-tun"
+			case "index":
+				f.tun.index = 0
+			case "mtu":
+				f.tun.mtu = 9000
+			case "binding":
+				f.source.failBind = true
+			}
+			f.tun.mu.Unlock()
+			if proof, err := f.box.RouterVPNDesktopExternalCreateProof(f.policy); err == nil || proof != nil {
+				t.Fatal("unacknowledged native TUN acquired proof", fault)
+			}
+			if f.network.Current() || !f.source.cancelled.Load() {
+				t.Fatal("failed TUN admission retained its physical source", fault)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopExternalPhysicalBoxCancelAndNetworkResetRetireExactOwner(t *testing.T) {
+	for _, action := range []string{"cancel", "network", "failed-proof", "replaced-outbound", "same-tun-index", "same-tun-mtu", "same-tun-close", "close"} {
+		t.Run(action, func(t *testing.T) {
+			f, replacement := newDesktopExternalBoxFixture(t, nil), newDesktopExternalBoxFixture(t, nil)
+			proof, other := f.proof(t), replacement.proof(t)
+			switch action {
+			case "cancel":
+				proof.Cancel()
+			case "network":
+				f.network.InterfaceUpdated(context.Background())
+			case "failed-proof":
+				if raw, err := proof.Run(); err == nil || raw != "" {
+					t.Fatal("fixture socket refusal fabricated a successful exit proof")
+				}
+			case "replaced-outbound":
+				_ = f.box.outbound.Remove(mobilemultihop.DesktopExternalPhysicalTag)
+			case "same-tun-index", "same-tun-mtu", "same-tun-close":
+				f.tun.mu.Lock()
+				switch action {
+				case "same-tun-index":
+					f.tun.index++
+				case "same-tun-mtu":
+					f.tun.mtu++
+				case "same-tun-close":
+					f.tun.closed = true
+				}
+				f.tun.mu.Unlock()
+			case "close":
+				if err := proof.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if proof.engine.Identity() != "" || proof.Healthy() || f.network.Current() || !f.source.cancelled.Load() {
+				t.Fatal("retired proof retained its physical publication or socket owner", action)
+			}
+			if other.engine.Identity() == "" || !replacement.network.Current() || replacement.source.cancelled.Load() {
+				t.Fatal("retirement affected a replacement session", action)
+			}
+			if err := f.network.Close(); err != nil || !f.source.closed.Load() {
+				t.Fatal("native Close lost its exact source join", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopExternalPhysicalBoxMTUReadbackKeepsGuardAndDerivedPolicy(t *testing.T) {
+	f := newDesktopExternalBoxFixture(t, nil)
+	proof := f.proof(t)
+	binding := proof.engine.physical.(*routerVPNDesktopExternalBinding)
+	meta := f.policy.Metadata()
+	authority, _ := json.Marshal(map[string]any{"schema": 1, "id": "selected-exit", "source_sha256": meta.OriginalSourceSHA256, "expected_public_ip": "203.0.113.88", "mtu_policy": "auto", "jumbo_tun": false})
+	config, transformed, err := binding.mtuAuthority(f.policy.OriginalPolicy().Config(), string(authority))
+	var fields map[string]any
+	if err != nil || config != f.policy.Config() || json.Unmarshal([]byte(transformed), &fields) != nil || len(fields) != 6 || fields["source_sha256"] != meta.SourceSHA256 || fields["mtu_policy"] != "auto" || fields["jumbo_tun"] != false {
+		t.Fatal("desktop MTU lost actual graph identity or original optimization policy", err)
+	}
+	if _, _, err := binding.mtuAuthority(f.policy.Config(), string(authority)); err == nil {
+		t.Fatal("derived graph impersonated original proof authority")
+	}
+	if _, _, _, err := binding.readback(f.tun); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := f.tun.RouterVPNDesktopMTU(func() bool { return true }); err == nil {
+		t.Fatal("fixture failed to retain one permanent TUN claim")
+	}
+	if _, err := f.box.RouterVPNExternalClaimMTU(proof, f.originalSource, f.originalCapture); err == nil {
+		t.Fatal("unproved physical preparation acquired an MTU optimization lease")
+	}
+	if err := binding.retireTUN(context.Background(), f.tun); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := binding.readback(f.tun); err == nil {
+		t.Fatal("retired TUN binding produced a current readback")
+	}
+	if err := binding.adoptTUN(context.Background(), f.tun); err != nil {
+		t.Fatal("exact retained rollback reader failed to rebind", err)
+	}
+	if f.source.binds != 2 || f.source.retires != 1 {
+		t.Fatal("MTU rollback bypassed exact physical retirement/rebind")
+	}
+	if err := binding.adoptTUN(context.Background(), f.tun); err == nil {
+		t.Fatal("arbitrary TUN adoption bypassed owned retirement")
+	}
+	if err := binding.retireTUN(context.Background(), f.tun); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := binding.adoptTUN(cancelled, f.tun); err != nil || !binding.validTUN(f.tun) || !f.network.Current() || f.source.binds != 3 {
+		t.Fatal("cancelled MTU operation destroyed its valid retained rollback reader", err)
+	}
+	if err := binding.retireTUN(context.Background(), f.tun); err != nil {
+		t.Fatal(err)
+	}
+	proof.Cancel()
+	if err := binding.adoptTUN(cancelled, f.tun); err == nil {
+		t.Fatal("real physical-generation cancellation admitted a stale rollback reader")
+	}
+	if _, _, err := binding.mtuAuthority(f.policy.OriginalPolicy().Config(), string(authority)); err == nil {
+		t.Fatal("retired physical proof retained derived MTU authority")
+	}
+}

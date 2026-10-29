@@ -38,6 +38,10 @@ type routerVPNDesktopMTUReadbackLease interface {
 	MTUReadback() (mobiletor.DesktopBridgeMTUReadback, error)
 }
 
+type routerVPNDesktopMTUClaimLease interface {
+	ClaimDesktopTUN(func() bool) (string, int, int, error)
+}
+
 type routerVPNDesktopMTUMeasurementLease interface {
 	BeginMeasurement(context.Context) (context.Context, context.CancelFunc, error)
 }
@@ -111,6 +115,15 @@ func newRouterVPNDesktopMTUOwner(lease routerVPNDesktopMTULease, session string,
 		readback, readErr := retained.MTUReadback()
 		name, index, mtu, nativeErr := inbound.RouterVPNDesktopMTUInterface()
 		if readErr != nil || nativeErr != nil || readback.InterfaceName != name || readback.InterfaceIndex != index || readback.EffectiveMTU != mtu {
+			return nil, routerVPNExternalFailure
+		}
+	} else if retained, ok := lease.(routerVPNDesktopMTUClaimLease); ok {
+		// A protected ordinary path also claims its TUN before proof. Let the
+		// actual native lease preserve that guard, or claim a legacy external
+		// reader exactly once when it has no physical owner.
+		name, index, mtu, readErr := retained.ClaimDesktopTUN(owner.pathCurrent)
+		actualName, actualIndex, actualMTU, nativeErr := inbound.RouterVPNDesktopMTUInterface()
+		if readErr != nil || nativeErr != nil || name != actualName || index != actualIndex || mtu != actualMTU {
 			return nil, routerVPNExternalFailure
 		}
 	} else {

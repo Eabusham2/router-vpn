@@ -69,6 +69,20 @@ type RouterVPNExternalProofRequest struct {
 	activity routerVPNExternalActivity
 }
 
+// A desktop lower path adds an actual native physical owner. Mobile and other
+// existing external paths leave this nil. The implementation lives in the
+// desktop Box package, so imported JSON and host booleans cannot supply it.
+// Its lifetime check must not acquire the engine lock: the owned TUN also
+// invokes that check during a serialized native MTU replacement.
+type routerVPNExternalPhysicalBinding interface {
+	current() bool
+	validTUN(adapter.Inbound) bool
+	cancel()
+	mtuAuthority(string, string) (string, string, error)
+	retireTUN(context.Context, adapter.Inbound) error
+	adoptTUN(context.Context, adapter.Inbound) error
+}
+
 func (s *Box) RouterVPNExternalCreateProof(source, capture, session string) (*RouterVPNExternalProofRequest, error) {
 	if s == nil || s.ctx == nil || s.ctx.Err() != nil || s.routerVPNExternalOptions == "" {
 		return nil, errors.New("external native Box is unavailable")
@@ -102,11 +116,20 @@ func (r *RouterVPNExternalProofRequest) Run() (string, error) {
 	if r == nil || r.request == nil {
 		return "", errors.New("external native proof request is unavailable")
 	}
-	return r.request.Run()
+	raw, err := r.request.Run()
+	if err != nil {
+		r.Cancel()
+	}
+	return raw, err
 }
 func (r *RouterVPNExternalProofRequest) Cancel() {
-	if r != nil && r.request != nil {
-		r.request.Cancel()
+	if r != nil {
+		if r.engine != nil && r.engine.physical != nil {
+			r.engine.physical.cancel()
+		}
+		if r.request != nil {
+			r.request.Cancel()
+		}
 	}
 }
 func (r *RouterVPNExternalProofRequest) Healthy() bool {
@@ -116,12 +139,17 @@ func (r *RouterVPNExternalProofRequest) VerifyCurrentPath() error {
 	if r == nil || r.request == nil {
 		return errors.New("external proof is unavailable")
 	}
-	return r.request.VerifyCurrentPath()
+	err := r.request.VerifyCurrentPath()
+	if err != nil {
+		r.Cancel()
+	}
+	return err
 }
 func (r *RouterVPNExternalProofRequest) Close() error {
 	if r == nil || r.request == nil {
 		return nil
 	}
+	r.Cancel()
 	return r.request.Close()
 }
 func (r *RouterVPNExternalProofRequest) ProgressJSON() string {
@@ -146,6 +174,7 @@ type routerVPNExternalNativeEngine struct {
 	routes   map[string]adapter.Outbound
 	dns      map[string]adapter.DNSTransport
 	services map[string]adapter.Service
+	physical routerVPNExternalPhysicalBinding
 }
 
 func (e *routerVPNExternalNativeEngine) OpenVPNRemote(tag string) (nativeopenvpn.RemoteReceipt, error) {
@@ -255,8 +284,19 @@ func (e *routerVPNExternalNativeEngine) Identity() string {
 	defer e.mu.RUnlock()
 	return e.identityLocked()
 }
-func (e *routerVPNExternalNativeEngine) identityLocked() string {
-	if e == nil || e.box == nil || e.box.ctx.Err() != nil {
+func (e *routerVPNExternalNativeEngine) identityLocked() (identity string) {
+	if e == nil {
+		return ""
+	}
+	defer func() {
+		if identity == "" && e.physical != nil {
+			// A manager may remove an object and then return its dependency
+			// error without closing it. Revoke this exact physical generation
+			// on every identity failure, not only a changed interface readback.
+			e.physical.cancel()
+		}
+	}()
+	if e.box == nil || e.box.ctx.Err() != nil || e.physical != nil && !e.physical.current() {
 		return ""
 	}
 	select {
@@ -284,6 +324,9 @@ func (e *routerVPNExternalNativeEngine) identityLocked() string {
 	}
 	current, ok := e.box.inbound.Get(e.tunTag)
 	if !ok || current != e.tun {
+		return ""
+	}
+	if e.physical != nil && !e.physical.validTUN(e.tun) {
 		return ""
 	}
 	return fmt.Sprintf("%p", e.box)

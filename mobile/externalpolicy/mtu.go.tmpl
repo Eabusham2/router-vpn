@@ -67,6 +67,12 @@ func (s *Box) RouterVPNExternalClaimMTU(proof *RouterVPNExternalProofRequest, so
 	if err != nil {
 		return nil, err
 	}
+	if proof.engine.physical != nil {
+		config, authority, err = proof.engine.physical.mtuAuthority(config, authority)
+		if err != nil {
+			return nil, err
+		}
+	}
 	ctx, cancel, err := proof.request.MTULifetime(s.ctx)
 	if err != nil {
 		return nil, err
@@ -134,6 +140,20 @@ func (l *RouterVPNExternalMTULease) Inbound() (adapter.Inbound, error) {
 	return e.tun, nil
 }
 func (l *RouterVPNExternalMTULease) ChangeMTU(parent context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+	if l == nil || l.box == nil {
+		return nil, errors.New("external MTU native Box is unavailable")
+	}
+	return l.changeMTU(parent, expected, mtu, l.box.RouterVPNChangeMTU)
+}
+
+// The public entry supplies only the real native transaction. Tests can replace
+// kernel TUN creation while retaining the actual manager, proof, cancellation,
+// reader adoption and physical-policy acknowledgements around that operation.
+func (l *RouterVPNExternalMTULease) changeMTU(parent context.Context, expected adapter.Inbound, mtu int,
+	change func(context.Context, adapter.Inbound, int) (adapter.Inbound, error)) (adapter.Inbound, error) {
+	if change == nil || mtu < 1280 || mtu > 9000 {
+		return expected, errors.New("external MTU candidate is invalid")
+	}
 	ctx, release, err := l.Lifetime(parent)
 	if err != nil {
 		return nil, err
@@ -156,14 +176,28 @@ func (l *RouterVPNExternalMTULease) ChangeMTU(parent context.Context, expected a
 		e.mu.Unlock()
 		return nil, errors.New("external MTU captured reader changed")
 	}
-	current, changeErr := l.box.RouterVPNChangeMTU(ctx, expected, mtu)
+	if e.physical != nil {
+		if err := e.physical.retireTUN(ctx, expected); err != nil {
+			e.mu.Unlock()
+			l.proof.Cancel()
+			return expected, err
+		}
+	}
+	current, changeErr := change(ctx, expected, mtu)
 	// The native manager either installs its candidate or restores its exact
 	// rollback reader. It returns that captured result even on a failed change.
 	// No arbitrary TUN pointer can be adopted through this boundary.
-	if current == nil || current.Tag() != e.tunTag {
+	if current == nil || current.Tag() != e.tunTag || current.Type() != C.TypeTun {
 		e.mu.Unlock()
 		l.proof.Cancel()
 		return nil, errors.New("external MTU lost the native reader")
+	}
+	if e.physical != nil {
+		if err := e.physical.adoptTUN(ctx, current); err != nil {
+			e.mu.Unlock()
+			l.proof.Cancel()
+			return current, err
+		}
 	}
 	e.tun = current
 	valid := e.identityLocked() != "" && !l.closed.Load() && l.proof.mtu.Load() == l

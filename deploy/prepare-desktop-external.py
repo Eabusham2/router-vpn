@@ -52,6 +52,9 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'external_physical_linux_test.go.tmpl', 'external_physical_darwin_test.go.tmpl',
                 'external_physical_windows_test.go.tmpl')
 BOX_TEMPLATES = {
+    'external_box_physical.go.tmpl': 'routervpn_desktop_external_box_physical.go',
+    'external_box_physical_test.go.tmpl': 'routervpn_desktop_external_box_physical_test.go',
+    'external_box_integration_test.go.tmpl': 'routervpn_desktop_external_box_integration_test.go',
     'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go',
     'tor_box_physical.go.tmpl': 'routervpn_desktop_tor_box_physical.go',
     'tor_box_tunnel_control.go.tmpl': 'routervpn_desktop_tor_box_tunnel_control.go',
