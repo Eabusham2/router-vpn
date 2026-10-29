@@ -20,7 +20,12 @@ import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
+SPEC = importlib.util.spec_from_file_location(
+    "windows_identity_preparation", ROOT / "deploy/prepare-desktop-external.py")
+PREP = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(PREP)
 IDENTITY = "desktop_socket_windows_identity.go"
+CONNECT = "desktop_socket_windows_identity_connect.go"
 REQUIRED = (
     "TestDesktopSocketWindowsIdentitySDKLayout",
     "TestDesktopSocketWindowsIdentityBoundKernelEndpoints",
@@ -34,6 +39,11 @@ REQUIRED = (
     "TestDesktopSocketWindowsIdentityRejectsOtherExecutableAppID",
     "TestDesktopSocketWindowsIdentityImportedTCPAndUDP",
     "TestDesktopSocketWindowsIdentityNativeProtocolAdmission",
+    "TestDesktopSocketWindowsIdentityRejectsUnregisteredConnect",
+    "TestDesktopSocketWindowsIdentityRejectsImportedEndpointReplacement",
+    "TestDesktopSocketWindowsIdentityRejectsRetargetedConnect",
+    "TestDesktopSocketWindowsIdentityRetainsPendingConnectUntilJoin",
+    "TestDesktopSocketWindowsIdentityRenewsAcrossActualEndpointTransition",
 )
 
 
@@ -43,14 +53,10 @@ def checked_sources(source):
         package = "./internal/mobiletor"
         target = source / "internal/mobiletor"
     else:
-        spec = importlib.util.spec_from_file_location(
-            "windows_identity_preparation", ROOT / "deploy/prepare-desktop-external.py")
-        preparation = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(preparation)
-        source = preparation.checked_vendor(source)
+        source = PREP.checked_vendor(source)
         target = source / "routervpn/mobiletor"
         package = "./routervpn/mobiletor"
-    required = {IDENTITY, "desktop_socket_windows_identity_api.go",
+    required = {IDENTITY, CONNECT, "desktop_socket_windows_identity_api.go",
                 "desktop_socket_windows_identity_test.go",
                 "desktop_socket_native_windows.go", "desktop_socket_source.go"}
     paths = sorted((ROOT / "internal/mobiletor").glob("desktop_socket_*.go"))
@@ -62,7 +68,8 @@ def checked_sources(source):
         if path.is_symlink() or copied.is_symlink() or not copied.is_file():
             raise ValueError("Windows identity source must be the actual regular copied file")
         raw = path.read_bytes()
-        if copied.read_bytes() != raw:
+        expected = raw if source == ROOT else PREP.relocated_shared_source(raw)
+        if copied.read_bytes() != expected:
             raise ValueError("Windows identity copy differs from shipping source: " + path.name)
         records[path.name] = hashlib.sha256(raw).hexdigest()
     return source, target, package, records
@@ -122,6 +129,22 @@ def mutants(text):
     )
 
 
+def connect_mutants(text):
+    return (
+        ("captured-connect-target", REQUIRED[14],
+         "changed remote escaped the independently captured Connect target",
+         replace_once(text, "} else if remote != connection.target {", "} else if false {")),
+        ("cancelled-connect-proof", REQUIRED[15],
+         "cancelled Connect retained a current kernel identity proof",
+         replace_once(replace_once(text,
+                                  "pending && connection.operation.Err() != nil", "false"),
+                      "pending && record.connect.operation.Err() != nil", "false")),
+        ("entered-import-retirement", REQUIRED[15],
+         "source original closed before pending imported I/O joined",
+         replace_once(text, "if !closed {", "if !closed && false {")),
+    )
+
+
 def run(command, *, cwd, env, timeout=180):
     process = subprocess.Popen([str(value) for value in command], cwd=cwd, env=env,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -174,7 +197,8 @@ def execute(source=ROOT, go="go", *, env=None):
     source, target, package, before = checked_sources(source)
     captured = dict(os.environ if env is None else env)
     compiler, captured, architecture = selected_compiler(go, source, captured)
-    changes = mutants((target / IDENTITY).read_text(encoding="utf-8"))
+    changes = [(IDENTITY, *mutation) for mutation in mutants((target / IDENTITY).read_text(encoding="utf-8"))]
+    changes += [(CONNECT, *mutation) for mutation in connect_mutants((target / CONNECT).read_text(encoding="utf-8"))]
     with tempfile.TemporaryDirectory(prefix="routervpn-windows-identity-") as directory:
         workspace = Path(directory)
         binary = workspace / "identity.test.exe"
@@ -203,11 +227,11 @@ def execute(source=ROOT, go="go", *, env=None):
                     raise ValueError("Windows identity baseline omitted actual protocol admission")
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("Windows identity binary changed during actual execution")
-        for name, test, witness, replacement in changes:
+        for filename, name, test, witness, replacement in changes:
             changed = workspace / (name + ".go")
             changed.write_text(replacement, encoding="utf-8")
             overlay = workspace / (name + ".json")
-            overlay.write_text(json.dumps({"Replace": {str(target / IDENTITY): str(changed)}}), encoding="utf-8")
+            overlay.write_text(json.dumps({"Replace": {str(target / filename): str(changed)}}), encoding="utf-8")
             candidate = workspace / (name + ".test.exe")
             status, output = run([*build, "-overlay=" + str(overlay), "-o", candidate, package],
                                  cwd=source, env=captured)
@@ -222,7 +246,7 @@ def execute(source=ROOT, go="go", *, env=None):
             print("Rejected production Windows identity mutant:", name, flush=True)
         if checked_sources(source)[3] != before:
             raise ValueError("Windows identity source changed during its actual native gate")
-    print("Windows isolated identity passed twelve kernel/lifecycle cases, all four bound/imported-I/O/protocol socket families, and nine production negative controls; WFP permit enforcement remains a separate gate.", flush=True)
+    print("Windows isolated identity passed seventeen kernel/lifecycle cases, all four bound/imported-I/O/protocol socket families, and twelve production negative controls; WFP permit enforcement remains a separate gate.", flush=True)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -833,6 +834,15 @@ func TestDesktopSocketWindowsIdentityImportedTCPAndUDP(t *testing.T) {
 					}
 					raw := desktopWindowsRaw{owned}
 					desktopWindowsIdentityTestIOProof(t, "after-connect", p, creation, created.Native, before, raw, remote)
+					// The broker releases its dial context after returning a live
+					// connection. Only a pending import is owned by that operation;
+					// successful renewal belongs to the captured socket session.
+					cancel()
+					desktopWindowsIdentityTestIOProof(t, "after-dial-context-release", p, creation, created.Native, before, raw, remote)
+					observer := created.Native.(*desktopWindowsIdentityNative)
+					if err := observer.finishNativeTCP(p.ctx, owned, nil); err == nil {
+						t.Fatal("completed native Connect accepted replayed finalization")
+					}
 					peer, err := listener.AcceptTCP()
 					if err != nil {
 						t.Fatal("native TCP connection did not reach its owned peer", err)
@@ -940,15 +950,29 @@ func desktopWindowsIdentityTestIOProof(t *testing.T, phase string, p *DesktopWin
 		t.Fatal("native I/O kernel diagnostics could not join", phase, err)
 	}
 	desktopWindowsIdentityTestDiagnoseALE(t, phase, p, source)
-	if endpoint != before.EndpointID {
-		t.Fatal("native I/O import replaced the independently proved ALE endpoint", phase, endpoint, before.EndpointID)
-	}
 	inspection, err := p.InspectSocket(p.ctx, creation)
 	if err != nil {
 		t.Fatal("actual native I/O lost the captured ALE token, application, or tuple proof", phase, err)
 	}
-	if inspection.EndpointID != before.EndpointID || inspection.TokenModifiedID != before.TokenModifiedID || inspection.Local != before.Local || inspection.Protocol != before.Protocol || inspection.Family != before.Family || !bytes.Equal(inspection.AppID, before.AppID) || inspection.Remote != remote {
+	if inspection.EndpointID != endpoint || inspection.TokenModifiedID != before.TokenModifiedID || inspection.Local != before.Local || inspection.Protocol != before.Protocol || inspection.Family != before.Family || !bytes.Equal(inspection.AppID, before.AppID) || inspection.Remote != remote || inspection.PeerConnected != (creation.Network == "tcp") {
 		t.Fatal("native I/O substituted the actual endpoint ownership or complete tuple", phase, inspection)
+	}
+	if err := p.call(p.ctx, false, func() error {
+		record := p.sockets[creation.SocketID]
+		if record == nil || record.endpoint != inspection.EndpointID {
+			return errors.New("native I/O proof did not capture its actual endpoint")
+		}
+		if creation.Network == "tcp" {
+			io, ok := raw.(desktopWindowsRaw)
+			if !ok || record.connect == nil || record.connect.io != io.socket || record.connect.boundEndpoint != before.EndpointID || record.connect.local != before.Local || record.connect.target != remote || record.connect.phase != desktopWindowsTCPConnected {
+				return errors.New("connected TCP proof lost its pre-connect capture and actual I/O owner")
+			}
+		} else if record.connect != nil || inspection.EndpointID != before.EndpointID {
+			return errors.New("unconnected UDP changed its retained kernel endpoint")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal("native I/O substituted its captured connect lifecycle", phase, err)
 	}
 }
 
@@ -991,4 +1015,390 @@ func TestDesktopSocketWindowsIdentityNativeProtocolAdmission(t *testing.T) {
 			})
 		}
 	}
+}
+
+type desktopWindowsIdentityTCPFixture struct {
+	identity *DesktopWindowsSocketIdentity
+	creation DesktopSocketCreation
+	created  DesktopSocketCreated
+	listener *net.TCPListener
+	remote   netip.AddrPort
+	mu       sync.Mutex
+	keeper   *desktopSocketKeeper
+	before   DesktopWindowsSocketInspection
+}
+
+func desktopWindowsIdentityTestTCPFixture(t *testing.T) *desktopWindowsIdentityTCPFixture {
+	t.Helper()
+	p := desktopWindowsIdentityTestNew(t)
+	creation := desktopWindowsIdentityTestCreation(t, p, "tcp", "127.0.0.1")
+	f := &desktopWindowsIdentityTCPFixture{identity: p, creation: creation, created: desktopWindowsIdentityTestCreate(t, p, creation)}
+	var err error
+	f.listener, err = net.ListenTCP("tcp4", net.TCPAddrFromAddrPort(netip.AddrPortFrom(creation.Binding.LocalAddress, 0)))
+	if err != nil {
+		t.Fatal("actual captured TCP peer", err)
+	}
+	f.remote = f.listener.Addr().(*net.TCPAddr).AddrPort()
+	t.Cleanup(func() { _ = f.listener.Close() })
+	t.Cleanup(func() {
+		f.mu.Lock()
+		keeper := f.keeper
+		f.mu.Unlock()
+		if keeper != nil {
+			if err := keeper.Close(); err != nil {
+				t.Error("captured TCP keeper did not close", err)
+			}
+		}
+	})
+	return f
+}
+
+func (f *desktopWindowsIdentityTCPFixture) control(ctx context.Context, network, destination string, raw syscall.RawConn) error {
+	if destination != f.remote.String() {
+		return errors.New("captured TCP test destination changed before native import")
+	}
+	matched, err := f.identity.MatchSocket(ctx, f.creation.Capture, f.creation.Binding, network, raw)
+	if err != nil || matched != f.creation {
+		return errors.Join(err, errors.New("captured TCP test import substituted the returned native handle"))
+	}
+	keeper, local, err := desktopSocketBindTCP(raw, f.creation.Binding.LocalAddress)
+	f.mu.Lock()
+	f.keeper = keeper
+	f.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	before, err := f.identity.InspectSocket(ctx, f.creation)
+	if err != nil || before.Local != local || before.Remote.Port() != 0 || !before.Remote.Addr().IsUnspecified() || before.PeerConnected {
+		return errors.Join(err, errors.New("captured TCP test has no independent bound proof"))
+	}
+	f.mu.Lock()
+	f.before = before
+	f.mu.Unlock()
+	return nil
+}
+
+func desktopWindowsIdentityTestKeepTCP(t *testing.T, connection net.Conn) {
+	t.Helper()
+	if connection != nil {
+		t.Cleanup(func() {
+			if err := connection.Close(); err != nil {
+				t.Error("captured TCP I/O did not close", err)
+			}
+		})
+	}
+}
+
+func TestDesktopSocketWindowsIdentityRejectsUnregisteredConnect(t *testing.T) {
+	f := desktopWindowsIdentityTestTCPFixture(t)
+	ctx, cancel := context.WithTimeout(f.identity.ctx, 5*time.Second)
+	defer cancel()
+	// The real returned socket is retained, but this deliberate broken caller
+	// strips its private source observer before actual native Connect.
+	source := f.created.Native.(*desktopWindowsIdentityNative)
+	connection, err := desktopSocketImportNativeTCP(ctx, "tcp4", f.remote, source.native, f.control)
+	desktopWindowsIdentityTestKeepTCP(t, connection)
+	if err != nil {
+		t.Fatal("uncaptured real Connect fixture did not reach its peer", err)
+	}
+	if err := f.identity.call(ctx, false, func() error {
+		if f.identity.sockets[f.creation.SocketID].connect != nil {
+			return errors.New("unregistered fixture accidentally registered a connect")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.identity.InspectSocket(ctx, f.creation)
+	if err == nil || (!strings.Contains(err.Error(), "retained ALE endpoint") && !strings.Contains(err.Error(), "no captured native import")) {
+		t.Fatal("uncaptured real Connect replaced the pre-connect identity", err)
+	}
+}
+
+func TestDesktopSocketWindowsIdentityRejectsImportedEndpointReplacement(t *testing.T) {
+	f := desktopWindowsIdentityTestTCPFixture(t)
+	ctx, cancel := context.WithTimeout(f.identity.ctx, 5*time.Second)
+	defer cancel()
+	raw, err := f.created.Native.SyscallConn()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.control(ctx, "tcp4", f.remote.String(), raw); err != nil {
+		t.Fatal(err)
+	}
+	otherCreation := desktopWindowsIdentityTestCreation(t, f.identity, "tcp", "127.0.0.1")
+	other := desktopWindowsIdentityTestCreate(t, f.identity, otherCreation)
+	otherRaw, _ := desktopWindowsIdentityTestBind(t, other.Native, otherCreation.Binding.LocalAddress)
+	var duplicate *desktopSocketKeeper
+	var duplicateErr error
+	if err := otherRaw.Control(func(handle uintptr) { duplicate, duplicateErr = desktopSocketDuplicate(syscall.Handle(handle)) }); err != nil || duplicateErr != nil || duplicate == nil {
+		if duplicate != nil {
+			_ = duplicate.Close()
+		}
+		t.Fatal("real substituted I/O duplicate fixture", err, duplicateErr)
+	}
+	owned := &desktopWindowsSocket{handle: duplicate.handle, remote: f.remote}
+	desktopWindowsIdentityTestKeepTCP(t, owned)
+	observer := f.created.Native.(*desktopWindowsIdentityNative)
+	if err := observer.beginNativeTCP(ctx, owned); err == nil || !strings.Contains(err.Error(), "substituted the pre-connect kernel endpoint") {
+		t.Fatal("same isolated token substituted another actual I/O endpoint", err)
+	}
+	if err := f.identity.call(ctx, false, func() error {
+		if f.identity.sockets[f.creation.SocketID].connect != nil {
+			return errors.New("rejected I/O replacement installed a captured connection")
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDesktopSocketWindowsIdentityRejectsRetargetedConnect(t *testing.T) {
+	f := desktopWindowsIdentityTestTCPFixture(t)
+	ctx, cancel := context.WithTimeout(f.identity.ctx, 5*time.Second)
+	defer cancel()
+	other, err := net.ListenTCP("tcp4", net.TCPAddrFromAddrPort(netip.AddrPortFrom(f.creation.Binding.LocalAddress, 0)))
+	if err != nil {
+		t.Fatal("actual replacement TCP peer", err)
+	}
+	t.Cleanup(func() { _ = other.Close() })
+	wrong := other.Addr().(*net.TCPAddr).AddrPort()
+	if wrong == f.remote {
+		t.Fatal("replacement peer fixture reused the captured port")
+	}
+	var reached bool
+	connection, err := desktopSocketImportNativeTCPWithConnect(ctx, "tcp4", f.remote, f.created.Native, f.control, func(ctx context.Context, owned *desktopWindowsSocket) error {
+		// The source captured the actual I/O object and original destination
+		// before entering this boundary. Change only the attempted destination;
+		// the real syscall and independently queried kernel tuple must disagree.
+		owned.remote = wrong
+		connectErr := desktopSocketConnectOwnedTCP(ctx, owned)
+		reached = connectErr == nil
+		return connectErr
+	})
+	desktopWindowsIdentityTestKeepTCP(t, connection)
+	if !reached {
+		t.Fatal("retargeted real Connect fixture did not reach its second peer", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "captured connect target") {
+		t.Fatal("changed remote escaped the independently captured Connect target", err)
+	}
+	if _, inspectErr := f.identity.InspectSocket(ctx, f.creation); inspectErr == nil {
+		t.Fatal("rejected replacement peer retained a current identity proof")
+	}
+}
+
+func TestDesktopSocketWindowsIdentityRetainsPendingConnectUntilJoin(t *testing.T) {
+	f := desktopWindowsIdentityTestTCPFixture(t)
+	ctx, cancel := context.WithTimeout(f.identity.ctx, 8*time.Second)
+	defer cancel()
+	entered := make(chan *desktopWindowsSocket, 1)
+	proceed := make(chan struct{})
+	var release sync.Once
+	done := make(chan struct{})
+	var connection net.Conn
+	var importErr error
+	go func() {
+		connection, importErr = desktopSocketImportNativeTCPWithConnect(ctx, "tcp4", f.remote, f.created.Native, f.control, func(ctx context.Context, owned *desktopWindowsSocket) error {
+			entered <- owned
+			<-proceed
+			return ctx.Err()
+		})
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		release.Do(func() { close(proceed) })
+		select {
+		case <-done:
+			if connection != nil {
+				if err := connection.Close(); err != nil {
+					t.Error("held imported I/O cleanup failed", err)
+				}
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("actual held import did not join for fixture cleanup")
+		}
+	})
+	var owned *desktopWindowsSocket
+	select {
+	case owned = <-entered:
+	case <-done:
+		t.Fatal("actual import failed before its captured connect boundary", importErr)
+	case <-ctx.Done():
+		t.Fatal("actual import never entered its captured connect boundary", ctx.Err())
+	}
+	inspectionCtx, stopInspection := context.WithTimeout(f.identity.ctx, 2*time.Second)
+	defer stopInspection()
+	if inspection, err := f.identity.InspectSocket(inspectionCtx, f.creation); err != nil || inspection.PeerConnected || inspection.Remote.Port() != 0 {
+		t.Fatal("pending actual Connect blocked independent identity renewal", err)
+	}
+	observer := f.created.Native.(*desktopWindowsIdentityNative)
+	if err := observer.beginNativeTCP(inspectionCtx, owned); err == nil {
+		t.Fatal("pending import accepted replayed registration")
+	}
+	cancel()
+	if _, err := f.identity.InspectSocket(inspectionCtx, f.creation); err == nil || !strings.Contains(err.Error(), "cancelled import") {
+		t.Fatal("cancelled Connect retained a current kernel identity proof", err)
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- owned.Close() }()
+	// Observe Close's actual entered state before testing retirement. The held
+	// connector, not a timing assumption about a scheduled worker, prevents the
+	// entered import from returning until every ownership assertion is complete.
+	for {
+		owned.mu.Lock()
+		closing, closed := owned.closing, owned.closed
+		owned.mu.Unlock()
+		if closed {
+			t.Fatal("imported I/O closed before the entered Connect returned")
+		}
+		if closing {
+			break
+		}
+		select {
+		case <-inspectionCtx.Done():
+			t.Fatal("actual imported Close did not enter", inspectionCtx.Err())
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if err := f.created.Native.Close(); err != nil {
+		t.Fatal(err)
+	}
+	retireErr := f.identity.ReleaseSocket(inspectionCtx, f.creation)
+	if err := f.identity.call(inspectionCtx, true, func() error {
+		record := f.identity.sockets[f.creation.SocketID]
+		if record == nil || record.original == nil || record.connect == nil || record.connect.io != owned || record.connect.phase == desktopWindowsTCPConnected {
+			return errors.New("pending I/O lost its exact retained source or installed success")
+		}
+		if _, err := record.original.SyscallConn(); err != nil {
+			return errors.Join(err, errors.New("source original closed before pending imported I/O joined"))
+		}
+		return nil
+	}); err != nil {
+		t.Fatal("source original closed before pending imported I/O joined", err)
+	}
+	if retireErr == nil || !strings.Contains(retireErr.Error(), "actual imported I/O close and join") {
+		t.Fatal("source retirement escaped the still-entered I/O owner", retireErr)
+	}
+	select {
+	case err := <-closeDone:
+		t.Fatal("imported I/O closed before the entered Connect returned", err)
+	default:
+	}
+	release.Do(func() { close(proceed) })
+	select {
+	case <-done:
+		if connection != owned || !errors.Is(importErr, context.Canceled) {
+			t.Fatal("cancelled Connect lost its returned partial owner", importErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled held Connect failed to join")
+	}
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatal("actual imported Close failed after joined Connect", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("imported Close did not join the completed entered operation")
+	}
+	if err := f.keeper.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := desktopWindowsIdentityTestRelease(f.identity, f.creation); err != nil {
+		t.Fatal("joined cancelled Connect did not retire its actual kernel endpoints", err)
+	}
+}
+
+func TestDesktopSocketWindowsIdentityRenewsAcrossActualEndpointTransition(t *testing.T) {
+	f := desktopWindowsIdentityTestTCPFixture(t)
+	ctx, cancel := context.WithTimeout(f.identity.ctx, 8*time.Second)
+	defer cancel()
+	entered := make(chan *desktopWindowsSocket, 1)
+	proceed := make(chan struct{})
+	connected := make(chan error, 1)
+	var release sync.Once
+	done := make(chan struct{})
+	var connection net.Conn
+	var importErr error
+	go func() {
+		connection, importErr = desktopSocketImportNativeTCPWithConnect(ctx, "tcp4", f.remote, f.created.Native, f.control, func(ctx context.Context, owned *desktopWindowsSocket) error {
+			entered <- owned
+			<-proceed
+			err := desktopSocketConnectOwnedTCP(ctx, owned)
+			connected <- err
+			return err
+		})
+		close(done)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		release.Do(func() { close(proceed) })
+		select {
+		case <-done:
+			if connection != nil {
+				if err := connection.Close(); err != nil {
+					t.Error("transition I/O cleanup failed", err)
+				}
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("real transition import did not join for fixture cleanup")
+		}
+	})
+	var owned *desktopWindowsSocket
+	select {
+	case owned = <-entered:
+	case <-done:
+		t.Fatal("real transition import failed before capture", importErr)
+	case <-ctx.Done():
+		t.Fatal("real transition import never reached Connect", ctx.Err())
+	}
+	var inspection DesktopWindowsSocketInspection
+	var snapshots int
+	var firstEndpoint uint64
+	if err := f.identity.call(ctx, false, func() error {
+		var err error
+		inspection, err = f.identity.inspectSocketSnapshotsLocked(f.creation, func(endpoint uint64) error {
+			snapshots++
+			if snapshots != 1 {
+				return nil
+			}
+			firstEndpoint = endpoint
+			// The first original descriptor was independently read while bound.
+			// Finish the real nonblocking Connect before reading the returned
+			// descriptor. Its finish hook waits for this same gate; only the
+			// kernel transition proceeds, creating a deterministic mixed read.
+			release.Do(func() { close(proceed) })
+			select {
+			case err := <-connected:
+				return err
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		})
+		return err
+	}); err != nil {
+		t.Fatal("straddled real endpoint reads did not renew a complete captured proof", err)
+	}
+	if !inspection.PeerConnected || inspection.Local != f.before.Local || inspection.Remote != f.remote || firstEndpoint != f.before.EndpointID {
+		t.Fatal("transition renewal accepted an inconsistent actual kernel tuple", inspection)
+	}
+	expectedSnapshots := 1
+	if inspection.EndpointID != firstEndpoint {
+		expectedSnapshots = 2
+	}
+	if snapshots != expectedSnapshots {
+		t.Fatal("native endpoint renewal did not use the exact bounded complete snapshots", snapshots, expectedSnapshots)
+	}
+	t.Logf("Actual concurrent ALE renewal bound=%x connected=%x complete_snapshots=%d", firstEndpoint, inspection.EndpointID, snapshots)
+	select {
+	case <-done:
+		if importErr != nil || connection != owned {
+			t.Fatal("real Connect lost ownership after concurrent renewal", importErr)
+		}
+	case <-ctx.Done():
+		t.Fatal("real Connect could not finish after concurrent renewal", ctx.Err())
+	}
+	desktopWindowsIdentityTestIOProof(t, "after-concurrent-renewal", f.identity, f.creation, f.created.Native, f.before, desktopWindowsRaw{owned}, f.remote)
 }

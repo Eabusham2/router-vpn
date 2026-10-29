@@ -99,6 +99,7 @@ def inputs():
                              ROOT/'deploy/install-desktop-windows-toolchain.py',
                              ROOT/'deploy/test_desktop_socket_uid.py',
                              ROOT/'deploy/test_desktop_windows_identity.py',
+                             ROOT/'deploy/test_desktop_windows_identity_runner.py',
                              ROOT/'deploy/test_desktop_windows_wfp.py',
                              ROOT/'deploy/test_desktop_windows_traffic.py',
                              ROOT/'deploy/test_desktop_linux_guardian.py',
@@ -505,6 +506,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 run([sys.executable, ROOT/'deploy/test_desktop_socket_uid.py', source],
                     env=env, timeout=300)
             if target.startswith('windows/'):
+                run([sys.executable, ROOT/'deploy/test_desktop_windows_identity_runner.py'], cwd=ROOT, env=env)
                 run([sys.executable, ROOT/'deploy/test_desktop_windows_identity.py', source],
                     env=env, timeout=600)
                 run([sys.executable, ROOT/'deploy/test_desktop_windows_wfp.py', source],

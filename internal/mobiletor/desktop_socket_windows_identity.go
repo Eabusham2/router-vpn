@@ -33,14 +33,18 @@ type DesktopWindowsSocketInspection struct {
 	Local, Remote               netip.AddrPort
 	AppID                       []byte
 	Raw                         syscall.RawConn
+	PeerConnected               bool // Actual Getpeername success; never inferred from a permit.
 }
 
 type desktopWindowsIdentitySocket struct {
-	creation  DesktopSocketCreation
-	original  DesktopSocketNative
-	returned  DesktopSocketNative
-	handedOut bool
-	endpoint  uint64
+	creation      DesktopSocketCreation
+	original      DesktopSocketNative
+	returned      DesktopSocketNative
+	handedOut     bool
+	endpoint      uint64
+	connect       *desktopWindowsIdentityTCP
+	finalEndpoint uint64
+	finalCaptured bool
 }
 
 // DesktopWindowsSocketIdentity owns a fresh, immediately disabled local account
@@ -409,7 +413,10 @@ func (p *DesktopWindowsSocketIdentity) createSocket(ctx context.Context, creatio
 		if err != nil {
 			return err
 		}
-		record.returned, err = desktopWindowsNativeDuplicate(raw)
+		transferred, err := desktopWindowsNativeDuplicate(raw)
+		if transferred != nil {
+			record.returned = &desktopWindowsIdentityNative{native: transferred, identity: p, creation: creation}
+		}
 		handoff.Lock()
 		if !abandoned {
 			result = DesktopSocketCreated{Creation: creation, Native: record.returned}
@@ -489,6 +496,46 @@ func (p *DesktopWindowsSocketIdentity) InspectSocket(ctx context.Context, creati
 		return result, net.ErrClosed
 	}
 	err := p.call(ctx, false, func() error {
+		inspection, err := p.inspectSocketLocked(creation)
+		resultMu.Lock()
+		result = inspection
+		resultMu.Unlock()
+		return err
+	})
+	resultMu.Lock()
+	copy := result
+	resultMu.Unlock()
+	return copy, err
+}
+
+// inspectSocketLocked runs only inside the captured native operation gate.
+// Import registration/finalization use the same proof as permission renewal.
+func (p *DesktopWindowsSocketIdentity) inspectSocketLocked(creation DesktopSocketCreation) (DesktopWindowsSocketInspection, error) {
+	return p.inspectSocketSnapshotsLocked(creation, nil)
+}
+
+// The optional boundary is used only by the actual native transition test to
+// complete Connect between two independent kernel reads. Shipping proof has no
+// callback. Every retry is a new complete proof, never a merged snapshot.
+func (p *DesktopWindowsSocketIdentity) inspectSocketSnapshotsLocked(creation DesktopSocketCreation, afterOriginal func(uint64) error) (DesktopWindowsSocketInspection, error) {
+	var last error
+	for attempt := 0; attempt < 3; attempt++ {
+		result, err := p.inspectSocketSnapshotLocked(creation, afterOriginal)
+		var transition *desktopWindowsIdentityEndpointTransition
+		if !errors.As(err, &transition) {
+			return result, err
+		}
+		last = err
+		if err := p.verifyPendingTransitionLocked(creation, transition); err != nil {
+			return DesktopWindowsSocketInspection{}, errors.Join(last, err)
+		}
+	}
+	return DesktopWindowsSocketInspection{}, errors.Join(last, errors.New("Windows captured TCP endpoint did not settle into one complete kernel snapshot"))
+}
+
+func (p *DesktopWindowsSocketIdentity) inspectSocketSnapshotLocked(creation DesktopSocketCreation, afterOriginal func(uint64) error) (DesktopWindowsSocketInspection, error) {
+	var result DesktopWindowsSocketInspection
+	err := func() error {
 		record := p.sockets[creation.SocketID]
 		if record == nil || record.creation != creation || record.original == nil || record.returned == nil || !record.handedOut || !p.validCreation(creation) {
 			return errors.New("Windows ALE proof lost its exact socket creation")
@@ -505,16 +552,29 @@ func (p *DesktopWindowsSocketIdentity) InspectSocket(ctx context.Context, creati
 		if err != nil {
 			return err
 		}
+		if afterOriginal != nil {
+			if err := afterOriginal(endpoint); err != nil {
+				return err
+			}
+		}
 		otherRaw, err := record.returned.SyscallConn()
 		if err != nil {
 			return err
 		}
 		other, err := desktopWindowsALEEndpoint(otherRaw)
-		if err != nil || other != endpoint || (record.endpoint != 0 && record.endpoint != endpoint) {
-			return errors.Join(err, errors.New("Windows socket transfer changed its retained ALE endpoint"))
+		if err != nil {
+			return err
+		}
+		if other != endpoint {
+			return &desktopWindowsIdentityEndpointTransition{before: endpoint, after: other}
 		}
 		properties, appID, err := p.api.endpointProperties(p.engine, endpoint)
 		if err != nil {
+			if errors.Is(err, desktopWindowsEndpointNotFound) {
+				if current, currentErr := desktopWindowsALEEndpoint(otherRaw); currentErr == nil && current != endpoint {
+					return &desktopWindowsIdentityEndpointTransition{before: endpoint, after: current}
+				}
+			}
 			return err
 		}
 		if properties.TokenModifiedID != p.statistics.ModifiedID || !bytes.Equal(appID, p.appID) {
@@ -540,53 +600,19 @@ func (p *DesktopWindowsSocketIdentity) InspectSocket(ctx context.Context, creati
 		if properties.Protocol != protocol || local.Addr() != creation.Binding.LocalAddress || local.Port() == 0 || local.Addr().Is4() != creation.Binding.LocalAddress.Is4() {
 			return errors.New("Windows ALE endpoint changed its bound family, protocol, or local tuple")
 		}
-		var socketErr error
-		// The returned handle is the exact descriptor on which the broker
-		// performed Bind and interface selection. Winsock's pre-bind original
-		// can retain provider-local unbound state even while its independent ALE
-		// endpoint reports the same bound kernel socket. Read provider tuples
-		// from the bound owner; retain both endpoint IDs as mandatory authority.
-		err = otherRaw.Control(func(handle uintptr) {
-			address, readErr := syscall.Getsockname(syscall.Handle(handle))
-			if readErr != nil {
-				socketErr = readErr
-				return
+		peerConnected, err := desktopWindowsIdentityInspectProvider(record, otherRaw, endpoint, local, remote)
+		if err != nil {
+			if current, currentErr := desktopWindowsALEEndpoint(otherRaw); currentErr == nil && current != endpoint {
+				return &desktopWindowsIdentityEndpointTransition{before: endpoint, after: current}
 			}
-			actual, readErr := desktopWindowsIdentitySocketAddress(address)
-			if readErr != nil || actual != local {
-				socketErr = errors.Join(readErr, errors.New("Windows ALE local tuple disagrees with the retained socket"))
-				return
-			}
-			peer, readErr := syscall.Getpeername(syscall.Handle(handle))
-			if errors.Is(readErr, desktopSocketNotConnected) || errors.Is(readErr, syscall.Errno(10022)) {
-				if remote.Port() != 0 || !remote.Addr().IsUnspecified() {
-					socketErr = errors.New("Windows unconnected socket has a conflicting ALE remote tuple")
-				}
-				return
-			}
-			if readErr != nil {
-				socketErr = readErr
-				return
-			}
-			actual, readErr = desktopWindowsIdentitySocketAddress(peer)
-			if readErr != nil || actual != remote {
-				socketErr = errors.Join(readErr, errors.New("Windows ALE remote tuple disagrees with the retained socket"))
-			}
-		})
-		if err != nil || socketErr != nil {
-			return errors.Join(err, socketErr)
+			return err
 		}
 		record.endpoint = endpoint
 		p.observed.Store(time.Now().UnixMilli())
-		resultMu.Lock()
-		result = DesktopWindowsSocketInspection{EndpointID: endpoint, TokenModifiedID: properties.TokenModifiedID, Family: family, Protocol: protocol, Local: local, Remote: remote, AppID: appID, Raw: otherRaw}
-		resultMu.Unlock()
+		result = DesktopWindowsSocketInspection{EndpointID: endpoint, TokenModifiedID: properties.TokenModifiedID, Family: family, Protocol: protocol, Local: local, Remote: remote, AppID: appID, Raw: otherRaw, PeerConnected: peerConnected}
 		return nil
-	})
-	resultMu.Lock()
-	copy := result
-	resultMu.Unlock()
-	return copy, err
+	}()
+	return result, err
 }
 
 func desktopWindowsIdentitySocketAddress(address syscall.Sockaddr) (netip.AddrPort, error) {
@@ -625,14 +651,28 @@ func (p *DesktopWindowsSocketIdentity) ReleaseSocket(ctx context.Context, creati
 				return err
 			}
 		}
+		if err := desktopWindowsIdentityCaptureRetirement(record); err != nil {
+			return err
+		}
 		if record.original != nil {
 			if err := record.original.Close(); err != nil {
 				return err
 			}
 		}
 		if record.endpoint != 0 {
-			if _, _, err := p.api.endpointProperties(p.engine, record.endpoint); !errors.Is(err, desktopWindowsEndpointNotFound) {
-				return errors.Join(err, errors.New("Windows socket ALE endpoint has not independently retired"))
+			endpoints := []uint64{record.endpoint, record.finalEndpoint}
+			if record.connect != nil {
+				endpoints = append(endpoints, record.connect.boundEndpoint)
+			}
+			seen := make(map[uint64]bool)
+			for _, endpoint := range endpoints {
+				if endpoint == 0 || seen[endpoint] {
+					continue
+				}
+				seen[endpoint] = true
+				if _, _, err := p.api.endpointProperties(p.engine, endpoint); !errors.Is(err, desktopWindowsEndpointNotFound) {
+					return errors.Join(err, errors.New("Windows socket ALE endpoint has not independently retired"))
+				}
 			}
 		}
 		// The broker has already independently revoked every permit and joined

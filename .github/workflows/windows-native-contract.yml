@@ -44,6 +44,8 @@ jobs:
       - name: Isolated Windows socket token and ALE endpoint proof
         shell: pwsh
         run: |
+          python deploy/test_desktop_windows_identity_runner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Windows identity source-copy contract failed' }
           python deploy/test_desktop_windows_identity.py
           if ($LASTEXITCODE -ne 0) { throw 'Actual Windows isolated socket identity gate failed' }
       - name: Owned Windows WFP baseline and recovery

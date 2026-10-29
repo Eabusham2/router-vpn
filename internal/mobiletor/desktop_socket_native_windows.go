@@ -170,11 +170,25 @@ func desktopSocketNativeRaw(source DesktopSocketNative, network string, address 
 }
 
 func desktopSocketImportNativeTCP(ctx context.Context, network string, remote netip.AddrPort, source DesktopSocketNative, control func(context.Context, string, string, syscall.RawConn) error) (net.Conn, error) {
+	return desktopSocketImportNativeTCPWithConnect(ctx, network, remote, source, control, desktopSocketConnectOwnedTCP)
+}
+
+// A captured source may own the bind-to-connected ALE transition. Its hooks
+// receive the actual imported I/O object before any connect operation, never a
+// caller-supplied endpoint number or a descriptor recovered after completion.
+type desktopWindowsNativeTCPSource interface {
+	beginNativeTCP(context.Context, *desktopWindowsSocket) error
+	finishNativeTCP(context.Context, *desktopWindowsSocket, error) error
+}
+
+// The connector seam holds the real entered operation in cancellation tests.
+// Production always supplies the shipping Winsock connect implementation above.
+func desktopSocketImportNativeTCPWithConnect(ctx context.Context, network string, remote netip.AddrPort, source DesktopSocketNative, control func(context.Context, string, string, syscall.RawConn) error, connect func(context.Context, *desktopWindowsSocket) error) (net.Conn, error) {
 	raw, actual, err := desktopSocketNativeRaw(source, "tcp", remote.Addr())
 	if err != nil {
 		return nil, err
 	}
-	if ctx == nil || ctx.Err() != nil || control == nil || (network != "tcp" && network != actual) {
+	if ctx == nil || ctx.Err() != nil || control == nil || connect == nil || (network != "tcp" && network != actual) {
 		return nil, net.ErrClosed
 	}
 	// The exact source handle is used for Bind and acknowledged Grant. Its
@@ -195,8 +209,25 @@ func desktopSocketImportNativeTCP(ctx context.Context, network string, remote ne
 	if err := desktopSocketNonblocking(c.handle); err != nil {
 		return c, err
 	}
-	if err := desktopSocketConnectOwnedTCP(ctx, c); err != nil {
+	// An entered import keeps the I/O descriptor alive through registration,
+	// connection and final proof. Close joins it without holding the short raw
+	// control mutex, so the policy can renew and inspect a pending connection.
+	if err := c.begin(); err != nil {
 		return c, err
+	}
+	defer c.io.Done()
+	observer, observed := source.(desktopWindowsNativeTCPSource)
+	if observed {
+		if err := observer.beginNativeTCP(ctx, c); err != nil {
+			return c, err
+		}
+	}
+	connectErr := connect(ctx, c)
+	if observed {
+		connectErr = errors.Join(connectErr, observer.finishNativeTCP(ctx, c, connectErr))
+	}
+	if connectErr != nil {
+		return c, connectErr
 	}
 	return c, nil
 }
