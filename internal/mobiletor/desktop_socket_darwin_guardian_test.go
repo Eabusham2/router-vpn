@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -359,6 +360,18 @@ func init() {
 		os.Exit(0)
 	}
 	if len(os.Args) == 3 && os.Args[1] == "routervpn-owned-socket-helper" {
+		if os.Args[2] == "uid-observer" {
+			path := filepath.Join(filepath.Dir(executable), "uid-observer-fixture")
+			if _, err := os.Lstat(path); err == nil {
+				if err := desktopDarwinTestUIDObserver(path); err != nil {
+					fmt.Fprintln(os.Stderr, err)
+					os.Exit(91)
+				}
+				os.Exit(0)
+			} else if !errors.Is(err, os.ErrNotExist) {
+				os.Exit(92)
+			}
+		}
 		if err := RunDesktopDarwinSocketHelper(os.Args[2]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(81)
@@ -532,6 +545,12 @@ func TestDesktopDarwinGuardianKernelIdentityRetirement(t *testing.T) {
 			if err := desktopDarwinVerifyAccount(account, uid); err != nil || !desktopDarwinUIDAccount(uid, account) {
 				t.Fatal("captured UID lost its actual native account", err)
 			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			absent, err := desktopDarwinFreshUIDReadback(ctx, desktopSocketFixtureCapture(), uid)
+			cancel()
+			if err != nil || absent {
+				t.Fatal("fresh observer accepted an actual occupied UID or failed its native lookup", err)
+			}
 			if state == "changed-recovery-owner" {
 				var record desktopDarwinIdentityRecord
 				if err := json.Unmarshal(raw, &record); err != nil {
@@ -579,11 +598,273 @@ func TestDesktopDarwinGuardianKernelIdentityRetirement(t *testing.T) {
 			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 				t.Fatal("proved identity retirement retained its recovery owner", err)
 			}
-			if absent, err := desktopDarwinUIDAbsentReadback(uid); err != nil || !absent {
+			ctx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
+			absent, err = desktopDarwinFreshUIDReadback(ctx, desktopSocketFixtureCapture(), uid)
+			cancel()
+			if err != nil || !absent {
 				t.Fatal("identity retirement completed before actual native absence", err)
 			}
 			if err := desktopDarwinNoUIDProcesses(uid); err != nil {
 				t.Fatal("identity retirement retained an actual UID process", err)
+			}
+		})
+	}
+}
+
+// Only this tagged, uniquely installed native test executable reads this
+// root-owned fixture file. The shipping helper has no environment, pathname,
+// command-line, or observer override. Every negative still crosses the actual
+// retained executable, inherited stream, kernel peer check and child join.
+func desktopDarwinTestUIDObserver(path string) error {
+	if os.Getuid() != 0 || os.Geteuid() != 0 || desktopDarwinProtectedPath(path, true) != nil {
+		return errors.New("UID observer test fixture has no private root owner")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || len(raw) > 64 {
+		return errors.New("UID observer test fixture lost its bounded mode")
+	}
+	mode := string(raw)
+	switch mode {
+	case "wrong-uid", "wrong-capture", "wrong-sequence", "unknown-status", "malformed", "descriptor", "failed-join", "cancelled", "unjoined":
+	default:
+		return errors.New("UID observer test fixture has another mode")
+	}
+	channel, err := desktopDarwinHelperChannel()
+	if err != nil {
+		return err
+	}
+	defer channel.Close()
+	channel.SetDeadline(time.Now().Add(3 * time.Second))
+	parent := uint32(os.Getppid())
+	var request desktopDarwinUIDRequest
+	file, err := desktopDarwinReceive(channel, &request, parent, 0)
+	if file != nil {
+		file.Close()
+		return errors.New("UID observer test fixture received a descriptor")
+	}
+	if err != nil || request.validate() != nil {
+		return errors.Join(err, errors.New("UID observer test fixture lost its real parent request"))
+	}
+	mark := func(stage string) error {
+		return os.WriteFile(path+".pid", []byte(strconv.Itoa(os.Getpid())+" "+stage), 0600)
+	}
+	if err := mark("received"); err != nil {
+		return err
+	}
+	if mode == "cancelled" {
+		var unused desktopDarwinUIDRequest
+		_, err := desktopDarwinReceive(channel, &unused, parent, 0)
+		return errors.Join(err, errors.New("cancelled observer must not issue a receipt"))
+	}
+	reply := desktopDarwinUIDReply{Sequence: request.Sequence, Capture: request.Capture, UID: request.UID, State: "absent"}
+	switch mode {
+	case "wrong-uid":
+		reply.UID++
+	case "wrong-capture":
+		reply.Capture.NetworkID = strings.Repeat("e", 32)
+	case "wrong-sequence":
+		reply.Sequence++
+	case "unknown-status":
+		reply.State = "unknown"
+	}
+	if mode == "malformed" {
+		err = desktopDarwinSend(channel, map[string]any{"Sequence": reply.Sequence, "Capture": reply.Capture, "UID": reply.UID, "State": reply.State, "Unrequested": true}, nil)
+	} else if mode == "descriptor" {
+		var unexpected *os.File
+		unexpected, err = os.Open(os.DevNull)
+		if err == nil {
+			err = desktopDarwinSend(channel, reply, unexpected)
+			unexpected.Close()
+		}
+	} else {
+		err = desktopDarwinSend(channel, reply, nil)
+	}
+	if err != nil {
+		return err
+	}
+	var ack desktopDarwinUIDRequest
+	file, err = desktopDarwinReceive(channel, &ack, parent, 0)
+	if file != nil {
+		file.Close()
+		return errors.New("UID observer test acknowledgment transferred a descriptor")
+	}
+	if err != nil || ack != request.acknowledgment() {
+		return errors.Join(err, errors.New("UID observer test acknowledgment changed its real parent request"))
+	}
+	if mode == "unjoined" {
+		if err := mark("unjoined"); err != nil {
+			return err
+		}
+		channel.SetDeadline(time.Time{})
+		var unused desktopDarwinUIDRequest
+		_, err := desktopDarwinReceive(channel, &unused, parent, 0)
+		return errors.Join(err, errors.New("unjoined observer has no successful exit"))
+	}
+	return errors.New("negative observer must not produce a successful child exit")
+}
+
+func TestDesktopDarwinGuardianKernelUIDObserver(t *testing.T) {
+	if os.Getuid() != 0 || os.Geteuid() != 0 || desktopDarwinTestFixture.Nonce == "" || !desktopDarwinKernelAvailable() {
+		t.Fatal("actual scoped Darwin observer fixture is required")
+	}
+	executable, err := desktopDarwinExecutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := desktopDarwinUIDRequest{Operation: "observe-uid", Sequence: 1, Capture: desktopSocketFixtureCapture(), UID: 0x40000001}
+	// Exercise the actual production child admission, including a valid
+	// native reply followed by an acknowledgment from a different capture.
+	for _, mode := range []string{"operation", "sequence", "capture", "uid", "descriptor", "unknown-field", "acknowledgment"} {
+		t.Run("request/"+mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			channel, child, err := desktopDarwinSocketPair()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer channel.Close()
+			defer child.Close()
+			command := exec.CommandContext(ctx, executable, "routervpn-owned-socket-helper", "uid-observer")
+			command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "LC_ALL=C", "GORACE=atexit_sleep_ms=0"}
+			command.ExtraFiles = []*os.File{child}
+			if err := command.Start(); err != nil {
+				t.Fatal(err)
+			}
+			child.Close()
+			joined := false
+			defer func() {
+				if !joined {
+					command.Process.Kill()
+					command.Wait()
+				}
+			}()
+			deadline, _ := ctx.Deadline()
+			channel.SetDeadline(deadline)
+			changed := request
+			switch mode {
+			case "operation":
+				changed.Operation = "prepare"
+			case "sequence":
+				changed.Sequence++
+			case "capture":
+				changed.Capture.SourceSHA256 = ""
+			case "uid":
+				changed.UID = 0
+			}
+			var sent *os.File
+			if mode == "descriptor" {
+				sent, err = os.Open(os.DevNull)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer sent.Close()
+			}
+			if mode == "unknown-field" {
+				err = desktopDarwinSend(channel, map[string]any{"Operation": request.Operation, "Sequence": request.Sequence, "Capture": request.Capture, "UID": request.UID, "Path": "/unrequested"}, nil)
+			} else {
+				err = desktopDarwinSend(channel, changed, sent)
+			}
+			if err != nil {
+				t.Fatal("native request negative could not reach its actual child", err)
+			}
+			var reply desktopDarwinUIDReply
+			file, readErr := desktopDarwinReceive(channel, &reply, uint32(command.Process.Pid), 0)
+			if file != nil {
+				file.Close()
+				t.Fatal("read-only UID helper transferred a descriptor")
+			}
+			if mode == "acknowledgment" {
+				if _, err := reply.absent(request); readErr != nil || err != nil {
+					t.Fatal("acknowledgment negative did not first obtain its real native lookup", readErr, err)
+				}
+				ack := request.acknowledgment()
+				ack.UID++
+				if err := desktopDarwinSend(channel, ack, nil); err != nil {
+					t.Fatal(err)
+				}
+			} else if readErr == nil {
+				t.Fatal("invalid observer request acquired a native receipt")
+			}
+			joinErr := command.Wait()
+			joined = true
+			if joinErr == nil || ctx.Err() != nil {
+				t.Fatal("invalid observer request was not explicitly rejected by the joined helper", joinErr, ctx.Err())
+			}
+		})
+	}
+	fixture := filepath.Join(filepath.Dir(executable), "uid-observer-fixture")
+	for _, mode := range []string{"wrong-uid", "wrong-capture", "wrong-sequence", "unknown-status", "malformed", "descriptor", "failed-join", "cancelled", "unjoined"} {
+		t.Run("reply/"+mode, func(t *testing.T) {
+			file, err := os.OpenFile(fixture, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer os.Remove(fixture)
+			defer os.Remove(fixture + ".pid")
+			if _, err := file.WriteString(mode); err != nil {
+				file.Close()
+				t.Fatal(err)
+			}
+			if err := file.Close(); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			type observation struct {
+				absent bool
+				err    error
+			}
+			done := make(chan observation, 1)
+			go func() {
+				absent, err := desktopDarwinFreshUIDReadback(ctx, request.Capture, request.UID)
+				done <- observation{absent, err}
+			}()
+			if mode == "cancelled" || mode == "unjoined" {
+				stage := "received"
+				if mode == "unjoined" {
+					stage = "unjoined"
+				}
+				tick := time.NewTicker(10 * time.Millisecond)
+				defer tick.Stop()
+				deadline := time.NewTimer(2 * time.Second)
+				defer deadline.Stop()
+			ready:
+				for {
+					select {
+					case result := <-done:
+						t.Fatal("UID observation completed without its joined helper", result.absent, result.err)
+					case <-deadline.C:
+						t.Fatal("UID observer did not reach its real captured cancellation boundary")
+					case <-tick.C:
+						raw, err := os.ReadFile(fixture + ".pid")
+						fields := strings.Fields(string(raw))
+						if err == nil && len(fields) == 2 && fields[1] == stage {
+							break ready
+						}
+					}
+				}
+				select {
+				case result := <-done:
+					t.Fatal("UID observation completed without its joined helper", result.absent, result.err)
+				default:
+				}
+				cancel()
+			}
+			result := <-done
+			if result.absent || result.err == nil {
+				t.Fatal("unowned, unknown, malformed or unjoined UID receipt released an identity", result.absent, result.err)
+			}
+			if (mode == "cancelled" || mode == "unjoined") && !errors.Is(result.err, context.Canceled) {
+				t.Fatal("cancelled native observer lost its actual operation identity", result.err)
+			}
+			raw, err := os.ReadFile(fixture + ".pid")
+			fields := strings.Fields(string(raw))
+			if err != nil || len(fields) != 2 {
+				t.Fatal("observer negative did not execute its actual retained child", err)
+			}
+			pid, err := strconv.Atoi(fields[0])
+			if err != nil || pid <= 1 || syscall.Kill(pid, 0) != syscall.ESRCH {
+				t.Fatal("completed UID observer retained an unjoined native process", err)
 			}
 		})
 	}

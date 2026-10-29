@@ -14,14 +14,14 @@ func init() {
 }
 
 func routerVPNOwnedSocketCommand() *cobra.Command {
-	return &cobra.Command{Use: "routervpn-owned-socket-helper guardian|creator", Hidden: true,
+	return &cobra.Command{Use: "routervpn-owned-socket-helper guardian|creator|uid-observer", Hidden: true,
 		Args: cobra.ExactArgs(1), SilenceUsage: true,
 		// Helper startup has no ordinary config, working-directory, resolver,
 		// registry or sudo-user initialization. Its inherited descriptor is the
 		// only input admitted by the separately checked kernel protocol.
 		PersistentPreRun: func(*cobra.Command, []string) {},
 		RunE: func(_ *cobra.Command, args []string) error {
-			if args[0] != "guardian" && args[0] != "creator" {
+			if args[0] != "guardian" && args[0] != "creator" && args[0] != "uid-observer" {
 				return errors.New("unknown native socket helper role")
 			}
 			// This command accepts no pathname, UID, destination, or rules.

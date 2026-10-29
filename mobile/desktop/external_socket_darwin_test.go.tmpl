@@ -15,7 +15,7 @@ import (
 )
 
 func TestRouterVPNDesktopTorSocketHelperRejectsCLIInput(t *testing.T) {
-	for _, args := range [][]string{nil, {"guardian", "extra"}, {"creator", "extra"}, {"unknown"}, {"--uid=1000"}, {"--path=/tmp/control"}} {
+	for _, args := range [][]string{nil, {"guardian", "extra"}, {"creator", "extra"}, {"uid-observer", "extra"}, {"uid-observer", "--uid=1000"}, {"unknown"}, {"--uid=1000"}, {"--path=/tmp/control"}} {
 		t.Run(strings.Join(args, "/"), func(t *testing.T) {
 			ordinaryStartup := false
 			root := &cobra.Command{Use: "native-fixture", SilenceErrors: true, SilenceUsage: true,
@@ -36,7 +36,7 @@ func TestRouterVPNDesktopTorSocketHelperRejectsCLIInput(t *testing.T) {
 
 func TestRouterVPNDesktopTorSocketHelperRequiresInheritedChannel(t *testing.T) {
 	if role := os.Getenv("ROUTERVPN_TEST_SOCKET_COMMAND_ROLE"); role != "" {
-		if role != "guardian" && role != "creator" {
+		if role != "guardian" && role != "creator" && role != "uid-observer" {
 			t.Fatal("invalid socket command test role")
 		}
 		// This is the actual registered command in the shipping native host.
@@ -57,7 +57,7 @@ func TestRouterVPNDesktopTorSocketHelperRequiresInheritedChannel(t *testing.T) {
 		}
 		return
 	}
-	for _, role := range []string{"guardian", "creator"} {
+	for _, role := range []string{"guardian", "creator", "uid-observer"} {
 		t.Run(role, func(t *testing.T) {
 			channel, err := os.Open(os.DevNull)
 			if err != nil {

@@ -50,6 +50,9 @@ func RunDesktopDarwinSocketHelper(role string) error {
 	if role == "creator" {
 		return desktopDarwinCreator(channel, parent)
 	}
+	if role == "uid-observer" {
+		return desktopDarwinUIDObserver(channel, parent)
+	}
 	if role != "guardian" || os.Geteuid() != 0 || !desktopDarwinKernelAvailable() {
 		return errors.New("Darwin physical guardian requires its privileged role")
 	}

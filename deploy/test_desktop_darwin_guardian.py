@@ -31,7 +31,7 @@ SPEC = importlib.util.spec_from_file_location('darwin_guardian_uid', ROOT/'deplo
 UID = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UID)
 
-CASES = ('PFCompiler', 'PFSystemDispatch', 'PFAnchorPaths', 'ProtectedPathAuthority', 'IdentityRetirement', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'SocketRetirementReusesCapacity',
+CASES = ('PFCompiler', 'PFSystemDispatch', 'PFAnchorPaths', 'ProtectedPathAuthority', 'IdentityRetirement', 'UIDObserver', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'SocketRetirementReusesCapacity',
          'RetainedTunnel', 'BothOwnersCrashCannotReuseTuple', 'ForeignBlockAndLaterPass',
          'RejectsForeignStatefulDirections', 'BlockedControlRetainsSourcePort',
          'FinishRequiresDescriptorRetirement', 'FloatingStateRetirement',
@@ -280,7 +280,8 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
         raise ValueError('The actual Darwin guardian gate requires a matching macOS host')
     source, package, before = checked_sources(source)
     if not {'desktop_socket_darwin_guardian_test.go', 'desktop_socket_darwin_kernel_cgo.go',
-            'desktop_socket_darwin_pf.go', 'desktop_socket_darwin_state.go'}.issubset(before):
+            'desktop_socket_darwin_pf.go', 'desktop_socket_darwin_state.go',
+            'desktop_socket_darwin_readback.go'}.issubset(before):
         raise ValueError('The exact native PF guardian source/test closure is incomplete')
     captured = dict(os.environ, GOWORK='off', CGO_ENABLED='1')
     if captured.get('GOOS', 'darwin') != 'darwin':
@@ -307,7 +308,7 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
         if any('--- PASS: TestDesktopDarwinGuardianKernel'+name+' (' not in output for name in wanted) or '--- SKIP:' in output:
             raise ValueError('Darwin guardian gate did not execute every required native boundary')
         if case is None:
-            for name in ('ChannelFragmentsAndDescriptorClosure', 'CurrentFreshnessAndStateScope', 'UIDAbsenceWait'):
+            for name in ('ChannelFragmentsAndDescriptorClosure', 'CurrentFreshnessAndStateScope', 'UIDAbsenceWait', 'UIDObserverProtocol'):
                 if '--- PASS: TestDesktopDarwinGuardian'+name+' (' not in output:
                     raise ValueError('Darwin guardian omitted its inherited-channel or freshness boundary')
             for network in ('tcp4','udp4','tcp6','udp6'):
@@ -329,6 +330,12 @@ def execute_mutations(source: Path, go='go'):
     compiler, captured = UID.compiler_toolchain(source, go, captured)
     sudo = UID.privilege_tool()
     mutations = (
+        ('native occupied UID observation', 'IdentityRetirement', 'fresh observer accepted an actual occupied UID',
+         'desktop_socket_darwin_readback.go', (
+             ('state := "occupied"', 'state := "absent"'),)),
+        ('native UID observer child join', 'UIDObserver', 'unowned, unknown, malformed or unjoined UID receipt released an identity',
+         'desktop_socket_darwin_readback.go', (
+             ('joinErr := command.Wait()', 'joinErr := error(nil)'),)),
         ('kernel creator UID', 'WrongUIDAndPrivatePeer', 'the actual PF rule admitted the same tuple from another UID',
          'desktop_socket_darwin_pf.go', (
              (' port %d user %d%s tag ', ' port %d%s tag '),

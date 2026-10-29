@@ -300,7 +300,9 @@ func desktopDarwinRetireAccount(account string, uid uint32) error {
 	if err := desktopDarwinLocalIdentityAbsent(ctx, account, uid); err != nil {
 		return err
 	}
-	if err := desktopDarwinWaitForUIDAbsence(ctx, uid, desktopDarwinUIDAbsentReadback); err != nil {
+	if err := desktopDarwinWaitForUIDAbsence(ctx, uid, func(actual uint32) (bool, error) {
+		return desktopDarwinFreshUIDReadback(ctx, record.Capture, actual)
+	}); err != nil {
 		return err
 	}
 	if err := desktopDarwinNoUIDProcesses(uid); err != nil {

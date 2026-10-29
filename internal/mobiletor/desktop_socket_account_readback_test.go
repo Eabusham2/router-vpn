@@ -94,6 +94,71 @@ func TestDesktopDarwinGuardianUIDAbsenceWait(t *testing.T) {
 	}
 }
 
+func TestDesktopDarwinGuardianUIDObserverProtocol(t *testing.T) {
+	request := desktopDarwinUIDRequest{Operation: "observe-uid", Sequence: 1, Capture: desktopSocketFixtureCapture(), UID: 0x40000001}
+	if err := request.validate(); err != nil {
+		t.Fatal("captured read-only observer request was rejected", err)
+	}
+	ack := request.acknowledgment()
+	if ack.Operation != "observed-uid-ack" || ack.Sequence != 2 || ack.Capture != request.Capture || ack.UID != request.UID || ack.validate() == nil {
+		t.Fatal("observer acknowledgment changed authority or became a reusable lookup request")
+	}
+	for _, change := range []struct {
+		name string
+		edit func(*desktopDarwinUIDRequest)
+	}{
+		{"operation", func(r *desktopDarwinUIDRequest) { r.Operation = "prepare" }},
+		{"empty-operation", func(r *desktopDarwinUIDRequest) { r.Operation = "" }},
+		{"sequence", func(r *desktopDarwinUIDRequest) { r.Sequence++ }},
+		{"zero-sequence", func(r *desktopDarwinUIDRequest) { r.Sequence = 0 }},
+		{"capture", func(r *desktopDarwinUIDRequest) { r.Capture.SessionID = "" }},
+		{"root-uid", func(r *desktopDarwinUIDRequest) { r.UID = 0 }},
+		{"below-managed-uid", func(r *desktopDarwinUIDRequest) { r.UID = 0x3fffffff }},
+		{"above-managed-uid", func(r *desktopDarwinUIDRequest) { r.UID = 0x80000000 }},
+	} {
+		t.Run("request/"+change.name, func(t *testing.T) {
+			changed := request
+			change.edit(&changed)
+			if changed.validate() == nil {
+				t.Fatal("invalid observer request acquired a native lookup")
+			}
+			if absent, err := (desktopDarwinUIDReply{Sequence: changed.Sequence, Capture: changed.Capture, UID: changed.UID, State: "absent"}).absent(changed); err == nil || absent {
+				t.Fatal("invalid observer request acquired an absent receipt")
+			}
+		})
+	}
+	reply := desktopDarwinUIDReply{Sequence: request.Sequence, Capture: request.Capture, UID: request.UID, State: "absent"}
+	for _, state := range []string{"absent", "occupied"} {
+		observed := reply
+		observed.State = state
+		if absent, err := observed.absent(request); err != nil || absent != (state == "absent") {
+			t.Fatal("explicit native observation lost its state", state, absent, err)
+		}
+	}
+	for _, change := range []struct {
+		name string
+		edit func(*desktopDarwinUIDReply)
+	}{
+		{"sequence", func(r *desktopDarwinUIDReply) { r.Sequence++ }},
+		{"session", func(r *desktopDarwinUIDReply) { r.Capture.SessionID = strings.Repeat("9", 32) }},
+		{"source", func(r *desktopDarwinUIDReply) { r.Capture.SourceSHA256 = strings.Repeat("9", 64) }},
+		{"network", func(r *desktopDarwinUIDReply) { r.Capture.NetworkID = strings.Repeat("9", 32) }},
+		{"uid", func(r *desktopDarwinUIDReply) { r.UID++ }},
+		{"unknown", func(r *desktopDarwinUIDReply) { r.State = "unknown" }},
+		{"empty", func(r *desktopDarwinUIDReply) { r.State = "" }},
+		{"error", func(r *desktopDarwinUIDReply) { r.State = "lookup-error" }},
+		{"masked", func(r *desktopDarwinUIDReply) { r.State = " absent" }},
+	} {
+		t.Run("reply/"+change.name, func(t *testing.T) {
+			changed := reply
+			change.edit(&changed)
+			if absent, err := changed.absent(request); err == nil || absent {
+				t.Fatal("unknown or mismatched native receipt released an identity")
+			}
+		})
+	}
+}
+
 func TestDesktopDarwinUIDSearchRequiresOneExactLocalAndNativeIdentity(t *testing.T) {
 	account := "_rvpnt_" + strings.Repeat("1", 20)
 	const uid = 0x40000001
