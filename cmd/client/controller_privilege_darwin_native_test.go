@@ -24,6 +24,53 @@ import (
 
 const macOSControllerFixtureMarker = "ROUTERVPN_MACOS_CONTROLLER_PRIVILEGE_FIXTURE"
 
+func TestMacOSOwnedControllerNativeInterpreterSelection(t *testing.T) {
+	if os.Geteuid() != 0 || os.Getenv(macOSControllerFixtureMarker) != "1" {
+		t.Fatal("native interpreter verification requires its explicit privileged fixture")
+	}
+	candidate := os.Getenv("ROUTERVPN_MACOS_FIXTURE_PYTHON")
+	python, root, err := macOSPythonTrustRoot(candidate)
+	if err != nil {
+		t.Fatal("the shipping installer candidate failed its complete native ownership proof", candidate, err)
+	}
+	if python == "/usr/bin/python3" || !strings.HasPrefix(python, root+string(filepath.Separator)) {
+		t.Fatal("native discovery retained a developer-tool launcher instead of its captured interpreter", python, root)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, python, "-EsS", "-c", `import json, os, sys
+print(json.dumps({"executable": os.path.realpath(sys.executable), "library": os.path.realpath(json.__file__), "no_site": sys.flags.no_site, "no_user_site": sys.flags.no_user_site, "ignore_environment": sys.flags.ignore_environment}))`)
+	// A -c invocation adds its CWD to sys.path. Use the root-owned system
+	// directory, never the unprivileged checkout used to compile this test.
+	command.Dir = "/"
+	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "HOME=/var/root", "LC_ALL=C"}
+	output, err := command.Output()
+	if err != nil || len(output) > 8192 {
+		t.Fatal("captured trusted Python did not execute its bounded identity proof", err)
+	}
+	var result struct {
+		Executable        string `json:"executable"`
+		Library           string `json:"library"`
+		NoSite            int    `json:"no_site"`
+		NoUserSite        int    `json:"no_user_site"`
+		IgnoreEnvironment int    `json:"ignore_environment"`
+	}
+	if err := json.Unmarshal(output, &result); err != nil {
+		t.Fatal("trusted native interpreter returned malformed identity", err)
+	}
+	captured, err := os.Stat(python)
+	executed, actualErr := os.Stat(result.Executable)
+	if err != nil || actualErr != nil || !os.SameFile(captured, executed) || !strings.HasPrefix(result.Library, root+string(filepath.Separator)) || result.NoSite != 1 || result.NoUserSite != 1 || result.IgnoreEnvironment != 1 {
+		t.Fatal("native interpreter or library escaped its captured ownership or enabled ambient initialization", result, err, actualErr)
+	}
+	for _, rejected := range []string{"python3", "/usr/bin/python3", "/usr/local/bin/python3", "/opt/homebrew/bin/python3"} {
+		if _, _, err := macOSPythonTrustRoot(rejected); err == nil {
+			t.Fatal("an ambient or developer-tool launcher received privileged interpreter authority", rejected)
+		}
+	}
+	t.Logf("actual native interpreter=%s library-root=%s no_site=1; ambient interpreter paths rejected", python, root)
+}
+
 func init() {
 	// Only this explicit test binary contains these entry points. They are
 	// absent from the shipping controller and never weaken a production flag.
@@ -292,7 +339,7 @@ func macOSControllerNativeInstall(t *testing.T) *macOSControllerNativeFixture {
 	if strings.ContainsAny(python, "'\n\r") {
 		t.Fatal("invalid captured interpreter")
 	}
-	wrapper := "#!/bin/sh\nexec '" + python + "' -Es \"$@\"\n"
+	wrapper := "#!/bin/sh\nexec '" + python + "' -EsS \"$@\"\n"
 	if err = os.WriteFile(filepath.Join(macOSOwnedControllerRoot, "bin", "python3"), []byte(wrapper), 0755); err != nil {
 		t.Fatal(err)
 	}

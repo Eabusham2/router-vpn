@@ -67,7 +67,7 @@ def _spawn_watcher() -> int:
     if _dry_run():
         return 0
     proc = subprocess.Popen(
-        [sys.executable, str(Path(__file__).resolve()), "watch"],
+        [sys.executable, "-EsS", str(Path(__file__).resolve()), "watch"],
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,

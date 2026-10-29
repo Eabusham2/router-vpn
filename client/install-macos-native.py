@@ -326,7 +326,7 @@ def stage_application(source, root, stage, installing_uid, python):
     wrapper = tools/'python3'
     if wrapper.exists():
         FILES.ordinary(wrapper, trusted=True)
-    wrapper.write_text('#!/bin/sh\nexec ' + shlex.quote(str(python)) + ' -Es "$@"\n')
+    wrapper.write_text('#!/bin/sh\nexec ' + shlex.quote(str(python)) + ' -EsS "$@"\n')
     os.chown(wrapper, 0, 0); wrapper.chmod(0o700)
     for name in REQUIRED & {'router-vpn-client', 'router-vpn-dns', 'router-vpn-start-layer-relay', 'router-vpn-update'}:
         if not os.access(stage/name, os.X_OK):
@@ -364,7 +364,7 @@ def stage_application(source, root, stage, installing_uid, python):
 def verify_runtimes(stage, python):
     for flag in ('--verify-native-runtime', '--verify-amnezia-runtime'):
         run([stage/'router-vpn-client', flag, stage])
-    run([python, '-Es', stage/'client/verify-bundled-xray.py', stage/'runtime/xray'])
+    run([python, '-EsS', stage/'client/verify-bundled-xray.py', stage/'runtime/xray'])
     for path in ('RouterVPN.app', 'router-vpn-client', 'router-vpn-dns', 'router-vpn-start-layer-relay', 'router-vpn-update'):
         run(['/usr/bin/codesign', '--verify', '--deep', '--strict', stage/path])
 

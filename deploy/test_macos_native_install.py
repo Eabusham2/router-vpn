@@ -18,6 +18,7 @@ import sys
 import tempfile
 import types
 import unittest
+import venv
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -116,13 +117,44 @@ class MacInstallTransactions(unittest.TestCase):
         self.assertEqual({'schema': 1, 'caller_uid': self.uid}, record)
         self.assertEqual(0o600, (self.root/'controller-owner.json').stat().st_mode & 0o777)
         self.assertEqual(0o755, self.root.stat().st_mode & 0o777)
-        self.assertIn(str(self.python)+' -Es "$@"', (self.root/'bin/python3').read_text())
+        self.assertIn(str(self.python)+' -EsS "$@"', (self.root/'bin/python3').read_text())
         definition = plistlib.loads((self.system/M.PLIST.lstrip('/')).read_bytes())
         self.assertEqual(M.launch_definition_arguments(), definition['ProgramArguments'])
         self.assertNotIn('EnvironmentVariables', definition)
         self.assertTrue(self.boundary.loaded)
         self.assertEqual(1, len(self.verifications))
         self.assertFalse(any('kickstart' in call or 'enable' in call for call in self.boundary.calls))
+
+    def test_actual_runtime_wrapper_excludes_global_site_and_untrusted_current_directory(self):
+        runtime = self.base/'private-python'
+        venv.EnvBuilder(with_pip=False).create(runtime)
+        self.python = runtime/'bin/python3'
+        libraries = list((runtime/'lib').glob('python*/site-packages'))
+        self.assertEqual(1, len(libraries))
+        site_marker, cwd_marker = self.base/'site-ran', self.base/'cwd-ran'
+        (libraries[0]/'routervpn-negative.pth').write_text(
+            'import pathlib; pathlib.Path(' + repr(str(site_marker)) + ').write_text("global site ran")\n')
+        untrusted = self.base/'untrusted-cwd'; untrusted.mkdir()
+        (untrusted/'json.py').write_text('open(' + repr(str(cwd_marker)) + ',"w").write("cwd imported")\nraise RuntimeError("untrusted CWD module")\n')
+        self.install()
+        script = self.root/'client/interpreter-proof.py'
+        script.write_text('import json, sys\nprint(json.dumps([sys.flags.ignore_environment, sys.flags.no_user_site, sys.flags.no_site]))\n')
+        wrapper = self.root/'bin/python3'
+        environment = dict(os.environ, PYTHONPATH=str(untrusted), PYTHONHOME=str(untrusted))
+        result = subprocess.run([wrapper, script], cwd=untrusted, env=environment, capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), [1, 1, 1])
+        self.assertFalse(site_marker.exists(), 'global site initialization ran before the protected helper')
+        self.assertFalse(cwd_marker.exists(), 'an untrusted CWD/PYTHONPATH module replaced the captured helper dependency')
+        # The negative control executes the same generated wrapper with only
+        # -S removed, proving this fixture really exposes global site code.
+        broken = self.root/'bin/python-with-site'
+        broken.write_text(wrapper.read_text().replace(' -EsS ', ' -Es ')); broken.chmod(0o700)
+        result = subprocess.run([broken, script], cwd=untrusted, env=environment, capture_output=True, text=True, timeout=15)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(result.stdout), [1, 1, 0])
+        self.assertTrue(site_marker.exists(), 'the global-site negative control did not reach its actual startup hook')
+        self.assertFalse(cwd_marker.exists())
 
     def test_upgrade_preserves_private_owner_settings_and_open_file_isolation(self):
         self.install()

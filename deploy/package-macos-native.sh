@@ -8,7 +8,7 @@ MACOS_SIGN_IDENTITY=${ROUTER_VPN_MACOS_SIGN_IDENTITY:--}
 rm -rf "$OUT"
 mkdir -p "$WORK"
 
-python3 "$ROOT/deploy/test_macos_controller_privilege.py" --go "$(command -v go)" --python /usr/bin/python3
+python3 "$ROOT/deploy/test_macos_controller_privilege.py" --go "$(command -v go)"
 python3 "$ROOT/deploy/test_macos_installer_trust.py"
 python3 "$ROOT/deploy/test_macos_native_install.py"
 

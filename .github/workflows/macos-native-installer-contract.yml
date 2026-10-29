@@ -82,7 +82,7 @@ jobs:
       - name: Prove installed supervisor, native peer identity and joined AppKit shutdown
         run: |
           python3 deploy/test_desktop_darwin_guardian_runner.py
-          python3 deploy/test_macos_controller_privilege.py --go "$(command -v go)" --python /usr/bin/python3
+          python3 deploy/test_macos_controller_privilege.py --go "$(command -v go)"
       - name: Prove privileged interpreter ownership and installation rollback
         run: |
           python3 deploy/test_macos_installer_trust.py

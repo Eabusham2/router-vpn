@@ -14,6 +14,7 @@ import hashlib
 import importlib.util
 import os
 import platform
+import pwd
 import subprocess
 import sys
 import tempfile
@@ -23,7 +24,7 @@ MAC = ROOT / 'client/macos'
 SPEC = importlib.util.spec_from_file_location('macos_controller_compiler', ROOT / 'deploy/test_desktop_socket_uid.py')
 UID = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UID)
-CASES = ('LifetimeAndInheritedLocks', 'RejectsForeignUIDAndInvalidFrames',
+CASES = ('InterpreterSelection', 'LifetimeAndInheritedLocks', 'RejectsForeignUIDAndInvalidFrames',
          'RejectsUnsafeInstalledAuthority', 'SupervisorRestartDoesNotAdoptLiveChild', 'AppKitClient')
 
 
@@ -42,11 +43,28 @@ def reported_run(command, **kwargs):
 
 
 def source_identity():
-    files = [ROOT / 'go.mod', ROOT / 'go.sum', *(ROOT / 'cmd/client').glob('*'),
+    files = [ROOT / 'go.mod', ROOT / 'go.sum', ROOT / 'client/install-macos-native.sh', *(ROOT / 'cmd/client').glob('*'),
              *(ROOT / 'internal').rglob('*.go'), *MAC.glob('*.swift'),
              *(ROOT / 'modes' / name for name in ['kill-switch-platform.py', 'kill-switch.py', 'darwin_kill_switch.py', 'profile_id.py'])]
     return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted(set(files)) if path.is_file() and not path.is_symlink()}
+
+
+def discover_python(uid):
+    """Use the ordinary installer's discovery without elevating a candidate."""
+    if type(uid) is not int or uid <= 0 or os.geteuid() not in (0, uid):
+        raise ValueError('Native interpreter discovery requires its captured ordinary user')
+    account = pwd.getpwuid(uid)
+    identity = dict(user=uid, group=account.pw_gid, extra_groups=[]) if os.geteuid() == 0 else {}
+    result = subprocess.run(['/bin/bash', str(ROOT / 'client/install-macos-native.sh'), '--discover-python'],
+                            cwd=ROOT, env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin',
+                                           'HOME': account.pw_dir, 'LC_ALL': 'C'},
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                            timeout=20, check=False, **identity)
+    candidate = result.stdout.rstrip('\n')
+    if result.returncode or not candidate or len(candidate) > 4096 or '\n' in candidate or '\r' in candidate or '\0' in candidate or not Path(candidate).is_absolute():
+        raise RuntimeError('The shipping installer could not select its native Python runtime: ' + result.stderr[-4096:])
+    return candidate
 
 
 def block(source, marker):
@@ -176,13 +194,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--go', default=os.environ.get('GO', 'go'))
     parser.add_argument('--swift', default=os.environ.get('SWIFTC', 'swiftc'))
-    parser.add_argument('--python', default='/usr/bin/python3')
+    parser.add_argument('--python', help='Explicit candidate; otherwise use the ordinary native installer discovery')
     arguments = parser.parse_args()
     if platform.system() != 'Darwin':
         raise RuntimeError('The native macOS ownership gate must execute on a matching real macOS host')
     uid = int(os.environ.get('SUDO_UID', '0')) if os.getuid() == 0 else os.getuid()
     if uid <= 0: raise RuntimeError('The native gate needs its captured ordinary build-user UID')
     before = source_identity()
+    python = arguments.python or discover_python(uid)
     compiler, environment = UID.compiler_toolchain(ROOT, arguments.go, dict(os.environ))
     sudo = UID.privilege_tool()
     with tempfile.TemporaryDirectory(prefix='routervpn-macos-controller-') as temporary:
@@ -204,7 +223,7 @@ def main():
         if source_identity() != before: raise RuntimeError('Native ownership source changed during compilation')
         command = ['/usr/bin/env', 'ROUTERVPN_MACOS_CONTROLLER_PRIVILEGE_FIXTURE=1',
                    'ROUTERVPN_MACOS_FIXTURE_UID=' + str(uid), 'ROUTERVPN_MACOS_FIXTURE_SOURCE=' + str(ROOT),
-                   'ROUTERVPN_MACOS_FIXTURE_PYTHON=' + str(Path(arguments.python).absolute()),
+                   'ROUTERVPN_MACOS_FIXTURE_PYTHON=' + str(Path(python).absolute()),
                    'ROUTERVPN_MACOS_FIXTURE_APPKIT=' + str(appkit), 'GORACE=atexit_sleep_ms=0',
                    str(binary), '-test.run=^TestMacOSOwnedControllerNative', '-test.v', '-test.timeout=180s']
         if sudo: command = [sudo, '-n', '--', *command]
