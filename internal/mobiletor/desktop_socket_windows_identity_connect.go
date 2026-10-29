@@ -112,9 +112,20 @@ func (n *desktopWindowsIdentityNative) beginNativeTCP(ctx context.Context, io *d
 		if err != nil || endpoint != before.EndpointID {
 			return errors.Join(err, errors.New("Windows TCP import substituted the pre-connect kernel endpoint"))
 		}
-		connected, err := desktopWindowsIdentityProviderTuple(raw, before.Local, before.Remote, false)
-		if err != nil || connected {
-			return errors.Join(err, errors.New("Windows TCP import was bound or connected under another owner"))
+		// The returned descriptor actually performed Bind. Confirm its exact
+		// original/returned kernel owner again around the I/O endpoint read.
+		// Do not ask a newly duplicated descriptor's provider cache to stand in
+		// for that proof before Connect. Its own completed tuple is mandatory
+		// in the connector and in finishNativeTCP before any connection escapes.
+		confirmed, err := p.inspectSocketLocked(n.creation)
+		if err != nil || confirmed.EndpointID != before.EndpointID || confirmed.TokenModifiedID != before.TokenModifiedID ||
+			confirmed.Local != before.Local || confirmed.Remote != before.Remote || confirmed.PeerConnected ||
+			confirmed.Family != before.Family || confirmed.Protocol != before.Protocol || !bytes.Equal(confirmed.AppID, before.AppID) || io.boundLocal != before.Local {
+			return errors.Join(err, errors.New("Windows TCP import lost its independently captured bound tuple and owner"))
+		}
+		endpoint, err = desktopWindowsALEEndpoint(raw)
+		if err != nil || endpoint != confirmed.EndpointID {
+			return errors.Join(err, errors.New("Windows TCP import changed its confirmed I/O kernel endpoint"))
 		}
 		if ctx.Err() != nil || !p.validCreation(n.creation) {
 			return net.ErrClosed
@@ -222,8 +233,10 @@ func desktopWindowsIdentityProviderLocal(raw syscall.RawConn, local netip.AddrPo
 }
 
 func desktopWindowsIdentityProviderTuple(raw syscall.RawConn, local, remote netip.AddrPort, pending bool) (bool, error) {
-	if err := desktopWindowsIdentityProviderLocal(raw, local); err != nil {
-		return false, fmt.Errorf("Winsock local tuple: %w", err)
+	if !pending {
+		if err := desktopWindowsIdentityProviderLocal(raw, local); err != nil {
+			return false, fmt.Errorf("Winsock local tuple: %w", err)
+		}
 	}
 	var connected bool
 	var socketErr error
@@ -250,6 +263,14 @@ func desktopWindowsIdentityProviderTuple(raw syscall.RawConn, local, remote neti
 		}
 		connected = true
 	})
+	if err == nil && socketErr == nil && connected && pending {
+		// Pending imports already proved the returned descriptor's real bind
+		// and the I/O descriptor's same ALE owner. A connected provider must now
+		// expose that exact local tuple too; no read failure is suppressed.
+		if localErr := desktopWindowsIdentityProviderLocal(raw, local); localErr != nil {
+			return false, fmt.Errorf("Winsock completed local tuple: %w", localErr)
+		}
+	}
 	return connected, errors.Join(err, socketErr)
 }
 

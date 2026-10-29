@@ -47,6 +47,7 @@ type desktopSocketPollFD struct {
 // The separate duplicate still keeps the port until the policy absent readback.
 type desktopWindowsSocket struct {
 	handle     syscall.Handle
+	boundLocal netip.AddrPort // Captured before import; never overwritten by connected readback.
 	local      netip.AddrPort
 	remote     netip.AddrPort
 	mu         sync.Mutex
@@ -160,24 +161,39 @@ func desktopSocketDialTCP(ctx context.Context, network string, remote netip.Addr
 // been acknowledged. Both ordinary and token-created sockets connect through
 // this same Winsock path without creating or rebinding another endpoint.
 func desktopSocketConnectOwnedTCP(ctx context.Context, c *desktopWindowsSocket) error {
+	return desktopSocketConnectOwnedTCPReadback(ctx, c, desktopSocketLocal)
+}
+
+// The private readback seam can inject a changed actual local observation in
+// native tests. Production always supplies desktopSocketLocal. Expected local
+// ownership remains a separate captured value, never the output being checked.
+func desktopSocketConnectOwnedTCPReadback(ctx context.Context, c *desktopWindowsSocket, readLocal func(syscall.Handle) (netip.AddrPort, error)) error {
+	if ctx == nil || c == nil || readLocal == nil {
+		return net.ErrClosed
+	}
 	remote := c.remote
-	local, err := desktopSocketLocal(c.handle)
-	if err != nil {
-		err = fmt.Errorf("Windows TCP imported local tuple: %w", err)
+	expectedLocal := c.boundLocal
+	if !expectedLocal.IsValid() {
+		// An ordinary socket has no imported capture; this descriptor itself
+		// performed Bind and must prove its local tuple before the handshake.
+		var err error
+		expectedLocal, err = desktopSocketLocal(c.handle)
+		if err != nil {
+			return fmt.Errorf("Windows TCP bound local tuple: %w", err)
+		}
 	}
-	if err != nil || ctx.Err() != nil {
-		return errors.Join(err, ctx.Err())
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
-	c.local = local
 	var target syscall.Sockaddr = &syscall.SockaddrInet6{Addr: remote.Addr().As16(), Port: int(remote.Port())}
 	if remote.Addr().Is4() {
 		target = &syscall.SockaddrInet4{Addr: remote.Addr().As4(), Port: int(remote.Port())}
 	}
-	err = syscall.Connect(c.handle, target)
+	err := syscall.Connect(c.handle, target)
 	if err != nil && !errors.Is(err, desktopSocketWouldBlock) && !errors.Is(err, desktopSocketInProgress) && !errors.Is(err, desktopSocketAlready) {
 		return fmt.Errorf("Winsock Connect: %w", err)
 	}
-	return desktopSocketCompleteTCP(ctx, err != nil, remote, func(ctx context.Context) error {
+	err = desktopSocketCompleteTCP(ctx, err != nil, remote, func(ctx context.Context) error {
 		return c.wait(ctx, true)
 	}, func() error {
 		const socketError = 0x1007 // SO_ERROR, after actual completion only.
@@ -205,6 +221,21 @@ func desktopSocketConnectOwnedTCP(ctx context.Context, c *desktopWindowsSocket) 
 		}
 		return actual, nil
 	})
+	if err != nil {
+		return err
+	}
+	local, err := readLocal(c.handle)
+	if err != nil {
+		return fmt.Errorf("Windows TCP completed local tuple: %w", err)
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if local != expectedLocal {
+		return errors.New("Windows TCP connected local tuple differs from its captured bind")
+	}
+	c.local = local
+	return nil
 }
 
 func (c *desktopWindowsSocket) begin() error {

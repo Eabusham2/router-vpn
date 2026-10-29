@@ -198,12 +198,22 @@ func desktopSocketImportNativeTCPWithConnect(ctx context.Context, network string
 		return nil, fmt.Errorf("Windows TCP bind and permit: %w", err)
 	}
 	var keeper *desktopSocketKeeper
+	var boundLocal netip.AddrPort
 	var result error
-	err = raw.Control(func(handle uintptr) { keeper, result = desktopSocketDuplicate(syscall.Handle(handle)) })
+	err = raw.Control(func(handle uintptr) {
+		// Capture the actual bound descriptor before duplicating it for I/O.
+		// A fresh duplicate's provider cache need not yet expose that binding;
+		// its independent ALE identity is checked before Connect, and its own
+		// local tuple must match this value after actual completion.
+		boundLocal, result = desktopSocketLocal(syscall.Handle(handle))
+		if result == nil {
+			keeper, result = desktopSocketDuplicate(syscall.Handle(handle))
+		}
+	})
 	if keeper == nil {
 		return nil, errors.Join(err, result)
 	}
-	c := &desktopWindowsSocket{handle: keeper.handle, remote: remote}
+	c := &desktopWindowsSocket{handle: keeper.handle, boundLocal: boundLocal, remote: remote}
 	if err != nil || result != nil {
 		return c, errors.Join(err, result)
 	}

@@ -1030,11 +1030,16 @@ type desktopWindowsIdentityTCPFixture struct {
 
 func desktopWindowsIdentityTestTCPFixture(t *testing.T) *desktopWindowsIdentityTCPFixture {
 	t.Helper()
+	return desktopWindowsIdentityTestTCPFamilyFixture(t, "tcp4", "127.0.0.1")
+}
+
+func desktopWindowsIdentityTestTCPFamilyFixture(t *testing.T, network, address string) *desktopWindowsIdentityTCPFixture {
+	t.Helper()
 	p := desktopWindowsIdentityTestNew(t)
-	creation := desktopWindowsIdentityTestCreation(t, p, "tcp", "127.0.0.1")
+	creation := desktopWindowsIdentityTestCreation(t, p, "tcp", address)
 	f := &desktopWindowsIdentityTCPFixture{identity: p, creation: creation, created: desktopWindowsIdentityTestCreate(t, p, creation)}
 	var err error
-	f.listener, err = net.ListenTCP("tcp4", net.TCPAddrFromAddrPort(netip.AddrPortFrom(creation.Binding.LocalAddress, 0)))
+	f.listener, err = net.ListenTCP(network, net.TCPAddrFromAddrPort(netip.AddrPortFrom(creation.Binding.LocalAddress, 0)))
 	if err != nil {
 		t.Fatal("actual captured TCP peer", err)
 	}
@@ -1185,6 +1190,86 @@ func TestDesktopSocketWindowsIdentityRejectsRetargetedConnect(t *testing.T) {
 	}
 	if _, inspectErr := f.identity.InspectSocket(ctx, f.creation); inspectErr == nil {
 		t.Fatal("rejected replacement peer retained a current identity proof")
+	}
+}
+
+func TestDesktopSocketWindowsIdentityRejectsConnectedLocalReplacement(t *testing.T) {
+	for _, family := range []struct{ network, address string }{{"tcp4", "127.0.0.1"}, {"tcp6", "::1"}} {
+		t.Run(family.network, func(t *testing.T) {
+			for _, replacement := range []string{"address", "port", "family", "read-error"} {
+				t.Run(replacement, func(t *testing.T) {
+					f := desktopWindowsIdentityTestTCPFamilyFixture(t, family.network, family.address)
+					ctx, cancel := context.WithTimeout(f.identity.ctx, 5*time.Second)
+					defer cancel()
+					readFailure := errors.New("deliberate completed local readback failure")
+					var reached bool
+					var io *desktopWindowsSocket
+					connection, err := desktopSocketImportNativeTCPWithConnect(ctx, family.network, f.remote, f.created.Native, f.control, func(ctx context.Context, owned *desktopWindowsSocket) error {
+						io = owned
+						if owned.boundLocal != f.before.Local || owned.local.IsValid() {
+							return errors.New("native import did not preserve a separate pre-duplicate bound tuple")
+						}
+						return desktopSocketConnectOwnedTCPReadback(ctx, owned, func(handle syscall.Handle) (netip.AddrPort, error) {
+							// Reach the real completed I/O descriptor first. Only its final
+							// local observation is changed; the native Connect, token,
+							// endpoint, peer and separately captured expected bind are real.
+							actual, readErr := desktopSocketLocal(handle)
+							if readErr != nil || actual != f.before.Local || handle != owned.handle || owned.local.IsValid() {
+								return netip.AddrPort{}, errors.Join(readErr, errors.New("actual completed local tuple fixture did not reach its captured bind"))
+							}
+							peer, peerErr := syscall.Getpeername(handle)
+							if peerErr != nil {
+								return netip.AddrPort{}, peerErr
+							}
+							remote, peerErr := desktopWindowsIdentitySocketAddress(peer)
+							if peerErr != nil || remote != f.remote {
+								return netip.AddrPort{}, errors.Join(peerErr, errors.New("local tuple readback preceded actual peer completion"))
+							}
+							reached = true
+							switch replacement {
+							case "address":
+								address := netip.MustParseAddr("127.0.0.2")
+								if actual.Addr().Is6() {
+									address = netip.MustParseAddr("::2")
+								}
+								return netip.AddrPortFrom(address, actual.Port()), nil
+							case "port":
+								port := actual.Port() + 1
+								if port == 0 {
+									port = 1
+								}
+								return netip.AddrPortFrom(actual.Addr(), port), nil
+							case "family":
+								address := netip.MustParseAddr("::1")
+								if actual.Addr().Is6() {
+									address = netip.MustParseAddr("127.0.0.1")
+								}
+								return netip.AddrPortFrom(address, actual.Port()), nil
+							default:
+								return netip.AddrPort{}, readFailure
+							}
+						})
+					})
+					desktopWindowsIdentityTestKeepTCP(t, connection)
+					if !reached {
+						t.Fatal("connected import skipped actual post-connect local readback", err)
+					}
+					if replacement == "read-error" {
+						if !errors.Is(err, readFailure) {
+							t.Fatal("native completed local readback error was suppressed", err)
+						}
+					} else if err == nil || !strings.Contains(err.Error(), "connected local tuple differs from its captured bind") {
+						t.Fatal("changed connected local escaped its independently captured bind", err)
+					}
+					if io == nil || connection != io || io.local.IsValid() || io.boundLocal != f.before.Local {
+						t.Fatal("failed local proof published a tuple or lost its original captured bind")
+					}
+					if _, inspectErr := f.identity.InspectSocket(ctx, f.creation); inspectErr == nil {
+						t.Fatal("rejected connected local observation retained a current identity proof")
+					}
+				})
+			}
+		})
 	}
 }
 
