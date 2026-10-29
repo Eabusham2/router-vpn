@@ -45,6 +45,8 @@ PACKAGE_FILES = (
 WORKSPACE_SCOPES = (
     ('^TestDesktopRuntimeWorkspace', ''),
     ('^TestDesktopDNS', ''),
+    ('^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)', ''),
+    ('^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)', ''),
     ('^TestDesktopTorMTU', ''),
     ('^TestDesktopTor', '^TestDesktopTorMTU'),
     ('^TestSpeedLab', ''),
@@ -163,7 +165,10 @@ def check_wfp_gate(job: str, packaged: bool) -> None:
             "& $shell -NoProfile -ExecutionPolicy Bypass -File $test -SourceRoot $roots[0].FullName",
         ]
     else:
-        required.append("& $shell -NoProfile -ExecutionPolicy Bypass -File client/test-windows-wfp.ps1 -SourceRoot $env:GITHUB_WORKSPACE")
+        required += [
+            "& $shell -NoProfile -ExecutionPolicy Bypass -File client/test-windows-wfp-endpoints.ps1 -SourceRoot $env:GITHUB_WORKSPACE",
+            "& $shell -NoProfile -ExecutionPolicy Bypass -File client/test-windows-wfp.ps1 -SourceRoot $env:GITHUB_WORKSPACE",
+        ]
     if any(value not in gate for value in required):
         raise AssertionError("WFP kernel gate lost a real shell or exact package boundary")
     if "-compileonly" in gate.lower() or re.search(r"(?m)^        (?:if|continue-on-error):", gate):
@@ -310,6 +315,8 @@ class WindowsReleaseGateTests(unittest.TestCase):
         job = workflow_job(workflow, "native-windows")
         check_workspace_gate(job)
         for old, new in (("Run = '^TestDesktopRuntimeWorkspace'", "Run = '^TestDesktopTor'"),
+                         ("Run = '^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)'", "Run = '^$'"),
+                         ("Run = '^Test(DesktopExternalCompiledPhysical|DesktopMappedLayerPhysical|DesktopExternalFullRouterPredecessor)'", "Run = '^$'"),
                          ("Run = '^TestSpeedLab'", "Run = '^$'"),
                          ("Skip = '^TestDesktopTorMTU'", "Skip = '^TestDesktopTor'"),
                          ("'-timeout=180s'", "'-timeout=600s'"),
@@ -347,15 +354,26 @@ class WindowsReleaseGateTests(unittest.TestCase):
             name = "Execute packaged Windows WFP enforcement" if packaged else "Executable-scoped Windows WFP enforcement"
             marker = "      - name: " + name + "\n"
             before, after = job.split(marker, 1)
+            gate, separator, following = after.partition("      - ")
             source = "$roots[0].FullName" if packaged else "$env:GITHUB_WORKSPACE"
             for old, new in (
                 ("foreach($shell in @('pwsh','powershell.exe'))", "foreach($shell in @('pwsh'))"),
-                ("-SourceRoot " + source, "-CompileOnly -SourceRoot " + source),
-                ("-SourceRoot " + source, "-SourceRoot 'unrelated source'"),
                 ("shell: pwsh", "continue-on-error: true\n        shell: pwsh"),
             ):
                 with self.subTest(file=filename, mutation=new), self.assertRaises(AssertionError):
-                    check_wfp_gate(before + marker + after.replace(old, new, 1), packaged)
+                    check_wfp_gate(before + marker + gate.replace(old, new, 1) + separator + following, packaged)
+            fixtures = ("$test",) if packaged else (
+                "client/test-windows-wfp-endpoints.ps1", "client/test-windows-wfp.ps1")
+            for fixture in fixtures:
+                command = "& $shell -NoProfile -ExecutionPolicy Bypass -File " + fixture + " -SourceRoot " + source
+                self.assertEqual(gate.count(command), 1)
+                for replacement in (
+                    command.replace(" -SourceRoot ", " -CompileOnly -SourceRoot ", 1),
+                    command.replace(" -SourceRoot " + source, " -SourceRoot 'unrelated source'", 1),
+                    "# omitted " + fixture,
+                ):
+                    with self.subTest(file=filename, fixture=fixture, mutation=replacement), self.assertRaises(AssertionError):
+                        check_wfp_gate(before + marker + gate.replace(command, replacement, 1) + separator + following, packaged)
 
     def test_broken_release_edges_and_weakened_commands_are_rejected(self):
         candidate = (REPOSITORY / ".github/workflows/release-candidate.yml").read_text(encoding="utf-8")
