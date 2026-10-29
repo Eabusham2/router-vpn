@@ -1,0 +1,795 @@
+package routervpndesktoppt
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"runtime"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/common/control"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// These fixtures execute the real compiler, native owner, native lower object
+// and broker byte path. The OS permit/isolated-identity constructor is the stated
+// test boundary; the separate privileged kernel gates must still prove that
+// constructor before any ordinary-external desktop admission can be enabled.
+func externalPhysicalPolicyFixture(t *testing.T, protocol, host string, port int, lan bool, target string) *mobilemultihop.DesktopExternalPolicy {
+	return externalPhysicalDeviceFixture(t, protocol, host, port, lan, target, "off", "always")
+}
+
+func externalPhysicalDeviceFixture(t *testing.T, protocol, host string, port int, lan bool, target, ipv6, kill string) *mobilemultihop.DesktopExternalPolicy {
+	t.Helper()
+	transport := map[string]any{"tag": mobilemultihop.ExternalFinalTag, "server": host, "server_port": port}
+	private := map[string]any{"protocol": protocol, "expected_public_ip": "203.0.113.88"}
+	switch protocol {
+	case "socks5":
+		transport["type"], transport["version"], transport["username"], transport["password"] = "socks", "5", "captured-user", "captured-password"
+		private["socks5"] = map[string]any{"host": host, "port": port, "username": transport["username"], "password": transport["password"]}
+	case "http-connect", "https-connect":
+		transport["type"], transport["username"], transport["password"] = "http", "captured-user", "captured-password"
+		settings := map[string]any{"host": host, "port": port, "username": transport["username"], "password": transport["password"]}
+		if protocol == "https-connect" {
+			transport["tls"] = map[string]any{"enabled": true, "server_name": "captured-proxy.example"}
+			settings["tls_server_name"] = "captured-proxy.example"
+		}
+		private[strings.ReplaceAll(protocol, "-", "_")] = settings
+	case "shadowsocks":
+		transport["type"], transport["method"], transport["password"] = "shadowsocks", "2022-blake3-aes-256-gcm", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{3}, 32))
+		private["shadowsocks"] = map[string]any{"server": host, "port": port, "method": transport["method"], "password": transport["password"]}
+	default:
+		t.Fatal("unexpected native fixture protocol")
+	}
+	profile := map[string]any{"id": "ordinary-native-exit", "node_kind": "external", "external": private, "dns_mode": "custom", "dns_protocol": "https",
+		"dns_host": "192.168.50.53", "dns_port": 5443, "dns_server_name": "selected-resolver.example", "dns_path": "/captured-query",
+		"home_lan_access": lan, "ipv6_mode": ipv6, "kill_switch_policy": kill, "mtu_policy": "auto"}
+	selection := map[string]any{"schema": 1, "exit_id": profile["id"], "protocol": protocol, "expected_public_ip": private["expected_public_ip"], "profile": profile}
+	graph := map[string]any{"outbounds": []any{transport}, "endpoints": []any{},
+		"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}},
+		"route":    map[string]any{"rules": []any{}, "final": mobilemultihop.ExternalFinalTag, "auto_detect_interface": true}}
+	config, _ := json.Marshal(graph)
+	capture, _ := json.Marshal(selection)
+	original, err := mobilemultihop.NewExternalPolicy(string(config), string(capture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewDesktopExternalPolicy(original, strings.Repeat("a", 32), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy
+}
+
+type externalPhysicalFixture struct {
+	native   *desktopPTFixture
+	policy   *mobilemultihop.DesktopExternalPolicy
+	manager  *desktopPTEntryManager
+	network  *ExternalNetworkOwner
+	physical *ExternalPhysicalOutbound
+}
+
+func newExternalPhysicalFixture(t *testing.T, policy *mobilemultihop.DesktopExternalPolicy) *externalPhysicalFixture {
+	t.Helper()
+	f := newDesktopPTFixture(t)
+	manager := &desktopPTEntryManager{}
+	service.MustRegister[adapter.OutboundManager](f.ctx, manager)
+	meta := policy.Metadata()
+	options := ExternalCaptureOptions{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256}
+	raw, err := NewExternalNetworkOwner(f.ctx, nil, mobilemultihop.DesktopExternalNetworkTag, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical, err := NewExternalPhysicalOutbound(f.ctx, nil, nil, mobilemultihop.DesktopExternalPhysicalTag, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.replace(physical)
+	fixture := &externalPhysicalFixture{f, policy, manager, raw.(*ExternalNetworkOwner), physical.(*ExternalPhysicalOutbound)}
+	t.Cleanup(func() {
+		if err := fixture.network.Close(); err != nil {
+			t.Error(err)
+		}
+		if err := fixture.physical.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return fixture
+}
+
+func (f *externalPhysicalFixture) start(t *testing.T, source *physicalFactorySource) context.Context {
+	t.Helper()
+	if err := f.network.PrepareExternalPhysicalBroker(f.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+		return broker, source, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+		if err := f.network.Start(stage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, err := f.network.Activate(f.policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ctx
+}
+
+func TestRouterVPNExternalPhysicalSeparateRegistriesAndUnpreparedRejection(t *testing.T) {
+	services := boxService.NewRegistry()
+	RegisterExternalNetworkOwner(services)
+	outbounds := outbound.NewRegistry()
+	RegisterExternalPhysicalOutbound(outbounds)
+	for _, registry := range []interface{ CreateOptions(string) (any, bool) }{services, outbounds} {
+		tag := mobilemultihop.DesktopExternalNetworkType
+		if registry == outbounds {
+			tag = mobilemultihop.DesktopExternalPhysicalType
+		}
+		options, found := registry.CreateOptions(tag)
+		if !found {
+			t.Fatal("external native type was not registered separately")
+		}
+		if _, ok := options.(*ExternalCaptureOptions); !ok {
+			t.Fatal("external native registry borrowed Tor options")
+		}
+	}
+	policy := externalPhysicalPolicyFixture(t, "http-connect", "192.168.50.7", 8443, false, runtime.GOOS)
+	f := newExternalPhysicalFixture(t, policy)
+	if err := f.network.Start(adapter.StartStateInitialize); err == nil || f.network.Current() {
+		t.Fatal("JSON-only owner opened a factory or became current")
+	}
+	if _, err := f.network.Activate(policy); err == nil {
+		t.Fatal("unprepared graph activated")
+	}
+	if _, err := f.physical.DialContext(context.Background(), "tcp", M.ParseSocksaddr("192.168.50.7:8443")); err == nil {
+		t.Fatal("unprepared outbound used a default dialer")
+	}
+	for _, tag := range []string{NetworkOwnerTag, "foreign"} {
+		if raw, err := NewExternalNetworkOwner(context.Background(), nil, tag, f.network.capture); err == nil || raw != nil {
+			t.Fatal("external native type adopted a foreign tag")
+		}
+	}
+	if err := f.network.Close(); err != nil || f.network.Current() || f.network.Start(adapter.StartStateInitialize) == nil {
+		t.Fatal("closed inert owner became startable", err)
+	}
+	var missing *ExternalNetworkOwner
+	if missing.Current() || missing.Close() != nil || missing.Start(adapter.StartStateInitialize) == nil {
+		t.Fatal("absent native owner acquired state")
+	}
+}
+
+func TestRouterVPNExternalPhysicalFactoryAndActivationRetainExactPolicy(t *testing.T) {
+	policy := externalPhysicalPolicyFixture(t, "shadowsocks", "192.168.50.7", 8443, false, runtime.GOOS)
+	f := newExternalPhysicalFixture(t, policy)
+	source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+	var calls atomic.Int32
+	factory := func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		calls.Add(1)
+		if capture != f.network.brokerCapture() || !current() || f.network.Current() {
+			t.Error("external factory lost its pre-TUN generation")
+		}
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+		return broker, source, err
+	}
+	if err := f.network.PrepareExternalPhysicalBroker(policy, factory); err != nil || calls.Load() != 0 {
+		t.Fatal("external factory ran before Initialize", err)
+	}
+	if f.network.PrepareExternalPhysicalBroker(policy, factory) == nil {
+		t.Fatal("replacement factory acquired native authority")
+	}
+	if err := f.network.Start(adapter.StartStateInitialize); err != nil || calls.Load() != 1 || f.network.Current() {
+		t.Fatal("native initialization failed or reported active early", err)
+	}
+	if _, err := f.network.Activate(policy); err == nil {
+		t.Fatal("pre-Started physical owner activated")
+	}
+	if err := f.network.Start(adapter.StartStateStarted); err != nil {
+		t.Fatal(err)
+	}
+	identical := externalPhysicalPolicyFixture(t, "shadowsocks", "192.168.50.7", 8443, false, runtime.GOOS)
+	if identical.Config() != policy.Config() {
+		t.Fatal("identity substitution fixture changed bytes")
+	}
+	if _, err := f.network.Activate(identical); err == nil {
+		t.Fatal("a different policy pointer consumed native activation")
+	}
+	ctx, err := f.network.Activate(policy)
+	if err != nil || !f.network.Current() {
+		t.Fatal("exact started policy did not activate", err)
+	}
+	if _, err := f.network.Activate(policy); err == nil {
+		t.Fatal("duplicate activation was admitted")
+	}
+	if err := f.network.Close(); err != nil || !source.cancelled.Load() || !source.closed.Load() || ctx.Err() == nil || f.network.Current() {
+		t.Fatal("native retirement did not revoke and join exact source", err)
+	}
+}
+
+func TestRouterVPNExternalPhysicalRejectsSocksUDPAndForeignTargetBeforeFactory(t *testing.T) {
+	for _, fault := range []string{"socks-association", "target", "source", "native-object"} {
+		t.Run(fault, func(t *testing.T) {
+			protocol, target := "http-connect", runtime.GOOS
+			if fault == "socks-association" {
+				protocol = "socks5"
+			}
+			if fault == "target" {
+				target = "windows"
+				if runtime.GOOS == "windows" {
+					target = "linux"
+				}
+			}
+			policy := externalPhysicalPolicyFixture(t, protocol, "192.168.50.7", 8443, false, target)
+			f := newExternalPhysicalFixture(t, policy)
+			if fault == "source" {
+				f.network.capture.SourceSHA256 = strings.Repeat("b", 64)
+			}
+			if fault == "native-object" {
+				foreign, err := NewExternalPhysicalOutbound(f.native.ctx, nil, nil, mobilemultihop.DesktopExternalPhysicalTag, ExternalCaptureOptions{SessionID: strings.Repeat("c", 32), SourceSHA256: policy.Metadata().SourceSHA256})
+				if err != nil {
+					t.Fatal(err)
+				}
+				f.manager.replace(foreign)
+			}
+			called := false
+			if err := f.network.PrepareExternalPhysicalBroker(policy, func(context.Context, mobiletor.DesktopSocketCapture, func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+				called = true
+				return nil, nil, errors.New("unexpected constructor")
+			}); err == nil || called || f.network.factory != nil {
+				t.Fatal("unproved transport or source installed a physical factory", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNExternalPhysicalNetworkResetRetiresOnlyCapturedOwner(t *testing.T) {
+	policy := externalPhysicalPolicyFixture(t, "http-connect", "192.168.50.7", 8443, false, runtime.GOOS)
+	f := newExternalPhysicalFixture(t, policy)
+	f.network.InterfaceUpdated(context.Background())
+	source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+	ctx := f.start(t, source)
+	replacement := newExternalPhysicalFixture(t, policy)
+	replacementSource := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+	replacementContext := replacement.start(t, replacementSource)
+	if f.network.brokerCapture().NetworkID == replacement.network.brokerCapture().NetworkID {
+		t.Fatal("replacement native generation reused its predecessor nonce")
+	}
+	f.network.InterfaceUpdated(context.Background())
+	if ctx.Err() == nil || f.network.Current() || !source.cancelled.Load() || !replacement.network.Current() || replacementContext.Err() != nil {
+		t.Fatal("network retirement missed the old owner or retired its replacement")
+	}
+	if err := f.network.Close(); err != nil || !replacement.network.Current() {
+		t.Fatal("old native cleanup changed replacement ownership", err)
+	}
+}
+
+func TestRouterVPNExternalPhysicalCloseJoinsLatePartialFactory(t *testing.T) {
+	policy := externalPhysicalPolicyFixture(t, "http-connect", "192.168.50.7", 8443, false, runtime.GOOS)
+	f := newExternalPhysicalFixture(t, policy)
+	source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+	entered, release, started := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	if err := f.network.PrepareExternalPhysicalBroker(policy, func(ctx context.Context, _ mobiletor.DesktopSocketCapture, _ func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		close(entered)
+		<-ctx.Done()
+		<-release
+		return nil, source, errors.New("captured late constructor failure")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	go func() { started <- f.network.Start(adapter.StartStateInitialize) }()
+	<-entered
+	// Cancellation must revoke the captured generation without joining the
+	// deliberately held constructor. The explicit Close below owns that join.
+	f.network.Cancel()
+	if f.network.Current() || f.network.Matches(policy.Metadata().SessionID, policy.Metadata().SourceSHA256) {
+		close(release)
+		<-started
+		t.Fatal("nonblocking cancellation retained native admission")
+	}
+	// Close's real bounded join must expire while this controlled operation
+	// retains its source. No scheduling delay decides whether a result is stale.
+	err := f.network.Close()
+	if !errors.Is(err, context.DeadlineExceeded) || source.closed.Load() {
+		close(release)
+		<-started
+		t.Fatal("native Close falsely acknowledged an unjoined constructor", err)
+	}
+	close(release)
+	if err := <-started; err == nil || !source.cancelled.Load() {
+		t.Fatal("late source survived cancelled native preparation", err)
+	}
+	if err := f.network.Close(); err != nil || !source.closed.Load() {
+		t.Fatal("retry failed to retire the exact returned partial source", err)
+	}
+}
+
+func TestRouterVPNExternalPhysicalCancelBeforeStartAndAfterActivation(t *testing.T) {
+	var absent *ExternalNetworkOwner
+	absent.Cancel()
+	policy := externalPhysicalPolicyFixture(t, "http-connect", "192.168.50.7", 8443, false, runtime.GOOS)
+	before := newExternalPhysicalFixture(t, policy)
+	before.network.Cancel()
+	if before.network.Current() || before.network.Start(adapter.StartStateInitialize) == nil ||
+		before.network.PrepareExternalPhysicalBroker(policy, func(context.Context, mobiletor.DesktopSocketCapture, func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+			t.Fatal("cancelled pre-start owner entered a factory")
+			return nil, nil, nil
+		}) == nil {
+		t.Fatal("pre-start cancellation failed to revoke the retained capture")
+	}
+	after := newExternalPhysicalFixture(t, policy)
+	source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+	proof := after.start(t, source)
+	after.network.Cancel()
+	if proof.Err() == nil || after.network.Current() || !source.cancelled.Load() || after.network.broker.Current() {
+		t.Fatal("proof cancellation left a native socket or publication owner live")
+	}
+	after.network.Cancel()
+	if err := after.network.Close(); err != nil || !source.closed.Load() {
+		t.Fatal("repeated cancellation lost its explicitly joined source", err)
+	}
+}
+
+func TestRouterVPNExternalPhysicalOutboundCloseRetiresPreparedOwner(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		t.Run(map[bool]string{false: "before-initialize", true: "active"}[active], func(t *testing.T) {
+			policy := externalPhysicalPolicyFixture(t, "http-connect", "192.168.50.7", 8443, false, runtime.GOOS)
+			f := newExternalPhysicalFixture(t, policy)
+			source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+			var proof context.Context
+			if active {
+				proof = f.start(t, source)
+			} else if err := f.network.PrepareExternalPhysicalBroker(policy, func(context.Context, mobiletor.DesktopSocketCapture, func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+				t.Fatal("retired lower object entered a later native factory")
+				return nil, nil, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.physical.Close(); err != nil || f.network.Current() || f.network.Matches(policy.Metadata().SessionID, policy.Metadata().SourceSHA256) {
+				t.Fatal("lower object closure left its preparation or proof owner live", err)
+			}
+			if active {
+				if proof.Err() == nil || !source.closed.Load() {
+					t.Fatal("active lower closure did not revoke proof and join its sockets")
+				}
+			} else if f.network.Start(adapter.StartStateInitialize) == nil {
+				t.Fatal("closed native lower object acquired a late factory")
+			}
+		})
+	}
+}
+
+type externalPhysicalFactoryNetwork struct {
+	*desktopPTNetwork
+	selected atomic.Pointer[adapter.NetworkInterface]
+}
+
+func (n *externalPhysicalFactoryNetwork) DefaultNetworkInterface() *adapter.NetworkInterface {
+	return n.selected.Load()
+}
+
+func externalPhysicalFactoryInterface(t *testing.T) *adapter.NetworkInterface {
+	t.Helper()
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, actual := range interfaces {
+		if actual.Flags&net.FlagUp == 0 || actual.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		selected, err := control.InterfaceFromNet(actual)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, prefix := range selected.Addresses {
+			if prefix.Addr().Is4() && prefix.Addr().IsGlobalUnicast() {
+				return &adapter.NetworkInterface{Interface: selected}
+			}
+		}
+	}
+	t.Fatal("ordinary native physical factory requires the runner's existing IPv4 interface")
+	return nil
+}
+
+type externalPhysicalFactoryCase struct {
+	fixture  *externalPhysicalFixture
+	manager  *externalPhysicalFactoryNetwork
+	selected *adapter.NetworkInterface
+	source   *externalTunnelFixture
+	lan      bool
+	ipv6     string
+	kill     string
+	fault    string
+	calls    int
+}
+
+func (c *externalPhysicalFactoryCase) constructed(t *testing.T, ctx context.Context, actual mobiletor.DesktopSocketCapture) error {
+	t.Helper()
+	c.calls++
+	n := c.fixture.network
+	if actual != n.brokerCapture() || ctx.Err() != nil || n.ready || n.active {
+		t.Error("ordinary physical constructor substituted its captured identity or ran after admission")
+	}
+	changed := *c.selected
+	changed.Addresses = append([]netip.Prefix(nil), c.selected.Addresses...)
+	switch c.fault {
+	case "during-index":
+		changed.Index++
+	case "during-address":
+		changed.Addresses = []netip.Prefix{netip.MustParsePrefix("192.0.2.200/24")}
+	case "during-mask":
+		prefix := changed.Addresses[0]
+		changed.Addresses[0] = netip.PrefixFrom(prefix.Addr(), (prefix.Bits()+1)%(prefix.Addr().BitLen()+1))
+	case "during-down":
+		changed.Flags &^= net.FlagUp
+	case "partial":
+		return errors.New("held ordinary partial constructor")
+	case "cancel":
+		n.Cancel()
+	}
+	c.manager.selected.Store(&changed)
+	return nil
+}
+
+func runExternalPhysicalFactoryCases(t *testing.T, prepare func(*testing.T, *externalPhysicalFactoryCase) error) {
+	t.Helper()
+	for _, lan := range []bool{false, true} {
+		for _, ipv6 := range []string{"off", "on"} {
+			for _, kill := range []string{"on-connect", "always"} {
+				for _, fault := range []string{"live", "during-index", "during-address", "during-mask", "during-down", "partial", "cancel"} {
+					t.Run(map[bool]string{false: "lan-off", true: "lan-on"}[lan]+"/ipv6-"+ipv6+"/"+kill+"/"+fault, func(t *testing.T) {
+						policy := externalPhysicalDeviceFixture(t, "shadowsocks", "192.168.50.7", 8443, lan, runtime.GOOS, ipv6, kill)
+						f := newExternalPhysicalFixture(t, policy)
+						selected := externalPhysicalFactoryInterface(t)
+						manager := &externalPhysicalFactoryNetwork{desktopPTNetwork: f.native.network}
+						manager.selected.Store(selected)
+						service.MustRegister[adapter.NetworkManager](f.native.ctx, manager)
+						source := &externalTunnelFixture{physicalFactorySource: &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}}
+						c := &externalPhysicalFactoryCase{fixture: f, manager: manager, selected: selected, source: source, lan: lan, ipv6: ipv6, kill: kill, fault: fault}
+						if err := prepare(t, c); err != nil {
+							t.Fatal(err)
+						}
+						if c.calls != 0 {
+							t.Fatal("ordinary physical factory entered before native Initialize")
+						}
+						err := f.network.Start(adapter.StartStateInitialize)
+						if c.calls != 1 {
+							t.Fatal("ordinary native Initialize omitted or repeated its exact constructor")
+						}
+						if fault != "live" {
+							if err == nil || !source.cancelled.Load() || f.network.Current() {
+								t.Fatal("late or partial ordinary physical source survived failed initialization", err)
+							}
+						} else {
+							if err != nil || f.network.broker == nil || !f.network.broker.Current() {
+								t.Fatal("ordinary captured physical source failed initialization", err)
+							}
+							if err := f.network.Start(adapter.StartStateStarted); err != nil {
+								t.Fatal(err)
+							}
+							proof, err := f.network.Activate(policy)
+							if err != nil || !f.network.Current() {
+								t.Fatal("ordinary native activation lost its exact source", err)
+							}
+							changed := *selected
+							changed.Addresses = []netip.Prefix{netip.MustParsePrefix("192.0.2.200/24")}
+							manager.selected.Store(&changed)
+							if f.network.Current() {
+								t.Fatal("physical generation survived an actual default-interface address replacement")
+							}
+							f.network.Cancel()
+							if proof.Err() == nil || !source.cancelled.Load() {
+								t.Fatal("native replacement did not revoke retained proof and socket authority")
+							}
+						}
+						if err := f.network.Close(); err != nil || !source.closed.Load() {
+							t.Fatal("ordinary native cleanup discarded a retained partial source", err)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+type externalPhysicalBytePolicy struct {
+	*desktopPhysicalPolicyFixture
+	address   netip.Addr
+	remote    netip.AddrPort
+	alternate netip.AddrPort
+}
+
+func (p *externalPhysicalBytePolicy) Select(_ context.Context, _ mobiletor.DesktopSocketCapture, _ string, remote netip.AddrPort) (mobiletor.DesktopSocketBinding, error) {
+	if remote != p.remote && remote != p.alternate {
+		return mobiletor.DesktopSocketBinding{}, errors.New("fixture denied a different destination")
+	}
+	return mobiletor.DesktopSocketBinding{Owner: p.owner, InterfaceName: "actual-fixture-address", InterfaceIndex: 1, LocalAddress: p.address}, nil
+}
+
+func (p *externalPhysicalBytePolicy) Grant(_ context.Context, q mobiletor.DesktopSocketGrant) (mobiletor.DesktopSocketReceipt, error) {
+	if q.Remote != p.remote && q.Remote != p.alternate {
+		return mobiletor.DesktopSocketReceipt{}, errors.New("fixture denied an uncaptured remote")
+	}
+	p.mu.Lock()
+	p.requests = append(p.requests, q)
+	p.grants[q.SocketID+q.Remote.String()] = q
+	p.mu.Unlock()
+	now := time.Now()
+	return mobiletor.DesktopSocketReceipt{Grant: q, ObservedAt: now.UnixMilli(), ExpiresAt: now.Add(10 * time.Second).UnixMilli()}, nil
+}
+
+func externalPhysicalByteAddress(t *testing.T) netip.Addr {
+	t.Helper()
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addresses, err := iface.Addrs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, address := range addresses {
+			prefix, err := netip.ParsePrefix(address.String())
+			if err == nil && prefix.Addr().Is4() && prefix.Addr().IsGlobalUnicast() {
+				return prefix.Addr()
+			}
+		}
+	}
+	t.Fatal("native lower-byte fixture requires the runner's existing non-loopback IPv4 address")
+	return netip.Addr{}
+}
+
+func TestRouterVPNExternalPhysicalActualBytesAndCapturedTuple(t *testing.T) {
+	address := externalPhysicalByteAddress(t)
+	for _, network := range []string{"tcp", "udp", "packet"} {
+		t.Run(network, func(t *testing.T) {
+			baseNetwork := network
+			if network == "packet" {
+				baseNetwork = "udp"
+			}
+			var remote netip.AddrPort
+			var listener net.Listener
+			var packets net.PacketConn
+			var err error
+			if network == "tcp" {
+				listener, err = net.Listen("tcp4", net.JoinHostPort(address.String(), "0"))
+				if err == nil {
+					defer listener.Close()
+					remote = listener.Addr().(*net.TCPAddr).AddrPort()
+				}
+			} else {
+				packets, err = net.ListenPacket("udp4", net.JoinHostPort(address.String(), "0"))
+				if err == nil {
+					defer packets.Close()
+					remote = packets.LocalAddr().(*net.UDPAddr).AddrPort()
+				}
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy := externalPhysicalPolicyFixture(t, "shadowsocks", remote.Addr().String(), int(remote.Port()), false, runtime.GOOS)
+			f := newExternalPhysicalFixture(t, policy)
+			kernel := &externalPhysicalBytePolicy{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture(), address: address, remote: remote}
+			if network == "packet" {
+				// The independent OS seam admits a second *local fixture* peer.
+				// Only the compiled native outbound rejects this extra tuple, so
+				// its per-write restriction is not hidden by a narrower mock.
+				other, err := net.ListenPacket("udp4", net.JoinHostPort(address.String(), "0"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer other.Close()
+				kernel.alternate = other.LocalAddr().(*net.UDPAddr).AddrPort()
+			}
+			partial := &physicalFactorySource{desktopPhysicalPolicyFixture: kernel.desktopPhysicalPolicyFixture}
+			if err := f.network.PrepareExternalPhysicalBroker(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+				// The actual byte fixture isolates OS identity/permit authority;
+				// it never creates an account or changes the runner's firewall.
+				broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, kernel, current)
+				return broker, partial, err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.network.Start(adapter.StartStateInitialize); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.network.Start(adapter.StartStateStarted); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := f.network.Activate(policy); err != nil {
+				t.Fatal(err)
+			}
+			payload := bytes.Repeat([]byte("exact ordinary lower path"), 128)
+			server := make(chan error, 1)
+			go func() {
+				if listener != nil {
+					conn, err := listener.Accept()
+					if err != nil {
+						server <- err
+						return
+					}
+					defer conn.Close()
+					_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+					buffer := make([]byte, len(payload))
+					_, err = io.ReadFull(conn, buffer)
+					if err == nil {
+						_, err = conn.Write(buffer)
+					}
+					server <- err
+				} else {
+					_ = packets.SetDeadline(time.Now().Add(5 * time.Second))
+					buffer := make([]byte, len(payload))
+					n, peer, err := packets.ReadFrom(buffer)
+					if err == nil {
+						_, err = packets.WriteTo(buffer[:n], peer)
+					}
+					server <- err
+				}
+			}()
+			dialCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			var closeSocket func() error
+			if network == "packet" {
+				packet, err := f.physical.ListenPacket(dialCtx, M.ParseSocksaddr(remote.String()))
+				cancel()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer packet.Close()
+				closeSocket = packet.Close
+				_ = packet.SetDeadline(time.Now().Add(5 * time.Second))
+				if _, err := packet.WriteTo(payload, net.UDPAddrFromAddrPort(kernel.alternate)); err == nil {
+					t.Fatal("native packet write bypassed its compiled tuple despite live OS permission")
+				}
+				if _, err := packet.WriteTo(payload, net.UDPAddrFromAddrPort(remote)); err != nil {
+					t.Fatal(err)
+				}
+				actual := make([]byte, len(payload)+1)
+				n, from, err := packet.ReadFrom(actual)
+				if err != nil || from == nil || from.String() != remote.String() || !bytes.Equal(actual[:n], payload) {
+					t.Fatal("native packet lower path changed peer or bytes", err)
+				}
+			} else {
+				conn, err := f.physical.DialContext(dialCtx, network, M.ParseSocksaddr(remote.String()))
+				cancel()
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer conn.Close()
+				closeSocket = conn.Close
+				_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+				if _, err := conn.Write(payload); err != nil {
+					t.Fatal(err)
+				}
+				actual := make([]byte, len(payload))
+				if _, err := io.ReadFull(conn, actual); err != nil || !bytes.Equal(actual, payload) {
+					t.Fatal("native lower socket did not transfer exact bytes", err)
+				}
+			}
+			if err := <-server; err != nil {
+				t.Fatal(err)
+			}
+			if err := closeSocket(); err != nil {
+				t.Fatal(err)
+			}
+			for _, wrong := range []string{"192.0.2.99:8443", netip.AddrPortFrom(remote.Addr(), remote.Port()+1).String(), "unowned.example:8443"} {
+				if leaked, err := f.physical.DialContext(context.Background(), baseNetwork, M.ParseSocksaddr(wrong)); err == nil || leaked != nil {
+					if leaked != nil {
+						_ = leaked.Close()
+					}
+					t.Fatal("native lower path accepted an uncaptured destination", wrong)
+				}
+			}
+			foreign, err := NewExternalPhysicalOutbound(f.native.ctx, nil, nil, mobilemultihop.DesktopExternalPhysicalTag, f.network.capture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.manager.replace(foreign)
+			if leaked, err := f.physical.DialContext(context.Background(), baseNetwork, M.ParseSocksaddr(remote.String())); err == nil || leaked != nil {
+				t.Fatal("replaced native lower object retained socket authority")
+			}
+			if err := f.network.Close(); err != nil {
+				t.Fatal(err)
+			}
+			kernel.mu.Lock()
+			left, calls := len(kernel.grants), len(kernel.requests)
+			kernel.mu.Unlock()
+			if left != 0 || calls == 0 || !partial.closed.Load() {
+				t.Fatal("native lower cleanup lost exact grants/source")
+			}
+		})
+	}
+}
+
+type externalTunnelFixture struct {
+	*physicalFactorySource
+	binds, retires atomic.Int32
+	release        chan struct{}
+	entered        chan struct{}
+}
+
+func (s *externalTunnelFixture) BindTunnel(ctx context.Context, _ mobiletor.DesktopSocketCapture, name string, index uint32) error {
+	if name != "exact-tun" || index != 77 {
+		return errors.New("foreign tunnel")
+	}
+	s.binds.Add(1)
+	if s.entered != nil {
+		close(s.entered)
+		<-s.release
+	}
+	return ctx.Err()
+}
+func (s *externalTunnelFixture) RetireTunnel(ctx context.Context, capture mobiletor.DesktopSocketCapture, name string, index uint32) error {
+	if name != "exact-tun" || index != 77 {
+		return errors.New("foreign tunnel")
+	}
+	s.retires.Add(1)
+	return ctx.Err()
+}
+func (s *externalTunnelFixture) BindTunnelFile(ctx context.Context, capture mobiletor.DesktopSocketCapture, name string, index uint32, file *os.File) error {
+	if file == nil {
+		return errors.New("missing retained tunnel control")
+	}
+	return s.BindTunnel(ctx, capture, name, index)
+}
+
+func TestRouterVPNExternalPhysicalTunnelLifecycleAndRetirement(t *testing.T) {
+	policy := externalPhysicalPolicyFixture(t, "http-connect", "192.168.50.7", 8443, false, runtime.GOOS)
+	f := newExternalPhysicalFixture(t, policy)
+	source := &externalTunnelFixture{physicalFactorySource: &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}}
+	if f.network.BindPhysicalTunnel(context.Background(), "exact-tun", 77) == nil {
+		t.Fatal("inactive owner bound a tunnel")
+	}
+	if err := f.network.PrepareExternalPhysicalBroker(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+		return broker, source, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.network.Start(adapter.StartStateInitialize); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.network.Start(adapter.StartStateStarted); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.network.Activate(policy); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.network.BindPhysicalTunnel(context.Background(), "exact-tun", 77); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.network.RetirePhysicalTunnel(context.Background(), "exact-tun", 77); err != nil {
+		t.Fatal(err)
+	}
+	if source.binds.Load() != 1 || source.retires.Load() != 1 {
+		t.Fatal("actual tunnel owner did not receive its lifecycle calls")
+	}
+	source.entered, source.release = make(chan struct{}), make(chan struct{})
+	returned := make(chan error, 1)
+	go func() { returned <- f.network.BindPhysicalTunnel(context.Background(), "exact-tun", 77) }()
+	<-source.entered
+	f.network.InterfaceUpdated(context.Background())
+	close(source.release)
+	if err := <-returned; err == nil {
+		t.Fatal("late tunnel acknowledgement survived generation retirement")
+	}
+}

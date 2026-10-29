@@ -1,0 +1,13 @@
+//go:build !linux && !darwin && !windows
+
+package routervpndesktoppt
+
+import (
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func (*ExternalNetworkOwner) PrepareExternalPhysicalPolicy(*mobilemultihop.DesktopExternalPolicy) error {
+	return errors.New("this native target has no ordinary external physical socket owner")
+}

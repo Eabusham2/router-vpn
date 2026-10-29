@@ -45,7 +45,12 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'tor_physical_linux.go.tmpl', 'tor_physical_darwin.go.tmpl', 'tor_physical_windows.go.tmpl', 'tor_physical_other.go.tmpl',
                 'tor_physical_tunnel.go.tmpl', 'tor_physical_tunnel_test.go.tmpl',
                 'tor_physical_linux_test.go.tmpl', 'tor_physical_darwin_test.go.tmpl', 'tor_physical_windows_test.go.tmpl',
-                'tor_physical_source_unix_test.go.tmpl')
+                'tor_physical_source_unix_test.go.tmpl',
+                'external_network.go.tmpl', 'external_physical.go.tmpl', 'external_physical_test.go.tmpl',
+                'external_physical_linux.go.tmpl', 'external_physical_darwin.go.tmpl',
+                'external_physical_windows.go.tmpl', 'external_physical_other.go.tmpl',
+                'external_physical_linux_test.go.tmpl', 'external_physical_darwin_test.go.tmpl',
+                'external_physical_windows_test.go.tmpl')
 BOX_TEMPLATES = {
     'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go',
     'tor_box_physical.go.tmpl': 'routervpn_desktop_tor_box_physical.go',
@@ -173,7 +178,14 @@ def pt_copies():
                    'tor_physical_linux_test.go.tmpl': b'//go:build linux\n\n',
                    'tor_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
                    'tor_physical_windows_test.go.tmpl': b'//go:build windows\n\n',
-                   'tor_physical_other.go.tmpl': b'//go:build !linux && !darwin && !windows\n\n' }.get(name, b'')
+                   'tor_physical_other.go.tmpl': b'//go:build !linux && !darwin && !windows\n\n',
+                   'external_physical_linux.go.tmpl': b'//go:build linux\n\n',
+                   'external_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
+                   'external_physical_windows.go.tmpl': b'//go:build windows\n\n',
+                   'external_physical_linux_test.go.tmpl': b'//go:build linux\n\n',
+                   'external_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
+                   'external_physical_windows_test.go.tmpl': b'//go:build windows\n\n',
+                   'external_physical_other.go.tmpl': b'//go:build !linux && !darwin && !windows\n\n' }.get(name, b'')
         if path.is_symlink() or not raw.startswith(prefix+b'package routervpndesktoppt\n'):
             raise ValueError('Desktop PT adapter package boundary changed')
         content['routervpn/desktoppt/'+name.removesuffix('.tmpl')] = raw
@@ -226,18 +238,20 @@ def pt_registry_source(source):
     if registered not in source[start:end]:
         raise ValueError('Desktop Tor Server must belong to the outbound registry')
     for function, anchor, name in (
+            ('RegisterExternalNetworkOwner', '\troutervpndesktoppt.RegisterNetworkOwner(registry)', 'func ServiceRegistry() *service.Registry {'),
             ('RegisterLocalTor', '\troutervpndesktoppt.RegisterServerTor(registry)', 'func OutboundRegistry() *outbound.Registry {'),
             ('RegisterPhysicalOutbound', '\troutervpndesktoppt.RegisterLocalTor(registry)', 'func OutboundRegistry() *outbound.Registry {'),
+            ('RegisterExternalPhysicalOutbound', '\troutervpndesktoppt.RegisterPhysicalOutbound(registry)', 'func OutboundRegistry() *outbound.Registry {'),
             ('RegisterLocalTorDNS', '\ttransport.RegisterTCP(registry)', 'func DNSTransportRegistry() *dns.TransportRegistry {')):
         registered = '\troutervpndesktoppt.'+function+'(registry)'
         marker = 'routervpndesktoppt.'+function+'('
         if marker in source and (source.count(marker) != 1 or source.count(registered) != 1):
-            raise ValueError('Desktop Tor Local padding registration differs')
+            raise ValueError('Desktop native adapter registration differs')
         source = TOR.insert_once(source, anchor, registered)
         start = source.index(name)
         end = source.index('\n}\n', start)
         if registered not in source[start:end]:
-            raise ValueError('Desktop Tor Local padding must belong to its native registry')
+            raise ValueError('Desktop native adapter must belong to its native registry')
     return source.encode()
 
 
@@ -470,6 +484,10 @@ def prepare(vendor, go='go', *, env=None):
     RELAY.OPENVPN_REMOTE.prepare(vendor)
     templates = [*sorted((ROOT/'mobile/desktop').glob('external*.go.tmpl')), *sorted((ROOT/'mobile/desktop').glob('mtu*.go.tmpl'))]
     for template in templates:
+        if template.name in PT_TEMPLATES or template.name in BOX_TEMPLATES:
+            continue
+        if b'\npackage main\n' not in b'\n'+template.read_bytes():
+            raise ValueError('Desktop command template has another native package')
         write(vendor, 'cmd/sing-box/routervpn_'+template.name.removesuffix('.tmpl'), template.read_bytes())
     for relative, raw in controller_contract.items():
         write(vendor, relative, raw)

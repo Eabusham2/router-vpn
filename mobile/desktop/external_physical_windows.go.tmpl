@@ -1,0 +1,91 @@
+//go:build windows
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"slices"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/service"
+)
+
+func (n *ExternalNetworkOwner) PrepareExternalPhysicalPolicy(policy *mobilemultihop.DesktopExternalPolicy) error {
+	return n.prepareExternalPhysicalWindows(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopWindowsSocketOptions) (desktopWindowsPhysicalPolicy, error) {
+		owned, err := mobiletor.NewDesktopWindowsSocketPolicy(ctx, capture, options)
+		if owned == nil {
+			return nil, err
+		}
+		return owned, err
+	})
+}
+
+func (n *ExternalNetworkOwner) prepareExternalPhysicalWindows(policy *mobilemultihop.DesktopExternalPolicy,
+	create func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopWindowsSocketOptions) (desktopWindowsPhysicalPolicy, error)) error {
+	if policy == nil || policy.Validate() != nil || create == nil {
+		return errors.New("Windows ordinary physical sockets lost their captured policy")
+	}
+	meta := policy.Metadata()
+	captured, err := policy.Capture()
+	if err != nil || meta.TargetOS != "windows" || !n.Matches(meta.SessionID, meta.SourceSHA256) {
+		return errors.New("Windows ordinary physical sockets belong to another native target")
+	}
+	options := mobiletor.DesktopWindowsSocketOptions{KillSwitchPolicy: meta.KillSwitchPolicy, IPv6Enabled: meta.IPv6Mode != "off"}
+	for _, destination := range captured.PrivateDestinations {
+		address, err := netip.ParseAddr(destination.Host)
+		if err != nil || address.String() != destination.Host || !(address.IsPrivate() || address.IsLinkLocalUnicast()) ||
+			destination.Port < 1 || destination.Port > 65535 || (destination.Network != "tcp" && destination.Network != "udp") {
+			return errors.New("Windows ordinary private exception lost its compiled literal tuple")
+		}
+		options.PrivateDestinations = append(options.PrivateDestinations, mobiletor.DesktopWindowsSocketDestination{
+			Network: destination.Network, Address: netip.AddrPortFrom(address, uint16(destination.Port)),
+		})
+	}
+	return n.PrepareExternalPhysicalBroker(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		manager := service.FromContext[adapter.NetworkManager](ctx)
+		if manager == nil || !manager.AutoDetectInterface() || manager.InterfaceMonitor() == nil {
+			return nil, nil, errors.New("Windows ordinary physical factory requires the initialized native monitor")
+		}
+		selected := manager.DefaultNetworkInterface()
+		interfaces, lan, err := desktopWindowsPhysicalInterfaces(selected, options.IPv6Enabled, meta.HomeLANAccess)
+		if err != nil {
+			return nil, nil, err
+		}
+		index, name := selected.Index, selected.Name
+		addresses := append([]netip.Prefix(nil), selected.Addresses...)
+		physicalCurrent := func() bool {
+			if !current() {
+				return false
+			}
+			actual := manager.DefaultNetworkInterface()
+			return actual != nil && actual.Index == index && actual.Name == name && actual.Flags&net.FlagUp != 0 && actual.Flags&net.FlagLoopback == 0 && slices.Equal(actual.Addresses, addresses)
+		}
+		options.Interfaces, options.LANPrefixes = interfaces, lan
+		for _, binding := range interfaces {
+			if binding.Address.Is4() {
+				options.DHCP4Servers, err = mobiletor.DesktopWindowsPhysicalDHCPServers(binding.Index)
+				if err != nil {
+					return nil, nil, err
+				}
+				break
+			}
+		}
+		if ctx.Err() != nil || !physicalCurrent() {
+			return nil, nil, errors.New("Windows ordinary physical interface changed during native capture")
+		}
+		owned, err := create(ctx, capture, options)
+		if err != nil {
+			if owned == nil {
+				return nil, nil, err
+			}
+			return nil, owned, err
+		}
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, owned, physicalCurrent)
+		return broker, owned, err
+	})
+}

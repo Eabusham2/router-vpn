@@ -93,7 +93,12 @@ class DesktopPTPreparation(unittest.TestCase):
                      'tor_physical_source_unix_test.go.tmpl', 'tor_physical_linux.go.tmpl', 'tor_physical_darwin.go.tmpl',
                      'tor_physical_other.go.tmpl', 'tor_physical_factory_test.go.tmpl',
                      'tor_physical_linux_test.go.tmpl', 'tor_physical_windows.go.tmpl',
-                     'tor_physical_windows_test.go.tmpl'):
+                     'tor_physical_windows_test.go.tmpl',
+                     'external_network.go.tmpl', 'external_physical.go.tmpl', 'external_physical_test.go.tmpl',
+                     'external_physical_linux.go.tmpl', 'external_physical_darwin.go.tmpl',
+                     'external_physical_windows.go.tmpl', 'external_physical_other.go.tmpl',
+                     'external_physical_linux_test.go.tmpl', 'external_physical_darwin_test.go.tmpl',
+                     'external_physical_windows_test.go.tmpl'):
             self.assertIn(name, PREP.PT_TEMPLATES)
         traffic = (self.vendor/'routervpn/desktoppt/tor_pt_entry_traffic_test.go').read_text()
         for name in ('MeekTLS', 'WebTunnelTLS', 'SnowflakeTraffic'):
@@ -116,6 +121,8 @@ class DesktopPTPreparation(unittest.TestCase):
         registry = (self.vendor/'include/registry.go').read_text()
         self.assertEqual(registry.count('routervpndesktoppt.RegisterNetworkOwner(registry)'), 1)
         self.assertEqual(registry.count('routervpndesktoppt.RegisterPhysicalOutbound(registry)'), 1)
+        self.assertEqual(registry.count('routervpndesktoppt.RegisterExternalNetworkOwner(registry)'), 1)
+        self.assertEqual(registry.count('routervpndesktoppt.RegisterExternalPhysicalOutbound(registry)'), 1)
         self.assertEqual((self.vendor/'route/network.go').read_text().count(PREP.NETWORK_DISPATCH), 1)
         record = json.loads((self.vendor/PREP.PT_OWNER).read_bytes())
         self.assertEqual(record['files'], {name: hashlib.sha256(raw).hexdigest() for name, raw in content.items()})
@@ -133,6 +140,8 @@ class DesktopPTPreparation(unittest.TestCase):
             selective.assert_called_once_with(self.vendor.resolve(), GO, env=captured)
             startup.assert_called_once_with(self.vendor.resolve())
             generated = {call.args[1]: call.args[2] for call in writes.call_args_list}
+            for name in (*PREP.PT_TEMPLATES, *PREP.BOX_TEMPLATES):
+                self.assertNotIn('cmd/sing-box/routervpn_'+name.removesuffix('.tmpl'), generated)
             for name in ('external_tor_comparison.go.tmpl', 'external_tor_comparison_test.go.tmpl',
                          'external_tor_comparison_whole_test.go.tmpl', 'external_socket_linux.go.tmpl',
                          'external_socket_linux_test.go.tmpl'):
@@ -413,6 +422,8 @@ class DesktopPTPreparation(unittest.TestCase):
         server_registered = '\troutervpndesktoppt.RegisterServerTor(registry)'
         local_registered = '\troutervpndesktoppt.RegisterLocalTor(registry)'
         dns_registered = '\troutervpndesktoppt.RegisterLocalTorDNS(registry)'
+        external_network = '\troutervpndesktoppt.RegisterExternalNetworkOwner(registry)'
+        external_physical = '\troutervpndesktoppt.RegisterExternalPhysicalOutbound(registry)'
         forms = [
             generated.replace(imported, imported+'\n'+imported),
             generated.replace(registered, registered+'\n'+registered),
@@ -432,6 +443,12 @@ class DesktopPTPreparation(unittest.TestCase):
             generated.replace(dns_registered, '')+'\nfunc foreign() {\n'+dns_registered+'\n}\n',
             ORIGINALS['include/registry.go'].decode()+'\n// '+PREP.MODULE+'/protocol/routervpntor\n',
         ]
+        for registration in (external_network, external_physical):
+            forms.extend((
+                generated.replace(registration, registration+'\n'+registration),
+                generated.replace(registration, registration.replace('(registry)', '(foreignRegistry)')),
+                generated.replace(registration, '')+'\nfunc foreign() {\n'+registration+'\n}\n',
+            ))
         for source in forms:
             with self.subTest(source=source[-100:]):
                 target.write_text(source)
