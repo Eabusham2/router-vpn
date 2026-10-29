@@ -31,6 +31,12 @@ REQUIRED = (
     "TestControllerTransportInvalidCaptureNeverDials",
     "TestLocalControllerPinnedTLSUsesShippingIdentityAndCleanup",
     "TestControllerTransportPreservesExactBundleImportLimit",
+    "TestControllerTransportDrainPinnedReadOnly",
+    "TestControllerTransportDrainRejectsUnprovedPeer",
+    "TestControllerTransportDrainRejectsAmbiguousReceipt",
+    "TestControllerTransportDrainRevokesLateResult",
+    "TestControllerTransportDrainCancellationAndDeadline",
+    "TestControllerTransportDrainPublicAPIJoinsTransport",
 )
 
 
@@ -69,7 +75,8 @@ def selected_compiler(go):
 
 def sources():
     names = ("internal/controllertransport/tls.go", "internal/controllertransport/client.go",
-             "internal/controllertransport/client_test.go", "cmd/client/controller_pinned_tls_test.go",
+             "internal/controllertransport/client_test.go", "internal/controllertransport/drain.go",
+             "internal/controllertransport/drain_test.go", "cmd/client/controller_pinned_tls_test.go",
              "cmd/client/controller_local_auth.go", "cmd/client/controller_shutdown.go")
     records = {}
     for name in names:
@@ -89,6 +96,7 @@ def replace_once(value, before, after):
 def mutants():
     client = (PACKAGE / "client.go").read_text(encoding="utf-8")
     tls = (PACKAGE / "tls.go").read_text(encoding="utf-8")
+    drain = (PACKAGE / "drain.go").read_text(encoding="utf-8")
     return (
         ("tls.go", "wrong-session-certificate", REQUIRED[1],
          "wrong TLS pin admitted a private controller request",
@@ -121,6 +129,31 @@ def mutants():
          "bundle import request budget escaped its exact supported operation",
          replace_once(client, 'if method == http.MethodPost && path == "/api/profile/import" {',
                       'if true {')),
+        ("drain.go", "drain-wrong-process", REQUIRED[16] + "/wrong-owner",
+         "ambiguous drain receipt acquired another owner's stop authority",
+         replace_once(drain, "receipt.PID != client.owner.PID()", "receipt.PID == 0")),
+        ("drain.go", "drain-late-process", REQUIRED[17],
+         "late drain response survived its exact retained process",
+         replace_once(drain, "if err := client.owner.Alive(); err != nil {", "if err := client.owner.Alive(); false && err != nil {")),
+        ("drain.go", "drain-poll-deadline", REQUIRED[18],
+         "native drain lost its existing bounded poll deadline",
+         replace_once(drain, "const drainTimeout = 400 * time.Millisecond", "const drainTimeout = 5 * time.Second")),
+        ("drain.go", "drain-transport-join", REQUIRED[19],
+         "public drain abandoned its retained TLS transport after returning",
+         replace_once(drain, "\tdefer client.Close()", "\t// Broken: abandon the read-only transport.")),
+        ("drain.go", "drain-private-bearer", REQUIRED[14],
+         "read-only drain disclosed credentials, body or another operation",
+         replace_once(drain, "\tresponse, err := client.http.Do(request)",
+                      '\trequest.Header.Set("Authorization", "Bearer " + client.access)\n\tresponse, err := client.http.Do(request)')),
+        ("drain.go", "drain-response-bound", REQUIRED[16] + "/oversized",
+         "ambiguous drain receipt acquired another owner's stop authority",
+         replace_once(replace_once(replace_once(drain,
+                      "response.ContentLength > drainLimit", "response.ContentLength > 1<<20"),
+                      "io.LimitReader(response.Body, drainLimit+1)", "io.LimitReader(response.Body, 1<<20)"),
+                      "len(raw) > drainLimit", "len(raw) > 1<<20")),
+        ("drain.go", "drain-failed-http-status", REQUIRED[15] + "/failed-status",
+         "failed HTTP response acquired native drain authority",
+         replace_once(drain, "response.StatusCode != http.StatusOK || ", "")),
     )
 
 
@@ -155,7 +188,7 @@ def execute(go="go"):
             print("Rejected production controller TLS mutant:", name, flush=True)
     if sources() != before:
         raise ValueError("Controller TLS source changed during its execution gate")
-    print("Controller TLS passed fourteen real transport/shipping-handler cases and eight compiled production negative controls; Windows launcher composition remains separate.", flush=True)
+    print("Controller TLS passed twenty real transport/shipping-handler cases and fifteen compiled production negative controls, including the credential-free pinned drain; Windows launcher and native wrapper adoption remain separate.", flush=True)
 
 
 if __name__ == "__main__":

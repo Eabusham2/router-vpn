@@ -65,6 +65,18 @@ func newClient(owner Process, pin, access, shutdown, endpoint string) (*Client, 
 	if !validSecret(access) || !validOwner(shutdown) {
 		return nil, errors.New("the native controller requires independent captured access and shutdown secrets")
 	}
+	client, err := newPinnedClient(owner, pin, endpoint)
+	if err != nil {
+		return nil, err
+	}
+	client.access, client.shutdown = access, shutdown
+	return client, nil
+}
+
+// The read-only native drain probe shares the exact owned TLS/dial lifetime but
+// never receives the GUI's bearer or shutdown token. Keep this constructor
+// private: only NewClient exposes general authenticated request authority.
+func newPinnedClient(owner Process, pin, endpoint string) (*Client, error) {
 	config, err := pinnedTLS(pin, owner)
 	if err != nil {
 		return nil, err
@@ -75,7 +87,7 @@ func newClient(owner Process, pin, access, shutdown, endpoint string) (*Client, 
 		return nil, errors.New("the native controller endpoint is not the captured loopback listener")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	client := &Client{owner: owner, access: access, shutdown: shutdown, base: base, ctx: ctx, cancel: cancel}
+	client := &Client{owner: owner, base: base, ctx: ctx, cancel: cancel}
 	client.dial = (&net.Dialer{Timeout: 5 * time.Second}).DialContext
 	client.transport = &http.Transport{
 		Proxy: nil,
