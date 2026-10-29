@@ -312,10 +312,17 @@ class NEPacketTunnelProvider: @unchecked Sendable {
 }
 final class NETunnelProviderProtocol {var providerConfiguration:[String:Any]?;var includeAllNetworks=true,enforceRoutes=true,excludeLocalNetworks=false}
 final class PrestartForwarding {func invalidate(){}}
-final class PrestartEngine {let trace:PrestartTrace;init(_ trace:PrestartTrace){self.trace=trace};func stop(){trace.stopped()};func pause(){}}
+final class PrestartEngine {let trace:PrestartTrace;init(_ trace:PrestartTrace){self.trace=trace};func stop(){trace.stopped()};func pause(){};func stopCheckedForStrategy()throws{fatalError("MAX prestart must not fabricate Tor comparison cleanup")}}
 final class PrestartAdapter {func stop(_ complete:(Error?)->Void){complete(nil)}}
 final class PrestartStrategy {let currentEpoch="test-epoch";func stop(){}}
 final class PrestartDriver {func drain(_ complete:()->Void){complete()}}
+// MAX startup never constructs a Tor comparison. Its actual provider admission
+// still checks that separately owned lifetime. The Tor comparison gate executes
+// its real engine/drain composition; this boundary must not fake success here.
+final class NetworkProofGuard {}
+final class RouterVPNTorCompare {
+ func cancelAndDrain(_ complete:@escaping(Error?)->Void){fatalError("Tor comparison drain belongs to its actual native fixture")}
+}
 final class PrestartTrace: @unchecked Sendable {
  private let lock=NSLock();private var starts=0,stops=0,dispatches:[String]=[];private var data:Data?;private var proof:((Error?)->Void)?
  private var held=false
@@ -337,6 +344,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
  let trace=PrestartTrace()
  func configure(_ config:[String:Any]){let p=NETunnelProviderProtocol();p.providerConfiguration=config;protocolConfiguration=p}
  func executionState()->(IOSMultihopExecution.Source?,String?,IOSMultihopExecution.ServerIdentityPins?){(multihopExecutionSource,restoredMultihopExecution,restoredMultihopIdentityPins)}
+ func captureForeignComparison(draining:Bool){torCompareOwnerLock.lock();torCompareOwner=draining ? nil:RouterVPNTorCompare();torCompareDraining=draining;torCompareOwnerLock.unlock()}
  private func currentProviderStrategy()->PrestartStrategy?{providerStrategy}
  private func retireLibboxSettings(epoch:String){}
  private func clearPathProofGuard(){}
@@ -344,6 +352,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
  // lifecycle fixture executes real channel retirement and callback joins.
  private func retireTelemetry(){}
  private func cancelActiveProof(){}
+ private func writeLibboxLog(_ message:String){fatalError("Unexpected comparison cleanup during MAX prestart: "+message)}
  private func tunnelError(_ code:Int,_ text:String)->NSError{NSError(domain:"ProviderBoundary",code:code,userInfo:[NSLocalizedDescriptionKey:text])}
  private func native(_ provider:[String:Any],_ complete:@escaping(Error?)->Void)throws{libboxEngine=PrestartEngine(trace);try trace.started(provider,complete:complete)}
  private func startWireGuard(provider:[String:Any],root:[String:Any],selectedProfile:[String:Any],completionHandler:@escaping(Error?)->Void)throws{try native(provider,completionHandler)}
@@ -357,6 +366,11 @@ __PRODUCTION__
 @MainActor func providerPrestartTests(good:[String:Any],fixtures:[String:Any])throws->Int{
  var checks=0
  func check(_ name:String,_ value:@autoclosure ()throws->Bool)throws{guard try value() else{fatalError(name)};checks+=1}
+ for draining in [false,true] {
+  let p=PacketTunnelProvider(),outcome=Outcome(),queries=DNSSDTest.shared.counts().0
+  p.configure(good);p.captureForeignComparison(draining:draining);p.startTunnel{outcome.receive($0)}
+  try check("MAX cannot enter another Tor comparison lifetime",outcome.done.wait(timeout:.now()+3) == .success && !outcome.result().1 && outcome.result().0==1 && p.trace.counts().0==0 && DNSSDTest.shared.counts().0==queries)
+ }
  for engine in ["libbox","external-libbox"]{for selected in ["empty","missing"]{
   var config=good,root=try object(good["bundle"] as! Data),profiles=try object(good["bundle"] as! Data)["profiles"] as! [String:[String:String]]
   profiles["wg"]=["wg.conf":profiles["max-tls-wg"]!["wg.conf"]!];root["profiles"]=profiles
@@ -486,7 +500,9 @@ def prestart_source():
         return source[source.index(begin):source.index(end, source.index(begin))]
     parts = [
         section('    private var multihopExecutionSource:', '    private var forwardingChannel:'),
+        section('    private let torCompareOwnerLock', '    private let maxStartOwnerLock'),
         section('    private let maxStartOwnerLock', '    override init()'),
+        section('    private func currentTorComparison(', '    private func torComparisonAvailable('),
         section('    override func startTunnel(', '    private func startWireGuard('),
         section('    override func stopTunnel(', '    override func wake()'),
         section('    private func selectedRouterProfile(', '    private func wireGuardLikeProfile('),
