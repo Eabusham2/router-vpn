@@ -157,5 +157,53 @@ class PinnedWintunModuleAuthority(unittest.TestCase):
         self.assert_subject_unchanged()
 
 
+class FailedSessionOverlayBoundary(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="windows-session-overlay-")
+        self.addCleanup(self.temp.cleanup)
+        self.source = Path(self.temp.name) / "source"
+        self.workspace = Path(self.temp.name) / "overlay"
+        self.workspace.mkdir()
+        self.native = self.source / GATE.SESSION_NATIVE
+        self.native.parent.mkdir(parents=True)
+        self.raw = ('package tun\nfunc fixture() {\n'
+                    '\tsession, err := adapter.StartSession(0x800000)\n'
+                    '\tif err != nil {\n\t\t_ = adapter.Close()\n\t\treturn nil, err\n\t}\n}\n')
+        self.native.write_text(self.raw)
+
+    def test_failure_overlay_changes_only_the_real_session_call_and_observes_its_owned_close(self):
+        before = GATE.tree(self.source)
+        record = json.loads(GATE.session_failure_overlay(self.source, self.workspace).read_text())["Replace"]
+        self.assertEqual(set(record), {str(self.source / GATE.SESSION_TARGET), str(self.native)})
+        self.assertEqual(Path(record[str(self.source / GATE.SESSION_TARGET)]).read_bytes(), GATE.SESSION_RESOURCE.read_bytes())
+        expected = self.raw.replace('adapter.StartSession(0x800000)', 'routervpnWintunInvalidSession(adapter, 0x800000)').replace(
+            '_ = adapter.Close()', '_ = routervpnWintunObservedFailureClose(adapter)')
+        self.assertEqual(Path(record[str(self.native)]).read_text(), expected)
+        self.assertEqual(GATE.tree(self.source), before)
+        missing = self.workspace / "missing"
+        missing.mkdir()
+        record = json.loads(GATE.session_failure_overlay(self.source, missing, missing_close=True).read_text())["Replace"]
+        self.assertEqual(Path(record[str(self.native)]).read_text(), expected.replace('\t\t_ = routervpnWintunObservedFailureClose(adapter)\n', ''))
+        self.assertEqual(GATE.tree(self.source), before)
+
+    def test_changed_cleanup_or_session_boundary_is_rejected(self):
+        for removed in ('adapter.StartSession(0x800000)', '_ = adapter.Close()'):
+            self.native.write_text(self.raw.replace(removed, 'unprovedOwner()'))
+            with self.assertRaises(ValueError):
+                GATE.session_failure_overlay(self.source, self.workspace)
+
+    def test_foreign_fixture_and_shipping_package_injection_are_rejected(self):
+        target = self.source / GATE.SESSION_TARGET
+        target.write_text('unowned fixture')
+        with self.assertRaisesRegex(ValueError, 'Unowned failed-session'):
+            GATE.session_failure_overlay(self.source, self.workspace)
+        self.assertEqual(target.read_text(), 'unowned fixture')
+        target.unlink()
+        unsafe = self.workspace / 'unsafe.go'
+        unsafe.write_bytes(GATE.SESSION_RESOURCE.read_bytes().replace(b'windows && routervpn_windows_physical_composition', b'windows'))
+        with patch.object(GATE, 'SESSION_RESOURCE', unsafe), self.assertRaisesRegex(ValueError, 'test-only package'):
+            GATE.session_failure_overlay(self.source, self.workspace)
+
+
 if __name__ == "__main__":
     unittest.main()

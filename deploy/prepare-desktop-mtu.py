@@ -106,6 +106,19 @@ def prepare(vendor):
 \t\t// another process is not an MTU rollback or startup resource.
 \t\treturn nil, err
 \t}''')
+                before = b'''\tsession, err := adapter.StartSession(0x800000)
+\tif err != nil {
+\t\treturn nil, err
+\t}'''
+                if raw.count(before) != 1:
+                    raise ValueError('Pinned Wintun failed-session cleanup boundary changed')
+                raw = raw.replace(before, b'''\tsession, err := adapter.StartSession(0x800000)
+\tif err != nil {
+\t\t// A failed session still owns the adapter just created above.
+\t\t// Close it synchronously before returning the original failure.
+\t\t_ = adapter.Close()
+\t\treturn nil, err
+\t}''')
                 # The pinned file uses errors elsewhere; its other ownership
                 # and close checks remain byte-for-byte unchanged.
             if target.exists() and not target.stat().st_mode & 0o200:

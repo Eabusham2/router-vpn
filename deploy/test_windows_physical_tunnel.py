@@ -28,6 +28,10 @@ TEST = "TestDesktopSocketWindowsActualWintunBindingAndRetirement"
 RESOURCE = ROOT / "deploy/fixtures/windows-physical-bootstrap/tunnel_test.go"
 TARGET = "routervpn/mobiletor/desktop_socket_windows_actual_tunnel_test.go"
 POLICY = "routervpn/mobiletor/desktop_socket_windows_tunnel.go"
+SESSION_RESOURCE = ROOT / "deploy/fixtures/windows-physical-bootstrap/session_failure_test.go"
+SESSION_TARGET = "routervpn-desktop-tun/routervpn_session_failure_windows_test.go"
+SESSION_NATIVE = "routervpn-desktop-tun/tun_windows.go"
+SESSION_TEST = "TestRouterVPNWintunFailedSessionRetiresCreatedAdapter"
 
 
 def tree(directory):
@@ -142,6 +146,63 @@ def mutants(source):
     )
 
 
+def session_failure_overlay(source, workspace, *, missing_close=False):
+    """Inject one real invalid ring call; retain shipping creation/cleanup."""
+    target = source / SESSION_TARGET
+    if target.exists() or target.is_symlink():
+        raise ValueError("Unowned failed-session fixture exists in the pinned dependency")
+    raw = SESSION_RESOURCE.read_bytes()
+    if SESSION_RESOURCE.is_symlink() or not raw.startswith(b"//go:build windows && routervpn_windows_physical_composition\n\npackage tun\n"):
+        raise ValueError("Failed-session fixture escaped its native test-only package")
+    native = source / SESSION_NATIVE
+    if native.is_symlink() or not native.is_file():
+        raise ValueError("Failed-session source is not the regular pinned native dependency")
+    prepared = native.read_text(encoding="utf-8")
+    prepared = IDENTITY.replace_once(prepared,
+                                    "session, err := adapter.StartSession(0x800000)",
+                                    "session, err := routervpnWintunInvalidSession(adapter, 0x800000)")
+    prepared = IDENTITY.replace_once(prepared,
+                                    "\t\t_ = adapter.Close()\n\t\treturn nil, err",
+                                    "\t\t_ = routervpnWintunObservedFailureClose(adapter)\n\t\treturn nil, err")
+    if missing_close:
+        prepared = IDENTITY.replace_once(prepared, "\t\t_ = routervpnWintunObservedFailureClose(adapter)\n", "")
+    fixture, implementation = workspace / "session_failure_test.go", workspace / "tun_windows.go"
+    fixture.write_bytes(raw)
+    implementation.write_text(prepared, encoding="utf-8")
+    record = {str(target): str(fixture), str(native): str(implementation)}
+    overlay_path = workspace / "session-overlay.json"
+    overlay_path.write_text(json.dumps({"Replace": record}, sort_keys=True, indent=2) + "\n", encoding="utf-8")
+    return overlay_path
+
+
+def execute_failed_session(source, compiler, captured, race, root):
+    for missing in (False, True):
+        name = "session-missing-close" if missing else "session-failure"
+        workspace = root / name
+        workspace.mkdir()
+        selected = session_failure_overlay(source, workspace, missing_close=missing)
+        binary = workspace / "session.test.exe"
+        command = [compiler, "test", "-c", "-mod=readonly", "-tags=" + ",".join(BOOT.TAGS), *race,
+                   "-ldflags=-checklinkname=0", "-overlay=" + str(selected), "-o", binary, BOOT.PREP.DESKTOP_MTU.MODULE]
+        status, output = IDENTITY.run(command, cwd=source, env=captured, timeout=300)
+        if status:
+            raise ValueError("Actual Wintun " + name + " compilation failed:\n" + output[-16384:])
+        digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+        status, output = IDENTITY.run([binary, "-test.run=^" + SESSION_TEST + "$", "-test.count=1", "-test.timeout=60s", "-test.v"],
+                                      cwd=source, env=captured, timeout=75)
+        print(output, end="" if output.endswith("\n") else "\n", flush=True)
+        if "--- SKIP:" in output or "DATA RACE" in output or "panic:" in output or \
+                output.count("actual failed-session adapter cleanup proved") != 1:
+            raise ValueError("Actual Wintun failed-session assertion or owned cleanup is unproved")
+        if missing:
+            if status == 0 or "failed Wintun session retained its created adapter" not in output or "--- FAIL: " + SESSION_TEST + " (" not in output:
+                raise ValueError("The missing-Close defect did not reach the actual leaked-adapter assertion")
+        elif status or "--- PASS: " + SESSION_TEST + " (" not in output:
+            raise ValueError("Actual Wintun failed-session adapter cleanup did not pass")
+        if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+            raise ValueError("Actual Wintun failed-session binary changed during execution")
+
+
 def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=False):
     if prospective:
         raise ValueError("Actual Wintun gate never overlays public OS admission")
@@ -152,10 +213,11 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     race = ["-race"] if architecture == "amd64" and not bootstrap_only else []
     captured["CGO_ENABLED"] = "1" if race else "0"
     tun_before = verified_tun_source(source, compiler, captured)
-    fixture_before = hashlib.sha256(RESOURCE.read_bytes()).hexdigest()
+    fixture_before = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in (RESOURCE, SESSION_RESOURCE)}
     variants = [("baseline", None, None), *mutants((source / POLICY).read_text(encoding="utf-8"))]
     with tempfile.TemporaryDirectory(prefix="routervpn-wintun-native-") as directory:
         root = Path(directory)
+        execute_failed_session(source, compiler, captured, race, root)
         for name, failure, changed in variants:
             workspace = root / name
             workspace.mkdir()
@@ -181,11 +243,12 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Actual Wintun did not reject the intended " + name + " production defect")
             if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
                 raise ValueError("Actual Wintun test binary changed during execution")
-    if BOOT.sources(source)[1] != before or hashlib.sha256(RESOURCE.read_bytes()).hexdigest() != fixture_before or \
+    if BOOT.sources(source)[1] != before or {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in (RESOURCE, SESSION_RESOURCE)} != fixture_before or \
             verified_tun_source(source, compiler, captured) != tun_before:
         raise ValueError("Actual Wintun prepared source changed during native execution")
     print("Actual Wintun IPv4/IPv6 policy, retained LUID, stale-reader rejection and exact WFP/adapter retirement passed; "
-          "three real production defects were rejected. No default routes, DNS or public admission changed.", flush=True)
+          "real failed-session cleanup and its missing-Close defect also passed. Three WFP production defects were rejected. "
+          "No default routes, DNS or public admission changed.", flush=True)
 
 
 if __name__ == "__main__":
