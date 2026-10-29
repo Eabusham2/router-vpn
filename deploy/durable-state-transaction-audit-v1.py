@@ -364,12 +364,15 @@ forbid(
 )
 
 # macOS PF uses the same hardened private state store. Poisoned-state force-off
-# may clear only Router VPN's scoped anchor; without the persisted reference
-# token it must never guess at global PF ownership.
+# may clear only Router VPN's fixed anchors, with checked absence before state
+# removal; without the persisted token it cannot guess at global PF ownership.
 require(
     "modes/kill-switch-platform.py",
     "_linux.remove_state(root",
-    "_darwin._clear_anchor(check=False)",
+    "_darwin._clear_anchor(check=True)",
+    "_darwin._clear_anchor(check=True, anchor=_darwin.OWNED_PF_ANCHOR)",
+    "_darwin.run_pf(['-a', anchor, '-s', 'rules']).stdout.strip()",
+    "explicit macOS force-off could not prove the owned dispatch absent",
     "persisted PF reference token was unreadable",
     "global PF enablement was left untouched",
 )
@@ -721,6 +724,7 @@ for test in (
     "server/scripts/test_verified_regular_read.py",
     "modes/test_runtime_pids.py",
     "modes/test_stop_mode_pid_ownership.py",
+    "modes/test_darwin_owned_pf.py",
     "modes/test_runtime_config.py",
     "modes/test_prepare_runtime_profile.py",
 ):
