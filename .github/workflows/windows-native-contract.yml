@@ -43,7 +43,14 @@ jobs:
           if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'Pinned Windows identity C compiler is missing' }
           "CC=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $compilerBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Native Windows controller process and private pipe ownership
+        if: ${{ success() || failure() }}
+        shell: pwsh
+        run: |
+          python deploy/test_windows_controller_foundation.py
+          if ($LASTEXITCODE -ne 0) { throw 'Actual Windows controller process ownership gate failed' }
       - name: Isolated Windows socket token and ALE endpoint proof
+        if: ${{ success() || failure() }}
         shell: pwsh
         run: |
           python deploy/test_desktop_windows_identity_runner.py
