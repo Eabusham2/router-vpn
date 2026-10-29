@@ -92,7 +92,7 @@ jobs:
     concurrency:
       group: macos-owned-controller-contract-${{ github.workflow }}-${{ github.ref }}
       cancel-in-progress: false
-    runs-on: macos-15
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - name: Syntax and native-app-only contract
