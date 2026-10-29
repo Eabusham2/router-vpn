@@ -626,7 +626,7 @@ func fixtureStableShellDiagnostics(t *testing.T, image *Image) {
 		t.Log("stable Shell diagnostic could not load the native API:", err)
 		return
 	}
-	for _, variant := range []string{"no-directory", "system-directory", "global-root", "invoke-stable-guid", "pidl-stable-guid", "machine-class-stable-guid"} {
+	for _, variant := range []string{"no-directory", "system-directory", "global-root", "invoke-stable-guid", "pidl-stable-guid", "machine-class-stable-guid", "normalized-volume-guid"} {
 		func() {
 			pipe, err := NewPipe()
 			if err != nil {
@@ -643,6 +643,27 @@ func fixtureStableShellDiagnostics(t *testing.T, image *Image) {
 				if variant == "system-directory" {
 					directory, _ = syscall.UTF16PtrFromString(api.systemDirectory)
 					info.Directory = directory
+				}
+				if variant == "normalized-volume-guid" {
+					// The normalized Win32 namespace still names the captured
+					// volume GUID. Prove the same retained file before invoking
+					// Shell; this never tries a DOS drive or weakens the baseline.
+					path := `\\.\` + image.path[len(`\\?\`):]
+					file, err := syscall.UTF16PtrFromString(path)
+					if err != nil {
+						return false, err
+					}
+					held, err := syscall.CreateFile(file, syscall.GENERIC_READ, syscall.FILE_SHARE_READ, nil, syscall.OPEN_EXISTING, 0x00200000, 0)
+					if err != nil {
+						return false, nativeError("diagnostic normalized-volume image capture", err)
+					}
+					defer syscall.CloseHandle(held)
+					var actual syscall.ByHandleFileInformation
+					if err := syscall.GetFileInformationByHandle(held, &actual); err != nil ||
+						actual.VolumeSerialNumber != image.identity.VolumeSerialNumber || actual.FileIndexHigh != image.identity.FileIndexHigh || actual.FileIndexLow != image.identity.FileIndexLow {
+						return false, errors.Join(err, errors.New("diagnostic normalized-volume path replaced the captured executable"))
+					}
+					info.File = file
 				}
 				if variant == "global-root" {
 					buffer := make([]uint16, 32768)
