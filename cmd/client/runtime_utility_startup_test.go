@@ -200,6 +200,37 @@ func TestRuntimeUtilityStartup(t *testing.T) {
 		}
 	}
 
+	t.Run("physical-protection-admission-before-configuration", func(t *testing.T) {
+		root := t.TempDir()
+		write(filepath.Join(root, "client", "Prepare-Windows-Mode-Catalog-v2.ps1"), helper)
+		write(filepath.Join(root, "client.json"), []byte("{unrelated-invalid-config"))
+		before := snapshot(root)
+		for _, args := range [][]string{
+			{windowsProtectionUtilityFlag},
+			{windowsProtectionUtilityFlag, "unknown"},
+			{windowsProtectionUtilityFlag, "release", "foreign-owner"},
+			{windowsProtectionUtilityFlag, "force-off", "foreign-path"},
+			{windowsProtectionUtilityFlag, "status", "foreign-object"},
+			{windowsProtectionUtilityFlag, "--help"},
+		} {
+			stdout, stderr, code := run(root, filepath.Join(root, "client.json"), args...)
+			if code != 1 || stdout != "" || stderr != "--windows-physical-protection requires exactly status, release or force-off\n" {
+				t.Fatalf("physical protection utility admitted arbitrary input or ordinary startup: args=%v code=%d out=%q err=%q", args, code, stdout, stderr)
+			}
+			if !reflect.DeepEqual(snapshot(root), before) {
+				t.Fatal("rejected protection utility changed unrelated application data")
+			}
+		}
+		if runtime.GOOS != "windows" {
+			for _, operation := range []string{"status", "release", "force-off"} {
+				stdout, stderr, code := run(root, filepath.Join(root, "client.json"), windowsProtectionUtilityFlag, operation)
+				if code != 1 || stdout != "" || stderr != "owned Windows physical protection requires Windows\n" || !reflect.DeepEqual(snapshot(root), before) {
+					t.Fatalf("foreign platform fell through to ordinary startup: operation=%s code=%d out=%q err=%q", operation, code, stdout, stderr)
+				}
+			}
+		}
+	})
+
 	t.Run("normal-startup-migrates-trust-and-prepares-catalog", func(t *testing.T) {
 		root := t.TempDir()
 		write(filepath.Join(root, "client", "Prepare-Windows-Mode-Catalog-v2.ps1"), helper)

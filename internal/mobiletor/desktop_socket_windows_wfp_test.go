@@ -424,3 +424,95 @@ func TestDesktopSocketWindowsWFPExplicitRecovery(t *testing.T) {
 		t.Fatal("explicit recovery retained the proved managed baseline", err)
 	}
 }
+
+func TestDesktopSocketWindowsWFPStatusAndNormalRelease(t *testing.T) {
+	for _, policy := range []string{"on-connect", "always"} {
+		t.Run(policy, func(t *testing.T) {
+			p := desktopWindowsWFPTestOwner(t, policy, false)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			state, err := readDesktopWindowsProtection(ctx, p.fixtureScope)
+			if err != nil || state.Schema != 1 || !state.Active || state.Policy != policy || state.Phase != "owned" {
+				t.Fatal("active native protection status differs from the actual owner", state, err)
+			}
+			if err := p.assertBaseline(); err != nil {
+				t.Fatal("status readback changed active protection", err)
+			}
+			blocked, err := newDesktopWindowsProtectionTransaction(ctx, p.fixtureScope, false)
+			if err == nil {
+				t.Fatal("normal release adopted an active native session")
+			}
+			if blocked != nil {
+				if err := blocked.Close(ctx); err != nil {
+					t.Fatal("rejected release did not retire its own empty session", err)
+				}
+			}
+			// End the two real BFE sessions without the higher-level cleanup,
+			// leaving their durable record as after a native process exits.
+			// No socket identity/account exists in this baseline-only fixture.
+			if err := p.leaseEngine.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := p.baselineEngine.Close(); err != nil {
+				t.Fatal(err)
+			}
+			p.closed = true // both handles were independently closed above
+			state, err = readDesktopWindowsProtection(ctx, p.fixtureScope)
+			if err != nil || !state.Active || state.Policy != policy || state.Phase != "retained" {
+				t.Fatal("native-session loss did not leave its complete durable record", state, err)
+			}
+			release, err := newDesktopWindowsProtectionTransaction(ctx, p.fixtureScope, false)
+			if release != nil {
+				err = errors.Join(err, release.Close(ctx))
+			}
+			if err != nil {
+				t.Fatal("normal native protection release failed", err)
+			}
+			state, err = readDesktopWindowsProtection(ctx, p.fixtureScope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if policy == "always" {
+				if !state.Active || state.Policy != "always" || state.Phase != "retained" {
+					t.Fatal("normal release removed Always protection", state)
+				}
+			} else if state.Active || state.Policy != "off" || state.Phase != "off" {
+				t.Fatal("normal release retained stale on-connect protection", state)
+			}
+			desktopWindowsWFPTestRecovery(t, p.fixtureScope)
+			state, err = readDesktopWindowsProtection(ctx, p.fixtureScope)
+			if err != nil || state.Active || state.Policy != "off" || state.Phase != "off" {
+				t.Fatal("explicit recovery did not prove the final managed absence", state, err)
+			}
+		})
+	}
+}
+
+func TestDesktopSocketWindowsWFPStatusRejectsExtraRetainedRule(t *testing.T) {
+	p := desktopWindowsWFPTestOwner(t, "always", false)
+	if err := p.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := desktopWFPOpen(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	extra := p.rule("unexpected-retained-status", 4, false, 99, true, true)
+	if err := engine.Add(&extra); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := engine.Delete(extra.Key); err != nil {
+			t.Error(err)
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := readDesktopWindowsProtection(ctx, p.fixtureScope); err == nil {
+		t.Fatal("native status accepted an extra retained permit")
+	}
+	if err := engine.Assert(extra); err != nil {
+		t.Fatal("rejected status unexpectedly changed the scoped fixture", err)
+	}
+}

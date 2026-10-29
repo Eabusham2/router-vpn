@@ -31,6 +31,8 @@ REQUIRED = (
     "TestDesktopSocketWindowsWFPAssignedWeights",
     "TestDesktopSocketWindowsWFPRejectsRecordedWeight",
     "TestDesktopSocketWindowsWFPInterfaceReadback",
+    "TestDesktopSocketWindowsWFPStatusAndNormalRelease",
+    "TestDesktopSocketWindowsWFPStatusRejectsExtraRetainedRule",
 )
 
 
@@ -38,6 +40,7 @@ def mutants(target):
     baseline = (target / "desktop_socket_windows_baseline.go").read_text(encoding="utf-8")
     wfp = (target / "desktop_socket_windows_wfp.go").read_text(encoding="utf-8")
     policy = (target / "desktop_socket_windows_policy.go").read_text(encoding="utf-8")
+    status = (target / "desktop_socket_windows_status.go").read_text(encoding="utf-8")
     return (
         ("extra-filter", "desktop_socket_windows_wfp.go", REQUIRED[4],
          "full WFP readback accepted an extra broader permit",
@@ -69,6 +72,14 @@ def mutants(target):
          IDENTITY.replace_once(policy,
                                "err != nil || uint32(actual) != item.Index",
                                "err != nil || uint32(actual) != uint32(value)")),
+        ("normal-release-always", "desktop_socket_windows_baseline.go", REQUIRED[10],
+         "normal release removed Always protection",
+         IDENTITY.replace_once(baseline, "if removeAlways {", "if true {")),
+        ("retained-status-extra-rule", "desktop_socket_windows_status.go", REQUIRED[11],
+         "native status accepted an extra retained permit",
+         IDENTITY.replace_once(status,
+                               "if err := engine.AssertComplete(baseline.sublayer, baseline.baseline); err != nil {",
+                               "if err := error(nil); err != nil {")),
     )
 
 
@@ -80,6 +91,7 @@ def execute(source=ROOT, go="go", *, env=None):
     source, target, package, before = IDENTITY.checked_sources(source)
     for name in ("desktop_socket_windows_wfp.go", "desktop_socket_windows_wfp_security.go",
                  "desktop_socket_windows_baseline.go", "desktop_socket_windows_policy.go",
+                 "desktop_socket_windows_status.go",
                  "desktop_socket_windows_tunnel.go", "desktop_socket_windows_wfp_test.go"):
         if name not in before:
             raise ValueError("WFP gate lost its shipping source closure: " + name)
@@ -121,7 +133,7 @@ def execute(source=ROOT, go="go", *, env=None):
             print("Rejected production WFP mutant:", label, flush=True)
         if IDENTITY.checked_sources(source)[3] != before:
             raise ValueError("WFP source changed during its actual native gate")
-    print("Owned Windows WFP baseline passed ten actual kernel/lifecycle cases and six production negative controls; socket traffic and native admission remain separately gated.", flush=True)
+    print("Owned Windows WFP baseline passed twelve actual kernel/lifecycle cases and eight production negative controls; socket traffic and native admission remain separately gated.", flush=True)
 
 
 if __name__ == "__main__":

@@ -324,6 +324,18 @@ func NewDesktopWindowsProtectionRecovery(ctx context.Context) (*DesktopWindowsPr
 	return newDesktopWindowsProtectionRecovery(ctx, nil)
 }
 func newDesktopWindowsProtectionRecovery(ctx context.Context, fixtureScope []byte) (*DesktopWindowsProtectionRecovery, error) {
+	return newDesktopWindowsProtectionTransaction(ctx, fixtureScope, true)
+}
+
+// NewDesktopWindowsProtectionRelease retires a stale on-connect baseline after
+// its native session has joined. Unlike explicit recovery, it preserves Always.
+// The decision is read under the same native session lock as cleanup, so a
+// selected-profile change or a replacement baseline cannot authorize removal.
+func NewDesktopWindowsProtectionRelease(ctx context.Context) (*DesktopWindowsProtectionRecovery, error) {
+	return newDesktopWindowsProtectionTransaction(ctx, nil, false)
+}
+
+func newDesktopWindowsProtectionTransaction(ctx context.Context, fixtureScope []byte, removeAlways bool) (*DesktopWindowsProtectionRecovery, error) {
 	if ctx == nil || ctx.Err() != nil || len(fixtureScope) > 65536 || len(fixtureScope)%2 != 0 {
 		return nil, errors.New("Windows protection recovery requires a live bounded owner")
 	}
@@ -364,7 +376,9 @@ func newDesktopWindowsProtectionRecovery(ctx context.Context, fixtureScope []byt
 		p.capture, p.metadata, p.baseline = old.capture, old.metadata, old.baseline
 		p.baselineWeight = old.baselineWeight
 		p.options = old.options
-		p.options.KillSwitchPolicy = "on-connect" // only this explicit recovery authorizes removal of Always
+		if removeAlways {
+			p.options.KillSwitchPolicy = "on-connect" // only explicit recovery authorizes removal of Always
+		}
 		p.installed = true
 		return struct{}{}, nil
 	})

@@ -99,6 +99,13 @@ func main() {
 		}
 		return
 	}
+	if handled, err := windowsPhysicalProtectionUtility(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err = validateNativeOwnedStartup(ownedController); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
