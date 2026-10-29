@@ -213,7 +213,7 @@ func LaunchGUIChild(ctx context.Context, image *Image, build func(uint64) ([]str
 		}
 	}
 	if err != nil {
-		return child, err
+		return child, nativeError("original-user GUI suspended CreateProcess", err)
 	}
 	if child.process == nil || created.Thread == 0 {
 		return child, errors.New("native GUI creation returned no exact suspended owner")
@@ -236,7 +236,7 @@ func LaunchGUIChild(ctx context.Context, image *Image, build func(uint64) ([]str
 		return child, errors.Join(err, errors.New("native GUI did not retain its original desktop identity"))
 	}
 	if err := child.process.VerifyImage(image); err != nil {
-		return child, err
+		return child, nativeError("original-user GUI suspended image readback", err)
 	}
 	actualParent, err := CurrentIdentity()
 	if err != nil || !sameOriginalUser(identity, actualParent) {

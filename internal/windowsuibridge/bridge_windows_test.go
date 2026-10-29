@@ -196,7 +196,11 @@ func nativeBridgeLaunch(t *testing.T, host *nativeBridgeHost, mode, address stri
 		}
 	})
 	if err != nil {
-		t.Fatal("actual original-user C# GUI did not start", err)
+		var pid uint32
+		if gui.child != nil {
+			pid = gui.child.PID()
+		}
+		t.Fatal("actual original-user C# GUI did not start", "retained_pid", pid, err)
 	}
 	return gui
 }

@@ -93,7 +93,7 @@ def mutants():
               "\t// Broken: cancelled launches enter a new owner.")),
         ("gui_windows.go", "suspended-image-readback", REQUIRED[7],
          "native GUI resumed a different actual image than its pinned capture",
-         once(gui, "\tif err := child.process.VerifyImage(image); err != nil {\n\t\treturn child, err\n\t}",
+         once(gui, "\tif err := child.process.VerifyImage(image); err != nil {\n\t\treturn child, nativeError(\"original-user GUI suspended image readback\", err)\n\t}",
               "\t// Broken: the suspended actual image is not compared.")),
         ("gui_windows.go", "launcher-death-job", REQUIRED[9],
          "GUI launcher death left its owned GUI tree alive",
