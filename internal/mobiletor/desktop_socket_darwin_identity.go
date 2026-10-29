@@ -34,10 +34,17 @@ func desktopDarwinProtectedPath(path string, private bool) error {
 			return err
 		}
 		stat, ok := info.Sys().(*syscall.Stat_t)
-		if !ok || stat.Uid != 0 || stat.Gid != 0 || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0022 != 0 ||
+		if !ok {
+			return fmt.Errorf("Darwin privileged path has no native ownership metadata: %q", current)
+		}
+		// macOS runtime directories can have a read-only daemon group, and
+		// children inherit that group. Only root ownership and the effective
+		// mutation/read permissions establish authority; a non-wheel group
+		// does not grant access when its mode bits and ACL do not allow it.
+		if stat.Uid != 0 || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0022 != 0 ||
 			info.Mode()&(os.ModeSetuid|os.ModeSetgid) != 0 || current != path && !info.IsDir() ||
 			current == path && private && info.Mode().Perm()&0077 != 0 {
-			return errors.New("Darwin privileged path has unowned mutation authority")
+			return fmt.Errorf("Darwin privileged path has unowned mutation authority: %q (uid=%d gid=%d mode=%#o)", current, stat.Uid, stat.Gid, info.Mode().Perm())
 		}
 		if !info.IsDir() && (!info.Mode().IsRegular() || stat.Nlink != 1) {
 			return errors.New("Darwin privileged path is linked or not a regular file")

@@ -31,6 +31,115 @@ type desktopDarwinFixture struct {
 
 var desktopDarwinTestFixture desktopDarwinFixture
 
+func TestDesktopDarwinGuardianKernelProtectedPathAuthority(t *testing.T) {
+	if os.Geteuid() != 0 || desktopDarwinTestFixture.Nonce == "" {
+		t.Fatal("actual root-owned Darwin path fixture is required")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := os.MkdirTemp(filepath.Dir(executable), "path-authority-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity, err := os.Lstat(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		current, err := os.Lstat(directory)
+		if err != nil || !os.SameFile(identity, current) {
+			t.Error("captured native path fixture was replaced; refusing cleanup", err)
+			return
+		}
+		if err := os.RemoveAll(directory); err != nil {
+			t.Error("captured native path cleanup failed", err)
+		}
+	})
+	// Exercise actual ownership metadata, including the group inherited from
+	// macOS runtime ancestors, without changing a pre-existing system path.
+	if err := os.Chown(directory, 0, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := desktopDarwinProtectedPath(directory, true); err != nil {
+		t.Fatal("root-owned private directory with a read-only group was rejected", err)
+	}
+	for _, kind := range []string{"public-readonly-group", "private-readonly-group", "foreign-owner", "group-write", "other-write", "private-readable", "symlink", "hardlink", "mutable-parent", "write-acl", "private-read-acl"} {
+		t.Run(kind, func(t *testing.T) {
+			var err error
+			parent := filepath.Join(directory, kind)
+			if err := os.Mkdir(parent, 0700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(parent, "captured")
+			if err := os.WriteFile(path, []byte("owned native path fixture\n"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chmod(path, 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chown(path, 0, 1); err != nil {
+				t.Fatal(err)
+			}
+			private := kind == "private-readonly-group" || kind == "private-readable" || kind == "private-read-acl"
+			if private && kind != "private-readable" {
+				if err := os.Chmod(path, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			switch kind {
+			case "foreign-owner":
+				err = os.Chown(path, 1, 1)
+			case "group-write":
+				err = os.Chmod(path, 0664)
+			case "other-write":
+				err = os.Chmod(path, 0646)
+			case "symlink":
+				alias := filepath.Join(parent, "alias")
+				err = os.Symlink(path, alias)
+				path = alias
+			case "hardlink":
+				err = os.Link(path, filepath.Join(parent, "alias"))
+			case "mutable-parent":
+				err = os.Chmod(parent, 0775)
+			case "write-acl", "private-read-acl":
+				right := "write"
+				if kind == "private-read-acl" {
+					right = "read"
+				}
+				before, statErr := os.Lstat(path)
+				if statErr != nil {
+					t.Fatal(statErr)
+				}
+				if output, aclErr := exec.Command("/bin/chmod", "+a", "everyone allow "+right, path).CombinedOutput(); aclErr != nil {
+					t.Fatal("actual native ACL fixture could not be applied", aclErr, string(output))
+				}
+				t.Cleanup(func() {
+					if output, aclErr := exec.Command("/bin/chmod", "-N", path).CombinedOutput(); aclErr != nil {
+						t.Error("actual native ACL fixture could not be removed", aclErr, string(output))
+					}
+				})
+				after, statErr := os.Lstat(path)
+				if statErr != nil || before.Mode().Perm() != after.Mode().Perm() {
+					t.Fatal("ACL authority was not isolated from Unix mode bits", statErr)
+				}
+			}
+			if err != nil {
+				t.Fatal("actual native path fixture could not be prepared", err)
+			}
+			err = desktopDarwinProtectedPath(path, private)
+			allowed := kind == "public-readonly-group" || kind == "private-readonly-group"
+			if allowed && err != nil {
+				t.Fatal("root-owned path with a read-only group was rejected", err)
+			}
+			if !allowed && err == nil {
+				t.Fatal("unowned file, write access or private-data exposure acquired privileged path authority", kind)
+			}
+		})
+	}
+}
+
 func init() {
 	executable, err := os.Executable()
 	if err != nil || filepath.Base(executable) != "darwin-guardian.test" || !strings.HasPrefix(filepath.Dir(executable), "/private/var/run/routervpn-darwin-guardian-") {
