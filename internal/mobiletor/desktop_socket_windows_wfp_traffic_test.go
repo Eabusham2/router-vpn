@@ -38,6 +38,31 @@ type desktopWindowsWFPPeerProcess struct {
 	record  desktopWindowsWFPPeerRecord
 }
 
+const desktopWindowsWFPHoldGreeting = "routervpn-bounded-receiver/1\n"
+const desktopWindowsWFPTestBuffer = 4096
+
+func desktopWindowsWFPReadTestBuffer(raw syscall.RawConn, option int) error {
+	var result error
+	err := raw.Control(func(handle uintptr) {
+		actual, readErr := syscall.GetsockoptInt(syscall.Handle(handle), syscall.SOL_SOCKET, option)
+		if readErr != nil || actual <= 0 || actual > desktopWindowsWFPTestBuffer {
+			result = errors.Join(readErr, fmt.Errorf("private WFP peer buffer is not bounded: option=%d actual=%d maximum=%d", option, actual, desktopWindowsWFPTestBuffer))
+		}
+	})
+	return errors.Join(err, result)
+}
+
+func desktopWindowsWFPSetTestBuffer(raw syscall.RawConn, option int) error {
+	var result error
+	err := raw.Control(func(handle uintptr) {
+		result = syscall.SetsockoptInt(syscall.Handle(handle), syscall.SOL_SOCKET, option, desktopWindowsWFPTestBuffer)
+	})
+	if err != nil || result != nil {
+		return errors.Join(err, result)
+	}
+	return desktopWindowsWFPReadTestBuffer(raw, option)
+}
+
 // A different actual executable hosts the peer. The subject's test-only WFP
 // scope cannot block the peer listener or make a same-process listener bypass
 // the subject's socket/SID conditions. Only local test traffic is generated.
@@ -196,9 +221,30 @@ func TestDesktopSocketWindowsWFPPeerProcess(t *testing.T) {
 			continue
 		}
 		for _, hold := range []bool{false, true} {
-			listener, err := net.Listen(network, address)
+			var config net.ListenConfig
+			if hold {
+				// Windows need not reduce the TCP receive window after the
+				// handshake. Bound it on the listening socket before bind/listen,
+				// then independently read the inherited accepted-socket value.
+				// https://learn.microsoft.com/en-us/windows/win32/winsock/sio-set-compatibility-mode
+				config.Control = func(_, _ string, raw syscall.RawConn) error {
+					return desktopWindowsWFPSetTestBuffer(raw, syscall.SO_RCVBUF)
+				}
+			}
+			listener, err := config.Listen(context.Background(), network, address)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if hold {
+				raw, err := listener.(*net.TCPListener).SyscallConn()
+				if err != nil {
+					_ = listener.Close()
+					t.Fatal(err)
+				}
+				if err := desktopWindowsWFPReadTestBuffer(raw, syscall.SO_RCVBUF); err != nil {
+					_ = listener.Close()
+					t.Fatal(err)
+				}
 			}
 			listeners = append(listeners, listener)
 			key := network
@@ -228,9 +274,25 @@ func TestDesktopSocketWindowsWFPPeerProcess(t *testing.T) {
 						defer connection.Close()
 						defer func() { mutex.Lock(); delete(connections, connection); mutex.Unlock() }()
 						if hold {
-							if tcp, ok := connection.(*net.TCPConn); ok {
-								_ = tcp.SetReadBuffer(4096)
+							connection := connection.(*net.TCPConn)
+							raw, err := connection.SyscallConn()
+							if err != nil {
+								t.Error("held peer lost its actual accepted socket", err)
+								return
 							}
+							if err := desktopWindowsWFPReadTestBuffer(raw, syscall.SO_RCVBUF); err != nil {
+								t.Error(err)
+								return
+							}
+							if err := connection.SetWriteDeadline(time.Now().Add(3 * time.Second)); err != nil {
+								t.Error(err)
+								return
+							}
+							if n, err := io.WriteString(connection, desktopWindowsWFPHoldGreeting); err != nil || n != len(desktopWindowsWFPHoldGreeting) {
+								t.Error("held peer could not acknowledge its bounded actual receiver", n, err)
+								return
+							}
+							// No receive call is made on this accepted socket.
 							<-stop
 							return
 						}
@@ -410,6 +472,16 @@ func TestDesktopSocketWindowsWFPBlockedControlRetainsEnteredIO(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer connection.Close()
+	if err := connection.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	greeting := make([]byte, len(desktopWindowsWFPHoldGreeting))
+	if _, err := io.ReadFull(connection, greeting); err != nil || string(greeting) != desktopWindowsWFPHoldGreeting {
+		t.Fatal("queued-I/O fixture lacks the actual bounded peer acknowledgment", string(greeting), err)
+	}
+	if err := connection.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
 	owned, ok := connection.(*desktopSocketConn)
 	if !ok {
 		t.Fatal("blocked-I/O fixture did not enter the shipping socket broker")
@@ -420,19 +492,31 @@ func TestDesktopSocketWindowsWFPBlockedControlRetainsEnteredIO(t *testing.T) {
 		t.Fatal("blocked-I/O fixture did not enter the shipping Winsock importer")
 	}
 	raw := desktopWindowsRaw{native}
-	var configured error
-	if err := raw.Control(func(handle uintptr) {
-		configured = syscall.SetsockoptInt(syscall.Handle(handle), syscall.SOL_SOCKET, syscall.SO_SNDBUF, 4096)
-	}); err != nil || configured != nil {
-		t.Fatal("could not bound the actual queued send buffer", err, configured)
+	if err := desktopWindowsWFPSetTestBuffer(raw, syscall.SO_SNDBUF); err != nil {
+		t.Fatal("could not bound the actual queued send buffer", err)
 	}
 	type writeResult struct {
 		n   int
 		err error
 	}
 	written := make(chan writeResult, 1)
-	payload := make([]byte, 64<<20)
-	go func() { n, err := connection.Write(payload); written <- writeResult{n, err} }()
+	const fillLimit = 64 << 20
+	payload := make([]byte, 64<<10)
+	go func() {
+		// A single large successful WSASend is not proof that the receiver
+		// drained it. Use bounded requests until an actual write is held in
+		// the native importer and WSAPoll independently reports no capacity.
+		writtenBytes := 0
+		for writtenBytes < fillLimit {
+			n, err := connection.Write(payload)
+			writtenBytes += n
+			if err != nil || n != len(payload) {
+				written <- writeResult{writtenBytes, errors.Join(err, io.ErrShortWrite)}
+				return
+			}
+		}
+		written <- writeResult{writtenBytes, nil}
+	}()
 	blockedUntil := time.Now().Add(5 * time.Second)
 	for {
 		select {
@@ -487,7 +571,7 @@ func TestDesktopSocketWindowsWFPBlockedControlRetainsEnteredIO(t *testing.T) {
 	}
 	select {
 	case result := <-written:
-		if result.err == nil || result.n >= len(payload) {
+		if result.err == nil || result.n >= fillLimit {
 			t.Fatal("stalled policy did not interrupt already-entered kernel I/O", result.n, result.err)
 		}
 	case <-time.After(6 * time.Second):
