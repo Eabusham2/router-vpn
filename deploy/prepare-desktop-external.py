@@ -418,6 +418,7 @@ def prepare(vendor, go='go', *, env=None):
         for path in sorted((ROOT/'internal'/package).glob('*.go')):
             if path.name.endswith('_test.go') and not (package == 'mobiletor' and path.name in (
                     'desktop_socket_broker_test.go', 'desktop_socket_source_unix_test.go', 'desktop_socket_native_windows_test.go',
+                    'desktop_socket_windows_identity_test.go',
                     'desktop_socket_source_privileged_test.go', 'desktop_socket_linux_guardian_test.go')):
                 continue
             raw = path.read_bytes()

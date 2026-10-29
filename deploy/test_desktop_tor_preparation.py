@@ -122,7 +122,7 @@ class DesktopPTPreparation(unittest.TestCase):
 
     def test_shipping_preparer_calls_selective_pipeline_without_mobile_tor(self):
         captured = dict(os.environ, GOTOOLCHAIN='local', GOWORK='off', GOENV='off')
-        with patch.object(PREP, 'prepare_desktop_pt') as selective, patch.object(PREP, 'write') as writes, \
+        with patch.object(PREP, 'prepare_desktop_pt') as selective, patch.object(PREP, 'write', wraps=PREP.write) as writes, \
              patch.object(PREP.MTU, 'prepare'), patch.object(PREP.DESKTOP_MTU, 'prepare'), \
              patch.object(PREP.STRATEGY, 'prepare'), patch.object(PREP.EXTERNAL, 'prepare'), \
              patch.object(PREP, 'prepare_network_startup') as startup, \
@@ -142,8 +142,13 @@ class DesktopPTPreparation(unittest.TestCase):
             self.assertEqual(generated['routervpn/mobiletor/desktop_socket_broker_test.go'],
                              (ROOT/'internal/mobiletor/desktop_socket_broker_test.go').read_bytes())
             for name in ('desktop_socket_source_unix_test.go', 'desktop_socket_source_privileged_test.go',
-                         'desktop_socket_linux_guardian_test.go'):
+                         'desktop_socket_linux_guardian_test.go', 'desktop_socket_native_windows_test.go',
+                         'desktop_socket_windows_identity_test.go'):
                 self.assertEqual(generated['routervpn/mobiletor/'+name], (ROOT/'internal/mobiletor'/name).read_bytes())
+            for name in ('desktop_socket_windows_identity.go', 'desktop_socket_windows_identity_api.go',
+                         'desktop_socket_windows_identity_test.go'):
+                self.assertEqual((self.vendor/'routervpn/mobiletor'/name).read_bytes(),
+                                 (ROOT/'internal/mobiletor'/name).read_bytes())
             for relative, raw in PREP.comparison_client_contract().items():
                 self.assertEqual(generated[relative], raw)
 
