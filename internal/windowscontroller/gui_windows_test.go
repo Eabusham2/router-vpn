@@ -782,6 +782,47 @@ func TestWindowsControllerGUIRejectsNormalizedImageBeforeCreate(t *testing.T) {
 	guiRejectChangedImage(t, false)
 }
 
+// The shipping WPF and tray hosts use the actual Windows PowerShell image,
+// rather than a PATH-selected process or a copy of this Go fixture. Its system
+// path, real file identity, suspended token/Job proofs and exit must all work
+// under exactly the same native launch boundary before that host is adopted.
+func TestWindowsControllerGUIActualSystemPowerShell(t *testing.T) {
+	api, err := native()
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := PinImage(filepath.Join(api.systemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"))
+	if err != nil {
+		t.Fatal("actual system PowerShell could not retain its native executable identity:", err)
+	}
+	defer image.Close()
+	directory := t.TempDir()
+	environment, err := guiFixtureEnvironment(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	child, err := LaunchGUIChild(ctx, image, func(uint64) ([]string, error) {
+		return []string{"-NoProfile", "-NonInteractive", "-Command", "exit 0"}, nil
+	}, environment, directory)
+	if child != nil {
+		defer func() {
+			cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+			defer stop()
+			if err := child.Close(cleanup); err != nil {
+				t.Error("actual system PowerShell did not join its captured native owner:", err)
+			}
+		}()
+	}
+	if err != nil || child == nil || child.PID() == 0 {
+		t.Fatal("actual system PowerShell did not pass suspended original-user launch proof:", err)
+	}
+	if exit, err := child.Wait(ctx); err != nil || exit != 0 {
+		t.Fatal("actual system PowerShell did not complete its fixed bounded command:", exit, err)
+	}
+}
+
 func guiRejectChangedImage(t *testing.T, afterCreation bool) {
 	t.Helper()
 	directory := t.TempDir()

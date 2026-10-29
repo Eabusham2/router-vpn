@@ -39,6 +39,7 @@ REQUIRED = (
     "TestWindowsControllerStreamCloseJoinsBorrowedWriter",
     "TestWindowsControllerGUIRejectedTerminationJoinsExactProcess",
     "TestWindowsControllerGUIRejectsNormalizedImageBeforeCreate",
+    "TestWindowsControllerGUIActualSystemPowerShell",
 )
 
 
@@ -171,7 +172,7 @@ def execute(go="go"):
             print("Rejected production native GUI mutant:", name, flush=True)
         if sources() != before:
             raise ValueError("Native GUI sources changed during execution")
-    print("Native GUI ownership passed sixteen actual kernel process/pipe cases and fourteen compiled production negative controls, including distinct pre-creation and suspended-image proofs; C# application and cross-account UAC composition remain separate.", flush=True)
+    print("Native GUI ownership passed seventeen actual kernel process/pipe cases and fourteen compiled production negative controls, including actual system PowerShell plus distinct pre-creation and suspended-image proofs; C# application and cross-account UAC composition remain separate.", flush=True)
 
 
 if __name__ == "__main__":
