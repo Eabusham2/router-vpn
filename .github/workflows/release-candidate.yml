@@ -335,11 +335,18 @@ jobs:
           $installed=Join-Path $env:RUNNER_TEMP "installed-$arch"
           $roots=@(Get-ChildItem -LiteralPath $installed -Directory)
           if($roots.Count -ne 1){throw 'Expected exactly one extracted Windows release package'}
-          $test=Join-Path $roots[0].FullName 'client/test-windows-owned-protection.ps1'
-          if(-not(Test-Path -LiteralPath $test -PathType Leaf)){throw 'Shipped Windows package lacks its owned protection adapter fixture'}
-          foreach($shell in @('pwsh','powershell.exe')){
-            & $shell -NoProfile -ExecutionPolicy Bypass -File $test
-            if($LASTEXITCODE -ne 0){throw "Packaged Windows $arch owned protection adapter failed in $shell"}
+          $relocated=@(Get-ChildItem -LiteralPath (Join-Path $env:RUNNER_TEMP "portable-moved-$arch") -Directory)
+          if($relocated.Count -ne 1){throw 'Expected exactly one relocated Portable release package'}
+          $packages=@($roots[0].FullName,(Join-Path $relocated[0].FullName 'App/RouterVPN'))
+          foreach($package in $packages){
+            foreach($name in @('test-windows-owned-protection.ps1','test-windows-protection-dispatch.ps1')){
+              $test=Join-Path $package ('client/'+$name)
+              if(-not(Test-Path -LiteralPath $test -PathType Leaf)){throw "Shipped Windows package lacks its owned protection fixture: $name"}
+              foreach($shell in @('pwsh','powershell.exe')){
+                & $shell -NoProfile -ExecutionPolicy Bypass -File $test
+                if($LASTEXITCODE -ne 0){throw "Packaged Windows $arch $name failed in $shell at $package"}
+              }
+            }
           }
       - name: Execute packaged Tor wrapper lifecycle
         shell: pwsh

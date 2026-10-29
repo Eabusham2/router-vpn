@@ -74,6 +74,8 @@ jobs:
           foreach($shell in @('pwsh','powershell.exe')){
             python deploy/test_windows_owned_protection.py --shell $shell
             if($LASTEXITCODE -ne 0){throw "Owned Windows protection adapter failed in $shell"}
+            & $shell -NoProfile -ExecutionPolicy Bypass -File client/test-windows-protection-dispatch.ps1
+            if($LASTEXITCODE -ne 0){throw "Full Windows protection dispatcher failed in $shell"}
           }
       - name: Parse native PowerShell
         shell: pwsh
@@ -83,6 +85,7 @@ jobs:
             'client/Private-RouterVPN-State.ps1',
             'client/Private-RouterVPN-Protection.ps1',
             'client/test-windows-owned-protection.ps1',
+            'client/test-windows-protection-dispatch.ps1',
             'client/Private-RouterVPN-Job.ps1',
             'client/test-windows-private-job.ps1',
             'client/Private-RouterVPN-Wfp.ps1',

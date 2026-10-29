@@ -329,6 +329,26 @@ function Assert-Blocked {
 $settings = $null
 if ($Action -in @('plan','check','prepare')) { $settings = Resolve-Settings }
 
+if ($Action -cne 'plan') {
+  $privateState=Join-Path $PSScriptRoot 'Private-RouterVPN-State.ps1'
+  $ownedProtection=Join-Path $PSScriptRoot 'Private-RouterVPN-Protection.ps1'
+  foreach ($helper in @($privateState,$ownedProtection)) {
+    Assert-NoReparseAncestors $helper
+    if (-not (Test-Path -LiteralPath $helper -PathType Leaf)) { throw 'Native Windows protection adapter is missing.' }
+  }
+  . $privateState
+  . $ownedProtection
+  $selectedPolicy=if ($null -ne $settings) { [string]$settings.policy } else { '' }
+  # This occurs outside legacy emergency recovery: a failed/denied native
+  # readback must never enter the old global-profile rollback fallback.
+  $handoff=Invoke-RouterVPNOwnedProtectionHandoff -Action $Action -ClientDirectory $PSScriptRoot -Policy $selectedPolicy
+  if ($handoff.handled) {
+    $handoff.status | ConvertTo-Json -Compress
+    if ($Action -ceq 'status' -and -not $handoff.status.active) { exit 1 }
+    exit 0
+  }
+}
+
 switch ($Action) {
   'plan' {
     $plan=[pscustomobject]@{

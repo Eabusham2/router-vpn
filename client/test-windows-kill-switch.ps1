@@ -280,9 +280,19 @@ try {
 
   $badState = Join-Path $temp 'windows-state.json'
   [IO.File]::WriteAllText($badState,'{broken',(New-Object Text.UTF8Encoding($false)))
+  # Exercise the real legacy reader independently of the installed native
+  # protection dispatcher. The full packaged status/denial paths (including
+  # this corrupt file) run in test-windows-protection-dispatch.ps1 with its
+  # actual sibling controller executable. A source checkout has no such exe.
+  foreach ($functionName in @('Get-StateRoot','Assert-NoReparseAncestors','Assert-SafeStateRoot','Assert-SafeStateLeaf','Read-SafeJsonFile','Read-State')) {
+    $definition=$tree.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName},$true)
+    if (-not $definition) { throw "Missing shipping legacy-state function $functionName" }
+    Invoke-Expression $definition.Extent.Text
+  }
+  $StateRoot = $temp
   $caughtState = $null
   try {
-    & $script -Action status -Endpoint '203.0.113.7' -Policy 'on-connect' -HomeLANAccess 'false' -StateRoot $temp | Out-Null
+    Read-State | Out-Null
   } catch {
     $caughtState = $_.Exception.Message
   }

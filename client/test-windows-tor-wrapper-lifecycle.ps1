@@ -261,6 +261,19 @@ if($Endpoint -cne $global:TorWitnessExpectedEndpoint){throw 'Firewall dispatch s
 $global:LASTEXITCODE=0
 if($global:TorWitnessFailure -ceq ('firewall-'+$Action)){$global:LASTEXITCODE=23}
 '@)
+  [IO.File]::WriteAllText((Join-Path $helpers 'Private-RouterVPN-Protection.ps1'),@'
+function Assert-RouterVPNNoLegacyWindowsProtection {
+  $global:TorWitnessProtection.Add('legacy-read')
+  if($global:TorWitnessFailure -ceq 'legacy-owner'){throw 'fixture existing legacy protection'}
+}
+function Invoke-RouterVPNOwnedWindowsProtection {
+  param($ClientDirectory,$Operation)
+  if($Operation -cne 'status'){throw 'Tor wrapper tried to mutate WFP outside native captured ownership.'}
+  $global:TorWitnessProtection.Add('status')
+  if($global:TorWitnessFailure -ceq 'owned-status'){throw 'fixture unknown native protection'}
+  return [pscustomobject]@{schema=1;active=$false;policy='off';phase='off'}
+}
+'@)
   $captureValue=[ordered]@{schema=1;session_id=('a'*32);isolation_secret=('b'*64);target_os='windows';tor_binary=$tor}
   $profileValue=[ordered]@{id='captured-tor-node';external=[ordered]@{protocol='tor-bridge'}}
   if($ViaEntry){
@@ -343,6 +356,29 @@ function New-FixedWitnessFixture([int]$Count=2,[string]$Policy='always',[string]
   Set-WitnessContent $fixture 'tor-profile.json' ($profile|ConvertTo-Json -Depth 16 -Compress)
   return $fixture
 }
+function New-BrokerWitnessFixture([string]$Transport='plain',[string]$Policy='always') {
+  $fixture=New-WitnessFixture
+  $external=[ordered]@{protocol='tor'}
+  if($Transport -cne 'plain'){
+    $lines=switch($Transport){
+      'meek' {@('meek_lite 192.0.2.2:443 0123456789ABCDEF0123456789ABCDEF01234567 url=https://meek.example.net/ front=front.example.net')}
+      'snowflake' {@('snowflake 192.0.2.3:80 2B280B23E1107BB62ABFC40DDCC8824814F80A72 fingerprint=2B280B23E1107BB62ABFC40DDCC8824814F80A72 url=https://snowflake-broker.example.net/ front=cdn.example.net ice=stun:stun.example.net:3478')}
+      'webtunnel' {@('webtunnel 10.0.0.2:443 89ABCDEF0123456789ABCDEF0123456789ABCDEF url=https://bridge.example.net/secret ver=0.0.1')}
+      'mixed' {@('obfs4 203.0.113.4:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=Y2VydA iat-mode=0',
+                 'webtunnel 10.0.0.2:443 89ABCDEF0123456789ABCDEF0123456789ABCDEF url=https://bridge.example.net/secret ver=0.0.1')}
+      default {throw 'Unknown physical broker fixture transport.'}
+    }
+    $external.protocol='tor-bridge'
+    $external['tor_bridge']=[ordered]@{transport='custom';bridges=@($lines);socks_port=19475}
+  }
+  $profile=[ordered]@{id='captured-tor-node';node_kind='external';kill_switch_policy=$Policy;kill_switch=$true;home_lan_access=$false;external=$external}
+  $fixture.Bridge='';$fixture.Environment['HOMEVPN_ENDPOINT']='';$fixture.Environment['HOMEVPN_TOR_PHYSICAL_BROKER']='1'
+  $graph=$fixture.Content['sing-box.json']|ConvertFrom-Json
+  $graph.services[0]|Add-Member -NotePropertyName physical_broker -NotePropertyValue $true
+  Set-WitnessContent $fixture 'tor-profile.json' ($profile|ConvertTo-Json -Depth 16 -Compress)
+  Set-WitnessContent $fixture 'sing-box.json' ($graph|ConvertTo-Json -Depth 16 -Compress)
+  return $fixture
+}
 function Invoke-WitnessWriter($Fixture,$State,[string]$Action='up'){
   Write-RouterVPNTorPrelaunchFailure -Action $Action -Root $Fixture.Root -RuntimeDir $Fixture.Runtime -Session ('a'*32) -TorBinary $Fixture.Tor -BridgeEndpoint $Fixture.Bridge -CapturedEnvironment $Fixture.Environment -LaunchState $State
 }
@@ -385,10 +421,12 @@ function Assert-MainWitness([string]$Failure,[bool]$Expected,[bool]$ViaEntry=$fa
   $global:TorWitnessFailure=$Failure;$global:TorWitnessNativePath=$fixture.Native
   $global:TorWitnessExpectedEndpoint=$fixture.Environment['HOMEVPN_ENDPOINT']
   $global:TorWitnessFirewall=New-Object 'System.Collections.Generic.List[string]'
+  $global:TorWitnessProtection=New-Object 'System.Collections.Generic.List[string]'
   $Root=$fixture.Root;$RuntimeDir=$fixture.Runtime;$Session='a'*32;$TorBinary=$fixture.Tor;$NativeBinary=$fixture.Native
   $KillSwitch=$fixture.Kill;$JobHelper=$fixture.Job;$Selector=$fixture.Selector;$Action='up';$TunnelAlias='router-vpn-tor';$BridgeEndpoint=$fixture.Bridge
   $CapturedEnvironment=$script:CapturedEnvironment;$LaunchState=$script:LaunchState
   if($Failure -in @('helper','witness-tamper-helper')){Remove-Item -LiteralPath $fixture.Job}
+  if($Failure -ceq 'physical-helper'){Remove-Item -LiteralPath (Join-Path (Split-Path -Parent $fixture.Kill) 'Private-RouterVPN-Protection.ps1')}
   if($Failure -eq 'witness-tamper-helper'){
     $fixture.Content['torrc']+='# changed input; original helper error must survive'
     [IO.File]::WriteAllText((Join-Path $fixture.Runtime 'torrc'),$fixture.Content['torrc'])
@@ -599,6 +637,69 @@ function Assert-PlainPhysicalCapture {
     Assert-MainWitness -Failure 'normal' -Expected $false -Server -CapturedFixture $fixture -RejectCapture
   }
 }
+function Assert-BrokerPhysicalCapture {
+  foreach($transport in @('plain','meek','snowflake','webtunnel','mixed')){foreach($policy in @('on-connect','always')){
+    $fixture=New-BrokerWitnessFixture $transport $policy
+    $identity=Read-CapturedIdentity $fixture
+    Check ($identity.physical_broker -and -not $identity.via_entry -and -not $identity.server -and
+      $identity.endpoint -ceq '' -and $identity.egress.Count -eq 0 -and $identity.endpoints.Count -eq 0) 'Dynamic Direct capture acquired a global physical exception.'
+    Assert-MainWitness -Failure normal -Expected $false -CapturedFixture $fixture
+    Check ($global:TorWitnessFirewall.Count -eq 0 -and ($global:TorWitnessProtection -join ',') -ceq 'legacy-read,status') 'Dynamic Direct entered the legacy profile firewall path.'
+    Check ($script:Joined -and ($script:Trace -join ',') -ceq 'start,wait,wait,close') 'Dynamic Direct failed to join its exact native owner.'
+  }}
+  foreach($failure in @('legacy-owner','owned-status','physical-helper','typed-no-child')){
+    $fixture=New-BrokerWitnessFixture 'snowflake'
+    Assert-MainWitness -Failure $failure -Expected $true -CapturedFixture $fixture
+    Check ($global:TorWitnessFirewall.Count -eq 0) 'Dynamic Direct failure modified legacy firewall state.'
+  }
+  foreach($fault in @('marker-missing','marker-typed','marker-zero','observer-missing','observer-false','observer-typed',
+    'observer-session','observer-source','endpoint','bridge-endpoint','external-session','endpoint-array','egress-array',
+    'projection','policy-off','kill-typed','bridge-missing','fixed','router','server')){
+    $fixture=switch($fault){
+      'fixed'{New-FixedWitnessFixture}
+      'router'{New-WitnessFixture -ViaEntry}
+      'server'{New-ServerWitnessFixture}
+      default{New-BrokerWitnessFixture 'snowflake'}
+    }
+    $fixture.Environment['HOMEVPN_TOR_PHYSICAL_BROKER']='1'
+    $profile=$fixture.Content['tor-profile.json']|ConvertFrom-Json
+    $graph=$fixture.Content['sing-box.json']|ConvertFrom-Json
+    switch($fault){
+      'marker-missing'{$fixture.Environment.Remove('HOMEVPN_TOR_PHYSICAL_BROKER')}
+      'marker-typed'{$fixture.Environment['HOMEVPN_TOR_PHYSICAL_BROKER']='true'}
+      'marker-zero'{$fixture.Environment['HOMEVPN_TOR_PHYSICAL_BROKER']='0'}
+      'observer-missing'{$graph.services[0].PSObject.Properties.Remove('physical_broker')}
+      'observer-false'{$graph.services[0].physical_broker=$false}
+      'observer-typed'{$graph.services[0].physical_broker='true'}
+      'observer-session'{$graph.services[0].session_id='d'*32}
+      'observer-source'{$graph.services[0].source_sha256='d'*64}
+      'endpoint'{$fixture.Environment['HOMEVPN_ENDPOINT']='203.0.113.4'}
+      'bridge-endpoint'{$fixture.Bridge='203.0.113.4'}
+      'external-session'{$fixture.Environment['HOMEVPN_EXTERNAL_SESSION']='a'*32}
+      'endpoint-array'{$fixture.Environment['HOMEVPN_NATIVE_ENDPOINTS_JSON']='[]'}
+      'egress-array'{$fixture.Environment['HOMEVPN_NATIVE_EGRESS_JSON']='[]'}
+      'projection'{$profile|Add-Member -NotePropertyName desktop_physical_egress -NotePropertyValue @()}
+      'policy-off'{$profile.kill_switch_policy='off';$profile.kill_switch=$false}
+      'kill-typed'{$profile.kill_switch='true'}
+      'bridge-missing'{$profile.external.PSObject.Properties.Remove('tor_bridge')}
+    }
+    Set-WitnessContent $fixture 'tor-profile.json' ($profile|ConvertTo-Json -Depth 16 -Compress)
+    Set-WitnessContent $fixture 'sing-box.json' ($graph|ConvertTo-Json -Depth 16 -Compress)
+    Assert-CaptureRejected $fixture ('physical-broker-'+$fault)
+    Assert-MainWitness -Failure normal -Expected $false -CapturedFixture $fixture -RejectCapture
+    Check ($global:TorWitnessFirewall.Count -eq 0 -and $global:TorWitnessProtection.Count -eq 0) 'Changed Direct capture reached any firewall owner.'
+  }
+  # The actual branch must not fall back to legacy firewall preparation even
+  # if the graph/marker validation has accepted an otherwise valid capture.
+  $changed=$mainSource.Replace("if(-not `$PhysicalCapture.physical_broker){Invoke-RouterVPNTorKillSwitch 'prepare'}", "Invoke-RouterVPNTorKillSwitch 'prepare'")
+  Check ($changed -cne $mainSource) 'Dynamic legacy-preparation defect missed its shipping guard.'
+  $script:MainDispatch=[scriptblock]::Create($changed)
+  try{
+    $fixture=New-BrokerWitnessFixture
+    Assert-MainWitness -Failure normal -Expected $false -CapturedFixture $fixture
+    Detect-Defect {Check ($global:TorWitnessFirewall.Count -eq 0) 'Dynamic Direct entered legacy preparation.'} 'Dynamic Direct entered legacy preparation.'
+  }finally{$script:MainDispatch=[scriptblock]::Create($mainSource)}
+}
 function Assert-ExternalPhysicalCapture {
   foreach($mode in @('wireguard','amneziawg','socks5','http-connect','https-connect','shadowsocks','hysteria2','openvpn')){
     $fixture=New-ExternalWitnessFixture $mode
@@ -780,13 +881,14 @@ function Assert-PhysicalCapture {
 try{
   $global:TorWitnessFirewall=New-Object 'System.Collections.Generic.List[string]'
   if(-not $ServerOnly){
+    Assert-BrokerPhysicalCapture
     Assert-FixedPhysicalCapture
     Assert-PhysicalCapture
     Assert-ExternalPhysicalCapture
   }
   Assert-ServerPhysicalCapture
   Assert-PlainPhysicalCapture
-  $changed=$captureSource.Replace("`$killPolicy.Value -cne 'off'",'$false')
+  $changed=$captureSource.Replace('$killPolicy.Value -cnotin $expectedPolicies','$false')
   Check ($changed -cne $captureSource) 'The plain Direct policy mutation missed its shipping protection guard.'
   . ([scriptblock]::Create($changed))
   $fixture=New-WitnessFixture

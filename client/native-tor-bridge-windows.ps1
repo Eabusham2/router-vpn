@@ -148,17 +148,25 @@ function Get-RouterVPNTorCaptureIdentity {
     if($null -ne $execution -and [string]$execution.Value -cnotin $choices){throw 'Tor predecessor requires its exact captured execution.'}
   }elseif($captured.length -gt 16384 -or $physicalID -cne $policyID -or
           ($null -ne $enabled -and (-not ($enabled.Value -is [bool]) -or $enabled.Value))){throw 'Direct Tor capture has another owner or exceeds its direct bound.'}
+  $brokerText=[string]$CapturedEnvironment['HOMEVPN_TOR_PHYSICAL_BROKER']
+  if($brokerText -cnotin @('','1')){throw 'Tor capture has an invalid physical broker marker.'}
+  $physicalBroker=$brokerText -ceq '1'
+  if($physicalBroker -and ($viaEntry -or $server)){throw 'Only captured Direct Tor can own a physical socket broker.'}
   $endpoint=[string]$CapturedEnvironment['HOMEVPN_ENDPOINT']
   $plainDirect=-not $viaEntry -and $protocol -ceq 'tor'
   if($plainDirect){
     $kill=$profile.PSObject.Properties['kill_switch']
     $killPolicy=$profile.PSObject.Properties['kill_switch_policy']
-    if($endpoint -cne '' -or $BridgeEndpoint -cne '' -or $null -eq $killPolicy -or $killPolicy.Value -isnot [string] -or $killPolicy.Value -cne 'off' -or
-       ($null -ne $kill -and ($kill.Value -isnot [bool] -or $kill.Value))){throw 'Direct plain Tor requires explicit Off protection and no invented guard endpoint.'}
-  }elseif([string]::IsNullOrWhiteSpace($endpoint) -or (-not $viaEntry -and $endpoint -cne $BridgeEndpoint)){throw 'Tor capture lost its actual physical endpoint.'}
+    $expectedPolicies=if($physicalBroker){@('on-connect','always')}else{@('off')}
+    if($endpoint -cne '' -or $BridgeEndpoint -cne '' -or $null -eq $killPolicy -or $killPolicy.Value -isnot [string] -or $killPolicy.Value -cnotin $expectedPolicies -or
+       ($null -ne $kill -and ($kill.Value -isnot [bool] -or (-not $physicalBroker -and $kill.Value)))){throw 'Direct plain Tor requires its captured protection owner and no invented guard endpoint.'}
+  }elseif(-not $physicalBroker -and ([string]::IsNullOrWhiteSpace($endpoint) -or (-not $viaEntry -and $endpoint -cne $BridgeEndpoint))){throw 'Tor capture lost its actual physical endpoint.'}
   # Fixed Direct authority comes only from the complete hashed bridge source.
   # Do not infer sockets from native output, a first bridge, or an entry label.
   $fixedDirect=$false;$directEgress=@();$directHosts=@()
+  if($physicalBroker -and $protocol -ceq 'tor-bridge' -and ($null -eq $bridgeSelection -or $bridgeSelection.Value -isnot [pscustomobject])){
+    throw 'Dynamic Direct Tor lost its complete captured bridge source.'
+  }
   if(-not $viaEntry -and $protocol -ceq 'tor-bridge' -and $null -ne $bridgeSelection -and $bridgeSelection.Value -is [pscustomobject]){
     $bridgeConfig=$bridgeSelection.Value
     $bridgeFields=@($bridgeConfig.PSObject.Properties.Name)
@@ -201,14 +209,18 @@ function Get-RouterVPNTorCaptureIdentity {
     $kill=$profile.PSObject.Properties['kill_switch'];$killPolicy=$profile.PSObject.Properties['kill_switch_policy']
     if(($null -ne $kill -and $kill.Value -isnot [bool]) -or ($null -ne $killPolicy -and ($killPolicy.Value -isnot [string] -or $killPolicy.Value -cnotin @('','off','on-connect','always')))){throw 'Direct Tor protection lost its captured type.'}
     $strict=($null -ne $killPolicy -and $killPolicy.Value -cin @('on-connect','always')) -or (($null -eq $killPolicy -or $killPolicy.Value -ceq '') -and $null -ne $kill -and $kill.Value)
-    if($strict -and -not $fixedDirect){throw 'Dynamic Direct Tor cannot acquire strict physical authority.'}
+    if($strict -and -not $fixedDirect -and -not $physicalBroker){throw 'Dynamic Direct Tor requires its captured physical socket broker.'}
+    if($physicalBroker -and ($fixedDirect -or -not $strict)){throw 'A physical socket broker cannot replace fixed-bridge or Off protection authority.'}
   }
   $endpointRaw=[string]$CapturedEnvironment['HOMEVPN_NATIVE_ENDPOINTS_JSON']
   $egressRaw=[string]$CapturedEnvironment['HOMEVPN_NATIVE_EGRESS_JSON']
   $hasArrays=$endpointRaw.Length -gt 0 -or $egressRaw.Length -gt 0
+  if($physicalBroker -and ($endpoint -cne '' -or $BridgeEndpoint -cne '' -or $hasArrays -or [string]$CapturedEnvironment['HOMEVPN_EXTERNAL_SESSION'])){
+    throw 'Dynamic Tor socket protection cannot acquire a global endpoint exception.'
+  }
   if(($viaEntry -or $fixedDirect) -and -not $hasArrays){throw 'Tor path requires its exact physical egress tuples.'}
   $addresses=@($endpoint);$egress=@()
-  if($plainDirect){$addresses=@()}
+  if($plainDirect -or $physicalBroker){$addresses=@()}
   if($hasArrays){
     if([string]$CapturedEnvironment['HOMEVPN_EXTERNAL_SESSION'] -cne $Session -or $endpointRaw.Length -gt 1024 -or $egressRaw.Length -gt 4096 -or
        $endpointRaw -cnotmatch '\A\["[0-9a-f:.]+"(?:,"[0-9a-f:.]+")*\]\z'){throw 'Tor physical endpoints lost their exact captured session or encoding.'}
@@ -220,7 +232,7 @@ function Get-RouterVPNTorCaptureIdentity {
     $egress=@($parsed.egress)
     if($egress.Count -lt 1 -or $egress.Count -gt 16){throw 'Tor physical egress exceeds its captured tuple bound.'}
   }
-  if(-not $plainDirect -and ($addresses.Count -lt 1 -or $addresses.Count -gt 16 -or $addresses[0] -cne $endpoint)){throw 'Tor physical endpoints changed their captured primary owner.'}
+  if(-not $plainDirect -and -not $physicalBroker -and ($addresses.Count -lt 1 -or $addresses.Count -gt 16 -or $addresses[0] -cne $endpoint)){throw 'Tor physical endpoints changed their captured primary owner.'}
   $seen=@{}
   foreach($address in $addresses){
     $ip=$null
@@ -281,16 +293,20 @@ function Get-RouterVPNTorCaptureIdentity {
   if($observers.Count -ne 1){throw 'Tor graph requires exactly one captured native network owner.'}
   $observer=$observers[0]
   $observerFields=@($observer.PSObject.Properties.Name)
-  if($observerFields.Count -ne 4 -or @($observerFields|Where-Object{@('type','tag','session_id','source_sha256') -cnotcontains $_}).Count -ne 0 -or
+  $expectedObserverFields=@('type','tag','session_id','source_sha256')
+  if($physicalBroker){$expectedObserverFields+=@('physical_broker')}
+  $observedBroker=$observer.PSObject.Properties['physical_broker']
+  if($observerFields.Count -ne $expectedObserverFields.Count -or @($observerFields|Where-Object{$expectedObserverFields -cnotcontains $_}).Count -ne 0 -or
      $observer.tag -isnot [string] -or $observer.tag -cne 'routervpn-tor-physical' -or
      $observer.session_id -isnot [string] -or $observer.session_id -cne $Session -or
-     $observer.source_sha256 -isnot [string] -or $observer.source_sha256 -cne $sourceSHA){
+     $observer.source_sha256 -isnot [string] -or $observer.source_sha256 -cne $sourceSHA -or
+     ($physicalBroker -and ($null -eq $observedBroker -or $observedBroker.Value -isnot [bool] -or -not $observedBroker.Value))){
     throw 'Tor graph belongs to another captured native network owner.'
   }
   # The controller and native compiler validate the complete entry graph.
   # This envelope binds the firewall handoff to that same immutable capture;
   # it never substitutes the Tor bridge or private proof/DNS destination.
-  return [pscustomobject]@{endpoint=$endpoint;via_entry=$viaEntry;server=$server;entry_id=$physicalID;policy_id=$policyID;capture=$capture;profile=$profile;egress=$egress;endpoints=$addresses}
+  return [pscustomobject]@{endpoint=$endpoint;via_entry=$viaEntry;server=$server;physical_broker=$physicalBroker;entry_id=$physicalID;policy_id=$policyID;capture=$capture;profile=$profile;egress=$egress;endpoints=$addresses}
 }
 function Invoke-RouterVPNTorOwnedNative {
   param(
@@ -456,12 +472,21 @@ try{
     & $KillSwitch -Action $Kind -Root $Root -Endpoint $PhysicalCapture.endpoint -TunnelAlias $TunnelAlias
     if($LASTEXITCODE -ne 0){throw "Windows Tor kill-switch $Kind failed."}
   }
-  Invoke-RouterVPNTorKillSwitch 'check'
+  if($PhysicalCapture.physical_broker){
+    $ProtectionHelper=Join-Path (Split-Path -Parent $KillSwitch) 'Private-RouterVPN-Protection.ps1'
+    Assert-RouterVPNNoReparseAncestors $ProtectionHelper
+    if(-not (Test-Path -LiteralPath $ProtectionHelper -PathType Leaf)){throw 'Native Windows protection adapter is missing.'}
+    . $ProtectionHelper
+    Assert-RouterVPNNoLegacyWindowsProtection
+    # Read only. The captured native factory creates the owned WFP baseline
+    # before any physical socket or actual TUN is allowed to start.
+    $null=Invoke-RouterVPNOwnedWindowsProtection -ClientDirectory (Split-Path -Parent $KillSwitch) -Operation status
+  }else{Invoke-RouterVPNTorKillSwitch 'check'}
   if($Action -eq 'check'){exit 0}
   $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
   $principal=New-Object Security.Principal.WindowsPrincipal($identity)
   if(-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){throw 'Native Windows Tor requires an elevated Router VPN process.'}
-  Invoke-RouterVPNTorKillSwitch 'prepare'
+  if(-not $PhysicalCapture.physical_broker){Invoke-RouterVPNTorKillSwitch 'prepare'}
   Invoke-RouterVPNTorOwnedNative -NativeBinary $NativeBinary -RuntimeDir $RuntimeDir -Session $Session -TorBinary $TorBinary -CapturedEnvironment $CapturedEnvironment -LaunchState $LaunchState
 }catch{
   try{
