@@ -37,6 +37,7 @@ REQUIRED = (
     "TestDesktopSocketWindowsWFPProbeOrdinaryProtectedObjects",
     "TestDesktopSocketWindowsWFPProbeCancelledGate",
     "TestDesktopSocketWindowsWFPProbeWorkerLifetime",
+    "TestDesktopSocketWindowsWFPProbeDeniedRead",
 )
 
 
@@ -87,18 +88,18 @@ def mutants(target):
          IDENTITY.replace_once(status,
                                "if err := engine.AssertComplete(baseline.sublayer, baseline.baseline); err != nil {",
                                "if err := error(nil); err != nil {")),
-        ("probe-access-denied", "desktop_socket_windows_probe.go", REQUIRED[13],
-         "ordinary protected session-lock access denial was reported as missing native protection",
+        ("probe-access-denied", "desktop_socket_windows_probe.go", REQUIRED[16],
+         "actual denied key read was reported as missing native protection",
          IDENTITY.replace_once(probe,
                                'if err := desktopWFPError("probe managed protection absence", status); err != nil {\n\t\t\treturn false, err\n\t\t}',
                                'if err := desktopWFPError("probe managed protection absence", status); err != nil {\n\t\t\treturn true, nil\n\t\t}')),
         ("probe-omits-baseline", "desktop_socket_windows_probe.go", REQUIRED[13],
-         "ordinary protected baseline access denial was reported as missing native protection",
+         "elevated probe overlooked its actual owned-object state",
          IDENTITY.replace_once(probe,
                                '[]string{"session-lock", "baseline", "session-lock"}',
                                '[]string{"session-lock", "session-lock"}')),
         ("probe-omits-lock", "desktop_socket_windows_probe.go", REQUIRED[13],
-         "ordinary protected session-lock access denial was reported as missing native protection",
+         "elevated probe overlooked its actual owned-object state",
          IDENTITY.replace_once(probe,
                                '[]string{"session-lock", "baseline", "session-lock"}',
                                '[]string{"baseline", "baseline"}')),
@@ -117,6 +118,11 @@ def mutants(target):
          IDENTITY.replace_once(fixture,
                                'const desktopWindowsProbePrimaryAccess = syscall.TOKEN_QUERY | syscall.TOKEN_DUPLICATE | syscall.TOKEN_ASSIGN_PRIMARY | syscall.TOKEN_ADJUST_DEFAULT | syscall.TOKEN_ADJUST_SESSIONID',
                                'const desktopWindowsProbePrimaryAccess = syscall.TOKEN_QUERY | syscall.TOKEN_DUPLICATE | syscall.TOKEN_ASSIGN_PRIMARY')),
+        ("probe-engine-access-denied", "desktop_socket_windows_probe.go", REQUIRED[12],
+         "ordinary BFE open denial was reported as missing native protection",
+         IDENTITY.function_mutant(probe, "func desktopWindowsProtectionProbe(",
+                                  '\tif err != nil {\n\t\treturn false, err\n\t}',
+                                  '\tif err != nil {\n\t\treturn true, nil\n\t}')),
     )
 
 
@@ -156,6 +162,8 @@ def execute(source=ROOT, go="go", *, env=None):
         for kind in ("session-lock", "baseline"):
             if "--- PASS: " + REQUIRED[13] + "/" + kind + " (" not in output:
                 raise ValueError("WFP probe omitted an actual non-admin protected-object query: " + kind)
+            if "--- PASS: " + REQUIRED[16] + "/" + kind + " (" not in output:
+                raise ValueError("WFP probe omitted an actual denied key READ: " + kind)
         for mode in ("worker-death", "outer-owner-close"):
             if "--- PASS: " + REQUIRED[15] + "/" + mode + " (" not in output:
                 raise ValueError("WFP probe omitted actual nested Job cleanup: " + mode)
@@ -180,7 +188,7 @@ def execute(source=ROOT, go="go", *, env=None):
             print("Rejected " + kind + " WFP mutant:", label, flush=True)
         if IDENTITY.checked_sources(source)[3] != before:
             raise ValueError("WFP source changed during its actual native gate")
-    print("Owned Windows WFP baseline passed sixteen actual kernel/lifecycle cases, distinct non-admin process absence/ACCESS_DENIED proofs, eleven production negative controls and two broken Job-owner/station-access fixture controls; socket traffic and native admission remain separately gated.", flush=True)
+    print("Owned Windows WFP baseline passed seventeen actual kernel/lifecycle cases, distinct non-admin identity with independently observed BFE OPEN/key READ results, elevated actual absence/presence, twelve production negative controls and three Job/station/token fixture controls; access denial remains unknown, never absence, and socket traffic/native admission remain separately gated.", flush=True)
 
 
 if __name__ == "__main__":

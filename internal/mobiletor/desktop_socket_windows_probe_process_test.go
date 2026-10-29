@@ -85,7 +85,10 @@ type desktopWindowsProbeReply struct {
 	Primary       bool      `json:"primary"`
 	Elevated      bool      `json:"elevated"`
 	Administrator bool      `json:"administrator"`
+	OpenStatus    uint32    `json:"open_status"`
+	Opened        bool      `json:"opened"`
 	Lookups       [3]uint32 `json:"lookups"`
+	Pointers      [3]bool   `json:"pointers"`
 	Absent        bool      `json:"absent"`
 	ProbeError    string    `json:"probe_error,omitempty"`
 	SetupError    string    `json:"setup_error,omitempty"`
@@ -940,23 +943,40 @@ func TestDesktopWindowsProtectionProbeProcess(t *testing.T) {
 			time.Sleep(25 * time.Second)
 			return errors.New("held probe child outlived its expected owner retirement")
 		}
-		engine, err := desktopWFPOpen(false)
+		api, err := desktopWFPLoad()
 		if err != nil {
-			if engine != nil {
-				_ = engine.Close()
-			}
 			return err
 		}
-		for index, kind := range []string{"session-lock", "baseline", "session-lock"} {
-			key := desktopWindowsManagedKey(kind, scope)
-			var pointer *desktopWFPSubLayer
-			status, _, _ := engine.api.getLayer.Call(uintptr(engine.handle), uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(&pointer)))
-			reply.Lookups[index] = uint32(status)
-			if pointer != nil {
-				engine.free(unsafe.Pointer(pointer))
+		// Observe the actual API independently of the production probe's error
+		// interpretation. This isolated ordinary logon may be denied at OPEN,
+		// before any key lookup; that is unknown state, never proven absence.
+		engine := &desktopWFPEngine{api: api}
+		session := desktopWFPSession{Timeout: 2000}
+		status, _, _ := api.open.Call(0, 10, 0, uintptr(unsafe.Pointer(&session)), uintptr(unsafe.Pointer(&engine.handle)))
+		runtime.KeepAlive(session)
+		reply.OpenStatus, reply.Opened = uint32(status), engine.handle != 0
+		observation := func() error {
+			if reply.OpenStatus != 0 {
+				if reply.OpenStatus != uint32(syscall.ERROR_ACCESS_DENIED) || reply.Opened {
+					return fmt.Errorf("ordinary independent BFE open returned unexpected status=0x%08x handle=%t", reply.OpenStatus, reply.Opened)
+				}
+				return nil
 			}
-		}
-		if err := engine.Close(); err != nil {
+			if !reply.Opened {
+				return errors.New("ordinary independent BFE open returned no session")
+			}
+			for index, kind := range []string{"session-lock", "baseline", "session-lock"} {
+				key := desktopWindowsManagedKey(kind, scope)
+				var pointer *desktopWFPSubLayer
+				status, _, _ := api.getLayer.Call(uintptr(engine.handle), uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(&pointer)))
+				reply.Lookups[index], reply.Pointers[index] = uint32(status), pointer != nil
+				if pointer != nil {
+					engine.free(unsafe.Pointer(pointer))
+				}
+			}
+			return nil
+		}()
+		if err := errors.Join(observation, engine.Close()); err != nil {
 			return err
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
