@@ -37,6 +37,7 @@ REQUIRED = (
     "TestWindowsControllerStreamActualBinaryChunks",
     "TestWindowsControllerStreamBoundsAndCancellation",
     "TestWindowsControllerStreamCloseJoinsBorrowedWriter",
+    "TestWindowsControllerGUIRejectedTerminationJoinsExactProcess",
 )
 
 
@@ -104,6 +105,14 @@ def mutants():
          "binary channel closed its native handle before the captured borrow joined",
          NATIVE.function_mutant(pipe, "func (p *Pipe) Close()", "p.operations.Wait()",
                                 "/* broken: no entered binary I/O join */")),
+        ("gui_windows.go", "termination-error-before-join", REQUIRED[14],
+         "GUI termination error bypassed the exact live process wait",
+         once(gui, "func joinGUIProcessTermination(ctx context.Context, process *Process, terminateErr error) error {",
+              "func joinGUIProcessTermination(ctx context.Context, process *Process, terminateErr error) error {\n\tif terminateErr != nil { return terminateErr }")),
+        ("gui_windows.go", "termination-error-lost-on-cancel", REQUIRED[14],
+         "bounded GUI join discarded cancellation or its actual termination failure",
+         NATIVE.function_mutant(gui, "func joinGUIProcessTermination(",
+                                "return errors.Join(terminateErr, err)", "return err")),
     )
 
 
@@ -149,7 +158,7 @@ def execute(go="go"):
             print("Rejected production native GUI mutant:", name, flush=True)
         if sources() != before:
             raise ValueError("Native GUI sources changed during execution")
-    print("Native GUI ownership passed fourteen actual kernel process/pipe cases and ten compiled production negative controls; C# application and cross-account UAC composition remain separate.", flush=True)
+    print("Native GUI ownership passed fifteen actual kernel process/pipe cases and twelve compiled production negative controls; C# application and cross-account UAC composition remain separate.", flush=True)
 
 
 if __name__ == "__main__":

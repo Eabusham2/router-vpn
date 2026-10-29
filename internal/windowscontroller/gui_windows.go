@@ -365,21 +365,15 @@ func (child *GUIChild) Close(ctx context.Context) error {
 			release()
 			return waitErr
 		}
+		var terminateErr error
 		if status == syscall.WAIT_TIMEOUT {
-			terminateErr := syscall.TerminateProcess(handle, 1)
-			if terminateErr != nil {
-				status, waitErr = syscall.WaitForSingleObject(handle, 0)
-				if waitErr != nil || status != syscall.WAIT_OBJECT_0 {
-					release()
-					return errors.Join(terminateErr, waitErr)
-				}
-			}
+			terminateErr = syscall.TerminateProcess(handle, 1)
 		} else if status != syscall.WAIT_OBJECT_0 {
 			release()
 			return errors.New("owned GUI process wait returned an unknown state")
 		}
 		release()
-		if _, err := child.process.Wait(ctx); err != nil {
+		if err := joinGUIProcessTermination(ctx, child.process, terminateErr); err != nil {
 			return err
 		}
 	}
@@ -417,5 +411,17 @@ func (child *GUIChild) Close(ctx context.Context) error {
 		child.job = 0
 	}
 	child.closed = true
+	return nil
+}
+
+// TerminateJobObject/TerminateProcess initiate asynchronous termination. A
+// repeated TerminateProcess can report access denied while that exact process
+// is still draining its kernel I/O. Neither that status nor a zero-time wait
+// proves exit. Keep its retained handle until the bounded actual wait signals;
+// if that join fails, preserve both the termination failure and join failure.
+func joinGUIProcessTermination(ctx context.Context, process *Process, terminateErr error) error {
+	if _, err := process.Wait(ctx); err != nil {
+		return errors.Join(terminateErr, err)
+	}
 	return nil
 }

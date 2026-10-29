@@ -479,6 +479,123 @@ func TestWindowsControllerGUICancelledCleanupRetainsOwner(t *testing.T) {
 	}
 }
 
+type guiObservedWaitContext struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (c *guiObservedWaitContext) Err() error {
+	c.once.Do(func() { close(c.entered) })
+	return c.Context.Err()
+}
+
+func TestWindowsControllerGUIRejectedTerminationJoinsExactProcess(t *testing.T) {
+	f := newGUIFixture(t, "hold")
+	handle, release, err := f.child.process.borrow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := syscall.GetCurrentProcess()
+	if err != nil {
+		release()
+		t.Fatal(err)
+	}
+	var queryHandle syscall.Handle
+	err = syscall.DuplicateHandle(current, handle, current, &queryHandle, 0x00101000, false, 0)
+	release()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The real kernel rejects termination through this independently narrowed
+	// handle while still allowing an actual wait on the same captured process.
+	// No process DACL, parent token privilege or production API is replaced.
+	query, err := adoptProcess(queryHandle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := query.Close(); err != nil {
+			t.Error("actual GUI wait witness did not release its joined process handle", err)
+		}
+	})
+	if rights, err := guiGrantedAccess(queryHandle); err != nil || rights != 0x00101000 || query.PID() != f.child.PID() {
+		t.Fatal("GUI termination witness lost the actual query/synchronize-only owner", rights, err)
+	}
+	terminateErr := syscall.TerminateProcess(queryHandle, 1)
+	if !errors.Is(terminateErr, syscall.ERROR_ACCESS_DENIED) || query.Alive() != nil {
+		t.Fatal("GUI termination witness did not preserve a live exact process after native access denial", terminateErr)
+	}
+	startWait := func() (context.CancelFunc, <-chan error) {
+		t.Helper()
+		bounded, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		observed := &guiObservedWaitContext{Context: bounded, entered: make(chan struct{})}
+		result, completed := make(chan error, 1), make(chan struct{})
+		go func() {
+			result <- joinGUIProcessTermination(observed, query, terminateErr)
+			close(completed)
+		}()
+		t.Cleanup(func() {
+			cancel()
+			select {
+			case <-completed:
+			case <-time.After(12 * time.Second):
+				t.Error("actual GUI process join did not leave its bounded owner")
+			}
+		})
+		select {
+		case <-observed.entered:
+		case err := <-result:
+			t.Fatal("GUI termination error bypassed the exact live process wait", err)
+		case <-time.After(3 * time.Second):
+			t.Fatal("actual GUI process join did not enter its bounded wait")
+		}
+		if err := query.Alive(); err != nil {
+			t.Fatal("GUI wait witness lost its live exact process before owner retirement", err)
+		}
+		select {
+		case err := <-result:
+			t.Fatal("GUI termination error bypassed the exact live process wait", err)
+		default:
+		}
+		return cancel, result
+	}
+	cancel, pending := startWait()
+	cancel()
+	select {
+	case err := <-pending:
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, syscall.ERROR_ACCESS_DENIED) {
+			t.Fatal("bounded GUI join discarded cancellation or its actual termination failure", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancelled exact GUI wait did not finish")
+	}
+	if err := query.Alive(); err != nil {
+		t.Fatal("cancelled GUI join changed the retained live owner", err)
+	}
+	stop, pending := startWait()
+	defer stop()
+	if ok, _, callErr := f.child.api.terminate.Call(uintptr(f.child.job), 1); ok == 0 {
+		t.Fatal("actual captured GUI Job could not retire its process", callErr)
+	}
+	select {
+	case err := <-pending:
+		if err != nil {
+			t.Fatal("actually signaled GUI process retained an earlier termination race as a failed join", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("actual GUI Job termination did not join its exact process")
+	}
+	joined, stopJoined := context.WithTimeout(context.Background(), 3*time.Second)
+	defer stopJoined()
+	if _, err := f.child.process.Wait(joined); err != nil {
+		t.Fatal("GUI termination helper fabricated a signaled process receipt", err)
+	}
+	if f.child.closed || f.child.processClosed || f.child.job == 0 {
+		t.Fatal("process-only GUI join discarded the independent descendant/Job cleanup owner")
+	}
+}
+
 func TestWindowsControllerGUIRetirementRevokesBeforeBlockedCleanup(t *testing.T) {
 	f := newGUIFixture(t, "hold")
 	peer, err := f.child.VerifyPeer(f.pipe, f.image)
