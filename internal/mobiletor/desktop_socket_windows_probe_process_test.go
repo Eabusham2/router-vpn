@@ -55,6 +55,14 @@ type desktopWindowsProbeProcessAPI struct {
 
 var desktopWindowsProbeDesktopGate sync.Mutex
 
+// The actual WithToken API also needs these adjustment rights on its private
+// primary-token handle. Independent held-empty-image controls distinguish this
+// mask (native BAD_EXE_FORMAT) from query/duplicate/assign alone (ACCESS_DENIED).
+// This grants no privilege or account right and changes no token field; only
+// the fixture keeps this non-inherited copy of its already captured ordinary
+// identity. The child still proves its exact SID and non-admin primary token.
+const desktopWindowsProbePrimaryAccess = syscall.TOKEN_QUERY | syscall.TOKEN_DUPLICATE | syscall.TOKEN_ASSIGN_PRIMARY | syscall.TOKEN_ADJUST_DEFAULT | syscall.TOKEN_ADJUST_SESSIONID
+
 type desktopWindowsProbeStartup struct {
 	Info       syscall.StartupInfo
 	Attributes unsafe.Pointer
@@ -374,7 +382,7 @@ func desktopWindowsProbeTestProcess(t *testing.T) *desktopWindowsProbeProcess {
 		}
 	})
 	if err := p.call(ctx, false, func() error {
-		ok, _, callErr := f.api.duplicate.Call(uintptr(p.token), syscall.TOKEN_QUERY|syscall.TOKEN_DUPLICATE|syscall.TOKEN_ASSIGN_PRIMARY, 0, 2, 1, uintptr(unsafe.Pointer(&f.primary)))
+		ok, _, callErr := f.api.duplicate.Call(uintptr(p.token), desktopWindowsProbePrimaryAccess, 0, 2, 1, uintptr(unsafe.Pointer(&f.primary)))
 		if ok == 0 || f.primary == 0 {
 			return desktopWindowsCallFailure("probe primary token conversion", callErr)
 		}

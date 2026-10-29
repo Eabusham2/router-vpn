@@ -112,6 +112,11 @@ def mutants(target):
          IDENTITY.replace_once(fixture,
                                'D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;',
                                'D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;')),
+        ("probe-primary-handle-access", "desktop_socket_windows_probe_process_test.go", REQUIRED[12],
+         "ordinary probe child basic CreateProcessWithTokenW: Access is denied.",
+         IDENTITY.replace_once(fixture,
+                               'const desktopWindowsProbePrimaryAccess = syscall.TOKEN_QUERY | syscall.TOKEN_DUPLICATE | syscall.TOKEN_ASSIGN_PRIMARY | syscall.TOKEN_ADJUST_DEFAULT | syscall.TOKEN_ADJUST_SESSIONID',
+                               'const desktopWindowsProbePrimaryAccess = syscall.TOKEN_QUERY | syscall.TOKEN_DUPLICATE | syscall.TOKEN_ASSIGN_PRIMARY')),
     )
 
 
