@@ -1079,7 +1079,7 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 	a.mu.Lock()
 	a.state.Phase = "checking"
 	a.mu.Unlock()
-	latency, healthErr := a.testHealth(p)
+	latency, healthErr := a.testStartedModeHealth(startupCtx, p, native)
 	if healthErr == nil && native != nil && native.external == nil && native.mtuSession != "" {
 		if _, err := readDesktopNodeMTU(native); err != nil {
 			healthErr = fmt.Errorf("captured native TUN readback is not ready: %w", err)
@@ -1091,6 +1091,9 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 			return cancelErr
 		}
 		failure := fmt.Errorf("%s started but selected-router path proof failed: %w", m.Name, healthErr)
+		if !a.ownsConnectionRuntime(cmd) {
+			return failure
+		}
 		_ = a.stopModeWithIntent(holdOnFailure)
 		a.mu.Lock()
 		a.state.LastError = failure.Error()
@@ -1318,6 +1321,10 @@ func (a *app) auto(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *app) testHealth(p common.RouterProfile) (time.Duration, error) {
+	return a.testHealthContext(a.connectionOperationContextOrBackground(), p)
+}
+
+func (a *app) testHealthContext(parent context.Context, p common.RouterProfile) (time.Duration, error) {
 	target := strings.TrimSpace(p.PathProbeURL)
 	if target == "" {
 		target = strings.TrimSpace(a.cfg.HealthURL)
@@ -1325,7 +1332,7 @@ func (a *app) testHealth(p common.RouterProfile) (time.Duration, error) {
 	if target == "" {
 		return 0, errors.New("selected router has no private path proof URL")
 	}
-	ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), time.Duration(a.cfg.AutoTestSeconds)*time.Second)
+	ctx, cancel := context.WithTimeout(parent, time.Duration(a.cfg.AutoTestSeconds)*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
