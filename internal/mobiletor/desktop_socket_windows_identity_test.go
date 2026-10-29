@@ -283,6 +283,11 @@ func desktopWindowsIdentityTestDiagnoseALE(t *testing.T, phase string, p *Deskto
 			}
 		}
 		for _, state := range states {
+			stateEndpoint, endpointErr := desktopWindowsALEEndpoint(state.raw)
+			properties, appID, propertiesErr := p.api.endpointProperties(p.engine, stateEndpoint)
+			localAddress, _ := desktopWindowsALEAddress(properties.IPVersion, properties.LocalAddress)
+			remoteAddress, _ := desktopWindowsALEAddress(properties.IPVersion, properties.RemoteAddress)
+			t.Logf("ALE handle diagnostic phase=%s handle=%s endpoint=%x endpoint_error=%v properties_error=%v kernel_modified=%x captured_modified=%x app_matches=%t local=%v remote=%v", phase, state.name, stateEndpoint, endpointErr, propertiesErr, properties.TokenModifiedID, p.statistics.ModifiedID, bytes.Equal(appID, p.appID), netip.AddrPortFrom(localAddress, properties.LocalPort), netip.AddrPortFrom(remoteAddress, properties.RemotePort))
 			if err := state.raw.Control(func(handle uintptr) {
 				local, localErr := syscall.Getsockname(syscall.Handle(handle))
 				peer, peerErr := syscall.Getpeername(syscall.Handle(handle))
@@ -912,8 +917,8 @@ func TestDesktopSocketWindowsIdentityImportedTCPAndUDP(t *testing.T) {
 func desktopWindowsIdentityTestIOProof(t *testing.T, phase string, p *DesktopWindowsSocketIdentity, creation DesktopSocketCreation, source DesktopSocketNative, before DesktopWindowsSocketInspection, raw syscall.RawConn, remote netip.AddrPort) {
 	t.Helper()
 	endpoint, err := desktopWindowsALEEndpoint(raw)
-	if err != nil || endpoint != before.EndpointID {
-		t.Fatal("native I/O import replaced the independently proved ALE endpoint", phase, endpoint, err)
+	if err != nil {
+		t.Fatal("native I/O import has no independently queryable ALE endpoint", phase, err)
 	}
 	if err := raw.Control(func(handle uintptr) {
 		local, localErr := syscall.Getsockname(syscall.Handle(handle))
@@ -925,12 +930,65 @@ func desktopWindowsIdentityTestIOProof(t *testing.T, phase string, p *DesktopWin
 	}); err != nil {
 		t.Fatal("native I/O descriptor cannot be independently inspected", phase, err)
 	}
+	if err := p.call(p.ctx, false, func() error {
+		properties, appID, err := p.api.endpointProperties(p.engine, endpoint)
+		localAddress, _ := desktopWindowsALEAddress(properties.IPVersion, properties.LocalAddress)
+		remoteAddress, _ := desktopWindowsALEAddress(properties.IPVersion, properties.RemoteAddress)
+		t.Logf("ALE I/O diagnostic phase=%s endpoint=%x pre_connect_endpoint=%x properties_error=%v kernel_modified=%x captured_modified=%x app_matches=%t local=%v remote=%v", phase, endpoint, before.EndpointID, err, properties.TokenModifiedID, p.statistics.ModifiedID, bytes.Equal(appID, p.appID), netip.AddrPortFrom(localAddress, properties.LocalPort), netip.AddrPortFrom(remoteAddress, properties.RemotePort))
+		return nil
+	}); err != nil {
+		t.Fatal("native I/O kernel diagnostics could not join", phase, err)
+	}
+	desktopWindowsIdentityTestDiagnoseALE(t, phase, p, source)
+	if endpoint != before.EndpointID {
+		t.Fatal("native I/O import replaced the independently proved ALE endpoint", phase, endpoint, before.EndpointID)
+	}
 	inspection, err := p.InspectSocket(p.ctx, creation)
 	if err != nil {
-		desktopWindowsIdentityTestDiagnoseALE(t, phase, p, source)
 		t.Fatal("actual native I/O lost the captured ALE token, application, or tuple proof", phase, err)
 	}
 	if inspection.EndpointID != before.EndpointID || inspection.TokenModifiedID != before.TokenModifiedID || inspection.Local != before.Local || inspection.Protocol != before.Protocol || inspection.Family != before.Family || !bytes.Equal(inspection.AppID, before.AppID) || inspection.Remote != remote {
 		t.Fatal("native I/O substituted the actual endpoint ownership or complete tuple", phase, inspection)
+	}
+}
+
+func TestDesktopSocketWindowsIdentityNativeProtocolAdmission(t *testing.T) {
+	for _, family := range []string{"4", "6"} {
+		for _, network := range []string{"tcp", "udp"} {
+			t.Run(network+family, func(t *testing.T) {
+				address := netip.IPv6Loopback()
+				if family == "4" {
+					address = netip.MustParseAddr("127.0.0.1")
+				}
+				source, err := desktopWindowsNativeTestSocket(network, family == "4")
+				if err != nil {
+					t.Fatal("real native protocol fixture", err)
+				}
+				t.Cleanup(func() { _ = source.Close() })
+				raw, actual, err := desktopSocketNativeRaw(source, network, address)
+				if err != nil || actual != network+family || raw == nil {
+					t.Fatal("real unbound protocol was not admitted", err)
+				}
+				wrong := "tcp"
+				if network == "tcp" {
+					wrong = "udp"
+				}
+				if _, _, err := desktopSocketNativeRaw(source, wrong, address); err == nil || !strings.Contains(err.Error(), "kernel family or protocol") {
+					t.Fatal("native import accepted a real socket with the wrong protocol", err)
+				}
+				desktopWindowsIdentityTestBind(t, source, address)
+				if network == "tcp" {
+					var listenErr error
+					if err := raw.Control(func(handle uintptr) { listenErr = syscall.Listen(syscall.Handle(handle), 1) }); err != nil || listenErr != nil {
+						t.Fatal("actual native listener fixture", err, listenErr)
+					}
+					if _, _, err := desktopSocketNativeRaw(source, network, address); err == nil || !strings.Contains(err.Error(), "listener or unproved listening state") {
+						t.Fatal("native TCP listener was admitted as an unbound source", err)
+					}
+				} else if _, _, err := desktopSocketNativeRaw(source, network, address); err == nil || !strings.Contains(err.Error(), "already bound a tuple") {
+					t.Fatal("native UDP source with an existing bind was admitted", err)
+				}
+			})
+		}
 	}
 }

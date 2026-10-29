@@ -120,16 +120,22 @@ func desktopSocketNativeRaw(source DesktopSocketNative, network string, address 
 			result = errors.New("Windows socket creator changed the kernel family or protocol")
 			return
 		}
-		listening, readErr := syscall.GetsockoptInt(fd, syscall.SOL_SOCKET, 0x0002 /* SO_ACCEPTCONN */)
-		if readErr != nil || listening != 0 {
-			result = errors.Join(readErr, errors.New("Windows socket creator supplied a listener or unproved listening state"))
-			return
+		// SO_ACCEPTCONN is defined only for connection-oriented sockets on
+		// Windows. The independent protocol readback above has already proved
+		// SOCK_DGRAM/IPPROTO_UDP for a packet source; it cannot be a TCP listener.
+		// An unknown TCP listener state still fails rather than ignoring errors.
+		if network == "tcp" {
+			listening, readErr := syscall.GetsockoptInt(fd, syscall.SOL_SOCKET, 0x0002 /* SO_ACCEPTCONN */)
+			if readErr != nil || listening != 0 {
+				result = errors.Join(readErr, errors.New("Windows socket creator supplied a listener or unproved listening state"))
+				return
+			}
 		}
-		if _, readErr = syscall.Getsockname(fd); !errors.Is(readErr, syscall.Errno(10022) /* WSAEINVAL */) {
+		if _, readErr := syscall.Getsockname(fd); !errors.Is(readErr, syscall.Errno(10022) /* WSAEINVAL */) {
 			result = errors.New("Windows socket creator already bound a tuple")
 			return
 		}
-		if _, readErr = syscall.Getpeername(fd); !errors.Is(readErr, desktopSocketNotConnected) && !errors.Is(readErr, syscall.Errno(10022) /* WSAEINVAL */) {
+		if _, readErr := syscall.Getpeername(fd); !errors.Is(readErr, desktopSocketNotConnected) && !errors.Is(readErr, syscall.Errno(10022) /* WSAEINVAL */) {
 			result = errors.New("Windows socket creator connected before permission acknowledgment")
 			return
 		}

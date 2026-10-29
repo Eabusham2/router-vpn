@@ -33,6 +33,7 @@ REQUIRED = (
     "TestDesktopSocketWindowsIdentityRejectsTokenStatisticsReplacement",
     "TestDesktopSocketWindowsIdentityRejectsOtherExecutableAppID",
     "TestDesktopSocketWindowsIdentityImportedTCPAndUDP",
+    "TestDesktopSocketWindowsIdentityNativeProtocolAdmission",
 )
 
 
@@ -198,6 +199,8 @@ def execute(source=ROOT, go="go", *, env=None):
             for network in ("tcp", "udp"):
                 if "--- PASS: " + REQUIRED[10] + "/" + network + family + " (" not in output:
                     raise ValueError("Windows identity baseline omitted native imported I/O")
+                if "--- PASS: " + REQUIRED[11] + "/" + network + family + " (" not in output:
+                    raise ValueError("Windows identity baseline omitted actual protocol admission")
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("Windows identity binary changed during actual execution")
         for name, test, witness, replacement in changes:
@@ -219,7 +222,7 @@ def execute(source=ROOT, go="go", *, env=None):
             print("Rejected production Windows identity mutant:", name, flush=True)
         if checked_sources(source)[3] != before:
             raise ValueError("Windows identity source changed during its actual native gate")
-    print("Windows isolated identity passed eleven kernel/lifecycle cases, all four bound and imported-I/O socket families, and nine production negative controls; WFP permit enforcement remains a separate gate.", flush=True)
+    print("Windows isolated identity passed twelve kernel/lifecycle cases, all four bound/imported-I/O/protocol socket families, and nine production negative controls; WFP permit enforcement remains a separate gate.", flush=True)
 
 
 if __name__ == "__main__":
