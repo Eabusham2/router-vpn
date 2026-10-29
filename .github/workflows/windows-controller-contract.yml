@@ -7,6 +7,7 @@ on:
       - '.github/workflows/windows-controller-contract.yml'
       - 'internal/windowscontroller/**'
       - 'internal/controllertransport/**'
+      - 'internal/controllerbridge/**'
       - 'internal/mobiletor/desktop_socket_windows_probe*'
       - 'cmd/client/controller_*'
       - 'cmd/windows-app-launcher/**'
@@ -21,6 +22,7 @@ on:
       - '.github/workflows/windows-controller-contract.yml'
       - 'internal/windowscontroller/**'
       - 'internal/controllertransport/**'
+      - 'internal/controllerbridge/**'
       - 'internal/mobiletor/desktop_socket_windows_probe*'
       - 'cmd/client/controller_*'
       - 'cmd/windows-app-launcher/**'
@@ -74,6 +76,12 @@ jobs:
         run: |
           python deploy/test_windows_controller_transport.py
           if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows controller transport gate failed' }
+      - name: Captured GUI request framing and cancellation ownership
+        if: ${{ success() || failure() }}
+        shell: pwsh
+        run: |
+          python deploy/test_windows_controller_bridge.py
+          if ($LASTEXITCODE -ne 0) { throw 'Captured Windows GUI bridge gate failed' }
       - name: Actual ordinary-user protection absence and denial
         if: ${{ success() || failure() }}
         shell: pwsh

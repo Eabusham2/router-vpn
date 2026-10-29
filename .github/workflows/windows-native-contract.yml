@@ -55,6 +55,12 @@ jobs:
         run: |
           python deploy/test_windows_controller_transport.py
           if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows controller transport gate failed' }
+      - name: Captured GUI request framing and cancellation ownership
+        if: ${{ success() || failure() }}
+        shell: pwsh
+        run: |
+          python deploy/test_windows_controller_bridge.py
+          if ($LASTEXITCODE -ne 0) { throw 'Captured Windows GUI bridge gate failed' }
       - name: Isolated Windows socket token and ALE endpoint proof
         if: ${{ success() || failure() }}
         shell: pwsh
