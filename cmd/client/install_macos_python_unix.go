@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"syscall"
 )
@@ -66,6 +67,34 @@ func trustedMacToolAncestors(path string) error {
 	}
 }
 
+// Rejected library links must identify the actual failure on the native host.
+// Keep untrusted names quoted, preserve both ends of long paths, and bound the
+// diagnostic without changing which owner or target the trust gate accepts.
+func macPythonDiagnosticValue(value string) string {
+	const limit = 256
+	if len(value) > limit {
+		value = value[:limit/2] + "...[truncated]..." + value[len(value)-limit/2:]
+	}
+	return strconv.QuoteToASCII(value)
+}
+
+func macPythonRejectedLink(path, target string, owner *syscall.Stat_t, resolutionErr error) error {
+	link, readErr := os.Readlink(path)
+	uid := "unavailable"
+	if owner != nil {
+		uid = strconv.FormatUint(uint64(owner.Uid), 10)
+	}
+	detail := "privileged Python contains a foreign or escaping link: path=" + macPythonDiagnosticValue(path) +
+		" link=" + macPythonDiagnosticValue(link) + " resolved=" + macPythonDiagnosticValue(target) + " owner_uid=" + uid
+	if resolutionErr != nil {
+		detail += " resolution_error=" + macPythonDiagnosticValue(resolutionErr.Error())
+	}
+	if readErr != nil {
+		detail += " readlink_error=" + macPythonDiagnosticValue(readErr.Error())
+	}
+	return errors.New(detail)
+}
+
 func validateMacPythonTree(root, executable string) error {
 	if !filepath.IsAbs(root) || filepath.Clean(root) != root || !strings.HasPrefix(executable, root+string(filepath.Separator)) {
 		return errors.New("the privileged interpreter escaped its captured installation")
@@ -91,7 +120,7 @@ func validateMacPythonTree(root, executable string) error {
 			stat, ok := info.Sys().(*syscall.Stat_t)
 			target, failure := filepath.EvalSymlinks(path)
 			if !ok || stat.Uid != 0 || failure != nil || !strings.HasPrefix(target, root+string(filepath.Separator)) {
-				return errors.New("privileged Python contains a foreign or escaping link")
+				return macPythonRejectedLink(path, target, stat, failure)
 			}
 			info, err = os.Stat(target)
 			if err != nil {

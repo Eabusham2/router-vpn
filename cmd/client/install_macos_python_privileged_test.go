@@ -5,6 +5,8 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -87,5 +89,67 @@ func TestNativeInstallerPythonTrust(t *testing.T) {
 		if _, _, err := macOSPythonTrustRoot(candidate); err == nil {
 			t.Fatal("ambient interpreter received privileged authority", candidate)
 		}
+	}
+	for _, defect := range []string{"outside-installation", "dangling", "cycle", "foreign-owner", "bounded-untrusted-name"} {
+		t.Run("rejected-link-diagnostic/"+defect, func(t *testing.T) {
+			root, binary, library := fixture(t)
+			link := filepath.Join(root, "rejected-link")
+			target := library
+			switch defect {
+			case "outside-installation":
+				target = filepath.Join(filepath.Dir(root), "foreign-module.py")
+				if err := os.WriteFile(target, []byte("foreign installation"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "dangling":
+				target = filepath.Join(root, "missing-module.py")
+			case "cycle":
+				target = link
+			case "bounded-untrusted-name":
+				link = filepath.Join(root, "untrusted\n\x1b-link")
+				target = "\n\x1b" + strings.Repeat("untrusted-", 80) + "-target-end"
+			}
+			if err := os.Symlink(target, link); err != nil {
+				t.Fatal(err)
+			}
+			if defect == "foreign-owner" {
+				if err := os.Lchown(link, 65534, 0); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := validateMacPythonTree(root, binary)
+			if err == nil {
+				t.Fatal("untrusted link passed the actual interpreter trust gate", defect)
+			}
+			diagnostic := err.Error()
+			if !strings.HasPrefix(diagnostic, "privileged Python contains a foreign or escaping link:") ||
+				!strings.Contains(diagnostic, "path="+strconv.QuoteToASCII(link)) {
+				t.Fatal("rejected link did not identify its actual captured path", diagnostic)
+			}
+			if strings.ContainsAny(diagnostic, "\n\r\x1b") || len(diagnostic) > 8192 {
+				t.Fatal("untrusted link escaped the bounded single-line diagnostic", len(diagnostic))
+			}
+			if defect == "bounded-untrusted-name" {
+				if !strings.Contains(diagnostic, "...[truncated]...") || !strings.Contains(diagnostic, "-target-end") || strings.Contains(diagnostic, target) {
+					t.Fatal("long untrusted target was not bounded while retaining its identity", diagnostic)
+				}
+			} else if !strings.Contains(diagnostic, "link="+strconv.QuoteToASCII(target)) {
+				t.Fatal("rejected link omitted its actual lexical target", diagnostic)
+			}
+			if defect == "outside-installation" || defect == "foreign-owner" {
+				if !strings.Contains(diagnostic, "resolved="+strconv.QuoteToASCII(target)) {
+					t.Fatal("rejected link omitted its resolved target", diagnostic)
+				}
+			} else if !strings.Contains(diagnostic, "resolution_error=") {
+				t.Fatal("unresolvable link omitted its resolution failure", diagnostic)
+			}
+			uid := "0"
+			if defect == "foreign-owner" {
+				uid = "65534"
+			}
+			if !strings.Contains(diagnostic, "owner_uid="+uid) {
+				t.Fatal("rejected link omitted its actual owner", diagnostic)
+			}
+		})
 	}
 }
