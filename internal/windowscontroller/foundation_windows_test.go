@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -613,10 +614,11 @@ func TestWindowsControllerFoundationActualElevatedLaunch(t *testing.T) {
 	}
 }
 
-// Failure-only native diagnostics isolate the Shell's working-directory
-// parameter from the captured Volume GUID executable. Every variant keeps the
-// same held image and verifies any actual child before closing its private
-// lifetime pipe. No remappable DOS executable or unowned fallback is tried.
+// Failure-only native diagnostics isolate Shell pathname/namespace handling
+// from the captured executable. Every variant keeps the same held image and
+// verifies any actual child before closing its private lifetime pipe. A PIDL
+// that normalizes back to a remappable DOS name is rejected before execution.
+// No remappable DOS executable or unowned fallback is tried.
 func fixtureStableShellDiagnostics(t *testing.T, image *Image) {
 	t.Helper()
 	api, err := native()
@@ -624,7 +626,7 @@ func fixtureStableShellDiagnostics(t *testing.T, image *Image) {
 		t.Log("stable Shell diagnostic could not load the native API:", err)
 		return
 	}
-	for _, variant := range []string{"no-directory", "system-directory"} {
+	for _, variant := range []string{"no-directory", "system-directory", "global-root", "invoke-stable-guid", "pidl-stable-guid"} {
 		func() {
 			pipe, err := NewPipe()
 			if err != nil {
@@ -641,6 +643,65 @@ func fixtureStableShellDiagnostics(t *testing.T, image *Image) {
 				if variant == "system-directory" {
 					directory, _ = syscall.UTF16PtrFromString(api.systemDirectory)
 					info.Directory = directory
+				}
+				if variant == "global-root" {
+					buffer := make([]uint16, 32768)
+					length, _, callErr := api.finalPath.Call(uintptr(image.handles[len(image.handles)-1]), uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)), 2 /* VOLUME_NAME_NT */)
+					if length == 0 || length >= uintptr(len(buffer)) {
+						return false, nativeError("diagnostic retained NT image path", callErr)
+					}
+					path := syscall.UTF16ToString(buffer[:length])
+					if !strings.HasPrefix(path, `\Device\`) {
+						return false, errors.New("diagnostic retained image did not return a device path")
+					}
+					file, err := syscall.UTF16PtrFromString(`\\?\GLOBALROOT` + path)
+					if err != nil {
+						return false, err
+					}
+					held, err := syscall.CreateFile(file, syscall.GENERIC_READ, syscall.FILE_SHARE_READ, nil, syscall.OPEN_EXISTING, 0x00200000, 0)
+					if err != nil {
+						return false, nativeError("diagnostic global-root image capture", err)
+					}
+					defer syscall.CloseHandle(held)
+					var actual syscall.ByHandleFileInformation
+					if err := syscall.GetFileInformationByHandle(held, &actual); err != nil ||
+						actual.VolumeSerialNumber != image.identity.VolumeSerialNumber || actual.FileIndexHigh != image.identity.FileIndexHigh || actual.FileIndexLow != image.identity.FileIndexLow {
+						return false, errors.Join(err, errors.New("diagnostic global-root path replaced the captured executable"))
+					}
+					info.File = file
+				}
+				if variant == "invoke-stable-guid" {
+					info.Mask |= 0x0c /* SEE_MASK_INVOKEIDLIST: the same fully qualified parsing name */
+				}
+				if variant == "pidl-stable-guid" {
+					parse, err := api.shellExecute.Dll.FindProc("SHParseDisplayName")
+					if err != nil {
+						return false, err
+					}
+					getPath, err := api.shellExecute.Dll.FindProc("SHGetPathFromIDListEx")
+					if err != nil {
+						return false, err
+					}
+					free, err := api.initializeCOM.Dll.FindProc("CoTaskMemFree")
+					if err != nil {
+						return false, err
+					}
+					var pidl uintptr
+					var attributes uint32
+					status, _, _ := parse.Call(uintptr(unsafe.Pointer(info.File)), 0, uintptr(unsafe.Pointer(&pidl)), 0x40000000 /* SFGAO_FILESYSTEM */, uintptr(unsafe.Pointer(&attributes)))
+					if pidl != 0 {
+						defer free.Call(pidl)
+					}
+					if status != 0 || pidl == 0 || attributes&0x40000000 == 0 {
+						return false, fmt.Errorf("diagnostic stable GUID PIDL parse failed (HRESULT=0x%08x, filesystem=%t)", uint32(status), attributes&0x40000000 != 0)
+					}
+					buffer := make([]uint16, 32768)
+					ok, _, callErr := getPath.Call(pidl, uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)), 0)
+					if ok == 0 || !strings.EqualFold(syscall.UTF16ToString(buffer), image.path) {
+						return false, errors.Join(callErr, errors.New("diagnostic Shell PIDL did not retain the stable GUID parsing path"))
+					}
+					info.File, info.IDList = nil, pidl
+					info.Mask |= 0x04 /* SEE_MASK_IDLIST */
 				}
 				ok, _, err := api.shellExecute.Call(uintptr(unsafe.Pointer(info)))
 				instance = uintptr(info.Instance)

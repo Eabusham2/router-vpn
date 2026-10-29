@@ -484,6 +484,9 @@ func (f *desktopWindowsProbeProcess) run(scope []byte) (reply desktopWindowsProb
 	}
 	if ok == 0 || process.Process == 0 || process.Thread == 0 {
 		creationErr := desktopWindowsCallFailure("ordinary probe child basic CreateProcessWithTokenW", callErr)
+		if errors.Is(callErr, syscall.ERROR_ACCESS_DENIED) && process.Process == 0 && process.Thread == 0 {
+			creationErr = errors.Join(creationErr, f.diagnoseCreateAccess())
+		}
 		if errors.Is(callErr, syscall.Errno(87)) && process.Process == 0 && process.Thread == 0 {
 			// Diagnose this exact rejected parameter boundary without allowing a
 			// child to execute outside the creation-time Job. All controls target
@@ -555,6 +558,109 @@ func (f *desktopWindowsProbeProcess) createChild(application, command *uint16, f
 	ok, _, callErr := f.api.create.Call(uintptr(f.primary), 0, uintptr(unsafe.Pointer(application)), uintptr(unsafe.Pointer(command)),
 		flags, uintptr(unsafe.Pointer(environment)), uintptr(unsafe.Pointer(directory)), uintptr(unsafe.Pointer(startup)), uintptr(unsafe.Pointer(child)))
 	return ok, callErr
+}
+
+// A rejected alternate-token launch does not establish which resource denied
+// access. Inspect only the fixture's new file/directory/station under the actual
+// caller and captured ordinary token. No ACL, privilege or process is changed;
+// the diagnostic thread is joined and may return to the pool only after an
+// independently observed removal of its temporary impersonation token.
+func (f *desktopWindowsProbeProcess) diagnoseCreateAccess() error {
+	openStation, err := f.api.user.FindProc("OpenWindowStationW")
+	if err != nil {
+		return err
+	}
+	observe := func(label string) string {
+		var observations []string
+		for _, item := range []struct {
+			name, path string
+			flags      uint32
+		}{{"executable-rx", f.executable, 0x00200000}, {"directory-rx", f.directory, 0x02200000}} {
+			path, pathErr := syscall.UTF16PtrFromString(item.path)
+			if pathErr != nil {
+				observations = append(observations, item.name+"=invalid")
+				continue
+			}
+			handle, openErr := syscall.CreateFile(path, syscall.GENERIC_READ|syscall.GENERIC_EXECUTE, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE, nil, syscall.OPEN_EXISTING, item.flags, 0)
+			if openErr == nil {
+				openErr = syscall.CloseHandle(handle)
+			}
+			observations = append(observations, fmt.Sprintf("%s=%v", item.name, openErr))
+			runtime.KeepAlive(path)
+		}
+		stationName, _, found := strings.Cut(f.desktopName, `\`)
+		if !found || stationName == "" {
+			observations = append(observations, "station=invalid")
+		} else {
+			name, _ := syscall.UTF16PtrFromString(stationName)
+			handle, _, stationErr := openStation.Call(uintptr(unsafe.Pointer(name)), 0, 0x10000000 /* GENERIC_ALL, this private station only */)
+			if handle != 0 {
+				if ok, _, closeErr := f.api.closeStation.Call(handle); ok == 0 {
+					stationErr = closeErr
+				} else {
+					stationErr = nil
+				}
+			}
+			observations = append(observations, fmt.Sprintf("station-all=%v", stationErr))
+			runtime.KeepAlive(name)
+		}
+		return label + "[" + strings.Join(observations, ", ") + "]"
+	}
+	admin := observe("caller")
+	done := make(chan error, 1)
+	go func() {
+		runtime.LockOSThread()
+		unlock := false
+		defer func() {
+			if unlock {
+				runtime.UnlockOSThread()
+			}
+		}()
+		api := f.identity.api
+		prior, priorErr := api.threadToken()
+		if !errors.Is(priorErr, desktopWindowsNoToken) {
+			if prior != 0 {
+				_ = prior.Close()
+			}
+			done <- errors.New("probe access diagnostic refused an existing thread identity")
+			return
+		}
+		var resultErr error
+		ok, _, callErr := api.impersonate.Call(uintptr(f.identity.token))
+		if ok == 0 {
+			resultErr = desktopWindowsCallFailure("probe diagnostic impersonation", callErr)
+		} else {
+			actual, readErr := api.threadToken()
+			if readErr == nil {
+				sid, statistics, identityErr := desktopWindowsTokenIdentity(actual)
+				readErr = errors.Join(identityErr, actual.Close())
+				if !bytes.Equal(sid, f.identity.sid) || statistics != f.identity.statistics {
+					readErr = errors.Join(readErr, errors.New("probe access diagnostic replaced its captured ordinary token"))
+				}
+			}
+			if readErr == nil {
+				resultErr = fmt.Errorf("owned launch resource observations: %s; %s", admin, observe("ordinary"))
+			} else {
+				resultErr = readErr
+			}
+		}
+		ok, _, callErr = api.revert.Call()
+		if ok == 0 {
+			done <- errors.Join(resultErr, desktopWindowsCallFailure("probe diagnostic identity reversion", callErr))
+			return
+		}
+		remaining, readErr := api.threadToken()
+		if !errors.Is(readErr, desktopWindowsNoToken) {
+			if remaining != 0 {
+				_ = remaining.Close()
+			}
+			done <- errors.Join(resultErr, errors.New("probe access diagnostic did not prove removal of its thread token"))
+			return
+		}
+		unlock = true
+		done <- resultErr
+	}()
+	return <-done
 }
 
 func (f *desktopWindowsProbeProcess) diagnoseCreateParameters(captured desktopWindowsProbeStartup, environment []uint16) error {
