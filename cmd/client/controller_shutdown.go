@@ -14,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"router-vpn/internal/controllertransport"
 )
 
 const controllerOwnerEnvironment = "HOMEVPN_CONTROLLER_OWNER"
@@ -151,6 +153,10 @@ func (c *controllerShutdown) requestExit() {
 
 func (c *controllerShutdown) handler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if c.a.localController != nil && c.a.localController.pinnedTLS != nil && r.URL.Path == controllertransport.DrainPath {
+			c.drainHTTP(w, r)
+			return
+		}
 		if r.URL.Path == controllerShutdownPath {
 			c.shutdownHTTP(w, r)
 			return
@@ -238,7 +244,14 @@ func runClientHTTP(a *app, address string, handler http.Handler) error {
 		<-closing.done
 		return err
 	}
-	return serveClientHTTP(closing, listener, handler, signals)
+	captured, err := a.localController.captureListener(listener)
+	if err != nil {
+		_ = listener.Close()
+		closing.begin()
+		<-closing.done
+		return err
+	}
+	return serveClientHTTP(closing, captured, handler, signals)
 }
 
 func serveClientHTTP(closing *controllerShutdown, listener net.Listener, handler http.Handler, signals <-chan os.Signal) error {

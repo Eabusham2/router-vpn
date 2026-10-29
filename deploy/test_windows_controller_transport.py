@@ -37,6 +37,8 @@ REQUIRED = (
     "TestControllerTransportDrainRevokesLateResult",
     "TestControllerTransportDrainCancellationAndDeadline",
     "TestControllerTransportDrainPublicAPIJoinsTransport",
+    "TestLocalControllerPinnedDrainUsesShippingLifetime",
+    "TestLocalControllerPinnedDrainRequiresActualTLSAndExactRequest",
 )
 
 
@@ -77,7 +79,8 @@ def sources():
     names = ("internal/controllertransport/tls.go", "internal/controllertransport/client.go",
              "internal/controllertransport/client_test.go", "internal/controllertransport/drain.go",
              "internal/controllertransport/drain_test.go", "cmd/client/controller_pinned_tls_test.go",
-             "cmd/client/controller_local_auth.go", "cmd/client/controller_shutdown.go")
+             "cmd/client/controller_pinned_tls.go", "cmd/client/controller_local_auth.go",
+             "cmd/client/controller_shutdown.go")
     records = {}
     for name in names:
         path = ROOT / name
@@ -157,12 +160,35 @@ def mutants():
     )
 
 
+def shipping_mutants():
+    pinned = (ROOT / "cmd/client/controller_pinned_tls.go").read_text(encoding="utf-8")
+    owner = (ROOT / "cmd/client/controller_local_auth.go").read_text(encoding="utf-8")
+    return (
+        ("cmd/client/controller_pinned_tls.go", "shipping-listener-plaintext", REQUIRED[20],
+         "pinned drain did not cross the actual shipping TLS admission",
+         replace_once(pinned, "return tls.NewListener(listener, config), nil",
+                      "if config != nil { return listener, nil }; return tls.NewListener(listener, config), nil")),
+        ("cmd/client/controller_local_auth.go", "shipping-drain-without-tls", REQUIRED[21],
+         "ordinary HTTP acquired pinned native drain authority",
+         replace_once(owner, "c.pinnedTLS != nil && r.TLS == nil", "c.pinnedTLS != nil && false")),
+        ("cmd/client/controller_pinned_tls.go", "shipping-drain-extra-query", REQUIRED[21] + "/query",
+         "non-exact request acquired bounded native drain authority",
+         replace_once(pinned, "r.URL.RequestURI() == controllertransport.DrainPath",
+                      "(r.URL.RequestURI() == controllertransport.DrainPath || r.URL.Path == controllertransport.DrainPath)")),
+        ("cmd/client/controller_local_auth.go", "shipping-drain-retired-gui", REQUIRED[20],
+         "retired launcher hid the exact native drain state",
+         replace_once(owner, "if c.pinnedTLS != nil && r.URL.Path == controllertransport.DrainPath {",
+                      'if c.pinnedTLS != nil && r.URL.Path == controllertransport.DrainPath {\n'
+                      '\t\t\tif c.retired() { http.Error(w, "retired", http.StatusServiceUnavailable); return }')),
+    )
+
+
 def execute(go="go"):
     before = sources()
     compiler, env, race = selected_compiler(go)
     status, output = run(
         [compiler, "test", "-mod=readonly", *race, "./internal/controllertransport", "./cmd/client",
-         "-run", "^(TestControllerTransport|TestLocalControllerPinnedTLSUsesShippingIdentityAndCleanup)",
+         "-run", "^(TestControllerTransport|TestLocalControllerPinned)",
          "-count=1", "-timeout=90s", "-v"], env)
     print(output, end="" if output.endswith("\n") else "\n", flush=True)
     if (status or "--- SKIP:" in output or "DATA RACE" in output or
@@ -170,14 +196,18 @@ def execute(go="go"):
         raise ValueError("Controller TLS gate did not execute every real transport/handler case")
     with tempfile.TemporaryDirectory(prefix="routervpn-controller-tls-") as directory:
         owned = Path(directory)
-        for filename, name, test, witness, replacement in mutants():
+        controls = [(PACKAGE / filename, "./internal/controllertransport", name, test, witness, replacement)
+                    for filename, name, test, witness, replacement in mutants()]
+        controls += [(ROOT / filename, "./cmd/client", name, test, witness, replacement)
+                     for filename, name, test, witness, replacement in shipping_mutants()]
+        for source, package, name, test, witness, replacement in controls:
             changed = owned / (name + ".go")
             changed.write_text(replacement, encoding="utf-8")
             overlay = owned / (name + ".json")
-            overlay.write_text(json.dumps({"Replace": {str(PACKAGE / filename): str(changed)}}), encoding="utf-8")
+            overlay.write_text(json.dumps({"Replace": {str(source): str(changed)}}), encoding="utf-8")
             binary = owned / (name + (".exe" if platform.system() == "Windows" else ".test"))
             status, output = run([compiler, "test", "-c", "-mod=readonly", *race,
-                                  "-overlay=" + str(overlay), "-o", binary, "./internal/controllertransport"], env)
+                                  "-overlay=" + str(overlay), "-o", binary, package], env)
             if status:
                 raise ValueError("Controller TLS mutant did not compile: " + name + "\n" + output[-8192:])
             selector = "/".join("^" + part + "$" for part in test.split("/"))
@@ -188,7 +218,7 @@ def execute(go="go"):
             print("Rejected production controller TLS mutant:", name, flush=True)
     if sources() != before:
         raise ValueError("Controller TLS source changed during its execution gate")
-    print("Controller TLS passed twenty real transport/shipping-handler cases and fifteen compiled production negative controls, including the credential-free pinned drain; Windows launcher and native wrapper adoption remain separate.", flush=True)
+    print("Controller TLS passed twenty-two real transport/shipping-handler cases and nineteen compiled production negative controls, including captured listener and credential-free drain during cleanup; Windows launcher and native wrapper adoption remain separate.", flush=True)
 
 
 if __name__ == "__main__":

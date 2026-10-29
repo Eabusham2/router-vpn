@@ -11,6 +11,8 @@ import (
 	"os"
 	"strconv"
 	"sync"
+
+	"router-vpn/internal/controllertransport"
 )
 
 const linuxOwnedControllerArgument = "--linux-owned-controller"
@@ -31,6 +33,7 @@ type ownedDesktopController struct {
 	installLock *os.File
 	processLock *os.File
 	closeOnce   sync.Once
+	pinnedTLS   *controllertransport.Identity
 }
 
 // Keep the Linux launcher API compatible while both installed desktops share
@@ -91,7 +94,22 @@ func (c *ownedDesktopController) handler(next http.Handler) http.Handler {
 		if err != nil || peer != "127.0.0.1" || r.Host != linuxOwnedControllerAddress ||
 			r.URL.IsAbs() || len(r.Header.Values("Origin")) != 0 || len(r.Header.Values("Sec-Fetch-Site")) != 0 ||
 			!validLocalControllerSecret(c.accessToken) || !validControllerOwnerToken(c.ownerToken) ||
-			c.processID <= 0 || c.callerUID == 0 || len(r.Header.Values("Authorization")) != 1 {
+			c.processID <= 0 || c.callerUID == 0 || c.pinnedTLS != nil && r.TLS == nil {
+			http.Error(w, "the captured native controller owner is required", http.StatusForbidden)
+			return
+		}
+		// An owned native helper needs only bounded process/drain observation
+		// while GUI authority is retiring. This exact operation carries no bearer
+		// or shutdown secret and exists only on the captured TLS listener.
+		if c.pinnedTLS != nil && r.URL.Path == controllertransport.DrainPath {
+			if !validPinnedControllerDrainRequest(r) {
+				http.Error(w, "the exact read-only native drain request is required", http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
+		if len(r.Header.Values("Authorization")) != 1 {
 			http.Error(w, "the captured native controller owner is required", http.StatusForbidden)
 			return
 		}
