@@ -212,7 +212,11 @@ func (p *DesktopLinuxSocketPolicy) Owner() (DesktopSocketKernelOwner, error) {
 }
 
 func (p *DesktopLinuxSocketPolicy) Current(c DesktopSocketCapture, o DesktopSocketKernelOwner) bool {
-	return p != nil && c == p.capture && o == p.owner && p.current.Load() && !p.closing.Load() && time.Now().UnixMilli()-p.observed.Load() <= DesktopSocketReadbackAge.Milliseconds()
+	if p == nil || c != p.capture || o != p.owner || !p.current.Load() || p.closing.Load() {
+		return false
+	}
+	observed, now := p.observed.Load(), time.Now().UnixMilli()
+	return observed > 0 && observed <= now && now-observed <= DesktopSocketReadbackAge.Milliseconds()
 }
 
 func (p *DesktopLinuxSocketPolicy) Select(ctx context.Context, c DesktopSocketCapture, network string, remote netip.AddrPort) (DesktopSocketBinding, error) {

@@ -87,6 +87,55 @@ func desktopLinuxTestCrashSource(remoteText string) error {
 	return nil
 }
 
+// This readback witness is memory-only, so a blocked guardian call cannot
+// postpone expiry. A clock rollback must invalidate a future observation
+// rather than making it current until wall time catches up.
+func checkDesktopLinuxPolicyCurrentFreshness(t *testing.T) {
+	t.Helper()
+	capture := desktopSocketFixtureCapture()
+	owner := desktopSocketFixturePolicy().owner
+	for _, test := range []struct {
+		name     string
+		observed int64
+		current  bool
+	}{
+		{"fresh", time.Now().UnixMilli(), true},
+		{"missing", 0, false},
+		{"future", time.Now().Add(time.Hour).UnixMilli(), false},
+		{"expired", time.Now().Add(-DesktopSocketReadbackAge - time.Second).UnixMilli(), false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			policy := &DesktopLinuxSocketPolicy{capture: capture, owner: owner}
+			policy.current.Store(true)
+			policy.observed.Store(test.observed)
+			if policy.Current(capture, owner) != test.current {
+				t.Fatal("Linux physical policy accepted an invalid readback age or rejected a fresh one")
+			}
+			_, err := policy.Owner()
+			if (err == nil) != test.current {
+				t.Fatal("Linux physical owner admission disagrees with readback freshness", err)
+			}
+			if test.current {
+				foreign := capture
+				foreign.NetworkID = strings.Repeat("f", 32)
+				changed := owner
+				changed.Generation++
+				if policy.Current(foreign, owner) || policy.Current(capture, changed) {
+					t.Fatal("fresh readback conferred authority on another capture or generation")
+				}
+				policy.closing.Store(true)
+				if policy.Current(capture, owner) {
+					t.Fatal("closing Linux owner retained admission")
+				}
+			}
+		})
+	}
+}
+
+func TestDesktopLinuxPolicyCurrentFreshness(t *testing.T) {
+	checkDesktopLinuxPolicyCurrentFreshness(t)
+}
+
 type desktopLinuxCrashReceipt struct {
 	NFT         *desktopLinuxNFT
 	UID         uint32
@@ -600,6 +649,7 @@ func TestDesktopLinuxGuardianKernelBlockedControlRetainsSourcePort(t *testing.T)
 }
 
 func TestDesktopLinuxGuardianKernelRejectsStaleCaptureAndGeneration(t *testing.T) {
+	t.Run("readback-freshness", checkDesktopLinuxPolicyCurrentFreshness)
 	remote := desktopLinuxKernelPeer(t, "udp4")
 	policy := desktopLinuxKernelPolicy(t, []DesktopLinuxSocketDestination{{Network: "udp", Address: remote}})
 	stale := policy.capture
