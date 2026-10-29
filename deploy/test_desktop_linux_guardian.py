@@ -85,7 +85,11 @@ def namespace_test(binary: Path, case=None) -> int:
                                          '-test.count=1', '-test.timeout=120s', '-test.v'],
                                         env=environment, timeout=135).returncode
                 subprocess.run(['ip', 'netns', 'delete', 'rvpn-peer'], check=True)
-                subprocess.run(['umount', '-R', '/run'], check=True)
+                # /run is a private tmpfs owned by this PID/mount namespace.
+                # Its remaining mounts disappear when this namespace exits.
+                # Recursive umount also enumerates hidden inherited mounts
+                # (for example a runner's /run/user/1001), which this test
+                # neither created nor has authority to retire.
                 subprocess.run(['umount', '/etc'], check=True)
             os._exit(result if result >= 0 else 128 - result)
         except BaseException as error:
@@ -122,6 +126,9 @@ def execute(source: Path, go='go', *, env=None):
         raise ValueError('The Linux guardian gate cannot run a cross-compiled executable')
     sudo = UID.privilege_tool()
     compiler, captured = UID.compiler_toolchain(source, go, captured)
+    namespace_output = UID.run([sys.executable, str(ROOT/'deploy/test_linux_guardian_namespace.py')],
+                               cwd=ROOT, timeout=90, sudo=sudo)
+    print(namespace_output, end='' if namespace_output.endswith('\n') else '\n')
     with tempfile.TemporaryDirectory(prefix='routervpn-linux-guardian-') as directory:
         binary = Path(directory) / 'linux-guardian.test'
         UID.run([compiler, 'test', '-c', '-race', '-mod=readonly', '-tags=routervpn_linux_guardian',

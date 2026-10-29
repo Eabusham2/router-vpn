@@ -99,6 +99,7 @@ def inputs():
                              ROOT/'deploy/install-desktop-windows-toolchain.py',
                              ROOT/'deploy/test_desktop_socket_uid.py',
                              ROOT/'deploy/test_desktop_linux_guardian.py',
+                             ROOT/'deploy/test_linux_guardian_namespace.py',
                              *sorted((ROOT/'mobile/rosenpass').glob('Cargo.*')),
                              *sorted((ROOT/'mobile/rosenpass').glob('*.h')),
                              *sorted((ROOT/'mobile/rosenpass').glob('*.c')),
