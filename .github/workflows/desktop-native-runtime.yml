@@ -18,6 +18,11 @@ permissions:
   contents: read
 
 jobs:
+  macos-physical-sockets:
+    name: Required native macOS socket and tunnel ownership
+    if: inputs.platform == 'all' || inputs.platform == 'darwin' || inputs.platform == ''
+    uses: ./.github/workflows/macos-physical-socket-contract.yml
+
   kernel-mtu:
     name: Actual native TUN MTU ownership and rollback
     needs: runtime
@@ -107,8 +112,8 @@ jobs:
 
   runtime:
     name: Complete native engine ${{ matrix.target }}
-    needs: [targets, tor-windows]
-    if: always() && needs.targets.result == 'success' && (needs.tor-windows.result == 'success' || needs.tor-windows.result == 'skipped')
+    needs: [targets, tor-windows, macos-physical-sockets]
+    if: always() && needs.targets.result == 'success' && (needs.tor-windows.result == 'success' || needs.tor-windows.result == 'skipped') && (needs.macos-physical-sockets.result == 'success' || needs.macos-physical-sockets.result == 'skipped')
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}

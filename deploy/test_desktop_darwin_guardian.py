@@ -250,6 +250,9 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
         if any('--- PASS: TestDesktopDarwinGuardianKernel'+name+' (' not in output for name in wanted) or '--- SKIP:' in output:
             raise ValueError('Darwin guardian gate did not execute every required native boundary')
         if case is None:
+            for name in ('ChannelFragmentsAndDescriptorClosure', 'CurrentFreshnessAndStateScope'):
+                if '--- PASS: TestDesktopDarwinGuardian'+name+' (' not in output:
+                    raise ValueError('Darwin guardian omitted its inherited-channel or freshness boundary')
             for network in ('tcp4','udp4','tcp6','udp6'):
                 if '--- PASS: TestDesktopDarwinGuardianKernelTCPAndUDP/'+network+' (' not in output:
                     raise ValueError('Darwin guardian omitted a transport/address family')

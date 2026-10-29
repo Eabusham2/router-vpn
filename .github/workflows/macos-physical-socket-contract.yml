@@ -1,0 +1,63 @@
+name: macOS physical socket ownership
+
+on:
+  workflow_call:
+  push:
+    branches: [main]
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - 'internal/mobiletor/**'
+      - '!internal/mobiletor/desktop_socket_windows*.go'
+      - '!internal/mobiletor/desktop_socket_native_windows*.go'
+      - 'internal/common/**'
+      - 'deploy/test_desktop_darwin_guardian.py'
+      - 'deploy/test_desktop_socket_uid.py'
+      - 'deploy/prepare-desktop-external.py'
+      - '.github/workflows/macos-physical-socket-contract.yml'
+  pull_request:
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - 'internal/mobiletor/**'
+      - '!internal/mobiletor/desktop_socket_windows*.go'
+      - '!internal/mobiletor/desktop_socket_native_windows*.go'
+      - 'internal/common/**'
+      - 'deploy/test_desktop_darwin_guardian.py'
+      - 'deploy/test_desktop_socket_uid.py'
+      - 'deploy/prepare-desktop-external.py'
+      - '.github/workflows/macos-physical-socket-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-physical-sockets-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-sockets:
+    name: Native PF, socket and utun ownership on ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15-intel, macos-15]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Prove actual kernel boundaries and reject broken production variants
+        # This compiles as the build user and elevates only the scoped native
+        # fixture. It neither opens public Tor nor changes the runner's default
+        # route, production Router VPN anchor, or global PF state table.
+        run: python3 deploy/test_desktop_darwin_guardian.py . --go "$(command -v go)" --mutations

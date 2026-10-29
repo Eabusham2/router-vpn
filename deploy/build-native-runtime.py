@@ -518,8 +518,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 run([sys.executable, ROOT/'deploy/test_desktop_linux_guardian.py', source],
                     env=env, timeout=300)
             if target.startswith('darwin/'):
-                run([sys.executable, ROOT/'deploy/test_desktop_darwin_guardian.py', source],
-                    env=env, timeout=900)
+                run([sys.executable, ROOT/'deploy/test_desktop_darwin_guardian.py', source, '--mutations'],
+                    env=env, timeout=1800)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './route', '-run', '^TestRouterVPNDesktopTorNetwork',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)

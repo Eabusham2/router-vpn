@@ -86,10 +86,10 @@ class NativeSocketUIDGate(unittest.TestCase):
                         return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_guardian.py'):
                         self.assertEqual(system, 'darwin')
-                        self.assertEqual(args[2:], [str(source.resolve())])
+                        self.assertEqual(args[2:], [str(source.resolve()), '--mutations'])
                         self.assertEqual(kwargs['env']['GOOS'], system)
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
-                        self.assertLessEqual(kwargs['timeout'], 900)
+                        self.assertLessEqual(kwargs['timeout'], 1800)
                         return ''
                     if args[:2] in (['go', 'test'], ['go', 'mod']):
                         return ''
