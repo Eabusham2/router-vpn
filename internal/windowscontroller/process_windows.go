@@ -339,6 +339,53 @@ func (image *Image) pinComponents(path string) error {
 	return nil
 }
 
+// normalizedLaunchNameLocked retains the same captured volume/file identity
+// using the Win32 spelling that supports native managed process creation. The
+// canonical no-normalization path stays the Image's public identity. There are
+// no relative or ambiguous components to normalize: PinImage rejected them.
+// Never replace this with a DOS drive path or a post-execution-only check.
+// The caller holds image.mu and retains the returned file through CreateProcess.
+func (image *Image) normalizedLaunchNameLocked() (string, syscall.Handle, error) {
+	if image.closed || len(image.handles) == 0 || len(image.path) <= len(volumeGUIDPrefix) ||
+		!strings.EqualFold(image.path[:len(volumeGUIDPrefix)], volumeGUIDPrefix) {
+		return "", 0, ErrClosed
+	}
+	path := `\\.\` + image.path[len(`\\?\`):]
+	name, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return "", 0, err
+	}
+	handle, err := syscall.CreateFile(name, syscall.GENERIC_READ, syscall.FILE_SHARE_READ, nil, syscall.OPEN_EXISTING, 0x00200000, 0)
+	if err != nil {
+		return "", 0, nativeError("normalized launch image capture", err)
+	}
+	reject := func(cause error) (string, syscall.Handle, error) {
+		closeErr := syscall.CloseHandle(handle)
+		if closeErr != nil {
+			// An ambiguous close never loses its owned native handle.
+			image.handles = append(image.handles, handle)
+		}
+		return "", 0, errors.Join(cause, closeErr)
+	}
+	var actual syscall.ByHandleFileInformation
+	err = syscall.GetFileInformationByHandle(handle, &actual)
+	if err != nil || actual.FileAttributes&(0x400|syscall.FILE_ATTRIBUTE_DIRECTORY) != 0 || actual.NumberOfLinks != 1 ||
+		actual.VolumeSerialNumber != image.identity.VolumeSerialNumber || actual.FileIndexHigh != image.identity.FileIndexHigh || actual.FileIndexLow != image.identity.FileIndexLow {
+		return reject(errors.Join(err, errors.New("normalized launch image differs from its retained executable")))
+	}
+	api, err := native()
+	if err != nil {
+		return reject(err)
+	}
+	buffer := make([]uint16, 32768)
+	length, _, callErr := api.finalPath.Call(uintptr(handle), uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)), 1 /* VOLUME_NAME_GUID */)
+	if length == 0 || length >= uintptr(len(buffer)) || !strings.EqualFold(syscall.UTF16ToString(buffer[:length]), image.path) {
+		return reject(nativeError("normalized launch image volume readback", callErr))
+	}
+	runtime.KeepAlive(buffer)
+	return path, handle, nil
+}
+
 func (i *Image) Path() string {
 	if i == nil {
 		return ""

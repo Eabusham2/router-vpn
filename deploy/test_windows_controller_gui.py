@@ -38,6 +38,7 @@ REQUIRED = (
     "TestWindowsControllerStreamBoundsAndCancellation",
     "TestWindowsControllerStreamCloseJoinsBorrowedWriter",
     "TestWindowsControllerGUIRejectedTerminationJoinsExactProcess",
+    "TestWindowsControllerGUIRejectsNormalizedImageBeforeCreate",
 )
 
 
@@ -65,6 +66,7 @@ def sources():
 def mutants():
     gui = (PACKAGE / "gui_windows.go").read_text(encoding="utf-8")
     pipe = (PACKAGE / "pipe_windows.go").read_text(encoding="utf-8")
+    process = (PACKAGE / "process_windows.go").read_text(encoding="utf-8")
     once = NATIVE.replace_once
     original = "actual.Primary || actual.SID != want.SID || actual.AuthenticationID != want.AuthenticationID || actual.SessionID != want.SessionID || actual.Elevated != want.Elevated || actual.Administrator != want.Administrator"
     return (
@@ -119,6 +121,11 @@ def mutants():
          NATIVE.function_mutant(NATIVE.function_mutant(gui, "func (child *GUIChild) Alive()",
               " || child.retiring.Load()", ""), "func (child *GUIChild) Alive()",
               "if child.retiring.Load() {", "if false {")),
+        ("process_windows.go", "normalized-image-before-create", REQUIRED[15],
+         "normalized launch replacement reached native creation before exact image proof",
+         once(process,
+              "actual.VolumeSerialNumber != image.identity.VolumeSerialNumber || actual.FileIndexHigh != image.identity.FileIndexHigh || actual.FileIndexLow != image.identity.FileIndexLow",
+              "false")),
     )
 
 
@@ -164,7 +171,7 @@ def execute(go="go"):
             print("Rejected production native GUI mutant:", name, flush=True)
         if sources() != before:
             raise ValueError("Native GUI sources changed during execution")
-    print("Native GUI ownership passed fifteen actual kernel process/pipe cases and thirteen compiled production negative controls; C# application and cross-account UAC composition remain separate.", flush=True)
+    print("Native GUI ownership passed sixteen actual kernel process/pipe cases and fourteen compiled production negative controls, including distinct pre-creation and suspended-image proofs; C# application and cross-account UAC composition remain separate.", flush=True)
 
 
 if __name__ == "__main__":

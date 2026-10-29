@@ -775,6 +775,15 @@ func TestWindowsControllerGUICancelledLaunchRunsNothing(t *testing.T) {
 }
 
 func TestWindowsControllerGUIRejectsChangedImageBeforeResume(t *testing.T) {
+	guiRejectChangedImage(t, true)
+}
+
+func TestWindowsControllerGUIRejectsNormalizedImageBeforeCreate(t *testing.T) {
+	guiRejectChangedImage(t, false)
+}
+
+func guiRejectChangedImage(t *testing.T, afterCreation bool) {
+	t.Helper()
 	directory := t.TempDir()
 	firstPath, secondPath := filepath.Join(directory, "first.exe"), filepath.Join(directory, "second.exe")
 	fixtureCopy(t, fixtureExecutable(t), firstPath)
@@ -792,22 +801,41 @@ func TestWindowsControllerGUIRejectsChangedImageBeforeResume(t *testing.T) {
 	if first.identity.FileIndexHigh == second.identity.FileIndexHigh && first.identity.FileIndexLow == second.identity.FileIndexLow {
 		t.Fatal("GUI image negative control did not create distinct real files")
 	}
-	// Corrupt only this test's private capture: keep the first actual held
-	// inode/identity, but cause CreateProcess to load the second held image.
-	// The shipping suspended-process readback must catch that mismatch before
-	// it resumes any GUI code, even though the executable bytes are identical.
-	first.mu.Lock()
-	first.path = second.Path()
-	first.mu.Unlock()
+	// Both inputs are independently held real files containing identical
+	// bytes. The before-create case substitutes only the named target. The
+	// suspended case changes this fixture's expected identity only after the
+	// actual first process has been created and proved in its exact Job/token.
+	// Keeping these cases distinct prevents the earlier guard from masking a
+	// regression in the suspended actual-process readback.
+	var afterSuspended func()
+	observed := false
+	if afterCreation {
+		afterSuspended = func() {
+			observed = true
+			first.mu.Lock()
+			first.identity = second.identity
+			first.mu.Unlock()
+		}
+	} else {
+		first.mu.Lock()
+		first.path = second.Path()
+		first.mu.Unlock()
+	}
 	environment, err := guiFixtureEnvironment(directory)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	child, err := LaunchGUIChild(ctx, first, func(uint64) ([]string, error) {
+	build := func(uint64) ([]string, error) {
 		return []string{"-test.run=^TestWindowsControllerGUIFixture$", "--", "leaf"}, nil
-	}, environment, directory)
+	}
+	var child *GUIChild
+	if afterCreation {
+		child, err = launchGUIChild(ctx, first, build, environment, directory, afterSuspended)
+	} else {
+		child, err = LaunchGUIChild(ctx, first, build, environment, directory)
+	}
 	if child != nil {
 		t.Cleanup(func() {
 			cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
@@ -820,8 +848,14 @@ func TestWindowsControllerGUIRejectsChangedImageBeforeResume(t *testing.T) {
 	if err == nil {
 		t.Fatal("native GUI resumed a different actual image than its pinned capture")
 	}
-	if !strings.Contains(err.Error(), "different captured file") || child == nil || !child.closed || child.job != 0 {
+	if afterCreation && (!observed || child == nil || child.PID() == 0 || !strings.Contains(err.Error(), "different captured file")) {
 		t.Fatal("GUI changed-image failure did not prove its intended boundary and joined cleanup", err)
+	}
+	if !afterCreation && (child == nil || child.PID() != 0 || !strings.Contains(err.Error(), "normalized launch image differs")) {
+		t.Fatal("normalized launch replacement reached native creation before exact image proof", err)
+	}
+	if child == nil || !child.closed || child.job != 0 {
+		t.Fatal("GUI changed-image failure did not join its exact native owner", err)
 	}
 }
 

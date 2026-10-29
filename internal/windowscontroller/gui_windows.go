@@ -70,6 +70,14 @@ func sameOriginalUser(a, b TokenIdentity) bool {
 // PROCESS_QUERY_LIMITED_INFORMATION; no bearer or owner token is put in argv.
 // The caller must pin/validate its shipping script and construct fixed flags.
 func LaunchGUIChild(ctx context.Context, image *Image, build func(uint64) ([]string, error), environment []string, directory string) (_ *GUIChild, failure error) {
+	return launchGUIChild(ctx, image, build, environment, directory, nil)
+}
+
+// afterSuspended is a private native test boundary, never an exported launch
+// option. The public entry always supplies nil. It runs after real creation,
+// Job membership and token proof, and cannot skip the following image readback,
+// cancellation guard or Resume ordering.
+func launchGUIChild(ctx context.Context, image *Image, build func(uint64) ([]string, error), environment []string, directory string, afterSuspended func()) (_ *GUIChild, failure error) {
 	if ctx == nil || image == nil || build == nil || !filepath.IsAbs(directory) || strings.ContainsRune(directory, 0) {
 		return nil, errors.New("the native GUI requires its exact captured launch")
 	}
@@ -190,10 +198,19 @@ func LaunchGUIChild(ctx context.Context, image *Image, build func(uint64) ([]str
 		image.mu.Unlock()
 		return child, ErrClosed
 	}
-	application, _ := syscall.UTF16PtrFromString(image.path)
-	command, _ := syscall.UTF16FromString(syscall.EscapeArg(image.path) + " " + strings.Join(quoted, " "))
+	launchPath, launchImage, err := image.normalizedLaunchNameLocked()
+	if err != nil {
+		image.mu.Unlock()
+		return child, err
+	}
+	application, _ := syscall.UTF16PtrFromString(launchPath)
+	command, _ := syscall.UTF16FromString(syscall.EscapeArg(launchPath) + " " + strings.Join(quoted, " "))
 	err = syscall.CreateProcess(application, &command[0], nil, nil, true, 0x00080000|0x00000400|0x00000004|0x08000000,
 		&block[0], dir, &startup.Info, &created)
+	if closeErr := syscall.CloseHandle(launchImage); closeErr != nil {
+		image.handles = append(image.handles, launchImage)
+		err = errors.Join(err, nativeError("normalized GUI image release", closeErr))
+	}
 	image.mu.Unlock()
 	runtime.KeepAlive(storage)
 	runtime.KeepAlive(jobs)
@@ -234,6 +251,9 @@ func LaunchGUIChild(ctx context.Context, image *Image, build func(uint64) ([]str
 	actual, err := child.process.Identity()
 	if err != nil || !sameOriginalUser(identity, actual) {
 		return child, errors.Join(err, errors.New("native GUI did not retain its original desktop identity"))
+	}
+	if afterSuspended != nil {
+		afterSuspended()
 	}
 	if err := child.process.VerifyImage(image); err != nil {
 		return child, nativeError("original-user GUI suspended image readback", err)
