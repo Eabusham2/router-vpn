@@ -22,12 +22,12 @@ $Code=[IO.File]::ReadAllText($Source,[Text.Encoding]::UTF8)
 if(-not$CompileAssembly){$Code+=[Environment]::NewLine+[IO.File]::ReadAllText($Fixture,[Text.Encoding]::UTF8)}
 Add-Type -AssemblyName System.Net.Http
 $Compile=@{TypeDefinition=$Code;ErrorAction='Stop'}
-if($CompileAssembly){$Compile.OutputAssembly=[IO.Path]::GetFullPath($CompileAssembly);$Compile.OutputType='Library'}
 if($PSVersionTable.PSEdition-eq'Desktop'){
     # Windows PowerShell 5.1 exposes CodeDOM CompilerParameters, not the
     # PowerShell 7 CompilerOptions switch. Keep the same C#5 boundary and pass
-    # its references through that object; the two reference parameters cannot
-    # be combined. This is the actual Framework compiler used for the DLL.
+    # its references and output path through that object; Add-Type rejects
+    # its separate reference/output switches with CompilerParameters. This
+    # is the actual Framework compiler used for the DLL.
     # https://learn.microsoft.com/powershell/module/microsoft.powershell.utility/add-type?view=powershell-5.1
     $Parameters=New-Object System.CodeDom.Compiler.CompilerParameters
     $Parameters.CompilerOptions='/langversion:5'
@@ -40,6 +40,7 @@ if($PSVersionTable.PSEdition-eq'Desktop'){
     $Compile.CompilerParameters=$Parameters
 }else{
     $Compile.CompilerOptions='/langversion:5'
+    if($CompileAssembly){$Compile.OutputAssembly=[IO.Path]::GetFullPath($CompileAssembly);$Compile.OutputType='Library'}
 }
 Add-Type @Compile
 if($CompileAssembly){Write-Host 'PASS controller GUI transport production DLL compilation';exit 0}
