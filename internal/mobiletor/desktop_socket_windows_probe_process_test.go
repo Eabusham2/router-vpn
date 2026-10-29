@@ -506,7 +506,14 @@ func (f *desktopWindowsProbeProcess) run(scope []byte) (reply desktopWindowsProb
 		defer syscall.CloseHandle(process.Thread)
 	}
 	if ok == 0 || process.Process == 0 || process.Thread == 0 {
-		return reply, desktopWindowsCallFailure("ordinary probe child creation", callErr)
+		creationErr := desktopWindowsCallFailure("ordinary probe child creation", callErr)
+		if errors.Is(callErr, syscall.Errno(87)) && process.Process == 0 && process.Thread == 0 {
+			// Diagnose this exact rejected parameter boundary without allowing a
+			// child to execute outside the creation-time Job. All controls target
+			// the same held zero-byte file, which cannot be a Windows executable.
+			creationErr = errors.Join(creationErr, f.diagnoseCreateParameters(startup, environment))
+		}
+		return reply, creationErr
 	}
 	var inJob uint32
 	ok, _, callErr = f.api.inJob.Call(uintptr(process.Process), jobValue, uintptr(unsafe.Pointer(&inJob)))
@@ -556,6 +563,90 @@ func (f *desktopWindowsProbeProcess) run(scope []byte) (reply desktopWindowsProb
 		return reply, fmt.Errorf("ordinary probe child did not prove its captured process identity (exit=%d): %s", exit, reply.SetupError)
 	}
 	return reply, nil
+}
+
+func (f *desktopWindowsProbeProcess) diagnoseCreateParameters(captured desktopWindowsProbeStartup, environment []uint16) error {
+	control, err := os.CreateTemp(f.directory, "create-parameter-control-*.exe")
+	if err != nil {
+		return err
+	}
+	path := control.Name()
+	if err := control.Close(); err != nil {
+		return err
+	}
+	defer os.Remove(path)
+	principal, err := (*syscall.SID)(unsafe.Pointer(&f.identity.sid[0])).String()
+	if err != nil {
+		return err
+	}
+	if err := f.allowOwnedFile(path, principal, "GRGX"); err != nil {
+		return err
+	}
+	application, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	held, err := syscall.CreateFile(application, syscall.GENERIC_READ, syscall.FILE_SHARE_READ, nil, syscall.OPEN_EXISTING, 0x00200000, 0)
+	if err != nil {
+		return err
+	}
+	defer syscall.CloseHandle(held)
+	var attributes syscall.ByHandleFileInformation
+	if err := syscall.GetFileInformationByHandle(held, &attributes); err != nil || attributes.FileSizeHigh != 0 || attributes.FileSizeLow != 0 || attributes.FileAttributes&(0x400|syscall.FILE_ATTRIBUTE_DIRECTORY) != 0 || attributes.NumberOfLinks != 1 {
+		return errors.Join(err, errors.New("process parameter control did not pin an empty regular file"))
+	}
+	directory, _ := syscall.UTF16PtrFromString(f.directory)
+	var statuses []string
+	for _, variant := range []struct {
+		name       string
+		flags      uintptr
+		cb         uint32
+		attributes unsafe.Pointer
+	}{
+		{"basic", 0x08000404, uint32(unsafe.Sizeof(syscall.StartupInfo{})), nil},
+		{"extended-empty", 0x08080404, uint32(unsafe.Sizeof(captured)), nil},
+		{"extended-job", 0x08080404, uint32(unsafe.Sizeof(captured)), captured.Attributes},
+		{"extended-basic-cb", 0x08080404, uint32(unsafe.Sizeof(syscall.StartupInfo{})), captured.Attributes},
+		{"extended-without-no-window", 0x00080404, uint32(unsafe.Sizeof(captured)), captured.Attributes},
+	} {
+		startup := desktopWindowsProbeStartup{Info: captured.Info, Attributes: variant.attributes}
+		startup.Info.Cb = variant.cb
+		command, _ := syscall.UTF16FromString(syscall.EscapeArg(path))
+		var child syscall.ProcessInformation
+		ok, _, callErr := f.api.create.Call(uintptr(f.primary), 0, uintptr(unsafe.Pointer(application)), uintptr(unsafe.Pointer(&command[0])), variant.flags,
+			uintptr(unsafe.Pointer(&environment[0])), uintptr(unsafe.Pointer(directory)), uintptr(unsafe.Pointer(&startup)), uintptr(unsafe.Pointer(&child)))
+		runtime.KeepAlive(command)
+		runtime.KeepAlive(startup)
+		if child.Process != 0 {
+			_ = syscall.TerminateProcess(child.Process, 125)
+			state, waitErr := syscall.WaitForSingleObject(child.Process, 5000)
+			closeErr := syscall.CloseHandle(child.Process)
+			if child.Thread != 0 {
+				closeErr = errors.Join(closeErr, syscall.CloseHandle(child.Thread))
+				child.Thread = 0
+			}
+			if waitErr != nil || state != syscall.WAIT_OBJECT_0 || closeErr != nil {
+				return errors.Join(waitErr, closeErr, errors.New("invalid-image diagnostic unexpectedly acquired an unjoined process"))
+			}
+		}
+		if child.Thread != 0 {
+			_ = syscall.CloseHandle(child.Thread)
+			return errors.New("invalid-image diagnostic unexpectedly acquired a standalone thread")
+		}
+		if ok != 0 || child.Process != 0 || child.Thread != 0 {
+			return errors.New("Windows unexpectedly accepted a pinned zero-byte executable control")
+		}
+		var status syscall.Errno
+		if !errors.As(callErr, &status) {
+			return errors.New("process parameter diagnostic returned no numeric Windows status")
+		}
+		statuses = append(statuses, fmt.Sprintf("%s(flags=0x%x,cb=%d):%d", variant.name, variant.flags, variant.cb, uint32(status)))
+	}
+	runtime.KeepAlive(application)
+	runtime.KeepAlive(environment)
+	runtime.KeepAlive(directory)
+	runtime.KeepAlive(captured)
+	return fmt.Errorf("held non-executable process controls (STARTUPINFO=%d, STARTUPINFOEX=%d): %s", unsafe.Sizeof(syscall.StartupInfo{}), unsafe.Sizeof(captured), strings.Join(statuses, "; "))
 }
 
 // Only the deliberately launched non-admin process selects this helper. The
