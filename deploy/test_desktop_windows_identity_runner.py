@@ -18,10 +18,13 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="windows-identity-copy-")
         self.addCleanup(self.temp.cleanup)
-        self.root = Path(self.temp.name) / "repository"
+        # Match the production gate's resolved ROOT even when Windows TEMP is
+        # reached through an 8.3 path alias (or a native directory junction).
+        workspace = Path(self.temp.name).resolve()
+        self.root = workspace / "repository"
         self.sources = self.root / "internal/mobiletor"
         self.sources.mkdir(parents=True)
-        self.vendor = Path(self.temp.name) / "native"
+        self.vendor = workspace / "native"
         self.target = self.vendor / "routervpn/mobiletor"
         self.target.mkdir(parents=True)
         for path in (ROOT / "internal/mobiletor").glob("desktop_socket_*.go"):
