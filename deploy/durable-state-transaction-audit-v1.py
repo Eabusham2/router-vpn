@@ -253,7 +253,8 @@ require(
 
 # Windows strict kill-switch rollback state is equally authoritative. Its state
 # tree must reject reparse redirects and use flushed random staging + atomic
-# replacement; corrupt-state force-off is explicit local recovery.
+# replacement. Recovery must prove captured defaults and rule removal; corrupt
+# state cannot authorize guessed global Allow or loss of the recovery record.
 require(
     "client/windows-kill-switch.ps1",
     "Assert-NoReparseAncestors",
@@ -261,13 +262,16 @@ require(
     "[IO.File]::Replace",
     "[Guid]::NewGuid().ToString('N')",
     "$stream.Flush($true)",
-    "Remove-State -ForceRecovery",
-    "emergency outbound-Allow recovery",
+    "Assert-RollbackState",
+    "Windows firewall restoration readback differs from its captured policy",
+    "preserve the rollback record and existing firewall policy",
 )
 forbid(
     "client/windows-kill-switch.ps1",
     '$tmp = "$path.tmp"',
     "Move-Item -LiteralPath $tmp -Destination $path -Force",
+    "Remove-State -ForceRecovery",
+    "emergency outbound-Allow recovery",
 )
 require(
     "client/test-windows-kill-switch.ps1",
@@ -275,6 +279,15 @@ require(
     "predictable Windows kill-switch state temp path returned",
     "Windows kill-switch plan/rollback/private-state contract: OK",
 )
+require(
+    "client/test-windows-legacy-protection-recovery.ps1",
+    "Invalid recovery authorized mutation",
+    "Recovery discarded its rollback record",
+    "Captured profile was not restored",
+    "foreign policy preservation",
+)
+require(".github/workflows/windows-native-contract.yml", "test_windows_legacy_protection_recovery.py --shell $shell")
+require(".github/workflows/release-candidate.yml", "test-windows-legacy-protection-recovery.ps1")
 
 # Elevated Windows native helpers consume the controller-owned private node store
 # through one read-only reparse-safe helper; they may never persist routers.json.

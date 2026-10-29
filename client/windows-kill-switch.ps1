@@ -84,6 +84,8 @@ function Read-SafeJsonFile([string]$Path,[string]$Label,[int]$Limit=1048576) {
   } finally {
     $stream.Dispose()
   }
+  $trimmed=$text.Trim()
+  if (-not $trimmed.StartsWith('{') -or -not $trimmed.EndsWith('}')) { throw "Invalid $Label JSON object: $Path" }
   try { return $text | ConvertFrom-Json } catch { throw "Invalid $Label JSON: $Path" }
 }
 function Safe-ProfileId([string]$Value) {
@@ -108,9 +110,12 @@ function Read-State {
   $path = Join-Path $dir 'windows-state.json'
   if (-not (Test-Path -LiteralPath $path)) { return $null }
   [void](Assert-SafeStateLeaf $path)
-  return Read-SafeJsonFile $path 'Windows kill-switch rollback state'
+  $value=Read-SafeJsonFile $path 'Windows kill-switch rollback state'
+  Assert-RollbackState $value
+  return $value
 }
 function Write-State($Value) {
+  Assert-RollbackState $Value
   $dir = Assert-SafeStateRoot
   $path = Join-Path $dir 'windows-state.json'
   $prior = Assert-SafeStateLeaf $path
@@ -142,15 +147,11 @@ function Write-State($Value) {
     Remove-Item -LiteralPath $backup -Force -ErrorAction SilentlyContinue
   }
 }
-function Remove-State([switch]$ForceRecovery) {
+function Remove-State {
   $dir = Assert-SafeStateRoot
   $path = Join-Path $dir 'windows-state.json'
   if (-not (Test-Path -LiteralPath $path)) { return }
-  try {
-    [void](Assert-SafeStateLeaf $path)
-  } catch {
-    if (-not $ForceRecovery) { throw }
-  }
+  [void](Assert-SafeStateLeaf $path)
   Remove-Item -LiteralPath $path -Force
 }
 function Get-SelectedProfiles {
@@ -281,12 +282,44 @@ function Resolve-Settings {
   return $settings
 }
 function Firewall-Profiles {
-  return @(Get-NetFirewallProfile -PolicyStore ActiveStore | Where-Object { $_.Name -in @('Domain','Private','Public') } | ForEach-Object {
+  return @(Get-NetFirewallProfile -PolicyStore ActiveStore -ErrorAction Stop | Where-Object { $_.Name -in @('Domain','Private','Public') } | ForEach-Object {
     [pscustomobject]@{ name=[string]$_.Name; default_outbound=[string]$_.DefaultOutboundAction }
   })
 }
+function Assert-OriginalProfiles($Profiles) {
+  if ($Profiles -isnot [array] -or $Profiles.Count -ne 3) {
+    throw 'Windows kill-switch rollback requires all three captured firewall profiles.'
+  }
+  $seen=@{}
+  foreach ($profile in $Profiles) {
+    if ($profile -isnot [pscustomobject] -or $profile.name -isnot [string] -or
+        $profile.name -cnotin @('Domain','Private','Public') -or $seen.ContainsKey($profile.name) -or
+        $profile.default_outbound -isnot [string] -or $profile.default_outbound -cnotin @('Allow','Block','NotConfigured')) {
+      throw 'Windows kill-switch rollback contains an invalid or duplicate captured firewall profile.'
+    }
+    $seen[$profile.name]=$true
+  }
+}
+function Assert-RollbackState($Value) {
+  if ($Value -isnot [pscustomobject] -or
+      ($Value.schema_version -isnot [int] -and $Value.schema_version -isnot [long]) -or $Value.schema_version -ne 1 -or
+      $Value.policy -isnot [string] -or $Value.policy -cnotin @('on-connect','always') -or
+      $Value.phase -isnot [string] -or $Value.phase -cnotin @('preparing','active')) {
+    throw 'Windows kill-switch rollback state has no valid captured policy or phase.'
+  }
+  Assert-OriginalProfiles $Value.original_profiles
+}
+function Get-ManagedRules {
+  # Query the inventory so an empty group is distinct from a failed query.
+  # A failed or partial removal must retain the rollback record for retry.
+  $rules=@(Get-NetFirewallRule -PolicyStore ActiveStore -ErrorAction Stop)
+  if ($rules.Count -gt 65536) { throw 'Windows firewall inventory exceeds its recovery bound.' }
+  return @($rules | Where-Object { [string]$_.Group -ceq $RuleGroup })
+}
 function Remove-Rules {
-  Get-NetFirewallRule -Group $RuleGroup -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+  $rules=@(Get-ManagedRules)
+  if ($rules.Count -gt 0) { $rules | Remove-NetFirewallRule -ErrorAction Stop }
+  if (@(Get-ManagedRules).Count -ne 0) { throw 'Windows kill-switch rule removal was not proved; rollback state is retained.' }
 }
 function Add-Rule([string]$Name,[hashtable]$RuleArguments) {
   $params = @{ DisplayName = $RulePrefix + $Name; Group = $RuleGroup; Direction='Outbound'; Action='Allow'; Profile='Any' }
@@ -309,11 +342,23 @@ function Install-AllowRules($settings) {
   if ($settings.tunnel_alias) { Add-Rule 'VPN interface' @{ InterfaceAlias=$settings.tunnel_alias } }
 }
 function Restore-State($state) {
-  if ($null -eq $state) { Remove-Rules; return }
+  if ($null -eq $state) {
+    if (@(Get-ManagedRules).Count -ne 0) {
+      throw 'Windows kill-switch rules exist without their captured rollback state; firewall defaults remain unchanged.'
+    }
+    return
+  }
+  Assert-RollbackState $state
   Remove-Rules
   foreach ($profile in @($state.original_profiles)) {
-    if ($profile -and $profile.name -and $profile.default_outbound) {
-      Set-NetFirewallProfile -Name ([string]$profile.name) -DefaultOutboundAction ([string]$profile.default_outbound)
+    Set-NetFirewallProfile -Name $profile.name -DefaultOutboundAction $profile.default_outbound -ErrorAction Stop
+  }
+  $actual=@(Firewall-Profiles)
+  Assert-OriginalProfiles $actual
+  foreach ($profile in @($state.original_profiles)) {
+    $readback=@($actual | Where-Object { $_.name -ceq $profile.name })
+    if ($readback.Count -ne 1 -or $readback[0].default_outbound -cne $profile.default_outbound) {
+      throw 'Windows firewall restoration readback differs from its captured policy; rollback state is retained.'
     }
   }
   Remove-State
@@ -437,19 +482,12 @@ switch ($Action) {
     Require-FirewallCmdlets
     try {
       $state = Read-State
-      if ($state) { Restore-State $state } else { Remove-Rules }
+      Restore-State $state
     } catch {
-      # Explicit local recovery when rollback JSON itself is poisoned. The exact
-      # pre-kill-switch defaults are unknowable without valid state, so force-off
-      # restores outbound Allow for the three Windows profiles to recover network
-      # access, removes only Router VPN's rule group, and deletes only the state
-      # leaf without following a reparse target.
-      Remove-Rules
-      foreach ($name in @('Domain','Private','Public')) {
-        Set-NetFirewallProfile -Name $name -DefaultOutboundAction Allow
-      }
-      Remove-State -ForceRecovery
-      Write-Warning 'Windows kill-switch state was unreadable; force-off used emergency outbound-Allow recovery.'
+      # Missing/corrupt recovery authority cannot reveal the user's prior
+      # firewall defaults. Never invent Allow, discard the record, or report
+      # Off after failed mutation/readback. A valid retained record can retry.
+      throw ('Windows kill-switch recovery was not proved; preserve the rollback record and existing firewall policy. '+$_.Exception.Message)
     }
     Write-Output 'Windows kill switch force-disabled.'
     exit 0

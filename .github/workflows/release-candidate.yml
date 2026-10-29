@@ -339,7 +339,7 @@ jobs:
           if($relocated.Count -ne 1){throw 'Expected exactly one relocated Portable release package'}
           $packages=@($roots[0].FullName,(Join-Path $relocated[0].FullName 'App/RouterVPN'))
           foreach($package in $packages){
-            foreach($name in @('test-windows-owned-protection.ps1','test-windows-protection-dispatch.ps1')){
+            foreach($name in @('test-windows-owned-protection.ps1','test-windows-protection-dispatch.ps1','test-windows-legacy-protection-recovery.ps1')){
               $test=Join-Path $package ('client/'+$name)
               if(-not(Test-Path -LiteralPath $test -PathType Leaf)){throw "Shipped Windows package lacks its owned protection fixture: $name"}
               foreach($shell in @('pwsh','powershell.exe')){

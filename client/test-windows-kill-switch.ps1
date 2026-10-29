@@ -42,7 +42,7 @@ try {
   $tokens=$null; $parseErrors=$null
   $tree=[Management.Automation.Language.Parser]::ParseFile($script,[ref]$tokens,[ref]$parseErrors)
   if ($parseErrors.Count) { throw 'Windows kill-switch parse failed' }
-  foreach ($functionName in @('Assert-NativeEgress','Remove-Rules','Add-Rule','Install-AllowRules')) {
+  foreach ($functionName in @('Assert-NativeEgress','Get-ManagedRules','Remove-Rules','Add-Rule','Install-AllowRules')) {
     $definition=$tree.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName},$true)
     if (-not $definition) { throw "Missing shipping function $functionName" }
     Invoke-Expression $definition.Extent.Text
@@ -269,8 +269,9 @@ try {
     '[IO.File]::Replace',
     '[Guid]::NewGuid().ToString(''N'')',
     '$stream.Flush($true)',
-    'Remove-State -ForceRecovery',
-    'emergency outbound-Allow recovery'
+    'Assert-RollbackState',
+    'Windows firewall restoration readback differs from its captured policy',
+    'preserve the rollback record and existing firewall policy'
   )) {
     if (-not $source.Contains($marker)) { throw "Windows kill-switch source missing marker: $marker" }
   }
@@ -284,7 +285,7 @@ try {
   # protection dispatcher. The full packaged status/denial paths (including
   # this corrupt file) run in test-windows-protection-dispatch.ps1 with its
   # actual sibling controller executable. A source checkout has no such exe.
-  foreach ($functionName in @('Get-StateRoot','Assert-NoReparseAncestors','Assert-SafeStateRoot','Assert-SafeStateLeaf','Read-SafeJsonFile','Read-State')) {
+  foreach ($functionName in @('Get-StateRoot','Assert-NoReparseAncestors','Assert-SafeStateRoot','Assert-SafeStateLeaf','Read-SafeJsonFile','Assert-OriginalProfiles','Assert-RollbackState','Read-State')) {
     $definition=$tree.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName},$true)
     if (-not $definition) { throw "Missing shipping legacy-state function $functionName" }
     Invoke-Expression $definition.Extent.Text
