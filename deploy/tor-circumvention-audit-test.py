@@ -23,6 +23,49 @@ CHOICE_CHECK = AUDIT["need_desktop_tor_choice"]
 ROUTE = "cmd/client/tor_bridge_routes.go"
 CHOICE = "cmd/client/desktop_tor_persistence.go"
 CHOICE_SOURCE = {path: (ROOT/path).read_text(encoding="utf-8") for path in (ROUTE, CHOICE)}
+PHYSICAL_CHECK = AUDIT["need_desktop_tor_physical_owner"]
+PHYSICAL_SOURCE = (ROOT/"internal/mobiletor/desktop_bridge.go").read_text(encoding="utf-8")
+
+
+class TorPhysicalOwnerAuditTests(unittest.TestCase):
+    def errors(self, source):
+        errors = []
+        with patch.dict(PHYSICAL_CHECK.__globals__, {"read": lambda _: source, "errors": errors}):
+            PHYSICAL_CHECK()
+        return errors
+
+    def test_fixed_and_dynamic_direct_paths_keep_the_real_socket_owner(self):
+        self.assertEqual([], self.errors(PHYSICAL_SOURCE))
+        self.assertEqual([], self.errors(PHYSICAL_SOURCE.replace(
+            'physicalBroker := predecessor == nil',
+            'physicalBroker /* { } */ := predecessor == nil').replace('\n', '\r\n')))
+
+    def test_old_fixed_bridge_exclusion_and_unowned_admission_are_rejected(self):
+        original = 'physicalBroker := predecessor == nil && targetOS == "linux" && kill != "off"'
+        self.assertEqual(1, PHYSICAL_SOURCE.count(original))
+        for replacement in (
+            original + ' && !desktopBridgeDirectProtection(plan)',
+            original.replace('predecessor == nil', 'true'),
+            original.replace('targetOS == "linux"', 'targetOS != ""'),
+            original.replace('kill != "off"', 'true'),
+            'physicalBroker := false // ' + original,
+        ):
+            with self.subTest(replacement=replacement):
+                self.assertTrue(self.errors(PHYSICAL_SOURCE.replace(original, replacement)))
+
+    def test_bootstrap_bypass_and_lost_socket_identity_are_rejected(self):
+        outbound = ('"type": DesktopPhysicalOutboundType, "tag": DesktopPhysicalOutboundTag,\n'
+                    '\t\t\t"session_id": sessionID, "source_sha256": sourceSHA,')
+        for original, replacement in (
+            ('bootstrap["detour"] = DesktopPhysicalOutboundTag', 'delete(bootstrap, "detour")'),
+            ('"type": DesktopPhysicalOutboundType, "tag": DesktopPhysicalOutboundTag,',
+             '"type": "direct", "tag": DesktopPhysicalOutboundTag,'),
+            (outbound, outbound.replace('"session_id": sessionID', '"session_id": ""')),
+            (outbound, outbound.replace('"source_sha256": sourceSHA', '"source_sha256": ""')),
+        ):
+            with self.subTest(replacement=replacement):
+                self.assertEqual(1, PHYSICAL_SOURCE.count(original))
+                self.assertTrue(self.errors(PHYSICAL_SOURCE.replace(original, replacement)))
 
 
 class TorEditorAuditTests(unittest.TestCase):

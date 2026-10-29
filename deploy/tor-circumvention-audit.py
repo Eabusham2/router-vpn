@@ -76,6 +76,31 @@ def go_contract_block(tokens: tuple[str, ...], marker: str) -> tuple[str, ...]:
     raise ValueError(f"unterminated executable block after {marker!r}")
 
 
+def need_desktop_tor_physical_owner() -> None:
+    """Keep fixed and dynamic protected Linux Direct paths on the socket owner."""
+    try:
+        source = go_contract_tokens(read("internal/mobiletor/desktop_bridge.go"))
+        compile_policy = go_contract_block(source, "func newDesktopBridgePolicy(")
+        # Include the next statement so an extra fixed-bridge exclusion cannot
+        # satisfy the shorter expression as a prefix. Comments are not proof.
+        go_contract_at(compile_policy,
+                       'physicalBroker := predecessor == nil && targetOS == "linux" && kill != "off" '
+                       'if kill != "off" && !physicalBroker')
+        dns_start = go_contract_at(compile_policy, "var root, tun, selected map[string]any")
+        dns_end = go_contract_at(compile_policy, 'if targetOS == "linux"')
+        direct = go_contract_block(compile_policy[dns_start:dns_end], "if predecessor == nil")
+        bootstrap = go_contract_block(direct, "if physicalBroker")
+        go_contract_at(bootstrap, 'bootstrap["detour"] = DesktopPhysicalOutboundTag')
+        outbound_start = go_contract_at(compile_policy, "sourceSHA := desktopDigest(sourceBytes)")
+        outbound_end = go_contract_at(compile_policy, "if padding.Enabled")
+        retained = go_contract_block(compile_policy[outbound_start:outbound_end], "if physicalBroker")
+        for marker in ('"type": DesktopPhysicalOutboundType', '"tag": DesktopPhysicalOutboundTag',
+                       '"session_id": sessionID', '"source_sha256": sourceSHA'):
+            go_contract_at(retained, marker)
+    except (ValueError, IndexError) as error:
+        errors.append(f"desktop Tor captured physical socket ownership: {error}")
+
+
 def need_desktop_tor_choice() -> None:
     """Follow the admitted durable save instead of a retired inline call."""
     try:
@@ -367,10 +392,10 @@ need(
 )
 need(
     "internal/mobiletor/desktop_bridge.go",
-    'physicalBroker := predecessor == nil && targetOS == "linux" && kill != "off" && !desktopBridgeDirectProtection(plan)',
     "strict desktop Tor protection has no captured typed predecessor",
     "routervpn-desktop-tor-network", "BootstrapDNSTag", "ConfiguredMTU",
 )
+need_desktop_tor_physical_owner()
 need(
     "mobile/desktop/tor_box.go.tmpl",
     "RouterVPNDesktopTorCreate", "RouterVPNDesktopMTU", "session.Configure",
