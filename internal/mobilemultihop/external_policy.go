@@ -25,6 +25,7 @@ const ExternalDNSTag = "selected-dns"
 type ExternalPolicy struct {
 	config, metadata, source string
 	capture                  externalPolicyCapture
+	desktopSeal              string
 }
 
 func (p *ExternalPolicy) Config() string       { return p.config }
@@ -305,7 +306,11 @@ func NewExternalPolicy(config, capture string) (*ExternalPolicy, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ExternalPolicy{config: string(body), metadata: string(metadata), source: meta.SourceSHA256, capture: selection}, nil
+	policy := &ExternalPolicy{config: string(body), metadata: string(metadata), source: meta.SourceSHA256, capture: selection}
+	if err := policy.sealDesktopCapture(); err != nil {
+		return nil, err
+	}
+	return policy, nil
 }
 
 func externalDigest(data []byte) string {

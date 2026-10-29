@@ -79,6 +79,10 @@ func (p *ExternalPolicy) PhysicalEgress() ([]PhysicalEgress, error) {
 // Source constructors validate the complete graph before this private helper.
 // It never accepts an arbitrary caller's JSON as firewall authority.
 func compiledPhysicalEgress(configJSON string, networks []string) ([]PhysicalEgress, error) {
+	return compiledPhysicalEgressWithDesktop(configJSON, networks, nil)
+}
+
+func compiledPhysicalEgressWithDesktop(configJSON string, networks []string, desktop *externalDesktopRecorder) ([]PhysicalEgress, error) {
 	var graph map[string]any
 	if exactJSON([]byte(configJSON), &graph, 4<<20) != nil {
 		return nil, nodePhysicalEgressError
@@ -86,12 +90,16 @@ func compiledPhysicalEgress(configJSON string, networks []string) ([]PhysicalEgr
 	p := nodeEgressProjection{
 		nodes: map[string]map[string]any{}, resolvers: map[string]map[string]any{},
 		active: map[string]bool{}, visited: map[string]bool{}, tuples: map[PhysicalEgress]bool{},
+		desktop: desktop,
 	}
 	for _, family := range []string{"endpoints", "outbounds"} {
 		rows, _ := graph[family].([]any)
 		for _, raw := range rows {
 			node := raw.(map[string]any)
 			p.nodes[predecessorText(node, "tag")] = node
+			if desktop != nil {
+				desktop.families[predecessorText(node, "tag")] = family
+			}
 		}
 	}
 	dns := graph["dns"].(map[string]any)
@@ -134,6 +142,7 @@ type nodeEgressProjection struct {
 	nodes, resolvers map[string]map[string]any
 	active, visited  map[string]bool
 	tuples           map[PhysicalEgress]bool
+	desktop          *externalDesktopRecorder
 }
 
 func (p *nodeEgressProjection) add(host string, port any, network string) error {
@@ -195,6 +204,14 @@ func (p *nodeEgressProjection) node(tag, payload string) error {
 	}
 	// The qualified native Xray compiler checks the full nested protocol, not
 	// just the outer type label or an arbitrary recursively found address.
+	if p.desktop != nil && value["type"] == "naive" && value["domain_resolver"] != nil {
+		// Naive retains an explicit native resolver even for a literal server.
+		// The desktop wrapper must preserve that compiled bootstrap dependency;
+		// the legacy fixed-tuple projection keeps its existing behavior.
+		if err := p.resolve(value); err != nil {
+			return err
+		}
+	}
 	var sockets []PhysicalEgress
 	switch value["type"] {
 	case "socks":
@@ -204,6 +221,13 @@ func (p *nodeEgressProjection) node(tag, payload string) error {
 			}
 			detour := predecessorText(value, "detour")
 			if detour == "" {
+				if p.desktop != nil {
+					if err := p.desktop.socks(p, tag, value); err != nil {
+						return err
+					}
+					p.visited[key] = true
+					return nil
+				}
 				return ErrDynamicPhysicalEgress
 			}
 			// Both SOCKS control and its negotiated relay traverse the captured
@@ -293,8 +317,14 @@ func (p *nodeEgressProjection) node(tag, payload string) error {
 			if err := p.through(detour, socket); err != nil {
 				return err
 			}
-		} else if err := p.add(socket.Host, float64(socket.Port), socket.Network); err != nil {
-			return err
+		} else {
+			if p.desktop != nil {
+				if err := p.desktop.node(p, tag, value, socket); err != nil {
+					return err
+				}
+			} else if err := p.add(socket.Host, float64(socket.Port), socket.Network); err != nil {
+				return err
+			}
 		}
 	}
 	p.visited[key] = true
@@ -392,10 +422,23 @@ func (p *nodeEgressProjection) through(tag string, socket PhysicalEgress) error 
 	if mapping.Detour != "" {
 		return p.node(mapping.Detour, socket.Network)
 	}
+	if p.desktop != nil {
+		if !externalPort(port) {
+			return nodePhysicalEgressError
+		}
+		return p.desktop.node(p, tag, value, PhysicalEgress{socket.Host, int(port.(float64)), socket.Network})
+	}
 	return p.add(socket.Host, port, socket.Network)
 }
 
 func (p *nodeEgressProjection) resolve(value map[string]any) error {
+	if p.desktop != nil {
+		query, err := externalDesktopQuery(value["domain_resolver"])
+		if err != nil || !query.Present {
+			return externalDesktopCaptureError
+		}
+		return p.dns(query.Server, true)
+	}
 	query, err := predecessorResolverSelection(value["domain_resolver"])
 	if err != nil {
 		return nodePhysicalEgressError
@@ -448,6 +491,11 @@ func (p *nodeEgressProjection) dns(tag string, bootstrap bool) error {
 			return nodePhysicalEgressError
 		}
 		port = value.(float64)
+	}
+	if p.desktop != nil {
+		if err := p.desktop.dns(tag, server, bootstrap, physical, int(port)); err != nil {
+			return err
+		}
 	}
 	if physical {
 		if err := p.add(host, port, network); err != nil {
