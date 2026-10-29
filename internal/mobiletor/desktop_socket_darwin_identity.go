@@ -22,7 +22,10 @@ import (
 
 // Tagged native tests use their own root-owned directory in the compiled test
 // executable. The shipping command has no argument or environment override.
-var desktopDarwinIdentities = "/private/var/run/router-vpn-physical"
+// /private/var/run is group-writable on supported macOS installations. Keep
+// allocator and crash-quarantine authority under the protected install prefix
+// rather than accepting a mutable ancestor or changing a system directory.
+var desktopDarwinIdentities = "/opt/router-vpn-physical"
 
 func desktopDarwinProtectedPath(path string, private bool) error {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path {

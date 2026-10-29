@@ -60,6 +60,12 @@ identity. Fresh controller access and ownership secrets are transferred over
 that captured connection, never through command-line arguments or a public
 configuration file.
 
+The supervisor socket is `/opt/router-vpn-client.control/controller.sock`.
+Both peers inspect its complete root-owned directory and ACL ancestry. The
+system's `/private/var/run` directory may grant group write permission, so it
+does not supply this application's protected runtime authority; the installer
+does not change that system directory's permissions.
+
 The supervisor holds the installation and controller locks before starting the
 fixed controller. Their inherited descriptors and the accepted owner socket
 remain tied to that child. The app verifies an authenticated startup receipt

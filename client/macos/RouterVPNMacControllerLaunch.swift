@@ -26,7 +26,7 @@ extension RouterVPNMacPathACL {
 }
 
 private final class RouterVPNMacSupervisorSocket {
-    static let directory = "/private/var/run/router-vpn"
+    static let directory = "/opt/router-vpn-client.control"
     static let path = directory + "/controller.sock"
     private(set) var descriptor: Int32
 

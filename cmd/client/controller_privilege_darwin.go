@@ -24,7 +24,7 @@ import (
 )
 
 const macOSOwnedControllerRoot = "/opt/router-vpn-client"
-const macOSOwnedControllerSocketDirectory = "/private/var/run/router-vpn"
+const macOSOwnedControllerSocketDirectory = "/opt/router-vpn-client.control"
 const macOSOwnedControllerSocket = macOSOwnedControllerSocketDirectory + "/controller.sock"
 const macOSOwnedControllerRecord = macOSOwnedControllerRoot + "/controller-owner.json"
 const macOSOwnedInstallLock = "/opt/router-vpn-client.install.lock"
@@ -361,9 +361,9 @@ func macOSControllerSupervisorUtility(arguments []string) (bool, error) {
 }
 
 func macOSOwnedSocketDirectory() error {
-	// macOS system runtime ancestors may use the daemon group. Integrity
-	// depends on root ownership and absence of group/other writes, not that
-	// those read-only system directories use the wheel group specifically.
+	// Use the protected installation prefix. /private/var/run can be writable
+	// by the daemon group, so it cannot supply the required immutable ancestry.
+	// Read-only non-wheel groups still do not grant mutation authority.
 	for path := filepath.Dir(macOSOwnedControllerSocketDirectory); ; path = filepath.Dir(path) {
 		info, err := os.Lstat(path)
 		if err != nil || !info.IsDir() {

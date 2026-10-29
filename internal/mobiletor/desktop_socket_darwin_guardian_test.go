@@ -142,7 +142,7 @@ func TestDesktopDarwinGuardianKernelProtectedPathAuthority(t *testing.T) {
 
 func init() {
 	executable, err := os.Executable()
-	if err != nil || filepath.Base(executable) != "darwin-guardian.test" || !strings.HasPrefix(filepath.Dir(executable), "/private/var/run/routervpn-darwin-guardian-") {
+	if err != nil || filepath.Base(executable) != "darwin-guardian.test" || !strings.HasPrefix(filepath.Dir(executable), "/opt/routervpn-darwin-guardian-") {
 		return
 	}
 	path := filepath.Join(filepath.Dir(executable), "fixture.json")
@@ -163,6 +163,14 @@ func init() {
 	desktopDarwinPFTestScope = fmt.Sprintf("on lo0 to { %s, %s }", addresses[1], addresses[3])
 	desktopDarwinPFTestAddresses = append([]netip.Addr(nil), addresses...)
 	desktopDarwinIdentities = filepath.Join(filepath.Dir(executable), "identities")
+	if len(os.Args) == 2 && os.Args[1] == "routervpn-darwin-fixture-preflight" {
+		if os.Geteuid() != 0 {
+			os.Exit(89)
+		}
+		// The runner must prove the actual native mode/ACL ancestry before
+		// creating any loopback aliases or acquiring a PF enable reference.
+		os.Exit(0)
+	}
 	if len(os.Args) == 3 && os.Args[1] == "routervpn-owned-socket-helper" {
 		if err := RunDesktopDarwinSocketHelper(os.Args[2]); err != nil {
 			fmt.Fprintln(os.Stderr, err)

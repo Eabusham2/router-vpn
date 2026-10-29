@@ -125,7 +125,17 @@ def root_fixture(source_binary: Path, expected_digest: str, case=None):
     raw = source_binary.read_bytes()
     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_mode & 0o022 or hashlib.sha256(raw).hexdigest() != expected_digest:
         raise ValueError('The native fixture executable changed before its root-owned capture')
-    root = Path(tempfile.mkdtemp(prefix='routervpn-darwin-guardian-', dir='/private/var/run'))
+    prefix = Path('/opt')
+    created_prefix = False
+    try:
+        prefix.mkdir(mode=0o755)
+        created_prefix = True
+    except FileExistsError:
+        pass
+    prefix_info = prefix.lstat()
+    if not stat.S_ISDIR(prefix_info.st_mode) or prefix_info.st_uid != 0 or prefix_info.st_mode & 0o022:
+        raise ValueError('The Darwin fixture requires the existing protected installation prefix')
+    root = Path(tempfile.mkdtemp(prefix='routervpn-darwin-guardian-', dir=prefix))
     root.chmod(0o755)
     binary = root/'darwin-guardian.test'
     binary.write_bytes(raw)
@@ -140,6 +150,9 @@ def root_fixture(source_binary: Path, expected_digest: str, case=None):
     aliases, token, dispatch, started = [], None, False, False
     result, failure = None, None
     try:
+        # This runs the real Go mode/ACL ancestry check before any kernel
+        # fixture mutation. Do not relax /var/run's system permissions.
+        system([str(binary), 'routervpn-darwin-fixture-preflight'])
         before, _ = system(['/sbin/ifconfig', 'lo0'])
         existing = set()
         for field in before.split():
@@ -213,6 +226,8 @@ def root_fixture(source_binary: Path, expected_digest: str, case=None):
         if cleanup_errors:
             raise RuntimeError('Native fixture cleanup retained its recovery record at '+str(root)+': '+repr(cleanup_errors)) from failure
         shutil.rmtree(root)
+        if created_prefix:
+            prefix.rmdir()
     if failure is not None:
         raise failure
     return result
