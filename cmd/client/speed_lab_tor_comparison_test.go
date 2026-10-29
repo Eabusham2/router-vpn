@@ -25,18 +25,22 @@ func speedLabTorCompareFixture(t *testing.T, protocol, prior, trial string) (*de
 		kind = "tor-compare-driver-final-failure"
 	}
 	f := newDesktopTorPublicComparisonFixture(t, kind)
+	f.a.mu.Lock()
 	if protocol == "tor" {
 		f.a.profiles.Profiles[0].External.Protocol, f.a.profiles.Profiles[0].External.TorBridge = "tor", nil
 	}
 	p := &f.a.profiles.Profiles[0]
 	p.DNSMode, p.DNSProtocol, p.DNSHost, p.DNSPort = "home", "udp", "", 53
-	response := f.request(t, externalProfileConnectRequest{ProfileID: p.ID})
+	profileID := p.ID
+	f.a.mu.Unlock()
+	response := f.request(t, externalProfileConnectRequest{ProfileID: profileID})
 	if response.Code != http.StatusOK || !f.a.state.Connected || desktopTorExecution(f.launch.tor.expected.Execution) != prior || f.a.profiles.Profiles[0].MultihopExecution != "auto" {
 		t.Fatal("fixture did not prove and retain its original Compare winner", response.Code, response.Body.String())
 	}
 	if _, err := waitForSpeedLabConnectedIdentity(f.a, time.Second); err != nil {
 		t.Fatal(err)
 	}
+	waitForSpeedLabTorPriorDNSAdoption(t, f.a)
 	previous := f.launch
 	f.launches, f.probes = nil, nil
 	for len(f.created) != 0 {

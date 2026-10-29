@@ -29,8 +29,10 @@ func newDesktopTorPublicComparisonFixture(t *testing.T, kind string) *desktopTor
 	t.Helper()
 	f := &desktopTorPublicComparisonFixture{desktopTorConnectFixture: speedLabTorPipelineFixture(t), created: make(chan *desktopTorComparisonClient, 8)}
 	f.a.cfg.StateFile = filepath.Join(clientRoot(f.a), "last.json")
+	f.a.mu.Lock()
 	p := &f.a.profiles.Profiles[0]
 	p.MultihopExecution, p.StartupMode, p.AutoConnect = "auto", "last", true
+	f.a.mu.Unlock()
 	command := f.driver.command
 	f.driver.command = func(a *app, runtime torBridgeRuntime, environment []string) (*exec.Cmd, error) {
 		cmd, err := command(a, runtime, environment)

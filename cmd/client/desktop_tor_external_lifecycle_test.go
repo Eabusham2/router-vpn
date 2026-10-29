@@ -133,7 +133,9 @@ func TestDesktopTorOrdinarySpeedLabRetainsCompiledSourceAndRestoresAfterCancel(t
 		t.Run(protocol, func(t *testing.T) {
 			f := speedLabTorPipelineFixture(t)
 			entry := desktopTorOrdinaryFixture(t, f, protocol)
+			f.a.mu.Lock()
 			f.a.profiles.Profiles[0].KillSwitchPolicy, f.a.profiles.Profiles[0].KillSwitch = "always", true
+			f.a.mu.Unlock()
 			lookups := 0
 			if protocol == "shadowsocks" {
 				f.a.mu.Lock()

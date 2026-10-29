@@ -29,10 +29,9 @@ func speedLabTorPipelineFixture(t *testing.T) *desktopTorConnectFixture {
 		return prepared, err
 	}
 	// Exercise the shipping session observer, with a joined fixture lifetime.
-	// The explicit native peer already supplies selected-DNS proof; tests below
-	// also call the real synchronous Tor DNS verifier. No ambient probe runs.
+	// Its selected-DNS verifier reads the explicit native peer's exact receipt;
+	// the connected fixture below also joins its real asynchronous adoption.
 	tracker := sessionTrackerFor(f.a)
-	tracker.dnsProofLastAttempt = time.Now()
 	stop, done := make(chan struct{}), make(chan struct{})
 	go func() {
 		defer close(done)
@@ -80,7 +79,33 @@ func connectSpeedLabTorPrior(t *testing.T, f *desktopTorConnectFixture, direct b
 	if _, err := waitForSpeedLabConnectedIdentity(f.a, time.Second); err != nil {
 		t.Fatal(err)
 	}
+	waitForSpeedLabTorPriorDNSAdoption(t, f.a)
 	return f.launch
+}
+
+func waitForSpeedLabTorPriorDNSAdoption(t *testing.T, a *app) {
+	t.Helper()
+	tracker := sessionTrackerFor(a)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if a.operationMu.TryLock() {
+			tracker.mu.Lock()
+			session := tracker.session
+			ready := session != nil && session.Connected && session.Phase == "connected" &&
+				session.DNSProof.Status == "passed" && !tracker.dnsProofRunning && tracker.dnsProofBinding != nil
+			tracker.mu.Unlock()
+			a.operationMu.Unlock()
+			if ready {
+				return
+			}
+		}
+		// Wait for an observed completion, not a guessed scheduling interval.
+		// Production keeps its nonblocking operation ownership and all proof
+		// checks; this fixture starts its next transaction only after the
+		// prior connection's actual DNS adoption has released that owner.
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("prior Tor fixture did not finish its actual selected-DNS adoption", tracker.snapshot(0).DNSProof)
 }
 
 func TestSpeedLabTorShippingPrepareStartAndRestoreExactNativePath(t *testing.T) {
