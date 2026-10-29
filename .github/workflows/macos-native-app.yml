@@ -25,6 +25,7 @@ on:
       - 'configs/client/**'
       - 'deploy/check-generic-package-secrets.py'
       - '.github/workflows/macos-native-app.yml'
+      - '.github/workflows/macos-native-installer-contract.yml'
   push:
     branches: [main]
     paths:
@@ -49,6 +50,7 @@ on:
       - 'configs/client/**'
       - 'deploy/check-generic-package-secrets.py'
       - '.github/workflows/macos-native-app.yml'
+      - '.github/workflows/macos-native-installer-contract.yml'
   workflow_dispatch:
 
 permissions:
@@ -60,27 +62,8 @@ concurrency:
 
 jobs:
   owned-controller:
-    name: Native controller ownership on ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [macos-15-intel, macos-15]
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.26.3'
-          cache: false
-      - name: Prove installed supervisor, native peer identity and joined AppKit shutdown
-        run: python3 deploy/test_macos_controller_privilege.py --go "$(command -v go)" --python /usr/bin/python3
-      - name: Prove privileged interpreter ownership and installation rollback
-        run: |
-          python3 deploy/test_macos_installer_trust.py
-          python3 deploy/test_macos_native_install.py
+    name: Required native controller and installer ownership
+    uses: ./.github/workflows/macos-native-installer-contract.yml
 
   native-runtimes:
     name: Build and verify complete native runtimes
