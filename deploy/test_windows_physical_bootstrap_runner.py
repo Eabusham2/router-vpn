@@ -68,6 +68,7 @@ func DNSTransportRegistry() *dns.TransportRegistry {
         self.assertIn("routervpn/desktoppt/tor_physical_windows.go", before)
         self.assertIn("routervpn/mobiletor/desktop_bridge.go", before)
         self.assertIn("fixture/kernel_observer.go", before)
+        self.assertTrue(all("\\" not in name for name in before))
         work = self.workspace / "overlay"
         work.mkdir()
         selected = json.loads(GATE.overlay(source, work, True).read_text())["Replace"]

@@ -48,7 +48,7 @@ def sources(source):
             expected = PREP.relocated_shared_source(path.read_bytes())
             if target.read_bytes() != expected:
                 raise ValueError("Windows bootstrap source differs from shipping bytes: " + path.name)
-            records[str(target.relative_to(source))] = hashlib.sha256(expected).hexdigest()
+            records[target.relative_to(source).as_posix()] = hashlib.sha256(expected).hexdigest()
     copies = PREP.pt_copies()
     PREP.preflight_pt_files(source, copies)
     for relative, expected in copies.items():
