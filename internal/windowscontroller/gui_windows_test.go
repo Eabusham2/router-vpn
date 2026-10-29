@@ -792,7 +792,7 @@ func TestWindowsControllerGUIActualSystemPowerShell(t *testing.T) {
 		t.Fatal(err)
 	}
 	path := filepath.Join(api.systemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe")
-	image, err := PinImage(path)
+	image, err := PinSystemPowerShell()
 	if err != nil {
 		guiObserveSystemPowerShellImage(t, path)
 		t.Fatal("actual system PowerShell could not retain its native executable identity:", err)

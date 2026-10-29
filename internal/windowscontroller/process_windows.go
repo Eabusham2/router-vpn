@@ -5,6 +5,7 @@ package windowscontroller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -199,11 +200,12 @@ func (p *Process) Close() error {
 // while launch and peer verification occur. The executable also denies writes.
 // Different files with identical bytes do not acquire the same identity.
 type Image struct {
-	mu       sync.Mutex
-	path     string
-	handles  []syscall.Handle
-	identity syscall.ByHandleFileInformation
-	closed   bool
+	mu               sync.Mutex
+	path             string
+	handles          []syscall.Handle
+	identity         syscall.ByHandleFileInformation
+	systemPowerShell bool
+	closed           bool
 }
 
 const volumeGUIDPrefix = `\\?\Volume{`
@@ -250,11 +252,18 @@ func localExecutablePath(path string) (string, error) {
 }
 
 func PinImage(path string) (_ *Image, resultErr error) {
+	return pinImage(path, false)
+}
+
+// The protected-system policy is private to the pathless OS factory and the
+// readback of its already captured child. A caller-selected executable always
+// uses PinImage's single-link policy.
+func pinImage(path string, systemPowerShell bool) (_ *Image, resultErr error) {
 	path, err := localExecutablePath(path)
 	if err != nil {
 		return nil, err
 	}
-	image := &Image{}
+	image := &Image{systemPowerShell: systemPowerShell}
 	defer func() {
 		if resultErr != nil {
 			resultErr = errors.Join(resultErr, image.Close())
@@ -287,7 +296,7 @@ func PinImage(path string) (_ *Image, resultErr error) {
 		}
 	}
 	actual := image.identity
-	if retained.VolumeSerialNumber != actual.VolumeSerialNumber || retained.FileIndexHigh != actual.FileIndexHigh || retained.FileIndexLow != actual.FileIndexLow {
+	if retained.VolumeSerialNumber != actual.VolumeSerialNumber || retained.FileIndexHigh != actual.FileIndexHigh || retained.FileIndexLow != actual.FileIndexLow || retained.NumberOfLinks != actual.NumberOfLinks {
 		return nil, errors.New("Windows image changed while pinning its resolved volume path")
 	}
 	image.path = canonical
@@ -311,6 +320,9 @@ func (image *Image) pinComponents(path string) error {
 		if last {
 			access, share, flags = syscall.GENERIC_READ, syscall.FILE_SHARE_READ, 0x00200000
 		}
+		if image.systemPowerShell && !last {
+			access |= 0x00020000 // READ_CONTROL for the retained directory DACL.
+		}
 		name, err := syscall.UTF16PtrFromString(current)
 		if err != nil {
 			return err
@@ -325,13 +337,24 @@ func (image *Image) pinComponents(path string) error {
 			return err
 		}
 		if info.FileAttributes&0x400 != 0 || (!last && info.FileAttributes&syscall.FILE_ATTRIBUTE_DIRECTORY == 0) ||
-			(last && (info.FileAttributes&syscall.FILE_ATTRIBUTE_DIRECTORY != 0 || info.NumberOfLinks != 1)) {
+			(last && (info.FileAttributes&syscall.FILE_ATTRIBUTE_DIRECTORY != 0 || info.NumberOfLinks != 1 && !image.systemPowerShell)) {
 			return errors.New("Windows controller image has a reparse, hardlink or unexpected path component")
+		}
+		if image.systemPowerShell && index >= 0 {
+			// The actual volume root may permit creating new ordinary folders.
+			// Every existing non-root ancestor of the system executable must be
+			// protected, including any ancestry exposed by a DOS alias.
+			if err := verifySystemImageProtection(handle); err != nil {
+				return fmt.Errorf("Windows system image component %q: %w", current, err)
+			}
 		}
 		if last {
 			kind, err := syscall.GetFileType(handle)
 			if err != nil || kind != syscall.FILE_TYPE_DISK || info.FileIndexHigh == 0 && info.FileIndexLow == 0 {
 				return errors.Join(err, errors.New("Windows controller image has no stable disk identity"))
+			}
+			if image.systemPowerShell && (info.NumberOfLinks == 0 || image.identity.NumberOfLinks != 0 && info.NumberOfLinks != image.identity.NumberOfLinks) {
+				return errors.New("Windows system image changed its captured hardlink count")
 			}
 			image.identity = info
 		}
@@ -369,9 +392,14 @@ func (image *Image) normalizedLaunchNameLocked() (string, syscall.Handle, error)
 	}
 	var actual syscall.ByHandleFileInformation
 	err = syscall.GetFileInformationByHandle(handle, &actual)
-	if err != nil || actual.FileAttributes&(0x400|syscall.FILE_ATTRIBUTE_DIRECTORY) != 0 || actual.NumberOfLinks != 1 ||
+	if err != nil || actual.FileAttributes&(0x400|syscall.FILE_ATTRIBUTE_DIRECTORY) != 0 || image.identity.NumberOfLinks == 0 || actual.NumberOfLinks != image.identity.NumberOfLinks ||
 		actual.VolumeSerialNumber != image.identity.VolumeSerialNumber || actual.FileIndexHigh != image.identity.FileIndexHigh || actual.FileIndexLow != image.identity.FileIndexLow {
 		return reject(errors.Join(err, errors.New("normalized launch image differs from its retained executable")))
+	}
+	if image.systemPowerShell {
+		if err := verifySystemImageProtection(handle); err != nil {
+			return reject(err)
+		}
 	}
 	api, err := native()
 	if err != nil {
@@ -437,7 +465,7 @@ func (p *Process) VerifyImage(expected *Image) (resultErr error) {
 	if ok == 0 || length == 0 || length >= uint32(len(buffer)) {
 		return nativeError("actual process executable", callErr)
 	}
-	actual, err := PinImage(syscall.UTF16ToString(buffer[:length]))
+	actual, err := pinImage(syscall.UTF16ToString(buffer[:length]), expected.systemPowerShell)
 	if err != nil {
 		return err
 	}
@@ -448,8 +476,8 @@ func (p *Process) VerifyImage(expected *Image) (resultErr error) {
 	}
 	want := expected.identity
 	got := actual.identity
-	if want.VolumeSerialNumber != retained.VolumeSerialNumber || want.FileIndexHigh != retained.FileIndexHigh || want.FileIndexLow != retained.FileIndexLow || retained.NumberOfLinks != 1 ||
-		want.VolumeSerialNumber != got.VolumeSerialNumber || want.FileIndexHigh != got.FileIndexHigh || want.FileIndexLow != got.FileIndexLow {
+	if want.VolumeSerialNumber != retained.VolumeSerialNumber || want.FileIndexHigh != retained.FileIndexHigh || want.FileIndexLow != retained.FileIndexLow || want.NumberOfLinks == 0 || retained.NumberOfLinks != want.NumberOfLinks ||
+		want.VolumeSerialNumber != got.VolumeSerialNumber || want.FileIndexHigh != got.FileIndexHigh || want.FileIndexLow != got.FileIndexLow || want.NumberOfLinks != got.NumberOfLinks {
 		return errors.New("Windows controller process executes a different captured file")
 	}
 	status, err := syscall.WaitForSingleObject(handle, 0)

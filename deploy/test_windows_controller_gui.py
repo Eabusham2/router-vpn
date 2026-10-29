@@ -40,12 +40,16 @@ REQUIRED = (
     "TestWindowsControllerGUIRejectedTerminationJoinsExactProcess",
     "TestWindowsControllerGUIRejectsNormalizedImageBeforeCreate",
     "TestWindowsControllerGUIActualSystemPowerShell",
+    "TestWindowsControllerGUISystemImageDescriptorPolicy",
+    "TestWindowsControllerGUISystemImageCapturePolicy",
 )
 
 
 def sources():
     expected = {"api_windows.go", "identity_windows.go", "launch_windows.go",
                 "pipe_windows.go", "process_windows.go", "gui_windows.go", "stream_windows.go",
+                "system_image_windows.go", "system_image_windows_test.go",
+                "system_image_policy.go", "system_image_policy_test.go",
                 "fixture_windows_test.go", "foundation_windows_test.go", "capture_windows_test.go",
                 "restricted_worker_windows_test.go", "gui_windows_test.go", "stream_windows_test.go"}
     paths = sorted(PACKAGE.glob("*.go"))
@@ -68,6 +72,7 @@ def mutants():
     gui = (PACKAGE / "gui_windows.go").read_text(encoding="utf-8")
     pipe = (PACKAGE / "pipe_windows.go").read_text(encoding="utf-8")
     process = (PACKAGE / "process_windows.go").read_text(encoding="utf-8")
+    system_policy = (PACKAGE / "system_image_policy.go").read_text(encoding="utf-8")
     once = NATIVE.replace_once
     original = "actual.Primary || actual.SID != want.SID || actual.AuthenticationID != want.AuthenticationID || actual.SessionID != want.SessionID || actual.Elevated != want.Elevated || actual.Administrator != want.Administrator"
     return (
@@ -127,6 +132,18 @@ def mutants():
          once(process,
               "actual.VolumeSerialNumber != image.identity.VolumeSerialNumber || actual.FileIndexHigh != image.identity.FileIndexHigh || actual.FileIndexLow != image.identity.FileIndexLow",
               "false")),
+        ("system_image_policy.go", "untrusted-system-image-owner", REQUIRED[17],
+         "untrusted image owner acquired system policy",
+         once(system_policy, "err != nil || !trustedSystemImageSID(sid)",
+              "err != nil || false && !trustedSystemImageSID(sid)")),
+        ("system_image_policy.go", "untrusted-system-image-writer", REQUIRED[17],
+         "untrusted image writer acquired system policy",
+         once(system_policy, "&& !trustedSystemImageSID(principal)",
+              "&& false && !trustedSystemImageSID(principal)")),
+        ("process_windows.go", "system-image-captured-link-count", REQUIRED[18],
+         "system image admitted a changed captured hardlink count before creation",
+         once(process, "actual.NumberOfLinks != image.identity.NumberOfLinks ||",
+              "false ||")),
     )
 
 
@@ -172,7 +189,7 @@ def execute(go="go"):
             print("Rejected production native GUI mutant:", name, flush=True)
         if sources() != before:
             raise ValueError("Native GUI sources changed during execution")
-    print("Native GUI ownership passed seventeen actual kernel process/pipe cases and fourteen compiled production negative controls, including actual system PowerShell plus distinct pre-creation and suspended-image proofs; C# application and cross-account UAC composition remain separate.", flush=True)
+    print("Native GUI ownership passed nineteen required process/pipe/system-policy cases and seventeen compiled production negative controls, including actual system PowerShell plus distinct pre-creation and suspended-image proofs; C# application and cross-account UAC composition remain separate.", flush=True)
 
 
 if __name__ == "__main__":
