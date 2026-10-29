@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -38,6 +39,25 @@ func TestDesktopTorDirectFixedSetUsesActualConnectAndOwnedShutdown(t *testing.T)
 					profile.KillSwitch, profile.KillSwitchPolicy = true, kill
 					entry := cloneRouterProfile(f.a.profiles.Profiles[1])
 					source := cloneRouterProfile(*profile)
+					if runtime.GOOS == "linux" {
+						command := f.driver.command
+						t.Setenv("HOMEVPN_EXTERNAL_SESSION", strings.Repeat("f", 32))
+						t.Setenv("HOMEVPN_NATIVE_ENDPOINTS_JSON", `["10.99.0.8"]`)
+						t.Setenv("HOMEVPN_NATIVE_EGRESS_JSON", `[{"host":"10.99.0.8","port":443,"network":"tcp"}]`)
+						f.driver.command = func(a *app, prepared torBridgeRuntime, environment []string) (*exec.Cmd, error) {
+							values := map[string]string{}
+							for _, row := range environment {
+								key, value, _ := strings.Cut(row, "=")
+								values[key] = value
+							}
+							if !prepared.Launch.tor.expected.PhysicalBroker || prepared.BridgeEndpoint != "" || prepared.Launch.endpoint != "" ||
+								values["HOMEVPN_ENDPOINT"] != "" || values["HOMEVPN_TOR_PHYSICAL_BROKER"] != "1" || values["HOMEVPN_EXTERNAL_SESSION"] != "" ||
+								values["HOMEVPN_NATIVE_ENDPOINTS_JSON"] != "" || values["HOMEVPN_NATIVE_EGRESS_JSON"] != "" {
+								t.Fatal("fixed Direct handoff bypassed its socket owner with a global endpoint exception", values)
+							}
+							return command(a, prepared, environment)
+						}
+					}
 					direct := true
 					reply := f.request(t, externalProfileConnectRequest{ProfileID: profile.ID, Direct: &direct})
 					if reply.Code != http.StatusOK || f.launch == nil || f.launch.tor.predecessor != nil || f.launch.tor.expected.KillSwitchPolicy != kill || !f.a.state.Connected {

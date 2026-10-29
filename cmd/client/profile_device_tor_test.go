@@ -199,7 +199,8 @@ func TestProfileDeviceTorStrictPolicyUsesActualCapturedBridgePlan(t *testing.T) 
 				}
 				t.Cleanup(func() { _ = cleanupDesktopTorLaunch(prepared.Launch); _ = prepared.Launch.directoryRoot.Close() })
 				meta := prepared.Launch.tor.expected
-				if meta.PhysicalBroker != dynamic || meta.KillSwitchPolicy != policy || meta.EntryID != "" || saved.KillSwitchPolicy != policy || saved.KillSwitch != (policy != "off") || a.state.Connected || a.cmd != nil {
+				broker := runtime.GOOS == "linux" && policy != "off"
+				if meta.PhysicalBroker != broker || meta.KillSwitchPolicy != policy || meta.EntryID != "" || saved.KillSwitchPolicy != policy || saved.KillSwitch != (policy != "off") || a.state.Connected || a.cmd != nil {
 					t.Fatal("saved Tor policy did not retain its exact native owner or invented a connection", meta)
 				}
 			})

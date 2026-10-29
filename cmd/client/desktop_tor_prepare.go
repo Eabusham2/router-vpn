@@ -149,9 +149,9 @@ func stageDesktopTorInputsWithPredecessor(root string, policy, profile common.Ro
 			return result, err
 		}
 	} else {
-		// Only a complete fixed obfs4 plan grants Direct tuple authority.
-		// Protected Linux dynamic/plain Direct instead requires the native
-		// isolated socket broker and grants no global endpoint exception.
+		// Retain the complete fixed obfs4 source projection in the captured
+		// private profile. An admitted native broker uses it only as source
+		// identity; the launch environment carries no endpoint exception.
 		egress, _ = mobiletor.DesktopDirectPhysicalEgress(plan)
 	}
 	if predecessor != nil || len(egress) != 0 {
@@ -230,7 +230,8 @@ func stageDesktopTorInputsWithPredecessor(root string, policy, profile common.Ro
 	}
 	launch.tor.expected, launch.tor.digests = inputs.Policy().Metadata(), inputs.Digests()
 	if inputs.Policy().PhysicalBroker() {
-		// Dynamic bridge targets can be PT placeholders, not firewall grants.
+		// Fixed bridge addresses and dynamic PT placeholders both belong to
+		// the captured native socket owner, never a global endpoint grant.
 		endpoint, launch.endpoint = "", ""
 	}
 	launch.configSHA256 = inputs.Digests().ConfigSHA256
@@ -358,12 +359,18 @@ func desktopTorCapturedPhysicalEgress(launch *desktopNodeLaunch) ([]mobilemultih
 		}
 		return entry.native.PhysicalEgress(plan)
 	}
+	if launch.tor.expected.PhysicalBroker {
+		if launch.tor.expected.TargetOS != "linux" || launch.tor.expected.EntryID != "" || runtime.GOOS != "linux" || launch.tor.expected.KillSwitchPolicy == "off" {
+			return nil, errors.New("Tor socket broker lost its exact protected Direct source")
+		}
+		// The complete fixed plan is still covered by the profile digest and
+		// compiler capture above. It cannot become an endpoint-wide rule when
+		// the native owner grants its actual sockets independently.
+		return nil, nil
+	}
 	egress, err := mobiletor.DesktopDirectPhysicalEgress(plan)
-	if err != nil && (launch.tor.expected.KillSwitchPolicy == "off" || launch.tor.expected.PhysicalBroker &&
-		launch.tor.expected.TargetOS == "linux" && launch.tor.expected.EntryID == "" && runtime.GOOS == "linux") {
-		// Plain and dynamic Direct have no fixed physical projection. This
-		// never turns an Off selection into protection, or grants the broker
-		// a fixed public endpoint exemption.
+	if err != nil && launch.tor.expected.KillSwitchPolicy == "off" {
+		// Plain and dynamic Off paths have no fixed physical projection.
 		return nil, nil
 	}
 	return egress, err

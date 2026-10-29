@@ -84,3 +84,35 @@ func TestRouterVPNDesktopTorPhysicalBoxRefusesUnprovisionedStart(t *testing.T) {
 		t.Fatal("failed physical initialization acquired Connected authority")
 	}
 }
+
+func TestRouterVPNDesktopTorFixedPhysicalBoxRequiresCapturedFactory(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux isolated socket factory")
+	}
+	for _, provision := range []bool{false, true} {
+		t.Run(map[bool]string{false: "missing-factory", true: "captured-factory"}[provision], func(t *testing.T) {
+			f := newDesktopTorBoxCapturedFixture(t, func(profile map[string]any) {
+				profile["kill_switch_policy"] = "always"
+			}, nil, routervpndesktoppt.RegisterPhysicalOutbound)
+			if !f.policy.PhysicalBroker() || f.policy.Mode() != "tor-bridge" {
+				t.Fatal("fixed bridge retained the legacy endpoint-policy path")
+			}
+			if provision {
+				if err := f.box.RouterVPNDesktopTorPreparePhysical(f.policy); err != nil {
+					t.Fatal("fixed bridge did not bind its exact native factory", err)
+				}
+				if err := f.box.RouterVPNDesktopTorPreparePhysical(f.policy); err == nil {
+					t.Fatal("fixed bridge replaced its captured native factory")
+				}
+			} else if err := f.box.RouterVPNStrategyStart(); err == nil {
+				t.Fatal("fixed bridge started without an owned physical factory")
+			}
+			if f.tun.ready || f.tun.claimed {
+				t.Fatal("unstarted fixed-bridge factory acquired tunnel authority")
+			}
+			if _, err := f.box.RouterVPNDesktopTorCreate(f.policy); err == nil {
+				t.Fatal("fixed bridge reported a proved path before native initialization")
+			}
+		})
+	}
+}

@@ -248,10 +248,16 @@ def validate_launch(target: str, bridge_endpoint: str | None = None, tor_binary:
             if (kill in {"on-connect", "always"} or not kill and flag) and direct is None and not socket_broker:
                 raise ValueError("dynamic Direct Tor cannot acquire strict physical authority")
         if socket_broker:
-            if (direct is not None or "desktop_physical_egress" in profile
-                    or os.environ.get("HOMEVPN_NATIVE_ENDPOINTS_JSON") or os.environ.get("HOMEVPN_NATIVE_EGRESS_JSON")
+            if (os.environ.get("HOMEVPN_NATIVE_ENDPOINTS_JSON") or os.environ.get("HOMEVPN_NATIVE_EGRESS_JSON")
                     or os.environ.get("HOMEVPN_EXTERNAL_SESSION")):
-                raise ValueError("dynamic physical broker cannot acquire a destination-wide exemption")
+                raise ValueError("physical broker cannot acquire a destination-wide exemption")
+            if direct is not None:
+                # This projection proves the complete captured fixed source;
+                # only the native broker can authorize its real sockets.
+                if physical_tuples(profile.get("desktop_physical_egress")) != direct:
+                    raise ValueError("fixed physical broker lost its exact captured bridge projection")
+            elif "desktop_physical_egress" in profile:
+                raise ValueError("dynamic physical broker acquired an unrelated fixed projection")
         elif via_entry or direct is not None:
             address_raw = os.environ.get("HOMEVPN_NATIVE_ENDPOINTS_JSON", "")
             egress_raw = os.environ.get("HOMEVPN_NATIVE_EGRESS_JSON", "")

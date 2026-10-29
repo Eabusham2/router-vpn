@@ -2,6 +2,7 @@ package mobiletor
 
 import (
 	"encoding/json"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -113,7 +114,7 @@ func TestDesktopPhysicalBrokerRetainsOnlySelectedLiteralPrivateExceptions(t *tes
 	}
 }
 
-func TestDesktopPhysicalBrokerNeverBorrowsProjectionOffOrFixedAuthority(t *testing.T) {
+func TestDesktopPhysicalBrokerNeverBorrowsProjectionOffOrUnadmittedAuthority(t *testing.T) {
 	for _, target := range []string{"linux", "darwin", "windows"} {
 		p := desktopDynamicProfile([]string{meekBridge})
 		p["kill_switch_policy"], p["kill_switch"], p["physical_broker"] = "off", false, true
@@ -125,13 +126,54 @@ func TestDesktopPhysicalBrokerNeverBorrowsProjectionOffOrFixedAuthority(t *testi
 			t.Fatal("Off policy acquired native socket authority")
 		}
 		fixed := desktopPolicy(t, desktopProfile(), target)
-		if fixed.PhysicalBroker() || strings.Contains(fixed.Config(), DesktopPhysicalOutboundType) {
-			t.Fatal("fixed obfs4 acquired unrelated dynamic authority")
+		if fixed.PhysicalBroker() != (target == "linux") || strings.Contains(fixed.Config(), DesktopPhysicalOutboundType) != (target == "linux") {
+			t.Fatal("fixed obfs4 changed its admitted native protection boundary")
 		}
 	}
 	p := desktopDynamicProfile([]string{meekBridge})
 	p["desktop_physical_egress"] = []any{map[string]any{"host": "9.9.9.9", "port": 5353, "network": "tcp"}}
 	if policy, err := NewDesktopBridgePolicy(torHostEncode(t, p), desktopSession, desktopIsolation, "linux"); err == nil || policy != nil {
 		t.Fatal("dynamic sockets acquired a destination-wide exemption")
+	}
+}
+
+func TestDesktopPhysicalBrokerCapturesEveryFixedBridgeAndSelectedDNS(t *testing.T) {
+	for _, count := range []int{1, 2, 8} {
+		for _, kill := range []string{"on-connect", "always"} {
+			for _, transport := range []string{"tcp", "dot", "doh"} {
+				t.Run(fmt.Sprintf("%d/%s/%s", count, kill, transport), func(t *testing.T) {
+					profile, _, bridges := directObfs4Source(t, count, "custom")
+					profile["kill_switch_policy"], profile["kill_switch"] = kill, true
+					profile["dns_protocol"], profile["dns_port"], profile["dns_server_name"] = transport, 5443, "selected-resolver.example"
+					source := torHostEncode(t, profile)
+					policy := desktopPolicy(t, profile, "linux")
+					if !policy.PhysicalBroker() || policy.Profile() != source || torHostEncode(t, profile) != source || policy.Predecessor() != nil || policy.ServerPolicy() != nil {
+						t.Fatal("fixed Direct source lost its independent socket owner")
+					}
+					want := append([]mobilemultihop.PhysicalEgress{{Host: "9.9.9.9", Port: 5443, Network: "tcp"}}, bridges...)
+					got, err := policy.PhysicalDestinations()
+					if err != nil || !reflect.DeepEqual(got, want) {
+						t.Fatal("fixed broker substituted a bridge, transport, port or selected DNS", got, err)
+					}
+					graph, err := profileObject(policy.Config(), 4<<20)
+					if err != nil {
+						t.Fatal(err)
+					}
+					bootstrap := torHostTagged(t, graph["dns"].(map[string]any)["servers"], bootstrapDNS)
+					if bootstrap["detour"] != DesktopPhysicalOutboundTag || bootstrap["server"] != "9.9.9.9" || bootstrap["server_port"] != json.Number("5443") {
+						t.Fatal("fixed bridge bootstrap bypassed captured socket protection")
+					}
+					directory := filepath.Join(t.TempDir(), "capture")
+					capture, err := NewDesktopBridgeCapture(source, desktopSession, desktopIsolation, "linux", filepath.Join(t.TempDir(), "tor"), directory)
+					if err != nil {
+						t.Fatal(err)
+					}
+					restored, err := DecodeDesktopBridgeCapture(source, capture.JSON(), directory)
+					if err != nil || !restored.Policy().PhysicalBroker() || restored.Policy().Config() != policy.Config() || restored.Digests() != capture.Digests() {
+						t.Fatal("fixed bridge restoration lost its exact socket owner", err)
+					}
+				})
+			}
+		}
 	}
 }

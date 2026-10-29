@@ -209,7 +209,10 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 	// Router, Home DNS or Server execution authority. The native PT owner
 	// proves either typed entry before opening any transport listener.
 	kill, _ := desktopBridgeKillPolicy(profile, plan)
-	physicalBroker := predecessor == nil && targetOS == "linux" && kill != "off" && !desktopBridgeDirectProtection(plan)
+	// Every protected Direct path on an admitted native OS uses the same
+	// retained socket owner, including fixed obfs4 bridges. A fixed address is
+	// still one destination of an owned socket, not a global endpoint permit.
+	physicalBroker := predecessor == nil && targetOS == "linux" && kill != "off"
 	if kill != "off" && !physicalBroker && (predecessor != nil || !desktopBridgeDirectProtection(plan)) &&
 		!predecessor.IsRouter() && !predecessor.IsExternal() {
 		return nil, errors.New("strict desktop Tor protection has no captured typed predecessor")

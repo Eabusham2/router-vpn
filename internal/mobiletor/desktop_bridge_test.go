@@ -38,12 +38,13 @@ func TestDesktopBridgePolicyPreservesResolverDeviceAndStandaloneOwner(t *testing
 				source := torHostEncode(t, p)
 				policy := desktopPolicy(t, p, target)
 				meta := policy.Metadata()
+				broker := target == "linux"
 				if source != torHostEncode(t, p) || policy.Profile() != source {
 					t.Fatal("compiler changed captured private source")
 				}
 				if meta.NodeID != "saved-tor" || meta.SessionID != desktopSession || meta.SocksPort != 19950 ||
 					meta.ConfiguredMTU != 1488 || meta.MTUPolicy != "manual" || meta.IPv6Mode != "off" || meta.HomeLANAccess != lan || meta.KillSwitchPolicy != "on-connect" ||
-					meta.SourceSHA256 != policy.SourceSHA256() || meta.ConfigSHA256 != desktopDigest([]byte(policy.Config())) {
+					meta.SourceSHA256 != policy.SourceSHA256() || meta.ConfigSHA256 != desktopDigest([]byte(policy.Config())) || meta.PhysicalBroker != broker {
 					t.Fatal("captured desktop policy metadata changed", meta)
 				}
 				graph, err := profileObject(policy.Config(), 4<<20)
@@ -55,7 +56,16 @@ func TestDesktopBridgePolicyPreservesResolverDeviceAndStandaloneOwner(t *testing
 					t.Fatal("desktop Tor did not capture its native network-reset service")
 				}
 				observer, ok := services[0].(map[string]any)
-				if !ok || len(observer) != 4 || observer["type"] != "routervpn-desktop-tor-network" || observer["tag"] != "routervpn-tor-physical" || observer["session_id"] != meta.SessionID || observer["source_sha256"] != meta.SourceSHA256 {
+				observerFields, outboundCount := 4, 1
+				var bootstrapDetour any
+				if broker {
+					observerFields, outboundCount, bootstrapDetour = 5, 2, DesktopPhysicalOutboundTag
+					physical := torHostTagged(t, graph["outbounds"], DesktopPhysicalOutboundTag)
+					if observer["physical_broker"] != true || len(physical) != 4 || physical["type"] != DesktopPhysicalOutboundType || physical["session_id"] != meta.SessionID || physical["source_sha256"] != meta.SourceSHA256 {
+						t.Fatal("fixed bridge lost its captured physical socket owner")
+					}
+				}
+				if !ok || len(observer) != observerFields || observer["type"] != "routervpn-desktop-tor-network" || observer["tag"] != "routervpn-tor-physical" || observer["session_id"] != meta.SessionID || observer["source_sha256"] != meta.SourceSHA256 {
 					t.Fatal("desktop Tor physical generation belongs to another session or source")
 				}
 				tun := graph["inbounds"].([]any)[0].(map[string]any)
@@ -66,14 +76,14 @@ func TestDesktopBridgePolicyPreservesResolverDeviceAndStandaloneOwner(t *testing
 					t.Fatal("native interface selection changed")
 				}
 				out := torHostTagged(t, graph["outbounds"], ProfileOutboundTag)
-				if len(graph["outbounds"].([]any)) != 1 || out["type"] != "socks" || out["server"] != "127.0.0.1" || out["server_port"] != json.Number("19950") || out["username"] != desktopSession || out["password"] != desktopIsolation {
+				if len(graph["outbounds"].([]any)) != outboundCount || out["type"] != "socks" || out["server"] != "127.0.0.1" || out["server_port"] != json.Number("19950") || out["username"] != desktopSession || out["password"] != desktopIsolation {
 					t.Fatal("compiler embedded or replaced standalone Tor, or lost isolation")
 				}
 				dns := graph["dns"].(map[string]any)
 				selected := torHostTagged(t, dns["servers"], profileDNS)
 				bootstrap := torHostTagged(t, dns["servers"], bootstrapDNS)
 				transport := map[string]string{"tcp": "tcp", "dot": "tls", "doh": "https"}[protocol]
-				if dns["final"] != profileDNS || dns["strategy"] != "ipv4_only" || selected["detour"] != ProfileOutboundTag || bootstrap["detour"] != nil || len(dns["servers"].([]any)) != 2 {
+				if dns["final"] != profileDNS || dns["strategy"] != "ipv4_only" || selected["detour"] != ProfileOutboundTag || bootstrap["detour"] != bootstrapDetour || len(dns["servers"].([]any)) != 2 {
 					t.Fatal("application DNS or physical bootstrap has another owner")
 				}
 				if meta.DNS.Address != "9.9.9.9" || meta.DNS.Port != 5353 || meta.DNS.Transport != transport || selected["type"] != transport || selected["server"] != "9.9.9.9" || selected["server_port"] != json.Number("5353") {
@@ -175,6 +185,13 @@ func TestDesktopBridgeJumboCapturesOnlyVirtualInterfaceCapacity(t *testing.T) {
 				// routes and the physical network policy remain byte-equivalent.
 				tun["mtu"] = base["inbounds"].([]any)[0].(map[string]any)["mtu"]
 				graph["services"].([]any)[0].(map[string]any)["source_sha256"] = plain.SourceSHA256()
+				if target == "linux" {
+					physical := torHostTagged(t, graph["outbounds"], DesktopPhysicalOutboundTag)
+					if physical["source_sha256"] != jumbo.SourceSHA256() {
+						t.Fatal("Jumbo did not capture its new physical socket generation")
+					}
+					physical["source_sha256"] = plain.SourceSHA256()
+				}
 				if !reflect.DeepEqual(graph, base) || meta.DNS != plain.Metadata().DNS || meta.ConfigSHA256 != desktopDigest([]byte(jumbo.Config())) {
 					t.Fatal("Jumbo changed a transport, resolver or protected route")
 				}

@@ -201,6 +201,36 @@ func TestRouterVPNDesktopTorPTPhysicalNativeLowerCarriesActualSelectedDNSAndTCPU
 	desktopPhysicalVerifyNativePath(t, f)
 }
 
+func TestRouterVPNDesktopTorPTPhysicalFixedBridgeRetainsBrokerAndNetworkOwner(t *testing.T) {
+	f := newDesktopPhysicalFixture(t, true)
+	desktopPhysicalDNS(t, f, PhysicalOutboundTag)
+	plan, _ := desktopPTObfs4(t)
+	owner, err := New(f.ctx, plan, *f.f.options.DomainResolver, f.network.Current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeDesktopPT(t, owner) })
+	if owner.broker != f.broker || owner.entry != nil || owner.plain {
+		t.Fatal("fixed obfs4 did not capture its exact physical socket broker")
+	}
+	// Only the owned local PT listener starts here. The existing lower-path
+	// test sends actual selected DNS/TCP/UDP through this same native broker;
+	// the real obfs4 fixture independently exercises its encrypted handshake.
+	listeners := desktopPTStart(t, owner)
+	if len(listeners) != 1 || listeners["obfs4"] == "" || !owner.Current() {
+		t.Fatal("fixed bridge lost its actual owned listener")
+	}
+	f.network.InterfaceUpdated(f.ctx)
+	if owner.Current() {
+		t.Fatal("fixed bridge survived retirement of its captured physical generation")
+	}
+	closeDesktopPT(t, owner)
+	if client, err := net.DialTimeout("tcp4", listeners["obfs4"], time.Second); err == nil {
+		client.Close()
+		t.Fatal("retired fixed bridge retained its listener")
+	}
+}
+
 func desktopPhysicalVerifyNativePath(t *testing.T, f *desktopPhysicalFixture) {
 	t.Helper()
 	dnsAddress := desktopPhysicalDNS(t, f, PhysicalOutboundTag)

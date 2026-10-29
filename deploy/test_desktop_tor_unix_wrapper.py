@@ -285,6 +285,15 @@ class Fixture:
         self.set_input("tor-capture.json", capture)
         self.set_input("tor-profile.json", profile)
 
+    def fixed_broker(self, count=2, policy="always") -> None:
+        self.physical_broker()
+        self.fixed_obfs4(count, policy)
+        self.endpoint = ""
+        self.env["HOMEVPN_ENDPOINT"] = ""
+        for name in ("HOMEVPN_EXTERNAL_SESSION", "HOMEVPN_NATIVE_ENDPOINTS_JSON", "HOMEVPN_NATIVE_EGRESS_JSON"):
+            self.env[name] = ""
+        self.sync()
+
     def server_entry(self) -> None:
         self.router_entry()
         capture = json.loads(self.inputs["tor-capture.json"])
@@ -418,6 +427,39 @@ class UnixTorWrapper(unittest.TestCase):
                 fixture.set_input("tor-profile.json", profile)
                 fixture.set_input("sing-box.json", graph)
                 fixture.set_input("tor-capture.json", capture)
+                result, events, _ = fixture.run()
+                self.assertNotEqual(result.returncode, 0, fault)
+                self.assertFalse(any(row["kind"] in {"protect", "native-admission"} for row in events), fault)
+
+    @unittest.skipUnless(sys.platform in {"linux", "darwin"}, "Unix isolated socket guardian")
+    def test_fixed_direct_broker_preserves_source_without_legacy_policy(self):
+        for count in (1, 2, 8):
+            for policy in ("on-connect", "always"):
+                with self.subTest(count=count, policy=policy), tempfile.TemporaryDirectory(prefix="fixed-tor-broker-") as directory:
+                    fixture = Fixture(Path(directory))
+                    fixture.fixed_broker(count, policy)
+                    self.assert_success(fixture)
+                    result, events, _ = fixture.run("check")
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertNotIn("protect", [row["kind"] for row in events])
+
+    @unittest.skipUnless(sys.platform in {"linux", "darwin"}, "Unix isolated socket guardian")
+    def test_fixed_direct_broker_rejects_projection_changes_before_exec(self):
+        for fault in ("missing", "source", "port", "host", "network", "duplicate", "wide-host", "wide-tuple", "off"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(prefix="fixed-tor-broker-reject-") as directory:
+                fixture = Fixture(Path(directory))
+                fixture.fixed_broker()
+                profile = json.loads(fixture.inputs["tor-profile.json"])
+                if fault == "missing": profile.pop("desktop_physical_egress")
+                elif fault == "source": profile["external"]["tor_bridge"]["bridges"][1] = profile["external"]["tor_bridge"]["bridges"][1].replace(":8444", ":9444")
+                elif fault == "port": profile["desktop_physical_egress"][1]["port"] = 9444
+                elif fault == "host": profile["desktop_physical_egress"][1]["host"] = "2001:db8::99"
+                elif fault == "network": profile["desktop_physical_egress"][1]["network"] = "udp"
+                elif fault == "duplicate": profile["desktop_physical_egress"].append(profile["desktop_physical_egress"][0])
+                elif fault == "wide-host": fixture.env["HOMEVPN_NATIVE_ENDPOINTS_JSON"] = '["203.0.113.40"]'
+                elif fault == "wide-tuple": fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"] = '[{"host":"203.0.113.40","port":8443,"network":"tcp"}]'
+                elif fault == "off": profile["kill_switch_policy"], profile["kill_switch"] = "off", False
+                fixture.set_input("tor-profile.json", profile)
                 result, events, _ = fixture.run()
                 self.assertNotEqual(result.returncode, 0, fault)
                 self.assertFalse(any(row["kind"] in {"protect", "native-admission"} for row in events), fault)

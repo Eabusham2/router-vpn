@@ -356,6 +356,15 @@ function New-FixedWitnessFixture([int]$Count=2,[string]$Policy='always',[string]
   Set-WitnessContent $fixture 'tor-profile.json' ($profile|ConvertTo-Json -Depth 16 -Compress)
   return $fixture
 }
+function New-FixedBrokerWitnessFixture([int]$Count=2,[string]$Policy='always') {
+  $fixture=New-FixedWitnessFixture -Count $Count -Policy $Policy
+  $fixture.Bridge='';$fixture.Environment['HOMEVPN_ENDPOINT']='';$fixture.Environment['HOMEVPN_TOR_PHYSICAL_BROKER']='1'
+  foreach($name in @('HOMEVPN_EXTERNAL_SESSION','HOMEVPN_NATIVE_ENDPOINTS_JSON','HOMEVPN_NATIVE_EGRESS_JSON')){$fixture.Environment.Remove($name)}
+  $graph=$fixture.Content['sing-box.json']|ConvertFrom-Json
+  $graph.services[0]|Add-Member -NotePropertyName physical_broker -NotePropertyValue $true
+  Set-WitnessContent $fixture 'sing-box.json' ($graph|ConvertTo-Json -Depth 16 -Compress)
+  return $fixture
+}
 function New-BrokerWitnessFixture([string]$Transport='plain',[string]$Policy='always') {
   $fixture=New-WitnessFixture
   $external=[ordered]@{protocol='tor'}
@@ -638,6 +647,35 @@ function Assert-PlainPhysicalCapture {
   }
 }
 function Assert-BrokerPhysicalCapture {
+  foreach($count in @(1,2,8)){foreach($policy in @('on-connect','always')){
+    $fixture=New-FixedBrokerWitnessFixture $count $policy
+    $identity=Read-CapturedIdentity $fixture
+    Check ($identity.physical_broker -and -not $identity.via_entry -and -not $identity.server -and
+      $identity.endpoint -ceq '' -and $identity.egress.Count -eq 0 -and $identity.endpoints.Count -eq 0 -and
+      $identity.profile.desktop_physical_egress.Count -eq $count) 'Fixed Direct capture lost its complete source or acquired a global endpoint exception.'
+    Assert-MainWitness -Failure normal -Expected $false -CapturedFixture $fixture
+    Check ($global:TorWitnessFirewall.Count -eq 0 -and ($global:TorWitnessProtection -join ',') -ceq 'legacy-read,status') 'Fixed Direct entered the legacy profile firewall path.'
+    Check ($script:Joined -and ($script:Trace -join ',') -ceq 'start,wait,wait,close') 'Fixed Direct failed to join its exact native owner.'
+  }}
+  foreach($fault in @('missing','source','port','host','network','duplicate','wide-host','wide-tuple','off')){
+    $fixture=New-FixedBrokerWitnessFixture
+    $profile=$fixture.Content['tor-profile.json']|ConvertFrom-Json
+    switch($fault){
+      'missing'{$profile.PSObject.Properties.Remove('desktop_physical_egress')}
+      'source'{$profile.external.tor_bridge.bridges[1]=$profile.external.tor_bridge.bridges[1].Replace(':8444',':9444')}
+      'port'{$profile.desktop_physical_egress[1].port=9444}
+      'host'{$profile.desktop_physical_egress[1].host='2001:db8::99'}
+      'network'{$profile.desktop_physical_egress[1].network='udp'}
+      'duplicate'{$profile.desktop_physical_egress+=@($profile.desktop_physical_egress[0])}
+      'wide-host'{$fixture.Environment['HOMEVPN_NATIVE_ENDPOINTS_JSON']='["203.0.113.40"]'}
+      'wide-tuple'{$fixture.Environment['HOMEVPN_NATIVE_EGRESS_JSON']='[{"host":"203.0.113.40","port":8443,"network":"tcp"}]'}
+      'off'{$profile.kill_switch_policy='off';$profile.kill_switch=$false}
+    }
+    Set-WitnessContent $fixture 'tor-profile.json' ($profile|ConvertTo-Json -Depth 16 -Compress)
+    Assert-CaptureRejected $fixture ('fixed-broker-'+$fault)
+    Assert-MainWitness -Failure normal -Expected $false -CapturedFixture $fixture -RejectCapture
+    Check ($global:TorWitnessFirewall.Count -eq 0 -and $global:TorWitnessProtection.Count -eq 0) 'Changed fixed Direct capture reached a protection owner.'
+  }
   foreach($transport in @('plain','meek','snowflake','webtunnel','mixed')){foreach($policy in @('on-connect','always')){
     $fixture=New-BrokerWitnessFixture $transport $policy
     $identity=Read-CapturedIdentity $fixture

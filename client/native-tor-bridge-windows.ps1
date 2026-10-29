@@ -210,7 +210,7 @@ function Get-RouterVPNTorCaptureIdentity {
     if(($null -ne $kill -and $kill.Value -isnot [bool]) -or ($null -ne $killPolicy -and ($killPolicy.Value -isnot [string] -or $killPolicy.Value -cnotin @('','off','on-connect','always')))){throw 'Direct Tor protection lost its captured type.'}
     $strict=($null -ne $killPolicy -and $killPolicy.Value -cin @('on-connect','always')) -or (($null -eq $killPolicy -or $killPolicy.Value -ceq '') -and $null -ne $kill -and $kill.Value)
     if($strict -and -not $fixedDirect -and -not $physicalBroker){throw 'Dynamic Direct Tor requires its captured physical socket broker.'}
-    if($physicalBroker -and ($fixedDirect -or -not $strict)){throw 'A physical socket broker cannot replace fixed-bridge or Off protection authority.'}
+    if($physicalBroker -and -not $strict){throw 'A physical socket broker cannot replace Off protection authority.'}
   }
   $endpointRaw=[string]$CapturedEnvironment['HOMEVPN_NATIVE_ENDPOINTS_JSON']
   $egressRaw=[string]$CapturedEnvironment['HOMEVPN_NATIVE_EGRESS_JSON']
@@ -218,15 +218,15 @@ function Get-RouterVPNTorCaptureIdentity {
   if($physicalBroker -and ($endpoint -cne '' -or $BridgeEndpoint -cne '' -or $hasArrays -or [string]$CapturedEnvironment['HOMEVPN_EXTERNAL_SESSION'])){
     throw 'Dynamic Tor socket protection cannot acquire a global endpoint exception.'
   }
-  if(($viaEntry -or $fixedDirect) -and -not $hasArrays){throw 'Tor path requires its exact physical egress tuples.'}
+  if(($viaEntry -or ($fixedDirect -and -not $physicalBroker)) -and -not $hasArrays){throw 'Tor path requires its exact physical egress tuples.'}
   $addresses=@($endpoint);$egress=@()
+  $tuple='\{"host":"[0-9a-f:.]+","port":[1-9][0-9]{0,4},"network":"(?:tcp|udp)"\}'
   if($plainDirect -or $physicalBroker){$addresses=@()}
   if($hasArrays){
     if([string]$CapturedEnvironment['HOMEVPN_EXTERNAL_SESSION'] -cne $Session -or $endpointRaw.Length -gt 1024 -or $egressRaw.Length -gt 4096 -or
        $endpointRaw -cnotmatch '\A\["[0-9a-f:.]+"(?:,"[0-9a-f:.]+")*\]\z'){throw 'Tor physical endpoints lost their exact captured session or encoding.'}
     $parsed=ConvertFrom-Json -InputObject ('{"endpoints":'+$endpointRaw+'}')
     $addresses=@($parsed.endpoints)
-    $tuple='\{"host":"[0-9a-f:.]+","port":[1-9][0-9]{0,4},"network":"(?:tcp|udp)"\}'
     if(-not [regex]::IsMatch($egressRaw,('\A\['+$tuple+'(?:,'+$tuple+')*\]\z'))){throw 'Tor physical egress requires canonical captured tuples.'}
     $parsed=ConvertFrom-Json -InputObject ('{"egress":'+$egressRaw+'}')
     $egress=@($parsed.egress)
@@ -259,16 +259,18 @@ function Get-RouterVPNTorCaptureIdentity {
     if($null -eq $projection -or $null -eq $projection.Value -or $projection.Value -isnot [Array]){throw 'Tor Router entry lacks its captured physical graph projection.'}
     # Consume every complete JSON string before identifying this key, so an
     # escaped key-shaped string inside a credential cannot be confused with a
-    # member. Its canonical tuple bytes must match the environment exactly;
+    # member. Its canonical tuples match either the complete fixed broker
+    # source or the exact legacy environment, never both authorities;
     # ConvertFrom-Json must not collapse duplicate members or coerce types.
     $projectionKeys=@([regex]::Matches($profileCapture.raw,'"(?:\\.|[^"\\])*"')|Where-Object{
       $_.Value -ceq '"desktop_physical_egress"' -and $profileCapture.raw.Substring($_.Index+$_.Length) -match '^\s*:'
     })
     $projectionTuples=[regex]::Matches($profileCapture.raw,('"desktop_physical_egress":(?<tuples>\['+$tuple+'(?:,'+$tuple+')*\])(?=[,}])'))
+    $expectedProjection=if($physicalBroker){ConvertTo-Json -InputObject @($directEgress) -Depth 8 -Compress}else{$egressRaw}
     $rawProjectionValid=$projectionKeys.Count -eq 1 -and $projectionTuples.Count -eq 1 -and
-      $projectionTuples[0].Index -eq $projectionKeys[0].Index -and $projectionTuples[0].Groups['tuples'].Value -ceq $egressRaw
+      $projectionTuples[0].Index -eq $projectionKeys[0].Index -and $projectionTuples[0].Groups['tuples'].Value -ceq $expectedProjection
     if(-not $rawProjectionValid){throw 'Tor physical graph projection differs from its exact captured tuples.'}
-    if($fixedDirect){
+    if($fixedDirect -and -not $physicalBroker){
       $directJSON=ConvertTo-Json -InputObject @($directEgress) -Depth 8 -Compress
       $hostsJSON=ConvertTo-Json -InputObject @($directHosts) -Compress
       if($directJSON -cne $egressRaw -or $hostsJSON -cne $endpointRaw){throw 'Direct obfs4 tuples differ from the complete captured bridge source.'}

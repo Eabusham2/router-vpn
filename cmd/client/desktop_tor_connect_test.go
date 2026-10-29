@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -127,7 +128,21 @@ func newDesktopTorConnectFixture(t *testing.T) *desktopTorConnectFixture {
 			if planErr != nil {
 				t.Fatal(planErr)
 			}
-			if fixedErr != nil {
+			if launch.tor.expected.PhysicalBroker {
+				if runtime.GOOS != "linux" || launch.tor.expected.TargetOS != "linux" || launch.tor.expected.KillSwitchPolicy == "off" ||
+					vars["HOMEVPN_ENDPOINT"] != "" || vars["HOMEVPN_TOR_PHYSICAL_BROKER"] != "1" || vars["HOMEVPN_EXTERNAL_SESSION"] != "" ||
+					vars["HOMEVPN_NATIVE_EGRESS_JSON"] != "" || vars["HOMEVPN_NATIVE_ENDPOINTS_JSON"] != "" {
+					t.Fatal("Direct socket owner acquired an endpoint-wide launch exception")
+				}
+				if fixedErr == nil {
+					var projected struct {
+						Egress []mobilemultihop.PhysicalEgress `json:"desktop_physical_egress"`
+					}
+					if json.Unmarshal(raw, &projected) != nil || !reflect.DeepEqual(projected.Egress, want) {
+						t.Fatal("fixed socket owner lost its exact private source projection", projected.Egress, want)
+					}
+				}
+			} else if fixedErr != nil {
 				if vars["HOMEVPN_NATIVE_EGRESS_JSON"] != "" || vars["HOMEVPN_EXTERNAL_SESSION"] != "" {
 					t.Fatal("dynamic Direct borrowed fixed or Router physical authority")
 				}
