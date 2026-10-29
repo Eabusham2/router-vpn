@@ -14,6 +14,7 @@ package mobiletor
 #include <sys/proc_info.h>
 #include <sys/socket.h>
 #include <sys/kern_control.h>
+#include <sys/sys_domain.h>
 #include <unistd.h>
 
 static int routervpn_darwin_socket(int fd, uint64_t *socket, uint64_t *pcb,

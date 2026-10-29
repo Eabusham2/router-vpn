@@ -12,6 +12,7 @@ on:
       - '!internal/mobiletor/desktop_socket_native_windows*.go'
       - 'internal/common/**'
       - 'deploy/test_desktop_darwin_guardian.py'
+      - 'deploy/test_desktop_darwin_guardian_runner.py'
       - 'deploy/test_desktop_socket_uid.py'
       - 'deploy/prepare-desktop-external.py'
       - '.github/workflows/macos-physical-socket-contract.yml'
@@ -24,6 +25,7 @@ on:
       - '!internal/mobiletor/desktop_socket_native_windows*.go'
       - 'internal/common/**'
       - 'deploy/test_desktop_darwin_guardian.py'
+      - 'deploy/test_desktop_darwin_guardian_runner.py'
       - 'deploy/test_desktop_socket_uid.py'
       - 'deploy/prepare-desktop-external.py'
       - '.github/workflows/macos-physical-socket-contract.yml'
@@ -56,6 +58,8 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - name: Verify bounded native failure diagnostics
+        run: python3 deploy/test_desktop_darwin_guardian_runner.py
       - name: Prove actual kernel boundaries and reject broken production variants
         # This compiles as the build user and elevates only the scoped native
         # fixture. It neither opens public Tor nor changes the runner's default

@@ -218,6 +218,20 @@ def root_fixture(source_binary: Path, expected_digest: str, case=None):
     return result
 
 
+def reported_run(command, **kwargs):
+    """Keep a failed compiler/native command's real diagnostic in the CI log."""
+    try:
+        return UID.run(command, **kwargs)
+    except subprocess.CalledProcessError as error:
+        output = error.output or b''
+        if isinstance(output, bytes):
+            output = output[-24*1024:].decode('utf-8', errors='replace')
+        else:
+            output = str(output)[-24*1024:]
+        print('Darwin native command failure output (bounded tail):\n'+output, file=sys.stderr, flush=True)
+        raise
+
+
 def execute(source: Path, go='go', *, case=None, overlay=None):
     if platform.system() != 'Darwin':
         raise ValueError('The actual Darwin guardian gate requires a matching macOS host')
@@ -236,7 +250,7 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
                    '-tags=routervpn_darwin_guardian', '-o', binary, package]
         if overlay is not None:
             command.insert(2, '-overlay='+str(overlay))
-        UID.run(command, cwd=source, env=captured, timeout=300)
+        reported_run(command, cwd=source, env=captured, timeout=300)
         if checked_sources(source)[2] != before:
             raise ValueError('Darwin guardian source changed during native compilation')
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
@@ -245,7 +259,7 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
             command += ['--case', case]
         if sudo:
             command = [sudo, '-n', '--', *command]
-        output = UID.run(command, cwd=source, timeout=850, sudo=sudo)
+        output = reported_run(command, cwd=source, timeout=850, sudo=sudo)
         wanted = (case,) if case else CASES
         if any('--- PASS: TestDesktopDarwinGuardianKernel'+name+' (' not in output for name in wanted) or '--- SKIP:' in output:
             raise ValueError('Darwin guardian gate did not execute every required native boundary')
@@ -303,7 +317,7 @@ def execute_mutations(source: Path, go='go'):
             overlay = directory/(str(index)+'-overlay.json')
             overlay.write_text(json.dumps({'Replace': {str(original): str(changed)}}))
             binary = directory/(str(index)+'-guardian.test')
-            UID.run([compiler, 'test', '-c', '-race', '-mod=readonly', '-tags=routervpn_darwin_guardian',
+            reported_run([compiler, 'test', '-c', '-race', '-mod=readonly', '-tags=routervpn_darwin_guardian',
                      '-overlay='+str(overlay), '-o', binary, package], cwd=source, env=captured, timeout=300)
             digest = hashlib.sha256(binary.read_bytes()).hexdigest()
             command = [sys.executable, str(Path(__file__).resolve()), '--root-test-binary', str(binary),
