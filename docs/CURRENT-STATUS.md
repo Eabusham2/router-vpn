@@ -9,7 +9,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 The latest resumed check started at `f87b7809`, preserving the source already
 316 commits beyond historical release `745b3e41`. Current repairs and exact
-verified pushes through `58a1031d` are recorded in the
+verified pushes through `d6da0f6e` are recorded in the
 [continuation evidence ledger](CONTINUATION-EVIDENCE-2026-10-28.md).
 
 Private-Router Tor Local/Server/Compare is now implemented across desktop,
@@ -56,23 +56,40 @@ privilege regression pass. Both Darwin architectures cross-compile. The actual
 Intel and Apple Silicon ownership/ACL jobs are mandatory and remain separate
 from these local results; see [macOS installation](MACOS-NATIVE-INSTALL.md).
 
-Windows/macOS dynamic Direct strict-protection factories and complete shipping
-wrapper adoption remain unfinished. The Windows isolated token/socket gate
-passed its initial ten actual cases and nine deliberate-defect controls at
-`9c69d930`. Stronger real TCP/UDP traffic checks then exposed a legitimate TCP
-endpoint transition during Connect and a TCP-only socket-option check on UDP.
-The UDP repair is published in `e5bf0cf4`; the TCP ownership transition remains
-source work at this checkpoint, with its rejection checks still enforced.
+The Windows TCP identity transition during the actual owned Connect operation
+is repaired in `6fa0dc97`. The exact native gate passed 17 cases and 12
+deliberately broken variants at `499a51f3`, then again at `d6337bea`. It proves
+TCP/UDP IPv4/IPv6 creation, bound/imported I/O, protocol identity, captured
+Connect ownership and descriptor retirement. The Windows temporary-path alias
+fixture was corrected in `b2971981`; it still rejects different file identity.
 
-The Windows WFP adapter now owns a persistent baseline, a separate dynamic
-session lock and exact socket permits, without changing other Firewall profile
-defaults. Actual `f4264b1a` execution passed all nine baseline/lifecycle cases
-and five production negative controls, including assigned-priority readback,
-Always replacement, complete rule/ACL checks and explicit recovery. Actual
-IPv6 UDP transfer/renewal, selected-adapter DHCP capture and process-death
-cleanup also passed; the full traffic gate did not. The IPv4 interface getter
-repair is published in `58a1031d`, with its new actual native test still pending.
-These kernel results do not certify the legacy Windows production wrapper.
+The Windows WFP adapter owns its persistent baseline, dynamic session lock and
+exact socket permits without changing other Firewall profile defaults.
+Read-only status and normal release preserving Always are published in
+`d28fb680`. At `d6337bea`, the actual Windows runner passed all 12
+baseline/status cases and eight broken variants, all four TCP/UDP IPv4/IPv6
+traffic/renewal cases, selected-adapter DHCP, blocked-control I/O with retained
+source ports, process-death cleanup and both traffic mutations. The corrected
+backpressure fixture (`499a51f3`) sets and reads the receiver buffer before
+Connect and proves a genuinely entered write. These completed steps are
+recorded in [job 123224546154](https://github.com/Eabusham2/router-vpn/actions/runs/40805819408/job/123224546154).
+The workflow was later cancelled; it is not an all-green workflow or release.
+Shipping Windows factory/wrapper adoption, ordinary/fixed protection migration
+and installed/Portable privileged startup ownership remain source work.
+
+macOS now has the captured physical-socket guardian and native factory
+(`b3e0c48c`): an independently running guardian retains isolated-UID sockets,
+the actual utun descriptor and scoped PF permissions. Launch/recovery preserves
+its cleanup record before filter mutation and refuses to claim explicit Off
+without absent-rule readback (`d6da0f6e`). Twenty real preparation tests, focused
+shared/prepared native race suites, 34 Unix wrapper cases and ten PF dispatch
+tests pass locally. Both architectures must now pass the early actual kernel
+gate and all five production mutations, and the prepared shipping build must
+repeat those proofs (`5d26fbd7`). The first Intel attempt in run `40806834878`
+failed during Cgo compilation before kernel tests; its captured compiler output
+was not printed. Diagnostic reporting and an omitted public Apple header are
+the next repair. Native kernel results and final public admission remain
+pending; foreign stateful/NAT PF coexistence is still bounded.
 
 Native tunnel permissions follow actual interface retirement/replacement
 across MTU changes (`5168ea53`), including rollback. All six native hosts must
@@ -83,12 +100,16 @@ valid Tor metadata (`2bff5e5f`). The shared descriptor-retention fixture checks
 its actual captured Bind handle (`2248a130`); a deliberate early close still
 fails. None of these results enables unfinished Windows/macOS admission.
 
-At `f6f2fc14`, the complete Windows native contract passed. At `60d9ca2a`,
-28 workflows were found: eight successful, with the rest pending, queued or
-running; the authoritative release run `40794768686` was pending. No
-current all-platform release, private deployment, signing operation or physical
-acceptance is claimed. Broader requested graph parity and all applicable live
-release requirements remain in scope.
+The actual Mac Intel release build exposed a Tor directory fixture that used
+a blocking-only reader on nonblocking sockets. `d6337bea` requires partial-read
+assembly, the exact bytes and actual EOF within a real-time bound. All 36 native
+C cases pass locally; discarded delivery and a sender left open each fail the
+intended assertion. The 329 package/metadata checks and Go receipt checks pass.
+The production Tor protocol is unchanged; actual Mac execution remains a gate.
+
+No current all-platform release, private deployment, signing operation or
+physical acceptance is claimed. Broader requested graph parity and all
+applicable live release requirements remain in scope.
 
 The older `58f92912` macOS installer syntax contract passed, but the real
 native ownership jobs later exposed a standalone AppKit fixture that called a
