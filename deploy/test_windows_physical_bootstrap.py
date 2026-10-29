@@ -121,6 +121,14 @@ def overlay(source, workspace, prospective):
                                 "return newDesktopWindowsSocketPolicy(ctx, capture, options, nil)",
                                 "return desktopWindowsCompositionConstruct(ctx, capture, options)")
     replace(policy.relative_to(source), raw.encode())
+    # The production callback deliberately redacts the transport cause. This
+    # explicit fixture has only its public selected resolver; preserve the
+    # identical failure branch and retain its cause in this test compilation.
+    network = source / "routervpn/desktoppt/network.go"
+    raw = IDENTITY.replace_once(network.read_text(encoding="utf-8"),
+                                'return nil, errors.New("Snowflake captured native DNS lookup failed")',
+                                'return nil, errors.Join(errors.New("Snowflake captured native DNS lookup failed"), err)')
+    replace(network.relative_to(source), raw.encode())
     for name, relative in (
         ("kernel_observer.go", "routervpn/mobiletor/desktop_socket_windows_composition_overlay.go"),
         ("resolver_access.go", "routervpn/desktoppt/tor_windows_composition_overlay.go"),

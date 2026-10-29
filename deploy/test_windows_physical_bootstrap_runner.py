@@ -72,7 +72,7 @@ func DNSTransportRegistry() *dns.TransportRegistry {
         work = self.workspace / "overlay"
         work.mkdir()
         selected = json.loads(GATE.overlay(source, work, True).read_text())["Replace"]
-        self.assertEqual(len(selected), 7)
+        self.assertEqual(len(selected), 8)
         for path in selected.values():
             self.assertTrue(Path(path).is_relative_to(work))
         self.assertEqual(GATE.sources(source)[1], before)
@@ -102,7 +102,7 @@ func DNSTransportRegistry() *dns.TransportRegistry {
         work = self.workspace / "ordinary"
         work.mkdir()
         selected = json.loads(GATE.overlay(self.core, work, False).read_text())["Replace"]
-        self.assertEqual(len(selected), 4)
+        self.assertEqual(len(selected), 5)
         for path in ("routervpn/mobiletor/desktop_bridge.go", "routervpn/mobiletor/desktop_physical_policy.go",
                      "routervpn_desktop_tor_box_physical.go"):
             self.assertNotIn(str(self.core / path), selected)
