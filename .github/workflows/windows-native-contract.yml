@@ -3,7 +3,16 @@ name: Windows native contract
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - 'client/macos/**'
+      - '.github/workflows/macos-native-*.yml'
+      - 'internal/mobiletor/desktop_socket_darwin_*.go'
   pull_request:
+    paths-ignore:
+      - 'client/macos/**'
+      - '.github/workflows/macos-native-*.yml'
+      - 'internal/mobiletor/desktop_socket_darwin_*.go'
+
 
 concurrency:
   group: windows-native-contract-${{ github.ref }}

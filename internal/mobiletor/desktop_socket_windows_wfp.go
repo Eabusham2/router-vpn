@@ -429,7 +429,7 @@ func (e *desktopWFPEngine) ReadSublayer(key syscall.GUID, persistent bool, weigh
 		flags = 1
 	}
 	if pointer.Key != key || pointer.Flags != flags || pointer.Weight != weight || pointer.Provider != nil || pointer.Metadata.Size == 0 || pointer.Metadata.Size > 16384 || pointer.Metadata.Data == nil {
-		return nil, false, errors.New("WFP baseline sublayer lost its exact owner")
+		return nil, false, fmt.Errorf("WFP baseline sublayer lost its exact owner: key_match=%t flags=%#x expected_flags=%#x weight=%d expected_weight=%d provider_present=%t metadata_size=%d metadata_present=%t", pointer.Key == key, pointer.Flags, flags, pointer.Weight, weight, pointer.Provider != nil, pointer.Metadata.Size, pointer.Metadata.Data != nil)
 	}
 	if err := e.assertLayerSecurity(key); err != nil {
 		return nil, false, err
