@@ -111,28 +111,29 @@ type DesktopSocketBroker struct {
 }
 
 type desktopSocket struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	broker      *DesktopSocketBroker
-	id          string
-	network     string
-	remote      netip.AddrPort
-	binding     DesktopSocketBinding
-	mu          sync.Mutex
-	closing     bool
-	conn        net.Conn
-	packet      net.PacketConn
-	keeper      *desktopSocketKeeper
-	sourceFile  *os.File
-	local       netip.AddrPort
-	peers       map[netip.AddrPort]*desktopSocketPeer
-	operation   chan struct{}
-	done        chan struct{}
-	closeOnce   sync.Once
-	io          sync.WaitGroup
-	readUntil   time.Time
-	writeUntil  time.Time
-	lastFailure error
+	ctx          context.Context
+	cancel       context.CancelFunc
+	broker       *DesktopSocketBroker
+	id           string
+	network      string
+	remote       netip.AddrPort
+	binding      DesktopSocketBinding
+	mu           sync.Mutex
+	closing      bool
+	conn         net.Conn
+	packet       net.PacketConn
+	keeper       *desktopSocketKeeper
+	sourceFile   *os.File
+	sourceNative DesktopSocketNative
+	local        netip.AddrPort
+	peers        map[netip.AddrPort]*desktopSocketPeer
+	operation    chan struct{}
+	done         chan struct{}
+	closeOnce    sync.Once
+	io           sync.WaitGroup
+	readUntil    time.Time
+	writeUntil   time.Time
+	lastFailure  error
 }
 
 type desktopSocketPeer struct {
@@ -158,7 +159,7 @@ func (c DesktopSocketCapture) valid() bool {
 
 func (o DesktopSocketKernelOwner) valid() bool {
 	switch o.Kind {
-	case "linux-cgroup", "unix-isolated-uid", "windows-isolated-appid":
+	case "linux-cgroup", "unix-isolated-uid", "windows-isolated-appid", "windows-isolated-token":
 	default:
 		return false
 	}
@@ -309,6 +310,8 @@ func (b *DesktopSocketBroker) DialContext(ctx context.Context, network, address 
 	var connection net.Conn
 	if b.source == nil {
 		connection, err = desktopSocketDialTCP(operation, network, remote, control)
+	} else if s.sourceNative != nil {
+		connection, err = desktopSocketImportNativeTCP(operation, network, remote, s.sourceNative, control)
 	} else {
 		connection, err = desktopSocketImportTCP(operation, network, remote, s.sourceFile, control)
 	}
@@ -366,6 +369,8 @@ func (b *DesktopSocketBroker) openPacket(ctx context.Context, network string, re
 	var packet net.PacketConn
 	if b.source == nil {
 		packet, err = listener.ListenPacket(operation, network, netip.AddrPortFrom(s.binding.LocalAddress, 0).String())
+	} else if s.sourceNative != nil {
+		packet, err = desktopSocketImportNativePacket(operation, network, s.sourceNative, s.binding.LocalAddress, listener.Control)
 	} else {
 		packet, err = desktopSocketImportPacket(operation, network, s.sourceFile, s.binding.LocalAddress, listener.Control)
 	}
@@ -695,7 +700,19 @@ func (s *desktopSocket) drain() {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
-	if source, ok := s.broker.source.(DesktopSocketSourceRelease); ok && s.sourceFile != nil {
+	if s.sourceNative != nil {
+		for {
+			err := s.sourceNative.Close()
+			if err == nil || errors.Is(err, net.ErrClosed) || errors.Is(err, os.ErrClosed) {
+				break
+			}
+			s.mu.Lock()
+			s.lastFailure = err
+			s.mu.Unlock()
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
+	if source, ok := s.broker.source.(DesktopSocketSourceRelease); ok && (s.sourceFile != nil || s.sourceNative != nil) {
 		request := DesktopSocketCreation{Capture: s.broker.capture, Binding: s.binding, SocketID: s.id, Network: s.network}
 		for {
 			ctx, cancel := context.WithTimeout(context.Background(), desktopSocketControlWait)

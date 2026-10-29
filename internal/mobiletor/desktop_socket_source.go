@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"syscall"
 )
 
 // DesktopSocketCreation binds a transferred descriptor to the same immutable
@@ -17,18 +18,29 @@ type DesktopSocketCreation struct {
 }
 
 // DesktopSocketCreated transfers ownership even when CreateSocket also returns
-// an error. File must be an actual unbound, unconnected kernel socket; the
-// broker imports that socket and does not recreate one under its own identity.
+// an error. File or Native must be an actual unbound, unconnected kernel socket;
+// the broker imports that socket without recreating one under its own identity.
 type DesktopSocketCreated struct {
 	Creation DesktopSocketCreation
 	File     *os.File
+	Native   DesktopSocketNative
+}
+
+// DesktopSocketNative retains an OS socket that cannot be closed as an os.File.
+// Winsock handles require closesocket, and their imported I/O must retain that
+// same endpoint instead of constructing a new socket under the receiver token.
+// Exactly one of File and Native may be supplied. Both are retained and closed
+// on a malformed or cancelled creation reply before the source can retire.
+type DesktopSocketNative interface {
+	SyscallConn() (syscall.RawConn, error)
+	Close() error
 }
 
 // DesktopSocketSource is an optional capability of the independently created
 // OS policy, not a configuration flag or an alternate caller-provided dialer.
-// The macOS policy can use it to create sockets under its isolated identity
-// without moving the native TUN/route owner into that identity. Linux's normal
-// cgroup socket creator does not implement this interface and is unchanged.
+// An OS policy uses it to create sockets under its isolated identity without
+// moving the native TUN/route owner into that identity. A Unix descriptor and a
+// Winsock handle keep their own import and close primitives.
 //
 // CreateSocket must join its transfer before returning. Any received descriptor
 // belongs to the caller, including an invalid or late reply returned with an
@@ -65,8 +77,9 @@ func (s *desktopSocket) create(ctx context.Context) error {
 	// malformed metadata. drain waits for this operation before releasing it.
 	s.mu.Lock()
 	s.sourceFile = reply.File
+	s.sourceNative = reply.Native
 	s.mu.Unlock()
-	if err != nil || deadlineErr != nil || ctx.Err() != nil || !s.live() || reply.File == nil || reply.Creation != request {
+	if err != nil || deadlineErr != nil || ctx.Err() != nil || !s.live() || (reply.File == nil) == (reply.Native == nil) || reply.Creation != request {
 		return errors.Join(err, deadlineErr, ctx.Err(), errors.New("desktop physical socket creation lost its exact captured owner"))
 	}
 	return nil

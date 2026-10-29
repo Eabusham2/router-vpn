@@ -123,10 +123,8 @@ func desktopSocketDialTCP(ctx context.Context, network string, remote netip.Addr
 		return nil, desktopSocketStartupError
 	}
 	family, actualNetwork := syscall.AF_INET6, "tcp6"
-	var target syscall.Sockaddr = &syscall.SockaddrInet6{Addr: remote.Addr().As16(), Port: int(remote.Port())}
 	if remote.Addr().Is4() {
 		family, actualNetwork = syscall.AF_INET, "tcp4"
-		target = &syscall.SockaddrInet4{Addr: remote.Addr().As4(), Port: int(remote.Port())}
 	}
 	if network != "tcp" && network != actualNetwork {
 		return nil, errors.New("desktop physical TCP address family changed")
@@ -150,18 +148,34 @@ func desktopSocketDialTCP(ctx context.Context, network string, remote netip.Addr
 	if err := control(ctx, actualNetwork, remote.String(), desktopWindowsRaw{c}); err != nil {
 		return c, err
 	}
+	if err := desktopSocketConnectOwnedTCP(ctx, c); err != nil {
+		return c, err
+	}
+	failed = false
+	return c, nil
+}
+
+// The socket is already exclusively bound and its exact physical permit has
+// been acknowledged. Both ordinary and token-created sockets connect through
+// this same Winsock path without creating or rebinding another endpoint.
+func desktopSocketConnectOwnedTCP(ctx context.Context, c *desktopWindowsSocket) error {
+	remote := c.remote
 	local, err := desktopSocketLocal(c.handle)
 	if err != nil || ctx.Err() != nil {
-		return c, errors.Join(err, ctx.Err())
+		return errors.Join(err, ctx.Err())
 	}
 	c.local = local
+	var target syscall.Sockaddr = &syscall.SockaddrInet6{Addr: remote.Addr().As16(), Port: int(remote.Port())}
+	if remote.Addr().Is4() {
+		target = &syscall.SockaddrInet4{Addr: remote.Addr().As4(), Port: int(remote.Port())}
+	}
 	err = syscall.Connect(c.handle, target)
 	if err != nil && !errors.Is(err, desktopSocketWouldBlock) && !errors.Is(err, desktopSocketInProgress) && !errors.Is(err, desktopSocketAlready) {
-		return c, err
+		return err
 	}
 	for {
 		if ctx.Err() != nil {
-			return c, ctx.Err()
+			return ctx.Err()
 		}
 		peer, peerErr := syscall.Getpeername(c.handle)
 		if peerErr == nil {
@@ -175,19 +189,18 @@ func desktopSocketDialTCP(ctx context.Context, network string, remote netip.Addr
 				}
 			}
 			if actual != remote {
-				return c, errors.New("desktop physical connected peer changed")
+				return errors.New("desktop physical connected peer changed")
 			}
 			break
 		}
 		if !errors.Is(peerErr, desktopSocketNotConnected) {
-			return c, peerErr
+			return peerErr
 		}
 		if err := c.wait(ctx, true); err != nil {
-			return c, err
+			return err
 		}
 	}
-	failed = false
-	return c, nil
+	return nil
 }
 
 func (c *desktopWindowsSocket) begin() error {
