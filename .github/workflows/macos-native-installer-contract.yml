@@ -19,6 +19,7 @@ on:
       - 'modes/darwin_kill_switch.py'
       - 'modes/profile_id.py'
       - 'deploy/test_macos_controller_privilege.py'
+      - 'deploy/test_desktop_darwin_guardian_runner.py'
       - 'deploy/test_macos_installer_trust.py'
       - 'deploy/test_macos_native_install.py'
       - 'deploy/test_linux_controller_privilege.py'
@@ -41,6 +42,7 @@ on:
       - 'modes/darwin_kill_switch.py'
       - 'modes/profile_id.py'
       - 'deploy/test_macos_controller_privilege.py'
+      - 'deploy/test_desktop_darwin_guardian_runner.py'
       - 'deploy/test_macos_installer_trust.py'
       - 'deploy/test_macos_native_install.py'
       - 'deploy/test_linux_controller_privilege.py'
@@ -77,7 +79,9 @@ jobs:
           go-version: '1.26.3'
           cache: false
       - name: Prove installed supervisor, native peer identity and joined AppKit shutdown
-        run: python3 deploy/test_macos_controller_privilege.py --go "$(command -v go)" --python /usr/bin/python3
+        run: |
+          python3 deploy/test_desktop_darwin_guardian_runner.py
+          python3 deploy/test_macos_controller_privilege.py --go "$(command -v go)" --python /usr/bin/python3
       - name: Prove privileged interpreter ownership and installation rollback
         run: |
           python3 deploy/test_macos_installer_trust.py

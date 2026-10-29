@@ -15,6 +15,7 @@ import importlib.util
 import os
 import platform
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,6 +25,20 @@ UID = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UID)
 CASES = ('LifetimeAndInheritedLocks', 'RejectsForeignUIDAndInvalidFrames',
          'RejectsUnsafeInstalledAuthority', 'SupervisorRestartDoesNotAdoptLiveChild', 'AppKitClient')
+
+
+def reported_run(command, **kwargs):
+    """Expose the actual failed native child without changing its verdict."""
+    try:
+        return UID.run(command, **kwargs)
+    except subprocess.CalledProcessError as error:
+        output = error.output or b''
+        if isinstance(output, bytes):
+            output = output[-24*1024:].decode('utf-8', errors='replace')
+        else:
+            output = str(output)[-24*1024:]
+        print('Darwin native command failure output (bounded tail):\n'+output, file=sys.stderr, flush=True)
+        raise
 
 
 def source_identity():
@@ -193,7 +208,7 @@ def main():
                    'ROUTERVPN_MACOS_FIXTURE_APPKIT=' + str(appkit), 'GORACE=atexit_sleep_ms=0',
                    str(binary), '-test.run=^TestMacOSOwnedControllerNative', '-test.v', '-test.timeout=180s']
         if sudo: command = [sudo, '-n', '--', *command]
-        output = UID.run(command, cwd=ROOT, env=environment, timeout=200, sudo=sudo)
+        output = reported_run(command, cwd=ROOT, env=environment, timeout=200, sudo=sudo)
         print(output, end='')
         for name in CASES:
             if '--- PASS: TestMacOSOwnedControllerNative' + name not in output:
