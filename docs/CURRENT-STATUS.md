@@ -9,7 +9,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 The latest resumed check started at `f87b7809`, preserving the source already
 316 commits beyond historical release `745b3e41`. Current repairs and exact
-verified pushes through `5168ea53` are recorded in the
+verified pushes through `58a1031d` are recorded in the
 [continuation evidence ledger](CONTINUATION-EVIDENCE-2026-10-28.md).
 
 Private-Router Tor Local/Server/Compare is now implemented across desktop,
@@ -56,16 +56,32 @@ privilege regression pass. Both Darwin architectures cross-compile. The actual
 Intel and Apple Silicon ownership/ACL jobs are mandatory and remain separate
 from these local results; see [macOS installation](MACOS-NATIVE-INSTALL.md).
 
-Windows/macOS dynamic Direct strict-protection factories remain unfinished.
-Windows now preserves the actual Winsock endpoint and has a fresh isolated
-account/token source (`1e4a35f8`, `06124358`). Actual Windows execution proved
-token preservation across bind, then exposed an executable path alias mismatch;
-`a3ed9c89` normalizes the held actual process image without relaxing identity
-comparison. The mandatory copied-source gate still has to pass, and the
-shipping WFP adapter/factory remains source work. Native tunnel permissions
-now follow actual interface retirement/replacement across MTU changes
-(`5168ea53`), including rollback. Neither this interface nor a successful
-cross-compile enables unfinished platform admission.
+Windows/macOS dynamic Direct strict-protection factories and complete shipping
+wrapper adoption remain unfinished. The Windows isolated token/socket gate
+passed its initial ten actual cases and nine deliberate-defect controls at
+`9c69d930`. Stronger real TCP/UDP traffic checks then exposed a legitimate TCP
+endpoint transition during Connect and a TCP-only socket-option check on UDP.
+The UDP repair is published in `e5bf0cf4`; the TCP ownership transition remains
+source work at this checkpoint, with its rejection checks still enforced.
+
+The Windows WFP adapter now owns a persistent baseline, a separate dynamic
+session lock and exact socket permits, without changing other Firewall profile
+defaults. Actual `f4264b1a` execution passed all nine baseline/lifecycle cases
+and five production negative controls, including assigned-priority readback,
+Always replacement, complete rule/ACL checks and explicit recovery. Actual
+IPv6 UDP transfer/renewal, selected-adapter DHCP capture and process-death
+cleanup also passed; the full traffic gate did not. The IPv4 interface getter
+repair is published in `58a1031d`, with its new actual native test still pending.
+These kernel results do not certify the legacy Windows production wrapper.
+
+Native tunnel permissions follow actual interface retirement/replacement
+across MTU changes (`5168ea53`), including rollback. All six native hosts must
+execute that lifecycle gate (`8dd355af`). Linux ownership freshness now rejects
+future timestamps after clock rollback (`ed3b5f00`). The current package-fallback
+audit passes four archived variants and 22 integrity controls after supplying
+valid Tor metadata (`2bff5e5f`). The shared descriptor-retention fixture checks
+its actual captured Bind handle (`2248a130`); a deliberate early close still
+fails. None of these results enables unfinished Windows/macOS admission.
 
 At `f6f2fc14`, the complete Windows native contract passed. At `60d9ca2a`,
 28 workflows were found: eight successful, with the rest pending, queued or
@@ -74,10 +90,15 @@ current all-platform release, private deployment, signing operation or physical
 acceptance is claimed. Broader requested graph parity and all applicable live
 release requirements remain in scope.
 
-The newer `58f92912` macOS native installer contract passed. Its early native
-ownership jobs in run `40798765946` were queued at the recorded read. Other
-native and authoritative workflows are still being checked at their actual
-commit identities; older failures and queued jobs are not current successes.
+The older `58f92912` macOS installer syntax contract passed, but the real
+native ownership jobs later exposed a standalone AppKit fixture that called a
+main-actor function without its actor context. `7e28ed94` corrects that fixture.
+The mandatory Intel/Apple Silicon ownership jobs now also run independently of
+long engine builds (`b3ebcd38`); their native execution remains pending at this
+checkpoint. Shared native ACL authority checks moved unchanged into
+`internal/common` (`8f91c807`). Other native and authoritative workflows are
+still checked at their actual commit identities; old failures and queued jobs
+are not current successes.
 
 ## October 28 source checkpoint (historical)
 
