@@ -34,15 +34,14 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: macos-physical-sockets-${{ github.workflow }}-${{ github.ref }}
-  # Finish the active native diagnostic; GitHub keeps only the newest pending
-  # run. Required release/native jobs still verify their own exact source SHA.
-  cancel-in-progress: false
-
 jobs:
   native-sockets:
     name: Native PF, socket and utun ownership on ${{ matrix.runner }}
+    concurrency:
+      group: macos-physical-sockets-${{ github.workflow }}-${{ github.ref }}-${{ matrix.runner }}
+      # Finish each active native diagnostic. An unallocated ARM runner must
+      # not prevent a completed Intel lane from testing its next correction.
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:

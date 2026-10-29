@@ -54,15 +54,14 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: macos-owned-controller-${{ github.workflow }}-${{ github.ref }}
-  # Finish the active native diagnostic; GitHub keeps only the newest pending
-  # run. Required release/native jobs still verify their own exact source SHA.
-  cancel-in-progress: false
-
 jobs:
   owned-controller:
     name: Native controller ownership on ${{ matrix.runner }}
+    concurrency:
+      group: macos-owned-controller-${{ github.workflow }}-${{ github.ref }}-${{ matrix.runner }}
+      # Keep the active diagnostic for each architecture while allowing the
+      # other native lane to advance independently after its own verdict.
+      cancel-in-progress: false
     strategy:
       fail-fast: false
       matrix:
@@ -90,6 +89,9 @@ jobs:
           python3 deploy/test_macos_native_install.py
 
   contract:
+    concurrency:
+      group: macos-owned-controller-contract-${{ github.workflow }}-${{ github.ref }}
+      cancel-in-progress: false
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
