@@ -50,7 +50,8 @@ REQUIRED = (
 def sources():
     expected = {"api_windows.go", "identity_windows.go", "launch_windows.go",
                 "pipe_windows.go", "process_windows.go",
-                "fixture_windows_test.go", "foundation_windows_test.go", "capture_windows_test.go"}
+                "fixture_windows_test.go", "foundation_windows_test.go", "capture_windows_test.go",
+                "restricted_worker_windows_test.go"}
     paths = sorted(TARGET.glob("*.go"))
     if {path.name for path in paths} != expected:
         raise ValueError("Windows controller native source/test closure changed")

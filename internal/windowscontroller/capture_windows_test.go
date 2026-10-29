@@ -15,6 +15,9 @@ import (
 )
 
 func TestWindowsControllerFoundationRetainsGrantedLaunchHandle(t *testing.T) {
+	if !fixtureInRestrictedDACLWorker(t) {
+		return
+	}
 	child := startFixtureChild(t, "hold", fixtureExecutable(t))
 	child.verify(t)
 	api, err := native()
