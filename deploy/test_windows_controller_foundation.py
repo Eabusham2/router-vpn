@@ -44,12 +44,15 @@ REQUIRED = (
     "TestWindowsControllerFoundationRetainsGrantedLaunchHandle",
     "TestWindowsControllerFoundationCapturedVolumeSurvivesDriveRebind",
     "TestWindowsControllerFoundationRejectRemoteVolumeNames",
+    "TestWindowsControllerFoundationPinnedPackageCode",
+    "TestWindowsControllerFoundationPinnedPackageCodeRejectsAliases",
 )
 
 
 def sources():
     expected = {"api_windows.go", "identity_windows.go", "launch_windows.go",
                 "pipe_windows.go", "process_windows.go", "gui_windows.go", "stream_windows.go",
+                "code_file_windows.go", "code_file_windows_test.go",
                 "system_image_windows.go", "system_image_windows_test.go",
                 "system_image_policy.go", "system_image_policy_test.go",
                 "fixture_windows_test.go", "foundation_windows_test.go", "capture_windows_test.go",
@@ -113,6 +116,14 @@ def mutants():
         ("process_windows.go", "mutable-launch-drive", REQUIRED[18],
          "retargeted DOS drive replaced the retained executable",
          once(process, "image.path = canonical", "image.path = path")),
+        ("process_windows.go", "package-code-write-sharing", REQUIRED[20],
+         "retained package code allowed another writer",
+         once(process, "access, share, flags = syscall.GENERIC_READ, syscall.FILE_SHARE_READ, 0x00200000",
+              "access, share, flags = syscall.GENERIC_READ, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, 0x00200000")),
+        ("process_windows.go", "package-code-launch-capability", REQUIRED[20],
+         "a non-executable code pin acquired a process launch capability",
+         once(process, 'err != nil || !strings.EqualFold(filepath.Ext(clean), ".exe")',
+              'err != nil || false')),
     )
 
 
@@ -163,7 +174,7 @@ def execute(go="go", *, env=None):
             print("Rejected production Windows controller mutant:", name, flush=True)
         if sources() != before:
             raise ValueError("Windows controller source changed during its native proof")
-    print("Windows controller foundation passed twenty actual process/IPC/lifetime cases and twelve compiled production negative controls; launcher composition remains a separate gate.", flush=True)
+    print("Windows controller foundation passed twenty-two actual process/IPC/lifetime/package-code cases and fourteen compiled production negative controls; launcher composition remains a separate gate.", flush=True)
 
 
 if __name__ == "__main__":

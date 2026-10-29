@@ -234,19 +234,27 @@ func executableRoot(path string) (string, error) {
 	return volume + `\`, nil
 }
 
-func localExecutablePath(path string) (string, error) {
+func localPackageFilePath(path string) (string, error) {
 	if !filepath.IsAbs(path) || len(path) > 32760 || strings.ContainsRune(path, 0) {
 		return "", errors.New("Windows controller requires an absolute local executable")
 	}
 	clean := filepath.Clean(path)
 	root, err := executableRoot(clean)
-	if err != nil || !strings.EqualFold(filepath.Ext(clean), ".exe") {
-		return "", errors.New("Windows controller executable must be on a local drive")
+	if err != nil {
+		return "", errors.New("Windows captured package file must be on a local drive")
 	}
 	for _, part := range strings.Split(clean[len(root):], `\`) {
 		if part == "" || strings.TrimRight(part, ". ") != part || strings.ContainsAny(part, ":") {
 			return "", errors.New("Windows controller executable path is ambiguous")
 		}
+	}
+	return clean, nil
+}
+
+func localExecutablePath(path string) (string, error) {
+	clean, err := localPackageFilePath(path)
+	if err != nil || !strings.EqualFold(filepath.Ext(clean), ".exe") {
+		return "", errors.Join(err, errors.New("Windows controller executable must be on a local drive"))
 	}
 	return clean, nil
 }
@@ -259,7 +267,13 @@ func PinImage(path string) (_ *Image, resultErr error) {
 // readback of its already captured child. A caller-selected executable always
 // uses PinImage's single-link policy.
 func pinImage(path string, systemPowerShell bool) (_ *Image, resultErr error) {
-	path, err := localExecutablePath(path)
+	return pinPackageObject(path, systemPowerShell, localExecutablePath)
+}
+
+// The validator is private: only executable pins reach launch APIs. CodeFile
+// wraps a non-executable package capture without exposing an Image capability.
+func pinPackageObject(path string, systemPowerShell bool, validate func(string) (string, error)) (_ *Image, resultErr error) {
+	path, err := validate(path)
 	if err != nil {
 		return nil, err
 	}
@@ -283,7 +297,7 @@ func pinImage(path string, systemPowerShell bool) (_ *Image, resultErr error) {
 		// DOS drive name, which can be rebound independently of held handles.
 		return nil, nativeError("captured local volume image path", callErr)
 	}
-	canonical, err := localExecutablePath(syscall.UTF16ToString(buffer[:length]))
+	canonical, err := validate(syscall.UTF16ToString(buffer[:length]))
 	if err != nil || !strings.HasPrefix(strings.ToLower(canonical), strings.ToLower(volumeGUIDPrefix)) {
 		return nil, errors.Join(err, errors.New("Windows image has no independently proved local volume identity"))
 	}
