@@ -26,6 +26,7 @@ type nativeMultihopCapture struct {
 	root, entryID, exitID, base, entryMode, endpoint, source string
 	entrySelection                                           string
 	entryOwners                                              mobilemultihop.NodeEntryOwners
+	entryPhysical                                            []mobilemultihop.PhysicalEgress
 	controlToken, entryToken, exitToken                      string
 	configs                                                  map[string]string
 	localPacketPublic                                        map[string]string
@@ -111,6 +112,10 @@ func captureNativeMultihopSelection(ctx context.Context, root string, sel multih
 	if err != nil {
 		return sel, err
 	}
+	c.entryPhysical, err = entry.PhysicalEgress()
+	if err != nil {
+		return sel, err
+	}
 	for _, mode := range modes {
 		if !nativeMultihopExitMode(mode) {
 			return sel, errors.New("native multihop exit mode is not supported")
@@ -159,7 +164,7 @@ func captureNativeMultihopSelection(ctx context.Context, root string, sel multih
 	for _, asset := range c.assets {
 		assetIDs = append(assetIDs, []string{asset.id, asset.mode, asset.digest})
 	}
-	identity, _ := json.Marshal([]any{c.entrySelection, c.entryMode, c.entryOwners, c.endpoint, c.controlToken, c.entryToken, c.exitToken, assetIDs, c.configs, c.localPacketPublic, c.localPQIdentity})
+	identity, _ := json.Marshal([]any{c.entrySelection, c.entryMode, c.entryOwners, c.entryPhysical, c.endpoint, c.controlToken, c.entryToken, c.exitToken, assetIDs, c.configs, c.localPacketPublic, c.localPQIdentity})
 	sum := sha256.Sum256(identity)
 	clear(identity)
 	c.source = hex.EncodeToString(sum[:])

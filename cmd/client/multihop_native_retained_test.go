@@ -96,6 +96,15 @@ func TestNativeMultihopRetainedGraphFinalizesServerAndOnlyRestoresSystemMTU(t *t
 							t.Fatal("restore rewrote the original native capture")
 						}
 						for _, launch := range []*desktopNodeLaunch{initial, restored} {
+							if len(launch.nodePhysicalEgress) == 0 || !reflect.DeepEqual(launch.nodePhysicalEgress, sel.Native.entryPhysical) {
+								t.Fatal("retained Local/Server or MTU restoration substituted physical entry tuples")
+							}
+							originalPort := launch.nodePhysicalEgress[0].Port
+							launch.nodePhysicalEgress[0].Port = 1
+							if sel.Native.entryPhysical[0].Port != originalPort {
+								t.Fatal("one retained launch rewrote its shared physical capture")
+							}
+							launch.nodePhysicalEgress[0].Port = originalPort
 							var receipt map[string]any
 							_ = json.Unmarshal(launch.metadata, &receipt)
 							digest := sha256.Sum256(launch.config)

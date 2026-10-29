@@ -158,7 +158,7 @@ func TestNodeProfileBaseBindsSavedEndpointAndPreservesSourcePort(t *testing.T) {
 				}
 				graph := startObject(t, compiled.Config())
 				peer := graph["endpoints"].([]any)[0].(map[string]any)["peers"].([]any)[0].(map[string]any)
-				if peer["port"] != float64(52999) || !SameNativeNodeHost(peer["address"].(string), "2001:db8::8") || before != encodeNodeBasePair(t, assets) {
+				if peer["port"] != float64(52999) || peer["address"] != "2001:db8::8" || before != encodeNodeBasePair(t, assets) {
 					t.Fatal("host binding replaced the port, address or saved source")
 				}
 			})

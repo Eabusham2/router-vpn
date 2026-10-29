@@ -14,6 +14,8 @@ import (
 	"runtime"
 	"sync"
 	"time"
+
+	"router-vpn/internal/mobilemultihop"
 )
 
 // The retained node launch owns the full-device TUN for both Local and Server.
@@ -105,7 +107,8 @@ func compileRetainedNativeMultihopLaunch(sel multihopSelection, descriptor *desk
 		clear(data)
 		return nil, err
 	}
-	return &desktopNodeLaunch{root: sel.Native.root, endpoint: physical.String(), profileID: sel.Exit.ID, policyProfileID: sel.Control.ID, mode: sel.ExitMode, config: data, metadata: metadata}, nil
+	return &desktopNodeLaunch{root: sel.Native.root, endpoint: physical.String(), profileID: sel.Exit.ID, policyProfileID: sel.Control.ID, mode: sel.ExitMode, config: data, metadata: metadata,
+		nodePhysicalEgress: append([]mobilemultihop.PhysicalEgress(nil), sel.Native.entryPhysical...)}, nil
 }
 
 func preflightRetainedNativeMultihop(ctx context.Context, binary string, launch *desktopNodeLaunch, run desktopExternalPreflightCommand) (failure error) {

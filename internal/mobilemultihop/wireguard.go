@@ -142,6 +142,15 @@ func parseWireGuardProfile(config, expectedNodeID string) (wireGuardProfile, err
 	if err != nil || !wireGuardServerIP(host) {
 		return wireGuardProfile{}, errors.New("WireGuard hop requires a literal unicast endpoint; no direct DNS bootstrap")
 	}
+	// Equivalent IPv6 spellings refer to the same peer, but the compiled
+	// graph and its physical-socket projection require one canonical literal.
+	// Normalize only the derived runtime address, preserving the saved asset,
+	// selected port, protocol parameters and authenticated public identity.
+	address, err := netip.ParseAddr(host)
+	if err != nil {
+		return fail()
+	}
+	host = address.String()
 	port, err := wireGuardNumber(portText, 1, 65535)
 	if err != nil {
 		return fail()

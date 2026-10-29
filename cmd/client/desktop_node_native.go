@@ -32,6 +32,7 @@ type desktopNodeLaunch struct {
 	configSHA256               string
 	mtuSession                 string
 	policyProfileID            string
+	nodePhysicalEgress         []mobilemultihop.PhysicalEgress
 	external                   *desktopExternalRuntime
 	tor                        *desktopTorRuntime
 	directoryInfo              os.FileInfo
@@ -344,6 +345,10 @@ func prepareDesktopNodeLaunch(a *app, p common.RouterProfile, mode string) (*des
 	if err := a.checkConnectionOperation(); err != nil {
 		return nil, err
 	}
+	physical, err := compiled.PhysicalEgress()
+	if err != nil {
+		return nil, err
+	}
 	var graph map[string]any
 	if json.Unmarshal([]byte(compiled.Config()), &graph) != nil {
 		return nil, errors.New("native compiler returned an invalid graph")
@@ -368,7 +373,7 @@ func prepareDesktopNodeLaunch(a *app, p common.RouterProfile, mode string) (*des
 	if err != nil {
 		return nil, err
 	}
-	return &desktopNodeLaunch{root: root, endpoint: endpoint, profileID: p.ID, mode: mode, config: data, metadata: receipt}, nil
+	return &desktopNodeLaunch{root: root, endpoint: endpoint, profileID: p.ID, mode: mode, config: data, metadata: receipt, nodePhysicalEgress: physical}, nil
 }
 
 // Stage only after the prior runtime is completely drained. A prior mode's

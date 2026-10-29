@@ -95,6 +95,44 @@ func TestNodePhysicalEgressAllModesAndStartLayers(t *testing.T) {
 	}
 }
 
+func TestCapturedNodePhysicalEgressRetainsEveryModeAndLayer(t *testing.T) {
+	for _, mode := range predecessorFamilies {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(mode+"/"+layer, func(t *testing.T) {
+				files, profile, start := nodeProfileFixture(t, mode, layer)
+				node, err := NewNodeProfile(mode, files, startJSON(t, profile), start, "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				before := node.Config()
+				got, err := node.PhysicalEgress()
+				want := expectedNodeEgress(mode, layer)
+				if err != nil || !reflect.DeepEqual(got, want) {
+					t.Fatal("captured physical projection changed protocol, port or Start Layer", got, want, err)
+				}
+				got[0].Port = 1
+				again, err := node.PhysicalEgress()
+				if err != nil || !reflect.DeepEqual(again, want) || node.Config() != before {
+					t.Fatal("one caller modified the retained source or another projection", err)
+				}
+				// The captured graph remains authority even if an unrelated
+				// selected-profile object changes after native preparation.
+				profile["endpoint"] = "203.0.113.200"
+				profile["start_layer"] = "off"
+				again, err = node.PhysicalEgress()
+				if err != nil || !reflect.DeepEqual(again, want) {
+					t.Fatal("current selection replaced captured physical tuples", err)
+				}
+			})
+		}
+	}
+	for _, node := range []*NodeProfile{nil, {}, {mode: "wg", config: "{}", profile: map[string]any{}}} {
+		if tuples, err := node.PhysicalEgress(); err == nil || tuples != nil {
+			t.Fatal("unproved node acquired physical tuples", tuples, err)
+		}
+	}
+}
+
 func TestNodePhysicalEgressRejectsIncompleteOrSubstitutedGraphs(t *testing.T) {
 	for _, mode := range predecessorFamilies {
 		for _, defect := range []string{"wrong-mode", "missing-final", "direct-final", "competing-route", "extra-tun", "unowned-node", "missing-auth", "bad-kind"} {

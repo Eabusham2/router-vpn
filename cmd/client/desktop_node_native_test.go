@@ -119,6 +119,10 @@ func TestDesktopNativeBaseHostNormalizationRetainsCapturedPort(t *testing.T) {
 				if err != nil || endpoint != test.resolved {
 					t.Fatal("equivalent captured endpoint was rejected", err)
 				}
+				tuples, tupleErr := compiled.PhysicalEgress()
+				if tupleErr != nil || len(tuples) != 1 || tuples[0].Host != test.resolved || tuples[0].Port != 52999 || tuples[0].Network != "udp" {
+					t.Fatal("physical projection lost the actual resolved WG/AWG endpoint and saved port", tuples, tupleErr)
+				}
 				var graph map[string]any
 				if err := json.Unmarshal([]byte(compiled.Config()), &graph); err != nil {
 					t.Fatal(err)

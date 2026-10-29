@@ -26,6 +26,21 @@ func (p *NodeProfile) Config() string       { return p.config }
 func (p *NodeProfile) SourceSHA256() string { return p.source }
 func (p *NodeProfile) Metadata() string     { return p.metadata }
 
+// PhysicalEgress derives the physical tuples from this complete captured
+// profile and graph. It never accepts a replacement selected profile, resolves
+// a hostname, or includes a detoured exit, proof service or application DNS.
+// Each call returns an independent projection for its retained launch owner.
+func (p *NodeProfile) PhysicalEgress() ([]PhysicalEgress, error) {
+	if p == nil || p.profile == nil || p.config == "" || !NodeProfileMode(p.mode) {
+		return nil, nodePhysicalEgressError
+	}
+	profile, err := json.Marshal(p.profile)
+	if err != nil {
+		return nil, nodePhysicalEgressError
+	}
+	return NodePhysicalEgress(p.mode, string(profile), p.config)
+}
+
 func NodeProfileMode(mode string) bool {
 	return mode == "wg" || mode == "awg2-fast" || mode == "awg2-strong" ||
 		IsPQMode(mode) || MAXMode(mode) || CompositeMode(mode) || ProxyEntryMode(mode)
