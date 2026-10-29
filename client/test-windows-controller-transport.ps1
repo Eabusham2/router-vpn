@@ -21,10 +21,25 @@ $Fixture=Join-Path $Root 'deploy/fixtures/windows-controller-transport/transport
 $Code=[IO.File]::ReadAllText($Source,[Text.Encoding]::UTF8)
 if(-not$CompileAssembly){$Code+=[Environment]::NewLine+[IO.File]::ReadAllText($Fixture,[Text.Encoding]::UTF8)}
 Add-Type -AssemblyName System.Net.Http
-$Compile=@{TypeDefinition=$Code;CompilerOptions='/langversion:5';ErrorAction='Stop'}
+$Compile=@{TypeDefinition=$Code;ErrorAction='Stop'}
 if($CompileAssembly){$Compile.OutputAssembly=[IO.Path]::GetFullPath($CompileAssembly);$Compile.OutputType='Library'}
 if($PSVersionTable.PSEdition-eq'Desktop'){
-    $Compile.ReferencedAssemblies=@('System.dll','System.Core.dll','System.Net.Http.dll')
+    # Windows PowerShell 5.1 exposes CodeDOM CompilerParameters, not the
+    # PowerShell 7 CompilerOptions switch. Keep the same C#5 boundary and pass
+    # its references through that object; the two reference parameters cannot
+    # be combined. This is the actual Framework compiler used for the DLL.
+    # https://learn.microsoft.com/powershell/module/microsoft.powershell.utility/add-type?view=powershell-5.1
+    $Parameters=New-Object System.CodeDom.Compiler.CompilerParameters
+    $Parameters.CompilerOptions='/langversion:5'
+    $Parameters.GenerateExecutable=$false
+    $Parameters.GenerateInMemory=-not [bool]$CompileAssembly
+    foreach($Reference in @('System.dll','System.Core.dll','System.Net.Http.dll')){
+        [void]$Parameters.ReferencedAssemblies.Add($Reference)
+    }
+    if($CompileAssembly){$Parameters.OutputAssembly=[IO.Path]::GetFullPath($CompileAssembly)}
+    $Compile.CompilerParameters=$Parameters
+}else{
+    $Compile.CompilerOptions='/langversion:5'
 }
 Add-Type @Compile
 if($CompileAssembly){Write-Host 'PASS controller GUI transport production DLL compilation';exit 0}
