@@ -408,6 +408,17 @@ def comparison_client_contract():
             'cmd/sing-box/routervpn_tor_controller_json_test.go': exact}
 
 
+def relocated_shared_source(raw: bytes) -> bytes:
+    """Apply only the declared import relocation used by the shipping copy."""
+    for name in PURE:
+        raw = raw.replace(('"router-vpn/internal/'+name+'"').encode(),
+                          ('"'+MODULE+'/routervpn/'+name+'"').encode())
+    for name in SHARED:
+        raw = raw.replace(('"router-vpn/internal/'+name+'"').encode(),
+                          ('"'+MODULE+'/experimental/libbox/routervpn/'+name+'"').encode())
+    return raw
+
+
 def prepare(vendor, go='go', *, env=None):
     vendor = checked_vendor(vendor)
     controller_contract = comparison_client_contract()
@@ -423,11 +434,7 @@ def prepare(vendor, go='go', *, env=None):
                     'desktop_socket_windows_network_test.go', 'desktop_socket_windows_wfp_traffic_test.go',
                     'desktop_socket_source_privileged_test.go', 'desktop_socket_linux_guardian_test.go')):
                 continue
-            raw = path.read_bytes()
-            for name in PURE:
-                raw = raw.replace(('"router-vpn/internal/'+name+'"').encode(), ('"'+MODULE+'/routervpn/'+name+'"').encode())
-            for name in SHARED:
-                raw = raw.replace(('"router-vpn/internal/'+name+'"').encode(), ('"'+MODULE+'/experimental/libbox/routervpn/'+name+'"').encode())
+            raw = relocated_shared_source(path.read_bytes())
             write(vendor, 'routervpn/'+package+'/'+path.name, raw)
     for path in sorted((ROOT/'internal/dnsmeasure').glob('*.go')):
         write(vendor, 'experimental/libbox/routervpn/dnsmeasure/'+path.name, path.read_bytes())

@@ -38,7 +38,11 @@ def checked_sources(source):
         if path.is_symlink() or target.is_symlink() or not target.is_file():
             raise ValueError('Owned Unix creator source must be an actual copied regular file')
         raw = path.read_bytes()
-        if target.read_bytes() != raw:
+        # The preparer relocates only these declared shared-package imports.
+        # Compare the actual shipping copy, not an unrelocated source file or
+        # an independently simplified fixture. All other bytes remain exact.
+        copied = PREP.relocated_shared_source(raw)
+        if target.read_bytes() != copied:
             raise ValueError('Owned Unix creator test differs from the exact prepared source: '+path.name)
         records[path.name] = hashlib.sha256(raw).hexdigest()
     return source, records

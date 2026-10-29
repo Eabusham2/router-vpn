@@ -23,6 +23,13 @@ def passed():
                       '--- PASS: TestDesktopSocketPrivilegedWrongKernelUIDCannotGrant (0.1s)', 'PASS', ''])
 
 
+def copied(path):
+    # This real shared ACL import is relocated by the actual native preparer.
+    # The fixture keeps every other source byte intact.
+    return path.read_bytes().replace(b'"router-vpn/internal/common"',
+                                     b'"github.com/sagernet/sing-box/routervpn/common"')
+
+
 class OwnedUIDRunner(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix='uid-runner-contract-')
@@ -31,7 +38,7 @@ class OwnedUIDRunner(unittest.TestCase):
         target = self.source/'routervpn/mobiletor'
         target.mkdir(parents=True)
         for path in (ROOT/'internal/mobiletor').glob('desktop_socket_*.go'):
-            (target/path.name).write_bytes(path.read_bytes())
+            (target/path.name).write_bytes(copied(path))
         self.toolchain = Path(self.temp.name)/'selected toolchain'
         self.compiler = self.toolchain/'bin/go'
         self.compiler.parent.mkdir(parents=True)
@@ -129,7 +136,7 @@ class OwnedUIDRunner(unittest.TestCase):
                       'missing-tests', 'skipped-test', 'missing-family'):
             with self.subTest(fault=fault):
                 for path in (ROOT/'internal/mobiletor').glob('desktop_socket_*.go'):
-                    (self.source/'routervpn/mobiletor'/path.name).write_bytes(path.read_bytes())
+                    (self.source/'routervpn/mobiletor'/path.name).write_bytes(copied(path))
                 with self.assertRaises(ValueError):
                     self.execute(fault)
 
@@ -153,6 +160,25 @@ class OwnedUIDRunner(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'cross-compiled'):
                 GATE.execute(self.source, env={'GOOS': 'darwin'})
             run.assert_not_called()
+
+    def test_only_the_declared_shipping_import_relocation_is_accepted(self):
+        fixture_root = Path(self.temp.name)/'source-repository'
+        original = fixture_root/'internal/mobiletor'
+        original.mkdir(parents=True)
+        for item in (ROOT/'internal/mobiletor').glob('desktop_socket_*.go'):
+            (original/item.name).write_bytes(item.read_bytes())
+        source = original/'desktop_socket_copy_mapping.go'
+        source.write_bytes(b'package mobiletor\nimport "router-vpn/internal/common"\n// unrelated import text remains exact\n')
+        path = self.source/'routervpn/mobiletor'/source.name
+        path.write_bytes(copied(source))
+        expected = b'"github.com/sagernet/sing-box/routervpn/common"'
+        self.assertIn(expected, path.read_bytes())
+        with patch.object(GATE, 'ROOT', fixture_root):
+            GATE.checked_sources(self.source)
+            path.write_bytes(path.read_bytes().replace(expected, b'"unrelated.example/borrowed/common"'))
+            with patch.object(GATE, 'run') as run, self.assertRaisesRegex(ValueError, 'differs'):
+                GATE.execute(self.source, env={})
+        run.assert_not_called()
 
 
 if __name__ == '__main__':
