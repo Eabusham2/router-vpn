@@ -225,6 +225,15 @@ state table, or modify unrelated loopback/tunnel states. A changed address set,
 PF bypass flag, replacement baseline or replacement generation retires the
 captured admission.
 
+The Unix launcher installs an empty captured native baseline, with no invented
+public endpoint or name-only utun allowance. It persists the exact PF reference
+and both fixed owned anchors before changing a filter during handoff. A failed
+or ambiguous kernel command therefore retains cleanup authority and deny. The
+intermediate record stays pending until final successful installation; status
+does not promote it to active. The Always path restores an inactive baseline
+without a former session, UID, tuple or tunnel permission. Only the native
+owner can subsequently admit a new descriptor.
+
 TUN permission requires the actual exclusively created utun control descriptor.
 The checksum-pinned `sing-tun` adapter duplicates that descriptor under the same
 native lifecycle ownership used for Close and MTU replacement. The independently
@@ -255,8 +264,9 @@ utun descriptor retention, native-only and simultaneous guardian/native crashes,
 foreign-block and later-pass composition, stateful inbound/outbound rejection,
 blocked control with source-port retention, floating-state retirement, stale
 network capture, replacement-safe cleanup, and refusal to finish with an
-unretired descriptor. The runner rejects skipped or missing cases. Its optional
-`--mutations` mode requires the specific native assertion to reject five
+unretired descriptor. The runner rejects skipped or missing cases. The early reusable Intel/ARM job
+and the matching native packaging gate use
+`--mutations`, requiring the specific native assertion to reject five
 intentionally broken production boundaries. Source cross-compilation and a
 Linux socket run do not establish any of these Darwin kernel results.
 
@@ -264,8 +274,9 @@ Linux socket run do not establish any of these Darwin kernel results.
 
 Windows still needs a separately protected session identity, exact WFP permits
 and independently owned dynamic-session cleanup in the final shipping factory
-and launcher composition. The macOS foundation above still needs its actual
-native compiler/kernel result and final launcher/compiler admission integration.
+and launcher composition. The macOS foundation and captured launcher above
+still need their actual
+native compiler/kernel result and final compiler/admission integration.
 Its broader foreign-stateful PF coexistence remains a separate unfinished
 boundary. Both platforms must prove identity retention across native-process
 and launcher crashes before public strict dynamic Direct admission can open.

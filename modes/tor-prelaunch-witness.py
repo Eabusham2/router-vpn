@@ -190,13 +190,13 @@ def validate_launch(target: str, bridge_endpoint: str | None = None, tor_binary:
             raise ValueError("Local Tor lost its captured executable identity")
         endpoint = os.environ.get("HOMEVPN_ENDPOINT", "")
         if socket_broker:
-            if (sys.platform != "linux" or via_entry or server or physical != policy
+            if (sys.platform not in {"linux", "darwin"} or via_entry or server or physical != policy
                     or profile.get("node_kind") != "external"
                     or profile.get("multihop_enabled", False) is not False
                     or profile.get("kill_switch_policy") not in {"on-connect", "always"}
                     or type(profile.get("kill_switch", False)) is not bool
                     or endpoint or bridge_endpoint not in {None, ""}):
-                raise ValueError("physical broker lost its captured protected direct Linux source")
+                raise ValueError("physical broker lost its captured protected direct Unix source")
         elif not via_entry and protocol == "tor":
             if (endpoint or bridge_endpoint not in {None, ""}
                     or profile.get("kill_switch_policy") != "off"

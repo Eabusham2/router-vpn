@@ -45,7 +45,10 @@ assert "Fail closed" in dispatch or "fail-closed" in dispatch
 assert "_linux.remove_state(root" in dispatch
 assert "_linux.state_path(root).unlink" not in dispatch
 assert "persisted PF reference token was unreadable" in dispatch
-assert "_darwin._clear_anchor(check=False)" in dispatch
+assert "_darwin._clear_anchor(check=True)" in dispatch
+assert "_darwin._clear_anchor(check=True, anchor=_darwin.OWNED_PF_ANCHOR)" in dispatch
+assert "_darwin.run_pf(['-a', anchor, '-s', 'rules']).stdout.strip()" in dispatch
+assert "explicit macOS force-off could not prove the owned dispatch absent" in dispatch
 assert "global PF enablement was left untouched" in dispatch
 
 # Established MTU logic is imported and only its pre-connect protection callback

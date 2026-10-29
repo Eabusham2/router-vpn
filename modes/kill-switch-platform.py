@@ -96,22 +96,32 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None) -> int:
         return 0
 
     endpoint = os.environ.get("HOMEVPN_ENDPOINT") or str(runtime_profile.get("endpoint") or "")
-    retained = _linux.retained_native_policy(retained_state, endpoint) if retained_state is not None else None
-    if retained is None:
+    socket_broker = _linux.native_socket_broker_policy(control_profile, runtime_id, control_id, retained_state)
+    retained = _linux.retained_native_policy(retained_state, endpoint) if retained_state is not None and not socket_broker else None
+    if socket_broker:
+        endpoint, endpoint_ips, native_egress = '', [], None
+    elif retained is None:
         endpoint_ips = _linux.captured_endpoint_ips(endpoint)
         native_egress = _linux.captured_native_egress(endpoint_ips)
     else:
         endpoint_ips, native_egress = retained
     lan = bool(control_profile.get("home_lan_access", False))
     _stop_watcher(previous)
-    extra = _darwin.apply_darwin(endpoint_ips, lan, previous, refresh=False, dry_run=_dry_run(), native_egress=native_egress)
+    socket_capture = ((os.environ['HOMEVPN_TOR_SESSION'], os.environ['HOMEVPN_TOR_SOURCE_SHA256'])
+                      if socket_broker and retained_state is None else None)
     state = _darwin_state_base(runtime_id, control_id, endpoint, endpoint_ips, lan, policy)
     if native_egress is not None:
         state["native_egress"] = native_egress
-    state.update(extra)
+    if socket_broker:
+        state['native_socket_broker'] = True
     state["darwin_watcher_pid"] = 0
+    def retain_state(extra):
+        _linux.write_state(root, {**state, **extra, "darwin_transition_pending": True})
+    extra = _darwin.apply_darwin(endpoint_ips, lan, previous, refresh=False, dry_run=_dry_run(), native_egress=native_egress,
+                               socket_broker=socket_broker, socket_capture=socket_capture, retain_state=retain_state)
+    state.update(extra)
     _linux.write_state(root, state)
-    if spawn_watch:
+    if spawn_watch and not socket_broker:
         state["darwin_watcher_pid"] = _spawn_watcher()
         _linux.write_state(root, state)
     print(f"strict macOS kill switch {policy} applied pre-connect for {endpoint}", file=sys.stderr)
@@ -124,6 +134,9 @@ def darwin_watch() -> int:
     while time.monotonic() < deadline:
         state = _linux.read_state(root)
         if not state or state.get("platform") != "darwin":
+            return 0
+        if state.get('native_socket_broker') is True:
+            # Only the native guardian can admit the actual retained utun FD.
             return 0
         try:
             endpoint_ips = [_linux.ipaddress.ip_address(x) for x in state.get("endpoint_ips", [])]
@@ -164,10 +177,16 @@ def darwin_release(force: bool = False) -> int:
             raise
         # Explicit local recovery for poisoned state: without a valid persisted
         # pf_token we cannot safely call pfctl -X, because that could interfere
-        # with another PF owner. Clear only Router VPN's scoped anchor, retain PF
-        # enablement, and remove only the poisoned state leaf without following it.
+        # with another PF owner. Clear only Router VPN's fixed dispatches and
+        # independently prove both absent before discarding the poisoned leaf.
+        # An unknown/failed removal retains that recovery record and reports
+        # failure; global enablement and every foreign reference stay untouched.
         if not _dry_run():
-            _darwin._clear_anchor(check=False)
+            _darwin._clear_anchor(check=True)
+            _darwin._clear_anchor(check=True, anchor=_darwin.OWNED_PF_ANCHOR)
+            for anchor in (_darwin.PF_ANCHOR, _darwin.OWNED_PF_ANCHOR):
+                if _darwin.run_pf(['-a', anchor, '-s', 'rules']).stdout.strip():
+                    raise RuntimeError('explicit macOS force-off could not prove the owned dispatch absent')
         _linux.remove_state(root, force_recovery=True)
         print(
             "strict macOS kill switch force-off cleared the Router VPN PF anchor; "
@@ -181,8 +200,9 @@ def darwin_release(force: bool = False) -> int:
     if not force and state.get("policy") == "always":
         # Remove the old tunnel-interface permission but retain the fail-closed
         # pre-connect endpoint exception while disconnected.
-        endpoint_ips = [_linux.ipaddress.ip_address(x) for x in state.get("endpoint_ips", [])]
-        retained = _linux.retained_native_policy(state, str(state.get("endpoint") or ""))
+        socket_broker = state.get('native_socket_broker') is True
+        endpoint_ips = [] if socket_broker else [_linux.ipaddress.ip_address(x) for x in state.get("endpoint_ips", [])]
+        retained = None if socket_broker else _linux.retained_native_policy(state, str(state.get("endpoint") or ""))
         native_egress = None
         if retained is not None:
             endpoint_ips, native_egress = retained
@@ -193,7 +213,12 @@ def darwin_release(force: bool = False) -> int:
             refresh=False,
             dry_run=_dry_run(),
             native_egress=native_egress,
+            socket_broker=socket_broker,
+            socket_capture=None,
+            retain_state=lambda extra: _linux.write_state(root, {**state, **extra, 'darwin_watcher_pid': 0, 'darwin_transition_pending': True}),
         )
+        state.pop('darwin_previous_pf_anchor', None)
+        state.pop('darwin_transition_pending', None)
         state.update(extra)
         state["darwin_watcher_pid"] = 0
         _linux.write_state(root, state)
@@ -216,6 +241,8 @@ def darwin_reassert() -> int:
     os.environ["HOMEVPN_ENDPOINT"] = str(state.get("endpoint") or "")
     os.environ.pop("HOMEVPN_NATIVE_ENDPOINTS_JSON", None)
     os.environ.pop("HOMEVPN_NATIVE_EGRESS_JSON", None)
+    os.environ.pop("HOMEVPN_TOR_PHYSICAL_BROKER", None)
+    os.environ.pop("HOMEVPN_EXTERNAL_SESSION", None)
     return darwin_apply(spawn_watch=False, retained_state=state)
 
 

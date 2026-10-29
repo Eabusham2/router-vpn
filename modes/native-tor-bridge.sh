@@ -56,9 +56,9 @@ VERIFIED_NATIVE=$(router_vpn_standard_engine) || { echo 'Tor native engine faile
 if [[ "$ACTION" == check ]]; then exit 0; fi
 
 # Install the captured client protection before the native TUN or Tor starts.
-# Linux uses router-vpn, already permitted by the strict helper; Darwin's
-# existing watcher admits only the newly observed routed utun.
-# A dynamic Direct Linux capture installs only the DROP baseline here. Its
+# Fixed Darwin captures retain their established route watcher. Dynamic
+# captures use only the native guardian's retained actual utun descriptor.
+# A dynamic Direct Unix capture installs only the deny baseline here. Its
 # native Initialize factory later starts the privileged socket guardian, whose
 # exact isolated-UID/full-tuple permits never become host-wide exemptions.
 HOMEVPN_ROOT="$ROOT" HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_POLICY_PROFILE_ID="$POLICY_PROFILE_ID" HOMEVPN_ENDPOINT="$HOMEVPN_ENDPOINT" \

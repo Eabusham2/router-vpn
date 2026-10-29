@@ -336,4 +336,5 @@ with tempfile.TemporaryDirectory(prefix='router-vpn-killswitch-parent-safety-') 
         assert not (real_run/'kill-switch.json').exists()
 
 subprocess.run([sys.executable, str(SCRIPT.with_name('test_native_egress.py'))], check=True, timeout=60)
+subprocess.run([sys.executable, str(SCRIPT.with_name('test_darwin_owned_pf.py'))], check=True, timeout=60)
 print('Kill switch tests: OK')

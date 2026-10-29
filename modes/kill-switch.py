@@ -261,7 +261,7 @@ def native_socket_broker_policy(profile: dict[str, Any], runtime_id: str, contro
                                retained_state: dict[str, Any] | None) -> bool:
     """Select a closed baseline, never grant authority from a helper's output.
 
-    The native Linux guardian independently verifies this DROP chain and owns
+    The native Unix guardian independently verifies its deny baseline and owns
     every short-lived UID/full-socket-tuple exception. A retained Always policy
     restores only this empty baseline; it cannot resurrect a former guardian.
     """
@@ -269,8 +269,8 @@ def native_socket_broker_policy(profile: dict[str, Any], runtime_id: str, contro
     retained = retained_state is not None and "native_socket_broker" in retained_state
     if not marker and not retained:
         return False
-    failure = RuntimeError("native socket protection requires its captured direct Linux Tor policy")
-    if not sys.platform.startswith("linux"):
+    failure = RuntimeError("native socket protection requires its captured direct Unix Tor policy")
+    if not sys.platform.startswith("linux") and sys.platform != "darwin":
         raise failure
     external = profile.get("external")
     if (runtime_id != control_id or profile.get("node_kind") != "external"
