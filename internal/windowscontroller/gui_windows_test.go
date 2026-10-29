@@ -380,16 +380,40 @@ func TestWindowsControllerGUIParentRightsAndHandleIsolation(t *testing.T) {
 		t.Fatal("independent GUI parent-handle rights differ from the child readback", access, err)
 	}
 	var candidate syscall.Handle
-	err = syscall.DuplicateHandle(handle, unrelated, ^syscall.Handle(0), &candidate, 0, false, syscall.DUPLICATE_SAME_ACCESS)
-	if err == nil {
+	excludedErr := syscall.DuplicateHandle(handle, unrelated, ^syscall.Handle(0), &candidate, 0, false, syscall.DUPLICATE_SAME_ACCESS)
+	if excludedErr == nil {
 		defer syscall.CloseHandle(candidate)
+	}
+	// Capture the original inheritance observation before inserting any test
+	// handle. Independently prove this exact Event is a supported cross-process
+	// object through the same retained child handle. An unrelated numeric slot
+	// can be absent or hold a type that Windows cannot duplicate between
+	// processes; neither status is accepted without this actual positive.
+	var control syscall.Handle
+	if err := syscall.DuplicateHandle(^syscall.Handle(0), unrelated, handle, &control, 0, false, syscall.DUPLICATE_SAME_ACCESS); err != nil {
+		t.Fatal("owned Event could not enter its exact GUI process for the duplication control", err)
+	}
+	defer func() {
+		if err := syscall.DuplicateHandle(handle, control, 0, nil, 0, false, syscall.DUPLICATE_CLOSE_SOURCE); err != nil {
+			t.Error("owned Event duplication control did not close its exact remote handle", err)
+		}
+	}()
+	var echoed syscall.Handle
+	if err := syscall.DuplicateHandle(handle, control, ^syscall.Handle(0), &echoed, 0, false, syscall.DUPLICATE_SAME_ACCESS); err != nil {
+		t.Fatal("owned Event could not return through the same GUI process duplication boundary", err)
+	}
+	defer syscall.CloseHandle(echoed)
+	if identical, _, _ := compare.Call(uintptr(echoed), uintptr(unrelated)); identical == 0 {
+		t.Fatal("GUI cross-process duplication control did not preserve the actual owned Event identity")
+	}
+	if excludedErr == nil {
 		// A reused numeric slot may name a different runtime object. Compare
 		// the actual objects instead of treating that ordinary reuse as a leak.
 		if identical, _, _ := compare.Call(uintptr(candidate), uintptr(unrelated)); identical != 0 {
 			t.Fatal("native GUI inherited an unrelated inheritable kernel object")
 		}
-	} else if !errors.Is(err, syscall.Errno(6) /* ERROR_INVALID_HANDLE */) {
-		t.Fatal("excluded-handle readback failed before proving object isolation:", err)
+	} else if !errors.Is(excludedErr, syscall.Errno(6) /* ERROR_INVALID_HANDLE */) && !errors.Is(excludedErr, syscall.Errno(50) /* ERROR_NOT_SUPPORTED */) {
+		t.Fatal("excluded-handle readback failed before proving object isolation:", excludedErr)
 	}
 }
 
