@@ -22,10 +22,10 @@ import (
 	"unsafe"
 )
 
-// DesktopWindowsSocketInspection is read from the held original kernel socket
-// and a separately opened WFP session after the broker binds the transferred
-// duplicate. Raw permits interface set/readback on that same retained endpoint.
-// It cannot create, connect, send, or substitute a socket.
+// DesktopWindowsSocketInspection independently matches the retained original
+// and transferred duplicate against a separately opened WFP session. Raw is the
+// exact transferred descriptor that the broker bound and selected an interface
+// on; it permits readback on that endpoint, not creation of a replacement.
 type DesktopWindowsSocketInspection struct {
 	EndpointID, TokenModifiedID uint64
 	Family                      int
@@ -541,7 +541,12 @@ func (p *DesktopWindowsSocketIdentity) InspectSocket(ctx context.Context, creati
 			return errors.New("Windows ALE endpoint changed its bound family, protocol, or local tuple")
 		}
 		var socketErr error
-		err = raw.Control(func(handle uintptr) {
+		// The returned handle is the exact descriptor on which the broker
+		// performed Bind and interface selection. Winsock's pre-bind original
+		// can retain provider-local unbound state even while its independent ALE
+		// endpoint reports the same bound kernel socket. Read provider tuples
+		// from the bound owner; retain both endpoint IDs as mandatory authority.
+		err = otherRaw.Control(func(handle uintptr) {
 			address, readErr := syscall.Getsockname(syscall.Handle(handle))
 			if readErr != nil {
 				socketErr = readErr
@@ -574,7 +579,7 @@ func (p *DesktopWindowsSocketIdentity) InspectSocket(ctx context.Context, creati
 		record.endpoint = endpoint
 		p.observed.Store(time.Now().UnixMilli())
 		resultMu.Lock()
-		result = DesktopWindowsSocketInspection{EndpointID: endpoint, TokenModifiedID: properties.TokenModifiedID, Family: family, Protocol: protocol, Local: local, Remote: remote, AppID: appID, Raw: raw}
+		result = DesktopWindowsSocketInspection{EndpointID: endpoint, TokenModifiedID: properties.TokenModifiedID, Family: family, Protocol: protocol, Local: local, Remote: remote, AppID: appID, Raw: otherRaw}
 		resultMu.Unlock()
 		return nil
 	})

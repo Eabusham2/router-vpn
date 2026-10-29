@@ -265,6 +265,34 @@ func desktopWindowsIdentityTestDiagnoseALE(t *testing.T, phase string, p *Deskto
 		// Ephemeral LUIDs and hashes distinguish the actual kernel field that
 		// disagrees; no SID bytes, password, account name, or local path is logged.
 		t.Logf("ALE identity diagnostic phase=%s endpoint=%x kernel_modified=%x captured_modified=%x ordinary_modified=%x ordinary_sid_differs=%t app_matches=%t app_bytes=%d/%d app_sha256=%x/%x protocol=%d local_port=%d", phase, endpoint, properties.TokenModifiedID, p.statistics.ModifiedID, processStatistics.ModifiedID, !bytes.Equal(processSID, p.sid), bytes.Equal(appID, p.appID), len(appID), len(p.appID), sha256.Sum256(appID), sha256.Sum256(p.appID), properties.Protocol, properties.LocalPort)
+		states := []struct {
+			name string
+			raw  syscall.RawConn
+		}{{"returned", raw}}
+		for _, record := range p.sockets {
+			if record.returned == socket && record.original != nil {
+				original, err := record.original.SyscallConn()
+				if err != nil {
+					return err
+				}
+				states = append(states, struct {
+					name string
+					raw  syscall.RawConn
+				}{"original", original})
+			}
+		}
+		for _, state := range states {
+			if err := state.raw.Control(func(handle uintptr) {
+				local, localErr := syscall.Getsockname(syscall.Handle(handle))
+				peer, peerErr := syscall.Getpeername(syscall.Handle(handle))
+				var localCode, peerCode syscall.Errno
+				_ = errors.As(localErr, &localCode)
+				_ = errors.As(peerErr, &peerCode)
+				t.Logf("Winsock bind diagnostic phase=%s handle=%s getsockname_errno=%d getpeername_errno=%d local=%v peer=%v", phase, state.name, localCode, peerCode, local, peer)
+			}); err != nil {
+				return err
+			}
+		}
 		return nil
 	}); err != nil {
 		t.Logf("ALE identity diagnostic phase=%s unavailable: %v", phase, err)
@@ -335,9 +363,9 @@ func TestDesktopSocketWindowsIdentityBoundKernelEndpoints(t *testing.T) {
 				}
 				desktopWindowsIdentityTestDiagnoseALE(t, "before-bind", p, result.Native)
 				_, bound := desktopWindowsIdentityTestBind(t, result.Native, creation.Binding.LocalAddress)
+				desktopWindowsIdentityTestDiagnoseALE(t, "after-bind", p, result.Native)
 				inspection, err := p.InspectSocket(p.ctx, creation)
 				if err != nil {
-					desktopWindowsIdentityTestDiagnoseALE(t, "after-bind", p, result.Native)
 					t.Fatal("actual post-bind ALE endpoint/token proof", err)
 				}
 				protocol, nativeFamily := uint8(syscall.IPPROTO_TCP), syscall.AF_INET6
@@ -350,10 +378,24 @@ func TestDesktopSocketWindowsIdentityBoundKernelEndpoints(t *testing.T) {
 				if inspection.EndpointID == 0 || inspection.TokenModifiedID != p.statistics.ModifiedID || inspection.Local != bound || inspection.Remote.Port() != 0 || !inspection.Remote.Addr().IsUnspecified() || inspection.Protocol != protocol || inspection.Family != nativeFamily || !bytes.Equal(inspection.AppID, p.appID) {
 					t.Fatal("ALE proof failed to match actual isolated token and complete tuple", inspection)
 				}
-				retained, err := desktopWindowsALEEndpoint(inspection.Raw)
+				var retained uint64
+				err = p.call(p.ctx, false, func() error {
+					original, err := p.sockets[creation.SocketID].original.SyscallConn()
+					if err != nil {
+						return err
+					}
+					retained, err = desktopWindowsALEEndpoint(original)
+					return err
+				})
 				transferred, otherErr := desktopWindowsALEEndpoint(raw)
-				if err != nil || otherErr != nil || retained != inspection.EndpointID || transferred != retained {
+				boundHandle, boundErr := desktopWindowsALEEndpoint(inspection.Raw)
+				if err != nil || otherErr != nil || boundErr != nil || retained != inspection.EndpointID || transferred != retained || boundHandle != retained {
 					t.Fatal("socket duplication replaced the original ALE endpoint", err, otherErr)
+				}
+				returnedHandle, returnedErr := desktopWindowsRawHandle(raw)
+				inspectionHandle, inspectionErr := desktopWindowsRawHandle(inspection.Raw)
+				if returnedErr != nil || inspectionErr != nil || returnedHandle != inspectionHandle {
+					t.Fatal("interface readback did not retain the exact bound transferred descriptor", returnedErr, inspectionErr)
 				}
 			})
 		}
