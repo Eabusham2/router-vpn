@@ -1141,7 +1141,7 @@ func TestDesktopDarwinGuardianKernelStaleCaptureAndReplacement(t *testing.T) {
 }
 
 func TestDesktopDarwinGuardianChannelFragmentsAndDescriptorClosure(t *testing.T) {
-	for _, fault := range []string{"valid", "wrong-pid", "late-rights", "two-rights", "unknown-field"} {
+	for _, fault := range []string{"valid", "idle-then-valid", "partial-header-timeout", "wrong-pid", "late-rights", "two-rights", "unknown-field"} {
 		t.Run(fault, func(t *testing.T) {
 			receiver, senderFile, err := desktopDarwinSocketPair()
 			if err != nil {
@@ -1155,6 +1155,19 @@ func TestDesktopDarwinGuardianChannelFragmentsAndDescriptorClosure(t *testing.T)
 			}
 			sender := senderConn.(*net.UnixConn)
 			defer sender.Close()
+			if fault == "idle-then-valid" {
+				if err := receiver.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+					t.Fatal(err)
+				}
+				var idle desktopDarwinRequest
+				file, err := desktopDarwinReceive(receiver, &idle, uint32(os.Getpid()), 0)
+				if file != nil {
+					file.Close()
+				}
+				if !errors.Is(err, desktopDarwinIdle) || file != nil || idle.Operation != "" {
+					t.Fatal("actual empty Darwin control retired its idle owner", err)
+				}
+			}
 			raw := []byte(`{"Operation":"probe"}`)
 			if fault == "unknown-field" {
 				raw = []byte(`{"Operation":"probe","foreign":true}`)
@@ -1182,6 +1195,11 @@ func TestDesktopDarwinGuardianChannelFragmentsAndDescriptorClosure(t *testing.T)
 				if fault == "two-rights" {
 					rights = syscall.UnixRights(int(duplicate.Fd()), int(duplicate.Fd()))
 				}
+				if fault == "partial-header-timeout" {
+					_, _, err := sender.WriteMsgUnix(header[:2], syscall.UnixRights(int(duplicate.Fd())), nil)
+					sent <- err
+					return
+				}
 				if _, _, err := sender.WriteMsgUnix(header, rights, nil); err != nil {
 					sent <- err
 					return
@@ -1206,12 +1224,15 @@ func TestDesktopDarwinGuardianChannelFragmentsAndDescriptorClosure(t *testing.T)
 			if file != nil {
 				file.Close()
 			}
-			if fault == "valid" {
+			if fault == "valid" || fault == "idle-then-valid" {
 				if readErr != nil || request.Operation != "probe" {
 					t.Fatal("valid fragmented control lost its peer", readErr)
 				}
 			} else if readErr == nil {
 				t.Fatal("invalid control frame accepted", fault)
+			}
+			if fault == "partial-header-timeout" && errors.Is(readErr, desktopDarwinIdle) {
+				t.Fatal("partially received Darwin frame was mistaken for an idle tick")
 			}
 			// The receiver may reject the header before the sender writes the
 			// body. Closing the stream also retires queued SCM_RIGHTS records.

@@ -17,6 +17,87 @@ import (
 	"time"
 )
 
+func TestDesktopSocketIdleReceiveKeepsPartialFramesDistinct(t *testing.T) {
+	deadline := &net.OpError{Op: "read", Net: "unix", Err: os.ErrDeadlineExceeded}
+	for _, test := range []struct {
+		name                string
+		n, ancillary, flags int
+		err                 error
+		idle                bool
+	}{
+		{"poll-zero", 0, 0, 0, deadline, true},
+		{"syscall-negative", -1, 0, 0, deadline, true},
+		{"invalid-negative", -2, 0, 0, deadline, false},
+		{"partial-data", 1, 0, 0, deadline, false},
+		{"ancillary", 0, 1, 0, deadline, false},
+		{"truncation", -1, 0, syscall.MSG_CTRUNC, deadline, false},
+		{"would-block", -1, 0, 0, syscall.EAGAIN, false},
+		{"closed", 0, 0, 0, net.ErrClosed, false},
+		{"eof", 0, 0, 0, io.EOF, false},
+		{"no-error", 0, 0, 0, nil, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := desktopSocketIdleReceive(test.n, test.ancillary, test.flags, test.err); got != test.idle {
+				t.Fatal("Unix control timeout lost its no-frame boundary", got, test.idle)
+			}
+		})
+	}
+}
+
+func TestDesktopSocketIdleReceivePreservesActualUnixStream(t *testing.T) {
+	pair, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, descriptor := range pair {
+		syscall.CloseOnExec(descriptor)
+	}
+	var sockets [2]*net.UnixConn
+	for index, descriptor := range pair {
+		file := os.NewFile(uintptr(descriptor), "owned-idle-control")
+		conn, err := net.FileConn(file)
+		file.Close()
+		if err != nil {
+			for _, socket := range sockets {
+				if socket != nil {
+					socket.Close()
+				}
+			}
+			if index == 0 {
+				syscall.Close(pair[1])
+			}
+			t.Fatal(err)
+		}
+		sockets[index] = conn.(*net.UnixConn)
+		defer sockets[index].Close()
+	}
+	receiver, sender := sockets[0], sockets[1]
+	if err := receiver.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	var data [4]byte
+	control := make([]byte, syscall.CmsgSpace(4))
+	n, ancillary, flags, _, err := receiver.ReadMsgUnix(data[:], control)
+	if !desktopSocketIdleReceive(n, ancillary, flags, err) {
+		t.Fatal("actual empty Unix stream was mistaken for a consumed frame", n, ancillary, flags, err)
+	}
+	if err := receiver.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if err := sender.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if count, err := sender.Write([]byte{7}); err != nil || count != 1 {
+		t.Fatal("captured Unix sender failed after the idle tick", count, err)
+	}
+	n, ancillary, flags, _, err = receiver.ReadMsgUnix(data[:], control)
+	// Linux returns its automatically supplied MSG_CMSG_CLOEXEC input flag
+	// after a successful read. Neither data nor control may be truncated.
+	if err != nil || n != 1 || data[0] != 7 || ancillary != 0 || flags&(syscall.MSG_CTRUNC|syscall.MSG_TRUNC) != 0 || desktopSocketIdleReceive(n, ancillary, flags, err) {
+		t.Fatal("idle handling discarded or retired the next actual frame byte", n, ancillary, flags, err)
+	}
+}
+
 // The socket and SCM_RIGHTS transfer are real. The privileged filter adapter
 // remains the explicit boundary doubled by desktopSocketPolicyFixture.
 type desktopSocketSourceFixture struct {

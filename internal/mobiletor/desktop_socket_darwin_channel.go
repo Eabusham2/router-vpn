@@ -120,8 +120,7 @@ func desktopDarwinReceive(channel *net.UnixConn, value any, pid, uid uint32) (fi
 	var header [4]byte
 	control := make([]byte, syscall.CmsgSpace(4*8))
 	n, oob, flags, _, err := channel.ReadMsgUnix(header[:], control)
-	var timed net.Error
-	if n == 0 && oob == 0 && errors.As(err, &timed) && timed.Timeout() {
+	if desktopSocketIdleReceive(n, oob, flags, err) {
 		return nil, desktopDarwinIdle
 	}
 	messages, parseErr := syscall.ParseSocketControlMessage(control[:oob])
