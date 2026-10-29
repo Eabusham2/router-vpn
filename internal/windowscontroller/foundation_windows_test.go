@@ -579,6 +579,7 @@ func TestWindowsControllerFoundationActualElevatedLaunch(t *testing.T) {
 		defer process.Close()
 	}
 	if err != nil || process == nil {
+		fixtureStableShellDiagnostics(t, image)
 		t.Fatal("actual ShellExecuteEx did not return its retained elevated process:", err)
 	}
 	defer func() {
@@ -609,6 +610,69 @@ func TestWindowsControllerFoundationActualElevatedLaunch(t *testing.T) {
 	}
 	if exit, err := process.Wait(ctx); err != nil || exit != 0 {
 		t.Fatal("actual elevated child exited without its expected lifetime acknowledgment:", err)
+	}
+}
+
+// Failure-only native diagnostics isolate the Shell's working-directory
+// parameter from the captured Volume GUID executable. Every variant keeps the
+// same held image and verifies any actual child before closing its private
+// lifetime pipe. No remappable DOS executable or unowned fallback is tried.
+func fixtureStableShellDiagnostics(t *testing.T, image *Image) {
+	t.Helper()
+	api, err := native()
+	if err != nil {
+		t.Log("stable Shell diagnostic could not load the native API:", err)
+		return
+	}
+	for _, variant := range []string{"no-directory", "system-directory"} {
+		func() {
+			pipe, err := NewPipe()
+			if err != nil {
+				t.Logf("stable Shell diagnostic %s pipe: %v", variant, err)
+				return
+			}
+			defer pipe.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			var instance uintptr
+			process, launchErr := launchElevated(ctx, image, fixtureArguments("hold", pipe, fixtureExecutable(t)), api, func(info *shellExecuteInfo) (bool, error) {
+				info.Directory = nil
+				var directory *uint16
+				if variant == "system-directory" {
+					directory, _ = syscall.UTF16PtrFromString(api.systemDirectory)
+					info.Directory = directory
+				}
+				ok, _, err := api.shellExecute.Call(uintptr(unsafe.Pointer(info)))
+				instance = uintptr(info.Instance)
+				runtime.KeepAlive(directory)
+				return ok != 0, err
+			})
+			if process == nil {
+				t.Logf("stable Shell diagnostic %s launch=%v instance=%d owned_process=false", variant, launchErr, instance)
+				return
+			}
+			defer process.Close()
+			defer func() {
+				_ = pipe.Close()
+				cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				if _, err := process.Wait(cleanup); err != nil {
+					t.Errorf("stable Shell diagnostic %s did not join its exact child: %v", variant, err)
+				}
+			}()
+			proofErr := pipe.Accept(ctx)
+			if proofErr == nil {
+				_, proofErr = pipe.ReadFrame(ctx)
+			}
+			if proofErr == nil {
+				var peer *Peer
+				peer, proofErr = pipe.VerifyPeer(process, image)
+				if peer != nil {
+					_ = peer.Process.Close()
+				}
+			}
+			t.Logf("stable Shell diagnostic %s launch=%v instance=%d owned_process=true exact_image_proof=%v", variant, launchErr, instance, proofErr)
+		}()
 	}
 }
 

@@ -141,15 +141,13 @@ func (p *Pipe) operation(ctx context.Context, requireConnected bool, start func(
 	overlapped := syscall.Overlapped{HEvent: event}
 	count, err := start(handle, &overlapped)
 	if !errors.Is(err, syscall.ERROR_IO_PENDING) {
-		if err == nil {
-			if err := ctx.Err(); err != nil {
-				return 0, err
-			}
-			select {
-			case <-p.closed:
-				return 0, ErrClosed
-			default:
-			}
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		select {
+		case <-p.closed:
+			return 0, ErrClosed
+		default:
 		}
 		return count, err
 	}
@@ -187,9 +185,10 @@ func (p *Pipe) operation(ctx context.Context, requireConnected bool, start func(
 	if interrupted != nil {
 		return 0, interrupted
 	}
-	if ok == 0 {
-		return 0, nativeError("joined pipe operation", callErr)
-	}
+	// Close may cancel the exact kernel request while this goroutine is in
+	// WaitForSingleObject. In that case the event wakes before the loop has
+	// sampled p.closed. Always join the kernel request first, then report the
+	// captured owner's revocation rather than an unrelated-looking raw 995.
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
@@ -197,6 +196,9 @@ func (p *Pipe) operation(ctx context.Context, requireConnected bool, start func(
 	case <-p.closed:
 		return 0, ErrClosed
 	default:
+	}
+	if ok == 0 {
+		return 0, nativeError("joined pipe operation", callErr)
 	}
 	return transferred, nil
 }
