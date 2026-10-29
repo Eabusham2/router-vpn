@@ -109,7 +109,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                 self.assertIn(ROOT/'deploy/test_desktop_linux_guardian.py', N.inputs())
                 physical = [args for args in calls if './routervpn/desktoppt' in args]
                 self.assertEqual(len(physical), 1)
-                self.assertIn('PhysicalFactory|LinuxPhysicalFactory', physical[0][physical[0].index('-run') + 1])
+                self.assertIn('PhysicalFactory|PhysicalTunnel|LinuxPhysicalFactory', physical[0][physical[0].index('-run') + 1])
 
 
 class NativeSetup(unittest.TestCase):
