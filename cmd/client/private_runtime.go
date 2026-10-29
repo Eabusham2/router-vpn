@@ -45,7 +45,7 @@ func privateRuntimeBase(root, category string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := ensurePrivateRuntimeDirectory(rootAbs); err != nil {
+	if err := preparePrivateRuntimeRoot(rootAbs); err != nil {
 		return "", fmt.Errorf("validate private client root: %w", err)
 	}
 	run := filepath.Join(rootAbs, "run")

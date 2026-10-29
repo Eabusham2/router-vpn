@@ -741,6 +741,10 @@ func TestMacOSOwnedControllerNativeAppKitClient(t *testing.T) {
 	if err = os.Chmod(installed, 0755); err != nil {
 		t.Fatal(err)
 	}
+	sharedRoot, err := os.Lstat(macOSOwnedControllerRoot)
+	if err != nil || sharedRoot.Mode().Perm() != 0755 {
+		t.Fatal("actual AppKit installation needs its captured ordinary-user traversal", err)
+	}
 	plist := `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleExecutable</key><string>RouterVPN</string><key>CFBundleIdentifier</key><string>com.routervpn.controller.nativefixture</string><key>CFBundlePackageType</key><string>APPL</string><key>CFBundleName</key><string>Router VPN Native Controller Fixture</string><key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict></dict></plist>`
 	if err = os.WriteFile(filepath.Join(app, "Info.plist"), []byte(plist), 0644); err != nil {
 		t.Fatal(err)
@@ -806,6 +810,9 @@ func TestMacOSOwnedControllerNativeAppKitClient(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "Actual native AppKit root peer, HTTP identity, bearer admission and joined exit: PASS") {
 		t.Fatal("native AppKit evidence missing", output.String())
+	}
+	if current, err := os.Lstat(macOSOwnedControllerRoot); err != nil || !os.SameFile(sharedRoot, current) || current.Mode() != sharedRoot.Mode() {
+		t.Fatal("actual connection preflight changed the native application's shared installation root", err)
 	}
 	if output, err := exec.Command("/bin/chmod", "+a", "everyone allow write", macOSOwnedControllerSocketDirectory).CombinedOutput(); err != nil {
 		t.Fatal("actual native socket-directory ACL fixture failed", err, string(output))
