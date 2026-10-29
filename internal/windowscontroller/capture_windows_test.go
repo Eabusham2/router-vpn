@@ -117,6 +117,11 @@ type fixtureDOSDrive struct {
 
 func newFixtureDOSDrive(t *testing.T, directory string) *fixtureDOSDrive {
 	t.Helper()
+	return newFixtureDOSDriveTarget(t, `\??\`+directory)
+}
+
+func newFixtureDOSDriveTarget(t *testing.T, target string) *fixtureDOSDrive {
+	t.Helper()
 	api, err := native()
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +159,7 @@ func newFixtureDOSDrive(t *testing.T, directory string) *fixtureDOSDrive {
 			}
 		}
 	})
-	if err := drive.replace(directory); err != nil {
+	if err := drive.replaceTarget(target); err != nil {
 		t.Fatal(err)
 	}
 	return drive
@@ -181,13 +186,16 @@ func (drive *fixtureDOSDrive) remove(target string) error {
 }
 
 func (drive *fixtureDOSDrive) replace(directory string) error {
+	return drive.replaceTarget(`\??\` + directory)
+}
+
+func (drive *fixtureDOSDrive) replaceTarget(target string) error {
 	if drive.target != "" {
 		if err := drive.remove(drive.target); err != nil {
 			return err
 		}
 		drive.owned[drive.target] = false
 	}
-	target := `\??\` + directory
 	name, _ := syscall.UTF16PtrFromString(drive.name)
 	value, _ := syscall.UTF16PtrFromString(target)
 	ok, _, callErr := drive.define.Call(0x1|0x8 /* RAW | NO_BROADCAST */, uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(value)))
@@ -206,12 +214,27 @@ func (drive *fixtureDOSDrive) replace(directory string) error {
 // A Shell-compatible spelling is useful only if its naming object is itself
 // retained, rather than checked once before UAC. This failure diagnostic tests
 // that possible authority using a newly owned unused drive only. It changes no
-// system drive, admits no process, and does not assume a symbolic-link handle
-// prevents removal/replacement: both the retained object and a fresh namespace
-// lookup are independently read after the attempted rebind.
-func fixtureRetainedDOSLinkDiagnostic(t *testing.T, first, second string) {
+// system drive and does not assume a symbolic-link handle prevents replacement:
+// both the retained object and a fresh namespace lookup are independently read.
+// An optional captured image adds a failure-only Shell control after those
+// proofs; every returned process stays owned through exact image/token proof
+// and joined pipe shutdown. The required production baseline is unchanged.
+func fixtureRetainedDOSLinkDiagnostic(t *testing.T, first, second string, captured ...*Image) {
 	t.Helper()
-	drive := newFixtureDOSDrive(t, first)
+	var image *Image
+	var drive *fixtureDOSDrive
+	if len(captured) == 1 && captured[0] != nil {
+		image = captured[0]
+		// Target only the retained local volume GUID, never another DOS drive.
+		path := image.Path()
+		if !strings.HasPrefix(path, volumeGUIDPrefix) {
+			t.Log("retained alias diagnostic has no captured volume")
+			return
+		}
+		drive = newFixtureDOSDriveTarget(t, `\??\`+strings.TrimPrefix(filepath.Dir(path), `\\?\`))
+	} else {
+		drive = newFixtureDOSDrive(t, first)
+	}
 	api, err := native()
 	if err != nil {
 		t.Log("retained DOS naming diagnostic native API:", err)
@@ -286,6 +309,75 @@ func fixtureRetainedDOSLinkDiagnostic(t *testing.T, first, second string) {
 	fresh, freshErr := drive.read(drive.name)
 	t.Logf("retained DOS naming diagnostic rebind=%v retained_same=%t retained_read=%v fresh_same=%t fresh_read=%v", rebindErr,
 		strings.EqualFold(after, before), afterErr, strings.EqualFold(fresh, before), freshErr)
+	if image == nil {
+		return
+	}
+	if rebindErr == nil || afterErr != nil || freshErr != nil || !strings.EqualFold(after, before) || !strings.EqualFold(fresh, before) {
+		t.Log("retained alias Shell diagnostic refused an unproved naming object")
+		return
+	}
+	// The held link must prevent a new same-name object, not just preserve an
+	// old orphaned target. Open the exact launch name only after the controlled
+	// rebind and require the retained native volume/file identity before Shell.
+	alias := drive.name + `\` + filepath.Base(image.Path())
+	nameFile, _ := syscall.UTF16PtrFromString(alias)
+	file, err := syscall.CreateFile(nameFile, syscall.GENERIC_READ, syscall.FILE_SHARE_READ, nil, syscall.OPEN_EXISTING, 0x00200000, 0)
+	if err != nil {
+		t.Log("retained alias Shell image could not be opened:", err)
+		return
+	}
+	defer syscall.CloseHandle(file)
+	var actual syscall.ByHandleFileInformation
+	if err := syscall.GetFileInformationByHandle(file, &actual); err != nil || actual.NumberOfLinks != 1 || actual.FileAttributes&(0x400|syscall.FILE_ATTRIBUTE_DIRECTORY) != 0 ||
+		actual.VolumeSerialNumber != image.identity.VolumeSerialNumber || actual.FileIndexHigh != image.identity.FileIndexHigh || actual.FileIndexLow != image.identity.FileIndexLow {
+		t.Log("retained alias Shell image did not match the captured actual file:", err)
+		return
+	}
+	pipe, err := NewPipe()
+	if err != nil {
+		t.Log("retained alias Shell pipe could not be owned:", err)
+		return
+	}
+	defer pipe.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	var instance uintptr
+	process, launchErr := launchElevated(ctx, image, fixtureArguments("hold", pipe, fixtureExecutable(t)), api, func(info *shellExecuteInfo) (bool, error) {
+		info.File, info.Directory = nameFile, nil
+		ok, _, err := api.shellExecute.Call(uintptr(unsafe.Pointer(info)))
+		instance = uintptr(info.Instance)
+		runtime.KeepAlive(nameFile)
+		return ok != 0, err
+	})
+	if process == nil {
+		t.Logf("retained alias Shell diagnostic launch=%v instance=%d owned_process=false", launchErr, instance)
+		return
+	}
+	defer process.Close()
+	defer func() {
+		_ = pipe.Close()
+		cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if _, err := process.Wait(cleanup); err != nil {
+			t.Error("retained alias Shell diagnostic did not join its actual child:", err)
+		}
+	}()
+	proofErr := pipe.Accept(ctx)
+	if proofErr == nil {
+		_, proofErr = pipe.ReadFrame(ctx)
+	}
+	if proofErr == nil {
+		var peer *Peer
+		peer, proofErr = pipe.VerifyPeer(process, image)
+		if peer != nil {
+			primary, err := process.Identity()
+			if err != nil || !primary.Primary || !primary.Elevated || !primary.Administrator || peer.Identity.SID != primary.SID {
+				proofErr = errors.Join(err, errors.New("retained alias Shell child has no exact elevated token"))
+			}
+			_ = peer.Process.Close()
+		}
+	}
+	t.Logf("retained alias Shell diagnostic launch=%v instance=%d owned_process=true exact_image_token_proof=%v", launchErr, instance, proofErr)
 }
 
 func TestWindowsControllerFoundationCapturedVolumeSurvivesDriveRebind(t *testing.T) {

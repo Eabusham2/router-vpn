@@ -581,6 +581,7 @@ func TestWindowsControllerFoundationActualElevatedLaunch(t *testing.T) {
 	}
 	if err != nil || process == nil {
 		fixtureStableShellDiagnostics(t, image)
+		fixtureRetainedDOSLinkDiagnostic(t, "", t.TempDir(), image)
 		t.Fatal("actual ShellExecuteEx did not return its retained elevated process:", err)
 	}
 	defer func() {
