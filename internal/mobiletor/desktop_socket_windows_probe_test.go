@@ -29,6 +29,9 @@ func desktopWindowsProbeTestScope(t *testing.T) []byte {
 }
 
 func TestDesktopSocketWindowsWFPProbeOrdinaryAbsence(t *testing.T) {
+	if !desktopWindowsProbeInOwnedWorker(t) {
+		return
+	}
 	scope := desktopWindowsProbeTestScope(t)
 	process := desktopWindowsProbeTestProcess(t)
 	reply, err := process.run(scope)
@@ -42,6 +45,9 @@ func TestDesktopSocketWindowsWFPProbeOrdinaryAbsence(t *testing.T) {
 }
 
 func TestDesktopSocketWindowsWFPProbeOrdinaryProtectedObjects(t *testing.T) {
+	if !desktopWindowsProbeInOwnedWorker(t) {
+		return
+	}
 	scope := desktopWindowsProbeTestScope(t)
 	process := desktopWindowsProbeTestProcess(t)
 	for _, kind := range []string{"session-lock", "baseline"} {

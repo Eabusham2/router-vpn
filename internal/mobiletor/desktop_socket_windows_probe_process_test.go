@@ -29,9 +29,9 @@ import (
 // process token. Only its new executable, result file and private desktop admit
 // that exact SID; no WFP, engine, sublayer, filter, existing account or unrelated
 // ACL changes. An explicit private desktop avoids any reliance on access to the
-// inherited window station/desktop. The actual primary-token process is created
-// with the documented CreateProcessAsUserW extended-startup boundary; no new
-// account rights or ambient process privileges are granted by this fixture.
+// inherited window station/desktop. The basic token process must inherit its
+// dedicated worker's exact retained Job at creation, independently checked
+// before ResumeThread. No new rights or ambient privileges are granted.
 type desktopWindowsProbeProcess struct {
 	identity                       *DesktopWindowsSocketIdentity
 	primary                        syscall.Token
@@ -39,6 +39,7 @@ type desktopWindowsProbeProcess struct {
 	desktopName                    string
 	station, desktop               syscall.Handle
 	api                            *desktopWindowsProbeProcessAPI
+	hold                           bool
 }
 
 type desktopWindowsProbeProcessAPI struct {
@@ -142,7 +143,7 @@ func desktopWindowsProbeProcessAPIs(identity *DesktopWindowsSocketIdentity) (*de
 		target **syscall.Proc
 	}{
 		{identity.api.logon.Dll, "DuplicateTokenEx", &api.duplicate},
-		{identity.api.logon.Dll, "CreateProcessAsUserW", &api.create},
+		{identity.api.logon.Dll, "CreateProcessWithTokenW", &api.create},
 		{identity.api.logon.Dll, "SetFileSecurityW", &api.fileSecurity},
 		{identity.api.processImage.Dll, "CreateJobObjectW", &api.createJob},
 		{identity.api.processImage.Dll, "SetInformationJobObject", &api.setJob},
@@ -417,52 +418,25 @@ func (f *desktopWindowsProbeProcess) run(scope []byte) (reply desktopWindowsProb
 	if err := f.allowOwnedFile(report.Name(), principal, "GW"); err != nil {
 		return reply, err
 	}
-	jobValue, _, callErr := f.api.createJob.Call(0, 0)
-	if jobValue == 0 {
-		return reply, desktopWindowsCallFailure("probe child job", callErr)
-	}
-	job := syscall.Handle(jobValue)
-	defer syscall.CloseHandle(job)
-	limits := desktopWindowsProbeJobLimits{Flags: 0x2008, ActiveProcesses: 1}
-	if unsafe.Sizeof(limits) != 144 {
-		return reply, errors.New("probe child job ABI changed")
-	}
-	ok, _, callErr := f.api.setJob.Call(jobValue, 9, uintptr(unsafe.Pointer(&limits)), unsafe.Sizeof(limits))
-	if ok == 0 {
-		return reply, desktopWindowsCallFailure("probe child job limits", callErr)
-	}
-	var attributesSize uintptr
-	ok, _, callErr = f.api.initializeAttributes.Call(0, 1, 0, uintptr(unsafe.Pointer(&attributesSize)))
-	if ok != 0 || !errors.Is(callErr, syscall.ERROR_INSUFFICIENT_BUFFER) || attributesSize < 8 || attributesSize > 65536 {
-		return reply, errors.Join(callErr, errors.New("probe child attribute-list size is unproved"))
-	}
-	attributes := make([]uintptr, (attributesSize+unsafe.Sizeof(uintptr(0))-1)/unsafe.Sizeof(uintptr(0)))
-	attributePointer := unsafe.Pointer(&attributes[0])
-	ok, _, callErr = f.api.initializeAttributes.Call(uintptr(attributePointer), 1, 0, uintptr(unsafe.Pointer(&attributesSize)))
-	if ok == 0 {
-		return reply, desktopWindowsCallFailure("probe child attribute-list initialization", callErr)
-	}
-	jobs := []syscall.Handle{job}
-	defer func() {
-		f.api.deleteAttributes.Call(uintptr(attributePointer))
-		runtime.KeepAlive(jobs)
-		runtime.KeepAlive(attributes)
-	}()
-	ok, _, callErr = f.api.updateAttributes.Call(uintptr(attributePointer), 0, 0x0002000d /* PROC_THREAD_ATTRIBUTE_JOB_LIST */, uintptr(unsafe.Pointer(&jobs[0])), unsafe.Sizeof(job), 0, 0)
-	if ok == 0 {
-		return reply, desktopWindowsCallFailure("probe child atomic job attribute", callErr)
+	job := desktopWindowsProbeWorkerJob
+	if job == 0 || os.Getenv(desktopWindowsProbeWorkerEnvironment) == "" {
+		return reply, errors.New("ordinary probe child requires its exact dedicated Job owner")
 	}
 	application, _ := syscall.UTF16PtrFromString(f.executable)
 	command, _ := syscall.UTF16FromString(syscall.EscapeArg(f.executable) + " -test.run=^TestDesktopWindowsProtectionProbeProcess$ -test.count=1 -test.timeout=10s")
 	directory, _ := syscall.UTF16PtrFromString(f.directory)
 	var environment []uint16
-	for _, entry := range []string{
+	entries := []string{
 		"ROUTERVPN_WFP_PROBE_REPLY=" + report.Name(),
 		"ROUTERVPN_WFP_PROBE_SCOPE=" + base64.StdEncoding.EncodeToString(scope),
 		"ROUTERVPN_WFP_PROBE_SID=" + f.sidHash,
 		"SystemRoot=" + os.Getenv("SystemRoot"),
 		"TEMP=" + f.directory, "TMP=" + f.directory,
-	} {
+	}
+	if f.hold {
+		entries = append(entries, "ROUTERVPN_WFP_PROBE_HOLD=1")
+	}
+	for _, entry := range entries {
 		encoded, err := syscall.UTF16FromString(entry)
 		if err != nil {
 			return reply, err
@@ -477,15 +451,16 @@ func (f *desktopWindowsProbeProcess) run(scope []byte) (reply desktopWindowsProb
 	if err != nil {
 		return reply, err
 	}
-	startup := desktopWindowsProbeStartup{Attributes: attributePointer}
-	startup.Info.Cb = uint32(unsafe.Sizeof(startup))
+	startup := desktopWindowsProbeStartup{}
+	startup.Info.Cb = uint32(unsafe.Sizeof(startup.Info))
 	startup.Info.Desktop = desktop
 	var process syscall.ProcessInformation
 	// No inherited handles, no loaded profile, and no alternate-network-only logon:
 	// the actual child primary token must be the isolated user on every thread.
-	// Its kill-on-close Job is assigned as part of creation, before the parent
-	// can observe a handle. There is no suspended-but-unowned assignment gap.
-	ok, callErr = f.createChild(application, &command[0], 0x08080404 /* no window, extended startup, Unicode, suspended */, &environment[0], directory, &startup, &process)
+	// Job inheritance is a required kernel observation, never metadata or an
+	// assumed property of the alternate-token API. A child outside the exact
+	// retained owner is terminated without ever resuming it.
+	ok, callErr := f.createChild(application, &command[0], 0x08000404 /* no window, Unicode, suspended */, &environment[0], directory, &startup, &process)
 	runtime.KeepAlive(application)
 	runtime.KeepAlive(command)
 	runtime.KeepAlive(environment)
@@ -508,7 +483,7 @@ func (f *desktopWindowsProbeProcess) run(scope []byte) (reply desktopWindowsProb
 		defer syscall.CloseHandle(process.Thread)
 	}
 	if ok == 0 || process.Process == 0 || process.Thread == 0 {
-		creationErr := desktopWindowsCallFailure("ordinary probe child CreateProcessAsUserW", callErr)
+		creationErr := desktopWindowsCallFailure("ordinary probe child basic CreateProcessWithTokenW", callErr)
 		if errors.Is(callErr, syscall.Errno(87)) && process.Process == 0 && process.Thread == 0 {
 			// Diagnose this exact rejected parameter boundary without allowing a
 			// child to execute outside the creation-time Job. All controls target
@@ -518,9 +493,9 @@ func (f *desktopWindowsProbeProcess) run(scope []byte) (reply desktopWindowsProb
 		return reply, creationErr
 	}
 	var inJob uint32
-	ok, _, callErr = f.api.inJob.Call(uintptr(process.Process), jobValue, uintptr(unsafe.Pointer(&inJob)))
+	ok, _, callErr = f.api.inJob.Call(uintptr(process.Process), uintptr(job), uintptr(unsafe.Pointer(&inJob)))
 	if ok == 0 || inJob != 1 {
-		return reply, desktopWindowsCallFailure("probe child atomic job membership readback", callErr)
+		return reply, errors.Join(callErr, errors.New("ordinary probe child did not inherit its exact creation-time worker Job"))
 	}
 	var token syscall.Token
 	if err := syscall.OpenProcessToken(process.Process, syscall.TOKEN_QUERY, &token); err != nil {
@@ -534,6 +509,12 @@ func (f *desktopWindowsProbeProcess) run(scope []byte) (reply desktopWindowsProb
 	resumed, _, callErr := f.api.resume.Call(uintptr(process.Thread))
 	if resumed != 1 {
 		return reply, desktopWindowsCallFailure("probe child resume", callErr)
+	}
+	if f.hold {
+		// Public PID only, after independent token and both creation/ownership
+		// boundaries. The outer test retains a real process handle and checks
+		// membership of its separate outer Job before exercising owner death.
+		fmt.Fprintln(os.Stdout, "PROBE_OWNED_CHILD", process.ProcessId)
 	}
 	for {
 		state, err := syscall.WaitForSingleObject(process.Process, 20)
@@ -568,12 +549,11 @@ func (f *desktopWindowsProbeProcess) run(scope []byte) (reply desktopWindowsProb
 }
 
 func (f *desktopWindowsProbeProcess) createChild(application, command *uint16, flags uintptr, environment, directory *uint16, startup *desktopWindowsProbeStartup, child *syscall.ProcessInformation) (uintptr, error) {
-	// InheritHandles is false. STARTUPINFOEX owns the Job-list attribute at
-	// creation; there is no unowned suspended-child assignment fallback.
-	// Windows may enable only privileges already assigned to the caller for
-	// this documented API call. ERROR_PRIVILEGE_NOT_HELD remains a gate failure.
-	ok, _, callErr := f.api.create.Call(uintptr(f.primary), uintptr(unsafe.Pointer(application)), uintptr(unsafe.Pointer(command)),
-		0, 0, 0, flags, uintptr(unsafe.Pointer(environment)), uintptr(unsafe.Pointer(directory)), uintptr(unsafe.Pointer(startup)), uintptr(unsafe.Pointer(child)))
+	// Basic WithToken uses the already captured ordinary primary token and the
+	// caller's existing SeImpersonate authority. A suspended child must prove
+	// inherited membership; this function never assigns it to a Job afterward.
+	ok, _, callErr := f.api.create.Call(uintptr(f.primary), 0, uintptr(unsafe.Pointer(application)), uintptr(unsafe.Pointer(command)),
+		flags, uintptr(unsafe.Pointer(environment)), uintptr(unsafe.Pointer(directory)), uintptr(unsafe.Pointer(startup)), uintptr(unsafe.Pointer(child)))
 	return ok, callErr
 }
 
@@ -702,6 +682,12 @@ func TestDesktopWindowsProtectionProbeProcess(t *testing.T) {
 		}
 		if _, err := hex.DecodeString(expected); err != nil {
 			return err
+		}
+		if os.Getenv("ROUTERVPN_WFP_PROBE_HOLD") == "1" {
+			// This child is already independently non-admin and owned before it
+			// runs. Only the lifetime test selects this bounded inert workload.
+			time.Sleep(25 * time.Second)
+			return errors.New("held probe child outlived its expected owner retirement")
 		}
 		engine, err := desktopWFPOpen(false)
 		if err != nil {

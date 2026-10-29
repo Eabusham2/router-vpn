@@ -36,6 +36,7 @@ REQUIRED = (
     "TestDesktopSocketWindowsWFPProbeOrdinaryAbsence",
     "TestDesktopSocketWindowsWFPProbeOrdinaryProtectedObjects",
     "TestDesktopSocketWindowsWFPProbeCancelledGate",
+    "TestDesktopSocketWindowsWFPProbeWorkerLifetime",
 )
 
 
@@ -45,6 +46,7 @@ def mutants(target):
     policy = (target / "desktop_socket_windows_policy.go").read_text(encoding="utf-8")
     status = (target / "desktop_socket_windows_status.go").read_text(encoding="utf-8")
     probe = (target / "desktop_socket_windows_probe.go").read_text(encoding="utf-8")
+    worker = (target / "desktop_socket_windows_probe_worker_test.go").read_text(encoding="utf-8")
     return (
         ("extra-filter", "desktop_socket_windows_wfp.go", REQUIRED[4],
          "full WFP readback accepted an extra broader permit",
@@ -99,6 +101,11 @@ def mutants(target):
          IDENTITY.replace_once(probe,
                                '[]string{"session-lock", "baseline", "session-lock"}',
                                '[]string{"baseline", "baseline"}')),
+        ("probe-worker-owner-death", "desktop_socket_windows_probe_worker_test.go", REQUIRED[15],
+         "probe worker death left its ordinary child alive",
+         IDENTITY.replace_once(worker,
+                               'desktopWindowsProbeJobLimits{Flags: 0x2008, ActiveProcesses: count}',
+                               'desktopWindowsProbeJobLimits{Flags: 0x0008, ActiveProcesses: count}')),
     )
 
 
@@ -113,6 +120,7 @@ def execute(source=ROOT, go="go", *, env=None):
                  "desktop_socket_windows_status.go",
                  "desktop_socket_windows_probe.go", "desktop_socket_windows_probe_test.go",
                  "desktop_socket_windows_probe_process_test.go",
+                 "desktop_socket_windows_probe_worker_test.go",
                  "desktop_socket_windows_tunnel.go", "desktop_socket_windows_wfp_test.go"):
         if name not in before:
             raise ValueError("WFP gate lost its shipping source closure: " + name)
@@ -137,6 +145,9 @@ def execute(source=ROOT, go="go", *, env=None):
         for kind in ("session-lock", "baseline"):
             if "--- PASS: " + REQUIRED[13] + "/" + kind + " (" not in output:
                 raise ValueError("WFP probe omitted an actual non-admin protected-object query: " + kind)
+        for mode in ("worker-death", "outer-owner-close"):
+            if "--- PASS: " + REQUIRED[15] + "/" + mode + " (" not in output:
+                raise ValueError("WFP probe omitted actual nested Job cleanup: " + mode)
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("WFP baseline binary changed during execution")
         for label, filename, test, witness, replacement in candidates:
@@ -157,7 +168,7 @@ def execute(source=ROOT, go="go", *, env=None):
             print("Rejected production WFP mutant:", label, flush=True)
         if IDENTITY.checked_sources(source)[3] != before:
             raise ValueError("WFP source changed during its actual native gate")
-    print("Owned Windows WFP baseline passed fifteen actual kernel/lifecycle cases, distinct non-admin process absence/ACCESS_DENIED proofs, and eleven production negative controls; socket traffic and native admission remain separately gated.", flush=True)
+    print("Owned Windows WFP baseline passed sixteen actual kernel/lifecycle cases, distinct non-admin process absence/ACCESS_DENIED proofs, eleven production negative controls and a broken Job-owner fixture control; socket traffic and native admission remain separately gated.", flush=True)
 
 
 if __name__ == "__main__":
