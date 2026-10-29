@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"net"
@@ -224,6 +225,49 @@ func desktopWindowsIdentityTestAccount(t *testing.T, p *DesktopWindowsSocketIden
 	return account
 }
 
+func desktopWindowsIdentityTestDiagnoseALE(t *testing.T, phase string, p *DesktopWindowsSocketIdentity, socket DesktopSocketNative) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := p.call(ctx, true, func() error {
+		raw, err := socket.SyscallConn()
+		if err != nil {
+			return err
+		}
+		endpoint, err := desktopWindowsALEEndpoint(raw)
+		if err != nil {
+			return err
+		}
+		var properties *desktopWindowsALEProperties
+		status, _, _ := p.api.endpoint.Call(uintptr(p.engine), uintptr(endpoint), uintptr(unsafe.Pointer(&properties)))
+		if properties != nil {
+			defer p.api.freeWFP.Call(uintptr(unsafe.Pointer(&properties)))
+		}
+		if status != 0 || properties == nil {
+			return desktopWindowsCallFailure("diagnostic ALE properties", syscall.Errno(status))
+		}
+		process, err := syscall.OpenCurrentProcessToken()
+		if err != nil {
+			return err
+		}
+		processSID, processStatistics, tokenErr := desktopWindowsTokenIdentity(process)
+		closeErr := process.Close()
+		if tokenErr != nil || closeErr != nil {
+			return errors.Join(tokenErr, closeErr)
+		}
+		var appID []byte
+		if properties.AppID.Data != nil && properties.AppID.Size <= 65536 {
+			appID = append([]byte(nil), unsafe.Slice(properties.AppID.Data, int(properties.AppID.Size))...)
+		}
+		// Ephemeral LUIDs and hashes distinguish the actual kernel field that
+		// disagrees; no SID bytes, password, account name, or local path is logged.
+		t.Logf("ALE identity diagnostic phase=%s endpoint=%x kernel_modified=%x captured_modified=%x ordinary_modified=%x ordinary_sid_differs=%t app_matches=%t app_bytes=%d/%d app_sha256=%x/%x protocol=%d local_port=%d", phase, endpoint, properties.TokenModifiedID, p.statistics.ModifiedID, processStatistics.ModifiedID, !bytes.Equal(processSID, p.sid), bytes.Equal(appID, p.appID), len(appID), len(p.appID), sha256.Sum256(appID), sha256.Sum256(p.appID), properties.Protocol, properties.LocalPort)
+		return nil
+	}); err != nil {
+		t.Logf("ALE identity diagnostic phase=%s unavailable: %v", phase, err)
+	}
+}
+
 func TestDesktopSocketWindowsIdentitySDKLayout(t *testing.T) {
 	var properties desktopWindowsALEProperties
 	if unsafe.Sizeof(properties) != 104 || unsafe.Offsetof(properties.Protocol) != 44 || unsafe.Offsetof(properties.LocalPort) != 46 || unsafe.Offsetof(properties.RemotePort) != 48 || unsafe.Offsetof(properties.TokenModifiedID) != 56 || unsafe.Offsetof(properties.AppID) != 88 {
@@ -286,9 +330,11 @@ func TestDesktopSocketWindowsIdentityBoundKernelEndpoints(t *testing.T) {
 				if _, err := p.InspectSocket(p.ctx, creation); err == nil {
 					t.Fatal("unbound socket acquired a post-bind ALE proof")
 				}
+				desktopWindowsIdentityTestDiagnoseALE(t, "before-bind", p, result.Native)
 				_, bound := desktopWindowsIdentityTestBind(t, result.Native, creation.Binding.LocalAddress)
 				inspection, err := p.InspectSocket(p.ctx, creation)
 				if err != nil {
+					desktopWindowsIdentityTestDiagnoseALE(t, "after-bind", p, result.Native)
 					t.Fatal("actual post-bind ALE endpoint/token proof", err)
 				}
 				protocol, nativeFamily := uint8(syscall.IPPROTO_TCP), syscall.AF_INET6
