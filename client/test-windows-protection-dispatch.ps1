@@ -103,18 +103,41 @@ func main(){
     $arguments=@('-NoLogo','-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',('"'+(Join-Path $client 'windows-kill-switch.ps1')+'"'),
       '-Action',$case.action,'-Root',('"'+$caseRoot+'"'),'-StateRoot',('"'+$caseRoot+'"'),'-Endpoint','203.0.113.4','-HomeLANAccess','false','-TunnelAlias','owned-test')
     if($case['policy']){$arguments+=@('-Policy',$case['policy'])}
-    $child=Start-Process -FilePath $shell -ArgumentList $arguments -RedirectStandardOutput $output -RedirectStandardError $diagnostics -PassThru
+    # Retain the handle returned by Process.Start itself. Windows PowerShell's
+    # redirected Start-Process -PassThru can lose ExitCode after WaitForExit;
+    # a missing code must never be interpreted as success or expected denial.
+    $child=[Diagnostics.Process]::new()
+    $child.StartInfo=[Diagnostics.ProcessStartInfo]::new()
+    $child.StartInfo.FileName=$shell
+    $child.StartInfo.Arguments=$arguments -join ' '
+    $child.StartInfo.UseShellExecute=$false
+    $child.StartInfo.CreateNoWindow=$true
+    $child.StartInfo.RedirectStandardOutput=$true
+    $child.StartInfo.RedirectStandardError=$true
+    $started=$false
     try{
+      $started=$child.Start()
+      if(-not $started){throw ('Real protection dispatcher did not start: '+$case.name)}
+      $stdout=$child.StandardOutput.ReadToEndAsync()
+      $stderr=$child.StandardError.ReadToEndAsync()
       if(-not $child.WaitForExit(45000)){$child.Kill();$child.WaitForExit();throw ('Real protection dispatcher exceeded its bound: '+$case.name)}
-      $text=[IO.File]::ReadAllText($output)+[IO.File]::ReadAllText($diagnostics)
-      Check (($child.ExitCode -ne 0) -eq [bool]$case['fail']) ('Unexpected complete protection dispatch result for '+$case.name+': '+$text)
+      $child.WaitForExit()
+      $outText=$stdout.GetAwaiter().GetResult();$errText=$stderr.GetAwaiter().GetResult()
+      [IO.File]::WriteAllText($output,$outText);[IO.File]::WriteAllText($diagnostics,$errText)
+      $text=$outText+$errText
+      $exitCode=$child.ExitCode
+      Check ($null -ne $exitCode) ('Real protection dispatcher omitted its exit code: '+$case.name)
+      Check (($exitCode -ne 0) -eq [bool]$case['fail']) ('Unexpected complete protection dispatch result for '+$case.name+' (exit '+$exitCode+'): '+$text)
       $log=Join-Path $caseRoot 'native.log'
       $operations=if(Test-Path -LiteralPath $log){[IO.File]::ReadAllLines($log)-join ','}else{''}
       Check ($operations -ceq $case.operations) ('Protection dispatcher changed owner or operation for '+$case.name+': '+$operations)
       Check (-not (Test-Path -LiteralPath (Join-Path $caseRoot 'mutation.log'))) ('Native protection reached a global firewall mutation for '+$case.name)
       if($case['message']){Check ($text.Contains($case['message'])) ('Legacy rejection boundary changed: '+$text)}
       if($case['legacyState']){Check ([IO.File]::ReadAllText((Join-Path $caseRoot 'windows-state.json')) -ceq '{broken legacy rollback') 'Native dispatch discarded legacy recovery authority.'}
-    }finally{$child.Dispose()}
+    }finally{
+      if($started -and -not $child.HasExited){$child.Kill();$child.WaitForExit()}
+      $child.Dispose()
+    }
   }
   Write-Output ("PASS {0} full Windows protection dispatcher cases and {1} assertions; real child utility, Portable package paths, Always preservation, explicit Off, denial/mixed-owner retention and no global profile mutation." -f $cases.Count,$script:checks)
 }finally{
