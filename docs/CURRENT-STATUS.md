@@ -9,8 +9,32 @@ completion of the current commit's packages, physical devices or deployment.
 
 The latest resumed check started at `f87b7809`, preserving the source already
 316 commits beyond historical release `745b3e41`. Current repairs and exact
-verified pushes through `d6da0f6e` are recorded in the
-[continuation evidence ledger](CONTINUATION-EVIDENCE-2026-10-28.md).
+verified pushes through `448ca1c5` are recorded in the
+[October 29 evidence ledger](CONTINUATION-EVIDENCE-2026-10-29.md), with
+the preceding work retained in the
+[October 28 ledger](CONTINUATION-EVIDENCE-2026-10-28.md).
+
+Private Router Windows firewall handoff now retains the compiled addresses,
+ports and transports through single-node and Local/Server launches, environment
+replacement, MTU restoration and Speed Lab (`d9a099d6`). Missing or mixed
+native owners cannot fall back to an all-port exception. Ordinary/fixed WFP
+migration and other external-node paths remain separate work.
+
+The Windows controller process/image/private-pipe foundation is published
+(`e76f418a`); actual native execution and installed/Portable integration are
+pending. The Windows prospective Box/bootstrap gate compiles on both native
+architectures and reaches the selected real DNS request, which still fails.
+The isolated ordinary-user probe now uses CreateProcessAsUserW after the prior
+API rejected extended startup before child creation (`b5fa9f34`); its actual
+native result remains required. Public dynamic Windows admission stays closed.
+
+The macOS Cgo header blocker is repaired. Actual Intel execution then exposed
+an overly strict group-equals-wheel check before kernel cases; `f6f77985`
+preserves root, mode, ACL and link authority while allowing a non-writable
+non-wheel group. Both architectures must execute the final kernel and
+installed-controller gates. The detailed observations below are historical
+where superseded by this continuation; no public Darwin admission or completed
+release is inferred from these source fixes.
 
 Private-Router Tor Local/Server/Compare is now implemented across desktop,
 Android and Apple. Both comparison operands follow the captured candidate,
