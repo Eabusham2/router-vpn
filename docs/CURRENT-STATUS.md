@@ -9,7 +9,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 The latest resumed check started at `f87b7809`, preserving the source already
 316 commits beyond historical release `745b3e41`. Current repairs and exact
-verified pushes through `60d9ca2a` are recorded in the
+verified pushes through `5168ea53` are recorded in the
 [continuation evidence ledger](CONTINUATION-EVIDENCE-2026-10-28.md).
 
 Private-Router Tor Local/Server/Compare is now implemented across desktop,
@@ -44,11 +44,28 @@ namespace privilege groups, GTK ownership tests, 24 installation/rollback
 tests and their negative controls pass. Interactive authorization, reboot and
 physical networking still require their separate acceptance evidence.
 
+The installed macOS application now has an authenticated supervisor/controller
+lifetime and transactional installer (`58f92912`). Its unprivileged AppKit
+client checks kernel peer identity and a fresh controller challenge, and all
+six HTTP paths retain the same captured authority. Private node data survives
+upgrades; active owners block replacement, and failed promotion rolls back.
+Native ACL checks reject mutation grants hidden from Unix mode bits and extra
+read grants on private state. Fifteen installer cases, six installation defect
+controls, the Swift transport/ownership suites and the isolated six-group Linux
+privilege regression pass. Both Darwin architectures cross-compile. The actual
+Intel and Apple Silicon ownership/ACL jobs are mandatory and remain separate
+from these local results; see [macOS installation](MACOS-NATIVE-INSTALL.md).
+
 Windows/macOS dynamic Direct strict-protection factories remain unfinished.
-The Windows WFP enforcement implementation passes its native contract, but
-the shipping Tor wrapper still uses its older firewall adapter; wiring and
-isolated dynamic socket identity remain source work. The macOS installed
-privileged launcher also needs an authenticated user/child lifetime.
+Windows now preserves the actual Winsock endpoint and has a fresh isolated
+account/token source (`1e4a35f8`, `06124358`). Actual Windows execution proved
+token preservation across bind, then exposed an executable path alias mismatch;
+`a3ed9c89` normalizes the held actual process image without relaxing identity
+comparison. The mandatory copied-source gate still has to pass, and the
+shipping WFP adapter/factory remains source work. Native tunnel permissions
+now follow actual interface retirement/replacement across MTU changes
+(`5168ea53`), including rollback. Neither this interface nor a successful
+cross-compile enables unfinished platform admission.
 
 At `f6f2fc14`, the complete Windows native contract passed. At `60d9ca2a`,
 28 workflows were found: eight successful, with the rest pending, queued or
@@ -56,6 +73,11 @@ running; the authoritative release run `40794768686` was pending. No
 current all-platform release, private deployment, signing operation or physical
 acceptance is claimed. Broader requested graph parity and all applicable live
 release requirements remain in scope.
+
+The newer `58f92912` macOS native installer contract passed. Its early native
+ownership jobs in run `40798765946` were queued at the recorded read. Other
+native and authoritative workflows are still being checked at their actual
+commit identities; older failures and queued jobs are not current successes.
 
 ## October 28 source checkpoint (historical)
 
