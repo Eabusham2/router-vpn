@@ -107,10 +107,14 @@ func (p *desktopWindowsNativeFixture) Grant(ctx context.Context, q DesktopSocket
 	p.mu.Lock()
 	pair := p.sockets[q.SocketID]
 	p.mu.Unlock()
-	if pair[0] == nil {
+	if pair[0] == nil || pair[1] == nil {
 		return DesktopSocketReceipt{}, errors.New("grant has no retained creator endpoint")
 	}
-	raw, err := pair[0].SyscallConn()
+	// Winsock providers cache bind state per duplicated handle. The returned
+	// handle is the one actually bound by the broker; the pre-bind original
+	// remains retained for endpoint/port lifetime and cannot supply this local
+	// name readback. The separate identity suite proves their ALE equality.
+	raw, err := pair[1].SyscallConn()
 	if err != nil {
 		return DesktopSocketReceipt{}, err
 	}
