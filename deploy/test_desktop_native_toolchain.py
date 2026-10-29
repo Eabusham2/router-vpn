@@ -84,6 +84,13 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
                         self.assertLessEqual(kwargs['timeout'], 300)
                         return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_physical_bootstrap.py'):
+                        self.assertEqual(system, 'windows')
+                        self.assertEqual(args[2:], [str(source.resolve()), '--prospective'])
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertLessEqual(kwargs['timeout'], 900)
+                        return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_guardian.py'):
                         self.assertEqual(system, 'darwin')
                         self.assertEqual(args[2:], [str(source.resolve()), '--mutations'])
@@ -128,6 +135,13 @@ class NativeSocketUIDGate(unittest.TestCase):
                 traffic = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_windows_traffic.py')]
                 self.assertEqual(len(traffic), 1 if system == 'windows' else 0)
                 self.assertIn(ROOT/'deploy/test_desktop_windows_traffic.py', N.inputs())
+                bootstrap = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_physical_bootstrap.py')]
+                self.assertEqual(len(bootstrap), 1 if system == 'windows' else 0)
+                if bootstrap:
+                    self.assertGreater(calls.index(bootstrap[0]), calls.index(traffic[0]))
+                self.assertIn(ROOT/'deploy/test_windows_physical_bootstrap.py', N.inputs())
+                for name in ('kernel_observer.go', 'resolver_access.go', 'bootstrap_test.go'):
+                    self.assertIn(ROOT/'deploy/fixtures/windows-physical-bootstrap'/name, N.inputs())
                 guardian = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_linux_guardian.py')]
                 self.assertEqual(len(guardian), 1 if system == 'linux' else 0)
                 self.assertIn(ROOT/'deploy/test_desktop_linux_guardian.py', N.inputs())

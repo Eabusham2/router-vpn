@@ -1,0 +1,77 @@
+name: Windows physical bootstrap composition
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - 'internal/**'
+      - 'mobile/desktop/**'
+      - 'mobile/toroutbound/**'
+      - 'mobile/torpt/**'
+      - 'deploy/prepare-*.py'
+      - 'deploy/mobile_*policy.py'
+      - 'deploy/build-native-runtime.py'
+      - 'deploy/test_windows_physical_bootstrap*.py'
+      - 'deploy/fixtures/windows-physical-bootstrap/**'
+      - '.github/workflows/windows-physical-bootstrap-contract.yml'
+  pull_request:
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - 'internal/**'
+      - 'mobile/desktop/**'
+      - 'mobile/toroutbound/**'
+      - 'mobile/torpt/**'
+      - 'deploy/prepare-*.py'
+      - 'deploy/mobile_*policy.py'
+      - 'deploy/build-native-runtime.py'
+      - 'deploy/test_windows_physical_bootstrap*.py'
+      - 'deploy/fixtures/windows-physical-bootstrap/**'
+      - '.github/workflows/windows-physical-bootstrap-contract.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-physical-bootstrap-${{ github.ref }}
+  # Preserve active native diagnostics; GitHub retains the newest pending head.
+  # Full native package/release gates still verify their exact source commit.
+  cancel-in-progress: false
+
+jobs:
+  native-bootstrap:
+    name: Native Windows bootstrap on ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, windows-11-arm]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Verify prospective overlay and source boundaries
+        shell: pwsh
+        run: |
+          python deploy/test_windows_physical_bootstrap_runner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Windows bootstrap overlay/source boundary failed' }
+      - name: Execute actual compiler, native factory, WFP and selected DNS bootstrap
+        shell: pwsh
+        run: |
+          # CGO-disabled bootstrap-only diagnostic: no TUN/routes, package,
+          # Tor circuit, native PQ link, race, or device acceptance is claimed.
+          # Every WFP rule also matches this exact test executable. The explicit
+          # fixture resolver receives a bounded real HTTPS DNS query.
+          python deploy/test_windows_physical_bootstrap.py --standalone --prospective
+          if ($LASTEXITCODE -ne 0) { throw 'Actual Windows bootstrap composition failed' }

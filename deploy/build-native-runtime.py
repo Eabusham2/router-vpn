@@ -102,6 +102,9 @@ def inputs():
                              ROOT/'deploy/test_desktop_windows_identity_runner.py',
                              ROOT/'deploy/test_desktop_windows_wfp.py',
                              ROOT/'deploy/test_desktop_windows_traffic.py',
+                             ROOT/'deploy/test_windows_physical_bootstrap.py',
+                             ROOT/'deploy/test_windows_physical_bootstrap_runner.py',
+                             *sorted((ROOT/'deploy/fixtures/windows-physical-bootstrap').glob('*.go')),
                              ROOT/'deploy/test_desktop_linux_guardian.py',
                              ROOT/'deploy/test_desktop_darwin_guardian.py',
                              ROOT/'deploy/test_linux_guardian_namespace.py',
@@ -514,6 +517,11 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                     env=env, timeout=600)
                 run([sys.executable, ROOT/'deploy/test_desktop_windows_traffic.py', source],
                     env=env, timeout=600)
+                # This explicit test-only admission overlay proves bootstrap
+                # composition before the public Windows capability is opened.
+                # Admission must remove --prospective and rerun unchanged code.
+                run([sys.executable, ROOT/'deploy/test_windows_physical_bootstrap.py', source, '--prospective'],
+                    env=env, timeout=900)
             if target.startswith('linux/'):
                 run([sys.executable, ROOT/'deploy/test_desktop_linux_guardian.py', source],
                     env=env, timeout=300)

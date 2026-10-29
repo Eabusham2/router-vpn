@@ -119,6 +119,37 @@ the real WFP gate or the final compiler-to-native selected-DNS and wrapper
 composition. Public Windows strict dynamic admission remains closed until that
 composition is verified.
 
+### Prospective bootstrap composition
+
+`deploy/test_windows_physical_bootstrap.py` verifies the exact prepared source
+closure and then compiles the real Box, generated Windows factory, native
+interface monitor, isolated socket owner, WFP policy and PT resolver callback.
+Its explicit fixture selects Cloudflare HTTPS DNS at `1.1.1.1:443`; that is a
+test profile, not a product default or a fallback. The query must receive a real
+answer through the captured resolver, while an ordinary process-token socket
+to that same endpoint is rejected by WFP. Independent readback checks the live
+kernel endpoint and its exact resolver, local tuple, interface and capture.
+The fixture also rejects a different compiler source, uncaptured context,
+replacement DNS object and retired network generation, then checks exact
+baseline/session-lock absence after cleanup.
+
+Every test filter additionally matches the running test executable. The TUN is
+the existing harmless Box fixture, so this gate changes no host route and does
+not establish an actual TUN, Tor circuit, Connected state, full wrapper launch
+or physical-device acceptance. The separate Windows diagnostic prepares the
+same pinned core/Xray sources with CGO disabled and makes no package, PQ-link
+or race claim. Matching Windows package builds also run the gate using their
+actual shipping tags, verified PQ link environment and supported race mode.
+
+While public Windows admission remains closed, `--prospective` overlays only
+the reviewed static OS predicate in the test compilation. Additional test-only
+visibility and executable scope also exist only in the Go overlay; no ordinary
+binary accepts an environment, profile or request switch for those controls.
+Cross-compilation alone is not an executed Windows result. Before publishing
+admission, remove `--prospective` from both gates and rerun against the
+unmodified admitted compiler/native source. This bootstrap evidence and the
+separate remaining connection/installation evidence must remain distinct.
+
 The WFP baseline gate by itself does not prove connected socket traffic or the
 shipping Windows wrapper/factory composition. Those gates and the complete
 native integration remain required before Windows strict Direct dynamic Tor
