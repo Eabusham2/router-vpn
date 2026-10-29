@@ -139,7 +139,14 @@ func require(_ condition:Bool,_ message:String) {
 }
 @MainActor func runNativeOwner() throws {
     require(RouterVPNMacLocalAuthorization.installedBundle(),"Native fixture did not execute the installed app branch")
-    let app=FixtureApplication(),delegate=ProductDelegate()
+    // AppKit requires the subclass's shared accessor to register NSApp. A
+    // directly initialized object makes the real shutdown panel create a
+    // second application when it obtains NSApplication.shared.
+    guard let app=FixtureApplication.shared as? FixtureApplication else {
+        require(false,"Native fixture did not create its captured application subclass");return
+    }
+    require(app === NSApplication.shared && app === NSApp,"Native fixture lost AppKit's actual shared application")
+    let delegate=ProductDelegate()
     try delegate.ensureController()
     guard let process=delegate.installedController else { require(false,"AppKit adopted a localhost listener instead of its root-owned child");return }
     require(delegate.controller === process && delegate.ownsController && process.acceptsRequests,"Installed AppKit lost its exact process capability")
