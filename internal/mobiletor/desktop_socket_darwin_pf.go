@@ -142,16 +142,14 @@ func desktopDarwinPFLoad(ctx context.Context, anchor string, rules string) error
 var desktopDarwinPFAnchorName = regexp.MustCompile(`^[A-Za-z0-9_.:-]+$`)
 
 func desktopDarwinPFRejectLegacyLayout(ctx context.Context) error {
-	for _, anchor := range []string{desktopDarwinPFNamespace + "/physical", desktopDarwinPFNamespace + "/physical/*"} {
-		rules, err := desktopDarwinPFRead(ctx, anchor)
-		if err != nil {
-			return err
-		}
-		if rules != "" {
-			return errors.New("Darwin PF retains an earlier nested physical owner; exact prior-owner recovery is required")
-		}
-	}
-	return nil
+	return desktopPFRejectLegacyRules(desktopDarwinPFNamespace+"/physical",
+		func(anchor string) (string, error) { return desktopDarwinPFRead(ctx, anchor) },
+		func(anchor string) ([]byte, error) {
+			if anchor == "" {
+				return desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-s", "Anchors")
+			}
+			return desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", anchor, "-s", "Anchors")
+		})
 }
 
 func desktopDarwinPFStatelessFilters(rules string) error {

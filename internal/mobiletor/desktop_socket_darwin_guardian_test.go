@@ -191,6 +191,9 @@ func TestDesktopDarwinGuardianKernelPFAnchorPaths(t *testing.T) {
 	if actual, err := desktopDarwinPFRead(ctx, desktopDarwinPFNamespace); err != nil || actual != before {
 		t.Fatal("loading captured PF children rewrote their parent policy", actual, err)
 	}
+	if err := desktopDarwinPFRejectLegacyLayout(ctx); err != nil {
+		t.Fatal("absent legacy PF layout was not proved from its actual parent inventory", err)
+	}
 	for _, anchor := range []string{legacy, legacyChild} {
 		if err := desktopDarwinPFLoad(ctx, anchor, rules); err != nil {
 			t.Fatal(err)

@@ -282,10 +282,17 @@ class DarwinStatefulComposition(unittest.TestCase):
                     elif anchor == 'com.apple/000.before' and fault == 'earlier-filter':
                         output = 'pass out all no state\n'
                     elif (anchor == policy.OWNED_PF_ANCHOR+'/physical' and fault == 'legacy-slot'
-                          or anchor == policy.OWNED_PF_ANCHOR+'/physical/*' and fault == 'legacy-generation'):
+                          or anchor == policy.OWNED_PF_ANCHOR+'/physical/legacy' and fault == 'legacy-generation'):
                         output = 'block out on lo0 all\n'
                 elif command == ['-s', 'Anchors']:
-                    output = 'com.apple\nforeign\n' if not anchor else '000.before\n000.router-vpn\nzzz.foreign\n'
+                    if not anchor:
+                        output = 'com.apple\nforeign\n'
+                    elif anchor == 'com.apple':
+                        output = '000.before\n000.router-vpn\nzzz.foreign\n'
+                    elif anchor == policy.OWNED_PF_ANCHOR and fault in ('legacy-slot', 'legacy-generation'):
+                        output = 'physical\n'
+                    elif anchor == policy.OWNED_PF_ANCHOR+'/physical' and fault == 'legacy-generation':
+                        output = '  '+anchor+'/legacy\n'
                 elif command == ['-s', 'nat']:
                     bad = {'root-nat': '', 'owned-nat': policy.OWNED_PF_ANCHOR,
                            'owned-child-nat': policy.OWNED_PF_ANCHOR+'/*', 'root-anchor-nat': 'foreign/*'}
@@ -302,6 +309,77 @@ class DarwinStatefulComposition(unittest.TestCase):
                     with self.assertRaises(RuntimeError):
                         policy.owned_pf_preflight({})
             self.assertFalse(any('-F' in row or '-k' in row or '-f' in row for row in seen))
+
+    def test_legacy_inventory_reads_unreferenced_children_without_mutation(self):
+        root = P.OWNED_PF_ANCHOR+'/physical'
+        for retained in (False, True):
+            seen = []
+            def run(arguments):
+                anchor = arguments[1] if arguments[:1] == ['-a'] else ''
+                command = arguments[2:] if anchor else arguments
+                parents = {'': 'com.apple\n', 'com.apple': '000.router-vpn\n', P.OWNED_PF_ANCHOR: 'physical\n'}
+                self.assertTrue(anchor in parents or anchor == root or anchor.startswith(root+'/'))
+                self.assertIn(command, (['-s', 'rules'], ['-s', 'Anchors']))
+                seen.append(arguments)
+                output = ''
+                if command == ['-s', 'Anchors']:
+                    output = (parents | {root: '  '+root+'/previous\n', root+'/previous': 'generation\n'}).get(anchor, '')
+                elif anchor == root+'/previous/generation' and retained:
+                    output = 'block out on lo0 all\n'
+                return subprocess.CompletedProcess(arguments, 0, output, '')
+            with self.subTest(retained=retained), patch.object(P, 'run_pf', side_effect=run):
+                if retained:
+                    with self.assertRaisesRegex(RuntimeError, 'earlier nested physical owner'):
+                        P._owned_reject_legacy_layout()
+                else:
+                    P._owned_reject_legacy_layout()
+            self.assertEqual([row[1] for row in seen if row[2:] == ['-s', 'rules']],
+                             [root, root+'/previous', root+'/previous/generation'])
+
+    def test_legacy_inventory_rejects_escape_ambiguity_and_excess(self):
+        root = P.OWNED_PF_ANCHOR+'/physical'
+        for raw in ('../other', 'other/child', '/foreign/child', root, root+'/child/deeper',
+                    '.', '..', '*', 'child\nchild', 'child\n'+root+'/child', 'child with spaces',
+                    'x'*(64*1024+1), '\n'.join('child'+str(i) for i in range(257))):
+            def run(arguments):
+                self.assertEqual(arguments[1], root)
+                output = raw if arguments[2:] == ['-s', 'Anchors'] else ''
+                return subprocess.CompletedProcess(arguments, 0, output, '')
+            with self.subTest(raw=raw[:80]), patch.object(P, 'run_pf', side_effect=run):
+                with self.assertRaises(RuntimeError):
+                    P._owned_legacy_children(root)
+        queries = []
+        def deep(arguments):
+            output = ''
+            anchor = arguments[1] if arguments[:1] == ['-a'] else ''
+            command = arguments[2:] if anchor else arguments
+            if command == ['-s', 'Anchors']:
+                parents = {'': 'com.apple\n', 'com.apple': '000.router-vpn\n', P.OWNED_PF_ANCHOR: 'physical\n'}
+                if anchor in parents:
+                    output = parents[anchor]
+                else:
+                    queries.append(anchor)
+                    output = 'child\n'
+            return subprocess.CompletedProcess(arguments, 0, output, '')
+        with patch.object(P, 'run_pf', side_effect=deep), self.assertRaisesRegex(RuntimeError, 'bounded tree'):
+            P._owned_reject_legacy_layout()
+        self.assertEqual(len(queries), 9)
+
+    def test_missing_legacy_tree_is_proved_from_existing_parents(self):
+        root = P.OWNED_PF_ANCHOR+'/physical'
+        parents = {'': 'com.apple\n', 'com.apple': '000.router-vpn\n', P.OWNED_PF_ANCHOR: 'physical\n'}
+        for missing_parent in parents:
+            seen = []
+            def run(arguments):
+                anchor = arguments[1] if arguments[:1] == ['-a'] else ''
+                command = arguments[2:] if anchor else arguments
+                self.assertEqual(command, ['-s', 'Anchors'])
+                self.assertIn(anchor, parents)
+                seen.append(anchor)
+                return subprocess.CompletedProcess(arguments, 0, '' if anchor == missing_parent else parents[anchor], '')
+            with self.subTest(parent=missing_parent), patch.object(P, 'run_pf', side_effect=run):
+                P._owned_reject_legacy_layout()
+            self.assertEqual(seen[-1], missing_parent)
 
     def test_same_shipping_prelaunch_witness_accepts_only_its_actual_unix_capture(self):
         wrapper_spec = importlib.util.spec_from_file_location('darwin_owned_wrapper_fixture', HERE.parent/'deploy/test_desktop_tor_unix_wrapper.py')

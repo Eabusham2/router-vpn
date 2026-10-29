@@ -121,11 +121,47 @@ def _owned_system_filters(text: str) -> None:
     _owned_compatible_filters(filters)
 
 
-def owned_pf_preflight(previous: dict[str, Any]) -> None:
-    _owned_system_filters(run_pf(['-s', 'rules']).stdout)
-    for anchor in (OWNED_PF_ANCHOR+'/physical', OWNED_PF_ANCHOR+'/physical/*'):
+def _owned_legacy_children(anchor: str) -> list[str]:
+    raw = run_pf((['-a', anchor] if anchor else [])+['-s', 'Anchors']).stdout
+    if len(raw.encode()) > 64 << 10:
+        raise RuntimeError('native macOS legacy PF inventory exceeds its output bound')
+    children = []
+    for line in raw.splitlines():
+        name = line.strip()
+        if not name:
+            continue
+        name = name.removeprefix(anchor+'/') if anchor else name
+        child = anchor+'/'+name if anchor else name
+        if not re.fullmatch('[A-Za-z0-9_.:-]+', name) or name in ('.', '..') or len(child) > 1023 or child in children or len(children) >= 256:
+            raise RuntimeError('native macOS legacy PF inventory has an ambiguous or escaping identity')
+        children.append(child)
+    return children
+
+
+def _owned_reject_legacy_layout() -> None:
+    # Wildcard rules follow filter dispatch and omit unreferenced children.
+    # Enumerate the actual prior-owner tree, then read each exact anchor. These
+    # commands only inspect; a retained owner requires explicit recovery.
+    root = OWNED_PF_ANCHOR+'/physical'
+    parent = ''
+    for name in root.split('/'):
+        child = parent+'/'+name if parent else name
+        if child not in _owned_legacy_children(parent):
+            return
+        parent = child
+    queue = [root]
+    for anchor in queue:
         if run_pf(['-a', anchor, '-s', 'rules']).stdout.strip():
             raise RuntimeError('native macOS protection retains an earlier nested physical owner; exact prior-owner recovery is required')
+        children = _owned_legacy_children(anchor)
+        if len(queue)+len(children) > 256 or children and anchor.count('/')-root.count('/') >= 8:
+            raise RuntimeError('native macOS legacy PF inventory exceeds its bounded tree')
+        queue.extend(children)
+
+
+def owned_pf_preflight(previous: dict[str, Any]) -> None:
+    _owned_system_filters(run_pf(['-s', 'rules']).stdout)
+    _owned_reject_legacy_layout()
     for anchor in ('', OWNED_PF_ANCHOR, OWNED_PF_ANCHOR+'/*'):
         _owned_no_translation(anchor)
     for root in run_pf(['-s', 'Anchors']).stdout.split():
