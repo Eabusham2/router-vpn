@@ -110,7 +110,10 @@ func desktopDarwinPFRead(ctx context.Context, anchor string) (string, error) {
 
 func desktopDarwinPFLoad(ctx context.Context, anchor string, rules string) error {
 	_, err := desktopDarwinCommand(ctx, "/sbin/pfctl", []byte(rules), "-a", anchor, "-f", "-")
-	return err
+	if err != nil {
+		return fmt.Errorf("Darwin scoped PF load for anchor %q (%d input bytes): %w", anchor, len(rules), err)
+	}
+	return nil
 }
 
 var desktopDarwinPFAnchorName = regexp.MustCompile(`^[A-Za-z0-9_.:-]+$`)
@@ -156,7 +159,11 @@ func desktopDarwinPFGlobal(ctx context.Context) error {
 	}
 	global, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-s", "rules")
 	if err != nil || !strings.HasPrefix(desktopDarwinPFRulesText(global)+"\n", "anchor \"com.apple/*\" all\n") {
-		return errors.New("Darwin physical policy requires the captured system PF anchor dispatch")
+		readback := desktopDarwinPFRulesText(global)
+		if len(readback) > 4096 {
+			readback = readback[:4096] + "[truncated]"
+		}
+		return errors.Join(err, fmt.Errorf("Darwin physical policy requires the captured system PF anchor dispatch; actual rules: %q", readback))
 	}
 	if err := desktopDarwinPFStatelessFilters(desktopDarwinPFRulesText(global)); err != nil {
 		return err
