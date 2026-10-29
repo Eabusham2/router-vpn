@@ -1,0 +1,34 @@
+//go:build darwin
+
+package tun
+
+import (
+	"errors"
+	"os"
+	"syscall"
+)
+
+func (t *NativeTun) RouterVPNRetainControl() (*os.File, error) {
+	if t == nil || t.tunFile == nil || t.routervpnOwnedIndex == 0 {
+		return nil, errors.New("Darwin retained control requires an exclusively created native TUN")
+	}
+	raw, err := t.tunFile.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	fd := -1
+	var captureErr error
+	err = raw.Control(func(handle uintptr) {
+		fd, captureErr = syscall.Dup(int(handle))
+		if captureErr == nil {
+			syscall.CloseOnExec(fd)
+		}
+	})
+	if err != nil || captureErr != nil {
+		if fd >= 0 {
+			syscall.Close(fd)
+		}
+		return nil, errors.Join(err, captureErr)
+	}
+	return os.NewFile(uintptr(fd), "routervpn-owned-utun-control"), nil
+}

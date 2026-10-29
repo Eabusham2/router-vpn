@@ -103,6 +103,7 @@ def inputs():
                              ROOT/'deploy/test_desktop_windows_wfp.py',
                              ROOT/'deploy/test_desktop_windows_traffic.py',
                              ROOT/'deploy/test_desktop_linux_guardian.py',
+                             ROOT/'deploy/test_desktop_darwin_guardian.py',
                              ROOT/'deploy/test_linux_guardian_namespace.py',
                              *sorted((ROOT/'mobile/rosenpass').glob('Cargo.*')),
                              *sorted((ROOT/'mobile/rosenpass').glob('*.h')),
@@ -497,7 +498,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                  '-ldflags=-checklinkname=0', './cmd/sing-box', '-run', '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU)',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', './routervpn/desktoppt', '-run', '^Test(RouterVPN(DesktopTorPT|PhysicalFactory|PhysicalTunnel|LinuxPhysicalFactory)|DesktopTorNetworkOwner)',
+                 '-ldflags=-checklinkname=0', './routervpn/desktoppt', '-run', '^Test(RouterVPN(DesktopTorPT|PhysicalFactory|PhysicalTunnel|LinuxPhysicalFactory|DarwinPhysicalFactory)|DesktopTorNetworkOwner)',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './routervpn/mobiletor', '-run', '^TestDesktopSocket',
@@ -516,6 +517,9 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             if target.startswith('linux/'):
                 run([sys.executable, ROOT/'deploy/test_desktop_linux_guardian.py', source],
                     env=env, timeout=300)
+            if target.startswith('darwin/'):
+                run([sys.executable, ROOT/'deploy/test_desktop_darwin_guardian.py', source],
+                    env=env, timeout=900)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './route', '-run', '^TestRouterVPNDesktopTorNetwork',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)

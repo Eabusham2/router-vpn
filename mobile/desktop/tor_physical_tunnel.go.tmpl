@@ -3,6 +3,7 @@ package routervpndesktoppt
 import (
 	"context"
 	"errors"
+	"os"
 	"runtime"
 	"time"
 
@@ -15,10 +16,19 @@ import (
 func (n *NetworkOwner) BindPhysicalTunnel(ctx context.Context, name string, index uint32) error {
 	return n.changePhysicalTunnel(ctx, name, index, false)
 }
+func (n *NetworkOwner) BindPhysicalTunnelFile(ctx context.Context, name string, index uint32, file *os.File) error {
+	if file == nil {
+		return errors.New("desktop physical tunnel has no retained control descriptor")
+	}
+	return n.changePhysicalTunnelFile(ctx, name, index, false, file)
+}
 func (n *NetworkOwner) RetirePhysicalTunnel(ctx context.Context, name string, index uint32) error {
 	return n.changePhysicalTunnel(ctx, name, index, true)
 }
 func (n *NetworkOwner) changePhysicalTunnel(ctx context.Context, name string, index uint32, retire bool) error {
+	return n.changePhysicalTunnelFile(ctx, name, index, retire, nil)
+}
+func (n *NetworkOwner) changePhysicalTunnelFile(ctx context.Context, name string, index uint32, retire bool, file *os.File) error {
 	n.mu.Lock()
 	if !n.capture.PhysicalBroker {
 		n.mu.Unlock()
@@ -32,8 +42,8 @@ func (n *NetworkOwner) changePhysicalTunnel(ctx context.Context, name string, in
 	}
 	policy, supported := source.(mobiletor.DesktopSocketTunnelPolicy)
 	if !supported {
-		if runtime.GOOS == "windows" {
-			return errors.New("Windows physical protection lost its actual WFP tunnel owner")
+		if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+			return errors.New("desktop physical protection lost its actual kernel tunnel owner")
 		}
 		return nil
 	}
@@ -42,6 +52,12 @@ func (n *NetworkOwner) changePhysicalTunnel(ctx context.Context, name string, in
 	var err error
 	if retire {
 		err = policy.RetireTunnel(bounded, capture, name, index)
+	} else if file != nil {
+		owned, ok := policy.(mobiletor.DesktopSocketTunnelFilePolicy)
+		if !ok {
+			return errors.New("desktop physical policy cannot retain its native tunnel control")
+		}
+		err = owned.BindTunnelFile(bounded, capture, name, index, file)
 	} else {
 		err = policy.BindTunnel(bounded, capture, name, index)
 	}

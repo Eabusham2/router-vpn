@@ -1,0 +1,86 @@
+//go:build darwin
+
+package routervpndesktoppt
+
+import (
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing/common/control"
+	"net"
+	"net/netip"
+	"testing"
+)
+
+func darwinPhysicalFixtureInterface(t *testing.T) *adapter.NetworkInterface {
+	t.Helper()
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, actual := range interfaces {
+		if actual.Flags&net.FlagUp == 0 || actual.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		selected, err := control.InterfaceFromNet(actual)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, address := range selected.Addresses {
+			if address.Addr().Is4() && address.Addr().IsGlobalUnicast() {
+				return &adapter.NetworkInterface{Interface: selected}
+			}
+		}
+	}
+	t.Fatal("Darwin native factory test requires the runner's existing physical IPv4 interface")
+	return nil
+}
+
+func TestRouterVPNDarwinPhysicalFactoryRejectsFalseKernelInterface(t *testing.T) {
+	selected := darwinPhysicalFixtureInterface(t)
+	for _, fault := range []string{"nil", "index", "name", "down", "loopback", "address"} {
+		copy := *selected
+		switch fault {
+		case "nil":
+		case "index":
+			copy.Index = 0
+		case "name":
+			copy.Name = "foreign"
+		case "down":
+			copy.Flags &^= net.FlagUp
+		case "loopback":
+			copy.Flags |= net.FlagLoopback
+		case "address":
+			copy.Addresses = []netip.Prefix{netip.MustParsePrefix("192.0.2.200/24")}
+		}
+		value := &copy
+		if fault == "nil" {
+			value = nil
+		}
+		if _, err := desktopDarwinPhysicalInterfaces(value, false); err == nil {
+			t.Fatal("physical factory accepted false kernel binding", fault)
+		}
+	}
+}
+
+func TestRouterVPNDarwinPhysicalFactoryUsesActualDefaultAddress(t *testing.T) {
+	selected := darwinPhysicalFixtureInterface(t)
+	captured, err := desktopDarwinPhysicalInterfaces(selected, false)
+	if err != nil || len(captured) != 1 || !captured[0].Address.Is4() || captured[0].Name != selected.Name || captured[0].Index != uint32(selected.Index) {
+		t.Fatal("Darwin factory substituted its actual physical address or enabled IPv6", captured, err)
+	}
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, actual := range interfaces {
+		if actual.Flags&net.FlagLoopback == 0 {
+			continue
+		}
+		local, err := control.InterfaceFromNet(actual)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := desktopDarwinPhysicalInterfaces(&adapter.NetworkInterface{Interface: local}, true); err == nil {
+			t.Fatal("a real loopback interface reached the production physical factory")
+		}
+	}
+}

@@ -63,6 +63,13 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['GOOS'], system)
                         self.assertLessEqual(kwargs['timeout'], 300)
                         return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_windows_identity_runner.py'):
+                        self.assertEqual(system, 'windows')
+                        self.assertEqual(len(args), 2)
+                        self.assertEqual(kwargs['cwd'], ROOT)
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        return ''
                     if len(args) > 1 and args[1] in (str(ROOT/'deploy/test_desktop_windows_identity.py'), str(ROOT/'deploy/test_desktop_windows_wfp.py'), str(ROOT/'deploy/test_desktop_windows_traffic.py')):
                         self.assertEqual(system, 'windows')
                         self.assertEqual(args[2:], [str(source.resolve())])
@@ -76,6 +83,13 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['GOOS'], system)
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
                         self.assertLessEqual(kwargs['timeout'], 300)
+                        return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_guardian.py'):
+                        self.assertEqual(system, 'darwin')
+                        self.assertEqual(args[2:], [str(source.resolve())])
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertLessEqual(kwargs['timeout'], 900)
                         return ''
                     if args[:2] in (['go', 'test'], ['go', 'mod']):
                         return ''
@@ -101,8 +115,12 @@ class NativeSocketUIDGate(unittest.TestCase):
                 uid = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_socket_uid.py')]
                 self.assertEqual(len(uid), 0 if system == 'windows' else 1)
                 self.assertIn(ROOT/'deploy/test_desktop_socket_uid.py', N.inputs())
+                runner = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_windows_identity_runner.py')]
+                self.assertEqual(len(runner), 1 if system == 'windows' else 0)
                 windows = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_windows_identity.py')]
                 self.assertEqual(len(windows), 1 if system == 'windows' else 0)
+                if windows:
+                    self.assertEqual(calls.index(windows[0]), calls.index(runner[0])+1)
                 self.assertIn(ROOT/'deploy/test_desktop_windows_identity.py', N.inputs())
                 wfp = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_windows_wfp.py')]
                 self.assertEqual(len(wfp), 1 if system == 'windows' else 0)
@@ -113,6 +131,9 @@ class NativeSocketUIDGate(unittest.TestCase):
                 guardian = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_linux_guardian.py')]
                 self.assertEqual(len(guardian), 1 if system == 'linux' else 0)
                 self.assertIn(ROOT/'deploy/test_desktop_linux_guardian.py', N.inputs())
+                darwin = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_guardian.py')]
+                self.assertEqual(len(darwin), 1 if system == 'darwin' else 0)
+                self.assertIn(ROOT/'deploy/test_desktop_darwin_guardian.py', N.inputs())
                 physical = [args for args in calls if './routervpn/desktoppt' in args]
                 self.assertEqual(len(physical), 1)
                 self.assertIn('PhysicalFactory|PhysicalTunnel|LinuxPhysicalFactory', physical[0][physical[0].index('-run') + 1])

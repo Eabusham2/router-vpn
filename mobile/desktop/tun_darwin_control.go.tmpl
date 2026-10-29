@@ -1,0 +1,34 @@
+//go:build darwin
+
+package tun
+
+import (
+	"errors"
+	"os"
+)
+
+// The same lifecycle mutex used by Close and MTU replacement protects this
+// capture. The returned duplicate pins the actual utun object, not its alias,
+// while the independently running PF guardian takes its retained reference.
+func (t *Inbound) RouterVPNDesktopTunnelControl(guard func() bool) (*os.File, error) {
+	t.routervpnLifecycle.Lock()
+	defer t.routervpnLifecycle.Unlock()
+	if !t.routervpnDesktop || guard == nil || !guard() || t.platformInterface != nil {
+		return nil, errors.New("Darwin tunnel control has no captured native reader")
+	}
+	if _, _, _, err := t.routervpnDesktopInterface(); err != nil {
+		return nil, err
+	}
+	owned, ok := t.tunIf.(interface{ RouterVPNRetainControl() (*os.File, error) })
+	if !ok {
+		return nil, errors.New("Darwin native TUN has no retained control adapter")
+	}
+	file, err := owned.RouterVPNRetainControl()
+	if err != nil || !guard() {
+		if file != nil {
+			file.Close()
+		}
+		return nil, errors.Join(err, errors.New("Darwin native control retired during capture"))
+	}
+	return file, nil
+}

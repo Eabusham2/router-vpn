@@ -90,7 +90,7 @@ class DesktopPTPreparation(unittest.TestCase):
         # native package selected by the mandatory shipping build gate.
         for name in ('tor_pt_entry_peers_test.go.tmpl', 'tor_pt_entry_traffic_test.go.tmpl',
                      'tor_physical.go.tmpl', 'tor_physical_test.go.tmpl',
-                     'tor_physical_source_unix_test.go.tmpl', 'tor_physical_linux.go.tmpl',
+                     'tor_physical_source_unix_test.go.tmpl', 'tor_physical_linux.go.tmpl', 'tor_physical_darwin.go.tmpl',
                      'tor_physical_other.go.tmpl', 'tor_physical_factory_test.go.tmpl',
                      'tor_physical_linux_test.go.tmpl'):
             self.assertIn(name, PREP.PT_TEMPLATES)
@@ -100,7 +100,7 @@ class DesktopPTPreparation(unittest.TestCase):
         self.assertEqual(PREP.BOX_TEMPLATES.get('tor_box_lastrelay.go.tmpl'), 'routervpn_desktop_tor_box_lastrelay.go')
         self.assertEqual(PREP.BOX_TEMPLATES.get('tor_box_lastrelay_test.go.tmpl'), 'routervpn_desktop_tor_box_lastrelay_test.go')
         self.assertEqual(PREP.BOX_TEMPLATES.get('tor_box_lastrelay_server_test.go.tmpl'), 'routervpn_desktop_tor_box_lastrelay_server_test.go')
-        for name, relative in {**PREP.BOX_TEMPLATES, **PREP.ROUTE_TEMPLATES}.items():
+        for name, relative in {**PREP.BOX_TEMPLATES, **PREP.ROUTE_TEMPLATES, **PREP.TUN_TEMPLATES}.items():
             self.assertEqual((self.vendor/relative).read_bytes(),
                              (ROOT/'mobile/desktop'/name).read_bytes())
         for name in ('network.go', 'upstream.go'):
@@ -367,6 +367,21 @@ class DesktopPTPreparation(unittest.TestCase):
         record = json.loads((self.vendor/PREP.PT_OWNER).read_bytes())
         for relative in PREP.BOX_TEMPLATES.values():
             self.assertEqual(record['files'][relative], hashlib.sha256((self.vendor/relative).read_bytes()).hexdigest())
+
+    def test_darwin_tunnel_control_cannot_adopt_replaced_or_unrelated_source(self):
+        self.prepare()
+        relative = PREP.TUN_TEMPLATES['tun_darwin_control.go.tmpl']
+        target = self.vendor/relative
+        original = target.read_bytes()
+        target.write_bytes(original.replace(b'owned.RouterVPNRetainControl()', b'unownedDescriptor()'))
+        self.rejected_without_writes('changed desktop PT')
+        target.write_bytes(original)
+        self.prepare()
+        owner = self.vendor/PREP.PT_OWNER
+        record = json.loads(owner.read_bytes())
+        record['files']['protocol/tun/unrelated.go'] = 'b'*64
+        owner.write_text(json.dumps(record))
+        self.rejected_without_writes('unrelated native source')
 
     def test_wrong_core_namespace_type_and_root_alias_fail_without_writes(self):
         with patch.object(PREP.subprocess, 'check_output', return_value='different-native-core\n'):

@@ -73,6 +73,15 @@ type DesktopSocketTunnelPolicy interface {
 	RetireTunnel(context.Context, DesktopSocketCapture, string, uint32) error
 }
 
+// A name-bound OS filter also retains the actual TUN control object. Darwin
+// utun names are reusable after the final descriptor closes; a guardian-held
+// duplicate prevents a replacement interface from acquiring a live permit.
+// The caller retains its file until this synchronous transfer returns.
+type DesktopSocketTunnelFilePolicy interface {
+	DesktopSocketTunnelPolicy
+	BindTunnelFile(context.Context, DesktopSocketCapture, string, uint32, *os.File) error
+}
+
 func (s *desktopSocket) create(ctx context.Context) error {
 	if s.broker.source == nil {
 		return nil

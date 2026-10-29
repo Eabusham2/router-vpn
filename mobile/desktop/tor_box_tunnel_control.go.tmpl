@@ -1,0 +1,28 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"os"
+	"runtime"
+)
+
+func (r *RouterVPNDesktopTor) bindPhysicalTunnel(ctx context.Context, reader routerVPNDesktopTorTUN, name string, index uint32) error {
+	if runtime.GOOS != "darwin" || !r.policy.PhysicalBroker() {
+		return r.network.BindPhysicalTunnel(ctx, name, index)
+	}
+	control, ok := reader.(interface {
+		RouterVPNDesktopTunnelControl(func() bool) (*os.File, error)
+	})
+	if !ok {
+		return errors.New("Darwin physical protection requires its actual owned utun control")
+	}
+	file, err := control.RouterVPNDesktopTunnelControl(r.readerLifetimeCurrent)
+	if file != nil {
+		defer file.Close()
+	}
+	if err != nil || file == nil {
+		return errors.Join(err, errors.New("Darwin physical tunnel could not retain its actual control descriptor"))
+	}
+	return r.network.BindPhysicalTunnelFile(ctx, name, index, file)
+}

@@ -5,9 +5,11 @@ owned-socket capability for dynamic Direct paths. Linux now has an implemented
 privileged UID/socket guardian, native factory and exact nftables boundary for
 plain Tor, meek, WebTunnel and Snowflake. It requires the captured privileged
 launch path; an ordinary user process cannot manufacture that authority from
-JSON or a command argument. Windows and macOS still require their corresponding
-privileged policy/identity factories and launcher integration before these
-dynamic paths can be admitted under strict protection. The existing exact,
+JSON or a command argument. Public dynamic strict admission on Windows and
+macOS remains gated until their corresponding native policy/identity and
+launcher integration has passed its actual host checks. The Darwin guardian and
+retained-utun foundation below is implemented behind that gate; its source and
+cross-compilation are not a native PF acceptance result. The existing exact,
 fixed obfs4 endpoint path remains available.
 
 ## Actual native call path
@@ -102,9 +104,9 @@ readback. UDP import installs no peer grant until the captured peer is used.
 The privileged policy must still read the actual kernel creator independently.
 On macOS, XNU stores the creator credential in the socket's `so_cred`; both the
 PF socket lookup and socket `fstat` UID derive from that credential. An SCM_RIGHTS
-reply's claimed UID is not this proof. The production UID allocator, helper
-invocation authentication and PF guardian are separate work; this import path
-does not claim those components already exist.
+reply's claimed UID is not this proof. The Darwin guardian below implements the
+separate allocator, helper authentication and PF boundary; imported-descriptor
+tests alone do not prove that privileged composition.
 
 Cancellation revokes pending source creation. Broker Close waits for the
 creation/transfer operation, every exact permit's absent readback, all entered
@@ -176,14 +178,97 @@ Its separate fixed-install namespace and real GTK callback tests supplement
 the socket guardian tests. These results do not establish an interactive
 authorization prompt, a public Tor circuit, or physical-device acceptance.
 
+## Darwin guardian and retained-control foundation
+
+`DesktopDarwinSocketPolicy` uses a separate root guardian and an otherwise empty
+creator under a fresh, disabled high numeric UID. A root-owned private record
+captures the UID before Directory Services changes; the allocator also checks
+the actual system user namespace. Reuse is prohibited while an outcome remains
+unknown. Normal retirement requires exact account readback, absent permits,
+joined creators and complete descriptor acknowledgment. Unexpected native or
+guardian death quarantines the UID and its recovery record.
+
+The anonymous inherited Unix stream transfers descriptors with `SCM_RIGHTS`.
+Each bounded frame checks the actual peer PID after reception. Unexpected
+ancillary rights on later stream fragments are closed and rejected. The
+retained physical socket's creator UID, socket/PCB identity and generation come
+from `fstat` and `proc_pidfdinfo`; claimed JSON identity does not grant a tuple.
+`IP_BOUND_IF`/`IPV6_BOUND_IF`, transport, family, bound address/port, reuse flags
+and the current kernel interface are checked before permission.
+
+The scoped PF baseline uses `com.apple/000.router-vpn`. An exact session/source
+label and complete canonical rule readback precede account allocation. A packet
+starts with an unproved tag. Only the exact isolated UID and complete physical
+tuple, the retained TUN, or selected LAN/link allowances can apply the permitted
+tag. These permitted rules and their enclosing anchors are nonquick so later
+foreign blocks can still apply. An untagged packet takes a quick deny before a
+later foreign pass. The native tests exercise both nested-anchor directions;
+lexical anchor placement alone is not the proof.
+
+Physical permits use `no state`. PF has no independent absolute timeout for
+these rules: its state timeout can refresh with traffic, and closing `/dev/pf`
+does not remove a committed rule. This implementation does not claim otherwise.
+Native receipt deadlines and an independent memory-only monitor bound new and
+entered application I/O. The guardian retires expired grants independently of
+native control requests. Both processes retain the actual socket until absent
+readback and I/O join. If both die, their descriptors close; a different UID
+reusing the tuple does not inherit the stateless permit. A stalled holder still
+pins the socket and UID, including already queued native traffic. A quarantined
+UID is never automatically recycled after an unknown outcome.
+
+Before new physical admission, the code captures all current addresses on all
+up physical adapters, including temporary IPv6 addresses and nondefault
+adapters. It retires interface-bound states and floating states for those exact
+local addresses in both directions, then verifies actual state absence and
+interface policy. It does not globally flush PF state, require an empty global
+state table, or modify unrelated loopback/tunnel states. A changed address set,
+PF bypass flag, replacement baseline or replacement generation retires the
+captured admission.
+
+TUN permission requires the actual exclusively created utun control descriptor.
+The checksum-pinned `sing-tun` adapter duplicates that descriptor under the same
+native lifecycle ownership used for Close and MTU replacement. The independently
+running guardian receives and verifies the real kernel control, retains it, and
+removes its PF permission before releasing it. A name and interface index alone
+cannot authorize a reusable utun.
+
+Current compatibility is bounded: foreign stateful passes in either direction
+and active translations are rejected before a grant because their states can
+bypass the next creator-UID check. The code preserves those foreign owners; it
+does not rewrite their rules. Support for narrower nonintersecting stateful
+coexistence remains unfinished. Stock/stateless composition must first pass the
+actual Darwin gate before public dynamic strict admission is enabled.
+
+`deploy/test_desktop_darwin_guardian.py` compiles exact repository or prepared
+sources with the selected native Go compiler, Cgo, and the race detector. Only
+the captured test executable is elevated. The fixture creates four fresh
+loopback aliases, a unique PF anchor and disabled temporary identities; every
+permit/deny mutation is limited to those aliases. It retains an actual utun
+without installing default routes. Cleanup joins only processes whose executable
+is the exact unique fixture path, clears only its anchors, removes its aliases,
+and balances its PF reference. Failed cleanup retains its private recovery
+record instead of claiming success.
+
+The required kernel cases cover TCP/UDP over IPv4/IPv6, wrong creator UID at the
+same tuple, uncaptured private peers, 130 sequential socket retirements, actual
+utun descriptor retention, native-only and simultaneous guardian/native crashes,
+foreign-block and later-pass composition, stateful inbound/outbound rejection,
+blocked control with source-port retention, floating-state retirement, stale
+network capture, replacement-safe cleanup, and refusal to finish with an
+unretired descriptor. The runner rejects skipped or missing cases. Its optional
+`--mutations` mode requires the specific native assertion to reject five
+intentionally broken production boundaries. Source cross-compilation and a
+Linux socket run do not establish any of these Darwin kernel results.
+
 ## Remaining platform boundaries
 
 Windows still needs a separately protected session identity, exact WFP permits
-and independently owned dynamic-session cleanup. The macOS PF boundary still
-needs an isolated socket UID and exact anchor rules with verified state and
-removal behavior. The imported Unix descriptor tests do not supply those missing
-factories. Both platforms must also retain identity across native-process and
-launcher crashes before public strict dynamic Direct admission can open.
+and independently owned dynamic-session cleanup in the final shipping factory
+and launcher composition. The macOS foundation above still needs its actual
+native compiler/kernel result and final launcher/compiler admission integration.
+Its broader foreign-stateful PF coexistence remains a separate unfinished
+boundary. Both platforms must prove identity retention across native-process
+and launcher crashes before public strict dynamic Direct admission can open.
 
 ## Executable evidence and limits
 
@@ -255,3 +340,9 @@ working tree and prepared source are not edited by those controls.
 - XNU socket fstat UID readback: https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/sys_socket.c
 - XNU PF socket lookup: https://github.com/apple-oss-distributions/xnu/blob/main/bsd/net/pf.c
 - XNU TCP/UDP PCB credential lookup: https://github.com/apple-oss-distributions/xnu/blob/main/bsd/netinet/in_pcb.c
+
+The Darwin mechanism also relies on the primary XNU control/state definitions:
+
+- PF state matching and rule ordering: https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/net/pf.c
+- PF interface-bound and address-specific state retirement: https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/net/pf_ioctl.c
+- Actual utun control lifetime: https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/net/if_utun.c

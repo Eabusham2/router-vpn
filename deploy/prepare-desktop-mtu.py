@@ -111,6 +111,14 @@ def prepare(vendor):
             if target.exists() and not target.stat().st_mode & 0o200:
                 target.chmod(0o644)
             target.write_bytes(raw)
+    control = ROOT/'mobile/desktop/sing_tun_darwin_control.go.tmpl'
+    raw = control.read_bytes()
+    if control.is_symlink() or not raw.startswith(b'//go:build darwin\n\npackage tun\n'):
+        raise ValueError('Darwin native TUN control source boundary changed')
+    target = destination/'routervpn_control_darwin.go'
+    if target.is_symlink():
+        raise ValueError('Linked Darwin native TUN control destination')
+    target.write_bytes(raw)
     subprocess.run(['go', 'mod', 'edit', '-replace='+MODULE+'=./routervpn-desktop-tun'], cwd=vendor, check=True)
     print('Prepared checksum-pinned desktop TUN with exclusive Wintun creation')
 

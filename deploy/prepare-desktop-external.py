@@ -42,13 +42,14 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'tor_server.go.tmpl', 'tor_plain_test.go.tmpl', 'tor_local.go.tmpl', 'tor_local_test.go.tmpl',
                 'tor_physical.go.tmpl', 'tor_physical_test.go.tmpl',
                 'tor_physical_factory_test.go.tmpl',
-                'tor_physical_linux.go.tmpl', 'tor_physical_other.go.tmpl',
+                'tor_physical_linux.go.tmpl', 'tor_physical_darwin.go.tmpl', 'tor_physical_other.go.tmpl',
                 'tor_physical_tunnel.go.tmpl', 'tor_physical_tunnel_test.go.tmpl',
-                'tor_physical_linux_test.go.tmpl',
+                'tor_physical_linux_test.go.tmpl', 'tor_physical_darwin_test.go.tmpl',
                 'tor_physical_source_unix_test.go.tmpl')
 BOX_TEMPLATES = {
     'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go',
     'tor_box_physical.go.tmpl': 'routervpn_desktop_tor_box_physical.go',
+    'tor_box_tunnel_control.go.tmpl': 'routervpn_desktop_tor_box_tunnel_control.go',
     'tor_box_physical_test.go.tmpl': 'routervpn_desktop_tor_box_physical_test.go',
     'tor_box_lastrelay.go.tmpl': 'routervpn_desktop_tor_box_lastrelay.go',
     'tor_box_lastrelay_test.go.tmpl': 'routervpn_desktop_tor_box_lastrelay_test.go',
@@ -68,6 +69,9 @@ BOX_TEMPLATES = {
 ROUTE_TEMPLATES = {
     'tor_network_startup.go.tmpl': 'route/routervpn_desktop_tor_network_startup.go',
     'tor_network_startup_test.go.tmpl': 'route/routervpn_desktop_tor_network_startup_test.go',
+}
+TUN_TEMPLATES = {
+    'tun_darwin_control.go.tmpl': 'protocol/tun/routervpn_desktop_control_darwin.go',
 }
 NETWORK_DISPATCH = '''\t// Invalidate native performance proofs before endpoints rebind.
 \tif manager := service.FromContext[adapter.ServiceManager](r.ctx); manager != nil {
@@ -164,8 +168,10 @@ def pt_copies():
         raw = path.read_bytes()
         prefix = { 'tor_physical_source_unix_test.go.tmpl': b'//go:build linux || darwin\n\n',
                    'tor_physical_linux.go.tmpl': b'//go:build linux\n\n',
+                   'tor_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
                    'tor_physical_linux_test.go.tmpl': b'//go:build linux\n\n',
-                   'tor_physical_other.go.tmpl': b'//go:build !linux\n\n' }.get(name, b'')
+                   'tor_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
+                   'tor_physical_other.go.tmpl': b'//go:build !linux && !darwin\n\n' }.get(name, b'')
         if path.is_symlink() or not raw.startswith(prefix+b'package routervpndesktoppt\n'):
             raise ValueError('Desktop PT adapter package boundary changed')
         content['routervpn/desktoppt/'+name.removesuffix('.tmpl')] = raw
@@ -174,6 +180,12 @@ def pt_copies():
         raw = path.read_bytes()
         if path.is_symlink() or not raw.startswith(b'package box\n'):
             raise ValueError('Desktop Tor Box package boundary changed')
+        content[relative] = raw
+    for name, relative in TUN_TEMPLATES.items():
+        tunnel = ROOT/'mobile/desktop'/name
+        raw = tunnel.read_bytes()
+        if tunnel.is_symlink() or not raw.startswith(b'//go:build darwin\n\npackage tun\n'):
+            raise ValueError('Desktop Darwin tunnel control package boundary changed')
         content[relative] = raw
     for name, relative in ROUTE_TEMPLATES.items():
         path = ROOT/'mobile/desktop'/name
@@ -258,7 +270,7 @@ def preflight_pt_files(vendor, content):
             raise ValueError('Desktop PT ownership record is invalid')
         previous = record['files']
         for relative, checksum in previous.items():
-            if (not relative.startswith(PT_NAMESPACES) and relative not in (*BOX_TEMPLATES.values(), *ROUTE_TEMPLATES.values())) or not isinstance(checksum, str) or not re.fullmatch('[0-9a-f]{64}', checksum):
+            if (not relative.startswith(PT_NAMESPACES) and relative not in (*BOX_TEMPLATES.values(), *ROUTE_TEMPLATES.values(), *TUN_TEMPLATES.values())) or not isinstance(checksum, str) or not re.fullmatch('[0-9a-f]{64}', checksum):
                 raise ValueError('Desktop PT cannot own unrelated native source')
             path = TOR.destination(vendor, relative)
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != checksum:
@@ -432,7 +444,8 @@ def prepare(vendor, go='go', *, env=None):
                     'desktop_socket_broker_test.go', 'desktop_socket_source_unix_test.go', 'desktop_socket_native_windows_test.go',
                     'desktop_socket_windows_identity_test.go', 'desktop_socket_windows_wfp_test.go',
                     'desktop_socket_windows_network_test.go', 'desktop_socket_windows_wfp_traffic_test.go',
-                    'desktop_socket_source_privileged_test.go', 'desktop_socket_linux_guardian_test.go')):
+                    'desktop_socket_source_privileged_test.go', 'desktop_socket_linux_guardian_test.go',
+                    'desktop_socket_darwin_guardian_test.go')):
                 continue
             raw = relocated_shared_source(path.read_bytes())
             write(vendor, 'routervpn/'+package+'/'+path.name, raw)

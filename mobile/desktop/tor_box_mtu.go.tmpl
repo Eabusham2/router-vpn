@@ -394,7 +394,7 @@ func (l *RouterVPNDesktopTorMTULease) changeMTUBounded(parent context.Context, e
 	if current != expected {
 		r.mtuRevision++
 	}
-	if err := r.network.BindPhysicalTunnel(operation, name, uint32(index)); err != nil {
+	if err := r.bindPhysicalTunnel(operation, reader, name, uint32(index)); err != nil {
 		r.Cancel()
 		return nil, errors.New("desktop Tor MTU replacement could not prove its actual tunnel policy")
 	}
