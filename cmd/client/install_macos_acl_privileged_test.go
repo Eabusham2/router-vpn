@@ -80,4 +80,50 @@ func TestNativeInstallerDarwinACLTrust(t *testing.T) {
 			}
 		})
 	}
+	for _, test := range []struct {
+		name, entry       string
+		ancestor, private bool
+		accepted          bool
+	}{
+		{"runtime-public-read", "everyone allow read,readattr,readextattr,readsecurity", false, false, true},
+		{"runtime-extension-write", "everyone allow write", false, false, false},
+		{"runtime-import-parent-write", "everyone allow add_file", true, false, false},
+		{"runtime-private-read", "everyone allow read", false, true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := macPythonRuntimeFiles(t, base)
+			target := fixture.extension
+			if test.ancestor {
+				target = filepath.Dir(fixture.dependency)
+			}
+			if test.private {
+				if err := os.Chmod(target, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := validateMacPythonRuntime(fixture.entry, fixture.framework); err != nil {
+				t.Fatal("native captured runtime baseline", err)
+			}
+			before, err := os.Stat(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if output, err := exec.Command("/bin/chmod", "+a", test.entry, target).CombinedOutput(); err != nil {
+				t.Fatalf("actual runtime ACL fixture: %v %s", err, output)
+			}
+			t.Cleanup(func() {
+				if output, err := exec.Command("/bin/chmod", "-N", target).CombinedOutput(); err != nil {
+					t.Errorf("remove exact runtime fixture ACL: %v %s", err, output)
+				}
+			})
+			after, err := os.Stat(target)
+			if err != nil || before.Mode().Perm() != after.Mode().Perm() || after.Mode().Perm()&0022 != 0 {
+				t.Fatal("runtime ACL fixture changed its apparently safe Unix mode bits", err)
+			}
+			_, err = validateMacPythonRuntime(fixture.entry, fixture.framework)
+			if (err == nil) != test.accepted {
+				t.Fatalf("actual runtime ACL accepted=%v, want %v: %v", err == nil, test.accepted, err)
+			}
+		})
+	}
 }

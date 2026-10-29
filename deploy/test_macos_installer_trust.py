@@ -13,6 +13,9 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('installer_trust_namespace', ROOT/'deploy/test_linux_controller_privilege.py')
 P = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(P)
+COMMON_CASES = ('TestNativeInstallerPythonTrust', 'TestMacPythonStaticLoadCapture',
+                'TestMacPythonEnvironmentAndLoaderPaths')
+COMMON_PATTERN = '^(' + '|'.join(COMMON_CASES) + ')$'
 
 
 def identities():
@@ -27,7 +30,7 @@ def main():
     parser.add_argument('--linux-namespace-binary', type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.linux_namespace_binary is not None:
-        raise SystemExit(P.namespace_test(args.linux_namespace_binary, '^TestNativeInstallerPythonTrust$'))
+        raise SystemExit(P.namespace_test(args.linux_namespace_binary, COMMON_PATTERN))
     if platform.system() not in ('Linux', 'Darwin'):
         raise RuntimeError('Interpreter trust needs a real Unix ownership boundary')
     sudo = P.UID.privilege_tool()
@@ -42,11 +45,14 @@ def main():
         if platform.system() == 'Linux':
             command = [sys.executable, str(Path(__file__).resolve()), '--linux-namespace-binary', str(binary)]
         else:
-            command = [str(binary), '-test.run=^TestNativeInstaller(PythonTrust|DarwinACLTrust)$', '-test.v', '-test.count=1', '-test.timeout=60s']
+            pattern = '^(' + '|'.join((*COMMON_CASES, 'TestNativeInstallerDarwinACLTrust')) + ')$'
+            command = [str(binary), '-test.run='+pattern, '-test.v', '-test.count=1', '-test.timeout=60s']
         if sudo is not None: command = [sudo, '-n', '--', *command]
         output = P.UID.run(command, cwd=ROOT, timeout=90, sudo=sudo)
-        if '--- PASS: TestNativeInstallerPythonTrust (' not in output or '--- SKIP:' in output:
+        if any('--- PASS: '+name+' (' not in output for name in COMMON_CASES) or '--- SKIP:' in output:
             raise RuntimeError('Actual interpreter ownership gate was not executed')
+        if '--- PASS: TestNativeInstallerPythonTrust/captured-runtime (' not in output:
+            raise RuntimeError('Actual static interpreter runtime closure was not executed')
         if platform.system() == 'Darwin' and '--- PASS: TestNativeInstallerDarwinACLTrust (' not in output:
             raise RuntimeError('Actual macOS ACL authority gate was not executed')
         if before != identities() or digest != hashlib.sha256(binary.read_bytes()).hexdigest():

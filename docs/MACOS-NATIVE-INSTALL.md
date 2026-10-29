@@ -13,10 +13,22 @@ separately from the generic application package.
 The protected platform helpers require Python 3.9 or newer from a root-owned
 Apple Command Line Tools installation or the signed
 [Python.org macOS installer](https://www.python.org/downloads/macos/). Before
-executing Python with privilege, the native installer checks the interpreter,
-its installation tree and parent directories, including native ACL grants that
-are independent of Unix mode bits. A user-writable interpreter or
-library installation cannot provide the privileged runtime. The installer uses
+executing Python with privilege, the native installer reads the selected
+executable's Mach-O load commands and captures its actual linked Python
+framework. It checks that framework's standard library, optional library
+archive, app interpreter and native extension dependencies, together with
+their parent directories and native ACL grants. Both architectures of a
+universal interpreter must name the same protected framework. The unrelated
+compiler, SDK and debugger tools in Command Line Tools are outside this
+Python runtime boundary.
+
+The check never runs an unproved interpreter to discover its own libraries.
+User-writable code, escaping library links, unowned native dependency paths
+and Python prefix overrides are rejected. Native OS dependencies remain in
+the protected macOS system namespace; cached system dylibs are not falsely
+reported as ordinary files. Privileged launch fixes dynamic-loader fallback
+to the system library and framework directories and disables ambient Python
+environment, user-site and global-site initialization. The installer uses
 the packaged VPN engines without compiling replacements on the Mac.
 
 The staged application, native runtime receipts and code signatures are

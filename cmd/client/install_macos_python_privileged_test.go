@@ -152,4 +152,5 @@ func TestNativeInstallerPythonTrust(t *testing.T) {
 			}
 		})
 	}
+	t.Run("captured-runtime", func(t *testing.T) { testNativeInstallerPythonRuntime(t, base) })
 }

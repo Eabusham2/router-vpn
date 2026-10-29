@@ -141,7 +141,9 @@ def run(arguments, *, check=True):
     return subprocess.run(list(map(str, arguments)), check=check, text=True,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                           env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'LC_ALL': 'C',
-                               'HOME': '/var/root', 'PYTHONNOUSERSITE': '1'}, timeout=120)
+                               'HOME': '/var/root', 'PYTHONNOUSERSITE': '1',
+                               'DYLD_FALLBACK_LIBRARY_PATH': '/usr/lib',
+                               'DYLD_FALLBACK_FRAMEWORK_PATH': '/System/Library/Frameworks'}, timeout=120)
 
 
 def launch_definition():
@@ -326,7 +328,11 @@ def stage_application(source, root, stage, installing_uid, python):
     wrapper = tools/'python3'
     if wrapper.exists():
         FILES.ordinary(wrapper, trusted=True)
-    wrapper.write_text('#!/bin/sh\nexec ' + shlex.quote(str(python)) + ' -EsS "$@"\n')
+    wrapper.write_text('#!/bin/sh\n'
+                       'DYLD_FALLBACK_LIBRARY_PATH=/usr/lib\n'
+                       'DYLD_FALLBACK_FRAMEWORK_PATH=/System/Library/Frameworks\n'
+                       'export DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH\n'
+                       'exec ' + shlex.quote(str(python)) + ' -EsS "$@"\n')
     os.chown(wrapper, 0, 0); wrapper.chmod(0o700)
     for name in REQUIRED & {'router-vpn-client', 'router-vpn-dns', 'router-vpn-start-layer-relay', 'router-vpn-update'}:
         if not os.access(stage/name, os.X_OK):

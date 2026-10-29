@@ -239,6 +239,7 @@ func macOSOwnedEnvironment() []string {
 		"HOME=/var/root", "LANG=en_US.UTF-8", "PATH=" + macOSOwnedControllerRoot + "/bin:/usr/bin:/bin:/usr/sbin:/sbin",
 		"HOMEVPN_ROOT=" + macOSOwnedControllerRoot, "HOMEVPN_CLIENT_CONFIG=" + macOSOwnedControllerRoot + "/client.json",
 		"HOMEVPN_NATIVE_APP=macos-appkit-product",
+		"DYLD_FALLBACK_LIBRARY_PATH=/usr/lib", "DYLD_FALLBACK_FRAMEWORK_PATH=/System/Library/Frameworks",
 	}
 }
 

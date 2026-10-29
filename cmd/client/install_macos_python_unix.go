@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -27,17 +26,17 @@ func macOSPythonTrustRoot(candidate string) (string, string, error) {
 		return "", "", err
 	}
 	const commandLineTools = "/Library/Developer/CommandLineTools"
-	var root string
+	var framework string
 	if strings.HasPrefix(canonical, commandLineTools+"/") {
-		root = commandLineTools
-	} else {
-		root = regexp.MustCompile(`^/Library/Frameworks/Python\.framework/Versions/[0-9]+\.[0-9]+/`).FindString(canonical)
-		root = strings.TrimSuffix(root, "/")
+		framework = commandLineTools + "/Library/Frameworks/Python3.framework"
+	} else if strings.HasPrefix(canonical, "/Library/Frameworks/Python.framework/Versions/") {
+		framework = "/Library/Frameworks/Python.framework"
 	}
-	if root == "" {
+	if framework == "" {
 		return "", "", errors.New("install a root-owned Python.org framework or Apple Command Line Tools Python before native installation; user-owned Homebrew runtimes cannot execute privileged helpers")
 	}
-	if err = validateMacPythonTree(root, canonical); err != nil {
+	root, err := validateMacPythonRuntime(canonical, framework)
+	if err != nil {
 		return "", "", err
 	}
 	return canonical, root, nil

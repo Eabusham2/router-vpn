@@ -33,27 +33,28 @@ func TestMacOSOwnedControllerNativeInterpreterSelection(t *testing.T) {
 	if err != nil {
 		t.Fatal("the shipping installer candidate failed its complete native ownership proof", candidate, err)
 	}
-	if python == "/usr/bin/python3" || !strings.HasPrefix(python, root+string(filepath.Separator)) {
-		t.Fatal("native discovery retained a developer-tool launcher instead of its captured interpreter", python, root)
+	if python == "/usr/bin/python3" || !strings.Contains(root, ".framework/Versions/") {
+		t.Fatal("native discovery did not capture the interpreter's actual linked framework", python, root)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, python, "-EsS", "-c", `import json, os, sys
-print(json.dumps({"executable": os.path.realpath(sys.executable), "library": os.path.realpath(json.__file__), "no_site": sys.flags.no_site, "no_user_site": sys.flags.no_user_site, "ignore_environment": sys.flags.ignore_environment}))`)
+	command := exec.CommandContext(ctx, python, "-EsS", "-c", `import json, os, sys, _ssl, _socket, _ctypes, zlib
+print(json.dumps({"executable": os.path.realpath(sys.executable), "library": os.path.realpath(json.__file__), "extensions": [os.path.realpath(module.__file__) for module in (_ssl, _socket, _ctypes, zlib)], "no_site": sys.flags.no_site, "no_user_site": sys.flags.no_user_site, "ignore_environment": sys.flags.ignore_environment}))`)
 	// A -c invocation adds its CWD to sys.path. Use the root-owned system
 	// directory, never the unprivileged checkout used to compile this test.
 	command.Dir = "/"
-	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "HOME=/var/root", "LC_ALL=C"}
+	command.Env = macOSPythonEnvironment()
 	output, err := command.Output()
 	if err != nil || len(output) > 8192 {
 		t.Fatal("captured trusted Python did not execute its bounded identity proof", err)
 	}
 	var result struct {
-		Executable        string `json:"executable"`
-		Library           string `json:"library"`
-		NoSite            int    `json:"no_site"`
-		NoUserSite        int    `json:"no_user_site"`
-		IgnoreEnvironment int    `json:"ignore_environment"`
+		Executable        string   `json:"executable"`
+		Library           string   `json:"library"`
+		Extensions        []string `json:"extensions"`
+		NoSite            int      `json:"no_site"`
+		NoUserSite        int      `json:"no_user_site"`
+		IgnoreEnvironment int      `json:"ignore_environment"`
 	}
 	if err := json.Unmarshal(output, &result); err != nil {
 		t.Fatal("trusted native interpreter returned malformed identity", err)
@@ -62,6 +63,14 @@ print(json.dumps({"executable": os.path.realpath(sys.executable), "library": os.
 	executed, actualErr := os.Stat(result.Executable)
 	if err != nil || actualErr != nil || !os.SameFile(captured, executed) || !strings.HasPrefix(result.Library, root+string(filepath.Separator)) || result.NoSite != 1 || result.NoUserSite != 1 || result.IgnoreEnvironment != 1 {
 		t.Fatal("native interpreter or library escaped its captured ownership or enabled ambient initialization", result, err, actualErr)
+	}
+	if len(result.Extensions) != 4 {
+		t.Fatal("native Python did not exercise every captured extension dependency", result.Extensions)
+	}
+	for _, extension := range result.Extensions {
+		if !strings.HasPrefix(extension, root+"/lib/python") {
+			t.Fatal("native Python loaded an extension outside the statically captured runtime", extension, root)
+		}
 	}
 	for _, rejected := range []string{"python3", "/usr/bin/python3", "/usr/local/bin/python3", "/opt/homebrew/bin/python3"} {
 		if _, _, err := macOSPythonTrustRoot(rejected); err == nil {

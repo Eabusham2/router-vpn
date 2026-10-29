@@ -66,7 +66,7 @@ func macOSInstallerUtility(arguments []string) (bool, error) {
 		}
 	}
 	command := exec.Command(python, "-EsS", filepath.Join(private, "install-macos-native.py"), source, "--caller-uid", strconv.FormatUint(caller, 10), "--python", python)
-	command.Env = []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin", "HOME=/var/root", "LC_ALL=C", "PYTHONNOUSERSITE=1"}
+	command.Env = macOSPythonEnvironment()
 	command.Dir = private
 	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr
 	return true, command.Run()

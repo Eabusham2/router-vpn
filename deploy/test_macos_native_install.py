@@ -138,12 +138,12 @@ class MacInstallTransactions(unittest.TestCase):
         (untrusted/'json.py').write_text('open(' + repr(str(cwd_marker)) + ',"w").write("cwd imported")\nraise RuntimeError("untrusted CWD module")\n')
         self.install()
         script = self.root/'client/interpreter-proof.py'
-        script.write_text('import json, sys\nprint(json.dumps([sys.flags.ignore_environment, sys.flags.no_user_site, sys.flags.no_site]))\n')
+        script.write_text('import json, os, sys\nprint(json.dumps([sys.flags.ignore_environment, sys.flags.no_user_site, sys.flags.no_site, os.environ.get("DYLD_FALLBACK_LIBRARY_PATH"), os.environ.get("DYLD_FALLBACK_FRAMEWORK_PATH")]))\n')
         wrapper = self.root/'bin/python3'
         environment = dict(os.environ, PYTHONPATH=str(untrusted), PYTHONHOME=str(untrusted))
         result = subprocess.run([wrapper, script], cwd=untrusted, env=environment, capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), [1, 1, 1])
+        self.assertEqual(json.loads(result.stdout), [1, 1, 1, '/usr/lib', '/System/Library/Frameworks'])
         self.assertFalse(site_marker.exists(), 'global site initialization ran before the protected helper')
         self.assertFalse(cwd_marker.exists(), 'an untrusted CWD/PYTHONPATH module replaced the captured helper dependency')
         # The negative control executes the same generated wrapper with only
@@ -152,7 +152,7 @@ class MacInstallTransactions(unittest.TestCase):
         broken.write_text(wrapper.read_text().replace(' -EsS ', ' -Es ')); broken.chmod(0o700)
         result = subprocess.run([broken, script], cwd=untrusted, env=environment, capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), [1, 1, 0])
+        self.assertEqual(json.loads(result.stdout), [1, 1, 0, '/usr/lib', '/System/Library/Frameworks'])
         self.assertTrue(site_marker.exists(), 'the global-site negative control did not reach its actual startup hook')
         self.assertFalse(cwd_marker.exists())
 
