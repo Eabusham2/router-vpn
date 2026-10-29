@@ -1,11 +1,45 @@
 # Current implementation status
 
-Updated October 28, 2026 (UTC). This file describes committed source
+Updated October 29, 2026 (UTC). This file describes committed source
 and remaining delivery work. The binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Current continuation
+## Latest implementation continuation
+
+The latest resumed check started at `f87b7809`, preserving the source already
+316 commits beyond historical release `745b3e41`. Current repairs and exact
+verified pushes through `34e032a7` are recorded in the
+[continuation evidence ledger](CONTINUATION-EVIDENCE-2026-10-28.md).
+
+Private-Router Tor Local/Server/Compare is now implemented across desktop,
+Android and Apple. Both comparison operands follow the captured candidate,
+both candidates share one external endpoint, and failed candidates receive no
+score. Complete-profile, Startup Last and Speed Lab restoration retain the
+already-proved execution. The older text below describing Tor Compare as
+unfinished is historical and does not reopen that completed source work.
+
+Captured PQ/MAX initial-key phases now propagate through mobile multihop,
+desktop multihop/comparison, private-server acquisition and Android single-node
+startup. Cancellation and source ownership remain checked during the longer
+startup phase; ordinary probes and steady-state checks keep their existing
+limits. The separate desktop single-node readiness path is still being closed.
+
+Fresh CI failures led to repairs of the actual Windows endpoint reservation,
+joined Tor process handle, Android permission/teardown fixtures, Apple compile
+dependencies, aggregate fixture deadline and selected privileged Go toolchain.
+Linux installer dependency checks now precede file replacement. The Direct
+dynamic-Tor DROP baseline is bound to its exact source/session, but the new
+Linux privileged guardian, public compiler/UI adoption and authenticated
+administrator launch path are not yet certified by a published complete batch.
+Windows/macOS dynamic Direct strict-protection factories remain unfinished.
+
+The last inspected `34e032a7` authoritative workflow was still pending. No
+current all-platform release, private deployment, signing operation or physical
+acceptance is claimed. Broader requested graph parity and all applicable live
+release requirements remain in scope.
+
+## October 28 source checkpoint (historical)
 
 The October 28 continuation started at `dbff30e8`, 231 commits ahead of the
 historical published `745b3e41` release. Personal/project context and the named
