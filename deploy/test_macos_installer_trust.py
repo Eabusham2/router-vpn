@@ -18,7 +18,8 @@ P = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(P)
 def identities():
     return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted([*(ROOT/'cmd/client').glob('install_macos_*.go'),
-                                *(ROOT/'cmd/client').glob('owned_path_acl*.go')])}
+                                *(ROOT/'cmd/client').glob('owned_path_acl*.go'),
+                                *(ROOT/'internal/common').glob('owned_path_acl*.go')])}
 
 
 def main():
