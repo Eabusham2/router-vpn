@@ -66,12 +66,23 @@ jobs:
         run: |
           python deploy/test_desktop_windows_traffic.py
           if ($LASTEXITCODE -ne 0) { throw 'Actual owned Windows WFP traffic gate failed' }
+      - name: Owned Windows protection and portable package dispatch
+        if: ${{ success() || failure() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          foreach($shell in @('pwsh','powershell.exe')){
+            python deploy/test_windows_owned_protection.py --shell $shell
+            if($LASTEXITCODE -ne 0){throw "Owned Windows protection adapter failed in $shell"}
+          }
       - name: Parse native PowerShell
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $files = @(
             'client/Private-RouterVPN-State.ps1',
+            'client/Private-RouterVPN-Protection.ps1',
+            'client/test-windows-owned-protection.ps1',
             'client/Private-RouterVPN-Job.ps1',
             'client/test-windows-private-job.ps1',
             'client/Private-RouterVPN-Wfp.ps1',

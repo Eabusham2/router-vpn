@@ -214,7 +214,7 @@ func TestRuntimeUtilityStartup(t *testing.T) {
 			{windowsProtectionUtilityFlag, "--help"},
 		} {
 			stdout, stderr, code := run(root, filepath.Join(root, "client.json"), args...)
-			if code != 1 || stdout != "" || stderr != "--windows-physical-protection requires exactly status, release or force-off\n" {
+			if code != 1 || stdout != "" || stderr != "--windows-physical-protection requires exactly probe, status, release or force-off\n" {
 				t.Fatalf("physical protection utility admitted arbitrary input or ordinary startup: args=%v code=%d out=%q err=%q", args, code, stdout, stderr)
 			}
 			if !reflect.DeepEqual(snapshot(root), before) {
@@ -222,7 +222,7 @@ func TestRuntimeUtilityStartup(t *testing.T) {
 			}
 		}
 		if runtime.GOOS != "windows" {
-			for _, operation := range []string{"status", "release", "force-off"} {
+			for _, operation := range []string{"probe", "status", "release", "force-off"} {
 				stdout, stderr, code := run(root, filepath.Join(root, "client.json"), windowsProtectionUtilityFlag, operation)
 				if code != 1 || stdout != "" || stderr != "owned Windows physical protection requires Windows\n" || !reflect.DeepEqual(snapshot(root), before) {
 					t.Fatalf("foreign platform fell through to ordinary startup: operation=%s code=%d out=%q err=%q", operation, code, stdout, stderr)

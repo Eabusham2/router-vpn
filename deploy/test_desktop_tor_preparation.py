@@ -147,6 +147,8 @@ class DesktopPTPreparation(unittest.TestCase):
                 self.assertEqual(generated['routervpn/mobiletor/'+name], (ROOT/'internal/mobiletor'/name).read_bytes())
             for name in ('desktop_socket_windows_identity.go', 'desktop_socket_windows_identity_api.go',
                          'desktop_socket_windows_identity_connect.go',
+                         'desktop_socket_windows_probe.go', 'desktop_socket_windows_probe_test.go',
+                         'desktop_socket_windows_probe_process_test.go',
                          'desktop_socket_windows_identity_test.go'):
                 self.assertEqual((self.vendor/'routervpn/mobiletor'/name).read_bytes(),
                                  (ROOT/'internal/mobiletor'/name).read_bytes())

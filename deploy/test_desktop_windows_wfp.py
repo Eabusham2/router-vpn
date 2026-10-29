@@ -33,6 +33,9 @@ REQUIRED = (
     "TestDesktopSocketWindowsWFPInterfaceReadback",
     "TestDesktopSocketWindowsWFPStatusAndNormalRelease",
     "TestDesktopSocketWindowsWFPStatusRejectsExtraRetainedRule",
+    "TestDesktopSocketWindowsWFPProbeOrdinaryAbsence",
+    "TestDesktopSocketWindowsWFPProbeOrdinaryProtectedObjects",
+    "TestDesktopSocketWindowsWFPProbeCancelledGate",
 )
 
 
@@ -41,6 +44,7 @@ def mutants(target):
     wfp = (target / "desktop_socket_windows_wfp.go").read_text(encoding="utf-8")
     policy = (target / "desktop_socket_windows_policy.go").read_text(encoding="utf-8")
     status = (target / "desktop_socket_windows_status.go").read_text(encoding="utf-8")
+    probe = (target / "desktop_socket_windows_probe.go").read_text(encoding="utf-8")
     return (
         ("extra-filter", "desktop_socket_windows_wfp.go", REQUIRED[4],
          "full WFP readback accepted an extra broader permit",
@@ -80,6 +84,21 @@ def mutants(target):
          IDENTITY.replace_once(status,
                                "if err := engine.AssertComplete(baseline.sublayer, baseline.baseline); err != nil {",
                                "if err := error(nil); err != nil {")),
+        ("probe-access-denied", "desktop_socket_windows_probe.go", REQUIRED[13],
+         "ordinary protected session-lock access denial was reported as missing native protection",
+         IDENTITY.replace_once(probe,
+                               'if err := desktopWFPError("probe managed protection absence", status); err != nil {\n\t\t\treturn false, err\n\t\t}',
+                               'if err := desktopWFPError("probe managed protection absence", status); err != nil {\n\t\t\treturn true, nil\n\t\t}')),
+        ("probe-omits-baseline", "desktop_socket_windows_probe.go", REQUIRED[13],
+         "ordinary protected baseline access denial was reported as missing native protection",
+         IDENTITY.replace_once(probe,
+                               '[]string{"session-lock", "baseline", "session-lock"}',
+                               '[]string{"session-lock", "session-lock"}')),
+        ("probe-omits-lock", "desktop_socket_windows_probe.go", REQUIRED[13],
+         "ordinary protected session-lock access denial was reported as missing native protection",
+         IDENTITY.replace_once(probe,
+                               '[]string{"session-lock", "baseline", "session-lock"}',
+                               '[]string{"baseline", "baseline"}')),
     )
 
 
@@ -92,6 +111,8 @@ def execute(source=ROOT, go="go", *, env=None):
     for name in ("desktop_socket_windows_wfp.go", "desktop_socket_windows_wfp_security.go",
                  "desktop_socket_windows_baseline.go", "desktop_socket_windows_policy.go",
                  "desktop_socket_windows_status.go",
+                 "desktop_socket_windows_probe.go", "desktop_socket_windows_probe_test.go",
+                 "desktop_socket_windows_probe_process_test.go",
                  "desktop_socket_windows_tunnel.go", "desktop_socket_windows_wfp_test.go"):
         if name not in before:
             raise ValueError("WFP gate lost its shipping source closure: " + name)
@@ -113,6 +134,9 @@ def execute(source=ROOT, go="go", *, env=None):
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if status or "--- SKIP:" in output or any("--- PASS: " + name + " (" not in output for name in REQUIRED):
             raise ValueError("WFP baseline did not execute every actual kernel proof")
+        for kind in ("session-lock", "baseline"):
+            if "--- PASS: " + REQUIRED[13] + "/" + kind + " (" not in output:
+                raise ValueError("WFP probe omitted an actual non-admin protected-object query: " + kind)
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("WFP baseline binary changed during execution")
         for label, filename, test, witness, replacement in candidates:
@@ -133,7 +157,7 @@ def execute(source=ROOT, go="go", *, env=None):
             print("Rejected production WFP mutant:", label, flush=True)
         if IDENTITY.checked_sources(source)[3] != before:
             raise ValueError("WFP source changed during its actual native gate")
-    print("Owned Windows WFP baseline passed twelve actual kernel/lifecycle cases and eight production negative controls; socket traffic and native admission remain separately gated.", flush=True)
+    print("Owned Windows WFP baseline passed fifteen actual kernel/lifecycle cases, distinct non-admin process absence/ACCESS_DENIED proofs, and eleven production negative controls; socket traffic and native admission remain separately gated.", flush=True)
 
 
 if __name__ == "__main__":

@@ -22,6 +22,17 @@ func windowsPhysicalProtectionUtility(args []string) (bool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	if operation == "probe" {
+		absent, err := mobiletor.ProbeDesktopWindowsProtectionAbsent(ctx)
+		if err != nil {
+			return true, err
+		}
+		// This distinct output cannot be confused with authoritative status.
+		return true, json.NewEncoder(os.Stdout).Encode(struct {
+			Schema int  `json:"schema"`
+			Absent bool `json:"absent"`
+		}{1, absent})
+	}
 	if operation != "status" {
 		var owner *mobiletor.DesktopWindowsProtectionRecovery
 		if operation == "force-off" {
