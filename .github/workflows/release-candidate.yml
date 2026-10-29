@@ -12,6 +12,10 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  macos-owned-controller:
+    name: Native macOS controller ownership on both architectures
+    uses: ./.github/workflows/macos-native-installer-contract.yml
+
   native-runtimes:
     name: Build and verify complete native runtimes
     uses: ./.github/workflows/desktop-native-runtime.yml
@@ -470,7 +474,7 @@ jobs:
         with: {name: RouterVPN-iOS-release-candidate, path: ios/RouterVPN/build/RouterVPN-native-unsigned-resignable.ipa, if-no-files-found: error, retention-days: 1}
 
   macos:
-    needs: native-runtimes
+    needs: [native-runtimes, macos-owned-controller]
     name: macOS native AppKit amd64 + arm64
     runs-on: macos-15
     steps:
