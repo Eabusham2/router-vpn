@@ -171,7 +171,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
           "Actual TUN, Tor circuit, Connected, wrapper launch and device acceptance remain separate.", flush=True)
 
 
-def standalone(go="go", *, prospective=False):
+def standalone(go="go", *, prospective=False, native_test=None):
     """Prepare the same pinned sources for a focused CGO-disabled diagnostic.
 
     This does not build/publish packages, link PQ, or claim race verification.
@@ -179,7 +179,7 @@ def standalone(go="go", *, prospective=False):
     compiler, shipping tags, verified PQ archive and supported race setting.
     """
     if platform.system() != "Windows" or not IDENTITY.ctypes.windll.shell32.IsUserAnAdmin():
-        raise ValueError("Standalone bootstrap diagnostic requires actual elevated Windows")
+        raise ValueError("Standalone native diagnostic requires actual elevated Windows")
     compiler, captured, _ = IDENTITY.selected_compiler(go, ROOT, dict(os.environ))
     spec = importlib.util.spec_from_file_location("windows_bootstrap_native_builder", ROOT / "deploy/build-native-runtime.py")
     native = importlib.util.module_from_spec(spec)
@@ -209,8 +209,9 @@ def standalone(go="go", *, prospective=False):
             native.run([compiler, "mod", "tidy"], cwd=source, env=captured)
             native.run([compiler, "mod", "verify"], cwd=source, env=captured)
             native.POLICY.AMNEZIA.verify(source)
-            print("Standalone diagnostic: exact pinned native source, CGO disabled, bootstrap only; no package/PQ/race claim.", flush=True)
-            execute(source, str(compiler), prospective=prospective, env=captured, bootstrap_only=True)
+            print("Standalone diagnostic: exact pinned native source, CGO disabled; no package/PQ/race claim.", flush=True)
+            selected_test = execute if native_test is None else native_test
+            selected_test(source, str(compiler), prospective=prospective, env=captured, bootstrap_only=True)
         finally:
             os.environ.clear()
             os.environ.update(previous)

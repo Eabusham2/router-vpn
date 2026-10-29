@@ -91,6 +91,13 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
                         self.assertLessEqual(kwargs['timeout'], 900)
                         return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_physical_tunnel.py'):
+                        self.assertEqual(system, 'windows')
+                        self.assertEqual(args[2:], [str(source.resolve())])
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertLessEqual(kwargs['timeout'], 1200)
+                        return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_guardian.py'):
                         self.assertEqual(system, 'darwin')
                         self.assertEqual(args[2:], [str(source.resolve()), '--mutations'])
@@ -140,8 +147,14 @@ class NativeSocketUIDGate(unittest.TestCase):
                 if bootstrap:
                     self.assertGreater(calls.index(bootstrap[0]), calls.index(traffic[0]))
                 self.assertIn(ROOT/'deploy/test_windows_physical_bootstrap.py', N.inputs())
-                for name in ('kernel_observer.go', 'resolver_access.go', 'bootstrap_test.go'):
+                for name in ('kernel_observer.go', 'resolver_access.go', 'bootstrap_test.go', 'tunnel_test.go'):
                     self.assertIn(ROOT/'deploy/fixtures/windows-physical-bootstrap'/name, N.inputs())
+                tunnel = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_physical_tunnel.py')]
+                self.assertEqual(len(tunnel), 1 if system == 'windows' else 0)
+                if tunnel:
+                    self.assertGreater(calls.index(tunnel[0]), calls.index(bootstrap[0]))
+                self.assertIn(ROOT/'deploy/test_windows_physical_tunnel.py', N.inputs())
+                self.assertIn(ROOT/'deploy/test_windows_physical_tunnel_runner.py', N.inputs())
                 guardian = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_linux_guardian.py')]
                 self.assertEqual(len(guardian), 1 if system == 'linux' else 0)
                 self.assertIn(ROOT/'deploy/test_desktop_linux_guardian.py', N.inputs())

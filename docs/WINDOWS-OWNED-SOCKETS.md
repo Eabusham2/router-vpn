@@ -150,6 +150,35 @@ admission, remove `--prospective` from both gates and rerun against the
 unmodified admitted compiler/native source. This bootstrap evidence and the
 separate remaining connection/installation evidence must remain distinct.
 
+### Real Wintun identity and retirement
+
+`deploy/test_windows_physical_tunnel.py` adds a separate actual Windows gate
+for the shipping Wintun reader and `BindTunnel` / `RetireTunnel`. It reconstructs
+the checksum-pinned sing-tun preparation in a private directory and compares
+every prepared source and embedded driver byte before compiling. Extra, missing
+or changed dependency files fail the gate; the subject is never repaired.
+
+The test creates uniquely named, held native adapters with external
+configuration and `AutoRoute=false`. It configures no addresses or DNS and
+adds no default route. It compares the retained adapter's LUID with independent
+Windows index/LUID readback, then reads the real WFP permit conditions through
+a separate BFE session. IPv4-only and IPv4/IPv6 policies must have exactly their
+required directions and families. A captured physical interface, wrong network
+generation, duplicate binding and stale reader retirement are rejected. A
+replacement reader remains authorized when its predecessor sends a late
+retirement callback. Exact filter absence precedes reader close; complete
+interface enumeration then proves the created adapters' names and LUIDs absent.
+
+Three compiled production mutations must fail their intended native assertions:
+allowing the physical interface as a tunnel, replacing the retained LUID in a
+permit, and accepting another reader's retirement. All filters additionally
+match only that test executable. There is no public OS-admission overlay in this
+gate. Both native architectures run the standalone diagnostic; matching package
+builds repeat it with their shipping compiler/link settings and supported race
+mode. Cross-compilation is not actual Wintun acceptance. The bounded identity
+and retirement result does not establish tunnel packet forwarding, selected-path
+DNS through the TUN, a Tor circuit, Connected state, or physical-device behavior.
+
 The WFP baseline gate by itself does not prove connected socket traffic or the
 shipping Windows wrapper/factory composition. Those gates and the complete
 native integration remain required before Windows strict Direct dynamic Tor
@@ -166,3 +195,4 @@ Microsoft primary references:
 - [User-mode ALE endpoint inspection](https://learn.microsoft.com/windows/win32/api/fwpsu/nf-fwpsu-fwpsaleendpointgetbyid0)
 - [Winsock socket duplication](https://learn.microsoft.com/windows/win32/api/winsock2/nf-winsock2-wsaduplicatesocketw)
 - [IPv4 adapter and DHCP lease readback](https://learn.microsoft.com/windows/win32/api/iphlpapi/nf-iphlpapi-getadaptersinfo)
+- [Wintun retained adapter, session and close API](https://git.zx2c4.com/wintun/about/)

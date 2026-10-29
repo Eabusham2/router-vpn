@@ -104,6 +104,8 @@ def inputs():
                              ROOT/'deploy/test_desktop_windows_traffic.py',
                              ROOT/'deploy/test_windows_physical_bootstrap.py',
                              ROOT/'deploy/test_windows_physical_bootstrap_runner.py',
+                             ROOT/'deploy/test_windows_physical_tunnel.py',
+                             ROOT/'deploy/test_windows_physical_tunnel_runner.py',
                              *sorted((ROOT/'deploy/fixtures/windows-physical-bootstrap').glob('*.go')),
                              ROOT/'deploy/test_desktop_linux_guardian.py',
                              ROOT/'deploy/test_desktop_darwin_guardian.py',
@@ -522,6 +524,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 # Admission must remove --prospective and rerun unchanged code.
                 run([sys.executable, ROOT/'deploy/test_windows_physical_bootstrap.py', source, '--prospective'],
                     env=env, timeout=900)
+                run([sys.executable, ROOT/'deploy/test_windows_physical_tunnel.py', source],
+                    env=env, timeout=1200)
             if target.startswith('linux/'):
                 run([sys.executable, ROOT/'deploy/test_desktop_linux_guardian.py', source],
                     env=env, timeout=300)

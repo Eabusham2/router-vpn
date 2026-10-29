@@ -14,6 +14,7 @@ on:
       - 'deploy/mobile_*policy.py'
       - 'deploy/build-native-runtime.py'
       - 'deploy/test_windows_physical_bootstrap*.py'
+      - 'deploy/test_windows_physical_tunnel*.py'
       - 'deploy/fixtures/windows-physical-bootstrap/**'
       - '.github/workflows/windows-physical-bootstrap-contract.yml'
   pull_request:
@@ -28,6 +29,7 @@ on:
       - 'deploy/mobile_*policy.py'
       - 'deploy/build-native-runtime.py'
       - 'deploy/test_windows_physical_bootstrap*.py'
+      - 'deploy/test_windows_physical_tunnel*.py'
       - 'deploy/fixtures/windows-physical-bootstrap/**'
       - '.github/workflows/windows-physical-bootstrap-contract.yml'
   workflow_dispatch:
@@ -75,3 +77,13 @@ jobs:
           # fixture resolver receives a bounded real HTTPS DNS query.
           python deploy/test_windows_physical_bootstrap.py --standalone --prospective
           if ($LASTEXITCODE -ne 0) { throw 'Actual Windows bootstrap composition failed' }
+      - name: Prove actual Wintun ownership and WFP retirement
+        if: success() || failure()
+        shell: pwsh
+        run: |
+          python deploy/test_windows_physical_tunnel_runner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Actual Wintun source/overlay boundary failed' }
+          # Unique held native adapters only; external configuration prevents
+          # address, default-route and DNS changes. No OS admission overlay.
+          python deploy/test_windows_physical_tunnel.py --standalone
+          if ($LASTEXITCODE -ne 0) { throw 'Actual Wintun/WFP ownership failed' }
