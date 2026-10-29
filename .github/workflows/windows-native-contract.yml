@@ -37,6 +37,12 @@ jobs:
         run: |
           python deploy/test_desktop_windows_identity.py
           if ($LASTEXITCODE -ne 0) { throw 'Actual Windows isolated socket identity gate failed' }
+      - name: Owned Windows WFP baseline and recovery
+        if: ${{ success() || failure() }}
+        shell: pwsh
+        run: |
+          python deploy/test_desktop_windows_wfp.py
+          if ($LASTEXITCODE -ne 0) { throw 'Actual owned Windows WFP baseline gate failed' }
       - name: Parse native PowerShell
         shell: pwsh
         run: |
