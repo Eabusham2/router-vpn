@@ -186,6 +186,28 @@ func macOSControllerNativeInstall(t *testing.T) *macOSControllerNativeFixture {
 	}
 	fixture := &macOSControllerNativeFixture{t: t, uid: uint32(uid), root: rootIdentity}
 	t.Cleanup(func() {
+		defer func() {
+			if fixture.log == nil {
+				return
+			}
+			defer fixture.log.Close()
+			if !t.Failed() {
+				return
+			}
+			// A missing socket or receipt may be caused by the actual nested
+			// supervisor/child bootstrap. Keep its bounded diagnostic after
+			// cleanup/join, including when ownership prevents path removal.
+			// Read the retained file descriptor: TempDir cleanup may already
+			// have unlinked its pathname, without retiring the child writer.
+			if info, err := fixture.log.Stat(); err == nil {
+				start := max(int64(0), info.Size()-24*1024)
+				body := make([]byte, info.Size()-start)
+				count, _ := fixture.log.ReadAt(body, start)
+				if count > 0 {
+					t.Logf("actual native supervisor/child failure output (bounded tail):\n%s", body[:count])
+				}
+			}
+		}()
 		current, err := os.Lstat(macOSOwnedControllerRoot)
 		if err != nil || !os.SameFile(fixture.root, current) {
 			t.Error("native fixture root changed; refusing replacement cleanup", err)
@@ -226,9 +248,6 @@ func macOSControllerNativeInstall(t *testing.T) *macOSControllerNativeFixture {
 			if err := os.RemoveAll(path); err != nil {
 				t.Error(err)
 			}
-		}
-		if fixture.log != nil {
-			fixture.log.Close()
 		}
 	})
 	installed, err := os.Executable()
@@ -667,6 +686,22 @@ func TestMacOSOwnedControllerNativeAppKitClient(t *testing.T) {
 			case <-joined:
 			case <-time.After(5 * time.Second):
 				t.Error("the captured native test harness did not join")
+			}
+		}
+		if t.Failed() {
+			select {
+			case <-joined:
+				// Wait has joined exec's output-copy goroutines. Reading the
+				// buffer before that acknowledgement would race the native UI.
+				body := output.Bytes()
+				if len(body) > 24*1024 {
+					body = body[len(body)-24*1024:]
+				}
+				if len(body) > 0 {
+					t.Logf("actual native AppKit failure output (bounded tail):\n%s", body)
+				}
+			default:
+				t.Log("actual native AppKit output remains owned by an unjoined child")
 			}
 		}
 	})
