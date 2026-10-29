@@ -165,8 +165,11 @@ func desktopDarwinAccountRecord(account string, uid uint32) (map[string]string, 
 		return nil, err
 	}
 	search, err := desktopDarwinCommand(ctx, "/usr/bin/dscl", nil, "/Local/Default", "-search", "/Users", "UniqueID", strconv.FormatUint(uint64(uid), 10))
-	if err != nil || strings.Join(strings.Fields(string(search)), " ") != account+" "+strconv.FormatUint(uint64(uid), 10) || !desktopDarwinUIDAccount(uid, account) {
-		return nil, errors.New("Darwin physical UID has another local or directory owner")
+	if err != nil {
+		return nil, errors.New("Darwin physical UID local search did not complete")
+	}
+	if err := desktopDarwinUIDSearchProof(search, account, uid, desktopDarwinUIDAccount(uid, account)); err != nil {
+		return nil, err
 	}
 	return values, nil
 }

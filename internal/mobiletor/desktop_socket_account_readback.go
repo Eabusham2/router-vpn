@@ -15,6 +15,40 @@ const desktopDarwinHiddenAttribute = "dsAttrTypeNative:IsHidden"
 
 var desktopDarwinAccountAttributes = []string{"RecordName", "UniqueID", "PrimaryGroupID", "NFSHomeDirectory", "UserShell", "Password", "AuthenticationAuthority", desktopDarwinHiddenAttribute, "GeneratedUID"}
 
+// dscl -search prints a record name, the selected attribute and its NSArray
+// description ("name\t\tUniqueID = (\n    decimal\n)\n"). Its -list format is
+// different. Parse only that single captured record/value, while retaining the
+// independent libc lookup through the configured system directory namespace.
+// Apple source: DSTools/dscl/PathRecordType.m, printSearch:Results:.
+func desktopDarwinUIDSearchProof(raw []byte, account string, uid uint32, nativeMatch bool) error {
+	if len(raw) == 0 || len(raw) > 4096 || !strings.HasPrefix(account, "_rvpnt_") || !desktopSocketHex(strings.TrimPrefix(account, "_rvpnt_"), 20) || uid < 0x40000000 || uid >= 0x80000000 {
+		return errors.New("Darwin physical UID search has an invalid capture or readback bound")
+	}
+	for _, value := range raw {
+		if value > 0x7e || value < 0x20 && value != '\t' && value != '\r' && value != '\n' {
+			return errors.New("Darwin physical UID search has an invalid character shape")
+		}
+	}
+	// Tokenize punctuation separately so compact or multiline whitespace cannot
+	// hide another value, duplicate record, malformed delimiter or attribute.
+	fields := strings.Fields(strings.NewReplacer("(", " ( ", ")", " ) ", "=", " = ").Replace(string(raw)))
+	shape := len(fields) == 6
+	nameMatch, keyMatch, valueMatch := false, false, false
+	if shape {
+		nameMatch, keyMatch = fields[0] == account, fields[1] == "UniqueID"
+		valueMatch = fields[4] == strconv.FormatUint(uint64(uid), 10)
+		shape = fields[2] == "=" && fields[3] == "(" && fields[5] == ")"
+	}
+	if !shape || !nameMatch || !keyMatch || !valueMatch || !nativeMatch {
+		// Directory text may contain credentials or arbitrary user-controlled
+		// values. These booleans and counts distinguish the failed proof without
+		// printing a record name, UID, returned value or command stderr.
+		return fmt.Errorf("Darwin physical UID has another local or directory owner: bytes=%d fields=%d shape=%t name_match=%t key_match=%t value_match=%t native_match=%t",
+			len(raw), len(fields), shape, nameMatch, keyMatch, valueMatch, nativeMatch)
+	}
+	return nil
+}
+
 func desktopDarwinParseAccountRecord(raw []byte, account string, uid uint32) (map[string]string, error) {
 	if len(raw) == 0 || len(raw) > 4096 || !strings.HasPrefix(account, "_rvpnt_") || !desktopSocketHex(strings.TrimPrefix(account, "_rvpnt_"), 20) || uid < 0x40000000 || uid >= 0x80000000 {
 		return nil, errors.New("Darwin physical account identity is invalid")

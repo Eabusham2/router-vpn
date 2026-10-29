@@ -5,6 +5,73 @@ import (
 	"testing"
 )
 
+func TestDesktopDarwinUIDSearchRequiresOneExactLocalAndNativeIdentity(t *testing.T) {
+	account := "_rvpnt_" + strings.Repeat("1", 20)
+	const uid = 0x40000001
+	raw := account + "\t\tUniqueID = (\n    1073741825\n)\n"
+	for _, value := range []string{raw, account + "\t\tUniqueID = (1073741825)\n"} {
+		if err := desktopDarwinUIDSearchProof([]byte(value), account, uid, true); err != nil {
+			t.Fatal("actual dscl search description lost its single captured UID", err)
+		}
+	}
+	for _, change := range []struct{ name, value string }{
+		{"list-format", account + " 1073741825\n"},
+		{"missing", ""},
+		{"duplicate-record", raw + raw},
+		{"foreign-record", raw + strings.Replace(raw, account, "_rvpnt_"+strings.Repeat("2", 20), 1)},
+		{"foreign-name", strings.Replace(raw, account, "_rvpnt_"+strings.Repeat("2", 20), 1)},
+		{"other-uid", strings.Replace(raw, "1073741825", "1073741826", 1)},
+		{"uid-prefix", strings.Replace(raw, "1073741825", "01073741825", 1)},
+		{"two-values", strings.Replace(raw, "1073741825", "1073741825, 1073741825", 1)},
+		{"other-attribute", strings.Replace(raw, "UniqueID", "PrimaryGroupID", 1)},
+		{"native-alias", strings.Replace(raw, "UniqueID", "dsAttrTypeNative:UniqueID", 1)},
+		{"unrequested-raw-prefix", strings.Replace(raw, "UniqueID", "dsAttrTypeStandard:UniqueID", 1)},
+		{"missing-assignment", strings.Replace(raw, "=", "", 1)},
+		{"missing-array", strings.NewReplacer("(", "", ")", "").Replace(raw)},
+		{"nested-array", strings.Replace(raw, "(", "((", 1)},
+		{"quoted-value", strings.Replace(raw, "1073741825", "\"1073741825\"", 1)},
+		{"trailing-output", raw + "another-field: credential-value\n"},
+		{"control", raw + "\x00"},
+		{"unicode-space", strings.Replace(raw, " = ", "\u00a0=\u00a0", 1)},
+		{"unbounded", raw + strings.Repeat("x", 4096)},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			if err := desktopDarwinUIDSearchProof([]byte(change.value), account, uid, true); err == nil {
+				t.Fatal("ambiguous or foreign local UID search acquired exclusive identity")
+			}
+		})
+	}
+	if err := desktopDarwinUIDSearchProof([]byte(raw), account, uid, false); err == nil {
+		t.Fatal("local UID search replaced independent system directory ownership")
+	}
+	for _, capture := range []struct {
+		account string
+		uid     uint32
+	}{{"foreign", uid}, {account, 0}, {account, 0x80000000}} {
+		if err := desktopDarwinUIDSearchProof([]byte(raw), capture.account, capture.uid, true); err == nil {
+			t.Fatal("invalid caller capture acquired UID authority")
+		}
+	}
+}
+
+func TestDesktopDarwinUIDSearchDiagnosticsDoNotDiscloseDirectoryValues(t *testing.T) {
+	account := "_rvpnt_" + strings.Repeat("1", 20)
+	raw := account + "\t\tUniqueID = (\n    private-directory-value\n)\n"
+	err := desktopDarwinUIDSearchProof([]byte(raw), account, 0x40000001, false)
+	if err == nil {
+		t.Fatal("foreign UID text unexpectedly passed")
+	}
+	message := err.Error()
+	if len(message) > 256 || strings.ContainsAny(message, "\r\n\t") || strings.Contains(message, account) || strings.Contains(message, "private-directory-value") || strings.Contains(message, "1073741825") {
+		t.Fatal("UID proof diagnostics disclosed directory values or lost their bound")
+	}
+	for _, part := range []string{"fields=6", "shape=true", "name_match=true", "key_match=true", "value_match=false", "native_match=false"} {
+		if !strings.Contains(message, part) {
+			t.Fatal("UID proof diagnostics lost the failed boundary", part, message)
+		}
+	}
+}
+
 func TestDesktopDarwinAccountDiagnosticsRemainBoundedAndDoNotDiscloseValues(t *testing.T) {
 	account := "_rvpnt_" + strings.Repeat("1", 20)
 	values := map[string]string{
