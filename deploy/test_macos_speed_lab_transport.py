@@ -184,7 +184,7 @@ print("Actual Swift URLSession cancellation, ownership, bounds and failure contr
 '''.replace('METHODS',methods)
     (fixture/'main.swift').write_text(main)
     try:
-        subprocess.run(['swiftc','-swift-version','5','-module-cache-path',str(directory/'module-cache'),str(fixture/'Transport.swift'),str(fixture/'main.swift'),'-o',str(fixture/'transport-test')],check=True,timeout=120)
+        subprocess.run(['swiftc','-swift-version','5','-module-cache-path',str(directory/'module-cache'),str(ROOT/'client/macos/RouterVPNMacControllerAuth.swift'),str(fixture/'Transport.swift'),str(fixture/'main.swift'),'-o',str(fixture/'transport-test')],check=True,timeout=120)
         result=subprocess.run([str(fixture/'transport-test'),'http://127.0.0.1:'+str(server.server_address[1]),str(fixture)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=35)
         if mutation=='shipping':
             print(result.stdout,end='');assert result.returncode==0,result.stdout+'\nLoopback events: '+repr(events)+'\nHits: '+repr(hits)+'\nErrors: '+repr(errors)

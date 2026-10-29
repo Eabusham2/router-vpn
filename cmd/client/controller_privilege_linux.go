@@ -4,8 +4,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -160,19 +158,7 @@ func containsOwnedControllerArgument(arguments []string) bool {
 }
 
 func decodeLinuxOwnedHandshake(frame []byte) (string, string, error) {
-	var request struct {
-		Schema      int    `json:"schema"`
-		AccessToken string `json:"access_token"`
-		OwnerToken  string `json:"owner_token"`
-	}
-	var fields map[string]json.RawMessage
-	if len(frame) > 384 || len(frame) == 0 || frame[len(frame)-1] != '\n' || bytes.Count(frame, []byte{'\n'}) != 1 ||
-		decodeRelayControlJSON(frame, &request) != nil || json.Unmarshal(frame, &fields) != nil || len(fields) != 3 ||
-		fields["schema"] == nil || fields["access_token"] == nil || fields["owner_token"] == nil ||
-		request.Schema != 1 || !validLocalControllerSecret(request.AccessToken) || !validControllerOwnerToken(request.OwnerToken) {
-		return "", "", errors.New("the native controller requires one exact private launch identity")
-	}
-	return request.AccessToken, request.OwnerToken, nil
+	return decodeOwnedControllerHandshake(frame)
 }
 
 func validateLinuxOwnedConfiguration(config common.ClientConfig) error {
@@ -197,65 +183,11 @@ func validateLinuxOwnedConfiguration(config common.ClientConfig) error {
 	return nil
 }
 
-func linuxOwnedInfo(info fs.FileInfo) bool {
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	return ok && stat.Uid == 0 && stat.Gid == 0 && info.Mode()&0022 == 0 &&
-		info.Mode()&(os.ModeSymlink|os.ModeSetuid|os.ModeSetgid) == 0 &&
-		(info.IsDir() || info.Mode().IsRegular() && stat.Nlink == 1)
-}
-
-func linuxOwnedAncestors(path string) error {
-	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
-		return errors.New("the native controller requires a canonical installed path")
-	}
-	for {
-		info, err := os.Lstat(path)
-		if err != nil || !info.IsDir() || !linuxOwnedInfo(info) {
-			return errors.New("the installed controller path is not exclusively root-owned")
-		}
-		if path == string(filepath.Separator) {
-			return nil
-		}
-		path = filepath.Dir(path)
-	}
-}
-
-func linuxOwnedInstall(root string) error {
-	if err := linuxOwnedAncestors(root); err != nil {
-		return err
-	}
-	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, failure error) error {
-		if failure != nil {
-			return errors.New("the installed controller files cannot be checked safely")
-		}
-		info, err := entry.Info()
-		if err != nil || !linuxOwnedInfo(info) {
-			return errors.New("installed controller code or state has unsafe ownership, permissions or links")
-		}
-		return nil
-	})
-}
-
+func linuxOwnedInfo(info fs.FileInfo) bool  { return ownedDesktopInfo(info) }
+func linuxOwnedAncestors(path string) error { return ownedDesktopAncestors(path) }
+func linuxOwnedInstall(root string) error   { return ownedDesktopInstall(root) }
 func linuxOwnedLock(path string, exclusive bool) (*os.File, error) {
-	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0600)
-	if err != nil {
-		return nil, err
-	}
-	file := os.NewFile(uintptr(fd), path)
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || !linuxOwnedInfo(info) || info.Mode().Perm()&0077 != 0 {
-		file.Close()
-		return nil, errors.New("unsafe installed controller lock")
-	}
-	operation := syscall.LOCK_SH
-	if exclusive {
-		operation = syscall.LOCK_EX
-	}
-	if err = syscall.Flock(fd, operation|syscall.LOCK_NB); err != nil {
-		file.Close()
-		return nil, err
-	}
-	return file, nil
+	return ownedDesktopLock(path, exclusive)
 }
 
 func linuxOwnedInput(input *os.File, uid uint32) (*os.File, error) {

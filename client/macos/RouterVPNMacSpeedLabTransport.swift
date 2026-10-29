@@ -27,6 +27,7 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if let body { request.httpBody = try JSONSerialization.data(withJSONObject: body); request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
+        try RouterVPNMacLocalAuthorization.shared.authorize(&request)
         self.completion = completion
         super.init()
         let configuration = URLSessionConfiguration.ephemeral

@@ -319,7 +319,7 @@ print("Actual Swift comparison HTTP nonce, generation, redirect, bounds, replace
     main.write_text(program)
     try:
         subprocess.run(['swiftc', '-swift-version', '5', '-module-cache-path', str(directory / 'module-cache'),
-                        str(main), '-o', str(fixture / 'progress-test')], check=True, timeout=120)
+                        str(ROOT / 'client/macos/RouterVPNMacControllerAuth.swift'), str(main), '-o', str(fixture / 'progress-test')], check=True, timeout=120)
         result = subprocess.run([str(fixture / 'progress-test'), 'http://127.0.0.1:' + str(server.server_address[1]), str(fixture)],
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=35)
         if mutation == 'shipping':

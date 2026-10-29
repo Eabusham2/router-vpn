@@ -44,8 +44,18 @@ protocol RouterVPNMacShutdownRequest: AnyObject { func start(); func cancel() }
 protocol RouterVPNMacShutdownProcess: AnyObject {
     var processIdentifier: Int32 { get }
     var isRunning: Bool { get }
+    var joinedSuccessfully: Bool { get }
+    var joinFailure: String? { get }
+    var retiredBeforeReady: Bool { get }
 }
-extension Process: RouterVPNMacShutdownProcess {}
+extension RouterVPNMacShutdownProcess {
+    var joinedSuccessfully: Bool { !isRunning }
+    var joinFailure: String? { nil }
+    var retiredBeforeReady: Bool { false }
+}
+extension Process: RouterVPNMacShutdownProcess {
+    var joinedSuccessfully: Bool { !isRunning && terminationReason == .exit && terminationStatus == 0 }
+}
 
 // A separate session owns this one terminal request. Its buffer, task and
 // completion are protected by lock; redirect refusal keeps the launch nonce local.
@@ -74,6 +84,7 @@ final class RouterVPNMacShutdownTransport: NSObject, RouterVPNMacShutdownRequest
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: identity.body)
+        try RouterVPNMacLocalAuthorization.shared.authorize(&request)
         self.completion = completion
         super.init()
         let configuration = URLSessionConfiguration.ephemeral
@@ -146,6 +157,7 @@ final class RouterVPNMacShutdownTransport: NSObject, RouterVPNMacShutdownRequest
     private var timer: Timer?
     private var generation = UUID()
     private var replyPending = false
+    private var launchCanceled = false
     private var exitDeadline = Date.distantPast
     private(set) var acknowledged = false
     private(set) var phase = Phase.idle
@@ -172,7 +184,12 @@ final class RouterVPNMacShutdownTransport: NSObject, RouterVPNMacShutdownRequest
     private func begin(_ captured: UUID) {
         guard generation == captured, replyPending else { return }
         guard owned() else { fail("The controller owner changed. Router VPN remains open."); return }
-        if acknowledged { waitForExit(); return }
+        if let failure = process.joinFailure { fail(failure); return }
+        // A startup that never proved HTTP ownership closes only its captured
+        // lifetime write half. Its independent root supervisor must still
+        // authenticate a successful actual process join before Quit succeeds.
+        if process.retiredBeforeReady { launchCanceled = true; waitForExit(); return }
+        if acknowledged || launchCanceled { waitForExit(); return }
         guard process.isRunning else { fail("The controller exited before confirming cleanup. Router VPN remains open."); return }
         phase = .requesting; message = "Stopping the owned connection and waiting for cleanup…"; onUpdate?()
         do {
@@ -199,9 +216,12 @@ final class RouterVPNMacShutdownTransport: NSObject, RouterVPNMacShutdownRequest
         }
     }
     private func waitForExit() {
-        guard owned(), acknowledged else { fail("The controller owner changed. Router VPN remains open."); return }
+        guard owned(), acknowledged || launchCanceled else { fail("The controller owner changed. Router VPN remains open."); return }
+        if let failure = process.joinFailure { fail(failure); return }
+        if !process.isRunning && !process.joinedSuccessfully { fail("The controller exited without proving successful cleanup. Router VPN remains open."); return }
         if !process.isRunning { finish(); return }
-        phase = .waitingForProcess; message = "Connection cleanup is confirmed. Waiting for the owned controller to exit…"
+        phase = .waitingForProcess
+        message = launchCanceled ? "Startup was canceled. Waiting for the privileged supervisor to confirm the captured controller drained and joined…" : "Connection cleanup is confirmed. Waiting for the owned controller to exit…"
         exitDeadline = Date().addingTimeInterval(exitTimeout); onUpdate?()
         timer?.invalidate()
         let timer = Timer(timeInterval: pollInterval, repeats: true) { [weak self] _ in
@@ -216,12 +236,14 @@ final class RouterVPNMacShutdownTransport: NSObject, RouterVPNMacShutdownRequest
     private func poll() {
         guard replyPending, phase == .waitingForProcess else { return }
         guard owned() else { fail("The controller owner changed. Router VPN remains open."); return }
-        if !process.isRunning { finish() }
+        if let failure = process.joinFailure { fail(failure) }
+        else if !process.isRunning && !process.joinedSuccessfully { fail("The controller exited without proving successful cleanup. Router VPN remains open.") }
+        else if !process.isRunning { finish() }
         else if Date() >= exitDeadline { fail("Cleanup was confirmed, but the controller is still exiting. Retry to wait; it has not been terminated.") }
     }
     private func finish() {
         timer?.invalidate(); timer = nil
-        guard replyPending, acknowledged, owned(), !process.isRunning else { return }
+        guard replyPending, acknowledged || launchCanceled, owned(), !process.isRunning, process.joinedSuccessfully else { return }
         phase = .complete; message = "Owned controller cleanup and exit confirmed."
         replyPending = false; onUpdate?(); onFinish?(true)
     }

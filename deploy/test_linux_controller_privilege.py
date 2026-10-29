@@ -33,7 +33,7 @@ def source_identity():
             for path in names if path.is_file() and not path.is_symlink()}
 
 
-def namespace_test(binary):
+def namespace_test(binary, pattern='^TestLinuxOwnedControllerNamespace'):
     if os.geteuid() != 0 or platform.system() != 'Linux' or not binary.is_absolute() or not binary.is_file():
         raise ValueError('Controller namespace fixture requires its actual privileged Linux invocation')
     libc = ctypes.CDLL(None, use_errno=True)
@@ -59,7 +59,7 @@ def namespace_test(binary):
             subprocess.run(['mount', '-t', 'tmpfs', '-o', 'mode=755', 'tmpfs', '/opt'], check=True)
             subprocess.run(['mount', '-t', 'tmpfs', '-o', 'mode=755', 'tmpfs', '/run'], check=True)
             subprocess.run(['ip', 'link', 'set', 'lo', 'up'], check=True)
-            result = subprocess.run([str(binary), '-test.run=^TestLinuxOwnedControllerNamespace',
+            result = subprocess.run([str(binary), '-test.run=' + pattern,
                                      '-test.count=1', '-test.timeout=120s', '-test.v'],
                                     env=dict(os.environ, ROUTERVPN_CONTROLLER_PRIVILEGE_TEST_NS='1'),
                                     timeout=135).returncode

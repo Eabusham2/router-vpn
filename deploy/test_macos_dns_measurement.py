@@ -429,7 +429,7 @@ def fixture(work, controller, main, module_cache, expected=None):
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler); server.daemon_threads = True
     thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
     (work / 'Controller.swift').write_text(controller); (work / 'main.swift').write_text(main)
-    sources = [str(MAC / 'RouterVPNMacDNSTransport.swift'), str(work / 'Controller.swift')]
+    sources = [str(MAC / 'RouterVPNMacControllerAuth.swift'), str(MAC / 'RouterVPNMacDNSTransport.swift'), str(work / 'Controller.swift')]
     if platform.system() == 'Darwin': sources.append(str(MAC / 'RouterVPNMacDNSPanel.swift'))
     sources.append(str(work / 'main.swift'))
     try:

@@ -2,6 +2,9 @@
 set -euo pipefail
 [[ $EUID -ne 0 ]] || { echo 'Run this as your normal Mac user, not with sudo.'; exit 1; }
 BUNDLE=${1:-$(pwd)}
+if [[ -x "$BUNDLE/router-vpn-client" && -d "$BUNDLE/RouterVPN.app" && -f "$BUNDLE/client/install-macos-native.sh" ]]; then
+  exec /bin/bash "$BUNDLE/client/install-macos-native.sh" "$BUNDLE"
+fi
 [[ -f "$BUNDLE/client/install-macos.sh" ]] || { echo 'Run from the extracted router-vpn-client-bundle folder.'; exit 1; }
 
 bash "$BUNDLE/client/install-macos.sh" "$BUNDLE"

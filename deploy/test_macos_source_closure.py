@@ -47,6 +47,8 @@ def verify(text):
         ROOT / "client/macos/RouterVPNMacViaEntryCandidates.swift",
         ROOT / "client/macos/RouterVPNMacViaEntryPolicy.swift",
         ROOT / "client/macos/RouterVPNMacDeviceSettings.swift",
+        ROOT / "client/macos/RouterVPNMacControllerAuth.swift",
+        ROOT / "client/macos/RouterVPNMacControllerLaunch.swift",
     }
     if not required <= paths or any(not path.is_file() for path in paths):
         raise ValueError("A native external/path/measurement extension is absent from the actual compiler inputs")
@@ -67,7 +69,9 @@ class NativeSourceClosure(unittest.TestCase):
         source = BUILDER.read_text()
         invocation = compiler_invocation(source)
         for variable, filename in (("EXTERNAL_NODE_SRC", "RouterVPNMacExternalNode.swift"),
-                                   ("DEVICE_SETTINGS_SRC", "RouterVPNMacDeviceSettings.swift")):
+                                   ("DEVICE_SETTINGS_SRC", "RouterVPNMacDeviceSettings.swift"),
+                                   ("CONTROLLER_AUTH_SRC", "RouterVPNMacControllerAuth.swift"),
+                                   ("CONTROLLER_LAUNCH_SRC", "RouterVPNMacControllerLaunch.swift")):
             with self.subTest(extension=filename):
                 token = '"$'+variable+'"'
                 self.assertIn(token, invocation)

@@ -84,6 +84,7 @@ final class RouterVPNMacDNSTransport: NSObject, RouterVPNMacDNSRequest, URLSessi
             request.httpBody = try JSONSerialization.data(withJSONObject: body)
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         }
+        try RouterVPNMacLocalAuthorization.shared.authorize(&request)
         self.completion = completion
         super.init()
         let configuration = URLSessionConfiguration.ephemeral

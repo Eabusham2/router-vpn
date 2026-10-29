@@ -58,7 +58,7 @@ type app struct {
 }
 
 func main() {
-	ownedController, err := prepareLinuxOwnedController(os.Args[1:])
+	ownedController, err := prepareNativeOwnedController(os.Args[1:])
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -85,7 +85,21 @@ func main() {
 		}
 		return
 	}
-	if err = validateLinuxOwnedStartup(ownedController); err != nil {
+	if handled, err := macOSInstallerUtility(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if handled, err := macOSControllerSupervisorUtility(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if err = validateNativeOwnedStartup(ownedController); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -134,7 +148,7 @@ func main() {
 		c.ProfilesFile = filepath.Join(configDir, c.ProfilesFile)
 	}
 	if ownedController != nil {
-		if err = validateLinuxOwnedConfiguration(c); err != nil {
+		if err = validateNativeOwnedConfiguration(c); err != nil {
 			log.Fatal(err)
 		}
 	}

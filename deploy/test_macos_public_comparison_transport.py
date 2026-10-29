@@ -100,7 +100,7 @@ def run_case(directory, mutation):
 }'''
     # This single observation runs after the shipping dataTask factory. No
     # session-selection, request-building or completion branches are copied.
-    creation = re.search(r'^        let task = ([A-Za-z]+)\.dataTask\(with: req\).*$', api, re.MULTILINE)
+    creation = re.search(r'^        let task = ([A-Za-z]+)\.dataTask\(with: ownedRequest\).*$', api, re.MULTILINE)
     assert creation is not None
     api = api.replace(creation.group(0), creation.group(0) + '\n        observeTask(' + creation.group(1) + ', task)')
     program = r'''
@@ -178,7 +178,7 @@ print("Public macOS comparisons: actual Tor540s and native450s sessions, ordinar
     main.write_text(program)
     try:
         subprocess.run(['swiftc', '-swift-version', '5', '-module-cache-path', str(directory / 'module-cache'),
-                        str(main), '-o', str(fixture / 'transport-test')], check=True, timeout=120)
+                        str(ROOT / 'client/macos/RouterVPNMacControllerAuth.swift'), str(main), '-o', str(fixture / 'transport-test')], check=True, timeout=120)
         result = subprocess.run([str(fixture / 'transport-test'), 'http://127.0.0.1:' + str(server.server_address[1])],
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=30)
         if mutation == 'shipping':

@@ -113,7 +113,7 @@ final class ProductAPI {
         c.timeoutIntervalForResource = 300
         c.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         c.connectionProxyDictionary = [:]
-        session = URLSession(configuration: c)
+        session = URLSession(configuration: c, delegate: ProductComparisonTransportDelegate(), delegateQueue: nil)
     }
     func request(_ path: String, method: String = "GET", body: [String: Any]? = nil, timeout: TimeInterval = 15) throws -> Data {
         try validateTimeout(timeout)
@@ -178,11 +178,13 @@ final class ProductAPI {
         return URLSession(configuration: configuration, delegate: ProductComparisonTransportDelegate(), delegateQueue: nil)
     }
     private func perform(_ req: URLRequest, timeout: TimeInterval) throws -> Data {
-        let comparisonSession = try capturedComparisonSession(req, timeout: timeout)
+        var ownedRequest = req
+        try RouterVPNMacLocalAuthorization.shared.authorize(&ownedRequest)
+        let comparisonSession = try capturedComparisonSession(ownedRequest, timeout: timeout)
         let activeSession = comparisonSession ?? session
         defer { comparisonSession?.invalidateAndCancel() }
         let sem = DispatchSemaphore(value: 0); var data = Data(); var code = 0; var err: Error?
-        let task = activeSession.dataTask(with: req) { d, r, e in data = d ?? Data(); code = (r as? HTTPURLResponse)?.statusCode ?? 0; err = e; sem.signal() }
+        let task = activeSession.dataTask(with: ownedRequest) { d, r, e in data = d ?? Data(); code = (r as? HTTPURLResponse)?.statusCode ?? 0; err = e; sem.signal() }
         task.resume()
         if sem.wait(timeout: .now() + timeout + 2) == .timedOut { task.cancel(); throw NSError(domain: "RouterVPNMac", code: 2, userInfo: [NSLocalizedDescriptionKey: "Local controller request timed out"]) }
         if let err { throw err }
@@ -451,6 +453,8 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         var request = URLRequest(url: routerVPNProductBaseURL.appendingPathComponent("api/multihop/status"))
         request.timeoutInterval = 2
         request.cachePolicy = .reloadIgnoringLocalCacheData
+        do { try RouterVPNMacLocalAuthorization.shared.authorize(&request) }
+        catch { stopCapturedComparisonProgress(generation); return }
         let task = session.dataTask(with: request)
         let captured = transport.capture(task) { [weak self] data, response, error in
             let status = (response as? HTTPURLResponse)?.statusCode
@@ -763,7 +767,8 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
 }
 
 @MainActor final class ProductDelegate: NSObject, NSApplicationDelegate {
-    let api = ProductAPI(); var wc: ProductWindowController?; var controller: Process?; var ownsController = false
+    let api = ProductAPI(); var wc: ProductWindowController?; var controller: RouterVPNMacShutdownProcess?; var ownsController = false
+    var installedController: RouterVPNMacOwnedProcess?
     var controllerOwnerToken = ""
     var shutdown: RouterVPNMacShutdownController?
     var shutdownPanel: RouterVPNMacShutdownPanel?
@@ -773,6 +778,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard ownsController else { return .terminateNow }
         guard let process = controller else { return .terminateCancel }
+        installedController?.retireBeforeReady()
         if terminationReplyPending { return .terminateLater }
         let identity = RouterVPNMacShutdownIdentity(processID: process.processIdentifier, token: controllerOwnerToken)
         if let previous = shutdown, previous.process !== process || previous.identity != identity {
@@ -808,6 +814,22 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         // this exact Process exit. No signal or emergency timeout belongs here.
     }
     func ensureController() throws {
+        if RouterVPNMacLocalAuthorization.installedBundle() {
+            let owned = try RouterVPNMacOwnedProcess.launch()
+            installedController = owned; controller = owned; controllerOwnerToken = owned.credentials.ownerToken; ownsController = true
+            try RouterVPNMacLocalAuthorization.shared.capture(owned.credentials, processID: owned.processIdentifier,
+                live: { [weak owned] in owned?.acceptsRequests == true })
+            let deadline = Date().addingTimeInterval(12)
+            while Date() < deadline, owned.acceptsRequests {
+                do {
+                    try RouterVPNMacLocalAuthorization.shared.verifyIdentity()
+                    if api.ready() { try owned.markReady(); return }
+                } catch { /* Retry only this captured process and fresh challenge. */ }
+                Thread.sleep(forTimeInterval: 0.2)
+            }
+            owned.retireBeforeReady()
+            throw RouterVPNMacLocalAuthorization.failure("The captured installed controller did not prove readiness. Router VPN has canceled this launch and will wait for its authenticated cleanup and process join.")
+        }
         if api.ready() { return }
         let root = Bundle.main.bundleURL.deletingLastPathComponent()
         let binary = root.appendingPathComponent("router-vpn-client")

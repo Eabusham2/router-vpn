@@ -6,6 +6,9 @@ on:
     paths:
       - 'client/macos/**'
       - 'deploy/package-macos-native.sh'
+      - 'deploy/test_macos_native_install.py'
+      - 'deploy/test_macos_installer_trust.py'
+      - 'deploy/test_macos_controller_privilege.py'
       - 'deploy/materialize-desktop-icons.py'
       - 'deploy/test_macos_via_entry_candidates.py'
       - 'deploy/test_desktop_startup_settings.py'
@@ -27,6 +30,9 @@ on:
     paths:
       - 'client/macos/**'
       - 'deploy/package-macos-native.sh'
+      - 'deploy/test_macos_native_install.py'
+      - 'deploy/test_macos_installer_trust.py'
+      - 'deploy/test_macos_controller_privilege.py'
       - 'deploy/materialize-desktop-icons.py'
       - 'deploy/test_macos_via_entry_candidates.py'
       - 'deploy/test_desktop_startup_settings.py'
@@ -53,6 +59,29 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  owned-controller:
+    name: Native controller ownership on ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15-intel, macos-15]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Prove installed supervisor, native peer identity and joined AppKit shutdown
+        run: python3 deploy/test_macos_controller_privilege.py --go "$(command -v go)" --python /usr/bin/python3
+      - name: Prove privileged interpreter ownership and installation rollback
+        run: |
+          python3 deploy/test_macos_installer_trust.py
+          python3 deploy/test_macos_native_install.py
+
   native-runtimes:
     name: Build and verify complete native runtimes
     uses: ./.github/workflows/desktop-native-runtime.yml
@@ -60,7 +89,7 @@ jobs:
       platform: darwin
 
   native-macos:
-    needs: native-runtimes
+    needs: [native-runtimes, owned-controller]
     name: Native AppKit packages amd64 + arm64
     runs-on: macos-15
     steps:

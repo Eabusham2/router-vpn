@@ -81,6 +81,14 @@ Physical Windows full-device routing, DNS/IPv4/IPv6, reconnect/network-change, l
 
 ## macOS — Apple Silicon and Intel
 
+Run the native package's `./install-router-vpn.sh` from your normal Mac account,
+approve its administrator request, then open `RouterVPN.app` in your user
+Applications folder. The protected installation preserves private nodes and
+settings, refuses upgrades while its controller is active, and authenticates
+the unprivileged AppKit app to its owned controller. See
+[native macOS installation and permissions](MACOS-NATIVE-INSTALL.md) for
+dependencies, upgrades, recovery and the verification boundaries.
+
 The macOS package contains the real AppKit/MapKit `RouterVPN.app` for arm64 and amd64. Native routing, PF kill-switch handling, real multihop and ordinary external-node paths are source-implemented. The current native external runtime supports WG/AWG, SOCKS5, HTTP(S) CONNECT, Shadowsocks, Hysteria2 and bounded inline OpenVPN. Tor bridges use the owned standalone Tor/native Go transport path. Graph and device-policy validation still decides whether a particular saved connection is runnable.
 
 Unsigned/local builds should use the targeted System Settings → Privacy & Security → Open Anyway flow only after checksum verification. Do not globally disable Gatekeeper. Signing/notarization plus physical macOS networking/visual validation remain release gates.

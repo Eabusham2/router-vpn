@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 BUNDLE=${1:-$(pwd)}
+if [[ -x "$BUNDLE/router-vpn-client" && -d "$BUNDLE/RouterVPN.app" && -f "$BUNDLE/client/install-macos-native.sh" ]]; then
+  exec /bin/bash "$BUNDLE/client/install-macos-native.sh" "$BUNDLE"
+fi
 [[ -f "$BUNDLE/client.json" && -f "$BUNDLE/routers.json" && -d "$BUNDLE/generated" ]] || { echo 'Run from the extracted Router VPN platform bundle folder.'; exit 1; }
 command -v brew >/dev/null || { echo 'Install Homebrew first from brew.sh, then rerun.'; exit 1; }
 

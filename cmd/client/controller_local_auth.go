@@ -17,10 +17,11 @@ const linuxOwnedControllerArgument = "--linux-owned-controller"
 const linuxOwnedControllerAddress = "127.0.0.1:8788"
 const controllerIdentityPath = "/api/controller/identity"
 
-// The desktop keeps the only write end of stdin alive until its exact child
-// has joined. Credentials stay in memory and never enter argv, environment,
+// The desktop retains its authenticated lifetime channel until its exact child
+// has joined: an anonymous pipe on Linux, a kernel-authenticated Unix connection
+// on macOS. Credentials stay in memory and never enter argv, environment,
 // persisted status or a publicly readable discovery file.
-type linuxOwnedController struct {
+type ownedDesktopController struct {
 	processID   int
 	callerUID   uint32
 	accessToken string
@@ -32,7 +33,11 @@ type linuxOwnedController struct {
 	closeOnce   sync.Once
 }
 
-func (c *linuxOwnedController) close() {
+// Keep the Linux launcher API compatible while both installed desktops share
+// exactly the same HTTP identity, admission and teardown boundary.
+type linuxOwnedController = ownedDesktopController
+
+func (c *ownedDesktopController) close() {
 	if c == nil {
 		return
 	}
@@ -45,7 +50,7 @@ func (c *linuxOwnedController) close() {
 	})
 }
 
-func (c *linuxOwnedController) retired() bool {
+func (c *ownedDesktopController) retired() bool {
 	if c == nil {
 		return false
 	}
@@ -75,7 +80,7 @@ func localControllerMAC(secret, message string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func (c *linuxOwnedController) handler(next http.Handler) http.Handler {
+func (c *ownedDesktopController) handler(next http.Handler) http.Handler {
 	if c == nil {
 		return next
 	}
@@ -108,7 +113,7 @@ func (c *linuxOwnedController) handler(next http.Handler) http.Handler {
 	})
 }
 
-func (c *linuxOwnedController) identity(w http.ResponseWriter, r *http.Request) {
+func (c *ownedDesktopController) identity(w http.ResponseWriter, r *http.Request) {
 	challenge := r.Header.Get("X-RouterVPN-Challenge")
 	if r.Method != http.MethodGet || r.URL.RawQuery != "" || r.ContentLength != 0 ||
 		len(r.Header.Values("X-RouterVPN-Challenge")) != 1 || !validControllerOwnerToken(challenge) ||

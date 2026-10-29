@@ -8,6 +8,10 @@ MACOS_SIGN_IDENTITY=${ROUTER_VPN_MACOS_SIGN_IDENTITY:--}
 rm -rf "$OUT"
 mkdir -p "$WORK"
 
+python3 "$ROOT/deploy/test_macos_controller_privilege.py" --go "$(command -v go)" --python /usr/bin/python3
+python3 "$ROOT/deploy/test_macos_installer_trust.py"
+python3 "$ROOT/deploy/test_macos_native_install.py"
+
 write_blank_routers() {
   cat >"$1" <<'JSON'
 {"schema_version":4,"selected_id":"","profiles":[]}
@@ -89,14 +93,34 @@ open -W "$APP"
 SH
   chmod 755 "$dir/start-router-vpn.sh"
 
+  cat >"$dir/install-router-vpn.sh" <<'SH'
+#!/bin/bash
+set -euo pipefail
+SOURCE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
+exec /bin/bash "$SOURCE/client/install-macos-native.sh" "$SOURCE"
+SH
+  chmod 755 "$dir/install-router-vpn.sh"
+
   cat >"$dir/README-MACOS.txt" <<'TXT'
 Router VPN for macOS
 ====================
 
-Open RouterVPN.app for the native AppKit client. The app includes the Router VPN application icon,
-owns the local controller lifecycle when it starts it, and talks only to http://127.0.0.1:8788. It
-does not open or embed a website/WebView. The archive is generic and contains no linked home node.
-Add/import your router separately.
+Verify the release checksum, extract this complete archive, and run ./install-router-vpn.sh from
+your normal Mac account. Approve its administrator request. A root-owned Python.org framework
+or Apple Command Line Tools Python (3.9 or newer) is required by the protected platform helpers;
+the installer verifies its entire code/library ownership before executing it as root. The normal
+installation uses the already-built native engines, without compiling VPN runtimes on this Mac.
+
+Open RouterVPN.app from your user Applications folder after installation. The fixed native AppKit
+app stays unprivileged. Its protected launch supervisor starts only its authenticated controller;
+the GUI verifies the captured child before releasing API credentials and waits for exact owned
+shutdown. Every installed privileged API path is authenticated. No website/WebView is embedded.
+The archive is generic and contains no linked private node; add/import router information separately.
+
+Close Router VPN and wait for cleanup before upgrading. The installer preserves linked nodes,
+settings and the original authorized desktop user, refuses live controllers, and rolls back failed
+promotion or launchd changes. An older unauthenticated legacy service must be deliberately stopped
+and removed before migration; the installer does not silently terminate an unowned active tunnel.
 
 The package includes router-vpn-start-layer-relay for the optional authenticated AES-256-GCM start
 layer's XOR whitening mode. XOR is obfuscation only; authenticated encryption remains Shadowsocks
@@ -107,9 +131,10 @@ Updates. router-vpn-update verifies immutable release identity plus RouterVPN-RE
 before staging a newer package beside the normal user cache. It never overwrites the running app.
 Public production updates still require Developer ID signing and notarization before installation.
 
-start-router-vpn.sh is a convenience launcher for the same native app. Keep RouterVPN.app beside
-router-vpn-client, router-vpn-dns, router-vpn-start-layer-relay, router-vpn-update, client.json,
-routers.json, modes/, generated/, and the rest of this folder.
+The installed app and its runtime live together under /opt/router-vpn-client. The Applications
+entry is an ordinary-user alias to that protected app. Keep this extracted package complete for
+installation, checksum verification and recovery. Developer folder launches are unprivileged and
+do not borrow the installed supervisor or its private node state.
 
 Release-candidate packages are cryptographically sealed with an ad-hoc code signature so macOS can
 verify bundle integrity after download. A public production build must additionally be signed with a
@@ -124,6 +149,11 @@ TXT
   codesign -dv --verbose=2 "$dir/RouterVPN.app" >"$signature_info" 2>&1
   grep -Eq 'Signature=adhoc|Authority=Developer ID Application' "$signature_info"
   python3 "$ROOT/server/scripts/source_provenance.py" "$dir" --family "macos-$arch"
+  host_arch=$(uname -m)
+  case "$host_arch" in x86_64) host_arch=amd64 ;; aarch64) host_arch=arm64 ;; esac
+  if [[ "$host_arch" == "$arch" ]]; then
+    python3 "$ROOT/deploy/test_macos_native_install.py" --package "$dir"
+  fi
 
   tar -C "$WORK" -czf "$OUT/$name.tar.gz" "$name"
   python3 "$ROOT/deploy/native-runtime-bundle.py" verify-package "darwin/$arch" "$OUT/$name.tar.gz"

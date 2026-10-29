@@ -47,7 +47,12 @@ func receipt(_ owner: RouterVPNMacShutdownIdentity, code: Int = 200) -> RouterVP
     var data = owner.body; data["closed"] = true
     return RouterVPNMacShutdownReply(code: code, data: try! JSONSerialization.data(withJSONObject: data, options: .sortedKeys))
 }
-final class FakeProcess: RouterVPNMacShutdownProcess { var processIdentifier: Int32 = 321; var isRunning = true }
+final class FakeProcess: RouterVPNMacShutdownProcess {
+    var processIdentifier: Int32 = 321; var isRunning = true
+    var successful = true, retiredBeforeReady = false
+    var joinFailure: String?
+    var joinedSuccessfully: Bool { !isRunning && successful }
+}
 final class ControlledRequest: RouterVPNMacShutdownRequest {
     let completion: (Result<RouterVPNMacShutdownReply, Error>) -> Void
     let owner: RouterVPNMacShutdownIdentity
@@ -127,6 +132,84 @@ final class ControlledRequest: RouterVPNMacShutdownRequest {
         check(f.requests[0].cancelled && replies == [false], "Retired request did not cancel its own HTTP task")
         p.isRunning = false; f.requests[0].reply(receipt(owned)); check(replies == [false], "Retired callback quit the replacement view")
     }
+    do {
+        let f = Factory(), p = FakeProcess(); p.retiredBeforeReady = true; let flow = make(f, p)
+        var replies: [Bool] = []; flow.onFinish = { replies.append($0) }; flow.start(); spin()
+        check(f.requests.isEmpty && replies.isEmpty && !flow.acknowledged && flow.phase == .waitingForProcess,
+              "Canceled startup invented HTTP readiness or a cleanup receipt")
+        p.isRunning = false; wait({ replies == [true] }, "Canceled startup did not require its actual successful join")
+        check(!flow.acknowledged, "A supervisor join was relabeled as an HTTP cleanup receipt")
+    }
+    for canceledStartup in [false, true] {
+        let f = Factory(), p = FakeProcess(); p.retiredBeforeReady = canceledStartup; let flow = make(f, p)
+        var replies: [Bool] = []; flow.onFinish = { replies.append($0) }; flow.start(); spin()
+        if !canceledStartup { f.requests[0].reply(receipt(owned)) }
+        p.successful = false; p.isRunning = false
+        wait({ replies == [false] }, "Failed process join was accepted as successful cleanup")
+    }
+    do {
+        let f = Factory(), p = FakeProcess(); let flow = make(f, p)
+        var replies: [Bool] = []; flow.onFinish = { replies.append($0) }; flow.start(); spin()
+        f.requests[0].reply(receipt(owned)); p.joinFailure = "Supervisor lost actual process-join authority"
+        wait({ replies == [false] }, "Lost supervisor authority was replaced by a fabricated join")
+        check(p.isRunning, "An unknown process join became an exited process")
+    }
+    do {
+        let f = Factory(), p = FakeProcess(); p.retiredBeforeReady = true; p.successful = false; p.isRunning = false
+        let flow = make(f,p); var replies:[Bool]=[]; flow.onFinish={replies.append($0)}; flow.start(); spin()
+        check(replies == [false] && f.requests.isEmpty, "An already failed startup join invented successful cleanup")
+    }
+}
+@MainActor func authorizationProtocolTests() {
+    func packet(_ kind: UInt32, _ rights: UInt32) -> Data {
+        var bytes = [UInt8](repeating: 0, count: 80)
+        func word(_ offset: Int, _ value: UInt32) {
+            for index in 0..<4 { bytes[offset + index] = UInt8(truncatingIfNeeded: value >> (index * 8)) }
+        }
+        word(0, 80); word(4, 8); word(8, 68); word(12, 0x012cc16d)
+        word(48, 1); word(72, kind); word(76, rights)
+        return Data(bytes)
+    }
+    for right: UInt32 in [1<<1, 1<<3, 1<<7, 1<<9, 1<<11, 1<<20, 1<<22, 1<<24] {
+        check(RouterVPNMacPathACL.accepts(packet(1, right)), "Read-only system ACL was rejected")
+        check(!RouterVPNMacPathACL.accepts(packet(1, right), privateAuthority: true), "Private socket ACL granted another principal access")
+    }
+    check(RouterVPNMacPathACL.accepts(packet(2, ~UInt32(0)), privateAuthority: true), "Benign deny-only system ACL was rejected")
+    for bit in 0..<32 where ![1,3,7,9,11,20,22,24].contains(bit) {
+        check(!RouterVPNMacPathACL.accepts(packet(1, UInt32(1) << bit)), "ACL mutation or unknown authority escaped mode validation")
+    }
+    for kind: UInt32 in [0,3,4,15] { check(!RouterVPNMacPathACL.accepts(packet(kind, 0)), "Unknown native ACL kind was accepted") }
+    for length in 0..<80 { check(!RouterVPNMacPathACL.accepts(packet(1, 2).prefix(length)), "Truncated native ACL readback was accepted") }
+    let credentials = RouterVPNMacControllerCredentials(accessToken:String(repeating:"a", count:64), ownerToken:String(repeating:"b", count:32))
+    check(credentials.valid, "Exact private credentials were rejected")
+    for token in ["", String(repeating:"A",count:64), String(repeating:"g",count:64), String(repeating:"a",count:63)] {
+        check(!RouterVPNMacControllerCredentials(accessToken:token, ownerToken:credentials.ownerToken).valid, "Invalid bearer capability was accepted")
+    }
+    let required = RouterVPNMacLocalAuthorization(required:true)
+    var request = URLRequest(url:URL(string:"http://127.0.0.1:8788/api/status")!)
+    do { try required.authorize(&request); check(false, "An unowned installed client adopted a localhost listener") } catch { check(true, "") }
+    try! required.capture(credentials, processID:7341, live:{true})
+    do { try required.authorize(&request); check(false, "A controller without the HMAC readiness proof received bearer authority") } catch { check(true, "") }
+    do { try required.capture(credentials, processID:7342, live:{true}); check(false, "A replacement PID overwrote captured controller authority") } catch { check(true, "") }
+    #if canImport(CryptoKit)
+    let challenge=String(repeating:"c", count:32)
+    let known="0c9ebde843b7781f9d838880a3d9bcf4873bba693b790e3a18d642f20f7fba96"
+    check((try! credentials.mac("routervpn-controller-identity-response\n7341\n"+challenge)) == known, "Swift and Go controller HMAC encoding disagree")
+    let identityText="{\"schema\":1,\"process_id\":7341,\"challenge\":\""+challenge+"\",\"proof\":\""+known+"\"}"
+    check(credentials.acceptsIdentity(Data(identityText.utf8),pid:7341,challenge:challenge), "Exact controller HMAC identity failed")
+    check(!credentials.acceptsIdentity(Data(identityText.utf8),pid:7342,challenge:challenge), "Different child PID inherited identity proof")
+    check(!credentials.acceptsIdentity(Data(identityText.utf8),pid:7341,challenge:String(repeating:"d",count:32)), "Old challenge replay was accepted")
+    for raw in [identityText.replacingOccurrences(of:"\"schema\":1",with:"\"schema\":true"), identityText.replacingOccurrences(of:"\"schema\":1",with:"\"schema\":1,\"schema\":1"), identityText.replacingOccurrences(of:"\"schema\":1",with:"\"schema\":1,\"extra\":1"), identityText.replacingOccurrences(of:known,with:String(repeating:"0",count:64))] {
+        check(!credentials.acceptsIdentity(Data(raw.utf8),pid:7341,challenge:challenge), "Malformed or forged HMAC identity was accepted")
+    }
+    for (phase, proof) in [("started","e78362463553b0a65584f437659b528e9f19d133644d330589a8636af51be5b3"),("joined","e605ecac49a66efe3be84652b57007e0a771a6c42edde25d5c076915de4eb7c6")] {
+        let raw="{\"schema\":1,\"phase\":\""+phase+"\",\"process_id\":7341,\"exit_code\":0,\"proof\":\""+proof+"\"}"
+        check(credentials.acceptsSupervisor(Data(raw.utf8),phase:phase,pid:7341)?.exitCode == 0, "Actual joined receipt format failed")
+        for bad in [raw.replacingOccurrences(of:"7341",with:"7342"), raw.replacingOccurrences(of:"\"exit_code\":0",with:"\"exit_code\":7"), raw.replacingOccurrences(of:"\"phase\":\""+phase+"\"",with:"\"phase\":\"unknown\""), raw.replacingOccurrences(of:"\"schema\":1",with:"\"schema\":1,\"schema\":1"), raw.replacingOccurrences(of:proof,with:String(repeating:"0",count:64))] {
+            check(credentials.acceptsSupervisor(Data(bad.utf8),phase:phase,pid:7341) == nil, "Forged or replayed supervisor process-join proof was accepted")
+        }
+    }
+    #endif
 }
 @MainActor func realTransport(_ character: Character) -> Result<RouterVPNMacShutdownReply, Error> {
     var result: Result<RouterVPNMacShutdownReply, Error>?
@@ -168,8 +251,12 @@ final class ControlledRequest: RouterVPNMacShutdownRequest {
     wait({ flow.acknowledged }, "Actual URLSession did not confirm the captured Process")
     check(process.isRunning && replies.isEmpty, "Actual Process was killed/quit before its exit")
     release(process, input); wait({ replies == [true] }, "Actual process cleanup/exit was not joined")
+    check(process.joinedSuccessfully, "Actual successful Process join was rejected")
+    let failed = Process(); failed.executableURL = URL(fileURLWithPath:"/bin/sh"); failed.arguments=["-c","exit 7"]
+    try! failed.run(); wait({!failed.isRunning},"Failed fixture Process never joined")
+    check(!failed.joinedSuccessfully,"Actual nonzero Process exit became successful cleanup")
 }
-controlledTests(); transportTests(); processTests()
+authorizationProtocolTests(); controlledTests(); transportTests(); processTests()
 #if canImport(AppKit)
 appKitTests()
 #endif
@@ -285,20 +372,20 @@ def execute(directory, swift, source, block, name):
     directory.mkdir()
     (directory/'Shutdown.swift').write_text(source)
     body=MAIN
-    sources=[directory/'Shutdown.swift']
+    sources=[MAC/'RouterVPNMacControllerAuth.swift', directory/'Shutdown.swift']
     package=directory/'package'; package.mkdir()
     if sys.platform=='darwin':
         anchor='let root = Bundle.main.bundleURL.deletingLastPathComponent()'
         if block.count(anchor)!=1: raise AssertionError('Actual launch package seam drifted')
         block=block.replace(anchor,'let root = URL(fileURLWithPath: CommandLine.arguments[3], isDirectory: true)')
         (directory/'Delegate.swift').write_text('import AppKit\nimport Foundation\n'+block+'\n'+APPKIT)
-        sources.append(directory/'Delegate.swift')
+        sources.extend([MAC/'RouterVPNMacControllerLaunch.swift', directory/'Delegate.swift'])
         binary=package/'router-vpn-client'
         binary.write_text('#!/usr/bin/env python3\nimport os,json,pathlib,time\np=pathlib.Path(os.environ["HOMEVPN_ROOT"])\n(p/"owner.json").write_text(json.dumps({"process_id":os.getpid(),"owner_token":os.environ["HOMEVPN_CONTROLLER_OWNER"]}))\nwhile not (p/"release").exists(): time.sleep(0.01)\n')
         binary.chmod(0o700); (package/'client.json').write_text('{}')
     (directory/'main.swift').write_text(body); sources.append(directory/'main.swift')
     executable=directory/'check'
-    compilation=subprocess.run([swift,'-swift-version','6',*[str(x) for x in sources],'-o',str(executable)],capture_output=True,text=True,timeout=90)
+    compilation=subprocess.run([swift,'-swift-version','6','-module-cache-path',str(directory/'module-cache'),*[str(x) for x in sources],'-o',str(executable)],capture_output=True,text=True,timeout=90)
     if compilation.returncode: raise AssertionError('Actual Swift shutdown source failed to compile:\n'+compilation.stdout+compilation.stderr)
     server=Server(directory); thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
     try:
@@ -325,12 +412,13 @@ def main():
                 'replacement-owner':('&& isCurrent()','&& true'),
                 'oversized-response':('private static let limit = 4096','private static let limit = 1048576'),
                 'redirect':('completionHandler(nil)','completionHandler(request)'),
+                'failed-join':('terminationReason == .exit && terminationStatus == 0','true'),
             }
             for name,(old,new) in mutations.items():
                 if source.count(old)!=1: raise AssertionError('Mutation anchor drifted: '+name)
                 result=execute(directory/name,swift,source.replace(old,new),block,name)
                 if result.returncode==0: raise AssertionError('Broken shutdown invariant passed: '+name)
-            print('macOS checked shutdown: 5 executable negative controls rejected')
+            print('macOS checked shutdown: 6 executable negative controls rejected')
     print('Actual AppKit callbacks: '+('passed' if sys.platform=='darwin' else 'require macOS CI; Foundation/URLSession/Process checks passed locally'))
 
 if __name__=='__main__': main()

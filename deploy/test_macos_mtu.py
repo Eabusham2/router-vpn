@@ -331,6 +331,7 @@ def run_case(directory, mutation):
     hits, errors = [], []
     lock = threading.Lock()
     request = {"id": ""}
+    before_admission = {}
 
     def mode():
         try:
@@ -413,12 +414,24 @@ def run_case(directory, mutation):
                 return
             query = parse_qs(parsed.query)
             if query:
-                if query != {"session_id": ["session-a"], "request_id": [request["id"]]}:
+                identifiers = query.get("request_id", [])
+                if set(query) != {"session_id", "request_id"} or query.get("session_id") != ["session-a"] or len(identifiers) != 1 or len(identifiers[0]) != 32 or any(c not in "0123456789abcdef" for c in identifiers[0]):
                     errors.append("real poll changed captured identity")
                     self.send_json({}, 409)
                     return
+                identifier = identifiers[0]
+                with lock:
+                    registered = request["id"]
+                    not_started = before_admission.setdefault(identifier, threading.Event())
+                if registered != identifier:
+                    # This is the shipping controller's 404 boundary: the
+                    # captured POST may still be queued on another connection.
+                    # A valid-but-unregistered ID is not a replaced session.
+                    self.send_json({}, 404)
+                    not_started.set()
+                    return
                 complete = (work / "complete").exists()
-                self.send_json(payload(request["id"], running=not complete, complete=complete, restored=complete))
+                self.send_json(payload(identifier, running=not complete, complete=complete, restored=complete))
             else:
                 self.send_json(payload())
 
@@ -434,7 +447,13 @@ def run_case(directory, mutation):
                     assert set(body) == {"session_id", "request_id", "profile_id"}
                     assert body["session_id"] == "session-a" and body["profile_id"] == "profile-a"
                     assert len(body["request_id"]) == 32 and all(c in "0123456789abcdef" for c in body["request_id"])
-                    request["id"] = body["request_id"]
+                    with lock:
+                        not_started = before_admission.setdefault(body["request_id"], threading.Event())
+                    # Force the real status-before-POST-registration ordering;
+                    # no scheduler timing assumption or sleep proves this case.
+                    assert not_started.wait(3), "native MTU owner did not retain its queued POST across the actual unregistered status"
+                    with lock:
+                        request["id"] = body["request_id"]
                     (work / "post-started").write_text("ready")
                     until = time.monotonic() + 5
                     while time.monotonic() < until:
@@ -478,7 +497,7 @@ def run_case(directory, mutation):
         controller = controller.replace(before, after, 1)
     (work / "Controller.swift").write_text(controller)
     (work / "main.swift").write_text(MAIN)
-    sources = [str(MAC / "RouterVPNMacMTUTransport.swift"), str(work / "Controller.swift")]
+    sources = [str(MAC / "RouterVPNMacControllerAuth.swift"), str(MAC / "RouterVPNMacMTUTransport.swift"), str(work / "Controller.swift")]
     if sys.platform == "darwin":
         sources.append(str(MAC / "RouterVPNMacMTUPanel.swift"))
     sources.append(str(work / "main.swift"))
@@ -493,6 +512,7 @@ def run_case(directory, mutation):
             expected = 2 if sys.platform == "darwin" else 1
             assert sum(method == "POST" and path == "/api/mtu/retest" for _, method, path in hits) == expected, hits
             assert sum(method == "POST" and path == "/api/mtu/cancel" for _, method, path in hits) == expected, hits
+            assert len(before_admission) == expected and all(event.is_set() for event in before_admission.values()), "actual status-before-registration case was not exercised"
         else:
             expected = {
                 "missing-session-owner": "Foreign or missing observed owner was adopted: session",
