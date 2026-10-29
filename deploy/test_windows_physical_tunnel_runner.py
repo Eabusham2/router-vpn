@@ -3,6 +3,8 @@
 from pathlib import Path
 import importlib.util
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -92,6 +94,67 @@ class ActualWintunSourceBoundary(unittest.TestCase):
             self.assertIn(marker, GATE.RESOURCE.read_text(encoding="utf-8"))
         with self.assertRaises(ValueError):
             GATE.mutants(source.replace("desktopWFPNumber(desktopWFPInterface, 4, luid)", "alteredProduction()"))
+
+
+class PinnedWintunModuleAuthority(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix="windows-tunnel-module-pin-")
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve()
+        self.git("init", "-q")
+        self.original = {
+            "go.mod": b"module fixture\n\ngo 1.26.3\n\nrequire github.com/sagernet/sing-tun v0.9.3\n",
+            "go.sum": b"github.com/sagernet/sing-tun v0.9.3 h1:fCXbGezGMUXi00X0MmG3iX5QR91sPApZwzfr0MAVHv4=\n",
+        }
+        for name, raw in self.original.items():
+            (self.root / name).write_bytes(raw)
+        self.git("add", "go.mod", "go.sum")
+        self.git("commit", "-q", "-m", "Pinned reference modules")
+        self.pin = self.git("rev-parse", "HEAD").strip()
+        (self.root / "go.mod").write_bytes(self.original["go.mod"] +
+                                            b"\nreplace github.com/sagernet/sing-tun => ./routervpn-desktop-tun\n")
+        # Actual post-preparation tidy no longer needs the original checksum.
+        (self.root / "go.sum").write_bytes(b"unrelated.example/dependency v1.0.0 h1:retained\n")
+        self.prepared = {name: (self.root / name).read_bytes() for name in self.original}
+
+    def git(self, *args):
+        completed = subprocess.run(
+            ["git", "-c", "core.autocrlf=false", "-c", "core.hooksPath=",
+             "-c", "commit.gpgsign=false", "-c", "user.name=Router VPN fixture",
+             "-c", "user.email=fixture@invalid", "-C", str(self.root), *args],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30, check=True)
+        return completed.stdout.decode("utf-8")
+
+    @staticmethod
+    def actual_run(command, *, cwd, env, timeout):
+        completed = subprocess.run([str(value) for value in command], cwd=cwd, env=env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=timeout)
+        return completed.returncode, completed.stdout.decode("utf-8", errors="replace")
+
+    def read(self, pin):
+        with patch.object(GATE.BOOT.PREP, "PIN", pin), patch.object(GATE.IDENTITY, "run", self.actual_run):
+            return GATE.pinned_reference_modules(self.root, dict(os.environ))
+
+    def assert_subject_unchanged(self):
+        self.assertEqual({name: (self.root / name).read_bytes() for name in self.original}, self.prepared)
+
+    def test_post_tidy_graph_uses_original_pinned_modules_without_repair(self):
+        self.assertEqual(self.read(self.pin), self.original)
+        self.assert_subject_unchanged()
+
+    def test_git_replacement_object_cannot_substitute_checksum_authority(self):
+        self.git("add", "go.mod", "go.sum")
+        self.git("commit", "-q", "-m", "Prepared graph without original checksum")
+        replacement = self.git("rev-parse", "HEAD").strip()
+        self.git("replace", self.pin, replacement)
+        self.assertNotEqual(self.git("show", self.pin + ":go.sum").encode(), self.original["go.sum"])
+        self.assertEqual(self.read(self.pin), self.original)
+        self.assert_subject_unchanged()
+
+    def test_missing_pin_fails_without_using_prepared_or_downloaded_checksums(self):
+        with self.assertRaisesRegex(ValueError, "Pinned Wintun reference module read failed"):
+            self.read("0" * 40)
+        self.assert_subject_unchanged()
 
 
 if __name__ == "__main__":

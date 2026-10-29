@@ -55,6 +55,26 @@ def compare_tun_source(expected, source):
     return actual
 
 
+def pinned_reference_modules(source, env):
+    """Read immutable pre-replacement module authority from the core pin.
+
+    The prepared graph replaces sing-tun locally, so its final go mod tidy may
+    remove the original module checksum. Replaying that graph in a fresh
+    directory cannot establish the upstream checksum. Read both original
+    module files from the exact Git object, without Git replacement objects;
+    never add a recovered checksum to the prepared subject.
+    """
+    modules = {}
+    for name in ("go.mod", "go.sum"):
+        status, output = IDENTITY.run(
+            ["git", "--no-replace-objects", "-C", source, "show", BOOT.PREP.PIN + ":" + name],
+            cwd=source, env=env, timeout=30)
+        if status or not output:
+            raise ValueError("Pinned Wintun reference module read failed: " + name + "\n" + output[-4096:])
+        modules[name] = output.encode("utf-8")
+    return modules
+
+
 def verified_tun_source(source, compiler, env):
     """Recreate the shipping transformation privately; never repair the subject."""
     captured = dict(env)
@@ -69,14 +89,18 @@ def verified_tun_source(source, compiler, env):
     if selected.get("Path") != BOOT.PREP.DESKTOP_MTU.MODULE or replacement.get("Path") != "./routervpn-desktop-tun" or \
             Path(replacement.get("Dir", "")).resolve() != expected or Path(selected.get("Dir", "")).resolve() != expected:
         raise ValueError("Actual Wintun compilation selected another module or source directory")
-    records = {name: hashlib.sha256((source / name).read_bytes()).hexdigest() for name in ("go.mod", "go.sum")}
+    records = {}
+    for name in ("go.mod", "go.sum"):
+        path = source / name
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("Actual Wintun module identity is not a regular source file")
+        records[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    modules = pinned_reference_modules(source, captured)
     with tempfile.TemporaryDirectory(prefix="routervpn-wintun-source-") as directory:
         workspace = Path(directory)
-        for name in ("go.mod", "go.sum"):
-            path = source / name
-            if path.is_symlink() or not path.is_file():
-                raise ValueError("Actual Wintun module identity is not a regular source file")
-            (workspace / name).write_bytes(path.read_bytes())
+        for name, raw in modules.items():
+            (workspace / name).write_bytes(raw)
+            records["pinned/" + name] = hashlib.sha256(raw).hexdigest()
         status, output = IDENTITY.run([sys.executable, BOOT.PREP.DESKTOP_MTU.__file__, workspace],
                                       cwd=source, env=captured, timeout=90)
         if status:
