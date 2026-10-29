@@ -626,7 +626,7 @@ func fixtureStableShellDiagnostics(t *testing.T, image *Image) {
 		t.Log("stable Shell diagnostic could not load the native API:", err)
 		return
 	}
-	for _, variant := range []string{"no-directory", "system-directory", "global-root", "invoke-stable-guid", "pidl-stable-guid"} {
+	for _, variant := range []string{"no-directory", "system-directory", "global-root", "invoke-stable-guid", "pidl-stable-guid", "machine-class-stable-guid"} {
 		func() {
 			pipe, err := NewPipe()
 			if err != nil {
@@ -672,6 +672,20 @@ func fixtureStableShellDiagnostics(t *testing.T, image *Image) {
 				}
 				if variant == "invoke-stable-guid" {
 					info.Mask |= 0x0c /* SEE_MASK_INVOKEIDLIST: the same fully qualified parsing name */
+				}
+				if variant == "machine-class-stable-guid" {
+					// Isolate Shell association parsing while retaining the exact
+					// captured volume-GUID filename. Use only the existing machine
+					// executable class, read-only, never a user-writable association
+					// or a remappable filename/zone-check bypass.
+					path, _ := syscall.UTF16PtrFromString(`SOFTWARE\Classes\exefile`)
+					var key syscall.Handle
+					if err := syscall.RegOpenKeyEx(syscall.HKEY_LOCAL_MACHINE, path, 0, syscall.KEY_READ|syscall.KEY_WOW64_64KEY, &key); err != nil {
+						return false, nativeError("diagnostic machine executable class", err)
+					}
+					defer syscall.RegCloseKey(key)
+					info.Mask |= 0x03 /* SEE_MASK_CLASSKEY */
+					info.ClassKey = key
 				}
 				if variant == "pidl-stable-guid" {
 					parse, err := api.shellExecute.Dll.FindProc("SHParseDisplayName")
