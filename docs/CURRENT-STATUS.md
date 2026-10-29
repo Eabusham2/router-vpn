@@ -9,7 +9,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 The latest resumed check started at `f87b7809`, preserving the source already
 316 commits beyond historical release `745b3e41`. Current repairs and exact
-verified pushes through `7f1c6c5d` are recorded in the
+verified pushes through `9ae48336` are recorded in the
 [October 29 evidence ledger](CONTINUATION-EVIDENCE-2026-10-29.md), with
 the preceding work retained in the
 [October 28 ledger](CONTINUATION-EVIDENCE-2026-10-28.md).
@@ -27,16 +27,22 @@ The broader ordinary/fixed WFP migration remains separate work.
 The Windows controller process/image/private-pipe foundation is published
 (`e76f418a`). Actual Windows execution now passes joined pending-read closure
 and the retained-handle DACL case under a separately derived token without
-debug privilege. The stable-GUID Shell launch and the fresh ordinary-user
-probe still fail before child creation; `7f1c6c5d` diagnoses their exact path
-and access boundaries without changing permissions. Pinned controller TLS
-and the bounded GUI request bridge are published prerequisites (`1e843ac8`,
-`439b95de`); installed/Portable composition remains unfinished. The real
-Windows bootstrap DNS failure is now localized to the retained original
-socket's ALE readback. The Wintun gate uses pinned original module objects,
-and failed StartSession cleanup now closes the exact newly created adapter
-(`ab356832`), with real-driver failure/missing-Close tests awaiting native
-execution. Public dynamic Windows admission stays closed.
+debug privilege. The stable-GUID Shell launch and fresh ordinary-user probe
+still fail before child creation. The probe's separately proved station access
+defect is fixed in `058bb95c`; actual caller and ordinary-token station opens
+now pass, but basic WithToken creation still returns access denied.
+Pinned controller TLS and the bounded GUI request bridge (`1e843ac8`,
+`439b95de`) now pass their actual Windows transport and negative controls.
+The original-user GUI kernel (`ca056061`) reaches real child execution but
+fails joined teardown with access denied. The C# binary-pipe consumer
+(`739c0dc6`) passes 17 executable cases and 11 negative controls locally;
+both Windows shells, native OVERLAPPED I/O and final installed/Portable
+composition remain required. The bootstrap TCP repair (`3f862cf1`) requires
+actual writable completion before status and peer proof; its native rerun
+remains separate. Real Wintun binding, IPv4/IPv6 retirement, failed
+StartSession cleanup (`ab356832`) and all four intentional defects now pass
+on both actual Windows architectures at `7f1c6c5d`. Public dynamic Windows
+admission stays closed.
 
 The macOS Cgo header blocker is repaired. Actual Intel execution then exposed
 an overly strict group-equals-wheel check before kernel cases; `f6f77985`
@@ -46,7 +52,12 @@ avoided through protected `/opt` runtime paths (`e1804ab2`). The native gate
 uses the ordinary installer's trusted interpreter selector; privileged Python
 startup excludes ambient site hooks (`1e9c9dd1`). Subsequent ARM kernel execution
 passes that path boundary but rejects the generated PF baseline syntax;
-the final kernel and installed-controller gates remain required on both
+`24315ca5` repairs the exact tag-negation grammar and requires the actual PF
+parser to check both generated forms and reject the old grammar. The installed
+controller's full Python-tree check separately rejects a CLT symbolic link;
+`9ae48336` adds bounded exact-link diagnostics with all trust rules preserved.
+Thirteen actual namespace trust cases and both Darwin cross-compiles pass.
+The final kernel and installed-controller gates remain required on both
 architectures. The detailed observations below are historical
 where superseded by this continuation; no public Darwin admission or completed
 release is inferred from these source fixes.

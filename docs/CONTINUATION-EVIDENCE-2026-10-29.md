@@ -12,7 +12,7 @@ percentage.
 Each source change below was committed directly on the current `main` parent,
 pushed without force and checked by a fresh remote reference read. The last
 implementation head covered here is
-`7f1c6c5da436f5bb539ee9d6f502e62788d40034`. Concurrent unfinished changes were
+`9ae483362e84e57ee0bb9556102133acb5f7e694`. Concurrent unfinished changes were
 preserved when synchronizing the local tree.
 
 | Commit | Published change | Evidence and remaining boundary |
@@ -52,6 +52,17 @@ an assertion that its complete shipping launcher or network path is admitted.
 | [`0ba18bf3`](https://github.com/Eabusham2/router-vpn/commit/0ba18bf35cff2f47d2312cdba920ab3a29869295) | Carry complete compiled ordinary-external physical tuples into native protection, preserving predecessor, DNS, Start Layers and restored execution selection. | The 189-case controller matrix and focused controller race suite pass in 14.230 seconds; final shared projection/rejection races pass in 6.134 seconds. Both Windows architecture controller compiles pass. Physically negotiated SOCKS UDP remains an explicit dynamic-socket gap; no relay port is invented. |
 | [`ab356832`](https://github.com/Eabusham2/router-vpn/commit/ab3568321680a27112349abd351a47912140ef55) | Close the exact newly created Wintun adapter when StartSession fails, preserving the original error. | Twelve runner checks and all 184 pinned module/source records pass. Baseline and missing-Close test binaries compile for both architectures. The native fixture asks the actual driver for an invalid ring, checks adapter removal and control survival, and performs exact fallback cleanup even for the mutant. Actual driver execution remains pending. |
 | [`7f1c6c5d`](https://github.com/Eabusham2/router-vpn/commit/7f1c6c5da436f5bb539ee9d6f502e62788d40034) | Diagnose retained-file-derived Windows Shell paths and actual probe file/station access. | Isolated controller and tagged WFP suites compile for both architectures. Diagnostics reject DOS-normalized PIDLs before execution and independently prove impersonation reversion. No permissions, privileges, production launch predicate or required test is loosened. |
+
+## Continued transport and native repairs
+
+| Commit | Published change | Evidence and remaining boundary |
+|---|---|---|
+| [`ca056061`](https://github.com/Eabusham2/router-vpn/commit/ca056061dca40caa4b356a3e11b29995e7f3a782) | Launch the GUI as the original user with its creation-time Job, retained child image/token and restricted inherited parent reference; join its binary pipe operations. | Fourteen real native cases and ten semantic variants are registered in both required Windows workflows; baseline and all variants compile on both architectures. Actual Windows reaches child cases but fails teardown with access denied, as recorded below. Shipping composition remains unfinished. |
+| [`24315ca5`](https://github.com/Eabusham2/router-vpn/commit/24315ca5e5cdb8823f740b21769ab6bb3b47ca0f) | Emit `! tagged` in the Go and Python Darwin PF baselines and validate every generated variant with the real native parser. | Ten dispatcher and six runner checks pass; both Darwin tagged binaries compile. The native gate dry-runs production/scoped active/inactive/LAN variants, compares equivalent emitted rules, and requires the old malformed grammar to report its actual syntax error. Corrected native packet/lifecycle execution remains required. |
+| [`3f862cf1`](https://github.com/Eabusham2/router-vpn/commit/3f862cf15f5f21adcc1a196b91793575488aa14c) | Require actual writable completion after pending Windows TCP Connect before SO_ERROR and exact-peer verification. | Ten repeated race runs and both architecture tagged compiles pass. Skipped completion, ignored socket error and wrong peer each fail their intended semantic check. Original/returned/imported ALE, token and application identity remain mandatory; no error 10022 retry or bypass is introduced. Corrected native bootstrap remains required. |
+| [`058bb95c`](https://github.com/Eabusham2/router-vpn/commit/058bb95ce951691b353bc2e5f78c4ada59bc70e0) | Use object-mapped access for the fixture-owned Windows station and require a fresh captured-caller open. | Baseline and old file-mask defect compile on both architectures. Actual caller and ordinary-token station access now pass; WithToken process creation still returns access denied. The sixteen-case WFP gate retains eleven production and two fixture controls; production WFP permissions are unchanged. |
+| [`739c0dc6`](https://github.com/Eabusham2/router-vpn/commit/739c0dc682fee2bcf16145ef85b44fdc4ffe4758) | Add the C# GUI consumer with bounded binary requests, captured deadlines, joined cancellation, shared-channel ownership and exception-safe native operation admission. | Seventeen actual cases and eleven semantic variants pass under PowerShell 7.6.9/.NET 10, with C# 5 compilation and production DLL loading. Required Windows workflows add the eighteenth real OVERLAPPED case under both shells and compile one Framework DLL for loading under both 5.1 and 7. No shipping UI call site is switched by this prerequisite alone. |
+| [`9ae48336`](https://github.com/Eabusham2/router-vpn/commit/9ae483362e84e57ee0bb9556102133acb5f7e694) | Identify rejected macOS Python symbolic links with bounded quoted lexical/resolved targets, owner and resolution error. | Thirteen real ownership cases pass under race instrumentation in private namespaces, including escaping, dangling, cyclic, foreign-owned and long/control-character link diagnostics. Both Darwin tagged binaries compile. The rejection predicate, root containment, executable/library permissions and ACL checks are unchanged; actual CLT path diagnosis is pending the native rerun. |
 
 ## Actual native observations
 
@@ -105,11 +116,33 @@ passes the protected-path startup boundary and reaches the actual PF fixture.
 PF rejects the generated baseline with `stdin:3: syntax error`. The workflow
 fails; the syntax and subsequent packet/lifecycle cases remain to be resolved.
 
+At `7f1c6c5d`, the real Wintun step passes on both
+[AMD64 job 123266290445](https://github.com/Eabusham2/router-vpn/actions/runs/40818669793/job/123266290445)
+and [ARM64 job 123266290221](https://github.com/Eabusham2/router-vpn/actions/runs/40818669793/job/123266290221).
+Both execute actual driver failure and exact adapter cleanup, reject the
+missing-Close defect, verify retained LUID and reader ownership for IPv4-only
+and IPv4/IPv6 policies, and reject all three WFP tunnel defects. Their cleanup
+readbacks prove the owned test adapters and permissions absent while the
+independent control survives. The full jobs still fail the earlier bootstrap
+TCP/ALE case; they predate `3f862cf1` and are not complete workflow passes.
+
+At `058bb95c`,
+[focused Windows job 123267560458](https://github.com/Eabusham2/router-vpn/actions/runs/40819222346/job/123267560458)
+again passes all fourteen TLS cases/eight production controls and fifteen
+blocking-stream bridge cases/fourteen production controls. The new GUI gate
+executes child cases but fails exact-owner teardown with access denied; the
+stream and captured-environment cases pass. The station repair is independently
+observed: both captured caller and fresh ordinary token open the private
+station successfully, and both read/execute the exact fixture file and directory.
+WithToken creation still fails before the ordinary probe child executes, so
+neither the GUI kernel nor complete WFP gate is accepted by this run.
+
 ## Concrete remaining implementation and evidence
 
-- Finish the Windows dynamic bootstrap failure, real Wintun binding/retirement
-  and unmodified admitted compiler/native composition. A prospective test
-  overlay is not public feature admission.
+- Finish the corrected Windows dynamic bootstrap and unmodified admitted
+  compiler/native composition. The separate real Wintun identity/retirement
+  gate now passes on both architectures; a prospective bootstrap overlay is
+  still not public feature admission.
 - Complete installed and Portable Windows administrator/controller startup,
   private authenticated transport, original-user data identity, repeated launch
   and shutdown ownership, including distinct-account UAC.
