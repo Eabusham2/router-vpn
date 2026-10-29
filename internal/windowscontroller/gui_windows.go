@@ -302,6 +302,22 @@ func (child *GUIChild) PID() uint32 {
 	}
 	return child.process.PID()
 }
+
+// Alive checks the retained kernel owner and the GUI's retirement admission.
+// A pending Close revokes new requests before asynchronous Job teardown ends.
+func (child *GUIChild) Alive() error {
+	if child == nil || child.process == nil || child.retiring.Load() {
+		return ErrClosed
+	}
+	if err := child.process.Alive(); err != nil {
+		return err
+	}
+	if child.retiring.Load() {
+		return ErrClosed
+	}
+	return nil
+}
+
 func (child *GUIChild) Wait(ctx context.Context) (uint32, error) {
 	if child == nil || child.process == nil {
 		return 0, ErrClosed

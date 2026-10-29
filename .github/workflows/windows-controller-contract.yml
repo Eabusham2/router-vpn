@@ -8,6 +8,7 @@ on:
       - 'internal/windowscontroller/**'
       - 'internal/controllertransport/**'
       - 'internal/controllerbridge/**'
+      - 'internal/windowsuibridge/**'
       - 'internal/mobiletor/desktop_socket_windows_probe*'
       - 'cmd/client/controller_*'
       - 'cmd/windows-app-launcher/**'
@@ -16,6 +17,7 @@ on:
       - 'client/RouterVPN-Windows-ControllerTransport.cs'
       - 'client/test-windows-controller-transport.ps1'
       - 'deploy/test_windows_gui_transport.py'
+      - 'deploy/test_windows_gui_bridge.py'
       - 'deploy/fixtures/windows-controller-transport/**'
       - 'deploy/test_desktop_windows_wfp.py'
       - 'deploy/test_desktop_windows_identity.py'
@@ -27,6 +29,7 @@ on:
       - 'internal/windowscontroller/**'
       - 'internal/controllertransport/**'
       - 'internal/controllerbridge/**'
+      - 'internal/windowsuibridge/**'
       - 'internal/mobiletor/desktop_socket_windows_probe*'
       - 'cmd/client/controller_*'
       - 'cmd/windows-app-launcher/**'
@@ -35,6 +38,7 @@ on:
       - 'client/RouterVPN-Windows-ControllerTransport.cs'
       - 'client/test-windows-controller-transport.ps1'
       - 'deploy/test_windows_gui_transport.py'
+      - 'deploy/test_windows_gui_bridge.py'
       - 'deploy/fixtures/windows-controller-transport/**'
       - 'deploy/test_desktop_windows_wfp.py'
       - 'deploy/test_desktop_windows_identity.py'
@@ -122,6 +126,13 @@ jobs:
         run: |
           python deploy/test_windows_controller_gui.py
           if ($LASTEXITCODE -ne 0) { throw 'Actual Windows GUI child ownership gate failed' }
+      - name: Actual CSharp GUI through owned Go pipe and pinned TLS
+        if: ${{ success() || failure() }}
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          python deploy/test_windows_gui_bridge.py
+          if ($LASTEXITCODE -ne 0) { throw 'Actual CSharp and Go GUI composition gate failed' }
       - name: Actual ordinary-user protection absence and denial
         if: ${{ success() || failure() }}
         shell: pwsh

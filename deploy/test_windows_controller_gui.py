@@ -80,7 +80,8 @@ def mutants():
          once(gui, "if " + original + " {", "if false && (" + original + ") {")),
         ("gui_windows.go", "retired-gui-admission", REQUIRED[4],
          "retiring GUI admitted a live pipe while cleanup was still blocked",
-         once(once(gui, " || child.retiring.Load()", ""),
+         NATIVE.function_mutant(NATIVE.function_mutant(gui, "func (child *GUIChild) VerifyPeer(",
+              " || child.retiring.Load()", ""), "func (child *GUIChild) VerifyPeer(",
               "if child.retiring.Load() {", "if false {")),
         ("gui_windows.go", "final-job-close-retry", REQUIRED[5],
          "GUI could not retire its retained Job after an actual final-close failure",
@@ -113,6 +114,11 @@ def mutants():
          "bounded GUI join discarded cancellation or its actual termination failure",
          NATIVE.function_mutant(gui, "func joinGUIProcessTermination(",
                                 "return errors.Join(terminateErr, err)", "return err")),
+        ("gui_windows.go", "retired-gui-request-admission", REQUIRED[4],
+         "retiring GUI admitted another request while its live process cleanup was blocked",
+         NATIVE.function_mutant(NATIVE.function_mutant(gui, "func (child *GUIChild) Alive()",
+              " || child.retiring.Load()", ""), "func (child *GUIChild) Alive()",
+              "if child.retiring.Load() {", "if false {")),
     )
 
 
@@ -158,7 +164,7 @@ def execute(go="go"):
             print("Rejected production native GUI mutant:", name, flush=True)
         if sources() != before:
             raise ValueError("Native GUI sources changed during execution")
-    print("Native GUI ownership passed fifteen actual kernel process/pipe cases and twelve compiled production negative controls; C# application and cross-account UAC composition remain separate.", flush=True)
+    print("Native GUI ownership passed fifteen actual kernel process/pipe cases and thirteen compiled production negative controls; C# application and cross-account UAC composition remain separate.", flush=True)
 
 
 if __name__ == "__main__":

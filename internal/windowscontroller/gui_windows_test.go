@@ -659,6 +659,9 @@ func TestWindowsControllerGUIRetirementRevokesBeforeBlockedCleanup(t *testing.T)
 		_ = peer.Process.Close()
 		t.Fatal("retiring GUI admitted a live pipe while cleanup was still blocked")
 	}
+	if err := f.child.Alive(); !errors.Is(err, ErrClosed) {
+		t.Fatal("retiring GUI admitted another request while its live process cleanup was blocked", err)
+	}
 	release()
 	select {
 	case <-done:
