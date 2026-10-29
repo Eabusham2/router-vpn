@@ -9,7 +9,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 The latest resumed check started at `f87b7809`, preserving the source already
 316 commits beyond historical release `745b3e41`. Current repairs and exact
-verified pushes through `448ca1c5` are recorded in the
+verified pushes through `7f1c6c5d` are recorded in the
 [October 29 evidence ledger](CONTINUATION-EVIDENCE-2026-10-29.md), with
 the preceding work retained in the
 [October 28 ledger](CONTINUATION-EVIDENCE-2026-10-28.md).
@@ -17,22 +17,37 @@ the preceding work retained in the
 Private Router Windows firewall handoff now retains the compiled addresses,
 ports and transports through single-node and Local/Server launches, environment
 replacement, MTU restoration and Speed Lab (`d9a099d6`). Missing or mixed
-native owners cannot fall back to an all-port exception. Ordinary/fixed WFP
-migration and other external-node paths remain separate work.
+native owners cannot fall back to an all-port exception. Ordinary external
+graphs now also pass their complete compiled physical tuples to native
+staging (`0ba18bf3`), preserving predecessor, Start Layer, selected DNS and
+restored Local/Server captures. A physically negotiated SOCKS UDP relay still
+requires its owned per-socket migration; no fixed relay port is invented.
+The broader ordinary/fixed WFP migration remains separate work.
 
 The Windows controller process/image/private-pipe foundation is published
-(`e76f418a`); actual native execution and installed/Portable integration are
-pending. The Windows prospective Box/bootstrap gate compiles on both native
-architectures and reaches the selected real DNS request, which still fails.
-The isolated ordinary-user probe now uses CreateProcessAsUserW after the prior
-API rejected extended startup before child creation (`b5fa9f34`); its actual
-native result remains required. Public dynamic Windows admission stays closed.
+(`e76f418a`). Actual Windows execution now passes joined pending-read closure
+and the retained-handle DACL case under a separately derived token without
+debug privilege. The stable-GUID Shell launch and the fresh ordinary-user
+probe still fail before child creation; `7f1c6c5d` diagnoses their exact path
+and access boundaries without changing permissions. Pinned controller TLS
+and the bounded GUI request bridge are published prerequisites (`1e843ac8`,
+`439b95de`); installed/Portable composition remains unfinished. The real
+Windows bootstrap DNS failure is now localized to the retained original
+socket's ALE readback. The Wintun gate uses pinned original module objects,
+and failed StartSession cleanup now closes the exact newly created adapter
+(`ab356832`), with real-driver failure/missing-Close tests awaiting native
+execution. Public dynamic Windows admission stays closed.
 
 The macOS Cgo header blocker is repaired. Actual Intel execution then exposed
 an overly strict group-equals-wheel check before kernel cases; `f6f77985`
 preserves root, mode, ACL and link authority while allowing a non-writable
-non-wheel group. Both architectures must execute the final kernel and
-installed-controller gates. The detailed observations below are historical
+non-wheel group. The actual group-writable `/private/var/run` boundary is now
+avoided through protected `/opt` runtime paths (`e1804ab2`). The native gate
+uses the ordinary installer's trusted interpreter selector; privileged Python
+startup excludes ambient site hooks (`1e9c9dd1`). Subsequent ARM kernel execution
+passes that path boundary but rejects the generated PF baseline syntax;
+the final kernel and installed-controller gates remain required on both
+architectures. The detailed observations below are historical
 where superseded by this continuation; no public Darwin admission or completed
 release is inferred from these source fixes.
 

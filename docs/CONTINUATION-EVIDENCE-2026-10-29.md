@@ -12,7 +12,7 @@ percentage.
 Each source change below was committed directly on the current `main` parent,
 pushed without force and checked by a fresh remote reference read. The last
 implementation head covered here is
-`448ca1c55f45f18f83e3683ddc4cef51d892dc46`. Concurrent unfinished changes were
+`7f1c6c5da436f5bb539ee9d6f502e62788d40034`. Concurrent unfinished changes were
 preserved when synchronizing the local tree.
 
 | Commit | Published change | Evidence and remaining boundary |
@@ -30,6 +30,28 @@ preserved when synchronizing the local tree.
 | [`a97b505c`](https://github.com/Eabusham2/router-vpn/commit/a97b505c3a68a1a0a95a5d6e544f23e33b9570fd) and [`aa41749e`](https://github.com/Eabusham2/router-vpn/commit/aa41749ea9cb0ccae797a65ba66abcbc86e0ee1d) | Retain bounded outer and nested macOS controller diagnostics after owned child teardown. | Actual subprocess-output tests and tagged Darwin compilation pass. Diagnostics preserve assertions and joined output ownership; no native ownership pass is inferred. |
 | [`f6f77985`](https://github.com/Eabusham2/router-vpn/commit/f6f7798560eafda760f37bf8d138478e10651a6e) | Replace the Darwin group-equals-wheel restriction with actual root ownership, mutation permissions, ACL and private-mode checks. | Real Intel execution exposed the overly strict group check before kernel cases. Both architectures compile; the native gate adds root-owned non-wheel positives and nine owner/mode/link/ACL negatives. Actual rerun remains required. |
 | [`9cb023a2`](https://github.com/Eabusham2/router-vpn/commit/9cb023a23cb4f35dff3792725ed1b3f015a93d0e) and [`448ca1c5`](https://github.com/Eabusham2/router-vpn/commit/448ca1c55f45f18f83e3683ddc4cef51d892dc46) | Preserve active native diagnostics, then give each macOS matrix architecture its own pending queue. | Parsed workflow comparisons prove that only concurrency changed. Commands, runner matrices, deadlines, assertions and exact-SHA release obligations remain unchanged. |
+
+## Subsequent published changes
+
+These extend the same reconciled scope. A tested prerequisite below is not
+an assertion that its complete shipping launcher or network path is admitted.
+
+| Commit | Published change | Evidence and remaining boundary |
+|---|---|---|
+| [`2ca80607`](https://github.com/Eabusham2/router-vpn/commit/2ca806072c7f35914eba5648f013b26f725626fd) | Exercise real, uniquely created Wintun adapters, retained readers/LUIDs, exact WFP binding, stale-reader rejection and retirement. | Baseline and three broken protection variants compile for both Windows architectures. Native preparation initially stopped before adapter creation; the repair below preserves checksum authority. |
+| [`f84b70e0`](https://github.com/Eabusham2/router-vpn/commit/f84b70e067b906c9e551653696daaa6fa956523c) | Identify original, returned and imported socket ALE/tuple failure stages without accepting a failed proof. | Both Windows architecture suites compile. Actual ARM bootstrap localized error 10022 to the original socket ALE readback; successful DNS/bootstrap is still unproved. |
+| [`3826dbbf`](https://github.com/Eabusham2/router-vpn/commit/3826dbbf854c9460b22aa1224194b74b11d83202) | Reconstruct the Wintun reference from the exact pinned original Git module objects after prepared-graph tidy removes the upstream checksum. | Nine source tests pass, including replacement-object and missing-pin negatives. Actual reconstruction verifies 180 dependency files and four module records without repairing the prepared subject. |
+| [`65e9f588`](https://github.com/Eabusham2/router-vpn/commit/65e9f588f9c604d848b5c99102d6307600b21495) | Recheck exact owner/context revocation after joining Windows pipe completion; isolate actual controller diagnostics in a preserved workflow. | Both architectures compile; actual Windows pending-read Close now passes. Failure-only stable-GUID launch diagnostics preserve exact image and child ownership; neither initial directory variant launched. |
+| [`1e9c9dd1`](https://github.com/Eabusham2/router-vpn/commit/1e9c9dd11e3f61540f9a8fbbdc03764440b1f794) | Use the shipping ordinary-user Python selector in native Mac verification and exclude ambient site initialization from privileged helpers. | Six selector/diagnostic cases, 16 installer cases, six production mutants, ten Darwin dispatch cases, actual interpreter ownership negatives and both Darwin cross-compiles pass. A generated wrapper rejects a planted global site hook; removing only `-S` executes that hook. Actual native interpreter/supervisor verification remains required. |
+| [`e1804ab2`](https://github.com/Eabusham2/router-vpn/commit/e1804ab2c976b4ba6d572fce9325e713ee984560) | Move Darwin registry and paired Go/AppKit supervisor socket authority below protected `/opt` paths. | Addresses actual root-owned mode-0775 `/private/var/run` rejection without relaxing ancestor, ACL, UID or link checks. Shared socket races and both Darwin architecture compiles pass. Subsequent actual ARM execution reaches PF parsing, exposing the separate syntax failure below. |
+| [`b3656d30`](https://github.com/Eabusham2/router-vpn/commit/b3656d308eeb375102d5a6bea76a1678fb99b62b) | Run the complete retained-handle DACL test under a same-user derived primary token with only SeDebug removed. | Baseline and reopened-process mutant compile for both architectures. Actual Windows retained-handle case passes inside that worker; no parent privilege or production authorization change was made. Full foundation still fails its separate Shell launch cases. |
+| [`71cdd2f7`](https://github.com/Eabusham2/router-vpn/commit/71cdd2f73900832bfde7ca912cb00eddb8ceb5c0) | Own ordinary-user probe workers with nested non-breakaway Jobs and require actual child membership before Resume. | Both architectures compile; 20 preparation checks pass. Actual basic WithToken launch still returns access denied before child creation. Ordinary-caller proof and both owner-death cases therefore remain unproved; no post-creation assignment or privilege grant is substituted. |
+| [`1e843ac8`](https://github.com/Eabusham2/router-vpn/commit/1e843ac80ac4e048fbaf59e794db6401f6c2fa91) | Add in-memory pinned TLS tied to the retained controller process, exact identity/shutdown receipts and complete 32 MiB import requests. | Fourteen actual transport/shipping-handler race cases and eight compiled production mutants pass locally; both Windows architecture controller suites compile. Windows server/launcher wiring is separate unfinished work. |
+| [`439b95de`](https://github.com/Eabusham2/router-vpn/commit/439b95def16b3b2c0e0461bca5b1609d87e4ae4c) | Add bounded GUI request framing, exact cancellation ownership, queued-response reclassification and joined forwarding. | Fifteen blocking-stream race cases and 14 compiled production mutants pass; both Windows architecture suites compile. Pipe peer authentication, C# consumer and installed/Portable composition require their own native evidence. |
+| [`a3973649`](https://github.com/Eabusham2/router-vpn/commit/a3973649d4bc736d06e591c5e7229c66bd5b652e) | Retain the real process handle and explicit exit code in the protection dispatcher fixture. | All 22 real-child cases and 92 assertions pass locally. Missing-code and false-zero variants reach their intended rejections. This addresses the redirected Start-Process exit-code boundary without weakening expected denial; actual PS5.1 rerun remains required. |
+| [`0ba18bf3`](https://github.com/Eabusham2/router-vpn/commit/0ba18bf35cff2f47d2312cdba920ab3a29869295) | Carry complete compiled ordinary-external physical tuples into native protection, preserving predecessor, DNS, Start Layers and restored execution selection. | The 189-case controller matrix and focused controller race suite pass in 14.230 seconds; final shared projection/rejection races pass in 6.134 seconds. Both Windows architecture controller compiles pass. Physically negotiated SOCKS UDP remains an explicit dynamic-socket gap; no relay port is invented. |
+| [`ab356832`](https://github.com/Eabusham2/router-vpn/commit/ab3568321680a27112349abd351a47912140ef55) | Close the exact newly created Wintun adapter when StartSession fails, preserving the original error. | Twelve runner checks and all 184 pinned module/source records pass. Baseline and missing-Close test binaries compile for both architectures. The native fixture asks the actual driver for an invalid ring, checks adapter removal and control survival, and performs exact fallback cleanup even for the mutant. Actual driver execution remains pending. |
+| [`7f1c6c5d`](https://github.com/Eabusham2/router-vpn/commit/7f1c6c5da436f5bb539ee9d6f502e62788d40034) | Diagnose retained-file-derived Windows Shell paths and actual probe file/station access. | Isolated controller and tagged WFP suites compile for both architectures. Diagnostics reject DOS-normalized PIDLs before execution and independently prove impersonation reversion. No permissions, privileges, production launch predicate or required test is loosened. |
 
 ## Actual native observations
 
@@ -63,6 +85,26 @@ test case passed in that attempt. `f6f77985` addresses that concrete boundary.
 Queued or unallocated Apple Silicon/controller jobs are neither failures nor
 passes.
 
+At `65e9f588`,
+[focused Windows job 123262208490](https://github.com/Eabusham2/router-vpn/actions/runs/40817589834/job/123262208490)
+passes `CloseJoinsPendingKernelRead` and the existing cancellation/join cases.
+Both stable-GUID executable launch diagnostics fail with Shell instance 5,
+including the variant without a working directory. The complete gate fails.
+
+At `71cdd2f7`,
+[focused Windows job 123262914196](https://github.com/Eabusham2/router-vpn/actions/runs/40817770902/job/123262914196)
+passes `RetainsGrantedLaunchHandle` both inside the reduced-privilege worker
+and at its parent, and again passes the joined pending-read case. The stable
+Shell launch remains unsuccessful; the ordinary-user probe returns access
+denied at basic WithToken creation. No ordinary probe child executed in those
+failed attempts, and no full foundation or WFP gate pass is claimed.
+
+At `e1804ab2`,
+[Apple Silicon kernel job 123262447241](https://github.com/Eabusham2/router-vpn/actions/runs/40817665679/job/123262447241)
+passes the protected-path startup boundary and reaches the actual PF fixture.
+PF rejects the generated baseline with `stdin:3: syntax error`. The workflow
+fails; the syntax and subsequent packet/lifecycle cases remain to be resolved.
+
 ## Concrete remaining implementation and evidence
 
 - Finish the Windows dynamic bootstrap failure, real Wintun binding/retirement
@@ -71,9 +113,10 @@ passes.
 - Complete installed and Portable Windows administrator/controller startup,
   private authenticated transport, original-user data identity, repeated launch
   and shutdown ownership, including distinct-account UAC.
-- Complete ordinary/fixed Windows protection migration. The private Router
-  handoff now uses exact tuples; that alone does not replace the legacy global
-  firewall-profile mechanism or finish every ordinary external-node path.
+- Complete ordinary/fixed Windows protection migration. Private Router and
+  bounded ordinary-external handoffs now retain exact tuples; that alone does
+  not replace the legacy global firewall-profile mechanism or implement
+  physically negotiated SOCKS UDP through an owned per-socket broker.
 - Resolve actual Intel/Apple Silicon kernel and installed-controller failures,
   execute every required native mutant, then validate the final unmodified
   Darwin compiler and shipping host composition before public admission.
