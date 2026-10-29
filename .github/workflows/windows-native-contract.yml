@@ -52,6 +52,12 @@ jobs:
         run: |
           python deploy/test_desktop_windows_wfp.py
           if ($LASTEXITCODE -ne 0) { throw 'Actual owned Windows WFP baseline gate failed' }
+      - name: Retained TCP descriptor and exact source-port cleanup
+        if: ${{ success() || failure() }}
+        shell: pwsh
+        run: |
+          go test -race -mod=readonly ./internal/mobiletor -run '^TestDesktopSocket(BoundTCPBytesAndRemovalBeforeRelease|ReservationProbeRejectsActuallyReleasedPort)$' -count=1 -timeout=60s
+          if ($LASTEXITCODE -ne 0) { throw 'Actual Windows retained socket cleanup gate failed' }
       - name: Owned Windows WFP traffic, control expiry and process death
         if: ${{ success() || failure() }}
         shell: pwsh

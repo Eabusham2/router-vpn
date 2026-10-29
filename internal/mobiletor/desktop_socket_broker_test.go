@@ -30,6 +30,7 @@ type desktopSocketPolicyFixture struct {
 	grant      func(context.Context, DesktopSocketGrant, DesktopSocketReceipt) (DesktopSocketReceipt, error)
 	revoke     func(context.Context, DesktopSocketGrant) error
 	selectHook func(*DesktopSocketBinding)
+	bindHook   func(syscall.RawConn)
 	bindCount  atomic.Int32
 }
 
@@ -64,6 +65,9 @@ func (p *desktopSocketPolicyFixture) Bind(ctx context.Context, _ DesktopSocketCa
 	}
 	if err := raw.Control(func(uintptr) {}); err != nil {
 		return err
+	}
+	if p.bindHook != nil {
+		p.bindHook(raw)
 	}
 	p.bindCount.Add(1)
 	return nil
@@ -223,6 +227,12 @@ func TestDesktopSocketReservationProbeRejectsActuallyReleasedPort(t *testing.T) 
 
 func TestDesktopSocketBoundTCPBytesAndRemovalBeforeRelease(t *testing.T) {
 	p := desktopSocketFixturePolicy()
+	// Capture the actual I/O descriptor at the production Bind boundary.
+	// Native Windows TCP owns Winsock directly and need not expose the Go
+	// net.TCPConn interface after import. The same raw witness must remain
+	// open until the policy has acknowledged removal on every platform.
+	var retained syscall.RawConn
+	p.bindHook = func(raw syscall.RawConn) { retained = raw }
 	b, _ := newDesktopSocketFixture(t, p)
 	listener := desktopSocketListener(t)
 	accepted := make(chan *net.TCPConn, 1)
@@ -261,10 +271,11 @@ func TestDesktopSocketBoundTCPBytesAndRemovalBeforeRelease(t *testing.T) {
 		// Report from the test goroutine after cleanup. FailNow here would
 		// abandon the production drain goroutine and hide the real failure
 		// behind Close waiting forever for its completion acknowledgment.
-		retained := connection.(*desktopSocketConn).socket.conn.(syscall.Conn)
-		raw, err := retained.SyscallConn()
-		if err == nil {
-			err = raw.Control(func(uintptr) {})
+		var err error
+		if retained == nil {
+			err = errors.New("actual bound I/O descriptor was not captured")
+		} else {
+			err = retained.Control(func(uintptr) {})
 		}
 		removalProof <- errors.Join(err, desktopSocketReservationError("tcp", q.Local))
 		return nil
