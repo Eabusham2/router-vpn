@@ -47,6 +47,7 @@ def mutants(target):
     status = (target / "desktop_socket_windows_status.go").read_text(encoding="utf-8")
     probe = (target / "desktop_socket_windows_probe.go").read_text(encoding="utf-8")
     worker = (target / "desktop_socket_windows_probe_worker_test.go").read_text(encoding="utf-8")
+    fixture = (target / "desktop_socket_windows_probe_process_test.go").read_text(encoding="utf-8")
     return (
         ("extra-filter", "desktop_socket_windows_wfp.go", REQUIRED[4],
          "full WFP readback accepted an extra broader permit",
@@ -106,6 +107,11 @@ def mutants(target):
          IDENTITY.replace_once(worker,
                                'desktopWindowsProbeJobLimits{Flags: 0x2008, ActiveProcesses: count}',
                                'desktopWindowsProbeJobLimits{Flags: 0x0008, ActiveProcesses: count}')),
+        ("probe-file-mask-on-station", "desktop_socket_windows_probe_process_test.go", REQUIRED[12],
+         "private probe station lacks captured caller authority",
+         IDENTITY.replace_once(fixture,
+                               'D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;',
+                               'D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;')),
     )
 
 
@@ -165,10 +171,11 @@ def execute(source=ROOT, go="go", *, env=None):
             if (status == 0 or "--- FAIL: " + test + " (" not in output or witness not in output or
                     "--- SKIP:" in output or "panic: test timed out" in output or "DATA RACE" in output):
                 raise ValueError("WFP negative control missed its exact broken behavior: " + label + "\n" + output[-16384:])
-            print("Rejected production WFP mutant:", label, flush=True)
+            kind = "fixture" if filename.endswith("_test.go") else "production"
+            print("Rejected " + kind + " WFP mutant:", label, flush=True)
         if IDENTITY.checked_sources(source)[3] != before:
             raise ValueError("WFP source changed during its actual native gate")
-    print("Owned Windows WFP baseline passed sixteen actual kernel/lifecycle cases, distinct non-admin process absence/ACCESS_DENIED proofs, eleven production negative controls and a broken Job-owner fixture control; socket traffic and native admission remain separately gated.", flush=True)
+    print("Owned Windows WFP baseline passed sixteen actual kernel/lifecycle cases, distinct non-admin process absence/ACCESS_DENIED proofs, eleven production negative controls and two broken Job-owner/station-access fixture controls; socket traffic and native admission remain separately gated.", flush=True)
 
 
 if __name__ == "__main__":

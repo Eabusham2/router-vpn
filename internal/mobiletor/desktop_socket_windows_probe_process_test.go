@@ -177,7 +177,10 @@ func desktopWindowsProbeWithDescriptor(sid, access string, apply func(unsafe.Poi
 	if err != nil {
 		return err
 	}
-	sddl, err := syscall.UTF16PtrFromString("D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;" + access + ";;;" + sid + ")")
+	// This helper also protects newly created window stations/desktops. FA is
+	// a file-specific mask and omits window-station rights; use object-mapped
+	// GENERIC_ALL for the captured administrator and SYSTEM on these new owners.
+	sddl, err := syscall.UTF16PtrFromString("D:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;" + access + ";;;" + sid + ")")
 	if err != nil {
 		return err
 	}
@@ -284,7 +287,32 @@ func (f *desktopWindowsProbeProcess) prepareDesktop(principal string) error {
 		}()
 		done <- result
 	}()
-	return <-done
+	if err := <-done; err != nil {
+		return err
+	}
+	// Prove a fresh access check, not merely the creation handle Windows
+	// already granted. Secondary Logon must be able to reopen this exact
+	// private station as the captured administrator/SYSTEM before a child can
+	// acquire it. This catches a file-only ACL even though the ordinary user's
+	// own GA entry would allow that user to open the station successfully.
+	open, err := f.api.user.FindProc("OpenWindowStationW")
+	if err != nil {
+		return err
+	}
+	stationName, _, valid := strings.Cut(f.desktopName, `\`)
+	if !valid || stationName == "" {
+		return errors.New("private probe station has no captured name")
+	}
+	name, _ := syscall.UTF16PtrFromString(stationName)
+	handle, _, callErr := open.Call(uintptr(unsafe.Pointer(name)), 0, 0x10000000 /* GENERIC_ALL */)
+	runtime.KeepAlive(name)
+	if handle == 0 {
+		return desktopWindowsCallFailure("private probe station lacks captured caller authority", callErr)
+	}
+	if ok, _, callErr := f.api.closeStation.Call(handle); ok == 0 {
+		return desktopWindowsCallFailure("private probe station access reference cleanup", callErr)
+	}
+	return nil
 }
 
 func desktopWindowsProbeTestProcess(t *testing.T) *desktopWindowsProbeProcess {
