@@ -53,6 +53,7 @@ def sources():
     expected = {"api_windows.go", "identity_windows.go", "launch_windows.go",
                 "pipe_windows.go", "process_windows.go", "gui_windows.go", "stream_windows.go",
                 "code_file_windows.go", "code_file_windows_test.go",
+                "process_profile_windows.go", "process_profile_windows_test.go",
                 "system_image_windows.go", "system_image_windows_test.go",
                 "system_image_policy.go", "system_image_policy_test.go",
                 "fixture_windows_test.go", "foundation_windows_test.go", "capture_windows_test.go",

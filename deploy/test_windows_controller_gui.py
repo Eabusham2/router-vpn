@@ -42,6 +42,7 @@ REQUIRED = (
     "TestWindowsControllerGUIActualSystemPowerShell",
     "TestWindowsControllerGUISystemImageDescriptorPolicy",
     "TestWindowsControllerGUISystemImageCapturePolicy",
+    "TestWindowsControllerGUIOriginalUserDirectories",
 )
 
 
@@ -49,6 +50,7 @@ def sources():
     expected = {"api_windows.go", "identity_windows.go", "launch_windows.go",
                 "pipe_windows.go", "process_windows.go", "gui_windows.go", "stream_windows.go",
                 "code_file_windows.go", "code_file_windows_test.go",
+                "process_profile_windows.go", "process_profile_windows_test.go",
                 "system_image_windows.go", "system_image_windows_test.go",
                 "system_image_policy.go", "system_image_policy_test.go",
                 "fixture_windows_test.go", "foundation_windows_test.go", "capture_windows_test.go",
@@ -190,7 +192,7 @@ def execute(go="go"):
             print("Rejected production native GUI mutant:", name, flush=True)
         if sources() != before:
             raise ValueError("Native GUI sources changed during execution")
-    print("Native GUI ownership passed nineteen required process/pipe/system-policy cases and seventeen compiled production negative controls, including actual system PowerShell plus distinct pre-creation and suspended-image proofs; C# application and cross-account UAC composition remain separate.", flush=True)
+    print("Native GUI ownership passed twenty required process/pipe/system-policy cases and seventeen compiled production negative controls, including actual original-user profile capture, system PowerShell and distinct pre-creation/suspended-image proofs; C# application and cross-account UAC composition remain separate.", flush=True)
 
 
 if __name__ == "__main__":
