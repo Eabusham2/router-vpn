@@ -193,12 +193,13 @@ func macOSOwnedPeer(raw syscall.RawConn) (macOSOwnedPeerIdentity, error) {
 		size := uint32(unsafe.Sizeof(credential))
 		_, _, callErr := syscall.Syscall6(syscall.SYS_GETSOCKOPT, uintptr(fd), 0, 1, uintptr(unsafe.Pointer(&credential)), uintptr(unsafe.Pointer(&size)), 0)
 		if callErr != 0 || size != 76 || credential.Version != 0 || credential.Groups < 1 || credential.Groups > 16 || credential.UID == ^uint32(0) {
-			result = errors.New("the desktop kernel peer credentials could not be verified")
+			result = fmt.Errorf("the desktop kernel peer credentials could not be verified (error=%v size=%d version=%d groups=%d uid=%d)",
+				callErr, size, credential.Version, credential.Groups, credential.UID)
 			return
 		}
 		pid, err := syscall.GetsockoptInt(fd, 0, 2) // LOCAL_PEERPID
 		if err != nil || pid <= 0 {
-			result = errors.New("the desktop kernel peer process could not be verified")
+			result = fmt.Errorf("the desktop kernel peer process could not be verified (pid=%d error=%v)", pid, err)
 			return
 		}
 		identity = macOSOwnedPeerIdentity{UID: credential.UID, PID: pid}
@@ -292,7 +293,7 @@ func prepareNativeOwnedController(arguments []string) (_ *ownedDesktopController
 	}
 	peer, err := macOSOwnedPeer(raw)
 	if err != nil || peer.UID != uid {
-		return nil, errors.New("the native controller lifetime belongs to another desktop user")
+		return nil, errors.Join(errors.New("the native controller lifetime belongs to another desktop user"), err)
 	}
 	var socketAddressError error
 	err = raw.Control(func(fd uintptr) {
@@ -530,7 +531,7 @@ func runMacOSOwnedChild(ctx context.Context, connection *net.UnixConn, registere
 	}
 	peer, err := macOSOwnedPeer(raw)
 	if err != nil || peer.UID != registeredUID || registeredUID == 0 {
-		return errors.New("the supervisor rejected a foreign local peer")
+		return errors.Join(errors.New("the supervisor rejected a foreign local peer"), err)
 	}
 	if err = connection.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
 		return err

@@ -693,6 +693,33 @@ func TestMacOSOwnedControllerNativeSupervisorRestartDoesNotAdoptLiveChild(t *tes
 	}
 }
 
+// An exec rejection precedes the AppKit ACL assertion. Record the actual
+// installed file and ancestor authority without changing modes, ACLs or the
+// original failure verdict, so the native run identifies the rejected stage.
+func macOSControllerNativeExecDiagnostic(t *testing.T, installed string, uid uint32) {
+	t.Helper()
+	t.Logf("actual AppKit exec rejected for captured uid=%d", uid)
+	for path := installed; ; path = filepath.Dir(path) {
+		info, err := os.Lstat(path)
+		if err != nil {
+			t.Logf("exec path %q: %v", path, err)
+		} else if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+			t.Logf("exec path %q: mode=%s uid=%d gid=%d links=%d dev=%d inode=%d acl=%v",
+				path, info.Mode(), stat.Uid, stat.Gid, stat.Nlink, stat.Dev, stat.Ino, ownedPathACL(path))
+		}
+		if path == "/" {
+			break
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(ctx, "/bin/ls", "-ldeO@", installed, macOSOwnedControllerRoot, macOSOwnedControllerSocketDirectory).CombinedOutput()
+	if len(output) > 8192 {
+		output = output[:8192]
+	}
+	t.Logf("actual AppKit file/ancestor flags and ACLs (bounded): error=%v\n%s", err, output)
+}
+
 func TestMacOSOwnedControllerNativeAppKitClient(t *testing.T) {
 	fixture := macOSControllerNativeInstall(t)
 	check := os.Getenv("ROUTERVPN_MACOS_FIXTURE_APPKIT")
@@ -726,6 +753,7 @@ func TestMacOSOwnedControllerNativeAppKitClient(t *testing.T) {
 	command.Stdout = &output
 	command.Stderr = &output
 	if err := command.Start(); err != nil {
+		macOSControllerNativeExecDiagnostic(t, installed, fixture.uid)
 		t.Fatal(err)
 	}
 	joined := make(chan struct{})
@@ -792,6 +820,7 @@ func TestMacOSOwnedControllerNativeAppKitClient(t *testing.T) {
 	rejected := exec.CommandContext(bounded, installed, "--reject-unsafe-supervisor-acl")
 	rejected.Env, rejected.SysProcAttr = command.Env, command.SysProcAttr
 	if evidence, err := rejected.CombinedOutput(); err != nil || !bytes.Contains(evidence, []byte("Actual native AppKit unsafe supervisor ACL rejected: PASS")) {
+		macOSControllerNativeExecDiagnostic(t, installed, fixture.uid)
 		t.Fatal("actual AppKit socket-path ACL gate failed", err, string(evidence))
 	}
 }
