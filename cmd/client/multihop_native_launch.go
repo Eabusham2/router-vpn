@@ -102,6 +102,7 @@ func compileRetainedNativeMultihopLaunch(sel multihopSelection, descriptor *desk
 		"control_id": sel.Control.ID, "entry_id": sel.Entry.ID, "exit_id": sel.Exit.ID,
 		"entry_mode": sel.Native.entryMode, "base": sel.Base, "exit_mode": sel.ExitMode,
 		"execution": execution, "mtu_scope": "multihop-exit-path",
+		"physical_egress": sel.Native.entryPhysical,
 	})
 	if err != nil {
 		clear(data)
@@ -206,6 +207,13 @@ func stageOwnedNativeMultihopCommand(a *app, sel multihopSelection, launch *desk
 	// The physical connection and firewall belong to ENTRY and CONTROL,
 	// respectively. The shared node launch's profile identity remains EXIT.
 	launch.command.Env = nativeNodeMTUEnvironment(nativeMultihopEnvironment(launch.root, sel), launch.mtuSession, launch.configSHA256)
+	if runtime.GOOS == "windows" {
+		var err error
+		launch.command.Env, err = desktopNodePhysicalEnvironment(launch.command.Env, launch)
+		if err != nil {
+			return err
+		}
+	}
 	if err := registerNativeMultihopDNSRuntime(a, sel, launch.command); err != nil {
 		return err
 	}

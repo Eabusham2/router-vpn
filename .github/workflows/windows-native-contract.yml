@@ -297,6 +297,7 @@ jobs:
           $scopes = @(
             @{ Run = '^TestDesktopRuntimeWorkspace'; Skip = '' },
             @{ Run = '^TestDesktopDNS'; Skip = '' },
+            @{ Run = '^Test(DesktopNodePhysical|DesktopNativeStaging|NativeMultihopRetainedStage)'; Skip = '' },
             @{ Run = '^TestDesktopTorMTU'; Skip = '' },
             @{ Run = '^TestDesktopTor'; Skip = '^TestDesktopTorMTU' },
             @{ Run = '^TestSpeedLab'; Skip = '' }

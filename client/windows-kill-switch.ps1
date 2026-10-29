@@ -180,12 +180,28 @@ function Parse-Bool([string]$Value,[bool]$Default) {
   if ([string]::IsNullOrWhiteSpace($Value)) { return $Default }
   return $Value.ToLowerInvariant() -eq 'true'
 }
+function Assert-CapturedNativeEgressOwner {
+  $external=[Environment]::GetEnvironmentVariable('HOMEVPN_EXTERNAL_SESSION','Process')
+  $node=[Environment]::GetEnvironmentVariable('HOMEVPN_NODE_SESSION','Process')
+  $config=[Environment]::GetEnvironmentVariable('HOMEVPN_NODE_CONFIG_SHA256','Process')
+  $hasExternal=$null-ne$external
+  $hasNode=$null-ne$node-or$null-ne$config
+  if($env:HOMEVPN_STANDARD_ENGINE-cne'native'-or$hasExternal-eq$hasNode){throw 'Native egress requires exactly one captured runtime owner.'}
+  if($hasExternal){
+    if($external-cnotmatch'^[a-f0-9]{32}$'){throw 'Native egress has an invalid external owner.'}
+  }elseif($node-cnotmatch'^[a-f0-9]{32}$'-or$config-cnotmatch'^[a-f0-9]{64}$'){
+    throw 'Native egress has no exact captured Router session and graph.'
+  }
+}
 function Captured-EndpointAddresses([string]$Primary) {
   $raw = $env:HOMEVPN_NATIVE_ENDPOINTS_JSON
-  if ($null -eq $raw) { if ($Primary) { return @($Primary) }; return @() }
-  if ($raw.Length -gt 1024 -or $env:HOMEVPN_STANDARD_ENGINE -cne 'native' -or $env:HOMEVPN_EXTERNAL_SESSION -cnotmatch '^[a-f0-9]{32}$') {
-    throw 'Native endpoint list has no captured external session.'
+  if($null-ne$env:HOMEVPN_NODE_SESSION-or$null-ne$env:HOMEVPN_NODE_CONFIG_SHA256){
+    Assert-CapturedNativeEgressOwner
+    if($null-eq$raw-or$null-eq$env:HOMEVPN_NATIVE_EGRESS_JSON){throw 'Captured Router egress cannot fall back to an all-port endpoint exception.'}
   }
+  if ($null -eq $raw) { if ($Primary) { return @($Primary) }; return @() }
+  Assert-CapturedNativeEgressOwner
+  if ($raw.Length -gt 1024) { throw 'Native endpoint list exceeds its captured bound.' }
   try {
     if (-not $raw.Trim().StartsWith('[') -or -not $raw.Trim().EndsWith(']')) { throw 'array required' }
     # PowerShell 5.1 returns a top-level JSON array as one pipeline object;
@@ -238,7 +254,8 @@ function Assert-NativeEgress($Items,[string[]]$Addresses) {
 function Captured-NativeEgress([string[]]$Addresses) {
   $raw=$env:HOMEVPN_NATIVE_EGRESS_JSON
   if($null-eq$raw){return}
-  if($raw.Length-gt4096-or$env:HOMEVPN_STANDARD_ENGINE-cne'native'-or$env:HOMEVPN_EXTERNAL_SESSION-cnotmatch'^[a-f0-9]{32}$'){throw 'Native egress has no captured external session.'}
+  Assert-CapturedNativeEgressOwner
+  if($raw.Length-gt4096){throw 'Native egress exceeds its captured bound.'}
   # Only the controller's canonical struct encoding reaches this environment.
   # An exact grammar rejects duplicate members before either PowerShell JSON
   # implementation can silently collapse them or change top-level array shape.

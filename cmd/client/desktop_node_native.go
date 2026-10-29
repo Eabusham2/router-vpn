@@ -33,6 +33,7 @@ type desktopNodeLaunch struct {
 	mtuSession                 string
 	policyProfileID            string
 	nodePhysicalEgress         []mobilemultihop.PhysicalEgress
+	nodePhysicalCapture        *desktopNodePhysicalCapture
 	external                   *desktopExternalRuntime
 	tor                        *desktopTorRuntime
 	directoryInfo              os.FileInfo
@@ -369,6 +370,7 @@ func prepareDesktopNodeLaunch(a *app, p common.RouterProfile, mode string) (*des
 	}
 	sum := sha256.Sum256(data)
 	metadata["config_sha256"] = hex.EncodeToString(sum[:])
+	metadata["physical_egress"] = physical
 	receipt, err := json.Marshal(metadata)
 	if err != nil {
 		return nil, err
@@ -405,6 +407,14 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 		launch.mtuSession = identifier
 	}
 	root, endpoint := launch.root, launch.endpoint
+	if runtime.GOOS == "windows" && launch.external == nil {
+		capture, err := captureDesktopNodePhysical(launch)
+		if err != nil {
+			return err
+		}
+		launch.nodePhysicalCapture = capture
+		endpoint = capture.primary
+	}
 	directory, err := newPrivateRuntimeDir(root, "native-node")
 	if err != nil {
 		return err
@@ -447,6 +457,12 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 	cmd.Env = desktopNativeEnvironment(os.Environ(), root, launch.profileID, endpoint)
 	if launch.external == nil {
 		cmd.Env = nativeNodeMTUEnvironment(cmd.Env, launch.mtuSession, configSHA256)
+		if runtime.GOOS == "windows" {
+			cmd.Env, err = desktopNodePhysicalEnvironment(cmd.Env, launch)
+			if err != nil {
+				return err
+			}
+		}
 	}
 	if launch.external != nil {
 		clean := cmd.Env[:0]

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/mobiletor"
 )
 
@@ -572,7 +573,8 @@ func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (sp
 		if err != nil {
 			return plan, err
 		}
-		plan.native = &desktopNodeLaunch{root: launch.root, endpoint: launch.endpoint, profileID: launch.profileID, mode: launch.mode, config: restoredConfig, metadata: restoredMetadata}
+		plan.native = &desktopNodeLaunch{root: launch.root, endpoint: launch.endpoint, profileID: launch.profileID, mode: launch.mode, config: restoredConfig, metadata: restoredMetadata,
+			nodePhysicalEgress: append([]mobilemultihop.PhysicalEgress(nil), launch.nodePhysicalEgress...)}
 	}
 	if err := validateSpeedLabIdentity(a, identity); err != nil {
 		clearSpeedLabRestorePlan(plan)

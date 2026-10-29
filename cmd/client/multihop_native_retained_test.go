@@ -150,6 +150,12 @@ func TestNativeMultihopRetainedStageBindsFreshSessionAndExactConfig(t *testing.T
 			t.Fatal("wrong staged ownership", expected)
 		}
 	}
+	if runtime.GOOS == "windows" {
+		encoded, err := json.Marshal(f.selection.Native.entryPhysical)
+		if err != nil || f.launch.nodePhysicalCapture == nil || !strings.Contains(environment, "HOMEVPN_NATIVE_EGRESS_JSON="+string(encoded)) {
+			t.Fatal("entry/control environment replacement dropped the actual Windows physical tuples", err)
+		}
+	}
 	graph := retainedGraph(t, raw)
 	for _, value := range graph["outbounds"].([]any) {
 		out := value.(map[string]any)

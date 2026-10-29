@@ -218,11 +218,30 @@ func TestDesktopNativeStagingOwnsExactDirectoryAndEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	launch := &desktopNodeLaunch{root: root, endpoint: "198.51.100.8", profileID: "captured", mode: "wg", config: []byte(compiled.Config()), metadata: []byte(compiled.Metadata())}
+	launch.nodePhysicalEgress, err = compiled.PhysicalEgress()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(launch.metadata, &metadata); err != nil {
+		t.Fatal(err)
+	}
+	metadata["physical_egress"] = launch.nodePhysicalEgress
+	launch.metadata, err = json.Marshal(metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := stageDesktopNodeLaunch(a, launch); err != nil {
 		t.Fatal(err)
 	}
 	if launch.directory == "" || launch.command == nil || len(launch.config) != 0 || len(launch.metadata) != 0 {
 		t.Fatal("native stage did not transfer ownership")
+	}
+	if runtime.GOOS == "windows" {
+		if launch.nodePhysicalCapture == nil || !strings.Contains(strings.Join(launch.command.Env, "\n"),
+			`HOMEVPN_NATIVE_EGRESS_JSON=[{"host":"198.51.100.8","port":51820,"network":"udp"}]`) {
+			t.Fatal("Windows stage lost the compiled physical socket")
+		}
 	}
 	if err := stageDesktopNodeLaunch(a, launch); err == nil {
 		t.Fatal("same capture staged twice")

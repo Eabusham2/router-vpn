@@ -12,7 +12,7 @@ if ($PreserveJsonArrays) {
 $script = if($Source){[IO.Path]::GetFullPath($Source)}else{Join-Path $PSScriptRoot 'windows-kill-switch.ps1'}
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('router-vpn-killswitch-test-'+[Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $temp | Out-Null
-$nativeNames = @('HOMEVPN_STANDARD_ENGINE','HOMEVPN_EXTERNAL_SESSION','HOMEVPN_NATIVE_ENDPOINTS_JSON','HOMEVPN_NATIVE_EGRESS_JSON','HOMEVPN_PROFILE_ID','HOMEVPN_POLICY_PROFILE_ID','HOMEVPN_ENDPOINT','HOMEVPN_ROOT')
+$nativeNames = @('HOMEVPN_STANDARD_ENGINE','HOMEVPN_EXTERNAL_SESSION','HOMEVPN_NODE_SESSION','HOMEVPN_NODE_CONFIG_SHA256','HOMEVPN_NATIVE_ENDPOINTS_JSON','HOMEVPN_NATIVE_EGRESS_JSON','HOMEVPN_PROFILE_ID','HOMEVPN_POLICY_PROFILE_ID','HOMEVPN_ENDPOINT','HOMEVPN_ROOT')
 $originalNative = @{}
 foreach ($name in $nativeNames) {
   $originalNative[$name] = [Environment]::GetEnvironmentVariable($name,'Process')
@@ -75,6 +75,40 @@ try {
     $expected=$egressPlan.native_egress[$i]
     if(@($outer[$i].RemoteAddress).Count-ne1-or$outer[$i].RemoteAddress[0]-cne$expected.host-or$outer[$i].RemotePort-cne[string]$expected.port-or$outer[$i].Protocol-cne$expected.network.ToUpperInvariant()){throw 'Firewall cmdlet lost exact compiled outer tuple.'}
   }
+  # Private Router graphs use their native node session/config identity.
+  # Exercise the same real plan and rule builder with the captured multi-host
+  # TCP/UDP tuples, independently of the currently selected node.
+  Remove-Item Env:HOMEVPN_EXTERNAL_SESSION
+  $env:HOMEVPN_NODE_SESSION=('b'*32);$env:HOMEVPN_NODE_CONFIG_SHA256=('c'*64)
+  $nodePlan=(& $script -Action plan -Endpoint '203.0.113.7' -Policy 'always' -HomeLANAccess 'false' -TunnelAlias 'router-vpn' -StateRoot $temp|ConvertFrom-Json)
+  $script:capturedRules=@();Install-AllowRules $nodePlan
+  $nodeOuter=@($script:capturedRules|Where-Object{$_.DisplayName-like'Router VPN test native outer *'})
+  if($nodeOuter.Count-ne3-or@($script:capturedRules|Where-Object{$_.DisplayName-eq'Router VPN test selected node'}).Count){throw 'Router graph widened into an all-port exception.'}
+  for($i=0;$i-lt3;$i++){
+    $expected=$nodePlan.native_egress[$i]
+    if(@($nodeOuter[$i].RemoteAddress).Count-ne1-or$nodeOuter[$i].RemoteAddress[0]-cne$expected.host-or$nodeOuter[$i].RemotePort-cne[string]$expected.port-or$nodeOuter[$i].Protocol-cne$expected.network.ToUpperInvariant()){throw 'Router graph lost its exact physical tuple.'}
+  }
+  foreach($fault in @('missing-session','missing-config','mixed-owner','upper-session','upper-config','short-config','missing-tuples','missing-endpoints','empty-tuples')){
+    $env:HOMEVPN_NODE_SESSION=('b'*32);$env:HOMEVPN_NODE_CONFIG_SHA256=('c'*64)
+    $env:HOMEVPN_NATIVE_EGRESS_JSON=$egress;$env:HOMEVPN_NATIVE_ENDPOINTS_JSON=$validEndpoints
+    switch($fault){
+      'missing-session'{Remove-Item Env:HOMEVPN_NODE_SESSION}
+      'missing-config'{Remove-Item Env:HOMEVPN_NODE_CONFIG_SHA256}
+      'mixed-owner'{$env:HOMEVPN_EXTERNAL_SESSION=('a'*32)}
+      'upper-session'{$env:HOMEVPN_NODE_SESSION=('B'*32)}
+      'upper-config'{$env:HOMEVPN_NODE_CONFIG_SHA256=('C'*64)}
+      'short-config'{$env:HOMEVPN_NODE_CONFIG_SHA256=('c'*63)}
+      'missing-tuples'{Remove-Item Env:HOMEVPN_NATIVE_EGRESS_JSON}
+      'missing-endpoints'{Remove-Item Env:HOMEVPN_NATIVE_ENDPOINTS_JSON}
+      'empty-tuples'{$env:HOMEVPN_NATIVE_EGRESS_JSON='[]'}
+    }
+    $rejected=$false
+    try{& $script -Action plan -Endpoint '203.0.113.7' -Policy 'always' -HomeLANAccess 'false' -StateRoot $temp|Out-Null}catch{$rejected=$true}
+    if(-not$rejected){throw "Invalid Router egress owner was accepted: $fault"}
+    Remove-Item Env:HOMEVPN_EXTERNAL_SESSION -ErrorAction SilentlyContinue
+  }
+  Remove-Item Env:HOMEVPN_NODE_SESSION,Env:HOMEVPN_NODE_CONFIG_SHA256 -ErrorAction SilentlyContinue
+  $env:HOMEVPN_EXTERNAL_SESSION=('a'*32);$env:HOMEVPN_NATIVE_ENDPOINTS_JSON=$validEndpoints;$env:HOMEVPN_NATIVE_EGRESS_JSON=$egress
   $badEgress=@('null','{}','[]','[[{"host":"203.0.113.7","port":8388,"network":"udp"}]]',
     '[{"host":"203.0.113.7","port":8388,"network":"udp"}]',
     $egress.Replace('"port":8388','"port":0'),$egress.Replace('"port":8388','"port":65536'),
