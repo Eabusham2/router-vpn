@@ -22,9 +22,10 @@ import (
 )
 
 // These are actual local Windows account, token, Winsock and WFP operations.
-// They do not install any firewall permit, connect a socket, or change an
-// existing account. Lack of elevation/BFE/IPv6 is a failed required gate, not a
-// skipped identity proof. Every created account is fresh and expires atomically.
+// Connections and byte exchanges use only owned loopback peers. These tests
+// install no firewall permission and change no existing account. Lack of
+// elevation/BFE/IPv6 is a failed required gate, not a skipped identity proof.
+// Every created account is fresh and expires atomically.
 func desktopWindowsIdentityTestNew(t *testing.T) *DesktopWindowsSocketIdentity {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -669,7 +670,7 @@ func TestDesktopSocketWindowsIdentityRejectsUnjoinedDuplicate(t *testing.T) {
 	if !errors.As(lookupErr, &status) || status != syscall.Errno(1168) {
 		t.Fatal("retirement did not return the actual user-mode ERROR_NOT_FOUND status", lookupErr)
 	}
-	t.Logf("retired ALE endpoint has independent native status=%d (%#x)", status, status)
+	t.Logf("retired ALE endpoint has independent native status=%d (%#x)", uint32(status), uint32(status))
 }
 
 func TestDesktopSocketWindowsIdentityRejectsTokenStatisticsReplacement(t *testing.T) {
@@ -748,5 +749,188 @@ func TestDesktopSocketWindowsIdentityRejectsOtherExecutableAppID(t *testing.T) {
 	}
 	if inspectErr == nil || !strings.Contains(inspectErr.Error(), "captured isolated token and process") {
 		t.Fatal("identical file bytes replaced the independently read process appId", inspectErr)
+	}
+}
+
+// These cases exercise the shipping native import and I/O composition with an
+// actual isolated creator. Firewall authorization is tested separately; the
+// narrow admission callbacks below require the real captured handle and ALE
+// proof before an importer can connect or a packet can be transmitted.
+func TestDesktopSocketWindowsIdentityImportedTCPAndUDP(t *testing.T) {
+	for _, family := range []string{"4", "6"} {
+		for _, network := range []string{"tcp", "udp"} {
+			t.Run(network+family, func(t *testing.T) {
+				address := "127.0.0.1"
+				if family == "6" {
+					address = "::1"
+				}
+				p := desktopWindowsIdentityTestNew(t)
+				creation := desktopWindowsIdentityTestCreation(t, p, network, address)
+				created := desktopWindowsIdentityTestCreate(t, p, creation)
+				ctx, cancel := context.WithTimeout(p.ctx, 10*time.Second)
+				defer cancel()
+				deadline := time.Now().Add(5 * time.Second)
+				match := func(actual string, raw syscall.RawConn) error {
+					matched, err := p.MatchSocket(ctx, creation.Capture, creation.Binding, actual, raw)
+					if err != nil || matched != creation {
+						return errors.Join(err, errors.New("native import changed the captured isolated descriptor"))
+					}
+					return nil
+				}
+				if network == "tcp" {
+					listener, err := net.ListenTCP(network+family, net.TCPAddrFromAddrPort(netip.AddrPortFrom(creation.Binding.LocalAddress, 0)))
+					if err != nil {
+						t.Fatal("actual identity TCP peer", err)
+					}
+					t.Cleanup(func() { _ = listener.Close() })
+					if err := listener.SetDeadline(deadline); err != nil {
+						t.Fatal(err)
+					}
+					remote := listener.Addr().(*net.TCPAddr).AddrPort()
+					var before DesktopWindowsSocketInspection
+					connection, err := desktopSocketImportNativeTCP(ctx, network+family, remote, created.Native, func(_ context.Context, actual, destination string, raw syscall.RawConn) error {
+						if destination != remote.String() {
+							return errors.New("native TCP import replaced its captured peer")
+						}
+						if err := match(actual, raw); err != nil {
+							return err
+						}
+						keeper, local, err := desktopSocketBindTCP(raw, creation.Binding.LocalAddress)
+						if keeper != nil {
+							t.Cleanup(func() {
+								if err := keeper.Close(); err != nil {
+									t.Error("retained imported TCP keeper", err)
+								}
+							})
+						}
+						if err != nil {
+							return err
+						}
+						before, err = p.InspectSocket(ctx, creation)
+						if err != nil || before.Local != local || before.Remote.Port() != 0 || !before.Remote.Addr().IsUnspecified() {
+							return errors.Join(err, errors.New("native TCP connect has no exact pre-connect ALE proof"))
+						}
+						return nil
+					})
+					if connection != nil {
+						t.Cleanup(func() {
+							if err := connection.Close(); err != nil {
+								t.Error("imported TCP owner did not close", err)
+							}
+						})
+					}
+					if err != nil {
+						t.Fatal("actual isolated native TCP import", err)
+					}
+					owned, ok := connection.(*desktopWindowsSocket)
+					if !ok {
+						t.Fatal("native TCP import lost its shipping Winsock owner")
+					}
+					raw := desktopWindowsRaw{owned}
+					desktopWindowsIdentityTestIOProof(t, "after-connect", p, creation, created.Native, before, raw, remote)
+					peer, err := listener.AcceptTCP()
+					if err != nil {
+						t.Fatal("native TCP connection did not reach its owned peer", err)
+					}
+					t.Cleanup(func() { _ = peer.Close() })
+					if err := errors.Join(connection.SetDeadline(deadline), peer.SetDeadline(deadline)); err != nil {
+						t.Fatal(err)
+					}
+					if n, err := connection.Write([]byte("ping")); err != nil || n != 4 {
+						t.Fatal("native isolated TCP did not send exact bytes", n, err)
+					}
+					var data [4]byte
+					if _, err := io.ReadFull(peer, data[:]); err != nil || string(data[:]) != "ping" {
+						t.Fatal("owned TCP peer did not receive exact bytes", err)
+					}
+					if n, err := peer.Write(data[:]); err != nil || n != 4 {
+						t.Fatal("owned TCP peer did not echo exact bytes", n, err)
+					}
+					if _, err := io.ReadFull(connection, data[:]); err != nil || string(data[:]) != "ping" {
+						t.Fatal("native isolated TCP did not receive exact bytes", err)
+					}
+					desktopWindowsIdentityTestIOProof(t, "after-TCP-I/O", p, creation, created.Native, before, raw, remote)
+				} else {
+					peer, err := net.ListenUDP(network+family, net.UDPAddrFromAddrPort(netip.AddrPortFrom(creation.Binding.LocalAddress, 0)))
+					if err != nil {
+						t.Fatal("actual identity UDP peer", err)
+					}
+					t.Cleanup(func() { _ = peer.Close() })
+					packet, err := desktopSocketImportNativePacket(ctx, network+family, created.Native, creation.Binding.LocalAddress, func(actual, _ string, raw syscall.RawConn) error {
+						if err := match(actual, raw); err != nil {
+							return err
+						}
+						return desktopSocketExclusive(raw)
+					})
+					if packet != nil {
+						t.Cleanup(func() {
+							if err := packet.Close(); err != nil {
+								t.Error("imported UDP owner did not close", err)
+							}
+						})
+					}
+					if err != nil {
+						t.Fatal("actual isolated native UDP import", err)
+					}
+					before, err := p.InspectSocket(ctx, creation)
+					if err != nil || before.Local.String() != packet.LocalAddr().String() || before.Remote.Port() != 0 || !before.Remote.Addr().IsUnspecified() {
+						t.Fatal("native UDP send has no exact bound ALE proof", err)
+					}
+					rawOwner, ok := packet.(syscall.Conn)
+					if !ok {
+						t.Fatal("native UDP import lost its shipping Winsock owner")
+					}
+					raw, err := rawOwner.SyscallConn()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := errors.Join(packet.SetDeadline(deadline), peer.SetDeadline(deadline)); err != nil {
+						t.Fatal(err)
+					}
+					if n, err := packet.WriteTo([]byte("ping"), peer.LocalAddr()); err != nil || n != 4 {
+						t.Fatal("native isolated UDP did not send exact bytes", n, err)
+					}
+					var data [4]byte
+					n, sender, err := peer.ReadFromUDP(data[:])
+					if err != nil || n != 4 || string(data[:]) != "ping" || sender.String() != packet.LocalAddr().String() {
+						t.Fatal("owned UDP peer did not receive exact bytes and tuple", n, err)
+					}
+					if n, err := peer.WriteToUDP(data[:], sender); err != nil || n != 4 {
+						t.Fatal("owned UDP peer did not echo exact bytes", n, err)
+					}
+					n, senderAddress, err := packet.ReadFrom(data[:])
+					if err != nil || n != 4 || string(data[:]) != "ping" || senderAddress.String() != peer.LocalAddr().String() {
+						t.Fatal("native isolated UDP did not receive exact bytes and peer", n, err)
+					}
+					desktopWindowsIdentityTestIOProof(t, "after-UDP-I/O", p, creation, created.Native, before, raw, before.Remote)
+				}
+			})
+		}
+	}
+}
+
+func desktopWindowsIdentityTestIOProof(t *testing.T, phase string, p *DesktopWindowsSocketIdentity, creation DesktopSocketCreation, source DesktopSocketNative, before DesktopWindowsSocketInspection, raw syscall.RawConn, remote netip.AddrPort) {
+	t.Helper()
+	endpoint, err := desktopWindowsALEEndpoint(raw)
+	if err != nil || endpoint != before.EndpointID {
+		t.Fatal("native I/O import replaced the independently proved ALE endpoint", phase, endpoint, err)
+	}
+	if err := raw.Control(func(handle uintptr) {
+		local, localErr := syscall.Getsockname(syscall.Handle(handle))
+		peer, peerErr := syscall.Getpeername(syscall.Handle(handle))
+		var localCode, peerCode syscall.Errno
+		_ = errors.As(localErr, &localCode)
+		_ = errors.As(peerErr, &peerCode)
+		t.Logf("native I/O diagnostic phase=%s getsockname_errno=%d getpeername_errno=%d local=%v peer=%v", phase, localCode, peerCode, local, peer)
+	}); err != nil {
+		t.Fatal("native I/O descriptor cannot be independently inspected", phase, err)
+	}
+	inspection, err := p.InspectSocket(p.ctx, creation)
+	if err != nil {
+		desktopWindowsIdentityTestDiagnoseALE(t, phase, p, source)
+		t.Fatal("actual native I/O lost the captured ALE token, application, or tuple proof", phase, err)
+	}
+	if inspection.EndpointID != before.EndpointID || inspection.TokenModifiedID != before.TokenModifiedID || inspection.Local != before.Local || inspection.Protocol != before.Protocol || inspection.Family != before.Family || !bytes.Equal(inspection.AppID, before.AppID) || inspection.Remote != remote {
+		t.Fatal("native I/O substituted the actual endpoint ownership or complete tuple", phase, inspection)
 	}
 }

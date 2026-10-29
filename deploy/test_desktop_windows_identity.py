@@ -2,7 +2,7 @@
 """Prove the shipping Windows isolated creator against actual kernel endpoints.
 
 This gate requires a matching elevated Windows host. It creates only fresh,
-atomically expiring local test accounts and unconnected loopback-bound sockets;
+atomically expiring local test accounts and owned loopback socket/echo peers;
 it installs no firewall permission or route and never touches an existing user.
 The baseline and every negative control execute compiled production Go source.
 An unavailable Windows capability is a failure, never a skipped proof.
@@ -32,6 +32,7 @@ REQUIRED = (
     "TestDesktopSocketWindowsIdentityRejectsUnjoinedDuplicate",
     "TestDesktopSocketWindowsIdentityRejectsTokenStatisticsReplacement",
     "TestDesktopSocketWindowsIdentityRejectsOtherExecutableAppID",
+    "TestDesktopSocketWindowsIdentityImportedTCPAndUDP",
 )
 
 
@@ -193,6 +194,10 @@ def execute(source=ROOT, go="go", *, env=None):
             for network in ("tcp", "udp"):
                 if "--- PASS: " + REQUIRED[1] + "/" + network + "-" + address + " (" not in output:
                     raise ValueError("Windows identity baseline omitted an actual socket family")
+        for family in ("4", "6"):
+            for network in ("tcp", "udp"):
+                if "--- PASS: " + REQUIRED[10] + "/" + network + family + " (" not in output:
+                    raise ValueError("Windows identity baseline omitted native imported I/O")
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("Windows identity binary changed during actual execution")
         for name, test, witness, replacement in changes:
@@ -214,7 +219,7 @@ def execute(source=ROOT, go="go", *, env=None):
             print("Rejected production Windows identity mutant:", name, flush=True)
         if checked_sources(source)[3] != before:
             raise ValueError("Windows identity source changed during its actual native gate")
-    print("Windows isolated identity passed ten kernel/lifecycle cases, all four socket families, and nine production negative controls; WFP permit enforcement remains a separate gate.", flush=True)
+    print("Windows isolated identity passed eleven kernel/lifecycle cases, all four bound and imported-I/O socket families, and nine production negative controls; WFP permit enforcement remains a separate gate.", flush=True)
 
 
 if __name__ == "__main__":
