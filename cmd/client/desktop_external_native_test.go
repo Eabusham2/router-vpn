@@ -170,6 +170,18 @@ func TestDesktopExternalFullRouterPredecessorAndRestoredChoice(t *testing.T) {
 						if original.external.predecessor == "" || original.external.profile.MultihopEntryMode != mode || original.external.entry.StartLayer != layer {
 							t.Fatal("captured entry mode/layer was dropped")
 						}
+						port := 51820
+						if layer == "aes-256-gcm" {
+							port = 8388
+						} else if layer == "aes-256-gcm+xor-whitening" {
+							port = 8389
+						}
+						if len(original.external.physicalEgress) != 1 ||
+							original.external.physicalEgress[0].Host != entry.Endpoint ||
+							original.external.physicalEgress[0].Port != port ||
+							original.external.physicalEgress[0].Network != "udp" {
+							t.Fatal("exit provider ports bypassed the actual captured Router entry", original.external.physicalEgress)
+						}
 						if layer == "aes-256-gcm+xor-whitening" && !bytes.Contains(original.config, []byte(`"routervpn-aes-xor"`)) {
 							t.Fatal("entry whitening was replaced")
 						}
@@ -192,6 +204,10 @@ func TestDesktopExternalFullRouterPredecessorAndRestoredChoice(t *testing.T) {
 						}
 						if restored.external.predecessor != original.external.predecessor || restored.external.selection != chosen || restored.external.session == original.external.session {
 							t.Fatal("restore changed its predecessor, reran Compare or reused a session")
+						}
+						if !reflect.DeepEqual(restored.external.physicalEgress, original.external.physicalEgress) ||
+							!reflect.DeepEqual(restored.external.physicalEndpoints, original.external.physicalEndpoints) {
+							t.Fatal("restoration changed the captured physical firewall closure")
 						}
 						if export := os.Getenv("ROUTERVPN_DESKTOP_EXTERNAL_GRAPHS"); export != "" {
 							name := strings.Join([]string{mode, layer, protocol, execution}, "-") + ".json"

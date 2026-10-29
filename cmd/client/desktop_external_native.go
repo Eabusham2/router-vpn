@@ -261,9 +261,15 @@ func compileDesktopExternalGraphWithPredecessor(graph map[string]any, profile, e
 	if err != nil {
 		return nil, err
 	}
-	physicalEgress, err := desktopExternalPhysicalEgress(profile, entry, direct)
+	physicalEgress, err := desktopExternalCompiledPhysical(compiled)
 	if err != nil {
 		return nil, err
+	}
+	if len(physicalEgress) != 0 {
+		physicalEndpoints, err = desktopExternalEgressEndpoints(endpoint, physicalEgress)
+		if err != nil {
+			return nil, err
+		}
 	}
 	selection := profile.MultihopExecution
 	if restored != "" {

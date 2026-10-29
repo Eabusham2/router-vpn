@@ -1,9 +1,130 @@
 package mobilemultihop
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
+
+func TestExternalCompletePhysicalProjectionMatchesCapturedProtocol(t *testing.T) {
+	for _, protocol := range []string{"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"} {
+		t.Run(protocol, func(t *testing.T) {
+			policy, want := directEgressFixture(t, protocol)
+			actual, err := policy.PhysicalEgress()
+			if protocol == "socks5" {
+				if !errors.Is(err, ErrDynamicPhysicalEgress) || actual != nil {
+					t.Fatal("negotiated physical SOCKS relay acquired a fabricated fixed port", actual, err)
+				}
+				return
+			}
+			if protocol == "shadowsocks" {
+				want = append(want, PhysicalEgress{"203.0.113.20", 443, "udp"})
+			}
+			if err != nil || !reflect.DeepEqual(actual, want) {
+				t.Fatal("complete captured graph lost its physical socket set", actual, want, err)
+			}
+			policy.config += " "
+			if actual, err := policy.PhysicalEgress(); err == nil || actual != nil {
+				t.Fatal("changed compiled source borrowed another physical capture")
+			}
+		})
+	}
+	if actual, err := (*ExternalPolicy)(nil).PhysicalEgress(); err == nil || actual != nil {
+		t.Fatal("nil compiled policy acquired physical authority")
+	}
+}
+
+func TestExternalCompletePhysicalProjectionKeepsNegotiatedRelayInsidePredecessor(t *testing.T) {
+	for _, mode := range predecessorFamilies {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(mode+"/"+layer, func(t *testing.T) {
+				source, entry := externalPredecessorFixture(t, mode, layer, false)
+				graph, capture := externalTestFixture(t, "socks5", "")
+				capture["entry"], capture["entry_tag"], capture["predecessor_config"] = entry, externalEntryTag, source
+				capture["profile"].(map[string]any)["multihop_entry_mode"] = mode
+				policy, err := NewExternalPolicy(startJSON(t, graph), startJSON(t, capture))
+				if err != nil {
+					t.Fatal(err)
+				}
+				actual, err := policy.PhysicalEgress()
+				if err != nil {
+					t.Fatal("negotiated inner relay escaped the captured predecessor", err)
+				}
+				expected, err := NodePhysicalEgress(mode, startJSON(t, entry), source)
+				if err != nil || !reflect.DeepEqual(actual, expected) {
+					t.Fatal("provider or selected DNS acquired a physical bypass", actual, expected, err)
+				}
+			})
+		}
+	}
+}
+
+func TestExternalCompletePhysicalProjectionRejectsSubstitutedSelector(t *testing.T) {
+	source, capture := externalExecutionFixture(t, "auto")
+	prepared, err := PrepareExternalExecutionCapture(source, capture, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := NewExternalPolicy(source, prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := policy.PhysicalEgress(); err != nil {
+		t.Fatal("valid captured execution selector lost its physical path", err)
+	}
+	for name, mutate := range map[string]func(map[string]any){
+		"other default":            func(node map[string]any) { node["default"] = "direct" },
+		"extra candidate":          func(node map[string]any) { node["outbounds"] = []any{LocalTag, ServerTag, "direct"} },
+		"substituted candidate":    func(node map[string]any) { node["outbounds"] = []any{LocalTag, "direct"} },
+		"retained connections":     func(node map[string]any) { node["interrupt_exist_connections"] = false },
+		"extra selector authority": func(node map[string]any) { node["fallback"] = "direct" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			graph := externalTestRead(t, policy.Config())
+			mutate(externalTestFind(t, graph, ExternalFinalTag))
+			// Exercise the private projection separately from the metadata digest
+			// rejection, so an altered selector cannot quietly broaden egress.
+			if got, err := compiledPhysicalEgress(externalTestJSON(t, graph), []string{"tcp", "udp"}); err == nil || got != nil {
+				t.Fatal("substituted execution selector acquired physical authority", got, err)
+			}
+		})
+	}
+}
+
+func TestExternalCompletePhysicalProjectionRejectsUnownedPrivateOpenVPNRemote(t *testing.T) {
+	source, capture := externalOpenVPNExecutionFixture(t, "local", "aes-256-gcm")
+	policy, err := NewExternalPolicy(source, capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := policy.PhysicalEgress(); err != nil || len(got) == 0 {
+		t.Fatal("valid layered OpenVPN graph lost its physical predecessor", got, err)
+	}
+	for name, mutate := range map[string]func(map[string]any, map[string]any){
+		"missing fixed layer": func(_ map[string]any, node map[string]any) { delete(node, "detour") },
+		"ordinary detour":     func(graph, node map[string]any) { node["detour"] = "entry-wg" },
+		"loopback inner remote": func(_ map[string]any, node map[string]any) {
+			node["servers"].([]any)[0].(map[string]any)["server"] = "127.0.0.1"
+		},
+		"zero inner port": func(_ map[string]any, node map[string]any) {
+			node["servers"].([]any)[0].(map[string]any)["server_port"] = float64(0)
+		},
+		"unbounded inner transport": func(_ map[string]any, node map[string]any) {
+			node["servers"].([]any)[0].(map[string]any)["network"] = "ip"
+		},
+		"extra remote authority": func(_ map[string]any, node map[string]any) {
+			node["servers"].([]any)[0].(map[string]any)["fallback"] = true
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			graph := externalTestRead(t, policy.Config())
+			mutate(graph, externalTestFind(t, graph, ExternalFinalTag))
+			if got, err := compiledPhysicalEgress(externalTestJSON(t, graph), []string{"tcp", "udp"}); err == nil || got != nil {
+				t.Fatal("unowned private OpenVPN remote acquired physical authority", got, err)
+			}
+		})
+	}
+}
 
 func directEgressFixture(t *testing.T, protocol string) (*ExternalPolicy, []PhysicalEgress) {
 	t.Helper()

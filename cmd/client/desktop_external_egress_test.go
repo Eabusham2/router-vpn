@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"path/filepath"
 	"reflect"
@@ -10,6 +11,53 @@ import (
 	"router-vpn/internal/common"
 	"router-vpn/internal/nativeopenvpn"
 )
+
+func TestDesktopExternalCompiledPhysicalTuplesReachOwnedStage(t *testing.T) {
+	for _, protocol := range []string{"wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"} {
+		t.Run(protocol, func(t *testing.T) {
+			profile, exit := desktopExternalNativeFixture(t, protocol)
+			launch, err := compileDesktopExternalCaptured(context.Background(), profile, common.RouterProfile{}, exit, true, "", nil, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if protocol == "socks5" {
+				if len(launch.external.physicalEgress) != 0 {
+					t.Fatal("negotiated SOCKS UDP relay was replaced by an invented static port")
+				}
+				return
+			}
+			network := "tcp"
+			if protocol == "wireguard" || protocol == "amneziawg" || protocol == "hysteria2" {
+				network = "udp"
+			}
+			want := []nativeopenvpn.LayerEgress{{Host: exit.Server, Port: exit.ServerPort, Network: network}}
+			if protocol == "shadowsocks" {
+				want = append(want, nativeopenvpn.LayerEgress{Host: exit.Server, Port: exit.ServerPort, Network: "udp"})
+			}
+			if !reflect.DeepEqual(launch.external.physicalEgress, want) {
+				t.Fatal("compiled provider path did not retain its actual transport port", launch.external.physicalEgress, want)
+			}
+			root := t.TempDir()
+			t.Setenv("HOMEVPN_ROOT", root)
+			t.Setenv("HOMEVPN_NATIVE_EGRESS_JSON", "foreign")
+			launch.root, launch.external.network = root, physicalNetworkIdentity()
+			a := &app{cfg: common.ClientConfig{ScriptsDir: filepath.Join(root, "modes")}}
+			if err := stageDesktopNodeLaunch(a, launch); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := cleanupDesktopNodeLaunch(launch); err != nil {
+					t.Error(err)
+				}
+			}()
+			encoded, _ := json.Marshal(want)
+			environment := strings.Join(launch.command.Env, "\n")
+			if !strings.Contains(environment, "HOMEVPN_NATIVE_EGRESS_JSON="+string(encoded)) || strings.Contains(environment, "foreign") {
+				t.Fatal("native stage lost the provider physical capture")
+			}
+		})
+	}
+}
 
 func TestDesktopMappedLayerPhysicalEgressOwnership(t *testing.T) {
 	for _, mode := range []string{common.StartLayerAES256GCM, common.StartLayerAES256GCMXOR} {

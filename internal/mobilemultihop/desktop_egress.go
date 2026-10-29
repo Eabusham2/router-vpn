@@ -21,6 +21,11 @@ type PhysicalEgress struct {
 
 var nodePhysicalEgressError = errors.New("captured Router graph has no exact bounded physical egress")
 
+// A physically dialed SOCKS UDP relay is negotiated at runtime. Its address or
+// port cannot be invented from the control endpoint. A caller must retain its
+// existing dynamic-path boundary until an owned socket broker supplies it.
+var ErrDynamicPhysicalEgress = errors.New("captured physical path requires an owned dynamic UDP relay")
+
 // NodePhysicalEgress projects a complete, already captured Router graph onto
 // its actual physical sockets. It performs no resolution, file or network I/O.
 // A detoured service, private proof target or application DNS server is not a
@@ -48,6 +53,25 @@ func (p *ExternalPolicy) DirectPhysicalEgress(networks []string) ([]PhysicalEgre
 			return nil, nodePhysicalEgressError
 		}
 		seen[network] = true
+	}
+	return compiledPhysicalEgress(p.config, networks)
+}
+
+// PhysicalEgress projects the complete captured ordinary path, including its
+// actual predecessor, selected DNS dependencies and Start Layers. No currently
+// selected profile or unauthenticated remote can add a physical exception.
+func (p *ExternalPolicy) PhysicalEgress() ([]PhysicalEgress, error) {
+	if p == nil || p.config == "" || p.capture.Profile == nil {
+		return nil, nodePhysicalEgressError
+	}
+	var metadata externalPolicyMetadata
+	if json.Unmarshal([]byte(p.metadata), &metadata) != nil || metadata.Schema != 1 ||
+		metadata.SourceSHA256 != p.source || metadata.ConfigSHA256 != externalDigest([]byte(p.config)) {
+		return nil, nodePhysicalEgressError
+	}
+	networks := []string{"tcp"}
+	if metadata.UDPAvailable {
+		networks = append(networks, "udp")
 	}
 	return compiledPhysicalEgress(p.config, networks)
 }
@@ -143,6 +167,25 @@ func (p *nodeEgressProjection) node(tag, payload string) error {
 	}
 	p.active[key] = true
 	defer delete(p.active, key)
+	if value["type"] == "selector" {
+		// This selector can only be emitted by the validated ordinary
+		// Local/Server compiler. Capture both candidate paths before trials;
+		// never follow an arbitrary default or rerun Compare selection.
+		children, ok := value["outbounds"].([]any)
+		if tag != ExternalFinalTag || len(value) != 5 || !ok || len(children) != 2 ||
+			children[0] != LocalTag || children[1] != ServerTag ||
+			value["default"] != LocalTag && value["default"] != ServerTag ||
+			value["interrupt_exist_connections"] != true {
+			return nodePhysicalEgressError
+		}
+		for _, child := range []string{LocalTag, ServerTag} {
+			if err := p.node(child, payload); err != nil {
+				return err
+			}
+		}
+		p.visited[key] = true
+		return nil
+	}
 	if value["type"] == nativecomposite.Type {
 		if err := p.node(predecessorText(value, payload), payload); err != nil {
 			return err
@@ -154,19 +197,43 @@ func (p *nodeEgressProjection) node(tag, payload string) error {
 	// just the outer type label or an arbitrary recursively found address.
 	var sockets []PhysicalEgress
 	switch value["type"] {
-	case "socks", "http":
+	case "socks":
+		if payload == "udp" {
+			if !externalPort(value["server_port"]) {
+				return nodePhysicalEgressError
+			}
+			detour := predecessorText(value, "detour")
+			if detour == "" {
+				return ErrDynamicPhysicalEgress
+			}
+			// Both SOCKS control and its negotiated relay traverse the captured
+			// predecessor. Only that predecessor's real outer sockets belong
+			// to the physical firewall, never the negotiated inner relay.
+			if _, err := netip.ParseAddr(predecessorText(value, "server")); err != nil {
+				if err := p.resolve(value); err != nil {
+					return err
+				}
+			}
+			for _, network := range []string{"tcp", "udp"} {
+				if err := p.node(detour, network); err != nil {
+					return err
+				}
+			}
+			p.visited[key] = true
+			return nil
+		}
+		fallthrough
+	case "http":
 		if payload != "tcp" || !externalPort(value["server_port"]) {
 			return nodePhysicalEgressError
 		}
 		sockets = append(sockets, PhysicalEgress{predecessorText(value, "server"), int(value["server_port"].(float64)), "tcp"})
 	case externalOpenVPNType:
-		remotes, err := nativeopenvpn.Remotes(value)
+		remotes, err := p.openVPNRemotes(value)
 		if err != nil {
 			return nodePhysicalEgressError
 		}
-		for _, remote := range remotes {
-			sockets = append(sockets, PhysicalEgress{remote.Host, remote.Port, remote.Network})
-		}
+		sockets = append(sockets, remotes...)
 	case "wireguard", AmneziaType, PQType:
 		peers, ok := value["peers"].([]any)
 		if !ok || len(peers) != 1 {
@@ -232,6 +299,61 @@ func (p *nodeEgressProjection) node(tag, payload string) error {
 	}
 	p.visited[key] = true
 	return nil
+}
+
+func (p *nodeEgressProjection) openVPNRemotes(value map[string]any) ([]PhysicalEgress, error) {
+	remotes, err := nativeopenvpn.Remotes(value)
+	if err == nil {
+		result := make([]PhysicalEgress, len(remotes))
+		for i, remote := range remotes {
+			result[i] = PhysicalEgress{remote.Host, remote.Port, remote.Network}
+		}
+		return result, nil
+	}
+	// A validated same-host Start Layer rewrites the inner OpenVPN remotes
+	// to its private API address. The public-import Remotes validator must
+	// keep rejecting those addresses. This projection accepts them only
+	// inside the already-compiled fixed layer and never grants them physical
+	// access; node() subsequently follows that exact layer's outer sockets.
+	layer := p.nodes[predecessorText(value, "detour")]
+	if layer == nil || layer["type"] != "shadowsocks" && layer["type"] != "routervpn-aes-xor" {
+		return nil, nodePhysicalEgressError
+	}
+	rows := []any{map[string]any{"server": value["server"], "server_port": value["server_port"], "network": value["network"]}}
+	if raw, exists := value["servers"]; exists {
+		var ok bool
+		rows, ok = raw.([]any)
+		if !ok || len(rows) < 2 || len(rows) > 16 || value["server"] != nil || value["server_port"] != nil {
+			return nil, nodePhysicalEgressError
+		}
+	}
+	result := make([]PhysicalEgress, 0, len(rows))
+	for i, raw := range rows {
+		remote, ok := raw.(map[string]any)
+		if !ok || len(remote) != 3 || !externalPort(remote["server_port"]) {
+			return nil, nodePhysicalEgressError
+		}
+		host := predecessorText(remote, "server")
+		address, err := netip.ParseAddr(host)
+		if err != nil || !address.IsPrivate() || address.Is4In6() || address.Zone() != "" || address.String() != host {
+			return nil, nodePhysicalEgressError
+		}
+		network := predecessorText(remote, "network")
+		if i == 0 && value["network"] != network {
+			return nil, nodePhysicalEgressError
+		}
+		switch network {
+		case "tcp4", "tcp6":
+			network = "tcp"
+		case "udp4", "udp6":
+			network = "udp"
+		}
+		if network != "tcp" && network != "udp" {
+			return nil, nodePhysicalEgressError
+		}
+		result = append(result, PhysicalEgress{host, int(remote["server_port"].(float64)), network})
+	}
+	return result, nil
 }
 
 func (p *nodeEgressProjection) through(tag string, socket PhysicalEgress) error {
