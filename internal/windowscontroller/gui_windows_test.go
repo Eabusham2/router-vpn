@@ -54,7 +54,7 @@ func TestWindowsControllerGUIFixture(t *testing.T) {
 
 func runGUIFixture(t *testing.T, arguments []string) error {
 	mode, name, parentText, imagePath, handleText := arguments[0], arguments[1], arguments[2], arguments[3], arguments[4]
-	if mode != "hold" && mode != "tree" && mode != "owner" {
+	if mode != "hold" && mode != "tree" && mode != "blocked-tree" && mode != "owner" {
 		return errors.New("native GUI fixture role is invalid")
 	}
 	pid, err := strconv.ParseUint(parentText, 10, 32)
@@ -112,7 +112,7 @@ func runGUIFixture(t *testing.T, arguments []string) error {
 	if err := guiWriteJSON(ctx, pipe, hello); err != nil {
 		return err
 	}
-	if mode == "tree" {
+	if mode == "tree" || mode == "blocked-tree" {
 		executable, err := os.Executable()
 		if err != nil {
 			return err
@@ -134,9 +134,19 @@ func runGUIFixture(t *testing.T, arguments []string) error {
 		if err := guiWriteJSON(ctx, pipe, guiFixtureTree{uint32(os.Getpid()), uint32(leaf.Process.Pid)}); err != nil {
 			return err
 		}
+		if mode == "blocked-tree" {
+			// The owner-death test must independently exercise kernel Job
+			// retirement. A cooperative EOF observer would return normally and
+			// run the leaf-killing defer even if KILL_ON_JOB_CLOSE were absent.
+			// This bounded fixture deliberately stops servicing its UI channel
+			// after the authenticated tree report; only the real Job can retire
+			// it within the parent's much shorter cleanup bound.
+			<-ctx.Done()
+			return ctx.Err()
+		}
 	}
 	if mode == "owner" {
-		gui, err := startGUIFixture(ctx, "tree", t.TempDir())
+		gui, err := startGUIFixture(ctx, "blocked-tree", t.TempDir())
 		if gui != nil {
 			defer gui.close()
 		}
