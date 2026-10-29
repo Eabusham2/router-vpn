@@ -60,7 +60,7 @@ func desktopPathRun(t *testing.T, directory string, owner *desktopPathProofFixtu
 	t.Helper()
 	done := make(chan error, 1)
 	go func() {
-		done <- routerVPNRunExternal(context.Background(), directory, desktopExternalSession, func(context.Context, *mobilemultihop.ExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
+		done <- routerVPNRunExternal(context.Background(), directory, desktopExternalSession, "", func(context.Context, *mobilemultihop.ExternalPolicy, *mobilemultihop.DesktopExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
 			return owner, nil
 		})
 	}()

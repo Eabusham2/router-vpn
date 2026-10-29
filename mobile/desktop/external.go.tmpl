@@ -33,15 +33,16 @@ var routerVPNExternalSession = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var routerVPNExternalFailure = errors.New("captured desktop external runtime failed; private credentials were not logged")
 
 func init() {
-	var directory, session string
+	var directory, session, physicalSource string
 	command := &cobra.Command{Use: "routervpn-external", Short: "Run one captured Router VPN external session", Args: cobra.NoArgs, SilenceUsage: true,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
-			return routerVPNRunExternal(ctx, directory, session, routerVPNNewExternalNative)
+			return routerVPNRunExternal(ctx, directory, session, physicalSource, routerVPNNewExternalNative)
 		}}
 	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private session directory")
 	command.Flags().StringVar(&session, "session", "", "captured session identity")
+	command.Flags().StringVar(&physicalSource, "physical-source-sha256", "", "captured desktop physical source identity")
 	mainCommand.AddCommand(command)
 }
 
@@ -196,12 +197,13 @@ type routerVPNExternalOwner interface {
 	Close() error
 }
 
-type routerVPNExternalFactory func(context.Context, *mobilemultihop.ExternalPolicy, string, string, string) (routerVPNExternalOwner, error)
+type routerVPNExternalFactory func(context.Context, *mobilemultihop.ExternalPolicy, *mobilemultihop.DesktopExternalPolicy, string, string, string) (routerVPNExternalOwner, error)
 
 type routerVPNExternalNative struct {
 	mu           sync.Mutex
 	box          *box.Box
 	proof        *box.RouterVPNExternalProofRequest
+	physical     *mobilemultihop.DesktopExternalPolicy
 	cancel       context.CancelFunc
 	source       string
 	capture      string
@@ -235,8 +237,21 @@ func routerVPNExternalConstructed(ctx context.Context) []any {
 	}
 }
 
-func routerVPNNewExternalNative(ctx context.Context, policy *mobilemultihop.ExternalPolicy, source, capture, session string) (routerVPNExternalOwner, error) {
-	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(policy.Config()))
+func routerVPNNewExternalNative(ctx context.Context, policy *mobilemultihop.ExternalPolicy, physical *mobilemultihop.DesktopExternalPolicy, source, capture, session string) (routerVPNExternalOwner, error) {
+	if policy == nil {
+		return nil, routerVPNExternalFailure
+	}
+	config := policy.Config()
+	if physical != nil {
+		captured, err := mobilemultihop.NewExternalPolicy(source, capture)
+		if err != nil || physical.Validate() != nil || physical.OriginalPolicy() != policy ||
+			captured.SourceSHA256() != policy.SourceSHA256() || captured.Config() != policy.Config() ||
+			physical.Metadata().SessionID != session || physical.Metadata().TargetOS != runtime.GOOS {
+			return nil, routerVPNExternalFailure
+		}
+		config = physical.Config()
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(config))
 	if err != nil {
 		return nil, routerVPNExternalFailure
 	}
@@ -250,7 +265,7 @@ func routerVPNNewExternalNative(ctx context.Context, policy *mobilemultihop.Exte
 			return nil, routerVPNExternalFailure
 		}
 	}
-	native := &routerVPNExternalNative{cancel: cancel, source: source, capture: capture, session: session}
+	native := &routerVPNExternalNative{cancel: cancel, physical: physical, source: source, capture: capture, session: session}
 	instance, err := box.New(box.Options{Context: owned, Options: options})
 	if err != nil {
 		for _, partial := range routerVPNExternalConstructed(owned) {
@@ -261,6 +276,11 @@ func routerVPNNewExternalNative(ctx context.Context, policy *mobilemultihop.Exte
 		return native, routerVPNExternalFailure
 	}
 	native.box = instance
+	if physical != nil {
+		if err := instance.RouterVPNDesktopExternalPreparePhysical(physical); err != nil {
+			return native, routerVPNExternalFailure
+		}
+	}
 	return native, nil
 }
 
@@ -271,7 +291,13 @@ func (n *routerVPNExternalNative) Start() error {
 	if err := n.box.RouterVPNStrategyStart(); err != nil {
 		return routerVPNExternalFailure
 	}
-	proof, err := n.box.RouterVPNExternalCreateProof(n.source, n.capture, n.session)
+	var proof *box.RouterVPNExternalProofRequest
+	var err error
+	if n.physical != nil {
+		proof, err = n.box.RouterVPNDesktopExternalCreateProof(n.physical)
+	} else {
+		proof, err = n.box.RouterVPNExternalCreateProof(n.source, n.capture, n.session)
+	}
 	if err != nil {
 		return routerVPNExternalFailure
 	}
@@ -363,18 +389,20 @@ func (n *routerVPNExternalNative) Close() error {
 
 type routerVPNExternalProofRecord struct {
 	mobilemultihop.ExternalProofResult
-	Healthy     bool                    `json:"healthy"`
-	HeartbeatAt int64                   `json:"heartbeat_at"`
-	Progress    mobilemultihop.Progress `json:"progress"`
+	Physical    *mobilemultihop.DesktopExternalMetadata `json:"desktop_physical,omitempty"`
+	Healthy     bool                                    `json:"healthy"`
+	HeartbeatAt int64                                   `json:"heartbeat_at"`
+	Progress    mobilemultihop.Progress                 `json:"progress"`
 }
 
 type routerVPNExternalProgressRecord struct {
-	Schema       int                     `json:"schema"`
-	Session      string                  `json:"session_id"`
-	SourceSHA256 string                  `json:"source_sha256"`
-	ConfigSHA256 string                  `json:"config_sha256"`
-	Stage        string                  `json:"stage"`
-	Progress     mobilemultihop.Progress `json:"progress"`
+	Schema       int                                     `json:"schema"`
+	Session      string                                  `json:"session_id"`
+	SourceSHA256 string                                  `json:"source_sha256"`
+	ConfigSHA256 string                                  `json:"config_sha256"`
+	Stage        string                                  `json:"stage"`
+	Progress     mobilemultihop.Progress                 `json:"progress"`
+	Physical     *mobilemultihop.DesktopExternalMetadata `json:"desktop_physical,omitempty"`
 }
 
 func routerVPNExternalProgress(owner routerVPNExternalOwner) mobilemultihop.Progress {
@@ -396,7 +424,7 @@ func routerVPNExternalProgress(owner routerVPNExternalOwner) mobilemultihop.Prog
 // routerVPNRunExternal owns one process/Box/proof, with no reload endpoint. The
 // parent replaces the whole session on a network or profile generation change.
 // It may report Connected only after matching proof.json and this child owner.
-func routerVPNRunExternal(parent context.Context, directory, session string, factory routerVPNExternalFactory) (failure error) {
+func routerVPNRunExternal(parent context.Context, directory, session, physicalSource string, factory routerVPNExternalFactory) (failure error) {
 	if parent == nil || parent.Err() != nil || !routerVPNExternalSession.MatchString(session) || factory == nil {
 		return routerVPNExternalFailure
 	}
@@ -443,7 +471,20 @@ func routerVPNRunExternal(parent context.Context, directory, session string, fac
 		routerVPNExternalStop
 		Closed bool `json:"closed"`
 	}{routerVPNExternalStop{Schema: 1, Session: session, SourceSHA256: policy.SourceSHA256()}, true}
+	physical, err := routerVPNExternalCommandPhysical(files, policy, session, physicalSource)
+	if err != nil {
+		_ = files.publish("stopped.json", closed)
+		return routerVPNExternalFailure
+	}
+	measurementSource, measurementConfig := policy.SourceSHA256(), configSHA
+	var physicalMetadata *mobilemultihop.DesktopExternalMetadata
+	if physical != nil {
+		metadata := physical.Metadata()
+		physicalMetadata = &metadata
+		measurementSource, measurementConfig = metadata.SourceSHA256, metadata.ConfigSHA256
+	}
 	progress := routerVPNExternalProgressRecord{Schema: 1, Session: session, SourceSHA256: policy.SourceSHA256(), ConfigSHA256: configSHA, Stage: "starting"}
+	progress.Physical = physicalMetadata
 	if files.publish("progress.json", progress) != nil {
 		return routerVPNExternalFailure
 	}
@@ -459,7 +500,7 @@ func routerVPNRunExternal(parent context.Context, directory, session string, fac
 		ctx = context.Background()
 	}
 	ctx = context.WithoutCancel(ctx)
-	owner, factoryErr := factory(ctx, policy, string(source), string(capture), session)
+	owner, factoryErr := factory(ctx, policy, physical, string(source), string(capture), session)
 	if owner == nil {
 		// Factory errors with partial native ownership must return that owner.
 		// A nil owner means native parsing failed before any construction.
@@ -507,23 +548,23 @@ func routerVPNRunExternal(parent context.Context, directory, session string, fac
 				break
 			}
 			heartbeat = time.Now()
-			receipt = routerVPNExternalProofRecord{ExternalProofResult: result, Healthy: true, HeartbeatAt: heartbeat.UnixMilli(), Progress: routerVPNExternalProgress(owner)}
+			receipt = routerVPNExternalProofRecord{ExternalProofResult: result, Physical: physicalMetadata, Healthy: true, HeartbeatAt: heartbeat.UnixMilli(), Progress: routerVPNExternalProgress(owner)}
 			if files.publish("proof.json", receipt) != nil {
 				failure, stopping = routerVPNExternalFailure, true
 				break
 			}
 			connected, progress.Stage = true, "connected"
-			pathFiles, err = routerVPNOpenDesktopPath(files, owner, session, policy.SourceSHA256(), configSHA)
+			pathFiles, err = routerVPNOpenDesktopPath(files, owner, session, measurementSource, measurementConfig)
 			if err != nil {
 				failure, stopping = routerVPNExternalFailure, true
 				break
 			}
-			mtuFiles, err = routerVPNOpenDesktopMTU(files, owner, session, policy.SourceSHA256(), configSHA)
+			mtuFiles, err = routerVPNOpenDesktopMTU(files, owner, session, measurementSource, measurementConfig)
 			if err != nil {
 				failure, stopping = routerVPNExternalFailure, true
 				break
 			}
-			dnsFiles, err = routerVPNOpenDesktopDNS(files, owner, session, policy.SourceSHA256(), configSHA)
+			dnsFiles, err = routerVPNOpenDesktopDNS(files, owner, session, measurementSource, measurementConfig)
 			if err != nil {
 				failure, stopping = routerVPNExternalFailure, true
 				break

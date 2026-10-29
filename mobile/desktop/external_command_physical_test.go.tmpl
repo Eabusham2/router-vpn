@@ -1,0 +1,235 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+)
+
+const desktopPhysicalCommandSource = `{"inbounds":[{"type":"tun","tag":"tun-in","interface_name":"router-vpn","address":["172.29.93.1/30","fd29:93::1/126"],"mtu":1280,"auto_route":true,"strict_route":true,"stack":"system"}],"outbounds":[{"type":"http","tag":"custom-exit","server":"203.0.113.20","server_port":8443,"username":"captured-user","password":"captured-secret"}],"route":{"final":"custom-exit","auto_detect_interface":true}}`
+const desktopPhysicalCommandCapture = `{"schema":1,"exit_id":"selected-exit","protocol":"http-connect","expected_public_ip":"203.0.113.88","profile":{"id":"selected-exit","node_kind":"external","external":{"protocol":"http-connect","expected_public_ip":"203.0.113.88","http_connect":{"host":"203.0.113.20","port":8443,"username":"captured-user","password":"captured-secret"}},"dns_mode":"custom","dns_protocol":"tcp","dns_host":"192.168.50.53","dns_port":5353,"mtu_policy":"auto","home_lan_access":false,"ipv6_mode":"off","kill_switch_policy":"always"}}`
+
+func desktopPhysicalCommandWorkspace(t *testing.T) (string, *mobilemultihop.ExternalPolicy, *mobilemultihop.DesktopExternalPolicy) {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		t.Skip("ordinary physical command admission currently requires Linux")
+	}
+	original, err := mobilemultihop.NewExternalPolicy(desktopPhysicalCommandSource, desktopPhysicalCommandCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	physical, err := mobilemultihop.NewDesktopExternalPolicy(original, desktopExternalSession, runtime.GOOS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string]string{"source.json": desktopPhysicalCommandSource, "capture.json": desktopPhysicalCommandCapture, "sing-box.json": physical.Config()} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return directory, original, physical
+}
+
+func TestRouterVPNDesktopExternalPhysicalCommandRequiresExactDerivedInputs(t *testing.T) {
+	for _, fault := range []string{"source-hash", "uppercase-hash", "session", "missing-config", "original-config", "credential", "linked-config"} {
+		t.Run(fault, func(t *testing.T) {
+			directory, original, physical := desktopPhysicalCommandWorkspace(t)
+			source, session := physical.Metadata().SourceSHA256, desktopExternalSession
+			switch fault {
+			case "source-hash":
+				source = strings.Repeat("f", 64)
+			case "uppercase-hash":
+				source = strings.ToUpper(source)
+			case "session":
+				session = strings.Repeat("b", 32)
+			case "missing-config":
+				if err := os.Remove(filepath.Join(directory, "sing-box.json")); err != nil {
+					t.Fatal(err)
+				}
+			case "original-config":
+				if err := os.WriteFile(filepath.Join(directory, "sing-box.json"), []byte(original.Config()), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "credential":
+				changed := strings.Replace(physical.Config(), "captured-secret", "foreign-secret", 1)
+				if changed == physical.Config() {
+					t.Fatal("credential fixture did not change")
+				}
+				if err := os.WriteFile(filepath.Join(directory, "sing-box.json"), []byte(changed), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "linked-config":
+				if err := os.Rename(filepath.Join(directory, "sing-box.json"), filepath.Join(directory, "foreign.json")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("foreign.json", filepath.Join(directory, "sing-box.json")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			called := false
+			err := routerVPNRunExternal(context.Background(), directory, session, source, func(context.Context, *mobilemultihop.ExternalPolicy, *mobilemultihop.DesktopExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
+				called = true
+				return nil, errors.New("must not construct an invalid physical owner")
+			})
+			if err == nil || called {
+				t.Fatal("changed staged native graph or captured identity reached physical construction", fault)
+			}
+			var stopped routerVPNExternalStop
+			if json.Unmarshal(desktopExternalWaitFile(t, directory, "stopped.json"), &stopped) != nil || stopped.SourceSHA256 != original.SourceSHA256() || stopped.Session != session {
+				t.Fatal("no-resource physical rejection lost its original cleanup identity")
+			}
+		})
+	}
+}
+
+// This is the command/IPC boundary only. The sibling Box composition suite
+// performs real selected-DNS and authenticated public proof through all three
+// native transports; this controlled owner does not claim an OS TUN or proof.
+func TestRouterVPNDesktopExternalPhysicalCommandSeparatesProofAndMailboxIdentity(t *testing.T) {
+	directory, original, physical := desktopPhysicalCommandWorkspace(t)
+	base := desktopExternalOwner(t, original, false)
+	base.healthy.Store(true)
+	engine := &desktopDNSFixtureEngine{base: base}
+	measurement, err := dnsmeasure.New(engine, dnsmeasure.Description{NodeID: "selected-exit", SessionID: desktopExternalSession, RouteLabel: "Current external exit", Selected: dnsmeasure.Endpoint{ID: "selected", Name: "Selected DNS", Kind: "selected", Address: "192.168.50.53", Port: 5353, Transport: "tcp", Route: "custom-exit", RouteLabel: "Selected DNS via custom-exit"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := &desktopDNSFixtureOwner{desktopExternalFixture: base, measurement: measurement}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- routerVPNRunExternal(ctx, directory, desktopExternalSession, physical.Metadata().SourceSHA256, func(_ context.Context, policy *mobilemultihop.ExternalPolicy, actual *mobilemultihop.DesktopExternalPolicy, source, capture, session string) (routerVPNExternalOwner, error) {
+			if actual == nil || actual.OriginalPolicy() != policy || actual.Metadata() != physical.Metadata() || source != desktopPhysicalCommandSource || capture != desktopPhysicalCommandCapture || session != desktopExternalSession {
+				return nil, errors.New("physical command did not retain its actual typed derivation")
+			}
+			return owner, nil
+		})
+	}()
+	defer func() {
+		cancel()
+		if err := desktopExternalWait(t, done); err != nil {
+			t.Error(err)
+		}
+	}()
+	var proof routerVPNExternalProofRecord
+	if json.Unmarshal(desktopExternalWaitFile(t, directory, "proof.json"), &proof) != nil || proof.Physical == nil || *proof.Physical != physical.Metadata() || proof.SourceSHA256 != original.SourceSHA256() || proof.ConfigSHA256 != physical.Metadata().OriginalConfigSHA256 || !proof.DNSProven || !proof.Healthy {
+		t.Fatal("command relabeled original network proof as the derived desktop graph", proof)
+	}
+	var progress routerVPNExternalProgressRecord
+	if json.Unmarshal(desktopExternalWaitFile(t, directory, "progress.json"), &progress) != nil || progress.Physical == nil || *progress.Physical != physical.Metadata() || progress.SourceSHA256 != original.SourceSHA256() {
+		t.Fatal("physical progress omitted its separately captured graph")
+	}
+	var path routerVPNDesktopPathRecord
+	if json.Unmarshal(desktopExternalWaitFile(t, directory, "path-status.json"), &path) != nil || path.SourceSHA256 != physical.Metadata().SourceSHA256 || path.ConfigSHA256 != physical.Metadata().ConfigSHA256 || path.Session != desktopExternalSession {
+		t.Fatal("fresh-path mailbox borrowed original graph identity", path)
+	}
+	dns := desktopDNSNativeRecord(t, directory, func(record routerVPNDesktopDNSRecord) bool { return record.Generation == 0 })
+	if dns.SourceSHA256 != physical.Metadata().SourceSHA256 || dns.ConfigSHA256 != physical.Metadata().ConfigSHA256 || dns.Session != desktopExternalSession {
+		t.Fatal("DNS mailbox borrowed original graph identity", dns)
+	}
+	// The stop capability remains attached to the private original capture.
+	// A physical graph identity cannot silently become a second stop namespace.
+	desktopExternalStopFile(t, directory, desktopExternalSession, physical.Metadata().SourceSHA256)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var next routerVPNExternalProofRecord
+		raw, readErr := os.ReadFile(filepath.Join(directory, "proof.json"))
+		if readErr == nil && json.Unmarshal(raw, &next) == nil && next.HeartbeatAt > proof.HeartbeatAt {
+			break
+		}
+		if time.Now().After(deadline) || !owner.Healthy() {
+			t.Fatal("derived source incorrectly stopped the original captured session")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestRouterVPNDesktopExternalPhysicalCommandRejectsRelabeledNetworkProof(t *testing.T) {
+	directory, original, physical := desktopPhysicalCommandWorkspace(t)
+	owner := desktopExternalOwner(t, original, false)
+	var result mobilemultihop.ExternalProofResult
+	if json.Unmarshal([]byte(owner.result), &result) != nil {
+		t.Fatal("invalid fixture")
+	}
+	result.SourceSHA256, result.ConfigSHA256 = physical.Metadata().SourceSHA256, physical.Metadata().ConfigSHA256
+	raw, _ := json.Marshal(result)
+	owner.result = string(raw)
+	err := routerVPNRunExternal(context.Background(), directory, desktopExternalSession, physical.Metadata().SourceSHA256, func(context.Context, *mobilemultihop.ExternalPolicy, *mobilemultihop.DesktopExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
+		return owner, nil
+	})
+	if err == nil || owner.Healthy() || owner.closes.Load() == 0 {
+		t.Fatal("relabeled network proof acquired a physical command receipt")
+	}
+	if _, err := os.Stat(filepath.Join(directory, "proof.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("failed relabeled proof left a published connection")
+	}
+}
+
+func TestRouterVPNDesktopExternalPhysicalCommandUsesActualPreparedNativeFactory(t *testing.T) {
+	_, original, physical := desktopPhysicalCommandWorkspace(t)
+	registry := include.InboundRegistry()
+	inbound.Register[option.TunInboundOptions](registry, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+		return &desktopExternalTUN{inbound.NewAdapter(C.TypeTun, tag)}, nil
+	})
+	ctx := box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	owner, err := routerVPNNewExternalNative(ctx, original, physical, desktopPhysicalCommandSource, desktopPhysicalCommandCapture, desktopExternalSession)
+	if err != nil || owner == nil {
+		t.Fatal("actual physical command constructor failed", err)
+	}
+	defer func() {
+		owner.Cancel()
+		if err := owner.Close(); err != nil {
+			t.Error("actual prepared physical Box did not join", err)
+		}
+	}()
+	native := owner.(*routerVPNExternalNative)
+	if native.physical != physical || native.box == nil || native.Healthy() {
+		t.Fatal("actual native factory discarded the typed policy or fabricated proof")
+	}
+	if err := native.box.RouterVPNDesktopExternalPreparePhysical(physical); err == nil {
+		t.Fatal("actual command factory omitted physical preparation before native startup")
+	}
+	for _, fault := range []string{"original-owner", "source", "capture", "session", "target"} {
+		t.Run(fault, func(t *testing.T) {
+			policy, derived, source, capture, session := original, physical, desktopPhysicalCommandSource, desktopPhysicalCommandCapture, desktopExternalSession
+			switch fault {
+			case "original-owner":
+				policy, err = mobilemultihop.NewExternalPolicy(source, capture)
+			case "source":
+				source = strings.Replace(source, "captured-secret", "other-secret", 1)
+			case "capture":
+				capture = strings.Replace(capture, "captured-secret", "other-secret", 1)
+			case "session":
+				session = strings.Repeat("b", 32)
+			case "target":
+				derived, err = mobilemultihop.NewDesktopExternalPolicy(policy, session, "darwin")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rejected, err := routerVPNNewExternalNative(ctx, policy, derived, source, capture, session); err == nil || rejected != nil {
+				t.Fatal("foreign captured policy reached actual native construction", fault)
+			}
+		})
+	}
+}

@@ -1,0 +1,37 @@
+package main
+
+import (
+	"regexp"
+	"runtime"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+var routerVPNExternalSource = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// An explicit parent capture selects the protected ordinary lower path. The
+// child derives the full graph independently from its private original inputs;
+// the argument is an expected identity, never a JSON-supplied socket permit.
+// Legacy paths retain their existing command contract until their native
+// transport and OS integration can provide the same captured physical owner.
+func routerVPNExternalCommandPhysical(files *routerVPNExternalFiles, original *mobilemultihop.ExternalPolicy, session, source string) (*mobilemultihop.DesktopExternalPolicy, error) {
+	if source == "" {
+		return nil, nil
+	}
+	if runtime.GOOS != "linux" || files == nil || original == nil || !routerVPNExternalSource.MatchString(source) {
+		return nil, routerVPNExternalFailure
+	}
+	policy, err := mobilemultihop.NewDesktopExternalPolicy(original, session, runtime.GOOS)
+	if err != nil || policy.Metadata().SourceSHA256 != source {
+		return nil, routerVPNExternalFailure
+	}
+	metadata := policy.Metadata()
+	if metadata.SOCKSUDPAssociationRequired || metadata.Protocol != "http-connect" && metadata.Protocol != "https-connect" && metadata.Protocol != "shadowsocks" {
+		return nil, routerVPNExternalFailure
+	}
+	staged, err := files.read("sing-box.json", 4<<20)
+	if err != nil || string(staged) != policy.Config() {
+		return nil, routerVPNExternalFailure
+	}
+	return policy, nil
+}

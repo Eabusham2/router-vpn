@@ -113,7 +113,7 @@ func desktopExternalRun(t *testing.T, ctx context.Context, directory string, own
 	t.Helper()
 	done := make(chan error, 1)
 	go func() {
-		done <- routerVPNRunExternal(ctx, directory, desktopExternalSession, func(_ context.Context, _ *mobilemultihop.ExternalPolicy, source, capture, session string) (routerVPNExternalOwner, error) {
+		done <- routerVPNRunExternal(ctx, directory, desktopExternalSession, "", func(_ context.Context, _ *mobilemultihop.ExternalPolicy, _ *mobilemultihop.DesktopExternalPolicy, source, capture, session string) (routerVPNExternalOwner, error) {
 			if source != desktopExternalSource || capture != desktopExternalCapture || session != desktopExternalSession {
 				return nil, errors.New("changed captured input")
 			}
@@ -297,7 +297,7 @@ func TestRouterVPNDesktopExternalStopBeforeStartupDoesNotCreateEngine(t *testing
 	directory, policy := desktopExternalWorkspace(t)
 	desktopExternalStopFile(t, directory, desktopExternalSession, policy.SourceSHA256())
 	calls := 0
-	if err := routerVPNRunExternal(context.Background(), directory, desktopExternalSession, func(context.Context, *mobilemultihop.ExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
+	if err := routerVPNRunExternal(context.Background(), directory, desktopExternalSession, "", func(context.Context, *mobilemultihop.ExternalPolicy, *mobilemultihop.DesktopExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
 		calls++
 		return nil, errors.New("must not create")
 	}); err != nil || calls != 0 {
@@ -311,7 +311,7 @@ func TestRouterVPNDesktopExternalFactoryFailureAcknowledgesOnlyDrainedOwnership(
 		directory, policy := desktopExternalWorkspace(t)
 		owner := desktopExternalOwner(t, policy, true)
 		owner.closeFailures = 1
-		err := routerVPNRunExternal(context.Background(), directory, desktopExternalSession, func(context.Context, *mobilemultihop.ExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
+		err := routerVPNRunExternal(context.Background(), directory, desktopExternalSession, "", func(context.Context, *mobilemultihop.ExternalPolicy, *mobilemultihop.DesktopExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
 			if partial {
 				return owner, errors.New("private partial construction")
 			}
@@ -336,7 +336,7 @@ func TestRouterVPNDesktopExternalInvalidCaptureAcknowledgesNoNativeResources(t *
 		t.Fatal(err)
 	}
 	calls := 0
-	err := routerVPNRunExternal(context.Background(), directory, desktopExternalSession, func(context.Context, *mobilemultihop.ExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
+	err := routerVPNRunExternal(context.Background(), directory, desktopExternalSession, "", func(context.Context, *mobilemultihop.ExternalPolicy, *mobilemultihop.DesktopExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
 		calls++
 		return nil, errors.New("must not construct")
 	})
@@ -432,7 +432,7 @@ func TestRouterVPNDesktopExternalFactoryUsesActualBoxAndProofOwnership(t *testin
 		return &desktopExternalTUN{inbound.NewAdapter(C.TypeTun, tag)}, nil
 	})
 	ctx := box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
-	owner, err := routerVPNNewExternalNative(ctx, policy, desktopExternalSource, desktopExternalCapture, desktopExternalSession)
+	owner, err := routerVPNNewExternalNative(ctx, policy, nil, desktopExternalSource, desktopExternalCapture, desktopExternalSession)
 	if err != nil {
 		t.Fatal("actual native Box factory", err)
 	}
@@ -462,7 +462,7 @@ func TestRouterVPNDesktopExternalActualConstructorFailureRetainsPartialManagers(
 		return nil, errors.New("private constructor sentinel")
 	})
 	ctx := box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
-	owner, err := routerVPNNewExternalNative(ctx, policy, desktopExternalSource, desktopExternalCapture, desktopExternalSession)
+	owner, err := routerVPNNewExternalNative(ctx, policy, nil, desktopExternalSource, desktopExternalCapture, desktopExternalSession)
 	if err == nil || owner == nil || strings.Contains(err.Error(), "sentinel") {
 		t.Fatal("partial actual Box ownership was discarded")
 	}
