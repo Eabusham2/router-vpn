@@ -30,12 +30,14 @@ REQUIRED = (
     "TestDesktopSocketWindowsWFPExplicitRecovery",
     "TestDesktopSocketWindowsWFPAssignedWeights",
     "TestDesktopSocketWindowsWFPRejectsRecordedWeight",
+    "TestDesktopSocketWindowsWFPInterfaceReadback",
 )
 
 
 def mutants(target):
     baseline = (target / "desktop_socket_windows_baseline.go").read_text(encoding="utf-8")
     wfp = (target / "desktop_socket_windows_wfp.go").read_text(encoding="utf-8")
+    policy = (target / "desktop_socket_windows_policy.go").read_text(encoding="utf-8")
     return (
         ("extra-filter", "desktop_socket_windows_wfp.go", REQUIRED[4],
          "full WFP readback accepted an extra broader permit",
@@ -62,6 +64,11 @@ def mutants(target):
          IDENTITY.replace_once(baseline,
                                "old.sublayer != key || snapshot.Weight != old.baselineWeight",
                                "old.sublayer != key")),
+        ("interface-byte-order", "desktop_socket_windows_policy.go", REQUIRED[9],
+         "actual interface application failed",
+         IDENTITY.replace_once(policy,
+                               "err != nil || uint32(actual) != item.Index",
+                               "err != nil || uint32(actual) != uint32(value)")),
     )
 
 
@@ -114,7 +121,7 @@ def execute(source=ROOT, go="go", *, env=None):
             print("Rejected production WFP mutant:", label, flush=True)
         if IDENTITY.checked_sources(source)[3] != before:
             raise ValueError("WFP source changed during its actual native gate")
-    print("Owned Windows WFP baseline passed nine actual kernel/lifecycle cases and five production negative controls; socket traffic and native admission remain separately gated.", flush=True)
+    print("Owned Windows WFP baseline passed ten actual kernel/lifecycle cases and six production negative controls; socket traffic and native admission remain separately gated.", flush=True)
 
 
 if __name__ == "__main__":

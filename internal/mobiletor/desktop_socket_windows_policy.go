@@ -495,8 +495,11 @@ func desktopWindowsApplyInterface(raw syscall.RawConn, item desktopWindowsPolicy
 			}
 		}
 		actual, err := syscall.GetsockoptInt(fd, level, option)
-		if err != nil || uint32(actual) != uint32(value) {
-			result = errors.Join(err, errors.New("Windows physical socket lost its captured outgoing interface"))
+		// IPv4 sets IP_UNICAST_IF in network byte order, but its getter
+		// returns the index in host order. IPv6 uses host order both ways.
+		// https://learn.microsoft.com/windows/win32/winsock/ipproto-ip-socket-options
+		if err != nil || uint32(actual) != item.Index {
+			result = errors.Join(err, fmt.Errorf("Windows physical socket lost its captured outgoing interface: actual=%d expected=%d", uint32(actual), item.Index))
 		}
 	})
 	return errors.Join(err, result)

@@ -166,6 +166,60 @@ func TestDesktopSocketWindowsWFPAssignedWeights(t *testing.T) {
 	}
 }
 
+func TestDesktopSocketWindowsWFPInterfaceReadback(t *testing.T) {
+	var startup syscall.WSAData
+	if err := syscall.WSAStartup(0x202, &startup); err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.WSACleanup()
+	options, _ := desktopWindowsWFPTestOptions(t, "on-connect")
+	for _, item := range options.Interfaces {
+		for _, network := range []string{"tcp", "udp"} {
+			t.Run(network+"-"+item.Address.String(), func(t *testing.T) {
+				family, level := syscall.AF_INET6, syscall.IPPROTO_IPV6
+				if item.Address.Is4() {
+					family, level = syscall.AF_INET, syscall.IPPROTO_IP
+				}
+				kind, protocol := syscall.SOCK_STREAM, syscall.IPPROTO_TCP
+				if network == "udp" {
+					kind, protocol = syscall.SOCK_DGRAM, syscall.IPPROTO_UDP
+				}
+				handle, err := syscall.Socket(family, kind, protocol)
+				if err != nil {
+					t.Fatal(err)
+				}
+				owned := desktopWindowsNativeOwn(handle)
+				defer owned.Close()
+				raw, err := owned.SyscallConn()
+				if err != nil {
+					t.Fatal(err)
+				}
+				captured, err := desktopWindowsCheckInterface(item, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := desktopWindowsApplyInterface(raw, captured, true); err != nil {
+					t.Fatal("actual interface application failed", err)
+				}
+				actual, err := syscall.GetsockoptInt(handle, level, 31)
+				if err != nil || uint32(actual) != item.Index {
+					t.Fatal("independent host-order interface readback differs", actual, item.Index, err)
+				}
+				t.Logf("actual %s interface index=%d family=%d", network, actual, family)
+				if err := desktopWindowsApplyInterface(raw, captured, false); err != nil {
+					t.Fatal("unchanged interface proof failed", err)
+				}
+				if err := syscall.SetsockoptInt(handle, level, 31, 0); err != nil {
+					t.Fatal("reset fixture-owned socket interface", err)
+				}
+				if err := desktopWindowsApplyInterface(raw, captured, false); err == nil {
+					t.Fatal("captured interface readback accepted a reset outgoing interface")
+				}
+			})
+		}
+	}
+}
+
 func TestDesktopSocketWindowsWFPRejectsRecordedWeight(t *testing.T) {
 	p := desktopWindowsWFPTestOwner(t, "always", false)
 	if err := p.Close(context.Background()); err != nil {
