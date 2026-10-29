@@ -3,6 +3,7 @@ package mobiletor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"sync"
@@ -194,7 +195,7 @@ func desktopSocketImportNativeTCPWithConnect(ctx context.Context, network string
 	// The exact source handle is used for Bind and acknowledged Grant. Its
 	// retained original and every duplicate refer to the same ALE endpoint.
 	if err := control(ctx, actual, remote.String(), raw); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Windows TCP bind and permit: %w", err)
 	}
 	var keeper *desktopSocketKeeper
 	var result error
@@ -219,10 +220,13 @@ func desktopSocketImportNativeTCPWithConnect(ctx context.Context, network string
 	observer, observed := source.(desktopWindowsNativeTCPSource)
 	if observed {
 		if err := observer.beginNativeTCP(ctx, c); err != nil {
-			return c, err
+			return c, fmt.Errorf("Windows TCP import registration: %w", err)
 		}
 	}
 	connectErr := connect(ctx, c)
+	if connectErr != nil {
+		connectErr = fmt.Errorf("Windows TCP native connect: %w", connectErr)
+	}
 	if observed {
 		connectErr = errors.Join(connectErr, observer.finishNativeTCP(ctx, c, connectErr))
 	}

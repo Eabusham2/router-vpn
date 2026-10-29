@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"syscall"
@@ -172,7 +173,7 @@ func desktopWindowsIdentityInspectProvider(record *desktopWindowsIdentitySocket,
 		peerRaw = desktopWindowsRaw{connection.io}
 		ioEndpoint, err := desktopWindowsALEEndpoint(peerRaw)
 		if err != nil {
-			return false, err
+			return false, fmt.Errorf("Windows imported I/O ALE readback: %w", err)
 		}
 		if ioEndpoint != endpoint {
 			return false, &desktopWindowsIdentityEndpointTransition{before: endpoint, after: ioEndpoint}
@@ -192,11 +193,11 @@ func desktopWindowsIdentityInspectProvider(record *desktopWindowsIdentitySocket,
 	// Bind. Its local provider state is valid; a pre-connect duplicate's peer
 	// cache is not evidence about the live connected I/O descriptor.
 	if err := desktopWindowsIdentityProviderLocal(returned, local); err != nil {
-		return false, err
+		return false, fmt.Errorf("Windows returned descriptor local readback: %w", err)
 	}
 	connected, err := desktopWindowsIdentityProviderTuple(peerRaw, local, remote, pending)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("Windows I/O descriptor tuple readback: %w", err)
 	}
 	if pending && record.connect.operation.Err() != nil {
 		return false, errors.New("Windows TCP proof was cancelled before publication")
@@ -222,7 +223,7 @@ func desktopWindowsIdentityProviderLocal(raw syscall.RawConn, local netip.AddrPo
 
 func desktopWindowsIdentityProviderTuple(raw syscall.RawConn, local, remote netip.AddrPort, pending bool) (bool, error) {
 	if err := desktopWindowsIdentityProviderLocal(raw, local); err != nil {
-		return false, err
+		return false, fmt.Errorf("Winsock local tuple: %w", err)
 	}
 	var connected bool
 	var socketErr error
@@ -239,7 +240,7 @@ func desktopWindowsIdentityProviderTuple(raw syscall.RawConn, local, remote neti
 			return
 		}
 		if readErr != nil {
-			socketErr = readErr
+			socketErr = fmt.Errorf("Winsock connected peer: %w", readErr)
 			return
 		}
 		actual, readErr := desktopWindowsIdentitySocketAddress(peer)

@@ -3,6 +3,7 @@ package mobiletor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -161,6 +162,9 @@ func desktopSocketDialTCP(ctx context.Context, network string, remote netip.Addr
 func desktopSocketConnectOwnedTCP(ctx context.Context, c *desktopWindowsSocket) error {
 	remote := c.remote
 	local, err := desktopSocketLocal(c.handle)
+	if err != nil {
+		err = fmt.Errorf("Windows TCP imported local tuple: %w", err)
+	}
 	if err != nil || ctx.Err() != nil {
 		return errors.Join(err, ctx.Err())
 	}
@@ -171,7 +175,7 @@ func desktopSocketConnectOwnedTCP(ctx context.Context, c *desktopWindowsSocket) 
 	}
 	err = syscall.Connect(c.handle, target)
 	if err != nil && !errors.Is(err, desktopSocketWouldBlock) && !errors.Is(err, desktopSocketInProgress) && !errors.Is(err, desktopSocketAlready) {
-		return err
+		return fmt.Errorf("Winsock Connect: %w", err)
 	}
 	for {
 		if ctx.Err() != nil {
@@ -194,10 +198,10 @@ func desktopSocketConnectOwnedTCP(ctx context.Context, c *desktopWindowsSocket) 
 			break
 		}
 		if !errors.Is(peerErr, desktopSocketNotConnected) {
-			return peerErr
+			return fmt.Errorf("Winsock pending connected peer: %w", peerErr)
 		}
 		if err := c.wait(ctx, true); err != nil {
-			return err
+			return fmt.Errorf("Winsock Connect polling: %w", err)
 		}
 	}
 	return nil

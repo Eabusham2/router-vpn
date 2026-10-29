@@ -550,7 +550,7 @@ func (p *DesktopWindowsSocketIdentity) inspectSocketSnapshotLocked(creation Desk
 		}
 		endpoint, err := desktopWindowsALEEndpoint(raw)
 		if err != nil {
-			return err
+			return fmt.Errorf("Windows original socket ALE readback: %w", err)
 		}
 		if afterOriginal != nil {
 			if err := afterOriginal(endpoint); err != nil {
@@ -563,7 +563,7 @@ func (p *DesktopWindowsSocketIdentity) inspectSocketSnapshotLocked(creation Desk
 		}
 		other, err := desktopWindowsALEEndpoint(otherRaw)
 		if err != nil {
-			return err
+			return fmt.Errorf("Windows returned socket ALE readback: %w", err)
 		}
 		if other != endpoint {
 			return &desktopWindowsIdentityEndpointTransition{before: endpoint, after: other}
@@ -575,7 +575,7 @@ func (p *DesktopWindowsSocketIdentity) inspectSocketSnapshotLocked(creation Desk
 					return &desktopWindowsIdentityEndpointTransition{before: endpoint, after: current}
 				}
 			}
-			return err
+			return fmt.Errorf("Windows kernel ALE properties readback: %w", err)
 		}
 		if properties.TokenModifiedID != p.statistics.ModifiedID || !bytes.Equal(appID, p.appID) {
 			return errors.New("Windows ALE endpoint does not belong to the captured isolated token and process")
