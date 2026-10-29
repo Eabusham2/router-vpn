@@ -149,8 +149,6 @@ func desktopDarwinIdentityLock() (*os.File, error) {
 	return file, nil
 }
 
-var desktopDarwinAccountAttributes = []string{"RecordName", "UniqueID", "PrimaryGroupID", "NFSHomeDirectory", "UserShell", "Password", "AuthenticationAuthority", "IsHidden", "GeneratedUID"}
-
 func desktopDarwinAccountRecord(account string, uid uint32) (map[string]string, error) {
 	if !strings.HasPrefix(account, "_rvpnt_") || !desktopSocketHex(strings.TrimPrefix(account, "_rvpnt_"), 20) || uid < 0x40000000 || uid >= 0x80000000 {
 		return nil, errors.New("Darwin physical account identity is invalid")
@@ -162,22 +160,9 @@ func desktopDarwinAccountRecord(account string, uid uint32) (map[string]string, 
 	if err != nil {
 		return nil, err
 	}
-	values := make(map[string]string)
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
-		key, value, ok := strings.Cut(line, ": ")
-		if !ok || values[key] != "" || strings.TrimSpace(value) != value || strings.ContainsAny(value, "\r\n\t") {
-			return nil, errors.New("Darwin physical account has an ambiguous attribute")
-		}
-		values[key] = value
-	}
-	if len(values) != len(desktopDarwinAccountAttributes) || values["RecordName"] != account || values["UniqueID"] != strconv.FormatUint(uint64(uid), 10) ||
-		values["PrimaryGroupID"] != "65534" || values["NFSHomeDirectory"] != "/var/empty" || values["UserShell"] != "/usr/bin/false" ||
-		values["Password"] != "*" || values["AuthenticationAuthority"] != ";DisabledUser;" || values["IsHidden"] != "1" {
-		return nil, desktopDarwinAccountAttributeFailure(values, account, uid)
-	}
-	compact := strings.ReplaceAll(strings.ToLower(values["GeneratedUID"]), "-", "")
-	if !desktopSocketHex(compact, 32) || len(values["GeneratedUID"]) != 36 {
-		return nil, errors.New("Darwin physical account lost its generated identity")
+	values, err := desktopDarwinParseAccountRecord(raw, account, uid)
+	if err != nil {
+		return nil, err
 	}
 	search, err := desktopDarwinCommand(ctx, "/usr/bin/dscl", nil, "/Local/Default", "-search", "/Users", "UniqueID", strconv.FormatUint(uint64(uid), 10))
 	if err != nil || strings.Join(strings.Fields(string(search)), " ") != account+" "+strconv.FormatUint(uint64(uid), 10) || !desktopDarwinUIDAccount(uid, account) {
@@ -248,7 +233,7 @@ func desktopDarwinAllocateAccount(c DesktopSocketCapture) (string, uint32, error
 		}
 		// The private recovery record precedes every account mutation. Any
 		// partial/unknown creation remains quarantined; it is never guessed away.
-		attributes := [][2]string{{"Password", "*"}, {"AuthenticationAuthority", ";DisabledUser;"}, {"UserShell", "/usr/bin/false"}, {"NFSHomeDirectory", "/var/empty"}, {"IsHidden", "1"}, {"PrimaryGroupID", "65534"}, {"GeneratedUID", uuid}, {"UniqueID", strconv.FormatUint(uint64(uid), 10)}}
+		attributes := [][2]string{{"Password", "*"}, {"AuthenticationAuthority", ";DisabledUser;"}, {"UserShell", "/usr/bin/false"}, {"NFSHomeDirectory", "/var/empty"}, {desktopDarwinHiddenAttribute, "1"}, {"PrimaryGroupID", "65534"}, {"GeneratedUID", uuid}, {"UniqueID", strconv.FormatUint(uint64(uid), 10)}}
 		for _, pair := range attributes {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 			_, err = desktopDarwinCommand(ctx, "/usr/bin/dscl", nil, "/Local/Default", "-create", "/Users/"+account, pair[0], pair[1])
