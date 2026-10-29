@@ -9,7 +9,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 The latest resumed check started at `f87b7809`, preserving the source already
 316 commits beyond historical release `745b3e41`. Current repairs and exact
-verified pushes through `9ae48336` are recorded in the
+verified pushes through `f9c66253` are recorded in the
 [October 29 evidence ledger](CONTINUATION-EVIDENCE-2026-10-29.md), with
 the preceding work retained in the
 [October 28 ledger](CONTINUATION-EVIDENCE-2026-10-28.md).
@@ -22,27 +22,39 @@ graphs now also pass their complete compiled physical tuples to native
 staging (`0ba18bf3`), preserving predecessor, Start Layer, selected DNS and
 restored Local/Server captures. A physically negotiated SOCKS UDP relay still
 requires its owned per-socket migration; no fixed relay port is invented.
-The broader ordinary/fixed WFP migration remains separate work.
+Protected fixed Direct Tor now uses the same captured Linux socket broker as
+dynamic Direct (`276f00b4`): complete bridge projections remain in the private
+source, while no endpoint-wide launch grant is emitted. Shared/controller and
+prepared native race suites, 36 Unix wrapper groups and 3,829 PowerShell wrapper
+assertions pass. The broader ordinary/fixed WFP migration remains separate work.
 
 The Windows controller process/image/private-pipe foundation is published
-(`e76f418a`). Actual Windows execution now passes joined pending-read closure
-and the retained-handle DACL case under a separately derived token without
-debug privilege. The stable-GUID Shell launch and fresh ordinary-user probe
-still fail before child creation. The probe's separately proved station access
-defect is fixed in `058bb95c`; actual caller and ordinary-token station opens
-now pass, but basic WithToken creation still returns access denied.
+(`e76f418a`). Actual Windows execution passes joined pending-read closure and
+the retained-handle DACL case under a separately derived token without debug
+privilege. The stable-GUID Shell launch still fails before child creation.
+The probe's station access defect is fixed in `058bb95c`; actual caller and
+ordinary-token station opens now pass. Held non-executable controls then
+identified missing rights on its fixture-owned primary-token handle;
+`ee6ad6e5` repairs that exact mask without changing token fields or privileges.
+Actual ordinary probe execution and its owner-death cases remain required.
 Pinned controller TLS and the bounded GUI request bridge (`1e843ac8`,
-`439b95de`) now pass their actual Windows transport and negative controls.
-The original-user GUI kernel (`ca056061`) reaches real child execution but
-fails joined teardown with access denied. The C# binary-pipe consumer
-(`739c0dc6`) passes 17 executable cases and 11 negative controls locally;
-both Windows shells, native OVERLAPPED I/O and final installed/Portable
-composition remain required. The bootstrap TCP repair (`3f862cf1`) requires
-actual writable completion before status and peer proof; its native rerun
-remains separate. Real Wintun binding, IPv4/IPv6 retirement, failed
-StartSession cleanup (`ab356832`) and all four intentional defects now pass
-on both actual Windows architectures at `7f1c6c5d`. Public dynamic Windows
-admission stays closed.
+`439b95de`) pass their actual Windows transport and negative controls.
+The original-user GUI teardown repair (`b31d6634`) passes all fourteen other
+native GUI cases, including real restricted-handle cancellation/join and
+descendant cleanup. Its remaining inheritance fixture confused numeric-handle
+reuse with object identity; `f9c66253` adds a real cross-process Event round trip
+while preserving the intentional inheritance leak. The complete native gate
+still needs its rerun. The C# binary-pipe consumer (`739c0dc6`) passes all
+eighteen actual cases and eleven semantic defects under both PowerShell 5.1
+and 7, including native OVERLAPPED I/O. The Framework compiler argument repairs
+(`835403c1`/`fdff2ec0`) also pass compilation of one production DLL followed by
+loading that same DLL in both runtimes. Shipping UI composition remains work.
+The bootstrap TCP repair (`3f862cf1`) now passes the full prospective workflow
+on actual AMD64 and ARM64 at `058bb95c`, including selected DNS and real Wintun
+checks. This remains an isolated admission overlay. Real Wintun binding,
+IPv4/IPv6 retirement, failed StartSession cleanup (`ab356832`) and all four
+intentional defects also passed on both architectures at `7f1c6c5d`. Public
+Windows admission and installed/Portable launcher composition remain unfinished.
 
 The macOS Cgo header blocker is repaired. Actual Intel execution then exposed
 an overly strict group-equals-wheel check before kernel cases; `f6f77985`
@@ -50,17 +62,22 @@ preserves root, mode, ACL and link authority while allowing a non-writable
 non-wheel group. The actual group-writable `/private/var/run` boundary is now
 avoided through protected `/opt` runtime paths (`e1804ab2`). The native gate
 uses the ordinary installer's trusted interpreter selector; privileged Python
-startup excludes ambient site hooks (`1e9c9dd1`). Subsequent ARM kernel execution
-passes that path boundary but rejects the generated PF baseline syntax;
-`24315ca5` repairs the exact tag-negation grammar and requires the actual PF
-parser to check both generated forms and reject the old grammar. The installed
-controller's full Python-tree check separately rejects a CLT symbolic link;
-`9ae48336` adds bounded exact-link diagnostics with all trust rules preserved.
-Thirteen actual namespace trust cases and both Darwin cross-compiles pass.
+startup excludes ambient site hooks (`1e9c9dd1`). Actual PF parsing now passes
+after `24315ca5` repaired the exact tag-negation grammar. Native Intel logs
+then exposed the stock scrub-anchor prefix and the loader's 63-byte complete
+anchor-path limit. `e61b4bd5` accepts only that exact stock prefix and uses
+short sibling anchors bound to the complete captured session/source/network
+identity; prior nested owners require explicit recovery. Eleven dispatcher
+cases, six runner cases and both Darwin cross-compiles pass; corrected
+packet/lifecycle execution remains pending. The installed controller's full
+Python-tree check separately traverses an unrelated dangling CLT LLDB
+`crashlog` link. Actual ARM diagnostics identify that path; runtime-closure
+discovery still needs repair without weakening trust for actual Python inputs.
+Thirteen actual namespace trust cases and both diagnostic cross-compiles pass.
 The final kernel and installed-controller gates remain required on both
-architectures. The detailed observations below are historical
-where superseded by this continuation; no public Darwin admission or completed
-release is inferred from these source fixes.
+architectures. The detailed observations below are historical where superseded
+by this continuation; no public Darwin admission or completed release is
+inferred from these source fixes.
 
 Private-Router Tor Local/Server/Compare is now implemented across desktop,
 Android and Apple. Both comparison operands follow the captured candidate,
