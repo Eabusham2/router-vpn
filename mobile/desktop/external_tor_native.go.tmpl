@@ -84,6 +84,9 @@ func routerVPNNewTorNative(ctx context.Context, files *routerVPNTorFiles, binary
 		}
 		return n, routerVPNTorFailure
 	}
+	if err := n.box.RouterVPNDesktopTorPreparePhysical(files.inputs.Policy()); err != nil {
+		return n, routerVPNTorFailure
+	}
 	return n, nil
 }
 

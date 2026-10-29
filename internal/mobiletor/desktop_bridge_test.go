@@ -321,8 +321,10 @@ func TestDesktopBridgeDynamicPTCannotPretendStrictFirewallSupport(t *testing.T) 
 		p := desktopProfile()
 		block := p["external"].(map[string]any)["tor_bridge"].(map[string]any)
 		block["transport"], block["bridges"] = "custom", bridges
-		if ValidateDesktopBridgeProfile(torHostEncode(t, p)) == nil {
-			t.Fatal("dynamic or multiple bridge egress bypassed strict protection")
+		for _, target := range []string{"darwin", "windows"} {
+			if ValidateDesktopBridgeProfileForOS(torHostEncode(t, p), target) == nil {
+				t.Fatal("dynamic bridge egress borrowed the Linux guardian", target)
+			}
 		}
 		p["kill_switch_policy"] = "off"
 		if err := ValidateDesktopBridgeProfile(torHostEncode(t, p)); err != nil {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"runtime"
 	"strings"
 
 	"router-vpn/internal/common"
@@ -271,6 +272,10 @@ func preserveTorBridgeEditSettings(existing common.RouterProfile, next common.Ro
 }
 
 func normalizeTorBridgeImportPolicy(profile common.RouterProfile) (common.RouterProfile, error) {
+	return normalizeTorBridgeImportPolicyForOS(profile, runtime.GOOS)
+}
+
+func normalizeTorBridgeImportPolicyForOS(profile common.RouterProfile, targetOS string) (common.RouterProfile, error) {
 	requestedKill := profile.KillSwitchPolicy
 	profile.KillSwitchPolicy, profile.KillSwitch = "off", false
 	if err := common.NormalizeRouterProfile(&profile); err != nil {
@@ -285,8 +290,8 @@ func normalizeTorBridgeImportPolicy(profile common.RouterProfile) (common.Router
 			requestedKill = "on-connect"
 		}
 	}
-	if requestedKill != "off" && !strictLiteralObfs4 && !profile.MultihopEnabled {
-		return common.RouterProfile{}, errors.New("dynamic bootstrap egress requires the exact saved eligible predecessor; Direct plain/meek/Snowflake/WebTunnel or mixed dynamic bridge profiles require kill_switch_policy=off")
+	if requestedKill != "off" && !strictLiteralObfs4 && !profile.MultihopEnabled && targetOS != "linux" {
+		return common.RouterProfile{}, errors.New("strict dynamic Direct Tor requires the Linux native socket owner or an eligible captured predecessor")
 	}
 	profile.KillSwitchPolicy, profile.KillSwitch = requestedKill, requestedKill != "off"
 	policy, err := externalRuntimePolicy(profile)

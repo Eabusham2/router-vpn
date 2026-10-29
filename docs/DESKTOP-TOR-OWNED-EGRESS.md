@@ -1,11 +1,14 @@
 # Captured desktop Tor physical sockets
 
-This prerequisite connects the desktop Tor native lower dialer and its selected
-bootstrap DNS to an explicit owned-socket capability. It does **not** enable
-Direct plain Tor, meek, WebTunnel or Snowflake under strict desktop protection.
-Their public compiler and wrapper guards remain closed until each platform's
-privileged policy/identity factory and launcher are implemented and verified.
-The existing exact, fixed obfs4 endpoint path is unchanged.
+The desktop Tor native lower dialer and selected bootstrap DNS use an explicit
+owned-socket capability for dynamic Direct paths. Linux now has an implemented
+privileged UID/socket guardian, native factory and exact nftables boundary for
+plain Tor, meek, WebTunnel and Snowflake. It requires the captured privileged
+launch path; an ordinary user process cannot manufacture that authority from
+JSON or a command argument. Windows and macOS still require their corresponding
+privileged policy/identity factories and launcher integration before these
+dynamic paths can be admitted under strict protection. The existing exact,
+fixed obfs4 endpoint path remains available.
 
 ## Actual native call path
 
@@ -111,40 +114,80 @@ An error or unknown creator close cannot release the isolated identity. The
 privileged guardian must retain the identity until that complete acknowledgment
 and must also cover native-process crashes independently.
 
-## Privileged integration still required
+## Linux privileged guardian
 
-No existing installer or launcher currently provisions the isolated identity
-represented by this new capability. An eventual factory must establish it
-before the first native physical socket, independently verify the actual
-process/socket identity, and retain it through process and policy cleanup.
-The current native callback cannot manufacture that factory from JSON.
+`DesktopLinuxSocketPolicy` is constructed by the native network-owner factory
+after the real default-interface monitor initializes and before the Box starts
+its TUN. Captured interface name, index and addresses are independently checked
+against the kernel. IPv6 Off omits the IPv6 physical binding. A real default
+network change retires the generation; creation of the owned TUN does not replace
+the captured physical interface.
 
-Linux can pair an inaccessible retained cgroup with owner-filtered nftables
-tuple sets and kernel timeouts. Windows needs a separately protected session
-identity plus exact WFP permits and independently owned dynamic-session cleanup.
-The existing macOS PF boundary needs an isolated socket UID and exact anchor
-rules with verified state/removal behavior. These are implementation directions,
-not evidence that those operating-system boundaries have been deployed.
+The launcher first installs the existing `inet router_vpn_killswitch` output
+chain with policy drop and an exact session/source comment. Dynamic Direct
+launch adds no global public-endpoint exemption. The guardian requires the
+complete expected baseline, including selected LAN allowances, before creating
+any account. It then captures the table, chain and every baseline rule handle
+and expression. A later broader accept, changed rule, inactive marker or
+replacement chain cannot become a new grant. Permits live inside this same
+output chain: acceptance in an unrelated nftables table would not override its
+drop policy.
 
-The policy owner must also cover native-process and launcher crashes. Retaining
-only an application-side duplicate is insufficient if that process dies. A
-privileged guardian can retain a transferred duplicate before installing a
-permit; identity reuse must remain quarantined until all grants are absent and
-the native process/children have joined. A shared process path or recycled UID,
-cgroup identity, interface index or local port must not inherit an old grant.
-Kernel permit expiry, baseline fail-closed behavior and actual cleanup must be
-verified separately from the broker's in-memory timers.
+An independently running root guardian allocates a fresh high numeric UID with
+a locked password, expired account, no home directory and a nologin shell. A
+private root-owned record captures the source and UID before `useradd` can
+mutate the account database. Kernel/socket ownership does not come from a
+printed account name. Every socket is created by an otherwise empty fork/exec
+child under the allocated UID with no supplementary groups. The child transfers
+the unconnected descriptor over an inherited anonymous sequenced Unix socket
+and joins before the guardian acknowledges creation. Actual SCM credentials,
+socket inode, `SO_COOKIE`, socket UID, transport and address family are checked.
+The guardian retains a duplicate independently of the native process.
 
-Private-address exceptions must come from the captured DNS, bridge and LAN
-policy. Supporting Home AdGuard or custom DNS does not authorize arbitrary
-dynamic physical access to the household LAN.
+Before a grant, the guardian verifies the retained descriptor's identity and
+actual local tuple, reads back `SO_BINDTODEVICE`, checks the captured interface
+address, and rejects either address or port reuse. The nftables rule combines
+the dedicated originating socket UID with the exact interface, local address and
+port, remote address and port, and TCP/UDP family. Each tuple has a nine-second
+kernel timeout; the native receipt expires after seven seconds and is issued
+only after independent rule, set, tuple and timeout readback. A stopped or
+killed guardian cannot extend a permit. Every selected bootstrap DNS socket
+uses this boundary, with exact private resolver/bridge exceptions. An enabled
+Home LAN policy retains its explicitly captured private-prefix allowances;
+choosing Home AdGuard alone grants no other LAN access.
+
+Cancellation retains the source port until the exact permit is absent and all
+native I/O and handles have joined. Per-socket `ReleaseSocket` then closes the
+guardian's duplicate, so sequential connections do not consume the 128-socket
+limit indefinitely. Final account retirement requires every source descriptor
+to have completed that acknowledgment, all rules/sets to be absent, and the
+creator processes to have joined. Native-process EOF makes the independent
+guardian remove permits and close its retained handles. Exceptional or unknown
+outcomes retain the locked account and its recovery record to quarantine the
+UID; they never guess that identity reuse is safe. Old-owner cleanup removes
+only its captured rule/set identities and preserves a replacement session.
+
+The Linux source requires root, nftables, `useradd`, `userdel`, and `nologin` in
+the trusted system locations checked by the installer and runtime. A normal
+installed user's authenticated controller-to-privileged-launch path needs its
+own installed-app validation. Kernel namespace results alone do not establish
+that user-facing launch, a public Tor circuit, or device acceptance.
+
+## Remaining platform boundaries
+
+Windows still needs a separately protected session identity, exact WFP permits
+and independently owned dynamic-session cleanup. The macOS PF boundary still
+needs an isolated socket UID and exact anchor rules with verified state and
+removal behavior. The imported Unix descriptor tests do not supply those missing
+factories. Both platforms must also retain identity across native-process and
+launcher crashes before public strict dynamic Direct admission can open.
 
 ## Executable evidence and limits
 
 The shared suite uses actual local TCP/UDP sockets, transferred bytes, bound-port
-conflicts, expiry, cancellation and entered-I/O joins. The privileged identity
-and firewall calls are explicit fixture doubles; the suite installs no policy
-on the test host. The native suite constructs the actual lower dialer, physical
+conflicts, expiry, cancellation and entered-I/O joins. Its portable policy calls
+use explicit fixture doubles. The separate Linux kernel suite below uses the
+actual privileged implementation. The native suite constructs the actual lower dialer, physical
 outbound and selected TCP DNS transport, and checks their real loopback traffic
 and rejected capability/owner/DNS substitutions.
 
@@ -171,6 +214,28 @@ macOS native builds require this gate before packaging. The Windows build path
 is unchanged. macOS socket execution must be established by its actual native
 runner, separately from a Linux fixture or Darwin cross-compilation.
 
+`deploy/test_desktop_linux_guardian.py` verifies and hashes the exact prepared
+Linux sources, resolves the native build's actual selected Go compiler, and
+builds the `routervpn_linux_guardian` tests with race instrumentation. It executes
+them only in fresh user, PID, mount and network namespaces with private account
+files and `/run`, a veth link and a separate peer namespace. The host account
+database, routes and firewall are untouched. Every required case must run and
+pass; missing privilege or kernel functionality fails the gate instead of
+skipping it. Matching Linux native packages require this gate before compilation
+and packaging.
+
+The ten real-kernel cases cover actual TCP/UDP bytes over IPv4 and IPv6, kernel
+rejection of a matching tuple from the wrong UID, uncaptured private peers,
+independent expiry after guardian SIGKILL, 130 sequential socket retirements,
+broader-baseline rejection, native-parent crash cleanup and guardian join,
+blocked-control source-port retention, stale source/network generations,
+replacement-safe cleanup, and refusal to retire an identity with an outstanding
+native descriptor. The runner's `--mutations` mode uses temporary Go compiler
+overlays to remove UID enforcement, extend kernel expiry, omit baseline checks,
+skip per-socket release, and skip final descriptor acknowledgment. Each broken
+production variant must fail its corresponding actual-kernel assertion. The
+working tree and prepared source are not edited by those controls.
+
 ## Primary mechanism references
 
 - Go Windows connect implementation: https://cs.opensource.google/go/go/+/refs/tags/go1.26.3:src/net/fd_windows.go
@@ -181,6 +246,8 @@ runner, separately from a Linux fixture or Darwin cross-compilation.
 - WFP condition identities: https://learn.microsoft.com/en-us/windows-hardware/drivers/network/filtering-condition-identifiers
 - WFP dynamic-session object cleanup: https://learn.microsoft.com/en-us/windows/win32/fwp/object-management
 - nftables owner expressions, tuple sets and timeouts: https://netfilter.org/projects/nftables/manpage.html
+- nftables originating socket UID matching: https://wiki.nftables.org/wiki-nftables/index.php/Matching_packet_metainformation
+- Linux socket inode credential allocation and UID changes: https://github.com/torvalds/linux/blob/master/net/socket.c
 - XNU socket creator credentials: https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/uipc_socket.c
 - XNU socket fstat UID readback: https://github.com/apple-oss-distributions/xnu/blob/main/bsd/kern/sys_socket.c
 - XNU PF socket lookup: https://github.com/apple-oss-distributions/xnu/blob/main/bsd/net/pf.c

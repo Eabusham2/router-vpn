@@ -148,10 +148,11 @@ static void linux_tor_refresh_caps_v13(LinuxTorBridgeV13 *state) {
                 const char *reason = obj_string(item, "reason");
                 gboolean supported = !json_object_has_member(item, "supported") || json_object_get_boolean_member(item, "supported");
                 gboolean strict = json_object_has_member(item, "strict_kill_switch") && json_object_get_boolean_member(item, "strict_kill_switch");
+                gboolean dynamic_strict = external_path_flag_v4(item, "strict_dynamic_direct_kill_switch");
                 gboolean router_strict = external_path_flag_v4(item, "strict_router_entry_kill_switch");
                 gboolean ordinary_strict = external_path_flag_v4(item, "strict_external_entry_kill_switch");
                 if (summary->len) g_string_append_c(summary, '\n');
-                g_string_append_printf(summary, "%s — %s • strict protection %s", id[0] ? id : "unknown", supported ? "available" : "unavailable", strict ? "Direct with 1–8 literal obfs4 bridges" : ordinary_strict ? "with an eligible Local entry; Server requires a paired Router" : router_strict ? "with a saved Router entry using Local or Server execution" : "unavailable for this transport");
+                g_string_append_printf(summary, "%s — %s • strict protection %s", id[0] ? id : "unknown", supported ? "available" : "unavailable", dynamic_strict ? "Direct, including dynamic transports" : strict ? "Direct with 1–8 literal obfs4 bridges" : ordinary_strict ? "with an eligible Local entry; Server requires a paired Router" : router_strict ? "with a saved Router entry using Local or Server execution" : "unavailable for this transport");
                 if (description[0]) g_string_append_printf(summary, "\n  %s", description);
                 if (reason[0]) g_string_append_printf(summary, "\n  Reason: %s", reason);
             }
@@ -222,7 +223,9 @@ static char *linux_tor_payload_v13(LinuxTorBridgeV13 *state, JsonNode *current, 
         fixed = kind != NULL && g_ascii_strcasecmp(kind, "obfs4") == 0;
         g_strfreev(words);
     }
-    gboolean direct = external_path_flag_v4(capability, "strict_kill_switch") && fixed && !external_path_flag_v4(profile, "multihop_enabled");
+    gboolean direct = !external_path_flag_v4(profile, "multihop_enabled") &&
+        ((external_path_flag_v4(capability, "strict_kill_switch") && fixed) ||
+         (external_path_flag_v4(capability, "supported") && external_path_flag_v4(capability, "strict_dynamic_direct_kill_switch")));
     gboolean router_path = profile != NULL && linux_tor_router_path_v13(state, profile);
     const char *execution = external_path_string_v4(profile, "multihop_execution");
     if (profile != NULL && ((execution[0] && g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0 && g_strcmp0(execution, "auto") != 0) ||
@@ -233,7 +236,7 @@ static char *linux_tor_payload_v13(LinuxTorBridgeV13 *state, JsonNode *current, 
     gboolean router = router_path && external_path_flag_v4(capability, "strict_router_entry_kill_switch");
     gboolean ordinary = profile != NULL && linux_tor_ordinary_path_v13(state, profile, transport, bridges) && external_path_flag_v4(capability, "strict_external_entry_kill_switch");
     if (matches != 1 || (g_strcmp0(kill, "off") != 0 && !direct && !router && !ordinary)) {
-        if (validation_error != NULL) *validation_error = g_strdup(matches != 1 ? "Refresh Tor transport support before saving." : "Strict protection requires a saved eligible entry. Ordinary entries use Local execution; Snowflake also needs bounded native UDP. Server requires a paired Router. Save a new Direct dynamic node with Kill switch Off, then configure its entry in Settings.");
+        if (validation_error != NULL) *validation_error = g_strdup(matches != 1 ? "Refresh Tor transport support before saving." : "Strict Direct protection requires the verified Linux native runtime or literal obfs4 bridges. An eligible saved entry can also provide strict protection; Snowflake needs UDP support. Server requires a paired Router.");
         g_ptr_array_unref(bridges); return NULL;
     }
 

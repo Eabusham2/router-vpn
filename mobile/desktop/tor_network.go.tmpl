@@ -42,17 +42,26 @@ func RegisterNetworkOwner(registry *boxService.Registry) {
 // physical capture, PT workers and proof operations.
 // A reset retires that context even when interface names/addresses stay equal.
 type NetworkOwner struct {
-	mu        sync.Mutex
-	ctx       context.Context
-	cancel    context.CancelFunc
-	capture   CaptureOptions
-	ready     bool
-	activated bool
-	retired   bool
-	networkID string
-	broker    *mobiletor.DesktopSocketBroker
-	physical  *PhysicalOutbound
+	mu                sync.Mutex
+	ctx               context.Context
+	cancel            context.CancelFunc
+	capture           CaptureOptions
+	ready             bool
+	activated         bool
+	retired           bool
+	networkID         string
+	broker            *mobiletor.DesktopSocketBroker
+	physical          *PhysicalOutbound
+	physicalFactory   PhysicalBrokerFactory
+	physicalSource    mobiletor.DesktopSocketSource
+	physicalPreparing chan struct{}
 }
+
+// PhysicalBrokerFactory is installed by the native host from its already
+// compiled immutable policy. It runs at Initialize, after the real network
+// monitor has captured the physical default and before the TUN starts. Partial
+// sources and brokers remain owned even when initialization fails or is late.
+type PhysicalBrokerFactory func(context.Context, mobiletor.DesktopSocketCapture, func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error)
 
 var (
 	_ adapter.Service                 = (*NetworkOwner)(nil)
@@ -77,6 +86,11 @@ func (*NetworkOwner) Type() string { return NetworkOwnerType }
 func (*NetworkOwner) Tag() string  { return NetworkOwnerTag }
 
 func (n *NetworkOwner) Start(stage adapter.StartStage) error {
+	if stage == adapter.StartStateInitialize {
+		if err := n.startPhysicalBroker(); err != nil {
+			return err
+		}
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.retired || n.ctx == nil || n.ctx.Err() != nil {
@@ -87,6 +101,61 @@ func (n *NetworkOwner) Start(stage adapter.StartStage) error {
 	}
 	if stage == adapter.StartStateStarted {
 		n.ready = true
+	}
+	return nil
+}
+
+func (n *NetworkOwner) PreparePhysicalBroker(factory PhysicalBrokerFactory) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if factory == nil || !n.capture.PhysicalBroker || n.retired || n.activated || n.ready ||
+		n.physicalFactory != nil || n.broker != nil || n.physicalPreparing != nil || n.ctx.Err() != nil {
+		return errors.New("desktop Tor physical factory is missing, replaced or late")
+	}
+	n.physicalFactory = factory
+	return nil
+}
+
+func (n *NetworkOwner) startPhysicalBroker() (failure error) {
+	n.mu.Lock()
+	if !n.capture.PhysicalBroker || n.broker != nil && n.physicalPreparing == nil {
+		n.mu.Unlock()
+		return nil
+	}
+	if n.retired || n.activated || n.ready || n.ctx.Err() != nil || n.physicalFactory == nil || n.physicalPreparing != nil {
+		n.mu.Unlock()
+		return errors.New("desktop Tor physical factory has no unused native initialization")
+	}
+	factory, capture, ctx := n.physicalFactory, n.brokerCapture(), n.ctx
+	joined := make(chan struct{})
+	n.physicalPreparing = joined
+	n.mu.Unlock()
+	defer close(joined)
+	broker, source, err := factory(ctx, capture, func() bool { return n.Matches(capture.SessionID, capture.SourceSHA256) })
+	// Publish partial ownership before inspecting factory/cancellation results.
+	// Close waits for this exact call, then drains the original source; it never
+	// releases an isolated UID while a late descriptor transfer can still arrive.
+	n.mu.Lock()
+	n.physicalSource = source
+	n.mu.Unlock()
+	if err == nil && ctx.Err() == nil && broker != nil && source != nil {
+		err = n.BindPhysicalBroker(broker)
+	}
+	if err != nil || ctx.Err() != nil || broker == nil || source == nil {
+		n.mu.Lock()
+		if n.broker == nil {
+			n.broker = broker
+		}
+		n.retired = true
+		n.cancel()
+		n.mu.Unlock()
+		if broker != nil {
+			broker.Cancel()
+		}
+		if source != nil {
+			source.Cancel()
+		}
+		return errors.Join(err, ctx.Err(), errors.New("desktop Tor physical initialization failed"))
 	}
 	return nil
 }
@@ -185,7 +254,7 @@ func (n *NetworkOwner) InterfaceUpdated(_ context.Context) {
 	n.mu.Lock()
 	// Box initialization may discover interfaces before admission. No PT
 	// socket/capture is owned yet; a later activation captures the new state.
-	if !n.activated {
+	if !n.activated && n.physicalPreparing == nil {
 		n.mu.Unlock()
 		return
 	}
@@ -200,18 +269,31 @@ func (n *NetworkOwner) InterfaceUpdated(_ context.Context) {
 }
 
 func (n *NetworkOwner) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 	n.mu.Lock()
 	n.retired = true
 	n.ready = false
 	if n.cancel != nil {
 		n.cancel()
 	}
-	broker := n.broker
+	preparing := n.physicalPreparing
+	n.mu.Unlock()
+	if preparing != nil {
+		select {
+		case <-preparing:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	n.mu.Lock()
+	broker, source := n.broker, n.physicalSource
 	n.mu.Unlock()
 	if broker != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
 		return broker.Close(ctx)
+	}
+	if source != nil {
+		return source.Close(ctx)
 	}
 	return nil
 }

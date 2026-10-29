@@ -85,7 +85,7 @@ func validateDesktopPhysicalEgress(profile map[string]any, predecessor *DesktopP
 			// Existing single-bridge pure compiler callers may omit runtime
 			// metadata. New strict multi-bridge graphs must retain it; shipping
 			// launch validators require it for every fixed bridge selection.
-			required = kill != "off" && len(plan.Bridges) > 1
+			required = kill != "off" && err == nil && len(plan.Bridges) > 1
 		} else {
 			required = kill != "off"
 			expected, err = predecessor.PhysicalEgress(plan)

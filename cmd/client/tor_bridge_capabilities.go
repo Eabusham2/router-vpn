@@ -5,8 +5,10 @@ import (
 	"net/http"
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobiletor"
 )
 
 type torBridgeTransportCapability struct {
@@ -15,6 +17,7 @@ type torBridgeTransportCapability struct {
 	Implemented                   bool   `json:"implemented"`
 	Supported                     bool   `json:"supported"`
 	StrictKillSwitch              bool   `json:"strict_kill_switch"`
+	StrictDynamicDirectKillSwitch bool   `json:"strict_dynamic_direct_kill_switch"`
 	StrictRouterEntryKillSwitch   bool   `json:"strict_router_entry_kill_switch"`
 	StrictExternalEntryKillSwitch bool   `json:"strict_external_entry_kill_switch"`
 	Helper                        string `json:"helper,omitempty"`
@@ -42,6 +45,14 @@ func torBridgeTransportCapabilities() []torBridgeTransportCapability {
 	for i := range rows {
 		rows[i].Supported = true
 		rows[i].Helper = "Router VPN native transport owner"
+		if runtime.GOOS == "linux" {
+			rows[i].StrictDynamicDirectKillSwitch = true
+			text := rows[i].Description
+			text = strings.ReplaceAll(text, "Direct dynamic egress requires Kill Switch Off.", "Direct strict protection is available through the Linux native runtime, including selected bootstrap DNS.")
+			text = strings.ReplaceAll(text, "Local supports Direct with Kill Switch Off or a proved Router/ordinary entry with strict protection.", "Local supports strict protection for Direct or a proved Router/ordinary entry.")
+			text = strings.ReplaceAll(text, "Direct strict protection requires every selected bridge to be literal obfs4, with one to eight lines. Dynamic families require an eligible captured entry;", "Direct strict protection supports all accepted bridge families through the Linux native runtime;")
+			rows[i].Description = text
+		}
 	}
 	return rows
 }
@@ -70,6 +81,12 @@ func torBridgeProfileRuntimeCapability(profile common.RouterProfile) standardExi
 	if _, _, _, _, err := torBridgeProfile(profile); err != nil {
 		cap.Supported = false
 		cap.Reason = "saved Tor bridge profile is invalid: " + err.Error()
+		return cap
+	}
+	if source, err := json.Marshal(profile); err != nil {
+		cap.Supported, cap.Reason = false, "saved Tor profile cannot be captured"
+	} else if err = mobiletor.ValidateDesktopBridgeProfileForOS(string(source), runtime.GOOS); err != nil {
+		cap.Supported, cap.Reason = false, "saved Tor policy is invalid: "+err.Error()
 	}
 	return cap
 }
@@ -109,6 +126,7 @@ func (a *app) torBridgeCapabilities(w http.ResponseWriter, r *http.Request) {
 		"supported":                           available,
 		"reason":                              reason,
 		"direct_full_device":                  cap.Supported,
+		"direct_dynamic_strict_kill_switch":   cap.Supported && runtime.GOOS == "linux",
 		"upstream_hop":                        available,
 		"router_vpn_entry_hop":                available,
 		"router_entry_strict_kill_switch":     available,

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -135,8 +136,12 @@ func TestDesktopTorFixedImportPreservesBoundsAndDynamicRejections(t *testing.T) 
 	for _, lines := range [][]string{{clientMeekBridge}, {clientSnowflakeBridge}, {clientWebTunnelBridge}, {clientTorBridge, clientMeekBridge}, {clientTorBridge, clientSnowflakeBridge}, {clientTorBridge, clientWebTunnelBridge}} {
 		p := existingTorImportProfile("dynamic-direct")
 		p.External.TorBridge.Transport, p.External.TorBridge.Bridges, p.KillSwitchPolicy = "custom", append([]string(nil), lines...), "always"
-		if _, err := normalizeTorBridgeImportPolicy(p); err == nil {
-			t.Fatal("dynamic source gained fixed Direct authority", lines)
+		if got, err := normalizeTorBridgeImportPolicy(p); runtime.GOOS == "linux" {
+			if err != nil || got.KillSwitchPolicy != "always" || !got.KillSwitch {
+				t.Fatal("Linux dynamic source lost requested protection", err)
+			}
+		} else if err == nil {
+			t.Fatal("another platform borrowed Linux dynamic protection", lines)
 		}
 	}
 }

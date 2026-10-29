@@ -1,0 +1,187 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/service"
+)
+
+type physicalFactorySource struct {
+	*desktopPhysicalPolicyFixture
+	cancelled atomic.Bool
+	closed    atomic.Bool
+}
+
+func (*physicalFactorySource) CreateSocket(context.Context, mobiletor.DesktopSocketCreation) (mobiletor.DesktopSocketCreated, error) {
+	return mobiletor.DesktopSocketCreated{}, errors.New("lifecycle fixture cannot create a socket")
+}
+func (s *physicalFactorySource) Cancel() { s.cancelled.Store(true) }
+func (s *physicalFactorySource) Close(context.Context) error {
+	s.closed.Store(true)
+	return nil
+}
+
+func physicalFactoryNetwork(t *testing.T) *NetworkOwner {
+	t.Helper()
+	f := newDesktopPTFixture(t)
+	manager := &desktopPTEntryManager{}
+	service.MustRegister[adapter.OutboundManager](f.ctx, manager)
+	options := testNetworkOptions()
+	options.PhysicalBroker = true
+	created, err := NewNetworkOwner(f.ctx, nil, NetworkOwnerTag, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := created.(*NetworkOwner)
+	physical, err := NewPhysicalOutbound(f.ctx, nil, nil, PhysicalOutboundTag, PhysicalOutboundOptions{
+		SessionID: options.SessionID, SourceSHA256: options.SourceSHA256,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.replace(physical)
+	t.Cleanup(func() {
+		if err := n.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return n
+}
+
+func TestRouterVPNPhysicalFactoryRunsBeforeTUNAndRetainsExactCapture(t *testing.T) {
+	n := physicalFactoryNetwork(t)
+	options := testNetworkOptions()
+	source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+	var calls atomic.Int32
+	factory := func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		calls.Add(1)
+		if capture != n.brokerCapture() || !current() || n.Current() || n.ready {
+			t.Error("physical factory ran after admission or with another capture")
+		}
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+		return broker, source, err
+	}
+	if err := n.PreparePhysicalBroker(factory); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 0 {
+		t.Fatal("factory opened resources before native network initialization")
+	}
+	if err := n.PreparePhysicalBroker(factory); err == nil {
+		t.Fatal("replacement factory was accepted")
+	}
+	if err := n.Start(adapter.StartStateInitialize); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 || n.broker == nil || n.physical == nil || n.physicalSource != source {
+		t.Fatal("native initialization failed to bind the complete physical owner")
+	}
+	if _, err := n.Activate(options.SessionID, options.SourceSHA256); err == nil {
+		t.Fatal("physical preparation reported native Started")
+	}
+	if err := n.Start(adapter.StartStateStarted); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.Activate(options.SessionID, options.SourceSHA256); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Close(); err != nil || !source.cancelled.Load() || !source.closed.Load() {
+		t.Fatal("native Close did not revoke and join its physical source", err)
+	}
+}
+
+func TestRouterVPNPhysicalFactoryRetainsPartialSourceAndLateCompletion(t *testing.T) {
+	for _, withBroker := range []bool{false, true} {
+		t.Run(map[bool]string{false: "partial-source", true: "late-broker"}[withBroker], func(t *testing.T) {
+			n := physicalFactoryNetwork(t)
+			source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+			entered, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			if err := n.PreparePhysicalBroker(func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+				var broker *mobiletor.DesktopSocketBroker
+				if withBroker {
+					var err error
+					broker, err = mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+					if err != nil {
+						t.Error(err)
+					}
+				}
+				close(entered)
+				<-ctx.Done()
+				close(cancelled)
+				<-release
+				return broker, source, errors.New("late factory failure")
+			}); err != nil {
+				t.Fatal(err)
+			}
+			started := make(chan error, 1)
+			go func() { started <- n.Start(adapter.StartStateInitialize) }()
+			<-entered
+			closed := make(chan error, 1)
+			go func() { closed <- n.Close() }()
+			<-cancelled
+			select {
+			case err := <-closed:
+				t.Fatal("Close returned before its creator joined", err)
+			default:
+			}
+			if !withBroker && source.closed.Load() {
+				t.Fatal("partial source released while its constructor was still running")
+			}
+			// Once a broker exists, it already owns the completed source and
+			// may independently drain it on cancellation. Native Close must
+			// still join this late factory return before reporting completion.
+			close(release)
+			select {
+			case err := <-started:
+				if err == nil {
+					t.Fatal("late factory was admitted")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("factory failed to join")
+			}
+			select {
+			case err := <-closed:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("Close failed to join")
+			}
+			if !source.cancelled.Load() || !source.closed.Load() {
+				t.Fatal("late source was discarded without its captured cleanup")
+			}
+		})
+	}
+}
+
+func TestRouterVPNPhysicalFactoryRequiresOSOwnerBeforeInitialize(t *testing.T) {
+	n := physicalFactoryNetwork(t)
+	if err := n.Start(adapter.StartStateInitialize); err == nil {
+		t.Fatal("JSON broker flag manufactured an OS owner")
+	}
+	source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+	if err := n.PreparePhysicalBroker(func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+		return broker, source, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Start(adapter.StartStateInitialize); err != nil {
+		t.Fatal(err)
+	}
+	// A real reset after physical capture but before Connected retires the same
+	// guardian; the former pre-activation discovery exception no longer applies.
+	n.InterfaceUpdated(context.Background())
+	if err := n.Start(adapter.StartStateStarted); err == nil {
+		t.Fatal("network reset reused the former physical capture")
+	}
+	if err := n.Close(); err != nil || !source.closed.Load() {
+		t.Fatal("reset did not join the captured source", err)
+	}
+}

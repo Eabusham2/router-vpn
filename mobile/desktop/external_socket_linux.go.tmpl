@@ -1,0 +1,32 @@
+//go:build linux
+
+package main
+
+import (
+	"errors"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/spf13/cobra"
+)
+
+func init() {
+	mainCommand.AddCommand(routerVPNOwnedSocketCommand())
+}
+
+func routerVPNOwnedSocketCommand() *cobra.Command {
+	return &cobra.Command{Use: "routervpn-owned-socket-helper guardian|creator", Hidden: true,
+		Args: cobra.ExactArgs(1), SilenceUsage: true,
+		// Helper startup has no ordinary config, working-directory, resolver,
+		// registry or sudo-user initialization. Its inherited descriptor is the
+		// only input admitted by the separately checked kernel protocol.
+		PersistentPreRun: func(*cobra.Command, []string) {},
+		RunE: func(_ *cobra.Command, args []string) error {
+			if args[0] != "guardian" && args[0] != "creator" {
+				return errors.New("unknown native socket helper role")
+			}
+			// This command accepts no pathname, UID, destination, or rules.
+			// Its sole authority is the inherited anonymous control channel;
+			// the helper verifies its actual kernel peer credentials itself.
+			return mobiletor.RunDesktopLinuxSocketHelper(args[0])
+		}}
+}

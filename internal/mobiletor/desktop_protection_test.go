@@ -89,7 +89,13 @@ func TestDesktopBridgeStrictDynamicProtectionRejectsUnownedSelection(t *testing.
 			block["transport"], block["bridges"] = "custom", []string{desktopProtectionSnowflakeBridge}
 			edit(p)
 			source := torHostEncode(t, p)
-			if ValidateDesktopBridgeProfile(source) == nil {
+			target := "linux"
+			if name == "direct" {
+				// Linux Direct now has its mandatory socket guardian. It still
+				// cannot borrow that authority on another native platform.
+				target = "windows"
+			}
+			if ValidateDesktopBridgeProfileForOS(source, target) == nil {
 				t.Fatal("unowned strict graph passed saved policy validation")
 			}
 			if policy, err := NewDesktopBridgePolicyWithPredecessor(source, desktopSession, desktopIsolation, "linux", entry); err == nil || policy != nil {

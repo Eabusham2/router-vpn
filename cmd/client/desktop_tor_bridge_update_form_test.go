@@ -138,6 +138,36 @@ func TestDesktopTorBridgeUpdateFormPayload(t *testing.T) {
 	if directory == "" {
 		t.Skip("native Tor editor supplies its callback payload directory")
 	}
+	// Only the Linux form emits these explicitly protected Direct selections.
+	// Windows/macOS retain their current fixed-bridge/predecessor capability.
+	dynamic, err := filepath.Glob(filepath.Join(directory, "tor-create-dynamic-*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range dynamic {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			a, old, entry := torBridgeFormSourceFixture(t, "local")
+			raw, err := os.ReadFile(path)
+			var request torBridgeImportRequest
+			if err != nil || json.Unmarshal(raw, &request) != nil || request.ID != "" || request.ExpectedSelectedNodeID != nil || len(request.ExpectedProfileTokens) != 0 ||
+				(request.KillSwitchPolicy != "on-connect" && request.KillSwitchPolicy != "always") {
+				t.Fatal("actual protected Direct form borrowed another source or lost protection", err)
+			}
+			response := postTorBridgeUpdate(a, raw)
+			if response.Code != http.StatusOK || len(a.profiles.Profiles) != 3 {
+				t.Fatal("actual protected Direct form failed import", response.Code, response.Body.String())
+			}
+			added := a.profiles.Profiles[2]
+			if added.KillSwitchPolicy != request.KillSwitchPolicy || !added.KillSwitch || added.MultihopEnabled || a.cmd != nil || a.state.Connected || added.DNSMode != "home" {
+				t.Fatal("protected Direct import changed saved policy or invented a running path")
+			}
+			before, _ := json.Marshal([]common.RouterProfile{old, entry})
+			after, _ := json.Marshal(a.profiles.Profiles[:2])
+			if !bytes.Equal(before, after) {
+				t.Fatal("protected Direct import changed another private node")
+			}
+		})
+	}
 	t.Run("new-plain-direct", func(t *testing.T) {
 		a, old, entry := torBridgeFormSourceFixture(t, "local")
 		raw, err := os.ReadFile(filepath.Join(directory, "tor-create-plain.json"))

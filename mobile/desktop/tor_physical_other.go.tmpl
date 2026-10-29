@@ -1,0 +1,13 @@
+//go:build !linux
+
+package routervpndesktoppt
+
+import (
+	"errors"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func (*NetworkOwner) PreparePhysicalPolicy(*mobiletor.DesktopBridgePolicy) error {
+	return errors.New("this native operating system has no installed physical socket policy")
+}

@@ -41,9 +41,14 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'tor_pt_entry_traffic_test.go.tmpl', 'tor_network.go.tmpl', 'tor_network_test.go.tmpl',
                 'tor_server.go.tmpl', 'tor_plain_test.go.tmpl', 'tor_local.go.tmpl', 'tor_local_test.go.tmpl',
                 'tor_physical.go.tmpl', 'tor_physical_test.go.tmpl',
+                'tor_physical_factory_test.go.tmpl',
+                'tor_physical_linux.go.tmpl', 'tor_physical_other.go.tmpl',
+                'tor_physical_linux_test.go.tmpl',
                 'tor_physical_source_unix_test.go.tmpl')
 BOX_TEMPLATES = {
     'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go',
+    'tor_box_physical.go.tmpl': 'routervpn_desktop_tor_box_physical.go',
+    'tor_box_physical_test.go.tmpl': 'routervpn_desktop_tor_box_physical_test.go',
     'tor_box_lastrelay.go.tmpl': 'routervpn_desktop_tor_box_lastrelay.go',
     'tor_box_lastrelay_test.go.tmpl': 'routervpn_desktop_tor_box_lastrelay_test.go',
     'tor_box_lastrelay_server_test.go.tmpl': 'routervpn_desktop_tor_box_lastrelay_server_test.go',
@@ -156,7 +161,10 @@ def pt_copies():
     for name in PT_TEMPLATES:
         path = ROOT/'mobile/desktop'/name
         raw = path.read_bytes()
-        prefix = (b'//go:build linux || darwin\n\n' if name == 'tor_physical_source_unix_test.go.tmpl' else b'')
+        prefix = { 'tor_physical_source_unix_test.go.tmpl': b'//go:build linux || darwin\n\n',
+                   'tor_physical_linux.go.tmpl': b'//go:build linux\n\n',
+                   'tor_physical_linux_test.go.tmpl': b'//go:build linux\n\n',
+                   'tor_physical_other.go.tmpl': b'//go:build !linux\n\n' }.get(name, b'')
         if path.is_symlink() or not raw.startswith(prefix+b'package routervpndesktoppt\n'):
             raise ValueError('Desktop PT adapter package boundary changed')
         content['routervpn/desktoppt/'+name.removesuffix('.tmpl')] = raw
@@ -410,7 +418,7 @@ def prepare(vendor, go='go', *, env=None):
         for path in sorted((ROOT/'internal'/package).glob('*.go')):
             if path.name.endswith('_test.go') and not (package == 'mobiletor' and path.name in (
                     'desktop_socket_broker_test.go', 'desktop_socket_source_unix_test.go',
-                    'desktop_socket_source_privileged_test.go')):
+                    'desktop_socket_source_privileged_test.go', 'desktop_socket_linux_guardian_test.go')):
                 continue
             raw = path.read_bytes()
             for name in PURE:

@@ -1,0 +1,171 @@
+//go:build linux
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"encoding/json"
+	"net"
+	"net/netip"
+	"reflect"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/common/control"
+	"github.com/sagernet/sing/service"
+)
+
+type linuxPhysicalFactoryNetwork struct {
+	*desktopPTNetwork
+	selected atomic.Pointer[adapter.NetworkInterface]
+}
+
+func (n *linuxPhysicalFactoryNetwork) DefaultNetworkInterface() *adapter.NetworkInterface {
+	return n.selected.Load()
+}
+
+func linuxPhysicalFixtureInterface(t *testing.T) *adapter.NetworkInterface {
+	t.Helper()
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, actual := range interfaces {
+		if actual.Flags&net.FlagUp == 0 || actual.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		selected, err := control.InterfaceFromNet(actual)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, address := range selected.Addresses {
+			if address.Addr().Is4() && address.Addr().IsGlobalUnicast() {
+				return &adapter.NetworkInterface{Interface: selected}
+			}
+		}
+	}
+	t.Fatal("Linux native factory test requires the runner's existing physical IPv4 interface")
+	return nil
+}
+
+func TestRouterVPNLinuxPhysicalFactoryCapturesExactInterfaceLANAndNetworkReset(t *testing.T) {
+	for _, lan := range []bool{false, true} {
+		for _, replaceDuringCreate := range []bool{false, true} {
+			t.Run(map[bool]string{false: "lan-off", true: "lan-on"}[lan]+map[bool]string{false: "/live", true: "/replacement"}[replaceDuringCreate], func(t *testing.T) {
+				f := newDesktopPTFixture(t)
+				raw, _ := json.Marshal(map[string]any{"id": "linux-factory", "node_kind": "external", "external": map[string]any{"protocol": "tor"},
+					"dns_mode": "custom", "dns_host": "9.9.9.9", "dns_protocol": "tcp", "dns_port": 5353,
+					"home_lan_access": lan, "ipv6_mode": "off", "kill_switch_policy": "always", "mtu_policy": "auto"})
+				policy, err := mobiletor.NewDesktopBridgePolicy(string(raw), strings.Repeat("a", 32), strings.Repeat("b", 64), "linux")
+				if err != nil {
+					t.Fatal(err)
+				}
+				meta := policy.Metadata()
+				selected := linuxPhysicalFixtureInterface(t)
+				manager := &linuxPhysicalFactoryNetwork{desktopPTNetwork: f.network}
+				manager.selected.Store(selected)
+				service.MustRegister[adapter.NetworkManager](f.ctx, manager)
+				outbounds := &desktopPTEntryManager{}
+				service.MustRegister[adapter.OutboundManager](f.ctx, outbounds)
+				created, err := NewNetworkOwner(f.ctx, nil, NetworkOwnerTag, CaptureOptions{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, PhysicalBroker: true})
+				if err != nil {
+					t.Fatal(err)
+				}
+				n := created.(*NetworkOwner)
+				t.Cleanup(func() {
+					if err := n.Close(); err != nil {
+						t.Error(err)
+					}
+				})
+				physical, err := NewPhysicalOutbound(f.ctx, nil, nil, PhysicalOutboundTag, PhysicalOutboundOptions{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256})
+				if err != nil {
+					t.Fatal(err)
+				}
+				outbounds.replace(physical)
+				source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+				called := false
+				if err := n.preparePhysicalLinux(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+					called = true
+					if capture != n.brokerCapture() || ctx.Err() != nil {
+						t.Error("factory changed its captured native generation")
+					}
+					if len(options.Interfaces) != 1 || options.Interfaces[0].Name != selected.Name || options.Interfaces[0].Index != uint32(selected.Index) || !options.Interfaces[0].Address.Is4() {
+						t.Error("factory substituted a physical owner or allowed IPv6 despite Off", options.Interfaces)
+					}
+					wantLAN := []netip.Prefix(nil)
+					if lan {
+						for _, value := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"} {
+							wantLAN = append(wantLAN, netip.MustParsePrefix(value))
+						}
+					}
+					if !reflect.DeepEqual(options.LANPrefixes, wantLAN) || len(options.PrivateDestinations) != 0 {
+						t.Error("factory widened selected LAN or manufactured private bootstrap exceptions", options)
+					}
+					if replaceDuringCreate {
+						replacement := *selected
+						replacement.Index++
+						manager.selected.Store(&replacement)
+					}
+					return source, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if called {
+					t.Fatal("factory ran before native Initialize")
+				}
+				err = n.Start(adapter.StartStateInitialize)
+				if !called {
+					t.Fatal("native Initialize omitted the real Linux factory")
+				}
+				if replaceDuringCreate {
+					if err == nil || !source.cancelled.Load() {
+						t.Fatal("late source survived replacement of default network", err)
+					}
+				} else {
+					if err != nil || n.broker == nil || !n.broker.Current() {
+						t.Fatal("captured Linux factory failed", err)
+					}
+					replacement := *selected
+					replacement.Name = "retired-interface"
+					manager.selected.Store(&replacement)
+					if n.broker.Current() {
+						t.Fatal("broker stayed current after default network identity changed")
+					}
+				}
+				if err := n.Close(); err != nil || !source.closed.Load() {
+					t.Fatal("retired Linux factory lost source cleanup", err)
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNLinuxPhysicalFactoryRejectsFalseKernelInterface(t *testing.T) {
+	selected := linuxPhysicalFixtureInterface(t)
+	for _, fault := range []string{"nil", "index", "name", "down", "loopback", "address"} {
+		copy := *selected
+		switch fault {
+		case "nil":
+		case "index":
+			copy.Index = 0
+		case "name":
+			copy.Name = "foreign"
+		case "down":
+			copy.Flags &^= net.FlagUp
+		case "loopback":
+			copy.Flags |= net.FlagLoopback
+		case "address":
+			copy.Addresses = []netip.Prefix{netip.MustParsePrefix("192.0.2.200/24")}
+		}
+		value := &copy
+		if fault == "nil" {
+			value = nil
+		}
+		if _, err := desktopLinuxPhysicalInterfaces(value, false); err == nil {
+			t.Fatal("physical factory accepted false kernel binding", fault)
+		}
+	}
+}

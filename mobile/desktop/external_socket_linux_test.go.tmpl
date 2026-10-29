@@ -1,0 +1,77 @@
+//go:build linux
+
+package main
+
+import (
+	"context"
+	"io"
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/spf13/cobra"
+)
+
+func TestRouterVPNDesktopTorSocketHelperRejectsCLIInput(t *testing.T) {
+	for _, args := range [][]string{nil, {"guardian", "extra"}, {"creator", "extra"}, {"unknown"}, {"--uid=1000"}, {"--path=/tmp/control"}} {
+		t.Run(strings.Join(args, "/"), func(t *testing.T) {
+			ordinaryStartup := false
+			root := &cobra.Command{Use: "native-fixture", SilenceErrors: true, SilenceUsage: true,
+				PersistentPreRun: func(*cobra.Command, []string) { ordinaryStartup = true }}
+			root.SetOut(io.Discard)
+			root.SetErr(io.Discard)
+			root.AddCommand(routerVPNOwnedSocketCommand())
+			root.SetArgs(append([]string{"routervpn-owned-socket-helper"}, args...))
+			if err := root.Execute(); err == nil {
+				t.Fatal("helper accepted an unauthenticated CLI input")
+			}
+			if ordinaryStartup {
+				t.Fatal("helper reached ordinary configuration/registry initialization")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorSocketHelperRequiresInheritedChannel(t *testing.T) {
+	if role := os.Getenv("ROUTERVPN_TEST_SOCKET_COMMAND_ROLE"); role != "" {
+		if role != "guardian" && role != "creator" {
+			t.Fatal("invalid socket command test role")
+		}
+		// This is the actual registered command in the shipping native host.
+		// fd 3 is an inherited /dev/null file, so no privileged account or
+		// firewall operation can be reached even on a root test runner.
+		ordinaryStartup := false
+		mainCommand.PersistentPreRun = func(*cobra.Command, []string) { ordinaryStartup = true }
+		mainCommand.SilenceErrors, mainCommand.SilenceUsage = true, true
+		mainCommand.SetOut(io.Discard)
+		mainCommand.SetErr(io.Discard)
+		mainCommand.SetArgs([]string{"routervpn-owned-socket-helper", role})
+		command, err := mainCommand.ExecuteC()
+		if err == nil || !strings.Contains(err.Error(), "requires an inherited private sequenced channel") {
+			t.Fatalf("helper did not require its actual authenticated channel: %v", err)
+		}
+		if ordinaryStartup || command == nil || !command.Hidden || command.Name() != "routervpn-owned-socket-helper" {
+			t.Fatal("registered helper inherited ordinary startup or lost its hidden command identity")
+		}
+		return
+	}
+	for _, role := range []string{"guardian", "creator"} {
+		t.Run(role, func(t *testing.T) {
+			channel, err := os.Open(os.DevNull)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer channel.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestRouterVPNDesktopTorSocketHelperRequiresInheritedChannel$", "-test.count=1")
+			command.ExtraFiles = []*os.File{channel}
+			command.Env = append(os.Environ(), "ROUTERVPN_TEST_SOCKET_COMMAND_ROLE="+role)
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("actual native helper command failed its isolated channel rejection: %v\n%s", err, output)
+			}
+		})
+	}
+}

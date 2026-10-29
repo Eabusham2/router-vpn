@@ -110,7 +110,7 @@ def linux_form(directory):
          'state.opened = displayed != NULL ? copy_public_source_value_v24(displayed) : NULL;',
          'state.opened = displayed != NULL ? json_node_copy(displayed) : NULL;',
          'cancelled/rejected modal escaped its owned callback'),
-        ('entry-fixed-bridge', ' && !external_path_flag_v4(profile, "multihop_enabled")', '',
+        ('entry-fixed-bridge', '!external_path_flag_v4(profile, "multihop_enabled") &&', 'TRUE &&',
          'Rejected trial identity: ordinary-fixed-bypass'),
         ('mixed-udp', 'if (g_regex_match_simple("(*UCP)(?i)^\\\\s*(?:bridge\\\\s+)?snowflake(?:\\\\s|$)", line, 0, 0)) udp = TRUE;',
          '(void)line;', 'Rejected trial identity: ordinary-mixed-udp'),
@@ -118,6 +118,10 @@ def linux_form(directory):
          'Rejected trial identity: plain-lines'),
         ('direct-fixed-source', 'fixed = kind != NULL && g_ascii_strcasecmp(kind, "obfs4") == 0;',
          '(void)kind; fixed = TRUE;', 'Rejected trial identity: fixed-mixed-meek_lite'),
+        ('dynamic-runtime', 'external_path_flag_v4(capability, "supported") && external_path_flag_v4(capability, "strict_dynamic_direct_kill_switch")',
+         'external_path_flag_v4(capability, "strict_dynamic_direct_kill_switch")', 'Rejected trial identity: dynamic-unverified'),
+        ('dynamic-owner', 'external_path_flag_v4(capability, "supported") && external_path_flag_v4(capability, "strict_dynamic_direct_kill_switch")',
+         'external_path_flag_v4(capability, "supported")', 'Rejected trial identity: direct-strict'),
     )
     include = '#include "routervpn-tor-bridge-v13.inc"'
     assert rendered.count(include) == 1

@@ -695,6 +695,21 @@ func (s *desktopSocket) drain() {
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
+	if source, ok := s.broker.source.(DesktopSocketSourceRelease); ok && s.sourceFile != nil {
+		request := DesktopSocketCreation{Capture: s.broker.capture, Binding: s.binding, SocketID: s.id, Network: s.network}
+		for {
+			ctx, cancel := context.WithTimeout(context.Background(), desktopSocketControlWait)
+			err := source.ReleaseSocket(ctx, request)
+			cancel()
+			if err == nil {
+				break
+			}
+			s.mu.Lock()
+			s.lastFailure = err
+			s.mu.Unlock()
+			time.Sleep(100 * time.Millisecond)
+		}
+	}
 	s.broker.mu.Lock()
 	delete(s.broker.sockets, s)
 	s.broker.mu.Unlock()

@@ -44,6 +44,14 @@ type DesktopSocketSource interface {
 	Close(context.Context) error
 }
 
+// A privileged guardian may retain a second socket handle outside the native
+// process. ReleaseSocket runs only after exact permits are absent and every
+// native I/O/descriptor has joined. An unknown result remains retryable and
+// does not free the independently owned identity for another socket.
+type DesktopSocketSourceRelease interface {
+	ReleaseSocket(context.Context, DesktopSocketCreation) error
+}
+
 func (s *desktopSocket) create(ctx context.Context) error {
 	if s.broker.source == nil {
 		return nil

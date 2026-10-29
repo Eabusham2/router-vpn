@@ -1,0 +1,40 @@
+package box
+
+import (
+	"errors"
+	"runtime"
+
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/common/json"
+)
+
+// RouterVPNDesktopTorPreparePhysical installs the OS factory from this exact
+// compiled policy before native startup. The factory itself runs in the network
+// service's Initialize stage: the real interface monitor is ready, and no TUN
+// has changed the physical routes. Neither this method nor a config flag grants
+// sockets; the privileged kernel owner must be created and bound successfully.
+func (s *Box) RouterVPNDesktopTorPreparePhysical(policy *mobiletor.DesktopBridgePolicy) error {
+	if s == nil || policy == nil || s.ctx == nil || s.ctx.Err() != nil || s.service == nil {
+		return errors.New("desktop Tor physical preparation requires its native Box")
+	}
+	if !policy.PhysicalBroker() {
+		return nil
+	}
+	if runtime.GOOS != "linux" {
+		return errors.New("this native operating system has no installed physical socket factory")
+	}
+	meta := policy.Metadata()
+	compiled, err := json.UnmarshalExtendedContext[option.Options](s.ctx, []byte(policy.Config()))
+	if err != nil || meta.TargetOS != runtime.GOOS ||
+		routerVPNCapturedOptions(s.ctx, compiled) != s.routerVPNTorOptions || policy.Predecessor() != nil || policy.ServerPolicy() != nil {
+		return errors.New("desktop Tor physical factory does not match its complete native source")
+	}
+	raw, found := s.service.Get(routervpndesktoppt.NetworkOwnerTag)
+	observer, ok := raw.(*routervpndesktoppt.NetworkOwner)
+	if !found || !ok || observer == nil || !observer.Matches(meta.SessionID, meta.SourceSHA256) {
+		return errors.New("desktop Tor physical factory has another captured network owner")
+	}
+	return observer.PreparePhysicalPolicy(policy)
+}

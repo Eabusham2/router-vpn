@@ -1,0 +1,149 @@
+//go:build linux
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/service"
+)
+
+func (n *NetworkOwner) PreparePhysicalPolicy(policy *mobiletor.DesktopBridgePolicy) error {
+	return n.preparePhysicalLinux(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+		owned, err := mobiletor.NewDesktopLinuxSocketPolicy(ctx, capture, options)
+		if owned == nil {
+			return nil, err
+		}
+		return owned, err
+	})
+}
+
+type desktopLinuxPhysicalPolicy interface {
+	mobiletor.DesktopSocketPolicy
+	mobiletor.DesktopSocketSource
+}
+
+// Only the privileged constructor is a test seam. Interface discovery, complete
+// typed policy projection, source retention and native activation are shared
+// with production; no environment or graph option can select another creator.
+func (n *NetworkOwner) preparePhysicalLinux(policy *mobiletor.DesktopBridgePolicy,
+	create func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error)) error {
+	if policy == nil || !policy.PhysicalBroker() || policy.Metadata().TargetOS != "linux" ||
+		policy.Predecessor() != nil || policy.ServerPolicy() != nil ||
+		!n.Matches(policy.Metadata().SessionID, policy.SourceSHA256()) || create == nil {
+		return errors.New("Linux physical sockets require the exact captured direct Tor policy")
+	}
+	destinations, err := policy.PhysicalDestinations()
+	if err != nil {
+		return err
+	}
+	options := mobiletor.DesktopLinuxSocketOptions{}
+	for _, destination := range destinations {
+		address, err := netip.ParseAddr(destination.Host)
+		if err != nil || address.String() != destination.Host || destination.Port < 1 || destination.Port > 65535 ||
+			(destination.Network != "tcp" && destination.Network != "udp") {
+			return errors.New("Linux physical exception lost its compiled literal tuple")
+		}
+		if address.IsPrivate() || address.IsLinkLocalUnicast() {
+			options.PrivateDestinations = append(options.PrivateDestinations, mobiletor.DesktopLinuxSocketDestination{
+				Network: destination.Network, Address: netip.AddrPortFrom(address, uint16(destination.Port)),
+			})
+		}
+	}
+	meta := policy.Metadata()
+	if meta.HomeLANAccess {
+		for _, prefix := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16"} {
+			options.LANPrefixes = append(options.LANPrefixes, netip.MustParsePrefix(prefix))
+		}
+		// Match the existing whole-device LAN baseline exactly. IPv6 Off is
+		// enforced independently by omitting its source interface below; the
+		// guardian cannot grant a tuple without a captured family binding.
+		options.LANPrefixes = append(options.LANPrefixes, netip.MustParsePrefix("fc00::/7"), netip.MustParsePrefix("fe80::/10"))
+	}
+	return n.PreparePhysicalBroker(func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		manager := service.FromContext[adapter.NetworkManager](ctx)
+		if manager == nil || !manager.AutoDetectInterface() || manager.InterfaceMonitor() == nil {
+			return nil, nil, errors.New("Linux physical factory requires the initialized native network monitor")
+		}
+		selected := manager.DefaultNetworkInterface()
+		interfaces, err := desktopLinuxPhysicalInterfaces(selected, meta.IPv6Mode != "off")
+		if err != nil {
+			return nil, nil, err
+		}
+		index, name := selected.Index, selected.Name
+		physicalCurrent := func() bool {
+			if !current() {
+				return false
+			}
+			// A default-network change during startup precedes normal reset
+			// dispatch. Recheck the monitor's memory-only capture too, so a
+			// late factory cannot activate the former physical interface.
+			actual := manager.DefaultNetworkInterface()
+			return actual != nil && actual.Index == index && actual.Name == name
+		}
+		options.Interfaces = interfaces
+		owned, err := create(ctx, capture, options)
+		if err != nil {
+			if owned == nil {
+				return nil, nil, err
+			}
+			return nil, owned, err
+		}
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, owned, physicalCurrent)
+		return broker, owned, err
+	})
+}
+
+// The initialized native monitor selects the physical interface. Kernel
+// identity and addresses must agree before a privileged helper is started.
+// The guardian rechecks the exact binding before every grant, and absent IPv6
+// has no IPv4 fallback. This reads local state only and performs no DNS/probe.
+func desktopLinuxPhysicalInterfaces(selected *adapter.NetworkInterface, ipv6 bool) ([]mobiletor.DesktopLinuxSocketInterface, error) {
+	if selected == nil || selected.Index <= 0 || selected.Name == "" || selected.Flags&net.FlagUp == 0 || selected.Flags&net.FlagLoopback != 0 {
+		return nil, errors.New("Linux physical default interface is unavailable")
+	}
+	actual, err := net.InterfaceByIndex(selected.Index)
+	if err != nil || actual.Name != selected.Name || actual.Flags&net.FlagUp == 0 || actual.Flags&net.FlagLoopback != 0 {
+		return nil, errors.New("Linux physical interface changed before capture")
+	}
+	addresses, err := actual.Addrs()
+	if err != nil {
+		return nil, err
+	}
+	available := make(map[netip.Addr]bool)
+	for _, value := range addresses {
+		prefix, err := netip.ParsePrefix(value.String())
+		if err == nil {
+			available[prefix.Addr()] = true
+		}
+	}
+	var result []mobiletor.DesktopLinuxSocketInterface
+	var found4, found6 bool
+	for _, prefix := range selected.Addresses {
+		address := prefix.Addr()
+		if !address.IsValid() || !available[address] || !address.IsGlobalUnicast() || address.IsLoopback() || address.Is4In6() || address.Zone() != "" {
+			continue
+		}
+		if address.Is4() {
+			if found4 {
+				continue
+			}
+			found4 = true
+		} else {
+			if !ipv6 || found6 {
+				continue
+			}
+			found6 = true
+		}
+		result = append(result, mobiletor.DesktopLinuxSocketInterface{Name: selected.Name, Index: uint32(selected.Index), Address: address})
+	}
+	if len(result) == 0 {
+		return nil, errors.New("Linux physical default has no captured usable address")
+	}
+	return result, nil
+}

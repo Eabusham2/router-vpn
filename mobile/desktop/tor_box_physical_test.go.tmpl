@@ -1,0 +1,86 @@
+package box
+
+import (
+	"encoding/json"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func desktopPhysicalBoxFixture(t *testing.T) *desktopTorBoxFixture {
+	t.Helper()
+	return newDesktopTorBoxCapturedFixture(t, func(profile map[string]any) {
+		profile["external"] = map[string]any{"protocol": "tor"}
+		profile["kill_switch_policy"] = "always"
+	}, nil, routervpndesktoppt.RegisterPhysicalOutbound)
+}
+
+func TestRouterVPNDesktopTorPhysicalBoxCapturesExactFactoryBeforeStartup(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux isolated socket factory")
+	}
+	f := desktopPhysicalBoxFixture(t)
+	if !f.policy.PhysicalBroker() {
+		t.Fatal("strict dynamic source did not retain the required physical factory")
+	}
+	for _, fault := range []string{"session", "source", "resolver"} {
+		var profile map[string]any
+		if err := json.Unmarshal([]byte(f.policy.Profile()), &profile); err != nil {
+			t.Fatal(err)
+		}
+		session := desktopTorBoxSession
+		switch fault {
+		case "session":
+			session = strings.Repeat("f", 32)
+		case "source":
+			profile["id"] = "another-captured-source"
+		case "resolver":
+			profile["dns_port"] = 5354
+		}
+		raw, err := json.Marshal(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		foreign, err := mobiletor.NewDesktopBridgePolicy(string(raw), session, desktopTorBoxIsolation, "linux")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.box.RouterVPNDesktopTorPreparePhysical(foreign); err == nil {
+			t.Fatal("foreign source installed a native physical factory", fault)
+		}
+	}
+	// Preparing uses the real compiled Box/service/outbound graph and launches
+	// no process. Privileged creation occurs only in native Initialize, whose
+	// real Linux kernel behavior is verified in the isolated namespace suite.
+	if err := f.box.RouterVPNDesktopTorPreparePhysical(f.policy); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.box.RouterVPNDesktopTorPreparePhysical(f.policy); err == nil {
+		t.Fatal("a second host preparation replaced the physical factory")
+	}
+	if _, err := f.box.RouterVPNDesktopTorCreate(f.policy); err == nil {
+		t.Fatal("prepared factory was mistaken for a started/proved native path")
+	}
+	if f.tun.ready || f.tun.claimed {
+		t.Fatal("physical preparation started or claimed the TUN")
+	}
+}
+
+func TestRouterVPNDesktopTorPhysicalBoxRefusesUnprovisionedStart(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux isolated socket factory")
+	}
+	f := desktopPhysicalBoxFixture(t)
+	if err := f.box.RouterVPNStrategyStart(); err == nil {
+		t.Fatal("a JSON flag started a protected path without its OS factory")
+	}
+	if f.tun.ready || f.tun.claimed {
+		t.Fatal("an unprovisioned physical owner reached TUN admission")
+	}
+	if _, err := f.box.RouterVPNDesktopTorCreate(f.policy); err == nil {
+		t.Fatal("failed physical initialization acquired Connected authority")
+	}
+}

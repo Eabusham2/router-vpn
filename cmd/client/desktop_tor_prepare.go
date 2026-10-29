@@ -150,7 +150,8 @@ func stageDesktopTorInputsWithPredecessor(root string, policy, profile common.Ro
 		}
 	} else {
 		// Only a complete fixed obfs4 plan grants Direct tuple authority.
-		// Dynamic or plain Direct remains Off-only in the shared compiler.
+		// Protected Linux dynamic/plain Direct instead requires the native
+		// isolated socket broker and grants no global endpoint exception.
 		egress, _ = mobiletor.DesktopDirectPhysicalEgress(plan)
 	}
 	if predecessor != nil || len(egress) != 0 {
@@ -228,6 +229,10 @@ func stageDesktopTorInputsWithPredecessor(root string, policy, profile common.Ro
 		return result, err
 	}
 	launch.tor.expected, launch.tor.digests = inputs.Policy().Metadata(), inputs.Digests()
+	if inputs.Policy().PhysicalBroker() {
+		// Dynamic bridge targets can be PT placeholders, not firewall grants.
+		endpoint, launch.endpoint = "", ""
+	}
 	launch.configSHA256 = inputs.Digests().ConfigSHA256
 	if err = launch.directoryRoot.Mkdir("tor-data", 0700); err != nil {
 		return result, err
@@ -316,7 +321,7 @@ func desktopTorEnvironment(base []string, root, profile, endpoint string, inputs
 	clean := environment[:0]
 	for _, entry := range environment {
 		key, _, _ := strings.Cut(entry, "=")
-		if strings.HasPrefix(strings.ToUpper(key), "HOMEVPN_TOR_") {
+		if strings.HasPrefix(strings.ToUpper(key), "HOMEVPN_TOR_") || strings.EqualFold(key, "HOMEVPN_EXTERNAL_SESSION") {
 			continue
 		}
 		clean = append(clean, entry)
@@ -354,9 +359,11 @@ func desktopTorCapturedPhysicalEgress(launch *desktopNodeLaunch) ([]mobilemultih
 		return entry.native.PhysicalEgress(plan)
 	}
 	egress, err := mobiletor.DesktopDirectPhysicalEgress(plan)
-	if err != nil && launch.tor.expected.KillSwitchPolicy == "off" {
+	if err != nil && (launch.tor.expected.KillSwitchPolicy == "off" || launch.tor.expected.PhysicalBroker &&
+		launch.tor.expected.TargetOS == "linux" && launch.tor.expected.EntryID == "" && runtime.GOOS == "linux") {
 		// Plain and dynamic Direct have no fixed physical projection. This
-		// never turns their saved Off selection into a protected path.
+		// never turns an Off selection into protection, or grants the broker
+		// a fixed public endpoint exemption.
 		return nil, nil
 	}
 	return egress, err
@@ -401,7 +408,16 @@ func desktopTorLaunchEnvironment(base []string, root string, prepared torBridgeR
 		return nil, err
 	}
 	if len(egress) == 0 {
+		if owner.expected.PhysicalBroker {
+			if runtime.GOOS != "linux" || owner.expected.TargetOS != "linux" || owner.predecessor != nil || owner.expected.KillSwitchPolicy == "off" {
+				return nil, errors.New("Tor socket broker has no exact Linux Direct policy")
+			}
+			environment = envWithValue(environment, "HOMEVPN_TOR_PHYSICAL_BROKER", "1")
+		}
 		return environment, nil
+	}
+	if owner.expected.PhysicalBroker {
+		return nil, errors.New("Tor socket broker cannot borrow a fixed endpoint exemption")
 	}
 	hosts, seen, found := []string{endpoint}, map[string]bool{endpoint: true}, false
 	for _, tuple := range egress {

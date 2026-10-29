@@ -227,6 +227,14 @@ static void reset_fixture(App *app, const char *fault) {
         json_object_set_string_member(json_object_get_object_member(node_in(displayed, "entry"), "external"), "expected_public_ip", "");
     if (g_strcmp0(fault, "missing-token") == 0) json_object_remove_member(node_in(displayed, "entry"), "profile_token");
     current_catalog = copy_public_source_value_v24(displayed); capabilities = copy_public_source_value_v24(source_capabilities);
+    if (g_str_has_prefix(fault, "dynamic-")) {
+        JsonArray *rows = json_object_get_array_member(json_node_get_object(capabilities), "transports");
+        for (guint i = 0; i < json_array_get_length(rows); i++) {
+            JsonObject *row = json_array_get_object_element(rows, i);
+            json_object_set_boolean_member(row, "strict_dynamic_direct_kill_switch", g_strcmp0(fault, "dynamic-missing") != 0);
+            json_object_set_boolean_member(row, "supported", g_strcmp0(fault, "dynamic-unverified") != 0);
+        }
+    }
     if (g_strcmp0(fault, "no-capability") == 0) json_object_set_boolean_member(json_node_get_object(capabilities), "profile_update_source_preconditions", FALSE);
     if (g_strcmp0(fault, "ordinary-capability") == 0) {
         JsonArray *rows = json_object_get_array_member(json_node_get_object(capabilities), "transports");
@@ -283,7 +291,7 @@ static void run_trial(App *app, const char *transport, const char *kill, gboolea
         check(rejected, "cancelled/rejected modal escaped its owned callback");
     }
     if (emit) {
-        char *name = !update ? (g_str_has_prefix(fault, "fixed-") ? g_strdup_printf("tor-create-fixed-%s-%s-%s.json", transport, fault + strlen("fixed-"), kill) : g_strdup("tor-create-plain.json")) : g_strcmp0(fault, "saved-always") == 0 ? g_strdup_printf("tor-update-%spreserved-protection.json", source_prefix) : g_strdup_printf("tor-update-%s%s-%s.json", source_prefix, transport, kill);
+        char *name = !update ? (g_strcmp0(fault, "dynamic-direct") == 0 ? g_strdup_printf("tor-create-dynamic-%s-%s.json", transport, kill) : g_str_has_prefix(fault, "fixed-") ? g_strdup_printf("tor-create-fixed-%s-%s-%s.json", transport, fault + strlen("fixed-"), kill) : g_strdup("tor-create-plain.json")) : g_strcmp0(fault, "saved-always") == 0 ? g_strdup_printf("tor-update-%spreserved-protection.json", source_prefix) : g_strdup_printf("tor-update-%s%s-%s.json", source_prefix, transport, kill);
         char *path = g_build_filename(directory, name, NULL);
         check(g_file_set_contents(path, last_body, -1, NULL) && g_chmod(path, 0600) == 0, "actual callback payload could not be saved privately");
         g_free(path); g_free(name);
@@ -340,6 +348,11 @@ int main(int argc, char **argv) {
     run_trial(&app, preserved, "always", TRUE, "cancel", FALSE, TRUE, FALSE);
     for (guint t = 0; t < G_N_ELEMENTS(transports); t++) run_trial(&app, transports[t], "off", FALSE, "add", TRUE, FALSE, g_strcmp0(transports[t], "tor") == 0);
     if (plain == 0 && execution == 0) {
+        for (guint t = 1; t < G_N_ELEMENTS(transports); t++) for (guint k = 1; k < G_N_ELEMENTS(kills); k++) {
+            run_trial(&app, transports[t], kills[k], FALSE, "dynamic-direct", TRUE, FALSE, TRUE);
+            run_trial(&app, transports[t], kills[k], FALSE, "dynamic-missing", FALSE, FALSE, FALSE);
+            run_trial(&app, transports[t], kills[k], FALSE, "dynamic-unverified", FALSE, FALSE, FALSE);
+        }
         const char *fixed_transports[] = {"obfs4", "custom"}, *fixed_counts[] = {"fixed-1", "fixed-2", "fixed-8"};
         for (guint t = 0; t < G_N_ELEMENTS(fixed_transports); t++) for (guint n = 0; n < G_N_ELEMENTS(fixed_counts); n++) for (guint k = 1; k < G_N_ELEMENTS(kills); k++)
             run_trial(&app, fixed_transports[t], kills[k], FALSE, fixed_counts[n], TRUE, FALSE, TRUE);

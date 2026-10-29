@@ -127,7 +127,7 @@ jobs:
           python-version: '3.12'
       - name: Install native Linux build libraries
         if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends clang libclang-dev cmake ninja-build pkg-config libssl-dev autoconf automake libtool make perl
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends clang libclang-dev cmake ninja-build pkg-config libssl-dev autoconf automake libtool make perl nftables iproute2 passwd util-linux
       - name: Install native macOS build libraries
         if: runner.os == 'macOS'
         run: brew install cmake ninja pkg-config openssl@3 autoconf automake libtool

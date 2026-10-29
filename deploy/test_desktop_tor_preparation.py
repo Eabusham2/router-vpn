@@ -90,7 +90,9 @@ class DesktopPTPreparation(unittest.TestCase):
         # native package selected by the mandatory shipping build gate.
         for name in ('tor_pt_entry_peers_test.go.tmpl', 'tor_pt_entry_traffic_test.go.tmpl',
                      'tor_physical.go.tmpl', 'tor_physical_test.go.tmpl',
-                     'tor_physical_source_unix_test.go.tmpl'):
+                     'tor_physical_source_unix_test.go.tmpl', 'tor_physical_linux.go.tmpl',
+                     'tor_physical_other.go.tmpl', 'tor_physical_factory_test.go.tmpl',
+                     'tor_physical_linux_test.go.tmpl'):
             self.assertIn(name, PREP.PT_TEMPLATES)
         traffic = (self.vendor/'routervpn/desktoppt/tor_pt_entry_traffic_test.go').read_text()
         for name in ('MeekTLS', 'WebTunnelTLS', 'SnowflakeTraffic'):
@@ -131,14 +133,16 @@ class DesktopPTPreparation(unittest.TestCase):
             startup.assert_called_once_with(self.vendor.resolve())
             generated = {call.args[1]: call.args[2] for call in writes.call_args_list}
             for name in ('external_tor_comparison.go.tmpl', 'external_tor_comparison_test.go.tmpl',
-                         'external_tor_comparison_whole_test.go.tmpl'):
+                         'external_tor_comparison_whole_test.go.tmpl', 'external_socket_linux.go.tmpl',
+                         'external_socket_linux_test.go.tmpl'):
                 self.assertEqual(generated['cmd/sing-box/routervpn_'+name.removesuffix('.tmpl')],
                                  (ROOT/'mobile/desktop'/name).read_bytes())
             self.assertEqual(generated['routervpn/mobiletor/desktop_lastrelay.go'],
                              (ROOT/'internal/mobiletor/desktop_lastrelay.go').read_bytes())
             self.assertEqual(generated['routervpn/mobiletor/desktop_socket_broker_test.go'],
                              (ROOT/'internal/mobiletor/desktop_socket_broker_test.go').read_bytes())
-            for name in ('desktop_socket_source_unix_test.go', 'desktop_socket_source_privileged_test.go'):
+            for name in ('desktop_socket_source_unix_test.go', 'desktop_socket_source_privileged_test.go',
+                         'desktop_socket_linux_guardian_test.go'):
                 self.assertEqual(generated['routervpn/mobiletor/'+name], (ROOT/'internal/mobiletor'/name).read_bytes())
             for relative, raw in PREP.comparison_client_contract().items():
                 self.assertEqual(generated[relative], raw)

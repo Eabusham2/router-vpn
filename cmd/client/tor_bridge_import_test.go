@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -79,17 +80,28 @@ func TestTorBridgeImportDefaultsSingleObfs4Safely(t *testing.T) {
 	}
 }
 
-func TestTorBridgeImportRejectsDynamicStrictKillSwitch(t *testing.T) {
+func TestTorBridgeImportRequiresPlatformDynamicProtection(t *testing.T) {
 	a := torImportTestApp(t, filepath.Join(t.TempDir(), "routers.json"))
 	body := `{"name":"Tor Snowflake","transport":"snowflake","kill_switch_policy":"always","bridges":["` + torImportSnowflakeBridge + `"]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/tor-bridge/import", strings.NewReader(body))
 	rr := httptest.NewRecorder()
 	a.torBridgeImport(rr, req)
-	if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "dynamic bootstrap egress") {
+	if runtime.GOOS == "linux" {
+		if rr.Code != http.StatusOK || len(a.profiles.Profiles) != 1 || a.profiles.Profiles[0].KillSwitchPolicy != "always" || !a.profiles.Profiles[0].KillSwitch || a.state.Connected || a.cmd != nil {
+			t.Fatalf("Linux strict Tor import changed policy or invented proof: %d %q", rr.Code, rr.Body.String())
+		}
+	} else if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "Linux native socket owner") {
 		t.Fatalf("dynamic strict Tor import = %d %q", rr.Code, rr.Body.String())
 	}
-	if len(a.profiles.Profiles) != 0 {
+	if runtime.GOOS != "linux" && len(a.profiles.Profiles) != 0 {
 		t.Fatalf("rejected dynamic Tor profile was persisted: %+v", a.profiles.Profiles)
+	}
+	for _, target := range []string{"darwin", "windows"} {
+		p := existingTorImportProfile("strict-dynamic")
+		p.External.TorBridge.Transport, p.External.TorBridge.Bridges = "snowflake", []string{torImportSnowflakeBridge}
+		if _, err := normalizeTorBridgeImportPolicyForOS(p, target); err == nil {
+			t.Fatal("import borrowed the Linux socket owner on another platform", target)
+		}
 	}
 }
 

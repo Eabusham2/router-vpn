@@ -63,6 +63,13 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['GOOS'], system)
                         self.assertLessEqual(kwargs['timeout'], 300)
                         return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_linux_guardian.py'):
+                        self.assertEqual(system, 'linux')
+                        self.assertEqual(args[2:], [str(source.resolve())])
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertLessEqual(kwargs['timeout'], 300)
+                        return ''
                     if args[:2] in (['go', 'test'], ['go', 'mod']):
                         return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_hysteria2_deadlines_pinned.py'):
@@ -87,6 +94,12 @@ class NativeSocketUIDGate(unittest.TestCase):
                 uid = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_socket_uid.py')]
                 self.assertEqual(len(uid), 0 if system == 'windows' else 1)
                 self.assertIn(ROOT/'deploy/test_desktop_socket_uid.py', N.inputs())
+                guardian = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_linux_guardian.py')]
+                self.assertEqual(len(guardian), 1 if system == 'linux' else 0)
+                self.assertIn(ROOT/'deploy/test_desktop_linux_guardian.py', N.inputs())
+                physical = [args for args in calls if './routervpn/desktoppt' in args]
+                self.assertEqual(len(physical), 1)
+                self.assertIn('PhysicalFactory|LinuxPhysicalFactory', physical[0][physical[0].index('-run') + 1])
 
 
 class NativeSetup(unittest.TestCase):

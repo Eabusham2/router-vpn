@@ -78,8 +78,11 @@ func TestDesktopPlainRejectsBridgeDowngradeAndUnownedProtection(t *testing.T) {
 		"bridge-downgrade": func(p map[string]any) {
 			p["external"].(map[string]any)["tor_bridge"] = map[string]any{"transport": "obfs4", "bridges": []string{obfs4Bridge}}
 		},
-		"fixed-exit":    func(p map[string]any) { p["external"].(map[string]any)["expected_public_ip"] = "203.0.113.44" },
-		"strict-direct": func(p map[string]any) { p["kill_switch_policy"] = "always" },
+		"fixed-exit": func(p map[string]any) { p["external"].(map[string]any)["expected_public_ip"] = "203.0.113.44" },
+		"strict-unowned": func(p map[string]any) {
+			p["kill_switch_policy"] = "always"
+			p["desktop_physical_egress"] = []any{map[string]any{"host": "203.0.113.44", "port": 443, "network": "tcp"}}
+		},
 		"direct-server": func(p map[string]any) { p["multihop_execution"] = "server" },
 		"unowned-projection": func(p map[string]any) {
 			p["desktop_physical_egress"] = []any{map[string]any{"host": "203.0.113.44", "port": 443, "network": "tcp"}}

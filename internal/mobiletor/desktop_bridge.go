@@ -3,6 +3,7 @@ package mobiletor
 import (
 	"encoding/json"
 	"errors"
+	"runtime"
 
 	"router-vpn/internal/common"
 )
@@ -33,6 +34,7 @@ type DesktopBridgeMetadata struct {
 	SourceSHA256          string               `json:"source_sha256"`
 	ConfigSHA256          string               `json:"config_sha256"`
 	TargetOS              string               `json:"target_os"`
+	PhysicalBroker        bool                 `json:"physical_broker,omitempty"`
 	FinalTag              string               `json:"final_tag"`
 	TUNTag                string               `json:"tun_tag"`
 	InterfaceName         string               `json:"interface_name,omitempty"`
@@ -109,6 +111,9 @@ func (p *DesktopBridgePolicy) Profile() string                  { return p.sourc
 func (p *DesktopBridgePolicy) Predecessor() *DesktopPredecessor { return p.predecessor }
 func (p *DesktopBridgePolicy) ServerPolicy() *ServerTorPolicy   { return p.server }
 func (p *DesktopBridgePolicy) Mode() string                     { return p.mode }
+func (p *DesktopBridgePolicy) PhysicalBroker() bool {
+	return p != nil && p.metadata.PhysicalBroker
+}
 func (p *DesktopBridgePolicy) Plan() (Plan, error) {
 	if p.mode != "tor-bridge" {
 		return Plan{}, errors.New("plain desktop Tor has no bridge plan")
@@ -121,9 +126,21 @@ func (p *DesktopBridgePolicy) Plan() (Plan, error) {
 // become runnable or acquire a substitute public resolver. No shipping desktop
 // capability is enabled merely by passing this pure validation.
 func ValidateDesktopBridgeProfile(source string) error {
-	profile, _, _, err := desktopBridgeProfile(source)
+	return ValidateDesktopBridgeProfileForOS(source, runtime.GOOS)
+}
+
+func ValidateDesktopBridgeProfileForOS(source, targetOS string) error {
+	if targetOS != "linux" && targetOS != "darwin" && targetOS != "windows" {
+		return errors.New("desktop Tor requires an explicit supported native OS")
+	}
+	profile, plan, _, err := desktopBridgeProfile(source)
 	if err != nil {
 		return err
+	}
+	kill, _ := desktopBridgeKillPolicy(profile, plan)
+	if kill != "off" && !desktopBridgeDirectProtection(plan) && !desktopBridgeSavedRouterSelection(profile) &&
+		(targetOS != "linux" || profile["multihop_enabled"] == true) {
+		return errors.New("strict dynamic Direct Tor requires the Linux native socket owner or an eligible captured predecessor")
 	}
 	if _, _, err := torSelectedDNS(profile, nil, true); err != nil {
 		return err
@@ -191,7 +208,9 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 	// projection checked below; a public-address proof never grants private
 	// Router, Home DNS or Server execution authority. The native PT owner
 	// proves either typed entry before opening any transport listener.
-	if kill, _ := desktopBridgeKillPolicy(profile, plan); kill != "off" && (predecessor != nil || !desktopBridgeDirectProtection(plan)) &&
+	kill, _ := desktopBridgeKillPolicy(profile, plan)
+	physicalBroker := predecessor == nil && targetOS == "linux" && kill != "off" && !desktopBridgeDirectProtection(plan)
+	if kill != "off" && !physicalBroker && (predecessor != nil || !desktopBridgeDirectProtection(plan)) &&
 		!predecessor.IsRouter() && !predecessor.IsExternal() {
 		return nil, errors.New("strict desktop Tor protection has no captured typed predecessor")
 	}
@@ -212,6 +231,9 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 		}
 		bootstrap["tag"] = bootstrapDNS
 		delete(bootstrap, "detour")
+		if physicalBroker {
+			bootstrap["detour"] = DesktopPhysicalOutboundTag
+		}
 		root["dns"] = map[string]any{"servers": []any{selected, bootstrap}, "final": profileDNS, "independent_cache": true}
 	} else {
 		root, tun, selected, err = desktopPredecessorGraph(profile, sessionID, predecessor)
@@ -284,6 +306,12 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 		}
 	}
 	sourceSHA := desktopDigest(sourceBytes)
+	if physicalBroker {
+		root["outbounds"] = append(root["outbounds"].([]any), map[string]any{
+			"type": DesktopPhysicalOutboundType, "tag": DesktopPhysicalOutboundTag,
+			"session_id": sessionID, "source_sha256": sourceSHA,
+		})
+	}
 	if padding.Enabled {
 		// Application sockets and selected-DNS exchanges must observe the
 		// actual native lease. The proof owner alone receives a short-lived
@@ -298,10 +326,14 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 	// This exact Box service retires the native physical/PT generation on
 	// every network reset, including resets whose addresses are unchanged.
 	services, _ := root["services"].([]any)
-	root["services"] = append(services, map[string]any{
+	observer := map[string]any{
 		"type": "routervpn-desktop-tor-network", "tag": "routervpn-tor-physical",
 		"session_id": sessionID, "source_sha256": sourceSHA,
-	})
+	}
+	if physicalBroker {
+		observer["physical_broker"] = true
+	}
+	root["services"] = append(services, observer)
 	encoded, err := json.Marshal(root)
 	if err != nil || len(encoded) > 4<<20 {
 		return nil, errors.New("desktop Tor configuration exceeds its bound")
@@ -330,11 +362,11 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 		ipv6 = "on"
 	}
 	lan, _ := profile["home_lan_access"].(bool)
-	kill, _ := desktopBridgeKillPolicy(profile, plan)
 	metadata := DesktopBridgeMetadata{
 		Schema: 1, NodeID: profileString(profile, "id"), SessionID: sessionID, SourceSHA256: sourceSHA, ConfigSHA256: desktopDigest(encoded),
 		TargetOS: targetOS, FinalTag: ProfileOutboundTag, TUNTag: profileString(tun, "tag"), InterfaceName: profileString(tun, "interface_name"), SocksPort: socksPort,
-		DNS: dns, BootstrapDNSTag: bootstrapDNS, IPv6Mode: ipv6, HomeLANAccess: lan, KillSwitchPolicy: kill, MTUPolicy: mtuPolicy, ConfiguredMTU: mtu, JumboTUN: profile["jumbo_tun"] == true, Padding: padding,
+		PhysicalBroker: physicalBroker,
+		DNS:            dns, BootstrapDNSTag: bootstrapDNS, IPv6Mode: ipv6, HomeLANAccess: lan, KillSwitchPolicy: kill, MTUPolicy: mtuPolicy, ConfiguredMTU: mtu, JumboTUN: profile["jumbo_tun"] == true, Padding: padding,
 	}
 	if predecessor != nil {
 		metadata.EntryID, metadata.EntryMode, metadata.EntryTag = predecessor.ID(), predecessor.mode, predecessor.tag
@@ -350,7 +382,13 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 	for i, bridge := range plan.Bridges {
 		bridges[i] = bridge.Line
 	}
-	return &DesktopBridgePolicy{source: source, config: string(encoded), mode: profile["external"].(map[string]any)["protocol"].(string), metadata: metadata, bridges: bridges, predecessor: predecessor, isolation: isolationSecret}, nil
+	policy := &DesktopBridgePolicy{source: source, config: string(encoded), mode: profile["external"].(map[string]any)["protocol"].(string), metadata: metadata, bridges: bridges, predecessor: predecessor, isolation: isolationSecret}
+	if physicalBroker {
+		if _, err := policy.PhysicalDestinations(); err != nil {
+			return nil, err
+		}
+	}
+	return policy, nil
 }
 
 func desktopBridgeProfile(source string) (map[string]any, Plan, int, error) {
@@ -435,9 +473,9 @@ func desktopBridgeKillPolicy(profile map[string]any, plan Plan) (string, error) 
 	if value != "off" && value != "on-connect" && value != "always" {
 		return "", errors.New("invalid desktop Tor kill switch policy")
 	}
-	if value != "off" && !desktopBridgeDirectProtection(plan) && !desktopBridgeSavedRouterSelection(profile) {
-		return "", errors.New("strict desktop Tor protection requires one to eight captured literal obfs4 bridges or its exact captured eligible predecessor")
-	}
+	// This parser retains saved intent. The target-aware compiler admits strict
+	// Direct dynamic traffic only through Linux's mandatory native socket broker;
+	// all other platforms still require fixed obfs4 or a proved predecessor.
 	return value, nil
 }
 
