@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory=$true)][string]$Assembly,
     [Parameter(Mandatory=$true)][string]$Fixture,
-    [Parameter(Mandatory=$true)][string]$Output
+    [Parameter(Mandatory=$true)][string]$Output,
+    [ValidateSet('anycpu','x64')][string]$Platform='anycpu'
 )
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
@@ -15,7 +16,7 @@ if(-not[IO.File]::Exists($Assembly)-or-not[IO.File]::Exists($Fixture)-or[IO.File
     throw 'The native GUI compiler requires captured inputs and a new owned output.'
 }
 $Parameters=New-Object System.CodeDom.Compiler.CompilerParameters
-$Parameters.CompilerOptions='/langversion:5 /platform:anycpu'
+$Parameters.CompilerOptions='/langversion:5 /platform:'+$Platform
 $Parameters.GenerateExecutable=$true
 $Parameters.GenerateInMemory=$false
 $Parameters.OutputAssembly=$Output

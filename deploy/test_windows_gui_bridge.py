@@ -76,7 +76,7 @@ def mutants():
     )
 
 
-def compile_fixture(directory, shell, captured, source=None):
+def compile_fixture(directory, shell, captured, source=None, platform_target="anycpu"):
     directory.mkdir()
     library = directory / "RouterVPN.ControllerTransport.dll"
     executable = directory / "RouterVPN.GuiBridgeFixture.exe"
@@ -91,10 +91,50 @@ def compile_fixture(directory, shell, captured, source=None):
         [shell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
          ROOT / "deploy/fixtures/windows-controller-transport/compile_bridge.ps1",
          "-Assembly", library, "-Fixture", ROOT / "deploy/fixtures/windows-controller-transport/bridge_process.cs",
-         "-Output", executable], cwd=ROOT, env=captured, timeout=90)
+         "-Output", executable, "-Platform", platform_target], cwd=ROOT, env=captured, timeout=90)
     if status or "PASS actual Framework GUI process compilation" not in output:
         raise ValueError("Actual Framework GUI process compilation failed:\n" + output[-16384:])
     return executable, {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in (library, executable)}
+
+
+def diagnose_managed_creation(workspace, shell, captured, architecture, build, package, executable):
+    """Bounded failure-only controls; never replace the required baseline.
+
+    Keep the actual private creation-time Job, handle allowlist, suspended image
+    readback and C# public channel unchanged. Compare native64 PE metadata with
+    the same AnyCPU source, then the same retained volume's normalized Win32
+    spelling. No mutable DOS drive or unowned running process is introduced.
+    """
+    if architecture != "amd64":
+        print("Managed creation PE diagnostic is limited to the actual AMD64 Framework compiler", flush=True)
+        return
+    native_image, _ = compile_fixture(workspace / "diagnostic-native64", shell, captured,
+                                      platform_target="x64")
+    path = ROOT / "internal/windowscontroller/gui_windows.go"
+    source = path.read_text(encoding="utf-8")
+    needle = ('\tapplication, _ := syscall.UTF16PtrFromString(image.path)\n'
+              '\tcommand, _ := syscall.UTF16FromString(syscall.EscapeArg(image.path) + " " + strings.Join(quoted, " "))')
+    replacement = ('\t// Diagnostic only: the same retained volume identity, with Win32 normalization.\n'
+                   '\tlaunchPath := `\\\\.\\` + image.path[len(`\\\\?\\`):]\n'
+                   '\tapplication, _ := syscall.UTF16PtrFromString(launchPath)\n'
+                   '\tcommand, _ := syscall.UTF16FromString(syscall.EscapeArg(launchPath) + " " + strings.Join(quoted, " "))')
+    changed = workspace / "diagnostic-volume-spelling.go"
+    changed.write_text(NATIVE.replace_once(source, needle, replacement), encoding="utf-8")
+    overlay = workspace / "diagnostic-volume-spelling.json"
+    overlay.write_text(json.dumps({"Replace": {str(path): str(changed)}}), encoding="utf-8")
+    for name, image, flags in (
+            ("native64-canonical-volume", native_image, []),
+            ("anycpu-normalized-volume", executable, ["-overlay=" + str(overlay)]),
+            ("native64-normalized-volume", native_image, ["-overlay=" + str(overlay)])):
+        binary = workspace / ("diagnostic-" + name + ".test.exe")
+        status, output = NATIVE.run([*build, *flags, "-o", binary, package], cwd=ROOT, env=captured, timeout=180)
+        if status:
+            raise ValueError("Managed creation diagnostic did not compile: " + name + "\n" + output[-8192:])
+        variant = dict(captured, ROUTERVPN_GUI_BRIDGE_FIXTURE=str(image))
+        status, output = NATIVE.run([binary, "-test.run=^" + REQUIRED[0] + "$", "-test.count=1",
+                                    "-test.timeout=35s", "-test.v"], cwd=ROOT, env=variant, timeout=45)
+        print("Managed creation diagnostic:", name, "exit", status, flush=True)
+        print(output, end="" if output.endswith("\n") else "\n", flush=True)
 
 
 def execute(go="go", shell="powershell.exe"):
@@ -124,6 +164,8 @@ def execute(go="go", shell="powershell.exe"):
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if (status or "--- SKIP:" in output or "DATA RACE" in output or
                 any("--- PASS: " + name + " (" not in output for name in REQUIRED)):
+            if "original-user GUI suspended CreateProcess: The parameter is incorrect." in output:
+                diagnose_managed_creation(workspace, shell, captured, architecture, build, package, executable)
             raise ValueError("Native C# GUI composition did not execute every actual boundary")
         for name, test, witness, replacement in mutants():
             changed = workspace / (name + ".go")
