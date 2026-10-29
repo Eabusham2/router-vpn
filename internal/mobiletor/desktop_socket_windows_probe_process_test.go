@@ -28,8 +28,10 @@ import (
 // another. The child has the fresh disabled account as its actual primary
 // process token. Only its new executable, result file and private desktop admit
 // that exact SID; no WFP, engine, sublayer, filter, existing account or unrelated
-// ACL changes. An explicit private desktop prevents CreateProcessWithTokenW
-// from adding that user to the inherited window station/desktop's ACL.
+// ACL changes. An explicit private desktop avoids any reliance on access to the
+// inherited window station/desktop. The actual primary-token process is created
+// with the documented CreateProcessAsUserW extended-startup boundary; no new
+// account rights or ambient process privileges are granted by this fixture.
 type desktopWindowsProbeProcess struct {
 	identity                       *DesktopWindowsSocketIdentity
 	primary                        syscall.Token
@@ -140,7 +142,7 @@ func desktopWindowsProbeProcessAPIs(identity *DesktopWindowsSocketIdentity) (*de
 		target **syscall.Proc
 	}{
 		{identity.api.logon.Dll, "DuplicateTokenEx", &api.duplicate},
-		{identity.api.logon.Dll, "CreateProcessWithTokenW", &api.create},
+		{identity.api.logon.Dll, "CreateProcessAsUserW", &api.create},
 		{identity.api.logon.Dll, "SetFileSecurityW", &api.fileSecurity},
 		{identity.api.processImage.Dll, "CreateJobObjectW", &api.createJob},
 		{identity.api.processImage.Dll, "SetInformationJobObject", &api.setJob},
@@ -479,11 +481,11 @@ func (f *desktopWindowsProbeProcess) run(scope []byte) (reply desktopWindowsProb
 	startup.Info.Cb = uint32(unsafe.Sizeof(startup))
 	startup.Info.Desktop = desktop
 	var process syscall.ProcessInformation
-	// No inherited standard handles, no profile, and no NETCREDENTIALS_ONLY:
+	// No inherited handles, no loaded profile, and no alternate-network-only logon:
 	// the actual child primary token must be the isolated user on every thread.
 	// Its kill-on-close Job is assigned as part of creation, before the parent
 	// can observe a handle. There is no suspended-but-unowned assignment gap.
-	ok, _, callErr = f.api.create.Call(uintptr(f.primary), 0, uintptr(unsafe.Pointer(application)), uintptr(unsafe.Pointer(&command[0])), 0x08080404 /* no window, extended startup, Unicode, suspended */, uintptr(unsafe.Pointer(&environment[0])), uintptr(unsafe.Pointer(directory)), uintptr(unsafe.Pointer(&startup)), uintptr(unsafe.Pointer(&process)))
+	ok, callErr = f.createChild(application, &command[0], 0x08080404 /* no window, extended startup, Unicode, suspended */, &environment[0], directory, &startup, &process)
 	runtime.KeepAlive(application)
 	runtime.KeepAlive(command)
 	runtime.KeepAlive(environment)
@@ -506,7 +508,7 @@ func (f *desktopWindowsProbeProcess) run(scope []byte) (reply desktopWindowsProb
 		defer syscall.CloseHandle(process.Thread)
 	}
 	if ok == 0 || process.Process == 0 || process.Thread == 0 {
-		creationErr := desktopWindowsCallFailure("ordinary probe child creation", callErr)
+		creationErr := desktopWindowsCallFailure("ordinary probe child CreateProcessAsUserW", callErr)
 		if errors.Is(callErr, syscall.Errno(87)) && process.Process == 0 && process.Thread == 0 {
 			// Diagnose this exact rejected parameter boundary without allowing a
 			// child to execute outside the creation-time Job. All controls target
@@ -565,6 +567,16 @@ func (f *desktopWindowsProbeProcess) run(scope []byte) (reply desktopWindowsProb
 	return reply, nil
 }
 
+func (f *desktopWindowsProbeProcess) createChild(application, command *uint16, flags uintptr, environment, directory *uint16, startup *desktopWindowsProbeStartup, child *syscall.ProcessInformation) (uintptr, error) {
+	// InheritHandles is false. STARTUPINFOEX owns the Job-list attribute at
+	// creation; there is no unowned suspended-child assignment fallback.
+	// Windows may enable only privileges already assigned to the caller for
+	// this documented API call. ERROR_PRIVILEGE_NOT_HELD remains a gate failure.
+	ok, _, callErr := f.api.create.Call(uintptr(f.primary), uintptr(unsafe.Pointer(application)), uintptr(unsafe.Pointer(command)),
+		0, 0, 0, flags, uintptr(unsafe.Pointer(environment)), uintptr(unsafe.Pointer(directory)), uintptr(unsafe.Pointer(startup)), uintptr(unsafe.Pointer(child)))
+	return ok, callErr
+}
+
 func (f *desktopWindowsProbeProcess) diagnoseCreateParameters(captured desktopWindowsProbeStartup, environment []uint16) error {
 	control, err := os.CreateTemp(f.directory, "create-parameter-control-*.exe")
 	if err != nil {
@@ -613,8 +625,7 @@ func (f *desktopWindowsProbeProcess) diagnoseCreateParameters(captured desktopWi
 		startup.Info.Cb = variant.cb
 		command, _ := syscall.UTF16FromString(syscall.EscapeArg(path))
 		var child syscall.ProcessInformation
-		ok, _, callErr := f.api.create.Call(uintptr(f.primary), 0, uintptr(unsafe.Pointer(application)), uintptr(unsafe.Pointer(&command[0])), variant.flags,
-			uintptr(unsafe.Pointer(&environment[0])), uintptr(unsafe.Pointer(directory)), uintptr(unsafe.Pointer(&startup)), uintptr(unsafe.Pointer(&child)))
+		ok, callErr := f.createChild(application, &command[0], variant.flags, &environment[0], directory, &startup, &child)
 		runtime.KeepAlive(command)
 		runtime.KeepAlive(startup)
 		if child.Process != 0 {
