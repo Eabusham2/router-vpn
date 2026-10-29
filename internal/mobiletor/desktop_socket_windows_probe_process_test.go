@@ -513,7 +513,7 @@ func (f *desktopWindowsProbeProcess) run(scope []byte) (reply desktopWindowsProb
 	if ok == 0 || process.Process == 0 || process.Thread == 0 {
 		creationErr := desktopWindowsCallFailure("ordinary probe child basic CreateProcessWithTokenW", callErr)
 		if errors.Is(callErr, syscall.ERROR_ACCESS_DENIED) && process.Process == 0 && process.Thread == 0 {
-			creationErr = errors.Join(creationErr, f.diagnoseCreateAccess())
+			creationErr = errors.Join(creationErr, f.diagnoseCreateAccess(), f.diagnoseCreateTokenAccess(startup, environment))
 		}
 		if errors.Is(callErr, syscall.Errno(87)) && process.Process == 0 && process.Thread == 0 {
 			// Diagnose this exact rejected parameter boundary without allowing a
@@ -772,6 +772,115 @@ func (f *desktopWindowsProbeProcess) diagnoseCreateParameters(captured desktopWi
 	runtime.KeepAlive(directory)
 	runtime.KeepAlive(captured)
 	return fmt.Errorf("held non-executable process controls (STARTUPINFO=%d, STARTUPINFOEX=%d): %s", unsafe.Sizeof(syscall.StartupInfo{}), unsafe.Sizeof(captured), strings.Join(statuses, "; "))
+}
+
+// These controls do not retry the real child. They keep an empty regular file
+// pinned against writing/replacement and compare the documented token-handle
+// mask with additional access to separate, already-owned token copies. No
+// privileges, token attributes, existing ACLs or account rights are changed. Even an
+// unexpected process return is suspended and must be terminated and joined.
+func (f *desktopWindowsProbeProcess) diagnoseCreateTokenAccess(captured desktopWindowsProbeStartup, environment []uint16) error {
+	control, err := os.CreateTemp(f.directory, "create-access-control-*.exe")
+	if err != nil {
+		return err
+	}
+	path := control.Name()
+	if err := control.Close(); err != nil {
+		return err
+	}
+	defer os.Remove(path)
+	principal, err := (*syscall.SID)(unsafe.Pointer(&f.identity.sid[0])).String()
+	if err != nil {
+		return err
+	}
+	if err := f.allowOwnedFile(path, principal, "GRGX"); err != nil {
+		return err
+	}
+	application, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	held, err := syscall.CreateFile(application, syscall.GENERIC_READ, syscall.FILE_SHARE_READ, nil, syscall.OPEN_EXISTING, 0x00200000, 0)
+	if err != nil {
+		return err
+	}
+	defer syscall.CloseHandle(held)
+	var info syscall.ByHandleFileInformation
+	if err := syscall.GetFileInformationByHandle(held, &info); err != nil || info.FileSizeHigh != 0 || info.FileSizeLow != 0 || info.FileAttributes&(0x400|syscall.FILE_ATTRIBUTE_DIRECTORY) != 0 || info.NumberOfLinks != 1 {
+		return errors.Join(err, errors.New("token-access control did not pin an empty regular file"))
+	}
+	var caller syscall.Token
+	if err := syscall.OpenProcessToken(^syscall.Handle(0), syscall.TOKEN_QUERY|syscall.TOKEN_DUPLICATE, &caller); err != nil {
+		return err
+	}
+	defer caller.Close()
+	directory, _ := syscall.UTF16PtrFromString(f.directory)
+	var observations []string
+	const required = syscall.TOKEN_QUERY | syscall.TOKEN_DUPLICATE | syscall.TOKEN_ASSIGN_PRIMARY
+	for _, variant := range []struct {
+		name   string
+		source syscall.Token
+		access uint32
+	}{
+		{"ordinary-documented", f.primary, required},
+		{"ordinary-impersonate", f.primary, required | syscall.TOKEN_IMPERSONATE},
+		{"ordinary-adjust", f.primary, required | syscall.TOKEN_ADJUST_DEFAULT | syscall.TOKEN_ADJUST_SESSIONID},
+		{"caller-documented", caller, required},
+	} {
+		var token syscall.Token
+		ok, _, callErr := f.api.duplicate.Call(uintptr(variant.source), uintptr(variant.access), 0, 2, 1, uintptr(unsafe.Pointer(&token)))
+		if token != 0 {
+			defer token.Close()
+		}
+		if ok == 0 || token == 0 {
+			observations = append(observations, fmt.Sprintf("%s(mask=0x%x):duplicate=%v", variant.name, variant.access, callErr))
+			continue
+		}
+		wantSID, want, wantErr := desktopWindowsTokenIdentity(variant.source)
+		gotSID, got, gotErr := desktopWindowsTokenIdentity(token)
+		if wantErr != nil || gotErr != nil || got.TokenType != 1 || !bytes.Equal(wantSID, gotSID) || want.AuthenticationID != got.AuthenticationID {
+			return errors.Join(wantErr, gotErr, errors.New("token-access diagnostic changed its source identity"))
+		}
+		var session, returned uint32
+		if err := syscall.GetTokenInformation(token, 12 /* TokenSessionId */, (*byte)(unsafe.Pointer(&session)), 4, &returned); err != nil || returned != 4 {
+			return errors.Join(err, errors.New("token-access diagnostic session is unproved"))
+		}
+		startup := desktopWindowsProbeStartup{Info: captured.Info}
+		startup.Info.Cb = uint32(unsafe.Sizeof(startup.Info))
+		command, _ := syscall.UTF16FromString(syscall.EscapeArg(path))
+		var child syscall.ProcessInformation
+		ok, _, callErr = f.api.create.Call(uintptr(token), 0, uintptr(unsafe.Pointer(application)), uintptr(unsafe.Pointer(&command[0])),
+			0x08000404 /* basic, Unicode, no-window, suspended */, uintptr(unsafe.Pointer(&environment[0])), uintptr(unsafe.Pointer(directory)),
+			uintptr(unsafe.Pointer(&startup)), uintptr(unsafe.Pointer(&child)))
+		runtime.KeepAlive(command)
+		runtime.KeepAlive(startup)
+		if child.Process != 0 {
+			termination := syscall.TerminateProcess(child.Process, 125)
+			state, waitErr := syscall.WaitForSingleObject(child.Process, 5000)
+			if waitErr != nil || state != syscall.WAIT_OBJECT_0 {
+				return errors.Join(termination, waitErr, errors.New("token-access control acquired an unjoined unexpected process"))
+			}
+			closeErr := syscall.CloseHandle(child.Process)
+			if child.Thread != 0 {
+				closeErr = errors.Join(closeErr, syscall.CloseHandle(child.Thread))
+				child.Thread = 0
+			}
+			return errors.Join(closeErr, errors.New("token-access control unexpectedly created a process from an empty file"))
+		}
+		if child.Thread != 0 {
+			return errors.Join(syscall.CloseHandle(child.Thread), errors.New("token-access control returned an unexpected standalone thread"))
+		}
+		var status syscall.Errno
+		if ok != 0 || !errors.As(callErr, &status) {
+			return errors.New("token-access control returned no exact failure status")
+		}
+		observations = append(observations, fmt.Sprintf("%s(mask=0x%x,session=%d):%d", variant.name, variant.access, session, uint32(status)))
+	}
+	runtime.KeepAlive(application)
+	runtime.KeepAlive(environment)
+	runtime.KeepAlive(directory)
+	runtime.KeepAlive(captured)
+	return errors.New("held empty-image token-access observations: " + strings.Join(observations, "; "))
 }
 
 // Only the deliberately launched non-admin process selects this helper. The
