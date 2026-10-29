@@ -30,7 +30,7 @@ def execute(shell):
     baseline = subprocess.run(command, cwd=ROOT, text=True, stdout=subprocess.PIPE,
                               stderr=subprocess.STDOUT, timeout=180)
     print(baseline.stdout, end="", flush=True)
-    if baseline.returncode or "32 actual child dispatches and 242 assertions" not in baseline.stdout:
+    if baseline.returncode or "32 actual child dispatches and 274 assertions" not in baseline.stdout:
         raise ValueError("The complete shipping legacy recovery fixture did not pass")
     source = SOURCE.read_text(encoding="utf-8")
     guessed = once(
@@ -59,6 +59,27 @@ def execute(shell):
                 raise ValueError("Legacy recovery defect did not fail at its intended assertion: "
                                  + name + "\n" + result.stdout[-16384:])
             print("Rejected shipping legacy recovery defect:", name, flush=True)
+        fixture = TEST.read_text(encoding="utf-8")
+        fixture_controls = (
+            ("missing-child-exit-code", "corrupt-json",
+             "Legacy recovery child omitted its exit code: corrupt-json", "$null"),
+            ("false-success-child-exit-code", "corrupt-json",
+             "Unexpected recovery verdict for corrupt-json", "0"),
+        )
+        for name, case, witness, value in fixture_controls:
+            body = once(fixture, "        $exitCode=$child.ExitCode\n",
+                        "        $exitCode=" + value + "\n")
+            path = Path(directory) / (name + ".ps1")
+            path.write_text(body, encoding="utf-8")
+            result = subprocess.run(
+                [*command[:-1], str(path), "-SourceRoot", str(ROOT), "-OnlyCase", case],
+                cwd=ROOT, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                timeout=45,
+            )
+            if result.returncode == 0 or witness not in result.stdout:
+                raise ValueError("Legacy recovery fixture defect did not fail at its intended assertion: "
+                                 + name + "\n" + result.stdout[-16384:])
+            print("Rejected legacy recovery child-result defect:", name, flush=True)
     if {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in closure} != captured:
         raise ValueError("Legacy recovery source changed while its actual fixture was running")
 

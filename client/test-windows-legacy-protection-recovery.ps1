@@ -154,13 +154,33 @@ function New-NetFirewallRule {throw 'Recovery tried to install a new allow rule'
         '-Action',$action,'-Root',('"'+$caseRoot+'"'),'-StateRoot',('"'+$caseRoot+'"'),'-Endpoint','203.0.113.7','-HomeLANAccess','false')
       if($case['policy']){$arguments+=@('-Policy',$case.policy)}
       $out=Join-Path $caseRoot ('stdout-'+$attempt+'.log');$err=Join-Path $caseRoot ('stderr-'+$attempt+'.log')
-      $child=Start-Process -FilePath $shell -ArgumentList $arguments -RedirectStandardOutput $out -RedirectStandardError $err -PassThru
-      $script:children++
+      # Retain the process created by Start itself. Redirected Start-Process
+      # -PassThru can lose ExitCode under Windows PowerShell 5.1; a missing
+      # result is neither a successful recovery nor an expected rejection.
+      $child=[Diagnostics.Process]::new()
+      $child.StartInfo=[Diagnostics.ProcessStartInfo]::new()
+      $child.StartInfo.FileName=$shell
+      $child.StartInfo.Arguments=$arguments -join ' '
+      $child.StartInfo.UseShellExecute=$false
+      $child.StartInfo.CreateNoWindow=$true
+      $child.StartInfo.RedirectStandardOutput=$true
+      $child.StartInfo.RedirectStandardError=$true
+      $started=$false
       try {
+        $started=$child.Start()
+        if(-not $started){throw ('Legacy recovery child did not start: '+$case.name)}
+        $script:children++
+        $stdout=$child.StandardOutput.ReadToEndAsync()
+        $stderr=$child.StandardError.ReadToEndAsync()
         if(-not $child.WaitForExit(30000)){$child.Kill();$child.WaitForExit();throw ('Legacy recovery child exceeded its bound: '+$case.name)}
-        $diagnostic=[IO.File]::ReadAllText($out)+[IO.File]::ReadAllText($err)
+        $child.WaitForExit()
+        $outText=$stdout.GetAwaiter().GetResult();$errText=$stderr.GetAwaiter().GetResult()
+        [IO.File]::WriteAllText($out,$outText);[IO.File]::WriteAllText($err,$errText)
+        $diagnostic=$outText+$errText
+        $exitCode=$child.ExitCode
+        Check ($null -ne $exitCode) ('Legacy recovery child omitted its exit code: '+$case.name)
         $failure=[bool]$case['invalid'] -or ($attempt -eq 0 -and [bool]$case['fault'])
-        Check (($child.ExitCode -ne 0) -eq $failure) ('Unexpected recovery verdict for '+$case.name+': '+$diagnostic)
+        Check (($exitCode -ne 0) -eq $failure) ('Unexpected recovery verdict for '+$case.name+' (exit '+$exitCode+'): '+$diagnostic)
         $after=ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($firewallPath))
         Check (@($after.rules|Where-Object {$_.Name -ceq 'foreign-rule' -and $_.Group -ceq 'Foreign policy'}).Count -eq 1) ('Foreign rule changed: '+$case.name)
         Check (@($after.profiles|Where-Object {$_.Name -ceq 'Foreign' -and $_.DefaultOutboundAction -ceq 'Block'}).Count -eq 1) ('Foreign profile changed: '+$case.name)
@@ -180,7 +200,10 @@ function New-NetFirewallRule {throw 'Recovery tried to install a new allow rule'
             Check (@($after.profiles|Where-Object {$_.Name -ceq $expected.name -and $_.DefaultOutboundAction -ceq $want}).Count -eq 1) ('Captured profile was not restored: '+$case.name)
           }
         }
-      } finally {$child.Dispose()}
+      } finally {
+        if($started -and -not $child.HasExited){$child.Kill();$child.WaitForExit()}
+        $child.Dispose()
+      }
     }
   }
   Write-Output ("PASS {0} legacy recovery cases, {1} actual child dispatches and {2} assertions; invalid authority, checked readback, retained failure/retry and foreign policy preservation." -f $cases.Count,$script:children,$script:checks)
