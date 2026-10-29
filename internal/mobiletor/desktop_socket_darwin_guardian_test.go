@@ -195,8 +195,15 @@ func TestDesktopDarwinGuardianKernelPFAnchorPaths(t *testing.T) {
 		if err := desktopDarwinPFLoad(ctx, anchor, rules); err != nil {
 			t.Fatal(err)
 		}
+		if actual, err := desktopDarwinPFRead(ctx, anchor); err != nil || actual != expected {
+			t.Fatal("legacy PF negative did not establish its exact native rule before rejection", anchor, actual, err)
+		}
 		if err := desktopDarwinPFRejectLegacyLayout(ctx); err == nil || !strings.Contains(err.Error(), "earlier nested physical owner") {
-			t.Fatal("earlier PF ownership was silently reinterpreted as a sibling generation", err)
+			children, childErr := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", legacy, "-s", "Anchors")
+			if len(children) > 2048 {
+				children = append(children[:2048:2048], []byte("[truncated]")...)
+			}
+			t.Fatalf("earlier PF ownership was silently reinterpreted as a sibling generation: anchor=%q children=%q read_error=%v rejection=%v", anchor, children, childErr, err)
 		}
 		if actual, err := desktopDarwinPFRead(ctx, anchor); err != nil || actual != expected {
 			t.Fatal("rejecting an earlier PF owner removed its recovery rules", actual, err)

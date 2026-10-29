@@ -173,7 +173,7 @@ func desktopDarwinAccountRecord(account string, uid uint32) (map[string]string, 
 	if len(values) != len(desktopDarwinAccountAttributes) || values["RecordName"] != account || values["UniqueID"] != strconv.FormatUint(uint64(uid), 10) ||
 		values["PrimaryGroupID"] != "65534" || values["NFSHomeDirectory"] != "/var/empty" || values["UserShell"] != "/usr/bin/false" ||
 		values["Password"] != "*" || values["AuthenticationAuthority"] != ";DisabledUser;" || values["IsHidden"] != "1" {
-		return nil, errors.New("Darwin physical account lost its exclusive disabled identity")
+		return nil, desktopDarwinAccountAttributeFailure(values, account, uid)
 	}
 	compact := strings.ReplaceAll(strings.ToLower(values["GeneratedUID"]), "-", "")
 	if !desktopSocketHex(compact, 32) || len(values["GeneratedUID"]) != 36 {
