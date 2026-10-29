@@ -31,6 +31,7 @@ REQUIRED = (
     "TestDesktopSocketWindowsIdentityRetainsPartialCreationError",
     "TestDesktopSocketWindowsIdentityRejectsUnjoinedDuplicate",
     "TestDesktopSocketWindowsIdentityRejectsTokenStatisticsReplacement",
+    "TestDesktopSocketWindowsIdentityRejectsOtherExecutableAppID",
 )
 
 
@@ -87,6 +88,10 @@ def mutants(text):
          replace_once(text,
                       "properties.TokenModifiedID != p.statistics.ModifiedID || !bytes.Equal(appID, p.appID)",
                       "!bytes.Equal(appID, p.appID)")),
+        ("other-executable", REQUIRED[9], "identical file bytes replaced the independently read process appId",
+         replace_once(text,
+                      "properties.TokenModifiedID != p.statistics.ModifiedID || !bytes.Equal(appID, p.appID)",
+                      "properties.TokenModifiedID != p.statistics.ModifiedID")),
         ("bound-tuple", REQUIRED[3], "metadata changed the independently read bound tuple",
          replace_once(text,
                       "local.Addr() != creation.Binding.LocalAddress || local.Port() == 0",
@@ -209,7 +214,7 @@ def execute(source=ROOT, go="go", *, env=None):
             print("Rejected production Windows identity mutant:", name, flush=True)
         if checked_sources(source)[3] != before:
             raise ValueError("Windows identity source changed during its actual native gate")
-    print("Windows isolated identity passed nine kernel/lifecycle cases, all four socket families, and eight production negative controls; WFP permit enforcement remains a separate gate.", flush=True)
+    print("Windows isolated identity passed ten kernel/lifecycle cases, all four socket families, and nine production negative controls; WFP permit enforcement remains a separate gate.", flush=True)
 
 
 if __name__ == "__main__":

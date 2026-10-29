@@ -9,8 +9,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -622,5 +625,64 @@ func TestDesktopSocketWindowsIdentityRejectsTokenStatisticsReplacement(t *testin
 	}
 	if verifyErr == nil || !strings.Contains(verifyErr.Error(), "kernel identity") {
 		t.Fatal("caller token statistics replaced actual GetTokenInformation authority", verifyErr)
+	}
+}
+
+func TestDesktopSocketWindowsIdentityRejectsOtherExecutableAppID(t *testing.T) {
+	p := desktopWindowsIdentityTestNew(t)
+	creation := desktopWindowsIdentityTestCreation(t, p, "tcp", "127.0.0.1")
+	result := desktopWindowsIdentityTestCreate(t, p, creation)
+	desktopWindowsIdentityTestBind(t, result.Native, creation.Binding.LocalAddress)
+	if _, err := p.InspectSocket(p.ctx, creation); err != nil {
+		t.Fatal("actual normalized process image must pass before the alternate-file control", err)
+	}
+	captured, err := p.AppID()
+	if err != nil || !bytes.Equal(captured, p.appID) {
+		t.Fatal("captured WFP process identity was not available", err)
+	}
+	captured[0] ^= 0xff
+	immutable, err := p.AppID()
+	if err != nil || !bytes.Equal(immutable, p.appID) {
+		t.Fatal("caller changed the captured process appId", err)
+	}
+	executable, held, err := p.api.canonicalExecutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	otherPath := filepath.Join(t.TempDir(), "identical-bytes-other-executable.exe")
+	other, err := os.OpenFile(otherPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count, copyErr := io.Copy(other, held)
+	closeErr := other.Close()
+	heldInfo, statErr := held.Stat()
+	otherInfo, otherErr := os.Stat(otherPath)
+	if copyErr != nil || closeErr != nil || statErr != nil || otherErr != nil || count != heldInfo.Size() || os.SameFile(heldInfo, otherInfo) || executable == otherPath {
+		t.Fatal("alternate executable control did not copy the actual bytes to a distinct file", copyErr, closeErr, statErr, otherErr)
+	}
+	path, _ := syscall.UTF16PtrFromString(otherPath)
+	var blob *desktopWindowsBlob
+	status, _, _ := p.api.appID.Call(uintptr(unsafe.Pointer(path)), uintptr(unsafe.Pointer(&blob)))
+	if blob != nil {
+		defer p.api.freeWFP.Call(uintptr(unsafe.Pointer(&blob)))
+	}
+	if status != 0 || blob == nil || blob.Data == nil || blob.Size < 2 || blob.Size > 65536 {
+		t.Fatal("alternate real file did not provide its own WFP appId", syscall.Errno(status))
+	}
+	wrong := append([]byte(nil), unsafe.Slice(blob.Data, int(blob.Size))...)
+	if bytes.Equal(wrong, p.appID) {
+		t.Fatal("alternate executable control reused the real process appId")
+	}
+	if err := p.call(p.ctx, false, func() error { p.appID = wrong; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	_, inspectErr := p.InspectSocket(p.ctx, creation)
+	if err := p.call(p.ctx, false, func() error { p.appID = immutable; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if inspectErr == nil || !strings.Contains(inspectErr.Error(), "captured isolated token and process") {
+		t.Fatal("identical file bytes replaced the independently read process appId", inspectErr)
 	}
 }

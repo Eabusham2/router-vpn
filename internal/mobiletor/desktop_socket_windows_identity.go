@@ -311,6 +311,17 @@ func (p *DesktopWindowsSocketIdentity) SID() ([]byte, error) {
 	return append([]byte(nil), p.publicSID...), nil
 }
 
+// AppID returns the WFP identifier of the normalized, independently held actual
+// process image. Policy filters must use this captured copy, not derive a new
+// identity from an 8.3 alias or a caller-supplied executable spelling.
+func (p *DesktopWindowsSocketIdentity) AppID() ([]byte, error) {
+	owner, err := p.Owner()
+	if err != nil || !p.Current(p.capture, owner) {
+		return nil, net.ErrClosed
+	}
+	return append([]byte(nil), p.appID...), nil
+}
+
 func (p *DesktopWindowsSocketIdentity) Cancel() {
 	if p != nil {
 		p.closing.Store(true)

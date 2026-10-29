@@ -79,6 +79,7 @@ type desktopWindowsAccount struct {
 }
 
 type desktopWindowsIdentityAPI struct {
+	processImage, finalPath                        *syscall.Proc
 	userAdd, userGet, userSet, userDelete, netFree *syscall.Proc
 	logon, impersonate, revert, openThreadToken    *syscall.Proc
 	validSID, socket                               *syscall.Proc
@@ -127,6 +128,7 @@ func desktopWindowsIdentityNativeAPI() (*desktopWindowsIdentityAPI, error) {
 			name  string
 			procs map[string]**syscall.Proc
 		}{
+			{"kernel32.dll", map[string]**syscall.Proc{"QueryFullProcessImageNameW": &api.processImage, "GetFinalPathNameByHandleW": &api.finalPath}},
 			{"netapi32.dll", map[string]**syscall.Proc{"NetUserAdd": &api.userAdd, "NetUserGetInfo": &api.userGet, "NetUserSetInfo": &api.userSet, "NetUserDel": &api.userDelete, "NetApiBufferFree": &api.netFree}},
 			{"advapi32.dll", map[string]**syscall.Proc{"LogonUserW": &api.logon, "ImpersonateLoggedOnUser": &api.impersonate, "RevertToSelf": &api.revert, "OpenThreadToken": &api.openThreadToken, "IsValidSid": &api.validSID}},
 			{"ws2_32.dll", map[string]**syscall.Proc{"WSASocketW": &api.socket}},
@@ -385,10 +387,11 @@ func (a *desktopWindowsIdentityAPI) createUnderToken(token syscall.Token, sid []
 }
 
 func (a *desktopWindowsIdentityAPI) executableAppID() ([]byte, error) {
-	executable, err := os.Executable()
+	executable, held, err := a.canonicalExecutable()
 	if err != nil {
 		return nil, err
 	}
+	defer held.Close()
 	path, err := syscall.UTF16PtrFromString(executable)
 	if err != nil {
 		return nil, err
@@ -405,6 +408,55 @@ func (a *desktopWindowsIdentityAPI) executableAppID() ([]byte, error) {
 		return nil, errors.New("Windows socket process has no bounded kernel application identity")
 	}
 	return append([]byte(nil), unsafe.Slice(blob.Data, int(blob.Size))...), nil
+}
+
+func (a *desktopWindowsIdentityAPI) canonicalExecutable() (string, *os.File, error) {
+	process, err := syscall.GetCurrentProcess()
+	if err != nil {
+		return "", nil, err
+	}
+	buffer := make([]uint16, 32768)
+	length := uint32(len(buffer))
+	status, _, callErr := a.processImage.Call(uintptr(process), 0 /* Win32 image path */, uintptr(unsafe.Pointer(&buffer[0])), uintptr(unsafe.Pointer(&length)))
+	if status == 0 || length == 0 || length >= uint32(len(buffer)) {
+		return "", nil, desktopWindowsCallFailure("actual process image path", callErr)
+	}
+	// Query the running image, not argv[0] or a caller-supplied path. Windows
+	// may launch through an 8.3 alias (for example RUNNER~1); the kernel's ALE
+	// application identity names the normalized image. Keep its actual file
+	// open while resolving and asking WFP for the application identifier.
+	held, err := os.Open(syscall.UTF16ToString(buffer[:length]))
+	if err != nil {
+		return "", nil, err
+	}
+	failed := func(err error) (string, *os.File, error) {
+		return "", nil, errors.Join(err, held.Close())
+	}
+	info, err := held.Stat()
+	if err != nil {
+		return failed(err)
+	}
+	if !info.Mode().IsRegular() || info.Size() <= 0 {
+		return failed(errors.New("Windows process image is not a held regular executable"))
+	}
+	opened, err := os.Executable()
+	if err != nil {
+		return failed(err)
+	}
+	openedInfo, err := os.Stat(opened)
+	if err != nil || !os.SameFile(info, openedInfo) {
+		return failed(errors.Join(err, errors.New("Windows process image differs from the running executable file")))
+	}
+	lengthValue, _, callErr := a.finalPath.Call(held.Fd(), uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)), 0 /* FILE_NAME_NORMALIZED | VOLUME_NAME_DOS */)
+	if lengthValue == 0 || lengthValue >= uintptr(len(buffer)) {
+		return failed(desktopWindowsCallFailure("normalized held process image", callErr))
+	}
+	canonical := syscall.UTF16ToString(buffer[:lengthValue])
+	canonicalInfo, err := os.Stat(canonical)
+	if err != nil || !os.SameFile(info, canonicalInfo) {
+		return failed(errors.Join(err, errors.New("Windows normalized image path lost its held file identity")))
+	}
+	return canonical, held, nil
 }
 
 func desktopWindowsALEEndpoint(raw syscall.RawConn) (uint64, error) {
