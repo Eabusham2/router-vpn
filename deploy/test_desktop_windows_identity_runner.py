@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Check exact Windows identity source preparation without native side effects."""
 from pathlib import Path
+import contextlib
 import hashlib
 import importlib.util
+import io
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -88,6 +90,36 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
         (self.sources / GATE.CONNECT).unlink()
         with self.assertRaisesRegex(ValueError, "source/test closure is incomplete"):
             GATE.checked_sources(self.vendor)
+
+    def test_shipping_preparer_emits_the_complete_identity_source_closure(self):
+        # Exercise the real shared-source copying loop. The hand-copied fixtures
+        # above cannot detect a file omitted by the production preparer itself.
+        vendor = self.vendor.parent / "shipping-prepared"
+        vendor.mkdir()
+        prep = GATE.PREP
+        with patch.object(GATE, "ROOT", ROOT), \
+             patch.object(prep, "prepare_desktop_pt"), \
+             patch.object(prep.MTU, "prepare"), patch.object(prep.DESKTOP_MTU, "prepare"), \
+             patch.object(prep.STRATEGY, "prepare"), patch.object(prep.EXTERNAL, "prepare"), \
+             patch.object(prep, "prepare_network_startup"), \
+             patch.object(prep.RELAY.OPENVPN_REMOTE, "prepare"), \
+             contextlib.redirect_stdout(io.StringIO()):
+            prep.prepare(vendor)
+            source, target, package, records = GATE.checked_sources(vendor)
+            self.assertEqual((source, target, package),
+                             (vendor, vendor / "routervpn/mobiletor", "./routervpn/mobiletor"))
+            originals = tuple((ROOT / "internal/mobiletor").glob("desktop_socket_*.go"))
+            self.assertEqual(records, {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                                       for path in originals})
+            missing = target / "desktop_socket_pf_inventory_test.go"
+            expected = missing.read_bytes()
+            self.assertEqual(expected, prep.relocated_shared_source(
+                (ROOT / "internal/mobiletor" / missing.name).read_bytes()))
+            missing.unlink()
+            with self.assertRaisesRegex(ValueError, "actual regular copied file"):
+                GATE.checked_sources(vendor)
+            missing.write_bytes(expected)
+            GATE.checked_sources(vendor)
 
 
 if __name__ == "__main__":
