@@ -98,7 +98,7 @@ class OwnedDarwinPF(unittest.TestCase):
         self.assertNotIn('utun', active)
         self.assertNotIn('198.51.100.44', active)
         self.assertNotIn('pass out quick', active)
-        self.assertIn('block drop out quick all tagged ! ', active)
+        self.assertIn('block drop out quick all ! tagged ', active)
         self.watcher.assert_not_called()
         with patch.dict(os.environ, {'HOMEVPN_TOR_SESSION': '', 'HOMEVPN_TOR_SOURCE_SHA256': '',
                                      'HOMEVPN_TOR_PHYSICAL_BROKER': '', 'HOMEVPN_ENDPOINT': '198.51.100.44'}):

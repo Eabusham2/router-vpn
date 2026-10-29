@@ -60,7 +60,7 @@ func desktopDarwinPFBaseline(c DesktopSocketCapture, o DesktopDarwinSocketOption
 	if desktopDarwinPFTestScope != "" {
 		// The native fixture never installs a device-wide pass or deny. Even a
 		// missing-UID mutation is limited to its newly created loopback peers.
-		return fmt.Sprintf("pass out %s tag \"%s\" no state\nanchor \"physical/%s\" out\nblock drop out quick %s tagged ! \"%s\" label \"%s\"\n",
+		return fmt.Sprintf("pass out %s tag \"%s\" no state\nanchor \"physical/%s\" out\nblock drop out quick %s ! tagged \"%s\" label \"%s\"\n",
 			desktopDarwinPFTestScope, reset, c.SessionID, desktopDarwinPFTestScope, allowed, label)
 	}
 	lines := []string{
@@ -80,7 +80,7 @@ func desktopDarwinPFBaseline(c DesktopSocketCapture, o DesktopDarwinSocketOption
 			fmt.Sprintf("pass out inet6 to { fc00::/7, fe80::/10 } tag \"%s\" no state", allowed),
 			fmt.Sprintf("pass out inet6 to ff00::/8 tag \"%s\" no state", allowed))
 	}
-	lines = append(lines, fmt.Sprintf("block drop out quick all tagged ! \"%s\" label \"%s\"", allowed, label))
+	lines = append(lines, fmt.Sprintf("block drop out quick all ! tagged \"%s\" label \"%s\"", allowed, label))
 	return strings.Join(lines, "\n") + "\n"
 }
 
@@ -367,7 +367,7 @@ func (p *desktopDarwinPF) render() string {
 		lines = append(lines, "pass out on "+p.tunnel+" all tag \""+desktopDarwinPFAllowedTag(p.Capture)+"\" no state label \""+desktopDarwinPFLabel("tunnel\x00"+p.Capture.NetworkID+"\x00"+p.tunnel+"\x00"+strconv.FormatUint(uint64(p.index), 10))+"\"")
 	}
 	if desktopDarwinPFTestScope != "" {
-		lines = append(lines, "block drop out quick "+desktopDarwinPFTestScope+" tagged ! \""+desktopDarwinPFAllowedTag(p.Capture)+"\"")
+		lines = append(lines, "block drop out quick "+desktopDarwinPFTestScope+" ! tagged \""+desktopDarwinPFAllowedTag(p.Capture)+"\"")
 	}
 	return strings.Join(lines, "\n") + "\n"
 }

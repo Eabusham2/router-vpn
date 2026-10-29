@@ -27,9 +27,67 @@ import (
 type desktopDarwinFixture struct {
 	Nonce     string
 	Addresses []netip.Addr
+	Baselines []string
 }
 
 var desktopDarwinTestFixture desktopDarwinFixture
+
+// Compile the actual shipping Go and Python baselines, including device-wide
+// production rules, using pfctl -n only. The native fixture never loads them.
+// Traffic tests below load only their fresh loopback-scoped rules.
+func TestDesktopDarwinGuardianKernelPFCompiler(t *testing.T) {
+	if os.Geteuid() != 0 || len(desktopDarwinTestFixture.Baselines) != 4 {
+		t.Fatal("actual captured Darwin dispatcher/parser fixture is required")
+	}
+	capture := desktopSocketFixtureCapture()
+	scope := desktopDarwinPFTestScope
+	defer func() { desktopDarwinPFTestScope = scope }()
+	parse := func(name, rules string, valid bool) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		canonical, err := desktopDarwinPFCanonical(ctx, rules)
+		if valid && (err != nil || canonical == "") {
+			t.Fatal("actual PF parser rejected shipping "+name, err)
+		}
+		if !valid && (err == nil || !strings.Contains(err.Error(), "syntax error")) {
+			t.Fatal("historical misplaced tag negation did not reach the actual PF syntax rejection", name, err)
+		}
+	}
+	for index, lan := range []bool{false, true} {
+		options := DesktopDarwinSocketOptions{}
+		if lan {
+			for _, raw := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"} {
+				options.LANPrefixes = append(options.LANPrefixes, netip.MustParsePrefix(raw))
+			}
+		}
+		desktopDarwinPFTestScope = ""
+		active := desktopDarwinPFBaseline(capture, options)
+		if active != desktopDarwinTestFixture.Baselines[index*2] {
+			t.Fatal("shipping Go and Python PF baselines differ for the same capture/LAN policy")
+		}
+		parse(fmt.Sprintf("active/LAN=%t", lan), active, true)
+		parse(fmt.Sprintf("inactive/LAN=%t", lan), desktopDarwinTestFixture.Baselines[index*2+1], true)
+		broken := strings.ReplaceAll(active, "! tagged ", "tagged ! ")
+		if broken == active {
+			t.Fatal("PF compiler negative control lost its tag-negation boundary")
+		}
+		parse(fmt.Sprintf("misplaced-negation/LAN=%t", lan), broken, false)
+		desktopDarwinPFTestScope = scope
+		parse(fmt.Sprintf("scoped/LAN=%t", lan), desktopDarwinPFBaseline(capture, options), true)
+	}
+	policy := &desktopDarwinPF{Capture: capture, UID: 0, permits: make(map[string]desktopDarwinPFPermit)}
+	for _, network := range []string{"tcp", "udp"} {
+		for _, pair := range [][2]int{{0, 1}, {2, 3}} {
+			grant := DesktopSocketGrant{Capture: capture, SocketID: strings.Repeat("4", 32), Network: network,
+				Local:   netip.AddrPortFrom(desktopDarwinTestFixture.Addresses[pair[0]], 41111),
+				Remote:  netip.AddrPortFrom(desktopDarwinTestFixture.Addresses[pair[1]], 42222),
+				Binding: DesktopSocketBinding{InterfaceName: "lo0", InterfaceIndex: 1}, Sequence: 1}
+			policy.permits[network+grant.Local.String()] = desktopDarwinPFPermit{Grant: grant}
+		}
+	}
+	parse("complete scoped socket rules", policy.render(), true)
+}
 
 func TestDesktopDarwinGuardianKernelProtectedPathAuthority(t *testing.T) {
 	if os.Geteuid() != 0 || desktopDarwinTestFixture.Nonce == "" {
@@ -151,7 +209,7 @@ func init() {
 		os.Exit(86)
 	}
 	raw, err := os.ReadFile(path)
-	if err != nil || len(raw) > 4096 || json.Unmarshal(raw, &desktopDarwinTestFixture) != nil || !desktopSocketHex(desktopDarwinTestFixture.Nonce, 32) || len(desktopDarwinTestFixture.Addresses) != 4 {
+	if err != nil || len(raw) > 16384 || json.Unmarshal(raw, &desktopDarwinTestFixture) != nil || !desktopSocketHex(desktopDarwinTestFixture.Nonce, 32) || len(desktopDarwinTestFixture.Addresses) != 4 || len(desktopDarwinTestFixture.Baselines) != 4 {
 		fmt.Fprintln(os.Stderr, "native guardian fixture capture is invalid")
 		os.Exit(87)
 	}

@@ -61,7 +61,7 @@ def render_owned_pf_rules(lan_access: bool, capture: tuple[str, str] | None) -> 
                   f'pass out inet to 224.0.0.0/4 tag "{allowed}" no state',
                   f'pass out inet6 to {{ {", ".join(PRIVATE_V6)} }} tag "{allowed}" no state',
                   f'pass out inet6 to ff00::/8 tag "{allowed}" no state']
-    lines.append(f'block drop out quick all tagged ! "{allowed}" label "{label}"')
+    lines.append(f'block drop out quick all ! tagged "{allowed}" label "{label}"')
     return '\n'.join(lines)+'\n'
 
 

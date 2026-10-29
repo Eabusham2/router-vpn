@@ -31,7 +31,7 @@ SPEC = importlib.util.spec_from_file_location('darwin_guardian_uid', ROOT/'deplo
 UID = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UID)
 
-CASES = ('ProtectedPathAuthority', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'SocketRetirementReusesCapacity',
+CASES = ('PFCompiler', 'ProtectedPathAuthority', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'SocketRetirementReusesCapacity',
          'RetainedTunnel', 'BothOwnersCrashCannotReuseTuple', 'ForeignBlockAndLaterPass',
          'RejectsForeignStatefulDirections', 'BlockedControlRetainsSourcePort',
          'FinishRequiresDescriptorRetirement', 'FloatingStateRetirement',
@@ -61,6 +61,10 @@ def checked_sources(source: Path):
         if path.is_symlink() or copied.is_symlink() or not copied.is_file() or copied.read_bytes() != expected:
             raise ValueError('Darwin guardian lost its exact shared kernel ACL source')
         records['common/'+path.name] = hashlib.sha256(expected).hexdigest()
+    dispatcher = ROOT/'modes/darwin_kill_switch.py'
+    if dispatcher.is_symlink() or not dispatcher.is_file():
+        raise ValueError('The native PF parser proof requires the shipping dispatcher')
+    records['dispatcher/darwin_kill_switch.py'] = hashlib.sha256(dispatcher.read_bytes()).hexdigest()
     for name in ('go.mod', 'go.sum'):
         path = source/name
         if path.exists():
@@ -117,6 +121,16 @@ def stop_owned_children(binary):
         time.sleep(.02)
 
 
+def dispatcher_baselines():
+    """Carry exact shipping Python output into the native parse-only test."""
+    spec = importlib.util.spec_from_file_location('darwin_guardian_dispatcher', ROOT/'modes/darwin_kill_switch.py')
+    dispatcher = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dispatcher)
+    capture = ('1'*32, '2'*64)
+    return [dispatcher.render_owned_pf_rules(lan, owner)
+            for lan in (False, True) for owner in (capture, None)]
+
+
 def root_fixture(source_binary: Path, expected_digest: str, case=None):
     if platform.system() != 'Darwin' or os.geteuid() != 0:
         raise ValueError('The explicit Darwin kernel fixture requires a matching privileged host')
@@ -145,7 +159,8 @@ def root_fixture(source_binary: Path, expected_digest: str, case=None):
     addresses = [f'127.78.{octet}.10', f'127.78.{octet}.11',
                  str(ipaddress.ip_address(f'fd73:{nonce[2:6]}:{nonce[6:10]}::1')),
                  str(ipaddress.ip_address(f'fd73:{nonce[2:6]}:{nonce[6:10]}::2'))]
-    (root/'fixture.json').write_text(json.dumps({'Nonce': nonce, 'Addresses': addresses})+'\n')
+    (root/'fixture.json').write_text(json.dumps({'Nonce': nonce, 'Addresses': addresses,
+                                               'Baselines': dispatcher_baselines()})+'\n')
     (root/'fixture.json').chmod(0o644)
     aliases, token, dispatch, started = [], None, False, False
     result, failure = None, None
