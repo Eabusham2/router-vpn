@@ -45,6 +45,8 @@
 #include "lib/crypt_ops/crypto_rand.h"
 #include "lib/evloop/timers.h"
 #include "lib/time/compat_time.h"
+#include "lib/time/tvdiff.h"
+#include "lib/wallclock/tor_gettimeofday.h"
 #include "test/test.h"
 
 #define SESSION "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -812,14 +814,48 @@ static void test_real_directory(void *arg)
   command("STATUS " ID);
   tt_u64_op(value("end_reason"), OP_EQ, END_STREAM_REASON_DONE);
   tt_assert(strstr(f->reply, "state=ended"));
-  tt_int_op(connection_flush(ENTRY_TO_CONN(stream)), OP_EQ, 0);
-  close_closeable_connections();
   tor_socket_t client = (tor_socket_t)(uintptr_t)smartlist_get(f->peers, 1);
   char delivered[8193];
-  tt_int_op(read_all_from_socket(client, delivered, bytes), OP_EQ, (int)bytes);
+  size_t received = 0;
+  bool flushed = false, eof = false;
+  struct timeval started, now;
+  tor_gettimeofday(&started);
+  /* Both real endpoints are nonblocking. Start the receive before flushing
+   * to exercise an actual would-block on every host, then retain partial
+   * reads until the entire response and FIN arrive. The protocol clock above
+   * is deliberately mocked, so use a separate real-time bound for this I/O. */
+  for (unsigned attempt = 0; attempt < 1000 && !eof; ++attempt) {
+    /* A small read bound exercises partial delivery even when the local
+     * kernel happens to queue the entire response in one packet. */
+    size_t capacity = MIN(sizeof(delivered) - received, (size_t)17);
+    int count = (int)tor_socket_recv(client, delivered + received,
+                                    capacity, 0);
+    if (count > 0) {
+      received += (size_t)count;
+      tt_u64_op(received, OP_LE, bytes);
+    } else if (count == 0) {
+      eof = true;
+    } else {
+      int error = tor_socket_errno(client);
+      tt_assert(ERRNO_IS_EAGAIN(error) || ERRNO_IS_EINTR(error));
+      if (!flushed) {
+        tt_assert(ERRNO_IS_EAGAIN(error));
+        tt_int_op(connection_flush(ENTRY_TO_CONN(stream)), OP_EQ, 0);
+        close_closeable_connections();
+        flushed = true;
+      }
+      tor_sleep_msec(1);
+    }
+    tor_gettimeofday(&now);
+    long elapsed = tv_mdiff(&started, &now);
+    tt_int_op(elapsed, OP_GE, 0);
+    tt_int_op(elapsed, OP_LT, 5000);
+  }
+  tt_assert(flushed);
+  tt_assert(eof);
+  tt_u64_op(received, OP_EQ, bytes);
   delivered[bytes] = 0;
   tt_str_op(delivered, OP_EQ, response);
-  tt_int_op(tor_socket_recv(client, delivered, 1, 0), OP_EQ, 0);
   command("STATUS " ID);
   tt_assert(strstr(f->reply, "state=ended"));
   tt_u64_op(value("response_bytes"), OP_EQ, bytes);

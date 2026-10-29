@@ -26,7 +26,7 @@ import (
 const bundledTorVersion = "0.4.9.14"
 const bundledTorRevision = "4a522a3ca491c6c04d4a44cb006b92101c42efc1"
 const bundledTorSourceSHA = "ca52ffdbda44d1554c6ac0cadd7ce84bca2c1e1f46f5ca6c5aaab1d34bf0459f"
-const bundledTorPaddingSHA = "011dc1e4c3e3b60fcc3b72ec180252cff3003c37b03fbed132f2fe58e2cf8be5"
+const bundledTorPaddingSHA = "1987d9afea70bea6fd9f12919c95a99c25a7b474223119e07abfd1986b53dd45"
 const bundledTorMaxBytes = 64 << 20
 
 var bundledTorRecords = []string{"TOR-RUNTIME.json", "TOR-SOURCE-LOCK.json", "TOR-PADDING-SOURCE-LOCK.json", "TOR-LICENSES.json"}

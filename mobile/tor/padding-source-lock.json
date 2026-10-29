@@ -17,7 +17,7 @@
       "target": "src/feature/control/routervpn_padding.h"
     },
     "mobile/tor/test_routervpn_lastrelay.c": {
-      "sha256": "9052087bbaf451b1396ff85b584e196ce6ec1ca1e4d429299776a5c210f6c866",
+      "sha256": "6bbe584f916bebcc106fd19474bda3289c7a5f3f55edf456f7638091a4a8c927",
       "target": "src/test/test_routervpn_lastrelay.c"
     },
     "mobile/tor/test_routervpn_padding.c": {
