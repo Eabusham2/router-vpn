@@ -179,19 +179,34 @@ func desktopDarwinVerifyAccount(account string, uid uint32) error {
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(desktopDarwinIdentities, account)
-	if err := desktopDarwinProtectedPath(path, true); err != nil {
+	record, err := desktopDarwinReadIdentityRecord(account, uid)
+	if err != nil {
 		return err
 	}
-	raw, err := os.ReadFile(path)
-	if err != nil || len(raw) > 4096 {
-		return errors.New("Darwin physical recovery ownership is missing")
-	}
-	var record desktopDarwinIdentityRecord
-	if json.Unmarshal(raw, &record) != nil || !record.Capture.valid() || record.UID != uid || record.Account != account || record.GeneratedUID != values["GeneratedUID"] || record.GuardianPID <= 1 {
+	if record.GeneratedUID != values["GeneratedUID"] {
 		return errors.New("Darwin physical account differs from its private recovery capture")
 	}
 	return nil
+}
+
+func desktopDarwinReadIdentityRecord(account string, uid uint32) (desktopDarwinIdentityRecord, error) {
+	if !strings.HasPrefix(account, "_rvpnt_") || !desktopSocketHex(strings.TrimPrefix(account, "_rvpnt_"), 20) || uid < 0x40000000 || uid >= 0x80000000 {
+		return desktopDarwinIdentityRecord{}, errors.New("Darwin physical recovery identity is invalid")
+	}
+	path := filepath.Join(desktopDarwinIdentities, account)
+	if err := desktopDarwinProtectedPath(path, true); err != nil {
+		return desktopDarwinIdentityRecord{}, err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || len(raw) > 4096 {
+		return desktopDarwinIdentityRecord{}, errors.New("Darwin physical recovery ownership is missing")
+	}
+	var record desktopDarwinIdentityRecord
+	if json.Unmarshal(raw, &record) != nil || !record.Capture.valid() || record.UID != uid || record.Account != account || record.GuardianPID <= 1 ||
+		len(record.GeneratedUID) != 36 || !desktopSocketHex(strings.ReplaceAll(strings.ToLower(record.GeneratedUID), "-", ""), 32) {
+		return desktopDarwinIdentityRecord{}, errors.New("Darwin physical account differs from its private recovery capture")
+	}
+	return record, nil
 }
 
 type desktopDarwinIdentityRecord struct {
@@ -259,19 +274,60 @@ func desktopDarwinRetireAccount(account string, uid uint32) error {
 		return err
 	}
 	defer lock.Close()
-	if err := desktopDarwinVerifyAccount(account, uid); err != nil {
+	record, err := desktopDarwinReadIdentityRecord(account, uid)
+	if err != nil {
+		return err
+	}
+	verifyErr := desktopDarwinVerifyAccount(account, uid)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if verifyErr != nil {
+		// A prior attempt may already have deleted the exact account while
+		// native cache invalidation was still pending. A trusted recovery
+		// record can finish only from independent empty local name/UID reads;
+		// it cannot authorize deleting a changed or replacement account.
+		if err := desktopDarwinLocalIdentityAbsent(ctx, account, uid); err != nil {
+			return errors.Join(verifyErr, err)
+		}
+	} else {
+		if err := desktopDarwinNoUIDProcesses(uid); err != nil {
+			return err
+		}
+		if _, err := desktopDarwinCommand(ctx, "/usr/bin/dscl", nil, "/Local/Default", "-delete", "/Users/"+account); err != nil {
+			return err
+		}
+	}
+	if err := desktopDarwinLocalIdentityAbsent(ctx, account, uid); err != nil {
+		return err
+	}
+	if err := desktopDarwinWaitForUIDAbsence(ctx, uid, desktopDarwinUIDAbsentReadback); err != nil {
 		return err
 	}
 	if err := desktopDarwinNoUIDProcesses(uid); err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-	if _, err := desktopDarwinCommand(ctx, "/usr/bin/dscl", nil, "/Local/Default", "-delete", "/Users/"+account); err != nil {
+	if err := desktopDarwinLocalIdentityAbsent(ctx, account, uid); err != nil {
 		return err
 	}
-	if !desktopDarwinUIDAvailable(uid) {
-		return errors.New("Darwin physical identity retirement has no independent absent readback")
+	current, err := desktopDarwinReadIdentityRecord(account, uid)
+	if err != nil || current != record {
+		return errors.Join(err, errors.New("Darwin physical retirement recovery owner changed"))
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	return os.Remove(filepath.Join(desktopDarwinIdentities, account))
+}
+
+func desktopDarwinLocalIdentityAbsent(ctx context.Context, account string, uid uint32) error {
+	for _, query := range [][2]string{{"UniqueID", strconv.FormatUint(uint64(uid), 10)}, {"RecordName", account}} {
+		raw, err := desktopDarwinCommand(ctx, "/usr/bin/dscl", nil, "/Local/Default", "-search", "/Users", query[0], query[1])
+		if err != nil {
+			return errors.New("Darwin physical identity retirement local absence query did not complete")
+		}
+		if len(raw) > 4096 || len(bytes.TrimSpace(raw)) != 0 {
+			return errors.New("Darwin physical identity retirement retains a local name or UID owner")
+		}
+	}
+	return nil
 }

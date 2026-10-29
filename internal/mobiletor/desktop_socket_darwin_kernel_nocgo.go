@@ -15,6 +15,9 @@ func desktopDarwinReadSocket(int) (desktopDarwinKernelSocket, error) {
 }
 func desktopDarwinUIDAvailable(uint32) bool       { return false }
 func desktopDarwinUIDAccount(uint32, string) bool { return false }
+func desktopDarwinUIDAbsentReadback(uint32) (bool, error) {
+	return false, errors.New("Darwin physical identity lookup requires the native system namespace adapter")
+}
 func desktopDarwinNoUIDProcesses(uint32) error {
 	return errors.New("Darwin process identity readback requires the native libproc adapter")
 }

@@ -31,7 +31,7 @@ SPEC = importlib.util.spec_from_file_location('darwin_guardian_uid', ROOT/'deplo
 UID = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UID)
 
-CASES = ('PFCompiler', 'PFSystemDispatch', 'PFAnchorPaths', 'ProtectedPathAuthority', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'SocketRetirementReusesCapacity',
+CASES = ('PFCompiler', 'PFSystemDispatch', 'PFAnchorPaths', 'ProtectedPathAuthority', 'IdentityRetirement', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'SocketRetirementReusesCapacity',
          'RetainedTunnel', 'BothOwnersCrashCannotReuseTuple', 'ForeignBlockAndLaterPass',
          'RejectsForeignStatefulDirections', 'BlockedControlRetainsSourcePort',
          'FinishRequiresDescriptorRetirement', 'FloatingStateRetirement',
@@ -307,7 +307,7 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
         if any('--- PASS: TestDesktopDarwinGuardianKernel'+name+' (' not in output for name in wanted) or '--- SKIP:' in output:
             raise ValueError('Darwin guardian gate did not execute every required native boundary')
         if case is None:
-            for name in ('ChannelFragmentsAndDescriptorClosure', 'CurrentFreshnessAndStateScope'):
+            for name in ('ChannelFragmentsAndDescriptorClosure', 'CurrentFreshnessAndStateScope', 'UIDAbsenceWait'):
                 if '--- PASS: TestDesktopDarwinGuardian'+name+' (' not in output:
                     raise ValueError('Darwin guardian omitted its inherited-channel or freshness boundary')
             for network in ('tcp4','udp4','tcp6','udp6'):

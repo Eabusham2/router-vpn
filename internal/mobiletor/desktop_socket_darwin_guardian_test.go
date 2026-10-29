@@ -4,6 +4,7 @@ package mobiletor
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -510,6 +511,82 @@ func desktopDarwinKernelBroker(t *testing.T, policy *DesktopDarwinSocketPolicy) 
 		}
 	})
 	return broker
+}
+
+func TestDesktopDarwinGuardianKernelIdentityRetirement(t *testing.T) {
+	if os.Geteuid() != 0 || desktopDarwinTestFixture.Nonce == "" || !desktopDarwinKernelAvailable() {
+		t.Fatal("actual scoped Darwin identity fixture is required")
+	}
+	for _, state := range []string{"present", "deleted-before-native-readback", "changed-recovery-owner"} {
+		t.Run(state, func(t *testing.T) {
+			account, uid, err := desktopDarwinAllocateAccount(desktopSocketFixtureCapture())
+			if err != nil {
+				t.Fatal("actual disabled identity allocation failed", err)
+			}
+			path := filepath.Join(desktopDarwinIdentities, account)
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Prove the original identity before priming the actual libc cache.
+			if err := desktopDarwinVerifyAccount(account, uid); err != nil || !desktopDarwinUIDAccount(uid, account) {
+				t.Fatal("captured UID lost its actual native account", err)
+			}
+			if state == "changed-recovery-owner" {
+				var record desktopDarwinIdentityRecord
+				if err := json.Unmarshal(raw, &record); err != nil {
+					t.Fatal(err)
+				}
+				record.GeneratedUID = "00000000-0000-0000-0000-000000000000"
+				changed, err := json.Marshal(record)
+				if err != nil || os.WriteFile(path, changed, 0600) != nil {
+					t.Fatal("could not install the exact owned recovery negative")
+				}
+				restore := true
+				defer func() {
+					if restore {
+						os.WriteFile(path, raw, 0600)
+					}
+				}()
+				if err := desktopDarwinRetireAccount(account, uid); err == nil {
+					t.Fatal("changed recovery owner deleted a still-present account")
+				}
+				if _, err := desktopDarwinAccountRecord(account, uid); err != nil {
+					t.Fatal("rejected recovery mutated the independently owned account", err)
+				}
+				if current, err := os.ReadFile(path); err != nil || !bytes.Equal(current, changed) {
+					t.Fatal("rejected recovery discarded its quarantined record", err)
+				}
+				if err := os.WriteFile(path, raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+				restore = false
+			}
+			if state == "deleted-before-native-readback" {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				_, err := desktopDarwinCommand(ctx, "/usr/bin/dscl", nil, "/Local/Default", "-delete", "/Users/"+account)
+				cancel()
+				if err != nil {
+					t.Fatal("actual owned account deletion failed", err)
+				}
+				if _, err := os.Stat(path); err != nil {
+					t.Fatal("interrupted deletion lost its recovery record", err)
+				}
+			}
+			if err := desktopDarwinRetireAccount(account, uid); err != nil {
+				t.Fatal("actual identity retirement lost the native absence boundary", err)
+			}
+			if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("proved identity retirement retained its recovery owner", err)
+			}
+			if absent, err := desktopDarwinUIDAbsentReadback(uid); err != nil || !absent {
+				t.Fatal("identity retirement completed before actual native absence", err)
+			}
+			if err := desktopDarwinNoUIDProcesses(uid); err != nil {
+				t.Fatal("identity retirement retained an actual UID process", err)
+			}
+		})
+	}
 }
 
 func desktopDarwinKernelPeer(t *testing.T, network string) netip.AddrPort {

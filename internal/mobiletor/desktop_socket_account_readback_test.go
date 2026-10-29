@@ -1,9 +1,98 @@
 package mobiletor
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"testing/synctest"
+	"time"
 )
+
+func TestDesktopDarwinGuardianUIDAbsenceWait(t *testing.T) {
+	const uid = 0x40000001
+	for _, name := range []string{"immediate", "delayed", "never", "lookup-error", "cancelled", "parent-deadline", "late-absence"} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				start := time.Now()
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				if name == "cancelled" {
+					cancel()
+				}
+				if name == "parent-deadline" {
+					var deadlineCancel context.CancelFunc
+					ctx, deadlineCancel = context.WithTimeout(ctx, 30*time.Millisecond)
+					defer deadlineCancel()
+				}
+				lookupFailure := errors.New("independent native lookup failed")
+				calls := 0
+				err := desktopDarwinWaitForUIDAbsence(ctx, uid, func(actual uint32) (bool, error) {
+					calls++
+					if actual != uid {
+						t.Fatal("native UID absence probe borrowed another capture")
+					}
+					switch name {
+					case "immediate":
+						return true, nil
+					case "delayed":
+						return calls >= 3, nil
+					case "lookup-error":
+						return false, lookupFailure
+					case "late-absence":
+						time.Sleep(3 * time.Second)
+						return true, nil
+					default:
+						return false, nil
+					}
+				})
+				elapsed := time.Since(start)
+				switch name {
+				case "immediate":
+					if err != nil || calls != 1 || elapsed != 0 {
+						t.Fatal("already absent native UID did not finish its exact readback", calls, elapsed, err)
+					}
+				case "delayed":
+					if err != nil || calls != 3 || elapsed != 40*time.Millisecond {
+						t.Fatal("cached occupied UID was discarded before independent absent readback", calls, elapsed, err)
+					}
+				case "never":
+					if !errors.Is(err, context.DeadlineExceeded) || calls < 2 || elapsed != 2*time.Second {
+						t.Fatal("occupied native UID escaped its bounded quarantine", calls, elapsed, err)
+					}
+				case "lookup-error":
+					if !errors.Is(err, lookupFailure) || calls != 1 || elapsed != 0 {
+						t.Fatal("failed native UID lookup was treated as absent or retried away", calls, elapsed, err)
+					}
+				case "cancelled":
+					if !errors.Is(err, context.Canceled) || calls != 0 || elapsed != 0 {
+						t.Fatal("cancelled UID retirement acquired a new native readback", calls, elapsed, err)
+					}
+				case "parent-deadline":
+					if !errors.Is(err, context.DeadlineExceeded) || calls != 2 || elapsed != 30*time.Millisecond {
+						t.Fatal("native UID retirement extended its captured caller deadline", calls, elapsed, err)
+					}
+				case "late-absence":
+					if !errors.Is(err, context.DeadlineExceeded) || calls != 1 {
+						t.Fatal("late native UID absence installed a retired proof", calls, elapsed, err)
+					}
+				}
+			})
+		})
+	}
+	for _, invalid := range []uint32{0, 0x3fffffff, 0x80000000} {
+		if err := desktopDarwinWaitForUIDAbsence(context.Background(), invalid, func(uint32) (bool, error) {
+			t.Fatal("invalid UID acquired native lookup authority")
+			return true, nil
+		}); err == nil {
+			t.Fatal("invalid UID acquired retirement authority")
+		}
+	}
+	if desktopDarwinWaitForUIDAbsence(nil, uid, func(uint32) (bool, error) { return true, nil }) == nil ||
+		desktopDarwinWaitForUIDAbsence(context.Background(), uid, nil) == nil {
+		t.Fatal("missing retirement context or native observer was accepted")
+	}
+}
 
 func TestDesktopDarwinUIDSearchRequiresOneExactLocalAndNativeIdentity(t *testing.T) {
 	account := "_rvpnt_" + strings.Repeat("1", 20)

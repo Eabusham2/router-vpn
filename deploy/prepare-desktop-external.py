@@ -457,7 +457,7 @@ def prepare(vendor, go='go', *, env=None):
     for package in PURE:
         for path in sorted((ROOT/'internal'/package).glob('*.go')):
             if path.name.endswith('_test.go') and not (package == 'mobiletor' and path.name in (
-                    'desktop_socket_broker_test.go', 'desktop_socket_source_unix_test.go', 'desktop_socket_native_windows_test.go',
+                    'desktop_socket_broker_test.go', 'desktop_socket_account_readback_test.go', 'desktop_socket_source_unix_test.go', 'desktop_socket_native_windows_test.go',
                     'desktop_socket_tcp_completion_test.go',
                     'desktop_socket_windows_identity_test.go', 'desktop_socket_windows_wfp_test.go',
                     'desktop_socket_windows_probe_test.go', 'desktop_socket_windows_probe_process_test.go',

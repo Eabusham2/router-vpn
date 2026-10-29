@@ -121,7 +121,19 @@ func desktopDarwinReadSocket(fd int) (desktopDarwinKernelSocket, error) {
 }
 
 func desktopDarwinUIDAvailable(uid uint32) bool {
-	return C.routervpn_darwin_uid_exists(C.uint32_t(uid)) == 0
+	absent, err := desktopDarwinUIDAbsentReadback(uid)
+	return err == nil && absent
+}
+
+func desktopDarwinUIDAbsentReadback(uid uint32) (bool, error) {
+	code := C.routervpn_darwin_uid_exists(C.uint32_t(uid))
+	if code < 0 {
+		return false, syscall.Errno(-code)
+	}
+	if code > 1 {
+		return false, errors.New("Darwin physical identity lookup returned an unknown status")
+	}
+	return code == 0, nil
 }
 
 func desktopDarwinUIDAccount(uid uint32, account string) bool {
