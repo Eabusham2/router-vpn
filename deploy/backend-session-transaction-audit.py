@@ -57,8 +57,20 @@ for handler in ("saveProfile", "selectProfile", "deleteProfile", "importProfileB
 strategy = require(
     "cmd/client/strategy_modes.go",
     "func (a *app) strategyAuto", "func (a *app) strategySmartAuto", "func (a *app) strategyCustom",
-    "scheduleStartupPolicy(a)", "cancelPendingStartupPolicy", "applyStartupPolicyWithContext",
+    "cancelPendingStartupPolicy", "applyStartupPolicyWithContext",
     "errors.Is(err, errConnectionOperationCancelled)", "finalizeCancelledFallback",
+)
+require(
+    "cmd/client/controller_shutdown.go",
+    "if closing.a.controllerClosing()", "scheduleStartupPolicy(closing.a)",
+    "go closing.a.recordLastSuccessfulRuntime(closing.operations)",
+)
+require(
+    "cmd/client/controller_startup_owner_test.go",
+    "TestLocalControllerStartupRouteRegistrationIsPassive",
+    "TestLocalControllerStartupCapturedBeforeEOFCannotLaunchAfterEOF",
+    "TestLocalControllerStartupEOFDeniesHTTPWithoutCleanupScheduling",
+    "TestLocalControllerStartupAlreadyRetiredClosesBeforeServing",
 )
 for name, next_name in (("strategyAuto", "strategySmartAuto"), ("strategySmartAuto", "strategyCustom"), ("strategyCustom", "writeStrategyResult")):
     start = strategy.find(f"func (a *app) {name}")

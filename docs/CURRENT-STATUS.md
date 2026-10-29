@@ -9,7 +9,7 @@ completion of the current commit's packages, physical devices or deployment.
 
 The latest resumed check started at `f87b7809`, preserving the source already
 316 commits beyond historical release `745b3e41`. Current repairs and exact
-verified pushes through `34e032a7` are recorded in the
+verified pushes through `60d9ca2a` are recorded in the
 [continuation evidence ledger](CONTINUATION-EVIDENCE-2026-10-28.md).
 
 Private-Router Tor Local/Server/Compare is now implemented across desktop,
@@ -21,20 +21,38 @@ unfinished is historical and does not reopen that completed source work.
 
 Captured PQ/MAX initial-key phases now propagate through mobile multihop,
 desktop multihop/comparison, private-server acquisition and Android single-node
-startup. Cancellation and source ownership remain checked during the longer
-startup phase; ordinary probes and steady-state checks keep their existing
-limits. The separate desktop single-node readiness path is still being closed.
+startup. Desktop single-node readiness now also waits for its captured native
+initial-key phase before beginning private proof (`36f1546a`). Cancellation and
+source ownership remain checked during startup; ordinary probes and
+steady-state checks keep their existing limits.
 
 Fresh CI failures led to repairs of the actual Windows endpoint reservation,
 joined Tor process handle, Android permission/teardown fixtures, Apple compile
 dependencies, aggregate fixture deadline and selected privileged Go toolchain.
-Linux installer dependency checks now precede file replacement. The Direct
-dynamic-Tor DROP baseline is bound to its exact source/session, but the new
-Linux privileged guardian, public compiler/UI adoption and authenticated
-administrator launch path are not yet certified by a published complete batch.
-Windows/macOS dynamic Direct strict-protection factories remain unfinished.
+Linux Direct dynamic Tor now uses the captured native socket guardian and
+compiler/UI integration (`f6f2fc14`). Ten real kernel groups verify IPv4/IPv6
+TCP/UDP, exact identity/tuple enforcement, independent expiry and owned cleanup.
+The GitHub runner's inherited-mount teardown defect is fixed in `a6a2fde6`.
+These tests do not contact a public Tor circuit or the private router.
 
-The last inspected `34e032a7` authoritative workflow was still pending. No
+The installed Linux app now has an authenticated administrator launch and
+transactional upgrade path (`60d9ca2a`). Its GUI stays unprivileged, validates
+the retained child before releasing API credentials, and owns shutdown through
+an anonymous lifetime pipe. Route registration cannot start autoconnect; a
+closed owner immediately rejects queued startup and new requests. Six actual
+namespace privilege groups, GTK ownership tests, 24 installation/rollback
+tests and their negative controls pass. Interactive authorization, reboot and
+physical networking still require their separate acceptance evidence.
+
+Windows/macOS dynamic Direct strict-protection factories remain unfinished.
+The Windows WFP enforcement implementation passes its native contract, but
+the shipping Tor wrapper still uses its older firewall adapter; wiring and
+isolated dynamic socket identity remain source work. The macOS installed
+privileged launcher also needs an authenticated user/child lifetime.
+
+At `f6f2fc14`, the complete Windows native contract passed. At `60d9ca2a`,
+28 workflows were found: eight successful, with the rest pending, queued or
+running; the authoritative release run `40794768686` was pending. No
 current all-platform release, private deployment, signing operation or physical
 acceptance is claimed. Broader requested graph parity and all applicable live
 release requirements remain in scope.
