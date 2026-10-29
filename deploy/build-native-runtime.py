@@ -494,7 +494,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                  '-ldflags=-checklinkname=0', './cmd/sing-box', '-run', '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU)',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', './routervpn/desktoppt', '-run', '^Test(RouterVPN(DesktopTorPT|PhysicalFactory|LinuxPhysicalFactory)|DesktopTorNetworkOwner)',
+                 '-ldflags=-checklinkname=0', './routervpn/desktoppt', '-run', '^Test(RouterVPN(DesktopTorPT|PhysicalFactory|PhysicalTunnel|LinuxPhysicalFactory)|DesktopTorNetworkOwner)',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './routervpn/mobiletor', '-run', '^TestDesktopSocket',

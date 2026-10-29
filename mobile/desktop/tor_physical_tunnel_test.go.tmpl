@@ -1,0 +1,163 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"runtime"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type physicalTunnelCall struct {
+	capture mobiletor.DesktopSocketCapture
+	name    string
+	index   uint32
+	retire  bool
+}
+type physicalTunnelSource struct {
+	*physicalFactorySource
+	mu     sync.Mutex
+	calls  []physicalTunnelCall
+	before func()
+	err    error
+}
+
+func (s *physicalTunnelSource) change(ctx context.Context, capture mobiletor.DesktopSocketCapture, name string, index uint32, retire bool) error {
+	deadline, bounded := ctx.Deadline()
+	if !bounded || time.Until(deadline) > 3*time.Second || ctx.Err() != nil {
+		return errors.New("physical tunnel operation lost its bounded caller")
+	}
+	s.mu.Lock()
+	s.calls = append(s.calls, physicalTunnelCall{capture, name, index, retire})
+	s.mu.Unlock()
+	if s.before != nil {
+		s.before()
+	}
+	return s.err
+}
+func (s *physicalTunnelSource) BindTunnel(ctx context.Context, capture mobiletor.DesktopSocketCapture, name string, index uint32) error {
+	return s.change(ctx, capture, name, index, false)
+}
+func (s *physicalTunnelSource) RetireTunnel(ctx context.Context, capture mobiletor.DesktopSocketCapture, name string, index uint32) error {
+	return s.change(ctx, capture, name, index, true)
+}
+func physicalTunnelNetwork(t *testing.T, source mobiletor.DesktopSocketSource, policy mobiletor.DesktopSocketPolicy, activate bool) *NetworkOwner {
+	t.Helper()
+	n := physicalFactoryNetwork(t)
+	if err := n.PreparePhysicalBroker(func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, policy, current)
+		return broker, source, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := n.Start(adapter.StartStateInitialize); err != nil {
+		t.Fatal(err)
+	}
+	if activate {
+		if err := n.Start(adapter.StartStateStarted); err != nil {
+			t.Fatal(err)
+		}
+		options := testNetworkOptions()
+		if _, err := n.Activate(options.SessionID, options.SourceSHA256); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return n
+}
+func physicalTunnelTestSource() *physicalTunnelSource {
+	return &physicalTunnelSource{physicalFactorySource: &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}}
+}
+func TestRouterVPNPhysicalTunnelCapturesAndRetiresExactReader(t *testing.T) {
+	source := physicalTunnelTestSource()
+	n := physicalTunnelNetwork(t, source, source, true)
+	ctx := context.Background()
+	for _, call := range []physicalTunnelCall{
+		{n.brokerCapture(), "RouterVPN-TUN", 301, false},
+		{n.brokerCapture(), "RouterVPN-TUN", 301, true},
+		{n.brokerCapture(), "RouterVPN-TUN", 304, false},
+	} {
+		var err error
+		if call.retire {
+			err = n.RetirePhysicalTunnel(ctx, call.name, call.index)
+		} else {
+			err = n.BindPhysicalTunnel(ctx, call.name, call.index)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	source.mu.Lock()
+	defer source.mu.Unlock()
+	if len(source.calls) != 3 || source.calls[0].retire || !source.calls[1].retire || source.calls[2].retire ||
+		source.calls[0].capture != n.brokerCapture() || source.calls[1].index != 301 || source.calls[2].index != 304 {
+		t.Fatal("native tunnel grant did not preserve captured retirement and replacement order", source.calls)
+	}
+}
+func TestRouterVPNPhysicalTunnelRejectsUnstartedAndInvalidReaders(t *testing.T) {
+	for _, activated := range []bool{false, true} {
+		source := physicalTunnelTestSource()
+		n := physicalTunnelNetwork(t, source, source, activated)
+		for _, call := range []physicalTunnelCall{{name: "", index: 301}, {name: "RouterVPN-TUN", index: 0}} {
+			if err := n.BindPhysicalTunnel(context.Background(), call.name, call.index); err == nil {
+				t.Fatal("invalid native tunnel reader reached policy")
+			}
+		}
+		if !activated && n.BindPhysicalTunnel(context.Background(), "RouterVPN-TUN", 301) == nil {
+			t.Fatal("unstarted tunnel reader reached policy")
+		}
+		source.mu.Lock()
+		if len(source.calls) != 0 {
+			t.Error("invalid tunnel reader caused a policy operation")
+		}
+		source.mu.Unlock()
+	}
+}
+func TestRouterVPNPhysicalTunnelRejectsNativePolicyFailure(t *testing.T) {
+	for _, retire := range []bool{false, true} {
+		source := physicalTunnelTestSource()
+		source.err = errors.New("actual native policy rejection")
+		n := physicalTunnelNetwork(t, source, source, true)
+		if err := n.changePhysicalTunnel(context.Background(), "RouterVPN-TUN", 301, retire); !errors.Is(err, source.err) {
+			t.Fatal("native tunnel policy failure was reported as acknowledged", err)
+		}
+	}
+}
+func TestRouterVPNPhysicalTunnelRejectsLateNetworkCompletion(t *testing.T) {
+	source := physicalTunnelTestSource()
+	entered, release := make(chan struct{}), make(chan struct{})
+	source.before = func() { close(entered); <-release }
+	n := physicalTunnelNetwork(t, source, source, true)
+	result := make(chan error, 1)
+	go func() { result <- n.BindPhysicalTunnel(context.Background(), "RouterVPN-TUN", 301) }()
+	<-entered
+	n.InterfaceUpdated(context.Background())
+	close(release)
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("late tunnel grant acknowledged a retired physical generation")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("late tunnel operation did not return")
+	}
+}
+func TestRouterVPNPhysicalTunnelPreservesExistingOSBoundary(t *testing.T) {
+	source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+	n := physicalTunnelNetwork(t, source, source, true)
+	err := n.BindPhysicalTunnel(context.Background(), "RouterVPN-TUN", 301)
+	if runtime.GOOS == "windows" {
+		if err == nil {
+			t.Fatal("Windows accepted a source without its actual WFP tunnel lifecycle")
+		}
+	} else if err != nil {
+		t.Fatal("existing non-WFP baseline behavior changed", err)
+	}
+	ordinary := &NetworkOwner{}
+	if err := ordinary.BindPhysicalTunnel(nil, "", 0); err != nil {
+		t.Fatal("ordinary native path acquired a physical WFP requirement", err)
+	}
+}

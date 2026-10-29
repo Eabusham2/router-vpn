@@ -64,6 +64,15 @@ type DesktopSocketSourceRelease interface {
 	ReleaseSocket(context.Context, DesktopSocketCreation) error
 }
 
+// DesktopSocketTunnelPolicy is the OS firewall adapter whose tunnel permit
+// depends on a real interface identity. The native Box supplies its own TUN
+// readback and retires that permit before a serialized device replacement.
+// Linux's name-bound baseline does not need this additional WFP lifecycle.
+type DesktopSocketTunnelPolicy interface {
+	BindTunnel(context.Context, DesktopSocketCapture, string, uint32) error
+	RetireTunnel(context.Context, DesktopSocketCapture, string, uint32) error
+}
+
 func (s *desktopSocket) create(ctx context.Context) error {
 	if s.broker.source == nil {
 		return nil

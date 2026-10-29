@@ -43,6 +43,7 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'tor_physical.go.tmpl', 'tor_physical_test.go.tmpl',
                 'tor_physical_factory_test.go.tmpl',
                 'tor_physical_linux.go.tmpl', 'tor_physical_other.go.tmpl',
+                'tor_physical_tunnel.go.tmpl', 'tor_physical_tunnel_test.go.tmpl',
                 'tor_physical_linux_test.go.tmpl',
                 'tor_physical_source_unix_test.go.tmpl')
 BOX_TEMPLATES = {

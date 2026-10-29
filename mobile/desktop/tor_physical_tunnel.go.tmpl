@@ -1,0 +1,55 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"runtime"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// BindPhysicalTunnel receives the real Box-owned TUN readback. Windows WFP
+// permits that exact LUID, so an interface replacement requires an acknowledged
+// retire/rebind. The Linux name-bound baseline keeps its existing semantics.
+func (n *NetworkOwner) BindPhysicalTunnel(ctx context.Context, name string, index uint32) error {
+	return n.changePhysicalTunnel(ctx, name, index, false)
+}
+func (n *NetworkOwner) RetirePhysicalTunnel(ctx context.Context, name string, index uint32) error {
+	return n.changePhysicalTunnel(ctx, name, index, true)
+}
+func (n *NetworkOwner) changePhysicalTunnel(ctx context.Context, name string, index uint32, retire bool) error {
+	n.mu.Lock()
+	if !n.capture.PhysicalBroker {
+		n.mu.Unlock()
+		return nil
+	}
+	source, capture := n.physicalSource, n.brokerCapture()
+	current := n.activated && n.ready && !n.retired && n.ctx != nil && n.ctx.Err() == nil
+	n.mu.Unlock()
+	if !current || source == nil || ctx == nil || ctx.Err() != nil || name == "" || index == 0 {
+		return errors.New("desktop physical tunnel has no captured native reader")
+	}
+	policy, supported := source.(mobiletor.DesktopSocketTunnelPolicy)
+	if !supported {
+		if runtime.GOOS == "windows" {
+			return errors.New("Windows physical protection lost its actual WFP tunnel owner")
+		}
+		return nil
+	}
+	bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	var err error
+	if retire {
+		err = policy.RetireTunnel(bounded, capture, name, index)
+	} else {
+		err = policy.BindTunnel(bounded, capture, name, index)
+	}
+	n.mu.Lock()
+	current = n.activated && n.ready && !n.retired && n.ctx.Err() == nil && n.physicalSource == source && n.brokerCapture() == capture
+	n.mu.Unlock()
+	if err != nil || bounded.Err() != nil || !current {
+		return errors.Join(err, bounded.Err(), errors.New("desktop physical tunnel policy did not acknowledge this exact reader"))
+	}
+	return nil
+}

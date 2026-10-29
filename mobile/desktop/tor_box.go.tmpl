@@ -121,6 +121,9 @@ func (s *Box) RouterVPNDesktopTorCreate(policy *mobiletor.DesktopBridgePolicy) (
 		return nil, errors.New("desktop Tor native interface does not match its selected MTU")
 	}
 	owner.tun, owner.name, owner.index, owner.mtu = tun, name, index, mtu
+	if err := observer.BindPhysicalTunnel(ctx, name, uint32(index)); err != nil {
+		return nil, err
+	}
 	if policy.ServerPolicy() != nil {
 		server, ok := engine.routes[meta.FinalTag].(*routervpndesktoppt.ServerTorOutbound)
 		if !ok || server == nil || meta.Execution != "server" {

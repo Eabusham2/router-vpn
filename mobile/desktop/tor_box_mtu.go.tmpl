@@ -369,6 +369,10 @@ func (l *RouterVPNDesktopTorMTULease) changeMTUBounded(parent context.Context, e
 	if err != nil || finished == nil || operation.Err() != nil || !r.readerLifetimeCurrent() {
 		return expected, errors.New("desktop Tor MTU transition was not published by its captured command")
 	}
+	if err := r.network.RetirePhysicalTunnel(operation, name, uint32(index)); err != nil {
+		r.Cancel()
+		return expected, errors.New("desktop Tor MTU transition could not retire the captured tunnel policy")
+	}
 	current, changeErr := change(operation, expected, mtu)
 	if errors.Is(bounded.Err(), context.DeadlineExceeded) {
 		r.Cancel()
@@ -389,6 +393,10 @@ func (l *RouterVPNDesktopTorMTULease) changeMTUBounded(parent context.Context, e
 	r.tun, r.name, r.index, r.mtu = reader, name, index, actual
 	if current != expected {
 		r.mtuRevision++
+	}
+	if err := r.network.BindPhysicalTunnel(operation, name, uint32(index)); err != nil {
+		r.Cancel()
+		return nil, errors.New("desktop Tor MTU replacement could not prove its actual tunnel policy")
 	}
 	if e.identityLocked() == "" || !r.readerLifetimeCurrent() {
 		r.Cancel()
