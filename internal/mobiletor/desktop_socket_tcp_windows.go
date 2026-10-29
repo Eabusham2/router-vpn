@@ -177,34 +177,34 @@ func desktopSocketConnectOwnedTCP(ctx context.Context, c *desktopWindowsSocket) 
 	if err != nil && !errors.Is(err, desktopSocketWouldBlock) && !errors.Is(err, desktopSocketInProgress) && !errors.Is(err, desktopSocketAlready) {
 		return fmt.Errorf("Winsock Connect: %w", err)
 	}
-	for {
-		if ctx.Err() != nil {
-			return ctx.Err()
+	return desktopSocketCompleteTCP(ctx, err != nil, remote, func(ctx context.Context) error {
+		return c.wait(ctx, true)
+	}, func() error {
+		const socketError = 0x1007 // SO_ERROR, after actual completion only.
+		code, err := syscall.GetsockoptInt(c.handle, syscall.SOL_SOCKET, socketError)
+		if err != nil {
+			return err
 		}
+		if code != 0 {
+			return syscall.Errno(code)
+		}
+		return nil
+	}, func() (netip.AddrPort, error) {
 		peer, peerErr := syscall.Getpeername(c.handle)
-		if peerErr == nil {
-			var actual netip.AddrPort
-			switch peer := peer.(type) {
-			case *syscall.SockaddrInet4:
-				actual = netip.AddrPortFrom(netip.AddrFrom4(peer.Addr), uint16(peer.Port))
-			case *syscall.SockaddrInet6:
-				if peer.ZoneId == 0 {
-					actual = netip.AddrPortFrom(netip.AddrFrom16(peer.Addr), uint16(peer.Port))
-				}
+		if peerErr != nil {
+			return netip.AddrPort{}, peerErr
+		}
+		var actual netip.AddrPort
+		switch peer := peer.(type) {
+		case *syscall.SockaddrInet4:
+			actual = netip.AddrPortFrom(netip.AddrFrom4(peer.Addr), uint16(peer.Port))
+		case *syscall.SockaddrInet6:
+			if peer.ZoneId == 0 {
+				actual = netip.AddrPortFrom(netip.AddrFrom16(peer.Addr), uint16(peer.Port))
 			}
-			if actual != remote {
-				return errors.New("desktop physical connected peer changed")
-			}
-			break
 		}
-		if !errors.Is(peerErr, desktopSocketNotConnected) {
-			return fmt.Errorf("Winsock pending connected peer: %w", peerErr)
-		}
-		if err := c.wait(ctx, true); err != nil {
-			return fmt.Errorf("Winsock Connect polling: %w", err)
-		}
-	}
-	return nil
+		return actual, nil
+	})
 }
 
 func (c *desktopWindowsSocket) begin() error {
