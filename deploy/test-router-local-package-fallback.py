@@ -20,6 +20,10 @@ spec = importlib.util.spec_from_file_location("routervpn_local_fallback_pe", ROO
 assert spec and spec.loader
 PE_FIXTURE = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(PE_FIXTURE)
+spec = importlib.util.spec_from_file_location("routervpn_local_fallback_tor", ROOT / "deploy" / "desktop_tor_test_fixture.py")
+assert spec and spec.loader
+TOR_FIXTURE = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(TOR_FIXTURE)
 METADATA_READS = []
 METADATA_OVERLAY = b"\nROUTER_VPN_TEST_GO_METADATA\n"
 
@@ -71,13 +75,17 @@ def sealed_runtime_fixtures(root: Path, arch: str) -> None:
                                         + (json.dumps(header) + "\n" + module.marker(policy) + "\n").encode())
         raw = (directory / binary).read_bytes()
         if kind == "native":
-            for name in module.expected_names(target) - {binary}:
+            for name in module.expected_names(target) - {binary} - module.TOR.VERIFY.names(target):
                 if name == module.library_name(target):
                     (directory / name).write_bytes(PE_FIXTURE.image(target))
                 elif name == module.PT_NOTICES:
                     (directory / name).write_bytes(module.EXTERNAL.desktop_pt_notices())
                 else:
                     write(directory / name, "same-image " + name + "\n")
+            # Use the existing metadata-only Tor fixture: exact pinned source
+            # and license bytes plus independently parsed PE headers. The real
+            # package verifier still runs, without executing this test image.
+            TOR_FIXTURE.write(directory, target)
             files = {name: module.payload((directory / name).read_bytes())
                      for name in module.expected_names(target)}
             receipt = {**module.receipt_fields(target, policy), **files[binary], "files": files}
@@ -217,6 +225,30 @@ def runtime_rejection_controls(work: Path, source: Path, base: Path) -> int:
             reject_before_compile(work, source, "wrong-native-" + field)
             count += 1
         receipt_path.write_bytes(old_receipt)
+
+        # A valid outer runtime receipt must not hide an invalid inner Tor
+        # record. Reseal only that outer payload so rejection proves that the
+        # actual pinned Tor verifier still runs before controller compilation.
+        tor = ENGINES["native"].TOR.VERIFY
+        tor_receipt = json.loads((native / tor.RECEIPT).read_bytes())
+        wrong_target = {**tor_receipt, "target": "windows/arm64"}
+        for filename, corruption in (
+            (tor.SOURCE, b"{}\n"),
+            (tor.RECEIPT, json.dumps(wrong_target).encode()),
+        ):
+            path = native / filename
+            original = path.read_bytes()
+            try:
+                path.write_bytes(corruption)
+                receipt = json.loads(old_receipt)
+                receipt["files"][filename] = ENGINES["native"].payload(corruption)
+                receipt_path.write_text(json.dumps(receipt))
+                reject_before_compile(work, source, "resealed-inner-" + filename,
+                                      "Desktop Tor source, padding or execution identity changed")
+                count += 1
+            finally:
+                path.write_bytes(original)
+                receipt_path.write_bytes(old_receipt)
 
         # A matching file hash and receipt target cannot hide an executable
         # compiled for the other architecture: shipping metadata checks run.
