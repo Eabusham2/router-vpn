@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -140,20 +141,83 @@ func desktopSocketListener(t *testing.T) *net.TCPListener {
 	return listener
 }
 
-func desktopSocketAssertReserved(t *testing.T, network string, address netip.AddrPort) {
-	t.Helper()
+func desktopSocketReservationError(network string, address netip.AddrPort) error {
+	// net.Listen enables SO_REUSEADDR. On Darwin a reuse-enabled listener
+	// can bind beside an established TCP connection, so it does not test
+	// whether the captured socket still owns its exclusive bind. Require
+	// the same no-reuse kernel operation as a newly owned physical socket.
+	configured := false
+	listenerConfig := net.ListenConfig{Control: func(_, _ string, raw syscall.RawConn) error {
+		err := desktopSocketExclusive(raw)
+		configured = err == nil
+		return err
+	}}
+	var err error
 	if network == "tcp" {
-		listener, err := net.Listen("tcp", address.String())
-		if err == nil {
+		var listener net.Listener
+		listener, err = listenerConfig.Listen(context.Background(), "tcp", address.String())
+		if listener != nil {
 			listener.Close()
-			t.Fatal("live/unremoved socket released its exclusive source port")
 		}
 	} else {
-		packet, err := net.ListenPacket("udp", address.String())
-		if err == nil {
+		var packet net.PacketConn
+		packet, err = listenerConfig.ListenPacket(context.Background(), "udp", address.String())
+		if packet != nil {
 			packet.Close()
-			t.Fatal("live/unremoved UDP socket released its exclusive source port")
 		}
+	}
+	if !configured {
+		return errors.Join(errors.New("source-port probe did not establish exclusive socket options"), err)
+	}
+	if err == nil {
+		return errors.New("live/unremoved socket released its exclusive source port")
+	}
+	occupied := errors.Is(err, syscall.EADDRINUSE)
+	if runtime.GOOS == "windows" {
+		// Winsock reports an exclusive-address collision as either
+		// WSAEADDRINUSE or WSAEACCES, rather than Unix's EADDRINUSE.
+		occupied = errors.Is(err, syscall.Errno(10048)) || errors.Is(err, syscall.Errno(10013))
+	}
+	if !occupied {
+		return fmt.Errorf("source-port probe failed without proving an occupied address: %w", err)
+	}
+	return nil
+}
+
+func desktopSocketAssertReserved(t *testing.T, network string, address netip.AddrPort) {
+	t.Helper()
+	if err := desktopSocketReservationError(network, address); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDesktopSocketReservationProbeRejectsActuallyReleasedPort(t *testing.T) {
+	for _, network := range []string{"tcp", "udp"} {
+		t.Run(network, func(t *testing.T) {
+			var address netip.AddrPort
+			var closeSocket func() error
+			if network == "tcp" {
+				listener := desktopSocketListener(t)
+				address = listener.Addr().(*net.TCPAddr).AddrPort()
+				closeSocket = listener.Close
+			} else {
+				packet, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { packet.Close() })
+				address, closeSocket = packet.LocalAddr().(*net.UDPAddr).AddrPort(), packet.Close
+			}
+			if err := desktopSocketReservationError(network, address); err != nil {
+				t.Fatal("live real port was not retained", err)
+			}
+			if err := closeSocket(); err != nil {
+				t.Fatal(err)
+			}
+			if err := desktopSocketReservationError(network, address); err == nil || !strings.Contains(err.Error(), "released its exclusive source port") {
+				t.Fatal("source-port probe accepted a closed descriptor", err)
+			}
+		})
 	}
 }
 
@@ -192,12 +256,24 @@ func TestDesktopSocketBoundTCPBytesAndRemovalBeforeRelease(t *testing.T) {
 	if err := desktopSocketAwait(t, done); err != nil {
 		t.Fatal(err)
 	}
+	removalProof := make(chan error, 1)
 	p.revoke = func(_ context.Context, q DesktopSocketGrant) error {
-		desktopSocketAssertReserved(t, "tcp", q.Local)
+		// Report from the test goroutine after cleanup. FailNow here would
+		// abandon the production drain goroutine and hide the real failure
+		// behind Close waiting forever for its completion acknowledgment.
+		retained := connection.(*desktopSocketConn).socket.conn.(syscall.Conn)
+		raw, err := retained.SyscallConn()
+		if err == nil {
+			err = raw.Control(func(uintptr) {})
+		}
+		removalProof <- errors.Join(err, desktopSocketReservationError("tcp", q.Local))
 		return nil
 	}
 	if err := connection.Close(); err != nil {
 		t.Fatal(err)
+	}
+	if err := desktopSocketAwait(t, removalProof); err != nil {
+		t.Fatal("captured socket was released before permit removal", err)
 	}
 	removed := desktopSocketAwait(t, p.removed)
 	if removed.SocketID != request.SocketID || p.count() != 0 {
