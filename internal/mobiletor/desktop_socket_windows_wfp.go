@@ -387,7 +387,11 @@ func (e *desktopWFPEngine) free(pointer unsafe.Pointer) {
 }
 
 func (e *desktopWFPEngine) AddSublayer(key syscall.GUID, metadata []byte) error {
-	return e.addSublayer(key, metadata, true, 65535)
+	record, err := desktopWindowsParseBaseline(metadata)
+	if err != nil {
+		return err
+	}
+	return e.addSublayer(key, metadata, true, *record.SublayerWeight)
 }
 func (e *desktopWFPEngine) addSublayer(key syscall.GUID, metadata []byte, persistent bool, weight uint16) error {
 	arena := &desktopWFPArena{}
@@ -405,36 +409,61 @@ func (e *desktopWFPEngine) addSublayer(key syscall.GUID, metadata []byte, persis
 	return desktopWFPError("add baseline sublayer", status)
 }
 func (e *desktopWFPEngine) AssertSublayer(key syscall.GUID, metadata []byte) error {
-	actual, exists, err := e.ReadSublayer(key, true, 65535)
+	record, err := desktopWindowsParseBaseline(metadata)
+	if err != nil {
+		return err
+	}
+	actual, exists, err := e.ReadSublayer(key, true, *record.SublayerWeight)
 	if err != nil || !exists || !bytes.Equal(actual, metadata) {
 		return errors.Join(err, errors.New("WFP baseline sublayer lost its exact owner"))
 	}
 	return nil
 }
 func (e *desktopWFPEngine) ReadSublayer(key syscall.GUID, persistent bool, weight uint16) ([]byte, bool, error) {
+	snapshot, err := e.readSublayer(key, persistent)
+	if err != nil || snapshot == nil {
+		return nil, false, err
+	}
+	if snapshot.Weight != weight {
+		return nil, false, fmt.Errorf("WFP baseline sublayer changed its captured weight: weight=%d expected_weight=%d", snapshot.Weight, weight)
+	}
+	return snapshot.Metadata, true, nil
+}
+
+type desktopWFPSublayerSnapshot struct {
+	Metadata []byte
+	Weight   uint16
+}
+
+// BFE may assign the closest available weight rather than the requested value.
+// This initial read does not authorize an existing object: callers either just
+// added it in their own session or validate its weight against the canonical
+// captured baseline record. Active ownership always uses exact ReadSublayer.
+// https://learn.microsoft.com/windows/win32/fwp/installing-a-provider
+func (e *desktopWFPEngine) readSublayer(key syscall.GUID, persistent bool) (*desktopWFPSublayerSnapshot, error) {
 	var pointer *desktopWFPSubLayer
 	status, _, _ := e.api.getLayer.Call(uintptr(e.handle), uintptr(unsafe.Pointer(&key)), uintptr(unsafe.Pointer(&pointer)))
 	if uint32(status) == 0x80320007 {
-		return nil, false, nil
+		return nil, nil
 	}
 	if err := desktopWFPError("read baseline sublayer", status); err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if pointer == nil {
-		return nil, false, errors.New("WFP returned no baseline sublayer")
+		return nil, errors.New("WFP returned no baseline sublayer")
 	}
 	defer e.free(unsafe.Pointer(pointer))
 	flags := uint32(0)
 	if persistent {
 		flags = 1
 	}
-	if pointer.Key != key || pointer.Flags != flags || pointer.Weight != weight || pointer.Provider != nil || pointer.Metadata.Size == 0 || pointer.Metadata.Size > 16384 || pointer.Metadata.Data == nil {
-		return nil, false, fmt.Errorf("WFP baseline sublayer lost its exact owner: key_match=%t flags=%#x expected_flags=%#x weight=%d expected_weight=%d provider_present=%t metadata_size=%d metadata_present=%t", pointer.Key == key, pointer.Flags, flags, pointer.Weight, weight, pointer.Provider != nil, pointer.Metadata.Size, pointer.Metadata.Data != nil)
+	if pointer.Key != key || pointer.Flags != flags || pointer.Provider != nil || pointer.Metadata.Size == 0 || pointer.Metadata.Size > 16384 || pointer.Metadata.Data == nil {
+		return nil, fmt.Errorf("WFP baseline sublayer lost its exact owner: key_match=%t flags=%#x expected_flags=%#x weight=%d provider_present=%t metadata_size=%d metadata_present=%t", pointer.Key == key, pointer.Flags, flags, pointer.Weight, pointer.Provider != nil, pointer.Metadata.Size, pointer.Metadata.Data != nil)
 	}
 	if err := e.assertLayerSecurity(key); err != nil {
-		return nil, false, err
+		return nil, err
 	}
-	return append([]byte(nil), unsafe.Slice(pointer.Metadata.Data, int(pointer.Metadata.Size))...), true, nil
+	return &desktopWFPSublayerSnapshot{Metadata: append([]byte(nil), unsafe.Slice(pointer.Metadata.Data, int(pointer.Metadata.Size))...), Weight: pointer.Weight}, nil
 }
 func (e *desktopWFPEngine) DeleteSublayer(key syscall.GUID) error {
 	s, _, _ := e.api.deleteLayer.Call(uintptr(e.handle), uintptr(unsafe.Pointer(&key)))

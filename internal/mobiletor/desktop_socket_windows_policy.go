@@ -64,6 +64,7 @@ type DesktopWindowsSocketPolicy struct {
 	lockKey                     syscall.GUID
 	metadata                    []byte
 	lockMetadata                []byte
+	baselineWeight, lockWeight  uint16
 	baseline                    []desktopWFPRule
 	tunnel                      []desktopWFPRule
 	tunnelName                  string
@@ -265,7 +266,7 @@ func newDesktopWindowsPolicyOwner(ctx context.Context, capture DesktopSocketCapt
 	options.LANPrefixes = append([]netip.Prefix(nil), options.LANPrefixes...)
 	options.DHCP4Servers = append([]netip.Addr(nil), options.DHCP4Servers...)
 	lifetime, cancel := context.WithCancel(ctx)
-	p := &DesktopWindowsSocketPolicy{capture: capture, options: options, ctx: lifetime, cancel: cancel, gate: make(chan struct{}, 1), permits: make(map[string]*desktopWindowsPolicyPermit), bindings: make(map[string]DesktopSocketCreation), fixtureScope: append([]byte(nil), fixtureScope...)}
+	p := &DesktopWindowsSocketPolicy{capture: capture, options: options, ctx: lifetime, cancel: cancel, gate: make(chan struct{}, 1), permits: make(map[string]*desktopWindowsPolicyPermit), bindings: make(map[string]DesktopSocketCreation), fixtureScope: append([]byte(nil), fixtureScope...), baselineWeight: 65535}
 	p.gate <- struct{}{}
 	p.sublayer = desktopWindowsManagedKey("baseline", p.fixtureScope)
 	var err error
@@ -378,7 +379,6 @@ func (p *DesktopWindowsSocketPolicy) prepareBaseline() error {
 	if err != nil {
 		return err
 	}
-	p.baseline = p.compileBaseline()
 	return p.replaceBaseline()
 }
 func (p *DesktopWindowsSocketPolicy) expected() []desktopWFPRule {

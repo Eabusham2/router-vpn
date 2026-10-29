@@ -29,6 +29,7 @@ type desktopWindowsBaselineRecord struct {
 	LANPrefixes      []netip.Prefix       `json:"lan_prefixes"`
 	DHCP4Servers     []netip.Addr         `json:"dhcp4_servers"`
 	FixtureSHA256    string               `json:"fixture_sha256,omitempty"`
+	SublayerWeight   *uint16              `json:"sublayer_weight"`
 }
 
 func desktopWindowsManagedKey(kind string, fixtureScope []byte) syscall.GUID {
@@ -45,12 +46,13 @@ func desktopWindowsFixtureHash(scope []byte) string {
 	return hex.EncodeToString(digest[:])
 }
 func (p *DesktopWindowsSocketPolicy) baselineMetadata() ([]byte, error) {
-	return json.Marshal(desktopWindowsBaselineRecord{Schema: 1, Kind: "routervpn-owned-physical-baseline",
+	weight := p.baselineWeight
+	return json.Marshal(desktopWindowsBaselineRecord{Schema: 2, Kind: "routervpn-owned-physical-baseline",
 		Capture: p.capture, KillSwitchPolicy: p.options.KillSwitchPolicy,
 		LANPrefixes: p.options.LANPrefixes, DHCP4Servers: p.options.DHCP4Servers,
-		FixtureSHA256: desktopWindowsFixtureHash(p.fixtureScope)})
+		FixtureSHA256: desktopWindowsFixtureHash(p.fixtureScope), SublayerWeight: &weight})
 }
-func desktopWindowsDecodeBaseline(data, fixtureScope []byte) (*DesktopWindowsSocketPolicy, error) {
+func desktopWindowsParseBaseline(data []byte) (*desktopWindowsBaselineRecord, error) {
 	if len(data) == 0 || len(data) > 16384 {
 		return nil, errors.New("Windows baseline record exceeded its bound")
 	}
@@ -61,9 +63,8 @@ func desktopWindowsDecodeBaseline(data, fixtureScope []byte) (*DesktopWindowsSoc
 		return nil, errors.New("Windows baseline record is not a known captured policy")
 	}
 	canonical, err := json.Marshal(record)
-	if err != nil || !bytes.Equal(canonical, data) || record.Schema != 1 || record.Kind != "routervpn-owned-physical-baseline" ||
-		!record.Capture.valid() || record.KillSwitchPolicy != "always" && record.KillSwitchPolicy != "on-connect" ||
-		record.FixtureSHA256 != desktopWindowsFixtureHash(fixtureScope) {
+	if err != nil || !bytes.Equal(canonical, data) || record.Schema != 2 || record.Kind != "routervpn-owned-physical-baseline" ||
+		!record.Capture.valid() || record.KillSwitchPolicy != "always" && record.KillSwitchPolicy != "on-connect" || record.SublayerWeight == nil {
 		return nil, errors.New("Windows baseline record lost its canonical identity")
 	}
 	if err := desktopWindowsValidateLAN(record.LANPrefixes); err != nil {
@@ -72,9 +73,20 @@ func desktopWindowsDecodeBaseline(data, fixtureScope []byte) (*DesktopWindowsSoc
 	if err := desktopWindowsValidateDHCP(record.DHCP4Servers); err != nil {
 		return nil, err
 	}
+	return &record, nil
+}
+func desktopWindowsDecodeBaseline(data, fixtureScope []byte) (*DesktopWindowsSocketPolicy, error) {
+	record, err := desktopWindowsParseBaseline(data)
+	if err != nil {
+		return nil, err
+	}
+	if record.FixtureSHA256 != desktopWindowsFixtureHash(fixtureScope) {
+		return nil, errors.New("Windows baseline record lost its captured scope")
+	}
 	p := &DesktopWindowsSocketPolicy{capture: record.Capture, metadata: append([]byte(nil), data...),
 		sublayer: desktopWindowsManagedKey("baseline", fixtureScope), fixtureScope: append([]byte(nil), fixtureScope...),
-		options: DesktopWindowsSocketOptions{KillSwitchPolicy: record.KillSwitchPolicy, LANPrefixes: record.LANPrefixes, DHCP4Servers: record.DHCP4Servers}}
+		baselineWeight: *record.SublayerWeight,
+		options:        DesktopWindowsSocketOptions{KillSwitchPolicy: record.KillSwitchPolicy, LANPrefixes: record.LANPrefixes, DHCP4Servers: record.DHCP4Servers}}
 	p.baseline = p.compileBaseline()
 	return p, nil
 }
@@ -94,17 +106,78 @@ func (p *DesktopWindowsSocketPolicy) acquireBaselineLock() error {
 	}
 	p.locked = true
 	p.lockVerify = true
+	snapshot, err := p.leaseEngine.readSublayer(p.lockKey, false)
+	if err != nil || snapshot == nil || !bytes.Equal(snapshot.Metadata, p.lockMetadata) {
+		return errors.Join(err, errors.New("Windows physical baseline session lock was not captured"))
+	}
+	p.lockWeight = snapshot.Weight
 	return p.assertBaselineLock()
 }
 func (p *DesktopWindowsSocketPolicy) assertBaselineLock() error {
 	if !p.locked || p.leaseEngine == nil || p.leaseEngine.handle == 0 {
 		return errors.New("Windows physical baseline has no native session lock")
 	}
-	metadata, found, err := p.leaseEngine.ReadSublayer(p.lockKey, false, 0)
+	metadata, found, err := p.leaseEngine.ReadSublayer(p.lockKey, false, p.lockWeight)
 	if err != nil || !found || !bytes.Equal(metadata, p.lockMetadata) {
 		return errors.Join(err, errors.New("Windows physical baseline session lock changed"))
 	}
 	return p.leaseEngine.AssertComplete(p.lockKey, nil)
+}
+
+// Initial replacement/recovery reads have no trusted in-memory weight from the
+// old process. Its canonical record must supply that exact value, and the full
+// sublayer, ACL and rules are verified before any removal is authorized.
+func desktopWindowsReadBaseline(engine *desktopWFPEngine, key syscall.GUID, scope []byte) (*DesktopWindowsSocketPolicy, error) {
+	snapshot, err := engine.readSublayer(key, true)
+	if err != nil || snapshot == nil {
+		return nil, err
+	}
+	old, err := desktopWindowsDecodeBaseline(snapshot.Metadata, scope)
+	if err != nil {
+		return nil, err
+	}
+	if old.sublayer != key || snapshot.Weight != old.baselineWeight {
+		return nil, errors.New("Windows baseline record differs from its captured kernel weight")
+	}
+	return old, nil
+}
+
+// Called only inside replaceBaseline's BFE write transaction, before any new
+// filter exists. An empty initial add discovers BFE's assigned priority. A
+// normalized result is recorded and re-added atomically with that exact weight;
+// it is never inferred from an unrelated sublayer or accepted as later drift.
+func (p *DesktopWindowsSocketPolicy) addCapturedBaseline() error {
+	if err := p.baselineEngine.AddSublayer(p.sublayer, p.metadata); err != nil {
+		return err
+	}
+	snapshot, err := p.baselineEngine.readSublayer(p.sublayer, true)
+	if err != nil || snapshot == nil || !bytes.Equal(snapshot.Metadata, p.metadata) {
+		return errors.Join(err, errors.New("Windows baseline assigned weight was not captured"))
+	}
+	if err := p.baselineEngine.AssertComplete(p.sublayer, nil); err != nil {
+		return err
+	}
+	if snapshot.Weight != p.baselineWeight {
+		if err := p.baselineEngine.DeleteSublayer(p.sublayer); err != nil {
+			return err
+		}
+		p.baselineWeight = snapshot.Weight
+		p.metadata, err = p.baselineMetadata()
+		if err != nil {
+			return err
+		}
+		if err := p.baselineEngine.AddSublayer(p.sublayer, p.metadata); err != nil {
+			return err
+		}
+	}
+	if err := p.baselineEngine.AssertSublayer(p.sublayer, p.metadata); err != nil {
+		return err
+	}
+	if err := p.baselineEngine.AssertComplete(p.sublayer, nil); err != nil {
+		return err
+	}
+	p.baseline = p.compileBaseline()
+	return nil
 }
 
 func desktopWindowsDeleteBaseline(engine *desktopWFPEngine, old *DesktopWindowsSocketPolicy) error {
@@ -132,11 +205,9 @@ func (p *DesktopWindowsSocketPolicy) replaceBaseline() error {
 	// BFE's read/write transaction holds one lock across old-state readback,
 	// exact removal and new installation: there is no open gap and no second
 	// sublayer whose older drop rule can override this session's new permits.
-	metadata, found, err := p.baselineEngine.ReadSublayer(p.sublayer, true, 65535)
-	if err == nil && found {
-		var old *DesktopWindowsSocketPolicy
-		old, err = desktopWindowsDecodeBaseline(metadata, p.fixtureScope)
-		if err == nil && old.capture == p.capture {
+	old, err := desktopWindowsReadBaseline(p.baselineEngine, p.sublayer, p.fixtureScope)
+	if err == nil && old != nil {
+		if old.capture == p.capture {
 			err = errors.New("Windows physical baseline cannot reuse a former native capture")
 		}
 		if err == nil {
@@ -144,7 +215,7 @@ func (p *DesktopWindowsSocketPolicy) replaceBaseline() error {
 		}
 	}
 	if err == nil {
-		err = p.baselineEngine.AddSublayer(p.sublayer, p.metadata)
+		err = p.addCapturedBaseline()
 	}
 	if err == nil {
 		for index := range p.baseline {
@@ -177,20 +248,16 @@ func (p *DesktopWindowsSocketPolicy) resolveBaselineOwnership() error {
 	if err := p.baselineEngine.Abort(); err != nil {
 		return err
 	}
-	metadata, found, err := p.baselineEngine.ReadSublayer(p.sublayer, true, 65535)
+	old, err := desktopWindowsReadBaseline(p.baselineEngine, p.sublayer, p.fixtureScope)
 	if err != nil {
 		return err
 	}
-	if !found {
+	if old == nil {
 		if p.installed && !p.baselineRemovalAttempted {
 			return errors.New("Windows physical baseline disappeared before owned cleanup")
 		}
 		p.installed = false
 		return nil
-	}
-	old, err := desktopWindowsDecodeBaseline(metadata, p.fixtureScope)
-	if err != nil {
-		return err
 	}
 	if old.capture != p.capture {
 		if p.installed {
@@ -198,7 +265,7 @@ func (p *DesktopWindowsSocketPolicy) resolveBaselineOwnership() error {
 		}
 		return p.baselineEngine.AssertComplete(old.sublayer, old.baseline)
 	}
-	if !bytes.Equal(p.metadata, metadata) {
+	if !bytes.Equal(p.metadata, old.metadata) || p.baselineWeight != old.baselineWeight {
 		return errors.New("Windows physical baseline policy changed within its capture")
 	}
 	p.installed = true
@@ -283,22 +350,19 @@ func newDesktopWindowsProtectionRecovery(ctx context.Context, fixtureScope []byt
 		if err != nil {
 			return struct{}{}, err
 		}
-		metadata, found, err := p.baselineEngine.ReadSublayer(p.sublayer, true, 65535)
+		old, err := desktopWindowsReadBaseline(p.baselineEngine, p.sublayer, fixtureScope)
 		if err != nil {
 			return struct{}{}, err
 		}
-		if !found {
+		if old == nil {
 			p.baselineDone = true
 			return struct{}{}, nil
-		}
-		old, err := desktopWindowsDecodeBaseline(metadata, fixtureScope)
-		if err != nil {
-			return struct{}{}, err
 		}
 		if err := p.baselineEngine.AssertComplete(old.sublayer, old.baseline); err != nil {
 			return struct{}{}, err
 		}
 		p.capture, p.metadata, p.baseline = old.capture, old.metadata, old.baseline
+		p.baselineWeight = old.baselineWeight
 		p.options = old.options
 		p.options.KillSwitchPolicy = "on-connect" // only this explicit recovery authorizes removal of Always
 		p.installed = true
@@ -342,8 +406,8 @@ func (p *DesktopWindowsSocketPolicy) releaseBaselineLock() error {
 			}
 			reader = p.baselineEngine
 		}
-		metadata, found, err := reader.ReadSublayer(p.lockKey, false, 0)
-		if err != nil || found && bytes.Equal(metadata, p.lockMetadata) {
+		snapshot, err := reader.readSublayer(p.lockKey, false)
+		if err != nil || snapshot != nil && bytes.Equal(snapshot.Metadata, p.lockMetadata) {
 			return errors.Join(err, errors.New("Windows native session lock retirement was not proved"))
 		}
 		p.lockVerify = false

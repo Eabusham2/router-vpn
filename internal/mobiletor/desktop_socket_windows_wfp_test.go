@@ -7,9 +7,12 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net"
 	"net/netip"
+	"strconv"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -111,12 +114,12 @@ func TestDesktopSocketWindowsWFPActualBaseline(t *testing.T) {
 	if err := p.assertBaseline(); err != nil {
 		t.Fatal("actual complete baseline readback", err)
 	}
-	metadata, found, err := p.baselineEngine.ReadSublayer(p.sublayer, true, 65535)
+	metadata, found, err := p.baselineEngine.ReadSublayer(p.sublayer, true, p.baselineWeight)
 	if err != nil || !found || !bytes.Equal(metadata, p.metadata) {
 		t.Fatal("actual baseline record differs", err)
 	}
 	decoded, err := desktopWindowsDecodeBaseline(metadata, p.fixtureScope)
-	if err != nil || decoded.capture != p.capture {
+	if err != nil || decoded.capture != p.capture || decoded.baselineWeight != p.baselineWeight {
 		t.Fatal("baseline record did not preserve exact native capture", err)
 	}
 	if err := p.baselineEngine.AssertComplete(p.sublayer, decoded.baseline); err != nil {
@@ -132,6 +135,118 @@ func TestDesktopSocketWindowsWFPActualBaseline(t *testing.T) {
 	defer reader.Close()
 	if err := reader.SublayerAbsent(p.sublayer); err != nil {
 		t.Fatal("on-connect baseline remained after owned cleanup", err)
+	}
+}
+func TestDesktopSocketWindowsWFPAssignedWeights(t *testing.T) {
+	p := desktopWindowsWFPTestOwner(t, "on-connect", false)
+	for _, item := range []struct {
+		name       string
+		key        syscall.GUID
+		persistent bool
+		weight     uint16
+	}{{"session-lock", p.lockKey, false, p.lockWeight}, {"baseline", p.sublayer, true, p.baselineWeight}} {
+		actual, err := p.baselineEngine.readSublayer(item.key, item.persistent)
+		if err != nil || actual == nil || actual.Weight != item.weight {
+			t.Fatalf("%s did not retain its actual BFE-assigned weight: %v", item.name, err)
+		}
+		t.Logf("actual BFE-assigned %s weight=%d", item.name, actual.Weight)
+		if _, _, err := p.baselineEngine.ReadSublayer(item.key, item.persistent, item.weight^1); err == nil {
+			t.Fatal("captured WFP weight drift was accepted", item.name)
+		}
+	}
+	oldWeight := p.lockWeight
+	p.lockWeight ^= 1
+	err := p.assertBaselineLock()
+	p.lockWeight = oldWeight
+	if err == nil {
+		t.Fatal("active native lock accepted a substituted captured weight")
+	}
+	if err := p.assertBaseline(); err != nil {
+		t.Fatal("negative weight readback changed the real baseline", err)
+	}
+}
+
+func TestDesktopSocketWindowsWFPRejectsRecordedWeight(t *testing.T) {
+	p := desktopWindowsWFPTestOwner(t, "always", false)
+	if err := p.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := desktopWFPOpen(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	record, err := desktopWindowsParseBaseline(p.metadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherWeight := p.baselineWeight ^ 1
+	record.SublayerWeight = &otherWeight
+	changed, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only this test executable is affected. Change metadata and preserve every
+	// actual filter inside one write transaction; no unprotected gap is visible.
+	replace := func(metadata []byte) error {
+		if err := engine.Begin(); err != nil {
+			return err
+		}
+		var failure error
+		for _, rule := range p.baseline {
+			if failure = engine.Delete(rule.Key); failure != nil {
+				break
+			}
+		}
+		if failure == nil {
+			failure = engine.DeleteSublayer(p.sublayer)
+		}
+		if failure == nil {
+			failure = engine.addSublayer(p.sublayer, metadata, true, p.baselineWeight)
+		}
+		if failure == nil {
+			for index := range p.baseline {
+				if failure = engine.Add(&p.baseline[index]); failure != nil {
+					break
+				}
+			}
+		}
+		if failure == nil {
+			failure = engine.Commit()
+		}
+		if failure != nil {
+			return errors.Join(failure, engine.Abort())
+		}
+		return nil
+	}
+	defer func() {
+		if err := replace(p.metadata); err != nil {
+			t.Error("restore exact fixture-owned baseline record", err)
+		}
+	}()
+	if err := replace(changed); err != nil {
+		t.Fatal("install exact fixture-owned mismatched weight record", err)
+	}
+	actual, err := engine.readSublayer(p.sublayer, true)
+	if err != nil || actual == nil || actual.Weight != p.baselineWeight || !bytes.Equal(actual.Metadata, changed) {
+		t.Fatal("mismatched recorded weight fixture lost its actual kernel witness", err)
+	}
+	if _, err := desktopWindowsReadBaseline(engine, p.sublayer, p.fixtureScope); err == nil {
+		t.Fatal("prior-session record accepted a substituted kernel weight")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	recovery, err := newDesktopWindowsProtectionRecovery(ctx, p.fixtureScope)
+	if err == nil {
+		t.Fatal("explicit recovery accepted a substituted recorded weight")
+	}
+	if recovery != nil {
+		if err := recovery.Close(ctx); err != nil {
+			t.Fatal("rejected recovery could not retire its own empty session", err)
+		}
+	}
+	if err := engine.AssertComplete(p.sublayer, p.baseline); err != nil {
+		t.Fatal("rejected recovery changed the prior baseline", err)
 	}
 }
 func TestDesktopSocketWindowsWFPRejectsActiveOwner(t *testing.T) {
@@ -210,7 +325,8 @@ func TestDesktopSocketWindowsWFPRejectsNoncanonicalRecords(t *testing.T) {
 	p := desktopWindowsWFPTestOwner(t, "on-connect", false)
 	for _, bad := range [][]byte{
 		append(append([]byte(nil), p.metadata...), '\n'),
-		bytes.Replace(p.metadata, []byte(`"schema":1`), []byte(`"schema":2`), 1),
+		bytes.Replace(p.metadata, []byte(`"schema":2`), []byte(`"schema":3`), 1),
+		bytes.Replace(p.metadata, []byte(`"sublayer_weight":`+strconv.Itoa(int(p.baselineWeight))), []byte(`"sublayer_weight":null`), 1),
 		bytes.Replace(p.metadata, []byte(`"lan_prefixes":null`), []byte(`"lan_prefixes":["0.0.0.0/0"]`), 1),
 		bytes.Replace(p.metadata, []byte(`"kind":"routervpn-owned-physical-baseline"`), []byte(`"kind":"foreign-policy"`), 1),
 	} {

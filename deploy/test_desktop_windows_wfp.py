@@ -28,6 +28,8 @@ REQUIRED = (
     "TestDesktopSocketWindowsWFPRejectsAdditionalPermit",
     "TestDesktopSocketWindowsWFPRejectsNoncanonicalRecords",
     "TestDesktopSocketWindowsWFPExplicitRecovery",
+    "TestDesktopSocketWindowsWFPAssignedWeights",
+    "TestDesktopSocketWindowsWFPRejectsRecordedWeight",
 )
 
 
@@ -48,8 +50,18 @@ def mutants(target):
         ("canonical-record", "desktop_socket_windows_baseline.go", REQUIRED[5],
          "untrusted WFP record acquired baseline replacement authority",
          IDENTITY.replace_once(baseline,
-                               "err != nil || !bytes.Equal(canonical, data) || record.Schema != 1",
-                               "err != nil || len(canonical) == 0 || record.Schema != 1")),
+                               "err != nil || !bytes.Equal(canonical, data) || record.Schema != 2",
+                               "err != nil || len(canonical) == 0 || record.Schema != 2")),
+        ("active-weight", "desktop_socket_windows_wfp.go", REQUIRED[7],
+         "captured WFP weight drift was accepted",
+         IDENTITY.replace_once(wfp,
+                               "if snapshot.Weight != weight {",
+                               "if false && snapshot.Weight != weight {")),
+        ("recorded-weight", "desktop_socket_windows_baseline.go", REQUIRED[8],
+         "prior-session record accepted a substituted kernel weight",
+         IDENTITY.replace_once(baseline,
+                               "old.sublayer != key || snapshot.Weight != old.baselineWeight",
+                               "old.sublayer != key")),
     )
 
 
@@ -102,7 +114,7 @@ def execute(source=ROOT, go="go", *, env=None):
             print("Rejected production WFP mutant:", label, flush=True)
         if IDENTITY.checked_sources(source)[3] != before:
             raise ValueError("WFP source changed during its actual native gate")
-    print("Owned Windows WFP baseline passed seven actual kernel/lifecycle cases and three production negative controls; socket traffic and native admission remain separately gated.", flush=True)
+    print("Owned Windows WFP baseline passed nine actual kernel/lifecycle cases and five production negative controls; socket traffic and native admission remain separately gated.", flush=True)
 
 
 if __name__ == "__main__":
