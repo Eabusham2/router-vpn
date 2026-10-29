@@ -141,14 +141,18 @@ func require(_ condition:Bool,_ message:String) {
     delegate.shutdownPanel?.close()
     print("Actual native AppKit root peer, HTTP identity, bearer admission and joined exit: PASS")
 }
-if CommandLine.arguments.contains("--reject-unsafe-supervisor-acl") {
-    do { _ = try RouterVPNMacOwnedProcess.launch(); require(false,"Native AppKit trusted a mutable supervisor directory ACL") }
-    catch {
-        require(error.localizedDescription.contains("ACL permissions"),"Native AppKit failed before exercising its actual ACL authority check: "+error.localizedDescription)
-        print("Actual native AppKit unsafe supervisor ACL rejected: PASS")
+// A Swift 5 executable's synchronous entry point is the actual main thread,
+// but does not implicitly acquire MainActor isolation on every supported SDK.
+MainActor.assumeIsolated {
+    if CommandLine.arguments.contains("--reject-unsafe-supervisor-acl") {
+        do { _ = try RouterVPNMacOwnedProcess.launch(); require(false,"Native AppKit trusted a mutable supervisor directory ACL") }
+        catch {
+            require(error.localizedDescription.contains("ACL permissions"),"Native AppKit failed before exercising its actual ACL authority check: "+error.localizedDescription)
+            print("Actual native AppKit unsafe supervisor ACL rejected: PASS")
+        }
+    } else {
+        do { try runNativeOwner() } catch { require(false,error.localizedDescription) }
     }
-} else {
-    do { try runNativeOwner() } catch { require(false,error.localizedDescription) }
 }
 '''.replace('COMPARISON', comparison).replace('PROGRESS_TRANSPORT', progress_transport).replace('API\n', api + '\n').replace('DELEGATE', delegate).replace('METHODS', methods)
 
