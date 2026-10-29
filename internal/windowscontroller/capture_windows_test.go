@@ -5,8 +5,10 @@ package windowscontroller
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -201,6 +203,91 @@ func (drive *fixtureDOSDrive) replace(directory string) error {
 	return nil
 }
 
+// A Shell-compatible spelling is useful only if its naming object is itself
+// retained, rather than checked once before UAC. This failure diagnostic tests
+// that possible authority using a newly owned unused drive only. It changes no
+// system drive, admits no process, and does not assume a symbolic-link handle
+// prevents removal/replacement: both the retained object and a fresh namespace
+// lookup are independently read after the attempted rebind.
+func fixtureRetainedDOSLinkDiagnostic(t *testing.T, first, second string) {
+	t.Helper()
+	drive := newFixtureDOSDrive(t, first)
+	api, err := native()
+	if err != nil {
+		t.Log("retained DOS naming diagnostic native API:", err)
+		return
+	}
+	dll, err := syscall.LoadDLL(filepath.Join(api.systemDirectory, "ntdll.dll"))
+	if err != nil {
+		t.Log("retained DOS naming diagnostic system DLL:", err)
+		return
+	}
+	defer dll.Release()
+	open, err := dll.FindProc("NtOpenSymbolicLinkObject")
+	if err != nil {
+		t.Log("retained DOS naming diagnostic open API:", err)
+		return
+	}
+	query, err := dll.FindProc("NtQuerySymbolicLinkObject")
+	if err != nil {
+		t.Log("retained DOS naming diagnostic query API:", err)
+		return
+	}
+	type unicodeString struct {
+		Length, MaximumLength uint16
+		Buffer                *uint16
+	}
+	type objectAttributes struct {
+		Length                     uint32
+		Root                       syscall.Handle
+		Name                       *unicodeString
+		Flags                      uint32
+		Security, QualityOfService uintptr
+	}
+	encoded, _ := syscall.UTF16FromString(`\??\` + drive.name)
+	name := unicodeString{uint16((len(encoded) - 1) * 2), uint16(len(encoded) * 2), &encoded[0]}
+	attributes := objectAttributes{Name: &name, Flags: 0x40 /* OBJ_CASE_INSENSITIVE; query only */}
+	attributes.Length = uint32(unsafe.Sizeof(attributes))
+	if unsafe.Sizeof(name) != 16 || unsafe.Sizeof(attributes) != 48 {
+		t.Log("retained DOS naming diagnostic has an unexpected native ABI")
+		return
+	}
+	var held syscall.Handle
+	status, _, _ := open.Call(uintptr(unsafe.Pointer(&held)), 1 /* SYMBOLIC_LINK_QUERY */, uintptr(unsafe.Pointer(&attributes)))
+	runtime.KeepAlive(encoded)
+	runtime.KeepAlive(name)
+	runtime.KeepAlive(attributes)
+	if held != 0 {
+		defer syscall.CloseHandle(held)
+	}
+	if uint32(status) != 0 || held == 0 {
+		t.Logf("retained DOS naming diagnostic open NTSTATUS=0x%08x retained=%t", uint32(status), held != 0)
+		return
+	}
+	read := func() (string, error) {
+		buffer := make([]uint16, 32767)
+		target := unicodeString{MaximumLength: uint16(len(buffer) * 2), Buffer: &buffer[0]}
+		var returned uint32
+		status, _, _ := query.Call(uintptr(held), uintptr(unsafe.Pointer(&target)), uintptr(unsafe.Pointer(&returned)))
+		if uint32(status) != 0 || target.Length == 0 || target.Length%2 != 0 || target.Length > target.MaximumLength {
+			return "", fmt.Errorf("retained symbolic-link query NTSTATUS=0x%08x", uint32(status))
+		}
+		value := syscall.UTF16ToString(buffer[:target.Length/2])
+		runtime.KeepAlive(buffer)
+		return value, nil
+	}
+	before, beforeErr := read()
+	if beforeErr != nil || !strings.EqualFold(before, drive.target) {
+		t.Log("retained DOS naming diagnostic did not capture its exact initial target:", beforeErr)
+		return
+	}
+	rebindErr := drive.replace(second)
+	after, afterErr := read()
+	fresh, freshErr := drive.read(drive.name)
+	t.Logf("retained DOS naming diagnostic rebind=%v retained_same=%t retained_read=%v fresh_same=%t fresh_read=%v", rebindErr,
+		strings.EqualFold(after, before), afterErr, strings.EqualFold(fresh, before), freshErr)
+}
+
 func TestWindowsControllerFoundationCapturedVolumeSurvivesDriveRebind(t *testing.T) {
 	identity, err := CurrentIdentity()
 	if err != nil || !identity.Elevated || !identity.Administrator {
@@ -247,6 +334,7 @@ func TestWindowsControllerFoundationCapturedVolumeSurvivesDriveRebind(t *testing
 		}()
 	}
 	if err != nil || process == nil {
+		fixtureRetainedDOSLinkDiagnostic(t, first, second)
 		t.Fatal("actual UAC could not launch the retained local volume image:", err)
 	}
 	if err := pipe.Accept(ctx); err != nil {
