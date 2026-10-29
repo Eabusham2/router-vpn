@@ -791,8 +791,10 @@ func TestWindowsControllerGUIActualSystemPowerShell(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	image, err := PinImage(filepath.Join(api.systemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"))
+	path := filepath.Join(api.systemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe")
+	image, err := PinImage(path)
 	if err != nil {
+		guiObserveSystemPowerShellImage(t, path)
 		t.Fatal("actual system PowerShell could not retain its native executable identity:", err)
 	}
 	defer image.Close()
@@ -820,6 +822,56 @@ func TestWindowsControllerGUIActualSystemPowerShell(t *testing.T) {
 	}
 	if exit, err := child.Wait(ctx); err != nil || exit != 0 {
 		t.Fatal("actual system PowerShell did not complete its fixed bounded command:", exit, err)
+	}
+}
+
+// Failure-only readback identifies the exact rejected native component before
+// considering any system-runtime-specific policy. It neither retries launch
+// nor changes general PinImage rejection, permissions, file contents or links.
+func guiObserveSystemPowerShellImage(t *testing.T, path string) {
+	t.Helper()
+	root, err := executableRoot(path)
+	if err != nil {
+		t.Log("actual system PowerShell diagnostic path:", err)
+		return
+	}
+	var handles []syscall.Handle
+	defer func() {
+		for index := len(handles) - 1; index >= 0; index-- {
+			if err := syscall.CloseHandle(handles[index]); err != nil {
+				t.Error("actual system PowerShell diagnostic handle did not retire:", err)
+			}
+		}
+	}()
+	parts := strings.Split(path[len(root):], `\`)
+	current := root
+	for index := -1; index < len(parts); index++ {
+		if index >= 0 {
+			current = filepath.Join(current, parts[index])
+		}
+		last := index == len(parts)-1
+		access, share, flags := uint32(0x80), uint32(syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE), uint32(0x00200000|0x02000000)
+		if last {
+			access, share, flags = syscall.GENERIC_READ, syscall.FILE_SHARE_READ, 0x00200000
+		}
+		name, err := syscall.UTF16PtrFromString(current)
+		if err != nil {
+			t.Log("actual system PowerShell diagnostic encoding:", err)
+			return
+		}
+		held, err := syscall.CreateFile(name, access, share, nil, syscall.OPEN_EXISTING, flags, 0)
+		if err != nil {
+			t.Logf("actual system PowerShell component=%q open=%v", current, err)
+			return
+		}
+		handles = append(handles, held)
+		var info syscall.ByHandleFileInformation
+		err = syscall.GetFileInformationByHandle(held, &info)
+		kind, kindErr := syscall.GetFileType(held)
+		t.Logf("actual system PowerShell component=%q last=%t attributes=0x%08x links=%d volume=0x%08x file=0x%08x%08x type=%d read=%v type_read=%v", current, last, info.FileAttributes, info.NumberOfLinks, info.VolumeSerialNumber, info.FileIndexHigh, info.FileIndexLow, kind, err, kindErr)
+		if err != nil || kindErr != nil {
+			return
+		}
 	}
 }
 
