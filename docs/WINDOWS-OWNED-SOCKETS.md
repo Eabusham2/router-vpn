@@ -77,13 +77,47 @@ backpressured, checks independent data expiry and retained source handle/port
 ownership, and kills a separate process to inspect BFE dynamic-object rundown.
 The crash case deliberately exercises BFE lifecycle without creating an orphan
 test account; isolated-token cleanup has its own identity and traffic cases.
-These are required tests, not a claim that a particular Windows run has passed.
+These are required tests. At commit
+`d6337bea2ee3c5f6d52351b0971b0c95bbc98649`, the completed identity, baseline and
+traffic steps in [Windows job 123224546154](https://github.com/Eabusham2/router-vpn/actions/runs/40805819408/job/123224546154)
+passed: 17 identity cases with 12 rejected production mutants; 12 baseline and
+status cases with eight rejected mutants; TCP/UDP IPv4/IPv6 transfer and renewal,
+blocked-control backpressure, actual process death, selected-adapter DHCP
+readback, and two rejected traffic mutants. That workflow was subsequently
+cancelled. These completed step results establish their named native
+boundaries, not a complete release or the still-pending full shipping path.
 
 The same runner exercises read-only DHCP capture for an actual IPv4 adapter and
 rejects missing, substituted or malformed lease records. The factory helper
 selects by the captured interface index, never by adapter enumeration order.
 Static IPv4 adds no renewal server, and IPv6-only execution does not call this
 IPv4 API. No DNS lookup, adapter change, route change or DHCP request is made.
+
+### Generated native factory
+
+`mobile/desktop/tor_physical_windows.go.tmpl` is registered in the same pinned
+native preparation as the Linux and Darwin factories. It installs the owned
+source at native Initialize, after default-interface capture and before TUN
+startup. The real network monitor's selected name, index, addresses and masks
+must agree with kernel readback. IPv6 Off omits that family's physical binding;
+Home LAN uses the selected adapter's actual private or link-local subnets. The
+factory captures only that adapter's IPv4 DHCP server and separately projects
+the compiler's exact literal private destinations. No profile supplies an
+account SID, token, LUID, firewall object key or helper executable.
+
+Changes to the captured interface identity, address list, mask or up state
+invalidate the in-memory generation. The WFP owner independently rechecks its
+kernel LUID and local address before socket grants. A partial or late native
+constructor remains owned through cancellation and Close; it cannot be
+discarded while its operation is still completing.
+
+Matching Windows native packaging runs `TestRouterVPNWindowsPhysicalFactory`.
+Those wiring tests read the actual adapter, mask and DHCP lease and exercise
+Initialize, replacement, partial-owner retention and teardown. They explicitly
+replace only the privileged constructor and therefore do not substitute for
+the real WFP gate or the final compiler-to-native selected-DNS and wrapper
+composition. Public Windows strict dynamic admission remains closed until that
+composition is verified.
 
 The WFP baseline gate by itself does not prove connected socket traffic or the
 shipping Windows wrapper/factory composition. Those gates and the complete

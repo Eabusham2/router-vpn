@@ -272,9 +272,14 @@ Linux socket run do not establish any of these Darwin kernel results.
 
 ## Remaining platform boundaries
 
-Windows still needs a separately protected session identity, exact WFP permits
-and independently owned dynamic-session cleanup in the final shipping factory
-and launcher composition. The macOS foundation and captured launcher above
+Windows now has actual native evidence for its isolated token/socket identity,
+exact WFP baseline and socket permits, four-family connected traffic/renewal,
+blocked-control cleanup and process-death rundown. The generated Windows
+factory captures the real adapter, mask, DHCP lease and generation; its
+constructor-seam tests establish wiring only. The final compiler-to-native
+selected-DNS and launcher composition remains required before public admission.
+See [Windows owned sockets](WINDOWS-OWNED-SOCKETS.md) for the exact completed
+job steps and their release limits. The macOS foundation and captured launcher above
 still need their actual
 native compiler/kernel result and final compiler/admission integration.
 Its broader foreign-stateful PF coexistence remains a separate unfinished

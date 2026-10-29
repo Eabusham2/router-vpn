@@ -92,7 +92,8 @@ class DesktopPTPreparation(unittest.TestCase):
                      'tor_physical.go.tmpl', 'tor_physical_test.go.tmpl',
                      'tor_physical_source_unix_test.go.tmpl', 'tor_physical_linux.go.tmpl', 'tor_physical_darwin.go.tmpl',
                      'tor_physical_other.go.tmpl', 'tor_physical_factory_test.go.tmpl',
-                     'tor_physical_linux_test.go.tmpl'):
+                     'tor_physical_linux_test.go.tmpl', 'tor_physical_windows.go.tmpl',
+                     'tor_physical_windows_test.go.tmpl'):
             self.assertIn(name, PREP.PT_TEMPLATES)
         traffic = (self.vendor/'routervpn/desktoppt/tor_pt_entry_traffic_test.go').read_text()
         for name in ('MeekTLS', 'WebTunnelTLS', 'SnowflakeTraffic'):

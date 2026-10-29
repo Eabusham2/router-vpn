@@ -1,0 +1,188 @@
+//go:build windows
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"slices"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/service"
+)
+
+func (n *NetworkOwner) PreparePhysicalPolicy(policy *mobiletor.DesktopBridgePolicy) error {
+	return n.preparePhysicalWindows(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopWindowsSocketOptions) (desktopWindowsPhysicalPolicy, error) {
+		owned, err := mobiletor.NewDesktopWindowsSocketPolicy(ctx, capture, options)
+		if owned == nil {
+			return nil, err
+		}
+		return owned, err
+	})
+}
+
+type desktopWindowsPhysicalPolicy interface {
+	mobiletor.DesktopSocketPolicy
+	mobiletor.DesktopSocketSource
+	mobiletor.DesktopSocketTunnelPolicy
+}
+
+// The only constructor seam is the privileged owner. Interface capture,
+// selected policy projection, partial-source retention and native activation
+// execute the same path in tests and production. No profile may supply a SID,
+// token, LUID, helper path or firewall identifier.
+func (n *NetworkOwner) preparePhysicalWindows(policy *mobiletor.DesktopBridgePolicy,
+	create func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopWindowsSocketOptions) (desktopWindowsPhysicalPolicy, error)) error {
+	if policy == nil || !policy.PhysicalBroker() || policy.Metadata().TargetOS != "windows" ||
+		policy.Predecessor() != nil || policy.ServerPolicy() != nil ||
+		!n.Matches(policy.Metadata().SessionID, policy.SourceSHA256()) || create == nil {
+		return errors.New("Windows physical sockets require the exact captured Direct Tor policy")
+	}
+	destinations, err := policy.PhysicalDestinations()
+	if err != nil {
+		return err
+	}
+	meta := policy.Metadata()
+	options := mobiletor.DesktopWindowsSocketOptions{
+		KillSwitchPolicy: meta.KillSwitchPolicy,
+		IPv6Enabled:      meta.IPv6Mode != "off",
+	}
+	for _, destination := range destinations {
+		address, err := netip.ParseAddr(destination.Host)
+		if err != nil || address.String() != destination.Host || destination.Port < 1 || destination.Port > 65535 ||
+			(destination.Network != "tcp" && destination.Network != "udp") {
+			return errors.New("Windows physical exception lost its compiled literal tuple")
+		}
+		if address.IsPrivate() {
+			options.PrivateDestinations = append(options.PrivateDestinations, mobiletor.DesktopWindowsSocketDestination{
+				Network: destination.Network, Address: netip.AddrPortFrom(address, uint16(destination.Port)),
+			})
+		}
+	}
+	return n.preparePhysicalWindowsOwner(meta, options, create)
+}
+
+// The concrete compiler adapter above is the only production caller. Keeping
+// native initialization separate lets the executable wiring tests exercise
+// real adapter/DHCP readback and partial-owner teardown while public Windows
+// strict-profile admission remains closed pending complete composition proof.
+func (n *NetworkOwner) preparePhysicalWindowsOwner(meta mobiletor.DesktopBridgeMetadata, options mobiletor.DesktopWindowsSocketOptions,
+	create func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopWindowsSocketOptions) (desktopWindowsPhysicalPolicy, error)) error {
+	if meta.TargetOS != "windows" || !meta.PhysicalBroker || !n.Matches(meta.SessionID, meta.SourceSHA256) || create == nil ||
+		(meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always") ||
+		options.KillSwitchPolicy != meta.KillSwitchPolicy || options.IPv6Enabled != (meta.IPv6Mode != "off") ||
+		len(options.Interfaces) != 0 || len(options.LANPrefixes) != 0 || len(options.DHCP4Servers) != 0 {
+		return errors.New("Windows physical initialization lost its captured policy or acquired foreign interface authority")
+	}
+	options.PrivateDestinations = append([]mobiletor.DesktopWindowsSocketDestination(nil), options.PrivateDestinations...)
+	return n.PreparePhysicalBroker(func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		manager := service.FromContext[adapter.NetworkManager](ctx)
+		if manager == nil || !manager.AutoDetectInterface() || manager.InterfaceMonitor() == nil {
+			return nil, nil, errors.New("Windows physical factory requires the initialized native network monitor")
+		}
+		selected := manager.DefaultNetworkInterface()
+		interfaces, lan, err := desktopWindowsPhysicalInterfaces(selected, options.IPv6Enabled, meta.HomeLANAccess)
+		if err != nil {
+			return nil, nil, err
+		}
+		index, name := selected.Index, selected.Name
+		addresses := append([]netip.Prefix(nil), selected.Addresses...)
+		physicalCurrent := func() bool {
+			if !current() {
+				return false
+			}
+			actual := manager.DefaultNetworkInterface()
+			return actual != nil && actual.Index == index && actual.Name == name &&
+				actual.Flags&net.FlagUp != 0 && actual.Flags&net.FlagLoopback == 0 && slices.Equal(actual.Addresses, addresses)
+		}
+		options.Interfaces, options.LANPrefixes = interfaces, lan
+		for _, binding := range interfaces {
+			if binding.Address.Is4() {
+				options.DHCP4Servers, err = mobiletor.DesktopWindowsPhysicalDHCPServers(binding.Index)
+				if err != nil {
+					return nil, nil, err
+				}
+				break
+			}
+		}
+		if ctx.Err() != nil || !physicalCurrent() {
+			return nil, nil, errors.New("Windows physical network changed during lease capture")
+		}
+		owned, err := create(ctx, capture, options)
+		if err != nil {
+			if owned == nil {
+				return nil, nil, err
+			}
+			return nil, owned, err
+		}
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, owned, physicalCurrent)
+		return broker, owned, err
+	})
+}
+
+// Windows Home LAN uses the actual selected local subnet, rather than granting
+// every RFC1918 network. Both address and mask must match native monitor and
+// kernel readback. The WFP owner captures and rechecks the corresponding LUID;
+// no selected name/index alone grants authority after an adapter is replaced.
+func desktopWindowsPhysicalInterfaces(selected *adapter.NetworkInterface, ipv6, homeLAN bool) ([]mobiletor.DesktopWindowsSocketInterface, []netip.Prefix, error) {
+	if selected == nil || selected.Index <= 0 || selected.Name == "" || selected.Flags&net.FlagUp == 0 || selected.Flags&net.FlagLoopback != 0 {
+		return nil, nil, errors.New("Windows physical default interface is unavailable")
+	}
+	actual, err := net.InterfaceByIndex(selected.Index)
+	if err != nil || actual.Name != selected.Name || actual.Flags&net.FlagUp == 0 || actual.Flags&net.FlagLoopback != 0 {
+		return nil, nil, errors.New("Windows physical interface changed before capture")
+	}
+	addresses, err := actual.Addrs()
+	if err != nil {
+		return nil, nil, err
+	}
+	available := make(map[netip.Prefix]bool)
+	for _, value := range addresses {
+		prefix, err := netip.ParsePrefix(value.String())
+		if err == nil {
+			available[prefix] = true
+		}
+	}
+	var result []mobiletor.DesktopWindowsSocketInterface
+	var lan []netip.Prefix
+	seenLAN := make(map[netip.Prefix]bool)
+	var found4, found6 bool
+	for _, prefix := range selected.Addresses {
+		address := prefix.Addr()
+		if !address.IsValid() || !available[prefix] || address.IsLoopback() || address.Is4In6() || address.Zone() != "" || (!ipv6 && address.Is6()) {
+			continue
+		}
+		if homeLAN && (address.IsPrivate() || address.IsLinkLocalUnicast()) {
+			network := prefix.Masked()
+			if !seenLAN[network] {
+				seenLAN[network] = true
+				lan = append(lan, network)
+			}
+			if len(lan) > 32 {
+				return nil, nil, errors.New("Windows selected LAN exceeds its captured subnet bound")
+			}
+		}
+		if !address.IsGlobalUnicast() {
+			continue
+		}
+		if address.Is4() {
+			if found4 {
+				continue
+			}
+			found4 = true
+		} else {
+			if found6 {
+				continue
+			}
+			found6 = true
+		}
+		result = append(result, mobiletor.DesktopWindowsSocketInterface{Name: selected.Name, Index: uint32(selected.Index), Address: address})
+	}
+	if len(result) == 0 {
+		return nil, nil, errors.New("Windows physical default has no captured usable address")
+	}
+	return result, lan, nil
+}

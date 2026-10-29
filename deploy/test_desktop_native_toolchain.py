@@ -137,6 +137,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                 physical = [args for args in calls if './routervpn/desktoppt' in args]
                 self.assertEqual(len(physical), 1)
                 self.assertIn('PhysicalFactory|PhysicalTunnel|LinuxPhysicalFactory', physical[0][physical[0].index('-run') + 1])
+                self.assertIn('DarwinPhysicalFactory|WindowsPhysicalFactory', physical[0][physical[0].index('-run') + 1])
 
 
 class NativeSetup(unittest.TestCase):

@@ -1,0 +1,292 @@
+//go:build windows
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"reflect"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/common/control"
+	"github.com/sagernet/sing/service"
+)
+
+type windowsPhysicalFactoryNetwork struct {
+	*desktopPTNetwork
+	selected atomic.Pointer[adapter.NetworkInterface]
+}
+
+func (n *windowsPhysicalFactoryNetwork) DefaultNetworkInterface() *adapter.NetworkInterface {
+	return n.selected.Load()
+}
+
+func windowsPhysicalFixtureInterface(t *testing.T) *adapter.NetworkInterface {
+	t.Helper()
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, actual := range interfaces {
+		if actual.Flags&net.FlagUp == 0 || actual.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		selected, err := control.InterfaceFromNet(actual)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, prefix := range selected.Addresses {
+			if prefix.Addr().Is4() && prefix.Addr().IsGlobalUnicast() {
+				return &adapter.NetworkInterface{Interface: selected}
+			}
+		}
+	}
+	t.Fatal("Windows native factory test requires the runner's existing physical IPv4 interface")
+	return nil
+}
+
+func TestRouterVPNWindowsPhysicalFactoryUsesActualDefaultAddressAndMask(t *testing.T) {
+	selected := windowsPhysicalFixtureInterface(t)
+	for _, lan := range []bool{false, true} {
+		captured, prefixes, err := desktopWindowsPhysicalInterfaces(selected, false, lan)
+		if err != nil || len(captured) != 1 || !captured[0].Address.Is4() || captured[0].Name != selected.Name || captured[0].Index != uint32(selected.Index) {
+			t.Fatal("Windows factory substituted the actual physical IPv4 owner or enabled IPv6", captured, err)
+		}
+		var expected []netip.Prefix
+		for _, prefix := range selected.Addresses {
+			if lan && prefix.Addr().Is4() && (prefix.Addr().IsPrivate() || prefix.Addr().IsLinkLocalUnicast()) {
+				masked := prefix.Masked()
+				duplicate := false
+				for _, prior := range expected {
+					duplicate = duplicate || prior == masked
+				}
+				if !duplicate {
+					expected = append(expected, masked)
+				}
+			}
+		}
+		if !reflect.DeepEqual(prefixes, expected) {
+			t.Fatal("Windows factory widened Home LAN beyond the actual selected subnets", prefixes, expected)
+		}
+	}
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, actual := range interfaces {
+		if actual.Flags&net.FlagLoopback == 0 {
+			continue
+		}
+		selected, err := control.InterfaceFromNet(actual)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := desktopWindowsPhysicalInterfaces(&adapter.NetworkInterface{Interface: selected}, true, true); err == nil {
+			t.Fatal("a real loopback interface reached the production physical factory")
+		}
+	}
+}
+
+func TestRouterVPNWindowsPhysicalFactoryRejectsFalseKernelInterface(t *testing.T) {
+	selected := windowsPhysicalFixtureInterface(t)
+	for _, fault := range []string{"nil", "index", "name", "down", "loopback", "address", "mask"} {
+		copy := *selected
+		copy.Addresses = append([]netip.Prefix(nil), selected.Addresses...)
+		switch fault {
+		case "index":
+			copy.Index = 0
+		case "name":
+			copy.Name = "foreign"
+		case "down":
+			copy.Flags &^= net.FlagUp
+		case "loopback":
+			copy.Flags |= net.FlagLoopback
+		case "address":
+			copy.Addresses = []netip.Prefix{netip.MustParsePrefix("192.0.2.200/24")}
+		case "mask":
+			for _, prefix := range selected.Addresses {
+				if prefix.Addr().Is4() && prefix.Addr().IsGlobalUnicast() {
+					copy.Addresses = []netip.Prefix{netip.PrefixFrom(prefix.Addr(), (prefix.Bits()+1)%33)}
+					break
+				}
+			}
+		}
+		value := &copy
+		if fault == "nil" {
+			value = nil
+		}
+		if _, _, err := desktopWindowsPhysicalInterfaces(value, false, true); err == nil {
+			t.Fatal("physical factory accepted false kernel binding", fault)
+		}
+	}
+}
+
+// This is executable native wiring evidence. The only replaced operation is
+// the privileged owner constructor; kernel WFP/token/traffic suites exercise
+// that constructor separately. This fixture does not claim that the Windows
+// public compiler or selected-DNS whole composition has been admitted.
+func TestRouterVPNWindowsPhysicalFactoryInitializesCapturedOwnerAndJoinsReplacement(t *testing.T) {
+	for _, policy := range []string{"on-connect", "always"} {
+		for _, fault := range []string{"live", "during-index", "during-address", "during-mask", "during-down", "partial"} {
+			t.Run(policy+"/"+fault, func(t *testing.T) {
+				f := newDesktopPTFixture(t)
+				selected := windowsPhysicalFixtureInterface(t)
+				manager := &windowsPhysicalFactoryNetwork{desktopPTNetwork: f.network}
+				manager.selected.Store(selected)
+				service.MustRegister[adapter.NetworkManager](f.ctx, manager)
+				outbounds := &desktopPTEntryManager{}
+				service.MustRegister[adapter.OutboundManager](f.ctx, outbounds)
+				capture := testNetworkOptions()
+				capture.PhysicalBroker = true
+				created, err := NewNetworkOwner(f.ctx, nil, NetworkOwnerTag, capture)
+				if err != nil {
+					t.Fatal(err)
+				}
+				n := created.(*NetworkOwner)
+				t.Cleanup(func() {
+					if err := n.Close(); err != nil {
+						t.Error(err)
+					}
+				})
+				physical, err := NewPhysicalOutbound(f.ctx, nil, nil, PhysicalOutboundTag, PhysicalOutboundOptions{SessionID: capture.SessionID, SourceSHA256: capture.SourceSHA256})
+				if err != nil {
+					t.Fatal(err)
+				}
+				outbounds.replace(physical)
+				meta := mobiletor.DesktopBridgeMetadata{Schema: 1, SessionID: capture.SessionID, SourceSHA256: capture.SourceSHA256,
+					TargetOS: "windows", PhysicalBroker: true, IPv6Mode: "off", HomeLANAccess: true, KillSwitchPolicy: policy}
+				options := mobiletor.DesktopWindowsSocketOptions{KillSwitchPolicy: policy}
+				wantInterfaces, wantLAN, err := desktopWindowsPhysicalInterfaces(selected, false, true)
+				if err != nil {
+					t.Fatal(err)
+				}
+				wantDHCP, err := mobiletor.DesktopWindowsPhysicalDHCPServers(uint32(selected.Index))
+				if err != nil {
+					t.Fatal(err)
+				}
+				source := physicalTunnelTestSource()
+				called := 0
+				if err := n.preparePhysicalWindowsOwner(meta, options, func(ctx context.Context, actual mobiletor.DesktopSocketCapture, options mobiletor.DesktopWindowsSocketOptions) (desktopWindowsPhysicalPolicy, error) {
+					called++
+					if actual != n.brokerCapture() || ctx.Err() != nil || n.ready || n.activated {
+						t.Error("factory substituted a capture or ran after native admission")
+					}
+					if options.KillSwitchPolicy != policy || options.IPv6Enabled || len(options.PrivateDestinations) != 0 ||
+						!reflect.DeepEqual(options.Interfaces, wantInterfaces) || !reflect.DeepEqual(options.LANPrefixes, wantLAN) || !reflect.DeepEqual(options.DHCP4Servers, wantDHCP) {
+						t.Error("factory changed selected protection, physical interface, exact LAN or actual DHCP lease", options)
+					}
+					changed := *selected
+					changed.Addresses = append([]netip.Prefix(nil), selected.Addresses...)
+					switch fault {
+					case "during-index":
+						changed.Index++
+					case "during-address":
+						changed.Addresses = []netip.Prefix{netip.MustParsePrefix("192.0.2.200/24")}
+					case "during-mask":
+						prefix := changed.Addresses[0]
+						changed.Addresses[0] = netip.PrefixFrom(prefix.Addr(), (prefix.Bits()+1)%(prefix.Addr().BitLen()+1))
+					case "during-down":
+						changed.Flags &^= net.FlagUp
+					case "partial":
+						return source, errors.New("held partial Windows owner")
+					}
+					manager.selected.Store(&changed)
+					return source, nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				if called != 0 {
+					t.Fatal("factory ran before native Initialize")
+				}
+				err = n.Start(adapter.StartStateInitialize)
+				if called != 1 {
+					t.Fatal("native Initialize omitted or repeated the captured Windows constructor")
+				}
+				if fault != "live" {
+					if err == nil || !source.cancelled.Load() {
+						t.Fatal("late or partial owner survived failed native initialization", err)
+					}
+				} else {
+					if err != nil || n.broker == nil || !n.broker.Current() {
+						t.Fatal("captured Windows factory failed", err)
+					}
+					if err := n.Start(adapter.StartStateStarted); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := n.Activate(capture.SessionID, capture.SourceSHA256); err != nil {
+						t.Fatal(err)
+					}
+					n.InterfaceUpdated(context.Background())
+					if n.broker.Current() {
+						t.Fatal("Windows native reset kept the previous physical generation")
+					}
+				}
+				if err := n.Close(); err != nil || !source.closed.Load() {
+					t.Fatal("retired Windows factory discarded its partial owner", err)
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNWindowsPhysicalFactoryRejectsForeignPolicyAuthority(t *testing.T) {
+	for _, fault := range []string{"nil-policy", "ordinary-off", "target", "session", "source", "broker", "off", "policy", "ipv6", "interfaces", "lan", "dhcp", "constructor"} {
+		t.Run(fault, func(t *testing.T) {
+			n := physicalFactoryNetwork(t)
+			capture := testNetworkOptions()
+			meta := mobiletor.DesktopBridgeMetadata{SessionID: capture.SessionID, SourceSHA256: capture.SourceSHA256,
+				TargetOS: "windows", PhysicalBroker: true, IPv6Mode: "off", KillSwitchPolicy: "always"}
+			options := mobiletor.DesktopWindowsSocketOptions{KillSwitchPolicy: "always"}
+			called := false
+			constructor := func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopWindowsSocketOptions) (desktopWindowsPhysicalPolicy, error) {
+				called = true
+				return nil, errors.New("unexpected privileged constructor")
+			}
+			var err error
+			switch fault {
+			case "nil-policy":
+				err = n.preparePhysicalWindows(nil, constructor)
+			case "ordinary-off":
+				policy, failure := mobiletor.NewDesktopBridgePolicy(`{"id":"ordinary","node_kind":"external","external":{"protocol":"tor"},"dns_mode":"custom","dns_host":"9.9.9.9","dns_protocol":"tcp","dns_port":5353,"kill_switch_policy":"off"}`, strings.Repeat("a", 32), strings.Repeat("b", 64), "windows")
+				if failure != nil {
+					t.Fatal(failure)
+				}
+				err = n.preparePhysicalWindows(policy, constructor)
+			case "target":
+				meta.TargetOS = "linux"
+			case "session":
+				meta.SessionID = strings.Repeat("f", 32)
+			case "source":
+				meta.SourceSHA256 = strings.Repeat("f", 64)
+			case "broker":
+				meta.PhysicalBroker = false
+			case "off":
+				meta.KillSwitchPolicy, options.KillSwitchPolicy = "off", "off"
+			case "policy":
+				options.KillSwitchPolicy = "on-connect"
+			case "ipv6":
+				options.IPv6Enabled = true
+			case "interfaces":
+				options.Interfaces = []mobiletor.DesktopWindowsSocketInterface{{Name: "foreign"}}
+			case "lan":
+				options.LANPrefixes = []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}
+			case "dhcp":
+				options.DHCP4Servers = []netip.Addr{netip.MustParseAddr("192.168.1.1")}
+			case "constructor":
+				constructor = nil
+			}
+			if fault != "nil-policy" && fault != "ordinary-off" {
+				err = n.preparePhysicalWindowsOwner(meta, options, constructor)
+			}
+			if err == nil || called || n.physicalFactory != nil {
+				t.Fatal("foreign policy acquired a Windows native factory", err)
+			}
+		})
+	}
+}

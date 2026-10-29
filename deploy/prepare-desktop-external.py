@@ -42,9 +42,9 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'tor_server.go.tmpl', 'tor_plain_test.go.tmpl', 'tor_local.go.tmpl', 'tor_local_test.go.tmpl',
                 'tor_physical.go.tmpl', 'tor_physical_test.go.tmpl',
                 'tor_physical_factory_test.go.tmpl',
-                'tor_physical_linux.go.tmpl', 'tor_physical_darwin.go.tmpl', 'tor_physical_other.go.tmpl',
+                'tor_physical_linux.go.tmpl', 'tor_physical_darwin.go.tmpl', 'tor_physical_windows.go.tmpl', 'tor_physical_other.go.tmpl',
                 'tor_physical_tunnel.go.tmpl', 'tor_physical_tunnel_test.go.tmpl',
-                'tor_physical_linux_test.go.tmpl', 'tor_physical_darwin_test.go.tmpl',
+                'tor_physical_linux_test.go.tmpl', 'tor_physical_darwin_test.go.tmpl', 'tor_physical_windows_test.go.tmpl',
                 'tor_physical_source_unix_test.go.tmpl')
 BOX_TEMPLATES = {
     'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go',
@@ -169,9 +169,11 @@ def pt_copies():
         prefix = { 'tor_physical_source_unix_test.go.tmpl': b'//go:build linux || darwin\n\n',
                    'tor_physical_linux.go.tmpl': b'//go:build linux\n\n',
                    'tor_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
+                   'tor_physical_windows.go.tmpl': b'//go:build windows\n\n',
                    'tor_physical_linux_test.go.tmpl': b'//go:build linux\n\n',
                    'tor_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
-                   'tor_physical_other.go.tmpl': b'//go:build !linux && !darwin\n\n' }.get(name, b'')
+                   'tor_physical_windows_test.go.tmpl': b'//go:build windows\n\n',
+                   'tor_physical_other.go.tmpl': b'//go:build !linux && !darwin && !windows\n\n' }.get(name, b'')
         if path.is_symlink() or not raw.startswith(prefix+b'package routervpndesktoppt\n'):
             raise ValueError('Desktop PT adapter package boundary changed')
         content['routervpn/desktoppt/'+name.removesuffix('.tmpl')] = raw
