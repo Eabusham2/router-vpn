@@ -20,6 +20,8 @@ type NodeProfile struct {
 	config, source, metadata string
 	mode                     string
 	profile                  map[string]any
+	inputs                   nodeProfileInputs
+	desktopSeal              string
 }
 
 func (p *NodeProfile) Config() string       { return p.config }
@@ -259,7 +261,12 @@ func NewNodeProfile(mode, files, profileJSON, start, dnsBootstrap string) (*Node
 	if err != nil {
 		return nil, err
 	}
-	return &NodeProfile{config: string(encoded), source: sourceSHA, metadata: string(metadata), mode: mode, profile: profile}, nil
+	compiled := &NodeProfile{config: string(encoded), source: sourceSHA, metadata: string(metadata), mode: mode, profile: profile,
+		inputs: nodeProfileInputs{mode, files, profileJSON, start, dnsBootstrap}}
+	if err := compiled.sealNodeDesktopCapture(); err != nil {
+		return nil, err
+	}
+	return compiled, nil
 }
 
 func nodeProfileAssets(raw string) (map[string][]byte, error) {
