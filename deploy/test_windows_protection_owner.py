@@ -40,6 +40,17 @@ REQUIRED = (
     "TestWindowsProtectionCapturedObjectsRejectHardlinks",
     "TestWindowsProtectionCapturedAncestorsRejectRename",
 )
+JOURNAL_REQUIRED = (
+    "TestWindowsProtectionJournalCanonicalLifecycle",
+    "TestWindowsProtectionJournalRejectsChangedIdentity",
+    "TestWindowsProtectionJournalStrictEncoding",
+    "TestWindowsProtectionJournalRetirementSemantics",
+    "TestWindowsProtectionJournalRejectsUnprovedTransitions",
+    "TestWindowsProtectionJournalSlotRecoveryDoesNotGuessCommit",
+    "TestWindowsProtectionJournalRejectsForeignOrReorderedSlots",
+    "TestWindowsProtectionJournalRecoveryCopiesCapturedTargets",
+    "TestWindowsProtectionJournalRejectsUncheckedControllerReplacement",
+)
 REQUIRED_SUBCASES = {
     REQUIRED[6]: ("record-write", "record-delete", "record-rename", "root-rename", "parent-rename"),
     REQUIRED[8]: ("session", "source", "config", "network", "generation"),
@@ -50,7 +61,7 @@ REQUIRED_SUBCASES = {
 
 def sources():
     expected = {"record.go", "record_test.go", "owner_windows.go", "owner_windows_test.go",
-                "path_windows.go", "security_windows.go"}
+                "path_windows.go", "security_windows.go", "journal_record.go", "journal_record_test.go"}
     owned = sorted(TARGET.glob("*.go"))
     if {path.name for path in owned} != expected:
         raise ValueError("Windows protection owner source/test closure changed")
@@ -58,7 +69,10 @@ def sources():
     if not {"process_windows.go", "identity_windows.go", "machine_directories_windows.go"}.issubset(
             path.name for path in controller):
         raise ValueError("Windows protection owner lost its shipping native identity dependency")
-    paths = owned + controller + [ROOT / "go.mod", Path(__file__).resolve(),
+    # Journal target comparison uses the actual shared native WFP types. Capture
+    # that source dependency as well; decoded records still confer no authority.
+    physical = sorted((ROOT / "internal/mobiletor").glob("*.go"))
+    paths = owned + controller + physical + [ROOT / "go.mod", Path(__file__).resolve(),
                                   ROOT / "deploy/test_desktop_windows_identity.py",
                                   ROOT / "deploy/prepare-desktop-external.py"]
     result = {}
@@ -133,7 +147,7 @@ def execute(go="go"):
                                      "-test.timeout=90s", "-test.v"], cwd=ROOT, env=captured, timeout=105)
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if (status or "--- SKIP:" in output or "DATA RACE" in output or
-                any("--- PASS: " + test + " (" not in output for test in REQUIRED)):
+                any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *JOURNAL_REQUIRED))):
             raise ValueError("Protection owner baseline did not execute every native ownership case")
         for test, names in REQUIRED_SUBCASES.items():
             if any("--- PASS: " + test + "/" + name + " (" not in output for name in names):
@@ -163,7 +177,7 @@ def execute(go="go"):
             print("Rejected production Windows protection owner mutant:", name, flush=True)
         if sources() != before:
             raise ValueError("Protection owner shipping sources changed during the actual native gate")
-    print("Native protection preparation passed five strict-record groups, ten native ownership groups, "
+    print("Native protection preparation passed five strict-owner-record groups, nine intent-record groups, ten native ownership groups, "
           "seven existing/untrusted-state cases and nine production negative controls. "
           "Firewall mutation, transfer, recovery and ordinary-path activation remain separate requirements.", flush=True)
 
