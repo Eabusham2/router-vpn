@@ -986,6 +986,8 @@ func desktopDarwinKernelPeer(t *testing.T, network string) netip.AddrPort {
 			t.Fatal(err)
 		}
 		var workers sync.WaitGroup
+		var connectionsMu sync.Mutex
+		connections := make(map[net.Conn]struct{})
 		joined := make(chan struct{})
 		go func() {
 			defer close(joined)
@@ -995,10 +997,18 @@ func desktopDarwinKernelPeer(t *testing.T, network string) netip.AddrPort {
 					return
 				}
 				accepted.Add(1)
+				connectionsMu.Lock()
+				connections[connection] = struct{}{}
+				connectionsMu.Unlock()
 				workers.Add(1)
 				go func() {
-					defer workers.Done()
-					defer connection.Close()
+					defer func() {
+						connection.Close()
+						connectionsMu.Lock()
+						delete(connections, connection)
+						connectionsMu.Unlock()
+						workers.Done()
+					}()
 					connection.SetDeadline(time.Now().Add(20 * time.Second))
 					buffer := make([]byte, 8192)
 					for {
@@ -1018,7 +1028,26 @@ func desktopDarwinKernelPeer(t *testing.T, network string) netip.AddrPort {
 				}()
 			}
 		}()
-		t.Cleanup(func() { trace(); listener.Close(); <-joined; workers.Wait() })
+		t.Cleanup(func() {
+			trace()
+			listener.Close()
+			<-joined
+			connectionsMu.Lock()
+			owned := make([]net.Conn, 0, len(connections))
+			for connection := range connections {
+				owned = append(owned, connection)
+			}
+			connectionsMu.Unlock()
+			// The client revokes its exact PF permit before closing. Its final
+			// FIN need not cross that deny, so retire the fixture's own accepted
+			// handles instead of waiting for an unrelated server read deadline.
+			for _, connection := range owned {
+				if err := connection.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+					t.Error("owned echo connection did not close", err)
+				}
+			}
+			workers.Wait()
+		})
 		return netip.MustParseAddrPort(listener.Addr().String())
 	}
 	packet, err := net.ListenPacket(network, endpoint)
