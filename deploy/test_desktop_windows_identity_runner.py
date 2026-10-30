@@ -29,8 +29,9 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
         self.vendor = workspace / "native"
         self.target = self.vendor / "routervpn/mobiletor"
         self.target.mkdir(parents=True)
-        for path in (ROOT / "internal/mobiletor").glob("desktop_socket_*.go"):
-            (self.sources / path.name).write_bytes(path.read_bytes())
+        for pattern in ("desktop_socket_*.go", "desktop_protection_transfer_record*.go"):
+            for path in (ROOT / "internal/mobiletor").glob(pattern):
+                (self.sources / path.name).write_bytes(path.read_bytes())
         # A source-copy boundary fixture exercises both actual preparer maps,
         # including when the platform-specific importer is absent at this SHA.
         # No native execution result is synthesized by these Python tests.
@@ -40,7 +41,7 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
             b'_ "router-vpn/internal/common"\n'
             b'_ "router-vpn/internal/mobilemtu"\n)\n'
             b'// Unrelated bytes and spelling stay exact.\n')
-        for path in self.sources.glob("desktop_socket_*.go"):
+        for path in self.sources.glob("*.go"):
             (self.target / path.name).write_bytes(GATE.PREP.relocated_shared_source(path.read_bytes()))
         self.addCleanup(patch.stopall)
         patch.object(GATE, "ROOT", self.root).start()
@@ -91,6 +92,26 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "source/test closure is incomplete"):
             GATE.checked_sources(self.vendor)
 
+    def test_transfer_records_are_required_exact_shipping_inputs(self):
+        for name in ("desktop_protection_transfer_record.go", "desktop_protection_transfer_record_test.go"):
+            with self.subTest(name=name):
+                self.assertIn(name, GATE.checked_sources(self.vendor)[3])
+                copied = self.target / name
+                expected = copied.read_bytes()
+                copied.write_bytes(expected + b"// changed private transfer contract\n")
+                with self.assertRaisesRegex(ValueError, "differs from shipping source"):
+                    GATE.checked_sources(self.vendor)
+                copied.unlink()
+                with self.assertRaisesRegex(ValueError, "actual regular copied file"):
+                    GATE.checked_sources(self.vendor)
+                copied.write_bytes(expected)
+                original = self.sources / name
+                raw = original.read_bytes()
+                original.unlink()
+                with self.assertRaisesRegex(ValueError, "source/test closure is incomplete"):
+                    GATE.checked_sources(self.vendor)
+                original.write_bytes(raw)
+
     def test_shipping_preparer_emits_the_complete_identity_source_closure(self):
         # Exercise the real shared-source copying loop. The hand-copied fixtures
         # above cannot detect a file omitted by the production preparer itself.
@@ -109,7 +130,8 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
             source, target, package, records = GATE.checked_sources(vendor)
             self.assertEqual((source, target, package),
                              (vendor, vendor / "routervpn/mobiletor", "./routervpn/mobiletor"))
-            originals = tuple((ROOT / "internal/mobiletor").glob("desktop_socket_*.go"))
+            originals = tuple(path for pattern in ("desktop_socket_*.go", "desktop_protection_transfer_record*.go")
+                              for path in (ROOT / "internal/mobiletor").glob(pattern))
             self.assertEqual(records, {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
                                        for path in originals})
             missing = target / "desktop_socket_pf_inventory_test.go"

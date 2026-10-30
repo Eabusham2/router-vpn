@@ -60,8 +60,11 @@ def checked_sources(source):
         package = "./routervpn/mobiletor"
     required = {IDENTITY, CONNECT, TCP, "desktop_socket_windows_identity_api.go",
                 "desktop_socket_windows_identity_test.go",
-                "desktop_socket_native_windows.go", "desktop_socket_source.go"}
-    paths = sorted((ROOT / "internal/mobiletor").glob("desktop_socket_*.go"))
+                "desktop_socket_native_windows.go", "desktop_socket_source.go",
+                "desktop_protection_transfer_record.go",
+                "desktop_protection_transfer_record_test.go"}
+    paths = sorted(path for pattern in ("desktop_socket_*.go", "desktop_protection_transfer_record*.go")
+                   for path in (ROOT / "internal/mobiletor").glob(pattern))
     if not required.issubset(path.name for path in paths):
         raise ValueError("Windows identity source/test closure is incomplete")
     records = {}
