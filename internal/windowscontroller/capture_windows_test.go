@@ -531,6 +531,9 @@ func TestWindowsControllerFoundationCapturedVolumeSurvivesDriveRebind(t *testing
 		t.Fatal(err)
 	}
 	defer image.Close()
+	if !strings.HasPrefix(strings.ToLower(image.Path()), strings.ToLower(volumeGUIDPrefix)) {
+		t.Fatal("captured executable retained a mutable DOS drive name")
+	}
 	if err := drive.replace(second); err != nil {
 		t.Fatal("held image did not permit the controlled DOS alias rebind:", err)
 	}
@@ -578,9 +581,6 @@ func TestWindowsControllerFoundationCapturedVolumeSurvivesDriveRebind(t *testing
 	defer peer.Process.Close()
 	if err := process.VerifyImage(replacement); err == nil {
 		t.Fatal("UAC ran the new DOS-drive target instead of the retained image")
-	}
-	if !strings.HasPrefix(strings.ToLower(image.Path()), strings.ToLower(volumeGUIDPrefix)) {
-		t.Fatal("captured executable retained a mutable DOS drive name")
 	}
 	if err := pipe.Close(); err != nil {
 		t.Fatal(err)

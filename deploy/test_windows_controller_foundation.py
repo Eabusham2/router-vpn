@@ -151,7 +151,7 @@ def mutants():
          "retained launch handle was rejected by a fresh process DACL",
          once(pipe, "process, err = expected.retain()", "process, err = OpenProcess(pid)")),
         ("process_windows.go", "mutable-launch-drive", REQUIRED[18],
-         "retargeted DOS drive replaced the retained executable",
+         "captured executable retained a mutable DOS drive name",
          once(process, "image.path = canonical", "image.path = path")),
         ("process_windows.go", "package-code-write-sharing", REQUIRED[20],
          "retained package code allowed another writer",
