@@ -136,6 +136,69 @@ func TestDesktopLinuxPolicyCurrentFreshness(t *testing.T) {
 	checkDesktopLinuxPolicyCurrentFreshness(t)
 }
 
+func checkDesktopLinuxHeartbeatStale(t *testing.T, policy *DesktopLinuxSocketPolicy) {
+	t.Helper()
+	policy.mu.Lock()
+	stale := time.Now().Add(-DesktopSocketReadbackAge - time.Second).UnixMilli()
+	policy.observed.Store(stale)
+	beforeSequence := policy.sequence
+	policy.mu.Unlock()
+	admitted, err := policy.probe()
+	policy.mu.Lock()
+	unchangedSequence := policy.sequence == beforeSequence
+	policy.mu.Unlock()
+	if !admitted || err == nil || policy.observed.Load() != stale || !unchangedSequence || policy.Current(policy.capture, policy.owner) {
+		t.Fatal("failed or stale heartbeat refreshed captured proof", admitted, err)
+	}
+}
+
+func checkDesktopLinuxHeartbeatCancellation(t *testing.T, policy *DesktopLinuxSocketPolicy) {
+	t.Helper()
+	policy.mu.Lock()
+	beforeSequence, beforeObserved := policy.sequence, policy.observed.Load()
+	type result struct {
+		admitted bool
+		err      error
+	}
+	entered, complete := make(chan struct{}), make(chan result, 1)
+	go func() {
+		close(entered)
+		admitted, err := policy.probe()
+		complete <- result{admitted, err}
+	}()
+	<-entered
+	policy.Cancel()
+	policy.mu.Unlock()
+	select {
+	case value := <-complete:
+		policy.mu.Lock()
+		unchangedSequence := policy.sequence == beforeSequence
+		policy.mu.Unlock()
+		if value.admitted || value.err != nil || !unchangedSequence || policy.observed.Load() != beforeObserved || policy.Current(policy.capture, policy.owner) {
+			t.Fatal("cancelled heartbeat entered or refreshed its captured stream", value.admitted, value.err)
+		}
+	case <-time.After(desktopSocketControlWait):
+		t.Fatal("cancelled queued heartbeat did not retire within its control bound")
+	}
+}
+
+func TestDesktopLinuxPolicyHeartbeatRejection(t *testing.T) {
+	for _, name := range []string{"stale", "cancelled-before-admission"} {
+		t.Run(name, func(t *testing.T) {
+			policy := &DesktopLinuxSocketPolicy{capture: desktopSocketFixtureCapture(), owner: desktopSocketFixturePolicy().owner}
+			policy.current.Store(true)
+			policy.observed.Store(time.Now().UnixMilli())
+			// These rejections precede every channel write. The kernel case
+			// repeats them on the real prepared guardian as well.
+			if name == "stale" {
+				checkDesktopLinuxHeartbeatStale(t, policy)
+			} else {
+				checkDesktopLinuxHeartbeatCancellation(t, policy)
+			}
+		})
+	}
+}
+
 type desktopLinuxCrashReceipt struct {
 	NFT         *desktopLinuxNFT
 	UID         uint32
@@ -491,6 +554,60 @@ func TestDesktopLinuxGuardianKernelExpirySurvivesGuardianCrash(t *testing.T) {
 	if err = desktopLinuxVerifyAccount(policy.account, policy.uid); err != nil {
 		t.Fatal("exceptional close released quarantined UID", err)
 	}
+}
+
+func TestDesktopLinuxGuardianKernelHeartbeatAdmission(t *testing.T) {
+	t.Run("owned", func(t *testing.T) {
+		policy := desktopLinuxKernelPolicy(t, nil)
+		policy.mu.Lock()
+		locked := true
+		defer func() {
+			if locked {
+				policy.mu.Unlock()
+			}
+		}()
+		beforeSequence, beforeObserved := policy.sequence, policy.observed.Load()
+		type result struct {
+			admitted bool
+			err      error
+		}
+		entered, complete := make(chan struct{}), make(chan result, 1)
+		go func() {
+			close(entered)
+			admitted, err := policy.probe()
+			complete <- result{admitted, err}
+		}()
+		<-entered
+		// Retain the actual serialized foreground owner beyond the probe's
+		// I/O budget, within the separate five-second proof lifetime.
+		hold := time.NewTimer(2*time.Second + 250*time.Millisecond)
+		defer hold.Stop()
+		select {
+		case value := <-complete:
+			t.Fatal("heartbeat bypassed held foreground admission", value)
+		case <-hold.C:
+		}
+		if policy.sequence != beforeSequence || policy.observed.Load() != beforeObserved {
+			t.Fatal("waiting heartbeat fabricated a request or refreshed captured proof")
+		}
+		policy.mu.Unlock()
+		locked = false
+		select {
+		case value := <-complete:
+			if !value.admitted || value.err != nil {
+				t.Fatal("queued heartbeat lost its admitted readback budget", value.err)
+			}
+		case <-time.After(desktopSocketControlWait):
+			t.Fatal("admitted heartbeat exceeded its unchanged control bound")
+		}
+		if policy.observed.Load() <= beforeObserved || !policy.Current(policy.capture, policy.owner) {
+			t.Fatal("actual admitted heartbeat did not establish fresh captured proof")
+		}
+		checkDesktopLinuxHeartbeatStale(t, policy)
+	})
+	t.Run("cancelled", func(t *testing.T) {
+		checkDesktopLinuxHeartbeatCancellation(t, desktopLinuxKernelPolicy(t, nil))
+	})
 }
 
 func TestDesktopLinuxGuardianKernelSocketRetirementReusesCapacity(t *testing.T) {

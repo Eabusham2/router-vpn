@@ -404,19 +404,37 @@ func (p *DesktopLinuxSocketPolicy) monitor() {
 		if p.closing.Load() {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_, file, err := p.call(ctx, desktopLinuxRequest{Operation: "probe", Capture: p.capture}, nil, true)
-		cancel()
-		if file != nil {
-			file.Close()
-			err = errors.New("Linux heartbeat transferred a descriptor")
-		}
-		if err != nil {
+		if !p.Current(p.capture, p.owner) {
 			p.current.Store(false)
 			return
 		}
+		if _, err := p.probe(); err != nil {
+			p.current.Store(false)
+			return
+		}
+	}
+}
+
+func (p *DesktopLinuxSocketPolicy) probe() (bool, error) {
+	// The monitor shares the captured request stream with foreground socket
+	// operations. Start its bounded readback only after fair serialized
+	// admission; waiting for another owner supplies no fresh observation.
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closing.Load() {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, file, err := p.callLocked(ctx, desktopLinuxRequest{Operation: "probe", Capture: p.capture}, nil, true)
+	if file != nil {
+		file.Close()
+		err = errors.New("Linux heartbeat transferred a descriptor")
+	}
+	if err == nil {
 		p.observed.Store(time.Now().UnixMilli())
 	}
+	return true, err
 }
 
 func (p *DesktopLinuxSocketPolicy) call(ctx context.Context, request desktopLinuxRequest, file *os.File, requireCurrent bool) (desktopLinuxReply, *os.File, error) {
@@ -425,6 +443,12 @@ func (p *DesktopLinuxSocketPolicy) call(ctx context.Context, request desktopLinu
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.callLocked(ctx, request, file, requireCurrent)
+}
+
+// callLocked retains one complete captured request/receipt under mu. Ordinary
+// caller cancellation and the existing channel deadline remain authoritative.
+func (p *DesktopLinuxSocketPolicy) callLocked(ctx context.Context, request desktopLinuxRequest, file *os.File, requireCurrent bool) (desktopLinuxReply, *os.File, error) {
 	if ctx.Err() != nil || requireCurrent && !p.Current(p.capture, p.owner) {
 		return desktopLinuxReply{}, nil, net.ErrClosed
 	}

@@ -26,7 +26,7 @@ SPEC = importlib.util.spec_from_file_location('desktop_linux_guardian_uid', ROOT
 UID = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UID)
 
-KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGuardianCrash',
+KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGuardianCrash', 'HeartbeatAdmission',
                 'SocketRetirementReusesCapacity', 'RejectsChangedBaseline', 'NativeParentCrash',
                 'BlockedControlRetainsSourcePort', 'RejectsStaleCaptureAndGeneration',
                 'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement')
@@ -167,7 +167,24 @@ def execute_mutations(source: Path, go='go', *, env=None):
     captured = dict(os.environ if env is None else env, GOWORK='off')
     compiler, captured = UID.compiler_toolchain(source, go, captured)
     sudo = UID.privilege_tool()
+    heartbeat_witnesses = {
+        'admitted heartbeat deadline': 'queued heartbeat lost its admitted readback budget',
+        'failed heartbeat cannot refresh proof': 'failed or stale heartbeat refreshed captured proof',
+        'cancelled heartbeat cannot enter stream': 'cancelled heartbeat entered or refreshed its captured stream',
+    }
     mutations = (
+        ('admitted heartbeat deadline', 'HeartbeatAdmission', 'desktop_socket_linux_policy.go', (
+            ('p.mu.Lock()\n\tdefer p.mu.Unlock()\n\tif p.closing.Load() {\n\t\treturn false, nil\n\t}\n\tctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)\n\tdefer cancel()',
+             'ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)\n\tdefer cancel()\n\tp.mu.Lock()\n\tdefer p.mu.Unlock()\n\tif p.closing.Load() {\n\t\treturn false, nil\n\t}'),
+        )),
+        ('failed heartbeat cannot refresh proof', 'HeartbeatAdmission', 'desktop_socket_linux_policy.go', (
+            ('if err == nil {\n\t\tp.observed.Store(time.Now().UnixMilli())',
+             'if true {\n\t\tp.observed.Store(time.Now().UnixMilli())'),
+        )),
+        ('cancelled heartbeat cannot enter stream', 'HeartbeatAdmission', 'desktop_socket_linux_policy.go', (
+            ('if p.closing.Load() {\n\t\treturn false, nil\n\t}',
+             'if false && p.closing.Load() {\n\t\treturn false, nil\n\t}'),
+        )),
         ('kernel UID predicate', 'RejectsWrongUIDAndPrivatePeer', 'desktop_socket_linux_nft.go', (
             ('output meta skuid %d meta l4proto %s', 'output meta l4proto %s'),
             ('desktopLinuxNFTTable, uid, network, family', 'desktopLinuxNFTTable, network, family'),
@@ -183,7 +200,8 @@ def execute_mutations(source: Path, go='go', *, env=None):
             (' || len(baselineFound) != len(n.Baseline)', ''),
         )),
         ('per-socket source retirement', 'SocketRetirementReusesCapacity', 'desktop_socket_broker.go', (
-            ('ok && s.sourceFile != nil {', 'ok && s.sourceFile != nil && false {'),
+            ('ok && (s.sourceFile != nil || s.sourceNative != nil) {',
+             'ok && (s.sourceFile != nil || s.sourceNative != nil) && false {'),
         )),
         ('native descriptor acknowledgment', 'FinishRequiresDescriptorRetirement', 'desktop_socket_linux_helper.go', (
             ('if release && len(g.sockets) != 0 {', 'if false && release && len(g.sockets) != 0 {'),
@@ -213,7 +231,9 @@ def execute_mutations(source: Path, go='go', *, env=None):
                 UID.run(command, cwd=source, timeout=150, sudo=sudo)
             except subprocess.CalledProcessError as error:
                 output = error.output.decode('utf-8', errors='replace')
-                if '--- FAIL: TestDesktopLinuxGuardianKernel'+case+' (' not in output:
+                witness = heartbeat_witnesses.get(label)
+                if ('--- FAIL: TestDesktopLinuxGuardianKernel'+case+' (' not in output
+                        or witness is not None and witness not in output):
                     raise ValueError('Guardian mutation failed before its intended kernel assertion: '+label+'\n'+output) from error
                 print('Rejected broken '+label+' through '+case+'.', flush=True)
             else:
