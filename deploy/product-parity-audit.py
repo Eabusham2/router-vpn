@@ -123,7 +123,7 @@ def windows_profile_controls() -> None:
                 "view.token(capture.revision) != capture.token",
                 "profileStartupSettingsToken(current) != capture.revision || a.nodeProtection != capture.slot",
                 "a.closing || a.cmd != nil || r.Context().Err() != nil || profileSettingsBusy(a.state.Connected, a.state.Phase)",
-                "capture.slot.captureOff(ctx, profile.ID, capture.revision, capture.token)",
+                "capture.slot.captureOff(ctx, profile.ID, capture.revision, capture.resultRevision, capture.token)",
                 "a.resumeDesktopProtectionOff(ctx, capture.slot, pending, false)",
                 'updated.KillSwitchPolicy, updated.KillSwitch = q.KillSwitchPolicy, q.KillSwitchPolicy != "off"',
                 "persistErr = a.persistProfilesLocked()", "a.profiles.Profiles[i] = current")
@@ -147,12 +147,35 @@ def windows_profile_controls() -> None:
                 "capture.removed, capture.absenceProved = true, true")
     go_function("cmd/client/desktop_node_protection_windows.go", "desktopOwnedNodeProtectionBackend",
                 "mobiletor.NewDesktopWindowsProtectionReleaseTarget(ctx, target)",
-                "mobiletor.NewDesktopWindowsProtectionRecoveryTarget(ctx, target)")
-    save = go_function("cmd/client/profile_protection_owned.go", "resumeDesktopProtectionOff",
-                       "profileStartupSettingsToken(profile) != capture.profileRevision", "a.nodeProtection != slot",
-                       "a.profiles.Profiles[i] = profile", "errors.Join(errDesktopProtectionOffUnsaved, saveErr)")
-    ordered(save, "resumeDesktopProtectionOff", "slot.applyOff(ctx, capture, current)",
-            "saveErr = a.persistProfilesLocked()", "slot.finishOffSave(capture)")
+                "mobiletor.NewDesktopWindowsProtectionRecoveryTarget(ctx, target)",
+                "mobiletor.NewDesktopWindowsProtectionRecoveryTargetWithBarrier(ctx, target, barrier)")
+    resume = go_function("cmd/client/profile_protection_owned.go", "resumeDesktopProtectionOff",
+                         "a.nodeProtection != slot")
+    ordered(resume, "resumeDesktopProtectionOff", "slot.applyOff(ctx, capture, current)",
+            "a.persistCapturedProtectionOff(ctx, slot, capture, cleanup)",
+            "slot.finishOffSave(ctx, capture, current)", "a.nodeProtection = nil")
+    save = go_function("cmd/client/profile_protection_owned.go", "persistCapturedProtectionOff",
+                       "profileStartupSettingsToken(profile) != capture.currentProfileRevision()", "a.nodeProtection != slot",
+                       "a.profiles.Profiles[i] = profile", "errors.Join(errDesktopProtectionOffUnsaved, err)",
+                       "a.cfg.ProfilesFile != capture.savedPath", "profileStartupSettingsToken(updated) != capture.resultRevision",
+                       "!bytes.Equal(raw, append(want, '\\n'))", "profileStartupSettingsToken(value) == capture.resultRevision")
+    ordered(save, "persistCapturedProtectionOff", "if !capture.profileWritten.Load()",
+            "a.persistProfilesLocked()", "capture.profileWritten.Store(true)",
+            "readPrivateRegular(capture.savedPath, maxPrivateStoreBytes)", "capture.profileSaved.Store(true)")
+    go_function("cmd/client/desktop_node_protection_off.go", "finishOffSave",
+                "!capture.profileSaved.Load()", "s.finishJournalOffLocked(ctx, capture, current)")
+    barrier = go_function("cmd/client/desktop_node_journal_off.go", "barrier",
+                          'change.Action != "off"', "*change.Previous != j.target", "change.Candidate != nil")
+    ordered(barrier, "durable explicit Off barrier",
+            "writeDesktopNodeJournalReleaseRecord(ctx, j.store, j.head, j.intent)", "j.acknowledged.Store(true)")
+    removal = go_function("cmd/client/desktop_node_journal_off.go", "applyJournalOffLocked",
+                          "s.offJournalCurrentLocked(capture)", "j.readExact(ctx, j.head)", "!j.acknowledged.Load()")
+    ordered(removal, "durable explicit Off removal", "s.backend.recoverWithBarrier(ctx, capture.target, j.barrier)",
+            "capture.owner.Close(ctx)", "s.backend.read(ctx, nil)", "capture.removed, capture.absenceProved = true, true")
+    settlement = go_function("cmd/client/desktop_node_journal_off.go", "finishJournalOffLocked",
+                            "!capture.profileWritten.Load() || !capture.profileSaved.Load() || !current()")
+    ordered(settlement, "durable explicit Off settlement",
+            "writeDesktopNodeJournalReleaseRecord(ctx, j.store, j.intent, j.settlement)", "s.closeEmptyJournalLocked(ctx)")
     go_function("cmd/client/desktop_node_owned.go", "releaseCapturedDesktopNodeProtection",
                 "slot.pendingOff()", "a.resumeDesktopProtectionOff(ctx, slot, pending, true)")
     require("cmd/client/profile_protection_test.go", "TestProfileProtectionPreservesExternalPrivateGraphAndPolicies",
