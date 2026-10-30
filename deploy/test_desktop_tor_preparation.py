@@ -555,6 +555,8 @@ class DesktopPTPreparation(unittest.TestCase):
         for name, text in notices.items():
             self.assertEqual((ROOT/name).read_text(), text)
         self.assertIn('mobile/torpt/LICENSE-DEPENDENCIES.json', notices)
+        for name, raw in PREP.PFABI.checked_files(ROOT/'internal/mobiletor').items():
+            self.assertEqual(notices['internal/mobiletor/'+name], raw.decode('utf-8'))
         self.assertIn('mobile/torpt/go.mod', notices)
         self.assertIn('mobile/torpt/go.sum', notices)
         inputs = PREP.inputs()

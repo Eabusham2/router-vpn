@@ -119,6 +119,12 @@ def desktop_pt_notices():
                path.name in ('UPSTREAM.json', 'SOURCE_LOCK.json', 'go.mod', 'go.sum', 'README.md')}
     if not {'mobile/torpt/SOURCE_LOCK.json', 'mobile/torpt/LICENSE-DEPENDENCIES.json'}.issubset(notices):
         raise ValueError('Desktop PT source and dependency notices are incomplete')
+    # The installed filename is a retained compatibility contract. It also
+    # carries this desktop-only guardian dependency under explicit source-path
+    # keys, including the full license and original header/BSD notices. The
+    # builder, receipt and installer already retain and verify every byte.
+    for name, raw in PFABI.checked_files(ROOT/'internal/mobiletor').items():
+        notices['internal/mobiletor/'+name] = raw.decode('utf-8')
     return (json.dumps(notices, indent=2, sort_keys=True)+'\n').encode()
 
 

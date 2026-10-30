@@ -316,6 +316,10 @@ def windows_dependency_boundaries(root):
 def pt_notice_boundaries(root):
     expected = BUILD.EXTERNAL.desktop_pt_notices()
     check(256*1024 < len(expected) <= 2*1024*1024, 'real PT notices do not exercise their explicit larger bound')
+    notices = json.loads(expected)
+    for name, raw in BUILD.EXTERNAL.PFABI.checked_files(ROOT/'internal/mobiletor').items():
+        check(notices.get('internal/mobiletor/'+name) == raw.decode('utf-8'),
+              'desktop notice payload omitted the pinned Apple PF source/license: '+name)
     stage = root/'pt-notice-stage'
     stage.mkdir()
     BUILD.stage_pt_notices(stage)
@@ -333,7 +337,8 @@ def pt_notice_boundaries(root):
                 check(DELIVERY.bound(name, target) == 256*1024, 'ordinary license bound was widened')
         rejected(lambda: DELIVERY.bound('TOR-PT-NOTICE.json', target), 'misnamed PT notice bound')
     target = 'linux/amd64'
-    for fault in ('missing', 'misnamed', 'changed', 'changed-resealed', 'oversized', 'ordinary-license-oversized'):
+    for fault in ('missing', 'misnamed', 'changed', 'changed-resealed', 'oversized', 'ordinary-license-oversized',
+                  'pf-license-missing-resealed', 'pf-header-notice-changed-resealed'):
         directory = root/('pt-notice-'+fault)
         shutil.copytree(root/'sources/linux-amd64', directory)
         path = directory/'TOR-PT-NOTICES.json'
@@ -345,9 +350,17 @@ def pt_notice_boundaries(root):
             raw = bytearray(path.read_bytes()); raw[len(raw)//2] ^= 1; path.write_bytes(raw)
         elif fault == 'oversized':
             path.write_bytes(b'x'*(2*1024*1024+1))
+        elif fault.startswith('pf-'):
+            changed = json.loads(path.read_bytes())
+            prefix = 'internal/mobiletor/desktop_socket_darwin_pfabi/'
+            if fault == 'pf-license-missing-resealed':
+                del changed[prefix+'APPLE_LICENSE']
+            else:
+                changed[prefix+'net/pfvar.h'] += '\nchanged original header notice\n'
+            path.write_text(json.dumps(changed, indent=2, sort_keys=True)+'\n')
         else:
             (directory/'XRAY-LICENSE').write_bytes(b'x'*(256*1024+1))
-        if fault in ('changed-resealed', 'oversized', 'ordinary-license-oversized'):
+        if fault in ('changed-resealed', 'oversized', 'ordinary-license-oversized') or fault.startswith('pf-'):
             fixture_receipt(directory, target)
         rejected(lambda: BUILD.reuse(directory, target), 'native PT notice '+fault)
         artifact = root/('pt-notice-'+fault+'.tar.gz')
