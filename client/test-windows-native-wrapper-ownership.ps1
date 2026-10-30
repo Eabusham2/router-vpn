@@ -152,7 +152,9 @@ try{
                 Assert-Wrapper (([IO.File]::ReadAllLines($env:WRAPPER_PROTECTION)-join',')-ceq'legacy-read,native-read') 'Physical admission omitted its read-only protection checks.'
             }
             if($Case-eq'physical-up'){
-                $ActualArguments=@([IO.File]::ReadAllText($env:WRAPPER_NATIVE_ARGUMENTS)|ConvertFrom-Json)
+                # Windows PowerShell 5.1 emits the JSON array as one pipeline
+                # object. Group it first so both shells enumerate its argv.
+                $ActualArguments=@(([IO.File]::ReadAllText($env:WRAPPER_NATIVE_ARGUMENTS)|ConvertFrom-Json))
                 Assert-Wrapper ($ActualArguments.Count-eq7-and$ActualArguments[0]-ceq'routervpn-external'-and$ActualArguments[3]-ceq'--session'-and$ActualArguments[4]-ceq('a'*32)-and$ActualArguments[5]-ceq'--physical-source-sha256'-and$ActualArguments[6]-ceq('b'*64)) 'Actual native child lost its captured physical identity.'
             }
         }
