@@ -23,9 +23,9 @@ import (
 var desktopDarwinPFNamespace = "com.apple/000.router-vpn"
 var desktopDarwinPFTestScope = ""
 
-// The Darwin/BSD pfctl loader copies its complete -a path into the 64-byte
-// pf_anchor.name before loading rules, even though the kernel path is larger.
-// Keep both independently mutable anchors as short siblings. The generation
+// Preserve the existing captured short sibling paths. Their independent
+// pfctl parser/readback and native anchor-call fields remain bounded even
+// though the native kernel's complete path buffer is larger. The generation
 // name binds every original capture field, so reusing a NetworkID in another
 // session cannot make an old cleanup target that session's leaf.
 const desktopDarwinPFAnchorPathLimit = 63
@@ -123,7 +123,10 @@ func desktopDarwinPFLoad(ctx context.Context, anchor string, rules string) error
 	if anchor == "" || len(anchor) > desktopDarwinPFAnchorPathLimit {
 		return errors.New("Darwin PF load path exceeds the native loader's captured anchor bound")
 	}
-	_, err := desktopDarwinCommand(ctx, "/sbin/pfctl", []byte(rules), "-a", anchor, "-f", "-")
+	compiled, err := desktopPFCompileFilters(rules)
+	if err == nil {
+		err = desktopDarwinPFNativeReplace(ctx, anchor, compiled)
+	}
 	if err != nil {
 		return fmt.Errorf("Darwin scoped PF load for anchor %q (%d input bytes): %w", anchor, len(rules), err)
 	}
@@ -353,13 +356,6 @@ func desktopDarwinNewPF(capture DesktopSocketCapture, uid uint32, account string
 		Slot:    desktopDarwinPFSlot(capture),
 		permits: make(map[string]desktopDarwinPFPermit)}
 	p.Anchor = desktopDarwinPFGeneration(capture)
-	p.Physical, err = desktopDarwinCaptureStateInterfaces()
-	if err != nil {
-		return nil, err
-	}
-	if err := desktopDarwinRetirePhysicalStates(ctx, p.Physical); err != nil {
-		return nil, err
-	}
 	p.Pointer = strings.TrimSpace(desktopDarwinPFPointer(capture))
 	existing, err := desktopDarwinPFRead(ctx, p.Slot)
 	if err != nil || existing != "" {
@@ -368,6 +364,18 @@ func desktopDarwinNewPF(capture DesktopSocketCapture, uid uint32, account string
 	existing, err = desktopDarwinPFRead(ctx, p.Anchor)
 	if err != nil || existing != "" {
 		return nil, errors.Join(err, errors.New("Darwin physical anchor already has an owner"))
+	}
+	if present, err := desktopDarwinPFNamespacePresent(ctx, p.Anchor); err != nil || present {
+		return nil, errors.Join(err, errors.New("Darwin physical generation still has a retained native namespace"))
+	}
+	// A different/unfinished owner is rejected before invalidating any
+	// physical states. An empty rule print alone is not an available identity.
+	p.Physical, err = desktopDarwinCaptureStateInterfaces()
+	if err != nil {
+		return nil, err
+	}
+	if err := desktopDarwinRetirePhysicalStates(ctx, p.Physical); err != nil {
+		return nil, err
 	}
 	if err := desktopDarwinPFLoad(ctx, p.Anchor, p.render()); err != nil {
 		return p, err
@@ -531,13 +539,23 @@ func (p *desktopDarwinPF) revoke(ctx context.Context, g DesktopSocketGrant) erro
 	return p.absent(ctx, g)
 }
 
-func (p *desktopDarwinPF) allAbsent(ctx context.Context) error {
+func (p *desktopDarwinPF) filtersAbsent(ctx context.Context) error {
 	if !p.valid() {
 		return errors.New("Darwin PF final absence has no captured owner")
 	}
 	actual, err := desktopDarwinPFRead(ctx, p.Anchor)
 	if err != nil || actual != "" {
 		return errors.Join(err, errors.New("Darwin physical generation still has retained filter rules"))
+	}
+	return nil
+}
+
+func (p *desktopDarwinPF) allAbsent(ctx context.Context) error {
+	if err := p.filtersAbsent(ctx); err != nil {
+		return err
+	}
+	if present, err := desktopDarwinPFNamespacePresent(ctx, p.Anchor); err != nil || present {
+		return errors.Join(err, errors.New("Darwin physical generation still has a retained native namespace"))
 	}
 	return nil
 }
@@ -552,7 +570,7 @@ func (p *desktopDarwinPF) close(ctx context.Context) error {
 	if err := desktopDarwinPFLoad(ctx, p.Anchor, "\n"); err != nil {
 		return err
 	}
-	if err := p.allAbsent(ctx); err != nil {
+	if err := p.filtersAbsent(ctx); err != nil {
 		return err
 	}
 	pointer, err := desktopDarwinPFRead(ctx, p.Slot)
@@ -567,6 +585,12 @@ func (p *desktopDarwinPF) close(ctx context.Context) error {
 		if err != nil || pointer != "" {
 			return errors.Join(err, errors.New("Darwin physical slot did not retire"))
 		}
+	}
+	// The matching slot reference must be retired before the empty generation
+	// can disappear. The baseline may still retain an empty slot; a replacement
+	// pointer belongs to its newer owner and is never cleared here.
+	if err := p.allAbsent(ctx); err != nil {
+		return err
 	}
 	clear(p.permits)
 	p.tunnel, p.index = "", 0

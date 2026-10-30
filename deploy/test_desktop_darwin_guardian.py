@@ -31,7 +31,7 @@ SPEC = importlib.util.spec_from_file_location('darwin_guardian_uid', ROOT/'deplo
 UID = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UID)
 
-CASES = ('PFCompiler', 'PFSystemDispatch', 'FixtureAnchorRetirement', 'PFAnchorPaths', 'ProtectedPathAuthority', 'IdentityRetirement', 'UIDObserver', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'HeartbeatAdmission', 'ForegroundAdmission', 'SocketRetirementReusesCapacity',
+CASES = ('PFCompiler', 'PFSystemDispatch', 'FixtureAnchorRetirement', 'PFAnchorPaths', 'PFGenerationRetirement', 'ProtectedPathAuthority', 'IdentityRetirement', 'UIDObserver', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'HeartbeatAdmission', 'ForegroundAdmission', 'SocketRetirementReusesCapacity',
          'RetainedTunnel', 'BothOwnersCrashCannotReuseTuple', 'ForeignBlockAndLaterPass',
          'RejectsForeignStatefulDirections', 'BlockedControlRetainsSourcePort',
          'FinishRequiresDescriptorRetirement', 'FloatingStateRetirement',
@@ -358,6 +358,10 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
             print('Darwin exact baseline plan, captured child join, inactive Always transition and native absence passed.')
         elif case == 'ReferenceOwnership':
             print('Darwin exact native PF reference presence, retirement and other-owner preservation passed.')
+        elif case == 'PFGenerationRetirement':
+            print('Darwin shipping PF generation retirement, replacement preservation and retained-reference retry passed.')
+        elif case in ('FixtureAnchorRetirement', 'PFAnchorPaths'):
+            print('Darwin shipping scoped PF loader, captured dispatch and actual namespace retirement passed.')
         elif case in PROBE_CASES:
             print('Darwin exact native single-filter commit and rollback anchor lifetime probe passed.')
         else:
@@ -368,11 +372,11 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
     """Compile scoped, temporary broken versions and require their exact failure."""
     if platform.system() != 'Darwin':
         raise ValueError('Darwin guardian mutations require the actual native kernel')
-    if only_case not in (None, 'NativeFilterProjection', 'BaselineTransition', 'ReferenceOwnership'):
+    if only_case not in (None, 'NativeFilterProjection', 'BaselineTransition', 'ReferenceOwnership', 'PFGenerationRetirement'):
         raise ValueError('Darwin guardian mutations require a known scoped positive case')
     if only_case is None:
         # The default guardian selector exercises the shipping loader. The
-        # proposed typed adapter has a separate exact baseline; a compilation
+        # qualified typed adapter has a separate exact baseline; a compilation
         # failure is never accepted as evidence that its mutants were rejected.
         execute(source, go, case='NativeFilterProjection')
         execute(source, go, case='BaselineTransition')
@@ -446,10 +450,25 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
         ('full captured PF dispatch path', 'PFAnchorPaths', 'actual full-session PF slot lost its exact sibling readback',
          'desktop_socket_darwin_pf.go', (
              ('return desktopDarwinPFLoad(ctx, desktopDarwinPFSlot(c), desktopDarwinPFPointer(c))',
-              'printed, err := desktopDarwinPFCanonical(ctx, desktopDarwinPFPointer(c))\n\tif err != nil { return err }\n\treturn desktopDarwinPFLoad(ctx, desktopDarwinPFSlot(c), printed+"\\n")'),)),
-        ('captured PF pointer readback', 'PFAnchorPaths', 'native PF readback accepted an unrelated root generation with the same leaf name',
+              'return desktopDarwinPFLoad(ctx, desktopDarwinPFSlot(c), strings.Replace(desktopDarwinPFPointer(c), "/"+desktopDarwinPFNamespace+"/", "", 1))'),)),
+        ('captured PF pointer readback', 'PFAnchorPaths', 'native PF readback accepted another captured sibling generation',
          'desktop_socket_darwin_pf.go', (
              ('if err != nil || actual != expected {', 'if err != nil || false && actual != expected {'),)),
+        ('complete native generation absence', 'PFGenerationRetirement', 'empty referenced generation was accepted as fully retired',
+         'desktop_socket_darwin_pf.go', (
+             ('func (p *desktopDarwinPF) allAbsent(ctx context.Context) error {\n\tif err := p.filtersAbsent(ctx); err != nil {\n\t\treturn err\n\t}\n\tif present, err := desktopDarwinPFNamespacePresent(ctx, p.Anchor); err != nil || present {',
+              'func (p *desktopDarwinPF) allAbsent(ctx context.Context) error {\n\tif err := p.filtersAbsent(ctx); err != nil {\n\t\treturn err\n\t}\n\tif present, err := desktopDarwinPFNamespacePresent(ctx, p.Anchor); err != nil || false && present {'),)),
+        ('captured replacement pointer preservation', 'PFGenerationRetirement', 'old generation cleanup removed the captured replacement pointer',
+         'desktop_socket_darwin_pf.go', (
+             ('if pointer == p.Pointer {', 'if pointer != "" {'),)),
+        ('retained native cleanup retry state', 'PFGenerationRetirement', 'failed generation retirement forgot its exact retained cleanup state',
+         'desktop_socket_darwin_pf.go', (
+             ('if err := p.allAbsent(ctx); err != nil {\n\t\treturn err\n\t}\n\tclear(p.permits)\n\tp.tunnel, p.index = "", 0',
+              'clear(p.permits)\n\tp.tunnel, p.index = "", 0\n\tif err := p.allAbsent(ctx); err != nil {\n\t\treturn err\n\t}'),)),
+        ('empty owned generation cannot be adopted', 'PFGenerationRetirement', 'native constructor adopted an empty already-referenced generation',
+         'desktop_socket_darwin_pf.go', (
+             ('if present, err := desktopDarwinPFNamespacePresent(ctx, p.Anchor); err != nil || present {\n\t\treturn nil, errors.Join(err, errors.New("Darwin physical generation still has a retained native namespace"))',
+              'if present, err := desktopDarwinPFNamespacePresent(ctx, p.Anchor); err != nil || false && present {\n\t\treturn nil, errors.Join(err, errors.New("Darwin physical generation still has a retained native namespace"))'),)),
         ('native occupied UID observation', 'IdentityRetirement', 'fresh observer accepted an actual occupied UID',
          'desktop_socket_darwin_readback.go', (
              ('state := "occupied"', 'state := "absent"'),)),
@@ -527,6 +546,7 @@ if __name__ == '__main__':
     parser.add_argument('--projection-mutations', action='store_true', help='Run only native filter projection mutations after its exact positive case')
     parser.add_argument('--baseline-mutations', action='store_true', help='Run only native baseline transition mutations after its exact positive case')
     parser.add_argument('--reference-mutations', action='store_true', help='Run only exact native reference mutations after their positive case')
+    parser.add_argument('--retirement-mutations', action='store_true', help='Run only captured generation retirement mutations after their positive case')
     args = parser.parse_args()
     if args.root_test_binary:
         if not args.sha256 or not re.fullmatch('[0-9a-f]{64}', args.sha256):
@@ -534,12 +554,14 @@ if __name__ == '__main__':
         raise SystemExit(root_fixture(args.root_test_binary, args.sha256, args.case))
     if args.source is None:
         parser.error('exact prepared native source is required')
-    if args.projection_mutations and (args.case != 'NativeFilterProjection' or args.mutations or args.baseline_mutations or args.reference_mutations):
+    if args.projection_mutations and (args.case != 'NativeFilterProjection' or args.mutations or args.baseline_mutations or args.reference_mutations or args.retirement_mutations):
         parser.error('native projection mutations require their exact positive case and a separate invocation')
-    if args.baseline_mutations and (args.case != 'BaselineTransition' or args.mutations or args.projection_mutations or args.reference_mutations):
+    if args.baseline_mutations and (args.case != 'BaselineTransition' or args.mutations or args.projection_mutations or args.reference_mutations or args.retirement_mutations):
         parser.error('native baseline mutations require their exact positive case and a separate invocation')
-    if args.reference_mutations and (args.case != 'ReferenceOwnership' or args.mutations or args.projection_mutations or args.baseline_mutations):
+    if args.reference_mutations and (args.case != 'ReferenceOwnership' or args.mutations or args.projection_mutations or args.baseline_mutations or args.retirement_mutations):
         parser.error('native reference mutations require their exact positive case and a separate invocation')
+    if args.retirement_mutations and (args.case != 'PFGenerationRetirement' or args.mutations or args.projection_mutations or args.baseline_mutations or args.reference_mutations):
+        parser.error('native retirement mutations require their exact positive case and a separate invocation')
     execute(args.source, args.go, case=args.case)
     if args.mutations:
         execute_mutations(args.source, args.go)
@@ -549,3 +571,5 @@ if __name__ == '__main__':
         execute_mutations(args.source, args.go, only_case='BaselineTransition')
     if args.reference_mutations:
         execute_mutations(args.source, args.go, only_case='ReferenceOwnership')
+    if args.retirement_mutations:
+        execute_mutations(args.source, args.go, only_case='PFGenerationRetirement')

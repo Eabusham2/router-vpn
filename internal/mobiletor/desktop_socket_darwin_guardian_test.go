@@ -241,6 +241,15 @@ func TestDesktopDarwinGuardianKernelFixtureAnchorRetirement(t *testing.T) {
 			t.Fatal("fixture retirement accepted another PF owner", anchor)
 		}
 	}
+	relativeAlias := slot + "/" + strings.TrimPrefix(generation, desktopDarwinPFNamespace+"/")
+	if !desktopDarwinFixturePFOwned(relativeAlias) {
+		t.Fatal("fixture lost its one exact shortened-pointer negative-control capture")
+	}
+	for _, unowned := range []string{relativeAlias + "/unowned", relativeAlias + "x", slot + "/other", foreign + "/" + strings.TrimPrefix(generation, desktopDarwinPFNamespace+"/") + "/unowned"} {
+		if desktopDarwinFixturePFOwned(unowned) {
+			t.Fatal("fixture relative-pointer cleanup adopted another descendant", unowned)
+		}
+	}
 	rules := fmt.Sprintf("block drop out on lo0 inet to %s\n", desktopDarwinTestFixture.Addresses[1])
 	if err := desktopDarwinPFLoad(ctx, foreign, rules); err != nil {
 		t.Fatal(err)
@@ -300,12 +309,17 @@ func TestDesktopDarwinGuardianKernelPFAnchorPaths(t *testing.T) {
 		cleanup, cancelCleanup := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancelCleanup()
 		for _, anchor := range owned {
-			if _, err := desktopDarwinCommand(cleanup, "/sbin/pfctl", nil, "-a", anchor, "-F", "rules"); err != nil {
+			if err := desktopDarwinPFLoad(cleanup, anchor, "\n"); err != nil {
 				t.Error("native PF anchor fixture did not clear its exact owned rules", anchor, err)
 				continue
 			}
 			if actual, err := desktopDarwinPFRead(cleanup, anchor); err != nil || actual != "" {
 				t.Error("native PF anchor fixture lost its exact absent readback", anchor, actual, err)
+			}
+		}
+		for _, anchor := range owned {
+			if present, err := desktopDarwinFixturePFPresent(cleanup, anchor); err != nil || present {
+				t.Error("native PF anchor fixture retained an actual owned namespace", anchor, err)
 			}
 		}
 	})
@@ -334,20 +348,35 @@ func TestDesktopDarwinGuardianKernelPFAnchorPaths(t *testing.T) {
 		t.Fatal("actual full-session PF slot lost its exact sibling readback", actual, err)
 	}
 	wrongRoot := fmt.Sprintf("anchor \"/%s\" out all", strings.TrimPrefix(generation, desktopDarwinPFNamespace+"/"))
-	if err := desktopDarwinPFLoad(ctx, slot, wrongRoot+"\n"); err != nil {
-		t.Fatal("wrong-root pointer control did not reach the native loader", err)
+	if err := desktopDarwinPFLoad(ctx, slot, wrongRoot+"\n"); err == nil {
+		t.Fatal("native PF loader created an uncaptured root generation")
 	}
-	if actual, err := desktopDarwinPFRead(ctx, slot); err != nil || actual != wrongRoot {
-		t.Fatal("wrong-root pointer control did not establish its actual kernel dispatch", actual, err)
+	if actual, err := desktopDarwinPFRead(ctx, slot); err != nil || actual != pointer {
+		t.Fatal("rejected root pointer changed the captured kernel dispatch", actual, err)
+	}
+	other := capture
+	other.NetworkID = strings.Repeat("9", 32)
+	if other.NetworkID == capture.NetworkID {
+		other.NetworkID = strings.Repeat("8", 32)
+	}
+	wrongSibling := desktopDarwinPFPointer(other)
+	if err := desktopDarwinPFLoad(ctx, slot, wrongSibling); err != nil {
+		t.Fatal("wrong-sibling control did not establish its captured native pointer", err)
+	}
+	if actual, err := desktopDarwinPFRead(ctx, slot); err != nil || actual != strings.TrimSpace(wrongSibling) {
+		t.Fatal("wrong-sibling control lost its actual kernel dispatch", actual, err)
 	}
 	if _, err := desktopDarwinPFReadPointer(ctx, capture); err == nil {
-		t.Fatal("native PF readback accepted an unrelated root generation with the same leaf name")
+		t.Fatal("native PF readback accepted another captured sibling generation")
 	}
 	if err := desktopDarwinPFLoadPointer(ctx, capture); err != nil {
 		t.Fatal(err)
 	}
 	if actual, err := desktopDarwinPFReadPointer(ctx, capture); err != nil || actual != pointer {
 		t.Fatal("actual full-session PF slot did not restore its captured sibling", actual, err)
+	}
+	if present, err := desktopDarwinFixturePFPresent(ctx, desktopDarwinPFGeneration(other)); err != nil || present {
+		t.Fatal("restoring the captured pointer retained its old empty sibling", err)
 	}
 	if actual, err := desktopDarwinPFRead(ctx, desktopDarwinPFNamespace); err != nil || actual != before {
 		t.Fatal("loading captured PF children rewrote their parent policy", actual, err)
@@ -372,10 +401,191 @@ func TestDesktopDarwinGuardianKernelPFAnchorPaths(t *testing.T) {
 		if actual, err := desktopDarwinPFRead(ctx, anchor); err != nil || actual != expected {
 			t.Fatal("rejecting an earlier PF owner removed its recovery rules", actual, err)
 		}
-		if _, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", anchor, "-F", "rules"); err != nil {
+		if err := desktopDarwinPFLoad(ctx, anchor, "\n"); err != nil {
 			t.Fatal(err)
 		}
 	}
+}
+
+func TestDesktopDarwinGuardianKernelPFGenerationRetirement(t *testing.T) {
+	options := desktopDarwinKernelOptions(t, nil)
+	capture := desktopSocketFixtureCapture()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if present, err := desktopDarwinFixturePFPresent(ctx, desktopDarwinPFNamespace); err != nil || present {
+		t.Fatal("generation retirement did not capture a fresh fixture namespace", err)
+	}
+	t.Cleanup(func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stop()
+		if err := desktopDarwinFixtureRetirePF(cleanup); err != nil {
+			t.Error("generation retirement fixture lost exact native cleanup", err)
+		}
+	})
+	if err := desktopDarwinPFLoad(ctx, desktopDarwinPFNamespace, desktopDarwinPFBaseline(capture, options)); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := desktopDarwinPFRead(ctx, desktopDarwinPFNamespace)
+	if err != nil || baseline == "" {
+		t.Fatal("generation retirement lost its scoped root baseline", err)
+	}
+	// These cases exercise the real PF cleanup primitive. They install only
+	// scoped deny rules, not a permit for this format-valid unused identity.
+	// The full guardian cases separately prove actual UID/process ownership.
+	newPolicy := func() *desktopDarwinPF {
+		return &desktopDarwinPF{Capture: capture, UID: 0x40000001, Account: "_rvpnt_" + strings.Repeat("a", 20),
+			Baseline: baseline, Slot: desktopDarwinPFSlot(capture), Anchor: desktopDarwinPFGeneration(capture),
+			Pointer: strings.TrimSpace(desktopDarwinPFPointer(capture)), permits: make(map[string]desktopDarwinPFPermit)}
+	}
+	install := func(t *testing.T, ctx context.Context, p *desktopDarwinPF) {
+		t.Helper()
+		if !p.valid() {
+			t.Fatal("generation retirement fixture lost its captured owner")
+		}
+		if err := desktopDarwinPFLoad(ctx, p.Anchor, "block drop out quick "+desktopDarwinPFTestScope+"\n"); err != nil {
+			t.Fatal(err)
+		}
+		if err := desktopDarwinPFLoadPointer(ctx, p.Capture); err != nil {
+			t.Fatal(err)
+		}
+	}
+	checkBaseline := func(t *testing.T, ctx context.Context) {
+		t.Helper()
+		if actual, err := desktopDarwinPFRead(ctx, desktopDarwinPFNamespace); err != nil || actual != baseline {
+			t.Fatal("generation retirement changed its retained root baseline", actual, err)
+		}
+	}
+	t.Run("matching-pointer", func(t *testing.T) {
+		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		p := newPolicy()
+		install(t, ctx, p)
+		if err := p.close(ctx); err != nil {
+			t.Fatal("matching generation did not retire after its pointer", err)
+		}
+		if present, err := desktopDarwinFixturePFPresent(ctx, p.Anchor); err != nil || present {
+			t.Fatal("matching generation retained its native namespace", err)
+		}
+		if actual, err := desktopDarwinPFRead(ctx, p.Slot); err != nil || actual != "" {
+			t.Fatal("matching pointer remained after generation retirement", actual, err)
+		}
+		checkBaseline(t, ctx)
+	})
+	t.Run("empty-referenced-generation", func(t *testing.T) {
+		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		p := newPolicy()
+		if err := desktopDarwinPFLoadPointer(ctx, capture); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.filtersAbsent(ctx); err != nil {
+			t.Fatal("referenced empty generation did not establish empty filter text", err)
+		}
+		if present, err := desktopDarwinFixturePFPresent(ctx, p.Anchor); err != nil || !present {
+			t.Fatal("referenced empty generation lost its actual native namespace", err)
+		}
+		if err := p.allAbsent(ctx); err == nil {
+			t.Fatal("empty referenced generation was accepted as fully retired")
+		}
+		if err := p.close(ctx); err != nil {
+			t.Fatal(err)
+		}
+		checkBaseline(t, ctx)
+	})
+	t.Run("replacement-pointer", func(t *testing.T) {
+		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		p := newPolicy()
+		install(t, ctx, p)
+		replacement := capture
+		replacement.NetworkID = strings.Repeat("7", 32)
+		if replacement.NetworkID == capture.NetworkID {
+			replacement.NetworkID = strings.Repeat("8", 32)
+		}
+		pointer := strings.TrimSpace(desktopDarwinPFPointer(replacement))
+		if err := desktopDarwinPFLoadPointer(ctx, replacement); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.close(ctx); err != nil {
+			t.Fatal("old generation could not retire beneath a replacement pointer", err)
+		}
+		if actual, err := desktopDarwinPFRead(ctx, p.Slot); err != nil || actual != pointer {
+			t.Fatal("old generation cleanup removed the captured replacement pointer", actual, err)
+		}
+		if present, err := desktopDarwinFixturePFPresent(ctx, desktopDarwinPFGeneration(replacement)); err != nil || !present {
+			t.Fatal("old generation cleanup lost the replacement namespace", err)
+		}
+		checkBaseline(t, ctx)
+		if err := desktopDarwinPFLoad(ctx, p.Slot, "\n"); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("retained-reference-retry", func(t *testing.T) {
+		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		p := newPolicy()
+		install(t, ctx, p)
+		other := capture
+		other.SessionID = strings.Repeat("d", 32)
+		extra := desktopDarwinPFSlot(other)
+		if err := desktopDarwinPFLoad(ctx, extra, p.Pointer); err != nil {
+			t.Fatal(err)
+		}
+		// Retained state is deliberately not rendered into this deny-only
+		// fixture; its lifetime must still survive an uncertain native close.
+		p.permits["pending-close"] = desktopDarwinPFPermit{}
+		p.tunnel, p.index = "utun777", 777
+		if err := p.close(ctx); err == nil {
+			t.Fatal("generation close ignored an independently retained native reference")
+		}
+		if len(p.permits) != 1 || p.tunnel != "utun777" || p.index != 777 {
+			t.Fatal("failed generation retirement forgot its exact retained cleanup state")
+		}
+		if actual, err := desktopDarwinPFRead(ctx, extra); err != nil || actual != p.Pointer {
+			t.Fatal("failed generation retirement removed another captured reference", actual, err)
+		}
+		if err := desktopDarwinPFLoad(ctx, extra, "\n"); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.close(ctx); err != nil {
+			t.Fatal("generation retirement could not retry after exact reference release", err)
+		}
+		if len(p.permits) != 0 || p.tunnel != "" || p.index != 0 {
+			t.Fatal("proved generation retirement retained its stale in-memory state")
+		}
+		checkBaseline(t, ctx)
+	})
+	t.Run("constructor-rejects-empty-owned-generation", func(t *testing.T) {
+		ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		p := newPolicy()
+		other := capture
+		other.SessionID = strings.Repeat("e", 32)
+		extra := desktopDarwinPFSlot(other)
+		if err := desktopDarwinPFLoad(ctx, extra, p.Pointer); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.filtersAbsent(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if actual, err := desktopDarwinPFRead(ctx, p.Slot); err != nil || actual != "" {
+			t.Fatal("constructor rejection fixture did not retain an empty session slot", actual, err)
+		}
+		owner, err := desktopDarwinNewPF(capture, p.UID, p.Account, options)
+		if owner != nil || err == nil {
+			t.Fatal("native constructor adopted an empty already-referenced generation", err)
+		}
+		if !strings.Contains(err.Error(), "retained native namespace") {
+			t.Fatal("constructor fixture failed before its exact empty-generation boundary", err)
+		}
+		if actual, err := desktopDarwinPFRead(ctx, extra); err != nil || actual != p.Pointer {
+			t.Fatal("rejected constructor changed the earlier captured reference", actual, err)
+		}
+		if err := desktopDarwinPFLoad(ctx, extra, "\n"); err != nil {
+			t.Fatal(err)
+		}
+		checkBaseline(t, ctx)
+	})
 }
 
 func TestDesktopDarwinGuardianKernelProtectedPathAuthority(t *testing.T) {
@@ -603,6 +813,15 @@ func desktopDarwinFixturePFOwned(anchor string) bool {
 	if anchor == projectionGeneration {
 		return true
 	}
+	// The mandatory shortened-pointer mutation can create this one empty
+	// relative alias before the independent readback rejects it. Capture only
+	// that exact derived alias so cleanup drops the parent's reference and can
+	// prove absence; arbitrary session descendants remain unowned.
+	capture := desktopSocketFixtureCapture()
+	relativeAlias := desktopDarwinPFSlot(capture) + "/" + strings.TrimPrefix(desktopDarwinPFGeneration(capture), desktopDarwinPFNamespace+"/")
+	if anchor == relativeAlias {
+		return true
+	}
 	child, found := strings.CutPrefix(anchor, desktopDarwinPFNamespace+"/")
 	return found && regexp.MustCompile(`^(?:p[0-9a-f]{32}|g[A-Za-z0-9_-]{32}|physical(?:/[0-9a-f]{32}){0,2}|physical/legacy)$`).MatchString(child)
 }
@@ -657,9 +876,6 @@ func desktopDarwinFixtureRetirePF(ctx context.Context) error {
 		}
 	}
 	for _, anchor := range anchors {
-		if anchor != desktopDarwinPFNamespace {
-			continue
-		}
 		children, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", anchor, "-v", "-s", "Anchors")
 		if err != nil {
 			return err
@@ -674,7 +890,7 @@ func desktopDarwinFixtureRetirePF(ctx context.Context) error {
 		}
 	}
 	// Retire the namespace dispatch first, then its now-unreferenced children.
-	// Load the complete empty ruleset and prove actual anchor absence. A
+	// Commit the exact empty FILTER queue and prove actual anchor absence. A
 	// filter-only flush plus empty filter text does not prove native retirement.
 	for _, anchor := range anchors {
 		present, err := desktopDarwinFixturePFPresent(ctx, anchor)

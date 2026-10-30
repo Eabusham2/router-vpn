@@ -72,17 +72,22 @@ jobs:
       - name: Prove actual shipping baseline journal and reference recovery contracts
         run: python3 deploy/test_darwin_pf_journal.py
       - name: Prove actual single-filter commit and rollback retire their native namespace
-        # This diagnostic does not alter the production PF loader or replace
-        # the full guardian/mutation gate below. Native anchor absence is
+        # This focused qualification does not replace the full shipping
+        # guardian/mutation gate below. Native anchor absence is
         # required; empty filter output alone is not a passing result.
         run: python3 deploy/test_desktop_darwin_guardian.py . --go "$(command -v go)" --case FilterOnlyRetirement
       - name: Prove typed native filter fields and reject broken private ABI projections
-        # This separately exercises the proposed native loader; the shipping
-        # PFLoad call path stays unchanged until the native transaction passes.
+        # The shipping loader uses this qualified finite projection; an
+        # unknown native build still fails before opening the PF device.
         run: python3 deploy/test_desktop_darwin_guardian.py . --go "$(command -v go)" --case NativeFilterProjection --projection-mutations
+      - name: Prove shipping scoped loader retirement and exact replacement ownership
+        run: |
+          python3 deploy/test_desktop_darwin_guardian.py . --go "$(command -v go)" --case FixtureAnchorRetirement
+          python3 deploy/test_desktop_darwin_guardian.py . --go "$(command -v go)" --case PFAnchorPaths
+          python3 deploy/test_desktop_darwin_guardian.py . --go "$(command -v go)" --case PFGenerationRetirement --retirement-mutations
       - name: Prove exact baseline transition and retained child ownership
-        # The fixed native utility is still dormant in the shipping Python
-        # path. This uses only a newly owned, scoped fixture namespace.
+        # The shipping Python journal invokes the fixed native utility. This
+        # kernel test uses only a newly owned, scoped fixture namespace.
         run: python3 deploy/test_desktop_darwin_guardian.py . --go "$(command -v go)" --case BaselineTransition --baseline-mutations
       - name: Prove exact PF reference presence and retirement without adopting another owner
         run: python3 deploy/test_desktop_darwin_guardian.py . --go "$(command -v go)" --case ReferenceOwnership --reference-mutations
