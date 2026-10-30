@@ -225,20 +225,44 @@ func desktopDarwinPFValidateSystemFilters(raw []byte) error {
 }
 
 func desktopDarwinPFGlobal(ctx context.Context) error {
+	// These independent inspections only read the kernel. Keep their original
+	// shared deadline and every foreign-owner/state/translation check, but do
+	// not spend that proof budget serially starting unrelated pfctl processes.
+	// The bounded group joins every native command before returning an error.
+	inspect := func(stage string, check func(context.Context) error) func(context.Context) error {
+		return func(captured context.Context) error {
+			if err := check(captured); err != nil {
+				return fmt.Errorf("Darwin PF %s inspection: %w", stage, err)
+			}
+			return nil
+		}
+	}
+	return desktopPFReadback(ctx,
+		inspect("enablement", desktopDarwinPFEnabled),
+		inspect("system dispatch", desktopDarwinPFSystemFilters),
+		inspect("legacy inventory", desktopDarwinPFRejectLegacyLayout),
+		inspect("owned translation", desktopDarwinPFOwnedTranslations),
+		inspect("foreign roots", desktopDarwinPFForeignRoots),
+		inspect("system children", desktopDarwinPFSystemChildren))
+}
+
+func desktopDarwinPFEnabled(ctx context.Context) error {
 	info, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-s", "info")
 	if err != nil || !regexp.MustCompile(`(?m)^Status:\s+Enabled\b`).Match(info) {
 		return errors.Join(err, errors.New("Darwin physical policy lost PF enablement"))
 	}
+	return nil
+}
+
+func desktopDarwinPFSystemFilters(ctx context.Context) error {
 	global, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-s", "rules")
 	if err != nil {
 		return errors.Join(err, errors.New("Darwin physical policy could not read the captured system PF anchor dispatch"))
 	}
-	if err := desktopDarwinPFValidateSystemFilters(global); err != nil {
-		return err
-	}
-	if err := desktopDarwinPFRejectLegacyLayout(ctx); err != nil {
-		return err
-	}
+	return desktopDarwinPFValidateSystemFilters(global)
+}
+
+func desktopDarwinPFOwnedTranslations(ctx context.Context) error {
 	// Translation outside or inside our filter namespace can create a state
 	// ahead of the next packet's creator-UID check. Read every relevant root
 	// as well as the complete owned subtree; filter ownership is not NAT ownership.
@@ -247,6 +271,10 @@ func desktopDarwinPFGlobal(ctx context.Context) error {
 			return err
 		}
 	}
+	return nil
+}
+
+func desktopDarwinPFForeignRoots(ctx context.Context) error {
 	roots, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-s", "Anchors")
 	if err != nil {
 		return err
@@ -271,6 +299,10 @@ func desktopDarwinPFGlobal(ctx context.Context) error {
 			}
 		}
 	}
+	return nil
+}
+
+func desktopDarwinPFSystemChildren(ctx context.Context) error {
 	anchors, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", "com.apple", "-s", "Anchors")
 	if err != nil {
 		return err

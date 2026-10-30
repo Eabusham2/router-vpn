@@ -36,6 +36,16 @@ CASES = ('PFCompiler', 'PFSystemDispatch', 'PFAnchorPaths', 'ProtectedPathAuthor
          'RejectsForeignStatefulDirections', 'BlockedControlRetainsSourcePort',
          'FinishRequiresDescriptorRetirement', 'FloatingStateRetirement',
          'StaleCaptureAndReplacement')
+READBACK_CASES = ('PFReadbackCompleteWithinCapturedBudget', 'PFReadbackFailureAndCancellationJoin',
+                  'PFReadbackDeadlineAndInvalidCapture')
+
+
+def native_case_name(case):
+    if case in READBACK_CASES:
+        return 'TestDesktop'+case
+    if case in CASES:
+        return 'TestDesktopDarwinGuardianKernel'+case
+    raise ValueError('Darwin native gate requires a known complete test identity')
 
 
 def checked_sources(source: Path):
@@ -207,7 +217,7 @@ def root_fixture(source_binary: Path, expected_digest: str, case=None):
         if match is None:
             raise ValueError('PF did not return an owned enable-reference token')
         token = match[1]
-        selector = '^TestDesktopDarwinGuardian' + ('Kernel'+case+'$' if case else '')
+        selector = '^'+native_case_name(case)+'$' if case else '^Test(DesktopDarwinGuardian|DesktopPFReadback)'
         started = True
         process = subprocess.Popen([str(binary), '-test.run='+selector, '-test.v',
                                     '-test.count=1', '-test.timeout=12m'],
@@ -304,8 +314,8 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
         if sudo:
             command = [sudo, '-n', '--', *command]
         output = reported_run(command, cwd=source, timeout=850, sudo=sudo)
-        wanted = (case,) if case else CASES
-        if any('--- PASS: TestDesktopDarwinGuardianKernel'+name+' (' not in output for name in wanted) or '--- SKIP:' in output:
+        wanted = (case,) if case else CASES+READBACK_CASES
+        if any('--- PASS: '+native_case_name(name)+' (' not in output for name in wanted) or '--- SKIP:' in output:
             raise ValueError('Darwin guardian gate did not execute every required native boundary')
         if case is None:
             for name in ('ChannelFragmentsAndDescriptorClosure', 'CurrentFreshnessAndStateScope', 'UIDAbsenceWait', 'UIDObserverProtocol'):
@@ -330,6 +340,18 @@ def execute_mutations(source: Path, go='go'):
     compiler, captured = UID.compiler_toolchain(source, go, captured)
     sudo = UID.privilege_tool()
     mutations = (
+        ('parallel complete PF inspection budget', 'PFReadbackCompleteWithinCapturedBudget', 'PF readback lost complete bounded parallel proof under its original deadline',
+         'desktop_socket_pf_readback.go', (
+             ('for range min(4, len(checks)) {', 'for range min(1, len(checks)) {'),)),
+        ('admitted PF inspection join', 'PFReadbackFailureAndCancellationJoin', 'PF readback returned before its admitted native checks joined',
+         'desktop_socket_pf_readback.go', (
+             ('joined.Wait()', '// broken native inspection join'),)),
+        ('PF inspection failure propagation', 'PFReadbackFailureAndCancellationJoin', 'PF readback discarded its exact failure or cancellation cleanup',
+         'desktop_socket_pf_readback.go', (
+             ('return errors.Join(ctx.Err(), errors.Join(results...))', 'return nil'),)),
+        ('PF inspection deadline proof', 'PFReadbackDeadlineAndInvalidCapture', 'PF readback accepted a stale deadline or lost admitted cleanup',
+         'desktop_socket_pf_readback.go', (
+             ('return errors.Join(ctx.Err(), errors.Join(results...))', 'return nil'),)),
         ('foreground control budget after admission', 'ForegroundAdmission', 'queued foreground creation lost its admitted control budget',
          'desktop_socket_darwin_policy.go', (
              ('if err := p.mu.lockContext(ctx); err != nil {\n\t\treturn nil, nil, err\n\t}',
@@ -413,7 +435,7 @@ def execute_mutations(source: Path, go='go'):
                 UID.run(command, cwd=source, timeout=850, sudo=sudo)
             except subprocess.CalledProcessError as error:
                 output = error.output.decode(errors='replace') if isinstance(error.output, bytes) else str(error.output)
-                if ('--- FAIL: TestDesktopDarwinGuardianKernel'+case+' (' not in output or message not in output
+                if ('--- FAIL: '+native_case_name(case)+' (' not in output or message not in output
                         or 'Native fixture cleanup retained its recovery record' in output):
                     raise ValueError('Darwin mutation failed before its intended assertion or lost cleanup: '+label+'\n'+output) from error
                 print('Rejected broken '+label+' through '+case+'.', flush=True)
@@ -429,7 +451,7 @@ if __name__ == '__main__':
     parser.add_argument('--go', default='go')
     parser.add_argument('--root-test-binary', type=Path)
     parser.add_argument('--sha256')
-    parser.add_argument('--case', choices=CASES)
+    parser.add_argument('--case', choices=CASES+READBACK_CASES)
     parser.add_argument('--mutations', action='store_true', help='Run scoped production mutation controls after the native positive suite')
     args = parser.parse_args()
     if args.root_test_binary:
