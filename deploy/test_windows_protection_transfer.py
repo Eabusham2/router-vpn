@@ -23,12 +23,24 @@ REQUIRED = tuple("TestDesktopWindowsProtectionTransfer" + suffix for suffix in (
 PURE = ("TestDesktopWindowsProtectionTargetRejectsSubstitution", "TestDesktopWindowsProtectionTargetCapturesBeforeNativeWait",
         "TestDesktopProtectionTransferRecordRoundTrip", "TestDesktopProtectionTransferRecordRejectsChangedFields",
         "TestDesktopProtectionTransferRecordStrictEncoding", "TestDesktopProtectionRetirementRecordExactOutcomes")
+COMMIT_REQUIRED = tuple("TestDesktopWindowsProtectionCommitNative" + suffix for suffix in (
+    "RequiresBarrier", "Successor", "SuccessorAbort", "RejectsExtraCandidate", "Retirement", "RetirementRetry"))
+COMMIT_PURE = tuple("TestDesktopWindowsProtectionCommit" + suffix for suffix in (
+    "Validation", "CopiesTargets", "Cancellation", "JoinsCallback"))
+COMMIT_SUBCASES = {
+    COMMIT_REQUIRED[1]: ("initial", "retained"),
+    COMMIT_REQUIRED[2]: ("persist-failure", "late-cancellation", "foreign-predecessor"),
+    COMMIT_REQUIRED[4]: ("release-on-connect", "preserve-always", "explicit-off"),
+    COMMIT_REQUIRED[5]: ("persist-failure", "late-cancellation"),
+}
 
 
 def mutants(target):
     transfer = (target / "desktop_socket_windows_transfer.go").read_text(encoding="utf-8")
     baseline = (target / "desktop_socket_windows_baseline.go").read_text(encoding="utf-8")
     record = (target / "desktop_protection_transfer_record.go").read_text(encoding="utf-8")
+    commit = (target / "desktop_socket_windows_commit.go").read_text(encoding="utf-8")
+    barrier = (target / "desktop_socket_protection_commit.go").read_text(encoding="utf-8")
     return (
         ("other-predecessor", "desktop_socket_windows_transfer.go", REQUIRED[1],
          "changed native predecessor acquired replacement authority",
@@ -64,6 +76,35 @@ def mutants(target):
          IDENTITY.replace_once(record,
             "r.Target.Capture.SourceSHA256 != expected.SourceSHA256",
             "(r.Target.Capture.SourceSHA256 != expected.SourceSHA256 && false)")),
+        ("successor-without-intent", "desktop_socket_windows_baseline.go", COMMIT_REQUIRED[1],
+         "BFE successor committed without its exact normalized intent",
+         IDENTITY.replace_once(baseline, "err = p.completeSuccessorCommitBarrier(old)", "err = nil")),
+        ("retirement-without-intent", "desktop_socket_windows_baseline.go", COMMIT_REQUIRED[4],
+         "BFE retirement lost its original policy or durable intent",
+         IDENTITY.replace_once(baseline, "err := p.completeRemovalCommitBarrier(ctx)", "err := error(nil)")),
+        ("candidate-extra-rule", "desktop_socket_windows_commit.go", COMMIT_REQUIRED[3],
+         "incomplete candidate rules acquired durable commit acknowledgment",
+         IDENTITY.function_mutant(commit, "func (p *DesktopWindowsSocketPolicy) completeSuccessorCommitBarrier(",
+            "if err := p.baselineEngine.AssertComplete(actual.sublayer, actual.baseline); err != nil {",
+            "if err := error(nil); err != nil {")),
+        ("original-always-intent", "desktop_socket_windows_commit.go", COMMIT_REQUIRED[4],
+         "BFE retirement lost its original policy or durable intent",
+         IDENTITY.replace_once(commit,
+            "previous := desktopWindowsProtectionTarget(actual.capture, actual.options.KillSwitchPolicy, actual.metadata)",
+            "previous := desktopWindowsProtectionTarget(actual.capture, p.options.KillSwitchPolicy, actual.metadata)")),
+        ("missing-required-callback", "desktop_socket_windows_commit.go", COMMIT_REQUIRED[0],
+         "durable successor admitted a missing persistence callback",
+         IDENTITY.function_mutant(commit, "func NewDesktopWindowsSocketPolicySuccessorWithBarrier(",
+            "if barrier == nil {", "if false && barrier == nil {")),
+        ("failed-durable-ack", "desktop_socket_protection_commit.go", COMMIT_PURE[2],
+         "commit lost its actual persistence failure",
+         IDENTITY.replace_once(barrier, "return errors.Join(err, ctx.Err())", "_ = err; return ctx.Err()")),
+        ("late-cancelled-ack", "desktop_socket_protection_commit.go", COMMIT_PURE[2],
+         "late cancellation was converted into commit authority",
+         IDENTITY.replace_once(barrier, "return errors.Join(err, ctx.Err())", "return err")),
+        ("mutable-native-commit", "desktop_socket_protection_commit.go", COMMIT_PURE[1],
+         "durable callback mutated retained native commit targets",
+         IDENTITY.replace_once(barrier, "barrier(ctx, cloneDesktopWindowsProtectionCommit(change))", "barrier(ctx, change)")),
     )
 
 
@@ -74,6 +115,8 @@ def execute(source=ROOT, go="go", *, env=None, bootstrap_only=False):
     for name in ("desktop_socket_protection_target.go", "desktop_socket_protection_target_test.go",
                  "desktop_socket_windows_transfer.go", "desktop_socket_windows_transfer_test.go",
                  "desktop_protection_transfer_record.go", "desktop_protection_transfer_record_test.go",
+                 "desktop_socket_protection_commit.go", "desktop_socket_protection_commit_test.go",
+                 "desktop_socket_windows_commit.go", "desktop_socket_windows_commit_test.go",
                  "desktop_socket_windows_baseline.go", "desktop_socket_windows_policy.go"):
         if name not in before:
             raise ValueError("Exact WFP transfer lost shipping source: " + name)
@@ -91,8 +134,11 @@ def execute(source=ROOT, go="go", *, env=None, bootstrap_only=False):
         status, output = IDENTITY.run([binary, "-test.run=^TestDesktop(WindowsProtection|ProtectionTransferRecord|ProtectionRetirementRecord)", "-test.count=1", "-test.timeout=120s", "-test.v"],
                                       cwd=source, env=captured, timeout=135)
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
-        if status or any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *PURE)) or any(value in output for value in ("--- SKIP:", "DATA RACE")):
+        if status or any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *PURE, *COMMIT_REQUIRED, *COMMIT_PURE)) or any(value in output for value in ("--- SKIP:", "DATA RACE")):
             raise ValueError("Exact native transfer omitted a required kernel/ownership case")
+        for test, cases in COMMIT_SUBCASES.items():
+            if any("--- PASS: " + test + "/" + case + " (" not in output for case in cases):
+                raise ValueError("Native commit barrier omitted its actual case: " + test)
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("Exact native transfer executable changed during execution")
         for label, filename, test, witness, changed in mutants(target):
@@ -111,7 +157,7 @@ def execute(source=ROOT, go="go", *, env=None, bootstrap_only=False):
             print("Rejected exact native transfer production mutant: " + label, flush=True)
     if IDENTITY.checked_sources(source)[3] != before:
         raise ValueError("Exact WFP transfer source changed during native execution")
-    print("Exact BFE succession and reversal, retained target identity, Always preservation, joined partial outcomes, canonical private receipts and eight production mutations passed. Application host adoption and encrypted-peer composition remain separate requirements.", flush=True)
+    print("Exact BFE succession and reversal, retained target identity, Always preservation, joined partial outcomes, canonical private receipts, precommit durable-barrier ordering/cancellation and sixteen production mutations passed. Actual journal persistence, application host adoption and encrypted-peer composition remain separate requirements.", flush=True)
 
 
 if __name__ == "__main__":

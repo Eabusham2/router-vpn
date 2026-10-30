@@ -165,6 +165,8 @@ class DesktopPTPreparation(unittest.TestCase):
             for name in ('desktop_socket_source_unix_test.go', 'desktop_socket_source_privileged_test.go',
                          'desktop_socket_linux_guardian_test.go', 'desktop_socket_native_windows_test.go',
                          'desktop_socket_windows_identity_test.go',
+                         'desktop_socket_protection_commit.go', 'desktop_socket_protection_commit_test.go',
+                         'desktop_socket_windows_commit.go', 'desktop_socket_windows_commit_test.go',
                          'desktop_socket_darwin_filter_cgo.go', 'desktop_socket_darwin_filter_nocgo.go',
                          'desktop_socket_darwin_filter_test.go', 'desktop_socket_pf_filter_native.go',
                          'desktop_socket_pf_filter_native_test.go',

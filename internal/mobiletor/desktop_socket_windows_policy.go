@@ -71,6 +71,8 @@ type DesktopWindowsSocketPolicy struct {
 	baselineWeight, lockWeight  uint16
 	baseline                    []desktopWFPRule
 	predecessor                 *desktopWindowsProtectionExpected
+	commitBarrier               DesktopWindowsProtectionCommitBarrier
+	commitAction                string
 	tunnel                      []desktopWFPRule
 	tunnelName                  string
 	tunnelIndex                 uint32
@@ -774,7 +776,7 @@ func (p *DesktopWindowsSocketPolicy) Close(ctx context.Context) error {
 				return struct{}{}, err
 			}
 		}
-		if err := p.finishBaseline(); err != nil {
+		if err := p.finishBaseline(ctx); err != nil {
 			return struct{}{}, err
 		}
 		// Release the native lock only after all socket/token ownership and the

@@ -21,6 +21,10 @@ func NewDesktopWindowsSocketPolicySuccessor(ctx context.Context, capture Desktop
 }
 
 func newDesktopWindowsSocketPolicySuccessor(ctx context.Context, capture DesktopSocketCapture, options DesktopWindowsSocketOptions, predecessor *DesktopWindowsProtectionTarget, scope []byte) (*DesktopWindowsSocketPolicy, error) {
+	return newDesktopWindowsSocketPolicySuccessorWithBarrier(ctx, capture, options, predecessor, scope, nil)
+}
+
+func newDesktopWindowsSocketPolicySuccessorWithBarrier(ctx context.Context, capture DesktopSocketCapture, options DesktopWindowsSocketOptions, predecessor *DesktopWindowsProtectionTarget, scope []byte, barrier DesktopWindowsProtectionCommitBarrier) (*DesktopWindowsSocketPolicy, error) {
 	expected, err := newDesktopWindowsProtectionExpected(predecessor)
 	if err != nil {
 		return nil, err
@@ -36,6 +40,7 @@ func newDesktopWindowsSocketPolicySuccessor(ctx context.Context, capture Desktop
 		return nil, err
 	}
 	p.predecessor = expected
+	p.commitBarrier, p.commitAction = barrier, "successor"
 	return startDesktopWindowsSocketPolicy(ctx, p)
 }
 

@@ -228,6 +228,9 @@ func (p *DesktopWindowsSocketPolicy) replaceBaseline() error {
 		}
 	}
 	if err == nil {
+		err = p.completeSuccessorCommitBarrier(old)
+	}
+	if err == nil {
 		err = p.baselineEngine.Commit()
 	}
 	if err != nil {
@@ -275,7 +278,7 @@ func (p *DesktopWindowsSocketPolicy) resolveBaselineOwnership() error {
 	return p.assertBaseline()
 }
 
-func (p *DesktopWindowsSocketPolicy) finishBaseline() error {
+func (p *DesktopWindowsSocketPolicy) finishBaseline(ctx context.Context) error {
 	if p.baselineDone {
 		return nil
 	}
@@ -292,8 +295,11 @@ func (p *DesktopWindowsSocketPolicy) finishBaseline() error {
 		if err := p.baselineEngine.Begin(); err != nil {
 			return err
 		}
-		p.baselineRemovalAttempted = true
-		err := desktopWindowsDeleteBaseline(p.baselineEngine, p)
+		err := p.completeRemovalCommitBarrier(ctx)
+		if err == nil {
+			p.baselineRemovalAttempted = true
+			err = desktopWindowsDeleteBaseline(p.baselineEngine, p)
+		}
 		if err == nil {
 			err = p.baselineEngine.Commit()
 		}
@@ -343,6 +349,10 @@ func newDesktopWindowsProtectionTransaction(ctx context.Context, fixtureScope []
 }
 
 func newDesktopWindowsProtectionTransactionTarget(ctx context.Context, fixtureScope []byte, removeAlways bool, target *DesktopWindowsProtectionTarget) (*DesktopWindowsProtectionRecovery, error) {
+	return newDesktopWindowsProtectionTransactionTargetWithBarrier(ctx, fixtureScope, removeAlways, target, nil)
+}
+
+func newDesktopWindowsProtectionTransactionTargetWithBarrier(ctx context.Context, fixtureScope []byte, removeAlways bool, target *DesktopWindowsProtectionTarget, barrier DesktopWindowsProtectionCommitBarrier) (*DesktopWindowsProtectionRecovery, error) {
 	var expected *desktopWindowsProtectionExpected
 	if target != nil {
 		var err error
@@ -366,6 +376,16 @@ func newDesktopWindowsProtectionTransactionTarget(ctx context.Context, fixtureSc
 	lifetime, cancel := context.WithCancel(ctx)
 	p := &DesktopWindowsSocketPolicy{capture: capture, ctx: lifetime, cancel: cancel, gate: make(chan struct{}, 1),
 		sublayer: desktopWindowsManagedKey("baseline", fixtureScope), fixtureScope: append([]byte(nil), fixtureScope...), recoveryMode: true}
+	if barrier != nil {
+		if expected == nil || expected.target == nil {
+			cancel()
+			return nil, errors.New("Windows durable retirement requires an exact expected target")
+		}
+		p.predecessor, p.commitBarrier, p.commitAction = expected, barrier, "release"
+		if removeAlways {
+			p.commitAction = "off"
+		}
+	}
 	p.gate <- struct{}{}
 	recovery := &DesktopWindowsProtectionRecovery{owner: p}
 	_, err := desktopWindowsPolicyCall(p, ctx, false, func() (struct{}, error) {

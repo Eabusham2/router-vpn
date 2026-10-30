@@ -516,6 +516,7 @@ def prepare(vendor, go='go', *, env=None):
                     'desktop_socket_tcp_completion_test.go',
                     'desktop_socket_windows_identity_test.go', 'desktop_socket_windows_wfp_test.go',
                     'desktop_socket_protection_target_test.go', 'desktop_socket_windows_transfer_test.go', 'desktop_protection_transfer_record_test.go',
+                    'desktop_socket_protection_commit_test.go', 'desktop_socket_windows_commit_test.go',
                     'desktop_socket_windows_probe_test.go', 'desktop_socket_windows_probe_process_test.go',
                     'desktop_socket_windows_probe_worker_test.go',
                     'desktop_socket_windows_network_test.go', 'desktop_socket_windows_wfp_traffic_test.go',
