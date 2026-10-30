@@ -75,12 +75,17 @@ class NativeShippingAuditTests(unittest.TestCase):
     def test_package_shutdown_and_executable_regressions_remain_required(self):
         mutations = (
             ("deploy/package-builds.sh", 'cp "$DIST/client/RouterVPN-$arch.exe" "$dir/RouterVPN.exe"', "omit owned launcher"),
-            ("cmd/windows-app-launcher/main.go", 'filepath.Join(root, "client", "RouterVPN-Windows-App.ps1")', 'filepath.Join(root, "web-link")'),
-            ("cmd/windows-app-launcher/main.go", "controllerprocess.Track(child, ownerToken)", "trackUnrelated(child)"),
-            ("cmd/portable-launcher/controller_shutdown.go", "controllerprocess.Stop(cmd)", "nil"),
-            ("internal/controllerprocess/client.go", "receipt.Token != token", "false"),
-            ("internal/controllerprocess/client.go", "!receipt.Closed", "false"),
-            ("internal/controllerprocess/client.go", "<-owner.done", "<-unrelatedDone"),
+            ("cmd/windows-app-launcher/main.go", "windowsapp.Main(false)", "windowsapp.Main(true)"),
+            ("cmd/portable-bootstrap/main.go", "windowsapp.Main(true)", "windowsapp.Main(false)"),
+            ("cmd/portable-launcher/main_windows.go", "windowsapp.Main(true)", "legacyMain()"),
+            ("internal/windowsapp/session_windows.go", "s.controller.Wait(ctx)", "s.self.Wait(ctx)"),
+            ("internal/windowsapp/session_windows.go", "s.controllerShell.Close()", "s.selfImage.Close()"),
+            ("internal/controllertransport/client.go", "subtle.ConstantTimeCompare([]byte(receipt.Token), []byte(client.shutdown)) != 1", "false"),
+            ("internal/controllertransport/client.go", "!receipt.Closed", "false"),
+            ("internal/windowsapp/entry_windows.go", "session.Close(retirement)", "error(nil)"),
+            ("deploy/test_windows_recovery_launcher.py", "check_package_session(shell)", "pass"),
+            ("client/test-windows-package-session.ps1", "Invoke-PackagedNativeSelfTest $RelocateTo $true", "# omit relocated native execution"),
+            ("client/test-windows-package-session.ps1", "[IO.FileShare]::None", "[IO.FileShare]::ReadWrite"),
             (".github/workflows/windows-native-contract.yml", "test_windows_recovery_launcher.py --shell powershell.exe", "unrelated-test.py"),
         )
         for path, before, after in mutations:

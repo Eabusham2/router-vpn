@@ -217,13 +217,18 @@ for required in (
 ):
     if required not in windows_app:
         error(f"native Windows app contract missing: {required}")
-portable = text("cmd/portable-launcher/main.go")
-for required in ("RouterVPN-Windows-App.ps1", "openNativeApp(nativeApp)", "nativeCmd.Wait()", "-SelfTest"):
+portable = text("cmd/portable-launcher/main_windows.go")
+for required in ('"router-vpn/internal/windowsapp"', "os.Exit(windowsapp.Main(true))"):
     if required not in portable:
         error(f"Windows Portable native-app lifecycle missing: {required}")
-for forbidden in ("msedge.exe", "chrome.exe", "--app=", "openAppWindow", "browserCmd"):
+for forbidden in ("msedge.exe", "chrome.exe", "--app=", "openAppWindow", "browserCmd", "exec.Command", "legacyMain()"):
     if forbidden in portable:
         error(f"Windows Portable still launches a browser shell: {forbidden}")
+session = text("internal/windowsapp/session_windows.go")
+for required in ("windowscontroller.LaunchProtectedBootstrapElevated", "controllertransport.NewClient(s.controller",
+                 "s.client.Shutdown(ctx)", "s.controller.Wait(ctx)", "s.controllerShell.Close()"):
+    if required not in session:
+        error(f"Windows native owned Session lost its captured lifecycle: {required}")
 
 helper = text("router/asus-merlin-router-vpn-forwards.sh")
 for required in (

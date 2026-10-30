@@ -20,7 +20,9 @@ var nativeLayeredWindowsModes = map[string]bool{
 	"reality-vision": true, "reality-pq-vision": true, "split": true, "max": true,
 }
 
-func main() {
+// legacyMain preserves the existing non-Windows compatibility entry. Windows
+// packages enter main_windows.go and the captured native windowsapp.Session.
+func legacyMain() {
 	selfTest := false
 	for _, arg := range os.Args[1:] {
 		if arg == "--self-test" {

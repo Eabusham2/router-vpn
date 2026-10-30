@@ -7,19 +7,15 @@ import (
 )
 
 func TestPortableCleanExitSourceContract(t *testing.T) {
-	b, err := os.ReadFile("main.go")
+	b, err := os.ReadFile("main_windows.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	s := string(b)
 	for _, required := range []string{
-		"RouterVPN-Windows-App.ps1",
-		"openNativeApp(nativeApp)",
-		"nativeCmd.Wait()",
-		"-SelfTest",
-		"stopPortableController(cmd)",
-		"trackPortableController(cmd, ownerToken)",
-		"http://10.77.0.1:8787/health",
+		"//go:build windows",
+		`"router-vpn/internal/windowsapp"`,
+		"os.Exit(windowsapp.Main(true))",
 	} {
 		if !strings.Contains(s, required) {
 			t.Fatalf("portable native-app clean-exit contract missing %q", required)
@@ -35,6 +31,10 @@ func TestPortableCleanExitSourceContract(t *testing.T) {
 		"--app=",
 		"BrowserProfile",
 		".Process.Kill()",
+		"legacyMain()",
+		"controllerReady",
+		"exec.Command",
+		"http://127.0.0.1",
 	} {
 		if strings.Contains(s, forbidden) {
 			t.Fatalf("portable launcher contains retired browser/path fallback %q", forbidden)

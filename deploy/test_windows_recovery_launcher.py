@@ -115,8 +115,10 @@ def audit_contracts():
     nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'windows_controller_lifecycle']
     require(len(nodes) == 1, 'Actual checked-launcher audit function is missing')
     code = compile(ast.Module(body=nodes, type_ignores=[]), str(audit), 'exec')
-    paths = ('cmd/portable-launcher/main.go', 'cmd/portable-launcher/controller_shutdown.go',
-             'cmd/windows-app-launcher/main.go', 'internal/controllerprocess/client.go', 'deploy/package-builds.sh')
+    paths = ('cmd/portable-launcher/main_windows.go', 'cmd/portable-bootstrap/main.go',
+             'cmd/windows-app-launcher/main.go', 'internal/windowsapp/entry_windows.go',
+             'internal/windowsapp/session_windows.go', 'internal/windowsapp/public_entry_test.go',
+             'internal/controllertransport/client.go', 'deploy/package-builds.sh')
     sources = {name: (ROOT/name).read_text(encoding='utf-8') for name in paths}
     def verify(changes=None):
         content = {**sources, **(changes or {})}; errors = []
@@ -127,13 +129,14 @@ def audit_contracts():
         scope = {'need':need, 'no':no}; exec(code, scope); scope['windows_controller_lifecycle']()
         return errors
     require(not verify(), 'Current checked-launcher audit failed')
-    package = 'deploy/package-builds.sh'; owner = 'internal/controllerprocess/client.go'
+    package = 'deploy/package-builds.sh'; owner = 'internal/controllertransport/client.go'
     mutations = (
         (package, '$process=Start-Process @start', '$process=$null'),
         (package, '$process.Refresh()', 'Stop-Process -InputObject $controller -Force'),
-        (owner, 'receipt.Token != token', 'false'),
-        (owner, '<-owner.done', '<-unrelatedDone'),
-        (owner, 'owners.Load(cmd)', 'owners.Load(otherCommand)'),
+        (owner, 'subtle.ConstantTimeCompare([]byte(receipt.Token), []byte(client.shutdown)) != 1', 'false'),
+        ('internal/windowsapp/session_windows.go', 's.controller.Wait(ctx)', 's.self.Wait(ctx)'),
+        ('internal/windowsapp/entry_windows.go', 'session.Close(retirement)', 'error(nil)'),
+        ('cmd/portable-launcher/main_windows.go', 'windowsapp.Main(true)', 'windowsapp.Main(false)'),
     )
     for path, before, after in mutations:
         require(before in sources[path], 'Lifecycle audit mutation drifted')
@@ -186,7 +189,9 @@ def main():
                                 capture_output=True, text=True, timeout=30)
         require(result.returncode != 0 and not missing_record.exists() and 'RouterVPN.exe is missing' in result.stderr,
                 'Missing adjacent launcher was silently replaced or accepted')
-    print('Packaged Windows recovery dispatch: 4 actual native exits + missing-launcher rejection + 5 lifecycle-audit negatives PASS ('+args.shell+')')
+    from test_windows_package_session import check as check_package_session
+    check_package_session(shell)
+    print('Packaged Windows recovery dispatch: 4 actual native exits + missing-launcher rejection + 6 lifecycle-audit negatives PASS ('+args.shell+')')
 
 
 if __name__ == '__main__':

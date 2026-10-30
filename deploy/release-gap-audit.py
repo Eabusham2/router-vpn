@@ -162,13 +162,13 @@ require(
     "$SelfTest",
 )
 require(
-    "cmd/portable-launcher/main.go",
-    "RouterVPN-Windows-App.ps1",
-    "openNativeApp(nativeApp)",
-    "nativeCmd.Wait()",
-    "-SelfTest",
+    "cmd/portable-launcher/main_windows.go",
+    '"router-vpn/internal/windowsapp"',
+    "os.Exit(windowsapp.Main(true))",
 )
-for rel in ("client/RouterVPN-Windows-App.ps1", "cmd/portable-launcher/main.go", "deploy/package-builds.sh"):
+require("internal/windowsapp/entry_windows.go", "session.RunUI(selfTest)", "session.Close(retirement)")
+require("internal/windowsapp/session_windows.go", "s.client.Shutdown(ctx)", "s.controller.Wait(ctx)", "s.controllerShell.Close()")
+for rel in ("client/RouterVPN-Windows-App.ps1", "cmd/portable-launcher/main_windows.go", "deploy/package-builds.sh"):
     forbid(rel, "msedge.exe", "chrome.exe", "--app=http://127.0.0.1", "WKWebView", "WebView2")
 
 # macOS must ship a native AppKit .app and not a hidden WebKit wrapper.

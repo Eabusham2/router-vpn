@@ -175,10 +175,11 @@ need(
 )
 need(
     "cmd/windows-app-launcher/main.go",
-    'filepath.Join(root, "client", "RouterVPN-Windows-App.ps1")',
-    'ui := hiddenCommand("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", app, "-BaseUrl", localBaseURL)',
-    "ui.Wait()",
+    '"router-vpn/internal/windowsapp"',
+    "os.Exit(windowsapp.Main(false))",
 )
+need("internal/windowsapp/entry_windows.go", "session.RunUI(selfTest)", "session.Close(retirement)")
+need("internal/windowsapp/session_windows.go", '"RouterVPN-Windows-App.ps1"', "windowscontroller.LaunchGUIChild", "windowsuibridge.ServeReady", "s.controller.Wait(ctx)")
 need(
     "client/RouterVPN-Windows-App.ps1",
     "RouterVPN-Windows-UnifiedShell.ps1",

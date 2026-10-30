@@ -28,6 +28,13 @@ def forbid(rel: str, *markers: str) -> None:
             errors.append(f"{rel}: forbidden Portable state regression marker {marker!r}")
 
 
+require("cmd/portable-launcher/main_windows.go", "os.Exit(windowsapp.Main(true))")
+require("cmd/portable-bootstrap/main.go", "os.Exit(windowsapp.Main(true))")
+require("internal/windowsapp/session_windows.go", "PreparePortableData(s.ctx, s.selfImage, s.self)")
+require("internal/windowsapp/portable_prepare_windows.go", "PreparePortableData", "portableReadPrivate", "portablePublishPrivate", "stillOwned", "Portable private target changed before captured publication")
+require("internal/windowsapp/portable_security_windows.go", "portableFileIdentity", "portableHardenCaptured", "Portable private state did not protect its inheritance")
+# Preserve the existing non-Windows compatibility/private-store regression
+# coverage as well as the actual retained Windows preparation above.
 require(
     "cmd/portable-launcher/private_store.go",
     "validatePortableExistingAncestors",

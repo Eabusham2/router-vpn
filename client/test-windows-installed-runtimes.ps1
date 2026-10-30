@@ -70,8 +70,9 @@ try {
     foreach($relative in $digests.Keys) {
         if((Get-FileHash -LiteralPath (Join-Path $installed $relative) -Algorithm SHA256).Hash -ne $digests[$relative]) { throw ('Upgrade replaced private state or driver assets: '+$relative) }
     }
-    $process=Start-Process -FilePath (Join-Path $installed 'RouterVPN.exe') -ArgumentList '--self-test' -Wait -PassThru
-    if($process.ExitCode -ne 0) { throw ('Installed native launcher self-test failed: '+$process.ExitCode) }
+    $sessionTest=Join-Path $installed 'client/test-windows-package-session.ps1'
+    if(-not(Test-Path -LiteralPath $sessionTest -PathType Leaf)) { throw 'Installed package lacks its actual owned Session test.' }
+    & $sessionTest -Root $installed
     if(@(Get-ChildItem -LiteralPath $installed -Force -Filter '.runtime-install-*').Count -ne 0) { throw 'Successful installed upgrade retained an unfinished runtime transaction.' }
     $complete=$true
     Write-Output ('Actual Windows '+$ExpectedArchitecture+' installation and upgrade: PASS (native, AmneziaWG, Xray, private state, drivers, Start Menu and launcher)')

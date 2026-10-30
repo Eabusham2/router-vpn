@@ -95,23 +95,33 @@ def windows_owned_package() -> bool:
                     "Wait=$true;PassThru=$true", "$process=Start-Process @start",
                     "$process.Refresh()", "exit ([int]$process.ExitCode)")
         and all_markers("cmd/windows-app-launcher/main.go",
-                        'filepath.Join(root, "client", "RouterVPN-Windows-App.ps1")',
-                        '"-File", app, "-BaseUrl", localBaseURL',
-                        "controllerprocess.Track(child, ownerToken)",
-                        "controllerprocess.Stop(child)", "ui.Wait()")
-        and all_markers("cmd/portable-launcher/main.go",
-                        "RouterVPN-Windows-App.ps1", "nativeCmd.Wait()",
-                        "trackPortableController(cmd, ownerToken)", "stopPortableController(cmd)")
-        and all_markers("cmd/portable-launcher/controller_shutdown.go",
-                        "controllerprocess.Track(cmd, token)", "controllerprocess.Stop(cmd)")
-        and all_markers("internal/controllerprocess/client.go", "owners.Load(cmd)",
-                        "receipt.PID != pid", "receipt.Token != token", "!receipt.Closed",
-                        "<-owner.done", "api/controller/shutdown")
-        and all_markers("internal/controllerprocess/client_test.go",
-                        "TestControllerProcessPendingCleanupRetainsOwnedProcess",
-                        "TestControllerProcessDeathIsNotCleanupEvidence")
+                        '"router-vpn/internal/windowsapp"', "os.Exit(windowsapp.Main(false))")
+        and all_markers("cmd/portable-bootstrap/main.go", "os.Exit(windowsapp.Main(true))")
+        and all_markers("cmd/portable-launcher/main_windows.go", "os.Exit(windowsapp.Main(true))")
+        and all(none_markers(path, "exec.Command", "http://127.0.0.1", "legacyMain()", "Process.Release")
+                for path in ("cmd/windows-app-launcher/main.go", "cmd/portable-bootstrap/main.go", "cmd/portable-launcher/main_windows.go"))
+        and all_markers("internal/windowsapp/entry_windows.go", "Start(ctx, portable)",
+                        "session.RunUI(selfTest)", "session.Close(retirement)")
+        and all_markers("internal/windowsapp/session_windows.go",
+                        "windowscontroller.PinCurrentImage()", "windowscontroller.PinProtectedShellImage(s.controllerImage)",
+                        "windowscontroller.LaunchProtectedBootstrapElevated(s.ctx, s.controllerShell, arguments)",
+                        "s.pipe.VerifyPeer(s.controller, s.controllerImage)", "controllertransport.NewClient(s.controller",
+                        '"RouterVPN-Windows-App.ps1"', '"RouterVPN-Windows-Tray.ps1"', "windowscontroller.LaunchGUIChild",
+                        "s.client.Shutdown(ctx)", "s.controller.Wait(ctx)", "s.controllerShell.Close()", "s.closed = true")
+        and all_markers("internal/controllertransport/client.go", "receipt.PID != int(client.owner.PID())",
+                        "subtle.ConstantTimeCompare([]byte(receipt.Token), []byte(client.shutdown)) != 1",
+                        "!receipt.Closed", "api/controller/shutdown")
+        and all_markers("internal/controllertransport/client_test.go", "TestControllerTransportExactShutdownAndExitedReceipt",
+                        "TestControllerTransportNoPlaintextFallback")
+        and all_markers("internal/windowsapp/public_entry_test.go", "TestWindowsPublicEntriesUseOwnedMain")
         and all_markers("deploy/test_windows_recovery_launcher.py",
-                        "def audit_contracts()", "write_windows_app_launcher", "Broken checked-launcher invariant passed")
+                        "def audit_contracts()", "write_windows_app_launcher", "Broken checked-launcher invariant passed",
+                        "from test_windows_package_session import check as check_package_session", "check_package_session(shell)")
+        and all_markers("client/test-windows-package-session.ps1",
+                        "GetFileInformationByHandle", "Invoke-PackagedNativeSelfTest $RelocateTo $true",
+                        "if($relocatedRouters -cne $routers)", "[IO.FileShare]::None")
+        and all_markers("deploy/test_windows_package_session.py",
+                        "def check(shell):", "^TestWindowsPublicEntriesUseOwnedMain$", "'ignore-exit'", "'ignore-file-identity'", "'ignore-router-replacement'", "'ignore-code-pins'")
         and all_markers(".github/workflows/windows-native-contract.yml",
                         "./internal/controllerprocess",
                         "test_windows_recovery_launcher.py --shell pwsh",

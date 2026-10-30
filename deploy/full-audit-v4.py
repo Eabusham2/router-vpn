@@ -74,11 +74,14 @@ need("deploy/cleanup-known-stale-branches.sh","Unexpected non-main branch","exit
 
 # Current controller/native app UI: 16 logical modes, typed validation, real Windows WPF shell, real Linux multihop UI.
 def windows_controller_lifecycle():
- need("cmd/portable-launcher/main.go","RouterVPN-Windows-App.ps1","openNativeApp(nativeApp)","nativeCmd.Wait()","-SelfTest","stopPortableController(cmd)","trackPortableController(cmd, ownerToken)")
- need("cmd/portable-launcher/controller_shutdown.go","controllerprocess.Track(cmd, token)","controllerprocess.Stop(cmd)")
- need("cmd/windows-app-launcher/main.go","controllerprocess.Environment(os.Environ(), ownerToken)","controllerprocess.Track(child, ownerToken)","controllerprocess.Stop(child)")
- need("internal/controllerprocess/client.go","owners.Load(cmd)","owner.command.Process.Pid, owner.token",'localURL+"api/controller/shutdown"',"applexray.Object(body)","len(fields) != 4","decoder.DisallowUnknownFields()","response.StatusCode != http.StatusOK","receipt.Schema != 1","receipt.PID != pid","receipt.Token != token","!receipt.Closed","<-owner.done","owned controller exited without a checked cleanup receipt")
- no("internal/controllerprocess/client.go",".Kill(",".Signal(","TerminateProcess","api/emergency-stop")
+ for path, portable in (("cmd/windows-app-launcher/main.go", "false"), ("cmd/portable-bootstrap/main.go", "true"), ("cmd/portable-launcher/main_windows.go", "true")):
+  need(path, "//go:build windows", '"router-vpn/internal/windowsapp"', "os.Exit(windowsapp.Main("+portable+"))")
+  no(path, "exec.Command", "http://127.0.0.1", "legacyMain()", "Process.Release", "powershell.exe")
+ need("internal/windowsapp/entry_windows.go", "Start(ctx, portable)", "session.RunUI(selfTest)", "session.Close(retirement)", "shutdown remains unproved")
+ need("internal/windowsapp/session_windows.go", "windowscontroller.PinCurrentImage()", "windowscontroller.PinProtectedShellImage(s.controllerImage)", "windowscontroller.LaunchProtectedBootstrapElevated(s.ctx, s.controllerShell, arguments)", "s.pipe.VerifyPeer(s.controller, s.controllerImage)", "controllertransport.NewClient(s.controller", "windowscontroller.LaunchGUIChild", "s.workers.Wait()", "s.client.Shutdown(ctx)", "s.controller.Wait(ctx)", "s.directController.Close(ctx)", "s.controllerShell.Close()", "s.closed = true")
+ need("internal/controllertransport/client.go", '"/api/controller/shutdown"', "exactObject(response.Body, &receipt", "receipt.Schema != 1", "receipt.PID != int(client.owner.PID())", "!receipt.Closed", "subtle.ConstantTimeCompare([]byte(receipt.Token), []byte(client.shutdown)) != 1")
+ no("internal/windowsapp/entry_windows.go", "exec.Command", "Process.Release")
+ need("internal/windowsapp/public_entry_test.go", "TestWindowsPublicEntriesUseOwnedMain", "public entry admitted an alternate authority or lifetime")
  need("deploy/package-builds.sh","native Windows Router VPN WPF app","$launcher=Join-Path $Root 'RouterVPN.exe'","$start=@{FilePath=$launcher;WorkingDirectory=$Root;Wait=$true;PassThru=$true}","$process=Start-Process @start","$start.ArgumentList=@('--self-test')","exit ([int]$process.ExitCode)")
  no("deploy/package-builds.sh","Stop-Process",".Kill(","api/emergency-stop","--app=$url","msedge.exe","chrome.exe")
 windows_controller_lifecycle()
