@@ -82,6 +82,15 @@ JOURNAL_CHANNEL_REQUIRED = (
     "TestWindowsProtectionJournalChannelCloseJoinsAppend",
     "TestWindowsProtectionJournalChannelRetirementOwnership",
 )
+JOURNAL_ADMISSION_REQUIRED = (
+    'TestJournalAdmissionExactRoundTrip',
+    'TestJournalAdmissionRequestBindsWholeIntent',
+    'TestJournalAdmissionRejectsUnreadyIntent',
+    'TestJournalAdmissionSettlementKeepsExactLiveSuccessor',
+    'TestJournalAdmissionSettlementCopiesCapturedState',
+    'TestJournalAdmissionReplyBindsRequestAndSettlement',
+    'TestJournalAdmissionRejectsNoncanonicalFrames',
+)
 REQUIRED_SUBCASES = {
     REQUIRED[6]: ("record-write", "record-delete", "record-rename", "root-rename", "parent-rename"),
     REQUIRED[8]: ("session", "source", "config", "network", "generation"),
@@ -101,7 +110,8 @@ def sources():
                 "path_windows.go", "security_windows.go", "journal_record.go", "journal_record_test.go",
                 "journal_header.go", "journal_header_test.go", "journal_store_windows.go", "journal_store_windows_test.go",
                 "journal_commit_record.go", "journal_commit_record_test.go",
-                "journal_channel_windows.go", "journal_channel_windows_test.go"}
+                "journal_channel_windows.go", "journal_channel_windows_test.go",
+                "journal_admission_record.go", "journal_admission_record_test.go"}
     owned = sorted(TARGET.glob("*.go"))
     if {path.name for path in owned} != expected:
         raise ValueError("Windows protection owner source/test closure changed")
@@ -133,6 +143,7 @@ def mutants():
     journal, header = read("journal_store_windows.go"), read("journal_header.go")
     commit = read("journal_commit_record.go")
     channel = read("journal_channel_windows.go")
+    admission = read("journal_admission_record.go")
     peer_call = "client.pipe.VerifyPeer(client.parent, client.parentImage)"
     if channel.count(peer_call) != 3:
         raise ValueError("Native journal inherited-parent peer callsites changed")
@@ -224,6 +235,38 @@ def mutants():
          "noncanonical capture reached the private commit contract",
          once(commit, "if err != nil || !bytes.Equal(raw, canonical) {\n\t\treturn JournalCommitCapture{},",
               "if err != nil || false && !bytes.Equal(raw, canonical) {\n\t\treturn JournalCommitCapture{},")),
+        ("journal_admission_record.go", 'admission-whole-intent', 'TestJournalAdmissionRequestBindsWholeIntent',
+         'admission request accepted another complete successor intent',
+         once(admission, 'request.IntentSHA256 != journalCommitDigest(intentRaw)',
+              'false && request.IntentSHA256 != journalCommitDigest(intentRaw)')),
+        ("journal_admission_record.go", 'admission-old-predecessor', 'TestJournalAdmissionSettlementKeepsExactLiveSuccessor',
+         'admission checkpoint retained the predecessor instead of its exact candidate',
+         once(admission, 'next.Committed = next.Intent.Candidate',
+              'next.Committed = cloneJournalState(intent.Committed)')),
+        ("journal_admission_record.go", 'admission-clear-live-engine', 'TestJournalAdmissionSettlementKeepsExactLiveSuccessor',
+         'admission checkpoint prematurely forgot its live native engine',
+         once(admission, 'next.Committed = next.Intent.Candidate',
+              'next.Committed = next.Intent.Candidate\n\tnext.Committed.Engine = nil')),
+        ("journal_admission_record.go", 'admission-candidate-alias', 'TestJournalAdmissionSettlementCopiesCapturedState',
+         'admission checkpoint aliases the captured candidate owner',
+         once(admission, 'next := cloneJournalRecord(intent)',
+              'next := intent')),
+        ("journal_admission_record.go", 'admission-reply-nonce', 'TestJournalAdmissionReplyBindsRequestAndSettlement',
+         'admission reply accepted a different challenge',
+         once(admission, 'reply.RequestSHA256 != journalCommitDigest(requestRaw)',
+              'false && reply.RequestSHA256 != journalCommitDigest(requestRaw)')),
+        ("journal_admission_record.go", 'admission-reply-active-checkpoint', 'TestJournalAdmissionReplyBindsRequestAndSettlement',
+         'admission reply accepted another actual engine checkpoint',
+         once(admission, 'reply.SettledSHA256 != journalCommitDigest(settledRaw)',
+              'false && reply.SettledSHA256 != journalCommitDigest(settledRaw)')),
+        ("journal_admission_record.go", 'admission-request-canonical', 'TestJournalAdmissionRejectsNoncanonicalFrames',
+         'noncanonical admission request reached prepared comparison',
+         once(admission, 'if err != nil || !bytes.Equal(raw, canonical) {\n\t\treturn JournalAdmissionRequest{}, errors.New',
+              'if err != nil || false && !bytes.Equal(raw, canonical) {\n\t\treturn JournalAdmissionRequest{}, errors.New')),
+        ("journal_admission_record.go", 'admission-reply-canonical', 'TestJournalAdmissionRejectsNoncanonicalFrames',
+         'noncanonical admission reply reached active checkpoint comparison',
+         once(admission, 'if err != nil || !bytes.Equal(raw, canonical) {\n\t\treturn JournalAdmissionReply{}, errors.New',
+              'if err != nil || false && !bytes.Equal(raw, canonical) {\n\t\treturn JournalAdmissionReply{}, errors.New')),
         ("journal_channel_windows.go", "channel-captured-native-child", JOURNAL_CHANNEL_REQUIRED[2],
          "another actual child acquired the journal commit owner",
          once(channel, "peer, err := child.VerifyPeer(server.pipe, expectedImage)",
@@ -270,11 +313,11 @@ def execute(go="go"):
         if status:
             raise ValueError("Native protection owner baseline failed to compile:\n" + output[-32768:])
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-        status, output = NATIVE.run([binary, "-test.run=^Test(WindowsProtection|JournalCommit)", "-test.count=1",
+        status, output = NATIVE.run([binary, "-test.run=^Test(WindowsProtection|JournalCommit|JournalAdmission)", "-test.count=1",
                                      "-test.timeout=90s", "-test.v"], cwd=ROOT, env=captured, timeout=105)
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if (status or "--- SKIP:" in output or "DATA RACE" in output or
-                any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *JOURNAL_REQUIRED, *JOURNAL_STORE_REQUIRED, *JOURNAL_COMMIT_REQUIRED, *JOURNAL_CHANNEL_REQUIRED))):
+                any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *JOURNAL_REQUIRED, *JOURNAL_STORE_REQUIRED, *JOURNAL_COMMIT_REQUIRED, *JOURNAL_CHANNEL_REQUIRED, *JOURNAL_ADMISSION_REQUIRED))):
             raise ValueError("Protection owner baseline did not execute every native ownership case")
         for test, names in REQUIRED_SUBCASES.items():
             if any("--- PASS: " + test + "/" + name + " (" not in output for name in names):
@@ -305,7 +348,7 @@ def execute(go="go"):
         if sources() != before:
             raise ValueError("Protection owner shipping sources changed during the actual native gate")
     print("Native protection preparation passed five strict-owner-record groups, nine intent-record groups, two native-file header groups, "
-          f"ten preparation ownership groups, nine durable journal storage groups, seven commit-record groups, seven native commit-channel groups and {len(mutants())} production negative controls. "
+          f"ten preparation ownership groups, nine durable journal storage groups, seven commit-record groups, seven native commit-channel groups, seven admission-record groups and {len(mutants())} production negative controls. "
           "Firewall mutation, transfer, recovery and ordinary-path activation remain separate requirements.", flush=True)
 
 
