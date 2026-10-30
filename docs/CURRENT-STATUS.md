@@ -1,11 +1,79 @@
 # Current implementation status
 
-Updated October 29, 2026 (UTC). This file describes committed source
+Updated October 30, 2026 (UTC). This file describes committed source
 and remaining delivery work. The binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
 ## Latest implementation continuation
+
+The current continuation started from live `main` at `775a7bbd`, after
+reconciling the accessible original Router sources with the existing requirement
+ledger. The [October 30 evidence ledger](CONTINUATION-EVIDENCE-2026-10-30.md)
+records coherent changes pushed through `e9aa4411` and the subsequent
+`90c426ed` image-capture repair. Historical `745b3e41`, `5967e9c3` and the
+formerly unpushed MAX checkpoint `0dce0cf` are already ancestors; no recovery
+package was replayed. The original 356 requirements, C1–C7, later 32-item
+request, map-first redesign, external-node additions and later corrections
+remain the scope. The three personal-context queries were unavailable; five
+accessible original-source files were read. This is not a claim to have read
+every private conversation.
+
+Actual Windows execution now passes imported TCP/UDP IPv4/IPv6 ownership and
+renewal, its identity defects and the WFP lifecycle/traffic controls. The
+legitimate system PowerShell servicing hardlink is accepted through a separate
+captured system-image policy; ordinary user-code hardlinks remain rejected.
+The retained original-user GUI, C# pipe client, actual PowerShell adapter and
+owned controller child/catalog pass their recorded native gates. These are
+bounded results at the SHAs in the evidence ledger, not an all-platform release.
+
+The Windows App/Tray session composition is published: a captured controller
+uses a private bootstrap pipe, pinned loopback TLS, an original-user GUI Job
+and checked shutdown. The first full Session run stopped in its package ACL
+fixture because a Windows PowerShell 5.1 child inherited PowerShell 7 module
+paths; `e9aa4411` fixes that fixture and schedules the same gate independently.
+Its next native run reached controller startup but timed out. `90c426ed` fixes
+the resulting self-capture mismatch by deriving the running image from the
+kernel process instead of a different executable-path spelling. Both
+architectures compile; the actual native rerun passes launch/private hello in
+0.28 seconds, then the controller exits before pinned-TLS identity proof.
+That new startup failure remains under diagnosis.
+Neither App/Tray acceptance nor installed/Portable launcher adoption is proved.
+Stable-GUID UAC launch still fails; diagnostic changes preserve the mandatory
+test and do not introduce an unverified DOS-path fallback.
+
+Onboarding, selected mode and custom presets now use the authenticated
+session's data directory. Migration preserves the three known legacy files,
+keeps existing destination preferences and rejects links/unsafe ancestry.
+The helper is required by the Windows package gate. Local actual-file and
+negative tests pass; the new state migration still needs its actual packaged
+Windows acceptance. A fresh Portable ZIP also needs captured initialization
+of its Data directory before the new Session can replace the legacy launcher.
+
+Actual macOS ARM execution at `c56a10cf` passes every baseline PF/kernel case,
+including four traffic families, capacity retirement, real utun, wrong UID,
+owner death and blocked-I/O cleanup. A stale mutation selector then stopped
+the negative gate; `5fd7c7d` repairs the selector, with its native rerun still
+required. Intel passes four-family traffic and normal UID retirement but
+fails a capacity heartbeat; `b0d5c4af` starts its read deadline only after
+serialized admission. `a81d707d` joins owned fixture echo connections. Their
+corrected native gate remains required. Actual ARM AppKit/controller tests
+pass at `a8b7945d`; the later installer fixture alias repair still needs native
+confirmation. Linux heartbeat admission has the corresponding bounded repair
+in `9c982f1d`.
+
+Ordinary external Windows per-socket WFP integration, negotiated SOCKS UDP,
+native launcher adoption, final native reruns and the exact-SHA automated
+release remain unfinished. So do the applicable physical/off-LAN checks,
+signing/distribution and deliberate private deployment. Full-audit-v4 and the
+12 Windows package-gate checks pass locally. The isolated broad Go run at
+`e9aa4411` initially passed every package except `internal/common`, whose Java
+fixture could not find `javac`. With JDK 17.0.20 supplied, that exact package
+passed in 14.729 seconds. Every Go package therefore passed across the full
+run and affected-package retry; the initial run was not all green. No current
+all-green native release is claimed.
+
+## Earlier continuation (October 29; retained history)
 
 The latest resumed check started at `f87b7809`, preserving the source already
 316 commits beyond historical release `745b3e41`. Current repairs and exact
