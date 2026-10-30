@@ -32,6 +32,7 @@ type desktopOwnedNodeRuntime struct {
 	attempt      *desktopNodeProtectionAttempt
 	// Process, start, readiness and retirement fields use launch.workspaceMu.
 	process       desktopNodeProcess
+	operation     context.Context // Captured request identity; not the successful connection's lifetime.
 	started       time.Time
 	ready         *mobilemultihop.DesktopNodeReadyRecord
 	retired       bool
@@ -181,7 +182,7 @@ func (a *app) desktopOwnedNodeCurrent(launch *desktopNodeLaunch, processRequired
 	}
 	a.mu.Lock()
 	profile, exists := a.profileByIDLocked(launch.profileID)
-	current := exists && !a.closing && a.cmd == launch.command && a.state.RouterID == launch.profileID &&
+	current := exists && !a.closing && owned.slot != nil && a.nodeProtection == owned.slot && a.cmd == launch.command && a.state.RouterID == launch.profileID &&
 		a.state.RuntimeMode == launch.mode && [3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} == owned.options &&
 		desktopOwnedNodeProfileToken(profile) == owned.profileToken
 	a.mu.Unlock()
@@ -264,6 +265,11 @@ func startDesktopOwnedNodeLaunchWith(ctx context.Context, a *app, launch *deskto
 		launch.workspaceMu.Unlock()
 		return errors.New("native Router process was already created")
 	}
+	if owned.operation != nil && owned.operation != ctx {
+		launch.workspaceMu.Unlock()
+		return errors.New("native Router process changed its initiating operation")
+	}
+	owned.operation = ctx
 	owned.started = time.Now()
 	launch.workspaceMu.Unlock()
 	process, err := start(ctx, args, launch.command.Env, launch.directory)
@@ -546,6 +552,9 @@ func (a *app) publishDesktopOwnedNodeStart(launch *desktopNodeLaunch, phase, bas
 	if prior, exists := desktopNodeOwners.LoadOrStore(a, launch); exists && prior != launch {
 		return errors.New("native Router start cannot replace another native owner")
 	}
+	launch.workspaceMu.Lock()
+	launch.ownedNode.operation = a.connectionContext
+	launch.workspaceMu.Unlock()
 	a.cmd = launch.command
 	a.state.Connected, a.state.Phase, a.state.LastError = false, phase, ""
 	a.state.Mode, a.state.RuntimeMode, a.state.RouterID = launch.mode, launch.mode, launch.profileID
@@ -646,10 +655,20 @@ func (a *app) releaseDesktopOwnedNodeProtection() (bool, error) {
 	if slot == nil {
 		return false, nil
 	}
+	return true, a.releaseCapturedDesktopNodeProtection(slot)
+}
+
+func (a *app) releaseCapturedDesktopNodeProtection(slot *desktopNodeProtectionSlot) error {
+	a.mu.Lock()
+	current := slot != nil && a.nodeProtection == slot
+	a.mu.Unlock()
+	if !current {
+		return errors.New("native protection release belongs to a replaced application slot")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	if err := slot.release(ctx); err != nil {
-		return true, err
+		return err
 	}
 	if slot.provedEmpty() {
 		// After a proved on-connect release a later legacy session must retain
@@ -660,7 +679,7 @@ func (a *app) releaseDesktopOwnedNodeProtection() (bool, error) {
 		}
 		a.mu.Unlock()
 	}
-	return true, nil
+	return nil
 }
 
 func desktopOwnedNodeDescriptor(launch *desktopNodeLaunch, packageRoot string, environment []string) (*exec.Cmd, error) {

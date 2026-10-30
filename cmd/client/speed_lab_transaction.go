@@ -776,7 +776,14 @@ func (a *app) speedLabRestartPlanWithTorRuntime(plan speedLabRestorePlan, torDri
 	return err
 }
 
-func (a *app) speedLabRestartNative(plan speedLabRestorePlan) (resultErr error) {
+func (a *app) speedLabRestartNative(plan speedLabRestorePlan) error {
+	return a.restartCapturedDesktopNode(plan, "speed-lab:restore")
+}
+
+func (a *app) restartCapturedDesktopNode(plan speedLabRestorePlan, scope string) (resultErr error) {
+	if scope != "speed-lab:restore" && scope != "smart:restore" {
+		return errors.New("captured native restore has no recognized operation")
+	}
 	launch := plan.native
 	if launch == nil || launch.external != nil {
 		return errors.New("previous native node capture is unavailable")
@@ -811,7 +818,7 @@ func (a *app) speedLabRestartNative(plan speedLabRestorePlan) (resultErr error) 
 		return err
 	}
 	if launch.ownedNode != nil {
-		if err := a.publishDesktopOwnedNodeStart(launch, "speed-lab:restore:proving-node", plan.request.Base); err != nil {
+		if err := a.publishDesktopOwnedNodeStart(launch, scope+":proving-node", plan.request.Base); err != nil {
 			return err
 		}
 		started = true
@@ -828,10 +835,10 @@ func (a *app) speedLabRestartNative(plan speedLabRestorePlan) (resultErr error) 
 	}
 	started = true
 	desktopNodeOwners.Store(a, launch)
-	sessionTrackerFor(a).declareRequest("speed-lab:restore:"+launch.mode, plan.request.Base)
+	sessionTrackerFor(a).declareRequest(scope+":"+launch.mode, plan.request.Base)
 	a.mu.Lock()
 	a.cmd = launch.command
-	a.state.Connected, a.state.Phase = false, "speed-lab:restore:proving-node"
+	a.state.Connected, a.state.Phase = false, scope+":proving-node"
 	a.state.Mode, a.state.RuntimeMode, a.state.RouterID, a.state.Base = launch.mode, launch.mode, launch.profileID, plan.request.Base
 	a.mu.Unlock()
 	if err := a.speedLabOwnRuntime(launch.command); err != nil {

@@ -40,7 +40,7 @@ for required in (
     assert required in orch, f"SMART/CUSTOM orchestrator missing transition intent: {required}"
 
 for required in (
-    "func (a *app) startModeAttempt(id string, holdOnFailure bool) error",
+    "func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*modeAttemptTransition) error",
     "a.stopModeWithIntent(true)",
     "a.stopModeWithIntent(holdOnFailure)",
     "func (a *app) stopModeWithIntent(holdKillSwitch bool) error",
@@ -49,6 +49,9 @@ for required in (
     "a.releaseTransitionKillSwitch()",
 ):
     assert required in main, f"controller missing protected transition state: {required}"
+
+attempt_body = main.split("func (a *app) startModeAttempt(", 1)[1].split("\nfunc ", 1)[0]
+assert attempt_body.index("a.guardDesktopOwnedNodeTransition(native)") < attempt_body.index("transition[0].StopBegun = true") < attempt_body.index("a.stopModeWithIntent(true)"), "SMART transition receipt does not distinguish preflight from the actual Stop boundary"
 
 try:
     stop_body = main.split("func (a *app) stopModeWithIntent(holdKillSwitch bool) error {", 1)[1].split("func (a *app) auto", 1)[0]

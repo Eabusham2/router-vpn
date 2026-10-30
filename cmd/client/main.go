@@ -994,7 +994,10 @@ func (a *app) startMode(id string) error {
 	return a.startModeAttempt(id, false)
 }
 
-func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
+func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*modeAttemptTransition) error {
+	if len(transition) > 1 {
+		return errors.New("connection attempt has more than one transition owner")
+	}
 	p, err := a.activeProfile()
 	if err != nil {
 		return err
@@ -1047,6 +1050,9 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 	}()
 	if err = a.guardDesktopOwnedNodeTransition(native); err != nil {
 		return err
+	}
+	if len(transition) == 1 && transition[0] != nil {
+		transition[0].StopBegun = true
 	}
 	if err = a.stopModeWithIntent(true); err != nil {
 		return err

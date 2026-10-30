@@ -189,11 +189,36 @@ func (a *app) declareStrategy(strategy string, p common.RouterProfile) {
 }
 
 func (a *app) setStrategyWinner(strategy string, mode common.Mode) error {
-	if err := a.checkConnectionOperation(); err != nil {
-		_ = a.stopMode()
-		return a.finalizeCancelledFallback(strings.ToUpper(strategy))
+	return a.setStrategyWinnerFor(strategy, mode, a.connectionOperationContextOrBackground())
+}
+
+func (a *app) setStrategyWinnerFor(strategy string, mode common.Mode, operation context.Context) error {
+	if err := a.checkCapturedConnectionOperation(operation); err != nil {
+		if a.sameConnectionOperation(operation) {
+			raw, exists := desktopNodeOwners.Load(a)
+			launch, _ := raw.(*desktopNodeLaunch)
+			if !exists || launch == nil || launch.ownedNode == nil {
+				_ = a.stopMode()
+			}
+		}
+		return a.finalizeCancelledFallbackFor(strings.ToUpper(strategy), operation)
+	}
+	if raw, exists := desktopNodeOwners.Load(a); exists {
+		if launch, ok := raw.(*desktopNodeLaunch); ok && launch != nil && launch.ownedNode != nil {
+			if desktopOwnedNodeOperation(launch) != operation || launch.mode != mode.ID {
+				return errors.Join(errConnectionOperationCancelled, errDesktopNodeOperationReplaced)
+			}
+			if _, err := a.readDesktopOwnedNodeReady(launch, false); err != nil {
+				_, stopErr := a.stopDesktopNodeForOperation(operation)
+				return errors.Join(err, stopErr)
+			}
+		}
 	}
 	a.mu.Lock()
+	if a.connectionContext != operation && !(a.connectionContext == nil && operation == context.Background()) {
+		a.mu.Unlock()
+		return errConnectionOperationCancelled
+	}
 	a.state.Mode = mode.ID
 	a.state.LogicalMode = strategy
 	a.state.RuntimeMode = mode.ID
@@ -286,17 +311,22 @@ func (a *app) runAutoStrategy(strategy string) (strategyResult, error) {
 }
 
 func (a *app) runSmartStrategy() (strategyResult, error) {
+	return a.runSmartStrategyWith(smartStrategyRuntime{})
+}
+
+func (a *app) runSmartStrategyWith(runtime smartStrategyRuntime) (strategyResult, error) {
 	const strategy = "smart-auto"
 	result := strategyResult{Strategy: strategy, LogicalMode: strategy, Attempts: []strategyAttempt{}}
 	lock := strategyLockFor(a)
 	lock.Lock()
 	defer lock.Unlock()
+	operation := a.connectionOperationContextOrBackground()
 	p, err := a.strategyProfile()
 	if err != nil {
 		return result, err
 	}
 	a.declareStrategy(strategy, p)
-	best, err := a.firstWorkingAuto(strategy, p, &result)
+	best, err := runtime.firstWorking(a, p, &result)
 	if err != nil {
 		return result, err
 	}
@@ -304,8 +334,8 @@ func (a *app) runSmartStrategy() (strategyResult, error) {
 	for {
 		changed := false
 		for _, candidateID := range best.SmartSimplify {
-			if err := a.checkConnectionOperation(); errors.Is(err, errConnectionOperationCancelled) {
-				return result, a.finalizeCancelledFallback("SMART AUTO")
+			if err := a.checkCapturedConnectionOperation(operation); errors.Is(err, errConnectionOperationCancelled) {
+				return result, a.finalizeCancelledFallbackFor("SMART AUTO", operation)
 			}
 			candidateID = strings.TrimSpace(candidateID)
 			if candidateID == "" || visited[candidateID] {
@@ -322,21 +352,35 @@ func (a *app) runSmartStrategy() (strategyResult, error) {
 				sessionTrackerFor(a).strategyEvent("strategy-filtered", reason)
 				continue
 			}
-			if ok, reason := a.checkMode(candidate); !ok {
+			if ok, reason := runtime.checkMode(a, candidate); !ok {
 				result.Attempts = append(result.Attempts, strategyAttempt{Mode: candidateID, Action: "simplify", Success: false, Error: reason})
 				continue
 			}
-			if err := a.checkConnectionOperation(); errors.Is(err, errConnectionOperationCancelled) {
-				return result, a.finalizeCancelledFallback("SMART AUTO")
+			if err := a.checkCapturedConnectionOperation(operation); errors.Is(err, errConnectionOperationCancelled) {
+				return result, a.finalizeCancelledFallbackFor("SMART AUTO", operation)
 			}
 			lastGood := best
+			saved, captureErr := a.captureSmartDesktopNode(operation, p)
+			if captureErr != nil {
+				result.Attempts = append(result.Attempts, strategyAttempt{Mode: candidate.ID, Action: "simplify", Success: false, Error: "could not capture the proved native predecessor: " + captureErr.Error()})
+				continue
+			}
+			// An unused capture is erased now; a restored active launch takes
+			// ownership of these buffers until its checked native retirement.
+			if saved != nil {
+				defer clearSpeedLabRestorePlan(saved.plan)
+			}
 			sessionTrackerFor(a).strategyEvent("strategy-simplify", fmt.Sprintf("SMART trying %s -> %s", lastGood.ID, candidate.ID))
 			a.mu.Lock()
 			a.state.Phase = "smart:simplify:" + candidate.ID
 			a.mu.Unlock()
-			tryErr := a.startModeAttempt(candidate.ID, true)
+			transition := &modeAttemptTransition{}
+			tryErr := runtime.startMode(a, candidate.ID, true, transition)
 			attempt := strategyAttempt{Mode: candidate.ID, Action: "simplify", Success: tryErr == nil}
 			if tryErr == nil {
+				if saved != nil {
+					clearSpeedLabRestorePlan(saved.plan)
+				}
 				result.Attempts = append(result.Attempts, attempt)
 				sessionTrackerFor(a).strategyEvent("strategy-simplified", fmt.Sprintf("SMART validated %s -> %s", lastGood.ID, candidate.ID))
 				best = candidate
@@ -346,14 +390,33 @@ func (a *app) runSmartStrategy() (strategyResult, error) {
 			attempt.Error = tryErr.Error()
 			result.Attempts = append(result.Attempts, attempt)
 			if errors.Is(tryErr, errConnectionOperationCancelled) {
-				return result, a.finalizeCancelledFallback("SMART AUTO")
+				return result, a.finalizeCancelledFallbackFor("SMART AUTO", operation)
+			}
+			if err := a.checkCapturedConnectionOperation(operation); err != nil {
+				return result, a.finalizeCancelledFallbackFor("SMART AUTO", operation)
+			}
+			if saved != nil && !transition.StopBegun {
+				if retainErr := a.retainSmartDesktopNode(saved); retainErr == nil {
+					clearSpeedLabRestorePlan(saved.plan)
+					result.Attempts = append(result.Attempts, strategyAttempt{Mode: lastGood.ID, Action: "retain", Success: true})
+					sessionTrackerFor(a).strategyEvent("strategy-retained", fmt.Sprintf("SMART retained proved %s after %s failed before transition", lastGood.ID, candidate.ID))
+					continue
+				}
 			}
 			sessionTrackerFor(a).strategyEvent("strategy-restore", fmt.Sprintf("SMART simplification %s failed; restoring %s", candidate.ID, lastGood.ID))
-			restoreErr := a.startModeAttempt(lastGood.ID, true)
+			var restoreErr error
+			if saved != nil {
+				restoreErr = a.restoreSmartDesktopNode(saved, runtime)
+			} else {
+				restoreErr = runtime.startMode(a, lastGood.ID, true, nil)
+			}
 			if restoreErr != nil {
 				result.Attempts = append(result.Attempts, strategyAttempt{Mode: lastGood.ID, Action: "restore", Success: false, Error: restoreErr.Error()})
 				if errors.Is(restoreErr, errConnectionOperationCancelled) {
-					return result, a.finalizeCancelledFallback("SMART AUTO")
+					return result, a.finalizeCancelledFallbackFor("SMART AUTO", operation)
+				}
+				if !a.sameConnectionOperation(operation) {
+					return result, errConnectionOperationCancelled
 				}
 				message := fmt.Sprintf("SMART could not restore last-known-good runtime %s after %s failed: %v", lastGood.ID, candidate.ID, restoreErr)
 				return result, a.failStrategy(strategy, []string{message})
@@ -366,7 +429,7 @@ func (a *app) runSmartStrategy() (strategyResult, error) {
 			break
 		}
 	}
-	if err = a.setStrategyWinner(strategy, best); err != nil {
+	if err = a.setStrategyWinnerFor(strategy, best, operation); err != nil {
 		return result, err
 	}
 	result.OK = true
