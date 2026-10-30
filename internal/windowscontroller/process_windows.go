@@ -176,6 +176,27 @@ func (p *Process) Identity() (TokenIdentity, error) {
 	return identity, nil
 }
 
+// StartTimeUTCTicks reads the creation identity from this retained process
+// handle. The representation matches DateTime.UtcTicks used by the native
+// Tray; a recycled PID cannot choose the captured value.
+func (p *Process) StartTimeUTCTicks() (int64, error) {
+	handle, release, err := p.borrow()
+	if err != nil {
+		return 0, err
+	}
+	defer release()
+	var created, exited, kernel, user syscall.Filetime
+	if err := syscall.GetProcessTimes(handle, &created, &exited, &kernel, &user); err != nil {
+		return 0, err
+	}
+	const epoch = uint64(504911232000000000)
+	ticks := uint64(created.HighDateTime)<<32 | uint64(created.LowDateTime)
+	if ticks == 0 || ticks > uint64(3155378975999999999)-epoch {
+		return 0, errors.New("the retained Windows process has an invalid creation identity")
+	}
+	return int64(ticks + epoch), nil
+}
+
 func (p *Process) Close() error {
 	if p == nil {
 		return nil

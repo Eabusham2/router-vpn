@@ -459,11 +459,14 @@ func TestWindowsControllerGUIOriginalUserAndPeer(t *testing.T) {
 
 func TestWindowsControllerGUIOldCleanupPreservesReplacement(t *testing.T) {
 	old, replacement := newGUIFixture(t, "hold"), newGUIFixture(t, "hold")
-	retained, err := old.child.process.retain()
+	retained, err := old.child.RetainProcess()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer retained.Close()
+	if retained.PID() != old.child.PID() || retained.VerifyImage(old.image) != nil {
+		t.Fatal("retained GUI process differs from the actual suspended launch")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := old.child.Close(ctx); err != nil {
@@ -474,6 +477,12 @@ func TestWindowsControllerGUIOldCleanupPreservesReplacement(t *testing.T) {
 	}
 	if err := old.child.Close(ctx); err != nil {
 		t.Fatal("old GUI cleanup lost idempotent ownership", err)
+	}
+	if extra, err := old.child.RetainProcess(); err == nil || extra != nil {
+		if extra != nil {
+			_ = extra.Close()
+		}
+		t.Fatal("closed GUI admitted another process capture")
 	}
 	if err := replacement.child.process.Alive(); err != nil {
 		t.Fatal("old GUI cleanup terminated a different replacement owner", err)
@@ -805,8 +814,10 @@ func TestWindowsControllerGUIActualSystemPowerShell(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	creationFile := filepath.Join(directory, "actual-creation-ticks.txt")
 	child, err := LaunchGUIChild(ctx, image, func(uint64) ([]string, error) {
-		return []string{"-NoProfile", "-NonInteractive", "-Command", "exit 0"}, nil
+		command := "[IO.File]::WriteAllText('" + strings.ReplaceAll(creationFile, "'", "''") + "',[Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().Ticks.ToString([Globalization.CultureInfo]::InvariantCulture)); exit 0"
+		return []string{"-NoProfile", "-NonInteractive", "-Command", command}, nil
 	}, environment, directory)
 	if child != nil {
 		defer func() {
@@ -822,6 +833,17 @@ func TestWindowsControllerGUIActualSystemPowerShell(t *testing.T) {
 	}
 	if exit, err := child.Wait(ctx); err != nil || exit != 0 {
 		t.Fatal("actual system PowerShell did not complete its fixed bounded command:", exit, err)
+	}
+	retained, err := child.RetainProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer retained.Close()
+	actual, err := retained.StartTimeUTCTicks()
+	content, readErr := os.ReadFile(creationFile)
+	want, parseErr := strconv.ParseInt(string(content), 10, 64)
+	if err != nil || readErr != nil || parseErr != nil || want <= 0 || actual != want {
+		t.Fatal("retained App creation identity differs from actual PowerShell UTC ticks", actual, want, err, readErr, parseErr)
 	}
 }
 

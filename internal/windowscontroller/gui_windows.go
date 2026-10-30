@@ -323,6 +323,22 @@ func (child *GUIChild) PID() uint32 {
 	return child.process.PID()
 }
 
+// RetainProcess duplicates the process handle captured by our suspended
+// CreateProcess call. It never reopens a public PID. A controller compositor
+// uses this read-only abstraction for pipe/TLS identity while the original
+// GUIChild continues to own its creation-time Job and checked cleanup.
+func (child *GUIChild) RetainProcess() (*Process, error) {
+	if child == nil {
+		return nil, ErrClosed
+	}
+	child.mu.Lock()
+	defer child.mu.Unlock()
+	if child.closed || child.retiring.Load() || child.process == nil {
+		return nil, ErrClosed
+	}
+	return child.process.retain()
+}
+
 // Alive checks the retained kernel owner and the GUI's retirement admission.
 // A pending Close revokes new requests before asynchronous Job teardown ends.
 func (child *GUIChild) Alive() error {

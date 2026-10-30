@@ -26,6 +26,10 @@ func TestWindowsControllerGUISystemImageCapturePolicy(t *testing.T) {
 	for _, name := range []string{"PATH", "SystemRoot", "WINDIR"} {
 		t.Setenv(name, directory)
 	}
+	system, systemErr := SystemDirectory()
+	if systemErr != nil || system != api.systemDirectory {
+		t.Fatal("environment replacement retargeted the captured system directory", system, systemErr)
+	}
 	image, err := PinSystemPowerShell()
 	if err != nil {
 		guiObserveSystemPowerShellImage(t, filepath.Join(api.systemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"))

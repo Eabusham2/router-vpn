@@ -24,6 +24,16 @@ func PinSystemPowerShell() (*Image, error) {
 	return pinImage(filepath.Join(api.systemDirectory, "WindowsPowerShell", "v1.0", "powershell.exe"), true)
 }
 
+// SystemDirectory returns the OS-derived directory used to load our native
+// APIs. It does not consult PATH, SystemRoot, or a launcher's environment.
+func SystemDirectory() (string, error) {
+	api, err := native()
+	if err != nil {
+		return "", err
+	}
+	return api.systemDirectory, nil
+}
+
 var systemImageSecurityOnce struct {
 	sync.Once
 	get, valid, length *syscall.Proc
