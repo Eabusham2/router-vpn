@@ -125,7 +125,10 @@ func desktopDarwinPFRulesText(raw []byte) string {
 
 func desktopDarwinPFRead(ctx context.Context, anchor string) (string, error) {
 	raw, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", anchor, "-s", "rules")
-	return desktopDarwinPFRulesText(raw), err
+	if err != nil {
+		return "", fmt.Errorf("Darwin PF readback for anchor %q: %w", anchor, err)
+	}
+	return desktopDarwinPFRulesText(raw), nil
 }
 
 func desktopDarwinPFLoad(ctx context.Context, anchor string, rules string) error {
@@ -208,7 +211,7 @@ func desktopDarwinPFValidateSystemFilters(raw []byte) error {
 func desktopDarwinPFGlobal(ctx context.Context) error {
 	info, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-s", "info")
 	if err != nil || !regexp.MustCompile(`(?m)^Status:\s+Enabled\b`).Match(info) {
-		return errors.New("Darwin physical policy lost PF enablement")
+		return errors.Join(err, errors.New("Darwin physical policy lost PF enablement"))
 	}
 	global, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-s", "rules")
 	if err != nil {
@@ -273,7 +276,7 @@ func desktopDarwinPFGlobal(ctx context.Context) error {
 		for _, anchor := range []string{"com.apple/" + name, "com.apple/" + name + "/*"} {
 			rules, err := desktopDarwinPFRead(ctx, anchor)
 			if err != nil || "com.apple/"+name < desktopDarwinPFNamespace && rules != "" {
-				return errors.New("Darwin PF dispatch has an unreadable or earlier nonempty filter owner")
+				return errors.Join(err, errors.New("Darwin PF dispatch has an unreadable or earlier nonempty filter owner"))
 			}
 			if err := desktopDarwinPFStatelessFilters(rules); err != nil {
 				return err
@@ -343,11 +346,11 @@ func desktopDarwinNewPF(capture DesktopSocketCapture, uid uint32, account string
 	}
 	existing, err := desktopDarwinPFRead(ctx, p.Slot)
 	if err != nil || existing != "" {
-		return nil, errors.New("Darwin physical slot still belongs to another network generation")
+		return nil, errors.Join(err, errors.New("Darwin physical slot still belongs to another network generation"))
 	}
 	existing, err = desktopDarwinPFRead(ctx, p.Anchor)
 	if err != nil || existing != "" {
-		return nil, errors.New("Darwin physical anchor already has an owner")
+		return nil, errors.Join(err, errors.New("Darwin physical anchor already has an owner"))
 	}
 	if err := desktopDarwinPFLoad(ctx, p.Anchor, p.render()); err != nil {
 		return p, err
@@ -377,11 +380,11 @@ func (p *desktopDarwinPF) verify(ctx context.Context, complete bool) error {
 	}
 	baseline, err := desktopDarwinPFRead(ctx, desktopDarwinPFNamespace)
 	if err != nil || baseline != p.Baseline {
-		return errors.New("Darwin PF baseline changed its captured rules")
+		return errors.Join(err, errors.New("Darwin PF baseline changed its captured rules"))
 	}
 	pointer, err := desktopDarwinPFRead(ctx, p.Slot)
 	if err != nil || pointer != p.Pointer {
-		return errors.New("Darwin PF slot changed its network owner")
+		return errors.Join(err, errors.New("Darwin PF slot changed its network owner"))
 	}
 	actual, err := desktopDarwinPFRead(ctx, p.Anchor)
 	if err != nil {
@@ -390,7 +393,7 @@ func (p *desktopDarwinPF) verify(ctx context.Context, complete bool) error {
 	if complete && p.permits != nil {
 		want, err := desktopDarwinPFCanonical(ctx, p.render())
 		if err != nil || actual != want {
-			return errors.New("Darwin physical permits differ from their complete captured tuples")
+			return errors.Join(err, errors.New("Darwin physical permits differ from their complete captured tuples"))
 		}
 	}
 	return nil

@@ -95,8 +95,11 @@ func (b *desktopDarwinCommandBuffer) Write(value []byte) (int, error) {
 }
 
 func desktopDarwinCommand(ctx context.Context, path string, input []byte, args ...string) ([]byte, error) {
-	if ctx == nil || ctx.Err() != nil {
-		return nil, context.Canceled
+	if ctx == nil {
+		return nil, errors.New("Darwin privileged command requires a captured operation")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	if err := desktopDarwinProtectedPath(path, false); err != nil {
 		return nil, err
@@ -106,12 +109,13 @@ func desktopDarwinCommand(ctx context.Context, path string, input []byte, args .
 	command.Stdin = bytes.NewReader(input)
 	output, diagnostics := desktopDarwinCommandBuffer{limit: 2 << 20}, desktopDarwinCommandBuffer{limit: 128 << 10}
 	command.Stdout, command.Stderr = &output, &diagnostics
+	started := time.Now()
 	err := command.Run()
 	if output.Len() > 2<<20 || diagnostics.Len() > 128<<10 {
 		return nil, errors.New("Darwin privileged command exceeded its readback bound")
 	}
-	if err != nil {
-		return nil, errors.Join(err, fmt.Errorf("Darwin privileged %s failed: %s", filepath.Base(path), diagnostics.String()))
+	if err != nil || ctx.Err() != nil {
+		return nil, errors.Join(err, ctx.Err(), fmt.Errorf("Darwin privileged %s failed after %s: %s", filepath.Base(path), time.Since(started).Round(time.Millisecond), diagnostics.String()))
 	}
 	return output.Bytes(), nil
 }

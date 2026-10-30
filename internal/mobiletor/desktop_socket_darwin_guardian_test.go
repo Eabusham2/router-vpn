@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -107,6 +108,25 @@ func TestDesktopDarwinGuardianKernelPFSystemDispatch(t *testing.T) {
 	}
 	if err := desktopDarwinPFValidateSystemFilters(actual); err != nil {
 		t.Fatal("actual system PF normalization/filter dispatch was not proved", err)
+	}
+	// A failed native read is not evidence that another owner changed a slot.
+	// Preserve both the exact captured operation failure and its anchor stage.
+	for _, deadline := range []bool{false, true} {
+		var cancelled context.Context
+		var stop context.CancelFunc
+		want := context.Canceled
+		if deadline {
+			cancelled, stop = context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+			want = context.DeadlineExceeded
+		} else {
+			cancelled, stop = context.WithCancel(context.Background())
+			stop()
+		}
+		readback, err := desktopDarwinPFRead(cancelled, desktopDarwinPFNamespace)
+		stop()
+		if readback != "" || !errors.Is(err, want) || !strings.Contains(err.Error(), desktopDarwinPFNamespace) {
+			t.Fatal("native PF readback lost its actual cancellation/deadline or captured anchor", readback, err)
+		}
 	}
 	anchor := "anchor \"com.apple/*\" all\n"
 	scrub := "scrub-anchor \"com.apple/*\" all fragment reassemble\n"
@@ -523,7 +543,68 @@ func desktopDarwinKernelBroker(t *testing.T, policy *DesktopDarwinSocketPolicy) 
 			}
 		}
 	})
+	// Register after drain cleanup so failure evidence is read while this
+	// exact owner still retains its descriptors and scoped rules.
+	t.Cleanup(func() {
+		if t.Failed() {
+			desktopDarwinKernelTrace(t, policy, broker)
+		}
+	})
 	return broker
+}
+
+func desktopDarwinKernelTrace(t *testing.T, policy *DesktopDarwinSocketPolicy, broker *DesktopSocketBroker) {
+	t.Helper()
+	if policy == nil || policy.pf == nil || !policy.pf.valid() || desktopDarwinTestFixture.Nonce == "" {
+		return
+	}
+	// Diagnostics are read-only and confined to the fixture's captured owner.
+	// A failed query remains a failed query; no repair or permit is installed.
+	t.Logf("owned PF failure: uid=%d guardian=%d current=%t", policy.uid, policy.owner.ProcessID, policy.Current(policy.capture, policy.owner))
+	if broker != nil {
+		broker.mu.Lock()
+		var sockets []*desktopSocket
+		for socket := range broker.sockets {
+			sockets = append(sockets, socket)
+		}
+		broker.mu.Unlock()
+		for _, socket := range sockets {
+			socket.mu.Lock()
+			t.Logf("owned PF tuple: protocol=%s local=%s remote=%s closing=%t last_failure=%v", socket.network, socket.local, socket.remote, socket.closing, socket.lastFailure)
+			if socket.sourceFile != nil {
+				raw, err := socket.sourceFile.SyscallConn()
+				if err == nil {
+					err = raw.Control(func(fd uintptr) {
+						var stat syscall.Stat_t
+						statErr := syscall.Fstat(int(fd), &stat)
+						local, localErr := desktopSocketLocal(int(fd))
+						family := syscall.AF_INET6
+						if socket.binding.LocalAddress.Is4() {
+							family = syscall.AF_INET
+						}
+						bound, boundErr := desktopDarwinBoundInterface(int(fd), family)
+						t.Logf("owned PF retained descriptor: uid=%d local=%s interface=%d errors=%v", stat.Uid, local, bound, errors.Join(statErr, localErr, boundErr))
+					})
+				}
+				if err != nil {
+					t.Log("owned PF retained descriptor readback:", err)
+				}
+			}
+			socket.mu.Unlock()
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	for _, query := range []struct{ anchor, kind string }{
+		{desktopDarwinPFNamespace, "labels"}, {policy.pf.Slot, "rules"}, {policy.pf.Anchor, "rules"}, {policy.pf.Anchor, "labels"},
+	} {
+		started := time.Now()
+		raw, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", query.anchor, "-s", query.kind)
+		if len(raw) > 2048 {
+			raw = append(raw[:2048:2048], []byte("[truncated]")...)
+		}
+		t.Logf("owned PF %s %q in %s: %q error=%v", query.kind, query.anchor, time.Since(started).Round(time.Millisecond), raw, err)
+	}
 }
 
 func TestDesktopDarwinGuardianKernelIdentityRetirement(t *testing.T) {
@@ -877,6 +958,12 @@ func desktopDarwinKernelPeer(t *testing.T, network string) netip.AddrPort {
 		address = desktopDarwinTestFixture.Addresses[3]
 	}
 	endpoint := netip.AddrPortFrom(address, 0).String()
+	var accepted, received, replied atomic.Int64
+	trace := func() {
+		if t.Failed() {
+			t.Logf("owned loopback echo: protocol=%s address=%s accepted=%d received_bytes=%d replied_bytes=%d", network, address, accepted.Load(), received.Load(), replied.Load())
+		}
+	}
 	if strings.HasPrefix(network, "tcp") {
 		listener, err := net.Listen(network, endpoint)
 		if err != nil {
@@ -891,16 +978,31 @@ func desktopDarwinKernelPeer(t *testing.T, network string) netip.AddrPort {
 				if err != nil {
 					return
 				}
+				accepted.Add(1)
 				workers.Add(1)
 				go func() {
 					defer workers.Done()
 					defer connection.Close()
 					connection.SetDeadline(time.Now().Add(20 * time.Second))
-					io.Copy(connection, connection)
+					buffer := make([]byte, 8192)
+					for {
+						n, readErr := connection.Read(buffer)
+						if n > 0 {
+							received.Add(int64(n))
+							written, writeErr := connection.Write(buffer[:n])
+							replied.Add(int64(written))
+							if writeErr != nil || written != n {
+								return
+							}
+						}
+						if readErr != nil {
+							return
+						}
+					}
 				}()
 			}
 		}()
-		t.Cleanup(func() { listener.Close(); <-joined; workers.Wait() })
+		t.Cleanup(func() { trace(); listener.Close(); <-joined; workers.Wait() })
 		return netip.MustParseAddrPort(listener.Addr().String())
 	}
 	packet, err := net.ListenPacket(network, endpoint)
@@ -916,10 +1018,12 @@ func desktopDarwinKernelPeer(t *testing.T, network string) netip.AddrPort {
 			if err != nil {
 				return
 			}
-			packet.WriteTo(buffer[:n], address)
+			received.Add(int64(n))
+			written, _ := packet.WriteTo(buffer[:n], address)
+			replied.Add(int64(written))
 		}
 	}()
-	t.Cleanup(func() { packet.Close(); <-joined })
+	t.Cleanup(func() { trace(); packet.Close(); <-joined })
 	return netip.MustParseAddrPort(packet.LocalAddr().String())
 }
 
@@ -931,8 +1035,8 @@ func desktopDarwinExchange(t *testing.T, connection net.Conn) {
 		t.Fatal(err)
 	}
 	buffer := make([]byte, len(data))
-	if _, err := io.ReadFull(connection, buffer); err != nil || string(buffer) != string(data) {
-		t.Fatal("real owned physical reply", string(buffer), err)
+	if n, err := io.ReadFull(connection, buffer); err != nil || string(buffer) != string(data) {
+		t.Fatal("real owned physical reply", n, string(buffer[:n]), err)
 	}
 }
 
@@ -942,7 +1046,11 @@ func TestDesktopDarwinGuardianKernelTCPAndUDP(t *testing.T) {
 			remote := desktopDarwinKernelPeer(t, network)
 			policy := desktopDarwinKernelPolicy(t, []DesktopDarwinSocketDestination{{Network: network[:3], Address: remote}})
 			broker := desktopDarwinKernelBroker(t, policy)
-			connection, err := broker.DialContext(context.Background(), network, remote.String())
+			// Exercise a bounded real dial; a dropped SYN must not defer failure
+			// to the kernel's unrelated default retransmission timeout.
+			dial, stopDial := context.WithTimeout(context.Background(), desktopSocketControlWait)
+			defer stopDial()
+			connection, err := broker.DialContext(dial, network, remote.String())
 			if err != nil {
 				t.Fatal(err)
 			}
