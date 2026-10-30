@@ -36,6 +36,16 @@ func TestWindowsControllerMachineDirectories(t *testing.T) {
 			}
 			before := os.Environ()
 			beforeNative := machineNativeEnvironmentSnapshot(t)
+			defer func() {
+				if t.Failed() {
+					// Failure evidence never changes the assertion or repairs the
+					// poisoned process environment. Log only fixed machine fields.
+					machineDirectoriesFailureDiagnostic(t, want)
+					if !reflect.DeepEqual(before, os.Environ()) || !reflect.DeepEqual(beforeNative, machineNativeEnvironmentSnapshot(t)) {
+						t.Error("machine directory diagnostic changed its caller environment")
+					}
+				}
+			}()
 			for attempt := 0; attempt < 2; attempt++ {
 				got, err := MachineDirectories()
 				if !reflect.DeepEqual(before, os.Environ()) || !reflect.DeepEqual(beforeNative, machineNativeEnvironmentSnapshot(t)) {
@@ -97,6 +107,139 @@ func TestWindowsControllerMachineDirectories(t *testing.T) {
 			}
 		}
 	})
+}
+
+// These read-only observations run only after the actual admission assertion
+// fails. They distinguish native APIs and explicit-token behavior; none is a
+// fallback or authority to admit the failed result. No complete environment,
+// profile, credentials or registry contents are written to the test log.
+func machineDirectoriesFailureDiagnostic(t *testing.T, baseline MachinePaths) {
+	t.Helper()
+	bounded := func(value string) string {
+		if len(value) > 512 {
+			return "<machine path exceeds diagnostic bound>"
+		}
+		return value
+	}
+	readPath := func(value *uint16) string {
+		if value == nil {
+			return "<absent>"
+		}
+		for size := 0; size < 32768; size++ {
+			if *(*uint16)(unsafe.Add(unsafe.Pointer(value), size*2)) == 0 {
+				return bounded(syscall.UTF16ToString(unsafe.Slice(value, size)))
+			}
+		}
+		return "<unterminated native machine path>"
+	}
+	load := func(name string) *syscall.DLL {
+		library, err := syscall.LoadDLL(filepath.Join(baseline.System, name))
+		if err != nil {
+			t.Logf("machine-directory diagnostic: load %s error=%v", name, err)
+			return nil
+		}
+		t.Cleanup(func() {
+			if err := library.Release(); err != nil {
+				t.Error("machine-directory diagnostic library close failed", name, err)
+			}
+		})
+		return library
+	}
+	tokens := []struct {
+		name  string
+		value uintptr
+	}{{name: "NULL"}}
+	process, processErr := syscall.GetCurrentProcess()
+	var token syscall.Token
+	if processErr == nil {
+		processErr = syscall.OpenProcessToken(process, syscall.TOKEN_QUERY|syscall.TOKEN_IMPERSONATE|syscall.TOKEN_DUPLICATE, &token)
+	}
+	if processErr != nil {
+		t.Logf("machine-directory diagnostic: explicit current token unavailable error=%v", processErr)
+	} else {
+		defer func() {
+			if err := token.Close(); err != nil {
+				t.Error("machine-directory diagnostic token close failed", err)
+			}
+		}()
+		tokens = append(tokens, struct {
+			name  string
+			value uintptr
+		}{"current-primary", uintptr(token)})
+	}
+	// SHGetKnownFolderPath requires QUERY|IMPERSONATE and sometimes DUPLICATE
+	// for an explicit token; the ordinary baseline was captured before poisoning.
+	shell, ole := load("shell32.dll"), load("ole32.dll")
+	if shell != nil && ole != nil {
+		known, knownErr := shell.FindProc("SHGetKnownFolderPath")
+		free, freeErr := ole.FindProc("CoTaskMemFree")
+		if knownErr != nil || freeErr != nil {
+			t.Logf("machine-directory diagnostic: known-folder procedures unavailable known=%v free=%v", knownErr, freeErr)
+		} else {
+			identifier := syscall.GUID{Data1: 0x62ab5d82, Data2: 0xfdc1, Data3: 0x4dc3, Data4: [8]byte{0xa9, 0xdd, 0x07, 0x0d, 0x1d, 0x49, 0x5d, 0x97}}
+			for _, choice := range tokens {
+				var value *uint16
+				status, _, _ := known.Call(uintptr(unsafe.Pointer(&identifier)), 0x4000 /* DONT_VERIFY */, choice.value, uintptr(unsafe.Pointer(&value)))
+				runtime.KeepAlive(identifier)
+				t.Logf("machine-directory diagnostic: SHGetKnownFolderPath ProgramData token=%s HRESULT=0x%08x value=%q", choice.name, uint32(status), readPath(value))
+				if value != nil {
+					free.Call(uintptr(unsafe.Pointer(value)))
+				}
+			}
+		}
+	}
+	userenv := load("userenv.dll")
+	if userenv == nil {
+		return
+	}
+	// https://learn.microsoft.com/windows/win32/api/userenv/nf-userenv-getallusersprofiledirectoryw
+	if allUsers, err := userenv.FindProc("GetAllUsersProfileDirectoryW"); err != nil {
+		t.Logf("machine-directory diagnostic: GetAllUsersProfileDirectoryW unavailable error=%v", err)
+	} else {
+		buffer := make([]uint16, 32768)
+		size := uint32(len(buffer))
+		ok, _, callErr := allUsers.Call(uintptr(unsafe.Pointer(&buffer[0])), uintptr(unsafe.Pointer(&size)))
+		runtime.KeepAlive(buffer)
+		value := "<not returned>"
+		if ok != 0 && size > 0 && size <= uint32(len(buffer)) {
+			value = readPath(&buffer[0])
+		}
+		t.Logf("machine-directory diagnostic: GetAllUsersProfileDirectoryW success=%t size=%d value=%q error=%v", ok != 0, size, value, callErr)
+	}
+	create, createErr := userenv.FindProc("CreateEnvironmentBlock")
+	destroy, destroyErr := userenv.FindProc("DestroyEnvironmentBlock")
+	if createErr != nil || destroyErr != nil {
+		t.Logf("machine-directory diagnostic: environment procedures unavailable create=%v destroy=%v", createErr, destroyErr)
+		return
+	}
+	for _, choice := range tokens {
+		var block unsafe.Pointer
+		ok, _, callErr := create.Call(uintptr(unsafe.Pointer(&block)), choice.value, 0 /* no inheritance */)
+		if ok == 0 || block == nil {
+			t.Logf("machine-directory diagnostic: CreateEnvironmentBlock token=%s inherit=false success=%t error=%v", choice.name, ok != 0, callErr)
+		} else {
+			entries, err := readMachineEnvironment(block)
+			if err != nil {
+				t.Logf("machine-directory diagnostic: CreateEnvironmentBlock token=%s read error=%v", choice.name, err)
+			} else {
+				for _, name := range []string{"SYSTEMDRIVE", "SYSTEMROOT", "WINDIR", "PROGRAMDATA", "PROGRAMFILES"} {
+					value, matches := "", 0
+					for _, entry := range entries {
+						key, candidate, found := strings.Cut(entry, "=")
+						if found && strings.EqualFold(key, name) {
+							value, matches = candidate, matches+1
+						}
+					}
+					t.Logf("machine-directory diagnostic: CreateEnvironmentBlock token=%s inherit=false field=%s matches=%d value=%q", choice.name, name, matches, bounded(value))
+				}
+			}
+		}
+		if block != nil {
+			if ok, _, callErr := destroy.Call(uintptr(block)); ok == 0 {
+				t.Error("machine-directory diagnostic environment close failed", callErr)
+			}
+		}
+	}
 }
 
 func machineNativeEnvironmentSnapshot(t *testing.T) []uint16 {
