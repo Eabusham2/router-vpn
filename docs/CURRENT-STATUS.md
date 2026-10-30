@@ -1,11 +1,161 @@
 # Current implementation status
 
-Updated October 30, 2026 (UTC). This file describes committed source
-and remaining delivery work. The binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
+Updated October 30, 2026 (UTC). This file distinguishes published source,
+local commits, unfinished integration and remaining delivery evidence. The
+binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
 ## Latest implementation continuation
+
+The continuation recovered the original requirements and verified the preserved
+source against live `main`. The current verified publication cutoff is
+`a4966ca453d70fa33b2b9819acc791545d161f4a`. Eighteen recovered source/test
+changes and the new standalone-utility fixture repair are now published directly to `main`.
+The [publication recovery section](CONTINUATION-EVIDENCE-2026-10-30.md#publication-recovery-after-the-interrupted-session)
+records every local-to-remote commit mapping and its validation limits.
+The branch may advance after this observation.
+
+The first recovered change was already upstream with an identical tree under
+`08b25133`; it was not replayed. Concurrent commit `3a8f5bcb` was preserved as
+an ancestor. Its UDP/TCP provider-state distinction was retained while the
+subsequent observer fix used the strictly tested unconnected-UDP peer helper.
+All branch updates were non-forced and followed by remote SHA/tree checks.
+The old interrupted-publication state is retained only as historical evidence.
+
+The [source reconciliation note](RECONCILIATION-2026-10-30-SOURCES.md) records
+actual original user turns, C1–C7, numbered-audit qualifications and retrieval
+limits. The original 356 requirements, later product/breakage list, map-first
+design, external nodes/hops/exits and later corrections remain binding.
+The unrelated `v0.2.47` memory does not change Router VPN's design. Original
+optional macOS notarization remains distinct from required iOS device signing.
+There is still source integration, native verification and live acceptance
+work; no all-requirements or current green-release claim is made.
+
+### Windows: current source and bounded native evidence
+
+At `83ba21a7`, the [actual Session job `124145999844`](https://github.com/Eabusham2/router-vpn/actions/runs/41079926475/job/124145999844)
+passed eight shipping Session cases and three executed defects. Its direct
+elevated fixture exercises installed/fresh Portable controller, App/Tray and
+joined retirement. It does not prove the later protected ordinary-user branch,
+interactive consent or cross-account UAC. The constructed LUA Medium child
+also reaches its intended successful execution in the same run's diagnostic
+job `124146000134`; that diagnostic job fails overall on other cases. The
+flags-zero token still reports `elevated=true` and is correctly rejected.
+Published `08b25133` (equivalent to recovered `72ca4a6b`) makes that rejection the required negative result without
+weakening the production Medium predicate; its new native run remains pending at this snapshot.
+
+Published `ac79bd95` retains the protected controller bootstrap through Session
+teardown. `41a25953` routes the installed launcher, outer Portable launcher and
+Portable Core through the owned Session. Six Windows launcher builds and the
+focused lifecycle/package checks pass locally. Public entry adoption is now
+implemented in source; actual packaged startup, relocation, both PowerShell
+versions, protected ordinary-user and cross-account execution must still pass
+on this newer source.
+
+Published journal work now includes protected native storage (`1d3442fb`), an exact
+BFE precommit barrier (`1a624883`), captured inherited elevated-parent authority
+(`674b4414`), strict commit/admission records (`b46c269c`, `d67dcc38`), actual
+child-channel implementation (`619b430c`) and durable prepared admission with
+mandatory app-owner capture before acknowledgment plus retained failed-write
+drain (`e22639ab`). Focused portable behavior/negative tests and both Windows
+cross-compiles pass. The native store, pipe, process, BFE and composed command
+execution on this source remain pending. Records, cross-compilation and a
+safe rejection are not native acceptance.
+
+Published `6b791e32` adds the bounded shipping Node startup integration. It connects
+the public physical command's authentication
+before private configuration, exact journal barrier, app-slot capture, joined
+outcome settlement and failed-close ownership. All 59 focused host lifecycle
+groups and four executed source defects pass, along with prepared-command and
+factory checks. Both actual prepared native command and host packages compile
+for AMD64 and ARM64; actual Windows execution remains pending. Public
+dataplane activation, durable nonempty release/Off, checked restart recovery
+and broader required graph/layer/relay compositions remain unfinished.
+
+`ad3ab281` corrects only the Windows Node test observer: an unconnected UDP
+socket may have no kernel peer, while connected TCP must still match its exact
+peer. Thirty IPv4/IPv6 predicate cases, four executed defects, six runner tests
+and both prepared native command builds pass locally. Real UDP receipt markers
+and encrypted WG/AWG evidence remain mandatory; the corrected Windows kernel
+run has not yet passed. `dffe7d42` updates stale durability audit assertions to
+the actual private-profile, captured MTU and native-child paths; all 22 invoked
+behavior scripts passed under root, and four source controls passed, without
+changing those runtime implementations. That root run did not establish the
+separate ordinary-UID PF result recorded below.
+
+### macOS: loader, installer and fixture corrections
+
+Published `74776aa0` connects the Python baseline to its durable owned native
+transaction and exact installed utility. Published `37b2ce01` connects the shipping
+Go loader to the already-qualified typed single-FILTER adapter and requires
+exact owned-generation absence before releasing cleanup state. It preserves
+foreign namespaces and rejects unqualified kernels. The earlier actual Intel
+and ARM adapter passes below are prerequisites, not execution of this newer
+Go/Python integration. Legacy-owner migration remains unfinished; ambiguous
+legacy state is preserved rather than adopted or flushed.
+
+`200f1f10` fixes only the freshly allocated fixture's macOS `/var` alias.
+`fa4ccece` makes its explicitly modeled PF backend use the actual test UID/GID
+while retaining production mode/type/link checks, inode identity, open, sync
+and locking. The corrected portable gate passes 46 cases and eight executed
+defects under both actual root and UID 65534; the older ordinary-UID failure
+was reproduced. Production root-owner predicate bytes are unchanged. Actual
+macOS root/ABI, installed journal and packet/lifecycle acceptance remain
+separate.
+
+The historical native installer failures at `74776aa0` and `08b25133` used
+the missing Darwin
+`os.getxattr` API. Published `a23b82a8` preserves the exact quarantine attribute
+through retained descriptors and the Darwin `fgetxattr`/`fsetxattr` ABI; 20
+installer cases and eight executed defects pass locally. `1c795f85` ends the
+final installer wrapper with the fixed native transaction, preventing the old
+recopy and quarantine stripping from running afterward. Eight actual shell
+dispatch cases and six defects pass. New mandatory native tests still need to
+run on Intel and ARM; signing, notarization and Gatekeeper acceptance are not
+established by these source and fixture results.
+
+### Current failures and remaining delivery work
+
+The newly pushed `3db0b8c1` source gate reports an outdated Android profile
+predicate in `deploy/durable-state-transaction-audit.py`; its shipping-predicate
+comparison and focused correction are in progress. Current native results are
+being inspected separately from the historical failures below.
+
+At historical remote `74776aa0`, the authoritative release source job `124150513503` and source
+blockers job `124150314616` failed the ordinary-UID PF fixture; the published
+`fa4ccece` source addresses that reproduced fixture defect. macOS installer jobs
+`124150317145` and `124150317186` fail the unavailable `os.getxattr` call; their
+published source correction still requires actual Darwin execution. Linux ARM
+job `124162968881` times out in the namespace harness. Buffered output was lost,
+so its exact stalled operation is unproved. The unchanged harness passes local
+kernel execution. A separate timeout-cleanup defect has been reproduced: the
+undelimited negative process-group argument can leave the retained child alive
+despite a successful kill-command exit. Published `3db0b8c1` corrects that cleanup
+with an actual sudo/pidfd/pipe regression, the old defect rejected, eight
+UID-runner cases and existing namespace verdict/teardown checks passing on
+x86_64. The five-file change also binds the new helper to native build source
+identity and the exact Linux workflow trigger paths. Changed/missing-helper
+fingerprint checks and both event filters were verified. It retains timeout
+output and adds phase diagnostics without changing the test deadlines. New
+native runs are pending; no repair of the original ARM stall or native ARM
+acceptance is claimed.
+
+There is no all-green native release for this newer continuation. The recovered
+source is published. Exact-SHA native packages, server images, production compose, manifests/checksums and release
+publication must still converge on the new source. Physical/off-LAN networking,
+leaks and transitions, real-device
+visual/accessibility checks, provider/benchmark/forwarding/rollback checks,
+signing/distribution and deliberately authorized private deployment remain
+separate requirements. No live ASUS, AdGuard, AI Board or Portainer change is
+claimed. A passing older release does not close these newer requirements.
+
+## Earlier continuation (October 30, through 83ba21a7; retained history)
+
+The following records that earlier cutoff. Where it calls public entries,
+native journal storage or Go/Python PF adoption unfinished, the newer source
+inventory above supersedes that status without converting pending native or
+live acceptance into a pass.
 
 The [October 30 evidence ledger](CONTINUATION-EVIDENCE-2026-10-30.md) records
 verified direct-`main` publication through

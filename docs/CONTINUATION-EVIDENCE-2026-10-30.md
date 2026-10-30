@@ -2,10 +2,10 @@
 
 This continues the [October 29 record](CONTINUATION-EVIDENCE-2026-10-29.md)
 and [reconciled requirements](REQUIREMENTS-RECONCILED.md). Dates here use UTC;
-the work occurred during October 29 in America/Chicago. The inventory starts
+the initial inventory work occurred during October 29 in America/Chicago. It starts
 at live `main` `775a7bbde34699ea27868394f7eaae69afd2e781` and ends at
 `e9aa4411841372df94049ac375b1db759cf0dce4`, with a separately identified
-`90c426ed` follow-up. Each listed coherent change was committed directly to
+`90c426ed` follow-up. Each change in that initial inventory was committed directly to
 `main`, pushed normally and verified by a fresh remote-reference read. These
 are publication observations, not an assertion that every native gate passed.
 
@@ -15,6 +15,12 @@ subsequent cold-start failures, retained Node ownership work and scoped native
 PF progress are separately identified. Earlier observations remain here with
 their original source identity; a newer failure is not hidden by an older pass.
 The current branch may advance after this document; read live `main` before editing.
+
+**Latest publication distinction:** the final recovery section below verifies
+source publication through `a4966ca453d70fa33b2b9819acc791545d161f4a`. It
+supersedes the earlier interrupted-publication status without changing the
+historical tests or claiming a new green release. Current work still includes
+unfinished lifecycle integration and native/live acceptance.
 
 ## Requirement recovery and preservation
 
@@ -829,3 +835,250 @@ builds, production images/compose, checksums and release publication for one
 matching source identity. Original live-device/off-LAN, leak/transition,
 visual/accessibility, provider/benchmark/forwarding/rollback, signing/distribution
 and deliberately authorized private deployment acceptance remain separate.
+
+## Later continuation — remote 74776aa0 and newer local work
+
+This section updates the earlier `83ba21a7` status without removing its history
+or the original requirement authority. Its source cutoff includes the bounded
+startup integration and Linux timeout-cleanup correction described below.
+The last verified remote `main` is
+`74776aa080478afe7256783e3a18198e96e033c0`; the local committed inventory below
+ends at `29364b61a76b29d1276da52811c29d3da8cceb89`, nineteen normal descendant
+commits later. Those nineteen commits have **not been verified as pushed**.
+The subsequent documentation commit that records this cutoff is separate from
+the source/test inventory.
+
+### Publication state and retained ancestry
+
+Published `ecbfc86aa6241cd36e174ccba94a9ac4e6d718a2` records the preceding
+evidence. Published `74776aa0` connects the Python macOS baseline to its durable
+owned native transaction, installed fixed utility and exact reference checks.
+Its original 18 private-journal plus 26 dispatcher tests and seven executed
+source defects passed in the recorded local fixture environment. Later native
+and ordinary-UID failures below refine that evidence; publication is not proof
+that those cases passed.
+
+The integrator observed two interrupted connected GitHub `create_tree` calls.
+A subsequent GitHub read confirmed tree
+`dc489f3e29fa37bbb42aac9583f7593a39efb031`, matching local `72ca4a6b` exactly,
+while the remote `main` reference remained `74776aa0`. A follow-up
+`create_commit` call using that existing tree was also interrupted without
+returning a commit SHA. No branch movement was verified from these calls.
+A fresh remote-reference read at approximately 20:22 UTC on October 30,
+after the third interruption, still returned `74776aa0`.
+The direct Git attempt failed because the configured proxy was unreachable.
+An approved network attempt reached GitHub but failed for lack of HTTPS
+credentials with terminal prompts disabled. No automatic approval-review
+rejection was reported for these publication attempts, and the interruptions
+do not establish that GitHub denied write permission. A returned object schema,
+uploaded tree, interrupted request or local commit is not a successful remote
+update. No force-push or historical recovery replay was used.
+
+The local history preserves each coherent change. Frozen source manifests,
+test receipts and patches exist in the current session for those groups; their
+paths are recovery aids, not a claim that a future session mounts them. Before
+recovery or publication, read live `main`, check ancestry and exact changed
+bytes, preserve newer remote work, push with normal ancestry, and verify the
+resulting remote reference. Do not reapply a frozen snapshot over a later
+version merely because its old manifest says READY or not published.
+
+### Further locally committed changes
+
+The following table is in parent-to-child order. Local tests, compiled native
+fixtures and real native execution are distinguished in each row.
+
+| Local commit | Concrete change | Evidence and remaining boundary |
+|---|---|---|
+| `72ca4a6bb5f9a38a993610e4674a8680869b3cf8` | Require rejection of the flags-zero elevated Medium test token | Both Windows checkptr builds pass. The actual production authority predicate is unchanged; corrected native negative execution is pending. |
+| `a62a89ddf17e8e9b882944e1cdd93d58bb39eb54` | Retain protected Shell bootstrap through Session teardown | Both architecture native-tag builds, original eight cases/three defects retained, four protected-branch cases and one additional defect compiled. Actual new protected Session execution is pending. |
+| `5862932ba50a71a6963e28b763669ee5d5e88e5f` | Protected Windows journal header, stable lock and native two-slot store | Header race tests and executed canonical-encoding defect; AMD64/ARM64 native baselines and six new native defects compile. Real file sharing, ACL, flush, interrupted-write and reopen behavior remains mandatory in Windows CI. |
+| `a50733136533d3f0a17077871b4344b926caf1e9` | Use the qualified typed single-FILTER transaction in the shipping scoped PF loader and cleanup | Focused PF race run and six runner cases pass; both Darwin baselines and six defects compile. Actual new loader/namespace-retirement execution is pending. No global flush or foreign-pointer removal is introduced. |
+| `8678e8a1223f3558ac2b2b62547fbec20c776777` | Resolve only the freshly allocated macOS fixture root's system alias | The new alias regression fails on the old setup and passes after the fixture-only correction; 45 fixture cases and seven executed defects passed at this intermediate cutoff. Caller-supplied symlink rejection remains. |
+| `7d9ab8655e5b5e8ce327ed2245f78983c624c023` | Route installed, outer Portable and Core entry points through the owned Windows Session | Six Windows launcher cross-compiles, focused Go/source audits and actual PowerShell 7 lifecycle/package-adapter checks pass. New Windows packaged, PS5.1, protected-user and cross-account acceptance is pending. |
+| `4842a73b4923de43aaef530de30459e7f888192d` | Add exact typed persistence barriers before successor/release/Off BFE commits | Four race groups and three executed defects pass; both native baselines and all sixteen existing/new mutation binaries compile. The additive constructors do not alone activate durable removal or Off. |
+| `c13613854c17d528c4d31924e4075f2238ec4968` | Capture the exact inherited elevated parent for the journal channel | Both native checkptr baselines and five negative controls compile. Actual inherited-handle/image/token/peer acceptance is pending. |
+| `fa9460767db0feeac4231069cbcb9f5ce73b7a92` | Strict single-use Windows journal commit records | Seven new race groups and six executed source defects pass. Canonical records bind the whole captured head, profile/revision, transfer, actual engine and reply digests; they are comparison data, not native authority. |
+| `9a1681ce4e4ac852b786aceca9e7aa74548c0374` | Authenticate the retained native child channel before acknowledging exact durable intent | Both architecture native-tag/checkptr builds and seven new native mutation binaries compile. The required actual pipe/child/Job/protected-store tests have not run on this source. |
+| `e7964b3b9613591055365b38a239fc33acb6596e` | Bind prepared admission records to the exact committed successor | Seven race groups and eight executed defects pass. The exact live engine remains in the settled checkpoint; record validation alone is not BFE or storage proof. |
+| `85969396b058fe1d6dc726c0949716f483ec54b6` | Persist prepared admission, capture the app owner before acknowledgment and retain exact failed writes for drain | Both native baselines and all 53 required mutation binaries compile against the recorded 22-file package and 284 transitive source hashes. Actual native execution is pending. No automatic restart adoption or removal permission is inferred. |
+| `972cd0f103d5303d3821813a2bfca172bab9fbc2` | Distinguish unconnected UDP readback from exact connected TCP proof in the Windows Node observer | Thirty IPv4/IPv6 race cases, four executed defects and six runner cases pass; both prepared native command builds pass. Real receiving markers, encrypted WG/AWG traffic and exact Windows WFP execution remain required. Production firewall criteria are unchanged. |
+| `490a1abf47ffcaf246723d256a3c65cfffb0827f` | Align durability audit with the actual private profile, retained MTU and captured child paths | All 22 behavior scripts pass under root; four source controls also pass. The obsolete assertions were replaced with current shipping calls; runtime behavior was not modified by this audit correction. The root run did not establish ordinary-UID PF acceptance. |
+| `ac4c9b3d36ba9c79d3e3c7fcfd3af2d9a877740f` | Preserve macOS quarantine through retained native descriptors | Twenty installer cases and eight executed defects pass. Exact Darwin six-argument descriptor calls, bounded binary attribute capture and readback replace unavailable `os.getxattr`; actual Intel/ARM syscall and installation tests are pending. |
+| `1c6c0b8b57e7b81642566231c2927f25b91ca99e` | End the final macOS wrapper in its owned native installer transaction | Eight actual shell cases and six executed defects pass under root and an ordinary UID. Fixed sibling `exec` preserves arguments, PID and exit result; old recopy/quarantine stripping cannot resume. Privileged native installation is separate. |
+| `94f095d98e9aa059a4243669cbb0111329c7e761` | Capture current UID/GID only in the explicit PF test-backend boundary | Root and actual UID 65534 each pass 46 fixture cases and eight executed source defects. The previous fixture reproduces two failures/nine errors across 27 tests. Production baseline/root predicate bytes remain unchanged; no native Darwin acceptance is claimed. |
+| `b4e7c89be15236972229828b74a73baabe9fb196` | Connect the actual Windows Node command and captured app slot to durable startup and joined settlement | Fifty-nine host race groups, three host defects, two prepared-command cases, one factory case and the command authentication-order defect pass. Both host and actual prepared command cross-compile for both Windows architectures. The exact 209-source preparation inventory and six runner cases were independently rechecked. Actual Windows composition, durable nonempty removal/Off, restart recovery and public dataplane activation remain pending. |
+| `29364b61a76b29d1276da52811c29d3da8cceb89` | Join the actual privileged fixture process group on timeout, retain diagnostics and bind the new helper to provenance/workflow triggers | Actual sudo/pidfd/pipe regression rejects the old cleanup defect; eight UID-runner cases and the existing x86_64 namespace verdict/negative controls pass. The 1,300-input native fingerprint detects a changed or missing helper, and both Linux workflow event filters match all six exact dependency paths. The initial ARM stall remains unlocalized; new native results are pending. |
+
+The intermediate counts in older manifests describe their own source. They
+are not added together as a requirement total or substituted for the final
+native gate. A compiled defect is not an executed rejection.
+
+### New native evidence: what passed and what still failed
+
+At `83ba21a7`, [Session job `124145999844`](https://github.com/Eabusham2/router-vpn/actions/runs/41079926475/job/124145999844)
+executes and passes the unmodified shipping Session's eight cases and three
+intentional defects. The same job also records broader Portable preparation
+(nine cases, seven unsafe inputs and five defects) and updater checks (six
+cases, seven unsafe inputs and four defects). These are distinct gates, not
+additional Session cases. The Session fixture directly starts from an elevated
+native test host. It proves that captured installed/Portable composition at
+that source, not the later protected ordinary-user branch or interactive and
+cross-account UAC.
+
+In the same run, [diagnostic job `124146000134`](https://github.com/Eabusham2/router-vpn/actions/runs/41079926475/job/124146000134)
+now successfully executes the constructed LUA Medium child after the
+`83ba21a7` default-object-ACL repair. The earlier pre-Go failure is superseded
+for that case. The job remains a failure overall: the hosted runner lacks a
+linked limited token, the flags-zero constructor is still elevated, and the
+GLOBALROOT probe has its own failure. The flags-zero child is not silently
+accepted; `72ca4a6b` changes its fixture expectation to the required rejection.
+Neither the successful LUA construction nor that correction proves real user
+consent, a physical desktop or a cross-account elevation session.
+
+The current remote `74776aa0` has these directly observed failures:
+
+| Actual job | Observation | Current disposition |
+|---|---|---|
+| [Authoritative release source `124150513503`](https://github.com/Eabusham2/router-vpn/actions/runs/41081151664/job/124150513503) and [source-blockers `124150314616`](https://github.com/Eabusham2/router-vpn/actions/runs/41081151111/job/124150314616) | Ordinary-UID portable PF fixture assumed root ownership | Reproduced under UID 65534; local `94f095d9` passes the corrected explicit test boundary under ordinary UID and root. The corrected remote jobs have not run. |
+| [macOS installer Intel `124150317145`](https://github.com/Eabusham2/router-vpn/actions/runs/41081151498/job/124150317145) and [ARM `124150317186`](https://github.com/Eabusham2/router-vpn/actions/runs/41081151498/job/124150317186) | `AttributeError: module os has no attribute getxattr` in the native installer | Local `ac4c9b3d` fixes the Darwin API boundary and preserves quarantine; native execution is pending. The trusted interpreter selection passed before this failure. |
+| [macOS PF broad Intel `124150317479`](https://github.com/Eabusham2/router-vpn/actions/runs/41081151669/job/124150317479) and [ARM `124150318039`](https://github.com/Eabusham2/router-vpn/actions/runs/41081151669/job/124150318039) | Old fixture-anchor retirement leaves its owned namespace in inventory | Local `a5073313` changes the loader/cleanup path to the qualified typed transaction. New native execution is pending; earlier adapter passes do not establish this integration. |
+| [macOS short Intel `124150318335`](https://github.com/Eabusham2/router-vpn/actions/runs/41081151669/job/124150318335) and [ARM `124150318800`](https://github.com/Eabusham2/router-vpn/actions/runs/41081151669/job/124150318800) | Fresh test root retained `/var` symlink spelling and correctly failed strict production traversal | Local fixture-only `8678e8a1` resolves its own root; production symlink rejection is preserved. |
+| [Linux ARM `124162968881`](https://github.com/Eabusham2/router-vpn/actions/runs/41081151411/job/124162968881) | Namespace harness timed out after 60 seconds; buffered output was discarded, followed by a cleanup timeout | The exact stalled operation is unproved. Unchanged harness passes local actual kernel execution. A separate cleanup defect is reproduced and locally corrected in `29364b61`, but no repair of the original ARM stall or passing ARM result is claimed. |
+
+These observations do not enumerate every latest workflow attempt or establish
+an authoritative green release. Cancelled, skipped, queued and uninspected
+attempts are not counted as successes.
+
+### Bounded startup integration and Linux timeout-cleanup correction
+
+The bounded Windows shipping Node startup group is locally committed as
+`b4e7c89b` in the inventory above. Its reviewed composition
+authenticates the native command before private configuration, passes the
+durable barrier into the actual physical factory, captures the prepared
+successor in the app before acknowledgment, joins the exact child/channel,
+drains only its attempted write and settles an independently read kernel
+outcome. The reviewed fixes retain an empty slot until its exact journal closes
+and reserve sequence capacity for intent, live admission and final joined
+settlement. Both Windows architectures compile the actual host and prepared
+native command with checkptr/vet. All 59 host lifecycle groups (including eight
+new journal groups), three host source defects and one prepared-command
+authentication-order defect pass. Prepared command/factory race/checkptr cases,
+the exact preparer copy check and six runner self-tests also pass. These local
+prepared cases model their unavailable native boundaries explicitly. The
+23-file snapshot is in `/tmp/router-vpn-ready-journal-shipping-startup/MANIFEST.json`
+with SHA-256 `a41492f4f3dce902d95d97b6196a3588c1bc6c13b5c02736c756994d37d815f2`.
+Its frozen input is based on `94f095d9`; actual Windows execution
+remains pending. There is no public dataplane activation or native acceptance
+claim for this frozen group.
+
+The Linux namespace timeout investigation remains separate. A repeat local
+pass of unchanged code does not diagnose the ARM failure. A distinct cleanup
+defect has been reproduced: external `/bin/kill -KILL -PGID` can return success
+while the actual retained sudo child remains alive and holds the output pipe.
+An explicit `--` before the captured negative process-group ID terminates and
+joins that owner. Local `29364b61` includes the correction, preserved timeout
+output, namespace phase diagnostics and executed sudo/pidfd regression. The
+new helper is included in native build source identity, and the exact Linux
+workflow dependency paths are present in both event filters. The five-file
+frozen snapshot is `/tmp/router-vpn-ready-linux-guardian-cleanup/MANIFEST.json`,
+SHA-256 `585ecf87ec15c6799ea7eeb50dc23ba5f6f8dd11d8d3008b7007f749656ef87c`.
+The real process/pipe regression passes and rejects the original defect. The
+existing namespace kernel test passes on x86_64 for exit verdicts 0, 17 and 143,
+preserves inherited read-only mounts and unchanged parent namespaces/mountinfo,
+and rejects both existing teardown defects. Eight UID-runner cases also pass.
+The 1,300-input fingerprint changes when this helper changes and rejects its
+absence; both push and pull-request filters match all six precise guardian/UID
+dependencies. No timeout was increased and no runtime implementation or native
+restriction was relaxed. The original ARM stall still needs a localized
+diagnosis and a new native result.
+
+This two-document status update records that exact code cutoff. It does not
+change either publication state or native behavior.
+
+### Remaining requirements after these source changes
+
+Windows durable nonempty release/Off and its exact saved-profile transaction,
+checked old-controller/engine retirement and restart recovery, full public
+dataplane activation, broader required graphs/Start Layers/relay compositions
+and their native host acceptance remain source/delivery work. The public app
+launchers and journal components above must not be re-listed as wholly absent,
+but safe rejection of the unfinished paths does not close them. macOS legacy
+root/watcher migration remains open; the new loader does not authorize adopting
+an ambiguous old owner, signaling a saved PID or flushing a foreign namespace.
+
+The complete original 356 requirements, C1–C7, later 32-item request, map-first
+design, external-node/hop/exit additions and later user corrections remain
+binding. No smaller source-gate denominator, package count or older release is
+substituted for that ledger. Publication, exact-SHA native applications, server
+images, production compose, manifests/checksums and release assets must still
+converge on the same committed code. Physical/off-LAN path, leak and network
+transition checks; real-device UI, DPI, orientation and accessibility;
+private benchmarking, forwarding, stop/resume, rollback and provider checks;
+Apple/Android signing and distribution; and deliberately authorized private
+AI Board/Portainer/ASUS deployment remain separate acceptance requirements.
+No such deployment, router change or signing operation was performed by this
+source/documentation continuation.
+
+## Publication recovery after the interrupted session
+
+Recovered October 30, 2026 (America/Chicago). The original requirement sources
+were reconciled again; see [the source note](RECONCILIATION-2026-10-30-SOURCES.md).
+Personal Context remained unavailable, while Library supplied the original
+named sources and user turns. No unavailable conversation is claimed read.
+
+The preserved recovery package passed all 356 listed checksums and Git bundle
+verification. Its first local commit `72ca4a6b` and live `08b25133` had exactly
+the same Git tree, so that change was not replayed. During recovery, live main
+advanced to `3a8f5bcb`; its ancestry and UDP/TCP provider-state distinction were
+preserved. The observer reconciliation uses the stricter recovered helper:
+TCP requires its exact connected peer; unconnected UDP requires same-family
+unspecified:0 readback, with destination proof remaining in real WFP/peer tests.
+All 30 predicate cases passed with race instrumentation, and six runner tests
+passed after resolving that one overlap. No production socket grant was relaxed.
+
+The first expected-head update returned a GitHub GraphQL service error. A fresh
+read exposed the concurrent advance before any stale update was retried. After
+reconciliation, ordinary non-forced updates succeeded. Every row below was
+followed by a remote main read and exact committed tree/parent check. Local Git
+objects were synchronized to the returned remote identities; uploading an
+unreferenced object was never counted as publication.
+
+| Preserved local change | Verified remote commit | Change |
+|---|---|---|
+| `a62a89dd` | [`ac79bd95`](https://github.com/Eabusham2/router-vpn/commit/ac79bd95fe2887dff2ab63ce6a77cc79d15375e4) | Retain the protected controller bootstrap through Windows Session teardown |
+| `5862932b` | [`1d3442fb`](https://github.com/Eabusham2/router-vpn/commit/1d3442fbeed7b1570fda7c2c1eafb8f9c6fccee4) | Retain the administrative Windows protection journal and durable file identities |
+| `a5073313` | [`37b2ce01`](https://github.com/Eabusham2/router-vpn/commit/37b2ce01be96204761ee901d492848c7d61bb3f4) | Use the qualified native PF transaction for scoped policy loading and cleanup |
+| `8678e8a1` | [`200f1f10`](https://github.com/Eabusham2/router-vpn/commit/200f1f10511676dca40eb02ea05636c981023523) | Resolve only the owned macOS fixture root before exercising strict PF admission |
+| `7d9ab865` | [`41a25953`](https://github.com/Eabusham2/router-vpn/commit/41a25953f55598efde2a68998707ae84a0360b16) | Route installed and Portable Windows launchers through the owned native Session |
+| `4842a73b` | [`1a624883`](https://github.com/Eabusham2/router-vpn/commit/1a624883631debe6adce19b702abadfba8746ea0) | Require a durable typed barrier before owned Windows protection commits |
+| `c1361385` | [`674b4414`](https://github.com/Eabusham2/router-vpn/commit/674b4414f1202f9f75b3c4be4a5f53c434c5e875) | Capture the exact inherited elevated parent for the journal channel |
+| `fa946076` | [`b46c269c`](https://github.com/Eabusham2/router-vpn/commit/b46c269cab0599b9d2e5fa1e73e77dec64c0e29b) | Define strict single-use Windows journal commit records |
+| `9a1681ce` | [`619b430c`](https://github.com/Eabusham2/router-vpn/commit/619b430cdbe3a620a1d905fde00c25d502a2861d) | Acknowledge durable Windows intents through the retained native child channel |
+| `e7964b3b` | [`d67dcc38`](https://github.com/Eabusham2/router-vpn/commit/d67dcc381162937ed5e5b39aba2068b2800b57eb) | Bind prepared admission records to the exact committed protection target |
+| `85969396` | [`e22639ab`](https://github.com/Eabusham2/router-vpn/commit/e22639ab39d1a8ba46af0e22a1ef1bcbde4b7c1e) | Capture durable Windows admission before acknowledgment and retain failed writes |
+| `972cd0f1` | [`ad3ab281`](https://github.com/Eabusham2/router-vpn/commit/ad3ab281f7cfeb83e810db03edca41909e64d577) | Distinguish unconnected UDP readback from exact connected TCP proof in the native Node gate |
+| `490a1abf` | [`dffe7d42`](https://github.com/Eabusham2/router-vpn/commit/dffe7d425d691e12f60f60bc3b55174d37e73fa5) | Verify current private profile, retained MTU and captured child durability paths |
+| `ac4c9b3d` | [`a23b82a8`](https://github.com/Eabusham2/router-vpn/commit/a23b82a86709fe2b3cd846f52755cc50e51feda4) | Preserve macOS download quarantine through retained native descriptors |
+| `1c6c0b8b` | [`1c795f85`](https://github.com/Eabusham2/router-vpn/commit/1c795f8585bc8db8837f1dd2c29a1767f35d090e) | Finish the macOS installer in its owned native transaction without legacy recopy |
+| `94f095d9` | [`fa4ccece`](https://github.com/Eabusham2/router-vpn/commit/fa4cceced7a2c2146289f9bcfbe41fb9ad8efd2b) | Capture the ordinary test owner without weakening the native PF journal predicate |
+| `b4e7c89b` | [`6b791e32`](https://github.com/Eabusham2/router-vpn/commit/6b791e326efd5a02a20907dce8b46933db8c7f2d) | Connect owned Windows Node startup to durable native intent and admission |
+| `29364b61` | [`3db0b8c1`](https://github.com/Eabusham2/router-vpn/commit/3db0b8c1cea3713151229ad493c9d52786a8708b) | Join the exact privileged fixture group on timeout and retain progress diagnostics |
+| `d83312a2` | [`a4966ca4`](https://github.com/Eabusham2/router-vpn/commit/a4966ca453d70fa33b2b9819acc791545d161f4a) | Verify reference utility isolation before ordinary application startup |
+
+The first eighteen rows recover already recorded focused source/test work;
+their original validation scopes remain in the preceding section. Cross-build
+receipts are not native execution, and the new commits require their own CI.
+The final utility-fixture repair reproduced the exact old diagnostic failure,
+then passed the complete runtime-utility startup and PF dispatch tests. An
+executed compiler-overlay defect admitting an extra `reference` argument was
+rejected. Production utility dispatch did not change.
+
+The old local documentation commit `46393017` was preserved as recovery
+history, while this current update replaces its obsolete unpublished status.
+The last published release remains the historical `745b3e41` prerelease; its
+25 successful workflows were independently reread. That does not certify the
+new source. Current native jobs, exact-SHA packages/images/compose/publication,
+remaining Windows disconnect/Off/restart integration, broader graph/layer
+coverage, macOS legacy migration and applicable device/deployment acceptance
+remain separately tracked. No private router, server, DNS, signing identity
+or production deployment was changed by this recovery.
