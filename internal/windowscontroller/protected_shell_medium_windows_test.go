@@ -4,6 +4,7 @@ package windowscontroller
 
 import (
 	"errors"
+	"fmt"
 	"maps"
 	"os"
 	"runtime"
@@ -181,7 +182,9 @@ func fixturePrimaryMediumIdentity(api *fixtureRestrictedAPI, token syscall.Token
 		!identity.Primary || identity.SID == "" || identity.Elevated || identity.Administrator || integrity != "S-1-16-8192" ||
 		len(privileges) != 1 || !present || attributes&2 == 0 || returned != 4 || mandatory&1 == 0 || mandatory&^uint32(3) != 0 {
 		return TokenIdentity{}, errors.Join(identityErr, integrityErr, privilegeErr, adminErr, policyErr,
-			lookupFailure, errors.New("native primary token is not the constructed bounded Medium authority"))
+			lookupFailure, fmt.Errorf("native primary token is not the constructed bounded Medium authority (primary=%t user_present=%t elevated=%t administrator=%t medium=%t privilege_count=%d notify_present=%t notify_enabled=%t mandatory_bytes=%d mandatory_mask=0x%x)",
+				identity.Primary, identity.SID != "", identity.Elevated, identity.Administrator, integrity == "S-1-16-8192",
+				len(privileges), present, attributes&2 != 0, returned, mandatory))
 	}
 	return identity, nil
 }
