@@ -63,18 +63,14 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: windows-controller-contract-${{ github.ref }}
-  # Preserve the active real-kernel result while coherent implementation commits
-  # continue. The comprehensive native and release gates remain independently
-  # required; this focused run only makes their controller failures observable.
-  cancel-in-progress: false
-
 jobs:
   elevation:
     name: Actual Windows Shell elevation diagnostic
     runs-on: windows-latest
     timeout-minutes: 8
+    concurrency:
+      group: windows-shell-elevation-${{ github.ref }}
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -101,6 +97,11 @@ jobs:
     # composition remain required in the independent controller job below.
   controller:
     runs-on: windows-latest
+    concurrency:
+      group: windows-controller-contract-${{ github.ref }}
+      # Retain the active complete native result while the independent short
+      # Shell job can finish and expose the next concrete launch observation.
+      cancel-in-progress: false
     # The measured pre-composition job took 10m07s. Child-entry and complete
     # Session execution add two separately bounded 10m native gates; retain a
     # small job/setup margin without altering any process or drain deadline.
