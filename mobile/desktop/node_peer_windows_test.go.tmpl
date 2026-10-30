@@ -54,10 +54,12 @@ type desktopNodeWFPReferenceRequest struct {
 }
 
 type desktopNodeWFPReferenceReply struct {
-	Schema   int    `json:"schema"`
-	Address  string `json:"address"`
-	AppID    []byte `json:"app_id"`
-	Received int64  `json:"received"`
+	Schema        int    `json:"schema"`
+	Address       string `json:"address"`
+	AppID         []byte `json:"app_id"`
+	Received      int64  `json:"received"`
+	Probe         string `json:"probe"`
+	ProbeReceived int64  `json:"probe_received"`
 }
 
 func desktopNodeWFPInterface(t *testing.T) netip.Addr {
@@ -130,7 +132,8 @@ func TestRouterVPNDesktopNodeWindowsEncryptedReferenceProcess(t *testing.T) {
 	if request.Address != local.String() {
 		t.Fatal("encrypted reference request selected another actual interface")
 	}
-	peer, err := startDesktopNodePeer(request.Configuration, request.Mode, local)
+	observation := &desktopNodePeerObservation{}
+	peer, err := startDesktopNodePeer(request.Configuration, request.Mode, local, observation)
 	if err != nil {
 		t.Fatal("actual separate encrypted reference startup", err)
 	}
@@ -139,21 +142,52 @@ func TestRouterVPNDesktopNodeWindowsEncryptedReferenceProcess(t *testing.T) {
 	if err != nil || len(scope) == 0 {
 		t.Fatal("encrypted reference has no actual executable identity", err)
 	}
-	respond := func() {
-		if err := json.NewEncoder(os.Stdout).Encode(desktopNodeWFPReferenceReply{Schema: 1, Address: peer.bind.address(), AppID: scope, Received: peer.bind.packets.Load()}); err != nil {
+	respond := func(nonce string) {
+		var count int64
+		if nonce != "" {
+			count, err = observation.count(nonce)
+			if err != nil {
+				t.Fatal("encrypted reference lost its raw observation owner", err)
+			}
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(desktopNodeWFPReferenceReply{Schema: 1, Address: peer.bind.address(), AppID: scope,
+			Received: peer.bind.packets.Load(), Probe: nonce, ProbeReceived: count}); err != nil {
 			t.Fatal("encrypted reference acknowledgement failed", err)
 		}
 	}
-	respond()
+	respond("")
 	for {
 		line, err := input.ReadSlice('\n')
 		if errors.Is(err, io.EOF) && len(line) == 0 {
 			return
 		}
-		if err != nil || string(line) != "stats\n" {
+		if err != nil || len(line) > desktopNodeWFPReferenceLimit {
 			t.Fatal("encrypted reference lost its owned input protocol", err)
 		}
-		respond()
+		if string(line) == "stats\n" {
+			respond("")
+			continue
+		}
+		action, nonce, found := strings.Cut(strings.TrimSuffix(string(line), "\n"), " ")
+		if !found || len(nonce) != 32 || action != "arm" && action != "observe" && action != "positive" {
+			t.Fatal("encrypted reference received an unrelated raw observation request")
+		}
+		if action == "arm" || action == "positive" {
+			if err := observation.arm(nonce); err != nil {
+				t.Fatal("encrypted reference reused or replaced its raw observation", err)
+			}
+		}
+		if action == "positive" {
+			remote, err := netip.ParseAddrPort(peer.bind.address())
+			if err != nil {
+				t.Fatal(err)
+			}
+			echo, err := desktopNodePeerProbeExchange(remote, nonce)
+			if err != nil || !echo {
+				t.Fatal("separately owned raw peer positive control did not transfer actual bytes", err)
+			}
+		}
+		respond(nonce)
 	}
 }
 
@@ -232,11 +266,54 @@ func (p *desktopNodeWFPReference) packets(t *testing.T) int64 {
 		t.Fatal(err)
 	}
 	reply, err := p.read()
-	if err != nil || reply.Schema != 1 || reply.Address != p.reply.Address || !bytes.Equal(reply.AppID, p.reply.AppID) || reply.Received < p.reply.Received {
+	if err != nil || reply.Schema != 1 || reply.Address != p.reply.Address || !bytes.Equal(reply.AppID, p.reply.AppID) || reply.Received < p.reply.Received || reply.Probe != "" || reply.ProbeReceived != 0 {
 		t.Fatal("actual encrypted reference changed its retained identity", err)
 	}
 	p.reply = reply
 	return reply.Received
+}
+
+func (p *desktopNodeWFPReference) probeCommand(t *testing.T, action, nonce string) int64 {
+	t.Helper()
+	if _, err := io.WriteString(p.input, action+" "+nonce+"\n"); err != nil {
+		t.Fatal("raw peer observation command lost its retained channel", err)
+	}
+	reply, err := p.read()
+	if err != nil || reply.Schema != 1 || reply.Address != p.reply.Address || !bytes.Equal(reply.AppID, p.reply.AppID) ||
+		reply.Received < p.reply.Received || reply.Probe != nonce || reply.ProbeReceived < 0 {
+		t.Fatal("raw peer observation changed its retained process, endpoint or nonce", err)
+	}
+	p.reply = reply
+	return reply.ProbeReceived
+}
+
+func desktopNodeWFPProbeNonce(t *testing.T) string {
+	t.Helper()
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		t.Fatal(err)
+	}
+	return hex.EncodeToString(nonce[:])
+}
+
+func (p *desktopNodeWFPReference) positiveProbe(t *testing.T, originalProcess bool) {
+	t.Helper()
+	nonce := desktopNodeWFPProbeNonce(t)
+	if originalProcess {
+		if p.probeCommand(t, "arm", nonce) != 0 {
+			t.Fatal("fresh parent raw probe already had peer traffic")
+		}
+		if echo, err := desktopNodePeerProbeExchange(p.remote, nonce); err != nil || !echo {
+			t.Fatal("ordinary parent raw positive control did not transfer actual bytes before BFE", err)
+		}
+		if p.probeCommand(t, "observe", nonce) == 0 {
+			t.Fatal("ordinary parent raw echo had no independently observed peer receipt")
+		}
+		return
+	}
+	if p.probeCommand(t, "positive", nonce) == 0 {
+		t.Fatal("separately owned raw positive echo had no actual peer receipt")
+	}
 }
 
 func desktopNodeWFPStartReference(t *testing.T, mode string) *desktopNodeWFPReference {
@@ -304,10 +381,11 @@ func desktopNodeWFPStartReference(t *testing.T, mode string) *desktopNodeWFPRefe
 	scope, scopeErr := mobiletor.DesktopWindowsNodeCompositionAppID()
 	remote, remoteErr := netip.ParseAddrPort(p.reply.Address)
 	if err != nil || scopeErr != nil || remoteErr != nil || p.reply.Schema != 1 || remote.Addr() != local || remote.Port() == 0 ||
-		len(p.reply.AppID) == 0 || bytes.Equal(scope, p.reply.AppID) {
+		len(p.reply.AppID) == 0 || bytes.Equal(scope, p.reply.AppID) || p.reply.Probe != "" || p.reply.ProbeReceived != 0 {
 		t.Fatal("encrypted reference was not a distinct retained actual executable and endpoint", err, scopeErr, remoteErr)
 	}
 	p.remote = remote
+	p.positiveProbe(t, true)
 	return p
 }
 
@@ -396,16 +474,34 @@ func desktopNodeWFPBox(t *testing.T, original *mobilemultihop.NodeProfile, prede
 	return f
 }
 
-func desktopNodeWFPRequireBlocked(t *testing.T, remote netip.AddrPort) {
+func desktopNodeWFPRequireBlocked(t *testing.T, peer *desktopNodeWFPReference) {
 	t.Helper()
-	connection, err := net.DialUDP("udp4", nil, net.UDPAddrFromAddrPort(remote))
-	if err == nil {
-		_ = connection.SetDeadline(time.Now().Add(time.Second))
-		_, err = connection.Write([]byte("ordinary-token-negative-control"))
-		_ = connection.Close()
+	// UDP may accept a write before filtering discards the packet. Require an
+	// actual receiving-side observation, not synchronous WSAEACCES alone. The
+	// distinct retained peer process proves its live socket and test-only AppID
+	// scope with real positive transfers on both sides of this bounded probe.
+	peer.positiveProbe(t, false)
+	nonce := desktopNodeWFPProbeNonce(t)
+	if peer.probeCommand(t, "arm", nonce) != 0 {
+		t.Fatal("fresh denied raw probe already had peer traffic")
 	}
-	if !errors.Is(err, syscall.Errno(10013)) { // WSAEACCES, independently enforced by BFE.
-		t.Fatal("ordinary process token bypassed the actual encrypted outer deny", err)
+	echo, err := desktopNodePeerProbeExchange(peer.remote, nonce)
+	received := peer.probeCommand(t, "observe", nonce)
+	peer.positiveProbe(t, false)
+	after := peer.probeCommand(t, "observe", nonce)
+	if after < received {
+		t.Fatal("raw peer observation regressed its captured marker count")
+	}
+	received = after
+	if received != 0 {
+		t.Fatal("ordinary process token crossed the actual encrypted outer deny: independent peer marker receipt", received)
+	}
+	if echo {
+		t.Fatal("ordinary process token crossed the actual encrypted outer deny: exact returned marker")
+	}
+	var timeout net.Error
+	if !errors.Is(err, syscall.Errno(10013)) && !(errors.As(err, &timeout) && timeout.Timeout()) {
+		t.Fatal("ordinary UDP rejection has no bounded native access or timeout observation", err)
 	}
 }
 
@@ -414,7 +510,7 @@ func desktopNodeWFPRequireTraffic(t *testing.T, f *desktopNodeWFPFixture, peer *
 	if f.admitted != 1 || f.prepared.Validate() != nil || f.network.Current() || !f.network.SocketCurrent() {
 		t.Fatal("actual WFP Node startup fabricated application readiness or skipped prepared admission")
 	}
-	desktopNodeWFPRequireBlocked(t, peer.remote)
+	desktopNodeWFPRequireBlocked(t, peer)
 	for _, network := range []string{"tcp", "udp"} {
 		for _, host := range []string{"192.0.2.99", "2001:db8::99"} {
 			if err := f.exchange(network, host); err != nil {
@@ -495,7 +591,7 @@ func TestRouterVPNDesktopNodeWindowsWFPEncryptedTraffic(t *testing.T) {
 				t.Fatal("physical transition retained the old real encrypted permission")
 			}
 			retained = desktopNodeWFPDrain(t, f)
-			desktopNodeWFPRequireBlocked(t, peer.remote)
+			desktopNodeWFPRequireBlocked(t, peer)
 		})
 	}
 }

@@ -52,9 +52,93 @@ import (
 // Only OS permits and the TUN are fixtures. The peer uses the unmodified pinned
 // cryptographic backend and an actual UDP socket; no successful packet result
 // is supplied by a mock. This alone does not establish Windows BFE acceptance.
+const desktopNodePeerProbePrefix = "routervpn-owned-raw-datagram/"
+
+// These bounded observations belong only to the retained encrypted test peer.
+// A fresh marker is armed through its private control pipe before the actual
+// UDP write. Markers are counted and echoed at the real socket, separately from
+// cryptographic traffic; the unmodified WG/AWG implementation never sees them.
+type desktopNodePeerObservation struct {
+	mu     sync.Mutex
+	counts map[string]int64
+}
+
+func (o *desktopNodePeerObservation) arm(nonce string) error {
+	decoded, err := hex.DecodeString(nonce)
+	if err != nil || len(decoded) != 16 || hex.EncodeToString(decoded) != nonce {
+		return errors.New("raw peer observation requires its exact fresh nonce")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.counts == nil {
+		o.counts = make(map[string]int64)
+	}
+	if _, exists := o.counts[nonce]; exists || len(o.counts) >= 64 {
+		return errors.New("raw peer observation was reused or exceeded its owned bound")
+	}
+	o.counts[nonce] = 0
+	return nil
+}
+
+func (o *desktopNodePeerObservation) count(nonce string) (int64, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	count, exists := o.counts[nonce]
+	if !exists {
+		return 0, errors.New("raw peer observation lost its captured nonce")
+	}
+	return count, nil
+}
+
+func (o *desktopNodePeerObservation) receive(c *net.UDPConn, payload []byte, remote netip.AddrPort) (bool, error) {
+	if len(payload) != len(desktopNodePeerProbePrefix)+32 || !bytes.HasPrefix(payload, []byte(desktopNodePeerProbePrefix)) {
+		return false, nil
+	}
+	nonce := string(payload[len(desktopNodePeerProbePrefix):])
+	o.mu.Lock()
+	count, armed := o.counts[nonce]
+	if armed {
+		o.counts[nonce] = count + 1
+	}
+	o.mu.Unlock()
+	if !armed {
+		return false, nil
+	}
+	n, err := c.WriteToUDPAddrPort(payload, remote)
+	if err == nil && n != len(payload) {
+		err = io.ErrShortWrite
+	}
+	return true, err
+}
+
+func desktopNodePeerProbeExchange(remote netip.AddrPort, nonce string) (bool, error) {
+	connection, err := net.DialUDP("udp4", nil, net.UDPAddrFromAddrPort(remote))
+	if err != nil {
+		return false, err
+	}
+	defer connection.Close()
+	if err := connection.SetDeadline(time.Now().Add(750 * time.Millisecond)); err != nil {
+		return false, err
+	}
+	payload := []byte(desktopNodePeerProbePrefix + nonce)
+	if n, err := connection.Write(payload); err != nil || n != len(payload) {
+		return false, errors.Join(err, io.ErrShortWrite)
+	}
+	answer := make([]byte, len(payload)+1)
+	n, err := connection.Read(answer)
+	if err != nil {
+		return false, err
+	}
+	if !bytes.Equal(answer[:n], payload) {
+		return false, errors.New("actual raw peer echo changed its captured marker")
+	}
+	return true, nil
+}
+
 type desktopNodePeerBind struct {
 	referenceBind
-	ip netip.Addr
+	ip          netip.Addr
+	observation *desktopNodePeerObservation
 }
 
 func (b *desktopNodePeerBind) Open(uint16) ([]awgconn.ReceiveFunc, uint16, error) {
@@ -69,16 +153,27 @@ func (b *desktopNodePeerBind) Open(uint16) ([]awgconn.ReceiveFunc, uint16, error
 	}
 	b.c = c
 	receive := func(packets [][]byte, sizes []int, endpoints []awgconn.Endpoint) (int, error) {
-		n, remote, err := c.ReadFromUDPAddrPort(packets[0])
-		if err != nil {
-			return 0, err
+		for {
+			n, remote, err := c.ReadFromUDPAddrPort(packets[0])
+			if err != nil {
+				return 0, err
+			}
+			if remote.Addr() != b.ip {
+				return 0, errors.New("node reference refused a non-fixture peer")
+			}
+			if b.observation != nil {
+				handled, err := b.observation.receive(c, packets[0][:n], remote)
+				if err != nil {
+					return 0, err
+				}
+				if handled {
+					continue
+				}
+			}
+			sizes[0], endpoints[0] = n, peerEndpoint(remote)
+			b.packets.Add(1)
+			return 1, nil
 		}
-		if remote.Addr() != b.ip {
-			return 0, errors.New("node reference refused a non-fixture peer")
-		}
-		sizes[0], endpoints[0] = n, peerEndpoint(remote)
-		b.packets.Add(1)
-		return 1, nil
 	}
 	return []awgconn.ReceiveFunc{receive}, uint16(c.LocalAddr().(*net.UDPAddr).Port), nil
 }
@@ -130,7 +225,10 @@ type desktopNodePeer struct {
 
 func (p *desktopNodePeer) close() { p.closeOnce.Do(p.stop) }
 
-func startDesktopNodePeer(config desktopReferenceConfiguration, mode string, ip netip.Addr) (*desktopNodePeer, error) {
+func startDesktopNodePeer(config desktopReferenceConfiguration, mode string, ip netip.Addr, observations ...*desktopNodePeerObservation) (*desktopNodePeer, error) {
+	if len(observations) > 1 || len(observations) == 1 && observations[0] == nil {
+		return nil, errors.New("node reference observation escaped its one captured owner")
+	}
 	ipc, addresses, rules, err := validateDesktopReference(config)
 	if err != nil {
 		return nil, err
@@ -143,6 +241,9 @@ func startDesktopNodePeer(config desktopReferenceConfiguration, mode string, ip 
 		return nil, err
 	}
 	bind := &desktopNodePeerBind{ip: ip}
+	if len(observations) == 1 {
+		bind.observation = observations[0]
+	}
 	peer := &desktopNodePeer{bind: bind}
 	if mode == "wg" {
 		// The shared validator checks keys, private addresses and bounded echo
@@ -185,6 +286,84 @@ func startDesktopNodePeer(config desktopReferenceConfiguration, mode string, ip 
 		return nil, err
 	}
 	return peer, nil
+}
+
+func TestRouterVPNDesktopNodeEncryptedRawPeerObservation(t *testing.T) {
+	_, ip := desktopNodePeerInterface(t)
+	observation := &desktopNodePeerObservation{}
+	nonce := strings.Repeat("a", 32)
+	if err := observation.arm(nonce); err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{nonce, "", strings.Repeat("A", 32), strings.Repeat("b", 31), strings.Repeat("g", 32)} {
+		if err := observation.arm(invalid); err == nil {
+			t.Fatal("raw observation accepted a repeated or malformed nonce")
+		}
+	}
+	if _, err := observation.count(strings.Repeat("b", 32)); err == nil {
+		t.Fatal("raw observation fabricated an unarmed marker")
+	}
+	for index := 0; index < 63; index++ {
+		if err := observation.arm(fmt.Sprintf("%032x", index)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := observation.arm(strings.Repeat("c", 32)); err == nil {
+		t.Fatal("raw observation exceeded its retained bound")
+	}
+	bind := &desktopNodePeerBind{ip: ip, observation: observation}
+	reads, port, err := bind.Open(0)
+	if err != nil || len(reads) != 1 || port == 0 {
+		t.Fatal("raw observation did not bind an actual owned UDP socket", err)
+	}
+	type result struct {
+		payload []byte
+		err     error
+	}
+	done, joined := make(chan result, 1), make(chan struct{})
+	defer func() {
+		if err := bind.Close(); err != nil {
+			t.Error(err)
+		}
+		<-joined
+	}()
+	go func() {
+		defer close(joined)
+		packets, sizes, endpoints := [][]byte{make([]byte, 2048)}, make([]int, 1), make([]awgconn.Endpoint, 1)
+		count, err := reads[0](packets, sizes, endpoints)
+		if err != nil || count != 1 {
+			done <- result{err: errors.Join(err, errors.New("owned raw observer lost the actual receive"))}
+			return
+		}
+		done <- result{payload: append([]byte(nil), packets[0][:sizes[0]]...)}
+	}()
+	remote := netip.AddrPortFrom(ip, port)
+	if echo, err := desktopNodePeerProbeExchange(remote, nonce); err != nil || !echo {
+		t.Fatal("raw observer did not echo the actual captured datagram", err)
+	}
+	if count, err := observation.count(nonce); err != nil || count != 1 || bind.packets.Load() != 0 {
+		t.Fatal("raw marker was omitted or counted as encrypted traffic", count, err)
+	}
+	connection, err := net.DialUDP("udp4", nil, net.UDPAddrFromAddrPort(remote))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	payload := []byte("actual non-marker datagram for the cryptographic receiver")
+	if err := connection.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := connection.Write(payload); err != nil || n != len(payload) {
+		t.Fatal("raw observer fixture lost its unhandled datagram", err)
+	}
+	select {
+	case result := <-done:
+		if result.err != nil || !bytes.Equal(result.payload, payload) || bind.packets.Load() != 1 {
+			t.Fatal("raw observer altered ordinary cryptographic receiver input", result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("raw observer did not join its actual unhandled receive")
+	}
 }
 
 func desktopNodePeerInterface(t *testing.T) (net.Interface, netip.Addr) {

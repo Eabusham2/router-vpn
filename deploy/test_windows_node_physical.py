@@ -53,7 +53,16 @@ def overlay(source, directory, mutation=None):
     # mutation calls the old recovery constructor. Neither ordinary binary has
     # an environment/profile switch for this fixture.
     policy = "routervpn/mobiletor/desktop_socket_windows_policy.go"
-    raw = BOOT.IDENTITY.replace_once((source / policy).read_text(encoding="utf-8"),
+    policy_source = (source / policy).read_text(encoding="utf-8")
+    policy_mutation = mutation is not None and mutation[1] == policy
+    if policy_mutation:
+        # Only this exact compiled action defect may share the policy overlay.
+        # Both constructor replacements are still applied afterward, so the
+        # deliberate permit remains confined to the actual test executable.
+        if mutation != mutants(source)[2]:
+            raise ValueError("Node production mutation overlaps native scope ownership")
+        policy_source = mutation[4]
+    raw = BOOT.IDENTITY.replace_once(policy_source,
         "return newDesktopWindowsSocketPolicy(ctx, capture, options, nil)",
         "return desktopWindowsNodeCompositionConstruct(ctx, capture, options, nil, false)")
     replace(policy, raw.encode())
@@ -68,9 +77,10 @@ def overlay(source, directory, mutation=None):
     replace(relative, (RESOURCES / "kernel_observer.go").read_bytes())
     if mutation is not None:
         name, relative, test, witness, raw = mutation
-        if str(source / relative) in replacements:
+        if str(source / relative) in replacements and not policy_mutation:
             raise ValueError("Node production mutation overlaps native scope ownership")
-        replace(relative, raw.encode())
+        if not policy_mutation:
+            replace(relative, raw.encode())
     result = directory / "overlay.json"
     result.write_text(json.dumps({"Replace": replacements}, sort_keys=True), encoding="utf-8")
     return result
@@ -79,6 +89,7 @@ def overlay(source, directory, mutation=None):
 def mutants(source):
     factory = "routervpn/desktoppt/node_physical_windows.go"
     lower = "routervpn/desktoppt/node_physical.go"
+    policy = "routervpn/mobiletor/desktop_socket_windows_policy.go"
     return (
         ("legacy-adoption", factory, REQUIRED[2], "foreign predecessor reached actual encrypted startup",
          BOOT.IDENTITY.replace_once((source / factory).read_text(encoding="utf-8"),
@@ -86,6 +97,9 @@ def mutants(source):
             "_ = predecessor\n\t\towned, err := mobiletor.NewDesktopWindowsSocketPolicy(ctx, capture, options)")),
         ("late-handshake", lower, REQUIRED[0], "actual WFP eager encrypted node startup failed",
          BOOT.IDENTITY.replace_once((source / lower).read_text(encoding="utf-8"), "!owner.SocketCurrent()", "!owner.Current()")),
+        ("ordinary-udp-deny", policy, REQUIRED[0], "independent peer marker receipt",
+         BOOT.IDENTITY.replace_once((source / policy).read_text(encoding="utf-8"),
+            'p.pair("deny", family, 1, false, true)', 'p.pair("deny", family, 1, true, true)')),
     )
 
 

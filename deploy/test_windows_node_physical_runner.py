@@ -71,12 +71,29 @@ class NativeNodeScope(unittest.TestCase):
             with self.subTest(name=mutation[0]):
                 selected = GATE.overlay(self.source, self.observer, mutation)
                 mapping = json.loads(selected.read_text())["Replace"]
-                self.assertEqual(len(mapping), 4)
+                self.assertEqual(len(mapping), 3 if mutation[0] == "ordinary-udp-deny" else 4)
                 self.assertIn("nil, false)", Path(mapping[str(self.source / "routervpn/mobiletor/desktop_socket_windows_policy.go")]).read_text())
                 self.assertIn("predecessor, true)", Path(mapping[str(self.source / "routervpn/mobiletor/desktop_socket_windows_transfer.go")]).read_text())
         forbidden = ("scope-mutation", "routervpn/mobiletor/desktop_socket_windows_policy.go", "test", "witness", "package mobiletor\n")
         with self.assertRaisesRegex(ValueError, "overlaps native scope ownership"):
             GATE.overlay(self.source, self.observer, forbidden)
+
+    def test_udp_permit_defect_keeps_scope_and_requires_actual_peer_receipt(self):
+        mutations = GATE.mutants(self.source)
+        self.assertEqual([m[0] for m in mutations], ["legacy-adoption", "late-handshake", "ordinary-udp-deny"])
+        mutation = mutations[2]
+        self.assertEqual(mutation[2], GATE.REQUIRED[0])
+        self.assertEqual(mutation[3], "independent peer marker receipt")
+        selected = GATE.overlay(self.source, self.observer, mutation)
+        mapping = json.loads(selected.read_text())["Replace"]
+        relative = "routervpn/mobiletor/desktop_socket_windows_policy.go"
+        changed = Path(mapping[str(self.source / relative)]).read_text()
+        self.assertIn('p.pair("deny", family, 1, true, true)', changed)
+        self.assertIn("return desktopWindowsNodeCompositionConstruct(ctx, capture, options, nil, false)", changed)
+        self.assertEqual((self.source / relative).read_bytes(), self.original[relative])
+        foreign = (*mutation[:4], mutation[4].replace("options, nil)", "options, untrustedScope)"))
+        with self.assertRaisesRegex(ValueError, "overlaps native scope ownership"):
+            GATE.overlay(self.source, self.observer, foreign)
 
     def test_observer_cannot_drop_its_compile_time_tag(self):
         fixtures = self.workspace / "fixtures"
