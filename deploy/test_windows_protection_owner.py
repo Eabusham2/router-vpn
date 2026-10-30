@@ -64,6 +64,15 @@ JOURNAL_STORE_REQUIRED = (
     "TestWindowsProtectionJournalStoreInitialAuthorityAndACL",
     "TestWindowsProtectionJournalStoreConcurrentClose",
 )
+JOURNAL_COMMIT_REQUIRED = (
+    "TestJournalCommitExactRoundTrip",
+    "TestJournalCommitCaptureRejectsUnownedHead",
+    "TestJournalCommitRequestBindsWholeCapture",
+    "TestJournalCommitDerivesExactIntentWithoutAliasing",
+    "TestJournalCommitReplyBindsActualEngineAndNonce",
+    "TestJournalCommitPreservesProfileBytesAndIntentBound",
+    "TestJournalCommitRejectsNoncanonicalFrames",
+)
 REQUIRED_SUBCASES = {
     REQUIRED[6]: ("record-write", "record-delete", "record-rename", "root-rename", "parent-rename"),
     REQUIRED[8]: ("session", "source", "config", "network", "generation"),
@@ -80,7 +89,8 @@ REQUIRED_SUBCASES = {
 def sources():
     expected = {"record.go", "record_test.go", "owner_windows.go", "owner_windows_test.go",
                 "path_windows.go", "security_windows.go", "journal_record.go", "journal_record_test.go",
-                "journal_header.go", "journal_header_test.go", "journal_store_windows.go", "journal_store_windows_test.go"}
+                "journal_header.go", "journal_header_test.go", "journal_store_windows.go", "journal_store_windows_test.go",
+                "journal_commit_record.go", "journal_commit_record_test.go"}
     owned = sorted(TARGET.glob("*.go"))
     if {path.name for path in owned} != expected:
         raise ValueError("Windows protection owner source/test closure changed")
@@ -107,6 +117,7 @@ def mutants():
     once, function = NATIVE.replace_once, NATIVE.function_mutant
     owner, path, security = read("owner_windows.go"), read("path_windows.go"), read("security_windows.go")
     journal, header = read("journal_store_windows.go"), read("journal_header.go")
+    commit = read("journal_commit_record.go")
     changed_bytes = once(owner, "read > OwnerRecordLimit || !bytes.Equal(buffer[:read], owner.body)",
                          "read > OwnerRecordLimit || false && !bytes.Equal(buffer[:read], owner.body)")
     changed_bytes = once(changed_bytes, "if err != nil || actual != owner.record {",
@@ -171,6 +182,30 @@ def mutants():
                    "previousSHA256 != store.current.SHA256 || false && store.current.Incomplete {"),
               "selection.SHA256 != previousSHA256 || selection.Incomplete {",
               "selection.SHA256 != previousSHA256 || false && selection.Incomplete {")),
+        ("journal_commit_record.go", "commit-exact-predecessor", JOURNAL_COMMIT_REQUIRED[1],
+         "invalid captured journal head or predecessor was accepted",
+         once(commit, "return *a == *b", "return true")),
+        ("journal_commit_record.go", "commit-complete-capture", JOURNAL_COMMIT_REQUIRED[2],
+         "request admitted another complete captured journal or configuration",
+         once(commit, "request.CaptureSHA256 != journalCommitDigest(canonical)",
+              "false && request.CaptureSHA256 != journalCommitDigest(canonical)")),
+        ("journal_commit_record.go", "commit-candidate-source", JOURNAL_COMMIT_REQUIRED[2],
+         "request admitted a changed native candidate or challenge",
+         once(once(commit, "if request.Candidate.Capture.SessionID != capture.Transfer.SessionID ||",
+                   "if false && (request.Candidate.Capture.SessionID != capture.Transfer.SessionID ||"),
+              "request.Candidate.Policy != capture.Transfer.Policy {",
+              "request.Candidate.Policy != capture.Transfer.Policy) {")),
+        ("journal_commit_record.go", "commit-intent-digest", JOURNAL_COMMIT_REQUIRED[4],
+         "commit reply accepted an unrelated intent digest or sequence",
+         once(commit, "reply.IntentSHA256 != journalCommitDigest(intentRaw)",
+              "false && reply.IntentSHA256 != journalCommitDigest(intentRaw)")),
+        ("journal_commit_record.go", "commit-captured-head-copy", JOURNAL_COMMIT_REQUIRED[3],
+         "derived intent rewrote its captured caller-owned comparison values",
+         once(commit, "next := cloneJournalRecord(capture.Head)", "next := capture.Head")),
+        ("journal_commit_record.go", "commit-canonical-capture", JOURNAL_COMMIT_REQUIRED[6],
+         "noncanonical capture reached the private commit contract",
+         once(commit, "if err != nil || !bytes.Equal(raw, canonical) {\n\t\treturn JournalCommitCapture{},",
+              "if err != nil || false && !bytes.Equal(raw, canonical) {\n\t\treturn JournalCommitCapture{},")),
     )
 
 
@@ -190,11 +225,11 @@ def execute(go="go"):
         if status:
             raise ValueError("Native protection owner baseline failed to compile:\n" + output[-32768:])
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-        status, output = NATIVE.run([binary, "-test.run=^TestWindowsProtection", "-test.count=1",
+        status, output = NATIVE.run([binary, "-test.run=^Test(WindowsProtection|JournalCommit)", "-test.count=1",
                                      "-test.timeout=90s", "-test.v"], cwd=ROOT, env=captured, timeout=105)
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if (status or "--- SKIP:" in output or "DATA RACE" in output or
-                any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *JOURNAL_REQUIRED, *JOURNAL_STORE_REQUIRED))):
+                any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *JOURNAL_REQUIRED, *JOURNAL_STORE_REQUIRED, *JOURNAL_COMMIT_REQUIRED))):
             raise ValueError("Protection owner baseline did not execute every native ownership case")
         for test, names in REQUIRED_SUBCASES.items():
             if any("--- PASS: " + test + "/" + name + " (" not in output for name in names):
@@ -225,7 +260,7 @@ def execute(go="go"):
         if sources() != before:
             raise ValueError("Protection owner shipping sources changed during the actual native gate")
     print("Native protection preparation passed five strict-owner-record groups, nine intent-record groups, two native-file header groups, "
-          "ten preparation ownership groups, nine durable journal storage groups and fifteen production negative controls. "
+          f"ten preparation ownership groups, nine durable journal storage groups, seven commit-record groups and {len(mutants())} production negative controls. "
           "Firewall mutation, transfer, recovery and ordinary-path activation remain separate requirements.", flush=True)
 
 
