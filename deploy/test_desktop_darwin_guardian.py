@@ -330,6 +330,13 @@ def execute_mutations(source: Path, go='go'):
     compiler, captured = UID.compiler_toolchain(source, go, captured)
     sudo = UID.privilege_tool()
     mutations = (
+        ('full captured PF dispatch path', 'PFAnchorPaths', 'actual full-session PF slot lost its exact sibling readback',
+         'desktop_socket_darwin_pf.go', (
+             ('return desktopDarwinPFLoad(ctx, desktopDarwinPFSlot(c), desktopDarwinPFPointer(c))',
+              'printed, err := desktopDarwinPFCanonical(ctx, desktopDarwinPFPointer(c))\n\tif err != nil { return err }\n\treturn desktopDarwinPFLoad(ctx, desktopDarwinPFSlot(c), printed+"\\n")'),)),
+        ('captured PF pointer readback', 'PFAnchorPaths', 'native PF readback accepted an unrelated root generation with the same leaf name',
+         'desktop_socket_darwin_pf.go', (
+             ('if err != nil || actual != expected {', 'if err != nil || false && actual != expected {'),)),
         ('native occupied UID observation', 'IdentityRetirement', 'fresh observer accepted an actual occupied UID',
          'desktop_socket_darwin_readback.go', (
              ('state := "occupied"', 'state := "absent"'),)),

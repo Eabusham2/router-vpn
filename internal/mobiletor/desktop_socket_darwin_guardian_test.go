@@ -200,15 +200,31 @@ func TestDesktopDarwinGuardianKernelPFAnchorPaths(t *testing.T) {
 	if actual, err := desktopDarwinPFRead(ctx, generation); err != nil || actual != expected {
 		t.Fatal("actual full-generation PF path lost its exact readback", actual, err)
 	}
-	pointer, err := desktopDarwinPFCanonical(ctx, desktopDarwinPFPointer(capture))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := desktopDarwinPFLoad(ctx, slot, pointer+"\n"); err != nil {
+	// The independent expected path includes its entire captured namespace;
+	// comparing a dry-run print with a reload of that print can agree on an
+	// unrelated empty root anchor while never entering the actual generation.
+	pointer := fmt.Sprintf("anchor \"/%s\" out all", generation)
+	if err := desktopDarwinPFLoadPointer(ctx, capture); err != nil {
 		t.Fatal("actual full-session PF slot did not load its exact sibling pointer", err)
 	}
-	if actual, err := desktopDarwinPFRead(ctx, slot); err != nil || actual != pointer {
+	if actual, err := desktopDarwinPFReadPointer(ctx, capture); err != nil || actual != pointer {
 		t.Fatal("actual full-session PF slot lost its exact sibling readback", actual, err)
+	}
+	wrongRoot := fmt.Sprintf("anchor \"/%s\" out all", strings.TrimPrefix(generation, desktopDarwinPFNamespace+"/"))
+	if err := desktopDarwinPFLoad(ctx, slot, wrongRoot+"\n"); err != nil {
+		t.Fatal("wrong-root pointer control did not reach the native loader", err)
+	}
+	if actual, err := desktopDarwinPFRead(ctx, slot); err != nil || actual != wrongRoot {
+		t.Fatal("wrong-root pointer control did not establish its actual kernel dispatch", actual, err)
+	}
+	if _, err := desktopDarwinPFReadPointer(ctx, capture); err == nil {
+		t.Fatal("native PF readback accepted an unrelated root generation with the same leaf name")
+	}
+	if err := desktopDarwinPFLoadPointer(ctx, capture); err != nil {
+		t.Fatal(err)
+	}
+	if actual, err := desktopDarwinPFReadPointer(ctx, capture); err != nil || actual != pointer {
+		t.Fatal("actual full-session PF slot did not restore its captured sibling", actual, err)
 	}
 	if actual, err := desktopDarwinPFRead(ctx, desktopDarwinPFNamespace); err != nil || actual != before {
 		t.Fatal("loading captured PF children rewrote their parent policy", actual, err)
@@ -1613,12 +1629,8 @@ func TestDesktopDarwinGuardianKernelStaleCaptureAndReplacement(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	replacement := desktopDarwinPFPointer(stale)
-	replacement, err = desktopDarwinPFCanonical(ctx, replacement)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := desktopDarwinPFLoad(ctx, policy.pf.Slot, replacement+"\n"); err != nil {
+	replacement := strings.TrimSpace(desktopDarwinPFPointer(stale))
+	if err := desktopDarwinPFLoadPointer(ctx, stale); err != nil {
 		t.Fatal(err)
 	}
 	// A replacement dispatch invalidates admission synchronously on readback.

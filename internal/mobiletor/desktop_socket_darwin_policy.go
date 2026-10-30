@@ -200,14 +200,15 @@ func NewDesktopDarwinSocketPolicy(ctx context.Context, capture DesktopSocketCapt
 	defer cancelReadback()
 	expectedOwner := desktopDarwinOwnerForPID(capture, p.uid, p.account, p.owner.Generation, uint32(command.Process.Pid))
 	expectedBaseline, baselineErr := desktopDarwinPFCanonical(readback, desktopDarwinPFBaseline(capture, options))
-	expectedPointer, pointerErr := desktopDarwinPFCanonical(readback, desktopDarwinPFPointer(capture))
+	expectedPointer := strings.TrimSpace(desktopDarwinPFPointer(capture))
 	// Prepare carries metadata, never borrowed proof. Independently compile the
-	// captured baseline/pointer and compare the still-empty generation before
-	// admitting any native socket or trusting the helper's monitor.
+	// captured baseline, retain the complete absolute pointer, and compare the
+	// still-empty generation before admitting any native socket or trusting the
+	// helper's monitor.
 	p.pf.permits = make(map[string]desktopDarwinPFPermit)
 	verifyErr := p.pf.verify(readback, true)
 	p.pf.permits = nil
-	if p.owner != expectedOwner || p.pf.Capture != capture || p.pf.UID != p.uid || p.pf.Account != p.account || baselineErr != nil || pointerErr != nil ||
+	if p.owner != expectedOwner || p.pf.Capture != capture || p.pf.UID != p.uid || p.pf.Account != p.account || baselineErr != nil ||
 		p.pf.Baseline != expectedBaseline || p.pf.Pointer != expectedPointer || desktopDarwinVerifyAccount(p.account, p.uid) != nil || verifyErr != nil {
 		channel.Close()
 		close(p.monitorDone)

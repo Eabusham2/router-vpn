@@ -40,7 +40,23 @@ func desktopDarwinPFGeneration(c DesktopSocketCapture) string {
 }
 
 func desktopDarwinPFPointer(c DesktopSocketCapture) string {
-	return fmt.Sprintf("anchor \"/%s\" out\n", desktopDarwinPFGeneration(c))
+	return fmt.Sprintf("anchor \"/%s\" out all\n", desktopDarwinPFGeneration(c))
+}
+
+func desktopDarwinPFLoadPointer(ctx context.Context, c DesktopSocketCapture) error {
+	// pfctl's dry-run printer can shorten an absolute anchor to its leaf name.
+	// Its display is not reloadable authority: load the original complete path,
+	// then independently read the kernel's dispatch before granting any socket.
+	return desktopDarwinPFLoad(ctx, desktopDarwinPFSlot(c), desktopDarwinPFPointer(c))
+}
+
+func desktopDarwinPFReadPointer(ctx context.Context, c DesktopSocketCapture) (string, error) {
+	actual, err := desktopDarwinPFRead(ctx, desktopDarwinPFSlot(c))
+	expected := strings.TrimSpace(desktopDarwinPFPointer(c))
+	if err != nil || actual != expected {
+		return actual, errors.Join(err, errors.New("Darwin PF slot changed its network owner or complete generation path"))
+	}
+	return actual, nil
 }
 
 type desktopDarwinPFPermit struct {
@@ -340,10 +356,7 @@ func desktopDarwinNewPF(capture DesktopSocketCapture, uid uint32, account string
 	if err := desktopDarwinRetirePhysicalStates(ctx, p.Physical); err != nil {
 		return nil, err
 	}
-	p.Pointer, err = desktopDarwinPFCanonical(ctx, desktopDarwinPFPointer(capture))
-	if err != nil {
-		return nil, err
-	}
+	p.Pointer = strings.TrimSpace(desktopDarwinPFPointer(capture))
 	existing, err := desktopDarwinPFRead(ctx, p.Slot)
 	if err != nil || existing != "" {
 		return nil, errors.Join(err, errors.New("Darwin physical slot still belongs to another network generation"))
@@ -355,7 +368,7 @@ func desktopDarwinNewPF(capture DesktopSocketCapture, uid uint32, account string
 	if err := desktopDarwinPFLoad(ctx, p.Anchor, p.render()); err != nil {
 		return p, err
 	}
-	if err := desktopDarwinPFLoad(ctx, p.Slot, p.Pointer+"\n"); err != nil {
+	if err := desktopDarwinPFLoadPointer(ctx, capture); err != nil {
 		return p, err
 	}
 	return p, p.verify(ctx, true)
@@ -365,7 +378,8 @@ func (p *desktopDarwinPF) valid() bool {
 	return p != nil && p.Capture.valid() && p.UID >= 0x40000000 && p.UID < 0x80000000 &&
 		p.Slot == desktopDarwinPFSlot(p.Capture) && p.Anchor == desktopDarwinPFGeneration(p.Capture) &&
 		len(p.Slot) <= desktopDarwinPFAnchorPathLimit && len(p.Anchor) <= desktopDarwinPFAnchorPathLimit &&
-		p.Baseline != "" && p.Pointer != "" && strings.HasPrefix(p.Account, "_rvpnt_") && desktopSocketHex(strings.TrimPrefix(p.Account, "_rvpnt_"), 20)
+		p.Baseline != "" && p.Pointer == strings.TrimSpace(desktopDarwinPFPointer(p.Capture)) &&
+		strings.HasPrefix(p.Account, "_rvpnt_") && desktopSocketHex(strings.TrimPrefix(p.Account, "_rvpnt_"), 20)
 }
 
 func (p *desktopDarwinPF) verify(ctx context.Context, complete bool) error {
@@ -382,7 +396,7 @@ func (p *desktopDarwinPF) verify(ctx context.Context, complete bool) error {
 	if err != nil || baseline != p.Baseline {
 		return errors.Join(err, errors.New("Darwin PF baseline changed its captured rules"))
 	}
-	pointer, err := desktopDarwinPFRead(ctx, p.Slot)
+	pointer, err := desktopDarwinPFReadPointer(ctx, p.Capture)
 	if err != nil || pointer != p.Pointer {
 		return errors.Join(err, errors.New("Darwin PF slot changed its network owner"))
 	}
