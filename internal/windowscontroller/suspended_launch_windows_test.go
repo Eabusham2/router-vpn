@@ -102,6 +102,148 @@ func fixtureNoSuspendedChildHello(t *testing.T, pipe *Pipe) {
 	}
 }
 
+// This is a support probe for a possible broker bootstrap, not a production
+// creation fallback. Its spelling comes only from the retained local file's
+// native device name and is independently reopened before Shell sees it.
+// GLOBALROOT names the system Object Manager root independently of a logon DOS
+// mapping; acceptance by Shell is a separate native observation.
+func fixtureGlobalRootImageLocked(api *nativeAPI, image *Image) (string, syscall.Handle, error) {
+	if image.closed || len(image.handles) == 0 {
+		return "", 0, ErrClosed
+	}
+	buffer := make([]uint16, 32768)
+	length, _, callErr := api.finalPath.Call(uintptr(image.handles[len(image.handles)-1]), uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)), 2 /* VOLUME_NAME_NT */)
+	if length == 0 || length >= uintptr(len(buffer)) {
+		return "", 0, nativeError("retained GLOBALROOT native name", callErr)
+	}
+	path := syscall.UTF16ToString(buffer[:length])
+	rest, valid := strings.CutPrefix(path, `\Device\`)
+	volume, suffix, slash := strings.Cut(rest, `\`)
+	if !valid || !slash || volume == "" || suffix == "" {
+		return "", 0, errors.New("GLOBALROOT fixture has no local native volume name")
+	}
+	for _, part := range strings.Split(rest, `\`) {
+		if part == "" || strings.TrimRight(part, ". ") != part || strings.ContainsAny(part, ":/\x00") {
+			return "", 0, errors.New("GLOBALROOT fixture native name has an ambiguous component")
+		}
+	}
+	path = `\\?\GLOBALROOT` + path
+	name, err := syscall.UTF16PtrFromString(path)
+	if err != nil {
+		return "", 0, err
+	}
+	held, err := syscall.CreateFile(name, syscall.GENERIC_READ, syscall.FILE_SHARE_READ, nil, syscall.OPEN_EXISTING, 0x00200000, 0)
+	if err != nil {
+		return "", 0, nativeError("independently open retained GLOBALROOT image", err)
+	}
+	reject := func(cause error) (string, syscall.Handle, error) {
+		closeErr := syscall.CloseHandle(held)
+		if closeErr != nil {
+			image.handles = append(image.handles, held)
+		}
+		return "", 0, errors.Join(cause, closeErr)
+	}
+	var actual, retained syscall.ByHandleFileInformation
+	if err := errors.Join(syscall.GetFileInformationByHandle(held, &actual), syscall.GetFileInformationByHandle(image.handles[len(image.handles)-1], &retained)); err != nil {
+		return reject(err)
+	}
+	want := image.identity
+	if actual.FileAttributes&(0x400|syscall.FILE_ATTRIBUTE_DIRECTORY) != 0 || want.NumberOfLinks != 1 ||
+		retained.NumberOfLinks != want.NumberOfLinks || retained.VolumeSerialNumber != want.VolumeSerialNumber ||
+		retained.FileIndexHigh != want.FileIndexHigh || retained.FileIndexLow != want.FileIndexLow ||
+		actual.VolumeSerialNumber != want.VolumeSerialNumber || actual.FileIndexHigh != want.FileIndexHigh ||
+		actual.FileIndexLow != want.FileIndexLow || actual.NumberOfLinks != want.NumberOfLinks {
+		return reject(errors.New("GLOBALROOT fixture did not select the exact retained image"))
+	}
+	length, _, callErr = api.finalPath.Call(uintptr(held), uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)), 1 /* VOLUME_NAME_GUID */)
+	if length == 0 || length >= uintptr(len(buffer)) || !strings.EqualFold(syscall.UTF16ToString(buffer[:length]), image.path) {
+		return reject(nativeError("GLOBALROOT fixture canonical volume identity", callErr))
+	}
+	runtime.KeepAlive(name)
+	runtime.KeepAlive(buffer)
+	return path, held, nil
+}
+
+func TestWindowsControllerGlobalRootSuspendedShellProbe(t *testing.T) {
+	for _, cancelled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancelled-after-creation=%t", cancelled), func(t *testing.T) {
+			api, image, pipe := fixtureSuspendedSetup(t)
+			original, err := CurrentIdentity()
+			if err != nil || !original.Primary || !original.Elevated || !original.Administrator {
+				t.Fatal("GLOBALROOT probe requires its actual elevated fixture owner", err)
+			}
+			ctx, cancel := mustNativeContext(t)
+			site, err := newShellCreationSite(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer shellCreationRelease(&site.service)
+			var instance syscall.Handle
+			process, launchErr := launchElevated(ctx, image, fixtureArguments("hold", pipe, fixtureExecutable(t)), api, func(info *shellExecuteInfo) (bool, error) {
+				path, held, err := fixtureGlobalRootImageLocked(api, image)
+				if err != nil {
+					return false, err
+				}
+				name, _ := syscall.UTF16PtrFromString(path)
+				info.File, info.Directory = name, nil
+				info.Mask |= 0x08000000
+				info.Instance = syscall.Handle(uintptr(unsafe.Pointer(&site.service)))
+				ok, _, callErr := api.shellExecute.Call(uintptr(unsafe.Pointer(info)))
+				instance = info.Instance
+				if closeErr := syscall.CloseHandle(held); closeErr != nil {
+					image.handles = append(image.handles, held)
+					callErr, ok = errors.Join(callErr, closeErr), 0
+				}
+				runtime.KeepAlive(name)
+				if cancelled {
+					cancel()
+				}
+				return ok != 0, callErr
+			})
+			if process != nil {
+				fixtureSuspendedReturnedOwner(t, process)
+			}
+			if process == nil || (!cancelled && launchErr != nil) || (cancelled && !errors.Is(launchErr, context.Canceled)) {
+				t.Fatalf("Shell did not admit the independently retained GLOBALROOT name: launch=%v instance=%d callback_count=%d; no production fallback or UAC acceptance", launchErr, instance, site.calls.Load())
+			}
+			if site.calls.Load() != 1 || site.result.Load() != 0 || site.after.Load()&4 == 0 || site.after.Load()&site.before.Load() != site.before.Load() ||
+				(!cancelled && site.prove() != nil) || (cancelled && site.prove() == nil) {
+				t.Fatal("GLOBALROOT Shell probe lost its actual suspended creation or cancellation", site.calls.Load(), site.result.Load())
+			}
+			thread, err := captureSuspendedShellThread(api, process)
+			if thread != 0 {
+				process.mu.Lock()
+				process.launchThread = thread
+				process.mu.Unlock()
+			}
+			if err != nil {
+				t.Fatal("GLOBALROOT probe did not retain exactly its suspended initial thread", err)
+			}
+			if err := verifySuspendedShellImage(api, process, image); err != nil {
+				t.Fatal("GLOBALROOT probe lost its exact captured kernel image", err)
+			}
+			child, err := process.Identity()
+			if err != nil || !child.Primary || !child.Elevated || !child.Administrator || child.SID != original.SID || child.SessionID != original.SessionID {
+				t.Fatal("GLOBALROOT probe lost its actual elevated fixture identity", err)
+			}
+			handle, release, err := process.borrow()
+			if err != nil {
+				t.Fatal(err)
+			}
+			granted, accessErr := fixtureShellGrantedAccess(api, handle)
+			release()
+			if accessErr != nil {
+				t.Fatal("GLOBALROOT probe could not observe its granted process handle", accessErr)
+			}
+			fixtureNoSuspendedChildHello(t, pipe)
+			if err := retireSuspendedShell(process); err != nil {
+				t.Fatal("GLOBALROOT probe did not join its exact suspended child", err)
+			}
+			t.Logf("Retained GLOBALROOT Shell path accepted with exact native file/image/token proof; creation suspension remained >=2, no child code ran, exact child terminated/joined. Captured process access=0x%x PROCESS_SUSPEND_RESUME=%t; no thread-access, interactive UAC or cross-account acceptance is established.", granted, granted&0x0800 != 0)
+		})
+	}
+}
+
 func TestWindowsControllerFoundationSuspendedLaunchRejectsReplacement(t *testing.T) {
 	api, image, pipe := fixtureSuspendedSetup(t)
 	wrongPath := filepath.Join(t.TempDir(), "different-file.exe")

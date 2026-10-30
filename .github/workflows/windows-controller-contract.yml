@@ -116,6 +116,15 @@ jobs:
           if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Constructed-medium diagnostic has no compiled exact-source binary' }
           & $binary '-test.run=^TestWindowsControllerFoundationConstructedMediumThreadAccess$' '-test.count=1' '-test.timeout=60s' '-test.v'
           if ($LASTEXITCODE -ne 0) { throw 'Constructed-medium access was not observed with verified identity and reversion; this is not UAC acceptance' }
+      - name: Probe retained GLOBALROOT Shell bootstrap without executing child code
+        if: ${{ success() || failure() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $binary = Join-Path $env:RUNNER_TEMP 'routervpn-shell-elevation.test.exe'
+          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'GLOBALROOT bootstrap probe has no compiled exact-source binary' }
+          & $binary '-test.run=^TestWindowsControllerGlobalRootSuspendedShellProbe$' '-test.count=1' '-test.timeout=60s' '-test.v'
+          if ($LASTEXITCODE -ne 0) { throw 'Retained GLOBALROOT Shell bootstrap remains unproved; no production fallback or ordinary UAC acceptance' }
     # This short job exposes the exact failing launch immediately. The complete
     # race-instrumented foundation, all negative controls and shipping Session
     # composition remain required in the independent controller job below.
