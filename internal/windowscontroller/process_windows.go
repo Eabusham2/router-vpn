@@ -284,6 +284,32 @@ func PinImage(path string) (_ *Image, resultErr error) {
 	return pinImage(path, false)
 }
 
+// PinCurrentImage captures the current process's kernel-reported image. The
+// module loader's spelling (and therefore os.Executable) preserves the launch
+// namespace, including the normalized \\.\Volume form required by managed
+// native children. It is not a caller-selected package path. Query the actual
+// process instead, then retain its same local volume/file through PinImage's
+// unchanged strict path, reparse and hardlink checks.
+func PinCurrentImage() (*Image, error) {
+	api, err := native()
+	if err != nil {
+		return nil, err
+	}
+	self, err := syscall.GetCurrentProcess()
+	if err != nil {
+		return nil, err
+	}
+	buffer := make([]uint16, 32768)
+	length := uint32(len(buffer))
+	ok, _, callErr := api.processImage.Call(uintptr(self), 0, uintptr(unsafe.Pointer(&buffer[0])), uintptr(unsafe.Pointer(&length)))
+	if ok == 0 || length == 0 || length >= uint32(len(buffer)) {
+		return nil, nativeError("current process executable", callErr)
+	}
+	image, err := PinImage(syscall.UTF16ToString(buffer[:length]))
+	runtime.KeepAlive(buffer)
+	return image, err
+}
+
 // The protected-system policy is private to the pathless OS factory and the
 // readback of its already captured child. A caller-selected executable always
 // uses PinImage's single-link policy.

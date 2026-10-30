@@ -57,6 +57,19 @@ func runGUIFixture(t *testing.T, arguments []string) error {
 	if mode != "hold" && mode != "tree" && mode != "blocked-tree" && mode != "owner" {
 		return errors.New("native GUI fixture role is invalid")
 	}
+	selfImage, err := PinCurrentImage()
+	if err != nil {
+		return fmt.Errorf("actual normalized GUI could not recapture its current executable: %w", err)
+	}
+	defer selfImage.Close()
+	self, err := OpenProcess(uint32(os.Getpid()))
+	if err != nil {
+		return err
+	}
+	defer self.Close()
+	if err := self.VerifyImage(selfImage); err != nil {
+		return fmt.Errorf("actual normalized GUI recaptured another executable: %w", err)
+	}
 	pid, err := strconv.ParseUint(parentText, 10, 32)
 	if err != nil || pid == 0 {
 		return errors.New("native GUI fixture parent PID is invalid")

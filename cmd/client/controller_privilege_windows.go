@@ -74,11 +74,7 @@ func prepareNativeOwnedController(arguments []string) (_ *ownedDesktopController
 	if err != nil || !capture.elevated.Primary || !capture.elevated.Elevated || !capture.elevated.Administrator {
 		return nil, errors.Join(err, errors.New("the Windows controller requires its actual administrator consent"))
 	}
-	executable, err := os.Executable()
-	if err != nil {
-		return nil, err
-	}
-	capture.selfImage, err = windowscontroller.PinImage(executable)
+	capture.selfImage, err = windowscontroller.PinCurrentImage()
 	if err != nil {
 		return nil, err
 	}

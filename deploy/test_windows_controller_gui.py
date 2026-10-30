@@ -148,6 +148,12 @@ def mutants():
          "system image admitted a changed captured hardlink count before creation",
          once(process, "actual.NumberOfLinks != image.identity.NumberOfLinks ||",
               "false ||")),
+        ("process_windows.go", "module-spelling-instead-of-kernel-image", REQUIRED[1],
+         "actual normalized GUI could not recapture its current executable",
+         NATIVE.function_mutant(once(process, '"context"', '"context"\n\t"os"'),
+              "func PinCurrentImage()",
+              "image, err := PinImage(syscall.UTF16ToString(buffer[:length]))",
+              "module, moduleErr := os.Executable(); if moduleErr != nil { return nil, moduleErr }; image, err := PinImage(module)")),
     )
 
 
@@ -193,7 +199,7 @@ def execute(go="go"):
             print("Rejected production native GUI mutant:", name, flush=True)
         if sources() != before:
             raise ValueError("Native GUI sources changed during execution")
-    print("Native GUI ownership passed twenty required process/pipe/system-policy cases and seventeen compiled production negative controls, including actual original-user profile capture, system PowerShell and distinct pre-creation/suspended-image proofs; C# application and cross-account UAC composition remain separate.", flush=True)
+    print("Native GUI ownership passed twenty required process/pipe/system-policy cases and eighteen compiled production negative controls, including kernel current-image recapture, original-user profile capture, system PowerShell and distinct pre-creation/suspended-image proofs; C# application and cross-account UAC composition remain separate.", flush=True)
 
 
 if __name__ == "__main__":

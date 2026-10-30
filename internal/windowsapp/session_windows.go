@@ -64,11 +64,8 @@ func Start(ctx context.Context, portable bool) (_ *Session, failure error) {
 			s.cancel(failure)
 		}
 	}()
-	executable, err := os.Executable()
-	if err != nil {
-		return s, err
-	}
-	s.selfImage, err = windowscontroller.PinImage(executable)
+	var err error
+	s.selfImage, err = windowscontroller.PinCurrentImage()
 	if err != nil {
 		return s, err
 	}
@@ -158,11 +155,11 @@ func Start(ctx context.Context, portable bool) (_ *Session, failure error) {
 	bootstrap, stop := context.WithTimeout(s.ctx, 30*time.Second)
 	defer stop()
 	if err = s.pipe.Accept(bootstrap); err != nil {
-		return s, err
+		return s, fmt.Errorf("owned Windows controller pipe admission: %w", err)
 	}
 	frame, err := s.pipe.ReadFrame(bootstrap)
 	if err != nil {
-		return s, err
+		return s, fmt.Errorf("owned Windows controller public hello: %w", err)
 	}
 	peer, err := s.pipe.VerifyPeer(s.controller, s.controllerImage)
 	if err != nil {
