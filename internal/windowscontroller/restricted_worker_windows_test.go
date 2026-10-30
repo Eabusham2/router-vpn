@@ -370,9 +370,24 @@ func fixtureStartPrimaryWorker(t *testing.T, worker *fixtureRestrictedWorker, to
 	// also checks that the API restored any temporary existing privilege use.
 	// No post-create Job assignment is accepted. The non-inherited Job kills
 	// both worker and child on owner loss.
-	err = syscall.CreateProcessAsUser(token, application, &command[0], nil, nil, true,
-		0x08080404, /* NO_WINDOW | EXTENDED_STARTUPINFO | UNICODE_ENVIRONMENT | SUSPENDED */
-		&environment[0], nil, &startup.Info, &worker.process)
+	create := func(attributes *syscall.SecurityAttributes) error {
+		return syscall.CreateProcessAsUser(token, application, &command[0], attributes, attributes, true,
+			0x08080404, /* NO_WINDOW | EXTENDED_STARTUPINFO | UNICODE_ENVIRONMENT | SUSPENDED */
+			&environment[0], nil, &startup.Info, &worker.process)
+	}
+	if marker == fixtureMediumWorkerEnvironment {
+		if worker.desktop == "" || worker.inspect == nil {
+			t.Fatal("Medium fixture has no private desktop or suspended object readback")
+		}
+		// Its derived token intentionally keeps the original default DACL,
+		// whose Administrators grant no longer applies and whose surviving
+		// logon grant can be read/execute only. Grant this same Medium user
+		// access to only the new process and initial thread at creation.
+		// No original object descriptor or parent/child token is changed.
+		err = fixtureWithMediumStartupSecurity(api, parentIdentity.SID, create)
+	} else {
+		err = create(nil)
+	}
 	runtime.KeepAlive(application)
 	runtime.KeepAlive(command)
 	runtime.KeepAlive(environment)

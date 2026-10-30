@@ -36,7 +36,11 @@ func fixtureInspectMediumStartup(t *testing.T, api *fixtureRestrictedAPI, token 
 	}
 	check := func(name string, handle syscall.Handle, kind, all, wanted uint32) {
 		var descriptor unsafe.Pointer
-		status, _, _ := functions[1].Call(uintptr(handle), uintptr(kind), 1|2|4, 0, 0, 0, 0, uintptr(unsafe.Pointer(&descriptor)))
+		information := uint32(1 | 2 | 4)
+		if kind == 6 {
+			information |= 0x10 // LABEL_SECURITY_INFORMATION requires READ_CONTROL.
+		}
+		status, _, _ := functions[1].Call(uintptr(handle), uintptr(kind), uintptr(information), 0, 0, 0, 0, uintptr(unsafe.Pointer(&descriptor)))
 		if descriptor != nil {
 			defer api.native.localFree.Call(uintptr(descriptor))
 		}
@@ -55,9 +59,10 @@ func fixtureInspectMediumStartup(t *testing.T, api *fixtureRestrictedAPI, token 
 			// full object mask; do not invent mappings for an unexpected generic
 			// read/write/execute ACE and call that a measured access result.
 			captured := unsafe.Slice((*byte)(descriptor), int(length))
-			if binary.LittleEndian.Uint16(captured[2:4])&0x8004 != 0x8004 {
+			if binary.LittleEndian.Uint16(captured[2:4])&0x9014 != 0x9014 {
 				t.Fatal("Medium startup kernel descriptor is not a captured explicit DACL")
 			}
+			fixtureVerifyMediumStartupLabel(t, captured)
 			start := int(binary.LittleEndian.Uint32(captured[16:20]))
 			if start < 20 || start > len(captured)-8 {
 				t.Fatal("Medium startup kernel DACL has an invalid bound")
@@ -91,11 +96,14 @@ func fixtureInspectMediumStartup(t *testing.T, api *fixtureRestrictedAPI, token 
 			t.Fatal(nativeError("Medium startup native AccessCheck", callErr))
 		}
 		t.Logf("Actual constructed-Medium startup access: %s desired=0x%x granted=0x%x allowed=%t", name, wanted, granted, allowed == 1)
+		if kind == 6 && (allowed != 1 || granted&wanted != wanted) {
+			t.Fatal("new Medium fixture process/thread denies its own captured token", name)
+		}
 	}
 	t.Logf("Constructed primary-Medium startup: captured session=%d child=%d; original private desktop ACLs and token authority remain unchanged", session, process.ProcessId)
 	fixtureLogMediumDefaultDACL(t, token)
-	check("owned-process", process.Process, 6, 0x001fffff, 0x00101000)
-	check("owned-thread", process.Thread, 6, 0x001fffff, 0x00100800)
+	check("owned-process", process.Process, 6, 0x001fffff, 0x001fffff)
+	check("owned-thread", process.Thread, 6, 0x001fffff, 0x001fffff)
 	func() {
 		image.mu.Lock()
 		defer image.mu.Unlock()
@@ -115,6 +123,63 @@ func fixtureInspectMediumStartup(t *testing.T, api *fixtureRestrictedAPI, token 
 			}()
 			check(library, handle, 1, 0x001f01ff, 0x001200a9)
 		}()
+	}
+}
+
+// Supply explicit security only while creating this new same-user process and
+// initial thread. The parent's token/default DACL and all existing objects stay
+// unchanged. The restricted child still has a Medium primary token, deny-only
+// Administrators and no privilege except SeChangeNotify.
+// https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-createprocessasuserw
+func fixtureWithMediumStartupSecurity(api *fixtureRestrictedAPI, sid string, create func(*syscall.SecurityAttributes) error) error {
+	parsed, err := syscall.StringToSid(sid)
+	if err != nil {
+		return err
+	}
+	canonical, err := parsed.String()
+	if err != nil || canonical != sid || create == nil || api == nil || api.native == nil {
+		return errors.New("Medium fixture creation has no exact local principal")
+	}
+	sddl, err := syscall.UTF16PtrFromString("O:" + sid + "D:P(A;;GA;;;SY)(A;;GA;;;" + sid + ")S:(ML;;NW;;;ME)")
+	if err != nil {
+		return err
+	}
+	var descriptor unsafe.Pointer
+	var size uint32
+	ok, _, callErr := api.native.convertSD.Call(uintptr(unsafe.Pointer(sddl)), 1, uintptr(unsafe.Pointer(&descriptor)), uintptr(unsafe.Pointer(&size)))
+	if descriptor != nil {
+		defer api.native.localFree.Call(uintptr(descriptor))
+	}
+	if ok == 0 || descriptor == nil || size < 20 || size > 65536 {
+		return nativeError("new Medium process/thread descriptor", callErr)
+	}
+	attributes := syscall.SecurityAttributes{Length: uint32(unsafe.Sizeof(syscall.SecurityAttributes{})), SecurityDescriptor: uintptr(descriptor)}
+	err = create(&attributes)
+	runtime.KeepAlive(sddl)
+	runtime.KeepAlive(parsed)
+	runtime.KeepAlive(attributes)
+	return err
+}
+
+func fixtureVerifyMediumStartupLabel(t *testing.T, descriptor []byte) {
+	t.Helper()
+	start := int(binary.LittleEndian.Uint32(descriptor[12:16]))
+	if start < 20 || start > len(descriptor)-8 {
+		t.Fatal("new Medium process/thread has no captured mandatory label")
+	}
+	acl := descriptor[start:]
+	size, count := int(binary.LittleEndian.Uint16(acl[2:4])), int(binary.LittleEndian.Uint16(acl[4:6]))
+	if acl[0] != 2 || size < 8 || size > len(acl) || count != 1 {
+		t.Fatal("new Medium process/thread has an unexpected mandatory ACL")
+	}
+	ace := acl[8:size]
+	if len(ace) < 16 || ace[0] != 17 || ace[1] != 0 || int(binary.LittleEndian.Uint16(ace[2:4])) != len(ace) ||
+		binary.LittleEndian.Uint32(ace[4:8]) != 1 {
+		t.Fatal("new Medium process/thread lost its explicit no-write-up label")
+	}
+	sid, length, err := systemImageSID(ace, 8)
+	if err != nil || length != len(ace)-8 || sid.authority != 16 || len(sid.parts) != 1 || sid.parts[0] != 8192 {
+		t.Fatal("new Medium process/thread changed its captured integrity", err)
 	}
 }
 
