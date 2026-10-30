@@ -32,11 +32,15 @@ type Session struct {
 	self, controller                       *windowscontroller.Process
 	selfImage, controllerImage, powershell *windowscontroller.Image
 	directController                       *windowscontroller.GUIChild
+	updater                                *windowscontroller.GUIChild
+	updaterImage                           *windowscontroller.Image
+	updateCache                            *capturedUpdateCache
 	pipe                                   *windowscontroller.Pipe
 	files                                  []*windowscontroller.CodeFile
 	client                                 *controllertransport.Client
 	packageRoot, dataRoot                  string
 	temporary                              *portableTemporary
+	portable                               bool
 	environment                            []string
 	desktop                                windowscontroller.TokenIdentity
 	workers                                sync.WaitGroup
@@ -58,7 +62,7 @@ func Start(ctx context.Context, portable bool) (_ *Session, failure error) {
 	if ctx == nil || ctx.Err() != nil {
 		return nil, errors.New("the Windows app needs its live launch operation")
 	}
-	s := &Session{}
+	s := &Session{portable: portable}
 	s.ctx, s.cancel = context.WithCancelCause(ctx)
 	defer func() {
 		if failure != nil {
@@ -453,6 +457,9 @@ func (s *Session) Close(ctx context.Context) error {
 		return nil
 	}
 	var failures []error
+	if s.updater != nil {
+		failures = append(failures, s.updater.Close(ctx))
+	}
 	for _, g := range s.guis {
 		if g.child != nil {
 			failures = append(failures, g.child.Close(ctx))
@@ -469,6 +476,9 @@ func (s *Session) Close(ctx context.Context) error {
 		}
 	}
 	if err := errors.Join(failures...); err != nil {
+		return err
+	}
+	if err := s.updateCache.Close(); err != nil {
 		return err
 	}
 	s.workers.Wait()
@@ -506,7 +516,7 @@ func (s *Session) Close(ctx context.Context) error {
 	for _, file := range s.files {
 		failures = append(failures, file.Close())
 	}
-	for _, image := range []*windowscontroller.Image{s.powershell, s.controllerImage, s.selfImage} {
+	for _, image := range []*windowscontroller.Image{s.updaterImage, s.powershell, s.controllerImage, s.selfImage} {
 		if image != nil {
 			failures = append(failures, image.Close())
 		}

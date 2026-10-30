@@ -30,6 +30,10 @@ PORTABLE_SPEC = importlib.util.spec_from_file_location(
     "windows_session_portable_preparation", ROOT / "deploy/windows_portable_preparation_gate.py")
 PORTABLE = importlib.util.module_from_spec(PORTABLE_SPEC)
 PORTABLE_SPEC.loader.exec_module(PORTABLE)
+UPDATER_SPEC = importlib.util.spec_from_file_location(
+    "windows_session_update_preparation", ROOT / "deploy/windows_update_preparation_gate.py")
+UPDATER = importlib.util.module_from_spec(UPDATER_SPEC)
+UPDATER_SPEC.loader.exec_module(UPDATER)
 TAG = "routervpn_windows_app_native"
 TEST = "TestWindowsAppComposedSession"
 DIAGNOSTIC_TAG = "routervpn_windows_main_diagnostic"
@@ -59,10 +63,11 @@ def regular_files(directory):
 
 
 def sources():
-    paths = set([*ROOT.glob("cmd/client/*.go"), *ROOT.glob("internal/**/*.go"),
+    paths = set([*ROOT.glob("cmd/client/*.go"), *ROOT.glob("cmd/app-update/*.go"), *ROOT.glob("internal/**/*.go"),
                  ROOT / "go.mod", *ROOT.glob("go.sum"), Path(__file__).resolve(),
                  ROOT / "deploy/materialize-desktop-icons.py",
                  ROOT / "deploy/windows_portable_preparation_gate.py",
+                 ROOT / "deploy/windows_update_preparation_gate.py",
                  ROOT / "configs/client/client.json.example", ROOT / "configs/client/routers.json.example",
                  ROOT / "configs/client/modes.json", ROOT / "configs/client/logical-modes.json",
                  ROOT / ".github/workflows/windows-controller-contract.yml",
@@ -80,6 +85,11 @@ def sources():
                 "internal/windowsapp/portable_prepare_windows.go", "internal/windowsapp/portable_security_windows.go",
                 "internal/windowsapp/portable_config.go", "internal/windowsapp/portable_config_test.go",
                 "internal/windowsapp/portable_prepare_windows_test.go", "deploy/windows_portable_preparation_gate.py",
+                "internal/windowsapp/updater_windows.go", "internal/windowsapp/updater_cache_windows.go",
+                "internal/windowsapp/updater_cache_windows_test.go", "internal/windowsapp/updater_policy.go",
+                "internal/windowsapp/updater_policy_test.go", "deploy/windows_update_preparation_gate.py",
+                "internal/updatepolicy/package_provenance.go", "internal/updatepolicy/package_provenance_test.go",
+                "cmd/app-update/main.go", "cmd/app-update/notify_windows.go", "cmd/app-update/notify_other.go",
                 "client/RouterVPN-Windows-App.ps1", "client/RouterVPN-Windows-Tray.ps1",
                 "client/RouterVPN-Windows-ControllerTransport.cs",
                 "client/RouterVPN-Windows-ControllerTransport.psm1"}
@@ -329,6 +339,13 @@ def execute(go="go", *, env=None):
         if status:
             raise ValueError("Actual production Windows main did not compile:\n" + output[-32768:])
         shipping_digest = hashlib.sha256(shipping.read_bytes()).hexdigest()
+        updater = workspace / "shipping-updater.exe"
+        status, output = NATIVE.run(
+            [compiler, "build", "-mod=readonly", "-o", updater, "./cmd/app-update"],
+            cwd=ROOT, env=captured, timeout=240)
+        if status:
+            raise ValueError("Actual production Windows updater did not compile:\n" + output[-32768:])
+        updater_digest = hashlib.sha256(updater.read_bytes()).hexdigest()
         fixture = workspace / "session.test.exe"
         status, output = NATIVE.run(
             [*build, "-o", fixture, "./internal/windowsapp"], cwd=ROOT, env=captured, timeout=240)
@@ -336,6 +353,7 @@ def execute(go="go", *, env=None):
             raise ValueError("Actual native Session fixture did not compile:\n" + output[-32768:])
         fixture_digest = hashlib.sha256(fixture.read_bytes()).hexdigest()
         preparation = PORTABLE.execute_prepared(NATIVE, compiler, captured, build, fixture, workspace)
+        update_preparation = UPDATER.execute_prepared(NATIVE, compiler, captured, build, fixture, workspace)
         for scenario in CASES:
             status, output = run_fixture(workspace, fixture, shipping, scenario, captured)
             print(output, end="" if output.endswith("\n") else "\n", flush=True)
@@ -361,6 +379,7 @@ def execute(go="go", *, env=None):
                 raise ValueError("Native Session negative control missed its intended boundary: " + name + "\n" + output[-16384:])
             print("Native Windows Session negative control rejected: " + name, flush=True)
         if (sources() != before or hashlib.sha256(shipping.read_bytes()).hexdigest() != shipping_digest or
+                hashlib.sha256(updater.read_bytes()).hexdigest() != updater_digest or
                 hashlib.sha256(fixture.read_bytes()).hexdigest() != fixture_digest):
             raise ValueError("Actual Session source or artifacts changed during native execution")
         print(json.dumps({"schema": 1, "host": "windows/" + architecture,
@@ -369,6 +388,8 @@ def execute(go="go", *, env=None):
                           "installed_and_portable_app_tray": "actual-packaged-selftests-with-owned-status",
                           "native_channel_proofs": "two-per-selftest",
                           "portable_preparation": preparation,
+                          "updater_preparation": update_preparation,
+                          "compiled_updater_sha256": updater_digest,
                           "negative_controls": len(mutants()), "source_files": len(before),
                           "source_sha256": hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest(),
                           "uac_cross_account_and_device_acceptance": "separate-required-gates"}, sort_keys=True))

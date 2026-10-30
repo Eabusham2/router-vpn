@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -540,22 +539,7 @@ func notifyStagedUpdate(out result) {
 	}
 	title := "Router VPN update ready"
 	message := fmt.Sprintf("Verified exact release %s is staged. Close Router VPN, then use the staged package to update.", out.TargetSHA[:12])
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		script := "Add-Type -AssemblyName PresentationFramework; [System.Windows.MessageBox]::Show($args[1], $args[0]) | Out-Null"
-		cmd = exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script, title, message)
-	case "darwin":
-		script := "on run argv\ndisplay notification (item 2 of argv) with title (item 1 of argv)\nend run"
-		cmd = exec.Command("/usr/bin/osascript", "-e", script, title, message)
-	case "linux":
-		if helper, err := exec.LookPath("notify-send"); err == nil {
-			cmd = exec.Command(helper, title, message)
-		}
-	}
-	if cmd != nil {
-		_ = cmd.Start()
-	}
+	notifyDesktopUpdate(title, message)
 }
 
 func emit(out result, asJSON bool) {
