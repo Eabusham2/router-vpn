@@ -90,7 +90,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $binary = Join-Path $env:RUNNER_TEMP 'routervpn-shell-elevation.test.exe'
-          & $binary '-test.run=^TestWindowsControllerFoundationActualElevatedLaunch$' -test.count=1 -test.timeout=120s -test.v
+          & $binary '-test.run=^TestWindowsControllerFoundationActualElevatedLaunch$' '-test.count=1' '-test.timeout=120s' '-test.v'
           if ($LASTEXITCODE -ne 0) { throw 'Actual Windows Shell elevation remains unproved; see its native diagnostics' }
     # This short job exposes the exact failing launch immediately. The complete
     # race-instrumented foundation, all negative controls and shipping Session
