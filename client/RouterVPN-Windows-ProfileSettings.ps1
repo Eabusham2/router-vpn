@@ -194,7 +194,12 @@ function global:Get-RouterVPNCurrentModeSnapshot {
     if($mode.StartsWith('custom:')){
         $name=$mode.Substring(7)
         $raw=Read-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-custom-presets-v1.json'
-        try{$preset=@(($raw|ConvertFrom-Json)|Where-Object{[string]$_.name -eq $name}|Select-Object -First 1);if($preset){$layers=@($preset.layers)}}catch{}
+        try{
+            # Windows PowerShell 5.1 emits a JSON array as one pipeline item.
+            # Materialize it before enumerating individual saved presets.
+            $presets=ConvertFrom-Json -InputObject $raw
+            foreach($preset in @($presets)){if([string]$preset.name -eq $name){$layers=@($preset.layers);break}}
+        }catch{}
     }
     [pscustomobject]@{mode=$mode;custom_layers=@($layers)}
 }
@@ -207,9 +212,9 @@ function global:Set-RouterVPNLoadedModeSnapshot {
         $name=$mode.Substring(7);$layers=@($Loaded.custom_layers)
         if($name -and $layers.Count -gt 0){
             $raw=Read-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-custom-presets-v1.json'
-            $values=@();if($raw){try{$values=@($raw|ConvertFrom-Json)}catch{$values=@()}}
+            $values=@();if($raw){try{$parsed=ConvertFrom-Json -InputObject $raw;$values=@($parsed)}catch{$values=@()}}
             $values=@($values|Where-Object{[string]$_.name -ne $name});$values+=,[pscustomobject]@{name=$name;layers=@($layers)}
-            Write-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-custom-presets-v1.json' -Text (@($values)|ConvertTo-Json -Depth 8)
+            Write-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-custom-presets-v1.json' -Text (ConvertTo-Json -InputObject @($values) -Depth 8)
         }
     }
 }

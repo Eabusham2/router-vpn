@@ -490,8 +490,8 @@ function CompleteUnifiedRefreshAsync {
     }
 }
 $script:UnifiedRefreshPoller.Add_Tick({CompleteUnifiedRefreshAsync})
-function GetUnifiedPresets{$raw=Read-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-custom-presets-v1.json';if(-not$raw){return @()};try{return @($raw|ConvertFrom-Json)}catch{return @()}}
-function SaveUnifiedPresets($Values){Write-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-custom-presets-v1.json' -Text (@($Values)|ConvertTo-Json -Depth 8)}
+function GetUnifiedPresets{$raw=Read-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-custom-presets-v1.json';if(-not$raw){return @()};try{$values=ConvertFrom-Json -InputObject $raw;return $values}catch{return @()}}
+function SaveUnifiedPresets($Values){Write-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-custom-presets-v1.json' -Text (ConvertTo-Json -InputObject @($Values) -Depth 8)}
 function GetUnifiedModeID{$raw=Read-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-selected-mode-v1.txt';if(-not[string]::IsNullOrWhiteSpace($raw)){return $raw.Trim()};return 'smart-auto'}
 function New-RouterVPNQuickDNSPayload {
  param($Captured,[string]$DisplayedProfileID,[string]$Mode)

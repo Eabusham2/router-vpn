@@ -36,7 +36,7 @@ def execute(shell, state=STATE, transport=TRANSPORT, witness=None):
             raise ValueError("UI state defect missed its semantic rejection:\n" + result.stdout)
     else:
         found = re.findall(r"^PASS Windows UI state checks=(\d+)$", result.stdout, re.MULTILINE)
-        if result.returncode or len(found) != 1 or int(found[0]) < 43:
+        if result.returncode or len(found) != 1 or int(found[0]) < 51:
             raise ValueError("UI state fixture did not execute its boundaries:\n" + result.stdout)
         print(result.stdout.strip(), flush=True)
 

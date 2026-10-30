@@ -77,6 +77,22 @@ try{
     Check ((GetUnifiedModeID)-ceq'custom:restored path') 'loaded profile did not update unified captured state'
     $Presets=@(GetUnifiedPresets)
     Check ($Presets.Count-eq2-and(@(($Presets|Where-Object{$_.name-ceq'restored path'}).layers)-join',')-ceq'awg2-fast,pq') 'loaded profile lost existing CUSTOM presets'
+    Check ((@(($Presets|Where-Object{$_.name-ceq'whole path'}).layers)-join',')-ceq'wg,pq') 'loaded profile changed another CUSTOM preset'
+    Set-RouterVPNLoadedModeSnapshot ([pscustomobject]@{mode='custom:whole path';custom_layers=@('awg2-strong','pq')})
+    $Presets=@(GetUnifiedPresets)
+    Check ($Presets.Count-eq2-and@($Presets|Where-Object{$_.name-ceq'whole path'}).Count-eq1) 'loaded profile duplicated or removed an existing CUSTOM preset'
+    $Snapshot=Get-RouterVPNCurrentModeSnapshot
+    Check ($Snapshot.mode-ceq'custom:whole path'-and(@($Snapshot.custom_layers)-join',')-ceq'awg2-strong,pq') 'profile snapshot did not select one preset from the saved array'
+    Check ((@(($Presets|Where-Object{$_.name-ceq'restored path'}).layers)-join',')-ceq'awg2-fast,pq') 'updating one CUSTOM preset changed another'
+    SaveUnifiedPresets @($Presets|Where-Object{$_.name-ceq'whole path'})
+    Check (@(GetUnifiedPresets).Count-eq1-and(Read-RouterVPNUIState -LegacyDirectory $Legacy -Name $Names[2]).TrimStart().StartsWith('[')) 'one remaining CUSTOM preset was not saved as an array'
+    SaveUnifiedPresets @()
+    Check (@(GetUnifiedPresets).Count-eq0-and(Read-RouterVPNUIState -LegacyDirectory $Legacy -Name $Names[2]).Trim()-ceq'[]') 'deleting the final CUSTOM preset did not save an empty array'
+    # Older releases serialized one preset as an object; preserve that input.
+    Write-RouterVPNUIState -LegacyDirectory $Legacy -Name $Names[2] -Text '{"name":"legacy single","layers":["wg","pq"]}'
+    Check (@(GetUnifiedPresets).Count-eq1-and[string](@(GetUnifiedPresets)[0].name)-ceq'legacy single') 'legacy single CUSTOM object was not preserved'
+    Set-RouterVPNLoadedModeSnapshot ([pscustomobject]@{mode='custom:restored path';custom_layers=@('awg2-fast','pq')})
+    Check (@(GetUnifiedPresets).Count-eq2) 'loading a profile discarded a legacy single CUSTOM object'
 
     # Match App's ScriptBlock.Create composition without replacing PSScriptRoot.
     # Copy the exact module beside disposable old package preferences so the
