@@ -15,6 +15,7 @@ import (
 )
 
 const fixtureMediumWorkerEnvironment = "ROUTERVPN_CONTROLLER_MEDIUM_WORKER"
+const fixtureMediumStationEnvironment = "ROUTERVPN_CONTROLLER_MEDIUM_STATION"
 
 // This case executes the shipping namespace capture from an actual Medium
 // primary process. It neither impersonates a test thread nor supplies UAC
@@ -60,9 +61,20 @@ func TestWindowsControllerFoundationProtectedShellPrimaryMedium(t *testing.T) {
 		t.Log("Constructed primary-Medium process, deny-only Administrators, only SeChangeNotify and no impersonation: actual global directory/link read ACLs, mapping identity and captured image proof passed. This is not linked-token, interactive or cross-account UAC acceptance.")
 		return
 	}
+	if marker := os.Getenv(fixtureMediumStationEnvironment); marker == "" {
+		// An elevated hosted runner's inherited service desktop need not admit
+		// its derived Medium token. Use a separately owned helper process for
+		// private USER object creation; do not edit the existing host desktop.
+		worker := fixtureStartRestrictedPrimaryWorker(t, api, test, fixtureMediumStationEnvironment)
+		fixtureWaitMediumWorker(t, worker, test)
+		return
+	} else if marker != test {
+		t.Fatal("primary-Medium desktop helper lost its captured test")
+	}
+	desktop := fixturePrivateMediumDesktop(t, api)
 
 	directory := t.TempDir()
-	worker := &fixtureRestrictedWorker{api: api, directory: directory}
+	worker := &fixtureRestrictedWorker{api: api, directory: directory, desktop: desktop}
 	t.Cleanup(func() {
 		if err := worker.close(); err != nil {
 			t.Error("primary-Medium worker did not retire its exact native owners", err)
@@ -109,6 +121,11 @@ func TestWindowsControllerFoundationProtectedShellPrimaryMedium(t *testing.T) {
 		}
 		return nil
 	})
+	fixtureWaitMediumWorker(t, worker, test)
+}
+
+func fixtureWaitMediumWorker(t *testing.T, worker *fixtureRestrictedWorker, test string) {
+	t.Helper()
 	if err := worker.wait(25 * time.Second); err != nil {
 		t.Fatal("primary-Medium worker did not join", err, worker.output())
 	}

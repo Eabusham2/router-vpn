@@ -154,6 +154,7 @@ func fixtureSamePrimary(a, b TokenIdentity) bool {
 type fixtureRestrictedWorker struct {
 	api        *fixtureRestrictedAPI
 	directory  string
+	desktop    string
 	job        syscall.Handle
 	process    syscall.ProcessInformation
 	image      *Image
@@ -163,6 +164,10 @@ type fixtureRestrictedWorker struct {
 }
 
 func fixtureStartRestrictedDACLWorker(t *testing.T, api *fixtureRestrictedAPI, test string) *fixtureRestrictedWorker {
+	return fixtureStartRestrictedPrimaryWorker(t, api, test, fixtureRestrictedWorkerEnvironment)
+}
+
+func fixtureStartRestrictedPrimaryWorker(t *testing.T, api *fixtureRestrictedAPI, test, marker string) *fixtureRestrictedWorker {
 	t.Helper()
 	directory := t.TempDir()
 	worker := &fixtureRestrictedWorker{api: api, directory: directory}
@@ -208,7 +213,7 @@ func fixtureStartRestrictedDACLWorker(t *testing.T, api *fixtureRestrictedAPI, t
 	if identityErr != nil || privilegeErr != nil || !fixtureSamePrimary(parentIdentity, restrictedIdentity) || !maps.Equal(wanted, restrictedPrivileges) {
 		t.Fatal("derived primary token changed more than SeDebug privilege", identityErr, privilegeErr)
 	}
-	return fixtureStartPrimaryWorker(t, worker, token, test, fixtureRestrictedWorkerEnvironment, 2, func(actual syscall.Token) error {
+	return fixtureStartPrimaryWorker(t, worker, token, test, marker, 2, func(actual syscall.Token) error {
 		identity, _, identityErr := readTokenIdentity(actual)
 		privileges, privilegeErr := fixtureTokenPrivileges(actual)
 		if identityErr != nil || privilegeErr != nil || !fixtureSamePrimary(parentIdentity, identity) || !maps.Equal(wanted, privileges) {
@@ -335,6 +340,12 @@ func fixtureStartPrimaryWorker(t *testing.T, worker *fixtureRestrictedWorker, to
 	startup.Info.Cb = uint32(unsafe.Sizeof(startup))
 	startup.Info.Flags = syscall.STARTF_USESTDHANDLES
 	startup.Info.StdInput, startup.Info.StdOutput, startup.Info.StdErr = input, output, output
+	if worker.desktop != "" {
+		startup.Info.Desktop, err = syscall.UTF16PtrFromString(worker.desktop)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	// The restricted-caller exception is the documented AsUser boundary. This
 	// fixture never adjusts or grants parent privileges; the post-call readback
 	// also checks that the API restored any temporary existing privilege use.
