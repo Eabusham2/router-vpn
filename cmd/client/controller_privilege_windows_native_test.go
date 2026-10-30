@@ -380,8 +380,16 @@ func TestWindowsOwnedControllerPrivateRootRetainsNamespace(t *testing.T) {
 	if err := ensurePrivateRuntimeDirectory(root); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.Stat(root)
+	// Windows path-based Stat can defer its file-ID read until SameFile. Both
+	// observations would then resolve the replacement path after the rename.
+	// Capture identity from an actual handle now, and close that observer before
+	// testing whether the production directory pin prevents replacement.
+	observer, err := os.Open(root)
 	if err != nil {
+		t.Fatal(err)
+	}
+	before, statErr := observer.Stat()
+	if err := errors.Join(statErr, observer.Close()); err != nil {
 		t.Fatal(err)
 	}
 	capture := &windowsOwnedController{dataRoot: root}
