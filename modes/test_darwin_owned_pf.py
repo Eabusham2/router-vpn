@@ -2,6 +2,7 @@
 """Exercise the shipping Darwin dispatcher without touching the host PF table."""
 from pathlib import Path
 import contextlib
+import hashlib
 import importlib.util
 import json
 import os
@@ -35,12 +36,16 @@ class OwnedDarwinPF(unittest.TestCase):
                     'HOMEVPN_NATIVE_ENDPOINTS_JSON': '', 'HOMEVPN_NATIVE_EGRESS_JSON': '',
                     'HOMEVPN_EXTERNAL_SESSION': '', 'HOMEVPN_KILLSWITCH_DRY_RUN': '0'}
         self.commands, self.rules, self.saved_before_load = [], {}, []
+        self.references, self.next_reference = {'999'}, 417
+        self.reference_reads, self.native_calls = [], []
         self.fail_after_load = False
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
         self.stack.enter_context(patch.dict(os.environ, self.env))
         self.stack.enter_context(patch.object(D.sys, 'platform', 'darwin'))
         self.stack.enter_context(patch.object(P, 'run_pf', side_effect=self.pf))
+        self.stack.enter_context(patch.object(P._baseline, '_invoke', side_effect=self.native))
+        self.stack.enter_context(patch.object(P._baseline, 'reference', side_effect=self.reference))
         self.stack.enter_context(patch.object(P, 'owned_pf_preflight'))
         self.stack.enter_context(patch.object(P, 'physical_state_interfaces', return_value={'en0': ['192.0.2.1', '2001:db8::1']}))
         self.retire = self.stack.enter_context(patch.object(P, 'retire_physical_states'))
@@ -55,13 +60,49 @@ class OwnedDarwinPF(unittest.TestCase):
     def saved(self):
         return json.loads((self.root/'run/kill-switch.json').read_text())
 
+    def reference(self, token):
+        P._baseline.token(token)
+        self.reference_reads.append(token)
+        return token in self.references
+
+    def native(self, phase, request):
+        self.native_calls.append((phase, request))
+        present = P.OWNED_PF_ANCHOR in self.rules
+        previous = {'present': present, 'rules_sha256': hashlib.sha256(self.rules[P.OWNED_PF_ANCHOR].encode()).hexdigest() if present else ''}
+        if previous not in request['expected']:
+            raise RuntimeError('native baseline has another exact preimage')
+        capture = (request['session_id'], request['source_sha256']) if request['session_id'] else None
+        rules = P.render_owned_pf_rules(request['home_lan_access'], capture) if request['action'] == 'replace' else None
+        target = {'present': rules is not None, 'rules_sha256': hashlib.sha256(rules.encode()).hexdigest() if rules is not None else ''}
+        if phase == 'apply':
+            saved = self.saved()
+            self.saved_before_load.append(saved)
+            journal = saved[P._baseline.STATE_KEY]
+            self.assertTrue(saved['darwin_transition_pending'])
+            self.assertFalse(journal['complete'])
+            self.assertEqual(journal['previous'], previous)
+            self.assertEqual(journal['target'], target)
+            if rules is None:
+                self.rules.pop(P.OWNED_PF_ANCHOR, None)
+            else:
+                self.rules[P.OWNED_PF_ANCHOR] = rules
+            if self.fail_after_load:
+                raise RuntimeError('ambiguous applied PF load failure')
+        return {'schema': 1, 'request_sha256': hashlib.sha256(P._baseline._canonical(request)).hexdigest(),
+                'previous': previous, 'target': target, 'applied': phase == 'apply'}
+
     def pf(self, arguments, *, check=True, input_text=None):
         self.commands.append(list(arguments))
         result = ''
         if arguments == ['-E']:
-            result = 'Token : 417\n'
+            token = str(self.next_reference)
+            self.next_reference += 1
+            self.references.add(token)
+            result = 'Token : '+token+'\n'
         elif arguments[:1] == ['-X']:
-            pass
+            self.references.discard(arguments[1])
+        elif arguments == ['-s', 'Anchors']:
+            result = 'com.apple\n' if self.rules else ''
         elif arguments[:1] == ['-a']:
             anchor = arguments[1]
             if arguments[2:] == ['-n', '-f', '-']:
@@ -75,6 +116,8 @@ class OwnedDarwinPF(unittest.TestCase):
                 self.rules[anchor] = ''
             elif arguments[2:] in (['-s', 'rules'], ['-sr']):
                 result = self.rules.get(anchor, '')
+            elif arguments[2:] == ['-s', 'Anchors']:
+                result = '\n'.join(sorted({name.removeprefix(anchor+'/').split('/')[0] for name in self.rules if name.startswith(anchor+'/')}))
             else:
                 self.fail('unexpected PF fixture operation '+repr(arguments))
         else:
@@ -90,8 +133,9 @@ class OwnedDarwinPF(unittest.TestCase):
         self.assertEqual(state['pf_token'], '417')
         self.assertNotIn('darwin_transition_pending', state)
         self.assertNotIn('native_egress', state)
-        self.assertNotIn('a'*32, json.dumps(state))
-        self.assertNotIn('b'*64, json.dumps(state))
+        self.assertEqual(state[P._baseline.STATE_KEY]['request']['session_id'], 'a'*32)
+        self.assertEqual(state[P._baseline.STATE_KEY]['request']['source_sha256'], 'b'*64)
+        self.assertTrue(state[P._baseline.STATE_KEY]['complete'])
         active = self.rules[P.OWNED_PF_ANCHOR]
         self.assertIn('anchor "p'+'a'*32+'" out', active)
         self.assertNotIn(' user ', active)
@@ -106,6 +150,8 @@ class OwnedDarwinPF(unittest.TestCase):
         inactive = self.rules[P.OWNED_PF_ANCHOR]
         self.assertNotIn('anchor ', inactive)
         self.assertNotIn('a'*32, inactive)
+        self.assertNotIn('a'*32, json.dumps(self.saved()))
+        self.assertNotIn('b'*64, json.dumps(self.saved()))
         self.assertEqual(D.darwin_release(), 0)
         self.assertEqual(self.rules[P.OWNED_PF_ANCHOR], inactive)
         self.assertEqual(self.commands.count(['-E']), 1)
@@ -124,7 +170,8 @@ class OwnedDarwinPF(unittest.TestCase):
         self.fail_after_load = False
         self.assertEqual(D.darwin_release(True), 0)
         self.assertIn(['-X', '417'], self.commands)
-        self.assertEqual(self.rules[P.OWNED_PF_ANCHOR], '')
+        self.assertNotIn(P.OWNED_PF_ANCHOR, self.rules)
+        self.assertEqual(self.references, {'999'})
 
     def test_state_write_failure_balances_new_reference_without_filter_mutation(self):
         with patch.object(D._linux, 'write_state', side_effect=RuntimeError('private state write rejected')):
@@ -134,33 +181,209 @@ class OwnedDarwinPF(unittest.TestCase):
         self.assertIn(['-X', '417'], self.commands)
         self.assertFalse((self.root/'run/kill-switch.json').exists())
 
-    def test_state_retirement_failure_keeps_cleanup_for_both_owned_anchors(self):
+    def test_adopted_but_unsynced_journal_retains_reference_for_same_retry(self):
+        with patch.object(P._baseline, 'sync_state', side_effect=OSError('directory sync failed')):
+            with self.assertRaises(RuntimeError):
+                D.darwin_apply()
+        saved = self.saved()
+        self.assertTrue(saved['darwin_transition_pending'])
+        self.assertFalse(saved[P._baseline.STATE_KEY]['complete'])
+        self.assertEqual(saved['pf_token'], '417')
+        self.assertEqual(self.rules, {})
+        self.assertNotIn(['-X', '417'], self.commands, 'unsynced adopted journal lost its captured reference')
+        self.assertEqual(self.references, {'417', '999'})
+        self.assertEqual(D.darwin_apply(), 0)
+        self.assertEqual(self.commands.count(['-E']), 1)
+        self.assertEqual(self.saved()['pf_token'], '417')
+
+    def test_unknown_journal_read_does_not_balance_a_possibly_adopted_reference(self):
+        with patch.object(D._linux, 'write_state', side_effect=OSError('uncertain write')), \
+             patch.object(D._linux, 'read_state', side_effect=[{}, RuntimeError('unknown private read')]):
+            with self.assertRaisesRegex(RuntimeError, 'retained captured PF reference 417'):
+                D.darwin_apply()
+        self.assertEqual(self.rules, {})
+        self.assertNotIn(['-X', '417'], self.commands)
+        self.assertEqual(self.references, {'417', '999'})
+
+    def test_reboot_reassert_proves_absence_then_acquires_a_new_exact_reference(self):
+        self.assertEqual(D.darwin_apply(), 0)
+        self.references.remove('417')
+        self.rules.clear()
+        self.assertEqual(D.darwin_reassert(), 0)
+        self.assertEqual(self.saved()['pf_token'], '418', 'native reboot reused a dead PF reference')
+        self.assertEqual(self.commands.count(['-E']), 2)
+        self.assertNotIn(['-X', '417'], self.commands)
+        self.assertEqual(self.references, {'418', '999'})
+        self.assertNotIn('a'*32, json.dumps(self.saved()))
+
+    def test_missing_reference_cannot_adopt_a_different_present_baseline(self):
+        self.assertEqual(D.darwin_apply(), 0)
+        before = self.saved()
+        self.references.remove('417')
+        self.rules[P.OWNED_PF_ANCHOR] = 'independently changed owner\n'
+        with self.assertRaisesRegex(RuntimeError, 'another exact preimage'):
+            D.darwin_reassert()
+        self.assertEqual(self.saved(), before)
+        self.assertEqual(self.commands.count(['-E']), 1)
+        self.assertEqual(self.rules[P.OWNED_PF_ANCHOR], 'independently changed owner\n')
+
+    def test_reference_release_uses_exact_absence_after_a_lost_reply(self):
+        self.assertEqual(D.darwin_apply(), 0)
+        actual = P.run_pf
+        def lost_reply(arguments, **kwargs):
+            result = actual(arguments, **kwargs)
+            if arguments == ['-X', '417']:
+                return subprocess.CompletedProcess(arguments, 1, '', 'reply lost after release')
+            return result
+        with patch.object(P, 'run_pf', side_effect=lost_reply):
+            self.assertEqual(D.darwin_release(True), 0)
+        self.assertFalse((self.root/'run/kill-switch.json').exists())
+        self.assertEqual(self.references, {'999'})
+
+    def test_failed_reference_release_retains_exact_clear_receipt_until_same_retry(self):
+        self.assertEqual(D.darwin_apply(), 0)
+        actual = P.run_pf
+        def reject_release(arguments, **kwargs):
+            if arguments == ['-X', '417']:
+                return subprocess.CompletedProcess(arguments, 1, '', 'release rejected')
+            return actual(arguments, **kwargs)
+        with patch.object(P, 'run_pf', side_effect=reject_release):
+            try:
+                D.darwin_release(True)
+            except RuntimeError as error:
+                self.assertIn('did not prove exact absence', str(error))
+            else:
+                self.fail('native reference release discarded a still-present exact owner')
+        saved = self.saved()
+        self.assertTrue(saved[P._baseline.STATE_KEY]['complete'])
+        self.assertFalse(saved[P._baseline.STATE_KEY]['target']['present'])
+        self.assertEqual(self.references, {'417', '999'})
+        self.assertEqual(D.darwin_release(True), 0)
+        self.assertEqual(self.references, {'999'})
+        self.assertFalse((self.root/'run/kill-switch.json').exists())
+
+    def test_unknown_post_release_read_keeps_exact_removal_and_retry_does_not_replay_x(self):
+        self.assertEqual(D.darwin_apply(), 0)
+        calls = []
+        def unknown_after_release(token):
+            calls.append(token)
+            if len(calls) == 2:
+                raise RuntimeError('native reference read unknown')
+            return self.reference(token)
+        with patch.object(P._baseline, 'reference', side_effect=unknown_after_release), self.assertRaisesRegex(RuntimeError, 'reference read unknown'):
+            D.darwin_release(True)
+        saved = self.saved()
+        self.assertTrue(saved['darwin_transition_pending'])
+        self.assertTrue(saved[P._baseline.STATE_KEY]['complete'])
+        self.assertFalse(saved[P._baseline.STATE_KEY]['target']['present'])
+        self.assertEqual(self.references, {'999'})
+        self.assertEqual(self.commands.count(['-X', '417']), 1)
+        with self.assertRaisesRegex(RuntimeError, 'retirement is pending'):
+            D.darwin_apply()
+        self.assertEqual(self.saved(), saved)
+        self.assertEqual(D.darwin_release(True), 0)
+        self.assertEqual(self.commands.count(['-X', '417']), 1)
+        self.assertFalse((self.root/'run/kill-switch.json').exists())
+
+    def test_existing_legacy_owner_is_preserved_before_native_transition(self):
         prior = D._darwin_state_base('direct-tor', 'direct-tor', '198.51.100.44', [], False, 'always')
         prior.update(pf_token='398', darwin_pf_anchor=P.PF_ANCHOR)
         self.private_json(self.root/'run/kill-switch.json', prior)
         self.rules[P.PF_ANCHOR] = 'previous endpoint policy\n'
+        self.references.add('398')
+        with self.assertRaisesRegex(RuntimeError, 'retained legacy PF namespace'):
+            D.darwin_apply()
+        self.assertEqual(self.saved(), prior)
+        self.assertEqual(self.rules, {P.PF_ANCHOR: 'previous endpoint policy\n'})
+        self.assertEqual(self.native_calls, [])
+        self.assertNotIn(['-E'], self.commands)
+        self.assertNotIn(['-X', '398'], self.commands)
+
+    def test_native_transition_does_not_kill_a_saved_unjoined_watcher_pid(self):
+        prior = D._darwin_state_base('direct-tor', 'direct-tor', '198.51.100.44', [], False, 'always')
+        prior.update(pf_token='398', darwin_pf_anchor=P.PF_ANCHOR, darwin_watcher_pid=991)
+        self.private_json(self.root/'run/kill-switch.json', prior)
+        with patch.object(D.os, 'kill') as kill, self.assertRaisesRegex(RuntimeError, 'prior watcher retirement'):
+            D.darwin_apply()
+        kill.assert_not_called()
+        self.assertEqual(self.saved(), prior)
+        self.assertEqual(self.native_calls, [])
+        self.assertEqual(self.commands, [])
+
+    def test_shipping_actions_hold_one_complete_state_transaction(self):
+        for action, name in (('apply', 'darwin_apply'), ('release', 'darwin_release'),
+                             ('force-off', 'darwin_release'), ('reassert', 'darwin_reassert')):
+            events = []
+            @contextlib.contextmanager
+            def guard(root):
+                self.assertEqual(root, self.root)
+                events.append('enter')
+                try:
+                    yield
+                finally:
+                    events.append('leave')
+            def operation(*args):
+                self.assertEqual(events, ['enter'], 'shipping PF mutation escaped its complete private state lock')
+                events.append('operation')
+                return 0
+            with self.subTest(action=action), patch.object(P._baseline, 'state_guard', side_effect=guard), \
+                 patch.object(D, name, side_effect=operation), patch.object(D.sys, 'argv', ['dispatcher', action]):
+                self.assertEqual(D.main(), 0, 'shipping PF mutation escaped its complete private state lock')
+            self.assertEqual(events, ['enter', 'operation', 'leave'])
+        with patch.object(P._baseline, 'state_guard', side_effect=BlockingIOError('captured state owner busy')), \
+             patch.object(D, 'darwin_apply') as operation, patch.object(D.sys, 'argv', ['dispatcher', 'apply']):
+            self.assertEqual(D.main(), 1)
+            operation.assert_not_called()
+
+    def test_legacy_watcher_locks_its_iteration_and_never_rewrites_native_timeout(self):
+        prior = D._darwin_state_base('direct-tor', 'direct-tor', '198.51.100.44', [], False, 'always')
+        prior.update(pf_token='398', darwin_pf_anchor=P.PF_ANCHOR, darwin_watcher_pid=os.getpid())
+        self.private_json(self.root/'run/kill-switch.json', prior)
+        held = []
+        @contextlib.contextmanager
+        def guard(root):
+            self.assertEqual(root, self.root)
+            held.append(True)
+            try:
+                yield
+            finally:
+                held.pop()
+        def refresh(*args, **kwargs):
+            self.assertEqual(held, [True], 'legacy watcher changed PF outside its captured state lock')
+            return {}
+        with patch.object(P._baseline, 'state_guard', side_effect=guard), patch.object(P._baseline, 'ROOT', self.root), \
+             patch.object(P, 'apply_darwin', side_effect=refresh), patch.object(D._linux, 'retained_native_policy', return_value=None):
+            self.assertEqual(D.darwin_watch(), 0)
+        native = {**prior, 'native_socket_broker': True, 'darwin_pf_anchor': P.OWNED_PF_ANCHOR}
+        self.private_json(self.root/'run/kill-switch.json', native)
+        with patch.object(P._baseline, 'state_guard', side_effect=guard), patch.object(D.time, 'monotonic', side_effect=[0, 91]), \
+             patch.object(D, '_write_state') as write:
+            self.assertEqual(D.darwin_watch(), 1)
+            self.assertEqual(write.call_count, 0, 'older watcher timeout rewrote a replacement native journal')
+        self.assertEqual(self.saved(), native)
+
+    def test_physical_retirement_failure_keeps_exact_native_cleanup(self):
         self.retire.side_effect = RuntimeError('physical address changed')
         with self.assertRaisesRegex(RuntimeError, 'physical address changed'):
             D.darwin_apply()
         saved = self.saved()
-        self.assertEqual(saved['pf_token'], '398')
-        self.assertEqual(saved['darwin_pf_anchor'], P.OWNED_PF_ANCHOR)
-        self.assertEqual(saved['darwin_previous_pf_anchor'], P.PF_ANCHOR)
-        self.assertNotIn(['-E'], self.commands)
-        self.assertNotIn(['-X', '398'], self.commands)
+        self.assertEqual(saved['pf_token'], '417')
+        self.assertTrue(saved['darwin_transition_pending'])
+        self.assertFalse(saved[P._baseline.STATE_KEY]['complete'])
+        self.assertIn('block drop out quick', self.rules[P.OWNED_PF_ANCHOR])
+        self.assertNotIn(['-X', '417'], self.commands)
         self.assertEqual(D.darwin_release(True), 0)
-        self.assertEqual(self.rules[P.PF_ANCHOR], '')
-        self.assertEqual(self.rules[P.OWNED_PF_ANCHOR], '')
-        self.assertEqual(self.commands[-1], ['-X', '398'])
+        self.assertNotIn(P.OWNED_PF_ANCHOR, self.rules)
+        self.assertEqual(self.commands[-1], ['-X', '417'])
 
     def test_failed_absence_never_releases_owned_reference(self):
         self.assertEqual(D.darwin_apply(), 0)
-        original = P.run_pf
-        def fail_clear(arguments, **kwargs):
-            if arguments[-2:] == ['-F', 'rules']:
+        original = self.native
+        def fail_clear(phase, request):
+            if phase == 'apply' and request['action'] == 'clear':
                 raise RuntimeError('owned clear did not complete')
-            return original(arguments, **kwargs)
-        with patch.object(P, 'run_pf', side_effect=fail_clear):
+            return original(phase, request)
+        with patch.object(P._baseline, '_invoke', side_effect=fail_clear):
             with self.assertRaisesRegex(RuntimeError, 'did not complete'):
                 D.darwin_release(True)
         self.assertNotIn(['-X', '417'], self.commands)
@@ -180,34 +403,52 @@ class OwnedDarwinPF(unittest.TestCase):
                 P.remove_darwin(state, dry_run=False)
             self.assertEqual(self.commands, [])
 
-    def test_corrupt_state_force_off_requires_both_actual_absence_readbacks(self):
+    def test_corrupt_state_cannot_adopt_a_present_native_namespace(self):
+        poisoned = self.root/'run/kill-switch.json'
+        raw = '{"incomplete":'
+        for native_rules in ('old native owner\n', ''):
+            with self.subTest(native_rules=native_rules):
+                poisoned.write_text(raw)
+                poisoned.chmod(0o600)
+                self.rules = {P.PF_ANCHOR: 'old fixed owner\n', P.OWNED_PF_ANCHOR: native_rules}
+                before = dict(self.rules)
+                self.commands.clear()
+                with patch.object(P, '_clear_anchor') as clear, self.assertRaisesRegex(RuntimeError, 'unreadable state cannot authorize'):
+                    D.darwin_release(True)
+                clear.assert_not_called()
+                self.assertEqual(poisoned.read_text(), raw)
+                self.assertEqual(self.rules, before)
+                self.assertEqual(self.native_calls, [])
+                self.assertFalse(any(row[:1] in (['-X'], ['-E']) for row in self.commands))
+
+    def test_corrupt_state_force_off_requires_real_namespace_absence(self):
         poisoned = self.root/'run/kill-switch.json'
         raw = '{"incomplete":'
         actual = P.run_pf
-        for fault in ('first-clear', 'second-clear', 'first-readback', 'second-readback', 'first-present', 'second-present'):
+        for fault in ('clear', 'legacy-readback', 'native-readback', 'empty-retained-namespace'):
             with self.subTest(fault=fault):
                 poisoned.write_text(raw)
                 poisoned.chmod(0o600)
-                self.rules = {P.PF_ANCHOR: 'old fixed owner\n', P.OWNED_PF_ANCHOR: 'old native owner\n'}
+                self.rules = {} if fault == 'native-readback' else {P.PF_ANCHOR: 'old fixed owner\n'}
                 self.commands.clear()
                 def failing(arguments, **kwargs):
-                    selected = P.PF_ANCHOR if fault.startswith('first') else P.OWNED_PF_ANCHOR
-                    if arguments[:2] == ['-a', selected]:
-                        if fault.endswith('clear') and arguments[2:] == ['-F', 'rules']:
-                            self.assertTrue(kwargs.get('check'))
-                            raise RuntimeError('owned clear failed')
-                        if fault.endswith('readback') and arguments[2:] == ['-s', 'rules']:
-                            raise RuntimeError('owned absence readback failed')
-                        if fault.endswith('present') and arguments[2:] == ['-s', 'rules']:
-                            return subprocess.CompletedProcess(arguments, 0, 'block out all\n', '')
+                    if fault == 'clear' and arguments == ['-a', P.PF_ANCHOR, '-F', 'rules']:
+                        self.assertTrue(kwargs.get('check'))
+                        raise RuntimeError('owned clear failed')
+                    if fault == 'legacy-readback' and arguments == ['-a', P.PF_ANCHOR, '-s', 'rules']:
+                        raise RuntimeError('owned absence readback failed')
+                    if fault == 'native-readback' and arguments == ['-a', P.OWNED_PF_ANCHOR, '-s', 'rules']:
+                        raise RuntimeError('owned absence readback failed')
                     return actual(arguments, **kwargs)
                 with patch.object(P, 'run_pf', side_effect=failing), self.assertRaises(RuntimeError):
                     D.darwin_release(True)
                 self.assertEqual(poisoned.read_text(), raw, 'failed Off discarded its only recovery record')
                 self.assertFalse(any(row[:1] in (['-X'], ['-E']) for row in self.commands), 'corrupt state guessed a PF reference')
+                # Only an independently absent pair can complete recovery. An
+                # empty rules string alone must retain the actual old namespace.
+                self.rules.clear()
                 self.assertEqual(D.darwin_release(True), 0)
                 self.assertFalse(poisoned.exists())
-                self.assertEqual(self.rules, {P.PF_ANCHOR: '', P.OWNED_PF_ANCHOR: ''})
                 for anchor in (P.PF_ANCHOR, P.OWNED_PF_ANCHOR):
                     self.assertIn(['-a', anchor, '-s', 'rules'], self.commands)
                 self.assertFalse(any(row[:1] in (['-X'], ['-E']) for row in self.commands))

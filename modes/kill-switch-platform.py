@@ -38,6 +38,33 @@ def _dry_run() -> bool:
     return os.environ.get("HOMEVPN_KILLSWITCH_DRY_RUN") == "1"
 
 
+def _write_state(root: Path, value: dict[str, Any]) -> None:
+    native = not _dry_run() and _darwin._baseline.STATE_KEY in value
+    try:
+        _linux.write_state(root, value)
+        if native:
+            _darwin._baseline.sync_state(root, value)
+    except Exception as error:
+        if not native:
+            raise
+        # A writer can adopt the file and then fail its final sync. Retain the
+        # reference when that exact record exists or its current state cannot
+        # be independently read; only proved non-adoption permits balancing a
+        # newly acquired reference before any baseline mutation.
+        retained = None
+        try:
+            retained = _linux.read_state(root) == value
+        except Exception:
+            pass
+        raise _darwin._baseline.PersistenceError('macOS baseline private persistence did not finish: '+str(error), retained=retained) from error
+
+
+def _retained_removal(root: Path, state: dict[str, Any]):
+    def persist(extra):
+        _write_state(root, {**state, **extra, 'darwin_transition_pending': True})
+    return persist
+
+
 def _darwin_state_base(runtime_id: str, control_id: str, endpoint: str, endpoint_ips, lan: bool, policy: str) -> dict[str, Any]:
     return {
         "policy": policy,
@@ -52,6 +79,10 @@ def _darwin_state_base(runtime_id: str, control_id: str, endpoint: str, endpoint
 
 
 def _stop_watcher(state: dict[str, Any]) -> None:
+    if state.get('native_socket_broker') is True:
+        if state.get('darwin_watcher_pid') not in (None, 0):
+            raise RuntimeError('native macOS protection cannot adopt an unjoined saved watcher identity')
+        return
     try:
         pid = int(state.get("darwin_watcher_pid") or 0)
     except (TypeError, ValueError):
@@ -90,7 +121,7 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None) -> int:
     if policy == "off":
         if previous and previous.get("platform") == "darwin":
             _stop_watcher(previous)
-            _darwin.remove_darwin(previous, dry_run=_dry_run())
+            _darwin.remove_darwin(previous, dry_run=_dry_run(), retain_state=_retained_removal(root, previous))
             _linux.remove_state(root)
         print("kill switch off", file=sys.stderr)
         return 0
@@ -106,7 +137,11 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None) -> int:
     else:
         endpoint_ips, native_egress = retained
     lan = bool(control_profile.get("home_lan_access", False))
-    _stop_watcher(previous)
+    if socket_broker:
+        if previous.get('darwin_watcher_pid') not in (None, 0):
+            raise RuntimeError('native macOS protection requires exact prior watcher retirement')
+    else:
+        _stop_watcher(previous)
     socket_capture = ((os.environ['HOMEVPN_TOR_SESSION'], os.environ['HOMEVPN_TOR_SOURCE_SHA256'])
                       if socket_broker and retained_state is None else None)
     state = _darwin_state_base(runtime_id, control_id, endpoint, endpoint_ips, lan, policy)
@@ -116,14 +151,14 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None) -> int:
         state['native_socket_broker'] = True
     state["darwin_watcher_pid"] = 0
     def retain_state(extra):
-        _linux.write_state(root, {**state, **extra, "darwin_transition_pending": True})
+        _write_state(root, {**state, **extra, "darwin_transition_pending": True})
     extra = _darwin.apply_darwin(endpoint_ips, lan, previous, refresh=False, dry_run=_dry_run(), native_egress=native_egress,
                                socket_broker=socket_broker, socket_capture=socket_capture, retain_state=retain_state)
     state.update(extra)
-    _linux.write_state(root, state)
+    _write_state(root, state)
     if spawn_watch and not socket_broker:
         state["darwin_watcher_pid"] = _spawn_watcher()
-        _linux.write_state(root, state)
+        _write_state(root, state)
     print(f"strict macOS kill switch {policy} applied pre-connect for {endpoint}", file=sys.stderr)
     return 0
 
@@ -132,39 +167,45 @@ def darwin_watch() -> int:
     root = _linux.root_dir()
     deadline = time.monotonic() + 90.0
     while time.monotonic() < deadline:
-        state = _linux.read_state(root)
-        if not state or state.get("platform") != "darwin":
-            return 0
-        if state.get('native_socket_broker') is True:
-            # Only the native guardian can admit the actual retained utun FD.
-            return 0
         try:
-            endpoint_ips = [_linux.ipaddress.ip_address(x) for x in state.get("endpoint_ips", [])]
-            retained = _linux.retained_native_policy(state, str(state.get("endpoint") or ""))
-            native_egress = None
-            if retained is not None:
-                endpoint_ips, native_egress = retained
-            extra = _darwin.apply_darwin(
-                endpoint_ips,
-                bool(state.get("home_lan_access", False)),
-                state,
-                refresh=True,
-                dry_run=_dry_run(),
-                native_egress=native_egress,
-            )
+            with _darwin._baseline.state_guard(root):
+                state = _linux.read_state(root)
+                if not state or state.get("platform") != "darwin":
+                    return 0
+                if state.get('native_socket_broker') is True:
+                    # Only the native guardian can admit a retained utun FD.
+                    return 0
+                if root == _darwin._baseline.ROOT and state.get('darwin_watcher_pid') != os.getpid():
+                    return 0
+                endpoint_ips = [_linux.ipaddress.ip_address(x) for x in state.get("endpoint_ips", [])]
+                retained = _linux.retained_native_policy(state, str(state.get("endpoint") or ""))
+                native_egress = None
+                if retained is not None:
+                    endpoint_ips, native_egress = retained
+                extra = _darwin.apply_darwin(
+                    endpoint_ips,
+                    bool(state.get("home_lan_access", False)),
+                    state,
+                    refresh=True,
+                    dry_run=_dry_run(),
+                    native_egress=native_egress,
+                )
+                state.update(extra)
+                state["darwin_watcher_pid"] = 0
+                _write_state(root, state)
         except Exception:
             time.sleep(0.2)
             continue
-        state.update(extra)
-        state["darwin_watcher_pid"] = 0
-        _linux.write_state(root, state)
         print("strict macOS kill switch promoted proven Router VPN utun", file=sys.stderr)
         return 0
-    # The pre-connect anchor remains installed, so timeout is fail-closed.
-    state = _linux.read_state(root)
-    if state:
-        state["darwin_watcher_pid"] = 0
-        _linux.write_state(root, state)
+    # Do not let an older watcher's timeout rewrite a replacement/native
+    # journal. The installed caller owns this exact private state lock too.
+    with _darwin._baseline.state_guard(root):
+        state = _linux.read_state(root)
+        if (state and state.get('native_socket_broker') is not True
+                and (root != _darwin._baseline.ROOT or state.get('darwin_watcher_pid') == os.getpid())):
+            state["darwin_watcher_pid"] = 0
+            _write_state(root, state)
     return 1
 
 
@@ -182,10 +223,12 @@ def darwin_release(force: bool = False) -> int:
         # An unknown/failed removal retains that recovery record and reports
         # failure; global enablement and every foreign reference stay untouched.
         if not _dry_run():
-            _darwin._clear_anchor(check=True)
-            _darwin._clear_anchor(check=True, anchor=_darwin.OWNED_PF_ANCHOR)
+            if _darwin.owned_namespace_present(_darwin.OWNED_PF_ANCHOR):
+                raise RuntimeError('unreadable state cannot authorize another retained native PF owner; exact prior-owner recovery is required')
+            if _darwin.owned_namespace_present(_darwin.PF_ANCHOR):
+                _darwin._clear_anchor(check=True)
             for anchor in (_darwin.PF_ANCHOR, _darwin.OWNED_PF_ANCHOR):
-                if _darwin.run_pf(['-a', anchor, '-s', 'rules']).stdout.strip():
+                if _darwin.run_pf(['-a', anchor, '-s', 'rules']).stdout.strip() or _darwin.owned_namespace_present(anchor):
                     raise RuntimeError('explicit macOS force-off could not prove the owned dispatch absent')
         _linux.remove_state(root, force_recovery=True)
         print(
@@ -215,16 +258,16 @@ def darwin_release(force: bool = False) -> int:
             native_egress=native_egress,
             socket_broker=socket_broker,
             socket_capture=None,
-            retain_state=lambda extra: _linux.write_state(root, {**state, **extra, 'darwin_watcher_pid': 0, 'darwin_transition_pending': True}),
+            retain_state=lambda extra: _write_state(root, {**state, **extra, 'darwin_watcher_pid': 0, 'darwin_transition_pending': True}),
         )
         state.pop('darwin_previous_pf_anchor', None)
         state.pop('darwin_transition_pending', None)
         state.update(extra)
         state["darwin_watcher_pid"] = 0
-        _linux.write_state(root, state)
+        _write_state(root, state)
         print("strict macOS kill switch remains active (always policy)", file=sys.stderr)
         return 0
-    _darwin.remove_darwin(state, dry_run=_dry_run())
+    _darwin.remove_darwin(state, dry_run=_dry_run(), retain_state=_retained_removal(root, state))
     _linux.remove_state(root, force_recovery=force)
     print("strict macOS kill switch released", file=sys.stderr)
     return 0
@@ -260,12 +303,14 @@ def main() -> int:
     if sys.platform != "darwin" and os.environ.get("HOMEVPN_KILLSWITCH_DARWIN_TEST") != "1":
         return _linux.main()
     try:
-        if action == "apply": return darwin_apply()
         if action == "watch": return darwin_watch()
-        if action == "release": return darwin_release(False)
-        if action == "force-off": return darwin_release(True)
-        if action == "reassert": return darwin_reassert()
         if action == "status": return darwin_status()
+        if action in ('apply', 'release', 'force-off', 'reassert'):
+            with _darwin._baseline.state_guard(_linux.root_dir()):
+                if action == "apply": return darwin_apply()
+                if action == "release": return darwin_release(False)
+                if action == "force-off": return darwin_release(True)
+                if action == "reassert": return darwin_reassert()
         print("usage: kill-switch-platform.py apply|watch|release|force-off|reassert|status", file=sys.stderr)
         return 2
     except Exception as exc:

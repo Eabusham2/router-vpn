@@ -4,7 +4,10 @@
 This module never rewrites /etc/pf.conf, never flushes the global PF ruleset,
 and never flushes the global PF state table. It installs filter rules only in
 the existing com.apple/* anchor namespace and uses pfctl's reference-counted
--E/-X lifecycle. A protected connect is two phase: pre-connect rules permit only
+-E/-X lifecycle. The native owned-socket baseline is compiled and committed by
+the fixed installed controller after an exact private journal is durable. Its
+reference reuse and removal require independent native token readback.
+A legacy protected connect is two phase: pre-connect rules permit only
 the selected literal node endpoint and required link maintenance; after the
 tunnel starts, the controller refreshes the anchor and permits only a newly-
 created Router VPN utun that also owns a public route. Existing states are
@@ -14,18 +17,24 @@ does not destroy unrelated PF state on other interfaces.
 from __future__ import annotations
 
 import ipaddress
+import importlib.util
 import base64
 import hashlib
 import os
 import re
 import shutil
 import subprocess
+from pathlib import Path
 from typing import Any, Callable
 
 PF_ANCHOR = "com.apple/router-vpn"
 OWNED_PF_ANCHOR = "com.apple/000.router-vpn"
 PRIVATE_V4 = ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16")
 PRIVATE_V6 = ("fc00::/7", "fe80::/10")
+
+_baseline_spec = importlib.util.spec_from_file_location('routervpn_darwin_pf_baseline', Path(__file__).with_name('darwin_pf_baseline.py'))
+_baseline = importlib.util.module_from_spec(_baseline_spec)
+_baseline_spec.loader.exec_module(_baseline)
 
 
 def owned_label(value: str) -> str:
@@ -157,6 +166,18 @@ def _owned_reject_legacy_layout() -> None:
         if len(queue)+len(children) > 256 or children and anchor.count('/')-root.count('/') >= 8:
             raise RuntimeError('native macOS legacy PF inventory exceeds its bounded tree')
         queue.extend(children)
+
+
+def owned_namespace_present(anchor: str) -> bool:
+    if anchor not in (PF_ANCHOR, OWNED_PF_ANCHOR):
+        raise RuntimeError('macOS protection inventory has another fixed owner')
+    parent = ''
+    for name in anchor.split('/'):
+        target = parent+'/'+name if parent else name
+        if target not in _owned_legacy_children(parent):
+            return False
+        parent = target
+    return True
 
 
 def owned_pf_preflight(previous: dict[str, Any]) -> None:
@@ -346,10 +367,16 @@ def render_pf_rules(
     return "\n".join(lines) + "\n"
 
 
-def _enable_reference(previous_state: dict[str, Any]) -> tuple[str, bool]:
+def _enable_reference(previous_state: dict[str, Any], *, native: bool = False) -> tuple[str, bool]:
     old = str(previous_state.get("pf_token") or "").strip()
     if old:
-        return old, False
+        if not re.fullmatch('[0-9]+', old):
+            raise RuntimeError('macOS retained PF reference is not an exact token')
+        baseline = previous_state.get(_baseline.STATE_KEY)
+        if previous_state.get('darwin_transition_pending') is True and isinstance(baseline, dict) and baseline.get('request', {}).get('action') == 'clear':
+            raise RuntimeError('macOS PF reference retirement is pending; finish the same removal before reconnecting')
+        if not native or _baseline.reference(_baseline.token(old)):
+            return old, False
     proc = run_pf(["-E"])
     text = (proc.stdout or "") + "\n" + (proc.stderr or "")
     match = re.search(r"(?i)token\s*:\s*([0-9]+)", text)
@@ -357,7 +384,22 @@ def _enable_reference(previous_state: dict[str, Any]) -> tuple[str, bool]:
         # PF may now be enabled, but without its reference token we cannot
         # safely balance our enable without risking another component's PF use.
         raise RuntimeError("pfctl -E did not return a reference token; refusing unbalanced PF ownership")
-    return match.group(1), True
+    value = match.group(1)
+    if native:
+        _baseline.token(value)
+    return value, True
+
+
+def _release_native_reference(value: str) -> None:
+    value = _baseline.token(value)
+    if not _baseline.reference(value):
+        return
+    # A nonzero command result may have lost its completion after the kernel
+    # removed the reference. The independent exact read decides retirement;
+    # generic stderr or global PF status can never authorize another -X.
+    result = run_pf(['-X', value], check=False)
+    if _baseline.reference(value):
+        raise RuntimeError('macOS native reference retirement did not prove exact absence (status '+str(result.returncode)+')')
 
 
 def _state_anchor(state: dict[str, Any]) -> str:
@@ -404,7 +446,7 @@ def apply_darwin(
     if socket_broker:
         if endpoint_ips or native_egress is not None or refresh:
             raise RuntimeError('macOS native socket baseline cannot acquire endpoint or name-only tunnel authority')
-        rules = render_owned_pf_rules(lan_access, socket_capture)
+        render_owned_pf_rules(lan_access, socket_capture)  # validate the complete capture before any operation
         if dry_run:
             return {'pf_token': str(previous_state.get('pf_token') or 'dry-run'),
                     'darwin_baseline_utun': [], 'darwin_tunnel_interfaces': [],
@@ -412,32 +454,40 @@ def apply_darwin(
         # Validate all compatibility/capture inputs before replacing an owned
         # baseline. The old route watcher cannot grant this native path.
         owned_pf_preflight(previous_state)
+        _baseline.retained(previous_state)
+        if PF_ANCHOR in previous_anchors and owned_namespace_present(PF_ANCHOR):
+            raise RuntimeError('macOS native protection cannot adopt a retained legacy PF namespace; exact prior-owner retirement is required')
         physical = physical_state_interfaces()
-        run_pf(['-a', OWNED_PF_ANCHOR, '-n', '-f', '-'], input_text=rules)
         if retain_state is None:
             raise RuntimeError('macOS native baseline requires persisted cleanup ownership before PF mutation')
-        token, token_created = _enable_reference(previous_state)
-        extra = {'pf_token': token, 'darwin_baseline_utun': [], 'darwin_tunnel_interfaces': [],
+        extra = {'darwin_baseline_utun': [], 'darwin_tunnel_interfaces': [],
                  'darwin_physical_interfaces': sorted(physical), 'darwin_pf_anchor': OWNED_PF_ANCHOR}
-        try:
-            retain_state(_transition_metadata(extra, previous_state))
-        except Exception:
-            # No filter has been changed. Balance only the reference acquired
-            # by this attempt; a previous owner's reference remains untouched.
-            if token_created:
-                run_pf(['-X', token], check=False)
-            raise
+        def persist_plan(journal):
+            token, created = _enable_reference(previous_state, native=True)
+            extra['pf_token'] = token
+            try:
+                retain_state({**_transition_metadata(extra, previous_state), **journal})
+            except Exception as error:
+                # Planning does not change filters. Balance only this newly
+                # acquired reference after independently proved non-adoption.
+                if created and isinstance(error, _baseline.PersistenceError) and error.retained is False:
+                    _release_native_reference(token)
+                elif created:
+                    raise RuntimeError('macOS baseline private persistence is uncertain; retained captured PF reference '+token+' for exact recovery') from error
+                raise
         # From this point the private saved record owns the reference and both
         # fixed anchors during handoff. A failure retains deny and exact cleanup
         # authority, including failure after the kernel applied a command.
-        run_pf(['-a', OWNED_PF_ANCHOR, '-f', '-'], input_text=rules)
+        journal = _baseline.transition(previous_state, action='replace', lan=lan_access,
+                                       capture=socket_capture, retain=persist_plan)
         retire_physical_states(physical)
-        for anchor in previous_anchors:
-            if anchor != OWNED_PF_ANCHOR:
-                _clear_anchor(check=True, anchor=anchor)
-        return extra
+        return {**extra, **journal}
     if socket_capture is not None:
         raise RuntimeError('macOS socket capture requires its native baseline')
+    if OWNED_PF_ANCHOR in previous_anchors:
+        proofs = _baseline.retained(previous_state)
+        if proofs != [{'present': False, 'rules_sha256': ''}] or owned_namespace_present(OWNED_PF_ANCHOR):
+            raise RuntimeError('macOS legacy runtime cannot replace retained native protection before its exact retirement')
     current = current_utuns()
     if refresh:
         baseline = {
@@ -514,10 +564,24 @@ def apply_darwin(
     }
 
 
-def remove_darwin(state: dict[str, Any], *, dry_run: bool) -> None:
+def remove_darwin(state: dict[str, Any], *, dry_run: bool,
+                  retain_state: Callable[[dict[str, Any]], None] | None = None) -> None:
     if dry_run:
         return
     anchors = _state_anchors(state)
+    if OWNED_PF_ANCHOR in anchors:
+        if retain_state is None:
+            raise RuntimeError('macOS native baseline removal requires its retained private journal')
+        if PF_ANCHOR in anchors and owned_namespace_present(PF_ANCHOR):
+            raise RuntimeError('macOS native removal cannot borrow a retained legacy namespace')
+        journal = _baseline.transition(state, action='clear', retain=retain_state)
+        # Preserve independently proved absence even if reference release or
+        # final state removal fails. A retry cannot recreate an active baseline.
+        retain_state(journal)
+        if owned_namespace_present(OWNED_PF_ANCHOR):
+            raise RuntimeError('macOS native baseline removal retained its actual namespace')
+        _release_native_reference(str(state.get('pf_token') or ''))
+        return
     for anchor in anchors:
         # Dynamic policy and in-progress handoffs must not release their PF
         # reference while an owned dispatch remains uncertain.
@@ -535,6 +599,8 @@ def status_darwin(state: dict[str, Any], *, dry_run: bool) -> bool:
         return False
     if dry_run:
         return bool(state)
+    if state.get('native_socket_broker') is True:
+        return _baseline.status(state)
     try:
         proc = run_pf(["-a", _state_anchor(state), "-sr"], check=False)
     except RuntimeError:

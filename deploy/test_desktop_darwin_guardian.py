@@ -84,10 +84,11 @@ def checked_sources(source: Path):
         if path.is_symlink() or copied.is_symlink() or not copied.is_file() or copied.read_bytes() != expected:
             raise ValueError('Darwin guardian lost its exact shared kernel ACL source')
         records['common/'+path.name] = hashlib.sha256(expected).hexdigest()
-    dispatcher = ROOT/'modes/darwin_kill_switch.py'
-    if dispatcher.is_symlink() or not dispatcher.is_file():
-        raise ValueError('The native PF parser proof requires the shipping dispatcher')
-    records['dispatcher/darwin_kill_switch.py'] = hashlib.sha256(dispatcher.read_bytes()).hexdigest()
+    for name in ('darwin_kill_switch.py', 'darwin_pf_baseline.py'):
+        dispatcher = ROOT/'modes'/name
+        if dispatcher.is_symlink() or not dispatcher.is_file():
+            raise ValueError('The native PF parser proof requires the complete shipping dispatcher')
+        records['dispatcher/'+name] = hashlib.sha256(dispatcher.read_bytes()).hexdigest()
     for name in ('go.mod', 'go.sum'):
         path = source/name
         if path.exists():

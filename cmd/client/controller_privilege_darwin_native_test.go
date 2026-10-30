@@ -337,7 +337,7 @@ func macOSControllerNativeInstall(t *testing.T) *macOSControllerNativeFixture {
 	// Copy the actual source closure and invoke its real empty-policy reassert.
 	// There is no kill-switch state and no PF, route or launchd mutation.
 	source := os.Getenv("ROUTERVPN_MACOS_FIXTURE_SOURCE")
-	for _, name := range []string{"kill-switch-platform.py", "kill-switch.py", "darwin_kill_switch.py", "profile_id.py"} {
+	for _, name := range []string{"kill-switch-platform.py", "kill-switch.py", "darwin_kill_switch.py", "darwin_pf_baseline.py", "profile_id.py"} {
 		data, err = os.ReadFile(filepath.Join(source, "modes", name))
 		if err != nil {
 			t.Fatal(err)

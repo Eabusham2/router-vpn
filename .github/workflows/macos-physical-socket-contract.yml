@@ -11,7 +11,13 @@ on:
       - '!internal/mobiletor/desktop_socket_windows*.go'
       - '!internal/mobiletor/desktop_socket_native_windows*.go'
       - 'internal/common/**'
+      - 'modes/darwin_kill_switch.py'
+      - 'modes/darwin_pf_baseline.py'
+      - 'modes/kill-switch-platform.py'
+      - 'modes/test_darwin_owned_pf.py'
+      - 'modes/test_darwin_pf_baseline.py'
       - 'deploy/test_desktop_darwin_guardian.py'
+      - 'deploy/test_darwin_pf_journal.py'
       - 'deploy/test_desktop_darwin_guardian_runner.py'
       - 'deploy/test_desktop_socket_uid.py'
       - 'deploy/prepare-desktop-external.py'
@@ -24,7 +30,13 @@ on:
       - '!internal/mobiletor/desktop_socket_windows*.go'
       - '!internal/mobiletor/desktop_socket_native_windows*.go'
       - 'internal/common/**'
+      - 'modes/darwin_kill_switch.py'
+      - 'modes/darwin_pf_baseline.py'
+      - 'modes/kill-switch-platform.py'
+      - 'modes/test_darwin_owned_pf.py'
+      - 'modes/test_darwin_pf_baseline.py'
       - 'deploy/test_desktop_darwin_guardian.py'
+      - 'deploy/test_darwin_pf_journal.py'
       - 'deploy/test_desktop_darwin_guardian_runner.py'
       - 'deploy/test_desktop_socket_uid.py'
       - 'deploy/prepare-desktop-external.py'
@@ -57,6 +69,8 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - name: Prove actual shipping baseline journal and reference recovery contracts
+        run: python3 deploy/test_darwin_pf_journal.py
       - name: Prove actual single-filter commit and rollback retire their native namespace
         # This diagnostic does not alter the production PF loader or replace
         # the full guardian/mutation gate below. Native anchor absence is

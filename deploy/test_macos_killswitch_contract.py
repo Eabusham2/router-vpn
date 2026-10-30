@@ -46,8 +46,20 @@ assert "_linux.remove_state(root" in dispatch
 assert "_linux.state_path(root).unlink" not in dispatch
 assert "persisted PF reference token was unreadable" in dispatch
 assert "_darwin._clear_anchor(check=True)" in dispatch
-assert "_darwin._clear_anchor(check=True, anchor=_darwin.OWNED_PF_ANCHOR)" in dispatch
+assert "_darwin._clear_anchor(check=True, anchor=_darwin.OWNED_PF_ANCHOR)" not in dispatch
+assert "unreadable state cannot authorize another retained native PF owner" in dispatch
 assert "_darwin.run_pf(['-a', anchor, '-s', 'rules']).stdout.strip()" in dispatch
+assert "or _darwin.owned_namespace_present(anchor)" in dispatch
+assert "with _darwin._baseline.state_guard(_linux.root_dir())" in dispatch
+assert "_darwin._baseline.sync_state(root, value)" in dispatch
+assert "_baseline.transition(previous_state, action='replace'" in darwin
+assert "_baseline.transition(state, action='clear'" in darwin
+assert "_release_native_reference" in darwin
+baseline = text("modes/darwin_pf_baseline.py")
+assert "CONTROLLER = ROOT / 'router-vpn-client'" in baseline
+assert "'--darwin-owned-pf', phase" in baseline
+assert "retain({STATE_KEY: receipt})" in baseline
+assert "os.fsync(descriptor)" in baseline and "os.fsync(parent)" in baseline
 assert "explicit macOS force-off could not prove the owned dispatch absent" in dispatch
 assert "global PF enablement was left untouched" in dispatch
 

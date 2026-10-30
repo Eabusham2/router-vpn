@@ -45,7 +45,7 @@ def reported_run(command, **kwargs):
 def source_identity():
     files = [ROOT / 'go.mod', ROOT / 'go.sum', ROOT / 'client/install-macos-native.sh', *(ROOT / 'cmd/client').glob('*'),
              *(ROOT / 'internal').rglob('*.go'), *MAC.glob('*.swift'),
-             *(ROOT / 'modes' / name for name in ['kill-switch-platform.py', 'kill-switch.py', 'darwin_kill_switch.py', 'profile_id.py'])]
+             *(ROOT / 'modes' / name for name in ['kill-switch-platform.py', 'kill-switch.py', 'darwin_kill_switch.py', 'darwin_pf_baseline.py', 'profile_id.py'])]
     return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in sorted(set(files)) if path.is_file() and not path.is_symlink()}
 

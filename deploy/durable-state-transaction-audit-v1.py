@@ -376,20 +376,25 @@ forbid(
     "Move-Item -LiteralPath $tmp -Destination $Ctx.Path -Force",
 )
 
-# macOS PF uses the same hardened private state store. Poisoned-state force-off
-# may clear only Router VPN's fixed anchors, with checked absence before state
-# removal; without the persisted token it cannot guess at global PF ownership.
+# macOS native PF keeps an exact pre-commit journal in the private state store.
+# Poisoned state cannot adopt a native owner. Legacy explicit recovery still
+# requires real namespace absence; it cannot guess a global PF reference.
 require(
     "modes/kill-switch-platform.py",
     "_linux.remove_state(root",
     "_darwin._clear_anchor(check=True)",
-    "_darwin._clear_anchor(check=True, anchor=_darwin.OWNED_PF_ANCHOR)",
+    "unreadable state cannot authorize another retained native PF owner",
+    "or _darwin.owned_namespace_present(anchor)",
+    "with _darwin._baseline.state_guard(_linux.root_dir())",
+    "_darwin._baseline.sync_state(root, value)",
     "_darwin.run_pf(['-a', anchor, '-s', 'rules']).stdout.strip()",
     "explicit macOS force-off could not prove the owned dispatch absent",
     "persisted PF reference token was unreadable",
     "global PF enablement was left untouched",
 )
 forbid("modes/kill-switch-platform.py", "_linux.state_path(root).unlink")
+forbid("modes/kill-switch-platform.py", "_darwin._clear_anchor(check=True, anchor=_darwin.OWNED_PF_ANCHOR)")
+require("modes/darwin_pf_baseline.py", "retain({STATE_KEY: receipt})", "os.fsync(descriptor)", "os.fsync(parent)")
 require(
     "deploy/test_macos_killswitch_contract.py",
     "_linux.remove_state(root",
@@ -737,7 +742,7 @@ for test in (
     "server/scripts/test_verified_regular_read.py",
     "modes/test_runtime_pids.py",
     "modes/test_stop_mode_pid_ownership.py",
-    "modes/test_darwin_owned_pf.py",
+    "deploy/test_darwin_pf_journal.py",
     "modes/test_runtime_config.py",
     "modes/test_prepare_runtime_profile.py",
 ):

@@ -51,6 +51,47 @@ func TestMacOSOwnedControllerNativePFBaselineUtility(t *testing.T) {
 	if inspectErr != nil || err != nil || !bytes.Equal(output, expectedReference) {
 		t.Fatal("actual installed PF utility lost its exact read-only reference proof", inspectErr, err)
 	}
+	// Exercise the real root-only Python state lock and both durable syncs in
+	// this disposable protected installation. This creates no PF baseline.
+	python, _, err := macOSPythonTrustRoot(os.Getenv("ROUTERVPN_MACOS_FIXTURE_PYTHON"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	journalCode := `import importlib.util,json,os
+from pathlib import Path
+root=Path('/opt/router-vpn-client')
+spec=importlib.util.spec_from_file_location('actual_owned_pf_journal',root/'modes/darwin_pf_baseline.py')
+baseline=importlib.util.module_from_spec(spec);spec.loader.exec_module(baseline)
+run=root/'run';run.mkdir(mode=0o700,exist_ok=True)
+path=run/'kill-switch.json'
+value={'policy':'always','darwin_native_baseline':{'fixture':'no kernel mutation'}}
+with baseline.state_guard(root):
+    fd=os.open(path,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600)
+    identity=os.fstat(fd)
+    try:
+        with os.fdopen(fd,'wb') as stream:
+            stream.write((json.dumps(value,indent=2)+'\n').encode());stream.flush();os.fsync(stream.fileno())
+        baseline.sync_state(root,value)
+        try:
+            with baseline.state_guard(root):
+                raise AssertionError('native private journal admitted a second mutation owner')
+        except BlockingIOError:
+            pass
+    finally:
+        if not os.path.samestat(identity,path.lstat()):
+            raise AssertionError('native private journal cleanup lost its exact file')
+        path.unlink()
+print('actual root PF journal file/parent sync and exclusive state lock passed')
+`
+	journalContext, stopJournal := context.WithTimeout(context.Background(), 10*time.Second)
+	journal := exec.CommandContext(journalContext, python, "-EsS", "-c", journalCode)
+	journal.Env = macOSOwnedEnvironment()
+	journal.Dir = "/"
+	output, err = journal.CombinedOutput()
+	stopJournal()
+	if err != nil || !bytes.Contains(output, []byte("actual root PF journal file/parent sync and exclusive state lock passed")) {
+		t.Fatal("actual installed Python PF journal did not prove its private commit", string(output), err)
+	}
 	for _, test := range []struct {
 		name string
 		args []string
