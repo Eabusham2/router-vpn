@@ -7,71 +7,107 @@ completion of the current commit's packages, physical devices or deployment.
 
 ## Latest implementation continuation
 
-The current continuation started from live `main` at `775a7bbd`, after
-reconciling the accessible original Router sources with the existing requirement
-ledger. The [October 30 evidence ledger](CONTINUATION-EVIDENCE-2026-10-30.md)
-records coherent changes pushed through `e9aa4411` and the subsequent
-`90c426ed` image-capture repair. Historical `745b3e41`, `5967e9c3` and the
-formerly unpushed MAX checkpoint `0dce0cf` are already ancestors; no recovery
-package was replayed. The original 356 requirements, C1–C7, later 32-item
-request, map-first redesign, external-node additions and later corrections
-remain the scope. The three personal-context queries were unavailable; five
-accessible original-source files were read. This is not a claim to have read
-every private conversation.
+The [October 30 evidence ledger](CONTINUATION-EVIDENCE-2026-10-30.md) now records
+source publication through `e8d99d692859c9f2c5cf571e0853d5db12351a0c`. These
+changes were committed directly to `main` with normal ancestry and verified
+against the remote. The current branch may advance after that cutoff. The
+original 356 requirements, C1–C7, later 32-item request, map-first redesign,
+external-node additions and later corrections remain binding. Five accessible
+original-source files were recovered; three personal-context queries were
+unavailable. Historical `745b3e41`, `5967e9c3` and `0dce0cf` were already upstream
+and were not replayed.
 
-Actual Windows execution now passes imported TCP/UDP IPv4/IPv6 ownership and
-renewal, its identity defects and the WFP lifecycle/traffic controls. The
-legitimate system PowerShell servicing hardlink is accepted through a separate
-captured system-image policy; ordinary user-code hardlinks remain rejected.
-The retained original-user GUI, C# pipe client, actual PowerShell adapter and
-owned controller child/catalog pass their recorded native gates. These are
-bounded results at the SHAs in the evidence ledger, not an all-platform release.
+### Windows application and protection
 
-The Windows App/Tray session composition is published: a captured controller
-uses a private bootstrap pipe, pinned loopback TLS, an original-user GUI Job
-and checked shutdown. The first full Session run stopped in its package ACL
-fixture because a Windows PowerShell 5.1 child inherited PowerShell 7 module
-paths; `e9aa4411` fixes that fixture and schedules the same gate independently.
-Its next native run reached controller startup but timed out. `90c426ed` fixes
-the resulting self-capture mismatch by deriving the running image from the
-kernel process instead of a different executable-path spelling. Both
-architectures compile; the actual native rerun passes launch/private hello in
-0.28 seconds, then the controller exits before pinned-TLS identity proof.
-That new startup failure remains under diagnosis.
-Neither App/Tray acceptance nor installed/Portable launcher adoption is proved.
-Stable-GUID UAC launch still fails; diagnostic changes preserve the mandatory
-test and do not introduce an unverified DOS-path fallback.
+The owned Session has executed the shipping controller, App and Tray in actual
+installed and fresh Portable layouts on Windows AMD64. At `846be027`, job
+`123949223828` passed all six then-current composition cases, both compiled
+Session defects, nine Portable preparation groups and six updater preparation
+groups, with their unsafe-state and mutation checks. Saved-state checks also
+passed in PowerShell 5.1 and 7. The application entry function and outer Portable
+ownership are implemented and have expanded native cases, but public
+`cmd/windows-app-launcher` and `cmd/portable-launcher` still use their older
+entry paths. Public adoption is unfinished.
 
-Onboarding, selected mode and custom presets now use the authenticated
-session's data directory. Migration preserves the three known legacy files,
-keeps existing destination preferences and rejects links/unsafe ancestry.
-The helper is required by the Windows package gate. Local actual-file and
-negative tests pass; the new state migration still needs its actual packaged
-Windows acceptance. A fresh Portable ZIP also needs captured initialization
-of its Data directory before the new Session can replace the legacy launcher.
+Later actual runs expose an intermittent first-launch pipe-accept deadline
+failure. At `85ead5d1`, job `124094259530` failed the first installed case after
+48.50 seconds; the later instrumented rerun passed in 14.02 seconds. That warm
+observation does not close the first-launch defect or establish the new entry
+cases. The first-launch diagnostic at `8d5080ec`, job `124109970768`, then
+failed in 48.95 seconds with both scripts entered but neither module import
+started. That isolates the intervening Get-Command discovery. `be3aa102`
+checks the loaded Function namespace directly before explicit package import.
+Actual local PowerShell checks reject an unexpected installed-module import
+and preserve an already retired channel; both old discovery expressions
+execute that deliberate defect. A named -ListImported attempt also imported
+it and was discarded before publication. The corrected Windows first-launch
+and exact-source Session results remain required. No authentication deadline
+or original Session job was changed.
 
-Actual macOS ARM execution at `c56a10cf` passes every baseline PF/kernel case,
-including four traffic families, capacity retirement, real utun, wrong UID,
-owner death and blocked-I/O cleanup. A stale mutation selector then stopped
-the negative gate; `5fd7c7d` repairs the selector, with its native rerun still
-required. Intel passes four-family traffic and normal UID retirement but
-fails a capacity heartbeat; `b0d5c4af` starts its read deadline only after
-serialized admission. `a81d707d` joins owned fixture echo connections. Their
-corrected native gate remains required. Actual ARM AppKit/controller tests
-pass at `a8b7945d`; the later installer fixture alias repair still needs native
-confirmation. Linux heartbeat admission has the corresponding bounded repair
-in `9c982f1d`.
+`dd644eb5` through `0b068e7c` add exact Windows protection succession and
+retirement, private native Node admission records, retained processes/Jobs,
+fresh selected-resolver proof, interface MTU restoration, cancellation during
+admission, and host Connect/Stop/Speed Lab/SMART restoration ownership. These
+include actual encrypted local WireGuard and AWG Fast/Strong tests, shared race
+checks and executed production defects. The admitted new Windows Node factory
+is bounded to WG/AWG with Start Layer Off; broader requested graphs/layers
+remain in scope. It is not publicly activated merely because those local
+components pass.
 
-Ordinary external Windows per-socket WFP integration, negotiated SOCKS UDP,
-native launcher adoption, final native reruns and the exact-SHA automated
-release remain unfinished. So do the applicable physical/off-LAN checks,
-signing/distribution and deliberate private deployment. Full-audit-v4 and the
-12 Windows package-gate checks pass locally. The isolated broad Go run at
-`e9aa4411` initially passed every package except `internal/common`, whose Java
-fixture could not find `javac`. With JDK 17.0.20 supplied, that exact package
-passed in 14.729 seconds. Every Go package therefore passed across the full
-run and affected-package retry; the initial run was not all green. No current
-all-green native release is claimed.
+The actual retained Node process gate now passes on Windows AMD64 at `5d1c5a4e`,
+job `124106287671`: two native cases, six shared ownership cases, 14 command
+rejections and three compiled production defects. Combined real-WFP/encrypted
+peer/native-TUN composition remains a different gate. `b5080efb` fixes its
+transfer-record source inventory, and `3ab522ca` fixes a later Amnezia pass that
+rewrote copied policy line endings; those pre-execution failures are not
+kernel failures or successful kernel evidence. The exact-shipping-source
+rejection remains mandatory.
+
+Ordinary-user elevation is unfinished. Elevated global-mapping capture and
+replacement rejection pass, while the hosted runner provides no linked limited
+token. The constructed Medium process cannot be treated as a substitute for
+interactive or cross-account consent. At `5d1c5a4e`, its new process/thread
+security fixture stops at strict mandatory-label readback before Resume; no
+primary-Medium capture pass follows. Actual impersonation still confirms that
+Medium cannot open the higher-integrity suspended thread. A normal protected
+Shell bootstrap primitive is published in `633a492c`, with six new required
+native cases and five compiled defects. Both architecture cross-compiles pass;
+actual execution and high-side application integration remain required.
+`a34d07ae` adds failure-only label field readback with every rejection preserved;
+`e8d99d69` includes the imported bootstrap protocol in both native CI triggers.
+Explicit authenticated Off, durable crash recovery, public adoption and all
+applicable mode/layer coverage remain open at this source cutoff.
+
+### macOS native firewall lifecycle
+
+The retained-anchor defect is real: empty `pfctl` rule text does not prove that
+the owned namespace has left the kernel. The single-FILTER native transaction
+probe at `7c3784e9`, Intel job `124096237888`, passed commit/rollback namespace
+retirement and negative controls on Darwin 24.6.0 build 24G830. Its ARM job
+compiled the private-header adapter but rejected the observed newer build
+24H232 before opening `/dev/pf`. `b3185094` adds only that exact ARM qualification
+target plus a kernel-version receipt; it is not an assertion of compatibility.
+The b318 ARM rerun was cancelled. New exact native execution is still required.
+
+`9acdbd59` adds the typed single-FILTER loader and a mandatory independent kernel
+projection gate for UID, addresses/masks, ports, tags, dispatch and retirement.
+Nine pure race groups, 22 preparation tests and executable projection/copy
+defects pass. Darwin cross-compilation used the explicit no-cgo stub and does
+not establish C compilation or kernel behavior. Production `PFLoad` and the
+Python baseline setup still use the old loader at this cutoff. Their complete
+owned-state handoff and full Intel/ARM lifecycle verification remain work. The
+Intel capacity test also retains a separately observed descriptor/heartbeat
+timeout; no timeout has been widened to manufacture a pass.
+
+### Delivery boundaries
+
+There is no all-green native release for this continuation cutoff. Exact-current
+source, native packages, server images, production compose, manifests, checksums
+and publication must converge on one commit. Physical/off-LAN networking,
+leaks and transitions, visual/accessibility checks, signing/distribution and
+deliberate private deployment remain separate requirements. No ASUS, AdGuard,
+AI Board, Portainer, signing identity or private deployment was changed by this
+source continuation. Earlier passing releases do not close these newer gaps.
 
 ## Earlier continuation (October 29; retained history)
 
