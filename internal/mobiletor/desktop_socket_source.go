@@ -64,6 +64,33 @@ type DesktopSocketSourceRelease interface {
 	ReleaseSocket(context.Context, DesktopSocketCreation) error
 }
 
+type desktopSocketAdmittedSource interface {
+	createSocketAdmitted(context.Context, DesktopSocketCreation) (DesktopSocketCreated, error)
+}
+
+type desktopSocketAdmittedSourceRelease interface {
+	releaseSocketAdmitted(context.Context, DesktopSocketCreation) error
+}
+
+func desktopSocketCreateControlled(ctx context.Context, source DesktopSocketSource, request DesktopSocketCreation) (DesktopSocketCreated, error) {
+	if admitted, ok := source.(desktopSocketAdmittedSource); ok {
+		return admitted.createSocketAdmitted(ctx, request)
+	}
+	bounded, cancel := context.WithTimeout(ctx, desktopSocketControlWait)
+	defer cancel()
+	reply, err := source.CreateSocket(bounded, request)
+	return reply, errors.Join(err, bounded.Err())
+}
+
+func desktopSocketReleaseControlled(ctx context.Context, source DesktopSocketSourceRelease, request DesktopSocketCreation) error {
+	if admitted, ok := source.(desktopSocketAdmittedSourceRelease); ok {
+		return admitted.releaseSocketAdmitted(ctx, request)
+	}
+	bounded, cancel := context.WithTimeout(ctx, desktopSocketControlWait)
+	defer cancel()
+	return errors.Join(source.ReleaseSocket(bounded, request), bounded.Err())
+}
+
 // DesktopSocketTunnelPolicy is the OS firewall adapter whose tunnel permit
 // depends on a real interface identity. The native Box supplies its own TUN
 // readback and retires that permit before a serialized device replacement.
@@ -87,18 +114,15 @@ func (s *desktopSocket) create(ctx context.Context) error {
 		return nil
 	}
 	request := DesktopSocketCreation{Capture: s.broker.capture, Binding: s.binding, SocketID: s.id, Network: s.network}
-	bounded, cancel := context.WithTimeout(ctx, desktopSocketControlWait)
-	reply, err := s.broker.source.CreateSocket(bounded, request)
-	deadlineErr := bounded.Err()
-	cancel()
+	reply, err := desktopSocketCreateControlled(ctx, s.broker.source, request)
 	// Publish ownership before checking the result, including cancellation and
 	// malformed metadata. drain waits for this operation before releasing it.
 	s.mu.Lock()
 	s.sourceFile = reply.File
 	s.sourceNative = reply.Native
 	s.mu.Unlock()
-	if err != nil || deadlineErr != nil || ctx.Err() != nil || !s.live() || (reply.File == nil) == (reply.Native == nil) || reply.Creation != request {
-		return errors.Join(err, deadlineErr, ctx.Err(), errors.New("desktop physical socket creation lost its exact captured owner"))
+	if err != nil || ctx.Err() != nil || !s.live() || (reply.File == nil) == (reply.Native == nil) || reply.Creation != request {
+		return errors.Join(err, ctx.Err(), errors.New("desktop physical socket creation lost its exact captured owner"))
 	}
 	return nil
 }

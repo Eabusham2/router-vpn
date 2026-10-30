@@ -1269,6 +1269,139 @@ func TestDesktopDarwinGuardianKernelHeartbeatAdmission(t *testing.T) {
 	}
 }
 
+func TestDesktopDarwinGuardianKernelForegroundAdmission(t *testing.T) {
+	type callerKey struct{}
+	for _, mode := range []string{"admitted", "cancelled", "deadline", "stale"} {
+		t.Run(mode, func(t *testing.T) {
+			policy := desktopDarwinKernelPolicy(t, nil)
+			binding, err := policy.options.binding(policy.owner, netip.AddrPortFrom(policy.options.Interfaces[0].Address, 1))
+			if err != nil {
+				t.Fatal(err)
+			}
+			creation := DesktopSocketCreation{Capture: policy.capture, Binding: binding, SocketID: strings.Repeat("6", 32), Network: "udp"}
+			ctx, cancel := context.WithCancel(context.Background())
+			if mode == "deadline" {
+				cancel()
+				ctx, cancel = context.WithTimeout(context.Background(), 40*time.Millisecond)
+			}
+			defer cancel()
+			caller := new(int)
+			ctx = context.WithValue(ctx, callerKey{}, caller)
+			policy.mu.Lock()
+			locked := true
+			defer func() {
+				if locked {
+					policy.mu.Unlock()
+				}
+			}()
+			beforeSequence, beforeObserved := policy.sequence, policy.observed.Load()
+			var reply DesktopSocketCreated
+			var failure error
+			done := make(chan struct{})
+			go func() {
+				reply, failure = desktopSocketCreateControlled(ctx, policy, creation)
+				close(done)
+			}()
+			t.Cleanup(func() {
+				cancel()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Error("native foreground request did not join its captured cancellation")
+					return
+				}
+				if reply.File != nil {
+					if err := reply.File.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+						t.Error("native foreground fixture retained its transferred descriptor", err)
+						return
+					}
+					cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+					defer stop()
+					if err := desktopSocketReleaseControlled(cleanup, policy, creation); err != nil {
+						t.Error("native foreground fixture retained its guardian descriptor", err)
+					}
+				}
+			})
+			if mode != "deadline" {
+				// Observe this original caller in the actual FIFO, independently
+				// of a monitor that may already be queued on the same channel.
+				until := time.Now().Add(time.Second)
+				for {
+					policy.mu.mu.Lock()
+					queued := false
+					for _, waiter := range policy.mu.waiters {
+						queued = queued || waiter.caller.Value(callerKey{}) == caller
+					}
+					policy.mu.mu.Unlock()
+					if queued {
+						break
+					}
+					if time.Now().After(until) {
+						t.Fatal("native foreground request did not queue its captured caller")
+					}
+					time.Sleep(time.Millisecond)
+				}
+			}
+			switch mode {
+			case "admitted":
+				// Exceed the unchanged I/O budget while queued, without extending
+				// the independently enforced five-second captured proof lifetime.
+				hold := time.NewTimer(desktopSocketControlWait + 250*time.Millisecond)
+				defer hold.Stop()
+				select {
+				case <-done:
+					t.Fatal("queued foreground creation lost its admitted control budget", failure)
+				case <-hold.C:
+				}
+			case "cancelled", "deadline":
+				want := error(context.DeadlineExceeded)
+				if mode == "cancelled" {
+					cancel()
+					want = context.Canceled
+				}
+				select {
+				case <-done:
+				case <-time.After(time.Second):
+					t.Fatal("queued foreground cancellation waited for a different owner")
+				}
+				if !errors.Is(failure, want) || reply.File != nil || policy.sequence != beforeSequence {
+					t.Fatal("queued foreground caller lost its cancellation/deadline or sent a frame", failure, reply.Creation)
+				}
+			case "stale":
+				beforeObserved = time.Now().Add(-DesktopSocketReadbackAge - time.Second).UnixMilli()
+				policy.observed.Store(beforeObserved)
+			}
+			if policy.sequence != beforeSequence || policy.observed.Load() != beforeObserved {
+				t.Fatal("queued foreground request fabricated a frame or refreshed proof")
+			}
+			policy.mu.Unlock()
+			locked = false
+			select {
+			case <-done:
+			case <-time.After(desktopSocketControlWait + time.Second):
+				t.Fatal("admitted foreground request did not join its unchanged control budget")
+			}
+			if mode == "admitted" {
+				if failure != nil || reply.File == nil || reply.Native != nil || reply.Creation != creation {
+					t.Fatal("queued foreground creation lost its admitted control budget", failure)
+				}
+				actual, err := desktopDarwinSocketIdentity(reply.File)
+				if err != nil || actual.uid != policy.uid || actual.network != "udp" {
+					t.Fatal("admitted foreground creation lost its actual kernel descriptor owner", err)
+				}
+			}
+			if mode == "stale" {
+				policy.mu.Lock()
+				unchanged := policy.sequence == beforeSequence && policy.observed.Load() == beforeObserved
+				policy.mu.Unlock()
+				if failure == nil || reply.File != nil || !unchanged || policy.Current(policy.capture, policy.owner) {
+					t.Fatal("stale queued foreground request acquired a descriptor or fresh proof", failure)
+				}
+			}
+		})
+	}
+}
+
 func TestDesktopDarwinGuardianKernelSocketRetirementReusesCapacity(t *testing.T) {
 	remote := desktopDarwinKernelPeer(t, "udp4")
 	policy := desktopDarwinKernelPolicy(t, []DesktopDarwinSocketDestination{{Network: "udp", Address: remote}})

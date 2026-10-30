@@ -17,6 +17,144 @@ import (
 	"time"
 )
 
+func desktopSocketAwaitControlQueue(t *testing.T, control *desktopSocketControlMutex, count int) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for {
+		control.mu.Lock()
+		actual := len(control.waiters)
+		control.mu.Unlock()
+		if actual == count {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("captured control queue did not reach %d waiters (got %d)", count, actual)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestDesktopSocketControlAdmissionFIFOAndCancellation(t *testing.T) {
+	var control desktopSocketControlMutex
+	control.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			control.Unlock()
+		}
+	}()
+	admitted := make(chan int, 3)
+	done := make([]chan error, 3)
+	release := make([]chan struct{}, 3)
+	cancel := make([]context.CancelFunc, 3)
+	for index := range done {
+		ctx, stop := context.WithCancel(context.Background())
+		cancel[index] = stop
+		defer stop()
+		done[index], release[index] = make(chan error, 1), make(chan struct{})
+		go func(index int) {
+			if err := control.lockContext(ctx); err != nil {
+				done[index] <- err
+				return
+			}
+			admitted <- index
+			select {
+			case <-release[index]:
+			case <-ctx.Done():
+			}
+			control.Unlock()
+			done[index] <- nil
+		}(index)
+		desktopSocketAwaitControlQueue(t, &control, index+1)
+	}
+	cancel[1]()
+	if err := desktopSocketAwait(t, done[1]); !errors.Is(err, context.Canceled) {
+		t.Fatal("queued caller cancellation lost its original cause", err)
+	}
+	desktopSocketAwaitControlQueue(t, &control, 2)
+	select {
+	case index := <-admitted:
+		t.Fatal("a queued operation bypassed the still-held native owner", index)
+	default:
+	}
+	control.Unlock()
+	locked = false
+	for _, expected := range []int{0, 2} {
+		if actual := desktopSocketAwait(t, admitted); actual != expected {
+			t.Fatal("cancelled control admission changed the surviving FIFO owners", actual, expected)
+		}
+		select {
+		case index := <-admitted:
+			t.Fatal("two native operations acquired one control stream", expected, index)
+		default:
+		}
+		close(release[expected])
+		if err := desktopSocketAwait(t, done[expected]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	control.mu.Lock()
+	defer control.mu.Unlock()
+	if control.held || len(control.waiters) != 0 {
+		t.Fatal("completed native admissions retained a phantom owner or waiter")
+	}
+}
+
+func TestDesktopSocketControlAdmissionCallerDeadline(t *testing.T) {
+	var control desktopSocketControlMutex
+	control.Lock()
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- control.lockContext(ctx) }()
+	if err := desktopSocketAwait(t, done); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("queued native call lost its caller's earlier deadline", err)
+	}
+	control.mu.Lock()
+	stillHeld, waiting := control.held, len(control.waiters)
+	control.mu.Unlock()
+	if !stillHeld || waiting != 0 {
+		t.Fatal("expired native caller released another owner or retained its queue slot", stillHeld, waiting)
+	}
+	control.Unlock()
+	if err := control.lockContext(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	control.Unlock()
+}
+
+func TestDesktopSocketControlAdmissionCancellationHandoff(t *testing.T) {
+	for iteration := 0; iteration < 200; iteration++ {
+		var control desktopSocketControlMutex
+		control.Lock()
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() {
+			err := control.lockContext(ctx)
+			if err == nil {
+				control.Unlock()
+			}
+			done <- err
+		}()
+		desktopSocketAwaitControlQueue(t, &control, 1)
+		ready, cancelled := make(chan struct{}), make(chan struct{})
+		go func() { <-ready; cancel(); close(cancelled) }()
+		close(ready)
+		control.Unlock()
+		if err := desktopSocketAwait(t, done); err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatal("native control cancellation handoff changed its owner", err)
+		}
+		<-cancelled
+		followup, stop := context.WithTimeout(context.Background(), time.Second)
+		if err := control.lockContext(followup); err != nil {
+			stop()
+			t.Fatal("cancelled native handoff stranded the next captured owner", iteration, err)
+		}
+		control.Unlock()
+		stop()
+	}
+}
+
 // The OS permission boundary is deliberately doubled. Every TCP/UDP socket,
 // retained source port, kernel close and byte exchange below is real loopback;
 // this suite does not claim a host firewall or isolated identity was installed.

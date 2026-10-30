@@ -88,6 +88,118 @@ type DesktopSocketPolicy interface {
 	Revoke(context.Context, DesktopSocketGrant) error
 }
 
+// Only an in-package native adapter can move the internal control budget past
+// its own serialized admission. The original caller still controls cancellation
+// and any earlier deadline; waiting never creates or refreshes a receipt.
+type desktopSocketAdmittedPolicy interface {
+	grantSocketAdmitted(context.Context, DesktopSocketGrant) (DesktopSocketReceipt, error)
+	revokeSocketAdmitted(context.Context, DesktopSocketGrant) error
+}
+
+// desktopSocketControlMutex preserves FIFO admission without leaving a cancelled
+// waiter behind its current owner. Lock is used by memory-only native snapshots;
+// request paths use lockContext so they cannot send after their caller retires.
+type desktopSocketControlMutex struct {
+	mu      sync.Mutex
+	held    bool
+	waiters []*desktopSocketControlWaiter
+}
+
+type desktopSocketControlWaiter struct {
+	ready  chan struct{}
+	queued bool
+	caller context.Context
+}
+
+func (m *desktopSocketControlMutex) Lock() { _ = m.lockContext(context.Background()) }
+
+func (m *desktopSocketControlMutex) lockContext(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("native control admission requires its caller")
+	}
+	m.mu.Lock()
+	if err := ctx.Err(); err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	if !m.held {
+		m.held = true
+		m.mu.Unlock()
+		return nil
+	}
+	waiter := &desktopSocketControlWaiter{ready: make(chan struct{}), queued: true, caller: ctx}
+	m.waiters = append(m.waiters, waiter)
+	m.mu.Unlock()
+	select {
+	case <-waiter.ready:
+		if err := ctx.Err(); err != nil {
+			m.Unlock()
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		m.mu.Lock()
+		if waiter.queued {
+			for index, candidate := range m.waiters {
+				if candidate == waiter {
+					copy(m.waiters[index:], m.waiters[index+1:])
+					m.waiters[len(m.waiters)-1] = nil
+					m.waiters = m.waiters[:len(m.waiters)-1]
+					break
+				}
+			}
+			waiter.queued = false
+		} else {
+			// Handoff won the race with cancellation. Relinquish precisely the
+			// admission it granted, rather than leaking or unlocking a successor.
+			m.unlockLocked()
+		}
+		m.mu.Unlock()
+		return ctx.Err()
+	}
+}
+
+func (m *desktopSocketControlMutex) unlockLocked() {
+	if !m.held {
+		panic("unlock of unowned native control admission")
+	}
+	if len(m.waiters) == 0 {
+		m.held = false
+		return
+	}
+	next := m.waiters[0]
+	copy(m.waiters, m.waiters[1:])
+	m.waiters[len(m.waiters)-1] = nil
+	m.waiters = m.waiters[:len(m.waiters)-1]
+	next.queued = false
+	close(next.ready)
+}
+
+func (m *desktopSocketControlMutex) Unlock() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.unlockLocked()
+}
+
+func desktopSocketGrantControlled(ctx context.Context, policy DesktopSocketPolicy, request DesktopSocketGrant) (DesktopSocketReceipt, error) {
+	if admitted, ok := policy.(desktopSocketAdmittedPolicy); ok {
+		return admitted.grantSocketAdmitted(ctx, request)
+	}
+	bounded, cancel := context.WithTimeout(ctx, desktopSocketControlWait)
+	defer cancel()
+	receipt, err := policy.Grant(bounded, request)
+	return receipt, errors.Join(err, bounded.Err())
+}
+
+func desktopSocketRevokeControlled(ctx context.Context, policy DesktopSocketPolicy, request DesktopSocketGrant) error {
+	if admitted, ok := policy.(desktopSocketAdmittedPolicy); ok {
+		return admitted.revokeSocketAdmitted(ctx, request)
+	}
+	bounded, cancel := context.WithTimeout(ctx, desktopSocketControlWait)
+	defer cancel()
+	return errors.Join(policy.Revoke(bounded, request), bounded.Err())
+}
+
 // DesktopSocketBroker is the socket lifetime used by the native desktop Tor
 // lower dialer. Its capability is supplied by a real privileged policy adapter;
 // constructing a generic source/tuple record does not enable strict protection.
@@ -478,16 +590,13 @@ func (s *desktopSocket) apply(ctx context.Context, peer *desktopSocketPeer) erro
 	request := peer.request
 	peer.applying = true
 	peer.mu.Unlock()
-	bounded, cancel := context.WithTimeout(ctx, desktopSocketControlWait)
-	receipt, err := s.broker.policy.Grant(bounded, request)
-	deadlineErr := bounded.Err()
-	cancel()
-	if err != nil || deadlineErr != nil || ctx.Err() != nil || !s.live() || !validDesktopSocketReceipt(receipt, request, time.Now()) {
+	receipt, err := desktopSocketGrantControlled(ctx, s.broker.policy, request)
+	if err != nil || ctx.Err() != nil || !s.live() || !validDesktopSocketReceipt(receipt, request, time.Now()) {
 		peer.mu.Lock()
 		peer.valid, peer.applying = false, false
 		peer.mu.Unlock()
 		s.stop()
-		return errors.Join(err, deadlineErr, errors.New("desktop physical permit has no current complete readback"))
+		return errors.Join(err, errors.New("desktop physical permit has no current complete readback"))
 	}
 	peer.mu.Lock()
 	peer.receipt, peer.valid = receipt, true
@@ -651,9 +760,7 @@ func (s *desktopSocket) drain() {
 	for _, peer := range peers {
 		peer.op.Lock()
 		for peer.request.Sequence != 0 {
-			ctx, cancel := context.WithTimeout(context.Background(), desktopSocketControlWait)
-			err := s.broker.policy.Revoke(ctx, peer.request)
-			cancel()
+			err := desktopSocketRevokeControlled(context.Background(), s.broker.policy, peer.request)
 			if err == nil {
 				peer.mu.Lock()
 				peer.valid = false
@@ -715,9 +822,7 @@ func (s *desktopSocket) drain() {
 	if source, ok := s.broker.source.(DesktopSocketSourceRelease); ok && (s.sourceFile != nil || s.sourceNative != nil) {
 		request := DesktopSocketCreation{Capture: s.broker.capture, Binding: s.binding, SocketID: s.id, Network: s.network}
 		for {
-			ctx, cancel := context.WithTimeout(context.Background(), desktopSocketControlWait)
-			err := source.ReleaseSocket(ctx, request)
-			cancel()
+			err := desktopSocketReleaseControlled(context.Background(), source, request)
 			if err == nil {
 				break
 			}

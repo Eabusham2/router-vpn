@@ -31,7 +31,7 @@ SPEC = importlib.util.spec_from_file_location('darwin_guardian_uid', ROOT/'deplo
 UID = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UID)
 
-CASES = ('PFCompiler', 'PFSystemDispatch', 'PFAnchorPaths', 'ProtectedPathAuthority', 'IdentityRetirement', 'UIDObserver', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'HeartbeatAdmission', 'SocketRetirementReusesCapacity',
+CASES = ('PFCompiler', 'PFSystemDispatch', 'PFAnchorPaths', 'ProtectedPathAuthority', 'IdentityRetirement', 'UIDObserver', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'HeartbeatAdmission', 'ForegroundAdmission', 'SocketRetirementReusesCapacity',
          'RetainedTunnel', 'BothOwnersCrashCannotReuseTuple', 'ForeignBlockAndLaterPass',
          'RejectsForeignStatefulDirections', 'BlockedControlRetainsSourcePort',
          'FinishRequiresDescriptorRetirement', 'FloatingStateRetirement',
@@ -330,6 +330,22 @@ def execute_mutations(source: Path, go='go'):
     compiler, captured = UID.compiler_toolchain(source, go, captured)
     sudo = UID.privilege_tool()
     mutations = (
+        ('foreground control budget after admission', 'ForegroundAdmission', 'queued foreground creation lost its admitted control budget',
+         'desktop_socket_darwin_policy.go', (
+             ('if err := p.mu.lockContext(ctx); err != nil {\n\t\treturn nil, nil, err\n\t}',
+              'bounded, cancel := context.WithTimeout(ctx, desktopSocketControlWait)\n\tif err := p.mu.lockContext(bounded); err != nil { cancel(); return nil, nil, err }'),
+             ('bounded, cancel := context.WithTimeout(ctx, desktopSocketControlWait)\n\treturn bounded, func() { cancel(); p.mu.Unlock() }, nil',
+              'return bounded, func() { cancel(); p.mu.Unlock() }, nil'))),
+        ('queued foreground caller cancellation', 'ForegroundAdmission', 'queued foreground cancellation waited for a different owner',
+         'desktop_socket_broker.go', (
+             ('case <-ctx.Done():\n\t\tm.mu.Lock()',
+              'case <-ctx.Done():\n\t\t<-waiter.ready\n\t\tm.mu.Lock()'),)),
+        ('stale foreground capture', 'ForegroundAdmission', 'stale queued foreground request acquired a descriptor or fresh proof',
+         'desktop_socket_darwin_policy.go', (
+             ('if !p.Current(c.Capture, c.Binding.Owner) {',
+              'if false && !p.Current(c.Capture, c.Binding.Owner) {'),
+             ('requireCurrent && !p.Current(p.capture, p.owner)',
+              'false && requireCurrent && !p.Current(p.capture, p.owner)'))),
         ('admitted heartbeat deadline', 'HeartbeatAdmission', 'queued heartbeat lost its admitted readback budget',
          'desktop_socket_darwin_policy.go', (
              ('p.mu.Lock()\n\tdefer p.mu.Unlock()\n\tif p.closing.Load() {\n\t\treturn false, nil\n\t}\n\tctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)\n\tdefer cancel()',

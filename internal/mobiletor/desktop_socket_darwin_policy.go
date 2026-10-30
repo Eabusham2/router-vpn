@@ -14,7 +14,6 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -143,7 +142,7 @@ type DesktopDarwinSocketPolicy struct {
 	pf          *desktopDarwinPF
 	channel     *net.UnixConn
 	command     *exec.Cmd
-	mu          sync.Mutex
+	mu          desktopSocketControlMutex
 	sequence    uint64
 	current     atomic.Bool
 	observed    atomic.Int64
@@ -244,11 +243,23 @@ func (p *DesktopDarwinSocketPolicy) Select(ctx context.Context, c DesktopSocketC
 }
 
 func (p *DesktopDarwinSocketPolicy) CreateSocket(ctx context.Context, c DesktopSocketCreation) (DesktopSocketCreated, error) {
-	if ctx == nil || ctx.Err() != nil || !p.Current(c.Capture, c.Binding.Owner) {
+	return p.createSocketAdmitted(ctx, c)
+}
+
+func (p *DesktopDarwinSocketPolicy) createSocketAdmitted(ctx context.Context, c DesktopSocketCreation) (DesktopSocketCreated, error) {
+	ctx, release, err := p.admitControl(ctx)
+	if err != nil {
+		return DesktopSocketCreated{}, err
+	}
+	defer release()
+	if err := ctx.Err(); err != nil {
+		return DesktopSocketCreated{}, err
+	}
+	if !p.Current(c.Capture, c.Binding.Owner) {
 		return DesktopSocketCreated{}, net.ErrClosed
 	}
-	reply, file, err := p.call(ctx, desktopDarwinRequest{Operation: "create", Capture: p.capture, Creation: c}, nil, true)
-	return DesktopSocketCreated{Creation: reply.Creation, File: file}, err
+	reply, file, err := p.callLocked(ctx, desktopDarwinRequest{Operation: "create", Capture: p.capture, Creation: c}, nil, true)
+	return DesktopSocketCreated{Creation: reply.Creation, File: file}, errors.Join(err, ctx.Err())
 }
 
 func (p *DesktopDarwinSocketPolicy) Bind(ctx context.Context, c DesktopSocketCapture, b DesktopSocketBinding, network string, raw syscall.RawConn) error {
@@ -289,28 +300,52 @@ func (p *DesktopDarwinSocketPolicy) Bind(ctx context.Context, c DesktopSocketCap
 }
 
 func (p *DesktopDarwinSocketPolicy) Grant(ctx context.Context, g DesktopSocketGrant) (DesktopSocketReceipt, error) {
-	if ctx == nil || ctx.Err() != nil || !p.Current(g.Capture, g.Binding.Owner) || !p.options.permits(g.Network, g.Remote) {
+	return p.grantSocketAdmitted(ctx, g)
+}
+
+func (p *DesktopDarwinSocketPolicy) grantSocketAdmitted(ctx context.Context, g DesktopSocketGrant) (DesktopSocketReceipt, error) {
+	ctx, release, err := p.admitControl(ctx)
+	if err != nil {
+		return DesktopSocketReceipt{}, err
+	}
+	defer release()
+	if err := ctx.Err(); err != nil {
+		return DesktopSocketReceipt{}, err
+	}
+	if !p.Current(g.Capture, g.Binding.Owner) || !p.options.permits(g.Network, g.Remote) {
 		return DesktopSocketReceipt{}, net.ErrClosed
 	}
-	reply, file, err := p.call(ctx, desktopDarwinRequest{Operation: "grant", Capture: p.capture, Grant: g}, nil, true)
+	reply, file, err := p.callLocked(ctx, desktopDarwinRequest{Operation: "grant", Capture: p.capture, Grant: g}, nil, true)
 	if file != nil {
 		file.Close()
 		return DesktopSocketReceipt{}, errors.New("Darwin grant unexpectedly returned a descriptor")
 	}
-	return reply.Receipt, err
+	return reply.Receipt, errors.Join(err, ctx.Err())
 }
 
 func (p *DesktopDarwinSocketPolicy) Revoke(ctx context.Context, g DesktopSocketGrant) error {
-	if ctx == nil || ctx.Err() != nil || g.Capture != p.capture || g.Binding.Owner != p.owner {
+	return p.revokeSocketAdmitted(ctx, g)
+}
+
+func (p *DesktopDarwinSocketPolicy) revokeSocketAdmitted(ctx context.Context, g DesktopSocketGrant) error {
+	ctx, release, err := p.admitControl(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if g.Capture != p.capture || g.Binding.Owner != p.owner {
 		return net.ErrClosed
 	}
-	_, file, err := p.call(ctx, desktopDarwinRequest{Operation: "revoke", Capture: p.capture, Grant: g}, nil, false)
+	_, file, err := p.callLocked(ctx, desktopDarwinRequest{Operation: "revoke", Capture: p.capture, Grant: g}, nil, false)
 	if file != nil {
 		file.Close()
 		return errors.New("Darwin revoke unexpectedly returned a descriptor")
 	}
 	if err == nil {
-		return p.pf.absent(ctx, g)
+		return errors.Join(p.pf.absent(ctx, g), ctx.Err())
 	}
 	// A dead guardian never lets a stale permit release a bound source port.
 	// The native owner can remove the exact stateless permit after actual
@@ -318,7 +353,7 @@ func (p *DesktopDarwinSocketPolicy) Revoke(ctx context.Context, g DesktopSocketG
 	// The dedicated account remains quarantined on this exceptional path.
 	select {
 	case <-p.joined:
-		return p.pf.revoke(ctx, g)
+		return errors.Join(p.pf.revoke(ctx, g), ctx.Err())
 	default:
 		return err
 	}
@@ -397,20 +432,32 @@ func (p *DesktopDarwinSocketPolicy) Close(ctx context.Context) error {
 }
 
 func (p *DesktopDarwinSocketPolicy) ReleaseSocket(ctx context.Context, c DesktopSocketCreation) error {
-	if ctx == nil || ctx.Err() != nil || c.Capture != p.capture || c.Binding.Owner != p.owner {
+	return p.releaseSocketAdmitted(ctx, c)
+}
+
+func (p *DesktopDarwinSocketPolicy) releaseSocketAdmitted(ctx context.Context, c DesktopSocketCreation) error {
+	ctx, release, err := p.admitControl(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if c.Capture != p.capture || c.Binding.Owner != p.owner {
 		return net.ErrClosed
 	}
-	_, file, err := p.call(ctx, desktopDarwinRequest{Operation: "release", Capture: p.capture, Creation: c}, nil, false)
+	_, file, err := p.callLocked(ctx, desktopDarwinRequest{Operation: "release", Capture: p.capture, Creation: c}, nil, false)
 	if file != nil {
 		file.Close()
 		return errors.New("Darwin socket release transferred a descriptor")
 	}
 	if err == nil {
-		return nil
+		return ctx.Err()
 	}
 	select {
 	case <-p.joined:
-		return p.pf.close(ctx)
+		return errors.Join(p.pf.close(ctx), ctx.Err())
 	default:
 		return err
 	}
@@ -467,9 +514,25 @@ func (p *DesktopDarwinSocketPolicy) call(ctx context.Context, request desktopDar
 	if ctx == nil || ctx.Err() != nil {
 		return desktopDarwinReply{}, nil, net.ErrClosed
 	}
-	p.mu.Lock()
+	if err := p.mu.lockContext(ctx); err != nil {
+		return desktopDarwinReply{}, nil, err
+	}
 	defer p.mu.Unlock()
 	return p.callLocked(ctx, request, file, requireCurrent)
+}
+
+func (p *DesktopDarwinSocketPolicy) admitControl(ctx context.Context) (context.Context, func(), error) {
+	if p == nil || ctx == nil {
+		return nil, nil, net.ErrClosed
+	}
+	if err := p.mu.lockContext(ctx); err != nil {
+		return nil, nil, err
+	}
+	// The same three-second budget bounds actual control and final readback.
+	// Admission retains the caller's original deadline/cancellation and cannot
+	// borrow freshness from another operation or send a partially expired frame.
+	bounded, cancel := context.WithTimeout(ctx, desktopSocketControlWait)
+	return bounded, func() { cancel(); p.mu.Unlock() }, nil
 }
 
 // callLocked admits exactly one complete request/receipt while its caller
