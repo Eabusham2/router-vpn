@@ -19,12 +19,22 @@ func TestRouterVPNDesktopNodePhysicalDNSCapturedOwner(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			calls := 0
-			err := owner.proveSelectedDNS(ctx, func(operation context.Context, query *dns.Msg, options adapter.DNSQueryOptions) (*dns.Msg, error) {
+			elapsed, err := owner.measureSelectedDNS(ctx, func(operation context.Context, query *dns.Msg, options adapter.DNSQueryOptions) (*dns.Msg, error) {
 				calls++
 				metadata := adapter.ContextFrom(operation)
 				if metadata == nil || metadata.Inbound != owner.inbound.Tag() || metadata.InboundType != "tun" || metadata.Network != "udp" || metadata.Protocol != "dns" ||
 					!options.DisableCache || !options.DisableOptimisticCache || options.Transport != nil || options.Timeout != 5*time.Second {
 					t.Fatal("Node DNS proof bypassed its actual router, TUN or freshness contract")
+				}
+				// An immediate in-memory reply can finish within one clock tick.
+				// Model a bounded exchange interval so the actual measurement is
+				// positive without relaxing the production clock/ownership checks.
+				exchangeDelay := time.NewTimer(time.Millisecond)
+				defer exchangeDelay.Stop()
+				select {
+				case <-exchangeDelay.C:
+				case <-operation.Done():
+					return nil, operation.Err()
 				}
 				response := new(dns.Msg).SetReply(query)
 				response.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.ParseIP("93.184.216.34")}}
@@ -49,6 +59,9 @@ func TestRouterVPNDesktopNodePhysicalDNSCapturedOwner(t *testing.T) {
 			})
 			if calls != 1 || fault == "exact" && err != nil || fault != "exact" && err == nil {
 				t.Fatal("Node DNS proof adopted a failed or replaced native path", fault, calls, err)
+			}
+			if err == nil && elapsed < time.Millisecond || err != nil && elapsed != 0 {
+				t.Fatal("Node DNS measurement returned an invalid exchange duration", fault, elapsed, err)
 			}
 		})
 	}
