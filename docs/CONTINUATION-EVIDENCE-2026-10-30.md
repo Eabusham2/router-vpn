@@ -715,3 +715,117 @@ error and a timeout while publishing `a34d07ae`. The branch was reread and had
 not moved. A normal non-force fast-forward update then succeeded, and fetched
 remote SHA/tree verification completed before local synchronization. No
 force-push, alternate branch or replay of another change was used.
+
+## Later continuation — source snapshot through 83ba21a7
+
+This section supersedes only the older implementation/status observations that
+it explicitly updates. The recovered original scope and historical evidence
+above remain intact. All commits listed below were published directly to
+`main`, then independently fetched and checked against the intended source
+tree. No force-push, recovery replay, private deployment or router change was
+used. The full verified cutoff is
+`83ba21a7deffcf03b9ad9903b1ce43e34ce665f1`.
+
+### Further published source and fixture changes
+
+| Commit | Concrete change | Verification and remaining boundary |
+|---|---|---|
+| `129fc431` | Captured authenticated explicit Off; exact target/profile revision, native absence, persistence and unsaved retry | Controller/native ownership and negative tests; public factory and durable recovery still required |
+| `a39d79d2` | Typed PF old/new baseline transition, captured child join and independent absence | Eight local race groups, three executed defects, renderer/preparation checks; later actual Intel baseline pass below |
+| `bc32c60e` | Accept documented Medium label NR/NX flags alongside required NW | Four valid masks, seven invalid masks, nineteen descriptor negatives and native rerun; no authority predicate weakened |
+| `5f436f7a` | MTU preparer preserves raw shared-policy/template bytes and only declared imports | Nine dependency tests, actual repeated desktop/mobile preparation, mixed-line-ending/UTF-8 and source-normalization defect |
+| `c50a0e94` | Retain actual high-side controller image and recheck original parent before private configuration read | Both Windows checkptr builds, compiled defects; actual Session reached private controller/UI startup; dedicated new native cases still required |
+| `4f09b981` | Audit follows the complete explicit Off request/native/persistence composition | Thirty-two deliberately broken compositions rejected; older rejection coverage retained |
+| `1102af56` | Fixed installed macOS PF plan/apply utility under retained install/operation ownership; CGO controller packaging | Actual dispatch/parser checks, executed dispatch defect, both Darwin Go/stub builds; installed/native utility still required |
+| `cf5392e8` | Windows admission fixture proves retained-root rename denial and same file identity | Ten actual shared race groups and both Windows checkptr builds; POSIX replacement ownership still tested |
+| `217fbf58`, `d79de2e3` | Isolate flags-zero Medium construction and record bounded failed authority predicates | Both builds; actual flags-zero result is elevated and rejected, while original LUA child still fails pre-Go |
+| `498af618`, `12b35c8c` | Direct loaded-function and .NET path lookup before private UI handoff | Actual PowerShell adapter checks, old discovery/path variants rejected; native timing below |
+| `73172459` | Preserve pending Off through telemetry, prevent Fastest reopening, repair successful Off logging | Complete composed refresh/callback tests and seven executed defects; actual Windows exposed a separate null-fixture issue |
+| `774449f4` | Read-only exact PF enable-reference presence with bounded native inventory | Three pure race groups, parser defects, twenty-two preparation checks, both Go/stub builds; native reference/installed phase still pending |
+| `2925bde3` | Canonical committed/intent Windows journal records and legal slot transitions | Nine race groups, six executed defects, twenty unchecked-controller regressions, both Windows builds; durable store and native adoption remain source work |
+| `34957b12` | Require the stronger pending-Off expression in the shipping telemetry audit | Full audit pass; losing either pending-Off or ordinary mutation guard is rejected |
+| `cbbcb308` | Explicit JSON null in the composed protection fixture | Full local suite; old source reproduces observed PS5.1 null behavior and corrected source passes; actual packaged rerun required |
+| `53dba30c` | Observe actual raw UDP receipt separately from encrypted peer traffic | Actual local UDP/WG/AWG race suite 28.367s, two executed observer defects, six scope checks; both Windows baselines and all three native defects compile; WFP execution pending |
+| `5e42794d` | Include packaged Windows fixture changes in controller/Session CI triggers | All thirty-one Windows test-script paths match push and pull-request filters; job bodies and permissions unchanged |
+| `83ba21a7` | Exact private default-object ACL for only the constructed Medium fixture token | Both checkptr builds, independent review, exact actual suspended-token readback and parent ACL preservation added; native startup verdict pending |
+
+The MTU source-copy correction matters because the real Windows native gate
+first rejected changed `hopmeasure` bytes before it could execute the kernel
+cases. At `5f436f7a` those cases execute and expose the retained-root fixture
+assumption and the separate UDP write-error assumption. These are not claims
+that every WFP or physical-TUN case has passed.
+
+### Actual Windows observations and current limits
+
+The [d79 diagnostic](https://github.com/Eabusham2/router-vpn/actions/runs/41076182526/job/124132868917)
+records a flags-zero token with Primary/Medium true, Administrators disabled,
+only enabled SeChangeNotify, and `elevated=true`. It is rejected before child
+creation. The original LUA variant retains all mandatory identity checks but
+still exits `0xc0000142` before Go after its explicit process/thread and six
+system-image access checks pass. Its default object ACL contains SYSTEM and
+Administrators grants, with only read/execute for the logon. The fixture-only
+change in `83ba21a7` does not change the original token, its privileges, any
+existing object, the Medium predicate or production bootstrap permissions.
+It adds exact template verification in the suspended process before Resume;
+actual initialization remains the decisive next check.
+
+The [731 first-launch diagnostic](https://github.com/Eabusham2/router-vpn/actions/runs/41077617276/job/124137886308)
+shows about 16ms from App script entry to module import, following the direct
+lookup/path repairs. Framework loading takes about 31.6s, then compilation and
+both authenticated pipe handoffs complete. The App executes the existing Help
+and via-entry checks and reaches the new composed protection test. That test
+fails on Framework `StringContent(null)`, matching PowerShell 5.1's omitted
+pipeline value for JSON null. `cbbcb308` repairs only the fake response body and
+adds real-content assertions for `null`, `[]` and empty string. The ordinary
+Session job also fails that fixture; neither failure is treated as a successful
+Session. The earlier outer Portable App-bridge EOF remains separately unclosed.
+
+At [cbbcb308 Actions](https://github.com/Eabusham2/router-vpn/actions?query=branch%3Amain+sha%3Acbbcb3082d50901382eb4559cf4a1ca6dc40629f),
+recovered map-first UI, recovered native UI exact-head, exact-head native release
+source blockers, weighted/repository audits and kill-switch source contracts
+pass. Native build/publication workflows are mixed pending/running/cancelled.
+No aggregate green release follows from these source checks.
+
+### Actual macOS qualification and remaining shipping seam
+
+The complete typed projection passes on both targets at `bf0f9478`:
+[Intel job124117994703](https://github.com/Eabusham2/router-vpn/actions/runs/41071922934/job/124117994703)
+and [ARM job124117995158](https://github.com/Eabusham2/router-vpn/actions/runs/41071922934/job/124117995158).
+Both execute single-FILTER retirement, captured generation/baseline, IPv4/IPv6
+prefixes, ICMPv6, complete pointer retirement, floating state and rejected-owner
+preservation. All three compiled UID, deny-tag and address-mask defects reach
+their required rejection. The qualification is limited to the recorded
+Darwin24.6.0/24G830/amd64 and Darwin24.6.0/24H232/arm64 source/ABI targets.
+
+The later [a39 Intel short job124121880342](https://github.com/Eabusham2/router-vpn/actions/runs/41073058015/job/124121880342)
+passes the complete baseline plan/apply transition in 0.82s and rejects the
+stale expected-owner and omitted captured-child-join defects. Its ARM baseline
+attempt was cancelled and supplies no result. The [a39 broad Intel job124121880986](https://github.com/Eabusham2/router-vpn/actions/runs/41073058015/job/124121880986)
+passes the socket-capacity case in 460.45s. The historical Intel capacity timeout
+is therefore not that run's unresolved defect. The broad run instead fails the
+old fixture anchor retirement and cleanup reports a retained exact native
+namespace. The shipping Go/Python loader adoption remains necessary.
+
+The fixed utility and reference inspector are bounded prerequisites. Apple’s
+[pinned PF token inventory implementation](https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/net/pf_ioctl.c)
+returns copied bytes rather than an authoritative required size for a nonempty
+buffer, so a full returned buffer is rejected as ambiguous. Only the exact
+requested token's presence is returned; errors cannot become absence. The
+native reference and installed root utility still require their actual gates.
+
+### Work remaining after this publication cutoff
+
+Source work still includes the protected ordinary-user Session handoff/public
+launchers, durable Windows journal store and checked process/kernel recovery,
+precommit intent acknowledgement, complete explicit-Off/native factory adoption,
+remaining graph/layer/relay compositions, and complete macOS Go/Python loader
+adoption with legacy-owner migration. Correct rejection of a presently
+unsupported path does not complete that requirement.
+
+Automated evidence still includes the new exact Windows Session and Medium
+runs, actual encrypted peer/WFP/native-TUN composition, macOS baseline/reference
+and installed utility checks on their required targets, complete native package
+builds, production images/compose, checksums and release publication for one
+matching source identity. Original live-device/off-LAN, leak/transition,
+visual/accessibility, provider/benchmark/forwarding/rollback, signing/distribution
+and deliberately authorized private deployment acceptance remain separate.
