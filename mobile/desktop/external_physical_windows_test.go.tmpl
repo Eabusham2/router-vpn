@@ -4,15 +4,42 @@ package routervpndesktoppt
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"reflect"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/service"
 )
+
+// The privileged policy constructor is the explicit seam in this composition
+// fixture. Actual captured-baseline hashing/readback is exercised by the WFP
+// kernel gate; this fake never changes a Firewall profile or BFE object.
+func (f *externalTunnelFixture) PreparedBaselineSHA256(ctx context.Context, _ mobiletor.DesktopSocketCapture) (string, error) {
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	return strings.Repeat("d", 64), nil
+}
 
 func TestRouterVPNExternalPhysicalWindowsCapturesPolicyAndRetainsLateOwner(t *testing.T) {
 	runExternalPhysicalFactoryCases(t, func(t *testing.T, c *externalPhysicalFactoryCase) error {
+		var err error
+		c.fixture.network.ctx, err = WithExternalPhysicalAdmission(c.fixture.network.ctx, c.fixture.policy, func(ctx context.Context, prepared ExternalPhysicalPrepared) error {
+			if ctx.Err() != nil || prepared.Capture != c.fixture.network.brokerCapture() || prepared.Policy != c.kill || prepared.BaselineSHA256 != strings.Repeat("d", 64) ||
+				c.fixture.network.ready || c.fixture.network.active || c.fixture.network.broker != nil {
+				t.Fatal("Windows ordinary handoff ran after activation or lost its captured baseline")
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
 		wantInterfaces, wantLAN, err := desktopWindowsPhysicalInterfaces(c.selected, c.ipv6 != "off", c.lan)
 		if err != nil {
 			t.Fatal(err)
@@ -26,7 +53,7 @@ func TestRouterVPNExternalPhysicalWindowsCapturesPolicyAndRetainsLateOwner(t *te
 			{Network: "udp", Address: netip.MustParseAddrPort("192.168.50.7:8443")},
 		}
 		return c.fixture.network.prepareExternalPhysicalWindows(c.fixture.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopWindowsSocketOptions) (desktopWindowsPhysicalPolicy, error) {
-			if options.KillSwitchPolicy != c.kill || options.IPv6Enabled != (c.ipv6 != "off") || !reflect.DeepEqual(options.Interfaces, wantInterfaces) ||
+			if options.KillSwitchPolicy != c.kill || !options.RetainBaselineForHandoff || options.IPv6Enabled != (c.ipv6 != "off") || !reflect.DeepEqual(options.Interfaces, wantInterfaces) ||
 				!reflect.DeepEqual(options.LANPrefixes, wantLAN) || !reflect.DeepEqual(options.DHCP4Servers, wantDHCP) ||
 				!reflect.DeepEqual(options.PrivateDestinations, wantPrivate) {
 				t.Error("Windows ordinary factory changed selected protection, exact private destinations, actual LAN or DHCP", options)
@@ -37,4 +64,148 @@ func TestRouterVPNExternalPhysicalWindowsCapturesPolicyAndRetainsLateOwner(t *te
 			return c.source, c.constructed(t, ctx, capture)
 		})
 	})
+}
+
+type externalWindowsAdmissionSource struct {
+	*externalTunnelFixture
+	reads   int
+	changed bool
+}
+
+func (f *externalWindowsAdmissionSource) PreparedBaselineSHA256(ctx context.Context, _ mobiletor.DesktopSocketCapture) (string, error) {
+	if ctx.Err() != nil {
+		return "", ctx.Err()
+	}
+	f.reads++
+	if f.changed && f.reads > 1 {
+		return strings.Repeat("e", 64), nil
+	}
+	return strings.Repeat("d", 64), nil
+}
+
+func externalWindowsAdmissionFixture(t *testing.T) (*externalPhysicalFixture, *externalPhysicalFactoryNetwork, *externalWindowsAdmissionSource) {
+	t.Helper()
+	policy := externalPhysicalPolicyFixture(t, "http-connect", "192.168.50.7", 8443, false, "windows")
+	f := newExternalPhysicalFixture(t, policy)
+	manager := &externalPhysicalFactoryNetwork{desktopPTNetwork: f.native.network}
+	manager.selected.Store(externalPhysicalFactoryInterface(t))
+	service.MustRegister[adapter.NetworkManager](f.native.ctx, manager)
+	source := &externalWindowsAdmissionSource{externalTunnelFixture: &externalTunnelFixture{physicalFactorySource: &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}}}
+	return f, manager, source
+}
+
+func TestRouterVPNExternalPhysicalWindowsAdmissionRetiresFailures(t *testing.T) {
+	for _, fault := range []string{"missing", "foreign", "denied", "cancelled", "network-changed", "baseline-changed"} {
+		t.Run(fault, func(t *testing.T) {
+			f, manager, source := externalWindowsAdmissionFixture(t)
+			constructors, admissions := 0, 0
+			if fault != "missing" {
+				policy := f.policy
+				if fault == "foreign" {
+					policy = externalPhysicalPolicyFixture(t, "http-connect", "192.168.50.7", 8443, false, "windows")
+				}
+				var err error
+				f.network.ctx, err = WithExternalPhysicalAdmission(f.network.ctx, policy, func(ctx context.Context, prepared ExternalPhysicalPrepared) error {
+					admissions++
+					if prepared.Capture != f.network.brokerCapture() || prepared.Policy != "always" || prepared.BaselineSHA256 != strings.Repeat("d", 64) || source.reads != 1 || f.network.ready || f.network.broker != nil {
+						return errors.New("fixture observed a changed or post-socket handoff")
+					}
+					switch fault {
+					case "denied":
+						return errors.New("fixture rejected exact legacy retirement")
+					case "cancelled":
+						f.network.Cancel()
+					case "network-changed":
+						changed := *manager.selected.Load()
+						changed.Index++
+						manager.selected.Store(&changed)
+					case "baseline-changed":
+						source.changed = true
+					}
+					return nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := f.network.prepareExternalPhysicalWindows(f.policy, func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopWindowsSocketOptions) (desktopWindowsPhysicalPolicy, error) {
+				constructors++
+				return source, nil
+			})
+			if fault == "missing" || fault == "foreign" {
+				if err == nil || constructors != 0 || admissions != 0 {
+					t.Fatal("unowned handoff reached the native policy constructor", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = f.network.Start(adapter.StartStateInitialize); err == nil || constructors != 1 || admissions != 1 || f.network.broker != nil || !source.cancelled.Load() {
+				t.Fatal("failed handoff admitted sockets or discarded its partial native owner", err, constructors, admissions)
+			}
+			if err = f.network.Close(); err != nil || !source.closed.Load() {
+				t.Fatal("failed native handoff did not join its exact source", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNExternalPhysicalWindowsAdmissionCloseJoinsEnteredCallback(t *testing.T) {
+	f, _, source := externalWindowsAdmissionFixture(t)
+	entered, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	var err error
+	f.network.ctx, err = WithExternalPhysicalAdmission(f.network.ctx, f.policy, func(ctx context.Context, _ ExternalPhysicalPrepared) error {
+		close(entered)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.network.prepareExternalPhysicalWindows(f.policy, func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopWindowsSocketOptions) (desktopWindowsPhysicalPolicy, error) {
+		return source, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	started, closed := make(chan error, 1), make(chan error, 1)
+	go func() { started <- f.network.Start(adapter.StartStateInitialize) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("native initialization did not enter its pre-TUN handoff")
+	}
+	go func() { closed <- f.network.Close() }()
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("native close did not revoke its entered handoff lifetime")
+	}
+	select {
+	case err := <-closed:
+		t.Fatal("native close acknowledged an unjoined handoff callback", err)
+	case <-time.After(25 * time.Millisecond):
+	}
+	unblock()
+	select {
+	case err := <-started:
+		if err == nil {
+			t.Fatal("late handoff completion activated a cancelled owner")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("native handoff Start did not join")
+	}
+	select {
+	case err := <-closed:
+		if err != nil || !source.closed.Load() {
+			t.Fatal("native close lost its entered handoff source", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("native handoff cleanup did not join")
+	}
 }

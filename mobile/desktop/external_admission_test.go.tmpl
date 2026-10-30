@@ -1,0 +1,65 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func TestRouterVPNExternalPhysicalAdmissionRetainsExactPolicy(t *testing.T) {
+	policy := externalPhysicalPolicyFixture(t, "http-connect", "192.168.50.7", 8443, false, "windows")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	want := errors.New("captured handoff callback")
+	owned, err := WithExternalPhysicalAdmission(ctx, policy, func(context.Context, ExternalPhysicalPrepared) error { return want })
+	if err != nil {
+		t.Fatal(err)
+	}
+	admit, err := externalPhysicalAdmissionFor(owned, policy)
+	if err != nil || !errors.Is(admit(owned, ExternalPhysicalPrepared{}), want) {
+		t.Fatal("native handoff callback changed its exact owner", err)
+	}
+	prepared := ExternalPhysicalPrepared{Capture: mobiletor.DesktopSocketCapture{SessionID: policy.Metadata().SessionID, SourceSHA256: policy.Metadata().SourceSHA256,
+		NetworkID: strings.Repeat("a", 32)}, Policy: policy.Metadata().KillSwitchPolicy, BaselineSHA256: strings.Repeat("b", 64)}
+	if err := CompleteExternalPhysicalAdmission(owned, policy, prepared); !errors.Is(err, want) {
+		t.Fatal("actual native handoff dispatch lost its captured callback", err)
+	}
+	for _, mutate := range []func(*ExternalPhysicalPrepared){
+		func(v *ExternalPhysicalPrepared) { v.Capture.SourceSHA256 = strings.Repeat("c", 64) },
+		func(v *ExternalPhysicalPrepared) { v.Capture.NetworkID = strings.Repeat("A", 32) },
+		func(v *ExternalPhysicalPrepared) { v.Policy = "off" },
+		func(v *ExternalPhysicalPrepared) { v.BaselineSHA256 = "" },
+	} {
+		changed := prepared
+		mutate(&changed)
+		if err := CompleteExternalPhysicalAdmission(owned, policy, changed); err == nil || errors.Is(err, want) {
+			t.Fatal("foreign native baseline reached the handoff callback", err)
+		}
+	}
+	identical := externalPhysicalPolicyFixture(t, "http-connect", "192.168.50.7", 8443, false, "windows")
+	if identical.Config() != policy.Config() {
+		t.Fatal("substitution fixture differs")
+	}
+	if _, err := externalPhysicalAdmissionFor(owned, identical); err == nil {
+		t.Fatal("an equal but differently owned graph adopted handoff authority")
+	}
+	if _, err := WithExternalPhysicalAdmission(owned, policy, admit); err == nil {
+		t.Fatal("native handoff callback was replaceable")
+	}
+	if _, err := externalPhysicalAdmissionFor(ctx, policy); err == nil {
+		t.Fatal("JSON-only native lifetime acquired handoff authority")
+	}
+	if _, err := WithExternalPhysicalAdmission(nil, policy, admit); err == nil {
+		t.Fatal("missing native lifetime acquired handoff authority")
+	}
+	if _, err := WithExternalPhysicalAdmission(ctx, policy, nil); err == nil {
+		t.Fatal("missing native callback acquired handoff authority")
+	}
+	cancel()
+	if _, err := externalPhysicalAdmissionFor(owned, policy); err == nil {
+		t.Fatal("cancelled native lifetime retained handoff authority")
+	}
+}

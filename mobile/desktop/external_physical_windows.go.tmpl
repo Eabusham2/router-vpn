@@ -35,7 +35,10 @@ func (n *ExternalNetworkOwner) prepareExternalPhysicalWindows(policy *mobilemult
 	if err != nil || meta.TargetOS != "windows" || !n.Matches(meta.SessionID, meta.SourceSHA256) {
 		return errors.New("Windows ordinary physical sockets belong to another native target")
 	}
-	options := mobiletor.DesktopWindowsSocketOptions{KillSwitchPolicy: meta.KillSwitchPolicy, IPv6Enabled: meta.IPv6Mode != "off"}
+	if _, err := externalPhysicalAdmissionFor(n.ctx, policy); err != nil {
+		return err
+	}
+	options := mobiletor.DesktopWindowsSocketOptions{KillSwitchPolicy: meta.KillSwitchPolicy, IPv6Enabled: meta.IPv6Mode != "off", RetainBaselineForHandoff: true}
 	for _, destination := range captured.PrivateDestinations {
 		address, err := netip.ParseAddr(destination.Host)
 		if err != nil || address.String() != destination.Host || !(address.IsPrivate() || address.IsLinkLocalUnicast()) ||
@@ -84,6 +87,23 @@ func (n *ExternalNetworkOwner) prepareExternalPhysicalWindows(policy *mobilemult
 				return nil, nil, err
 			}
 			return nil, owned, err
+		}
+		prepared, ok := owned.(interface {
+			PreparedBaselineSHA256(context.Context, mobiletor.DesktopSocketCapture) (string, error)
+		})
+		if !ok {
+			return nil, owned, errors.New("Windows ordinary physical source has no native handoff barrier")
+		}
+		baseline, err := prepared.PreparedBaselineSHA256(ctx, capture)
+		if err != nil || !networkSourceID.MatchString(baseline) || !physicalCurrent() {
+			return nil, owned, errors.Join(err, errors.New("Windows ordinary physical deny baseline is not prepared"))
+		}
+		if err := CompleteExternalPhysicalAdmission(ctx, policy, ExternalPhysicalPrepared{Capture: capture, Policy: meta.KillSwitchPolicy, BaselineSHA256: baseline}); err != nil {
+			return nil, owned, err
+		}
+		currentBaseline, err := prepared.PreparedBaselineSHA256(ctx, capture)
+		if err != nil || currentBaseline != baseline || ctx.Err() != nil || !physicalCurrent() {
+			return nil, owned, errors.Join(err, errors.New("Windows ordinary physical handoff changed before native activation"))
 		}
 		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, owned, physicalCurrent)
 		return broker, owned, err

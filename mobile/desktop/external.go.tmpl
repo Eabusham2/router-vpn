@@ -500,11 +500,23 @@ func routerVPNRunExternal(parent context.Context, directory, session, physicalSo
 		ctx = context.Background()
 	}
 	ctx = context.WithoutCancel(ctx)
+	ctx, admission, err := routerVPNPrepareExternalAdmission(ctx, files, physical)
+	if err != nil {
+		_ = files.publish("stopped.json", closed)
+		return routerVPNExternalFailure
+	}
+	defer func() {
+		if admission.close() != nil {
+			failure = routerVPNExternalFailure
+		}
+	}()
 	owner, factoryErr := factory(ctx, policy, physical, string(source), string(capture), session)
 	if owner == nil {
 		// Factory errors with partial native ownership must return that owner.
 		// A nil owner means native parsing failed before any construction.
-		_ = files.publish("stopped.json", closed)
+		if admission.close() == nil {
+			_ = files.publish("stopped.json", closed)
+		}
 		return routerVPNExternalFailure
 	}
 	type result struct {
@@ -519,6 +531,10 @@ func routerVPNRunExternal(parent context.Context, directory, session, physicalSo
 		}
 		if err := owner.Start(); err != nil {
 			done <- result{err: err}
+			return
+		}
+		if !admission.admitted() {
+			done <- result{err: routerVPNExternalFailure}
 			return
 		}
 		raw, err := owner.Run()
@@ -643,6 +659,11 @@ func routerVPNRunExternal(parent context.Context, directory, session, physicalSo
 	}
 	if dnsFiles.close() != nil {
 		failure = routerVPNExternalFailure
+	}
+	if admission.close() != nil {
+		progress.Stage = "cleanup-pending"
+		_ = files.publish("progress.json", progress)
+		return routerVPNExternalFailure
 	}
 	progress.Stage, progress.Progress = "closed", mobilemultihop.Progress{}
 	_ = files.publish("progress.json", progress)

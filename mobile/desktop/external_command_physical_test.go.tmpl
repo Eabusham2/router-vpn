@@ -20,6 +20,7 @@ import (
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	routervpndesktoppt "github.com/sagernet/sing-box/routervpn/desktoppt"
 )
 
 const desktopPhysicalCommandSource = `{"inbounds":[{"type":"tun","tag":"tun-in","interface_name":"router-vpn","address":["172.29.93.1/30","fd29:93::1/126"],"mtu":1280,"auto_route":true,"strict_route":true,"stack":"system"}],"outbounds":[{"type":"http","tag":"custom-exit","server":"203.0.113.20","server_port":8443,"username":"captured-user","password":"captured-secret"}],"route":{"final":"custom-exit","auto_detect_interface":true}}`
@@ -118,10 +119,11 @@ func TestRouterVPNDesktopExternalPhysicalCommandSeparatesProofAndMailboxIdentity
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		done <- routerVPNRunExternal(ctx, directory, desktopExternalSession, physical.Metadata().SourceSHA256, func(_ context.Context, policy *mobilemultihop.ExternalPolicy, actual *mobilemultihop.DesktopExternalPolicy, source, capture, session string) (routerVPNExternalOwner, error) {
+		done <- routerVPNRunExternal(ctx, directory, desktopExternalSession, physical.Metadata().SourceSHA256, func(nativeCtx context.Context, policy *mobilemultihop.ExternalPolicy, actual *mobilemultihop.DesktopExternalPolicy, source, capture, session string) (routerVPNExternalOwner, error) {
 			if actual == nil || actual.OriginalPolicy() != policy || actual.Metadata() != physical.Metadata() || source != desktopPhysicalCommandSource || capture != desktopPhysicalCommandCapture || session != desktopExternalSession {
 				return nil, errors.New("physical command did not retain its actual typed derivation")
 			}
+			desktopPhysicalCommandFixtureAdmission(nativeCtx, actual, base)
 			return owner, nil
 		})
 	}()
@@ -131,6 +133,7 @@ func TestRouterVPNDesktopExternalPhysicalCommandSeparatesProofAndMailboxIdentity
 			t.Error(err)
 		}
 	}()
+	desktopPhysicalCommandFixtureAck(t, directory)
 	var proof routerVPNExternalProofRecord
 	if json.Unmarshal(desktopExternalWaitFile(t, directory, "proof.json"), &proof) != nil || proof.Physical == nil || *proof.Physical != physical.Metadata() || proof.SourceSHA256 != original.SourceSHA256() || proof.ConfigSHA256 != physical.Metadata().OriginalConfigSHA256 || !proof.DNSProven || !proof.Healthy {
 		t.Fatal("command relabeled original network proof as the derived desktop graph", proof)
@@ -174,10 +177,18 @@ func TestRouterVPNDesktopExternalPhysicalCommandRejectsRelabeledNetworkProof(t *
 	result.SourceSHA256, result.ConfigSHA256 = physical.Metadata().SourceSHA256, physical.Metadata().ConfigSHA256
 	raw, _ := json.Marshal(result)
 	owner.result = string(raw)
-	err := routerVPNRunExternal(context.Background(), directory, desktopExternalSession, physical.Metadata().SourceSHA256, func(context.Context, *mobilemultihop.ExternalPolicy, *mobilemultihop.DesktopExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
-		return owner, nil
-	})
-	if err == nil || owner.Healthy() || owner.closes.Load() == 0 {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- routerVPNRunExternal(ctx, directory, desktopExternalSession, physical.Metadata().SourceSHA256, func(nativeCtx context.Context, _ *mobilemultihop.ExternalPolicy, actual *mobilemultihop.DesktopExternalPolicy, _, _, _ string) (routerVPNExternalOwner, error) {
+			desktopPhysicalCommandFixtureAdmission(nativeCtx, actual, owner)
+			return owner, nil
+		})
+	}()
+	desktopPhysicalCommandFixtureAck(t, directory)
+	err := desktopExternalWait(t, done)
+	if err == nil || owner.Healthy() || owner.closes.Load() == 0 || owner.starts.Load() != 1 {
 		t.Fatal("relabeled network proof acquired a physical command receipt")
 	}
 	if _, err := os.Stat(filepath.Join(directory, "proof.json")); !errors.Is(err, os.ErrNotExist) {
@@ -192,6 +203,15 @@ func TestRouterVPNDesktopExternalPhysicalCommandUsesActualPreparedNativeFactory(
 		return &desktopExternalTUN{inbound.NewAdapter(C.TypeTun, tag)}, nil
 	})
 	ctx := box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	var err error
+	if runtime.GOOS == "windows" {
+		ctx, err = routervpndesktoppt.WithExternalPhysicalAdmission(ctx, physical, func(context.Context, routervpndesktoppt.ExternalPhysicalPrepared) error {
+			return errors.New("construction fixture must not start real kernel policy")
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	owner, err := routerVPNNewExternalNative(ctx, original, physical, desktopPhysicalCommandSource, desktopPhysicalCommandCapture, desktopExternalSession)
 	if err != nil || owner == nil {
 		t.Fatal("actual physical command constructor failed", err)

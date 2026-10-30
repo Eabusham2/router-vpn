@@ -1,0 +1,59 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// This callback is an owned native capability installed by the command before
+// constructing its Box. Imported options cannot approve a protection handoff.
+type ExternalPhysicalPrepared struct {
+	Capture        mobiletor.DesktopSocketCapture
+	Policy         string
+	BaselineSHA256 string
+}
+
+type ExternalPhysicalAdmission func(context.Context, ExternalPhysicalPrepared) error
+type externalPhysicalAdmissionKey struct{}
+type externalPhysicalAdmissionOwner struct {
+	policy *mobilemultihop.DesktopExternalPolicy
+	admit  ExternalPhysicalAdmission
+}
+
+func WithExternalPhysicalAdmission(ctx context.Context, policy *mobilemultihop.DesktopExternalPolicy, admit ExternalPhysicalAdmission) (context.Context, error) {
+	if ctx == nil || ctx.Err() != nil || policy == nil || policy.Validate() != nil || admit == nil ||
+		policy.Metadata().TargetOS != "windows" || ctx.Value(externalPhysicalAdmissionKey{}) != nil {
+		return nil, errors.New("ordinary physical handoff requires its unique captured native policy")
+	}
+	return context.WithValue(ctx, externalPhysicalAdmissionKey{}, &externalPhysicalAdmissionOwner{policy, admit}), nil
+}
+
+func externalPhysicalAdmissionFor(ctx context.Context, policy *mobilemultihop.DesktopExternalPolicy) (ExternalPhysicalAdmission, error) {
+	if ctx == nil || ctx.Err() != nil || policy == nil {
+		return nil, errors.New("ordinary physical handoff lost its native lifetime")
+	}
+	owner, ok := ctx.Value(externalPhysicalAdmissionKey{}).(*externalPhysicalAdmissionOwner)
+	if !ok || owner == nil || owner.policy != policy || owner.admit == nil {
+		return nil, errors.New("ordinary physical handoff has no captured native admission")
+	}
+	return owner.admit, nil
+}
+
+// CompleteExternalPhysicalAdmission consumes only a previously installed
+// native capability for this same policy object. It does not create or verify
+// kernel policy; the Windows factory supplies its independently read baseline.
+func CompleteExternalPhysicalAdmission(ctx context.Context, policy *mobilemultihop.DesktopExternalPolicy, prepared ExternalPhysicalPrepared) error {
+	admit, err := externalPhysicalAdmissionFor(ctx, policy)
+	if err != nil {
+		return err
+	}
+	metadata := policy.Metadata()
+	if prepared.Capture.SessionID != metadata.SessionID || prepared.Capture.SourceSHA256 != metadata.SourceSHA256 ||
+		prepared.Policy != metadata.KillSwitchPolicy || !networkSessionID.MatchString(prepared.Capture.NetworkID) || !networkSourceID.MatchString(prepared.BaselineSHA256) {
+		return errors.New("ordinary physical handoff substituted its captured native baseline")
+	}
+	return admit(ctx, prepared)
+}

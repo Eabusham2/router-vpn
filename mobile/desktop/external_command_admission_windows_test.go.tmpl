@@ -1,0 +1,106 @@
+//go:build windows
+
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func TestRouterVPNDesktopExternalPhysicalCommandAdmissionCannotSkipBarrier(t *testing.T) {
+	directory, original, physical := desktopPhysicalCommandWorkspace(t)
+	owner := desktopExternalOwner(t, original, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	joined := false
+	defer func() {
+		cancel()
+		if !joined {
+			_ = desktopExternalWait(t, done)
+		}
+	}()
+	go func() {
+		done <- routerVPNRunExternal(ctx, directory, desktopExternalSession, physical.Metadata().SourceSHA256,
+			func(context.Context, *mobilemultihop.ExternalPolicy, *mobilemultihop.DesktopExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
+				// This controlled owner starts and could return a valid network
+				// proof, but deliberately never consumes the native handoff.
+				return owner, nil
+			})
+	}()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case err := <-done:
+			joined = true
+			if err == nil || owner.starts.Load() != 1 || owner.closes.Load() == 0 || owner.Healthy() {
+				t.Fatal("missing native handoff did not fail and join its exact owner", err)
+			}
+			if _, err := os.Stat(filepath.Join(directory, "proof.json")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("unacknowledged native handoff published a connected proof")
+			}
+			return
+		case <-ticker.C:
+			if _, err := os.Stat(filepath.Join(directory, "proof.json")); err == nil {
+				t.Fatal("unacknowledged native handoff published a connected proof")
+			}
+		case <-deadline.C:
+			t.Fatal("missing native handoff did not produce a bounded rejected result")
+		}
+	}
+}
+
+func TestRouterVPNDesktopExternalPhysicalCommandAdmissionCleanupFailureCannotAcknowledgeStop(t *testing.T) {
+	directory, original, physical := desktopPhysicalCommandWorkspace(t)
+	owner := desktopExternalOwner(t, original, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	joined := false
+	defer func() {
+		cancel()
+		if !joined {
+			_ = desktopExternalWait(t, done)
+		}
+	}()
+	go func() {
+		done <- routerVPNRunExternal(ctx, directory, desktopExternalSession, physical.Metadata().SourceSHA256,
+			func(nativeCtx context.Context, _ *mobilemultihop.ExternalPolicy, actual *mobilemultihop.DesktopExternalPolicy, _, _, _ string) (routerVPNExternalOwner, error) {
+				desktopPhysicalCommandFixtureAdmission(nativeCtx, actual, owner)
+				return owner, nil
+			})
+	}()
+	desktopPhysicalCommandFixtureAck(t, directory)
+	_ = desktopExternalWaitFile(t, directory, "proof.json")
+	path := filepath.Join(directory, "physical-handoff-ready.json")
+	if err := os.Rename(path, path+".retained"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("replacement-owner"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	desktopExternalStopFile(t, directory, desktopExternalSession, original.SourceSHA256())
+	err := desktopExternalWait(t, done)
+	joined = true
+	if err == nil || owner.starts.Load() != 1 || owner.closes.Load() == 0 || owner.Healthy() {
+		t.Fatal("failed admission cleanup did not fail and join its actual command owner", err)
+	}
+	if _, err := os.Stat(filepath.Join(directory, "stopped.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Error("unproved admission cleanup published a successful stopped receipt", err)
+	}
+	var progress routerVPNExternalProgressRecord
+	if json.Unmarshal(desktopExternalWaitFile(t, directory, "progress.json"), &progress) != nil || progress.Stage != "cleanup-pending" {
+		t.Error("failed admission cleanup did not preserve pending status", progress.Stage)
+	}
+	if raw, err := os.ReadFile(path); err != nil || string(raw) != "replacement-owner" {
+		t.Fatal("failed command cleanup changed replacement ownership", err)
+	}
+}

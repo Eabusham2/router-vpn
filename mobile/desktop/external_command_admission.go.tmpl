@@ -1,0 +1,158 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"sync/atomic"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	routervpndesktoppt "github.com/sagernet/sing-box/routervpn/desktoppt"
+)
+
+const routerVPNExternalAdmissionLimit = 45 * time.Second
+
+type routerVPNExternalAdmissionRecord struct {
+	Schema         int    `json:"schema"`
+	SessionID      string `json:"session_id"`
+	SourceSHA256   string `json:"source_sha256"`
+	ConfigSHA256   string `json:"config_sha256"`
+	NetworkID      string `json:"network_id"`
+	Policy         string `json:"policy"`
+	BaselineSHA256 string `json:"baseline_sha256"`
+	Nonce          string `json:"nonce"`
+	Accepted       bool   `json:"accepted"`
+}
+
+type routerVPNExternalAdmission struct {
+	files    *routerVPNExternalFiles
+	metadata mobilemultihop.DesktopExternalMetadata
+	state    atomic.Int32 // 0 prepared, 1 entered/joined callback, 2 retired
+	joined   chan struct{}
+	retired  chan struct{}
+	accepted atomic.Bool
+	closeErr error
+}
+
+func routerVPNPrepareExternalAdmission(ctx context.Context, files *routerVPNExternalFiles, policy *mobilemultihop.DesktopExternalPolicy) (context.Context, *routerVPNExternalAdmission, error) {
+	if policy == nil || policy.Metadata().TargetOS != "windows" {
+		return ctx, nil, nil
+	}
+	if ctx == nil || ctx.Err() != nil || files == nil || files.root == nil || policy.Validate() != nil {
+		return nil, nil, routerVPNExternalFailure
+	}
+	// Startup and the main command loop use different retained roots/maps.
+	// The callback cannot race proof/progress ownership while Start is entered.
+	root, err := files.root.OpenRoot(".")
+	if err != nil {
+		return nil, nil, routerVPNExternalFailure
+	}
+	before, e1 := files.root.Stat(".")
+	after, e2 := root.Stat(".")
+	if e1 != nil || e2 != nil || !os.SameFile(before, after) {
+		_ = root.Close()
+		return nil, nil, routerVPNExternalFailure
+	}
+	admission := &routerVPNExternalAdmission{files: &routerVPNExternalFiles{root: root, owned: map[string]os.FileInfo{}}, metadata: policy.Metadata(), joined: make(chan struct{}), retired: make(chan struct{})}
+	for _, name := range []string{"physical-handoff-ready.json", "physical-handoff-ack.json"} {
+		if !admission.files.current(name) {
+			_ = root.Close()
+			return nil, nil, routerVPNExternalFailure
+		}
+	}
+	owned, err := routervpndesktoppt.WithExternalPhysicalAdmission(ctx, policy, admission.admit)
+	if err != nil {
+		_ = root.Close()
+		return nil, nil, routerVPNExternalFailure
+	}
+	return owned, admission, nil
+}
+
+func (a *routerVPNExternalAdmission) admitted() bool {
+	return a == nil || a.state.Load() == 1 && a.accepted.Load()
+}
+
+func (a *routerVPNExternalAdmission) admit(ctx context.Context, prepared routervpndesktoppt.ExternalPhysicalPrepared) error {
+	if a == nil || ctx == nil || ctx.Err() != nil || !a.state.CompareAndSwap(0, 1) {
+		return routerVPNExternalFailure
+	}
+	defer close(a.joined)
+	if prepared.Capture.SessionID != a.metadata.SessionID || prepared.Capture.SourceSHA256 != a.metadata.SourceSHA256 ||
+		prepared.Policy != a.metadata.KillSwitchPolicy || !routerVPNExternalSession.MatchString(prepared.Capture.NetworkID) {
+		return routerVPNExternalFailure
+	}
+	digest, err := hex.DecodeString(prepared.BaselineSHA256)
+	if err != nil || len(digest) != 32 || hex.EncodeToString(digest) != prepared.BaselineSHA256 {
+		return routerVPNExternalFailure
+	}
+	var nonce [32]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return routerVPNExternalFailure
+	}
+	record := routerVPNExternalAdmissionRecord{Schema: 1, SessionID: a.metadata.SessionID, SourceSHA256: a.metadata.SourceSHA256,
+		ConfigSHA256: a.metadata.ConfigSHA256, NetworkID: prepared.Capture.NetworkID, Policy: prepared.Policy,
+		BaselineSHA256: prepared.BaselineSHA256, Nonce: hex.EncodeToString(nonce[:])}
+	if !a.files.current("physical-handoff-ack.json") || a.files.publish("physical-handoff-ready.json", record) != nil {
+		return routerVPNExternalFailure
+	}
+	expected := record
+	expected.Accepted = true
+	bounded, cancel := context.WithTimeout(ctx, routerVPNExternalAdmissionLimit)
+	defer cancel()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if bounded.Err() != nil || a.state.Load() != 1 || !a.files.current("physical-handoff-ready.json") {
+			return routerVPNExternalFailure
+		}
+		raw, err := a.files.read("physical-handoff-ack.json", 2048)
+		if err == nil {
+			object, err := applexray.Object(raw)
+			if err != nil || len(object) != 9 {
+				return routerVPNExternalFailure
+			}
+			var actual routerVPNExternalAdmissionRecord
+			decoder := json.NewDecoder(bytes.NewReader(raw))
+			decoder.DisallowUnknownFields()
+			if decoder.Decode(&actual) != nil || actual != expected || bounded.Err() != nil || a.state.Load() != 1 {
+				return routerVPNExternalFailure
+			}
+			a.accepted.Store(true)
+			return nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return routerVPNExternalFailure
+		}
+		select {
+		case <-bounded.Done():
+			return routerVPNExternalFailure
+		case <-ticker.C:
+		}
+	}
+}
+
+// Retirement prevents a late acknowledgement and joins any entered callback
+// before closing its files. A replacement remains untouched and is reported
+// as pending ownership, never path-deleted.
+func (a *routerVPNExternalAdmission) close() error {
+	if a == nil {
+		return nil
+	}
+	// Every caller joins the same retirement. A failed file ownership check is
+	// sticky; a later Close cannot turn an unproved cleanup into success.
+	if previous := a.state.Swap(2); previous != 2 {
+		if previous == 1 {
+			<-a.joined
+		}
+		a.closeErr = errors.Join(a.files.remove("physical-handoff-ready.json"), a.files.root.Close())
+		close(a.retired)
+	}
+	<-a.retired
+	return a.closeErr
+}

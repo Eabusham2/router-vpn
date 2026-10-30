@@ -153,6 +153,14 @@ func newDesktopExternalBoxFixture(t *testing.T, edit func(map[string]any)) *desk
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	ctx = Context(ctx, ins, outs, endpoint.NewRegistry(), dnsRegistry, services, certificate.NewRegistry())
+	if runtime.GOOS == "windows" {
+		ctx, err = routervpndesktoppt.WithExternalPhysicalAdmission(ctx, policy, func(context.Context, routervpndesktoppt.ExternalPhysicalPrepared) error {
+			return errors.New("Box construction fixture must not activate actual Windows protection")
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(raw))
 	if err != nil {
 		t.Fatal("actual native policy parser", err)

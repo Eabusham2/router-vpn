@@ -56,6 +56,7 @@ type desktopExternalFixture struct {
 	starts        atomic.Int32
 	closes        atomic.Int32
 	closeFailures int32
+	beforeStart   func() error
 }
 
 func desktopExternalOwner(t *testing.T, policy *mobilemultihop.ExternalPolicy, blocked bool) *desktopExternalFixture {
@@ -69,7 +70,15 @@ func desktopExternalOwner(t *testing.T, policy *mobilemultihop.ExternalPolicy, b
 	}
 	return owner
 }
-func (f *desktopExternalFixture) Start() error { f.starts.Add(1); return nil }
+func (f *desktopExternalFixture) Start() error {
+	if f.beforeStart != nil {
+		if err := f.beforeStart(); err != nil {
+			return err
+		}
+	}
+	f.starts.Add(1)
+	return nil
+}
 func (f *desktopExternalFixture) Run() (string, error) {
 	select {
 	case <-f.cancel:
