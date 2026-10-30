@@ -11,7 +11,7 @@ $ErrorActionPreference = 'Stop'
 # Read the loaded function directly without initializing a provider cmdlet;
 # the captured module below owns first import.
 if($null-eq${function:New-RouterVPNControllerClient}){
-    Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
+    Import-Module ([IO.Path]::Combine($PSScriptRoot,'RouterVPN-Windows-ControllerTransport.psm1')) -Global -ErrorAction Stop
 }
 
 $Handoff=@{}

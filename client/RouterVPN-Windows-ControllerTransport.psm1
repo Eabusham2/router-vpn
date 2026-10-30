@@ -22,7 +22,7 @@ function Initialize-RouterVPNControllerTransport {
        [string]::IsNullOrEmpty($ControllerPipe)-or$ControllerParentHandle-le0){throw 'The complete captured native controller handoff is required.'}
     Add-Type -AssemblyName System.Net.Http
     if(-not('RouterVPN.ControllerUI.ControllerChannel'-as[type])){
-        $Source=Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.cs'
+        $Source=[IO.Path]::Combine($PSScriptRoot,'RouterVPN-Windows-ControllerTransport.cs')
         $Code=[IO.File]::ReadAllText($Source,[Text.Encoding]::UTF8)
         $Compile=@{TypeDefinition=$Code;ErrorAction='Stop'}
         if($PSVersionTable.PSEdition-eq'Desktop'){

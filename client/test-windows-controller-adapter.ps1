@@ -20,7 +20,7 @@ if($Case-ceq'startup'){
         $AST=[Management.Automation.Language.Parser]::ParseInput($Source,[ref]$Tokens,[ref]$Errors)
         Check ($Errors.Count-eq0) 'startup source did not parse'
         $Imports=@($AST.FindAll({param($Node) $Node-is[Management.Automation.Language.IfStatementAst]-and
-            $Node.Extent.Text.Contains("Import-Module (Join-Path `$PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1')")},$true))
+            $Node.Extent.Text.Contains("Import-Module ([IO.Path]::Combine(`$PSScriptRoot,'RouterVPN-Windows-ControllerTransport.psm1'))")},$true))
         Check ($Imports.Count-eq1-and$Imports[0].Clauses.Count-eq1) 'startup lost its unique captured-module condition'
         $Guard=[ScriptBlock]::Create($Imports[0].Clauses[0].Item1.Extent.Text)
         Check ([bool](&$Guard)) 'startup did not request its missing captured transport'

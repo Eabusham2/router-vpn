@@ -39,7 +39,7 @@ def instrumented_scripts():
         source = (ROOT / path).read_bytes().decode("utf-8")
         preference = "$ErrorActionPreference='Stop'" if role == "App" else "$ErrorActionPreference = 'Stop'"
         source = NATIVE.replace_once(source, preference, preference + "\n" + marker(role.lower() + "-script-entered"))
-        boundary = "    Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop"
+        boundary = "    Import-Module ([IO.Path]::Combine($PSScriptRoot,'RouterVPN-Windows-ControllerTransport.psm1')) -Global -ErrorAction Stop"
         source = NATIVE.replace_once(source, boundary,
             "    " + marker(role.lower() + "-module-begin") + "\n" + boundary + "\n    " + marker(role.lower() + "-module-complete"))
         result[path] = source.encode("utf-8")
