@@ -157,12 +157,13 @@ def mutants():
          once(suspended, 'if uint32(previous) != 1 {',
               'if false && uint32(previous) != 1 {')),
         ("suspended_launch_windows.go", "suspended-callback-refusal", REQUIRED[27],
-         "Shell did not obey the actual pre-creation callback refusal",
-         once(once(suspended,
-                   'if site.ctx.Err() != nil {\n\t\treturn reject(0x800704c7) // HRESULT_FROM_WIN32(ERROR_CANCELLED)\n\t}',
-                   'if false && site.ctx.Err() != nil {\n\t\treturn reject(0x800704c7) // HRESULT_FROM_WIN32(ERROR_CANCELLED)\n\t}'),
-              'if site.ctx.Err() != nil {\n\t\treturn reject(0x800704c7)\n\t}',
-              'if false && site.ctx.Err() != nil {\n\t\treturn reject(0x800704c7)\n\t}')),
+         "cancelled Shell callback lost its local admission refusal",
+         once(suspended, 'if site.ctx.Err() != nil {',
+              'if false && site.ctx.Err() != nil {')),
+        ("suspended_launch_windows.go", "suspended-cancel-before-suspension", REQUIRED[27],
+         "cancelled Shell callback omitted its actual creation suspension",
+         once(suspended, 'if site.calls.Add(1) != 1 || inputs == nil {',
+              'if site.ctx.Err() != nil {\n\t\tsite.calls.Add(1)\n\t\treturn reject(0x800704c7)\n\t}\n\tif site.calls.Add(1) != 1 || inputs == nil {')),
     )
 
 

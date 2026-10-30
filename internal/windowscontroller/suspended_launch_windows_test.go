@@ -242,10 +242,34 @@ func TestWindowsControllerFoundationSuspendedCallbackRefusal(t *testing.T) {
 	if process != nil {
 		fixtureSuspendedReturnedOwner(t, process)
 	}
-	if process != nil || err == nil || site.calls.Load() != 1 || !site.denied.Load() || site.result.Load() != 0x800704c7 {
-		t.Fatal("Shell did not obey the actual pre-creation callback refusal", err, site.calls.Load(), site.result.Load())
+	// The real Shell can return a child even if an OnCreating callback reports
+	// failure. Cancellation must therefore refuse admission locally after
+	// supplying the actual suspension flag, without relying on an HRESULT veto.
+	if process == nil || err != nil || site.calls.Load() != 1 || !site.denied.Load() || site.result.Load() != 0x800704c7 || site.prove() == nil {
+		t.Fatal("cancelled Shell callback lost its local admission refusal", err, site.calls.Load(), site.result.Load())
+	}
+	if site.after.Load()&4 == 0 || site.after.Load()&site.before.Load() != site.before.Load() {
+		t.Fatal("cancelled Shell callback omitted its actual creation suspension")
+	}
+	thread, err := captureSuspendedShellThread(api, process)
+	if thread != 0 {
+		process.mu.Lock()
+		process.launchThread = thread
+		process.mu.Unlock()
+	}
+	if err != nil {
+		t.Fatal("cancelled Shell callback did not preserve its suspended initial thread", err)
+	}
+	if err := verifySuspendedShellImage(api, process, image); err != nil {
+		t.Fatal("cancelled Shell child lost its retained image before retirement", err)
 	}
 	fixtureNoSuspendedChildHello(t, pipe)
+	if err := retireSuspendedShell(process); err != nil {
+		t.Fatal("cancelled Shell callback did not join its exact suspended child", err)
+	}
+	if _, err := process.Wait(launchCtx); err != nil {
+		t.Fatal("cancelled Shell child was acknowledged before it joined", err)
+	}
 }
 
 // These are the documented SDK IUnknown, IServiceProvider and ICreatingProcess

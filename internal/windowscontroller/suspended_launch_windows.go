@@ -16,8 +16,10 @@ import (
 )
 
 // Shell's documented creation site supplies flags to the actual CreateProcess
-// call. A non-S_OK OnCreating result prevents creation; AddCreateFlags preserves
-// Shell's own flags. No undocumented process-resume API participates here.
+// call, preserving Shell's own flags. Native Shell can still create a child
+// after an OnCreating failure, so cancellation is a local admission refusal
+// after installing suspension, never a substitute for that creation barrier.
+// No undocumented process-resume API participates here.
 // https://learn.microsoft.com/windows/win32/api/shobjidl_core/nf-shobjidl_core-icreatingprocess-oncreating
 // https://learn.microsoft.com/windows/win32/api/shobjidl_core/nf-shobjidl_core-icreateprocessinputs-addcreateflags
 var shellUnknownIID = syscall.GUID{Data4: [8]byte{0xc0, 0, 0, 0, 0, 0, 0, 0x46}}
@@ -100,9 +102,6 @@ func shellOnCreating(this *shellCreationInterface, inputs unsafe.Pointer) uintpt
 	if site.calls.Add(1) != 1 || inputs == nil {
 		return reject(0x8000ffff) // E_UNEXPECTED
 	}
-	if site.ctx.Err() != nil {
-		return reject(0x800704c7) // HRESULT_FROM_WIN32(ERROR_CANCELLED)
-	}
 	vtable := *(**[6]uintptr)(inputs)
 	if vtable == nil || vtable[3] == 0 || vtable[5] == 0 {
 		return reject(0x80004003)
@@ -126,7 +125,12 @@ func shellOnCreating(this *shellCreationInterface, inputs unsafe.Pointer) uintpt
 		return reject(0x8000ffff)
 	}
 	if site.ctx.Err() != nil {
-		return reject(0x800704c7)
+		// A canceled caller still owns any late child Shell creates. The
+		// creation flags were applied and read back successfully: return S_OK
+		// for that operation while retaining the local refusal. The launch
+		// path will terminate/join this suspended owner without resuming it.
+		reject(0x800704c7) // HRESULT_FROM_WIN32(ERROR_CANCELLED)
+		return 0
 	}
 	site.result.Store(0)
 	return 0
