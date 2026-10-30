@@ -57,13 +57,23 @@ def run(command, *, cwd=None, env=None, timeout=180, sudo=None):
                                start_new_session=True)
     try:
         output, _ = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        if sudo is None:
-            os.killpg(process.pid, signal.SIGKILL)
-        else:
-            subprocess.run([sudo, '-n', '--', '/bin/kill', '-KILL', '-'+str(process.pid)],
-                           check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
-        output, _ = process.communicate(timeout=5)
+    except subprocess.TimeoutExpired as expired:
+        try:
+            if sudo is None:
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                # An external kill parses options independently of Bash's
+                # builtin. Delimit this captured negative PGID explicitly;
+                # otherwise a successful command need not signal the group.
+                subprocess.run([sudo, '-n', '--', '/bin/kill', '-KILL', '--', '-'+str(process.pid)],
+                               check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=5)
+            output, _ = process.communicate(timeout=5)
+        except (OSError, subprocess.SubprocessError) as cleanup:
+            # Preserve the first timeout's progress even if the output pipe
+            # remains owned by a live descendant. Never call that a join.
+            partial = getattr(cleanup, 'output', None) or expired.output or b''
+            raise RuntimeError('Owned socket fixture timed out and its process group could not be joined: '+
+                               partial[-8192:].decode('utf-8', errors='replace')) from cleanup
         raise RuntimeError('Owned socket fixture timed out after its process group was joined: '+output[-8192:].decode('utf-8', errors='replace'))
     if process.returncode:
         raise subprocess.CalledProcessError(process.returncode, command, output=output)

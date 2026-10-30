@@ -115,6 +115,7 @@ def inputs():
                              ROOT/'deploy/test_desktop_linux_guardian.py',
                              ROOT/'deploy/test_desktop_darwin_guardian.py',
                              ROOT/'deploy/test_linux_guardian_namespace.py',
+                             ROOT/'deploy/test_linux_guardian_cleanup.py',
                              *sorted((ROOT/'mobile/rosenpass').glob('Cargo.*')),
                              *sorted((ROOT/'mobile/rosenpass').glob('*.h')),
                              *sorted((ROOT/'mobile/rosenpass').glob('*.c')),

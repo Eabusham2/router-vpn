@@ -77,6 +77,7 @@ assert not pathlib.Path('/run/user/1001').exists(), 'the inherited mount was not
 assert any(line.split()[4] == '/etc' for line in pathlib.Path('/proc/self/mountinfo').read_text().splitlines())
 ''' + ("os.kill(os.getpid(), signal.SIGTERM)\n" if status == 143 else 'sys.exit('+str(status)+')\n'))
             executable.chmod(0o700)
+            print('Guardian nested mount isolation starting test status '+str(status)+'.', flush=True)
             result = module.namespace_test(executable)
             unchanged_mount(inherited, sentinel)
             if Path('/proc/self/mountinfo').read_text() != mounts:
@@ -155,6 +156,8 @@ def main():
     arguments = parser.parse_args()
     if arguments.isolated:
         raise SystemExit(isolated())
+    from test_linux_guardian_cleanup import check as check_timeout_cleanup
+    check_timeout_cleanup()
     sudo = GUARDIAN.UID.privilege_tool()
     command = [sys.executable, str(Path(__file__).resolve()), '--isolated']
     if sudo is not None:
