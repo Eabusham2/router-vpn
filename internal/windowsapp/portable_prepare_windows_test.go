@@ -313,7 +313,10 @@ func TestWindowsPortableCancellationAndPublicationOwnership(t *testing.T) {
 	if err != nil || !bytes.Equal(after, replacement) {
 		t.Fatal("failed Portable publication changed its replacement owner", err)
 	}
-	entries, err := os.ReadDir(dataRoot)
+	// The transaction still retains this directory without delete sharing.
+	// Enumerate its captured handle; reopening the pathname would conflict
+	// with that deliberate owner and would weaken the inspection's identity.
+	entries, err := directory.ReadDir(-1)
 	if err != nil {
 		t.Fatal(err)
 	}
