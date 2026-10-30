@@ -303,6 +303,156 @@ func TestRouterVPNDesktopNodePhysicalCommandAdmissionClosePreservesFailure(t *te
 	}
 }
 
+func desktopNodeAdmissionStop(t *testing.T, directory string, raw []byte) {
+	t.Helper()
+	pending := filepath.Join(directory, "stop-test.pending")
+	if err := os.WriteFile(pending, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(pending, filepath.Join(directory, "stop.json")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterVPNDesktopNodePhysicalCommandAdmissionExactStop(t *testing.T) {
+	for _, phase := range []string{"before-ready", "after-ready", "with-ack"} {
+		t.Run(phase, func(t *testing.T) {
+			directory, a, ctx, cancel, prepared := desktopNodeAdmissionFixture(t)
+			defer cancel()
+			raw, err := json.Marshal(routerVPNExternalStop{Schema: 1, Session: a.metadata.SessionID, SourceSHA256: a.metadata.ConfigSHA256})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if phase == "before-ready" {
+				desktopNodeAdmissionStop(t, directory, raw)
+			}
+			done := make(chan error, 1)
+			go func() { done <- a.admit(ctx, prepared) }()
+			if phase != "before-ready" {
+				value := desktopNodeAdmissionRecord(t, directory)
+				desktopNodeAdmissionStop(t, directory, raw)
+				if phase == "with-ack" {
+					value.Accepted = true
+					ack, err := json.Marshal(value)
+					if err != nil {
+						t.Fatal(err)
+					}
+					desktopNodeAdmissionAck(t, directory, ack)
+				}
+			}
+			// The stop itself must end the callback. Cancelling its context or
+			// calling Close first would conceal the former 45-second wait.
+			select {
+			case err := <-done:
+				if err == nil || a.admitted() || a.accepted.Load() {
+					t.Fatal("exact captured stop admitted the pending native owner")
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("exact captured stop did not retire pending native admission")
+			}
+			if ctx.Err() != nil {
+				t.Fatal("stop fixture cancelled the operation instead of exercising its private record")
+			}
+			if phase == "before-ready" {
+				if _, err := os.Stat(filepath.Join(directory, "node-physical-handoff-ready.json")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("preexisting captured stop published a native handoff", err)
+				}
+			}
+			if err := a.close(); err != nil {
+				t.Fatal("stopped native admission did not join its owned cleanup", err)
+			}
+			select {
+			case <-a.joined:
+			default:
+				t.Fatal("stopped native admission closed its files before joining the callback")
+			}
+			if _, err := os.Stat(filepath.Join(directory, "node-physical-handoff-ready.json")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("stopped native admission retained its ready record", err)
+			}
+			if actual, err := os.ReadFile(filepath.Join(directory, "stop.json")); err != nil || string(actual) != string(raw) {
+				t.Fatal("native admission changed the controller-owned stop", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodePhysicalCommandAdmissionRejectsForeignStop(t *testing.T) {
+	for _, fault := range []string{"session", "config", "physical-source", "schema", "malformed", "extra", "duplicate"} {
+		for _, phase := range []string{"before-ready", "after-ready"} {
+			for _, correctACK := range []bool{true, false} {
+				name := fault + "/" + phase + "/correct-ack"
+				if !correctACK {
+					name = fault + "/" + phase + "/foreign-ack"
+				}
+				t.Run(name, func(t *testing.T) {
+					directory, a, ctx, cancel, prepared := desktopNodeAdmissionFixture(t)
+					defer cancel()
+					stop := routerVPNExternalStop{Schema: 1, Session: a.metadata.SessionID, SourceSHA256: a.metadata.ConfigSHA256}
+					switch fault {
+					case "session":
+						stop.Session = strings.Repeat("d", 32)
+					case "config":
+						stop.SourceSHA256 = strings.Repeat("d", 64)
+					case "physical-source":
+						stop.SourceSHA256 = a.metadata.SourceSHA256
+						if stop.SourceSHA256 == a.metadata.ConfigSHA256 {
+							t.Fatal("stop fixture did not distinguish physical source from configuration")
+						}
+					case "schema":
+						stop.Schema++
+					}
+					raw, err := json.Marshal(stop)
+					if err != nil {
+						t.Fatal(err)
+					}
+					switch fault {
+					case "malformed":
+						raw = raw[:len(raw)-1]
+					case "extra":
+						raw = append(raw[:len(raw)-1], []byte(`,"extra":true}`)...)
+					case "duplicate":
+						raw = append(raw[:len(raw)-1], []byte(`,"schema":1}`)...)
+					}
+					if phase == "before-ready" {
+						desktopNodeAdmissionStop(t, directory, raw)
+					}
+					done := make(chan error, 1)
+					go func() { done <- a.admit(ctx, prepared) }()
+					value := desktopNodeAdmissionRecord(t, directory)
+					if phase == "after-ready" {
+						desktopNodeAdmissionStop(t, directory, raw)
+					}
+					if a.admitted() || a.accepted.Load() {
+						t.Fatal("foreign stop authorized native admission without an acknowledgement")
+					}
+					value.Accepted = true
+					if !correctACK {
+						value.SessionID = strings.Repeat("d", 32)
+					}
+					ack, err := json.Marshal(value)
+					if err != nil {
+						t.Fatal(err)
+					}
+					desktopNodeAdmissionAck(t, directory, ack)
+					err = desktopNodeAdmissionWait(t, done)
+					if correctACK && (err != nil || !a.admitted()) {
+						t.Fatal("foreign or malformed stop cancelled the captured handoff", err)
+					}
+					if !correctACK && (err == nil || a.admitted() || a.accepted.Load()) {
+						t.Fatal("foreign stop authorized a mismatched handoff acknowledgement")
+					}
+					if err := a.close(); err != nil {
+						t.Fatal(err)
+					}
+					if actual, err := os.ReadFile(filepath.Join(directory, "stop.json")); err != nil || string(actual) != string(raw) {
+						t.Fatal("native admission changed an unowned stop record", err)
+					}
+				})
+			}
+		}
+	}
+}
+
 func TestRouterVPNDesktopNodePhysicalCommandAdmissionEveryCloseJoins(t *testing.T) {
 	// Hold the entered-callback completion channel explicitly. synctest waits
 	// for durable blocking, so this proves duplicate Close joins without a

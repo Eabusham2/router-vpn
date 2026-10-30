@@ -115,7 +115,10 @@ func (a *routerVPNNodeAdmission) admit(ctx context.Context, prepared routervpnde
 	record := routerVPNNodeAdmissionRecord{Schema: 1, Kind: "routervpn-node-physical-handoff-v2", SessionID: a.metadata.SessionID, SourceSHA256: a.metadata.SourceSHA256,
 		ConfigSHA256: a.metadata.ConfigSHA256, TransferSHA256: a.transfer, NetworkID: prepared.Capture.NetworkID, Policy: prepared.Policy,
 		BaselineSHA256: prepared.BaselineSHA256, Nonce: hex.EncodeToString(nonce[:])}
-	if !a.files.current("node-physical-handoff-ack.json") || a.files.publish("node-physical-handoff-ready.json", record) != nil {
+	// The controller can stop this captured session before startup reaches the
+	// main loop. Its exact session/config record remains owned by the controller.
+	if a.files.stopRequested(a.metadata.SessionID, a.metadata.ConfigSHA256) ||
+		!a.files.current("node-physical-handoff-ack.json") || a.files.publish("node-physical-handoff-ready.json", record) != nil {
 		return routerVPNExternalFailure
 	}
 	expected := record
@@ -125,7 +128,8 @@ func (a *routerVPNNodeAdmission) admit(ctx context.Context, prepared routervpnde
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if bounded.Err() != nil || a.state.Load() != 1 || !a.files.current("node-physical-handoff-ready.json") {
+		if bounded.Err() != nil || a.state.Load() != 1 || a.files.stopRequested(a.metadata.SessionID, a.metadata.ConfigSHA256) ||
+			!a.files.current("node-physical-handoff-ready.json") {
 			return routerVPNExternalFailure
 		}
 		raw, err := a.files.read("node-physical-handoff-ack.json", 2048)
@@ -137,7 +141,8 @@ func (a *routerVPNNodeAdmission) admit(ctx context.Context, prepared routervpnde
 			var actual routerVPNNodeAdmissionRecord
 			decoder := json.NewDecoder(bytes.NewReader(raw))
 			decoder.DisallowUnknownFields()
-			if decoder.Decode(&actual) != nil || actual != expected || bounded.Err() != nil || a.state.Load() != 1 {
+			if decoder.Decode(&actual) != nil || actual != expected || bounded.Err() != nil || a.state.Load() != 1 ||
+				a.files.stopRequested(a.metadata.SessionID, a.metadata.ConfigSHA256) {
 				return routerVPNExternalFailure
 			}
 			a.accepted.Store(true)

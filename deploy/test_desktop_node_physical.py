@@ -134,6 +134,10 @@ def mutants(source, windows):
          "another compiler owner adopted this native generation", changed(network, "n.policy != policy", "false && n.policy != policy")),
         ("foreign-handoff-reply", admission, "./cmd/sing-box", "TestRouterVPNDesktopNodePhysicalCommandAdmissionRejectsForeignReplies", "source",
          "foreign handoff acknowledgement activated native sockets", changed(admission, "actual != expected", "false && actual != expected")),
+        ("ignored-native-stop", admission, "./cmd/sing-box", "TestRouterVPNDesktopNodePhysicalCommandAdmissionExactStop", "after-ready",
+         "exact captured stop did not retire pending native admission", changed(admission,
+         "\t\tif bounded.Err() != nil || a.state.Load() != 1 || a.files.stopRequested(a.metadata.SessionID, a.metadata.ConfigSHA256) ||\n",
+         "\t\tif bounded.Err() != nil || a.state.Load() != 1 || (false && a.files.stopRequested(a.metadata.SessionID, a.metadata.ConfigSHA256)) ||\n")),
         ("unbound-private-predecessor", transfer, "./cmd/sing-box", "TestRouterVPNDesktopNodePhysicalCommandTransferInput", "wrong-hash",
          "command accepted missing, changed or unbound predecessor input", changed(transfer, "hex.EncodeToString(sum[:]) != digest", "hex.EncodeToString(sum[:]) != digest && false")),
         ("unjoined-native-outcome", network, "./routervpn/desktoppt", "TestRouterVPNNodePhysicalRetirementKeepsExactJoinedSource", "partial-before-admission",
@@ -166,7 +170,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     captured["CGO_ENABLED"] = "1" if race else "0"
     suites = [
         ("command", "./cmd/sing-box", "^TestRouterVPNDesktopNodePhysicalCommand",
-         tuple("TestRouterVPNDesktopNodePhysicalCommand" + name for name in ("SourceBoundary", "RestoredMTU", "TransferInput", "RetirementReceipt", "ReadyRequiresFreshDNS", "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins"))),
+         tuple("TestRouterVPNDesktopNodePhysicalCommand" + name for name in ("SourceBoundary", "RestoredMTU", "TransferInput", "RetirementReceipt", "ReadyRequiresFreshDNS", "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionExactStop", "AdmissionRejectsForeignStop", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins"))),
         ("factory", "./routervpn/desktoppt", "^TestRouterVPNNodePhysical",
          tuple("TestRouterVPNNodePhysical" + name for name in ("SeparateRegistriesAndUnpreparedRejection", "HandshakePhaseAndExactPolicy", "FactoryCancellationJoinsPartialOwner", "RetirementKeepsExactJoinedSource", "AdmissionRetainsExactPolicy", "AdmissionCapturesExactPredecessor")) +
          (tuple("TestRouterVPNNodePhysicalWindows" + name for name in ("CapturesPreparedOwner", "AdmissionRejectsChangedOwners", "CloseJoinsAdmission")) if windows else ())),
