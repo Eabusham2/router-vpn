@@ -11,15 +11,21 @@ function Save([string]$Value){[IO.File]::WriteAllText($Report,$Value,[Text.UTF8E
 function global:Invoke-RestMethod {throw 'CONTROL owned PowerShell used ordinary HTTP'}
 try{
     Import-Module (Join-Path $Root 'client/RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
+    $env:HOMEVPN_ROOT=Join-Path ([IO.Path]::GetDirectoryName($Report)) 'captured-data'
+    $CapturedDataRoot=$env:HOMEVPN_ROOT
+    Check ($null-eq(Get-RouterVPNControllerDataRoot)) 'unproved PowerShell trusted its ambient Data directory'
     if($StartupDelayMilliseconds-gt0){Start-Sleep -Milliseconds $StartupDelayMilliseconds}
     if($Mode-ceq'reject-peer'){
         Reject {Initialize-RouterVPNControllerTransport -ControllerPipe $ControllerPipe -ControllerParentHandle $ControllerParentHandle} 'unproved native parent acquired the PowerShell channel'
         Reject {Initialize-RouterVPNControllerTransport} 'failed native handoff reset to legacy'
         Reject {New-RouterVPNControllerClient} 'failed native handoff created a fallback client'
+        Reject {Get-RouterVPNControllerDataRoot} 'failed native handoff retained UI state access'
         Save 'REJECTED PEER'
     }else{
         $Base=Initialize-RouterVPNControllerTransport -ControllerPipe $ControllerPipe -ControllerParentHandle $ControllerParentHandle
         Check ($Base-ceq'https://127.0.0.1:8788') 'native PowerShell lost the captured HTTPS origin'
+        $env:HOMEVPN_ROOT=Join-Path ([IO.Path]::GetDirectoryName($Report)) 'replacement-data'
+        Check ((Get-RouterVPNControllerDataRoot)-ceq$CapturedDataRoot) 'native PowerShell did not retain its authenticated Data directory'
         if($Mode-ceq'reject-request'){
             Reject {Invoke-RouterVPNControllerRequest -Uri ($Base+'/api/ui/status') -TimeoutSec 5} 'wrong TLS pin reached the PowerShell controller'
             Reject {Invoke-RouterVPNControllerRequest -Uri 'http://127.0.0.1:8788/api/ui/status'} 'failed TLS request used ordinary HTTP'
@@ -44,6 +50,7 @@ try{
             Close-RouterVPNControllerTransport
             Reject {Initialize-RouterVPNControllerTransport} 'retired PowerShell owner reset to legacy'
             Reject {New-RouterVPNControllerClient} 'retired PowerShell owner created another client'
+            Reject {Get-RouterVPNControllerDataRoot} 'retired PowerShell owner retained UI state access'
             Reject {Invoke-RouterVPNControllerRequest -Uri 'http://127.0.0.1:8788/api/ui/status'} 'old PowerShell callback used ordinary HTTP'
             Save 'PASS ROUNDTRIP'
         }else{

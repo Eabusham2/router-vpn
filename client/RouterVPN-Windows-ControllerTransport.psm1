@@ -6,6 +6,7 @@ $script:ControllerMode='legacy'
 $script:ControllerChannel=$null
 $script:ControllerPipe=''
 $script:ControllerParentHandle=[long]0
+$script:ControllerDataRoot=''
 
 function Initialize-RouterVPNControllerTransport {
     param([string]$ControllerPipe,[long]$ControllerParentHandle)
@@ -38,8 +39,19 @@ function Initialize-RouterVPNControllerTransport {
     # feature receives a controller bearer or a TLS-validation callback.
     $script:ControllerChannel=[RouterVPN.ControllerUI.ControllerChannel]::ConnectAsync($ControllerPipe,$ControllerParentHandle,10000,[Threading.CancellationToken]::None).GetAwaiter().GetResult()
     $script:ControllerPipe=$ControllerPipe;$script:ControllerParentHandle=$ControllerParentHandle
+    # The retained native parent supplies this public path in its reconstructed
+    # environment. Capture it only after authenticating that parent and pipe;
+    # later feature callbacks must not follow mutable process environment.
+    $script:ControllerDataRoot=[string]$env:HOMEVPN_ROOT
     $script:ControllerMode='owned'
     return 'https://127.0.0.1:8788'
+}
+
+function Get-RouterVPNControllerDataRoot {
+    if($script:ControllerMode-ceq'legacy'){return $null}
+    if($script:ControllerMode-cne'owned'-or$null-eq$script:ControllerChannel){throw 'The captured native controller channel is closed or unavailable.'}
+    if([string]::IsNullOrWhiteSpace($script:ControllerDataRoot)){throw 'The native UI has no captured data directory.'}
+    return $script:ControllerDataRoot
 }
 
 function Assert-RouterVPNControllerBaseUrl {
@@ -137,4 +149,4 @@ function Close-RouterVPNControllerTransport {
     }
 }
 
-Export-ModuleMember -Function Initialize-RouterVPNControllerTransport,Assert-RouterVPNControllerBaseUrl,New-RouterVPNControllerClient,Set-RouterVPNControllerRequestTimeout,Invoke-RouterVPNControllerRequest,Close-RouterVPNControllerTransport
+Export-ModuleMember -Function Initialize-RouterVPNControllerTransport,Get-RouterVPNControllerDataRoot,Assert-RouterVPNControllerBaseUrl,New-RouterVPNControllerClient,Set-RouterVPNControllerRequestTimeout,Invoke-RouterVPNControllerRequest,Close-RouterVPNControllerTransport

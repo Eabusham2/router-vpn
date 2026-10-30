@@ -81,8 +81,6 @@ $UnifiedControllerContract=@(
 )
 $LegacyAutoAuditMarker='/api/auto'
 
-$OnboardingStateDir=Join-Path $PSScriptRoot '.routervpn-state'
-$OnboardingStateFile=Join-Path $OnboardingStateDir 'windows-onboarding-v3.json'
 $OnboardingSteps=@(
     @{Title='Welcome to Router VPN';Body='The map is the daily app. Setup Center remains the separate authenticated deployment/admin surface. Install this native app once, then securely add/select Router nodes or compatible Custom/external exits.'},
     @{Title='Map and nodes';Body='One normal node is selected by default. Router and Custom/external nodes share one catalog. Only real stored coordinates are plotted; Router VPN never fabricates a map pin from an IP address. The connect-side dropdown can live-test Router nodes and choose the fastest measured median RTT.'},
@@ -96,10 +94,11 @@ $OnboardingSteps=@(
 )
 
 function Get-OnboardingState{
-    if(-not(Test-Path -LiteralPath $OnboardingStateFile)){return [pscustomobject]@{done=$false;step=0}}
-    try{$s=Get-Content -LiteralPath $OnboardingStateFile -Raw -Encoding UTF8|ConvertFrom-Json;return [pscustomobject]@{done=[bool]$s.done;step=[Math]::Max(0,[Math]::Min([int]$s.step,$OnboardingSteps.Count-1))}}catch{return [pscustomobject]@{done=$false;step=0}}
+    $raw=Read-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-onboarding-v3.json'
+    if(-not$raw){return [pscustomobject]@{done=$false;step=0}}
+    try{$s=$raw|ConvertFrom-Json;return [pscustomobject]@{done=[bool]$s.done;step=[Math]::Max(0,[Math]::Min([int]$s.step,$OnboardingSteps.Count-1))}}catch{return [pscustomobject]@{done=$false;step=0}}
 }
-function Save-OnboardingState([int]$Step,[bool]$Done){[void](New-Item -ItemType Directory -Force -Path $OnboardingStateDir);@{version=3;done=$Done;step=$Step}|ConvertTo-Json -Compress|Set-Content -LiteralPath $OnboardingStateFile -Encoding UTF8}
+function Save-OnboardingState([int]$Step,[bool]$Done){Write-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-onboarding-v3.json' -Text (@{version=3;done=$Done;step=$Step}|ConvertTo-Json -Compress)}
 function global:Show-RouterVPNProductOnboarding{
     param([switch]$Force)
     # Latest map-first contract: normal startup must never open a modal in front

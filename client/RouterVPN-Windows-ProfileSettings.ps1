@@ -1,6 +1,12 @@
 if(-not(Get-Command New-RouterVPNControllerClient -ErrorAction SilentlyContinue)){
     Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
 }
+if(-not(Get-Command Read-RouterVPNUIState -ErrorAction SilentlyContinue)){
+    # App reads this UTF-8 source into a ScriptBlock, whose PSScriptRoot is
+    # empty. The already imported transport retains the actual package root.
+    $UIStateHelpers=Join-Path (Get-Command Get-RouterVPNControllerDataRoot -ErrorAction Stop).Module.ModuleBase 'RouterVPN-Windows-UIState.psm1'
+    Import-Module $UIStateHelpers -Global -ErrorAction Stop
+}
 
 function global:Get-RouterVPNProfileSettings {
     param([string]$BaseUrl)
@@ -182,14 +188,13 @@ function global:Test-RouterVPNConnectionProfileBusy {
 }
 
 function global:Get-RouterVPNCurrentModeSnapshot {
-    $stateDir=Join-Path $PSScriptRoot '.routervpn-state'
-    $modeFile=Join-Path $stateDir 'windows-selected-mode-v1.txt'
-    $presetFile=Join-Path $stateDir 'windows-custom-presets-v1.json'
-    $mode='smart-auto';if(Test-Path -LiteralPath $modeFile){try{$raw=(Get-Content -LiteralPath $modeFile -Raw -Encoding UTF8).Trim();if($raw){$mode=$raw}}catch{}}
+    $raw=Read-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-selected-mode-v1.txt'
+    $mode='smart-auto';if(-not[string]::IsNullOrWhiteSpace($raw)){$mode=$raw.Trim()}
     $layers=@()
-    if($mode.StartsWith('custom:') -and (Test-Path -LiteralPath $presetFile)){
+    if($mode.StartsWith('custom:')){
         $name=$mode.Substring(7)
-        try{$preset=@((Get-Content -LiteralPath $presetFile -Raw -Encoding UTF8|ConvertFrom-Json)|Where-Object{[string]$_.name -eq $name}|Select-Object -First 1);if($preset){$layers=@($preset.layers)}}catch{}
+        $raw=Read-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-custom-presets-v1.json'
+        try{$preset=@(($raw|ConvertFrom-Json)|Where-Object{[string]$_.name -eq $name}|Select-Object -First 1);if($preset){$layers=@($preset.layers)}}catch{}
     }
     [pscustomobject]@{mode=$mode;custom_layers=@($layers)}
 }
@@ -197,13 +202,14 @@ function global:Get-RouterVPNCurrentModeSnapshot {
 function global:Set-RouterVPNLoadedModeSnapshot {
     param($Loaded)
     $mode=[string]$Loaded.mode;if([string]::IsNullOrWhiteSpace($mode)){$mode='smart-auto'}
-    $stateDir=Join-Path $PSScriptRoot '.routervpn-state';[void](New-Item -ItemType Directory -Force -Path $stateDir)
-    $modeFile=Join-Path $stateDir 'windows-selected-mode-v1.txt';Set-Content -LiteralPath $modeFile -Value $mode -Encoding UTF8
+    Write-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-selected-mode-v1.txt' -Text $mode
     if($mode.StartsWith('custom:')){
         $name=$mode.Substring(7);$layers=@($Loaded.custom_layers)
         if($name -and $layers.Count -gt 0){
-            $presetFile=Join-Path $stateDir 'windows-custom-presets-v1.json';$values=@();if(Test-Path -LiteralPath $presetFile){try{$values=@(Get-Content -LiteralPath $presetFile -Raw -Encoding UTF8|ConvertFrom-Json)}catch{$values=@()}}
-            $values=@($values|Where-Object{[string]$_.name -ne $name});$values+=,[pscustomobject]@{name=$name;layers=@($layers)};@($values)|ConvertTo-Json -Depth 8|Set-Content -LiteralPath $presetFile -Encoding UTF8
+            $raw=Read-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-custom-presets-v1.json'
+            $values=@();if($raw){try{$values=@($raw|ConvertFrom-Json)}catch{$values=@()}}
+            $values=@($values|Where-Object{[string]$_.name -ne $name});$values+=,[pscustomobject]@{name=$name;layers=@($layers)}
+            Write-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-custom-presets-v1.json' -Text (@($values)|ConvertTo-Json -Depth 8)
         }
     }
 }

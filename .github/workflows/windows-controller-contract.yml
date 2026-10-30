@@ -129,6 +129,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Native GUI pipe transport gate failed in $shell" }
             python deploy/test_windows_gui_adapter.py --shell $shell
             if ($LASTEXITCODE -ne 0) { throw "PowerShell UI adapter gate failed in $shell" }
+            python deploy/test_windows_ui_state.py --shell $shell
+            if ($LASTEXITCODE -ne 0) { throw "Captured Windows UI state gate failed in $shell" }
           }
           # Build once with the shipping Framework compiler, then load the same
           # production DLL in both runtimes. Independent recompilation cannot

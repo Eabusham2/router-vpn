@@ -1,5 +1,9 @@
 $script:RouterVPNUnifiedModeKey = 'windows-selected-mode-v1.txt'
 $script:RouterVPNUnifiedPresets = 'windows-custom-presets-v1.json'
+if(-not(Get-Command Read-RouterVPNUIState -ErrorAction SilentlyContinue)){
+    $UIStateHelpers=Join-Path (Get-Command Get-RouterVPNControllerDataRoot -ErrorAction Stop).Module.ModuleBase 'RouterVPN-Windows-UIState.psm1'
+    Import-Module $UIStateHelpers -Global -ErrorAction Stop
+}
 
 function Add-RouterVPNUnifiedWindowsShell {
     param([Parameter(Mandatory=$true)][string]$ProductSource)
@@ -66,8 +70,6 @@ function Add-RouterVPNUnifiedWindowsShell {
     $scriptMarker = '$script:EventSeq=[uint64]0;$script:Busy=$false;$script:NodeSort=''current'';$script:DnsPolicySummary=''Saved DNS policy not loaded yet.'''
     if (-not $ProductSource.Contains($scriptMarker)) { throw 'Windows unified shell: script-state marker drifted.' }
     $extraState = @'
-$script:UnifiedModeStateFile=Join-Path $PSScriptRoot '.routervpn-state\windows-selected-mode-v1.txt'
-$script:UnifiedPresetFile=Join-Path $PSScriptRoot '.routervpn-state\windows-custom-presets-v1.json'
 $script:UnifiedModeChoices=@()
 Add-Type -AssemblyName System.Net.Http
 $script:UnifiedAsyncClient=New-RouterVPNControllerClient -TimeoutMilliseconds 960000 -ResponseLimit 8388608
@@ -488,9 +490,9 @@ function CompleteUnifiedRefreshAsync {
     }
 }
 $script:UnifiedRefreshPoller.Add_Tick({CompleteUnifiedRefreshAsync})
-function GetUnifiedPresets{if(-not(Test-Path -LiteralPath $script:UnifiedPresetFile)){return @()};try{return @((Get-Content -LiteralPath $script:UnifiedPresetFile -Raw -Encoding UTF8|ConvertFrom-Json))}catch{return @()}}
-function SaveUnifiedPresets($Values){[void](New-Item -ItemType Directory -Force -Path (Split-Path $script:UnifiedPresetFile));@($Values)|ConvertTo-Json -Depth 8|Set-Content -LiteralPath $script:UnifiedPresetFile -Encoding UTF8}
-function GetUnifiedModeID{if(Test-Path -LiteralPath $script:UnifiedModeStateFile){$v=(Get-Content -LiteralPath $script:UnifiedModeStateFile -Raw -Encoding UTF8).Trim();if($v){return $v}};return 'smart-auto'}
+function GetUnifiedPresets{$raw=Read-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-custom-presets-v1.json';if(-not$raw){return @()};try{return @($raw|ConvertFrom-Json)}catch{return @()}}
+function SaveUnifiedPresets($Values){Write-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-custom-presets-v1.json' -Text (@($Values)|ConvertTo-Json -Depth 8)}
+function GetUnifiedModeID{$raw=Read-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-selected-mode-v1.txt';if(-not[string]::IsNullOrWhiteSpace($raw)){return $raw.Trim()};return 'smart-auto'}
 function New-RouterVPNQuickDNSPayload {
  param($Captured,[string]$DisplayedProfileID,[string]$Mode)
  if($Mode -notin @('home','rescue')){throw 'Open DNS details to configure or select a measured resolver.'}
@@ -510,7 +512,7 @@ function SetUnifiedDNSPreset {
  $Body=New-RouterVPNQuickDNSPayload -Captured $Captured -DisplayedProfileID $DisplayedProfileID -Mode $Mode
  [void](Api '/api/dns/policy' 'POST' $Body 10)
 }
-function SaveUnifiedModeID([string]$Value){[void](New-Item -ItemType Directory -Force -Path (Split-Path $script:UnifiedModeStateFile));Set-Content -LiteralPath $script:UnifiedModeStateFile -Value $Value -Encoding UTF8}
+function SaveUnifiedModeID([string]$Value){Write-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-selected-mode-v1.txt' -Text $Value}
 function RefreshUnifiedModeChoices($Modes){$Wanted=GetUnifiedModeID;$Values=New-Object System.Collections.ArrayList;[void]$Values.Add([pscustomobject]@{id='smart-auto';display='SMART AUTO — recommended';available=$true});[void]$Values.Add([pscustomobject]@{id='auto';display='AUTO — first proven path';available=$true});foreach($M in @($Modes)){$Reason=[string]$M.reason_text;$Label=if([bool]$M.available){[string]$M.name}else{"$($M.name) — unavailable: $Reason"};[void]$Values.Add([pscustomobject]@{id=[string]$M.id;display=$Label;available=[bool]$M.available})};foreach($P in @(GetUnifiedPresets)){[void]$Values.Add([pscustomobject]@{id=('custom:'+[string]$P.name);display=('CUSTOM • '+[string]$P.name);available=$true})};[void]$Values.Add([pscustomobject]@{id='custom:new';display='New CUSTOM preset…';available=$true});$script:UnifiedModeChoices=@($Values);$ModeCombo.ItemsSource=$script:UnifiedModeChoices;$ModeCombo.SelectedValue=$Wanted;if(-not$ModeCombo.SelectedItem){$ModeCombo.SelectedValue='smart-auto';SaveUnifiedModeID 'smart-auto'}}
 function UnifiedSelectedProfile{try{$S=$RouterCombo.Tag;$ID=[string]$RouterCombo.SelectedValue;if($null-eq$S -or -not$ID -or [string]$S.selected_id -cne $ID){return $null};$Found=@($S.profiles|Where-Object{[string]$_.id -ceq $ID});if($Found.Count-ne1){return $null};return $Found[0]}catch{return $null}}
 function OpenUnifiedDetail([int]$Index){(Control 'UnifiedShell').Visibility='Collapsed';(Control 'LegacyDetailTabs').Visibility='Visible';(Control 'LegacyDetailTabs').SelectedIndex=$Index;(Control 'UnifiedBackButton').Visibility='Visible'}
