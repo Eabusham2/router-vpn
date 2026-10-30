@@ -87,7 +87,8 @@ try{
     SaveUnifiedPresets @($Presets|Where-Object{$_.name-ceq'whole path'})
     Check (@(GetUnifiedPresets).Count-eq1-and(Read-RouterVPNUIState -LegacyDirectory $Legacy -Name $Names[2]).TrimStart().StartsWith('[')) 'one remaining CUSTOM preset was not saved as an array'
     SaveUnifiedPresets @()
-    Check (@(GetUnifiedPresets).Count-eq0-and(Read-RouterVPNUIState -LegacyDirectory $Legacy -Name $Names[2]).Trim()-ceq'[]') 'deleting the final CUSTOM preset did not save an empty array'
+    $EmptyPresets=@(GetUnifiedPresets);$EmptyRaw=Read-RouterVPNUIState -LegacyDirectory $Legacy -Name $Names[2]
+    Check ($EmptyPresets.Count-eq0-and$EmptyRaw-match'^\s*\[\s*\]\s*$') ('deleting the final CUSTOM preset did not save an empty array; count='+$EmptyPresets.Count+'; saved='+($EmptyRaw|ConvertTo-Json -Compress))
     # Older releases serialized one preset as an object; preserve that input.
     Write-RouterVPNUIState -LegacyDirectory $Legacy -Name $Names[2] -Text '{"name":"legacy single","layers":["wg","pq"]}'
     Check (@(GetUnifiedPresets).Count-eq1-and[string](@(GetUnifiedPresets)[0].name)-ceq'legacy single') 'legacy single CUSTOM object was not preserved'
