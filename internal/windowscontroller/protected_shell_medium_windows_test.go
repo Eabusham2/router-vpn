@@ -114,6 +114,9 @@ func TestWindowsControllerFoundationProtectedShellPrimaryMedium(t *testing.T) {
 		}
 	}()
 	token := fixtureConstructMediumPrimary(t, api, worker.parent, original, statistics, worker.privileges)
+	worker.inspect = func(process syscall.ProcessInformation, image *Image) {
+		fixtureInspectMediumStartup(t, api, token, process, image, original.SessionID)
+	}
 	worker = fixtureStartPrimaryWorker(t, worker, token, test, fixtureMediumWorkerEnvironment, 1, func(actual syscall.Token) error {
 		identity, err := fixturePrimaryMediumIdentity(api, actual)
 		if err != nil || identity.SID != original.SID || identity.AuthenticationID != original.AuthenticationID || identity.SessionID != original.SessionID {
@@ -131,7 +134,7 @@ func fixtureWaitMediumWorker(t *testing.T, worker *fixtureRestrictedWorker, test
 	}
 	var exit uint32
 	if err := syscall.GetExitCodeProcess(worker.process.Process, &exit); err != nil || exit != 0 {
-		t.Fatalf("primary-Medium namespace capture failed (exit=%d): %v\n%s", exit, err, worker.output())
+		t.Fatalf("primary-Medium namespace capture failed (pid=%d exit=0x%08x): %v\n%s", worker.process.ProcessId, exit, err, worker.output())
 	}
 	output := worker.output()
 	if !strings.Contains(output, "--- PASS: "+test+" (") || strings.Contains(output, "--- SKIP:") || strings.Contains(output, "DATA RACE") {

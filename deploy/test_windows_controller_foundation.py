@@ -76,6 +76,7 @@ def sources():
                 "protected_shell_windows.go", "protected_shell_windows_test.go",
                 "protected_shell_medium_windows_test.go",
                 "medium_desktop_windows_test.go",
+                "medium_access_windows_test.go",
                 "machine_directories_windows.go", "machine_directories_windows_test.go",
                 "fixture_windows_test.go", "foundation_windows_test.go", "capture_windows_test.go",
                 "suspended_launch_windows.go", "suspended_launch_windows_test.go",

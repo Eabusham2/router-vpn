@@ -155,6 +155,7 @@ type fixtureRestrictedWorker struct {
 	api        *fixtureRestrictedAPI
 	directory  string
 	desktop    string
+	inspect    func(syscall.ProcessInformation, *Image)
 	job        syscall.Handle
 	process    syscall.ProcessInformation
 	image      *Image
@@ -387,6 +388,9 @@ func fixtureStartPrimaryWorker(t *testing.T, worker *fixtureRestrictedWorker, to
 	proofCloseErr := proof.Close()
 	if proofErr != nil || proofCloseErr != nil {
 		t.Fatal("restricted worker lost its exact captured image before resume", proofErr, proofCloseErr)
+	}
+	if worker.inspect != nil {
+		worker.inspect(worker.process, worker.image)
 	}
 	parentAfter, err := fixtureTokenPrivileges(worker.parent)
 	if err != nil || !maps.Equal(worker.privileges, parentAfter) {
