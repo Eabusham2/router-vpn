@@ -37,7 +37,7 @@ REQUIRED = (
 
 
 def sources():
-    expected = {"bridge_windows.go", "bridge_windows_test.go"}
+    expected = {"bridge_windows.go", "bridge_windows_test.go", "bridge_powershell_windows_test.go"}
     paths = sorted(PACKAGE.glob("*.go"))
     if PACKAGE.is_symlink() or {path.name for path in paths} != expected:
         raise ValueError("Native GUI composition source closure changed")
@@ -119,7 +119,8 @@ def execute(go="go", shell="powershell.exe"):
         if status:
             raise ValueError("Actual Go GUI composition did not compile:\n" + output[-16384:])
         artifacts[str(binary)] = hashlib.sha256(binary.read_bytes()).hexdigest()
-        status, output = NATIVE.run([binary, "-test.run=^TestWindowsUIBridge", "-test.count=1",
+        selector = "^(" + "|".join(REQUIRED) + ")$"
+        status, output = NATIVE.run([binary, "-test.run=" + selector, "-test.count=1",
                                     "-test.timeout=120s", "-test.v"], cwd=ROOT, env=captured, timeout=135)
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if (status or "--- SKIP:" in output or "DATA RACE" in output or

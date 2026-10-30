@@ -56,6 +56,11 @@ func nativeBridgeTestHost(t *testing.T, wrongPin bool) *nativeBridgeHost {
 			t.Error(err)
 		}
 	})
+	return nativeBridgeHostForImage(t, wrongPin, image, nil)
+}
+
+func nativeBridgeHostForImage(t *testing.T, wrongPin bool, image *windowscontroller.Image, extra http.Handler) *nativeBridgeHost {
+	t.Helper()
 	host := &nativeBridgeHost{image: image, entered: make(chan struct{}), drained: make(chan struct{})}
 	identity, err := controllertransport.NewIdentity()
 	if err != nil {
@@ -76,6 +81,10 @@ func nativeBridgeTestHost(t *testing.T, wrongPin bool) *nativeBridgeHost {
 			return
 		}
 		host.requests.Add(1)
+		if extra != nil && (strings.HasPrefix(r.URL.Path, "/api/ui/") || r.URL.Path == "/api/profile/import") {
+			extra.ServeHTTP(w, r)
+			return
+		}
 		switch r.URL.Path {
 		case "/api/status":
 			_, _ = io.WriteString(w, "captured")

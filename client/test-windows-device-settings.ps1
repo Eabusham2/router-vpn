@@ -1,6 +1,7 @@
 param([string]$Root=(Split-Path $PSScriptRoot -Parent),[string]$Source='', [string]$UnifiedSource='', [switch]$WPF)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
+Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
 if(-not $Source){$Source=Join-Path $Root 'client/RouterVPN-Windows-ProfileSettings.ps1'}
 if(-not $UnifiedSource){$UnifiedSource=Join-Path $Root 'client/RouterVPN-Windows-UnifiedShell.ps1'}
 $Text=[IO.File]::ReadAllText($Source,[Text.Encoding]::UTF8)

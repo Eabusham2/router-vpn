@@ -70,6 +70,8 @@ jobs:
           foreach ($shell in @('powershell.exe', 'pwsh')) {
             python deploy/test_windows_gui_transport.py --shell $shell
             if ($LASTEXITCODE -ne 0) { throw "Native GUI pipe transport gate failed in $shell" }
+            python deploy/test_windows_gui_adapter.py --shell $shell
+            if ($LASTEXITCODE -ne 0) { throw "PowerShell UI adapter gate failed in $shell" }
           }
           # Build once with the shipping Framework compiler, then load the same
           # production DLL in both runtimes. Independent recompilation cannot
@@ -100,6 +102,15 @@ jobs:
         run: |
           python deploy/test_windows_gui_bridge.py
           if ($LASTEXITCODE -ne 0) { throw 'Actual CSharp and Go GUI composition gate failed' }
+      - name: Actual PowerShell UI adapter through owned Go pipe and pinned TLS
+        if: ${{ success() || failure() }}
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          foreach ($shell in @('powershell.exe', 'pwsh')) {
+            python deploy/test_windows_gui_powershell.py --shell $shell
+            if ($LASTEXITCODE -ne 0) { throw "Actual PowerShell and Go UI composition gate failed in $shell" }
+          }
       - name: Isolated Windows socket token and ALE endpoint proof
         if: ${{ success() || failure() }}
         shell: pwsh

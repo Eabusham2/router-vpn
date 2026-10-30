@@ -75,7 +75,7 @@ function ApplyUnifiedFastestStore($Store){
  $Preferred=[string]$Store.selected_id;$Known=@($Values|Where-Object{[string]$_.id -eq $Preferred}).Count -gt 0;if(-not $Preferred -or -not $Known){$Preferred='fastest'}
  $script:UnifiedTelemetrySync=$true;(Control 'UnifiedFastestNode').ItemsSource=@($Values);(Control 'UnifiedFastestNode').SelectedValue=$Preferred;$script:UnifiedTelemetrySync=$false
 }
-$script:UnifiedTelemetryClient=[System.Net.Http.HttpClient]::new()
+$script:UnifiedTelemetryClient=New-RouterVPNControllerClient -TimeoutMilliseconds 12000 -ResponseLimit 2097152
 $script:UnifiedTelemetryClient.Timeout=[System.Threading.Timeout]::InfiniteTimeSpan
 $script:UnifiedTelemetryTasks=@{}
 $script:UnifiedTelemetryRequests=@{}

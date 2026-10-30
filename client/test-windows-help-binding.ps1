@@ -2,6 +2,7 @@ param([string]$Root = (Split-Path $PSScriptRoot -Parent))
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 $Client=Join-Path $Root 'client'
+if(-not(Get-Command New-RouterVPNControllerClient -ErrorAction SilentlyContinue)){Import-Module (Join-Path $Client 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop}
 $Launcher=Get-Content -LiteralPath (Join-Path $Client 'RouterVPN-Windows-App.ps1') -Raw -Encoding UTF8
 
 function Assert-HelpBinding([bool]$Value,[string]$Message){if(-not$Value){throw $Message}}

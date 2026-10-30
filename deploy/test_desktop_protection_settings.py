@@ -8,7 +8,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from test_desktop_startup_settings import ROOT, read, run, section
+from test_desktop_startup_settings import ROOT, read, run, section, windows_adapter_import
 
 
 PS_TEST = r'''
@@ -65,7 +65,7 @@ def windows(directory, shell):
         if name != "shipping" and body == function:
             raise RuntimeError("PowerShell negative did not apply: " + name)
         path = directory / (name + ".ps1")
-        path.write_text(body + PS_TEST, encoding="utf-8-sig")
+        path.write_text(windows_adapter_import() + body + PS_TEST, encoding="utf-8-sig")
         run([shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(path)], broken=name != "shipping")
 
 

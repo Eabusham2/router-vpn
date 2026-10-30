@@ -1,6 +1,7 @@
 param([string]$Source=(Join-Path $PSScriptRoot 'RouterVPN-Windows-MTU.ps1'),[switch]$Live,[string]$Scenario='accepted')
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
+Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
 Add-Type -AssemblyName System.Net.Http
 . ([ScriptBlock]::Create((Get-Content -LiteralPath $Source -Raw -Encoding UTF8)))
 $script:Checks=0

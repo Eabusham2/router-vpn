@@ -24,7 +24,7 @@ foreach($BadScore in @([double]::NaN,[double]::PositiveInfinity,-1,0)) {
  RefreshUnifiedMultihopComparison @{comparison=@{id='three';stage='measured';measurements=@($bad)}}
  if($script:ComparisonTestLabel.Text-notlike '*rejected*'){throw 'Invalid score displayed as winner'}
 }
-foreach($Marker in @('UnifiedExecution','/api/multihop/status','StopUnifiedComparisonProgress','StartUnifiedComparisonProgress','UseProxy=$false','AllowAutoRedirect=$false','MaxResponseContentBufferSize=32768')) {
+foreach($Marker in @('UnifiedExecution','/api/multihop/status','StopUnifiedComparisonProgress','StartUnifiedComparisonProgress','New-RouterVPNControllerClient -TimeoutMilliseconds 2000 -ResponseLimit 32768','MaxResponseContentBufferSize=32768')) {
  if(-not$ProductSource.Contains($Marker)){throw "Missing shipping execution/progress guard: $Marker"}
 }
 if(-not$ProductSource.Contains('$Body.execution=')){throw 'Connect does not submit selected execution'}

@@ -33,6 +33,8 @@ PACKAGE_FILES = (
     "client/native-wireguard-windows.ps1",
     "client/native-windows-mode.ps1",
     "client/RouterVPN-Windows-App.ps1",
+    "client/RouterVPN-Windows-ControllerTransport.psm1",
+    "client/RouterVPN-Windows-ControllerTransport.cs",
     "client/RouterVPN-Windows-ProfileSettings.ps1",
     "client/RouterVPN-Windows-Product-v2.ps1",
     "client/RouterVPN-Windows-UnifiedShell.ps1",

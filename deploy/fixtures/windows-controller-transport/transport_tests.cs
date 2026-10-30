@@ -15,7 +15,7 @@ namespace RouterVPN.ControllerUI.Tests
     using System.Threading;
     using System.Threading.Tasks;
 
-    public static class TransportTests
+    public static partial class TransportTests
     {
         private static readonly Encoding UTF8 = new UTF8Encoding(false, true);
         private static void Check(bool value, string message)
@@ -532,6 +532,39 @@ namespace RouterVPN.ControllerUI.Tests
             pair[1].Dispose();
         }
 
+        private static async Task SpeedLabDeadline()
+        {
+            Duplex[] pair = Duplex.Pair();
+            using (ControllerChannel channel = Channel(pair[0]))
+            using (HttpClient client = channel.CreateClient(960000, 1024))
+            {
+                using (HttpRequestMessage request = Request("/api/speed-lab/run", new byte[0]))
+                {
+                    Task<HttpResponseMessage> task = client.SendAsync(request);
+                    Frame frame = await Within(ReadFrame(pair[1]), "Speed Lab deadline frame").ConfigureAwait(false);
+                    Check(frame.Method == 2 && frame.Path == "/api/speed-lab/run" && frame.Timeout > 950000 && frame.Timeout <= 960000,
+                        "captured Speed Lab deadline was clipped or extended");
+                    await Reply(pair[1], frame, 200, UTF8.GetBytes("captured")).ConfigureAwait(false);
+                    using (HttpResponseMessage response = await Within(task, "Speed Lab deadline response").ConfigureAwait(false)) { }
+                }
+                long before = pair[0].Written;
+                foreach (HttpRequestMessage request in new HttpRequestMessage[] {
+                    Request("/api/speed-lab/run", null), Request("/api/status", new byte[0]),
+                    Request("/api/speed-lab/run?other=1", new byte[0]), Request("/api/speed-lab/%72un", new byte[0]),
+                    new HttpRequestMessage(HttpMethod.Put, ControllerChannel.Origin + "/api/speed-lab/run") })
+                {
+                    using (request)
+                    {
+                        Task<HttpResponseMessage> invalid = client.SendAsync(request);
+                        Check(invalid.IsCompleted, "another operation borrowed the Speed Lab deadline");
+                        await Rejected(invalid, "another operation borrowed the Speed Lab deadline").ConfigureAwait(false);
+                    }
+                }
+                Check(pair[0].Written == before, "invalid extended deadline escaped before rejection");
+            }
+            pair[1].Dispose();
+        }
+
         private static async Task AdmissionCloseJoin()
         {
             Duplex[] pair = Duplex.Pair();
@@ -712,7 +745,7 @@ namespace RouterVPN.ControllerUI.Tests
                 Case("close-join", CloseJoinsEnteredWrite), Case("targets", BoundsAndTargets), Case("large-import", ExactLargeImport),
                 Case("budgets", PendingAndAggregateBudgets), Case("responses", ResponseValidation), Case("terminals", FailureAndCancelled),
                 Case("sync-context", SynchronousUIContext), Case("peer-revocation", PeerRevocationAndPrivateSeam), Case("real-pipe", RealDuplexPipeBytes),
-                Case("publication-revocation", RevokedPublication), Case("captured-deadline", CapturedDeadlineBehindWriter),
+                Case("publication-revocation", RevokedPublication), Case("captured-deadline", CapturedDeadlineBehindWriter), Case("speed-lab-deadline", SpeedLabDeadline),
                 Case("admission-close", AdmissionCloseJoin), Case("native-dispatch-failure", RejectedNativeDispatchJoins)
             };
             if (Environment.OSVersion.Platform == PlatformID.Win32NT) cases.Add(Case("native-overlapped", WindowsNativeOverlapped));

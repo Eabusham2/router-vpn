@@ -14,18 +14,19 @@ import (
 )
 
 const (
-	HeaderSize   = 32
-	Request      = 1
-	Cancel       = 2
-	Response     = 3
-	Failure      = 4
-	Cancelled    = 5
-	MaxBody      = 8 << 20
-	MaxImport    = 32 << 20
-	MaxPath      = 2048
-	MaxPending   = 32
-	MaxReserved  = 64 << 20
-	MaxTimeoutMS = 900000
+	HeaderSize           = 32
+	Request              = 1
+	Cancel               = 2
+	Response             = 3
+	Failure              = 4
+	Cancelled            = 5
+	MaxBody              = 8 << 20
+	MaxImport            = 32 << 20
+	MaxPath              = 2048
+	MaxPending           = 32
+	MaxReserved          = 64 << 20
+	MaxTimeoutMS         = 900000
+	MaxSpeedLabTimeoutMS = 960000
 )
 
 var ErrProtocol = errors.New("the captured native UI channel received an invalid frame")
@@ -49,7 +50,7 @@ func (h Header) valid() bool {
 	}
 	switch h.Kind {
 	case Request:
-		return h.Method >= 1 && h.Method <= 4 && h.Status == 0 && h.TimeoutMS > 0 && h.TimeoutMS <= MaxTimeoutMS &&
+		return h.Method >= 1 && h.Method <= 4 && h.Status == 0 && h.TimeoutMS > 0 && h.TimeoutMS <= MaxSpeedLabTimeoutMS &&
 			h.PathLength > 0 && h.PathLength <= MaxPath && h.BodyLength <= MaxImport && h.ResponseLimit > 0 && h.ResponseLimit <= MaxBody
 	case Cancel, Cancelled:
 		return h.Method == 0 && h.Status == 0 && h.TimeoutMS == 0 && h.PathLength == 0 && h.BodyLength == 0 && h.ResponseLimit == 0
@@ -140,4 +141,14 @@ func RequestBodyLimit(method, target string) uint32 {
 		return MaxImport
 	}
 	return MaxBody
+}
+
+// The longer captured Tor Compare budget belongs only to the exact Speed Lab
+// POST. Header decoding cannot know the target; Serve checks it before reading
+// its body or forwarding any operation.
+func RequestTimeoutLimit(method, target string) uint32 {
+	if method == http.MethodPost && target == "/api/speed-lab/run" {
+		return MaxSpeedLabTimeoutMS
+	}
+	return MaxTimeoutMS
 }

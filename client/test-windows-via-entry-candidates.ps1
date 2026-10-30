@@ -2,6 +2,8 @@ param([Parameter(Mandatory=$true)][string]$ProductSource)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 Add-Type -AssemblyName System.Net.Http
+if(-not(Get-Command New-RouterVPNControllerClient -ErrorAction SilentlyContinue)){Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop}
+$script:BaseUrl='https://127.0.0.1:8788'
 $Ast=[ScriptBlock]::Create($ProductSource).Ast
 $Names=@('BaseChoice','TestUnifiedCandidateBase','UnifiedCandidateBaseLabel','BeginUnifiedCandidateEntryChoice','MarkUnifiedCandidateEntryChoice','CommitUnifiedCandidateEntryChoice','UnifiedMultihopValue','TestUnifiedCandidateCurrent','TestUnifiedCandidateFresh','ReadUnifiedCandidateReceipt','TestUnifiedCandidateValidation','UpdateUnifiedCandidateButtons','NewUnifiedCandidateRequest','StartUnifiedCandidates','FinishUnifiedCandidateCancel','StopUnifiedCandidates','SelectUnifiedCandidate','PollUnifiedCandidates')
 $Original=@{}
@@ -18,7 +20,7 @@ function New-State{
     $Client=[pscustomobject]@{Jobs=(New-Object System.Collections.ArrayList)}
     $Client|Add-Member ScriptMethod SendAsync {param($Request,$Token)
         $Source=[System.Threading.Tasks.TaskCompletionSource[System.Net.Http.HttpResponseMessage]]::new()
-        $Job=[pscustomobject]@{Path=$Request.RequestUri.AbsolutePath;Body=($Request.Content.ReadAsStringAsync().GetAwaiter().GetResult()|ConvertFrom-Json);Source=$Source;Token=$Token}
+        $Job=[pscustomobject]@{Path=$Request.RequestUri.AbsolutePath;Origin=$Request.RequestUri.GetLeftPart([UriPartial]::Authority);Body=($Request.Content.ReadAsStringAsync().GetAwaiter().GetResult()|ConvertFrom-Json);Source=$Source;Token=$Token}
         [void]$this.Jobs.Add($Job);return $Source.Task
     }
     $Dialog=[pscustomobject]@{CloseCalls=0};$Dialog|Add-Member ScriptMethod Close {$this.CloseCalls++}
@@ -38,6 +40,7 @@ function Ack($S){Complete $S.Client.Jobs[$S.Client.Jobs.Count-1] @{ok=$true;requ
 
 $S=New-State;Measure-CandidatesTest $S
 Check ($S.Client.Jobs[0].Path-eq'/api/multihop/candidates') 'Wrong candidate endpoint'
+Check ($S.Client.Jobs[0].Origin-ceq$script:BaseUrl) 'Candidate request lost its captured controller origin'
 Check ($S.RequestID-cmatch'^[0-9a-f]{32}$' -and $S.Client.Jobs[0].Body.request_id-ceq$S.RequestID) 'Nonce not captured before request'
 Check ($S.Client.Jobs[0].Body.samples-eq5 -and $S.Client.Jobs[0].Body.base-eq'wg' -and @($S.Client.Jobs[0].Body.candidate_ids).Count-eq3 -and $S.Client.Jobs[0].Body.candidate_ids-notcontains'entry') 'Candidate request identities or sample count changed'
 Check ($S.Rows.Count-eq3 -and $S.Eligible.Count-eq2) 'Partial failures dropped or eligible candidates lost'
@@ -174,5 +177,5 @@ Check ($script:PickerOpens-eq1) 'Programmatic refresh was treated as an entry-pi
 $script:TestBusy=$true;BeginUnifiedCandidateEntryChoice;$MultihopEntryCombo.SelectedValue='busy-entry';MarkUnifiedCandidateEntryChoice;CommitUnifiedCandidateEntryChoice
 Check ($script:PickerOpens-eq1) 'Entry picker opened a competing operation'
 
-foreach($Marker in @('UnifiedCandidatesButton','ShowUnifiedCandidates','UseProxy=$false','AllowAutoRedirect=$false','MaxResponseContentBufferSize=2097152',"StopUnifiedCandidates `$script:UnifiedCandidates 'close'",('Measure exits via entry'+[char]0x2026))){Check ($ProductSource.Contains($Marker)) ("Candidate shipping UI or lifecycle seam missing: $Marker")}
+foreach($Marker in @('UnifiedCandidatesButton','ShowUnifiedCandidates','New-RouterVPNControllerClient -TimeoutMilliseconds 900000 -ResponseLimit 2097152',"StopUnifiedCandidates `$script:UnifiedCandidates 'close'",('Measure exits via entry'+[char]0x2026))){Check ($ProductSource.Contains($Marker)) ("Candidate shipping UI or lifecycle seam missing: $Marker")}
 Write-Host "Windows routed candidate UI/receipt/cancellation tests: PASS ($script:Checks checks; stale-selection mutation rejected)"

@@ -1,11 +1,23 @@
 param(
     [string]$BaseUrl = 'http://127.0.0.1:8788',
-    [switch]$SelfTest
+    [switch]$SelfTest,
+    [string]$ControllerPipe,
+    [long]$ControllerParentHandle
 )
 
 $ErrorActionPreference='Stop'
+if(-not(Get-Command New-RouterVPNControllerClient -ErrorAction SilentlyContinue)){
+    Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
+}
+
+$Handoff=@{}
+foreach($Name in @('ControllerPipe','ControllerParentHandle')){if($PSBoundParameters.ContainsKey($Name)){$Handoff[$Name]=$PSBoundParameters[$Name]}}
+$CapturedBase=Initialize-RouterVPNControllerTransport @Handoff
+try{
+if(-not$PSBoundParameters.ContainsKey('BaseUrl')){$BaseUrl=$CapturedBase}
 $BaseUrl=$BaseUrl.TrimEnd('/')
-if($BaseUrl-ne'http://127.0.0.1:8788'){throw 'Router VPN native Windows app only talks to the fixed local controller at http://127.0.0.1:8788.'}
+if($BaseUrl-cne$CapturedBase){throw 'Router VPN requires the fixed local controller captured by this UI owner.'}
+Assert-RouterVPNControllerBaseUrl $BaseUrl
 
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
@@ -177,3 +189,5 @@ try{
 # Tor bridge profile builder for obfs4/meek/Snowflake/WebTunnel/Custom with truthful Windows runtime unavailability;
 # SMART AUTO default; AUTO first-class; visible readiness; GUI CUSTOM presets;
 # real-coordinate map with measured node ms; fixed local controller only; no browser/PWA final shell.
+
+}finally{Close-RouterVPNControllerTransport}

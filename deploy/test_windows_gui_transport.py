@@ -23,7 +23,7 @@ CASES = (
     "golden", "concurrent", "cancel-frame", "widget-dispose", "close-join",
     "targets", "large-import", "budgets", "responses", "terminals",
     "sync-context", "peer-revocation", "real-pipe",
-    "publication-revocation", "captured-deadline",
+    "publication-revocation", "captured-deadline", "speed-lab-deadline",
     "admission-close", "native-dispatch-failure",
 )
 
@@ -75,6 +75,8 @@ def main() -> None:
         return
     source = SOURCE.read_text(encoding="utf-8")
     mutations = [
+        ("speed-lab-deadline-route", "speed-lab-deadline", 'if (timeout > timeoutLimit) throw ProtocolError();', '',
+         "CONTROL another operation borrowed the Speed Lab deadline"),
         ("skipped-id", "concurrent", "state.ID = ++lastID;", "state.ID = (lastID += 2);",
          "CONTROL serialized request IDs were reused or reordered"),
         ("large-import-cap", "large-import", "? MaxImport : MaxBody;", "? MaxBody : MaxBody;",

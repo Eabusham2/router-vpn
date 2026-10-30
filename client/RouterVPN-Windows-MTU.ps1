@@ -1,3 +1,7 @@
+if(-not(Get-Command New-RouterVPNControllerClient -ErrorAction SilentlyContinue)){
+    Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
+}
+
 # One MTU view owns its requests. Polls and cancellation never follow a new
 # connection or a replacement measurement, even when an old HTTP task finishes.
 function global:Get-RouterVPNMTUValue {
@@ -10,8 +14,7 @@ function global:Get-RouterVPNMTUValue {
 
 function global:New-RouterVPNMTUState {
     param([string]$BaseUrl)
-    $Uri=[Uri]$BaseUrl
-    if($Uri.Scheme-cne'http'-or$Uri.Host-cne'127.0.0.1'-or$Uri.UserInfo-or$Uri.Query-or$Uri.Fragment-or$Uri.AbsolutePath-ne'/'){throw 'MTU uses the captured local controller only.'}
+    Assert-RouterVPNControllerBaseUrl $BaseUrl
     return @{BaseUrl=$BaseUrl.TrimEnd('/');Generation=[long]1;Completion=[long]0;Session='';Profile='';Request='';Seen=$false;Own=$false;
         Cancelled=$false;CancelAck=$false;Terminal=$false;Retired=$false;Closing=$false;Detaching=$false;Closed=$false;RunDone=$true;OptimizationAllowed=$false;
         Run=$null;Poll=$null;Cancel=$null;Client=$null;Window=$null;Timer=$null;Next=[DateTime]::MinValue;
@@ -99,8 +102,7 @@ function global:Receive-RouterVPNMTUStatus {
 
 function global:New-RouterVPNMTUClient {
     Add-Type -AssemblyName System.Net.Http
-    $Handler=[System.Net.Http.HttpClientHandler]::new();$Handler.UseProxy=$false;$Handler.AllowAutoRedirect=$false
-    $Client=[System.Net.Http.HttpClient]::new($Handler);$Client.Timeout=[Threading.Timeout]::InfiniteTimeSpan;$Client.MaxResponseContentBufferSize=262144
+    $Client=New-RouterVPNControllerClient -TimeoutMilliseconds 900000 -ResponseLimit 262144
     return $Client
 }
 
@@ -110,6 +112,7 @@ function global:New-RouterVPNMTURequest {
     if($Path-cnotmatch'^/api/mtu/(status(?:\?(?:request_id=[0-9a-f]{32}&)?session_id=[^&\r\n]+)?|retest|cancel)$'){throw 'Invalid MTU request path.'}
     $Method=if($null-eq$Body){[System.Net.Http.HttpMethod]::Get}else{[System.Net.Http.HttpMethod]::Post}
     $Request=[System.Net.Http.HttpRequestMessage]::new($Method,$State.BaseUrl+$Path)
+    Set-RouterVPNControllerRequestTimeout $Request ([int]($Timeout*1000))
     $Cts=[System.Threading.CancellationTokenSource]::new();$Cts.CancelAfter([TimeSpan]::FromSeconds($Timeout))
     try{
         if($null-ne$Body){$Request.Content=[System.Net.Http.StringContent]::new(($Body|ConvertTo-Json -Depth 6 -Compress),[Text.Encoding]::UTF8,'application/json')}

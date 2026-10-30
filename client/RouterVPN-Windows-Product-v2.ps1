@@ -1,7 +1,17 @@
-param([string]$BaseUrl='http://127.0.0.1:8788',[switch]$SelfTest)
+param([string]$BaseUrl='http://127.0.0.1:8788',[switch]$SelfTest,[string]$ControllerPipe,[long]$ControllerParentHandle)
 $ErrorActionPreference='Stop'
+if(-not(Get-Command New-RouterVPNControllerClient -ErrorAction SilentlyContinue)){
+    Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
+}
+
+$Handoff=@{}
+foreach($Name in @('ControllerPipe','ControllerParentHandle')){if($PSBoundParameters.ContainsKey($Name)){$Handoff[$Name]=$PSBoundParameters[$Name]}}
+$CapturedBase=Initialize-RouterVPNControllerTransport @Handoff
+try{
+if(-not$PSBoundParameters.ContainsKey('BaseUrl')){$BaseUrl=$CapturedBase}
 $BaseUrl=$BaseUrl.TrimEnd('/')
-if($BaseUrl-ne'http://127.0.0.1:8788'){throw 'Router VPN Windows product app only uses the fixed local controller.'}
+if($BaseUrl-cne$CapturedBase){throw 'Router VPN requires the fixed local controller captured by this UI owner.'}
+Assert-RouterVPNControllerBaseUrl $BaseUrl
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore
 Add-Type -AssemblyName WindowsBase
@@ -33,8 +43,8 @@ if($SelfTest){
 }
 $StateText=Control 'StateText';$StateDot=Control 'StateDot';$HeaderDetail=Control 'HeaderDetail';$RouterCombo=Control 'RouterCombo';$ModeCombo=Control 'ModeCombo';$BaseCombo=Control 'BaseCombo';$ConnectionDetail=Control 'ConnectionDetail';$ProofText=Control 'ProofText';$LastErrorText=Control 'LastErrorText';$NodesGrid=Control 'NodesGrid';$MapCanvas=Control 'MapCanvas';$ModesGrid=Control 'ModesGrid';$DnsSummary=Control 'DnsSummary';$DnsModeCombo=Control 'DnsModeCombo';$DnsProtocolCombo=Control 'DnsProtocolCombo';$DnsPresetCombo=Control 'DnsPresetCombo';$DnsHostBox=Control 'DnsHostBox';$DnsPortBox=Control 'DnsPortBox';$DnsServerBox=Control 'DnsServerBox';$DnsPathBox=Control 'DnsPathBox';$DnsSaveButton=Control 'DnsSaveButton';$DnsButton=Control 'DnsButton';$DnsRefreshButton=Control 'DnsRefreshButton';$AdvancedSummary=Control 'AdvancedSummary';$SettingsSummary=Control 'SettingsSummary';$DiagnosticsBox=Control 'DiagnosticsBox';$MultihopEntryCombo=Control 'MultihopEntryCombo';$MultihopEntryModeCombo=Control 'MultihopEntryModeCombo';$MultihopExitCombo=Control 'MultihopExitCombo';$MultihopExitModeCombo=Control 'MultihopExitModeCombo';$MultihopSummary=Control 'MultihopSummary'
 $script:EventSeq=[uint64]0;$script:Busy=$false;$script:NodeSort='current';$script:DnsPolicySummary='Saved DNS policy not loaded yet.'
-function Api{param([string]$Path,[string]$Method='GET',$Body=$null,[int]$Timeout=45);$Uri="$BaseUrl$Path";if($Method-eq'GET'){return Invoke-RestMethod -Uri $Uri -Method Get -TimeoutSec $Timeout};$Json=if($null-eq$Body){'{}'}else{$Body|ConvertTo-Json -Depth 12 -Compress};return Invoke-RestMethod -Uri $Uri -Method $Method -ContentType 'application/json' -Body $Json -TimeoutSec $Timeout}
-function ApiRaw{param([string]$Path,[byte[]]$Bytes,[int]$Timeout=45);return Invoke-RestMethod -Uri "$BaseUrl$Path" -Method Post -ContentType 'application/json' -Body $Bytes -TimeoutSec $Timeout}
+function Api{param([string]$Path,[string]$Method='GET',$Body=$null,[int]$Timeout=45);$Uri="$BaseUrl$Path";if($Method-eq'GET'){return Invoke-RouterVPNControllerRequest -Uri $Uri -Method Get -TimeoutSec $Timeout};$Json=if($null-eq$Body){'{}'}else{$Body|ConvertTo-Json -Depth 12 -Compress};return Invoke-RouterVPNControllerRequest -Uri $Uri -Method $Method -ContentType 'application/json' -Body $Json -TimeoutSec $Timeout}
+function ApiRaw{param([string]$Path,[byte[]]$Bytes,[int]$Timeout=45);return Invoke-RouterVPNControllerRequest -Uri "$BaseUrl$Path" -Method Post -ContentType 'application/json' -Body $Bytes -TimeoutSec $Timeout}
 function Log([string]$Text){$DiagnosticsBox.AppendText("[$(Get-Date -Format 'HH:mm:ss')] $Text`r`n");$DiagnosticsBox.ScrollToEnd()}
 function BaseChoice{$Item=$BaseCombo.SelectedItem;if($Item-and$Item.Tag){return [string]$Item.Tag};return 'auto'}
 function MultihopEntryModeChoice{$Item=$MultihopEntryModeCombo.SelectedItem;if($null-ne$Item-and([string]$Item.Tag)-cin@('','wg','awg2-fast','awg2-strong','wg-pq','awg2-pq','shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','ss-v2ray','split','max','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg')){return [string]$Item.Tag};throw 'Select a supported entry mode.'}
@@ -116,3 +126,5 @@ RefreshDnsPolicy
 RefreshProduct
 $Timer.Start()
 [void]$Window.ShowDialog()
+
+}finally{Close-RouterVPNControllerTransport}

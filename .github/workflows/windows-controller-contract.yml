@@ -15,9 +15,14 @@ on:
       - 'cmd/portable-launcher/**'
       - 'deploy/test_windows_controller*'
       - 'client/RouterVPN-Windows-ControllerTransport.cs'
+      - 'client/RouterVPN-Windows-ControllerTransport.psm1'
+      - 'client/RouterVPN-Windows-*.ps1'
       - 'client/test-windows-controller-transport.ps1'
+      - 'client/test-windows-controller-adapter.ps1'
       - 'deploy/test_windows_gui_transport.py'
       - 'deploy/test_windows_gui_bridge.py'
+      - 'deploy/test_windows_gui_adapter.py'
+      - 'deploy/test_windows_gui_powershell.py'
       - 'deploy/fixtures/windows-controller-transport/**'
       - 'deploy/test_desktop_windows_wfp.py'
       - 'deploy/test_desktop_windows_identity.py'
@@ -36,9 +41,14 @@ on:
       - 'cmd/portable-launcher/**'
       - 'deploy/test_windows_controller*'
       - 'client/RouterVPN-Windows-ControllerTransport.cs'
+      - 'client/RouterVPN-Windows-ControllerTransport.psm1'
+      - 'client/RouterVPN-Windows-*.ps1'
       - 'client/test-windows-controller-transport.ps1'
+      - 'client/test-windows-controller-adapter.ps1'
       - 'deploy/test_windows_gui_transport.py'
       - 'deploy/test_windows_gui_bridge.py'
+      - 'deploy/test_windows_gui_adapter.py'
+      - 'deploy/test_windows_gui_powershell.py'
       - 'deploy/fixtures/windows-controller-transport/**'
       - 'deploy/test_desktop_windows_wfp.py'
       - 'deploy/test_desktop_windows_identity.py'
@@ -103,6 +113,8 @@ jobs:
           foreach ($shell in @('powershell.exe', 'pwsh')) {
             python deploy/test_windows_gui_transport.py --shell $shell
             if ($LASTEXITCODE -ne 0) { throw "Native GUI pipe transport gate failed in $shell" }
+            python deploy/test_windows_gui_adapter.py --shell $shell
+            if ($LASTEXITCODE -ne 0) { throw "PowerShell UI adapter gate failed in $shell" }
           }
           # Build once with the shipping Framework compiler, then load the same
           # production DLL in both runtimes. Independent recompilation cannot
@@ -133,6 +145,15 @@ jobs:
         run: |
           python deploy/test_windows_gui_bridge.py
           if ($LASTEXITCODE -ne 0) { throw 'Actual CSharp and Go GUI composition gate failed' }
+      - name: Actual PowerShell UI adapter through owned Go pipe and pinned TLS
+        if: ${{ success() || failure() }}
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          foreach ($shell in @('powershell.exe', 'pwsh')) {
+            python deploy/test_windows_gui_powershell.py --shell $shell
+            if ($LASTEXITCODE -ne 0) { throw "Actual PowerShell and Go UI composition gate failed in $shell" }
+          }
       - name: Actual ordinary-user protection absence and denial
         if: ${{ success() || failure() }}
         shell: pwsh

@@ -8,6 +8,7 @@ $ErrorActionPreference='Stop'
 # Only widget properties, the local HTTP boundary, and the state directory are
 # doubled. This test neither starts a VPN nor claims to render WPF.
 $Client=Join-Path $Root 'client'
+Import-Module (Join-Path $Client 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
 $Launcher=Get-Content -LiteralPath (Join-Path $Client 'RouterVPN-Windows-App.ps1') -Raw -Encoding UTF8
 $FixtureStateRoot=Join-Path ([IO.Path]::GetTempPath()) ('routervpn-profile-modes-'+[Guid]::NewGuid().ToString('N'))
 [void](New-Item -ItemType Directory -Path $FixtureStateRoot)

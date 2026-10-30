@@ -257,6 +257,7 @@ param([string]$Root)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
 $Client=Join-Path $Root 'client'
+Import-Module (Join-Path $Client 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
 $Launcher=Get-Content (Join-Path $Client 'RouterVPN-Windows-App.ps1') -Raw -Encoding UTF8
 $LoadStart=$Launcher.IndexOf('$MTUHelpers=');$LoadEnd=$Launcher.IndexOf('# The shipping Windows product',$LoadStart)
 $ComposeStart=$Launcher.IndexOf('$Product=Join-Path');$ComposeEnd=$Launcher.IndexOf('$ProductSource=Set-RouterVPNProductHelpBinding -Source $ProductSource',$ComposeStart)

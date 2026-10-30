@@ -161,7 +161,7 @@ func TestControllerBridgeHeaderRejectsMalformedControls(t *testing.T) {
 	for _, mutation := range []func([]byte){
 		func(v []byte) { v[3] = '2' }, func(v []byte) { v[4] = 99 }, func(v []byte) { v[5] = 0 }, func(v []byte) { v[7] = 1 },
 		func(v []byte) { binary.BigEndian.PutUint64(v[8:16], 0) }, func(v []byte) { binary.BigEndian.PutUint32(v[16:20], 0) },
-		func(v []byte) { binary.BigEndian.PutUint32(v[16:20], MaxTimeoutMS+1) }, func(v []byte) { binary.BigEndian.PutUint16(v[20:22], 0) },
+		func(v []byte) { binary.BigEndian.PutUint32(v[16:20], MaxSpeedLabTimeoutMS+1) }, func(v []byte) { binary.BigEndian.PutUint16(v[20:22], 0) },
 		func(v []byte) { binary.BigEndian.PutUint16(v[20:22], MaxPath+1) }, func(v []byte) { v[22] = 1 }, func(v []byte) { v[23] = 1 },
 		func(v []byte) { binary.BigEndian.PutUint32(v[24:28], MaxImport+1) }, func(v []byte) { binary.BigEndian.PutUint32(v[28:32], 0) },
 		func(v []byte) { binary.BigEndian.PutUint32(v[28:32], MaxBody+1) }, func(v []byte) { v[4] = Cancel },
@@ -247,6 +247,55 @@ func TestControllerBridgeCompleteImportAndAggregateBound(t *testing.T) {
 	case <-entered:
 		t.Fatal("aggregate UI request byte budget reached the controller")
 	default:
+	}
+}
+
+func TestControllerBridgeSpeedLabCapturedDeadline(t *testing.T) {
+	t.Run("exact-post", func(t *testing.T) {
+		h := newHarness(t, forwardFunc(func(ctx context.Context, method, target string, body []byte, limit int64) (controllertransport.Response, error) {
+			deadline, ok := ctx.Deadline()
+			remaining := time.Until(deadline)
+			if method != "POST" || target != "/api/speed-lab/run" || !ok || remaining <= 950*time.Second || remaining > 960*time.Second {
+				t.Error("captured Speed Lab deadline was clipped or extended")
+			}
+			return controllertransport.Response{Status: 200, Body: []byte(`{"ok":true}`)}, nil
+		}))
+		header := requestHeader(1, "/api/speed-lab/run", nil, 1024)
+		header.TimeoutMS = MaxSpeedLabTimeoutMS
+		if err := h.send(header, "/api/speed-lab/run", nil); err != nil {
+			t.Fatal("exact Speed Lab deadline was rejected", err)
+		}
+		response, _, err := h.receive()
+		if err != nil || response.Kind != Response || response.Status != 200 {
+			t.Fatal("exact Speed Lab deadline was rejected", err)
+		}
+	})
+	for _, test := range []struct {
+		name, target string
+		method       uint8
+	}{
+		{"get", "/api/speed-lab/run", 1}, {"put", "/api/speed-lab/run", 3},
+		{"other", "/api/status", 2}, {"query", "/api/speed-lab/run?other=1", 2},
+		{"alias", "/api/speed-lab/%72un", 2},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var forwarded atomic.Int32
+			h := newHarness(t, forwardFunc(func(context.Context, string, string, []byte, int64) (controllertransport.Response, error) {
+				forwarded.Add(1)
+				return controllertransport.Response{Status: 200}, nil
+			}))
+			header := requestHeader(1, test.target, nil, 1024)
+			header.Method, header.TimeoutMS, header.BodyLength = test.method, MaxTimeoutMS+1, 1
+			// Intentionally send no body. The method/path deadline check owns
+			// rejection before body read, not a later request timeout.
+			if err := h.send(header, test.target, nil); err != nil && !errors.Is(err, io.ErrClosedPipe) {
+				t.Fatal(err)
+			}
+			mustSignal(t, h.done, "another operation borrowed the Speed Lab deadline")
+			if forwarded.Load() != 0 {
+				t.Fatal("another operation borrowed the Speed Lab deadline")
+			}
+		})
 	}
 }
 

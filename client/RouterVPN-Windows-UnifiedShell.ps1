@@ -70,7 +70,7 @@ $script:UnifiedModeStateFile=Join-Path $PSScriptRoot '.routervpn-state\windows-s
 $script:UnifiedPresetFile=Join-Path $PSScriptRoot '.routervpn-state\windows-custom-presets-v1.json'
 $script:UnifiedModeChoices=@()
 Add-Type -AssemblyName System.Net.Http
-$script:UnifiedAsyncClient=[System.Net.Http.HttpClient]::new()
+$script:UnifiedAsyncClient=New-RouterVPNControllerClient -TimeoutMilliseconds 960000 -ResponseLimit 8388608
 $script:UnifiedAsyncClient.Timeout=[System.Threading.Timeout]::InfiniteTimeSpan
 $script:UnifiedAsyncTask=$null
 $script:UnifiedAsyncRequest=$null
@@ -153,10 +153,7 @@ $script:UnifiedComparisonTask=$null
 $script:UnifiedComparisonRequest=$null
 $script:UnifiedComparisonCts=$null
 $script:UnifiedComparisonNext=[DateTime]::MinValue
-$script:UnifiedComparisonHandler=[System.Net.Http.HttpClientHandler]::new()
-$script:UnifiedComparisonHandler.UseProxy=$false
-$script:UnifiedComparisonHandler.AllowAutoRedirect=$false
-$script:UnifiedComparisonClient=[System.Net.Http.HttpClient]::new($script:UnifiedComparisonHandler)
+$script:UnifiedComparisonClient=New-RouterVPNControllerClient -TimeoutMilliseconds 2000 -ResponseLimit 32768
 $script:UnifiedComparisonClient.MaxResponseContentBufferSize=32768
 $script:UnifiedComparisonClient.Timeout=[System.Threading.Timeout]::InfiniteTimeSpan
 $script:UnifiedComparisonPoller=New-Object Windows.Threading.DispatcherTimer
@@ -216,7 +213,7 @@ function PollUnifiedComparisonProgress {
     if(-not$script:UnifiedComparisonWatching){if($null-eq$script:UnifiedComparisonTask){$script:UnifiedComparisonPoller.Stop()};return}
     if($null-eq$script:UnifiedComparisonTask-and[DateTime]::UtcNow-ge$script:UnifiedComparisonNext){
         try{
-            $script:UnifiedComparisonRequest=[System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get,'http://127.0.0.1:8788/api/multihop/status')
+            $script:UnifiedComparisonRequest=[System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get,(([string]$BaseUrl).TrimEnd('/')+'/api/multihop/status'))
             $script:UnifiedComparisonCts=[System.Threading.CancellationTokenSource]::new()
             $script:UnifiedComparisonCts.CancelAfter([TimeSpan]::FromSeconds(2))
             $script:UnifiedComparisonTaskGeneration=$script:UnifiedComparisonGeneration
@@ -267,6 +264,7 @@ function StartUnifiedApiAsync([string]$Label,[string]$Path,[string]$Method='GET'
         $Timeout=UnifiedCapturedComparisonTimeout $Path $ComparisonID $Timeout
         $Uri=([string]$BaseUrl).TrimEnd('/')+$Path
         $Req=[System.Net.Http.HttpRequestMessage]::new($Verb,$Uri)
+        Set-RouterVPNControllerRequestTimeout $Req ([int]([Math]::Max(1,$Timeout)*1000))
         if($null-ne$Body){
             $Json=$Body|ConvertTo-Json -Depth 24 -Compress
             $Req.Content=[System.Net.Http.StringContent]::new($Json,[System.Text.Encoding]::UTF8,'application/json')
@@ -353,7 +351,7 @@ function CompleteUnifiedApiAsync{
     RefreshProduct
 }
 $script:UnifiedAsyncPoller.Add_Tick({CompleteUnifiedApiAsync})
-$script:UnifiedRefreshClient=[System.Net.Http.HttpClient]::new()
+$script:UnifiedRefreshClient=New-RouterVPNControllerClient -TimeoutMilliseconds 15000 -ResponseLimit 2097152
 $script:UnifiedRefreshClient.Timeout=[System.Threading.Timeout]::InfiniteTimeSpan
 $script:UnifiedRefreshTasks=@{}
 $script:UnifiedRefreshRequests=@{}
@@ -636,7 +634,8 @@ function UpdateUnifiedCandidateButtons($State){
     if($null-ne$State.Receipt -and -not$Fresh -and $Idle){$State.Status.Text='Measurements expired or the entry changed. Retest before selecting an exit.'}
 }
 function NewUnifiedCandidateRequest($State,[string]$Path,$Body,[int]$Timeout=180){
-    $Req=[System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post,'http://127.0.0.1:8788'+$Path)
+    $Req=[System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post,(([string]$BaseUrl).TrimEnd('/')+$Path))
+    Set-RouterVPNControllerRequestTimeout $Req ([int]($Timeout*1000))
     $Req.Content=[System.Net.Http.StringContent]::new(($Body|ConvertTo-Json -Depth 8 -Compress),[System.Text.Encoding]::UTF8,'application/json')
     $Cts=[System.Threading.CancellationTokenSource]::new();$Cts.CancelAfter([TimeSpan]::FromSeconds($Timeout))
     try{$Task=$State.Client.SendAsync($Req,$Cts.Token);return @{Task=$Task;Request=$Req;Cts=$Cts}}catch{$Req.Dispose();$Cts.Dispose();throw}
@@ -721,8 +720,7 @@ function ShowUnifiedCandidates{
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Exits via selected entry" Width="850" Height="530" MinWidth="620" MinHeight="360" WindowStartupLocation="CenterOwner" Background="#101B2C" Foreground="#EFF4FF"><Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Name="Heading" TextWrapping="Wrap" FontSize="18" Margin="0,0,0,12"/><ListView Name="Candidates" Grid.Row="1" Background="#142237" Foreground="#EFF4FF"><ListView.View><GridView><GridViewColumn Header="Exit" DisplayMemberBinding="{Binding name}" Width="160"/><GridViewColumn Header="Routed measurement" DisplayMemberBinding="{Binding response}" Width="590"/></GridView></ListView.View></ListView><TextBlock Name="Status" Grid.Row="2" TextWrapping="Wrap" Margin="0,12,0,12"/><WrapPanel Grid.Row="3" HorizontalAlignment="Right"><Button Name="Retest" Content="Retest" Padding="10,7" Margin="4"/><Button Name="Cancel" Content="Cancel measurement" Padding="10,7" Margin="4"/><Button Name="Select" Content="Select exit" Padding="10,7" Margin="4"/><Button Name="Fastest" Content="Select fastest" Padding="10,7" Margin="4"/><Button Name="Close" Content="Close" Padding="10,7" Margin="4"/></WrapPanel></Grid></Window>
 "@
     $Reader=New-Object System.Xml.XmlNodeReader $X;$Dialog=[Windows.Markup.XamlReader]::Load($Reader);$Dialog.Owner=$Window
-    $Handler=[System.Net.Http.HttpClientHandler]::new();$Handler.UseProxy=$false;$Handler.AllowAutoRedirect=$false
-    $Client=[System.Net.Http.HttpClient]::new($Handler);$Client.Timeout=[System.Threading.Timeout]::InfiniteTimeSpan;$Client.MaxResponseContentBufferSize=2097152
+    $Client=New-RouterVPNControllerClient -TimeoutMilliseconds 900000 -ResponseLimit 2097152
     $State=@{Dialog=$Dialog;EntryID=$Entry;EntryName=$EntryName;Base=(BaseChoice);EntryBase='';EntryMode='';Names=$Names;RequestID='';Receipt=$null;Expires=[DateTimeOffset]::MinValue;Rows=@();Eligible=@{};FastestID='';PendingExit='';Operation='';Action='';LastError='';Cancelled=$false;CancelAck=$false;Closed=$false;AllowClose=$false;CloseOwner=$false;Client=$Client;Task=$null;Request=$null;Cts=$null;CancelTask=$null;CancelRequest=$null;CancelCts=$null;Timer=(New-Object Windows.Threading.DispatcherTimer)}
     foreach($N in @('Candidates','Status','Select','Fastest','Retest','Cancel')){$State[$(if($N-eq'Candidates'){'List'}else{$N})]=$Dialog.FindName($N);$Dialog.FindName($N).Tag=$State}
     $Dialog.Tag=$State;$Dialog.FindName('Close').Tag=$State;$Dialog.FindName('Heading').Text='Candidate exits via '+$EntryName+' · selected '+$State.Base+' entry base'

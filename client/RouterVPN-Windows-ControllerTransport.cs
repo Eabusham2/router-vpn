@@ -27,6 +27,7 @@ namespace RouterVPN.ControllerUI
         internal const int MaxPending = 32;
         internal const long MaxReserved = 64L << 20;
         internal const int MaxTimeout = 900000;
+        internal const int MaxSpeedLabTimeout = 960000;
         internal const string Origin = "https://127.0.0.1:8788";
         internal const string PipePrefix = @"\\.\pipe\RouterVPN-Controller-v1-";
         internal static readonly UTF8Encoding UTF8 = new UTF8Encoding(false, true);
@@ -153,7 +154,7 @@ namespace RouterVPN.ControllerUI
         // carries an independent bounded server deadline.
         public HttpClient CreateClient(int timeoutMilliseconds, int responseLimit)
         {
-            if (timeoutMilliseconds < 1 || timeoutMilliseconds > MaxTimeout || responseLimit < 1 || responseLimit > MaxBody)
+            if (timeoutMilliseconds < 1 || timeoutMilliseconds > MaxSpeedLabTimeout || responseLimit < 1 || responseLimit > MaxBody)
                 throw new ArgumentOutOfRangeException("The native UI request bounds are invalid.");
             lock (gate) { ThrowIfClosed(); }
             HttpClient client = new HttpClient(new ControllerHandler(this, timeoutMilliseconds, responseLimit), true);
@@ -254,6 +255,10 @@ namespace RouterVPN.ControllerUI
                 if (!(capturedTimeout is int) || (int)capturedTimeout < 1 || (int)capturedTimeout > timeout) throw ProtocolError();
                 timeout = (int)capturedTimeout;
             }
+            // The established Tor Compare Speed Lab operation captures a
+            // 960-second budget. No other method/target borrows that allowance.
+            int timeoutLimit = method == 2 && target == "/api/speed-lab/run" ? MaxSpeedLabTimeout : MaxTimeout;
+            if (timeout > timeoutLimit) throw ProtocolError();
             byte[] path = UTF8.GetBytes(target);
             long contentLength = 0;
             if (message.Content != null)

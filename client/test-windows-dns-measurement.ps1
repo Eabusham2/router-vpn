@@ -1,6 +1,7 @@
 param([string]$Source=(Join-Path $PSScriptRoot 'RouterVPN-Windows-DNSMeasurement.ps1'),[switch]$Live,[string]$Scenario='success',[string]$BaseUrl='http://127.0.0.1:8788')
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
+Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
 Add-Type -AssemblyName System.Net.Http
 $Text=Get-Content -LiteralPath $Source -Raw -Encoding UTF8
 $Tokens=$null;$Errors=$null

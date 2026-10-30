@@ -1,6 +1,9 @@
-# Dot-sourced by the stable Windows product wrapper before the WPF product is parsed.
+# Packaged Home helpers share their caller's captured Windows UI channel.
 # Home uses only /api/home-summary for combined state and its session-keyed
 # /api/home-summary/prove-exit action for the actual public VPN exit.
+if(-not(Get-Command New-RouterVPNControllerClient -ErrorAction SilentlyContinue)){
+    Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
+}
 
 function global:Format-RouterVPNHomeSummary {
     param($Summary)
@@ -34,12 +37,12 @@ function global:Format-RouterVPNHomeSummary {
 
 function global:Get-RouterVPNHomeSummary {
     param([string]$BaseUrl)
-    Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/home-summary') -Method Get -TimeoutSec 5
+    Invoke-RouterVPNControllerRequest -Uri ($BaseUrl.TrimEnd('/') + '/api/home-summary') -Method Get -TimeoutSec 5
 }
 
 function global:Prove-RouterVPNHomeExit {
     param([string]$BaseUrl)
-    Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/home-summary/prove-exit') -Method Post -ContentType 'application/json' -Body '{}' -TimeoutSec 12
+    Invoke-RouterVPNControllerRequest -Uri ($BaseUrl.TrimEnd('/') + '/api/home-summary/prove-exit') -Method Post -ContentType 'application/json' -Body '{}' -TimeoutSec 12
 }
 
 # Shipping contract markers:

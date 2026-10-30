@@ -1,3 +1,7 @@
+if(-not(Get-Command New-RouterVPNControllerClient -ErrorAction SilentlyContinue)){
+    Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
+}
+
 # One modeless view owns one captured DNS request. Closing never interprets an
 # HTTP error, a disconnected path or a cancelled HTTP task as native drain proof.
 function global:Get-RouterVPNDNSValue {
@@ -14,8 +18,7 @@ function global:Test-RouterVPNDNSNumber {
 }
 function global:New-RouterVPNDNSState {
     param([string]$BaseUrl,[string]$DisplayedProfileID)
-    $Uri=[Uri]$BaseUrl
-    if($Uri.Scheme-cne'http'-or$Uri.Host-cne'127.0.0.1'-or$Uri.UserInfo-or$Uri.Query-or$Uri.Fragment-or$Uri.AbsolutePath-ne'/'){throw 'DNS measurements use the captured local controller only.'}
+    Assert-RouterVPNControllerBaseUrl $BaseUrl
     if([string]::IsNullOrEmpty($DisplayedProfileID)-or$DisplayedProfileID.Length-gt128){throw 'Select the external node displayed by this window.'}
     return @{BaseUrl=$BaseUrl.TrimEnd('/');Displayed=$DisplayedProfileID;Profile='';Token='';Session='';Request='';Generation=[long]0;
         Ready=$false;Drained=$true;StartDone=$true;Cancelled=$false;Closing=$false;Closed=$false;AllowClose=$false;Invalid=$false;Saved=$false;
@@ -26,8 +29,7 @@ function global:New-RouterVPNDNSState {
 }
 function global:New-RouterVPNDNSClient {
     Add-Type -AssemblyName System.Net.Http
-    $Handler=[Net.Http.HttpClientHandler]::new();$Handler.UseProxy=$false;$Handler.AllowAutoRedirect=$false
-    $Client=[Net.Http.HttpClient]::new($Handler);$Client.Timeout=[Threading.Timeout]::InfiniteTimeSpan;$Client.MaxResponseContentBufferSize=262144
+    $Client=New-RouterVPNControllerClient -TimeoutMilliseconds 6000 -ResponseLimit 262144
     return $Client
 }
 function global:New-RouterVPNDNSRequest {

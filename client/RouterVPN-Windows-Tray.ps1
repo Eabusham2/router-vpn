@@ -1,14 +1,24 @@
 param(
     [string]$BaseUrl = 'http://127.0.0.1:8788',
     [int]$UiPid = 0,
-    [switch]$SelfTest
+    [switch]$SelfTest,
+    [string]$ControllerPipe,
+    [long]$ControllerParentHandle
 )
 
 $ErrorActionPreference = 'Stop'
-$BaseUrl = $BaseUrl.TrimEnd('/')
-if ($BaseUrl -ne 'http://127.0.0.1:8788') {
-    throw 'Router VPN tray only talks to the fixed local controller at http://127.0.0.1:8788.'
+if(-not(Get-Command New-RouterVPNControllerClient -ErrorAction SilentlyContinue)){
+    Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
 }
+
+$Handoff=@{}
+foreach($Name in @('ControllerPipe','ControllerParentHandle')){if($PSBoundParameters.ContainsKey($Name)){$Handoff[$Name]=$PSBoundParameters[$Name]}}
+$CapturedBase=Initialize-RouterVPNControllerTransport @Handoff
+try{
+if(-not$PSBoundParameters.ContainsKey('BaseUrl')){$BaseUrl=$CapturedBase}
+$BaseUrl=$BaseUrl.TrimEnd('/')
+if($BaseUrl-cne$CapturedBase){throw 'Router VPN requires the fixed local controller captured by this UI owner.'}
+Assert-RouterVPNControllerBaseUrl $BaseUrl
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -69,7 +79,7 @@ function Show-RouterVPNWindow {
 }
 function Emergency-StopRouterVPN {
     try {
-        Invoke-RestMethod -Uri "$BaseUrl/api/emergency-stop" -Method Post -ContentType 'application/json' -Body '{}' -TimeoutSec 3 | Out-Null
+        Invoke-RouterVPNControllerRequest -Uri "$BaseUrl/api/emergency-stop" -Method Post -ContentType 'application/json' -Body '{}' -TimeoutSec 3 | Out-Null
         $Notify.BalloonTipTitle = 'Router VPN'
         $Notify.BalloonTipText = 'Emergency stop completed.'
         $Notify.ShowBalloonTip(1500)
@@ -138,3 +148,5 @@ finally {
     $Notify.Visible = $false; $Notify.Dispose()
     $TrayIcon.Dispose(); $Menu.Dispose()
 }
+
+}finally{Close-RouterVPNControllerTransport}

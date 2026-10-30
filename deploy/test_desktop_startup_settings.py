@@ -16,6 +16,13 @@ def read(path):
     return (ROOT / path).read_text(encoding="utf-8")
 
 
+def windows_adapter_import():
+    # Extracted shipping functions keep the same module dependency as the real
+    # App runspace. ROOT is rebound to the extracted release by its package gate.
+    module = str(ROOT / "client/RouterVPN-Windows-ControllerTransport.psm1").replace("'", "''")
+    return "Import-Module '" + module + "' -Global -ErrorAction Stop\n"
+
+
 def run(command, *, broken=False):
     result = subprocess.run(command, text=True, encoding="utf-8", errors="replace", capture_output=True, timeout=90)
     if (result.returncode != 0) != broken:
@@ -88,7 +95,7 @@ if($parseErrors.Count){throw ($parseErrors.Message -join '; ')}
         if name != "shipping" and body == function:
             raise RuntimeError("Windows negative mutation did not apply: " + name)
         path = directory / (name + ".ps1")
-        path.write_text(body + PS_TEST, encoding="utf-8-sig")
+        path.write_text(windows_adapter_import() + body + PS_TEST, encoding="utf-8-sig")
         run([shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(path)], broken=name != "shipping")
 
 

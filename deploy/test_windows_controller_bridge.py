@@ -37,6 +37,7 @@ REQUIRED = (
     "TestControllerBridgeSuppressesNativeErrorContext",
     "TestControllerBridgeRejectsUnboundedForwarderResponse",
     "TestControllerBridgeQueuedReplyRechecksCancellation",
+    "TestControllerBridgeSpeedLabCapturedDeadline",
 )
 
 
@@ -65,6 +66,9 @@ def mutants():
     server = (PACKAGE / "server.go").read_text(encoding="utf-8")
     once = TRANSPORT.replace_once
     return (
+        ("server.go", "speed-lab-deadline-route", REQUIRED[15] + "/other",
+         "another operation borrowed the Speed Lab deadline",
+         once(server, " || header.TimeoutMS > RequestTimeoutLimit(method, target)", "")),
         ("server.go", "replayed-request-owner", REQUIRED[8] + "/replayed-request",
          "replayed or future request identity was admitted",
          once(server, " || h.ID != s.last+1", "")),
@@ -155,7 +159,7 @@ def execute(go="go"):
             print("Rejected production controller bridge mutant:", name, flush=True)
         if sources() != before:
             raise ValueError("Controller bridge source changed during its execution gate")
-    print("Controller bridge passed fifteen actual blocking-stream cases and fourteen compiled production negative controls; native Windows pipe authentication and GUI composition remain separate.", flush=True)
+    print("Controller bridge passed", len(REQUIRED), "actual blocking-stream cases and", len(mutants()), "compiled production negative controls; native Windows pipe authentication and GUI composition remain separate.", flush=True)
 
 
 if __name__ == "__main__":

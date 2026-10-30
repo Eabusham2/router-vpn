@@ -5,7 +5,7 @@ import argparse
 from pathlib import Path
 import subprocess
 import tempfile
-from test_desktop_startup_settings import ROOT, read, run, section
+from test_desktop_startup_settings import ROOT, read, run, section, windows_adapter_import
 from test_desktop_protection_settings import load_transform
 
 PS_TEST = r'''
@@ -78,7 +78,7 @@ if($parseErrors.Count){throw ($parseErrors.Message -join '; ')}
     for name,body in variants.items():
         assert name=="shipping" or body!=helper
         path=directory/(name+".ps1")
-        path.write_text(product+"\n"+body+"\n"+callback+"\n"+PS_TEST,encoding="utf-8-sig")
+        path.write_text(windows_adapter_import()+product+"\n"+body+"\n"+callback+"\n"+PS_TEST,encoding="utf-8-sig")
         run([shell,"-NoProfile","-ExecutionPolicy","Bypass","-File",str(path)],broken=name!="shipping")
 
 SWIFT_TEST=r'''

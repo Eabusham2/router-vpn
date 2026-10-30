@@ -157,7 +157,7 @@ func (s *server) read() error {
 				return err
 			}
 			target, method := string(path), header.HTTPMethod()
-			if ValidateTarget(target) != nil || header.BodyLength > RequestBodyLimit(method, target) {
+			if ValidateTarget(target) != nil || header.BodyLength > RequestBodyLimit(method, target) || header.TimeoutMS > RequestTimeoutLimit(method, target) {
 				return ErrProtocol
 			}
 			body := make([]byte, header.BodyLength)
