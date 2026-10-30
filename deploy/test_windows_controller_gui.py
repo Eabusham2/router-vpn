@@ -43,6 +43,7 @@ REQUIRED = (
     "TestWindowsControllerGUISystemImageDescriptorPolicy",
     "TestWindowsControllerGUISystemImageCapturePolicy",
     "TestWindowsControllerGUIOriginalUserDirectories",
+    "TestWindowsControllerMachineDirectories",
 )
 
 
@@ -53,6 +54,7 @@ def sources():
                 "process_profile_windows.go", "process_profile_windows_test.go",
                 "system_image_windows.go", "system_image_windows_test.go",
                 "system_image_policy.go", "system_image_policy_test.go",
+                "machine_directories_windows.go", "machine_directories_windows_test.go",
                 "fixture_windows_test.go", "foundation_windows_test.go", "capture_windows_test.go",
                 "suspended_launch_windows.go", "suspended_launch_windows_test.go",
                 "restricted_worker_windows_test.go", "gui_windows_test.go", "stream_windows_test.go"}
@@ -77,6 +79,7 @@ def mutants():
     pipe = (PACKAGE / "pipe_windows.go").read_text(encoding="utf-8")
     process = (PACKAGE / "process_windows.go").read_text(encoding="utf-8")
     system_policy = (PACKAGE / "system_image_policy.go").read_text(encoding="utf-8")
+    machine = (PACKAGE / "machine_directories_windows.go").read_text(encoding="utf-8")
     once = NATIVE.replace_once
     original = "actual.Primary || actual.SID != want.SID || actual.AuthenticationID != want.AuthenticationID || actual.SessionID != want.SessionID || actual.Elevated != want.Elevated || actual.Administrator != want.Administrator"
     return (
@@ -154,6 +157,10 @@ def mutants():
               "func PinCurrentImage()",
               "image, err := PinImage(syscall.UTF16ToString(buffer[:length]))",
               "module, moduleErr := os.Executable(); if moduleErr != nil { return nil, moduleErr }; image, err := PinImage(module)")),
+        ("machine_directories_windows.go", "inherited-machine-directory", REQUIRED[20],
+         "machine directory capture used or required inherited environment",
+         once(machine, 'validateMachineDirectory(values["PROGRAMDATA"])',
+              'validateMachineDirectory(func() string { value, _ := syscall.Getenv("ProgramData"); return value }())')),
     )
 
 

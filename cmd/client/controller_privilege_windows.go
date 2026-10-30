@@ -421,29 +421,22 @@ func windowsOwnedSamePath(value, expected string) bool {
 }
 
 func (c *windowsOwnedController) applyEnvironment(pin string) error {
-	system, err := windowsOwnedSystemDirectory()
+	machine, err := windowscontroller.MachineDirectories()
 	if err != nil {
 		return err
 	}
-	programData, err := windowsOwnedCommonFolder(system, syscall.GUID{Data1: 0x62ab5d82, Data2: 0xfdc1, Data3: 0x4dc3, Data4: [8]byte{0xa9, 0xdd, 0x07, 0x0d, 0x1d, 0x49, 0x5d, 0x97}})
-	if err != nil {
-		return err
-	}
-	programFiles, err := windowsOwnedCommonFolder(system, syscall.GUID{Data1: 0x6d809377, Data2: 0x6af0, Data3: 0x444b, Data4: [8]byte{0x89, 0x57, 0xa3, 0x77, 0x3f, 0x02, 0x20, 0x0e}})
-	if err != nil {
-		return err
-	}
+	system := machine.System
 	temporary := filepath.Join(c.dataRoot, "run", "controller-temp")
 	if err := ensurePrivateRuntimeDirectory(temporary); err != nil {
 		return err
 	}
 	values := map[string]string{
-		"SystemRoot": filepath.Dir(system), "WINDIR": filepath.Dir(system), "COMSPEC": filepath.Join(system, "cmd.exe"),
+		"SystemRoot": machine.Windows, "WINDIR": machine.Windows, "SystemDrive": machine.SystemDrive, "COMSPEC": filepath.Join(system, "cmd.exe"),
 		"PATH":         strings.Join([]string{system, filepath.Join(system, "WindowsPowerShell", "v1.0"), c.packageRoot, filepath.Join(c.packageRoot, "bin")}, string(os.PathListSeparator)),
 		"PSModulePath": filepath.Join(system, "WindowsPowerShell", "v1.0", "Modules"),
 		"PATHEXT":      ".COM;.EXE;.BAT;.CMD", "TEMP": temporary, "TMP": temporary,
 		"USERPROFILE": c.profile.Profile, "APPDATA": c.profile.RoamingAppData, "LOCALAPPDATA": c.profile.LocalAppData,
-		"HOME": c.profile.Profile, "ProgramData": programData, "ProgramFiles": programFiles, "OS": "Windows_NT", "PROCESSOR_ARCHITECTURE": strings.ToUpper(runtime.GOARCH),
+		"HOME": c.profile.Profile, "ProgramData": machine.ProgramData, "ProgramFiles": machine.ProgramFiles, "OS": "Windows_NT", "PROCESSOR_ARCHITECTURE": strings.ToUpper(runtime.GOARCH),
 		"HOMEVPN_ROOT": c.dataRoot, "HOMEVPN_CLIENT_CONFIG": filepath.Join(c.dataRoot, "client.json"), "HOMEVPN_NATIVE_APP": "windows-owned-controller",
 		"HOMEVPN_CONTROLLER_PID": strconv.Itoa(os.Getpid()), "HOMEVPN_CONTROLLER_TLS_PIN": pin, "HOMEVPN_CONTROLLER_TRANSPORT": "pinned-tls", "HOMEVPN_CONTROLLER_EXECUTABLE": c.selfImage.Path(),
 	}
@@ -462,45 +455,6 @@ func (c *windowsOwnedController) applyEnvironment(pin string) error {
 		}
 	}
 	return os.Chdir(c.dataRoot)
-}
-
-func windowsOwnedCommonFolder(system string, identifier syscall.GUID) (string, error) {
-	shell, err := syscall.LoadDLL(filepath.Join(system, "shell32.dll"))
-	if err != nil {
-		return "", err
-	}
-	defer shell.Release()
-	ole, err := syscall.LoadDLL(filepath.Join(system, "ole32.dll"))
-	if err != nil {
-		return "", err
-	}
-	defer ole.Release()
-	get, err := shell.FindProc("SHGetKnownFolderPath")
-	if err != nil {
-		return "", err
-	}
-	free, err := ole.FindProc("CoTaskMemFree")
-	if err != nil {
-		return "", err
-	}
-	var value *uint16
-	status, _, _ := get.Call(uintptr(unsafe.Pointer(&identifier)), 0x4000, 0, uintptr(unsafe.Pointer(&value)))
-	if value != nil {
-		defer free.Call(uintptr(unsafe.Pointer(value)))
-	}
-	if uint32(status) != 0 || value == nil {
-		return "", fmt.Errorf("captured machine folder failed (HRESULT 0x%08x)", uint32(status))
-	}
-	for size := 0; size < 32768; size++ {
-		if *(*uint16)(unsafe.Add(unsafe.Pointer(value), size*2)) == 0 {
-			path := syscall.UTF16ToString(unsafe.Slice(value, size))
-			if !filepath.IsAbs(path) || len(path) > 32760 || strings.ContainsAny(path, "\x00\r\n") {
-				return "", errors.New("machine folder is not a bounded absolute path")
-			}
-			return filepath.Clean(path), nil
-		}
-	}
-	return "", errors.New("machine folder is unbounded")
 }
 
 func windowsOwnedSystemDirectory() (string, error) {

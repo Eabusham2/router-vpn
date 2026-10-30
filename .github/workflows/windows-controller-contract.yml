@@ -92,6 +92,8 @@ jobs:
           $binary = Join-Path $env:RUNNER_TEMP 'routervpn-shell-elevation.test.exe'
           & $binary '-test.run=^TestWindowsControllerFoundation(ActualElevatedLaunch|SuspendedLaunch.*|SuspendedCallbackRefusal)$' '-test.count=1' '-test.timeout=120s' '-test.v'
           if ($LASTEXITCODE -ne 0) { throw 'Actual Windows Shell elevation remains unproved; see its native diagnostics' }
+          & $binary '-test.run=^TestWindowsControllerMachineDirectories$' '-test.count=1' '-test.timeout=30s' '-test.v'
+          if ($LASTEXITCODE -ne 0) { throw 'Native machine-directory capture failed its independent environment checks' }
     # This short job exposes the exact failing launch immediately. The complete
     # race-instrumented foundation, all negative controls and shipping Session
     # composition remain required in the independent controller job below.
