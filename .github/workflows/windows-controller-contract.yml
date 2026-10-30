@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/windows-controller-contract.yml'
       - 'internal/windowscontroller/**'
+      - 'internal/windowsbootstrap/**'
       - 'internal/windowsprotection/**'
       - 'internal/controllertransport/**'
       - 'internal/controllerbridge/**'
@@ -48,6 +49,7 @@ on:
     paths:
       - '.github/workflows/windows-controller-contract.yml'
       - 'internal/windowscontroller/**'
+      - 'internal/windowsbootstrap/**'
       - 'internal/windowsprotection/**'
       - 'internal/controllertransport/**'
       - 'internal/controllerbridge/**'
