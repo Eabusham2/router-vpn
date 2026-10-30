@@ -319,10 +319,28 @@ func fixtureStartPrimaryWorker(t *testing.T, worker *fixtureRestrictedWorker, to
 	if err != nil {
 		t.Fatal(err)
 	}
-	// This is a native CreateProcessAsUser call with its returned initial
-	// thread retained. The caller-visible spelling selects only a suspended
-	// candidate; exact native image proof below precedes any child execution.
-	executable := fixtureExecutable(t)
+	// The full native runner may execute through a short TEMP component. Use
+	// the held file's normalized DOS spelling for this suspended candidate,
+	// rather than the module loader's original short spelling. The unchanged
+	// native-name and file-object proof below still precedes all child code.
+	// A DOS spelling is not elevated-launch authority: this fixture retains
+	// the actual CreateProcessAsUser initial thread before any execution.
+	var executable string
+	func() {
+		worker.image.mu.Lock()
+		defer worker.image.mu.Unlock()
+		buffer := make([]uint16, 32768)
+		length, _, callErr := api.native.finalPath.Call(uintptr(worker.image.handles[len(worker.image.handles)-1]),
+			uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)), 0 /* FILE_NAME_NORMALIZED | VOLUME_NAME_DOS */)
+		if length == 0 || length >= uintptr(len(buffer)) {
+			t.Fatal(nativeError("restricted worker retained normalized executable", callErr))
+		}
+		executable, err = localExecutablePath(strings.TrimPrefix(syscall.UTF16ToString(buffer[:length]), `\\?\`))
+		runtime.KeepAlive(buffer)
+		if err != nil {
+			t.Fatal("restricted worker retained file has no local normalized executable", err)
+		}
+	}()
 	application, _ := syscall.UTF16PtrFromString(executable)
 	command, _ := syscall.UTF16FromString(syscall.EscapeArg(executable) + " -test.run=^" + test + "$ -test.count=1 -test.timeout=20s -test.v")
 	var environment []uint16
