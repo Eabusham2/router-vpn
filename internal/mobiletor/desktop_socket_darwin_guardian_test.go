@@ -53,6 +53,9 @@ func TestDesktopDarwinGuardianKernelPFCompiler(t *testing.T) {
 		t.Helper()
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
+		if compiled, compileErr := desktopPFCompileFilters(rules); valid && (compileErr != nil || len(compiled) == 0) {
+			t.Fatal("typed native filter projection rejected shipping "+name, compileErr)
+		}
 		canonical, err := desktopDarwinPFCanonical(ctx, rules)
 		if valid && (err != nil || canonical == "") {
 			t.Fatal("actual PF parser rejected shipping "+name, err)
