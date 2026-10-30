@@ -6,7 +6,9 @@ param(
 )
 
 $ErrorActionPreference='Stop'
-if(-not(Get-Command New-RouterVPNControllerClient -ErrorAction SilentlyContinue)){
+# The transport comes from this captured package. Searching installed modules
+# here can stall a cold native launch before the controller pipe is opened.
+if(-not(Test-Path -LiteralPath Function:\New-RouterVPNControllerClient)){
     Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
 }
 

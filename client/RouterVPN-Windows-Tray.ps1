@@ -8,7 +8,8 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-if(-not(Get-Command New-RouterVPNControllerClient -ErrorAction SilentlyContinue)){
+# Reuse only a loaded transport; the captured module below owns first import.
+if(-not(Test-Path -LiteralPath Function:\New-RouterVPNControllerClient)){
     Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
 }
 
