@@ -62,6 +62,10 @@ jobs:
         # the full guardian/mutation gate below. Native anchor absence is
         # required; empty filter output alone is not a passing result.
         run: python3 deploy/test_desktop_darwin_guardian.py . --go "$(command -v go)" --case FilterOnlyRetirement
+      - name: Prove typed native filter fields and reject broken private ABI projections
+        # This separately exercises the proposed native loader; the shipping
+        # PFLoad call path stays unchanged until the native transaction passes.
+        run: python3 deploy/test_desktop_darwin_guardian.py . --go "$(command -v go)" --case NativeFilterProjection --projection-mutations
 
   native-sockets:
     name: Native PF, socket and utun ownership on ${{ matrix.runner }}

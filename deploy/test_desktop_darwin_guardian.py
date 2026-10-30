@@ -38,7 +38,7 @@ CASES = ('PFCompiler', 'PFSystemDispatch', 'FixtureAnchorRetirement', 'PFAnchorP
          'StaleCaptureAndReplacement')
 READBACK_CASES = ('PFReadbackCompleteWithinCapturedBudget', 'PFReadbackFailureAndCancellationJoin',
                   'PFReadbackDeadlineAndInvalidCapture')
-PROBE_CASES = ('FilterOnlyRetirement',)
+PROBE_CASES = ('FilterOnlyRetirement', 'NativeFilterProjection')
 
 
 def native_case_name(case):
@@ -305,7 +305,9 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
     if not {'desktop_socket_darwin_guardian_test.go', 'desktop_socket_darwin_kernel_cgo.go',
             'desktop_socket_darwin_pf.go', 'desktop_socket_darwin_state.go',
             'desktop_socket_darwin_readback.go', 'desktop_socket_darwin_pf_probe_cgo.go',
-            'desktop_socket_darwin_pf_probe_nocgo.go'}.issubset(before):
+            'desktop_socket_darwin_pf_probe_nocgo.go', 'desktop_socket_darwin_filter_cgo.go',
+            'desktop_socket_darwin_filter_nocgo.go', 'desktop_socket_darwin_filter_test.go',
+            'desktop_socket_pf_filter_native.go', 'desktop_socket_pf_filter_native_test.go'}.issubset(before):
         raise ValueError('The exact native PF guardian source/test closure is incomplete')
     if not {'desktop_socket_pf_abi.go', 'desktop_socket_darwin_pf_abi.go',
             'desktop_socket_pf_abi_test.go', 'desktop_socket_darwin_pfabi.h',
@@ -349,22 +351,41 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
         if checked_sources(source)[2] != before or hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError('Darwin guardian source/executable changed during actual kernel execution')
         print(output, end='' if output.endswith('\n') else '\n')
-        if case in PROBE_CASES:
+        if case == 'NativeFilterProjection':
+            print('Darwin exact typed native filter fields, unchanged rejected owner and namespace retirement passed.')
+        elif case in PROBE_CASES:
             print('Darwin exact native single-filter commit and rollback anchor lifetime probe passed.')
         else:
             print('Darwin exact native libproc, isolated UID, scoped PF, actual utun ownership and crash cleanup passed.')
 
 
-def execute_mutations(source: Path, go='go'):
+def execute_mutations(source: Path, go='go', *, only_case=None):
     """Compile scoped, temporary broken versions and require their exact failure."""
     if platform.system() != 'Darwin':
         raise ValueError('Darwin guardian mutations require the actual native kernel')
+    if only_case not in (None, 'NativeFilterProjection'):
+        raise ValueError('Darwin guardian mutations require a known scoped positive case')
+    if only_case is None:
+        # The default guardian selector exercises the shipping loader. The
+        # proposed typed adapter has a separate exact baseline; a compilation
+        # failure is never accepted as evidence that its mutants were rejected.
+        execute(source, go, case='NativeFilterProjection')
     source, package, before = checked_sources(source)
     target = source/('internal/mobiletor' if source == ROOT else 'routervpn/mobiletor')
     captured = dict(os.environ, GOWORK='off', CGO_ENABLED='1')
     compiler, captured = UID.compiler_toolchain(source, go, captured)
     sudo = UID.privilege_tool()
     mutations = (
+        ('native PF UID selector projection', 'NativeFilterProjection', 'native filter fields differ from the independent parser',
+         'desktop_socket_darwin_filter_cgo.go', (
+             ('rule->uid.op = PF_OP_EQ;', 'rule->uid.op = PF_OP_NONE;'),)),
+        ('native PF deny tag negation', 'NativeFilterProjection', 'native filter fields differ from the independent parser',
+         'desktop_socket_darwin_filter_cgo.go', (
+             ('rule->match_tag_not = input->match_not;', 'rule->match_tag_not = 0;'),)),
+        ('native PF address mask projection', 'NativeFilterProjection', 'native filter fields differ from the independent parser',
+         'desktop_socket_darwin_filter_cgo.go', (
+             ('memcpy(&rule->src.addr.v.a.mask, input->source_mask, sizeof(input->source_mask));',
+              'memset(&rule->src.addr.v.a.mask, 0xff, sizeof(input->source_mask));'),)),
         ('parallel complete PF inspection budget', 'PFReadbackCompleteWithinCapturedBudget', 'PF readback lost complete bounded parallel proof under its original deadline',
          'desktop_socket_pf_readback.go', (
              ('for range min(4, len(checks)) {', 'for range min(1, len(checks)) {'),)),
@@ -435,6 +456,10 @@ def execute_mutations(source: Path, go='go'):
          'desktop_socket_darwin_helper.go', (
              ('if release && len(g.sockets) != 0 {', 'if false && release && len(g.sockets) != 0 {'),)),
     )
+    if only_case is not None:
+        mutations = tuple(value for value in mutations if value[1] == only_case)
+        if not mutations:
+            raise ValueError('Darwin mutation selection has no exact native case')
     with tempfile.TemporaryDirectory(prefix='routervpn-darwin-guardian-mutants-') as temporary:
         directory = Path(temporary)
         for index, (label, case, message, name, replacements) in enumerate(mutations):
@@ -478,6 +503,7 @@ if __name__ == '__main__':
     parser.add_argument('--sha256')
     parser.add_argument('--case', choices=CASES+READBACK_CASES+PROBE_CASES)
     parser.add_argument('--mutations', action='store_true', help='Run scoped production mutation controls after the native positive suite')
+    parser.add_argument('--projection-mutations', action='store_true', help='Run only native filter projection mutations after its exact positive case')
     args = parser.parse_args()
     if args.root_test_binary:
         if not args.sha256 or not re.fullmatch('[0-9a-f]{64}', args.sha256):
@@ -485,6 +511,10 @@ if __name__ == '__main__':
         raise SystemExit(root_fixture(args.root_test_binary, args.sha256, args.case))
     if args.source is None:
         parser.error('exact prepared native source is required')
+    if args.projection_mutations and (args.case != 'NativeFilterProjection' or args.mutations):
+        parser.error('native projection mutations require their exact positive case and a separate invocation')
     execute(args.source, args.go, case=args.case)
     if args.mutations:
         execute_mutations(args.source, args.go)
+    if args.projection_mutations:
+        execute_mutations(args.source, args.go, only_case='NativeFilterProjection')
