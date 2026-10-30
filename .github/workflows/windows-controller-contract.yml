@@ -9,6 +9,7 @@ on:
       - 'internal/controllertransport/**'
       - 'internal/controllerbridge/**'
       - 'internal/windowsuibridge/**'
+      - 'internal/windowsapp/**'
       - 'internal/mobiletor/desktop_socket_windows_probe*'
       - 'cmd/client/controller_*'
       - 'cmd/windows-app-launcher/**'
@@ -23,6 +24,7 @@ on:
       - 'deploy/test_windows_gui_bridge.py'
       - 'deploy/test_windows_gui_adapter.py'
       - 'deploy/test_windows_gui_powershell.py'
+      - 'deploy/test_windows_app_session.py'
       - 'deploy/fixtures/windows-controller-transport/**'
       - 'deploy/test_desktop_windows_wfp.py'
       - 'deploy/test_desktop_windows_identity.py'
@@ -35,6 +37,7 @@ on:
       - 'internal/controllertransport/**'
       - 'internal/controllerbridge/**'
       - 'internal/windowsuibridge/**'
+      - 'internal/windowsapp/**'
       - 'internal/mobiletor/desktop_socket_windows_probe*'
       - 'cmd/client/controller_*'
       - 'cmd/windows-app-launcher/**'
@@ -49,6 +52,7 @@ on:
       - 'deploy/test_windows_gui_bridge.py'
       - 'deploy/test_windows_gui_adapter.py'
       - 'deploy/test_windows_gui_powershell.py'
+      - 'deploy/test_windows_app_session.py'
       - 'deploy/fixtures/windows-controller-transport/**'
       - 'deploy/test_desktop_windows_wfp.py'
       - 'deploy/test_desktop_windows_identity.py'
@@ -69,7 +73,10 @@ concurrency:
 jobs:
   controller:
     runs-on: windows-latest
-    timeout-minutes: 20
+    # The measured pre-composition job took 10m07s. Child-entry and complete
+    # Session execution add two separately bounded 10m native gates; retain a
+    # small job/setup margin without altering any process or drain deadline.
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -161,6 +168,13 @@ jobs:
             python deploy/test_windows_gui_powershell.py --shell $shell
             if ($LASTEXITCODE -ne 0) { throw "Actual PowerShell and Go UI composition gate failed in $shell" }
           }
+      - name: Actual installed and Portable Windows Session with packaged App and Tray
+        if: ${{ success() || failure() }}
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          python deploy/test_windows_app_session.py
+          if ($LASTEXITCODE -ne 0) { throw 'Actual composed Windows Session gate failed' }
       - name: Actual ordinary-user protection absence and denial
         if: ${{ success() || failure() }}
         shell: pwsh

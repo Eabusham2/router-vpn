@@ -1,6 +1,7 @@
 param(
     [string]$BaseUrl = 'http://127.0.0.1:8788',
     [int]$UiPid = 0,
+    [long]$UiCreationTicks = 0,
     [switch]$SelfTest,
     [string]$ControllerPipe,
     [long]$ControllerParentHandle
@@ -40,6 +41,10 @@ if (-not (Test-Path -LiteralPath $PrivateState -PathType Leaf)) { throw 'Router 
 . $PrivateState
 
 if ($SelfTest) {
+    if($CapturedBase-ceq'https://127.0.0.1:8788'){
+        $CapturedStatus=Invoke-RouterVPNControllerRequest -Uri "$BaseUrl/api/status" -Method Get -TimeoutSec 10
+        if($null-eq$CapturedStatus-or[string]::IsNullOrEmpty([string]$CapturedStatus.mode)){throw 'The owned Tray did not read its real controller status.'}
+    }
     if (-not (Test-Path -LiteralPath $IconPath -PathType Leaf)) { throw "Router VPN tray icon missing: $IconPath" }
     $Source = Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw
     foreach ($Marker in @('System.Windows.Forms.NotifyIcon','Open Router VPN','Emergency Stop','Exit Router VPN','/api/emergency-stop','ShowWindowAsync','SetForegroundWindow','PostMessage','IsIconic','Get-RouterVPNProcessIdentity','start_time_utc_ticks','executable_path')) {
@@ -54,6 +59,9 @@ if (-not (Test-Path -LiteralPath $IconPath -PathType Leaf)) { throw "Router VPN 
 
 $InitialUiProcess = Get-Process -Id $UiPid -ErrorAction Stop
 $UiIdentity = Get-RouterVPNProcessIdentity $InitialUiProcess
+if($CapturedBase-ceq'https://127.0.0.1:8788'-and($UiCreationTicks-le0-or[Int64]$UiIdentity.start_time_utc_ticks-ne$UiCreationTicks)){
+    throw 'The Tray requires the exact App process captured by its launcher.'
+}
 $UiStartTicks = [Int64]$UiIdentity.start_time_utc_ticks
 $UiExecutable = [string]$UiIdentity.executable_path
 
@@ -116,10 +124,12 @@ $OpenItem.Add_Click({ Show-RouterVPNWindow })
 $Notify.Add_DoubleClick({ Show-RouterVPNWindow })
 $EmergencyItem.Add_Click({ Emergency-StopRouterVPN })
 $ExitItem.Add_Click({
-    if (-not (Close-RouterVPNWindow)) {
+    if (-not (Close-RouterVPNWindow) -and $CapturedBase-cne'https://127.0.0.1:8788') {
         $ownedUi = Get-UiProcess
         if ($ownedUi) { Stop-Process -InputObject $ownedUi -ErrorAction SilentlyContinue }
     }
+    # Owned launchers join their retained App Job after this Tray exits. Never
+    # reopen and terminate a public PID on that path.
     [System.Windows.Forms.Application]::ExitThread()
 })
 

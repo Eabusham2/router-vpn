@@ -18,6 +18,13 @@ if(-not$PSBoundParameters.ContainsKey('BaseUrl')){$BaseUrl=$CapturedBase}
 $BaseUrl=$BaseUrl.TrimEnd('/')
 if($BaseUrl-cne$CapturedBase){throw 'Router VPN requires the fixed local controller captured by this UI owner.'}
 Assert-RouterVPNControllerBaseUrl $BaseUrl
+if($SelfTest-and$CapturedBase-ceq'https://127.0.0.1:8788'){
+    $CapturedStatus=Invoke-RouterVPNControllerRequest -Uri ($BaseUrl+'/api/status') -Method Get -TimeoutSec 10
+    if($null-eq$CapturedStatus-or$null-eq$CapturedStatus.PSObject.Properties['mode']-or$null-eq$CapturedStatus.PSObject.Properties['phase']-or
+       [string]::IsNullOrWhiteSpace([string]$CapturedStatus.mode)-or[string]::IsNullOrWhiteSpace([string]$CapturedStatus.phase)){
+        throw 'The owned Windows app self-test did not receive its captured controller status.'
+    }
+}
 
 Add-Type -AssemblyName PresentationFramework
 Add-Type -AssemblyName PresentationCore

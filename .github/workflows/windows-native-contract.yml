@@ -118,6 +118,13 @@ jobs:
             python deploy/test_windows_gui_powershell.py --shell $shell
             if ($LASTEXITCODE -ne 0) { throw "Actual PowerShell and Go UI composition gate failed in $shell" }
           }
+      - name: Actual installed and Portable Windows Session with packaged App and Tray
+        if: ${{ success() || failure() }}
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          python deploy/test_windows_app_session.py
+          if ($LASTEXITCODE -ne 0) { throw 'Actual composed Windows Session gate failed' }
       - name: Isolated Windows socket token and ALE endpoint proof
         if: ${{ success() || failure() }}
         shell: pwsh
