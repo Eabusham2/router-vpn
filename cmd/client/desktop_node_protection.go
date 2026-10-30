@@ -18,6 +18,7 @@ type desktopNodeProtectionBackend struct {
 	read     func(context.Context, *mobiletor.DesktopWindowsProtectionTarget) error
 	prepared func(context.Context, mobiletor.DesktopWindowsProtectionTarget) error
 	release  func(context.Context, mobiletor.DesktopWindowsProtectionTarget) (desktopNodeProtectionRelease, error)
+	recover  func(context.Context, mobiletor.DesktopWindowsProtectionTarget) (desktopNodeProtectionRelease, error)
 }
 
 type desktopNodeProtectionAttempt struct {
@@ -39,6 +40,9 @@ type desktopNodeProtectionSlot struct {
 	active             *desktopNodeProtectionAttempt
 	retirement         desktopNodeProtectionRelease
 	retirementPrepared bool
+	generation         uint64
+	binding            desktopNodeProtectionBinding
+	off                *desktopNodeProtectionOff
 }
 
 func copyDesktopNodeProtectionTarget(target *mobiletor.DesktopWindowsProtectionTarget) *mobiletor.DesktopWindowsProtectionTarget {
@@ -55,7 +59,7 @@ func (s *desktopNodeProtectionSlot) begin(ctx context.Context, launch *desktopNo
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active != nil || s.retirement != nil || s.backend.read == nil || s.backend.prepared == nil || s.backend.release == nil {
+	if s.active != nil || s.retirement != nil || s.off != nil || s.backend.read == nil || s.backend.prepared == nil || s.backend.release == nil {
 		return nil, errors.New("native protection still belongs to an active or retiring attempt")
 	}
 	expected := copyDesktopNodeProtectionTarget(s.target)
@@ -72,6 +76,9 @@ func (s *desktopNodeProtectionSlot) begin(ctx context.Context, launch *desktopNo
 		return nil, err
 	}
 	attempt := &desktopNodeProtectionAttempt{launch: launch, policy: policy, transfer: transfer, digest: digest}
+	if err := s.advanceGenerationLocked(); err != nil {
+		return nil, err
+	}
 	s.known, s.active = true, attempt
 	return attempt, nil
 }
@@ -119,6 +126,17 @@ func (s *desktopNodeProtectionSlot) finish(ctx context.Context, attempt *desktop
 	if err := s.backend.read(ctx, target); err != nil || ctx.Err() != nil {
 		return errors.Join(err, ctx.Err())
 	}
+	if err := s.advanceGenerationLocked(); err != nil {
+		return err
+	}
+	if target == nil {
+		s.binding = desktopNodeProtectionBinding{}
+	} else if target.Capture.SessionID == attempt.policy.Metadata().SessionID && target.Capture.SourceSHA256 == attempt.policy.Metadata().SourceSHA256 {
+		// A failed trial may return its unchanged predecessor. Only a proved
+		// successor acquires the new profile/source binding.
+		meta := attempt.policy.Metadata()
+		s.binding = desktopNodeProtectionBinding{ProfileID: meta.ProfileID, SourceSHA256: meta.SourceSHA256}
+	}
 	s.target, s.active, s.known = target, nil, true
 	return nil
 }
@@ -142,6 +160,9 @@ func (s *desktopNodeProtectionSlot) abandonUnchanged(ctx context.Context, attemp
 	if err := s.backend.read(ctx, expected); err != nil || ctx.Err() != nil {
 		return errors.Join(err, ctx.Err())
 	}
+	if err := s.advanceGenerationLocked(); err != nil {
+		return err
+	}
 	s.target, s.active, s.known = expected, nil, true
 	return nil
 }
@@ -152,7 +173,7 @@ func (s *desktopNodeProtectionSlot) release(ctx context.Context) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.known || s.active != nil || s.backend.read == nil || s.backend.release == nil {
+	if !s.known || s.active != nil || s.off != nil || s.backend.read == nil || s.backend.release == nil {
 		return errors.New("native protection is still active or unknown")
 	}
 	if s.target == nil {
@@ -200,6 +221,12 @@ func (s *desktopNodeProtectionSlot) release(ctx context.Context) error {
 	if err := s.backend.read(ctx, expected); err != nil || ctx.Err() != nil {
 		return errors.Join(err, ctx.Err())
 	}
+	if err := s.advanceGenerationLocked(); err != nil {
+		return err
+	}
+	if expected == nil {
+		s.binding = desktopNodeProtectionBinding{}
+	}
 	s.target, s.retirement, s.retirementPrepared = expected, nil, false
 	return nil
 }
@@ -210,5 +237,5 @@ func (s *desktopNodeProtectionSlot) retained() bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.active != nil || s.retirement != nil || s.target != nil
+	return s.active != nil || s.retirement != nil || s.target != nil || s.off != nil
 }

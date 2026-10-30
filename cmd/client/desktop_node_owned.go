@@ -163,7 +163,7 @@ func (s *desktopNodeProtectionSlot) provedEmpty() bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.known && s.target == nil && s.active == nil && s.retirement == nil
+	return s.known && s.target == nil && s.active == nil && s.retirement == nil && s.off == nil
 }
 
 // current never takes the protection slot lock. The slot may invoke this guard
@@ -667,6 +667,10 @@ func (a *app) releaseCapturedDesktopNodeProtection(slot *desktopNodeProtectionSl
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	if pending := slot.pendingOff(); pending != nil {
+		_, err := a.resumeDesktopProtectionOff(ctx, slot, pending, true)
+		return err
+	}
 	if err := slot.release(ctx); err != nil {
 		return err
 	}

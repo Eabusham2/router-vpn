@@ -29,5 +29,12 @@ func desktopOwnedNodeProtectionBackend() (desktopNodeProtectionBackend, error) {
 			}
 			return owner, err
 		},
+		recover: func(ctx context.Context, target mobiletor.DesktopWindowsProtectionTarget) (desktopNodeProtectionRelease, error) {
+			owner, err := mobiletor.NewDesktopWindowsProtectionRecoveryTarget(ctx, target)
+			if owner == nil {
+				return nil, err
+			}
+			return owner, err
+		},
 	}, nil
 }

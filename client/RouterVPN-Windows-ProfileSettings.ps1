@@ -161,8 +161,47 @@ function global:Set-RouterVPNProfileProtection {
     if([string]::IsNullOrWhiteSpace($DisplayedProfileID)){throw 'Select a node before changing protection.'}
     $captured=Invoke-RouterVPNControllerRequest -Uri ($BaseUrl.TrimEnd('/') + '/api/profile/protection') -Method Get -TimeoutSec 5
     if([string]$captured.profile_id -cne $DisplayedProfileID -or [string]::IsNullOrWhiteSpace([string]$captured.profile_token)){throw 'The selected node changed. Refresh before changing protection.'}
+    $pendingProperty=$captured.PSObject.Properties['protection_status']
+    if($Enabled -and $null-ne$pendingProperty -and @('off-pending','off-unsaved') -ccontains [string]$pendingProperty.Value){throw 'Finish the pending Off change before enabling the kill switch.'}
     $body=@{profile_id=$DisplayedProfileID;profile_token=[string]$captured.profile_token;kill_switch_policy=$(if($Enabled){'on-connect'}else{'off'})}
-    Invoke-RouterVPNControllerRequest -Uri ($BaseUrl.TrimEnd('/') + '/api/profile/protection') -Method Post -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress) -TimeoutSec 8
+    try{
+        $saved=Invoke-RouterVPNControllerRequest -Uri ($BaseUrl.TrimEnd('/') + '/api/profile/protection') -Method Post -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress) -TimeoutSec 30
+    }catch{
+        $failure=$_.Exception.Message;$pending=$null
+        try{$pending=Invoke-RouterVPNControllerRequest -Uri ($BaseUrl.TrimEnd('/') + '/api/profile/protection') -Method Get -TimeoutSec 5}catch{}
+        if($null-ne$pending -and [string]$pending.profile_id -ceq $DisplayedProfileID){
+            $state=$pending.PSObject.Properties['protection_status'];$message=$pending.PSObject.Properties['message']
+            if($null-ne$state -and @('off-pending','off-unsaved') -ccontains [string]$state.Value -and $null-ne$message -and -not[string]::IsNullOrWhiteSpace([string]$message.Value)){throw ([string]$message.Value)}
+        }
+        throw $failure
+    }
+    if($null-eq$saved -or [string]$saved.profile_id -cne $DisplayedProfileID -or [string]$saved.kill_switch_policy -cne [string]$body.kill_switch_policy -or [string]::IsNullOrWhiteSpace([string]$saved.profile_token)){throw 'The controller did not confirm the captured protection change.'}
+    $savedState=$saved.PSObject.Properties['protection_status'];$effective=$saved.PSObject.Properties['effective_policy']
+    if($null-ne$savedState -and @('off-pending','off-unsaved') -ccontains [string]$savedState.Value){throw 'The protection change is still pending. Refresh and finish Off.'}
+    if(-not$Enabled -and $null-ne$effective -and [string]$effective.Value -cne 'off'){throw 'The controller has not confirmed that retained protection is off.'}
+    return $saved
+}
+
+function global:Get-RouterVPNProtectionPresentation {
+    param($Captured,[string]$DisplayedProfileID)
+    $result=[pscustomobject]@{Valid=$false;Enabled=$false;Checked=$null;Pending=$false;Label='Kill switch';Message='Protection status is unavailable. Refresh before changing it.'}
+    if($null-eq$Captured -or [string]::IsNullOrWhiteSpace($DisplayedProfileID) -or [string]$Captured.profile_id -cne $DisplayedProfileID -or [string]::IsNullOrWhiteSpace([string]$Captured.profile_token)){return $result}
+    $policy=[string]$Captured.kill_switch_policy
+    if(@('off','on-connect','always') -cnotcontains $policy){return $result}
+    $stateProperty=$Captured.PSObject.Properties['protection_status'];$state=if($null-ne$stateProperty){[string]$stateProperty.Value}else{''}
+    $effectiveProperty=$Captured.PSObject.Properties['effective_policy'];$effective=if($null-ne$effectiveProperty){[string]$effectiveProperty.Value}else{$policy}
+    if(@('','retained','active','pending','off-pending','off-unsaved') -cnotcontains $state -or @('off','on-connect','always','unknown') -cnotcontains $effective){return $result}
+    $result.Valid=$true;$result.Enabled=$true;$result.Message=''
+    $messageProperty=$Captured.PSObject.Properties['message'];if($null-ne$messageProperty){$result.Message=[string]$messageProperty.Value}
+    if(@('off-pending','off-unsaved') -ccontains $state){
+        $result.Pending=$true;$result.Label='Finish Off';$result.Checked=$null
+        if([string]::IsNullOrWhiteSpace($result.Message)){$result.Message='The Off change is pending. Select Finish Off to retry the same change.'}
+        return $result
+    }
+    if($effective-ceq'unknown'){$result.Enabled=$false;$result.Checked=$null}else{$result.Checked=($effective-cne'off')}
+    $ownerProperty=$Captured.PSObject.Properties['protection_profile_id']
+    if($null-ne$ownerProperty -and -not[string]::IsNullOrWhiteSpace([string]$ownerProperty.Value) -and [string]$ownerProperty.Value-cne$DisplayedProfileID){$result.Enabled=$false}
+    return $result
 }
 
 function global:Get-RouterVPNStartLayerCapabilities {

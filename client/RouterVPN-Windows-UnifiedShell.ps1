@@ -35,7 +35,7 @@ function Add-RouterVPNUnifiedWindowsShell {
       <TextBlock Name="UnifiedProofText" Text="Connected requires exact selected-node path proof." Foreground="#DDE7FF" TextWrapping="Wrap" Margin="0,0,0,7"/>
       <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,0,0,6"><Button Name="UnifiedProofButton" Content="Prove actual exit" Padding="10,5"/><Button Name="UnifiedEmergencyButton" Content="Emergency disconnect" Margin="6,0,0,0" Padding="10,5"/></StackPanel>
       <TextBlock Name="UnifiedLastError" Foreground="#FF9CA8" TextWrapping="Wrap" Margin="0,0,0,6"/>
-      <Grid Margin="0,2,0,6"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button Name="UnifiedConnectButton" Content="Connect" FontSize="17" FontWeight="Bold" Padding="18,10" Background="#6857E5" Foreground="White"/><CheckBox Name="UnifiedKillSwitch" Grid.Column="1" Content="Kill switch" VerticalAlignment="Center" Margin="14,0,0,0"/></Grid>
+      <Grid Margin="0,2,0,6"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Button Name="UnifiedConnectButton" Content="Connect" FontSize="17" FontWeight="Bold" Padding="18,10" Background="#6857E5" Foreground="White"/><CheckBox Name="UnifiedKillSwitch" Grid.Column="1" Content="Kill switch" IsEnabled="False" VerticalAlignment="Center" Margin="14,0,0,0"/></Grid>
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Multihop" FontWeight="SemiBold" VerticalAlignment="Center"/><CheckBox Name="UnifiedMultihop" Grid.Column="1" VerticalAlignment="Center" Margin="6,0"/><ComboBox Name="UnifiedEntryCombo" Grid.Column="2" DisplayMemberPath="name" SelectedValuePath="id" MinWidth="150"/><TextBlock Grid.Column="3" Text=" → " VerticalAlignment="Center"/><ComboBox Name="UnifiedExitCombo" Grid.Column="4" DisplayMemberPath="name" SelectedValuePath="id" MinWidth="150"/><ComboBox Name="UnifiedExitMode" Grid.Column="5" Margin="6,0,0,0"><ComboBoxItem Content="Shadowsocks" Tag="shadowsocks"/><ComboBoxItem Content="Hysteria2" Tag="hysteria2"/><ComboBoxItem Content="REALITY Vision" Tag="reality-vision"/><ComboBoxItem Content="PQ REALITY Vision" Tag="reality-pq-vision"/><ComboBoxItem Content="REALITY XHTTP" Tag="reality-xhttp"/><ComboBoxItem Content="Naive H2" Tag="naive-h2"/><ComboBoxItem Content="Naive H3" Tag="naive-h3"/><ComboBoxItem Content="WireGuard" Tag="wg"/><ComboBoxItem Content="AWG Fast" Tag="awg2-fast"/><ComboBoxItem Content="AWG Strong" Tag="awg2-strong"/><ComboBoxItem Content="SS/V2Ray" Tag="ss-v2ray"/><ComboBoxItem Content="Split" Tag="split"/><ComboBoxItem Content="MAX" Tag="max"/><ComboBoxItem Content="WG + PQ" Tag="wg-pq"/><ComboBoxItem Content="AWG + PQ" Tag="awg2-pq"/><ComboBoxItem Content="Complete MAX TLS / WG" Tag="max-tls-wg"/><ComboBoxItem Content="Complete MAX TLS / AWG" Tag="max-tls-awg"/><ComboBoxItem Content="Complete MAX QUIC / WG" Tag="max-quic-wg"/><ComboBoxItem Content="Complete MAX QUIC / AWG" Tag="max-quic-awg"/></ComboBox></Grid>
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Entry base" FontWeight="SemiBold" VerticalAlignment="Center"/><ComboBox Name="UnifiedBaseCombo" Grid.Column="1" SelectedIndex="0" ToolTip="Auto follows the selected entry node's saved base. AWG uses its exact saved Fast or Strong source."><ComboBoxItem Content="Auto - saved entry base" Tag="auto"/><ComboBoxItem Content="WireGuard" Tag="wg"/><ComboBoxItem Content="AmneziaWG" Tag="awg"/></ComboBox></Grid>
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Entry mode" FontWeight="SemiBold" VerticalAlignment="Center"/><ComboBox Name="UnifiedEntryMode" Grid.Column="1" SelectedIndex="0" ToolTip="Keep the saved entry mode or choose its complete transport. Entry base supplies the WG/AWG fallback when no mode was saved."><ComboBoxItem Content="Use saved entry mode / base" Tag=""/><ComboBoxItem Content="WireGuard" Tag="wg"/><ComboBoxItem Content="AWG Fast" Tag="awg2-fast"/><ComboBoxItem Content="AWG Strong" Tag="awg2-strong"/><ComboBoxItem Content="WG + PQ" Tag="wg-pq"/><ComboBoxItem Content="AWG + PQ" Tag="awg2-pq"/><ComboBoxItem Content="Shadowsocks" Tag="shadowsocks"/><ComboBoxItem Content="Hysteria2" Tag="hysteria2"/><ComboBoxItem Content="REALITY Vision" Tag="reality-vision"/><ComboBoxItem Content="PQ REALITY Vision" Tag="reality-pq-vision"/><ComboBoxItem Content="REALITY XHTTP" Tag="reality-xhttp"/><ComboBoxItem Content="Naive H2" Tag="naive-h2"/><ComboBoxItem Content="Naive H3" Tag="naive-h3"/><ComboBoxItem Content="SS/V2Ray" Tag="ss-v2ray"/><ComboBoxItem Content="Split" Tag="split"/><ComboBoxItem Content="MAX TCP/UDP" Tag="max"/><ComboBoxItem Content="MAX TLS / WG + PQ" Tag="max-tls-wg"/><ComboBoxItem Content="MAX TLS / AWG + PQ" Tag="max-tls-awg"/><ComboBoxItem Content="MAX QUIC / WG + PQ" Tag="max-quic-wg"/><ComboBoxItem Content="MAX QUIC / AWG + PQ" Tag="max-quic-awg"/></ComboBox></Grid>
@@ -232,9 +232,9 @@ $script:UnifiedComparisonPoller.Add_Tick({PollUnifiedComparisonProgress})
 function SetUnifiedAsyncUI([bool]$Busy,[string]$Label=''){
     if($script:UnifiedAsyncClosed){return}
     foreach($N in @('UnifiedMtuButton','UnifiedSettingsButton','UnifiedPresetsButton','UnifiedNodesButton','UnifiedModeCombo','UnifiedMultihop','UnifiedEntryCombo','UnifiedExitCombo','UnifiedEntryMode','UnifiedExitMode','UnifiedExecution','UnifiedBaseCombo','UnifiedCandidatesButton','UnifiedFastestNode','UnifiedForwardButton','UnifiedPerformanceButton','MtuRetestButton','MultihopConnectButton','AutoButton','ConnectButton','ExternalDirectButton','ExternalViaEntryButton','LatencyButton','DnsButton','UnifiedNodeCombo','UnifiedDnsCombo','UnifiedKillSwitch','UnifiedTorButton','UnifiedExternalNodeButton','UnifiedExternalPathButton')){
-        $C=Control $N;if($null-ne$C){$C.IsEnabled=-not$Busy}
+        $C=Control $N;if($null-ne$C){$C.IsEnabled=(-not$Busy -and (-not$script:UnifiedProtectionPending -or $N-ceq'UnifiedKillSwitch'))}
     }
-    $B=Control 'UnifiedConnectButton';if($null-ne$B){$B.IsEnabled=$true;if($Busy){$B.Content=if($Label-match'(?i)connect|auto|custom|multihop|external'){'Cancel / Disconnect'}else{$Label}}}
+    $B=Control 'UnifiedConnectButton';if($null-ne$B){$B.IsEnabled=($Busy -or -not$script:UnifiedProtectionPending);if($Busy){$B.Content=if($Label-match'(?i)connect|auto|custom|multihop|external'){'Cancel / Disconnect'}else{$Label}}}
 }
 function UnifiedMultihopStartupTimeout($Body){
     if([string]$Body.execution-cne'auto'){return 200}
@@ -359,6 +359,8 @@ $script:UnifiedRefreshTasks=@{}
 $script:UnifiedRefreshRequests=@{}
 $script:UnifiedRefreshCts=$null
 $script:UnifiedRefreshDiscard=$false
+$script:UnifiedProtectionPending=$false
+$script:UnifiedProtectionProfileID=''
 $script:UnifiedRefreshPoller=New-Object Windows.Threading.DispatcherTimer
 $script:UnifiedRefreshPoller.Interval=[TimeSpan]::FromMilliseconds(100)
 function UnifiedRefreshBusy { return $script:UnifiedRefreshTasks.Count -gt 0 }
@@ -380,6 +382,7 @@ function StartUnifiedRefreshAsync {
         modes='/api/logical-modes'
         multihop='/api/multihop/status'
         events=('/api/session/events?after='+[string]$script:EventSeq)
+        protection='/api/profile/protection'
     }
     try{
         foreach($Key in $Paths.Keys){
@@ -393,17 +396,22 @@ function StartUnifiedRefreshAsync {
         $StateText.Text='Controller unavailable';$StateDot.Fill='#FF5D6C';$LastErrorText.Text=$_.Exception.Message
     }
 }
-function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Timeline){
+function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Timeline,$Protection){
     $script:Busy=$true
     try{
         $Connected=[bool]$Status.connected;$Phase=[string]$Status.phase
-        $MutationBusy=Test-RouterVPNMutationBusyFromStatus $Status
+        $ControllerBusy=Test-RouterVPNMutationBusyFromStatus $Status
+        $ProtectionView=Get-RouterVPNProtectionPresentation -Captured $Protection -DisplayedProfileID ([string]$Store.selected_id)
+        $script:UnifiedProtectionPending=[bool]$ProtectionView.Pending
+        $script:UnifiedProtectionProfileID=if($ProtectionView.Valid){[string]$Store.selected_id}else{''}
+        $MutationBusy=$ControllerBusy -or $script:UnifiedProtectionPending
         $Disconnecting=$Phase -match '(?i)(disconnecting|stopping)'
         $StateText.Text=if($Connected){'Connected'}elseif($Phase){$Phase}else{'Off'}
         $StateDot.Fill=if($Connected){'#35D07F'}elseif($Phase-eq'failed'){'#FF5D6C'}else{'#6B7280'}
         $Runtime=if($Status.runtime_mode){$Status.runtime_mode}else{$Status.mode}
         $ConnectionDetail.Text="Phase: $Phase Logical: $($Status.logical_mode) Runtime: $Runtime Base: $($Status.base) Router: $($Status.router_id)"
         $LastErrorText.Text=[string]$Status.last_error
+        if($Store.selected_id -and -not[string]::IsNullOrWhiteSpace([string]$ProtectionView.Message)){$LastErrorText.Text+=([Environment]::NewLine+[string]$ProtectionView.Message)}
         if($Connected){$ProofText.Text='Connected - selected-router private path proof passed.'}
         $DnsSaveButton.IsEnabled=-not$MutationBusy;$DnsButton.IsEnabled=$Connected
         foreach($Name in @('PairNodeButton','ImportNodeButton','DeleteNodeButton','SelectNodeButton','SelectLowestLatencyButton','ExternalDirectButton','ExternalViaEntryButton','MultihopConnectButton','UnifiedCandidatesButton','AutoButton','ConnectButton')){
@@ -420,6 +428,8 @@ function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Time
         if($OldNode){$NodesGrid.SelectedValue=$OldNode}
         DrawMap $Profiles ([string]$Store.selected_id)
         $Selected=@($Profiles|Where-Object{[string]$_.id-eq[string]$Store.selected_id}|Select-Object -First 1)
+        $UnifiedKill=Control 'UnifiedKillSwitch'
+        if($null-ne$UnifiedKill){$UnifiedKill.Content=[string]$ProtectionView.Label;$UnifiedKill.IsChecked=$ProtectionView.Checked;$UnifiedKill.ToolTip=[string]$ProtectionView.Message;$UnifiedKill.IsEnabled=(-not$ControllerBusy -and [bool]$ProtectionView.Enabled)}
         if($Selected.Count){
             $Profile=$Selected[0]
             $Success=if($Profile.effective_mtu_success_ratio){[double]$Profile.effective_mtu_success_ratio*100}else{0}
@@ -432,8 +442,6 @@ function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Time
                 $AutoReqText=if($AutoReq.Count){$AutoReq -join '+'}else{'Off'}
                 $UnifiedSettings.Text="IPv6=$($Profile.ipv6_mode) • MTU=$($Profile.mtu_policy)/$($Profile.effective_mtu) • LAN=$($Profile.home_lan_access) • AUTO requirements=$AutoReqText"
             }
-            $UnifiedKill=Control 'UnifiedKillSwitch'
-            if($null-ne$UnifiedKill){$UnifiedKill.IsChecked=([string]$Profile.kill_switch_policy -ne 'off')}
             $UnifiedDns=Control 'UnifiedDnsCombo'
             if($null-ne$UnifiedDns -and $Profile.dns_mode){SetComboTag $UnifiedDns ([string]$Profile.dns_mode)}
         }
@@ -459,10 +467,10 @@ function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Time
 
         $UnifiedConnect=Control 'UnifiedConnectButton'
         if($null-ne$UnifiedConnect){
-            $UnifiedConnect.Content=if($Disconnecting){'Disconnecting…'}elseif($Connected-or$MutationBusy){'Disconnect'}else{'Connect'}
-            $UnifiedConnect.IsEnabled=-not$Disconnecting
+            $UnifiedConnect.Content=if($Disconnecting){'Disconnecting…'}elseif($script:UnifiedProtectionPending){'Connect'}elseif($Connected-or$MutationBusy){'Disconnect'}else{'Connect'}
+            $UnifiedConnect.IsEnabled=(-not$Disconnecting -and -not$script:UnifiedProtectionPending)
         }
-        foreach($Name in @('UnifiedKillSwitch','UnifiedMultihop','UnifiedModeCombo','UnifiedDnsCombo')){
+        foreach($Name in @('UnifiedMultihop','UnifiedModeCombo','UnifiedDnsCombo')){
             $C=Control $Name;if($null-ne$C){$C.IsEnabled=-not$MutationBusy}
         }
     }finally{$script:Busy=$false}
@@ -476,10 +484,11 @@ function CompleteUnifiedRefreshAsync {
         foreach($Key in @($script:UnifiedRefreshTasks.Keys)){
             $Resp=$script:UnifiedRefreshTasks[$Key].GetAwaiter().GetResult();$Responses+=$Resp
             $Text=$Resp.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+            if($Key-ceq'protection' -and [int]$Resp.StatusCode-eq400){$Payload[$Key]=$null;continue}
             if(-not$Resp.IsSuccessStatusCode){throw ("refresh "+$Key+" HTTP "+[int]$Resp.StatusCode+" "+$Text)}
             $Payload[$Key]=if([string]::IsNullOrWhiteSpace($Text)){$null}else{$Text|ConvertFrom-Json}
         }
-        if(-not$Discard){ApplyUnifiedRefreshSnapshot $Payload.status $Payload.nodes $Payload.session $Payload.modes $Payload.multihop $Payload.events}
+        if(-not$Discard){ApplyUnifiedRefreshSnapshot $Payload.status $Payload.nodes $Payload.session $Payload.modes $Payload.multihop $Payload.events $Payload.protection}
     }catch{
         if(-not$Discard){$StateText.Text='Controller unavailable';$StateDot.Fill='#FF5D6C';$LastErrorText.Text=$_.Exception.Message}
     }finally{
@@ -856,7 +865,7 @@ $Window.Add_Closed({
     try{if($null-ne$script:UnifiedAsyncCts){$script:UnifiedAsyncCts.Dispose()}}catch{}
 })
 (Control 'UnifiedModeCombo').Add_SelectionChanged({if($ModeCombo.SelectedValue){$ID=[string]$ModeCombo.SelectedValue;if($ID -eq 'custom:new'){ShowUnifiedCustomBuilder}else{SaveUnifiedModeID $ID}}})
-(Control 'UnifiedKillSwitch').Add_Click({try{$On=[bool](Control 'UnifiedKillSwitch').IsChecked;$DisplayedProfileID=[string]$RouterCombo.SelectedValue;[void](Set-RouterVPNProfileProtection -BaseUrl $BaseUrl -DisplayedProfileID $DisplayedProfileID -Enabled $On);Log (if($On){'Kill switch enabled'}else{'Kill switch disabled'})}catch{Log ('Kill switch update failed: '+$_.Exception.Message)};RefreshProduct})
+(Control 'UnifiedKillSwitch').Add_Click({try{$On=[bool](Control 'UnifiedKillSwitch').IsChecked;$DisplayedProfileID=[string]$RouterCombo.SelectedValue;if($script:UnifiedProtectionPending -and $script:UnifiedProtectionProfileID-ceq$DisplayedProfileID){$On=$false};[void](Set-RouterVPNProfileProtection -BaseUrl $BaseUrl -DisplayedProfileID $DisplayedProfileID -Enabled $On);Log (if($On){'Kill switch enabled'}else{'Kill switch disabled'})}catch{Log ('Kill switch update failed: '+$_.Exception.Message)};RefreshProduct})
 (Control 'UnifiedDnsCombo').Add_SelectionChanged({if(-not $script:Busy){$Tag=ComboTag (Control 'UnifiedDnsCombo') 'home';if($Tag -in @('fastest','custom','dot','doh','doh3')){OpenUnifiedDetail 3;RefreshDnsPolicy}else{try{SetUnifiedDNSPreset -Mode $Tag;Log ('DNS selected: '+$Tag)}catch{Log ('DNS update failed: '+$_.Exception.Message)};RefreshDnsPolicy;RefreshProduct}}})
 '@
     $ProductSource = $ProductSource.Replace($beforeShow, $handlers + "`n" + $beforeShow)

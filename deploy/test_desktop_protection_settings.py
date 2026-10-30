@@ -20,6 +20,7 @@ function global:Invoke-RestMethod {
     if($Uri -cne 'http://127.0.0.1:8788/api/profile/protection'){throw 'Wrong protection route'}
     if($Method -ceq 'Get'){$script:gets++;return $script:captured}
     if($Method -cne 'Post'){throw 'Wrong method'}
+    if($TimeoutSec -ne 30){throw 'Explicit protection transaction lost its bounded cleanup wait'}
     if($script:reject){throw 'Source changed before commit'}
     $script:posts++;$script:sent=$Body|ConvertFrom-Json;return $script:sent
 }
@@ -46,20 +47,68 @@ foreach($case in @('empty selection','different selection','different case','mis
     if(-not$caught -or $script:posts -ne $before){throw "Unsafe edit accepted: $case"}
     if($case -eq 'empty selection' -and $script:gets -ne $gets){throw 'An empty displayed selection adopted the server node'}
 }
+$script:captured=[pscustomobject]@{profile_id='node';profile_token='exact-target-revision';kill_switch_policy='always';protection_status='off-unsaved';effective_policy='off';message='Protection is off; saving failed. Retry Off.'}
+$script:posts=0;$script:postMode='success'
+function global:Invoke-RestMethod {
+    param($Uri,$Method,$ContentType,$Body,$TimeoutSec)
+    if($Method -ceq 'Get'){return $script:captured}
+    if($TimeoutSec -ne 30){throw 'Explicit protection transaction lost its bounded cleanup wait'}
+    $script:posts++;$value=$Body|ConvertFrom-Json
+    if($script:postMode-ceq'error'){throw 'Request ended before the server could reply'}
+    if($script:postMode-ceq'pending'){$value|Add-Member protection_status 'off-unsaved';$value|Add-Member effective_policy 'off'}
+    if($script:postMode-ceq'not-off'){$value|Add-Member effective_policy 'always'}
+    return $value
+}
+$before=$script:posts;$caught=$false
+try{Set-RouterVPNProfileProtection -BaseUrl 'http://127.0.0.1:8788' -DisplayedProfileID 'node' -Enabled $true}catch{$caught=$true}
+if(-not$caught -or $script:posts-ne$before){throw 'Pending Off was silently changed into enabling protection'}
+$value=Set-RouterVPNProfileProtection -BaseUrl 'http://127.0.0.1:8788' -DisplayedProfileID 'node' -Enabled $false
+if($value.kill_switch_policy-cne'off' -or $value.profile_token-cne'exact-target-revision'){throw 'Pending Off retry lost its captured revision'}
+foreach($mode in @('error','pending','not-off')){
+    $script:postMode=$mode;$caught=''
+    try{Set-RouterVPNProfileProtection -BaseUrl 'http://127.0.0.1:8788' -DisplayedProfileID 'node' -Enabled $false}catch{$caught=$_.Exception.Message}
+    if([string]::IsNullOrWhiteSpace($caught)){throw "Unfinished effective Off was reported as successful: $mode"}
+    if($mode-ceq'error' -and $caught-cne$script:captured.message){throw 'HTTP failure hid the exact off-unsaved state'}
+}
+foreach($state in @('off-pending','off-unsaved')){
+    $script:captured.protection_status=$state
+    $view=Get-RouterVPNProtectionPresentation -Captured $script:captured -DisplayedProfileID 'node'
+    if(-not$view.Valid -or -not$view.Enabled -or -not$view.Pending -or $view.Label-cne'Finish Off' -or $null-ne$view.Checked -or $view.Message-cne$script:captured.message){throw 'Pending Off presentation lost truthful retry state'}
+}
+$script:captured.protection_status='retained';$script:captured.kill_switch_policy='off';$script:captured.effective_policy='always'
+$view=Get-RouterVPNProtectionPresentation -Captured $script:captured -DisplayedProfileID 'node'
+if(-not$view.Valid -or -not$view.Checked -or $view.Pending){throw 'Saved preference replaced actual retained protection in presentation'}
+$script:captured|Add-Member protection_profile_id 'another-node'
+$view=Get-RouterVPNProtectionPresentation -Captured $script:captured -DisplayedProfileID 'node'
+if($view.Enabled){throw 'Another node acquired the retained protection control'}
+foreach($displayed in @('','replacement','NODE')){
+    $view=Get-RouterVPNProtectionPresentation -Captured $script:captured -DisplayedProfileID $displayed
+    if($view.Valid -or $view.Enabled -or $null-ne$view.Checked){throw 'Stale protection status was rendered as current'}
+}
 '''
 
 
 def windows(directory, shell):
     source = read("client/RouterVPN-Windows-ProfileSettings.ps1")
     function = section(source, r"^function global:Set-RouterVPNProfileProtection \{.*?^\}")
+    function += "\n" + section(source, r"^function global:Get-RouterVPNProtectionPresentation \{.*?^\}")
     callback = read("client/RouterVPN-Windows-UnifiedShell.ps1")
     assert "$DisplayedProfileID=[string]$RouterCombo.SelectedValue" in callback
     assert "-DisplayedProfileID $DisplayedProfileID -Enabled $On" in callback
+    assert "protection='/api/profile/protection'" in callback
+    assert "Get-RouterVPNProtectionPresentation -Captured $Protection" in callback
+    assert "$Payload.events $Payload.protection" in callback
+    assert "$script:UnifiedProtectionPending -and $script:UnifiedProtectionProfileID-ceq$DisplayedProfileID){$On=$false}" in callback
     variants = {
         "shipping": function,
         "adopt-replacement": function.replace("[string]$captured.profile_id -cne $DisplayedProfileID", "$false"),
         "wrong-revision": function.replace("profile_token=[string]$captured.profile_token", "profile_token='unrelated-source'"),
         "copy-private": function.replace("-Body ($body | ConvertTo-Json -Compress)", "-Body ($captured | ConvertTo-Json -Compress)"),
+        "short-cleanup-wait": function.replace("-TimeoutSec 30", "-TimeoutSec 8"),
+        "pending-enabled": function.replace("$Enabled -and $null-ne$pendingProperty", "$false -and $null-ne$pendingProperty"),
+        "pending-hidden": function.replace("$result.Pending=$true", "$result.Pending=$false"),
+        "saved-instead-of-effective": function.replace("($effective-cne'off')", "($policy-cne'off')"),
+        "unproved-off": function.replace("-not$Enabled -and $null-ne$effective", "$false -and $null-ne$effective"),
     }
     for name, body in variants.items():
         if name != "shipping" and body == function:

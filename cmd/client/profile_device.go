@@ -485,6 +485,10 @@ func (a *app) profileDeviceSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if err := a.guardDesktopProtectionPreference(validated.KillSwitchPolicy); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	a.mu.Lock()
 	current, currentEntry, exists := a.dnsPolicySelectionLocked()
 	if !exists || current.ID != profile.ID || profileDeviceSettingsToken(current, currentEntry) != token ||

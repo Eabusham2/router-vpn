@@ -128,6 +128,12 @@ func (a *app) profileSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if request.KillSwitchPolicy != nil {
+		if err := a.guardDesktopProtectionPreference(updated.KillSwitchPolicy); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+	}
 
 	a.mu.Lock()
 	if profileSettingsBusy(a.state.Connected, a.state.Phase) {

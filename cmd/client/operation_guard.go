@@ -32,6 +32,10 @@ func (a *app) beginNodeBoundOperation() (func(), error) {
 		a.operationMu.Unlock()
 		return nil, errControllerClosing
 	}
+	if err := a.guardDesktopProtectionOffPending(); err != nil {
+		a.operationMu.Unlock()
+		return nil, err
+	}
 	if err := guardViaEntryDecision(a); err != nil {
 		a.operationMu.Unlock()
 		return nil, err
@@ -40,10 +44,17 @@ func (a *app) beginNodeBoundOperation() (func(), error) {
 }
 
 func (a *app) beginMutationOperation(r *http.Request) (func(), error) {
+	return a.beginProtectionAwareMutationOperation(r, false)
+}
+
+func (a *app) beginProtectionAwareMutationOperation(r *http.Request, allowOffRetry bool) (func(), error) {
 	if a.controllerClosing() {
 		return nil, errControllerClosing
 	}
-	if hasInternalMutationContext(r) {
+	if hasInternalMutationContext(r) && !allowOffRetry {
+		if err := a.guardDesktopProtectionOffPending(); err != nil {
+			return nil, err
+		}
 		return func() {}, nil
 	}
 	if !a.operationMu.TryLock() {
@@ -60,6 +71,12 @@ func (a *app) beginMutationOperation(r *http.Request) (func(), error) {
 	if busy {
 		a.operationMu.Unlock()
 		return nil, errors.New("disconnect and wait for Router VPN to become fully idle before changing session or profile state")
+	}
+	if !allowOffRetry {
+		if err := a.guardDesktopProtectionOffPending(); err != nil {
+			a.operationMu.Unlock()
+			return nil, err
+		}
 	}
 	if err := guardViaEntryDecision(a); err != nil {
 		a.operationMu.Unlock()
@@ -107,6 +124,10 @@ func (a *app) beginConnectionTransaction() (context.Context, func(), error) {
 	if busy {
 		a.operationMu.Unlock()
 		return nil, nil, errors.New("Router VPN is connected or transitioning; disconnect before starting another connection")
+	}
+	if err := a.guardDesktopProtectionOffPending(); err != nil {
+		a.operationMu.Unlock()
+		return nil, nil, err
 	}
 	if err := guardViaEntryDecision(a); err != nil {
 		a.operationMu.Unlock()
