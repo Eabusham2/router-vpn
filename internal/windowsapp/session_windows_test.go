@@ -229,9 +229,10 @@ func assertSessionPortableData(t *testing.T, session *Session, packageRoot, data
 		}
 	}
 	for _, name := range []string{"TEMP", "TMP"} {
-		if values[name] != filepath.Join(session.dataRoot, "generated") {
-			t.Fatal("Portable GUI temporary files escaped their prepared private directory", name)
+		if strings.HasPrefix(values[name], `\\`) || !filepath.IsAbs(values[name]) {
+			t.Fatal("Portable GUI temporary handoff used a CodeDOM-incompatible path", name)
 		}
+		assertSessionSameFile(t, values[name], filepath.Join(session.dataRoot, "generated"))
 	}
 	if values["HOMEVPN_PORTABLE"] != "1" {
 		t.Fatal("Portable GUI lost its captured Portable mode")

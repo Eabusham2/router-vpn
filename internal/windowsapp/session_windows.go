@@ -36,6 +36,7 @@ type Session struct {
 	files                                  []*windowscontroller.CodeFile
 	client                                 *controllertransport.Client
 	packageRoot, dataRoot                  string
+	temporary                              *portableTemporary
 	environment                            []string
 	desktop                                windowscontroller.TokenIdentity
 	workers                                sync.WaitGroup
@@ -119,7 +120,11 @@ func Start(ctx context.Context, portable bool) (_ *Session, failure error) {
 	temporary := filepath.Join(profile.LocalAppData, "Temp")
 	if portable {
 		appData, localAppData = s.dataRoot, s.dataRoot
-		temporary = filepath.Join(s.dataRoot, "generated")
+		s.temporary, err = capturePortableTemporary(s.dataRoot, s.desktop.SID)
+		if err != nil {
+			return s, err
+		}
+		temporary = s.temporary.path
 	}
 	s.environment = []string{
 		"SystemRoot=" + filepath.Dir(system), "windir=" + filepath.Dir(system),
@@ -488,6 +493,9 @@ func (s *Session) Close(ctx context.Context) error {
 		if err := s.directController.Close(ctx); err != nil {
 			return err
 		}
+	}
+	if err := s.temporary.Close(); err != nil {
+		return err
 	}
 	if s.client != nil {
 		failures = append(failures, s.client.Close())
