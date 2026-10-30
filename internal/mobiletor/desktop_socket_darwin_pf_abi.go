@@ -5,6 +5,7 @@ package mobiletor
 import (
 	"fmt"
 	"runtime"
+	"strings"
 	"syscall"
 )
 
@@ -17,8 +18,15 @@ func desktopDarwinPFCapturedABI() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("capture Darwin PF kernel build: %w", err)
 	}
-	if err := desktopPFValidateABI(release, build, runtime.GOARCH); err != nil {
-		return "", err
+	version, err := syscall.Sysctl("kern.version")
+	if err != nil {
+		return "", fmt.Errorf("capture Darwin PF kernel source version: %w", err)
 	}
-	return fmt.Sprintf("source=%s release=%s build=%s architecture=%s", desktopPFABIUpstream, release, build, runtime.GOARCH), nil
+	if version == "" || len(version) > 1024 || strings.ContainsAny(version, "\x00\r\n") {
+		return "", fmt.Errorf("Darwin PF kernel source version is not a bounded receipt")
+	}
+	if err := desktopPFValidateABI(release, build, runtime.GOARCH); err != nil {
+		return "", fmt.Errorf("%w (kern.version=%q)", err, version)
+	}
+	return fmt.Sprintf("source=%s release=%s build=%s architecture=%s kern.version=%q", desktopPFABIUpstream, release, build, runtime.GOARCH, version), nil
 }

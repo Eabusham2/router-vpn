@@ -13,11 +13,20 @@ does not make the interface public or stable. The local wrapper includes the
 SDK's public prerequisites before enabling only the pinned PF header's private
 declarations; it does not duplicate or guess kernel structure layouts.
 
-The native qualification target is explicitly limited to Darwin `24.6.0`,
-macOS build `24G830`, on AMD64 and ARM64. This is the observed build whose
-scoped single-FILTER commit/rollback and exact rule/namespace readback must be
-tested. Selecting that target is not evidence that either architecture passed.
-Other builds are rejected before the private adapter opens `/dev/pf`. OS updates require fresh
+The native qualification targets are explicitly limited to Darwin `24.6.0`,
+macOS build `24G830` on AMD64 and ARM64, and build `24H232` on ARM64 only.
+The latter is the independently observed October 28 ARM runner update, from
+macOS 15.7.9 to 15.8.2, recorded in the [runner image release](https://github.com/actions/runner-images/releases/tag/macos-15-arm64%2F20261028.0489).
+Apple's public XNU tags were re-read on October 30: `xnu-11417.140.69` remains
+the newest published Darwin-24 family source. This does not prove that a later
+OS binary has the same private ABI. Each target must execute the scoped
+single-FILTER commit/rollback and exact rule/namespace readback; its receipt
+also records the actual `kern.version`. Selecting a target is not acceptance.
+The Intel `24G830` probe passed at Router VPN commit `7c3784e9362110357e8c6af73d8db895690a4657`,
+[job 124096237888](https://github.com/Eabusham2/router-vpn/actions/runs/41065656538/job/124096237888).
+The ARM `24H232` probe had been rejected before `/dev/pf` by the former build
+bound, so its transaction acceptance remains pending this qualification.
+Other build/architecture pairs are rejected before the private adapter opens `/dev/pf`. OS updates require fresh
 primary-source review and native qualification before expanding the contract.
 The complete kernel rule readback and owned namespace absence assertions remain
 mandatory; an empty rule listing alone cannot establish anchor retirement.
