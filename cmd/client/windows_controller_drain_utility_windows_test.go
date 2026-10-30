@@ -27,10 +27,13 @@ func TestLocalControllerPinnedDrainUtilityWindowsExecution(t *testing.T) {
 	binary := filepath.Join(workspace, fmt.Sprintf("routervpn-drain-%x.exe", time.Now().UnixNano()))
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
+	started := time.Now()
 	build := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go.exe"), "build", "-mod=readonly", "-o", binary, ".")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("actual drain controller build failed: %v\n%s", err, output)
 	}
+	remaining, _ := ctx.Deadline()
+	t.Logf("Actual shipping utility built in %s; bounded fixture has %s remaining", time.Since(started), time.Until(remaining))
 	image, err := windowscontroller.PinImage(binary)
 	if err != nil {
 		t.Fatal(err)

@@ -45,8 +45,8 @@ REQUIRED = (
 )
 
 
-def run(command, env, timeout=180):
-    result = subprocess.run([str(value) for value in command], cwd=ROOT, env=env,
+def run(command, env, timeout=180, *, cwd=ROOT):
+    result = subprocess.run([str(value) for value in command], cwd=cwd, env=env,
                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                             timeout=timeout, check=False)
     return result.returncode, result.stdout.decode("utf-8", errors="replace")
@@ -198,16 +198,41 @@ def shipping_mutants():
     )
 
 
+def execute_baseline(compiler, env, race, owned):
+    outputs = []
+    # The Windows shipping-utility fixture owns a 120-second build/run context
+    # and narrower 5/8-second child deadlines. Its package watchdog must outlive
+    # that fixture so cold compilation cannot kill a valid negative case. Keep
+    # compilation separately bounded and ordinary transport execution at 90s.
+    for package, selector, seconds in (
+            ("./internal/controllertransport", "^TestControllerTransport", 90),
+            ("./cmd/client", "^TestLocalControllerPinned", 150)):
+        name = "transport" if package.startswith("./internal/") else "shipping-handler"
+        binary = owned / (name + (".exe" if platform.system() == "Windows" else ".test"))
+        status, output = run([compiler, "test", "-c", "-mod=readonly", "-p=1", *race,
+                              "-o", binary, package], env)
+        if status:
+            raise ValueError("Controller TLS baseline compilation failed: " + package + "\n" + output[-16384:])
+        digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+        status, output = run([binary, "-test.run=" + selector, "-test.count=1",
+                              "-test.timeout=" + str(seconds) + "s", "-test.v"], env, timeout=seconds+15,
+                             cwd=ROOT / package.removeprefix("./"))
+        print(output, end="" if output.endswith("\n") else "\n", flush=True)
+        if status:
+            raise ValueError("Controller TLS baseline execution failed: " + package + "\n" + output[-32768:])
+        if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+            raise ValueError("Controller TLS baseline executable changed during execution: " + package)
+        outputs.append(output)
+    return "\n".join(outputs)
+
+
 def execute(go="go"):
     before = sources()
     compiler, env, race = selected_compiler(go)
-    status, output = run(
-        [compiler, "test", "-mod=readonly", "-p=1", *race, "./internal/controllertransport", "./cmd/client",
-         "-run", "^(TestControllerTransport|TestLocalControllerPinned)",
-         "-count=1", "-timeout=90s", "-v"], env)
-    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    with tempfile.TemporaryDirectory(prefix="routervpn-controller-tls-baseline-") as directory:
+        output = execute_baseline(compiler, env, race, Path(directory))
     required = REQUIRED + (("TestLocalControllerPinnedDrainUtilityWindowsExecution",) if platform.system() == "Windows" else ())
-    if (status or "--- SKIP:" in output or "DATA RACE" in output or
+    if ("--- SKIP:" in output or "DATA RACE" in output or
             any("--- PASS: " + name + " (" not in output for name in required)):
         raise ValueError("Controller TLS gate did not execute every real transport/handler case")
     if platform.system() == "Windows":
