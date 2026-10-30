@@ -101,12 +101,9 @@ func DesktopWindowsNodeCompositionSnapshot(ctx context.Context) (DesktopWindowsN
 				return result, errors.New("Node composition permit has an unknown transport")
 			}
 			actual, err := p.identity.InspectSocket(ctx, creation)
-			// The retained UDP owner uses unconnected datagram I/O. Its ALE
-			// readback still carries the exact remote after traffic, but the
-			// provider's Getpeername must remain unconnected. TCP requires its
-			// completed Connect instead; neither result is inferred from WFP.
-			if err != nil || actual.Local != request.Local || actual.Remote != request.Remote || actual.PeerConnected != (request.Network == "tcp") || actual.Protocol != protocol {
-				return result, errors.Join(err, errors.New("Node composition permit is not its actual isolated endpoint"))
+			if err != nil || actual.Local != request.Local || actual.Protocol != protocol ||
+				!desktopWindowsNodeCompositionPeerMatches(request.Network, actual.Remote, request.Remote, actual.PeerConnected) {
+				return result, errors.Join(err, errors.New("Node composition permit is not its actual isolated transport endpoint"))
 			}
 			result.Grants = append(result.Grants, request)
 		}

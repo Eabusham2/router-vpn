@@ -29,7 +29,7 @@ REQUIRED = tuple("TestRouterVPNDesktopNodeWindowsWFP" + suffix for suffix in (
 
 def checked_sources(source):
     source, records = NODE.checked_sources(source)
-    for name in ("kernel_observer.go",):
+    for name in ("kernel_observer.go", "socket_peer.go", "socket_peer_test.go"):
         path = RESOURCES / name
         if path.is_symlink() or not path.is_file() or not path.read_bytes().startswith(TAG):
             raise ValueError("Windows Node observer escaped its explicit native test scope")
@@ -71,10 +71,11 @@ def overlay(source, directory, mutation=None):
         "return newDesktopWindowsSocketPolicySuccessor(ctx, capture, options, predecessor, nil)",
         "return desktopWindowsNodeCompositionConstruct(ctx, capture, options, predecessor, true)")
     replace(transfer, raw.encode())
-    relative = "routervpn/mobiletor/desktop_socket_windows_node_composition_overlay.go"
-    if (source / relative).exists() or (source / relative).is_symlink():
-        raise ValueError("Unowned Windows Node observer already occupies the native core")
-    replace(relative, (RESOURCES / "kernel_observer.go").read_bytes())
+    for name, relative in (("kernel_observer.go", "routervpn/mobiletor/desktop_socket_windows_node_composition_overlay.go"),
+                           ("socket_peer.go", "routervpn/mobiletor/desktop_socket_windows_node_peer_overlay.go")):
+        if (source / relative).exists() or (source / relative).is_symlink():
+            raise ValueError("Unowned Windows Node observer already occupies the native core")
+        replace(relative, (RESOURCES / name).read_bytes())
     if mutation is not None:
         name, relative, test, witness, raw = mutation
         if str(source / relative) in replacements and not policy_mutation:
@@ -111,6 +112,14 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     race = ["-race"] if architecture == "amd64" and not bootstrap_only else []
     captured["CGO_ENABLED"] = "1" if race else "0"
     captured.pop("ROUTERVPN_NODE_WFP_REFERENCE_CHILD", None)
+    # Execute the exact test-scoped transport predicate as well as the native
+    # graph. An unconnected UDP readback must not weaken connected TCP proof.
+    status, output = BOOT.IDENTITY.run([compiler, "test", *race, "-count=1", "-timeout=30s", "-v",
+        RESOURCES / "socket_peer.go", RESOURCES / "socket_peer_test.go"],
+        cwd=source, env=captured, timeout=90)
+    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    if status or "--- PASS: TestWindowsNodeObserverTransportPeer (" not in output or any(value in output for value in ("--- SKIP:", "DATA RACE")):
+        raise ValueError("Windows Node transport-specific observer lost its required peer checks")
     build = [compiler, "test", "-c", "-mod=readonly", "-tags=" + ",".join(TAGS), *race, "-ldflags=-checklinkname=0"]
     with tempfile.TemporaryDirectory(prefix="routervpn-node-kernel-") as temporary:
         workspace = Path(temporary)
@@ -150,7 +159,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             print("Rejected actual WFP encrypted Node production mutant: " + name, flush=True)
     if checked_sources(source)[1] != before:
         raise ValueError("WFP Node source changed during actual native execution")
-    print("Actual Windows BFE, isolated connected UDP grants, WG/AWG encrypted IPv4/IPv6 TCP/UDP, exact forward/reverse native succession and wrong-key/ordinary-token controls passed. TUN, node/DNS proof, host adoption and device acceptance remain separate.", flush=True)
+    print("Actual Windows BFE, isolated unconnected UDP grants with exact permitted peers, WG/AWG encrypted IPv4/IPv6 TCP/UDP, exact forward/reverse native succession and wrong-key/ordinary-token controls passed. TUN, node/DNS proof, host adoption and device acceptance remain separate.", flush=True)
 
 
 if __name__ == "__main__":

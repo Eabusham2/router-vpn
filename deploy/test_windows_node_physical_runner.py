@@ -37,7 +37,7 @@ class NativeNodeScope(unittest.TestCase):
     def test_both_actual_constructors_are_scoped_without_changing_shipping_files(self):
         path = GATE.overlay(self.source, self.observer)
         mapping = json.loads(path.read_text())["Replace"]
-        self.assertEqual(len(mapping), 3)
+        self.assertEqual(len(mapping), 4)
         old = Path(mapping[str(self.source / "routervpn/mobiletor/desktop_socket_windows_policy.go")]).read_text()
         new = Path(mapping[str(self.source / "routervpn/mobiletor/desktop_socket_windows_transfer.go")]).read_text()
         self.assertIn("return desktopWindowsNodeCompositionConstruct(ctx, capture, options, nil, false)", old)
@@ -45,6 +45,7 @@ class NativeNodeScope(unittest.TestCase):
         for relative, raw in self.original.items():
             self.assertEqual((self.source / relative).read_bytes(), raw)
         self.assertFalse((self.source / "routervpn/mobiletor/desktop_socket_windows_node_composition_overlay.go").exists())
+        self.assertFalse((self.source / "routervpn/mobiletor/desktop_socket_windows_node_peer_overlay.go").exists())
 
     def test_unknown_constructor_source_is_rejected_before_compilation(self):
         for relative, raw in self.original.items():
@@ -60,18 +61,22 @@ class NativeNodeScope(unittest.TestCase):
                 path.write_bytes(raw)
 
     def test_existing_observer_is_never_overwritten_or_adopted(self):
-        path = self.source / "routervpn/mobiletor/desktop_socket_windows_node_composition_overlay.go"
-        path.write_bytes(b"package mobiletor\n// another owner\n")
-        with self.assertRaisesRegex(ValueError, "Unowned Windows Node observer"):
-            GATE.overlay(self.source, self.observer)
-        self.assertEqual(path.read_bytes(), b"package mobiletor\n// another owner\n")
+        for relative in ("routervpn/mobiletor/desktop_socket_windows_node_composition_overlay.go",
+                         "routervpn/mobiletor/desktop_socket_windows_node_peer_overlay.go"):
+            with self.subTest(relative=relative):
+                path = self.source / relative
+                path.write_bytes(b"package mobiletor\n// another owner\n")
+                with self.assertRaisesRegex(ValueError, "Unowned Windows Node observer"):
+                    GATE.overlay(self.source, self.observer)
+                self.assertEqual(path.read_bytes(), b"package mobiletor\n// another owner\n")
+                path.unlink()
 
     def test_every_mutation_keeps_both_real_firewall_constructors_scoped(self):
         for mutation in GATE.mutants(self.source):
             with self.subTest(name=mutation[0]):
                 selected = GATE.overlay(self.source, self.observer, mutation)
                 mapping = json.loads(selected.read_text())["Replace"]
-                self.assertEqual(len(mapping), 3 if mutation[0] == "ordinary-udp-deny" else 4)
+                self.assertEqual(len(mapping), 4 if mutation[0] == "ordinary-udp-deny" else 5)
                 self.assertIn("nil, false)", Path(mapping[str(self.source / "routervpn/mobiletor/desktop_socket_windows_policy.go")]).read_text())
                 self.assertIn("predecessor, true)", Path(mapping[str(self.source / "routervpn/mobiletor/desktop_socket_windows_transfer.go")]).read_text())
         forbidden = ("scope-mutation", "routervpn/mobiletor/desktop_socket_windows_policy.go", "test", "witness", "package mobiletor\n")
@@ -98,10 +103,17 @@ class NativeNodeScope(unittest.TestCase):
     def test_observer_cannot_drop_its_compile_time_tag(self):
         fixtures = self.workspace / "fixtures"
         fixtures.mkdir()
-        (fixtures / "kernel_observer.go").write_bytes(b"package mobiletor\n")
-        with patch.object(GATE, "RESOURCES", fixtures), patch.object(GATE.NODE, "checked_sources", return_value=(self.source, {})):
-            with self.assertRaisesRegex(ValueError, "explicit native test scope"):
-                GATE.checked_sources(self.source)
+        names = ("kernel_observer.go", "socket_peer.go", "socket_peer_test.go")
+        for name in names:
+            (fixtures / name).write_bytes((GATE.RESOURCES / name).read_bytes())
+        for name in names:
+            with self.subTest(name=name):
+                original = (fixtures / name).read_bytes()
+                (fixtures / name).write_bytes(b"package mobiletor\n")
+                with patch.object(GATE, "RESOURCES", fixtures), patch.object(GATE.NODE, "checked_sources", return_value=(self.source, {})):
+                    with self.assertRaisesRegex(ValueError, "explicit native test scope"):
+                        GATE.checked_sources(self.source)
+                (fixtures / name).write_bytes(original)
 
 
 if __name__ == "__main__":
