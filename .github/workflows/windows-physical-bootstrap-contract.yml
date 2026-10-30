@@ -17,6 +17,7 @@ on:
       - 'deploy/test_windows_physical_tunnel*.py'
       - 'deploy/test_windows_external_physical.py'
       - 'deploy/test_desktop_node_physical.py'
+      - 'deploy/test_windows_protection_transfer.py'
       - 'deploy/fixtures/windows-physical-bootstrap/**'
       - '.github/workflows/windows-physical-bootstrap-contract.yml'
   pull_request:
@@ -34,6 +35,7 @@ on:
       - 'deploy/test_windows_physical_tunnel*.py'
       - 'deploy/test_windows_external_physical.py'
       - 'deploy/test_desktop_node_physical.py'
+      - 'deploy/test_windows_protection_transfer.py'
       - 'deploy/fixtures/windows-physical-bootstrap/**'
       - '.github/workflows/windows-physical-bootstrap-contract.yml'
   workflow_dispatch:
@@ -67,7 +69,16 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - name: Prove exact native protection succession and reversal
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          # Real BFE rules scoped to this executable; no route/profile changes.
+          # This diagnostic does not claim race instrumentation or host adoption.
+          python deploy/test_windows_protection_transfer.py --bootstrap-only
+          if ($LASTEXITCODE -ne 0) { throw 'Exact native protection succession failed' }
       - name: Execute exact Node command, startup and encrypted peers
+        if: success() || failure()
         shell: pwsh
         run: |
           # Real compiled Box, captured IPC, WG/AWG TCP/UDP and MTU rollback.

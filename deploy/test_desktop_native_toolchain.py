@@ -70,7 +70,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['GOOS'], system)
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
                         return ''
-                    if len(args) > 1 and args[1] in (str(ROOT/'deploy/test_desktop_windows_identity.py'), str(ROOT/'deploy/test_desktop_windows_wfp.py'), str(ROOT/'deploy/test_desktop_windows_traffic.py')):
+                    if len(args) > 1 and args[1] in (str(ROOT/'deploy/test_desktop_windows_identity.py'), str(ROOT/'deploy/test_desktop_windows_wfp.py'), str(ROOT/'deploy/test_desktop_windows_traffic.py'), str(ROOT/'deploy/test_windows_protection_transfer.py')):
                         self.assertEqual(system, 'windows')
                         self.assertEqual(args[2:], [str(source.resolve())])
                         self.assertEqual(kwargs['env']['GOOS'], system)
@@ -149,6 +149,11 @@ class NativeSocketUIDGate(unittest.TestCase):
                 wfp = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_windows_wfp.py')]
                 self.assertEqual(len(wfp), 1 if system == 'windows' else 0)
                 self.assertIn(ROOT/'deploy/test_desktop_windows_wfp.py', N.inputs())
+                transfer = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_protection_transfer.py')]
+                self.assertEqual(len(transfer), 1 if system == 'windows' else 0)
+                self.assertIn(ROOT/'deploy/test_windows_protection_transfer.py', N.inputs())
+                if transfer:
+                    self.assertEqual(calls.index(transfer[0]), calls.index(wfp[0])+1)
                 traffic = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_windows_traffic.py')]
                 self.assertEqual(len(traffic), 1 if system == 'windows' else 0)
                 self.assertIn(ROOT/'deploy/test_desktop_windows_traffic.py', N.inputs())

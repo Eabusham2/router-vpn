@@ -206,6 +206,9 @@ func (p *DesktopWindowsSocketPolicy) replaceBaseline() error {
 	// exact removal and new installation: there is no open gap and no second
 	// sublayer whose older drop rule can override this session's new permits.
 	old, err := desktopWindowsReadBaseline(p.baselineEngine, p.sublayer, p.fixtureScope)
+	if err == nil && p.predecessor != nil {
+		err = p.predecessor.verify(old)
+	}
 	if err == nil && old != nil {
 		if old.capture == p.capture {
 			err = errors.New("Windows physical baseline cannot reuse a former native capture")
@@ -336,6 +339,18 @@ func NewDesktopWindowsProtectionRelease(ctx context.Context) (*DesktopWindowsPro
 }
 
 func newDesktopWindowsProtectionTransaction(ctx context.Context, fixtureScope []byte, removeAlways bool) (*DesktopWindowsProtectionRecovery, error) {
+	return newDesktopWindowsProtectionTransactionTarget(ctx, fixtureScope, removeAlways, nil)
+}
+
+func newDesktopWindowsProtectionTransactionTarget(ctx context.Context, fixtureScope []byte, removeAlways bool, target *DesktopWindowsProtectionTarget) (*DesktopWindowsProtectionRecovery, error) {
+	var expected *desktopWindowsProtectionExpected
+	if target != nil {
+		var err error
+		expected, err = newDesktopWindowsProtectionExpected(target)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if ctx == nil || ctx.Err() != nil || len(fixtureScope) > 65536 || len(fixtureScope)%2 != 0 {
 		return nil, errors.New("Windows protection recovery requires a live bounded owner")
 	}
@@ -365,6 +380,11 @@ func newDesktopWindowsProtectionTransaction(ctx context.Context, fixtureScope []
 		old, err := desktopWindowsReadBaseline(p.baselineEngine, p.sublayer, fixtureScope)
 		if err != nil {
 			return struct{}{}, err
+		}
+		if expected != nil {
+			if err := expected.verify(old); err != nil {
+				return struct{}{}, err
+			}
 		}
 		if old == nil {
 			p.baselineDone = true

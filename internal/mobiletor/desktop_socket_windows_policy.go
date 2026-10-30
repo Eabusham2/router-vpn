@@ -70,6 +70,7 @@ type DesktopWindowsSocketPolicy struct {
 	lockMetadata                []byte
 	baselineWeight, lockWeight  uint16
 	baseline                    []desktopWFPRule
+	predecessor                 *desktopWindowsProtectionExpected
 	tunnel                      []desktopWFPRule
 	tunnelName                  string
 	tunnelIndex                 uint32
@@ -243,7 +244,11 @@ func newDesktopWindowsSocketPolicy(ctx context.Context, capture DesktopSocketCap
 	if err != nil {
 		return nil, err
 	}
-	_, err = desktopWindowsPolicyCall(p, ctx, false, func() (struct{}, error) { return struct{}{}, p.prepare() })
+	return startDesktopWindowsSocketPolicy(ctx, p)
+}
+
+func startDesktopWindowsSocketPolicy(ctx context.Context, p *DesktopWindowsSocketPolicy) (*DesktopWindowsSocketPolicy, error) {
+	_, err := desktopWindowsPolicyCall(p, ctx, false, func() (struct{}, error) { return struct{}{}, p.prepare() })
 	if err != nil {
 		p.Cancel()
 		return p, err
