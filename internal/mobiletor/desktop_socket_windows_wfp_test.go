@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -73,9 +74,14 @@ func desktopWindowsWFPTestRecovery(t *testing.T, scope []byte) {
 		t.Error("exact test-owned WFP recovery failed", err)
 	}
 }
-func desktopWindowsWFPTestOwner(t *testing.T, policy string, full bool) *DesktopWindowsSocketPolicy {
+func desktopWindowsWFPTestOwner(t *testing.T, policy string, full bool, retain ...bool) *DesktopWindowsSocketPolicy {
 	t.Helper()
 	options, scope := desktopWindowsWFPTestOptions(t, policy)
+	if len(retain) == 1 {
+		options.RetainBaselineForHandoff = retain[0]
+	} else if len(retain) > 1 {
+		t.Fatal("handoff fixture received more than one lifetime selection")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	var p *DesktopWindowsSocketPolicy
 	var err error
@@ -514,5 +520,134 @@ func TestDesktopSocketWindowsWFPStatusRejectsExtraRetainedRule(t *testing.T) {
 	}
 	if err := engine.Assert(extra); err != nil {
 		t.Fatal("rejected status unexpectedly changed the scoped fixture", err)
+	}
+}
+
+func desktopWindowsWFPTestBaselineDigest(p *DesktopWindowsSocketPolicy) string {
+	digest := sha256.Sum256(p.metadata)
+	return hex.EncodeToString(digest[:])
+}
+
+func TestDesktopSocketWindowsWFPPreparedCapture(t *testing.T) {
+	for _, policy := range []string{"on-connect", "always"} {
+		t.Run(policy, func(t *testing.T) {
+			p := desktopWindowsWFPTestOwner(t, policy, false, true)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if err := p.VerifyPrepared(ctx, p.capture); err != nil {
+				t.Fatal("native prepared owner failed its complete baseline readback", err)
+			}
+			if digest, err := p.PreparedBaselineSHA256(ctx, p.capture); err != nil || digest != desktopWindowsWFPTestBaselineDigest(p) {
+				t.Fatal("native prepared owner lost its complete baseline identity", digest, err)
+			}
+			if err := readDesktopWindowsPreparedProtection(ctx, p.capture, policy, desktopWindowsWFPTestBaselineDigest(p), p.fixtureScope); err != nil {
+				t.Fatal("independent prepared reader rejected its exact native baseline", err)
+			}
+			for _, kind := range []string{"session", "source", "network", "policy", "empty"} {
+				t.Run(kind, func(t *testing.T) {
+					capture, selected := p.capture, policy
+					other := desktopWindowsWFPTestCapture(t)
+					switch kind {
+					case "session":
+						capture.SessionID = other.SessionID
+					case "source":
+						capture.SourceSHA256 = other.SourceSHA256
+					case "network":
+						capture.NetworkID = other.NetworkID
+					case "policy":
+						selected = "always"
+						if selected == policy {
+							selected = "on-connect"
+						}
+					case "empty":
+						capture = DesktopSocketCapture{}
+					}
+					if err := readDesktopWindowsPreparedProtection(ctx, capture, selected, desktopWindowsWFPTestBaselineDigest(p), p.fixtureScope); err == nil {
+						t.Fatal("prepared readback accepted a different captured owner or policy")
+					}
+					if capture != p.capture && p.VerifyPrepared(ctx, capture) == nil {
+						t.Fatal("native prepared owner accepted a substituted capture")
+					}
+				})
+			}
+			if err := readDesktopWindowsPreparedProtection(ctx, p.capture, policy, desktopWindowsWFPTestCapture(t).SourceSHA256, p.fixtureScope); err == nil {
+				t.Fatal("prepared readback accepted another complete baseline identity")
+			}
+			cancelled, stop := context.WithCancel(ctx)
+			stop()
+			if readDesktopWindowsPreparedProtection(cancelled, p.capture, policy, desktopWindowsWFPTestBaselineDigest(p), p.fixtureScope) == nil ||
+				readDesktopWindowsPreparedProtection(nil, p.capture, policy, desktopWindowsWFPTestBaselineDigest(p), p.fixtureScope) == nil {
+				t.Fatal("prepared readback accepted a missing or cancelled lifetime")
+			}
+			if err := p.assertBaseline(); err != nil {
+				t.Fatal("rejected prepared read changed actual protection", err)
+			}
+			if err := p.Close(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if p.VerifyPrepared(ctx, p.capture) == nil || readDesktopWindowsPreparedProtection(ctx, p.capture, policy, desktopWindowsWFPTestBaselineDigest(p), p.fixtureScope) == nil {
+				t.Fatal("retained baseline was mistaken for a live prepared handoff owner")
+			}
+		})
+	}
+}
+
+func TestDesktopSocketWindowsWFPPreparedRejectsAdditionalPermit(t *testing.T) {
+	p := desktopWindowsWFPTestOwner(t, "on-connect", false, true)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	engine, err := desktopWFPOpen(false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	extra := p.rule("unexpected-prepared-permit", 4, false, 99, true, true)
+	if err := engine.Add(&extra); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := engine.Delete(extra.Key); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := readDesktopWindowsPreparedProtection(ctx, p.capture, "on-connect", desktopWindowsWFPTestBaselineDigest(p), p.fixtureScope); err == nil {
+		t.Fatal("prepared readback accepted an additional active permit")
+	}
+	if err := p.VerifyPrepared(ctx, p.capture); err == nil {
+		t.Fatal("native prepared owner accepted an additional active permit")
+	}
+	if err := engine.Assert(extra); err != nil {
+		t.Fatal("rejected prepared read mutated the actual fixture", err)
+	}
+}
+
+func TestDesktopSocketWindowsWFPHandoffRetainsDenyUntilRelease(t *testing.T) {
+	for _, policy := range []string{"on-connect", "always"} {
+		t.Run(policy, func(t *testing.T) {
+			p := desktopWindowsWFPTestOwner(t, policy, false, true)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if err := p.Close(ctx); err != nil {
+				t.Fatal(err)
+			}
+			state, err := readDesktopWindowsProtection(ctx, p.fixtureScope)
+			if err != nil || !state.Active || state.Policy != policy || state.Phase != "retained" {
+				t.Fatal("native handoff cleanup removed its last captured deny baseline", state, err)
+			}
+			// Release is a separate host operation after the native owner has
+			// joined. It preserves Always and retires only stale on-connect.
+			release, err := newDesktopWindowsProtectionTransaction(ctx, p.fixtureScope, false)
+			if release != nil {
+				err = errors.Join(err, release.Close(ctx))
+			}
+			if err != nil {
+				t.Fatal("joined handoff baseline release", err)
+			}
+			state, err = readDesktopWindowsProtection(ctx, p.fixtureScope)
+			if err != nil || state.Active != (policy == "always") || policy == "always" && (state.Policy != policy || state.Phase != "retained") ||
+				policy == "on-connect" && (state.Policy != "off" || state.Phase != "off") {
+				t.Fatal("normal handoff release changed the captured protection policy", state, err)
+			}
+		})
 	}
 }

@@ -16,6 +16,20 @@ import (
 // It addresses only the native managed BFE identity; no pathname, PID, profile,
 // interface or firewall object can be supplied by a caller.
 func windowsPhysicalProtectionUtility(args []string) (bool, error) {
+	prepared, handled, err := parseWindowsPreparedProtectionUtility(args)
+	if handled {
+		if err != nil {
+			return true, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		capture := mobiletor.DesktopSocketCapture{SessionID: prepared.SessionID, SourceSHA256: prepared.SourceSHA256, NetworkID: prepared.NetworkID}
+		if err := mobiletor.ReadDesktopWindowsPreparedProtection(ctx, capture, prepared.Policy, prepared.BaselineSHA256); err != nil {
+			return true, err
+		}
+		prepared.Prepared = true
+		return true, json.NewEncoder(os.Stdout).Encode(prepared)
+	}
 	operation, handled, err := parseWindowsProtectionUtility(args)
 	if !handled || err != nil {
 		return handled, err

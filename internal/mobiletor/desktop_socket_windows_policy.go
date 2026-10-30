@@ -32,6 +32,10 @@ type DesktopWindowsSocketOptions struct {
 	DHCP4Servers        []netip.Addr
 	KillSwitchPolicy    string
 	IPv6Enabled         bool
+	// The owned desktop wrapper retires this deny baseline only after its
+	// native process and any legacy protection handoff have joined. This
+	// native-only lifetime choice is never decoded from an imported graph.
+	RetainBaselineForHandoff bool
 }
 
 type desktopWindowsPolicyInterface struct {

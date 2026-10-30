@@ -285,7 +285,7 @@ func (p *DesktopWindowsSocketPolicy) finishBaseline() error {
 	if err := p.resolveBaselineOwnership(); err != nil {
 		return err
 	}
-	if p.installed && p.options.KillSwitchPolicy != "always" {
+	if p.installed && p.options.KillSwitchPolicy != "always" && !p.options.RetainBaselineForHandoff {
 		if err := p.baselineEngine.Begin(); err != nil {
 			return err
 		}

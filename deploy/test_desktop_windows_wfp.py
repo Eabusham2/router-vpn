@@ -38,6 +38,9 @@ REQUIRED = (
     "TestDesktopSocketWindowsWFPProbeCancelledGate",
     "TestDesktopSocketWindowsWFPProbeWorkerLifetime",
     "TestDesktopSocketWindowsWFPProbeDeniedRead",
+    "TestDesktopSocketWindowsWFPPreparedCapture",
+    "TestDesktopSocketWindowsWFPPreparedRejectsAdditionalPermit",
+    "TestDesktopSocketWindowsWFPHandoffRetainsDenyUntilRelease",
 )
 
 
@@ -58,8 +61,8 @@ def mutants(target):
         ("always-retention", "desktop_socket_windows_baseline.go", REQUIRED[3],
          "Always lost its persistent baseline",
          IDENTITY.replace_once(baseline,
-                               'if p.installed && p.options.KillSwitchPolicy != "always" {',
-                               'if p.installed {')),
+                               'if p.installed && p.options.KillSwitchPolicy != "always" && !p.options.RetainBaselineForHandoff {',
+                               'if p.installed && !p.options.RetainBaselineForHandoff {')),
         ("canonical-record", "desktop_socket_windows_baseline.go", REQUIRED[5],
          "untrusted WFP record acquired baseline replacement authority",
          IDENTITY.replace_once(baseline,
@@ -86,8 +89,8 @@ def mutants(target):
         ("retained-status-extra-rule", "desktop_socket_windows_status.go", REQUIRED[11],
          "native status accepted an extra retained permit",
          IDENTITY.replace_once(status,
-                               "if err := engine.AssertComplete(baseline.sublayer, baseline.baseline); err != nil {",
-                               "if err := error(nil); err != nil {")),
+                               "if lock == nil {\n\t\tif err := engine.AssertComplete(baseline.sublayer, baseline.baseline); err != nil {",
+                               "if lock == nil {\n\t\tif err := error(nil); err != nil {")),
         ("probe-access-denied", "desktop_socket_windows_probe.go", REQUIRED[16],
          "actual denied key read was reported as missing native protection",
          IDENTITY.replace_once(probe,
@@ -123,6 +126,26 @@ def mutants(target):
          IDENTITY.function_mutant(probe, "func desktopWindowsProtectionProbe(",
                                   '\tif err != nil {\n\t\treturn false, err\n\t}',
                                   '\tif err != nil {\n\t\treturn true, nil\n\t}')),
+        ("prepared-capture", "desktop_socket_windows_status.go", REQUIRED[17],
+         "prepared readback accepted a different captured owner or policy",
+         IDENTITY.replace_once(status,
+                               'activeCapture != prepared.capture || baseline.capture != prepared.capture ||\n\t\t\tbaseline.options.KillSwitchPolicy != prepared.policy',
+                               'false')),
+        ("prepared-extra-permit", "desktop_socket_windows_status.go", REQUIRED[18],
+         "prepared readback accepted an additional active permit",
+         IDENTITY.replace_once(status,
+                               '\t\tif err := engine.AssertComplete(baseline.sublayer, baseline.baseline); err != nil {\n\t\t\treturn snapshot, err\n\t\t}',
+                               '\t\tif err := error(nil); err != nil {\n\t\t\treturn snapshot, err\n\t\t}')),
+        ("handoff-retention", "desktop_socket_windows_baseline.go", REQUIRED[19],
+         "native handoff cleanup removed its last captured deny baseline",
+         IDENTITY.replace_once(baseline,
+                               ' && !p.options.RetainBaselineForHandoff',
+                               '')),
+        ("prepared-baseline-identity", "desktop_socket_windows_status.go", REQUIRED[17],
+         "prepared readback accepted another complete baseline identity",
+         IDENTITY.replace_once(status,
+                               'hex.EncodeToString(digest[:]) != prepared.baselineSHA256',
+                               'false && hex.EncodeToString(digest[:]) != prepared.baselineSHA256')),
     )
 
 
@@ -135,6 +158,7 @@ def execute(source=ROOT, go="go", *, env=None):
     for name in ("desktop_socket_windows_wfp.go", "desktop_socket_windows_wfp_security.go",
                  "desktop_socket_windows_baseline.go", "desktop_socket_windows_policy.go",
                  "desktop_socket_windows_status.go",
+                 "desktop_socket_windows_prepared.go",
                  "desktop_socket_windows_probe.go", "desktop_socket_windows_probe_test.go",
                  "desktop_socket_windows_probe_process_test.go",
                  "desktop_socket_windows_probe_worker_test.go",
@@ -188,7 +212,7 @@ def execute(source=ROOT, go="go", *, env=None):
             print("Rejected " + kind + " WFP mutant:", label, flush=True)
         if IDENTITY.checked_sources(source)[3] != before:
             raise ValueError("WFP source changed during its actual native gate")
-    print("Owned Windows WFP baseline passed seventeen actual kernel/lifecycle cases, distinct non-admin identity with independently observed BFE OPEN/key READ results, elevated actual absence/presence, twelve production negative controls and three Job/station/token fixture controls; access denial remains unknown, never absence, and socket traffic/native admission remain separately gated.", flush=True)
+    print("Owned Windows WFP baseline passed twenty actual kernel/lifecycle cases, exact prepared handoff readback and retained deny lifetime, distinct non-admin identity with independently observed BFE OPEN/key READ results, elevated actual absence/presence, sixteen production negative controls and three Job/station/token fixture controls; access denial remains unknown, never absence, and socket traffic/native admission remain separately gated.", flush=True)
 
 
 if __name__ == "__main__":

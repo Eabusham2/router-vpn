@@ -4,6 +4,8 @@ package mobiletor
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 )
@@ -29,6 +31,10 @@ func ReadDesktopWindowsProtection(ctx context.Context) (DesktopWindowsProtection
 }
 
 func readDesktopWindowsProtection(ctx context.Context, fixtureScope []byte) (DesktopWindowsProtectionSnapshot, error) {
+	return readDesktopWindowsProtectionRequest(ctx, fixtureScope, nil)
+}
+
+func readDesktopWindowsProtectionRequest(ctx context.Context, fixtureScope []byte, prepared *desktopWindowsPreparedCapture) (DesktopWindowsProtectionSnapshot, error) {
 	var zero DesktopWindowsProtectionSnapshot
 	if ctx == nil || ctx.Err() != nil {
 		return zero, errors.New("Windows protection readback requires a live caller")
@@ -52,7 +58,7 @@ func readDesktopWindowsProtection(ctx context.Context, fixtureScope []byte) (Des
 	finished := make(chan result, 1)
 	go func() {
 		defer func() { <-desktopWindowsProtectionReadGate }()
-		snapshot, err := desktopWindowsProtectionRead(ctx, scope)
+		snapshot, err := desktopWindowsProtectionReadRequest(ctx, scope, prepared)
 		finished <- result{snapshot, err}
 	}()
 	select {
@@ -67,6 +73,10 @@ func readDesktopWindowsProtection(ctx context.Context, fixtureScope []byte) (Des
 }
 
 func desktopWindowsProtectionRead(ctx context.Context, scope []byte) (snapshot DesktopWindowsProtectionSnapshot, result error) {
+	return desktopWindowsProtectionReadRequest(ctx, scope, nil)
+}
+
+func desktopWindowsProtectionReadRequest(ctx context.Context, scope []byte, prepared *desktopWindowsPreparedCapture) (snapshot DesktopWindowsProtectionSnapshot, result error) {
 	engine, err := desktopWFPOpen(false)
 	if engine != nil {
 		defer func() { result = errors.Join(result, engine.Close()) }()
@@ -110,6 +120,23 @@ func desktopWindowsProtectionRead(ctx context.Context, scope []byte) (snapshot D
 	baseline, err := desktopWindowsReadBaseline(engine, desktopWindowsManagedKey("baseline", scope), scope)
 	if err != nil {
 		return snapshot, err
+	}
+	if prepared != nil {
+		// A handoff may retire only its old protection while this exact new
+		// native owner has a complete deny baseline and no active socket or
+		// TUN permits. A retained, preparing, changed or unknown state is not
+		// evidence of this barrier, even if ordinary status says Active.
+		if lock == nil || baseline == nil || activeCapture != prepared.capture || baseline.capture != prepared.capture ||
+			baseline.options.KillSwitchPolicy != prepared.policy {
+			return snapshot, errors.New("Windows prepared protection differs from the captured handoff owner")
+		}
+		digest := sha256.Sum256(baseline.metadata)
+		if hex.EncodeToString(digest[:]) != prepared.baselineSHA256 {
+			return snapshot, errors.New("Windows prepared protection changed its complete captured baseline")
+		}
+		if err := engine.AssertComplete(baseline.sublayer, baseline.baseline); err != nil {
+			return snapshot, err
+		}
 	}
 	snapshot = DesktopWindowsProtectionSnapshot{Schema: 1, Policy: "off", Phase: "off"}
 	if baseline == nil {
