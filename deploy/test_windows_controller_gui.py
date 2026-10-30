@@ -57,6 +57,7 @@ def sources():
                 "machine_directories_windows.go", "machine_directories_windows_test.go",
                 "fixture_windows_test.go", "foundation_windows_test.go", "capture_windows_test.go",
                 "suspended_launch_windows.go", "suspended_launch_windows_test.go",
+                "suspended_access_windows_test.go",
                 "restricted_worker_windows_test.go", "gui_windows_test.go", "stream_windows_test.go"}
     paths = sorted(PACKAGE.glob("*.go"))
     if PACKAGE.is_symlink() or {path.name for path in paths} != expected:

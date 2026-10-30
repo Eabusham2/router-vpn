@@ -94,6 +94,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Actual Windows Shell elevation remains unproved; see its native diagnostics' }
           & $binary '-test.run=^TestWindowsControllerMachineDirectories$' '-test.count=1' '-test.timeout=30s' '-test.v'
           if ($LASTEXITCODE -ne 0) { throw 'Native machine-directory capture failed its independent environment checks' }
+      - name: Observe actual linked limited-token access to the retained suspended thread
+        if: ${{ success() || failure() }}
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $binary = Join-Path $env:RUNNER_TEMP 'routervpn-shell-elevation.test.exe'
+          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Native linked-token diagnostic has no compiled exact-source binary' }
+          & $binary '-test.run=^TestWindowsControllerFoundationLimitedTokenThreadAccess$' '-test.count=1' '-test.timeout=60s' '-test.v'
+          if ($LASTEXITCODE -ne 0) { throw 'Actual linked-token thread access was not observed with verified identity and reversion' }
     # This short job exposes the exact failing launch immediately. The complete
     # race-instrumented foundation, all negative controls and shipping Session
     # composition remain required in the independent controller job below.
