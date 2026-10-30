@@ -27,11 +27,10 @@ func TestWindowsControllerFoundationProtectedShellPrimaryMedium(t *testing.T) {
 	fixtureProtectedShellPrimaryMedium(t, 4 /* LUA_TOKEN */)
 }
 
-// Flags zero is the documented explicit-restriction constructor. This separate
-// case isolates LUA_TOKEN's additional transformation while retaining every
-// actual Medium/user/group/privilege predicate and the same owned desktop,
-// suspended creation, image proof and Job lifetime. Neither case is a linked
-// token or interactive UAC acceptance.
+// Explicit restrictions without LUA_TOKEN retain the original elevation bit
+// on the actual hosted token. This negative case independently proves the other
+// derived fields and requires the unchanged Medium predicate to reject it
+// before a worker can launch. It is not linked-token or UAC acceptance.
 func TestWindowsControllerFoundationConstructedPrimaryMediumWithoutLUA(t *testing.T) {
 	fixtureProtectedShellPrimaryMedium(t, 0)
 }
@@ -140,6 +139,12 @@ func fixtureProtectedShellPrimaryMedium(t *testing.T, flags uint32) {
 	}()
 	t.Logf("Constructed primary-Medium token variant: constructor flags=0x%x; actual authority, private desktop and exact suspended child checks are unchanged", flags)
 	token := fixtureConstructMediumPrimary(t, api, worker.parent, original, statistics, worker.privileges, flags)
+	if flags == 0 {
+		if token != 0 {
+			t.Fatal("unfiltered Medium constructor reached process launch")
+		}
+		return
+	}
 	// The hosted administrator's default ACL gives its logon only read/execute
 	// after Administrators becomes deny-only. The new child must be able to use
 	// its own newly created synchronization objects. Set only this independent
@@ -282,6 +287,28 @@ func fixtureConstructMediumPrimary(t *testing.T, api *fixtureRestrictedAPI, pare
 	}
 	actual, err := fixturePrimaryMediumIdentity(api, token)
 	afterPrivileges, privilegeErr := fixtureTokenPrivileges(token)
+	if flags == 0 {
+		// A rejected API call, a missing field or another token is not this
+		// negative control. Prove the exact constructed result and retain the
+		// original strict predicate, whose elevation rejection is required.
+		identity, _, identityErr := readTokenIdentity(token)
+		integrity, integrityErr := fixtureTokenIntegrity(token)
+		adminErr := fixtureDenyOnlyAdministrator(token)
+		var mandatory, returned uint32
+		policyErr := syscall.GetTokenInformation(token, 27 /* TokenMandatoryPolicy */, (*byte)(unsafe.Pointer(&mandatory)), 4, &returned)
+		if identityErr != nil || integrityErr != nil || adminErr != nil || privilegeErr != nil || policyErr != nil ||
+			!identity.Primary || !identity.Elevated || identity.Administrator || identity.SID != original.SID ||
+			identity.AuthenticationID != original.AuthenticationID || identity.SessionID != original.SessionID || integrity != "S-1-16-8192" ||
+			!maps.Equal(afterPrivileges, map[fixturePrivilegeLUID]uint32{notify: privileges[notify]}) ||
+			returned != 4 || mandatory&1 == 0 || mandatory&^uint32(3) != 0 {
+			t.Fatal("unfiltered Medium negative control did not retain the exact observed authority", identityErr, integrityErr, adminErr, privilegeErr, policyErr)
+		}
+		if err == nil {
+			t.Fatal("unfiltered elevated token bypassed the strict primary-Medium predicate")
+		}
+		t.Log("Explicit no-LUA constructor retained elevation despite Medium integrity, deny-only Administrators and only SeChangeNotify; strict primary-Medium admission rejected it before any child launch.")
+		return 0
+	}
 	if err != nil || privilegeErr != nil || actual.SID != original.SID || actual.AuthenticationID != original.AuthenticationID || actual.SessionID != original.SessionID ||
 		!maps.Equal(afterPrivileges, map[fixturePrivilegeLUID]uint32{notify: privileges[notify]}) {
 		t.Fatal("constructed primary-Medium token changed its captured authority", err, privilegeErr)

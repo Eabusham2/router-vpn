@@ -247,7 +247,7 @@ jobs:
           if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Constructed-medium diagnostic has no compiled exact-source binary' }
           & $binary '-test.run=^TestWindowsControllerFoundationConstructedMediumThreadAccess$' '-test.count=1' '-test.timeout=60s' '-test.v'
           if ($LASTEXITCODE -ne 0) { throw 'Constructed-medium access was not observed with verified identity and reversion; this is not UAC acceptance' }
-      - name: Isolate explicit primary-Medium construction without optional LUA transformation
+      - name: Reject the unfiltered constructor that retains elevated token authority
         if: ${{ success() || failure() }}
         shell: pwsh
         run: |
@@ -255,7 +255,7 @@ jobs:
           $binary = Join-Path $env:RUNNER_TEMP 'routervpn-shell-elevation.test.exe'
           if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Explicit Medium constructor has no compiled exact-source binary' }
           & $binary '-test.run=^TestWindowsControllerFoundationConstructedPrimaryMediumWithoutLUA$' '-test.count=1' '-test.timeout=60s' '-test.v'
-          if ($LASTEXITCODE -ne 0) { throw 'Explicit Medium primary construction remains unproved under the unchanged native authority checks; this is not UAC acceptance' }
+          if ($LASTEXITCODE -ne 0) { throw 'The unfiltered constructor was not rejected under the unchanged native authority checks; this is not UAC acceptance' }
       - name: Probe retained GLOBALROOT Shell bootstrap without executing child code
         if: ${{ success() || failure() }}
         shell: pwsh
