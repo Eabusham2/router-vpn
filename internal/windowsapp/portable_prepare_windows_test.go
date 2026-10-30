@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"testing"
 
+	"router-vpn/internal/windowsbootstrap"
 	"router-vpn/internal/windowscontroller"
 )
 
@@ -130,7 +131,7 @@ func TestWindowsPortableInspectionPreservesLivePins(t *testing.T) {
 	}
 }
 
-func TestWindowsPortableRequiresCapturedCore(t *testing.T) {
+func TestWindowsPortableRequiresCapturedLauncher(t *testing.T) {
 	image, err := windowscontroller.PinCurrentImage()
 	if err != nil {
 		t.Fatal(err)
@@ -141,8 +142,8 @@ func TestWindowsPortableRequiresCapturedCore(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer self.Close()
-	if strings.EqualFold(filepath.Base(image.Path()), "RouterVPNPortableCore.exe") {
-		t.Fatal("the independent Portable API rejection test was placed in a shipping Core layout")
+	if windowsbootstrap.IsPortableLauncherName(filepath.Base(image.Path())) {
+		t.Fatal("the independent Portable API rejection test was placed in a shipping launcher layout")
 	}
 	for _, invoke := range []func() error{
 		func() error { return PreparePortableData(context.Background(), image, self) },
@@ -151,7 +152,7 @@ func TestWindowsPortableRequiresCapturedCore(t *testing.T) {
 		func() error { return PreparePortableData(context.Background(), image, nil) },
 	} {
 		if err := invoke(); err == nil {
-			t.Fatal("Portable preparation accepted an unproved current Core owner")
+			t.Fatal("Portable preparation accepted an unproved current launcher owner")
 		}
 	}
 }

@@ -16,7 +16,7 @@ REQUIRED = (
     "TestWindowsPortableInitializationAndRelocation",
     "TestWindowsPortableRejectsUnsafeAndInvalidState",
     "TestWindowsPortableCancellationAndPublicationOwnership",
-    "TestWindowsPortableRequiresCapturedCore",
+    "TestWindowsPortableRequiresCapturedLauncher",
     "TestWindowsPortableInspectionPreservesLivePins",
     "TestWindowsPortableTemporaryRetainsPrivateIdentity",
 )

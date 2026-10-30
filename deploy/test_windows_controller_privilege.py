@@ -33,7 +33,7 @@ REQUIRED = (
     "TestLocalControllerNativeOwnerOwnsConfigurationAndClose",
     "TestWindowsOwnedControllerPrivateRootRetainsNamespace",
 )
-CASES = ("installed-eof", "portable-eof", "installed-extra-byte", "foreign-layout",
+CASES = ("installed-eof", "portable-eof", "portable-outer-eof", "installed-extra-byte", "foreign-layout",
          "unsafe-config", "code-hardlink", "config-hardlink", "private-public-read",
          "portable-runtime-hardlink", "malformed-private", "injected-catalog")
 

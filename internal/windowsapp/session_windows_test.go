@@ -28,7 +28,7 @@ func TestWindowsAppComposedSession(t *testing.T) {
 		t.Fatal("the native Windows Session gate requires its owned layout and case")
 	}
 	root, scenario := arguments[0], arguments[1]
-	portable := scenario == "portable-selftest"
+	portable := scenario == "portable-selftest" || scenario == "portable-outer-selftest"
 	packageRoot, dataRoot := root, root
 	if portable {
 		packageRoot = filepath.Join(root, "App", "RouterVPN")
@@ -112,7 +112,7 @@ func TestWindowsAppComposedSession(t *testing.T) {
 			t.Fatalf("retired Session accepted replacement GUI work: %v", err)
 		}
 	} else {
-		if scenario != "installed-selftest" && scenario != "portable-selftest" {
+		if scenario != "installed-selftest" && !portable {
 			t.Fatal("unknown native Windows Session scenario")
 		}
 		runErr := session.RunUI(true)

@@ -194,7 +194,7 @@ func (c *windowsOwnedController) captureLayout() error {
 	switch {
 	case strings.EqualFold(filepath.Base(parent), "RouterVPN.exe") && strings.EqualFold(filepath.Dir(parent), c.packageRoot):
 		c.dataRoot = c.packageRoot
-	case strings.EqualFold(filepath.Base(parent), "RouterVPNPortableCore.exe") && strings.EqualFold(filepath.Join(filepath.Dir(parent), "App", "RouterVPN"), c.packageRoot):
+	case windowsbootstrap.IsPortableLauncherName(filepath.Base(parent)) && strings.EqualFold(filepath.Join(filepath.Dir(parent), "App", "RouterVPN"), c.packageRoot):
 		c.portable = true
 		c.dataRoot = filepath.Join(filepath.Dir(parent), "Data")
 	default:

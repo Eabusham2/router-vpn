@@ -14,23 +14,23 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 	"syscall"
 	"unsafe"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/windowsbootstrap"
 	"router-vpn/internal/windowscontroller"
 )
 
 // PreparePortableData is an original-desktop operation before elevation. Its
-// roots come only from this retained running Portable Core, not argv, a current
+// roots come only from this retained running Portable launcher, not argv, a current
 // directory, environment variables or a caller-selected configuration path.
 // It does not launch a shell, acquire UAC, execute a generated catalog or copy
 // data from another Windows user's profile.
 func PreparePortableData(ctx context.Context, launcher *windowscontroller.Image, self *windowscontroller.Process) error {
 	if ctx == nil || ctx.Err() != nil || launcher == nil || self == nil || self.PID() != uint32(os.Getpid()) ||
-		!strings.EqualFold(filepath.Base(launcher.Path()), "RouterVPNPortableCore.exe") {
-		return errors.New("Portable preparation requires its live captured Core process")
+		!windowsbootstrap.IsPortableLauncherName(filepath.Base(launcher.Path())) {
+		return errors.New("Portable preparation requires its live captured launcher process")
 	}
 	if err := self.VerifyImage(launcher); err != nil {
 		return err

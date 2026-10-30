@@ -38,7 +38,8 @@ TAG = "routervpn_windows_app_native"
 TEST = "TestWindowsAppComposedSession"
 DIAGNOSTIC_TAG = "routervpn_windows_main_diagnostic"
 DIAGNOSTIC_LOG = ".routervpn-main-diagnostic.log"
-CASES = ("installed-selftest", "portable-selftest", "retirement-retry",
+PORTABLE_CASES = ("portable-selftest", "portable-outer-selftest")
+CASES = ("installed-selftest", *PORTABLE_CASES, "retirement-retry",
          "foreign-launcher", "code-hardlink")
 
 
@@ -112,7 +113,7 @@ def system_powershell():
 def layout(workspace, fixture, shipping, scenario, env):
     root = workspace / (scenario + " layout")
     root.mkdir()
-    portable = scenario == "portable-selftest"
+    portable = scenario in PORTABLE_CASES
     package = root / "App/RouterVPN" if portable else root
     data = root / "Data" if portable else root
     for path in (package, data, package / "runtime", data / "generated"):
@@ -127,6 +128,8 @@ def layout(workspace, fixture, shipping, scenario, env):
         shutil.copyfile(ROOT / "configs/client" / name, package / name)
     shutil.copyfile(shipping, package / "router-vpn-client.exe")
     launcher_name = "RouterVPNPortableCore.exe" if portable else "RouterVPN.exe"
+    if scenario == "portable-outer-selftest":
+        launcher_name = "RouterVPNPortable.exe"
     if scenario == "foreign-launcher":
         launcher_name = "Unrelated.exe"
     launcher = root / launcher_name
@@ -137,7 +140,7 @@ def layout(workspace, fixture, shipping, scenario, env):
               "profiles_file": str(data / "routers.json")}
     if portable:
         # Match the generic ZIP: defaults belong to the immutable package.
-        # The actual retained Core must initialize private Data itself before
+        # The actual retained launcher must initialize private Data itself before
         # the separately compiled production controller can read any config.
         shutil.copyfile(ROOT / "configs/client/client.json.example", package / "client.json")
         shutil.copyfile(ROOT / "configs/client/routers.json.example", package / "routers.json")
@@ -205,7 +208,7 @@ def diagnose_full_main(workspace, fixture, scenario, compiler, env):
     print("Test-only fullmain diagnostic Session fixture exit status: " + str(status), flush=True)
     print(output[-16384:], end="" if output.endswith("\n") else "\n", flush=True)
     root = diagnostic / (scenario + " layout")
-    package = root / "App/RouterVPN" if scenario == "portable-selftest" else root
+    package = root / "App/RouterVPN" if scenario in PORTABLE_CASES else root
     path = package / DIAGNOSTIC_LOG
     try:
         info = path.lstat()
@@ -269,7 +272,7 @@ def diagnose_native_gui(workspace, shipping, scenario, compiler, env):
     print("Failure-only native GUI Session exit status: " + str(status), flush=True)
     print(output[-16384:], end="" if output.endswith("\n") else "\n", flush=True)
     root = diagnostic / (scenario + " layout")
-    data = root / "Data" if scenario == "portable-selftest" else root
+    data = root / "Data" if scenario in PORTABLE_CASES else root
     traces = sorted(data.glob(".routervpn-gui-trace-*.log"))
     if len(traces) > 3:
         raise ValueError("Native GUI diagnostic exceeded its three captured child processes")

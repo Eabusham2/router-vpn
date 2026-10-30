@@ -85,15 +85,16 @@ func Start(ctx context.Context, portable bool) (_ *Session, failure error) {
 	if err != nil || !s.desktop.Primary || s.desktop.SID == "" || s.desktop.AuthenticationID == 0 {
 		return s, errors.Join(err, errors.New("the Windows app has no captured original desktop identity"))
 	}
-	name := "RouterVPN.exe"
+	launcherName := filepath.Base(s.selfImage.Path())
+	validLauncher := strings.EqualFold(launcherName, "RouterVPN.exe")
 	s.packageRoot = filepath.Dir(s.selfImage.Path())
 	s.dataRoot = s.packageRoot
 	if portable {
-		name = "RouterVPNPortableCore.exe"
+		validLauncher = windowsbootstrap.IsPortableLauncherName(launcherName)
 		s.dataRoot = filepath.Join(s.packageRoot, "Data")
 		s.packageRoot = filepath.Join(s.packageRoot, "App", "RouterVPN")
 	}
-	if !strings.EqualFold(filepath.Base(s.selfImage.Path()), name) {
+	if !validLauncher {
 		return s, errors.New("the Windows app is not its exact installed or Portable launcher")
 	}
 	s.controllerImage, err = windowscontroller.PinImage(filepath.Join(s.packageRoot, "router-vpn-client.exe"))

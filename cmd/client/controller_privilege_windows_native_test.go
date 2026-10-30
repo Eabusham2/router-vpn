@@ -491,7 +491,7 @@ func TestWindowsOwnedControllerNativeEntry(t *testing.T) {
 			t.Fatal(copyErr, closeErr)
 		}
 	}
-	for _, mode := range []string{"installed-eof", "portable-eof", "installed-extra-byte", "foreign-layout", "unsafe-config", "code-hardlink", "config-hardlink", "private-public-read", "portable-runtime-hardlink", "malformed-private", "injected-catalog"} {
+	for _, mode := range []string{"installed-eof", "portable-eof", "portable-outer-eof", "installed-extra-byte", "foreign-layout", "unsafe-config", "code-hardlink", "config-hardlink", "private-public-read", "portable-runtime-hardlink", "malformed-private", "injected-catalog"} {
 		t.Run(mode, func(t *testing.T) {
 			root := t.TempDir()
 			if err := ensurePrivateRuntimeDirectory(root); err != nil {
@@ -502,6 +502,9 @@ func TestWindowsOwnedControllerNativeEntry(t *testing.T) {
 				packageRoot = filepath.Join(root, "App", "RouterVPN")
 				dataRoot = filepath.Join(root, "Data")
 				parent = filepath.Join(root, "RouterVPNPortableCore.exe")
+				if mode == "portable-outer-eof" {
+					parent = filepath.Join(root, "RouterVPNPortable.exe")
+				}
 			}
 			for _, directory := range []string{packageRoot, dataRoot, filepath.Join(packageRoot, "client"), filepath.Join(packageRoot, "client", ".routervpn-state"), filepath.Join(packageRoot, "modes"), filepath.Join(packageRoot, "runtime")} {
 				if err := os.MkdirAll(directory, 0700); err != nil {
