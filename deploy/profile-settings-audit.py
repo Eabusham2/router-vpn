@@ -74,8 +74,12 @@ connection_profiles = require(
 )
 require(
     "cmd/client/private_store.go",
-    "0o600", "os.CreateTemp", "tmp.Sync()", "os.Rename(tmpPath, path)", "os.SameFile",
+    "0o600", "os.CreateTemp", "tmp.Sync()", "replacePrivateStoreFile(tmpPath, path)", "os.SameFile",
 )
+require("cmd/client/private_store_replace_windows.go", "MoveFileExW",
+        "windowsPrivateReplaceExisting|windowsPrivateWriteThrough",
+        "replaceWindowsPrivateStoreFile(source, target, moveWindowsPrivateStoreFile)")
+require("cmd/client/private_store_replace_other.go", "os.Rename(source, target)")
 for forbidden_field in (
     "APIToken string", "PrivateKey string", "PresharedKey string", "SocksUsername string",
     "SocksPassword string", "External *common.ExternalNodeConfig",
