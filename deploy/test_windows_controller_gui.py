@@ -56,6 +56,7 @@ def sources():
                 "system_image_policy.go", "system_image_policy_test.go",
                 "protected_shell_policy.go", "protected_shell_policy_test.go",
                 "protected_shell_windows.go", "protected_shell_windows_test.go",
+                "protected_bootstrap_windows.go", "protected_bootstrap_windows_test.go",
                 "protected_shell_medium_windows_test.go",
                 "medium_desktop_windows_test.go",
                 "medium_access_windows_test.go",
@@ -67,6 +68,12 @@ def sources():
     paths = sorted(PACKAGE.glob("*.go"))
     if PACKAGE.is_symlink() or {path.name for path in paths} != expected:
         raise ValueError("Native GUI source/test closure changed")
+    bootstrap = ROOT / "internal/windowsbootstrap"
+    dependency = sorted(bootstrap.glob("*.go"))
+    if (bootstrap.is_symlink() or {path.name for path in dependency} !=
+            {"layout.go", "layout_test.go", "protocol.go", "protocol_test.go"}):
+        raise ValueError("Native GUI protected bootstrap protocol source/test closure changed")
+    paths.extend(dependency)
     paths.extend(ROOT / name for name in ("go.mod", "deploy/test_desktop_windows_identity.py",
                                          "deploy/test_windows_controller_gui.py"))
     checksum = ROOT / "go.sum"

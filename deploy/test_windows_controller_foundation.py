@@ -58,6 +58,12 @@ REQUIRED = (
     "TestWindowsControllerFoundationProtectedShellGlobalCapture",
     "TestWindowsControllerFoundationProtectedShellWrongMapping",
     "TestWindowsControllerFoundationProtectedShellPrimaryMedium",
+    "TestWindowsControllerFoundationProtectedShellBootstrapLaunch",
+    "TestWindowsControllerFoundationProtectedShellBootstrapArguments",
+    "TestWindowsControllerFoundationProtectedShellBootstrapLateCancellation",
+    "TestWindowsControllerFoundationProtectedShellBootstrapReturnedImage",
+    "TestWindowsControllerFoundationProtectedShellBootstrapChangedCapture",
+    "TestWindowsControllerFoundationProtectedShellBootstrapToken",
 )
 # A real linked token belongs to a separate native fixture. Its exact test is
 # still mandatory in the independent UAC workflow step and fails when absent;
@@ -74,6 +80,7 @@ def sources():
                 "system_image_policy.go", "system_image_policy_test.go",
                 "protected_shell_policy.go", "protected_shell_policy_test.go",
                 "protected_shell_windows.go", "protected_shell_windows_test.go",
+                "protected_bootstrap_windows.go", "protected_bootstrap_windows_test.go",
                 "protected_shell_medium_windows_test.go",
                 "medium_desktop_windows_test.go",
                 "medium_access_windows_test.go",
@@ -87,7 +94,16 @@ def sources():
         raise ValueError("Windows controller native source/test closure changed")
     if TARGET.is_symlink() or any(path.is_symlink() or not path.is_file() for path in paths):
         raise ValueError("Windows controller native source must be regular captured files")
-    return {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+    records = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+    bootstrap = ROOT / "internal/windowsbootstrap"
+    dependency = sorted(bootstrap.glob("*.go"))
+    if (bootstrap.is_symlink() or {path.name for path in dependency} !=
+            {"layout.go", "layout_test.go", "protocol.go", "protocol_test.go"} or
+            any(path.is_symlink() or not path.is_file() for path in dependency)):
+        raise ValueError("Protected bootstrap protocol source/test closure changed")
+    records.update({"windowsbootstrap/" + path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in dependency})
+    return records
 
 
 def mutants():
@@ -100,6 +116,7 @@ def mutants():
     launch = read("launch_windows.go")
     suspended = read("suspended_launch_windows.go")
     protected_shell = read("protected_shell_windows.go")
+    bootstrap = read("protected_bootstrap_windows.go")
     return (
         ("pipe_windows.go", "retained-pid", REQUIRED[3],
          "same executable with a different retained PID acquired the private channel",
@@ -192,6 +209,26 @@ def mutants():
          "cancelled Shell callback omitted its actual creation suspension",
          once(suspended, 'if site.calls.Add(1) != 1 || inputs == nil {',
               'if site.ctx.Err() != nil {\n\t\tsite.calls.Add(1)\n\t\treturn reject(0x800704c7)\n\t}\n\tif site.calls.Add(1) != 1 || inputs == nil {')),
+        ("protected_bootstrap_windows.go", "protected-bootstrap-public-parent", REQUIRED[35],
+         "another or unbounded caller rendezvous reached protected Shell",
+         once(bootstrap, 'err != nil || rendezvous.ParentPID != uint32(os.Getpid())',
+              'err != nil || false && rendezvous.ParentPID != uint32(os.Getpid())')),
+        ("protected_bootstrap_windows.go", "protected-bootstrap-returned-image", REQUIRED[37],
+         "protected bootstrap authorized another retained actual image",
+         once(bootstrap, 'proofErr = errors.Join(proofErr, process.VerifyImage(capture.image))',
+              '// Broken: the exact returned process image is not proved.')),
+        ("protected_bootstrap_windows.go", "protected-bootstrap-capture-after-create", REQUIRED[38],
+         "protected bootstrap accepted its changed original capture after creation",
+         once(bootstrap, 'proofErr := capture.verifyLocked(api, namespace)',
+              'var proofErr error // Broken: original namespace ownership is not rechecked.')),
+        ("protected_bootstrap_windows.go", "protected-bootstrap-elevated-token", REQUIRED[39],
+         "protected bootstrap accepted an unproved elevated desktop token",
+         once(bootstrap, '!actual.Elevated || !actual.Administrator || actual.SessionID != original.SessionID',
+              'actual.SessionID != original.SessionID')),
+        ("protected_bootstrap_windows.go", "protected-bootstrap-late-owner", REQUIRED[36],
+         "late protected bootstrap cancellation discarded its actual process owner",
+         once(bootstrap, '\truntime.KeepAlive(path)\n\tproofErr :=',
+              '\truntime.KeepAlive(path)\n\tif launchErr != nil { return nil, launchErr }\n\tproofErr :=')),
     )
 
 
