@@ -17,6 +17,7 @@ import json
 import os
 import platform
 import shutil
+import stat
 import sys
 import tempfile
 
@@ -27,6 +28,8 @@ NATIVE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(NATIVE)
 TAG = "routervpn_windows_app_native"
 TEST = "TestWindowsAppComposedSession"
+DIAGNOSTIC_TAG = "routervpn_windows_main_diagnostic"
+DIAGNOSTIC_LOG = ".routervpn-main-diagnostic.log"
 CASES = ("installed-selftest", "portable-selftest", "retirement-retry",
          "foreign-launcher", "code-hardlink")
 
@@ -67,6 +70,7 @@ def sources():
         records[path.relative_to(ROOT).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     required = {"internal/windowsapp/session_windows.go", "internal/windowsapp/session_windows_test.go",
                 "cmd/client/controller_privilege_windows.go", "cmd/client/main.go",
+                "cmd/client/controller_main_diagnostic_windows_test.go",
                 "client/RouterVPN-Windows-App.ps1", "client/RouterVPN-Windows-Tray.ps1",
                 "client/RouterVPN-Windows-ControllerTransport.cs",
                 "client/RouterVPN-Windows-ControllerTransport.psm1"}
@@ -161,6 +165,56 @@ def run_fixture(workspace, fixture, shipping, scenario, env):
     return status, output
 
 
+def diagnose_full_main(workspace, fixture, scenario, compiler, env):
+    """Observe an already failed shipping case; never replace its verdict."""
+    diagnostic = workspace / ("diagnostic-" + scenario)
+    diagnostic.mkdir()
+    binary = diagnostic / "fullmain.test.exe"
+    status, output = NATIVE.run(
+        [compiler, "test", "-c", "-mod=readonly", "-tags=" + DIAGNOSTIC_TAG,
+         "-o", binary, "./cmd/client"], cwd=ROOT, env=env, timeout=240)
+    if status:
+        raise ValueError("Test-only fullmain diagnostic did not compile:\n" + output[-8192:])
+    status, output = run_fixture(diagnostic, fixture, binary, scenario, env)
+    print("Test-only fullmain diagnostic Session fixture exit status: " + str(status), flush=True)
+    print(output[-16384:], end="" if output.endswith("\n") else "\n", flush=True)
+    root = diagnostic / (scenario + " layout")
+    package = root / "App/RouterVPN" if scenario == "portable-selftest" else root
+    path = package / DIAGNOSTIC_LOG
+    try:
+        info = path.lstat()
+    except FileNotFoundError:
+        print("Test-only fullmain diagnostic did not reach its exclusive log.", flush=True)
+        return
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or
+            getattr(info, "st_file_attributes", 0) & 0x400):
+        raise ValueError("Test-only fullmain diagnostic log is not its regular single-link file")
+    # Only this newly generated blank fixture is read. Do not collect arbitrary
+    # user logs, profiles, argv or inherited environment. The process joined
+    # through the same actual Session test; cleanup/receipt failures stay fatal.
+    with path.open("rb") as stream:
+        opened = os.fstat(stream.fileno())
+        if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+            raise ValueError("Test-only fullmain diagnostic log changed before read")
+        stream.seek(max(0, opened.st_size - 16384))
+        body = stream.read(16384).decode("utf-8", errors="replace")
+    print("Test-only actual main stderr/log (bounded):\n" + body, flush=True)
+
+
+def require_fixture_success(status, output, workspace, fixture, scenario, compiler, env):
+    if (not status and "--- SKIP:" not in output and "DATA RACE" not in output and
+            "--- PASS: " + TEST + " (" in output):
+        return
+    failure = ValueError("Composed Windows Session failed its actual " + scenario + " path")
+    try:
+        diagnose_full_main(workspace, fixture, scenario, compiler, env)
+    except Exception as diagnostic_error:
+        print("Failure-only fullmain diagnostic could not complete: " + str(diagnostic_error)[-8192:], flush=True)
+    # A succeeding diagnostic is still a different test binary. Its output can
+    # explain a failure but can never turn the failed shipping main into a pass.
+    raise failure
+
+
 def mutants():
     filename = "internal/windowsapp/session_windows.go"
     source = (ROOT / filename).read_text(encoding="utf-8")
@@ -204,9 +258,7 @@ def execute(go="go", *, env=None):
         for scenario in CASES:
             status, output = run_fixture(workspace, fixture, shipping, scenario, captured)
             print(output, end="" if output.endswith("\n") else "\n", flush=True)
-            if (status or "--- SKIP:" in output or "DATA RACE" in output or
-                    "--- PASS: " + TEST + " (" not in output):
-                raise ValueError("Composed Windows Session failed its actual " + scenario + " path")
+            require_fixture_success(status, output, workspace, fixture, scenario, compiler, captured)
             print("Actual Windows Session passed: " + scenario, flush=True)
         for name, witness, replacement in mutants():
             changed = workspace / (name + ".go")

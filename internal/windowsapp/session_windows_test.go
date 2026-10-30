@@ -57,6 +57,16 @@ func TestWindowsAppComposedSession(t *testing.T) {
 		return
 	}
 	if startErr != nil || session == nil {
+		if session != nil && session.controller != nil {
+			observation, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+			code, waitErr := session.controller.Wait(observation)
+			cancel()
+			if waitErr == nil {
+				t.Logf("actual retained controller exit after failed startup: %d", code)
+			} else {
+				t.Logf("actual retained controller exit remains unproved after failed startup: %v", waitErr)
+			}
+		}
 		t.Fatalf("actual production Windows controller did not start: %v", startErr)
 	}
 	if !session.authenticated || !session.desktop.Primary || !session.desktop.Elevated || !session.desktop.Administrator || session.directController == nil {
