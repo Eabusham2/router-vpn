@@ -31,7 +31,7 @@ SPEC = importlib.util.spec_from_file_location('darwin_guardian_uid', ROOT/'deplo
 UID = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UID)
 
-CASES = ('PFCompiler', 'PFSystemDispatch', 'PFAnchorPaths', 'ProtectedPathAuthority', 'IdentityRetirement', 'UIDObserver', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'HeartbeatAdmission', 'ForegroundAdmission', 'SocketRetirementReusesCapacity',
+CASES = ('PFCompiler', 'PFSystemDispatch', 'FixtureAnchorRetirement', 'PFAnchorPaths', 'ProtectedPathAuthority', 'IdentityRetirement', 'UIDObserver', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'HeartbeatAdmission', 'ForegroundAdmission', 'SocketRetirementReusesCapacity',
          'RetainedTunnel', 'BothOwnersCrashCannotReuseTuple', 'ForeignBlockAndLaterPass',
          'RejectsForeignStatefulDirections', 'BlockedControlRetainsSourcePort',
          'FinishRequiresDescriptorRetirement', 'FloatingStateRetirement',

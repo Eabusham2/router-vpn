@@ -146,6 +146,53 @@ func TestDesktopDarwinGuardianKernelPFSystemDispatch(t *testing.T) {
 	}
 }
 
+func TestDesktopDarwinGuardianKernelFixtureAnchorRetirement(t *testing.T) {
+	if os.Geteuid() != 0 || desktopDarwinTestFixture.Nonce == "" {
+		t.Fatal("actual captured Darwin fixture retirement is required")
+	}
+	capture := desktopSocketFixtureCapture()
+	slot, generation := desktopDarwinPFSlot(capture), desktopDarwinPFGeneration(capture)
+	foreign := desktopDarwinTestForeignNamespace()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	for _, anchor := range []string{foreign, slot, generation, desktopDarwinPFNamespace} {
+		if !desktopDarwinFixturePFOwned(anchor) {
+			t.Fatal("fixture lost its captured retirement namespace", anchor)
+		}
+	}
+	for _, anchor := range []string{"", "com.apple", desktopDarwinPFNamespace + "/../other", foreign + "/unowned", desktopDarwinPFNamespace + "-other"} {
+		if _, err := desktopDarwinFixturePFPresent(ctx, anchor); err == nil {
+			t.Fatal("fixture retirement accepted another PF owner", anchor)
+		}
+	}
+	rules := fmt.Sprintf("block drop out on lo0 inet to %s\n", desktopDarwinTestFixture.Addresses[1])
+	if err := desktopDarwinPFLoad(ctx, foreign, rules); err != nil {
+		t.Fatal(err)
+	}
+	if err := desktopDarwinPFLoad(ctx, generation, rules); err != nil {
+		t.Fatal(err)
+	}
+	if err := desktopDarwinPFLoadPointer(ctx, capture); err != nil {
+		t.Fatal(err)
+	}
+	if err := desktopDarwinPFLoad(ctx, desktopDarwinPFNamespace, fmt.Sprintf("anchor \"p%s\" out all\n", capture.SessionID)); err != nil {
+		t.Fatal(err)
+	}
+	for _, anchor := range []string{foreign, slot, generation, desktopDarwinPFNamespace} {
+		if present, err := desktopDarwinFixturePFPresent(ctx, anchor); err != nil || !present {
+			t.Fatal("actual retained fixture anchor was not independently inventoried", anchor, err)
+		}
+	}
+	if err := desktopDarwinFixtureRetirePF(ctx); err != nil {
+		t.Fatal("complete owned fixture retirement did not remove actual native anchors", err)
+	}
+	for _, anchor := range []string{foreign, slot, generation, desktopDarwinPFNamespace} {
+		if present, err := desktopDarwinFixturePFPresent(ctx, anchor); err != nil || present {
+			t.Fatal("fixture PF cleanup left a native namespace in the next owner's inventory", anchor, err)
+		}
+	}
+}
+
 func TestDesktopDarwinGuardianKernelPFAnchorPaths(t *testing.T) {
 	if os.Geteuid() != 0 || desktopDarwinTestFixture.Nonce == "" {
 		t.Fatal("actual captured Darwin anchor fixture is required")
@@ -439,37 +486,7 @@ func desktopDarwinFixtureCleanup() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	foreign := desktopDarwinTestForeignNamespace()
-	if _, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", foreign, "-F", "rules"); err != nil {
-		return err
-	}
-	if actual, err := desktopDarwinPFRead(ctx, foreign); err != nil || actual != "" {
-		return errors.Join(err, errors.New("fixture foreign-policy test anchor remained"))
-	}
-	children, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", desktopDarwinPFNamespace, "-v", "-s", "Anchors")
-	if err != nil {
-		return err
-	}
-	var anchors []string
-	for _, value := range strings.Fields(string(children)) {
-		value = strings.TrimPrefix(value, desktopDarwinPFNamespace+"/")
-		if value == "" {
-			continue
-		}
-		if !regexp.MustCompile(`^(?:p[0-9a-f]{32}|g[A-Za-z0-9_-]{32}|physical(?:/[0-9a-f]{32}){0,2}|physical/legacy)$`).MatchString(value) {
-			return errors.New("fixture cleanup found an unowned PF descendant")
-		}
-		anchors = append(anchors, desktopDarwinPFNamespace+"/"+value)
-	}
-	for index := len(anchors) - 1; index >= 0; index-- {
-		if _, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", anchors[index], "-F", "rules"); err != nil {
-			return err
-		}
-		if actual, err := desktopDarwinPFRead(ctx, anchors[index]); err != nil || actual != "" {
-			return errors.Join(err, errors.New("fixture child rules remained"))
-		}
-	}
-	if _, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", desktopDarwinPFNamespace, "-F", "rules"); err != nil {
+	if err := desktopDarwinFixtureRetirePF(ctx); err != nil {
 		return err
 	}
 	entries, err := os.ReadDir(desktopDarwinIdentities)
@@ -490,6 +507,107 @@ func desktopDarwinFixtureCleanup() error {
 		}
 		if err := desktopDarwinRetireAccount(record.Account, record.UID); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func desktopDarwinFixturePFOwned(anchor string) bool {
+	if os.Geteuid() != 0 || !desktopSocketHex(desktopDarwinTestFixture.Nonce, 32) ||
+		desktopDarwinPFNamespace != "com.apple/000.t-"+desktopDarwinTestFixture.Nonce[:12] {
+		return false
+	}
+	if anchor == desktopDarwinPFNamespace || anchor == desktopDarwinTestForeignNamespace() {
+		return true
+	}
+	child, found := strings.CutPrefix(anchor, desktopDarwinPFNamespace+"/")
+	return found && regexp.MustCompile(`^(?:p[0-9a-f]{32}|g[A-Za-z0-9_-]{32}|physical(?:/[0-9a-f]{32}){0,2}|physical/legacy)$`).MatchString(child)
+}
+
+func desktopDarwinFixturePFPresent(ctx context.Context, anchor string) (bool, error) {
+	if !desktopDarwinFixturePFOwned(anchor) {
+		return false, errors.New("fixture PF inventory has no exact captured owner")
+	}
+	// Enumerate existing parents only. An empty direct rules print cannot
+	// distinguish an absent anchor from a retained empty native namespace.
+	parent := ""
+	for _, name := range strings.Split(anchor, "/") {
+		arguments := []string{"-s", "Anchors"}
+		if parent != "" {
+			arguments = append([]string{"-a", parent}, arguments...)
+		}
+		raw, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, arguments...)
+		if err != nil {
+			return false, err
+		}
+		children, err := desktopPFInventoryChildren(parent, raw)
+		if err != nil {
+			return false, err
+		}
+		next := name
+		if parent != "" {
+			next = parent + "/" + name
+		}
+		found := false
+		for _, child := range children {
+			found = found || child == next
+		}
+		if !found {
+			return false, nil
+		}
+		parent = next
+	}
+	return true, nil
+}
+
+func desktopDarwinFixtureRetirePF(ctx context.Context) error {
+	var anchors []string
+	seen := make(map[string]bool)
+	for _, anchor := range []string{desktopDarwinTestForeignNamespace(), desktopDarwinPFNamespace} {
+		present, err := desktopDarwinFixturePFPresent(ctx, anchor)
+		if err != nil {
+			return err
+		}
+		if present {
+			anchors = append(anchors, anchor)
+			seen[anchor] = true
+		}
+	}
+	for _, anchor := range anchors {
+		if anchor != desktopDarwinPFNamespace {
+			continue
+		}
+		children, err := desktopDarwinCommand(ctx, "/sbin/pfctl", nil, "-a", anchor, "-v", "-s", "Anchors")
+		if err != nil {
+			return err
+		}
+		for _, child := range strings.Fields(string(children)) {
+			child = anchor + "/" + strings.TrimPrefix(child, anchor+"/")
+			if !desktopDarwinFixturePFOwned(child) || seen[child] || len(anchors) >= 256 {
+				return errors.New("fixture cleanup found an unowned or unbounded PF descendant")
+			}
+			anchors = append(anchors, child)
+			seen[child] = true
+		}
+	}
+	// Retire the namespace dispatch first, then its now-unreferenced children.
+	// Load the complete empty ruleset and prove actual anchor absence. A
+	// filter-only flush plus empty filter text does not prove native retirement.
+	for _, anchor := range anchors {
+		present, err := desktopDarwinFixturePFPresent(ctx, anchor)
+		if err != nil {
+			return err
+		}
+		if !present {
+			continue
+		}
+		if err := desktopDarwinPFLoad(ctx, anchor, "\n"); err != nil {
+			return err
+		}
+	}
+	for _, anchor := range anchors {
+		if present, err := desktopDarwinFixturePFPresent(ctx, anchor); err != nil || present {
+			return errors.Join(err, fmt.Errorf("fixture PF namespace remains in native inventory: %q", anchor))
 		}
 	}
 	return nil
