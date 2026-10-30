@@ -38,9 +38,12 @@ CASES = ('PFCompiler', 'PFSystemDispatch', 'FixtureAnchorRetirement', 'PFAnchorP
          'StaleCaptureAndReplacement')
 READBACK_CASES = ('PFReadbackCompleteWithinCapturedBudget', 'PFReadbackFailureAndCancellationJoin',
                   'PFReadbackDeadlineAndInvalidCapture')
+PROBE_CASES = ('FilterOnlyRetirement',)
 
 
 def native_case_name(case):
+    if case in PROBE_CASES:
+        return 'TestDesktopPFAnchorProbe'+case
     if case in READBACK_CASES:
         return 'TestDesktop'+case
     if case in CASES:
@@ -327,7 +330,10 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
         if checked_sources(source)[2] != before or hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError('Darwin guardian source/executable changed during actual kernel execution')
         print(output, end='' if output.endswith('\n') else '\n')
-        print('Darwin exact native libproc, isolated UID, scoped PF, actual utun ownership and crash cleanup passed.')
+        if case in PROBE_CASES:
+            print('Darwin exact native filter-only anchor lifetime probe passed.')
+        else:
+            print('Darwin exact native libproc, isolated UID, scoped PF, actual utun ownership and crash cleanup passed.')
 
 
 def execute_mutations(source: Path, go='go'):
@@ -451,7 +457,7 @@ if __name__ == '__main__':
     parser.add_argument('--go', default='go')
     parser.add_argument('--root-test-binary', type=Path)
     parser.add_argument('--sha256')
-    parser.add_argument('--case', choices=CASES+READBACK_CASES)
+    parser.add_argument('--case', choices=CASES+READBACK_CASES+PROBE_CASES)
     parser.add_argument('--mutations', action='store_true', help='Run scoped production mutation controls after the native positive suite')
     args = parser.parse_args()
     if args.root_test_binary:

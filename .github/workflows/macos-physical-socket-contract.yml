@@ -35,6 +35,34 @@ permissions:
   contents: read
 
 jobs:
+  anchor-lifetime-probe:
+    name: Fresh filter-only PF anchor lifetime on ${{ matrix.runner }}
+    concurrency:
+      group: macos-pf-anchor-probe-${{ github.workflow }}-${{ github.ref }}-${{ matrix.runner }}
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-15-intel, macos-15]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Prove actual filter-only namespace retirement in a fresh owned fixture
+        # This diagnostic does not alter the production PF loader or replace
+        # the full guardian/mutation gate below. Native anchor absence is
+        # required; empty filter output alone is not a passing result.
+        run: python3 deploy/test_desktop_darwin_guardian.py . --go "$(command -v go)" --case FilterOnlyRetirement
+
   native-sockets:
     name: Native PF, socket and utun ownership on ${{ matrix.runner }}
     concurrency:

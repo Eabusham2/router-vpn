@@ -146,6 +146,45 @@ func TestDesktopDarwinGuardianKernelPFSystemDispatch(t *testing.T) {
 	}
 }
 
+// Keep this fresh-namespace diagnostic separate from the required guardian
+// suite. It tests whether the actual host's filter-only loader can retire its
+// own anchor; it does not substitute empty rule text for native absence or
+// change the production loader before that boundary is established.
+func TestDesktopPFAnchorProbeFilterOnlyRetirement(t *testing.T) {
+	if os.Geteuid() != 0 || desktopDarwinTestFixture.Nonce == "" {
+		t.Fatal("actual captured Darwin filter-only retirement probe is required")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	anchor := desktopDarwinTestForeignNamespace()
+	if present, err := desktopDarwinFixturePFPresent(ctx, anchor); err != nil || present {
+		t.Fatal("filter-only probe did not capture an absent owned namespace", anchor, err)
+	}
+	rules := fmt.Sprintf("block drop out on lo0 inet to %s label \"rvpn-filter-only-probe\"\n", desktopDarwinTestFixture.Addresses[1])
+	expected, err := desktopDarwinPFCanonical(ctx, rules)
+	if err != nil {
+		t.Fatal("filter-only probe did not parse its scoped filter", err)
+	}
+	if _, err := desktopDarwinCommand(ctx, "/sbin/pfctl", []byte(rules), "-R", "-a", anchor, "-f", "-"); err != nil {
+		t.Fatal("actual filter-only creation was rejected", err)
+	}
+	if actual, err := desktopDarwinPFRead(ctx, anchor); err != nil || actual != expected {
+		t.Fatal("actual filter-only creation did not preserve its exact scoped filter", actual, err)
+	}
+	if present, err := desktopDarwinFixturePFPresent(ctx, anchor); err != nil || !present {
+		t.Fatal("actual filter-only anchor was not independently inventoried", anchor, err)
+	}
+	if _, err := desktopDarwinCommand(ctx, "/sbin/pfctl", []byte("\n"), "-R", "-a", anchor, "-f", "-"); err != nil {
+		t.Fatal("actual filter-only empty transaction was rejected", err)
+	}
+	if actual, err := desktopDarwinPFRead(ctx, anchor); err != nil || actual != "" {
+		t.Fatal("actual filter-only retirement retained filter rules", actual, err)
+	}
+	if present, err := desktopDarwinFixturePFPresent(ctx, anchor); err != nil || present {
+		t.Fatal("filter-only transaction retained its empty native anchor", anchor, err)
+	}
+}
+
 func TestDesktopDarwinGuardianKernelFixtureAnchorRetirement(t *testing.T) {
 	if os.Geteuid() != 0 || desktopDarwinTestFixture.Nonce == "" {
 		t.Fatal("actual captured Darwin fixture retirement is required")
