@@ -36,10 +36,12 @@ UPDATER = importlib.util.module_from_spec(UPDATER_SPEC)
 UPDATER_SPEC.loader.exec_module(UPDATER)
 TAG = "routervpn_windows_app_native"
 TEST = "TestWindowsAppComposedSession"
+ENTRY_TEST = "TestWindowsAppEntry"
 DIAGNOSTIC_TAG = "routervpn_windows_main_diagnostic"
 DIAGNOSTIC_LOG = ".routervpn-main-diagnostic.log"
-PORTABLE_CASES = ("portable-selftest", "portable-outer-selftest")
-CASES = ("installed-selftest", *PORTABLE_CASES, "retirement-retry",
+ENTRY_CASES = ("installed-entry-selftest", "portable-outer-entry-selftest")
+PORTABLE_CASES = ("portable-selftest", "portable-outer-selftest", "portable-outer-entry-selftest")
+CASES = ("installed-selftest", "portable-selftest", "portable-outer-selftest", *ENTRY_CASES, "retirement-retry",
          "foreign-launcher", "code-hardlink")
 
 
@@ -81,6 +83,8 @@ def sources():
             raise ValueError("Windows Session gate lost its actual source: " + str(path))
         records[path.relative_to(ROOT).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     required = {"internal/windowsapp/session_windows.go", "internal/windowsapp/session_windows_test.go",
+                "internal/windowsapp/entry_windows.go", "internal/windowsapp/entry_windows_test.go",
+                "internal/windowsapp/entry_options.go", "internal/windowsapp/entry_options_test.go",
                 "cmd/client/controller_privilege_windows.go", "cmd/client/main.go",
                 "cmd/client/controller_main_diagnostic_windows_test.go",
                 "internal/windowsapp/portable_prepare_windows.go", "internal/windowsapp/portable_security_windows.go",
@@ -128,7 +132,7 @@ def layout(workspace, fixture, shipping, scenario, env):
         shutil.copyfile(ROOT / "configs/client" / name, package / name)
     shutil.copyfile(shipping, package / "router-vpn-client.exe")
     launcher_name = "RouterVPNPortableCore.exe" if portable else "RouterVPN.exe"
-    if scenario == "portable-outer-selftest":
+    if scenario in ("portable-outer-selftest", "portable-outer-entry-selftest"):
         launcher_name = "RouterVPNPortable.exe"
     if scenario == "foreign-launcher":
         launcher_name = "Unrelated.exe"
@@ -187,11 +191,15 @@ def run_fixture(workspace, fixture, shipping, scenario, env):
     root, launcher = layout(workspace, fixture, shipping, scenario, env)
     digest = hashlib.sha256(launcher.read_bytes()).hexdigest()
     status, output = NATIVE.run(
-        [launcher, "-test.run=^" + TEST + "$", "-test.count=1", "-test.timeout=180s",
+        [launcher, "-test.run=^" + fixture_test(scenario) + "$", "-test.count=1", "-test.timeout=180s",
          "-test.v", root, scenario], cwd=root, env=env, timeout=195)
     if hashlib.sha256(launcher.read_bytes()).hexdigest() != digest:
         raise ValueError("The actual native Session launcher changed during its execution")
     return status, output
+
+
+def fixture_test(scenario):
+    return ENTRY_TEST if scenario in ENTRY_CASES else TEST
 
 
 def diagnose_full_main(workspace, fixture, scenario, compiler, env):
@@ -292,7 +300,7 @@ def diagnose_native_gui(workspace, shipping, scenario, compiler, env):
 
 def require_fixture_success(status, output, workspace, fixture, shipping, scenario, compiler, env):
     if (not status and "--- SKIP:" not in output and "DATA RACE" not in output and
-            "--- PASS: " + TEST + " (" in output):
+            "--- PASS: " + fixture_test(scenario) + " (" in output):
         return
     failure = ValueError("Composed Windows Session failed its actual " + scenario + " path")
     try:
@@ -312,13 +320,17 @@ def mutants():
     filename = "internal/windowsapp/session_windows.go"
     source = (ROOT / filename).read_text(encoding="utf-8")
     return (
-        ("missing-ui-handoff", "native UI self-test omitted an authenticated channel",
+        ("missing-ui-handoff", filename, "installed-selftest", "native UI self-test omitted an authenticated channel",
          NATIVE.replace_once(source,
                              '\n\t\t\t"-ControllerPipe", pipe.Name(), "-ControllerParentHandle", strconv.FormatUint(parent, 10)}',
                              '}')),
-        ("unacknowledged-controller", "Session released code without its authenticated receipt and independent process join",
+        ("unacknowledged-controller", filename, "installed-selftest", "Session released code without its authenticated receipt and independent process join",
          NATIVE.replace_once(source, "if s.authenticated && !s.receipt {",
                              "if false && s.authenticated && !s.receipt {")),
+        ("entry-omits-retirement", "internal/windowsapp/entry_windows.go", "installed-entry-selftest",
+         "application entry returned with its controller code still retained",
+         NATIVE.replace_once((ROOT / "internal/windowsapp/entry_windows.go").read_text(encoding="utf-8"),
+                             "if session != nil {", "if false && session != nil {")),
     )
 
 
@@ -362,12 +374,12 @@ def execute(go="go", *, env=None):
             print(output, end="" if output.endswith("\n") else "\n", flush=True)
             require_fixture_success(status, output, workspace, fixture, shipping, scenario, compiler, captured)
             print("Actual Windows Session passed: " + scenario, flush=True)
-        for name, witness, replacement in mutants():
+        for name, filename, scenario, witness, replacement in mutants():
             changed = workspace / (name + ".go")
             changed.write_text(replacement, encoding="utf-8")
             overlay = workspace / (name + ".json")
             overlay.write_text(json.dumps({"Replace": {
-                str(ROOT / "internal/windowsapp/session_windows.go"): str(changed)}}), encoding="utf-8")
+                str(ROOT / filename): str(changed)}}), encoding="utf-8")
             candidate = workspace / (name + ".test.exe")
             status, output = NATIVE.run(
                 [*build, "-overlay=" + str(overlay), "-o", candidate, "./internal/windowsapp"],
@@ -376,8 +388,8 @@ def execute(go="go", *, env=None):
                 raise ValueError("Windows Session negative control did not compile: " + name + "\n" + output[-8192:])
             owned = workspace / name
             owned.mkdir()
-            status, output = run_fixture(owned, candidate, shipping, "installed-selftest", captured)
-            if (not status or witness not in output or "--- FAIL: " + TEST + " (" not in output or
+            status, output = run_fixture(owned, candidate, shipping, scenario, captured)
+            if (not status or witness not in output or "--- FAIL: " + fixture_test(scenario) + " (" not in output or
                     "--- SKIP:" in output or "panic: test timed out" in output or "DATA RACE" in output):
                 raise ValueError("Native Session negative control missed its intended boundary: " + name + "\n" + output[-16384:])
             print("Native Windows Session negative control rejected: " + name, flush=True)
