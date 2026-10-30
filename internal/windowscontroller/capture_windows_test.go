@@ -333,6 +333,7 @@ func fixtureRetainedDOSLinkDiagnostic(t *testing.T, first, second string, captur
 		t.Log("retained alias Shell image did not match the captured actual file:", err)
 		return
 	}
+	fixtureSuspendedShellDiagnostic(t, image, nameFile)
 	pipe, err := NewPipe()
 	if err != nil {
 		t.Log("retained alias Shell pipe could not be owned:", err)
