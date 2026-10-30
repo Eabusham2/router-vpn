@@ -27,8 +27,8 @@ const desktopPhysicalCommandCapture = `{"schema":1,"exit_id":"selected-exit","pr
 
 func desktopPhysicalCommandWorkspace(t *testing.T) (string, *mobilemultihop.ExternalPolicy, *mobilemultihop.DesktopExternalPolicy) {
 	t.Helper()
-	if runtime.GOOS != "linux" {
-		t.Skip("ordinary physical command admission currently requires Linux")
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("ordinary physical command requires an admitted Linux or Windows host")
 	}
 	original, err := mobilemultihop.NewExternalPolicy(desktopPhysicalCommandSource, desktopPhysicalCommandCapture)
 	if err != nil {

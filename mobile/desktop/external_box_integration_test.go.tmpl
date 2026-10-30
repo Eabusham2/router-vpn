@@ -79,7 +79,17 @@ type desktopExternalIntegrationKernel struct {
 	deny     atomic.Bool
 	mu       sync.Mutex
 	grants   map[string]mobiletor.DesktopSocketGrant
+	issued   map[string]*desktopExternalIntegrationGrant
 	requests int
+}
+
+// Accept can be scheduled after the sender has already closed its socket and
+// revoked the permit. Retain a one-use receipt of each actual prior Grant;
+// looking only at current permits mistakes that joined teardown for a bypass.
+type desktopExternalIntegrationGrant struct {
+	grant    mobiletor.DesktopSocketGrant
+	at       time.Time
+	accepted bool
 }
 
 type desktopExternalIntegrationSource struct {
@@ -116,6 +126,20 @@ func (p *desktopExternalIntegrationKernel) Grant(ctx context.Context, q mobileto
 		return mobiletor.DesktopSocketReceipt{}, errors.New("local composition source refused a different grant")
 	}
 	p.mu.Lock()
+	if previous, ok := p.issued[q.SocketID]; ok {
+		identity := q
+		identity.Sequence = previous.grant.Sequence
+		if previous.grant != identity {
+			p.mu.Unlock()
+			return mobiletor.DesktopSocketReceipt{}, errors.New("local composition renewed a different captured socket")
+		}
+	}
+	if p.issued == nil {
+		p.issued = make(map[string]*desktopExternalIntegrationGrant)
+	}
+	if p.issued[q.SocketID] == nil {
+		p.issued[q.SocketID] = &desktopExternalIntegrationGrant{grant: q, at: time.Now()}
+	}
 	p.requests++
 	p.grants[q.SocketID] = q
 	p.mu.Unlock()
@@ -131,15 +155,17 @@ func (p *desktopExternalIntegrationKernel) Revoke(_ context.Context, q mobiletor
 	delete(p.grants, q.SocketID)
 	return nil
 }
-func (p *desktopExternalIntegrationKernel) grantedPeer(address net.Addr) bool {
+func (p *desktopExternalIntegrationKernel) grantedPeer(address net.Addr, acceptedAt time.Time) bool {
 	peer, err := netip.ParseAddrPort(address.String())
 	if err != nil {
 		return false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for _, grant := range p.grants {
-		if grant.Local == peer && grant.Remote == p.remote {
+	for _, receipt := range p.issued {
+		grant := receipt.grant
+		if !receipt.accepted && !receipt.at.After(acceptedAt) && grant.Local == peer && grant.Remote == p.remote {
+			receipt.accepted = true
 			return true
 		}
 	}
@@ -265,6 +291,7 @@ func (p *desktopExternalIntegrationPeer) start(t *testing.T) {
 			if err != nil {
 				return
 			}
+			acceptedAt := time.Now()
 			p.mu.Lock()
 			if p.closing {
 				p.mu.Unlock()
@@ -277,7 +304,7 @@ func (p *desktopExternalIntegrationPeer) start(t *testing.T) {
 			go func() {
 				defer p.workers.Done()
 				defer func() { c.Close(); p.mu.Lock(); delete(p.connections, c); p.mu.Unlock() }()
-				if !p.kernel.grantedPeer(c.RemoteAddr()) {
+				if !p.kernel.grantedPeer(c.RemoteAddr(), acceptedAt) {
 					p.bypassed.Add(1)
 					return
 				}
@@ -455,6 +482,80 @@ func desktopExternalIntegrationAddress(t *testing.T) (net.Interface, netip.Addr)
 	t.Fatal("ordinary composition requires an existing local non-loopback IPv4 interface")
 	return net.Interface{}, netip.Addr{}
 }
+
+// A TCP connection can finish its handshake while still waiting in the
+// listener backlog. Force that ordering so a queued Accept cannot be mistaken
+// for traffic sent after the exact client permit has already been retired.
+func desktopExternalIntegrationDelayedAccept(t *testing.T) {
+	t.Helper()
+	iface, address := desktopExternalIntegrationAddress(t)
+	listener, err := net.Listen("tcp4", net.JoinHostPort(address.String(), "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	source := &desktopExternalIntegrationSource{
+		capture: mobiletor.DesktopSocketCapture{SessionID: strings.Repeat("a", 32), SourceSHA256: strings.Repeat("b", 64), NetworkID: strings.Repeat("c", 32)},
+		owner:   mobiletor.DesktopSocketKernelOwner{Kind: "unix-isolated-uid", IdentitySHA256: strings.Repeat("d", 64), Generation: 1, ProcessID: uint32(os.Getpid())},
+	}
+	source.live.Store(true)
+	kernel := &desktopExternalIntegrationKernel{source: source, local: address, remote: listener.Addr().(*net.TCPAddr).AddrPort(), index: uint32(iface.Index), name: iface.Name, grants: make(map[string]mobiletor.DesktopSocketGrant)}
+	source.kernel = kernel
+	broker, err := mobiletor.NewDesktopSocketBroker(ctx, source.capture, kernel, source.live.Load)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := broker.Close(context.Background()); err != nil {
+			t.Error("delayed Accept broker did not join", err)
+		}
+		if err := source.Close(context.Background()); err != nil {
+			t.Error("delayed Accept source retained an active grant", err)
+		}
+	}()
+	beforeDial := time.Now()
+	connection, err := broker.DialContext(ctx, "tcp4", kernel.remote.String())
+	if err != nil {
+		t.Fatal("delayed Accept did not exercise a real broker socket", err)
+	}
+	if err = connection.Close(); err != nil {
+		t.Fatal("delayed Accept did not join the original socket", err)
+	}
+	kernel.mu.Lock()
+	remaining := len(kernel.grants)
+	kernel.mu.Unlock()
+	if remaining != 0 {
+		t.Fatal("delayed Accept fixture did not revoke before receiving the connection")
+	}
+	if err = listener.(*net.TCPListener).SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	peer, err := listener.Accept()
+	if err != nil {
+		t.Fatal("delayed Accept lost the already connected socket", err)
+	}
+	defer peer.Close()
+	acceptedAt := time.Now()
+	if kernel.grantedPeer(peer.RemoteAddr(), beforeDial) || !kernel.grantedPeer(peer.RemoteAddr(), acceptedAt) || kernel.grantedPeer(peer.RemoteAddr(), acceptedAt) {
+		t.Fatal("queued connection lost its one-use prior grant or accepted a future/replayed receipt")
+	}
+	unowned, err := (&net.Dialer{}).DialContext(ctx, "tcp4", kernel.remote.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unowned.Close()
+	other, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if kernel.grantedPeer(other.RemoteAddr(), time.Now()) {
+		t.Fatal("ungranted real connection reused a retired broker receipt")
+	}
+}
+
 func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalIntegrationCA, protocol, fault string) *desktopExternalIntegrationFixture {
 	t.Helper()
 	iface, address := desktopExternalIntegrationAddress(t)
@@ -550,8 +651,10 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 		if !f.source.closed.Load() {
 			t.Error("real Box discarded the OS source before joined cleanup")
 		}
+		// Join accepted peer work before observing its receipt failures.
+		f.peer.close()
 		if f.peer.bypassed.Load() != 0 {
-			t.Error("physical proxy received bytes without a preexisting broker grant")
+			t.Error("physical proxy accepted a connection without its prior broker grant")
 		}
 	})
 	service, ok := f.box.service.Get(mobilemultihop.DesktopExternalNetworkTag)
@@ -632,8 +735,8 @@ func (f *desktopExternalIntegrationFixture) replacement(callback func(adapter.St
 }
 
 func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("ordinary native physical admission currently requires Linux")
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("ordinary native physical admission requires Linux or Windows")
 	}
 	const marker = "ROUTERVPN_DESKTOP_EXTERNAL_COMPOSITION_CHILD"
 	if os.Getenv(marker) != "1" {
@@ -661,6 +764,19 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 		return
 	}
 	ca := newDesktopExternalIntegrationCA(t)
+	if runtime.GOOS == "windows" {
+		// Windows does not consume SSL_CERT_FILE. This isolated test child
+		// replaces only its own verifier roots; normal chain/name checks and
+		// the wrong-root negative still execute without a production TLS seam.
+		roots := x509.NewCertPool()
+		root, err := x509.ParseCertificate(ca.der)
+		if err != nil {
+			t.Fatal("isolated Windows fixture root is invalid", err)
+		}
+		roots.AddCert(root)
+		t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
+		x509.SetFallbackRoots(roots)
+	}
 	directory := t.TempDir()
 	rootPath := filepath.Join(directory, "fixture-ca.pem")
 	if err := os.WriteFile(rootPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.der}), 0600); err != nil {
@@ -668,6 +784,7 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 	}
 	t.Setenv("SSL_CERT_FILE", rootPath)
 	t.Setenv("SSL_CERT_DIR", directory)
+	t.Run("delayed-accept-retains-prior-grant", desktopExternalIntegrationDelayedAccept)
 	for _, protocol := range []string{"http-connect", "https-connect", "shadowsocks"} {
 		t.Run(protocol+"/proof-and-mtu", func(t *testing.T) {
 			f := newDesktopExternalIntegrationFixture(t, ca, protocol, "")

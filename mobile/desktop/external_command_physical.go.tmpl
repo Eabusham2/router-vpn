@@ -18,7 +18,7 @@ func routerVPNExternalCommandPhysical(files *routerVPNExternalFiles, original *m
 	if source == "" {
 		return nil, nil
 	}
-	if runtime.GOOS != "linux" || files == nil || original == nil || !routerVPNExternalSource.MatchString(source) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" || files == nil || original == nil || !routerVPNExternalSource.MatchString(source) {
 		return nil, routerVPNExternalFailure
 	}
 	policy, err := mobilemultihop.NewDesktopExternalPolicy(original, session, runtime.GOOS)

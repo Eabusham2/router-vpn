@@ -15,6 +15,7 @@ on:
       - 'deploy/build-native-runtime.py'
       - 'deploy/test_windows_physical_bootstrap*.py'
       - 'deploy/test_windows_physical_tunnel*.py'
+      - 'deploy/test_windows_external_physical.py'
       - 'deploy/fixtures/windows-physical-bootstrap/**'
       - '.github/workflows/windows-physical-bootstrap-contract.yml'
   pull_request:
@@ -30,6 +31,7 @@ on:
       - 'deploy/build-native-runtime.py'
       - 'deploy/test_windows_physical_bootstrap*.py'
       - 'deploy/test_windows_physical_tunnel*.py'
+      - 'deploy/test_windows_external_physical.py'
       - 'deploy/fixtures/windows-physical-bootstrap/**'
       - '.github/workflows/windows-physical-bootstrap-contract.yml'
   workflow_dispatch:
@@ -87,3 +89,12 @@ jobs:
           # address, default-route and DNS changes. No OS admission overlay.
           python deploy/test_windows_physical_tunnel.py --standalone
           if ($LASTEXITCODE -ne 0) { throw 'Actual Wintun/WFP ownership failed' }
+      - name: Captured ordinary native command and three-protocol proof composition
+        if: success() || failure()
+        shell: pwsh
+        run: |
+          # Actual protocol, selected DNS, proof and command tests use explicit
+          # injected OS/TUN boundaries. The WFP and Wintun gates above remain
+          # required; no legacy handoff or end-user activation is inferred.
+          python deploy/test_windows_external_physical.py --standalone
+          if ($LASTEXITCODE -ne 0) { throw 'Ordinary Windows native composition failed' }

@@ -295,7 +295,15 @@ func preflightDesktopExternalLaunch(ctx context.Context, binary string, launch *
 		return err
 	}
 	environment := desktopNativeEnvironment(os.Environ(), launch.root, launch.profileID, launch.endpoint)
-	if err = run(ctx, binary, []string{"routervpn-external", "--help"}, environment, directory); err != nil {
+	command := []string{"routervpn-external", "--help"}
+	if launch.external.physical != nil {
+		physical, captureErr := capturedDesktopExternalPhysical(launch.external)
+		if captureErr != nil || physical == nil || string(launch.config) != launch.external.physical.Config() {
+			return errors.New("external preflight lost its exact ordinary physical graph")
+		}
+		command = append(command, "--physical-source-sha256", physical.SourceSHA256)
+	}
+	if err = run(ctx, binary, command, environment, directory); err != nil {
 		return err
 	}
 	if err = desktopExternalDirectoryCurrent(workspace); err != nil {

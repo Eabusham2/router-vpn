@@ -295,7 +295,7 @@ func desktopNativeEnvironment(environment []string, root, profile, endpoint stri
 	for _, entry := range result {
 		name, _, _ := strings.Cut(entry, "=")
 		name = strings.ToUpper(name)
-		if name == "HOMEVPN_STANDARD_ENGINE" || name == "HOMEVPN_ROOT" || name == "HOMEVPN_PROFILE_ID" || name == "HOMEVPN_POLICY_PROFILE_ID" || name == "HOMEVPN_ENDPOINT" || name == "HOMEVPN_NATIVE_ENDPOINTS_JSON" || name == "HOMEVPN_NATIVE_EGRESS_JSON" || name == "HOMEVPN_NODE_SESSION" || name == "HOMEVPN_NODE_CONFIG_SHA256" {
+		if strings.HasPrefix(name, "HOMEVPN_EXTERNAL_PHYSICAL_") || name == "HOMEVPN_STANDARD_ENGINE" || name == "HOMEVPN_ROOT" || name == "HOMEVPN_PROFILE_ID" || name == "HOMEVPN_POLICY_PROFILE_ID" || name == "HOMEVPN_ENDPOINT" || name == "HOMEVPN_NATIVE_ENDPOINTS_JSON" || name == "HOMEVPN_NATIVE_EGRESS_JSON" || name == "HOMEVPN_NODE_SESSION" || name == "HOMEVPN_NODE_CONFIG_SHA256" {
 			continue
 		}
 		clean = append(clean, entry)
@@ -399,6 +399,12 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 		return errors.New("native launch graph differs from its captured configuration digest")
 	}
 	launch.configSHA256 = configSHA256
+	if launch.external != nil && launch.external.physical != nil {
+		physical, err := capturedDesktopExternalPhysical(launch.external)
+		if err != nil || physical == nil || physical.TargetOS != runtime.GOOS || physical.ConfigSHA256 != configSHA256 || string(launch.config) != launch.external.physical.Config() {
+			return errors.New("native staging lost its captured ordinary physical graph")
+		}
+	}
 	if launch.external == nil {
 		identifier, err := randomHex(16)
 		if err != nil {
@@ -407,6 +413,9 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 		launch.mtuSession = identifier
 	}
 	root, endpoint := launch.root, launch.endpoint
+	if launch.external != nil && launch.external.physical != nil {
+		endpoint = "" // The native owner grants sockets; no endpoint-wide allow rule.
+	}
 	if runtime.GOOS == "windows" && launch.external == nil {
 		capture, err := captureDesktopNodePhysical(launch)
 		if err != nil {
@@ -473,14 +482,19 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 			}
 		}
 		cmd.Env = append(clean, "HOMEVPN_POLICY_PROFILE_ID="+launch.policyProfileID, "HOMEVPN_EXTERNAL_SESSION="+launch.external.session)
-		if len(launch.external.physicalEndpoints) > 1 {
+		if launch.external.physical != nil {
+			cmd.Env, err = desktopExternalPhysicalEnvironment(cmd.Env, launch.external)
+			if err != nil {
+				return err
+			}
+		} else if len(launch.external.physicalEndpoints) > 1 {
 			encoded, err := json.Marshal(launch.external.physicalEndpoints)
 			if err != nil {
 				return err
 			}
 			cmd.Env = append(cmd.Env, "HOMEVPN_NATIVE_ENDPOINTS_JSON="+string(encoded))
 		}
-		if len(launch.external.physicalEgress) != 0 {
+		if launch.external.physical == nil && len(launch.external.physicalEgress) != 0 {
 			encoded, err := json.Marshal(launch.external.physicalEgress)
 			if err != nil {
 				return err
@@ -586,8 +600,10 @@ func finishDesktopNodeRuntime(a *app) error {
 		return errors.New("native desktop owner changed before stop committed")
 	}
 	if owner.external != nil {
+		owner.external.mu.Lock()
 		clear(owner.external.source)
 		clear(owner.external.capture)
+		owner.external.mu.Unlock()
 	}
 	if owner.directoryRoot != nil {
 		_ = owner.directoryRoot.Close()

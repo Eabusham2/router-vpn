@@ -32,7 +32,11 @@ func capturedDesktopMeasurementRuntime(launch *desktopNodeLaunch) (desktopMeasur
 			network: owner.network, measuredSource: "measured-tor-system-tun-transfer", mu: &owner.mu, mtu: &owner.mtu,
 			pathMu: &owner.pathMu, pathGeneration: &owner.pathGeneration, pathFailed: &owner.pathFailed}
 	} else if owner := launch.external; owner != nil {
-		identity = desktopMeasurementRuntime{session: owner.session, source: owner.expected.SourceSHA256, config: owner.expected.ConfigSHA256, node: owner.expected.ExitID, entry: owner.expected.EntryID,
+		source, config, err := desktopExternalMeasurementIdentity(owner)
+		if err != nil {
+			return identity, err
+		}
+		identity = desktopMeasurementRuntime{session: owner.session, source: source, config: config, node: owner.expected.ExitID, entry: owner.expected.EntryID,
 			network: owner.network, measuredSource: "measured-public-system-tun-transfer", mu: &owner.mu, mtu: &owner.mtu,
 			pathMu: &owner.pathMu, pathGeneration: &owner.pathGeneration, pathFailed: &owner.pathFailed}
 	} else {

@@ -31,7 +31,11 @@ func capturedDesktopDNSRuntime(launch *desktopNodeLaunch) (desktopDNSRuntimeIden
 		identity = desktopDNSRuntimeIdentity{session: metadata.SessionID, source: metadata.SourceSHA256, config: metadata.ConfigSHA256, node: metadata.NodeID,
 			network: owner.network, currentNetwork: owner.currentNetworkIdentity, lock: &owner.dnsMu, generation: &owner.dnsGeneration, failed: &owner.dnsFailed}
 	} else if owner := launch.external; owner != nil {
-		identity = desktopDNSRuntimeIdentity{session: owner.session, source: owner.expected.SourceSHA256, config: owner.expected.ConfigSHA256, node: owner.expected.ExitID,
+		source, config, err := desktopExternalMeasurementIdentity(owner)
+		if err != nil {
+			return identity, err
+		}
+		identity = desktopDNSRuntimeIdentity{session: owner.session, source: source, config: config, node: owner.expected.ExitID,
 			network: owner.network, currentNetwork: owner.currentNetworkIdentity, lock: &owner.dnsMu, generation: &owner.dnsGeneration, failed: &owner.dnsFailed}
 	} else {
 		return identity, errors.New("native DNS has no captured external or Tor runtime")

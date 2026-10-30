@@ -20,6 +20,7 @@ function Start-Sleep{}
 function Start-Process{
     param($FilePath,$ArgumentList,$WorkingDirectory,[switch]$PassThru,$WindowStyle)
     [IO.File]::WriteAllText($env:WRAPPER_STARTED,'started')
+    [IO.File]::WriteAllText($env:WRAPPER_NATIVE_ARGUMENTS,(ConvertTo-Json -InputObject @($ArgumentList) -Compress))
     $script:FixtureChild=[pscustomobject]@{Id=111;StartTime=[datetime]'2026-01-01T00:00:00Z';Path=[string]$FilePath;HasExited=($env:WRAPPER_CASE-eq'early');ExitCode=23}
     $script:FixtureChild|Add-Member ScriptMethod Refresh {}
     return $script:FixtureChild
@@ -41,10 +42,23 @@ Set-Alias -Name kill -Value Stop-Process -Scope Script -Option AllScope
 '@
 [IO.File]::WriteAllText((Join-Path $FixtureClient 'Private-RouterVPN-State.ps1'),(". '"+$RealPrivate+"'`n"+$Overrides),[Text.UTF8Encoding]::new($false))
 $Core=Join-Path $TaskRoot 'core.ps1'
-[IO.File]::WriteAllText($Core,'param([string]$Mode); if($Mode-ne''check''){throw ''Unexpected native invocation''}; exit ([int]$env:WRAPPER_CHECK_RESULT)',[Text.UTF8Encoding]::new($false))
+[IO.File]::WriteAllText($Core,'param([string]$Mode); if($Mode-eq''routervpn-external''){if($env:WRAPPER_CASE-eq''physical-command-missing''){exit 29};exit 0}; if($Mode-ne''check''){throw ''Unexpected native invocation''}; exit ([int]$env:WRAPPER_CHECK_RESULT)',[Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText((Join-Path $FixtureClient 'Select-Standard-Engine.ps1'),'function Get-RouterVPNStandardEngine($Root){return $env:WRAPPER_CORE}',[Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText((Join-Path $FixtureClient 'windows-kill-switch.ps1'),'param($Action,$Root,$Endpoint,$TunnelAlias);[IO.File]::AppendAllText($env:WRAPPER_POLICY,($Action+"`n"));exit 0',[Text.UTF8Encoding]::new($false))
-$Names=@('HOMEVPN_ROOT','HOMEVPN_STANDARD_ENGINE','HOMEVPN_EXTERNAL_SESSION','WRAPPER_RUNTIME','WRAPPER_CORE','WRAPPER_POLICY','WRAPPER_STARTED','WRAPPER_STOPPED','WRAPPER_CASE','WRAPPER_CHECK_RESULT','WRAPPER_DISPATCH_LOG','WRAPPER_POLICY_FAIL')
+$Protection=@'
+function Assert-RouterVPNNoLegacyWindowsProtection{
+    [IO.File]::AppendAllText($env:WRAPPER_PROTECTION,"legacy-read`n")
+    if($env:WRAPPER_CASE-eq'physical-legacy'){throw 'Existing captured legacy owner was retained.'}
+}
+function Invoke-RouterVPNOwnedWindowsProtection($ClientDirectory,$Operation){
+    if($Operation-cne'status'){throw 'Wrapper attempted a native protection mutation.'}
+    [IO.File]::AppendAllText($env:WRAPPER_PROTECTION,"native-read`n")
+    if($env:WRAPPER_CASE-eq'physical-native-read-failed'){throw 'Actual native observation failed.'}
+    return [pscustomobject]@{active=$false;policy='off';phase='off'}
+}
+'@
+[IO.File]::WriteAllText((Join-Path $FixtureClient 'Private-RouterVPN-Protection.ps1'),$Protection,[Text.UTF8Encoding]::new($false))
+$Names=@('HOMEVPN_ROOT','HOMEVPN_STANDARD_ENGINE','HOMEVPN_EXTERNAL_SESSION','HOMEVPN_EXTERNAL_PHYSICAL_SOURCE_SHA256','HOMEVPN_EXTERNAL_PHYSICAL_CONFIG_SHA256','HOMEVPN_ENDPOINT','HOMEVPN_NATIVE_ENDPOINTS_JSON','HOMEVPN_NATIVE_EGRESS_JSON','HOMEVPN_NODE_SESSION','HOMEVPN_NODE_CONFIG_SHA256','HOMEVPN_TOR_SESSION','WRAPPER_RUNTIME','WRAPPER_CORE','WRAPPER_POLICY','WRAPPER_STARTED','WRAPPER_STOPPED','WRAPPER_CASE','WRAPPER_CHECK_RESULT','WRAPPER_DISPATCH_LOG','WRAPPER_POLICY_FAIL','WRAPPER_NATIVE_ARGUMENTS','WRAPPER_PROTECTION')
 $Saved=@{};foreach($Name in $Names){$Saved[$Name]=[Environment]::GetEnvironmentVariable($Name,'Process')}
 $Shell=(Get-Process -Id $PID).Path
 
@@ -99,23 +113,49 @@ try{
     Assert-ShippingKillSwitchDispatch $Root 'client/native-multihop-windows.ps1' 'Invoke-RouterVPNNativeKillSwitch' @('release','check','prepare')
     Assert-ShippingKillSwitchDispatch $Root 'client/native-openvpn-windows.ps1' 'Invoke-RouterVPNOpenVPNKillSwitch' @('release','check','prepare','tunnel')
     Assert-ShippingKillSwitchDispatch $Root 'client/native-tor-bridge-windows.ps1' 'Invoke-RouterVPNTorKillSwitch' @('check','prepare')
-    foreach($Case in @('check','failed-check','down','up','changed','early')){
+    foreach($Case in @('check','failed-check','down','up','changed','early','physical-check','physical-up','physical-malformed','physical-config-changed','physical-legacy','physical-native-read-failed','physical-command-missing','physical-endpoint','physical-node','physical-static-egress')){
         $PrivateRoot=Join-Path $TaskRoot $Case;$Runtime=Join-Path $PrivateRoot 'run/native-node/one';[void][IO.Directory]::CreateDirectory($Runtime)
         [IO.File]::WriteAllText((Join-Path $Runtime 'sing-box.json'),'{}');[IO.File]::WriteAllText((Join-Path $Runtime 'replacement.marker'),'retained')
         $env:HOMEVPN_ROOT=$PrivateRoot;$env:HOMEVPN_STANDARD_ENGINE='native';$env:HOMEVPN_EXTERNAL_SESSION=('a'*32)
+        foreach($Name in @('HOMEVPN_EXTERNAL_PHYSICAL_SOURCE_SHA256','HOMEVPN_EXTERNAL_PHYSICAL_CONFIG_SHA256','HOMEVPN_ENDPOINT','HOMEVPN_NATIVE_ENDPOINTS_JSON','HOMEVPN_NATIVE_EGRESS_JSON','HOMEVPN_NODE_SESSION','HOMEVPN_NODE_CONFIG_SHA256','HOMEVPN_TOR_SESSION')){[Environment]::SetEnvironmentVariable($Name,$null,'Process')}
+        $Physical=$Case.StartsWith('physical-',[StringComparison]::Ordinal)
+        if($Physical){
+            $env:HOMEVPN_EXTERNAL_PHYSICAL_SOURCE_SHA256=('b'*64)
+            $env:HOMEVPN_EXTERNAL_PHYSICAL_CONFIG_SHA256=(Get-FileHash -LiteralPath (Join-Path $Runtime 'sing-box.json') -Algorithm SHA256).Hash.ToLowerInvariant()
+            switch($Case){
+                'physical-malformed'{$env:HOMEVPN_EXTERNAL_PHYSICAL_SOURCE_SHA256=('B'*64)}
+                'physical-config-changed'{[IO.File]::WriteAllText((Join-Path $Runtime 'sing-box.json'),'{"foreign":true}')}
+                'physical-node'{$env:HOMEVPN_NODE_SESSION=('c'*32);$env:HOMEVPN_NODE_CONFIG_SHA256=('d'*64)}
+                'physical-static-egress'{$env:HOMEVPN_NATIVE_EGRESS_JSON='[]'}
+            }
+        }
         $env:WRAPPER_RUNTIME=$Runtime;$env:WRAPPER_CORE=$Core;$env:WRAPPER_CASE=$Case;$env:WRAPPER_CHECK_RESULT=if($Case-eq'failed-check'){'19'}else{'0'}
         $env:WRAPPER_POLICY=Join-Path $PrivateRoot 'policy.log';$env:WRAPPER_STARTED=Join-Path $PrivateRoot 'started';$env:WRAPPER_STOPPED=Join-Path $PrivateRoot 'stopped'
-        $Action=if($Case-eq'check'-or$Case-eq'failed-check'){'check'}elseif($Case-eq'down'){'down'}else{'up'}
+        $env:WRAPPER_NATIVE_ARGUMENTS=Join-Path $PrivateRoot 'arguments.json';$env:WRAPPER_PROTECTION=Join-Path $PrivateRoot 'protection.log'
+        $Action=if($Case-eq'check'-or$Case-eq'failed-check'-or$Case-eq'physical-check'){'check'}elseif($Case-eq'down'){'down'}else{'up'}
         $Log=Join-Path $PrivateRoot 'wrapper.log'
         $ErrorLog=Join-Path $PrivateRoot 'wrapper.err'
-        $Arguments=@('-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$Wrapper+'"'),'-Action',$Action,'-RuntimeDir',('"'+$Runtime+'"'),'-Endpoint','203.0.113.20','-TunnelAlias','router-vpn')
+        $CapturedEndpoint=if($Physical-and$Case-ne'physical-endpoint'){'""'}else{'203.0.113.20'}
+        $Arguments=@('-NoProfile','-ExecutionPolicy','Bypass','-File',('"'+$Wrapper+'"'),'-Action',$Action,'-RuntimeDir',('"'+$Runtime+'"'),'-Endpoint',$CapturedEndpoint,'-TunnelAlias','router-vpn')
         $Run=Start-Process -FilePath $Shell -ArgumentList $Arguments -RedirectStandardOutput $Log -RedirectStandardError $ErrorLog -Wait -PassThru
         $Code=$Run.ExitCode
-        $ExpectedFailure=$Case-eq'failed-check'-or$Case-eq'early'
+        $ExpectedFailure=$Case-eq'failed-check'-or$Case-eq'early'-or($Physical-and$Case-cnotin@('physical-check','physical-up'))
         Assert-Wrapper (($Code-ne0)-eq$ExpectedFailure) ('Unexpected '+$Case+' result: '+[IO.File]::ReadAllText($Log)+[IO.File]::ReadAllText($ErrorLog))
         Assert-Wrapper ([IO.File]::ReadAllText((Join-Path $Runtime 'replacement.marker'))-ceq'retained') 'Wrapper erased the current workspace.'
-        $Policies=if(Test-Path -LiteralPath $env:WRAPPER_POLICY){@([IO.File]::ReadAllLines($env:WRAPPER_POLICY))}else{@()}
+        $Policies=@()
+        if(Test-Path -LiteralPath $env:WRAPPER_POLICY){$Policies=@([IO.File]::ReadAllLines($env:WRAPPER_POLICY))}
         Assert-Wrapper (-not($Policies-contains'release')) 'Wrapper released protection outside controller ownership.'
+        if($Physical){
+            Assert-Wrapper ($Policies.Count-eq0) 'Captured physical path fell back to a legacy endpoint-wide firewall operation.'
+            if($ExpectedFailure){Assert-Wrapper (-not(Test-Path -LiteralPath $env:WRAPPER_STARTED)) 'Failed physical preparation started a native child.'}
+            if($Case-eq'physical-check'-or$Case-eq'physical-up'){
+                Assert-Wrapper (([IO.File]::ReadAllLines($env:WRAPPER_PROTECTION)-join',')-ceq'legacy-read,native-read') 'Physical admission omitted its read-only protection checks.'
+            }
+            if($Case-eq'physical-up'){
+                $ActualArguments=@([IO.File]::ReadAllText($env:WRAPPER_NATIVE_ARGUMENTS)|ConvertFrom-Json)
+                Assert-Wrapper ($ActualArguments.Count-eq7-and$ActualArguments[0]-ceq'routervpn-external'-and$ActualArguments[3]-ceq'--session'-and$ActualArguments[4]-ceq('a'*32)-and$ActualArguments[5]-ceq'--physical-source-sha256'-and$ActualArguments[6]-ceq('b'*64)) 'Actual native child lost its captured physical identity.'
+            }
+        }
         if($Action-eq'check'-or$Action-eq'down'){
             Assert-Wrapper (-not(Test-Path -LiteralPath $env:WRAPPER_STARTED)-and-not(Test-Path -LiteralPath $env:WRAPPER_STOPPED)) 'Check/down changed process ownership.'
             Assert-Wrapper (-not($Policies-contains'prepare')) 'Check/down prepared the firewall.'

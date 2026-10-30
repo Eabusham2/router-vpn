@@ -40,6 +40,7 @@ type desktopExternalRuntime struct {
 	profile, entry                         common.RouterProfile
 	physicalEndpoints                      []string
 	physicalEgress                         []nativeopenvpn.LayerEgress
+	physical                               *mobilemultihop.DesktopExternalPolicy
 	mtu                                    *desktopMTUSession
 	direct                                 bool
 	started                                time.Time
@@ -64,9 +65,10 @@ func (o *desktopExternalRuntime) currentNetworkIdentity() string {
 
 type desktopExternalProof struct {
 	mobilemultihop.ExternalProofResult
-	Healthy     bool            `json:"healthy"`
-	HeartbeatAt int64           `json:"heartbeat_at"`
-	Progress    json.RawMessage `json:"progress,omitempty"`
+	Physical    *mobilemultihop.DesktopExternalMetadata `json:"desktop_physical,omitempty"`
+	Healthy     bool                                    `json:"healthy"`
+	HeartbeatAt int64                                   `json:"heartbeat_at"`
+	Progress    json.RawMessage                         `json:"progress,omitempty"`
 }
 
 type desktopExternalStop struct {
@@ -77,12 +79,13 @@ type desktopExternalStop struct {
 }
 
 type desktopExternalProgressRecord struct {
-	Schema       int                     `json:"schema"`
-	SessionID    string                  `json:"session_id"`
-	SourceSHA256 string                  `json:"source_sha256"`
-	ConfigSHA256 string                  `json:"config_sha256"`
-	Stage        string                  `json:"stage"`
-	Progress     mobilemultihop.Progress `json:"progress"`
+	Physical     *mobilemultihop.DesktopExternalMetadata `json:"desktop_physical,omitempty"`
+	Schema       int                                     `json:"schema"`
+	SessionID    string                                  `json:"session_id"`
+	SourceSHA256 string                                  `json:"source_sha256"`
+	ConfigSHA256 string                                  `json:"config_sha256"`
+	Stage        string                                  `json:"stage"`
+	Progress     mobilemultihop.Progress                 `json:"progress"`
 }
 
 // Exactly one goroutine reaps the wrapper. Startup, heartbeat monitoring and
@@ -353,6 +356,9 @@ func validateDesktopExternalProof(raw []byte, owner *desktopExternalRuntime, now
 	if owner == nil || len(raw) == 0 || len(raw) > 256<<10 || decodeRelayControlJSON(raw, &proof) != nil {
 		return proof, bad
 	}
+	if !desktopExternalPhysicalReceipt(owner, proof.Physical) {
+		return proof, bad
+	}
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
 	expected := owner.expected
@@ -426,7 +432,7 @@ func (a *app) readDesktopExternalProgress(launch *desktopNodeLaunch) error {
 	}
 	owner := launch.external
 	var record desktopExternalProgressRecord
-	if decodeRelayControlJSON(raw, &record) != nil || record.Schema != 1 || record.SessionID != owner.session || record.SourceSHA256 != owner.expected.SourceSHA256 || record.ConfigSHA256 != owner.expected.ConfigSHA256 || len(record.Progress.Measurements) > 8 {
+	if decodeRelayControlJSON(raw, &record) != nil || record.Schema != 1 || record.SessionID != owner.session || record.SourceSHA256 != owner.expected.SourceSHA256 || record.ConfigSHA256 != owner.expected.ConfigSHA256 || len(record.Progress.Measurements) > 8 || !desktopExternalPhysicalReceipt(owner, record.Physical) {
 		return errors.New("external progress does not belong to the captured graph")
 	}
 	switch record.Stage {

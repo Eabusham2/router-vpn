@@ -159,7 +159,7 @@ func desktopSelectedStandardEngineEnvironment(environment []string, engine strin
 	result := make([]string, 0, len(environment)+1)
 	for _, value := range environment {
 		upper := strings.ToUpper(value)
-		if !strings.HasPrefix(upper, "HOMEVPN_STANDARD_ENGINE=") && !strings.HasPrefix(upper, "HOMEVPN_AMNEZIA_CONTROLLER=") && !strings.HasPrefix(upper, "HOMEVPN_AMNEZIA_PACKAGE=") && !strings.HasPrefix(upper, "HOMEVPN_NATIVE_CONTROLLER=") && !strings.HasPrefix(upper, "HOMEVPN_NATIVE_PACKAGE=") && !strings.HasPrefix(upper, "HOMEVPN_EXTERNAL_SESSION=") && !strings.HasPrefix(upper, "HOMEVPN_NATIVE_ENDPOINTS_JSON=") && !strings.HasPrefix(upper, "HOMEVPN_NATIVE_EGRESS_JSON=") {
+		if !strings.HasPrefix(upper, "HOMEVPN_EXTERNAL_PHYSICAL_") && !strings.HasPrefix(upper, "HOMEVPN_STANDARD_ENGINE=") && !strings.HasPrefix(upper, "HOMEVPN_AMNEZIA_CONTROLLER=") && !strings.HasPrefix(upper, "HOMEVPN_AMNEZIA_PACKAGE=") && !strings.HasPrefix(upper, "HOMEVPN_NATIVE_CONTROLLER=") && !strings.HasPrefix(upper, "HOMEVPN_NATIVE_PACKAGE=") && !strings.HasPrefix(upper, "HOMEVPN_EXTERNAL_SESSION=") && !strings.HasPrefix(upper, "HOMEVPN_NATIVE_ENDPOINTS_JSON=") && !strings.HasPrefix(upper, "HOMEVPN_NATIVE_EGRESS_JSON=") {
 			result = append(result, value)
 		}
 	}

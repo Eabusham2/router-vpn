@@ -110,8 +110,8 @@ type desktopExternalBoxFixture struct {
 
 func newDesktopExternalBoxFixture(t *testing.T, edit func(map[string]any)) *desktopExternalBoxFixture {
 	t.Helper()
-	if runtime.GOOS != "linux" {
-		t.Skip("ordinary physical Box admission currently requires Linux")
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("ordinary physical Box requires an admitted Linux or Windows host")
 	}
 	const source = `{"inbounds":[{"type":"tun","tag":"tun-in","interface_name":"router-vpn","address":["172.29.93.1/30","fd29:93::1/126"],"mtu":1280,"auto_route":true,"strict_route":true,"stack":"system"}],"outbounds":[{"type":"http","tag":"custom-exit","server":"192.168.50.7","server_port":8443,"username":"captured-user","password":"captured-secret"}],"route":{"final":"custom-exit","auto_detect_interface":true}}`
 	const capture = `{"schema":1,"exit_id":"selected-exit","protocol":"http-connect","expected_public_ip":"203.0.113.88","profile":{"id":"selected-exit","node_kind":"external","external":{"protocol":"http-connect","expected_public_ip":"203.0.113.88","http_connect":{"host":"192.168.50.7","port":8443,"username":"captured-user","password":"captured-secret"}},"dns_mode":"custom","dns_protocol":"tcp","dns_host":"192.168.50.53","dns_port":5353,"mtu_policy":"auto","home_lan_access":false,"ipv6_mode":"off","kill_switch_policy":"always"}}`

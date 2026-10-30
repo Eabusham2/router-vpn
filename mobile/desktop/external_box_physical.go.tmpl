@@ -20,7 +20,7 @@ import (
 // match this Box. The network service constructs its OS owner in Initialize,
 // before a TUN can change the physical routes. Preparation is not proof.
 func (s *Box) RouterVPNDesktopExternalPreparePhysical(policy *mobilemultihop.DesktopExternalPolicy) error {
-	if runtime.GOOS != "linux" {
+	if !routerVPNDesktopExternalPhysicalAvailable(policy) {
 		return errors.New("this native operating system has no admitted ordinary external socket factory")
 	}
 	_, _, network, err := s.routerVPNDesktopExternalPhysical(policy)
@@ -58,7 +58,7 @@ func (s *Box) routerVPNDesktopExternalPhysical(policy *mobilemultihop.DesktopExt
 // against the actual Box above. Neither identity is relabeled as the other.
 // A successful proof also owns the exact activated physical service and TUN.
 func (s *Box) RouterVPNDesktopExternalCreateProof(policy *mobilemultihop.DesktopExternalPolicy) (proof *RouterVPNExternalProofRequest, failure error) {
-	if runtime.GOOS != "linux" {
+	if !routerVPNDesktopExternalPhysicalAvailable(policy) {
 		return nil, errors.New("this native operating system has no admitted ordinary external socket factory")
 	}
 	compiled, capture, network, err := s.routerVPNDesktopExternalPhysical(policy)
@@ -106,6 +106,18 @@ func (s *Box) RouterVPNDesktopExternalCreateProof(policy *mobilemultihop.Desktop
 		return nil, err
 	}
 	return &RouterVPNExternalProofRequest{request: request, engine: engine}, nil
+}
+
+func routerVPNDesktopExternalPhysicalAvailable(policy *mobilemultihop.DesktopExternalPolicy) bool {
+	if runtime.GOOS == "linux" {
+		return true // Preserve the existing complete Linux factory contract.
+	}
+	if runtime.GOOS != "windows" || policy == nil || policy.Validate() != nil {
+		return false
+	}
+	meta := policy.Metadata()
+	return meta.TargetOS == "windows" && !meta.SOCKSUDPAssociationRequired &&
+		(meta.Protocol == "http-connect" || meta.Protocol == "https-connect" || meta.Protocol == "shadowsocks")
 }
 
 // Reader state is read or changed under the owning engine's lock after initial

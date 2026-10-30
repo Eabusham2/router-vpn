@@ -153,6 +153,16 @@ jobs:
         run: |
           python deploy/test_desktop_windows_traffic.py
           if ($LASTEXITCODE -ne 0) { throw 'Actual owned Windows WFP traffic gate failed' }
+      - name: Captured ordinary external host and native wrapper identities
+        if: ${{ success() || failure() }}
+        shell: pwsh
+        run: |
+          go test -race -mod=readonly ./cmd/client -run '^TestDesktopExternalPhysical' -count=1 -timeout=120s
+          if ($LASTEXITCODE -ne 0) { throw 'Windows ordinary physical host capture failed' }
+          foreach ($shell in @('pwsh', 'powershell.exe')) {
+            & $shell -NoProfile -ExecutionPolicy Bypass -File client/test-windows-native-wrapper-ownership.ps1
+            if ($LASTEXITCODE -ne 0) { throw "Windows ordinary physical wrapper failed in $shell" }
+          }
       - name: Owned Windows protection and portable package dispatch
         if: ${{ success() || failure() }}
         shell: pwsh
