@@ -160,7 +160,7 @@ telemetry=(ROOT/'client/RouterVPN-Windows-Telemetry.ps1').read_text(encoding='ut
 for marker in (
     "Assert-RouterVPNMutationIdle 'selecting a node from the VPN globe'",
     "Assert-RouterVPNMutationIdle 'selecting a Router VPN node'",
-    "UnifiedFastestNode').IsEnabled=($Payload.status-and-not(Test-RouterVPNMutationBusyFromStatus $Payload.status))",
+    "UnifiedFastestNode').IsEnabled=($Payload.status-and-not$script:UnifiedProtectionPending-and-not(Test-RouterVPNMutationBusyFromStatus $Payload.status))",
     "status=@('GET','/api/status',$null)",
     "function StartUnifiedTelemetryRefresh",
     "function CancelUnifiedTelemetryRefreshAsync",
