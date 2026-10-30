@@ -210,7 +210,11 @@ func main() {
 	h.HandleFunc("/api/forward", a.forward)
 	h.HandleFunc("/api/forward/clear", a.clearForward)
 	extraRoutes(h, a)
-	log.Printf("Router VPN client UI: http://%s", c.Listen)
+	scheme := "http"
+	if ownedController != nil && ownedController.pinnedTLS != nil {
+		scheme = "https"
+	}
+	log.Printf("Router VPN client UI: %s://%s", scheme, c.Listen)
 	if err := runClientHTTP(a, c.Listen, h); err != nil {
 		log.Fatal(err) // All owned runtimes have completed checked cleanup.
 	}
