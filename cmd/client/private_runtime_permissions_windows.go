@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"sync/atomic"
 	"syscall"
 	"unsafe"
 )
@@ -63,6 +64,15 @@ type windowsRuntimeSecurity struct {
 	dacl       *windowsRuntimeACL
 }
 
+// The elevated controller keeps the authenticated original desktop principal
+// separately from its administrator token. This capture is never populated
+// from an environment variable, file, HTTP request or a claimed SID.
+type windowsRuntimeOriginalOwner struct {
+	desktopSID, controllerSID string
+}
+
+var windowsRuntimeOriginalOwnerCapture atomic.Pointer[windowsRuntimeOriginalOwner]
+
 func (s windowsRuntimeSecurity) close() {
 	if s.descriptor != nil {
 		_, _ = syscall.LocalFree(syscall.Handle(s.descriptor))
@@ -70,6 +80,9 @@ func (s windowsRuntimeSecurity) close() {
 }
 
 func windowsRuntimeCurrentUser() (string, error) {
+	if captured := windowsRuntimeOriginalOwnerCapture.Load(); captured != nil {
+		return captured.desktopSID, nil
+	}
 	token, err := syscall.OpenCurrentProcessToken()
 	if err != nil {
 		return "", err
@@ -97,7 +110,11 @@ func windowsRuntimeTrustedSID(sid, user string) bool {
 	// These are the same principals permitted by the installed private-root
 	// hardener. Elevated Windows tokens may create Administrators-owned files;
 	// that owner is already inside this explicitly trusted boundary.
-	return sid == user || sid == "S-1-5-18" || sid == "S-1-5-32-544"
+	if sid == user || sid == "S-1-5-18" || sid == "S-1-5-32-544" {
+		return true
+	}
+	captured := windowsRuntimeOriginalOwnerCapture.Load()
+	return captured != nil && captured.desktopSID == user && captured.controllerSID == sid
 }
 
 func windowsRuntimeInspectSecurity(file *os.File) (windowsRuntimeSecurity, error) {
@@ -115,6 +132,14 @@ func windowsRuntimeInspectSecurity(file *os.File) (windowsRuntimeSecurity, error
 }
 
 func windowsRuntimeValidateSecurity(security windowsRuntimeSecurity, user string) error {
+	return windowsRuntimeValidateSecurityMode(security, user, false)
+}
+
+func windowsRuntimeValidateCodeSecurity(security windowsRuntimeSecurity, user string) error {
+	return windowsRuntimeValidateSecurityMode(security, user, true)
+}
+
+func windowsRuntimeValidateSecurityMode(security windowsRuntimeSecurity, user string, publicRead bool) error {
 	owner, err := windowsRuntimeSIDString(security.owner)
 	if err != nil || !windowsRuntimeTrustedSID(owner, user) {
 		return errors.New("private runtime has an untrusted Windows owner")
@@ -159,10 +184,13 @@ func windowsRuntimeValidateSecurity(security windowsRuntimeSecurity, user string
 			return err
 		}
 		if ace.Type == windowsRuntimeAllowACE {
-			if !windowsRuntimeTrustedSID(sid, user) {
+			mask := *(*uint32)(unsafe.Add(unsafe.Pointer(ace), 4))
+			// Immutable package code may be publicly readable. Its owner and
+			// every effective writer must still belong to the captured boundary.
+			readOnly := publicRead && (ace.Flags&windowsRuntimeInheritOnlyACE != 0 || mask&^uint32(0xa01200a9) == 0)
+			if !windowsRuntimeTrustedSID(sid, user) && !readOnly {
 				return errors.New("private runtime DACL grants access outside its Windows owner boundary")
 			}
-			mask := *(*uint32)(unsafe.Add(unsafe.Pointer(ace), 4))
 			if mask != 0 && ace.Flags&windowsRuntimeInheritOnlyACE == 0 {
 				hasGrant = true
 			}
@@ -203,6 +231,9 @@ func windowsRuntimeObjectUnchanged(file *os.File, info os.FileInfo) error {
 	}
 	if attributes.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
 		return errors.New("private runtime object is a Windows reparse point")
+	}
+	if info.Mode().IsRegular() && attributes.NumberOfLinks != 1 {
+		return errors.New("private runtime file has another Windows hardlink")
 	}
 	return nil
 }
@@ -297,7 +328,7 @@ func preparePrivateRuntimeDirectoryPermissions(path string, info os.FileInfo) er
 	}
 	information := uint32(windowsRuntimeDACLInformation | windowsRuntimeProtectedDACL)
 	var newOwner uintptr
-	if owner != user {
+	if owner != user && windowsRuntimeOriginalOwnerCapture.Load() == nil {
 		information |= windowsRuntimeOwnerInformation
 		newOwner = uintptr(unsafe.Pointer(security.owner))
 	}

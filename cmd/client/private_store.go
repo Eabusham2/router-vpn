@@ -61,6 +61,9 @@ func hardenPrivateRegular(path string) error {
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return fmt.Errorf("refusing non-regular/symlink private store %s", path)
 	}
+	if handled, err := validateOwnedPrivateStoreFile(path, info); handled || err != nil {
+		return err
+	}
 	if info.Mode().Perm()&0o077 != 0 {
 		if err := os.Chmod(path, 0o600); err != nil {
 			return fmt.Errorf("harden private store permissions %s: %w", path, err)
@@ -72,6 +75,9 @@ func hardenPrivateRegular(path string) error {
 func readPrivateRegular(path string, limit int64) ([]byte, error) {
 	if limit <= 0 || limit > maxPrivateStoreBytes {
 		limit = maxPrivateStoreBytes
+	}
+	if body, handled, err := readOwnedPrivateStoreFile(path, limit); handled || err != nil {
+		return body, err
 	}
 	if err := hardenPrivateRegular(path); err != nil {
 		return nil, err

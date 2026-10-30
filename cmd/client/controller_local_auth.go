@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"sync"
 
+	"router-vpn/internal/common"
 	"router-vpn/internal/controllertransport"
 )
 
@@ -34,6 +35,18 @@ type ownedDesktopController struct {
 	processLock *os.File
 	closeOnce   sync.Once
 	pinnedTLS   *controllertransport.Identity
+	nativeOwner ownedDesktopNativeOwner
+}
+
+// Native Windows ownership is a retained kernel process/pipe capture, not a
+// fabricated Unix UID or a request/environment flag. Its data layout also
+// belongs to that capture so the portable and installed roots cannot mix.
+type ownedDesktopNativeOwner interface {
+	Captured() bool
+	Alive() error
+	Close() error
+	CaptureConfiguration(common.ClientConfig) (common.ClientConfig, error)
+	CaptureModes([]common.Mode) ([]common.Mode, error)
 }
 
 // Keep the Linux launcher API compatible while both installed desktops share
@@ -45,6 +58,9 @@ func (c *ownedDesktopController) close() {
 		return
 	}
 	c.closeOnce.Do(func() {
+		if c.nativeOwner != nil {
+			_ = c.nativeOwner.Close()
+		}
 		for _, file := range []*os.File{c.input, c.processLock, c.installLock} {
 			if file != nil {
 				_ = file.Close()
@@ -53,9 +69,40 @@ func (c *ownedDesktopController) close() {
 	})
 }
 
+func (c *ownedDesktopController) validateConfiguration(config *common.ClientConfig) error {
+	if c != nil && c.nativeOwner != nil {
+		captured, err := c.nativeOwner.CaptureConfiguration(*config)
+		if err == nil {
+			*config = captured
+		}
+		return err
+	}
+	return validateNativeOwnedConfiguration(*config)
+}
+
+func (c *ownedDesktopController) captureModes(modes []common.Mode) ([]common.Mode, error) {
+	if c != nil && c.nativeOwner != nil {
+		return c.nativeOwner.CaptureModes(modes)
+	}
+	return modes, nil
+}
+
+func (c *ownedDesktopController) hasCapturedCaller() bool {
+	if c == nil {
+		return false
+	}
+	if c.nativeOwner != nil {
+		return c.callerUID == 0 && c.nativeOwner.Captured()
+	}
+	return c.callerUID != 0
+}
+
 func (c *ownedDesktopController) retired() bool {
 	if c == nil {
 		return false
+	}
+	if c.nativeOwner != nil && c.nativeOwner.Alive() != nil {
+		return true
 	}
 	select {
 	case <-c.ownerDone:
@@ -94,7 +141,7 @@ func (c *ownedDesktopController) handler(next http.Handler) http.Handler {
 		if err != nil || peer != "127.0.0.1" || r.Host != linuxOwnedControllerAddress ||
 			r.URL.IsAbs() || len(r.Header.Values("Origin")) != 0 || len(r.Header.Values("Sec-Fetch-Site")) != 0 ||
 			!validLocalControllerSecret(c.accessToken) || !validControllerOwnerToken(c.ownerToken) ||
-			c.processID <= 0 || c.callerUID == 0 || c.pinnedTLS != nil && r.TLS == nil {
+			c.processID <= 0 || !c.hasCapturedCaller() || c.pinnedTLS != nil && r.TLS == nil {
 			http.Error(w, "the captured native controller owner is required", http.StatusForbidden)
 			return
 		}

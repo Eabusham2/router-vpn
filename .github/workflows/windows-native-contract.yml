@@ -55,6 +55,13 @@ jobs:
         run: |
           python deploy/test_windows_controller_transport.py
           if ($LASTEXITCODE -ne 0) { throw 'Pinned Windows controller transport gate failed' }
+      - name: Actual owned Windows controller child entry and catalog authority
+        if: ${{ success() || failure() }}
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          python deploy/test_windows_controller_privilege.py
+          if ($LASTEXITCODE -ne 0) { throw 'Owned Windows controller child entry gate failed' }
       - name: Captured GUI request framing and cancellation ownership
         if: ${{ success() || failure() }}
         shell: pwsh

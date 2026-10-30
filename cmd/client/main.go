@@ -120,7 +120,9 @@ func main() {
 	// Package verification is a read-only utility. Only normal application
 	// startup may migrate client configuration or prepare a Windows catalog.
 	prepareClientTrustBeforeMain()
-	prepareWindowsCatalogBeforeMain()
+	if ownedController == nil || ownedController.nativeOwner == nil {
+		prepareWindowsCatalogBeforeMain()
+	}
 	configPath := getenv("HOMEVPN_CLIENT_CONFIG", "./client.json")
 	var c common.ClientConfig
 	b, err := readPrivateRegular(configPath, maxPrivateStoreBytes)
@@ -162,7 +164,7 @@ func main() {
 		c.ProfilesFile = filepath.Join(configDir, c.ProfilesFile)
 	}
 	if ownedController != nil {
-		if err = validateNativeOwnedConfiguration(c); err != nil {
+		if err = ownedController.validateConfiguration(&c); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -178,6 +180,9 @@ func main() {
 	}
 	var modes []common.Mode
 	if err = json.Unmarshal(mb, &modes); err != nil {
+		log.Fatal(err)
+	}
+	if modes, err = ownedController.captureModes(modes); err != nil {
 		log.Fatal(err)
 	}
 
