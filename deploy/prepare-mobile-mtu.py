@@ -24,6 +24,20 @@ def digest():
     h=hashlib.sha256()
     for p in inputs():h.update(str(p.relative_to(ROOT)).encode()+b'\0'+p.read_bytes())
     return h.hexdigest()
+def policy_copies(vendor):
+    # This pass follows relay/multihop policy preparation. Preserve all source
+    # bytes except the declared import relocation, including on Windows.
+    copies={}
+    for package in PACKAGES:
+        for source in sorted((ROOT/'internal'/package).glob('*.go')):
+            content=source.read_bytes()
+            for name in PACKAGES:
+                content=content.replace(('"router-vpn/internal/'+name+'"').encode(),
+                    ('"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+name+'"').encode())
+            if b'"router-vpn/internal/' in content:
+                raise ValueError('Native MTU policy import closure is incomplete: '+str(source.relative_to(ROOT)))
+            copies[vendor/'experimental/libbox/routervpn'/package/source.name]=content
+    return copies
 def mapping_source():
     # Go 1.26 rejects upstream's private parseProcSelfMaps linkname on Linux.
     # Copy the exact licensed implementation, not a linker-check exemption.
@@ -75,8 +89,8 @@ def prepare(vendor, *, mobile=True):
         tail='\n\tif !t.routervpnReady { return }' if 'InterfaceUpdated' in signature else '\n\tt.routervpnReady = false'
         changes['protocol/tun/inbound.go'].append((signature,signature+'\n\tt.routervpnLifecycle.Lock()\n\tdefer t.routervpnLifecycle.Unlock()'+tail))
     writes={
-        vendor/'experimental/libbox/internal/oomprofile/routervpn_maps.go':mappings,
-        vendor/'experimental/libbox/internal/oomprofile/GO-LICENSE':(ROOT/'mobile/mtu/GO-LICENSE').read_text(),
+        vendor/'experimental/libbox/internal/oomprofile/routervpn_maps.go':mappings.encode(),
+        vendor/'experimental/libbox/internal/oomprofile/GO-LICENSE':(ROOT/'mobile/mtu/GO-LICENSE').read_bytes(),
     } if mobile else {}
     for name,pairs in changes.items():
         path=vendor/name
@@ -90,23 +104,19 @@ def prepare(vendor, *, mobile=True):
                 continue
             if text.count(old)!=1:raise ValueError('native MTU boundary changed: '+name)
             text=text.replace(old,new)
-        writes[path]=text
+        writes[path]=text.encode()
     targets={'tun.go':'protocol/tun/routervpn_mtu.go','box.go':'routervpn_mtu.go','box_test.go':'routervpn_mtu_test.go'}
     if mobile:
         targets['pprof_maps_test.go']='experimental/libbox/internal/oomprofile/routervpn_maps_test.go'
         for name in ['bridge','external_owner','interface','socket_linux','socket_darwin','socket_other','bridge_test']:
             targets[name+'.go']='experimental/libbox/routervpn_mtu_'+name+'.go'
-    for source,dest in targets.items():writes[vendor/dest]=(ROOT/'mobile/mtu'/(source+'.tmpl')).read_text()
-    for package in PACKAGES:
-        dest=vendor/'experimental/libbox/routervpn'/package
-        dest.mkdir(parents=True,exist_ok=True)
-        for source in (ROOT/'internal'/package).glob('*.go'):
-            text=source.read_text()
-            for name in PACKAGES:text=text.replace('"router-vpn/internal/'+name+'"','"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+name+'"')
-            writes[dest/source.name]=text
-    for path,text in writes.items():
+    for source,dest in targets.items():writes[vendor/dest]=(ROOT/'mobile/mtu'/(source+'.tmpl')).read_bytes()
+    writes.update(policy_copies(vendor))
+    for path in writes:
         if path.is_symlink() or not path.parent.resolve().is_relative_to(vendor):raise ValueError('unsafe MTU destination')
-    for path,text in writes.items():path.write_text(text)
+    for path,content in writes.items():
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_bytes(content)
     print('Native MTU source digest:',digest())
 if __name__=='__main__':
     p=argparse.ArgumentParser();p.add_argument('vendor',type=Path,nargs='?');p.add_argument('--digest',action='store_true');a=p.parse_args()

@@ -137,6 +137,46 @@ sys.exit(status)
                     module.prepare_policies(core)
                 self.assertEqual(copied.read_bytes(),expected)
 
+    def test_mtu_policy_recopy_preserves_source_bytes_and_rejects_unknown_imports(self):
+        spec=importlib.util.spec_from_file_location('native_mtu_policy_bytes',ROOT/'deploy/prepare-mobile-mtu.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)/'repository'
+            original=root/'internal/hopmeasure/activity.go'
+            original.parent.mkdir(parents=True)
+            raw=(b'package hopmeasure\r\nimport "router-vpn/internal/mtuprobe"\n'
+                 b'// Keep mixed newlines and UTF-8: \xc3\xa9\r\n')
+            original.write_bytes(raw)
+            core=Path(tmp)/'core'
+            copied=core/'experimental/libbox/routervpn/hopmeasure/activity.go'
+            expected=raw.replace(b'"router-vpn/internal/mtuprobe"',
+                                 b'"github.com/sagernet/sing-box/experimental/libbox/routervpn/mtuprobe"')
+            with mock.patch.object(module,'ROOT',root):
+                self.assertEqual(module.policy_copies(core),{copied:expected})
+                self.assertEqual(module.policy_copies(core),{copied:expected})
+                original.write_bytes(raw+b'import "router-vpn/internal/unowned"\r\n')
+                with self.assertRaisesRegex(ValueError,'import closure is incomplete'):
+                    module.policy_copies(core)
+            self.assertFalse(core.exists(),'collecting policy source must not partially overwrite a prepared core')
+
+    def test_mtu_policy_closure_matches_every_shipping_source(self):
+        spec=importlib.util.spec_from_file_location('native_mtu_policy_closure',ROOT/'deploy/prepare-mobile-mtu.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            core=Path(tmp)/'core'
+            copies=module.policy_copies(core)
+            originals={p for package in module.PACKAGES for p in (ROOT/'internal'/package).glob('*.go')}
+            self.assertTrue(originals)
+            self.assertEqual(len(copies),len(originals))
+            for source in originals:
+                expected=source.read_bytes()
+                for name in module.PACKAGES:
+                    expected=expected.replace(('"router-vpn/internal/'+name+'"').encode(),
+                        ('"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+name+'"').encode())
+                self.assertEqual(copies[core/'experimental/libbox/routervpn'/source.parent.name/source.name],expected)
+                self.assertNotIn(b'"router-vpn/internal/',expected)
+                self.assertIn(source,module.inputs())
+
     def test_whitening_prepares_native_base_before_module_resolution(self):
         source=(ROOT/'deploy/test_mobile_whitening_pinned.sh').read_text().split('FIXTURE_DIR=',1)[0]
         shim='''#!PYTHON
