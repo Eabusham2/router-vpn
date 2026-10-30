@@ -91,21 +91,21 @@ func (owner *fixtureSuspendedShellOwner) retire() error {
 	return closeErr
 }
 
-func fixtureShellSite(this uintptr) *fixtureSuspendedShellSite {
-	return (*fixtureShellCOMInterface)(unsafe.Pointer(this)).owner
+func fixtureShellSite(this *fixtureShellCOMInterface) *fixtureSuspendedShellSite {
+	return this.owner
 }
 
-func fixtureShellQuery(this, iid, destination uintptr) uintptr {
-	if this == 0 || iid == 0 || destination == 0 {
+func fixtureShellQuery(this *fixtureShellCOMInterface, iid *syscall.GUID, destination *unsafe.Pointer) uintptr {
+	if this == nil || this.owner == nil || iid == nil || destination == nil {
 		return 0x80004003 // E_POINTER
 	}
-	*(*uintptr)(unsafe.Pointer(destination)) = 0
+	*destination = nil
 	site := fixtureShellSite(this)
-	switch *(*syscall.GUID)(unsafe.Pointer(iid)) {
+	switch *iid {
 	case fixtureShellUnknownIID, fixtureShellServiceIID:
-		*(*uintptr)(unsafe.Pointer(destination)) = uintptr(unsafe.Pointer(&site.service))
+		*destination = unsafe.Pointer(&site.service)
 	case fixtureShellCreatingIID:
-		*(*uintptr)(unsafe.Pointer(destination)) = uintptr(unsafe.Pointer(&site.creating))
+		*destination = unsafe.Pointer(&site.creating)
 	default:
 		return 0x80004002 // E_NOINTERFACE
 	}
@@ -113,42 +113,42 @@ func fixtureShellQuery(this, iid, destination uintptr) uintptr {
 	return 0
 }
 
-func fixtureShellAddRef(this uintptr) uintptr {
+func fixtureShellAddRef(this *fixtureShellCOMInterface) uintptr {
 	return uintptr(fixtureShellSite(this).references.Add(1))
 }
 
-func fixtureShellRelease(this uintptr) uintptr {
+func fixtureShellRelease(this *fixtureShellCOMInterface) uintptr {
 	return uintptr(fixtureShellSite(this).references.Add(-1))
 }
 
-func fixtureShellQueryService(this, service, iid, destination uintptr) uintptr {
-	if destination == 0 {
+func fixtureShellQueryService(this *fixtureShellCOMInterface, service, iid *syscall.GUID, destination *unsafe.Pointer) uintptr {
+	if destination == nil {
 		return 0x80004003
 	}
-	*(*uintptr)(unsafe.Pointer(destination)) = 0
-	if service == 0 || *(*syscall.GUID)(unsafe.Pointer(service)) != fixtureShellCreatingIID {
+	*destination = nil
+	if service == nil || *service != fixtureShellCreatingIID {
 		return 0x80004002
 	}
 	return fixtureShellQuery(this, iid, destination)
 }
 
-func fixtureShellOnCreating(this, inputs uintptr) uintptr {
+func fixtureShellOnCreating(this *fixtureShellCOMInterface, inputs unsafe.Pointer) uintptr {
 	site := fixtureShellSite(this)
-	if !site.calls.CompareAndSwap(0, 1) || inputs == 0 {
+	if !site.calls.CompareAndSwap(0, 1) || inputs == nil {
 		site.result.Store(0x8000ffff) // E_UNEXPECTED
 		return 0x8000ffff
 	}
 	// ICreateProcessInputs: IUnknown, GetCreateFlags, SetCreateFlags,
 	// AddCreateFlags. Add preserves Shell's existing flags.
-	vtable := *(**[6]uintptr)(unsafe.Pointer(inputs))
+	vtable := *(**[6]uintptr)(inputs)
 	var before, after uint32
-	status, _, _ := syscall.SyscallN(vtable[3], inputs, uintptr(unsafe.Pointer(&before)))
+	status, _, _ := syscall.SyscallN(vtable[3], uintptr(inputs), uintptr(unsafe.Pointer(&before)))
 	site.before.Store(before)
 	if uint32(status)&0x80000000 == 0 {
-		status, _, _ = syscall.SyscallN(vtable[5], inputs, 4 /* CREATE_SUSPENDED */)
+		status, _, _ = syscall.SyscallN(vtable[5], uintptr(inputs), 4 /* CREATE_SUSPENDED */)
 	}
 	if uint32(status)&0x80000000 == 0 {
-		status, _, _ = syscall.SyscallN(vtable[3], inputs, uintptr(unsafe.Pointer(&after)))
+		status, _, _ = syscall.SyscallN(vtable[3], uintptr(inputs), uintptr(unsafe.Pointer(&after)))
 	}
 	site.after.Store(after)
 	if uint32(status)&0x80000000 == 0 && after&4 == 0 {
