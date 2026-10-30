@@ -596,6 +596,13 @@ func desktopDarwinFixturePFOwned(anchor string) bool {
 	if anchor == desktopDarwinPFNamespace || anchor == desktopDarwinTestForeignNamespace() {
 		return true
 	}
+	// The typed projection fixture references exactly one captured generation
+	// beneath its separately captured sibling root. This is not authority for
+	// other generations, descendants or foreign namespaces.
+	projectionGeneration := strings.Replace(desktopDarwinPFGeneration(desktopSocketFixtureCapture()), desktopDarwinPFNamespace, desktopDarwinTestForeignNamespace(), 1)
+	if anchor == projectionGeneration {
+		return true
+	}
 	child, found := strings.CutPrefix(anchor, desktopDarwinPFNamespace+"/")
 	return found && regexp.MustCompile(`^(?:p[0-9a-f]{32}|g[A-Za-z0-9_-]{32}|physical(?:/[0-9a-f]{32}){0,2}|physical/legacy)$`).MatchString(child)
 }

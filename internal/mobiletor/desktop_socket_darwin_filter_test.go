@@ -19,6 +19,21 @@ func TestDesktopPFAnchorProbeNativeFilterProjection(t *testing.T) {
 	}
 	anchor := desktopDarwinTestForeignNamespace()
 	capture := desktopSocketFixtureCapture()
+	projectionGeneration := strings.Replace(desktopDarwinPFGeneration(capture), desktopDarwinPFNamespace, anchor, 1)
+	if !desktopDarwinFixturePFOwned(projectionGeneration) {
+		t.Fatal("native projection inventory lost its exact captured generation")
+	}
+	other := capture
+	other.SessionID = strings.Repeat("9", 32)
+	for _, unowned := range []string{
+		projectionGeneration + "/unowned",
+		strings.Replace(desktopDarwinPFGeneration(other), desktopDarwinPFNamespace, anchor, 1),
+		anchor + "/g" + strings.Repeat("x", 32),
+	} {
+		if desktopDarwinFixturePFOwned(unowned) {
+			t.Fatal("native projection inventory adopted an uncaptured sibling or descendant", unowned)
+		}
+	}
 	policy := &desktopDarwinPF{Capture: capture, UID: uint32(os.Geteuid()), permits: make(map[string]desktopDarwinPFPermit)}
 	for _, network := range []string{"tcp", "udp"} {
 		for _, pair := range [][2]int{{0, 1}, {2, 3}} {
