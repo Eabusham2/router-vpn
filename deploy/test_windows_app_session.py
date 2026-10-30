@@ -217,15 +217,79 @@ def diagnose_full_main(workspace, fixture, scenario, compiler, env):
     print("Test-only actual main stderr/log (bounded):\n" + body, flush=True)
 
 
-def require_fixture_success(status, output, workspace, fixture, scenario, compiler, env):
+def gui_diagnostic_overlay():
+    """Only a failure-only test build redirects its retained child stdio.
+
+    Production GUI creation has no diagnostic override. The overlay preserves
+    the same suspended creation, inherited-handle list, Job, token/image proof,
+    private pipe and joined teardown. Its exclusive files are created inside
+    newly generated blank fixture directories, never a user's package or Data.
+    """
+    source = (ROOT / "internal/windowscontroller/gui_windows.go").read_text(encoding="utf-8")
+    source = NATIVE.replace_once(source, '\t"context"\n',
+                                 '\t"context"\n\t"crypto/rand"\n\t"encoding/hex"\n')
+    source = NATIVE.replace_once(source,
+        '\tnulName, _ := syscall.UTF16PtrFromString("NUL")',
+        '\tvar diagnosticNonce [16]byte\n'
+        '\tif _, err := rand.Read(diagnosticNonce[:]); err != nil { return child, err }\n'
+        '\tdiagnosticPath := filepath.Join(directory, ".routervpn-gui-trace-"+hex.EncodeToString(diagnosticNonce[:])+".log")\n'
+        '\tnulName, _ := syscall.UTF16PtrFromString(diagnosticPath)')
+    return NATIVE.replace_once(source,
+        'syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, &attributes, syscall.OPEN_EXISTING, 0, 0)',
+        'syscall.FILE_SHARE_READ, &attributes, syscall.CREATE_NEW, syscall.FILE_FLAG_OPEN_REPARSE_POINT, 0)')
+
+
+def diagnose_native_gui(workspace, shipping, scenario, compiler, env):
+    diagnostic = workspace / ("gui-diagnostic-" + scenario)
+    diagnostic.mkdir()
+    source = diagnostic / "gui_windows.go"
+    source.write_text(gui_diagnostic_overlay(), encoding="utf-8")
+    overlay = diagnostic / "gui-overlay.json"
+    overlay.write_text(json.dumps({"Replace": {
+        str(ROOT / "internal/windowscontroller/gui_windows.go"): str(source)}}), encoding="utf-8")
+    fixture = diagnostic / "gui-session.test.exe"
+    race = ["-race"] if env.get("GOARCH") == "amd64" else []
+    status, output = NATIVE.run(
+        [compiler, "test", "-c", "-mod=readonly", "-tags=" + TAG, *race,
+         "-overlay=" + str(overlay), "-o", fixture, "./internal/windowsapp"],
+        cwd=ROOT, env=env, timeout=240)
+    if status:
+        raise ValueError("Failure-only native GUI diagnostic did not compile:\n" + output[-8192:])
+    status, output = run_fixture(diagnostic, fixture, shipping, scenario, env)
+    print("Failure-only native GUI Session exit status: " + str(status), flush=True)
+    print(output[-16384:], end="" if output.endswith("\n") else "\n", flush=True)
+    root = diagnostic / (scenario + " layout")
+    data = root / "Data" if scenario == "portable-selftest" else root
+    traces = sorted(data.glob(".routervpn-gui-trace-*.log"))
+    if len(traces) > 3:
+        raise ValueError("Native GUI diagnostic exceeded its three captured child processes")
+    for path in traces:
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or
+                getattr(info, "st_file_attributes", 0) & 0x400):
+            raise ValueError("Native GUI diagnostic lost its exclusive regular file")
+        with path.open("rb") as stream:
+            opened = os.fstat(stream.fileno())
+            if (opened.st_dev, opened.st_ino) != (info.st_dev, info.st_ino):
+                raise ValueError("Native GUI diagnostic changed before its bounded read")
+            stream.seek(max(0, opened.st_size - 16384))
+            body = stream.read(16384).decode("utf-8", errors="replace")
+        print("Failure-only captured child stderr/stdout (bounded):\n" + body, flush=True)
+
+
+def require_fixture_success(status, output, workspace, fixture, shipping, scenario, compiler, env):
     if (not status and "--- SKIP:" not in output and "DATA RACE" not in output and
             "--- PASS: " + TEST + " (" in output):
         return
     failure = ValueError("Composed Windows Session failed its actual " + scenario + " path")
     try:
-        diagnose_full_main(workspace, fixture, scenario, compiler, env)
+        diagnose_native_gui(workspace, shipping, scenario, compiler, env)
     except Exception as diagnostic_error:
-        print("Failure-only fullmain diagnostic could not complete: " + str(diagnostic_error)[-8192:], flush=True)
+        print("Failure-only native GUI diagnostic could not complete: " + str(diagnostic_error)[-8192:], flush=True)
+        try:
+            diagnose_full_main(workspace, fixture, scenario, compiler, env)
+        except Exception as fullmain_error:
+            print("Failure-only fullmain diagnostic could not complete: " + str(fullmain_error)[-8192:], flush=True)
     # A succeeding diagnostic is still a different test binary. Its output can
     # explain a failure but can never turn the failed shipping main into a pass.
     raise failure
@@ -275,7 +339,7 @@ def execute(go="go", *, env=None):
         for scenario in CASES:
             status, output = run_fixture(workspace, fixture, shipping, scenario, captured)
             print(output, end="" if output.endswith("\n") else "\n", flush=True)
-            require_fixture_success(status, output, workspace, fixture, scenario, compiler, captured)
+            require_fixture_success(status, output, workspace, fixture, shipping, scenario, compiler, captured)
             print("Actual Windows Session passed: " + scenario, flush=True)
         for name, witness, replacement in mutants():
             changed = workspace / (name + ".go")
