@@ -63,7 +63,20 @@ func ReadDesktopWindowsRetainedProtection(ctx context.Context, target DesktopWin
 }
 
 func readDesktopWindowsRetainedProtection(ctx context.Context, target DesktopWindowsProtectionTarget, scope []byte) error {
-	if ctx == nil || ctx.Err() != nil || target.Validate() != nil || len(scope) > 65536 || len(scope)%2 != 0 {
+	return readDesktopWindowsProtectionExpectation(ctx, &target, scope)
+}
+
+// ReadDesktopWindowsProtectionExpectation checks one captured retained target,
+// or explicit initial absence, without acquiring mutation authority. The
+// target is copied before native work begins. A nil target never means that
+// whichever baseline happens to exist may be used as a predecessor.
+func ReadDesktopWindowsProtectionExpectation(ctx context.Context, target *DesktopWindowsProtectionTarget) error {
+	return readDesktopWindowsProtectionExpectation(ctx, target, nil)
+}
+
+func readDesktopWindowsProtectionExpectation(ctx context.Context, target *DesktopWindowsProtectionTarget, scope []byte) error {
+	expected, err := newDesktopWindowsProtectionExpected(target)
+	if ctx == nil || ctx.Err() != nil || err != nil || len(scope) > 65536 || len(scope)%2 != 0 {
 		return errors.New("Windows retained protection requires its exact live read request")
 	}
 	if err := desktopWindowsRequireElevation(); err != nil {
@@ -78,7 +91,7 @@ func readDesktopWindowsRetainedProtection(ctx context.Context, target DesktopWin
 	done := make(chan error, 1)
 	go func() {
 		defer func() { <-desktopWindowsProtectionReadGate }()
-		done <- desktopWindowsReadRetainedTarget(ctx, target, capturedScope)
+		done <- desktopWindowsReadRetainedExpectation(ctx, expected, capturedScope)
 	}()
 	select {
 	case <-ctx.Done():
@@ -88,7 +101,7 @@ func readDesktopWindowsRetainedProtection(ctx context.Context, target DesktopWin
 	}
 }
 
-func desktopWindowsReadRetainedTarget(ctx context.Context, target DesktopWindowsProtectionTarget, scope []byte) (result error) {
+func desktopWindowsReadRetainedExpectation(ctx context.Context, expected *desktopWindowsProtectionExpected, scope []byte) (result error) {
 	engine, err := desktopWFPOpen(false)
 	if engine != nil {
 		defer func() { result = errors.Join(result, engine.Close()) }()
@@ -114,9 +127,11 @@ func desktopWindowsReadRetainedTarget(ctx context.Context, target DesktopWindows
 	if err != nil {
 		return err
 	}
-	expected := &desktopWindowsProtectionExpected{target: &target}
 	if err := expected.verify(actual); err != nil {
 		return err
+	}
+	if actual == nil {
+		return ctx.Err() // Explicit absence was independently checked in this transaction.
 	}
 	if err := engine.AssertComplete(actual.sublayer, actual.baseline); err != nil {
 		return err
@@ -136,6 +151,33 @@ func (p *DesktopWindowsSocketPolicy) RetainedProtectionTarget(ctx context.Contex
 		target := desktopWindowsProtectionTarget(p.capture, p.options.KillSwitchPolicy, p.metadata)
 		if err := readDesktopWindowsRetainedProtection(ctx, target, p.fixtureScope); err != nil {
 			return DesktopWindowsProtectionTarget{}, err
+		}
+		return target, nil
+	})
+}
+
+// RetainedProtectionOutcome is the joined result of an exact successor
+// attempt. A successfully installed successor returns its own complete target.
+// A failed attempt that made no replacement returns only its independently
+// verified captured predecessor (or nil for proved initial absence). Unknown,
+// live, partially retired or replaced state never becomes a cleanup receipt.
+// This method cannot confer authority on a legacy recovery constructor.
+func (p *DesktopWindowsSocketPolicy) RetainedProtectionOutcome(ctx context.Context) (*DesktopWindowsProtectionTarget, error) {
+	return desktopWindowsPolicyCall(p, ctx, true, func() (*DesktopWindowsProtectionTarget, error) {
+		if !p.closed || !p.baselineDone || p.locked || len(p.permits) != 0 || len(p.bindings) != 0 || len(p.tunnel) != 0 ||
+			p.predecessor == nil || !p.options.RetainBaselineForHandoff {
+			return nil, errors.New("Windows successor has not joined its exact protection outcome")
+		}
+		var target *DesktopWindowsProtectionTarget
+		if p.installed {
+			captured := desktopWindowsProtectionTarget(p.capture, p.options.KillSwitchPolicy, p.metadata)
+			target = &captured
+		} else if p.predecessor.target != nil {
+			captured := *p.predecessor.target
+			target = &captured
+		}
+		if err := readDesktopWindowsProtectionExpectation(ctx, target, p.fixtureScope); err != nil {
+			return nil, err
 		}
 		return target, nil
 	})

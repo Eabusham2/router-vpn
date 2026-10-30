@@ -285,3 +285,96 @@ func TestDesktopWindowsProtectionTransferRejectsAdditionalPermit(t *testing.T) {
 	}
 	desktopWindowsWFPExactRelease(t, ctx, original.fixtureScope, target, true)
 }
+
+func TestDesktopWindowsProtectionTransferJoinedOutcome(t *testing.T) {
+	original := desktopWindowsWFPTestOwner(t, "always", false, true)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	target := desktopWindowsWFPTarget(t, original)
+	if err := original.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := readDesktopWindowsProtectionExpectation(ctx, nil, original.fixtureScope); err == nil {
+		t.Fatal("explicit absence adopted a retained native baseline")
+	}
+	if _, err := original.RetainedProtectionOutcome(ctx); err == nil {
+		t.Fatal("legacy constructor acquired an exact successor outcome")
+	}
+
+	// This owner is cancelled before native startup enters. Its only possible
+	// success is an independent read of the exact unchanged predecessor; the
+	// constructor's in-memory installed flag is never sufficient evidence.
+	partial, err := newDesktopWindowsPolicyOwner(ctx, desktopWindowsWFPTestCapture(t), original.options, original.fixtureScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	partial.predecessor, err = newDesktopWindowsProtectionExpected(&target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { desktopWindowsWFPJoinCandidate(t, partial) })
+	if _, err := partial.RetainedProtectionOutcome(ctx); err == nil {
+		t.Fatal("unjoined partial successor reported a protection outcome")
+	}
+	if err := partial.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	retained, err := partial.RetainedProtectionOutcome(ctx)
+	if err != nil || retained == nil || *retained != target {
+		t.Fatal("joined unentered successor lost its exact unchanged predecessor", err)
+	}
+	retained.Capture.SessionID = strings.Repeat("1", 32)
+	retained, err = partial.RetainedProtectionOutcome(ctx)
+	if err != nil || retained == nil || *retained != target {
+		t.Fatal("returned outcome mutated the retained native expectation", err)
+	}
+	stopped, stop := context.WithCancel(ctx)
+	stop()
+	if _, err := partial.RetainedProtectionOutcome(stopped); err == nil {
+		t.Fatal("cancelled outcome read acknowledged native protection")
+	}
+
+	successor, err := newDesktopWindowsSocketPolicySuccessor(ctx, desktopWindowsWFPTestCapture(t), original.options, &target, original.fixtureScope)
+	if successor != nil {
+		t.Cleanup(func() { desktopWindowsWFPJoinCandidate(t, successor) })
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := successor.RetainedProtectionOutcome(ctx); err == nil {
+		t.Fatal("live successor reported a joined protection outcome")
+	}
+	actual := desktopWindowsWFPTarget(t, successor)
+	if err := successor.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	retained, err = successor.RetainedProtectionOutcome(ctx)
+	if err != nil || retained == nil || *retained != actual {
+		t.Fatal("joined successor lost its own retained outcome", err)
+	}
+	if _, err := partial.RetainedProtectionOutcome(ctx); err == nil {
+		t.Fatal("stale partial outcome adopted a replacement native baseline")
+	}
+	desktopWindowsWFPExactRelease(t, ctx, original.fixtureScope, actual, true)
+	if _, err := successor.RetainedProtectionOutcome(ctx); err == nil {
+		t.Fatal("removed successor fabricated a retained protection outcome")
+	}
+	if err := readDesktopWindowsProtectionExpectation(ctx, nil, original.fixtureScope); err != nil {
+		t.Fatal("explicit initial absence lacked exact native readback", err)
+	}
+	absent, err := newDesktopWindowsPolicyOwner(ctx, desktopWindowsWFPTestCapture(t), original.options, original.fixtureScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	absent.predecessor, err = newDesktopWindowsProtectionExpected(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { desktopWindowsWFPJoinCandidate(t, absent) })
+	if err := absent.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if outcome, err := absent.RetainedProtectionOutcome(ctx); err != nil || outcome != nil {
+		t.Fatal("joined unentered initial source did not prove unchanged absence", err)
+	}
+}

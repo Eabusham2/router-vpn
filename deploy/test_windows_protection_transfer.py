@@ -19,13 +19,16 @@ SPEC = importlib.util.spec_from_file_location("windows_transfer_identity", ROOT 
 IDENTITY = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(IDENTITY)
 REQUIRED = tuple("TestDesktopWindowsProtectionTransfer" + suffix for suffix in (
-    "BothDirections", "RejectsChangedTarget", "RetirementRejectsReplacement", "RejectsAdditionalPermit"))
-PURE = ("TestDesktopWindowsProtectionTargetRejectsSubstitution", "TestDesktopWindowsProtectionTargetCapturesBeforeNativeWait")
+    "BothDirections", "RejectsChangedTarget", "RetirementRejectsReplacement", "RejectsAdditionalPermit", "JoinedOutcome"))
+PURE = ("TestDesktopWindowsProtectionTargetRejectsSubstitution", "TestDesktopWindowsProtectionTargetCapturesBeforeNativeWait",
+        "TestDesktopProtectionTransferRecordRoundTrip", "TestDesktopProtectionTransferRecordRejectsChangedFields",
+        "TestDesktopProtectionTransferRecordStrictEncoding", "TestDesktopProtectionRetirementRecordExactOutcomes")
 
 
 def mutants(target):
     transfer = (target / "desktop_socket_windows_transfer.go").read_text(encoding="utf-8")
     baseline = (target / "desktop_socket_windows_baseline.go").read_text(encoding="utf-8")
+    record = (target / "desktop_protection_transfer_record.go").read_text(encoding="utf-8")
     return (
         ("other-predecessor", "desktop_socket_windows_transfer.go", REQUIRED[1],
          "changed native predecessor acquired replacement authority",
@@ -46,6 +49,21 @@ def mutants(target):
          IDENTITY.replace_once(transfer,
             "if err := engine.AssertComplete(actual.sublayer, actual.baseline); err != nil {",
             "if err := error(nil); err != nil {")),
+        ("unverified-retired-outcome", "desktop_socket_windows_transfer.go", REQUIRED[4],
+         "stale partial outcome adopted a replacement native baseline",
+         IDENTITY.replace_once(transfer,
+            "if err := readDesktopWindowsProtectionExpectation(ctx, target, p.fixtureScope); err != nil {",
+            "if err := error(nil); err != nil {")),
+        ("noncanonical-private-transfer", "desktop_protection_transfer_record.go", PURE[4],
+         "noncanonical transfer input was admitted",
+         IDENTITY.replace_once(record,
+            "canonical, err := CanonicalDesktopProtectionTransferRecord(record)\n\tif err != nil || !bytes.Equal(raw, canonical)",
+            "canonical, err := CanonicalDesktopProtectionTransferRecord(record)\n\tif err != nil || (!bytes.Equal(raw, canonical) && false)")),
+        ("retired-other-source", "desktop_protection_transfer_record.go", PURE[5],
+         "retirement receipt adopted an uncaptured protection outcome",
+         IDENTITY.replace_once(record,
+            "r.Target.Capture.SourceSHA256 != expected.SourceSHA256",
+            "(r.Target.Capture.SourceSHA256 != expected.SourceSHA256 && false)")),
     )
 
 
@@ -55,6 +73,7 @@ def execute(source=ROOT, go="go", *, env=None, bootstrap_only=False):
     source, target, package, before = IDENTITY.checked_sources(source)
     for name in ("desktop_socket_protection_target.go", "desktop_socket_protection_target_test.go",
                  "desktop_socket_windows_transfer.go", "desktop_socket_windows_transfer_test.go",
+                 "desktop_protection_transfer_record.go", "desktop_protection_transfer_record_test.go",
                  "desktop_socket_windows_baseline.go", "desktop_socket_windows_policy.go"):
         if name not in before:
             raise ValueError("Exact WFP transfer lost shipping source: " + name)
@@ -69,7 +88,7 @@ def execute(source=ROOT, go="go", *, env=None, bootstrap_only=False):
         if status:
             raise ValueError("Exact native transfer did not compile:\n" + output[-32768:])
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-        status, output = IDENTITY.run([binary, "-test.run=^TestDesktopWindowsProtection", "-test.count=1", "-test.timeout=120s", "-test.v"],
+        status, output = IDENTITY.run([binary, "-test.run=^TestDesktop(WindowsProtection|ProtectionTransferRecord|ProtectionRetirementRecord)", "-test.count=1", "-test.timeout=120s", "-test.v"],
                                       cwd=source, env=captured, timeout=135)
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if status or any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *PURE)) or any(value in output for value in ("--- SKIP:", "DATA RACE")):
@@ -92,7 +111,7 @@ def execute(source=ROOT, go="go", *, env=None, bootstrap_only=False):
             print("Rejected exact native transfer production mutant: " + label, flush=True)
     if IDENTITY.checked_sources(source)[3] != before:
         raise ValueError("Exact WFP transfer source changed during native execution")
-    print("Exact BFE succession and reversal, retained target identity, Always preservation, partial cleanup and five production mutations passed. Application host adoption and encrypted-peer composition remain separate requirements.", flush=True)
+    print("Exact BFE succession and reversal, retained target identity, Always preservation, joined partial outcomes, canonical private receipts and eight production mutations passed. Application host adoption and encrypted-peer composition remain separate requirements.", flush=True)
 
 
 if __name__ == "__main__":
