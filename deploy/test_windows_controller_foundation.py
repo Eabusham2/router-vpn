@@ -46,6 +46,12 @@ REQUIRED = (
     "TestWindowsControllerFoundationRejectRemoteVolumeNames",
     "TestWindowsControllerFoundationPinnedPackageCode",
     "TestWindowsControllerFoundationPinnedPackageCodeRejectsAliases",
+    "TestWindowsControllerFoundationSuspendedLaunchRejectsReplacement",
+    "TestWindowsControllerFoundationSuspendedLaunchRejectsMissingCallback",
+    "TestWindowsControllerFoundationSuspendedLaunchCancellation",
+    "TestWindowsControllerFoundationSuspendedLaunchThreadOwner",
+    "TestWindowsControllerFoundationSuspendedLaunchCreationCount",
+    "TestWindowsControllerFoundationSuspendedCallbackRefusal",
 )
 
 
@@ -57,7 +63,7 @@ def sources():
                 "system_image_windows.go", "system_image_windows_test.go",
                 "system_image_policy.go", "system_image_policy_test.go",
                 "fixture_windows_test.go", "foundation_windows_test.go", "capture_windows_test.go",
-                "suspended_launch_windows_test.go",
+                "suspended_launch_windows.go", "suspended_launch_windows_test.go",
                 "restricted_worker_windows_test.go", "gui_windows_test.go", "stream_windows_test.go"}
     paths = sorted(TARGET.glob("*.go"))
     if {path.name for path in paths} != expected:
@@ -75,6 +81,7 @@ def mutants():
     process = read("process_windows.go")
     identity = read("identity_windows.go")
     launch = read("launch_windows.go")
+    suspended = read("suspended_launch_windows.go")
     return (
         ("pipe_windows.go", "retained-pid", REQUIRED[3],
          "same executable with a different retained PID acquired the private channel",
@@ -126,6 +133,36 @@ def mutants():
          "a non-executable code pin acquired a process launch capability",
          once(process, 'err != nil || !strings.EqualFold(filepath.Ext(clean), ".exe")',
               'err != nil || false')),
+        ("suspended_launch_windows.go", "suspended-image-before-resume", REQUIRED[22],
+         "replacement image was admitted before its captured pre-resume proof",
+         once(suspended,
+              'return errors.New("suspended Shell process mapped a different captured native image path")',
+              'return nil')),
+        ("suspended_launch_windows.go", "suspended-creation-site", REQUIRED[23],
+         "a missing Shell creation callback admitted its child",
+         once(suspended, 'if err := site.prove(); err != nil {',
+              'if err := site.prove(); false && err != nil {')),
+        ("suspended_launch_windows.go", "suspended-cancelled-owner", REQUIRED[24],
+         "cancelled suspended launch lost its original caller",
+         function(once(suspended, 'if launchErr != nil {',
+                       'if launchErr != nil && !errors.Is(launchErr, context.Canceled) {'),
+                  'func resumeSuspendedShellThread(', 'if err := ctx.Err(); err != nil {',
+                  'if err := ctx.Err(); false && err != nil {')),
+        ("suspended_launch_windows.go", "suspended-thread-owner", REQUIRED[25],
+         "a foreign retained thread was considered for Shell resume",
+         once(suspended, 'if thread == 0 || pid != uintptr(process.PID()) {',
+              'if thread == 0 || false && pid != uintptr(process.PID()) {')),
+        ("suspended_launch_windows.go", "suspended-original-count", REQUIRED[26],
+         "a changed initial suspension count was admitted for Shell resume",
+         once(suspended, 'if uint32(previous) != 1 {',
+              'if false && uint32(previous) != 1 {')),
+        ("suspended_launch_windows.go", "suspended-callback-refusal", REQUIRED[27],
+         "Shell did not obey the actual pre-creation callback refusal",
+         once(once(suspended,
+                   'if site.ctx.Err() != nil {\n\t\treturn reject(0x800704c7) // HRESULT_FROM_WIN32(ERROR_CANCELLED)\n\t}',
+                   'if false && site.ctx.Err() != nil {\n\t\treturn reject(0x800704c7) // HRESULT_FROM_WIN32(ERROR_CANCELLED)\n\t}'),
+              'if site.ctx.Err() != nil {\n\t\treturn reject(0x800704c7)\n\t}',
+              'if false && site.ctx.Err() != nil {\n\t\treturn reject(0x800704c7)\n\t}')),
     )
 
 
@@ -176,7 +213,7 @@ def execute(go="go", *, env=None):
             print("Rejected production Windows controller mutant:", name, flush=True)
         if sources() != before:
             raise ValueError("Windows controller source changed during its native proof")
-    print("Windows controller foundation passed twenty-two actual process/IPC/lifetime/package-code cases and fourteen compiled production negative controls; launcher composition remains a separate gate.", flush=True)
+    print(f"Windows controller foundation passed {len(REQUIRED)} actual process/IPC/lifetime/package-code cases and {len(mutants())} compiled production negative controls; launcher composition remains a separate gate.", flush=True)
 
 
 if __name__ == "__main__":

@@ -42,7 +42,7 @@ func LaunchElevated(ctx context.Context, image *Image, arguments []string) (*Pro
 	if err != nil {
 		return nil, err
 	}
-	return launchElevated(ctx, image, arguments, api, func(info *shellExecuteInfo) (bool, error) {
+	return launchSuspendedElevated(ctx, image, arguments, api, func(info *shellExecuteInfo) (bool, error) {
 		ok, _, err := api.shellExecute.Call(uintptr(unsafe.Pointer(info)))
 		return ok != 0, err
 	})
@@ -98,7 +98,20 @@ func launchElevated(ctx context.Context, image *Image, arguments []string, api *
 		var process *Process
 		var processErr error
 		if info.Process != 0 {
-			process, processErr = adoptProcess(info.Process)
+			// A valid Shell handle stays owned even if its PID readback fails.
+			// The public suspended path must still terminate/join that exact
+			// object and return any unjoined owner with its failure.
+			if info.Process == syscall.InvalidHandle {
+				processErr = errors.New("Windows elevation returned an invalid process handle")
+			} else {
+				process = &Process{handle: info.Process, closed: make(chan struct{})}
+				pid, _, e := api.processID.Call(uintptr(info.Process))
+				if pid == 0 || pid > 0xffffffff {
+					processErr = nativeError("captured Shell process identity", e)
+				} else {
+					process.pid = uint32(pid)
+				}
+			}
 		}
 		if !ok {
 			if errors.Is(callErr, syscall.Errno(1223)) {

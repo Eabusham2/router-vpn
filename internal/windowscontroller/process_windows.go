@@ -20,14 +20,17 @@ var ErrClosed = errors.New("the captured Windows controller owner is closed")
 // claimed process ID cannot retarget it. Closing a reference does not terminate
 // a process and is never a substitute for acknowledged controller cleanup.
 type Process struct {
-	mu         sync.Mutex
-	handle     syscall.Handle
-	pid        uint32
-	closing    bool
-	closed     chan struct{}
-	operations sync.WaitGroup
-	closeOnce  sync.Once
-	closeErr   error
+	mu     sync.Mutex
+	handle syscall.Handle
+	// Only the owner returned by suspended Shell creation retains this exact
+	// initial thread. Ordinary borrowed process references never acquire it.
+	launchThread syscall.Handle
+	pid          uint32
+	closing      bool
+	closed       chan struct{}
+	operations   sync.WaitGroup
+	closeOnce    sync.Once
+	closeErr     error
 }
 
 func adoptProcess(handle syscall.Handle) (*Process, error) {
@@ -209,8 +212,15 @@ func (p *Process) Close() error {
 		p.operations.Wait()
 		p.mu.Lock()
 		defer p.mu.Unlock()
-		p.closeErr = syscall.CloseHandle(p.handle)
-		if p.closeErr == nil {
+		if p.launchThread != 0 {
+			p.closeErr = syscall.CloseHandle(p.launchThread)
+			if p.closeErr == nil {
+				p.launchThread = 0
+			}
+		}
+		processErr := syscall.CloseHandle(p.handle)
+		p.closeErr = errors.Join(p.closeErr, processErr)
+		if processErr == nil {
 			p.handle = 0
 		}
 	})

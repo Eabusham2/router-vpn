@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -15,6 +16,237 @@ import (
 	"time"
 	"unsafe"
 )
+
+func fixtureSuspendedChild(t *testing.T, image *Image, pipe *Pipe) (*Process, syscall.Handle) {
+	t.Helper()
+	image.mu.Lock()
+	path, held, err := image.normalizedLaunchNameLocked()
+	if err != nil {
+		image.mu.Unlock()
+		t.Fatal(err)
+	}
+	arguments := append([]string{path}, fixtureArguments("hold", pipe, fixtureExecutable(t))...)
+	for index := range arguments {
+		arguments[index] = syscall.EscapeArg(arguments[index])
+	}
+	application, _ := syscall.UTF16PtrFromString(path)
+	command, _ := syscall.UTF16FromString(strings.Join(arguments, " "))
+	startup := syscall.StartupInfo{Cb: uint32(unsafe.Sizeof(syscall.StartupInfo{}))}
+	var created syscall.ProcessInformation
+	err = syscall.CreateProcess(application, &command[0], nil, nil, false, 4 /* CREATE_SUSPENDED */, nil, nil, &startup, &created)
+	closeErr := syscall.CloseHandle(held)
+	if closeErr != nil {
+		image.handles = append(image.handles, held)
+	}
+	image.mu.Unlock()
+	if err != nil {
+		t.Fatal("actual suspended fixture creation", err, closeErr)
+	}
+	process := &Process{handle: created.Process, pid: created.ProcessId, closed: make(chan struct{})}
+	t.Cleanup(func() {
+		if err := retireSuspendedShell(process); err != nil {
+			t.Error("actual suspended fixture did not join its retained process", err)
+			return
+		}
+		if err := errors.Join(syscall.CloseHandle(created.Thread), process.Close()); err != nil {
+			t.Error("actual suspended fixture did not close its joined handles", err)
+		}
+	})
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	return process, created.Thread
+}
+
+func fixtureSuspendedSetup(t *testing.T) (*nativeAPI, *Image, *Pipe) {
+	t.Helper()
+	api, err := native()
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := PinImage(fixtureExecutable(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { image.Close() })
+	pipe, err := NewPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { pipe.Close() })
+	return api, image, pipe
+}
+
+func fixtureSuspendedReturnedOwner(t *testing.T, process *Process) {
+	t.Helper()
+	if process == nil {
+		t.Fatal("actual suspended launch did not return its retained process owner")
+	}
+	t.Cleanup(func() {
+		if err := retireSuspendedShell(process); err != nil {
+			t.Error("returned suspended launch remained retained and unjoined", err)
+			return
+		}
+		if err := process.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+}
+
+func fixtureNoSuspendedChildHello(t *testing.T, pipe *Pipe) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	if err := pipe.Accept(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("an unproved suspended child executed its fixture hello", err)
+	}
+}
+
+func TestWindowsControllerFoundationSuspendedLaunchRejectsReplacement(t *testing.T) {
+	api, image, pipe := fixtureSuspendedSetup(t)
+	wrongPath := filepath.Join(t.TempDir(), "different-file.exe")
+	fixtureCopy(t, fixtureExecutable(t), wrongPath)
+	wrong, _ := syscall.UTF16PtrFromString(wrongPath)
+	ctx, _ := mustNativeContext(t)
+	process, err := launchSuspendedElevated(ctx, image, fixtureArguments("hold", pipe, fixtureExecutable(t)), api, func(info *shellExecuteInfo) (bool, error) {
+		info.File = wrong
+		ok, _, callErr := api.shellExecute.Call(uintptr(unsafe.Pointer(info)))
+		return ok != 0, callErr
+	})
+	fixtureSuspendedReturnedOwner(t, process)
+	if err == nil || !strings.Contains(err.Error(), "mapped a different captured native image path") {
+		t.Fatal("replacement image was admitted before its captured pre-resume proof", err)
+	}
+	if _, err := process.Wait(ctx); err != nil {
+		t.Fatal("rejected replacement did not join its exact process", err)
+	}
+	fixtureNoSuspendedChildHello(t, pipe)
+	runtime.KeepAlive(wrong)
+}
+
+func TestWindowsControllerFoundationSuspendedLaunchRejectsMissingCallback(t *testing.T) {
+	api, image, pipe := fixtureSuspendedSetup(t)
+	child, _ := fixtureSuspendedChild(t, image, pipe)
+	ctx, _ := mustNativeContext(t)
+	process, err := launchSuspendedElevated(ctx, image, fixtureArguments("hold", pipe, fixtureExecutable(t)), api, func(info *shellExecuteInfo) (bool, error) {
+		handle, release, err := child.borrow()
+		if err != nil {
+			return false, err
+		}
+		defer release()
+		self, err := syscall.GetCurrentProcess()
+		if err != nil {
+			return false, err
+		}
+		err = syscall.DuplicateHandle(self, handle, self, &info.Process, 0, false, syscall.DUPLICATE_SAME_ACCESS)
+		return err == nil, err
+	})
+	fixtureSuspendedReturnedOwner(t, process)
+	if err == nil || !strings.Contains(err.Error(), "exact suspended creation callback") {
+		t.Fatal("a missing Shell creation callback admitted its child", err)
+	}
+	if _, err := process.Wait(ctx); err != nil {
+		t.Fatal("missing-callback child did not join", err)
+	}
+	fixtureNoSuspendedChildHello(t, pipe)
+}
+
+func TestWindowsControllerFoundationSuspendedLaunchCancellation(t *testing.T) {
+	api, image, pipe := fixtureSuspendedSetup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	process, err := launchSuspendedElevated(ctx, image, fixtureArguments("hold", pipe, fixtureExecutable(t)), api, func(info *shellExecuteInfo) (bool, error) {
+		ok, _, callErr := api.shellExecute.Call(uintptr(unsafe.Pointer(info)))
+		cancel() // Actual Shell completion precedes this owned cancellation.
+		return ok != 0, callErr
+	})
+	fixtureSuspendedReturnedOwner(t, process)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatal("cancelled suspended launch lost its original caller", err)
+	}
+	joined, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	if _, err := process.Wait(joined); err != nil {
+		t.Fatal("cancelled suspended launch returned an unjoined process", err)
+	}
+	fixtureNoSuspendedChildHello(t, pipe)
+}
+
+func TestWindowsControllerFoundationSuspendedLaunchThreadOwner(t *testing.T) {
+	api, image, pipe := fixtureSuspendedSetup(t)
+	first, _ := fixtureSuspendedChild(t, image, pipe)
+	otherPipe, err := NewPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { otherPipe.Close() })
+	other, thread := fixtureSuspendedChild(t, image, otherPipe)
+	ctx, _ := mustNativeContext(t)
+	if err := resumeSuspendedShellThread(ctx, api, first, thread); err == nil || !strings.Contains(err.Error(), "exact retained thread owner") {
+		t.Fatal("a foreign retained thread was considered for Shell resume", err)
+	}
+	if first.PID() == other.PID() || first.Alive() != nil || other.Alive() != nil {
+		t.Fatal("thread substitution fixture lost its two distinct retained processes")
+	}
+	fixtureNoSuspendedChildHello(t, pipe)
+	fixtureNoSuspendedChildHello(t, otherPipe)
+}
+
+func TestWindowsControllerFoundationSuspendedLaunchCreationCount(t *testing.T) {
+	api, image, pipe := fixtureSuspendedSetup(t)
+	process, thread := fixtureSuspendedChild(t, image, pipe)
+	suspend, err := api.processID.Dll.FindProc("SuspendThread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous, _, callErr := suspend.Call(uintptr(thread))
+	if uint32(previous) != 1 {
+		t.Fatal("creation-count fixture did not retain its original suspension", callErr)
+	}
+	captured, err := captureSuspendedShellThread(api, process)
+	if captured != 0 {
+		process.mu.Lock()
+		process.launchThread = captured
+		process.mu.Unlock()
+	}
+	if err == nil || !strings.Contains(err.Error(), "original creation suspension") {
+		t.Fatal("a changed initial suspension count was admitted for Shell resume", err)
+	}
+	fixtureNoSuspendedChildHello(t, pipe)
+}
+
+func TestWindowsControllerFoundationSuspendedCallbackRefusal(t *testing.T) {
+	api, image, pipe := fixtureSuspendedSetup(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	site, err := newShellCreationSite(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shellCreationRelease(&site.service)
+	cancel()
+	launchCtx, _ := mustNativeContext(t)
+	process, err := launchElevated(launchCtx, image, fixtureArguments("hold", pipe, fixtureExecutable(t)), api, func(info *shellExecuteInfo) (bool, error) {
+		path, held, err := image.shellCreationNameLocked(api)
+		if err != nil {
+			return false, err
+		}
+		defer syscall.CloseHandle(held)
+		name, _ := syscall.UTF16PtrFromString(path)
+		info.File, info.Directory = name, nil
+		info.Mask |= 0x08000000
+		info.Instance = syscall.Handle(uintptr(unsafe.Pointer(&site.service)))
+		ok, _, callErr := api.shellExecute.Call(uintptr(unsafe.Pointer(info)))
+		runtime.KeepAlive(name)
+		return ok != 0, callErr
+	})
+	if process != nil {
+		fixtureSuspendedReturnedOwner(t, process)
+	}
+	if process != nil || err == nil || site.calls.Load() != 1 || !site.denied.Load() || site.result.Load() != 0x800704c7 {
+		t.Fatal("Shell did not obey the actual pre-creation callback refusal", err, site.calls.Load(), site.result.Load())
+	}
+	fixtureNoSuspendedChildHello(t, pipe)
+}
 
 // These are the documented SDK IUnknown, IServiceProvider and ICreatingProcess
 // contracts. SID_ExecuteCreatingProcess is IID_ICreatingProcess. No undocumented
