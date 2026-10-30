@@ -38,7 +38,7 @@ CASES = ('PFCompiler', 'PFSystemDispatch', 'FixtureAnchorRetirement', 'PFAnchorP
          'StaleCaptureAndReplacement')
 READBACK_CASES = ('PFReadbackCompleteWithinCapturedBudget', 'PFReadbackFailureAndCancellationJoin',
                   'PFReadbackDeadlineAndInvalidCapture')
-PROBE_CASES = ('FilterOnlyRetirement', 'NativeFilterProjection')
+PROBE_CASES = ('FilterOnlyRetirement', 'NativeFilterProjection', 'BaselineTransition')
 
 
 def native_case_name(case):
@@ -353,6 +353,8 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
         print(output, end='' if output.endswith('\n') else '\n')
         if case == 'NativeFilterProjection':
             print('Darwin exact typed native filter fields, unchanged rejected owner and namespace retirement passed.')
+        elif case == 'BaselineTransition':
+            print('Darwin exact baseline plan, captured child join, inactive Always transition and native absence passed.')
         elif case in PROBE_CASES:
             print('Darwin exact native single-filter commit and rollback anchor lifetime probe passed.')
         else:
@@ -363,19 +365,28 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
     """Compile scoped, temporary broken versions and require their exact failure."""
     if platform.system() != 'Darwin':
         raise ValueError('Darwin guardian mutations require the actual native kernel')
-    if only_case not in (None, 'NativeFilterProjection'):
+    if only_case not in (None, 'NativeFilterProjection', 'BaselineTransition'):
         raise ValueError('Darwin guardian mutations require a known scoped positive case')
     if only_case is None:
         # The default guardian selector exercises the shipping loader. The
         # proposed typed adapter has a separate exact baseline; a compilation
         # failure is never accepted as evidence that its mutants were rejected.
         execute(source, go, case='NativeFilterProjection')
+        execute(source, go, case='BaselineTransition')
     source, package, before = checked_sources(source)
     target = source/('internal/mobiletor' if source == ROOT else 'routervpn/mobiletor')
     captured = dict(os.environ, GOWORK='off', CGO_ENABLED='1')
     compiler, captured = UID.compiler_toolchain(source, go, captured)
     sudo = UID.privilege_tool()
     mutations = (
+        ('native PF baseline expected owner', 'BaselineTransition', 'native baseline accepted a stale absent-owner expectation',
+         'desktop_socket_pf_baseline_transition.go', (
+             ('if err != nil || !request.accepts(previous) {',
+              'if err != nil || false && !request.accepts(previous) {'),)),
+        ('native PF baseline captured child join', 'BaselineTransition', 'native baseline readiness failure changed its retained owner tree',
+         'desktop_socket_pf_baseline_transition.go', (
+             ('if err := backend.ready(ctx); err != nil {',
+              'if err := error(nil); err != nil {'),)),
         ('native PF UID selector projection', 'NativeFilterProjection', 'native filter fields differ from the independent parser',
          'desktop_socket_darwin_filter_cgo.go', (
              ('rule->uid.op = PF_OP_EQ;', 'rule->uid.op = PF_OP_NONE;'),)),
@@ -504,6 +515,7 @@ if __name__ == '__main__':
     parser.add_argument('--case', choices=CASES+READBACK_CASES+PROBE_CASES)
     parser.add_argument('--mutations', action='store_true', help='Run scoped production mutation controls after the native positive suite')
     parser.add_argument('--projection-mutations', action='store_true', help='Run only native filter projection mutations after its exact positive case')
+    parser.add_argument('--baseline-mutations', action='store_true', help='Run only native baseline transition mutations after its exact positive case')
     args = parser.parse_args()
     if args.root_test_binary:
         if not args.sha256 or not re.fullmatch('[0-9a-f]{64}', args.sha256):
@@ -511,10 +523,14 @@ if __name__ == '__main__':
         raise SystemExit(root_fixture(args.root_test_binary, args.sha256, args.case))
     if args.source is None:
         parser.error('exact prepared native source is required')
-    if args.projection_mutations and (args.case != 'NativeFilterProjection' or args.mutations):
+    if args.projection_mutations and (args.case != 'NativeFilterProjection' or args.mutations or args.baseline_mutations):
         parser.error('native projection mutations require their exact positive case and a separate invocation')
+    if args.baseline_mutations and (args.case != 'BaselineTransition' or args.mutations or args.projection_mutations):
+        parser.error('native baseline mutations require their exact positive case and a separate invocation')
     execute(args.source, args.go, case=args.case)
     if args.mutations:
         execute_mutations(args.source, args.go)
     if args.projection_mutations:
         execute_mutations(args.source, args.go, only_case='NativeFilterProjection')
+    if args.baseline_mutations:
+        execute_mutations(args.source, args.go, only_case='BaselineTransition')

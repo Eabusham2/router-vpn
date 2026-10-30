@@ -522,7 +522,9 @@ def prepare(vendor, go='go', *, env=None):
                     'desktop_socket_source_privileged_test.go', 'desktop_socket_linux_guardian_test.go',
                     'desktop_socket_darwin_guardian_test.go', 'desktop_socket_pf_inventory_test.go',
                     'desktop_socket_pf_readback_test.go', 'desktop_socket_pf_filter_test.go', 'desktop_socket_pf_abi_test.go',
-                    'desktop_socket_pf_filter_native_test.go', 'desktop_socket_darwin_filter_test.go')):
+                    'desktop_socket_pf_filter_native_test.go', 'desktop_socket_darwin_filter_test.go',
+                    'desktop_socket_pf_baseline_test.go', 'desktop_socket_pf_baseline_transition_test.go',
+                    'desktop_socket_darwin_baseline_test.go')):
                 continue
             raw = relocated_shared_source(path.read_bytes())
             write(vendor, 'routervpn/'+package+'/'+path.name, raw)

@@ -81,8 +81,7 @@ type desktopDarwinPF struct {
 }
 
 func desktopDarwinPFLabel(value string) string {
-	digest := sha256.Sum256([]byte(value))
-	return "rvpn:" + base64.RawURLEncoding.EncodeToString(digest[:])
+	return desktopPFLabel(value)
 }
 
 func desktopDarwinPFAllowedTag(c DesktopSocketCapture) string {
@@ -90,34 +89,7 @@ func desktopDarwinPFAllowedTag(c DesktopSocketCapture) string {
 }
 
 func desktopDarwinPFBaseline(c DesktopSocketCapture, o DesktopDarwinSocketOptions) string {
-	allowed := desktopDarwinPFAllowedTag(c)
-	reset := desktopDarwinPFLabel("unproven\x00" + c.SessionID + "\x00" + c.SourceSHA256)
-	label := desktopDarwinPFLabel("baseline\x00" + c.SessionID + "\x00" + c.SourceSHA256)
-	if desktopDarwinPFTestScope != "" {
-		// The native fixture never installs a device-wide pass or deny. Even a
-		// missing-UID mutation is limited to its newly created loopback peers.
-		return fmt.Sprintf("pass out %s tag \"%s\" no state\nanchor \"p%s\" out\nblock drop out quick %s ! tagged \"%s\" label \"%s\"\n",
-			desktopDarwinPFTestScope, reset, c.SessionID, desktopDarwinPFTestScope, allowed, label)
-	}
-	lines := []string{
-		fmt.Sprintf("pass out all tag \"%s\" no state", reset),
-		fmt.Sprintf("anchor \"p%s\" out", c.SessionID),
-		fmt.Sprintf("pass out on lo0 all tag \"%s\" no state", allowed),
-		fmt.Sprintf("pass out inet proto udp from any port 68 to 255.255.255.255 port 67 tag \"%s\" no state", allowed),
-		fmt.Sprintf("pass out inet6 proto udp from any port 546 to any port 547 tag \"%s\" no state", allowed),
-		fmt.Sprintf("pass out inet6 proto icmp6 from { ::, fe80::/10 } to { fe80::/10, ff00::/8 } tag \"%s\" no state", allowed),
-	}
-	if len(o.LANPrefixes) != 0 {
-		// Dynamic admission uses the same explicit Home LAN switch as the
-		// existing platform policy. A partial or extra prefix set is rejected.
-		lines = append(lines,
-			fmt.Sprintf("pass out inet to { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16 } tag \"%s\" no state", allowed),
-			fmt.Sprintf("pass out inet to 224.0.0.0/4 tag \"%s\" no state", allowed),
-			fmt.Sprintf("pass out inet6 to { fc00::/7, fe80::/10 } tag \"%s\" no state", allowed),
-			fmt.Sprintf("pass out inet6 to ff00::/8 tag \"%s\" no state", allowed))
-	}
-	lines = append(lines, fmt.Sprintf("block drop out quick all ! tagged \"%s\" label \"%s\"", allowed, label))
-	return strings.Join(lines, "\n") + "\n"
+	return desktopPFOwnedBaseline(c.SessionID, c.SourceSHA256, len(o.LANPrefixes) != 0, desktopDarwinPFTestScope)
 }
 
 func desktopDarwinPFCanonical(ctx context.Context, rules string) (string, error) {

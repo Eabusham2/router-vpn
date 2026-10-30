@@ -66,6 +66,10 @@ jobs:
         # This separately exercises the proposed native loader; the shipping
         # PFLoad call path stays unchanged until the native transaction passes.
         run: python3 deploy/test_desktop_darwin_guardian.py . --go "$(command -v go)" --case NativeFilterProjection --projection-mutations
+      - name: Prove exact baseline transition and retained child ownership
+        # The fixed native utility is still dormant in the shipping Python
+        # path. This uses only a newly owned, scoped fixture namespace.
+        run: python3 deploy/test_desktop_darwin_guardian.py . --go "$(command -v go)" --case BaselineTransition --baseline-mutations
 
   native-sockets:
     name: Native PF, socket and utun ownership on ${{ matrix.runner }}

@@ -167,7 +167,11 @@ class DesktopPTPreparation(unittest.TestCase):
                          'desktop_socket_windows_identity_test.go',
                          'desktop_socket_darwin_filter_cgo.go', 'desktop_socket_darwin_filter_nocgo.go',
                          'desktop_socket_darwin_filter_test.go', 'desktop_socket_pf_filter_native.go',
-                         'desktop_socket_pf_filter_native_test.go'):
+                         'desktop_socket_pf_filter_native_test.go',
+                         'desktop_socket_pf_baseline.go', 'desktop_socket_pf_baseline_test.go',
+                         'desktop_socket_pf_baseline_transition.go', 'desktop_socket_pf_baseline_transition_test.go',
+                         'desktop_socket_darwin_baseline.go', 'desktop_socket_darwin_baseline_other.go',
+                         'desktop_socket_darwin_baseline_test.go'):
                 self.assertEqual(generated['routervpn/mobiletor/'+name], (ROOT/'internal/mobiletor'/name).read_bytes())
             for name in ('desktop_socket_windows_identity.go', 'desktop_socket_windows_identity_api.go',
                          'desktop_socket_windows_identity_connect.go',
