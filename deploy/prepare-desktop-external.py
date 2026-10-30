@@ -51,8 +51,12 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'external_physical_linux.go.tmpl', 'external_physical_darwin.go.tmpl',
                 'external_physical_windows.go.tmpl', 'external_physical_other.go.tmpl',
                 'external_physical_linux_test.go.tmpl', 'external_physical_darwin_test.go.tmpl',
-                'external_physical_windows_test.go.tmpl')
+                'external_physical_windows_test.go.tmpl',
+                'node_network.go.tmpl', 'node_network_test.go.tmpl', 'node_physical.go.tmpl', 'node_admission.go.tmpl', 'node_admission_test.go.tmpl',
+                'node_physical_windows.go.tmpl', 'node_physical_windows_test.go.tmpl', 'node_physical_other.go.tmpl')
 BOX_TEMPLATES = {
+    'node_box_physical.go.tmpl': 'routervpn_desktop_node_box_physical.go',
+    'node_box_physical_test.go.tmpl': 'routervpn_desktop_node_box_physical_test.go',
     'external_box_physical.go.tmpl': 'routervpn_desktop_external_box_physical.go',
     'external_box_physical_test.go.tmpl': 'routervpn_desktop_external_box_physical_test.go',
     'external_box_integration_test.go.tmpl': 'routervpn_desktop_external_box_integration_test.go',
@@ -74,6 +78,9 @@ BOX_TEMPLATES = {
     'tor_server_cover_box_test.go.tmpl': 'routervpn_desktop_tor_server_cover_box_test.go',
     'tor_proof_dns_test.go.tmpl': 'routervpn_desktop_tor_proof_dns_test.go',
     'tor_plain_box_test.go.tmpl': 'routervpn_desktop_tor_plain_box_test.go',
+}
+PEER_TEMPLATES = {
+    'node_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_test.go',
 }
 ROUTE_TEMPLATES = {
     'tor_network_startup.go.tmpl': 'route/routervpn_desktop_tor_network_startup.go',
@@ -189,6 +196,9 @@ def pt_copies():
                    'external_physical_linux_test.go.tmpl': b'//go:build linux\n\n',
                    'external_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
                    'external_physical_windows_test.go.tmpl': b'//go:build windows\n\n',
+                   'node_physical_windows.go.tmpl': b'//go:build windows\n\n',
+                   'node_physical_windows_test.go.tmpl': b'//go:build windows\n\n',
+                   'node_physical_other.go.tmpl': b'//go:build !windows\n\n',
                    'external_physical_other.go.tmpl': b'//go:build !linux && !darwin && !windows\n\n' }.get(name, b'')
         if path.is_symlink() or not raw.startswith(prefix+b'package routervpndesktoppt\n'):
             raise ValueError('Desktop PT adapter package boundary changed')
@@ -243,9 +253,11 @@ def pt_registry_source(source):
         raise ValueError('Desktop Tor Server must belong to the outbound registry')
     for function, anchor, name in (
             ('RegisterExternalNetworkOwner', '\troutervpndesktoppt.RegisterNetworkOwner(registry)', 'func ServiceRegistry() *service.Registry {'),
+            ('RegisterNodeNetworkOwner', '\troutervpndesktoppt.RegisterExternalNetworkOwner(registry)', 'func ServiceRegistry() *service.Registry {'),
             ('RegisterLocalTor', '\troutervpndesktoppt.RegisterServerTor(registry)', 'func OutboundRegistry() *outbound.Registry {'),
             ('RegisterPhysicalOutbound', '\troutervpndesktoppt.RegisterLocalTor(registry)', 'func OutboundRegistry() *outbound.Registry {'),
             ('RegisterExternalPhysicalOutbound', '\troutervpndesktoppt.RegisterPhysicalOutbound(registry)', 'func OutboundRegistry() *outbound.Registry {'),
+            ('RegisterNodePhysicalOutbound', '\troutervpndesktoppt.RegisterExternalPhysicalOutbound(registry)', 'func OutboundRegistry() *outbound.Registry {'),
             ('RegisterLocalTorDNS', '\ttransport.RegisterTCP(registry)', 'func DNSTransportRegistry() *dns.TransportRegistry {')):
         registered = '\troutervpndesktoppt.'+function+'(registry)'
         marker = 'routervpndesktoppt.'+function+'('
@@ -451,6 +463,32 @@ def relocated_shared_source(raw: bytes) -> bytes:
     return raw
 
 
+def node_capture_source(source):
+    edits = (
+        ('\trouterVPNTorOptions string\n', '\trouterVPNTorOptions string\n\trouterVPNNodeOptions string\n'),
+        ('\ttorOptionsSnapshot := routerVPNTorOptionsSnapshot(options.Context, options.Options)\n', '\ttorOptionsSnapshot := routerVPNTorOptionsSnapshot(options.Context, options.Options)\n\tnodeOptionsDigest := routerVPNNodeOptionsDigest(options.Context, options.Options)\n'),
+        ('\t\trouterVPNTorOptions: torOptionsSnapshot,\n', '\t\trouterVPNTorOptions: torOptionsSnapshot,\n\t\trouterVPNNodeOptions: nodeOptionsDigest,\n'),
+    )
+    tokens = (('routerVPNNodeOptions', 2), ('nodeOptionsDigest', 2), ('routerVPNNodeOptionsDigest', 1))
+    counts = [(len(re.findall(r'\b'+name+r'\b', source)), expected) for name, expected in tokens]
+    if any(count for count, _ in counts):
+        if any(count != expected for count, expected in counts) or any(source.count(after) != 1 for _, after in edits):
+            raise ValueError('Changed desktop Node construction snapshot')
+        return source.encode()
+    for before, after in edits:
+        if source.count(before) != 1:
+            raise ValueError('Desktop Node construction snapshot boundary changed')
+        source = source.replace(before, after, 1)
+    return source.encode()
+
+
+def prepare_node_capture(vendor):
+    path = vendor/'box.go'
+    if path.is_symlink():
+        raise ValueError('Linked desktop Node construction snapshot')
+    path.write_bytes(node_capture_source(path.read_text(encoding='utf-8')))
+
+
 def prepare(vendor, go='go', *, env=None):
     vendor = checked_vendor(vendor)
     controller_contract = comparison_client_contract()
@@ -486,16 +524,23 @@ def prepare(vendor, go='go', *, env=None):
     STRATEGY.prepare(vendor, mobile=False)
     prepare_network_startup(vendor)
     EXTERNAL.prepare(vendor, mobile=False)
+    prepare_node_capture(vendor)
     RELAY.OPENVPN_REMOTE.prepare(vendor)
-    templates = [*sorted((ROOT/'mobile/desktop').glob('external*.go.tmpl')), *sorted((ROOT/'mobile/desktop').glob('mtu*.go.tmpl'))]
+    templates = [*sorted((ROOT/'mobile/desktop').glob('external*.go.tmpl')), *sorted((ROOT/'mobile/desktop').glob('mtu*.go.tmpl')),
+                 *sorted((ROOT/'mobile/desktop').glob('node*.go.tmpl'))]
     for template in templates:
-        if template.name in PT_TEMPLATES or template.name in BOX_TEMPLATES:
+        if template.name in PT_TEMPLATES or template.name in BOX_TEMPLATES or template.name in PEER_TEMPLATES:
             continue
         if b'\npackage main\n' not in b'\n'+template.read_bytes():
             raise ValueError('Desktop command template has another native package')
         write(vendor, 'cmd/sing-box/routervpn_'+template.name.removesuffix('.tmpl'), template.read_bytes())
     for relative, raw in controller_contract.items():
         write(vendor, relative, raw)
+    for name, relative in PEER_TEMPLATES.items():
+        path = ROOT/'mobile/desktop'/name
+        if path.is_symlink() or not path.read_bytes().startswith(b'package routervpnamnezia\n'):
+            raise ValueError('Desktop encrypted peer test changed its test-only package')
+        write(vendor, relative, path.read_bytes())
     print('Desktop native external proof source:', digest())
 
 

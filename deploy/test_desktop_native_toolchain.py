@@ -84,6 +84,13 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
                         self.assertLessEqual(kwargs['timeout'], 300)
                         return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_physical.py'):
+                        self.assertIn(system, ('linux', 'windows'))
+                        self.assertEqual(args[2:], [str(source.resolve())])
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertLessEqual(kwargs['timeout'], 900)
+                        return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_physical_bootstrap.py'):
                         self.assertEqual(system, 'windows')
                         self.assertEqual(args[2:], [str(source.resolve()), '--prospective'])
@@ -129,6 +136,9 @@ class NativeSocketUIDGate(unittest.TestCase):
                 uid = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_socket_uid.py')]
                 self.assertEqual(len(uid), 0 if system == 'windows' else 1)
                 self.assertIn(ROOT/'deploy/test_desktop_socket_uid.py', N.inputs())
+                node = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_physical.py')]
+                self.assertEqual(len(node), 1 if system in ('linux', 'windows') else 0)
+                self.assertIn(ROOT/'deploy/test_desktop_node_physical.py', N.inputs())
                 runner = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_windows_identity_runner.py')]
                 self.assertEqual(len(runner), 1 if system == 'windows' else 0)
                 windows = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_windows_identity.py')]

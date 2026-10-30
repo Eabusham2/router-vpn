@@ -97,6 +97,7 @@ type routerVPNNodeMTUEngine interface {
 type routerVPNNodeMTUBox struct {
 	instance *box.Box
 	tag      string
+	physical *box.RouterVPNDesktopNodePhysical
 }
 
 func (engine *routerVPNNodeMTUBox) Current() (adapter.Inbound, error) {
@@ -107,7 +108,22 @@ func (engine *routerVPNNodeMTUBox) Current() (adapter.Inbound, error) {
 	return current, nil
 }
 func (engine *routerVPNNodeMTUBox) Change(ctx context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+	if engine.physical != nil {
+		return engine.physical.ChangeMTU(ctx, expected, mtu)
+	}
 	return engine.instance.RouterVPNChangeMTU(ctx, expected, mtu)
+}
+
+func (engine *routerVPNNodeMTUBox) ClaimTUN(guard func() bool) (string, int, int, error) {
+	if engine.physical != nil {
+		return engine.physical.ClaimTUN(guard)
+	}
+	current, err := engine.Current()
+	reader, ok := current.(routerVPNDesktopMTUTUN)
+	if err != nil || !ok {
+		return "", 0, 0, routerVPNExternalFailure
+	}
+	return reader.RouterVPNDesktopMTU(guard)
 }
 
 type routerVPNNodeMTU struct {
@@ -133,7 +149,13 @@ func newRouterVPNNodeMTU(engine routerVPNNodeMTUEngine, session, config, path st
 	if !ok || inbound.Type() != "tun" {
 		return nil, routerVPNExternalFailure
 	}
-	name, index, mtu, err := inbound.RouterVPNDesktopMTU(guard)
+	claim := inbound.RouterVPNDesktopMTU
+	if captured, ok := engine.(interface {
+		ClaimTUN(func() bool) (string, int, int, error)
+	}); ok {
+		claim = captured.ClaimTUN
+	}
+	name, index, mtu, err := claim(guard)
 	if err != nil {
 		return nil, err
 	}
@@ -279,19 +301,24 @@ func (owner *routerVPNNodeMTU) command(request routerVPNNodeMTUCommand) error {
 }
 
 func init() {
-	var directory, session, config string
+	var directory, session, config, physicalSource string
 	command := &cobra.Command{Use: "routervpn-node", Short: "Run one captured Router VPN node and its retained TUN", Args: cobra.NoArgs, SilenceUsage: true, RunE: func(*cobra.Command, []string) error {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		return routerVPNRunNodeMTU(ctx, directory, session, config)
+		return routerVPNRunNodeMTUWithPhysical(ctx, directory, session, config, physicalSource)
 	}}
 	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private runtime directory")
 	command.Flags().StringVar(&session, "session", "", "captured runtime identity")
 	command.Flags().StringVar(&config, "config-sha256", "", "captured configuration digest")
+	command.Flags().StringVar(&physicalSource, "physical-source-sha256", "", "captured derived physical owner identity")
 	mainCommand.AddCommand(command)
 }
 
 func routerVPNRunNodeMTU(parent context.Context, directory, session, config string) (failure error) {
+	return routerVPNRunNodeMTUWithPhysical(parent, directory, session, config, "")
+}
+
+func routerVPNRunNodeMTUWithPhysical(parent context.Context, directory, session, config, physicalSource string) (failure error) {
 	decoded, decodeErr := hex.DecodeString(config)
 	if parent == nil || !routerVPNExternalSession.MatchString(session) || decodeErr != nil || len(decoded) != 32 || hex.EncodeToString(decoded) != config {
 		return routerVPNExternalFailure
@@ -314,6 +341,10 @@ func routerVPNRunNodeMTU(parent context.Context, directory, session, config stri
 	if hex.EncodeToString(digest[:]) != config {
 		return routerVPNExternalFailure
 	}
+	physicalPolicy, err := routerVPNNodeCommandPhysical(files, session, config, physicalSource)
+	if err != nil {
+		return err
+	}
 	ctx := globalCtx
 	if ctx == nil {
 		ctx = context.Background()
@@ -331,6 +362,7 @@ func routerVPNRunNodeMTU(parent context.Context, directory, session, config stri
 		}
 	}
 	native := &routerVPNExternalNative{cancel: cancel}
+	var admission *routerVPNNodeAdmission
 	var stopped atomic.Bool
 	defer func() {
 		stopped.Store(true)
@@ -339,6 +371,12 @@ func routerVPNRunNodeMTU(parent context.Context, directory, session, config stri
 		for native.Close() != nil {
 			failure = routerVPNExternalFailure
 			time.Sleep(100 * time.Millisecond)
+		}
+		// The exact entered handoff callback and its owned receipt must be
+		// retired before the command can acknowledge complete shutdown.
+		if admission.close() != nil {
+			failure = routerVPNExternalFailure
+			return
 		}
 		closed := struct {
 			routerVPNExternalStop
@@ -350,6 +388,12 @@ func routerVPNRunNodeMTU(parent context.Context, directory, session, config stri
 	}()
 	if parent.Err() != nil || files.stopRequested(session, config) {
 		return nil
+	}
+	if physicalPolicy != nil {
+		ctx, admission, err = routerVPNPrepareNodeAdmission(ctx, files, physicalPolicy)
+		if err != nil {
+			return routerVPNExternalFailure
+		}
 	}
 	watchStop, watchDone := make(chan struct{}), make(chan struct{})
 	go func() {
@@ -382,8 +426,23 @@ func routerVPNRunNodeMTU(parent context.Context, directory, session, config stri
 		return routerVPNExternalFailure
 	}
 	native.box = instance
+	if physicalPolicy != nil {
+		if err := instance.RouterVPNDesktopNodePreparePhysical(physicalPolicy); err != nil {
+			return routerVPNExternalFailure
+		}
+	}
 	if err = instance.RouterVPNStrategyStart(); err != nil {
 		return routerVPNExternalFailure
+	}
+	var physical *box.RouterVPNDesktopNodePhysical
+	if physicalPolicy != nil {
+		if !admission.admitted() {
+			return routerVPNExternalFailure
+		}
+		physical, err = instance.RouterVPNDesktopNodeActivatePhysical(physicalPolicy)
+		if err != nil {
+			return routerVPNExternalFailure
+		}
 	}
 	var inbound adapter.Inbound
 	for _, candidate := range instance.Inbound().Inbounds() {
@@ -399,9 +458,10 @@ func routerVPNRunNodeMTU(parent context.Context, directory, session, config stri
 	}
 	path := routerVPNDesktopPhysicalPath(instance)
 	guard := func() bool {
-		return !stopped.Load() && parent.Err() == nil && ctx.Err() == nil && path != "" && path == routerVPNDesktopPhysicalPath(instance)
+		return !stopped.Load() && parent.Err() == nil && ctx.Err() == nil && path != "" && path == routerVPNDesktopPhysicalPath(instance) &&
+			(physical == nil || physical.Current())
 	}
-	owner, err := newRouterVPNNodeMTU(&routerVPNNodeMTUBox{instance: instance, tag: inbound.Tag()}, session, config, path, guard)
+	owner, err := newRouterVPNNodeMTU(&routerVPNNodeMTUBox{instance: instance, tag: inbound.Tag(), physical: physical}, session, config, path, guard)
 	if err != nil {
 		return routerVPNExternalFailure
 	}

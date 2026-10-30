@@ -123,6 +123,8 @@ class DesktopPTPreparation(unittest.TestCase):
         self.assertEqual(registry.count('routervpndesktoppt.RegisterPhysicalOutbound(registry)'), 1)
         self.assertEqual(registry.count('routervpndesktoppt.RegisterExternalNetworkOwner(registry)'), 1)
         self.assertEqual(registry.count('routervpndesktoppt.RegisterExternalPhysicalOutbound(registry)'), 1)
+        self.assertEqual(registry.count('routervpndesktoppt.RegisterNodeNetworkOwner(registry)'), 1)
+        self.assertEqual(registry.count('routervpndesktoppt.RegisterNodePhysicalOutbound(registry)'), 1)
         self.assertEqual((self.vendor/'route/network.go').read_text().count(PREP.NETWORK_DISPATCH), 1)
         record = json.loads((self.vendor/PREP.PT_OWNER).read_bytes())
         self.assertEqual(record['files'], {name: hashlib.sha256(raw).hexdigest() for name, raw in content.items()})
@@ -134,14 +136,18 @@ class DesktopPTPreparation(unittest.TestCase):
              patch.object(PREP.MTU, 'prepare'), patch.object(PREP.DESKTOP_MTU, 'prepare'), \
              patch.object(PREP.STRATEGY, 'prepare'), patch.object(PREP.EXTERNAL, 'prepare'), \
              patch.object(PREP, 'prepare_network_startup') as startup, \
+             patch.object(PREP, 'prepare_node_capture') as node_capture, \
              patch.object(PREP.RELAY.OPENVPN_REMOTE, 'prepare'), \
              contextlib.redirect_stdout(io.StringIO()):
             PREP.prepare(self.vendor, GO, env=captured)
             selective.assert_called_once_with(self.vendor.resolve(), GO, env=captured)
             startup.assert_called_once_with(self.vendor.resolve())
+            node_capture.assert_called_once_with(self.vendor.resolve())
             generated = {call.args[1]: call.args[2] for call in writes.call_args_list}
-            for name in (*PREP.PT_TEMPLATES, *PREP.BOX_TEMPLATES):
+            for name in (*PREP.PT_TEMPLATES, *PREP.BOX_TEMPLATES, *PREP.PEER_TEMPLATES):
                 self.assertNotIn('cmd/sing-box/routervpn_'+name.removesuffix('.tmpl'), generated)
+            for name, relative in PREP.PEER_TEMPLATES.items():
+                self.assertEqual(generated[relative], (ROOT/'mobile/desktop'/name).read_bytes())
             for name in ('external_tor_comparison.go.tmpl', 'external_tor_comparison_test.go.tmpl',
                          'external_tor_comparison_whole_test.go.tmpl', 'external_socket_linux.go.tmpl',
                          'external_socket_linux_test.go.tmpl'):
@@ -182,6 +188,51 @@ class DesktopPTPreparation(unittest.TestCase):
             return text.replace('func desktopTorComparisonStatus(', 'func removedTorStatus(') if path == source else text
         with patch.object(Path, 'read_text', changed), self.assertRaisesRegex(ValueError, 'receipt contract seam'):
             PREP.comparison_client_contract()
+
+    def test_native_node_construction_capture_preserves_shared_preparation(self):
+        # Start from the actual pinned Box and apply the real External/Tor
+        # preparation. The Node snapshot must remain distinct and must not
+        # disrupt the shared preparer's exact placement/idempotence.
+        PREP.EXTERNAL.prepare(self.vendor, mobile=False)
+        target = self.vendor/'box.go'
+        baseline = target.read_text()
+        PREP.prepare_node_capture(self.vendor)
+        expected = target.read_bytes()
+        self.assertNotEqual(expected, baseline.encode())
+        PREP.EXTERNAL.prepare(self.vendor, mobile=False)
+        PREP.prepare_node_capture(self.vendor)
+        self.assertEqual(target.read_bytes(), expected)
+        for before, after in (
+            ('\trouterVPNNodeOptions string\n', ''),
+            ('\trouterVPNNodeOptions string\n', '\trouterVPNNodeOptions string\n\trouterVPNNodeOptions string\n'),
+            ('\tnodeOptionsDigest := routerVPNNodeOptionsDigest(options.Context, options.Options)\n',
+             '\tnodeOptionsDigest := routerVPNNodeOptionsDigest(context.Background(), options.Options)\n'),
+            ('\t\trouterVPNNodeOptions: nodeOptionsDigest,\n', '\t\trouterVPNNodeOptions: "",\n'),
+            ('\trouterVPNTorOptions string\n\trouterVPNNodeOptions string\n',
+             '\trouterVPNNodeOptions string\n\trouterVPNTorOptions string\n'),
+        ):
+            with self.subTest(before=before):
+                changed = expected.decode().replace(before, after, 1)
+                self.assertNotEqual(changed.encode(), expected)
+                target.write_text(changed)
+                with self.assertRaisesRegex(ValueError, 'Node construction snapshot'):
+                    PREP.prepare_node_capture(self.vendor)
+                self.assertEqual(target.read_text(), changed)
+        target.write_bytes(expected)
+
+    def test_native_node_capture_rejects_linked_source(self):
+        PREP.EXTERNAL.prepare(self.vendor, mobile=False)
+        target = self.vendor/'box.go'
+        outside = Path(self.temp.name)/'foreign-box.go'
+        target.rename(outside)
+        original = outside.read_bytes()
+        try:
+            target.symlink_to(outside)
+        except (OSError, NotImplementedError):
+            self.skipTest('Symlink creation unavailable on this host')
+        with self.assertRaisesRegex(ValueError, 'Linked desktop Node'):
+            PREP.prepare_node_capture(self.vendor)
+        self.assertEqual(outside.read_bytes(), original)
 
     def test_native_network_startup_joins_exact_callbacks_and_preserves_repeat_preparation(self):
         self.prepare()
@@ -443,7 +494,9 @@ class DesktopPTPreparation(unittest.TestCase):
             generated.replace(dns_registered, '')+'\nfunc foreign() {\n'+dns_registered+'\n}\n',
             ORIGINALS['include/registry.go'].decode()+'\n// '+PREP.MODULE+'/protocol/routervpntor\n',
         ]
-        for registration in (external_network, external_physical):
+        for registration in (external_network, external_physical,
+                             '\troutervpndesktoppt.RegisterNodeNetworkOwner(registry)',
+                             '\troutervpndesktoppt.RegisterNodePhysicalOutbound(registry)'):
             forms.extend((
                 generated.replace(registration, registration+'\n'+registration),
                 generated.replace(registration, registration.replace('(registry)', '(foreignRegistry)')),
@@ -525,7 +578,7 @@ if __name__ == '__main__':
     if subprocess.check_output([GO, 'version'], text=True).split()[2] != 'go1.26.3':
         raise ValueError('Desktop preparation fixture requires the actual Go 1.26.3 toolchain')
     ORIGINALS = {name: subprocess.check_output(['git', '-C', str(vendor), 'show', head+':'+name])
-                 for name in ('include/registry.go', 'route/network.go', 'dns/transport_adapter.go', 'go.mod', 'go.sum',
+                 for name in ('include/registry.go', 'route/network.go', 'dns/transport_adapter.go', 'go.mod', 'go.sum', 'box.go',
                               'adapter/inbound/manager.go', 'adapter/outbound/manager.go', 'adapter/endpoint/manager.go',
                               'adapter/service/manager.go', 'dns/transport_manager.go')}
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(DesktopPTPreparation))

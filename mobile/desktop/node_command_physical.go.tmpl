@@ -1,0 +1,43 @@
+package main
+
+import (
+	"runtime"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// The native child recompiles all of the exact captured private constructor
+// inputs. A staged graph, tuple list or metadata document alone never supplies
+// NodeProfile authority. The public argument only constrains its expected
+// desktop identity and cannot install a socket factory by itself.
+func routerVPNNodeCommandPhysical(files *routerVPNExternalFiles, session, config, source string) (*mobilemultihop.DesktopNodePolicy, error) {
+	if source == "" {
+		return nil, nil
+	}
+	if runtime.GOOS != "windows" || files == nil || !routerVPNExternalSource.MatchString(source) {
+		return nil, routerVPNExternalFailure
+	}
+	raw, err := files.read("node-source.json", mobilemultihop.NodeLaunchInputLimit)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	original, err := mobilemultihop.ParseNodeLaunchInput(string(raw))
+	clear(raw)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	policy, err := mobilemultihop.NewDesktopNodePolicy(original, session, runtime.GOOS)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	meta := policy.Metadata()
+	if meta.SourceSHA256 != source || meta.ConfigSHA256 != config || meta.StartLayer != "" ||
+		(meta.Mode != "wg" && meta.Mode != "awg2-fast" && meta.Mode != "awg2-strong") {
+		return nil, routerVPNExternalFailure
+	}
+	staged, err := files.read("sing-box.json", 4<<20)
+	if err != nil || string(staged) != policy.Config() {
+		return nil, routerVPNExternalFailure
+	}
+	return policy, nil
+}

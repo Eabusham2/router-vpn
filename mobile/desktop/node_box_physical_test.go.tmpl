@@ -1,0 +1,253 @@
+package box
+
+import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/shadowsocks"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	SJ "github.com/sagernet/sing/common/json"
+)
+
+// Actual compiler/Box/native manager/MTU transactions execute here. The stated
+// fixture boundary is a harmless TUN and an OS source that refuses public
+// traffic. Successful preparation is not node/DNS or physical kernel proof.
+type desktopNodeBoxFixture struct {
+	box     *Box
+	policy  *mobilemultihop.DesktopNodePolicy
+	network *routervpndesktoppt.NodeNetworkOwner
+	tun     *desktopTorBoxTUN
+	source  *desktopExternalBoxSource
+}
+
+func newDesktopNodeBoxFixture(t *testing.T, edit func(map[string]any)) *desktopNodeBoxFixture {
+	t.Helper()
+	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
+		t.Skip("node native composition fixture requires Linux or Windows")
+	}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true, "mtu": 1280}},
+		"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "192.0.2.44", "server_port": 443,
+			"method": "2022-blake3-aes-256-gcm", "password": base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32)))}},
+		"route": map[string]any{"final": "proxy", "rules": []any{}}}
+	config, _ := json.Marshal(graph)
+	files, _ := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(config)})
+	profile, _ := json.Marshal(map[string]any{"id": "captured-router", "node_kind": "router-vpn", "node_proof_id": strings.Repeat("a", 64),
+		"router_api": "http://10.77.0.1:8787", "api_token": "captured-node-token", "endpoint": "192.0.2.44", "dns_mode": "home", "adguard_ipv4": "192.168.50.133",
+		"kill_switch_policy": "always", "mtu_policy": "auto", "ipv6_mode": "off", "home_lan_access": false})
+	original, err := mobilemultihop.NewNodeProfile("shadowsocks", string(files), string(profile), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewDesktopNodePolicy(original, desktopTorBoxSession, runtime.GOOS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &desktopNodeBoxFixture{policy: policy, source: newDesktopExternalBoxSource()}
+	raw := policy.Config()
+	if edit != nil {
+		var graph map[string]any
+		if err := json.Unmarshal([]byte(raw), &graph); err != nil {
+			t.Fatal(err)
+		}
+		edit(graph)
+		body, err := json.Marshal(graph)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw = string(body)
+	}
+	ins := inbound.NewRegistry()
+	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options option.TunInboundOptions) (adapter.Inbound, error) {
+		f.tun = &desktopTorBoxTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag), name: options.InterfaceName, index: 771, mtu: int(options.MTU)}
+		return f.tun, nil
+	})
+	outs := outbound.NewRegistry()
+	shadowsocks.RegisterOutbound(outs)
+	routervpndesktoppt.RegisterNodePhysicalOutbound(outs)
+	dnsRegistry := dns.NewTransportRegistry()
+	DNST.RegisterUDP(dnsRegistry)
+	DNST.RegisterTCP(dnsRegistry)
+	services := boxService.NewRegistry()
+	routervpndesktoppt.RegisterNodeNetworkOwner(services)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ctx = Context(ctx, ins, outs, endpoint.NewRegistry(), dnsRegistry, services, certificate.NewRegistry())
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Log = &option.LogOptions{Disabled: true}
+	f.box, err = New(Options{Context: ctx, Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.box.Close(); err != nil {
+			t.Error("node Box did not join its native owners", err)
+		}
+	})
+	service, found := f.box.service.Get(mobilemultihop.DesktopNodeNetworkTag)
+	var ok bool
+	f.network, ok = service.(*routervpndesktoppt.NodeNetworkOwner)
+	if !found || !ok {
+		t.Fatal("compiled node lost its separate native network service")
+	}
+	return f
+}
+
+func (f *desktopNodeBoxFixture) start(t *testing.T) *RouterVPNDesktopNodePhysical {
+	t.Helper()
+	if _, _, err := f.box.routerVPNDesktopNodePhysical(f.policy); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.network.PrepareNodePhysicalBroker(f.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		if f.tun.ready || f.tun.claimed || f.network.SocketCurrent() || f.network.Current() {
+			t.Error("node source was constructed after native admission")
+		}
+		f.source.capture = capture
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, f.source, current)
+		return broker, f.source, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal("actual node startup", err)
+	}
+	if f.network.Current() || f.tun.claimed || !f.network.SocketCurrent() {
+		t.Fatal("handshake phase fabricated completed node readiness")
+	}
+	owner, err := f.box.routerVPNDesktopNodeActivatePhysical(f.policy)
+	if err != nil {
+		t.Fatal("actual node TUN ownership", err)
+	}
+	if !owner.Current() || !f.tun.claimed || f.source.binds != 1 {
+		t.Fatal("node activation omitted its exact TUN binding")
+	}
+	return owner
+}
+
+func TestRouterVPNDesktopNodePhysicalBoxRejectsSubstitutedGraph(t *testing.T) {
+	for _, field := range []string{"credential", "dns", "lan", "mtu", "interface", "source"} {
+		t.Run(field, func(t *testing.T) {
+			f := newDesktopNodeBoxFixture(t, func(graph map[string]any) {
+				switch field {
+				case "credential":
+					graph["outbounds"].([]any)[0].(map[string]any)["password"] = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("f", 32)))
+				case "dns":
+					graph["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["server"] = "192.168.50.134"
+				case "lan":
+					graph["route"].(map[string]any)["rules"] = []any{}
+				case "mtu":
+					graph["inbounds"].([]any)[0].(map[string]any)["mtu"] = float64(1392)
+				case "interface":
+					graph["inbounds"].([]any)[0].(map[string]any)["interface_name"] = "foreign-tunnel"
+				case "source":
+					graph["services"].([]any)[0].(map[string]any)["source_sha256"] = strings.Repeat("f", 64)
+				}
+			})
+			if _, _, err := f.box.routerVPNDesktopNodePhysical(f.policy); err == nil {
+				t.Fatal("substituted native graph acquired a node lower factory")
+			}
+			if owner, err := f.box.routerVPNDesktopNodeActivatePhysical(f.policy); err == nil || owner != nil {
+				t.Fatal("substituted graph acquired an actual TUN owner")
+			}
+			if f.tun.ready || f.tun.claimed {
+				t.Fatal("rejected graph entered native TUN lifecycle")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodePhysicalBoxRequiresPreparedOwner(t *testing.T) {
+	f := newDesktopNodeBoxFixture(t, nil)
+	if owner, err := f.box.routerVPNDesktopNodeActivatePhysical(f.policy); err == nil || owner != nil {
+		t.Fatal("unstarted Box acquired physical TUN authority")
+	}
+	if err := f.box.RouterVPNStrategyStart(); err == nil {
+		t.Fatal("node JSON bypassed its actual prepared OS factory")
+	}
+	if f.tun.ready || f.tun.claimed || f.network.SocketCurrent() {
+		t.Fatal("missing factory reached native handshake or TUN startup")
+	}
+}
+
+func (f *desktopNodeBoxFixture) replacement(owner *RouterVPNDesktopNodePhysical, callback func(adapter.StartStage) error, candidate, rollback **desktopTorMTUCandidate) func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) {
+	return func(ctx context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+		reader, ok := expected.(routerVPNDesktopTorTUN)
+		if !ok {
+			return expected, errors.New("another reader family")
+		}
+		name, index, oldMTU, err := reader.RouterVPNDesktopMTUInterface()
+		if err != nil {
+			return expected, err
+		}
+		makeReader := func(value, nextIndex int) *desktopTorMTUCandidate {
+			return &desktopTorMTUCandidate{desktopTorBoxTUN: &desktopTorBoxTUN{Adapter: inbound.NewAdapter(C.TypeTun, expected.Tag()), name: name, index: nextIndex, mtu: value, claimed: true, guard: owner.generationCurrent}}
+		}
+		*candidate, *rollback = makeReader(mtu, index+1), makeReader(oldMTU, index+2)
+		(*candidate).afterStart = callback
+		return f.box.inbound.RouterVPNReplaceTun(ctx, expected, *candidate, *rollback)
+	}
+}
+
+func TestRouterVPNDesktopNodePhysicalBoxRetainsMTUAndExactRollback(t *testing.T) {
+	f := newDesktopNodeBoxFixture(t, nil)
+	owner := f.start(t)
+	joined := make(chan error, 1)
+	go func() { _, _, _, err := owner.ClaimTUN(owner.Current); joined <- err }()
+	select {
+	case err := <-joined:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("composite MTU guard deadlocked its same retained owner")
+	}
+	original := owner.inbound
+	var candidate, rollback *desktopTorMTUCandidate
+	next, err := owner.changeMTU(context.Background(), original, 1400, f.replacement(owner, nil, &candidate, &rollback))
+	if err != nil || next != candidate || !owner.Current() {
+		t.Fatal("native MTU candidate lost exact physical ownership", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	next, err = owner.changeMTU(ctx, next, 1500, f.replacement(owner, func(stage adapter.StartStage) error {
+		if stage == adapter.StartStateStarted {
+			cancel()
+		}
+		return nil
+	}, &candidate, &rollback))
+	if err == nil || next != rollback || !owner.Current() {
+		t.Fatal("cancelled native MTU lost its actual valid rollback", err)
+	}
+	name, index, mtu, err := owner.ClaimTUN(owner.Current)
+	if err != nil || name != "router-vpn" || index != 774 || mtu != 1400 || f.source.binds != 3 || f.source.retires != 2 || f.source.index != 774 {
+		t.Fatal("native rollback adopted another TUN or skipped exact retire/rebind", name, index, mtu, err)
+	}
+	called := false
+	if _, err := owner.changeMTU(context.Background(), original, 1450, func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) { called = true; return nil, nil }); err == nil || called {
+		t.Fatal("stale original TUN changed its replacement")
+	}
+	if _, err := owner.changeMTU(context.Background(), next, 1450, func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) { return original, nil }); err == nil || owner.Current() || f.network.SocketCurrent() {
+		t.Fatal("unrelated replacement result retained the live physical generation")
+	}
+}

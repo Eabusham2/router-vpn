@@ -106,6 +106,7 @@ def inputs():
                              ROOT/'deploy/test_windows_physical_bootstrap_runner.py',
                              ROOT/'deploy/test_windows_physical_tunnel.py',
                              ROOT/'deploy/test_windows_physical_tunnel_runner.py',
+                             ROOT/'deploy/test_desktop_node_physical.py',
                              *sorted((ROOT/'deploy/fixtures/windows-physical-bootstrap').glob('*.go')),
                              ROOT/'deploy/test_desktop_linux_guardian.py',
                              ROOT/'deploy/test_desktop_darwin_guardian.py',
@@ -508,6 +509,12 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './routervpn/mobiletor', '-run', '^TestDesktopSocket',
                  '-count=1', '-timeout=60s'], cwd=source, env=env, timeout=120)
+            if target.startswith(('linux/', 'windows/')):
+                # Private Node startup uses its own sealed policy and eager
+                # WG/AWG lower phase. The exact native command/Box tests keep
+                # OS permits and TUN as explicit composition boundaries.
+                run([sys.executable, ROOT/'deploy/test_desktop_node_physical.py', source],
+                    env=env, timeout=900)
             if target.startswith(('linux/', 'darwin/')):
                 run([sys.executable, ROOT/'deploy/test_desktop_socket_uid.py', source],
                     env=env, timeout=300)

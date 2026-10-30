@@ -1,0 +1,338 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"testing/synctest"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	routervpndesktoppt "github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func desktopNodeCommandOriginal(t *testing.T) *mobilemultihop.NodeProfile {
+	return desktopNodeCommandOriginalWithLayer(t, "")
+}
+
+func desktopNodeCommandOriginalWithLayer(t *testing.T, layer string) *mobilemultihop.NodeProfile {
+	t.Helper()
+	private := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32)))
+	public := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("p", 32)))
+	node := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+	config := "[Interface]\nAddress=10.77.0.2/32\nPrivateKey=" + private + "\nDNS=192.168.50.133\n[Peer]\nPublicKey=" + public + "\nEndpoint=192.0.2.44:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n"
+	files, _ := json.Marshal(map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(config))})
+	profile, _ := json.Marshal(map[string]any{"id": "captured-router", "node_kind": "router-vpn", "node_proof_id": hex.EncodeToString(node[:]), "router_api": "http://10.77.0.1:8787", "api_token": "private-fixture-token", "endpoint": "192.0.2.44", "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "kill_switch_policy": "always", "ipv6_mode": "off", "home_lan_access": false, "mtu_policy": "auto", "start_layer": layer})
+	var start string
+	if layer != "" {
+		graph, _ := json.Marshal(map[string]any{"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "192.0.2.44", "server_port": 443, "method": "2022-blake3-aes-256-gcm", "password": private}}})
+		assets, _ := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(graph)})
+		start = string(assets)
+	}
+	original, err := mobilemultihop.NewNodeProfile("wg", string(files), string(profile), start, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return original
+}
+
+// This fixture runs the actual private-file handshake independently of the
+// privileged Windows policy. BFE readback and legacy Firewall mutation are
+// separate native/adapter gates; an IPC acknowledgement alone proves neither.
+func desktopNodeAdmissionFixture(t *testing.T) (string, *routerVPNNodeAdmission, context.Context, context.CancelFunc, routervpndesktoppt.NodePhysicalPrepared) {
+	t.Helper()
+	policy := desktopNodeCommandOriginal(t)
+	physical, err := mobilemultihop.NewDesktopNodePolicy(policy, desktopExternalSession, "windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	files, err := routerVPNOpenExternalFiles(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = files.root.Close() })
+	ctx, cancel := context.WithCancel(context.Background())
+	owned, admission, err := routerVPNPrepareNodeAdmission(ctx, files, physical)
+	if err != nil || admission == nil || admission.admitted() {
+		t.Fatal("native IPC admission was not captured", err)
+	}
+	t.Cleanup(cancel)
+	t.Cleanup(func() { cancel(); _ = admission.close() })
+	prepared := routervpndesktoppt.NodePhysicalPrepared{Capture: mobiletor.DesktopSocketCapture{SessionID: desktopExternalSession,
+		SourceSHA256: physical.Metadata().SourceSHA256, NetworkID: strings.Repeat("b", 32)}, Policy: "always", BaselineSHA256: strings.Repeat("c", 64)}
+	return directory, admission, owned, cancel, prepared
+}
+
+func desktopNodeAdmissionWait(t *testing.T, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(3 * time.Second):
+		t.Fatal("native handoff callback did not join")
+		return nil
+	}
+}
+
+func desktopNodeAdmissionRecord(t *testing.T, directory string) routerVPNNodeAdmissionRecord {
+	t.Helper()
+	var value routerVPNNodeAdmissionRecord
+	if err := json.Unmarshal(desktopExternalWaitFile(t, directory, "node-physical-handoff-ready.json"), &value); err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+func desktopNodeAdmissionAck(t *testing.T, directory string, raw []byte) {
+	t.Helper()
+	pending := filepath.Join(directory, "ack-test.pending")
+	if err := os.WriteFile(pending, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(pending, filepath.Join(directory, "node-physical-handoff-ack.json")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterVPNDesktopNodePhysicalCommandAdmissionExactHandshake(t *testing.T) {
+	directory, a, ctx, cancel, prepared := desktopNodeAdmissionFixture(t)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- a.admit(ctx, prepared) }()
+	value := desktopNodeAdmissionRecord(t, directory)
+	if value.Schema != 1 || value.Accepted || value.SessionID != prepared.Capture.SessionID || value.SourceSHA256 != prepared.Capture.SourceSHA256 ||
+		value.NetworkID != prepared.Capture.NetworkID || value.Policy != prepared.Policy || value.BaselineSHA256 != prepared.BaselineSHA256 ||
+		value.ConfigSHA256 != a.metadata.ConfigSHA256 || len(value.Nonce) != 64 || a.admitted() {
+		t.Fatal("native handshake changed its captured baseline or admitted before acknowledgement")
+	}
+	value.Accepted = true
+	raw, _ := json.Marshal(value)
+	desktopNodeAdmissionAck(t, directory, raw)
+	if err := desktopNodeAdmissionWait(t, done); err != nil || !a.admitted() {
+		t.Fatal("exact captured handoff acknowledgement was rejected", err)
+	}
+	if a.admit(ctx, prepared) == nil {
+		t.Fatal("duplicate native handoff was admitted")
+	}
+	if err := a.close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(directory, "node-physical-handoff-ready.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("joined handoff retained its ready file", err)
+	}
+	if actual, err := os.ReadFile(filepath.Join(directory, "node-physical-handoff-ack.json")); err != nil || string(actual) != string(raw) {
+		t.Fatal("native cleanup changed the wrapper-owned acknowledgement", err)
+	}
+}
+
+func TestRouterVPNDesktopNodePhysicalCommandAdmissionRejectsForeignReplies(t *testing.T) {
+	for _, fault := range []string{"schema", "session", "source", "config", "network", "policy", "baseline", "nonce", "not-accepted", "extra", "duplicate", "oversized", "linked"} {
+		t.Run(fault, func(t *testing.T) {
+			directory, a, ctx, cancel, prepared := desktopNodeAdmissionFixture(t)
+			defer cancel()
+			done := make(chan error, 1)
+			go func() { done <- a.admit(ctx, prepared) }()
+			value := desktopNodeAdmissionRecord(t, directory)
+			value.Accepted = true
+			switch fault {
+			case "schema":
+				value.Schema++
+			case "session":
+				value.SessionID = strings.Repeat("d", 32)
+			case "source":
+				value.SourceSHA256 = strings.Repeat("d", 64)
+			case "config":
+				value.ConfigSHA256 = strings.Repeat("d", 64)
+			case "network":
+				value.NetworkID = strings.Repeat("d", 32)
+			case "policy":
+				value.Policy = "on-connect"
+			case "baseline":
+				value.BaselineSHA256 = strings.Repeat("d", 64)
+			case "nonce":
+				value.Nonce = strings.Repeat("d", 64)
+			case "not-accepted":
+				value.Accepted = false
+			}
+			raw, _ := json.Marshal(value)
+			switch fault {
+			case "extra":
+				raw = append(raw[:len(raw)-1], []byte(`,"extra":true}`)...)
+			case "duplicate":
+				raw = append(raw[:len(raw)-1], []byte(`,"accepted":true}`)...)
+			case "oversized":
+				raw = []byte(strings.Repeat(" ", 2049))
+			}
+			if fault == "linked" {
+				if err := os.WriteFile(filepath.Join(directory, "foreign-ack.json"), raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink("foreign-ack.json", filepath.Join(directory, "node-physical-handoff-ack.json")); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				desktopNodeAdmissionAck(t, directory, raw)
+			}
+			if err := desktopNodeAdmissionWait(t, done); err == nil || a.admitted() {
+				t.Fatal("foreign handoff acknowledgement activated native sockets")
+			}
+			if err := a.close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodePhysicalCommandAdmissionCancellationAndReplacement(t *testing.T) {
+	for _, fault := range []string{"cancel", "ready-replaced", "workspace-replaced"} {
+		t.Run(fault, func(t *testing.T) {
+			directory, a, ctx, cancel, prepared := desktopNodeAdmissionFixture(t)
+			done := make(chan error, 1)
+			go func() { done <- a.admit(ctx, prepared) }()
+			value := desktopNodeAdmissionRecord(t, directory)
+			var retained string
+			if fault == "ready-replaced" {
+				path := filepath.Join(directory, "node-physical-handoff-ready.json")
+				if err := os.Rename(path, path+".retained"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("replacement"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else if fault == "workspace-replaced" {
+				retained = directory + "-retained"
+				if err := os.Rename(directory, retained); err != nil {
+					t.Fatal(err)
+				}
+				defer os.RemoveAll(retained)
+				if err := os.Mkdir(directory, 0700); err != nil {
+					t.Fatal(err)
+				}
+				value.Accepted = true
+				raw, _ := json.Marshal(value)
+				desktopNodeAdmissionAck(t, directory, raw)
+			}
+			cancel()
+			if err := desktopNodeAdmissionWait(t, done); err == nil || a.admitted() {
+				t.Fatal("cancelled or replaced handoff activated a native owner")
+			}
+			err := a.close()
+			if fault == "ready-replaced" {
+				if err == nil {
+					t.Fatal("handoff cleanup acknowledged a substituted ready file")
+				}
+				actual, readErr := os.ReadFile(filepath.Join(directory, "node-physical-handoff-ready.json"))
+				if readErr != nil || string(actual) != "replacement" {
+					t.Fatal("handoff cleanup removed a replacement owner", readErr)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if retained != "" {
+				if _, err := os.Stat(filepath.Join(directory, "node-physical-handoff-ack.json")); err != nil {
+					t.Fatal("old native callback changed the replacement workspace", err)
+				}
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodePhysicalCommandAdmissionCloseRetiresEnteredCallback(t *testing.T) {
+	directory, a, ctx, _, prepared := desktopNodeAdmissionFixture(t)
+	done := make(chan error, 1)
+	go func() { done <- a.admit(ctx, prepared) }()
+	_ = desktopNodeAdmissionRecord(t, directory)
+	if err := a.close(); err != nil {
+		t.Fatal("owned admission close did not retire its private files", err)
+	}
+	if err := desktopNodeAdmissionWait(t, done); err == nil || a.admitted() {
+		t.Fatal("entered handoff remained admitted after owned close")
+	}
+	if a.admit(ctx, prepared) == nil {
+		t.Fatal("retired handoff accepted a later callback")
+	}
+	if _, err := os.Stat(filepath.Join(directory, "node-physical-handoff-ready.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("joined admission cleanup left its owned ready record", err)
+	}
+}
+
+func TestRouterVPNDesktopNodePhysicalCommandAdmissionClosePreservesFailure(t *testing.T) {
+	directory, a, ctx, cancel, prepared := desktopNodeAdmissionFixture(t)
+	done := make(chan error, 1)
+	go func() { done <- a.admit(ctx, prepared) }()
+	_ = desktopNodeAdmissionRecord(t, directory)
+	path := filepath.Join(directory, "node-physical-handoff-ready.json")
+	if err := os.Rename(path, path+".retained"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("replacement-owner"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if err := desktopNodeAdmissionWait(t, done); err == nil {
+		t.Fatal("replaced admission did not reject the pending callback")
+	}
+	first := a.close()
+	if first == nil {
+		t.Fatal("handoff cleanup acknowledged a substituted ready file")
+	}
+	if second := a.close(); second == nil || second != first {
+		t.Error("failed admission cleanup was forgotten by repeated close", second)
+	}
+	if raw, err := os.ReadFile(path); err != nil || string(raw) != "replacement-owner" {
+		t.Fatal("repeated admission close changed replacement ownership", err)
+	}
+}
+
+func TestRouterVPNDesktopNodePhysicalCommandAdmissionEveryCloseJoins(t *testing.T) {
+	// Hold the entered-callback completion channel explicitly. synctest waits
+	// for durable blocking, so this proves duplicate Close joins without a
+	// scheduler-dependent sleep or treating elapsed time as the assertion.
+	synctest.Test(t, func(t *testing.T) {
+		_, a, _, _, _ := desktopNodeAdmissionFixture(t)
+		if !a.state.CompareAndSwap(0, 1) {
+			t.Fatal("admission fixture was already entered")
+		}
+		first := make(chan error, 1)
+		go func() { first <- a.close() }()
+		synctest.Wait()
+		if a.state.Load() != 2 {
+			close(a.joined)
+			<-first
+			t.Fatal("first close did not retire its captured callback")
+		}
+		second := make(chan error, 1)
+		go func() { second <- a.close() }()
+		synctest.Wait()
+		early := false
+		select {
+		case <-second:
+			early = true
+		default:
+		}
+		close(a.joined)
+		if err := <-first; err != nil {
+			t.Error("first joined close failed", err)
+		}
+		if !early {
+			if err := <-second; err != nil {
+				t.Error("duplicate joined close failed", err)
+			}
+		}
+		if early {
+			t.Fatal("duplicate admission close returned before the captured callback joined")
+		}
+	})
+}

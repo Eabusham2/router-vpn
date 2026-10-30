@@ -26,17 +26,25 @@ type externalPhysicalDestination struct {
 // eligible. This is a request constraint, not an endpoint-wide firewall permit;
 // the broker still creates, proves and retires each individual kernel socket.
 func externalPhysicalDestinations(capture mobilemultihop.ExternalDesktopCapture) (map[externalPhysicalDestination]bool, error) {
+	return desktopPhysicalDestinations(capture.IPv6Mode, capture.PhysicalRoots, capture.SelectedDNS, capture.BootstrapDNS)
+}
+
+// Both independently sealed policy families use the same bounded tuple
+// projection. These copied values constrain requests; they never create an OS
+// source or replace the original native policy required by either factory.
+func desktopPhysicalDestinations(ipv6 string, roots []mobilemultihop.ExternalDesktopPhysicalRoot,
+	selectedDNS mobilemultihop.ExternalDesktopDNS, bootstrap []mobilemultihop.ExternalDesktopDNS) (map[externalPhysicalDestination]bool, error) {
 	result := make(map[externalPhysicalDestination]bool)
 	add := func(network, host string, port int) error {
 		address, err := netip.ParseAddr(host)
 		if err != nil || address.String() != host || address.Is4In6() || address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() ||
-			port < 1 || port > 65535 || (network != "tcp" && network != "udp") || capture.IPv6Mode == "off" && address.Is6() {
+			port < 1 || port > 65535 || (network != "tcp" && network != "udp") || ipv6 == "off" && address.Is6() {
 			return errors.New("ordinary desktop lower path requires its exact captured numeric protocol tuple")
 		}
 		result[externalPhysicalDestination{network, netip.AddrPortFrom(address, uint16(port))}] = true
 		return nil
 	}
-	for _, root := range capture.PhysicalRoots {
+	for _, root := range roots {
 		if root.DynamicSOCKSUDP {
 			return nil, errors.New("ordinary SOCKS UDP requires a retained native control association")
 		}
@@ -46,7 +54,7 @@ func externalPhysicalDestinations(capture mobilemultihop.ExternalDesktopCapture)
 			}
 		}
 	}
-	for _, dns := range capture.BootstrapDNS {
+	for _, dns := range bootstrap {
 		if !dns.Physical {
 			continue
 		}
@@ -59,7 +67,7 @@ func externalPhysicalDestinations(capture mobilemultihop.ExternalDesktopCapture)
 		default:
 			return nil, errors.New("ordinary physical DNS lost its captured transport")
 		}
-		if dns.Tag == capture.SelectedDNS.Tag || dns.Detour != "" {
+		if dns.Tag == selectedDNS.Tag || dns.Detour != "" {
 			return nil, errors.New("selected or already routed DNS cannot become a physical exception")
 		}
 		if err := add(network, dns.Host, dns.Port); err != nil {

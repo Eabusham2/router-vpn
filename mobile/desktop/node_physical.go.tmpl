@@ -1,0 +1,161 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+type NodePhysicalOutbound struct {
+	outbound.Adapter
+	mu      sync.Mutex
+	ctx     context.Context
+	options NodeCaptureOptions
+	owner   *NodeNetworkOwner
+	allowed map[externalPhysicalDestination]bool
+	closed  bool
+}
+
+func RegisterNodePhysicalOutbound(registry *outbound.Registry) {
+	outbound.Register[NodeCaptureOptions](registry, mobilemultihop.DesktopNodePhysicalType, NewNodePhysicalOutbound)
+}
+
+func NewNodePhysicalOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options NodeCaptureOptions) (adapter.Outbound, error) {
+	if ctx == nil || ctx.Err() != nil || tag != mobilemultihop.DesktopNodePhysicalTag ||
+		!networkSessionID.MatchString(options.SessionID) || !networkSourceID.MatchString(options.SourceSHA256) {
+		return nil, errors.New("Router node desktop physical outbound requires its exact captured native source")
+	}
+	return &NodePhysicalOutbound{Adapter: outbound.NewAdapter(mobilemultihop.DesktopNodePhysicalType, tag, []string{"tcp", "udp"}, nil), ctx: ctx, options: options}, nil
+}
+
+func (o *NodePhysicalOutbound) prepare(owner *NodeNetworkOwner, allowed map[externalPhysicalDestination]bool) error {
+	if owner == nil || owner.capture != o.options || len(allowed) == 0 || len(allowed) > 64 {
+		return errors.New("Router node desktop lower object has another captured owner")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed || o.ctx.Err() != nil || o.owner != nil {
+		return errors.New("Router node desktop lower object was already prepared or retired")
+	}
+	o.allowed = make(map[externalPhysicalDestination]bool, len(allowed))
+	for key, permitted := range allowed {
+		o.allowed[key] = permitted
+	}
+	o.owner = owner
+	return nil
+}
+
+func (o *NodePhysicalOutbound) current(ctx context.Context, network string, destination M.Socksaddr) (*mobiletor.DesktopSocketBroker, error) {
+	if ctx == nil || ctx.Err() != nil || o.ctx.Err() != nil || destination.IsDomain() || !destination.IsValid() || destination.Port == 0 {
+		return nil, errors.New("Router node desktop lower socket has no current numeric captured destination")
+	}
+	address, err := netip.ParseAddrPort(destination.String())
+	if err != nil {
+		return nil, err
+	}
+	var base string
+	switch network {
+	case "tcp", "tcp4", "tcp6":
+		base = "tcp"
+	case "udp", "udp4", "udp6":
+		base = "udp"
+	default:
+		return nil, errors.New("Router node desktop lower socket has another outer protocol")
+	}
+	o.mu.Lock()
+	owner, allowed, closed := o.owner, o.allowed[externalPhysicalDestination{base, address}], o.closed
+	o.mu.Unlock()
+	if closed || !allowed || owner == nil || !owner.SocketCurrent() {
+		return nil, errors.New("Router node desktop lower socket lost its captured native capability")
+	}
+	manager := service.FromContext[adapter.OutboundManager](o.ctx)
+	if manager == nil {
+		return nil, errors.New("Router node desktop lower manager is unavailable")
+	}
+	selected, found := manager.Outbound(mobilemultihop.DesktopNodePhysicalTag)
+	if !found || selected != o {
+		return nil, errors.New("Router node desktop lower object was replaced")
+	}
+	owner.mu.Lock()
+	broker := owner.broker
+	owner.mu.Unlock()
+	if broker == nil || !broker.Matches(owner.brokerCapture()) {
+		return nil, errors.New("Router node desktop broker belongs to another native generation")
+	}
+	return broker, nil
+}
+
+// Private Router protocols retain this exact lower object through their
+// compiled detour. Startup admits only the sealed outer tuples after the deny
+// baseline and handoff. The node/DNS proof phase remains a separate operation.
+func (o *NodePhysicalOutbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	broker, err := o.current(ctx, network, destination)
+	if err != nil {
+		return nil, err
+	}
+	return broker.DialContext(ctx, network, destination.String())
+}
+
+func (o *NodePhysicalOutbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	broker, err := o.current(ctx, "udp", destination)
+	if err != nil {
+		return nil, err
+	}
+	packet, err := broker.ListenPacket(ctx, "udp", destination.String())
+	if err != nil {
+		return nil, err
+	}
+	// Dial cancellation applies only to establishment. A retained packet socket
+	// lives under its native owner, not a caller's completed request deadline.
+	return &nodePhysicalPacket{PacketConn: packet, ctx: o.ctx, owner: o}, nil
+}
+
+type nodePhysicalPacket struct {
+	net.PacketConn
+	ctx   context.Context
+	owner *NodePhysicalOutbound
+}
+
+func (c *nodePhysicalPacket) WriteTo(p []byte, address net.Addr) (int, error) {
+	if address == nil {
+		return 0, errors.New("Router node packet destination is missing")
+	}
+	if _, err := c.owner.current(c.ctx, "udp", M.ParseSocksaddr(address.String())); err != nil {
+		return 0, err
+	}
+	return c.PacketConn.WriteTo(p, address)
+}
+
+func (o *NodePhysicalOutbound) Close() error {
+	o.mu.Lock()
+	o.closed = true
+	owner := o.owner
+	o.mu.Unlock()
+	if owner == nil {
+		return nil
+	}
+	// Box can close outbounds before services, or cancel construction before
+	// Initialize. Revoke the same proof/factory owner now; its service Close
+	// still retains and joins a constructor that has not returned yet.
+	owner.Cancel()
+	owner.mu.Lock()
+	broker := owner.broker
+	owner.mu.Unlock()
+	if broker == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	return broker.Close(ctx)
+}

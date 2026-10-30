@@ -1,0 +1,277 @@
+package box
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"runtime"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing/common/json"
+)
+
+// Private node graphs use their own final tag. Capture their actual parsed
+// options at Box construction without widening the External/Tor source gate.
+// Only the separate compiled Node service makes this snapshot eligible.
+func routerVPNNodeOptionsDigest(ctx context.Context, options option.Options) string {
+	if options.Route == nil || options.Route.Final != "proxy" {
+		return ""
+	}
+	owned := 0
+	services := make([]option.Service, 0, len(options.Services))
+	for _, service := range options.Services {
+		if service.Type == mobilemultihop.DesktopNodeNetworkType && service.Tag == mobilemultihop.DesktopNodeNetworkTag {
+			owned++
+		}
+		if service.Type != C.TypeOOMKiller {
+			services = append(services, service)
+		}
+	}
+	if owned != 1 {
+		return ""
+	}
+	options.Log, options.Services = nil, services
+	encoded, err := json.MarshalContext(ctx, options)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
+}
+
+// Preparation compares the actual complete Box options with the separately
+// sealed desktop adaptation. The service creates its native deny baseline in
+// Initialize; WG/AWG may then open only their captured outer handshake sockets
+// during endpoint Start. This method itself opens neither a socket nor a TUN.
+func (s *Box) RouterVPNDesktopNodePreparePhysical(policy *mobilemultihop.DesktopNodePolicy) error {
+	if !routerVPNDesktopNodePhysicalAvailable(policy) {
+		return errors.New("this native target has no admitted Router node physical factory")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return err
+	}
+	return network.PrepareNodePhysicalPolicy(policy)
+}
+
+func routerVPNDesktopNodePhysicalAvailable(policy *mobilemultihop.DesktopNodePolicy) bool {
+	if runtime.GOOS != "windows" || policy == nil || policy.Validate() != nil {
+		return false
+	}
+	meta := policy.Metadata()
+	// Other compiled families and Start Layers retain their original path until
+	// their actual eager/lazy lower composition is admitted by its peer gate.
+	return meta.TargetOS == "windows" && meta.StartLayer == "" &&
+		(meta.Mode == "wg" || meta.Mode == "awg2-fast" || meta.Mode == "awg2-strong")
+}
+
+func (s *Box) routerVPNDesktopNodePhysical(policy *mobilemultihop.DesktopNodePolicy) (option.Options, *routervpndesktoppt.NodeNetworkOwner, error) {
+	var empty option.Options
+	if s == nil || s.ctx == nil || s.ctx.Err() != nil || s.service == nil || s.routerVPNNodeOptions == "" ||
+		policy == nil || policy.Validate() != nil {
+		return empty, nil, errors.New("Router node physical preparation lost its complete native Box")
+	}
+	meta := policy.Metadata()
+	compiled, err := json.UnmarshalExtendedContext[option.Options](s.ctx, []byte(policy.Config()))
+	if err != nil || meta.TargetOS != runtime.GOOS || routerVPNNodeOptionsDigest(s.ctx, compiled) != s.routerVPNNodeOptions {
+		return empty, nil, errors.New("Router node physical policy differs from its actual derived native graph")
+	}
+	raw, found := s.service.Get(mobilemultihop.DesktopNodeNetworkTag)
+	network, ok := raw.(*routervpndesktoppt.NodeNetworkOwner)
+	if !found || !ok || network == nil || !network.Matches(meta.SessionID, meta.SourceSHA256) {
+		return empty, nil, errors.New("Router node physical policy has another captured native service")
+	}
+	return compiled, network, nil
+}
+
+// RouterVPNDesktopNodePhysical retains the started native graph and its exact
+// physical owner through TUN changes. Its construction does not stand in for
+// authenticated node or selected-DNS proof; the controller's existing proofs
+// still precede Connected. Public metadata cannot construct this capability.
+type RouterVPNDesktopNodePhysical struct {
+	mu            sync.Mutex
+	instance      *Box
+	ctx           context.Context
+	policy        *mobilemultihop.DesktopNodePolicy
+	network       *routervpndesktoppt.NodeNetworkOwner
+	inbound       adapter.Inbound
+	reader        routerVPNDesktopTorTUN
+	interfaceName string
+	name          string
+	index, mtu    int
+	detached      bool
+}
+
+func (s *Box) RouterVPNDesktopNodeActivatePhysical(policy *mobilemultihop.DesktopNodePolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if !routerVPNDesktopNodePhysicalAvailable(policy) {
+		return nil, errors.New("this native target has no admitted Router node physical factory")
+	}
+	return s.routerVPNDesktopNodeActivatePhysical(policy)
+}
+
+func (s *Box) routerVPNDesktopNodeActivatePhysical(policy *mobilemultihop.DesktopNodePolicy) (_ *RouterVPNDesktopNodePhysical, failure error) {
+	compiled, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	capture, err := policy.Capture()
+	if err != nil || len(compiled.Inbounds) != 1 || compiled.Inbounds[0].Tag != capture.TUNTag {
+		return nil, errors.New("Router node physical activation lost its one captured TUN")
+	}
+	options, ok := compiled.Inbounds[0].Options.(*option.TunInboundOptions)
+	if !ok || compiled.Inbounds[0].Type != C.TypeTun || options.InterfaceName == "" {
+		return nil, errors.New("Router node physical activation lost its derived interface policy")
+	}
+	inbound, found := s.inbound.Get(capture.TUNTag)
+	reader, ok := inbound.(routerVPNDesktopTorTUN)
+	if !found || !ok || inbound.Type() != C.TypeTun {
+		return nil, errors.New("Router node physical activation lost its actual native TUN reader")
+	}
+	ctx, err := network.Activate(policy)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if failure != nil {
+			// Box/service cleanup retains every partial source and socket. An
+			// activation failure revokes their generation before returning.
+			network.Cancel()
+		}
+	}()
+	owner := &RouterVPNDesktopNodePhysical{instance: s, ctx: ctx, policy: policy, network: network,
+		inbound: inbound, reader: reader, interfaceName: options.InterfaceName}
+	name, index, mtu, err := reader.RouterVPNDesktopMTU(owner.generationCurrent)
+	if err != nil || name != options.InterfaceName || index < 1 || mtu != capture.ConfiguredMTU {
+		return nil, errors.New("Router node native TUN differs from its captured graph")
+	}
+	if err := network.BindPhysicalTunnel(ctx, name, uint32(index)); err != nil {
+		return nil, err
+	}
+	owner.name, owner.index, owner.mtu = name, index, mtu
+	if !owner.Current() {
+		return nil, errors.New("Router node physical activation changed before delivery")
+	}
+	return owner, nil
+}
+
+// This callback is also held by the TUN reader, whose own lock can be held
+// during MTU replacement. It therefore consults only the permanent generation,
+// never this binding's mutex or the inbound manager being replaced.
+func (owner *RouterVPNDesktopNodePhysical) generationCurrent() bool {
+	return owner != nil && owner.ctx != nil && owner.ctx.Err() == nil && owner.network != nil && owner.network.Current()
+}
+
+func (owner *RouterVPNDesktopNodePhysical) readback() (string, int, int, error) {
+	if !owner.generationCurrent() || owner.detached || owner.instance == nil || owner.inbound == nil || owner.reader == nil {
+		return "", 0, 0, errors.New("Router node physical TUN owner is retired or detached")
+	}
+	actual, found := owner.instance.inbound.Get(owner.inbound.Tag())
+	if !found || actual != owner.inbound {
+		return "", 0, 0, errors.New("Router node physical TUN was replaced by another owner")
+	}
+	name, index, mtu, err := owner.reader.RouterVPNDesktopMTUInterface()
+	if err != nil || name != owner.name || index != owner.index || mtu != owner.mtu || !owner.generationCurrent() {
+		return "", 0, 0, errors.New("Router node physical TUN changed its proved readback")
+	}
+	return name, index, mtu, nil
+}
+
+func (owner *RouterVPNDesktopNodePhysical) Current() bool {
+	if owner == nil {
+		return false
+	}
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	_, _, _, err := owner.readback()
+	return err == nil
+}
+
+func (owner *RouterVPNDesktopNodePhysical) ClaimTUN(guard func() bool) (string, int, int, error) {
+	if owner == nil || guard == nil || !guard() {
+		return "", 0, 0, errors.New("Router node MTU has no captured physical owner")
+	}
+	owner.mu.Lock()
+	name, index, mtu, err := owner.readback()
+	owner.mu.Unlock()
+	// The caller's composite guard may consult Current. Never invoke that
+	// callback while holding this binding's mutex.
+	if err != nil || !guard() {
+		return "", 0, 0, errors.Join(err, errors.New("Router node MTU physical capture changed"))
+	}
+	return name, index, mtu, nil
+}
+
+func (owner *RouterVPNDesktopNodePhysical) Cancel() {
+	if owner != nil && owner.network != nil {
+		owner.network.Cancel()
+	}
+}
+
+// Retire the old virtual-interface permission before the native TUN changes.
+// The existing manager transaction returns either its exact candidate or its
+// exact rollback reader. Only that result can acquire the replacement grant;
+// user cancellation cannot authorize adopting an unrelated current reader.
+func (owner *RouterVPNDesktopNodePhysical) ChangeMTU(ctx context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+	if owner == nil || owner.instance == nil {
+		return nil, errors.New("Router node physical MTU replacement has no native Box")
+	}
+	return owner.changeMTU(ctx, expected, mtu, owner.instance.RouterVPNChangeMTU)
+}
+
+// The private operation parameter lets the native manager transaction be
+// exercised with a harmless TUN reader in composition tests. The only public
+// entry above always supplies the shipping Box replacement operation.
+func (owner *RouterVPNDesktopNodePhysical) changeMTU(ctx context.Context, expected adapter.Inbound, mtu int,
+	change func(context.Context, adapter.Inbound, int) (adapter.Inbound, error)) (adapter.Inbound, error) {
+	if owner == nil || ctx == nil || ctx.Err() != nil || expected == nil || change == nil || mtu < 1280 || mtu > 9000 {
+		return nil, errors.New("Router node physical MTU replacement has no live bounded request")
+	}
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	name, index, _, err := owner.readback()
+	if err != nil || owner.inbound != expected {
+		return nil, errors.Join(err, errors.New("Router node physical MTU request has another native reader"))
+	}
+	if err := owner.network.RetirePhysicalTunnel(ctx, name, uint32(index)); err != nil {
+		return nil, err
+	}
+	owner.detached = true
+	next, changeErr := change(ctx, expected, mtu)
+	if err := owner.adoptTUN(next); err != nil {
+		owner.Cancel()
+		return next, errors.Join(changeErr, err)
+	}
+	return next, changeErr
+}
+
+func (owner *RouterVPNDesktopNodePhysical) adoptTUN(next adapter.Inbound) error {
+	if !owner.generationCurrent() || !owner.detached || next == nil || next.Type() != C.TypeTun || next.Tag() != owner.inbound.Tag() {
+		return errors.New("Router node physical replacement lost its native generation")
+	}
+	current, found := owner.instance.inbound.Get(next.Tag())
+	reader, ok := next.(routerVPNDesktopTorTUN)
+	if !found || current != next || !ok {
+		return errors.New("Router node physical replacement is not the returned native reader")
+	}
+	// The native MTU transaction already carries this generation guard into
+	// its candidate and rollback readers. Do not claim their ownership again.
+	name, index, mtu, err := reader.RouterVPNDesktopMTUInterface()
+	if err != nil || name != owner.interfaceName || index < 1 || mtu < 1280 || mtu > 9000 {
+		return errors.New("Router node physical replacement has an invalid TUN identity")
+	}
+	cleanup, cancel := context.WithTimeout(owner.ctx, 3*time.Second)
+	defer cancel()
+	if err := owner.network.BindPhysicalTunnel(cleanup, name, uint32(index)); err != nil {
+		return err
+	}
+	owner.inbound, owner.reader, owner.name, owner.index, owner.mtu, owner.detached = next, reader, name, index, mtu, false
+	_, _, _, err = owner.readback()
+	return err
+}

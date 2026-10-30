@@ -1,0 +1,208 @@
+//go:build windows
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/service"
+)
+
+// Only the privileged source constructor is replaced here. Actual interface,
+// DHCP and policy capture, admission dispatch and pre-ready retirement run in
+// the shipping Windows factory. Kernel readback remains a separate native gate.
+func nodeWindowsAdmissionFixture(t *testing.T) (*nodePhysicalFixture, *externalPhysicalFactoryNetwork, *externalWindowsAdmissionSource) {
+	t.Helper()
+	f := newNodePhysicalFixture(t)
+	original, ok := service.FromContext[adapter.NetworkManager](f.physical.ctx).(*desktopPTNetwork)
+	if !ok {
+		t.Fatal("node fixture lost original native network manager")
+	}
+	manager := &externalPhysicalFactoryNetwork{desktopPTNetwork: original}
+	manager.selected.Store(externalPhysicalFactoryInterface(t))
+	service.MustRegister[adapter.NetworkManager](f.physical.ctx, manager)
+	source := &externalWindowsAdmissionSource{externalTunnelFixture: &externalTunnelFixture{physicalFactorySource: &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}}}
+	return f, manager, source
+}
+
+func TestRouterVPNNodePhysicalWindowsCapturesPreparedOwner(t *testing.T) {
+	f, manager, source := nodeWindowsAdmissionFixture(t)
+	var admissions, constructors int
+	var err error
+	f.network.ctx, err = WithNodePhysicalAdmission(f.network.ctx, f.policy, func(ctx context.Context, prepared NodePhysicalPrepared) error {
+		admissions++
+		if ctx.Err() != nil || prepared.Capture != f.network.brokerCapture() || prepared.Policy != "always" || prepared.BaselineSHA256 != strings.Repeat("d", 64) || source.reads != 1 || f.network.SocketCurrent() || f.network.Current() {
+			t.Error("node handoff ran after sockets or lost its exact prepared receipt")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantInterfaces, wantLAN, err := desktopWindowsPhysicalInterfaces(manager.selected.Load(), true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDHCP, err := mobiletor.DesktopWindowsPhysicalDHCPServers(uint32(manager.selected.Load().Index))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.network.prepareNodePhysicalWindows(f.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopWindowsSocketOptions) (desktopWindowsPhysicalPolicy, error) {
+		constructors++
+		if ctx.Err() != nil || capture != f.network.brokerCapture() || options.KillSwitchPolicy != "always" || !options.RetainBaselineForHandoff || !options.IPv6Enabled ||
+			!reflect.DeepEqual(options.Interfaces, wantInterfaces) || !reflect.DeepEqual(options.LANPrefixes, wantLAN) || !reflect.DeepEqual(options.DHCP4Servers, wantDHCP) || len(options.PrivateDestinations) != 0 {
+			t.Error("node native constructor changed captured physical/device policy or allowed selected Home DNS")
+		}
+		return source, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if constructors != 0 || admissions != 0 {
+		t.Fatal("node factory opened native state before Initialize")
+	}
+	if err = f.network.Start(adapter.StartStateInitialize); err != nil || constructors != 1 || admissions != 1 || source.reads != 2 || !f.network.SocketCurrent() || f.network.Current() {
+		t.Fatal("node startup skipped two-sided baseline readback or fabricated full readiness", err)
+	}
+	changed := *manager.selected.Load()
+	changed.Index++
+	manager.selected.Store(&changed)
+	if f.network.SocketCurrent() {
+		t.Fatal("old node handshake source survived physical interface replacement")
+	}
+	f.network.Cancel()
+	if err = f.network.Close(); err != nil || !source.closed.Load() {
+		t.Fatal("node close lost its captured native owner", err)
+	}
+}
+
+func TestRouterVPNNodePhysicalWindowsAdmissionRejectsChangedOwners(t *testing.T) {
+	for _, fault := range []string{"missing", "foreign", "denied", "cancelled", "network-changed", "baseline-changed", "partial"} {
+		t.Run(fault, func(t *testing.T) {
+			f, manager, source := nodeWindowsAdmissionFixture(t)
+			constructors, admissions := 0, 0
+			if fault != "missing" {
+				policy := f.policy
+				if fault == "foreign" {
+					policy = nodePhysicalPolicyFixture(t, "windows")
+				}
+				var err error
+				f.network.ctx, err = WithNodePhysicalAdmission(f.network.ctx, policy, func(ctx context.Context, prepared NodePhysicalPrepared) error {
+					admissions++
+					if prepared.Capture != f.network.brokerCapture() || source.reads != 1 || f.network.SocketCurrent() {
+						return errors.New("node handoff was not before physical sockets")
+					}
+					switch fault {
+					case "denied":
+						return errors.New("exact native transfer was not approved")
+					case "cancelled":
+						f.network.Cancel()
+					case "network-changed":
+						changed := *manager.selected.Load()
+						changed.Index++
+						manager.selected.Store(&changed)
+					case "baseline-changed":
+						source.changed = true
+					}
+					return nil
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := f.network.prepareNodePhysicalWindows(f.policy, func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopWindowsSocketOptions) (desktopWindowsPhysicalPolicy, error) {
+				constructors++
+				if fault == "partial" {
+					return source, errors.New("held partial native constructor")
+				}
+				return source, nil
+			})
+			if fault == "missing" || fault == "foreign" {
+				if err == nil || constructors != 0 || admissions != 0 {
+					t.Fatal("unowned node callback reached native construction", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = f.network.Start(adapter.StartStateInitialize)
+			wantAdmissions := 1
+			if fault == "partial" {
+				wantAdmissions = 0
+			}
+			if err == nil || constructors != 1 || admissions != wantAdmissions || f.network.broker != nil || f.network.SocketCurrent() || !source.cancelled.Load() {
+				t.Fatal("failed node handoff admitted eager sockets or discarded partial source", err)
+			}
+			if err = f.network.Close(); err != nil || !source.closed.Load() {
+				t.Fatal("failed node factory did not join its exact source", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodePhysicalWindowsCloseJoinsAdmission(t *testing.T) {
+	f, _, source := nodeWindowsAdmissionFixture(t)
+	entered, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	var err error
+	f.network.ctx, err = WithNodePhysicalAdmission(f.network.ctx, f.policy, func(ctx context.Context, _ NodePhysicalPrepared) error {
+		close(entered)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.network.prepareNodePhysicalWindows(f.policy, func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopWindowsSocketOptions) (desktopWindowsPhysicalPolicy, error) {
+		return source, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	started, closed := make(chan error, 1), make(chan error, 1)
+	go func() { started <- f.network.Start(adapter.StartStateInitialize) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("node native initialization did not enter handoff")
+	}
+	go func() { closed <- f.network.Close() }()
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("node native close did not revoke entered handoff")
+	}
+	select {
+	case err := <-closed:
+		t.Fatal("node close acknowledged an unjoined native handoff", err)
+	default:
+	}
+	unblock()
+	select {
+	case err := <-started:
+		if err == nil {
+			t.Fatal("late node handoff activated cancelled sockets")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("node factory did not join")
+	}
+	select {
+	case err := <-closed:
+		if err != nil || !source.closed.Load() {
+			t.Fatal("node close discarded captured handoff source", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("node native close did not join")
+	}
+}

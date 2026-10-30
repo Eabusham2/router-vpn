@@ -1,0 +1,250 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"runtime"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// This fixture executes the immutable node compiler and real native service,
+// lower outbound and broker. Its explicitly stated OS source refuses sockets;
+// encrypted traffic and real Windows BFE are exercised in separate composition
+// gates. Neither a constructor nor these fixture acknowledgments prove a node.
+func nodePhysicalPolicyFixture(t *testing.T, target string) *mobilemultihop.DesktopNodePolicy {
+	t.Helper()
+	private := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("a", 32)))
+	public := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("b", 32)))
+	psk := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("c", 32)))
+	id := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+	config := "[Interface]\nAddress=10.77.0.2/24,fd77:77::2/64\nPrivateKey=" + private + "\nDNS=192.168.50.133\n[Peer]\nPublicKey=" + public + "\nPresharedKey=" + psk + "\nEndpoint=192.0.2.1:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n"
+	files, _ := json.Marshal(map[string]string{"wg.conf": base64.StdEncoding.EncodeToString([]byte(config))})
+	profile, _ := json.Marshal(map[string]any{"id": "captured-router", "node_kind": "router-vpn", "node_proof_id": hex.EncodeToString(id[:]),
+		"router_api": "http://10.77.0.1:8787", "api_token": "private-fixture-token", "endpoint": "192.0.2.1", "dns_mode": "home", "adguard_ipv4": "192.168.50.133",
+		"mtu_policy": "auto", "home_lan_access": false, "ipv6_mode": "on", "kill_switch_policy": "always"})
+	original, err := mobilemultihop.NewNodeProfile("wg", string(files), string(profile), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewDesktopNodePolicy(original, strings.Repeat("b", 32), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy
+}
+
+type nodePhysicalFixture struct {
+	policy   *mobilemultihop.DesktopNodePolicy
+	manager  *desktopPTEntryManager
+	network  *NodeNetworkOwner
+	physical *NodePhysicalOutbound
+}
+
+func newNodePhysicalFixture(t *testing.T) *nodePhysicalFixture {
+	t.Helper()
+	f := newDesktopPTFixture(t)
+	manager := &desktopPTEntryManager{}
+	service.MustRegister[adapter.OutboundManager](f.ctx, manager)
+	policy := nodePhysicalPolicyFixture(t, runtime.GOOS)
+	meta := policy.Metadata()
+	options := NodeCaptureOptions{meta.SessionID, meta.SourceSHA256}
+	raw, err := NewNodeNetworkOwner(f.ctx, nil, mobilemultihop.DesktopNodeNetworkTag, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower, err := NewNodePhysicalOutbound(f.ctx, nil, nil, mobilemultihop.DesktopNodePhysicalTag, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.replace(lower)
+	result := &nodePhysicalFixture{policy, manager, raw.(*NodeNetworkOwner), lower.(*NodePhysicalOutbound)}
+	t.Cleanup(func() {
+		if err := result.network.Close(); err != nil {
+			t.Error(err)
+		}
+		if err := result.physical.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return result
+}
+
+func (f *nodePhysicalFixture) prepare(t *testing.T, source *physicalFactorySource) {
+	t.Helper()
+	if err := f.network.PrepareNodePhysicalBroker(f.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		if f.network.Current() || f.network.SocketCurrent() || !current() || capture != f.network.brokerCapture() {
+			t.Error("node factory ran outside its pre-TUN captured initialization")
+		}
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+		return broker, source, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterVPNNodePhysicalSeparateRegistriesAndUnpreparedRejection(t *testing.T) {
+	services, outbounds := boxService.NewRegistry(), outbound.NewRegistry()
+	RegisterNodeNetworkOwner(services)
+	RegisterNodePhysicalOutbound(outbounds)
+	for _, item := range []struct {
+		registry interface{ CreateOptions(string) (any, bool) }
+		name     string
+	}{{services, mobilemultihop.DesktopNodeNetworkType}, {outbounds, mobilemultihop.DesktopNodePhysicalType}} {
+		options, found := item.registry.CreateOptions(item.name)
+		if _, ok := options.(*NodeCaptureOptions); !found || !ok {
+			t.Fatal("private node registry borrowed another graph's authority")
+		}
+	}
+	f := newNodePhysicalFixture(t)
+	if f.network.Current() || f.network.SocketCurrent() || f.network.Start(adapter.StartStateInitialize) == nil {
+		t.Fatal("JSON-only node source became a prepared native owner")
+	}
+	if _, err := f.network.Activate(f.policy); err == nil {
+		t.Fatal("node activated without an actual prepared factory")
+	}
+	if _, err := f.physical.DialContext(context.Background(), "udp", M.ParseSocksaddr("192.0.2.1:51820")); err == nil {
+		t.Fatal("unprepared node used a default physical dialer")
+	}
+	if _, err := NewNodeNetworkOwner(context.Background(), nil, mobilemultihop.DesktopExternalNetworkTag, f.network.capture); err == nil {
+		t.Fatal("node source adopted an ordinary external service tag")
+	}
+	if err := f.network.Close(); err != nil || f.network.SocketCurrent() || f.network.Start(adapter.StartStateInitialize) == nil {
+		t.Fatal("closed node source became startable", err)
+	}
+}
+
+func TestRouterVPNNodePhysicalHandshakePhaseAndExactPolicy(t *testing.T) {
+	f := newNodePhysicalFixture(t)
+	source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+	f.prepare(t, source)
+	if _, err := f.physical.current(context.Background(), "udp", M.ParseSocksaddr("192.0.2.1:51820")); err == nil {
+		t.Fatal("captured tuple was eligible before the deny factory completed")
+	}
+	if err := f.network.Start(adapter.StartStateInitialize); err != nil || !f.network.SocketCurrent() || f.network.Current() {
+		t.Fatal("completed node initialization did not retain a separate handshake phase", err)
+	}
+	if broker, err := f.physical.current(context.Background(), "udp", M.ParseSocksaddr("192.0.2.1:51820")); err != nil || broker != f.network.broker {
+		t.Fatal("sealed eager peer could not acquire its actual pre-ready lower broker", err)
+	}
+	for _, attempt := range []struct{ network, address string }{
+		{"tcp", "192.0.2.1:51820"}, {"udp", "192.0.2.1:51821"}, {"udp", "192.0.2.2:51820"},
+		{"udp", "192.168.50.133:53"}, {"tcp", "10.77.0.1:8787"}, {"udp", "peer.example:51820"},
+	} {
+		if _, err := f.physical.current(context.Background(), attempt.network, M.ParseSocksaddr(attempt.address)); err == nil {
+			t.Fatal("node handshake admitted an uncaptured application or outer tuple", attempt)
+		}
+	}
+	if _, err := f.network.Activate(f.policy); err == nil {
+		t.Fatal("physical handshake permission was reported as complete readiness")
+	}
+	if f.network.Start(adapter.StartStateStarted) == nil {
+		t.Fatal("skipped native startup stages acquired readiness")
+	}
+	for _, stage := range []adapter.StartStage{adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+		if err := f.network.Start(stage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	identical := nodePhysicalPolicyFixture(t, runtime.GOOS)
+	if identical.Config() != f.policy.Config() {
+		t.Fatal("equal-source substitution fixture differs")
+	}
+	if _, err := f.network.Activate(identical); err == nil {
+		t.Fatal("another compiler owner adopted this native generation")
+	}
+	if _, err := f.network.Activate(f.policy); err != nil || !f.network.Current() {
+		t.Fatal("exact completed node owner failed activation", err)
+	}
+	replacement, err := NewNodePhysicalOutbound(f.physical.ctx, nil, nil, mobilemultihop.DesktopNodePhysicalTag, f.network.capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.manager.replace(replacement)
+	if _, err := f.physical.current(context.Background(), "udp", M.ParseSocksaddr("192.0.2.1:51820")); err == nil {
+		t.Fatal("retired lower object mutated its replacement")
+	}
+	f.network.InterfaceUpdated(context.Background())
+	if f.network.Current() || f.network.SocketCurrent() || f.network.Start(adapter.StartStateStarted) == nil {
+		t.Fatal("network transition retained the old handshake or proof generation")
+	}
+	if err := f.network.Close(); err != nil || !source.closed.Load() || !source.cancelled.Load() {
+		t.Fatal("node teardown did not join its exact source", err)
+	}
+}
+
+func TestRouterVPNNodePhysicalFactoryCancellationJoinsPartialOwner(t *testing.T) {
+	for _, withBroker := range []bool{false, true} {
+		t.Run(map[bool]string{false: "partial-source", true: "late-broker"}[withBroker], func(t *testing.T) {
+			f := newNodePhysicalFixture(t)
+			source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+			entered, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			var calls atomic.Int32
+			if err := f.network.PrepareNodePhysicalBroker(f.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+				calls.Add(1)
+				var broker *mobiletor.DesktopSocketBroker
+				if withBroker {
+					var err error
+					broker, err = mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+					if err != nil {
+						t.Error(err)
+					}
+				}
+				close(entered)
+				<-ctx.Done()
+				close(cancelled)
+				<-release
+				return broker, source, errors.New("captured late factory failure")
+			}); err != nil {
+				t.Fatal(err)
+			}
+			started, closed := make(chan error, 1), make(chan error, 1)
+			go func() { started <- f.network.Start(adapter.StartStateInitialize) }()
+			<-entered
+			go func() { closed <- f.network.Close() }()
+			<-cancelled
+			select {
+			case err := <-closed:
+				t.Fatal("node Close returned before its entered creator joined", err)
+			default:
+			}
+			if f.network.SocketCurrent() || f.network.Current() {
+				t.Fatal("cancelled startup retained a ready phase")
+			}
+			close(release)
+			select {
+			case err := <-started:
+				if err == nil {
+					t.Fatal("late factory was admitted")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("late factory did not join")
+			}
+			select {
+			case err := <-closed:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("node Close did not join returned source")
+			}
+			if calls.Load() != 1 || !source.closed.Load() || !source.cancelled.Load() {
+				t.Fatal("partial node source ownership was discarded")
+			}
+		})
+	}
+}

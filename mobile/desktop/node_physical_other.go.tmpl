@@ -1,0 +1,13 @@
+//go:build !windows
+
+package routervpndesktoppt
+
+import (
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func (n *NodeNetworkOwner) PrepareNodePhysicalPolicy(*mobilemultihop.DesktopNodePolicy) error {
+	return errors.New("this operating system has no admitted private Router node physical factory")
+}

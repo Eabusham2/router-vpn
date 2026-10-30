@@ -1,0 +1,90 @@
+package main
+
+import (
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+func TestRouterVPNDesktopNodePhysicalCommandSourceBoundary(t *testing.T) {
+	if policy, err := routerVPNNodeCommandPhysical(nil, "", "", ""); err != nil || policy != nil {
+		t.Fatal("ordinary legacy node command unexpectedly selected a physical factory", err)
+	}
+	if runtime.GOOS != "windows" {
+		if policy, err := routerVPNNodeCommandPhysical(nil, desktopExternalSession, strings.Repeat("b", 64), strings.Repeat("c", 64)); err == nil || policy != nil {
+			t.Fatal("unsupported target adopted a Windows source flag")
+		}
+		return
+	}
+	for _, fault := range []string{"exact", "missing-source", "source-record", "derived-config", "source-hash", "config-hash", "session", "linked-source", "layer-aes", "layer-whitening"} {
+		t.Run(fault, func(t *testing.T) {
+			original := desktopNodeCommandOriginal(t)
+			if fault == "layer-aes" {
+				original = desktopNodeCommandOriginalWithLayer(t, "aes-256-gcm")
+			} else if fault == "layer-whitening" {
+				original = desktopNodeCommandOriginalWithLayer(t, "aes-256-gcm+xor-whitening")
+			}
+			policy, err := mobilemultihop.NewDesktopNodePolicy(original, desktopExternalSession, "windows")
+			if err != nil {
+				t.Fatal(err)
+			}
+			launch, err := original.LaunchInput()
+			if err != nil {
+				t.Fatal(err)
+			}
+			directory := t.TempDir()
+			if err := os.Chmod(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
+			staged := policy.Config()
+			source, config, session := policy.Metadata().SourceSHA256, policy.Metadata().ConfigSHA256, desktopExternalSession
+			switch fault {
+			case "source-record":
+				launch = strings.Replace(launch, "private-fixture-token", "foreign-fixture-token", 1)
+			case "derived-config":
+				staged += "\n"
+			case "source-hash":
+				source = strings.Repeat("f", 64)
+			case "config-hash":
+				config = strings.Repeat("f", 64)
+			case "session":
+				session = strings.Repeat("f", 32)
+			}
+			if err := os.WriteFile(filepath.Join(directory, "sing-box.json"), []byte(staged), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if fault != "missing-source" {
+				name := "node-source.json"
+				if fault == "linked-source" {
+					name = "foreign-source.json"
+				}
+				if err := os.WriteFile(filepath.Join(directory, name), []byte(launch), 0600); err != nil {
+					t.Fatal(err)
+				}
+				if fault == "linked-source" {
+					if err := os.Symlink(name, filepath.Join(directory, "node-source.json")); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			files, err := routerVPNOpenExternalFiles(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer files.root.Close()
+			actual, err := routerVPNNodeCommandPhysical(files, session, config, source)
+			if fault == "exact" {
+				if err != nil || actual == nil || actual.Config() != policy.Config() || !reflect.DeepEqual(actual.Metadata(), policy.Metadata()) {
+					t.Fatal("exact private inputs did not reconstruct their captured native policy", err)
+				}
+			} else if err == nil || actual != nil {
+				t.Fatal("node command adopted changed source or staged derived authority", fault)
+			}
+		})
+	}
+}

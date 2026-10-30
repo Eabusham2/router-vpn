@@ -1,0 +1,65 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func TestRouterVPNNodePhysicalAdmissionRetainsExactPolicy(t *testing.T) {
+	policy := nodePhysicalPolicyFixture(t, "windows")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	want := errors.New("captured handoff callback")
+	owned, err := WithNodePhysicalAdmission(ctx, policy, func(context.Context, NodePhysicalPrepared) error { return want })
+	if err != nil {
+		t.Fatal(err)
+	}
+	admit, err := nodePhysicalAdmissionFor(owned, policy)
+	if err != nil || !errors.Is(admit(owned, NodePhysicalPrepared{}), want) {
+		t.Fatal("native handoff callback changed its exact owner", err)
+	}
+	prepared := NodePhysicalPrepared{Capture: mobiletor.DesktopSocketCapture{SessionID: policy.Metadata().SessionID, SourceSHA256: policy.Metadata().SourceSHA256,
+		NetworkID: strings.Repeat("a", 32)}, Policy: policy.Metadata().KillSwitchPolicy, BaselineSHA256: strings.Repeat("b", 64)}
+	if err := CompleteNodePhysicalAdmission(owned, policy, prepared); !errors.Is(err, want) {
+		t.Fatal("actual native handoff dispatch lost its captured callback", err)
+	}
+	for _, mutate := range []func(*NodePhysicalPrepared){
+		func(v *NodePhysicalPrepared) { v.Capture.SourceSHA256 = strings.Repeat("c", 64) },
+		func(v *NodePhysicalPrepared) { v.Capture.NetworkID = strings.Repeat("A", 32) },
+		func(v *NodePhysicalPrepared) { v.Policy = "off" },
+		func(v *NodePhysicalPrepared) { v.BaselineSHA256 = "" },
+	} {
+		changed := prepared
+		mutate(&changed)
+		if err := CompleteNodePhysicalAdmission(owned, policy, changed); err == nil || errors.Is(err, want) {
+			t.Fatal("foreign native baseline reached the handoff callback", err)
+		}
+	}
+	identical := nodePhysicalPolicyFixture(t, "windows")
+	if identical.Config() != policy.Config() {
+		t.Fatal("substitution fixture differs")
+	}
+	if _, err := nodePhysicalAdmissionFor(owned, identical); err == nil {
+		t.Fatal("an equal but differently owned graph adopted handoff authority")
+	}
+	if _, err := WithNodePhysicalAdmission(owned, policy, admit); err == nil {
+		t.Fatal("native handoff callback was replaceable")
+	}
+	if _, err := nodePhysicalAdmissionFor(ctx, policy); err == nil {
+		t.Fatal("JSON-only native lifetime acquired handoff authority")
+	}
+	if _, err := WithNodePhysicalAdmission(nil, policy, admit); err == nil {
+		t.Fatal("missing native lifetime acquired handoff authority")
+	}
+	if _, err := WithNodePhysicalAdmission(ctx, policy, nil); err == nil {
+		t.Fatal("missing native callback acquired handoff authority")
+	}
+	cancel()
+	if _, err := nodePhysicalAdmissionFor(owned, policy); err == nil {
+		t.Fatal("cancelled native lifetime retained handoff authority")
+	}
+}

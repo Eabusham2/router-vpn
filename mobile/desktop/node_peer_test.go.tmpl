@@ -1,0 +1,561 @@
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	awgconn "github.com/amnezia-vpn/amneziawg-go/v3/conn"
+	awg "github.com/amnezia-vpn/amneziawg-go/v3/device"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	WG "github.com/sagernet/sing-box/protocol/wireguard"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-box/service/routervpnperformance"
+	wg "github.com/sagernet/sing-box/transport/wireguard"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+	wgconn "github.com/sagernet/wireguard-go/conn"
+	wgdevice "github.com/sagernet/wireguard-go/device"
+)
+
+// This desktop-only test is installed into the existing reference package.
+// The client is the real compiled Box, WG/AWG endpoint, Node lower and broker.
+// Only OS permits and the TUN are fixtures. The peer uses the unmodified pinned
+// cryptographic backend and an actual UDP socket; no successful packet result
+// is supplied by a mock. This alone does not establish Windows BFE acceptance.
+type desktopNodePeerBind struct {
+	referenceBind
+	ip netip.Addr
+}
+
+func (b *desktopNodePeerBind) Open(uint16) ([]awgconn.ReceiveFunc, uint16, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.c != nil || !b.ip.Is4() || b.ip.IsLoopback() {
+		return nil, 0, errors.New("node reference requires its one actual local IPv4 binding")
+	}
+	c, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(b.ip, 0)))
+	if err != nil {
+		return nil, 0, err
+	}
+	b.c = c
+	receive := func(packets [][]byte, sizes []int, endpoints []awgconn.Endpoint) (int, error) {
+		n, remote, err := c.ReadFromUDPAddrPort(packets[0])
+		if err != nil {
+			return 0, err
+		}
+		if remote.Addr() != b.ip {
+			return 0, errors.New("node reference refused a non-fixture peer")
+		}
+		sizes[0], endpoints[0] = n, peerEndpoint(remote)
+		b.packets.Add(1)
+		return 1, nil
+	}
+	return []awgconn.ReceiveFunc{receive}, uint16(c.LocalAddr().(*net.UDPAddr).Port), nil
+}
+
+type desktopNodeWGPeerBind struct{ *desktopNodePeerBind }
+
+func (b *desktopNodeWGPeerBind) Open(port uint16) ([]wgconn.ReceiveFunc, uint16, error) {
+	reads, port, err := b.desktopNodePeerBind.Open(port)
+	if err != nil {
+		return nil, 0, err
+	}
+	converted := make([]wgconn.ReceiveFunc, len(reads))
+	for i, read := range reads {
+		converted[i] = func(packets [][]byte, sizes []int, endpoints []wgconn.Endpoint) (int, error) {
+			values := make([]awgconn.Endpoint, len(endpoints))
+			n, err := read(packets, sizes, values)
+			for j := 0; j < n; j++ {
+				endpoints[j] = values[j]
+			}
+			return n, err
+		}
+	}
+	return converted, port, nil
+}
+func (b *desktopNodeWGPeerBind) Send(packets [][]byte, endpoint wgconn.Endpoint, offset int) error {
+	trimmed := make([][]byte, len(packets))
+	for i, p := range packets {
+		if offset < 0 || offset > len(p) {
+			return errors.New("invalid node peer WG offset")
+		}
+		trimmed[i] = p[offset:]
+	}
+	return b.desktopNodePeerBind.Send(trimmed, endpoint)
+}
+func (b *desktopNodeWGPeerBind) ParseEndpoint(value string) (wgconn.Endpoint, error) {
+	return b.desktopNodePeerBind.ParseEndpoint(value)
+}
+func (*desktopNodeWGPeerBind) SetReservedForEndpoint(_ netip.AddrPort, reserved [3]byte) {
+	if reserved != [3]byte{} {
+		panic("reference has no reserved-byte policy")
+	}
+}
+
+type desktopNodePeer struct {
+	bind      *desktopNodePeerBind
+	closeOnce sync.Once
+	stop      func()
+}
+
+func (p *desktopNodePeer) close() { p.closeOnce.Do(p.stop) }
+
+func startDesktopNodePeer(config desktopReferenceConfiguration, mode string, ip netip.Addr) (*desktopNodePeer, error) {
+	ipc, addresses, rules, err := validateDesktopReference(config)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	handler := &desktopReferenceHandler{ctx: ctx, cancel: cancel, rules: rules, owned: map[io.Closer]bool{}}
+	stack, err := wg.NewDevice(wg.DeviceOptions{Context: ctx, Logger: log.NewNOPFactory().Logger(), Handler: handler, UDPTimeout: 30 * time.Second, ICMPTimeout: time.Second, MTU: 1400, Address: addresses})
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	bind := &desktopNodePeerBind{ip: ip}
+	peer := &desktopNodePeer{bind: bind}
+	if mode == "wg" {
+		// The shared validator checks keys, private addresses and bounded echo
+		// rules. Standard WireGuard receives none of AWG's parameter lines.
+		var standard strings.Builder
+		for _, line := range strings.Split(ipc, "\n") {
+			key, _, ok := strings.Cut(line, "=")
+			if !ok {
+				continue
+			}
+			if _, awgParameter := config.Parameters[key]; !awgParameter {
+				standard.WriteString(line + "\n")
+			}
+		}
+		device := wgdevice.NewDevice(ctx, stack, &desktopNodeWGPeerBind{bind}, &wgdevice.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}}, 0)
+		stack.SetDevice(device)
+		peer.stop = func() { handler.close(); device.Close() }
+		if err = device.IpcSet(standard.String()); err == nil {
+			err = stack.Start()
+		}
+		if err == nil {
+			err = device.Up()
+		}
+	} else {
+		wrapped := wrapTun(stack)
+		device := awg.NewDevice(wrapped, bind, &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}})
+		peer.stop = func() { handler.close(); device.Close() }
+		if err = device.IpcSet(ipc); err == nil {
+			err = wrapped.configuredPadding(32)
+		}
+		if err == nil {
+			err = stack.Start()
+		}
+		if err == nil {
+			err = device.Up()
+		}
+	}
+	if err != nil {
+		peer.close()
+		return nil, err
+	}
+	return peer, nil
+}
+
+func desktopNodePeerInterface(t *testing.T) (net.Interface, netip.Addr) {
+	t.Helper()
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addresses, err := iface.Addrs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, value := range addresses {
+			prefix, err := netip.ParsePrefix(value.String())
+			if err == nil && prefix.Addr().Is4() && prefix.Addr().IsPrivate() {
+				return iface, prefix.Addr()
+			}
+		}
+	}
+	t.Fatal("actual private non-loopback IPv4 interface is required")
+	return net.Interface{}, netip.Addr{}
+}
+
+type desktopNodePeerTUN struct {
+	inbound.Adapter
+	ready, closed atomic.Bool
+}
+
+func (t *desktopNodePeerTUN) Start(stage adapter.StartStage) error {
+	if stage == adapter.StartStateStart {
+		t.ready.Store(true)
+	}
+	return nil
+}
+func (t *desktopNodePeerTUN) Close() error { t.closed.Store(true); return nil }
+
+type desktopNodePeerKernel struct {
+	capture          mobiletor.DesktopSocketCapture
+	owner            mobiletor.DesktopSocketKernelOwner
+	iface            net.Interface
+	local            netip.Addr
+	remote           netip.AddrPort
+	network          *routervpndesktoppt.NodeNetworkOwner
+	tun              *desktopNodePeerTUN
+	live             atomic.Bool
+	mu               sync.Mutex
+	grants           map[string]mobiletor.DesktopSocketGrant
+	preTUN, requests int
+}
+
+func (p *desktopNodePeerKernel) Owner() (mobiletor.DesktopSocketKernelOwner, error) {
+	return p.owner, nil
+}
+func (p *desktopNodePeerKernel) Current(c mobiletor.DesktopSocketCapture, o mobiletor.DesktopSocketKernelOwner) bool {
+	return p.live.Load() && c == p.capture && o == p.owner
+}
+func (p *desktopNodePeerKernel) Select(ctx context.Context, c mobiletor.DesktopSocketCapture, network string, remote netip.AddrPort) (mobiletor.DesktopSocketBinding, error) {
+	if ctx.Err() != nil || !p.Current(c, p.owner) || network != "udp" || remote != p.remote {
+		return mobiletor.DesktopSocketBinding{}, errors.New("node peer fixture rejected another outer tuple")
+	}
+	return mobiletor.DesktopSocketBinding{Owner: p.owner, InterfaceName: p.iface.Name, InterfaceIndex: uint32(p.iface.Index), LocalAddress: p.local}, nil
+}
+func (p *desktopNodePeerKernel) Bind(ctx context.Context, c mobiletor.DesktopSocketCapture, b mobiletor.DesktopSocketBinding, network string, raw syscall.RawConn) error {
+	if ctx.Err() != nil || !p.Current(c, b.Owner) || b.LocalAddress != p.local || b.InterfaceIndex != uint32(p.iface.Index) || b.InterfaceName != p.iface.Name || network != "udp4" || raw == nil {
+		return errors.New("node peer fixture lost its actual binding")
+	}
+	return raw.Control(func(uintptr) {})
+}
+func (p *desktopNodePeerKernel) Grant(ctx context.Context, q mobiletor.DesktopSocketGrant) (mobiletor.DesktopSocketReceipt, error) {
+	if ctx.Err() != nil || !p.Current(q.Capture, q.Binding.Owner) || q.Network != "udp" || q.Remote != p.remote || q.Local.Addr() != p.local || q.Local.Port() == 0 || !p.network.SocketCurrent() {
+		return mobiletor.DesktopSocketReceipt{}, errors.New("node eager socket preceded captured handshake admission")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if old, ok := p.grants[q.SocketID]; ok {
+		identity := q
+		identity.Sequence = old.Sequence
+		if old != identity {
+			return mobiletor.DesktopSocketReceipt{}, errors.New("node socket renewal changed its owner")
+		}
+	}
+	p.grants[q.SocketID] = q
+	p.requests++
+	if !p.tun.ready.Load() && !p.network.Current() {
+		p.preTUN++
+	}
+	now := time.Now()
+	return mobiletor.DesktopSocketReceipt{Grant: q, ObservedAt: now.UnixMilli(), ExpiresAt: now.Add(10 * time.Second).UnixMilli()}, nil
+}
+func (p *desktopNodePeerKernel) Revoke(_ context.Context, q mobiletor.DesktopSocketGrant) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	old, ok := p.grants[q.SocketID]
+	if ok && (old.Capture != q.Capture || old.Local != q.Local || old.Remote != q.Remote) {
+		return errors.New("node peer revoke changed owner")
+	}
+	delete(p.grants, q.SocketID)
+	return nil
+}
+
+type desktopNodePeerSource struct {
+	*desktopNodePeerKernel
+	closed atomic.Bool
+}
+
+func (*desktopNodePeerSource) CreateSocket(context.Context, mobiletor.DesktopSocketCreation) (mobiletor.DesktopSocketCreated, error) {
+	return mobiletor.DesktopSocketCreated{}, errors.New("fixture cannot fabricate sockets")
+}
+func (p *desktopNodePeerSource) Cancel() { p.live.Store(false) }
+func (p *desktopNodePeerSource) Close(ctx context.Context) error {
+	p.Cancel()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if ctx.Err() != nil || len(p.grants) != 0 {
+		return errors.New("node fixture close preceded actual socket retirement")
+	}
+	p.closed.Store(true)
+	return nil
+}
+
+type desktopNodePeerFixture struct {
+	box       *box.Box
+	policy    *mobilemultihop.DesktopNodePolicy
+	network   *routervpndesktoppt.NodeNetworkOwner
+	peer      *desktopNodePeer
+	kernel    *desktopNodePeerKernel
+	source    *desktopNodePeerSource
+	tun       *desktopNodePeerTUN
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (f *desktopNodePeerFixture) close() error {
+	f.closeOnce.Do(func() { f.closeErr = f.box.Close() })
+	return f.closeErr
+}
+
+func newDesktopNodePeerFixture(t *testing.T, mode string, wrongKey bool, configuredCover ...bool) *desktopNodePeerFixture {
+	t.Helper()
+	if len(configuredCover) > 1 {
+		t.Fatal("unexpected captured cover selection count")
+	}
+	iface, ip := desktopNodePeerInterface(t)
+	config, options := desktopReferenceFixture(t)
+	if mode == "awg2-strong" {
+		config.Parameters["jc"], config.Parameters["jmax"] = "8", "1200"
+	}
+	config.Echo = append(config.Echo,
+		desktopReferenceRule{Network: "tcp", Address: "2001:db8::99", Port: 9999},
+		desktopReferenceRule{Network: "udp", Address: "2001:db8::99", Port: 9999})
+	peer, err := startDesktopNodePeer(config, mode, ip)
+	if err != nil {
+		t.Fatal("actual encrypted reference start", err)
+	}
+	t.Cleanup(peer.close)
+	remote := netip.MustParseAddrPort(peer.bind.address())
+	public := options.Peers[0].PublicKey
+	if wrongKey {
+		_, public = keys(t)
+	}
+	id := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+	var parameters strings.Builder
+	if mode != "wg" {
+		for _, key := range []string{"jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"} {
+			fmt.Fprintf(&parameters, "%s=%s\n", key, config.Parameters[key])
+		}
+	}
+	text := "[Interface]\nAddress=10.78.0.2/32,fd78:78::2/128\nPrivateKey=" + options.PrivateKey + "\nDNS=192.168.50.133\n" + parameters.String() + "[Peer]\nPublicKey=" + public + "\nPresharedKey=" + options.Peers[0].PreSharedKey + "\nEndpoint=" + remote.String() + "\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n"
+	asset := "wg.conf"
+	if mode != "wg" {
+		asset = "awg.conf"
+	}
+	files, _ := json.Marshal(map[string]string{asset: base64.StdEncoding.EncodeToString([]byte(text))})
+	profileValues := map[string]any{"id": "captured-native-node", "node_kind": "router-vpn", "node_proof_id": hex.EncodeToString(id[:]), "router_api": "http://10.78.0.1:8787", "api_token": "private-fixture-node-token", "endpoint": ip.String(),
+		"dns_mode": "home", "adguard_ipv4": "192.168.50.133", "kill_switch_policy": "always", "ipv6_mode": "on", "home_lan_access": false, "mtu_policy": "auto"}
+	if len(configuredCover) == 1 && configuredCover[0] {
+		profileValues["daita_enabled"], profileValues["daita_rate_kbps"], profileValues["daita_host"] = true, 64, "10.78.0.1"
+	}
+	profile, _ := json.Marshal(profileValues)
+	original, err := mobilemultihop.NewNodeProfile(mode, string(files), string(profile), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewDesktopNodePolicy(original, strings.Repeat("c", 32), runtime.GOOS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &desktopNodePeerFixture{policy: policy, peer: peer}
+	ins := inbound.NewRegistry()
+	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+		f.tun = &desktopNodePeerTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag)}
+		return f.tun, nil
+	})
+	outs := outbound.NewRegistry()
+	routervpndesktoppt.RegisterNodePhysicalOutbound(outs)
+	endpoints := endpoint.NewRegistry()
+	RegisterEndpoint(endpoints)
+	WG.RegisterEndpoint(endpoints)
+	dnsRegistry := dns.NewTransportRegistry()
+	DNST.RegisterUDP(dnsRegistry)
+	DNST.RegisterTCP(dnsRegistry)
+	services := boxService.NewRegistry()
+	routervpnperformance.RegisterService(services)
+	boxService.Register[routervpndesktoppt.NodeCaptureOptions](services, mobilemultihop.DesktopNodeNetworkType, func(ctx context.Context, logger log.ContextLogger, tag string, options routervpndesktoppt.NodeCaptureOptions) (adapter.Service, error) {
+		owned, err := routervpndesktoppt.NewNodeNetworkOwner(ctx, logger, tag, options)
+		if err == nil {
+			f.network = owned.(*routervpndesktoppt.NodeNetworkOwner)
+		}
+		return owned, err
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ctx = box.Context(ctx, ins, outs, endpoints, dnsRegistry, services, certificate.NewRegistry())
+	native, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(policy.Config()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	native.Log = &option.LogOptions{Disabled: true}
+	f.box, err = box.New(box.Options{Context: ctx, Options: native})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.kernel = &desktopNodePeerKernel{owner: mobiletor.DesktopSocketKernelOwner{Kind: "unix-isolated-uid", IdentitySHA256: strings.Repeat("d", 64), Generation: 1, ProcessID: uint32(os.Getpid())}, iface: iface, local: ip, remote: remote, network: f.network, tun: f.tun, grants: map[string]mobiletor.DesktopSocketGrant{}}
+	f.kernel.live.Store(true)
+	f.source = &desktopNodePeerSource{desktopNodePeerKernel: f.kernel}
+	t.Cleanup(func() {
+		if err := f.close(); err != nil {
+			t.Error("actual node Box did not join", err)
+		}
+		if !f.source.closed.Load() {
+			t.Error("actual node Box discarded its physical owner")
+		}
+	})
+	if err := f.network.PrepareNodePhysicalBroker(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		if f.tun.ready.Load() || f.network.SocketCurrent() || f.network.Current() {
+			t.Error("actual node source initialized after TUN or socket admission")
+		}
+		f.kernel.capture = capture
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, f.kernel, current)
+		return broker, f.source, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func (f *desktopNodePeerFixture) exchange(network string, hosts ...string) error {
+	outer, found := f.box.Outbound().Outbound("proxy")
+	if !found {
+		return errors.New("actual encrypted endpoint is missing")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	host := "192.0.2.99"
+	if len(hosts) == 1 {
+		host = hosts[0]
+	} else if len(hosts) != 0 {
+		return errors.New("unexpected peer destination count")
+	}
+	connection, err := outer.DialContext(ctx, network, M.ParseSocksaddr(net.JoinHostPort(host, "9999")))
+	if err != nil {
+		return err
+	}
+	defer connection.Close()
+	_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
+	message := bytes.Repeat([]byte("retained-native-node-"), 32)
+	if _, err = connection.Write(message); err != nil {
+		return err
+	}
+	response := make([]byte, len(message))
+	if _, err = io.ReadFull(connection, response); err != nil {
+		return err
+	}
+	if !bytes.Equal(message, response) {
+		return errors.New("encrypted peer returned different payload")
+	}
+	return nil
+}
+
+func TestRouterVPNDesktopNodeEncryptedPreReadyHandshake(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newDesktopNodePeerFixture(t, mode, false)
+			if err := f.box.RouterVPNStrategyStart(); err != nil {
+				t.Fatal("actual eager encrypted Box startup", err)
+			}
+			f.kernel.mu.Lock()
+			early, requests := f.kernel.preTUN, f.kernel.requests
+			f.kernel.mu.Unlock()
+			if early < 1 || requests < 1 || f.network.Current() || !f.network.SocketCurrent() {
+				t.Fatal("eager encrypted peer skipped prepared startup or fabricated ready proof", early, requests)
+			}
+			for _, network := range []string{"tcp", "udp"} {
+				for _, host := range []string{"192.0.2.99", "2001:db8::99"} {
+					if err := f.exchange(network, host); err != nil {
+						t.Fatal("real encrypted payload did not use captured native lower", network, host, err)
+					}
+				}
+			}
+			if f.peer.bind.packets.Load() == 0 {
+				t.Fatal("successful payload had no actual encrypted peer packets")
+			}
+			f.network.InterfaceUpdated(context.Background())
+			if f.network.Current() || f.network.SocketCurrent() || f.kernel.live.Load() {
+				t.Fatal("physical transition retained old endpoint permission")
+			}
+			if err := f.exchange("udp"); err == nil {
+				t.Fatal("retired node generation delivered another encrypted payload")
+			}
+			if err := f.close(); err != nil {
+				t.Fatal(err)
+			}
+			f.kernel.mu.Lock()
+			remaining := len(f.kernel.grants)
+			f.kernel.mu.Unlock()
+			if remaining != 0 || !f.source.closed.Load() {
+				t.Fatal("encrypted native close retained socket grants")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeEncryptedWrongPeerRejected(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newDesktopNodePeerFixture(t, mode, true)
+			if err := f.box.RouterVPNStrategyStart(); err != nil {
+				t.Fatal("wrong-key negative must reach the real encrypted peer", err)
+			}
+			if err := f.exchange("udp"); err == nil {
+				t.Fatal("wrong encrypted peer key delivered a payload")
+			}
+			if f.peer.bind.packets.Load() == 0 || f.network.Current() {
+				t.Fatal("wrong-key negative missed actual encrypted traffic or fabricated ready proof")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeEncryptedConfiguredCoverStartup(t *testing.T) {
+	f := newDesktopNodePeerFixture(t, "awg2-strong", false, true)
+	if err := f.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal("captured cover settings changed eager encrypted startup", err)
+	}
+	services := f.box.RouterVPNServices()
+	if len(services) != 2 || services[0].Type() != "routervpn-cover" || services[1] != f.network {
+		t.Fatal("configured cover or appended Node owner changed native service order")
+	}
+	cover, ok := services[0].(*routervpnperformance.Service)
+	if !ok {
+		t.Fatal("configured cover did not construct its actual shipping native service")
+	}
+	var status struct {
+		Requested bool   `json:"requested"`
+		Active    bool   `json:"active"`
+		SentBytes uint64 `json:"sent_bytes"`
+		RateKbps  int    `json:"rate_kbps"`
+	}
+	if err := json.Unmarshal([]byte(cover.StatusJSON()), &status); err != nil || !status.Requested || status.Active || status.SentBytes != 0 || status.RateKbps != 64 || cover.Healthy() || f.network.Current() {
+		t.Fatal("native startup discarded cover policy or fabricated post-proof padding readiness", err)
+	}
+	if err := f.exchange("udp"); err != nil {
+		t.Fatal("configured cover prevented the real captured encrypted path", err)
+	}
+	// Cover activation/traffic still requires the later captured node proof.
+	// This test closes only startup order and preservation, not that live phase.
+	if err := f.close(); err != nil || !f.source.closed.Load() {
+		t.Fatal("configured native services did not join their exact owner", err)
+	}
+}

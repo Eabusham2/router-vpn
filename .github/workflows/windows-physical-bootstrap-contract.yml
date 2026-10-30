@@ -16,6 +16,7 @@ on:
       - 'deploy/test_windows_physical_bootstrap*.py'
       - 'deploy/test_windows_physical_tunnel*.py'
       - 'deploy/test_windows_external_physical.py'
+      - 'deploy/test_desktop_node_physical.py'
       - 'deploy/fixtures/windows-physical-bootstrap/**'
       - '.github/workflows/windows-physical-bootstrap-contract.yml'
   pull_request:
@@ -32,6 +33,7 @@ on:
       - 'deploy/test_windows_physical_bootstrap*.py'
       - 'deploy/test_windows_physical_tunnel*.py'
       - 'deploy/test_windows_external_physical.py'
+      - 'deploy/test_desktop_node_physical.py'
       - 'deploy/fixtures/windows-physical-bootstrap/**'
       - '.github/workflows/windows-physical-bootstrap-contract.yml'
   workflow_dispatch:
@@ -46,6 +48,33 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  native-node-composition:
+    name: Captured Node startup on ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, windows-11-arm]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Execute exact Node command, startup and encrypted peers
+        shell: pwsh
+        run: |
+          # Real compiled Box, captured IPC, WG/AWG TCP/UDP and MTU rollback.
+          # The OS source/TUN are explicit fixtures; the other kernel gates
+          # and both-direction host protection transfer remain required.
+          python deploy/test_desktop_node_physical.py --standalone
+          if ($LASTEXITCODE -ne 0) { throw 'Captured native Node composition failed' }
   native-bootstrap:
     name: Native Windows bootstrap on ${{ matrix.runner }}
     runs-on: ${{ matrix.runner }}

@@ -1,0 +1,352 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"os"
+	"runtime"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/service"
+)
+
+type NodeCaptureOptions struct {
+	SessionID    string `json:"session_id"`
+	SourceSHA256 string `json:"source_sha256"`
+}
+
+func RegisterNodeNetworkOwner(registry *boxService.Registry) {
+	boxService.Register[NodeCaptureOptions](registry, mobilemultihop.DesktopNodeNetworkType, NewNodeNetworkOwner)
+}
+
+// NodeNetworkOwner belongs only to the compiled private Router node graph.
+// JSON can name its inert capture but cannot install a factory or activate it.
+// The native Box must independently compare its complete derived options and
+// supply the exact constructed policy before any startup stage opens a socket.
+type NodeNetworkOwner struct {
+	mu        sync.Mutex
+	ctx       context.Context
+	cancel    context.CancelFunc
+	capture   NodeCaptureOptions
+	networkID string
+	policy    *mobilemultihop.DesktopNodePolicy
+	factory   NodePhysicalBrokerFactory
+	preparing chan struct{}
+	broker    *mobiletor.DesktopSocketBroker
+	source    mobiletor.DesktopSocketSource
+	physical  *NodePhysicalOutbound
+	nextStage adapter.StartStage
+	sockets   bool
+	ready     bool
+	active    bool
+	retired   bool
+}
+
+// The factory is an in-memory native capability, never an imported graph field.
+// It must return partial source ownership even on cancellation/failure. Close
+// joins this exact operation before retiring its descriptors and OS identity.
+type NodePhysicalBrokerFactory func(context.Context, mobiletor.DesktopSocketCapture, func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error)
+
+var (
+	_ adapter.Service                 = (*NodeNetworkOwner)(nil)
+	_ adapter.InterfaceUpdateListener = (*NodeNetworkOwner)(nil)
+)
+
+func NewNodeNetworkOwner(ctx context.Context, _ log.ContextLogger, tag string, options NodeCaptureOptions) (adapter.Service, error) {
+	if ctx == nil || ctx.Err() != nil || tag != mobilemultihop.DesktopNodeNetworkTag ||
+		!networkSessionID.MatchString(options.SessionID) || !networkSourceID.MatchString(options.SourceSHA256) {
+		return nil, errors.New("Router node desktop network owner requires its exact captured native source")
+	}
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return nil, err
+	}
+	owned, cancel := context.WithCancel(ctx)
+	return &NodeNetworkOwner{ctx: owned, cancel: cancel, capture: options, networkID: hex.EncodeToString(nonce[:])}, nil
+}
+
+func (*NodeNetworkOwner) Type() string { return mobilemultihop.DesktopNodeNetworkType }
+func (*NodeNetworkOwner) Tag() string  { return mobilemultihop.DesktopNodeNetworkTag }
+
+func (n *NodeNetworkOwner) Matches(session, source string) bool {
+	if n == nil {
+		return false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return !n.retired && n.ctx != nil && n.ctx.Err() == nil && n.capture.SessionID == session && n.capture.SourceSHA256 == source
+}
+
+func (n *NodeNetworkOwner) brokerCapture() mobiletor.DesktopSocketCapture {
+	return mobiletor.DesktopSocketCapture{SessionID: n.capture.SessionID, SourceSHA256: n.capture.SourceSHA256, NetworkID: n.networkID}
+}
+
+func (n *NodeNetworkOwner) PrepareNodePhysicalBroker(policy *mobilemultihop.DesktopNodePolicy, factory NodePhysicalBrokerFactory) error {
+	if n == nil || policy == nil || policy.Validate() != nil || factory == nil {
+		return errors.New("Router node desktop physical preparation requires its original compiled authority")
+	}
+	meta := policy.Metadata()
+	if meta.TargetOS != runtime.GOOS || !n.Matches(meta.SessionID, meta.SourceSHA256) {
+		// The Node constructor retains the complete original compiled profile;
+		// a target alias cannot relabel its actual native socket authority.
+		return errors.New("Router node desktop physical transport requires a proved native target and complete association capability")
+	}
+	capture, err := policy.Capture()
+	if err != nil {
+		return err
+	}
+	allowed, err := desktopPhysicalDestinations(capture.IPv6Mode, capture.PhysicalRoots, capture.SelectedDNS, capture.BootstrapDNS)
+	if err != nil {
+		return err
+	}
+	manager := service.FromContext[adapter.OutboundManager](n.ctx)
+	if manager == nil {
+		return errors.New("Router node desktop physical preparation has no native outbound manager")
+	}
+	selected, exists := manager.Outbound(mobilemultihop.DesktopNodePhysicalTag)
+	physical, ok := selected.(*NodePhysicalOutbound)
+	if !exists || !ok || physical == nil || physical.options != n.capture {
+		return errors.New("Router node desktop physical preparation found another native lower object")
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.retired || n.ready || n.active || n.ctx.Err() != nil || n.factory != nil || n.policy != nil || n.preparing != nil {
+		return errors.New("Router node desktop physical preparation is late, replaced or already owned")
+	}
+	if err := physical.prepare(n, allowed); err != nil {
+		return err
+	}
+	n.policy, n.factory, n.physical = policy, factory, physical
+	return nil
+}
+
+func (n *NodeNetworkOwner) Start(stage adapter.StartStage) error {
+	if n == nil {
+		return errors.New("Router node desktop network owner is unavailable")
+	}
+	n.mu.Lock()
+	valid := !n.retired && n.ctx != nil && n.ctx.Err() == nil && stage == n.nextStage && stage <= adapter.StartStateStarted
+	n.mu.Unlock()
+	if !valid {
+		return errors.New("Router node desktop startup changed its captured stage order")
+	}
+	if stage == adapter.StartStateInitialize {
+		if err := n.startPhysical(); err != nil {
+			return err
+		}
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.retired || n.ctx == nil || n.ctx.Err() != nil || n.policy == nil || n.broker == nil || n.source == nil || stage != n.nextStage {
+		return errors.New("Router node desktop network startup has no prepared native owner")
+	}
+	if stage == adapter.StartStateInitialize {
+		// Literal WG/AWG peers open their captured bind during endpoint
+		// Start, before the native TUN or service's Started stage. The factory
+		// has already proved the deny baseline and exact handoff. Only this
+		// lower object's compiled numeric tuples become eligible here.
+		n.sockets = true
+	}
+	if stage == adapter.StartStateStarted {
+		n.ready = true
+	}
+	n.nextStage++
+	return nil
+}
+
+func (n *NodeNetworkOwner) startPhysical() error {
+	n.mu.Lock()
+	if n.retired || n.ctx == nil || n.ctx.Err() != nil || n.factory == nil || n.policy == nil || n.preparing != nil || n.active || n.ready {
+		n.mu.Unlock()
+		return errors.New("Router node desktop physical factory is missing, retired or already entered")
+	}
+	ctx, factory, capture := n.ctx, n.factory, n.brokerCapture()
+	joined := make(chan struct{})
+	n.preparing = joined
+	n.mu.Unlock()
+	defer close(joined)
+	broker, source, err := factory(ctx, capture, func() bool { return n.Matches(capture.SessionID, capture.SourceSHA256) })
+	// Retain every returned owner before testing cancellation or result shape.
+	// The close path waits for joined before observing these fields.
+	n.mu.Lock()
+	n.broker, n.source = broker, source
+	n.mu.Unlock()
+	if err == nil && broker != nil && source != nil && ctx.Err() == nil && broker.Matches(capture) {
+		n.mu.Lock()
+		current := !n.retired && n.ctx.Err() == nil
+		n.mu.Unlock()
+		if current {
+			return nil
+		}
+	}
+	n.retire()
+	return errors.Join(err, ctx.Err(), errors.New("Router node desktop physical initialization did not retain its exact live source"))
+}
+
+// Activate follows actual native Started and consumes the same policy pointer
+// used for preparation. Its context is the parent of proof and measurement
+// work, so a real network reset revokes those results before publication.
+func (n *NodeNetworkOwner) Activate(policy *mobilemultihop.DesktopNodePolicy) (context.Context, error) {
+	if n == nil || policy == nil || policy.Validate() != nil {
+		return nil, errors.New("Router node desktop activation requires its original native policy")
+	}
+	n.mu.Lock()
+	broker, capture := n.broker, n.brokerCapture()
+	n.mu.Unlock()
+	if broker == nil || !broker.Matches(capture) {
+		return nil, errors.New("Router node desktop activation lost its captured broker")
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.retired || !n.ready || n.active || n.ctx.Err() != nil || n.policy != policy || n.broker != broker || n.source == nil || n.physical == nil {
+		return nil, errors.New("Router node desktop activation is early, stale or already owned")
+	}
+	n.active = true
+	return n.ctx, nil
+}
+
+func (n *NodeNetworkOwner) Current() bool {
+	if n == nil {
+		return false
+	}
+	n.mu.Lock()
+	current := n.active && n.ready && !n.retired && n.ctx != nil && n.ctx.Err() == nil
+	broker, capture := n.broker, n.brokerCapture()
+	n.mu.Unlock()
+	return current && broker != nil && broker.Matches(capture)
+}
+
+// SocketCurrent is deliberately distinct from Current. It admits only the
+// sealed lower object after initialization; it does not establish TUN, node,
+// DNS or application readiness. Retirement revokes both phases together.
+func (n *NodeNetworkOwner) SocketCurrent() bool {
+	if n == nil {
+		return false
+	}
+	n.mu.Lock()
+	current := n.sockets && !n.retired && n.ctx != nil && n.ctx.Err() == nil
+	broker, capture := n.broker, n.brokerCapture()
+	n.mu.Unlock()
+	return current && broker != nil && broker.Matches(capture)
+}
+
+// Cancel revokes proof, measurement and socket admission without waiting for an
+// entered native constructor or OS cleanup. Close retains and joins those
+// exact owners, including a source returned after this cancellation.
+func (n *NodeNetworkOwner) Cancel() { n.retire() }
+
+func (n *NodeNetworkOwner) retire() {
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	n.retired, n.ready, n.sockets = true, false, false
+	if n.cancel != nil {
+		n.cancel()
+	}
+	broker, source := n.broker, n.source
+	n.mu.Unlock()
+	if broker != nil {
+		broker.Cancel()
+	}
+	if source != nil {
+		source.Cancel()
+	}
+}
+
+func (n *NodeNetworkOwner) InterfaceUpdated(_ context.Context) {
+	if n == nil {
+		return
+	}
+	n.mu.Lock()
+	entered := n.active || n.preparing != nil
+	n.mu.Unlock()
+	if entered {
+		n.retire()
+	}
+}
+
+func (n *NodeNetworkOwner) Close() error {
+	if n == nil {
+		return nil
+	}
+	n.retire()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	n.mu.Lock()
+	preparing := n.preparing
+	n.mu.Unlock()
+	if preparing != nil {
+		select {
+		case <-preparing:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	n.mu.Lock()
+	broker, source := n.broker, n.source
+	n.mu.Unlock()
+	if broker != nil {
+		if err := broker.Close(ctx); err != nil {
+			return err
+		}
+	}
+	if source != nil {
+		return source.Close(ctx)
+	}
+	return nil
+}
+
+func (n *NodeNetworkOwner) BindPhysicalTunnel(ctx context.Context, name string, index uint32) error {
+	return n.changePhysicalTunnel(ctx, name, index, nil, false)
+}
+func (n *NodeNetworkOwner) BindPhysicalTunnelFile(ctx context.Context, name string, index uint32, file *os.File) error {
+	if file == nil {
+		return errors.New("Router node desktop tunnel has no retained native control")
+	}
+	return n.changePhysicalTunnel(ctx, name, index, file, false)
+}
+func (n *NodeNetworkOwner) RetirePhysicalTunnel(ctx context.Context, name string, index uint32) error {
+	return n.changePhysicalTunnel(ctx, name, index, nil, true)
+}
+func (n *NodeNetworkOwner) changePhysicalTunnel(ctx context.Context, name string, index uint32, file *os.File, retire bool) error {
+	if ctx == nil || ctx.Err() != nil || name == "" || index == 0 || !n.Current() {
+		return errors.New("Router node desktop tunnel lost its active native capture")
+	}
+	n.mu.Lock()
+	source, capture := n.source, n.brokerCapture()
+	n.mu.Unlock()
+	policy, ok := source.(mobiletor.DesktopSocketTunnelPolicy)
+	if !ok {
+		if runtime.GOOS == "linux" && source != nil {
+			return nil
+		}
+		return errors.New("Router node desktop physical policy cannot attest its actual TUN")
+	}
+	bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	var err error
+	if retire {
+		err = policy.RetireTunnel(bounded, capture, name, index)
+	} else if file != nil {
+		owned, ok := policy.(mobiletor.DesktopSocketTunnelFilePolicy)
+		if !ok {
+			return errors.New("Router node desktop physical policy cannot retain its exact TUN control")
+		}
+		err = owned.BindTunnelFile(bounded, capture, name, index, file)
+	} else {
+		err = policy.BindTunnel(bounded, capture, name, index)
+	}
+	if err != nil || bounded.Err() != nil || !n.Current() {
+		return errors.Join(err, bounded.Err(), errors.New("Router node desktop physical policy did not acknowledge the captured TUN"))
+	}
+	return nil
+}
