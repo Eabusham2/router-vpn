@@ -17,6 +17,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 import venv
@@ -49,13 +50,24 @@ class NativeCall:
 
 class ProcessLibrary:
     """Darwin ABI double for the actual shipping inventory function."""
-    def __init__(self, pids=(101,), paths=None, count=None, inventory=None):
+    def __init__(self, pids=(101,), paths=None, count=None, inventory=None, states=None):
         self.pids, self.paths = pids, dict(paths or {})
+        self.states = dict(states or {})
         self.count = count if count is not None else (len(pids), errno.EBUSY)
         self.inventory = list(inventory or [(len(pids), errno.EBUSY)])
         self.calls = []
         self.proc_listallpids = NativeCall(self.list_pids)
         self.proc_pidpath = NativeCall(self.pid_path)
+        self.proc_pidinfo = NativeCall(self.pid_info)
+
+    @staticmethod
+    def next_result(values, pid, default):
+        result = values.get(pid, default)
+        if isinstance(result, list):
+            selected = result[0]
+            if len(result) > 1: result.pop(0)
+            return selected
+        return result
 
     def list_pids(self, buffer, size):
         self.calls.append(('count' if buffer is None else 'inventory', ctypes.get_errno()))
@@ -73,12 +85,27 @@ class ProcessLibrary:
     def pid_path(self, pid, buffer, size):
         self.calls.append((pid, ctypes.get_errno()))
         if size != 4096: raise AssertionError('Native executable path lost its bounded capture')
-        result, error = self.paths.get(pid, (b'/fixture/native-owner', errno.EBUSY))
+        result, error = self.next_result(self.paths, pid, (b'/fixture/native-owner', errno.EBUSY))
         if error is not None: ctypes.set_errno(error)
         if isinstance(result, bytes):
             ctypes.memmove(buffer, result, min(len(result), size))
             return len(result)
         return result
+
+    def pid_info(self, pid, flavor, argument, buffer, size):
+        self.calls.append(('state', pid, ctypes.get_errno()))
+        if (flavor, argument, size) != (3, 1, 136):
+            raise AssertionError('Native process state lost its exact public ABI or zombie lookup')
+        result, error = self.next_result(self.states, pid, ({}, errno.EBUSY))
+        if error is not None: ctypes.set_errno(error)
+        if result is None: return 0
+        if isinstance(result, int): return result
+        raw = bytearray(136)
+        struct.pack_into('<I', raw, 4, result.get('status', 2))
+        struct.pack_into('<I', raw, 12, result.get('pid', pid))
+        struct.pack_into('<QQ', raw, 120, result.get('seconds', 1700000000), result.get('microseconds', 123))
+        ctypes.memmove(buffer, bytes(raw), len(raw))
+        return result.get('size', len(raw))
 
 
 class MacProcessInventory(unittest.TestCase):
@@ -98,11 +125,14 @@ class MacProcessInventory(unittest.TestCase):
         self.assertEqual(library.calls, [('count', 0), ('inventory', 0), (101, 0), (102, 0)])
         self.assertEqual(library.proc_listallpids.argtypes, [ctypes.c_void_p, ctypes.c_int])
         self.assertEqual(library.proc_pidpath.argtypes, [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32])
+        self.assertEqual(library.proc_pidinfo.argtypes,
+                         [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int])
 
-    def test_only_esrch_proves_a_missing_process(self):
-        library = ProcessLibrary(pids=(101, 102), paths={101: (0, errno.ESRCH)})
+    def test_path_esrch_requires_independent_native_process_absence(self):
+        library = ProcessLibrary(pids=(101, 102), paths={101: (0, errno.ESRCH)},
+                                 states={101: (None, errno.ESRCH)})
         self.assertEqual(self.read(library), ['/fixture/native-owner'])
-        self.assertEqual(library.calls[-2:], [(101, 0), (102, 0)])
+        self.assertEqual(library.calls[-3:], [(101, 0), ('state', 101, 0), (102, 0)])
 
     def test_unknown_or_denied_paths_fail_closed_with_only_numeric_diagnostics(self):
         for error in (errno.EPERM, errno.EACCES, errno.EIO, errno.EINVAL, 0):
@@ -118,7 +148,8 @@ class MacProcessInventory(unittest.TestCase):
                     self.assertNotIn('/private/', str(failure.exception))
 
     def test_previous_esrch_cannot_hide_a_zero_result_without_errno(self):
-        library = ProcessLibrary(pids=(101, 102), paths={101: (0, errno.ESRCH), 102: (0, None)})
+        library = ProcessLibrary(pids=(101, 102), paths={101: (0, errno.ESRCH), 102: (0, None)},
+                                 states={101: (None, errno.ESRCH)})
         with self.assertRaisesRegex(RuntimeError, r'pid=102, errno=0, result=0'):
             self.read(library)
 
@@ -145,6 +176,85 @@ class MacProcessInventory(unittest.TestCase):
         library = ProcessLibrary(paths={101: (4096, 0)})
         with self.assertRaisesRegex(RuntimeError, r'identity was truncated \(pid=101, result=4096\)'):
             self.read(library)
+
+    def test_missing_paths_require_native_absence_or_the_same_zombie(self):
+        for path_error in (errno.ENOENT, errno.ESRCH):
+            for states in (
+                [(None, errno.ESRCH)],
+                [({}, 0), (None, errno.ESRCH)],
+                [({}, 0), ({'status': 5}, 0)],
+                [({'status': 5}, 0), ({'status': 5}, 0)],
+            ):
+                with self.subTest(path_error=path_error, states=states):
+                    library = ProcessLibrary(paths={101: (0, path_error)}, states={101: list(states)})
+                    self.assertEqual([], self.read(library))
+                    self.assertTrue(all(call[-1] == 0 for call in library.calls))
+
+    def test_transient_missing_path_recovers_only_the_captured_live_identity(self):
+        library = ProcessLibrary(paths={101: [(0, errno.ENOENT), (b'/fixture/native-owner', 0)]})
+        self.assertEqual(['/fixture/native-owner'], self.read(library))
+        self.assertEqual(library.calls[-4:], [(101, 0), ('state', 101, 0), (101, 0), ('state', 101, 0)])
+
+    def test_live_missing_executable_is_rejected_after_bounded_retries(self):
+        for path_error in (errno.ENOENT, errno.ESRCH):
+            for status in (1, 2, 3, 4):
+                with self.subTest(path_error=path_error, status=status):
+                    library = ProcessLibrary(paths={101: (0, path_error)}, states={101: ({'status': status}, 0)})
+                    with mock.patch.object(self.installer.time, 'sleep') as pause, self.assertRaisesRegex(
+                            RuntimeError, f'pid=101, errno={path_error}, result=0, status={status}'):
+                        self.read(library)
+                    self.assertEqual([mock.call(0.01)] * 2, pause.call_args_list)
+                    self.assertEqual(4, sum(call[0] == 101 for call in library.calls))
+                    self.assertEqual(4, sum(call[0] == 'state' for call in library.calls))
+
+    def test_missing_path_retry_rejects_pid_reuse_and_zombie_revival(self):
+        for before, after in (({}, {'seconds': 1700000001}), ({}, {'microseconds': 124}),
+                              ({}, {'seconds': 1700000001, 'status': 5}), ({'status': 5}, {})):
+            with self.subTest(before=before, after=after):
+                library = ProcessLibrary(paths={101: [(0, errno.ENOENT), (b'/fixture/replacement', 0)]},
+                                         states={101: [(before, 0), (after, 0)]})
+                with self.assertRaisesRegex(RuntimeError, 'identity changed during executable capture'):
+                    self.read(library)
+
+    def test_missing_path_state_errors_never_prove_absence(self):
+        for error in (0, errno.EPERM, errno.EACCES, errno.EIO, errno.EINVAL, errno.ENOENT):
+            for returned in (0, -1):
+                with self.subTest(error=error, returned=returned):
+                    library = ProcessLibrary(paths={101: (0, errno.ENOENT)}, states={101: (returned, error)})
+                    with self.assertRaisesRegex(RuntimeError, f'pid=101, errno={error}, result={returned}, expected=136'):
+                        self.read(library)
+        library = ProcessLibrary(paths={101: (0, errno.ESRCH)}, states={101: (0, None)})
+        with self.assertRaisesRegex(RuntimeError, 'pid=101, errno=0, result=0, expected=136'):
+            self.read(library)
+
+    def test_missing_path_rejects_short_or_malformed_native_state(self):
+        for changed in ({'size': 135}, {'size': 137}, {'pid': 102}, {'status': 0}, {'status': 6},
+                        {'seconds': 0}, {'microseconds': 1000000}):
+            with self.subTest(changed=changed):
+                record = {'status': 5, **changed}
+                library = ProcessLibrary(paths={101: (0, errno.ENOENT)}, states={101: (record, 0)})
+                with self.assertRaisesRegex(RuntimeError, 'Cannot capture native process state|Native process state is malformed'):
+                    self.read(library)
+
+    def test_native_state_abi_offsets_are_checked_before_any_inventory(self):
+        class WrongLayout(ctypes.Structure):
+            _fields_ = [('pbi_pid', ctypes.c_uint32), ('pbi_status', ctypes.c_uint32),
+                        ('padding', ctypes.c_char * 112), ('pbi_start_tvusec', ctypes.c_uint64),
+                        ('pbi_start_tvsec', ctypes.c_uint64)]
+        self.assertEqual(136, ctypes.sizeof(WrongLayout))
+        with mock.patch.object(self.installer, 'NativeProcessBSDInfo', WrongLayout), \
+             mock.patch.object(self.installer.sys, 'platform', 'darwin'), \
+             mock.patch.object(self.installer.ctypes, 'CDLL') as factory, \
+             self.assertRaisesRegex(RuntimeError, 'identity ABI'):
+            self.installer.running_executables()
+        factory.assert_not_called()
+
+    def test_retry_does_not_turn_denied_live_identity_into_absence(self):
+        library = ProcessLibrary(paths={101: [(0, errno.ENOENT), (0, errno.EACCES)]})
+        with mock.patch.object(self.installer.time, 'sleep') as pause, \
+             self.assertRaisesRegex(RuntimeError, f'pid=101, errno={errno.EACCES}, result=0, status=2'):
+            self.read(library)
+        pause.assert_not_called()
 
 
 class QuarantineLibrary:
@@ -587,6 +697,81 @@ class MacNativeQuarantine(MacInstallTransactions):
             self.assertEqual(value, bytes.fromhex(captured.stdout))
 
 
+class MacNativeProcesses(unittest.TestCase):
+    def test_actual_native_state_identifies_owned_live_zombie_and_reaped_child(self):
+        if sys.platform != 'darwin': raise RuntimeError('Actual macOS process-state execution is required')
+        library = M.native_process_library()
+        current = M.native_process_state(library, os.getpid())
+        self.assertIsNotNone(current)
+        self.assertEqual(os.getpid(), current[0])
+        self.assertNotEqual(5, current[3])
+        child = subprocess.Popen(['/bin/cat'], stdin=subprocess.PIPE,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            captured = M.native_process_state(library, child.pid)
+            self.assertIsNotNone(captured)
+            self.assertNotEqual(5, captured[3])
+            child.stdin.close()  # Exit on EOF, but retain the unreaped child.
+            deadline = time.monotonic() + 3
+            while True:
+                ended = M.native_process_state(library, child.pid)
+                self.assertIsNotNone(ended, 'Unreaped native child vanished without its captured zombie')
+                self.assertEqual(captured[:3], ended[:3])
+                if ended[3] == 5: break
+                if time.monotonic() >= deadline:
+                    self.fail('Owned native child did not reach its independently observed zombie state')
+                time.sleep(0.01)
+            self.assertIsNone(M.native_executable(library, child.pid))
+            child.wait(timeout=3)
+            self.assertIsNone(M.native_process_state(library, child.pid))
+            print(f'Actual libproc identity retained owned PID {child.pid} through SZOMB and independent ESRCH.')
+        finally:
+            if child.poll() is None: child.kill()
+            child.wait(timeout=3)
+            if not child.stdin.closed: child.stdin.close()
+
+    def test_actual_unlinked_live_executable_never_proves_absence(self):
+        if sys.platform != 'darwin': raise RuntimeError('Actual macOS unlinked-process execution is required')
+        library = M.native_process_library()
+        with tempfile.TemporaryDirectory(prefix='routervpn-mac-live-image-') as temporary:
+            root = Path(temporary).resolve(strict=True)
+            executable = root/'owned-live-image'
+            shutil.copyfile('/bin/sleep', executable)
+            executable.chmod(0o755)
+            child = subprocess.Popen([str(executable), '30'], stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                captured = M.native_process_state(library, child.pid)
+                self.assertIsNotNone(captured)
+                self.assertNotEqual(5, captured[3])
+                self.assertEqual(str(executable), M.native_executable(library, child.pid))
+                executable.unlink()
+                path, error, size = M.native_process_path(library, child.pid)
+                live = M.native_process_state(library, child.pid)
+                self.assertIsNotNone(live)
+                self.assertEqual(captured[:3], live[:3])
+                self.assertNotEqual(5, live[3])
+                # Darwin versions may return a retained path or an executable
+                # vnode error. Both observations must still block this owner.
+                try:
+                    retained = M.native_executable(library, child.pid)
+                except RuntimeError as failure:
+                    self.assertIn('Cannot prove the previous native processes have exited', str(failure))
+                else:
+                    self.assertIsNotNone(retained, 'Live unlinked native executable was classified as absent')
+                    self.assertEqual(str(executable), retained)
+                    with self.assertRaisesRegex(RuntimeError, 'previous owned native processes'):
+                        M.reject_running_previous(root, lambda: [retained])
+                after = M.native_process_state(library, child.pid)
+                self.assertIsNotNone(after)
+                self.assertEqual(captured[:3], after[:3])
+                self.assertNotEqual(5, after[3])
+                print(f'Actual unlinked live owner remains blocked (pid={child.pid}, errno={error}, result={size}, status={after[3]}).')
+            finally:
+                if child.poll() is None: child.kill()
+                child.wait(timeout=3)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--package', type=Path)
@@ -618,10 +803,29 @@ def main():
         result = unittest.TextTestRunner(stream=io.StringIO()).run(broken(case))
         if result.wasSuccessful(): raise AssertionError('Broken native installation was accepted: '+case)
         print('Rejected macOS installer defect: '+case)
+    for before, after, case in (
+        ('    captured = native_process_state(library, pid)', '    return None\n    captured = native_process_state(library, pid)',
+         'test_live_missing_executable_is_rejected_after_bounded_retries'),
+        ('        if captured[:3] != current[:3] or captured[3] == 5 and current[3] != 5:', '        if False:',
+         'test_missing_path_retry_rejects_pid_reuse_and_zombie_revival'),
+        ('    if size != ctypes.sizeof(info):', '    if size < 0:',
+         'test_missing_path_rejects_short_or_malformed_native_state'),
+        ('    ctypes.set_errno(0)\n    # Nonzero arg explicitly includes zombie processes,',
+         '    # Nonzero arg explicitly includes zombie processes,',
+         'test_missing_path_state_errors_never_prove_absence'),
+    ):
+        source = TARGET.read_text()
+        if source.count(before) != 1: raise AssertionError('Mutation lost its actual native inventory seam')
+        broken = type('BrokenMacInventory', (MacProcessInventory,), {'installer': load(source.replace(before, after, 1))})
+        result = unittest.TextTestRunner(stream=io.StringIO()).run(broken(case))
+        if result.wasSuccessful(): raise AssertionError('Broken native process inventory was accepted: '+case)
+        print('Rejected macOS native inventory defect: '+case)
     if sys.platform == 'darwin':
         result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(MacNativeACL))
         if not result.wasSuccessful(): raise SystemExit(1)
         result = unittest.TextTestRunner(verbosity=2).run(MacNativeQuarantine('test_real_download_quarantine_survives_native_installation'))
+        if not result.wasSuccessful(): raise SystemExit(1)
+        result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(MacNativeProcesses))
         if not result.wasSuccessful(): raise SystemExit(1)
         actual = {str(Path(path).resolve()) for path in M.running_executables()}
         if str(Path(sys.executable).resolve()) not in actual:

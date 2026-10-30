@@ -370,17 +370,101 @@ def launch_definition_arguments():
     return [str(ROOT/'router-vpn-client'), '--macos-controller-supervisor']
 
 
-def running_executables():
-    # Apple libproc returns a PID count here (not the byte count returned by
-    # proc_listpids). Paths come from the kernel, not mutable argv or ps text.
-    # https://github.com/apple-oss-distributions/xnu/blob/main/libsyscall/wrappers/libproc/libproc.c
+class NativeProcessBSDInfo(ctypes.Structure):
+    # Darwin's public PROC_PIDTBSDINFO ABI, including the native start time.
+    # https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/sys/proc_info.h
+    _fields_ = [(name, ctypes.c_uint32) for name in (
+        'pbi_flags', 'pbi_status', 'pbi_xstatus', 'pbi_pid', 'pbi_ppid',
+        'pbi_uid', 'pbi_gid', 'pbi_ruid', 'pbi_rgid', 'pbi_svuid', 'pbi_svgid', 'rfu_1')]
+    _fields_ += [('pbi_comm', ctypes.c_char * 16), ('pbi_name', ctypes.c_char * 32)]
+    _fields_ += [(name, ctypes.c_uint32) for name in (
+        'pbi_nfiles', 'pbi_pgid', 'pbi_pjobc', 'e_tdev', 'e_tpgid')]
+    _fields_ += [('pbi_nice', ctypes.c_int32), ('pbi_start_tvsec', ctypes.c_uint64),
+                ('pbi_start_tvusec', ctypes.c_uint64)]
+
+
+def native_process_library():
     if sys.platform != 'darwin':
         raise RuntimeError('Actual macOS process identity is required')
+    if ctypes.sizeof(NativeProcessBSDInfo) != 136 or any(
+            getattr(NativeProcessBSDInfo, name).offset != offset for name, offset in (
+                ('pbi_status', 4), ('pbi_pid', 12), ('pbi_start_tvsec', 120), ('pbi_start_tvusec', 128))):
+        raise RuntimeError('Native process identity ABI is not the documented Darwin layout')
     library = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True)
     library.proc_listallpids.argtypes = [ctypes.c_void_p, ctypes.c_int]
     library.proc_listallpids.restype = ctypes.c_int
     library.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
     library.proc_pidpath.restype = ctypes.c_int
+    library.proc_pidinfo.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_uint64, ctypes.c_void_p, ctypes.c_int]
+    library.proc_pidinfo.restype = ctypes.c_int
+    return library
+
+
+def native_process_state(library, pid):
+    info = NativeProcessBSDInfo()
+    ctypes.set_errno(0)
+    # Nonzero arg explicitly includes zombie processes, rather than treating
+    # failure to resolve their executable vnode as evidence of absence.
+    size = library.proc_pidinfo(pid, 3, 1, ctypes.byref(info), ctypes.sizeof(info))
+    error = ctypes.get_errno()
+    if size == 0 and error == errno.ESRCH:
+        return None
+    if size != ctypes.sizeof(info):
+        raise RuntimeError('Cannot capture native process state '
+                           f'(pid={pid}, errno={error}, result={size}, expected={ctypes.sizeof(info)})')
+    if info.pbi_pid != pid or not 1 <= info.pbi_status <= 5 or not info.pbi_start_tvsec or info.pbi_start_tvusec >= 1000000:
+        raise RuntimeError(f'Native process state is malformed (pid={pid}, returned_pid={info.pbi_pid}, status={info.pbi_status})')
+    return (info.pbi_pid, info.pbi_start_tvsec, info.pbi_start_tvusec, info.pbi_status)
+
+
+def native_process_path(library, pid):
+    buffer = ctypes.create_string_buffer(4096)
+    ctypes.set_errno(0)
+    size = library.proc_pidpath(pid, buffer, len(buffer))
+    error = ctypes.get_errno()
+    if size >= len(buffer):
+        raise RuntimeError(f'Native executable identity was truncated (pid={pid}, result={size})')
+    return (os.fsdecode(buffer.raw[:size]) if size > 0 else None, error, size)
+
+
+def native_executable(library, pid):
+    path, error, size = native_process_path(library, pid)
+    if path is not None:
+        return path
+    if error not in (errno.ENOENT, errno.ESRCH):
+        raise RuntimeError('Cannot prove the previous native processes have exited '
+                           f'(pid={pid}, errno={error}, result={size})')
+    # XNU can fail a live process's executable-vnode lookup with ENOENT or
+    # ESRCH. Neither path result grants absence. proc_pidinfo independently
+    # proves disappearance, or the same PID/start-time must reach SZOMB.
+    # https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/proc_info.c
+    captured = native_process_state(library, pid)
+    if captured is None:
+        return None
+    for attempt in range(3):
+        path, error, size = native_process_path(library, pid)
+        current = native_process_state(library, pid)
+        if current is None:
+            return None
+        if captured[:3] != current[:3] or captured[3] == 5 and current[3] != 5:
+            raise RuntimeError(f'Native process identity changed during executable capture (pid={pid})')
+        if current[3] == 5:
+            return None
+        if path is not None:
+            return path
+        if error not in (errno.ENOENT, errno.ESRCH):
+            break
+        if attempt < 2:
+            time.sleep(0.01)
+    raise RuntimeError('Cannot prove the previous native processes have exited '
+                       f'(pid={pid}, errno={error}, result={size}, status={current[3]})')
+
+
+def running_executables():
+    # Apple libproc returns a PID count here (not the byte count returned by
+    # proc_listpids). Paths come from the kernel, not mutable argv or ps text.
+    # https://github.com/apple-oss-distributions/xnu/blob/main/libsyscall/wrappers/libproc/libproc.c
+    library = native_process_library()
     for attempt in range(4):
         ctypes.set_errno(0)
         count = library.proc_listallpids(None, 0)
@@ -400,21 +484,9 @@ def running_executables():
     for pid in array[:actual]:
         if pid <= 0:
             continue
-        buffer = ctypes.create_string_buffer(4096)
-        ctypes.set_errno(0)
-        size = library.proc_pidpath(pid, buffer, len(buffer))
-        error = ctypes.get_errno()
-        if size <= 0:
-            if error == errno.ESRCH:
-                continue
-            # libproc returns zero for syscall errors and for an empty path.
-            # Only ESRCH proves disappearance. Keep unknown/denied identities
-            # fail-closed and report numeric diagnostics without process paths.
-            raise RuntimeError('Cannot prove the previous native processes have exited '
-                               f'(pid={pid}, errno={error}, result={size})')
-        if size >= len(buffer):
-            raise RuntimeError(f'Native executable identity was truncated (pid={pid}, result={size})')
-        paths.append(os.fsdecode(buffer.raw[:size]))
+        path = native_executable(library, pid)
+        if path is not None:
+            paths.append(path)
     return paths
 
 
