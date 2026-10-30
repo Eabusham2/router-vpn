@@ -73,6 +73,15 @@ JOURNAL_COMMIT_REQUIRED = (
     "TestJournalCommitPreservesProfileBytesAndIntentBound",
     "TestJournalCommitRejectsNoncanonicalFrames",
 )
+JOURNAL_CHANNEL_REQUIRED = (
+    "TestWindowsProtectionJournalChannelActualCommit",
+    "TestWindowsProtectionJournalChannelRejectsForgedServer",
+    "TestWindowsProtectionJournalChannelRejectsDifferentChild",
+    "TestWindowsProtectionJournalChannelFailedPersistence",
+    "TestWindowsProtectionJournalChannelLateReplacement",
+    "TestWindowsProtectionJournalChannelCloseJoinsAppend",
+    "TestWindowsProtectionJournalChannelRetirementOwnership",
+)
 REQUIRED_SUBCASES = {
     REQUIRED[6]: ("record-write", "record-delete", "record-rename", "root-rename", "parent-rename"),
     REQUIRED[8]: ("session", "source", "config", "network", "generation"),
@@ -83,6 +92,7 @@ REQUIRED_SUBCASES = {
     JOURNAL_STORE_REQUIRED[5]: ("desktop-user", "private-directory", "unknown-file"),
     JOURNAL_STORE_REQUIRED[6]: ("initial", "later"),
     JOURNAL_STORE_REQUIRED[9]: ("unproved-absence", "user-owner", "broad-write", "inherited", "legacy-file"),
+    JOURNAL_CHANNEL_REQUIRED[6]: ("server", "client"),
 }
 
 
@@ -90,18 +100,22 @@ def sources():
     expected = {"record.go", "record_test.go", "owner_windows.go", "owner_windows_test.go",
                 "path_windows.go", "security_windows.go", "journal_record.go", "journal_record_test.go",
                 "journal_header.go", "journal_header_test.go", "journal_store_windows.go", "journal_store_windows_test.go",
-                "journal_commit_record.go", "journal_commit_record_test.go"}
+                "journal_commit_record.go", "journal_commit_record_test.go",
+                "journal_channel_windows.go", "journal_channel_windows_test.go"}
     owned = sorted(TARGET.glob("*.go"))
     if {path.name for path in owned} != expected:
         raise ValueError("Windows protection owner source/test closure changed")
     controller = sorted((ROOT / "internal/windowscontroller").glob("*.go"))
-    if not {"process_windows.go", "identity_windows.go", "machine_directories_windows.go"}.issubset(
+    if not {"process_windows.go", "identity_windows.go", "machine_directories_windows.go", "inherited_process_windows.go"}.issubset(
             path.name for path in controller):
         raise ValueError("Windows protection owner lost its shipping native identity dependency")
     # Journal target comparison uses the actual shared native WFP types. Capture
     # that source dependency as well; decoded records still confer no authority.
     physical = sorted((ROOT / "internal/mobiletor").glob("*.go"))
-    paths = owned + controller + physical + [ROOT / "go.mod", Path(__file__).resolve(),
+    bootstrap = sorted((ROOT / "internal/windowsbootstrap").glob("*.go"))
+    if {path.name for path in bootstrap} != {"layout.go", "layout_test.go", "protocol.go", "protocol_test.go"}:
+        raise ValueError("Native journal channel lost its exact controller bootstrap dependency")
+    paths = owned + controller + bootstrap + physical + [ROOT / "go.mod", Path(__file__).resolve(),
                                   ROOT / "deploy/test_desktop_windows_identity.py",
                                   ROOT / "deploy/prepare-desktop-external.py"]
     result = {}
@@ -118,6 +132,10 @@ def mutants():
     owner, path, security = read("owner_windows.go"), read("path_windows.go"), read("security_windows.go")
     journal, header = read("journal_store_windows.go"), read("journal_header.go")
     commit = read("journal_commit_record.go")
+    channel = read("journal_channel_windows.go")
+    peer_call = "client.pipe.VerifyPeer(client.parent, client.parentImage)"
+    if channel.count(peer_call) != 3:
+        raise ValueError("Native journal inherited-parent peer callsites changed")
     changed_bytes = once(owner, "read > OwnerRecordLimit || !bytes.Equal(buffer[:read], owner.body)",
                          "read > OwnerRecordLimit || false && !bytes.Equal(buffer[:read], owner.body)")
     changed_bytes = once(changed_bytes, "if err != nil || actual != owner.record {",
@@ -206,6 +224,33 @@ def mutants():
          "noncanonical capture reached the private commit contract",
          once(commit, "if err != nil || !bytes.Equal(raw, canonical) {\n\t\treturn JournalCommitCapture{},",
               "if err != nil || false && !bytes.Equal(raw, canonical) {\n\t\treturn JournalCommitCapture{},")),
+        ("journal_channel_windows.go", "channel-captured-native-child", JOURNAL_CHANNEL_REQUIRED[2],
+         "another actual child acquired the journal commit owner",
+         once(channel, "peer, err := child.VerifyPeer(server.pipe, expectedImage)",
+              "peer, err := server.pipe.Peer()")),
+        ("journal_channel_windows.go", "channel-inherited-parent-peer", JOURNAL_CHANNEL_REQUIRED[1],
+         "forged native pipe acknowledged an unflushed journal intent",
+         channel.replace(peer_call, "client.pipe.Peer()")),
+        ("journal_channel_windows.go", "channel-actual-durable-append", JOURNAL_CHANNEL_REQUIRED[3],
+         "failed native journal persistence produced a commit acknowledgment",
+         once(channel, "selection, appendErr := server.journal.Append(ctx, intent.PreviousSHA256, intent)",
+              "selection, appendErr := JournalSelection{Record: intent, SHA256: journalCommitDigest(intentBytes)}, error(nil)")),
+        ("journal_channel_windows.go", "channel-late-operation-owner", JOURNAL_CHANNEL_REQUIRED[4],
+         "late application replacement acquired a persisted native commit acknowledgment",
+         function(channel, "func (server *JournalCommitServer) currentOwner()",
+                  "if err := server.current(); err != nil {\n\t\treturn err\n\t}",
+                  "// Broken: the original application operation is no longer inspected.")),
+        ("journal_channel_windows.go", "channel-consumed-acknowledgment", JOURNAL_CHANNEL_REQUIRED[0],
+         "native journal channel did not acknowledge one exact flushed intent",
+         once(channel,
+              'return errors.Join(client.resultErr, bounded.Err(), errors.New("native journal commit acknowledgment has already been consumed"))',
+              'return errors.Join(client.resultErr, bounded.Err())')),
+        ("journal_channel_windows.go", "channel-server-callback-join", JOURNAL_CHANNEL_REQUIRED[6],
+         "journal server acknowledged retirement before its entered callback joined",
+         function(channel, "func (server *JournalCommitServer) Close(", "<-server.joined", "_ = server.joined")),
+        ("journal_channel_windows.go", "channel-client-callback-join", JOURNAL_CHANNEL_REQUIRED[6],
+         "journal client acknowledged retirement before its callback joined",
+         function(channel, "func (client *JournalCommitClient) Close(", "<-client.gate", "// Broken: the entered client callback is not joined.")),
     )
 
 
@@ -229,7 +274,7 @@ def execute(go="go"):
                                      "-test.timeout=90s", "-test.v"], cwd=ROOT, env=captured, timeout=105)
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if (status or "--- SKIP:" in output or "DATA RACE" in output or
-                any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *JOURNAL_REQUIRED, *JOURNAL_STORE_REQUIRED, *JOURNAL_COMMIT_REQUIRED))):
+                any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *JOURNAL_REQUIRED, *JOURNAL_STORE_REQUIRED, *JOURNAL_COMMIT_REQUIRED, *JOURNAL_CHANNEL_REQUIRED))):
             raise ValueError("Protection owner baseline did not execute every native ownership case")
         for test, names in REQUIRED_SUBCASES.items():
             if any("--- PASS: " + test + "/" + name + " (" not in output for name in names):
@@ -260,7 +305,7 @@ def execute(go="go"):
         if sources() != before:
             raise ValueError("Protection owner shipping sources changed during the actual native gate")
     print("Native protection preparation passed five strict-owner-record groups, nine intent-record groups, two native-file header groups, "
-          f"ten preparation ownership groups, nine durable journal storage groups, seven commit-record groups and {len(mutants())} production negative controls. "
+          f"ten preparation ownership groups, nine durable journal storage groups, seven commit-record groups, seven native commit-channel groups and {len(mutants())} production negative controls. "
           "Firewall mutation, transfer, recovery and ordinary-path activation remain separate requirements.", flush=True)
 
 
