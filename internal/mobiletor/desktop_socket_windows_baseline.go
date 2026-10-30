@@ -248,10 +248,15 @@ func (p *DesktopWindowsSocketPolicy) resolveBaselineOwnership() error {
 	if !p.locked || p.baselineEngine == nil || p.baselineEngine.handle == 0 {
 		return nil
 	}
-	if err := p.assertBaselineLock(); err != nil {
+	// A failed construction/commit can still retain this engine's write
+	// transaction. Abort that exact operation before reading the session lock
+	// through leaseEngine: its independent read would otherwise wait on our own
+	// BFE write lock. Aborting does not authorize any baseline or lock removal;
+	// the same captured-lock and complete-baseline checks still follow.
+	if err := p.baselineEngine.Abort(); err != nil {
 		return err
 	}
-	if err := p.baselineEngine.Abort(); err != nil {
+	if err := p.assertBaselineLock(); err != nil {
 		return err
 	}
 	old, err := desktopWindowsReadBaseline(p.baselineEngine, p.sublayer, p.fixtureScope)

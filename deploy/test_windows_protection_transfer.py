@@ -30,6 +30,7 @@ COMMIT_PURE = tuple("TestDesktopWindowsProtectionCommit" + suffix for suffix in 
 COMMIT_SUBCASES = {
     COMMIT_REQUIRED[1]: ("initial", "retained"),
     COMMIT_REQUIRED[2]: ("persist-failure", "late-cancellation", "foreign-predecessor"),
+    COMMIT_REQUIRED[3]: ("initial", "retained"),
     COMMIT_REQUIRED[4]: ("release-on-connect", "preserve-always", "explicit-off"),
     COMMIT_REQUIRED[5]: ("persist-failure", "late-cancellation"),
 }
@@ -87,6 +88,11 @@ def mutants(target):
          IDENTITY.function_mutant(commit, "func (p *DesktopWindowsSocketPolicy) completeSuccessorCommitBarrier(",
             "if err := p.baselineEngine.AssertComplete(actual.sublayer, actual.baseline); err != nil {",
             "if err := error(nil); err != nil {")),
+        ("read-before-own-abort", "desktop_socket_windows_baseline.go", COMMIT_REQUIRED[3],
+         "rejected candidate cleanup waited on its own pending transaction",
+         IDENTITY.function_mutant(baseline, "func (p *DesktopWindowsSocketPolicy) resolveBaselineOwnership(",
+            "if err := p.baselineEngine.Abort(); err != nil {\n\t\treturn err\n\t}\n\tif err := p.assertBaselineLock(); err != nil {\n\t\treturn err\n\t}",
+            "if err := p.assertBaselineLock(); err != nil {\n\t\treturn err\n\t}\n\tif err := p.baselineEngine.Abort(); err != nil {\n\t\treturn err\n\t}")),
         ("original-always-intent", "desktop_socket_windows_commit.go", COMMIT_REQUIRED[4],
          "BFE retirement lost its original policy or durable intent",
          IDENTITY.replace_once(commit,
@@ -157,7 +163,7 @@ def execute(source=ROOT, go="go", *, env=None, bootstrap_only=False):
             print("Rejected exact native transfer production mutant: " + label, flush=True)
     if IDENTITY.checked_sources(source)[3] != before:
         raise ValueError("Exact WFP transfer source changed during native execution")
-    print("Exact BFE succession and reversal, retained target identity, Always preservation, joined partial outcomes, canonical private receipts, precommit durable-barrier ordering/cancellation and sixteen production mutations passed. Actual journal persistence, application host adoption and encrypted-peer composition remain separate requirements.", flush=True)
+    print("Exact BFE succession and reversal, retained target identity, Always preservation, joined partial outcomes, canonical private receipts, precommit durable-barrier ordering/cancellation, pending-transaction rollback and seventeen production mutations passed. Actual journal persistence, application host adoption and encrypted-peer composition remain separate requirements.", flush=True)
 
 
 if __name__ == "__main__":
