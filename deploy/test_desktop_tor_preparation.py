@@ -144,6 +144,19 @@ class DesktopPTPreparation(unittest.TestCase):
             startup.assert_called_once_with(self.vendor.resolve())
             node_capture.assert_called_once_with(self.vendor.resolve())
             generated = {call.args[1]: call.args[2] for call in writes.call_args_list}
+            for package in ('windowsbootstrap', 'windowscontroller', 'windowsprotection'):
+                for path in sorted((ROOT/'internal'/package).glob('*.go')):
+                    if path.name.endswith('_test.go'):
+                        continue
+                    relative = 'routervpn/'+package+'/'+path.name
+                    exact = PREP.relocated_shared_source(path.read_bytes())
+                    self.assertEqual(generated[relative], exact)
+                    self.assertEqual((self.vendor/relative).read_bytes(), exact)
+                    self.assertNotIn(b'"router-vpn/internal/', exact)
+            for name in ('node_command_journal.go.tmpl', 'node_command_journal_windows.go.tmpl',
+                         'node_command_journal_other.go.tmpl', 'node_command_journal_test.go.tmpl'):
+                relative = 'cmd/sing-box/routervpn_'+name.removesuffix('.tmpl')
+                self.assertEqual(generated[relative], (ROOT/'mobile/desktop'/name).read_bytes())
             for name, raw in PREP.PFABI.checked_files(ROOT/'internal/mobiletor').items():
                 self.assertEqual(generated['routervpn/mobiletor/'+name], raw)
                 self.assertEqual((self.vendor/'routervpn/mobiletor'/name).read_bytes(), raw)

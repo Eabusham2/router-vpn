@@ -36,6 +36,14 @@ SHARED_TESTS = (
     "TestDesktopNodeProcessCancelledWaitDoesNotManufactureExit",
     "TestDesktopNodeProcessControllerReplacementAndPartialOwner",
     "TestDesktopNodeProcessPinReleaseRetriesAfterJoinedChild",
+    "TestDesktopNodeJournalCapturedPreparedPrecedesPermission",
+    "TestDesktopNodeJournalCapturedPreparedRejectsChangedOwners",
+    "TestDesktopNodeJournalSettlementRequiresJoinedExactOutcome",
+    "TestDesktopNodeJournalSettlementRetriesExactFailedFlush",
+    "TestDesktopNodeJournalAbortedIntentKeepsProvedPredecessor",
+    "TestDesktopNodeJournalDoesNotUseCallbackFreeRemoval",
+    "TestDesktopNodeJournalReceiptlessChildUsesOnlyRecordedOutcome",
+    "TestDesktopNodeJournalEmptyReleaseRetainsFailedNativeClose",
 )
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
@@ -51,6 +59,8 @@ REQUIRED_SOURCES = (
     "cmd/client/desktop_node_process_test.go",
     "cmd/client/desktop_node_process_windows.go",
     "cmd/client/desktop_node_process_windows_native_test.go",
+    "cmd/client/desktop_node_journal.go", "cmd/client/desktop_node_journal_test.go",
+    "cmd/client/desktop_node_journal_windows.go",
     "cmd/client/controller_privilege_windows.go",
     "cmd/client/private_runtime_permissions_windows.go",
     "cmd/client/bundled_native.go", "cmd/client/bundled_amnezia.go",
@@ -99,6 +109,8 @@ def check_rejection(name, test, witness, status, output):
 def mutants():
     filename = "cmd/client/desktop_node_process.go"
     original = (ROOT / filename).read_text(encoding="utf-8")
+    journal_file = "cmd/client/desktop_node_journal.go"
+    journal = (ROOT / journal_file).read_text(encoding="utf-8")
     once = NATIVE.replace_once
     alive = NATIVE.function_mutant(original, "func (owner *desktopNodeProcessOwner) Alive()",
         "\tif err := owner.controller(); err != nil {\n\t\treturn err\n\t}\n", "")
@@ -115,6 +127,16 @@ def mutants():
          "native Node launch accepted substituted or incomplete authority",
          once(original, 'if _, exists := values[name]; exists || value == ""',
               'if _, exists := values[name]; false && exists || value == ""')),
+        (journal_file, "uncaptured-durable-target", "TestDesktopNodeJournalCapturedPreparedPrecedesPermission",
+         "native admission did not capture its independently proved durable target before permission",
+         once(journal, "return s.provePreparedLocked(ctx, attempt, *record.Committed.Target, current)", "return nil")),
+        (journal_file, "orphaned-empty-journal", "TestDesktopNodeJournalEmptyReleaseRetainsFailedNativeClose",
+         "failed journal close released its exact owner",
+         once(journal, "\tif err := s.journal.Close(); err != nil {\n\t\treturn err\n\t}\n", "")),
+        (journal_file, "ignored-settlement-flush", "TestDesktopNodeJournalSettlementRetriesExactFailedFlush",
+         "failed journal settlement discarded its exact attempt",
+         once(journal, "if err != nil || wantErr != nil || gotErr != nil || written.Incomplete || !bytes.Equal(want, got) {",
+              "if false && (err != nil || wantErr != nil || gotErr != nil || written.Incomplete || !bytes.Equal(want, got)) {")),
     )
 
 

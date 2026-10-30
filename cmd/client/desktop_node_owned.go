@@ -163,7 +163,7 @@ func (s *desktopNodeProtectionSlot) provedEmpty() bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.known && s.target == nil && s.active == nil && s.retirement == nil && s.off == nil
+	return s.known && s.target == nil && s.active == nil && s.retirement == nil && s.off == nil && s.journal == nil
 }
 
 // current never takes the protection slot lock. The slot may invoke this guard
@@ -247,7 +247,10 @@ func startDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 	if launch.ownedNode == nil {
 		return launch.command.Start()
 	}
-	return startDesktopOwnedNodeLaunchWith(a.connectionOperationContextOrBackground(), a, launch, startDesktopOwnedNodeProcess)
+	return startDesktopOwnedNodeLaunchWith(a.connectionOperationContextOrBackground(), a, launch,
+		func(ctx context.Context, arguments, environment []string, directory string) (desktopNodeProcess, error) {
+			return startDesktopOwnedNodeJournalProcess(ctx, a, launch, arguments, environment, directory)
+		})
 }
 
 func startDesktopOwnedNodeLaunchWith(ctx context.Context, a *app, launch *desktopNodeLaunch,
@@ -324,36 +327,42 @@ func (a *app) admitDesktopOwnedNode(parent context.Context, launch *desktopNodeL
 	defer cancel()
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
-	for {
-		if ctx.Err() != nil || !current() {
-			return errors.Join(ctx.Err(), errors.New("native Router handoff lost its captured child or network"))
-		}
-		raw, err := readDesktopRuntimeFile(launch, "node-physical-handoff-ready.json", 2048)
-		if err == nil {
-			record, target, err := desktopNodeHandoff(raw, launch)
-			if err != nil {
-				return err
-			}
-			if err := owned.slot.provePrepared(ctx, owned.attempt, target, current); err != nil {
-				return err
-			}
-			record.Accepted = true
-			ack, err := json.Marshal(record)
-			if err != nil || !current() {
-				return errors.Join(err, errors.New("native Router handoff retired before acknowledgement"))
-			}
-			if err := writeDesktopRuntimeFile(launch, "node-physical-handoff-ack.json", ack, false); err != nil {
-				return err
-			}
-			break
-		}
-		if !errors.Is(err, os.ErrNotExist) {
+	if journal, ok := desktopOwnedNodeProcess(launch).(desktopNodeJournalAdmission); ok {
+		if err := journal.AdmitProtection(ctx); err != nil {
 			return err
 		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
+	} else {
+		for {
+			if ctx.Err() != nil || !current() {
+				return errors.Join(ctx.Err(), errors.New("native Router handoff lost its captured child or network"))
+			}
+			raw, err := readDesktopRuntimeFile(launch, "node-physical-handoff-ready.json", 2048)
+			if err == nil {
+				record, target, err := desktopNodeHandoff(raw, launch)
+				if err != nil {
+					return err
+				}
+				if err := owned.slot.provePrepared(ctx, owned.attempt, target, current); err != nil {
+					return err
+				}
+				record.Accepted = true
+				ack, err := json.Marshal(record)
+				if err != nil || !current() {
+					return errors.Join(err, errors.New("native Router handoff retired before acknowledgement"))
+				}
+				if err := writeDesktopRuntimeFile(launch, "node-physical-handoff-ack.json", ack, false); err != nil {
+					return err
+				}
+				break
+			}
+			if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-ticker.C:
+			}
 		}
 	}
 	// The physical baseline acknowledgement precedes native sockets/TUN. It is
@@ -492,8 +501,13 @@ func (a *app) retireDesktopOwnedNode(ctx context.Context, launch *desktopNodeLau
 		err = owned.slot.finish(ctx, owned.attempt, record, join)
 	} else if errors.Is(err, os.ErrNotExist) {
 		// Includes a child that failed before native preparation. A missing
-		// receipt after committed preparation fails the exact original read.
-		err = owned.slot.abandonUnchanged(ctx, owned.attempt, join)
+		// receipt on the journal path uses only its authenticated durable
+		// candidates after the exact child joined, never discovery/adoption.
+		if _, ok := desktopOwnedNodeProcess(launch).(desktopNodeJournalAdmission); ok {
+			err = owned.slot.finishJournalWithoutReceipt(ctx, owned.attempt, join)
+		} else {
+			err = owned.slot.abandonUnchanged(ctx, owned.attempt, join)
+		}
 	}
 	if err != nil {
 		return err

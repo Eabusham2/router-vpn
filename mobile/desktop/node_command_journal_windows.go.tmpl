@@ -1,0 +1,123 @@
+//go:build windows
+
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	routervpndesktoppt "github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-box/routervpn/windowscontroller"
+	"github.com/sagernet/sing-box/routervpn/windowsprotection"
+)
+
+type routerVPNNodeWindowsJournal struct {
+	options routerVPNNodeJournalOptions
+	parent  *windowscontroller.Process
+	image   *windowscontroller.Image
+	client  *windowsprotection.JournalCommitClient
+	capture windowsprotection.JournalCommitCapture
+}
+
+func routerVPNNewNodeJournal(ctx context.Context, source string, options routerVPNNodeJournalOptions) (_ routerVPNNodeJournal, failure error) {
+	if source == "" && options == (routerVPNNodeJournalOptions{}) && ctx != nil && ctx.Err() == nil {
+		return nil, nil
+	}
+	if ctx == nil || ctx.Err() != nil || !routerVPNExternalSource.MatchString(source) ||
+		options.ParentHandle == 0 || options.ParentImage == "" || options.Pipe == "" || !routerVPNExternalSource.MatchString(options.CaptureSHA256) {
+		return nil, routerVPNExternalFailure
+	}
+	owner := &routerVPNNodeWindowsJournal{options: options}
+	defer func() {
+		if failure != nil {
+			failure = errors.Join(failure, owner.close())
+		}
+	}()
+	var err error
+	owner.parent, err = windowscontroller.CaptureInheritedElevatedParent(options.ParentHandle)
+	if err != nil {
+		return owner, err
+	}
+	owner.image, err = windowscontroller.PinImage(options.ParentImage)
+	if err != nil {
+		return owner, err
+	}
+	if err := owner.parent.VerifyImage(owner.image); err != nil {
+		return owner, err
+	}
+	return owner, ctx.Err()
+}
+
+func (owner *routerVPNNodeWindowsJournal) authenticate(ctx context.Context, files *routerVPNExternalFiles) error {
+	if owner == nil || owner.client != nil || owner.parent == nil || owner.image == nil || files == nil {
+		return routerVPNExternalFailure
+	}
+	// This first file is bounded comparison data. Private node credentials and
+	// graph configuration are read only after the actual pipe peer is proved.
+	raw, err := files.read("node-journal-capture.json", windowsprotection.JournalCommitCaptureLimit)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256(raw)
+	if hex.EncodeToString(digest[:]) != owner.options.CaptureSHA256 {
+		return routerVPNExternalFailure
+	}
+	owner.capture, err = windowsprotection.ParseJournalCommitCapture(raw)
+	if err != nil {
+		return err
+	}
+	parent := owner.parent
+	owner.parent = nil // Connect consumes this exact inherited capability on error too.
+	owner.client, err = windowsprotection.ConnectJournalCommitClient(ctx, owner.options.Pipe, parent, owner.image, owner.capture)
+	return err
+}
+
+func (owner *routerVPNNodeWindowsJournal) prepare(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy,
+	expected *mobiletor.DesktopProtectionTransferRecord) (context.Context, *routerVPNNodeAdmission, error) {
+	if owner == nil || owner.client == nil || ctx == nil || ctx.Err() != nil || policy == nil || policy.Validate() != nil || expected == nil {
+		return nil, nil, routerVPNExternalFailure
+	}
+	meta := policy.Metadata()
+	digest, err := mobiletor.DesktopProtectionTransferRecordSHA256(*expected)
+	captured, capturedErr := mobiletor.DesktopProtectionTransferRecordSHA256(owner.capture.Transfer)
+	if err != nil || capturedErr != nil || digest != captured || owner.capture.ProfileID != meta.ProfileID ||
+		expected.SessionID != meta.SessionID || expected.SourceSHA256 != meta.SourceSHA256 || expected.ConfigSHA256 != meta.ConfigSHA256 || expected.Policy != meta.KillSwitchPolicy {
+		return nil, nil, routerVPNExternalFailure
+	}
+	admission := &routerVPNNodeAdmission{metadata: meta, transfer: digest, joined: make(chan struct{}), retired: make(chan struct{}), nativeClose: owner.close}
+	admission.nativeAdmit = func(ctx context.Context, prepared routervpndesktoppt.NodePhysicalPrepared) error {
+		return owner.client.Admit(ctx, mobiletor.DesktopWindowsProtectionTarget{Capture: prepared.Capture,
+			Policy: prepared.Policy, BaselineSHA256: prepared.BaselineSHA256})
+	}
+	owned, err := routervpndesktoppt.WithNodePhysicalJournalAdmission(ctx, policy, expected.Predecessor, owner.client.Barrier, admission.admit)
+	if err != nil {
+		return nil, admission, err
+	}
+	return owned, admission, nil
+}
+
+func (owner *routerVPNNodeWindowsJournal) close() error {
+	if owner == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if owner.client != nil {
+		if err := owner.client.Close(ctx); err != nil {
+			return err
+		}
+	}
+	var failure error
+	if owner.parent != nil {
+		failure = errors.Join(failure, owner.parent.Close())
+	}
+	if owner.image != nil {
+		failure = errors.Join(failure, owner.image.Close())
+	}
+	return failure
+}

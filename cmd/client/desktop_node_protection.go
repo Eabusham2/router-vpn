@@ -7,6 +7,7 @@ import (
 
 	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/mobiletor"
+	"router-vpn/internal/windowsprotection"
 )
 
 type desktopNodeProtectionRelease interface{ Close(context.Context) error }
@@ -22,11 +23,12 @@ type desktopNodeProtectionBackend struct {
 }
 
 type desktopNodeProtectionAttempt struct {
-	launch   *desktopNodeLaunch
-	policy   *mobilemultihop.DesktopNodePolicy
-	transfer mobiletor.DesktopProtectionTransferRecord
-	digest   string
-	prepared *mobiletor.DesktopWindowsProtectionTarget
+	launch     *desktopNodeLaunch
+	policy     *mobilemultihop.DesktopNodePolicy
+	transfer   mobiletor.DesktopProtectionTransferRecord
+	digest     string
+	prepared   *mobiletor.DesktopWindowsProtectionTarget
+	settlement *windowsprotection.JournalRecord
 }
 
 // The succession slot outlives each runtime directory. A restored original
@@ -43,6 +45,8 @@ type desktopNodeProtectionSlot struct {
 	generation         uint64
 	binding            desktopNodeProtectionBinding
 	off                *desktopNodeProtectionOff
+	journal            desktopNodeProtectionJournal
+	journalClosing     bool
 }
 
 func copyDesktopNodeProtectionTarget(target *mobiletor.DesktopWindowsProtectionTarget) *mobiletor.DesktopWindowsProtectionTarget {
@@ -59,7 +63,7 @@ func (s *desktopNodeProtectionSlot) begin(ctx context.Context, launch *desktopNo
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active != nil || s.retirement != nil || s.off != nil || s.backend.read == nil || s.backend.prepared == nil || s.backend.release == nil {
+	if s.active != nil || s.retirement != nil || s.off != nil || s.journalClosing || s.backend.read == nil || s.backend.prepared == nil || s.backend.release == nil {
 		return nil, errors.New("native protection still belongs to an active or retiring attempt")
 	}
 	expected := copyDesktopNodeProtectionTarget(s.target)
@@ -89,6 +93,10 @@ func (s *desktopNodeProtectionSlot) provePrepared(ctx context.Context, attempt *
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return s.provePreparedLocked(ctx, attempt, target, current)
+}
+
+func (s *desktopNodeProtectionSlot) provePreparedLocked(ctx context.Context, attempt *desktopNodeProtectionAttempt, target mobiletor.DesktopWindowsProtectionTarget, current func() bool) error {
 	if s.active != attempt || attempt.policy == nil || attempt.policy.Validate() != nil {
 		return errors.New("native protection handoff belongs to another attempt")
 	}
@@ -126,6 +134,9 @@ func (s *desktopNodeProtectionSlot) finish(ctx context.Context, attempt *desktop
 	if err := s.backend.read(ctx, target); err != nil || ctx.Err() != nil {
 		return errors.Join(err, ctx.Err())
 	}
+	if err := s.settleJournalLocked(ctx, attempt, target); err != nil {
+		return err
+	}
 	if err := s.advanceGenerationLocked(); err != nil {
 		return err
 	}
@@ -160,6 +171,9 @@ func (s *desktopNodeProtectionSlot) abandonUnchanged(ctx context.Context, attemp
 	if err := s.backend.read(ctx, expected); err != nil || ctx.Err() != nil {
 		return errors.Join(err, ctx.Err())
 	}
+	if err := s.settleJournalLocked(ctx, attempt, expected); err != nil {
+		return err
+	}
 	if err := s.advanceGenerationLocked(); err != nil {
 		return err
 	}
@@ -176,11 +190,17 @@ func (s *desktopNodeProtectionSlot) release(ctx context.Context) error {
 	if !s.known || s.active != nil || s.off != nil || s.backend.read == nil || s.backend.release == nil {
 		return errors.New("native protection is still active or unknown")
 	}
+	if s.journal != nil && s.target != nil {
+		return errors.New("native journal release requires its durable removal transaction")
+	}
 	if s.target == nil {
 		if s.retirement != nil {
 			return errors.New("native protection retirement lost its exact target")
 		}
-		return errors.Join(s.backend.read(ctx, nil), ctx.Err())
+		if err := s.backend.read(ctx, nil); err != nil || ctx.Err() != nil {
+			return errors.Join(err, ctx.Err())
+		}
+		return s.closeEmptyJournalLocked(ctx)
 	}
 	target := *s.target
 	if s.retirement != nil && !s.retirementPrepared {
@@ -237,5 +257,5 @@ func (s *desktopNodeProtectionSlot) retained() bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.active != nil || s.retirement != nil || s.target != nil || s.off != nil
+	return s.active != nil || s.retirement != nil || s.target != nil || s.off != nil || s.journal != nil
 }

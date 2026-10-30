@@ -138,6 +138,9 @@ func (s *desktopNodeProtectionSlot) applyOff(ctx context.Context, capture *deskt
 	if !s.offCurrentLocked(capture) || s.backend.read == nil || s.backend.recover == nil {
 		return errors.New("protection Off belongs to a replaced retained owner")
 	}
+	if s.journal != nil {
+		return errors.New("native journal Off requires its durable removal and profile-save transaction")
+	}
 	check := func() error {
 		if ctx.Err() != nil || !current() {
 			return errors.Join(ctx.Err(), errors.New("protection Off no longer has its captured selected-node revision"))

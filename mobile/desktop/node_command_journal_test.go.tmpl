@@ -1,0 +1,51 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type routerVPNNodeJournalAuthenticationFixture struct {
+	calls   int
+	failure error
+}
+
+func (f *routerVPNNodeJournalAuthenticationFixture) authenticate(context.Context, *routerVPNExternalFiles) error {
+	f.calls++
+	return f.failure
+}
+func (f *routerVPNNodeJournalAuthenticationFixture) prepare(context.Context, *mobilemultihop.DesktopNodePolicy, *mobiletor.DesktopProtectionTransferRecord) (context.Context, *routerVPNNodeAdmission, error) {
+	return nil, nil, errors.New("fixture unexpectedly reached native construction")
+}
+func (f *routerVPNNodeJournalAuthenticationFixture) close() error { return nil }
+
+func TestRouterVPNDesktopNodePhysicalCommandJournalBeforePrivateInputs(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "sing-box.json"), []byte("invalid private graph must remain unread"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	want := errors.New("fixture parent was not authenticated")
+	journal := &routerVPNNodeJournalAuthenticationFixture{failure: want}
+	err := routerVPNRunNodeMTUCaptured(context.Background(), directory, strings.Repeat("1", 32), strings.Repeat("2", 64), strings.Repeat("3", 64), strings.Repeat("4", 64), 0, journal)
+	if !errors.Is(err, want) || journal.calls != 1 {
+		t.Fatal("private node input preceded actual parent authentication", err, journal.calls)
+	}
+}
+
+func TestRouterVPNDesktopNodePhysicalCommandPublicRequiresJournal(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "not-created")
+	err := routerVPNRunNodeMTUWithJournal(context.Background(), directory, strings.Repeat("1", 32), strings.Repeat("2", 64), strings.Repeat("3", 64), strings.Repeat("4", 64), 0, routerVPNNodeJournalOptions{})
+	if !errors.Is(err, routerVPNExternalFailure) || errors.Is(err, os.ErrNotExist) {
+		t.Fatal("public physical command reached private input without its native journal capability", err)
+	}
+}

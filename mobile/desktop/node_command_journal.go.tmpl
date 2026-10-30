@@ -1,0 +1,37 @@
+package main
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type routerVPNNodeJournalOptions struct {
+	ParentHandle                     uint64
+	ParentImage, Pipe, CaptureSHA256 string
+}
+
+type routerVPNNodeJournal interface {
+	authenticate(context.Context, *routerVPNExternalFiles) error
+	prepare(context.Context, *mobilemultihop.DesktopNodePolicy, *mobiletor.DesktopProtectionTransferRecord) (context.Context, *routerVPNNodeAdmission, error)
+	close() error
+}
+
+// The public command selects the authenticated form before it can open any
+// private node input. The old private runner remains a bounded fixture entry;
+// no command flag or environment switch selects its file-only acknowledgment.
+func routerVPNRunNodeMTUWithJournal(parent context.Context, directory, session, config, source, transfer string,
+	mtu int, options routerVPNNodeJournalOptions) (failure error) {
+	journal, err := routerVPNNewNodeJournal(parent, source, options)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if journal != nil {
+			failure = errors.Join(failure, journal.close())
+		}
+	}()
+	return routerVPNRunNodeMTUCaptured(parent, directory, session, config, source, transfer, mtu, journal)
+}

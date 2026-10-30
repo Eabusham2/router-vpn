@@ -22,6 +22,36 @@ type nodePhysicalAdmissionOwner struct {
 	policy      *mobilemultihop.DesktopNodePolicy
 	admit       NodePhysicalAdmission
 	predecessor *mobiletor.DesktopWindowsProtectionTarget
+	commit      mobiletor.DesktopWindowsProtectionCommitBarrier
+}
+
+// WithNodePhysicalJournalAdmission binds the authenticated parent's durable
+// intent acknowledgment to this exact compiled policy and prepared admission.
+// A staged transfer file is comparison data; it cannot construct this callback.
+func WithNodePhysicalJournalAdmission(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy,
+	predecessor *mobiletor.DesktopWindowsProtectionTarget, commit mobiletor.DesktopWindowsProtectionCommitBarrier,
+	admit NodePhysicalAdmission) (context.Context, error) {
+	if commit == nil || predecessor != nil && predecessor.Validate() != nil {
+		return nil, errors.New("Router node journal admission has no exact durable transaction")
+	}
+	var previous *mobiletor.DesktopWindowsProtectionTarget
+	if predecessor != nil {
+		copy := *predecessor
+		previous = &copy
+	}
+	owned, err := withNodePhysicalAdmission(ctx, policy, previous, admit)
+	if err != nil {
+		return nil, err
+	}
+	owned.Value(nodePhysicalAdmissionKey{}).(*nodePhysicalAdmissionOwner).commit = commit
+	return owned, nil
+}
+
+func nodePhysicalCommitFor(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (mobiletor.DesktopWindowsProtectionCommitBarrier, error) {
+	if _, err := nodePhysicalAdmissionFor(ctx, policy); err != nil {
+		return nil, err
+	}
+	return ctx.Value(nodePhysicalAdmissionKey{}).(*nodePhysicalAdmissionOwner).commit, nil
 }
 
 func WithNodePhysicalAdmission(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy, admit NodePhysicalAdmission) (context.Context, error) {

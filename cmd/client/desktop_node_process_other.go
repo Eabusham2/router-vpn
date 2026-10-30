@@ -14,3 +14,7 @@ func desktopOwnedNodePackageRoot() (string, error) {
 func startDesktopOwnedNodeProcess(context.Context, []string, []string, string) (desktopNodeProcess, error) {
 	return nil, errors.New("the direct owned Node process requires its Windows controller")
 }
+
+func startDesktopOwnedNodeJournalProcess(context.Context, *app, *desktopNodeLaunch, []string, []string, string) (desktopNodeProcess, error) {
+	return nil, errors.New("the durable Node engine requires its Windows controller")
+}

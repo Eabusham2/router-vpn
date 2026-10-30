@@ -27,6 +27,10 @@ func desktopOwnedNodePackageRoot() (string, error) {
 }
 
 func startDesktopOwnedNodeProcess(ctx context.Context, arguments, environment []string, directory string) (_ desktopNodeProcess, failure error) {
+	return startDesktopOwnedNodeProcessWithJournal(ctx, arguments, environment, directory, nil)
+}
+
+func startDesktopOwnedNodeProcessWithJournal(ctx context.Context, arguments, environment []string, directory string, journal *desktopNodeWindowsJournalProcess) (_ desktopNodeProcess, failure error) {
 	if ctx == nil {
 		return nil, errors.New("the direct Node engine requires its captured operation")
 	}
@@ -61,11 +65,16 @@ func startDesktopOwnedNodeProcess(ctx context.Context, arguments, environment []
 		return nil, err
 	}
 	owner := newDesktopNodeProcessOwner(guard)
+	var result desktopNodeProcess = owner
+	if journal != nil {
+		journal.desktopNodeProcessOwner = owner
+		result = journal
+	}
 	defer func() {
 		if failure != nil {
 			cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			failure = errors.Join(failure, owner.Close(cleanup))
+			failure = errors.Join(failure, result.Close(cleanup))
 		}
 	}()
 	launchContext, cancel := context.WithCancel(ctx)
@@ -73,21 +82,26 @@ func startDesktopOwnedNodeProcess(ctx context.Context, arguments, environment []
 	defer func() { stopController(); cancel() }()
 	image, err := captureDesktopNodeRuntime(launchContext, capture, owner)
 	if err != nil {
-		return owner, err
+		return result, err
 	}
 	if err := guard(); err != nil {
-		return owner, err
+		return result, err
 	}
-	if err := startDesktopCapturedNodeChild(launchContext, owner, image, arguments, environment, directory); err != nil {
-		return owner, err
+	if err := startDesktopCapturedNodeChildWithJournal(launchContext, owner, image, arguments, environment, directory, journal); err != nil {
+		return result, err
 	}
-	return owner, nil
+	return result, nil
 }
 
 // This is the actual same-token creation/observation composition. Package
 // authority is established by startDesktopOwnedNodeProcess before it enters.
 func startDesktopCapturedNodeChild(ctx context.Context, owner *desktopNodeProcessOwner, image *windowscontroller.Image,
 	arguments, environment []string, directory string) error {
+	return startDesktopCapturedNodeChildWithJournal(ctx, owner, image, arguments, environment, directory, nil)
+}
+
+func startDesktopCapturedNodeChildWithJournal(ctx context.Context, owner *desktopNodeProcessOwner, image *windowscontroller.Image,
+	arguments, environment []string, directory string, journal *desktopNodeWindowsJournalProcess) error {
 	if ctx == nil || owner == nil || owner.controller == nil || image == nil || owner.child != nil || owner.waiter != nil {
 		return errors.New("the captured Node child has no unused native launch owner")
 	}
@@ -95,11 +109,19 @@ func startDesktopCapturedNodeChild(ctx context.Context, owner *desktopNodeProces
 		return err
 	}
 	child, err := windowscontroller.LaunchGUIChild(ctx, image,
-		func(uint64) ([]string, error) { return append([]string(nil), arguments...), owner.controller() },
+		func(parent uint64) ([]string, error) {
+			if journal != nil {
+				return journal.launchArguments(parent, arguments)
+			}
+			return append([]string(nil), arguments...), owner.controller()
+		},
 		nativeLibraryEnvironment(environment, filepath.Dir(image.Path())), directory)
 	if child != nil {
 		owner.child = child
 		owner.started = child.PID() != 0
+	}
+	if journal != nil {
+		journal.child, journal.image = child, image
 	}
 	if err != nil {
 		return err

@@ -66,16 +66,18 @@ class NodeProcessRunner(unittest.TestCase):
                         GATE.check_rejection(name, test, witness, status, wrong)
 
     def test_mutations_are_exact_production_changes_and_leave_the_source_unchanged(self):
-        original = (ROOT / "cmd/client/desktop_node_process.go").read_bytes()
+        originals = {name: (ROOT / name).read_bytes() for name in
+                     ("cmd/client/desktop_node_process.go", "cmd/client/desktop_node_journal.go")}
         changes = GATE.mutants()
-        self.assertEqual(len(changes), 3)
-        self.assertEqual(len({change[1] for change in changes}), 3)
+        self.assertEqual(len(changes), 6)
+        self.assertEqual(len({change[1] for change in changes}), 6)
         for filename, _, test, witness, replacement in changes:
-            self.assertEqual(filename, "cmd/client/desktop_node_process.go")
-            self.assertNotEqual(replacement.encode(), original)
+            self.assertIn(filename, originals)
+            self.assertNotEqual(replacement.encode(), originals[filename])
             self.assertTrue(test.split("/")[0] in GATE.REQUIRED)
             self.assertTrue(witness)
-        self.assertEqual((ROOT / "cmd/client/desktop_node_process.go").read_bytes(), original)
+        for filename, original in originals.items():
+            self.assertEqual((ROOT / filename).read_bytes(), original)
 
     def test_other_host_cannot_report_native_windows_execution(self):
         with patch.object(GATE.platform, "system", return_value="Linux"):

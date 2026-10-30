@@ -1,0 +1,12 @@
+//go:build !windows
+
+package main
+
+import "context"
+
+func routerVPNNewNodeJournal(ctx context.Context, source string, options routerVPNNodeJournalOptions) (routerVPNNodeJournal, error) {
+	if ctx == nil || ctx.Err() != nil || source != "" || options != (routerVPNNodeJournalOptions{}) {
+		return nil, routerVPNExternalFailure
+	}
+	return nil, nil
+}

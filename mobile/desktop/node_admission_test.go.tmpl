@@ -107,3 +107,37 @@ func TestRouterVPNNodePhysicalAdmissionCapturesExactPredecessor(t *testing.T) {
 		t.Fatal("cancelled graph retained predecessor authority")
 	}
 }
+
+func TestRouterVPNNodePhysicalJournalAdmissionCapturesDurableBarrier(t *testing.T) {
+	policy := nodePhysicalPolicyFixture(t, "windows")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	want := errors.New("exact durable parent acknowledgment")
+	barrier := func(context.Context, mobiletor.DesktopWindowsProtectionCommit) error { return want }
+	admit := func(context.Context, NodePhysicalPrepared) error { return nil }
+	predecessor := mobiletor.DesktopWindowsProtectionTarget{Capture: mobiletor.DesktopSocketCapture{SessionID: strings.Repeat("1", 32), SourceSHA256: strings.Repeat("2", 64), NetworkID: strings.Repeat("3", 32)}, Policy: "always", BaselineSHA256: strings.Repeat("4", 64)}
+	original := predecessor
+	owned, err := WithNodePhysicalJournalAdmission(ctx, policy, &predecessor, barrier, admit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessor.BaselineSHA256 = strings.Repeat("a", 64)
+	actual, err := nodePhysicalPredecessorFor(owned, policy)
+	if err != nil || actual == nil || *actual != original {
+		t.Fatal("durable callback retained mutable predecessor authority", err)
+	}
+	callback, err := nodePhysicalCommitFor(owned, policy)
+	if err != nil || callback == nil || !errors.Is(callback(ctx, mobiletor.DesktopWindowsProtectionCommit{}), want) {
+		t.Fatal("native factory lost its captured durable callback", err)
+	}
+	if _, err := WithNodePhysicalJournalAdmission(ctx, policy, nil, nil, admit); err == nil {
+		t.Fatal("durable factory accepted a missing parent acknowledgment")
+	}
+	if _, err := nodePhysicalCommitFor(owned, nodePhysicalPolicyFixture(t, "windows")); err == nil {
+		t.Fatal("another compiled graph adopted durable commit authority")
+	}
+	cancel()
+	if _, err := nodePhysicalCommitFor(owned, policy); err == nil {
+		t.Fatal("retired graph retained durable commit authority")
+	}
+}

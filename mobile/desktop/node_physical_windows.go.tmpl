@@ -23,7 +23,20 @@ func (n *NodeNetworkOwner) PrepareNodePhysicalPolicy(policy *mobilemultihop.Desk
 	if err != nil {
 		return err
 	}
+	commit, err := nodePhysicalCommitFor(n.ctx, policy)
+	if err != nil {
+		return err
+	}
 	return n.prepareNodePhysicalWindows(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopWindowsSocketOptions) (desktopWindowsPhysicalPolicy, error) {
+		if commit != nil {
+			owned, err := mobiletor.NewDesktopWindowsSocketPolicySuccessorWithBarrier(ctx, capture, options, predecessor, commit)
+			if owned == nil {
+				return nil, err
+			}
+			return owned, err
+		}
+		// Bounded in-process fixtures retain their explicit admission API.
+		// The public physical command requires the authenticated journal form.
 		owned, err := mobiletor.NewDesktopWindowsSocketPolicySuccessor(ctx, capture, options, predecessor)
 		if owned == nil {
 			return nil, err

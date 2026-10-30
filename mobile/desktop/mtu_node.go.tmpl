@@ -303,10 +303,11 @@ func (owner *routerVPNNodeMTU) command(request routerVPNNodeMTUCommand) error {
 func init() {
 	var directory, session, config, physicalSource, physicalTransfer string
 	var physicalMTU int
+	var journal routerVPNNodeJournalOptions
 	command := &cobra.Command{Use: "routervpn-node", Short: "Run one captured Router VPN node and its retained TUN", Args: cobra.NoArgs, SilenceUsage: true, RunE: func(*cobra.Command, []string) error {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		return routerVPNRunNodeMTUWithPhysicalMTU(ctx, directory, session, config, physicalSource, physicalTransfer, physicalMTU)
+		return routerVPNRunNodeMTUWithJournal(ctx, directory, session, config, physicalSource, physicalTransfer, physicalMTU, journal)
 	}}
 	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private runtime directory")
 	command.Flags().StringVar(&session, "session", "", "captured runtime identity")
@@ -314,6 +315,10 @@ func init() {
 	command.Flags().StringVar(&physicalSource, "physical-source-sha256", "", "captured derived physical owner identity")
 	command.Flags().StringVar(&physicalTransfer, "physical-transfer-sha256", "", "captured private protection predecessor record")
 	command.Flags().IntVar(&physicalMTU, "physical-mtu", 0, "captured live TUN value for sealed connection restoration")
+	command.Flags().Uint64Var(&journal.ParentHandle, "journal-parent-handle", 0, "inherited native controller capability")
+	command.Flags().StringVar(&journal.ParentImage, "journal-parent-image", "", "retained native controller image")
+	command.Flags().StringVar(&journal.Pipe, "journal-pipe", "", "native durable transaction rendezvous")
+	command.Flags().StringVar(&journal.CaptureSHA256, "journal-capture-sha256", "", "captured journal comparison digest")
 	mainCommand.AddCommand(command)
 }
 
@@ -326,6 +331,10 @@ func routerVPNRunNodeMTUWithPhysical(parent context.Context, directory, session,
 }
 
 func routerVPNRunNodeMTUWithPhysicalMTU(parent context.Context, directory, session, config, physicalSource, physicalTransfer string, physicalMTU int) (failure error) {
+	return routerVPNRunNodeMTUCaptured(parent, directory, session, config, physicalSource, physicalTransfer, physicalMTU, nil)
+}
+
+func routerVPNRunNodeMTUCaptured(parent context.Context, directory, session, config, physicalSource, physicalTransfer string, physicalMTU int, journal routerVPNNodeJournal) (failure error) {
 	decoded, decodeErr := hex.DecodeString(config)
 	if parent == nil || !routerVPNExternalSession.MatchString(session) || decodeErr != nil || len(decoded) != 32 || hex.EncodeToString(decoded) != config {
 		return routerVPNExternalFailure
@@ -335,6 +344,11 @@ func routerVPNRunNodeMTUWithPhysicalMTU(parent context.Context, directory, sessi
 		return err
 	}
 	defer files.root.Close()
+	if journal != nil {
+		if err := journal.authenticate(parent, files); err != nil {
+			return err
+		}
+	}
 	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-protection-retired.json", "stopped.json"} {
 		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
 			return routerVPNExternalFailure
@@ -407,7 +421,11 @@ func routerVPNRunNodeMTUWithPhysicalMTU(parent context.Context, directory, sessi
 		return nil
 	}
 	if physicalPolicy != nil {
-		ctx, admission, err = routerVPNPrepareNodeAdmission(ctx, files, physicalPolicy, protectionTransfer)
+		if journal != nil {
+			ctx, admission, err = journal.prepare(ctx, physicalPolicy, protectionTransfer)
+		} else {
+			ctx, admission, err = routerVPNPrepareNodeAdmission(ctx, files, physicalPolicy, protectionTransfer)
+		}
 		if err != nil {
 			return routerVPNExternalFailure
 		}
