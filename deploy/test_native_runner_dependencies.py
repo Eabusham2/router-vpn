@@ -100,18 +100,42 @@ sys.exit(status)
                 originals = {p.name for p in (ROOT/'internal'/package).glob('*.go') if not p.name.endswith('_test.go')}
                 self.assertEqual({p.name for p in (target/package).glob('*.go')}, originals)
             for source in target.rglob('*.go'):
-                self.assertNotIn('"router-vpn/internal/', source.read_text())
+                self.assertNotIn(b'"router-vpn/internal/', source.read_bytes())
                 original=ROOT/'internal'/source.parent.name/source.name
-                expected=original.read_text()
+                expected=original.read_bytes()
                 for package in module.POLICY_PACKAGES:
-                    expected=expected.replace('"router-vpn/internal/'+package+'"','"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+package+'"')
-                self.assertEqual(source.read_text(),expected)
+                    expected=expected.replace(('"router-vpn/internal/'+package+'"').encode(),('"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+package+'"').encode())
+                self.assertEqual(source.read_bytes(),expected)
                 self.assertIn(original,module.inputs())
             # go mod tidy includes the custom-tag integration test imports too.
             native = (ROOT/'mobile/amnezia/start_layer_test.go.tmpl').read_text()
             self.assertIn('experimental/libbox/routervpn/startwhitening', native)
             self.assertTrue((target/'startwhitening/authenticated.go').is_file())
             self.assertFalse(list(target.rglob('*_test.go')))
+
+    def test_awg_policy_recopy_preserves_nonimport_bytes_and_rejects_unknown_imports(self):
+        spec=importlib.util.spec_from_file_location('native_awg_policy_bytes',ROOT/'deploy/prepare-mobile-amnezia.py')
+        module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)/'repository'
+            original=root/'internal/awgpolicy/parameters.go'
+            original.parent.mkdir(parents=True)
+            raw=(b'package awgpolicy\r\nimport "router-vpn/internal/routechoice"\n'
+                 b'// Preserve mixed newlines and UTF-8: \xc3\xa9\r\n')
+            original.write_bytes(raw)
+            core=Path(tmp)/'core'
+            copied=core/'experimental/libbox/routervpn/awgpolicy/parameters.go'
+            expected=raw.replace(b'"router-vpn/internal/routechoice"',
+                                 b'"github.com/sagernet/sing-box/experimental/libbox/routervpn/routechoice"')
+            with mock.patch.object(module,'ROOT',root):
+                module.prepare_policies(core)
+                self.assertEqual(copied.read_bytes(),expected)
+                module.prepare_policies(core)
+                self.assertEqual(copied.read_bytes(),expected)
+                original.write_bytes(raw+b'import "router-vpn/internal/unowned"\r\n')
+                with self.assertRaisesRegex(ValueError,'import closure is incomplete'):
+                    module.prepare_policies(core)
+                self.assertEqual(copied.read_bytes(),expected)
 
     def test_whitening_prepares_native_base_before_module_resolution(self):
         source=(ROOT/'deploy/test_mobile_whitening_pinned.sh').read_text().split('FIXTURE_DIR=',1)[0]

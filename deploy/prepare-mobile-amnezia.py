@@ -33,15 +33,17 @@ def prepare_policies(vendor):
     # Parent-module tests are not part of this native production import graph.
     sources={}
     for path in policy_inputs():
-        text=path.read_text()
+        # This pass follows the shared policy preparation. Preserve its exact
+        # bytes on Windows too; text I/O normalizes or expands line endings.
+        content=path.read_bytes()
         for package in POLICY_PACKAGES:
-            text=text.replace('"router-vpn/internal/'+package+'"','"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+package+'"')
-        if '"router-vpn/internal/' in text:
+            content=content.replace(('"router-vpn/internal/'+package+'"').encode(),('"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+package+'"').encode())
+        if b'"router-vpn/internal/' in content:
             raise ValueError('Native AWG policy import closure is incomplete: '+str(path.relative_to(ROOT)))
-        sources[vendor/'experimental/libbox/routervpn'/path.parent.name/path.name]=text
-    for path,text in sources.items():
+        sources[vendor/'experimental/libbox/routervpn'/path.parent.name/path.name]=content
+    for path,content in sources.items():
         path.parent.mkdir(parents=True,exist_ok=True)
-        path.write_text(text)
+        path.write_bytes(content)
 def digest():
     h=hashlib.sha256()
     for path in inputs():h.update(str(path.relative_to(ROOT)).encode()+b'\0'+path.read_bytes())
