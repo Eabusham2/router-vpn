@@ -39,6 +39,9 @@ REQUIRED = (
     "TestControllerTransportDrainPublicAPIJoinsTransport",
     "TestLocalControllerPinnedDrainUsesShippingLifetime",
     "TestLocalControllerPinnedDrainRequiresActualTLSAndExactRequest",
+    "TestLocalControllerPinnedDrainUtilityArguments",
+    "TestLocalControllerPinnedDrainUtilityReadOnly",
+    "TestLocalControllerPinnedDrainUtilityRejectsUnknownAndCancelled",
 )
 
 
@@ -80,7 +83,13 @@ def sources():
              "internal/controllertransport/client_test.go", "internal/controllertransport/drain.go",
              "internal/controllertransport/drain_test.go", "cmd/client/controller_pinned_tls_test.go",
              "cmd/client/controller_pinned_tls.go", "cmd/client/controller_local_auth.go",
-             "cmd/client/controller_shutdown.go")
+             "cmd/client/controller_shutdown.go", "cmd/client/main.go",
+             "cmd/client/windows_controller_drain_utility.go",
+             "cmd/client/windows_controller_drain_utility_windows.go",
+             "cmd/client/windows_controller_drain_utility_other.go",
+             "cmd/client/windows_controller_drain_utility_test.go",
+             "cmd/client/windows_controller_drain_utility_windows_test.go",
+             "client/Private-RouterVPN-State.ps1")
     records = {}
     for name in names:
         path = ROOT / name
@@ -163,6 +172,7 @@ def mutants():
 def shipping_mutants():
     pinned = (ROOT / "cmd/client/controller_pinned_tls.go").read_text(encoding="utf-8")
     owner = (ROOT / "cmd/client/controller_local_auth.go").read_text(encoding="utf-8")
+    utility = (ROOT / "cmd/client/windows_controller_drain_utility.go").read_text(encoding="utf-8")
     return (
         ("cmd/client/controller_pinned_tls.go", "shipping-listener-plaintext", REQUIRED[20],
          "pinned drain did not cross the actual shipping TLS admission",
@@ -180,6 +190,11 @@ def shipping_mutants():
          replace_once(owner, "if c.pinnedTLS != nil && r.URL.Path == controllertransport.DrainPath {",
                       'if c.pinnedTLS != nil && r.URL.Path == controllertransport.DrainPath {\n'
                       '\t\t\tif c.retired() { http.Error(w, "retired", http.StatusServiceUnavailable); return }')),
+        ("cmd/client/windows_controller_drain_utility.go", "utility-drain-unknown-result", REQUIRED[24],
+         "unknown or cancelled utility observation published stop authority",
+         replace_once(utility,
+                      "draining, err := controllertransport.ReadDrain(ctx, owner, pin)\n\tif err != nil {",
+                      "draining, err := controllertransport.ReadDrain(ctx, owner, pin)\n\tif false && err != nil {")),
     )
 
 
@@ -187,13 +202,22 @@ def execute(go="go"):
     before = sources()
     compiler, env, race = selected_compiler(go)
     status, output = run(
-        [compiler, "test", "-mod=readonly", *race, "./internal/controllertransport", "./cmd/client",
+        [compiler, "test", "-mod=readonly", "-p=1", *race, "./internal/controllertransport", "./cmd/client",
          "-run", "^(TestControllerTransport|TestLocalControllerPinned)",
          "-count=1", "-timeout=90s", "-v"], env)
     print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    required = REQUIRED + (("TestLocalControllerPinnedDrainUtilityWindowsExecution",) if platform.system() == "Windows" else ())
     if (status or "--- SKIP:" in output or "DATA RACE" in output or
-            any("--- PASS: " + name + " (" not in output for name in REQUIRED)):
+            any("--- PASS: " + name + " (" not in output for name in required)):
         raise ValueError("Controller TLS gate did not execute every real transport/handler case")
+    if platform.system() == "Windows":
+        for kind, cases in (("command", ("running", "draining", "wrong-pin", "wrong-owner", "timeout")),
+                            ("wrapper", ("running", "draining", "captured-once", "wrong-pin", "malformed",
+                                         "plaintext-fallback", "legacy", "cancelled"))):
+            for case in cases:
+                name = "TestLocalControllerPinnedDrainUtilityWindowsExecution/" + kind + "/" + case
+                if "--- PASS: " + name + " (" not in output:
+                    raise ValueError("Controller drain omitted actual Windows utility/wrapper case: " + name)
     with tempfile.TemporaryDirectory(prefix="routervpn-controller-tls-") as directory:
         owned = Path(directory)
         controls = [(PACKAGE / filename, "./internal/controllertransport", name, test, witness, replacement)
@@ -218,7 +242,7 @@ def execute(go="go"):
             print("Rejected production controller TLS mutant:", name, flush=True)
     if sources() != before:
         raise ValueError("Controller TLS source changed during its execution gate")
-    print("Controller TLS passed twenty-two real transport/shipping-handler cases and nineteen compiled production negative controls, including captured listener and credential-free drain during cleanup; Windows launcher and native wrapper adoption remain separate.", flush=True)
+    print("Controller TLS passed", len(required), "required real transport/handler/utility cases and twenty compiled production negative controls; Windows additionally executes the actual command and shipping wrapper with capture, plaintext, owner and cancellation negatives. Native UAC remains separate.", flush=True)
 
 
 if __name__ == "__main__":

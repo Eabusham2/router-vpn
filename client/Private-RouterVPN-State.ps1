@@ -4,6 +4,15 @@
 # primitive below is create-only and scoped to ephemeral process-ownership
 # records; it never mutates routers.json or other controller-owned profile state.
 
+# These public fields are captured once from the authenticated controller's
+# helper launch. Later environment changes cannot select a replacement owner.
+$script:RouterVPNControllerDrainCapture = [pscustomobject]@{
+  Transport = [string]$env:HOMEVPN_CONTROLLER_TRANSPORT
+  ProcessId = [string]$env:HOMEVPN_CONTROLLER_PID
+  Pin = [string]$env:HOMEVPN_CONTROLLER_TLS_PIN
+  Executable = [string]$env:HOMEVPN_CONTROLLER_EXECUTABLE
+}
+
 function Assert-RouterVPNNoReparseAncestors([string]$Path) {
   $full = [IO.Path]::GetFullPath($Path)
   if (Test-Path -LiteralPath $full) {
@@ -405,13 +414,69 @@ function Stop-RouterVPNRecordedProcess([string]$Path) {
 }
 
 # Long-running Windows PowerShell dataplane owners cannot receive Go's
-# os.Interrupt signal. The controller publishes phase=stopping before waiting up
-# to three seconds and force-killing a wrapper. Poll only the loopback controller
-# and let helpers return normally when that owned stop transaction is visible, so
-# their existing finally/down paths restore firewall/DNS/routes and remove private
-# runtime state before the hard-kill fallback can fire.
+# os.Interrupt signal. The controller publishes its terminal drain state before
+# the bounded wrapper wait. The owned TLS path uses the native retained-process
+# probe; a failure is unknown and never selects the legacy plaintext endpoint.
+function Test-RouterVPNPinnedControllerStopping($Capture,[int]$TimeoutMilliseconds) {
+  $probe=$null
+  $held=$null
+  $started=$false
+  try {
+    $owner=[uint32]0
+    if($Capture.Transport-cne'pinned-tls' -or $Capture.ProcessId-cnotmatch'\A[1-9][0-9]{0,9}\z' -or
+       -not[uint32]::TryParse($Capture.ProcessId,[ref]$owner) -or $owner-eq0 -or
+       $Capture.Pin-cnotmatch'\A[0-9a-f]{64}\z' -or [string]::IsNullOrWhiteSpace($Capture.Executable) -or
+       -not[IO.Path]::IsPathRooted($Capture.Executable)) { return $false }
+    Assert-RouterVPNNoReparseAncestors $Capture.Executable
+    # Hold the exact utility leaf against replacement until its owned process
+    # exits. The authenticated launch separately retains the full image ancestry.
+    $held=[IO.File]::Open($Capture.Executable,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
+    $start=New-Object Diagnostics.ProcessStartInfo
+    $start.FileName=$Capture.Executable
+    $start.Arguments='--windows-controller-drain '+$Capture.ProcessId+' '+$Capture.Pin
+    $start.UseShellExecute=$false
+    $start.CreateNoWindow=$true
+    $start.RedirectStandardOutput=$true
+    $start.RedirectStandardError=$true
+    $probe=New-Object Diagnostics.Process
+    $probe.StartInfo=$start
+    $started=$probe.Start()
+    if(-not$started){return $false}
+    # Both reads are independently bounded. Excess output blocks only this
+    # owned utility until the deadline kills and joins it; it cannot grow the
+    # dataplane owner's memory or masquerade as a complete small receipt.
+    $stdoutBuffer=New-Object char[] 1025
+    $stderrBuffer=New-Object char[] 1025
+    $stdout=$probe.StandardOutput.ReadBlockAsync($stdoutBuffer,0,$stdoutBuffer.Length)
+    $stderr=$probe.StandardError.ReadBlockAsync($stderrBuffer,0,$stderrBuffer.Length)
+    if(-not$probe.WaitForExit($TimeoutMilliseconds)){return $false}
+    if(-not$stdout.Wait(100)-or-not$stderr.Wait(100)-or$probe.ExitCode-ne0){return $false}
+    if($stdout.Result-gt1024-or$stderr.Result-ne0){return $false}
+    $text=New-Object string($stdoutBuffer,0,[int]$stdout.Result)
+    $receipt=$text|ConvertFrom-Json
+    $fields=@($receipt.PSObject.Properties.Name)
+    if($fields.Count-ne3-or$fields-cnotcontains'schema'-or$fields-cnotcontains'process_id'-or$fields-cnotcontains'draining'-or
+       $receipt.schema-ne1-or$receipt.process_id-ne$owner-or$receipt.draining-isnot[bool]){return $false}
+    return [bool]$receipt.draining
+  } catch {
+    return $false
+  } finally {
+    if($null-ne$probe){
+      try { if($started-and-not$probe.HasExited){$probe.Kill();[void]$probe.WaitForExit(1000)} } catch { }
+      $probe.Dispose()
+    }
+    if($null-ne$held){$held.Dispose()}
+  }
+}
+
 function Test-RouterVPNControllerStopping([int]$TimeoutMilliseconds=400) {
   if($TimeoutMilliseconds-lt50-or$TimeoutMilliseconds-gt2000){$TimeoutMilliseconds=400}
+  $capture=$script:RouterVPNControllerDrainCapture
+  if($capture.Transport-or$capture.ProcessId-or$capture.Pin-or$capture.Executable){
+    return Test-RouterVPNPinnedControllerStopping $capture $TimeoutMilliseconds
+  }
+  # Only legacy helpers launched without any owned transport capture use their
+  # existing ordinary loopback status. An owned failure never reaches this code.
   $request=$null
   $response=$null
   $reader=$null
