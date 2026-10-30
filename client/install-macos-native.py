@@ -9,6 +9,7 @@ macOS launchd integration below can dispatch platform commands.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import ctypes
 import errno
 import fcntl
@@ -38,6 +39,118 @@ CODE_FILES = FILES.CODE_FILES - {'router-vpn-app', 'router-vpn.desktop', 'router
 REQUIRED = {'router-vpn-client', 'router-vpn-dns', 'router-vpn-start-layer-relay',
             'router-vpn-update', 'modes.json', 'logical-modes.json', 'ROUTER-VPN-SOURCE.json'}
 NATIVE_MACOS = sys.platform == 'darwin'
+QUARANTINE_NAME = b'com.apple.quarantine'
+QUARANTINE_LIMIT = 65536
+
+
+class NativeQuarantine:
+    """Copy only download provenance through retained Darwin descriptors.
+
+    CPython's os xattr methods are Linux-only. Darwin's fixed libSystem API
+    takes two additional position/options arguments; neither may be omitted.
+    https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/sys/xattr.h
+    """
+    def __init__(self):
+        self.library = ctypes.CDLL('/usr/lib/libSystem.B.dylib', use_errno=True)
+        arguments = [ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p,
+                     ctypes.c_size_t, ctypes.c_uint32, ctypes.c_int]
+        self.library.fgetxattr.argtypes = arguments
+        self.library.fgetxattr.restype = ctypes.c_ssize_t
+        self.library.fsetxattr.argtypes = arguments
+        self.library.fsetxattr.restype = ctypes.c_int
+
+    def read(self, descriptor):
+        ctypes.set_errno(0)
+        size = self.library.fgetxattr(descriptor, QUARANTINE_NAME, None, 0, 0, 0)
+        if size < 0:
+            error = ctypes.get_errno()
+            # ENOATTR is Darwin's only absent-attribute result. A denied,
+            # unsupported or failed read never means quarantine was absent.
+            if error == getattr(errno, 'ENOATTR', 93):
+                return None
+            raise OSError(error or errno.EIO, 'Cannot capture download quarantine')
+        if size > QUARANTINE_LIMIT:
+            raise ValueError('Download quarantine exceeds its bounded capture')
+        buffer = ctypes.create_string_buffer(max(1, size))
+        ctypes.set_errno(0)
+        actual = self.library.fgetxattr(descriptor, QUARANTINE_NAME, buffer, len(buffer), 0, 0)
+        if actual < 0:
+            raise OSError(ctypes.get_errno() or errno.EIO, 'Cannot read captured download quarantine')
+        if actual != size:
+            raise ValueError('Download quarantine changed during capture')
+        return buffer.raw[:actual]
+
+    def write(self, descriptor, value):
+        if type(value) is not bytes or len(value) > QUARANTINE_LIMIT:
+            raise ValueError('Invalid captured download quarantine')
+        buffer = ctypes.create_string_buffer(value, max(1, len(value)))
+        ctypes.set_errno(0)
+        if self.library.fsetxattr(descriptor, QUARANTINE_NAME, buffer, len(value), 0, 0) != 0:
+            raise OSError(ctypes.get_errno() or errno.EIO, 'Cannot preserve download quarantine')
+        if self.read(descriptor) != value:
+            raise ValueError('Installed download quarantine did not read back exactly')
+
+
+def quarantine_identity(info):
+    return (info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid,
+            info.st_size, info.st_mtime_ns, info.st_nlink)
+
+
+@contextmanager
+def quarantine_object(path, *, output=False):
+    """Open each ancestor and the final object without following a symlink."""
+    path = Path(os.path.abspath(path))
+    retained = [os.open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)]
+    try:
+        for part in path.parts[1:-1]:
+            retained.append(os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                                    dir_fd=retained[-1]))
+        parent = retained[-1]
+        before = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+        directory = stat.S_ISDIR(before.st_mode)
+        if not directory and (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1):
+            raise ValueError('Download quarantine object is linked or nonregular')
+        flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
+        if directory:
+            flags |= os.O_DIRECTORY
+        descriptor = os.open(path.name, flags, dir_fd=parent)
+        retained.append(descriptor)
+        opened = os.fstat(descriptor)
+        if quarantine_identity(before) != quarantine_identity(opened) or before.st_ctime_ns != opened.st_ctime_ns:
+            raise ValueError('Download quarantine object changed during capture')
+        if output and (opened.st_uid != 0 or opened.st_gid != 0 or opened.st_mode & 0o022):
+            raise ValueError('Download quarantine output is not protected installation code')
+        yield descriptor
+        actual = os.fstat(descriptor)
+        named = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+        if quarantine_identity(opened) != quarantine_identity(actual) or quarantine_identity(opened) != quarantine_identity(named):
+            raise ValueError('Download quarantine object changed during preservation')
+        # Setting the output attribute deliberately changes ctime. The input
+        # must remain exactly the captured object, including its metadata.
+        if not output and (opened.st_ctime_ns != actual.st_ctime_ns or opened.st_ctime_ns != named.st_ctime_ns):
+            raise ValueError('Download quarantine input changed during preservation')
+    finally:
+        for descriptor in reversed(retained):
+            os.close(descriptor)
+
+
+def preserve_download_quarantine(source, stage):
+    attributes = NativeQuarantine()
+    code_paths = [stage]
+    for name in sorted(CODE_TREES | CODE_FILES):
+        target = stage/name
+        if not target.exists():
+            continue
+        code_paths.extend([target, *target.rglob('*')] if target.is_dir() else [target])
+    for path in code_paths:
+        original = source/path.relative_to(stage)
+        with quarantine_object(original) as incoming, quarantine_object(path, output=True) as outgoing:
+            quarantine = attributes.read(incoming)
+            if quarantine is None:
+                continue
+            attributes.write(outgoing, quarantine)
+            if attributes.read(incoming) != quarantine:
+                raise ValueError('Download quarantine input changed before installation')
 
 
 def validate_acl_buffer(data, private):
@@ -344,20 +457,7 @@ def stage_application(source, root, stage, installing_uid, python):
     # decisions. Copy only that provenance attribute, never arbitrary ACLs or
     # extended metadata from the caller's extracted package.
     if sys.platform == 'darwin':
-        absent = {errno.ENODATA, getattr(errno, 'ENOATTR', errno.ENODATA)}
-        code_paths = [stage]
-        for name in sorted(CODE_TREES | CODE_FILES):
-            target = stage/name
-            if not target.exists(): continue
-            code_paths.extend([target, *target.rglob('*')] if target.is_dir() else [target])
-        for path in code_paths:
-            original = source/path.relative_to(stage)
-            try:
-                quarantine = os.getxattr(original, 'com.apple.quarantine', follow_symlinks=False)
-            except OSError as error:
-                if error.errno in absent: continue
-                raise
-            os.setxattr(path, 'com.apple.quarantine', quarantine, follow_symlinks=False)
+        preserve_download_quarantine(source, stage)
     # New files may inherit ACLs from their parent even though copying omitted
     # source ACLs. Inspect the complete staged authority before any execution.
     for path in [stage, *stage.rglob('*')]:

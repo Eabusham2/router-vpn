@@ -2,6 +2,7 @@
 """Execute macOS installer transactions in temporary roots, without host services."""
 from __future__ import annotations
 import argparse
+import ctypes
 import errno
 import fcntl
 import importlib.util
@@ -35,6 +36,62 @@ def load(source=None):
 
 
 M = load()
+
+
+class NativeCall:
+    def __init__(self, implementation):
+        self.implementation = implementation
+        self.argtypes = self.restype = None
+
+    def __call__(self, *arguments):
+        return self.implementation(*arguments)
+
+
+class QuarantineLibrary:
+    """Darwin ABI double; paths and descriptor ownership remain real."""
+    def __init__(self, values=None):
+        self.values = dict(values or {})
+        self.read_error = self.write_error = None
+        self.short_read = self.drop_write = False
+        self.after_write = lambda: None
+        self.calls = []
+        self.fgetxattr = NativeCall(self.read)
+        self.fsetxattr = NativeCall(self.write)
+
+    @staticmethod
+    def identity(descriptor):
+        info = os.fstat(descriptor)
+        return info.st_dev, info.st_ino
+
+    def capture(self, descriptor, name, buffer, size, position, options):
+        if name != b'com.apple.quarantine' or position != 0 or options != 0:
+            raise AssertionError('Native quarantine lost its exact Darwin attribute/argument boundary')
+        self.calls.append((name, size, position, options))
+        return self.identity(descriptor)
+
+    def read(self, descriptor, name, buffer, size, position, options):
+        identity = self.capture(descriptor, name, buffer, size, position, options)
+        value = self.values.get(identity)
+        if self.read_error or value is None:
+            ctypes.set_errno(self.read_error or getattr(errno, 'ENOATTR', 93))
+            return -1
+        if buffer is None:
+            return len(value)
+        if len(value) > size:
+            ctypes.set_errno(errno.ERANGE)
+            return -1
+        ctypes.memmove(buffer, value, len(value))
+        return len(value) - 1 if self.short_read else len(value)
+
+    def write(self, descriptor, name, buffer, size, position, options):
+        identity = self.capture(descriptor, name, buffer, size, position, options)
+        if self.write_error:
+            ctypes.set_errno(self.write_error)
+            return -1
+        if not self.drop_write:
+            self.values[identity] = ctypes.string_at(buffer, size)
+        self.after_write()
+        return 0
 
 
 class LaunchBoundary:
@@ -265,43 +322,105 @@ class MacInstallTransactions(unittest.TestCase):
         self.assertEqual(self.uid, json.loads((self.root/'controller-owner.json').read_text())['caller_uid'])
 
     def test_existing_download_quarantine_is_preserved_on_code(self):
-        # Exercise the Darwin attribute boundary without asking a Linux host
-        # to manufacture macOS filesystem semantics. Actual Mac package runs
-        # below also execute the unmodified native attribute operations.
+        # Only the Darwin native calls are doubled. The shipping descriptor
+        # capture, size bounds, source recheck and installed readback execute.
         expected = {
             '.': b'0081;fixture;download;package-root',
-            'RouterVPN.app': b'0081;fixture;download;app',
-            'RouterVPN.app/Contents/MacOS/RouterVPN': b'0081;fixture;download;executable',
+            'RouterVPN.app': b'',
+            'RouterVPN.app/Contents/MacOS/RouterVPN': b'0081;fixture;download;\0executable',
             'router-vpn-client': b'0081;fixture;download;controller',
         }
-        captured = {}
-        def read(path, name, *, follow_symlinks):
-            self.assertEqual('com.apple.quarantine', name)
-            self.assertFalse(follow_symlinks)
-            relative = str(path.relative_to(self.source))
-            if relative in expected: return expected[relative]
-            raise OSError(errno.ENODATA, 'attribute absent')
-        def write(path, name, value, *, follow_symlinks):
-            self.assertEqual('com.apple.quarantine', name)
-            self.assertFalse(follow_symlinks)
-            relative = str(Path(*path.parts[path.parts.index('new')+1:]))
-            captured[relative] = value
-        platform_os = types.SimpleNamespace(**vars(os))
-        platform_os.getxattr, platform_os.setxattr = read, write
+        values = {(path.stat().st_dev, path.stat().st_ino): value
+                  for name, value in expected.items() for path in [self.source/name]}
+        native = QuarantineLibrary(values)
+        self.install_with_quarantine(native)
+        self.assertEqual(expected, {name: native.values[(path.stat().st_dev, path.stat().st_ino)]
+                                  for name in expected for path in [self.root/name]})
+        self.assertEqual(len(expected)*2, len(native.values), 'installation copied unrelated extended metadata')
+
+    def native_quarantine(self, library):
+        with mock.patch.object(self.installer.ctypes, 'CDLL', return_value=library) as factory:
+            attributes = self.installer.NativeQuarantine()
+        factory.assert_called_once_with('/usr/lib/libSystem.B.dylib', use_errno=True)
+        expected = [ctypes.c_int, ctypes.c_char_p, ctypes.c_void_p,
+                    ctypes.c_size_t, ctypes.c_uint32, ctypes.c_int]
+        self.assertEqual(expected, library.fgetxattr.argtypes)
+        self.assertEqual(expected, library.fsetxattr.argtypes)
+        self.assertIs(ctypes.c_ssize_t, library.fgetxattr.restype)
+        self.assertIs(ctypes.c_int, library.fsetxattr.restype)
+        return attributes
+
+    def install_with_quarantine(self, library):
+        attributes = self.native_quarantine(library)
+        # Simulate CPython's actual Darwin os surface on Linux too. These
+        # methods must not be required by the installation path.
+        platform_os = types.SimpleNamespace(**{name: value for name, value in vars(os).items()
+                                               if name not in ('getxattr', 'setxattr')})
         with mock.patch.object(self.installer, 'sys', types.SimpleNamespace(platform='darwin')), \
-             mock.patch.object(self.installer, 'os', platform_os):
+             mock.patch.object(self.installer, 'os', platform_os), \
+             mock.patch.object(self.installer, 'NativeQuarantine', return_value=attributes):
             self.install()
-        self.assertEqual(expected, captured)
 
     def test_quarantine_read_failure_is_not_silently_cleared(self):
-        platform_os = types.SimpleNamespace(**vars(os))
-        def broken(*_, **__): raise OSError(errno.EACCES, 'cannot capture existing quarantine')
-        platform_os.getxattr = broken
-        with mock.patch.object(self.installer, 'sys', types.SimpleNamespace(platform='darwin')), \
-             mock.patch.object(self.installer, 'os', platform_os):
-            with self.assertRaises(OSError): self.install()
+        native = QuarantineLibrary()
+        native.read_error = errno.EACCES
+        with self.assertRaises(OSError):
+            self.install_with_quarantine(native)
         self.assertFalse(self.root.exists())
         self.assertEqual([], self.boundary.calls)
+
+    def test_quarantine_write_and_readback_fail_before_promotion(self):
+        source = self.source/'router-vpn-client'
+        identity = source.stat().st_dev, source.stat().st_ino
+        for fault in ('write-error', 'dropped-write', 'changed-input'):
+            native = QuarantineLibrary({identity: b'0081;fixture;preserve-me'})
+            if fault == 'write-error': native.write_error = errno.EPERM
+            if fault == 'dropped-write': native.drop_write = True
+            if fault == 'changed-input':
+                native.after_write = lambda: native.values.__setitem__(identity, b'0081;changed-after-read')
+            with self.subTest(fault=fault), self.assertRaises((OSError, ValueError)):
+                self.install_with_quarantine(native)
+            self.assertFalse(self.root.exists())
+            self.assertEqual([], self.boundary.calls)
+
+    def test_native_quarantine_absence_bounds_and_exact_size(self):
+        with self.installer.quarantine_object(self.source/'router-vpn-client') as descriptor:
+            identity = QuarantineLibrary.identity(descriptor)
+            native = QuarantineLibrary()
+            attributes = self.native_quarantine(native)
+            self.assertIsNone(attributes.read(descriptor))
+            for error in (errno.EACCES, errno.EIO, errno.ENOTSUP):
+                native.read_error = error
+                with self.subTest(error=error), self.assertRaises(OSError):
+                    attributes.read(descriptor)
+            native.read_error = None
+            native.values[identity] = b'x'*(self.installer.QUARANTINE_LIMIT+1)
+            with self.assertRaisesRegex(ValueError, 'bounded capture'):
+                attributes.read(descriptor)
+            native.values[identity] = b'actual-value'
+            native.short_read = True
+            with self.assertRaisesRegex(ValueError, 'changed during capture'):
+                attributes.read(descriptor)
+            with self.assertRaisesRegex(ValueError, 'Invalid captured'):
+                attributes.write(descriptor, b'x'*(self.installer.QUARANTINE_LIMIT+1))
+
+    def test_quarantine_capture_rejects_linked_or_replaced_objects(self):
+        regular = self.base/'quarantine-source'; F.write(regular, 'retained input')
+        leaf = self.base/'quarantine-alias'; leaf.symlink_to(regular)
+        parent = self.base/'quarantine-parent'; parent.symlink_to(self.source, target_is_directory=True)
+        hardlink = self.base/'quarantine-hardlink'; os.link(regular, hardlink)
+        for path in (leaf, parent/'router-vpn-client', regular, hardlink):
+            with self.subTest(path=path), self.assertRaises((OSError, ValueError)):
+                with self.installer.quarantine_object(path):
+                    self.fail('quarantine capture followed a linked object')
+        hardlink.unlink()
+        descriptor = None
+        with self.assertRaisesRegex(ValueError, 'changed during preservation'):
+            with self.installer.quarantine_object(regular) as descriptor:
+                regular.rename(self.base/'quarantine-original')
+                F.write(regular, 'another inode')
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
 
     def test_native_acl_decoder_preserves_public_read_and_private_denial(self):
         def record(kind, rights):
@@ -352,6 +471,22 @@ class MacNativeACL(unittest.TestCase):
                         subprocess.run(['/bin/chmod', '-N', path], check=True)
 
 
+class MacNativeQuarantine(MacInstallTransactions):
+    def test_real_download_quarantine_survives_native_installation(self):
+        if sys.platform != 'darwin': raise RuntimeError('Actual macOS quarantine execution is required')
+        expected = {'.': b'0081;fixture;download;package-root',
+                    'RouterVPN.app': b'0081;fixture;download;app',
+                    'RouterVPN.app/Contents/MacOS/RouterVPN': b'0081;fixture;download;executable',
+                    'router-vpn-client': b'0081;fixture;download;controller'}
+        for name, value in expected.items():
+            subprocess.run(['/usr/bin/xattr', '-wx', 'com.apple.quarantine', value.hex(), self.source/name], check=True)
+        self.install()
+        for name, value in expected.items():
+            captured = subprocess.run(['/usr/bin/xattr', '-px', 'com.apple.quarantine', self.root/name],
+                                      check=True, stdout=subprocess.PIPE, text=True)
+            self.assertEqual(value, bytes.fromhex(captured.stdout))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--package', type=Path)
@@ -371,7 +506,9 @@ def main():
         ('            reject_running_previous(root, process_reader)', '            pass # ignore legacy owner', 'test_running_legacy_native_owner_prevents_promotion'),
         ('                FILES.copy_checked(child, stage/child.name, private=True)', '                pass # discard private state', 'test_upgrade_preserves_private_owner_settings_and_open_file_isolation'),
         ('                integration.restore()', '                pass # omit restoration', 'test_system_failure_restores_old_root_files_and_supervisor'),
-        ("    if sys.platform == 'darwin':\n        absent", "    if False:\n        absent", 'test_existing_download_quarantine_is_preserved_on_code'),
+        ('        preserve_download_quarantine(source, stage)', '        pass # discard download provenance', 'test_existing_download_quarantine_is_preserved_on_code'),
+        ('        if self.read(descriptor) != value:', '        if False:', 'test_quarantine_write_and_readback_fail_before_promotion'),
+        ('            if attributes.read(incoming) != quarantine:', '            if False:', 'test_quarantine_write_and_readback_fail_before_promotion'),
     ):
         source = TARGET.read_text()
         if source.count(before) != 1: raise AssertionError('Mutation lost its actual production seam')
@@ -381,6 +518,8 @@ def main():
         print('Rejected macOS installer defect: '+case)
     if sys.platform == 'darwin':
         result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(MacNativeACL))
+        if not result.wasSuccessful(): raise SystemExit(1)
+        result = unittest.TextTestRunner(verbosity=2).run(MacNativeQuarantine('test_real_download_quarantine_survives_native_installation'))
         if not result.wasSuccessful(): raise SystemExit(1)
         actual = {str(Path(path).resolve()) for path in M.running_executables()}
         if str(Path(sys.executable).resolve()) not in actual:
