@@ -56,7 +56,12 @@ func macOSOwnedPFUtility(args []string) (bool, error) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
-	result, err := mobiletor.RunDesktopDarwinPFBaseline(ctx, raw, apply)
+	var result []byte
+	if args[1] == "reference" {
+		result, err = mobiletor.RunDesktopDarwinPFReference(ctx, raw)
+	} else {
+		result, err = mobiletor.RunDesktopDarwinPFBaseline(ctx, raw, apply)
+	}
 	if err != nil {
 		return true, err
 	}

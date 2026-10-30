@@ -171,7 +171,10 @@ class DesktopPTPreparation(unittest.TestCase):
                          'desktop_socket_pf_baseline.go', 'desktop_socket_pf_baseline_test.go',
                          'desktop_socket_pf_baseline_transition.go', 'desktop_socket_pf_baseline_transition_test.go',
                          'desktop_socket_darwin_baseline.go', 'desktop_socket_darwin_baseline_other.go',
-                         'desktop_socket_darwin_baseline_test.go'):
+                         'desktop_socket_darwin_baseline_test.go',
+                         'desktop_socket_pf_reference.go', 'desktop_socket_pf_reference_test.go',
+                         'desktop_socket_darwin_reference_cgo.go', 'desktop_socket_darwin_reference_other.go',
+                         'desktop_socket_darwin_reference_test.go'):
                 self.assertEqual(generated['routervpn/mobiletor/'+name], (ROOT/'internal/mobiletor'/name).read_bytes())
             for name in ('desktop_socket_windows_identity.go', 'desktop_socket_windows_identity_api.go',
                          'desktop_socket_windows_identity_connect.go',

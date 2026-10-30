@@ -70,6 +70,8 @@ jobs:
         # The fixed native utility is still dormant in the shipping Python
         # path. This uses only a newly owned, scoped fixture namespace.
         run: python3 deploy/test_desktop_darwin_guardian.py . --go "$(command -v go)" --case BaselineTransition --baseline-mutations
+      - name: Prove exact PF reference presence and retirement without adopting another owner
+        run: python3 deploy/test_desktop_darwin_guardian.py . --go "$(command -v go)" --case ReferenceOwnership --reference-mutations
 
   native-sockets:
     name: Native PF, socket and utun ownership on ${{ matrix.runner }}

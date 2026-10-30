@@ -40,6 +40,17 @@ func TestMacOSOwnedControllerNativePFBaselineUtility(t *testing.T) {
 	if err != nil || json.Unmarshal(output, &result) != nil || result.Schema != 1 || result.Applied || result.Previous.Present || result.Target.Present {
 		t.Fatal("actual installed PF utility did not retain its read-only absent target", string(output), err)
 	}
+	reference, err := mobiletor.EncodeDesktopDarwinPFReferenceRequest(mobiletor.DesktopDarwinPFReferenceRequest{Schema: 1, Token: "18446744073709551615"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspect, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	expectedReference, inspectErr := mobiletor.RunDesktopDarwinPFReference(inspect, reference)
+	stop()
+	output, err = invoke([]string{darwinOwnedPFArgument, "reference"}, reference)
+	if inspectErr != nil || err != nil || !bytes.Equal(output, expectedReference) {
+		t.Fatal("actual installed PF utility lost its exact read-only reference proof", inspectErr, err)
+	}
 	for _, test := range []struct {
 		name string
 		args []string
@@ -50,6 +61,8 @@ func TestMacOSOwnedControllerNativePFBaselineUtility(t *testing.T) {
 		{"unknown record field", []string{darwinOwnedPFArgument, "plan"}, append(append([]byte(nil), raw[:len(raw)-1]...), []byte(`,"anchor":"com.apple/foreign"}`)...)},
 		{"oversized record", []string{darwinOwnedPFArgument, "plan"}, []byte(strings.Repeat("x", mobiletor.DesktopDarwinPFBaselineLimit+1))},
 		{"missing record", []string{darwinOwnedPFArgument, "plan"}, nil},
+		{"reference identity missing", []string{darwinOwnedPFArgument, "reference"}, raw},
+		{"reference extra authority", []string{darwinOwnedPFArgument, "reference", "--stop"}, reference},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if output, err := invoke(test.args, test.raw); err == nil {
