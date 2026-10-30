@@ -366,7 +366,8 @@ def execute_mutations(source: Path, go='go'):
              ('block drop out quick ', 'block drop out '),)),
         ('per-socket descriptor retirement', 'SocketRetirementReusesCapacity', 'sequential owned socket 128:',
          'desktop_socket_broker.go', (
-             ('ok && s.sourceFile != nil {', 'ok && s.sourceFile != nil && false {'),)),
+             ('ok && (s.sourceFile != nil || s.sourceNative != nil) {',
+              'ok && (s.sourceFile != nil || s.sourceNative != nil) && false {'),)),
         ('native descriptor finish acknowledgment', 'FinishRequiresDescriptorRetirement', 'finish claimed success with an unretired descriptor',
          'desktop_socket_darwin_helper.go', (
              ('if release && len(g.sockets) != 0 {', 'if false && release && len(g.sockets) != 0 {'),)),
