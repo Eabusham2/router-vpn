@@ -152,6 +152,10 @@ func (a *app) externalProfileConnectWithRuntime(w http.ResponseWriter, r *http.R
 // Both interactive Connect and startup already hold one connection transaction.
 // A retained execution is internal Last-state evidence, never an HTTP override.
 func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfileConnectRequest, retained string, startup *startupPolicyCapture, driver externalConnectRuntime) {
+	if err := a.guardDesktopOwnedNodeTransition(nil); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		http.Error(w, "desktop external-node runtime is unavailable on this platform", http.StatusNotImplemented)
 		return

@@ -79,6 +79,10 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 }
 
 func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile common.RouterProfile, q externalProfileConnectRequest, startup *startupPolicyCapture, driver desktopTorConnectRuntime) {
+	if err := a.guardDesktopOwnedNodeTransition(nil); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if startup != nil {
 		if err := startup.current(a); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)

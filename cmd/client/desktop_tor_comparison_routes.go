@@ -15,6 +15,10 @@ import (
 // They preserve the saved node, full policy and Startup Last until a winner
 // earns two fresh operands and the normal durable choice/adoption transaction.
 func (a *app) torBridgeCompareSelectionOwned(w http.ResponseWriter, profile common.RouterProfile, q externalProfileConnectRequest, startup *startupPolicyCapture, runtime desktopTorConnectRuntime) {
+	if err := a.guardDesktopOwnedNodeTransition(nil); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	driver, err := newDesktopTorComparisonDriver(a, profile, q, startup, runtime)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

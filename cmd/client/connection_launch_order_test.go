@@ -46,7 +46,7 @@ func assertGuardedProcessStart(t *testing.T, file, signature, startMarker, owner
 }
 
 func TestEveryShippingConnectionStartIsGuardedBeforeAndAfterLaunch(t *testing.T) {
-	assertGuardedProcessStart(t, "main.go", "func (a *app) startModeAttempt", "if err = cmd.Start(); err != nil", "a.cmd = cmd")
+	assertGuardedProcessStart(t, "main.go", "func (a *app) startModeAttempt", "err = cmd.Start()", "a.cmd = cmd")
 	assertGuardedProcessStart(t, "standard_exit_platform_routes.go", "func (a *app) platformStandardExitConnect", "if err = cmd.Start(); err != nil", "a.cmd = cmd")
 	assertGuardedProcessStart(t, "multihop_native_routes.go", "func (a *app) nativeMultihopConnect", "if err = cmd.Start(); err != nil", "a.cmd = cmd")
 	assertGuardedProcessStart(t, "multihop.go", "func (a *app) multihopConnect", "if err := cmd.Start(); err != nil", "a.cmd = cmd")

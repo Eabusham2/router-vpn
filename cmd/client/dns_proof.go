@@ -373,6 +373,11 @@ func proveSelectedDNSWithLookup(parent context.Context, a *app, s observedConnec
 		result.Reason = selectionErr.Error()
 		return result
 	}
+	if raw, exists := desktopNodeOwners.Load(a); exists {
+		if launch, ok := raw.(*desktopNodeLaunch); ok && launch != nil && launch.ownedNode != nil {
+			return proveDesktopOwnedNodeDNS(parent, a, s, runtimeID, selected, launch)
+		}
+	}
 	if parent == nil || lookup == nil {
 		result.Reason = "selected-DNS proof requires an owned context and resolver"
 		return result

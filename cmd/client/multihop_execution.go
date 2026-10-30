@@ -633,6 +633,10 @@ func releaseDesktopRelay(a *app, owner *exec.Cmd) error {
 }
 
 func (a *app) runMultihopExecution(w http.ResponseWriter, r *http.Request, sel multihopSelection, q multihopConnectRequest) {
+	if err := a.guardDesktopOwnedNodeTransition(nil); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	execution, err := routeExecution(q)
 	if err != nil {
 		http.Error(w, err.Error(), 400)

@@ -31,6 +31,9 @@ func (a *app) stopCommandEnv(hold bool) []string {
 }
 
 func (a *app) releaseTransitionKillSwitch() error {
+	if owned, err := a.releaseDesktopOwnedNodeProtection(); owned {
+		return err
+	}
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 	if runtime.GOOS == "windows" {
 		helper := filepath.Join(root, "client", "windows-kill-switch.ps1")

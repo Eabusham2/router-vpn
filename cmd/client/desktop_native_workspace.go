@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+
+	"router-vpn/internal/mobilemultihop"
 )
 
 // Keep a directory handle as well as its pathname. A superseding session or a
@@ -123,7 +125,11 @@ func readDesktopRuntimeSnapshot(root *os.Root, name string, limit int64) ([]byte
 // replacement owner's file; retries may only accept the exact existing bytes.
 // The CLI ignores a not-yet-complete stop JSON record until this write finishes.
 func writeDesktopRuntimeFile(launch *desktopNodeLaunch, name string, data []byte, retry bool) error {
-	if launch == nil || !desktopRuntimeFilename(name) || len(data) == 0 || len(data) > 8<<20 {
+	limit := 8 << 20
+	if launch != nil && launch.ownedNode != nil && name == "node-source.json" {
+		limit = mobilemultihop.NodeLaunchInputLimit
+	}
+	if launch == nil || !desktopRuntimeFilename(name) || len(data) == 0 || len(data) > limit {
 		return errors.New("invalid native runtime input")
 	}
 	launch.workspaceMu.Lock()
@@ -174,6 +180,9 @@ func desktopRuntimeOwnedFile(name string) bool {
 	case "sing-box.json", "source.json", "capture.json", "proof.json", "progress.json", "stop.json", "stopped.json", "native-multihop.process.json",
 		".proof.json.pending", ".progress.json.pending", ".stopped.json.pending", "mtu-request.json", "mtu-commit.json", "mtu-cancel.json", "mtu-status.json", ".mtu-status.json.pending",
 		"path-request.json", "path-cancel.json", "path-status.json", ".path-status.json.pending",
+		"node-source.json", "node-protection-transfer.json", "node-protection-retired.json", ".node-protection-retired.json.pending",
+		"node-physical-handoff-ready.json", ".node-physical-handoff-ready.json.pending", "node-physical-handoff-ack.json",
+		"node-ready.json", ".node-ready.json.pending",
 		"node-mtu-request.json", "node-mtu-status.json", ".node-mtu-status.json.pending":
 		return true
 	}
@@ -189,6 +198,9 @@ func cleanupDesktopNodeLaunch(launch *desktopNodeLaunch) error {
 	}
 	launch.workspaceMu.Lock()
 	defer launch.workspaceMu.Unlock()
+	if launch.ownedNode != nil && (launch.ownedNode.attempt != nil || launch.ownedNode.process != nil) && !launch.ownedNode.retired {
+		return errors.New("native workspace still owns a pending process or protection transfer")
+	}
 	if err := desktopExternalDirectoryCurrent(launch); err != nil {
 		return err
 	}

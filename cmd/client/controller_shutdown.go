@@ -138,7 +138,7 @@ func (a *app) drainControllerOwner() error {
 	_, nativeOwned := desktopNodeOwners.Load(a)
 	_, relayOwned := desktopRelays.Load(a)
 	_, mtuOwned := mtuLiveOwners.Load(a)
-	if !needsStop && !nativeOwned && !relayOwned && !mtuOwned {
+	if !needsStop && !nativeOwned && !relayOwned && !mtuOwned && !a.retainedDesktopNodeProtection() {
 		// A second controller that cannot bind its listener has no authority to
 		// release a first controller's persisted firewall. No owned connection
 		// means there is nothing to stop or reconfigure on this process's exit.

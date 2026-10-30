@@ -54,7 +54,8 @@ type app struct {
 	state             state
 	cmd               *exec.Cmd
 	daitaCancel       context.CancelFunc
-	dnsMeasurements   *desktopDNSSlot // protected by mu; bounded current native DNS operation
+	dnsMeasurements   *desktopDNSSlot            // protected by mu; bounded current native DNS operation
+	nodeProtection    *desktopNodeProtectionSlot // protected by mu; exact successor outlives its runtime workspace
 }
 
 func main() {
@@ -1031,7 +1032,11 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 			clear(native.config)
 			clear(native.metadata)
 			if native.directory != "" {
-				_ = cleanupDesktopNodeLaunch(native)
+				if native.ownedNode != nil {
+					_ = a.discardDesktopOwnedNodeUnstarted(native)
+				} else {
+					_ = cleanupDesktopNodeLaunch(native)
+				}
 			}
 			if raw, ok := activeDNSRuntimeIdentities.Load(a); ok {
 				if identity, ok := raw.(activeDNSRuntimeIdentity); ok && identity.Config == filepath.Join(native.directory, "sing-box.json") {
@@ -1040,6 +1045,9 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 			}
 		}
 	}()
+	if err = a.guardDesktopOwnedNodeTransition(native); err != nil {
+		return err
+	}
 	if err = a.stopModeWithIntent(true); err != nil {
 		return err
 	}
@@ -1081,7 +1089,24 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 		}
 		return err
 	}
-	if err = cmd.Start(); err != nil {
+	if native != nil && native.ownedNode != nil {
+		if err = a.publishDesktopOwnedNodeStart(native, "starting", ""); err != nil {
+			return err
+		}
+		// From publication onward even a partial native creation owns checked
+		// Stop. An unstarted-defer must not discard its protection workspace.
+		nativeStarted = true
+		if err = a.speedLabOwnRuntime(cmd); err != nil {
+			return errors.Join(err, a.stopModeWithIntent(holdOnFailure))
+		}
+		err = startDesktopNodeLaunch(a, native)
+	} else {
+		err = cmd.Start()
+	}
+	if err != nil {
+		if native != nil && native.ownedNode != nil {
+			return errors.Join(err, a.stopModeWithIntent(holdOnFailure))
+		}
 		if native != nil {
 			clearActiveDNSRuntimeConfig(a)
 		}
@@ -1133,6 +1158,9 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 	a.state.Phase = "checking"
 	a.mu.Unlock()
 	latency, healthErr := a.testStartedModeHealth(startupCtx, p, native)
+	if healthErr == nil && native != nil && native.ownedNode != nil {
+		_, healthErr = a.readDesktopOwnedNodeReady(native, false)
+	}
 	if healthErr == nil && native != nil && native.external == nil && native.mtuSession != "" {
 		if _, err := readDesktopNodeMTU(native); err != nil {
 			healthErr = fmt.Errorf("captured native TUN readback is not ready: %w", err)
@@ -1175,6 +1203,9 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 	}
 	log.Printf("mode %s selected-router path proof OK in %.2f ms", id, float64(latency.Microseconds())/1000)
 	a.startRouterNodeAutomaticMTU()
+	if native != nil && native.ownedNode != nil {
+		a.monitorDesktopOwnedNodeRuntime(native)
+	}
 	return nil
 }
 

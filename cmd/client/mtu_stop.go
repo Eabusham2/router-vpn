@@ -41,7 +41,7 @@ func (a *app) holdMTUForStopWith(hold func(context.Context) (func(), error)) (fu
 	}
 	raw, exists := desktopNodeOwners.Load(a)
 	launch, native := raw.(*desktopNodeLaunch)
-	if !exists || !native || launch == nil || launch.command != command || launch.command.Process == nil || launch.external == nil && launch.tor == nil && launch.mtuSession == "" {
+	if !exists || !native || launch == nil || launch.command != command || launch.command.Process == nil && !desktopOwnedNodeCreated(launch) || launch.external == nil && launch.tor == nil && launch.mtuSession == "" {
 		return nil, command, holdErr
 	}
 	// An unconfirmed commit can outlive its revert deadline. Stop this exact

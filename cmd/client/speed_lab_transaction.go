@@ -299,9 +299,20 @@ func (a *app) beginSpeedLabTemporaryOperationExpected(request *speedLabRequest) 
 }
 
 func clearSpeedLabRestorePlan(plan speedLabRestorePlan) {
-	if plan.native != nil {
-		clear(plan.native.config)
-		clear(plan.native.metadata)
+	if launch := plan.native; launch != nil {
+		launch.workspaceMu.Lock()
+		owner := launch.ownedNode
+		// Once staging acquires a protection attempt, the runtime owns these
+		// buffers even if startup or cleanup is still pending. A finished test
+		// plan must not erase a restored connection's future restore source.
+		if owner == nil || owner.retired || owner.attempt == nil && owner.process == nil {
+			clear(launch.config)
+			clear(launch.metadata)
+			if owner != nil {
+				clear(owner.source)
+			}
+		}
+		launch.workspaceMu.Unlock()
 	}
 	if plan.external != nil {
 		clear(plan.external.source)
@@ -543,6 +554,17 @@ func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (sp
 		if !ok || launch == nil || launch.external != nil || launch.tor != nil || launch.command != snapshot.Runtime || launch.profileID != st.RouterID || launch.mode != plan.request.Mode {
 			return plan, errors.New("previous native connection has another captured owner")
 		}
+		if launch.ownedNode != nil {
+			plan.native, err = a.captureDesktopOwnedNodeRestore(launch, profile)
+			if err != nil {
+				return plan, err
+			}
+			if err := validateSpeedLabIdentity(a, identity); err != nil {
+				clearSpeedLabRestorePlan(plan)
+				return speedLabRestorePlan{}, err
+			}
+			return plan, nil
+		}
 		if err := desktopExternalDirectoryCurrent(launch); err != nil {
 			return plan, err
 		}
@@ -776,7 +798,11 @@ func (a *app) speedLabRestartNative(plan speedLabRestorePlan) (resultErr error) 
 			resultErr = errors.Join(resultErr, err)
 			return
 		}
-		resultErr = errors.Join(resultErr, cleanupDesktopNodeLaunch(launch))
+		if launch.ownedNode != nil {
+			resultErr = errors.Join(resultErr, a.discardDesktopOwnedNodeUnstarted(launch))
+		} else {
+			resultErr = errors.Join(resultErr, cleanupDesktopNodeLaunch(launch))
+		}
 	}()
 	if err := registerActiveDNSRuntimeConfig(a, launch.profileID, launch.mode, filepath.Join(launch.directory, "sing-box.json")); err != nil {
 		return err
@@ -784,8 +810,21 @@ func (a *app) speedLabRestartNative(plan speedLabRestorePlan) (resultErr error) 
 	if err := a.checkConnectionOperation(); err != nil {
 		return err
 	}
-	if err := launch.command.Start(); err != nil {
-		return err
+	if launch.ownedNode != nil {
+		if err := a.publishDesktopOwnedNodeStart(launch, "speed-lab:restore:proving-node", plan.request.Base); err != nil {
+			return err
+		}
+		started = true
+		if err := a.speedLabOwnRuntime(launch.command); err != nil {
+			return errors.Join(err, a.stopModeWithIntent(true))
+		}
+		if err := startDesktopNodeLaunch(a, launch); err != nil {
+			return errors.Join(err, a.stopModeWithIntent(true))
+		}
+	} else {
+		if err := launch.command.Start(); err != nil {
+			return err
+		}
 	}
 	started = true
 	desktopNodeOwners.Store(a, launch)
@@ -822,12 +861,20 @@ func (a *app) speedLabRestartNative(plan speedLabRestorePlan) (resultErr error) 
 	if err := a.checkConnectionOperation(); err != nil || !a.ownsConnectionRuntime(launch.command) {
 		return errors.Join(err, errors.New("restored native proof completed for a retired runtime"))
 	}
+	if launch.ownedNode != nil {
+		if _, err := a.readDesktopOwnedNodeReady(launch, false); err != nil {
+			return err
+		}
+	}
 	a.mu.Lock()
 	a.state.Connected, a.state.Phase, a.state.LastError = true, "connected", ""
 	daita := a.state.DAITA
 	a.mu.Unlock()
 	if daita {
 		a.startCoverTraffic(plan.profile)
+	}
+	if launch.ownedNode != nil {
+		a.monitorDesktopOwnedNodeRuntime(launch)
 	}
 	return nil
 }

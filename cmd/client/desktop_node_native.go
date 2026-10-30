@@ -34,6 +34,7 @@ type desktopNodeLaunch struct {
 	policyProfileID            string
 	nodePhysicalEgress         []mobilemultihop.PhysicalEgress
 	nodePhysicalCapture        *desktopNodePhysicalCapture
+	ownedNode                  *desktopOwnedNodeRuntime
 	external                   *desktopExternalRuntime
 	tor                        *desktopTorRuntime
 	directoryInfo              os.FileInfo
@@ -380,7 +381,7 @@ func prepareDesktopNodeLaunch(a *app, p common.RouterProfile, mode string) (*des
 
 // Stage only after the prior runtime is completely drained. A prior mode's
 // cleanup must never delete the new graph before its captured process starts.
-func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
+func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) (resultErr error) {
 	if launch == nil || launch.command != nil || launch.directory != "" || len(launch.config) == 0 {
 		return errors.New("native launch has already been staged or is incomplete")
 	}
@@ -405,7 +406,7 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 			return errors.New("native staging lost its captured ordinary physical graph")
 		}
 	}
-	if launch.external == nil {
+	if launch.external == nil && launch.ownedNode == nil {
 		identifier, err := randomHex(16)
 		if err != nil {
 			return err
@@ -416,7 +417,7 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 	if launch.external != nil && launch.external.physical != nil {
 		endpoint = "" // The native owner grants sockets; no endpoint-wide allow rule.
 	}
-	if runtime.GOOS == "windows" && launch.external == nil {
+	if runtime.GOOS == "windows" && launch.external == nil && launch.ownedNode == nil {
 		capture, err := captureDesktopNodePhysical(launch)
 		if err != nil {
 			return err
@@ -434,7 +435,11 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 	owned := false
 	defer func() {
 		if !owned {
-			_ = cleanupDesktopNodeLaunch(launch)
+			if launch.ownedNode != nil {
+				resultErr = errors.Join(resultErr, a.discardDesktopOwnedNodeUnstarted(launch))
+			} else {
+				_ = cleanupDesktopNodeLaunch(launch)
+			}
 		}
 	}()
 	if err = writeDesktopRuntimeFile(launch, "sing-box.json", launch.config, false); err != nil {
@@ -449,6 +454,25 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 	}
 	if err = writeDesktopRuntimeFile(launch, "capture.json", capture, false); err != nil {
 		return err
+	}
+	if launch.ownedNode != nil {
+		if err = stageDesktopOwnedNodeInputs(a, launch); err != nil {
+			return err
+		}
+		packageRoot, err := desktopOwnedNodePackageRoot()
+		if err != nil {
+			return err
+		}
+		command, err := desktopOwnedNodeDescriptor(launch, packageRoot, desktopNativeEnvironment(os.Environ(), root, launch.profileID, ""))
+		if err != nil {
+			return err
+		}
+		launch.command = command
+		owned = true
+		clear(launch.config)
+		clear(launch.metadata)
+		launch.config, launch.metadata = nil, nil
+		return nil
 	}
 	var args []string
 	if runtime.GOOS == "windows" {
@@ -528,6 +552,28 @@ func stopDesktopNodeRuntime(a *app, cmd *exec.Cmd) (bool, error) {
 		return false, nil
 	}
 	owner, ok := raw.(*desktopNodeLaunch)
+	if ok && owner != nil && owner.ownedNode != nil {
+		if cmd != nil && owner.command != cmd {
+			return true, errors.New("native Router cleanup belongs to another command")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err := a.retireDesktopOwnedNode(ctx, owner); err != nil {
+			return true, err
+		}
+		if _, err := os.Lstat(owner.directory); !errors.Is(err, os.ErrNotExist) {
+			if err != nil {
+				return true, err
+			}
+			if err := cleanupDesktopNodeLaunch(owner); err != nil {
+				return true, err
+			}
+		}
+		if current, exists := desktopNodeOwners.Load(a); !exists || current != owner {
+			return true, errors.New("native Router cleanup lost its retained runtime")
+		}
+		return true, nil
+	}
 	if ok && owner != nil && owner.tor != nil {
 		return true, stopDesktopTorRuntime(a, owner, cmd)
 	}
@@ -604,6 +650,15 @@ func finishDesktopNodeRuntime(a *app) error {
 		clear(owner.external.source)
 		clear(owner.external.capture)
 		owner.external.mu.Unlock()
+	}
+	if owner.ownedNode != nil {
+		owner.workspaceMu.Lock()
+		clear(owner.config)
+		clear(owner.metadata)
+		clear(owner.ownedNode.source)
+		owner.config, owner.metadata = nil, nil
+		owner.ownedNode.source, owner.ownedNode.ready = nil, nil
+		owner.workspaceMu.Unlock()
 	}
 	if owner.directoryRoot != nil {
 		_ = owner.directoryRoot.Close()

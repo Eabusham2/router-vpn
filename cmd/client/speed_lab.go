@@ -283,6 +283,9 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 	if err := r.Context().Err(); err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, nil, err
 	}
+	if err := a.guardDesktopOwnedNodeTemporary(q, snapshot); err != nil {
+		return speedLabPath{}, speedLabMeasurement{}, nil, err
+	}
 	if strings.EqualFold(strings.TrimSpace(q.Topology), "external") {
 		q.preparedExternal, err = a.prepareSpeedLabExternalPath(q, nil)
 		if err != nil {

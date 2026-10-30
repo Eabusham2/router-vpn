@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -384,12 +385,19 @@ func (owner *desktopNodeMTUOwner) drain() error {
 }
 
 func desktopNodeProcessDone(launch *desktopNodeLaunch) <-chan struct{} {
-	if launch == nil || launch.command == nil || launch.command.Process == nil {
+	if launch == nil || launch.command == nil || launch.command.Process == nil && !desktopOwnedNodeCreated(launch) {
 		return nil
 	}
 	launch.nodeWaitOnce.Do(func() {
 		launch.nodeWaitDone = make(chan struct{})
-		go func() { _ = launch.command.Wait(); close(launch.nodeWaitDone) }()
+		go func() {
+			if process := desktopOwnedNodeProcess(launch); process != nil {
+				_, _ = process.Wait(context.Background())
+			} else {
+				_ = launch.command.Wait()
+			}
+			close(launch.nodeWaitDone)
+		}()
 	})
 	return launch.nodeWaitDone
 }
@@ -424,6 +432,9 @@ func prepareDesktopNodeStop(a *app, command *exec.Cmd) error {
 		return nil
 	}
 	launch, ok := raw.(*desktopNodeLaunch)
+	if ok && launch != nil && launch.ownedNode != nil {
+		return a.prepareDesktopOwnedNodeStop(launch, command)
+	}
 	if !ok || launch == nil || launch.external != nil || launch.mtuSession == "" || launch.command == nil || launch.command.Process == nil {
 		return nil
 	}

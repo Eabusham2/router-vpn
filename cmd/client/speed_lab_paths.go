@@ -80,6 +80,9 @@ type speedLabPathIdentity struct {
 	Tor             *desktopNodeLaunch
 	TorSession      string
 	TorEntry        *desktopTorPredecessorCapture
+	Node            *desktopNodeLaunch
+	NodeSession     string
+	NodeSource      string
 	Execution       string
 	Options         [3]bool
 }
@@ -199,6 +202,17 @@ func captureSpeedLabIdentity(a *app) (speedLabPathIdentity, speedLabPath, error)
 		} else if profile.External != nil && desktopTorProtocol(profile.External.Protocol) {
 			return speedLabPathIdentity{}, speedLabPath{}, errors.New("active Tor Speed Lab path has no captured native owner")
 		}
+	} else if raw, exists := desktopNodeOwners.Load(a); exists {
+		launch, ok := raw.(*desktopNodeLaunch)
+		if ok && launch != nil && launch.ownedNode != nil {
+			proof, err := a.readDesktopOwnedNodeReady(launch, false)
+			if err != nil || launch.command != command || launch.profileID != profile.ID || launch.external != nil || launch.tor != nil {
+				return speedLabPathIdentity{}, speedLabPath{}, errors.Join(err, errors.New("active Router Speed Lab path lost its exact native owner"))
+			}
+			identity.Node, identity.NodeSession, identity.NodeSource = launch, proof.SessionID, proof.SourceSHA256
+			identity.ProfileToken = desktopOwnedNodeProfileToken(profile)
+			path.Description = "actual captured native Router path with selected DNS, source, process and interface proof"
+		}
 	}
 	if err := validateSpeedLabIdentity(a, identity); err != nil {
 		return speedLabPathIdentity{}, speedLabPath{}, err
@@ -208,7 +222,8 @@ func captureSpeedLabIdentity(a *app) (speedLabPathIdentity, speedLabPath, error)
 
 func validateSpeedLabIdentity(a *app, identity speedLabPathIdentity) error {
 	if identity.External != nil && (identity.External.external == nil || identity.External.tor != nil || identity.Tor != nil) ||
-		identity.Tor != nil && (identity.Tor.tor == nil || identity.Tor.external != nil || identity.GraphOK || identity.TorEntry != identity.Tor.tor.predecessor || (identity.TorEntry == nil) != (identity.EntryToken == "")) {
+		identity.Tor != nil && (identity.Tor.tor == nil || identity.Tor.external != nil || identity.GraphOK || identity.TorEntry != identity.Tor.tor.predecessor || (identity.TorEntry == nil) != (identity.EntryToken == "")) ||
+		identity.Node != nil && (identity.Node.ownedNode == nil || identity.Node.external != nil || identity.Node.tor != nil || identity.External != nil || identity.Tor != nil || identity.GraphOK) {
 		return errors.New("Speed Lab identity mixes incompatible native path owners")
 	}
 	session := sessionTrackerFor(a).snapshot(0)
@@ -219,6 +234,9 @@ func validateSpeedLabIdentity(a *app, identity speedLabPathIdentity) error {
 	st, command := a.state, a.cmd
 	profile, profileOK := a.profileByIDLocked(identity.RouterID)
 	profileToken := liveMeasurementProfileToken(profile)
+	if identity.Node != nil {
+		profileToken = desktopOwnedNodeProfileToken(profile)
+	}
 	entryID := identity.Graph.EntryID
 	if identity.External != nil {
 		entryID = identity.External.external.entry.ID
@@ -268,6 +286,15 @@ func validateSpeedLabIdentity(a *app, identity speedLabPathIdentity) error {
 		}
 		if identity.TorSession == "" || proof.SessionID != identity.TorSession || identity.Execution == "" || identity.Execution != desktopTorExecution(proof.Policy.Execution) {
 			return errors.New("Speed Lab result belongs to a different Tor execution")
+		}
+	}
+	if identity.Node != nil {
+		if raw, exists := desktopNodeOwners.Load(a); !exists || raw != identity.Node || identity.Node.command != identity.Command || identity.Node.profileID != identity.RouterID {
+			return errors.New("Speed Lab result belongs to a replacement native Router process")
+		}
+		proof, err := a.readDesktopOwnedNodeReady(identity.Node, false)
+		if err != nil || proof.SessionID != identity.NodeSession || proof.SourceSHA256 != identity.NodeSource || identity.NodeSession == "" || identity.NodeSource == "" {
+			return errors.Join(err, errors.New("Speed Lab result belongs to a changed native Router source"))
 		}
 	}
 	return nil
