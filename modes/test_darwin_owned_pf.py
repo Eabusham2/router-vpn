@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import tempfile
+import types
 import unittest
 from unittest.mock import patch
 
@@ -22,7 +23,10 @@ class OwnedDarwinPF(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='darwin-owned-policy-')
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
+        # macOS temporary paths can retain /var -> /private/var. Capture the
+        # physical fixture root before the real no-follow private traversal.
+        # Caller-supplied symlinks remain rejected by the production helper.
+        self.root = Path(self.temporary.name).resolve(strict=True)
         (self.root/'run').mkdir(mode=0o700)
         self.selected = {'id': 'direct-tor', 'node_kind': 'external', 'endpoint': '198.51.100.44',
                          'external': {'protocol': 'tor'}, 'kill_switch_policy': 'always',
@@ -123,6 +127,26 @@ class OwnedDarwinPF(unittest.TestCase):
         else:
             self.fail('unexpected PF fixture operation '+repr(arguments))
         return subprocess.CompletedProcess(arguments, 0, result, '')
+
+    def test_temporary_parent_alias_keeps_real_fixture_and_private_path_rejection(self):
+        physical = self.root/'physical-temp'
+        physical.mkdir(mode=0o700)
+        alias = self.root/'temp-alias'
+        alias.symlink_to(physical, target_is_directory=True)
+        temporary = types.SimpleNamespace(name=str(alias), cleanup=lambda: None)
+        independent = OwnedDarwinPF('test_actual_dispatch_captures_empty_baseline_and_reasserts_without_session')
+        try:
+            with patch.object(tempfile, 'TemporaryDirectory', return_value=temporary):
+                independent.setUp()
+            self.assertEqual(physical, independent.root, 'temporary PF fixture retained its symlink parent spelling')
+            self.assertEqual(physical, D._linux.root_dir())
+            for unsafe in (alias, alias/'run'):
+                with self.subTest(unsafe=unsafe), patch.dict(os.environ, HOMEVPN_ROOT=str(unsafe)):
+                    with self.assertRaisesRegex(RuntimeError, 'symlink private'):
+                        D._linux.root_dir()
+            independent.test_actual_dispatch_captures_empty_baseline_and_reasserts_without_session()
+        finally:
+            independent.doCleanups()
 
     def test_actual_dispatch_captures_empty_baseline_and_reasserts_without_session(self):
         self.assertEqual(D.darwin_apply(), 0)
