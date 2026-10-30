@@ -125,8 +125,10 @@ run_test("ios/RouterVPN/test_connection_profile_store_fail_closed.py")
 # fails. No bespoke delete/rename writer may bypass that contract.
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidConnectionProfileStore.java",
-    "AndroidPrivateFileStore.read(file, MAX_STORE)",
+    "AndroidPrivateFileStore.read(source, MAX_STORE)",
     "AndroidPrivateFileStore.write(file, raw, MAX_STORE)",
+    "AndroidPrivateFileStore.remove(legacyFile, MAX_STORE)",
+    "nodes.restoreSelection(originalSelection)",
     "nodes.importBundle(originalBundle)",
 )
 forbid(
@@ -135,15 +137,27 @@ forbid(
     "FileOutputStream",
     "requirePrivateRegularFile",
 )
-run_test("android/test_android_connection_profile_store_contract.py")
+run_test("android/test_android_connection_profiles_contract.py")
 run_test("android/test_android_node_store_transaction_contract.py")
 
 # MTU adoption remains a two-phase live/session transaction and persistence
 # failure must restore the live interface/in-memory state. Runtime-profile MTU
 # edits are disposable pre-connect state, but still reject path redirection and
 # restore earlier files if a later adoption fails.
-require("cmd/client/mtu_retest.go", "mtuRetestSnapshot", "rollbackMTULiveResult", "restoreMTUMeasurementFields")
-require("cmd/client/mtu_retest_test.go", "stale", "rollback")
+require(
+    "cmd/client/mtu_retest.go",
+    "mtuRetestSnapshot",
+    "failMTURetestWithLiveRollback",
+    "restoreMTULiveSnapshot",
+    "return live.Owner.Restore()",
+    "MTU rollback requires its retained kernel owner",
+    "restoreMTUMeasurementFields",
+)
+require(
+    "cmd/client/mtu_retest_test.go",
+    "TestMTURetestRejectsStaleSessionBeforeApplyOrPersistence",
+    "TestMTURetestPersistenceFailureRollsBackLiveAndInMemoryResult",
+)
 require(
     "modes/prepare-runtime-profile.py",
     "runtime profile file changed during open",
@@ -161,9 +175,9 @@ require(
 require("modes/run-combined.sh", "prepare-runtime-profile.py", "runtime-pids.py")
 forbid("modes/run-combined.sh", 'cp -a "$SOURCE" "$CONF"', "for p in root.glob('*.json')")
 
-# Background process ownership is recovery state too. Every launcher that starts
-# long-lived children must use the verified PID registry (PID + process-start
-# + command identity) rather than trusting reusable raw numeric PID files.
+# Background process ownership is recovery state too. Long-lived children use
+# verified PID records (birth + command identity); native wrappers additionally
+# capture an immutable child token and re-prove it before each later signal.
 require(
     "modes/runtime-pids.py",
     "process_start",
@@ -197,22 +211,36 @@ for rel in ("modes/run-mode.sh", "modes/run-max.sh", "modes/run-pq.sh", "modes/r
 
 require(
     "modes/native-multihop-darwin.sh",
-    'verified-mode "$ROOT" "$PID_MODE"',
+    'OWNER_HELPER="$SCRIPT_DIR/native-wrapper-owner.py"',
+    '"$OWNER_HELPER" capture "$child"',
+    '"$OWNER_HELPER" stop "$CHILD_TOKEN"',
+    '"$OWNER_HELPER" recorded "$ROOT" "$PID_MODE"',
     'record "$ROOT" "$PID_MODE" "$child"',
     "could not prove ownership of native macOS multihop process",
 )
 forbid("modes/native-multihop-darwin.sh", "native-multihop.pid", "PID_FILE")
+require(
+    "modes/test_native_wrapper_ownership.py",
+    '"native-multihop-darwin.sh"',
+    "replacement identity received the later TERM signal",
+    "retired process identity was signalled",
+)
 
 require(
     "modes/stop-mode.sh",
-    'verified "$ROOT"',
+    'verified-strict "$ROOT"',
     'clear "$ROOT"',
+    "wait_for_owned_exit",
+    "retaining PID ownership registry for recovery",
+    "strict kill switch remains held for recovery",
     "refusing broad process-name cleanup",
 )
 forbid("modes/stop-mode.sh", 'cat "$RUN"/*.pids', "pkill -f")
 require(
     "modes/test_stop_mode_pid_ownership.py",
-    "legacy/raw PID registry",
+    "malformed registry was erased after failed ownership proof",
+    "valid registry was erased beside malformed peer",
+    "strict failure must not guess at process ownership",
     "kill_calls ==",
     "Verified central stop-mode PID ownership tests: OK",
 )
@@ -742,6 +770,7 @@ for test in (
     "server/scripts/test_verified_regular_read.py",
     "modes/test_runtime_pids.py",
     "modes/test_stop_mode_pid_ownership.py",
+    "modes/test_native_wrapper_ownership.py",
     "deploy/test_darwin_pf_journal.py",
     "modes/test_runtime_config.py",
     "modes/test_prepare_runtime_profile.py",
