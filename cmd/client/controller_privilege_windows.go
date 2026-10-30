@@ -31,6 +31,7 @@ var windowsOwnedCapture atomic.Pointer[windowsOwnedController]
 type windowsOwnedController struct {
 	parent, self           *windowscontroller.Process
 	parentImage, selfImage *windowscontroller.Image
+	protectedSelf          *windowscontroller.ProtectedShellImage
 	powerShell             *windowscontroller.Image
 	modeSource             []common.Mode
 	pipe                   *windowscontroller.Pipe
@@ -76,6 +77,12 @@ func prepareNativeOwnedController(arguments []string) (_ *ownedDesktopController
 	}
 	capture.selfImage, err = windowscontroller.PinCurrentImage()
 	if err != nil {
+		return nil, err
+	}
+	capture.protectedSelf, err = windowscontroller.PinProtectedShellImage(capture.selfImage)
+	if err != nil {
+		// A partial namespace/image capture remains in this owner for the
+		// checked preparation teardown; an error never discards its handles.
 		return nil, err
 	}
 	capture.self, err = windowscontroller.OpenProcess(uint32(os.Getpid()))
@@ -137,7 +144,7 @@ func prepareNativeOwnedController(arguments []string) (_ *ownedDesktopController
 	if err = capture.pinDataDirectory(); err != nil {
 		return nil, err
 	}
-	raw, err := readPrivateRuntimeSnapshot(filepath.Join(capture.dataRoot, "client.json"), maxPrivateStoreBytes)
+	raw, err := capture.readInitialConfiguration()
 	if err != nil {
 		return nil, err
 	}
@@ -183,6 +190,20 @@ func prepareNativeOwnedController(arguments []string) (_ *ownedDesktopController
 	go func() { <-capture.ctx.Done(); close(capture.done) }()
 	return &ownedDesktopController{processID: os.Getpid(), accessToken: credentials.AccessToken, ownerToken: credentials.OwnerToken,
 		ownerDone: capture.done, pinnedTLS: identity, nativeOwner: capture}, nil
+}
+
+// The original peer, package and private directory have already been captured
+// before this read. Reprove the high-side current image's protected namespace
+// immediately before consuming private bytes, while its full owner is retained.
+func (c *windowsOwnedController) readInitialConfiguration() ([]byte, error) {
+	if c == nil || c.ctx == nil || c.self == nil || c.parent == nil || c.selfImage == nil ||
+		c.protectedSelf == nil || c.dataRoot == "" || len(c.directories) == 0 {
+		return nil, errors.New("the Windows controller has no protected current-image configuration owner")
+	}
+	if err := errors.Join(c.ctx.Err(), c.protectedSelf.Verify(), c.self.VerifyImage(c.selfImage), c.parent.Alive()); err != nil {
+		return nil, err
+	}
+	return readPrivateRuntimeSnapshot(filepath.Join(c.dataRoot, "client.json"), maxPrivateStoreBytes)
 }
 
 func (c *windowsOwnedController) captureLayout() error {
@@ -516,6 +537,12 @@ func (c *windowsOwnedController) Close() error {
 			if image != nil {
 				c.closeErr = errors.Join(c.closeErr, image.Close())
 			}
+		}
+		// Application shutdown joins its captured children before retiring
+		// this controller owner. Its bootstrap observers have joined above;
+		// retain the independently duplicated self pins through that boundary.
+		if c.protectedSelf != nil {
+			c.closeErr = errors.Join(c.closeErr, c.protectedSelf.Close())
 		}
 		windowsOwnedCapture.CompareAndSwap(c, nil)
 		if c.privateOwner != nil {

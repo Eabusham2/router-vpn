@@ -32,6 +32,8 @@ REQUIRED = (
     "TestLocalControllerNativeOwnerRevokesWritesButRetainsPinnedDrain",
     "TestLocalControllerNativeOwnerOwnsConfigurationAndClose",
     "TestWindowsOwnedControllerPrivateRootRetainsNamespace",
+    "TestWindowsOwnedControllerProtectedSelfBeforeConfiguration",
+    "TestWindowsOwnedControllerProtectedSelfRetirement",
 )
 CASES = ("installed-eof", "portable-eof", "portable-outer-eof", "installed-extra-byte", "foreign-layout",
          "unsafe-config", "code-hardlink", "config-hardlink", "private-public-read",
@@ -95,6 +97,15 @@ def mutants():
          "captured controller private root allowed namespace replacement",
          once(capture, "windowsRuntimeReadControl|windowsRuntimeReadAttributes|syscall.FILE_LIST_DIRECTORY",
               "windowsRuntimeReadControl|windowsRuntimeReadAttributes")),
+        (capture_name, "initial-private-self-proof", REQUIRED[8],
+         "private configuration bytes escaped a retired protected self capture",
+         once(capture,
+              "errors.Join(c.ctx.Err(), c.protectedSelf.Verify(), c.self.VerifyImage(c.selfImage), c.parent.Alive())",
+              "errors.Join(c.ctx.Err(), c.self.VerifyImage(c.selfImage), c.parent.Alive())")),
+        (capture_name, "protected-self-before-worker-join", REQUIRED[9],
+         "protected self pins retired before the captured worker joined",
+         once(capture, "\t\tc.workers.Wait()",
+              "\t\tif c.protectedSelf != nil { c.closeErr = errors.Join(c.closeErr, c.protectedSelf.Close()) }\n\t\tc.workers.Wait()")),
     )
 
 

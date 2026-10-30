@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"router-vpn/internal/common"
@@ -52,6 +54,9 @@ func windowsOwnedNativeChild() error {
 	capture, ok := owner.nativeOwner.(*windowsOwnedController)
 	if !ok {
 		return errors.New("actual child did not adopt the Windows owner")
+	}
+	if capture.protectedSelf == nil || capture.protectedSelf.Verify() != nil {
+		return errors.New("actual Windows child did not retain its protected current image before private configuration")
 	}
 	user, err := windowsRuntimeCurrentUser()
 	if err != nil || user != capture.desktop.SID {
@@ -441,6 +446,129 @@ func TestWindowsOwnedControllerPrivateRootRetainsNamespace(t *testing.T) {
 	if err != nil || os.SameFile(before, after) {
 		t.Fatal("released controller data fixture did not replace its directory identity", err)
 	}
+}
+
+// The full installed/Portable test above owns the real bootstrap composition.
+// This fixture isolates its actual initial private-read method with real image,
+// namespace, process and private-file handles so stale proof cannot be hidden
+// by a later successful handshake or configuration parser rejection.
+func windowsOwnedPrivateReadFixture(t *testing.T) (*windowsOwnedController, []byte) {
+	t.Helper()
+	root := t.TempDir()
+	capture := &windowsOwnedController{dataRoot: root}
+	capture.ctx, capture.cancel = context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		if err := capture.Close(); err != nil {
+			t.Error("private-read fixture retained cleanup failure", err)
+		}
+	})
+	var err error
+	capture.selfImage, err = windowscontroller.PinCurrentImage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture.protectedSelf, err = windowscontroller.PinProtectedShellImage(capture.selfImage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture.self, err = windowscontroller.OpenProcess(uint32(os.Getpid()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Separate retained references deliberately use the live fixture process;
+	// only the full native entry test asserts an independently created parent.
+	capture.parent, err = windowscontroller.OpenProcess(uint32(os.Getpid()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ensurePrivateRuntimeDirectory(root); err != nil {
+		t.Fatal(err)
+	}
+	if err := capture.pinDataDirectory(); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("{\"listen\":\"127.0.0.1:7777\"}\n")
+	if err := os.WriteFile(filepath.Join(root, "client.json"), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	return capture, data
+}
+
+func TestWindowsOwnedControllerProtectedSelfBeforeConfiguration(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		end  func(*windowsOwnedController) error
+		want error
+	}{
+		{"closed-mapping", func(c *windowsOwnedController) error { return c.protectedSelf.Close() }, windowscontroller.ErrClosed},
+		{"closed-original", func(c *windowsOwnedController) error { return c.parent.Close() }, windowscontroller.ErrClosed},
+		{"closed-self", func(c *windowsOwnedController) error { return c.self.Close() }, windowscontroller.ErrClosed},
+		{"cancelled-owner", func(c *windowsOwnedController) error { c.cancel(); return nil }, context.Canceled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			capture, expected := windowsOwnedPrivateReadFixture(t)
+			before, err := capture.readInitialConfiguration()
+			if err != nil || !bytes.Equal(before, expected) {
+				t.Fatal("actual protected self could not read its captured private file", err)
+			}
+			if err := test.end(capture); err != nil {
+				t.Fatal(err)
+			}
+			if data, err := capture.readInitialConfiguration(); !errors.Is(err, test.want) || len(data) != 0 {
+				t.Fatal("private configuration bytes escaped a retired protected self capture", err)
+			}
+		})
+	}
+	t.Run("missing-mapping", func(t *testing.T) {
+		capture, _ := windowsOwnedPrivateReadFixture(t)
+		retained := capture.protectedSelf
+		capture.protectedSelf = nil
+		defer func() { capture.protectedSelf = retained }()
+		if data, err := capture.readInitialConfiguration(); err == nil || len(data) != 0 {
+			t.Fatal("private configuration admitted no protected current-image owner", err)
+		}
+	})
+}
+
+func TestWindowsOwnedControllerProtectedSelfRetirement(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		capture, _ := windowsOwnedPrivateReadFixture(t)
+		release := make(chan struct{})
+		releaseWorker := func() {
+			select {
+			case <-release:
+			default:
+				close(release)
+			}
+		}
+		defer releaseWorker()
+		capture.workers.Add(1)
+		go func() { defer capture.workers.Done(); <-release }()
+		closed := make(chan error, 1)
+		go func() { closed <- capture.Close() }()
+		// Wait for actual retirement to revoke admission and block on the
+		// captured worker; no scheduling sleep or OS timeout proves this order.
+		synctest.Wait()
+		if !errors.Is(capture.ctx.Err(), context.Canceled) {
+			t.Fatal("protected self retirement did not revoke its owner")
+		}
+		select {
+		case err := <-closed:
+			t.Fatal("protected self retirement did not join its captured worker", err)
+		default:
+		}
+		if err := capture.protectedSelf.Verify(); err != nil {
+			t.Fatal("protected self pins retired before the captured worker joined", err)
+		}
+		releaseWorker()
+		synctest.Wait()
+		if err := <-closed; err != nil {
+			t.Fatal(err)
+		}
+		if err := capture.protectedSelf.Verify(); !errors.Is(err, windowscontroller.ErrClosed) {
+			t.Fatal("joined protected self retirement kept reusable namespace authority", err)
+		}
+	})
 }
 
 func TestWindowsOwnedControllerCodeAndPrivateACLPolicy(t *testing.T) {
