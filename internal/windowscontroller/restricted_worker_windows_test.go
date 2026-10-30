@@ -153,8 +153,10 @@ func fixtureSamePrimary(a, b TokenIdentity) bool {
 
 type fixtureRestrictedWorker struct {
 	api        *fixtureRestrictedAPI
+	directory  string
 	job        syscall.Handle
 	process    syscall.ProcessInformation
+	image      *Image
 	report     *os.File
 	parent     syscall.Token
 	privileges map[fixturePrivilegeLUID]uint32
@@ -163,7 +165,7 @@ type fixtureRestrictedWorker struct {
 func fixtureStartRestrictedDACLWorker(t *testing.T, api *fixtureRestrictedAPI, test string) *fixtureRestrictedWorker {
 	t.Helper()
 	directory := t.TempDir()
-	worker := &fixtureRestrictedWorker{api: api}
+	worker := &fixtureRestrictedWorker{api: api, directory: directory}
 	t.Cleanup(func() {
 		if err := worker.close(); err != nil {
 			t.Error("restricted DACL worker did not retire its exact native owners:", err)
@@ -206,6 +208,32 @@ func fixtureStartRestrictedDACLWorker(t *testing.T, api *fixtureRestrictedAPI, t
 	if identityErr != nil || privilegeErr != nil || !fixtureSamePrimary(parentIdentity, restrictedIdentity) || !maps.Equal(wanted, restrictedPrivileges) {
 		t.Fatal("derived primary token changed more than SeDebug privilege", identityErr, privilegeErr)
 	}
+	return fixtureStartPrimaryWorker(t, worker, token, test, fixtureRestrictedWorkerEnvironment, 2, func(actual syscall.Token) error {
+		identity, _, identityErr := readTokenIdentity(actual)
+		privileges, privilegeErr := fixtureTokenPrivileges(actual)
+		if identityErr != nil || privilegeErr != nil || !fixtureSamePrimary(parentIdentity, identity) || !maps.Equal(wanted, privileges) {
+			return errors.Join(identityErr, privilegeErr, errors.New("DACL worker changed its captured primary authority"))
+		}
+		return nil
+	})
+}
+
+// Both restricted fixtures use the same actual creation-time Job and exact
+// inherited handles. The caller independently validates the requested and
+// actual primary tokens before this owner resumes the returned initial thread.
+func fixtureStartPrimaryWorker(t *testing.T, worker *fixtureRestrictedWorker, token syscall.Token, test, marker string, maximum uint32, validate func(syscall.Token) error) *fixtureRestrictedWorker {
+	t.Helper()
+	if worker == nil || worker.api == nil || worker.parent == 0 || worker.directory == "" || token == 0 || maximum == 0 || maximum > 4 || validate == nil {
+		t.Fatal("restricted primary worker lost its captured creation authority")
+	}
+	api := worker.api
+	directory := worker.directory
+	parentIdentity, _, err := readTokenIdentity(worker.parent)
+	if err != nil || !parentIdentity.Primary {
+		t.Fatal("restricted primary worker lost its retained parent token", err)
+	}
+	var ok uintptr
+	var callErr error
 	err = withDescriptor(parentIdentity.SID, func(attributes *syscall.SecurityAttributes) error {
 		value, _, callErr := api.native.createJob.Call(uintptr(unsafe.Pointer(attributes)), 0)
 		worker.job = syscall.Handle(value)
@@ -217,7 +245,7 @@ func fixtureStartRestrictedDACLWorker(t *testing.T, api *fixtureRestrictedAPI, t
 	if err != nil {
 		t.Fatal(err)
 	}
-	limits := jobLimits{Flags: 0x2008 /* KILL_ON_JOB_CLOSE | ACTIVE_PROCESS */, ActiveProcesses: 2}
+	limits := jobLimits{Flags: 0x2008 /* KILL_ON_JOB_CLOSE | ACTIVE_PROCESS */, ActiveProcesses: maximum}
 	if unsafe.Sizeof(limits) != 144 {
 		t.Fatal("restricted fixture Job ABI changed")
 	}
@@ -228,7 +256,7 @@ func fixtureStartRestrictedDACLWorker(t *testing.T, api *fixtureRestrictedAPI, t
 	var observed jobLimits
 	var returned uint32
 	ok, _, callErr = api.queryJob.Call(uintptr(worker.job), 9, uintptr(unsafe.Pointer(&observed)), unsafe.Sizeof(observed), uintptr(unsafe.Pointer(&returned)))
-	if ok == 0 || returned != uint32(unsafe.Sizeof(observed)) || observed.Flags != limits.Flags || observed.ActiveProcesses != 2 {
+	if ok == 0 || returned != uint32(unsafe.Sizeof(observed)) || observed.Flags != limits.Flags || observed.ActiveProcesses != maximum {
 		t.Fatal(nativeError("restricted fixture Job limits readback", callErr))
 	}
 	writer, err := os.CreateTemp(directory, "dacl-worker-output-")
@@ -281,11 +309,18 @@ func fixtureStartRestrictedDACLWorker(t *testing.T, api *fixtureRestrictedAPI, t
 			t.Fatal(nativeError("restricted worker exact Job/handle attribute", callErr))
 		}
 	}
+	worker.image, err = PinCurrentImage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This is a native CreateProcessAsUser call with its returned initial
+	// thread retained. The caller-visible spelling selects only a suspended
+	// candidate; exact native image proof below precedes any child execution.
 	executable := fixtureExecutable(t)
 	application, _ := syscall.UTF16PtrFromString(executable)
 	command, _ := syscall.UTF16FromString(syscall.EscapeArg(executable) + " -test.run=^" + test + "$ -test.count=1 -test.timeout=20s -test.v")
 	var environment []uint16
-	for _, entry := range []string{fixtureRestrictedWorkerEnvironment + "=" + test, "SystemRoot=" + filepath.Dir(api.native.systemDirectory), "TEMP=" + directory, "TMP=" + directory, "GORACE=atexit_sleep_ms=0"} {
+	for _, entry := range []string{marker + "=" + test, "SystemRoot=" + filepath.Dir(api.native.systemDirectory), "TEMP=" + directory, "TMP=" + directory, "GORACE=atexit_sleep_ms=0"} {
 		encoded, err := syscall.UTF16FromString(entry)
 		if err != nil {
 			t.Fatal(err)
@@ -324,11 +359,23 @@ func fixtureStartRestrictedDACLWorker(t *testing.T, api *fixtureRestrictedAPI, t
 	if err := syscall.OpenProcessToken(worker.process.Process, syscall.TOKEN_QUERY, &actual); err != nil {
 		t.Fatal(err)
 	}
-	identity, _, actualIdentityErr := readTokenIdentity(actual)
-	privileges, actualPrivilegeErr := fixtureTokenPrivileges(actual)
+	validationErr := validate(actual)
 	closeErr := actual.Close()
-	if actualIdentityErr != nil || actualPrivilegeErr != nil || closeErr != nil || !fixtureSamePrimary(parentIdentity, identity) || !maps.Equal(wanted, privileges) {
-		t.Fatal("suspended worker did not retain its actual restricted primary token", actualIdentityErr, actualPrivilegeErr, closeErr)
+	if validationErr != nil || closeErr != nil {
+		t.Fatal("suspended worker did not retain its actual restricted primary token", validationErr, closeErr)
+	}
+	var duplicate syscall.Handle
+	if err := syscall.DuplicateHandle(^syscall.Handle(0), worker.process.Process, ^syscall.Handle(0), &duplicate, 0, false, syscall.DUPLICATE_SAME_ACCESS); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := adoptProcess(duplicate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofErr := verifySuspendedShellImage(api.native, proof, worker.image)
+	proofCloseErr := proof.Close()
+	if proofErr != nil || proofCloseErr != nil {
+		t.Fatal("restricted worker lost its exact captured image before resume", proofErr, proofCloseErr)
 	}
 	parentAfter, err := fixtureTokenPrivileges(worker.parent)
 	if err != nil || !maps.Equal(worker.privileges, parentAfter) {
@@ -427,5 +474,5 @@ func (worker *fixtureRestrictedWorker) close() error {
 		result = errors.Join(result, worker.report.Close())
 		worker.report = nil
 	}
-	return result
+	return errors.Join(result, worker.image.Close())
 }

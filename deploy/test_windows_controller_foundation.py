@@ -57,6 +57,7 @@ REQUIRED = (
     "TestWindowsControllerFoundationProtectedShellDescriptor",
     "TestWindowsControllerFoundationProtectedShellGlobalCapture",
     "TestWindowsControllerFoundationProtectedShellWrongMapping",
+    "TestWindowsControllerFoundationProtectedShellPrimaryMedium",
 )
 # A real linked token belongs to a separate native fixture. Its exact test is
 # still mandatory in the independent UAC workflow step and fails when absent;
@@ -73,6 +74,7 @@ def sources():
                 "system_image_policy.go", "system_image_policy_test.go",
                 "protected_shell_policy.go", "protected_shell_policy_test.go",
                 "protected_shell_windows.go", "protected_shell_windows_test.go",
+                "protected_shell_medium_windows_test.go",
                 "machine_directories_windows.go", "machine_directories_windows_test.go",
                 "fixture_windows_test.go", "foundation_windows_test.go", "capture_windows_test.go",
                 "suspended_launch_windows.go", "suspended_launch_windows_test.go",
