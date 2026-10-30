@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "repository": "apple-oss-distributions/xnu",
+  "tag": "xnu-11417.140.69",
+  "commit": "43a90889846e00bfb5cf1d255cdc0a701a1e05a4",
+  "status": "Unmodified primary-source private userland ABI headers; this is not a public SDK API. Native kernel acceptance is required.",
+  "files": {
+    "net/pfvar.h": {
+      "source": "bsd/net/pfvar.h",
+      "url": "https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/bsd/net/pfvar.h",
+      "sha256": "aeaaa90c761577247bfa0328bd4765512f787f5af9a56b9bb530030c90a692c9",
+      "git_blob": "691a4e711f5c8ec77184d575e4ffebb9ce41d772"
+    },
+    "libkern/tree.h": {
+      "source": "libkern/libkern/tree.h",
+      "url": "https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/libkern/libkern/tree.h",
+      "sha256": "ae6e463397b9fe9a0de1d509a5fda87d388da56010442302d18efe77efbdd4b1",
+      "git_blob": "f728efcf33a5cc46a7ecae09c77be4b626c11378"
+    },
+    "APPLE_LICENSE": {
+      "source": "APPLE_LICENSE",
+      "url": "https://github.com/apple-oss-distributions/xnu/blob/43a90889846e00bfb5cf1d255cdc0a701a1e05a4/APPLE_LICENSE",
+      "sha256": "e5881019d8766c1e88a5fe1dbca4ba40c78011d41fcb18f6e9f50df60182685b",
+      "git_blob": "fe81a60cae982c042a69f97623b427666c455093"
+    }
+  }
+}

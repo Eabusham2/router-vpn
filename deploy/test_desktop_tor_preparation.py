@@ -144,6 +144,11 @@ class DesktopPTPreparation(unittest.TestCase):
             startup.assert_called_once_with(self.vendor.resolve())
             node_capture.assert_called_once_with(self.vendor.resolve())
             generated = {call.args[1]: call.args[2] for call in writes.call_args_list}
+            for name, raw in PREP.PFABI.checked_files(ROOT/'internal/mobiletor').items():
+                self.assertEqual(generated['routervpn/mobiletor/'+name], raw)
+                self.assertEqual((self.vendor/'routervpn/mobiletor'/name).read_bytes(), raw)
+            self.assertEqual(PREP.PFABI.checked_files(self.vendor/'routervpn/mobiletor'),
+                             PREP.PFABI.checked_files(ROOT/'internal/mobiletor'))
             for name in (*PREP.PT_TEMPLATES, *PREP.BOX_TEMPLATES, *PREP.PEER_TEMPLATES):
                 self.assertNotIn('cmd/sing-box/routervpn_'+name.removesuffix('.tmpl'), generated)
             for name, relative in PREP.PEER_TEMPLATES.items():

@@ -3,16 +3,19 @@
 package mobiletor
 
 /*
+#cgo CFLAGS: -I${SRCDIR}/desktop_socket_darwin_pfabi
 #include <errno.h>
 #include <fcntl.h>
-#include <net/pfvar.h>
+#include "desktop_socket_darwin_pfabi.h"
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
-// The native guardian test uses the host SDK's actual PF ABI. A single FILTER
+// The native guardian test uses the pinned Apple private userland PF ABI.
+// Source identity, license and version bounds are in pfabi/UPSTREAM.json.
+// A single FILTER
 // transaction avoids relying on pfctl -R, whose loader can include additional
 // rulesets. This probe never flushes PF or changes an unselected ruleset.
 static int routervpn_darwin_pf_filter_probe(const char *anchor,
@@ -100,6 +103,9 @@ var desktopDarwinPFProbeAnchor = regexp.MustCompile(`^com\.apple/zzz\.t-[a-f0-9]
 // Neither shipping arguments nor graph data can select its test namespace.
 func desktopDarwinPFProbeTransaction(ctx context.Context, anchor string, address netip.Addr, operation int) error {
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if _, err := desktopDarwinPFCapturedABI(); err != nil {
 		return err
 	}
 	if !desktopDarwinPFProbeAnchor.MatchString(anchor) || !address.Is4() || operation < 0 || operation > 2 {

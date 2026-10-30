@@ -157,6 +157,11 @@ func TestDesktopPFAnchorProbeFilterOnlyRetirement(t *testing.T) {
 	if os.Geteuid() != 0 || desktopDarwinTestFixture.Nonce == "" {
 		t.Fatal("actual captured Darwin filter-only retirement probe is required")
 	}
+	identity, err := desktopDarwinPFCapturedABI()
+	if err != nil {
+		t.Fatal("the single-filter probe requires its captured kernel/header boundary", err)
+	}
+	t.Log("private PF ABI qualification:", identity)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	anchor := desktopDarwinTestForeignNamespace()

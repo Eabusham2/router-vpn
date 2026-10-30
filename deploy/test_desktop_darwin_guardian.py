@@ -65,6 +65,16 @@ def checked_sources(source: Path):
         source, records = UID.checked_sources(source)
         target, package = source/'routervpn/mobiletor', './routervpn/mobiletor'
         common = source/'routervpn/common'
+    expected_abi = UID.PREP.PFABI.checked_files(ROOT/'internal/mobiletor')
+    actual_abi = UID.PREP.PFABI.checked_files(target)
+    if actual_abi != expected_abi:
+        raise ValueError('Darwin guardian lost its exact pinned PF header/license dependency')
+    for name, raw in expected_abi.items():
+        records[name] = hashlib.sha256(raw).hexdigest()
+    verifier = ROOT/'deploy/darwin-pf-abi.py'
+    if verifier.is_symlink() or not verifier.is_file():
+        raise ValueError('Darwin guardian lost its pinned PF source verifier')
+    records['dependency/darwin-pf-abi.py'] = hashlib.sha256(verifier.read_bytes()).hexdigest()
     # The kernel ACL parser/readback is part of this ownership boundary too.
     for path in sorted((ROOT/'internal/common').glob('owned_path_acl*.go')):
         if path.name.endswith('_test.go'):
@@ -220,7 +230,7 @@ def root_fixture(source_binary: Path, expected_digest: str, case=None):
         if match is None:
             raise ValueError('PF did not return an owned enable-reference token')
         token = match[1]
-        selector = '^'+native_case_name(case)+'$' if case else '^Test(DesktopDarwinGuardian|DesktopPFReadback)'
+        selector = '^('+native_case_name(case)+'|TestDesktopPFABIRejectsUnprovedKernel)$' if case else '^Test(DesktopDarwinGuardian|DesktopPFReadback|DesktopPFABI)'
         started = True
         process = subprocess.Popen([str(binary), '-test.run='+selector, '-test.v',
                                     '-test.count=1', '-test.timeout=12m'],
@@ -297,6 +307,12 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
             'desktop_socket_darwin_readback.go', 'desktop_socket_darwin_pf_probe_cgo.go',
             'desktop_socket_darwin_pf_probe_nocgo.go'}.issubset(before):
         raise ValueError('The exact native PF guardian source/test closure is incomplete')
+    if not {'desktop_socket_pf_abi.go', 'desktop_socket_darwin_pf_abi.go',
+            'desktop_socket_pf_abi_test.go', 'desktop_socket_darwin_pfabi.h',
+            'desktop_socket_darwin_pfabi/net/pfvar.h',
+            'desktop_socket_darwin_pfabi/libkern/tree.h',
+            'desktop_socket_darwin_pfabi/APPLE_LICENSE'}.issubset(before):
+        raise ValueError('The native PF kernel/header identity boundary is incomplete')
     captured = dict(os.environ, GOWORK='off', CGO_ENABLED='1')
     if captured.get('GOOS', 'darwin') != 'darwin':
         raise ValueError('The native Darwin gate cannot execute a cross-compiled package')
@@ -321,6 +337,8 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
         wanted = (case,) if case else CASES+READBACK_CASES
         if any('--- PASS: '+native_case_name(name)+' (' not in output for name in wanted) or '--- SKIP:' in output:
             raise ValueError('Darwin guardian gate did not execute every required native boundary')
+        if '--- PASS: TestDesktopPFABIRejectsUnprovedKernel (' not in output:
+            raise ValueError('Darwin guardian omitted the private ABI version-rejection boundary')
         if case is None:
             for name in ('ChannelFragmentsAndDescriptorClosure', 'CurrentFreshnessAndStateScope', 'UIDAbsenceWait', 'UIDObserverProtocol'):
                 if '--- PASS: TestDesktopDarwinGuardian'+name+' (' not in output:

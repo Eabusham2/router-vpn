@@ -33,6 +33,7 @@ STRATEGY = load('prepare-mobile-strategy')
 RELAY = load('prepare-relay-core')
 DESKTOP_MTU = load('prepare-desktop-mtu')
 TOR = load('prepare-mobile-tor')
+PFABI = load('darwin-pf-abi')
 SHARED = tuple(dict.fromkeys((*RELAY.PACKAGES, 'dnsmeasure', 'mobilemtu', 'mtuprobe')))
 PURE = ('common', 'mobiletor', 'awgpolicy', 'nativeopenvpn')
 PT_OWNER = 'routervpn-desktop-tor-source.json'
@@ -126,13 +127,14 @@ def inputs():
              ROOT/'mobile/toroutbound/box.go.tmpl', ROOT/'mobile/toroutbound/box_test.go.tmpl',
              ROOT/'mobile/toroutbound/padding_box.go.tmpl', ROOT/'mobile/toroutbound/padding_box_test.go.tmpl',
              ROOT/'deploy/prepare-desktop-mtu.py', ROOT/'deploy/prepare-mobile-tor.py',
-             ROOT/'deploy/test_desktop_tor_preparation.py',
+             ROOT/'deploy/test_desktop_tor_preparation.py', ROOT/'deploy/darwin-pf-abi.py',
              ROOT/'cmd/client/desktop_tor_comparison_native.go', ROOT/'cmd/client/multihop_exact_json.go',
              ROOT/'mobile/toroutbound/network.go.tmpl', ROOT/'mobile/toroutbound/upstream.go.tmpl',
              ROOT/'mobile/toroutbound/dns_adapter.go.tmpl', *pt_inputs(),
              *sorted((ROOT/'mobile/desktop').glob('*.tmpl'))]
     for package in (*PURE, 'dnsmeasure'):
         files += sorted((ROOT/'internal'/package).glob('*.go'))
+    files += [ROOT/'internal/mobiletor'/name for name in PFABI.checked_files(ROOT/'internal/mobiletor')]
     return sorted(dict.fromkeys(files), key=lambda path: path.relative_to(ROOT).as_posix())
 
 
@@ -491,6 +493,7 @@ def prepare_node_capture(vendor):
 
 def prepare(vendor, go='go', *, env=None):
     vendor = checked_vendor(vendor)
+    pfabi = PFABI.checked_files(ROOT/'internal/mobiletor')
     controller_contract = comparison_client_contract()
     prepare_desktop_pt(vendor, go, env=env)
     # These pure policy types are shared by the Box's external and Tor proof
@@ -508,10 +511,12 @@ def prepare(vendor, go='go', *, env=None):
                     'desktop_socket_windows_network_test.go', 'desktop_socket_windows_wfp_traffic_test.go',
                     'desktop_socket_source_privileged_test.go', 'desktop_socket_linux_guardian_test.go',
                     'desktop_socket_darwin_guardian_test.go', 'desktop_socket_pf_inventory_test.go',
-                    'desktop_socket_pf_readback_test.go', 'desktop_socket_pf_filter_test.go')):
+                    'desktop_socket_pf_readback_test.go', 'desktop_socket_pf_filter_test.go', 'desktop_socket_pf_abi_test.go')):
                 continue
             raw = relocated_shared_source(path.read_bytes())
             write(vendor, 'routervpn/'+package+'/'+path.name, raw)
+    for name, raw in pfabi.items():
+        write(vendor, 'routervpn/mobiletor/'+name, raw)
     for path in sorted((ROOT/'internal/dnsmeasure').glob('*.go')):
         write(vendor, 'experimental/libbox/routervpn/dnsmeasure/'+path.name, path.read_bytes())
     for name in ('box.go', 'box_test.go'):
