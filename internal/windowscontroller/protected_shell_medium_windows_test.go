@@ -22,7 +22,24 @@ const fixtureMediumStationEnvironment = "ROUTERVPN_CONTROLLER_MEDIUM_STATION"
 // consent. A constructed restricted primary token is not evidence of an
 // interactive linked-token or cross-account launch.
 func TestWindowsControllerFoundationProtectedShellPrimaryMedium(t *testing.T) {
-	const test = "TestWindowsControllerFoundationProtectedShellPrimaryMedium"
+	fixtureProtectedShellPrimaryMedium(t, 4 /* LUA_TOKEN */)
+}
+
+// Flags zero is the documented explicit-restriction constructor. This separate
+// case isolates LUA_TOKEN's additional transformation while retaining every
+// actual Medium/user/group/privilege predicate and the same owned desktop,
+// suspended creation, image proof and Job lifetime. Neither case is a linked
+// token or interactive UAC acceptance.
+func TestWindowsControllerFoundationConstructedPrimaryMediumWithoutLUA(t *testing.T) {
+	fixtureProtectedShellPrimaryMedium(t, 0)
+}
+
+func fixtureProtectedShellPrimaryMedium(t *testing.T, flags uint32) {
+	t.Helper()
+	if flags != 0 && flags != 4 {
+		t.Fatal("primary-Medium fixture refused an unrelated token transformation")
+	}
+	test := t.Name()
 	api := fixtureRestrictedAPIs(t)
 	if marker := os.Getenv(fixtureMediumWorkerEnvironment); marker != "" {
 		if marker != test {
@@ -58,7 +75,7 @@ func TestWindowsControllerFoundationProtectedShellPrimaryMedium(t *testing.T) {
 		if err := capture.Verify(); err != nil {
 			t.Fatal("actual primary-Medium process cannot reverify its independently retained global image", err)
 		}
-		t.Log("Constructed primary-Medium process, deny-only Administrators, only SeChangeNotify and no impersonation: actual global directory/link read ACLs, mapping identity and captured image proof passed. This is not linked-token, interactive or cross-account UAC acceptance.")
+		t.Logf("Constructed primary-Medium process (constructor flags=0x%x), deny-only Administrators, only SeChangeNotify and no impersonation: actual global directory/link read ACLs, mapping identity and captured image proof passed. This is not linked-token, interactive or cross-account UAC acceptance.", flags)
 		return
 	}
 	if marker := os.Getenv(fixtureMediumStationEnvironment); marker == "" {
@@ -113,7 +130,8 @@ func TestWindowsControllerFoundationProtectedShellPrimaryMedium(t *testing.T) {
 			t.Error("primary-Medium fixture changed its parent token or privileges", identityErr, statisticsErr, integrityErr, privilegeErr)
 		}
 	}()
-	token := fixtureConstructMediumPrimary(t, api, worker.parent, original, statistics, worker.privileges)
+	t.Logf("Constructed primary-Medium token variant: constructor flags=0x%x; actual authority, private desktop and exact suspended child checks are unchanged", flags)
+	token := fixtureConstructMediumPrimary(t, api, worker.parent, original, statistics, worker.privileges, flags)
 	worker.inspect = func(process syscall.ProcessInformation, image *Image) {
 		fixtureInspectMediumStartup(t, api, token, process, image, original.SessionID)
 	}
@@ -168,8 +186,11 @@ func fixturePrimaryMediumIdentity(api *fixtureRestrictedAPI, token syscall.Token
 	return identity, nil
 }
 
-func fixtureConstructMediumPrimary(t *testing.T, api *fixtureRestrictedAPI, parent syscall.Token, original TokenIdentity, before tokenStatistics, privileges map[fixturePrivilegeLUID]uint32) syscall.Token {
+func fixtureConstructMediumPrimary(t *testing.T, api *fixtureRestrictedAPI, parent syscall.Token, original TokenIdentity, before tokenStatistics, privileges map[fixturePrivilegeLUID]uint32, flags uint32) syscall.Token {
 	t.Helper()
+	if flags != 0 && flags != 4 {
+		t.Fatal("primary-Medium token refused an unrelated restriction flag")
+	}
 	name, _ := syscall.UTF16PtrFromString("SeChangeNotifyPrivilege")
 	var notify fixturePrivilegeLUID
 	ok, _, callErr := api.lookup.Call(0, uintptr(unsafe.Pointer(name)), uintptr(unsafe.Pointer(&notify)))
@@ -199,7 +220,7 @@ func fixtureConstructMediumPrimary(t *testing.T, api *fixtureRestrictedAPI, pare
 	}
 	disable := syscall.SIDAndAttributes{Sid: admin}
 	var token syscall.Token
-	ok, _, callErr = api.restrict.Call(uintptr(parent), 4 /* LUA_TOKEN */, 1, uintptr(unsafe.Pointer(&disable)),
+	ok, _, callErr = api.restrict.Call(uintptr(parent), uintptr(flags), 1, uintptr(unsafe.Pointer(&disable)),
 		uintptr(len(remove)), uintptr(unsafe.Pointer(&remove[0])), 0, 0, uintptr(unsafe.Pointer(&token)))
 	runtime.KeepAlive(admin)
 	runtime.KeepAlive(disable)

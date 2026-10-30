@@ -65,6 +65,7 @@ REQUIRED = (
     "TestWindowsControllerFoundationProtectedShellBootstrapChangedCapture",
     "TestWindowsControllerFoundationProtectedShellBootstrapToken",
     "TestWindowsControllerFoundationProtectedShellMediumLabelPolicy",
+    "TestWindowsControllerFoundationConstructedPrimaryMediumWithoutLUA",
 )
 # A real linked token belongs to a separate native fixture. Its exact test is
 # still mandatory in the independent UAC workflow step and fails when absent;
