@@ -113,8 +113,9 @@ func readPrivateRegular(path string, limit int64) ([]byte, error) {
 
 // atomicWritePrivate publishes one private file without an interval containing a
 // truncated/partial authoritative value. All fallible permission/write/fsync
-// work happens on the same-directory temporary file before rename. Once rename
-// succeeds the new bytes are authoritative, so a best-effort directory fsync is
+// work happens on the same-directory temporary file before replacement. Windows
+// requests write-through replacement rather than an ordinary path rename. Once
+// replacement succeeds the new bytes are authoritative, so a directory fsync is
 // deliberately not returned as a false post-commit failure to callers that may
 // otherwise roll RAM back while disk already contains the new value.
 func atomicWritePrivateTargetUnchanged(path string, before os.FileInfo) error {
@@ -184,7 +185,7 @@ func atomicWritePrivate(path string, data []byte) error {
 	if err := atomicWritePrivateTargetUnchanged(path, targetBefore); err != nil {
 		return err
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := replacePrivateStoreFile(tmpPath, path); err != nil {
 		return err
 	}
 	committed = true

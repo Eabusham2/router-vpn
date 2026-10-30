@@ -57,9 +57,11 @@ require(
     "os.SameFile(opened, current)",
     "os.CreateTemp",
     "tmp.Sync()",
-    "os.Rename(tmpPath, path)",
+    "replacePrivateStoreFile(tmpPath, path)",
     "atomicWritePrivateTargetUnchanged",
 )
+require("cmd/client/private_store_replace_windows.go", "windowsPrivateReplaceExisting|windowsPrivateWriteThrough", "MoveFileExW", "replaceWindowsPrivateStoreFile(source, target, moveWindowsPrivateStoreFile)")
+require("cmd/client/private_store_replace_other.go", "os.Rename(source, target)")
 require(
     "cmd/client/main.go",
     "beginMutationOperation",

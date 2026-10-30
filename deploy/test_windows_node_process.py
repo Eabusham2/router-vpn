@@ -28,6 +28,10 @@ TAG = "routervpn_controller_windows_native"
 NATIVE_TESTS = (
     "TestWindowsOwnedNodeProcessActualRetirement",
     "TestWindowsOwnedNodeProcessRejectsMissingController",
+    "TestWindowsPrivateStoreWriteThroughReplace",
+    "TestWindowsPrivateStoreWriteThroughFailureAndRetry",
+    "TestWindowsPrivateStoreWriteThroughFlags",
+    "TestWindowsPrivateStoreRejectsInvalidReplacement",
 )
 SHARED_TESTS = (
     "TestDesktopNodeProcessArguments",
@@ -63,7 +67,9 @@ ARGUMENT_CASES = (
     "upper-transfer", "zero-mtu", "low-mtu", "large-mtu", "noncanonical-mtu",
     "flag-injection",
 )
-EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES))
+EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES),
+            "TestWindowsPrivateStoreWriteThroughReplace/unicode",
+            "TestWindowsPrivateStoreWriteThroughReplace/long-portable-path")
 REQUIRED_SOURCES = (
     "cmd/client/desktop_node_process.go",
     "cmd/client/desktop_node_process_other.go",
@@ -76,6 +82,8 @@ REQUIRED_SOURCES = (
     "cmd/client/desktop_node_protection.go", "cmd/client/desktop_node_protection_windows.go",
     "cmd/client/controller_privilege_windows.go",
     "cmd/client/private_runtime_permissions_windows.go",
+    "cmd/client/private_store.go", "cmd/client/private_store_replace_windows.go",
+    "cmd/client/private_store_replace_other.go", "cmd/client/private_store_replace_windows_test.go",
     "cmd/client/bundled_native.go", "cmd/client/bundled_amnezia.go",
     "cmd/client/main.go", "cmd/client/ui.html", "cmd/client/logical_ui.js",
     "internal/windowscontroller/gui_windows.go",
@@ -126,6 +134,8 @@ def mutants():
     journal = (ROOT / journal_file).read_text(encoding="utf-8")
     release_file = "cmd/client/desktop_node_journal_release.go"
     release = (ROOT / release_file).read_text(encoding="utf-8")
+    private_file = "cmd/client/private_store_replace_windows.go"
+    private = (ROOT / private_file).read_text(encoding="utf-8")
     once = NATIVE.replace_once
     alive = NATIVE.function_mutant(original, "func (owner *desktopNodeProcessOwner) Alive()",
         "\tif err := owner.controller(); err != nil {\n\t\treturn err\n\t}\n", "")
@@ -161,6 +171,9 @@ def mutants():
         (release_file, "release-accepts-off-callback", "TestDesktopNodeJournalReleaseRejectsSubstitutedNativeBarrier/off",
          "substituted native callback gained durable removal permission",
          once(release, 'change.Action != "release" || change.Previous == nil', 'false || change.Previous == nil')),
+        (private_file, "private-publication-without-write-through", "TestWindowsPrivateStoreWriteThroughFlags",
+         "private replacement omitted write-through or permitted deferred/cross-volume publication",
+         once(private, "windowsPrivateReplaceExisting|windowsPrivateWriteThrough", "windowsPrivateReplaceExisting")),
     )
 
 
