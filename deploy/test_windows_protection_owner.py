@@ -51,17 +51,36 @@ JOURNAL_REQUIRED = (
     "TestWindowsProtectionJournalRecoveryCopiesCapturedTargets",
     "TestWindowsProtectionJournalRejectsUncheckedControllerReplacement",
 )
+JOURNAL_STORE_REQUIRED = (
+    "TestWindowsProtectionJournalHeaderIdentity",
+    "TestWindowsProtectionJournalHeaderStrictEncoding",
+    "TestWindowsProtectionJournalStoreActualLifecycle",
+    "TestWindowsProtectionJournalStoreExclusiveAndNamespace",
+    "TestWindowsProtectionJournalStoreRejectsReplacedFiles",
+    "TestWindowsProtectionJournalStoreOriginalUserAndData",
+    "TestWindowsProtectionJournalStoreTornSlotIsReadOnly",
+    "TestWindowsProtectionJournalStorePendingWriteRetriesSameOwner",
+    "TestWindowsProtectionJournalStoreRejectsCreatorAndCancellation",
+    "TestWindowsProtectionJournalStoreInitialAuthorityAndACL",
+    "TestWindowsProtectionJournalStoreConcurrentClose",
+)
 REQUIRED_SUBCASES = {
     REQUIRED[6]: ("record-write", "record-delete", "record-rename", "root-rename", "parent-rename"),
     REQUIRED[8]: ("session", "source", "config", "network", "generation"),
     REQUIRED[12]: ("foreign-owner", "broad-write", "inherited", "legacy-record", "unknown-journal",
                    "foreign-lock", "linked-parent"),
+    JOURNAL_STORE_REQUIRED[3]: ("header-write", "lock-delete", "slot-rename", "root-rename", "parent-rename", "data-rename"),
+    JOURNAL_STORE_REQUIRED[4]: ("files.json", "journal.lock", "slot-0.json", "slot-1.json"),
+    JOURNAL_STORE_REQUIRED[5]: ("desktop-user", "private-directory", "unknown-file"),
+    JOURNAL_STORE_REQUIRED[6]: ("initial", "later"),
+    JOURNAL_STORE_REQUIRED[9]: ("unproved-absence", "user-owner", "broad-write", "inherited", "legacy-file"),
 }
 
 
 def sources():
     expected = {"record.go", "record_test.go", "owner_windows.go", "owner_windows_test.go",
-                "path_windows.go", "security_windows.go", "journal_record.go", "journal_record_test.go"}
+                "path_windows.go", "security_windows.go", "journal_record.go", "journal_record_test.go",
+                "journal_header.go", "journal_header_test.go", "journal_store_windows.go", "journal_store_windows_test.go"}
     owned = sorted(TARGET.glob("*.go"))
     if {path.name for path in owned} != expected:
         raise ValueError("Windows protection owner source/test closure changed")
@@ -87,6 +106,7 @@ def mutants():
     read = lambda name: (TARGET / name).read_text(encoding="utf-8")
     once, function = NATIVE.replace_once, NATIVE.function_mutant
     owner, path, security = read("owner_windows.go"), read("path_windows.go"), read("security_windows.go")
+    journal, header = read("journal_store_windows.go"), read("journal_header.go")
     changed_bytes = once(owner, "read > OwnerRecordLimit || !bytes.Equal(buffer[:read], owner.body)",
                          "read > OwnerRecordLimit || false && !bytes.Equal(buffer[:read], owner.body)")
     changed_bytes = once(changed_bytes, "if err != nil || actual != owner.record {",
@@ -124,6 +144,33 @@ def mutants():
          function(path, "func pinProtectionDirectory(",
                   "syscall.FILE_LIST_DIRECTORY|protectionReadAttributes|protectionReadControl",
                   "protectionReadAttributes|protectionReadControl")),
+        ("journal_header.go", "canonical-native-header", JOURNAL_STORE_REQUIRED[1],
+         "noncanonical journal header encoding was admitted",
+         once(header, "if err != nil || !bytes.Equal(raw, canonical) {",
+              "if err != nil || false && !bytes.Equal(raw, canonical) {")),
+        ("journal_store_windows.go", "replaced-journal-file", JOURNAL_STORE_REQUIRED[4],
+         "journal adopted identical bytes under a replacement native file identity",
+         once(journal, "if store.header != expected || store.header.validate() != nil {",
+              "if false && store.header != expected || store.header.validate() != nil {")),
+        ("journal_store_windows.go", "durable-journal-lock", JOURNAL_STORE_REQUIRED[2],
+         "journal close deleted or rewrote its durable native owner",
+         function(journal, "func (store *ProtectionJournal) Close()", "return errors.Join(store.closeErr, failure)",
+                  "if store.lock != nil && failure == nil { _ = os.Remove(store.lock.path) }; return errors.Join(store.closeErr, failure)")),
+        ("journal_store_windows.go", "same-pending-journal-write", JOURNAL_STORE_REQUIRED[7],
+         "journal failed-write retry adopted another pending operation",
+         once(journal, "} else if !bytes.Equal(store.pending.body, body) {",
+              "} else if false && !bytes.Equal(store.pending.body, body) {")),
+        ("journal_store_windows.go", "unacknowledged-journal-write", JOURNAL_STORE_REQUIRED[7],
+         "failed durable append was silently acknowledged by Snapshot",
+         function(journal, "func (store *ProtectionJournal) Snapshot(", "if store.pending != nil {",
+                  "if false && store.pending != nil {")),
+        ("journal_store_windows.go", "torn-journal-append", JOURNAL_STORE_REQUIRED[6],
+         "incomplete journal acquired ordinary append authority",
+         once(once(journal,
+                   "previousSHA256 != store.current.SHA256 || store.current.Incomplete {",
+                   "previousSHA256 != store.current.SHA256 || false && store.current.Incomplete {"),
+              "selection.SHA256 != previousSHA256 || selection.Incomplete {",
+              "selection.SHA256 != previousSHA256 || false && selection.Incomplete {")),
     )
 
 
@@ -147,7 +194,7 @@ def execute(go="go"):
                                      "-test.timeout=90s", "-test.v"], cwd=ROOT, env=captured, timeout=105)
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if (status or "--- SKIP:" in output or "DATA RACE" in output or
-                any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *JOURNAL_REQUIRED))):
+                any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *JOURNAL_REQUIRED, *JOURNAL_STORE_REQUIRED))):
             raise ValueError("Protection owner baseline did not execute every native ownership case")
         for test, names in REQUIRED_SUBCASES.items():
             if any("--- PASS: " + test + "/" + name + " (" not in output for name in names):
@@ -177,8 +224,8 @@ def execute(go="go"):
             print("Rejected production Windows protection owner mutant:", name, flush=True)
         if sources() != before:
             raise ValueError("Protection owner shipping sources changed during the actual native gate")
-    print("Native protection preparation passed five strict-owner-record groups, nine intent-record groups, ten native ownership groups, "
-          "seven existing/untrusted-state cases and nine production negative controls. "
+    print("Native protection preparation passed five strict-owner-record groups, nine intent-record groups, two native-file header groups, "
+          "ten preparation ownership groups, nine durable journal storage groups and fifteen production negative controls. "
           "Firewall mutation, transfer, recovery and ordinary-path activation remain separate requirements.", flush=True)
 
 
