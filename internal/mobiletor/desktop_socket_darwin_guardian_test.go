@@ -1081,7 +1081,7 @@ func TestDesktopDarwinGuardianKernelWrongUIDAndPrivatePeer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rootSocket.Close()
+	t.Cleanup(func() { rootSocket.Close() })
 	raw, _ := rootSocket.(syscall.Conn).SyscallConn()
 	binding, _ := policy.Select(context.Background(), policy.capture, "udp", remote)
 	if policy.Bind(context.Background(), policy.capture, binding, "udp4", raw) == nil {
@@ -1090,14 +1090,52 @@ func TestDesktopDarwinGuardianKernelWrongUIDAndPrivatePeer(t *testing.T) {
 	if _, err := broker.DialContext(context.Background(), "udp4", netip.AddrPortFrom(remote.Addr(), remote.Port()+1).String()); err == nil {
 		t.Fatal("an uncaptured private port acquired physical egress")
 	}
-	policy.Cancel()
-	<-policy.monitorDone
-	copy := *policy.pf
-	copy.permits = make(map[string]desktopDarwinPFPermit)
-	grant := DesktopSocketGrant{Capture: policy.capture, Binding: binding, SocketID: strings.Repeat("9", 32), Network: "udp", Local: netip.MustParseAddrPort(rootSocket.LocalAddr().String()), Remote: remote, Sequence: 1}
+	// The first half exercises the actual broker/source admission. Retire that
+	// owner completely before the deliberate PF-only negative below: cancelling
+	// its policy while borrowing its leaf lets the broker concurrently Close it.
+	closeCtx, stopClose := context.WithTimeout(context.Background(), 8*time.Second)
+	err = broker.Close(closeCtx)
+	stopClose()
+	if err != nil {
+		t.Fatal("native broker did not join before the independent UID rule test", err)
+	}
+	select {
+	case <-broker.joined:
+	default:
+		t.Fatal("independent UID rule test borrowed an unjoined native broker")
+	}
+	capture := policy.capture
+	capture.NetworkID = desktopDarwinTestFixture.Nonce
+	if capture.NetworkID == policy.capture.NetworkID {
+		t.Fatal("independent UID rule fixture did not capture a fresh generation")
+	}
+	account, uid, err := desktopDarwinAllocateAccount(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var isolated *desktopDarwinPF
+	t.Cleanup(func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 4*time.Second)
+		defer stop()
+		if isolated != nil {
+			if err := isolated.close(cleanup); err != nil {
+				t.Error("independent UID rule fixture retained its exact PF/account recovery owner", err)
+				return
+			}
+		}
+		if err := desktopDarwinRetireAccount(account, uid); err != nil {
+			t.Error("independent UID rule fixture did not retire its exact disabled identity", err)
+		}
+	})
+	isolated, err = desktopDarwinNewPF(capture, uid, account, policy.options)
+	if err != nil {
+		t.Fatal("independent UID rule fixture did not establish its exact native ownership", err)
+	}
+	binding.Owner = desktopDarwinOwner(capture, uid, account, 1)
+	grant := DesktopSocketGrant{Capture: capture, Binding: binding, SocketID: strings.Repeat("9", 32), Network: "udp", Local: netip.MustParseAddrPort(rootSocket.LocalAddr().String()), Remote: remote, Sequence: 1}
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	if _, err := copy.grant(ctx, grant); err != nil {
+	if _, err := isolated.grant(ctx, grant); err != nil {
 		t.Fatal(err)
 	}
 	rootSocket.WriteTo([]byte("wrong exact tuple UID"), net.UDPAddrFromAddrPort(remote))
@@ -1106,7 +1144,7 @@ func TestDesktopDarwinGuardianKernelWrongUIDAndPrivatePeer(t *testing.T) {
 	if n, _, err := rootSocket.ReadFrom(buffer); err == nil || n != 0 {
 		t.Fatal("the actual PF rule admitted the same tuple from another UID", n, err)
 	}
-	if err := copy.revoke(ctx, grant); err != nil {
+	if err := isolated.revoke(ctx, grant); err != nil {
 		t.Fatal(err)
 	}
 }
