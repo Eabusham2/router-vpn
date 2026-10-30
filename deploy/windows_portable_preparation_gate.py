@@ -28,9 +28,11 @@ def mutations(native):
     configuration = "internal/windowsapp/portable_config.go"
     files = "internal/windowsapp/portable_security_windows.go"
     publication = "internal/windowsapp/portable_prepare_windows.go"
+    temporary = "internal/windowsapp/temporary_windows.go"
     config_source = (ROOT / configuration).read_text(encoding="utf-8")
     file_source = (ROOT / files).read_text(encoding="utf-8")
     publish_source = (ROOT / publication).read_text(encoding="utf-8")
+    temporary_source = (ROOT / temporary).read_text(encoding="utf-8")
     return (
         (configuration, "reset-existing-settings", REQUIRED[0],
          "Portable relocation replaced saved field",
@@ -49,6 +51,10 @@ def mutations(native):
          native.replace_once(publish_source,
                              "if (before == nil) != (current == nil) || before != nil &&",
                              "if false && (before == nil) != (current == nil) || false && before != nil &&")),
+        (temporary, "metadata-only-temporary-owner", REQUIRED[8] + "/private",
+         "live Portable temporary capture allowed its directory to move",
+         native.replace_once(temporary_source, "0x00020000|0x80|syscall.FILE_LIST_DIRECTORY",
+                             "0x00020000|0x80")),
     )
 
 

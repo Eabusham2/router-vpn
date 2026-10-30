@@ -311,7 +311,9 @@ func (c *windowsOwnedController) pinDataDirectory() error {
 	if err != nil {
 		return err
 	}
-	handle, err := syscall.CreateFile(name, windowsRuntimeReadControl|windowsRuntimeReadAttributes, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, nil, syscall.OPEN_EXISTING, syscall.FILE_FLAG_OPEN_REPARSE_POINT|syscall.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	// Attribute-only access does not enforce the no-delete share. Retain actual
+	// directory-read access so this captured private root cannot be renamed.
+	handle, err := syscall.CreateFile(name, windowsRuntimeReadControl|windowsRuntimeReadAttributes|syscall.FILE_LIST_DIRECTORY, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, nil, syscall.OPEN_EXISTING, syscall.FILE_FLAG_OPEN_REPARSE_POINT|syscall.FILE_FLAG_BACKUP_SEMANTICS, 0)
 	if err != nil {
 		return err
 	}

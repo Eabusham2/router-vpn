@@ -31,6 +31,7 @@ REQUIRED = (
     "TestOwnedWindowsCatalogRejectsUnboundedOrAmbiguousSource",
     "TestLocalControllerNativeOwnerRevokesWritesButRetainsPinnedDrain",
     "TestLocalControllerNativeOwnerOwnsConfigurationAndClose",
+    "TestWindowsOwnedControllerPrivateRootRetainsNamespace",
 )
 CASES = ("installed-eof", "portable-eof", "installed-extra-byte", "foreign-layout",
          "unsafe-config", "code-hardlink", "config-hardlink", "private-public-read",
@@ -90,6 +91,10 @@ def mutants():
         (permissions_name, "public-code-writer", REQUIRED[1] + "/public-write",
          "immutable Windows package admitted the wrong code ACL",
          once(permissions, "readOnly := publicRead && (", "readOnly := publicRead || (")),
+        (capture_name, "metadata-only-private-root", REQUIRED[7],
+         "captured controller private root allowed namespace replacement",
+         once(capture, "windowsRuntimeReadControl|windowsRuntimeReadAttributes|syscall.FILE_LIST_DIRECTORY",
+              "windowsRuntimeReadControl|windowsRuntimeReadAttributes")),
     )
 
 

@@ -375,6 +375,66 @@ func TestWindowsOwnedControllerLauncherFixture(t *testing.T) {
 	}
 }
 
+func TestWindowsOwnedControllerPrivateRootRetainsNamespace(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "private")
+	if err := ensurePrivateRuntimeDirectory(root); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture := &windowsOwnedController{dataRoot: root}
+	closePins := func() error {
+		var result error
+		for index, file := range capture.directories {
+			if file != nil {
+				err := file.Close()
+				result = errors.Join(result, err)
+				if err == nil {
+					capture.directories[index] = nil
+				}
+			}
+		}
+		return result
+	}
+	defer func() {
+		if err := closePins(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if err := capture.pinDataDirectory(); err != nil {
+		t.Fatal(err)
+	}
+	// The private root stays writable. No open descendant file may mask a
+	// metadata-only directory handle in the following namespace check.
+	state := filepath.Join(root, "mutable-state.json")
+	if err := os.WriteFile(state, []byte("{}\n"), 0600); err != nil {
+		t.Fatal("captured controller data lost mutable state", err)
+	}
+	if err := os.Remove(state); err != nil {
+		t.Fatal(err)
+	}
+	moved := root + ".retired"
+	if err := os.Rename(root, moved); err == nil {
+		restoreErr := os.Rename(moved, root)
+		t.Fatal("captured controller private root allowed namespace replacement", restoreErr)
+	}
+	if err := closePins(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(root, moved); err != nil {
+		t.Fatal("joined controller data retirement retained its namespace lock", err)
+	}
+	if err := ensurePrivateRuntimeDirectory(root); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(root)
+	if err != nil || os.SameFile(before, after) {
+		t.Fatal("released controller data fixture did not replace its directory identity", err)
+	}
+}
+
 func TestWindowsOwnedControllerCodeAndPrivateACLPolicy(t *testing.T) {
 	user := windowsRuntimeTestUser(t)
 	for _, test := range []struct {

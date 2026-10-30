@@ -39,7 +39,10 @@ func capturePortableTemporary(dataRoot, desktop string) (_ *portableTemporary, f
 		if err != nil {
 			return nil, err
 		}
-		handle, err := syscall.CreateFile(name, 0x00020000|0x80, /* READ_CONTROL | FILE_READ_ATTRIBUTES */
+		// FILE_LIST_DIRECTORY makes the no-delete share participate in native
+		// sharing enforcement. An attributes-only handle can inspect an object
+		// while still allowing its pathname to be renamed underneath the owner.
+		handle, err := syscall.CreateFile(name, 0x00020000|0x80|syscall.FILE_LIST_DIRECTORY, /* READ_CONTROL | FILE_READ_ATTRIBUTES | FILE_LIST_DIRECTORY */
 			syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, nil, syscall.OPEN_EXISTING,
 			syscall.FILE_FLAG_OPEN_REPARSE_POINT|syscall.FILE_FLAG_BACKUP_SEMANTICS, 0)
 		if err != nil {
