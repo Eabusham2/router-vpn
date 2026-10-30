@@ -14,7 +14,7 @@ def load(name):
     return module
 
 class NativePolicyScope(unittest.TestCase):
-    def copied(self,name,stale=None):
+    def copied(self,name,stale=None,windows_text=False):
         module=load(name)
         with tempfile.TemporaryDirectory() as tmp, ExitStack() as mocks:
             vendor=Path(tmp);(vendor/'go.mod').write_text('module github.com/sagernet/sing-box\n')
@@ -31,11 +31,32 @@ class NativePolicyScope(unittest.TestCase):
                     prepared[hook]=mocks.enter_context(mock.patch.object(getattr(module,hook),'prepare'))
             if hasattr(module,'CORE'):
                 mocks.enter_context(mock.patch.object(module.subprocess,'check_output',return_value=module.CORE+'\n'))
+            if windows_text:
+                # Exercise the producer with the Windows default text newline
+                # behavior even on Linux. Byte writes remain actual filesystem
+                # writes, and every generated compiler is compared below.
+                write_text=Path.write_text
+                def native_windows_text(path,data,*args,**kwargs):
+                    if path.resolve().is_relative_to(vendor):
+                        kwargs.setdefault('newline','\r\n')
+                    return write_text(path,data,*args,**kwargs)
+                mocks.enter_context(mock.patch.object(Path,'write_text',native_windows_text))
             if stale=='foreign':
                 with self.assertRaises(ValueError):module.prepare(vendor)
                 self.assertEqual(parent.read_text(),'do not erase unknown test')
                 return
             module.prepare(vendor)
+            if windows_text:
+                for package in module.PACKAGES:
+                    for path in (ROOT/'internal'/package).glob('*.go'):
+                        if path.name=='core_config_test.go' or package=='applexray' and path.name=='preparation_test.go':continue
+                        expected=path.read_bytes()
+                        for source_package in module.PACKAGES:
+                            expected=expected.replace(('"router-vpn/internal/'+source_package+'"').encode(),
+                                ('"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+source_package+'"').encode())
+                        copied=vendor/'experimental/libbox/routervpn'/package/path.name
+                        self.assertEqual(copied.read_bytes(),expected,
+                            'Windows text translation changed the exact native compiler: '+package+'/'+path.name)
             # The relay copies policy here, then applies its native runtime
             # guards in prepare_native. Mobile applies both in prepare.
             for hook in ('OPENVPN_CLOSE','OPENVPN_REMOTE','HY2_DEADLINES'):
@@ -125,6 +146,7 @@ class NativePolicyScope(unittest.TestCase):
             self.assertEqual(calls.mock_calls[-1],mock.call.server_tor(vendor))
     def test_mobile_copy_does_not_export_parent_build_audits(self):self.copied('prepare-mobile-multihop.py')
     def test_relay_copy_does_not_export_parent_build_audits(self):self.copied('prepare-relay-core.py')
+    def test_relay_copy_preserves_exact_source_bytes_on_windows(self):self.copied('prepare-relay-core.py',windows_text=True)
     def test_owned_stale_parent_tests_are_removed(self):
         for name in ('prepare-mobile-multihop.py','prepare-relay-core.py'):self.copied(name,'old')
     def test_foreign_native_files_are_not_deleted(self):

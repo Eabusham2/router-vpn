@@ -76,12 +76,16 @@ def prepare(vendor):
                 parent_test.unlink()
         for path in (ROOT/'internal'/package).glob('*.go'):
             if path.name == 'core_config_test.go' or (package == 'applexray' and path.name == 'preparation_test.go'): continue
-            text = path.read_text()
+            # Native provenance compares the exact source bytes after import
+            # relocation. Text-mode writes translate LF to CRLF on Windows
+            # and make the copied compiler differ from its captured source.
+            content = path.read_bytes()
             for name in PACKAGES:
-                text = text.replace('"router-vpn/internal/'+name+'"','"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+name+'"')
+                content = content.replace(('"router-vpn/internal/'+name+'"').encode(),
+                    ('"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+name+'"').encode())
             target=output/path.name
             if target.is_symlink(): raise ValueError('Refusing a linked relay source destination')
-            target.write_text(text)
+            target.write_bytes(content)
     AMNEZIA.prepare(vendor)
     OPENVPN_REMOTE.prepare(vendor)
     for source in (ROOT/'mobile/relay').glob('*.tmpl'):
