@@ -28,6 +28,8 @@ func TestWindowsAppComposedSession(t *testing.T) {
 		t.Fatal("the native Windows Session gate requires its owned layout and case")
 	}
 	root, scenario := arguments[0], arguments[1]
+	protected := strings.HasPrefix(scenario, "protected-shell-")
+	scenario = strings.TrimPrefix(scenario, "protected-shell-")
 	portable := scenario == "portable-selftest" || scenario == "portable-outer-selftest"
 	packageRoot, dataRoot := root, root
 	if portable {
@@ -74,8 +76,15 @@ func TestWindowsAppComposedSession(t *testing.T) {
 		}
 		t.Fatalf("actual production Windows controller did not start: %v", startErr)
 	}
-	if !session.authenticated || !session.desktop.Primary || !session.desktop.Elevated || !session.desktop.Administrator || session.directController == nil {
+	if !session.authenticated || !session.desktop.Primary || !session.desktop.Elevated || !session.desktop.Administrator {
 		t.Fatal("native Session fixture did not capture its actual elevated test desktop")
+	}
+	if protected {
+		if session.directController != nil || session.controllerShell == nil || session.controllerShell.Verify() != nil {
+			t.Fatal("protected Session did not retain its exact Shell bootstrap mapping")
+		}
+	} else if session.directController == nil || session.controllerShell != nil {
+		t.Fatal("already-elevated Session did not preserve its exact direct Job path")
 	}
 	assertSessionSameFile(t, session.packageRoot, packageRoot)
 	assertSessionSameFile(t, session.dataRoot, dataRoot)
@@ -86,10 +95,7 @@ func TestWindowsAppComposedSession(t *testing.T) {
 	if !strings.HasPrefix(strings.ToLower(session.packageRoot), `\\?\volume{`) {
 		t.Fatal("native Session lost the captured local-volume package identity")
 	}
-	controller, err := session.directController.RetainProcess()
-	if err != nil {
-		t.Fatal(err)
-	}
+	controller := retainSessionControllerForTest(t, session)
 	defer controller.Close()
 	if controller.PID() != session.controller.PID() || controller.Alive() != nil {
 		t.Fatal("native Session did not retain its exact running controller")
@@ -106,6 +112,9 @@ func TestWindowsAppComposedSession(t *testing.T) {
 		}
 		if controller.Alive() != nil {
 			t.Fatal("cancelled Session retirement killed its unacknowledged controller")
+		}
+		if protected && session.controllerShell.Verify() != nil {
+			t.Fatal("cancelled Session retirement released its protected Shell mapping")
 		}
 		assertSessionCodePinned(t, filepath.Join(packageRoot, "client", "RouterVPN-Windows-ControllerTransport.cs"))
 		if err := session.RunUI(true); err == nil || len(session.guis) != 0 {
@@ -151,6 +160,9 @@ func TestWindowsAppComposedSession(t *testing.T) {
 	if !session.receipt || !session.joined || !session.closed {
 		t.Fatal("Session released code without its authenticated receipt and independent process join")
 	}
+	if protected && session.controllerShell.Verify() == nil {
+		t.Fatal("joined Session left its protected Shell mapping live")
+	}
 	code, err := controller.Wait(retire)
 	if err != nil || code != 0 {
 		t.Fatalf("the actual controller did not exit after checked cleanup: %d %v", code, err)
@@ -183,6 +195,105 @@ func TestWindowsAppComposedSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Log("shipping controller, captured App/Tray pipes, exact-volume code and checked retirement completed")
+	if protected {
+		t.Log("The production protected-Shell branch executed on the actual elevated fixture desktop; this is not Medium-token or interactive same-user/cross-account UAC acceptance.")
+	}
+}
+
+// Only the test observer reopens a PID. The production Session always keeps the
+// actual Shell creation handle. Its still-live original handle, creation time,
+// complete token and image independently bind this second observer before the
+// test uses it to verify that the original Session actually joined its owner.
+func retainSessionControllerForTest(t *testing.T, session *Session) *windowscontroller.Process {
+	t.Helper()
+	if session.directController != nil {
+		process, err := session.directController.RetainProcess()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return process
+	}
+	original := session.controller
+	if original == nil || original.Alive() != nil {
+		t.Fatal("protected Session lost its original live Shell process")
+	}
+	created, err := original.StartTimeUTCTicks()
+	identity, identityErr := original.Identity()
+	if err != nil || identityErr != nil {
+		t.Fatal("protected Session cannot prove its original process identity", err, identityErr)
+	}
+	process, err := windowscontroller.OpenProcess(original.PID())
+	if err != nil {
+		t.Fatal(err)
+	}
+	actualCreated, createdErr := process.StartTimeUTCTicks()
+	actualIdentity, actualErr := process.Identity()
+	if createdErr != nil || actualErr != nil || actualCreated != created || actualIdentity != identity ||
+		process.VerifyImage(session.controllerImage) != nil || original.Alive() != nil {
+		_ = process.Close()
+		t.Fatal("protected Session observer substituted another process owner", createdErr, actualErr)
+	}
+	return process
+}
+
+// The runner's test-only source overlay cancels the real startup immediately
+// after its authenticated public hello and before private credentials. This
+// exercises the production partial-Start and Close paths with an actual Shell
+// process. It does not replace normal Session startup or its baseline verdict.
+func TestWindowsAppProtectedCancelledStart(t *testing.T) {
+	arguments := flag.Args()
+	if len(arguments) != 2 || arguments[1] != "protected-shell-cancelled-start" {
+		t.Fatal("the cancelled protected Session requires its exact native layout")
+	}
+	operation, stop := context.WithTimeout(context.Background(), 50*time.Second)
+	defer stop()
+	session, startErr := Start(operation, false)
+	if session != nil {
+		t.Cleanup(func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+			defer cancel()
+			if err := session.Close(ctx); err != nil {
+				t.Error("cancelled protected Session retained an unjoined actual owner", err)
+			}
+		})
+	}
+	if !errors.Is(startErr, context.Canceled) || session == nil || session.controller == nil ||
+		session.controllerShell == nil || session.directController != nil || session.authenticated || session.client == nil ||
+		session.receipt || session.joined || session.closed || len(session.guis) != 0 {
+		t.Fatal("cancelled protected startup lost its actual pre-credential Shell owner", startErr)
+	}
+	if err := session.controllerShell.Verify(); err != nil {
+		t.Fatal("failed protected startup released its captured Shell mapping", err)
+	}
+	controller := retainSessionControllerForTest(t, session)
+	defer controller.Close()
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := session.Close(cancelled); err == nil || session.joined || session.closed {
+		t.Fatal("cancelled protected cleanup acknowledged an unjoined controller", err)
+	}
+	if err := session.controllerShell.Verify(); err != nil {
+		t.Fatal("failed controller join released its protected Shell mapping", err)
+	}
+	retire, finish := context.WithTimeout(context.Background(), 35*time.Second)
+	defer finish()
+	if err := session.Close(retire); err != nil || !session.joined || !session.closed || session.receipt {
+		t.Fatal("cancelled protected startup did not join its exact bootstrap owner", err)
+	}
+	if _, err := controller.Wait(retire); err != nil {
+		t.Fatal("cancelled protected startup acknowledged another process join", err)
+	}
+	if session.controllerShell.Verify() == nil {
+		t.Fatal("cancelled protected startup retained its mapping after the actual join")
+	}
+	file, err := os.OpenFile(filepath.Join(arguments[0], "router-vpn-client.exe"), os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal("joined protected startup left its actual controller image pinned", err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Log("Actual protected Shell child, pre-credential cancellation, failed-join owner retention and checked retry completed on the elevated fixture desktop.")
 }
 
 func assertSessionPortableData(t *testing.T, session *Session, packageRoot, dataRoot string) {

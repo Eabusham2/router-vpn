@@ -6,7 +6,9 @@ owners. Disposable installed/Portable layouts contain the separately compiled
 production cmd/client and actual App/Tray scripts; no router/node is imported
 or connected. The actual elevated CI desktop exercises the explicit already
 elevated launch path. Ordinary-user UAC, cross-account consent and real-device
-network/visual acceptance remain separate mandatory gates.
+network/visual acceptance remain separate mandatory gates. A separately compiled
+test-only branch overlay also exercises the production protected-Shell path on
+that same elevated desktop; it never substitutes for those token/consent gates.
 """
 from pathlib import Path
 import argparse
@@ -37,10 +39,15 @@ UPDATER_SPEC.loader.exec_module(UPDATER)
 TAG = "routervpn_windows_app_native"
 TEST = "TestWindowsAppComposedSession"
 ENTRY_TEST = "TestWindowsAppEntry"
+SHELL_CANCELLED_TEST = "TestWindowsAppProtectedCancelledStart"
+SHELL_CANCELLED_CASE = "protected-shell-cancelled-start"
+SHELL_CASES = ("protected-shell-installed-selftest", "protected-shell-portable-selftest",
+               "protected-shell-retirement-retry")
 DIAGNOSTIC_TAG = "routervpn_windows_main_diagnostic"
 DIAGNOSTIC_LOG = ".routervpn-main-diagnostic.log"
 ENTRY_CASES = ("installed-entry-selftest", "portable-outer-entry-selftest")
-PORTABLE_CASES = ("portable-selftest", "portable-outer-selftest", "portable-outer-entry-selftest")
+PORTABLE_CASES = ("portable-selftest", "portable-outer-selftest", "portable-outer-entry-selftest",
+                  "protected-shell-portable-selftest")
 CASES = ("installed-selftest", "portable-selftest", "portable-outer-selftest", *ENTRY_CASES, "retirement-retry",
          "foreign-launcher", "code-hardlink")
 
@@ -85,6 +92,8 @@ def sources():
     required = {"internal/windowsapp/session_windows.go", "internal/windowsapp/session_windows_test.go",
                 "internal/windowsapp/entry_windows.go", "internal/windowsapp/entry_windows_test.go",
                 "internal/windowsapp/entry_options.go", "internal/windowsapp/entry_options_test.go",
+                "internal/windowscontroller/protected_shell_windows.go",
+                "internal/windowscontroller/protected_bootstrap_windows.go",
                 "cmd/client/controller_privilege_windows.go", "cmd/client/main.go",
                 "cmd/client/controller_main_diagnostic_windows_test.go",
                 "internal/windowsapp/portable_prepare_windows.go", "internal/windowsapp/portable_security_windows.go",
@@ -199,7 +208,40 @@ def run_fixture(workspace, fixture, shipping, scenario, env):
 
 
 def fixture_test(scenario):
+    if scenario == SHELL_CANCELLED_CASE:
+        return SHELL_CANCELLED_TEST
     return ENTRY_TEST if scenario in ENTRY_CASES else TEST
+
+
+def protected_shell_overlay(*, cancelled=False):
+    """Exercise the actual protected branch, keeping the real elevated identity.
+
+    This changes only test-build branch selection. The captured original token,
+    protected mapping, ordinary Shell runas, full shipping high-side bootstrap,
+    actual GUI processes and exact teardown still execute. No production API,
+    environment or public argv can request this override. The optional second
+    build cancels after the real public hello, before private credentials.
+    """
+    source = (ROOT / "internal/windowsapp/session_windows.go").read_text(encoding="utf-8")
+    source = NATIVE.replace_once(source,
+        "if s.desktop.Elevated && s.desktop.Administrator {",
+        "if false && s.desktop.Elevated && s.desktop.Administrator {")
+    if cancelled:
+        source = NATIVE.replace_once(source,
+            "\tcredentials, err := windowsbootstrap.NewCredentials()",
+            "\ts.cancel(context.Canceled) // Test-only cancellation after the actual public hello.\n"
+            "\tcredentials, err := windowsbootstrap.NewCredentials()")
+    return source
+
+
+def protected_shell_mutants():
+    source = protected_shell_overlay(cancelled=True)
+    return (("protected-mapping-before-join", "internal/windowsapp/session_windows.go",
+             SHELL_CANCELLED_CASE, "failed controller join released its protected Shell mapping",
+             NATIVE.replace_once(source,
+                 "\tif s.controller != nil && !s.joined {",
+                 "\tif s.controllerShell != nil { _ = s.controllerShell.Close() }\n"
+                 "\tif s.controller != nil && !s.joined {")),)
 
 
 def diagnose_full_main(workspace, fixture, scenario, compiler, env):
@@ -266,8 +308,12 @@ def diagnose_native_gui(workspace, shipping, scenario, compiler, env):
     source = diagnostic / "gui_windows.go"
     source.write_text(gui_diagnostic_overlay(), encoding="utf-8")
     overlay = diagnostic / "gui-overlay.json"
-    overlay.write_text(json.dumps({"Replace": {
-        str(ROOT / "internal/windowscontroller/gui_windows.go"): str(source)}}), encoding="utf-8")
+    replacement = {str(ROOT / "internal/windowscontroller/gui_windows.go"): str(source)}
+    if scenario in SHELL_CASES or scenario == SHELL_CANCELLED_CASE:
+        session_source = diagnostic / "session_windows.go"
+        session_source.write_text(protected_shell_overlay(cancelled=scenario == SHELL_CANCELLED_CASE), encoding="utf-8")
+        replacement[str(ROOT / "internal/windowsapp/session_windows.go")] = str(session_source)
+    overlay.write_text(json.dumps({"Replace": replacement}), encoding="utf-8")
     fixture = diagnostic / "gui-session.test.exe"
     race = ["-race"] if env.get("GOARCH") == "amd64" else []
     status, output = NATIVE.run(
@@ -374,7 +420,28 @@ def execute(go="go", *, env=None):
             print(output, end="" if output.endswith("\n") else "\n", flush=True)
             require_fixture_success(status, output, workspace, fixture, shipping, scenario, compiler, captured)
             print("Actual Windows Session passed: " + scenario, flush=True)
-        for name, filename, scenario, witness, replacement in mutants():
+        # Both builds keep the real elevated fixture token. They add actual
+        # protected-branch coverage without replacing the unchanged baseline
+        # or calling this ordinary-user/cross-account UAC acceptance.
+        for cancelled, scenarios in ((False, SHELL_CASES), (True, (SHELL_CANCELLED_CASE,))):
+            name = "protected-shell-cancelled" if cancelled else "protected-shell"
+            source = workspace / (name + ".go")
+            source.write_text(protected_shell_overlay(cancelled=cancelled), encoding="utf-8")
+            overlay = workspace / (name + ".json")
+            overlay.write_text(json.dumps({"Replace": {
+                str(ROOT / "internal/windowsapp/session_windows.go"): str(source)}}), encoding="utf-8")
+            candidate = workspace / (name + ".test.exe")
+            status, output = NATIVE.run(
+                [*build, "-overlay=" + str(overlay), "-o", candidate, "./internal/windowsapp"],
+                cwd=ROOT, env=captured, timeout=240)
+            if status:
+                raise ValueError("Protected-branch Session fixture did not compile: " + name + "\n" + output[-8192:])
+            for scenario in scenarios:
+                status, output = run_fixture(workspace, candidate, shipping, scenario, captured)
+                print(output, end="" if output.endswith("\n") else "\n", flush=True)
+                require_fixture_success(status, output, workspace, candidate, shipping, scenario, compiler, captured)
+                print("Actual protected Session branch passed on the elevated fixture desktop: " + scenario, flush=True)
+        for name, filename, scenario, witness, replacement in (*mutants(), *protected_shell_mutants()):
             changed = workspace / (name + ".go")
             changed.write_text(replacement, encoding="utf-8")
             overlay = workspace / (name + ".json")
@@ -400,12 +467,14 @@ def execute(go="go", *, env=None):
         print(json.dumps({"schema": 1, "host": "windows/" + architecture,
                           "shipping_main": "executed", "shipping_sha256": shipping_digest,
                           "fixture_sha256": fixture_digest, "native_cases": list(CASES),
+                          "protected_shell_cases": [*SHELL_CASES, SHELL_CANCELLED_CASE],
+                          "protected_shell_token_context": "actual-elevated-fixture-not-interactive-uac",
                           "installed_and_portable_app_tray": "actual-packaged-selftests-with-owned-status",
                           "native_channel_proofs": "two-per-selftest",
                           "portable_preparation": preparation,
                           "updater_preparation": update_preparation,
                           "compiled_updater_sha256": updater_digest,
-                          "negative_controls": len(mutants()), "source_files": len(before),
+                          "negative_controls": len(mutants()) + len(protected_shell_mutants()), "source_files": len(before),
                           "source_sha256": hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest(),
                           "uac_cross_account_and_device_acceptance": "separate-required-gates"}, sort_keys=True))
 

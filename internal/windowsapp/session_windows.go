@@ -31,6 +31,7 @@ type Session struct {
 	cancel                                 context.CancelCauseFunc
 	self, controller                       *windowscontroller.Process
 	selfImage, controllerImage, powershell *windowscontroller.Image
+	controllerShell                        *windowscontroller.ProtectedShellImage
 	directController                       *windowscontroller.GUIChild
 	updater                                *windowscontroller.GUIChild
 	updaterImage                           *windowscontroller.Image
@@ -155,8 +156,9 @@ func Start(ctx context.Context, portable bool) (_ *Session, failure error) {
 	}
 	// An already elevated desktop does not require a second UAC operation.
 	// Exact image, creation-time Job, primary token and suspended readback still
-	// precede execution. Ordinary desktops must use the actual Shell consent
-	// operation; a failed consent/image launch never falls back to a DOS alias.
+	// precede execution. Ordinary desktops use the independently retained global
+	// mapping for the pre-configuration Shell bootstrap. That operation does not
+	// require opening an elevated thread from the original desktop token.
 	if s.desktop.Elevated && s.desktop.Administrator {
 		s.directController, err = windowscontroller.LaunchGUIChild(s.ctx, s.controllerImage,
 			func(uint64) ([]string, error) { return arguments, nil }, s.environment, s.dataRoot)
@@ -165,7 +167,14 @@ func Start(ctx context.Context, portable bool) (_ *Session, failure error) {
 		}
 		s.controller, err = s.directController.RetainProcess()
 	} else {
-		s.controller, err = windowscontroller.LaunchElevated(s.ctx, s.controllerImage, arguments)
+		// Assign each returned owner before checking its error. A failed capture
+		// can retain native handles, and cancelled consent can still return the
+		// exact newly created process. Close joins it before releasing this map.
+		s.controllerShell, err = windowscontroller.PinProtectedShellImage(s.controllerImage)
+		if err != nil {
+			return s, err
+		}
+		s.controller, err = windowscontroller.LaunchProtectedBootstrapElevated(s.ctx, s.controllerShell, arguments)
 	}
 	if err != nil {
 		return s, err
@@ -513,6 +522,9 @@ func (s *Session) Close(ctx context.Context) error {
 	}
 	if s.controller != nil {
 		failures = append(failures, s.controller.Close())
+	}
+	if s.controllerShell != nil {
+		failures = append(failures, s.controllerShell.Close())
 	}
 	for _, file := range s.files {
 		failures = append(failures, file.Close())
