@@ -15,10 +15,12 @@ on:
       - 'cmd/client/controller_*'
       - 'cmd/windows-app-launcher/**'
       - 'cmd/portable-launcher/**'
+      - 'cmd/app-update/**'
       - 'deploy/test_windows_controller*'
       - 'deploy/test_windows_protection_owner.py'
       - 'client/RouterVPN-Windows-ControllerTransport.cs'
       - 'client/RouterVPN-Windows-ControllerTransport.psm1'
+      - 'client/RouterVPN-Windows-UIState.psm1'
       - 'client/RouterVPN-Windows-*.ps1'
       - 'client/test-windows-controller-transport.ps1'
       - 'client/test-windows-controller-adapter.ps1'
@@ -27,6 +29,9 @@ on:
       - 'deploy/test_windows_gui_adapter.py'
       - 'deploy/test_windows_gui_powershell.py'
       - 'deploy/test_windows_app_session.py'
+      - 'deploy/test_windows_ui_state.py'
+      - 'client/test-windows-ui-state.ps1'
+      - 'deploy/windows_*_preparation_gate.py'
       - 'deploy/fixtures/windows-controller-transport/**'
       - 'deploy/test_desktop_windows_wfp.py'
       - 'deploy/test_desktop_windows_identity.py'
@@ -45,10 +50,12 @@ on:
       - 'cmd/client/controller_*'
       - 'cmd/windows-app-launcher/**'
       - 'cmd/portable-launcher/**'
+      - 'cmd/app-update/**'
       - 'deploy/test_windows_controller*'
       - 'deploy/test_windows_protection_owner.py'
       - 'client/RouterVPN-Windows-ControllerTransport.cs'
       - 'client/RouterVPN-Windows-ControllerTransport.psm1'
+      - 'client/RouterVPN-Windows-UIState.psm1'
       - 'client/RouterVPN-Windows-*.ps1'
       - 'client/test-windows-controller-transport.ps1'
       - 'client/test-windows-controller-adapter.ps1'
@@ -57,6 +64,9 @@ on:
       - 'deploy/test_windows_gui_adapter.py'
       - 'deploy/test_windows_gui_powershell.py'
       - 'deploy/test_windows_app_session.py'
+      - 'deploy/test_windows_ui_state.py'
+      - 'client/test-windows-ui-state.ps1'
+      - 'deploy/windows_*_preparation_gate.py'
       - 'deploy/fixtures/windows-controller-transport/**'
       - 'deploy/test_desktop_windows_wfp.py'
       - 'deploy/test_desktop_windows_identity.py'
@@ -68,6 +78,26 @@ permissions:
   contents: read
 
 jobs:
+  ui-state:
+    name: Saved Windows UI state in PowerShell 5.1 and 7
+    runs-on: windows-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Execute saved profile, CUSTOM and state ownership regressions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($shell in @('powershell.exe', 'pwsh')) {
+            python deploy/test_windows_ui_state.py --shell $shell
+            if ($LASTEXITCODE -ne 0) { throw "Captured Windows UI state gate failed in $shell" }
+          }
+    # The same state checks and executable negative controls previously ran
+    # inside the long controller job. Keep both shell versions mandatory while
+    # making their exact-source outcome observable independently of UAC work.
   elevation:
     name: Actual Windows Shell elevation diagnostic
     runs-on: windows-latest
@@ -228,8 +258,6 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "Native GUI pipe transport gate failed in $shell" }
             python deploy/test_windows_gui_adapter.py --shell $shell
             if ($LASTEXITCODE -ne 0) { throw "PowerShell UI adapter gate failed in $shell" }
-            python deploy/test_windows_ui_state.py --shell $shell
-            if ($LASTEXITCODE -ne 0) { throw "Captured Windows UI state gate failed in $shell" }
           }
           # Build once with the shipping Framework compiler, then load the same
           # production DLL in both runtimes. Independent recompilation cannot
