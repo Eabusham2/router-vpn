@@ -58,6 +58,8 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
 BOX_TEMPLATES = {
     'node_box_physical.go.tmpl': 'routervpn_desktop_node_box_physical.go',
     'node_box_physical_test.go.tmpl': 'routervpn_desktop_node_box_physical_test.go',
+    'node_box_dns.go.tmpl': 'routervpn_desktop_node_box_dns.go',
+    'node_box_dns_test.go.tmpl': 'routervpn_desktop_node_box_dns_test.go',
     'external_box_physical.go.tmpl': 'routervpn_desktop_external_box_physical.go',
     'external_box_physical_test.go.tmpl': 'routervpn_desktop_external_box_physical_test.go',
     'external_box_integration_test.go.tmpl': 'routervpn_desktop_external_box_integration_test.go',
@@ -82,6 +84,7 @@ BOX_TEMPLATES = {
 }
 PEER_TEMPLATES = {
     'node_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_test.go',
+    'node_peer_dns_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_dns_test.go',
     'node_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_windows_test.go',
 }
 ROUTE_TEMPLATES = {

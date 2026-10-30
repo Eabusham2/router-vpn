@@ -1,0 +1,66 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+)
+
+// ProveSelectedDNS uses this captured Box's actual DNS router and exact live
+// TUN metadata. The existing exchange disables both caches and validates a
+// complete usable matching answer. It cannot select a replacement resolver or
+// create a platform/default-resolver socket outside the compiled native graph.
+func (owner *RouterVPNDesktopNodePhysical) ProveSelectedDNS(parent context.Context) error {
+	_, err := owner.MeasureSelectedDNS(parent)
+	return err
+}
+
+// MeasureSelectedDNS returns only the time spent in the real uncached native
+// DNS exchange. Configuration validation and TUN readback are not RTT samples.
+func (owner *RouterVPNDesktopNodePhysical) MeasureSelectedDNS(parent context.Context) (time.Duration, error) {
+	if owner == nil || owner.instance == nil || owner.instance.dnsRouter == nil {
+		return 0, errors.New("Router node selected DNS has no retained native router")
+	}
+	return owner.measureSelectedDNS(parent, owner.instance.dnsRouter.Exchange)
+}
+
+func (owner *RouterVPNDesktopNodePhysical) proveSelectedDNS(parent context.Context,
+	exchange func(context.Context, *dns.Msg, adapter.DNSQueryOptions) (*dns.Msg, error)) error {
+	_, err := owner.measureSelectedDNS(parent, exchange)
+	return err
+}
+
+func (owner *RouterVPNDesktopNodePhysical) measureSelectedDNS(parent context.Context,
+	exchange func(context.Context, *dns.Msg, adapter.DNSQueryOptions) (*dns.Msg, error)) (time.Duration, error) {
+	if owner == nil || parent == nil || parent.Err() != nil || exchange == nil {
+		return 0, errors.New("Router node selected DNS has no current proof request")
+	}
+	owner.mu.Lock()
+	_, _, _, err := owner.readback()
+	inbound, lifetime := owner.inbound, owner.ctx
+	owner.mu.Unlock()
+	if err != nil || inbound == nil || lifetime == nil {
+		return 0, errors.New("Router node selected DNS lost its exact live TUN")
+	}
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	stop := context.AfterFunc(lifetime, cancel)
+	defer func() { stop(); cancel() }()
+	ctx = adapter.WithContext(ctx, &adapter.InboundContext{Inbound: inbound.Tag(), InboundType: C.TypeTun, Network: "udp", Protocol: "dns"})
+	started := time.Now()
+	if err := routerVPNStrategyDNSExchange(ctx, exchange); err != nil {
+		return 0, err
+	}
+	elapsed := time.Since(started)
+	owner.mu.Lock()
+	_, _, _, err = owner.readback()
+	same := owner.inbound == inbound
+	owner.mu.Unlock()
+	if err != nil || !same || ctx.Err() != nil || elapsed <= 0 {
+		return 0, errors.New("Router node selected DNS proof changed its captured native owner or clock")
+	}
+	return elapsed, nil
+}

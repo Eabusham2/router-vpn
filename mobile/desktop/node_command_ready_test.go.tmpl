@@ -1,0 +1,113 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type desktopNodeDNSReadyOwner struct {
+	current bool
+	mtu     int
+	calls   int
+	prove   func(context.Context) error
+}
+
+func (o *desktopNodeDNSReadyOwner) Current() bool { return o.current }
+func (o *desktopNodeDNSReadyOwner) ClaimTUN(guard func() bool) (string, int, int, error) {
+	if !guard() {
+		return "", 0, 0, errors.New("fixture owner retired")
+	}
+	return "router-vpn", 771, o.mtu, nil
+}
+func (o *desktopNodeDNSReadyOwner) MeasureSelectedDNS(ctx context.Context) (time.Duration, error) {
+	o.calls++
+	if o.prove != nil {
+		if err := o.prove(ctx); err != nil {
+			return 0, err
+		}
+	}
+	return time.Millisecond, nil
+}
+
+func TestRouterVPNDesktopNodePhysicalCommandReadyRequiresFreshDNS(t *testing.T) {
+	for _, fault := range []string{"exact", "resolver-failed", "cancelled", "retired", "mtu-changed", "transfer-changed", "replacement", "stop"} {
+		t.Run(fault, func(t *testing.T) {
+			policy, transfer := desktopNodeCommandTransferFixture(t)
+			capture, err := policy.Capture()
+			if err != nil {
+				t.Fatal(err)
+			}
+			directory := t.TempDir()
+			if err := os.Chmod(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
+			files, err := routerVPNOpenExternalFiles(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer files.root.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			owner := &desktopNodeDNSReadyOwner{current: true, mtu: capture.ConfiguredMTU}
+			owner.prove = func(context.Context) error {
+				switch fault {
+				case "resolver-failed":
+					return errors.New("fixture resolver failed")
+				case "cancelled":
+					cancel()
+				case "retired":
+					owner.current = false
+				case "mtu-changed":
+					owner.mtu++
+				case "replacement":
+					if err := os.WriteFile(filepath.Join(directory, "node-ready.json"), []byte("replacement-owner"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				case "stop":
+					if err := files.publish("stop.json", routerVPNExternalStop{Schema: 1, Session: transfer.SessionID, SourceSHA256: transfer.ConfigSHA256}); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return nil
+			}
+			if fault == "transfer-changed" {
+				transfer.ConfigSHA256 = capture.ConfigSHA256
+			}
+			before := time.Now().UnixMilli()
+			err = routerVPNProveNodeReady(ctx, files, policy, &transfer, owner)
+			if fault == "exact" {
+				digest, digestErr := mobiletor.DesktopProtectionTransferRecordSHA256(transfer)
+				raw, readErr := files.read("node-ready.json", mobilemultihop.DesktopNodeReadyRecordLimit)
+				record, parseErr := mobilemultihop.ParseDesktopNodeReadyRecord(raw, policy, digest)
+				if err != nil || digestErr != nil || readErr != nil || parseErr != nil || owner.calls != 1 || record.ProvedAt < before || record.ProvedAt > time.Now().UnixMilli() {
+					t.Fatal("actual DNS capability did not precede its exact readiness receipt", err, digestErr, readErr, parseErr)
+				}
+				if err := files.remove("node-ready.json"); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err == nil {
+					t.Fatal("failed or replaced native DNS acquired readiness", fault)
+				}
+				if fault == "transfer-changed" && owner.calls != 0 {
+					t.Fatal("foreign transfer contacted selected DNS")
+				}
+				raw, readErr := os.ReadFile(filepath.Join(directory, "node-ready.json"))
+				if fault == "replacement" {
+					if readErr != nil || string(raw) != "replacement-owner" {
+						t.Fatal("failed ready publication changed another owner", readErr)
+					}
+				} else if !errors.Is(readErr, os.ErrNotExist) {
+					t.Fatal("failed native DNS published a ready receipt", readErr)
+				}
+			}
+		})
+	}
+}

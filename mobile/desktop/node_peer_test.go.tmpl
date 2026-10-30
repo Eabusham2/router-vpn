@@ -363,6 +363,11 @@ func newDesktopNodePeerFixture(t *testing.T, mode string, wrongKey bool, configu
 	if len(configuredCover) > 1 {
 		t.Fatal("unexpected captured cover selection count")
 	}
+	return newDesktopNodePeerFixtureWithReference(t, mode, wrongKey, len(configuredCover) == 1 && configuredCover[0], nil)
+}
+
+func newDesktopNodePeerFixtureWithReference(t *testing.T, mode string, wrongKey, configuredCover bool, configure func(*desktopReferenceConfiguration)) *desktopNodePeerFixture {
+	t.Helper()
 	iface, ip := desktopNodePeerInterface(t)
 	config, options := desktopReferenceFixture(t)
 	if mode == "awg2-strong" {
@@ -371,13 +376,16 @@ func newDesktopNodePeerFixture(t *testing.T, mode string, wrongKey bool, configu
 	config.Echo = append(config.Echo,
 		desktopReferenceRule{Network: "tcp", Address: "2001:db8::99", Port: 9999},
 		desktopReferenceRule{Network: "udp", Address: "2001:db8::99", Port: 9999})
+	if configure != nil {
+		configure(&config)
+	}
 	peer, err := startDesktopNodePeer(config, mode, ip)
 	if err != nil {
 		t.Fatal("actual encrypted reference start", err)
 	}
 	t.Cleanup(peer.close)
 	remote := netip.MustParseAddrPort(peer.bind.address())
-	original := desktopNodePeerOriginal(t, mode, config, options, ip, remote, wrongKey, len(configuredCover) == 1 && configuredCover[0], "always")
+	original := desktopNodePeerOriginal(t, mode, config, options, ip, remote, wrongKey, configuredCover, "always")
 	policy, err := mobilemultihop.NewDesktopNodePolicy(original, strings.Repeat("c", 32), runtime.GOOS)
 	if err != nil {
 		t.Fatal(err)

@@ -1,0 +1,57 @@
+package main
+
+import (
+	"context"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type routerVPNNodeDNSOwner interface {
+	Current() bool
+	ClaimTUN(func() bool) (string, int, int, error)
+	MeasureSelectedDNS(context.Context) (time.Duration, error)
+}
+
+// Ready is published only after an actual fresh native DNS query and an exact
+// TUN readback. The private record is bound to the same source and predecessor
+// as the handoff; the controller still owes its authenticated selected-node
+// proof before it can report Connected.
+func routerVPNProveNodeReady(ctx context.Context, files *routerVPNExternalFiles, policy *mobilemultihop.DesktopNodePolicy,
+	expected *mobiletor.DesktopProtectionTransferRecord, owner routerVPNNodeDNSOwner) error {
+	if ctx == nil || ctx.Err() != nil || files == nil || files.root == nil || policy == nil || policy.Validate() != nil ||
+		expected == nil || expected.Validate() != nil || owner == nil || !owner.Current() {
+		return routerVPNExternalFailure
+	}
+	meta := policy.Metadata()
+	if expected.SessionID != meta.SessionID || expected.SourceSHA256 != meta.SourceSHA256 ||
+		expected.ConfigSHA256 != meta.ConfigSHA256 || expected.Policy != meta.KillSwitchPolicy ||
+		files.stopRequested(meta.SessionID, meta.ConfigSHA256) || !files.current("node-ready.json") {
+		return routerVPNExternalFailure
+	}
+	capture, err := policy.Capture()
+	if err != nil {
+		return routerVPNExternalFailure
+	}
+	transfer, err := mobiletor.DesktopProtectionTransferRecordSHA256(*expected)
+	if err != nil {
+		return routerVPNExternalFailure
+	}
+	elapsed, err := owner.MeasureSelectedDNS(ctx)
+	if err != nil || elapsed <= 0 {
+		return routerVPNExternalFailure
+	}
+	name, index, mtu, err := owner.ClaimTUN(owner.Current)
+	if err != nil || index < 1 || uint64(index) > uint64(^uint32(0)) || ctx.Err() != nil || !owner.Current() || files.stopRequested(meta.SessionID, meta.ConfigSHA256) {
+		return routerVPNExternalFailure
+	}
+	record := mobilemultihop.DesktopNodeReadyRecord{Schema: 1, Kind: "routervpn-node-ready-v1", SessionID: meta.SessionID,
+		SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, TransferSHA256: transfer,
+		DNSConfigSHA256: capture.SelectedDNS.ConfigSHA256, InterfaceName: name, InterfaceIndex: uint32(index), MTU: mtu, ProvedAt: time.Now().UnixMilli(),
+		DNSMilliseconds: float64(elapsed.Nanoseconds()) / 1e6}
+	if record.Validate(policy, transfer) != nil || files.publish("node-ready.json", record) != nil || ctx.Err() != nil || !owner.Current() {
+		return routerVPNExternalFailure
+	}
+	return nil
+}

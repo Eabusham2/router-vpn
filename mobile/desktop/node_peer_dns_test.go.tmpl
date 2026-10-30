@@ -1,0 +1,87 @@
+package routervpnamnezia
+
+import (
+	"context"
+	"net"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+)
+
+// The selected Home resolver exists only behind the real encrypted peer. The
+// fixture forwards that one inner destination to its owned loopback listener;
+// the client cannot reach it through an ambient/default resolver. Consecutive
+// opposite answers ensure the native proof does not adopt either DNS cache.
+func TestRouterVPNDesktopNodeEncryptedSelectedDNSIsFresh(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) {
+			listener, err := net.ListenPacket("udp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var failed, invalid atomic.Bool
+			var queries atomic.Uint32
+			started := make(chan struct{})
+			server := &dns.Server{PacketConn: listener, NotifyStartedFunc: func() { close(started) }, Handler: dns.HandlerFunc(func(writer dns.ResponseWriter, query *dns.Msg) {
+				queries.Add(1)
+				answer := new(dns.Msg).SetReply(query)
+				if len(query.Question) != 1 || query.Question[0].Name != "example.com." || query.Question[0].Qtype != dns.TypeA {
+					invalid.Store(true)
+					answer.Rcode = dns.RcodeRefused
+				} else if failed.Load() {
+					answer.Rcode = dns.RcodeNameError
+				} else {
+					answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: net.ParseIP("93.184.216.34")}}
+				}
+				if err := writer.WriteMsg(answer); err != nil {
+					invalid.Store(true)
+				}
+			})}
+			joined := make(chan error, 1)
+			go func() { joined <- server.ActivateAndServe() }()
+			select {
+			case <-started:
+			case err := <-joined:
+				_ = listener.Close()
+				t.Fatal("captured DNS listener did not start", err)
+			case <-time.After(time.Second):
+				_ = listener.Close()
+				<-joined
+				t.Fatal("captured DNS listener startup timed out")
+			}
+			t.Cleanup(func() {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				if err := server.ShutdownContext(ctx); err != nil {
+					t.Error("captured DNS listener did not join", err)
+				}
+				if err := <-joined; err != nil {
+					t.Error("captured DNS worker failed", err)
+				}
+			})
+			f := newDesktopNodePeerFixtureWithReference(t, mode, false, false, func(config *desktopReferenceConfiguration) {
+				config.Forward = append(config.Forward, desktopReferenceRule{Network: "udp", Address: "192.168.50.133", Port: 53, Target: listener.LocalAddr().String()})
+			})
+			if err := f.box.RouterVPNStrategyStart(); err != nil {
+				t.Fatal("actual encrypted DNS startup", err)
+			}
+			if err := f.box.RouterVPNStrategyDNSProof(); err != nil || queries.Load() != 1 || invalid.Load() {
+				t.Fatal("native selected DNS did not traverse the captured encrypted peer", err, queries.Load())
+			}
+			failed.Store(true)
+			if err := f.box.RouterVPNStrategyDNSProof(); err == nil || queries.Load() != 2 || invalid.Load() {
+				t.Fatal("cached or failed selected DNS was adopted as a fresh native proof", err, queries.Load())
+			}
+			if f.peer.bind.packets.Load() == 0 {
+				t.Fatal("native DNS proof had no actual encrypted packets")
+			}
+			f.network.InterfaceUpdated(context.Background())
+			before := queries.Load()
+			if err := f.box.RouterVPNStrategyDNSProof(); err == nil || queries.Load() != before {
+				t.Fatal("retired encrypted node opened a selected DNS query", err, queries.Load(), before)
+			}
+		})
+	}
+}

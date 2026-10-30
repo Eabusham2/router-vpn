@@ -335,7 +335,7 @@ func routerVPNRunNodeMTUWithPhysicalMTU(parent context.Context, directory, sessi
 		return err
 	}
 	defer files.root.Close()
-	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-protection-retired.json", "stopped.json"} {
+	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-protection-retired.json", "stopped.json"} {
 		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
 			return routerVPNExternalFailure
 		}
@@ -378,6 +378,7 @@ func routerVPNRunNodeMTUWithPhysicalMTU(parent context.Context, directory, sessi
 	var stopped atomic.Bool
 	defer func() {
 		stopped.Store(true)
+		readyRetired := files.remove("node-ready.json")
 		// Partial construction and Box teardown retain ownership until every
 		// close succeeds. Only then may the parent retire this workspace.
 		for native.Close() != nil {
@@ -386,7 +387,7 @@ func routerVPNRunNodeMTUWithPhysicalMTU(parent context.Context, directory, sessi
 		}
 		// The exact entered handoff callback and its owned receipt must be
 		// retired before the command can acknowledge complete shutdown.
-		if admission.close() != nil {
+		if admission.close() != nil || readyRetired != nil {
 			failure = routerVPNExternalFailure
 			return
 		}
@@ -484,6 +485,11 @@ func routerVPNRunNodeMTUWithPhysicalMTU(parent context.Context, directory, sessi
 	owner, err := newRouterVPNNodeMTU(&routerVPNNodeMTUBox{instance: instance, tag: inbound.Tag(), physical: physical}, session, config, path, guard)
 	if err != nil {
 		return routerVPNExternalFailure
+	}
+	if physical != nil {
+		if routerVPNProveNodeReady(ctx, files, physicalPolicy, protectionTransfer, physical) != nil {
+			return routerVPNExternalFailure
+		}
 	}
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()

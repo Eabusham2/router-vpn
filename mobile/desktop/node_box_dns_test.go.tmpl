@@ -1,0 +1,86 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"net"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+)
+
+func TestRouterVPNDesktopNodePhysicalDNSCapturedOwner(t *testing.T) {
+	for _, fault := range []string{"exact", "dns-failed", "bad-answer", "caller-cancel", "network-retired", "tun-changed", "tun-replaced"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newDesktopNodeBoxFixture(t, nil)
+			owner := f.start(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			calls := 0
+			err := owner.proveSelectedDNS(ctx, func(operation context.Context, query *dns.Msg, options adapter.DNSQueryOptions) (*dns.Msg, error) {
+				calls++
+				metadata := adapter.ContextFrom(operation)
+				if metadata == nil || metadata.Inbound != owner.inbound.Tag() || metadata.InboundType != "tun" || metadata.Network != "udp" || metadata.Protocol != "dns" ||
+					!options.DisableCache || !options.DisableOptimisticCache || options.Transport != nil || options.Timeout != 5*time.Second {
+					t.Fatal("Node DNS proof bypassed its actual router, TUN or freshness contract")
+				}
+				response := new(dns.Msg).SetReply(query)
+				response.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.ParseIP("93.184.216.34")}}
+				switch fault {
+				case "dns-failed":
+					return nil, errors.New("fixture resolver unavailable")
+				case "bad-answer":
+					response.Rcode = dns.RcodeNameError
+				case "caller-cancel":
+					cancel()
+				case "network-retired":
+					f.network.Cancel()
+				case "tun-changed":
+					f.tun.mtu++
+				case "tun-replaced":
+					var candidate, rollback *desktopTorMTUCandidate
+					if _, err := owner.changeMTU(context.Background(), owner.inbound, 1400, f.replacement(owner, nil, &candidate, &rollback)); err != nil || !owner.Current() {
+						t.Fatal("DNS late-owner negative did not install its valid replacement", err)
+					}
+				}
+				return response, nil
+			})
+			if calls != 1 || fault == "exact" && err != nil || fault != "exact" && err == nil {
+				t.Fatal("Node DNS proof adopted a failed or replaced native path", fault, calls, err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodePhysicalDNSRetirementCancelsQuery(t *testing.T) {
+	f := newDesktopNodeBoxFixture(t, nil)
+	owner := f.start(t)
+	entered := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		result <- owner.proveSelectedDNS(context.Background(), func(ctx context.Context, _ *dns.Msg, _ adapter.DNSQueryOptions) (*dns.Msg, error) {
+			close(entered)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+	}()
+	<-entered
+	f.network.Cancel()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("retired native DNS query reported success")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("native DNS query ignored its retained network retirement")
+	}
+	called := false
+	if err := owner.proveSelectedDNS(context.Background(), func(context.Context, *dns.Msg, adapter.DNSQueryOptions) (*dns.Msg, error) {
+		called = true
+		return nil, nil
+	}); err == nil || called {
+		t.Fatal("retired native owner contacted selected DNS again")
+	}
+}
