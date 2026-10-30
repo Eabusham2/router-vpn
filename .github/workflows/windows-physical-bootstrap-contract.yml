@@ -18,6 +18,7 @@ on:
       - 'deploy/test_windows_external_physical.py'
       - 'deploy/test_desktop_node_physical.py'
       - 'deploy/test_windows_protection_transfer.py'
+      - 'deploy/test_windows_protection_observation.py'
       - 'deploy/test_windows_node_physical*.py'
       - 'deploy/fixtures/windows-node-physical/**'
       - 'deploy/fixtures/windows-physical-bootstrap/**'
@@ -38,6 +39,7 @@ on:
       - 'deploy/test_windows_external_physical.py'
       - 'deploy/test_desktop_node_physical.py'
       - 'deploy/test_windows_protection_transfer.py'
+      - 'deploy/test_windows_protection_observation.py'
       - 'deploy/test_windows_node_physical*.py'
       - 'deploy/fixtures/windows-node-physical/**'
       - 'deploy/fixtures/windows-physical-bootstrap/**'
@@ -112,6 +114,13 @@ jobs:
           # This diagnostic does not claim race instrumentation or host adoption.
           python deploy/test_windows_protection_transfer.py --bootstrap-only
           if ($LASTEXITCODE -ne 0) { throw 'Exact native protection succession failed' }
+      - name: Prove retained read-only recovery snapshot and callback lifetime
+        if: success() || failure()
+        timeout-minutes: 6
+        shell: pwsh
+        run: |
+          python deploy/test_windows_protection_observation.py --bootstrap-only
+          if ($LASTEXITCODE -ne 0) { throw 'Retained native recovery observation failed' }
       - name: Execute exact Node command, startup and encrypted peers
         if: success() || failure()
         shell: pwsh

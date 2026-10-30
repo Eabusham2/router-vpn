@@ -102,6 +102,7 @@ def inputs():
                              ROOT/'deploy/test_desktop_windows_identity_runner.py',
                              ROOT/'deploy/test_desktop_windows_wfp.py',
                              ROOT/'deploy/test_windows_protection_transfer.py',
+                             ROOT/'deploy/test_windows_protection_observation.py',
                              ROOT/'deploy/test_windows_node_physical.py',
                              ROOT/'deploy/test_windows_node_physical_runner.py',
                              ROOT/'deploy/test_desktop_windows_traffic.py',
@@ -530,6 +531,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 run([sys.executable, ROOT/'deploy/test_desktop_windows_wfp.py', source],
                     env=env, timeout=600)
                 run([sys.executable, ROOT/'deploy/test_windows_protection_transfer.py', source],
+                    env=env, timeout=600)
+                run([sys.executable, ROOT/'deploy/test_windows_protection_observation.py', source],
                     env=env, timeout=600)
                 run([sys.executable, ROOT/'deploy/test_windows_node_physical_runner.py'], cwd=ROOT, env=env)
                 run([sys.executable, ROOT/'deploy/test_windows_node_physical.py', source],

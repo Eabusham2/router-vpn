@@ -56,6 +56,13 @@ jobs:
         run: |
           python deploy/test_windows_protection_owner.py
           if ($LASTEXITCODE -ne 0) { throw 'Native Windows protection owner preparation failed' }
+      - name: Native retained firewall snapshot and durable callback ownership
+        if: ${{ success() || failure() }}
+        timeout-minutes: 6
+        shell: pwsh
+        run: |
+          python deploy/test_windows_protection_observation.py
+          if ($LASTEXITCODE -ne 0) { throw 'Native retained protection observation failed' }
       - name: Pinned controller TLS and actual shipping handler
         if: ${{ success() || failure() }}
         shell: pwsh
