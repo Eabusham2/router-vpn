@@ -64,6 +64,7 @@ REQUIRED = (
     "TestWindowsControllerFoundationProtectedShellBootstrapReturnedImage",
     "TestWindowsControllerFoundationProtectedShellBootstrapChangedCapture",
     "TestWindowsControllerFoundationProtectedShellBootstrapToken",
+    "TestWindowsControllerFoundationProtectedShellMediumLabelPolicy",
 )
 # A real linked token belongs to a separate native fixture. Its exact test is
 # still mandatory in the independent UAC workflow step and fails when absent;
@@ -84,6 +85,7 @@ def sources():
                 "protected_shell_medium_windows_test.go",
                 "medium_desktop_windows_test.go",
                 "medium_access_windows_test.go",
+                "medium_label_policy_test.go",
                 "machine_directories_windows.go", "machine_directories_windows_test.go",
                 "fixture_windows_test.go", "foundation_windows_test.go", "capture_windows_test.go",
                 "suspended_launch_windows.go", "suspended_launch_windows_test.go",
