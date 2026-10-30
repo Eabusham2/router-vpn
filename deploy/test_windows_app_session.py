@@ -26,6 +26,10 @@ SPEC = importlib.util.spec_from_file_location(
     "windows_session_native_toolchain", ROOT / "deploy/test_desktop_windows_identity.py")
 NATIVE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(NATIVE)
+PORTABLE_SPEC = importlib.util.spec_from_file_location(
+    "windows_session_portable_preparation", ROOT / "deploy/windows_portable_preparation_gate.py")
+PORTABLE = importlib.util.module_from_spec(PORTABLE_SPEC)
+PORTABLE_SPEC.loader.exec_module(PORTABLE)
 TAG = "routervpn_windows_app_native"
 TEST = "TestWindowsAppComposedSession"
 DIAGNOSTIC_TAG = "routervpn_windows_main_diagnostic"
@@ -58,6 +62,8 @@ def sources():
     paths = set([*ROOT.glob("cmd/client/*.go"), *ROOT.glob("internal/**/*.go"),
                  ROOT / "go.mod", *ROOT.glob("go.sum"), Path(__file__).resolve(),
                  ROOT / "deploy/materialize-desktop-icons.py",
+                 ROOT / "deploy/windows_portable_preparation_gate.py",
+                 ROOT / "configs/client/client.json.example", ROOT / "configs/client/routers.json.example",
                  ROOT / "configs/client/modes.json", ROOT / "configs/client/logical-modes.json",
                  ROOT / ".github/workflows/windows-controller-contract.yml",
                  ROOT / ".github/workflows/windows-native-contract.yml"])
@@ -71,6 +77,9 @@ def sources():
     required = {"internal/windowsapp/session_windows.go", "internal/windowsapp/session_windows_test.go",
                 "cmd/client/controller_privilege_windows.go", "cmd/client/main.go",
                 "cmd/client/controller_main_diagnostic_windows_test.go",
+                "internal/windowsapp/portable_prepare_windows.go", "internal/windowsapp/portable_security_windows.go",
+                "internal/windowsapp/portable_config.go", "internal/windowsapp/portable_config_test.go",
+                "internal/windowsapp/portable_prepare_windows_test.go", "deploy/windows_portable_preparation_gate.py",
                 "client/RouterVPN-Windows-App.ps1", "client/RouterVPN-Windows-Tray.ps1",
                 "client/RouterVPN-Windows-ControllerTransport.cs",
                 "client/RouterVPN-Windows-ControllerTransport.psm1"}
@@ -116,8 +125,15 @@ def layout(workspace, fixture, shipping, scenario, env):
               "auto_test_seconds": 8, "modes_file": str(package / "modes.json"),
               "scripts_dir": str(package / "modes"), "state_file": str(data / "state.json"),
               "profiles_file": str(data / "routers.json")}
-    (data / "client.json").write_text(json.dumps(config), encoding="utf-8")
-    (data / "routers.json").write_text('{"selected_id":"","profiles":[]}', encoding="utf-8")
+    if portable:
+        # Match the generic ZIP: defaults belong to the immutable package.
+        # The actual retained Core must initialize private Data itself before
+        # the separately compiled production controller can read any config.
+        shutil.copyfile(ROOT / "configs/client/client.json.example", package / "client.json")
+        shutil.copyfile(ROOT / "configs/client/routers.json.example", package / "routers.json")
+    else:
+        (data / "client.json").write_text(json.dumps(config), encoding="utf-8")
+        (data / "routers.json").write_text('{"selected_id":"","profiles":[]}', encoding="utf-8")
     # Two distinct existing stores prove that starting/closing the owned app
     # preserves a newer private Data preference as well as its migration source.
     for state, mode in ((package / "client/.routervpn-state", "wg"),
@@ -255,6 +271,7 @@ def execute(go="go", *, env=None):
         if status:
             raise ValueError("Actual native Session fixture did not compile:\n" + output[-32768:])
         fixture_digest = hashlib.sha256(fixture.read_bytes()).hexdigest()
+        preparation = PORTABLE.execute_prepared(NATIVE, compiler, captured, build, fixture, workspace)
         for scenario in CASES:
             status, output = run_fixture(workspace, fixture, shipping, scenario, captured)
             print(output, end="" if output.endswith("\n") else "\n", flush=True)
@@ -287,6 +304,7 @@ def execute(go="go", *, env=None):
                           "fixture_sha256": fixture_digest, "native_cases": list(CASES),
                           "installed_and_portable_app_tray": "actual-packaged-selftests-with-owned-status",
                           "native_channel_proofs": "two-per-selftest",
+                          "portable_preparation": preparation,
                           "negative_controls": len(mutants()), "source_files": len(before),
                           "source_sha256": hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest(),
                           "uac_cross_account_and_device_acceptance": "separate-required-gates"}, sort_keys=True))

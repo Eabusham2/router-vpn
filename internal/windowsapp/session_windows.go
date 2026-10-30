@@ -102,6 +102,11 @@ func Start(ctx context.Context, portable bool) (_ *Session, failure error) {
 	if err = s.pinUI(); err != nil {
 		return s, err
 	}
+	if portable {
+		if err = PreparePortableData(s.ctx, s.selfImage, s.self); err != nil {
+			return s, err
+		}
+	}
 	profile, err := s.self.UserDirectories()
 	if err != nil {
 		return s, err
@@ -110,19 +115,25 @@ func Start(ctx context.Context, portable bool) (_ *Session, failure error) {
 	if err != nil {
 		return s, err
 	}
+	appData, localAppData := profile.RoamingAppData, profile.LocalAppData
+	temporary := filepath.Join(profile.LocalAppData, "Temp")
+	if portable {
+		appData, localAppData = s.dataRoot, s.dataRoot
+		temporary = filepath.Join(s.dataRoot, "generated")
+	}
 	s.environment = []string{
 		"SystemRoot=" + filepath.Dir(system), "windir=" + filepath.Dir(system),
 		"PATH=" + system + ";" + filepath.Dir(system) + ";" + filepath.Join(system, "WindowsPowerShell", "v1.0"),
 		"PATHEXT=.COM;.EXE;.BAT;.CMD", "USERPROFILE=" + profile.Profile,
 		"PSModulePath=" + filepath.Join(system, "WindowsPowerShell", "v1.0", "Modules"),
 		"COMSPEC=" + filepath.Join(system, "cmd.exe"), "OS=Windows_NT",
-		"APPDATA=" + profile.RoamingAppData, "LOCALAPPDATA=" + profile.LocalAppData,
-		"TEMP=" + filepath.Join(profile.LocalAppData, "Temp"), "TMP=" + filepath.Join(profile.LocalAppData, "Temp"),
+		"APPDATA=" + appData, "LOCALAPPDATA=" + localAppData,
+		"TEMP=" + temporary, "TMP=" + temporary,
 		"HOMEVPN_ROOT=" + s.dataRoot, "HOMEVPN_CLIENT_CONFIG=" + filepath.Join(s.dataRoot, "client.json"),
 		"HOMEVPN_NATIVE_APP=windows-wpf-product",
 	}
 	if portable {
-		s.environment = append(s.environment, "HOMEVPN_PORTABLE=1")
+		s.environment = append(s.environment, "HOMEVPN_PORTABLE=1", "HOME="+s.dataRoot)
 	}
 	s.pipe, err = windowscontroller.NewPipe()
 	if err != nil {

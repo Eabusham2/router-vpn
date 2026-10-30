@@ -33,6 +33,11 @@ func TestWindowsAppComposedSession(t *testing.T) {
 	if portable {
 		packageRoot = filepath.Join(root, "App", "RouterVPN")
 		dataRoot = filepath.Join(root, "Data")
+		for _, name := range []string{"client.json", "routers.json"} {
+			if _, err := os.Lstat(filepath.Join(dataRoot, name)); !os.IsNotExist(err) {
+				t.Fatal("the actual Portable Session fixture preseeded private Data instead of testing first launch")
+			}
+		}
 	}
 	operation, stop := context.WithTimeout(context.Background(), 100*time.Second)
 	defer stop()
@@ -75,6 +80,9 @@ func TestWindowsAppComposedSession(t *testing.T) {
 	assertSessionSameFile(t, session.packageRoot, packageRoot)
 	assertSessionSameFile(t, session.dataRoot, dataRoot)
 	assertSessionSameFile(t, session.controllerImage.Path(), filepath.Join(packageRoot, "router-vpn-client.exe"))
+	if portable {
+		assertSessionPortableData(t, session, packageRoot, dataRoot)
+	}
 	if !strings.HasPrefix(strings.ToLower(session.packageRoot), `\\?\volume{`) {
 		t.Fatal("native Session lost the captured local-volume package identity")
 	}
@@ -175,6 +183,64 @@ func TestWindowsAppComposedSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Log("shipping controller, captured App/Tray pipes, exact-volume code and checked retirement completed")
+}
+
+func assertSessionPortableData(t *testing.T, session *Session, packageRoot, dataRoot string) {
+	t.Helper()
+	for _, path := range []string{dataRoot, filepath.Join(dataRoot, "generated")} {
+		assertPortablePrivateNative(t, path, session.desktop.SID, true)
+	}
+	for _, name := range []string{"client.json", "routers.json"} {
+		assertPortablePrivateNative(t, filepath.Join(dataRoot, name), session.desktop.SID, false)
+	}
+	body, err := os.ReadFile(filepath.Join(dataRoot, "client.json"))
+	config, parseErr := portableJSONObject(body)
+	if err != nil || parseErr != nil {
+		t.Fatal("the actual Portable Session lost its prepared private configuration", errors.Join(err, parseErr))
+	}
+	for name, expected := range map[string]string{
+		"modes_file":    filepath.Join(packageRoot, "modes.json"),
+		"scripts_dir":   filepath.Join(packageRoot, "modes"),
+		"profiles_file": filepath.Join(dataRoot, "routers.json"),
+	} {
+		var actual string
+		if json.Unmarshal(config[name], &actual) != nil {
+			t.Fatal("the actual Portable Session lost its captured location", name)
+		}
+		assertSessionSameFile(t, actual, expected)
+	}
+	var state string
+	if json.Unmarshal(config["state_file"], &state) != nil || filepath.Base(state) != "state.json" {
+		t.Fatal("the actual Portable Session lost its captured state location")
+	}
+	assertSessionSameFile(t, filepath.Dir(state), dataRoot)
+	values := make(map[string]string)
+	for _, item := range session.environment {
+		name, value, found := strings.Cut(item, "=")
+		name = strings.ToUpper(name)
+		if !found || values[name] != "" {
+			t.Fatal("Portable Session published an ambiguous GUI environment")
+		}
+		values[name] = value
+	}
+	for _, name := range []string{"APPDATA", "LOCALAPPDATA", "HOME"} {
+		if values[name] != session.dataRoot {
+			t.Fatal("Portable GUI cache escaped its captured Data directory", name)
+		}
+	}
+	for _, name := range []string{"TEMP", "TMP"} {
+		if values[name] != filepath.Join(session.dataRoot, "generated") {
+			t.Fatal("Portable GUI temporary files escaped their prepared private directory", name)
+		}
+	}
+	if values["HOMEVPN_PORTABLE"] != "1" {
+		t.Fatal("Portable GUI lost its captured Portable mode")
+	}
+	profile, err := session.self.UserDirectories()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSessionSameFile(t, values["USERPROFILE"], profile.Profile)
 }
 
 func assertSessionSameFile(t *testing.T, actual, expected string) {
