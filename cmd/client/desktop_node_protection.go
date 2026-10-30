@@ -32,12 +32,13 @@ type desktopNodeProtectionAttempt struct {
 // graph consumes the most recent joined trial target (A -> B -> A'), not A's
 // already replaced baseline. Only exact independent readback changes the slot.
 type desktopNodeProtectionSlot struct {
-	mu         sync.Mutex
-	backend    desktopNodeProtectionBackend
-	known      bool
-	target     *mobiletor.DesktopWindowsProtectionTarget
-	active     *desktopNodeProtectionAttempt
-	retirement desktopNodeProtectionRelease
+	mu                 sync.Mutex
+	backend            desktopNodeProtectionBackend
+	known              bool
+	target             *mobiletor.DesktopWindowsProtectionTarget
+	active             *desktopNodeProtectionAttempt
+	retirement         desktopNodeProtectionRelease
+	retirementPrepared bool
 }
 
 func copyDesktopNodeProtectionTarget(target *mobiletor.DesktopWindowsProtectionTarget) *mobiletor.DesktopWindowsProtectionTarget {
@@ -161,10 +162,26 @@ func (s *desktopNodeProtectionSlot) release(ctx context.Context) error {
 		return errors.Join(s.backend.read(ctx, nil), ctx.Err())
 	}
 	target := *s.target
+	if s.retirement != nil && !s.retirementPrepared {
+		// A constructor can return an unarmed partial native owner. Its Close
+		// joins entered work but deliberately preserves the original baseline.
+		// Retain that exact owner until both join and unchanged-target proof
+		// succeed; only then may this retry prepare a fresh exact release.
+		if err := s.retirement.Close(ctx); err != nil || ctx.Err() != nil {
+			return errors.Join(err, ctx.Err())
+		}
+		if err := s.backend.read(ctx, &target); err != nil || ctx.Err() != nil {
+			return errors.Join(err, ctx.Err())
+		}
+		s.retirement, s.retirementPrepared = nil, false
+	}
 	if s.retirement == nil {
 		owner, err := s.backend.release(ctx, target)
 		if owner != nil {
 			s.retirement = owner
+			// The constructor's result is authoritative. Cancellation after a
+			// successful return does not turn its armed owner into a partial one.
+			s.retirementPrepared = err == nil
 		}
 		if err != nil || ctx.Err() != nil {
 			return errors.Join(err, ctx.Err())
@@ -183,7 +200,7 @@ func (s *desktopNodeProtectionSlot) release(ctx context.Context) error {
 	if err := s.backend.read(ctx, expected); err != nil || ctx.Err() != nil {
 		return errors.Join(err, ctx.Err())
 	}
-	s.target, s.retirement = expected, nil
+	s.target, s.retirement, s.retirementPrepared = expected, nil, false
 	return nil
 }
 
