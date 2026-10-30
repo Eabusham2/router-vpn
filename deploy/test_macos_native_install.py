@@ -82,7 +82,10 @@ class MacInstallTransactions(unittest.TestCase):
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory(prefix='routervpn-mac-installer-')
         self.addCleanup(self.directory.cleanup)
-        self.base = Path(self.directory.name)
+        # macOS may spell its temporary parent as /tmp -> /private/tmp.
+        # Capture the physical fixture root before supplying it to the real
+        # installer's no-follow traversal; production path checks stay intact.
+        self.base = Path(self.directory.name).resolve(strict=True)
         self.root, self.system = self.base/'installed', self.base/'system'
         self.system.mkdir()
         self.source = F.package_fixture(self.base/'package')
@@ -124,6 +127,19 @@ class MacInstallTransactions(unittest.TestCase):
         self.assertTrue(self.boundary.loaded)
         self.assertEqual(1, len(self.verifications))
         self.assertFalse(any('kickstart' in call or 'enable' in call for call in self.boundary.calls))
+
+    def test_temp_parent_alias_is_resolved_before_actual_installer_traversal(self):
+        physical = self.base/'physical-temp'; physical.mkdir()
+        alias = self.base/'temp-alias'; alias.symlink_to(physical, target_is_directory=True)
+        fixture = types.SimpleNamespace(name=str(alias), cleanup=lambda: None)
+        independent = MacInstallTransactions('test_first_install_has_one_root_owned_authority_and_no_http_daemon')
+        try:
+            with mock.patch.object(tempfile, 'TemporaryDirectory', return_value=fixture):
+                independent.setUp()
+            self.assertEqual(physical, independent.base)
+            independent.test_first_install_has_one_root_owned_authority_and_no_http_daemon()
+        finally:
+            independent.doCleanups()
 
     def test_actual_runtime_wrapper_excludes_global_site_and_untrusted_current_directory(self):
         runtime = self.base/'private-python'
@@ -375,7 +391,7 @@ def main():
         source = arguments.package.resolve()
         expected = F.runtime_digests(source/'runtime')
         with tempfile.TemporaryDirectory(prefix='routervpn-mac-package-install-') as temporary:
-            base = Path(temporary); installed, system = base/'installed', base/'system'
+            base = Path(temporary).resolve(strict=True); installed, system = base/'installed', base/'system'
             system.mkdir()
             boundary = LaunchBoundary(M, installed, system)
             for iteration in range(2):
