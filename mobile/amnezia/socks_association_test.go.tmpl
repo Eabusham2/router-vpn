@@ -1,0 +1,422 @@
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"runtime"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing/common/buf"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/protocol/socks"
+	"github.com/sagernet/sing/protocol/socks/socks5"
+)
+
+type socksAssociationObserved struct {
+	net.Conn
+	closed, readReturned chan struct{}
+	releaseRead          <-chan struct{}
+	closeOnce, readOnce  sync.Once
+	closeErr             error
+}
+
+func (c *socksAssociationObserved) Close() error {
+	c.closeOnce.Do(func() { c.closeErr = c.Conn.Close(); close(c.closed) })
+	return c.closeErr
+}
+
+func (c *socksAssociationObserved) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if err != nil && c.readReturned != nil {
+		c.readOnce.Do(func() { close(c.readReturned) })
+		if c.releaseRead != nil {
+			<-c.releaseRead
+		}
+	}
+	return n, err
+}
+
+type socksAssociationDialer struct {
+	controlAddress, relayAddress M.Socksaddr
+	tcp, udp                     *socksAssociationObserved
+	releaseRead                  <-chan struct{}
+}
+
+func (d *socksAssociationDialer) DialContext(ctx context.Context, network string, address M.Socksaddr) (net.Conn, error) {
+	want := d.controlAddress
+	if network == "udp" {
+		want = d.relayAddress
+	} else if network != "tcp" {
+		return nil, errors.New("SOCKS fixture received an unsupported network")
+	}
+	if address != want {
+		return nil, errors.New("SOCKS client replaced its negotiated control or relay endpoint")
+	}
+	connection, err := (&net.Dialer{}).DialContext(ctx, network, address.String())
+	if err != nil {
+		return nil, err
+	}
+	observed := &socksAssociationObserved{Conn: connection, closed: make(chan struct{})}
+	if network == "tcp" {
+		observed.readReturned, observed.releaseRead = make(chan struct{}), d.releaseRead
+		d.tcp = observed
+	} else {
+		d.udp = observed
+	}
+	return observed, nil
+}
+
+func (*socksAssociationDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("SOCKS client did not use the negotiated connected UDP socket")
+}
+
+type socksAssociationPeer struct {
+	listener net.Listener
+	udp      *net.UDPConn
+	control  chan net.Conn
+	joined   chan error
+	udpDone  chan error
+	mu       sync.Mutex
+	accepted net.Conn
+}
+
+func newSocksAssociationPeer(t *testing.T, network, host string) *socksAssociationPeer {
+	t.Helper()
+	listener, err := net.Listen("tcp"+network, net.JoinHostPort(host, "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	udpAddress, err := net.ResolveUDPAddr("udp"+network, net.JoinHostPort(host, "0"))
+	if err != nil {
+		_ = listener.Close()
+		t.Fatal(err)
+	}
+	udp, err := net.ListenUDP("udp"+network, udpAddress)
+	if err != nil {
+		_ = listener.Close()
+		t.Fatal(err)
+	}
+	p := &socksAssociationPeer{listener: listener, udp: udp, control: make(chan net.Conn, 1), joined: make(chan error, 1), udpDone: make(chan error, 1)}
+	t.Cleanup(func() {
+		_ = listener.Close()
+		_ = udp.Close()
+		p.mu.Lock()
+		if p.accepted != nil {
+			_ = p.accepted.Close()
+		}
+		p.mu.Unlock()
+		for _, joined := range []<-chan error{p.joined, p.udpDone} {
+			select {
+			case err := <-joined:
+				if err != nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.EOF) {
+					t.Error("actual SOCKS peer failed:", err)
+				}
+			case <-time.After(5 * time.Second):
+				t.Error("actual SOCKS peer did not join")
+			}
+		}
+	})
+	go func() {
+		var packet [65535]byte
+		for {
+			n, address, err := udp.ReadFromUDP(packet[:])
+			if err != nil {
+				p.udpDone <- err
+				return
+			}
+			if _, err := udp.WriteToUDP(packet[:n], address); err != nil {
+				p.udpDone <- err
+				return
+			}
+		}
+	}()
+	go func() {
+		p.joined <- func() error {
+			connection, err := listener.Accept()
+			if err != nil {
+				return err
+			}
+			p.mu.Lock()
+			p.accepted = connection
+			p.mu.Unlock()
+			defer connection.Close()
+			_ = connection.SetDeadline(time.Now().Add(10 * time.Second))
+			reader := bufio.NewReader(connection)
+			request, err := socks5.ReadAuthRequest(reader)
+			if err != nil || !bytes.Contains(request.Methods, []byte{socks5.AuthTypeUsernamePassword}) {
+				return errors.Join(err, errors.New("actual SOCKS peer did not receive selected authentication"))
+			}
+			if err := socks5.WriteAuthResponse(connection, socks5.AuthResponse{Method: socks5.AuthTypeUsernamePassword}); err != nil {
+				return err
+			}
+			auth, err := socks5.ReadUsernamePasswordAuthRequest(reader)
+			if err != nil || auth.Username != "captured-node" || auth.Password != "private-association" {
+				return errors.Join(err, errors.New("SOCKS credentials belong to another node"))
+			}
+			if err := socks5.WriteUsernamePasswordAuthResponse(connection, socks5.UsernamePasswordAuthResponse{}); err != nil {
+				return err
+			}
+			association, err := socks5.ReadRequest(reader)
+			if err != nil || association.Command != socks5.CommandUDPAssociate {
+				return errors.Join(err, errors.New("SOCKS client did not negotiate UDP ASSOCIATE"))
+			}
+			if err := socks5.WriteResponse(connection, socks5.Response{ReplyCode: socks5.ReplyCodeSuccess, Bind: M.SocksaddrFromNet(udp.LocalAddr())}); err != nil {
+				return err
+			}
+			_ = connection.SetDeadline(time.Time{})
+			p.control <- connection
+			var unexpected [1]byte
+			_, err = reader.Read(unexpected[:])
+			return err
+		}()
+	}()
+	return p
+}
+
+func (p *socksAssociationPeer) client(t *testing.T, release <-chan struct{}) (net.Conn, *socksAssociationDialer, net.Conn) {
+	t.Helper()
+	dialer := &socksAssociationDialer{controlAddress: M.SocksaddrFromNet(p.listener.Addr()), relayAddress: M.SocksaddrFromNet(p.udp.LocalAddr()), releaseRead: release}
+	client := socks.NewClient(dialer, dialer.controlAddress, socks.Version5, "captured-node", "private-association")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	connection, err := client.DialContext(ctx, "udp", M.ParseSocksaddr("203.0.113.8:5353"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	if dialer.tcp == nil || dialer.udp == nil {
+		t.Fatal("actual client omitted its separately captured TCP or UDP connection")
+	}
+	select {
+	case control := <-p.control:
+		return connection, dialer, control
+	case <-time.After(5 * time.Second):
+		t.Fatal("actual SOCKS server did not complete its negotiated association")
+		return nil, nil, nil
+	}
+}
+
+func socksAssociationRoundTrip(t *testing.T, connection net.Conn, payload string) {
+	t.Helper()
+	if err := connection.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.Write([]byte(payload)); err != nil {
+		t.Fatal("actual SOCKS UDP write failed", err)
+	}
+	var response [128]byte
+	n, err := connection.Read(response[:])
+	if err != nil || string(response[:n]) != payload {
+		t.Fatal("actual SOCKS UDP response lost its owner or payload", err)
+	}
+	if err := connection.SetDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSocksClientAssociationControlLifetime(t *testing.T) {
+	for _, family := range []struct{ network, host string }{{"4", "127.0.0.1"}, {"6", "::1"}} {
+		t.Run("IPv"+family.network, func(t *testing.T) {
+			first, second := newSocksAssociationPeer(t, family.network, family.host), newSocksAssociationPeer(t, family.network, family.host)
+			one, owner, control := first.client(t, nil)
+			two, replacement, _ := second.client(t, nil)
+			socksAssociationRoundTrip(t, one, "first-owner")
+			socksAssociationRoundTrip(t, two, "replacement-owner")
+			if err := control.Close(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-owner.udp.closed:
+			case <-time.After(2 * time.Second):
+				t.Fatal("SOCKS UDP association survived its terminated TCP control owner")
+			}
+			if _, err := one.Write([]byte("stale-owner")); err == nil {
+				t.Fatal("retired SOCKS association admitted another datagram")
+			}
+			select {
+			case <-replacement.udp.closed:
+				t.Fatal("old SOCKS control retirement closed a replacement association")
+			default:
+			}
+			socksAssociationRoundTrip(t, two, "replacement-still-live")
+			if err := one.Close(); err != nil {
+				t.Fatal("retired SOCKS control did not preserve its joined result", err)
+			}
+		})
+	}
+}
+
+func TestSocksClientAssociationCloseJoinsControlRead(t *testing.T) {
+	peer := newSocksAssociationPeer(t, "4", "127.0.0.1")
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	connection, owner, control := peer.client(t, release)
+	socksAssociationRoundTrip(t, connection, "owned-before-close")
+	if err := control.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-owner.tcp.readReturned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SOCKS client has no joined TCP association observer")
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- connection.Close() }()
+	select {
+	case <-owner.tcp.closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SOCKS close did not retire its captured TCP connection")
+	}
+	select {
+	case err := <-closed:
+		t.Fatal("SOCKS close returned before its captured control read joined", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("SOCKS close did not join its released control observer")
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(fmt.Errorf("repeated SOCKS close lost its captured result: %w", err))
+	}
+}
+
+// This transport supplies complete encoded packets to the actual dependency
+// association. Its three receive APIs and concurrent reply/getter paths are
+// production methods; no duplicate implementation of their synchronization is
+// used. Each owner has distinct endpoints, including multiword IPv6 values.
+type socksAssociationPacketTransport struct {
+	addresses     [2]M.Socksaddr
+	reads, writes atomic.Uint64
+}
+
+func (c *socksAssociationPacketTransport) packet() []byte {
+	var packet bytes.Buffer
+	packet.Write([]byte{0, 0, 0})
+	if err := M.SocksaddrSerializer.WriteAddrPort(&packet, c.addresses[c.reads.Add(1)%2]); err != nil {
+		panic(err)
+	}
+	packet.WriteString("payload")
+	return packet.Bytes()
+}
+
+func (c *socksAssociationPacketTransport) Read(p []byte) (int, error) {
+	return copy(p, c.packet()), nil
+}
+func (c *socksAssociationPacketTransport) Write(p []byte) (int, error) {
+	if len(p) < 3 {
+		return 0, errors.New("association reply lost its wire header")
+	}
+	address, err := M.SocksaddrSerializer.ReadAddrPort(bytes.NewReader(p[3:]))
+	if err != nil || address != c.addresses[0] && address != c.addresses[1] {
+		return 0, errors.Join(err, errors.New("association reply has a torn or foreign endpoint"))
+	}
+	c.writes.Add(1)
+	return len(p), nil
+}
+func (c *socksAssociationPacketTransport) ReadBuffer(p *buf.Buffer) error {
+	_, err := p.Write(c.packet())
+	return err
+}
+func (c *socksAssociationPacketTransport) WriteBuffer(p *buf.Buffer) error {
+	defer p.Release()
+	_, err := c.Write(p.Bytes())
+	return err
+}
+func (c *socksAssociationPacketTransport) LocalAddr() net.Addr              { return c.addresses[0].UDPAddr() }
+func (c *socksAssociationPacketTransport) RemoteAddr() net.Addr             { return c.addresses[0].UDPAddr() }
+func (c *socksAssociationPacketTransport) Close() error                     { return nil }
+func (c *socksAssociationPacketTransport) SetDeadline(time.Time) error      { return nil }
+func (c *socksAssociationPacketTransport) SetReadDeadline(time.Time) error  { return nil }
+func (c *socksAssociationPacketTransport) SetWriteDeadline(time.Time) error { return nil }
+func (c *socksAssociationPacketTransport) CreateReadWaiter() (N.ReadWaiter, bool) {
+	return c, true
+}
+func (*socksAssociationPacketTransport) InitializeReadWaiter(N.ReadWaitOptions) bool { return false }
+func (c *socksAssociationPacketTransport) WaitReadBuffer() (*buf.Buffer, error) {
+	return buf.As(c.packet()), nil
+}
+
+func TestSocksAssociateConcurrentEndpoint(t *testing.T) {
+	for _, method := range []string{"ReadFrom", "ReadPacket", "ReadWaiter"} {
+		t.Run(method, func(t *testing.T) {
+			for identity := 1; identity <= 2; identity++ {
+				transport := &socksAssociationPacketTransport{addresses: [2]M.Socksaddr{
+					M.ParseSocksaddr(fmt.Sprintf("203.0.113.%d:3000", identity)),
+					M.ParseSocksaddr(fmt.Sprintf("[2001:db8::%d]:4000", identity)),
+				}}
+				connection := socks.NewAssociatePacketConn(transport, transport.addresses[0], transport)
+				read := func() error {
+					switch method {
+					case "ReadFrom":
+						var packet [64]byte
+						_, _, err := connection.ReadFrom(packet[:])
+						return err
+					case "ReadPacket":
+						packet := buf.NewSize(64)
+						defer packet.Release()
+						_, err := connection.ReadPacket(packet)
+						return err
+					default:
+						waiter, ok := connection.CreateReadWaiter()
+						if !ok {
+							return errors.New("actual association packet waiter was not retained")
+						}
+						waiter.InitializeReadWaiter(N.ReadWaitOptions{})
+						packet, _, err := waiter.WaitReadPacket()
+						if packet != nil {
+							packet.Release()
+						}
+						return err
+					}
+				}
+				var workers sync.WaitGroup
+				workers.Add(2)
+				go func() {
+					defer workers.Done()
+					for n := 0; n < 4096; n++ {
+						if err := read(); err != nil {
+							t.Error(err)
+							return
+						}
+						runtime.Gosched()
+					}
+				}()
+				go func() {
+					defer workers.Done()
+					for n := 0; n < 4096; n++ {
+						if _, err := connection.Write([]byte("reply")); err != nil {
+							t.Error(err)
+							return
+						}
+						address := M.SocksaddrFromNet(connection.RemoteAddr())
+						if address != transport.addresses[0] && address != transport.addresses[1] {
+							t.Error("association getter has a torn or foreign endpoint")
+							return
+						}
+						runtime.Gosched()
+					}
+				}()
+				workers.Wait()
+				if transport.writes.Load() != 4096 {
+					t.Fatal("association concurrent replies lost packets")
+				}
+			}
+		})
+	}
+}

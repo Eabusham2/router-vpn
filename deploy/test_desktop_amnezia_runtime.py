@@ -32,6 +32,39 @@ def prove_original_packet_race(source, env):
         raise RuntimeError('Original sing packet endpoint did not fail the expected race regression')
     print('Verified negative control: original pinned SOCKS UDP endpoint fails the concurrent receive/reply regression', flush=True)
 
+def prove_association_controls(source, env):
+    patch = BUILD.POLICY.AMNEZIA.PACKET
+    captured = {name: (source/patch.COPY/name).read_bytes() for name in patch.ASSOCIATION_FILES}
+    def reject(selector, witnesses):
+        control = subprocess.run(['go', 'test', '-race', '-ldflags=-checklinkname=0', '-tags='+BUILD.TAGS,
+                                  '-count=1', '-timeout=30s', './protocol/routervpnamnezia', '-run', '^'+selector+'$'],
+                                 cwd=source, env=env, text=True, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, timeout=300)
+        if control.returncode != 1 or any(witness not in control.stdout for witness in witnesses) or 'panic: test timed out' in control.stdout:
+            print(control.stdout)
+            raise RuntimeError('Broken SOCKS association missed its exact native regression: '+selector)
+    try:
+        for name, fixed in captured.items():
+            (source/patch.COPY/name).write_bytes(patch.transform(name, fixed, reverse=True))
+        reject('TestSocksClientAssociationControlLifetime', ('SOCKS UDP association survived its terminated TCP control owner',))
+        reject('TestSocksAssociateConcurrentEndpoint', ('WARNING: DATA RACE', 'AssociatePacketConn'))
+    finally:
+        for name, fixed in captured.items():
+            (source/patch.COPY/name).write_bytes(fixed)
+    patch.verify(source)
+    name = 'protocol/socks/packet.go'
+    source_file = source/patch.COPY/name
+    fixed = captured[name]
+    if fixed.count(b'\t<-c.joined\n') != 1:
+        raise RuntimeError('SOCKS association control join changed its exact production boundary')
+    try:
+        source_file.write_bytes(fixed.replace(b'\t<-c.joined\n', b'\t// deliberately broken control join\n', 1))
+        reject('TestSocksClientAssociationCloseJoinsControlRead', ('SOCKS close returned before its captured control read joined',))
+    finally:
+        source_file.write_bytes(fixed)
+    patch.verify(source)
+    print('Verified real SOCKS association negatives: TCP ownership, concurrent endpoints and joined retirement', flush=True)
+
 def test(source=None):
     target = subprocess.check_output(['go', 'env', 'GOHOSTOS', 'GOHOSTARCH'], text=True).split()
     target = '/'.join(target)
@@ -54,9 +87,10 @@ def test(source=None):
                        cwd=source, env=env, check=True, timeout=90)
         subprocess.run(['go', 'test', '-race', '-ldflags=-checklinkname=0', '-tags='+BUILD.TAGS,
                         '-count=2', '-timeout=90s', './protocol/routervpnamnezia', '-run',
-                        '^Test(DesktopAmneziaCLIEncryptedTrafficAndOwnerShutdown|BindPreservesPacketFramingAndShortWriteRejection|ActualAmneziaUnconnectedUDPReply|ServerPacketConcurrentEndpoint|ServerPacketBlockedReplyDoesNotBlockReceive)$'],
+                        '^Test(DesktopAmneziaCLIEncryptedTrafficAndOwnerShutdown|BindPreservesPacketFramingAndShortWriteRejection|ActualAmneziaUnconnectedUDPReply|ServerPacketConcurrentEndpoint|ServerPacketBlockedReplyDoesNotBlockReceive|SocksClientAssociationControlLifetime|SocksClientAssociationCloseJoinsControlRead|SocksAssociateConcurrentEndpoint)$'],
                        cwd=source, env=env, check=True, timeout=300)
         prove_original_packet_race(source, env)
+        prove_association_controls(source, env)
         BUILD.reuse(bundle, target, BUILD.digest(), BUILD.environment(target))
         env['ROUTERVPN_AWG_DESKTOP_BUNDLE'] = str(bundle)
         env['ROUTERVPN_VIA_ENTRY_NATIVE_CLI'] = str(binary)

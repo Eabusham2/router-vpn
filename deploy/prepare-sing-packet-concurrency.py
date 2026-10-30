@@ -6,6 +6,8 @@ reply goroutine reads it. Guard all three receive APIs and all reply/getter APIs
 without holding a lock across network IO. The same copy also preserves complete
 65535-byte UDP ciphertext in default and low-memory builds. Both native build
 preparations use this owner, so neither can replace the other's dependency.
+The SOCKS client association also couples its UDP socket to the lifetime of
+its negotiated TCP control connection and synchronizes its own reply endpoint.
 Preserve TCP capacities, upstream routing semantics, the whole-module h1
 checksum, and the license; never edit the Go module cache.
 """
@@ -54,6 +56,84 @@ PATCHES = {
 PATCHES.update({name: (digest, (('UDPBufferSize = ' + size, 'UDPBufferSize = 65535'),))
                 for name, (digest, size) in BUFFER_FILES.items()})
 
+ASSOCIATION_FILES = {
+    'protocol/socks/packet.go': ('583600cacce0cbdf96a63d27c2a95874c3341f55', (
+        ('\t"bytes"\n\t"net"\n', '\t"bytes"\n\t"errors"\n\t"net"\n\t"sync"\n'),
+        ('\tremoteAddr M.Socksaddr\n\tunderlying net.Conn\n',
+         '\tremoteMu   sync.RWMutex\n\tremoteAddr M.Socksaddr\n\tunderlying net.Conn\n\tcontrol    *clientAssociationControl\n'),
+        ('func (c *AssociatePacketConn) ReadFrom(', '''// Only a completed client UDP ASSOCIATE owns this control observer. Server
+// and lazy-response constructors keep their existing handshake ownership.
+// RFC 1928 ends the association when its TCP control connection terminates.
+type clientAssociationControl struct {
+	udp, tcp net.Conn
+	once     sync.Once
+	joined   chan struct{}
+	err      error
+}
+
+func (c *clientAssociationControl) retire() {
+	c.once.Do(func() {
+		for _, conn := range []net.Conn{c.udp, c.tcp} {
+			if err := conn.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				c.err = errors.Join(c.err, err)
+			}
+		}
+	})
+}
+
+func (c *clientAssociationControl) Close() error {
+	c.retire()
+	<-c.joined
+	return c.err
+}
+
+func newClientAssociatePacketConn(conn net.Conn, remoteAddr M.Socksaddr, underlying net.Conn) *AssociatePacketConn {
+	association := NewAssociatePacketConn(conn, remoteAddr, underlying)
+	control := &clientAssociationControl{udp: conn, tcp: underlying, joined: make(chan struct{})}
+	association.control = control
+	go func() {
+		defer close(control.joined)
+		var unexpected [1]byte
+		_, _ = underlying.Read(unexpected[:])
+		control.retire()
+	}()
+	return association
+}
+
+// Copy the complete endpoint without holding its lock across packet I/O.
+func (c *AssociatePacketConn) setRemoteAddress(address M.Socksaddr) {
+	c.remoteMu.Lock()
+	c.remoteAddr = address
+	c.remoteMu.Unlock()
+}
+
+func (c *AssociatePacketConn) remoteAddress() M.Socksaddr {
+	c.remoteMu.RLock()
+	address := c.remoteAddr
+	c.remoteMu.RUnlock()
+	return address
+}
+
+func (c *AssociatePacketConn) ReadFrom('''),
+        ('\tc.remoteAddr = destination\n\taddr = destination.UDPAddr()',
+         '\tc.setRemoteAddress(destination)\n\taddr = destination.UDPAddr()'),
+        ('\tc.remoteAddr = destination\n\treturn destination, nil',
+         '\tc.setRemoteAddress(destination)\n\treturn destination, nil'),
+        ('return c.WriteTo(b, c.remoteAddr)', 'return c.WriteTo(b, c.remoteAddress())'),
+        ('return c.remoteAddr.UDPAddr()', 'return c.remoteAddress().UDPAddr()'),
+        ('func (c *AssociatePacketConn) Close() error {\n\treturn common.Close(',
+         'func (c *AssociatePacketConn) Close() error {\n\tif c.control != nil {\n\t\treturn c.control.Close()\n\t}\n\treturn common.Close('),
+    )),
+    'protocol/socks/packet_wait.go': ('ecf673acc8ffb99be71f271122d8bdddd6460a5b', (
+        ('\tw.conn.remoteAddr = destination\n', '\tw.conn.setRemoteAddress(destination)\n'),
+    )),
+    'protocol/socks/client.go': ('ccfb6ae89e38771c96d2d3b7d065d26e3d70a545', (
+        ('return NewAssociatePacketConn(udpConn, address, tcpConn), nil',
+         'return newClientAssociatePacketConn(udpConn, address, tcpConn), nil'),
+    )),
+}
+PATCHES.update(ASSOCIATION_FILES)
+
 
 def git_blob(data):
     return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
@@ -97,10 +177,10 @@ def verify_tree(directory, allow_packet_only=False):
         if total > MAX_BYTES or len(rows) >= 5000:
             raise ValueError('Prepared sing exceeds source bounds')
         data = path.read_bytes()
-        if allow_packet_only and relative in BUFFER_FILES and git_blob(data) == BUFFER_FILES[relative][0]:
-            # The earlier owned copy contained exactly the endpoint fix. Only
-            # those two pristine pinned buffers may be upgraded, and only after
-            # the entire module below reverses to its original exact checksum.
+        if allow_packet_only and relative in (BUFFER_FILES | ASSOCIATION_FILES) and git_blob(data) == PATCHES[relative][0]:
+            # A prior owned copy may predate either complete fix group. Only
+            # exact pristine files may be upgraded, and only after every group
+            # and the entire module reverse to the original pinned checksum.
             if path.stat().st_nlink != 1:
                 raise ValueError('Cannot upgrade an aliased native buffer file')
             original = data
@@ -110,8 +190,10 @@ def verify_tree(directory, allow_packet_only=False):
         rows.append((PREFIX + relative, hashlib.sha256(original).hexdigest()))
     if h1(rows) != SUM:
         raise ValueError('Prepared sing differs from its pinned module plus packet synchronization')
-    if upgrades and set(upgrades) != set(BUFFER_FILES):
-        raise ValueError('Prepared sing has a partial UDP capacity policy')
+    for group in (BUFFER_FILES, ASSOCIATION_FILES):
+        changed = set(upgrades).intersection(group)
+        if changed and changed != set(group):
+            raise ValueError('Prepared sing has a partial UDP capacity or association policy')
     return upgrades
 
 
@@ -179,7 +261,7 @@ def prepare(vendor):
             extract_verified(Path(info['Zip']), staged)
             staged.rename(target)
     subprocess.run(['go', 'mod', 'edit', '-replace=' + MODULE + '@' + VERSION + '=./' + COPY], cwd=vendor, check=True)
-    print('Prepared checksum-verified sing UDP endpoint synchronization and complete ciphertext buffers:', VERSION)
+    print('Prepared checksum-verified sing UDP endpoints, joined SOCKS control ownership and complete ciphertext buffers:', VERSION)
 
 
 def verify(vendor):
