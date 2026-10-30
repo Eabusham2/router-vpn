@@ -76,6 +76,7 @@ UAC_ACCEPTANCE = ("TestWindowsControllerUACAcceptanceLimitedTokenThreadAccess",)
 def sources():
     expected = {"api_windows.go", "identity_windows.go", "launch_windows.go",
                 "pipe_windows.go", "process_windows.go", "gui_windows.go", "stream_windows.go",
+                "inherited_process_windows.go", "inherited_process_windows_test.go",
                 "code_file_windows.go", "code_file_windows_test.go",
                 "process_profile_windows.go", "process_profile_windows_test.go",
                 "system_image_windows.go", "system_image_windows_test.go",

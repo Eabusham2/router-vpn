@@ -44,12 +44,16 @@ REQUIRED = (
     "TestWindowsControllerGUISystemImageCapturePolicy",
     "TestWindowsControllerGUIOriginalUserDirectories",
     "TestWindowsControllerMachineDirectories",
+    "TestWindowsControllerInheritedParentActual",
+    "TestWindowsControllerInheritedParentInvalidHandles",
+    "TestWindowsControllerInheritedParentIdentity",
 )
 
 
 def sources():
     expected = {"api_windows.go", "identity_windows.go", "launch_windows.go",
                 "pipe_windows.go", "process_windows.go", "gui_windows.go", "stream_windows.go",
+                "inherited_process_windows.go", "inherited_process_windows_test.go",
                 "code_file_windows.go", "code_file_windows_test.go",
                 "process_profile_windows.go", "process_profile_windows_test.go",
                 "system_image_windows.go", "system_image_windows_test.go",
@@ -94,6 +98,7 @@ def mutants():
     process = (PACKAGE / "process_windows.go").read_text(encoding="utf-8")
     system_policy = (PACKAGE / "system_image_policy.go").read_text(encoding="utf-8")
     machine = (PACKAGE / "machine_directories_windows.go").read_text(encoding="utf-8")
+    inherited = (PACKAGE / "inherited_process_windows.go").read_text(encoding="utf-8")
     once = NATIVE.replace_once
     original = "actual.Primary || actual.SID != want.SID || actual.AuthenticationID != want.AuthenticationID || actual.SessionID != want.SessionID || actual.Elevated != want.Elevated || actual.Administrator != want.Administrator"
     return (
@@ -175,6 +180,26 @@ def mutants():
          "machine directory capture used or required inherited environment",
          once(machine, 'validateMachineDirectory(programData)',
               'validateMachineDirectory(func() string { value, _ := syscall.Getenv("ProgramData"); return value }())')),
+        ("inherited_process_windows.go", "inherited-parent-excess-rights", REQUIRED[21],
+         "invalid inherited parent capability was admitted",
+         once(inherited, "err != nil || access != inheritedParentAccess",
+              "err != nil || false && access != inheritedParentAccess")),
+        ("inherited_process_windows.go", "noninherited-parent-capability", REQUIRED[21],
+         "invalid inherited parent capability was admitted",
+         once(inherited, "err != nil || flags != syscall.HANDLE_FLAG_INHERIT",
+              "err != nil || false && flags != syscall.HANDLE_FLAG_INHERIT")),
+        ("inherited_process_windows.go", "inherited-self-as-parent", REQUIRED[22],
+         "native child accepted itself as its inherited parent",
+         once(inherited, "if parent.PID() == uint32(os.Getpid()) {",
+              "if false && parent.PID() == uint32(os.Getpid()) {")),
+        ("inherited_process_windows.go", "inherited-parent-token-policy", REQUIRED[23],
+         "inherited native parent ignored the actual token policy",
+         once(inherited, "sameOriginalUser(current, parent)", "true")),
+        ("inherited_process_windows.go", "protected-parent-handle-leak", REQUIRED[21],
+         "invalid inherited parent capability was admitted",
+         once(inherited,
+              "syscall.SetHandleInformation(handle, inheritedParentProtectClose, 0), syscall.CloseHandle(handle)",
+              "syscall.CloseHandle(handle)")),
     )
 
 
@@ -198,7 +223,9 @@ def execute(go="go"):
                                     cwd=ROOT, env=environment, timeout=195)
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if (status or "--- SKIP:" in output or "DATA RACE" in output or
-                any("--- PASS: " + name + " (" not in output for name in REQUIRED)):
+                any("--- PASS: " + name + " (" not in output for name in REQUIRED) or
+                any("--- PASS: " + REQUIRED[21] + "/" + name + " (" not in output
+                    for name in ("accepted", "excess-rights", "not-inherited", "protected-close"))):
             raise ValueError("Native GUI did not execute every actual process/pipe boundary")
         if hashlib.sha256(baseline.read_bytes()).hexdigest() != identity:
             raise ValueError("Native GUI test image changed during its proof")
@@ -220,7 +247,7 @@ def execute(go="go"):
             print("Rejected production native GUI mutant:", name, flush=True)
         if sources() != before:
             raise ValueError("Native GUI sources changed during execution")
-    print("Native GUI ownership passed twenty required process/pipe/system-policy cases and eighteen compiled production negative controls, including kernel current-image recapture, original-user profile capture, system PowerShell and distinct pre-creation/suspended-image proofs; C# application and cross-account UAC composition remain separate.", flush=True)
+    print(f"Native GUI ownership passed {len(REQUIRED)} required process/pipe/system-policy cases and {len(mutants())} compiled production negative controls, including inherited elevated-parent capability, kernel current-image recapture, original-user profile capture, system PowerShell and distinct pre-creation/suspended-image proofs; C# application and cross-account UAC composition remain separate.", flush=True)
 
 
 if __name__ == "__main__":
