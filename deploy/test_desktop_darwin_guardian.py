@@ -340,6 +340,9 @@ def execute_mutations(source: Path, go='go'):
         ('native occupied UID observation', 'IdentityRetirement', 'fresh observer accepted an actual occupied UID',
          'desktop_socket_darwin_readback.go', (
              ('state := "occupied"', 'state := "absent"'),)),
+        ('normal owned identity retirement', 'TCPAndUDP', 'normal close did not retire its local identity',
+         'desktop_socket_darwin_helper.go', (
+             ('if release && g.account != "" {', 'if false && release && g.account != "" {'),)),
         ('native UID observer child join', 'UIDObserver', 'unowned, unknown, malformed or unjoined UID receipt released an identity',
          'desktop_socket_darwin_readback.go', (
              ('joinErr := command.Wait()', 'joinErr := error(nil)'),)),

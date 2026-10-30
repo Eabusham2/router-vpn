@@ -1082,8 +1082,22 @@ func TestDesktopDarwinGuardianKernelTCPAndUDP(t *testing.T) {
 			if err := policy.pf.allAbsent(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if !desktopDarwinUIDAvailable(policy.uid) {
-				t.Fatal("normal close did not retire its isolated identity")
+			// Preparation proved this account in the long-lived parent's libc
+			// cache. Observe its actual post-close state through a fresh native
+			// process, as retirement itself does; a cached occupied UID is not a
+			// new directory observation. Require all independent cleanup facts.
+			if err := desktopDarwinLocalIdentityAbsent(ctx, policy.account, policy.uid); err != nil {
+				t.Fatal("normal close did not retire its local identity", err)
+			}
+			absent, err := desktopDarwinFreshUIDReadback(ctx, policy.capture, policy.uid)
+			if err != nil || !absent {
+				t.Fatal("normal close did not prove fresh native UID absence", err)
+			}
+			if _, err := os.Lstat(filepath.Join(desktopDarwinIdentities, policy.account)); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("normal close retained its identity recovery owner", err)
+			}
+			if err := desktopDarwinNoUIDProcesses(policy.uid); err != nil {
+				t.Fatal("normal close retained an isolated identity process", err)
 			}
 		})
 	}
