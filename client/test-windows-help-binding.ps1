@@ -162,3 +162,4 @@ Write-Host ("Windows Help binding regression tests: PASS ("+$Count+" checks)")
 
 & (Join-Path $Client 'test-windows-multihop-execution.ps1') -ProductSource $After
 & (Join-Path $Client 'test-windows-via-entry-candidates.ps1') -ProductSource $After
+& (Join-Path $Client 'test-windows-protection-composition.ps1') -ProductSource $After

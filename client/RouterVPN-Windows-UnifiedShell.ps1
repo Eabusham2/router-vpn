@@ -470,7 +470,7 @@ function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Time
             $UnifiedConnect.Content=if($Disconnecting){'Disconnecting…'}elseif($script:UnifiedProtectionPending){'Connect'}elseif($Connected-or$MutationBusy){'Disconnect'}else{'Connect'}
             $UnifiedConnect.IsEnabled=(-not$Disconnecting -and -not$script:UnifiedProtectionPending)
         }
-        foreach($Name in @('UnifiedMultihop','UnifiedModeCombo','UnifiedDnsCombo')){
+        foreach($Name in @('UnifiedMultihop','UnifiedModeCombo','UnifiedDnsCombo','UnifiedFastestNode')){
             $C=Control $Name;if($null-ne$C){$C.IsEnabled=-not$MutationBusy}
         }
     }finally{$script:Busy=$false}
@@ -865,7 +865,7 @@ $Window.Add_Closed({
     try{if($null-ne$script:UnifiedAsyncCts){$script:UnifiedAsyncCts.Dispose()}}catch{}
 })
 (Control 'UnifiedModeCombo').Add_SelectionChanged({if($ModeCombo.SelectedValue){$ID=[string]$ModeCombo.SelectedValue;if($ID -eq 'custom:new'){ShowUnifiedCustomBuilder}else{SaveUnifiedModeID $ID}}})
-(Control 'UnifiedKillSwitch').Add_Click({try{$On=[bool](Control 'UnifiedKillSwitch').IsChecked;$DisplayedProfileID=[string]$RouterCombo.SelectedValue;if($script:UnifiedProtectionPending -and $script:UnifiedProtectionProfileID-ceq$DisplayedProfileID){$On=$false};[void](Set-RouterVPNProfileProtection -BaseUrl $BaseUrl -DisplayedProfileID $DisplayedProfileID -Enabled $On);Log (if($On){'Kill switch enabled'}else{'Kill switch disabled'})}catch{Log ('Kill switch update failed: '+$_.Exception.Message)};RefreshProduct})
+(Control 'UnifiedKillSwitch').Add_Click({try{$On=[bool](Control 'UnifiedKillSwitch').IsChecked;$DisplayedProfileID=[string]$RouterCombo.SelectedValue;if($script:UnifiedProtectionPending -and $script:UnifiedProtectionProfileID-ceq$DisplayedProfileID){$On=$false};[void](Set-RouterVPNProfileProtection -BaseUrl $BaseUrl -DisplayedProfileID $DisplayedProfileID -Enabled $On);Log $(if($On){'Kill switch enabled'}else{'Kill switch disabled'})}catch{Log ('Kill switch update failed: '+$_.Exception.Message)};RefreshProduct})
 (Control 'UnifiedDnsCombo').Add_SelectionChanged({if(-not $script:Busy){$Tag=ComboTag (Control 'UnifiedDnsCombo') 'home';if($Tag -in @('fastest','custom','dot','doh','doh3')){OpenUnifiedDetail 3;RefreshDnsPolicy}else{try{SetUnifiedDNSPreset -Mode $Tag;Log ('DNS selected: '+$Tag)}catch{Log ('DNS update failed: '+$_.Exception.Message)};RefreshDnsPolicy;RefreshProduct}}})
 '@
     $ProductSource = $ProductSource.Replace($beforeShow, $handlers + "`n" + $beforeShow)
