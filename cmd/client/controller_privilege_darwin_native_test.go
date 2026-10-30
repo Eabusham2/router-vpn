@@ -83,7 +83,8 @@ print(json.dumps({"executable": os.path.realpath(sys.executable), "library": os.
 func init() {
 	// Only this explicit test binary contains these entry points. They are
 	// absent from the shipping controller and never weaken a production flag.
-	privilegedRole := len(os.Args) == 2 && (os.Args[1] == macOSControllerSupervisorArgument || os.Args[1] == macOSOwnedControllerArgument)
+	pfUtility := len(os.Args) >= 2 && os.Args[1] == darwinOwnedPFArgument
+	privilegedRole := pfUtility || len(os.Args) == 2 && (os.Args[1] == macOSControllerSupervisorArgument || os.Args[1] == macOSOwnedControllerArgument)
 	if privilegedRole {
 		marker := filepath.Join(macOSOwnedControllerRoot, "fixture-native-authority")
 		info, err := os.Lstat(marker)
@@ -94,6 +95,10 @@ func init() {
 		}
 	}
 	if len(os.Args) == 2 && os.Args[1] == macOSControllerSupervisorArgument {
+		main()
+		os.Exit(0)
+	}
+	if pfUtility {
 		main()
 		os.Exit(0)
 	}

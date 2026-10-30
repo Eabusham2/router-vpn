@@ -54,7 +54,9 @@ for arch in amd64 arm64; do
   mkdir -p "$dir"
   copy_runtime "$dir"
 
-  CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-client" ./cmd/client
+  # The fixed installed PF utility includes the qualified native single-FILTER
+  # adapter. A Go-only stub cannot implement its exact kernel transaction.
+  CGO_ENABLED=1 GOOS=darwin GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-client" ./cmd/client
   python3 "$ROOT/deploy/build-dnsproxy.py" build "darwin/$goarch" "$dir/router-vpn-dns"
   CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-start-layer-relay" ./cmd/start-layer-relay
   CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-update" ./cmd/app-update

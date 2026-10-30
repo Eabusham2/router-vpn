@@ -100,6 +100,13 @@ func main() {
 		}
 		return
 	}
+	if handled, err := macOSOwnedPFUtility(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if handled, err := windowsPhysicalProtectionUtility(os.Args[1:]); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)

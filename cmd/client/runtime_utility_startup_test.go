@@ -231,6 +231,26 @@ func TestRuntimeUtilityStartup(t *testing.T) {
 		}
 	})
 
+	t.Run("darwin-pf-before-configuration", func(t *testing.T) {
+		root := t.TempDir()
+		write(filepath.Join(root, "client.json"), []byte("{unrelated-invalid-config"))
+		before := snapshot(root)
+		for _, args := range [][]string{{darwinOwnedPFArgument}, {darwinOwnedPFArgument, "clear"}, {darwinOwnedPFArgument, "apply", "foreign-owner"}} {
+			stdout, stderr, code := run(root, filepath.Join(root, "client.json"), args...)
+			if code != 1 || stdout != "" || stderr != "the fixed Darwin PF utility requires exactly plan or apply\n" || !reflect.DeepEqual(snapshot(root), before) {
+				t.Fatalf("Darwin PF utility admitted ordinary startup or arbitrary authority: args=%v code=%d out=%q err=%q", args, code, stdout, stderr)
+			}
+		}
+		if runtime.GOOS != "darwin" {
+			for _, phase := range []string{"plan", "apply"} {
+				stdout, stderr, code := run(root, filepath.Join(root, "client.json"), darwinOwnedPFArgument, phase)
+				if code != 1 || stdout != "" || stderr != "the installed Darwin PF utility requires macOS\n" || !reflect.DeepEqual(snapshot(root), before) {
+					t.Fatalf("Darwin PF utility fell through to ordinary startup on another platform: phase=%s code=%d out=%q err=%q", phase, code, stdout, stderr)
+				}
+			}
+		}
+	})
+
 	t.Run("normal-startup-migrates-trust-and-prepares-catalog", func(t *testing.T) {
 		root := t.TempDir()
 		write(filepath.Join(root, "client", "Prepare-Windows-Mode-Catalog-v2.ps1"), helper)

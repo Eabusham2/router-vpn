@@ -25,7 +25,7 @@ SPEC = importlib.util.spec_from_file_location('macos_controller_compiler', ROOT 
 UID = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UID)
 CASES = ('InterpreterSelection', 'LifetimeAndInheritedLocks', 'RejectsForeignUIDAndInvalidFrames',
-         'RejectsUnsafeInstalledAuthority', 'SupervisorRestartDoesNotAdoptLiveChild', 'AppKitClient')
+         'RejectsUnsafeInstalledAuthority', 'SupervisorRestartDoesNotAdoptLiveChild', 'AppKitClient', 'PFBaselineUtility')
 
 
 def reported_run(command, **kwargs):
