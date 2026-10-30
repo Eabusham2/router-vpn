@@ -294,7 +294,8 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
     source, package, before = checked_sources(source)
     if not {'desktop_socket_darwin_guardian_test.go', 'desktop_socket_darwin_kernel_cgo.go',
             'desktop_socket_darwin_pf.go', 'desktop_socket_darwin_state.go',
-            'desktop_socket_darwin_readback.go'}.issubset(before):
+            'desktop_socket_darwin_readback.go', 'desktop_socket_darwin_pf_probe_cgo.go',
+            'desktop_socket_darwin_pf_probe_nocgo.go'}.issubset(before):
         raise ValueError('The exact native PF guardian source/test closure is incomplete')
     captured = dict(os.environ, GOWORK='off', CGO_ENABLED='1')
     if captured.get('GOOS', 'darwin') != 'darwin':
@@ -331,7 +332,7 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
             raise ValueError('Darwin guardian source/executable changed during actual kernel execution')
         print(output, end='' if output.endswith('\n') else '\n')
         if case in PROBE_CASES:
-            print('Darwin exact native filter-only anchor lifetime probe passed.')
+            print('Darwin exact native single-filter commit and rollback anchor lifetime probe passed.')
         else:
             print('Darwin exact native libproc, isolated UID, scoped PF, actual utun ownership and crash cleanup passed.')
 

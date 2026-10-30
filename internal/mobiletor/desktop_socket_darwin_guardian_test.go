@@ -147,7 +147,7 @@ func TestDesktopDarwinGuardianKernelPFSystemDispatch(t *testing.T) {
 }
 
 // Keep this fresh-namespace diagnostic separate from the required guardian
-// suite. It tests whether the actual host's filter-only loader can retire its
+// suite. It tests whether an actual single FILTER transaction can retire its
 // own anchor; it does not substitute empty rule text for native absence or
 // change the production loader before that boundary is established.
 func TestDesktopPFAnchorProbeFilterOnlyRetirement(t *testing.T) {
@@ -160,12 +160,30 @@ func TestDesktopPFAnchorProbeFilterOnlyRetirement(t *testing.T) {
 	if present, err := desktopDarwinFixturePFPresent(ctx, anchor); err != nil || present {
 		t.Fatal("filter-only probe did not capture an absent owned namespace", anchor, err)
 	}
+	for _, wrong := range []string{"", "com.apple", anchor + "/unowned", "com.apple/000.router-vpn"} {
+		if err := desktopDarwinPFProbeTransaction(ctx, wrong, desktopDarwinTestFixture.Addresses[1], 1); err == nil {
+			t.Fatal("single-filter probe accepted an uncaptured native namespace", wrong)
+		}
+	}
+	for _, wrong := range []netip.Addr{netip.MustParseAddr("192.0.2.1"), netip.MustParseAddr("::1"), desktopDarwinTestFixture.Addresses[0]} {
+		if err := desktopDarwinPFProbeTransaction(ctx, anchor, wrong, 1); err == nil {
+			t.Fatal("single-filter probe accepted an unowned loopback target", wrong)
+		}
+	}
+	cancelled, stop := context.WithCancel(ctx)
+	stop()
+	if err := desktopDarwinPFProbeTransaction(cancelled, anchor, desktopDarwinTestFixture.Addresses[1], 1); !errors.Is(err, context.Canceled) {
+		t.Fatal("single-filter probe ignored cancellation before its native mutation", err)
+	}
+	if present, err := desktopDarwinFixturePFPresent(ctx, anchor); err != nil || present {
+		t.Fatal("rejected single-filter probe created a native namespace", anchor, err)
+	}
 	rules := fmt.Sprintf("block drop out on lo0 inet to %s label \"rvpn-filter-only-probe\"\n", desktopDarwinTestFixture.Addresses[1])
 	expected, err := desktopDarwinPFCanonical(ctx, rules)
 	if err != nil {
 		t.Fatal("filter-only probe did not parse its scoped filter", err)
 	}
-	if _, err := desktopDarwinCommand(ctx, "/sbin/pfctl", []byte(rules), "-R", "-a", anchor, "-f", "-"); err != nil {
+	if err := desktopDarwinPFProbeTransaction(ctx, anchor, desktopDarwinTestFixture.Addresses[1], 1); err != nil {
 		t.Fatal("actual filter-only creation was rejected", err)
 	}
 	if actual, err := desktopDarwinPFRead(ctx, anchor); err != nil || actual != expected {
@@ -174,7 +192,7 @@ func TestDesktopPFAnchorProbeFilterOnlyRetirement(t *testing.T) {
 	if present, err := desktopDarwinFixturePFPresent(ctx, anchor); err != nil || !present {
 		t.Fatal("actual filter-only anchor was not independently inventoried", anchor, err)
 	}
-	if _, err := desktopDarwinCommand(ctx, "/sbin/pfctl", []byte("\n"), "-R", "-a", anchor, "-f", "-"); err != nil {
+	if err := desktopDarwinPFProbeTransaction(ctx, anchor, desktopDarwinTestFixture.Addresses[1], 0); err != nil {
 		t.Fatal("actual filter-only empty transaction was rejected", err)
 	}
 	if actual, err := desktopDarwinPFRead(ctx, anchor); err != nil || actual != "" {
@@ -182,6 +200,17 @@ func TestDesktopPFAnchorProbeFilterOnlyRetirement(t *testing.T) {
 	}
 	if present, err := desktopDarwinFixturePFPresent(ctx, anchor); err != nil || present {
 		t.Fatal("filter-only transaction retained its empty native anchor", anchor, err)
+	}
+	// A populated inactive transaction must also retire its own namespace when
+	// explicitly rolled back. No active rule or native anchor may survive.
+	if err := desktopDarwinPFProbeTransaction(ctx, anchor, desktopDarwinTestFixture.Addresses[1], 2); err != nil {
+		t.Fatal("single-filter rollback did not finish its exact owned transaction", err)
+	}
+	if actual, err := desktopDarwinPFRead(ctx, anchor); err != nil || actual != "" {
+		t.Fatal("single-filter rollback left active filter rules", actual, err)
+	}
+	if present, err := desktopDarwinFixturePFPresent(ctx, anchor); err != nil || present {
+		t.Fatal("single-filter rollback retained its empty native anchor", anchor, err)
 	}
 }
 
