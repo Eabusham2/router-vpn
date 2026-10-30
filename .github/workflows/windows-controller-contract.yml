@@ -34,6 +34,8 @@ on:
       - 'deploy/test_windows_gui_adapter.py'
       - 'deploy/test_windows_gui_powershell.py'
       - 'deploy/test_windows_app_session.py'
+      - 'deploy/diagnose_windows_ui_startup.py'
+      - 'deploy/test_windows_ui_startup_diagnostic.py'
       - 'deploy/test_windows_ui_state.py'
       - 'client/test-windows-ui-state.ps1'
       - 'deploy/windows_*_preparation_gate.py'
@@ -74,6 +76,8 @@ on:
       - 'deploy/test_windows_gui_adapter.py'
       - 'deploy/test_windows_gui_powershell.py'
       - 'deploy/test_windows_app_session.py'
+      - 'deploy/diagnose_windows_ui_startup.py'
+      - 'deploy/test_windows_ui_startup_diagnostic.py'
       - 'deploy/test_windows_ui_state.py'
       - 'client/test-windows-ui-state.ps1'
       - 'deploy/windows_*_preparation_gate.py'
@@ -88,6 +92,42 @@ permissions:
   contents: read
 
 jobs:
+  cold-ui-diagnostic:
+    name: First Windows UI launch stage timings (instrumented)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    concurrency:
+      group: windows-first-ui-diagnostic-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Validate fixed timing instrumentation boundaries
+        shell: pwsh
+        run: |
+          python deploy/test_windows_ui_startup_diagnostic.py
+          if ($LASTEXITCODE -ne 0) { throw 'First-launch instrumentation changed the original transport code' }
+      - name: Pinned compiler for first-launch Session diagnostics
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $compilerLines = @(python deploy/install-desktop-windows-toolchain.py (Join-Path $env:RUNNER_TEMP 'routervpn-first-ui-llvm'))
+          if ($LASTEXITCODE -ne 0 -or $compilerLines.Count -ne 1) { throw 'Pinned first-launch compiler installation failed' }
+          $compilerBin = [string]$compilerLines[0]
+          $compiler = Join-Path $compilerBin 'x86_64-w64-mingw32-clang.exe'
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'Pinned first-launch C compiler is missing' }
+          "CC=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $compilerBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Observe the first instrumented installed Session without retry
+        shell: pwsh
+        run: |
+          python deploy/diagnose_windows_ui_startup.py
+          if ($LASTEXITCODE -ne 0) { throw 'Instrumented first UI launch failed; original stage timings are above' }
+    # This fresh job locates a cold-start delay. Its instrumented result cannot
+    # replace acceptance in the independent exact-source Session job below.
   node-process:
     name: Actual retained Windows Node child process
     runs-on: windows-latest
