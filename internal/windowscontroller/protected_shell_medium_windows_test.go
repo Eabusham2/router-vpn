@@ -3,6 +3,7 @@
 package windowscontroller
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"maps"
@@ -117,22 +118,39 @@ func fixtureProtectedShellPrimaryMedium(t *testing.T, flags uint32) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	parentDefaultDACL, err := fixtureTokenDefaultDACL(worker.parent)
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer func() {
 		actual, _, identityErr := readTokenIdentity(worker.parent)
 		after, statisticsErr := fixtureTokenStatistics(worker.parent)
 		label, integrityErr := fixtureTokenIntegrity(worker.parent)
 		privileges, privilegeErr := fixtureTokenPrivileges(worker.parent)
+		defaultDACL, daclErr := fixtureTokenDefaultDACL(worker.parent)
 		// CreateProcessAsUser may temporarily use an already-present privilege
 		// and restore it. ModifiedID can change; the original token object,
 		// complete privilege attributes and primary authority must not.
-		if identityErr != nil || statisticsErr != nil || integrityErr != nil || privilegeErr != nil ||
+		if identityErr != nil || statisticsErr != nil || integrityErr != nil || privilegeErr != nil || daclErr != nil ||
 			!fixtureSamePrimary(original, actual) || after.TokenID != statistics.TokenID ||
-			after.AuthenticationID != statistics.AuthenticationID || label != integrity || !maps.Equal(privileges, worker.privileges) {
-			t.Error("primary-Medium fixture changed its parent token or privileges", identityErr, statisticsErr, integrityErr, privilegeErr)
+			after.AuthenticationID != statistics.AuthenticationID || label != integrity || !maps.Equal(privileges, worker.privileges) ||
+			!bytes.Equal(defaultDACL, parentDefaultDACL) {
+			t.Error("primary-Medium fixture changed its parent token, privileges or default DACL", identityErr, statisticsErr, integrityErr, privilegeErr, daclErr)
 		}
 	}()
 	t.Logf("Constructed primary-Medium token variant: constructor flags=0x%x; actual authority, private desktop and exact suspended child checks are unchanged", flags)
 	token := fixtureConstructMediumPrimary(t, api, worker.parent, original, statistics, worker.privileges, flags)
+	// The hosted administrator's default ACL gives its logon only read/execute
+	// after Administrators becomes deny-only. The new child must be able to use
+	// its own newly created synchronization objects. Set only this independent
+	// fixture token's default template, never an existing object or parent token.
+	if err := fixtureSetMediumDefaultDACL(api, token); err != nil {
+		t.Fatal("constructed Medium fixture has no verified private object template", err)
+	}
+	workerDefaultDACL, err := fixtureTokenDefaultDACL(token)
+	if err != nil {
+		t.Fatal(err)
+	}
 	worker.inspect = func(process syscall.ProcessInformation, image *Image) {
 		fixtureInspectMediumStartup(t, api, token, process, image, original.SessionID)
 	}
@@ -140,6 +158,10 @@ func fixtureProtectedShellPrimaryMedium(t *testing.T, flags uint32) {
 		identity, err := fixturePrimaryMediumIdentity(api, actual)
 		if err != nil || identity.SID != original.SID || identity.AuthenticationID != original.AuthenticationID || identity.SessionID != original.SessionID {
 			return errors.Join(err, errors.New("suspended Medium worker changed its captured user or logon"))
+		}
+		defaultDACL, err := fixtureTokenDefaultDACL(actual)
+		if err != nil || !bytes.Equal(defaultDACL, workerDefaultDACL) {
+			return errors.Join(err, errors.New("suspended Medium worker changed its exact private object template"))
 		}
 		return nil
 	})

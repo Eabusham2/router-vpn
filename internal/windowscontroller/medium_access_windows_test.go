@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"maps"
 	"path/filepath"
 	"runtime"
 	"syscall"
@@ -161,6 +162,113 @@ func fixtureWithMediumStartupSecurity(api *fixtureRestrictedAPI, sid string, cre
 	return err
 }
 
+// Return only the bounded ACL bytes, never the token-information buffer's
+// embedded pointer. This also lets the parent independently prove that its
+// default template was untouched by constructing the separate fixture token.
+func fixtureTokenDefaultDACL(token syscall.Token) ([]byte, error) {
+	var size, returned uint32
+	err := syscall.GetTokenInformation(token, 6 /* TokenDefaultDacl */, nil, 0, &size)
+	if !errors.Is(err, syscall.ERROR_INSUFFICIENT_BUFFER) || size < 16 || size > 65536 {
+		return nil, errors.Join(err, errors.New("Medium default DACL has no bounded readback"))
+	}
+	data := make([]byte, size)
+	if err := syscall.GetTokenInformation(token, 6, &data[0], size, &returned); err != nil || returned != size {
+		return nil, errors.Join(err, errors.New("Medium default DACL changed shape"))
+	}
+	pointer := *(*unsafe.Pointer)(unsafe.Pointer(&data[0]))
+	start, address := uintptr(unsafe.Pointer(&data[0])), uintptr(pointer)
+	if pointer == nil || address < start || address-start < unsafe.Sizeof(pointer) || address-start > uintptr(len(data)-8) {
+		return nil, errors.New("Medium default DACL is outside its captured buffer")
+	}
+	acl := data[address-start:]
+	length, count := int(binary.LittleEndian.Uint16(acl[2:4])), int(binary.LittleEndian.Uint16(acl[4:6]))
+	if length < 8 || length > len(acl) || count > (length-8)/8 {
+		return nil, errors.New("Medium default DACL is malformed")
+	}
+	result := append([]byte(nil), acl[:length]...)
+	runtime.KeepAlive(data)
+	return result, nil
+}
+
+// Set only the newly derived token's default ACL for objects that its worker
+// will create. Existing host objects, the original token, groups, privileges,
+// integrity and elevation are not modified. A hosted administrator's default
+// ACL otherwise leaves its logon with read/execute after Administrators becomes
+// deny-only, preventing writes to its own newly created objects.
+// https://learn.microsoft.com/windows/win32/api/winnt/ns-winnt-token_default_dacl
+// https://learn.microsoft.com/windows/win32/api/securitybaseapi/nf-securitybaseapi-settokeninformation
+func fixtureSetMediumDefaultDACL(api *fixtureRestrictedAPI, token syscall.Token) error {
+	before, err := fixturePrimaryMediumIdentity(api, token)
+	if err != nil || before.SID == "S-1-5-18" {
+		return errors.Join(err, errors.New("Medium object template has no exact ordinary fixture principal"))
+	}
+	statistics, err := fixtureTokenStatistics(token)
+	if err != nil {
+		return err
+	}
+	privileges, err := fixtureTokenPrivileges(token)
+	if err != nil {
+		return err
+	}
+	user, err := syscall.StringToSid(before.SID)
+	if err != nil {
+		return err
+	}
+	canonical, err := user.String()
+	if err != nil || canonical != before.SID {
+		return errors.Join(err, errors.New("Medium object template principal is not canonical"))
+	}
+	sddl, _ := syscall.UTF16PtrFromString("D:P(A;;GA;;;SY)(A;;GA;;;" + canonical + ")")
+	var descriptor unsafe.Pointer
+	var size uint32
+	ok, _, callErr := api.native.convertSD.Call(uintptr(unsafe.Pointer(sddl)), 1, uintptr(unsafe.Pointer(&descriptor)), uintptr(unsafe.Pointer(&size)))
+	runtime.KeepAlive(sddl)
+	if descriptor != nil {
+		defer api.native.localFree.Call(uintptr(descriptor))
+	}
+	if ok == 0 || descriptor == nil || size < 20 || size > 65536 {
+		return nativeError("new Medium default object descriptor", callErr)
+	}
+	read, err := api.native.convertSD.Dll.FindProc("GetSecurityDescriptorDacl")
+	if err != nil {
+		return err
+	}
+	var present, defaulted uint32
+	var acl unsafe.Pointer
+	ok, _, callErr = read.Call(uintptr(descriptor), uintptr(unsafe.Pointer(&present)), uintptr(unsafe.Pointer(&acl)), uintptr(unsafe.Pointer(&defaulted)))
+	start, address := uintptr(descriptor), uintptr(acl)
+	if ok == 0 || present != 1 || defaulted != 0 || acl == nil || address < start || address-start < 20 || address-start > uintptr(size-8) {
+		return errors.Join(nativeError("new Medium default object ACL", callErr), errors.New("Medium object template lost its explicit captured ACL"))
+	}
+	available := unsafe.Slice((*byte)(acl), int(uintptr(size)-(address-start)))
+	length := int(binary.LittleEndian.Uint16(available[2:4]))
+	if available[0] != 2 || length < 8 || length > len(available) || binary.LittleEndian.Uint16(available[4:6]) != 2 {
+		return errors.New("Medium object template is not its two captured principals")
+	}
+	expected := append([]byte(nil), available[:length]...)
+	set, err := api.native.convertSD.Dll.FindProc("SetTokenInformation")
+	if err != nil {
+		return err
+	}
+	value := struct{ DefaultDacl unsafe.Pointer }{DefaultDacl: acl}
+	ok, _, callErr = set.Call(uintptr(token), 6 /* TokenDefaultDacl */, uintptr(unsafe.Pointer(&value)), unsafe.Sizeof(value))
+	runtime.KeepAlive(value)
+	if ok == 0 {
+		return nativeError("set only the new Medium fixture object template", callErr)
+	}
+	actual, err := fixtureTokenDefaultDACL(token)
+	after, identityErr := fixturePrimaryMediumIdentity(api, token)
+	afterStatistics, statisticsErr := fixtureTokenStatistics(token)
+	afterPrivileges, privilegeErr := fixtureTokenPrivileges(token)
+	if err != nil || identityErr != nil || statisticsErr != nil || privilegeErr != nil || !bytes.Equal(actual, expected) ||
+		!fixtureSamePrimary(before, after) || statistics.TokenID != afterStatistics.TokenID ||
+		statistics.AuthenticationID != afterStatistics.AuthenticationID || !maps.Equal(privileges, afterPrivileges) {
+		return errors.Join(err, identityErr, statisticsErr, privilegeErr, errors.New("Medium default template changed or altered its independent token authority"))
+	}
+	runtime.KeepAlive(user)
+	return nil
+}
+
 func fixtureLogMediumDefaultDACL(t *testing.T, token syscall.Token) {
 	t.Helper()
 	identity, _, err := readTokenIdentity(token)
@@ -172,26 +280,11 @@ func fixtureLogMediumDefaultDACL(t *testing.T, token syscall.Token) {
 		t.Fatal(err)
 	}
 	userBytes := unsafe.Slice((*byte)(unsafe.Pointer(user)), user.Len())
-	var size, returned uint32
-	err = syscall.GetTokenInformation(token, 6 /* TokenDefaultDacl */, nil, 0, &size)
-	if !errors.Is(err, syscall.ERROR_INSUFFICIENT_BUFFER) || size < 16 || size > 65536 {
-		t.Fatal("Medium default DACL has no bounded readback", err)
+	acl, err := fixtureTokenDefaultDACL(token)
+	if err != nil {
+		t.Fatal(err)
 	}
-	data := make([]byte, size)
-	if err := syscall.GetTokenInformation(token, 6, &data[0], size, &returned); err != nil || returned != size {
-		t.Fatal("Medium default DACL changed shape", err)
-	}
-	pointer := *(*unsafe.Pointer)(unsafe.Pointer(&data[0]))
-	start, address := uintptr(unsafe.Pointer(&data[0])), uintptr(pointer)
-	if pointer == nil || address < start || address-start > uintptr(len(data)-8) {
-		t.Fatal("Medium default DACL is outside its captured buffer")
-	}
-	acl := data[address-start:]
-	length, count := int(binary.LittleEndian.Uint16(acl[2:4])), int(binary.LittleEndian.Uint16(acl[4:6]))
-	if length < 8 || length > len(acl) || count > (length-8)/8 {
-		t.Fatal("Medium default DACL is malformed")
-	}
-	acl = acl[:length]
+	count := int(binary.LittleEndian.Uint16(acl[4:6]))
 	for index, position := 0, 8; index < count; index++ {
 		if position > len(acl)-8 {
 			t.Fatal("Medium default ACE is truncated")
@@ -225,6 +318,5 @@ func fixtureLogMediumDefaultDACL(t *testing.T, token syscall.Token) {
 		t.Logf("Constructed Medium default DACL ACE %d: type=%d flags=0x%x mask=0x%x principal=%s", index, ace[0], ace[1], binary.LittleEndian.Uint32(ace[4:8]), principal)
 		position += length
 	}
-	runtime.KeepAlive(data)
 	runtime.KeepAlive(user)
 }
