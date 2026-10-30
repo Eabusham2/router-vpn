@@ -326,6 +326,38 @@ func (f *desktopNodePeerFixture) close() error {
 	return f.closeErr
 }
 
+func desktopNodePeerOriginal(t *testing.T, mode string, config desktopReferenceConfiguration, options Options, ip netip.Addr, remote netip.AddrPort, wrongKey, cover bool, killPolicy string) *mobilemultihop.NodeProfile {
+	t.Helper()
+	public := options.Peers[0].PublicKey
+	if wrongKey {
+		_, public = keys(t)
+	}
+	id := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+	var parameters strings.Builder
+	if mode != "wg" {
+		for _, key := range []string{"jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"} {
+			fmt.Fprintf(&parameters, "%s=%s\n", key, config.Parameters[key])
+		}
+	}
+	text := "[Interface]\nAddress=10.78.0.2/32,fd78:78::2/128\nPrivateKey=" + options.PrivateKey + "\nDNS=192.168.50.133\n" + parameters.String() + "[Peer]\nPublicKey=" + public + "\nPresharedKey=" + options.Peers[0].PreSharedKey + "\nEndpoint=" + remote.String() + "\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n"
+	asset := "wg.conf"
+	if mode != "wg" {
+		asset = "awg.conf"
+	}
+	files, _ := json.Marshal(map[string]string{asset: base64.StdEncoding.EncodeToString([]byte(text))})
+	profileValues := map[string]any{"id": "captured-native-node", "node_kind": "router-vpn", "node_proof_id": hex.EncodeToString(id[:]), "router_api": "http://10.78.0.1:8787", "api_token": "private-fixture-node-token", "endpoint": ip.String(),
+		"dns_mode": "home", "adguard_ipv4": "192.168.50.133", "kill_switch_policy": killPolicy, "ipv6_mode": "on", "home_lan_access": false, "mtu_policy": "auto"}
+	if cover {
+		profileValues["daita_enabled"], profileValues["daita_rate_kbps"], profileValues["daita_host"] = true, 64, "10.78.0.1"
+	}
+	profile, _ := json.Marshal(profileValues)
+	original, err := mobilemultihop.NewNodeProfile(mode, string(files), string(profile), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return original
+}
+
 func newDesktopNodePeerFixture(t *testing.T, mode string, wrongKey bool, configuredCover ...bool) *desktopNodePeerFixture {
 	t.Helper()
 	if len(configuredCover) > 1 {
@@ -345,33 +377,7 @@ func newDesktopNodePeerFixture(t *testing.T, mode string, wrongKey bool, configu
 	}
 	t.Cleanup(peer.close)
 	remote := netip.MustParseAddrPort(peer.bind.address())
-	public := options.Peers[0].PublicKey
-	if wrongKey {
-		_, public = keys(t)
-	}
-	id := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
-	var parameters strings.Builder
-	if mode != "wg" {
-		for _, key := range []string{"jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"} {
-			fmt.Fprintf(&parameters, "%s=%s\n", key, config.Parameters[key])
-		}
-	}
-	text := "[Interface]\nAddress=10.78.0.2/32,fd78:78::2/128\nPrivateKey=" + options.PrivateKey + "\nDNS=192.168.50.133\n" + parameters.String() + "[Peer]\nPublicKey=" + public + "\nPresharedKey=" + options.Peers[0].PreSharedKey + "\nEndpoint=" + remote.String() + "\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n"
-	asset := "wg.conf"
-	if mode != "wg" {
-		asset = "awg.conf"
-	}
-	files, _ := json.Marshal(map[string]string{asset: base64.StdEncoding.EncodeToString([]byte(text))})
-	profileValues := map[string]any{"id": "captured-native-node", "node_kind": "router-vpn", "node_proof_id": hex.EncodeToString(id[:]), "router_api": "http://10.78.0.1:8787", "api_token": "private-fixture-node-token", "endpoint": ip.String(),
-		"dns_mode": "home", "adguard_ipv4": "192.168.50.133", "kill_switch_policy": "always", "ipv6_mode": "on", "home_lan_access": false, "mtu_policy": "auto"}
-	if len(configuredCover) == 1 && configuredCover[0] {
-		profileValues["daita_enabled"], profileValues["daita_rate_kbps"], profileValues["daita_host"] = true, 64, "10.78.0.1"
-	}
-	profile, _ := json.Marshal(profileValues)
-	original, err := mobilemultihop.NewNodeProfile(mode, string(files), string(profile), "", "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	original := desktopNodePeerOriginal(t, mode, config, options, ip, remote, wrongKey, len(configuredCover) == 1 && configuredCover[0], "always")
 	policy, err := mobilemultihop.NewDesktopNodePolicy(original, strings.Repeat("c", 32), runtime.GOOS)
 	if err != nil {
 		t.Fatal(err)

@@ -63,3 +63,47 @@ func TestRouterVPNNodePhysicalAdmissionRetainsExactPolicy(t *testing.T) {
 		t.Fatal("cancelled native lifetime retained handoff authority")
 	}
 }
+
+func TestRouterVPNNodePhysicalAdmissionCapturesExactPredecessor(t *testing.T) {
+	policy := nodePhysicalPolicyFixture(t, "windows")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	admit := func(context.Context, NodePhysicalPrepared) error { return nil }
+	original := mobiletor.DesktopWindowsProtectionTarget{Capture: mobiletor.DesktopSocketCapture{SessionID: strings.Repeat("1", 32), SourceSHA256: strings.Repeat("2", 64), NetworkID: strings.Repeat("3", 32)},
+		Policy: "always", BaselineSHA256: strings.Repeat("4", 64)}
+	input := original
+	owned, err := WithNodePhysicalSuccessorAdmission(ctx, policy, input, admit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.Capture.NetworkID, input.BaselineSHA256, input.Policy = strings.Repeat("a", 32), strings.Repeat("b", 64), "on-connect"
+	first, err := nodePhysicalPredecessorFor(owned, policy)
+	if err != nil || first == nil || *first != original {
+		t.Fatal("native predecessor was not captured before waiting", err)
+	}
+	first.Capture.SourceSHA256 = strings.Repeat("c", 64)
+	again, err := nodePhysicalPredecessorFor(owned, policy)
+	if err != nil || again == nil || *again != original {
+		t.Fatal("native predecessor readback exposed mutable ownership", err)
+	}
+	if _, err := nodePhysicalPredecessorFor(owned, nodePhysicalPolicyFixture(t, "windows")); err == nil {
+		t.Fatal("equal graph adopted another predecessor capability")
+	}
+	if _, err := WithNodePhysicalSuccessorAdmission(ctx, policy, mobiletor.DesktopWindowsProtectionTarget{}, admit); err == nil {
+		t.Fatal("malformed predecessor acquired native admission")
+	}
+	if _, err := WithNodePhysicalSuccessorAdmission(owned, policy, original, admit); err == nil {
+		t.Fatal("native predecessor replaced an existing admission owner")
+	}
+	initial, err := WithNodePhysicalAdmission(ctx, policy, admit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target, err := nodePhysicalPredecessorFor(initial, policy); err != nil || target != nil {
+		t.Fatal("initial native admission did not require explicit absence", err)
+	}
+	cancel()
+	if _, err := nodePhysicalPredecessorFor(owned, policy); err == nil {
+		t.Fatal("cancelled graph retained predecessor authority")
+	}
+}

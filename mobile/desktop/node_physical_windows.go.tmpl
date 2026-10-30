@@ -16,8 +16,15 @@ import (
 )
 
 func (n *NodeNetworkOwner) PrepareNodePhysicalPolicy(policy *mobilemultihop.DesktopNodePolicy) error {
+	if n == nil {
+		return errors.New("Windows Router node physical sockets have no captured owner")
+	}
+	predecessor, err := nodePhysicalPredecessorFor(n.ctx, policy)
+	if err != nil {
+		return err
+	}
 	return n.prepareNodePhysicalWindows(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopWindowsSocketOptions) (desktopWindowsPhysicalPolicy, error) {
-		owned, err := mobiletor.NewDesktopWindowsSocketPolicy(ctx, capture, options)
+		owned, err := mobiletor.NewDesktopWindowsSocketPolicySuccessor(ctx, capture, options, predecessor)
 		if owned == nil {
 			return nil, err
 		}

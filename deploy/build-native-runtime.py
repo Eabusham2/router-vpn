@@ -102,6 +102,8 @@ def inputs():
                              ROOT/'deploy/test_desktop_windows_identity_runner.py',
                              ROOT/'deploy/test_desktop_windows_wfp.py',
                              ROOT/'deploy/test_windows_protection_transfer.py',
+                             ROOT/'deploy/test_windows_node_physical.py',
+                             ROOT/'deploy/test_windows_node_physical_runner.py',
                              ROOT/'deploy/test_desktop_windows_traffic.py',
                              ROOT/'deploy/test_windows_physical_bootstrap.py',
                              ROOT/'deploy/test_windows_physical_bootstrap_runner.py',
@@ -109,6 +111,7 @@ def inputs():
                              ROOT/'deploy/test_windows_physical_tunnel_runner.py',
                              ROOT/'deploy/test_desktop_node_physical.py',
                              *sorted((ROOT/'deploy/fixtures/windows-physical-bootstrap').glob('*.go')),
+                             *sorted((ROOT/'deploy/fixtures/windows-node-physical').glob('*.go')),
                              ROOT/'deploy/test_desktop_linux_guardian.py',
                              ROOT/'deploy/test_desktop_darwin_guardian.py',
                              ROOT/'deploy/test_linux_guardian_namespace.py',
@@ -527,6 +530,9 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                     env=env, timeout=600)
                 run([sys.executable, ROOT/'deploy/test_windows_protection_transfer.py', source],
                     env=env, timeout=600)
+                run([sys.executable, ROOT/'deploy/test_windows_node_physical_runner.py'], cwd=ROOT, env=env)
+                run([sys.executable, ROOT/'deploy/test_windows_node_physical.py', source],
+                    env=env, timeout=1200)
                 run([sys.executable, ROOT/'deploy/test_desktop_windows_traffic.py', source],
                     env=env, timeout=600)
                 # This explicit test-only admission overlay proves bootstrap

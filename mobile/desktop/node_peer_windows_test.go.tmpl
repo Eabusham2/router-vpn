@@ -1,0 +1,594 @@
+//go:build windows && routervpn_windows_node_composition
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	WG "github.com/sagernet/sing-box/protocol/wireguard"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-box/service/routervpnperformance"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
+	SJ "github.com/sagernet/sing/common/json"
+)
+
+const desktopNodeWFPReferenceLimit = 64 << 10
+
+type desktopNodeWFPReferenceRequest struct {
+	Schema        int                           `json:"schema"`
+	Mode          string                        `json:"mode"`
+	Address       string                        `json:"address"`
+	Configuration desktopReferenceConfiguration `json:"configuration"`
+}
+
+type desktopNodeWFPReferenceReply struct {
+	Schema   int    `json:"schema"`
+	Address  string `json:"address"`
+	AppID    []byte `json:"app_id"`
+	Received int64  `json:"received"`
+}
+
+func desktopNodeWFPInterface(t *testing.T) netip.Addr {
+	t.Helper()
+	logger := log.NewNOPFactory().Logger()
+	updates, err := tun.NewNetworkUpdateMonitor(logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := updates.Close(); err != nil {
+			t.Error("reference physical update monitor did not join", err)
+		}
+	}()
+	monitor, err := tun.NewDefaultInterfaceMonitor(updates, logger, tun.DefaultInterfaceMonitorOptions{InterfaceFinder: control.NewDefaultInterfaceFinder()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := monitor.Close(); err != nil {
+			t.Error("reference default interface monitor did not join", err)
+		}
+	}()
+	if err := updates.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := monitor.Start(); err != nil {
+		t.Fatal(err)
+	}
+	selected := monitor.DefaultInterface()
+	if selected == nil || selected.Flags&net.FlagUp == 0 || selected.Flags&net.FlagLoopback != 0 {
+		t.Fatal("encrypted reference has no actual selected physical interface")
+	}
+	for _, prefix := range selected.Addresses {
+		if prefix.Addr().Is4() && prefix.Addr().IsPrivate() {
+			return prefix.Addr()
+		}
+	}
+	t.Fatal("encrypted reference requires the selected interface's actual private IPv4 address")
+	return netip.Addr{}
+}
+
+// This helper is the real pinned encrypted implementation in another retained
+// executable. Its normal anonymous-input EOF closes the peer and joins its
+// cryptographic/echo workers. No external endpoint or fabricated echo is used.
+func TestRouterVPNDesktopNodeWindowsEncryptedReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_NODE_WFP_REFERENCE_CHILD") == "" {
+		return
+	}
+	if os.Getenv("ROUTERVPN_NODE_WFP_REFERENCE_CHILD") != "1" {
+		t.Fatal("unknown encrypted reference owner")
+	}
+	input := bufio.NewReaderSize(os.Stdin, desktopNodeWFPReferenceLimit+1)
+	raw, err := input.ReadSlice('\n')
+	if err != nil || len(raw) == 0 || len(raw) > desktopNodeWFPReferenceLimit {
+		t.Fatal("encrypted reference request is not bounded", err)
+	}
+	var request desktopNodeWFPReferenceRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		t.Fatal("encrypted reference request is invalid", err)
+	}
+	var trailing any
+	if decoder.Decode(&trailing) != io.EOF || request.Schema != 1 ||
+		(request.Mode != "wg" && request.Mode != "awg2-fast" && request.Mode != "awg2-strong") || len(request.Configuration.Forward) != 0 {
+		t.Fatal("encrypted reference request escaped its captured fixture")
+	}
+	local := desktopNodeWFPInterface(t)
+	if request.Address != local.String() {
+		t.Fatal("encrypted reference request selected another actual interface")
+	}
+	peer, err := startDesktopNodePeer(request.Configuration, request.Mode, local)
+	if err != nil {
+		t.Fatal("actual separate encrypted reference startup", err)
+	}
+	defer peer.close()
+	scope, err := mobiletor.DesktopWindowsNodeCompositionAppID()
+	if err != nil || len(scope) == 0 {
+		t.Fatal("encrypted reference has no actual executable identity", err)
+	}
+	respond := func() {
+		if err := json.NewEncoder(os.Stdout).Encode(desktopNodeWFPReferenceReply{Schema: 1, Address: peer.bind.address(), AppID: scope, Received: peer.bind.packets.Load()}); err != nil {
+			t.Fatal("encrypted reference acknowledgement failed", err)
+		}
+	}
+	respond()
+	for {
+		line, err := input.ReadSlice('\n')
+		if errors.Is(err, io.EOF) && len(line) == 0 {
+			return
+		}
+		if err != nil || string(line) != "stats\n" {
+			t.Fatal("encrypted reference lost its owned input protocol", err)
+		}
+		respond()
+	}
+}
+
+type desktopNodeWFPReference struct {
+	command     *exec.Cmd
+	input       io.WriteCloser
+	output      *os.File
+	reader      *bufio.Reader
+	done        chan error
+	ctx         context.Context
+	cancel      context.CancelFunc
+	closeOnce   sync.Once
+	closeErr    error
+	diagnostics bytes.Buffer // Read only after the retained process has joined.
+	reply       desktopNodeWFPReferenceReply
+	config      desktopReferenceConfiguration
+	options     Options
+	mode        string
+	local       netip.Addr
+	remote      netip.AddrPort
+}
+
+func (p *desktopNodeWFPReference) read() (desktopNodeWFPReferenceReply, error) {
+	type result struct {
+		value desktopNodeWFPReferenceReply
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		raw, err := p.reader.ReadSlice('\n')
+		var reply desktopNodeWFPReferenceReply
+		if err == nil && len(raw) <= desktopNodeWFPReferenceLimit {
+			decoder := json.NewDecoder(bytes.NewReader(raw))
+			decoder.DisallowUnknownFields()
+			err = decoder.Decode(&reply)
+			var trailing any
+			if err == nil && decoder.Decode(&trailing) != io.EOF {
+				err = errors.New("encrypted reference appended another response")
+			}
+		} else {
+			err = errors.Join(err, errors.New("encrypted reference response exceeded its bound"))
+		}
+		done <- result{reply, err}
+	}()
+	ctx, cancel := context.WithTimeout(p.ctx, 10*time.Second)
+	defer cancel()
+	select {
+	case result := <-done:
+		return result.value, result.err
+	case <-ctx.Done():
+		p.cancel()
+		_ = p.output.Close()
+		<-done // Join the exact entered read before releasing the pipe owner.
+		return desktopNodeWFPReferenceReply{}, ctx.Err()
+	}
+}
+
+func (p *desktopNodeWFPReference) close() error {
+	p.closeOnce.Do(func() {
+		defer p.cancel()
+		_ = p.input.Close()
+		select {
+		case p.closeErr = <-p.done:
+		case <-time.After(10 * time.Second):
+			_ = p.command.Process.Kill() // The retained process, never a PID lookup.
+			p.closeErr = errors.Join(<-p.done, errors.New("encrypted reference ignored owned input EOF"))
+		}
+		p.closeErr = errors.Join(p.closeErr, p.output.Close())
+	})
+	return p.closeErr
+}
+
+func (p *desktopNodeWFPReference) packets(t *testing.T) int64 {
+	t.Helper()
+	if _, err := io.WriteString(p.input, "stats\n"); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := p.read()
+	if err != nil || reply.Schema != 1 || reply.Address != p.reply.Address || !bytes.Equal(reply.AppID, p.reply.AppID) || reply.Received < p.reply.Received {
+		t.Fatal("actual encrypted reference changed its retained identity", err)
+	}
+	p.reply = reply
+	return reply.Received
+}
+
+func desktopNodeWFPStartReference(t *testing.T, mode string) *desktopNodeWFPReference {
+	t.Helper()
+	local := desktopNodeWFPInterface(t)
+	config, options := desktopReferenceFixture(t)
+	if mode == "awg2-strong" {
+		config.Parameters["jc"], config.Parameters["jmax"] = "8", "1200"
+	}
+	config.Echo = append(config.Echo,
+		desktopReferenceRule{Network: "tcp", Address: "2001:db8::99", Port: 9999},
+		desktopReferenceRule{Network: "udp", Address: "2001:db8::99", Port: 9999})
+	actual, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(actual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(t.TempDir(), "owned-encrypted-peer.test.exe")
+	if err := os.WriteFile(copyPath, contents, 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+	command := exec.CommandContext(ctx, copyPath, "-test.run=^TestRouterVPNDesktopNodeWindowsEncryptedReferenceProcess$", "-test.count=1", "-test.timeout=145s")
+	command.Env = append(os.Environ(), "ROUTERVPN_NODE_WFP_REFERENCE_CHILD=1")
+	input, err := command.StdinPipe()
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	output, childOutput, err := os.Pipe()
+	if err != nil {
+		_ = input.Close()
+		cancel()
+		t.Fatal(err)
+	}
+	p := &desktopNodeWFPReference{command: command, input: input, output: output,
+		reader: bufio.NewReaderSize(output, desktopNodeWFPReferenceLimit+1), done: make(chan error, 1), ctx: ctx, cancel: cancel,
+		config: config, options: options, mode: mode, local: local}
+	command.Stdout, command.Stderr = childOutput, &p.diagnostics
+	if err := command.Start(); err != nil {
+		_ = input.Close()
+		_ = output.Close()
+		_ = childOutput.Close()
+		cancel()
+		t.Fatal(err)
+	}
+	_ = childOutput.Close()
+	go func() { p.done <- command.Wait() }()
+	t.Cleanup(func() {
+		if err := p.close(); err != nil {
+			t.Errorf("separate encrypted reference did not join: %v; %s", err, p.diagnostics.String())
+		}
+	})
+	raw, err := json.Marshal(desktopNodeWFPReferenceRequest{Schema: 1, Mode: mode, Address: local.String(), Configuration: config})
+	if err != nil || len(raw)+1 > desktopNodeWFPReferenceLimit {
+		t.Fatal("encrypted peer launch request exceeded its bound", err)
+	}
+	if _, err := input.Write(append(raw, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	p.reply, err = p.read()
+	scope, scopeErr := mobiletor.DesktopWindowsNodeCompositionAppID()
+	remote, remoteErr := netip.ParseAddrPort(p.reply.Address)
+	if err != nil || scopeErr != nil || remoteErr != nil || p.reply.Schema != 1 || remote.Addr() != local || remote.Port() == 0 ||
+		len(p.reply.AppID) == 0 || bytes.Equal(scope, p.reply.AppID) {
+		t.Fatal("encrypted reference was not a distinct retained actual executable and endpoint", err, scopeErr, remoteErr)
+	}
+	p.remote = remote
+	return p
+}
+
+func (p *desktopNodeWFPReference) original(t *testing.T, kill string, wrongKey bool) *mobilemultihop.NodeProfile {
+	return desktopNodePeerOriginal(t, p.mode, p.config, p.options, p.local, p.remote, wrongKey, false, kill)
+}
+
+type desktopNodeWFPFixture struct {
+	*desktopNodePeerFixture
+	prepared mobiletor.DesktopWindowsProtectionTarget
+	admitted int
+}
+
+func desktopNodeWFPBox(t *testing.T, original *mobilemultihop.NodeProfile, predecessor *mobiletor.DesktopWindowsProtectionTarget) *desktopNodeWFPFixture {
+	t.Helper()
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewDesktopNodePolicy(original, hex.EncodeToString(nonce[:]), "windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &desktopNodeWFPFixture{desktopNodePeerFixture: &desktopNodePeerFixture{policy: policy}}
+	ins := inbound.NewRegistry()
+	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+		f.tun = &desktopNodePeerTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag)}
+		return f.tun, nil
+	})
+	outs := outbound.NewRegistry()
+	routervpndesktoppt.RegisterNodePhysicalOutbound(outs)
+	endpoints := endpoint.NewRegistry()
+	RegisterEndpoint(endpoints)
+	WG.RegisterEndpoint(endpoints)
+	dnsRegistry := dns.NewTransportRegistry()
+	DNST.RegisterUDP(dnsRegistry)
+	DNST.RegisterTCP(dnsRegistry)
+	services := boxService.NewRegistry()
+	routervpnperformance.RegisterService(services)
+	boxService.Register[routervpndesktoppt.NodeCaptureOptions](services, mobilemultihop.DesktopNodeNetworkType, func(ctx context.Context, logger log.ContextLogger, tag string, options routervpndesktoppt.NodeCaptureOptions) (adapter.Service, error) {
+		owned, err := routervpndesktoppt.NewNodeNetworkOwner(ctx, logger, tag, options)
+		if err == nil {
+			f.network = owned.(*routervpndesktoppt.NodeNetworkOwner)
+		}
+		return owned, err
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	admit := func(ctx context.Context, prepared routervpndesktoppt.NodePhysicalPrepared) error {
+		if f.network.SocketCurrent() || f.network.Current() || f.tun.ready.Load() || f.admitted != 0 {
+			return errors.New("Node native handoff was late or repeated")
+		}
+		target := mobiletor.DesktopWindowsProtectionTarget{Capture: prepared.Capture, Policy: prepared.Policy, BaselineSHA256: prepared.BaselineSHA256}
+		if err := mobiletor.DesktopWindowsNodeCompositionVerifyPrepared(ctx, target); err != nil {
+			return err
+		}
+		f.prepared, f.admitted = target, 1
+		return nil
+	}
+	if predecessor == nil {
+		ctx, err = routervpndesktoppt.WithNodePhysicalAdmission(ctx, policy, admit)
+	} else {
+		ctx, err = routervpndesktoppt.WithNodePhysicalSuccessorAdmission(ctx, policy, *predecessor, admit)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx = box.Context(ctx, ins, outs, endpoints, dnsRegistry, services, certificate.NewRegistry())
+	native, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(policy.Config()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	native.Log = &option.LogOptions{Disabled: true}
+	f.box, err = box.New(box.Options{Context: ctx, Options: native})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.close(); err != nil {
+			t.Error("actual WFP Node Box did not join", err)
+		}
+	})
+	if err := f.box.RouterVPNDesktopNodePreparePhysical(policy); err != nil {
+		t.Fatal("actual sealed Node factory preparation", err)
+	}
+	return f
+}
+
+func desktopNodeWFPRequireBlocked(t *testing.T, remote netip.AddrPort) {
+	t.Helper()
+	connection, err := net.DialUDP("udp4", nil, net.UDPAddrFromAddrPort(remote))
+	if err == nil {
+		_ = connection.SetDeadline(time.Now().Add(time.Second))
+		_, err = connection.Write([]byte("ordinary-token-negative-control"))
+		_ = connection.Close()
+	}
+	if !errors.Is(err, syscall.Errno(10013)) { // WSAEACCES, independently enforced by BFE.
+		t.Fatal("ordinary process token bypassed the actual encrypted outer deny", err)
+	}
+}
+
+func desktopNodeWFPRequireTraffic(t *testing.T, f *desktopNodeWFPFixture, peer *desktopNodeWFPReference) {
+	t.Helper()
+	if f.admitted != 1 || f.prepared.Validate() != nil || f.network.Current() || !f.network.SocketCurrent() {
+		t.Fatal("actual WFP Node startup fabricated application readiness or skipped prepared admission")
+	}
+	desktopNodeWFPRequireBlocked(t, peer.remote)
+	for _, network := range []string{"tcp", "udp"} {
+		for _, host := range []string{"192.0.2.99", "2001:db8::99"} {
+			if err := f.exchange(network, host); err != nil {
+				t.Fatal("actual WFP encrypted node payload failed", network, host, err)
+			}
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	snapshot, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+	if err != nil || snapshot.Closed || snapshot.Target != f.prepared || snapshot.Owner.Kind != "windows-isolated-token" || len(snapshot.Grants) == 0 || !snapshot.Options.RetainBaselineForHandoff {
+		t.Fatal("encrypted traffic lacked actual retained WFP/socket readback", err)
+	}
+	for _, grant := range snapshot.Grants {
+		if grant.Capture != f.prepared.Capture || grant.Network != "udp" || grant.Remote != peer.remote || grant.Local.Addr() != peer.local || grant.Binding.Owner != snapshot.Owner {
+			t.Fatal("encrypted traffic used an uncaptured actual lower tuple")
+		}
+	}
+	if peer.packets(t) == 0 {
+		t.Fatal("encrypted WFP result had no actual separately observed peer traffic")
+	}
+}
+
+func desktopNodeWFPDrain(t *testing.T, f *desktopNodeWFPFixture) mobiletor.DesktopWindowsProtectionTarget {
+	t.Helper()
+	if err := f.close(); err != nil {
+		t.Fatal("actual WFP encrypted owner did not join", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	snapshot, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+	if err != nil || !snapshot.Closed || len(snapshot.Grants) != 0 || snapshot.Target != f.prepared {
+		t.Fatal("actual encrypted drain did not retain only its captured deny", err)
+	}
+	return snapshot.Target
+}
+
+func desktopNodeWFPCleanup(t *testing.T, target *mobiletor.DesktopWindowsProtectionTarget) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		// A failed startup can commit its deny before reaching the admission
+		// callback. Recover only the exact source object retained by the test
+		// constructor after its Box has joined, never a fresh arbitrary record.
+		if partial, err := mobiletor.DesktopWindowsNodeCompositionRetainedTarget(ctx); err == nil {
+			*target = partial
+		}
+		if target.Validate() != nil {
+			if err := mobiletor.DesktopWindowsNodeCompositionAbsent(ctx); err != nil {
+				t.Error("unacknowledged native test state has no exact cleanup owner", err)
+			}
+			return
+		}
+		if err := mobiletor.DesktopWindowsNodeCompositionRetire(ctx, *target); err != nil {
+			t.Error("exact test-owned retained deny did not retire", err)
+		}
+	})
+}
+
+func TestRouterVPNDesktopNodeWindowsWFPEncryptedTraffic(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) {
+			if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			peer := desktopNodeWFPStartReference(t, mode)
+			var retained mobiletor.DesktopWindowsProtectionTarget
+			desktopNodeWFPCleanup(t, &retained)
+			f := desktopNodeWFPBox(t, peer.original(t, "always", false), nil)
+			if err := f.box.RouterVPNStrategyStart(); err != nil {
+				t.Fatal("actual WFP eager encrypted node startup failed", err)
+			}
+			retained = f.prepared
+			desktopNodeWFPRequireTraffic(t, f, peer)
+			f.network.InterfaceUpdated(context.Background())
+			if f.network.SocketCurrent() || f.network.Current() || f.exchange("udp") == nil {
+				t.Fatal("physical transition retained the old real encrypted permission")
+			}
+			retained = desktopNodeWFPDrain(t, f)
+			desktopNodeWFPRequireBlocked(t, peer.remote)
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeWindowsWFPEncryptedSuccession(t *testing.T) {
+	if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	firstPeer := desktopNodeWFPStartReference(t, "wg")
+	trialPeer := desktopNodeWFPStartReference(t, "awg2-strong")
+	var retained mobiletor.DesktopWindowsProtectionTarget
+	desktopNodeWFPCleanup(t, &retained)
+	original := firstPeer.original(t, "always", false)
+	first := desktopNodeWFPBox(t, original, nil)
+	if err := first.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal("original WFP encrypted startup failed", err)
+	}
+	retained = first.prepared
+	desktopNodeWFPRequireTraffic(t, first, firstPeer)
+	retained = desktopNodeWFPDrain(t, first)
+	firstTarget := retained
+	trial := desktopNodeWFPBox(t, trialPeer.original(t, "on-connect", false), &retained)
+	if err := trial.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal("exact forward WFP encrypted startup failed", err)
+	}
+	retained = trial.prepared
+	desktopNodeWFPRequireTraffic(t, trial, trialPeer)
+	// A failed temporary path must still retain its new deny until the saved
+	// original graph has an independently proved exact native successor.
+	trial.network.InterfaceUpdated(context.Background())
+	retained = desktopNodeWFPDrain(t, trial)
+	restored := desktopNodeWFPBox(t, original, &retained)
+	if err := restored.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal("exact reverse WFP encrypted startup failed", err)
+	}
+	retained = restored.prepared
+	if retained.Capture.SourceSHA256 != firstTarget.Capture.SourceSHA256 || retained.Capture == firstTarget.Capture || retained.Policy != "always" {
+		t.Fatal("real encrypted restoration replaced the saved source or reused its old session")
+	}
+	first.network.InterfaceUpdated(context.Background())
+	if err := first.close(); err != nil {
+		t.Fatal(err)
+	}
+	desktopNodeWFPRequireTraffic(t, restored, firstPeer)
+	retained = desktopNodeWFPDrain(t, restored)
+}
+
+func TestRouterVPNDesktopNodeWindowsWFPRejectsForeignPredecessor(t *testing.T) {
+	if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	peer := desktopNodeWFPStartReference(t, "awg2-fast")
+	var retained mobiletor.DesktopWindowsProtectionTarget
+	desktopNodeWFPCleanup(t, &retained)
+	original := peer.original(t, "always", false)
+	first := desktopNodeWFPBox(t, original, nil)
+	if err := first.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal(err)
+	}
+	retained = first.prepared
+	desktopNodeWFPRequireTraffic(t, first, peer)
+	retained = desktopNodeWFPDrain(t, first)
+	wrong := retained
+	wrong.Capture.SourceSHA256 = strings.Repeat("f", 64)
+	candidate := desktopNodeWFPBox(t, original, &wrong)
+	if err := candidate.box.RouterVPNStrategyStart(); err == nil || candidate.admitted != 0 {
+		if candidate.admitted != 0 {
+			retained = candidate.prepared // Exact cleanup even for a broken mutant.
+		}
+		t.Fatal("foreign predecessor reached actual encrypted startup")
+	}
+	if err := candidate.close(); err != nil {
+		t.Fatal("rejected native successor did not join", err)
+	}
+	if err := mobiletor.DesktopWindowsNodeCompositionVerifyRetained(context.Background(), retained); err != nil {
+		t.Fatal("rejected native graph changed the original retained deny", err)
+	}
+}
+
+func TestRouterVPNDesktopNodeWindowsWFPWrongPeerRejected(t *testing.T) {
+	if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	peer := desktopNodeWFPStartReference(t, "awg2-strong")
+	var retained mobiletor.DesktopWindowsProtectionTarget
+	desktopNodeWFPCleanup(t, &retained)
+	f := desktopNodeWFPBox(t, peer.original(t, "always", true), nil)
+	if err := f.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal("wrong-key control did not reach real WFP encrypted startup", err)
+	}
+	retained = f.prepared
+	if f.exchange("udp") == nil || peer.packets(t) == 0 || f.network.Current() {
+		t.Fatal("real WFP peer accepted the wrong key or fabricated readiness")
+	}
+	retained = desktopNodeWFPDrain(t, f)
+}

@@ -105,6 +105,18 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
                         self.assertLessEqual(kwargs['timeout'], 1200)
                         return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_physical_runner.py'):
+                        self.assertEqual(system, 'windows')
+                        self.assertEqual(args[2:], [])
+                        self.assertEqual(kwargs['cwd'], ROOT)
+                        return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_physical.py'):
+                        self.assertEqual(system, 'windows')
+                        self.assertEqual(args[2:], [str(source.resolve())])
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertLessEqual(kwargs['timeout'], 1200)
+                        return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_guardian.py'):
                         self.assertEqual(system, 'darwin')
                         self.assertEqual(args[2:], [str(source.resolve()), '--mutations'])
@@ -154,6 +166,16 @@ class NativeSocketUIDGate(unittest.TestCase):
                 self.assertIn(ROOT/'deploy/test_windows_protection_transfer.py', N.inputs())
                 if transfer:
                     self.assertEqual(calls.index(transfer[0]), calls.index(wfp[0])+1)
+                kernel_runner = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_physical_runner.py')]
+                kernel_node = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_physical.py')]
+                self.assertEqual(len(kernel_runner), 1 if system == 'windows' else 0)
+                self.assertEqual(len(kernel_node), len(kernel_runner))
+                if kernel_node:
+                    self.assertEqual(calls.index(kernel_runner[0]), calls.index(transfer[0])+1)
+                    self.assertEqual(calls.index(kernel_node[0]), calls.index(kernel_runner[0])+1)
+                for name in ('test_windows_node_physical.py', 'test_windows_node_physical_runner.py'):
+                    self.assertIn(ROOT/'deploy'/name, N.inputs())
+                self.assertIn(ROOT/'deploy/fixtures/windows-node-physical/kernel_observer.go', N.inputs())
                 traffic = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_windows_traffic.py')]
                 self.assertEqual(len(traffic), 1 if system == 'windows' else 0)
                 self.assertIn(ROOT/'deploy/test_desktop_windows_traffic.py', N.inputs())

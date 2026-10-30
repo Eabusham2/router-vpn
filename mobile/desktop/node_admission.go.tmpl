@@ -19,16 +19,32 @@ type NodePhysicalPrepared struct {
 type NodePhysicalAdmission func(context.Context, NodePhysicalPrepared) error
 type nodePhysicalAdmissionKey struct{}
 type nodePhysicalAdmissionOwner struct {
-	policy *mobilemultihop.DesktopNodePolicy
-	admit  NodePhysicalAdmission
+	policy      *mobilemultihop.DesktopNodePolicy
+	admit       NodePhysicalAdmission
+	predecessor *mobiletor.DesktopWindowsProtectionTarget
 }
 
 func WithNodePhysicalAdmission(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy, admit NodePhysicalAdmission) (context.Context, error) {
+	return withNodePhysicalAdmission(ctx, policy, nil, admit)
+}
+
+// WithNodePhysicalSuccessorAdmission captures the exact already-drained native
+// predecessor alongside this particular compiled graph. The Windows factory
+// independently verifies it under the native BFE lock before replacement.
+// Imported JSON and a later selected profile cannot supply or change it.
+func WithNodePhysicalSuccessorAdmission(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy, predecessor mobiletor.DesktopWindowsProtectionTarget, admit NodePhysicalAdmission) (context.Context, error) {
+	if err := predecessor.Validate(); err != nil {
+		return nil, err
+	}
+	return withNodePhysicalAdmission(ctx, policy, &predecessor, admit)
+}
+
+func withNodePhysicalAdmission(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy, predecessor *mobiletor.DesktopWindowsProtectionTarget, admit NodePhysicalAdmission) (context.Context, error) {
 	if ctx == nil || ctx.Err() != nil || policy == nil || policy.Validate() != nil || admit == nil ||
 		policy.Metadata().TargetOS != "windows" || ctx.Value(nodePhysicalAdmissionKey{}) != nil {
 		return nil, errors.New("Router node physical handoff requires its unique captured native policy")
 	}
-	return context.WithValue(ctx, nodePhysicalAdmissionKey{}, &nodePhysicalAdmissionOwner{policy, admit}), nil
+	return context.WithValue(ctx, nodePhysicalAdmissionKey{}, &nodePhysicalAdmissionOwner{policy: policy, admit: admit, predecessor: predecessor}), nil
 }
 
 func nodePhysicalAdmissionFor(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (NodePhysicalAdmission, error) {
@@ -40,6 +56,21 @@ func nodePhysicalAdmissionFor(ctx context.Context, policy *mobilemultihop.Deskto
 		return nil, errors.New("Router node physical handoff has no captured native admission")
 	}
 	return owner.admit, nil
+}
+
+func nodePhysicalPredecessorFor(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (*mobiletor.DesktopWindowsProtectionTarget, error) {
+	if _, err := nodePhysicalAdmissionFor(ctx, policy); err != nil {
+		return nil, err
+	}
+	owner := ctx.Value(nodePhysicalAdmissionKey{}).(*nodePhysicalAdmissionOwner)
+	if owner.predecessor == nil {
+		return nil, nil // Explicit initial absence, never arbitrary recovery.
+	}
+	captured := *owner.predecessor
+	if err := captured.Validate(); err != nil {
+		return nil, err
+	}
+	return &captured, nil
 }
 
 // CompleteNodePhysicalAdmission consumes only a previously installed

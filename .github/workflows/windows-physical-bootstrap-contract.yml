@@ -18,6 +18,8 @@ on:
       - 'deploy/test_windows_external_physical.py'
       - 'deploy/test_desktop_node_physical.py'
       - 'deploy/test_windows_protection_transfer.py'
+      - 'deploy/test_windows_node_physical*.py'
+      - 'deploy/fixtures/windows-node-physical/**'
       - 'deploy/fixtures/windows-physical-bootstrap/**'
       - '.github/workflows/windows-physical-bootstrap-contract.yml'
   pull_request:
@@ -36,6 +38,8 @@ on:
       - 'deploy/test_windows_external_physical.py'
       - 'deploy/test_desktop_node_physical.py'
       - 'deploy/test_windows_protection_transfer.py'
+      - 'deploy/test_windows_node_physical*.py'
+      - 'deploy/fixtures/windows-node-physical/**'
       - 'deploy/fixtures/windows-physical-bootstrap/**'
       - '.github/workflows/windows-physical-bootstrap-contract.yml'
   workflow_dispatch:
@@ -50,6 +54,37 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  native-node-kernel:
+    name: Actual WFP encrypted Node on ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, windows-11-arm]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Verify test-only native firewall scope
+        shell: pwsh
+        run: |
+          python deploy/test_windows_node_physical_runner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Native Node scope/source boundary failed' }
+      - name: Prove actual WFP, encrypted peers and exact native reversal
+        shell: pwsh
+        run: |
+          # Real BFE and WG/AWG in distinct retained executable processes.
+          # TUN stays harmless; no route, node/DNS or device claim is inferred.
+          python deploy/test_windows_node_physical.py --standalone
+          if ($LASTEXITCODE -ne 0) { throw 'Actual WFP encrypted Node composition failed' }
   native-node-composition:
     name: Captured Node startup on ${{ matrix.runner }}
     runs-on: ${{ matrix.runner }}

@@ -149,7 +149,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         ("command", "./cmd/sing-box", "^TestRouterVPNDesktopNodePhysicalCommand",
          tuple("TestRouterVPNDesktopNodePhysicalCommand" + name for name in ("SourceBoundary", "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins"))),
         ("factory", "./routervpn/desktoppt", "^TestRouterVPNNodePhysical",
-         tuple("TestRouterVPNNodePhysical" + name for name in ("SeparateRegistriesAndUnpreparedRejection", "HandshakePhaseAndExactPolicy", "FactoryCancellationJoinsPartialOwner", "AdmissionRetainsExactPolicy")) +
+         tuple("TestRouterVPNNodePhysical" + name for name in ("SeparateRegistriesAndUnpreparedRejection", "HandshakePhaseAndExactPolicy", "FactoryCancellationJoinsPartialOwner", "AdmissionRetainsExactPolicy", "AdmissionCapturesExactPredecessor")) +
          (tuple("TestRouterVPNNodePhysicalWindows" + name for name in ("CapturesPreparedOwner", "AdmissionRejectsChangedOwners", "CloseJoinsAdmission")) if windows else ())),
         ("box", ".", "^TestRouterVPNDesktopNodePhysical",
          tuple("TestRouterVPNDesktopNodePhysicalBox" + name for name in ("RejectsSubstitutedGraph", "RequiresPreparedOwner", "RetainsMTUAndExactRollback"))),
