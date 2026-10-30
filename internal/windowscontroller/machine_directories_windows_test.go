@@ -3,6 +3,7 @@
 package windowscontroller
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -10,13 +11,14 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"unicode/utf16"
 	"unsafe"
 )
 
 func TestWindowsControllerMachineDirectories(t *testing.T) {
 	// Capture an independent OS baseline before changing any environment. The
-	// production implementation uses Userenv's system-only environment block;
-	// this baseline uses ordinary Kernel32 and Shell known-folder APIs instead.
+	// production implementation reads unexpanded machine registrations; this
+	// baseline uses ordinary Kernel32 and Shell known-folder APIs instead.
 	want := machineDirectoriesIndependent(t)
 	names := []string{"SystemDrive", "SystemRoot", "windir", "ProgramData", "ProgramFiles", "ProgramFiles(x86)",
 		"ProgramW6432", "CommonProgramFiles", "CommonProgramFiles(x86)", "CommonProgramW6432"}
@@ -75,38 +77,130 @@ func TestWindowsControllerMachineDirectories(t *testing.T) {
 		})
 	}
 	t.Run("bounded-records", func(t *testing.T) {
-		valid := []string{"SystemDrive=" + want.SystemDrive, "SystemRoot=" + want.Windows, "windir=" + want.Windows,
-			"ProgramData=" + want.ProgramData, "ProgramFiles=" + want.ProgramFiles, "PATH=machine-only"}
-		parsed, err := parseMachineEnvironment(valid)
-		if err != nil || parsed["PROGRAMDATA"] != want.ProgramData || parsed["PROGRAMFILES"] != want.ProgramFiles {
-			t.Fatal("bounded independent machine environment was rejected", err)
-		}
-		invalid := [][]string{nil, {}, make([]string, 8193)}
-		for _, value := range []string{"malformed", "=empty-name", "BAD=contains\x00nul", "BAD=contains\nnewline", "BAD=contains\rreturn", "LONG=" + strings.Repeat("a", 32768)} {
-			invalid = append(invalid, append(append([]string(nil), valid...), value))
-		}
-		invalid = append(invalid, append(append([]string(nil), valid...), "programdata="+want.ProgramData))
-		for index := 0; index < 5; index++ {
-			missing := append([]string(nil), valid[:index]...)
-			missing = append(missing, valid[index+1:]...)
-			invalid = append(invalid, missing)
-			empty := append([]string(nil), valid...)
-			name, _, _ := strings.Cut(empty[index], "=")
-			empty[index] = name + "="
-			invalid = append(invalid, empty)
-		}
-		for index, entries := range invalid {
-			if _, err := parseMachineEnvironment(entries); err == nil {
-				t.Fatalf("malformed or incomplete machine environment was admitted at case %d", index)
-			}
-		}
-		for _, value := range []string{"", `relative\machine`, `C:relative`, `%SystemDrive%\ProgramData`, `C:\%Unexpanded%`,
-			`\\.\PhysicalDrive0`, `\\?\GLOBALROOT\Device\HarddiskVolume1`, "C:\\machine\n", strings.Repeat("a", 32761)} {
-			if _, err := validateMachineDirectory(value); err == nil {
-				t.Fatal("unsafe or unresolved registered machine path was admitted")
-			}
-		}
+		t.Run("registry-strings", machineRegistrationStrings)
+		t.Run("captured-expansion", machineCapturedExpansion)
+		t.Run("registered-locations", machineRegisteredLocations)
 	})
+}
+
+func machineRegistrationStrings(t *testing.T) {
+	terminated := func(value string) []uint16 { return append(utf16.Encode([]rune(value)), 0) }
+	for _, value := range []string{`D:\Shared Data`, `R:\Registered\資料`, `E:\Apps\𠮷`} {
+		for _, kind := range []uint32{syscall.REG_SZ, syscall.REG_EXPAND_SZ} {
+			buffer := terminated(value)
+			got, err := decodeMachineRegistration(kind, buffer, uint32(len(buffer)*2))
+			if err != nil || got != value {
+				t.Fatal("bounded literal machine registration was changed or rejected", err)
+			}
+		}
+	}
+	expression := terminated(`%SystemDrive%\Registered Data`)
+	if got, err := decodeMachineRegistration(syscall.REG_EXPAND_SZ, expression, uint32(len(expression)*2)); err != nil || got != `%SystemDrive%\Registered Data` {
+		t.Fatal("expandable machine registration was not preserved literally", err)
+	}
+	for _, fixture := range []struct {
+		name   string
+		kind   uint32
+		buffer []uint16
+		size   uint32
+	}{
+		{"wrong-type", syscall.REG_MULTI_SZ, terminated(`D:\Data`), 16},
+		{"empty", syscall.REG_SZ, []uint16{0}, 2},
+		{"odd-byte-count", syscall.REG_SZ, terminated(`D:\Data`), 15},
+		{"short-buffer", syscall.REG_SZ, []uint16{'D', 0}, 8},
+		{"unbounded-count", syscall.REG_SZ, nil, 0xfffffffe},
+		{"unbounded-buffer", syscall.REG_SZ, make([]uint16, machineDirectoryLimit+2), 2 * (machineDirectoryLimit + 2)},
+		{"unterminated", syscall.REG_SZ, []uint16{'D', ':', '\\', 'a'}, 8},
+		{"embedded-nul", syscall.REG_SZ, []uint16{'D', ':', '\\', 0, 'a', 0}, 12},
+		{"surrogate-high", syscall.REG_SZ, []uint16{'D', ':', '\\', 0xd800, 0}, 10},
+		{"surrogate-low", syscall.REG_SZ, []uint16{'D', ':', '\\', 0xdc00, 0}, 10},
+		{"literal-expansion", syscall.REG_SZ, expression, uint32(len(expression) * 2)},
+		{"newline", syscall.REG_SZ, terminated("D:\\Data\n"), 18},
+		{"return", syscall.REG_EXPAND_SZ, terminated("D:\\Data\r"), 18},
+	} {
+		t.Run(fixture.name, func(t *testing.T) {
+			if _, err := decodeMachineRegistration(fixture.kind, fixture.buffer, fixture.size); err == nil {
+				t.Fatal("malformed or ambiguous machine registration was admitted")
+			}
+		})
+	}
+}
+
+func machineCapturedExpansion(t *testing.T) {
+	values := map[string]string{"SYSTEMDRIVE": "R:", "SYSTEMROOT": `R:\Operating System`, "WINDIR": "%SystemRoot%",
+		"PROGRAMDATA": `D:\Shared Data`, "ALLUSERSPROFILE": "%PROGRAMDATA%", "PROGRAMFILES": `%AllUsersProfile%\Apps`}
+	for input, want := range map[string]string{
+		`%SystemDrive%\Registered`: `R:\Registered`, `%windir%\Temp`: `R:\Operating System\Temp`,
+		`%ProgramFiles%\Product`: `D:\Shared Data\Apps\Product`, `E:\Redirected Data`: `E:\Redirected Data`,
+		`%PROGRAMDATA%\%SystemDrive%`: `D:\Shared Data\R:`,
+	} {
+		before := make(map[string]string, len(values))
+		for name, value := range values {
+			before[name] = value
+		}
+		got, err := expandMachineVariables(input, values)
+		if err != nil || got != want || !reflect.DeepEqual(before, values) {
+			t.Fatal("captured redirected machine expansion changed its value or inputs", err)
+		}
+	}
+	for _, input := range []string{"", "%", "%%", "%SystemDrive", "%Unknown%", "%USERPROFILE%", "%PATH%",
+		"value\x00", "value\n", "value\r", strings.Repeat("a", machineDirectoryLimit+1)} {
+		if _, err := expandMachineVariables(input, values); err == nil {
+			t.Fatal("unknown, incomplete or unbounded machine expression was admitted")
+		}
+	}
+	for _, captured := range []map[string]string{
+		nil, {}, {"PATH": "R:"}, {"SYSTEMDRIVE": ""}, {"SYSTEMDRIVE": "R:", "systemdrive": "S:"},
+		{"SYSTEMDRIVE": "%SYSTEMDRIVE%"}, {"SYSTEMDRIVE": "%SYSTEMROOT%", "SYSTEMROOT": "%SYSTEMDRIVE%"},
+		{"SYSTEMROOT": `R:\OS`}, {"SYSTEMDRIVE": "R:\x00"}, {"SYSTEMDRIVE": "R:\n"},
+		{"SYSTEMDRIVE": strings.Repeat("x", machineDirectoryLimit+1)},
+	} {
+		if _, err := expandMachineVariables("%SYSTEMDRIVE%", captured); err == nil {
+			t.Fatal("missing, cyclic or ambiguous machine expansion authority was admitted")
+		}
+	}
+	if _, err := expandMachineVariables("%PROGRAMDATA%%PROGRAMDATA%", map[string]string{"PROGRAMDATA": strings.Repeat("a", machineDirectoryLimit/2+1)}); err == nil {
+		t.Fatal("expanded machine registration exceeded its output bound")
+	}
+}
+
+func machineRegisteredLocations(t *testing.T) {
+	paths := MachinePaths{System: `R:\Operating System\System32`, Windows: `R:\Operating System`, SystemDrive: "R:"}
+	for _, fixture := range []struct{ data, files, common, wantData, wantFiles string }{
+		{`%SystemDrive%\Data`, `%SystemDrive%\Apps`, "", `R:\Data`, `R:\Apps`},
+		{`D:\Shared Data`, `E:\Installed Apps`, `%ProgramData%`, `D:\Shared Data`, `E:\Installed Apps`},
+		{`D:\Shared Data`, `%AllUsersProfile%\Apps`, `F:\Common Data`, `F:\Common Data`, `D:\Shared Data\Apps`},
+		{`D:\Shared Data`, `E:\Apps`, `%ProgramData%\Common`, `D:\Shared Data\Common`, `E:\Apps`},
+		{`%SystemRoot%\Data`, `%windir%\Apps`, "%AllUsersProfile%", `R:\Operating System\Data`, `R:\Operating System\Apps`},
+	} {
+		got, err := resolveMachineRegistrations(paths, fixture.data, fixture.files, fixture.common)
+		if err != nil || got.ProgramData != fixture.wantData || got.ProgramFiles != fixture.wantFiles ||
+			got.System != paths.System || got.Windows != paths.Windows || got.SystemDrive != paths.SystemDrive {
+			t.Fatal("registered custom-drive or common-folder refinement was not preserved", err)
+		}
+	}
+	for _, fixture := range [][3]string{
+		{"", `E:\Apps`, ""}, {`D:\Data`, "", ""}, {`%ProgramFiles%`, `%ProgramData%`, ""},
+		{`D:\Data`, `E:\Apps`, `%UNKNOWN%`}, {`D:\Data`, `E:\Apps`, `relative`},
+		{`D:\Data`, `E:\Apps`, `\\server\share`}, {`%ProgramData%`, `E:\Apps`, ""},
+	} {
+		if _, err := resolveMachineRegistrations(paths, fixture[0], fixture[1], fixture[2]); err == nil {
+			t.Fatal("invalid registered location was replaced with a default or other location")
+		}
+	}
+	for _, value := range []string{`R:\`, `D:\Shared Data`, `E:\Apps\資料`, `\\?\Volume{01234567-89ab-cdef-0123-456789abcdef}\Data`} {
+		if got, err := validateMachineDirectory(value); err != nil || got != value {
+			t.Fatal("bounded local registered directory was rejected", err)
+		}
+	}
+	for _, value := range []string{"", `relative\machine`, `C:relative`, `%SystemDrive%\ProgramData`, `C:\%Unexpanded%`,
+		`\\.\PhysicalDrive0`, `\\?\GLOBALROOT\Device\HarddiskVolume1`, `\\server\share`, `1:\Data`,
+		`C:\bad:stream`, `C:\bad.`, `C:\bad `, `C:\bad*`, `C:\bad?`, `C:\bad|`, `C:\bad<`, `C:\bad>`, `C:\bad"`,
+		`C:/Data`, "C:\\machine\n", "C:\\machine\x00", "C:\\machine\t", strings.Repeat("a", machineDirectoryLimit+1)} {
+		if _, err := validateMachineDirectory(value); err == nil {
+			t.Fatal("unsafe or unresolved registered machine path was admitted")
+		}
+	}
 }
 
 // These read-only observations run only after the actual admission assertion
@@ -218,7 +312,7 @@ func machineDirectoriesFailureDiagnostic(t *testing.T, baseline MachinePaths) {
 		if ok == 0 || block == nil {
 			t.Logf("machine-directory diagnostic: CreateEnvironmentBlock token=%s inherit=false success=%t error=%v", choice.name, ok != 0, callErr)
 		} else {
-			entries, err := readMachineEnvironment(block)
+			entries, err := machineDiagnosticEnvironmentEntries(block)
 			if err != nil {
 				t.Logf("machine-directory diagnostic: CreateEnvironmentBlock token=%s read error=%v", choice.name, err)
 			} else {
@@ -240,6 +334,30 @@ func machineDirectoriesFailureDiagnostic(t *testing.T, baseline MachinePaths) {
 			}
 		}
 	}
+}
+
+// The obsolete Userenv approach remains only as bounded failure evidence. It
+// cannot supply production machine paths or repair a failed native assertion.
+func machineDiagnosticEnvironmentEntries(block unsafe.Pointer) ([]string, error) {
+	entries := make([]string, 0, 64)
+	start := 0
+	for offset := 0; offset < 1<<20; offset++ {
+		if *(*uint16)(unsafe.Add(block, offset*2)) != 0 {
+			if offset-start >= 32767 {
+				return nil, errors.New("diagnostic environment entry is unbounded")
+			}
+			continue
+		}
+		if offset == start {
+			return entries, nil
+		}
+		if len(entries) >= 8192 {
+			return nil, errors.New("diagnostic environment contains too many entries")
+		}
+		entries = append(entries, syscall.UTF16ToString(unsafe.Slice((*uint16)(unsafe.Add(block, start*2)), offset-start)))
+		start = offset + 1
+	}
+	return nil, errors.New("diagnostic environment is unbounded")
 }
 
 func machineNativeEnvironmentSnapshot(t *testing.T) []uint16 {

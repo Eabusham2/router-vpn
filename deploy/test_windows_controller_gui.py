@@ -160,7 +160,7 @@ def mutants():
               "module, moduleErr := os.Executable(); if moduleErr != nil { return nil, moduleErr }; image, err := PinImage(module)")),
         ("machine_directories_windows.go", "inherited-machine-directory", REQUIRED[20],
          "machine directory capture used or required inherited environment",
-         once(machine, 'validateMachineDirectory(values["PROGRAMDATA"])',
+         once(machine, 'validateMachineDirectory(programData)',
               'validateMachineDirectory(func() string { value, _ := syscall.Getenv("ProgramData"); return value }())')),
     )
 
