@@ -95,6 +95,36 @@ jobs:
     # This short job exposes the exact failing launch immediately. The complete
     # race-instrumented foundation, all negative controls and shipping Session
     # composition remain required in the independent controller job below.
+  session:
+    name: Actual installed and Portable Windows Session
+    runs-on: windows-latest
+    timeout-minutes: 12
+    concurrency:
+      group: windows-owned-session-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Pinned compiler for the actual composed Session race checks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $compilerLines = @(python deploy/install-desktop-windows-toolchain.py (Join-Path $env:RUNNER_TEMP 'routervpn-session-llvm'))
+          if ($LASTEXITCODE -ne 0 -or $compilerLines.Count -ne 1) { throw 'Pinned Windows Session compiler installation failed' }
+          $compilerBin = [string]$compilerLines[0]
+          $compiler = Join-Path $compilerBin 'x86_64-w64-mingw32-clang.exe'
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'Pinned Windows Session C compiler is missing' }
+          "CC=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $compilerBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Actual installed and Portable Windows Session with packaged App and Tray
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          python deploy/test_windows_app_session.py
+          if ($LASTEXITCODE -ne 0) { throw 'Actual composed Windows Session gate failed' }
   controller:
     runs-on: windows-latest
     concurrency:
@@ -102,9 +132,9 @@ jobs:
       # Retain the active complete native result while the independent short
       # Shell job can finish and expose the next concrete launch observation.
       cancel-in-progress: false
-    # The measured pre-composition job took 10m07s. Child-entry and complete
-    # Session execution add two separately bounded 10m native gates; retain a
-    # small job/setup margin without altering any process or drain deadline.
+    # Keep the previously measured controller-gate budget while complete
+    # Session execution runs independently above. No process or drain deadline
+    # changes when the native observations can complete in parallel.
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
@@ -199,13 +229,6 @@ jobs:
             python deploy/test_windows_gui_powershell.py --shell $shell
             if ($LASTEXITCODE -ne 0) { throw "Actual PowerShell and Go UI composition gate failed in $shell" }
           }
-      - name: Actual installed and Portable Windows Session with packaged App and Tray
-        if: ${{ success() || failure() }}
-        timeout-minutes: 10
-        shell: pwsh
-        run: |
-          python deploy/test_windows_app_session.py
-          if ($LASTEXITCODE -ne 0) { throw 'Actual composed Windows Session gate failed' }
       - name: Actual ordinary-user protection absence and denial
         if: ${{ success() || failure() }}
         shell: pwsh

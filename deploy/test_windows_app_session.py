@@ -131,10 +131,18 @@ def layout(workspace, fixture, shipping, scenario, env):
         cwd=ROOT, env=env, timeout=45)
     if status:
         raise ValueError("Actual shipping icon generation failed:\n" + output[-8192:])
+    powershell = system_powershell()
+    # This fixture is normally launched by PowerShell 7, whose inherited module
+    # path can select Core assemblies in the actual Windows PowerShell 5.1 ACL
+    # helper. Use only that OS-selected interpreter's own Framework modules.
+    # The production Session independently reconstructs the same system path.
+    acl_environment = {key: value for key, value in env.items()
+                       if key.casefold() != "psmodulepath"}
+    acl_environment["PSModulePath"] = str(powershell.parent / "Modules")
     status, output = NATIVE.run(
-        [system_powershell(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+        [powershell, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
          "-File", package / "client/Protect-RouterVPN-Windows-PrivateRoot.ps1", "-Root", root],
-        cwd=root, env=env, timeout=45)
+        cwd=root, env=acl_environment, timeout=45)
     if status:
         raise ValueError("The actual package ACL helper rejected its owned fixture:\n" + output[-8192:])
     if scenario == "code-hardlink":
