@@ -61,6 +61,23 @@ def linux_dns_measurement_controls() -> None:
 
 def windows_profile_controls() -> None:
     """Trace the captured quick control and the separate complete Settings form."""
+    def go_function(path: str, name: str, *markers: str) -> str:
+        body = require(path)
+        found = re.search(r"(?ms)^func (?:\([^\n]+\) )?" + re.escape(name) + r"\([^\n]*\{.*?^\}", body)
+        for marker in markers:
+            if found is None or marker not in found.group():
+                errors.append(f"{path}: protection function {name} lost: {marker}")
+        return found.group() if found is not None else ""
+
+    def ordered(body: str, name: str, *markers: str) -> None:
+        position = -1
+        for marker in markers:
+            following = body.find(marker, position + 1)
+            if following < 0:
+                errors.append(f"protection function {name} lost ordered operation: {marker}")
+                return
+            position = following
+
     require("client/RouterVPN-Windows-App.ps1",
             "$ProfileSettingsHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-ProfileSettings.ps1'",
             "$ProfileSettingsSource=Get-Content -LiteralPath $ProfileSettingsHelpers -Raw -Encoding UTF8",
@@ -68,7 +85,11 @@ def windows_profile_controls() -> None:
             "$ProductSource=Add-RouterVPNUnifiedWindowsShell -ProductSource $ProductSource")
     shell_path = "client/RouterVPN-Windows-UnifiedShell.ps1"
     shell = require(shell_path, "(Control 'UnifiedSettingsButton').Add_Click(",
-                    "Show-RouterVPNProfileSettingsDialog -BaseUrl $BaseUrl -Owner $Window")
+                    "Show-RouterVPNProfileSettingsDialog -BaseUrl $BaseUrl -Owner $Window",
+                    "protection='/api/profile/protection'",
+                    "Get-RouterVPNProtectionPresentation -Captured $Protection",
+                    "$Payload.events $Payload.protection",
+                    "$script:UnifiedProtectionPending -and $script:UnifiedProtectionProfileID-ceq$DisplayedProfileID){$On=$false}")
     binding = re.search(r"(?m)^\(Control 'UnifiedKillSwitch'\)\.Add_Click\(.*$", shell)
     for marker in ("$DisplayedProfileID=[string]$RouterCombo.SelectedValue",
                    "Set-RouterVPNProfileProtection -BaseUrl $BaseUrl -DisplayedProfileID $DisplayedProfileID -Enabled $On"):
@@ -87,19 +108,58 @@ def windows_profile_controls() -> None:
                    "[string]::IsNullOrWhiteSpace([string]$captured.profile_token)",
                    "profile_id=$DisplayedProfileID;profile_token=[string]$captured.profile_token;kill_switch_policy=",
                    "'/api/profile/protection') -Method Post",
-                   "-Body ($body | ConvertTo-Json -Compress)"):
+                   "-Body ($body | ConvertTo-Json -Compress) -TimeoutSec 30",
+                   "$Enabled -and $null-ne$pendingProperty",
+                   "-not$Enabled -and $null-ne$effective"):
         if function is None or marker not in function.group():
             errors.append(f"{helper_path}: captured quick protection helper is incomplete: {marker}")
     require("cmd/client/profile_settings.go", 'h.HandleFunc("/api/profile/protection", a.profileProtectionSettings)')
-    require("cmd/client/profile_protection.go", "a.beginMutationOperation(r)", "decoder.DisallowUnknownFields()",
-            "q.ProfileID != profile.ID || q.ProfileToken != profileStartupSettingsToken(profile)",
-            "a.profiles.SelectedID != profile.ID || profileStartupSettingsToken(current) != q.ProfileToken",
-            "a.closing || profileSettingsBusy(a.state.Connected, a.state.Phase)",
-            'updated.KillSwitchPolicy, updated.KillSwitch = q.KillSwitchPolicy, q.KillSwitchPolicy != "off"',
-            "persistErr = a.persistProfilesLocked()", "a.profiles.Profiles[i] = current")
+    go_function("cmd/client/profile_protection.go", "profileProtectionSettings",
+                "a.beginProtectionAwareMutationOperation(r, true)",
+                "capture := a.captureProfileProtection(profile)",
+                "io.ReadAll(http.MaxBytesReader(w, r.Body, 4096))", "decodeRelayControlJSON(raw, &q)",
+                'len(fields) != 3 || fields["profile_id"] == nil || fields["profile_token"] == nil || fields["kill_switch_policy"] == nil',
+                "q.ProfileID != profile.ID || q.ProfileToken != capture.token",
+                "view.token(capture.revision) != capture.token",
+                "profileStartupSettingsToken(current) != capture.revision || a.nodeProtection != capture.slot",
+                "a.closing || a.cmd != nil || r.Context().Err() != nil || profileSettingsBusy(a.state.Connected, a.state.Phase)",
+                "capture.slot.captureOff(ctx, profile.ID, capture.revision, capture.token)",
+                "a.resumeDesktopProtectionOff(ctx, capture.slot, pending, false)",
+                'updated.KillSwitchPolicy, updated.KillSwitch = q.KillSwitchPolicy, q.KillSwitchPolicy != "off"',
+                "persistErr = a.persistProfilesLocked()", "a.profiles.Profiles[i] = current")
+    go_function("cmd/client/multihop_exact_json.go", "decodeRelayControlJSON",
+                "decodeRelayControlJSONBounded(data, out, multihoprelay.MaxControlResponseBytes)")
+    go_function("cmd/client/multihop_exact_json.go", "decodeRelayControlJSONBounded",
+                "decoder.DisallowUnknownFields()", "err != nil || !ok || seen[name]", "scan.Token(); err != io.EOF")
+    go_function("cmd/client/operation_guard.go", "beginMutationOperation",
+                "a.beginProtectionAwareMutationOperation(r, false)")
+    go_function("cmd/client/operation_guard.go", "beginProtectionAwareMutationOperation",
+                "a.operationMu.TryLock()", "a.guardDesktopProtectionOffPending()")
+    go_function("cmd/client/profile_protection_owned.go", "captureProfileProtection",
+                "slot := a.nodeProtection", "profileStartupSettingsToken(profile)", "slot.view()", "capture.view.token(capture.revision)")
+    go_function("cmd/client/desktop_node_protection_off.go", "captureOff",
+                "s.binding.ProfileID != profileID", "s.binding.SourceSHA256 != s.target.Capture.SourceSHA256",
+                "s.viewLocked().token(profileRevision) != token")
+    go_function("cmd/client/desktop_node_protection_off.go", "applyOff",
+                "s.offCurrentLocked(capture)", "s.backend.recover(ctx, capture.target)",
+                "capture.owner, capture.prepared = owner, err == nil", "capture.owner.Close(ctx)",
+                "s.backend.read(ctx, &capture.target)", "s.backend.read(ctx, nil)",
+                "capture.removed, capture.absenceProved = true, true")
+    go_function("cmd/client/desktop_node_protection_windows.go", "desktopOwnedNodeProtectionBackend",
+                "mobiletor.NewDesktopWindowsProtectionReleaseTarget(ctx, target)",
+                "mobiletor.NewDesktopWindowsProtectionRecoveryTarget(ctx, target)")
+    save = go_function("cmd/client/profile_protection_owned.go", "resumeDesktopProtectionOff",
+                       "profileStartupSettingsToken(profile) != capture.profileRevision", "a.nodeProtection != slot",
+                       "a.profiles.Profiles[i] = profile", "errors.Join(errDesktopProtectionOffUnsaved, saveErr)")
+    ordered(save, "resumeDesktopProtectionOff", "slot.applyOff(ctx, capture, current)",
+            "saveErr = a.persistProfilesLocked()", "slot.finishOffSave(capture)")
+    go_function("cmd/client/desktop_node_owned.go", "releaseCapturedDesktopNodeProtection",
+                "slot.pendingOff()", "a.resumeDesktopProtectionOff(ctx, slot, pending, true)")
     require("cmd/client/profile_protection_test.go", "TestProfileProtectionPreservesExternalPrivateGraphAndPolicies",
             "TestProfileProtectionRejectsStaleSourceAndBusyOrMissingOwner",
             "TestProfileProtectionRejectsMalformedInputAndRollsBackPersistenceFailure")
+    require("cmd/client/profile_protection_owned_test.go", "TestProfileProtectionOwnedOffCommitsOnlyAfterExactAbsence",
+            "TestProfileProtectionOwnedOffSaveFailureIsTruthfulAndRetryable", "TestProfileProtectionOwnedPendingBlocksUnrelatedMutation")
     require(".github/workflows/windows-native-contract.yml",
             "test_desktop_protection_settings.py --platform windows --shell pwsh",
             "test_desktop_protection_settings.py --platform windows --shell powershell.exe")
