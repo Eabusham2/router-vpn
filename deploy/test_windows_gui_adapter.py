@@ -16,10 +16,10 @@ ADAPTER = ROOT / "client/RouterVPN-Windows-ControllerTransport.psm1"
 HARNESS = ROOT / "client/test-windows-controller-adapter.ps1"
 
 
-def execute(shell, adapter, case, witness=None):
+def execute(shell, adapter, case, witness=None, root=ROOT):
     result = subprocess.run(
         [shell, "-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
-         "-File", str(HARNESS), "-Root", str(ROOT), "-Adapter", str(adapter), "-Case", case],
+         "-File", str(HARNESS), "-Root", str(root), "-Adapter", str(adapter), "-Case", case],
         cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
         encoding="utf-8", errors="replace", timeout=60, check=False)
     if witness is not None:
@@ -42,12 +42,13 @@ def main():
     args = parser.parse_args()
     paths = [ADAPTER, HARNESS, ROOT / "client/RouterVPN-Windows-ControllerTransport.cs",
              ROOT / "client/RouterVPN-Windows-HomeSummary.ps1",
+             ROOT / "client/RouterVPN-Windows-App.ps1", ROOT / "client/RouterVPN-Windows-Tray.ps1",
              ROOT / "deploy/fixtures/windows-controller-transport/transport_tests.cs",
              ROOT / "deploy/fixtures/windows-controller-transport/adapter_tests.cs"]
     if any(path.is_symlink() or not path.is_file() for path in paths):
         raise ValueError("PowerShell adapter requires exact regular source")
     before = {path: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
-    for case in ("requests", "handoff", "bounds"):
+    for case in ("startup", "requests", "handoff", "bounds"):
         print(execute(args.shell, ADAPTER, case), flush=True)
     source = ADAPTER.read_text(encoding="utf-8")
     variants = (
@@ -67,6 +68,24 @@ def main():
          replace_once(source, "$script:ControllerMode='closed'", "$script:ControllerMode='legacy'")),
     )
     with tempfile.TemporaryDirectory(prefix="routervpn-ui-adapter-") as directory:
+        staged = Path(directory) / "client"
+        staged.mkdir()
+        guards = (
+            ("provider-lookup", "-not(Test-Path -LiteralPath Function:\\New-RouterVPNControllerClient)",
+             "CONTROL startup lookup invoked a provider cmdlet"),
+            ("command-discovery", "-not(Get-Command New-RouterVPNControllerClient -ErrorAction SilentlyContinue)",
+             "CONTROL startup lookup searched commands"),
+        )
+        for role in ("App", "Tray"):
+            for name, changed, witness in guards:
+                for candidate in ("App", "Tray"):
+                    filename = "RouterVPN-Windows-" + candidate + ".ps1"
+                    raw = (ROOT / "client" / filename).read_text(encoding="utf-8")
+                    if candidate == role:
+                        raw = replace_once(raw, "$null-eq${function:New-RouterVPNControllerClient}", changed)
+                    (staged / filename).write_text(raw, encoding="utf-8")
+                execute(args.shell, ADAPTER, "startup", witness, root=Path(directory))
+                print("Rejected executable PowerShell startup defect:", role, name, flush=True)
         for name, case, witness, changed in variants:
             target = Path(directory) / (name + ".psm1")
             target.write_text(changed, encoding="utf-8")
@@ -74,7 +93,7 @@ def main():
             print("Rejected executable PowerShell adapter defect:", name, flush=True)
     if any(hashlib.sha256(path.read_bytes()).hexdigest() != digest for path, digest in before.items()):
         raise ValueError("PowerShell adapter source changed during execution")
-    print("PowerShell adapter passed real request, cancellation, raw-import, ownership and response-bound cases plus five executable production negative controls; native Windows authentication remains a separate gate.", flush=True)
+    print("PowerShell adapter passed direct loaded-function startup, real requests, cancellation, raw imports, ownership and response bounds; four startup and five transport defects were rejected. Native Windows authentication remains a separate gate.", flush=True)
 
 
 if __name__ == "__main__":

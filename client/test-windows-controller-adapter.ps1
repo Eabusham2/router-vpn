@@ -1,14 +1,43 @@
 param([string]$Root=(Split-Path $PSScriptRoot -Parent),[string]$Adapter='',
-      [ValidateSet('requests','handoff','bounds')][string]$Case='requests')
+      [ValidateSet('requests','handoff','bounds','startup')][string]$Case='requests')
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
 if(-not$Adapter){$Adapter=Join-Path $Root 'client/RouterVPN-Windows-ControllerTransport.psm1'}
-$Module=Import-Module $Adapter -Global -PassThru -ErrorAction Stop
-. ([ScriptBlock]::Create([IO.File]::ReadAllText((Join-Path $Root 'client/RouterVPN-Windows-HomeSummary.ps1'),[Text.Encoding]::UTF8)))
 $script:Checks=0;$global:RouterVPNAdapterLegacyCalls=0
 function Check([bool]$Condition,[string]$Message){if(-not$Condition){throw ('CONTROL '+$Message)};$script:Checks++}
 function Reject([scriptblock]$Action,[string]$Message){$Rejected=$false;try{[void](&$Action)}catch{$Rejected=$true};Check $Rejected $Message}
 function global:Invoke-RestMethod { $global:RouterVPNAdapterLegacyCalls++;throw 'Unexpected ordinary HTTP fallback' }
+
+if($Case-ceq'startup'){
+    # Execute the actual App/Tray import condition. A cold launch must not
+    # discover another command or load a provider module merely to inspect
+    # whether its captured transport is already loaded.
+    function Test-Path { throw 'CONTROL startup lookup invoked a provider cmdlet' }
+    function Get-Command { throw 'CONTROL startup lookup searched commands' }
+    foreach($Role in @('App','Tray')){
+        $Source=[IO.File]::ReadAllText((Join-Path $Root ('client/RouterVPN-Windows-'+$Role+'.ps1')),[Text.Encoding]::UTF8)
+        $Tokens=$null;$Errors=$null
+        $AST=[Management.Automation.Language.Parser]::ParseInput($Source,[ref]$Tokens,[ref]$Errors)
+        Check ($Errors.Count-eq0) 'startup source did not parse'
+        $Imports=@($AST.FindAll({param($Node) $Node-is[Management.Automation.Language.IfStatementAst]-and
+            $Node.Extent.Text.Contains("Import-Module (Join-Path `$PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1')")},$true))
+        Check ($Imports.Count-eq1-and$Imports[0].Clauses.Count-eq1) 'startup lost its unique captured-module condition'
+        $Guard=[ScriptBlock]::Create($Imports[0].Clauses[0].Item1.Extent.Text)
+        Check ([bool](&$Guard)) 'startup did not request its missing captured transport'
+        $Module=Import-Module $Adapter -Global -PassThru -ErrorAction Stop
+        try{
+            Check (-not[bool](&$Guard)) 'startup would replace its loaded captured transport'
+            & $Module { $script:ControllerMode='closed' }
+            Check (-not[bool](&$Guard)) 'startup would reload its retired captured transport'
+            Reject {Initialize-RouterVPNControllerTransport} 'startup restored a retired channel to legacy'
+        }finally{Remove-Module $Module -Force}
+    }
+    Write-Host "PASS controller PowerShell adapter startup checks=$script:Checks"
+    return
+}
+
+$Module=Import-Module $Adapter -Global -PassThru -ErrorAction Stop
+. ([ScriptBlock]::Create([IO.File]::ReadAllText((Join-Path $Root 'client/RouterVPN-Windows-HomeSummary.ps1'),[Text.Encoding]::UTF8)))
 
 if($Case-ceq'handoff'){
     Reject {Initialize-RouterVPNControllerTransport -ControllerPipe 'invalid' -ControllerParentHandle 1} 'invalid handoff was accepted'

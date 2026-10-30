@@ -6,9 +6,9 @@ param(
 )
 
 $ErrorActionPreference='Stop'
-# The transport comes from this captured package. Searching installed modules
-# here can stall a cold native launch before the controller pipe is opened.
-if(-not(Test-Path -LiteralPath Function:\New-RouterVPNControllerClient)){
+# Read the loaded function directly. Even a provider cmdlet lookup can trigger
+# module initialization before the captured controller pipe is opened.
+if($null-eq${function:New-RouterVPNControllerClient}){
     Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
 }
 
