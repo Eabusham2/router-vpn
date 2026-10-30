@@ -2,13 +2,17 @@
 """Exercise the shipping Darwin dispatcher without touching the host PF table."""
 from pathlib import Path
 import contextlib
+import fcntl
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import stat
 import subprocess
+import sys
 import tempfile
+import time
 import types
 import unittest
 from unittest.mock import patch
@@ -19,6 +23,9 @@ D = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(D)
 P = D._darwin
 NATIVE_OWNED_INFO = P._baseline._owned_info
+SPAWN_WATCHER = D._spawn_watcher
+RUN_PF = P.run_pf
+POPEN = subprocess.Popen
 
 
 class OwnedDarwinPF(unittest.TestCase):
@@ -77,6 +84,66 @@ class OwnedDarwinPF(unittest.TestCase):
 
     def saved(self):
         return json.loads((self.root/'run/kill-switch.json').read_text())
+
+    def legacy_state(self, policy='always'):
+        state = D._darwin_state_base('direct-tor', 'direct-tor', '198.51.100.44',
+                                     ['198.51.100.44'], False, policy)
+        state.update(pf_token='398', darwin_pf_anchor=P.PF_ANCHOR, darwin_watcher_pid=0,
+                     darwin_baseline_utun=[], darwin_tunnel_interfaces=[], darwin_physical_interfaces=['en0'])
+        self.private_json(self.root/'run/kill-switch.json', state)
+        self.rules = {P.PF_ANCHOR: 'previous endpoint policy\n', 'com.apple/foreign': 'block out all\n'}
+        self.references = {'398', '999'}
+        return state
+
+    @contextlib.contextmanager
+    def legacy_environment(self):
+        with patch.dict(os.environ, {'HOMEVPN_TOR_PHYSICAL_BROKER': '', 'HOMEVPN_ENDPOINT': '',
+                                     'HOMEVPN_KILLSWITCH_DARWIN_TEST': '1', 'HOMEVPN_KILLSWITCH_DARWIN_UTUNS': ''}), \
+             patch.object(P, 'current_utuns', return_value=[]), \
+             patch.object(P, 'public_route_interfaces', return_value=['en0']):
+            os.environ.pop('HOMEVPN_NATIVE_ENDPOINTS_JSON', None)
+            os.environ.pop('HOMEVPN_NATIVE_EGRESS_JSON', None)
+            yield
+
+    def dispatch(self, action):
+        output = io.StringIO()
+        with patch.object(D.sys, 'argv', ['dispatcher', action]), contextlib.redirect_stderr(output):
+            result = D.main()
+        return result, output.getvalue()
+
+    def captured_lease(self, state=None):
+        state = dict(state or self.legacy_state())
+        with D._private_run(self.root) as parent:
+            generation = os.urandom(16).hex()
+            descriptor = D._private_descriptor(parent, 'darwin-watcher-'+generation+'.lease', create=True, exclusive=True)
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            info = os.fstat(descriptor)
+        record = {'schema': 1, 'generation': generation, 'device': info.st_dev, 'inode': info.st_ino, 'phase': 'active'}
+        state.update(darwin_watcher_pid=os.getpid(), darwin_watcher=record)
+        self.private_json(self.root/'run/kill-switch.json', state)
+        return state, descriptor
+
+    def start_real_watcher(self, command=None):
+        children = []
+        def spawn(argv, **kwargs):
+            proc = POPEN(command(argv) if command else argv, **kwargs)
+            children.append(proc)
+            return proc
+        def cleanup():
+            for child in children:
+                if child.poll() is None:
+                    child.terminate()  # retained, unreaped test child, never a saved numeric identity
+                child.wait(timeout=5)
+        self.addCleanup(cleanup)
+        self.watcher.side_effect = SPAWN_WATCHER
+        with patch.object(D.subprocess, 'Popen', side_effect=spawn):
+            result, error = self.dispatch('apply')
+        self.assertEqual(result, 0, 'new owned watcher did not start: '+error)
+        self.assertEqual(len(children), 1)
+        state = self.saved()
+        self.assertEqual(state['darwin_watcher_pid'], children[0].pid)
+        self.assertEqual(D._watcher_record(state)['phase'], 'active')
+        return children[0], state
 
     def reference(self, token):
         P._baseline.token(token)
@@ -346,7 +413,7 @@ class OwnedDarwinPF(unittest.TestCase):
 
     def test_existing_legacy_owner_is_preserved_before_native_transition(self):
         prior = D._darwin_state_base('direct-tor', 'direct-tor', '198.51.100.44', [], False, 'always')
-        prior.update(pf_token='398', darwin_pf_anchor=P.PF_ANCHOR)
+        prior.update(pf_token='398', darwin_pf_anchor=P.PF_ANCHOR, darwin_watcher_pid=0)
         self.private_json(self.root/'run/kill-switch.json', prior)
         self.rules[P.PF_ANCHOR] = 'previous endpoint policy\n'
         self.references.add('398')
@@ -369,6 +436,112 @@ class OwnedDarwinPF(unittest.TestCase):
         self.assertEqual(self.native_calls, [])
         self.assertEqual(self.commands, [])
 
+    def test_legacy_actions_retain_unresolved_watcher_without_signaling(self):
+        missing = object()
+        # A stored PID has no creation identity or retained child handle. Even
+        # the current process, a missing field and zero-like values cannot
+        # establish that the old watcher has relinquished its authority.
+        identities = (991, os.getpid(), 1, -1, '991', '0', '', None, False, True, 0.0, [], {}, missing)
+        for label, action, policy in (('Off', 'apply', 'off'), ('release', 'release', 'on-connect'),
+                                      ('Always release', 'release', 'always'), ('force-off', 'force-off', 'always'),
+                                      ('reassert', 'reassert', 'always'), ('legacy apply', 'apply', 'always')):
+            for identity in identities:
+                with self.subTest(action=label, identity=repr(identity)):
+                    self.selected['kill_switch_policy'] = policy
+                    self.private_json(self.root/'routers.json', self.store)
+                    prior = D._darwin_state_base('direct-tor', 'direct-tor', '198.51.100.44',
+                                                ['198.51.100.44'], False, 'always' if policy == 'off' else policy)
+                    prior.update(pf_token='398', darwin_pf_anchor=P.PF_ANCHOR,
+                                 darwin_baseline_utun=[], darwin_tunnel_interfaces=[],
+                                 darwin_physical_interfaces=['en0'])
+                    if identity is not missing:
+                        prior['darwin_watcher_pid'] = identity
+                    path = self.root/'run/kill-switch.json'
+                    self.private_json(path, prior)
+                    saved, saved_identity = path.read_bytes(), path.stat()
+                    self.rules = {P.PF_ANCHOR: 'previous endpoint policy\n', 'com.apple/foreign': 'block out all\n'}
+                    rules_before = dict(self.rules)
+                    self.references = {'398', '999'}
+                    self.commands.clear(); self.native_calls.clear(); self.reference_reads.clear()
+                    self.watcher.reset_mock(); self.watcher.return_value = 0
+                    stdout, stderr = io.StringIO(), io.StringIO()
+                    with patch.object(D.os, 'kill') as kill, patch.object(P, 'current_utuns', return_value=[]), \
+                         patch.object(P, 'public_route_interfaces', return_value=['en0']), \
+                         patch.dict(os.environ, {'HOMEVPN_TOR_PHYSICAL_BROKER': '', 'HOMEVPN_ENDPOINT': ''}), \
+                         patch.object(D.sys, 'argv', ['dispatcher', action]), \
+                         contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                        os.environ.pop('HOMEVPN_NATIVE_ENDPOINTS_JSON', None)
+                        os.environ.pop('HOMEVPN_NATIVE_EGRESS_JSON', None)
+                        result = D.main()
+                    self.assertEqual(kill.call_count, 0, 'legacy saved PID was signaled without captured ownership')
+                    self.assertEqual(result, 1, 'legacy watcher action did not retain unresolved ownership')
+                    self.assertIn('prior watcher retirement', stderr.getvalue())
+                    self.assertEqual(stdout.getvalue(), '')
+                    self.assertEqual(path.read_bytes(), saved, 'unresolved watcher changed its private recovery record')
+                    self.assertTrue(os.path.samestat(saved_identity, path.stat()))
+                    self.assertEqual(self.rules, rules_before)
+                    self.assertEqual(self.references, {'398', '999'})
+                    self.assertEqual(self.commands, [], 'unresolved watcher reached PF operations')
+                    self.assertEqual(self.native_calls, [])
+                    self.assertEqual(self.reference_reads, [])
+                    self.watcher.assert_not_called()
+
+    def test_explicit_zero_watcher_preserves_legacy_off_release_and_reassert(self):
+        for action, policy in (('apply', 'off'), ('release', 'on-connect'), ('release', 'always'),
+                               ('force-off', 'always'), ('reassert', 'always')):
+            with self.subTest(action=action, policy=policy):
+                self.selected['kill_switch_policy'] = policy
+                self.private_json(self.root/'routers.json', self.store)
+                prior = D._darwin_state_base('direct-tor', 'direct-tor', '198.51.100.44',
+                                            ['198.51.100.44'], False, 'always' if policy == 'off' else policy)
+                prior.update(pf_token='398', darwin_pf_anchor=P.PF_ANCHOR, darwin_watcher_pid=0,
+                             darwin_baseline_utun=[], darwin_tunnel_interfaces=[], darwin_physical_interfaces=['en0'])
+                path = self.root/'run/kill-switch.json'
+                self.private_json(path, prior)
+                self.rules = {P.PF_ANCHOR: 'previous endpoint policy\n', 'com.apple/foreign': 'block out all\n'}
+                self.references = {'398', '999'}
+                self.commands.clear(); self.native_calls.clear()
+                with patch.object(D.os, 'kill') as kill, patch.object(P, 'current_utuns', return_value=[]), \
+                     patch.object(P, 'public_route_interfaces', return_value=['en0']), \
+                     patch.dict(os.environ, {'HOMEVPN_TOR_PHYSICAL_BROKER': '', 'HOMEVPN_ENDPOINT': ''}), \
+                     patch.object(D.sys, 'argv', ['dispatcher', action]), \
+                     contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(D.main(), 0, 'explicit no-watcher legacy operation was blocked')
+                kill.assert_not_called()
+                self.assertEqual(self.rules['com.apple/foreign'], 'block out all\n')
+                if policy == 'off' or policy == 'on-connect' or action == 'force-off':
+                    self.assertFalse(path.exists())
+                    self.assertEqual(self.references, {'999'})
+                else:
+                    self.assertEqual(self.saved()['darwin_watcher_pid'], 0)
+                    self.assertEqual(self.saved()['policy'], 'always')
+                    self.assertEqual(self.references, {'398', '999'})
+                    self.assertIn('block drop out quick all', self.rules[P.PF_ANCHOR])
+
+    def test_absent_legacy_owner_with_zero_watcher_uses_existing_native_transaction(self):
+        # This already-supported inactive case needs no new migration authority.
+        # A present namespace or unresolved watcher remains a different case.
+        prior = D._darwin_state_base('direct-tor', 'direct-tor', '198.51.100.44', [], False, 'always')
+        prior.update(pf_token='398', darwin_pf_anchor=P.PF_ANCHOR, darwin_watcher_pid=0)
+        self.private_json(self.root/'run/kill-switch.json', prior)
+        settings = (self.root/'routers.json').read_bytes()
+        self.rules = {'com.apple/foreign': 'block out all\n'}
+        with patch.object(D.os, 'kill') as kill:
+            self.assertEqual(D.darwin_apply(), 0)
+        kill.assert_not_called()
+        state = self.saved()
+        self.assertTrue(state['native_socket_broker'])
+        self.assertEqual(state['darwin_watcher_pid'], 0)
+        self.assertEqual(state['pf_token'], '417')
+        self.assertTrue(state[P._baseline.STATE_KEY]['complete'])
+        self.assertEqual(state[P._baseline.STATE_KEY]['previous'], {'present': False, 'rules_sha256': ''})
+        self.assertEqual(self.references, {'417', '999'})
+        self.assertEqual(self.rules['com.apple/foreign'], 'block out all\n')
+        self.assertEqual((self.root/'routers.json').read_bytes(), settings)
+        self.assertNotIn(['-X', '398'], self.commands)
+        self.assertFalse(any(command[:1] == ['-a'] and '-F' in command for command in self.commands))
+        self.watcher.assert_not_called()
+
     def test_shipping_actions_hold_one_complete_state_transaction(self):
         for action, name in (('apply', 'darwin_apply'), ('release', 'darwin_release'),
                              ('force-off', 'darwin_release'), ('reassert', 'darwin_reassert')):
@@ -383,6 +556,14 @@ class OwnedDarwinPF(unittest.TestCase):
                     events.append('leave')
             def operation(*args):
                 self.assertEqual(events, ['enter'], 'shipping PF mutation escaped its complete private state lock')
+                lock = self.root/'run/darwin-watcher-state.lock'
+                self.assertTrue(lock.is_file(), 'shipping PF mutation escaped its real per-root transaction')
+                probe = os.open(lock, os.O_RDWR)
+                try:
+                    with self.assertRaises(BlockingIOError, msg='shipping PF mutation escaped its real per-root transaction'):
+                        fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.close(probe)
                 events.append('operation')
                 return 0
             with self.subTest(action=action), patch.object(P._baseline, 'state_guard', side_effect=guard), \
@@ -395,9 +576,7 @@ class OwnedDarwinPF(unittest.TestCase):
             operation.assert_not_called()
 
     def test_legacy_watcher_locks_its_iteration_and_never_rewrites_native_timeout(self):
-        prior = D._darwin_state_base('direct-tor', 'direct-tor', '198.51.100.44', [], False, 'always')
-        prior.update(pf_token='398', darwin_pf_anchor=P.PF_ANCHOR, darwin_watcher_pid=os.getpid())
-        self.private_json(self.root/'run/kill-switch.json', prior)
+        prior, descriptor = self.captured_lease()
         held = []
         @contextlib.contextmanager
         def guard(root):
@@ -409,17 +588,381 @@ class OwnedDarwinPF(unittest.TestCase):
                 held.pop()
         def refresh(*args, **kwargs):
             self.assertEqual(held, [True], 'legacy watcher changed PF outside its captured state lock')
+            probe = os.open(self.root/'run/darwin-watcher-state.lock', os.O_RDWR)
+            try:
+                with self.assertRaises(BlockingIOError, msg='legacy watcher bypassed its real per-root lock'):
+                    fcntl.flock(probe, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            finally:
+                os.close(probe)
+            self.assertEqual(set(P._baseline.process_authority_fds()), {descriptor, D._WATCHER_GUARD_FD})
             return {}
-        with patch.object(P._baseline, 'state_guard', side_effect=guard), patch.object(P._baseline, 'ROOT', self.root), \
+        with patch.object(P._baseline, 'state_guard', side_effect=guard), \
              patch.object(P, 'apply_darwin', side_effect=refresh), patch.object(D._linux, 'retained_native_policy', return_value=None):
-            self.assertEqual(D.darwin_watch(), 0)
-        native = {**prior, 'native_socket_broker': True, 'darwin_pf_anchor': P.OWNED_PF_ANCHOR}
-        self.private_json(self.root/'run/kill-switch.json', native)
-        with patch.object(P._baseline, 'state_guard', side_effect=guard), patch.object(D.time, 'monotonic', side_effect=[0, 91]), \
-             patch.object(D, '_write_state') as write:
-            self.assertEqual(D.darwin_watch(), 1)
-            self.assertEqual(write.call_count, 0, 'older watcher timeout rewrote a replacement native journal')
-        self.assertEqual(self.saved(), native)
+            self.assertEqual(D.darwin_watch(prior['darwin_watcher']['generation'], descriptor), 0)
+        self.assertEqual(self.saved()['darwin_watcher']['phase'], 'finished')
+        for timeout in (False, True):
+            native, descriptor = self.captured_lease({**prior, 'native_socket_broker': True, 'darwin_pf_anchor': P.OWNED_PF_ANCHOR})
+            with self.subTest(timeout=timeout), patch.object(P._baseline, 'state_guard', side_effect=guard), \
+                 patch.object(P, 'apply_darwin', return_value={}) as refresh, patch.object(D, '_write_watcher_state') as write, \
+                 patch.object(D.time, 'monotonic', side_effect=[0, 91] if timeout else [0, 1]):
+                self.assertEqual(D.darwin_watch(native['darwin_watcher']['generation'], descriptor), 1 if timeout else 0)
+                self.assertEqual(refresh.call_count, 0, 'older watcher changed a replacement native journal')
+                self.assertEqual(write.call_count, 0, 'older watcher timeout rewrote a replacement native journal')
+            self.assertEqual(self.saved(), native)
+        with self.assertRaisesRegex(RuntimeError, 'inherited lease'), patch.object(P, 'apply_darwin') as refresh:
+            D.darwin_watch()
+        refresh.assert_not_called()
+
+    def test_watcher_rechecks_exact_generation_inside_its_transaction(self):
+        prior, descriptor = self.captured_lease()
+        replacement, replacement_descriptor = self.captured_lease(prior)
+        self.addCleanup(os.close, replacement_descriptor)
+        self.private_json(self.root/'run/kill-switch.json', prior)
+        @contextlib.contextmanager
+        def intervening_replacement(root):
+            self.private_json(root/'run/kill-switch.json', replacement)
+            yield
+        with patch.object(P._baseline, 'state_guard', side_effect=intervening_replacement), \
+             patch.object(P, 'apply_darwin', return_value={}) as refresh:
+            self.assertEqual(D.darwin_watch(prior['darwin_watcher']['generation'], descriptor), 0)
+        self.assertEqual(refresh.call_count, 0, 'stale watcher changed PF after a captured generation replacement')
+        self.assertEqual(self.saved(), replacement)
+
+    def test_new_real_watchers_retire_for_off_release_always_and_reassert(self):
+        for action, policy in (('apply', 'off'), ('release', 'on-connect'), ('release', 'always'),
+                               ('force-off', 'always'), ('reassert', 'always')):
+            with self.subTest(action=action, policy=policy), self.legacy_environment():
+                initial_policy = 'always' if policy == 'off' else policy
+                self.selected['kill_switch_policy'] = initial_policy
+                self.private_json(self.root/'routers.json', self.store)
+                self.legacy_state(initial_policy)
+                child, active = self.start_real_watcher()
+                lease = self.root/'run'/D._watcher_leaf(active['darwin_watcher'])
+                self.assertTrue(lease.is_file())
+                self.selected['kill_switch_policy'] = policy
+                self.private_json(self.root/'routers.json', self.store)
+                with patch.object(D.os, 'kill') as kill:
+                    result, error = self.dispatch(action)
+                self.assertEqual(result, 0, 'new watcher prevented normal lifecycle retirement: '+error)
+                self.assertEqual(kill.call_count, 0, 'new watcher retirement signaled a saved PID')
+                self.assertEqual(child.wait(timeout=4), 0)
+                self.assertFalse(lease.exists(), 'retired new watcher left its owned lease')
+                self.assertEqual(self.rules['com.apple/foreign'], 'block out all\n')
+                if policy in ('off', 'on-connect') or action == 'force-off':
+                    self.assertFalse((self.root/'run/kill-switch.json').exists())
+                    self.assertEqual(self.references, {'999'})
+                else:
+                    self.assertEqual(self.saved()['darwin_watcher_pid'], 0)
+                    self.assertNotIn('darwin_watcher', self.saved())
+                    self.assertEqual(self.references, {'398', '999'})
+                    self.assertIn('block drop out quick all', self.rules[P.PF_ANCHOR])
+
+    def test_failed_cancellation_persistence_retains_owner_and_same_retry(self):
+        with self.legacy_environment():
+            self.legacy_state()
+            child, active = self.start_real_watcher()
+            before_rules, before_references = dict(self.rules), set(self.references)
+            original = D._write_watcher_state
+            def adopted_then_failed(root, state):
+                original(root, state)
+                raise OSError('fixture cancellation directory sync failed after adoption')
+            with patch.object(D, '_write_watcher_state', side_effect=adopted_then_failed):
+                result, error = self.dispatch('force-off')
+            self.assertEqual(result, 1, 'uncertain cancellation was reported as successful retirement')
+            self.assertIn('directory sync failed', error)
+            self.assertEqual(self.saved()['darwin_watcher']['generation'], active['darwin_watcher']['generation'])
+            self.assertEqual(self.saved()['darwin_watcher']['phase'], 'cancel')
+            self.assertEqual(self.rules, before_rules)
+            self.assertEqual(self.references, before_references)
+            result, error = self.dispatch('force-off')
+            self.assertEqual(result, 0, error)
+            self.assertEqual(child.wait(timeout=4), 0)
+            self.assertFalse((self.root/'run/kill-switch.json').exists())
+
+    def test_unresolved_lease_retains_cancel_until_exact_holder_retires(self):
+        active, holder = self.captured_lease()
+        original = self.saved()
+        with self.legacy_environment(), patch.object(D, '_WATCHER_RETIRE_SECONDS', 0.04):
+            result, error = self.dispatch('force-off')
+        self.assertEqual(result, 1, 'held watcher lease was treated as retired')
+        self.assertIn('not yet retired', error)
+        self.assertEqual(self.saved(), {**original, 'darwin_watcher': {**original['darwin_watcher'], 'phase': 'cancel'}})
+        self.assertEqual(self.rules[P.PF_ANCHOR], 'previous endpoint policy\n')
+        os.close(holder)
+        with self.legacy_environment():
+            result, error = self.dispatch('force-off')
+        self.assertEqual(result, 0, error)
+        self.assertEqual(self.references, {'999'})
+
+    def test_retired_lease_cleanup_failures_keep_exact_receipt_for_retry(self):
+        for failure in ('unlink', 'parent-sync'):
+            with self.subTest(failure=failure), self.legacy_environment():
+                active, holder = self.captured_lease()
+                os.close(holder)
+                leaf = D._watcher_leaf(active['darwin_watcher'])
+                lease = self.root/'run'/leaf
+                original_unlink, original_sync = os.unlink, os.fsync
+                failures = []
+                def unlink(path, *args, **kwargs):
+                    if failure == 'unlink' and path == leaf:
+                        failures.append('unlink')
+                        raise OSError('fixture exact lease unlink failed')
+                    return original_unlink(path, *args, **kwargs)
+                def sync(descriptor):
+                    if failure == 'parent-sync' and stat.S_ISDIR(os.fstat(descriptor).st_mode) and not lease.exists():
+                        failures.append('parent-sync')
+                        raise OSError('fixture exact lease parent sync failed')
+                    return original_sync(descriptor)
+                self.commands.clear()
+                with patch.object(D.os, 'unlink', side_effect=unlink), patch.object(D.os, 'fsync', side_effect=sync), \
+                     patch.object(D.os, 'kill') as kill:
+                    result, error = self.dispatch('force-off')
+                self.assertEqual(result, 1, 'failed lease cleanup was reported as complete')
+                self.assertEqual(failures, [failure])
+                self.assertEqual(kill.call_count, 0)
+                receipt = self.saved()
+                self.assertIn('darwin_watcher', receipt, 'failed lease cleanup lost its exact retry receipt')
+                self.assertEqual(receipt['darwin_watcher']['phase'], 'retired', 'failed lease cleanup lost its exact retry receipt')
+                self.assertEqual(receipt['darwin_watcher_pid'], 0)
+                self.assertEqual(receipt['darwin_watcher']['generation'], active['darwin_watcher']['generation'])
+                self.assertEqual(lease.exists(), failure == 'unlink')
+                self.assertEqual(self.commands, [], 'PF release overtook uncertain lease cleanup')
+                self.assertEqual(self.references, {'398', '999'})
+                if failure == 'unlink':
+                    retained = lease.with_suffix('.retained-fixture')
+                    lease.rename(retained)
+                    lease.write_text('foreign replacement\n')
+                    lease.chmod(0o600)
+                    result, error = self.dispatch('force-off')
+                    self.assertEqual(result, 1)
+                    self.assertEqual(lease.read_text(), 'foreign replacement\n')
+                    self.assertEqual(self.saved(), receipt)
+                    lease.unlink()
+                    retained.rename(lease)
+                result, error = self.dispatch('force-off')
+                self.assertEqual(result, 0, 'exact retired lease cleanup was not retryable: '+error)
+                self.assertFalse(lease.exists())
+                self.assertFalse((self.root/'run/kill-switch.json').exists())
+                self.assertEqual(self.references, {'999'})
+
+    def test_failed_watcher_launch_keeps_a_recoverable_unactivated_lease(self):
+        with self.legacy_environment():
+            self.legacy_state()
+            self.watcher.side_effect = SPAWN_WATCHER
+            with patch.object(D.subprocess, 'Popen', side_effect=OSError('fixture process creation failed')):
+                result, error = self.dispatch('apply')
+            self.assertEqual(result, 1)
+            self.assertIn('process creation failed', error)
+            state = self.saved()
+            self.assertEqual(state['darwin_watcher']['phase'], 'starting')
+            self.assertEqual(state['darwin_watcher_pid'], 0)
+            lease = self.root/'run'/D._watcher_leaf(state['darwin_watcher'])
+            self.assertTrue(lease.is_file())
+            result, error = self.dispatch('force-off')
+            self.assertEqual(result, 0, 'failed launch prevented exact owned cleanup: '+error)
+            self.assertFalse(lease.exists())
+
+    def test_failed_initial_watcher_publication_cleans_only_proved_unadopted_lease(self):
+        for adopted in (False, True):
+            with self.subTest(adopted=adopted), self.legacy_environment():
+                self.legacy_state()
+                self.watcher.side_effect = SPAWN_WATCHER
+                original = D._write_watcher_state
+                def fail(root, state):
+                    if adopted:
+                        original(root, state)
+                    raise OSError('fixture initial lease publication failed')
+                with patch.object(D, '_write_watcher_state', side_effect=fail), patch.object(D.subprocess, 'Popen') as spawn:
+                    result, error = self.dispatch('apply')
+                self.assertEqual(result, 1)
+                self.assertIn('initial lease publication failed', error)
+                spawn.assert_not_called()
+                leases = list((self.root/'run').glob('darwin-watcher-*.lease'))
+                self.assertEqual(len(leases), 1 if adopted else 0, 'failed lease publication lost its exact adoption/cleanup distinction')
+                self.assertEqual('darwin_watcher' in self.saved(), adopted)
+                result, error = self.dispatch('force-off')
+                self.assertEqual(result, 0, error)
+                self.assertEqual(list((self.root/'run').glob('darwin-watcher-*.lease')), [])
+
+    def test_malformed_or_replaced_lease_never_clears_ownership(self):
+        active, holder = self.captured_lease()
+        self.addCleanup(os.close, holder)
+        valid = active['darwin_watcher']
+        mutations = ({'schema': True}, {'generation': '../other'}, {'device': False}, {'inode': 0},
+                     {'inode': valid['inode']+1}, {'phase': 'unknown'}, {'phase': None}, {'extra': 1})
+        for changed in mutations:
+            current = {**active, 'darwin_watcher': {**valid, **changed}}
+            self.private_json(self.root/'run/kill-switch.json', current)
+            before = (self.root/'run/kill-switch.json').read_bytes()
+            with self.subTest(changed=changed), self.legacy_environment(), patch.object(D.os, 'kill') as kill:
+                result, error = self.dispatch('force-off')
+            self.assertEqual(result, 1, 'malformed watcher lease authorized retirement')
+            self.assertIn('watcher lease', error)
+            self.assertEqual(kill.call_count, 0)
+            self.assertEqual((self.root/'run/kill-switch.json').read_bytes(), before)
+            self.assertEqual(self.commands, [])
+            self.assertEqual(self.references, {'398', '999'})
+
+    def test_pf_child_retains_both_locks_after_its_watcher_crashes(self):
+        self._assert_child_retains_installed_locks('pfctl')
+
+    def test_fixed_native_child_retains_installed_locks_after_its_watcher_crashes(self):
+        self._assert_child_retains_installed_locks('native')
+
+    def _assert_child_retains_installed_locks(self, kind):
+        # The shipping watcher and run_pf really spawn processes here. Only
+        # the PF executable and interface observations are fixture boundaries;
+        # no command can reach the host's PF table.
+        ready, finish, completed = (self.root/name for name in ('pf-ready.json', 'pf-finish', 'pf-completed'))
+        fake_pf = self.root/'fixture-pfctl'
+        fake_pf.write_text('#!'+sys.executable+'\n'+r'''
+import fcntl,json,os,sys,time
+from pathlib import Path
+root=Path(__file__).parent
+args=sys.argv[1:]
+if args != ['--darwin-owned-pf','apply'] and (args[-2:] != ['-f','-'] or '-n' in args):
+    raise SystemExit(0)
+sys.stdin.read()
+proof={'descriptors': [], 'error': ''}
+try:
+    for fd in json.loads((root/'pf-expected.json').read_text()):
+        info=os.fstat(fd)
+        fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        proof['descriptors'].append([info.st_dev,info.st_ino])
+except OSError as error:
+    proof['error']=str(error)
+temporary=root/'pf-ready.tmp'
+temporary.write_text(json.dumps(proof))
+temporary.replace(root/'pf-ready.json')
+if proof['error']:
+    raise SystemExit(2)
+deadline=time.monotonic()+6
+while not (root/'pf-finish').exists():
+    if time.monotonic()>=deadline:
+        raise SystemExit(3)
+    time.sleep(.01)
+(root/'pf-completed').write_text('exact fixture PF mutation completed\n')
+''')
+        fake_pf.chmod(0o700)
+        harness = r'''
+import importlib.util,json,os,sys,types
+from pathlib import Path
+modes=Path(sys.argv[1]); binary=sys.argv[2]; kind=sys.argv[3]; arguments=sys.argv[4:]
+sys.path.insert(0,str(modes))
+spec=importlib.util.spec_from_file_location('real_child_dispatcher',modes/'kill-switch-platform.py')
+D=importlib.util.module_from_spec(spec); spec.loader.exec_module(D)
+P=D._darwin
+root=Path(os.environ['HOMEVPN_ROOT'])
+# Explicit portable fixture for the protected installation and root helper.
+# Real no-follow opens, flock operations and child exec boundaries remain.
+# No fixture override is accepted by production code or its environment.
+uid,gid=os.getuid(),os.getgid()
+proxy=types.SimpleNamespace(**vars(os)); proxy.getuid=lambda:0; proxy.geteuid=lambda:0
+P.os=proxy; P._baseline.os=proxy
+P._baseline.ROOT=root
+P._baseline.INSTALL_LOCK=root/'fixture-install.lock'
+P._baseline.CONTROLLER=Path(binary)
+ancestors={(path.stat().st_dev,path.stat().st_ino) for path in root.parents}
+actual_owner=P._baseline._owned_info
+def fixture_owner(info, *, directory=False):
+    if directory and (info.st_dev,info.st_ino) in ancestors:
+        return True
+    if info.st_uid!=uid or info.st_gid!=gid:
+        return False
+    scoped=types.SimpleNamespace(st_mode=info.st_mode,st_nlink=info.st_nlink,st_uid=0,st_gid=0)
+    return actual_owner(scoped,directory=directory)
+P._baseline._owned_info=fixture_owner
+P.current_utuns=lambda:['utun9']
+P.route_utuns=lambda:['utun9']
+def pf_binary():
+    (root/'pf-expected.json').write_text(json.dumps(P._baseline.process_authority_fds()))
+    return binary
+P._pfctl=pf_binary
+if kind=='native':
+    def native_refresh(*args,**kwargs):
+        pf_binary()
+        P._baseline._native('apply',b'{"fixture":"owned-child-lifetime"}')
+        return {}
+    P.apply_darwin=native_refresh
+sys.argv=['fixture-dispatcher',*arguments]
+raise SystemExit(D.main())
+'''
+        def command(argv):
+            return [sys.executable, '-EsS', '-c', harness, str(HERE), str(fake_pf), kind, *argv[-3:]]
+        def available(path, timeout=4):
+            deadline = time.monotonic()+timeout
+            while not path.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(path.exists(), 'PF child did not retain its actual operation lifetime')
+        self.addCleanup(finish.touch)
+        with self.legacy_environment():
+            self.legacy_state()
+            child, active = self.start_real_watcher(command)
+            self.addCleanup(finish.touch)
+            available(ready)
+            proof = json.loads(ready.read_text())
+            self.assertEqual(proof['error'], '', 'PF child lost its captured lifetime or transaction descriptor')
+            lease = self.root/'run'/D._watcher_leaf(active['darwin_watcher'])
+            guard = self.root/'run/darwin-watcher-state.lock'
+            locks = (lease, guard, self.root/'fixture-install.lock', self.root/'pf-state.lock')
+            self.assertEqual(set(map(tuple, proof['descriptors'])),
+                             {(path.stat().st_dev, path.stat().st_ino) for path in locks},
+                             'PF child lost its captured lifetime or transaction descriptor')
+            child.kill()  # captured, unreaped child created by this test
+            child.wait(timeout=3)
+            for path in locks:
+                descriptor = os.open(path, os.O_RDWR)
+                try:
+                    with self.assertRaises(BlockingIOError, msg='crashed watcher released an in-flight PF child lock'):
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                finally:
+                    os.close(descriptor)
+            before, calls = self.saved(), list(self.commands)
+            result, error = self.dispatch('force-off')
+            self.assertEqual(result, 1, 'PF release overtook an in-flight orphaned operation')
+            self.assertEqual(self.saved(), before)
+            self.assertEqual(self.commands, calls)
+            self.assertFalse(completed.exists())
+            finish.touch()
+            available(completed)
+            deadline = time.monotonic()+3
+            while True:
+                try:
+                    with D._watcher_state_guard(self.root):
+                        break
+                except BlockingIOError:
+                    if time.monotonic() >= deadline:
+                        self.fail('completed PF child did not release its retained transaction')
+                    time.sleep(0.01)
+            result, error = self.dispatch('force-off')
+            self.assertEqual(result, 0, 'captured child completion did not permit same-owner release: '+error)
+            self.assertFalse(lease.exists())
+            self.assertEqual(self.references, {'999'})
+            self.assertEqual(self.rules['com.apple/foreign'], 'block out all\n')
+
+    def test_nonroot_pf_explicitly_preserves_descriptors_or_fails_without_retry(self):
+        # Exercise the real runner and argv with a policy-denying sudo fixture;
+        # no UID change or actual privilege operation is involved.
+        sudo = self.root/'fixture-sudo'
+        evidence = self.root/'sudo-invocations.jsonl'
+        sudo.write_text('#!'+sys.executable+'\n'+
+                        'import json,sys\nfrom pathlib import Path\n'+
+                        'with Path('+repr(str(evidence))+').open("a") as stream: stream.write(json.dumps(sys.argv[1:])+"\\n")\n'+
+                        'print("fixture policy does not permit -C",file=sys.stderr)\nraise SystemExit(1)\n')
+        sudo.chmod(0o700)
+        state, lifetime = self.captured_lease()
+        self.addCleanup(os.close, lifetime)
+        with D._watcher_state_guard(self.root), P.pf_process_authority((lifetime,)), \
+             patch.object(P.os, 'geteuid', return_value=501), patch.object(P.shutil, 'which', return_value=str(sudo)), \
+             patch.object(P, '_pfctl', return_value='/fixture-only/pfctl'):
+            descriptors = P._baseline.process_authority_fds()
+            with self.assertRaisesRegex(RuntimeError, 'explicit -C descriptor preservation; no unpreserved retry'):
+                RUN_PF(['-a', P.PF_ANCHOR, '-s', 'rules'])
+        requests = [json.loads(line) for line in evidence.read_text().splitlines()]
+        self.assertEqual(requests, [['-n', '-C', str(max(descriptors)+1), '/fixture-only/pfctl', '-a', P.PF_ANCHOR, '-s', 'rules']],
+                         'owned PF command retried without its captured descriptors')
+        self.assertEqual(self.saved(), state)
+        self.assertEqual(self.rules[P.PF_ANCHOR], 'previous endpoint policy\n')
 
     def test_physical_retirement_failure_keeps_exact_native_cleanup(self):
         self.retire.side_effect = RuntimeError('physical address changed')

@@ -9,9 +9,13 @@ then only a newly-created utun that owns a public route is promoted.
 from __future__ import annotations
 
 import importlib.util
+import contextlib
+import fcntl
 import os
 from pathlib import Path
-import signal
+import re
+import secrets
+import stat
 import subprocess
 import sys
 import time
@@ -32,6 +36,125 @@ def _load(name: str, path: Path):
 
 _linux = _load("routervpn_linux_killswitch", HERE / "kill-switch.py")
 _darwin = _load("routervpn_darwin_killswitch", HERE / "darwin_kill_switch.py")
+
+_WATCHER_KEY = 'darwin_watcher'
+_WATCHER_GUARD_FD: int | None = None
+_WATCHER_RETIRE_SECONDS = 3.0
+
+
+def _private_owner(info, *, directory=False):
+    kind = stat.S_ISDIR(info.st_mode) if directory else stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+    return kind and info.st_uid == os.geteuid() and not info.st_mode & 0o077
+
+
+@contextlib.contextmanager
+def _private_run(root: Path):
+    _linux._require_private_dir(root)
+    directory = root / 'run'
+    try:
+        directory.mkdir(mode=0o700)
+    except FileExistsError:
+        pass
+    descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISDIR(opened.st_mode) or opened.st_uid != os.geteuid() or not os.path.samestat(opened, directory.lstat()):
+            raise RuntimeError('macOS watcher directory changed its private owner')
+        # Legacy wrappers may create run with their ordinary umask. Preserve
+        # the existing state writer's hardening, through this retained owner
+        # descriptor rather than chmod of a path that could be replaced.
+        if opened.st_mode & 0o077:
+            os.fchmod(descriptor, 0o700)
+            opened = os.fstat(descriptor)
+        if not _private_owner(opened, directory=True) or not os.path.samestat(opened, directory.lstat()):
+            raise RuntimeError('macOS watcher directory changed its private owner')
+        yield descriptor
+        if not os.path.samestat(opened, directory.lstat()):
+            raise RuntimeError('macOS watcher directory changed during its owned operation')
+    finally:
+        os.close(descriptor)
+
+
+def _private_descriptor(parent: int, leaf: str, *, create=False, exclusive=False):
+    flags = os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC
+    if create:
+        flags |= os.O_CREAT
+    if exclusive:
+        flags |= os.O_EXCL
+    descriptor = os.open(leaf, flags, 0o600, dir_fd=parent)
+    try:
+        opened = os.fstat(descriptor)
+        if not _private_owner(opened) or not os.path.samestat(opened, os.stat(leaf, dir_fd=parent, follow_symlinks=False)):
+            raise RuntimeError('macOS watcher lease changed its private identity')
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+@contextlib.contextmanager
+def _watcher_state_guard(root: Path):
+    """Serialize every root, including the standalone legacy dispatcher.
+
+    The fixed installation's independent native guard remains the outer lock.
+    Never unlink this lock: a replacement inode could admit a second writer.
+    PF children inherit the retained description until their own completion.
+    """
+    global _WATCHER_GUARD_FD
+    if _WATCHER_GUARD_FD is not None:
+        raise RuntimeError('macOS watcher transaction cannot borrow another root owner')
+    with _private_run(root) as parent:
+        descriptor = _private_descriptor(parent, 'darwin-watcher-state.lock', create=True)
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _WATCHER_GUARD_FD = descriptor
+            with _darwin.pf_process_authority((descriptor,)):
+                yield
+        finally:
+            _WATCHER_GUARD_FD = None
+            # Closing, rather than LOCK_UN, preserves any in-flight child's
+            # shared authority if this Python owner fails or exits early.
+            os.close(descriptor)
+
+
+def _watcher_record(state: dict[str, Any]):
+    value = state.get(_WATCHER_KEY)
+    if (type(value) is not dict or set(value) != {'schema', 'generation', 'device', 'inode', 'phase'}
+            or type(value['schema']) is not int or value['schema'] != 1
+            or type(value['generation']) is not str or not re.fullmatch('[0-9a-f]{32}', value['generation'])
+            or type(value['device']) is not int or value['device'] < 0
+            or type(value['inode']) is not int or value['inode'] <= 0
+            or value['phase'] not in ('starting', 'active', 'cancel', 'finished', 'retired')
+            or type(state.get('darwin_watcher_pid')) is not int or state['darwin_watcher_pid'] < 0):
+        raise RuntimeError('macOS protection has an unresolved private watcher lease')
+    return value
+
+
+def _watcher_leaf(record):
+    return 'darwin-watcher-' + record['generation'] + '.lease'
+
+
+def _check_watcher_descriptor(descriptor: int, record) -> None:
+    info = os.fstat(descriptor)
+    if not _private_owner(info) or (info.st_dev, info.st_ino) != (record['device'], record['inode']):
+        raise RuntimeError('macOS watcher lease no longer matches its captured owner')
+
+
+def _write_watcher_state(root: Path, state: dict[str, Any]) -> None:
+    _write_state(root, state)
+    # Cancellation/adoption is also a durable ownership transition. The older
+    # generic writer tolerates directory-sync failure; a lease owner cannot.
+    with _private_run(root) as parent:
+        descriptor = _private_descriptor(parent, 'kill-switch.json')
+        try:
+            if _linux.read_state(root) != state:
+                raise RuntimeError('macOS watcher journal changed before its durable proof')
+            os.fsync(descriptor)
+            os.fsync(parent)
+            if not os.path.samestat(os.fstat(descriptor), os.stat('kill-switch.json', dir_fd=parent, follow_symlinks=False)):
+                raise RuntimeError('macOS watcher journal changed during its durable proof')
+        finally:
+            os.close(descriptor)
 
 
 def _dry_run() -> bool:
@@ -78,34 +201,126 @@ def _darwin_state_base(runtime_id: str, control_id: str, endpoint: str, endpoint
     }
 
 
-def _stop_watcher(state: dict[str, Any]) -> None:
-    if state.get('native_socket_broker') is True:
-        if state.get('darwin_watcher_pid') not in (None, 0):
-            raise RuntimeError('native macOS protection cannot adopt an unjoined saved watcher identity')
+def _require_watcher_retired(state: dict[str, Any]) -> None:
+    if not state:
         return
-    try:
-        pid = int(state.get("darwin_watcher_pid") or 0)
-    except (TypeError, ValueError):
-        pid = 0
-    if pid > 1 and pid != os.getpid():
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            pass
+    if _WATCHER_KEY in state:
+        root = _linux.root_dir()
+        if _WATCHER_GUARD_FD is None:
+            raise RuntimeError('macOS watcher retirement requires its captured state transaction')
+        record = _watcher_record(state)
+        with _private_run(root) as parent:
+            descriptor = None
+            try:
+                try:
+                    descriptor = _private_descriptor(parent, _watcher_leaf(record))
+                except FileNotFoundError:
+                    # Only a durable exact retirement receipt permits the
+                    # missing-file retry after unlink or parent-sync failure.
+                    if record['phase'] != 'retired':
+                        raise RuntimeError('macOS watcher lease is missing before proved retirement')
+                if descriptor is not None:
+                    _check_watcher_descriptor(descriptor, record)
+                    if record['phase'] != 'retired':
+                        # Check cancellation outside the transaction lock too,
+                        # so the watcher can retire while this caller waits.
+                        cancelled = {**state, _WATCHER_KEY: {**record, 'phase': 'cancel'}}
+                        _write_watcher_state(root, cancelled)
+                        deadline = time.monotonic() + _WATCHER_RETIRE_SECONDS
+                        while True:
+                            try:
+                                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                                break
+                            except BlockingIOError:
+                                if time.monotonic() >= deadline:
+                                    raise RuntimeError('macOS watcher cancellation has not yet retired its captured lease')
+                                time.sleep(0.02)
+                        _check_watcher_descriptor(descriptor, record)
+                        if _linux.read_state(root) != cancelled:
+                            raise RuntimeError('macOS watcher cancellation lost its captured journal')
+                        state.clear()
+                        state.update({**cancelled, 'darwin_watcher_pid': 0,
+                                      _WATCHER_KEY: {**record, 'phase': 'retired'}})
+                        _write_watcher_state(root, state)
+                    else:
+                        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    if not os.path.samestat(os.fstat(descriptor), os.stat(_watcher_leaf(record), dir_fd=parent, follow_symlinks=False)):
+                        raise RuntimeError('macOS watcher lease changed before owned cleanup')
+                    os.unlink(_watcher_leaf(record), dir_fd=parent)
+                # Keep the retired receipt until the exact leaf's absence is
+                # durable. A failed unlink/sync remains retryable and cannot
+                # rearm a watcher or authorize deleting a foreign replacement.
+                os.fsync(parent)
+                retired = {**state, 'darwin_watcher_pid': 0}
+                retired.pop(_WATCHER_KEY)
+                _write_watcher_state(root, retired)
+                state.clear()
+                state.update(retired)
+            finally:
+                if descriptor is not None:
+                    os.close(descriptor)
+        return
+    # Old journals retain only a numeric PID, without a creation identity,
+    # captured child handle or authenticated retirement receipt. It cannot
+    # authorize signaling, including after PID reuse. Preserve an unresolved
+    # owner before changing its rules or private journal; do not coerce a
+    # missing/malformed identity into a successful no-watcher observation.
+    pid = state.get('darwin_watcher_pid')
+    if type(pid) is not int or pid != 0:
+        raise RuntimeError('macOS protection requires exact prior watcher retirement; saved process identities cannot authorize signaling')
 
 
 def _spawn_watcher() -> int:
     if _dry_run():
         return 0
-    proc = subprocess.Popen(
-        [sys.executable, "-EsS", str(Path(__file__).resolve()), "watch"],
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        start_new_session=True,
-        close_fds=True,
-    )
-    return int(proc.pid)
+    if _WATCHER_GUARD_FD is None:
+        raise RuntimeError('macOS watcher launch requires its captured state transaction')
+    root = _linux.root_dir()
+    state = _linux.read_state(root)
+    _require_watcher_retired(state)
+    generation = secrets.token_hex(16)
+    with _private_run(root) as parent:
+        leaf = _watcher_leaf({'generation': generation})
+        descriptor = _private_descriptor(parent, leaf, create=True, exclusive=True)
+        launched = False
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            info = os.fstat(descriptor)
+            os.fsync(descriptor)
+            record = {'schema': 1, 'generation': generation, 'device': info.st_dev, 'inode': info.st_ino, 'phase': 'starting'}
+            # Publish before launch. An interrupted launch keeps an exact
+            # recoverable lease; a child cannot mutate PF before activation.
+            state[_WATCHER_KEY] = record
+            _write_watcher_state(root, state)
+            proc = subprocess.Popen(
+                [sys.executable, '-EsS', str(Path(__file__).resolve()), 'watch', generation, str(descriptor)],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                start_new_session=True, close_fds=True, pass_fds=(descriptor,),
+            )
+            launched = True
+            state['darwin_watcher_pid'] = int(proc.pid)
+            state[_WATCHER_KEY] = {**record, 'phase': 'active'}
+            _write_watcher_state(root, state)
+            return int(proc.pid)
+        except BaseException:
+            # A failed first journal write can leave an unreferenced lease.
+            # Delete it only before a child was launched and after an exact
+            # independent read proves this generation was never adopted.
+            adopted = None
+            if not launched:
+                try:
+                    saved = _linux.read_state(root).get(_WATCHER_KEY)
+                    adopted = type(saved) is dict and saved.get('generation') == generation
+                except Exception:
+                    pass
+            if adopted is False:
+                if not os.path.samestat(os.fstat(descriptor), os.stat(leaf, dir_fd=parent, follow_symlinks=False)):
+                    raise RuntimeError('macOS unpublished watcher lease changed before cleanup')
+                os.unlink(leaf, dir_fd=parent)
+                os.fsync(parent)
+            raise
+        finally:
+            os.close(descriptor)
 
 
 def darwin_apply(*, spawn_watch: bool = True, retained_state=None) -> int:
@@ -120,7 +335,7 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None) -> int:
 
     if policy == "off":
         if previous and previous.get("platform") == "darwin":
-            _stop_watcher(previous)
+            _require_watcher_retired(previous)
             _darwin.remove_darwin(previous, dry_run=_dry_run(), retain_state=_retained_removal(root, previous))
             _linux.remove_state(root)
         print("kill switch off", file=sys.stderr)
@@ -137,11 +352,7 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None) -> int:
     else:
         endpoint_ips, native_egress = retained
     lan = bool(control_profile.get("home_lan_access", False))
-    if socket_broker:
-        if previous.get('darwin_watcher_pid') not in (None, 0):
-            raise RuntimeError('native macOS protection requires exact prior watcher retirement')
-    else:
-        _stop_watcher(previous)
+    _require_watcher_retired(previous)
     socket_capture = ((os.environ['HOMEVPN_TOR_SESSION'], os.environ['HOMEVPN_TOR_SOURCE_SHA256'])
                       if socket_broker and retained_state is None else None)
     state = _darwin_state_base(runtime_id, control_id, endpoint, endpoint_ips, lan, policy)
@@ -157,56 +368,80 @@ def darwin_apply(*, spawn_watch: bool = True, retained_state=None) -> int:
     state.update(extra)
     _write_state(root, state)
     if spawn_watch and not socket_broker:
-        state["darwin_watcher_pid"] = _spawn_watcher()
-        _write_state(root, state)
+        _spawn_watcher()
     print(f"strict macOS kill switch {policy} applied pre-connect for {endpoint}", file=sys.stderr)
     return 0
 
 
-def darwin_watch() -> int:
+def _watcher_matches(state: dict[str, Any], capture: dict[str, Any], *, active=False) -> bool:
+    if not state or state.get('platform') != 'darwin' or state.get('native_socket_broker') is True:
+        return False
+    try:
+        record = _watcher_record(state)
+    except RuntimeError:
+        return False
+    if any(record[key] != capture[key] for key in ('schema', 'generation', 'device', 'inode')):
+        return False
+    if active:
+        return record['phase'] == 'active' and state['darwin_watcher_pid'] == os.getpid()
+    return record['phase'] in ('starting', 'active')
+
+
+def darwin_watch(generation: str = '', descriptor: int = -1) -> int:
+    # A manual or old PID-only `watch` invocation has no inherited ownership.
+    if not re.fullmatch('[0-9a-f]{32}', generation) or type(descriptor) is not int or descriptor < 3:
+        raise RuntimeError('macOS watcher requires its captured generation and inherited lease')
     root = _linux.root_dir()
-    deadline = time.monotonic() + 90.0
-    while time.monotonic() < deadline:
-        try:
-            with _darwin._baseline.state_guard(root):
-                state = _linux.read_state(root)
-                if not state or state.get("platform") != "darwin":
-                    return 0
-                if state.get('native_socket_broker') is True:
-                    # Only the native guardian can admit a retained utun FD.
-                    return 0
-                if root == _darwin._baseline.ROOT and state.get('darwin_watcher_pid') != os.getpid():
-                    return 0
-                endpoint_ips = [_linux.ipaddress.ip_address(x) for x in state.get("endpoint_ips", [])]
-                retained = _linux.retained_native_policy(state, str(state.get("endpoint") or ""))
-                native_egress = None
-                if retained is not None:
-                    endpoint_ips, native_egress = retained
-                extra = _darwin.apply_darwin(
-                    endpoint_ips,
-                    bool(state.get("home_lan_access", False)),
-                    state,
-                    refresh=True,
-                    dry_run=_dry_run(),
-                    native_egress=native_egress,
-                )
-                state.update(extra)
-                state["darwin_watcher_pid"] = 0
-                _write_state(root, state)
-        except Exception:
-            time.sleep(0.2)
-            continue
-        print("strict macOS kill switch promoted proven Router VPN utun", file=sys.stderr)
-        return 0
-    # Do not let an older watcher's timeout rewrite a replacement/native
-    # journal. The installed caller owns this exact private state lock too.
-    with _darwin._baseline.state_guard(root):
-        state = _linux.read_state(root)
-        if (state and state.get('native_socket_broker') is not True
-                and (root != _darwin._baseline.ROOT or state.get('darwin_watcher_pid') == os.getpid())):
-            state["darwin_watcher_pid"] = 0
-            _write_state(root, state)
-    return 1
+    try:
+        initial = _linux.read_state(root)
+        capture = _watcher_record(initial)
+        if capture['generation'] != generation:
+            raise RuntimeError('macOS watcher launch changed its captured generation')
+        _check_watcher_descriptor(descriptor, capture)
+        with _private_run(root) as parent:
+            current = os.stat(_watcher_leaf(capture), dir_fd=parent, follow_symlinks=False)
+            if not os.path.samestat(os.fstat(descriptor), current):
+                raise RuntimeError('macOS watcher inherited another private lease')
+        # This succeeds on the inherited open description. Opening the same
+        # leaf independently cannot borrow the launcher's already-held lock.
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        deadline = time.monotonic() + 90.0
+        while time.monotonic() < deadline:
+            state = _linux.read_state(root)
+            if not _watcher_matches(state, capture):
+                return 0
+            if state[_WATCHER_KEY]['phase'] == 'starting':
+                time.sleep(0.02)
+                continue
+            try:
+                with _darwin._baseline.state_guard(root):
+                    with _watcher_state_guard(root):
+                        state = _linux.read_state(root)
+                        if not _watcher_matches(state, capture, active=True):
+                            return 0
+                        endpoint_ips = [_linux.ipaddress.ip_address(x) for x in state.get('endpoint_ips', [])]
+                        retained = _linux.retained_native_policy(state, str(state.get('endpoint') or ''))
+                        native_egress = None
+                        if retained is not None:
+                            endpoint_ips, native_egress = retained
+                        with _darwin.pf_process_authority((descriptor,)):
+                            extra = _darwin.apply_darwin(
+                                endpoint_ips, bool(state.get('home_lan_access', False)), state,
+                                refresh=True, dry_run=_dry_run(), native_egress=native_egress,
+                            )
+                        state.update(extra)
+                        state[_WATCHER_KEY] = {**capture, 'phase': 'finished'}
+                        _write_watcher_state(root, state)
+            except Exception:
+                time.sleep(0.02)
+                continue
+            print('strict macOS kill switch promoted proven Router VPN utun', file=sys.stderr)
+            return 0
+        # Timeout only closes this captured lease. It never zeros a saved PID
+        # or rewrites whichever replacement/native journal is now selected.
+        return 1
+    finally:
+        os.close(descriptor)
 
 
 def darwin_release(force: bool = False) -> int:
@@ -239,7 +474,7 @@ def darwin_release(force: bool = False) -> int:
         return 0
     if not state:
         return 0
-    _stop_watcher(state)
+    _require_watcher_retired(state)
     if not force and state.get("policy") == "always":
         # Remove the old tunnel-interface permission but retain the fail-closed
         # pre-connect endpoint exception while disconnected.
@@ -303,14 +538,17 @@ def main() -> int:
     if sys.platform != "darwin" and os.environ.get("HOMEVPN_KILLSWITCH_DARWIN_TEST") != "1":
         return _linux.main()
     try:
+        if len(sys.argv) == 4 and sys.argv[1] == 'watch':
+            return darwin_watch(sys.argv[2], int(sys.argv[3]))
         if action == "watch": return darwin_watch()
         if action == "status": return darwin_status()
         if action in ('apply', 'release', 'force-off', 'reassert'):
             with _darwin._baseline.state_guard(_linux.root_dir()):
-                if action == "apply": return darwin_apply()
-                if action == "release": return darwin_release(False)
-                if action == "force-off": return darwin_release(True)
-                if action == "reassert": return darwin_reassert()
+                with _watcher_state_guard(_linux.root_dir()):
+                    if action == "apply": return darwin_apply()
+                    if action == "release": return darwin_release(False)
+                    if action == "force-off": return darwin_release(True)
+                    if action == "reassert": return darwin_reassert()
         print("usage: kill-switch-platform.py apply|watch|release|force-off|reassert|status", file=sys.stderr)
         return 2
     except Exception as exc:

@@ -36,6 +36,11 @@ _baseline_spec = importlib.util.spec_from_file_location('routervpn_darwin_pf_bas
 _baseline = importlib.util.module_from_spec(_baseline_spec)
 _baseline_spec.loader.exec_module(_baseline)
 
+# PF children and the fixed native utility share the same retained open file
+# descriptions. A crashed caller cannot unlock an in-flight child's operation
+# or its installed-root guard by merely closing its own descriptor copies.
+pf_process_authority = _baseline.process_authority
+
 
 def owned_label(value: str) -> str:
     return 'rvpn:' + base64.urlsafe_b64encode(hashlib.sha256(value.encode()).digest()).decode().rstrip('=')
@@ -227,13 +232,18 @@ def retire_physical_states(captured: dict[str, list[str]]) -> None:
         raise RuntimeError('macOS physical state capture changed during retirement')
 
 
-def _root_prefix(binary: str, purpose: str) -> list[str]:
+def _root_prefix(binary: str, purpose: str, *, retained_fds: tuple[int, ...] = ()) -> list[str]:
     if getattr(os, "geteuid", lambda: 1)() == 0:
         return [binary]
     sudo = shutil.which("sudo")
     if sudo is None:
         raise RuntimeError(f"root privileges are required for {purpose}")
-    return [sudo, "-n", binary]
+    # sudo normally closes descriptors >= 3. Never silently lose an owned PF
+    # operation's lifetime or transaction lock at that boundary. A standalone
+    # sudo policy that disallows -C fails closed; the installed root helper
+    # does not use this fallback or require a sudoers change.
+    preserve = ["-C", str(max(retained_fds) + 1)] if retained_fds else []
+    return [sudo, "-n", *preserve, binary]
 
 
 def _pfctl() -> str:
@@ -246,15 +256,19 @@ def _pfctl() -> str:
 
 
 def run_pf(args: list[str], *, check: bool = True, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
+    retained_fds = _baseline.process_authority_fds()
     proc = subprocess.run(
-        _root_prefix(_pfctl(), "strict macOS kill switch") + args,
+        _root_prefix(_pfctl(), "strict macOS kill switch", retained_fds=retained_fds) + args,
         input=input_text,
         text=True,
         capture_output=True,
         timeout=8,
         check=False,
+        pass_fds=retained_fds,
     )
     if check and proc.returncode != 0:
+        if retained_fds and os.geteuid() != 0:
+            raise RuntimeError('macOS owned PF command requires the installed privileged helper or a sudo policy permitting explicit -C descriptor preservation; no unpreserved retry was attempted: ' + (proc.stderr or proc.stdout or 'pfctl command failed').strip())
         raise RuntimeError((proc.stderr or proc.stdout or "pfctl command failed").strip())
     return proc
 

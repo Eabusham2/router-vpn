@@ -22,6 +22,23 @@ CONTROLLER = ROOT / 'router-vpn-client'
 INSTALL_LOCK = Path('/opt/router-vpn-client.install.lock')
 LIMIT = 4096
 STATE_KEY = 'darwin_native_baseline'
+_PROCESS_AUTHORITY_FDS: tuple[int, ...] = ()
+
+
+@contextlib.contextmanager
+def process_authority(descriptors: tuple[int, ...]):
+    """Carry exact lock lifetimes across PF and native-helper exec boundaries."""
+    global _PROCESS_AUTHORITY_FDS
+    previous = _PROCESS_AUTHORITY_FDS
+    _PROCESS_AUTHORITY_FDS = tuple(dict.fromkeys((*previous, *descriptors)))
+    try:
+        yield
+    finally:
+        _PROCESS_AUTHORITY_FDS = previous
+
+
+def process_authority_fds() -> tuple[int, ...]:
+    return _PROCESS_AUTHORITY_FDS
 
 
 class PersistenceError(RuntimeError):
@@ -112,7 +129,7 @@ def _native(phase: str, raw: bytes):
     result = subprocess.run([str(CONTROLLER), '--darwin-owned-pf', phase], input=raw,
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd='/',
                             env={'PATH': '/usr/bin:/bin:/usr/sbin:/sbin', 'HOME': '/var/root', 'LC_ALL': 'C'},
-                            timeout=15, check=False)
+                            timeout=15, check=False, pass_fds=process_authority_fds())
     if result.returncode:
         raise RuntimeError('the exact native macOS baseline transaction did not finish: '+result.stderr[-1024:].decode('utf-8', errors='replace'))
     return result.stdout
@@ -273,7 +290,7 @@ def state_guard(root: Path):
     or installation selector is accepted from the process environment.
     """
     if root != ROOT:
-        yield
+        yield ()
         return
     if os.getuid() != 0 or os.geteuid() != 0:
         raise RuntimeError('the installed macOS PF transaction requires its protected root helper')
@@ -291,7 +308,8 @@ def state_guard(root: Path):
             raise RuntimeError('the installed macOS PF state root changed before capture')
         # The fixed native utility independently checks extended ACLs of this
         # root, both locks and all installed inputs before planning or applying.
-        yield
+        with process_authority((install, state_lock)):
+            yield (install, state_lock)
     finally:
         if state_lock is not None:
             os.close(state_lock)
