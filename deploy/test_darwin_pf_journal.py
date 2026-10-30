@@ -15,8 +15,15 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 FILES = ('modes/darwin_pf_baseline.py', 'modes/darwin_kill_switch.py',
          'modes/kill-switch-platform.py', 'modes/kill-switch.py', 'modes/profile_id.py',
-         'modes/test_darwin_pf_baseline.py', 'modes/test_darwin_owned_pf.py')
+         'modes/test_darwin_pf_baseline.py', 'modes/test_darwin_owned_pf.py',
+         'deploy/test_desktop_tor_unix_wrapper.py', 'modes/native-tor-bridge.sh',
+         'modes/cleanup-private-runtime.py', 'modes/select-standard-engine.sh',
+         'modes/tor-prelaunch-witness.py')
 MUTANTS = (
+    ('native root journal owner', 'darwin_pf_baseline.py', 'info.st_uid == 0 and info.st_gid == 0 and ',
+     '', 'test_darwin_owned_pf.py',
+     'OwnedDarwinPF.test_fixture_owner_preserves_native_metadata_and_root_only_admission',
+     'portable ownership fixture weakened the production root predicate'),
     ('private pre-commit journal', 'darwin_pf_baseline.py', 'retain({STATE_KEY: receipt})',
      'pass  # omitted private pre-commit journal', 'test_darwin_pf_baseline.py',
      'BaselineTransition.test_plan_and_exact_journal_precede_mutation',

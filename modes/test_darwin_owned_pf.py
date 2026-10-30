@@ -6,6 +6,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import stat
 import subprocess
 import tempfile
 import types
@@ -17,6 +18,7 @@ SPEC = importlib.util.spec_from_file_location('darwin_owned_dispatch_test', HERE
 D = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(D)
 P = D._darwin
+NATIVE_OWNED_INFO = P._baseline._owned_info
 
 
 class OwnedDarwinPF(unittest.TestCase):
@@ -50,6 +52,18 @@ class OwnedDarwinPF(unittest.TestCase):
         self.stack.enter_context(patch.object(P, 'run_pf', side_effect=self.pf))
         self.stack.enter_context(patch.object(P._baseline, '_invoke', side_effect=self.native))
         self.stack.enter_context(patch.object(P._baseline, 'reference', side_effect=self.reference))
+        uid, gid = os.getuid(), os.getgid()
+        # This portable backend owns only its temporary current-user files.
+        # Translate that captured owner at the same explicit fixture boundary
+        # as BaselinePrivateJournal; retain the real native mode/type/link
+        # predicate and all actual open, inode, readback, lock and fsync checks.
+        # The installed native gate separately executes the root-only predicate.
+        def fixture_owner(info, *, directory=False):
+            if info.st_uid != uid or info.st_gid != gid:
+                return False
+            scoped = types.SimpleNamespace(st_mode=info.st_mode, st_nlink=info.st_nlink, st_uid=0, st_gid=0)
+            return NATIVE_OWNED_INFO(scoped, directory=directory)
+        self.stack.enter_context(patch.object(P._baseline, '_owned_info', side_effect=fixture_owner))
         self.stack.enter_context(patch.object(P, 'owned_pf_preflight'))
         self.stack.enter_context(patch.object(P, 'physical_state_interfaces', return_value={'en0': ['192.0.2.1', '2001:db8::1']}))
         self.retire = self.stack.enter_context(patch.object(P, 'retire_physical_states'))
@@ -147,6 +161,27 @@ class OwnedDarwinPF(unittest.TestCase):
             independent.test_actual_dispatch_captures_empty_baseline_and_reasserts_without_session()
         finally:
             independent.doCleanups()
+
+    def test_fixture_owner_preserves_native_metadata_and_root_only_admission(self):
+        uid, gid = os.getuid(), os.getgid()
+        regular = dict(st_mode=stat.S_IFREG | 0o600, st_nlink=1, st_uid=uid, st_gid=gid)
+        directory = dict(st_mode=stat.S_IFDIR | 0o700, st_nlink=2, st_uid=uid, st_gid=gid)
+        self.assertTrue(P._baseline._owned_info(types.SimpleNamespace(**regular)))
+        self.assertTrue(P._baseline._owned_info(types.SimpleNamespace(**directory), directory=True))
+        for changed in ({'st_uid': uid+1}, {'st_gid': gid+1}, {'st_nlink': 2},
+                        {'st_mode': stat.S_IFREG | 0o644}, {'st_mode': stat.S_IFREG | 0o622},
+                        {'st_mode': stat.S_IFLNK | 0o600}, {'st_mode': stat.S_IFDIR | 0o700}):
+            with self.subTest(changed=changed):
+                self.assertFalse(P._baseline._owned_info(types.SimpleNamespace(**{**regular, **changed})))
+        for changed in ({'st_uid': uid+1}, {'st_gid': gid+1}, {'st_mode': stat.S_IFDIR | 0o722},
+                        {'st_mode': stat.S_IFREG | 0o600}, {'st_mode': stat.S_IFLNK | 0o700}):
+            with self.subTest(directory_changed=changed):
+                self.assertFalse(P._baseline._owned_info(types.SimpleNamespace(**{**directory, **changed}), directory=True))
+        for uid, gid in ((0, 0), (501, 0), (0, 20), (501, 20)):
+            with self.subTest(native_owner=(uid, gid)):
+                info = types.SimpleNamespace(**{**regular, 'st_uid': uid, 'st_gid': gid})
+                self.assertEqual(NATIVE_OWNED_INFO(info), uid == 0 and gid == 0,
+                                 'portable ownership fixture weakened the production root predicate')
 
     def test_actual_dispatch_captures_empty_baseline_and_reasserts_without_session(self):
         self.assertEqual(D.darwin_apply(), 0)
