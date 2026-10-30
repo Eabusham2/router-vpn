@@ -72,10 +72,7 @@ type releaseManifest struct {
 	} `json:"assets"`
 }
 
-type sourceManifest struct {
-	Repository string `json:"repository"`
-	SourceSHA  string `json:"source_sha"`
-}
+type sourceManifest = updatepolicy.PackageProvenance
 
 type result struct {
 	OK             bool   `json:"ok"`
@@ -386,20 +383,7 @@ func readSourceManifest(path string) (sourceManifest, error) {
 	if err != nil || !os.SameFile(opened, after) || after.Size() != int64(len(raw)) {
 		return sourceManifest{}, errors.New("package provenance changed while reading")
 	}
-	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&manifest); err != nil {
-		return sourceManifest{}, fmt.Errorf("decode package provenance: %w", err)
-	}
-	var trailing json.RawMessage
-	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return sourceManifest{}, errors.New("package provenance contains trailing data")
-	}
-	if manifest.Repository != repository || !validSHA(strings.ToLower(manifest.SourceSHA)) {
-		return sourceManifest{}, errors.New("package provenance identity is invalid")
-	}
-	manifest.SourceSHA = strings.ToLower(manifest.SourceSHA)
-	return manifest, nil
+	return updatepolicy.ParsePackageProvenance(raw)
 }
 
 func sourceSHA(explicit string) (string, error) {

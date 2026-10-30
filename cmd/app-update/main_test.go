@@ -103,12 +103,12 @@ func TestReadSourceManifestRequiresExactRegularFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ROUTER-VPN-SOURCE.json")
 	sha := strings.Repeat("c", 40)
-	raw := []byte(`{"repository":"Eabusham2/router-vpn","source_sha":"` + sha + `"}`)
+	raw := []byte(`{"schema_version":1,"repository":"Eabusham2/router-vpn","source_sha":"` + sha + `","artifact_family":"windows-amd64"}`)
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	got, err := readSourceManifest(path)
-	if err != nil || got.SourceSHA != sha {
+	if err != nil || got.SourceSHA != sha || got.SchemaVersion != 1 || got.ArtifactFamily != "windows-amd64" {
 		t.Fatalf("canonical provenance failed: got=%+v err=%v", got, err)
 	}
 	if runtime.GOOS != "windows" {
