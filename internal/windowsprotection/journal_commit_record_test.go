@@ -20,7 +20,7 @@ func journalCommitFixture(t *testing.T, retained bool) (JournalCommitCapture, Jo
 		Sequence: 1, Controller: controller, Phase: "settled"}
 	if retained {
 		head.Sequence, head.PreviousSHA256 = 3, strings.Repeat("e", 64)
-		head.Committed = JournalState{ProfileID: "previous/router", Target: &mobiletor.DesktopWindowsProtectionTarget{
+		head.Committed = JournalState{ProfileID: "previous/router", ProfileRevision: strings.Repeat("9", 64), Target: &mobiletor.DesktopWindowsProtectionTarget{
 			Capture: mobiletor.DesktopSocketCapture{SessionID: strings.Repeat("b", 32), SourceSHA256: strings.Repeat("b", 64), NetworkID: strings.Repeat("c", 32)},
 			Policy:  "always", BaselineSHA256: strings.Repeat("d", 64)}}
 	}

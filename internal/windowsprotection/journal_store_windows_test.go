@@ -150,6 +150,87 @@ func TestWindowsProtectionJournalStoreActualLifecycle(t *testing.T) {
 	}
 }
 
+func TestWindowsProtectionJournalStoreRejectsUnboundTarget(t *testing.T) {
+	t.Run("new-candidate", testWindowsProtectionJournalStoreRejectsUnboundCandidate)
+	for _, action := range []string{"release", "off"} {
+		t.Run("old-"+action+"-to-absence", func(t *testing.T) {
+			fixture := journalNativeCreate(t)
+			store := fixture.store
+			// Install canonical legacy comparison records into the actual fixed
+			// slots after the original native owner has joined. Reopening must
+			// preserve their bytes without granting an unbound old target new
+			// write authority merely because its next outcome has no target.
+			previous := journalTestRetained(t)
+			previous.JournalID, previous.Controller = store.header.JournalID, store.controller
+			previous.Committed.ProfileRevision = ""
+			previous.Committed.Target.Policy = "on-connect"
+			pending := journalTestNext(t, previous)
+			pending.Phase = "intent"
+			pending.Intent = &JournalIntent{Action: action, RequestID: strings.Repeat("c", 32), ProfileID: previous.Committed.ProfileID,
+				ProfileRevision: strings.Repeat("f", 64), ResultProfileRevision: strings.Repeat("f", 64)}
+			if action == "off" {
+				pending.Intent.ResultProfileRevision = strings.Repeat("d", 64)
+			}
+			next := journalTestSettled(t, pending, JournalState{})
+			if err := CheckJournalTransition(pending, next); err != nil {
+				t.Fatal("legacy empty settlement must remain valid comparison evidence", err)
+			}
+			before := [2][]byte{journalTestBody(t, previous), journalTestBody(t, pending)}
+			if err := store.Close(); err != nil {
+				t.Fatal(err)
+			}
+			for index, body := range before {
+				journalNativeOverwrite(t, store.api, store.slots[index].path, body)
+			}
+			opened, err := journalNativeOpen(t, fixture)
+			if err != nil {
+				t.Fatal("legacy intact records must remain readable", err)
+			}
+			current, err := opened.Snapshot(context.Background())
+			if err != nil || current.Record.Sequence != pending.Sequence || current.Incomplete {
+				t.Fatal("legacy fixture did not retain its exact old pending intent", err)
+			}
+			if _, err := opened.Append(context.Background(), current.SHA256, next); err == nil || opened.pending != nil {
+				t.Fatal("unbound old intent acquired native empty-settlement authority")
+			}
+			for index, expected := range before {
+				actual, err := journalReadRetained(opened.slots[index], JournalRecordLimit)
+				if err != nil || !bytes.Equal(actual, expected) {
+					t.Fatal("rejected legacy retirement changed captured journal bytes", err)
+				}
+			}
+		})
+	}
+}
+
+func testWindowsProtectionJournalStoreRejectsUnboundCandidate(t *testing.T) {
+	fixture := journalNativeCreate(t)
+	store := fixture.store
+	current, err := store.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := journalTestNext(t, current.Record)
+	next.Phase = "intent"
+	engine := store.controller
+	engine.PID++
+	engine.StartTimeUTCTicks++
+	candidate := journalTestState("b", false)
+	candidate.ProfileRevision, candidate.Engine = "", &engine
+	next.Intent = &JournalIntent{Action: "successor", RequestID: strings.Repeat("b", 32), ProfileID: candidate.ProfileID,
+		ProfileRevision: strings.Repeat("f", 64), ResultProfileRevision: strings.Repeat("f", 64), Candidate: candidate}
+	if err := CheckJournalTransition(current.Record, next); err != nil {
+		t.Fatal("legacy unbound record fixture must remain valid comparison evidence", err)
+	}
+	if _, err := store.Append(context.Background(), current.SHA256, next); err == nil || store.pending != nil {
+		t.Fatal("unbound target acquired native journal write authority")
+	}
+	actual, err := store.Snapshot(context.Background())
+	if err != nil || actual.SHA256 != current.SHA256 {
+		t.Fatal("rejected unbound write changed the captured native journal", err)
+	}
+}
+
 func TestWindowsProtectionJournalStoreExclusiveAndNamespace(t *testing.T) {
 	fixture := journalNativeCreate(t)
 	store := fixture.store

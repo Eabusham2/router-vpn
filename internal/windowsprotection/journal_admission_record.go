@@ -41,6 +41,9 @@ func journalAdmissionIntentRaw(intent JournalRecord) ([]byte, error) {
 		intent.Sequence == math.MaxUint64 {
 		return nil, errors.New("Windows admission requires a bounded successor intent with its live retained engine")
 	}
+	if err := requireJournalProfileBindings(intent); err != nil {
+		return nil, err
+	}
 	return CanonicalJournalRecord(intent)
 }
 

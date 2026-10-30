@@ -74,7 +74,7 @@ func (capture JournalCommitCapture) Validate() error {
 	if !journalCommitSameTarget(capture.Head.Committed.Target, capture.Transfer.Predecessor) {
 		return errors.New("Windows commit capture changed its exact retained predecessor")
 	}
-	return nil
+	return requireJournalProfileBindings(capture.Head)
 }
 
 func (request JournalCommitRequest) Validate(capture JournalCommitCapture) error {
@@ -137,7 +137,7 @@ func DeriveJournalCommitIntent(capture JournalCommitCapture, request JournalComm
 	candidate := request.Candidate
 	next.Intent = &JournalIntent{Action: "successor", RequestID: capture.Transfer.SessionID,
 		ProfileID: capture.ProfileID, ProfileRevision: capture.ProfileRevision, ResultProfileRevision: capture.ProfileRevision,
-		Candidate: JournalState{Target: &candidate, ProfileID: capture.ProfileID, Engine: &actualEngine}}
+		Candidate: JournalState{Target: &candidate, ProfileID: capture.ProfileID, ProfileRevision: capture.ProfileRevision, Engine: &actualEngine}}
 	if err := CheckJournalTransition(capture.Head, next); err != nil {
 		return JournalRecord{}, err
 	}

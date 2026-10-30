@@ -601,6 +601,12 @@ func (store *ProtectionJournal) Append(ctx context.Context, previousSHA256 strin
 	if err := CheckJournalTransition(store.current.Record, next); err != nil {
 		return JournalSelection{}, err
 	}
+	if err := requireJournalProfileBindings(store.current.Record); err != nil {
+		return JournalSelection{}, err
+	}
+	if err := requireJournalProfileBindings(next); err != nil {
+		return JournalSelection{}, err
+	}
 	if err := store.verifyObjects(); err != nil {
 		return JournalSelection{}, err
 	}

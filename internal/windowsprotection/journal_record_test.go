@@ -21,7 +21,7 @@ func journalTestInitial() JournalRecord {
 }
 
 func journalTestState(seed string, live bool) JournalState {
-	state := JournalState{ProfileID: "node \"quoted\"", Target: &mobiletor.DesktopWindowsProtectionTarget{
+	state := JournalState{ProfileID: "node \"quoted\"", ProfileRevision: strings.Repeat("f", 64), Target: &mobiletor.DesktopWindowsProtectionTarget{
 		Capture: mobiletor.DesktopSocketCapture{SessionID: strings.Repeat(seed, 32), SourceSHA256: strings.Repeat(seed, 64), NetworkID: strings.Repeat("e", 32)},
 		Policy:  "always", BaselineSHA256: strings.Repeat(seed, 64)}}
 	if live {

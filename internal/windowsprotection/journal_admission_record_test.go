@@ -97,6 +97,7 @@ func TestJournalAdmissionRequestBindsWholeIntent(t *testing.T) {
 		"profile-revision": func(r *JournalRecord) {
 			r.Intent.ProfileRevision = strings.Repeat("5", 64)
 			r.Intent.ResultProfileRevision = r.Intent.ProfileRevision
+			r.Intent.Candidate.ProfileRevision = r.Intent.ProfileRevision
 		},
 		"candidate-session":   func(r *JournalRecord) { r.Intent.Candidate.Target.Capture.SessionID = strings.Repeat("6", 32) },
 		"candidate-source":    func(r *JournalRecord) { r.Intent.Candidate.Target.Capture.SourceSHA256 = strings.Repeat("7", 64) },

@@ -50,6 +50,9 @@ JOURNAL_REQUIRED = (
     "TestWindowsProtectionJournalRejectsForeignOrReorderedSlots",
     "TestWindowsProtectionJournalRecoveryCopiesCapturedTargets",
     "TestWindowsProtectionJournalRejectsUncheckedControllerReplacement",
+    "TestWindowsProtectionJournalRetainsCapturedProfileRevision",
+    "TestWindowsProtectionJournalLegacyBytesStayUnbound",
+    "TestWindowsProtectionJournalRejectsMissingOrMixedBinding",
 )
 JOURNAL_STORE_REQUIRED = (
     "TestWindowsProtectionJournalHeaderIdentity",
@@ -63,6 +66,7 @@ JOURNAL_STORE_REQUIRED = (
     "TestWindowsProtectionJournalStoreRejectsCreatorAndCancellation",
     "TestWindowsProtectionJournalStoreInitialAuthorityAndACL",
     "TestWindowsProtectionJournalStoreConcurrentClose",
+    "TestWindowsProtectionJournalStoreRejectsUnboundTarget",
 )
 JOURNAL_COMMIT_REQUIRED = (
     "TestJournalCommitExactRoundTrip",
@@ -129,7 +133,7 @@ REQUIRED_SUBCASES = {
 
 def sources():
     expected = {"record.go", "record_test.go", "owner_windows.go", "owner_windows_test.go",
-                "path_windows.go", "security_windows.go", "journal_record.go", "journal_record_test.go",
+                "path_windows.go", "security_windows.go", "journal_record.go", "journal_record_test.go", "journal_profile_binding_test.go",
                 "journal_header.go", "journal_header_test.go", "journal_store_windows.go", "journal_store_windows_test.go",
                 "journal_commit_record.go", "journal_commit_record_test.go",
                 "journal_channel_windows.go", "journal_channel_windows_test.go",
@@ -179,6 +183,15 @@ def mutants():
     changed_bytes = once(changed_bytes, "if err != nil || actual != owner.record {",
                          "if err != nil || false && actual != owner.record {")
     return (
+        ("journal_commit_record.go", "lost-captured-profile-binding", "TestWindowsProtectionJournalRetainsCapturedProfileRevision",
+         "successor lost its actual captured profile binding",
+         once(commit, "ProfileID: capture.ProfileID, ProfileRevision: capture.ProfileRevision, Engine: &actualEngine", "ProfileID: capture.ProfileID, Engine: &actualEngine")),
+        ("journal_store_windows.go", "unbound-native-journal-write", "TestWindowsProtectionJournalStoreRejectsUnboundTarget",
+         "unbound target acquired native journal write authority",
+         once(journal, "\tif err := requireJournalProfileBindings(next); err != nil {\n\t\treturn JournalSelection{}, err\n\t}\n", "")),
+        ("journal_store_windows.go", "unbound-old-journal-retirement", "TestWindowsProtectionJournalStoreRejectsUnboundTarget",
+         "unbound old intent acquired native empty-settlement authority",
+         once(journal, "\tif err := requireJournalProfileBindings(store.current.Record); err != nil {\n\t\treturn JournalSelection{}, err\n\t}\n", "")),
         ("security_windows.go", "native-security-readback", REQUIRED[12],
          "an existing or untrusted protection owner was adopted",
          function(security, "func verifyProtectionSecurity(", "return security.verify(directory)", "return nil")),
@@ -445,7 +458,7 @@ def execute(go="go"):
         if sources() != before:
             raise ValueError("Protection owner shipping sources changed during the actual native gate")
     print("Native protection preparation passed five strict-owner-record groups, nine intent-record groups, two native-file header groups, "
-          f"ten preparation ownership groups, nine durable journal storage groups, seven commit-record groups, seven native commit-channel groups, seven admission-record groups, seven native prepared-admission groups, four captured-host admission groups, three attempted-write drain groups and {len(mutants())} production negative controls. "
+          f"ten preparation ownership groups, ten durable journal storage groups, three durable profile-binding groups, seven commit-record groups, seven native commit-channel groups, seven admission-record groups, seven native prepared-admission groups, four captured-host admission groups, three attempted-write drain groups and {len(mutants())} production negative controls. "
           "Firewall mutation, transfer, recovery and ordinary-path activation remain separate requirements.", flush=True)
 
 

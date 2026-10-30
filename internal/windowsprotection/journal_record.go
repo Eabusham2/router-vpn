@@ -29,7 +29,10 @@ const (
 type JournalState struct {
 	Target    *mobiletor.DesktopWindowsProtectionTarget `json:"target"`
 	ProfileID string                                    `json:"profile_id"`
-	Engine    *Controller                               `json:"engine"`
+	// Omitted only by legacy records. Their canonical bytes stay readable, but
+	// missing source binding cannot grant new writes or restart adoption.
+	ProfileRevision string      `json:"profile_revision,omitempty"`
+	Engine          *Controller `json:"engine"`
 }
 
 // JournalIntent is flushed before the native write transaction may commit.
@@ -72,12 +75,12 @@ func journalProfileID(value string) bool {
 
 func (s JournalState) Validate() error {
 	if s.Target == nil {
-		if s.ProfileID != "" || s.Engine != nil {
+		if s.ProfileID != "" || s.ProfileRevision != "" || s.Engine != nil {
 			return errors.New("absent journal protection cannot retain a profile or native engine")
 		}
 		return nil
 	}
-	if s.Target.Validate() != nil || !journalProfileID(s.ProfileID) {
+	if s.Target.Validate() != nil || !journalProfileID(s.ProfileID) || s.ProfileRevision != "" && !lowerHex(s.ProfileRevision, 64) {
 		return errors.New("journal protection lost its exact target and profile binding")
 	}
 	if s.Engine != nil {
@@ -115,6 +118,7 @@ func (r JournalRecord) Validate() error {
 	case "successor":
 		candidate := intent.Candidate
 		if intent.ResultProfileRevision != intent.ProfileRevision || candidate.Target == nil || candidate.ProfileID != intent.ProfileID || candidate.Engine == nil ||
+			candidate.ProfileRevision != "" && candidate.ProfileRevision != intent.ProfileRevision ||
 			candidate.Engine.PID == r.Controller.PID || candidate.Engine.StartTimeUTCTicks < r.Controller.StartTimeUTCTicks ||
 			candidate.Engine.SID != r.Controller.SID || candidate.Engine.AuthenticationID != r.Controller.AuthenticationID || candidate.Engine.SessionID != r.Controller.SessionID ||
 			r.Committed.Target != nil && candidate.Target.Capture == r.Committed.Target.Capture {
@@ -123,6 +127,9 @@ func (r JournalRecord) Validate() error {
 	case "release", "off":
 		if r.Committed.Target == nil || intent.ProfileID != r.Committed.ProfileID || intent.Action == "release" && intent.ResultProfileRevision != intent.ProfileRevision {
 			return errors.New("Windows journal retirement requires the exact retained profile")
+		}
+		if intent.Action == "release" && r.Committed.ProfileRevision != "" && r.Committed.ProfileRevision != intent.ProfileRevision {
+			return errors.New("Windows normal release changed its retained source profile revision")
 		}
 		expected := JournalState{}
 		if intent.Action == "release" && r.Committed.Target.Policy == "always" {
@@ -160,10 +167,26 @@ func cloneJournalRecord(r JournalRecord) JournalRecord {
 }
 
 func sameJournalProtection(a, b JournalState) bool {
-	if a.ProfileID != b.ProfileID || (a.Target == nil) != (b.Target == nil) {
+	if a.ProfileID != b.ProfileID || a.ProfileRevision != b.ProfileRevision || (a.Target == nil) != (b.Target == nil) {
 		return false
 	}
 	return a.Target == nil || *a.Target == *b.Target
+}
+
+// Legacy canonical records are preserved as comparison evidence. A modern
+// caller cannot turn their missing source revision into newly acknowledged
+// authority by copying a current selected profile or clearing the old target.
+func requireJournalProfileBindings(record JournalRecord) error {
+	states := []JournalState{record.Committed}
+	if record.Intent != nil {
+		states = append(states, record.Intent.Candidate)
+	}
+	for _, state := range states {
+		if state.Target != nil && !lowerHex(state.ProfileRevision, 64) {
+			return errors.New("Windows journal target has no durably captured source profile revision")
+		}
+	}
+	return nil
 }
 
 func sameJournalState(a, b JournalState) bool {
