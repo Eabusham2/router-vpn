@@ -293,7 +293,7 @@ func fixtureSuspendedAccessTarget(t *testing.T, api *nativeAPI, image *Image, pi
 
 // This records the real same-user split-token access boundary. It does not
 // drive interactive UAC or establish cross-account or Portable acceptance.
-func TestWindowsControllerFoundationLimitedTokenThreadAccess(t *testing.T) {
+func TestWindowsControllerUACAcceptanceLimitedTokenThreadAccess(t *testing.T) {
 	api, image, pipe := fixtureSuspendedSetup(t)
 	original, err := CurrentIdentity()
 	if err != nil || !original.Primary || !original.Elevated || !original.Administrator {

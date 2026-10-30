@@ -52,13 +52,16 @@ REQUIRED = (
     "TestWindowsControllerFoundationSuspendedLaunchThreadOwner",
     "TestWindowsControllerFoundationSuspendedLaunchCreationCount",
     "TestWindowsControllerFoundationSuspendedCallbackRefusal",
-    "TestWindowsControllerFoundationLimitedTokenThreadAccess",
     "TestWindowsControllerFoundationConstructedMediumThreadAccess",
     "TestWindowsControllerFoundationPinnedAncestorsRejectReplacement",
     "TestWindowsControllerFoundationProtectedShellDescriptor",
     "TestWindowsControllerFoundationProtectedShellGlobalCapture",
     "TestWindowsControllerFoundationProtectedShellWrongMapping",
 )
+# A real linked token belongs to a separate native fixture. Its exact test is
+# still mandatory in the independent UAC workflow step and fails when absent;
+# an unavailable hosted token must not prevent the protocol mutants executing.
+UAC_ACCEPTANCE = ("TestWindowsControllerUACAcceptanceLimitedTokenThreadAccess",)
 
 
 def sources():
@@ -116,13 +119,13 @@ def mutants():
          "pinned image allowed a concurrent writer",
          once(process, "access, share, flags = syscall.GENERIC_READ, syscall.FILE_SHARE_READ, 0x00200000",
               "access, share, flags = syscall.GENERIC_READ, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, 0x00200000")),
-        ("process_windows.go", "image-ancestor-data-access", REQUIRED[30],
+        ("process_windows.go", "image-ancestor-data-access", REQUIRED[29],
          "retained executable ancestors permitted namespace replacement after leaf retirement",
          once(process, "uint32(syscall.FILE_LIST_DIRECTORY|0x80)", "uint32(0x80)")),
-        ("protected_shell_windows.go", "protected-shell-kernel-mapping", REQUIRED[33],
+        ("protected_shell_windows.go", "protected-shell-kernel-mapping", REQUIRED[32],
          "same-target local alias acquired the retained global mapping identity",
          once(protected_shell, "if same == 0 {", "if false && same == 0 {")),
-        ("protected_shell_policy.go", "protected-shell-object-rights", REQUIRED[31],
+        ("protected_shell_policy.go", "protected-shell-object-rights", REQUIRED[30],
          "untrusted namespace mutation right acquired a protected Shell capability",
          once(read("protected_shell_policy.go"), "readOnly := uint32(0x00120001)",
               "readOnly := uint32(0x001e000d)")),
