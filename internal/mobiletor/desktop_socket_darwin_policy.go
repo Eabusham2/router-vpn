@@ -429,19 +429,38 @@ func (p *DesktopDarwinSocketPolicy) monitor() {
 		if p.closing.Load() {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_, file, err := p.call(ctx, desktopDarwinRequest{Operation: "probe", Capture: p.capture}, nil, true)
-		cancel()
-		if file != nil {
-			file.Close()
-			err = errors.New("Darwin heartbeat transferred a descriptor")
-		}
-		if err != nil {
+		if !p.Current(p.capture, p.owner) {
 			p.current.Store(false)
 			return
 		}
+		if _, err := p.probe(); err != nil {
+			p.current.Store(false)
+			return
+		}
+	}
+}
+
+func (p *DesktopDarwinSocketPolicy) probe() (bool, error) {
+	// Foreground create/grant/retirement shares this exact request stream. A
+	// queued monitor must not spend its readback budget waiting for that owner,
+	// then send a request whose deadline is already about to close the stream.
+	// Waiting supplies no receipt: Current still expires the previous proof.
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closing.Load() {
+		return false, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, file, err := p.callLocked(ctx, desktopDarwinRequest{Operation: "probe", Capture: p.capture}, nil, true)
+	if file != nil {
+		file.Close()
+		err = errors.New("Darwin heartbeat transferred a descriptor")
+	}
+	if err == nil {
 		p.observed.Store(time.Now().UnixMilli())
 	}
+	return true, err
 }
 
 func (p *DesktopDarwinSocketPolicy) call(ctx context.Context, request desktopDarwinRequest, file *os.File, requireCurrent bool) (desktopDarwinReply, *os.File, error) {
@@ -450,6 +469,13 @@ func (p *DesktopDarwinSocketPolicy) call(ctx context.Context, request desktopDar
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.callLocked(ctx, request, file, requireCurrent)
+}
+
+// callLocked admits exactly one complete request/receipt while its caller
+// retains mu. Caller cancellation and the existing operation bounds apply to
+// the same channel and sequence for both foreground requests and probes.
+func (p *DesktopDarwinSocketPolicy) callLocked(ctx context.Context, request desktopDarwinRequest, file *os.File, requireCurrent bool) (desktopDarwinReply, *os.File, error) {
 	if ctx.Err() != nil || requireCurrent && !p.Current(p.capture, p.owner) {
 		return desktopDarwinReply{}, nil, net.ErrClosed
 	}

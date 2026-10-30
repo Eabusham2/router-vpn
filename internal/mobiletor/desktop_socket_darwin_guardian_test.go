@@ -1179,6 +1179,67 @@ func TestDesktopDarwinGuardianKernelWrongUIDAndPrivatePeer(t *testing.T) {
 	}
 }
 
+func TestDesktopDarwinGuardianKernelHeartbeatAdmission(t *testing.T) {
+	policy := desktopDarwinKernelPolicy(t, nil)
+	policy.mu.Lock()
+	locked := true
+	defer func() {
+		if locked {
+			policy.mu.Unlock()
+		}
+	}()
+	beforeSequence, beforeObserved := policy.sequence, policy.observed.Load()
+	type result struct {
+		admitted bool
+		err      error
+	}
+	entered, complete := make(chan struct{}), make(chan result, 1)
+	go func() {
+		close(entered)
+		admitted, err := policy.probe()
+		complete <- result{admitted, err}
+	}()
+	<-entered
+	// Hold actual foreground admission beyond a probe's I/O budget, while
+	// remaining within the independently checked five-second proof lifetime.
+	// No request or observation is allowed to bypass the captured stream lock.
+	hold := time.NewTimer(2*time.Second + 250*time.Millisecond)
+	defer hold.Stop()
+	select {
+	case value := <-complete:
+		t.Fatal("heartbeat bypassed held foreground admission", value)
+	case <-hold.C:
+	}
+	if policy.sequence != beforeSequence || policy.observed.Load() != beforeObserved {
+		t.Fatal("waiting heartbeat fabricated a request or refreshed captured proof")
+	}
+	policy.mu.Unlock()
+	locked = false
+	select {
+	case value := <-complete:
+		if !value.admitted || value.err != nil {
+			t.Fatal("queued heartbeat lost its admitted readback budget", value.err)
+		}
+	case <-time.After(desktopSocketControlWait):
+		t.Fatal("admitted heartbeat exceeded its unchanged control bound")
+	}
+	if policy.observed.Load() <= beforeObserved || !policy.Current(policy.capture, policy.owner) {
+		t.Fatal("actual admitted heartbeat did not establish fresh captured proof")
+	}
+	policy.mu.Lock()
+	stale := time.Now().Add(-DesktopSocketReadbackAge - time.Second).UnixMilli()
+	policy.observed.Store(stale)
+	beforeSequence = policy.sequence
+	policy.mu.Unlock()
+	admitted, err := policy.probe()
+	policy.mu.Lock()
+	unchangedSequence := policy.sequence == beforeSequence
+	policy.mu.Unlock()
+	if !admitted || err == nil || policy.observed.Load() != stale || !unchangedSequence || policy.Current(policy.capture, policy.owner) {
+		t.Fatal("failed or stale heartbeat refreshed captured proof", admitted, err)
+	}
+}
+
 func TestDesktopDarwinGuardianKernelSocketRetirementReusesCapacity(t *testing.T) {
 	remote := desktopDarwinKernelPeer(t, "udp4")
 	policy := desktopDarwinKernelPolicy(t, []DesktopDarwinSocketDestination{{Network: "udp", Address: remote}})
