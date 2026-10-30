@@ -6,6 +6,7 @@ on:
     paths:
       - '.github/workflows/windows-controller-contract.yml'
       - 'internal/windowscontroller/**'
+      - 'internal/windowsprotection/**'
       - 'internal/controllertransport/**'
       - 'internal/controllerbridge/**'
       - 'internal/windowsuibridge/**'
@@ -15,6 +16,7 @@ on:
       - 'cmd/windows-app-launcher/**'
       - 'cmd/portable-launcher/**'
       - 'deploy/test_windows_controller*'
+      - 'deploy/test_windows_protection_owner.py'
       - 'client/RouterVPN-Windows-ControllerTransport.cs'
       - 'client/RouterVPN-Windows-ControllerTransport.psm1'
       - 'client/RouterVPN-Windows-*.ps1'
@@ -34,6 +36,7 @@ on:
     paths:
       - '.github/workflows/windows-controller-contract.yml'
       - 'internal/windowscontroller/**'
+      - 'internal/windowsprotection/**'
       - 'internal/controllertransport/**'
       - 'internal/controllerbridge/**'
       - 'internal/windowsuibridge/**'
@@ -43,6 +46,7 @@ on:
       - 'cmd/windows-app-launcher/**'
       - 'cmd/portable-launcher/**'
       - 'deploy/test_windows_controller*'
+      - 'deploy/test_windows_protection_owner.py'
       - 'client/RouterVPN-Windows-ControllerTransport.cs'
       - 'client/RouterVPN-Windows-ControllerTransport.psm1'
       - 'client/RouterVPN-Windows-*.ps1'
@@ -169,6 +173,13 @@ jobs:
         run: |
           python deploy/test_windows_controller_foundation.py
           if ($LASTEXITCODE -ne 0) { throw 'Actual Windows controller ownership gate failed' }
+      - name: Native protected owner records and retained preparation handles
+        if: ${{ success() || failure() }}
+        timeout-minutes: 8
+        shell: pwsh
+        run: |
+          python deploy/test_windows_protection_owner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Native Windows protection owner preparation failed' }
       - name: Pinned controller TLS and actual shipping handler
         if: ${{ success() || failure() }}
         shell: pwsh
