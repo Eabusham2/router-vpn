@@ -41,6 +41,13 @@ func (forward capturedForwarder) Request(ctx context.Context, method, path strin
 // Its public hello is read before writer-token proof; no private request or
 // bearer is accepted until the exact retained child has authenticated.
 func Serve(ctx context.Context, pipe *windowscontroller.Pipe, child *windowscontroller.GUIChild, image *windowscontroller.Image, client *controllertransport.Client) (resultErr error) {
+	return ServeReady(ctx, pipe, child, image, client, nil)
+}
+
+// ServeReady reports readiness only after the actual retained GUI has proved
+// its pipe writer and received the exact ready frame. It is a launcher's local
+// observation, never a replacement for process/pipe/TLS authentication.
+func ServeReady(ctx context.Context, pipe *windowscontroller.Pipe, child *windowscontroller.GUIChild, image *windowscontroller.Image, client *controllertransport.Client, onReady func()) (resultErr error) {
 	if ctx == nil || pipe == nil || child == nil || image == nil || client == nil {
 		return errors.New("the native GUI bridge requires its complete captured owners")
 	}
@@ -61,13 +68,20 @@ func Serve(ctx context.Context, pipe *windowscontroller.Pipe, child *windowscont
 		retire(resultErr)
 		<-joined
 	}()
+	// A cold PowerShell process can still be loading Framework and compiling
+	// its retained transport before it opens the pipe. Bound that startup
+	// separately; it must not consume the authenticated frame exchange budget.
+	// Both phases remain tied to this exact child's process and caller context.
+	startup, stopStartup := context.WithTimeout(owned, 45*time.Second)
+	err := pipe.Accept(startup)
+	stopStartup()
+	if err != nil {
+		return err
+	}
 	// Cancellation owns this entire partial handshake, never a reusable pipe
 	// prefix. The binary frame reader starts only after the exact ready frame.
 	handoff, stop := context.WithTimeout(owned, 15*time.Second)
-	err := func() error {
-		if err := pipe.Accept(handoff); err != nil {
-			return err
-		}
+	err = func() error {
 		frame, err := pipe.ReadFrame(handoff)
 		if err != nil {
 			return err
@@ -90,6 +104,9 @@ func Serve(ctx context.Context, pipe *windowscontroller.Pipe, child *windowscont
 	stop()
 	if err != nil {
 		return err
+	}
+	if onReady != nil {
+		onReady()
 	}
 	return controllerbridge.Serve(owned, pipe, capturedForwarder{child: child, client: client})
 }

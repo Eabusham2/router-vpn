@@ -23,6 +23,7 @@ NATIVE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(NATIVE)
 REQUIRED = (
     "TestWindowsUIBridgePowerShellActualRequests",
+    "TestWindowsUIBridgePowerShellDelayedStartup",
     "TestWindowsUIBridgePowerShellCancellation",
     "TestWindowsUIBridgePowerShellWrongParent",
     "TestWindowsUIBridgePowerShellWrongPin",
@@ -113,7 +114,7 @@ def execute(go="go", shell="powershell.exe"):
             raise ValueError("Actual PowerShell or native bridge fixture changed during execution")
     if sources() != before:
         raise ValueError("Actual PowerShell source closure changed during execution")
-    print("Actual", edition, "PowerShell passed four native Go/pipe/TLS cases and an executable adapter fallback defect; WPF and cross-account UAC acceptance remain separate.", flush=True)
+    print("Actual", edition, "PowerShell passed five native Go/pipe/TLS cases, including delayed cold startup, and an executable adapter fallback defect; WPF and cross-account UAC acceptance remain separate.", flush=True)
 
 
 if __name__ == "__main__":

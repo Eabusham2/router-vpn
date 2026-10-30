@@ -110,6 +110,10 @@ func nativePowerShellHost(t *testing.T, wrongPin bool) (*nativeBridgeHost, strin
 }
 
 func nativePowerShellLaunch(t *testing.T, host *nativeBridgeHost, root string, directories windowscontroller.UserDirectories, mode string, invalidParent bool) *nativeBridgeGUI {
+	return nativePowerShellLaunchAfter(t, host, root, directories, mode, invalidParent, 0)
+}
+
+func nativePowerShellLaunchAfter(t *testing.T, host *nativeBridgeHost, root string, directories windowscontroller.UserDirectories, mode string, invalidParent bool, startupDelay time.Duration) *nativeBridgeGUI {
 	t.Helper()
 	pipe, err := windowscontroller.NewPipe()
 	if err != nil {
@@ -149,12 +153,13 @@ func nativePowerShellLaunch(t *testing.T, host *nativeBridgeHost, root string, d
 		}
 		return []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File",
 			filepath.Join(root, "deploy", "fixtures", "windows-controller-transport", "bridge_process.ps1"),
-			"-Root", root, "-ControllerPipe", pipe.Name(), "-ControllerParentHandle", fmt.Sprint(parent), "-Mode", mode, "-Report", gui.report}, nil
+			"-Root", root, "-ControllerPipe", pipe.Name(), "-ControllerParentHandle", fmt.Sprint(parent), "-Mode", mode, "-Report", gui.report,
+			"-StartupDelayMilliseconds", fmt.Sprint(startupDelay.Milliseconds())}, nil
 	}, environment, filepath.Dir(gui.report))
 	if err != nil {
 		t.Fatal("actual PowerShell GUI did not start", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 75*time.Second)
 	gui.cancel, gui.done = cancel, make(chan struct{})
 	go func() { defer close(gui.done); gui.serveErr = Serve(ctx, pipe, gui.child, host.image, host.client) }()
 	return gui
@@ -162,10 +167,18 @@ func nativePowerShellLaunch(t *testing.T, host *nativeBridgeHost, root string, d
 
 func nativePowerShellFinished(t *testing.T, gui *nativeBridgeGUI, expected string) {
 	t.Helper()
-	code, err := gui.child.Wait(nativeBridgeContext(t, 40*time.Second))
+	// Cover the production 45-second startup and 15-second authenticated
+	// exchange plus ten seconds for this fixture's four bounded requests.
+	code, err := gui.child.Wait(nativeBridgeContext(t, 70*time.Second))
 	raw, readErr := os.ReadFile(gui.report)
 	if err != nil || code != 0 || readErr != nil || string(raw) != expected {
-		t.Fatal("actual PowerShell adapter missed its native boundary", expected, code, err, readErr, string(raw))
+		bridgeState := "retained bridge still running"
+		select {
+		case <-gui.done:
+			bridgeState = fmt.Sprint(gui.serveErr)
+		default:
+		}
+		t.Fatal("actual PowerShell adapter missed its native boundary", expected, code, err, readErr, "bridge:", bridgeState, string(raw))
 	}
 	// The public constructor may reject an invalid inherited handle before it
 	// connects. Retire the exact server after the child is conclusively joined.
@@ -183,6 +196,18 @@ func TestWindowsUIBridgePowerShellActualRequests(t *testing.T) {
 	nativePowerShellFinished(t, gui, "PASS ROUNDTRIP")
 	if host.requests.Load() != 4 {
 		t.Fatal("actual PowerShell requests bypassed captured TLS", host.requests.Load())
+	}
+}
+
+func TestWindowsUIBridgePowerShellDelayedStartup(t *testing.T) {
+	host, root, directories := nativePowerShellHost(t, false)
+	// Hold this real PowerShell before its public connection longer than the
+	// old combined 15-second startup/handshake deadline. It must still prove
+	// the actual parent, exact pipe and pinned TLS before any request arrives.
+	gui := nativePowerShellLaunchAfter(t, host, root, directories, "roundtrip", false, 16*time.Second)
+	nativePowerShellFinished(t, gui, "PASS ROUNDTRIP")
+	if host.requests.Load() != 4 {
+		t.Fatal("delayed PowerShell startup bypassed captured TLS", host.requests.Load())
 	}
 }
 

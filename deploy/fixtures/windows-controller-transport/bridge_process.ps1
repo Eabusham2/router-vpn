@@ -1,6 +1,7 @@
 param([Parameter(Mandatory=$true)][string]$Root,[Parameter(Mandatory=$true)][string]$ControllerPipe,
       [Parameter(Mandatory=$true)][long]$ControllerParentHandle,[Parameter(Mandatory=$true)][string]$Report,
-      [ValidateSet('roundtrip','cancel','reject-peer','reject-request')][string]$Mode='roundtrip')
+      [ValidateSet('roundtrip','cancel','reject-peer','reject-request')][string]$Mode='roundtrip',
+      [ValidateRange(0,30000)][int]$StartupDelayMilliseconds=0)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
 $Client=$null;$Other=$null;$Request=$null;$Response=$null;$Cts=$null
@@ -10,6 +11,7 @@ function Save([string]$Value){[IO.File]::WriteAllText($Report,$Value,[Text.UTF8E
 function global:Invoke-RestMethod {throw 'CONTROL owned PowerShell used ordinary HTTP'}
 try{
     Import-Module (Join-Path $Root 'client/RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
+    if($StartupDelayMilliseconds-gt0){Start-Sleep -Milliseconds $StartupDelayMilliseconds}
     if($Mode-ceq'reject-peer'){
         Reject {Initialize-RouterVPNControllerTransport -ControllerPipe $ControllerPipe -ControllerParentHandle $ControllerParentHandle} 'unproved native parent acquired the PowerShell channel'
         Reject {Initialize-RouterVPNControllerTransport} 'failed native handoff reset to legacy'
