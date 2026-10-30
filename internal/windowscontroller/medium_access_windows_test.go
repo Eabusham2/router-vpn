@@ -173,9 +173,13 @@ func fixtureVerifyMediumStartupLabel(t *testing.T, descriptor []byte) {
 		t.Fatal("new Medium process/thread has an unexpected mandatory ACL")
 	}
 	ace := acl[8:size]
-	if len(ace) < 16 || ace[0] != 17 || ace[1] != 0 || int(binary.LittleEndian.Uint16(ace[2:4])) != len(ace) ||
+	if len(ace) < 16 {
+		t.Fatal("new Medium process/thread has a truncated mandatory ACE")
+	}
+	if ace[0] != 17 || ace[1] != 0 || int(binary.LittleEndian.Uint16(ace[2:4])) != len(ace) ||
 		binary.LittleEndian.Uint32(ace[4:8]) != 1 {
-		t.Fatal("new Medium process/thread lost its explicit no-write-up label")
+		t.Fatalf("new Medium process/thread lost its explicit no-write-up label (type=%d flags=0x%x ACE-size=%d captured-span=%d mask=0x%x)",
+			ace[0], ace[1], binary.LittleEndian.Uint16(ace[2:4]), len(ace), binary.LittleEndian.Uint32(ace[4:8]))
 	}
 	sid, length, err := systemImageSID(ace, 8)
 	if err != nil || length != len(ace)-8 || sid.authority != 16 || len(sid.parts) != 1 || sid.parts[0] != 8192 {
