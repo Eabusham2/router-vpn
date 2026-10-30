@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"math"
 	"os"
 	"sync/atomic"
 	"time"
@@ -28,16 +29,19 @@ const journalCommitChannelLimit = 45 * time.Second
 // runs while the child's BFE write transaction is held, so current MUST NOT
 // re-enter BFE, close that child, or wait for its transaction to finish.
 type JournalCommitServer struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	pipe     *windowscontroller.Pipe
-	journal  *ProtectionJournal
-	capture  JournalCommitCapture
-	current  func() error
-	state    atomic.Int32 // 0 unused, 1 Receive entered, 2 retiring
-	joined   chan struct{}
-	retired  chan struct{}
-	closeErr error
+	ctx             context.Context
+	cancel          context.CancelFunc
+	pipe            *windowscontroller.Pipe
+	journal         *ProtectionJournal
+	capture         JournalCommitCapture
+	current         func() error
+	state           atomic.Int32 // 0 unused, 1 Receive entered, 2 retiring, 3 prepared admission
+	joined          chan struct{}
+	admissionJoined chan struct{}
+	commit          *journalCommitAcknowledged
+	attempted       *JournalRecord
+	retired         chan struct{}
+	closeErr        error
 }
 
 func cloneJournalCommitCapture(capture JournalCommitCapture) (JournalCommitCapture, error) {
@@ -55,6 +59,9 @@ func NewJournalCommitServer(ctx context.Context, journal *ProtectionJournal, cap
 	capture, err := cloneJournalCommitCapture(capture)
 	if err != nil {
 		return nil, err
+	}
+	if capture.Head.Sequence >= math.MaxUint64-1 {
+		return nil, errors.New("native commit channel has no sequence capacity for its live-engine checkpoint")
 	}
 	if err := current(); err != nil {
 		return nil, err
@@ -77,7 +84,7 @@ func NewJournalCommitServer(ctx context.Context, journal *ProtectionJournal, cap
 	}
 	owned, cancel := context.WithCancel(ctx)
 	server := &JournalCommitServer{ctx: owned, cancel: cancel, pipe: pipe, journal: journal, capture: capture,
-		current: current, joined: make(chan struct{}), retired: make(chan struct{})}
+		current: current, joined: make(chan struct{}), admissionJoined: make(chan struct{}), retired: make(chan struct{})}
 	if err := server.currentOwner(); err != nil {
 		cancel()
 		return nil, errors.Join(err, pipe.Close())
@@ -164,6 +171,8 @@ func (server *JournalCommitServer) Receive(child *windowscontroller.GUIChild, ex
 	if err != nil {
 		return JournalRecord{}, err
 	}
+	attempted := cloneJournalRecord(intent)
+	server.attempted = &attempted
 	selection, appendErr := server.journal.Append(ctx, intent.PreviousSHA256, intent)
 	var durable JournalRecord
 	if !selection.Incomplete && selection.SHA256 == journalCommitDigest(intentBytes) {
@@ -204,7 +213,12 @@ func (server *JournalCommitServer) Receive(child *windowscontroller.GUIChild, ex
 	if err := server.pipe.WriteFrame(ctx, append(raw, '\n')); err != nil {
 		return durable, err
 	}
-	return durable, errors.Join(ctx.Err(), server.currentOwner())
+	if err := errors.Join(ctx.Err(), server.currentOwner()); err != nil {
+		return durable, err
+	}
+	server.commit = &journalCommitAcknowledged{request: request, engine: engine, identity: identity,
+		intent: cloneJournalRecord(durable), child: child, image: expectedImage}
+	return durable, nil
 }
 
 func journalCommitFrame(frame []byte) []byte {
@@ -231,8 +245,11 @@ func (server *JournalCommitServer) Close(ctx context.Context) error {
 		server.cancel()
 		go func() {
 			server.closeErr = server.pipe.Close()
-			if previous == 1 {
+			if previous == 1 || previous == 3 {
 				<-server.joined
+			}
+			if previous == 3 {
+				<-server.admissionJoined
 			}
 			close(server.retired)
 		}()
@@ -249,21 +266,23 @@ func (server *JournalCommitServer) Close(ctx context.Context) error {
 // native pipe verified against that process/image. Only this channel can return
 // a durable precommit acknowledgment; the staged capture is comparison data.
 type JournalCommitClient struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	pipe        *windowscontroller.Pipe
-	parent      *windowscontroller.Process
-	parentImage *windowscontroller.Image
-	self        *windowscontroller.Process
-	engine      Controller
-	capture     JournalCommitCapture
-	gate        chan struct{}
-	closing     atomic.Bool
-	retired     chan struct{}
-	closeErr    error
-	request     *JournalCommitRequest
-	resultReady bool
-	resultErr   error
+	ctx                context.Context
+	cancel             context.CancelFunc
+	pipe               *windowscontroller.Pipe
+	parent             *windowscontroller.Process
+	parentImage        *windowscontroller.Image
+	self               *windowscontroller.Process
+	engine             Controller
+	capture            JournalCommitCapture
+	gate               chan struct{}
+	closing            atomic.Bool
+	retired            chan struct{}
+	closeErr           error
+	request            *JournalCommitRequest
+	resultReady        bool
+	resultErr          error
+	admissionAttempted bool
+	admissionErr       error
 }
 
 // ConnectJournalCommitClient consumes inheritedParent, including on error.

@@ -25,9 +25,10 @@ import (
 )
 
 type journalChannelReport struct {
-	Stage, Pipe, Failure string
-	Accepted, Replayed   bool
-	Closed, Forged       bool
+	Stage, Pipe, Failure                   string
+	Accepted, Replayed                     bool
+	Closed, Forged                         bool
+	Admitted, AdmissionReplayed, Premature bool
 }
 
 func journalChannelWrite(ctx context.Context, pipe *windowscontroller.Pipe, value any) error {
@@ -75,7 +76,7 @@ func TestWindowsProtectionJournalChannelFixture(t *testing.T) {
 
 func runJournalChannelFixture(arguments []string) error {
 	mode, production, control, handleText, imagePath, capturePath, digest := arguments[0], arguments[1], arguments[2], arguments[3], arguments[4], arguments[5], arguments[6]
-	if mode != "client" && mode != "forger" && mode != "hold" {
+	if mode != "client" && mode != "forger" && mode != "hold" && mode != "admission-client" && mode != "admission-wrong-candidate" {
 		return errors.New("journal channel fixture selected an unknown role")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
@@ -131,10 +132,22 @@ func runJournalChannelFixture(arguments []string) error {
 	report := journalChannelReport{Stage: "client"}
 	if resultErr == nil {
 		candidate := journalChannelCandidate(capture)
+		admission := mode == "admission-client" || mode == "admission-wrong-candidate"
+		if admission {
+			report.Premature = client.Admit(ctx, candidate) == nil
+		}
 		change := mobiletor.DesktopWindowsProtectionCommit{Action: "successor", Previous: capture.Transfer.Predecessor, Candidate: &candidate}
 		resultErr = client.Barrier(ctx, change)
 		report.Accepted = resultErr == nil
 		report.Replayed = client.Barrier(ctx, change) == nil
+		if admission && resultErr == nil {
+			if mode == "admission-wrong-candidate" {
+				candidate.BaselineSHA256 = strings.Repeat("f", 64)
+			}
+			resultErr = client.Admit(ctx, candidate)
+			report.Admitted = resultErr == nil
+			report.AdmissionReplayed = client.Admit(ctx, candidate) == nil
+		}
 	}
 	if resultErr != nil {
 		report.Failure = resultErr.Error()

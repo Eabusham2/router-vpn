@@ -91,6 +91,26 @@ JOURNAL_ADMISSION_REQUIRED = (
     'TestJournalAdmissionReplyBindsRequestAndSettlement',
     'TestJournalAdmissionRejectsNoncanonicalFrames',
 )
+JOURNAL_ADMISSION_NATIVE_REQUIRED = (
+    'TestWindowsProtectionJournalAdmissionTwoPhaseCheckpoint',
+    'TestWindowsProtectionJournalAdmissionPreparedReadFailures',
+    'TestWindowsProtectionJournalAdmissionSettlementWriteFailure',
+    'TestWindowsProtectionJournalAdmissionOperationReplacement',
+    'TestWindowsProtectionJournalAdmissionCandidateMismatch',
+    'TestWindowsProtectionJournalAdmissionCloseJoinsPreparedRead',
+    'TestWindowsProtectionJournalAdmissionRetainedAdmissionClose',
+)
+JOURNAL_CAPTURE_REQUIRED = (
+    'TestWindowsProtectionJournalAdmissionCapturedCheckpoint',
+    'TestWindowsProtectionJournalAdmissionCapturedOwnerFailure',
+    'TestWindowsProtectionJournalAdmissionRequiresCapturedOwner',
+    'TestWindowsProtectionJournalAdmissionCloseJoinsCapturedOwner',
+)
+JOURNAL_ATTEMPT_REQUIRED = (
+    'TestWindowsProtectionJournalAttemptPendingDrain',
+    'TestWindowsProtectionJournalAttemptRejectsNewerCheckpoint',
+    'TestWindowsProtectionJournalAttemptNoWrite',
+)
 REQUIRED_SUBCASES = {
     REQUIRED[6]: ("record-write", "record-delete", "record-rename", "root-rename", "parent-rename"),
     REQUIRED[8]: ("session", "source", "config", "network", "generation"),
@@ -102,6 +122,8 @@ REQUIRED_SUBCASES = {
     JOURNAL_STORE_REQUIRED[6]: ("initial", "later"),
     JOURNAL_STORE_REQUIRED[9]: ("unproved-absence", "user-owner", "broad-write", "inherited", "legacy-file"),
     JOURNAL_CHANNEL_REQUIRED[6]: ("server", "client"),
+    JOURNAL_ADMISSION_NATIVE_REQUIRED[1]: ("before-flush", "after-flush"),
+    JOURNAL_ATTEMPT_REQUIRED[0]: ("intent", "settled"),
 }
 
 
@@ -111,7 +133,9 @@ def sources():
                 "journal_header.go", "journal_header_test.go", "journal_store_windows.go", "journal_store_windows_test.go",
                 "journal_commit_record.go", "journal_commit_record_test.go",
                 "journal_channel_windows.go", "journal_channel_windows_test.go",
-                "journal_admission_record.go", "journal_admission_record_test.go"}
+                "journal_admission_record.go", "journal_admission_record_test.go",
+                "journal_admission_windows.go", "journal_admission_windows_test.go",
+                "journal_admission_capture_windows_test.go", "journal_attempt_windows_test.go"}
     owned = sorted(TARGET.glob("*.go"))
     if {path.name for path in owned} != expected:
         raise ValueError("Windows protection owner source/test closure changed")
@@ -144,6 +168,9 @@ def mutants():
     commit = read("journal_commit_record.go")
     channel = read("journal_channel_windows.go")
     admission = read("journal_admission_record.go")
+    native_admission = read("journal_admission_windows.go")
+    if native_admission.count("server.currentOwner()") != 6:
+        raise ValueError("Native prepared admission changed its captured ownership checks")
     peer_call = "client.pipe.VerifyPeer(client.parent, client.parentImage)"
     if channel.count(peer_call) != 3:
         raise ValueError("Native journal inherited-parent peer callsites changed")
@@ -267,6 +294,76 @@ def mutants():
          'noncanonical admission reply reached active checkpoint comparison',
          once(admission, 'if err != nil || !bytes.Equal(raw, canonical) {\n\t\treturn JournalAdmissionReply{}, errors.New',
               'if err != nil || false && !bytes.Equal(raw, canonical) {\n\t\treturn JournalAdmissionReply{}, errors.New')),
+        ("journal_admission_windows.go", "prepared-read-before-flush", JOURNAL_ADMISSION_NATIVE_REQUIRED[1],
+         "pre-flush failure fabricated a durable settled checkpoint",
+         once(native_admission,
+              "if err := read(bounded, target); err != nil {\n\t\treturn JournalRecord{}, err\n\t}",
+              "// Broken: the prepared kernel state was not read before checkpoint persistence.")),
+        ("journal_admission_windows.go", "prepared-read-after-flush", JOURNAL_ADMISSION_NATIVE_REQUIRED[1],
+         "native admission omitted its failed independent read",
+         once(native_admission,
+              "if err := read(bounded, target); err != nil {\n\t\treturn durable, err\n\t}",
+              "// Broken: the prepared kernel state was not read after checkpoint persistence.")),
+        ("journal_admission_windows.go", "prepared-actual-checkpoint-append", JOURNAL_ADMISSION_NATIVE_REQUIRED[2],
+         "failed actual settlement write acknowledged or erased its retained pending owner",
+         once(native_admission, "selection, appendErr := server.journal.Append(bounded, settled.PreviousSHA256, settled)",
+              "selection, appendErr := JournalSelection{Record: settled, SHA256: journalCommitDigest(settledBytes)}, error(nil)")),
+        ("journal_admission_windows.go", "prepared-late-operation-owner", JOURNAL_ADMISSION_NATIVE_REQUIRED[3],
+         "late operation replacement acquired admission or lost its durable checkpoint",
+         native_admission.replace("server.currentOwner()", "error(nil)")),
+        ("journal_admission_windows.go", "prepared-exact-candidate", JOURNAL_ADMISSION_NATIVE_REQUIRED[4],
+         "native journal admission accepted a substituted prepared candidate",
+         once(native_admission, " || client.request.Candidate != target", "")),
+        ("journal_admission_windows.go", "prepared-consumed-acknowledgment", JOURNAL_ADMISSION_NATIVE_REQUIRED[0],
+         "native admission did not acknowledge one independently bracketed checkpoint",
+         once(native_admission,
+              'return errors.Join(client.admissionErr, bounded.Err(), errors.New("native journal admission acknowledgment has already been consumed"))',
+              'return errors.Join(client.admissionErr, bounded.Err())')),
+        ("journal_channel_windows.go", "prepared-second-phase-join", JOURNAL_ADMISSION_NATIVE_REQUIRED[6],
+         "journal admission close returned before its entered second phase joined",
+         function(channel, "func (server *JournalCommitServer) Close(", "<-server.admissionJoined", "_ = server.admissionJoined")),
+        ("journal_admission_windows.go", "prepared-retained-durable-error", JOURNAL_ADMISSION_NATIVE_REQUIRED[1],
+         "post-flush failure discarded its durable live-engine checkpoint",
+         once(native_admission,
+              "if err := read(bounded, target); err != nil {\n\t\treturn durable, err\n\t}",
+              "if err := read(bounded, target); err != nil {\n\t\treturn JournalRecord{}, err\n\t}")),
+        ("journal_admission_windows.go", "prepared-captured-host-before-ack", JOURNAL_CAPTURE_REQUIRED[0],
+         "native admission omitted its captured host before acknowledgment",
+         once(native_admission,
+              "if err := prepared(bounded, cloneJournalRecord(durable)); err != nil {\n\t\treturn durable, err\n\t}",
+              "// Broken: the host attempt was not recorded before the startup acknowledgment.")),
+        ("journal_admission_windows.go", "prepared-captured-host-error", JOURNAL_CAPTURE_REQUIRED[1],
+         "captured host rejection was ignored or discarded its flushed checkpoint",
+         once(native_admission,
+              "if err := prepared(bounded, cloneJournalRecord(durable)); err != nil {\n\t\treturn durable, err\n\t}",
+              "_ = prepared(bounded, cloneJournalRecord(durable))")),
+        ("journal_admission_windows.go", "prepared-captured-host-copy", JOURNAL_CAPTURE_REQUIRED[0],
+         "captured host callback changed the retained checkpoint through an alias",
+         once(native_admission, "prepared(bounded, cloneJournalRecord(durable))", "prepared(bounded, durable)")),
+        ("journal_admission_windows.go", "prepared-captured-host-required", JOURNAL_CAPTURE_REQUIRED[2],
+         "missing captured host consumed a native admission read or phase",
+         once(native_admission, " || prepared == nil", "")),
+        ("journal_admission_windows.go", "journal-drain-joined-owner", JOURNAL_CAPTURE_REQUIRED[3],
+         "revoked but unjoined captured callback supplied a durable journal drain",
+         function(native_admission, "func (server *JournalCommitServer) DrainAttempt(",
+                  'default:\n\t\treturn JournalRecord{}, errors.New("native journal attempt cannot drain an entered callback")',
+                  'default:\n\t\treturn cloneJournalRecord(*server.attempted), nil')),
+        ("journal_channel_windows.go", "journal-intent-attempt-capture", JOURNAL_ATTEMPT_REQUIRED[0],
+         "channel forgot the exact native append before its failed flush",
+         once(channel, "server.attempted = &attempted", "_ = attempted")),
+        ("journal_admission_windows.go", "journal-settlement-attempt-capture", JOURNAL_ATTEMPT_REQUIRED[0],
+         "channel forgot the exact native append before its failed flush",
+         once(native_admission, "server.attempted = &attempted", "_ = attempted")),
+        ("journal_admission_windows.go", "journal-drain-exact-generation", JOURNAL_ATTEMPT_REQUIRED[1],
+         "old channel adopted another durable journal generation",
+         once(native_admission,
+              "if durable, ok := exact(selection); ok {\n\t\treturn durable, errors.Join(readErr, ctx.Err())\n\t}",
+              "if durable := cloneJournalRecord(selection.Record); readErr == nil && durable.Validate() == nil {\n\t\treturn durable, ctx.Err()\n\t}")),
+        ("journal_admission_windows.go", "journal-drain-actual-retry", JOURNAL_ATTEMPT_REQUIRED[0],
+         "readonly retry discarded or adopted a different journal attempt",
+         once(native_admission,
+              "selection, appendErr := server.journal.Append(ctx, attempted.PreviousSHA256, attempted)",
+              "selection, appendErr := JournalSelection{Record: attempted, SHA256: journalCommitDigest(raw)}, error(nil)")),
         ("journal_channel_windows.go", "channel-captured-native-child", JOURNAL_CHANNEL_REQUIRED[2],
          "another actual child acquired the journal commit owner",
          once(channel, "peer, err := child.VerifyPeer(server.pipe, expectedImage)",
@@ -317,7 +414,7 @@ def execute(go="go"):
                                      "-test.timeout=90s", "-test.v"], cwd=ROOT, env=captured, timeout=105)
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if (status or "--- SKIP:" in output or "DATA RACE" in output or
-                any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *JOURNAL_REQUIRED, *JOURNAL_STORE_REQUIRED, *JOURNAL_COMMIT_REQUIRED, *JOURNAL_CHANNEL_REQUIRED, *JOURNAL_ADMISSION_REQUIRED))):
+                any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *JOURNAL_REQUIRED, *JOURNAL_STORE_REQUIRED, *JOURNAL_COMMIT_REQUIRED, *JOURNAL_CHANNEL_REQUIRED, *JOURNAL_ADMISSION_REQUIRED, *JOURNAL_ADMISSION_NATIVE_REQUIRED, *JOURNAL_CAPTURE_REQUIRED, *JOURNAL_ATTEMPT_REQUIRED))):
             raise ValueError("Protection owner baseline did not execute every native ownership case")
         for test, names in REQUIRED_SUBCASES.items():
             if any("--- PASS: " + test + "/" + name + " (" not in output for name in names):
@@ -348,7 +445,7 @@ def execute(go="go"):
         if sources() != before:
             raise ValueError("Protection owner shipping sources changed during the actual native gate")
     print("Native protection preparation passed five strict-owner-record groups, nine intent-record groups, two native-file header groups, "
-          f"ten preparation ownership groups, nine durable journal storage groups, seven commit-record groups, seven native commit-channel groups, seven admission-record groups and {len(mutants())} production negative controls. "
+          f"ten preparation ownership groups, nine durable journal storage groups, seven commit-record groups, seven native commit-channel groups, seven admission-record groups, seven native prepared-admission groups, four captured-host admission groups, three attempted-write drain groups and {len(mutants())} production negative controls. "
           "Firewall mutation, transfer, recovery and ordinary-path activation remain separate requirements.", flush=True)
 
 
