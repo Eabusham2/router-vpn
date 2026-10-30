@@ -44,6 +44,17 @@ SHARED_TESTS = (
     "TestDesktopNodeJournalDoesNotUseCallbackFreeRemoval",
     "TestDesktopNodeJournalReceiptlessChildUsesOnlyRecordedOutcome",
     "TestDesktopNodeJournalEmptyReleaseRetainsFailedNativeClose",
+    "TestDesktopNodeJournalReleaseOrdersDurabilityAndPreservesAlways",
+    "TestDesktopNodeJournalReleaseRetriesExactIntentFlush",
+    "TestDesktopNodeJournalReleaseRetriesAfterNativeRemoval",
+    "TestDesktopNodeJournalReleaseRetriesPartialNativeOwner",
+    "TestDesktopNodeJournalReleaseRetainsArmedOwnerAndIntent",
+    "TestDesktopNodeJournalReleaseRejectsUncapturedState",
+    "TestDesktopNodeJournalReleaseRejectsReplacementDuringRetry",
+    "TestDesktopNodeJournalReleaseRejectsSubstitutedNativeBarrier",
+    "TestDesktopNodeJournalReleaseRequiresActualBarrierAcknowledgment",
+    "TestDesktopNodeJournalReleaseKeepsSeparateOffGate",
+    "TestDesktopNodeJournalReleaseJoinsLateNativeBarrier",
 )
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
@@ -61,6 +72,8 @@ REQUIRED_SOURCES = (
     "cmd/client/desktop_node_process_windows_native_test.go",
     "cmd/client/desktop_node_journal.go", "cmd/client/desktop_node_journal_test.go",
     "cmd/client/desktop_node_journal_windows.go",
+    "cmd/client/desktop_node_journal_release.go", "cmd/client/desktop_node_journal_release_test.go",
+    "cmd/client/desktop_node_protection.go", "cmd/client/desktop_node_protection_windows.go",
     "cmd/client/controller_privilege_windows.go",
     "cmd/client/private_runtime_permissions_windows.go",
     "cmd/client/bundled_native.go", "cmd/client/bundled_amnezia.go",
@@ -111,6 +124,8 @@ def mutants():
     original = (ROOT / filename).read_text(encoding="utf-8")
     journal_file = "cmd/client/desktop_node_journal.go"
     journal = (ROOT / journal_file).read_text(encoding="utf-8")
+    release_file = "cmd/client/desktop_node_journal_release.go"
+    release = (ROOT / release_file).read_text(encoding="utf-8")
     once = NATIVE.replace_once
     alive = NATIVE.function_mutant(original, "func (owner *desktopNodeProcessOwner) Alive()",
         "\tif err := owner.controller(); err != nil {\n\t\treturn err\n\t}\n", "")
@@ -137,6 +152,15 @@ def mutants():
          "failed journal settlement discarded its exact attempt",
          once(journal, "if err != nil || wantErr != nil || gotErr != nil || written.Incomplete || !bytes.Equal(want, got) {",
               "if false && (err != nil || wantErr != nil || gotErr != nil || written.Incomplete || !bytes.Equal(want, got)) {")),
+        (release_file, "release-before-durable-intent", "TestDesktopNodeJournalReleaseOrdersDurabilityAndPreservesAlways/on-connect",
+         "native removal preceded its exact durable intent",
+         once(release, "\tif err := writeDesktopNodeJournalReleaseRecord(ctx, r.store, r.head, r.intent); err != nil {\n\t\treturn err\n\t}\n", "")),
+        (release_file, "release-without-settlement", "TestDesktopNodeJournalReleaseOrdersDurabilityAndPreservesAlways/on-connect",
+         "durable release did not finish its captured transaction",
+         once(release, "\t\t\tif err := writeDesktopNodeJournalReleaseRecord(ctx, r.store, r.intent, r.settlement); err != nil {\n\t\t\t\treturn err\n\t\t\t}\n", "")),
+        (release_file, "release-accepts-off-callback", "TestDesktopNodeJournalReleaseRejectsSubstitutedNativeBarrier/off",
+         "substituted native callback gained durable removal permission",
+         once(release, 'change.Action != "release" || change.Previous == nil', 'false || change.Previous == nil')),
     )
 
 

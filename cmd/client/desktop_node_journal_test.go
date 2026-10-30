@@ -79,18 +79,24 @@ func (p *desktopNodeJournalFixtureProcess) JournalOutcome() (windowsprotection.J
 }
 
 func desktopNodeJournalFixture(t *testing.T, live bool) (*desktopNodeProtectionSlot, *desktopNodeProtectionAttempt, *desktopNodeProtectionFixture, *desktopNodeJournalFixtureStore, *desktopNodeJournalFixtureProcess) {
+	return desktopNodeJournalPolicyFixture(t, live, "always")
+}
+
+func desktopNodeJournalPolicyFixture(t *testing.T, live bool, policyName string) (*desktopNodeProtectionSlot, *desktopNodeProtectionAttempt, *desktopNodeProtectionFixture, *desktopNodeJournalFixtureStore, *desktopNodeJournalFixtureProcess) {
 	t.Helper()
-	policy := desktopNodeProtectionPolicy(t, "1", "always", 0)
+	policy := desktopNodeProtectionPolicy(t, "1", policyName, 0)
+	profile, _ := desktopNodeFixture(t, "198.51.100.8")
+	profile.KillSwitch, profile.KillSwitchPolicy = true, policyName
 	kernel := &desktopNodeProtectionFixture{}
 	slot := &desktopNodeProtectionSlot{backend: kernel.backend()}
-	launch := &desktopNodeLaunch{ownedNode: &desktopOwnedNodeRuntime{}}
+	launch := &desktopNodeLaunch{ownedNode: &desktopOwnedNodeRuntime{profileToken: desktopOwnedNodeProfileToken(profile)}}
 	attempt, err := slot.begin(context.Background(), launch, policy)
 	if err != nil {
 		t.Fatal(err)
 	}
 	controller := windowsprotection.Controller{PID: 101, StartTimeUTCTicks: 638000000000000000, SID: "S-1-5-21-100-200-300-1001", AuthenticationID: 123, SessionID: 2}
 	head := windowsprotection.JournalRecord{Schema: 1, Kind: windowsprotection.JournalRecordKind, JournalID: strings.Repeat("a", 32), Sequence: 1, Controller: controller, Phase: "settled"}
-	capture := windowsprotection.JournalCommitCapture{Schema: 1, Kind: windowsprotection.JournalCommitCaptureKind, Head: head, ProfileID: policy.Metadata().ProfileID, ProfileRevision: strings.Repeat("f", 64), Transfer: attempt.transfer}
+	capture := windowsprotection.JournalCommitCapture{Schema: 1, Kind: windowsprotection.JournalCommitCaptureKind, Head: head, ProfileID: policy.Metadata().ProfileID, ProfileRevision: launch.ownedNode.profileToken, Transfer: attempt.transfer}
 	raw, err := windowsprotection.CanonicalJournalCommitCapture(capture)
 	if err != nil {
 		t.Fatal(err)

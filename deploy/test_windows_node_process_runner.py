@@ -67,10 +67,10 @@ class NodeProcessRunner(unittest.TestCase):
 
     def test_mutations_are_exact_production_changes_and_leave_the_source_unchanged(self):
         originals = {name: (ROOT / name).read_bytes() for name in
-                     ("cmd/client/desktop_node_process.go", "cmd/client/desktop_node_journal.go")}
+                     ("cmd/client/desktop_node_process.go", "cmd/client/desktop_node_journal.go", "cmd/client/desktop_node_journal_release.go")}
         changes = GATE.mutants()
-        self.assertEqual(len(changes), 6)
-        self.assertEqual(len({change[1] for change in changes}), 6)
+        self.assertEqual(len(changes), 9)
+        self.assertEqual(len({change[1] for change in changes}), 9)
         for filename, _, test, witness, replacement in changes:
             self.assertIn(filename, originals)
             self.assertNotEqual(replacement.encode(), originals[filename])

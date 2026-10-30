@@ -91,7 +91,7 @@ func captureDesktopNodeJournal(ctx context.Context, controller *windowsOwnedCont
 	slot := owned.slot
 	slot.mu.Lock()
 	defer slot.mu.Unlock()
-	if slot.active != owned.attempt || len(controller.directories) != 1 || controller.parent == nil ||
+	if slot.active != owned.attempt || owned.attempt.profileRevision != owned.profileToken || len(controller.directories) != 1 || controller.parent == nil ||
 		!windowsOwnedSamePath(controller.directories[0].Name(), controller.dataRoot) {
 		return nil, empty, errors.New("native journal lost its retained original Data directory")
 	}
@@ -124,7 +124,7 @@ func captureDesktopNodeJournal(ctx context.Context, controller *windowsOwnedCont
 	}
 	meta := owned.policy.Metadata()
 	captured := windowsprotection.JournalCommitCapture{Schema: windowsprotection.JournalCommitSchema, Kind: windowsprotection.JournalCommitCaptureKind,
-		Head: selection.Record, ProfileID: meta.ProfileID, ProfileRevision: owned.profileToken, Transfer: owned.attempt.transfer}
+		Head: selection.Record, ProfileID: meta.ProfileID, ProfileRevision: owned.attempt.profileRevision, Transfer: owned.attempt.transfer}
 	if err := captured.Validate(); err != nil {
 		return nil, empty, err
 	}

@@ -16,19 +16,21 @@ type desktopNodeProtectionRelease interface{ Close(context.Context) error }
 // Tests model the kernel explicitly; production uses the exact BFE readers and
 // target-bound release constructor. No callback may adopt a current baseline.
 type desktopNodeProtectionBackend struct {
-	read     func(context.Context, *mobiletor.DesktopWindowsProtectionTarget) error
-	prepared func(context.Context, mobiletor.DesktopWindowsProtectionTarget) error
-	release  func(context.Context, mobiletor.DesktopWindowsProtectionTarget) (desktopNodeProtectionRelease, error)
-	recover  func(context.Context, mobiletor.DesktopWindowsProtectionTarget) (desktopNodeProtectionRelease, error)
+	read               func(context.Context, *mobiletor.DesktopWindowsProtectionTarget) error
+	prepared           func(context.Context, mobiletor.DesktopWindowsProtectionTarget) error
+	release            func(context.Context, mobiletor.DesktopWindowsProtectionTarget) (desktopNodeProtectionRelease, error)
+	recover            func(context.Context, mobiletor.DesktopWindowsProtectionTarget) (desktopNodeProtectionRelease, error)
+	releaseWithBarrier func(context.Context, mobiletor.DesktopWindowsProtectionTarget, mobiletor.DesktopWindowsProtectionCommitBarrier) (desktopNodeProtectionRelease, error)
 }
 
 type desktopNodeProtectionAttempt struct {
-	launch     *desktopNodeLaunch
-	policy     *mobilemultihop.DesktopNodePolicy
-	transfer   mobiletor.DesktopProtectionTransferRecord
-	digest     string
-	prepared   *mobiletor.DesktopWindowsProtectionTarget
-	settlement *windowsprotection.JournalRecord
+	launch          *desktopNodeLaunch
+	policy          *mobilemultihop.DesktopNodePolicy
+	transfer        mobiletor.DesktopProtectionTransferRecord
+	digest          string
+	prepared        *mobiletor.DesktopWindowsProtectionTarget
+	settlement      *windowsprotection.JournalRecord
+	profileRevision string
 }
 
 // The succession slot outlives each runtime directory. A restored original
@@ -47,6 +49,7 @@ type desktopNodeProtectionSlot struct {
 	off                *desktopNodeProtectionOff
 	journal            desktopNodeProtectionJournal
 	journalClosing     bool
+	profileRevision    string // Exact private profile revision captured by the joined successor.
 }
 
 func copyDesktopNodeProtectionTarget(target *mobiletor.DesktopWindowsProtectionTarget) *mobiletor.DesktopWindowsProtectionTarget {
@@ -80,6 +83,9 @@ func (s *desktopNodeProtectionSlot) begin(ctx context.Context, launch *desktopNo
 		return nil, err
 	}
 	attempt := &desktopNodeProtectionAttempt{launch: launch, policy: policy, transfer: transfer, digest: digest}
+	if launch.ownedNode != nil {
+		attempt.profileRevision = launch.ownedNode.profileToken
+	}
 	if err := s.advanceGenerationLocked(); err != nil {
 		return nil, err
 	}
@@ -142,11 +148,13 @@ func (s *desktopNodeProtectionSlot) finish(ctx context.Context, attempt *desktop
 	}
 	if target == nil {
 		s.binding = desktopNodeProtectionBinding{}
+		s.profileRevision = ""
 	} else if target.Capture.SessionID == attempt.policy.Metadata().SessionID && target.Capture.SourceSHA256 == attempt.policy.Metadata().SourceSHA256 {
 		// A failed trial may return its unchanged predecessor. Only a proved
 		// successor acquires the new profile/source binding.
 		meta := attempt.policy.Metadata()
 		s.binding = desktopNodeProtectionBinding{ProfileID: meta.ProfileID, SourceSHA256: meta.SourceSHA256}
+		s.profileRevision = attempt.profileRevision
 	}
 	s.target, s.active, s.known = target, nil, true
 	return nil
@@ -190,8 +198,8 @@ func (s *desktopNodeProtectionSlot) release(ctx context.Context) error {
 	if !s.known || s.active != nil || s.off != nil || s.backend.read == nil || s.backend.release == nil {
 		return errors.New("native protection is still active or unknown")
 	}
-	if s.journal != nil && s.target != nil {
-		return errors.New("native journal release requires its durable removal transaction")
+	if _, durable := s.retirement.(*desktopNodeJournalRelease); durable || s.journal != nil && s.target != nil {
+		return s.releaseJournalLocked(ctx)
 	}
 	if s.target == nil {
 		if s.retirement != nil {
@@ -246,6 +254,7 @@ func (s *desktopNodeProtectionSlot) release(ctx context.Context) error {
 	}
 	if expected == nil {
 		s.binding = desktopNodeProtectionBinding{}
+		s.profileRevision = ""
 	}
 	s.target, s.retirement, s.retirementPrepared = expected, nil, false
 	return nil
