@@ -170,7 +170,11 @@ func (s *Box) routerVPNDesktopNodeActivatePhysical(policy *mobilemultihop.Deskto
 	owner := &RouterVPNDesktopNodePhysical{instance: s, ctx: ctx, policy: policy, network: network,
 		inbound: inbound, reader: reader, interfaceName: options.InterfaceName}
 	name, index, mtu, err := reader.RouterVPNDesktopMTU(owner.generationCurrent)
-	if err != nil || name != options.InterfaceName || index < 1 || mtu != capture.ConfiguredMTU {
+	expectedMTU := capture.ConfiguredMTU
+	if restored := policy.Metadata().RestoredMTU; restored != 0 {
+		expectedMTU = restored
+	}
+	if err != nil || name != options.InterfaceName || index < 1 || mtu != expectedMTU {
 		return nil, errors.New("Router node native TUN differs from its captured graph")
 	}
 	if err := network.BindPhysicalTunnel(ctx, name, uint32(index)); err != nil {

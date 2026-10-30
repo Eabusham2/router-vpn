@@ -18,7 +18,14 @@ import (
 // NodeProfile authority. The public argument only constrains its expected
 // desktop identity and cannot install a socket factory by itself.
 func routerVPNNodeCommandPhysical(files *routerVPNExternalFiles, session, config, source string) (*mobilemultihop.DesktopNodePolicy, error) {
+	return routerVPNNodeCommandPhysicalWithMTU(files, session, config, source, 0)
+}
+
+func routerVPNNodeCommandPhysicalWithMTU(files *routerVPNExternalFiles, session, config, source string, restoredMTU int) (*mobilemultihop.DesktopNodePolicy, error) {
 	if source == "" {
+		if restoredMTU != 0 {
+			return nil, routerVPNExternalFailure
+		}
 		return nil, nil
 	}
 	if runtime.GOOS != "windows" || files == nil || !routerVPNExternalSource.MatchString(source) {
@@ -33,7 +40,7 @@ func routerVPNNodeCommandPhysical(files *routerVPNExternalFiles, session, config
 	if err != nil {
 		return nil, routerVPNExternalFailure
 	}
-	policy, err := mobilemultihop.NewDesktopNodePolicy(original, session, runtime.GOOS)
+	policy, err := mobilemultihop.NewDesktopNodePolicyWithMTU(original, session, runtime.GOOS, restoredMTU)
 	if err != nil {
 		return nil, routerVPNExternalFailure
 	}

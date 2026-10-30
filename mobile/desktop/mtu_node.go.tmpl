@@ -302,16 +302,18 @@ func (owner *routerVPNNodeMTU) command(request routerVPNNodeMTUCommand) error {
 
 func init() {
 	var directory, session, config, physicalSource, physicalTransfer string
+	var physicalMTU int
 	command := &cobra.Command{Use: "routervpn-node", Short: "Run one captured Router VPN node and its retained TUN", Args: cobra.NoArgs, SilenceUsage: true, RunE: func(*cobra.Command, []string) error {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		return routerVPNRunNodeMTUWithPhysical(ctx, directory, session, config, physicalSource, physicalTransfer)
+		return routerVPNRunNodeMTUWithPhysicalMTU(ctx, directory, session, config, physicalSource, physicalTransfer, physicalMTU)
 	}}
 	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private runtime directory")
 	command.Flags().StringVar(&session, "session", "", "captured runtime identity")
 	command.Flags().StringVar(&config, "config-sha256", "", "captured configuration digest")
 	command.Flags().StringVar(&physicalSource, "physical-source-sha256", "", "captured derived physical owner identity")
 	command.Flags().StringVar(&physicalTransfer, "physical-transfer-sha256", "", "captured private protection predecessor record")
+	command.Flags().IntVar(&physicalMTU, "physical-mtu", 0, "captured live TUN value for sealed connection restoration")
 	mainCommand.AddCommand(command)
 }
 
@@ -320,6 +322,10 @@ func routerVPNRunNodeMTU(parent context.Context, directory, session, config stri
 }
 
 func routerVPNRunNodeMTUWithPhysical(parent context.Context, directory, session, config, physicalSource, physicalTransfer string) (failure error) {
+	return routerVPNRunNodeMTUWithPhysicalMTU(parent, directory, session, config, physicalSource, physicalTransfer, 0)
+}
+
+func routerVPNRunNodeMTUWithPhysicalMTU(parent context.Context, directory, session, config, physicalSource, physicalTransfer string, physicalMTU int) (failure error) {
 	decoded, decodeErr := hex.DecodeString(config)
 	if parent == nil || !routerVPNExternalSession.MatchString(session) || decodeErr != nil || len(decoded) != 32 || hex.EncodeToString(decoded) != config {
 		return routerVPNExternalFailure
@@ -342,7 +348,7 @@ func routerVPNRunNodeMTUWithPhysical(parent context.Context, directory, session,
 	if hex.EncodeToString(digest[:]) != config {
 		return routerVPNExternalFailure
 	}
-	physicalPolicy, err := routerVPNNodeCommandPhysical(files, session, config, physicalSource)
+	physicalPolicy, err := routerVPNNodeCommandPhysicalWithMTU(files, session, config, physicalSource, physicalMTU)
 	if err != nil {
 		return err
 	}

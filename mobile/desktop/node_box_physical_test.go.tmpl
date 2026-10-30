@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"runtime"
 	"strings"
 	"testing"
@@ -40,6 +41,10 @@ type desktopNodeBoxFixture struct {
 }
 
 func newDesktopNodeBoxFixture(t *testing.T, edit func(map[string]any)) *desktopNodeBoxFixture {
+	return newDesktopNodeBoxFixtureWithMTU(t, edit, 0)
+}
+
+func newDesktopNodeBoxFixtureWithMTU(t *testing.T, edit func(map[string]any), restoredMTU int) *desktopNodeBoxFixture {
 	t.Helper()
 	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
 		t.Skip("node native composition fixture requires Linux or Windows")
@@ -57,7 +62,7 @@ func newDesktopNodeBoxFixture(t *testing.T, edit func(map[string]any)) *desktopN
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy, err := mobilemultihop.NewDesktopNodePolicy(original, desktopTorBoxSession, runtime.GOOS)
+	policy, err := mobilemultihop.NewDesktopNodePolicyWithMTU(original, desktopTorBoxSession, runtime.GOOS, restoredMTU)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,5 +254,27 @@ func TestRouterVPNDesktopNodePhysicalBoxRetainsMTUAndExactRollback(t *testing.T)
 	}
 	if _, err := owner.changeMTU(context.Background(), next, 1450, func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) { return original, nil }); err == nil || owner.Current() || f.network.SocketCurrent() {
 		t.Fatal("unrelated replacement result retained the live physical generation")
+	}
+}
+
+func TestRouterVPNDesktopNodePhysicalBoxRestoresCapturedMTU(t *testing.T) {
+	for _, restored := range []int{1280, 1392} {
+		t.Run(fmt.Sprint(restored), func(t *testing.T) {
+			f := newDesktopNodeBoxFixtureWithMTU(t, nil, restored)
+			capture, err := f.policy.Capture()
+			if err != nil || capture.ConfiguredMTU != 1280 || f.policy.Metadata().RestoredMTU != restored {
+				t.Fatal("restoration replaced the saved MTU contract", err)
+			}
+			owner := f.start(t)
+			_, _, actual, err := owner.ClaimTUN(owner.Current)
+			if err != nil || actual != restored {
+				t.Fatal("sealed restored MTU did not match the actual started TUN", err, actual)
+			}
+			// The same valid policy cannot adopt a different live interface MTU.
+			f.tun.mtu++
+			if owner.Current() {
+				t.Fatal("restored native TUN accepted another live MTU")
+			}
+		})
 	}
 }
