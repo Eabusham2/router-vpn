@@ -105,6 +105,11 @@ def mutants():
          "captured protection ancestry allowed a namespace replacement",
          function(path, "func pinProtectionDirectory(", "syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE)",
                   "syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE)")),
+        ("path_windows.go", "metadata-only-ancestor", REQUIRED[14],
+         "captured protection ancestry allowed a namespace replacement",
+         function(path, "func pinProtectionDirectory(",
+                  "syscall.FILE_LIST_DIRECTORY|protectionReadAttributes|protectionReadControl",
+                  "protectionReadAttributes|protectionReadControl")),
     )
 
 
@@ -159,7 +164,7 @@ def execute(go="go"):
         if sources() != before:
             raise ValueError("Protection owner shipping sources changed during the actual native gate")
     print("Native protection preparation passed five strict-record groups, ten native ownership groups, "
-          "seven existing/untrusted-state cases and eight production negative controls. "
+          "seven existing/untrusted-state cases and nine production negative controls. "
           "Firewall mutation, transfer, recovery and ordinary-path activation remain separate requirements.", flush=True)
 
 

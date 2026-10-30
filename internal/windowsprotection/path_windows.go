@@ -141,8 +141,10 @@ func protectionFinalPath(api *protectionNativeAPI, file *protectionObject) (stri
 	return path, file.verify()
 }
 
-// Every ancestor is retained without FILE_SHARE_DELETE. The canonical volume
-// ancestry is pinned too: a DOS alias cannot omit a parent or retarget creation.
+// Every ancestor is retained with FILE_LIST_DIRECTORY and without
+// FILE_SHARE_DELETE. Metadata-only handles do not participate in the sharing
+// check and cannot prevent a rename. The canonical volume ancestry is pinned
+// too: a DOS alias cannot omit a parent or retarget creation.
 // Failed opens remain in the returned list so their caller can join cleanup.
 func pinProtectionDirectory(api *protectionNativeAPI, path string) ([]*protectionObject, string, error) {
 	path, root, err := protectionLocalPath(path)
@@ -160,7 +162,7 @@ func pinProtectionDirectory(api *protectionNativeAPI, path string) ([]*protectio
 			if index >= 0 {
 				current = filepath.Join(current, parts[index])
 			}
-			file, err := openProtectionObject(current, true, protectionReadAttributes|protectionReadControl,
+			file, err := openProtectionObject(current, true, syscall.FILE_LIST_DIRECTORY|protectionReadAttributes|protectionReadControl,
 				syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE)
 			if file != nil {
 				pins = append(pins, file)
@@ -211,7 +213,7 @@ func createProtectionDirectory(api *protectionNativeAPI, path string) (_ *protec
 	if ok == 0 && !errors.Is(callErr, syscall.ERROR_ALREADY_EXISTS) {
 		return nil, fmt.Errorf("create protected administrative directory: %w", callErr)
 	}
-	file, err := openProtectionObject(path, true, protectionReadAttributes|protectionReadControl,
+	file, err := openProtectionObject(path, true, syscall.FILE_LIST_DIRECTORY|protectionReadAttributes|protectionReadControl,
 		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE)
 	if err != nil {
 		return file, err

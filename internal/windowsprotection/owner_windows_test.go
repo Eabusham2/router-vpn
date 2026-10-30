@@ -327,6 +327,58 @@ func protectionFixtureDirectory(t *testing.T, api *protectionNativeAPI, path, sd
 	}
 }
 
+// Creation with a caller-supplied SDDL does not by itself prove how the native
+// object recorded inheritance. Deliberately unprotect only this disposable
+// fixture by its retained handle, then independently read its actual control
+// bits before asking production to reject it.
+func protectionFixtureUnprotect(t *testing.T, api *protectionNativeAPI, path string) {
+	t.Helper()
+	file, err := openProtectionObject(path, true, protectionReadControl|0x00040000, /* WRITE_DAC */
+		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE)
+	if file != nil {
+		defer file.close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	setSecurity, err := api.getSecurity.Dll.FindProc("SetSecurityInfo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	security, err := newProtectionSecurity(api, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer security.close()
+	var acl *protectionACL
+	var present, defaulted uint32
+	ok, _, callErr := api.dacl.Call(uintptr(security.descriptor), uintptr(unsafe.Pointer(&present)),
+		uintptr(unsafe.Pointer(&acl)), uintptr(unsafe.Pointer(&defaulted)))
+	if ok == 0 || present == 0 || acl == nil {
+		t.Fatal("native inherited-DACL fixture has no captured ACL", callErr)
+	}
+	status, _, _ := setSecurity.Call(uintptr(file.handle), 1, /* SE_FILE_OBJECT */
+		4|0x20000000, /* DACL_SECURITY_INFORMATION | UNPROTECTED_DACL_SECURITY_INFORMATION */
+		0, 0, uintptr(unsafe.Pointer(acl)), 0)
+	if status != 0 {
+		t.Fatal("native inherited-DACL fixture could not be applied", syscall.Errno(status))
+	}
+	actual := &protectionSecurity{api: api}
+	defer actual.close()
+	status, _, _ = api.getSecurity.Call(uintptr(file.handle), 1, 1|4, 0, 0, 0, 0,
+		uintptr(unsafe.Pointer(&actual.descriptor)))
+	if status != 0 || actual.descriptor == nil {
+		t.Fatal("native inherited-DACL fixture could not be read back", syscall.Errno(status))
+	}
+	var control uint16
+	var revision uint32
+	ok, _, callErr = api.control.Call(uintptr(actual.descriptor), uintptr(unsafe.Pointer(&control)),
+		uintptr(unsafe.Pointer(&revision)))
+	if ok == 0 || control&0x1000 != 0 {
+		t.Fatalf("native inherited-DACL fixture is still protected: control=%#x error=%v", control, callErr)
+	}
+}
+
 func TestWindowsProtectionPreparedOwnerRejectsUntrustedOrExistingState(t *testing.T) {
 	protectionRequireNative(t)
 	api, err := protectionNative()
@@ -347,8 +399,6 @@ func TestWindowsProtectionPreparedOwnerRejectsUntrustedOrExistingState(t *testin
 				sddl = "O:" + identity.SID + "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
 			case "broad-write":
 				sddl += "(A;OICI;FA;;;BU)"
-			case "inherited":
-				sddl = "O:BAG:BAD:(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
 			case "linked-parent":
 				target := t.TempDir()
 				linked := filepath.Join(machine, "redirected")
@@ -362,6 +412,9 @@ func TestWindowsProtectionPreparedOwnerRejectsUntrustedOrExistingState(t *testin
 				return
 			}
 			protectionFixtureDirectory(t, api, root, sddl)
+			if fault == "inherited" {
+				protectionFixtureUnprotect(t, api, root)
+			}
 			var retained string
 			switch fault {
 			case "legacy-record":
@@ -435,5 +488,18 @@ func TestWindowsProtectionCapturedAncestorsRejectRename(t *testing.T) {
 			}
 			t.Fatal("captured protection ancestry allowed a namespace replacement")
 		}
+	}
+	for index := len(pins) - 1; index >= 0; index-- {
+		if err := pins[index].close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Closing the exact retained handles releases the namespace restriction;
+	// a filesystem or fixture that forbids every rename cannot pass this gate.
+	if err := os.Rename(directory, directory+".moved"); err != nil {
+		t.Fatal("joined ancestor release did not permit fixture rename", err)
+	}
+	if err := os.Rename(directory+".moved", directory); err != nil {
+		t.Fatal("released ancestor fixture could not be restored", err)
 	}
 }
