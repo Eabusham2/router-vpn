@@ -16,6 +16,141 @@ import (
 	"unsafe"
 )
 
+func TestWindowsControllerFoundationPinnedAncestorsRejectReplacement(t *testing.T) {
+	for _, spelling := range []string{"local", "volume-guid", "dos-subdirectory"} {
+		t.Run(spelling, func(t *testing.T) {
+			root := t.TempDir()
+			outer, inner := filepath.Join(root, "captured"), filepath.Join(root, "captured", "inner")
+			if err := os.MkdirAll(inner, 0700); err != nil {
+				t.Fatal(err)
+			}
+			executable := filepath.Join(inner, "captured.exe")
+			fixtureCopy(t, fixtureExecutable(t), executable)
+			path := executable
+			if spelling == "volume-guid" {
+				captured, err := PinImage(executable)
+				if err != nil {
+					t.Fatal(err)
+				}
+				path = captured.Path()
+				if err := captured.Close(); err != nil {
+					t.Fatal(err)
+				}
+			} else if spelling == "dos-subdirectory" {
+				// A DOS alias omits outer from the lexical spelling. The
+				// shipping canonical pass must retain that ancestor too.
+				drive := newFixtureDOSDrive(t, inner)
+				path = drive.name + `\captured.exe`
+			}
+			image, err := PinImage(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer image.Close()
+			original := image.identity
+			current, err := syscall.GetCurrentProcess()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ancestors []syscall.Handle
+			closeAncestors := func() error {
+				var result error
+				for index := len(ancestors) - 1; index >= 0; index-- {
+					if ancestors[index] != 0 {
+						err := syscall.CloseHandle(ancestors[index])
+						result = errors.Join(result, err)
+						if err == nil {
+							ancestors[index] = 0
+						}
+					}
+				}
+				return result
+			}
+			defer func() {
+				if err := closeAncestors(); err != nil {
+					t.Error("captured fixture ancestors did not retire", err)
+				}
+			}()
+			// Retain only the actual shipping directory handles, with their
+			// already-granted access. Close every original Image handle so an
+			// open descendant executable cannot mask metadata-only ancestors.
+			files := 0
+			for _, handle := range image.handles {
+				var info syscall.ByHandleFileInformation
+				if err := syscall.GetFileInformationByHandle(handle, &info); err != nil {
+					t.Fatal(err)
+				}
+				if info.FileAttributes&syscall.FILE_ATTRIBUTE_DIRECTORY == 0 {
+					files++
+					continue
+				}
+				var retained syscall.Handle
+				if err := syscall.DuplicateHandle(current, handle, current, &retained, 0, false, syscall.DUPLICATE_SAME_ACCESS); err != nil {
+					t.Fatal(err)
+				}
+				ancestors = append(ancestors, retained)
+			}
+			if files == 0 || len(ancestors) < 3 {
+				t.Fatal("ancestor fixture did not capture the actual image composition")
+			}
+			if err := image.Close(); err != nil {
+				t.Fatal(err)
+			}
+			for _, directory := range []string{inner, outer} {
+				moved := directory + ".moved"
+				if err := os.Rename(directory, moved); err == nil {
+					restoreErr := os.Rename(moved, directory)
+					t.Fatal("retained executable ancestors permitted namespace replacement after leaf retirement", restoreErr)
+				}
+			}
+			// Metadata-only readback remains permitted while the namespace is
+			// held. It must not require write/delete sharing or weaken a pin.
+			name, _ := syscall.UTF16PtrFromString(inner)
+			metadata, err := syscall.CreateFile(name, 0x80, 0, nil, syscall.OPEN_EXISTING, 0x00200000|0x02000000, 0)
+			if err != nil {
+				t.Fatal("retained executable ancestors blocked metadata-only readback", err)
+			}
+			if err := syscall.CloseHandle(metadata); err != nil {
+				t.Fatal(err)
+			}
+			if err := closeAncestors(); err != nil {
+				t.Fatal(err)
+			}
+			// After exact retirement, prove that this same fixture can replace
+			// the namespace with an equal-byte executable of another identity.
+			// A filesystem/ACL that rejects every rename cannot pass the test.
+			moved := outer + ".retired"
+			if err := os.Rename(outer, moved); err != nil {
+				t.Fatal("joined image ancestor retirement retained its namespace lock", err)
+			}
+			defer func() {
+				if err := os.RemoveAll(outer); err != nil {
+					t.Error("replacement fixture cleanup failed", err)
+					return
+				}
+				if err := os.Rename(moved, outer); err != nil {
+					t.Error("replacement fixture restore failed", err)
+				}
+			}()
+			if err := os.MkdirAll(inner, 0700); err != nil {
+				t.Fatal(err)
+			}
+			fixtureCopy(t, fixtureExecutable(t), executable)
+			replacement, err := PinImage(executable)
+			if err != nil {
+				t.Fatal(err)
+			}
+			actual := replacement.identity
+			if err := replacement.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if actual.VolumeSerialNumber == original.VolumeSerialNumber && actual.FileIndexHigh == original.FileIndexHigh && actual.FileIndexLow == original.FileIndexLow {
+				t.Fatal("released namespace replacement did not create an independent file identity")
+			}
+		})
+	}
+}
+
 func TestWindowsControllerFoundationRetainsGrantedLaunchHandle(t *testing.T) {
 	if !fixtureInRestrictedDACLWorker(t) {
 		return

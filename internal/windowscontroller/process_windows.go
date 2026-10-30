@@ -387,7 +387,10 @@ func (image *Image) pinComponents(path string) error {
 			current = filepath.Join(current, parts[index])
 		}
 		last := index == len(parts)-1
-		access, share, flags := uint32(0x80), uint32(syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE), uint32(0x00200000|0x02000000)
+		// Metadata-only directory access is exempt from Windows sharing
+		// checks. Include a data-read right so omitting FILE_SHARE_DELETE
+		// actually pins each ancestor against namespace replacement.
+		access, share, flags := uint32(syscall.FILE_LIST_DIRECTORY|0x80), uint32(syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE), uint32(0x00200000|0x02000000)
 		if last {
 			access, share, flags = syscall.GENERIC_READ, syscall.FILE_SHARE_READ, 0x00200000
 		}

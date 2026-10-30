@@ -54,6 +54,7 @@ REQUIRED = (
     "TestWindowsControllerFoundationSuspendedCallbackRefusal",
     "TestWindowsControllerFoundationLimitedTokenThreadAccess",
     "TestWindowsControllerFoundationConstructedMediumThreadAccess",
+    "TestWindowsControllerFoundationPinnedAncestorsRejectReplacement",
 )
 
 
@@ -109,6 +110,9 @@ def mutants():
          "pinned image allowed a concurrent writer",
          once(process, "access, share, flags = syscall.GENERIC_READ, syscall.FILE_SHARE_READ, 0x00200000",
               "access, share, flags = syscall.GENERIC_READ, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, 0x00200000")),
+        ("process_windows.go", "image-ancestor-data-access", REQUIRED[30],
+         "retained executable ancestors permitted namespace replacement after leaf retirement",
+         once(process, "uint32(syscall.FILE_LIST_DIRECTORY|0x80)", "uint32(0x80)")),
         ("process_windows.go", "image-hardlink", REQUIRED[9],
          "hardlinked executable was admitted as one owned image",
          once(process, "info.FileAttributes&syscall.FILE_ATTRIBUTE_DIRECTORY != 0 || info.NumberOfLinks != 1",
