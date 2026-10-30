@@ -47,6 +47,106 @@ class NativeCall:
         return self.implementation(*arguments)
 
 
+class ProcessLibrary:
+    """Darwin ABI double for the actual shipping inventory function."""
+    def __init__(self, pids=(101,), paths=None, count=None, inventory=None):
+        self.pids, self.paths = pids, dict(paths or {})
+        self.count = count if count is not None else (len(pids), errno.EBUSY)
+        self.inventory = list(inventory or [(len(pids), errno.EBUSY)])
+        self.calls = []
+        self.proc_listallpids = NativeCall(self.list_pids)
+        self.proc_pidpath = NativeCall(self.pid_path)
+
+    def list_pids(self, buffer, size):
+        self.calls.append(('count' if buffer is None else 'inventory', ctypes.get_errno()))
+        if buffer is None:
+            if size != 0: raise AssertionError('Native PID sizing lost its null-buffer ABI')
+            result, error = self.count
+        else:
+            if size != ctypes.sizeof(buffer): raise AssertionError('Native PID inventory used count instead of bytes')
+            for index, pid in enumerate(self.pids): buffer[index] = pid
+            result, error = self.inventory[0]
+            if len(self.inventory) > 1: self.inventory.pop(0)
+        if error is not None: ctypes.set_errno(error)
+        return result
+
+    def pid_path(self, pid, buffer, size):
+        self.calls.append((pid, ctypes.get_errno()))
+        if size != 4096: raise AssertionError('Native executable path lost its bounded capture')
+        result, error = self.paths.get(pid, (b'/fixture/native-owner', errno.EBUSY))
+        if error is not None: ctypes.set_errno(error)
+        if isinstance(result, bytes):
+            ctypes.memmove(buffer, result, min(len(result), size))
+            return len(result)
+        return result
+
+
+class MacProcessInventory(unittest.TestCase):
+    installer = M
+
+    def read(self, library):
+        with mock.patch.object(self.installer.sys, 'platform', 'darwin'), \
+             mock.patch.object(self.installer.ctypes, 'CDLL', return_value=library) as load_library:
+            result = self.installer.running_executables()
+        load_library.assert_called_once_with('/usr/lib/libproc.dylib', use_errno=True)
+        return result
+
+    def test_actual_inventory_captures_native_paths_and_clears_errno_for_each_call(self):
+        library = ProcessLibrary(pids=(0, -1, 101, 102))
+        ctypes.set_errno(errno.ESRCH)
+        self.assertEqual(self.read(library), ['/fixture/native-owner'] * 2)
+        self.assertEqual(library.calls, [('count', 0), ('inventory', 0), (101, 0), (102, 0)])
+        self.assertEqual(library.proc_listallpids.argtypes, [ctypes.c_void_p, ctypes.c_int])
+        self.assertEqual(library.proc_pidpath.argtypes, [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32])
+
+    def test_only_esrch_proves_a_missing_process(self):
+        library = ProcessLibrary(pids=(101, 102), paths={101: (0, errno.ESRCH)})
+        self.assertEqual(self.read(library), ['/fixture/native-owner'])
+        self.assertEqual(library.calls[-2:], [(101, 0), (102, 0)])
+
+    def test_unknown_or_denied_paths_fail_closed_with_only_numeric_diagnostics(self):
+        for error in (errno.EPERM, errno.EACCES, errno.EIO, errno.EINVAL, 0):
+            for returned in (0, -1):
+                with self.subTest(error=error, returned=returned):
+                    library = ProcessLibrary(pids=(101, 102), paths={
+                        101: (b'/private/unrelated-process-name', None), 102: (returned, error)})
+                    with self.assertRaises(RuntimeError) as failure:
+                        self.read(library)
+                    self.assertEqual(str(failure.exception),
+                        'Cannot prove the previous native processes have exited '
+                        f'(pid=102, errno={error}, result={returned})')
+                    self.assertNotIn('/private/', str(failure.exception))
+
+    def test_previous_esrch_cannot_hide_a_zero_result_without_errno(self):
+        library = ProcessLibrary(pids=(101, 102), paths={101: (0, errno.ESRCH), 102: (0, None)})
+        with self.assertRaisesRegex(RuntimeError, r'pid=102, errno=0, result=0'):
+            self.read(library)
+
+    def test_inventory_count_and_capture_are_bounded_before_path_queries(self):
+        for count in (-1, 0, 1000000):
+            with self.subTest(count=count):
+                library = ProcessLibrary(count=(count, errno.EIO))
+                with self.assertRaisesRegex(RuntimeError, f'count={count}, errno={errno.EIO}'):
+                    self.read(library)
+                self.assertEqual(library.calls, [('count', 0)])
+        for actual in (-1, 0, 129, 130):
+            with self.subTest(actual=actual):
+                library = ProcessLibrary(inventory=[(actual, errno.EIO)])
+                with self.assertRaisesRegex(RuntimeError, f'count={actual}, capacity=129, errno={errno.EIO}'):
+                    self.read(library)
+                self.assertEqual(library.calls, [('count', 0), ('inventory', 0)] * 4)
+
+    def test_full_inventory_retries_then_accepts_only_a_complete_capture(self):
+        library = ProcessLibrary(inventory=[(129, 0), (1, 0)])
+        self.assertEqual(self.read(library), ['/fixture/native-owner'])
+        self.assertEqual(library.calls, [('count', 0), ('inventory', 0)] * 2 + [(101, 0)])
+
+    def test_truncated_native_identity_is_not_accepted(self):
+        library = ProcessLibrary(paths={101: (4096, 0)})
+        with self.assertRaisesRegex(RuntimeError, r'identity was truncated \(pid=101, result=4096\)'):
+            self.read(library)
+
+
 class QuarantineLibrary:
     """Darwin ABI double; paths and descriptor ownership remain real."""
     def __init__(self, values=None):
@@ -499,6 +599,8 @@ def main():
         if sudo is None: raise RuntimeError('Installer ownership tests require actual root in temporary directories')
         raise SystemExit(subprocess.run([sudo, '-n', '--', sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]]).returncode)
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(MacInstallTransactions))
+    if not result.wasSuccessful(): raise SystemExit(1)
+    result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(MacProcessInventory))
     if not result.wasSuccessful(): raise SystemExit(1)
     for before, after, case in (
         ('with FILES.installation_lock(root):', 'with __import__("contextlib").nullcontext():', 'test_live_install_lock_prevents_even_service_probe'),

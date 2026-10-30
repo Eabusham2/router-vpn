@@ -382,15 +382,20 @@ def running_executables():
     library.proc_pidpath.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
     library.proc_pidpath.restype = ctypes.c_int
     for attempt in range(4):
+        ctypes.set_errno(0)
         count = library.proc_listallpids(None, 0)
+        count_error = ctypes.get_errno()
         if not 0 < count < 1000000:
-            raise RuntimeError('Cannot bound the native process inventory')
+            raise RuntimeError(f'Cannot bound the native process inventory (count={count}, errno={count_error})')
         array = (ctypes.c_int * (count + 128))()
+        ctypes.set_errno(0)
         actual = library.proc_listallpids(array, ctypes.sizeof(array))
+        inventory_error = ctypes.get_errno()
         if 0 < actual < len(array):
             break
     else:
-        raise RuntimeError('The native process inventory kept changing during capture')
+        raise RuntimeError('Cannot capture the complete native process inventory after 4 attempts '
+                           f'(count={actual}, capacity={len(array)}, errno={inventory_error})')
     paths = []
     for pid in array[:actual]:
         if pid <= 0:
@@ -398,12 +403,17 @@ def running_executables():
         buffer = ctypes.create_string_buffer(4096)
         ctypes.set_errno(0)
         size = library.proc_pidpath(pid, buffer, len(buffer))
+        error = ctypes.get_errno()
         if size <= 0:
-            if ctypes.get_errno() == errno.ESRCH:
+            if error == errno.ESRCH:
                 continue
-            raise RuntimeError('Cannot prove the previous native processes have exited')
+            # libproc returns zero for syscall errors and for an empty path.
+            # Only ESRCH proves disappearance. Keep unknown/denied identities
+            # fail-closed and report numeric diagnostics without process paths.
+            raise RuntimeError('Cannot prove the previous native processes have exited '
+                               f'(pid={pid}, errno={error}, result={size})')
         if size >= len(buffer):
-            raise RuntimeError('Native executable identity was truncated')
+            raise RuntimeError(f'Native executable identity was truncated (pid={pid}, result={size})')
         paths.append(os.fsdecode(buffer.raw[:size]))
     return paths
 
