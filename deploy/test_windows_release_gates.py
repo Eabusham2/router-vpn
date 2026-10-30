@@ -35,6 +35,7 @@ PACKAGE_FILES = (
     "client/RouterVPN-Windows-App.ps1",
     "client/RouterVPN-Windows-ControllerTransport.psm1",
     "client/RouterVPN-Windows-ControllerTransport.cs",
+    "client/RouterVPN-Windows-UIState.psm1",
     "client/RouterVPN-Windows-ProfileSettings.ps1",
     "client/RouterVPN-Windows-Product-v2.ps1",
     "client/RouterVPN-Windows-UnifiedShell.ps1",
@@ -463,6 +464,16 @@ class WindowsReleaseGateTests(unittest.TestCase):
             (package / "client/test-windows-home-dns.ps1").unlink()
             with self.assertRaisesRegex(ValueError, "missing client/test-windows-home-dns.ps1"):
                 run_packaged(package, "pwsh", lambda _: self.fail("missing package invoked a harness"))
+
+    def test_missing_captured_ui_state_dependency_blocks_both_runtime_gates(self):
+        # ProfileSettings and the composed App now import this actual package
+        # module. A checkout copy must not satisfy an incomplete release.
+        with tempfile.TemporaryDirectory(prefix="routervpn-release-state-dependency-") as directory:
+            package = self.fixture(directory)
+            (package / "client/RouterVPN-Windows-UIState.psm1").unlink()
+            for shell in ("pwsh", "powershell.exe"):
+                with self.assertRaisesRegex(ValueError, "missing client/RouterVPN-Windows-UIState.psm1"):
+                    run_packaged(package, shell, lambda _: self.fail("missing UI state dependency invoked a harness"))
 
 
 def main() -> None:
