@@ -757,6 +757,7 @@ require("server/scripts/generate-setup-assets.py", "private router credentials",
 
 # Execute the focused Python behavior contracts from the authoritative gate.
 for test in (
+    "deploy/test_durable_state_audit_entrypoint.py",
     "server/finalize/test_sync_endpoint.py",
     "server/scripts/test_atomic_private_publication.py",
     "server/scripts/test_dns_benchmark_persistence.py",
