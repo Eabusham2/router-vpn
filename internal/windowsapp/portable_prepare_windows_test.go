@@ -57,11 +57,25 @@ func assertPortablePrivateNative(t *testing.T, path, desktop string, directory b
 	if err != nil {
 		t.Fatal(err)
 	}
-	file, err := portableOpenExisting(path, directory, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE)
+	// This is an independent readback, not a preparation or ACL-hardening
+	// operation. The running controller deliberately holds non-delete pins on
+	// Data and immutable inputs. MAXIMUM_ALLOWED would unnecessarily request
+	// write/delete access and conflict with those correct live owners.
+	name, err := syscall.UTF16PtrFromString(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	handle, err := syscall.CreateFile(name, 0x00020000|0x80, /* READ_CONTROL | FILE_READ_ATTRIBUTES */
+		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE, nil, syscall.OPEN_EXISTING,
+		syscall.FILE_FLAG_OPEN_REPARSE_POINT|syscall.FILE_FLAG_BACKUP_SEMANTICS, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := os.NewFile(uintptr(handle), path)
 	defer file.Close()
+	if _, err := portableFileIdentity(file, directory); err != nil {
+		t.Fatal(err)
+	}
 	security, err := portableInspectSecurity(api, file)
 	if err != nil {
 		t.Fatal(err)
@@ -82,6 +96,37 @@ func assertPortablePrivateNative(t *testing.T, path, desktop string, directory b
 	}
 	if !effective {
 		t.Fatal("actual Portable object has no effective private grant")
+	}
+}
+
+func TestWindowsPortableInspectionPreservesLivePins(t *testing.T) {
+	const sharingViolation = syscall.Errno(32) // ERROR_SHARING_VIOLATION
+	_, packageRoot, dataRoot, desktop := portableNativeFixture(t)
+	if err := preparePortableCaptured(context.Background(), packageRoot, dataRoot, desktop, func() error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dataRoot, "client.json")
+	captured, err := windowscontroller.PinFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer captured.Close()
+	assertPortablePrivateNative(t, dataRoot, desktop, true)
+	assertPortablePrivateNative(t, path, desktop, false)
+	if file, err := os.OpenFile(path, os.O_WRONLY, 0); err == nil {
+		file.Close()
+		t.Fatal("Portable ACL inspection released the actual immutable file pin")
+	} else if !errors.Is(err, sharingViolation) {
+		t.Fatal("Portable write rejection did not witness its retained file pin", err)
+	}
+	if err := os.Rename(dataRoot, dataRoot+"-replaced"); !errors.Is(err, sharingViolation) && !errors.Is(err, syscall.ERROR_ACCESS_DENIED) {
+		t.Fatal("Portable ACL inspection released the actual non-delete ancestry pin", err)
+	}
+	if err := captured.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(dataRoot, dataRoot+"-released"); err != nil {
+		t.Fatal("retired Portable pin did not release its exact inspected directory", err)
 	}
 }
 

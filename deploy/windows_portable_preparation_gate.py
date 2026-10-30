@@ -17,6 +17,7 @@ REQUIRED = (
     "TestWindowsPortableRejectsUnsafeAndInvalidState",
     "TestWindowsPortableCancellationAndPublicationOwnership",
     "TestWindowsPortableRequiresCapturedCore",
+    "TestWindowsPortableInspectionPreservesLivePins",
 )
 NEGATIVE_CASES = ("private-hardlink", "data-link", "generated-link",
                   "source-hardlink", "invalid-config", "invalid-routers", "existing-lock")
