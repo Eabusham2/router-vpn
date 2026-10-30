@@ -9,6 +9,12 @@ at live `main` `775a7bbde34699ea27868394f7eaae69afd2e781` and ends at
 `main`, pushed normally and verified by a fresh remote-reference read. These
 are publication observations, not an assertion that every native gate passed.
 
+**Later evidence:** the continuation below records source publication through
+`56c7724eeaf3e0a7ac080c728e36016cfe9e3411`. Its native Windows Session result
+supersedes the earlier startup-failure and unimplemented fresh-Portable-preparation
+observations. Earlier observations remain here with their original source identity.
+The current branch may advance after this document; read live `main` before editing.
+
 ## Requirement recovery and preservation
 
 The original 356-item scope, C1–C7, later 32-item product/breakage request,
@@ -51,7 +57,7 @@ Fresh ancestry checks confirmed historical release
 `0dce0cf9902003d4a04eb7f16b643cbd3b802ce8` are already ancestors of this
 continuation. No old recovery package was replayed over newer source.
 
-## Published changes
+## Published changes at the initial inventory cutoff
 
 The table records each publication, not a claim that its complete product
 requirement is closed. Executed native results and outstanding boundaries
@@ -94,7 +100,7 @@ follow it.
 | [`21a4f0a7`](https://github.com/Eabusham2/router-vpn/commit/21a4f0a70430e2d744e5a796345d11db173a5a51) | Preserve dotted Go test arguments through the actual PowerShell diagnostic invocation |
 | [`e9aa4411`](https://github.com/Eabusham2/router-vpn/commit/e9aa4411841372df94049ac375b1db759cf0dce4) | Use Framework modules for the actual package ACL fixture and isolate Session CI |
 
-## Actual Windows execution
+## Historical Windows execution at the initial inventory cutoff
 
 At [`0fe5db88`, job 123801083431](https://github.com/Eabusham2/router-vpn/actions/runs/40974825453/job/123801083431),
 the real imported-socket/WFP traffic and renewal test passed TCP4, TCP6, UDP4
@@ -165,7 +171,7 @@ suspension, not a usable standard-user or cross-account UAC launch.
 observable without removing the comprehensive gate. No unverified DOS-path
 fallback or public admission was added.
 
-## Actual macOS execution
+## Historical macOS execution at the initial inventory cutoff
 
 At `1e774728`, Intel job `123799860371` passed all three UID-retirement tests
 and the fresh native observer request/reply negatives. Other PF traffic cases
@@ -198,7 +204,7 @@ Their native rerun remains required. The corresponding Linux stream-admission
 repair is `9c982f1d`; these source changes do not establish a current all-green
 Darwin or Linux release.
 
-## Shipping composition and focused local evidence
+## Historical shipping composition and focused local evidence
 
 The Windows child now authenticates its actual launcher pipe peer and retained
 process, captures original-user token folders, validates immutable package
@@ -242,7 +248,7 @@ before pinned-TLS identity proof and cleanup reports a missing shutdown
 receipt. That new startup failure remains under diagnosis. This is not a
 completed UAC, App/Tray or launcher-adoption claim.
 
-## Remaining delivery work
+## Remaining delivery work at the initial inventory cutoff
 
 - Finish and prove installed/Portable launcher adoption, fresh Portable Data
   initialization and stable UAC execution while retaining exact image, token,
@@ -267,3 +273,236 @@ completed UAC, App/Tray or launcher-adoption claim.
 
 No live router, private deployment, credentials or signing environment was
 changed for this continuation record. The preceding ledgers remain preserved.
+
+
+## Later continuation — source snapshot through 56c7724e
+
+This section supersedes the earlier **status** where newer evidence is explicit;
+it does not remove requirements or rewrite historical failures as successes.
+Each listed commit was published directly to `main` with an expected-parent
+check, then fetched back and matched against the exact staged tree. Concurrent
+unfinished changes were preserved. No old recovery snapshot was replayed.
+
+### Further published changes
+
+| Commit | Published change |
+|---|---|
+| [`e0a780bc`](https://github.com/Eabusham2/router-vpn/commit/e0a780bcaae1ea7fd2528e37b244dba353a36ec1) | Record recovered scope and October 30 implementation evidence |
+| [`3b33ccc6`](https://github.com/Eabusham2/router-vpn/commit/3b33ccc65dec8e0e0b035e32914c7e6fc229d53f) | Expose actual Windows main failures without changing the shipping verdict |
+| [`a6f58449`](https://github.com/Eabusham2/router-vpn/commit/a6f58449494b746e410ee0f5e2cc035fcdcfc779) | Prove the suspended Windows Shell image before resuming its exact thread |
+| [`12e8d63c`](https://github.com/Eabusham2/router-vpn/commit/12e8d63ca621a523bd53adbbde8df1b6bf14808a) | Start Darwin foreground control budgets after cancellable native admission |
+| [`fdafe7e0`](https://github.com/Eabusham2/router-vpn/commit/fdafe7e0577d269bc91bcb16d775ccde356c69ac) | Keep canceled Shell launches suspended until exact owned retirement |
+| [`674c8fc9`](https://github.com/Eabusham2/router-vpn/commit/674c8fc9cc9c9c4ee20edfc71e8d916a00c7de6f) | Capture ordinary Windows proxy policy and preserve native proof identities |
+| [`bd7b0bac`](https://github.com/Eabusham2/router-vpn/commit/bd7b0bac2716409ea6fb4ad278473123e134fbb3) | Independently verify the exact prepared Windows deny baseline |
+| [`56e0e4ab`](https://github.com/Eabusham2/router-vpn/commit/56e0e4aba7484468526264a42290e069fc002a6f) | Require captured Windows admission before native tunnel activation |
+| [`1473bfa5`](https://github.com/Eabusham2/router-vpn/commit/1473bfa5d63504405079868edd6f7a1700dd0d81) | Prepare retained Portable data before starting the owned Windows session |
+| [`5b1dc911`](https://github.com/Eabusham2/router-vpn/commit/5b1dc911f142f98c67d1b1ed0209bf1715052434) | Define immutable captured ownership for Windows protection transitions |
+| [`d5e2f181`](https://github.com/Eabusham2/router-vpn/commit/d5e2f181d955d8ddf2d0f53c6ad0b0f8cb8afbb7) | Capture Windows machine folders independently of inherited environment |
+| [`201c70fe`](https://github.com/Eabusham2/router-vpn/commit/201c70fe033fa7b662fead4003b21768314dab37) | Observe real limited-token access to the retained suspended Windows child |
+| [`092534a5`](https://github.com/Eabusham2/router-vpn/commit/092534a5b230f5c723e30eead34fc222fe3fdb68) | Inspect Portable publication cleanup through its retained directory handle |
+| [`08c2e765`](https://github.com/Eabusham2/router-vpn/commit/08c2e7657402164fabfc878fbac66973fec6c364) | Observe actual Windows folder expansion after failed native admission |
+| [`e9d82ec7`](https://github.com/Eabusham2/router-vpn/commit/e9d82ec7a42b4821e69ef12dfe83b4415890985f) | Join bounded parallel macOS PF readback within the captured proof deadline |
+| [`1b7477e8`](https://github.com/Eabusham2/router-vpn/commit/1b7477e811cf74a8fd30e7c56d398d59320270c6) | Retain native Windows protection preparation without adopting old recovery state |
+| [`f5ac5259`](https://github.com/Eabusham2/router-vpn/commit/f5ac52599664f3d5f9c011f3e831e0793f274ca0) | Tie SOCKS UDP associations to joined TCP ownership and synchronized endpoints |
+| [`b9c6c48b`](https://github.com/Eabusham2/router-vpn/commit/b9c6c48b6140de9134ab991593a16a4a20d651e3) | Prove complete retirement of each captured macOS native test namespace |
+| [`33f4eec8`](https://github.com/Eabusham2/router-vpn/commit/33f4eec85c98a098a205169ad98959ab0a297c95) | Resolve registered Windows machine paths from captured kernel roots |
+| [`c763fdd0`](https://github.com/Eabusham2/router-vpn/commit/c763fdd05cac3220ddc7488c922bf4e70d32ea15) | Inspect Portable ACLs without requesting rights denied by live ownership pins |
+| [`febbdcdf`](https://github.com/Eabusham2/router-vpn/commit/febbdcdfe2f6643830a5029c7bbcad53d6ed55fd) | Observe suspended Windows thread access under a separately proved medium token |
+| [`4a981243`](https://github.com/Eabusham2/router-vpn/commit/4a981243f6b3f087a2300535017d8cec23301c33) | Capture bounded native GUI startup diagnostics only after a failed blank Session fixture |
+| [`e68d7818`](https://github.com/Eabusham2/router-vpn/commit/e68d7818df072cdf5347e92345348bf838fa1033) | Probe a retained session-independent Shell image path before cooperative broker work |
+| [`ff1eb963`](https://github.com/Eabusham2/router-vpn/commit/ff1eb9630ba5fff36f094a91288288dd2688c4b5) | Report the actual pinned HTTPS controller transport at startup |
+| [`fa23c6c2`](https://github.com/Eabusham2/router-vpn/commit/fa23c6c21bf082e9d63534e1f62db577fe9b0c3a) | Capture and recompile complete Router node inputs for sealed desktop physical policy |
+| [`c7e60047`](https://github.com/Eabusham2/router-vpn/commit/c7e60047c05ecda8547790b879cc3e1eaf59e69a) | Retain a private Portable temporary directory with a proven CodeDOM-compatible spelling |
+| [`9e1c4c9a`](https://github.com/Eabusham2/router-vpn/commit/9e1c4c9a213bbad9207e3a6e666494b357959786) | Read the actual four-field native package provenance in the update helper |
+| [`f0285785`](https://github.com/Eabusham2/router-vpn/commit/f028578577e5576c907d9f1911b7f8606698fc96) | Probe actual filter-only macOS PF anchor retirement in a fresh owned namespace |
+| [`35ff3999`](https://github.com/Eabusham2/router-vpn/commit/35ff39995d694b47294e2c77acab309e8c791f67) | Retain sharing-relevant Windows protection directory ownership |
+| [`1d65de11`](https://github.com/Eabusham2/router-vpn/commit/1d65de113d2c5276104b3f940101a0e874422058) | Hold Windows executable ancestors against namespace replacement |
+| [`bb8d1ab8`](https://github.com/Eabusham2/router-vpn/commit/bb8d1ab8c14769571d7e8b618e0121724d8c724d) | Keep captured Windows private data and Portable temporary roots in place |
+| [`9c01f77f`](https://github.com/Eabusham2/router-vpn/commit/9c01f77f4608473d6987ea2d16a46c79768ff329) | Preserve exact shared compiler bytes during Windows native preparation |
+| [`aea7be1e`](https://github.com/Eabusham2/router-vpn/commit/aea7be1e10cfde02af351d804a7c426f1894af7d) | Keep Windows update staging in its original user's owned session |
+| [`818b4d14`](https://github.com/Eabusham2/router-vpn/commit/818b4d141518b25ab474d7c5712d548743fb9946) | Preserve CUSTOM preset arrays across Windows PowerShell versions |
+| [`f7247676`](https://github.com/Eabusham2/router-vpn/commit/f7247676fdcaaf57f057bd3235735024149123b8) | Compose captured Router node startup with its native physical owner |
+| [`03b5b658`](https://github.com/Eabusham2/router-vpn/commit/03b5b65804f6ce48ec721d64719f166e28915c50) | Run mandatory Windows saved-state checks independently across both shells |
+| [`3ec8824e`](https://github.com/Eabusham2/router-vpn/commit/3ec8824ee78ecf9f685101175424a1308e32338c) | Enumerate saved CUSTOM presets explicitly and preserve an empty collection |
+| [`253468c5`](https://github.com/Eabusham2/router-vpn/commit/253468c5d545c6c2759aa800eaf72a3d028d416d) | Prove native macOS single-filter transaction commit and rollback ownership |
+| [`12004aa6`](https://github.com/Eabusham2/router-vpn/commit/12004aa665156a42e25ac84442a77d50a9f59fe4) | Capture protected global Windows Shell mappings with retained native identity |
+| [`56c7724e`](https://github.com/Eabusham2/router-vpn/commit/56c7724eeaf3e0a7ac080c728e36016cfe9e3411) | Keep mandatory UAC acceptance separate from native protocol regression execution |
+
+### Windows: actual corrected Session execution
+
+The first complete corrected installed **and fresh Portable** Session job passed
+at [`bb8d1ab8`, job 123938889135](https://github.com/Eabusham2/router-vpn/actions/runs/41018094202/job/123938889135).
+It executed the shipping controller and packaged App/Tray, authenticated both
+native channels, preserved private configuration and UI preferences, obtained
+checked controller retirement and joined the owned processes. Installed
+execution took 50.77 seconds; Portable execution took 8.37 seconds. The same job
+passed retirement retry, foreign-launcher and hardlinked-code rejection, plus
+two compiled production negative controls. Its native Portable preparation
+passed nine groups, seven unsafe-existing-state cases and five production
+negative controls, including real namespace retention and release. This is
+actual Windows/AMD64 execution, not an ARM64 or ordinary-user UAC claim.
+
+The failures leading to this result were concrete. `33f4eec8` reads registered
+machine paths without expanding inherited environment substitutions, using
+captured kernel roots. The actual `33f4eec8` and later short native jobs passed
+ordinary, missing and poisoned environment cases. `c763fdd0` changes only the
+ACL fixture's requested read rights so inspection does not conflict with live
+code pins. Failure-only GUI instrumentation in `4a981243` then showed that
+Windows PowerShell 5.1 CodeDOM rejected the volume-GUID TEMP spelling.
+`c7e60047` captures a DOS spelling that independently resolves to the same
+private Portable generated directory; `bb8d1ab8` gives its retained directory
+handles sharing-relevant read access. That final repair is exercised by the
+successful full Session job above.
+
+The independent executable-ancestor regression also passed at
+[`1d65de11`, job 123938166667](https://github.com/Eabusham2/router-vpn/actions/runs/41017860638/job/123938166667).
+It duplicates only the actual ancestor handles, closes the executable leaf,
+and checks local, volume-GUID and DOS-subdirectory spellings. Rename remains
+blocked until those handles retire; afterward a distinct equal-byte file can
+replace the namespace. This prevents an open executable leaf from masking an
+ineffective directory pin. The protection-record and controller-data variants
+have their own native cases and compiled negative controls; their results must
+be read independently rather than inferred from the image test.
+
+`9e1c4c9a` fixes the updater's parser to accept the actual four-field package
+provenance while rejecting malformed, duplicate and ambiguous fields.
+`aea7be1e` captures the correct installed or Portable provenance file, explicit
+current SHA, original-user private cache and retained updater Job. Windows
+notifications now remain in that process instead of launching an ambient
+PowerShell interpreter. Its exact staged Session fixtures and actual updater
+binaries compiled with pointer checks on AMD64 and ARM64; neutral race tests
+passed. The later actual Windows/AMD64 Session at
+[`03b5b658`, job 123941285563](https://github.com/Eabusham2/router-vpn/actions/runs/41018850334/job/123941285563)
+then passed the complete installed/Portable composition again, all six updater
+preparation groups, seven unsafe-state cases and four actual compiled production
+negative controls. These establish native cache/provenance ownership; network
+update download and public launcher adoption remain separate requirements.
+
+The actual PowerShell 5.1 saved-state failure was reproduced in the shipping
+CUSTOM/profile functions. `818b4d14` materializes JSON before enumerating
+presets and serializes arrays explicitly. A new short mandatory job in
+`03b5b658` preserves both PowerShell versions and all eight executable
+state-ownership negatives independently of the longer controller gate. Its
+[first native result](https://github.com/Eabusham2/router-vpn/actions/runs/41018850334/job/123941285264)
+passed the original preset-preservation boundary and stopped at the added
+empty-collection check. `3ec8824e` explicitly enumerates each preset and checks
+empty JSON structurally, including permitted whitespace. All 51 local state
+checks and eight executable negative controls pass under PowerShell 7.6.9;
+the corrected actual Windows job at
+[`3ec8824e`, job 123942120568](https://github.com/Eabusham2/router-vpn/actions/runs/41019115466/job/123942120568)
+also passed all 51 checks and eight negative controls in **both PowerShell 5.1
+and 7**. The prior failed native observation is preserved above as the diagnosis,
+not carried forward as an unresolved saved-state defect.
+
+**Public launcher adoption and ordinary UAC are still unfinished.** The
+successful Session composition does not replace the installed or Portable
+command entry points by itself. Existing suspended-Shell image/thread proofs
+pass under the elevated native runner, but the actual constructed Medium-token
+probe at `febbdcdf` observes `ERROR_ACCESS_DENIED` when trying to open the
+higher-integrity initial thread. The linked-token test reports that the hosted
+runner has no linked limited token; that unavailable observation is not a pass.
+The `e68d7818` GLOBALROOT Shell probe fails before a creation callback.
+`12004aa6` introduces a separate read-only capture of the protected global
+mapping, exact file and original process identity. Its policies and compiled
+negative controls pass locally, but native mapping/API/ACL execution and a
+cooperative elevated broker remain unproved. No unverified launch fallback was
+adopted.
+
+`56c7724e` separates the exact unchanged linked-token test into an explicit UAC
+acceptance case. Its independent native workflow step remains mandatory and
+still fails when evidence is unavailable. The foundation now has 33 protocol
+cases with all 24 compiled production mutation targets preserved, so unavailable
+linked-token evidence no longer prevents those independent regressions from
+executing. This is test scheduling and evidence separation, not UAC completion.
+
+### Windows: ordinary and private-node physical ownership
+
+`674c8fc9`, `bd7b0bac` and `56e0e4ab` add captured ordinary HTTP/HTTPS/Shadowsocks
+lower-path composition, independently read BFE deny-baseline identity and
+pre-TUN admission. `5b1dc911` and `1b7477e8` define and retain strict prepared
+owner records. Actual native testing exposed an inherited-ACL fixture that had
+not established its intended kernel state, plus metadata-only directory pins
+that did not prevent rename. `35ff3999` fixes the exact-handle fixture and
+sharing access while preserving all security rejection rules. Source schemas
+alone are not complete protection transfer.
+
+At `c7e60047`, both Windows physical jobs (`123935497375` AMD64 and
+`123935497635` ARM64) passed the existing actual selected-DNS/WFP bootstrap and
+Wintun ownership/retirement gates and their negative controls. The subsequent
+ordinary-composition stage failed before testing because the preparer had
+converted shared compiler LF bytes to CRLF. `9c01f77f` fixes byte-preserving
+import relocation, leaving the exact-source verifier intact. Seven policy
+scope tests and two relay-build tests passed; executing the original text-mode
+producer under the native newline behavior reached the intended byte mismatch.
+The corrected ordinary native composition needs its own completed run.
+
+`fa23c6c2` seals and recompiles all 57 captured private node mode/layer inputs,
+including private references and selected DNS/bootstrap policy; 171 desktop
+adaptations and three production negative controls passed. The complete
+`internal/mobilemultihop` race suite passed in 335.599 seconds with the real
+local socket tests enabled. `f7247676` composes the exact native command,
+pre-ready physical owner, eager WG/AWG outer sockets, actual Box startup and
+retained MTU change/rollback. Local race execution includes real encrypted
+WireGuard, AWG Fast and AWG Strong TCP/UDP peers with inner IPv4/IPv6, incorrect
+keys and five production defects. The Windows packages cross-compile on both
+architectures. The new native admission is bounded to Windows WG/AWG with
+Start Layer Off; the shared 57-input scope and older paths remain preserved.
+
+This is **not** automatic controller activation or a combined real-WFP,
+encrypted-peer and physical-TUN acceptance result. Exact predecessor-to-successor
+protection transfer in both directions, retained recovery, and the remaining
+mode/layer compositions are still required. Legacy firewall default-block
+settings can be overridden by unrelated allow rules; an owner record does not
+make that behavior equivalent to the strict native baseline.
+
+`f5ac5259` ties a completed SOCKS UDP association to its exact joined TCP
+control owner, revokes it on control EOF/unexpected data and synchronizes the
+lazy remote endpoint. Real local race tests and four executable broken controls
+passed. This closes that lifetime/race defect; it does not invent dynamic
+per-socket WFP authority for a negotiated relay tuple.
+
+### macOS: current failure and next native transaction evidence
+
+Later native runs passed actual baseline TCP/UDP traffic for both address
+families, UID and process retirement, wrong-UID controls, real utun ownership,
+foreign blocked traffic and bounded capacity cases. `12e8d63c` makes foreground
+admission cancellable before starting its operation budget; `e9d82ec7` bounds
+parallel PF readback within the same captured deadline. These earlier passes do
+not close every current negative gate.
+
+The corrected fixture in `b9c6c48b` requires the complete owned PF anchor to
+leave the kernel inventory. Both Intel and ARM runs exposed that an empty
+`pfctl` load left the anchor present. The independent filter-only `-R` probe in
+`f0285785` also failed on Intel
+([job 123935870586](https://github.com/Eabusham2/router-vpn/actions/runs/41017120262/job/123935870586)):
+the scoped filter was emptied, but its native anchor remained after 0.12
+seconds. This is an actual lifecycle failure; increasing a timeout or accepting
+empty text would not repair it.
+
+`253468c5` adds an explicitly guardian-test-tagged single-FILTER transaction
+probe against the host Apple SDK ABI. It requires real rule readback, empty
+commit inventory absence, populated rollback inventory absence and rejection
+before mutation for wrong namespaces/targets and cancellation. Both ordinary
+Darwin cross-compiles and six runner tests pass; those cross-compiles use the
+explicit unavailable no-cgo adapter and do **not** establish Apple C-header or
+kernel behavior. Actual Intel/ARM SDK execution is pending. The production PF
+loader is unchanged at this snapshot. A production replacement must cover
+initial rule load, owned slot dispatch and cleanup; changing only an empty
+load cannot repair references already retained by an earlier transaction.
+
+### Current remaining delivery boundaries
+
+| Requirement area | Source/result established by this continuation | Still required |
+|---|---|---|
+| Installed/Portable Windows ownership | Real corrected AMD64 Session, fresh private Data, App/Tray, saved configuration and checked retirement | Public command adoption; ordinary/cross-account UAC; actual update-download integration; ARM64 composed execution and packaged release |
+| Native strict protection | Windows physical bootstrap/Wintun evidence; sealed ordinary/Node composition; immutable ownership preparation | Exact both-direction successor transfer, combined actual WFP/peer/TUN evidence, applicable family/layer adoption and safe crash recovery |
+| macOS lifecycle | Actual broad traffic/UID baseline evidence; precise retained-anchor failure reproduced | SDK single-transaction result, genuine loader repair and full Intel/ARM negative gate; current installer/release result |
+| Complete saved profiles/CUSTOM | Original private references and full mode/layer inputs preserved; actual 51-check saved-state regression and eight production defects in both PowerShell 5.1 and 7 | Remaining applicable full-ledger/profile/runtime acceptance |
+| SOCKS UDP | Real TCP-control/UDP lifetime and endpoint race repair | Exact negotiated-relay physical authorization and full off-LAN interoperability |
+| Cross-platform release | Coherent changes published with verified normal ancestry | One exact current SHA through all required native builds, packages, images, compose, manifests, checksums and publication |
+| Live/device acceptance | No new private deployment or physical acceptance claimed | Authorized devices, off-LAN networking/leaks/transitions, visual/accessibility, private performance/forwarding/rollback/provider checks, signing and deliberate deployment |
+
+The broader requirement ledger remains binding. No percentage or all-feature
+completion follows from this table, a passing source audit or an isolated
+native job. The Router/AI Board, ASUS forwarding, AdGuard, signing identities
+and private deployment were not changed during these source publications.
