@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"syscall"
@@ -596,6 +597,90 @@ func TestRouterVPNDesktopNodeWindowsWFPEncryptedTraffic(t *testing.T) {
 	}
 }
 
+// SourceSHA256 and ConfigSHA256 identify the per-session desktop adaptation.
+// A restored original keeps every Original* digest and saved policy field,
+// while a fresh session necessarily creates different derived runtime hashes.
+func desktopNodeWFPCheckRestoration(first, restored *mobilemultihop.DesktopNodePolicy,
+	firstTarget, restoredTarget mobiletor.DesktopWindowsProtectionTarget) error {
+	if first == nil || restored == nil || first.Validate() != nil || restored.Validate() != nil ||
+		firstTarget.Validate() != nil || restoredTarget.Validate() != nil {
+		return errors.New("restoration lost its sealed policy or captured native target")
+	}
+	before, after := first.Metadata(), restored.Metadata()
+	if before.TargetOS != "windows" || after.TargetOS != "windows" ||
+		firstTarget.Capture.SessionID != before.SessionID || firstTarget.Capture.SourceSHA256 != before.SourceSHA256 ||
+		restoredTarget.Capture.SessionID != after.SessionID || restoredTarget.Capture.SourceSHA256 != after.SourceSHA256 ||
+		firstTarget.Policy != before.KillSwitchPolicy || restoredTarget.Policy != after.KillSwitchPolicy {
+		return errors.New("restoration target differs from its actual sealed desktop policy")
+	}
+	if after.SessionID == before.SessionID || after.SourceSHA256 == before.SourceSHA256 || after.ConfigSHA256 == before.ConfigSHA256 {
+		return errors.New("restoration reused its previous runtime identity")
+	}
+	// Normalize only the three session-derived fields. Original source/config/
+	// metadata/capture, roots, TUN, DNS-bound source, mode and saved device policy
+	// must remain equal; no selected-current profile can replace this capture.
+	before.SessionID, before.SourceSHA256, before.ConfigSHA256 = "", "", ""
+	after.SessionID, after.SourceSHA256, after.ConfigSHA256 = "", "", ""
+	if !reflect.DeepEqual(before, after) {
+		return errors.New("restoration replaced the saved source or policy")
+	}
+	return nil
+}
+
+func TestRouterVPNDesktopNodeWindowsWFPRestorationCapture(t *testing.T) {
+	// These are real sealed compiler outputs and explicit comparison-only
+	// target values. Actual BFE/traffic restoration is exercised separately below.
+	config, options := desktopReferenceFixture(t)
+	ip := netip.MustParseAddr("192.0.2.1")
+	remote := netip.MustParseAddrPort("192.0.2.1:51820")
+	original := desktopNodePeerOriginal(t, "wg", config, options, ip, remote, false, false, "always")
+	policy := func(source *mobilemultihop.NodeProfile, session string, mtu int) *mobilemultihop.DesktopNodePolicy {
+		t.Helper()
+		result, err := mobilemultihop.NewDesktopNodePolicyWithMTU(source, session, "windows", mtu)
+		if err != nil {
+			t.Fatal("restoration comparison fixture lost its sealed source", err)
+		}
+		return result
+	}
+	target := func(p *mobilemultihop.DesktopNodePolicy) mobiletor.DesktopWindowsProtectionTarget {
+		meta := p.Metadata()
+		return mobiletor.DesktopWindowsProtectionTarget{Capture: mobiletor.DesktopSocketCapture{
+			SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, NetworkID: strings.Repeat("3", 32)},
+			Policy: meta.KillSwitchPolicy, BaselineSHA256: meta.ConfigSHA256}
+	}
+	first := policy(original, strings.Repeat("1", 32), 0)
+	restored := policy(original, strings.Repeat("2", 32), 0)
+	if err := desktopNodeWFPCheckRestoration(first, restored, target(first), target(restored)); err != nil {
+		t.Fatal("fresh runtime did not preserve its actual saved original", err)
+	}
+	for _, fault := range []string{"source", "policy", "mtu", "session-reuse", "stale-target", "target-source"} {
+		t.Run(fault, func(t *testing.T) {
+			candidate := restored
+			switch fault {
+			case "source":
+				replaced := desktopNodePeerOriginal(t, "wg", config, options, ip, remote, true, false, "always")
+				candidate = policy(replaced, strings.Repeat("2", 32), 0)
+			case "policy":
+				replaced := desktopNodePeerOriginal(t, "wg", config, options, ip, remote, false, false, "on-connect")
+				candidate = policy(replaced, strings.Repeat("2", 32), 0)
+			case "mtu":
+				candidate = policy(original, strings.Repeat("2", 32), 1392)
+			case "session-reuse":
+				candidate = policy(original, first.Metadata().SessionID, 0)
+			}
+			capture := target(candidate)
+			if fault == "stale-target" {
+				capture = target(first)
+			} else if fault == "target-source" {
+				capture.Capture.SourceSHA256 = first.Metadata().SourceSHA256
+			}
+			if err := desktopNodeWFPCheckRestoration(first, candidate, target(first), capture); err == nil {
+				t.Fatal("restoration accepted a replaced source, reused session or stale native target", fault)
+			}
+		})
+	}
+}
+
 func TestRouterVPNDesktopNodeWindowsWFPEncryptedSuccession(t *testing.T) {
 	if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
 		t.Fatal(err)
@@ -628,8 +713,8 @@ func TestRouterVPNDesktopNodeWindowsWFPEncryptedSuccession(t *testing.T) {
 		t.Fatal("exact reverse WFP encrypted startup failed", err)
 	}
 	retained = restored.prepared
-	if retained.Capture.SourceSHA256 != firstTarget.Capture.SourceSHA256 || retained.Capture == firstTarget.Capture || retained.Policy != "always" {
-		t.Fatal("real encrypted restoration replaced the saved source or reused its old session")
+	if err := desktopNodeWFPCheckRestoration(first.policy, restored.policy, firstTarget, retained); err != nil || retained.Policy != "always" {
+		t.Fatal("real encrypted restoration replaced the saved source or reused its old session", err)
 	}
 	first.network.InterfaceUpdated(context.Background())
 	if err := first.close(); err != nil {

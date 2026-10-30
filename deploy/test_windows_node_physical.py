@@ -24,7 +24,7 @@ RESOURCES = ROOT / "deploy/fixtures/windows-node-physical"
 TAG = b"//go:build windows && routervpn_windows_node_composition\n"
 TAGS = (*NODE.TAGS, "routervpn_windows_node_composition")
 REQUIRED = tuple("TestRouterVPNDesktopNodeWindowsWFP" + suffix for suffix in (
-    "EncryptedTraffic", "EncryptedSuccession", "RejectsForeignPredecessor", "WrongPeerRejected"))
+    "EncryptedTraffic", "EncryptedSuccession", "RejectsForeignPredecessor", "WrongPeerRejected", "RestorationCapture"))
 
 
 def checked_sources(source):
