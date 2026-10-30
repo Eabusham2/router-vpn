@@ -59,6 +59,17 @@ SHARED_TESTS = (
     "TestDesktopNodeJournalReleaseRequiresActualBarrierAcknowledgment",
     "TestDesktopNodeJournalReleaseKeepsSeparateOffGate",
     "TestDesktopNodeJournalReleaseJoinsLateNativeBarrier",
+    "TestDesktopNodeJournalOffOrdersRemovalSaveAndSettlement",
+    "TestDesktopNodeJournalOffRetainsIntentUntilProfileSave",
+    "TestDesktopNodeJournalOffSavedResultRetryKeepsTokenAndOwner",
+    "TestDesktopNodeJournalOffSavedReadbackRetainsExactOwner",
+    "TestDesktopNodeJournalOffRejectsReplacementRevision",
+    "TestDesktopNodeJournalOffRejectsUncapturedDurability",
+    "TestDesktopNodeJournalOffRejectsSubstitutedBarrier",
+    "TestDesktopNodeJournalOffRetriesNativeAndIntentFailures",
+    "TestDesktopNodeJournalOffDoesNotPublishBeforeNativeProof",
+    "TestDesktopNodeJournalOffHTTPReportsActualSavedPendingResult",
+    "TestDesktopNodeJournalOffJoinsLateNativeBarrier",
 )
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
@@ -80,6 +91,9 @@ REQUIRED_SOURCES = (
     "cmd/client/desktop_node_journal_windows.go",
     "cmd/client/desktop_node_journal_release.go", "cmd/client/desktop_node_journal_release_test.go",
     "cmd/client/desktop_node_protection.go", "cmd/client/desktop_node_protection_windows.go",
+    "cmd/client/desktop_node_protection_off.go", "cmd/client/desktop_node_protection_off_test.go",
+    "cmd/client/desktop_node_journal_off.go", "cmd/client/desktop_node_journal_off_test.go",
+    "cmd/client/profile_protection.go", "cmd/client/profile_protection_owned.go", "cmd/client/profile_protection_owned_test.go",
     "cmd/client/controller_privilege_windows.go",
     "cmd/client/private_runtime_permissions_windows.go",
     "cmd/client/private_store.go", "cmd/client/private_store_replace_windows.go",
@@ -136,6 +150,12 @@ def mutants():
     release = (ROOT / release_file).read_text(encoding="utf-8")
     private_file = "cmd/client/private_store_replace_windows.go"
     private = (ROOT / private_file).read_text(encoding="utf-8")
+    off_file = "cmd/client/desktop_node_journal_off.go"
+    off = (ROOT / off_file).read_text(encoding="utf-8")
+    off_capture_file = "cmd/client/desktop_node_protection_off.go"
+    off_capture = (ROOT / off_capture_file).read_text(encoding="utf-8")
+    profile_file = "cmd/client/profile_protection_owned.go"
+    profile = (ROOT / profile_file).read_text(encoding="utf-8")
     once = NATIVE.replace_once
     alive = NATIVE.function_mutant(original, "func (owner *desktopNodeProcessOwner) Alive()",
         "\tif err := owner.controller(); err != nil {\n\t\treturn err\n\t}\n", "")
@@ -174,6 +194,18 @@ def mutants():
         (private_file, "private-publication-without-write-through", "TestWindowsPrivateStoreWriteThroughFlags",
          "private replacement omitted write-through or permitted deferred/cross-volume publication",
          once(private, "windowsPrivateReplaceExisting|windowsPrivateWriteThrough", "windowsPrivateReplaceExisting")),
+        (off_file, "off-before-durable-intent", "TestDesktopNodeJournalOffOrdersRemovalSaveAndSettlement/always",
+         "explicit Off removed protection before its durable intent",
+         once(off, "\tif err := writeDesktopNodeJournalReleaseRecord(ctx, j.store, j.head, j.intent); err != nil {\n\t\treturn err\n\t}\n", "")),
+        (off_file, "off-accepts-normal-release", "TestDesktopNodeJournalOffRejectsSubstitutedBarrier/release",
+         "substituted explicit Off callback reached persistence or completion",
+         once(off, 'change.Action != "off" ||', 'false ||')),
+        (profile_file, "off-accepts-replaced-profile-store", "TestDesktopNodeJournalOffSavedReadbackRetainsExactOwner/store-bytes",
+         "saved Off accepted a replacement private profile store",
+         once(profile, "!bytes.Equal(raw, append(want, '\\n'))", "false && !bytes.Equal(raw, append(want, '\\n'))")),
+        (off_capture_file, "off-loses-saved-result-revision", "TestDesktopNodeJournalOffSavedResultRetryKeepsTokenAndOwner/settlement",
+         "saved-result retry did not finish captured Off",
+         once(off_capture, "if capture.profileWritten.Load() {", "if false && capture.profileWritten.Load() {")),
     )
 
 

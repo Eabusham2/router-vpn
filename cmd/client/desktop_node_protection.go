@@ -21,6 +21,7 @@ type desktopNodeProtectionBackend struct {
 	release            func(context.Context, mobiletor.DesktopWindowsProtectionTarget) (desktopNodeProtectionRelease, error)
 	recover            func(context.Context, mobiletor.DesktopWindowsProtectionTarget) (desktopNodeProtectionRelease, error)
 	releaseWithBarrier func(context.Context, mobiletor.DesktopWindowsProtectionTarget, mobiletor.DesktopWindowsProtectionCommitBarrier) (desktopNodeProtectionRelease, error)
+	recoverWithBarrier func(context.Context, mobiletor.DesktopWindowsProtectionTarget, mobiletor.DesktopWindowsProtectionCommitBarrier) (desktopNodeProtectionRelease, error)
 }
 
 type desktopNodeProtectionAttempt struct {

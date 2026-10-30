@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"sync/atomic"
 
 	"router-vpn/internal/mobiletor"
 )
@@ -19,15 +20,19 @@ type desktopNodeProtectionBinding struct {
 // The view is copied under the slot lock. A UI revision binds this exact
 // source owner and generation; callers never supply a native target or PID.
 type desktopNodeProtectionView struct {
-	Generation    uint64                                    `json:"generation"`
-	Known         bool                                      `json:"known"`
-	Target        *mobiletor.DesktopWindowsProtectionTarget `json:"target"`
-	Binding       desktopNodeProtectionBinding              `json:"binding"`
-	Active        bool                                      `json:"active"`
-	Retiring      bool                                      `json:"retiring"`
-	PendingOff    bool                                      `json:"-"`
-	Removed       bool                                      `json:"-"`
-	AbsenceProved bool                                      `json:"-"`
+	Generation       uint64                                    `json:"generation"`
+	Known            bool                                      `json:"known"`
+	Target           *mobiletor.DesktopWindowsProtectionTarget `json:"target"`
+	Binding          desktopNodeProtectionBinding              `json:"binding"`
+	Active           bool                                      `json:"active"`
+	Retiring         bool                                      `json:"retiring"`
+	PendingOff       bool                                      `json:"-"`
+	Removed          bool                                      `json:"-"`
+	AbsenceProved    bool                                      `json:"-"`
+	ProfileWritten   bool                                      `json:"-"`
+	ProfileSaved     bool                                      `json:"-"`
+	OriginalRevision string                                    `json:"-"`
+	ResultRevision   string                                    `json:"-"`
 }
 
 // An accepted Off request keeps its original target even after native absence
@@ -36,14 +41,21 @@ type desktopNodeProtectionView struct {
 type desktopNodeProtectionOff struct {
 	profileID       string
 	profileRevision string
+	resultRevision  string
+	sourceRevision  string
+	savedPath       string // Published once under app.mu before profileWritten is set.
+	profileWritten  atomic.Bool
+	profileSaved    atomic.Bool
 	token           string
 	generation      uint64
 	binding         desktopNodeProtectionBinding
 	target          mobiletor.DesktopWindowsProtectionTarget
 	owner           desktopNodeProtectionRelease
 	prepared        bool
+	joined          bool
 	removed         bool
 	absenceProved   bool
+	journal         *desktopNodeJournalOff
 }
 
 func (s *desktopNodeProtectionSlot) advanceGenerationLocked() error {
@@ -61,6 +73,8 @@ func (s *desktopNodeProtectionSlot) viewLocked() desktopNodeProtectionView {
 	if s.off != nil {
 		v.Removed = s.off.removed
 		v.AbsenceProved = s.off.absenceProved
+		v.ProfileWritten, v.ProfileSaved = s.off.profileWritten.Load(), s.off.profileSaved.Load()
+		v.OriginalRevision, v.ResultRevision = s.off.profileRevision, s.off.resultRevision
 	}
 	return v
 }
@@ -78,6 +92,9 @@ func (v desktopNodeProtectionView) token(profileRevision string) string {
 	// Pending/removed are deliberately excluded. An accepted operation retains
 	// the same revision through cleanup and off-unsaved retries. Completion or
 	// any ordinary succession changes the generation and invalidates it.
+	if v.PendingOff && (profileRevision == v.OriginalRevision || profileRevision == v.ResultRevision) {
+		profileRevision = v.OriginalRevision
+	}
 	raw, _ := json.Marshal(struct {
 		Kind            string                    `json:"kind"`
 		ProfileRevision string                    `json:"profile_revision"`
@@ -96,8 +113,8 @@ func (s *desktopNodeProtectionSlot) pendingOff() *desktopNodeProtectionOff {
 	return s.off
 }
 
-func (s *desktopNodeProtectionSlot) captureOff(ctx context.Context, profileID, profileRevision, token string) (*desktopNodeProtectionOff, error) {
-	if s == nil || ctx == nil || ctx.Err() != nil || profileID == "" || profileRevision == "" || token == "" {
+func (s *desktopNodeProtectionSlot) captureOff(ctx context.Context, profileID, profileRevision, resultRevision, token string) (*desktopNodeProtectionOff, error) {
+	if s == nil || ctx == nil || ctx.Err() != nil || profileID == "" || !desktopNodeProcessHex(profileRevision, 32) || !desktopNodeProcessHex(resultRevision, 32) || token == "" {
 		return nil, errors.New("protection Off has no current selected-node revision")
 	}
 	s.mu.Lock()
@@ -109,21 +126,39 @@ func (s *desktopNodeProtectionSlot) captureOff(ctx context.Context, profileID, p
 		return nil, errors.New("protection Off requires the retained disconnected owner and its current selected-node revision")
 	}
 	if s.off != nil {
-		if s.off.profileID != profileID || s.off.profileRevision != profileRevision || s.off.token != token || !s.offCurrentLocked(s.off) {
+		if s.off.profileID != profileID || s.off.currentProfileRevision() != profileRevision || s.off.resultRevision != resultRevision || s.off.token != token || !s.offCurrentLocked(s.off) {
 			return nil, errors.New("another protection Off operation is still pending")
 		}
 		return s.off, nil
 	}
-	capture := &desktopNodeProtectionOff{profileID: profileID, profileRevision: profileRevision, token: token,
+	capture := &desktopNodeProtectionOff{profileID: profileID, profileRevision: profileRevision, resultRevision: resultRevision, sourceRevision: s.profileRevision, token: token,
 		generation: s.generation, binding: s.binding, target: *s.target}
 	s.off = capture
 	return capture, nil
 }
 
+func (capture *desktopNodeProtectionOff) currentProfileRevision() string {
+	if capture.profileWritten.Load() {
+		return capture.resultRevision
+	}
+	return capture.profileRevision
+}
+
 func (s *desktopNodeProtectionSlot) offCurrentLocked(capture *desktopNodeProtectionOff) bool {
 	return capture != nil && s.off == capture && s.known && s.active == nil && s.retirement == nil &&
 		s.generation == capture.generation && s.binding == capture.binding &&
+		s.profileRevision == capture.sourceRevision &&
 		s.target != nil && *s.target == capture.target
+}
+
+func (s *desktopNodeProtectionSlot) offReadyToSave(capture *desktopNodeProtectionOff) bool {
+	if s == nil {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.offCurrentLocked(capture) && capture.removed && capture.absenceProved && capture.owner != nil && capture.prepared &&
+		(capture.journal == nil && s.journal == nil || s.offJournalCurrentLocked(capture) && capture.joined && capture.journal.acknowledged.Load())
 }
 
 // current must not acquire the slot lock. The application holds operationMu
@@ -138,9 +173,6 @@ func (s *desktopNodeProtectionSlot) applyOff(ctx context.Context, capture *deskt
 	if !s.offCurrentLocked(capture) || s.backend.read == nil || s.backend.recover == nil {
 		return errors.New("protection Off belongs to a replaced retained owner")
 	}
-	if s.journal != nil {
-		return errors.New("native journal Off requires its durable removal and profile-save transaction")
-	}
 	check := func() error {
 		if ctx.Err() != nil || !current() {
 			return errors.Join(ctx.Err(), errors.New("protection Off no longer has its captured selected-node revision"))
@@ -149,6 +181,9 @@ func (s *desktopNodeProtectionSlot) applyOff(ctx context.Context, capture *deskt
 	}
 	if err := check(); err != nil {
 		return err
+	}
+	if s.journal != nil || capture.journal != nil {
+		return s.applyJournalOffLocked(ctx, capture, check)
 	}
 	if capture.removed {
 		// Saving can fail after native removal. Retrying never creates a second
@@ -208,18 +243,27 @@ func (s *desktopNodeProtectionSlot) applyOff(ctx context.Context, capture *deskt
 	return nil
 }
 
-func (s *desktopNodeProtectionSlot) finishOffSave(capture *desktopNodeProtectionOff) error {
-	if s == nil {
+func (s *desktopNodeProtectionSlot) finishOffSave(ctx context.Context, capture *desktopNodeProtectionOff, current func() bool) error {
+	if s == nil || ctx == nil || ctx.Err() != nil || current == nil || !current() {
 		return errors.New("protection Off lost its pending save owner")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.offCurrentLocked(capture) || !capture.removed || !capture.absenceProved || capture.owner == nil || !capture.prepared {
+	if !s.offCurrentLocked(capture) || !capture.removed || !capture.absenceProved || capture.owner == nil || !capture.prepared || !capture.profileSaved.Load() {
 		return errors.New("protection Off cannot finish before exact native absence and preference persistence")
+	}
+	if capture.journal != nil {
+		if err := s.finishJournalOffLocked(ctx, capture, current); err != nil {
+			return err
+		}
+	}
+	if ctx.Err() != nil || !current() {
+		return errors.Join(ctx.Err(), errors.New("saved Off lost its captured application owner"))
 	}
 	if err := s.advanceGenerationLocked(); err != nil {
 		return err
 	}
 	s.target, s.off, s.binding = nil, nil, desktopNodeProtectionBinding{}
+	s.profileRevision = ""
 	return nil
 }

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 
@@ -11,10 +13,11 @@ import (
 var errDesktopProtectionOffUnsaved = errors.New("kill switch is off, but its preference could not be saved; retry Off to save the same change")
 
 type profileProtectionCapture struct {
-	slot     *desktopNodeProtectionSlot
-	view     desktopNodeProtectionView
-	revision string
-	token    string
+	slot           *desktopNodeProtectionSlot
+	view           desktopNodeProtectionView
+	revision       string
+	resultRevision string
+	token          string
 }
 
 func (a *app) captureProfileProtection(profile common.RouterProfile) profileProtectionCapture {
@@ -22,6 +25,9 @@ func (a *app) captureProfileProtection(profile common.RouterProfile) profileProt
 	slot := a.nodeProtection
 	a.mu.Unlock()
 	capture := profileProtectionCapture{slot: slot, revision: profileStartupSettingsToken(profile)}
+	if result, err := profileProtectionOffResult(profile); err == nil {
+		capture.resultRevision = profileStartupSettingsToken(result)
+	}
 	capture.token = capture.revision
 	if slot != nil {
 		capture.view = slot.view()
@@ -43,6 +49,13 @@ func protectionSettingsWithCapture(profile common.RouterProfile, capture profile
 		if v.Removed && v.AbsenceProved {
 			result.ProtectionStatus, result.EffectivePolicy = "off-unsaved", "off"
 			result.Message = errDesktopProtectionOffUnsaved.Error()
+			if v.ProfileWritten {
+				result.Message = "The kill switch is off. Its saved preference still needs verification; retry Off to finish."
+			}
+			if v.ProfileSaved {
+				result.ProtectionStatus = "off-pending"
+				result.Message = "The kill switch is off and its preference is saved. Retry Off to finish protection cleanup."
+			}
 		}
 	} else if !v.Known || v.Retiring {
 		result.ProtectionStatus, result.EffectivePolicy = "pending", "unknown"
@@ -90,7 +103,8 @@ func (a *app) capturedProtectionOffCurrent(slot *desktopNodeProtectionSlot, capt
 	defer a.mu.Unlock()
 	profile, exists := a.profileByIDLocked(capture.profileID)
 	if !exists || a.nodeProtection != slot || a.profiles.SelectedID != capture.profileID ||
-		profileStartupSettingsToken(profile) != capture.profileRevision || a.cmd != nil || a.state.Connected {
+		profileStartupSettingsToken(profile) != capture.currentProfileRevision() || a.cmd != nil || a.state.Connected ||
+		capture.profileWritten.Load() && a.cfg.ProfilesFile != capture.savedPath {
 		return false
 	}
 	// Shutdown may resume an already accepted Off while Stop is in its checked
@@ -108,39 +122,97 @@ func (a *app) resumeDesktopProtectionOff(ctx context.Context, slot *desktopNodeP
 	if ctx.Err() != nil || !current() {
 		return common.RouterProfile{}, errors.Join(errDesktopProtectionOffUnsaved, ctx.Err())
 	}
-	a.mu.Lock()
-	profile, exists := a.profileByIDLocked(capture.profileID)
-	if !exists || a.nodeProtection != slot || a.profiles.SelectedID != capture.profileID ||
-		profileStartupSettingsToken(profile) != capture.profileRevision || a.cmd != nil || a.state.Connected ||
-		!cleanup && (a.closing || profileSettingsBusy(a.state.Connected, a.state.Phase)) || ctx.Err() != nil {
-		a.mu.Unlock()
-		return common.RouterProfile{}, errDesktopProtectionOffUnsaved
+	updated, err := a.persistCapturedProtectionOff(ctx, slot, capture, cleanup)
+	if err != nil {
+		return common.RouterProfile{}, err
 	}
-	updated := cloneRouterProfile(profile)
-	updated.KillSwitchPolicy, updated.KillSwitch = "off", false
-	var saveErr error
-	for i := range a.profiles.Profiles {
-		if a.profiles.Profiles[i].ID == profile.ID {
-			a.profiles.Profiles[i] = updated
-			saveErr = a.persistProfilesLocked()
-			if saveErr != nil {
-				a.profiles.Profiles[i] = profile
-			}
-			break
-		}
-	}
-	a.mu.Unlock()
-	if saveErr != nil {
-		return common.RouterProfile{}, errors.Join(errDesktopProtectionOffUnsaved, saveErr)
-	}
-	if err := slot.finishOffSave(capture); err != nil {
+	if err := slot.finishOffSave(ctx, capture, current); err != nil {
 		return common.RouterProfile{}, err
 	}
 	a.mu.Lock()
-	if a.nodeProtection == slot {
-		a.nodeProtection = nil
+	if a.nodeProtection != slot {
+		a.mu.Unlock()
+		return common.RouterProfile{}, errors.New("saved Off completed for a replaced application slot")
 	}
+	a.nodeProtection = nil
 	a.mu.Unlock()
 	cancelPendingStartupPolicy(a)
+	return updated, nil
+}
+
+func profileProtectionOffResult(profile common.RouterProfile) (common.RouterProfile, error) {
+	updated := cloneRouterProfile(profile)
+	updated.KillSwitchPolicy, updated.KillSwitch = "off", false
+	// The result revision must be reproducible from the actual saved profile,
+	// whose JSON contract normalizes defaults. Capture it before native removal.
+	if err := common.NormalizeRouterProfile(&updated); err != nil {
+		return common.RouterProfile{}, err
+	}
+	return updated, nil
+}
+
+// A successful publication immediately changes the allowed in-memory revision.
+// Readback acknowledgment is separate, so a read error, cancellation, failed
+// journal flush or failed close can retry this result without rewriting Off or
+// rolling RAM back to the original preference after disk has already changed.
+func (a *app) persistCapturedProtectionOff(ctx context.Context, slot *desktopNodeProtectionSlot, capture *desktopNodeProtectionOff, cleanup bool) (common.RouterProfile, error) {
+	if ctx == nil || ctx.Err() != nil || !slot.offReadyToSave(capture) {
+		return common.RouterProfile{}, errDesktopProtectionOffUnsaved
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	profile, exists := a.profileByIDLocked(capture.profileID)
+	if !exists || a.nodeProtection != slot || a.profiles.SelectedID != capture.profileID ||
+		profileStartupSettingsToken(profile) != capture.currentProfileRevision() || a.cmd != nil || a.state.Connected ||
+		!cleanup && (a.closing || profileSettingsBusy(a.state.Connected, a.state.Phase)) || ctx.Err() != nil {
+		return common.RouterProfile{}, errDesktopProtectionOffUnsaved
+	}
+	updated, err := profileProtectionOffResult(profile)
+	if err != nil || profileStartupSettingsToken(updated) != capture.resultRevision {
+		return common.RouterProfile{}, errors.Join(errDesktopProtectionOffUnsaved, err)
+	}
+	if !capture.profileWritten.Load() {
+		for i := range a.profiles.Profiles {
+			if a.profiles.Profiles[i].ID == profile.ID {
+				a.profiles.Profiles[i] = updated
+				if err := a.persistProfilesLocked(); err != nil {
+					a.profiles.Profiles[i] = profile
+					return common.RouterProfile{}, errors.Join(errDesktopProtectionOffUnsaved, err)
+				}
+				capture.savedPath = a.cfg.ProfilesFile
+				capture.profileWritten.Store(true)
+				break
+			}
+		}
+	}
+	if !capture.profileWritten.Load() || a.cfg.ProfilesFile != capture.savedPath {
+		return common.RouterProfile{}, errDesktopProtectionOffUnsaved
+	}
+	capture.profileSaved.Store(false)
+	if err := ctx.Err(); err != nil {
+		return common.RouterProfile{}, errors.Join(errDesktopProtectionOffUnsaved, err)
+	}
+	want, err := json.MarshalIndent(a.profiles, "", "  ")
+	if err != nil {
+		return common.RouterProfile{}, errors.Join(errDesktopProtectionOffUnsaved, err)
+	}
+	raw, err := readPrivateRegular(capture.savedPath, maxPrivateStoreBytes)
+	var saved common.RouterProfileStore
+	if err != nil || !bytes.Equal(raw, append(want, '\n')) || json.Unmarshal(raw, &saved) != nil || saved.SelectedID != capture.profileID {
+		return common.RouterProfile{}, errors.Join(errDesktopProtectionOffUnsaved, err, errors.New("saved Off did not read back its exact private profile store"))
+	}
+	proved := false
+	for _, value := range saved.Profiles {
+		if value.ID == capture.profileID && value.KillSwitchPolicy == "off" && !value.KillSwitch && profileStartupSettingsToken(value) == capture.resultRevision {
+			proved = true
+		}
+	}
+	if !proved {
+		return common.RouterProfile{}, errors.Join(errDesktopProtectionOffUnsaved, errors.New("saved Off changed its captured result revision"))
+	}
+	capture.profileSaved.Store(true)
+	if err := ctx.Err(); err != nil {
+		return common.RouterProfile{}, errors.Join(errDesktopProtectionOffUnsaved, err)
+	}
 	return updated, nil
 }

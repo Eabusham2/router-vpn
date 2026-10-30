@@ -474,12 +474,12 @@ func TestDesktopNodeJournalReleaseKeepsSeparateOffGate(t *testing.T) {
 	if err := f.slot.release(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	capture, err := f.slot.captureOff(context.Background(), f.slot.binding.ProfileID, f.revision, f.slot.view().token(f.revision))
+	capture, err := f.slot.captureOff(context.Background(), f.slot.binding.ProfileID, f.revision, f.revision, f.slot.view().token(f.revision))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := f.slot.applyOff(context.Background(), capture, func() bool { return true }); err == nil || f.store.base.writes != 0 || f.kernel.target == nil {
-		t.Fatal("normal release silently completed unsupported durable Off")
+		t.Fatal("normal release silently authorized durable Off without its distinct native barrier")
 	}
 }
 

@@ -106,7 +106,7 @@ func (a *app) profileProtectionSettings(w http.ResponseWriter, r *http.Request) 
 		a.mu.Unlock()
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()
-		pending, err := capture.slot.captureOff(ctx, profile.ID, capture.revision, capture.token)
+		pending, err := capture.slot.captureOff(ctx, profile.ID, capture.revision, capture.resultRevision, capture.token)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -118,6 +118,12 @@ func (a *app) profileProtectionSettings(w http.ResponseWriter, r *http.Request) 
 			if errors.Is(err, errDesktopProtectionOffUnsaved) {
 				status = http.StatusInternalServerError
 			}
+			a.mu.Lock()
+			latest, exists := a.profileByIDLocked(profile.ID)
+			if exists {
+				profile = cloneRouterProfile(latest)
+			}
+			a.mu.Unlock()
 			value := protectionSettingsWithCapture(profile, a.captureProfileProtection(profile))
 			if value.Message == "" {
 				value.Message = "The protection change did not finish. Refresh and retry Off."

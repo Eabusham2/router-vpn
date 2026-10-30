@@ -29,6 +29,7 @@ type desktopProtectionOffFixture struct {
 	afterMake   func()
 	afterRead   func(*mobiletor.DesktopWindowsProtectionTarget)
 	beforeClose func(context.Context) error
+	attempt     *desktopNodeProtectionAttempt
 }
 
 type desktopProtectionOffFixtureOwner struct {
@@ -64,9 +65,16 @@ func (owner *desktopProtectionOffFixtureOwner) Close(ctx context.Context) error 
 }
 
 func newDesktopProtectionOffFixture(t *testing.T) *desktopProtectionOffFixture {
+	return newDesktopProtectionOffPolicyFixture(t, "always")
+}
+
+func newDesktopProtectionOffPolicyFixture(t *testing.T, policyName string) *desktopProtectionOffFixture {
 	t.Helper()
 	profile, files := desktopNodeFixture(t, "198.51.100.8")
-	profile.KillSwitchPolicy, profile.KillSwitch = "always", true
+	profile.KillSwitchPolicy, profile.KillSwitch = policyName, true
+	if err := common.NormalizeRouterProfile(&profile); err != nil {
+		t.Fatal(err)
+	}
 	original, _, err := compileDesktopNode(context.Background(), profile, "wg", files, nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -105,7 +113,7 @@ func newDesktopProtectionOffFixture(t *testing.T) *desktopProtectionOffFixture {
 		return owner, nil
 	}
 	f.slot = &desktopNodeProtectionSlot{backend: backend}
-	attempt, err := f.slot.begin(context.Background(), &desktopNodeLaunch{}, policy)
+	attempt, err := f.slot.begin(context.Background(), &desktopNodeLaunch{ownedNode: &desktopOwnedNodeRuntime{profileToken: desktopOwnedNodeProfileToken(profile)}}, policy)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -120,6 +128,7 @@ func newDesktopProtectionOffFixture(t *testing.T) *desktopProtectionOffFixture {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	f.attempt = attempt
 	f.a = &app{nodeProtection: f.slot}
 	f.a.cfg.ProfilesFile = filepath.Join(t.TempDir(), "routers.json")
 	f.a.profiles = common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}}
@@ -133,7 +142,11 @@ func newDesktopProtectionOffFixture(t *testing.T) *desktopProtectionOffFixture {
 func (f *desktopProtectionOffFixture) capture(t *testing.T) *desktopNodeProtectionOff {
 	t.Helper()
 	revision := profileStartupSettingsToken(f.profile)
-	capture, err := f.slot.captureOff(context.Background(), f.profile.ID, revision, f.slot.view().token(revision))
+	result, err := profileProtectionOffResult(f.profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture, err := f.slot.captureOff(context.Background(), f.profile.ID, revision, profileStartupSettingsToken(result), f.slot.view().token(revision))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +163,7 @@ func TestDesktopProtectionOffRemovesOnlyExplicitJoinedAlways(t *testing.T) {
 		t.Fatal("normal lifecycle completion did not invalidate its previous revision")
 	}
 	capture := f.capture(t)
-	if err := f.slot.finishOffSave(capture); err == nil {
+	if err := f.slot.finishOffSave(context.Background(), capture, func() bool { return true }); err == nil {
 		t.Fatal("Off save finished before exact native absence")
 	}
 	if err := f.slot.applyOff(context.Background(), capture, func() bool { return true }); err != nil {
@@ -172,10 +185,13 @@ func TestDesktopProtectionOffRemovesOnlyExplicitJoinedAlways(t *testing.T) {
 	if err := f.slot.applyOff(context.Background(), capture, func() bool { return true }); err != nil || f.calls != 1 {
 		t.Fatal("pending-save retry performed another native removal", err)
 	}
-	if err := f.slot.finishOffSave(capture); err != nil || f.slot.retained() || !f.slot.provedEmpty() {
+	if _, err := f.a.persistCapturedProtectionOff(context.Background(), f.slot, capture, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.slot.finishOffSave(context.Background(), capture, func() bool { return true }); err != nil || f.slot.retained() || !f.slot.provedEmpty() {
 		t.Fatal("saved Off did not finish its exact capture", err)
 	}
-	if err := f.slot.finishOffSave(capture); err == nil {
+	if err := f.slot.finishOffSave(context.Background(), capture, func() bool { return true }); err == nil {
 		t.Fatal("consumed Off capture acquired a second completion")
 	}
 }
@@ -211,7 +227,11 @@ func TestDesktopProtectionOffRejectsChangedCaptureBeforeMutation(t *testing.T) {
 				cancel()
 				ctx = cancelled
 			}
-			capture, err := f.slot.captureOff(ctx, id, revision, token)
+			result, err := profileProtectionOffResult(f.profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			capture, err := f.slot.captureOff(ctx, id, revision, profileStartupSettingsToken(result), token)
 			if fault == "current" || fault == "target" {
 				if err != nil {
 					t.Fatal(err)
