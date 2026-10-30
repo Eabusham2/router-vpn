@@ -55,6 +55,9 @@ REQUIRED = (
     "TestWindowsControllerFoundationLimitedTokenThreadAccess",
     "TestWindowsControllerFoundationConstructedMediumThreadAccess",
     "TestWindowsControllerFoundationPinnedAncestorsRejectReplacement",
+    "TestWindowsControllerFoundationProtectedShellDescriptor",
+    "TestWindowsControllerFoundationProtectedShellGlobalCapture",
+    "TestWindowsControllerFoundationProtectedShellWrongMapping",
 )
 
 
@@ -65,6 +68,8 @@ def sources():
                 "process_profile_windows.go", "process_profile_windows_test.go",
                 "system_image_windows.go", "system_image_windows_test.go",
                 "system_image_policy.go", "system_image_policy_test.go",
+                "protected_shell_policy.go", "protected_shell_policy_test.go",
+                "protected_shell_windows.go", "protected_shell_windows_test.go",
                 "machine_directories_windows.go", "machine_directories_windows_test.go",
                 "fixture_windows_test.go", "foundation_windows_test.go", "capture_windows_test.go",
                 "suspended_launch_windows.go", "suspended_launch_windows_test.go",
@@ -87,6 +92,7 @@ def mutants():
     identity = read("identity_windows.go")
     launch = read("launch_windows.go")
     suspended = read("suspended_launch_windows.go")
+    protected_shell = read("protected_shell_windows.go")
     return (
         ("pipe_windows.go", "retained-pid", REQUIRED[3],
          "same executable with a different retained PID acquired the private channel",
@@ -113,6 +119,13 @@ def mutants():
         ("process_windows.go", "image-ancestor-data-access", REQUIRED[30],
          "retained executable ancestors permitted namespace replacement after leaf retirement",
          once(process, "uint32(syscall.FILE_LIST_DIRECTORY|0x80)", "uint32(0x80)")),
+        ("protected_shell_windows.go", "protected-shell-kernel-mapping", REQUIRED[33],
+         "same-target local alias acquired the retained global mapping identity",
+         once(protected_shell, "if same == 0 {", "if false && same == 0 {")),
+        ("protected_shell_policy.go", "protected-shell-object-rights", REQUIRED[31],
+         "untrusted namespace mutation right acquired a protected Shell capability",
+         once(read("protected_shell_policy.go"), "readOnly := uint32(0x00120001)",
+              "readOnly := uint32(0x001e000d)")),
         ("process_windows.go", "image-hardlink", REQUIRED[9],
          "hardlinked executable was admitted as one owned image",
          once(process, "info.FileAttributes&syscall.FILE_ATTRIBUTE_DIRECTORY != 0 || info.NumberOfLinks != 1",

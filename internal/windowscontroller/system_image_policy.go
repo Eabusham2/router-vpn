@@ -11,6 +11,12 @@ import (
 // only explicit effective grants it can prove safe. Denials cannot turn an
 // unsafe grant into an accepted policy, and unknown ACE types fail closed.
 func validateSystemImageDescriptor(data []byte) error {
+	// File read data/EA/attributes, execute/traverse, READ_CONTROL and
+	// SYNCHRONIZE, plus GENERIC_READ/EXECUTE, cannot mutate the image.
+	return validateSystemObjectDescriptor(data, 0xa01200a9)
+}
+
+func validateSystemObjectDescriptor(data []byte, readOnlyRights uint32) error {
 	if len(data) < 20 || data[0] != 1 || binary.LittleEndian.Uint16(data[2:4])&0x8004 != 0x8004 {
 		return errors.New("Windows system image requires a self-relative descriptor with an explicit DACL")
 	}
@@ -47,11 +53,8 @@ func validateSystemImageDescriptor(data []byte) error {
 		if err != nil || sidLength != length-8 {
 			return errors.Join(err, errors.New("Windows system image DACL entry has an invalid principal"))
 		}
-		// Read data/EA/attributes, execute/traverse, READ_CONTROL and
-		// SYNCHRONIZE, plus GENERIC_READ/EXECUTE, cannot mutate the image.
-		// Every other bit, including unknown or generic write/all rights,
-		// requires one of the same trusted principals as file ownership.
-		const readOnlyRights = uint32(0xa01200a9)
+		// The caller supplies the exact object-type read rights. Every other
+		// bit requires one of the same trusted principals as ownership.
 		mask := binary.LittleEndian.Uint32(ace[4:8])
 		if ace[0] == 0 && ace[1]&0x08 == 0 && mask & ^readOnlyRights != 0 && !trustedSystemImageSID(principal) {
 			return fmt.Errorf("Windows system image permits an untrusted writer (ACE %d, mask 0x%08x)", index, mask)
