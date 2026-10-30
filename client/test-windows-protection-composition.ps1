@@ -71,11 +71,20 @@ Assert-ProtectionComposition ((Control 'UnifiedKillSwitch').Registrations-eq1) '
 
 function New-ProtectionCompletion($Value,[int]$Status=200){
     $R=[System.Net.Http.HttpResponseMessage]::new([System.Net.HttpStatusCode]$Status)
-    $R.Content=[System.Net.Http.StringContent]::new((ConvertTo-Json -InputObject $Value -Depth 32 -Compress),[Text.Encoding]::UTF8,'application/json')
+    # Windows PowerShell 5.1 emits no pipeline value for ConvertTo-Json $null.
+    # The controller response still contains the JSON literal, never an absent
+    # StringContent body; keep null distinct from an empty array or string.
+    $Json=if($null-eq$Value){'null'}else{ConvertTo-Json -InputObject $Value -Depth 32 -Compress}
+    $R.Content=[System.Net.Http.StringContent]::new($Json,[Text.Encoding]::UTF8,'application/json')
     $T=New-Object 'System.Threading.Tasks.TaskCompletionSource[System.Net.Http.HttpResponseMessage]'
     $T.SetResult($R)
     return $T.Task
 }
+foreach($Case in @(@{Value=$null;Json='null'},@{Value=@();Json='[]'},@{Value='';Json='""'})){
+    $Response=(New-ProtectionCompletion -Value $Case.Value).GetAwaiter().GetResult()
+    try{Assert-ProtectionComposition ($Response.Content.ReadAsStringAsync().GetAwaiter().GetResult()-ceq$Case.Json) 'Protection fixture confused null with an empty array or string'}finally{$Response.Dispose()}
+}
+Write-Host 'PASS completed HTTP bodies preserve null, empty array and empty string'
 function Complete-ProtectionSnapshot($Protection,[bool]$Discard=$false){
     $Payload=@{status=$script:ProtectionStatus;nodes=$Store;session=$Session;modes=@();multihop=$MH;events=$Timeline;protection=$Protection}
     foreach($Key in $Payload.Keys){$script:UnifiedRefreshTasks[$Key]=New-ProtectionCompletion $Payload[$Key]}
