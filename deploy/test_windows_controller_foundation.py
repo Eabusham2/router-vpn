@@ -53,6 +53,7 @@ REQUIRED = (
     "TestWindowsControllerFoundationSuspendedLaunchCreationCount",
     "TestWindowsControllerFoundationSuspendedCallbackRefusal",
     "TestWindowsControllerFoundationLimitedTokenThreadAccess",
+    "TestWindowsControllerFoundationConstructedMediumThreadAccess",
 )
 
 
