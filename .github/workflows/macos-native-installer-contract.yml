@@ -23,6 +23,7 @@ on:
       - 'deploy/test_desktop_darwin_guardian_runner.py'
       - 'deploy/test_macos_installer_trust.py'
       - 'deploy/test_macos_native_install.py'
+      - 'deploy/test_macos_installer_entry.py'
       - 'deploy/test_linux_controller_privilege.py'
       - 'deploy/test_linux_native_install.py'
       - 'deploy/test_desktop_socket_uid.py'
@@ -47,6 +48,7 @@ on:
       - 'deploy/test_desktop_darwin_guardian_runner.py'
       - 'deploy/test_macos_installer_trust.py'
       - 'deploy/test_macos_native_install.py'
+      - 'deploy/test_macos_installer_entry.py'
       - 'deploy/test_linux_controller_privilege.py'
       - 'deploy/test_linux_native_install.py'
       - 'deploy/test_desktop_socket_uid.py'
@@ -87,6 +89,7 @@ jobs:
           python3 deploy/test_macos_controller_privilege.py --go "$(command -v go)"
       - name: Prove privileged interpreter ownership and installation rollback
         run: |
+          python3 deploy/test_macos_installer_entry.py
           python3 deploy/test_macos_installer_trust.py
           python3 deploy/test_macos_native_install.py
 
@@ -101,9 +104,7 @@ jobs:
         run: |
           bash -n client/install-macos-final.sh
           bash -n client/install-macos-complete.sh
-          grep -Fq 'RouterVPN.app/Contents/MacOS/RouterVPN" --self-test' client/install-macos-final.sh
-          grep -Fq 'standard-exits.json' client/install-macos-final.sh
-          grep -Fq 'routers.json' client/install-macos-final.sh
+          python3 deploy/test_macos_installer_entry.py
           grep -Fq 'native AppKit app is the daily-use UI' client/install-macos-complete.sh
           ! grep -Eq 'Google Chrome|Microsoft Edge|Brave Browser|Chromium|--app=' client/install-macos-final.sh
           ! grep -Eq 'Open http://127\.0\.0\.1:8788|open http://127\.0\.0\.1:8788' client/install-macos-final.sh client/install-macos-complete.sh
