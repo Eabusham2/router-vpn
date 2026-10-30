@@ -118,6 +118,7 @@ def mutants(source, windows):
     network = "routervpn/desktoppt/node_network.go"
     box = "routervpn_desktop_node_box_physical.go"
     admission = "cmd/sing-box/routervpn_node_command_admission.go"
+    transfer = "cmd/sing-box/routervpn_node_command_physical.go"
     result = [
         ("late-handshake-phase", lower, "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeEncryptedPreReadyHandshake", "awg2-fast",
          "actual eager encrypted Box startup", changed(lower, "!owner.SocketCurrent()", "!owner.Current()")),
@@ -129,6 +130,12 @@ def mutants(source, windows):
          "another compiler owner adopted this native generation", changed(network, "n.policy != policy", "false && n.policy != policy")),
         ("foreign-handoff-reply", admission, "./cmd/sing-box", "TestRouterVPNDesktopNodePhysicalCommandAdmissionRejectsForeignReplies", "source",
          "foreign handoff acknowledgement activated native sockets", changed(admission, "actual != expected", "false && actual != expected")),
+        ("unbound-private-predecessor", transfer, "./cmd/sing-box", "TestRouterVPNDesktopNodePhysicalCommandTransferInput", "wrong-hash",
+         "command accepted missing, changed or unbound predecessor input", changed(transfer, "hex.EncodeToString(sum[:]) != digest", "hex.EncodeToString(sum[:]) != digest && false")),
+        ("unjoined-native-outcome", network, "./routervpn/desktoppt", "TestRouterVPNNodePhysicalRetirementKeepsExactJoinedSource", "partial-before-admission",
+         "unjoined node acquired or queried a retained protection result", changed(network, "n.closed && n.retired", "(n.closed || true) && n.retired")),
+        ("failed-cleanup-receipt", transfer, "./cmd/sing-box", "TestRouterVPNDesktopNodePhysicalCommandRetirementReceipt", "owner-failed",
+         "retirement did not preserve its explicit outcome", changed(transfer, "if err != nil || ctx.Err() != nil {", "if ctx.Err() != nil {")),
     ]
     if windows:
         factory = "routervpn/desktoppt/node_physical_windows.go"
@@ -147,9 +154,9 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     captured["CGO_ENABLED"] = "1" if race else "0"
     suites = [
         ("command", "./cmd/sing-box", "^TestRouterVPNDesktopNodePhysicalCommand",
-         tuple("TestRouterVPNDesktopNodePhysicalCommand" + name for name in ("SourceBoundary", "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins"))),
+         tuple("TestRouterVPNDesktopNodePhysicalCommand" + name for name in ("SourceBoundary", "TransferInput", "RetirementReceipt", "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins"))),
         ("factory", "./routervpn/desktoppt", "^TestRouterVPNNodePhysical",
-         tuple("TestRouterVPNNodePhysical" + name for name in ("SeparateRegistriesAndUnpreparedRejection", "HandshakePhaseAndExactPolicy", "FactoryCancellationJoinsPartialOwner", "AdmissionRetainsExactPolicy", "AdmissionCapturesExactPredecessor")) +
+         tuple("TestRouterVPNNodePhysical" + name for name in ("SeparateRegistriesAndUnpreparedRejection", "HandshakePhaseAndExactPolicy", "FactoryCancellationJoinsPartialOwner", "RetirementKeepsExactJoinedSource", "AdmissionRetainsExactPolicy", "AdmissionCapturesExactPredecessor")) +
          (tuple("TestRouterVPNNodePhysicalWindows" + name for name in ("CapturesPreparedOwner", "AdmissionRejectsChangedOwners", "CloseJoinsAdmission")) if windows else ())),
         ("box", ".", "^TestRouterVPNDesktopNodePhysical",
          tuple("TestRouterVPNDesktopNodePhysicalBox" + name for name in ("RejectsSubstitutedGraph", "RequiresPreparedOwner", "RetainsMTUAndExactRollback"))),

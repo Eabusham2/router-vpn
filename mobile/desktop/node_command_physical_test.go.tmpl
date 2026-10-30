@@ -1,14 +1,21 @@
 package main
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
 func TestRouterVPNDesktopNodePhysicalCommandSourceBoundary(t *testing.T) {
@@ -84,6 +91,195 @@ func TestRouterVPNDesktopNodePhysicalCommandSourceBoundary(t *testing.T) {
 				}
 			} else if err == nil || actual != nil {
 				t.Fatal("node command adopted changed source or staged derived authority", fault)
+			}
+		})
+	}
+}
+
+func desktopNodeCommandTransferFixture(t *testing.T) (*mobilemultihop.DesktopNodePolicy, mobiletor.DesktopProtectionTransferRecord) {
+	t.Helper()
+	policy, err := mobilemultihop.NewDesktopNodePolicy(desktopNodeCommandOriginal(t), desktopExternalSession, "windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := policy.Metadata()
+	expected := mobiletor.DesktopProtectionTransferRecord{Schema: 1, Kind: "routervpn-windows-protection-transfer-v1", SessionID: meta.SessionID,
+		SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy,
+		Predecessor: &mobiletor.DesktopWindowsProtectionTarget{Capture: mobiletor.DesktopSocketCapture{SessionID: strings.Repeat("f", 32),
+			SourceSHA256: strings.Repeat("e", 64), NetworkID: strings.Repeat("d", 32)}, Policy: "always", BaselineSHA256: strings.Repeat("c", 64)}}
+	return policy, expected
+}
+
+func TestRouterVPNDesktopNodePhysicalCommandTransferInput(t *testing.T) {
+	for _, fault := range []string{"exact", "initial", "missing-hash", "wrong-hash", "missing-file", "session", "source", "config", "policy", "invalid-old", "noncanonical", "duplicate", "linked", "dropped-physical", "unexpected-legacy"} {
+		t.Run(fault, func(t *testing.T) {
+			policy, expected := desktopNodeCommandTransferFixture(t)
+			switch fault {
+			case "initial":
+				expected.Predecessor = nil
+			case "session":
+				expected.SessionID = strings.Repeat("b", 32)
+			case "source":
+				expected.SourceSHA256 = strings.Repeat("b", 64)
+			case "config":
+				expected.ConfigSHA256 = strings.Repeat("b", 64)
+			case "policy":
+				expected.Policy = "on-connect"
+			case "invalid-old":
+				expected.Predecessor.Capture.NetworkID = ""
+			}
+			raw, _ := json.Marshal(expected)
+			if fault == "noncanonical" {
+				raw = append(raw, '\n')
+			} else if fault == "duplicate" {
+				raw = append(raw[:len(raw)-1], []byte(`,"schema":1}`)...)
+			}
+			sum := sha256.Sum256(raw)
+			digest := hex.EncodeToString(sum[:])
+			if fault == "missing-hash" || fault == "unexpected-legacy" {
+				digest = ""
+			}
+			if fault == "wrong-hash" {
+				digest = strings.Repeat("0", 64)
+			}
+			if fault == "dropped-physical" || fault == "unexpected-legacy" {
+				policy = nil
+			}
+			directory := t.TempDir()
+			if err := os.Chmod(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
+			files, err := routerVPNOpenExternalFiles(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer files.root.Close()
+			if fault != "missing-file" {
+				name := "node-protection-transfer.json"
+				if fault == "linked" {
+					name = "foreign-transfer.json"
+				}
+				if err := os.WriteFile(filepath.Join(directory, name), raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+				if fault == "linked" {
+					if err := os.Symlink(name, filepath.Join(directory, "node-protection-transfer.json")); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			actual, err := routerVPNNodeCommandTransfer(files, policy, digest)
+			if fault == "exact" || fault == "initial" {
+				if err != nil || actual == nil || !reflect.DeepEqual(*actual, expected) {
+					t.Fatal("captured private predecessor did not survive command parsing", err)
+				}
+				if actual.Predecessor != nil {
+					if err := os.WriteFile(filepath.Join(directory, "node-protection-transfer.json"), []byte("replacement"), 0600); err != nil {
+						t.Fatal(err)
+					}
+					if *actual.Predecessor != *expected.Predecessor {
+						t.Fatal("parsed predecessor changed with its private pathname")
+					}
+				}
+			} else if err == nil || actual != nil {
+				t.Fatal("command accepted missing, changed or unbound predecessor input", fault)
+			}
+		})
+	}
+}
+
+type desktopNodeCommandRetiredOwner struct {
+	target   *mobiletor.DesktopWindowsProtectionTarget
+	captured bool
+	failure  error
+}
+
+func (o *desktopNodeCommandRetiredOwner) RetainedProtection(context.Context) (*mobiletor.DesktopWindowsProtectionTarget, bool, error) {
+	return o.target, o.captured, o.failure
+}
+
+func TestRouterVPNDesktopNodePhysicalCommandRetirementReceipt(t *testing.T) {
+	for _, fault := range []string{"own", "unchanged", "absent", "no-source", "no-owner", "read-failed", "owner-failed", "other-source", "lost-deny", "replaced-receipt"} {
+		t.Run(fault, func(t *testing.T) {
+			policy, expected := desktopNodeCommandTransferFixture(t)
+			directory := t.TempDir()
+			if err := os.Chmod(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
+			files, err := routerVPNOpenExternalFiles(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer files.root.Close()
+			target := &mobiletor.DesktopWindowsProtectionTarget{Capture: mobiletor.DesktopSocketCapture{SessionID: expected.SessionID,
+				SourceSHA256: expected.SourceSHA256, NetworkID: strings.Repeat("2", 32)}, Policy: expected.Policy, BaselineSHA256: strings.Repeat("3", 64)}
+			retired := &desktopNodeCommandRetiredOwner{target: target, captured: true}
+			var owner routerVPNNodeProtectionOwner = retired
+			switch fault {
+			case "unchanged":
+				retired.target = expected.Predecessor
+			case "absent":
+				expected.Predecessor = nil
+				retired.target = nil
+			case "no-source", "read-failed":
+				retired.target = nil
+				retired.captured = false
+			case "no-owner":
+				owner = nil
+			case "owner-failed":
+				retired.failure = errors.New("native cleanup pending")
+			case "other-source":
+				retired.target.Capture.SourceSHA256 = strings.Repeat("7", 64)
+			case "lost-deny":
+				retired.target = nil
+			case "replaced-receipt":
+				if err := os.WriteFile(filepath.Join(directory, "node-protection-retired.json"), []byte("replacement-owner"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			reads := 0
+			verify := func(ctx context.Context, actual *mobiletor.DesktopWindowsProtectionTarget) error {
+				reads++
+				deadline, bounded := ctx.Deadline()
+				if !bounded || time.Until(deadline) > 3*time.Second || time.Until(deadline) <= 0 || !reflect.DeepEqual(actual, expected.Predecessor) {
+					t.Fatal("fallback read lost its bounded exact expected state")
+				}
+				if fault == "read-failed" {
+					return errors.New("native expected state changed")
+				}
+				return nil
+			}
+			err = routerVPNRetireNodeProtection(files, policy, &expected, owner, verify)
+			valid := fault == "own" || fault == "unchanged" || fault == "absent" || fault == "no-source" || fault == "no-owner"
+			if (err == nil) != valid {
+				t.Fatal("retirement did not preserve its explicit outcome", fault, err)
+			}
+			expectedReads := 0
+			if fault == "no-source" || fault == "no-owner" || fault == "read-failed" {
+				expectedReads = 1
+			}
+			if reads != expectedReads {
+				t.Fatal("failed native source silently fell back to a different protection read")
+			}
+			raw, readErr := os.ReadFile(filepath.Join(directory, "node-protection-retired.json"))
+			if valid {
+				record, parseErr := mobiletor.ParseDesktopProtectionRetirementRecord(raw, expected)
+				if readErr != nil || parseErr != nil {
+					t.Fatal("joined command omitted its canonical protection receipt", readErr, parseErr)
+				}
+				want := retired.target
+				if expectedReads != 0 {
+					want = expected.Predecessor
+				}
+				if !reflect.DeepEqual(record.Target, want) {
+					t.Fatal("published receipt changed its captured native result")
+				}
+			} else if fault == "replaced-receipt" {
+				if readErr != nil || string(raw) != "replacement-owner" {
+					t.Fatal("cleanup changed a replacement receipt", readErr)
+				}
+			} else if !errors.Is(readErr, os.ErrNotExist) {
+				t.Fatal("failed protection read published a cleanup receipt", readErr)
 			}
 		})
 	}

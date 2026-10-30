@@ -1,0 +1,13 @@
+//go:build windows
+
+package main
+
+import (
+	"context"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func routerVPNReadNodeProtectionExpected(ctx context.Context, target *mobiletor.DesktopWindowsProtectionTarget) error {
+	return mobiletor.ReadDesktopWindowsProtectionExpectation(ctx, target)
+}

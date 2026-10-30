@@ -1,9 +1,16 @@
 package main
 
 import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"os"
 	"runtime"
+	"time"
 
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
 // The native child recompiles all of the exact captured private constructor
@@ -40,4 +47,96 @@ func routerVPNNodeCommandPhysical(files *routerVPNExternalFiles, session, config
 		return nil, routerVPNExternalFailure
 	}
 	return policy, nil
+}
+
+func routerVPNNodeCommandTransfer(files *routerVPNExternalFiles, policy *mobilemultihop.DesktopNodePolicy, digest string) (*mobiletor.DesktopProtectionTransferRecord, error) {
+	if files == nil || files.root == nil {
+		return nil, routerVPNExternalFailure
+	}
+	if policy == nil {
+		if digest != "" {
+			return nil, routerVPNExternalFailure
+		}
+		if _, err := files.root.Lstat("node-protection-transfer.json"); !errors.Is(err, os.ErrNotExist) {
+			return nil, routerVPNExternalFailure
+		}
+		return nil, nil
+	}
+	if policy.Validate() != nil || !routerVPNExternalSource.MatchString(digest) {
+		return nil, routerVPNExternalFailure
+	}
+	raw, err := files.read("node-protection-transfer.json", mobiletor.DesktopProtectionTransferRecordLimit)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	sum := sha256.Sum256(raw)
+	if hex.EncodeToString(sum[:]) != digest {
+		return nil, routerVPNExternalFailure
+	}
+	record, err := mobiletor.ParseDesktopProtectionTransferRecord(raw)
+	meta := policy.Metadata()
+	if err != nil || record.SessionID != meta.SessionID || record.SourceSHA256 != meta.SourceSHA256 ||
+		record.ConfigSHA256 != meta.ConfigSHA256 || record.Policy != meta.KillSwitchPolicy {
+		return nil, routerVPNExternalFailure
+	}
+	return &record, nil
+}
+
+type routerVPNNodeProtectionOwner interface {
+	RetainedProtection(context.Context) (*mobiletor.DesktopWindowsProtectionTarget, bool, error)
+}
+
+// Called only after the command has joined Box and its entered admission.
+// Every return path either publishes one exact bounded readback receipt or
+// leaves cleanup pending. A source that was never returned still requires an
+// independent native check of the original expected state.
+func routerVPNRetireNodeProtection(files *routerVPNExternalFiles, policy *mobilemultihop.DesktopNodePolicy,
+	expected *mobiletor.DesktopProtectionTransferRecord, owner routerVPNNodeProtectionOwner,
+	readExpected func(context.Context, *mobiletor.DesktopWindowsProtectionTarget) error) error {
+	if policy == nil {
+		if expected != nil || owner != nil {
+			return routerVPNExternalFailure
+		}
+		return nil
+	}
+	if files == nil || files.root == nil || policy.Validate() != nil || expected == nil || expected.Validate() != nil || readExpected == nil {
+		return routerVPNExternalFailure
+	}
+	meta := policy.Metadata()
+	if expected.SessionID != meta.SessionID || expected.SourceSHA256 != meta.SourceSHA256 || expected.ConfigSHA256 != meta.ConfigSHA256 || expected.Policy != meta.KillSwitchPolicy {
+		return routerVPNExternalFailure
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	var target *mobiletor.DesktopWindowsProtectionTarget
+	var captured bool
+	var err error
+	if owner != nil {
+		target, captured, err = owner.RetainedProtection(ctx)
+		if err != nil || ctx.Err() != nil {
+			return routerVPNExternalFailure
+		}
+	}
+	if !captured {
+		// Absence of a returned source is not absence of protection. Use only
+		// the unchanged launch expectation and verify it against the kernel.
+		if expected.Predecessor != nil {
+			copy := *expected.Predecessor
+			target = &copy
+		} else {
+			target = nil
+		}
+		if readExpected(ctx, target) != nil || ctx.Err() != nil {
+			return routerVPNExternalFailure
+		}
+	}
+	digest, err := mobiletor.DesktopProtectionTransferRecordSHA256(*expected)
+	if err != nil {
+		return routerVPNExternalFailure
+	}
+	receipt := mobiletor.DesktopProtectionRetirementRecord{Schema: 1, Kind: "routervpn-windows-protection-retired-v1", TransferSHA256: digest, Target: target}
+	if receipt.Validate(*expected) != nil || files.publish("node-protection-retired.json", receipt) != nil {
+		return routerVPNExternalFailure
+	}
+	return nil
 }

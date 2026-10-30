@@ -14,6 +14,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/sagernet/sing/common/json"
 )
 
@@ -51,14 +52,35 @@ func routerVPNNodeOptionsDigest(ctx context.Context, options option.Options) str
 // Initialize; WG/AWG may then open only their captured outer handshake sockets
 // during endpoint Start. This method itself opens neither a socket nor a TUN.
 func (s *Box) RouterVPNDesktopNodePreparePhysical(policy *mobilemultihop.DesktopNodePolicy) error {
+	_, err := s.RouterVPNDesktopNodePreparePhysicalOwned(policy)
+	return err
+}
+
+// RouterVPNDesktopNodePreparation is captured before native startup, including
+// a partial preparation failure. It retains the exact source for cleanup;
+// looking it up from a later, cancelled or replacement Box is unnecessary.
+type RouterVPNDesktopNodePreparation struct {
+	network *routervpndesktoppt.NodeNetworkOwner
+	policy  *mobilemultihop.DesktopNodePolicy
+}
+
+func (s *Box) RouterVPNDesktopNodePreparePhysicalOwned(policy *mobilemultihop.DesktopNodePolicy) (*RouterVPNDesktopNodePreparation, error) {
 	if !routerVPNDesktopNodePhysicalAvailable(policy) {
-		return errors.New("this native target has no admitted Router node physical factory")
+		return nil, errors.New("this native target has no admitted Router node physical factory")
 	}
 	_, network, err := s.routerVPNDesktopNodePhysical(policy)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return network.PrepareNodePhysicalPolicy(policy)
+	owner := &RouterVPNDesktopNodePreparation{network: network, policy: policy}
+	return owner, network.PrepareNodePhysicalPolicy(policy)
+}
+
+func (p *RouterVPNDesktopNodePreparation) RetainedProtection(ctx context.Context) (*mobiletor.DesktopWindowsProtectionTarget, bool, error) {
+	if p == nil || p.network == nil || p.policy == nil {
+		return nil, false, errors.New("Router node preparation has no captured retirement owner")
+	}
+	return p.network.RetainedPhysicalProtection(ctx, p.policy)
 }
 
 func routerVPNDesktopNodePhysicalAvailable(policy *mobilemultihop.DesktopNodePolicy) bool {

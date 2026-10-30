@@ -64,7 +64,10 @@ func desktopNodeAdmissionFixture(t *testing.T) (string, *routerVPNNodeAdmission,
 	}
 	t.Cleanup(func() { _ = files.root.Close() })
 	ctx, cancel := context.WithCancel(context.Background())
-	owned, admission, err := routerVPNPrepareNodeAdmission(ctx, files, physical)
+	meta := physical.Metadata()
+	expected := mobiletor.DesktopProtectionTransferRecord{Schema: 1, Kind: "routervpn-windows-protection-transfer-v1", SessionID: meta.SessionID,
+		SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy}
+	owned, admission, err := routerVPNPrepareNodeAdmission(ctx, files, physical, &expected)
 	if err != nil || admission == nil || admission.admitted() {
 		t.Fatal("native IPC admission was not captured", err)
 	}
@@ -114,7 +117,7 @@ func TestRouterVPNDesktopNodePhysicalCommandAdmissionExactHandshake(t *testing.T
 	value := desktopNodeAdmissionRecord(t, directory)
 	if value.Schema != 1 || value.Accepted || value.SessionID != prepared.Capture.SessionID || value.SourceSHA256 != prepared.Capture.SourceSHA256 ||
 		value.NetworkID != prepared.Capture.NetworkID || value.Policy != prepared.Policy || value.BaselineSHA256 != prepared.BaselineSHA256 ||
-		value.ConfigSHA256 != a.metadata.ConfigSHA256 || len(value.Nonce) != 64 || a.admitted() {
+		value.ConfigSHA256 != a.metadata.ConfigSHA256 || value.TransferSHA256 != a.transfer || len(value.Nonce) != 64 || a.admitted() {
 		t.Fatal("native handshake changed its captured baseline or admitted before acknowledgement")
 	}
 	value.Accepted = true
@@ -138,7 +141,7 @@ func TestRouterVPNDesktopNodePhysicalCommandAdmissionExactHandshake(t *testing.T
 }
 
 func TestRouterVPNDesktopNodePhysicalCommandAdmissionRejectsForeignReplies(t *testing.T) {
-	for _, fault := range []string{"schema", "session", "source", "config", "network", "policy", "baseline", "nonce", "not-accepted", "extra", "duplicate", "oversized", "linked"} {
+	for _, fault := range []string{"schema", "kind", "session", "source", "config", "transfer", "network", "policy", "baseline", "nonce", "not-accepted", "extra", "duplicate", "oversized", "linked"} {
 		t.Run(fault, func(t *testing.T) {
 			directory, a, ctx, cancel, prepared := desktopNodeAdmissionFixture(t)
 			defer cancel()
@@ -149,12 +152,16 @@ func TestRouterVPNDesktopNodePhysicalCommandAdmissionRejectsForeignReplies(t *te
 			switch fault {
 			case "schema":
 				value.Schema++
+			case "kind":
+				value.Kind = "routervpn-node-physical-handoff-v1"
 			case "session":
 				value.SessionID = strings.Repeat("d", 32)
 			case "source":
 				value.SourceSHA256 = strings.Repeat("d", 64)
 			case "config":
 				value.ConfigSHA256 = strings.Repeat("d", 64)
+			case "transfer":
+				value.TransferSHA256 = strings.Repeat("d", 64)
 			case "network":
 				value.NetworkID = strings.Repeat("d", 32)
 			case "policy":

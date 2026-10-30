@@ -48,6 +48,7 @@ type NodeNetworkOwner struct {
 	ready     bool
 	active    bool
 	retired   bool
+	closed    bool
 }
 
 // The factory is an in-memory native capability, never an imported graph field.
@@ -300,9 +301,64 @@ func (n *NodeNetworkOwner) Close() error {
 		}
 	}
 	if source != nil {
-		return source.Close(ctx)
+		if err := source.Close(ctx); err != nil {
+			return err
+		}
 	}
+	n.mu.Lock()
+	n.closed = true
+	n.mu.Unlock()
 	return nil
+}
+
+// RetainedPhysicalProtection is available only after this exact network
+// service has joined every entered constructor, socket and native source. The
+// bool says whether a native source was returned at all; false is not proof
+// of absence and requires the command's independent expected-state read.
+func (n *NodeNetworkOwner) RetainedPhysicalProtection(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (*mobiletor.DesktopWindowsProtectionTarget, bool, error) {
+	if n == nil || ctx == nil || ctx.Err() != nil || policy == nil || policy.Validate() != nil {
+		return nil, false, errors.New("Router node retirement lost its captured cleanup request")
+	}
+	meta := policy.Metadata()
+	n.mu.Lock()
+	valid := n.closed && n.retired && n.ctx != nil && !n.ready && !n.sockets && n.capture.SessionID == meta.SessionID && n.capture.SourceSHA256 == meta.SourceSHA256 &&
+		(n.policy == policy || n.policy == nil && n.factory == nil && n.preparing == nil)
+	source, capture, lifetime := n.source, n.brokerCapture(), n.ctx
+	n.mu.Unlock()
+	if !valid {
+		return nil, false, errors.New("Router node retirement is unjoined or belongs to another native policy")
+	}
+	if source == nil {
+		return nil, false, nil
+	}
+	reader, ok := source.(interface {
+		RetainedProtectionOutcome(context.Context) (*mobiletor.DesktopWindowsProtectionTarget, error)
+	})
+	if !ok {
+		return nil, true, errors.New("Router node native source cannot attest its joined protection outcome")
+	}
+	target, err := reader.RetainedProtectionOutcome(ctx)
+	if err != nil || ctx.Err() != nil {
+		return nil, true, errors.Join(err, ctx.Err())
+	}
+	if target != nil && target.Validate() == nil && target.Capture == capture && target.Policy == meta.KillSwitchPolicy {
+		captured := *target
+		return &captured, true, nil
+	}
+	// Cleanup reads the already captured capability after cancellation; it may
+	// not create a new admission or use whichever profile is currently selected.
+	owner, ok := lifetime.Value(nodePhysicalAdmissionKey{}).(*nodePhysicalAdmissionOwner)
+	if !ok || owner == nil || owner.policy != policy || owner.admit == nil {
+		return nil, true, errors.New("Router node retirement lost its original predecessor capability")
+	}
+	if target == nil && owner.predecessor == nil {
+		return nil, true, nil
+	}
+	if target == nil || target.Validate() != nil || owner.predecessor == nil || *target != *owner.predecessor {
+		return nil, true, errors.New("Router node retirement substituted its captured protection outcome")
+	}
+	captured := *target
+	return &captured, true, nil
 }
 
 func (n *NodeNetworkOwner) BindPhysicalTunnel(ctx context.Context, name string, index uint32) error {

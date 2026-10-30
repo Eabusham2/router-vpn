@@ -14,6 +14,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	routervpndesktoppt "github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
 const routerVPNNodeAdmissionLimit = 45 * time.Second
@@ -24,6 +25,7 @@ type routerVPNNodeAdmissionRecord struct {
 	SessionID      string `json:"session_id"`
 	SourceSHA256   string `json:"source_sha256"`
 	ConfigSHA256   string `json:"config_sha256"`
+	TransferSHA256 string `json:"transfer_sha256"`
 	NetworkID      string `json:"network_id"`
 	Policy         string `json:"policy"`
 	BaselineSHA256 string `json:"baseline_sha256"`
@@ -34,6 +36,7 @@ type routerVPNNodeAdmissionRecord struct {
 type routerVPNNodeAdmission struct {
 	files    *routerVPNExternalFiles
 	metadata mobilemultihop.DesktopNodeMetadata
+	transfer string
 	state    atomic.Int32 // 0 prepared, 1 entered/joined callback, 2 retired
 	joined   chan struct{}
 	retired  chan struct{}
@@ -41,11 +44,19 @@ type routerVPNNodeAdmission struct {
 	closeErr error
 }
 
-func routerVPNPrepareNodeAdmission(ctx context.Context, files *routerVPNExternalFiles, policy *mobilemultihop.DesktopNodePolicy) (context.Context, *routerVPNNodeAdmission, error) {
+func routerVPNPrepareNodeAdmission(ctx context.Context, files *routerVPNExternalFiles, policy *mobilemultihop.DesktopNodePolicy, expected *mobiletor.DesktopProtectionTransferRecord) (context.Context, *routerVPNNodeAdmission, error) {
 	if policy == nil || policy.Metadata().TargetOS != "windows" {
-		return ctx, nil, nil
+		return nil, nil, routerVPNExternalFailure
 	}
-	if ctx == nil || ctx.Err() != nil || files == nil || files.root == nil || policy.Validate() != nil {
+	if ctx == nil || ctx.Err() != nil || files == nil || files.root == nil || policy.Validate() != nil || expected == nil || expected.Validate() != nil {
+		return nil, nil, routerVPNExternalFailure
+	}
+	meta := policy.Metadata()
+	if expected.SessionID != meta.SessionID || expected.SourceSHA256 != meta.SourceSHA256 || expected.ConfigSHA256 != meta.ConfigSHA256 || expected.Policy != meta.KillSwitchPolicy {
+		return nil, nil, routerVPNExternalFailure
+	}
+	transfer, err := mobiletor.DesktopProtectionTransferRecordSHA256(*expected)
+	if err != nil {
 		return nil, nil, routerVPNExternalFailure
 	}
 	// Startup and the main command loop use different retained roots/maps.
@@ -60,14 +71,19 @@ func routerVPNPrepareNodeAdmission(ctx context.Context, files *routerVPNExternal
 		_ = root.Close()
 		return nil, nil, routerVPNExternalFailure
 	}
-	admission := &routerVPNNodeAdmission{files: &routerVPNExternalFiles{root: root, owned: map[string]os.FileInfo{}}, metadata: policy.Metadata(), joined: make(chan struct{}), retired: make(chan struct{})}
+	admission := &routerVPNNodeAdmission{files: &routerVPNExternalFiles{root: root, owned: map[string]os.FileInfo{}}, metadata: meta, transfer: transfer, joined: make(chan struct{}), retired: make(chan struct{})}
 	for _, name := range []string{"node-physical-handoff-ready.json", "node-physical-handoff-ack.json"} {
 		if !admission.files.current(name) {
 			_ = root.Close()
 			return nil, nil, routerVPNExternalFailure
 		}
 	}
-	owned, err := routervpndesktoppt.WithNodePhysicalAdmission(ctx, policy, admission.admit)
+	var owned context.Context
+	if expected.Predecessor == nil {
+		owned, err = routervpndesktoppt.WithNodePhysicalAdmission(ctx, policy, admission.admit)
+	} else {
+		owned, err = routervpndesktoppt.WithNodePhysicalSuccessorAdmission(ctx, policy, *expected.Predecessor, admission.admit)
+	}
 	if err != nil {
 		_ = root.Close()
 		return nil, nil, routerVPNExternalFailure
@@ -96,8 +112,8 @@ func (a *routerVPNNodeAdmission) admit(ctx context.Context, prepared routervpnde
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return routerVPNExternalFailure
 	}
-	record := routerVPNNodeAdmissionRecord{Schema: 1, Kind: "routervpn-node-physical-handoff-v1", SessionID: a.metadata.SessionID, SourceSHA256: a.metadata.SourceSHA256,
-		ConfigSHA256: a.metadata.ConfigSHA256, NetworkID: prepared.Capture.NetworkID, Policy: prepared.Policy,
+	record := routerVPNNodeAdmissionRecord{Schema: 1, Kind: "routervpn-node-physical-handoff-v2", SessionID: a.metadata.SessionID, SourceSHA256: a.metadata.SourceSHA256,
+		ConfigSHA256: a.metadata.ConfigSHA256, TransferSHA256: a.transfer, NetworkID: prepared.Capture.NetworkID, Policy: prepared.Policy,
 		BaselineSHA256: prepared.BaselineSHA256, Nonce: hex.EncodeToString(nonce[:])}
 	if !a.files.current("node-physical-handoff-ack.json") || a.files.publish("node-physical-handoff-ready.json", record) != nil {
 		return routerVPNExternalFailure
@@ -115,7 +131,7 @@ func (a *routerVPNNodeAdmission) admit(ctx context.Context, prepared routervpnde
 		raw, err := a.files.read("node-physical-handoff-ack.json", 2048)
 		if err == nil {
 			object, err := applexray.Object(raw)
-			if err != nil || len(object) != 10 {
+			if err != nil || len(object) != 11 {
 				return routerVPNExternalFailure
 			}
 			var actual routerVPNNodeAdmissionRecord

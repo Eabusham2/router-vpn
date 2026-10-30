@@ -248,3 +248,97 @@ func TestRouterVPNNodePhysicalFactoryCancellationJoinsPartialOwner(t *testing.T)
 		})
 	}
 }
+
+type nodePhysicalRetirementSource struct {
+	*physicalFactorySource
+	target    mobiletor.DesktopWindowsProtectionTarget
+	closeFail atomic.Bool
+	readErr   error
+	readCalls int
+}
+
+func (s *nodePhysicalRetirementSource) Close(ctx context.Context) error {
+	if s.closeFail.Load() {
+		return errors.New("fixture retained native handle")
+	}
+	return s.physicalFactorySource.Close(ctx)
+}
+
+func (s *nodePhysicalRetirementSource) RetainedProtectionOutcome(context.Context) (*mobiletor.DesktopWindowsProtectionTarget, error) {
+	s.readCalls++
+	if s.readErr != nil {
+		return nil, s.readErr
+	}
+	return &s.target, nil
+}
+
+func TestRouterVPNNodePhysicalRetirementKeepsExactJoinedSource(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		t.Run(map[bool]string{false: "started", true: "partial-before-admission"}[partial], func(t *testing.T) {
+			f := newNodePhysicalFixture(t)
+			source := &nodePhysicalRetirementSource{physicalFactorySource: &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()},
+				target: mobiletor.DesktopWindowsProtectionTarget{Capture: f.network.brokerCapture(), Policy: "always", BaselineSHA256: strings.Repeat("a", 64)}}
+			if err := f.network.PrepareNodePhysicalBroker(f.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+				if partial {
+					return nil, source, errors.New("fixture failed after captured baseline construction")
+				}
+				broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+				return broker, source, err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			err := f.network.Start(adapter.StartStateInitialize)
+			if (err != nil) != partial {
+				t.Fatal("fixture did not enter its intended construction phase", err)
+			}
+			if _, _, err := f.network.RetainedPhysicalProtection(context.Background(), f.policy); err == nil || source.readCalls != 0 {
+				t.Fatal("unjoined node acquired or queried a retained protection result")
+			}
+			source.closeFail.Store(true)
+			if err := f.network.Close(); err == nil {
+				t.Fatal("fixture failed close unexpectedly joined")
+			}
+			if _, _, err := f.network.RetainedPhysicalProtection(context.Background(), f.policy); err == nil || source.readCalls != 0 {
+				t.Fatal("failed node close acquired or queried a retained protection result")
+			}
+			source.closeFail.Store(false)
+			if err := f.network.Close(); err != nil {
+				t.Fatal(err)
+			}
+			actual, captured, err := f.network.RetainedPhysicalProtection(context.Background(), f.policy)
+			if err != nil || !captured || actual == nil || *actual != source.target || source.readCalls != 1 {
+				t.Fatal("joined node lost its exact retained source result", err)
+			}
+			actual.Capture.NetworkID = strings.Repeat("e", 32)
+			if source.target.Capture != f.network.brokerCapture() {
+				t.Fatal("returned node receipt mutated native source identity")
+			}
+			other := nodePhysicalPolicyFixture(t, runtime.GOOS)
+			if _, _, err := f.network.RetainedPhysicalProtection(context.Background(), other); err == nil || source.readCalls != 1 {
+				t.Fatal("equal but foreign policy read the old source retirement")
+			}
+			cancelled, cancel := context.WithCancel(context.Background())
+			cancel()
+			if _, _, err := f.network.RetainedPhysicalProtection(cancelled, f.policy); err == nil || source.readCalls != 1 {
+				t.Fatal("cancelled node retirement query reached the native source")
+			}
+			source.readErr = errors.New("fixture native baseline replaced")
+			if target, captured, err := f.network.RetainedPhysicalProtection(context.Background(), f.policy); err == nil || !captured || target != nil {
+				t.Fatal("failed native outcome became an unchanged predecessor")
+			}
+			source.readErr = nil
+			source.target.Capture.NetworkID = strings.Repeat("e", 32)
+			if target, _, err := f.network.RetainedPhysicalProtection(context.Background(), f.policy); err == nil || target != nil {
+				t.Fatal("node retirement accepted another source's network owner")
+			}
+		})
+	}
+
+	f := newNodePhysicalFixture(t)
+	if err := f.network.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if target, captured, err := f.network.RetainedPhysicalProtection(context.Background(), f.policy); err != nil || captured || target != nil {
+		t.Fatal("never-entered node source fabricated retained native protection", err)
+	}
+}
