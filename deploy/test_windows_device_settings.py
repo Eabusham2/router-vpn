@@ -87,7 +87,7 @@ def main():
         ("manual-autoconnect", "helper", "$body.auto_connect=$AutoConnect", "$body.auto_connect=$true", "CONTROL explicit startup edit did not form one atomic device payload"),
         ("coerced-lan", "helper", "if($HomeLANAccess -isnot [bool])", "if($false)", "CONTROL invalid device field accepted HomeLANAccess"),
         ("unsupported", "helper", "if(-not $Captured.device_policy_supported)", "if($false)", "CONTROL unsupported runtime received device policy"),
-        ("wrong-get-owner", "helper", "$Captured.profile_id -cne $DisplayedProfileID", "$false", "CONTROL invalid device field accepted DisplayedProfileID"),
+        ("wrong-get-owner", "helper", "$Captured.profile_id -isnot [string] -or $Captured.profile_id -cne $DisplayedProfileID", "$Captured.profile_id -isnot [string] -or $false", "CONTROL invalid device field accepted DisplayedProfileID"),
         ("wrong-post-route", "helper", "'/api/profile/device') -Method Post", "'/api/profile/settings') -Method Post", "CONTROL device save did not use its own endpoint"),
         ("busy-save", "helper", "if(Test-RouterVPNConnectionProfileBusy -BaseUrl $BaseUrl){throw 'Disconnect Router VPN before saving device settings.'}", "if($false){throw 'Disconnect Router VPN before saving device settings.'}", "CONTROL active device policy was submitted"),
         ("displayed-capture", "unified", "-Owner $Window -DisplayedProfileID $DisplayedProfileID -DisplayedNodeKind $DisplayedNodeKind", "-Owner $Window -DisplayedProfileID 'replacement' -DisplayedNodeKind $DisplayedNodeKind", "CONTROL composed callback lost displayed external identity"),
