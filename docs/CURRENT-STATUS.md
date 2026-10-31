@@ -6,7 +6,82 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through d342000f
+## Latest implementation continuation — through 5f7e8e97
+
+The verified source publication cutoff is
+[`5f7e8e9703dc7998675e3d36a1480d02c51fa043`](https://github.com/Eabusham2/router-vpn/commit/5f7e8e9703dc7998675e3d36a1480d02c51fa043).
+Each coherent unit below was committed directly to `main`, with its remote
+parent, tree and resulting head independently checked. The branch may advance.
+The [captured proof, native startup and Unix adapter evidence](CONTINUATION-EVIDENCE-2026-10-30.md#captured-proof-native-startup-and-unix-adapters)
+provides exact commit identities and verification boundaries. Earlier sections
+remain historical evidence and do not override these newer results.
+
+### Application and runtime changes
+
+- Owned Node startup and SMART/Speed Lab restoration prove HTTP health from the
+  sealed original node, private credentials and captured probe URL (`43fa0fdb`).
+  They no longer reopen a changed saved WG bundle or borrow a global fallback
+  URL. Actual HTTP parsing is bracketed by the current operation, process,
+  native target/generation, TUN and selected-DNS receipt. Ordinary saved-bundle
+  proof keeps its existing identity validation.
+- Xray Vision inbound now uses checked GC-tracked pointer arithmetic, matching
+  the existing outbound repair (`e1eabc8e`). Race/checkptr remain enabled; the
+  unpatched inbound crashes at the intended native witness. Five real encrypted
+  variants pass TCP and UDP after the repair.
+- Completed native Xray dials transfer lifetime to their captured connection
+  owner (`eaa2eb03`). Cancelling a completed DNS dial no longer closes its pooled
+  connection before the first query. Pending cancellation/deadline, connection
+  deadlines, exact native retirement and ordinary request semantics remain
+  enforced. Three REALITY families pass real TCP/UDP after caller cancellation;
+  the old lifetime and publication-cancellation defects are rejected.
+- Linux/Darwin Node adapters now project the sealed private tuples, selected
+  LAN/IPv6 policy and native interface into their existing socket guardians
+  (`25ea43b6`). Partial construction and failed cleanup retain the exact source.
+  The focused Linux race tests model the privileged constructor and use real
+  interface discovery. Actual integrated nft/PF Node traffic, Unix baseline/
+  readiness/journal contracts and public activation are still open.
+- Windows has a native read-only startup journal API (`17ccd1fc`). Only absence
+  of the root namespace can begin its fresh identity/BFE/namespace proof;
+  missing peers, changed Data and incomplete journals remain errors. It creates
+  no durable journal just to open an empty application. The separate app
+  consumer and pre-start materialization are under validation at this cutoff.
+
+### Native evidence and current gaps
+
+At `999e35d2`, actual Windows PowerShell 5.1 first-command lookup fell from the
+previous approximately 32 seconds to approximately 0.155 seconds; the HTTP
+assembly call completed approximately 0.240 seconds after its start. The
+independent installed App/Tray Session passed in 51.73 seconds. Portable then
+reached a distinct journal/Data identity failure; this is not a complete
+Portable or all-Windows acceptance result.
+
+The actual constructed Medium child/image/ancestor proof passed at `e8af9209`.
+The corrected macOS PF gate passed all four Intel/ARM64 jobs at `3e873649`.
+Ordinary interactive UAC, GLOBALROOT diagnostic failure and complete macOS
+installer process inventory remain separate unresolved evidence.
+
+`43927ebb` repairs complete Hysteria2 Start Layer sources; `6988438b` synchronizes
+the pre-TUN test with actual captured grants while retaining its late-admission
+negative. `70452de9` closes Windows identity snapshot handles before production
+write-through replacement, preserving the original object through an owned test
+hard link. Its in-place-overwrite negative remains. `344357e0` reserves bounded
+UDP send capacity on the two test-owned macOS ciphertext sockets. These fixture
+changes do not relax production policy; their current native outcomes must be
+read rather than inferred from cross-compilation.
+
+The dedicated Windows controller workflow now watches the complete shipping
+client and `go.sum` (`5f7e8e97`). Previously omitted private-store/recovery/health
+changes cannot miss its dedicated Node/Session gate. Existing jobs, checks and
+read-only permissions are unchanged.
+
+Public Connect/AUTO/SMART/captured restoration integration, remaining graph
+families and Unix protected Node composition are still being implemented.
+There is no new verified all-green exact-SHA release at this cutoff. Packages,
+images, compose, publication, physical/off-LAN checks, applicable signing and
+private deployment remain distinct requirements. No live router, AdGuard or
+Portainer configuration was changed.
+
+## Earlier implementation continuation — through d342000f
 
 The latest verified source publication cutoff is
 [`d342000f2f41c36517ce3fedccf65611e13f608b`](https://github.com/Eabusham2/router-vpn/commit/d342000f2f41c36517ce3fedccf65611e13f608b).

@@ -1400,3 +1400,125 @@ No new complete release or private deployment is established by this section.
 Current source, native execution, packages, publication and physical/live
 acceptance remain distinct evidence. The old `745b3e41` release must not be
 attached to these newer changes.
+
+
+## Captured proof, native startup and Unix adapters
+
+This continuation records verified source publications through `5f7e8e97`.
+It preserves the original requirement authority and platform distinctions.
+Local validation and generated-engine fixtures do not establish current release,
+physical-device or private deployment acceptance. All remote commits below were
+created with the preceding verified `main` as parent and a non-forced expected-
+head ref update; the resulting tree and branch were read back independently.
+
+| Unit | Local reviewed commit | Verified remote `main` commit |
+|---|---|---|
+| Qualified first Windows framework command | `16392e2cfd1febf7d416e61f2a8376b6305bf43e` | [`999e35d284f70fda68b1f0f21478994cde9e39dc`](https://github.com/Eabusham2/router-vpn/commit/999e35d284f70fda68b1f0f21478994cde9e39dc) |
+| Native UDP ciphertext fixture capacity | `43e0804fb889d9727b4fcb322e175914d357309c` | [`344357e02c092ffd182a6390faad413f7476402a`](https://github.com/Eabusham2/router-vpn/commit/344357e02c092ffd182a6390faad413f7476402a) |
+| Complete Hysteria2 command Start Layer sources | `2c6fc7e0ce00bc7af30d19fb00d6a2d090ae84cb` | [`43927ebb94fd284e237ea081c2041372ca1da0c3`](https://github.com/Eabusham2/router-vpn/commit/43927ebb94fd284e237ea081c2041372ca1da0c3) |
+| Actual pre-TUN grant fixture barrier | `4613c3154d6a1c0203490059ca2f282b2770eed0` | [`6988438b4f5315f9338d9f464c2c1a1852087d5a`](https://github.com/Eabusham2/router-vpn/commit/6988438b4f5315f9338d9f464c2c1a1852087d5a) |
+| Captured owned Node health proof | `c3efc163da59af1edcd82008ce47c39c73e799a0` | [`43fa0fdbdcff631f57a9b3d667815e5e3bb315c8`](https://github.com/Eabusham2/router-vpn/commit/43fa0fdbdcff631f57a9b3d667815e5e3bb315c8) |
+| Closed native identity snapshots | `130598ae4cd6f0189cbbe927788935b1dfacb613` | [`70452de9c3c344b5405c81c8799088b5e2d4f3bc`](https://github.com/Eabusham2/router-vpn/commit/70452de9c3c344b5405c81c8799088b5e2d4f3bc) |
+| Checked Vision inbound pointers | `04e823ea7e930974948bf80b7f7902a968651d0a` | [`e1eabc8e8f9b76d834e557840ec39d5e8ee9976a`](https://github.com/Eabusham2/router-vpn/commit/e1eabc8e8f9b76d834e557840ec39d5e8ee9976a) |
+| Linux/Darwin owned Node socket adapters | `518cdec67e5377e466df49250de2287cbbdb218d` | [`25ea43b6aa8d01f61f2274b273b8e94b4e7abe23`](https://github.com/Eabusham2/router-vpn/commit/25ea43b6aa8d01f61f2274b273b8e94b4e7abe23) |
+| Native startup namespace absence | `09abf02712e3bf31579dc5643522444d8997facc` | [`17ccd1fca96c021e827ba2f3de34a5c490cc8d68`](https://github.com/Eabusham2/router-vpn/commit/17ccd1fca96c021e827ba2f3de34a5c490cc8d68) |
+| Native Xray completed dial lifetime | `d9d49c386a6a13b97f48febabce833a7ae4d6c8a` | [`eaa2eb03c846d914c4ab4b2d0f384af635f4125d`](https://github.com/Eabusham2/router-vpn/commit/eaa2eb03c846d914c4ab4b2d0f384af635f4125d) |
+| Complete client input trigger for Windows gates | `5d6627b6d8fdc8e16f94328c1ea1b50b4bab0a7f` | [`5f7e8e9703dc7998675e3d36a1480d02c51fa043`](https://github.com/Eabusham2/router-vpn/commit/5f7e8e9703dc7998675e3d36a1480d02c51fa043) |
+
+### Captured restoration and actual native Xray behavior
+
+Owned health previously reopened the current generated WG bundle during
+restoration. `43fa0fdb` uses the validated sealed original profile and NodeID,
+its private credentials and explicit probe URL (or its captured Router API
+health endpoint). Native ready/DNS/TUN ownership, process liveness, protection
+generation/target and the captured operation are checked before and after the
+real HTTP exchange. Three focused race groups cover ten nested cases; broader
+startup/SMART/protection/restore cases passed three repetitions. Four compiled
+production mutations were rejected. Windows AMD64/ARM64 checkptr builds passed;
+application fixtures model process/BFE boundaries and in-memory HTTP connections.
+
+The actual Xray reference exposed a pointer-safety panic at the pinned Vision
+inbound's reflected buffer access. `e1eabc8e` applies the existing retained
+`unsafe.Pointer`/`unsafe.Add` and checked field-type repair to the exact inbound
+owner set as well. Drift is rejected before either source file is written.
+Nine preparation tests and five actual encrypted variants passed with race/
+checkptr, including TCP and 64/1200/9000-byte UDP. Reverting only the inbound
+repair reproduced the original pointer-check failure.
+
+The native DNS pool cancels its completed dial context before its first query.
+The old adapter tied the returned connection to that caller and closed it.
+`eaa2eb03` introduces explicit `BeginDial` publication: caller cancellation or
+expiry rejects pending results, then a successful result belongs to its native
+connection owner. Ordinary `Begin` behavior remains. Owner shutdown still
+synchronously cancels and closes every pending/published request. Shared race
+regressions, all three REALITY-family actual TCP/UDP cancellation/retirement
+cases, the old-lifetime mutation and a deterministic cancellation during
+publication mutation passed their intended positive/negative outcomes. The
+separate wider owned Node admission unit is not included in this cutoff.
+
+### Windows native outcomes and startup work
+
+At [999e35d2, instrumented job 124411232161](https://github.com/Eabusham2/router-vpn/actions/runs/41158726345/job/124411232161),
+actual Windows PowerShell 5.1 command discovery completed in approximately
+0.155 seconds and framework HTTP initialization in approximately 0.240 seconds.
+The first production command is module-qualified to the system Utility cmdlet;
+no warmup, added deadline or retry masks the result. The independent
+[normal Session job 124411232211](https://github.com/Eabusham2/router-vpn/actions/runs/41158726345/job/124411232211)
+passed installed App/Tray composition in 51.73 seconds, then failed the fresh
+Portable case on the global journal's original Data identity. Failure-only
+logs identify startup recovery, not an authenticated-channel timeout.
+
+`17ccd1fc` provides `OpenProtectionJournalForStartup` and fresh
+`InitialAbsence`. Only missing root namespace can enter absence observation;
+missing lock/header/slot, another Data directory and unknown records do not.
+Retained controller/desktop/Data/machine identities and repeated namespace
+inspection bracket actual BFE absence. An unexpected opened root remains owned
+for checked Close. Snapshot cannot fabricate a durable head from absence.
+Three new native groups cover absence, seven existing/incomplete cases and
+seven changed-observation cases. Both architecture/checkptr baselines and
+three deliberately broken native variants compiled. Their Windows execution
+and the app consumer/materialization are still pending at this source cutoff.
+
+The [e8af9209 Medium diagnostic job 124409159985](https://github.com/Eabusham2/router-vpn/actions/runs/41158061863/job/124409159985)
+passed the restricted constructed-Medium child, protected global image and
+retained executable ancestors. Missing linked limited-token and GLOBALROOT
+Shell diagnostics remain separate failures; this pass is not interactive
+same-user/cross-account UAC acceptance.
+
+The Windows Node job at `999e35d2` exposed a second identity-fixture problem:
+ordinary replacement rejects an open destination even with DELETE sharing.
+The [documented native rename rules](https://learn.microsoft.com/en-us/windows-hardware/drivers/ddi/ntifs/ns-ntifs-_file_rename_information)
+distinguish ordinary replacement from the separate POSIX replacement flag.
+`70452de9` captures native IDs, closes the read handles, and preserves the old
+object with a hard link confined to the new test directory. New identity and
+unchanged old bytes are checked; the in-place-overwrite mutation is unchanged.
+Both native/checkptr baselines, one mutation compile and seven runner tests
+passed locally. Current actual Windows execution is still required. The
+missing dedicated workflow trigger was independently observed at this commit;
+`5f7e8e97` now covers all `cmd/client/**` inputs and `go.sum` for push/PR, with
+all jobs, steps and read-only permissions preserved.
+
+### Unix adapters and remaining contracts
+
+`25ea43b6` adds Linux/Darwin native Node factories using the existing exact
+nft/PF socket guardians. The adapter derives private address/port/transport
+exceptions, LAN choice, IPv6 interface bindings and captured native interface
+from the sealed original profile. A replaced interface, cancellation or partial
+constructor never transfers authority to a replacement source. Linux race
+fixtures passed three groups/156 leaf cases with privileged constructors
+explicitly modeled; three production defects were rejected. Linux ARM64 and
+Darwin AMD64/ARM64 generated packages compiled. Preparation passed 22 tests;
+native toolchain registration passed 23 with one existing optional skip.
+
+These adapters do not alone activate protected Unix Node traffic. Real native
+baseline/retirement observations, authenticated child/app admission, actual
+TUN/utun ready records, fresh DNS/node proof, durable recovery and Always/Off
+succession remain necessary. Existing helper-native Linux/macOS tunnels and
+nft/PF protection are distinct implemented paths and are not described as absent.
+The [corrected macOS PF run at 3e873649](https://github.com/Eabusham2/router-vpn/actions/runs/41156173455)
+passed both main and single-filter lifetime jobs on Intel and ARM64, including
+all 130 retirements and the corrected quick-deny negative.
+
+The old 745b3e41 release remains historical. Native build, package/image
+publication, current compose, physical/off-LAN acceptance and deliberate private
+deployment still require their own exact-source evidence.
