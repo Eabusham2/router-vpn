@@ -27,6 +27,7 @@ function Reset-Fixture {
     $script:UnifiedAsyncSuccess=$null; $script:UnifiedAsyncFailure=$null; $script:UnifiedAsyncFinally=$null
     $script:UnifiedAsyncLabel=''; $script:UnifiedAsyncCancelled=$false; $script:UnifiedAsyncDisconnectAfterCancel=$false
     $script:UnifiedAsyncActive=$false; $script:UnifiedAsyncCompleting=$false; $script:UnifiedAsyncClosed=$false
+    $script:UnifiedProtectionPending=$false
     $script:UnifiedAsyncPoller=[pscustomobject]@{Starts=0;Stops=0}
     $script:UnifiedAsyncPoller | Add-Member ScriptMethod Start {$this.Starts++}
     $script:UnifiedAsyncPoller | Add-Member ScriptMethod Stop {$this.Stops++}
@@ -64,6 +65,35 @@ function Finish-Response([int]$Status = 200) {
     [void]$script:UnifiedAsyncClient.Pending.TrySetResult($r)
     return $r
 }
+
+# A settled HTTP action cannot re-enable connection/profile mutations while
+# the captured protection owner is still pending. Explicit protection recovery
+# stays reachable when idle, and an in-flight action retains Cancel/Disconnect.
+Reset-Fixture
+$MutationControls=@('UnifiedSettingsButton','UnifiedPresetsButton','UnifiedNodesButton','UnifiedModeCombo','UnifiedMultihop','UnifiedEntryCombo','UnifiedExitCombo','UnifiedExecution','UnifiedCandidatesButton','UnifiedFastestNode','UnifiedForwardButton','UnifiedPerformanceButton','UnifiedNodeCombo','UnifiedDnsCombo','UnifiedTorButton','UnifiedExternalNodeButton','UnifiedExternalPathButton')
+SetUnifiedAsyncUI $false
+foreach($Name in $MutationControls){Assert (Control $Name).IsEnabled ('Idle action did not release '+$Name)}
+$script:UnifiedProtectionPending=$true
+SetUnifiedAsyncUI $false
+foreach($Name in $MutationControls){Assert (-not(Control $Name).IsEnabled) ('Pending protection enabled mutation '+$Name)}
+Assert ((Control 'UnifiedKillSwitch').IsEnabled-and-not(Control 'UnifiedConnectButton').IsEnabled) 'Pending protection hid explicit recovery or enabled Connect'
+SetUnifiedAsyncUI $true 'Connect'
+foreach($Name in $MutationControls){Assert (-not(Control $Name).IsEnabled) ('Busy action enabled mutation '+$Name)}
+Assert (-not(Control 'UnifiedKillSwitch').IsEnabled-and(Control 'UnifiedConnectButton').IsEnabled-and(Control 'UnifiedConnectButton').Content-ceq'Cancel / Disconnect') 'Busy protected action lost Cancel/Disconnect or enabled a protection mutation'
+$script:UnifiedProtectionPending=$false
+SetUnifiedAsyncUI $false
+foreach($Name in $MutationControls){Assert (Control $Name).IsEnabled ('Drained protection did not release '+$Name)}
+Assert ((Control 'UnifiedKillSwitch').IsEnabled-and(Control 'UnifiedConnectButton').IsEnabled) 'Drained protection did not release idle connection controls'
+
+Reset-Fixture
+Assert (StartUnifiedApiAsync 'Connect' '/api/connect-logical' 'POST' @{} 30 $null $null $null) 'Pending-protection completion fixture did not start'
+[void](Finish-Response)
+$script:UnifiedProtectionPending=$true
+CompleteUnifiedApiAsync
+foreach($Name in $MutationControls){Assert (-not(Control $Name).IsEnabled) ('HTTP completion overrode pending protection for '+$Name)}
+Assert (-not(UnifiedAsyncBusy)-and(Control 'UnifiedKillSwitch').IsEnabled-and-not(Control 'UnifiedConnectButton').IsEnabled) 'HTTP completion confused its reservation with pending protection'
+Write-Host 'PASS pending protection survives HTTP completion and preserves exact recovery/cancel controls'
+
 Reset-Fixture
 Assert (StartUnifiedApiAsync 'Connect' '/api/connect-logical' 'POST' @{} 30 {param($r)$script:Successes++} $null $null) 'First request did not start'
 $r=Finish-Response
@@ -257,4 +287,4 @@ $tokens=$null;$errors=$null
 [void][System.Management.Automation.Language.Parser]::ParseInput($handlers.Groups[1].Value,[ref]$tokens,[ref]$errors)
 Assert ($errors.Count -eq 0) ('Shipping event-handler parse failed: '+(($errors|ForEach-Object Message)-join '; '))
 Write-Host 'PASS generated window event handlers parse'
-Write-Host 'Windows async action regression tests: PASS (13 groups)'
+Write-Host 'Windows async action regression tests: PASS (14 groups)'
