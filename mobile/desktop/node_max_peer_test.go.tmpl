@@ -1,0 +1,556 @@
+//go:build cgo && routervpn_native_pq && routervpn_pq_traffic_test
+
+package routervpnpq
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"runtime"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxTLS "github.com/sagernet/sing-box/common/tls"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	HYOUT "github.com/sagernet/sing-box/protocol/hysteria2"
+	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
+	XR "github.com/sagernet/sing-box/protocol/routervpnxray"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	HY "github.com/sagernet/sing-quic/hysteria2"
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	"github.com/sagernet/sing/common/buf"
+	"github.com/sagernet/sing/common/bufio"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// Additional complete MAX graph evidence using the same native PQ references.
+type nodeMAXPacket struct {
+	net.PacketConn
+	owner *nodePQLayer
+}
+
+func (p *nodeMAXPacket) ReadFrom(body []byte) (int, net.Addr, error) {
+	n, source, err := p.PacketConn.ReadFrom(body)
+	if err == nil {
+		p.owner.raw.Add(1)
+		if bytes.Contains(body[:n], []byte(nodePQPayload)) {
+			p.owner.plain.Store(true)
+		}
+	}
+	return n, source, err
+}
+
+type nodeMAXHYHandler struct{ *nodePQLayer }
+
+func (h nodeMAXHYHandler) NewConnectionEx(_ context.Context, connection net.Conn, _, _ M.Socksaddr, done N.CloseHandlerFunc) {
+	_ = connection.Close()
+	if done != nil {
+		done(errors.New("MAX reference permits only its captured middle UDP tuple"))
+	}
+}
+
+func (h nodeMAXHYHandler) NewPacketConnectionEx(ctx context.Context, connection N.PacketConn, source, destination M.Socksaddr, done N.CloseHandlerFunc) {
+	err := h.NewPacketConnection(ctx, connection, M.Metadata{Source: source, Destination: destination})
+	if done != nil {
+		done(err)
+	}
+}
+
+func nodeMAXCertificate(t *testing.T) (string, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: "captured-max.test"},
+		DNSNames: []string{"captured-max.test"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, IsCA: true, BasicConstraintsValid: true}
+	der, err := x509.CreateCertificate(rand.Reader, spec, spec, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	encodedKey := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
+	clear(private)
+	return certificate, encodedKey
+}
+
+func nodeMAXSecret(t *testing.T) string {
+	t.Helper()
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		t.Fatal(err)
+	}
+	encoded := base64.StdEncoding.EncodeToString(raw[:])
+	clear(raw[:])
+	return encoded
+}
+
+func nodeMAXUDP(t *testing.T, ip netip.Addr, excluded ...uint16) *net.UDPConn {
+	t.Helper()
+	for attempt := 0; attempt < 3; attempt++ {
+		packet, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(ip, 0)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := packet.LocalAddr().(*net.UDPAddr).AddrPort().Port()
+		blocked := false
+		for _, reserved := range excluded {
+			blocked = blocked || port == reserved
+		}
+		if blocked {
+			_ = packet.Close()
+			continue
+		}
+		t.Cleanup(func() { _ = packet.Close() })
+		if err := packet.SetWriteBuffer(65535); err != nil {
+			t.Fatal(err)
+		}
+		return packet
+	}
+	t.Fatal("MAX fixture could not retain a distinct captured UDP service")
+	return nil
+}
+
+func nodeMAXSS(t *testing.T, packet *net.UDPConn, stream net.Listener, secret string, routes, tcpRoutes map[M.Socksaddr]string, wg M.Socksaddr, barrier <-chan struct{}) *nodePQLayer {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &nodePQLayer{ctx: ctx, cancel: cancel, udp: packet, routes: routes, wg: wg, barrier: barrier, owned: make(map[io.Closer]bool)}
+	t.Cleanup(func() {
+		if stream != nil {
+			_ = stream.Close()
+		}
+		s.close()
+	})
+	service, err := shadowaead_2022.NewServiceWithPassword(mobilemultihop.NativeStartLayerMethod, secret, 10, nodeMAXMiddleHandler{s, tcpRoutes}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.workers.Add(1)
+	go func() {
+		defer s.workers.Done()
+		reader := bufio.NewPacketConn(packet)
+		for {
+			body := buf.NewSize(65535)
+			source, err := reader.ReadPacket(body)
+			if err != nil {
+				body.Release()
+				return
+			}
+			s.raw.Add(1)
+			if bytes.Contains(body.Bytes(), []byte(nodePQPayload)) {
+				s.plain.Store(true)
+			}
+			if service.NewPacket(ctx, reader, body, M.Metadata{Source: source}) != nil {
+				s.rejected.Add(1)
+				body.Release()
+			}
+		}
+	}()
+	if stream != nil {
+		s.workers.Add(1)
+		go func() {
+			defer s.workers.Done()
+			for {
+				connection, err := stream.Accept()
+				if err != nil {
+					return
+				}
+				if !s.enter(connection) {
+					_ = connection.Close()
+					return
+				}
+				go func(connection net.Conn) {
+					defer s.leave(connection)
+					if err := service.NewConnection(ctx, &nodeMAXTLSCountedConn{connection, s}, M.Metadata{Source: M.SocksaddrFromNet(connection.RemoteAddr())}); err != nil {
+						s.rejected.Add(1)
+					}
+				}(connection)
+			}
+		}()
+	}
+	return s
+}
+
+func nodeMAXHY(t *testing.T, packet *net.UDPConn, secret, certificate, key string, middle M.Socksaddr, target string) *nodePQLayer {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &nodePQLayer{ctx: ctx, cancel: cancel, udp: packet, routes: map[M.Socksaddr]string{middle: target}, owned: make(map[io.Closer]bool)}
+	logger := log.NewNOPFactory().NewLogger("captured-max-outer")
+	config, err := boxTLS.NewServer(ctx, logger, option.InboundTLSOptions{Enabled: true, Certificate: []string{certificate}, Key: []string{key}})
+	if err != nil {
+		s.close()
+		t.Fatal(err)
+	}
+	service, err := HY.NewService[int](HY.ServiceOptions{Context: ctx, Logger: logger, TLSConfig: config, UDPTimeout: 10 * time.Second, Handler: nodeMAXHYHandler{s},
+		MasqueradeHandler: http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			// The unmodified service reaches its default 404 only after the
+			// actual HTTP/3 authentication request is rejected. Keep that result.
+			s.rejected.Add(1)
+			http.NotFound(response, request)
+		})})
+	t.Cleanup(func() {
+		if service != nil {
+			_ = service.Close()
+		}
+		_ = config.Close()
+		s.close()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.UpdateUsers([]int{1}, []string{secret})
+	if err := config.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Start(&nodeMAXPacket{PacketConn: packet, owner: s}); err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+type nodeMAXFixture struct {
+	*nodePQFixture
+	middle, outer                                    *nodePQLayer
+	packet, kem, middleDestination, outerDestination M.Socksaddr
+	tlsReference                                     *nodeMAXTLSReference
+}
+
+func newNodeMAXFixture(t *testing.T, mode, layer, fault string) *nodeMAXFixture {
+	t.Helper()
+	if mode != "max-quic-wg" && mode != "max-quic-awg" && mode != "max-tls-wg" && mode != "max-tls-awg" {
+		t.Fatal("wrong complete MAX family")
+	}
+	if layer != "" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening" {
+		t.Fatal("wrong MAX Start Layer")
+	}
+	if fault != "" && fault != "kem-peer" && fault != "packet-peer" && fault != "middle-key" && fault != "outer-password" && fault != "outer-trust" && fault != "outer-name" && fault != "outer-reality-key" && fault != "outer-mlkem-key" && fault != "outer-user" {
+		t.Fatal("unknown MAX fault")
+	}
+	iface, ip := nodePQInterface(t)
+	private, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &nodePQFixture{inner: &nodePQInner{owned: make(map[io.Closer]bool)}}
+	t.Cleanup(f.inner.close)
+	f.reference = AWG.NewNativePQTrafficReferenceWithHandler(t, private.PublicKey().Bytes(), strings.HasSuffix(mode, "-awg"), f.inner)
+	f.server = newPQTrafficServer(t, f.reference, 2)
+	service, basePort, baseFile, tool := "10.77.0.1", uint16(51820), "wg.conf", "wg"
+	if strings.HasSuffix(mode, "-awg") {
+		service, basePort, baseFile, tool = "10.78.0.1", 585, "awg.conf", "awg"
+	}
+	packetDestination := M.SocksaddrFrom(netip.MustParseAddr(service), basePort)
+	kemDestination := M.SocksaddrFrom(netip.MustParseAddr(service), 51822)
+	isTLS := strings.HasPrefix(mode, "max-tls-")
+	var middleStream net.Listener
+	var middleSocket *net.UDPConn
+	if isTLS {
+		middleStream, middleSocket = nodeMAXBoth(t, ip, basePort, 51822, 8389)
+	} else {
+		middleSocket = nodeMAXUDP(t, ip, basePort, 51822, 8389)
+	}
+	middleAddress := middleSocket.LocalAddr().(*net.UDPAddr).AddrPort()
+	middleDestination := M.SocksaddrFrom(netip.MustParseAddr(service), middleAddress.Port())
+	middleKey, outerKey := nodeMAXSecret(t), nodeMAXSecret(t)
+	certificate, certificateKey := nodeMAXCertificate(t)
+	var outer *nodePQLayer
+	var outerAddress netip.AddrPort
+	var tlsReference *nodeMAXTLSReference
+	protocol := "udp"
+	if isTLS {
+		tlsReference = nodeMAXTLS(t, ip, middleDestination, middleAddress.String(), fault)
+		outer, outerAddress = tlsReference.observed, tlsReference.address
+		protocol = "tcp"
+	} else {
+		outerSocket := nodeMAXUDP(t, ip, basePort, 51822, 8389)
+		outerAddress = outerSocket.LocalAddr().(*net.UDPAddr).AddrPort()
+		outer = nodeMAXHY(t, outerSocket, outerKey, certificate, certificateKey, middleDestination, middleAddress.String())
+	}
+	outerDestination := M.SocksaddrFrom(netip.MustParseAddr(service), outerAddress.Port())
+	routes := map[M.Socksaddr]string{packetDestination: f.reference.Address(), kemDestination: f.server.conn.LocalAddr().String()}
+	tcpRoutes := make(map[M.Socksaddr]string)
+	if isTLS {
+		tcpRoutes[outerDestination] = outerAddress.String()
+	} else {
+		if outerDestination == packetDestination || outerDestination == kemDestination {
+			t.Fatal("MAX outer service aliases a mandatory inner UDP lane")
+		}
+		routes[outerDestination] = outerAddress.String()
+	}
+	middle := nodeMAXSS(t, middleSocket, middleStream, middleKey, routes, tcpRoutes, packetDestination, f.server.initialKey)
+	physical := outerAddress
+	if layer != "" {
+		physical = middleAddress
+	}
+	if layer == "aes-256-gcm+xor-whitening" {
+		physical = nodePQRelay(t, ip, middleAddress.String(), middleKey)
+	}
+	if fault == "middle-key" {
+		middleKey = nodeMAXSecret(t)
+	}
+	if fault == "outer-password" {
+		outerKey = nodeMAXSecret(t)
+	}
+	if fault == "outer-trust" {
+		certificate, _ = nodeMAXCertificate(t)
+	}
+	serverName := "captured-max.test"
+	if fault == "outer-name" {
+		serverName = "different-node.test"
+	}
+	packetPublic := f.reference.Public
+	if fault == "packet-peer" {
+		other, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		packetPublic = other.PublicKey().Bytes()
+	}
+	public := base64.StdEncoding.EncodeToString(packetPublic)
+	proof := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+	var parameters strings.Builder
+	if strings.HasSuffix(mode, "-awg") {
+		for _, name := range []string{"jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"} {
+			fmt.Fprintf(&parameters, "%s=%s\n", name, f.reference.Parameters[name])
+		}
+	}
+	packetProfile := "[Interface]\nAddress=10.78.0.2/32,fd78:78::2/128\nPrivateKey=" + base64.StdEncoding.EncodeToString(private.Bytes()) + "\nDNS=192.168.50.133\n" + parameters.String() + "\n[Peer]\nPublicKey=" + public + "\nEndpoint=127.0.0.1:51830\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n"
+	peerName := "server"
+	if fault == "kem-peer" {
+		peerName = "other"
+	}
+	outerConfig := map[string]any{"type": "hysteria2", "tag": "outer", "server": ip.String(), "server_port": int(outerAddress.Port()), "password": outerKey, "tls": map[string]any{"enabled": true, "server_name": serverName, "certificate_path": "cert.pem"}}
+	engine, layers := "sing-box", "rosenpass-pq>base>shadowsocks2022>hysteria2-quic"
+	if isTLS {
+		outerConfig = map[string]any{"type": "socks", "tag": "outer", "server": "127.0.0.1", "server_port": 1090, "version": "5"}
+		engine, layers = "xray", "rosenpass-pq>base>shadowsocks2022>xray-vless-pq-reality-xhttp-finalmask"
+	}
+	middleConfig, _ := json.Marshal(map[string]any{"log": map[string]any{"level": "warn"}, "inbounds": []any{map[string]any{"type": "direct", "tag": "base-relay", "listen": "127.0.0.1", "listen_port": 51830, "network": "udp", "override_address": "127.0.0.1", "override_port": int(basePort)}},
+		"outbounds": []any{outerConfig,
+			map[string]any{"type": "shadowsocks", "tag": "ss-hop", "server": "127.0.0.1", "server_port": int(middleAddress.Port()), "method": mobilemultihop.NativeStartLayerMethod, "password": middleKey, "detour": "outer"}}, "route": map[string]any{"final": "ss-hop"}})
+	files := map[string][]byte{baseFile: []byte(packetProfile), "middle-sing-box.json": middleConfig, "cert.pem": []byte(certificate),
+		"chain.env":               []byte("CHAIN_READY=1\nOUTER_ENGINE=" + engine + "\nCHAIN_LAYERS=" + layers + "\nLOCAL_RELAY_PORT=51830\nPQ_BASE=1\n"),
+		"rosenpass.env":           []byte(fmt.Sprintf("ROSENPASS_TOOL=%s\nROSENPASS_INTERFACE=%s\nROSENPASS_WG_PEER=%s\nROSENPASS_KEY_OUT=rosenpass.psk\nROSENPASS_PORT=51822\n", tool, tool, public)),
+		"rosenpass.toml":          []byte(fmt.Sprintf("public_key = \"rosenpass-client-public\"\nsecret_key = \"rosenpass-client-secret\"\nlisten = []\nverbosity = \"Quiet\"\n[[peers]]\npublic_key = \"rosenpass-server-public\"\nendpoint = \"%s:51822\"\nkey_out = \"rosenpass.psk\"\n", service)),
+		"rosenpass-client-secret": realKeys(t, "client", "secret"), "rosenpass-client-public": realKeys(t, "client", "public"), "rosenpass-server-public": realKeys(t, peerName, "public")}
+	if isTLS {
+		delete(files, "cert.pem")
+		files["outer-xray.json"] = tlsReference.asset
+	}
+	encoded := make(map[string]string, len(files))
+	for name, value := range files {
+		encoded[name] = base64.StdEncoding.EncodeToString(value)
+		clear(value)
+	}
+	rawFiles, _ := json.Marshal(encoded)
+	profile, _ := json.Marshal(map[string]any{"id": "captured-complete-max-node", "node_kind": "router-vpn", "node_proof_id": hex.EncodeToString(proof[:]), "router_api": "http://" + service + ":8787", "api_token": "private-max-fixture-token", "endpoint": ip.String(),
+		"start_layer": layer, "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "kill_switch_policy": "always", "ipv6_mode": "on", "home_lan_access": false, "mtu_policy": "auto"})
+	f = assembleNodeMAXFixture(t, f, iface, ip, mode, protocol, rawFiles, profile, map[netip.AddrPort]bool{physical: true})
+	return &nodeMAXFixture{f, middle, outer, packetDestination, kemDestination, middleDestination, outerDestination, tlsReference}
+}
+
+func nodeMAXTrafficCases(t *testing.T, modes []string) {
+	for _, mode := range modes {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(mode+"/"+nodePQLayerName(layer), func(t *testing.T) {
+				constructionStarted := time.Now()
+				f := newNodeMAXFixture(t, mode, layer, "")
+				t.Logf("captured complete MAX construction: %s", time.Since(constructionStarted))
+				if f.middle.raw.Load() != 0 || f.outer.raw.Load() != 0 || f.server.received.Load() != 0 {
+					t.Fatal("MAX opened a middle, outer or KEM lane before captured startup")
+				}
+				f.start(t)
+				var previous [32]byte
+				var priorLocal, priorRemote int64
+				native := f.endpoint.base.(nativePQReadback)
+				for epoch := 0; epoch < 2; epoch++ {
+					if epoch != 0 {
+						f.server.force(t)
+					}
+					previous = pqTrafficAgreedKeys(t, f.endpoint, f.server, f.reference, previous, epoch)
+					if epoch != 0 {
+						if err := f.reference.Rehandshake(); err != nil {
+							t.Fatal(err)
+						}
+						if err := native.RouterVPNTestPQRehandshake(); err != nil {
+							t.Fatal(err)
+						}
+					}
+					for _, network := range []string{"tcp", "udp"} {
+						for _, host := range []string{"192.0.2.99", "2001:db8::99"} {
+							if err := f.exchange(network, host, epoch); err != nil {
+								t.Fatal("complete MAX encrypted payload", err)
+							}
+						}
+					}
+					local, localErr := native.RouterVPNTestPQSnapshot()
+					remote, remoteErr := f.reference.Snapshot()
+					if localErr != nil || remoteErr != nil || local.KeyDigest != previous || remote.KeyDigest != previous ||
+						local.HandshakeNanos <= priorLocal || remote.HandshakeNanos <= priorRemote {
+						t.Fatal("MAX payload did not use the same freshly negotiated native key and handshake", epoch, localErr, remoteErr)
+					}
+					priorLocal, priorRemote = local.HandshakeNanos, remote.HandshakeNanos
+				}
+				if err := f.box.RouterVPNStrategyDNSProof(); err != nil || f.inner.queries.Load() == 0 {
+					t.Fatal("complete MAX selected Home DNS", err)
+				}
+				queries := f.inner.queries.Load()
+				f.inner.failed.Store(true)
+				if err := f.box.RouterVPNStrategyDNSProof(); err == nil || f.inner.queries.Load() <= queries {
+					t.Fatal("complete MAX cached or bypassed selected DNS")
+				}
+				f.inner.failed.Store(false)
+				queries = f.inner.queries.Load()
+				if err := f.box.RouterVPNStrategyDNSProof(); err != nil || f.inner.queries.Load() <= queries {
+					t.Fatal("MAX recovery omitted a fresh selected DNS query", err)
+				}
+				for _, destination := range []M.Socksaddr{f.packet, f.kem} {
+					if value, ok := f.middle.lanes.Load(destination); !ok || value.(*atomic.Int64).Load() == 0 {
+						t.Fatal("MAX omitted mandatory middle packet/KEM lane", destination)
+					}
+				}
+				if value, ok := f.outer.lanes.Load(f.middleDestination); !ok || value.(*atomic.Int64).Load() == 0 {
+					t.Fatal("MAX omitted authenticated outer middle lane")
+				}
+				if layer != "" {
+					if value, ok := f.middle.lanes.Load(f.outerDestination); !ok || value.(*atomic.Int64).Load() == 0 {
+						t.Fatal("MAX omitted separately selected outer Start Layer")
+					}
+				}
+				if f.kernel.bad.Load() != 0 || f.reference.PlaintextSeen() || f.middle.plain.Load() || f.outer.plain.Load() || f.inner.rejected.Load() != 0 {
+					t.Fatal("MAX escaped original capture or leaked plaintext")
+				}
+				f.kernel.mu.Lock()
+				complete := f.kernel.preTUN > 0 && len(f.kernel.seen) == 1 && len(f.kernel.allowed) == 1
+				for destination := range f.kernel.allowed {
+					complete = complete && f.kernel.seen[destination] > 0
+				}
+				f.kernel.mu.Unlock()
+				if !complete {
+					t.Fatal("MAX bypassed its exact outermost captured physical grant")
+				}
+				f.network.InterfaceUpdated(context.Background())
+				if err := f.close(); err != nil || !f.kernel.closed.Load() || f.network.Current() || f.endpoint.owner.Ready() {
+					t.Fatal("MAX failed joined captured retirement", err)
+				}
+				if err := f.exchange("tcp", "192.0.2.99", 3); err == nil {
+					t.Fatal("retired MAX accepted traffic")
+				}
+				queries = f.inner.queries.Load()
+				if err := f.box.RouterVPNStrategyDNSProof(); err == nil || f.inner.queries.Load() != queries {
+					t.Fatal("retired MAX issued or accepted a stale selected DNS proof")
+				}
+			})
+		}
+	}
+}
+
+func assembleNodeMAXFixture(t *testing.T, f *nodePQFixture, iface net.Interface, ip netip.Addr, mode, protocol string, rawFiles, profile []byte, allowed map[netip.AddrPort]bool) *nodePQFixture {
+	t.Helper()
+	startAssets := ""
+	original, err := mobilemultihop.NewNodeProfile(mode, string(rawFiles), string(profile), startAssets, "")
+	if err != nil {
+		t.Fatal("actual PQ Node profile constructor", err)
+	}
+	var session [16]byte
+	if _, err = rand.Read(session[:]); err != nil {
+		t.Fatal(err)
+	}
+	f.policy, err = mobilemultihop.NewDesktopNodePolicy(original, hex.EncodeToString(session[:]), runtime.GOOS)
+	if err != nil {
+		t.Fatal("actual PQ Node policy constructor", err)
+	}
+	capture, err := f.policy.Capture()
+	if err != nil || capture.SelectedDNS.Host != "192.168.50.133" || capture.SelectedDNS.Detour != "proxy" || capture.SelectedDNS.Physical || len(capture.BootstrapDNS) != 0 || capture.HomeLANAccess || capture.IPv6Mode != "on" || capture.KillSwitchPolicy != "always" {
+		t.Fatal("PQ Node lost its complete selected policy", err)
+	}
+	actual := make(map[netip.AddrPort]bool)
+	for _, root := range capture.PhysicalRoots {
+		for _, tuple := range root.Destinations {
+			address, err := netip.ParseAddr(tuple.Host)
+			if err != nil || tuple.Network != protocol || tuple.Port < 1 || tuple.Port > 65535 {
+				t.Fatal("PQ Node captured an unexpected physical destination")
+			}
+			actual[netip.AddrPortFrom(address, uint16(tuple.Port))] = true
+		}
+	}
+	if len(actual) != len(allowed) {
+		t.Fatal("PQ Node omitted a packet/KEM tuple or broadened its Start Layer")
+	}
+	for address := range actual {
+		if !allowed[address] {
+			t.Fatal("PQ Node captured a substituted physical destination")
+		}
+	}
+	// Use the same complete Box constructor as the current PQ and native-host
+	// compositions, including the real performance service registration.
+	buildNodePQCapturedBox(t, f, nil, func(registry *outbound.Registry) {
+		HYOUT.RegisterOutbound(registry)
+		XR.RegisterOutbound(registry)
+	})
+	f.kernel = &nodePQKernel{owner: mobiletor.DesktopSocketKernelOwner{Kind: "unix-isolated-uid", IdentitySHA256: strings.Repeat("d", 64), Generation: 1, ProcessID: uint32(os.Getpid())},
+		iface: iface, local: ip, allowed: allowed, network: f.network, tun: f.tun, grants: make(map[string]mobiletor.DesktopSocketGrant), seen: make(map[netip.AddrPort]int)}
+	f.kernel.live.Store(true)
+	f.source = &nodePQSource{f.kernel}
+	t.Cleanup(func() {
+		if err := f.close(); err != nil || !f.kernel.closed.Load() {
+			t.Error("actual PQ Node did not join its captured physical owner", err)
+		}
+	})
+	if err := f.network.PrepareNodePhysicalBroker(f.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		if f.tun.ready.Load() || f.network.SocketCurrent() || f.network.Current() {
+			t.Error("PQ Node source initialized after TUN or socket admission")
+		}
+		f.kernel.capture = capture
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, &nodeMAXKernel{f.kernel, protocol}, current)
+		return broker, f.source, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	outer, found := f.box.Outbound().Outbound("proxy")
+	if !found {
+		t.Fatal("PQ Node lost its captured packet endpoint")
+	}
+	f.endpoint, _ = outer.(*Endpoint)
+	if f.endpoint == nil || f.endpoint.owner.Ready() || f.endpoint.owner.TransportReady() {
+		t.Fatal("PQ Node omitted its real native owner or declared readiness during construction")
+	}
+	return f
+}
+
+func TestRouterVPNDesktopNodeCompleteMAXQUIC(t *testing.T) {
+	nodeMAXTrafficCases(t, []string{"max-quic-wg", "max-quic-awg"})
+}
+
+func TestRouterVPNDesktopNodeCompleteMAXTLS(t *testing.T) {
+	nodeMAXTrafficCases(t, []string{"max-tls-wg", "max-tls-awg"})
+}

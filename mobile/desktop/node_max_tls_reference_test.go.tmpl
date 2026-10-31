@@ -1,0 +1,451 @@
+//go:build cgo && routervpn_native_pq && routervpn_pq_traffic_test
+
+package routervpnpq
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/mlkem"
+	"crypto/rand"
+	"crypto/tls"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+type nodeMAXTLSReference struct {
+	observed *nodePQLayer
+	address  netip.AddrPort
+	asset    []byte
+	process  *nodeMAXTLSXrayProcess
+}
+
+// This is the original pinned Xray reference with an actual captured physical
+// TCP front. The client retains that exact endpoint. Only the server may route
+// the one authenticated private UDP tuple into its owned middle service.
+func nodeMAXTLS(t *testing.T, ip netip.Addr, middle M.Socksaddr, target, fault string) *nodeMAXTLSReference {
+	t.Helper()
+	binary := os.Getenv("ROUTER_VPN_XRAY_TEST_BINARY")
+	if !filepath.IsAbs(binary) || !ip.Is4() || !ip.IsPrivate() || ip.IsLoopback() || !middle.Addr.IsPrivate() || middle.Port == 0 {
+		t.Fatal("MAX TLS reference lost its pinned server or captured private tuples")
+	}
+	front, err := net.ListenTCP("tcp4", net.TCPAddrFromAddrPort(netip.AddrPortFrom(ip, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		_ = front.Close()
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &nodePQLayer{ctx: ctx, cancel: cancel, udp: bridge, owned: make(map[io.Closer]bool)}
+	t.Cleanup(func() { _ = front.Close(); s.close() })
+	nodeMAXTLSBridge(t, s, bridge, middle, target)
+	reservation, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reservation.Close() })
+	certificate, private := nodeMAXCertificate(t)
+	pair, err := tls.X509KeyPair([]byte(certificate), []byte(private))
+	if err != nil {
+		t.Fatal(err)
+	}
+	camouflage := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	camouflage.EnableHTTP2 = true
+	camouflage.TLS = &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, CurvePreferences: []tls.CurveID{tls.X25519}}
+	camouflage.StartTLS()
+	t.Cleanup(camouflage.Close)
+	reality, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var seed [64]byte
+	if _, err = rand.Read(seed[:]); err != nil {
+		t.Fatal(err)
+	}
+	defer clear(seed[:])
+	pq, err := mlkem.NewDecapsulationKey768(seed[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var identity [16]byte
+	if _, err = rand.Read(identity[:]); err != nil {
+		t.Fatal(err)
+	}
+	identity[6], identity[8] = identity[6]&15|64, identity[8]&63|128
+	uuid := fmt.Sprintf("%x-%x-%x-%x-%x", identity[:4], identity[4:6], identity[6:8], identity[8:10], identity[10:])
+	shortID, path := hex.EncodeToString(identity[:8]), "/captured-max-"+hex.EncodeToString(identity[:])
+	publicKey := base64.RawURLEncoding.EncodeToString(reality.PublicKey().Bytes())
+	pqPublic := base64.RawURLEncoding.EncodeToString(pq.EncapsulationKey().Bytes())
+	userID := uuid
+	switch fault {
+	case "outer-reality-key":
+		other, e := ecdh.X25519().GenerateKey(rand.Reader)
+		if e != nil {
+			t.Fatal(e)
+		}
+		publicKey = base64.RawURLEncoding.EncodeToString(other.PublicKey().Bytes())
+	case "outer-mlkem-key":
+		var otherSeed [64]byte
+		if _, e := rand.Read(otherSeed[:]); e != nil {
+			t.Fatal(e)
+		}
+		other, e := mlkem.NewDecapsulationKey768(otherSeed[:])
+		clear(otherSeed[:])
+		if e != nil {
+			t.Fatal(e)
+		}
+		pqPublic = base64.RawURLEncoding.EncodeToString(other.EncapsulationKey().Bytes())
+	case "outer-user":
+		userID = "11111111-1111-4111-8111-111111111111"
+	}
+	client := map[string]any{
+		"inbounds": []any{map[string]any{"tag": "socks", "listen": "127.0.0.1", "port": 1090, "protocol": "socks", "settings": map[string]any{"auth": "noauth", "udp": true}}},
+		"outbounds": []any{map[string]any{"tag": "proxy", "protocol": "vless", "settings": map[string]any{"vnext": []any{map[string]any{"address": ip.String(), "port": front.Addr().(*net.TCPAddr).Port, "users": []any{map[string]any{"id": userID, "encryption": "mlkem768x25519plus.native.0rtt." + pqPublic}}}}},
+			"streamSettings": map[string]any{"network": "xhttp", "security": "reality", "xhttpSettings": map[string]any{"path": path, "mode": "auto"},
+				"realitySettings": map[string]any{"serverName": "captured-max.test", "fingerprint": "chrome", "password": publicKey, "shortId": shortID},
+				"finalmask":       map[string]any{"tcp": []any{map[string]any{"type": "fragment", "settings": map[string]any{"packets": "tlshello", "length": "100-300", "delay": "10-30", "maxSplit": "3-7"}}}},
+			}},
+		},
+	}
+	server := map[string]any{
+		"log": map[string]any{"loglevel": "debug"},
+		"inbounds": []any{map[string]any{"tag": "captured-max-node", "listen": "127.0.0.1", "port": reservation.Addr().(*net.TCPAddr).Port, "protocol": "vless",
+			"settings": map[string]any{"clients": []any{map[string]any{"id": uuid}}, "decryption": "mlkem768x25519plus.native.600s." + base64.RawURLEncoding.EncodeToString(seed[:])},
+			"streamSettings": map[string]any{"network": "xhttp", "security": "reality", "xhttpSettings": map[string]any{"path": path, "mode": "auto"},
+				"realitySettings": map[string]any{"target": camouflage.Listener.Addr().String(), "serverNames": []string{"captured-max.test"}, "privateKey": base64.RawURLEncoding.EncodeToString(reality.Bytes()), "shortIds": []string{shortID}}}}},
+		"outbounds": []any{map[string]any{"tag": "block", "protocol": "blackhole"}, map[string]any{"tag": "private-middle", "protocol": "freedom", "settings": map[string]any{"redirect": bridge.LocalAddr().String(), "finalRules": []any{
+			map[string]any{"action": "allow", "network": "udp", "ip": []string{"127.0.0.1/32"}, "port": strconv.Itoa(bridge.LocalAddr().(*net.UDPAddr).Port)}, map[string]any{"action": "block", "blockDelay": "0-0"}}}}},
+		"routing": map[string]any{"domainStrategy": "AsIs", "rules": []any{map[string]any{"type": "field", "inboundTag": []string{"captured-max-node"}, "network": "udp", "ip": []string{middle.Addr.String() + "/32"}, "port": strconv.Itoa(int(middle.Port)), "outboundTag": "private-middle"}}},
+	}
+	process, port := nodeMAXTLSStartXray(t, binary, server, reservation, "transport/internet/splithttp: listening TCP for XHTTP on ")
+	s.workers.Add(1)
+	go func() {
+		defer s.workers.Done()
+		for {
+			connection, err := front.Accept()
+			if err != nil {
+				return
+			}
+			if !s.enter(connection) {
+				_ = connection.Close()
+				return
+			}
+			go nodeMAXTLSForward(s, connection, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+		}
+	}()
+	asset, err := json.Marshal(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &nodeMAXTLSReference{observed: s, address: front.Addr().(*net.TCPAddr).AddrPort(), asset: asset, process: process}
+}
+
+type nodeMAXTLSCountedConn struct {
+	net.Conn
+	owner *nodePQLayer
+}
+
+func (c *nodeMAXTLSCountedConn) Read(body []byte) (int, error) {
+	n, err := c.Conn.Read(body)
+	if n > 0 {
+		c.owner.raw.Add(1)
+		if bytes.Contains(body[:n], []byte(nodePQPayload)) {
+			c.owner.plain.Store(true)
+		}
+	}
+	return n, err
+}
+
+func nodeMAXTLSForward(s *nodePQLayer, incoming net.Conn, target string) {
+	defer s.leave(incoming)
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+	outgoing, err := (&net.Dialer{}).DialContext(ctx, "tcp4", target)
+	if err != nil {
+		return
+	}
+	if !s.enter(outgoing) {
+		_ = outgoing.Close()
+		return
+	}
+	defer s.leave(outgoing)
+	if incoming.SetDeadline(time.Now().Add(30*time.Second)) != nil || outgoing.SetDeadline(time.Now().Add(30*time.Second)) != nil {
+		return
+	}
+	joined := make(chan struct{})
+	go func() {
+		defer close(joined)
+		_, _ = io.Copy(outgoing, &nodeMAXTLSCountedConn{incoming, s})
+		_ = outgoing.Close()
+		_ = incoming.Close()
+	}()
+	_, _ = io.Copy(incoming, outgoing)
+	_ = outgoing.Close()
+	_ = incoming.Close()
+	<-joined
+}
+
+func nodeMAXTLSBridge(t *testing.T, s *nodePQLayer, listener *net.UDPConn, middle M.Socksaddr, target string) {
+	t.Helper()
+	address, err := net.ResolveUDPAddr("udp4", target)
+	if err != nil || !address.IP.IsPrivate() {
+		t.Fatal("MAX TLS bridge lost its captured middle", err)
+	}
+	var mu sync.Mutex
+	peers := make(map[netip.AddrPort]*net.UDPConn)
+	s.workers.Add(1)
+	go func() {
+		defer s.workers.Done()
+		body := make([]byte, 65535)
+		for {
+			n, source, err := listener.ReadFromUDPAddrPort(body)
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			peer := peers[source]
+			if peer == nil {
+				peer, err = net.DialUDP("udp4", nil, address)
+				if err != nil {
+					mu.Unlock()
+					return
+				}
+				if !s.enter(peer) {
+					_ = peer.Close()
+					mu.Unlock()
+					return
+				}
+				peers[source] = peer
+				go func(peer *net.UDPConn, source netip.AddrPort) {
+					defer s.leave(peer)
+					defer func() {
+						mu.Lock()
+						if peers[source] == peer {
+							delete(peers, source)
+						}
+						mu.Unlock()
+					}()
+					answer := make([]byte, 65535)
+					for {
+						n, err := peer.Read(answer)
+						if err != nil {
+							return
+						}
+						if _, err = listener.WriteToUDPAddrPort(answer[:n], source); err != nil {
+							return
+						}
+					}
+				}(peer, source)
+			}
+			mu.Unlock()
+			if n, err := peer.Write(body[:n]); err == nil && n > 0 {
+				counter, _ := s.lanes.LoadOrStore(middle, &atomic.Int64{})
+				counter.(*atomic.Int64).Add(1)
+			}
+		}
+	}()
+}
+
+type nodeMAXTLSXrayProcess struct {
+	command   *exec.Cmd
+	log       *os.File
+	done      chan struct{}
+	err       error // Published only by closing done after the actual Wait.
+	closeMu   sync.Mutex
+	joined    bool
+	logClosed bool
+}
+
+func (p *nodeMAXTLSXrayProcess) diagnostics() string {
+	file, err := os.Open(p.log.Name())
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	raw, _ := io.ReadAll(io.LimitReader(file, 64<<10))
+	return string(raw)
+}
+
+func (p *nodeMAXTLSXrayProcess) close() error {
+	p.closeMu.Lock()
+	defer p.closeMu.Unlock()
+	if !p.joined {
+		select {
+		case <-p.done:
+		default:
+			killErr := p.command.Process.Kill()
+			select {
+			case <-p.done:
+			case <-time.After(3 * time.Second):
+				return errors.Join(killErr, errors.New("owned Xray fixture process did not join"))
+			}
+		}
+		p.joined = true
+	}
+	if !p.logClosed {
+		if err := p.log.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+			return err
+		}
+		p.logClosed = true
+	}
+	return nil
+}
+
+// Retain the selected port while constructing every sibling listener. Retry
+// only an owned child that actually exited with the exact bind collision; a
+// successful TCP accept alone cannot impersonate the captured Xray process.
+func nodeMAXTLSStartXray(t *testing.T, binary string, graph map[string]any, reservation net.Listener, binding string) (*nodeMAXTLSXrayProcess, int) {
+	t.Helper()
+	directory, err := os.MkdirTemp("", "routervpn-max-tls-reference-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retained []*nodeMAXTLSXrayProcess
+	t.Cleanup(func() {
+		failed := false
+		for _, process := range retained {
+			if err := process.close(); err != nil {
+				failed = true
+				t.Error("MAX TLS retained its unjoined reference and private workspace", err)
+			}
+			if t.Failed() {
+				t.Logf("owned MAX TLS reference diagnostics:\n%s", process.diagnostics())
+			}
+		}
+		if !failed {
+			if err := os.RemoveAll(directory); err != nil {
+				t.Error("MAX TLS owned workspace cleanup", err)
+			}
+		}
+	})
+	defer func() {
+		if reservation != nil {
+			_ = reservation.Close()
+		}
+	}()
+	for attempt := 0; attempt < 3; attempt++ {
+		address := reservation.Addr().String()
+		port := reservation.Addr().(*net.TCPAddr).Port
+		graph["inbounds"].([]any)[0].(map[string]any)["port"] = port
+		graph["log"] = map[string]any{"loglevel": "debug"}
+		raw, err := json.Marshal(graph)
+		if err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(directory, fmt.Sprintf("reference-%d.json", attempt))
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		log, err := os.OpenFile(filepath.Join(directory, fmt.Sprintf("reference-%d.log", attempt)), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		command := exec.Command(binary, "run", "-c", path)
+		command.Stdout, command.Stderr = log, log
+		if err := reservation.Close(); err != nil {
+			_ = log.Close()
+			t.Fatal(err)
+		}
+		if err := command.Start(); err != nil {
+			_ = log.Close()
+			t.Fatal(err)
+		}
+		process := &nodeMAXTLSXrayProcess{command: command, log: log, done: make(chan struct{})}
+		retained = append(retained, process)
+		go func() { process.err = command.Wait(); close(process.done) }()
+		collision, err := process.ready(address, binding)
+		if err == nil {
+			return process, port
+		}
+		if joinErr := process.close(); joinErr != nil {
+			t.Fatal("MAX TLS cannot replace its unjoined captured process", joinErr)
+		}
+		if !collision || attempt == 2 {
+			t.Fatalf("MAX TLS reference readiness: %v\n%s", err, process.diagnostics())
+		}
+		reservation, err = net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Fatal("MAX TLS reference exhausted owned bind attempts")
+	return nil, 0
+}
+
+func (p *nodeMAXTLSXrayProcess) ready(address, binding string) (bool, error) {
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-p.done:
+			text := syscall.EADDRINUSE.Error()
+			if runtime.GOOS == "windows" {
+				text = syscall.Errno(10048).Error()
+			}
+			collision := p.err != nil && strings.Contains(p.diagnostics(), "listen tcp "+address+": bind: "+text)
+			return collision, fmt.Errorf("captured Xray process exited before readiness: %w", p.err)
+		default:
+		}
+		diagnostic := p.diagnostics()
+		bound := binding != "" && strings.Contains(diagnostic, binding+address+"\n")
+		if bound && strings.Contains(diagnostic, "core: Xray ") && strings.Contains(diagnostic, " started\n") {
+			connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+			if err == nil {
+				_ = connection.Close()
+				select {
+				case <-p.done:
+					return false, errors.New("captured Xray process exited during readiness")
+				default:
+					return false, nil
+				}
+			}
+		}
+		select {
+		case <-p.done:
+		case <-deadline.C:
+			return false, errors.New("captured Xray process did not prove its listeners and startup")
+		case <-tick.C:
+		}
+	}
+}
+
+func nodeMAXTLSRejected(diagnostic, uuid string) bool {
+	if len(uuid) != 36 || uuid[8] != '-' || uuid[13] != '-' || uuid[18] != '-' || uuid[23] != '-' || strings.ToLower(uuid) != uuid {
+		return false
+	}
+	if decoded, err := hex.DecodeString(strings.ReplaceAll(uuid, "-", "")); err != nil || len(decoded) != 16 {
+		return false
+	}
+	for _, line := range strings.Split(diagnostic, "\n") {
+		if strings.Contains(line, " rejected ") && strings.HasSuffix(strings.TrimSpace(line), "invalid request user id: "+uuid) {
+			return true
+		}
+	}
+	return false
+}

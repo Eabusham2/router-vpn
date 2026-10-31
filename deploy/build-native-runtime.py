@@ -114,6 +114,8 @@ def inputs():
                              ROOT/'deploy/test_windows_physical_tunnel_runner.py',
                              ROOT/'deploy/test_desktop_node_physical.py',
                              ROOT/'deploy/test_desktop_node_pq.py',
+                             ROOT/'deploy/test_desktop_node_max.py',
+                             ROOT/'deploy/test_desktop_node_max_runner.py',
                              ROOT/'deploy/build_pq_reference_fixture.py',
                              ROOT/'deploy/test_server_pq_traffic.py',
                              ROOT/'mobile/rosenpass/examples/native_keys.rs',
@@ -542,6 +544,14 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 run([sys.executable, ROOT/'deploy/test_desktop_node_pq.py', source, pq,
                      '--cache', cache or ROOT/'dist/.native-pq-cache'],
                     env=env, timeout=1800)
+                run([sys.executable, ROOT/'deploy/test_desktop_node_max_runner.py'],
+                    cwd=ROOT, env=env, timeout=60)
+                # Complete MAX retains its mandatory PQ base, middle and
+                # outer transport. Prove the full encrypted graph separately
+                # from the raw MAX branch and from native firewall admission.
+                run([sys.executable, ROOT/'deploy/test_desktop_node_max.py', source, pq,
+                     '--cache', cache or ROOT/'dist/.native-pq-cache'],
+                    env=env, timeout=5400)
             if target.startswith(('linux/', 'darwin/')):
                 run([sys.executable, ROOT/'deploy/test_desktop_socket_uid.py', source],
                     env=env, timeout=300)

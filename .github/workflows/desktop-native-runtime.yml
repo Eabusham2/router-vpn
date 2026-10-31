@@ -118,7 +118,7 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: ${{ startsWith(matrix.target, 'darwin/') && 60 || 150 }}
     steps:
       - uses: actions/checkout@v4
         with:

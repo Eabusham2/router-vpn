@@ -114,6 +114,21 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertIn('-L'+str(root/'pq'), shlex.split(kwargs['env']['CGO_LDFLAGS']))
                         self.assertLessEqual(kwargs['timeout'], 1800)
                         return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_max_runner.py'):
+                        self.assertIn(system, ('linux', 'windows'))
+                        self.assertEqual(args[2:], [])
+                        self.assertEqual(kwargs['cwd'], ROOT)
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertLessEqual(kwargs['timeout'], 60)
+                        return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_max.py'):
+                        self.assertIn(system, ('linux', 'windows'))
+                        self.assertEqual(args[2:], [str(source.resolve()), str(root/'pq'), '--cache', str(ROOT/'dist/.native-pq-cache')])
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertIn('-L'+str(root/'pq'), shlex.split(kwargs['env']['CGO_LDFLAGS']))
+                        self.assertLessEqual(kwargs['timeout'], 5400)
+                        return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_physical_bootstrap.py'):
                         self.assertEqual(system, 'windows')
                         self.assertEqual(args[2:], [str(source.resolve()), '--prospective'])
@@ -192,6 +207,17 @@ class NativeSocketUIDGate(unittest.TestCase):
                 self.assertEqual(len(node_pq), len(node))
                 if node_pq:
                     self.assertEqual(calls.index(node_pq[0]), calls.index(node[0])+1)
+                max_runner = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_max_runner.py')]
+                max_graph = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_max.py')]
+                self.assertEqual(len(max_runner), len(node))
+                self.assertEqual(len(max_graph), len(node))
+                if max_graph:
+                    self.assertEqual(calls.index(max_runner[0]), calls.index(node_pq[0])+1)
+                    self.assertEqual(calls.index(max_graph[0]), calls.index(max_runner[0])+1)
+                for dependency in ('deploy/test_desktop_node_max.py', 'deploy/test_desktop_node_max_runner.py',
+                                   'mobile/desktop/node_max_peer_test.go.tmpl', 'mobile/desktop/node_max_stream_test.go.tmpl',
+                                   'mobile/desktop/node_max_tls_reference_test.go.tmpl', 'mobile/desktop/node_max_credentials_test.go.tmpl'):
+                    self.assertIn(ROOT/dependency, N.inputs())
                 for dependency in ('deploy/test_desktop_node_pq.py', 'deploy/build_pq_reference_fixture.py',
                                    'deploy/test_server_pq_traffic.py', 'mobile/rosenpass/examples/native_keys.rs',
                                    'mobile/pq/native_factory_real_test.go.tmpl', 'mobile/pq/native_traffic_test.go.tmpl',

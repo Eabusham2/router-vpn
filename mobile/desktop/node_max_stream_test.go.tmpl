@@ -1,0 +1,137 @@
+//go:build cgo && routervpn_native_pq && routervpn_pq_traffic_test
+
+package routervpnpq
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+func nodeMAXBoth(t *testing.T, ip netip.Addr, excluded ...uint16) (net.Listener, *net.UDPConn) {
+	t.Helper()
+	for attempt := 0; attempt < 3; attempt++ {
+		tcp, err := net.ListenTCP("tcp4", net.TCPAddrFromAddrPort(netip.AddrPortFrom(ip, 0)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := tcp.Addr().(*net.TCPAddr).AddrPort().Port()
+		blocked := false
+		for _, reserved := range excluded {
+			blocked = blocked || port == reserved
+		}
+		if blocked {
+			_ = tcp.Close()
+			continue
+		}
+		udp, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(tcp.Addr().(*net.TCPAddr).AddrPort()))
+		if err == nil {
+			t.Cleanup(func() { _ = tcp.Close(); _ = udp.Close() })
+			return tcp, udp
+		}
+		_ = tcp.Close()
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			t.Fatal(err)
+		}
+	}
+	t.Fatal("MAX middle could not retain its exact TCP/UDP port pair")
+	return nil, nil
+}
+
+// The same generated SS2022 middle also provides the selected outer Start
+// Layer. For TLS that outer destination is TCP; the two PQ lanes remain UDP.
+type nodeMAXMiddleHandler struct {
+	*nodePQLayer
+	tcpRoutes map[M.Socksaddr]string
+}
+
+func (h nodeMAXMiddleHandler) NewConnection(_ context.Context, connection net.Conn, metadata M.Metadata) error {
+	target, found := h.tcpRoutes[metadata.Destination]
+	if !found {
+		return errors.New("MAX middle rejected an uncaptured TCP destination")
+	}
+	ctx, cancel := context.WithTimeout(h.ctx, 5*time.Second)
+	defer cancel()
+	peer, err := (&net.Dialer{}).DialContext(ctx, "tcp4", target)
+	if err != nil {
+		return err
+	}
+	if !h.enter(peer) {
+		_ = peer.Close()
+		return net.ErrClosed
+	}
+	defer h.leave(peer)
+	if peer.SetDeadline(time.Now().Add(30*time.Second)) != nil || connection.SetDeadline(time.Now().Add(30*time.Second)) != nil {
+		return errors.New("MAX middle stream could not retain bounded deadlines")
+	}
+	counter, _ := h.lanes.LoadOrStore(metadata.Destination, &atomic.Int64{})
+	counter.(*atomic.Int64).Add(1)
+	joined := make(chan struct{})
+	go func() {
+		defer close(joined)
+		_, _ = io.Copy(peer, connection)
+		_ = peer.Close()
+		_ = connection.Close()
+	}()
+	_, err = io.Copy(connection, peer)
+	_ = peer.Close()
+	_ = connection.Close()
+	<-joined
+	return err
+}
+
+// Only OS permission observation is modeled here. Preserve the real captured
+// TCP protocol in Bind, grants and receipts; it must never be rewritten as UDP
+// merely to reuse the PQ-only fixture. Native WFP has a separate composition.
+type nodeMAXKernel struct {
+	*nodePQKernel
+	protocol string
+}
+
+func (k *nodeMAXKernel) Select(ctx context.Context, c mobiletor.DesktopSocketCapture, network string, remote netip.AddrPort) (mobiletor.DesktopSocketBinding, error) {
+	if ctx.Err() != nil || !k.Current(c, k.owner) || network != k.protocol || !k.allowed[remote] {
+		k.bad.Add(1)
+		return mobiletor.DesktopSocketBinding{}, errors.New("MAX physical kernel rejected an uncaptured protocol or tuple")
+	}
+	return mobiletor.DesktopSocketBinding{Owner: k.owner, InterfaceName: k.iface.Name, InterfaceIndex: uint32(k.iface.Index), LocalAddress: k.local}, nil
+}
+
+func (k *nodeMAXKernel) Bind(ctx context.Context, c mobiletor.DesktopSocketCapture, b mobiletor.DesktopSocketBinding, network string, raw syscall.RawConn) error {
+	if ctx.Err() != nil || !k.Current(c, b.Owner) || b.LocalAddress != k.local || b.InterfaceName != k.iface.Name || b.InterfaceIndex != uint32(k.iface.Index) || network != k.protocol+"4" || raw == nil {
+		k.bad.Add(1)
+		return errors.New("MAX physical socket changed its captured protocol or binding")
+	}
+	return raw.Control(func(uintptr) {})
+}
+
+func (k *nodeMAXKernel) Grant(ctx context.Context, q mobiletor.DesktopSocketGrant) (mobiletor.DesktopSocketReceipt, error) {
+	if ctx.Err() != nil || !k.Current(q.Capture, q.Binding.Owner) || q.Network != k.protocol || !k.allowed[q.Remote] || q.Local.Addr() != k.local || q.Local.Port() == 0 || !k.network.SocketCurrent() {
+		k.bad.Add(1)
+		return mobiletor.DesktopSocketReceipt{}, errors.New("MAX socket preceded its captured native admission")
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if old, exists := k.grants[q.SocketID]; exists {
+		identity := q
+		identity.Sequence = old.Sequence
+		if identity != old {
+			return mobiletor.DesktopSocketReceipt{}, errors.New("MAX renewal changed its exact native socket owner")
+		}
+	}
+	k.grants[q.SocketID] = q
+	k.seen[q.Remote]++
+	if !k.tun.ready.Load() && !k.network.Current() {
+		k.preTUN++
+	}
+	now := time.Now()
+	return mobiletor.DesktopSocketReceipt{Grant: q, ObservedAt: now.UnixMilli(), ExpiresAt: now.Add(10 * time.Second).UnixMilli()}, nil
+}
