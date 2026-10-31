@@ -151,6 +151,11 @@ class NativeSocketUIDGate(unittest.TestCase):
                 node = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_physical.py')]
                 self.assertEqual(len(node), 1 if system in ('linux', 'windows') else 0)
                 self.assertIn(ROOT/'deploy/test_desktop_node_physical.py', N.inputs())
+                native_factory = [args for args in calls if args[:2] == ['go', 'test'] and './routervpn/desktoppt' in args]
+                self.assertEqual(len(native_factory), 1)
+                selector = native_factory[0][native_factory[0].index('-run') + 1]
+                for name in ('CapturesPolicyAndRetainsLateOwner', 'RejectsUncapturedSourceBeforeConstructor', 'CloseJoinsLateFactoryAndRetriesSource'):
+                    self.assertRegex('TestRouterVPNNodePhysicalUnix' + name, selector)
                 self.assertIn(ROOT/'go.mod', N.inputs())
                 self.assertIn(ROOT/'cmd/start-layer-relay/main.go', N.inputs())
                 if (ROOT/'go.sum').exists() or (ROOT/'go.sum').is_symlink():

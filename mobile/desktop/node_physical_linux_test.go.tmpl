@@ -1,0 +1,30 @@
+//go:build linux
+
+package routervpndesktoppt
+
+import (
+	"context"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func prepareNodeUnixFixture(f *nodeUnixFactoryFixture,
+	create func(context.Context, mobiletor.DesktopSocketCapture, nodeUnixFactoryOptions) (*nodeUnixFactorySource, error)) error {
+	return f.node.network.prepareNodePhysicalLinux(f.node.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+		actual := nodeUnixFactoryOptions{LANPrefixes: options.LANPrefixes}
+		for _, binding := range options.Interfaces {
+			actual.Interfaces = append(actual.Interfaces, nodeUnixFactoryBinding{binding.Name, binding.Index, binding.Address})
+		}
+		for _, destination := range options.PrivateDestinations {
+			actual.PrivateDestinations = append(actual.PrivateDestinations, mobilemultihop.PhysicalEgress{
+				Host: destination.Address.Addr().String(), Port: int(destination.Address.Port()), Network: destination.Network,
+			})
+		}
+		source, err := create(ctx, capture, actual)
+		if source == nil {
+			return nil, err
+		}
+		return source, err
+	})
+}

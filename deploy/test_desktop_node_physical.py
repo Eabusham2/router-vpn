@@ -208,6 +208,20 @@ def mutants(source, windows):
                        "captured live MTU did not recompile the original private graph", changed(transfer,
                        "mobilemultihop.NewDesktopNodePolicyWithMTU(original, session, runtime.GOOS, restoredMTU)",
                        "mobilemultihop.NewDesktopNodePolicyWithMTU(original, session, runtime.GOOS, 0)")))
+    else:
+        factory = "routervpn/desktoppt/node_physical_linux.go"
+        test = "TestRouterVPNNodePhysicalUnixCapturesPolicyAndRetainsLateOwner"
+        result.extend((
+            ("unix-changed-interface", factory, "./routervpn/desktoppt", test, "wg/lan-off/ipv6-off/always/index",
+             "Unix Node admitted a changed interface, cancellation or partial source",
+             changed(factory, "actual.Index == index", "(actual.Index == index || actual.Index != index)")),
+            ("unix-substituted-private-tuple", factory, "./routervpn/desktoppt", test, "wg/lan-off/ipv6-off/always/live",
+             "Unix Node constructor changed exact private outer tuples or allowed selected Home DNS",
+             changed(factory, "uint16(destination.Port)", "uint16(destination.Port+1)")),
+            ("unix-dropped-partial-source", factory, "./routervpn/desktoppt", test, "wg/lan-off/ipv6-off/always/partial",
+             "Unix Node factory dropped or replaced its exact returned source",
+             changed(factory, "return nil, owned, err", "return nil, nil, err")),
+        ))
     return result
 
 
@@ -226,7 +240,8 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          tuple("TestRouterVPNDesktopNodePhysicalCommand" + name for name in ("SourceBoundary", "RestoredMTU", "TransferInput", "RetirementReceipt", "ReadyRequiresFreshDNS", "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionExactStop", "AdmissionRejectsForeignStop", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "JournalBeforePrivateInputs", "PublicRequiresJournal"))),
         ("factory", "./routervpn/desktoppt", "^TestRouterVPNNodePhysical",
          tuple("TestRouterVPNNodePhysical" + name for name in ("SeparateRegistriesAndUnpreparedRejection", "HandshakePhaseAndExactPolicy", "FactoryCancellationJoinsPartialOwner", "RetirementKeepsExactJoinedSource", "AdmissionRetainsExactPolicy", "AdmissionCapturesExactPredecessor", "JournalAdmissionCapturesDurableBarrier")) +
-         (tuple("TestRouterVPNNodePhysicalWindows" + name for name in ("CapturesPreparedOwner", "AdmissionRejectsChangedOwners", "CloseJoinsAdmission")) if windows else ())),
+         (tuple("TestRouterVPNNodePhysicalWindows" + name for name in ("CapturesPreparedOwner", "AdmissionRejectsChangedOwners", "CloseJoinsAdmission")) if windows else
+          tuple("TestRouterVPNNodePhysicalUnix" + name for name in ("CapturesPolicyAndRetainsLateOwner", "RejectsUncapturedSourceBeforeConstructor", "CloseJoinsLateFactoryAndRetriesSource")))),
         ("box", ".", "^TestRouterVPNDesktopNodePhysical",
          tuple("TestRouterVPNDesktopNodePhysicalBox" + name for name in ("RejectsSubstitutedGraph", "RequiresPreparedOwner", "RetainsMTUAndExactRollback", "RestoresCapturedMTU")) +
          ("TestRouterVPNDesktopNodePhysicalDNSCapturedOwner", "TestRouterVPNDesktopNodePhysicalDNSRetirementCancelsQuery")),

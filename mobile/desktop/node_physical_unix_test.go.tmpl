@@ -1,0 +1,394 @@
+//go:build linux || darwin
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/netip"
+	"reflect"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-tun"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+// These cases replace only the privileged guardian constructor. The immutable
+// compiler, actual interface readback, Node service, lower object, broker and
+// joined cleanup are shipping code. This is not a native nft/PF acceptance or
+// public Unix Node admission; those require their complete host transaction.
+type nodeUnixFactoryBinding struct {
+	Name    string
+	Index   uint32
+	Address netip.Addr
+}
+
+type nodeUnixFactoryOptions struct {
+	Interfaces          []nodeUnixFactoryBinding
+	PrivateDestinations []mobilemultihop.PhysicalEgress
+	LANPrefixes         []netip.Prefix
+}
+
+type nodeUnixFactorySource struct {
+	*physicalFactorySource
+	failClose atomic.Bool
+}
+
+func (s *nodeUnixFactorySource) Close(ctx context.Context) error {
+	if s.failClose.Load() {
+		return errors.New("fixture retains its exact unjoined Unix source")
+	}
+	return s.physicalFactorySource.Close(ctx)
+}
+
+type nodeUnixFactoryNetwork struct {
+	*externalPhysicalFactoryNetwork
+	hideMonitor bool
+}
+
+func (n *nodeUnixFactoryNetwork) InterfaceMonitor() tun.DefaultInterfaceMonitor {
+	if n.hideMonitor {
+		return nil
+	}
+	return n.desktopPTNetwork.InterfaceMonitor()
+}
+
+type nodeUnixFactoryFixture struct {
+	node     *nodePhysicalFixture
+	manager  *nodeUnixFactoryNetwork
+	selected *adapter.NetworkInterface
+	source   *nodeUnixFactorySource
+	mode     string
+	lan      bool
+	ipv6     string
+	kill     string
+}
+
+func nodeUnixFactoryPolicy(t *testing.T, mode, target, ipv6, kill string, lan bool) *mobilemultihop.DesktopNodePolicy {
+	t.Helper()
+	private := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("a", 32)))
+	public := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("b", 32)))
+	psk := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("c", 32)))
+	id := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+	files := map[string]string{}
+	switch mode {
+	case "wg":
+		config := "[Interface]\nAddress=10.77.0.2/24,fd77:77::2/64\nPrivateKey=" + private + "\nDNS=192.168.50.133\n[Peer]\nPublicKey=" + public + "\nPresharedKey=" + psk + "\nEndpoint=192.168.50.7:51820\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n"
+		files["wg.conf"] = base64.StdEncoding.EncodeToString([]byte(config))
+	case "shadowsocks":
+		graph := map[string]any{
+			"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
+			"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "192.168.50.7", "server_port": 8443,
+				"method": mobilemultihop.NativeStartLayerMethod, "password": private}},
+			"route": map[string]any{"final": "proxy", "rules": []any{}},
+		}
+		config, _ := json.Marshal(graph)
+		files["sing-box.json"] = base64.StdEncoding.EncodeToString(config)
+	default:
+		t.Fatal("unknown Unix Node fixture protocol")
+	}
+	encoded, _ := json.Marshal(files)
+	profile, _ := json.Marshal(map[string]any{"id": "captured-unix-router", "node_kind": "router-vpn", "node_proof_id": hex.EncodeToString(id[:]),
+		"router_api": "http://10.77.0.1:8787", "api_token": "private-unix-fixture-token", "endpoint": "192.168.50.7",
+		"dns_mode": "home", "adguard_ipv4": "192.168.50.133", "mtu_policy": "auto", "home_lan_access": lan,
+		"ipv6_mode": ipv6, "kill_switch_policy": kill})
+	original, err := mobilemultihop.NewNodeProfile(mode, string(encoded), string(profile), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewDesktopNodePolicy(original, strings.Repeat("b", 32), target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy
+}
+
+func newNodeUnixFactoryFixture(t *testing.T, mode, target, ipv6, kill string, lan bool) *nodeUnixFactoryFixture {
+	t.Helper()
+	native := newDesktopPTFixture(t)
+	manager := &desktopPTEntryManager{}
+	service.MustRegister[adapter.OutboundManager](native.ctx, manager)
+	policy := nodeUnixFactoryPolicy(t, mode, target, ipv6, kill, lan)
+	meta := policy.Metadata()
+	options := NodeCaptureOptions{meta.SessionID, meta.SourceSHA256}
+	raw, err := NewNodeNetworkOwner(native.ctx, nil, mobilemultihop.DesktopNodeNetworkTag, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower, err := NewNodePhysicalOutbound(native.ctx, nil, nil, mobilemultihop.DesktopNodePhysicalTag, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.replace(lower)
+	node := &nodePhysicalFixture{policy, manager, raw.(*NodeNetworkOwner), lower.(*NodePhysicalOutbound)}
+	selected := externalPhysicalFactoryInterface(t)
+	network := &nodeUnixFactoryNetwork{externalPhysicalFactoryNetwork: &externalPhysicalFactoryNetwork{desktopPTNetwork: native.network}}
+	network.selected.Store(selected)
+	service.MustRegister[adapter.NetworkManager](native.ctx, network)
+	source := &nodeUnixFactorySource{physicalFactorySource: &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}}
+	f := &nodeUnixFactoryFixture{node, network, selected, source, mode, lan, ipv6, kill}
+	t.Cleanup(func() {
+		source.failClose.Store(false)
+		if err := node.network.Close(); err != nil {
+			t.Error(err)
+		}
+		if err := node.physical.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return f
+}
+
+func (f *nodeUnixFactoryFixture) checkOptions(t *testing.T, actual nodeUnixFactoryOptions) {
+	t.Helper()
+	want := []mobilemultihop.PhysicalEgress{{Host: "192.168.50.7", Port: 51820, Network: "udp"}}
+	if f.mode == "shadowsocks" {
+		want = []mobilemultihop.PhysicalEgress{{Host: "192.168.50.7", Port: 8443, Network: "tcp"}, {Host: "192.168.50.7", Port: 8443, Network: "udp"}}
+	}
+	if !reflect.DeepEqual(actual.PrivateDestinations, want) {
+		t.Error("Unix Node constructor changed exact private outer tuples or allowed selected Home DNS", actual.PrivateDestinations)
+	}
+	var lan []netip.Prefix
+	if f.lan {
+		for _, raw := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"} {
+			lan = append(lan, netip.MustParsePrefix(raw))
+		}
+	}
+	if !reflect.DeepEqual(actual.LANPrefixes, lan) || len(actual.Interfaces) < 1 || len(actual.Interfaces) > 2 {
+		t.Error("Unix Node constructor changed selected LAN or physical families", actual)
+	}
+	seen := map[bool]bool{}
+	for _, binding := range actual.Interfaces {
+		present := false
+		for _, prefix := range f.selected.Addresses {
+			present = present || prefix.Addr() == binding.Address
+		}
+		if !present || binding.Index != uint32(f.selected.Index) || binding.Name != f.selected.Name ||
+			seen[binding.Address.Is4()] || f.ipv6 == "off" && !binding.Address.Is4() {
+			t.Error("Unix Node constructor substituted its captured native interface", binding)
+		}
+		seen[binding.Address.Is4()] = true
+	}
+	if !seen[true] {
+		t.Error("Unix Node constructor discarded the runner's captured IPv4 family")
+	}
+}
+
+func TestRouterVPNNodePhysicalUnixCapturesPolicyAndRetainsLateOwner(t *testing.T) {
+	for _, mode := range []string{"wg", "shadowsocks"} {
+		for _, lan := range []bool{false, true} {
+			for _, ipv6 := range []string{"off", "on"} {
+				for _, kill := range []string{"on-connect", "always"} {
+					for _, fault := range []string{"live", "index", "name", "address", "mask", "down", "loopback", "partial", "cancel"} {
+						t.Run(mode+"/"+map[bool]string{false: "lan-off", true: "lan-on"}[lan]+"/ipv6-"+ipv6+"/"+kill+"/"+fault, func(t *testing.T) {
+							f := newNodeUnixFactoryFixture(t, mode, runtime.GOOS, ipv6, kill, lan)
+							calls := 0
+							if err := prepareNodeUnixFixture(f, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options nodeUnixFactoryOptions) (*nodeUnixFactorySource, error) {
+								calls++
+								if capture != f.node.network.brokerCapture() || ctx.Err() != nil || f.node.network.Current() || f.node.network.SocketCurrent() {
+									t.Error("Unix Node constructor lost its pre-TUN source or entered after socket admission")
+								}
+								f.checkOptions(t, options)
+								changed := *f.selected
+								changed.Addresses = append([]netip.Prefix(nil), f.selected.Addresses...)
+								switch fault {
+								case "index":
+									changed.Index++
+								case "name":
+									changed.Name += "-replacement"
+								case "address":
+									changed.Addresses = []netip.Prefix{netip.MustParsePrefix("192.0.2.200/24")}
+								case "mask":
+									p := changed.Addresses[0]
+									changed.Addresses[0] = netip.PrefixFrom(p.Addr(), (p.Bits()+1)%(p.Addr().BitLen()+1))
+								case "down":
+									changed.Flags &^= net.FlagUp
+								case "loopback":
+									changed.Flags |= net.FlagLoopback
+								case "partial":
+									return f.source, errors.New("fixture retained partial Unix source")
+								case "cancel":
+									f.node.network.Cancel()
+								}
+								f.manager.selected.Store(&changed)
+								return f.source, nil
+							}); err != nil || calls != 0 {
+								t.Fatal("Unix Node factory entered before Initialize or rejected its source", err)
+							}
+							err := f.node.network.Start(adapter.StartStateInitialize)
+							if calls != 1 || f.node.network.source != f.source {
+								t.Fatal("Unix Node factory dropped or replaced its exact returned source")
+							}
+							if fault != "live" {
+								if err == nil || !f.source.cancelled.Load() || f.node.network.Current() || f.node.network.SocketCurrent() {
+									t.Fatal("Unix Node admitted a changed interface, cancellation or partial source", err)
+								}
+							} else {
+								if err != nil || !f.node.network.SocketCurrent() || f.node.network.Current() {
+									t.Fatal("Unix Node lost its distinct pre-ready handshake phase", err)
+								}
+								port, network := "51820", "udp"
+								if mode == "shadowsocks" {
+									port, network = "8443", "tcp"
+								}
+								if broker, err := f.node.physical.current(context.Background(), network, M.ParseSocksaddr("192.168.50.7:"+port)); err != nil || broker != f.node.network.broker {
+									t.Fatal("Unix Node lost its compiled eager physical tuple", err)
+								}
+								for _, address := range []string{"192.168.50.7:53", "192.168.50.133:53", "10.77.0.1:8787", "replacement.example:" + port} {
+									if _, err := f.node.physical.current(context.Background(), network, M.ParseSocksaddr(address)); err == nil {
+										t.Fatal("Unix Node lower widened physical authority outside its exact captured tuple", address)
+									}
+								}
+								for _, stage := range []adapter.StartStage{adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+									if err := f.node.network.Start(stage); err != nil {
+										t.Fatal(err)
+									}
+								}
+								proof, err := f.node.network.Activate(f.node.policy)
+								if err != nil || !f.node.network.Current() {
+									t.Fatal("Unix Node source could not retain its completed native lifetime", err)
+								}
+								changed := *f.selected
+								changed.Index++
+								f.manager.selected.Store(&changed)
+								if f.node.network.Current() || f.node.network.SocketCurrent() {
+									t.Fatal("Unix Node source survived its physical-interface replacement")
+								}
+								f.node.network.Cancel()
+								if proof.Err() == nil {
+									t.Fatal("Unix Node cancellation retained its proof lifetime")
+								}
+							}
+							if err := f.node.network.Close(); err != nil || !f.source.closed.Load() || !f.source.cancelled.Load() {
+								t.Fatal("Unix Node cleanup discarded its retained partial or live owner", err)
+							}
+						})
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestRouterVPNNodePhysicalUnixRejectsUncapturedSourceBeforeConstructor(t *testing.T) {
+	for _, fault := range []string{"target", "source", "native-object", "missing-monitor", "manual-interface", "missing-default", "wrong-index", "wrong-name", "wrong-address", "down", "loopback"} {
+		t.Run(fault, func(t *testing.T) {
+			target := runtime.GOOS
+			if fault == "target" {
+				target = "windows"
+			}
+			f := newNodeUnixFactoryFixture(t, "wg", target, "off", "always", false)
+			changed := *f.selected
+			switch fault {
+			case "source":
+				f.node.network.capture.SourceSHA256 = strings.Repeat("c", 64)
+			case "native-object":
+				f.node.manager.replace(nil)
+			case "missing-monitor":
+				f.manager.hideMonitor = true
+			case "manual-interface":
+				f.manager.automatic = false
+			case "wrong-index":
+				changed.Index = 0
+			case "wrong-name":
+				changed.Name += "-replacement"
+			case "wrong-address":
+				changed.Addresses = []netip.Prefix{netip.MustParsePrefix("192.0.2.200/24")}
+			case "down":
+				changed.Flags &^= net.FlagUp
+			case "loopback":
+				changed.Flags |= net.FlagLoopback
+			}
+			f.manager.selected.Store(&changed)
+			if fault == "missing-default" {
+				f.manager.selected.Store(nil)
+			}
+			calls := 0
+			err := prepareNodeUnixFixture(f, func(context.Context, mobiletor.DesktopSocketCapture, nodeUnixFactoryOptions) (*nodeUnixFactorySource, error) {
+				calls++
+				return f.source, nil
+			})
+			if err == nil {
+				err = f.node.network.Start(adapter.StartStateInitialize)
+			}
+			if err == nil || calls != 0 || f.node.network.source != nil || f.node.network.SocketCurrent() {
+				t.Fatal("Unix Node unproved target, source or interface reached native construction", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodePhysicalUnixCloseJoinsLateFactoryAndRetriesSource(t *testing.T) {
+	f := newNodeUnixFactoryFixture(t, "wg", runtime.GOOS, "off", "always", false)
+	entered, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	defer unblock()
+	f.source.failClose.Store(true)
+	if err := prepareNodeUnixFixture(f, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options nodeUnixFactoryOptions) (*nodeUnixFactorySource, error) {
+		f.checkOptions(t, options)
+		close(entered)
+		<-ctx.Done()
+		close(cancelled)
+		<-release
+		return f.source, errors.New("fixture returned a late partial Unix guardian")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	started, closed := make(chan error, 1), make(chan error, 1)
+	go func() { started <- f.node.network.Start(adapter.StartStateInitialize) }()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Unix Node initialization did not enter captured constructor")
+	}
+	go func() { closed <- f.node.network.Close() }()
+	select {
+	case <-cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Unix Node close did not cancel its entered constructor")
+	}
+	select {
+	case err := <-closed:
+		t.Fatal("Unix Node Close acknowledged an unjoined constructor", err)
+	default:
+	}
+	unblock()
+	select {
+	case err := <-started:
+		if err == nil {
+			t.Fatal("Unix Node late constructor acquired socket authority")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Unix Node constructor failed to join")
+	}
+	select {
+	case err := <-closed:
+		if err == nil {
+			t.Fatal("Unix Node Close discarded its unjoined partial source")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Unix Node source close did not return its retained failure")
+	}
+	if f.node.network.source != f.source || f.node.network.closed || f.source.closed.Load() || !f.source.cancelled.Load() {
+		t.Fatal("Unix Node failed close lost ownership of its exact partial source")
+	}
+	f.source.failClose.Store(false)
+	if err := f.node.network.Close(); err != nil || !f.source.closed.Load() || !f.node.network.closed {
+		t.Fatal("Unix Node source cleanup retry did not join the same retained owner", err)
+	}
+}

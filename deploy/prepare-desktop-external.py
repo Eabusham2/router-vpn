@@ -54,6 +54,8 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'external_physical_linux_test.go.tmpl', 'external_physical_darwin_test.go.tmpl',
                 'external_physical_windows_test.go.tmpl',
                 'node_network.go.tmpl', 'node_network_test.go.tmpl', 'node_physical.go.tmpl', 'node_admission.go.tmpl', 'node_admission_test.go.tmpl',
+                'node_physical_linux.go.tmpl', 'node_physical_darwin.go.tmpl',
+                'node_physical_linux_test.go.tmpl', 'node_physical_darwin_test.go.tmpl', 'node_physical_unix_test.go.tmpl',
                 'node_physical_windows.go.tmpl', 'node_physical_windows_test.go.tmpl', 'node_physical_other.go.tmpl')
 BOX_TEMPLATES = {
     'node_box_physical.go.tmpl': 'routervpn_desktop_node_box_physical.go',
@@ -213,7 +215,12 @@ def pt_copies():
                    'external_physical_windows_test.go.tmpl': b'//go:build windows\n\n',
                    'node_physical_windows.go.tmpl': b'//go:build windows\n\n',
                    'node_physical_windows_test.go.tmpl': b'//go:build windows\n\n',
-                   'node_physical_other.go.tmpl': b'//go:build !windows\n\n',
+                   'node_physical_linux.go.tmpl': b'//go:build linux\n\n',
+                   'node_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
+                   'node_physical_linux_test.go.tmpl': b'//go:build linux\n\n',
+                   'node_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
+                   'node_physical_unix_test.go.tmpl': b'//go:build linux || darwin\n\n',
+                   'node_physical_other.go.tmpl': b'//go:build !linux && !darwin && !windows\n\n',
                    'external_physical_other.go.tmpl': b'//go:build !linux && !darwin && !windows\n\n' }.get(name, b'')
         if path.is_symlink() or not raw.startswith(prefix+b'package routervpndesktoppt\n'):
             raise ValueError('Desktop PT adapter package boundary changed')
