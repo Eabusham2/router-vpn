@@ -22,6 +22,9 @@ import (
 )
 
 func linuxNodeParentFixture(owner *ownedDesktopController, scenario string) error {
+	if strings.HasPrefix(scenario, "journal/") {
+		return linuxNodeJournalFixture(owner, strings.TrimPrefix(scenario, "journal/"))
+	}
 	a := &app{localController: owner, cfg: common.ClientConfig{
 		ProfilesFile: filepath.Join(linuxOwnedControllerRoot, "routers.json"), ModesFile: filepath.Join(linuxOwnedControllerRoot, "modes.json"),
 		ScriptsDir: filepath.Join(linuxOwnedControllerRoot, "modes"), StateFile: filepath.Join(linuxOwnedControllerRoot, "state.json"),
@@ -65,8 +68,12 @@ func linuxNodeParentFixture(owner *ownedDesktopController, scenario string) erro
 		if err := capture.Current(context.Background()); !errors.Is(err, os.ErrClosed) {
 			return errors.Join(err, errors.New("closed native descriptor witness was not refused"))
 		}
-	case "root-descriptor":
-		if err := capture.parent.root.Close(); err != nil {
+	case "root-descriptor", "anchor-descriptor":
+		root := capture.parent.root
+		if scenario == "anchor-descriptor" {
+			root = capture.parent.installationAnchor
+		}
+		if err := root.Close(); err != nil {
 			return err
 		}
 		if err := capture.Current(context.Background()); !errors.Is(err, os.ErrClosed) {
@@ -102,7 +109,7 @@ func linuxNodeParentFixture(owner *ownedDesktopController, scenario string) erro
 		return err
 	}
 	if !capture.parent.closed || capture.parent.image != nil || capture.parent.networkNamespace != nil ||
-		capture.parent.pidNamespace != nil || capture.parent.root != nil {
+		capture.parent.pidNamespace != nil || capture.parent.root != nil || capture.parent.installationAnchor != nil {
 		return errors.New("Linux Node parent retained unjoined native witnesses after retirement")
 	}
 	for _, original := range []*os.File{owner.input, owner.installLock, owner.processLock} {
@@ -216,7 +223,7 @@ func (p *linuxNodeParentProcess) retire(t *testing.T, ending string) {
 }
 
 func TestLinuxOwnedControllerNamespaceNodeParentRetainsExactObjects(t *testing.T) {
-	for _, scenario := range []string{"root", "image", "image-descriptor", "root-descriptor", "network-namespace-descriptor", "pid-namespace-descriptor", "install-lock", "process-lock", "profile-root", "application-owner", "retire"} {
+	for _, scenario := range []string{"root", "image", "image-descriptor", "root-descriptor", "anchor-descriptor", "network-namespace-descriptor", "pid-namespace-descriptor", "install-lock", "process-lock", "profile-root", "application-owner", "retire"} {
 		t.Run(scenario, func(t *testing.T) {
 			installed := linuxControllerNamespaceInstall(t)
 			child := startLinuxNodeParentProcess(t, installed, scenario)

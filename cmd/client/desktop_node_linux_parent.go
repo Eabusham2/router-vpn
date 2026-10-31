@@ -12,28 +12,15 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"router-vpn/internal/linuxprotection"
 )
 
 // These values identify retained native objects. They neither construct a
 // parent from persisted JSON nor authorize adopting another controller's
 // protection. A later journal must retain this actual parent and its locks.
-type desktopLinuxNodeObject struct {
-	Device uint64
-	Inode  uint64
-	Mode   uint32
-	UID    uint32
-	GID    uint32
-}
-
-type desktopLinuxNodeParentRecord struct {
-	Generation                     string
-	ProcessID, ProcProcessID       int
-	StartTicks                     uint64
-	CallerUID                      uint32
-	Root, Image, Input             desktopLinuxNodeObject
-	InstallLock, ProcessLock       desktopLinuxNodeObject
-	NetworkNamespace, PIDNamespace desktopLinuxNodeObject
-}
+type desktopLinuxNodeObject = linuxprotection.NativeObject
+type desktopLinuxNodeParentRecord = linuxprotection.ParentRecord
 
 type desktopLinuxNodeParent struct {
 	controller                            *ownedDesktopController
@@ -44,12 +31,13 @@ type desktopLinuxNodeParent struct {
 	cancel                                context.CancelFunc
 	joined                                chan struct{}
 	gate                                  chan struct{}
-	root                                  *os.Root
+	installationAnchor, root              *os.Root
 	image, networkNamespace, pidNamespace *os.File
 	imageInfo                             os.FileInfo
 	record                                desktopLinuxNodeParentRecord
 	complete, closed                      bool // Serialized by gate after constructor publication.
 	retirementErr                         error
+	dependents                            map[ownedDesktopNodeParent]struct{}
 }
 
 func desktopLinuxNodeObjectOf(info os.FileInfo) (desktopLinuxNodeObject, error) {
@@ -60,7 +48,7 @@ func desktopLinuxNodeObjectOf(info os.FileInfo) (desktopLinuxNodeObject, error) 
 	if !ok || value.Ino == 0 {
 		return desktopLinuxNodeObject{}, errors.New("Linux Node parent has no native inode witness")
 	}
-	return desktopLinuxNodeObject{uint64(value.Dev), value.Ino, value.Mode, value.Uid, value.Gid}, nil
+	return desktopLinuxNodeObject{Device: uint64(value.Dev), Inode: value.Ino, Mode: value.Mode, UID: value.Uid, GID: value.Gid}, nil
 }
 
 func desktopLinuxNodeProcessStart(raw []byte) (int, uint64, error) {
@@ -98,6 +86,21 @@ func readDesktopLinuxNodeProcessStart() (int, uint64, error) {
 	return desktopLinuxNodeProcessStart(raw)
 }
 
+func readDesktopLinuxNodeBootID() (string, error) {
+	file, err := os.Open("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return "", err
+	}
+	body, readErr := io.ReadAll(io.LimitReader(file, 38))
+	if err := errors.Join(readErr, file.Close()); err != nil {
+		return "", err
+	}
+	if len(body) != 37 || body[36] != '\n' || !linuxprotection.BootIDValid(string(body[:36])) {
+		return "", errors.New("Linux Node parent lost its bounded native boot identity")
+	}
+	return string(body[:36]), nil
+}
+
 func desktopLinuxNodeCredentials(owner *ownedDesktopController) [32]byte {
 	return sha256.Sum256([]byte(owner.accessToken + "\n" + owner.ownerToken))
 }
@@ -131,7 +134,22 @@ func newDesktopLinuxNodeParent(owner *ownedDesktopController) (*desktopLinuxNode
 	if p.record.Generation, err = randomHex(16); err != nil {
 		return p, err
 	}
-	p.root, err = os.OpenRoot(linuxOwnedControllerRoot)
+	if p.record.BootID, err = readDesktopLinuxNodeBootID(); err != nil {
+		return p, err
+	}
+	p.installationAnchor, err = os.OpenRoot(filepath.Dir(linuxOwnedControllerRoot))
+	if err != nil {
+		return p, err
+	}
+	anchor, err := p.installationAnchor.Stat(".")
+	if err != nil || !anchor.IsDir() || !ownedDesktopInfo(anchor) {
+		return p, errors.Join(err, errors.New("Linux Node parent lost its retained installation ancestry"))
+	}
+	p.record.InstallationAnchor, err = desktopLinuxNodeObjectOf(anchor)
+	if err != nil {
+		return p, err
+	}
+	p.root, err = p.installationAnchor.OpenRoot(filepath.Base(linuxOwnedControllerRoot))
 	if err != nil {
 		return p, err
 	}
@@ -195,6 +213,9 @@ func newDesktopLinuxNodeParent(owner *ownedDesktopController) (*desktopLinuxNode
 	if err != nil {
 		return p, err
 	}
+	if err := p.record.Validate(); err != nil {
+		return p, err
+	}
 	p.complete = true
 	if err := p.currentLocked(false); err != nil {
 		p.complete = false
@@ -226,7 +247,7 @@ func desktopLinuxNodeRetainedObject(file *os.File, wanted desktopLinuxNodeObject
 }
 
 func (p *desktopLinuxNodeParent) currentLocked(published bool) error {
-	if p == nil || p.closed || !p.complete || p.ctx == nil || p.ctx.Err() != nil || p.root == nil || p.image == nil || p.imageInfo == nil ||
+	if p == nil || p.closed || !p.complete || p.ctx == nil || p.ctx.Err() != nil || p.installationAnchor == nil || p.root == nil || p.image == nil || p.imageInfo == nil ||
 		p.controller == nil || os.Getuid() != 0 || os.Geteuid() != 0 || os.Getpid() != p.record.ProcessID {
 		return errors.New("Linux Node parent has no live complete native capture")
 	}
@@ -240,6 +261,16 @@ func (p *desktopLinuxNodeParent) currentLocked(published bool) error {
 	case <-p.ownerDone:
 		return errors.New("Linux Node parent lost its original desktop lifetime")
 	default:
+	}
+	anchor, err := p.installationAnchor.Stat(".")
+	if err != nil {
+		return err
+	}
+	anchorID, err := desktopLinuxNodeObjectOf(anchor)
+	anchorPath, pathErr := os.Lstat(filepath.Dir(linuxOwnedControllerRoot))
+	if err != nil || pathErr != nil || !anchor.IsDir() || !ownedDesktopInfo(anchor) || anchorID != p.record.InstallationAnchor ||
+		!anchorPath.IsDir() || !ownedDesktopInfo(anchorPath) || !os.SameFile(anchor, anchorPath) {
+		return errors.Join(err, pathErr, errors.New("Linux Node parent installation ancestry was replaced"))
 	}
 	root, err := p.root.Stat(".")
 	if err != nil {
@@ -297,8 +328,9 @@ func (p *desktopLinuxNodeParent) currentLocked(published bool) error {
 		}
 	}
 	procPID, start, err := readDesktopLinuxNodeProcessStart()
-	if err != nil || procPID != p.record.ProcProcessID || start != p.record.StartTicks || p.ctx.Err() != nil {
-		return errors.Join(err, errors.New("Linux Node parent lost its original native process start"))
+	boot, bootErr := readDesktopLinuxNodeBootID()
+	if err != nil || bootErr != nil || procPID != p.record.ProcProcessID || start != p.record.StartTicks || boot != p.record.BootID || p.ctx.Err() != nil {
+		return errors.Join(err, bootErr, errors.New("Linux Node parent lost its original native process start or boot"))
 	}
 	return nil
 }
@@ -310,6 +342,8 @@ func (p *desktopLinuxNodeParent) Current(ctx context.Context) error {
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
+	case <-p.ctx.Done():
+		return p.ctx.Err()
 	case <-p.gate:
 	}
 	defer func() { p.gate <- struct{}{} }()
@@ -339,7 +373,27 @@ func (p *desktopLinuxNodeParent) Close(ctx context.Context) error {
 		return ctx.Err()
 	case <-p.gate:
 	}
+	dependents := make([]ownedDesktopNodeParent, 0, len(p.dependents))
+	for dependent := range p.dependents {
+		dependents = append(dependents, dependent)
+	}
+	p.gate <- struct{}{}
+	// A dependent may finish a cancelled operation by observing this parent.
+	// Never wait for its gate while holding the parent readback gate.
+	for _, dependent := range dependents {
+		if err := dependent.Close(ctx); err != nil {
+			return err
+		}
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-p.gate:
+	}
 	defer func() { p.gate <- struct{}{} }()
+	if len(p.dependents) != 0 {
+		return errors.New("Linux Node parent has unjoined captured dependents")
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -367,12 +421,33 @@ func (p *desktopLinuxNodeParent) Close(ctx context.Context) error {
 		}
 		p.root = nil
 	}
+	if p.installationAnchor != nil {
+		if err := p.installationAnchor.Close(); err != nil {
+			p.retirementErr = errors.Join(p.retirementErr, err)
+			return err
+		}
+		p.installationAnchor = nil
+	}
 	// A retry can join remaining descriptors after a genuine native close
 	// failure, but their later ErrClosed values cannot erase that failure.
 	if p.retirementErr != nil {
 		return p.retirementErr
 	}
 	p.closed = true
+	return nil
+}
+
+func (p *desktopLinuxNodeParent) releaseDependent(ctx context.Context, dependent ownedDesktopNodeParent) error {
+	if p == nil || ctx == nil || dependent == nil {
+		return errors.New("Linux Node dependent retirement lost its original parent")
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-p.gate:
+	}
+	defer func() { p.gate <- struct{}{} }()
+	delete(p.dependents, dependent)
 	return nil
 }
 
