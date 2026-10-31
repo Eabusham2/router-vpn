@@ -8,14 +8,17 @@ factory cases still execute the actual captured interface/DHCP and handoff path.
 """
 from pathlib import Path
 import argparse
+import contextlib
 import hashlib
 import importlib.util
 import json
 import os
 import platform
 import signal
+import stat
 import subprocess
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("desktop_node_bootstrap", ROOT / "deploy/test_windows_physical_bootstrap.py")
@@ -174,6 +177,99 @@ def run(command, *, cwd, env, timeout):
         raw, _ = process.communicate(timeout=10)
         raise RuntimeError("Node test process group timed out and was joined:\n" + raw[-16384:].decode("utf-8", errors="replace"))
     return process.returncode, raw.decode("utf-8", errors="replace")
+
+
+@contextlib.contextmanager
+def stage(label):
+    started = time.monotonic()
+    print("Node source gate start: " + label, flush=True)
+    try:
+        yield
+    except BaseException:
+        print("Node source gate failed: " + label + " (%.3fs)" % (time.monotonic() - started), flush=True)
+        raise
+    else:
+        print("Node source gate finished: " + label + " (%.3fs)" % (time.monotonic() - started), flush=True)
+
+
+def retained_binary(path):
+    def identity(record):
+        return (record.st_dev, record.st_ino, record.st_mode, record.st_nlink,
+                record.st_size, record.st_mtime_ns, record.st_ctime_ns)
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        raise ValueError("Node baseline executable is not its owned regular file")
+    digest = hashlib.sha256()
+    with path.open("rb") as opened:
+        if identity(os.fstat(opened.fileno())) != identity(before):
+            raise ValueError("Node baseline executable changed while opening its original file")
+        for block in iter(lambda: opened.read(1024 * 1024), b""):
+            digest.update(block)
+        if identity(os.fstat(opened.fileno())) != identity(before) or identity(path.lstat()) != identity(before):
+            raise ValueError("Node baseline executable changed during its file readback")
+    return identity(before), digest.hexdigest()
+
+
+class BaselineBinaries:
+    """Own one compiled image per package for this exact source/build capture.
+
+    Selectors still execute in separate processes with their original deadlines.
+    Mutants never use this cache: each overlay must compile its distinct defect.
+    The complete shipping inventory is checked at entry and exit by execute();
+    every recorded input is also read back around each baseline invocation.
+    """
+    def __init__(self, source, workspace, build, captured, records):
+        self.source, self.workspace = source, workspace
+        self.build, self.captured = build, captured
+        self.original_build = tuple(str(value) for value in build)
+        self.original_environment = dict(captured)
+        self.records = dict(records)
+        self.binaries = {}
+
+    def check_inputs(self):
+        if tuple(str(value) for value in self.build) != self.original_build or self.captured != self.original_environment:
+            raise ValueError("Node baseline changed its captured compiler arguments or environment")
+        for relative, expected in self.records.items():
+            if relative == "runner":
+                path = Path(__file__)
+            elif relative == "cronet-packaging":
+                path = ROOT / "deploy/build-native-runtime.py"
+            elif relative.startswith("layer-reference/"):
+                path = ROOT / relative.removeprefix("layer-reference/")
+            else:
+                path = self.source / relative
+            if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+                raise ValueError("Node baseline changed a captured source input: " + relative)
+
+    def verify(self, package):
+        self.check_inputs()
+        binary, receipt = self.binaries[package]
+        if retained_binary(binary) != receipt:
+            raise ValueError("Node baseline executable changed from its original compiled image")
+        return binary
+
+    def binary(self, package):
+        if package not in self.binaries:
+            self.check_inputs()
+            suffix = ".exe" if self.captured["GOOS"] == "windows" else ""
+            binary = self.workspace / ("baseline-%d.test" % len(self.binaries) + suffix)
+            if binary.exists() or binary.is_symlink():
+                raise ValueError("Node baseline compilation does not own its new output path")
+            with stage("compile baseline " + package):
+                status, output = run([*self.build, "-o", binary, package], cwd=self.source, env=self.captured, timeout=600)
+                if status:
+                    raise ValueError("Node baseline native compilation failed: " + package + "\n" + output[-32768:])
+                self.check_inputs()
+                self.binaries[package] = binary, retained_binary(binary)
+        return self.verify(package)
+
+    def execute(self, name, package, selector, duration):
+        binary = self.binary(package)
+        with stage("execute baseline " + name):
+            status, output = run([binary, "-test.run=" + selector, "-test.count=1", "-test.timeout=" + str(duration) + "s", "-test.v"],
+                                 cwd=self.source, env=self.captured, timeout=duration + 15)
+            self.verify(package)
+        return status, output
 
 
 def selected_compiler(go, source, env):
@@ -479,22 +575,21 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     ]
     with tempfile.TemporaryDirectory(prefix="routervpn-node-physical-") as directory:
         workspace = Path(directory)
-        relay, relay_digest = build_layer_reference(compiler, workspace, captured, race)
-        xray_binary, xray_digest, xray_source, xray_records = build_xray_reference(compiler, source, workspace, captured, race)
-        naive_library = stage_naive_library(compiler, source, workspace, captured)
+        with stage("prepare shipping Start Layer reference"):
+            relay, relay_digest = build_layer_reference(compiler, workspace, captured, race)
+        with stage("prepare pinned Xray reference"):
+            xray_binary, xray_digest, xray_source, xray_records = build_xray_reference(compiler, source, workspace, captured, race)
+        with stage("prepare pinned Naive library"):
+            naive_library = stage_naive_library(compiler, source, workspace, captured)
         build = [compiler, "test", "-c", "-mod=readonly", "-tags=" + ",".join(TAGS), *race, "-ldflags=-checklinkname=0"]
         suffix = ".exe" if windows else ""
+        baselines = BaselineBinaries(source, workspace, build, captured, before)
         for name, package, selector, required in suites:
-            binary = workspace / (name + ".test" + suffix)
-            status, output = run([*build, "-o", binary, package], cwd=source, env=captured, timeout=600)
-            if status:
-                raise ValueError("Node " + name + " native compilation failed:\n" + output[-32768:])
-            digest = hashlib.sha256(binary.read_bytes()).hexdigest()
             # Encrypted graph/layer and selected-DNS cases alone consumed
             # 89.58 s on Windows before the required pre-ready cases began.
             # These two expanded aggregates retain every per-operation bound.
             duration = 180 if name in ("encrypted", "composite-credentials") else 90
-            status, output = run([binary, "-test.run=" + selector, "-test.count=1", "-test.timeout=" + str(duration) + "s", "-test.v"], cwd=source, env=captured, timeout=duration + 15)
+            status, output = baselines.execute(name, package, selector, duration)
             print(output, end="" if output.endswith("\n") else "\n", flush=True)
             if status or any("--- PASS: " + test + " (" not in output for test in required) or "--- SKIP:" in output or "DATA RACE" in output:
                 raise ValueError("Node " + name + " omitted a required native boundary")
@@ -516,19 +611,19 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Node composite gate omitted simultaneous original TCP/UDP branches or a Start Layer")
             if name == "composite-credentials" and any("--- PASS: TestRouterVPNDesktopNodeCompositeWrongCredential/" + case + " (" not in output for case in COMPOSITE_CREDENTIAL_CASES):
                 raise ValueError("Node composite gate omitted an independent TCP, UDP or shared Start Layer credential negative")
-            if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
-                raise ValueError("Node native executable changed during execution")
         for label, relative, package, test, subtest, witness, replacement in mutants(source, windows):
             changed = workspace / (label + ".go")
             changed.write_text(replacement, encoding="utf-8")
             overlay = workspace / (label + ".json")
             overlay.write_text(json.dumps({"Replace": {str(source / relative): str(changed)}}), encoding="utf-8")
             binary = workspace / (label + ".test" + suffix)
-            status, output = run([*build, "-overlay=" + str(overlay), "-o", binary, package], cwd=source, env=captured, timeout=600)
-            if status:
-                raise ValueError("Node negative control failed to compile: " + label + "\n" + output[-16384:])
+            with stage("compile control " + label):
+                status, output = run([*build, "-overlay=" + str(overlay), "-o", binary, package], cwd=source, env=captured, timeout=600)
+                if status:
+                    raise ValueError("Node negative control failed to compile: " + label + "\n" + output[-16384:])
             selector = "^" + test + "$" + ("/^" + subtest + "$" if subtest else "")
-            status, output = run([binary, "-test.run=" + selector, "-test.count=1", "-test.timeout=45s", "-test.v"], cwd=source, env=captured, timeout=55)
+            with stage("execute control " + label):
+                status, output = run([binary, "-test.run=" + selector, "-test.count=1", "-test.timeout=45s", "-test.v"], cwd=source, env=captured, timeout=55)
             if status == 0 or "--- FAIL: " + test + " (" not in output or witness not in output or any(value in output for value in ("--- SKIP:", "DATA RACE", "panic: test timed out")):
                 raise ValueError("Node negative control missed its precise production defect: " + label + "\n" + output[-16384:])
             print("Rejected native Node production mutant: " + label, flush=True)

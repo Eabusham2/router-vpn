@@ -927,5 +927,147 @@ class SelectedNodeCompiler(unittest.TestCase):
                 node.selected_compiler('bootstrap-go', root, {'PATH': 'first', 'Path': 'second'})
 
 
+class RetainedNodeBaselines(unittest.TestCase):
+    def setUp(self):
+        self.node = SelectedNodeCompiler.runner()
+        if self.node.platform.system() not in ('Linux', 'Windows'):
+            self.skipTest('Node baseline binaries execute on Linux and Windows')
+        self.temporary = tempfile.TemporaryDirectory(prefix='node baseline ')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.source, self.workspace = self.root/'source', self.root/'owned outputs'
+        self.source.mkdir()
+        self.workspace.mkdir()
+        file(self.source/'go.mod', b'module example.test/node-baseline\n\ngo 1.26.0\n')
+        self.test_source = file(self.source/'baseline_test.go', br'''package baseline
+import ("fmt"; "os"; "testing")
+func record(t *testing.T) {
+    f, err := os.OpenFile(os.Getenv("ROUTERVPN_BASELINE_MARKER"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+    if err != nil { t.Fatal(err) }
+    if _, err = fmt.Fprintf(f, "%s:%d\n", t.Name(), os.Getpid()); err != nil { t.Fatal(err) }
+    if err = f.Close(); err != nil { t.Fatal(err) }
+}
+func TestFirst(t *testing.T) { record(t) }
+func TestSecond(t *testing.T) { record(t) }
+func TestRejected(t *testing.T) { record(t); t.Fatal("actual second selector failure") }
+func TestChangesSource(t *testing.T) {
+    record(t)
+    f, err := os.OpenFile("baseline_test.go", os.O_APPEND|os.O_WRONLY, 0)
+    if err != nil { t.Fatal(err) }
+    if _, err = f.WriteString("\n// source changed by actual test execution\n"); err != nil { t.Fatal(err) }
+    if err = f.Close(); err != nil { t.Fatal(err) }
+}
+''')
+        go = shutil.which('go')
+        self.assertIsNotNone(go, 'The retained baseline regression requires actual Go')
+        env = dict(os.environ, GOTOOLCHAIN=N.TOOLCHAIN, GOWORK='off', GOFLAGS='', CGO_ENABLED='0')
+        self.compiler, self.captured, _ = self.node.selected_compiler(go, self.source, env)
+        self.marker = self.root/'invocations'
+        self.captured['ROUTERVPN_BASELINE_MARKER'] = str(self.marker)
+        self.build = [self.compiler, 'test', '-c', '-mod=readonly']
+        self.records = {str(path.relative_to(self.source)): hashlib.sha256(path.read_bytes()).hexdigest()
+                        for path in (self.source/'go.mod', self.test_source)}
+        self.baselines = self.node.BaselineBinaries(self.source, self.workspace, self.build, self.captured, self.records)
+
+    def execute(self, name, package='.'):
+        return self.baselines.execute(name, package, '^'+name+'$', 10)
+
+    def test_reuses_exact_image_but_executes_each_selector_in_a_separate_process(self):
+        with patch.object(self.node, 'run', wraps=self.node.run) as actual:
+            status, first = self.execute('TestFirst')
+            self.assertEqual(status, 0, first)
+            binary = self.baselines.binary('.')
+            before = self.node.retained_binary(binary)
+            status, second = self.execute('TestSecond')
+            self.assertEqual(status, 0, second)
+        self.assertIn('--- PASS: TestFirst (', first)
+        self.assertNotIn('--- PASS: TestSecond (', first)
+        self.assertIn('--- PASS: TestSecond (', second)
+        self.assertNotIn('--- PASS: TestFirst (', second)
+        records = [line.split(':') for line in self.marker.read_text().splitlines()]
+        self.assertEqual([row[0] for row in records], ['TestFirst', 'TestSecond'])
+        self.assertNotEqual(records[0][1], records[1][1])
+        self.assertEqual(self.node.retained_binary(binary), before)
+        builds = [call for call in actual.call_args_list if 'test' in call.args[0] and '-c' in call.args[0]]
+        self.assertEqual(len(builds), 1, 'An identical baseline package was compiled again')
+        invocations = [call for call in actual.call_args_list if str(call.args[0][0]) == str(binary)]
+        self.assertEqual(len(invocations), 2)
+        self.assertTrue(all(call.kwargs['timeout'] == 25 for call in invocations))
+
+    def test_equal_bytes_replacement_is_rejected_before_the_next_selector(self):
+        status, output = self.execute('TestFirst')
+        self.assertEqual(status, 0, output)
+        binary = self.baselines.binary('.')
+        original = self.workspace/'original retained image'
+        binary.rename(original)
+        shutil.copy2(original, binary)
+        self.assertEqual(hashlib.sha256(binary.read_bytes()).hexdigest(), hashlib.sha256(original.read_bytes()).hexdigest())
+        with self.assertRaisesRegex(ValueError, 'original compiled image'):
+            self.execute('TestSecond')
+        self.assertEqual(len(self.marker.read_text().splitlines()), 1)
+
+    def test_changed_binary_bytes_are_rejected_before_the_next_selector(self):
+        status, output = self.execute('TestFirst')
+        self.assertEqual(status, 0, output)
+        binary = self.baselines.binary('.')
+        with binary.open('ab') as stream:
+            stream.write(b'changed actual compiled image')
+        with self.assertRaisesRegex(ValueError, 'original compiled image'):
+            self.execute('TestSecond')
+        self.assertEqual(len(self.marker.read_text().splitlines()), 1)
+
+    def test_changed_recorded_source_is_rejected_before_the_next_selector(self):
+        status, output = self.execute('TestFirst')
+        self.assertEqual(status, 0, output)
+        self.test_source.write_bytes(self.test_source.read_bytes()+b'\n// changed source input\n')
+        with self.assertRaisesRegex(ValueError, 'captured source input'):
+            self.execute('TestSecond')
+        self.assertEqual(len(self.marker.read_text().splitlines()), 1)
+
+    def test_actual_execution_cannot_rewrite_source_then_keep_its_passing_result(self):
+        with self.assertRaisesRegex(ValueError, 'captured source input'):
+            self.execute('TestChangesSource')
+        self.assertTrue(self.marker.read_text().startswith('TestChangesSource:'))
+        self.assertIn(b'source changed by actual test execution', self.test_source.read_bytes())
+
+    def test_changed_environment_or_build_arguments_cannot_reuse_a_baseline(self):
+        status, output = self.execute('TestFirst')
+        self.assertEqual(status, 0, output)
+        original_environment = dict(self.captured)
+        self.captured['ROUTERVPN_BASELINE_MARKER'] = str(self.root/'different owner')
+        with self.assertRaisesRegex(ValueError, 'compiler arguments or environment'):
+            self.execute('TestSecond')
+        self.captured.clear()
+        self.captured.update(original_environment)
+        self.build.append('-tags=changed_build_inputs')
+        with self.assertRaisesRegex(ValueError, 'compiler arguments or environment'):
+            self.execute('TestSecond')
+        self.assertFalse((self.root/'different owner').exists())
+        self.assertEqual(len(self.marker.read_text().splitlines()), 1)
+
+    def test_each_distinct_package_gets_its_own_compiled_image(self):
+        other = file(self.source/'other/other_test.go', b'package other\nimport "testing"\nfunc TestOther(t *testing.T) {}\n')
+        self.records['other/other_test.go'] = hashlib.sha256(other.read_bytes()).hexdigest()
+        self.baselines = self.node.BaselineBinaries(self.source, self.workspace, self.build, self.captured, self.records)
+        status, first = self.execute('TestFirst')
+        self.assertEqual(status, 0, first)
+        status, second = self.execute('TestOther', './other')
+        self.assertEqual(status, 0, second)
+        self.assertIn('--- PASS: TestOther (', second)
+        self.assertNotEqual(self.baselines.binary('.'), self.baselines.binary('./other'))
+        self.assertNotEqual(self.node.retained_binary(self.baselines.binary('.')),
+                            self.node.retained_binary(self.baselines.binary('./other')))
+
+    def test_prior_success_does_not_hide_an_actual_later_selector_failure(self):
+        status, output = self.execute('TestFirst')
+        self.assertEqual(status, 0, output)
+        status, output = self.execute('TestRejected')
+        self.assertNotEqual(status, 0)
+        self.assertIn('--- FAIL: TestRejected (', output)
+        self.assertIn('actual second selector failure', output)
+        self.assertEqual([line.split(':')[0] for line in self.marker.read_text().splitlines()],
+                         ['TestFirst', 'TestRejected'])
+
+
 if __name__ == '__main__':
     unittest.main()
