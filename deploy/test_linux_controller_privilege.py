@@ -26,6 +26,9 @@ SPEC.loader.exec_module(UID)
 CONTROL_SPEC = importlib.util.spec_from_file_location('controller_node_control', ROOT/'deploy/test_linux_node_control.py')
 CONTROL = importlib.util.module_from_spec(CONTROL_SPEC)
 CONTROL_SPEC.loader.exec_module(CONTROL)
+TRANSACTION_SPEC = importlib.util.spec_from_file_location('controller_node_transaction', ROOT/'deploy/test_linux_node_transaction.py')
+TRANSACTION = importlib.util.module_from_spec(TRANSACTION_SPEC)
+TRANSACTION_SPEC.loader.exec_module(TRANSACTION)
 CASES = ('FixedInstallAndPipeLifetime', 'RejectsUnsafeInstallAndConfig',
          'RejectsForeignIdentityAndInput', 'HonorsInstallAndProcessLocks', 'RequiresBoundedHandshake',
          'RejectsUnownedInstalledMainPreservesUtilities', 'NodeParentRetainsExactObjects', 'NodeParentLifetimeAndRestart',
@@ -39,7 +42,7 @@ PROCESS_CASES = ('Witness', 'CreatedBootstrap', 'RejectsForeignBootstrap', 'Reta
 
 def source_identity():
     names = sorted([ROOT/'go.mod', ROOT/'go.sum', *(ROOT/'cmd/client').glob('*'), *(ROOT/'internal').rglob('*.go'),
-                    *(ROOT/'deploy'/name for name in (*CONTROL.RUNNERS, 'test_linux_controller_privilege.py'))])
+                    *(ROOT/'deploy'/name for name in (*CONTROL.RUNNERS, *TRANSACTION.RUNNERS, 'test_linux_controller_privilege.py'))])
     return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in names if path.is_file() and not path.is_symlink()}
 
@@ -149,8 +152,10 @@ def execute(go='go'):
     UID.run([compiler, 'test', '-race', '-mod=readonly', '-count=1', './internal/linuxprotection', './internal/linuxprocess'], cwd=ROOT, env=env)
     UID.run([sys.executable, ROOT/'deploy/test_linux_node_control_runner.py'], cwd=ROOT, env=env)
     CONTROL.execute(compiler, env=env)
+    UID.run([sys.executable, ROOT/'deploy/test_linux_node_transaction_runner.py'], cwd=ROOT, env=env)
+    TRANSACTION.execute(compiler, env=env)
     if source_identity() != before:
-        raise ValueError('Original Node control source changed during its required native gate')
+        raise ValueError('Original Node control/transaction source changed during its required native gates')
     with tempfile.TemporaryDirectory(prefix='routervpn-controller-privilege-') as temporary:
         process_binary = Path(temporary)/'native-process.test'
         UID.run([compiler, 'test', '-race', '-c', '-mod=readonly', '-tags=routervpn_controller_privileged',
