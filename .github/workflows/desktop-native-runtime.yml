@@ -130,6 +130,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Require actual build-job descendant ownership before native preparation
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          python deploy/test_windows_build_owner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Native build job ownership failed' }
       - name: Install native Linux build libraries
         if: runner.os == 'Linux'
         run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends clang libclang-dev cmake ninja-build pkg-config libssl-dev autoconf automake libtool make perl nftables iproute2 passwd util-linux

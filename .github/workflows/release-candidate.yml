@@ -49,6 +49,7 @@ jobs:
           python3 deploy/test_linux_runtime_install.py
           python3 deploy/test_desktop_native_toolchain.py
           python3 deploy/test_desktop_native_dependencies.py
+          python3 deploy/test_windows_build_owner.py
           python3 deploy/test_desktop_pq_output.py
           python3 deploy/test_desktop_pq_dependencies.py
           python3 deploy/test_desktop_bindgen.py

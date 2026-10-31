@@ -38,6 +38,7 @@ PERFORMANCE = load('desktop_native_performance', 'prepare-mobile-performance.py'
 OPENVPN = load('desktop_native_openvpn', 'mobile_openvpn_close_policy.py')
 EXTERNAL = load('desktop_native_external', 'prepare-desktop-external.py')
 TOR = load('desktop_native_tor', 'build-desktop-tor.py')
+BUILD_OWNER = load('desktop_windows_build_owner', 'windows_build_owner.py')
 PIN, VERSION, TOOLCHAIN = POLICY.CORE, '1.14.1', 'go1.26.3'
 TARGETS = tuple(PQ.TARGETS)
 TAGS = ('with_wireguard', 'with_gvisor', 'with_quic', 'with_utls', 'with_openvpn',
@@ -62,9 +63,12 @@ def run(command, *, cwd=None, env=None, timeout=1800):
     # Cargo/Go metadata is UTF-8 even on Windows. Keep stdout binary until the
     # child is joined; a locale reader thread must not discard its output.
     try:
-        completed = subprocess.run([str(arg) for arg in command], cwd=cwd, env=env,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   timeout=timeout, check=True)
+        if os.name == 'nt':
+            completed = BUILD_OWNER.run(command, cwd=cwd, env=env, timeout=timeout)
+        else:
+            completed = subprocess.run([str(arg) for arg in command], cwd=cwd, env=env,
+                                       stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                       timeout=timeout, check=True)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         # A failed or timed-out native gate must expose its actual diagnostic,
         # not only the wrapper traceback. Retain both stream tails within one
@@ -94,6 +98,8 @@ def run(command, *, cwd=None, env=None, timeout=1800):
 
 def inputs():
     files = list(dict.fromkeys([Path(__file__).resolve(), ROOT/'deploy/build-desktop-pq.py',
+                             ROOT/'deploy/windows_build_owner.py',
+                             ROOT/'deploy/test_windows_build_owner.py',
                              ROOT/'deploy/build-mobile-pq.py', ROOT/'deploy/prepare-desktop-rosenpass.py',
                              ROOT/'deploy/setup-desktop-native-toolchain.py',
                              ROOT/'deploy/install-desktop-windows-toolchain.py',

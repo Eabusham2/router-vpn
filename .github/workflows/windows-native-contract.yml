@@ -24,6 +24,27 @@ permissions:
   contents: read
 
 jobs:
+  owned-build-command:
+    name: Build command ownership ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, windows-11-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Require actual original job admission and descendant retirement
+        shell: pwsh
+        run: |
+          python deploy/test_windows_build_owner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Native build job ownership failed' }
+
   native-windows:
     runs-on: windows-latest
     steps:
