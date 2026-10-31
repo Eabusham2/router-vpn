@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"testing"
 	"time"
+	"unsafe"
 
 	"router-vpn/internal/mobiletor"
 	"router-vpn/internal/windowscontroller"
@@ -496,10 +497,9 @@ func TestWindowsProtectionJournalRecoveryNativeStickyClose(t *testing.T) {
 	}
 	store, err := openProtectionJournal(context.Background(), fixture.machine, fixture.desktop, fixture.data)
 	if store != nil {
-		// This fixture substitutes the reserved invalid value for one retained
-		// Toolhelp close operation. The actual original handle stays owned by
-		// the fixture, so no recycled handle can be closed accidentally. Every
-		// other actual file/process handle must still join on Close.
+		// Every actual file/process handle must still join despite the deliberately
+		// protected snapshot below. No pseudo-handle or retired numeric handle
+		// substitutes for a native owner that another thread could recycle.
 		t.Cleanup(func() { _ = store.Close() })
 	}
 	if err != nil {
@@ -510,6 +510,10 @@ func TestWindowsProtectionJournalRecoveryNativeStickyClose(t *testing.T) {
 	var retainedSnapshot syscall.Handle
 	t.Cleanup(func() {
 		if retainedSnapshot != 0 {
+			if err := syscall.SetHandleInformation(retainedSnapshot, 2 /* PROTECT_FROM_CLOSE */, 0); err != nil {
+				t.Error("fixture failed to remove its native snapshot close protection", err)
+				return
+			}
 			if err := syscall.CloseHandle(retainedSnapshot); err != nil {
 				t.Error("fixture failed to join its separately retained native snapshot", err)
 			}
@@ -519,11 +523,23 @@ func TestWindowsProtectionJournalRecoveryNativeStickyClose(t *testing.T) {
 		if native.snapshot == nil || native.snapshot.handle == 0 {
 			return errors.New("fixture lost its actual retained process snapshot")
 		}
-		retainedSnapshot, native.snapshot.handle = native.snapshot.handle, syscall.InvalidHandle
+		// Force a real CloseHandle failure on this still-owned object. The
+		// documented flag prevents close without freeing/recycling the handle.
+		if err := syscall.SetHandleInformation(native.snapshot.handle, 2 /* PROTECT_FROM_CLOSE */, 2); err != nil {
+			return err
+		}
+		retainedSnapshot = native.snapshot.handle
+		query := syscall.NewLazyDLL("kernel32.dll").NewProc("GetHandleInformation")
+		var flags uint32
+		ok, _, callErr := query.Call(uintptr(retainedSnapshot), uintptr(unsafe.Pointer(&flags)))
+		if ok == 0 || flags&2 == 0 {
+			return errors.Join(callErr, errors.New("fixture native snapshot is not actually protected from close"))
+		}
 		return nil
 	}
 	partial, err := owner.Run(context.Background())
-	if err == nil || partial.Selection.Record.Sequence == 0 || native.closeErr == nil || store.recovery != owner {
+	if err == nil || partial.Selection.Record.Sequence == 0 || native.closeErr == nil || store.recovery != owner ||
+		native.snapshot.handle != retainedSnapshot || retainedSnapshot == 0 {
 		t.Fatal("native retained-handle close failure admitted controller recovery")
 	}
 	for range 2 {
