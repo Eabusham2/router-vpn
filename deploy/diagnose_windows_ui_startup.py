@@ -121,7 +121,30 @@ def app_post_channel_stages(source):
     end = ". ([ScriptBlock]::Create($TorBridgeSource))"
     source = NATIVE.replace_once(source, start, marker("app-helpers-begin") + "\n" +
         marker("app-first-path-begin") + "\n" + start + "\n" + marker("app-first-path-complete"))
-    return NATIVE.replace_once(source, end, end + "\n" + marker("app-helpers-complete"))
+    source = NATIVE.replace_once(source, end, end + "\n" + marker("app-helpers-complete"))
+    # The qualified first path command took 34ms on 27eb9491, while this
+    # helper group still took 31s. Separate actual input reads from parsing/
+    # dot-sourcing so neither module lookup nor a single helper is guessed.
+    helpers = (
+        ("MTU", "MTU", "mtu", "Router VPN MTU helpers are missing"),
+        ("DNSMeasurement", "DNSMeasurement", "dns", "Router VPN DNS measurement helpers are missing"),
+        ("ProfileSettings", "ProfileSettings", "profile", "Router VPN profile settings helpers are missing"),
+        ("SessionMutation", "SessionMutation", "session", "Router VPN Windows session-mutation helpers are missing"),
+        ("UnifiedShell", "UnifiedShell", "unified", "Router VPN unified shell helpers are missing"),
+        ("Telemetry", "Telemetry", "telemetry", "Router VPN telemetry helpers are missing"),
+        ("SpeedLab", "SpeedLab", "speedlab", "Router VPN Speed Lab helpers are missing"),
+        ("TorBridge", "TorBridge", "tor", "Router VPN Tor bridge UI helpers are missing"),
+    )
+    for path_name, source_name, label, missing in helpers:
+        boundary = ("if(-not(Test-Path -LiteralPath $" + path_name + "Helpers)){throw \"" + missing +
+                    ": $" + path_name + "Helpers\"}\n$" + source_name +
+                    "Source=Get-Content -LiteralPath $" + path_name + "Helpers -Raw -Encoding UTF8")
+        source = timed_stage(source, boundary, "app-helper-" + label + "-input")
+        source = timed_stage(source, ". ([ScriptBlock]::Create($" + source_name + "Source))",
+                             "app-helper-" + label + "-load")
+    return timed_stage(source,
+        "$UnifiedShellSource=Convert-RouterVPNWindowsUnifiedSessionMutation -Source $UnifiedShellSource",
+        "app-helper-unified-mutation")
 
 
 def instrumented_scripts():

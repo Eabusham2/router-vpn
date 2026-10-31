@@ -47,12 +47,22 @@ class FirstLaunchDiagnostic(unittest.TestCase):
                       "app-help-regressions", "app-product-selftest"):
             self.assertIn(label + "-begin", stages)
             self.assertIn(label + "-complete", stages)
+        for helper in ("mtu", "dns", "profile", "session", "unified", "telemetry", "speedlab", "tor"):
+            for operation in ("input", "load"):
+                for boundary in ("begin", "complete"):
+                    self.assertIn("app-helper-" + helper + "-" + operation + "-" + boundary, stages)
+        self.assertIn("app-helper-unified-mutation-begin", stages)
+        self.assertIn("app-helper-unified-mutation-complete", stages)
 
     def test_changed_post_channel_stage_cannot_trace_a_different_selftest(self):
         source = (ROOT / "client/RouterVPN-Windows-App.ps1").read_bytes().decode("utf-8")
         for boundary in ("$ProductSource=Add-RouterVPNUnifiedWindowsShell -ProductSource $ProductSource",
                          "        & $HelpBindingTest -Root (Split-Path $PSScriptRoot -Parent)\n        if(-not$?){throw 'Windows composed Help binding regressions failed.'}",
-                         "        & $ProductScript -BaseUrl $BaseUrl -SelfTest"):
+                         "        & $ProductScript -BaseUrl $BaseUrl -SelfTest",
+                         ". ([ScriptBlock]::Create($MTUSource))",
+                         'if(-not(Test-Path -LiteralPath $DNSMeasurementHelpers)){throw "Router VPN DNS measurement helpers are missing: $DNSMeasurementHelpers"}\n'
+                         "$DNSMeasurementSource=Get-Content -LiteralPath $DNSMeasurementHelpers -Raw -Encoding UTF8",
+                         "$UnifiedShellSource=Convert-RouterVPNWindowsUnifiedSessionMutation -Source $UnifiedShellSource"):
             for changed in (source.replace(boundary, "# removed actual operation", 1),
                             source + "\n" + boundary):
                 with self.subTest(boundary=boundary), self.assertRaisesRegex(ValueError, "exact production boundary"):
