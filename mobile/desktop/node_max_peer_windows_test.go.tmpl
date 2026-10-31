@@ -1,0 +1,1323 @@
+//go:build windows && cgo && routervpn_native_pq && routervpn_pq_traffic_test && routervpn_windows_node_composition
+
+package routervpnpq
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilepq"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
+	HYOUT "github.com/sagernet/sing-box/protocol/hysteria2"
+	XR "github.com/sagernet/sing-box/protocol/routervpnxray"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// Three native PQ assets are bounded individually by 2 MiB. This private
+// original-source reply includes their normal asset and pipe JSON encodings.
+const nodeMAXWFPLimit = 16 << 20
+const nodeMAXWFPBuffer = 64 << 10
+const nodeMAXWFPProbePrefix = "routervpn-complete-max-owned-marker/"
+
+var nodeMAXWFPModes = []string{"max-quic-wg", "max-quic-awg", "max-tls-wg", "max-tls-awg"}
+var nodeMAXWFPLayers = []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"}
+
+func nodeMAXWFPReadLine(reader *bufio.Reader, maximum int) ([]byte, error) {
+	var result []byte
+	for {
+		part, err := reader.ReadSlice('\n')
+		if len(part) > maximum-len(result) {
+			clear(result)
+			return nil, errors.New("MAX private message exceeded its bound")
+		}
+		result = append(result, part...)
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return result, err
+	}
+}
+
+// The optional reference wrappers preserve each retained original socket and
+// every encrypted byte. Only a nonce armed through the private process channel
+// is consumed before the selected outermost server protocol. Marker bytes do
+// not advance protocol, authentication, payload or DNS counters.
+type nodeMAXWFPObservation struct {
+	mu     sync.Mutex
+	owner  *nodePQLayer
+	keys   map[*nodePQLayer]string
+	counts map[string]int64
+}
+
+func (o *nodeMAXWFPObservation) arm(nonce string) error {
+	raw, err := hex.DecodeString(nonce)
+	if err != nil || len(raw) != 16 || hex.EncodeToString(raw) != nonce {
+		return errors.New("MAX marker is not a canonical private nonce")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.owner == nil || len(o.counts) >= 128 {
+		return errors.New("MAX marker has no selected owner or exceeded its bound")
+	}
+	if _, found := o.counts[nonce]; found {
+		return errors.New("MAX marker reused an owned nonce")
+	}
+	if o.counts == nil {
+		o.counts = make(map[string]int64)
+	}
+	o.counts[nonce] = 0
+	return nil
+}
+
+func (o *nodeMAXWFPObservation) count(nonce string) (int64, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	value, found := o.counts[nonce]
+	if !found {
+		return 0, errors.New("MAX observation lost its exact armed nonce")
+	}
+	return value, nil
+}
+
+func (o *nodeMAXWFPObservation) consume(owner *nodePQLayer, body []byte) bool {
+	if len(body) != len(nodeMAXWFPProbePrefix)+32 || !bytes.HasPrefix(body, []byte(nodeMAXWFPProbePrefix)) {
+		return false
+	}
+	nonce := string(body[len(nodeMAXWFPProbePrefix):])
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if owner == nil || owner != o.owner {
+		return false
+	}
+	count, found := o.counts[nonce]
+	if found {
+		o.counts[nonce] = count + 1
+	}
+	return found
+}
+
+type nodeMAXWFPObservedPacket struct {
+	net.PacketConn
+	owner       *nodePQLayer
+	observation *nodeMAXWFPObservation
+}
+
+func (p *nodeMAXWFPObservedPacket) ReadFrom(body []byte) (int, net.Addr, error) {
+	for {
+		n, source, err := p.PacketConn.ReadFrom(body)
+		if err != nil || !p.observation.consume(p.owner, body[:n]) {
+			return n, source, err
+		}
+		if written, err := p.PacketConn.WriteTo(body[:n], source); err != nil || written != n {
+			return 0, nil, errors.Join(err, io.ErrShortWrite)
+		}
+	}
+}
+
+type nodeMAXWFPObservedStream struct {
+	net.Conn
+	owner       *nodePQLayer
+	observation *nodeMAXWFPObservation
+	reader      *bufio.Reader
+	classified  bool
+}
+
+func (p *nodeMAXWFPObservedStream) Read(body []byte) (int, error) {
+	if len(body) == 0 {
+		return 0, nil
+	}
+	if !p.classified {
+		// Inspect only the matching prefix. An encrypted fragment with a
+		// different first byte immediately proceeds unchanged, even if short.
+		for length := 1; length <= len(nodeMAXWFPProbePrefix); length++ {
+			prefix, err := p.reader.Peek(length)
+			if err != nil || !bytes.Equal(prefix, []byte(nodeMAXWFPProbePrefix[:length])) {
+				p.classified = true
+				break
+			}
+		}
+		if !p.classified {
+			marker, err := p.reader.Peek(len(nodeMAXWFPProbePrefix) + 32)
+			if err == nil && p.observation.consume(p.owner, marker) {
+				if n, err := p.Conn.Write(marker); err != nil || n != len(marker) {
+					return 0, errors.Join(err, io.ErrShortWrite)
+				}
+				_ = p.Conn.Close()
+				return 0, io.EOF
+			}
+			p.classified = true
+		}
+	}
+	return p.reader.Read(body)
+}
+
+func (o *nodeMAXWFPObservation) hooks(t *testing.T) *nodeMAXReferenceHooks {
+	t.Helper()
+	return &nodeMAXReferenceHooks{
+		Interface: func(t *testing.T) (net.Interface, netip.Addr) {
+			local := nodePQWFPInterface(t)
+			interfaces, err := net.Interfaces()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, iface := range interfaces {
+				addresses, err := iface.Addrs()
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, address := range addresses {
+					prefix, err := netip.ParsePrefix(address.String())
+					if err == nil && prefix.Addr() == local {
+						return iface, local
+					}
+				}
+			}
+			t.Fatal("MAX reference lost the actual selected physical interface")
+			return net.Interface{}, netip.Addr{}
+		},
+		Packet: func(owner *nodePQLayer, connection net.PacketConn, password string) net.PacketConn {
+			o.mu.Lock()
+			if o.keys == nil {
+				o.keys = make(map[*nodePQLayer]string)
+			}
+			if password != "" {
+				o.keys[owner] = password
+			}
+			o.mu.Unlock()
+			return &nodeMAXWFPObservedPacket{connection, owner, o}
+		},
+		Stream: func(owner *nodePQLayer, connection net.Conn) net.Conn {
+			return &nodeMAXWFPObservedStream{Conn: connection, owner: owner, observation: o, reader: bufio.NewReader(connection)}
+		},
+	}
+}
+
+type nodeMAXWFPRequest struct {
+	Schema  int    `json:"schema"`
+	Mode    string `json:"mode"`
+	Layer   string `json:"layer"`
+	Fault   string `json:"fault"`
+	Address string `json:"address"`
+}
+
+type nodeMAXWFPSource struct {
+	Mode     string `json:"mode"`
+	Protocol string `json:"protocol"`
+	Physical string `json:"physical"`
+	Packet   string `json:"packet"`
+	KEM      string `json:"kem"`
+	Middle   string `json:"middle"`
+	Outer    string `json:"outer"`
+	Files    []byte `json:"files"`
+	Profile  []byte `json:"profile"`
+}
+
+func (s nodeMAXWFPSource) digest() string {
+	raw, err := json.Marshal(s)
+	if err != nil {
+		return ""
+	}
+	defer clear(raw)
+	value := sha256.Sum256(raw)
+	return hex.EncodeToString(value[:])
+}
+
+type nodeMAXWFPReply struct {
+	Schema         int                       `json:"schema"`
+	AppID          []byte                    `json:"app_id"`
+	SourceSHA256   string                    `json:"source_sha256"`
+	Source         *nodeMAXWFPSource         `json:"source,omitempty"`
+	Password       string                    `json:"password,omitempty"`
+	Snapshot       mobilepq.NativePQSnapshot `json:"snapshot"`
+	Updates        int64                     `json:"updates"`
+	Packets        int64                     `json:"packets"`
+	KEMReceived    int64                     `json:"kem_received"`
+	KEMRejected    int64                     `json:"kem_rejected"`
+	MiddleRaw      int64                     `json:"middle_raw"`
+	MiddleRejected int64                     `json:"middle_rejected"`
+	MiddlePacket   int64                     `json:"middle_packet"`
+	MiddleKEM      int64                     `json:"middle_kem"`
+	MiddleOuter    int64                     `json:"middle_outer"`
+	OuterRaw       int64                     `json:"outer_raw"`
+	OuterRejected  int64                     `json:"outer_rejected"`
+	OuterMiddle    int64                     `json:"outer_middle"`
+	Queries        int64                     `json:"queries"`
+	Echoes         int64                     `json:"echoes"`
+	Rejected       int64                     `json:"rejected"`
+	Plain          bool                      `json:"plain"`
+	MLKEMRejected  bool                      `json:"mlkem_rejected"`
+	UserRejected   bool                      `json:"user_rejected"`
+	Probe          string                    `json:"probe"`
+	ProbeCount     int64                     `json:"probe_count"`
+}
+
+func nodeMAXWFPProbe(protocol string, remote netip.AddrPort, nonce, layer, password string) (bool, error) {
+	if protocol != "tcp" && protocol != "udp" {
+		return false, errors.New("MAX probe changed its captured transport")
+	}
+	connection, err := net.DialTimeout(protocol+"4", remote.String(), 750*time.Millisecond)
+	if err != nil {
+		return false, err
+	}
+	defer connection.Close()
+	if err = connection.SetDeadline(time.Now().Add(750 * time.Millisecond)); err != nil {
+		return false, err
+	}
+	payload := []byte(nodeMAXWFPProbePrefix + nonce)
+	if layer == "aes-256-gcm+xor-whitening" {
+		key, err := startwhitening.Key(mobilemultihop.NativeStartLayerMethod, password)
+		if err != nil {
+			return false, err
+		}
+		for i := range payload {
+			payload[i] ^= key[i%len(key)]
+		}
+		clear(key[:])
+	}
+	if n, err := connection.Write(payload); err != nil || n != len(payload) {
+		return false, errors.Join(err, io.ErrShortWrite)
+	}
+	answer := make([]byte, len(payload))
+	if protocol == "tcp" {
+		_, err = io.ReadFull(connection, answer)
+	} else {
+		var n int
+		n, err = connection.Read(answer)
+		if err == nil && n != len(answer) {
+			err = io.ErrUnexpectedEOF
+		}
+	}
+	if err != nil {
+		return false, err
+	}
+	if !bytes.Equal(payload, answer) {
+		return false, errors.New("MAX marker changed its exact private nonce")
+	}
+	return true, nil
+}
+
+func TestRouterVPNDesktopNodeWindowsMAXReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_NODE_MAX_WFP_REFERENCE_CHILD") == "" {
+		return
+	}
+	if os.Getenv("ROUTERVPN_NODE_MAX_WFP_REFERENCE_CHILD") != "1" {
+		t.Fatal("unknown MAX reference owner")
+	}
+	input := bufio.NewReaderSize(os.Stdin, nodeMAXWFPBuffer)
+	raw, err := nodeMAXWFPReadLine(input, 256)
+	if err != nil || len(raw) == 0 {
+		t.Fatal("MAX reference input is not bounded", err)
+	}
+	var request nodeMAXWFPRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(&request); err != nil {
+		t.Fatal("MAX reference input is not its captured request", err)
+	}
+	var extra any
+	if decoder.Decode(&extra) != io.EOF || request.Schema != 1 || request.Address != nodePQWFPInterface(t).String() {
+		t.Fatal("MAX reference changed its captured interface or schema")
+	}
+	observation := new(nodeMAXWFPObservation)
+	hooks := observation.hooks(t)
+	var wg, kem *nodePQWFPBridge
+	hooks.InnerRoutes = func(t *testing.T, f *nodePQFixture, ip netip.Addr, routes map[M.Socksaddr]string) map[M.Socksaddr]string {
+		// Establish stable reference-side sources before publishing the middle
+		// route map to its workers. No live map is changed during restoration.
+		wg = newNodePQWFPBridge(t, ip, f.reference.Address(), true, f.server.initialKey)
+		kem = newNodePQWFPBridge(t, ip, f.server.conn.LocalAddr().String(), true, nil)
+		captured := make(map[M.Socksaddr]string, 2)
+		for destination, target := range routes {
+			switch target {
+			case f.reference.Address():
+				captured[destination] = wg.address().String()
+			case f.server.conn.LocalAddr().String():
+				captured[destination] = kem.address().String()
+			default:
+				t.Fatal("MAX inner reference wrapper received an uncaptured original peer")
+			}
+		}
+		return captured
+	}
+	var source nodeMAXWFPSource
+	f := newNodeMAXFixtureWithAssembly(t, request.Mode, request.Layer, request.Fault,
+		func(t *testing.T, f *nodePQFixture, _ net.Interface, ip netip.Addr, mode, protocol string, files, profile []byte, allowed map[netip.AddrPort]bool) *nodePQFixture {
+			if f.box != nil || f.kernel != nil || f.network != nil || ip.String() != request.Address || len(allowed) != 1 {
+				t.Fatal("MAX reference assembly gained a client owner or changed its outer root")
+			}
+			var physical netip.AddrPort
+			for remote, value := range allowed {
+				if !value || remote.Addr() != ip || remote.Port() == 0 {
+					t.Fatal("MAX reference lost its original physical tuple")
+				}
+				physical = remote
+			}
+			source = nodeMAXWFPSource{Mode: mode, Protocol: protocol, Physical: physical.String(), Files: append([]byte(nil), files...), Profile: append([]byte(nil), profile...)}
+			return f
+		}, hooks)
+	if f.box != nil || f.kernel != nil || f.network != nil {
+		t.Fatal("MAX separate reference constructed a modeled client")
+	}
+	source.Packet, source.KEM, source.Middle, source.Outer = f.packet.String(), f.kem.String(), f.middleDestination.String(), f.outerDestination.String()
+	if wg == nil || kem == nil || f.middle.routes[f.packet] != wg.address().String() || f.middle.routes[f.kem] != kem.address().String() {
+		t.Fatal("MAX private references lost their captured packet/KEM routes")
+	}
+	observation.mu.Lock()
+	observation.owner = f.outer
+	if request.Layer != "" {
+		observation.owner = f.middle
+	}
+	password := observation.keys[f.middle]
+	observation.mu.Unlock()
+	if password == "" {
+		t.Fatal("MAX marker lost the actual paired reference key")
+	}
+	scope, err := mobiletor.DesktopWindowsNodeCompositionAppID()
+	if err != nil || len(scope) == 0 {
+		t.Fatal("MAX reference lost its executable identity", err)
+	}
+	digest := source.digest()
+	lane := func(owner *nodePQLayer, destination M.Socksaddr) int64 {
+		value, found := owner.lanes.Load(destination)
+		if !found {
+			return 0
+		}
+		return value.(*atomic.Int64).Load()
+	}
+	respond := func(initial bool, nonce string) {
+		select {
+		case err := <-f.server.failure:
+			t.Fatal("MAX actual native reference failed", err)
+		default:
+		}
+		snapshot, err := f.reference.Snapshot()
+		if err != nil {
+			t.Fatal("MAX actual native reference readback failed", err)
+		}
+		reply := nodeMAXWFPReply{Schema: 1, AppID: scope, SourceSHA256: digest, Snapshot: snapshot, Updates: f.reference.Updates(), Packets: f.reference.Packets(), KEMReceived: f.server.received.Load(), KEMRejected: f.server.rejected.Load(), MiddleRaw: f.middle.raw.Load(), MiddleRejected: f.middle.rejected.Load(), MiddlePacket: lane(f.middle, f.packet), MiddleKEM: lane(f.middle, f.kem), MiddleOuter: lane(f.middle, f.outerDestination), OuterRaw: f.outer.raw.Load(), OuterRejected: f.outer.rejected.Load(), OuterMiddle: lane(f.outer, f.middleDestination), Queries: f.inner.queries.Load(), Echoes: f.inner.echoes.Load(), Rejected: f.inner.rejected.Load(), Plain: f.reference.PlaintextSeen() || f.middle.plain.Load() || f.outer.plain.Load() || wg.plain.Load() || kem.plain.Load(), Probe: nonce}
+		if f.tlsReference != nil {
+			diagnostic := f.tlsReference.process.diagnostics()
+			reply.MLKEMRejected = strings.Contains(diagnostic, "ML-KEM-768 handshake failed > chacha20poly1305: message authentication failed")
+			reply.UserRejected = nodeMAXTLSRejected(diagnostic, "11111111-1111-4111-8111-111111111111")
+		}
+		if initial {
+			reply.Source, reply.Password = &source, password
+		}
+		if nonce != "" {
+			reply.ProbeCount, err = observation.count(nonce)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		encoded, err := json.Marshal(reply)
+		if err != nil || len(encoded)+1 > nodeMAXWFPLimit {
+			t.Fatal("MAX reply exceeded its captured bound", err)
+		}
+		if _, err = os.Stdout.Write(append(encoded, '\n')); err != nil {
+			t.Fatal("MAX reference lost its private reply channel", err)
+		}
+		clear(encoded)
+	}
+	respond(true, "")
+	for {
+		line, err := input.ReadSlice('\n')
+		if errors.Is(err, io.EOF) && len(line) == 0 {
+			return
+		}
+		if err != nil || len(line) > 256 {
+			t.Fatal("MAX reference lost its bounded observation input", err)
+		}
+		action := strings.TrimSuffix(string(line), "\n")
+		switch action {
+		case "stats":
+			respond(false, "")
+			continue
+		case "fail-dns":
+			f.inner.failed.Store(true)
+			respond(false, "")
+			continue
+		case "restore-dns":
+			f.inner.failed.Store(false)
+			respond(false, "")
+			continue
+		case "rekey":
+			f.server.force(t)
+			respond(false, "")
+			continue
+		case "rehandshake":
+			if err := f.reference.Rehandshake(); err != nil {
+				t.Fatal(err)
+			}
+			respond(false, "")
+			continue
+		case "reset-joined-client":
+			wg.reset()
+			kem.reset()
+			respond(false, "")
+			continue
+		}
+		parts := strings.Split(action, " ")
+		if len(parts) != 2 || len(parts[1]) != 32 || parts[0] != "arm" && parts[0] != "observe" && parts[0] != "positive" {
+			t.Fatal("MAX reference rejected an unrelated observation request")
+		}
+		if parts[0] != "observe" {
+			if err := observation.arm(parts[1]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if parts[0] == "positive" {
+			echo, err := nodeMAXWFPProbe(source.Protocol, netip.MustParseAddrPort(source.Physical), parts[1], request.Layer, password)
+			if err != nil || !echo {
+				t.Fatal("MAX separate reference marker did not traverse its exact listener", err)
+			}
+		}
+		respond(false, parts[1])
+	}
+}
+
+type nodeMAXWFPReference struct {
+	command                                            *exec.Cmd
+	input                                              io.WriteCloser
+	output                                             *os.File
+	reader                                             *bufio.Reader
+	done                                               chan error
+	ctx                                                context.Context
+	cancel                                             context.CancelFunc
+	mu                                                 sync.Mutex
+	inputClosed, joined, outputClosed, killed, removed bool
+	closeErr                                           error
+	diagnostics                                        bytes.Buffer
+	request                                            nodeMAXWFPRequest
+	reply                                              nodeMAXWFPReply
+	source                                             nodeMAXWFPSource
+	password                                           string
+	local                                              netip.Addr
+	workspace, copyPath                                string
+	digest                                             [32]byte
+}
+
+func (p *nodeMAXWFPReference) read(timeout time.Duration) (nodeMAXWFPReply, error) {
+	type result struct {
+		reply nodeMAXWFPReply
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		raw, err := nodeMAXWFPReadLine(p.reader, nodeMAXWFPLimit)
+		defer clear(raw)
+		var reply nodeMAXWFPReply
+		if err == nil && len(raw) <= nodeMAXWFPLimit {
+			decoder := json.NewDecoder(bytes.NewReader(raw))
+			decoder.DisallowUnknownFields()
+			err = decoder.Decode(&reply)
+			var extra any
+			if err == nil && decoder.Decode(&extra) != io.EOF {
+				err = errors.New("MAX reference appended another reply")
+			}
+		} else {
+			err = errors.Join(err, errors.New("MAX reference response exceeded its bound"))
+		}
+		done <- result{reply, err}
+	}()
+	ctx, cancel := context.WithTimeout(p.ctx, timeout)
+	defer cancel()
+	select {
+	case value := <-done:
+		return value.reply, value.err
+	case <-ctx.Done():
+		p.cancel()
+		_ = p.output.Close()
+		<-done
+		return nodeMAXWFPReply{}, ctx.Err()
+	}
+}
+
+func (p *nodeMAXWFPReference) close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if !p.inputClosed {
+		_ = p.input.Close()
+		p.inputClosed = true
+	}
+	if !p.joined {
+		select {
+		case err := <-p.done:
+			p.closeErr = errors.Join(p.closeErr, err)
+			p.joined = true
+		case <-time.After(10 * time.Second):
+			if !p.killed {
+				p.closeErr = errors.Join(p.closeErr, errors.New("MAX reference ignored its owned input EOF"))
+				_ = p.command.Process.Kill()
+				p.killed = true
+			}
+			select {
+			case err := <-p.done:
+				p.closeErr = errors.Join(p.closeErr, err)
+				p.joined = true
+			case <-time.After(10 * time.Second):
+				return errors.Join(p.closeErr, errors.New("MAX reference retained its unjoined process and private workspace"))
+			}
+		}
+	}
+	p.cancel()
+	if !p.outputClosed {
+		_ = p.output.Close()
+		p.outputClosed = true
+	}
+	if !p.removed {
+		raw, err := os.ReadFile(p.copyPath)
+		if err != nil || sha256.Sum256(raw) != p.digest {
+			return errors.Join(p.closeErr, err, errors.New("retained MAX reference executable changed"))
+		}
+		if err = os.RemoveAll(p.workspace); err != nil {
+			return errors.Join(p.closeErr, err)
+		}
+		p.removed = true
+	}
+	return p.closeErr
+}
+
+func (p *nodeMAXWFPReference) observe(t *testing.T, action string) nodeMAXWFPReply {
+	t.Helper()
+	if len(action) > 255 || strings.Contains(action, "\n") {
+		t.Fatal("MAX observation escaped its fixed private request")
+	}
+	if _, err := io.WriteString(p.input, action+"\n"); err != nil {
+		t.Fatal("MAX observation lost its retained channel", err)
+	}
+	reply, err := p.read(10 * time.Second)
+	old := p.reply
+	if err != nil || reply.Schema != 1 || !bytes.Equal(reply.AppID, old.AppID) || reply.SourceSHA256 != old.SourceSHA256 || reply.Source != nil || reply.Password != "" || reply.Updates < old.Updates || reply.Packets < old.Packets || reply.KEMReceived < old.KEMReceived || reply.KEMRejected < old.KEMRejected || reply.Queries < old.Queries || reply.Echoes < old.Echoes || reply.MiddleRaw < old.MiddleRaw || reply.MiddleRejected < old.MiddleRejected || reply.MiddlePacket < old.MiddlePacket || reply.MiddleKEM < old.MiddleKEM || reply.MiddleOuter < old.MiddleOuter || reply.OuterRaw < old.OuterRaw || reply.OuterRejected < old.OuterRejected || reply.OuterMiddle < old.OuterMiddle || old.MLKEMRejected && !reply.MLKEMRejected || old.UserRejected && !reply.UserRejected || old.Plain && !reply.Plain {
+		t.Fatal("MAX reference changed its original source or regressed actual observations", err)
+	}
+	p.reply = reply
+	return reply
+}
+
+func (p *nodeMAXWFPReference) probe(t *testing.T, action, nonce string) int64 {
+	t.Helper()
+	reply := p.observe(t, action+" "+nonce)
+	if reply.Probe != nonce || reply.ProbeCount < 0 {
+		t.Fatal("MAX marker changed its private nonce")
+	}
+	return reply.ProbeCount
+}
+
+func nodeMAXWFPStartReference(t *testing.T, mode, layer, fault string) *nodeMAXWFPReference {
+	t.Helper()
+	local := nodePQWFPInterface(t)
+	request := nodeMAXWFPRequest{Schema: 1, Mode: mode, Layer: layer, Fault: fault, Address: local.String()}
+	actual, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(actual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace, err := os.MkdirTemp("", "routervpn-owned-max-reference-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(workspace, "owned-complete-max-reference.test.exe")
+	if err = os.WriteFile(copyPath, contents, 0700); err != nil {
+		_ = os.RemoveAll(workspace)
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+	command := exec.CommandContext(ctx, copyPath, "-test.run=^TestRouterVPNDesktopNodeWindowsMAXReferenceProcess$", "-test.count=1", "-test.timeout=235s")
+	command.Env = append(os.Environ(), "ROUTERVPN_NODE_MAX_WFP_REFERENCE_CHILD=1")
+	input, err := command.StdinPipe()
+	if err != nil {
+		cancel()
+		_ = os.RemoveAll(workspace)
+		t.Fatal(err)
+	}
+	output, childOutput, err := os.Pipe()
+	if err != nil {
+		_ = input.Close()
+		cancel()
+		_ = os.RemoveAll(workspace)
+		t.Fatal(err)
+	}
+	p := &nodeMAXWFPReference{command: command, input: input, output: output, reader: bufio.NewReaderSize(output, nodeMAXWFPBuffer), done: make(chan error, 1), ctx: ctx, cancel: cancel, request: request, local: local, workspace: workspace, copyPath: copyPath, digest: sha256.Sum256(contents)}
+	command.Stdout, command.Stderr = childOutput, &p.diagnostics
+	if err = command.Start(); err != nil {
+		_ = input.Close()
+		_ = output.Close()
+		_ = childOutput.Close()
+		cancel()
+		_ = os.RemoveAll(workspace)
+		t.Fatal(err)
+	}
+	_ = childOutput.Close()
+	go func() { p.done <- command.Wait() }()
+	t.Cleanup(func() {
+		if err := p.close(); err != nil {
+			// Diagnostics are read only after Wait joined its writer.
+			if p.joined {
+				t.Errorf("owned MAX reference did not join cleanly: %v; %s", err, p.diagnostics.String())
+			} else {
+				t.Errorf("owned MAX reference did not join: %v", err)
+			}
+		}
+	})
+	raw, err := json.Marshal(request)
+	if err != nil || len(raw)+1 > 256 {
+		t.Fatal("MAX launch request exceeded its bound", err)
+	}
+	if _, err = input.Write(append(raw, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	// This is reference construction (native keys and the complete servers),
+	// not a relaxed path, KEM, connection, DNS or retirement deadline.
+	p.reply, err = p.read(90 * time.Second)
+	scope, scopeErr := mobiletor.DesktopWindowsNodeCompositionAppID()
+	if err != nil || scopeErr != nil || p.reply.Schema != 1 || len(p.reply.AppID) == 0 || bytes.Equal(scope, p.reply.AppID) || p.reply.Source == nil || p.reply.SourceSHA256 != p.reply.Source.digest() || p.reply.Source.Mode != mode || p.reply.Probe != "" || p.reply.ProbeCount != 0 {
+		t.Fatal("MAX reference was not a distinct retained executable and exact original source", err, scopeErr)
+	}
+	p.source, p.password = *p.reply.Source, p.reply.Password
+	p.reply.Source, p.reply.Password = nil, ""
+	remote, err := netip.ParseAddrPort(p.source.Physical)
+	protocol := "udp"
+	if strings.HasPrefix(mode, "max-tls-") {
+		protocol = "tcp"
+	}
+	if err != nil || remote.Addr() != local || remote.Port() == 0 || p.source.Protocol != protocol || p.password == "" {
+		t.Fatal("MAX reference replaced its actual TCP/UDP outer tuple", err)
+	}
+	packet, pe := netip.ParseAddrPort(p.source.Packet)
+	kem, ke := netip.ParseAddrPort(p.source.KEM)
+	middle, me := netip.ParseAddrPort(p.source.Middle)
+	outer, oe := netip.ParseAddrPort(p.source.Outer)
+	service, packetPort := netip.MustParseAddr("10.77.0.1"), uint16(51820)
+	if strings.HasSuffix(mode, "-awg") {
+		service, packetPort = netip.MustParseAddr("10.78.0.1"), 585
+	}
+	if pe != nil || ke != nil || me != nil || oe != nil || packet != netip.AddrPortFrom(service, packetPort) || kem != netip.AddrPortFrom(service, 51822) || middle.Addr() != service || outer.Addr() != service || middle.Port() == 0 || outer.Port() == 0 || packet == kem || middle == packet || middle == kem || outer == packet || outer == kem {
+		t.Fatal("MAX reference changed or aliased its original packet/KEM/middle destinations")
+	}
+	if p.reply.Packets != 0 || p.reply.KEMReceived != 0 || p.reply.MiddleRaw != 0 || p.reply.OuterRaw != 0 || p.reply.Queries != 0 {
+		t.Fatal("MAX reference opened an encrypted path before captured native admission")
+	}
+	nonce := nodePQWFPNonce(t)
+	if p.probe(t, "arm", nonce) != 0 {
+		t.Fatal("MAX fresh original-token marker already had traffic")
+	}
+	echo, err := nodeMAXWFPProbe(protocol, remote, nonce, layer, p.password)
+	if err != nil || !echo || p.probe(t, "observe", nonce) != 1 {
+		t.Fatal("MAX original-token positive marker missed its actual outer listener", err)
+	}
+	return p
+}
+
+func (p *nodeMAXWFPReference) original(t *testing.T, kill string) *mobilemultihop.NodeProfile {
+	t.Helper()
+	if p.source.digest() != p.reply.SourceSHA256 || kill != "always" && kill != "on-connect" {
+		t.Fatal("MAX original source changed or lost its explicit protection choice")
+	}
+	profile := p.source.Profile
+	if kill == "on-connect" {
+		var selected map[string]any
+		if json.Unmarshal(profile, &selected) != nil || selected["kill_switch_policy"] != "always" {
+			t.Fatal("MAX trial changed its captured original policy")
+		}
+		selected["kill_switch_policy"] = kill
+		var err error
+		profile, err = json.Marshal(selected)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer clear(profile)
+	}
+	original, err := mobilemultihop.NewNodeProfile(p.source.Mode, string(p.source.Files), string(profile), "", "")
+	if err != nil {
+		t.Fatal("actual Windows MAX original source constructor", err)
+	}
+	return original
+}
+
+func nodeMAXWFPBox(t *testing.T, original *mobilemultihop.NodeProfile, predecessor *mobiletor.DesktopWindowsProtectionTarget, prepare bool) *nodePQWFPFixture {
+	t.Helper()
+	policy, err := mobilemultihop.NewDesktopNodePolicy(original, nodePQWFPNonce(t), "windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &nodePQWFPFixture{nodePQFixture: &nodePQFixture{policy: policy}}
+	buildNodePQCapturedBox(t, f.nodePQFixture, func(ctx context.Context) (context.Context, error) {
+		admit := func(ctx context.Context, prepared routervpndesktoppt.NodePhysicalPrepared) error {
+			if f.network == nil || f.tun == nil || f.network.SocketCurrent() || f.network.Current() || f.tun.ready.Load() || f.admitted != 0 {
+				return errors.New("MAX native handoff was late, missing or repeated")
+			}
+			target := mobiletor.DesktopWindowsProtectionTarget{Capture: prepared.Capture, Policy: prepared.Policy, BaselineSHA256: prepared.BaselineSHA256}
+			if err := mobiletor.DesktopWindowsNodeCompositionVerifyPrepared(ctx, target); err != nil {
+				return err
+			}
+			f.prepared, f.admitted = target, 1
+			return nil
+		}
+		if predecessor == nil {
+			return routervpndesktoppt.WithNodePhysicalAdmission(ctx, policy, admit)
+		}
+		return routervpndesktoppt.WithNodePhysicalSuccessorAdmission(ctx, policy, *predecessor, admit)
+	}, func(registry *outbound.Registry) { HYOUT.RegisterOutbound(registry); XR.RegisterOutbound(registry) })
+	if prepare {
+		if err := f.box.RouterVPNDesktopNodePreparePhysical(policy); err != nil {
+			t.Fatal("actual sealed Windows MAX factory preparation", err)
+		}
+	}
+	endpoint, found := f.box.Outbound().Outbound("proxy")
+	if !found {
+		t.Fatal("native MAX Box omitted its actual packet endpoint")
+	}
+	f.endpoint, _ = endpoint.(*Endpoint)
+	if f.endpoint == nil || f.endpoint.owner.Ready() || f.endpoint.owner.TransportReady() {
+		t.Fatal("native MAX Box fabricated readiness or substituted its packet runtime")
+	}
+	return f
+}
+
+func nodeMAXWFPRequireBlocked(t *testing.T, p *nodeMAXWFPReference) {
+	t.Helper()
+	if p.probe(t, "positive", nodePQWFPNonce(t)) != 1 {
+		t.Fatal("MAX separate-reference positive marker has no independent receipt")
+	}
+	nonce := nodePQWFPNonce(t)
+	if p.probe(t, "arm", nonce) != 0 {
+		t.Fatal("MAX denied marker already had traffic")
+	}
+	echo, err := nodeMAXWFPProbe(p.source.Protocol, netip.MustParseAddrPort(p.source.Physical), nonce, p.request.Layer, p.password)
+	before := p.probe(t, "observe", nonce)
+	if p.probe(t, "positive", nodePQWFPNonce(t)) != 1 {
+		t.Fatal("MAX independent reference lost its actual outer route")
+	}
+	after := p.probe(t, "observe", nonce)
+	if after < before || after != 0 || echo {
+		t.Fatal("ordinary token crossed MAX actual outer deny: independent peer marker receipt", p.source.Protocol, after)
+	}
+	var timeout net.Error
+	if !errors.Is(err, syscall.Errno(10013)) && !(errors.As(err, &timeout) && timeout.Timeout()) {
+		t.Fatal("MAX ordinary rejection has no bounded native denial or timeout", err)
+	}
+}
+
+func nodeMAXWFPRequireNative(t *testing.T, f *nodePQWFPFixture, p *nodeMAXWFPReference) {
+	t.Helper()
+	if f.admitted != 1 || f.prepared.Validate() != nil || f.network.Current() || !f.network.SocketCurrent() || !f.tun.ready.Load() || f.kernel != nil || f.source != nil {
+		t.Fatal("MAX native startup omitted its prepared handoff or fabricated a physical owner")
+	}
+	capture, err := f.policy.Capture()
+	if err != nil || capture.SelectedDNS.Host != "192.168.50.133" || capture.SelectedDNS.Detour != "proxy" || capture.SelectedDNS.Physical || len(capture.BootstrapDNS) != 0 || capture.HomeLANAccess || capture.IPv6Mode != "on" {
+		t.Fatal("MAX actual WFP changed selected DNS or device policy", err)
+	}
+	type tuple struct {
+		network string
+		remote  netip.AddrPort
+	}
+	expected := map[tuple]bool{{p.source.Protocol, netip.MustParseAddrPort(p.source.Physical)}: true}
+	actual := make(map[tuple]bool)
+	for _, root := range capture.PhysicalRoots {
+		for _, destination := range root.Destinations {
+			ip, err := netip.ParseAddr(destination.Host)
+			if err != nil || destination.Network != "tcp" && destination.Network != "udp" || destination.Port < 1 || destination.Port > 65535 {
+				t.Fatal("MAX captured an invalid native protocol or destination")
+			}
+			actual[tuple{destination.Network, netip.AddrPortFrom(ip, uint16(destination.Port))}] = true
+		}
+	}
+	if !reflect.DeepEqual(actual, expected) {
+		t.Fatal("MAX actual WFP substituted its exact outermost TCP/UDP tuple")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	snapshot, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+	if err != nil || snapshot.Closed || snapshot.Target != f.prepared || snapshot.Owner.Kind != "windows-isolated-token" || !snapshot.Options.RetainBaselineForHandoff || len(snapshot.Grants) == 0 {
+		t.Fatal("MAX encrypted graph has no actual retained WFP/socket readback", err)
+	}
+	seen := make(map[tuple]bool)
+	for _, grant := range snapshot.Grants {
+		key := tuple{grant.Network, grant.Remote}
+		if !expected[key] || grant.Capture != f.prepared.Capture || grant.Local.Addr() != p.local || grant.Local.Port() == 0 || grant.Binding.Owner != snapshot.Owner {
+			t.Fatal("MAX native grant changed its captured transport, exact tuple or lower owner")
+		}
+		seen[key] = true
+	}
+	if !reflect.DeepEqual(seen, expected) {
+		t.Fatal("MAX native WFP omitted its exact outermost physical grant")
+	}
+}
+
+func nodeMAXWFPAgreedKey(t *testing.T, f *nodePQWFPFixture, p *nodeMAXWFPReference, previous [32]byte, epoch int) [32]byte {
+	t.Helper()
+	native, ok := f.endpoint.base.(nativePQReadback)
+	if !ok {
+		t.Fatal("actual MAX endpoint lost native PQ readback")
+	}
+	for deadline := time.Now().Add(2 * time.Second); ; {
+		local, err := native.RouterVPNTestPQSnapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		remote := p.observe(t, "stats")
+		if remote.Updates >= int64(epoch+1) && local.KeyDigest == remote.Snapshot.KeyDigest && local.KeyDigest != previous {
+			return local.KeyDigest
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("both isolated complete MAX peers did not adopt the same fresh PQ key", epoch)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func nodeMAXWFPRequireTraffic(t *testing.T, f *nodePQWFPFixture, p *nodeMAXWFPReference, previous [32]byte, rekey bool) [32]byte {
+	t.Helper()
+	var priorLocal, priorRemote int64
+	epochs := 1
+	if rekey {
+		epochs = 2
+	}
+	for epoch := 0; epoch < epochs; epoch++ {
+		if epoch != 0 {
+			p.observe(t, "rekey")
+		}
+		previous = nodeMAXWFPAgreedKey(t, f, p, previous, epoch)
+		native := f.endpoint.base.(nativePQReadback)
+		if epoch != 0 {
+			p.observe(t, "rehandshake")
+			if err := native.RouterVPNTestPQRehandshake(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, network := range []string{"tcp", "udp"} {
+			for _, host := range []string{"192.0.2.99", "2001:db8::99"} {
+				if err := f.exchange(network, host, epoch); err != nil {
+					t.Fatal("actual WFP complete MAX encrypted payload failed", network, host, epoch, err)
+				}
+			}
+		}
+		local, err := native.RouterVPNTestPQSnapshot()
+		remote := p.observe(t, "stats")
+		if err != nil || local.KeyDigest != previous || remote.Snapshot.KeyDigest != previous || local.HandshakeNanos <= priorLocal || remote.Snapshot.HandshakeNanos <= priorRemote {
+			t.Fatal("actual WFP complete MAX used a stale or different native key and handshake", epoch, err)
+		}
+		priorLocal, priorRemote = local.HandshakeNanos, remote.Snapshot.HandshakeNanos
+	}
+	if err := f.box.RouterVPNStrategyDNSProof(); err != nil {
+		t.Fatal("actual WFP complete MAX selected Home DNS proof failed", err)
+	}
+	before := p.observe(t, "fail-dns")
+	if before.Queries == 0 {
+		t.Fatal("actual WFP complete MAX DNS never reached its selected native peer")
+	}
+	if err := f.box.RouterVPNStrategyDNSProof(); err == nil {
+		t.Fatal("actual WFP complete MAX cached or bypassed selected DNS")
+	}
+	after := p.observe(t, "restore-dns")
+	if after.Queries <= before.Queries {
+		t.Fatal("actual WFP complete MAX DNS failure skipped its captured route")
+	}
+	if err := f.box.RouterVPNStrategyDNSProof(); err != nil {
+		t.Fatal("actual WFP complete MAX selected DNS did not recover", err)
+	}
+	final := p.observe(t, "stats")
+	if final.Queries <= after.Queries || final.Packets == 0 || final.KEMReceived == 0 || final.MiddleRaw == 0 || final.MiddlePacket == 0 || final.MiddleKEM == 0 || final.OuterRaw == 0 || final.OuterMiddle == 0 || final.Plain || final.Rejected != 0 || p.request.Layer != "" && final.MiddleOuter == 0 {
+		t.Fatal("actual WFP complete MAX omitted a mandatory encrypted lane or fresh selected DNS")
+	}
+	nodeMAXWFPRequireNative(t, f, p)
+	nodeMAXWFPRequireBlocked(t, p)
+	return previous
+}
+
+func TestRouterVPNDesktopNodeWindowsMAXCapabilityClosed(t *testing.T) {
+	for _, mode := range nodeMAXWFPModes {
+		t.Run(mode, func(t *testing.T) {
+			if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			for _, layer := range append(append([]string(nil), nodeMAXWFPLayers...), "off") {
+				if mobilemultihop.DesktopNodePhysicalGraphSupported(mode, layer) {
+					t.Fatal("unmodified current predicate already admits prospective complete MAX")
+				}
+			}
+			peer := nodeMAXWFPStartReference(t, mode, "", "")
+			f := nodeMAXWFPBox(t, peer.original(t, "always"), nil, false)
+			if err := f.box.RouterVPNDesktopNodePreparePhysical(f.policy); err == nil || f.admitted != 0 || f.network.SocketCurrent() {
+				t.Fatal("closed complete MAX capability reached a native physical owner")
+			}
+			if err := f.close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+				t.Fatal("closed complete MAX capability changed BFE", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeWindowsMAXCapabilityOpen(t *testing.T) {
+	for _, mode := range nodeMAXWFPModes {
+		for _, layer := range append(append([]string(nil), nodeMAXWFPLayers...), "off") {
+			if !mobilemultihop.DesktopNodePhysicalGraphSupported(mode, layer) {
+				t.Fatal("prospective complete MAX omitted its exact native graph", mode, layer)
+			}
+		}
+		if mobilemultihop.DesktopNodePhysicalGraphSupported(mode, "uncaptured-layer") {
+			t.Fatal("MAX capability widened the Start Layer contract")
+		}
+	}
+}
+
+func nodeMAXWFPTraffic(t *testing.T, modes []string) {
+	for _, mode := range modes {
+		for _, layer := range nodeMAXWFPLayers {
+			t.Run(mode+"/"+nodePQLayerName(layer), func(t *testing.T) {
+				if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				peer := nodeMAXWFPStartReference(t, mode, layer, "")
+				var retained mobiletor.DesktopWindowsProtectionTarget
+				nodePQWFPCleanup(t, &retained)
+				f := nodeMAXWFPBox(t, peer.original(t, "always"), nil, true)
+				f.start(t)
+				retained = f.prepared
+				nodeMAXWFPRequireTraffic(t, f, peer, [32]byte{}, true)
+				f.network.InterfaceUpdated(context.Background())
+				if f.network.SocketCurrent() || f.network.Current() {
+					t.Fatal("MAX interface transition retained old native admission")
+				}
+				retained = nodePQWFPDrain(t, f)
+				nodeMAXWFPRequireBlocked(t, peer)
+				before := peer.observe(t, "stats")
+				if f.exchange("tcp", "192.0.2.99", 3) == nil || f.box.RouterVPNStrategyDNSProof() == nil {
+					t.Fatal("retired actual WFP MAX owner admitted traffic or DNS")
+				}
+				after := peer.observe(t, "stats")
+				if before.Queries != after.Queries {
+					t.Fatal("retired MAX owner issued a stale selected DNS query")
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeWindowsMAXQUIC(t *testing.T) {
+	nodeMAXWFPTraffic(t, []string{"max-quic-wg", "max-quic-awg"})
+}
+func TestRouterVPNDesktopNodeWindowsMAXTLS(t *testing.T) {
+	nodeMAXWFPTraffic(t, []string{"max-tls-wg", "max-tls-awg"})
+}
+
+func nodeMAXWFPCredentials(t *testing.T, modes, outerFaults []string) {
+	for _, mode := range modes {
+		for _, layer := range nodeMAXWFPLayers {
+			faults := []string{"kem-peer", "packet-peer", "middle-key"}
+			if layer == "" {
+				faults = append(faults, outerFaults...)
+			}
+			for _, fault := range faults {
+				t.Run(mode+"/"+nodePQLayerName(layer)+"/"+fault, func(t *testing.T) {
+					if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+						t.Fatal(err)
+					}
+					peer := nodeMAXWFPStartReference(t, mode, layer, fault)
+					var retained mobiletor.DesktopWindowsProtectionTarget
+					nodePQWFPCleanup(t, &retained)
+					f := nodeMAXWFPBox(t, peer.original(t, "always"), nil, true)
+					if fault == "packet-peer" {
+						f.start(t)
+						nodeMAXWFPAgreedKey(t, f, peer, [32]byte{}, 0)
+						err := f.exchange("tcp", "192.0.2.99", 0)
+						observed := peer.observe(t, "stats")
+						if err == nil || observed.Packets == 0 || observed.Echoes != 0 || observed.Queries != 0 {
+							t.Fatal("actual WFP MAX accepted a wrong captured packet peer after native KEM")
+						}
+					} else {
+						done := make(chan error, 1)
+						go func() { done <- f.box.RouterVPNStrategyStart() }()
+						completed := false
+						for deadline := time.Now().Add(12 * time.Second); ; {
+							select {
+							case err := <-done:
+								completed = true
+								if err == nil {
+									t.Fatal("actual WFP MAX accepted the substituted authenticated layer credential")
+								}
+							default:
+							}
+							observed := peer.observe(t, "stats")
+							witnessed := false
+							switch fault {
+							case "kem-peer":
+								witnessed = observed.KEMRejected != 0
+							case "middle-key":
+								witnessed = observed.MiddleRejected != 0
+							case "outer-password":
+								witnessed = completed && observed.OuterRejected != 0
+							case "outer-mlkem-key":
+								witnessed = completed && observed.OuterRaw != 0 && observed.MLKEMRejected
+							case "outer-user":
+								witnessed = completed && observed.OuterRaw != 0 && observed.UserRejected
+							case "outer-name", "outer-trust", "outer-reality-key":
+								witnessed = completed && observed.OuterRaw != 0 && observed.OuterRejected == 0
+							}
+							if witnessed || completed {
+								if !witnessed {
+									t.Fatal("actual WFP MAX negative missed its actual authenticated rejection", fault)
+								}
+								break
+							}
+							if time.Now().After(deadline) {
+								f.network.Cancel()
+								select {
+								case <-done:
+								case <-time.After(time.Second):
+									t.Error("MAX failed credential startup did not join")
+								}
+								t.Fatal("actual WFP MAX negative never reached its retained encrypted peer", fault)
+							}
+							time.Sleep(time.Millisecond)
+						}
+						observed := peer.observe(t, "stats")
+						if f.endpoint.owner.Ready() || f.endpoint.owner.TransportReady() || observed.Updates != 0 || observed.Packets != 0 || observed.Queries != 0 {
+							t.Fatal("actual WFP MAX credential failure admitted packet traffic or DNS")
+						}
+						if fault == "middle-key" && (layer == "" && observed.OuterRaw == 0 || layer != "" && observed.OuterRaw != 0) {
+							t.Fatal("actual WFP MAX wrong paired key crossed or omitted its captured authentication stage")
+						}
+						if fault == "kem-peer" && (observed.OuterRaw == 0 || observed.MiddleRaw == 0) || strings.HasPrefix(fault, "outer-") && observed.KEMReceived != 0 || fault == "middle-key" && observed.KEMReceived != 0 {
+							t.Fatal("actual WFP MAX negative crossed or omitted a mandatory layer", fault)
+						}
+						f.network.Cancel()
+						if !completed {
+							select {
+							case err := <-done:
+								if err == nil {
+									t.Fatal("MAX cancelled native credential trial reported success")
+								}
+							case <-time.After(time.Second):
+								t.Fatal("MAX cancelled native credential trial did not join")
+							}
+						}
+					}
+					retained = f.prepared
+					if retained.Validate() != nil || f.admitted != 1 {
+						t.Fatal("MAX credential rejection bypassed exact native prepared ownership")
+					}
+					retained = nodePQWFPDrain(t, f)
+					nodeMAXWFPRequireBlocked(t, peer)
+				})
+			}
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeWindowsMAXQUICCredentials(t *testing.T) {
+	nodeMAXWFPCredentials(t, []string{"max-quic-wg", "max-quic-awg"}, []string{"outer-password", "outer-trust", "outer-name"})
+}
+func TestRouterVPNDesktopNodeWindowsMAXTLSCredentials(t *testing.T) {
+	nodeMAXWFPCredentials(t, []string{"max-tls-wg", "max-tls-awg"}, []string{"outer-reality-key", "outer-mlkem-key", "outer-user"})
+}
+
+func TestRouterVPNDesktopNodeWindowsMAXSuccession(t *testing.T) {
+	opposite := map[string]string{"max-quic-wg": "max-tls-awg", "max-quic-awg": "max-tls-wg", "max-tls-wg": "max-quic-awg", "max-tls-awg": "max-quic-wg"}
+	for _, mode := range nodeMAXWFPModes {
+		for _, layer := range nodeMAXWFPLayers {
+			t.Run(mode+"/"+nodePQLayerName(layer), func(t *testing.T) {
+				if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				firstPeer := nodeMAXWFPStartReference(t, mode, layer, "")
+				// Only the original owns the optional fixed whitening listener.
+				// The temporary graph has separate keys and the opposite transport.
+				trialPeer := nodeMAXWFPStartReference(t, opposite[mode], "", "")
+				var retained mobiletor.DesktopWindowsProtectionTarget
+				nodePQWFPCleanup(t, &retained)
+				original := firstPeer.original(t, "always")
+				first := nodeMAXWFPBox(t, original, nil, true)
+				first.start(t)
+				retained = first.prepared
+				previous := nodeMAXWFPRequireTraffic(t, first, firstPeer, [32]byte{}, false)
+				retained = nodePQWFPDrain(t, first)
+				trial := nodeMAXWFPBox(t, trialPeer.original(t, "on-connect"), &retained, true)
+				trial.start(t)
+				retained = trial.prepared
+				nodeMAXWFPRequireTraffic(t, trial, trialPeer, [32]byte{}, false)
+				trial.network.InterfaceUpdated(context.Background())
+				retained = nodePQWFPDrain(t, trial)
+				firstPeer.observe(t, "reset-joined-client")
+				restored := nodeMAXWFPBox(t, original, &retained, true)
+				restored.start(t)
+				retained = restored.prepared
+				if err := nodePQWFPRestoration(first, restored); err != nil || retained.Policy != "always" {
+					t.Fatal("actual MAX reverse handoff lost its saved original capture", err)
+				}
+				first.network.InterfaceUpdated(context.Background())
+				if err := first.close(); err != nil {
+					t.Fatal(err)
+				}
+				nodeMAXWFPRequireTraffic(t, restored, firstPeer, previous, false)
+				retained = nodePQWFPDrain(t, restored)
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor(t *testing.T) {
+	for _, mode := range nodeMAXWFPModes {
+		t.Run(mode, func(t *testing.T) {
+			if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			peer := nodeMAXWFPStartReference(t, mode, "", "")
+			var retained mobiletor.DesktopWindowsProtectionTarget
+			nodePQWFPCleanup(t, &retained)
+			original := peer.original(t, "always")
+			first := nodeMAXWFPBox(t, original, nil, true)
+			first.start(t)
+			retained = first.prepared
+			nodeMAXWFPRequireTraffic(t, first, peer, [32]byte{}, false)
+			retained = nodePQWFPDrain(t, first)
+			wrong := retained
+			wrong.Capture.SourceSHA256 = strings.Repeat("f", 64)
+			candidate := nodeMAXWFPBox(t, original, &wrong, true)
+			if err := candidate.box.RouterVPNStrategyStart(); err == nil || candidate.admitted != 0 {
+				if candidate.admitted != 0 {
+					retained = candidate.prepared
+				}
+				t.Fatal("foreign MAX predecessor reached actual native encrypted startup")
+			}
+			if err := candidate.close(); err != nil {
+				t.Fatal("rejected MAX successor did not join", err)
+			}
+			if err := mobiletor.DesktopWindowsNodeCompositionVerifyRetained(context.Background(), retained); err != nil {
+				t.Fatal("rejected MAX successor changed the original retained deny", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeWindowsMAXMarkers(t *testing.T) {
+	t.Run("bounded-input", func(t *testing.T) {
+		for _, value := range []string{"short\n", strings.Repeat("x", 8192) + "\n"} {
+			got, err := nodeMAXWFPReadLine(bufio.NewReaderSize(strings.NewReader(value), 32), len(value))
+			if err != nil || string(got) != value {
+				t.Fatal("MAX bounded reply lost split original bytes", err)
+			}
+			if _, err := nodeMAXWFPReadLine(bufio.NewReaderSize(strings.NewReader(value), 32), len(value)-1); err == nil {
+				t.Fatal("MAX reply exceeded its exact bounded ownership")
+			}
+		}
+	})
+	t.Run("unarmed-and-wrong-owner", func(t *testing.T) {
+		owner, other := new(nodePQLayer), new(nodePQLayer)
+		observed := &nodeMAXWFPObservation{owner: owner}
+		nonce := strings.Repeat("a", 32)
+		marker := []byte(nodeMAXWFPProbePrefix + nonce)
+		if observed.consume(owner, marker) {
+			t.Fatal("MAX consumed an unarmed marker")
+		}
+		if err := observed.arm(nonce); err != nil {
+			t.Fatal(err)
+		}
+		if observed.consume(other, marker) || observed.consume(owner, append(marker, 0)) {
+			t.Fatal("MAX marker escaped its exact owner or frame")
+		}
+		if count, err := observed.count(nonce); err != nil || count != 0 {
+			t.Fatal("MAX wrong-owner observation changed its owned count", err)
+		}
+		if !observed.consume(owner, marker) {
+			t.Fatal("MAX exact armed marker disappeared")
+		}
+		if count, err := observed.count(nonce); err != nil || count != 1 {
+			t.Fatal("MAX exact armed marker has no receipt", err)
+		}
+		if err := observed.arm(nonce); err == nil {
+			t.Fatal("MAX reused a private marker nonce")
+		}
+	})
+	t.Run("encrypted-fragments", func(t *testing.T) {
+		for _, body := range [][]byte{{0x16, 0x03, 0x01, 0x00}, []byte("rX"), []byte(nodeMAXWFPProbePrefix + strings.Repeat("b", 32))} {
+			left, right := net.Pipe()
+			deadline := time.Now().Add(time.Second)
+			_ = left.SetDeadline(deadline)
+			_ = right.SetDeadline(deadline)
+			owner := new(nodePQLayer)
+			observed := &nodeMAXWFPObservation{owner: owner}
+			reader := &nodeMAXWFPObservedStream{Conn: left, owner: owner, observation: observed, reader: bufio.NewReader(left)}
+			done := make(chan error, 1)
+			go func() {
+				n, err := right.Write(body)
+				if err == nil && n != len(body) {
+					err = io.ErrShortWrite
+				}
+				done <- err
+			}()
+			got := make([]byte, len(body))
+			_, readErr := io.ReadFull(reader, got)
+			_ = left.Close()
+			_ = right.Close()
+			writeErr := <-done
+			if readErr != nil || writeErr != nil || !bytes.Equal(got, body) {
+				t.Fatal("MAX marker wrapper changed an original encrypted fragment", readErr, writeErr)
+			}
+		}
+	})
+	t.Run("exact-armed-stream", func(t *testing.T) {
+		left, right := net.Pipe()
+		defer left.Close()
+		defer right.Close()
+		deadline := time.Now().Add(time.Second)
+		_ = left.SetDeadline(deadline)
+		_ = right.SetDeadline(deadline)
+		owner := new(nodePQLayer)
+		observed := &nodeMAXWFPObservation{owner: owner}
+		nonce := strings.Repeat("c", 32)
+		if err := observed.arm(nonce); err != nil {
+			t.Fatal(err)
+		}
+		reader := &nodeMAXWFPObservedStream{Conn: left, owner: owner, observation: observed, reader: bufio.NewReader(left)}
+		done := make(chan error, 1)
+		go func() {
+			body := make([]byte, 4096)
+			n, err := reader.Read(body)
+			if n != 0 || err != io.EOF {
+				done <- errors.New("MAX marker entered the encrypted protocol")
+			} else {
+				done <- nil
+			}
+		}()
+		marker := []byte(nodeMAXWFPProbePrefix + nonce)
+		n, writeErr := right.Write(marker)
+		answer := make([]byte, len(marker))
+		_, readErr := io.ReadFull(right, answer)
+		_ = right.Close()
+		_ = left.Close()
+		joined := <-done
+		count, countErr := observed.count(nonce)
+		if writeErr != nil || n != len(marker) || readErr != nil || joined != nil || countErr != nil || count != 1 || !bytes.Equal(answer, marker) {
+			t.Fatal("MAX armed marker lost its exact echo or joined observation", writeErr, readErr, joined, countErr)
+		}
+	})
+}

@@ -107,6 +107,8 @@ def inputs():
                              ROOT/'deploy/test_windows_node_physical_runner.py',
                              ROOT/'deploy/test_windows_node_pq.py',
                              ROOT/'deploy/test_windows_node_pq_runner.py',
+                             ROOT/'deploy/test_windows_node_max.py',
+                             ROOT/'deploy/test_windows_node_max_runner.py',
                              ROOT/'deploy/test_desktop_windows_traffic.py',
                              ROOT/'deploy/test_windows_physical_bootstrap.py',
                              ROOT/'deploy/test_windows_physical_bootstrap_runner.py',

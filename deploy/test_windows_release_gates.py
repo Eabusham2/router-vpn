@@ -209,6 +209,10 @@ def native_dns_test_script(workflow: str, candidate: str) -> str:
 
 def check_workflow(candidate: str, build_all: str) -> None:
     windows = workflow_job(candidate, "windows-native-smoke")
+    complete_max = workflow_job(candidate, "windows-complete-max")
+    if "    uses: ./.github/workflows/windows-node-max-contract.yml\n" not in complete_max or re.search(
+            r"(?m)^    (?:if|continue-on-error):", complete_max):
+        raise AssertionError("authoritative release lost its blocking native complete MAX workflow")
     check_workspace_gate(windows)
     check_owned_process_gate(windows, True)
     check_owned_process_gate(windows, True, True)
@@ -244,7 +248,8 @@ def check_workflow(candidate: str, build_all: str) -> None:
         raise AssertionError("Windows release policy gate omitted executable negatives or live fixtures")
     aggregate = workflow_job(candidate, "aggregate")
     needs = re.search(r"(?m)^    needs: \[([^\]]+)\]$", aggregate)
-    if needs is None or "windows-native-smoke" not in [value.strip() for value in needs.group(1).split(",")]:
+    if needs is None or not {"windows-native-smoke", "windows-complete-max"}.issubset(
+            value.strip() for value in needs.group(1).split(",")):
         raise AssertionError("release aggregation bypassed Windows native gates")
     release = workflow_job(build_all, "release-candidate")
     publication = workflow_job(build_all, "publish-exact-sha-release")
@@ -390,7 +395,11 @@ class WindowsReleaseGateTests(unittest.TestCase):
             ("source", "--package-root $roots[0].FullName", "--package-root $env:GITHUB_WORKSPACE"),
             ("mutants", "--shell $shell", "--shell $shell --shipping-only"),
             ("blocking", "      - name: Execute packaged device and DNS ownership gates\n", "      - name: Execute packaged device and DNS ownership gates\n        continue-on-error: true\n"),
-            ("aggregate", "generic-builds, windows-native-smoke, android", "generic-builds, android"),
+            ("aggregate", "generic-builds, windows-native-smoke, windows-complete-max, android", "generic-builds, windows-complete-max, android"),
+            ("max-aggregate", "windows-native-smoke, windows-complete-max, android", "windows-native-smoke, android"),
+            ("max-workflow", "uses: ./.github/workflows/windows-node-max-contract.yml", "uses: ./.github/workflows/windows-node-pq-contract.yml"),
+            ("max-conditional", "  windows-complete-max:\n", "  windows-complete-max:\n    if: false\n"),
+            ("max-nonblocking", "  windows-complete-max:\n", "  windows-complete-max:\n    continue-on-error: true\n"),
         )
         for name, old, new in variants:
             with self.subTest(name=name):

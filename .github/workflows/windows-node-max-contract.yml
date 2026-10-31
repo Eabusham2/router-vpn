@@ -1,0 +1,143 @@
+name: Windows complete MAX and native WFP
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches: [main]
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - 'internal/**'
+      - 'mobile/desktop/**'
+      - 'mobile/pq/**'
+      - 'mobile/xray/**'
+      - 'mobile/amnezia/**'
+      - 'mobile/rosenpass/**'
+      - 'mobile/startwhitening/**'
+      - 'cmd/start-layer-relay/**'
+      - 'client/Protect-RouterVPN-Windows-PrivateRoot.ps1'
+      - 'client/test-windows-private-acl.ps1'
+      - 'deploy/prepare-*.py'
+      - 'deploy/build*pq*.py'
+      - 'deploy/build-native-runtime.py'
+      - 'deploy/test_windows_node_pq*.py'
+      - 'deploy/test_desktop_node_pq.py'
+      - 'deploy/test_pq_reference_preparation.py'
+      - 'deploy/test_desktop_node_physical.py'
+      - 'deploy/test_desktop_node_max*.py'
+      - 'deploy/test_windows_node_max*.py'
+      - 'deploy/test_server_pq_traffic.py'
+      - 'deploy/test_windows_node_physical*.py'
+      - 'deploy/fixtures/windows-node-physical/**'
+      - 'deploy/setup-desktop-native-toolchain.py'
+      - 'deploy/install-desktop-windows-toolchain.py'
+      - '.github/workflows/windows-node-max-contract.yml'
+      - '.github/workflows/release-candidate.yml'
+  pull_request:
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - 'internal/**'
+      - 'mobile/desktop/**'
+      - 'mobile/pq/**'
+      - 'mobile/xray/**'
+      - 'mobile/amnezia/**'
+      - 'mobile/rosenpass/**'
+      - 'mobile/startwhitening/**'
+      - 'cmd/start-layer-relay/**'
+      - 'client/Protect-RouterVPN-Windows-PrivateRoot.ps1'
+      - 'client/test-windows-private-acl.ps1'
+      - 'deploy/prepare-*.py'
+      - 'deploy/build*pq*.py'
+      - 'deploy/build-native-runtime.py'
+      - 'deploy/test_windows_node_pq*.py'
+      - 'deploy/test_desktop_node_pq.py'
+      - 'deploy/test_pq_reference_preparation.py'
+      - 'deploy/test_desktop_node_physical.py'
+      - 'deploy/test_desktop_node_max*.py'
+      - 'deploy/test_windows_node_max*.py'
+      - 'deploy/test_server_pq_traffic.py'
+      - 'deploy/test_windows_node_physical*.py'
+      - 'deploy/fixtures/windows-node-physical/**'
+      - 'deploy/setup-desktop-native-toolchain.py'
+      - 'deploy/install-desktop-windows-toolchain.py'
+      - '.github/workflows/windows-node-max-contract.yml'
+      - '.github/workflows/release-candidate.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-node-max-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-max:
+    name: Actual complete MAX and WFP on ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            target: windows/amd64
+            slug: windows-amd64
+          - runner: windows-11-arm
+            target: windows/arm64
+            slug: windows-arm64
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Verify native scope and prospective admission boundaries
+        shell: pwsh
+        run: |
+          python deploy/test_windows_node_max_runner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Complete MAX native source/scope boundary failed' }
+          python deploy/test_pq_reference_preparation.py
+          if ($LASTEXITCODE -ne 0) { throw 'Complete MAX private reference preparation failed' }
+      - name: Private ACL readback in Windows PowerShell 5.1 and 7
+        timeout-minutes: 6
+        shell: pwsh
+        run: |
+          $systemShell = [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::System), 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+          $coreShell = [IO.Path]::Combine($PSHOME, 'pwsh.exe')
+          foreach ($shell in @($systemShell, $coreShell)) {
+            & $shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File client/test-windows-private-acl.ps1
+            if ($LASTEXITCODE -ne 0) { throw 'Actual private ACL readback/failure controls failed' }
+          }
+      - name: Select exact native Rust target and verified LLVM compiler
+        shell: pwsh
+        run: |
+          python deploy/setup-desktop-native-toolchain.py '${{ matrix.target }}' (Join-Path $env:RUNNER_TEMP 'routervpn-max-native-toolchain')
+          if ($LASTEXITCODE -ne 0) { throw 'Exact MAX native toolchain preparation failed' }
+      - name: Execute complete MAX, actual WFP, rekey and retained reversal
+        timeout-minutes: 150
+        shell: pwsh
+        run: |
+          # Aggregate allowance: 12 complete paths, 48 credential cases, 12
+          # reversals, 4 foreign predecessors and 22 compiled controls.
+          # Individual native startup/query/retirement deadlines are unchanged.
+          # Actual CGO/WFP is scoped to this executable; only TUN is modeled.
+          # Public complete-MAX admission remains closed in this prerequisite.
+          python deploy/test_windows_node_max.py --standalone --prospective --sha $env:GITHUB_SHA --receipt (Join-Path $env:RUNNER_TEMP 'routervpn-windows-max-receipt.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Actual Windows complete MAX/WFP composition failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-max-native-${{ matrix.slug }}-${{ github.sha }}
+          path: ${{ runner.temp }}/routervpn-windows-max-receipt.json
+          if-no-files-found: error
+          retention-days: 7

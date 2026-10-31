@@ -44,7 +44,7 @@ type nodeMAXTLSReference struct {
 // This is the original pinned Xray reference with an actual captured physical
 // TCP front. The client retains that exact endpoint. Only the server may route
 // the one authenticated private UDP tuple into its owned middle service.
-func nodeMAXTLS(t *testing.T, ip netip.Addr, middle M.Socksaddr, target, fault string) *nodeMAXTLSReference {
+func nodeMAXTLS(t *testing.T, ip netip.Addr, middle M.Socksaddr, target, fault string, hooks *nodeMAXReferenceHooks) *nodeMAXTLSReference {
 	t.Helper()
 	binary := os.Getenv("ROUTER_VPN_XRAY_TEST_BINARY")
 	if !filepath.IsAbs(binary) || !ip.Is4() || !ip.IsPrivate() || ip.IsLoopback() || !middle.Addr.IsPrivate() || middle.Port == 0 {
@@ -154,7 +154,7 @@ func nodeMAXTLS(t *testing.T, ip netip.Addr, middle M.Socksaddr, target, fault s
 				_ = connection.Close()
 				return
 			}
-			go nodeMAXTLSForward(s, connection, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+			go nodeMAXTLSForward(s, connection, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), hooks)
 		}
 	}()
 	asset, err := json.Marshal(client)
@@ -180,8 +180,9 @@ func (c *nodeMAXTLSCountedConn) Read(body []byte) (int, error) {
 	return n, err
 }
 
-func nodeMAXTLSForward(s *nodePQLayer, incoming net.Conn, target string) {
+func nodeMAXTLSForward(s *nodePQLayer, incoming net.Conn, target string, hooks *nodeMAXReferenceHooks) {
 	defer s.leave(incoming)
+	readable := hooks.stream(s, incoming)
 	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
 	defer cancel()
 	outgoing, err := (&net.Dialer{}).DialContext(ctx, "tcp4", target)
@@ -199,7 +200,7 @@ func nodeMAXTLSForward(s *nodePQLayer, incoming net.Conn, target string) {
 	joined := make(chan struct{})
 	go func() {
 		defer close(joined)
-		_, _ = io.Copy(outgoing, &nodeMAXTLSCountedConn{incoming, s})
+		_, _ = io.Copy(outgoing, &nodeMAXTLSCountedConn{readable, s})
 		_ = outgoing.Close()
 		_ = incoming.Close()
 	}()

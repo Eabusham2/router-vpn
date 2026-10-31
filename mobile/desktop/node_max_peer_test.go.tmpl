@@ -140,7 +140,7 @@ func nodeMAXUDP(t *testing.T, ip netip.Addr, excluded ...uint16) *net.UDPConn {
 	return nil
 }
 
-func nodeMAXSS(t *testing.T, packet *net.UDPConn, stream net.Listener, secret string, routes, tcpRoutes map[M.Socksaddr]string, wg M.Socksaddr, barrier <-chan struct{}) *nodePQLayer {
+func nodeMAXSS(t *testing.T, packet *net.UDPConn, stream net.Listener, secret string, routes, tcpRoutes map[M.Socksaddr]string, wg M.Socksaddr, barrier <-chan struct{}, hooks *nodeMAXReferenceHooks) *nodePQLayer {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &nodePQLayer{ctx: ctx, cancel: cancel, udp: packet, routes: routes, wg: wg, barrier: barrier, owned: make(map[io.Closer]bool)}
@@ -154,10 +154,10 @@ func nodeMAXSS(t *testing.T, packet *net.UDPConn, stream net.Listener, secret st
 	if err != nil {
 		t.Fatal(err)
 	}
+	reader := bufio.NewPacketConn(hooks.packet(s, packet, secret))
 	s.workers.Add(1)
 	go func() {
 		defer s.workers.Done()
-		reader := bufio.NewPacketConn(packet)
 		for {
 			body := buf.NewSize(65535)
 			source, err := reader.ReadPacket(body)
@@ -190,7 +190,7 @@ func nodeMAXSS(t *testing.T, packet *net.UDPConn, stream net.Listener, secret st
 				}
 				go func(connection net.Conn) {
 					defer s.leave(connection)
-					if err := service.NewConnection(ctx, &nodeMAXTLSCountedConn{connection, s}, M.Metadata{Source: M.SocksaddrFromNet(connection.RemoteAddr())}); err != nil {
+					if err := service.NewConnection(ctx, &nodeMAXTLSCountedConn{hooks.stream(s, connection), s}, M.Metadata{Source: M.SocksaddrFromNet(connection.RemoteAddr())}); err != nil {
 						s.rejected.Add(1)
 					}
 				}(connection)
@@ -200,7 +200,7 @@ func nodeMAXSS(t *testing.T, packet *net.UDPConn, stream net.Listener, secret st
 	return s
 }
 
-func nodeMAXHY(t *testing.T, packet *net.UDPConn, secret, certificate, key string, middle M.Socksaddr, target string) *nodePQLayer {
+func nodeMAXHY(t *testing.T, packet *net.UDPConn, secret, certificate, key string, middle M.Socksaddr, target string, hooks *nodeMAXReferenceHooks) *nodePQLayer {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &nodePQLayer{ctx: ctx, cancel: cancel, udp: packet, routes: map[M.Socksaddr]string{middle: target}, owned: make(map[io.Closer]bool)}
@@ -231,7 +231,7 @@ func nodeMAXHY(t *testing.T, packet *net.UDPConn, secret, certificate, key strin
 	if err := config.Start(); err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Start(&nodeMAXPacket{PacketConn: packet, owner: s}); err != nil {
+	if err := service.Start(&nodeMAXPacket{PacketConn: hooks.packet(s, packet, ""), owner: s}); err != nil {
 		t.Fatal(err)
 	}
 	return s
@@ -244,8 +244,43 @@ type nodeMAXFixture struct {
 	tlsReference                                     *nodeMAXTLSReference
 }
 
+// These optional, test-only hooks retain the original reference sockets and
+// source. The default prerequisite uses no wrapper or alternative assembly.
+// A native composition may intercept its private armed marker before the
+// reference protocol; it cannot rewrite a transport, destination or credential.
+type nodeMAXAssembler func(*testing.T, *nodePQFixture, net.Interface, netip.Addr, string, string, []byte, []byte, map[netip.AddrPort]bool) *nodePQFixture
+
+type nodeMAXReferenceHooks struct {
+	Interface func(*testing.T) (net.Interface, netip.Addr)
+	InnerRoutes func(*testing.T, *nodePQFixture, netip.Addr, map[M.Socksaddr]string) map[M.Socksaddr]string
+	Packet func(*nodePQLayer, net.PacketConn, string) net.PacketConn
+	Stream func(*nodePQLayer, net.Conn) net.Conn
+}
+
+func (h *nodeMAXReferenceHooks) packet(owner *nodePQLayer, connection net.PacketConn, password string) net.PacketConn {
+	if h != nil && h.Packet != nil {
+		return h.Packet(owner, connection, password)
+	}
+	return connection
+}
+
+func (h *nodeMAXReferenceHooks) stream(owner *nodePQLayer, connection net.Conn) net.Conn {
+	if h != nil && h.Stream != nil {
+		return h.Stream(owner, connection)
+	}
+	return connection
+}
+
 func newNodeMAXFixture(t *testing.T, mode, layer, fault string) *nodeMAXFixture {
 	t.Helper()
+	return newNodeMAXFixtureWithAssembly(t, mode, layer, fault, assembleNodeMAXFixture, nil)
+}
+
+func newNodeMAXFixtureWithAssembly(t *testing.T, mode, layer, fault string, assemble nodeMAXAssembler, hooks *nodeMAXReferenceHooks) *nodeMAXFixture {
+	t.Helper()
+	if assemble == nil {
+		t.Fatal("MAX reference requires its captured assembly callback")
+	}
 	if mode != "max-quic-wg" && mode != "max-quic-awg" && mode != "max-tls-wg" && mode != "max-tls-awg" {
 		t.Fatal("wrong complete MAX family")
 	}
@@ -255,7 +290,11 @@ func newNodeMAXFixture(t *testing.T, mode, layer, fault string) *nodeMAXFixture 
 	if fault != "" && fault != "kem-peer" && fault != "packet-peer" && fault != "middle-key" && fault != "outer-password" && fault != "outer-trust" && fault != "outer-name" && fault != "outer-reality-key" && fault != "outer-mlkem-key" && fault != "outer-user" {
 		t.Fatal("unknown MAX fault")
 	}
-	iface, ip := nodePQInterface(t)
+	selectInterface := nodePQInterface
+	if hooks != nil && hooks.Interface != nil {
+		selectInterface = hooks.Interface
+	}
+	iface, ip := selectInterface(t)
 	private, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -287,16 +326,22 @@ func newNodeMAXFixture(t *testing.T, mode, layer, fault string) *nodeMAXFixture 
 	var tlsReference *nodeMAXTLSReference
 	protocol := "udp"
 	if isTLS {
-		tlsReference = nodeMAXTLS(t, ip, middleDestination, middleAddress.String(), fault)
+		tlsReference = nodeMAXTLS(t, ip, middleDestination, middleAddress.String(), fault, hooks)
 		outer, outerAddress = tlsReference.observed, tlsReference.address
 		protocol = "tcp"
 	} else {
 		outerSocket := nodeMAXUDP(t, ip, basePort, 51822, 8389)
 		outerAddress = outerSocket.LocalAddr().(*net.UDPAddr).AddrPort()
-		outer = nodeMAXHY(t, outerSocket, outerKey, certificate, certificateKey, middleDestination, middleAddress.String())
+		outer = nodeMAXHY(t, outerSocket, outerKey, certificate, certificateKey, middleDestination, middleAddress.String(), hooks)
 	}
 	outerDestination := M.SocksaddrFrom(netip.MustParseAddr(service), outerAddress.Port())
 	routes := map[M.Socksaddr]string{packetDestination: f.reference.Address(), kemDestination: f.server.conn.LocalAddr().String()}
+	if hooks != nil && hooks.InnerRoutes != nil {
+		routes = hooks.InnerRoutes(t, f, ip, routes)
+		if len(routes) != 2 || routes[packetDestination] == "" || routes[kemDestination] == "" {
+			t.Fatal("MAX reference wrapper changed its exact packet/KEM destinations")
+		}
+	}
 	tcpRoutes := make(map[M.Socksaddr]string)
 	if isTLS {
 		tcpRoutes[outerDestination] = outerAddress.String()
@@ -306,7 +351,7 @@ func newNodeMAXFixture(t *testing.T, mode, layer, fault string) *nodeMAXFixture 
 		}
 		routes[outerDestination] = outerAddress.String()
 	}
-	middle := nodeMAXSS(t, middleSocket, middleStream, middleKey, routes, tcpRoutes, packetDestination, f.server.initialKey)
+	middle := nodeMAXSS(t, middleSocket, middleStream, middleKey, routes, tcpRoutes, packetDestination, f.server.initialKey, hooks)
 	physical := outerAddress
 	if layer != "" {
 		physical = middleAddress
@@ -374,7 +419,7 @@ func newNodeMAXFixture(t *testing.T, mode, layer, fault string) *nodeMAXFixture 
 	rawFiles, _ := json.Marshal(encoded)
 	profile, _ := json.Marshal(map[string]any{"id": "captured-complete-max-node", "node_kind": "router-vpn", "node_proof_id": hex.EncodeToString(proof[:]), "router_api": "http://" + service + ":8787", "api_token": "private-max-fixture-token", "endpoint": ip.String(),
 		"start_layer": layer, "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "kill_switch_policy": "always", "ipv6_mode": "on", "home_lan_access": false, "mtu_policy": "auto"})
-	f = assembleNodeMAXFixture(t, f, iface, ip, mode, protocol, rawFiles, profile, map[netip.AddrPort]bool{physical: true})
+	f = assemble(t, f, iface, ip, mode, protocol, rawFiles, profile, map[netip.AddrPort]bool{physical: true})
 	return &nodeMAXFixture{f, middle, outer, packetDestination, kemDestination, middleDestination, outerDestination, tlsReference}
 }
 

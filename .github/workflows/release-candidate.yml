@@ -16,6 +16,10 @@ jobs:
     name: Native macOS controller ownership on both architectures
     uses: ./.github/workflows/macos-native-installer-contract.yml
 
+  windows-complete-max:
+    name: Actual complete MAX ownership on both Windows architectures
+    uses: ./.github/workflows/windows-node-max-contract.yml
+
   native-runtimes:
     name: Build and verify complete native runtimes
     uses: ./.github/workflows/desktop-native-runtime.yml
@@ -575,7 +579,7 @@ jobs:
 
   aggregate:
     name: Aggregate one-SHA native release candidate
-    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, android, ios, macos, linux]
+    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, windows-complete-max, android, ios, macos, linux]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
