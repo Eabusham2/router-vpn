@@ -224,8 +224,15 @@ class ModeledRun:
             return (0 if self.failure_kind == 'control-succeeded' else 1), output
         selected = next(value.removeprefix('-test.run=') for value in command if value.startswith('-test.run='))
         if selected.startswith('^Test(RealPinnedFactory'):
-            return 0, ''.join(success(parent, ('v2', 'v3') if parent == 'TestRealPinnedFactoryExchangeAndRekey' else ())
-                              for parent in GATE.PQ.NATIVE_CASES)
+            if not re.search(selected, GATE.STARTUP_RECORDS):
+                raise AssertionError('MAX execution omitted its startup parser regression')
+            output = ''.join(success(parent, ('v2', 'v3') if parent == 'TestRealPinnedFactoryExchangeAndRekey' else ())
+                             for parent in GATE.PQ.NATIVE_CASES)
+            if self.failure_kind == 'failed-startup-records':
+                return 1, output + '--- FAIL: ' + GATE.STARTUP_RECORDS + ' (0.01s)\n'
+            if self.failure_kind != 'missing-startup-records':
+                output += success(GATE.STARTUP_RECORDS)
+            return 0, output
         parent = selected.strip('^$')
         family = 'QUIC' if 'QUIC' in parent else 'TLS'
         cases = (GATE.CREDENTIALS if parent.endswith('Credentials') else GATE.TRAFFIC)[family]
@@ -269,13 +276,15 @@ class MAXOwnershipChecks(unittest.TestCase):
             self.assertEqual(run.events, ['source-enter', 'source-joined'])
             self.assertTrue(all(not path.exists() for path in run.private))
             self.assertTrue(result['private_key_workspace_removed'])
+            self.assertEqual(result['startup_record_case'], GATE.STARTUP_RECORDS)
             self.assertEqual(json.loads(run.receipt.read_text())['target'], 'linux/amd64')
             deadlines = [value for command in run.commands for value in command if value.startswith('-test.timeout=')]
             self.assertCountEqual(deadlines, ['-test.timeout=120s', '-test.timeout=600s', '-test.timeout=1800s',
                                              '-test.timeout=600s', '-test.timeout=1800s', '-test.timeout=90s'])
 
     def test_failed_compile_execution_or_postflight_never_publishes_a_receipt(self):
-        for fault in ('control-compile', 'control-succeeded', 'missing-case', 'changed-source', 'changed-archive'):
+        for fault in ('control-compile', 'control-succeeded', 'missing-case', 'changed-source', 'changed-archive',
+                      'missing-startup-records', 'failed-startup-records'):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
                 run = ModeledRun(Path(directory), fault)
                 with run.installed(), self.assertRaises(ValueError):
