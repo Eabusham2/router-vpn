@@ -311,8 +311,20 @@ func TestLinuxProcessNamespaceCreatedBootstrap(t *testing.T) {
 	if child.bootstrap.childRecord.ProcessID != child.command.Process.Pid || child.bootstrap.childRecord.ProcParentID != child.observation.ProcProcessID {
 		t.Fatal("created process witness lost its namespace-aware original parent")
 	}
+	parent, created, err := child.bootstrap.Observations(ctx)
+	if err != nil || parent != child.observation || created != child.bootstrap.childRecord || created.ProcessID != child.command.Process.Pid {
+		t.Fatal("authenticated observations lost their actual created parent or child", err)
+	}
+	created.Image.Inode++
+	_, unchanged, err := child.bootstrap.Observations(ctx)
+	if err != nil || unchanged != child.bootstrap.childRecord || unchanged == created {
+		t.Fatal("returned comparison data replaced the original native capture", err)
+	}
 	if err := child.bootstrap.Close(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if parent, created, err := child.bootstrap.Observations(ctx); err == nil || parent != (Observation{}) || created != (Observation{}) {
+		t.Fatal("retired bootstrap returned cached process observations", err)
 	}
 	select {
 	case <-child.joined:
@@ -513,6 +525,9 @@ func TestLinuxProcessNamespaceRejectsRetiredAndReexecutedTask(t *testing.T) {
 		}
 		if ctx.Err() != nil {
 			t.Fatal("actual changed executable retained original child authority")
+		}
+		if parent, created, err := child.bootstrap.Observations(context.Background()); err == nil || parent != (Observation{}) || created != (Observation{}) {
+			t.Fatal("reexecuted child returned cached original observations", err)
 		}
 		if _, err := child.parent.Current(context.Background()); err != nil {
 			t.Fatal("child executable substitution retired its original parent", err)

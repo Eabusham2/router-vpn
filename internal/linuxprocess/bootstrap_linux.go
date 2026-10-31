@@ -316,6 +316,20 @@ func (b *Bootstrap) Current(ctx context.Context) error {
 	return b.current(ctx)
 }
 
+// Observations returns comparison copies only after observing the original
+// inherited channel and both retained native processes under the same gate.
+// A decoded or previously returned record never supplies this authority.
+func (b *Bootstrap) Observations(ctx context.Context) (Observation, Observation, error) {
+	if err := b.enter(ctx); err != nil {
+		return Observation{}, Observation{}, err
+	}
+	defer func() { b.gate <- struct{}{} }()
+	if err := b.current(ctx); err != nil {
+		return Observation{}, Observation{}, err
+	}
+	return b.parentRecord, b.childRecord, nil
+}
+
 // Send and Receive preserve the original process proof around each real native
 // frame. Their bytes are still only a transport: native admission and durable
 // settlement require the caller's independent exact captured policy checks.
