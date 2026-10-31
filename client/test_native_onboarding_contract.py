@@ -31,6 +31,8 @@ def block(source: str, start: str, end: str) -> str:
 # Unified map-first shells may own drill-in controls while onboarding remains a
 # separate persisted lifecycle. Legacy prototype files are never used as proof.
 win = read("client/RouterVPN-Windows-App.ps1")
+win_state = read("client/RouterVPN-Windows-UIState.psm1")
+win_profile_settings = read("client/RouterVPN-Windows-ProfileSettings.ps1")
 win_unified = read("client/RouterVPN-Windows-UnifiedShell.ps1")
 win_telemetry = read("client/RouterVPN-Windows-Telemetry.ps1")
 win_product = read("client/RouterVPN-Windows-Product-v2.ps1")
@@ -54,7 +56,7 @@ ios_project = read("ios/RouterVPN/project.yml")
 # map immediately. Normal startup reaches the onboarding entry point only as a
 # deliberate no-op; Help force-opens the real persisted wizard on demand.
 require("Windows onboarding v3", win, (
-    "windows-onboarding-v3.json", ".routervpn-state", "Get-OnboardingState",
+    "windows-onboarding-v3.json", "Get-OnboardingState",
     "Save-OnboardingState", "Show-RouterVPNProductOnboarding",
     "Close and resume later", "app onboarding is separate from Setup Center",
     "SMART AUTO is the default mode", "AUTO", "WireGuard", "AmneziaWG",
@@ -62,6 +64,31 @@ require("Windows onboarding v3", win, (
     "Disconnect", "selected-node private path proof", "public exit",
     "Setup Center Full Guide", "Emergency stop",
     "normal startup must never open a modal", "Show-RouterVPNProductOnboarding -Force",
+))
+# The owned App keeps preferences in its authenticated Data directory. The
+# shared state module preserves package-relative preferences only as a legacy
+# migration source; the App must not recreate the retired package-root writer.
+# Its actual read/write, migration and ownership behavior is exercised by
+# deploy/test_windows_ui_state.py in both native PowerShell runtimes.
+require("Windows onboarding state read", block(win, "function Get-OnboardingState", "function Save-OnboardingState"), (
+    "Read-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-onboarding-v3.json'",
+))
+require("Windows onboarding state write", block(win, "function Save-OnboardingState", "function global:Show-RouterVPNProductOnboarding"), (
+    "Write-RouterVPNUIState -LegacyDirectory $PSScriptRoot -Name 'windows-onboarding-v3.json'",
+))
+require("Windows captured UI state", win_state, (
+    "windows-onboarding-v3.json", "Get-RouterVPNControllerDataRoot",
+    "$Root=if($Owned){Assert-RouterVPNUIStateDirectory $Captured}",
+    "$Directory=[IO.Path]::Combine($Root,'.routervpn-state')",
+    "$Bytes=Read-RouterVPNUIStateBytes $Old.FullName",
+    "Write-RouterVPNUIStateBytes $Path $Bytes $true",
+))
+require("Windows App state-helper composition", win, (
+    "RouterVPN-Windows-ProfileSettings.ps1", ". ([ScriptBlock]::Create($ProfileSettingsSource))",
+))
+require("Windows captured state module loading", win_profile_settings, (
+    "(Get-Command Get-RouterVPNControllerDataRoot -ErrorAction Stop).Module.ModuleBase 'RouterVPN-Windows-UIState.psm1'",
+    "Import-Module $UIStateHelpers -Global -ErrorAction Stop",
 ))
 require_any("Windows onboarding v3", win, "kill switch", ("kill switch", "kill-switch"))
 require("Windows unified shipping shell", win_unified + win_product + win_telemetry, (
