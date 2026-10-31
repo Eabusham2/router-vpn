@@ -39,26 +39,30 @@ def checkout(root):
     if not (root/'go.mod').read_text().startswith('module github.com/xtls/xray-core\n'):
         raise ValueError('Unexpected Xray dependency module')
 
-def patch_vision_buffers(text):
+def patch_vision_buffers(text, *, inbound=False):
     # Keep a real GC-tracked pointer between reflection and the offset access.
     # A stored uintptr is not a pointer and fails Go's pointer-safety checker.
     before = 'var p uintptr'
     after = 'var p unsafe.Pointer'
-    previous = '\t\t\ti, _ := t.FieldByName("input")\n\t\t\tr, _ := t.FieldByName("rawInput")'
-    checked = '\t\t\ti, inputOK := t.FieldByName("input")\n\t\t\tr, rawOK := t.FieldByName("rawInput")\n\t\t\tif !inputOK || !rawOK || i.Type != reflect.TypeOf(bytes.Reader{}) || r.Type != reflect.TypeOf(bytes.Buffer{}) {\n\t\t\t\treturn errors.New("native Vision buffer layout differs from pinned transport")\n\t\t\t}'
+    indent = '\t' * (4 if inbound else 3)
+    previous = indent + 'i, _ := t.FieldByName("input")\n' + indent + 'r, _ := t.FieldByName("rawInput")'
+    checked = indent + 'i, inputOK := t.FieldByName("input")\n' + indent + 'r, rawOK := t.FieldByName("rawInput")\n' + indent + 'if !inputOK || !rawOK || i.Type != reflect.TypeOf(bytes.Reader{}) || r.Type != reflect.TypeOf(bytes.Buffer{}) {\n' + indent + '\treturn errors.New("native Vision buffer layout differs from pinned transport")\n' + indent + '}'
+    owners = ('commonConn', 'tlsConn.Conn', 'realityConn.Conn') if inbound else ('commonConn', 'tlsConn.Conn', 'utlsConn.Conn', 'realityConn.Conn')
     # Reapplying preparation is allowed only for this exact complete patch.
     if after in text:
         if before in text or text.count(after) != 1 or text.count(checked) != 1:
             raise ValueError('Native Vision pointer patch differs')
         if text.count('unsafe.Add(p, i.Offset)') != 1 or text.count('unsafe.Add(p, r.Offset)') != 1 or 'unsafe.Pointer(p +' in text:
             raise ValueError('Native Vision pointer access differs')
+        if tuple(re.findall(r'p = unsafe.Pointer\(([^()]+)\)', text)) != owners:
+            raise ValueError('Native Vision pointer owners differ')
         return text
     if text.count(before) != 1 or text.count(previous) != 1:
         raise ValueError('Pinned Vision buffer reflection boundary changed')
     text = text.replace(before, after, 1).replace(previous, checked, 1)
-    text, count = re.subn(r'p = uintptr\(unsafe.Pointer\(([^()]+)\)\)', r'p = unsafe.Pointer(\1)', text)
-    if count != 4:
+    if tuple(re.findall(r'p = uintptr\(unsafe.Pointer\(([^()]+)\)\)', text)) != owners:
         raise ValueError('Pinned Vision pointer owners changed')
+    text = re.sub(r'p = uintptr\(unsafe.Pointer\(([^()]+)\)\)', r'p = unsafe.Pointer(\1)', text)
     for field in ('i', 'r'):
         old = 'unsafe.Pointer(p + '+field+'.Offset)'
         if text.count(old) != 1:
@@ -75,8 +79,9 @@ def prepare(root):
         for relative in policy.PATCHES:
             path = root/relative
             candidates[path] = policy.patch_text(relative, path.read_text())
-    path = root/'proxy/vless/outbound/outbound.go'
-    candidates[path] = patch_vision_buffers(path.read_text())
+    for family in ('outbound', 'inbound'):
+        path = root/f'proxy/vless/{family}/{family}.go'
+        candidates[path] = patch_vision_buffers(path.read_text(), inbound=family == 'inbound')
     # Validate every source boundary before any mutation; drift cannot produce
     # a partially prepared engine for another build step to unknowingly reuse.
     for path, text in candidates.items():

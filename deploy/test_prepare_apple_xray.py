@@ -21,15 +21,17 @@ p = uintptr(unsafe.Pointer(realityConn.Conn))
 input = (*bytes.Reader)(unsafe.Pointer(p + i.Offset))
 rawInput = (*bytes.Buffer)(unsafe.Pointer(p + r.Offset))
 '''
+VISION_INBOUND = VISION.replace('p = uintptr(unsafe.Pointer(utlsConn.Conn))\n', '').replace('\t\t\t', '\t\t\t\t')
 
 class Prepare(unittest.TestCase):
     def fixture(self,tmp):
         sing=Path(tmp)/'sing';xray=Path(tmp)/'xray'
-        for root,path in ((sing,'include'),(sing,'experimental/libbox'),(xray,'core'),(xray,'transport/internet/reality'),(xray,'proxy/vless/outbound')):
+        for root,path in ((sing,'include'),(sing,'experimental/libbox'),(xray,'core'),(xray,'transport/internet/reality'),(xray,'proxy/vless/outbound'),(xray,'proxy/vless/inbound')):
             (root/path).mkdir(parents=True,exist_ok=True)
         (sing/'include/registry.go').write_text('import (\n\t"github.com/sagernet/sing-box/protocol/vless"\n)\nfunc register() {\n\tvless.RegisterOutbound(registry)\n}\n')
         (xray/'transport/internet/reality/reality.go').write_text('package reality\nfunc client() {\n\tif !uConn.Verified {\n\t\tlegacySpider()\n\t}\n}\n')
         (xray/'proxy/vless/outbound/outbound.go').write_text(VISION)
+        (xray/'proxy/vless/inbound/inbound.go').write_text(VISION_INBOUND)
         for name,pairs in MODULE.DATAGRAMS.PATCHES.items():
             path=xray/name;path.parent.mkdir(parents=True,exist_ok=True)
             path.write_text('\n'.join(old for old,_ in pairs))
@@ -83,17 +85,21 @@ class Prepare(unittest.TestCase):
             self.assertNotIn('t.Skip',nested)
 
     def test_vision_pointer_checks_are_kept_not_suppressed(self):
-        patched = MODULE.patch_vision_buffers(VISION)
-        self.assertEqual(MODULE.patch_vision_buffers(patched), patched)
-        self.assertNotIn('uintptr', patched)
-        self.assertIn('unsafe.Add(p, i.Offset)', patched)
-        self.assertIn('i.Type != reflect.TypeOf(bytes.Reader{})', patched)
-        self.assertIn('r.Type != reflect.TypeOf(bytes.Buffer{})', patched)
-        self.assertNotIn('nocheckptr', patched)
-        with self.assertRaises(ValueError):
-            MODULE.patch_vision_buffers(patched.replace('unsafe.Add(p, i.Offset)', 'unsafe.Pointer(p)'))
-        with self.assertRaises(ValueError):
-            MODULE.patch_vision_buffers(VISION.replace('realityConn.Conn', 'different(pointer)'))
+        for inbound, original in ((False, VISION), (True, VISION_INBOUND)):
+            with self.subTest(inbound=inbound):
+                patched = MODULE.patch_vision_buffers(original, inbound=inbound)
+                self.assertEqual(MODULE.patch_vision_buffers(patched, inbound=inbound), patched)
+                self.assertNotIn('uintptr', patched)
+                self.assertIn('unsafe.Add(p, i.Offset)', patched)
+                self.assertIn('i.Type != reflect.TypeOf(bytes.Reader{})', patched)
+                self.assertIn('r.Type != reflect.TypeOf(bytes.Buffer{})', patched)
+                self.assertNotIn('nocheckptr', patched)
+                with self.assertRaises(ValueError):
+                    MODULE.patch_vision_buffers(patched.replace('unsafe.Add(p, i.Offset)', 'unsafe.Pointer(p)'), inbound=inbound)
+                with self.assertRaises(ValueError):
+                    MODULE.patch_vision_buffers(original.replace('realityConn.Conn', 'different(pointer)'), inbound=inbound)
+                with self.assertRaises(ValueError):
+                    MODULE.patch_vision_buffers(patched.replace('realityConn.Conn', 'tlsConn.Conn'), inbound=inbound)
     def test_datagram_patch_is_bounded_and_idempotent(self):
         for name,pairs in MODULE.DATAGRAMS.PATCHES.items():
             with self.subTest(path=name):
