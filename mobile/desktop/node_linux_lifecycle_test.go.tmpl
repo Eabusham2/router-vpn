@@ -19,10 +19,72 @@ import (
 // and joined broker/service cleanup are the actual shipping composition.
 type nodeLinuxLifecycleSource struct {
 	*nodeUnixFactorySource
-	record  mobiletor.DesktopLinuxProtectionRecord
-	reads   int
-	observe func(int, *mobiletor.DesktopLinuxProtectionRecord) error
-	retired func(*mobiletor.DesktopLinuxProtectionRecord) error
+	record      mobiletor.DesktopLinuxProtectionRecord
+	reads       int
+	observe     func(int, *mobiletor.DesktopLinuxProtectionRecord) error
+	retired     func(*mobiletor.DesktopLinuxProtectionRecord) error
+	retention   *nodeLinuxLifecycleRetention
+	retainError error
+}
+
+type nodeLinuxLifecycleRetention struct {
+	source          *nodeLinuxLifecycleSource
+	policy          string
+	closed, removed bool
+	releases        int
+}
+
+func (s *nodeLinuxLifecycleSource) RetainProtection(ctx context.Context, capture mobiletor.DesktopSocketCapture, policy string) (mobiletor.DesktopLinuxProtectionOwner, error) {
+	if ctx.Err() != nil || capture != s.record.Capture || s.retention != nil || s.closed.Load() || (policy != "always" && policy != "on-connect") {
+		return nil, errors.New("fixture has no original unused source")
+	}
+	s.retention = &nodeLinuxLifecycleRetention{source: s, policy: policy}
+	return s.retention, s.retainError
+}
+
+func (r *nodeLinuxLifecycleRetention) Prepared(ctx context.Context) (mobiletor.DesktopLinuxProtectionRecord, error) {
+	if r.closed || r.removed {
+		return mobiletor.DesktopLinuxProtectionRecord{}, errors.New("fixture retention closed")
+	}
+	return r.source.ObservePreparedProtection(ctx, r.source.record.Capture)
+}
+
+func (r *nodeLinuxLifecycleRetention) Retired(ctx context.Context) (mobiletor.DesktopLinuxProtectionRecord, error) {
+	if r.closed || r.removed {
+		return mobiletor.DesktopLinuxProtectionRecord{}, errors.New("fixture retention closed")
+	}
+	return r.source.ObserveRetiredProtection(ctx, r.source.record.Capture)
+}
+
+func (r *nodeLinuxLifecycleRetention) Disconnect(ctx context.Context) (bool, error) {
+	if r.policy == "always" {
+		_, err := r.Retired(ctx)
+		return err == nil, err
+	}
+	return false, r.Release(ctx)
+}
+
+func (r *nodeLinuxLifecycleRetention) Release(ctx context.Context) error {
+	if r.closed || ctx.Err() != nil {
+		return errors.New("fixture retention closed")
+	}
+	if r.removed {
+		return nil
+	}
+	if _, err := r.Retired(ctx); err != nil {
+		return err
+	}
+	r.removed = true
+	r.releases++
+	return nil
+}
+
+func (r *nodeLinuxLifecycleRetention) Close(ctx context.Context) error {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	r.closed = true
+	return nil
 }
 
 func (s *nodeLinuxLifecycleSource) ObservePreparedProtection(ctx context.Context, capture mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxProtectionRecord, error) {
@@ -63,6 +125,17 @@ func nodeLinuxLifecycleFixture(t *testing.T, kill string, admit NodeLinuxPhysica
 		Capture: f.node.network.brokerCapture(), Owner: f.source.owner, UID: 22171,
 		PermitPrefix: "rvpn_" + strings.Repeat("e", 20), TableHandle: 11, ChainHandle: 12, BaselineSHA256: strings.Repeat("f", 64),
 	}
+	t.Cleanup(func() {
+		if source.retention != nil {
+			if err := f.node.network.Close(); err != nil {
+				t.Error(err)
+				return
+			}
+			if err := f.node.network.CloseLinuxPhysicalProtection(context.Background(), f.node.policy); err != nil {
+				t.Error(err)
+			}
+		}
+	})
 	return f, source
 }
 
@@ -313,5 +386,101 @@ func TestRouterVPNNodeLinuxLifecycleJoinsCancelledLateConstructor(t *testing.T) 
 	}
 	if target, returned, err := f.node.network.RetainedLinuxPhysicalProtection(context.Background(), f.node.policy); err != nil || target == nil || !returned || target.Protection != source.record {
 		t.Fatal("Linux cancelled partial owner lost its acknowledged retirement", err)
+	}
+}
+
+func TestRouterVPNNodeLinuxLifecycleRetainedCapabilityOwnsDisconnectAndTeardown(t *testing.T) {
+	for _, policy := range []string{"on-connect", "always"} {
+		t.Run(policy, func(t *testing.T) {
+			f, source := nodeLinuxLifecycleFixture(t, policy, func(context.Context, NodeLinuxPhysicalPrepared) error { return nil })
+			if err := f.node.network.prepareNodePhysicalLinuxLifecycle(f.node.policy, func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+				return source, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.node.network.Start(adapter.StartStateInitialize); err != nil {
+				t.Fatal(err)
+			}
+			ctx := context.Background()
+			if source.retention == nil || source.retention.policy != policy {
+				t.Fatal("native lifecycle did not retain its selected capability")
+			}
+			if _, err := f.node.network.DisconnectLinuxPhysicalProtection(ctx, f.node.policy); err == nil {
+				t.Fatal("disconnect ran before its original source joined")
+			}
+			if err := f.node.network.ReleaseLinuxPhysicalProtection(ctx, f.node.policy); err == nil {
+				t.Fatal("explicit release ran before its original source joined")
+			}
+			if err := f.node.network.CloseLinuxPhysicalProtection(ctx, f.node.policy); err == nil || source.retention.closed {
+				t.Fatal("early teardown discarded baseline mutation authority")
+			}
+			source.failClose.Store(true)
+			if err := f.node.network.Close(); err == nil {
+				t.Fatal("fixture native close did not fail")
+			}
+			if err := f.node.network.CloseLinuxPhysicalProtection(ctx, f.node.policy); err == nil || source.retention.closed {
+				t.Fatal("failed source join discarded retained baseline authority")
+			}
+			source.failClose.Store(false)
+			if err := f.node.network.Close(); err != nil {
+				t.Fatal(err)
+			}
+			foreign, err := mobilemultihop.NewDesktopNodePolicy(f.node.policy.OriginalProfile(), f.node.policy.Metadata().SessionID, "linux")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := f.node.network.ReleaseLinuxPhysicalProtection(ctx, foreign); err == nil {
+				t.Fatal("equivalent replacement policy acquired original retention")
+			}
+			for i := 0; i < 2; i++ {
+				kept, err := f.node.network.DisconnectLinuxPhysicalProtection(ctx, f.node.policy)
+				if err != nil || kept != (policy == "always") {
+					t.Fatal("captured disconnect changed selected On-connect/Always behavior", kept, err)
+				}
+			}
+			if policy == "always" && (source.retention.removed || source.retention.releases != 0) {
+				t.Fatal("Always disconnect released its retained baseline")
+			}
+			if policy == "on-connect" && (!source.retention.removed || source.retention.releases != 1) {
+				t.Fatal("On-connect disconnect omitted or replayed its original removal")
+			}
+			if err := f.node.network.ReleaseLinuxPhysicalProtection(ctx, f.node.policy); err != nil {
+				t.Fatal(err)
+			}
+			if source.retention.releases != 1 {
+				t.Fatal("explicit native cleanup replayed a committed removal")
+			}
+			if err := f.node.network.CloseLinuxPhysicalProtection(ctx, f.node.policy); err != nil || !source.retention.closed {
+				t.Fatal("joined cleanup discarded the original retention descriptor", err)
+			}
+			if err := f.node.network.ReleaseLinuxPhysicalProtection(ctx, f.node.policy); err == nil {
+				t.Fatal("retired retention was reused for a later mutation")
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeLinuxLifecycleKeepsPartialRetentionUntilSourceJoin(t *testing.T) {
+	f, source := nodeLinuxLifecycleFixture(t, "always", func(context.Context, NodeLinuxPhysicalPrepared) error {
+		t.Fatal("partial retention reached parent admission")
+		return nil
+	})
+	source.retainError = errors.New("native endpoint capture interrupted")
+	if err := f.node.network.prepareNodePhysicalLinuxLifecycle(f.node.policy, func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+		return source, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.node.network.Start(adapter.StartStateInitialize); err == nil || source.retention == nil || source.retention.closed {
+		t.Fatal("failed constructor discarded its partial retained endpoint", err)
+	}
+	if err := f.node.network.CloseLinuxPhysicalProtection(context.Background(), f.node.policy); err == nil || source.retention.closed {
+		t.Fatal("partial endpoint closed before the original source joined")
+	}
+	if err := f.node.network.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.node.network.CloseLinuxPhysicalProtection(context.Background(), f.node.policy); err != nil || !source.retention.closed {
+		t.Fatal("joined source leaked its partial retained endpoint", err)
 	}
 }

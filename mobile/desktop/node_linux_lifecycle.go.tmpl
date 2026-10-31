@@ -22,20 +22,25 @@ type NodeLinuxPhysicalPrepared struct {
 type NodeLinuxPhysicalAdmission func(context.Context, NodeLinuxPhysicalPrepared) error
 type nodeLinuxPhysicalAdmissionKey struct{}
 type nodeLinuxPhysicalAdmissionOwner struct {
-	mu       sync.Mutex
-	policy   *mobilemultihop.DesktopNodePolicy
-	admit    NodeLinuxPhysicalAdmission
-	network  *NodeNetworkOwner
-	source   desktopLinuxPhysicalPolicy
-	capture  mobiletor.DesktopSocketCapture
-	prepared *mobiletor.DesktopLinuxProtectionRecord
-	entered  bool
-	admitted bool
+	mu        sync.Mutex
+	policy    *mobilemultihop.DesktopNodePolicy
+	admit     NodeLinuxPhysicalAdmission
+	network   *NodeNetworkOwner
+	source    desktopLinuxPhysicalPolicy
+	capture   mobiletor.DesktopSocketCapture
+	prepared  *mobiletor.DesktopLinuxProtectionRecord
+	retention mobiletor.DesktopLinuxProtectionOwner
+	entered   bool
+	admitted  bool
 }
 
 type nodeLinuxProtectionReader interface {
 	ObservePreparedProtection(context.Context, mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxProtectionRecord, error)
 	ObserveRetiredProtection(context.Context, mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxProtectionRecord, error)
+}
+
+type nodeLinuxProtectionRetainer interface {
+	RetainProtection(context.Context, mobiletor.DesktopSocketCapture, string) (mobiletor.DesktopLinuxProtectionOwner, error)
 }
 
 // WithNodeLinuxPhysicalAdmission installs one in-memory capability for one
@@ -100,11 +105,18 @@ func (n *NodeNetworkOwner) prepareNodePhysicalLinuxLifecycle(policy *mobilemulti
 		if err != nil {
 			return owned, err
 		}
-		reader, ok := owned.(nodeLinuxProtectionReader)
+		retainer, ok := owned.(nodeLinuxProtectionRetainer)
 		if !ok || owned == nil {
-			return owned, errors.New("Linux Router node source has no native closed-baseline observations")
+			return owned, errors.New("Linux Router node source has no retained native baseline authority")
 		}
-		before, err := reader.ObservePreparedProtection(ctx, capture)
+		retention, err := retainer.RetainProtection(ctx, capture, policy.Metadata().KillSwitchPolicy)
+		owner.mu.Lock()
+		owner.retention = retention
+		owner.mu.Unlock()
+		if err != nil || retention == nil {
+			return owned, errors.Join(err, errors.New("Linux Router node could not retain its original baseline endpoint"))
+		}
+		before, err := retention.Prepared(ctx)
 		identity, identityErr := owned.Owner()
 		if err != nil || identityErr != nil || before.Validate() != nil || before.Capture != capture || before.Owner != identity ||
 			ctx.Err() != nil || !n.Matches(capture.SessionID, capture.SourceSHA256) {
@@ -117,7 +129,7 @@ func (n *NodeNetworkOwner) prepareNodePhysicalLinuxLifecycle(policy *mobilemulti
 		if err = owner.admit(ctx, NodeLinuxPhysicalPrepared{Protection: before, Policy: policy.Metadata().KillSwitchPolicy}); err != nil {
 			return owned, err
 		}
-		after, err := reader.ObservePreparedProtection(ctx, capture)
+		after, err := retention.Prepared(ctx)
 		if err != nil || after != before || ctx.Err() != nil || !n.Matches(capture.SessionID, capture.SourceSHA256) {
 			return owned, errors.Join(err, errors.New("Linux Router node admission changed its captured empty native baseline"))
 		}
@@ -142,10 +154,10 @@ func (n *NodeNetworkOwner) CheckLinuxPhysicalAdmission(policy *mobilemultihop.De
 	}
 	owner.mu.Lock()
 	valid := owner.network == n && owner.entered && owner.admitted && owner.prepared != nil
-	source, capture := owner.source, owner.capture
+	source, capture, retention := owner.source, owner.capture, owner.retention
 	owner.mu.Unlock()
 	n.mu.Lock()
-	valid = valid && source != nil && n.source == source && n.policy == policy && n.brokerCapture() == capture &&
+	valid = valid && retention != nil && source != nil && n.source == source && n.policy == policy && n.brokerCapture() == capture &&
 		!n.retired && !n.closed && n.ready && n.sockets && n.ctx.Err() == nil
 	n.mu.Unlock()
 	if !valid || !n.SocketCurrent() {
@@ -168,7 +180,7 @@ func (n *NodeNetworkOwner) RetainedLinuxPhysicalProtection(ctx context.Context, 
 	}
 	owner.mu.Lock()
 	valid := owner.network == n
-	source, capture := owner.source, owner.capture
+	source, capture, retention := owner.source, owner.capture, owner.retention
 	var prepared *mobiletor.DesktopLinuxProtectionRecord
 	if owner.prepared != nil {
 		copy := *owner.prepared
@@ -187,13 +199,74 @@ func (n *NodeNetworkOwner) RetainedLinuxPhysicalProtection(ctx context.Context, 
 	if source == nil {
 		return nil, false, nil
 	}
-	reader, ok := source.(nodeLinuxProtectionReader)
-	if !ok {
+	var record mobiletor.DesktopLinuxProtectionRecord
+	if retention != nil {
+		record, err = retention.Retired(ctx)
+	} else if reader, ok := source.(nodeLinuxProtectionReader); ok {
+		// A constructor can return a partial source before retention starts.
+		// Readback through that original source supplies no release authority.
+		record, err = reader.ObserveRetiredProtection(ctx, capture)
+	} else {
 		return nil, true, errors.New("Linux Router node source cannot observe its joined baseline")
 	}
-	record, err := reader.ObserveRetiredProtection(ctx, capture)
 	if err != nil || record.Validate() != nil || record.Capture != capture || prepared != nil && record != *prepared || ctx.Err() != nil {
 		return nil, true, errors.Join(err, ctx.Err(), errors.New("Linux Router node retirement changed its captured native baseline"))
 	}
 	return &NodeLinuxPhysicalPrepared{Protection: record, Policy: policy.Metadata().KillSwitchPolicy}, true, nil
+}
+
+// These operations retain the same sealed policy, network and original source
+// after successful native join. A cancelled admission keeps a partial owner
+// available for descriptor teardown without deriving mutation authority from
+// its serialized readback. Parent authentication/journaling still surround an
+// explicit release or successor operation in the public controller.
+func (n *NodeNetworkOwner) joinedLinuxProtection(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (mobiletor.DesktopLinuxProtectionOwner, error) {
+	if n == nil || ctx == nil || ctx.Err() != nil {
+		return nil, errors.New("Linux protection cleanup lost its captured network")
+	}
+	owner, err := nodeLinuxPhysicalAdmissionFor(n.ctx, policy, false)
+	if err != nil {
+		return nil, err
+	}
+	owner.mu.Lock()
+	valid := owner.network == n
+	source, capture, retention := owner.source, owner.capture, owner.retention
+	owner.mu.Unlock()
+	n.mu.Lock()
+	valid = valid && n.closed && n.retired && !n.ready && !n.sockets && n.policy == policy && n.source == source
+	if source != nil {
+		valid = valid && n.brokerCapture() == capture
+	}
+	n.mu.Unlock()
+	if !valid {
+		return nil, errors.New("Linux protection cleanup preceded its exact native source join")
+	}
+	return retention, nil
+}
+
+func (n *NodeNetworkOwner) DisconnectLinuxPhysicalProtection(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (bool, error) {
+	retention, err := n.joinedLinuxProtection(ctx, policy)
+	if err != nil || retention == nil {
+		return false, errors.Join(err, errors.New("Linux disconnect has no retained native baseline"))
+	}
+	return retention.Disconnect(ctx)
+}
+
+func (n *NodeNetworkOwner) ReleaseLinuxPhysicalProtection(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) error {
+	retention, err := n.joinedLinuxProtection(ctx, policy)
+	if err != nil || retention == nil {
+		return errors.Join(err, errors.New("Linux release has no retained native baseline"))
+	}
+	return retention.Release(ctx)
+}
+
+func (n *NodeNetworkOwner) CloseLinuxPhysicalProtection(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) error {
+	retention, err := n.joinedLinuxProtection(ctx, policy)
+	if err != nil {
+		return err
+	}
+	if retention == nil {
+		return nil
+	}
+	return retention.Close(ctx)
 }

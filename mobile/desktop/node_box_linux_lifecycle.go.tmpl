@@ -49,6 +49,27 @@ func (p *RouterVPNDesktopLinuxNodePreparation) RetainedProtection(ctx context.Co
 	return p.network.RetainedLinuxPhysicalProtection(ctx, p.policy)
 }
 
+func (p *RouterVPNDesktopLinuxNodePreparation) DisconnectProtection(ctx context.Context) (bool, error) {
+	if p == nil || p.network == nil || p.policy == nil {
+		return false, errors.New("Linux disconnect lost its retained native preparation")
+	}
+	return p.network.DisconnectLinuxPhysicalProtection(ctx, p.policy)
+}
+
+func (p *RouterVPNDesktopLinuxNodePreparation) ReleaseProtection(ctx context.Context) error {
+	if p == nil || p.network == nil || p.policy == nil {
+		return errors.New("Linux release lost its retained native preparation")
+	}
+	return p.network.ReleaseLinuxPhysicalProtection(ctx, p.policy)
+}
+
+func (p *RouterVPNDesktopLinuxNodePreparation) CloseProtection(ctx context.Context) error {
+	if p == nil || p.network == nil || p.policy == nil {
+		return errors.New("Linux protection teardown lost its native preparation")
+	}
+	return p.network.CloseLinuxPhysicalProtection(ctx, p.policy)
+}
+
 // Activation uses the actual native TUN reader and an uncached selected-DNS
 // exchange through this exact graph. A cancelled or failed proof revokes the
 // same native generation and leaves its partial owners available for Close.

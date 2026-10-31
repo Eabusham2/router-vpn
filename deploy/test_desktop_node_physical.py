@@ -412,9 +412,16 @@ def mutants(source, windows):
             ('linux-node-post-admission-record', lifecycle, './routervpn/desktoppt', 'TestRouterVPNNodeLinuxLifecycleBracketsAdmissionAndRetainsSource', 'always/after-baseline',
              'Linux lifecycle admitted an unobserved, changed, failed or cancelled baseline', changed(lifecycle, 'err != nil || after != before || ctx.Err() != nil', 'err != nil || (after != before && false) || ctx.Err() != nil')),
             ('linux-node-partial-source-retention', lifecycle, './routervpn/desktoppt', 'TestRouterVPNNodeLinuxLifecycleBracketsAdmissionAndRetainsSource', 'always/partial',
-             'Linux lifecycle discarded its exact returned native owner', changed(lifecycle, 'if err != nil {\n\t\t\treturn owned, err\n\t\t}\n\t\treader, ok := owned.(nodeLinuxProtectionReader)', 'if err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t\treader, ok := owned.(nodeLinuxProtectionReader)')),
+             'Linux lifecycle discarded its exact returned native owner', changed(lifecycle, 'if err != nil {\n\t\t\treturn owned, err\n\t\t}\n\t\tretainer, ok := owned.(nodeLinuxProtectionRetainer)', 'if err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t\tretainer, ok := owned.(nodeLinuxProtectionRetainer)')),
             ('linux-node-retired-original-record', lifecycle, './routervpn/desktoppt', 'TestRouterVPNNodeLinuxLifecycleRetirementRequiresSuccessfulJoinAndSameRecord', 'baseline',
              'Linux lifecycle adopted a changed retired native baseline', changed(lifecycle, 'prepared != nil && record != *prepared || ctx.Err() != nil', '(prepared != nil && record != *prepared && false) || ctx.Err() != nil')),
+            ('linux-node-retention-joined-teardown', lifecycle, './routervpn/desktoppt', 'TestRouterVPNNodeLinuxLifecycleRetainedCapabilityOwnsDisconnectAndTeardown', 'always',
+             'early teardown discarded baseline mutation authority', changed(lifecycle,
+             'if !valid {\n\t\treturn nil, errors.New("Linux protection cleanup preceded its exact native source join")',
+             'if !valid && false {\n\t\treturn nil, errors.New("Linux protection cleanup preceded its exact native source join")')),
+            ('linux-node-partial-retention-kept', lifecycle, './routervpn/desktoppt', 'TestRouterVPNNodeLinuxLifecycleKeepsPartialRetentionUntilSourceJoin', '',
+             'joined source leaked its partial retained endpoint', changed(lifecycle,
+             'owner.retention = retention', 'if err == nil { owner.retention = retention }')),
         ))
     return result
 
@@ -436,7 +443,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          tuple("TestRouterVPNNodePhysical" + name for name in ("SeparateRegistriesAndUnpreparedRejection", "HandshakePhaseAndExactPolicy", "FactoryCancellationJoinsPartialOwner", "RetirementKeepsExactJoinedSource", "AdmissionRetainsExactPolicy", "AdmissionCapturesExactPredecessor", "JournalAdmissionCapturesDurableBarrier")) +
          (tuple("TestRouterVPNNodePhysicalWindows" + name for name in ("CapturesPreparedOwner", "AdmissionRejectsChangedOwners", "CloseJoinsAdmission")) if windows else
           tuple("TestRouterVPNNodePhysicalUnix" + name for name in ("CapturesPolicyAndRetainsLateOwner", "RejectsUncapturedSourceBeforeConstructor", "CloseJoinsLateFactoryAndRetriesSource")) +
-          tuple("TestRouterVPNNodeLinuxLifecycle" + name for name in ("RejectsMissingOrReusedCapability", "BracketsAdmissionAndRetainsSource", "RetirementRequiresSuccessfulJoinAndSameRecord", "JoinsCancelledLateConstructor")))),
+          tuple("TestRouterVPNNodeLinuxLifecycle" + name for name in ("RejectsMissingOrReusedCapability", "BracketsAdmissionAndRetainsSource", "RetirementRequiresSuccessfulJoinAndSameRecord", "JoinsCancelledLateConstructor", "RetainedCapabilityOwnsDisconnectAndTeardown", "KeepsPartialRetentionUntilSourceJoin")))),
         ("box", ".", "^TestRouterVPNDesktopNodePhysical",
          tuple("TestRouterVPNDesktopNodePhysicalBox" + name for name in ("RejectsSubstitutedGraph", "RequiresPreparedOwner", "RetainsMTUAndExactRollback", "RestoresCapturedMTU")) +
          ("TestRouterVPNDesktopNodePhysicalDNSCapturedOwner", "TestRouterVPNDesktopNodePhysicalDNSRetirementCancelsQuery")),

@@ -33,11 +33,12 @@ KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGua
                 'SocketRetirementReusesCapacity', 'RejectsChangedBaseline', 'NativeParentCrash',
                 'BlockedControlRetainsSourcePort', 'RejectsStaleCaptureAndGeneration',
                 'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement',
-                'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions')
+                'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions', 'RetainedBaseline')
 ACCOUNT_FILES = ('passwd', 'group', 'shadow', 'gshadow', 'subuid', 'subgid')
 BASELINE_CASES = ('RequiresCommittedBatchReceipt', 'ReplyRejectsUnrelatedDatagrams',
                   'GenerationRejectsMissingOrAmbiguousIdentity', 'EndpointRequiresRetainedOwner',
-                  'SemanticFailureRetiresOriginalEndpoint')
+                  'SemanticFailureRetiresOriginalEndpoint', 'RetentionRequiresOriginalUnusedSource',
+                  'RetentionPartialCloseOwnsOnlyOriginalDescriptors', 'RetentionCancelledWaitCannotEnterAnotherOperation')
 
 
 def account_mount(source, target, flags):
@@ -302,7 +303,8 @@ def execute(source: Path, go='go', *, env=None):
                 'desktop_socket_linux_protection.go', 'desktop_socket_linux_protection_record.go',
                 'desktop_socket_linux_protection_native_test.go', 'desktop_socket_linux_flags_test.go',
                 'desktop_socket_linux_baseline_netlink.go', 'desktop_socket_linux_baseline_netlink_test.go',
-                'desktop_socket_linux_baseline_netlink_native_test.go'}
+                'desktop_socket_linux_baseline_netlink_native_test.go', 'desktop_socket_linux_baseline_owner.go',
+                'desktop_socket_linux_baseline_owner_test.go', 'desktop_socket_linux_baseline_owner_native_test.go'}
     if not required.issubset(before):
         raise ValueError('The complete production guardian and actual kernel tests were not copied')
     captured = dict(os.environ if env is None else env, GOWORK='off')
@@ -369,6 +371,9 @@ def execute_mutations(source: Path, go='go', *, env=None):
         'original baseline table handle': 'retired handle deleted or adopted a same-name replacement',
         'committed baseline receipt': 'substituted for committed batch receipt',
         'uncertain baseline receipt': 'semantic receipt failure left its original endpoint reusable',
+        'joined retained baseline source': 'live guardian authorized baseline removal',
+        'retained Always selection': 'disconnect changed the captured On-connect/Always semantics',
+        'retained native namespace': 'changed native namespace substituted absence for the original replacement',
     }
     mutations = (
         ('admitted heartbeat deadline', 'HeartbeatAdmission', 'desktop_socket_linux_policy.go', (
@@ -434,6 +439,16 @@ def execute_mutations(source: Path, go='go', *, env=None):
         )),
         ('uncertain baseline receipt', 'TestLinuxBaselineSemanticFailureRetiresOriginalEndpoint', 'desktop_socket_linux_baseline_netlink.go', (
             ('\t\tn.uncertain = err\n', '\t\t_ = err\n'),
+        )),
+        ('joined retained baseline source', 'RetainedBaseline', 'desktop_socket_linux_baseline_owner.go', (
+            ('b.observe(ctx, false)', 'b.observe(ctx, true)'),
+        )),
+        ('retained Always selection', 'RetainedBaseline', 'desktop_socket_linux_baseline_owner.go', (
+            ('if b.policy == "always" {', 'if false && b.policy == "always" {'),
+            ('if b.policy != "on-connect" {', 'if b.policy != "on-connect" && b.policy != "always" {'),
+        )),
+        ('retained native namespace', 'RetainedBaseline', 'desktop_socket_linux_baseline_owner.go', (
+            ('|| !os.SameFile(current, b.namespaceInfo)', '|| false && !os.SameFile(current, b.namespaceInfo)'),
         )),
     )
     with tempfile.TemporaryDirectory(prefix='routervpn-guardian-mutations-') as temporary:

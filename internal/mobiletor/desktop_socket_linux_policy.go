@@ -147,15 +147,16 @@ type DesktopLinuxSocketPolicy struct {
 	sequence uint64
 	// socketActivity is monotonic under mu. Empty sets after an earlier socket
 	// retires cannot turn an already used source into a fresh preparation.
-	socketActivity    bool
-	closeAcknowledged atomic.Bool
-	current           atomic.Bool
-	observed          atomic.Int64
-	closing           atomic.Bool
-	joined            chan struct{}
-	monitorDone       chan struct{}
-	joinErr           error
-	parentStop        func() bool
+	socketActivity      bool
+	closeAcknowledged   atomic.Bool
+	current             atomic.Bool
+	observed            atomic.Int64
+	closing             atomic.Bool
+	joined              chan struct{}
+	monitorDone         chan struct{}
+	joinErr             error
+	parentStop          func() bool
+	protectionRetention *desktopLinuxRetainedProtection // One native retention for this exact source, under mu.
 }
 
 var _ DesktopSocketPolicy = (*DesktopLinuxSocketPolicy)(nil)

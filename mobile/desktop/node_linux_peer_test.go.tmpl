@@ -251,7 +251,11 @@ add rule inet router_vpn_killswitch output ip protocol udp udp sport 68 udp dpor
 add rule inet router_vpn_killswitch output ip6 nexthdr ipv6-icmp icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
 `, meta.SessionID, meta.SourceSHA256)
 	desktopNodeLinuxCommand(t, script, "nft", "-f", "-")
-	t.Cleanup(func() { desktopNodeLinuxCommand(t, "", "nft", "delete", "table", "inet", "router_vpn_killswitch") })
+	t.Cleanup(func() {
+		if err := mobiletor.ReadDesktopLinuxProtectionAbsence(context.Background()); err != nil {
+			desktopNodeLinuxCommand(t, "", "nft", "delete", "table", "inet", "router_vpn_killswitch")
+		}
+	})
 	ins := inbound.NewRegistry()
 	TUN.RegisterInbound(ins)
 	outs := outbound.NewRegistry()
@@ -306,6 +310,12 @@ add rule inet router_vpn_killswitch output ip6 nexthdr ipv6-icmp icmpv6 type { n
 	t.Cleanup(func() {
 		if err := f.close(); err != nil {
 			t.Error("actual Linux Node Box failed its joined cleanup", err)
+			return
+		}
+		if f.preparation != nil {
+			if err := f.preparation.CloseProtection(context.Background()); err != nil {
+				t.Error("actual Linux Node retained descriptor teardown failed", err)
+			}
 		}
 	})
 	f.preparation, err = f.box.RouterVPNDesktopLinuxNodePreparePhysicalOwned(policy)
@@ -401,6 +411,11 @@ func TestDesktopLinuxGuardianKernelNodeLifecycle(t *testing.T) {
 			}
 			desktopNodeLinuxDrain(t, f)
 			desktopNodeLinuxProbe(t, peer, true)
+			kept, err := f.preparation.DisconnectProtection(context.Background())
+			if err != nil || kept != (kill == "always") {
+				t.Fatal("actual Linux disconnect changed selected baseline retention", kept, err)
+			}
+			desktopNodeLinuxProbe(t, peer, kill == "always")
 		})
 	}
 }
