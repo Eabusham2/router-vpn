@@ -49,7 +49,7 @@ func startDesktopNodeCompositeServer(t *testing.T, mode string, ip netip.Addr, d
 	// on the OS ephemeral-port lottery or redirecting either original socket.
 	reservation, reserveErr := net.ListenPacket("udp4", tcp.tcp.Addr().String())
 	if reserveErr != nil {
-		t.Fatal("could not reserve distinct composite peer ports", reserveErr)
+		desktopNodeLayerPreparationError(t, "distinct composite peer ports", reserveErr)
 	}
 	t.Cleanup(func() { _ = reservation.Close() })
 	udp, udpFiles := startDesktopNodeHysteria2Server(t, ip, dnsAddress)

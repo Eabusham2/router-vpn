@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
@@ -63,6 +64,17 @@ import (
 const desktopNodeLayerReferenceLimit = 64 << 10
 
 var desktopNodeLayerReferenceScope = func() ([]byte, error) { return nil, nil }
+
+// A child test failure is written by testing to its stdout, which is also the
+// strict reply channel. Keep the actual preparation error on the separate
+// diagnostic pipe; never reinterpret a failed test line as a protocol record.
+func desktopNodeLayerPreparationError(t *testing.T, stage string, err error) {
+	t.Helper()
+	if os.Getenv("ROUTERVPN_NODE_LAYER_REFERENCE_CHILD") == "1" {
+		fmt.Fprintf(os.Stderr, "retained layer reference preparation error at %s: %T: %v\n", stage, err, err)
+	}
+	t.Fatal(stage, err)
+}
 
 type desktopNodeLayerRequest struct {
 	Schema        int                           `json:"schema"`
@@ -303,12 +315,12 @@ func startDesktopNodeLayerRoutedServer(t *testing.T, ip netip.Addr, password str
 	}
 	listener, err := net.Listen("tcp4", net.JoinHostPort(ip.String(), "0"))
 	if err != nil {
-		t.Fatal(err)
+		desktopNodeLayerPreparationError(t, "TCP listener", err)
 	}
 	packet, err := net.ListenPacket("udp4", listener.Addr().String())
 	if err != nil {
 		_ = listener.Close()
-		t.Fatal(err)
+		desktopNodeLayerPreparationError(t, "paired UDP listener", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, tcp: listener, udp: packet, routes: append([]desktopNodeLayerRoute(nil), routes...),
@@ -318,7 +330,7 @@ func startDesktopNodeLayerRoutedServer(t *testing.T, ip netip.Addr, password str
 		cancel()
 		_ = listener.Close()
 		_ = packet.Close()
-		t.Fatal(err)
+		desktopNodeLayerPreparationError(t, "authenticated Start Layer service", err)
 	}
 	s.workers.Add(2)
 	go func() {
@@ -431,6 +443,12 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	if os.Getenv("ROUTERVPN_NODE_LAYER_REFERENCE_CHILD") != "1" {
 		t.Fatal("unknown layer reference owner")
 	}
+	stage := "captured request"
+	t.Cleanup(func() {
+		if t.Failed() {
+			fmt.Fprintf(os.Stderr, "retained layer reference failed during %s\n", stage)
+		}
+	})
 	reader := STD.NewReaderSize(os.Stdin, desktopNodeLayerReferenceLimit+1)
 	line, err := reader.ReadSlice('\n')
 	if err != nil || len(line) > desktopNodeLayerReferenceLimit {
@@ -450,6 +468,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 		t.Fatal("layer reference has no exact AES credential")
 	}
 	clear(key)
+	stage = "private interface"
 	ip, err := netip.ParseAddr(request.Address)
 	if err != nil || !ip.Is4() || !ip.IsPrivate() {
 		t.Fatal("layer reference requires its actual private interface")
@@ -468,9 +487,10 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	}
 	var failedDNS atomic.Bool
 	var dnsQueries atomic.Uint32
+	stage = "selected DNS listener"
 	dnsListener, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
-		t.Fatal(err)
+		desktopNodeLayerPreparationError(t, stage, err)
 	}
 	dnsServer := &dns.Server{PacketConn: dnsListener, Handler: dns.HandlerFunc(func(writer dns.ResponseWriter, query *dns.Msg) {
 		dnsQueries.Add(1)
@@ -492,6 +512,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	var protocolServer *desktopNodeLayerServer
 	var udpBranch *desktopNodeLayerServer
 	var routes []desktopNodeLayerRoute
+	stage = "authenticated protocol peers"
 	if desktopNodeCompositeMode(request.Mode) {
 		protocolServer, udpBranch, protocolFiles = startDesktopNodeCompositeServer(t, request.Mode, ip, dnsListener.LocalAddr().String())
 		baseAddress = protocolServer.tcp.Addr().String()
@@ -535,6 +556,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	}
 	server := protocolServer
 	address, aesAddress := baseAddress, ""
+	stage = "authenticated Start Layer"
 	if request.Mode != "hysteria2" && !desktopNodeXrayMode(request.Mode) && !desktopNodeNaiveMode(request.Mode) && !desktopNodeCompositeMode(request.Mode) || request.Layer != "" {
 		if len(routes) != 0 {
 			server = startDesktopNodeLayerRoutedServer(t, ip, request.Password, routes, dnsListener.LocalAddr().String())
@@ -545,11 +567,13 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 		aesAddress = address
 	}
 	if request.Layer == "aes-256-gcm+xor-whitening" {
+		stage = "shipping whitening relay"
 		address = startDesktopNodeLayerRelay(t, ip, address, request.Password)
 	}
+	stage = "native process scope"
 	scope, err := desktopNodeLayerReferenceScope()
 	if err != nil {
-		t.Fatal("layer reference has no exact process scope", err)
+		desktopNodeLayerPreparationError(t, stage, err)
 	}
 	respond := func(nonce, target string, observer *desktopNodeLayerServer) {
 		var count int64
@@ -576,6 +600,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 			t.Fatal("layer reference lost its retained reply pipe", err)
 		}
 	}
+	stage = "captured reply and control"
 	respond("", "", server)
 	for {
 		line, err := reader.ReadSlice('\n')
