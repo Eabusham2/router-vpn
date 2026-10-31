@@ -92,7 +92,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
-      - name: Verify native scope and prospective admission boundaries
+      - name: Verify native scope and shipping admission boundaries
         shell: pwsh
         run: |
           python deploy/test_windows_node_pq_runner.py
@@ -120,8 +120,9 @@ jobs:
         run: |
           # Real CGO and target Rust/C library on each actual architecture.
           # WFP is scoped to this executable; only TUN is a harmless fixture.
-          # Public PQ admission remains closed until this prospective gate passes.
-          python deploy/test_windows_node_pq.py --standalone --prospective --receipt (Join-Path $env:RUNNER_TEMP 'routervpn-windows-pq-receipt.json')
+          # Positive execution uses the unchanged shipping PQ predicate.
+          # A separately compiled exact-family removal must reject admission.
+          python deploy/test_windows_node_pq.py --standalone --receipt (Join-Path $env:RUNNER_TEMP 'routervpn-windows-pq-receipt.json')
           if ($LASTEXITCODE -ne 0) { throw 'Actual Windows PQ/WFP composition failed' }
       - uses: actions/upload-artifact@v4
         with:

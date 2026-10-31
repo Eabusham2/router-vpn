@@ -578,10 +578,10 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                     env=env, timeout=1200)
                 run([sys.executable, ROOT/'deploy/test_windows_node_pq_runner.py'], cwd=ROOT, env=env)
                 # Actual matching-host CGO/Rust, isolated sockets and BFE. Only
-                # the two future PQ modes use an explicit test-only predicate;
-                # public admission removes this flag after native proof.
+                # positive PQ execution keeps the shipping predicate unchanged;
+                # a separate exact-family-closed control must reject admission.
                 run([sys.executable, ROOT/'deploy/test_windows_node_pq.py', source, pq,
-                     '--cache', cache or ROOT/'dist/.native-pq-cache', '--prospective'],
+                     '--cache', cache or ROOT/'dist/.native-pq-cache'],
                     env=env, timeout=2400)
                 run([sys.executable, ROOT/'deploy/test_desktop_windows_traffic.py', source],
                     env=env, timeout=600)

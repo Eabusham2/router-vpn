@@ -104,6 +104,8 @@ SHARED_TESTS = (
     "TestDesktopNodeInitialCreateCancellationRetainsWrittenJournal",
     "TestDesktopNodeInitialCancelledStartCannotAuthorizeReadOnlyCreate",
     "TestDesktopNodePublicConnectUsesCapturedOwnedHost",
+    "TestDesktopNodeOwnedPQPlatformBoundary",
+    "TestDesktopNodePublicPQSourceAndProofFailuresPreserveOwnership",
     "TestDesktopNodePublicAutoRetainsCatalogAndExactPredecessor",
     "TestDesktopNodePublicSmartRestoresCapturedSourceAndLiveMTU",
     "TestDesktopNodePublicSpeedLabCancellationRestoresExactWinner",
@@ -134,7 +136,7 @@ ARGUMENT_CASES = (
     "upper-transfer", "zero-mtu", "low-mtu", "large-mtu", "noncanonical-mtu",
     "flag-injection",
 )
-PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2",
+PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2",
                 "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max", "ss-v2ray")
 PUBLIC_LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
 EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES),
@@ -143,6 +145,8 @@ EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES
               for layer in PUBLIC_LAYERS),
             *("TestDesktopNodePublicConnectUsesCapturedOwnedHost/" + mode + "/" + layer
               for mode in PUBLIC_MODES for layer in PUBLIC_LAYERS),
+            *("TestDesktopNodePublicPQSourceAndProofFailuresPreserveOwnership/" + mode + "/" + layer + "/" + fault
+              for mode in ("wg-pq", "awg2-pq") for layer in PUBLIC_LAYERS for fault in ("private-source", "node-proof")),
             *("TestDesktopNodePublicConnectCancellationAndProofReplacement/" + case
               for case in ("cancel-at-start", "request-during-proof", "runtime-during-proof", "native-owner-during-proof")),
             *("TestDesktopNodeSmartRetainRechecksPublicationOwner/" + case for case in ("cancel", "native-owner")),

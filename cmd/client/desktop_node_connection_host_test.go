@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -85,6 +86,10 @@ func newDesktopNodeConnectionFixture(t *testing.T, policy, layer string) *deskto
 	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		_, files := viaEntryBaseFixture(t, mode)
 		f.writeAssets(t, mode, files)
+	}
+	for _, pair := range [][2]string{{"wg", "wg-pq"}, {"awg2-strong", "awg2-pq"}} {
+		_, packet := viaEntryBaseFixture(t, pair[0])
+		f.writeAssets(t, pair[1], nativeMultihopPQAssets(t, pair[1], packet, testWGKey('q')))
 	}
 	f.writeAssets(t, "shadowsocks", desktopOwnedNodePreparationAES(t, profile.Endpoint))
 	hy2, _ := json.Marshal(map[string]any{
@@ -434,7 +439,7 @@ func (f *desktopNodeConnectionFixture) close(t *testing.T) {
 }
 
 func TestDesktopNodePublicConnectUsesCapturedOwnedHost(t *testing.T) {
-	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max", "ss-v2ray"} {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max", "ss-v2ray"} {
 		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 			label := layer
 			if label == "" {
@@ -464,6 +469,71 @@ func TestDesktopNodePublicConnectUsesCapturedOwnedHost(t *testing.T) {
 					}
 				})
 			})
+		}
+	}
+}
+
+func TestDesktopNodeOwnedPQPlatformBoundary(t *testing.T) {
+	a := &app{}
+	if (a.desktopNodeConnectionHost() != nil) != (runtime.GOOS == "windows") {
+		t.Fatal("PQ admission changed the shipping native host platform boundary")
+	}
+}
+
+func TestDesktopNodePublicPQSourceAndProofFailuresPreserveOwnership(t *testing.T) {
+	for _, mode := range []string{"wg-pq", "awg2-pq"} {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			label := layer
+			if label == "" {
+				label = "off"
+			}
+			for _, fault := range []string{"private-source", "node-proof"} {
+				t.Run(mode+"/"+label+"/"+fault, func(t *testing.T) {
+					synctest.Test(t, func(t *testing.T) {
+						f := newDesktopNodeConnectionFixture(t, "always", layer)
+						var previous *desktopNodeConnectionChild
+						if fault == "private-source" {
+							connected := httptest.NewRecorder()
+							f.a.connect(connected, httptest.NewRequest(http.MethodPost, "/api/connect", strings.NewReader(`{"mode":"wg"}`)))
+							if connected.Code != http.StatusOK || len(f.children) != 1 || !f.a.state.Connected {
+								t.Fatal("could not establish the exact predecessor for PQ source rejection", connected.Code, connected.Body.String())
+							}
+							previous = f.children[0]
+							path := filepath.Join(f.data, "generated", f.profile.ID, mode, "rosenpass-server-public")
+							if err := os.WriteFile(path, []byte{7}, 0600); err != nil {
+								t.Fatal(err)
+							}
+						} else {
+							// The actual proof parser receives another node's identity.
+							// This is independent of native KEM credential controls.
+							f.failedMode[mode] = true
+						}
+						response := httptest.NewRecorder()
+						f.a.connect(response, httptest.NewRequest(http.MethodPost, "/api/connect", strings.NewReader(`{"mode":"`+mode+`"}`)))
+						if response.Code < 400 || len(f.children) != 1 || f.requests.Load() != 1 {
+							t.Fatal("failed public PQ source or node proof became success or another child", response.Code, response.Body.String(), len(f.children), f.requests.Load())
+						}
+						child := f.children[0]
+						if fault == "private-source" {
+							current, _ := desktopNodeOwners.Load(f.a)
+							if child != previous || child.Alive() != nil || f.a.cmd != previous.launch.command || current != previous.launch ||
+								!f.a.state.Connected || f.a.state.RuntimeMode != "wg" || f.a.nodeProtection.active != previous.launch.ownedNode.attempt || f.kernel.prepared != 3 {
+								t.Fatal("invalid PQ source stopped or replaced the previously proved owner")
+							}
+						} else {
+							child.mu.Lock()
+							joined := child.closed
+							child.mu.Unlock()
+							expected := desktopNodeProtectionInstalled(child.launch.ownedNode.policy)
+							if child.launch.mode != mode || !joined || f.a.state.Connected || f.a.cmd != nil ||
+								f.a.nodeProtection.active != nil || f.kernel.locked || f.kernel.target == nil || *f.kernel.target != expected ||
+								!f.a.retainedDesktopNodeProtection() || f.a.guardDesktopOwnedNodeTransition(nil) == nil || f.kernel.releases != 1 || f.kernel.closes != 1 {
+								t.Fatalf("failed PQ node proof escaped joined retirement or retained Always protection: mode=%q joined=%t connected=%t command=%t active=%t locked=%t target=%+v releases=%d response=%s", child.launch.mode, joined, f.a.state.Connected, f.a.cmd != nil, f.a.nodeProtection.active != nil, f.kernel.locked, f.kernel.target, f.kernel.releases, response.Body.String())
+							}
+						}
+					})
+				})
+			}
 		}
 	}
 }
@@ -562,7 +632,7 @@ func TestDesktopNodePublicSmartRestoresCapturedSourceAndLiveMTU(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		f := newDesktopNodeConnectionFixture(t, "always", "aes-256-gcm+xor-whitening")
 		catalog, _ := json.Marshal(f.a.modes)
-		for _, mode := range []string{"wg", "awg2-fast", "shadowsocks"} {
+		for _, mode := range []string{"wg", "awg2-fast", "wg-pq", "shadowsocks"} {
 			f.failedMode[mode] = true
 		}
 		var firstGood *desktopNodeConnectionChild
@@ -606,7 +676,7 @@ func TestDesktopNodePublicSmartRestoresCapturedSourceAndLiveMTU(t *testing.T) {
 		var result strategyResult
 		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil || !result.OK ||
 			result.RuntimeMode != "awg2-strong" || result.RestoredMode != "awg2-strong" || !f.a.state.Connected ||
-			f.a.state.LogicalMode != "smart-auto" || !corrupted || firstGood == nil || len(f.children) != 6 {
+			f.a.state.LogicalMode != "smart-auto" || !corrupted || firstGood == nil || len(f.children) != 7 {
 			t.Fatal("public SMART did not restore its proved captured graph after an actual failed trial", response.Code, response.Body.String(), len(f.children))
 		}
 		winner, trial := f.children[len(f.children)-1], f.children[len(f.children)-2]
@@ -618,15 +688,15 @@ func TestDesktopNodePublicSmartRestoresCapturedSourceAndLiveMTU(t *testing.T) {
 			f.a.nodeProtection.active != winner.launch.ownedNode.attempt {
 			t.Fatal("public SMART restored changed assets, stale MTU, another host or the original obsolete protection target")
 		}
-		restored, retained, rejectedPQ := false, false, false
+		restored, retained, failedPQ := false, false, false
 		for _, attempt := range result.Attempts {
 			restored = restored || attempt.Mode == "awg2-strong" && attempt.Action == "restore" && attempt.Success
 			retained = retained || attempt.Mode == "awg2-strong" && attempt.Action == "retain" && attempt.Success
-			rejectedPQ = rejectedPQ || attempt.Mode == "wg-pq" && attempt.Action == "candidate" && !attempt.Success
+			failedPQ = failedPQ || attempt.Mode == "wg-pq" && attempt.Action == "candidate" && !attempt.Success
 		}
 		after, _ := json.Marshal(f.a.modes)
-		if !restored || !retained || !rejectedPQ || !bytes.Equal(catalog, after) || f.kernel.releases != 0 {
-			t.Fatal("public SMART omitted a required catalog candidate or stopped its proved winner on unsupported preflight", result.Attempts)
+		if !restored || !retained || !failedPQ || !bytes.Equal(catalog, after) || f.kernel.releases != 0 {
+			t.Fatal("public SMART omitted a required failed proof or lost its captured proved winner", result.Attempts)
 		}
 	})
 }

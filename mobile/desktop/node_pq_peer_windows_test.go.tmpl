@@ -1080,9 +1080,9 @@ func nodePQWFPRequireTraffic(t *testing.T, f *nodePQWFPFixture, p *nodePQWFPRefe
 	nodePQWFPRequireBlocked(t, p)
 }
 
-// The prerequisite runner executes this under the exact current predicate,
-// without its prospective two-mode overlay. Source construction is real and
-// rejection must precede every native source/admission effect.
+// The runner executes this in its separately compiled closed-admission control.
+// Only the exact two-mode PQ capability is removed; source construction is real
+// and rejection must precede every native source/admission effect.
 func TestRouterVPNDesktopNodeWindowsPQCapabilityClosed(t *testing.T) {
 	for _, mode := range []string{"wg-pq", "awg2-pq"} {
 		t.Run(mode, func(t *testing.T) {
@@ -1091,7 +1091,7 @@ func TestRouterVPNDesktopNodeWindowsPQCapabilityClosed(t *testing.T) {
 			}
 			for _, layer := range []string{"", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 				if mobilemultihop.DesktopNodePhysicalGraphSupported(mode, layer) {
-					t.Fatal("unmodified current predicate already admits prospective PQ")
+					t.Fatal("closed PQ control still admits its captured family")
 				}
 			}
 			peer := nodePQWFPStartReference(t, mode, "")
@@ -1327,7 +1327,7 @@ func TestRouterVPNDesktopNodeWindowsPQCapabilityOpen(t *testing.T) {
 	for _, mode := range []string{"wg-pq", "awg2-pq"} {
 		for _, layer := range []string{"", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 			if !mobilemultihop.DesktopNodePhysicalGraphSupported(mode, layer) {
-				t.Fatal("prospective native PQ graph was not admitted by its exact capability", mode, layer)
+				t.Fatal("native PQ graph was not admitted by its exact capability", mode, layer)
 			}
 		}
 		if mobilemultihop.DesktopNodePhysicalGraphSupported(mode, "uncaptured-layer") {

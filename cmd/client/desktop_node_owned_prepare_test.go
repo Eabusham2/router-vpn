@@ -367,7 +367,7 @@ func TestDesktopOwnedNodePreparationRejectsUnsupportedAdmission(t *testing.T) {
 			case "layer":
 				f.profile.StartLayer = "xor-only"
 			case "mode":
-				mode = "wg-pq"
+				mode = "openvpn"
 			case "no-operation":
 				f.operation = nil
 			case "wrong-operation":
