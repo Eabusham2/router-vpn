@@ -122,6 +122,9 @@ SHARED_TESTS = (
     "TestLogicalBaseRollbackRejectsChangedOrUnjoinedOwners",
     "TestLogicalBaseRollbackPreservesDurablePredecessorAndCancellation",
     "TestLogicalBaseRollbackWriteFailureRetainsSavedStagedValue",
+    "TestDesktopNodeALLKeepsCompleteTLSFirstOrder",
+    "TestDesktopNodePublicALLClosedGraphsKeepOriginalOwner",
+    "TestDesktopNodePublicALLCancellationKeepsCapturedOperation",
 )
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
@@ -149,9 +152,13 @@ EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES
             *("TestLogicalBaseRollbackRejectsChangedOrUnjoinedOwners/" + case
               for case in ("operation", "selection", "profile", "command", "workspace", "new-unknown-slot", "replaced-slot", "lost-slot",
                            "active", "retiring", "off", "journal-close", "new-target", "revision")),
+            *("TestDesktopNodePublicALLClosedGraphsKeepOriginalOwner/" + policy for policy in ("always", "on-connect")),
+            *("TestDesktopNodePublicALLCancellationKeepsCapturedOperation/" + case for case in ("cancel", "replacement")),
             "TestWindowsPrivateStoreWriteThroughReplace/unicode",
             "TestWindowsPrivateStoreWriteThroughReplace/long-portable-path")
 REQUIRED_SOURCES = (
+    "cmd/client/desktop_node_all.go", "cmd/client/desktop_node_all_test.go", "cmd/client/desktop_node_all_prospective_test.go",
+    "internal/mobilemultihop/desktop_node_admission.go",
     "cmd/client/logical_modes.go", "cmd/client/logical_base_preference.go", "cmd/client/logical_base_preference_test.go",
     "cmd/client/desktop_node_start_assets_test.go",
     "cmd/client/desktop_node_process.go",
@@ -192,6 +199,94 @@ REQUIRED_SOURCES = (
     "deploy/test_windows_node_process.py", "deploy/test_windows_node_process_runner.py",
     ".github/workflows/windows-controller-contract.yml",
 )
+
+ALL_GROUPS = ("TestDesktopNodeProspectiveALLProvesOrderedFallback",
+              "TestDesktopNodeProspectiveALLFailureRetainsSelectedProtection",
+              "TestDesktopNodeProspectiveALLStopsAtUnjoinedAttempt")
+ALL_EXPECTED = (*ALL_GROUPS,
+                *(ALL_GROUPS[0] + "/" + policy + "/" + base + "/" + str(winner)
+                  for policy in ("always", "on-connect") for base in ("wg", "awg") for winner in range(4)),
+                *(ALL_GROUPS[1] + "/" + policy for policy in ("always", "on-connect")))
+ALL_CAPABILITY_FILE = "internal/mobilemultihop/desktop_node_admission.go"
+
+
+def all_capability_source():
+    original = (ROOT / ALL_CAPABILITY_FILE).read_text(encoding="utf-8")
+    modes = ("max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg")
+    if any('"' + mode + '"' in original for mode in modes):
+        raise ValueError("Prospective ALL requires its unchanged closed shipping capability")
+    return NATIVE.replace_once(original, "\tdefault:\n\t\treturn false",
+        '\tcase "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg":\n\t\treturn true\n\tdefault:\n\t\treturn false')
+
+
+def check_all_composition(status, output):
+    if (status or invalid_execution(output) or "--- FAIL:" in output or
+            any(len(re.findall(r"(?m)^[ \t]*--- PASS: " + re.escape(name) + r" \(", output)) != 1
+                for name in ALL_EXPECTED)):
+        raise ValueError("Prospective ALL did not execute every actual controller case:\n" + output[-32768:])
+
+
+def all_mutants():
+    logical_file, all_file = "cmd/client/logical_modes.go", "cmd/client/desktop_node_all.go"
+    logical = (ROOT / logical_file).read_text(encoding="utf-8")
+    original = (ROOT / all_file).read_text(encoding="utf-8")
+    once = NATIVE.replace_once
+    return (
+        (logical_file, "all-legacy-dispatch", ALL_GROUPS[0] + "/always/wg/0",
+         "native ALL did not retain its first proved complete branch",
+         once(logical, 'if a.desktopNodeConnectionSelected("max-tls-wg") {', 'if false && a.desktopNodeConnectionSelected("max-tls-wg") {')),
+        (all_file, "all-unproved-selection", ALL_GROUPS[0] + "/always/wg/0",
+         "native ALL did not retain its first proved complete branch",
+         once(original, "err = a.startModeAttempt(candidate.RuntimeID, true, transition)", "err = nil")),
+        (all_file, "all-unjoined-successor", ALL_GROUPS[2],
+         "ALL attempted a successor before its original child joined",
+         once(original, "if commandRetained || ownerRetained {", "if false && (commandRetained || ownerRetained) {")),
+        (all_file, "all-released-between-attempts", ALL_GROUPS[0] + "/on-connect/wg/1",
+         "native ALL did not retain its first proved complete branch",
+         once(original, "a.startModeAttempt(candidate.RuntimeID, true, transition)", "a.startModeAttempt(candidate.RuntimeID, false, transition)")),
+        (logical_file, "all-replacement-cancellation", "TestDesktopNodePublicALLCancellationKeepsCapturedOperation/replacement",
+         "old ALL cancellation changed a replacement connection",
+         once(logical, 'a.finalizeCancelledFallbackFor("ALL", operation)', 'a.finalizeCancelledFallbackFor("ALL", func() context.Context { _ = operation; return a.connectionOperationContextOrBackground() }())').replace('import (\n', 'import (\n\t"context"\n', 1)),
+    )
+
+
+def execute_all_composition(build, captured, workspace):
+    # Only this test binary admits complete MAX. Native application selection,
+    # source compilation, proof and retirement remain the actual shipping code.
+    # This prospective controller result never substitutes for native WFP/PQ.
+    source = workspace / "all-capability.go"
+    source.write_text(all_capability_source(), encoding="utf-8")
+    capability_digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    compiled = ["-tags=" + TAG + ",routervpn_node_all_prospective" if value == "-tags=" + TAG else value for value in build]
+    cases = [(None, "node-all", None, None, None), *all_mutants()]
+    for filename, label, test, witness, replacement in cases:
+        mapping = {str(ROOT / ALL_CAPABILITY_FILE): str(source)}
+        if filename is not None:
+            changed = workspace / (label + ".go")
+            changed.write_text(replacement, encoding="utf-8")
+            mapping[str(ROOT / filename)] = str(changed)
+        overlay = workspace / (label + ".json")
+        overlay.write_text(json.dumps({"Replace": mapping}), encoding="utf-8")
+        binary = workspace / (label + ".test.exe")
+        status, output = NATIVE.run([*compiled, "-overlay=" + str(overlay), "-o", binary, "./cmd/client"],
+                                    cwd=ROOT, env=captured, timeout=240)
+        if status:
+            raise ValueError("Prospective ALL did not compile: " + label + "\n" + output[-16384:])
+        digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+        expression = "^(" + "|".join(ALL_GROUPS) + ")$" if test is None else "/".join("^" + re.escape(part) + "$" for part in test.split("/"))
+        duration = 240 if test is None else 60
+        status, output = NATIVE.run([binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=" + str(duration) + "s", "-test.v"],
+                                    cwd=ROOT / "cmd/client", env=captured, timeout=duration + 15)
+        if test is None:
+            print(output, end="" if output.endswith("\n") else "\n", flush=True)
+            check_all_composition(status, output)
+        else:
+            check_rejection(label, test, witness, status, output)
+            print("Prospective ALL control rejected: " + label, flush=True)
+        if hashlib.sha256(binary.read_bytes()).hexdigest() != digest or hashlib.sha256(source.read_bytes()).hexdigest() != capability_digest:
+            raise ValueError("Prospective ALL changed its retained binary or compiled capability")
+        binary.unlink()
+    return capability_digest
 
 
 def sources():
@@ -491,6 +586,7 @@ def execute(go="go", *, env=None):
                 raise ValueError("Native Node process mutant changed during execution: " + name)
             print("Node process negative control rejected: " + name, flush=True)
             candidate.unlink()
+        all_capability_digest = execute_all_composition(build, captured, workspace)
         if sources() != before:
             raise ValueError("Native Node process source changed during the gate")
         print(json.dumps({"schema": 1, "host": "windows/" + architecture,
@@ -498,6 +594,9 @@ def execute(go="go", *, env=None):
                           "command_rejection_cases": len(ARGUMENT_CASES), "negative_controls": len(changes),
                           "public_connection_mode_layer_cases": len(PUBLIC_MODES) * len(PUBLIC_LAYERS),
                           "actual_child_fixture_sha256": digest, "source_files": len(before),
+                          "prospective_all_markers": len(ALL_EXPECTED), "prospective_all_controls": len(all_mutants()),
+                          "prospective_all_capability_sha256": all_capability_digest,
+                          "prospective_all_scope": "controller composition only; shipping MAX admission and actual WFP/PQ remain separate",
                           "source_sha256": hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest(),
                           "authenticated_package_launch": "separate-required-composition-gate",
                           "sing_box_dataplane": "separate-required-composition-gate"}, sort_keys=True))

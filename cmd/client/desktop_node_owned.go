@@ -805,6 +805,9 @@ func (a *app) guardDesktopOwnedNodeTemporary(request speedLabRequest, snapshot s
 	mode := strings.ToLower(strings.TrimSpace(request.Mode))
 	if logical, exists := a.logicalModeByID(mode); exists {
 		candidates := a.candidatesForLogical(logical, request.Base)
+		if mode == "all" {
+			candidates = desktopNodeALLCandidates(a.preferredBase(request.Base))
+		}
 		if len(candidates) == 0 {
 			return errors.New("temporary Router mode has no captured native successor")
 		}

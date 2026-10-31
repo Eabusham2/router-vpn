@@ -302,6 +302,9 @@ func restoreEnv(key, old string, existed bool) {
 }
 
 func (a *app) startAllLogical(requestedBase string) (runtimeCandidate, error) {
+	if a.desktopNodeConnectionSelected("max-tls-wg") {
+		return a.startDesktopNodeALL(requestedBase)
+	}
 	p, err := a.activeProfile()
 	if err != nil {
 		return runtimeCandidate{}, err
@@ -396,9 +399,10 @@ func (a *app) startLogicalMode(id, requestedBase string) (runtimeCandidate, erro
 	}
 
 	if id == "all" {
+		operation := a.connectionOperationContextOrBackground()
 		candidate, err := a.startAllLogical(requestedBase)
 		if errors.Is(err, errConnectionOperationCancelled) {
-			return runtimeCandidate{}, a.finalizeCancelledFallback("ALL")
+			return runtimeCandidate{}, a.finalizeCancelledFallbackFor("ALL", operation)
 		}
 		return candidate, err
 	}

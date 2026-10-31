@@ -109,8 +109,38 @@ class NodeProcessRunner(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "actual Windows execution"):
                 GATE.execute()
 
+    def test_prospective_all_requires_every_unique_real_controller_marker(self):
+        complete = "\n".join("--- PASS: " + name + " (0.01s)" for name in GATE.ALL_EXPECTED) + "\nPASS\n"
+        GATE.check_all_composition(0, complete)
+        for name in GATE.ALL_EXPECTED:
+            marker = "--- PASS: " + name + " (0.01s)"
+            for output in (complete.replace(marker, ""), complete.replace(marker, "fixture.go:1: " + marker), complete + marker + "\n"):
+                with self.subTest(name=name), self.assertRaisesRegex(ValueError, "every actual controller case"):
+                    GATE.check_all_composition(0, output)
+        for status, output in ((1, complete), (0, complete + "\n--- FAIL: hidden (0.01s)"),
+                               (0, complete + "\n--- SKIP: hidden (0.01s)"), (0, complete + "\nDATA RACE")):
+            with self.assertRaises(ValueError):
+                GATE.check_all_composition(status, output)
+
+    def test_all_controls_keep_the_shipping_capability_closed_and_source_unchanged(self):
+        names = (GATE.ALL_CAPABILITY_FILE, "cmd/client/logical_modes.go", "cmd/client/desktop_node_all.go")
+        before = {name: (ROOT / name).read_bytes() for name in names}
+        prospective = GATE.all_capability_source()
+        self.assertNotEqual(prospective.encode(), before[GATE.ALL_CAPABILITY_FILE])
+        self.assertIn('case "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg":', prospective)
+        controls = GATE.all_mutants()
+        self.assertEqual(len(controls), 5)
+        self.assertEqual(len({item[1] for item in controls}), 5)
+        for filename, _, test, witness, changed in controls:
+            self.assertIn(filename, before)
+            self.assertNotEqual(changed.encode(), before[filename])
+            self.assertIn(test.split("/")[0], (*GATE.REQUIRED, *GATE.ALL_GROUPS))
+            self.assertTrue(witness)
+        for name, body in before.items():
+            self.assertEqual((ROOT / name).read_bytes(), body)
+
     def test_expanded_baseline_keeps_individual_control_deadlines(self):
-        controls = {name: (test, witness) for _, name, test, witness, _ in GATE.mutants()}
+        controls = {name: (test, witness) for _, name, test, witness, _ in (*GATE.mutants(), *GATE.all_mutants())}
         executions = []
 
         def run(command, *, cwd, env, timeout):
@@ -120,6 +150,8 @@ class NodeProcessRunner(unittest.TestCase):
             executions.append((command, timeout))
             if Path(command[0]).name == "node-process.test.exe":
                 return 0, "\n".join("--- PASS: " + name + " (0.01s)" for name in GATE.EXPECTED)
+            if Path(command[0]).name == "node-all.test.exe":
+                return 0, "\n".join("--- PASS: " + name + " (0.01s)" for name in GATE.ALL_EXPECTED)
             test, witness = controls[Path(command[0]).name.removesuffix(".test.exe")]
             return 1, "--- FAIL: " + test + " (0.01s)\n    source_test.go:1: " + witness + "\n"
 
@@ -131,12 +163,16 @@ class NodeProcessRunner(unittest.TestCase):
              patch.object(GATE, "report_baseline", wraps=GATE.check_baseline), \
              patch("sys.stdout", new_callable=io.StringIO):
             GATE.execute()
-        self.assertEqual(len(executions), 1 + len(controls))
+        self.assertEqual(len(executions), 2 + len(controls))
         self.assertIn("-test.timeout=240s", executions[0][0])
         self.assertEqual(executions[0][1], 255)
         for command, timeout in executions[1:]:
-            self.assertIn("-test.timeout=60s", command)
-            self.assertEqual(timeout, 75)
+            if Path(command[0]).name == "node-all.test.exe":
+                self.assertIn("-test.timeout=240s", command)
+                self.assertEqual(timeout, 255)
+            else:
+                self.assertIn("-test.timeout=60s", command)
+                self.assertEqual(timeout, 75)
 
 
 if __name__ == "__main__":

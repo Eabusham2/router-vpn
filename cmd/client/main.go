@@ -894,7 +894,7 @@ func (a *app) listModes(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *app) checkMode(m common.Mode) (bool, string) {
-	if a.desktopNodeConnectionSelected(m.ID) {
+	if a.desktopNodeConnectionSelected(m.ID) || m.ID == "all" && a.desktopNodeConnectionSelected("max-tls-wg") {
 		// Native transport/configuration validation occurs for the exact captured
 		// node at launch. A catalog request must not resolve hosts or open tunnels.
 		return a.checkDesktopNodeConnectionPackage()
