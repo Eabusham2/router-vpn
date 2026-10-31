@@ -31,6 +31,40 @@ type Witness struct {
 	closeErr                  error
 }
 
+// SetCloseOnExec prevents an inherited file from escaping through a later
+// descendant exec. It reads, preserves, sets and verifies the descriptor flags
+// while SyscallConn retains this original file; no numeric fd can be recycled
+// during the operation. The caller retains the file on both success and error.
+func SetCloseOnExec(file *os.File) error {
+	if file == nil {
+		return errors.New("Linux inherited descriptor has no retained file")
+	}
+	raw, err := file.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var nativeErr error
+	err = raw.Control(func(fd uintptr) {
+		flags, _, errno := syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_GETFD, 0)
+		if errno != 0 {
+			nativeErr = os.NewSyscallError("fcntl(F_GETFD)", errno)
+			return
+		}
+		expected := flags | syscall.FD_CLOEXEC
+		if _, _, errno = syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_SETFD, expected); errno != 0 {
+			nativeErr = os.NewSyscallError("fcntl(F_SETFD)", errno)
+			return
+		}
+		actual, _, errno := syscall.Syscall(syscall.SYS_FCNTL, fd, syscall.F_GETFD, 0)
+		if errno != 0 {
+			nativeErr = os.NewSyscallError("fcntl(F_GETFD) readback", errno)
+		} else if actual != expected {
+			nativeErr = errors.New("Linux inherited descriptor did not retain its close-on-exec flags")
+		}
+	})
+	return errors.Join(err, nativeErr)
+}
+
 func CaptureSelf(ctx context.Context) (*Witness, error) {
 	directory, err := os.Open("/proc/self")
 	if err != nil {
@@ -46,6 +80,11 @@ func CaptureSelf(ctx context.Context) (*Witness, error) {
 func CaptureDirectory(ctx context.Context, directory *os.File, expectedPID int) (*Witness, error) {
 	w := &Witness{directory: directory, gate: make(chan struct{}, 1)}
 	defer func() { w.gate <- struct{}{} }()
+	if directory != nil {
+		if err := SetCloseOnExec(directory); err != nil {
+			return w, err
+		}
+	}
 	if ctx == nil || ctx.Err() != nil || directory == nil || expectedPID < 1 || uint64(expectedPID) > 1<<31-1 {
 		return w, errors.New("Linux process capture requires its actual retained directory and caller")
 	}

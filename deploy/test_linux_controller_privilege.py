@@ -30,7 +30,7 @@ CASES = ('FixedInstallAndPipeLifetime', 'RejectsUnsafeInstallAndConfig',
          'JournalSurvivesUpgradeWithoutAdoption', 'NodeEngineLauncher')
 PROCESS_CASES = ('Witness', 'CreatedBootstrap', 'RejectsForeignBootstrap', 'RetainsOriginalProcView',
                  'RejectsRetiredAndReexecutedTask', 'RetainsFailedClose', 'RejectsForeignPidFD',
-                 'PreservesBorrowedParent', 'ChannelBoundsAndCancellation')
+                 'PreservesBorrowedParent', 'ChannelBoundsAndCancellation', 'InheritedCloseOnExec')
 
 
 def source_identity():
@@ -126,6 +126,7 @@ def execute(go='go'):
                 'internal/linuxprocess/abi_linux.go', 'internal/linuxprocess/channel_linux.go',
                 'internal/linuxprocess/pidfd_linux.go', 'internal/linuxprocess/bootstrap_linux.go',
                 'internal/linuxprocess/process_linux_native_test.go',
+                'internal/linuxprocess/close_on_exec_linux_test.go', 'internal/linuxprocess/close_on_exec_linux_native_test.go',
                 'cmd/client/desktop_node_process_linux.go', 'cmd/client/desktop_node_process_linux_native_test.go',
                 'internal/linuxprotection/command_capture.go', 'internal/linuxprotection/command_capture_test.go'}
     if not required.issubset(before):
@@ -159,6 +160,7 @@ def execute(go='go'):
             'RetainsOriginalProcView': ('covered-fdinfo-directory', 'rejects-bind-crossing'),
             'RejectsRetiredAndReexecutedTask': ('retired-task-directory', 'reexecuted-image'),
             'ChannelBoundsAndCancellation': ('wrong-sender', 'extra-descriptor', 'oversize', 'cancelled-receive', 'close-joins-receive'),
+            'InheritedCloseOnExec': ('channel', 'directory', 'image', 'still-authenticated'),
         }
         for group, leaves in process_leaves.items():
             for leaf in leaves:

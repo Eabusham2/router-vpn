@@ -86,6 +86,12 @@ func CaptureChannel(file *os.File) (*Channel, error) {
 	if file == nil {
 		return c, errors.New("Linux child channel has no inherited descriptor")
 	}
+	// ExtraFiles clears CLOEXEC for the initial child. net.FileConn owns a
+	// separate duplicate; marking that duplicate cannot protect this original
+	// socket retained for authentication and joined cleanup.
+	if err := SetCloseOnExec(file); err != nil {
+		return c, err
+	}
 	info, statErr := file.Stat()
 	var err error
 	c.identity, err = objectOf(info)
