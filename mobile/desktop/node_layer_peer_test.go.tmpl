@@ -1060,8 +1060,24 @@ func desktopNodeLayerTraffic(t *testing.T, mode, layer string) {
 	}
 	for _, network := range []string{"tcp", "udp"} {
 		for _, host := range []string{"192.0.2.99", "2001:db8::99"} {
-			if err := f.exchange(network, host); err != nil {
-				t.Fatal("layered encrypted payload escaped or lost its exact native lower", network, host, err)
+			firstXray := desktopNodeXrayMode(mode) && network == "tcp" && host == "192.0.2.99"
+			started := time.Now()
+			var err error
+			if firstXray {
+				// The pinned REALITY server may wait five seconds for its cold
+				// camouflage detector. Match the native WFP first-transfer bound.
+				err = f.exchangeWithin(10*time.Second, 8*time.Second, network, host)
+			} else {
+				err = f.exchange(network, host)
+			}
+			if err != nil {
+				observed := peer.observe(t, "stats")
+				t.Fatal("layered encrypted payload escaped or lost its exact native lower", network, host, err,
+					"elapsed", time.Since(started), "socket_current", f.network.SocketCurrent(), "application_current", f.network.Current(),
+					"outer_tcp", observed.RawTCP, "protocol_tcp", observed.ProtocolRawTCP, "echo", observed.ProtocolTCP)
+			}
+			if firstXray {
+				t.Log("first authenticated Xray transfer", "elapsed", time.Since(started))
 			}
 		}
 	}

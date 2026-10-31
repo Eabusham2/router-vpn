@@ -642,11 +642,15 @@ func newDesktopNodePeerFixtureWithReference(t *testing.T, mode string, wrongKey,
 }
 
 func (f *desktopNodePeerFixture) exchange(network string, hosts ...string) error {
+	return f.exchangeWithin(2*time.Second, 2*time.Second, network, hosts...)
+}
+
+func (f *desktopNodePeerFixture) exchangeWithin(contextTimeout, ioTimeout time.Duration, network string, hosts ...string) error {
 	outer, found := f.box.Outbound().Outbound("proxy")
 	if !found {
 		return errors.New("actual encrypted endpoint is missing")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), contextTimeout)
 	defer cancel()
 	host := "192.0.2.99"
 	if len(hosts) == 1 {
@@ -659,7 +663,7 @@ func (f *desktopNodePeerFixture) exchange(network string, hosts ...string) error
 		return err
 	}
 	defer connection.Close()
-	_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
+	_ = connection.SetDeadline(time.Now().Add(ioTimeout))
 	message := bytes.Repeat([]byte("retained-native-node-"), 32)
 	if _, err = connection.Write(message); err != nil {
 		return err
