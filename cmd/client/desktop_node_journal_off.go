@@ -25,6 +25,7 @@ type desktopNodeJournalOff struct {
 	acknowledged atomic.Bool
 	settled      bool
 	storeClosed  bool
+	recovered    bool
 }
 
 func (s *desktopNodeProtectionSlot) captureJournalOffLocked(ctx context.Context, capture *desktopNodeProtectionOff) (*desktopNodeJournalOff, error) {
@@ -89,11 +90,60 @@ func (j *desktopNodeJournalOff) barrier(ctx context.Context, change mobiletor.De
 	}
 	// Called inside the native BFE transaction. Do not acquire slot/app locks
 	// or query BFE here; the captured store alone flushes the immutable intent.
-	if err := writeDesktopNodeJournalReleaseRecord(ctx, j.store, j.head, j.intent); err != nil {
-		return err
+	if j.recovered {
+		// Restart already flushed the exact accepted Off under its checked new
+		// controller. Retrying removal verifies that same intent inside BFE's
+		// write transaction; it never invents a second request or profile pair.
+		if err := j.readExact(ctx, j.intent); err != nil {
+			return err
+		}
+	} else {
+		if err := writeDesktopNodeJournalReleaseRecord(ctx, j.store, j.head, j.intent); err != nil {
+			return err
+		}
 	}
 	j.acknowledged.Store(true)
 	return ctx.Err()
+}
+
+func (s *desktopNodeProtectionSlot) recoveredJournalOffLocked(selectedID string, result windowsprotection.JournalRecoveryResult,
+	joined desktopNodeJournalRecovery) (*desktopNodeProtectionOff, error) {
+	record := result.Selection.Record
+	if s.journal == nil || s.backend.recoverWithBarrier == nil || joined == nil || record.Phase != "intent" || record.Intent == nil ||
+		record.Intent.Action != "off" || record.Committed.Target == nil || record.Committed.Engine != nil || record.Sequence == math.MaxUint64 ||
+		!desktopNodeProcessHex(record.Committed.ProfileRevision, 32) {
+		return nil, errors.New("recovered Off lost its exact joined source, intent or native barrier")
+	}
+	intent, err := copyDesktopNodeJournalRecord(record)
+	if err != nil {
+		return nil, err
+	}
+	settlement, err := copyDesktopNodeJournalRecord(record)
+	if err != nil {
+		return nil, err
+	}
+	settlement.Sequence++
+	settlement.PreviousSHA256, settlement.Phase, settlement.Intent = result.Selection.SHA256, "settled", nil
+	settlement.Committed = windowsprotection.JournalState{}
+	if err := windowsprotection.CheckJournalTransition(record, settlement); err != nil {
+		return nil, err
+	}
+	journal := &desktopNodeJournalOff{store: s.journal, head: intent, intent: intent, settlement: settlement,
+		target: *record.Committed.Target, recovered: true}
+	capture := &desktopNodeProtectionOff{profileID: record.Intent.ProfileID, profileRevision: record.Intent.ProfileRevision,
+		resultRevision: record.Intent.ResultProfileRevision, sourceRevision: record.Committed.ProfileRevision,
+		target: *record.Committed.Target, journal: journal, recovered: true, selectedID: selectedID}
+	if result.Observed.Target == nil {
+		// This is the real joined native recovery owner, carrying process death
+		// and BFE absence proof. A no-op release or a decoded record cannot stand
+		// in for it. Later retries still independently read current absence.
+		capture.owner, capture.prepared, capture.joined = joined, true, true
+		capture.removed, capture.absenceProved = true, true
+		journal.acknowledged.Store(true)
+	} else if *result.Observed.Target != capture.target {
+		return nil, errors.New("recovered Off substituted another native target")
+	}
+	return capture, nil
 }
 
 func (j *desktopNodeJournalOff) readExact(ctx context.Context, expected windowsprotection.JournalRecord) error {

@@ -16,6 +16,7 @@ type desktopNodeProtectionRelease interface{ Close(context.Context) error }
 // Tests model the kernel explicitly; production uses the exact BFE readers and
 // target-bound release constructor. No callback may adopt a current baseline.
 type desktopNodeProtectionBackend struct {
+	bootstrap          func(context.Context, string) (desktopNodeRecoveryBackend, error)
 	read               func(context.Context, *mobiletor.DesktopWindowsProtectionTarget) error
 	prepared           func(context.Context, mobiletor.DesktopWindowsProtectionTarget) error
 	release            func(context.Context, mobiletor.DesktopWindowsProtectionTarget) (desktopNodeProtectionRelease, error)
@@ -51,6 +52,7 @@ type desktopNodeProtectionSlot struct {
 	journal            desktopNodeProtectionJournal
 	journalClosing     bool
 	profileRevision    string // Exact private profile revision captured by the joined successor.
+	recovery           *desktopNodeRecoveryState
 }
 
 func copyDesktopNodeProtectionTarget(target *mobiletor.DesktopWindowsProtectionTarget) *mobiletor.DesktopWindowsProtectionTarget {
@@ -67,7 +69,8 @@ func (s *desktopNodeProtectionSlot) begin(ctx context.Context, launch *desktopNo
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active != nil || s.retirement != nil || s.off != nil || s.journalClosing || s.backend.read == nil || s.backend.prepared == nil || s.backend.release == nil {
+	if s.active != nil || s.retirement != nil || s.off != nil || s.journalClosing ||
+		s.backend.bootstrap != nil && (s.recovery == nil || !s.recovery.ready) || s.backend.read == nil || s.backend.prepared == nil || s.backend.release == nil {
 		return nil, errors.New("native protection still belongs to an active or retiring attempt")
 	}
 	expected := copyDesktopNodeProtectionTarget(s.target)

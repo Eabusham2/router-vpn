@@ -7,6 +7,9 @@ and joins its retained child Job before releasing image ancestry. The shared
 tests additionally exercise failed joins, concurrent cancellation and bounded
 command authority. This is not a complete authenticated-package launch or a
 sing-box dataplane test; those remain separate required composition gates.
+The application restart cases use real admission/settings/private-store code
+with explicit process/BFE/journal-I/O models. Native journal retirement/adoption
+and actual BFE observation are verified by their separate Windows gates.
 """
 from pathlib import Path
 import argparse
@@ -70,6 +73,20 @@ SHARED_TESTS = (
     "TestDesktopNodeJournalOffDoesNotPublishBeforeNativeProof",
     "TestDesktopNodeJournalOffHTTPReportsActualSavedPendingResult",
     "TestDesktopNodeJournalOffJoinsLateNativeBarrier",
+    "TestDesktopNodeRecoveryRetainsAlwaysBeforeSuccessor",
+    "TestDesktopNodeRecoveryPendingOffOriginalAndSavedResult",
+    "TestDesktopNodeRecoveryOffRetriesActualSavedResult",
+    "TestDesktopNodeRecoveryRejectsUnprovedReceiptAndChangedProfile",
+    "TestDesktopNodeRecoveryAdmissionRetriesAndHTTPPendingOff",
+    "TestDesktopNodeRecoveryEmptyStartupClosesStore",
+    "TestDesktopNodeRecoveryTerminalShutdownPreservesUnknownPolicy",
+    "TestDesktopNodeRecoveryCancellationKeepsReplacement",
+    "TestDesktopNodeRecoveryRequiresJoinedInitializationBeforeBegin",
+    "TestDesktopNodeRecoveryPartialOpenAndNativeCloseRemainOwned",
+    "TestDesktopNodeRecoveryUncertainResultCannotBeReplaced",
+    "TestDesktopNodeRecoveryHTTPDoesNotReuseUnknownOwnerToken",
+    "TestDesktopNodeRecoveryAdmissionCancellation",
+    "TestDesktopNodeRecoveryOldCompletionKeepsNewOperation",
 )
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
@@ -93,6 +110,9 @@ REQUIRED_SOURCES = (
     "cmd/client/desktop_node_protection.go", "cmd/client/desktop_node_protection_windows.go",
     "cmd/client/desktop_node_protection_off.go", "cmd/client/desktop_node_protection_off_test.go",
     "cmd/client/desktop_node_journal_off.go", "cmd/client/desktop_node_journal_off_test.go",
+    "cmd/client/desktop_node_recovery.go", "cmd/client/desktop_node_recovery_windows.go",
+    "cmd/client/desktop_node_recovery_other.go", "cmd/client/desktop_node_recovery_test.go",
+    "cmd/client/controller_shutdown.go", "cmd/client/operation_guard.go",
     "cmd/client/profile_protection.go", "cmd/client/profile_protection_owned.go", "cmd/client/profile_protection_owned_test.go",
     "cmd/client/controller_privilege_windows.go",
     "cmd/client/private_runtime_permissions_windows.go",
@@ -156,6 +176,12 @@ def mutants():
     off_capture = (ROOT / off_capture_file).read_text(encoding="utf-8")
     profile_file = "cmd/client/profile_protection_owned.go"
     profile = (ROOT / profile_file).read_text(encoding="utf-8")
+    recovery_file = "cmd/client/desktop_node_recovery.go"
+    recovery = (ROOT / recovery_file).read_text(encoding="utf-8")
+    protection_file = "cmd/client/desktop_node_protection.go"
+    protection = (ROOT / protection_file).read_text(encoding="utf-8")
+    operation_file = "cmd/client/operation_guard.go"
+    operation = (ROOT / operation_file).read_text(encoding="utf-8")
     once = NATIVE.replace_once
     alive = NATIVE.function_mutant(original, "func (owner *desktopNodeProcessOwner) Alive()",
         "\tif err := owner.controller(); err != nil {\n\t\treturn err\n\t}\n", "")
@@ -194,18 +220,50 @@ def mutants():
         (private_file, "private-publication-without-write-through", "TestWindowsPrivateStoreWriteThroughFlags",
          "private replacement omitted write-through or permitted deferred/cross-volume publication",
          once(private, "windowsPrivateReplaceExisting|windowsPrivateWriteThrough", "windowsPrivateReplaceExisting")),
+        (private_file, "private-publication-overwrites-retained-file", "TestWindowsPrivateStoreWriteThroughReplace",
+         "private replacement modified the old file instead of promoting its new private file",
+         once(private, "return replaceWindowsPrivateStoreFile(source, target, moveWindowsPrivateStoreFile)",
+              "body, err := os.ReadFile(source); if err != nil { return err }; if err := os.WriteFile(target, body, 0600); err != nil { return err }; return os.Remove(source)")),
         (off_file, "off-before-durable-intent", "TestDesktopNodeJournalOffOrdersRemovalSaveAndSettlement/always",
          "explicit Off removed protection before its durable intent",
-         once(off, "\tif err := writeDesktopNodeJournalReleaseRecord(ctx, j.store, j.head, j.intent); err != nil {\n\t\treturn err\n\t}\n", "")),
+         once(off, "\t\tif err := writeDesktopNodeJournalReleaseRecord(ctx, j.store, j.head, j.intent); err != nil {\n\t\t\treturn err\n\t\t}\n", "")),
         (off_file, "off-accepts-normal-release", "TestDesktopNodeJournalOffRejectsSubstitutedBarrier/release",
          "substituted explicit Off callback reached persistence or completion",
          once(off, 'change.Action != "off" ||', 'false ||')),
         (profile_file, "off-accepts-replaced-profile-store", "TestDesktopNodeJournalOffSavedReadbackRetainsExactOwner/store-bytes",
          "saved Off accepted a replacement private profile store",
-         once(profile, "!bytes.Equal(raw, append(want, '\\n'))", "false && !bytes.Equal(raw, append(want, '\\n'))")),
+         NATIVE.function_mutant(profile, "func (a *app) persistCapturedProtectionOff(",
+                               "!bytes.Equal(raw, append(want, '\\n'))", "false && !bytes.Equal(raw, append(want, '\\n'))")),
         (off_capture_file, "off-loses-saved-result-revision", "TestDesktopNodeJournalOffSavedResultRetryKeepsTokenAndOwner/settlement",
          "saved-result retry did not finish captured Off",
          once(off_capture, "if capture.profileWritten.Load() {", "if false && capture.profileWritten.Load() {")),
+        (protection_file, "successor-without-startup-recovery", "TestDesktopNodeRecoveryRequiresJoinedInitializationBeforeBegin/not-initialized",
+         "native successor entered before checked startup recovery joined",
+         once(protection, "s.backend.bootstrap != nil && (s.recovery == nil || !s.recovery.ready) ||", "")),
+        (recovery_file, "adoption-with-lost-native-proof", "TestDesktopNodeRecoveryRejectsUnprovedReceiptAndChangedProfile/durable-with-error",
+         "unproved recovery or changed accepted profile reached native removal or saved settlement",
+         once(recovery, '\t\tif err != nil {\n\t\t\treturn errors.Join(err, errors.New("native startup recovery has not joined its process and BFE proof"))\n\t\t}',
+              '\t\tif false && err != nil {\n\t\t\treturn errors.Join(err, errors.New("native startup recovery has not joined its process and BFE proof"))\n\t\t}')),
+        (recovery_file, "adoption-forgets-captured-profile", "TestDesktopNodeRecoveryRetainsAlwaysBeforeSuccessor",
+         "startup did not adopt the exact joined Always owner independently of today's selected profile",
+         once(recovery, "true, copyDesktopNodeProtectionTarget(state.Target), state.ProfileRevision", 'true, copyDesktopNodeProtectionTarget(state.Target), ""')),
+        (recovery_file, "adoption-replaces-uncertain-receipt", "TestDesktopNodeRecoveryUncertainResultCannotBeReplaced/changed-request",
+         "uncertain restart result was replaced or reused without a current exact native receipt",
+         once(recovery, "r.result != nil && !sameDesktopNodeJournalSelection(r.result.Selection, copy)", "false")),
+        (profile_file, "recovered-off-ignores-private-readback", "TestDesktopNodeRecoveryRejectsUnprovedReceiptAndChangedProfile/private-store-mismatch",
+         "unproved recovery or changed accepted profile reached native removal or saved settlement",
+         NATIVE.function_mutant(profile, "func (a *app) captureRecoveredOffProfile(",
+                               "!bytes.Equal(raw, append(want, '\\n'))", "false && !bytes.Equal(raw, append(want, '\\n'))")),
+        (recovery_file, "adoption-before-native-close", "TestDesktopNodeRecoveryPartialOpenAndNativeCloseRemainOwned/native-close",
+         "native recovery cleanup failure admitted a successor owner",
+         once(recovery, "\t\tif err := r.owner.Close(ctx); err != nil {\n\t\t\treturn err\n\t\t}\n", "")),
+        (recovery_file, "terminal-recovery-drops-open-store", "TestDesktopNodeRecoveryTerminalShutdownPreservesUnknownPolicy/partial-open",
+         "terminal recovery dropped its slot before joining the original protected store",
+         NATIVE.function_mutant(recovery, "func (a *app) closeTerminalDesktopNodeRecovery(",
+                               "\t\tif err := slot.journal.Close(); err != nil {\n\t\t\treturn true, err\n\t\t}\n", "")),
+        (operation_file, "disconnect-leaves-admission-recovery-running", "TestDesktopNodeRecoveryAdmissionCancellation/cancel-operation",
+         "admission recovery ignored captured cancellation or installed a connection owner",
+         once(operation, "\ta.cancelDesktopNodeRecovery()\n", "")),
     )
 
 

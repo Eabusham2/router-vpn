@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"math"
-	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -82,9 +81,9 @@ func startDesktopOwnedNodeJournalProcess(ctx context.Context, a *app, launch *de
 	return process, err
 }
 
-// Capture uses the already retained original desktop/Data handles. A complete
-// journal from this controller may reopen; another controller's checkpoint is
-// retained but cannot be appended or silently adopted on this startup path.
+// Startup initializes/reconciles the journal before slot.begin can capture its
+// predecessor. Launch only consumes that retained checked owner; it never
+// creates a store after selecting a nil expectation or adopts a decoded head.
 func captureDesktopNodeJournal(ctx context.Context, controller *windowsOwnedController, launch *desktopNodeLaunch) (*windowsprotection.ProtectionJournal, windowsprotection.JournalCommitCapture, error) {
 	var empty windowsprotection.JournalCommitCapture
 	owned := launch.ownedNode
@@ -96,22 +95,10 @@ func captureDesktopNodeJournal(ctx context.Context, controller *windowsOwnedCont
 		return nil, empty, errors.New("native journal lost its retained original Data directory")
 	}
 	if slot.journal == nil {
-		store, err := windowsprotection.OpenProtectionJournal(ctx, controller.parent, controller.directories[0])
-		if errors.Is(err, os.ErrNotExist) {
-			if store != nil {
-				if closeErr := store.Close(); closeErr != nil {
-					slot.journal = store
-					return nil, empty, errors.Join(err, closeErr)
-				}
-			}
-			store, err = windowsprotection.CreateProtectionJournal(ctx, controller.parent, controller.directories[0])
-		}
-		if store != nil {
-			slot.journal = store // Preserve partial native capture even on failure.
-		}
-		if err != nil {
-			return nil, empty, err
-		}
+		return nil, empty, errors.New("native journal launch preceded checked startup initialization")
+	}
+	if slot.recovery == nil || !slot.recovery.ready {
+		return nil, empty, errors.New("native journal launch still has unresolved startup recovery")
 	}
 	store, ok := slot.journal.(*windowsprotection.ProtectionJournal)
 	if !ok || store == nil {

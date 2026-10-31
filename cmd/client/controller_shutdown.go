@@ -130,6 +130,9 @@ func (a *app) drainControllerOwner() error {
 	if err := finishViaEntryCancellation(a); err != nil {
 		return err
 	}
+	if handled, err := a.closeTerminalDesktopNodeRecovery(); handled {
+		return err
+	}
 	a.mu.Lock()
 	needsStop := a.cmd != nil || a.daitaCancel != nil || a.state.Connected ||
 		a.state.Mode != "" && a.state.Mode != "off" || a.state.RuntimeMode != "" ||

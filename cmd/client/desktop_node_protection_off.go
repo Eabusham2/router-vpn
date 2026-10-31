@@ -33,6 +33,7 @@ type desktopNodeProtectionView struct {
 	ProfileSaved     bool                                      `json:"-"`
 	OriginalRevision string                                    `json:"-"`
 	ResultRevision   string                                    `json:"-"`
+	RecoveryPending  bool                                      `json:"-"`
 }
 
 // An accepted Off request keeps its original target even after native absence
@@ -56,6 +57,8 @@ type desktopNodeProtectionOff struct {
 	removed         bool
 	absenceProved   bool
 	journal         *desktopNodeJournalOff
+	recovered       bool
+	selectedID      string // Startup selection is preserved separately from the recorded Off profile.
 }
 
 func (s *desktopNodeProtectionSlot) advanceGenerationLocked() error {
@@ -70,6 +73,7 @@ func (s *desktopNodeProtectionSlot) viewLocked() desktopNodeProtectionView {
 	v := desktopNodeProtectionView{Generation: s.generation, Known: s.known,
 		Target: copyDesktopNodeProtectionTarget(s.target), Binding: s.binding,
 		Active: s.active != nil, Retiring: s.retirement != nil, PendingOff: s.off != nil}
+	v.RecoveryPending = s.backend.bootstrap != nil && (s.recovery == nil || !s.recovery.ready)
 	if s.off != nil {
 		v.Removed = s.off.removed
 		v.AbsenceProved = s.off.absenceProved
@@ -142,6 +146,13 @@ func (capture *desktopNodeProtectionOff) currentProfileRevision() string {
 		return capture.resultRevision
 	}
 	return capture.profileRevision
+}
+
+func (capture *desktopNodeProtectionOff) capturedSelection() string {
+	if capture.recovered {
+		return capture.selectedID
+	}
+	return capture.profileID
 }
 
 func (s *desktopNodeProtectionSlot) offCurrentLocked(capture *desktopNodeProtectionOff) bool {

@@ -18,7 +18,8 @@ func desktopOwnedNodeProtectionBackend() (desktopNodeProtectionBackend, error) {
 	// after the original UI retires, so these checked native cleanup operations
 	// deliberately do not depend on that UI remaining alive.
 	return desktopNodeProtectionBackend{
-		read: mobiletor.ReadDesktopWindowsProtectionExpectation,
+		bootstrap: desktopNodeRecoveryBootstrap(owner),
+		read:      mobiletor.ReadDesktopWindowsProtectionExpectation,
 		prepared: func(ctx context.Context, target mobiletor.DesktopWindowsProtectionTarget) error {
 			return mobiletor.ReadDesktopWindowsPreparedProtection(ctx, target.Capture, target.Policy, target.BaselineSHA256)
 		},

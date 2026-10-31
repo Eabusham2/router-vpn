@@ -286,7 +286,7 @@ class WindowsProfileControlsAuditTests(unittest.TestCase):
             ("cmd/client/desktop_node_journal_off.go", "s.backend.recoverWithBarrier(ctx, capture.target, j.barrier)", "s.backend.recover(ctx, capture.target)"),
             ("cmd/client/desktop_node_journal_off.go", "writeDesktopNodeJournalReleaseRecord(ctx, j.store, j.intent, j.settlement)", "unflushedSettlement()"),
             ("cmd/client/desktop_node_owned.go", "a.resumeDesktopProtectionOff(ctx, slot, pending, true)", "a.resumeUnrelatedOff(ctx)"),
-            ("cmd/client/operation_guard.go", "a.guardDesktopProtectionOffPending()", "unrelatedGuard()"),
+            ("cmd/client/operation_guard.go", "a.guardDesktopProtectionOffPending(r.Context())", "unrelatedGuard(r.Context())"),
             ("client/RouterVPN-Windows-ProfileSettings.ps1", "-Body ($body | ConvertTo-Json -Compress) -TimeoutSec 30", "-Body ($body | ConvertTo-Json -Compress) -TimeoutSec 8"),
             ("client/RouterVPN-Windows-UnifiedShell.ps1", "Get-RouterVPNProtectionPresentation -Captured $Protection", "Get-UnrelatedPresentation -Captured $Protection"),
             ("client/RouterVPN-Windows-UnifiedShell.ps1", "Show-RouterVPNProfileSettingsDialog -BaseUrl", "Show-UnrelatedSettings -BaseUrl"),

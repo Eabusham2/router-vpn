@@ -134,7 +134,7 @@ def windows_profile_controls() -> None:
     go_function("cmd/client/operation_guard.go", "beginMutationOperation",
                 "a.beginProtectionAwareMutationOperation(r, false)")
     go_function("cmd/client/operation_guard.go", "beginProtectionAwareMutationOperation",
-                "a.operationMu.TryLock()", "a.guardDesktopProtectionOffPending()")
+                "a.operationMu.TryLock()", "a.guardDesktopProtectionOffPending(r.Context())")
     go_function("cmd/client/profile_protection_owned.go", "captureProfileProtection",
                 "slot := a.nodeProtection", "profileStartupSettingsToken(profile)", "slot.view()", "capture.view.token(capture.revision)")
     go_function("cmd/client/desktop_node_protection_off.go", "captureOff",

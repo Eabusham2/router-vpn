@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"router-vpn/internal/common"
 )
@@ -43,7 +44,10 @@ func protectionSettingsWithCapture(profile common.RouterProfile, capture profile
 	}
 	v := capture.view
 	result.ProtectionProfileID = v.Binding.ProfileID
-	if v.PendingOff {
+	if v.RecoveryPending {
+		result.ProtectionStatus, result.EffectivePolicy = "recovery-pending", "unknown"
+		result.Message = "Protection recovery is pending. Retry the operation to reconcile the recorded owner before connecting or changing protection."
+	} else if v.PendingOff {
 		result.ProtectionStatus, result.EffectivePolicy = "off-pending", "unknown"
 		result.Message = "Turning the kill switch off is pending. Retry Off to finish the same change."
 		if v.Removed && v.AbsenceProved {
@@ -79,7 +83,27 @@ func (a *app) desktopProtectionOffPending() bool {
 	return slot != nil && slot.pendingOff() != nil
 }
 
-func (a *app) guardDesktopProtectionOffPending() error {
+func (a *app) guardDesktopProtectionOffPending(caller ...context.Context) error {
+	if len(caller) > 1 || len(caller) == 1 && caller[0] == nil {
+		return errors.New("recorded protection recovery has no single captured caller")
+	}
+	a.mu.Lock()
+	slot := a.nodeProtection
+	a.mu.Unlock()
+	if slot != nil {
+		pending := slot.pendingOff()
+		if slot.recoveryPending() || pending != nil && pending.recovered {
+			parent := a.connectionOperationContextOrBackground()
+			if len(caller) == 1 {
+				parent = caller[0]
+			}
+			ctx, cancel := context.WithTimeout(parent, 25*time.Second)
+			defer cancel()
+			if err := a.resumeDesktopNodeStartupRecovery(ctx, slot); err != nil {
+				return errors.Join(err, errors.New("recorded protection recovery must finish before another operation"))
+			}
+		}
+	}
 	if a.desktopProtectionOffPending() {
 		return errors.New("finish the pending Kill Switch Off change before starting a connection or changing node settings")
 	}
@@ -102,7 +126,7 @@ func (a *app) capturedProtectionOffCurrent(slot *desktopNodeProtectionSlot, capt
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	profile, exists := a.profileByIDLocked(capture.profileID)
-	if !exists || a.nodeProtection != slot || a.profiles.SelectedID != capture.profileID ||
+	if !exists || a.nodeProtection != slot || a.profiles.SelectedID != capture.capturedSelection() ||
 		profileStartupSettingsToken(profile) != capture.currentProfileRevision() || a.cmd != nil || a.state.Connected ||
 		capture.profileWritten.Load() && a.cfg.ProfilesFile != capture.savedPath {
 		return false
@@ -115,6 +139,11 @@ func (a *app) capturedProtectionOffCurrent(slot *desktopNodeProtectionSlot, capt
 // The caller owns operationMu. Native operations run without a.mu; persistence
 // takes a.mu only after the exact owner has joined and absence has been read.
 func (a *app) resumeDesktopProtectionOff(ctx context.Context, slot *desktopNodeProtectionSlot, capture *desktopNodeProtectionOff, cleanup bool) (common.RouterProfile, error) {
+	if capture != nil && capture.recovered {
+		if err := a.captureRecoveredOffProfile(slot, capture); err != nil {
+			return common.RouterProfile{}, err
+		}
+	}
 	current := func() bool { return a.capturedProtectionOffCurrent(slot, capture, cleanup) }
 	if err := slot.applyOff(ctx, capture, current); err != nil {
 		return common.RouterProfile{}, err
@@ -162,7 +191,7 @@ func (a *app) persistCapturedProtectionOff(ctx context.Context, slot *desktopNod
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	profile, exists := a.profileByIDLocked(capture.profileID)
-	if !exists || a.nodeProtection != slot || a.profiles.SelectedID != capture.profileID ||
+	if !exists || a.nodeProtection != slot || a.profiles.SelectedID != capture.capturedSelection() ||
 		profileStartupSettingsToken(profile) != capture.currentProfileRevision() || a.cmd != nil || a.state.Connected ||
 		!cleanup && (a.closing || profileSettingsBusy(a.state.Connected, a.state.Phase)) || ctx.Err() != nil {
 		return common.RouterProfile{}, errDesktopProtectionOffUnsaved
@@ -198,7 +227,7 @@ func (a *app) persistCapturedProtectionOff(ctx context.Context, slot *desktopNod
 	}
 	raw, err := readPrivateRegular(capture.savedPath, maxPrivateStoreBytes)
 	var saved common.RouterProfileStore
-	if err != nil || !bytes.Equal(raw, append(want, '\n')) || json.Unmarshal(raw, &saved) != nil || saved.SelectedID != capture.profileID {
+	if err != nil || !bytes.Equal(raw, append(want, '\n')) || json.Unmarshal(raw, &saved) != nil || saved.SelectedID != capture.capturedSelection() {
 		return common.RouterProfile{}, errors.Join(errDesktopProtectionOffUnsaved, err, errors.New("saved Off did not read back its exact private profile store"))
 	}
 	proved := false
@@ -215,4 +244,47 @@ func (a *app) persistCapturedProtectionOff(ctx context.Context, slot *desktopNod
 		return common.RouterProfile{}, errors.Join(errDesktopProtectionOffUnsaved, err)
 	}
 	return updated, nil
+}
+
+// Startup may find the original accepted profile, or its exact Off result
+// already durably published before the old controller crashed. Read the actual
+// private store before doing either native removal or another save. Preserve
+// the selected node and every unrelated profile/credential reference.
+func (a *app) captureRecoveredOffProfile(slot *desktopNodeProtectionSlot, capture *desktopNodeProtectionOff) error {
+	if capture == nil || !capture.recovered {
+		return errors.New("restart Off has no captured accepted request")
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	profile, exists := a.profileByIDLocked(capture.profileID)
+	if !exists || a.nodeProtection != slot || a.profiles.SelectedID != capture.selectedID || a.cmd != nil || a.state.Connected ||
+		capture.profileWritten.Load() && a.cfg.ProfilesFile != capture.savedPath {
+		return errors.New("recovered Off no longer names its original profile and startup selection")
+	}
+	revision := profileStartupSettingsToken(profile)
+	if revision != capture.profileRevision && revision != capture.resultRevision {
+		return errors.New("recovered Off profile differs from both its accepted original and exact result")
+	}
+	updated, err := profileProtectionOffResult(profile)
+	if err != nil || profileStartupSettingsToken(updated) != capture.resultRevision {
+		return errors.Join(err, errors.New("recovered Off cannot reproduce its accepted result profile"))
+	}
+	want, err := json.MarshalIndent(a.profiles, "", "  ")
+	if err != nil {
+		return err
+	}
+	raw, err := readPrivateRegular(a.cfg.ProfilesFile, maxPrivateStoreBytes)
+	if err != nil || !bytes.Equal(raw, append(want, '\n')) {
+		return errors.Join(err, errors.New("recovered Off did not read back its exact private profile store"))
+	}
+	if revision == capture.resultRevision {
+		if profile.KillSwitchPolicy != "off" || profile.KillSwitch {
+			return errors.New("recovered Off result still enables protection")
+		}
+		capture.savedPath = a.cfg.ProfilesFile
+		capture.profileWritten.Store(true)
+	} else if capture.profileWritten.Load() {
+		return errors.New("recovered Off cannot roll a published result back to its original revision")
+	}
+	return nil
 }

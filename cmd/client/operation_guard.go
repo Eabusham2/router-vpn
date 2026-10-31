@@ -52,7 +52,7 @@ func (a *app) beginProtectionAwareMutationOperation(r *http.Request, allowOffRet
 		return nil, errControllerClosing
 	}
 	if hasInternalMutationContext(r) && !allowOffRetry {
-		if err := a.guardDesktopProtectionOffPending(); err != nil {
+		if err := a.guardDesktopProtectionOffPending(r.Context()); err != nil {
 			return nil, err
 		}
 		return func() {}, nil
@@ -73,7 +73,7 @@ func (a *app) beginProtectionAwareMutationOperation(r *http.Request, allowOffRet
 		return nil, errors.New("disconnect and wait for Router VPN to become fully idle before changing session or profile state")
 	}
 	if !allowOffRetry {
-		if err := a.guardDesktopProtectionOffPending(); err != nil {
+		if err := a.guardDesktopProtectionOffPending(r.Context()); err != nil {
 			a.operationMu.Unlock()
 			return nil, err
 		}
@@ -199,6 +199,7 @@ func (a *app) cancelConnectionOperation() {
 	// begun, closing both sides of the startup-timer race.
 	cancelPendingStartupPolicy(a)
 	cancelViaEntryOperation(a)
+	a.cancelDesktopNodeRecovery()
 	a.mu.Lock()
 	cancel := a.connectionCancel
 	a.mu.Unlock()

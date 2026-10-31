@@ -93,6 +93,26 @@ func (a *app) profileProtectionSettings(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "protection ownership changed or Off is pending; refresh and finish the same change", http.StatusConflict)
 			return
 		}
+		if view.RecoveryPending {
+			ctx, cancel := context.WithTimeout(r.Context(), 25*time.Second)
+			defer cancel()
+			err := a.resumeDesktopNodeStartupRecovery(ctx, capture.slot)
+			a.mu.Lock()
+			latest, exists := a.profileByIDLocked(a.profiles.SelectedID)
+			a.mu.Unlock()
+			if exists {
+				profile = cloneRouterProfile(latest)
+			}
+			value := protectionSettingsWithCapture(profile, a.captureProfileProtection(profile))
+			status := http.StatusConflict
+			if err != nil {
+				status = http.StatusServiceUnavailable
+			} else {
+				value.Message = "Protection recovery finished. Review the refreshed owner before changing its policy."
+			}
+			writeProfileProtectionValue(w, status, value)
+			return
+		}
 	}
 	a.mu.Lock()
 	current, exists := a.profileByIDLocked(profile.ID)
@@ -106,7 +126,11 @@ func (a *app) profileProtectionSettings(w http.ResponseWriter, r *http.Request) 
 		a.mu.Unlock()
 		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 		defer cancel()
-		pending, err := capture.slot.captureOff(ctx, profile.ID, capture.revision, capture.resultRevision, capture.token)
+		pending := capture.slot.pendingOff()
+		var err error
+		if pending == nil || !pending.recovered {
+			pending, err = capture.slot.captureOff(ctx, profile.ID, capture.revision, capture.resultRevision, capture.token)
+		}
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
@@ -130,6 +154,16 @@ func (a *app) profileProtectionSettings(w http.ResponseWriter, r *http.Request) 
 			}
 			writeProfileProtectionValue(w, status, value)
 			return
+		}
+		if pending.recovered {
+			// Completing the old accepted request must not select its node or
+			// present that node's settings as the startup-selected profile.
+			a.mu.Lock()
+			latest, exists := a.profileByIDLocked(a.profiles.SelectedID)
+			a.mu.Unlock()
+			if exists {
+				updated = cloneRouterProfile(latest)
+			}
 		}
 		writeProfileProtectionValue(w, http.StatusOK, protectionSettingsWithCapture(updated, a.captureProfileProtection(updated)))
 		return

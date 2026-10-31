@@ -54,8 +54,9 @@ type app struct {
 	state             state
 	cmd               *exec.Cmd
 	daitaCancel       context.CancelFunc
-	dnsMeasurements   *desktopDNSSlot            // protected by mu; bounded current native DNS operation
-	nodeProtection    *desktopNodeProtectionSlot // protected by mu; exact successor outlives its runtime workspace
+	dnsMeasurements   *desktopDNSSlot               // protected by mu; bounded current native DNS operation
+	nodeProtection    *desktopNodeProtectionSlot    // protected by mu; exact successor outlives its runtime workspace
+	nodeRecovery      *desktopNodeRecoveryOperation // protected by mu; cancellable pre-admission recovery, separate from a connection
 }
 
 func main() {
@@ -199,6 +200,10 @@ func main() {
 		log.Fatal(err)
 	}
 	a.state.RouterID = a.profiles.SelectedID
+	if err := a.initializeDesktopNodeRecovery(); err != nil {
+		a.state.Phase, a.state.LastError = "failed", "Protection recovery is pending: "+err.Error()
+		log.Printf("Router VPN startup protection recovery remains pending: %v", err)
+	}
 
 	h := http.NewServeMux()
 	h.HandleFunc("/", a.index)
