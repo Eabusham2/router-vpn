@@ -83,7 +83,7 @@ class NativePQScope(unittest.TestCase):
     def shipping_predicate(self):
         raw = GATE.prospective_predicate(self.original[GATE.PREDICATE].decode())
         self.original[GATE.PREDICATE] = raw.encode()
-        (self.source / GATE.PREDICATE).write_text(raw)
+        (self.source / GATE.PREDICATE).write_bytes(self.original[GATE.PREDICATE])
         return raw
 
     def test_shipping_execution_keeps_its_predicate_and_only_closed_control_removes_pq(self):
@@ -361,7 +361,7 @@ class NativePQScope(unittest.TestCase):
                     self.assertFalse(closed.exists(), 'closed-admission executable survived into positive compilation')
                 selected = Path(next(value.removeprefix('-overlay=') for value in args if value.startswith('-overlay=')))
                 mapping = json.loads(selected.read_text())['Replace']
-                state['compiled_overlays'][binary.parent.name] = {str(Path(original).relative_to(self.source)): Path(replacement).read_text()
+                state['compiled_overlays'][binary.parent.name] = {Path(original).relative_to(self.source).as_posix(): Path(replacement).read_text()
                                                                 for original, replacement in mapping.items()}
                 binary.write_bytes(('test-only compiled ' + binary.parent.name).encode())
                 if binary.parent.name.endswith('closed-capability'):
