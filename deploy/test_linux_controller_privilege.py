@@ -30,7 +30,8 @@ CASES = ('FixedInstallAndPipeLifetime', 'RejectsUnsafeInstallAndConfig',
          'JournalSurvivesUpgradeWithoutAdoption', 'NodeEngineLauncher')
 PROCESS_CASES = ('Witness', 'CreatedBootstrap', 'RejectsForeignBootstrap', 'RetainsOriginalProcView',
                  'RejectsRetiredAndReexecutedTask', 'RetainsFailedClose', 'RejectsForeignPidFD',
-                 'PreservesBorrowedParent', 'ChannelBoundsAndCancellation', 'InheritedCloseOnExec')
+                 'PreservesBorrowedParent', 'ChannelBoundsAndCancellation', 'InheritedCloseOnExec',
+                 'ChannelPeerClosed', 'AcknowledgedPeerClose')
 
 
 def source_identity():
@@ -127,6 +128,7 @@ def execute(go='go'):
                 'internal/linuxprocess/pidfd_linux.go', 'internal/linuxprocess/bootstrap_linux.go',
                 'internal/linuxprocess/process_linux_native_test.go',
                 'internal/linuxprocess/close_on_exec_linux_test.go', 'internal/linuxprocess/close_on_exec_linux_native_test.go',
+                'internal/linuxprocess/channel_eof_linux_native_test.go',
                 'cmd/client/desktop_node_process_linux.go', 'cmd/client/desktop_node_process_linux_native_test.go',
                 'internal/linuxprotection/command_capture.go', 'internal/linuxprotection/command_capture_test.go'}
     if not required.issubset(before):
@@ -161,6 +163,9 @@ def execute(go='go'):
             'RejectsRetiredAndReexecutedTask': ('retired-task-directory', 'reexecuted-image'),
             'ChannelBoundsAndCancellation': ('wrong-sender', 'extra-descriptor', 'oversize', 'cancelled-receive', 'close-joins-receive'),
             'InheritedCloseOnExec': ('channel', 'directory', 'image', 'still-authenticated'),
+            'ChannelPeerClosed': ('original-peer-eof', 'write-half-close', 'empty-credential-frame', 'empty-rights-frame',
+                                  'disabled-credentials', 'replaced-original', 'replaced-connection', 'changed-creator',
+                                  'cancelled-receive', 'local-close', 'receive-timeout', 'cancelled-completion', 'retired-completion'),
         }
         for group, leaves in process_leaves.items():
             for leaf in leaves:

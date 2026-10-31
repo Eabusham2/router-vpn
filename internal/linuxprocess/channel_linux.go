@@ -5,6 +5,7 @@ package linuxprocess
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"sync"
@@ -14,6 +15,12 @@ import (
 )
 
 const MessageLimit = 16384
+
+// ErrPeerClosed reports only receive-side EOF on the original captured channel.
+// It is not a message from an authenticated PID or proof that a process, engine,
+// guardian or descriptor owner has retired. A protocol may use it after its
+// independently authenticated final acknowledgement, never as that acknowledgement.
+var ErrPeerClosed = errors.New("Linux child original channel reached peer EOF")
 
 // Channel owns the actual inherited SOCK_SEQPACKET connection. Its per-message
 // peer PID is supplied by actual process creation or a retained parent witness;
@@ -162,6 +169,43 @@ func (c *Channel) currentIdentity() (Object, error) {
 	return identity, nil
 }
 
+// receiveIdentity also checks the duplicate used by ReadMsgUnix. SO_PASSCRED is
+// essential: Go reports io.EOF for a zero-byte sequenced packet too, but that
+// packet still carries credentials. The original creator remains a comparison
+// witness only; per-message sender authentication still requires SCM_CREDENTIALS.
+func (c *Channel) receiveIdentity() error {
+	if _, err := c.currentIdentity(); err != nil {
+		return err
+	}
+	raw, err := c.conn.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var nativeErr error
+	err = raw.Control(func(fd uintptr) {
+		var info syscall.Stat_t
+		if err := syscall.Fstat(int(fd), &info); err != nil {
+			nativeErr = err
+			return
+		}
+		identity := Object{Device: uint64(info.Dev), Inode: info.Ino, Mode: info.Mode, UID: info.Uid, GID: info.Gid}
+		if identity != c.identity {
+			nativeErr = errors.New("Linux child receiver lost its original socket duplicate")
+			return
+		}
+		pass, err := syscall.GetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_PASSCRED)
+		if err != nil || pass != 1 {
+			nativeErr = errors.Join(err, errors.New("Linux child receiver lost its native credential delivery"))
+			return
+		}
+		creator, err := syscall.GetsockoptUcred(int(fd), syscall.SOL_SOCKET, syscall.SO_PEERCRED)
+		if err != nil || creator == nil || *creator != c.creator {
+			nativeErr = errors.Join(err, errors.New("Linux child receiver changed its original native creator"))
+		}
+	})
+	return errors.Join(err, nativeErr)
+}
+
 func (c *Channel) enter(ctx context.Context) error {
 	if c == nil || ctx == nil || c.gate == nil {
 		return errors.New("Linux child channel has no captured owner")
@@ -201,12 +245,20 @@ func (c *Channel) operation(ctx context.Context, operation func() error) (failur
 		}
 		// Join the exact cancellation callback before clearing its deadline;
 		// an old operation can never interrupt a replacement operation.
+		var completion error
 		if err := c.conn.SetDeadline(time.Time{}); err != nil && !errors.Is(err, net.ErrClosed) {
-			failure = errors.Join(failure, err)
+			completion = err
 		}
-		failure = errors.Join(failure, ctx.Err())
+		completion = errors.Join(completion, ctx.Err())
 		if c.stopping.Load() {
-			failure = errors.Join(failure, errors.New("Linux child channel retired during its entered operation"))
+			completion = errors.Join(completion, errors.New("Linux child channel retired during its entered operation"))
+		}
+		if failure == ErrPeerClosed && completion != nil {
+			// A caller using errors.Is must not mistake a cancelled operation
+			// or its own Close for the peer's clean receive-side EOF.
+			failure = completion
+		} else {
+			failure = errors.Join(failure, completion)
 		}
 		if failure != nil {
 			c.stopping.Store(true)
@@ -246,6 +298,9 @@ func (c *Channel) Receive(ctx context.Context, expectedPID int, wantFile bool) (
 		return p, errors.New("Linux child receiver requires its actually captured peer PID")
 	}
 	err := c.operation(ctx, func() error {
+		if err := c.receiveIdentity(); err != nil {
+			return err
+		}
 		body := make([]byte, MessageLimit+1)
 		control := make([]byte, syscall.CmsgSpace(syscall.SizeofUcred)+syscall.CmsgSpace(16))
 		n, oob, flags, address, readErr := c.conn.ReadMsgUnix(body, control)
@@ -275,6 +330,13 @@ func (c *Channel) Receive(ctx context.Context, expectedPID int, wantFile bool) (
 			default:
 				ancillaryErr = errors.New("Linux child received an unknown native ancillary object")
 			}
+		}
+		if n == 0 && oob == 0 && parseErr == nil && ancillaryErr == nil && credentials == nil && len(p.files) == 0 &&
+			flags & ^syscall.MSG_CMSG_CLOEXEC == 0 && address == nil && (readErr == nil || errors.Is(readErr, io.EOF)) {
+			if err := c.receiveIdentity(); err != nil {
+				return err
+			}
+			return ErrPeerClosed
 		}
 		if readErr != nil || parseErr != nil || ancillaryErr != nil || n == 0 || n > MessageLimit ||
 			flags & ^syscall.MSG_CMSG_CLOEXEC != 0 || (address != nil && address.Name != "" && address.Name[0] != '@') ||
