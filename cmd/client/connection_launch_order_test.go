@@ -26,12 +26,17 @@ func sourceFunctionForTest(t *testing.T, file, signature string) string {
 
 func assertGuardedProcessStart(t *testing.T, file, signature, startMarker, ownershipMarker string) {
 	t.Helper()
+	assertCapturedGuardedProcessStart(t, file, signature, startMarker, ownershipMarker, "checkConnectionOperation()")
+}
+
+func assertCapturedGuardedProcessStart(t *testing.T, file, signature, startMarker, ownershipMarker, guardMarker string) {
+	t.Helper()
 	fn := sourceFunctionForTest(t, file, signature)
 	start := strings.Index(fn, startMarker)
 	if start < 0 {
 		t.Fatalf("%s %s is missing process start %q", file, signature, startMarker)
 	}
-	if guard := strings.LastIndex(fn[:start], "checkConnectionOperation()"); guard < 0 {
+	if guard := strings.LastIndex(fn[:start], guardMarker); guard < 0 {
 		t.Fatalf("%s %s starts a process without a cancellation check immediately upstream", file, signature)
 	}
 	ownershipRelative := strings.Index(fn[start+len(startMarker):], ownershipMarker)
@@ -39,14 +44,17 @@ func assertGuardedProcessStart(t *testing.T, file, signature, startMarker, owner
 		t.Fatalf("%s %s never publishes ownership marker %q after process start", file, signature, ownershipMarker)
 	}
 	ownership := start + len(startMarker) + ownershipRelative
-	guardAfter := strings.Index(fn[ownership+len(ownershipMarker):], "checkConnectionOperation()")
+	guardAfter := strings.Index(fn[ownership+len(ownershipMarker):], guardMarker)
 	if guardAfter < 0 {
 		t.Fatalf("%s %s publishes process ownership without a post-launch cancellation check", file, signature)
 	}
 }
 
 func TestEveryShippingConnectionStartIsGuardedBeforeAndAfterLaunch(t *testing.T) {
-	assertGuardedProcessStart(t, "main.go", "func (a *app) startModeAttempt", "err = cmd.Start()", "a.cmd = cmd")
+	// Router Node and ordinary starts share the captured request check and
+	// locked publication helper. Re-reading whichever request is current after
+	// a native callback would let an old start adopt a replacement operation.
+	assertCapturedGuardedProcessStart(t, "main.go", "func (a *app) startModeAttempt", "err = cmd.Start()", "a.publishStartedDesktopNode(startupCtx, native, cmd", "checkCapturedConnectionOperation(startupCtx)")
 	assertGuardedProcessStart(t, "standard_exit_platform_routes.go", "func (a *app) platformStandardExitConnect", "if err = cmd.Start(); err != nil", "a.cmd = cmd")
 	assertGuardedProcessStart(t, "multihop_native_routes.go", "func (a *app) nativeMultihopConnect", "if err = cmd.Start(); err != nil", "a.cmd = cmd")
 	assertGuardedProcessStart(t, "multihop.go", "func (a *app) multihopConnect", "if err := cmd.Start(); err != nil", "a.cmd = cmd")

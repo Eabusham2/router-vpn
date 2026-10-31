@@ -45,10 +45,30 @@ require(
 main = require(
     "cmd/client/main.go",
     "beginMutationOperation(r)", "beginConnectionOperation()", "cancelConnectionOperation()",
-    "a.operationMu.Lock()", "checkConnectionOperation()", "a.ownsConnectionRuntime(cmd)",
+    "a.operationMu.Lock()", "checkCapturedConnectionOperation(startupCtx)", "a.ownsConnectionRuntime(cmd)",
+    "publishStartedDesktopNode(startupCtx, native, cmd", "checkDesktopNodeStartupOwnerLocked(startupCtx, native, cmd)",
     "errConnectionOperationCancelled", "connectionOperationContextOrBackground()",
     "oldStore := a.profiles", "a.profiles = oldStore",
     "func (a *app) stopModeWithIntent(holdKillSwitch bool) error", "clearActiveMultihopGraph(a)",
+)
+require(
+    "cmd/client/desktop_node_connection_host.go",
+    "func (a *app) publishStartedDesktopNode", "a.mu.Lock()", "defer a.mu.Unlock()",
+    "a.sameConnectionOperationLocked(operation)", "a.checkCapturedConnectionOperationLocked(operation)",
+    "func (a *app) checkDesktopNodeStartupOwnerLocked", "a.cmd != command", "current != launch",
+)
+require(
+    "cmd/client/desktop_node_connection_host_test.go",
+    "TestDesktopNodePublicConnectRejectsReplacedRequest",
+    "TestDesktopNodePublicConnectCancellationAndProofReplacement",
+    "TestDesktopNodePublicOrdinaryCancellationRetainsCapturedCleanup",
+)
+require(
+    "deploy/test_windows_node_process.py",
+    '"TestDesktopNodePublicConnectRejectsReplacedRequest"',
+    '"TestDesktopNodePublicConnectCancellationAndProofReplacement"',
+    '"TestDesktopNodePublicOrdinaryCancellationRetainsCapturedCleanup"',
+    '"public-node-adopts-replacement-request"', '"cancelled-ordinary-start-loses-cleanup"',
 )
 for handler in ("saveProfile", "selectProfile", "deleteProfile", "importProfileBundle", "options"):
     if f"func (a *app) {handler}" not in main:
