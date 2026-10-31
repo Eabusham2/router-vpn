@@ -4,8 +4,9 @@
 An outer private user/mount/network namespace supplies the inherited
 /run/user/1001 bind mount. The production guardian runner creates its normal
 nested namespaces and real veth/peer setup. Only its Go test executable is
-replaced with a small verdict process so success, failure and signals can be
-checked independently. No host mount, interface, account or firewall is changed.
+replaced with a build-user-owned verdict process so its protected exact copy,
+success, failure and signals can be checked independently. No host mount,
+interface, account or firewall is changed.
 """
 from __future__ import annotations
 
@@ -139,12 +140,19 @@ def cases():
         account_hashes = {name: hashlib.sha256((Path('/etc')/name).read_bytes()).digest()
                           for name in GUARDIAN.ACCOUNT_FILES if (Path('/etc')/name).is_file()}
 
-        def run_case(module, status):
+        def run_case(module, status, digest=None):
             executable = work/('verdict-'+str(status)+'.py')
-            executable.write_text('#!'+sys.executable+'\n' + '''
-import os, pathlib, pwd, secrets, signal, subprocess, sys
+            # CI's selected Python may live under /opt too. The nested runner
+            # deliberately hides that installation with its private image
+            # mount; use the distribution interpreter outside that mount.
+            executable.write_text('#!/usr/bin/python3\n' + '''
+import os, pathlib, pwd, secrets, signal, stat, subprocess, sys
 assert os.environ.get('ROUTERVPN_LINUX_GUARDIAN_TEST_NS') == '1'
 assert os.getppid() == 1, 'the actual runner must own this test process as PID 1'
+image = pathlib.Path(sys.argv[0])
+identity = image.stat()
+assert image.parent == pathlib.Path('/opt/routervpn-guardian-proof'), 'fixture executed the build-user original image'
+assert identity.st_uid == 0 and identity.st_gid == 0 and identity.st_nlink == 1 and stat.S_ISREG(identity.st_mode) and not identity.st_mode & 0o6022, 'fixture image has no protected native ownership'
 assert not pathlib.Path('/run/user/1001').exists(), 'the inherited mount was not hidden by the private /run'
 assert any(line.split()[4] == '/etc' for line in pathlib.Path('/proc/self/mountinfo').read_text().splitlines())
 for path in ('/etc/routervpn-relative-config', '/etc/routervpn-relative.d/release', '/etc/os-release'):
@@ -164,9 +172,19 @@ except KeyError:
 else:
     raise AssertionError('actual NSS retained the retired private account')
 ''' + ("os.kill(os.getpid(), signal.SIGTERM)\n" if status == 143 else 'sys.exit('+str(status)+')\n'))
-            executable.chmod(0o700)
+            executable.chmod(0o755)
+            os.chown(executable, 65534, 65534)
+            original = executable.stat()
+            contents = executable.read_bytes()
+            expected = hashlib.sha256(contents).hexdigest() if digest is None else digest
             print('Guardian nested mount isolation starting test status '+str(status)+'.', flush=True)
-            result = module.namespace_test(executable)
+            result = module.namespace_test(executable, expected_sha256=expected)
+            after = executable.stat()
+            if ((original.st_dev, original.st_ino, original.st_uid, original.st_gid, original.st_mode,
+                 original.st_size, original.st_mtime_ns, original.st_ctime_ns) !=
+                    (after.st_dev, after.st_ino, after.st_uid, after.st_gid, after.st_mode,
+                     after.st_size, after.st_mtime_ns, after.st_ctime_ns) or executable.read_bytes() != contents):
+                raise AssertionError('Private image preparation changed the build-user original')
             unchanged_mount(inherited, sentinel)
             if Path('/proc/self/mountinfo').read_text() != mounts:
                 raise AssertionError('Nested runner changed its parent mount namespace')
@@ -181,6 +199,18 @@ else:
             if actual != status:
                 raise AssertionError('Guardian teardown changed test verdict '+str(status)+' to '+str(actual))
             print('Guardian nested mount isolation preserves test status '+str(status)+'.', flush=True)
+
+        if run_case(GUARDIAN, 0, '0' * 64) != 1:
+            raise AssertionError('Guardian private image accepted a different compiled digest')
+        print('Rejected an incorrect compiled image digest before executing its private copy.', flush=True)
+        original_image = variant('executable = protected_test_image(binary, expected_sha256)', 'executable = binary')
+        if run_case(original_image, 0) != 1:
+            raise AssertionError('Native image regression accepted execution of the unprivileged original')
+        print('Rejected bypass of the protected private image.', flush=True)
+        ignored_digest = variant('hashlib.sha256(executable.read_bytes()).hexdigest() != expected_sha256', 'False')
+        if run_case(ignored_digest, 0, '0' * 64) != 0:
+            raise AssertionError('Native image regression did not expose its disabled digest comparison')
+        print('Rejected suppression of the captured compiled image digest.', flush=True)
 
         old_cleanup = variant(
             "                subprocess.run(['ip', 'netns', 'delete', 'rvpn-peer'], check=True)\n",

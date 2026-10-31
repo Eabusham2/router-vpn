@@ -3,8 +3,8 @@
 
 The build user's selected Go compiler creates the instrumented test executable.
 Root is used only for fresh user/PID/network/mount namespaces with private
-account files, /run, a veth link and a separate peer network namespace. The host
-account database, routes and firewall are never changed. Missing namespace or
+account files, /run, a protected image in /opt, a veth link and a separate peer
+network namespace. The host account database, routes and firewall are never changed. Missing namespace or
 kernel support fails the mandatory gate; no privileged cases are skipped.
 """
 from pathlib import Path
@@ -199,9 +199,43 @@ def namespace_progress(message):
           ' (pid=' + str(os.getpid()) + ', monotonic=' + format(time.monotonic(), '.3f') + ')', flush=True)
 
 
-def namespace_test(binary: Path, case=None) -> int:
+def protected_test_image(binary, expected_sha256):
+    # Compilation belongs to the build user. Native process witnesses must
+    # observe the exact compiled bytes in an actual root-owned image, without
+    # changing that user's original executable or any host installation.
+    directory = Path('/opt/routervpn-guardian-proof')
+    directory.mkdir(mode=0o755)
+    executable = directory/'guardian.test'
+    descriptor = os.open(binary, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    with os.fdopen(descriptor, 'rb') as source, executable.open('xb') as target:
+        before = os.fstat(source.fileno())
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_mode & 0o6022 or
+                not before.st_mode & 0o111 or before.st_size == 0):
+            raise ValueError('Linux guardian fixture lost its original compiled file')
+        shutil.copyfileobj(source, target)
+        target.flush()
+        # The real socket creator drops to its isolated UID before re-exec.
+        # It needs read/execute access, while only root may alter this image.
+        os.fchmod(target.fileno(), 0o755)
+        after = os.fstat(source.fileno())
+    def identity(info):
+        return (info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_uid, info.st_gid,
+                info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+    if identity(before) != identity(after):
+        raise ValueError('Linux guardian fixture source changed during its private copy')
+    info = executable.stat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_uid != 0 or info.st_gid != 0 or
+            info.st_mode & 0o6022 or not info.st_mode & 0o111 or
+            hashlib.sha256(executable.read_bytes()).hexdigest() != expected_sha256):
+        raise ValueError('Linux guardian fixture did not preserve its exact compiled protected image')
+    return executable
+
+
+def namespace_test(binary: Path, case=None, expected_sha256=None) -> int:
     if os.geteuid() != 0 or platform.system() != 'Linux' or not binary.is_absolute() or not binary.is_file():
         raise ValueError('The Linux guardian namespace runner requires its real root-owned invocation')
+    if not isinstance(expected_sha256, str) or re.fullmatch('[0-9a-f]{64}', expected_sha256) is None:
+        raise ValueError('The Linux guardian namespace runner requires its exact compiled executable digest')
     libc = ctypes.CDLL(None, use_errno=True)
     ready_read, ready_write = os.pipe()
     map_read, map_write = os.pipe()
@@ -241,6 +275,9 @@ def namespace_test(binary: Path, case=None) -> int:
                 namespace_progress('bind private account directory')
                 namespace_progress('mount private runtime directory')
                 subprocess.run(['mount', '-t', 'tmpfs', '-o', 'mode=755', 'tmpfs', '/run'], check=True)
+                namespace_progress('capture exact compiled image in private installation directory')
+                subprocess.run(['mount', '-t', 'tmpfs', '-o', 'mode=755', 'tmpfs', '/opt'], check=True)
+                executable = protected_test_image(binary, expected_sha256)
                 for arguments in [
                     ['link', 'set', 'lo', 'up'],
                     ['netns', 'add', 'rvpn-peer'],
@@ -259,7 +296,7 @@ def namespace_test(binary: Path, case=None) -> int:
                 environment = dict(os.environ, ROUTERVPN_LINUX_GUARDIAN_TEST_NS='1')
                 selector = '^TestDesktopLinuxGuardianKernel' + (case + '$' if case else '')
                 namespace_progress('execute owned test process')
-                result = subprocess.run([str(binary), '-test.run=' + selector,
+                result = subprocess.run([str(executable), '-test.run=' + selector,
                                          '-test.count=1', '-test.timeout=120s', '-test.v'],
                                         env=environment, timeout=135).returncode
                 namespace_progress('retire owned peer namespace; test status ' + str(result))
@@ -339,7 +376,8 @@ def execute(source: Path, go='go', *, env=None):
         if any('--- PASS: TestLinuxBaseline' + name + ' (' not in baseline_output for name in BASELINE_CASES) or '--- SKIP:' in baseline_output:
             raise ValueError('Linux baseline receipt gate omitted an owned transaction boundary')
         print(baseline_output, end='' if baseline_output.endswith('\n') else '\n')
-        command = [sys.executable, str(Path(__file__).resolve()), '--namespace-test-binary', str(binary)]
+        command = [sys.executable, str(Path(__file__).resolve()), '--namespace-test-binary', str(binary),
+                   '--namespace-test-sha256', digest]
         if sudo is not None:
             command = [sudo, '-n', '--', *command]
         output = UID.run(command, cwd=source, timeout=150, sudo=sudo)
@@ -508,7 +546,7 @@ def execute_mutations(source: Path, go='go', *, env=None):
             expected_case = 'TestDesktopLinuxGuardianKernel'+case if native else case
             if native:
                 command = [sys.executable, str(Path(__file__).resolve()), '--namespace-test-binary', str(binary),
-                           '--kernel-case', case]
+                           '--namespace-test-sha256', hashlib.sha256(binary.read_bytes()).hexdigest(), '--kernel-case', case]
                 if sudo is not None:
                     command = [sudo, '-n', '--', *command]
             else:
@@ -533,11 +571,12 @@ if __name__ == '__main__':
     parser.add_argument('source', type=Path, nargs='?')
     parser.add_argument('--go', default='go')
     parser.add_argument('--namespace-test-binary', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--namespace-test-sha256', help=argparse.SUPPRESS)
     parser.add_argument('--kernel-case', choices=KERNEL_CASES, help=argparse.SUPPRESS)
     parser.add_argument('--mutations', action='store_true', help='Run temporary production mutation controls against the isolated kernel')
     args = parser.parse_args()
     if args.namespace_test_binary is not None:
-        raise SystemExit(namespace_test(args.namespace_test_binary, args.kernel_case))
+        raise SystemExit(namespace_test(args.namespace_test_binary, args.kernel_case, args.namespace_test_sha256))
     if args.source is None:
         parser.error('the exact prepared native source is required')
     try:

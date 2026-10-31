@@ -38,7 +38,7 @@ SUBCASES = {
 }
 
 
-def namespace_test(binary, case=None):
+def namespace_test(binary, case=None, expected_sha256=None):
     # The outer privileged parent remains alive until namespace_test joins.
     # Capture its actual namespace identity before unshare, without depending
     # on /proc/1 visibility or ptrace permission from a child user namespace.
@@ -47,7 +47,7 @@ def namespace_test(binary, case=None):
     previous = os.environ.get(key)
     os.environ[key] = str(current.st_dev) + ":" + str(current.st_ino)
     try:
-        return GUARD.namespace_test(binary, case)
+        return GUARD.namespace_test(binary, case, expected_sha256)
     finally:
         if previous is None:
             os.environ.pop(key, None)
@@ -109,7 +109,8 @@ def execute(source, go="go", *, env=None):
         if not stat.S_ISREG(identity.st_mode) or identity.st_nlink != 1 or identity.st_mode & 0o022 or identity.st_size == 0:
             raise ValueError("Linux Node lifecycle compiler did not return its owned executable")
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-        command = [sys.executable, str(Path(__file__).resolve()), "--namespace-test-binary", str(binary)]
+        command = [sys.executable, str(Path(__file__).resolve()), "--namespace-test-binary", str(binary),
+                   "--namespace-test-sha256", digest]
         if sudo is not None:
             command = [sudo, "-n", "--", *command]
         output = GUARD.UID.run(command, cwd=source, env=captured, timeout=150, sudo=sudo)
@@ -128,10 +129,11 @@ if __name__ == "__main__":
     parser.add_argument("source", type=Path, nargs="?")
     parser.add_argument("--go", default="go")
     parser.add_argument("--namespace-test-binary", type=Path)
+    parser.add_argument("--namespace-test-sha256")
     parser.add_argument("--kernel-case", choices=CASES)
     args = parser.parse_args()
     if args.namespace_test_binary:
-        raise SystemExit(namespace_test(args.namespace_test_binary, args.kernel_case))
+        raise SystemExit(namespace_test(args.namespace_test_binary, args.kernel_case, args.namespace_test_sha256))
     if args.source is None or args.kernel_case is not None:
         parser.error("an exact prepared source is required; kernel-case is only for the owned namespace invocation")
     execute(args.source, args.go)

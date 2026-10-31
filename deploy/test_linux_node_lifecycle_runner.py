@@ -46,14 +46,16 @@ class LinuxNodeRunner(unittest.TestCase):
                     os.environ.pop(key, None)
                 else:
                     os.environ[key] = previous
-                def enter(binary, case):
+                digest = "a" * 64
+                def enter(binary, case, actual_digest):
                     self.assertEqual(os.environ[key], expected)
                     self.assertEqual(binary, Path("/captured-test-binary"))
                     self.assertEqual(case, "NodeLifecycle")
+                    self.assertEqual(actual_digest, digest)
                     raise RuntimeError("original namespace refusal")
                 with patch.object(RUNNER.GUARD, "namespace_test", side_effect=enter):
                     with self.assertRaisesRegex(RuntimeError, "original namespace refusal"):
-                        RUNNER.namespace_test(Path("/captured-test-binary"), "NodeLifecycle")
+                        RUNNER.namespace_test(Path("/captured-test-binary"), "NodeLifecycle", digest)
                 self.assertEqual(os.environ.get(key), previous)
 
 
