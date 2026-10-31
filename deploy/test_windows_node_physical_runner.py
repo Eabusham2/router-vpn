@@ -41,6 +41,7 @@ class NativeNodeScope(unittest.TestCase):
         old = Path(mapping[str(self.source / "routervpn/mobiletor/desktop_socket_windows_policy.go")]).read_text()
         new = Path(mapping[str(self.source / "routervpn/mobiletor/desktop_socket_windows_transfer.go")]).read_text()
         self.assertIn("return desktopWindowsNodeCompositionConstruct(ctx, capture, options, nil, false)", old)
+        self.assertIn(GATE.LOOPBACK_COMPOSITION, old)
         self.assertIn("return desktopWindowsNodeCompositionConstruct(ctx, capture, options, predecessor, true)", new)
         for relative, raw in self.original.items():
             self.assertEqual((self.source / relative).read_bytes(), raw)
@@ -76,7 +77,7 @@ class NativeNodeScope(unittest.TestCase):
             with self.subTest(name=mutation[0]):
                 selected = GATE.overlay(self.source, self.observer, mutation)
                 mapping = json.loads(selected.read_text())["Replace"]
-                self.assertEqual(len(mapping), 4 if mutation[0] == "ordinary-udp-deny" else 5)
+                self.assertEqual(len(mapping), 4 if mutation[0] in ("ordinary-udp-deny", "missing-loopback-ipc") else 5)
                 self.assertIn("nil, false)", Path(mapping[str(self.source / "routervpn/mobiletor/desktop_socket_windows_policy.go")]).read_text())
                 self.assertIn("predecessor, true)", Path(mapping[str(self.source / "routervpn/mobiletor/desktop_socket_windows_transfer.go")]).read_text())
         forbidden = ("scope-mutation", "routervpn/mobiletor/desktop_socket_windows_policy.go", "test", "witness", "package mobiletor\n")
@@ -85,7 +86,7 @@ class NativeNodeScope(unittest.TestCase):
 
     def test_udp_permit_defect_keeps_scope_and_requires_actual_peer_receipt(self):
         mutations = GATE.mutants(self.source)
-        self.assertEqual([m[0] for m in mutations], ["legacy-adoption", "late-handshake", "ordinary-udp-deny"])
+        self.assertEqual([m[0] for m in mutations], ["legacy-adoption", "late-handshake", "ordinary-udp-deny", "missing-loopback-ipc"])
         mutation = mutations[2]
         self.assertEqual(mutation[2], GATE.REQUIRED[0])
         self.assertEqual(mutation[3], "independent peer marker receipt")
@@ -99,6 +100,39 @@ class NativeNodeScope(unittest.TestCase):
         foreign = (*mutation[:4], mutation[4].replace("options, nil)", "options, untrustedScope)"))
         with self.assertRaisesRegex(ValueError, "overlaps native scope ownership"):
             GATE.overlay(self.source, self.observer, foreign)
+
+    def test_native_ipc_keeps_both_loopback_addresses_and_physical_deny(self):
+        selected = GATE.overlay(self.source, self.observer)
+        mapping = json.loads(selected.read_text())["Replace"]
+        relative = "routervpn/mobiletor/desktop_socket_windows_policy.go"
+        actual = Path(mapping[str(self.source / relative)]).read_text()
+        self.assertEqual(actual.count(GATE.LOOPBACK_COMPOSITION), 1)
+        narrow = GATE.LOOPBACK_COMPOSITION[len(GATE.LOOPBACK_SOURCE):]
+        self.assertIn('desktopWFPAddress(desktopWFPLocalAddress, address)', narrow)
+        self.assertIn('desktopWFPAddress(desktopWFPRemoteAddress, address)', narrow)
+        self.assertIn('netip.IPv6Loopback()', narrow)
+        self.assertIn('netip.MustParseAddr("127.0.0.1")', narrow)
+        self.assertNotIn('desktopWFPFlags', narrow)
+        self.assertIn('p.pair("deny", family, 1, false, true)', actual)
+        self.assertIn('conditions = append(conditions, desktopWFPCondition{Field: desktopWFPAppID', actual)
+        self.assertEqual((self.source / relative).read_bytes(), self.original[relative])
+
+    def test_missing_ipc_control_restores_only_the_old_scoped_fixture(self):
+        mutation = GATE.mutants(self.source)[3]
+        self.assertIn(mutation[2], GATE.REQUIRED)
+        self.assertEqual(mutation[3], 'captured WFP loopback IPC was denied')
+        selected = GATE.overlay(self.source, self.observer, mutation)
+        mapping = json.loads(selected.read_text())["Replace"]
+        actual = Path(mapping[str(self.source / "routervpn/mobiletor/desktop_socket_windows_policy.go")]).read_text()
+        self.assertIn(GATE.LOOPBACK_SOURCE, actual)
+        self.assertNotIn('loopback-ipc', actual)
+        self.assertIn('p.pair("deny", family, 1, false, true)', actual)
+        self.assertIn('return desktopWindowsNodeCompositionConstruct(ctx, capture, options, nil, false)', actual)
+        # An unrelated loopback-source change is rejected before native compile.
+        source = self.source / "routervpn/mobiletor/desktop_socket_windows_policy.go"
+        source.write_bytes(self.original[source.relative_to(self.source).as_posix()].replace(b'"loopback", family, 60', b'"other-loopback", family, 60'))
+        with self.assertRaisesRegex(ValueError, 'exact production boundary'):
+            GATE.overlay(self.source, self.observer)
 
     def test_observer_cannot_drop_its_compile_time_tag(self):
         fixtures = self.workspace / "fixtures"

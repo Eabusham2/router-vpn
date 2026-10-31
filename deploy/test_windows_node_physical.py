@@ -26,7 +26,24 @@ TAGS = (*NODE.TAGS, "routervpn_windows_node_composition")
 REQUIRED = tuple("TestRouterVPNDesktopNodeWindowsWFP" + suffix for suffix in (
     "EncryptedTraffic", "EncryptedSuccession", "RejectsForeignPredecessor", "WrongPeerRejected", "RestorationCapture",
     "LayerTraffic", "LayerSuccession", "LayerWrongCredential", "XrayTraffic", "XraySuccession", "XrayWrongCredential",
-    "NaiveTraffic", "NaiveSuccession", "NaiveWrongCredential", "CompositeTraffic", "CompositeSuccession", "CompositeWrongCredential"))
+    "NaiveTraffic", "NaiveSuccession", "NaiveWrongCredential", "CompositeTraffic", "CompositeSuccession", "CompositeWrongCredential",
+    "LoopbackIPC"))
+IPC_CASES = tuple("TestRouterVPNDesktopNodeWindowsWFPLoopbackIPC/" + network
+                  for network in ("tcp4", "tcp6", "udp4", "udp6"))
+LOOPBACK_SOURCE = '''\t\tif len(p.fixtureScope) == 0 {
+\t\t\trules = append(rules, p.pair("loopback", family, 60, true, true, desktopWFPCondition{Field: desktopWFPFlags, Type: 3, Match: 6, Number: 1})...)
+\t\t}'''
+LOOPBACK_COMPOSITION = LOOPBACK_SOURCE + ''' else {
+\t\t\t// Retain production's internal IPC behavior without exempting the
+\t\t\t// private-interface peer used to model an off-host physical path.
+\t\t\taddress := netip.IPv6Loopback()
+\t\t\tif family == 4 {
+\t\t\t\taddress = netip.MustParseAddr("127.0.0.1")
+\t\t\t}
+\t\t\trules = append(rules, p.pair("loopback-ipc", family, 60, true, true,
+\t\t\t\tdesktopWFPAddress(desktopWFPLocalAddress, address),
+\t\t\t\tdesktopWFPAddress(desktopWFPRemoteAddress, address))...)
+\t\t}'''
 
 
 def checked_sources(source):
@@ -61,12 +78,19 @@ def overlay(source, directory, mutation=None):
         # Only this exact compiled action defect may share the policy overlay.
         # Both constructor replacements are still applied afterward, so the
         # deliberate permit remains confined to the actual test executable.
-        if mutation != mutants(source)[2]:
+        if mutation not in (mutants(source)[2], mutants(source)[3]):
             raise ValueError("Node production mutation overlaps native scope ownership")
         policy_source = mutation[4]
     raw = BOOT.IDENTITY.replace_once(policy_source,
         "return newDesktopWindowsSocketPolicy(ctx, capture, options, nil)",
         "return desktopWindowsNodeCompositionConstruct(ctx, capture, options, nil, false)")
+    # The general WFP unit fixture deliberately removes loopback so its local
+    # peers can test ordinary-token denial. The Node fixture instead uses the
+    # actual private interface for those peers and must retain narrow internal
+    # IPC for Cronet's owned resolver/socket pairs. Never permit all same-host
+    # traffic through WFP's broad IS_LOOPBACK flag in this composition.
+    if mutation is None or mutation[0] != "missing-loopback-ipc":
+        raw = BOOT.IDENTITY.replace_once(raw, LOOPBACK_SOURCE, LOOPBACK_COMPOSITION)
     replace(policy, raw.encode())
     transfer = "routervpn/mobiletor/desktop_socket_windows_transfer.go"
     raw = BOOT.IDENTITY.replace_once((source / transfer).read_text(encoding="utf-8"),
@@ -103,6 +127,10 @@ def mutants(source):
         ("ordinary-udp-deny", policy, REQUIRED[0], "independent peer marker receipt",
          BOOT.IDENTITY.replace_once((source / policy).read_text(encoding="utf-8"),
             'p.pair("deny", family, 1, false, true)', 'p.pair("deny", family, 1, true, true)')),
+        # Recompile the old scoped fixture, preserving both exact constructors
+        # and every physical deny. The real IPC test must reject that omission.
+        ("missing-loopback-ipc", policy, "TestRouterVPNDesktopNodeWindowsWFPLoopbackIPC",
+         "captured WFP loopback IPC was denied", (source / policy).read_text(encoding="utf-8")),
     )
 
 
@@ -146,7 +174,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         status, output = BOOT.IDENTITY.run([binary, "-test.run=^TestRouterVPNDesktopNodeWindowsWFP", "-test.count=1", "-test.timeout=1200s", "-test.v"],
                                            cwd=source, env=captured, timeout=1215)
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
-        if status or any("--- PASS: " + test + " (" not in output for test in REQUIRED) or any(value in output for value in ("--- SKIP:", "DATA RACE")):
+        if status or any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *IPC_CASES)) or any(value in output for value in ("--- SKIP:", "DATA RACE")):
             raise ValueError("Actual WFP encrypted Node omitted a required native proof")
         for mode in ("wg", "awg2-fast", "awg2-strong"):
             if "--- PASS: " + REQUIRED[0] + "/" + mode + " (" not in output:
@@ -204,7 +232,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                                                cwd=source, env=captured, timeout=105)
             if status == 0 or "--- FAIL: " + test + " (" not in output or witness not in output or any(value in output for value in ("--- SKIP:", "DATA RACE", "panic: test timed out")):
                 raise ValueError("WFP Node mutation missed its precise defect: " + name + "\n" + output[-16384:])
-            print("Rejected actual WFP encrypted Node production mutant: " + name, flush=True)
+            print("Rejected actual WFP encrypted Node production/fixture control: " + name, flush=True)
         if relay.is_symlink() or hashlib.sha256(relay.read_bytes()).hexdigest() != relay_digest:
             raise ValueError("Actual WFP whitening reference changed during execution")
         if xray_binary.is_symlink() or hashlib.sha256(xray_binary.read_bytes()).hexdigest() != xray_digest or NODE.xray_reference_sources(xray_source) != xray_records:

@@ -584,6 +584,131 @@ func desktopNodeWFPCleanup(t *testing.T, target *mobiletor.DesktopWindowsProtect
 	})
 }
 
+// Cronet's native resolver uses local socket pairs even when its actual outer
+// transport is held by the captured physical owner. Exercise those ordinary
+// process IPC sockets under the real scoped BFE baseline, while the separate
+// private-interface peer continues to prove that physical bypass is denied.
+func desktopNodeWFPLoopbackExchange(network string) error {
+	host := "127.0.0.1"
+	if strings.HasSuffix(network, "6") {
+		host = "::1"
+	}
+	payload := []byte("router-vpn-captured-loopback-ipc")
+	deadline := time.Now().Add(3 * time.Second)
+	if strings.HasPrefix(network, "tcp") {
+		listener, err := net.ListenTCP(network, &net.TCPAddr{IP: net.ParseIP(host)})
+		if err != nil {
+			return err
+		}
+		defer listener.Close()
+		if err := listener.SetDeadline(deadline); err != nil {
+			return err
+		}
+		client, err := (&net.Dialer{Deadline: deadline}).Dial(network, listener.Addr().String())
+		if err != nil {
+			return err
+		}
+		defer client.Close()
+		server, err := listener.AcceptTCP()
+		if err != nil {
+			return err
+		}
+		defer server.Close()
+		if err := errors.Join(client.SetDeadline(deadline), server.SetDeadline(deadline)); err != nil {
+			return err
+		}
+		if _, err := client.Write(payload); err != nil {
+			return err
+		}
+		buffer := make([]byte, len(payload))
+		if _, err := io.ReadFull(server, buffer); err != nil {
+			return err
+		}
+		if !bytes.Equal(buffer, payload) {
+			return errors.New("loopback TCP peer received another payload")
+		}
+		if _, err := server.Write(buffer); err != nil {
+			return err
+		}
+		if _, err := io.ReadFull(client, buffer); err != nil {
+			return err
+		}
+		if !bytes.Equal(buffer, payload) {
+			return errors.New("loopback TCP reply changed its payload")
+		}
+		return nil
+	}
+	server, err := net.ListenUDP(network, &net.UDPAddr{IP: net.ParseIP(host)})
+	if err != nil {
+		return err
+	}
+	defer server.Close()
+	client, err := net.DialUDP(network, &net.UDPAddr{IP: net.ParseIP(host)}, server.LocalAddr().(*net.UDPAddr))
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	if err := errors.Join(client.SetDeadline(deadline), server.SetDeadline(deadline)); err != nil {
+		return err
+	}
+	if _, err := client.Write(payload); err != nil {
+		return err
+	}
+	buffer := make([]byte, len(payload)+1)
+	n, remote, err := server.ReadFromUDP(buffer)
+	if err != nil {
+		return err
+	}
+	if remote.String() != client.LocalAddr().String() || !bytes.Equal(buffer[:n], payload) {
+		return errors.New("loopback UDP peer received another tuple or payload")
+	}
+	if _, err := server.WriteToUDP(buffer[:n], remote); err != nil {
+		return err
+	}
+	n, err = client.Read(buffer)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(buffer[:n], payload) {
+		return errors.New("loopback UDP reply changed its payload")
+	}
+	return nil
+}
+
+func TestRouterVPNDesktopNodeWindowsWFPLoopbackIPC(t *testing.T) {
+	if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	peer := desktopNodeWFPStartReference(t, "wg")
+	var retained mobiletor.DesktopWindowsProtectionTarget
+	desktopNodeWFPCleanup(t, &retained)
+	f := desktopNodeWFPBox(t, peer.original(t, "always", false), nil)
+	if err := f.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal("actual WFP loopback fixture startup failed", err)
+	}
+	retained = f.prepared
+	desktopNodeWFPRequireBlocked(t, peer)
+	for _, network := range []string{"tcp4", "tcp6", "udp4", "udp6"} {
+		t.Run(network, func(t *testing.T) {
+			if err := desktopNodeWFPLoopbackExchange(network); err != nil {
+				var timeout net.Error
+				if !errors.Is(err, syscall.Errno(10013)) && !(errors.As(err, &timeout) && timeout.Timeout()) {
+					t.Fatal("loopback IPC fixture lost its bounded native socket exchange", network, err)
+				}
+				t.Fatal("captured WFP loopback IPC was denied", network, err)
+			}
+		})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	snapshot, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+	if err != nil || snapshot.Closed || snapshot.Target != retained || snapshot.Owner.Kind != "windows-isolated-token" || !snapshot.Options.RetainBaselineForHandoff {
+		t.Fatal("loopback IPC changed its exact retained native baseline", err)
+	}
+	desktopNodeWFPRequireBlocked(t, peer)
+	retained = desktopNodeWFPDrain(t, f)
+}
+
 func TestRouterVPNDesktopNodeWindowsWFPEncryptedTraffic(t *testing.T) {
 	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		t.Run(mode, func(t *testing.T) {
