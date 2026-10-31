@@ -5,7 +5,7 @@ and preserves the [reconciled requirement authority](REQUIREMENTS-RECONCILED.md)
 The original requirements and later corrections remain binding. Source,
 executable tests, native execution, packages, publication, private deployment
 and physical acceptance are distinct. The source cutoff for this section is
-[`3ec570037fb2268504d625969c868369952b3c73`](https://github.com/Eabusham2/router-vpn/commit/3ec570037fb2268504d625969c868369952b3c73).
+[`b36ddc985bc5b06d735ed0dc40bf5a63c07da87c`](https://github.com/Eabusham2/router-vpn/commit/b36ddc985bc5b06d735ed0dc40bf5a63c07da87c).
 No current all-green release, signing or private deployment is claimed.
 
 ## Verified publications
@@ -15,6 +15,8 @@ No current all-green release, signing or private deployment is claimed.
 | `36259331eb140c0a1de2dff9789efe9af3488985` | [`d58d92082414d300db81d5c308c0b61c3c99dbb6`](https://github.com/Eabusham2/router-vpn/commit/d58d92082414d300db81d5c308c0b61c3c99dbb6) | Record public Windows Node/Naive proofs, native startup outcomes and unchanged drain-diagnostic boundaries. |
 | `cf33702bc8139018f3b13314bfb99dd4cde15eaa` | [`a875d3bef707fccf860e124df34a7d77b82cd146`](https://github.com/Eabusham2/router-vpn/commit/a875d3bef707fccf860e124df34a7d77b82cd146) | Align release checks with captured connection operations and locked runtime-owner publication. |
 | `f0acb5678a0123d136bac3a20bd5a301b9db5962` | [`3ec570037fb2268504d625969c868369952b3c73`](https://github.com/Eabusham2/router-vpn/commit/3ec570037fb2268504d625969c868369952b3c73) | Add the captured Linux Node native lifecycle and mandatory matching-host nft/TUN/DNS gate. |
+| `c76d68245064301df136dc0e03df93fd26202541` | [`655615a25c2a898a15915fa3357b91ee2308d2b1`](https://github.com/Eabusham2/router-vpn/commit/655615a25c2a898a15915fa3357b91ee2308d2b1) | Require the new Linux lifecycle commands and source fingerprints in the six-target native build-sequence test. |
+| `266b66dfeb520dcfa864ec40e1520128f6a66b5b` | [`b36ddc985bc5b06d735ed0dc40bf5a63c07da87c`](https://github.com/Eabusham2/router-vpn/commit/b36ddc985bc5b06d735ed0dc40bf5a63c07da87c) | Keep reused Node library helpers on the verified Go compiler and run Linux CI when this runner changes. |
 
 Each publication used normal `main` ancestry, compared the exact tree and
 parent, guarded the reference update against the previously read head, then
@@ -64,6 +66,53 @@ These elevated native fixtures do not establish interactive UAC, cross-account
 acceptance or real VPN traffic. The separate Shell diagnostic still reports
 its linked-token/GLOBALROOT failures. The new drain phase observer needs its
 own completed native result before any timeout repair can be claimed.
+
+### Completed retained Windows Node execution
+
+The [actual Windows Node job 124429115327](https://github.com/Eabusham2/router-vpn/actions/runs/41164524140/job/124429115327)
+completed successfully at `9f20f6e7`. Its receipt records six native process
+cases, 73 shared ownership cases, 14 command rejection cases, 30 public
+connection/mode/Start Layer cases and all 40 compiled negative controls.
+The captured source set contains 1,210 files, with digest
+`0c30707945c6e0f97c08dbbf549b73c1707b87d727dfa30bde0b2f6340658058`.
+The retained child fixture digest is
+`d6ab64d126bf3a72cb6ab8abbcc67d13a50957d962198761bf30cdae28fa1f53`.
+Actual authenticated package launch and the sing-box dataplane retain their
+separate required composition gates. This result does not establish those
+gates, interactive UAC, other architectures or physical network acceptance.
+
+## Native build sequence and captured compiler
+
+`655615a2` updates the existing six-target executable build-sequence fixture
+to require the published Linux runner and native lifecycle invocation exactly
+once, after the existing guardian gate, with their original deadlines,
+environment and source fingerprints. All six targets passed in 14.884 seconds.
+Four deliberately removed behaviors were rejected: each execution and each
+source fingerprint. Shipping gate behavior and timeout values are unchanged.
+
+Both Linux runtime jobs at [`a875d3be`, run 41165935960](https://github.com/Eabusham2/router-vpn/actions/runs/41165935960)
+then exposed a distinct compiler handoff error. The Node runner selected Go
+1.26.3 and set `GOTOOLCHAIN=local`, but the reused Naive library metadata helper
+invoked `go` from the old ambient `PATH`. That executable was Go 1.24.13 and
+could not load the native source's Go 1.26 module. These logs did not show a
+missing Cronet library or a TUN result.
+
+`b36ddc98` prepends the verified compiler directory to the captured child
+environment while preserving the remaining executable path. Windows `Path`
+casing is normalized; ambiguous duplicate path keys are rejected. The caller's
+environment is unchanged. A real compiler builds an ambient executable decoy;
+the unchanged packaging metadata helper then reads a private checksum-bearing
+module through the selected compiler. Removing the production PATH fix makes
+that same test execute the decoy and fail with exit 97. Both regression groups
+pass, including Windows key casing and ambiguity.
+
+The actual packaging helpers also staged and reverified the pinned Linux
+Naive library from a minimal Go 1.26 module carrying its original checksum:
+revision `v0.0.0-20260912104006-c10c03c318db`, 11,915,768 bytes, SHA-256
+`23109c55b08829bb1a68682a61a64852b1bbf243753b153cbd8f6e4ea2c05294`.
+This verifies compiler selection and library staging. It does not replace the
+new exact-SHA native engine, TUN or release workflow results, which were still
+pending when this section was recorded.
 
 ## Linux Node native admission and retirement
 

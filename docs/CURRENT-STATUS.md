@@ -6,10 +6,10 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 3ec57003
+## Latest implementation continuation — through b36ddc98
 
 The verified source cutoff is
-[`3ec570037fb2268504d625969c868369952b3c73`](https://github.com/Eabusham2/router-vpn/commit/3ec570037fb2268504d625969c868369952b3c73).
+[`b36ddc985bc5b06d735ed0dc40bf5a63c07da87c`](https://github.com/Eabusham2/router-vpn/commit/b36ddc985bc5b06d735ed0dc40bf5a63c07da87c).
 The [October 31 UTC evidence](CONTINUATION-EVIDENCE-2026-10-31.md) records exact
 source identities, test receipts and remaining acceptance boundaries.
 
@@ -31,6 +31,16 @@ source identities, test receipts and remaining acceptance boundaries.
   installed 13.48 seconds, Portable 9.46 seconds and outer Portable 9.29 seconds,
   with the complete native/protected/control matrix. Actual interactive UAC,
   the drain-wrapper diagnosis and full native dataplane acceptance are separate.
+- The actual Windows Node job at that same SHA subsequently passed six native
+  process cases, 73 shared ownership cases, 14 command rejection cases, thirty
+  public mode/layer cases and all forty compiled negative controls. Its receipt
+  keeps authenticated package launch and full native dataplane gates separate.
+- The six-target build-sequence fixture now requires the Linux lifecycle
+  commands and fingerprints (`655615a2`); all targets and four omission controls
+  passed. The next Linux run identified an older ambient Go compiler in a
+  reused library helper. `b36ddc98` preserves the verified compiler through
+  that helper's PATH lookup. Real executable selection, the missing-fix control
+  and actual pinned Naive library staging passed; fresh native CI is pending.
 
 Composite and PQ graph work is still being validated. The original full scope,
 macOS inventory boundary, current-SHA release convergence, signing, physical
