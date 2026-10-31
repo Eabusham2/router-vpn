@@ -1173,12 +1173,19 @@ func TestRouterVPNDesktopNodeWindowsPQCredentials(t *testing.T) {
 						}
 					} else {
 						done := make(chan error, 1)
+						started := time.Now()
 						go func() { done <- f.box.RouterVPNStrategyStart() }()
 						completed := false
-						for deadline := time.Now().Add(2 * time.Second); ; {
+						var startupErr error
+						// This includes the real Windows deny baseline, captured
+						// handoff and socket activation, just as f.start does.
+						// Use its existing 12-second startup bound; only the
+						// retained peer's actual rejection can satisfy this case.
+						for deadline := started.Add(12 * time.Second); ; {
 							select {
 							case err := <-done:
 								completed = true
+								startupErr = err
 								if err == nil {
 									t.Fatal("actual WFP PQ accepted untrusted KEM or Start Layer credentials")
 								}
@@ -1190,15 +1197,16 @@ func TestRouterVPNDesktopNodeWindowsPQCredentials(t *testing.T) {
 								break
 							}
 							if completed || time.Now().After(deadline) {
+								elapsed, socketCurrent := time.Since(started), f.network.SocketCurrent()
 								f.network.Cancel()
 								if !completed {
 									select {
-									case <-done:
+									case startupErr = <-done:
 									case <-time.After(time.Second):
 										t.Error("failed PQ credential startup did not join")
 									}
 								}
-								t.Fatal("actual WFP PQ credential negative never reached native authenticated rejection")
+								t.Fatalf("actual WFP PQ credential negative never reached native authenticated rejection: elapsed=%s completed_before_cancel=%t startup_error=%v socket_current=%t kem_received=%d kem_rejected=%d layer_raw=%d layer_rejected=%d packet_updates=%d packets=%d queries=%d", elapsed, completed, startupErr, socketCurrent, observed.KEMReceived, observed.KEMRejected, observed.LayerRaw, observed.LayerRejected, observed.Updates, observed.Packets, observed.Queries)
 							}
 							time.Sleep(time.Millisecond)
 						}
@@ -1206,6 +1214,7 @@ func TestRouterVPNDesktopNodeWindowsPQCredentials(t *testing.T) {
 						if f.endpoint.owner.Ready() || f.endpoint.owner.TransportReady() || observed.Updates != 0 || observed.Packets != 0 || observed.Queries != 0 {
 							t.Fatal("untrusted native PQ gained packet or DNS readiness")
 						}
+						t.Logf("captured native credential rejection: fault=%s elapsed=%s kem_received=%d kem_rejected=%d layer_raw=%d layer_rejected=%d", fault, time.Since(started), observed.KEMReceived, observed.KEMRejected, observed.LayerRaw, observed.LayerRejected)
 						f.network.Cancel()
 						if !completed {
 							select {
