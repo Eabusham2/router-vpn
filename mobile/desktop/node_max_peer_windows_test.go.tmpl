@@ -33,7 +33,9 @@ import (
 	XR "github.com/sagernet/sing-box/protocol/routervpnxray"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-shadowsocks/shadowaead"
 	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	"github.com/sagernet/sing/common/buf"
 	M "github.com/sagernet/sing/common/metadata"
 )
 
@@ -1223,6 +1225,7 @@ func TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor(t *testing.T) {
 
 func TestRouterVPNDesktopNodeWindowsMAXMarkers(t *testing.T) {
 	t.Run("marker-and-authentication", nodeMAXWFPMarkerAuthentication)
+	t.Run("packet-authentication", nodeMAXWFPSSPacketAuthentication)
 	t.Run("bounded-input", func(t *testing.T) {
 		for _, value := range []string{"short\n", strings.Repeat("x", 8192) + "\n"} {
 			got, err := nodeMAXWFPReadLine(bufio.NewReaderSize(strings.NewReader(value), 32), len(value))
@@ -1393,6 +1396,27 @@ func nodeMAXWFPMarkerAuthentication(t *testing.T) {
 	if clientErr != nil || !errors.Is(serverErr, io.EOF) || countErr != nil || count != 1 || owner.raw.Load() != 0 || owner.rejected.Load() != 0 {
 		t.Fatal("MAX armed marker EOF counted as a credential rejection", serverErr, clientErr, countErr, "raw", owner.raw.Load(), "rejected", owner.rejected.Load())
 	}
+	serverErr, clientErr = run(func(connection net.Conn) error {
+		_, err := connection.Write([]byte{0x16})
+		return err
+	})
+	if clientErr != nil || !errors.Is(serverErr, shadowaead.ErrBadHeader) || owner.raw.Load() == 0 || owner.rejected.Load() != 0 {
+		t.Fatal("MAX truncated TCP header counted as a credential rejection", serverErr, clientErr, "raw", owner.raw.Load(), "rejected", owner.rejected.Load())
+	}
+	valid, err := shadowaead_2022.NewWithPassword(mobilemultihop.NativeStartLayerMethod, password, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverErr, clientErr = run(func(connection net.Conn) error {
+		encrypted, err := valid.DialConn(connection, M.ParseSocksaddr("192.0.2.99:9999"))
+		if encrypted != nil {
+			_ = encrypted.Close()
+		}
+		return err
+	})
+	if clientErr != nil || serverErr == nil || !strings.Contains(serverErr.Error(), "PQ layer has no captured TCP forwarding destination") || owner.rejected.Load() != 0 {
+		t.Fatal("MAX authenticated forwarding error counted as a credential rejection", serverErr, clientErr, "rejected", owner.rejected.Load())
+	}
 	wrong := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x24}, 32))
 	method, err := shadowaead_2022.NewWithPassword(mobilemultihop.NativeStartLayerMethod, wrong, nil)
 	if err != nil {
@@ -1407,5 +1431,77 @@ func nodeMAXWFPMarkerAuthentication(t *testing.T) {
 	})
 	if serverErr == nil || !strings.Contains(serverErr.Error(), "cipher: message authentication failed") || owner.raw.Load() == 0 || owner.rejected.Load() != 1 {
 		t.Fatal("MAX actual AES key rejection has no authenticated ciphertext witness", serverErr, clientErr, "raw", owner.raw.Load(), "rejected", owner.rejected.Load())
+	}
+	if nodeMAXSSAuthenticationFailure(serverErr) || nodeMAXSSAuthenticationFailure(errors.Join(errors.Unwrap(serverErr))) {
+		t.Fatal("MAX wrapped authentication error replaced the direct cipher cause")
+	}
+}
+
+func nodeMAXWFPSSPacketAuthentication(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	owner := &nodePQLayer{ctx: ctx, cancel: cancel, owned: make(map[io.Closer]bool)}
+	password := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
+	service, err := shadowaead_2022.NewServiceWithPassword(mobilemultihop.NativeStartLayerMethod, password, 10, owner, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encode := func(password string, now func() time.Time) []byte {
+		method, err := shadowaead_2022.NewWithPassword(mobilemultihop.NativeStartLayerMethod, password, now)
+		if err != nil {
+			t.Fatal(err)
+		}
+		left, right := net.Pipe()
+		defer left.Close()
+		defer right.Close()
+		deadline := time.Now().Add(2 * time.Second)
+		if err := errors.Join(left.SetDeadline(deadline), right.SetDeadline(deadline)); err != nil {
+			t.Fatal(err)
+		}
+		writer := method.DialPacketConn(right)
+		done := make(chan error, 1)
+		go func() {
+			_, err := writer.WriteTo([]byte(nodePQPayload), &net.UDPAddr{IP: net.IPv4(192, 0, 2, 99), Port: 9999})
+			_ = writer.Close()
+			done <- err
+		}()
+		body := make([]byte, 65535)
+		n, readErr := left.Read(body)
+		_ = left.Close()
+		_ = right.Close()
+		select {
+		case writeErr := <-done:
+			if readErr != nil || writeErr != nil || n < shadowaead_2022.PacketMinimalHeaderSize {
+				t.Fatal("MAX packet credential fixture lost its actual ciphertext", readErr, writeErr, n)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("MAX packet credential encoder did not join")
+		}
+		return body[:n]
+	}
+	source := M.ParseSocksaddr("192.0.2.10:4444")
+	check := func(body []byte) error {
+		packet := buf.NewSize(len(body))
+		if _, err := packet.Write(body); err != nil {
+			packet.Release()
+			t.Fatal(err)
+		}
+		// These inputs all fail before a packet writer or forwarding owner can
+		// be used. Passing nil makes an accidental acceptance fail immediately.
+		err := nodeMAXSSPacket(owner, service, nil, packet, source)
+		packet.Release()
+		return err
+	}
+	if err := check([]byte{0x16}); !errors.Is(err, shadowaead_2022.ErrPacketTooShort) || owner.rejected.Load() != 0 {
+		t.Fatal("MAX truncated UDP packet counted as a credential rejection", err, "rejected", owner.rejected.Load())
+	}
+	stale := encode(password, func() time.Time { return time.Now().Add(-time.Minute) })
+	if err := check(stale); !errors.Is(err, shadowaead_2022.ErrBadTimestamp) || owner.rejected.Load() != 0 {
+		t.Fatal("MAX authenticated stale UDP packet counted as a credential rejection", err, "rejected", owner.rejected.Load())
+	}
+	wrong := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x24}, 32))
+	if err := check(encode(wrong, nil)); err == nil || !strings.Contains(err.Error(), "decrypt packet: cipher: message authentication failed") || owner.rejected.Load() != 1 {
+		t.Fatal("MAX actual UDP AES key rejection has no authenticated ciphertext witness", err, "rejected", owner.rejected.Load())
 	}
 }

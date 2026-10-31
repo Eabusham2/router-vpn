@@ -234,15 +234,16 @@ class MAXNativeBoundaries(unittest.TestCase):
 
     def test_marker_prerequisite_requires_actual_authentication_boundary(self):
         self.assertEqual(GATE.MARKER_CASES, ('bounded-input', 'unarmed-and-wrong-owner', 'encrypted-fragments',
-                                           'exact-armed-stream', 'marker-and-authentication'))
+                                           'exact-armed-stream', 'marker-and-authentication', 'packet-authentication'))
         complete = '\n'.join('--- PASS: ' + value + ' (0.01s)' for value in
                              (GATE.MARKERS, *(GATE.MARKERS + '/' + case for case in GATE.MARKER_CASES))) + '\nPASS\n'
         GATE.MAX.required_output(0, complete, GATE.MARKERS, GATE.MARKER_CASES)
-        marker = '--- PASS: ' + GATE.MARKERS + '/marker-and-authentication (0.01s)'
-        for status, output in ((0, complete.replace(marker, '')), (1, complete.replace(marker, marker.replace('PASS', 'FAIL'))),
-                               (0, complete.replace(marker, 'fixture.go:1: ' + marker)), (0, complete + marker + '\n')):
-            with self.assertRaises(ValueError):
-                GATE.MAX.required_output(status, output, GATE.MARKERS, GATE.MARKER_CASES)
+        for case in ('marker-and-authentication', 'packet-authentication'):
+            marker = '--- PASS: ' + GATE.MARKERS + '/' + case + ' (0.01s)'
+            for status, output in ((0, complete.replace(marker, '')), (1, complete.replace(marker, marker.replace('PASS', 'FAIL'))),
+                                   (0, complete.replace(marker, 'fixture.go:1: ' + marker)), (0, complete + marker + '\n')):
+                with self.subTest(case=case), self.assertRaises(ValueError):
+                    GATE.MAX.required_output(status, output, GATE.MARKERS, GATE.MARKER_CASES)
 
     def test_compiled_control_requires_exact_failure_and_acknowledged_cleanup(self):
         parent, case, witness = 'TestMAX', 'max-tls-wg/aes-256-gcm+xor-whitening/middle-key', 'actual intended defect'
