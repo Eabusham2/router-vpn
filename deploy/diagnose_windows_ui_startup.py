@@ -38,7 +38,7 @@ def lookup_observers():
     # Observe the original Add-Type lookup; do not pre-load or resolve it.
     # https://learn.microsoft.com/dotnet/api/system.management.automation.commandinvocationintrinsics.precommandlookupaction
     # https://learn.microsoft.com/dotnet/api/system.management.automation.commandinvocationintrinsics.postcommandlookupaction
-    before = """    $RouterVPNDiagnosticInvocation=$null
+    before = r"""    $RouterVPNDiagnosticInvocation=$null
     $RouterVPNDiagnosticCaptured=$false
     try{
         $RouterVPNDiagnosticInvocation=$ExecutionContext.InvokeCommand
@@ -48,13 +48,13 @@ def lookup_observers():
         $RouterVPNDiagnosticCaptured=$true
         $RouterVPNDiagnosticInvocation.PreCommandLookupAction=[System.EventHandler[System.Management.Automation.CommandLookupEventArgs]]{
             param($Sender,$Lookup)
-            try{if($Sender-ceq'Add-Type'){
+            try{if($Sender-ceq'Add-Type'-or$Sender-ceq'Microsoft.PowerShell.Utility\Add-Type'){
                 PRE_MARKER
             }}catch{}
         }
         $RouterVPNDiagnosticInvocation.PostCommandLookupAction=[System.EventHandler[System.Management.Automation.CommandLookupEventArgs]]{
             param($Sender,$Lookup)
-            try{if($Sender-ceq'Add-Type'){
+            try{if($Sender-ceq'Add-Type'-or$Sender-ceq'Microsoft.PowerShell.Utility\Add-Type'){
                 POST_MARKER
             }}catch{}
         }
@@ -97,7 +97,7 @@ def instrumented_scripts():
     source = NATIVE.replace_once(source, "Set-StrictMode -Version 2", marker("module-entered") + "\nSet-StrictMode -Version 2")
     boundaries = (
         ("    param([string]$ControllerPipe,[long]$ControllerParentHandle)", "initialize-entered", False),
-        ("    Add-Type -AssemblyName System.Net.Http", "framework-http", True),
+        ("    Microsoft.PowerShell.Utility\\Add-Type -AssemblyName System.Net.Http", "framework-http", True),
         ("        Add-Type @Compile", "transport-compile", True),
         ("    $script:ControllerChannel=[RouterVPN.ControllerUI.ControllerChannel]::ConnectAsync($ControllerPipe,$ControllerParentHandle,10000,[Threading.CancellationToken]::None).GetAwaiter().GetResult()", "pipe-connect", True),
     )

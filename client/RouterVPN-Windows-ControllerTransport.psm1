@@ -20,7 +20,9 @@ function Initialize-RouterVPNControllerTransport {
     $script:ControllerMode='failed'
     if(-not$PSBoundParameters.ContainsKey('ControllerPipe')-or-not$PSBoundParameters.ContainsKey('ControllerParentHandle')-or
        [string]::IsNullOrEmpty($ControllerPipe)-or$ControllerParentHandle-le0){throw 'The complete captured native controller handoff is required.'}
-    Add-Type -AssemblyName System.Net.Http
+    # Resolve the known system cmdlet directly. Unqualified cold discovery can
+    # analyze every installed module before the captured pipe is authenticated.
+    Microsoft.PowerShell.Utility\Add-Type -AssemblyName System.Net.Http
     if(-not('RouterVPN.ControllerUI.ControllerChannel'-as[type])){
         $Source=[IO.Path]::Combine($PSScriptRoot,'RouterVPN-Windows-ControllerTransport.cs')
         $Code=[IO.File]::ReadAllText($Source,[Text.Encoding]::UTF8)

@@ -44,7 +44,7 @@ class FirstLaunchDiagnostic(unittest.TestCase):
 
     def test_lookup_observers_only_observe_the_fixed_command(self):
         before, after = DIAGNOSTIC.lookup_observers()
-        self.assertEqual(2, before.count("if($Sender-ceq'Add-Type')"))
+        self.assertEqual(2, before.count("if($Sender-ceq'Add-Type'-or$Sender-ceq'Microsoft.PowerShell.Utility\\Add-Type')"))
         for forbidden in ('Get-Command', 'Import-Module', 'Add-Type -', '$Lookup.Command=', '$Lookup.StopSearch='):
             self.assertNotIn(forbidden, before + after)
         self.assertIn('if($RouterVPNDiagnosticCaptured)', after)
@@ -90,7 +90,7 @@ try{
     $Actual.PreCommandLookupAction=$null
     $Actual.PostCommandLookupAction=$null
     $Original=[InvalidOperationException]::new('original execution failure')
-    $Value=Invoke-ObservedBody $Actual {Add-Type -AssemblyName System.Net.Http;'original result'}
+    $Value=Invoke-ObservedBody $Actual {Microsoft.PowerShell.Utility\Add-Type -AssemblyName System.Net.Http;'original result'}
     Assert-Probe ($Value-ceq'original result') 'observer changed successful execution'
     Assert-Probe ($null-eq$Actual.PreCommandLookupAction-and$null-eq$Actual.PostCommandLookupAction) 'observer retained a hook after success'
     try{Invoke-ObservedBody $Actual {throw $Original};throw 'accepted failed execution'}catch{Assert-Probe ([Object]::ReferenceEquals($_.Exception,$Original)) 'observer replaced original failure'}
@@ -145,10 +145,65 @@ try{
     print(completed.stdout.strip())
 
 
+def execute_utility_binding_probe(powershell):
+    """Execute the actual initializer command without unqualified discovery."""
+    probe = r"""
+param([string]$Source)
+$ErrorActionPreference='Stop'
+Set-StrictMode -Version 2
+if(Get-Module -Name Microsoft.PowerShell.Utility){throw 'utility binding probe was already initialized'}
+if($PSVersionTable.PSEdition-eq'Desktop'){
+    $env:PSModulePath=[IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::System),'WindowsPowerShell','v1.0','Modules')
+}else{$env:PSModulePath=[IO.Path]::Combine($PSHOME,'Modules')}
+$Tokens=$null;$Errors=$null
+$Ast=[System.Management.Automation.Language.Parser]::ParseInput([IO.File]::ReadAllText($Source),[ref]$Tokens,[ref]$Errors)
+if($Errors.Count-ne0){throw 'actual controller module did not parse'}
+$Initialize=$Ast.Find({param($Node)$Node-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$Node.Name-ceq'Initialize-RouterVPNControllerTransport'},$false)
+if($null-eq$Initialize){throw 'actual controller initializer is missing'}
+$Calls=@($Initialize.Body.FindAll({param($Node)$Node-is[System.Management.Automation.Language.CommandAst]-and$Node.GetCommandName()-cmatch'(^|\\)Add-Type$'},$false))
+if($Calls.Count-ne2){throw 'actual initializer assembly/compile commands changed'}
+$PSModuleAutoLoadingPreference='ModuleQualified'
+try{& ([ScriptBlock]::Create($Calls[0].Extent.Text))}catch [System.Management.Automation.CommandNotFoundException]{throw 'initializer requires unqualified module discovery'}
+if($null-eq('System.Net.Http.HttpClient'-as[type])){throw 'actual initializer failed to load its HTTP assembly'}
+$Command=$ExecutionContext.InvokeCommand.GetCommand('Microsoft.PowerShell.Utility\Add-Type',[System.Management.Automation.CommandTypes]::Cmdlet)
+$Ordinary=$ExecutionContext.InvokeCommand.GetCommand('Add-Type',[System.Management.Automation.CommandTypes]::Cmdlet)
+if($null-eq$Command-or$Command.ModuleName-cne'Microsoft.PowerShell.Utility'-or$Command.ImplementingType.FullName-cne'Microsoft.PowerShell.Commands.AddTypeCommand'-or
+   $null-eq$Ordinary-or-not[Object]::ReferenceEquals($Command.ImplementingType,$Ordinary.ImplementingType)){throw 'initializer resolved a different framework cmdlet'}
+[Console]::WriteLine('PASS actual initializer binds the same system Add-Type without unqualified discovery')
+"""
+    source = (ROOT/'client/RouterVPN-Windows-ControllerTransport.psm1').read_bytes()
+    qualified = b'    Microsoft.PowerShell.Utility\\Add-Type -AssemblyName System.Net.Http'
+    if source.count(qualified) != 1:
+        raise AssertionError('Actual initializer lost its exact qualified command')
+    with tempfile.TemporaryDirectory(prefix='routervpn-utility-binding-probe-') as temporary:
+        root = Path(temporary)
+        script = root/'probe.ps1'
+        script.write_text(probe, encoding='utf-8')
+        environment = dict(os.environ)
+        if sys.platform != 'win32':
+            environment.update(XDG_CACHE_HOME=str(root/'cache'), XDG_CONFIG_HOME=str(root/'config'),
+                               XDG_DATA_HOME=str(root/'data'))
+        for name, body in (('actual', source), ('unqualified', source.replace(qualified, b'    Add-Type -AssemblyName System.Net.Http', 1))):
+            candidate = root/(name+'.psm1')
+            candidate.write_bytes(body)
+            completed = subprocess.run([str(powershell), '-NoProfile', '-NonInteractive', '-File', str(script), str(candidate)],
+                                       capture_output=True, text=True, env=environment, timeout=45)
+            output = completed.stdout + completed.stderr
+            if name == 'actual':
+                if completed.returncode or 'PASS actual initializer binds the same system Add-Type without unqualified discovery' not in output:
+                    raise AssertionError('Actual framework binding failed:\n'+output[-8192:])
+                print(completed.stdout.strip())
+            elif completed.returncode == 0 or 'initializer requires unqualified module discovery' not in output:
+                raise AssertionError('Unqualified initializer missed its exact rejection:\n'+output[-8192:])
+            else:
+                print('Rejected actual initializer dependence on unqualified module discovery')
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--powershell', type=Path)
     arguments, test_arguments = parser.parse_known_args()
     if arguments.powershell is not None:
         execute_hook_probe(arguments.powershell)
+        execute_utility_binding_probe(arguments.powershell)
     unittest.main(argv=[__file__, *test_arguments])
