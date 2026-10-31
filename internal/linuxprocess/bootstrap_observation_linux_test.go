@@ -4,6 +4,7 @@ package linuxprocess
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -15,6 +16,9 @@ func TestBootstrapObservationsRejectIncompleteOrCancelledOwner(t *testing.T) {
 			parent, child, err := owner.Observations(ctx)
 			if err == nil || parent != (Observation{}) || child != (Observation{}) {
 				t.Fatal("incomplete or cancelled bootstrap exposed cached process authority", err)
+			}
+			if err := owner.CheckCapture(ctx, strings.Repeat("a", 64)); err == nil {
+				t.Fatal("incomplete or cancelled bootstrap admitted a captured request")
 			}
 		}
 	}

@@ -330,6 +330,20 @@ func (b *Bootstrap) Observations(ctx context.Context) (Observation, Observation,
 	return b.parentRecord, b.childRecord, nil
 }
 
+// CheckCapture joins the caller's expected request identity with this exact
+// authenticated native handshake. A live bootstrap for another request cannot
+// supply authority merely because its parent and child are still running.
+func (b *Bootstrap) CheckCapture(ctx context.Context, expected string) error {
+	if err := b.enter(ctx); err != nil {
+		return err
+	}
+	defer func() { b.gate <- struct{}{} }()
+	if !digest(expected) || expected != b.captureSHA256 {
+		return errors.New("Linux child bootstrap belongs to another captured request")
+	}
+	return b.current(ctx)
+}
+
 // Send and Receive preserve the original process proof around each real native
 // frame. Their bytes are still only a transport: native admission and durable
 // settlement require the caller's independent exact captured policy checks.

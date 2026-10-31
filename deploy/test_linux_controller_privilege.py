@@ -27,7 +27,7 @@ CASES = ('FixedInstallAndPipeLifetime', 'RejectsUnsafeInstallAndConfig',
          'RejectsForeignIdentityAndInput', 'HonorsInstallAndProcessLocks', 'RequiresBoundedHandshake',
          'RejectsUnownedInstalledMainPreservesUtilities', 'NodeParentRetainsExactObjects', 'NodeParentLifetimeAndRestart',
          'JournalRetainsNativeFiles', 'JournalRequiresActualAbsence', 'JournalRetainsFailedRetirement',
-         'JournalSurvivesUpgradeWithoutAdoption')
+         'JournalSurvivesUpgradeWithoutAdoption', 'NodeEngineLauncher')
 PROCESS_CASES = ('Witness', 'CreatedBootstrap', 'RejectsForeignBootstrap', 'RetainsOriginalProcView',
                  'RejectsRetiredAndReexecutedTask', 'RetainsFailedClose', 'RejectsForeignPidFD',
                  'PreservesBorrowedParent', 'ChannelBoundsAndCancellation')
@@ -125,7 +125,9 @@ def execute(go='go'):
                 'internal/linuxprocess/record.go', 'internal/linuxprocess/process_linux.go',
                 'internal/linuxprocess/abi_linux.go', 'internal/linuxprocess/channel_linux.go',
                 'internal/linuxprocess/pidfd_linux.go', 'internal/linuxprocess/bootstrap_linux.go',
-                'internal/linuxprocess/process_linux_native_test.go'}
+                'internal/linuxprocess/process_linux_native_test.go',
+                'cmd/client/desktop_node_process_linux.go', 'cmd/client/desktop_node_process_linux_native_test.go',
+                'internal/linuxprotection/command_capture.go', 'internal/linuxprotection/command_capture_test.go'}
     if not required.issubset(before):
         raise ValueError('The actual controller privilege source/test closure is incomplete')
     env = dict(os.environ, GOWORK='off')
@@ -198,6 +200,10 @@ def execute(go='go'):
         for case in ('restart', 'new-package-inodes'):
             if '--- PASS: TestLinuxOwnedControllerNamespaceJournalSurvivesUpgradeWithoutAdoption/'+case+' (' not in output:
                 raise ValueError('Linux journal omitted its stable inode/explicit creator recovery boundary: '+case)
+        for case in ('live', 'engine-exit', 'parent-retirement', 'image-replacement', 'workspace-replacement',
+                     'wrong-capture', 'cancelled', 'wrong-verifier'):
+            if '--- PASS: TestLinuxOwnedControllerNamespaceNodeEngineLauncher/'+case+' (' not in output:
+                raise ValueError('Linux engine launcher omitted its actual captured process boundary: '+case)
         after = binary.stat()
         if (after.st_dev, after.st_ino, after.st_size) != (info.st_dev, info.st_ino, info.st_size) or hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError('The actual controller test executable changed during verification')

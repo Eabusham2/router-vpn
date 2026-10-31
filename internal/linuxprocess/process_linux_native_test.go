@@ -315,6 +315,14 @@ func TestLinuxProcessNamespaceCreatedBootstrap(t *testing.T) {
 	if err != nil || parent != child.observation || created != child.bootstrap.childRecord || created.ProcessID != child.command.Process.Pid {
 		t.Fatal("authenticated observations lost their actual created parent or child", err)
 	}
+	if err := child.bootstrap.CheckCapture(ctx, processFixtureCapture); err != nil {
+		t.Fatal("native bootstrap refused its original captured request", err)
+	}
+	for _, wrong := range []string{"", strings.Repeat("0", 64), strings.Repeat("d", 64)} {
+		if err := child.bootstrap.CheckCapture(ctx, wrong); err == nil {
+			t.Fatal("live bootstrap admitted another captured request")
+		}
+	}
 	created.Image.Inode++
 	_, unchanged, err := child.bootstrap.Observations(ctx)
 	if err != nil || unchanged != child.bootstrap.childRecord || unchanged == created {
@@ -325,6 +333,9 @@ func TestLinuxProcessNamespaceCreatedBootstrap(t *testing.T) {
 	}
 	if parent, created, err := child.bootstrap.Observations(ctx); err == nil || parent != (Observation{}) || created != (Observation{}) {
 		t.Fatal("retired bootstrap returned cached process observations", err)
+	}
+	if err := child.bootstrap.CheckCapture(ctx, processFixtureCapture); err == nil {
+		t.Fatal("retired bootstrap admitted its old captured request")
 	}
 	select {
 	case <-child.joined:

@@ -22,6 +22,9 @@ import (
 )
 
 func linuxNodeParentFixture(owner *ownedDesktopController, scenario string) error {
+	if strings.HasPrefix(scenario, "launcher/") {
+		return linuxNodeLauncherFixture(owner, strings.TrimPrefix(scenario, "launcher/"))
+	}
 	if strings.HasPrefix(scenario, "journal/") {
 		return linuxNodeJournalFixture(owner, strings.TrimPrefix(scenario, "journal/"))
 	}
