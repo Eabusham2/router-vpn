@@ -113,6 +113,31 @@ class OwnedUIDRunner(unittest.TestCase):
         calls = self.execute()
         self.assertEqual(len(calls), 4)
 
+    def test_actual_preparer_supplies_the_complete_unix_source_gate(self):
+        # The older synthetic setUp copied every matching file and concealed
+        # omissions in the shipping preparer's explicit shared-test list.
+        # Execute that real copy stage into an empty checkout, then require the
+        # unchanged UID source gate to accept all original relocated bytes.
+        class SharedStageComplete(Exception):
+            pass
+
+        source = Path(self.temp.name)/'actual-preparation'
+        source.mkdir()
+        write = GATE.PREP.write
+        def copy_shared(vendor, relative, raw):
+            if not relative.startswith('routervpn/'):
+                raise SharedStageComplete()
+            write(vendor, relative, raw)
+
+        with patch.object(GATE.PREP, 'prepare_desktop_pt'), \
+             patch.object(GATE.PREP, 'comparison_client_contract', return_value={}), \
+             patch.object(GATE.PREP.PFABI, 'checked_files', return_value={}), \
+             patch.object(GATE.PREP, 'write', side_effect=copy_shared), \
+             self.assertRaises(SharedStageComplete):
+            GATE.PREP.prepare(source)
+        _, records = GATE.checked_sources(source)
+        self.assertEqual(set(records), {path.name for path in (ROOT/'internal/mobiletor').glob('desktop_socket_*.go')})
+
     def test_nonroot_build_compiles_normally_before_bounded_noprompt_sudo(self):
         with patch.object(GATE, 'privilege_tool', return_value='/usr/bin/sudo'):
             calls = self.execute('sudo')

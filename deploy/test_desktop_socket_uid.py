@@ -36,7 +36,7 @@ def checked_sources(source):
     for path in expected:
         target = source/'routervpn/mobiletor'/path.name
         if path.is_symlink() or target.is_symlink() or not target.is_file():
-            raise ValueError('Owned Unix creator source must be an actual copied regular file')
+            raise ValueError('Owned Unix creator source must be an actual copied regular file: '+path.name)
         raw = path.read_bytes()
         # The preparer relocates only these declared shared-package imports.
         # Compare the actual shipping copy, not an unrelocated source file or
