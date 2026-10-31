@@ -87,6 +87,7 @@ PEER_TEMPLATES = {
     'node_peer_dns_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_dns_test.go',
     'node_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_windows_test.go',
     'node_layer_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_layer_peer_test.go',
+    'node_hysteria2_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_hysteria2_peer_test.go',
     'node_layer_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_layer_peer_windows_test.go',
 }
 ROUTE_TEMPLATES = {

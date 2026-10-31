@@ -109,6 +109,9 @@ func desktopNodeWFPLayerTraffic(t *testing.T, f *desktopNodeWFPFixture, peer *de
 	if observed.RawUDP == 0 || observed.PlainUDP == 0 || peer.request.Mode == "shadowsocks" && (observed.RawTCP == 0 || observed.PlainTCP == 0) {
 		t.Fatal("actual WFP layered payload had no independent ciphertext observation", observed)
 	}
+	if peer.request.Mode == "hysteria2" && (observed.ProtocolRawUDP == 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP == 0) {
+		t.Fatal("actual WFP Hysteria traffic bypassed its authenticated protocol", observed)
+	}
 }
 
 func TestRouterVPNDesktopNodeWindowsWFPLayerTraffic(t *testing.T) {
@@ -142,11 +145,18 @@ func TestRouterVPNDesktopNodeWindowsWFPLayerTraffic(t *testing.T) {
 }
 
 func TestRouterVPNDesktopNodeWindowsWFPLayerSuccession(t *testing.T) {
+	for _, mode := range []string{"shadowsocks", "hysteria2"} {
+		t.Run(mode, func(t *testing.T) { desktopNodeWFPLayerSuccession(t, mode) })
+	}
+}
+
+func desktopNodeWFPLayerSuccession(t *testing.T, mode string) {
+	t.Helper()
 	if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	firstPeer := desktopNodeWFPStartReference(t, "wg")
-	layerPeer := desktopNodeWFPLayerReference(t, "shadowsocks", "aes-256-gcm+xor-whitening")
+	layerPeer := desktopNodeWFPLayerReference(t, mode, "aes-256-gcm+xor-whitening")
 	var retained mobiletor.DesktopWindowsProtectionTarget
 	desktopNodeWFPCleanup(t, &retained)
 	original := firstPeer.original(t, "always", false)
@@ -179,23 +189,37 @@ func TestRouterVPNDesktopNodeWindowsWFPLayerSuccession(t *testing.T) {
 }
 
 func TestRouterVPNDesktopNodeWindowsWFPLayerWrongCredential(t *testing.T) {
+	for _, test := range []struct{ mode, layer, fault string }{
+		{"shadowsocks", "aes-256-gcm+xor-whitening", "aes-key"},
+		{"hysteria2", "", "hysteria-trust"},
+		{"hysteria2", "aes-256-gcm+xor-whitening", "hysteria-password"},
+	} {
+		t.Run(test.mode+"/"+test.fault, func(t *testing.T) {
+			desktopNodeWFPLayerWrongCredential(t, test.mode, test.layer, test.fault)
+		})
+	}
+}
+
+func desktopNodeWFPLayerWrongCredential(t *testing.T, mode, layer, fault string) {
+	t.Helper()
 	if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	peer := desktopNodeWFPLayerReference(t, "shadowsocks", "aes-256-gcm+xor-whitening")
+	peer := desktopNodeWFPLayerReference(t, mode, layer)
 	var retained mobiletor.DesktopWindowsProtectionTarget
 	desktopNodeWFPCleanup(t, &retained)
-	f := desktopNodeWFPBox(t, peer.original(t, "always", "aes-key"), nil)
+	f := desktopNodeWFPBox(t, peer.original(t, "always", fault), nil)
 	if err := f.box.RouterVPNStrategyStart(); err != nil {
 		t.Fatal("wrong layer key must reach actual owned native startup", err)
 	}
 	retained = f.prepared
 	desktopNodeWFPLayerBlocked(t, peer)
 	if err := f.exchange("udp"); err == nil {
-		t.Fatal("wrong AES/XOR key delivered an actual WFP encrypted payload")
+		t.Fatal("wrong captured layer or protocol credential delivered an actual WFP encrypted payload")
 	}
 	observed := peer.observe(t, "stats")
-	if observed.RawUDP == 0 || observed.PlainUDP != 0 || f.network.Current() {
+	if observed.RawUDP == 0 || mode == "shadowsocks" && observed.PlainUDP != 0 || f.network.Current() ||
+		mode == "hysteria2" && (observed.ProtocolRawUDP == 0 || observed.ProtocolTCP != 0 || observed.ProtocolUDP != 0) {
 		t.Fatal("wrong layered credential missed its actual encrypted native path", observed)
 	}
 	retained = desktopNodeWFPDrain(t, f)

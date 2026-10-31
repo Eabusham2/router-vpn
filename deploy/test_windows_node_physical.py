@@ -134,7 +134,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         if status:
             raise ValueError("Actual WFP encrypted Node compilation failed:\n" + output[-32768:])
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-        # The added nine layered graphs and cross-family reversal run in the
+        # The admitted layered graphs and cross-family reversals run in the
         # same native host with independent retained peers. This bounds the
         # complete expanded suite; individual production/fixture deadlines stay unchanged.
         status, output = BOOT.IDENTITY.run([binary, "-test.run=^TestRouterVPNDesktopNodeWindowsWFP", "-test.count=1", "-test.timeout=360s", "-test.v"],
@@ -148,6 +148,12 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         for case in NODE.LAYER_CASES:
             if "--- PASS: TestRouterVPNDesktopNodeWindowsWFPLayerTraffic/" + case + " (" not in output:
                 raise ValueError("Actual WFP encrypted Node omitted an admitted graph/Start Layer: " + case)
+        for mode in ("shadowsocks", "hysteria2"):
+            if "--- PASS: TestRouterVPNDesktopNodeWindowsWFPLayerSuccession/" + mode + " (" not in output:
+                raise ValueError("Actual WFP Node omitted its exact cross-family restoration: " + mode)
+        for case in ("shadowsocks/aes-key", "hysteria2/hysteria-trust", "hysteria2/hysteria-password"):
+            if "--- PASS: TestRouterVPNDesktopNodeWindowsWFPLayerWrongCredential/" + case + " (" not in output:
+                raise ValueError("Actual WFP Node omitted its encrypted credential negative: " + case)
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("Actual WFP Node executable changed during its retained test")
         for mutation in mutants(source):
@@ -169,7 +175,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             raise ValueError("Actual WFP whitening reference changed during execution")
     if checked_sources(source)[1] != before:
         raise ValueError("WFP Node source changed during actual native execution")
-    print("Actual Windows BFE, isolated TCP/UDP grants with exact permitted peers, WG/AWG/Shadowsocks AES/XOR encrypted IPv4/IPv6 payloads, fresh selected DNS, exact cross-family forward/reverse native succession and wrong-key/ordinary-token controls passed. TUN, node identity proof, host adoption and device acceptance remain separate.", flush=True)
+    print("Actual Windows BFE, isolated TCP/UDP grants with exact permitted peers, WG/AWG/Shadowsocks/Hysteria2 AES/XOR encrypted IPv4/IPv6 payloads, fresh selected DNS, exact cross-family forward/reverse native succession and wrong-key/ordinary-token controls passed. TUN, node identity proof, host adoption and device acceptance remain separate.", flush=True)
 
 
 if __name__ == "__main__":

@@ -36,6 +36,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	HY "github.com/sagernet/sing-box/protocol/hysteria2"
 	WH "github.com/sagernet/sing-box/protocol/routervpnwhitening"
 	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
 	WG "github.com/sagernet/sing-box/protocol/wireguard"
@@ -419,6 +420,7 @@ func desktopNodeWFPBox(t *testing.T, original *mobilemultihop.NodeProfile, prede
 		return f.tun, nil
 	})
 	outs := outbound.NewRegistry()
+	HY.RegisterOutbound(outs)
 	SS.RegisterOutbound(outs)
 	WH.RegisterOutbound(outs)
 	routervpndesktoppt.RegisterNodePhysicalOutbound(outs)

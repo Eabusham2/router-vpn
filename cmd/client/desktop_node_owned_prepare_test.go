@@ -160,11 +160,11 @@ func desktopOwnedNodePreparationAES(t *testing.T, endpoint string) map[string][]
 }
 
 func TestDesktopOwnedNodePreparationKeepsCapturedAESAndWhitening(t *testing.T) {
-	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks"} {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"} {
 		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 			t.Run(mode+"/"+layer, func(t *testing.T) {
 				base := mode
-				if mode == "shadowsocks" {
+				if mode == "shadowsocks" || mode == "hysteria2" {
 					base = "wg"
 				}
 				f := newDesktopOwnedNodePreparationFixture(t, base)
@@ -185,6 +185,27 @@ func TestDesktopOwnedNodePreparationKeepsCapturedAESAndWhitening(t *testing.T) {
 					f.files = aes
 				} else if layer != "" {
 					start = aes
+				}
+				if mode == "hysteria2" {
+					graph := map[string]any{
+						"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
+						"outbounds": []any{map[string]any{"type": "hysteria2", "tag": "proxy", "server": f.profile.Endpoint, "server_port": 8443,
+							"password": "captured-hysteria-credential", "obfs": map[string]any{"type": "salamander", "password": "captured-hysteria-obfuscation"},
+							"tls": map[string]any{"enabled": true, "server_name": "captured-node.test"}}},
+						"route": map[string]any{"final": "proxy", "rules": []any{}},
+					}
+					raw, err := json.Marshal(graph)
+					if err != nil {
+						t.Fatal(err)
+					}
+					f.files = map[string][]byte{"sing-box.json": raw}
+					directory := filepath.Join(f.capture.dataRoot, "generated", f.profile.ID, mode)
+					if err := os.MkdirAll(directory, 0700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(directory, "sing-box.json"), raw, 0600); err != nil {
+						t.Fatal(err)
+					}
 				}
 				command, previous := f.a.cmd, f.a.state
 				t.Setenv("HOMEVPN_ROOT", t.TempDir())
@@ -329,7 +350,7 @@ func TestDesktopOwnedNodePreparationRejectsUnsupportedAdmission(t *testing.T) {
 			case "layer":
 				f.profile.StartLayer = "xor-only"
 			case "mode":
-				mode = "hysteria2"
+				mode = "reality-vision"
 			case "no-operation":
 				f.operation = nil
 			case "wrong-operation":

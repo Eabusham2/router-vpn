@@ -38,6 +38,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	HY "github.com/sagernet/sing-box/protocol/hysteria2"
 	WH "github.com/sagernet/sing-box/protocol/routervpnwhitening"
 	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
 	WG "github.com/sagernet/sing-box/protocol/wireguard"
@@ -70,18 +71,22 @@ type desktopNodeLayerRequest struct {
 }
 
 type desktopNodeLayerReply struct {
-	Schema      int    `json:"schema"`
-	Address     string `json:"address"`
-	AESAddress  string `json:"aes_address"`
-	BaseAddress string `json:"base_address,omitempty"`
-	AppID       []byte `json:"app_id,omitempty"`
-	RawTCP      int64  `json:"raw_tcp"`
-	RawUDP      int64  `json:"raw_udp"`
-	PlainTCP    int64  `json:"plain_tcp"`
-	PlainUDP    int64  `json:"plain_udp"`
-	DNSQueries  uint32 `json:"dns_queries"`
-	Probe       string `json:"probe,omitempty"`
-	ProbeCount  int64  `json:"probe_count,omitempty"`
+	Schema         int    `json:"schema"`
+	Address        string `json:"address"`
+	AESAddress     string `json:"aes_address"`
+	BaseAddress    string `json:"base_address,omitempty"`
+	ProtocolFiles  string `json:"protocol_files,omitempty"`
+	ProtocolRawUDP int64  `json:"protocol_raw_udp,omitempty"`
+	ProtocolTCP    int64  `json:"protocol_tcp,omitempty"`
+	ProtocolUDP    int64  `json:"protocol_udp,omitempty"`
+	AppID          []byte `json:"app_id,omitempty"`
+	RawTCP         int64  `json:"raw_tcp"`
+	RawUDP         int64  `json:"raw_udp"`
+	PlainTCP       int64  `json:"plain_tcp"`
+	PlainUDP       int64  `json:"plain_udp"`
+	DNSQueries     uint32 `json:"dns_queries"`
+	Probe          string `json:"probe,omitempty"`
+	ProbeCount     int64  `json:"probe_count,omitempty"`
 }
 
 type desktopNodeLayerServer struct {
@@ -355,7 +360,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	var trailing any
 	if decoder.Decode(&request) != nil || decoder.Decode(&trailing) != io.EOF || request.Schema != 1 ||
 		!mobilemultihop.DesktopNodePhysicalGraphSupported(request.Mode, request.Layer) ||
-		request.Mode != "shadowsocks" && request.Layer == "" || len(request.Configuration.Forward) != 0 {
+		request.Mode != "shadowsocks" && request.Mode != "hysteria2" && request.Layer == "" || len(request.Configuration.Forward) != 0 {
 		t.Fatal("layer reference request escaped its captured fixture")
 	}
 	key, keyErr := base64.StdEncoding.Strict().DecodeString(request.Password)
@@ -400,8 +405,14 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	dnsJoined := make(chan error, 1)
 	go func() { dnsJoined <- dnsServer.ActivateAndServe() }()
 	t.Cleanup(func() { _ = dnsServer.Shutdown(); _ = dnsListener.Close(); <-dnsJoined })
-	var inner, baseAddress string
-	if request.Mode != "shadowsocks" {
+	var inner, baseAddress, protocolFiles string
+	var protocolServer *desktopNodeLayerServer
+	if request.Mode == "hysteria2" {
+		protocolServer, protocolFiles = startDesktopNodeHysteria2Server(t, ip, dnsListener.LocalAddr().String())
+		baseAddress = protocolServer.udp.LocalAddr().String()
+		base := netip.MustParseAddrPort(baseAddress)
+		inner = netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), base.Port()).String()
+	} else if request.Mode != "shadowsocks" {
 		request.Configuration.Forward = []desktopReferenceRule{{Network: "udp", Address: "192.168.50.133", Port: 53, Target: dnsListener.LocalAddr().String()}}
 		peer, err := startDesktopNodePeer(request.Configuration, request.Mode, ip)
 		if err != nil {
@@ -412,8 +423,13 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 		base := netip.MustParseAddrPort(baseAddress)
 		inner = netip.AddrPortFrom(netip.MustParseAddr("10.78.0.1"), base.Port()).String()
 	}
-	server := startDesktopNodeLayerServer(t, ip, request.Password, inner, baseAddress, dnsListener.LocalAddr().String())
-	address := server.tcp.Addr().String()
+	server := protocolServer
+	address, aesAddress := baseAddress, ""
+	if request.Mode != "hysteria2" || request.Layer != "" {
+		server = startDesktopNodeLayerServer(t, ip, request.Password, inner, baseAddress, dnsListener.LocalAddr().String())
+		address = server.tcp.Addr().String()
+		aesAddress = address
+	}
 	if request.Layer == "aes-256-gcm+xor-whitening" {
 		address = startDesktopNodeLayerRelay(t, ip, address, request.Password)
 	}
@@ -430,8 +446,12 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		err := json.NewEncoder(os.Stdout).Encode(desktopNodeLayerReply{Schema: 1, Address: address, AESAddress: server.tcp.Addr().String(), BaseAddress: baseAddress,
-			AppID: scope, RawTCP: server.rawTCP.Load(), RawUDP: server.rawUDP.Load(), PlainTCP: server.plainTCP.Load(), PlainUDP: server.plainUDP.Load(), DNSQueries: dnsQueries.Load(), Probe: nonce, ProbeCount: count})
+		reply := desktopNodeLayerReply{Schema: 1, Address: address, AESAddress: aesAddress, BaseAddress: baseAddress, ProtocolFiles: protocolFiles,
+			AppID: scope, RawTCP: server.rawTCP.Load(), RawUDP: server.rawUDP.Load(), PlainTCP: server.plainTCP.Load(), PlainUDP: server.plainUDP.Load(), DNSQueries: dnsQueries.Load(), Probe: nonce, ProbeCount: count}
+		if protocolServer != nil {
+			reply.ProtocolRawUDP, reply.ProtocolTCP, reply.ProtocolUDP = protocolServer.rawUDP.Load(), protocolServer.plainTCP.Load(), protocolServer.plainUDP.Load()
+		}
+		err := json.NewEncoder(os.Stdout).Encode(reply)
 		if err != nil {
 			t.Fatal("layer reference lost its retained reply pipe", err)
 		}
@@ -575,7 +595,7 @@ func (p *desktopNodeLayerReference) observe(t *testing.T, action string) desktop
 		t.Fatal(err)
 	}
 	result, err := p.read()
-	if err != nil || result.Address != p.reply.Address || result.AESAddress != p.reply.AESAddress || result.BaseAddress != p.reply.BaseAddress || !bytes.Equal(result.AppID, p.reply.AppID) {
+	if err != nil || result.Address != p.reply.Address || result.AESAddress != p.reply.AESAddress || result.BaseAddress != p.reply.BaseAddress || result.ProtocolFiles != p.reply.ProtocolFiles || !bytes.Equal(result.AppID, p.reply.AppID) {
 		t.Fatal("layer peer observation changed its original owner", err)
 	}
 	return result
@@ -665,20 +685,28 @@ func (p *desktopNodeLayerReference) original(t *testing.T, kill, fault string) *
 	if fault == "aes-key" {
 		password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{53}, 32))
 	}
-	aesAddress := netip.MustParseAddrPort(p.reply.AESAddress)
-	aesGraph := map[string]any{
-		"inbounds":  []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
-		"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": p.request.Address, "server_port": int(aesAddress.Port()), "method": mobilemultihop.NativeStartLayerMethod, "password": password}},
-		"route":     map[string]any{"final": "proxy", "rules": []any{}},
+	var aesFiles []byte
+	if p.reply.AESAddress != "" {
+		aesAddress := netip.MustParseAddrPort(p.reply.AESAddress)
+		aesGraph := map[string]any{
+			"inbounds":  []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
+			"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": p.request.Address, "server_port": int(aesAddress.Port()), "method": mobilemultihop.NativeStartLayerMethod, "password": password}},
+			"route":     map[string]any{"final": "proxy", "rules": []any{}},
+		}
+		aesJSON, _ := json.Marshal(aesGraph)
+		aesFiles, _ = json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(aesJSON)})
 	}
-	aesJSON, _ := json.Marshal(aesGraph)
-	aesFiles, _ := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(aesJSON)})
 	files, start := string(aesFiles), ""
 	profile := map[string]any{"id": "captured-layered-node", "node_kind": "router-vpn", "node_proof_id": strings.Repeat("a", 64),
 		"router_api": "http://10.78.0.1:8787", "api_token": "captured-layer-node-token", "endpoint": p.request.Address,
 		"start_layer": p.request.Layer, "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "kill_switch_policy": kill,
 		"ipv6_mode": "on", "home_lan_access": false, "mtu_policy": "auto"}
-	if p.request.Mode != "shadowsocks" {
+	if p.request.Mode == "hysteria2" {
+		files = desktopNodeHysteria2Assets(t, p.reply.ProtocolFiles, fault)
+		if p.request.Layer != "" {
+			start = string(aesFiles)
+		}
+	} else if p.request.Mode != "shadowsocks" {
 		base := desktopNodePeerOriginal(t, p.request.Mode, p.request.Configuration, p.options, netip.MustParseAddr(p.request.Address),
 			netip.MustParseAddrPort(p.reply.BaseAddress), fault == "base-key", false, kill)
 		input, err := base.LaunchInput()
@@ -761,6 +789,7 @@ func newDesktopNodeLayerFixture(t *testing.T, peer *desktopNodeLayerReference, f
 		return f.tun, nil
 	})
 	outs := outbound.NewRegistry()
+	HY.RegisterOutbound(outs)
 	SS.RegisterOutbound(outs)
 	WH.RegisterOutbound(outs)
 	routervpndesktoppt.RegisterNodePhysicalOutbound(outs)
@@ -814,9 +843,9 @@ func newDesktopNodeLayerFixture(t *testing.T, peer *desktopNodeLayerReference, f
 
 func desktopNodeLayerCases(t *testing.T, test func(*testing.T, string, string)) {
 	t.Helper()
-	for _, mode := range []string{"shadowsocks", "wg", "awg2-fast", "awg2-strong"} {
+	for _, mode := range []string{"shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong"} {
 		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
-			if mode != "shadowsocks" && layer == "" {
+			if mode != "shadowsocks" && mode != "hysteria2" && layer == "" {
 				continue // Existing encrypted base cases already prove the plain path.
 			}
 			label := layer
@@ -846,6 +875,9 @@ func TestRouterVPNDesktopNodeEncryptedLayerTraffic(t *testing.T) {
 		observed := peer.observe(t, "stats")
 		if observed.RawUDP == 0 || observed.PlainUDP == 0 || mode == "shadowsocks" && (observed.RawTCP == 0 || observed.PlainTCP == 0) || f.network.Current() {
 			t.Fatal("layered payload omitted real ciphertext or fabricated readiness", observed)
+		}
+		if mode == "hysteria2" && (observed.ProtocolRawUDP == 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP == 0) {
+			t.Fatal("captured Hysteria payload bypassed its authenticated protocol", observed)
 		}
 		if err := f.box.RouterVPNStrategyDNSProof(); err != nil || peer.observe(t, "stats").DNSQueries != 1 {
 			t.Fatal("selected Home DNS did not traverse the actual layered graph", err)

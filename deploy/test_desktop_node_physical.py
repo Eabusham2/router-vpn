@@ -23,9 +23,13 @@ BOOT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BOOT)
 PREP = BOOT.PREP
 TAGS = tuple(value for value in BOOT.TAGS if value not in ("routervpn_native_pq", "routervpn_windows_physical_composition"))
-LAYER_CASES = tuple(mode + "/" + layer for mode in ("shadowsocks", "wg", "awg2-fast", "awg2-strong")
+LAYER_CASES = tuple(mode + "/" + layer for mode in ("shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong")
                     for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
-                    if mode == "shadowsocks" or layer != "off")
+                    if mode in ("shadowsocks", "hysteria2") or layer != "off")
+HYSTERIA2_CREDENTIAL_CASES = (
+    "off/hysteria-password", "off/hysteria-trust", "off/hysteria-salamander",
+    "aes-256-gcm/hysteria-password", "aes-256-gcm+xor-whitening/hysteria-password",
+    "aes-256-gcm/aes-key", "aes-256-gcm+xor-whitening/aes-key")
 
 
 def layer_reference_sources():
@@ -154,6 +158,10 @@ def mutants(source, windows):
     selected_dns = "routervpn_desktop_node_box_dns.go"
     node_command = "cmd/sing-box/routervpn_mtu_node.go"
     result = [
+        ("ignored-hysteria2-tls-identity", "protocol/hysteria2/outbound.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeHysteria2WrongCredential", "off/hysteria-trust",
+         "wrong captured Hysteria credential delivered encrypted payload", changed("protocol/hysteria2/outbound.go",
+         "tlsConfig, err := tls.NewClient(ctx, logger, tlsServerAddress, tlsOptions)",
+         "tlsOptions.Insecure = true\n\ttlsConfig, err := tls.NewClient(ctx, logger, tlsServerAddress, tlsOptions)")),
         ("missing-node-whitening", "protocol/routervpnwhitening/outbound.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeEncryptedLayerTraffic", "shadowsocks/aes-256-gcm\\+xor-whitening",
          "layered encrypted payload escaped or lost its exact native lower", changed("protocol/routervpnwhitening/outbound.go",
          "return h.owner.Open(ctx, h.key, network == N.NetworkUDP,",
@@ -225,6 +233,8 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         ("encrypted", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeEncrypted",
          ("TestRouterVPNDesktopNodeEncryptedPreReadyHandshake", "TestRouterVPNDesktopNodeEncryptedWrongPeerRejected", "TestRouterVPNDesktopNodeEncryptedConfiguredCoverStartup", "TestRouterVPNDesktopNodeEncryptedSelectedDNSIsFresh",
           "TestRouterVPNDesktopNodeEncryptedLayerTraffic", "TestRouterVPNDesktopNodeEncryptedLayerWrongCredential")),
+        ("hysteria2-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeHysteria2",
+         ("TestRouterVPNDesktopNodeHysteria2WrongCredential",)),
     ]
     with tempfile.TemporaryDirectory(prefix="routervpn-node-physical-") as directory:
         workspace = Path(directory)
@@ -245,6 +255,8 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Node encrypted gate omitted a complete base profile")
             if name == "encrypted" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedLayerTraffic/" + case + " (" not in output for case in LAYER_CASES):
                 raise ValueError("Node encrypted gate omitted an admitted graph/Start Layer")
+            if name == "hysteria2-credentials" and any("--- PASS: TestRouterVPNDesktopNodeHysteria2WrongCredential/" + case + " (" not in output for case in HYSTERIA2_CREDENTIAL_CASES):
+                raise ValueError("Node Hysteria2 gate omitted a captured protocol, trust or layer credential negative")
             if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
                 raise ValueError("Node native executable changed during execution")
         for label, relative, package, test, subtest, witness, replacement in mutants(source, windows):
@@ -265,7 +277,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             raise ValueError("Node shipping whitening reference changed during actual execution")
     if checked_sources(source)[1] != before:
         raise ValueError("Node native source changed during actual execution")
-    print("Exact native Node startup, captured IPC, retained TUN/MTU rollback, real WG/AWG/Shadowsocks plus AES/XOR encrypted TCP/UDP, fresh selected DNS and wrong-key controls passed. OS permits/TUN remain explicit fixtures; kernel composition and both-direction host activation remain separate.", flush=True)
+    print("Exact native Node startup, captured IPC, retained TUN/MTU rollback, real WG/AWG/Shadowsocks/Hysteria2 plus AES/XOR encrypted TCP/UDP, fresh selected DNS and wrong-key controls passed. OS permits/TUN remain explicit fixtures; kernel composition and both-direction host activation remain separate.", flush=True)
 
 
 if __name__ == "__main__":

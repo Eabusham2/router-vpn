@@ -1,0 +1,244 @@
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"io"
+	"math/big"
+	"net"
+	"net/netip"
+	"strings"
+	"testing"
+	"time"
+
+	boxTLS "github.com/sagernet/sing-box/common/tls"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	HY "github.com/sagernet/sing-quic/hysteria2"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// This is the actual pinned QUIC/TLS/Hysteria service. The raw marker observer
+// uses the same retained UDP descriptor, before Salamander decoding, and never
+// supplies a protocol reply. Only authenticated streams reach the echo/DNS
+// handler. The owning subprocess joins shutdown before its parent reuses a
+// captured physical endpoint.
+type desktopNodeHysteria2Packet struct {
+	net.PacketConn
+	server *desktopNodeLayerServer
+}
+
+func (p *desktopNodeHysteria2Packet) ReadFrom(body []byte) (int, net.Addr, error) {
+	p.server.mu.Lock()
+	if p.server.closing {
+		p.server.mu.Unlock()
+		return 0, nil, net.ErrClosed
+	}
+	p.server.workers.Add(1)
+	p.server.mu.Unlock()
+	defer p.server.workers.Done()
+	for {
+		n, source, err := p.PacketConn.ReadFrom(body)
+		if err != nil {
+			return n, source, err
+		}
+		address, ok := source.(*net.UDPAddr)
+		if !ok {
+			return 0, nil, errors.New("Hysteria reference changed its retained datagram source")
+		}
+		if handled, _ := p.server.observation.receive(p.PacketConn.(*net.UDPConn), body[:n], address.AddrPort()); handled {
+			continue
+		}
+		p.server.rawUDP.Add(1)
+		return n, source, nil
+	}
+}
+
+type desktopNodeHysteria2Handler struct{ *desktopNodeLayerServer }
+
+func (h desktopNodeHysteria2Handler) NewConnectionEx(ctx context.Context, connection net.Conn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	if !h.enter(connection) {
+		_ = connection.Close()
+		if onClose != nil {
+			onClose(net.ErrClosed)
+		}
+		return
+	}
+	defer h.leave(connection)
+	err := h.NewConnection(ctx, connection, M.Metadata{Source: source, Destination: destination})
+	if onClose != nil {
+		onClose(err)
+	}
+}
+
+func (h desktopNodeHysteria2Handler) NewPacketConnectionEx(ctx context.Context, connection N.PacketConn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	err := h.NewPacketConnection(ctx, connection, M.Metadata{Source: source, Destination: destination})
+	if onClose != nil {
+		onClose(err)
+	}
+}
+
+func startDesktopNodeHysteria2Server(t *testing.T, ip netip.Addr, dnsAddress string) (*desktopNodeLayerServer, string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: "captured-node.test"},
+		DNSNames: []string{"captured-node.test"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, IsCA: true, BasicConstraintsValid: true}
+	der, err := x509.CreateCertificate(rand.Reader, spec, spec, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	privatePEM := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
+	clear(private)
+	var credential [64]byte
+	if _, err := rand.Read(credential[:]); err != nil {
+		t.Fatal(err)
+	}
+	password, mask := base64.StdEncoding.EncodeToString(credential[:32]), base64.StdEncoding.EncodeToString(credential[32:])
+	clear(credential[:])
+	packet, err := net.ListenPacket("udp4", net.JoinHostPort(ip.String(), "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, udp: packet, dnsAddress: dnsAddress, connections: make(map[io.Closer]bool)}
+	logger := log.NewNOPFactory().NewLogger("captured-hysteria2-peer")
+	tlsConfig, err := boxTLS.NewServer(ctx, logger, option.InboundTLSOptions{Enabled: true, Certificate: []string{certificate}, Key: []string{privatePEM}})
+	if err != nil {
+		cancel()
+		_ = packet.Close()
+		t.Fatal(err)
+	}
+	service, err := HY.NewService[int](HY.ServiceOptions{Context: ctx, Logger: logger, TLSConfig: tlsConfig,
+		SalamanderPassword: mask, UDPTimeout: 10 * time.Second, Handler: desktopNodeHysteria2Handler{s}})
+	if err == nil {
+		service.UpdateUsers([]int{1}, []string{password})
+		err = tlsConfig.Start()
+	}
+	if err == nil {
+		err = service.Start(&desktopNodeHysteria2Packet{PacketConn: packet, server: s})
+	}
+	if err != nil {
+		cancel()
+		_ = packet.Close()
+		_ = tlsConfig.Close()
+		if service != nil {
+			_ = service.Close()
+		}
+		t.Fatal("actual Hysteria2 reference did not start", err)
+	}
+	t.Cleanup(func() {
+		s.mu.Lock()
+		s.closing = true
+		connections := make([]io.Closer, 0, len(s.connections))
+		for connection := range s.connections {
+			connections = append(connections, connection)
+		}
+		s.mu.Unlock()
+		cancel()
+		_ = packet.Close()
+		_ = service.Close()
+		_ = tlsConfig.Close()
+		for _, connection := range connections {
+			_ = connection.Close()
+		}
+		s.workers.Wait()
+	})
+	graph := map[string]any{
+		"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
+		"outbounds": []any{map[string]any{"type": "hysteria2", "tag": "proxy", "server": ip.String(), "server_port": packet.LocalAddr().(*net.UDPAddr).Port,
+			"password": password, "obfs": map[string]any{"type": "salamander", "password": mask},
+			"tls": map[string]any{"enabled": true, "server_name": "captured-node.test", "certificate_path": "cert.pem"}}},
+		"route": map[string]any{"final": "proxy", "rules": []any{}},
+	}
+	raw, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(raw), "cert.pem": base64.StdEncoding.EncodeToString([]byte(certificate))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, string(files)
+}
+
+func desktopNodeHysteria2Assets(t *testing.T, files, fault string) string {
+	t.Helper()
+	var assets map[string]string
+	if json.Unmarshal([]byte(files), &assets) != nil || len(assets) != 2 || assets["cert.pem"] == "" {
+		t.Fatal("Hysteria reference lost its complete captured node assets")
+	}
+	raw, err := base64.StdEncoding.Strict().DecodeString(assets["sing-box.json"])
+	var graph map[string]any
+	if err != nil || json.Unmarshal(raw, &graph) != nil {
+		t.Fatal("Hysteria reference lost its actual client graph", err)
+	}
+	outbound := graph["outbounds"].([]any)[0].(map[string]any)
+	switch fault {
+	case "hysteria-password":
+		outbound["password"] = "different-node-" + outbound["password"].(string)
+	case "hysteria-trust":
+		outbound["tls"].(map[string]any)["server_name"] = "another-node.test"
+	case "hysteria-salamander":
+		outbound["obfs"].(map[string]any)["password"] = "different-node-" + outbound["obfs"].(map[string]any)["password"].(string)
+	case "", "aes-key":
+	default:
+		t.Fatal("unrecognized Hysteria reference fault")
+	}
+	raw, err = json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets["sing-box.json"] = base64.StdEncoding.EncodeToString(raw)
+	raw, err = json.Marshal(assets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func TestRouterVPNDesktopNodeHysteria2WrongCredential(t *testing.T) {
+	for _, test := range []struct{ layer, fault string }{
+		{"", "hysteria-password"}, {"", "hysteria-trust"}, {"", "hysteria-salamander"},
+		{"aes-256-gcm", "hysteria-password"}, {"aes-256-gcm+xor-whitening", "hysteria-password"},
+		{"aes-256-gcm", "aes-key"}, {"aes-256-gcm+xor-whitening", "aes-key"},
+	} {
+		label := test.layer
+		if label == "" {
+			label = "off"
+		}
+		t.Run(label+"/"+test.fault, func(t *testing.T) {
+			_, ip := desktopNodePeerInterface(t)
+			peer := startDesktopNodeLayerReference(t, "hysteria2", test.layer, ip)
+			f := newDesktopNodeLayerFixture(t, peer, test.fault)
+			if err := f.box.RouterVPNStrategyStart(); err != nil {
+				t.Fatal("Hysteria wrong credential did not reach actual captured startup", err)
+			}
+			if err := f.exchange("udp"); err == nil {
+				t.Fatal("wrong captured Hysteria credential delivered encrypted payload")
+			}
+			observed := peer.observe(t, "stats")
+			if observed.RawUDP == 0 || observed.ProtocolTCP != 0 || observed.ProtocolUDP != 0 ||
+				strings.HasPrefix(test.fault, "hysteria-") && observed.ProtocolRawUDP == 0 || f.network.Current() {
+				t.Fatal("Hysteria negative missed its real encrypted peer or fabricated readiness", observed)
+			}
+		})
+	}
+}

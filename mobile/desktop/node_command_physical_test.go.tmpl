@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,31 @@ import (
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
+func desktopNodeCommandHysteria2Original(t *testing.T, layer string) *mobilemultihop.NodeProfile {
+	t.Helper()
+	input, err := desktopNodeCommandOriginalWithLayer(t, layer).LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source struct {
+		Profile string `json:"profile_json"`
+		Start   string `json:"start"`
+	}
+	if json.Unmarshal([]byte(input), &source) != nil || source.Profile == "" {
+		t.Fatal("Hysteria command lost its exact original node policy")
+	}
+	graph, _ := json.Marshal(map[string]any{"inbounds": []any{map[string]any{"type": "tun", "auto_route": true, "strict_route": true}},
+		"outbounds": []any{map[string]any{"type": "hysteria2", "tag": "proxy", "server": "192.0.2.44", "server_port": 8443,
+			"password": "captured-hysteria-password", "obfs": map[string]any{"type": "salamander", "password": "captured-hysteria-mask"},
+			"tls": map[string]any{"enabled": true, "server_name": "captured-node.test"}}}, "route": map[string]any{"final": "proxy"}})
+	files, _ := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(graph)})
+	original, err := mobilemultihop.NewNodeProfile("hysteria2", string(files), source.Profile, source.Start, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return original
+}
+
 func TestRouterVPNDesktopNodePhysicalCommandSourceBoundary(t *testing.T) {
 	if policy, err := routerVPNNodeCommandPhysical(nil, "", "", ""); err != nil || policy != nil {
 		t.Fatal("ordinary legacy node command unexpectedly selected a physical factory", err)
@@ -28,13 +54,21 @@ func TestRouterVPNDesktopNodePhysicalCommandSourceBoundary(t *testing.T) {
 		}
 		return
 	}
-	for _, fault := range []string{"exact", "missing-source", "source-record", "derived-config", "source-hash", "config-hash", "session", "linked-source", "layer-aes", "layer-whitening"} {
+	for _, fault := range []string{"exact", "missing-source", "source-record", "derived-config", "source-hash", "config-hash", "session", "linked-source", "layer-aes", "layer-whitening", "hysteria2-off", "hysteria2-aes", "hysteria2-whitening"} {
 		t.Run(fault, func(t *testing.T) {
 			original := desktopNodeCommandOriginal(t)
 			if fault == "layer-aes" {
 				original = desktopNodeCommandOriginalWithLayer(t, "aes-256-gcm")
 			} else if fault == "layer-whitening" {
 				original = desktopNodeCommandOriginalWithLayer(t, "aes-256-gcm+xor-whitening")
+			} else if strings.HasPrefix(fault, "hysteria2-") {
+				layer := ""
+				if fault == "hysteria2-aes" {
+					layer = "aes-256-gcm"
+				} else if fault == "hysteria2-whitening" {
+					layer = "aes-256-gcm+xor-whitening"
+				}
+				original = desktopNodeCommandHysteria2Original(t, layer)
 			}
 			policy, err := mobilemultihop.NewDesktopNodePolicy(original, desktopExternalSession, "windows")
 			if err != nil {
@@ -85,7 +119,7 @@ func TestRouterVPNDesktopNodePhysicalCommandSourceBoundary(t *testing.T) {
 			}
 			defer files.root.Close()
 			actual, err := routerVPNNodeCommandPhysical(files, session, config, source)
-			if fault == "exact" || fault == "layer-aes" || fault == "layer-whitening" {
+			if fault == "exact" || fault == "layer-aes" || fault == "layer-whitening" || strings.HasPrefix(fault, "hysteria2-") {
 				if err != nil || actual == nil || actual.Config() != policy.Config() || !reflect.DeepEqual(actual.Metadata(), policy.Metadata()) {
 					t.Fatal("exact private inputs did not reconstruct their captured native policy", err)
 				}
