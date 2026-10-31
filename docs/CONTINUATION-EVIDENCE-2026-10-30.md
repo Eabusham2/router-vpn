@@ -1663,3 +1663,142 @@ Linux generated lifecycle integration are active follow-on work. No complete
 new release, private deployment, signing or physical/off-LAN acceptance is
 established by these source units. Historical all-green `745b3e41` results must
 not be assigned to newer source.
+
+## Native Session and Node outcomes, active Linux tables and profile-helper loading
+
+This continuation advances the verified source cutoff to
+[`d02bc9f68fb9ea522e50daa84b5fbab28c9f14f7`](https://github.com/Eabusham2/router-vpn/commit/d02bc9f68fb9ea522e50daa84b5fbab28c9f14f7).
+Each row was committed locally and published with the remote parent, tree and
+resulting `main` reference checked. Earlier failure observations remain history;
+the newer successful jobs below close only their stated acceptance boundaries.
+
+| Local commit | Verified published commit | Coherent change |
+|---|---|---|
+| `1fc38ec5760bcb8424206c7bf3e8f82d03e4a417` | [`27eb9491c27c1c9760b609332598d3fb1d466432`](https://github.com/Eabusham2/router-vpn/commit/27eb9491c27c1c9760b609332598d3fb1d466432) | Bind the first Windows App/Tray filesystem commands to their known system module. |
+| `e7093de11714d7b5f1a6e8e7b3fbe13125665fba` | [`882fecca8ee89c3805dd76a91cae146b62ce904d`](https://github.com/Eabusham2/router-vpn/commit/882fecca8ee89c3805dd76a91cae146b62ce904d) | Locate individual helper reads and loads in disposable first-launch diagnostic copies. |
+| `747868c7d311740a3b67cdd33ccc43f3e0b536e6` | [`4965310ec3392038c6dd60e81aaae49de310a515`](https://github.com/Eabusham2/router-vpn/commit/4965310ec3392038c6dd60e81aaae49de310a515) | Reject inactive or ambiguously flagged native Linux firewall tables before preparation and heartbeat admission. |
+| `7521c2bd6d484fb90128c761113d01916ceeb6c9` | [`d02bc9f68fb9ea522e50daa84b5fbab28c9f14f7`](https://github.com/Eabusham2/router-vpn/commit/d02bc9f68fb9ea522e50daa84b5fbab28c9f14f7) | Load packaged Windows profile helpers without unrelated command discovery. |
+
+### Completed native Windows Session and process ownership gates
+
+The normal installed/Portable Session passed at
+[`db6f789b`, job 124418887376](https://github.com/Eabusham2/router-vpn/actions/runs/41161191166/job/124418887376),
+including the installed self-test in 56.44 seconds and Portable in 9.44 seconds.
+It passed again at
+[`2b1fb0c5`, job 124420410219](https://github.com/Eabusham2/router-vpn/actions/runs/41161688315/job/124420410219):
+installed 53.15 seconds, Portable 9.22 seconds, outer Portable 9.11 seconds.
+The completed latter receipt records eight native cases, two actual channel
+proofs per self-test, four protected-shell cases, four compiled Session negative
+controls, five Portable preparation defects and four updater preparation
+defects. Its copied source digest is
+`bdac77553d78877913abc69feb0faa9b5ff41e81e7b863439d653825385ac8fb`;
+its shipping-source digest is
+`a30f1a40a6e6a8542028893b24fbe8b7a7a5190865910873c04116961cc4249d`.
+These are actual packaged App/Tray and shipping-entry executions on an elevated
+fixture desktop. They do not establish interactive/cross-account UAC or real
+VPN networking and must not be described that way.
+
+The entire Node process gate passed at
+[`2b1fb0c5`, job 124420410293](https://github.com/Eabusham2/router-vpn/actions/runs/41161688315/job/124420410293).
+Its receipt records six native process cases, 62 shared ownership groups,
+fourteen command rejection cases and all 32 compiled production negative
+controls. This includes Unicode/long-Portable private-file write-through,
+retained child retirement, durable settlement/Off, captured node proof and
+initial-absence journal materialization. The source digest is
+`18c30d3b3e516d543ae3f33eeeee9ae46fb5db1e94f43bc20d3e87bead7c2fb6`;
+the actual-child fixture digest is
+`9ee874107d9350ded1f79dcd3799f1534a690082313df6dd22f3310d08b89052`.
+The previously incomplete 32-control run is now complete at this exact source.
+The receipt explicitly retains authenticated package launch and Sing-box
+dataplane composition as separate required gates.
+
+### Inactive native Linux firewall tables
+
+The existing active guardian verified the retained table handle but did not
+check its flags. A dormant table could therefore keep that identity while
+suspending evaluation of its base chains. The
+[nftables manual](https://netfilter.org/projects/nftables/manpage.html)
+describes that native dormant-table behavior. The new predicate accepts only
+absent flags or an empty flag array. Unknown, malformed and nonempty flags are
+rejected during initial capture and active verification. Exact permit cleanup
+does not require treating an inactive baseline as valid protection.
+
+All thirteen real race-instrumented guardian groups passed on Linux 6.18.57,
+Go 1.26.3 and nftables/libnftables 1.0.9 in fresh isolated namespaces. Their
+reported group durations total 56.58 seconds. The two new cases show that:
+
+- A running owner loses Current after actual table dormancy and cannot transmit
+  its rejected marker. An independent live UDP peer still works, so an unrelated
+  peer failure cannot explain the rejection.
+- New preparation refuses the disabled baseline before allocating its isolated
+  account. Cleanup preserves the actual table identity and complete baseline.
+
+The registered single-predicate old-behavior mutation failed both exact native
+assertions. Five parser groups passed three race-instrumented repetitions and
+the Linux ARM64 tagged test binary compiled. Production and fixture timeouts
+were unchanged. The frozen four-file manifest digest is
+`c5908d7abcb2b8e5a575ee4b845cb3930294f1fc7ccce61ab79575917efcbbf5`,
+validation receipt digest
+`2cc352c8030336e47325d250f867e67e926ddac395da330cc65d6f8a8d977842`
+and patch digest
+`a66791d2cefd7c05f3569c57bd786459671e31556517bcd833e9b38e64fab741`.
+
+The local nftables version rendered dormant flags as unstable JSON string
+values while its sets changed. Production rejects all such values. Only the
+test uses an additional exact native text readback to prove the dormant bit
+survives cleanup, together with unchanged table/rule identity and actual packet
+observations. No production compatibility exception or flag whitelist was added.
+This is Linux kernel evidence, not completed public parent/journal admission,
+macOS lifecycle, a hosted release or physical-device acceptance.
+
+### Profile-helper startup delay and explicit package loading
+
+At [`27eb9491`, instrumented job 124421906988](https://github.com/Eabusham2/router-vpn/actions/runs/41162175978/job/124421906988),
+the first qualified filesystem command took 0.0342322 seconds, while the complete
+helper group still took 31.1079194 seconds. The finer diagnostic at
+[`882fecca`, job 124423412057](https://github.com/Eabusham2/router-vpn/actions/runs/41162664848/job/124423412057)
+located 45.2144777 seconds inside loading `RouterVPN-Windows-ProfileSettings.ps1`
+out of a 45.8473583-second helper group. The actual file read took 0.0013132
+seconds. All other helper loads were below half a second on that run.
+
+The helper used `Get-Command` to ask whether its UI-state function was already
+loaded. Microsoft documents that an
+[exact-name Get-Command lookup searches available modules and can import one](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.core/get-command?view=powershell-5.1).
+The corrected helper inspects the loaded Function drive and imports the known
+packaged state module only when absent, retaining its existing captured
+transport and UTF-8 ScriptBlock composition.
+
+The PowerShell 7.4.6 semantic fixture loads the actual helper with an unrelated
+discoverable module exporting the same function. Both absent and already-loaded
+packaged state cases preserve the exact module/controller objects. Reinstating
+the old lookup executes the unrelated module and is rejected by its independent
+file witness. The existing 51 UI-state/consumer checks and six instrumentation
+preservation tests pass. Windows CI executes the same loading and system-command
+probes in PowerShell 5.1 and 7 after its independent first-launch observation.
+Fresh native results and reduced cold timing remain pending for `d02bc9f6`;
+local functional proof is not a native timing measurement.
+
+### Still-open native and full-product requirements
+
+The mandatory Windows linked-token UAC and GLOBALROOT Shell diagnostic failures
+remain, as detailed above. Protected elevated fixtures cannot substitute for
+those acceptance cases. At `2b1fb0c5`, further controller steps have reported
+failures; their completed job log was not yet available at this cutoff, so no
+source diagnosis is inferred from a step title alone.
+
+The latest inspected macOS installer jobs at `b131cd6e` failed on both
+[Apple Silicon, job 124418635373](https://github.com/Eabusham2/router-vpn/actions/runs/41161107178/job/124418635373)
+and [Intel, job 124418635418](https://github.com/Eabusham2/router-vpn/actions/runs/41161107178/job/124418635418).
+Each passed its owned live/zombie/reaped and unlinked-executable native cases,
+then refused a live status-2 process with `proc_pidpath` result zero/ENOENT and
+complete independent BSD metadata. Its observed `provjobd` name is not accepted
+as executable identity. No name allowlist, blanket ENOENT exception or inventory
+skip was introduced.
+
+Public Windows Connect/AUTO/SMART/Speed Lab, Naive H2/H3 owned Node composition
+and Linux generated-host lifecycle are active source units. Their uncommitted
+or preliminary outcomes are not claimed as published completion here. The full
+reconciled original graph/platform scope, source/native/package convergence,
+private/off-LAN acceptance, real-device UI and networking, signing and deliberate
+deployment remain binding. No private server/router change or new all-green
+exact-SHA release was performed or established by this continuation.

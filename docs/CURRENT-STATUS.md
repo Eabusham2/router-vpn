@@ -6,7 +6,51 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 2b1fb0c5
+## Latest implementation continuation — through d02bc9f6
+
+The verified source cutoff is
+[`d02bc9f68fb9ea522e50daa84b5fbab28c9f14f7`](https://github.com/Eabusham2/router-vpn/commit/d02bc9f68fb9ea522e50daa84b5fbab28c9f14f7).
+The [new native outcomes and active-table correction](CONTINUATION-EVIDENCE-2026-10-30.md#native-session-and-node-outcomes-active-linux-tables-and-profile-helper-loading)
+record the exact commits, native jobs and validation limits.
+
+- The actual installed/Portable Windows Session passed at both `db6f789b` and
+  `2b1fb0c5`. The latter includes all eight native cases, both real UI channels,
+  four protected-shell cases, all four compiled Session controls and the
+  existing Portable/updater preparation controls. These are elevated fixture
+  results; interactive/cross-account UAC and device networking remain separate.
+- The complete Windows Node process gate passed at `2b1fb0c5`: six actual native
+  process cases, 62 shared ownership groups, fourteen command rejections and
+  all 32 compiled negative controls. The earlier suite timeout is closed by
+  this completed execution. Authenticated package/dataplane integration and
+  newer public Connect/SMART/Speed Lab changes still require their own evidence.
+- Linux preparation and heartbeat now reject a dormant or ambiguously flagged
+  nftables table (`4965310e`). All thirteen actual race-instrumented kernel
+  groups passed in isolated namespaces. The new running-owner and pre-account
+  cases reject the old behavior; exact owned cleanup remains possible without
+  adopting the disabled table as valid protection. Linux public parent/journal
+  and generated-host lifecycle integration remain unfinished.
+- Windows App/Tray bind their first filesystem commands to the system module
+  (`27eb9491`). Fixed diagnostic stages (`882fecca`) then isolated a remaining
+  45.21-second delay to the profile-settings helper. Its loaded-function guards
+  now avoid discovery of unrelated modules (`d02bc9f6`). Actual PowerShell 7
+  loading preserves the packaged state/controller owners, rejects the original
+  discovery behavior, and passes the existing 51 UI-state checks. Fresh Windows
+  PowerShell 5.1/7 execution and improved cold timing are pending at this cutoff.
+
+The mandatory linked-token UAC and GLOBALROOT Shell support checks still fail.
+Both latest inspected macOS installer native jobs at `b131cd6e` also refuse a
+live process whose executable identity cannot be read; a process name is not
+accepted as evidence that it is unrelated. Neither requirement has been waived.
+Further Windows controller steps have reported failures whose completed logs
+are still pending; no diagnosis is assigned from their step names alone.
+
+Public Windows connection ownership, Naive H2/H3 native Node composition and
+Linux lifecycle integration are under final source validation or active
+implementation. The original graph/platform scope, physical/off-LAN tests,
+signing, private deployment and exact-SHA release convergence remain required.
+There is no new all-green release or private deployment at this cutoff.
+
+## Earlier implementation continuation — through 2b1fb0c5
 
 The verified source cutoff is
 [`2b1fb0c58a613e8265f59ba259f7aa41c66cd25e`](https://github.com/Eabusham2/router-vpn/commit/2b1fb0c58a613e8265f59ba259f7aa41c66cd25e).
