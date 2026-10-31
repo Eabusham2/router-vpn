@@ -193,21 +193,47 @@ def stage(label):
 
 
 def retained_binary(path):
+    windows = platform.system() == "Windows"
+
     def identity(record):
-        return (record.st_dev, record.st_ino, record.st_mode, record.st_nlink,
-                record.st_size, record.st_mtime_ns, record.st_ctime_ns)
+        if not stat.S_ISREG(record.st_mode) or record.st_nlink != 1:
+            raise ValueError("Node baseline executable is not its owned regular file")
+        result = (record.st_dev, record.st_ino, record.st_mode, record.st_nlink,
+                  record.st_size, record.st_mtime_ns, record.st_ctime_ns)
+        if windows:
+            # Both CPython views expose native creation time and attributes.
+            # A regular-looking name surrogate must not become an owned image.
+            native = tuple(getattr(record, field, None) for field in
+                           ("st_birthtime_ns", "st_file_attributes", "st_reparse_tag"))
+            if any(not isinstance(value, int) for value in native) or native[1] & stat.FILE_ATTRIBUTE_REPARSE_POINT or native[2]:
+                raise ValueError("Node baseline executable lacks a non-reparse native file identity")
+            result += native
+        return result
+
+    def same_object(named, handled):
+        if not windows:
+            return named == handled
+        # CPython 3.12.10's win32_xstat adds execute bits for .exe paths and
+        # aliases path ctime to birthtime. Its fstat uses the handle's raw mode
+        # and FileBasicInfo.ChangeTime. Compare like native fields across those
+        # views, while retaining EACH complete original tuple for readback.
+        handle_mode = handled[2] | (0o111 if path.suffix.lower() == ".exe" else 0)
+        return (named[:2], named[2], named[3:6], named[7:]) == (
+            handled[:2], handle_mode, handled[3:6], handled[7:])
+
     before = path.lstat()
-    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
-        raise ValueError("Node baseline executable is not its owned regular file")
+    named = identity(before)
     digest = hashlib.sha256()
     with path.open("rb") as opened:
-        if identity(os.fstat(opened.fileno())) != identity(before):
-            raise ValueError("Node baseline executable changed while opening its original file")
+        handled = identity(os.fstat(opened.fileno()))
+        if not same_object(named, handled):
+            raise ValueError("Node baseline executable changed while opening its original file "
+                             "(path=%r; handle=%r)" % (named, handled))
         for block in iter(lambda: opened.read(1024 * 1024), b""):
             digest.update(block)
-        if identity(os.fstat(opened.fileno())) != identity(before) or identity(path.lstat()) != identity(before):
+        if identity(os.fstat(opened.fileno())) != handled or identity(path.lstat()) != named:
             raise ValueError("Node baseline executable changed during its file readback")
-    return identity(before), digest.hexdigest()
+    return named, handled, digest.hexdigest()
 
 
 class BaselineBinaries:

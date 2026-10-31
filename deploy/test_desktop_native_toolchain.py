@@ -13,6 +13,7 @@ import stat
 import subprocess
 import tarfile
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
 import zipfile
@@ -925,6 +926,94 @@ class SelectedNodeCompiler(unittest.TestCase):
                  patch.object(node, 'run', return_value=(0, json.dumps(identity))), \
                  self.assertRaisesRegex(ValueError, 'ambiguous executable search paths'):
                 node.selected_compiler('bootstrap-go', root, {'PATH': 'first', 'Path': 'second'})
+
+
+class RetainedNodeFileIdentity(unittest.TestCase):
+    """Exercise CPython's distinct Windows path/handle views with real bytes."""
+    def setUp(self):
+        self.node = SelectedNodeCompiler.runner()
+        temporary = tempfile.TemporaryDirectory(prefix='node image identity ')
+        self.addCleanup(temporary.cleanup)
+        self.image = file(Path(temporary.name)/'baseline.test.exe', b'original compiled image bytes')
+        self.named = dict(st_dev=33, st_ino=(1 << 90) + 29, st_mode=stat.S_IFREG | 0o777,
+                          st_nlink=1, st_size=self.image.stat().st_size,
+                          st_mtime_ns=900, st_ctime_ns=100, st_birthtime_ns=100,
+                          st_file_attributes=stat.FILE_ATTRIBUTE_ARCHIVE, st_reparse_tag=0)
+        # Exact CPython 3.12.10 semantics: descriptor ctime is ChangeTime;
+        # pathname ctime is creation time, and only the name gains execute bits.
+        self.handled = dict(self.named, st_mode=stat.S_IFREG | 0o666, st_ctime_ns=800)
+
+    def readback(self, *, named=None, handled=None, named_after=None, handled_after=None,
+                 system='Windows', suffix='.exe'):
+        named = self.named if named is None else named
+        handled = self.handled if handled is None else handled
+        path = MagicMock()
+        path.suffix = suffix
+        path.lstat.side_effect = [SimpleNamespace(**named),
+                                 SimpleNamespace(**(named if named_after is None else named_after))]
+        path.open.side_effect = self.image.open
+        with patch.object(self.node.platform, 'system', return_value=system), \
+             patch.object(self.node.os, 'fstat', side_effect=[SimpleNamespace(**handled),
+                         SimpleNamespace(**(handled if handled_after is None else handled_after))]):
+            return self.node.retained_binary(path)
+
+    def test_windows_executable_annotation_and_native_times_keep_a_stable_receipt(self):
+        for suffix in ('.exe', '.EXE'):
+            with self.subTest(suffix=suffix):
+                receipt = self.readback(suffix=suffix)
+                self.assertEqual(receipt, self.readback(suffix=suffix))
+                self.assertIn(hashlib.sha256(self.image.read_bytes()).hexdigest(), receipt)
+
+    def test_both_original_ctime_values_remain_bound_between_invocations(self):
+        original = self.readback()
+        self.assertNotEqual(original, self.readback(named=dict(self.named, st_ctime_ns=101)))
+        self.assertNotEqual(original, self.readback(handled=dict(self.handled, st_ctime_ns=801)))
+
+    def test_equal_metadata_does_not_hide_different_file_contents(self):
+        original = self.readback()
+        self.image.write_bytes(self.image.read_bytes()[::-1])
+        self.assertNotEqual(original, self.readback())
+
+    def test_every_shared_native_field_must_match_the_opened_object(self):
+        changes = {'st_dev': 34, 'st_ino': (1 << 90) + 30,
+                   'st_mode': stat.S_IFREG | 0o466, 'st_nlink': 2,
+                   'st_size': self.named['st_size'] + 1, 'st_mtime_ns': 901,
+                   'st_birthtime_ns': 101, 'st_file_attributes': stat.FILE_ATTRIBUTE_READONLY}
+        for field, value in changes.items():
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                self.readback(handled=dict(self.handled, **{field: value}))
+
+    def test_every_original_field_is_read_back_on_both_authorities(self):
+        changes = {'st_dev': 34, 'st_ino': (1 << 90) + 30,
+                   'st_mode': stat.S_IFREG | 0o444, 'st_nlink': 2,
+                   'st_size': self.named['st_size'] + 1, 'st_mtime_ns': 901,
+                   'st_ctime_ns': 999, 'st_birthtime_ns': 101,
+                   'st_file_attributes': stat.FILE_ATTRIBUTE_READONLY, 'st_reparse_tag': 1}
+        for view, original in (('named_after', self.named), ('handled_after', self.handled)):
+            for field, value in changes.items():
+                with self.subTest(view=view, field=field), self.assertRaises(ValueError):
+                    self.readback(**{view: dict(original, **{field: value})})
+
+    def test_regular_looking_reparse_files_and_missing_native_fields_are_rejected(self):
+        for view, original in (('named', self.named), ('handled', self.handled), ('both', None)):
+            for changes in ({'st_file_attributes': stat.FILE_ATTRIBUTE_REPARSE_POINT},
+                            {'st_reparse_tag': 0xA0000003}, {'st_birthtime_ns': None},
+                            {'st_file_attributes': None}, {'st_reparse_tag': None}):
+                with self.subTest(view=view, changes=changes), self.assertRaises(ValueError):
+                    records = ({'named': dict(self.named, **changes), 'handled': dict(self.handled, **changes)}
+                               if view == 'both' else {view: dict(original, **changes)})
+                    self.readback(**records)
+
+    def test_filename_annotation_cannot_hide_other_modes_or_posix_ctime_changes(self):
+        for system, suffix, handled in (
+                ('Windows', '.test', self.handled),
+                ('Linux', '.exe', dict(self.handled, st_ctime_ns=self.named['st_ctime_ns'])),
+                ('Linux', '.exe', dict(self.named, st_ctime_ns=101))):
+            with self.subTest(system=system, suffix=suffix, handled=handled), self.assertRaises(ValueError):
+                self.readback(system=system, suffix=suffix, handled=handled)
+        # POSIX still requires the complete unmodified raw tuple in both views.
+        self.assertEqual(self.readback(system='Linux', handled=self.named),
+                         self.readback(system='Linux', handled=self.named))
 
 
 class RetainedNodeBaselines(unittest.TestCase):
