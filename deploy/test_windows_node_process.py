@@ -20,6 +20,7 @@ import json
 import os
 import platform
 import re
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -153,6 +154,16 @@ def check_baseline(status, output):
     if (status or invalid_execution(output) or "--- FAIL:" in output or
             any(not test_line(output, "PASS", name) for name in EXPECTED)):
         raise ValueError("Native Node process gate did not execute every required ownership case:\n" + output[-32768:])
+
+
+def report_baseline(status, output):
+    # Windows redirected Python output can default to cp1252 while the native
+    # fixture emits UTF-8 private paths. Keep their exact spelling visible;
+    # a console encoding error must not hide the actual native exit status.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="strict")
+    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    check_baseline(status, output)
 
 
 def check_rejection(name, test, witness, status, output):
@@ -291,8 +302,7 @@ def execute(go="go", *, env=None):
         status, output = NATIVE.run(
             [binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=120s", "-test.v"],
             cwd=ROOT / "cmd/client", env=captured, timeout=135)
-        print(output, end="" if output.endswith("\n") else "\n", flush=True)
-        check_baseline(status, output)
+        report_baseline(status, output)
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("Native Node process fixture changed during execution")
         for filename, name, test, witness, replacement in changes:

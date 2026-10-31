@@ -2,6 +2,7 @@
 """Reject missing source and false native-process gate acknowledgments."""
 from pathlib import Path
 import importlib.util
+import io
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -64,6 +65,22 @@ class NodeProcessRunner(unittest.TestCase):
                                       (1, output + "[build failed]")):
                     with self.assertRaisesRegex(ValueError, "intended boundary"):
                         GATE.check_rejection(name, test, witness, status, wrong)
+
+    def test_native_unicode_output_survives_cp1252_and_keeps_actual_exit_gate(self):
+        output = "\n".join("--- PASS: " + name + " (0.01s)" for name in GATE.EXPECTED)
+        output += "\nprivate path: C:\\Portable 路由器\\Data\\routers.json\n"
+        for status in (0, 1):
+            with self.subTest(status=status):
+                raw = io.BytesIO()
+                with io.TextIOWrapper(raw, encoding="cp1252", errors="strict", newline="") as stream:
+                    with patch.object(GATE.sys, "stdout", stream):
+                        if status:
+                            with self.assertRaisesRegex(ValueError, "every required ownership case"):
+                                GATE.report_baseline(status, output)
+                        else:
+                            GATE.report_baseline(status, output)
+                    self.assertEqual(raw.getvalue().decode("utf-8"), output)
+                    self.assertEqual(stream.encoding, "utf-8")
 
     def test_mutations_are_exact_production_changes_and_leave_the_source_unchanged(self):
         originals = {name: (ROOT / name).read_bytes() for name in
