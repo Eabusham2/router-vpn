@@ -109,18 +109,12 @@ func fixtureInspectMediumStartup(t *testing.T, api *fixtureRestrictedAPI, token 
 	func() {
 		image.mu.Lock()
 		defer image.mu.Unlock()
-		reopen, err := api.native.event.Dll.FindProc("ReOpenFile")
-		if err != nil {
-			t.Fatal(err)
-		}
 		for index, held := range image.handles {
-			value, _, callErr := reopen.Call(uintptr(held), 0x00020080,
-				syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE, 0x02200000)
-			if syscall.Handle(value) == syscall.InvalidHandle || value == 0 {
-				t.Fatal(nativeError("Medium captured executable ancestry security readback", callErr))
+			handle, err := fixtureOpenSameMediumObject(api.native, held, 0x00020080, 0x02200000)
+			if err != nil {
+				t.Fatalf("Medium captured executable component %d security readback: %v", index, err)
 			}
 			func() {
-				handle := syscall.Handle(value)
 				defer func() {
 					if err := syscall.CloseHandle(handle); err != nil {
 						t.Error(err)

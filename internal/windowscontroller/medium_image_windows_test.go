@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"unsafe"
 )
@@ -23,7 +24,7 @@ import (
 type fixtureMediumImage struct {
 	image         *Image
 	file, dir     syscall.Handle
-	reopen        *syscall.Proc
+	native        *nativeAPI
 	dispose       *syscall.Proc
 	retiringWrite syscall.Handle
 	removal       syscall.Handle
@@ -32,12 +33,8 @@ type fixtureMediumImage struct {
 }
 
 func fixtureCaptureMediumImage(api *fixtureRestrictedAPI, source *Image, sid string) (_ *fixtureMediumImage, resultErr error) {
-	owner := &fixtureMediumImage{}
+	owner := &fixtureMediumImage{native: api.native}
 	var err error
-	owner.reopen, err = api.native.event.Dll.FindProc("ReOpenFile")
-	if err != nil {
-		return owner, err
-	}
 	owner.dispose, err = api.native.event.Dll.FindProc("SetFileInformationByHandle")
 	if err != nil {
 		return owner, err
@@ -117,7 +114,7 @@ func fixtureCaptureMediumImage(api *fixtureRestrictedAPI, source *Image, sid str
 	if err := syscall.FlushFileBuffers(owner.file); err != nil {
 		return owner, err
 	}
-	// ReOpenFile retains the same object with metadata-only access. A duplicate
+	// Retain the same native object with metadata-only access. A duplicate
 	// of the writable file object would keep its write access and conflict with
 	// the unchanged production pin's refusal to share image writes/deletion.
 	metadata, err := owner.open(owner.file, 0x00020080 /* READ_CONTROL | READ_ATTRIBUTES */, 0x00200000)
@@ -165,15 +162,51 @@ func (handle fixtureMediumFileWriter) Write(data []byte) (int, error) {
 	return int(written), err
 }
 
-// ReOpenFile resolves the already retained object, not a later pathname.
-// https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-reopenfile
-func (owner *fixtureMediumImage) open(handle syscall.Handle, access uint32, flags uint32) (syscall.Handle, error) {
-	value, _, callErr := owner.reopen.Call(uintptr(handle), uintptr(access),
-		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE, uintptr(flags))
-	if syscall.Handle(value) == syscall.InvalidHandle || value == 0 {
-		return 0, nativeError("private Medium retained object reopen", callErr)
+// The actual hosted fixture rejects ReOpenFile for retained directory/security
+// and disposal access. Resolve the held object's kernel volume-GUID spelling,
+// open with the exact requested rights, and independently compare native file
+// identity before using it. A successful pathname open alone is never proof.
+// The original handle remains retained throughout capture and later cleanup.
+func fixtureOpenSameMediumObject(api *nativeAPI, handle syscall.Handle, access, flags uint32) (syscall.Handle, error) {
+	var before syscall.ByHandleFileInformation
+	if api == nil || handle == 0 || handle == syscall.InvalidHandle {
+		return 0, errors.New("private Medium object has no retained native owner")
 	}
-	return syscall.Handle(value), nil
+	if err := syscall.GetFileInformationByHandle(handle, &before); err != nil {
+		return 0, err
+	}
+	if before.VolumeSerialNumber == 0 || before.FileIndexHigh == 0 && before.FileIndexLow == 0 || before.FileAttributes&0x400 != 0 {
+		return 0, errors.New("private Medium object has no stable non-reparse identity")
+	}
+	name := make([]uint16, 32768)
+	length, _, callErr := api.finalPath.Call(uintptr(handle), uintptr(unsafe.Pointer(&name[0])), uintptr(len(name)),
+		1 /* FILE_NAME_NORMALIZED | VOLUME_NAME_GUID */)
+	runtime.KeepAlive(name)
+	if length == 0 || length >= uintptr(len(name)) {
+		return 0, nativeError("private Medium retained object spelling", callErr)
+	}
+	path := syscall.UTF16ToString(name[:length])
+	root, err := executableRoot(path)
+	if err != nil || len(root) < len(volumeGUIDPrefix) || !strings.EqualFold(root[:len(volumeGUIDPrefix)], volumeGUIDPrefix) {
+		return 0, errors.Join(err, errors.New("private Medium retained object lost its local volume identity"))
+	}
+	actual, err := syscall.CreateFile(&name[0], access,
+		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE, nil, syscall.OPEN_EXISTING, flags, 0)
+	runtime.KeepAlive(name)
+	if err != nil {
+		return 0, nativeError("private Medium identity-checked open", err)
+	}
+	var after syscall.ByHandleFileInformation
+	readErr := syscall.GetFileInformationByHandle(actual, &after)
+	if readErr != nil || after.VolumeSerialNumber != before.VolumeSerialNumber || after.FileIndexHigh != before.FileIndexHigh ||
+		after.FileIndexLow != before.FileIndexLow || after.FileAttributes != before.FileAttributes {
+		return 0, errors.Join(readErr, syscall.CloseHandle(actual), errors.New("private Medium open substituted its retained native object"))
+	}
+	return actual, nil
+}
+
+func (owner *fixtureMediumImage) open(handle syscall.Handle, access uint32, flags uint32) (syscall.Handle, error) {
+	return fixtureOpenSameMediumObject(owner.native, handle, access, flags)
 }
 
 func (owner *fixtureMediumImage) close() error {
