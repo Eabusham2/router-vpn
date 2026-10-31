@@ -9,12 +9,14 @@ kernel support fails the mandatory gate; no privileged cases are skipped.
 """
 from pathlib import Path
 import argparse
+import contextlib
 import ctypes
 import hashlib
 import importlib.util
 import json
 import os
 import platform
+import re
 import shutil
 import stat
 import subprocess
@@ -32,6 +34,119 @@ KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGua
                 'BlockedControlRetainsSourcePort', 'RejectsStaleCaptureAndGeneration',
                 'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement',
                 'ClosedProtectionObservations', 'RejectsDormantTable')
+ACCOUNT_FILES = ('passwd', 'group', 'shadow', 'gshadow', 'subuid', 'subgid')
+
+
+def account_mounts(directory):
+    result = []
+    for line in Path('/proc/self/mountinfo').read_text().splitlines():
+        fields = line.split()
+        path = Path(re.sub(r'\\([0-7]{3})', lambda match: chr(int(match.group(1), 8)), fields[4]))
+        if path == directory or path.is_relative_to(directory):
+            result.append((fields[0], path, frozenset(fields[5].split(','))))
+    return result
+
+
+def unmount_account_mounts(mounted):
+    # An rbind at /etc can hide existing /etc submounts. Retire only captured
+    # new mount IDs, checking the currently visible native root first.
+    # A less-privileged nested user namespace locks inherited submounts into
+    # their tree. Detach our complete new bind after its test child joins;
+    # do not attempt to unmount locked or hidden inherited children separately.
+    # The joined namespace owner remains the final lifetime boundary.
+    by_path = {}
+    for identity, path, _ in mounted:
+        by_path.setdefault(path, set()).add(identity)
+    roots = [path for path in by_path if not any(parent in by_path for parent in path.parents)]
+    for path in roots:
+        descriptor = os.open(path, os.O_PATH | os.O_CLOEXEC | os.O_NOFOLLOW)
+        try:
+            native = [line.split()[1] for line in Path('/proc/self/fdinfo/'+str(descriptor)).read_text().splitlines()
+                      if line.startswith('mnt_id:')]
+        finally:
+            os.close(descriptor)
+        if len(native) != 1 or native[0] not in by_path[path]:
+            raise ValueError('Private account cleanup lost its original visible mount')
+        captured = {identity for identity, target, _ in mounted if target == path or target.is_relative_to(path)}
+        subprocess.run(['umount', '--lazy', '--no-canonicalize', '--', str(path)], check=True)
+        if any(identity in captured for identity, _, _ in account_mounts(path)):
+            raise ValueError('Private account cleanup retained its captured mount tree')
+
+
+@contextlib.contextmanager
+def bind_account_directory(source, target):
+    before = {identity for identity, _, _ in account_mounts(target)}
+    subprocess.run(['mount', '--rbind', str(source), str(target)], check=True)
+    owned = [record for record in account_mounts(target) if record[0] not in before]
+    try:
+        if not any(path == target for _, path, _ in owned):
+            raise ValueError('Private account directory lost its new root mount')
+        yield
+    finally:
+        unmount_account_mounts(owned)
+
+
+@contextlib.contextmanager
+def private_account_directory(source, workspace):
+    """Capture config read-only and copy only the account tools' mutable files.
+
+    The caller owns a private mount namespace. Recursive read-only backing
+    retains the real NSS/tool configuration without copying an unrelated
+    runner's whole /etc tree. Account databases, backups and locks never alias
+    that backing. Other users still need directory traversal for NSS reads.
+    """
+    workspace.chmod(0o711)
+    backing, private = workspace/'original-etc', workspace/'etc'
+    backing.mkdir()
+    subprocess.run(['mount', '--rbind', str(source), str(backing)], check=True)
+    mounted = account_mounts(backing)
+    private_mounts = []
+    try:
+        if not any(path == backing for _, path, _ in mounted):
+            raise ValueError('Private account source lost its captured bind mount')
+        for _, path, _ in sorted(mounted, key=lambda item: len(item[1].parts), reverse=True):
+            subprocess.run(['mount', '-o', 'remount,bind,ro', str(path)], check=True)
+        observed = account_mounts(backing)
+        if ({(identity, path) for identity, path, _ in observed} !=
+                {(identity, path) for identity, path, _ in mounted}
+                or any('ro' not in options for _, _, options in observed)):
+            raise ValueError('Private account source is not recursively read-only')
+        source_info = source.stat()
+        private.mkdir(mode=stat.S_IMODE(source_info.st_mode))
+        private.chmod(stat.S_IMODE(source_info.st_mode))
+        os.chown(private, source_info.st_uid, source_info.st_gid)
+        mutable = set(ACCOUNT_FILES) | {name+'-' for name in ACCOUNT_FILES}
+        locks = {'.pwd.lock', *(name+'.lock' for name in ACCOUNT_FILES)}
+        for entry in backing.iterdir():
+            target = private/entry.name
+            if entry.name in locks:
+                continue
+            if entry.name in mutable:
+                info = entry.lstat()
+                if not stat.S_ISREG(info.st_mode) or info.st_size > 8*1024*1024:
+                    raise ValueError('Private account database is not a bounded regular file: '+entry.name)
+                shutil.copy2(entry, target, follow_symlinks=False)
+                os.chown(target, info.st_uid, info.st_gid, follow_symlinks=False)
+            elif entry.is_symlink():
+                # Relative links must resolve at their real /etc position,
+                # including links escaping /etc to /usr. Indirection through
+                # an unrelated /tmp backing path changes that meaning.
+                target.symlink_to(os.readlink(entry))
+            else:
+                if entry.is_dir():
+                    target.mkdir()
+                    operation = '--rbind'
+                else:
+                    target.touch()
+                    operation = '--bind'
+                subprocess.run(['mount', operation, str(entry), str(target)], check=True)
+                private_mounts.extend(account_mounts(target))
+        if any(not (private/name).is_file() or (private/name).is_symlink() for name in ACCOUNT_FILES[:4]):
+            raise ValueError('Private account source is missing a required local database')
+        yield private
+    finally:
+        unmount_account_mounts(private_mounts)
+        unmount_account_mounts(mounted)
 
 
 def namespace_progress(message):
@@ -77,12 +192,11 @@ def namespace_test(binary: Path, case=None) -> int:
                 os._exit(os.waitstatus_to_exitcode(status))
             namespace_progress('make inherited mounts private')
             subprocess.run(['mount', '--make-rprivate', '/'], check=True)
-            with tempfile.TemporaryDirectory(prefix='routervpn-guardian-namespace-') as temporary:
-                etc = Path(temporary) / 'etc'
-                namespace_progress('copy private account directory')
-                shutil.copytree('/etc', etc, symlinks=True)
+            namespace_progress('capture read-only configuration and private account files')
+            with tempfile.TemporaryDirectory(prefix='routervpn-guardian-namespace-') as temporary, \
+                    private_account_directory(Path('/etc'), Path(temporary)) as etc, \
+                    bind_account_directory(etc, Path('/etc')):
                 namespace_progress('bind private account directory')
-                subprocess.run(['mount', '--bind', str(etc), '/etc'], check=True)
                 namespace_progress('mount private runtime directory')
                 subprocess.run(['mount', '-t', 'tmpfs', '-o', 'mode=755', 'tmpfs', '/run'], check=True)
                 for arguments in [
@@ -114,7 +228,6 @@ def namespace_test(binary: Path, case=None) -> int:
                 # (for example a runner's /run/user/1001), which this test
                 # neither created nor has authority to retire.
                 namespace_progress('unmount private account directory')
-                subprocess.run(['umount', '/etc'], check=True)
             namespace_progress('private account workspace removed; return test status ' + str(result))
             os._exit(result if result >= 0 else 128 - result)
         except BaseException as error:
