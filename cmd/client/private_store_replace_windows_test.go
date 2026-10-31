@@ -5,12 +5,45 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 )
+
+func retainWindowsPrivateStoreFile(t *testing.T, path string) (*os.File, os.FileInfo) {
+	t.Helper()
+	name, err := windowsPrivateStoreName(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Ordinary os.Stat defers its Windows file-ID lookup until os.SameFile,
+	// which would reopen the replacement pathname. Capture the ID from a
+	// retained native file instead, sharing DELETE so replacement stays real.
+	handle, err := syscall.CreateFile(name, syscall.GENERIC_READ,
+		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
+		nil, syscall.OPEN_EXISTING, syscall.FILE_ATTRIBUTE_NORMAL, 0)
+	if err != nil {
+		t.Fatal("capture actual Windows private file before replacement", err)
+	}
+	file := os.NewFile(uintptr(handle), path)
+	if file == nil {
+		_ = syscall.CloseHandle(handle)
+		t.Fatal("retained Windows private file has no owned Go handle")
+	}
+	t.Cleanup(func() {
+		if err := file.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+			t.Error("retained Windows private file failed to close", err)
+		}
+	})
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatal("retained Windows private file has no regular native identity", err)
+	}
+	return file, info
+}
 
 func requireWindowsPrivateStoreBytes(t *testing.T, path string, want []byte) {
 	t.Helper()
@@ -39,17 +72,18 @@ func TestWindowsPrivateStoreWriteThroughReplace(t *testing.T) {
 				t.Fatal("first actual Windows private publication", err)
 			}
 			requireWindowsPrivateStoreBytes(t, path, first)
-			before, err := os.Stat(path)
-			if err != nil {
-				t.Fatal(err)
-			}
+			retained, before := retainWindowsPrivateStoreFile(t, path)
 			if err := atomicWritePrivate(path, next); err != nil {
 				t.Fatal("replacement actual Windows private publication", err)
 			}
 			requireWindowsPrivateStoreBytes(t, path, next)
-			after, err := os.Stat(path)
-			if err != nil || os.SameFile(before, after) {
-				t.Fatal("private replacement modified the old file instead of promoting its new private file", err)
+			_, after := retainWindowsPrivateStoreFile(t, path)
+			if os.SameFile(before, after) {
+				t.Fatal("private replacement modified the old file instead of promoting its new private file")
+			}
+			preserved, err := io.ReadAll(retained)
+			if err != nil || !bytes.Equal(preserved, first) {
+				t.Fatal("private replacement changed the retained original file bytes", err)
 			}
 		})
 	}
