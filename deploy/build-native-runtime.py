@@ -105,6 +105,8 @@ def inputs():
                              ROOT/'deploy/test_windows_protection_observation.py',
                              ROOT/'deploy/test_windows_node_physical.py',
                              ROOT/'deploy/test_windows_node_physical_runner.py',
+                             ROOT/'deploy/test_windows_node_pq.py',
+                             ROOT/'deploy/test_windows_node_pq_runner.py',
                              ROOT/'deploy/test_desktop_windows_traffic.py',
                              ROOT/'deploy/test_windows_physical_bootstrap.py',
                              ROOT/'deploy/test_windows_physical_bootstrap_runner.py',
@@ -552,6 +554,13 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 run([sys.executable, ROOT/'deploy/test_windows_node_physical_runner.py'], cwd=ROOT, env=env)
                 run([sys.executable, ROOT/'deploy/test_windows_node_physical.py', source],
                     env=env, timeout=1200)
+                run([sys.executable, ROOT/'deploy/test_windows_node_pq_runner.py'], cwd=ROOT, env=env)
+                # Actual matching-host CGO/Rust, isolated sockets and BFE. Only
+                # the two future PQ modes use an explicit test-only predicate;
+                # public admission removes this flag after native proof.
+                run([sys.executable, ROOT/'deploy/test_windows_node_pq.py', source, pq,
+                     '--cache', cache or ROOT/'dist/.native-pq-cache', '--prospective'],
+                    env=env, timeout=2400)
                 run([sys.executable, ROOT/'deploy/test_desktop_windows_traffic.py', source],
                     env=env, timeout=600)
                 # This explicit test-only admission overlay proves bootstrap

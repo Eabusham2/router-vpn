@@ -97,6 +97,7 @@ PEER_TEMPLATES = {
     'node_naive_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_peer_windows_test.go',
     'node_naive_loader_purego_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_loader_purego_test.go',
     'node_pq_peer_test.go.tmpl': 'protocol/routervpnpq/node_pq_peer_test.go',
+    'node_pq_peer_windows_test.go.tmpl': 'protocol/routervpnpq/node_pq_peer_windows_test.go',
     'node_xray_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_xray_peer_test.go',
     'node_composite_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_composite_peer_test.go',
     'node_sip003_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_sip003_peer_test.go',
@@ -593,6 +594,8 @@ def prepare(vendor, go='go', *, env=None):
             prefix = b'//go:build windows && routervpn_windows_node_composition\n\n' + prefix
         elif name == 'node_naive_loader_purego_test.go.tmpl':
             prefix = b'//go:build with_purego\n\n' + prefix
+        elif name == 'node_pq_peer_windows_test.go.tmpl':
+            prefix = b'//go:build windows && cgo && routervpn_native_pq && routervpn_pq_traffic_test && routervpn_windows_node_composition\n\npackage routervpnpq\n'
         elif name == 'node_pq_peer_test.go.tmpl':
             prefix = b'//go:build cgo && routervpn_native_pq && routervpn_pq_traffic_test\n\npackage routervpnpq\n'
         elif name == 'node_linux_peer_test.go.tmpl':

@@ -1,0 +1,1331 @@
+//go:build windows && cgo && routervpn_native_pq && routervpn_pq_traffic_test && routervpn_windows_node_composition
+
+package routervpnpq
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilepq"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
+	"github.com/sagernet/sing-box/log"
+	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+const nodePQWFPLimit = 64 << 10
+const nodePQWFPProbePrefix = "routervpn-pq-owned-raw-datagram/"
+
+// All observations are owned by this exact retained peer and armed over its
+// private anonymous input. They are disjoint from the actual KEM/packet data.
+type nodePQWFPObservation struct {
+	mu     sync.Mutex
+	counts map[string]int64
+}
+
+func (o *nodePQWFPObservation) arm(nonce string) error {
+	raw, err := hex.DecodeString(nonce)
+	if err != nil || len(raw) != 16 || hex.EncodeToString(raw) != nonce {
+		return errors.New("PQ probe nonce is not canonical")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.counts == nil {
+		o.counts = make(map[string]int64)
+	}
+	if _, exists := o.counts[nonce]; exists || len(o.counts) >= 128 {
+		return errors.New("PQ probe reused its nonce or exceeded its owned bound")
+	}
+	o.counts[nonce] = 0
+	return nil
+}
+func (o *nodePQWFPObservation) count(nonce string) (int64, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	count, ok := o.counts[nonce]
+	if !ok {
+		return 0, errors.New("PQ probe lost its exact nonce")
+	}
+	return count, nil
+}
+func (o *nodePQWFPObservation) receive(conn *net.UDPConn, body []byte, remote netip.AddrPort) (bool, error) {
+	if len(body) != len(nodePQWFPProbePrefix)+32 || !bytes.HasPrefix(body, []byte(nodePQWFPProbePrefix)) {
+		return false, nil
+	}
+	nonce := string(body[len(nodePQWFPProbePrefix):])
+	o.mu.Lock()
+	count, armed := o.counts[nonce]
+	if armed {
+		o.counts[nonce] = count + 1
+	}
+	o.mu.Unlock()
+	if !armed {
+		return false, nil
+	}
+	n, err := conn.WriteToUDPAddrPort(body, remote)
+	if err == nil && n != len(body) {
+		err = io.ErrShortWrite
+	}
+	return true, err
+}
+
+// A single bridge retains the same loopback KEM endpoint through an explicitly
+// joined client replacement. The layer bridge instead retains a bounded exact
+// connection per captured UDP sender; it cannot mix the two encrypted lanes.
+type nodePQWFPBridge struct {
+	listener    *net.UDPConn
+	target      *net.UDPAddr
+	single      *net.UDPConn
+	barrier     <-chan struct{}
+	observation nodePQWFPObservation
+	ctx         context.Context
+	cancel      context.CancelFunc
+	mu          sync.Mutex
+	dispatch    sync.Mutex
+	remote      netip.AddrPort
+	retired     map[netip.AddrPort]bool
+	peers       map[netip.AddrPort]*nodePQWFPBridgePeer
+	workers     sync.WaitGroup
+	packets     atomic.Int64
+	plain       atomic.Bool
+	once        sync.Once
+}
+
+type nodePQWFPBridgePeer struct {
+	connection *net.UDPConn
+	done       chan struct{}
+}
+
+func newNodePQWFPBridge(t *testing.T, ip netip.Addr, target string, single bool, barrier <-chan struct{}) *nodePQWFPBridge {
+	t.Helper()
+	address, err := net.ResolveUDPAddr("udp4", target)
+	if err != nil || !address.IP.IsLoopback() && !address.IP.Equal(net.IP(ip.AsSlice())) || address.Port == 0 {
+		t.Fatal("PQ reference bridge escaped its captured local peer", err)
+	}
+	listener, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(ip, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = listener.SetWriteBuffer(65535); err != nil {
+		_ = listener.Close()
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	f := &nodePQWFPBridge{listener: listener, target: address, barrier: barrier, ctx: ctx, cancel: cancel, peers: make(map[netip.AddrPort]*nodePQWFPBridgePeer), retired: make(map[netip.AddrPort]bool)}
+	if single {
+		f.single, err = net.DialUDP("udp4", nil, address)
+		if err != nil {
+			cancel()
+			_ = listener.Close()
+			t.Fatal(err)
+		}
+		f.workers.Add(1)
+		go f.returnPackets(f.single, netip.AddrPort{})
+	}
+	f.workers.Add(1)
+	go func() {
+		defer f.workers.Done()
+		packet := make([]byte, 65535)
+		for {
+			n, remote, err := listener.ReadFromUDPAddrPort(packet)
+			if err != nil {
+				return
+			}
+			if remote.Addr() != ip {
+				continue
+			}
+			if consumed, err := f.observation.receive(listener, packet[:n], remote); consumed || err != nil {
+				if err != nil {
+					return
+				}
+				continue
+			}
+			if err := f.forward(packet[:n], remote); err != nil {
+				return
+			}
+		}
+	}()
+	t.Cleanup(f.close)
+	return f
+}
+
+// reset and one complete forwarding operation share this retained dispatch
+// guard. A stale client tuple remains retired after reset, including packets
+// already read before the joined replacement command acquired the guard.
+func (f *nodePQWFPBridge) forward(packet []byte, remote netip.AddrPort) error {
+	f.dispatch.Lock()
+	defer f.dispatch.Unlock()
+	f.mu.Lock()
+	if f.ctx.Err() != nil {
+		f.mu.Unlock()
+		return f.ctx.Err()
+	}
+	if f.retired[remote] {
+		f.mu.Unlock()
+		return nil
+	}
+	peer := f.single
+	if peer != nil {
+		if f.remote.IsValid() && f.remote != remote {
+			f.mu.Unlock()
+			return nil
+		}
+		f.remote = remote
+	} else {
+		captured := f.peers[remote]
+		if captured == nil {
+			if len(f.peers) >= 16 {
+				f.mu.Unlock()
+				return nil
+			}
+			var err error
+			peer, err = net.DialUDP("udp4", nil, f.target)
+			if err != nil {
+				f.mu.Unlock()
+				return err
+			}
+			captured = &nodePQWFPBridgePeer{connection: peer, done: make(chan struct{})}
+			f.peers[remote] = captured
+			f.workers.Add(1)
+			go func() { defer close(captured.done); f.returnPackets(captured.connection, remote) }()
+		}
+		peer = captured.connection
+	}
+	f.mu.Unlock()
+	f.packets.Add(1)
+	if bytes.Contains(packet, []byte(nodePQPayload)) {
+		f.plain.Store(true)
+	}
+	if f.barrier != nil {
+		select {
+		case <-f.barrier:
+		case <-f.ctx.Done():
+			return f.ctx.Err()
+		}
+	}
+	if err := peer.SetWriteDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		return err
+	}
+	_, err := peer.Write(packet)
+	return err
+}
+
+func (f *nodePQWFPBridge) returnPackets(peer *net.UDPConn, captured netip.AddrPort) {
+	defer f.workers.Done()
+	packet := make([]byte, 65535)
+	for {
+		n, err := peer.Read(packet)
+		if err != nil {
+			return
+		}
+		remote := captured
+		if !remote.IsValid() {
+			f.mu.Lock()
+			remote = f.remote
+			f.mu.Unlock()
+		}
+		if !remote.IsValid() {
+			continue
+		}
+		if _, err = f.listener.WriteToUDPAddrPort(packet[:n], remote); err != nil {
+			return
+		}
+	}
+}
+func (f *nodePQWFPBridge) address() netip.AddrPort {
+	return f.listener.LocalAddr().(*net.UDPAddr).AddrPort()
+}
+func (f *nodePQWFPBridge) reset() {
+	f.dispatch.Lock()
+	f.mu.Lock()
+	if f.remote.IsValid() {
+		f.retired[f.remote] = true
+	}
+	f.remote = netip.AddrPort{}
+	joined := make([]<-chan struct{}, 0, len(f.peers))
+	for remote, peer := range f.peers {
+		f.retired[remote] = true
+		_ = peer.connection.Close()
+		joined = append(joined, peer.done)
+		delete(f.peers, remote)
+	}
+	f.mu.Unlock()
+	f.dispatch.Unlock()
+	for _, done := range joined {
+		<-done
+	}
+}
+func (f *nodePQWFPBridge) close() {
+	f.once.Do(func() {
+		f.cancel()
+		_ = f.listener.Close()
+		f.mu.Lock()
+		if f.single != nil {
+			_ = f.single.Close()
+		}
+		for _, peer := range f.peers {
+			_ = peer.connection.Close()
+		}
+		f.mu.Unlock()
+		f.workers.Wait()
+	})
+}
+
+func nodePQWFPInterface(t *testing.T) netip.Addr {
+	t.Helper()
+	logger := log.NewNOPFactory().Logger()
+	updates, err := tun.NewNetworkUpdateMonitor(logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := updates.Close(); err != nil {
+			t.Error("PQ physical update monitor did not join", err)
+		}
+	}()
+	monitor, err := tun.NewDefaultInterfaceMonitor(updates, logger, tun.DefaultInterfaceMonitorOptions{InterfaceFinder: control.NewDefaultInterfaceFinder()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := monitor.Close(); err != nil {
+			t.Error("PQ default interface monitor did not join", err)
+		}
+	}()
+	if err = updates.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err = monitor.Start(); err != nil {
+		t.Fatal(err)
+	}
+	selected := monitor.DefaultInterface()
+	if selected == nil || selected.Flags&net.FlagUp == 0 || selected.Flags&net.FlagLoopback != 0 {
+		t.Fatal("PQ native reference has no current physical interface")
+	}
+	for _, prefix := range selected.Addresses {
+		if prefix.Addr().Is4() && prefix.Addr().IsPrivate() {
+			return prefix.Addr()
+		}
+	}
+	t.Fatal("PQ native reference requires a selected private IPv4 interface")
+	return netip.Addr{}
+}
+
+type nodePQWFPRequest struct {
+	Schema   int    `json:"schema"`
+	Mode     string `json:"mode"`
+	Layer    string `json:"layer"`
+	Address  string `json:"address"`
+	Public   []byte `json:"public"`
+	Password string `json:"password"`
+}
+type nodePQWFPReply struct {
+	Schema        int                       `json:"schema"`
+	AppID         []byte                    `json:"app_id"`
+	WG            string                    `json:"wg"`
+	KEM           string                    `json:"kem"`
+	Layer         string                    `json:"layer"`
+	Physical      string                    `json:"physical"`
+	Public        []byte                    `json:"public"`
+	Parameters    map[string]string         `json:"parameters"`
+	Snapshot      mobilepq.NativePQSnapshot `json:"snapshot"`
+	Updates       int64                     `json:"updates"`
+	Packets       int64                     `json:"packets"`
+	KEMReceived   int64                     `json:"kem_received"`
+	KEMRejected   int64                     `json:"kem_rejected"`
+	LayerRaw      int64                     `json:"layer_raw"`
+	LayerRejected int64                     `json:"layer_rejected"`
+	Lanes         int                       `json:"lanes"`
+	Queries       int64                     `json:"queries"`
+	Echoes        int64                     `json:"echoes"`
+	Rejected      int64                     `json:"rejected"`
+	Plain         bool                      `json:"plain"`
+	ProbeLane     string                    `json:"probe_lane"`
+	Probe         string                    `json:"probe"`
+	ProbeCount    int64                     `json:"probe_count"`
+}
+
+func nodePQWFPProbe(remote netip.AddrPort, nonce, layer, password string) (bool, error) {
+	connection, err := net.DialTimeout("udp4", remote.String(), 750*time.Millisecond)
+	if err != nil {
+		return false, err
+	}
+	defer connection.Close()
+	if err = connection.SetDeadline(time.Now().Add(750 * time.Millisecond)); err != nil {
+		return false, err
+	}
+	payload := []byte(nodePQWFPProbePrefix + nonce)
+	if layer == "aes-256-gcm+xor-whitening" {
+		key, err := startwhitening.Key(mobilemultihop.NativeStartLayerMethod, password)
+		if err != nil {
+			return false, err
+		}
+		for i := range payload {
+			payload[i] ^= key[i%len(key)]
+		}
+		clear(key[:])
+	}
+	if n, err := connection.Write(payload); err != nil || n != len(payload) {
+		return false, errors.Join(err, io.ErrShortWrite)
+	}
+	answer := make([]byte, len(payload)+1)
+	n, err := connection.Read(answer)
+	if err != nil {
+		return false, err
+	}
+	if !bytes.Equal(answer[:n], payload) {
+		return false, errors.New("PQ raw probe changed its exact nonce")
+	}
+	return true, nil
+}
+
+// This is the real native PQ and packet implementation in a distinct retained
+// executable. Its EOF joins all captured references and relay processes.
+func TestRouterVPNDesktopNodeWindowsPQReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_NODE_PQ_WFP_REFERENCE_CHILD") == "" {
+		return
+	}
+	if os.Getenv("ROUTERVPN_NODE_PQ_WFP_REFERENCE_CHILD") != "1" {
+		t.Fatal("unknown PQ reference owner")
+	}
+	input := bufio.NewReaderSize(os.Stdin, nodePQWFPLimit+1)
+	raw, err := input.ReadSlice('\n')
+	if err != nil || len(raw) == 0 || len(raw) > nodePQWFPLimit {
+		t.Fatal("PQ reference request is not bounded", err)
+	}
+	var request nodePQWFPRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err = decoder.Decode(&request); err != nil {
+		t.Fatal("invalid PQ reference request", err)
+	}
+	var extra any
+	if decoder.Decode(&extra) != io.EOF || request.Schema != 1 || len(request.Public) != 32 || request.Mode != "wg-pq" && request.Mode != "awg2-pq" || request.Layer != "" && request.Layer != "aes-256-gcm" && request.Layer != "aes-256-gcm+xor-whitening" {
+		t.Fatal("PQ reference request escaped its fixed graph")
+	}
+	local := nodePQWFPInterface(t)
+	if request.Address != local.String() {
+		t.Fatal("PQ reference selected another physical interface")
+	}
+	if request.Layer == "" && request.Password != "" {
+		t.Fatal("PQ reference carried an unselected layer")
+	}
+	if request.Layer != "" {
+		key, err := base64.StdEncoding.Strict().DecodeString(request.Password)
+		valid := err == nil && len(key) == 32 && base64.StdEncoding.EncodeToString(key) == request.Password
+		clear(key)
+		if !valid {
+			t.Fatal("PQ reference layer key was not canonical")
+		}
+	}
+	inner := &nodePQInner{owned: make(map[io.Closer]bool)}
+	t.Cleanup(inner.close)
+	reference := AWG.NewNativePQTrafficReferenceWithHandler(t, request.Public, request.Mode == "awg2-pq", inner)
+	server := newPQTrafficServer(t, reference, 2)
+	wg := newNodePQWFPBridge(t, local, reference.Address(), true, server.initialKey)
+	kem := newNodePQWFPBridge(t, local, server.conn.LocalAddr().String(), true, nil)
+	var layer *nodePQLayer
+	var outer *nodePQWFPBridge
+	var physical netip.AddrPort
+	if request.Layer != "" {
+		wgInner := M.SocksaddrFrom(netip.MustParseAddr("10.78.0.1"), wg.address().Port())
+		kemInner := M.SocksaddrFrom(netip.MustParseAddr("10.78.0.1"), kem.address().Port())
+		layer = newNodePQLayer(t, local, request.Password, wgInner, kemInner, reference, server)
+		// The same retained bridges preserve the independently captured packet/KEM
+		// destinations through a joined native restoration. No endpoint is guessed.
+		layer.routes[wgInner] = wg.address().String()
+		layer.routes[kemInner] = kem.address().String()
+		outer = newNodePQWFPBridge(t, local, layer.address().String(), false, nil)
+		physical = outer.address()
+		if request.Layer == "aes-256-gcm+xor-whitening" {
+			physical = nodePQRelay(t, local, outer.address().String(), request.Password)
+		}
+	}
+	scope, err := mobiletor.DesktopWindowsNodeCompositionAppID()
+	if err != nil || len(scope) == 0 {
+		t.Fatal("PQ reference has no executable identity", err)
+	}
+	bridges := map[string]*nodePQWFPBridge{"wg": wg, "kem": kem}
+	if outer != nil {
+		bridges["layer"] = outer
+	}
+	respond := func(lane, nonce string) {
+		select {
+		case err := <-server.failure:
+			t.Fatal("native PQ reference failed", err)
+		default:
+		}
+		snapshot, err := reference.Snapshot()
+		if err != nil {
+			t.Fatal("native PQ reference readback failed", err)
+		}
+		reply := nodePQWFPReply{Schema: 1, AppID: scope, WG: wg.address().String(), KEM: kem.address().String(), Public: reference.Public, Parameters: reference.Parameters, Snapshot: snapshot, Updates: reference.Updates(), Packets: reference.Packets(), KEMReceived: server.received.Load(), KEMRejected: server.rejected.Load(), Queries: inner.queries.Load(), Echoes: inner.echoes.Load(), Rejected: inner.rejected.Load(), Plain: reference.PlaintextSeen() || wg.plain.Load() || kem.plain.Load(), ProbeLane: lane, Probe: nonce}
+		if layer != nil {
+			reply.Layer = outer.address().String()
+			reply.Physical = physical.String()
+			reply.LayerRaw = layer.raw.Load()
+			reply.LayerRejected = layer.rejected.Load()
+			reply.Plain = reply.Plain || layer.plain.Load() || outer.plain.Load()
+			layer.lanes.Range(func(_, v any) bool {
+				if v.(*atomic.Int64).Load() > 0 {
+					reply.Lanes++
+				}
+				return true
+			})
+		}
+		if nonce != "" {
+			reply.ProbeCount, err = bridges[lane].observation.count(nonce)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err = json.NewEncoder(os.Stdout).Encode(reply); err != nil {
+			t.Fatal("PQ reference acknowledgement failed", err)
+		}
+	}
+	respond("", "")
+	for {
+		line, err := input.ReadSlice('\n')
+		if errors.Is(err, io.EOF) && len(line) == 0 {
+			return
+		}
+		if err != nil || len(line) > nodePQWFPLimit {
+			t.Fatal("PQ reference lost its bounded input", err)
+		}
+		action := strings.TrimSuffix(string(line), "\n")
+		switch action {
+		case "stats":
+			respond("", "")
+			continue
+		case "fail-dns":
+			inner.failed.Store(true)
+			respond("", "")
+			continue
+		case "restore-dns":
+			inner.failed.Store(false)
+			respond("", "")
+			continue
+		case "rekey":
+			server.force(t)
+			respond("", "")
+			continue
+		case "rehandshake":
+			if err := reference.Rehandshake(); err != nil {
+				t.Fatal(err)
+			}
+			respond("", "")
+			continue
+		case "reset-joined-client":
+			wg.reset()
+			kem.reset()
+			if outer != nil {
+				outer.reset()
+			}
+			respond("", "")
+			continue
+		}
+		parts := strings.Split(action, " ")
+		if len(parts) != 3 || len(parts[2]) != 32 || bridges[parts[1]] == nil || parts[0] != "arm" && parts[0] != "observe" && parts[0] != "positive" {
+			t.Fatal("PQ reference received an unrelated observation request")
+		}
+		bridge := bridges[parts[1]]
+		if parts[0] != "observe" {
+			if err := bridge.observation.arm(parts[2]); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if parts[0] == "positive" {
+			remote := bridge.address()
+			selected := ""
+			if parts[1] == "layer" {
+				remote = physical
+				selected = request.Layer
+			}
+			echo, err := nodePQWFPProbe(remote, parts[2], selected, request.Password)
+			if err != nil || !echo {
+				t.Fatal("PQ reference positive marker did not transfer actual bytes", err)
+			}
+		}
+		respond(parts[1], parts[2])
+	}
+}
+
+type nodePQWFPReference struct {
+	command     *exec.Cmd
+	input       io.WriteCloser
+	output      *os.File
+	reader      *bufio.Reader
+	done        chan error
+	ctx         context.Context
+	cancel      context.CancelFunc
+	once        sync.Once
+	closeErr    error
+	diagnostics bytes.Buffer
+	request     nodePQWFPRequest
+	reply       nodePQWFPReply
+	private     *ecdh.PrivateKey
+	local       netip.Addr
+	copyPath    string
+	digest      [32]byte
+}
+
+func (p *nodePQWFPReference) read() (nodePQWFPReply, error) {
+	type result struct {
+		reply nodePQWFPReply
+		err   error
+	}
+	done := make(chan result, 1)
+	go func() {
+		raw, err := p.reader.ReadSlice('\n')
+		var reply nodePQWFPReply
+		if err == nil && len(raw) <= nodePQWFPLimit {
+			d := json.NewDecoder(bytes.NewReader(raw))
+			d.DisallowUnknownFields()
+			err = d.Decode(&reply)
+			var extra any
+			if err == nil && d.Decode(&extra) != io.EOF {
+				err = errors.New("PQ reference appended another reply")
+			}
+		} else {
+			err = errors.Join(err, errors.New("PQ reference response exceeded its bound"))
+		}
+		done <- result{reply, err}
+	}()
+	ctx, cancel := context.WithTimeout(p.ctx, 10*time.Second)
+	defer cancel()
+	select {
+	case value := <-done:
+		return value.reply, value.err
+	case <-ctx.Done():
+		p.cancel()
+		_ = p.output.Close()
+		<-done
+		return nodePQWFPReply{}, ctx.Err()
+	}
+}
+func (p *nodePQWFPReference) close() error {
+	p.once.Do(func() {
+		defer p.cancel()
+		_ = p.input.Close()
+		select {
+		case p.closeErr = <-p.done:
+		case <-time.After(10 * time.Second):
+			_ = p.command.Process.Kill()
+			p.closeErr = errors.Join(<-p.done, errors.New("PQ reference ignored its owned input EOF"))
+		}
+		p.closeErr = errors.Join(p.closeErr, p.output.Close())
+		raw, err := os.ReadFile(p.copyPath)
+		if err != nil || sha256.Sum256(raw) != p.digest {
+			p.closeErr = errors.Join(p.closeErr, err, errors.New("retained PQ reference executable changed"))
+		}
+	})
+	return p.closeErr
+}
+func (p *nodePQWFPReference) observe(t *testing.T, action string) nodePQWFPReply {
+	t.Helper()
+	if _, err := io.WriteString(p.input, action+"\n"); err != nil {
+		t.Fatal("PQ observation lost its retained channel", err)
+	}
+	reply, err := p.read()
+	old := p.reply
+	if err != nil || reply.Schema != 1 || !bytes.Equal(reply.AppID, old.AppID) || reply.WG != old.WG || reply.KEM != old.KEM || reply.Layer != old.Layer || reply.Physical != old.Physical || !bytes.Equal(reply.Public, old.Public) || !reflect.DeepEqual(reply.Parameters, old.Parameters) || reply.Updates < old.Updates || reply.Packets < old.Packets || reply.Queries < old.Queries || reply.KEMReceived < old.KEMReceived || reply.KEMRejected < old.KEMRejected || reply.LayerRejected < old.LayerRejected {
+		t.Fatal("PQ reference changed its captured owner or regressed real observations", err)
+	}
+	p.reply = reply
+	return reply
+}
+func nodePQWFPNonce(t *testing.T) string {
+	t.Helper()
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		t.Fatal(err)
+	}
+	return hex.EncodeToString(nonce[:])
+}
+func (p *nodePQWFPReference) probe(t *testing.T, action, lane, nonce string) int64 {
+	t.Helper()
+	reply := p.observe(t, action+" "+lane+" "+nonce)
+	if reply.ProbeLane != lane || reply.Probe != nonce || reply.ProbeCount < 0 {
+		t.Fatal("PQ raw probe changed its captured nonce or lane")
+	}
+	return reply.ProbeCount
+}
+func (p *nodePQWFPReference) lanes() map[string]netip.AddrPort {
+	if p.request.Layer != "" {
+		return map[string]netip.AddrPort{"layer": netip.MustParseAddrPort(p.reply.Physical)}
+	}
+	return map[string]netip.AddrPort{"wg": netip.MustParseAddrPort(p.reply.WG), "kem": netip.MustParseAddrPort(p.reply.KEM)}
+}
+func nodePQWFPStartReference(t *testing.T, mode, layer string) *nodePQWFPReference {
+	t.Helper()
+	local := nodePQWFPInterface(t)
+	private, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := nodePQWFPRequest{Schema: 1, Mode: mode, Layer: layer, Address: local.String(), Public: private.PublicKey().Bytes()}
+	if layer != "" {
+		var secret [32]byte
+		if _, err = rand.Read(secret[:]); err != nil {
+			t.Fatal(err)
+		}
+		request.Password = base64.StdEncoding.EncodeToString(secret[:])
+		clear(secret[:])
+	}
+	actual, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(actual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(t.TempDir(), "owned-pq-reference.test.exe")
+	if err = os.WriteFile(copyPath, contents, 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+	command := exec.CommandContext(ctx, copyPath, "-test.run=^TestRouterVPNDesktopNodeWindowsPQReferenceProcess$", "-test.count=1", "-test.timeout=235s")
+	command.Env = append(os.Environ(), "ROUTERVPN_NODE_PQ_WFP_REFERENCE_CHILD=1")
+	input, err := command.StdinPipe()
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	output, childOutput, err := os.Pipe()
+	if err != nil {
+		_ = input.Close()
+		cancel()
+		t.Fatal(err)
+	}
+	p := &nodePQWFPReference{command: command, input: input, output: output, reader: bufio.NewReaderSize(output, nodePQWFPLimit+1), done: make(chan error, 1), ctx: ctx, cancel: cancel, request: request, private: private, local: local, copyPath: copyPath, digest: sha256.Sum256(contents)}
+	command.Stdout, command.Stderr = childOutput, &p.diagnostics
+	if err = command.Start(); err != nil {
+		_ = input.Close()
+		_ = output.Close()
+		_ = childOutput.Close()
+		cancel()
+		t.Fatal(err)
+	}
+	_ = childOutput.Close()
+	go func() { p.done <- command.Wait() }()
+	t.Cleanup(func() {
+		if err := p.close(); err != nil {
+			t.Errorf("owned PQ reference did not join: %v; %s", err, p.diagnostics.String())
+		}
+	})
+	raw, err := json.Marshal(request)
+	if err != nil || len(raw)+1 > nodePQWFPLimit {
+		t.Fatal("PQ launch request exceeded its bound", err)
+	}
+	if _, err = input.Write(append(raw, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	p.reply, err = p.read()
+	scope, scopeErr := mobiletor.DesktopWindowsNodeCompositionAppID()
+	wg, we := netip.ParseAddrPort(p.reply.WG)
+	kem, ke := netip.ParseAddrPort(p.reply.KEM)
+	if err != nil || scopeErr != nil || p.reply.Schema != 1 || len(p.reply.AppID) == 0 || bytes.Equal(scope, p.reply.AppID) || we != nil || ke != nil || wg.Addr() != local || kem.Addr() != local || wg.Port() == 0 || kem.Port() == 0 || wg == kem || len(p.reply.Public) != 32 || p.reply.Probe != "" || p.reply.ProbeLane != "" || p.reply.ProbeCount != 0 {
+		t.Fatal("PQ reference was not a distinct retained executable and two exact peers", err, scopeErr, we, ke)
+	}
+	if layer == "" {
+		if p.reply.Layer != "" || p.reply.Physical != "" {
+			t.Fatal("PQ reference introduced an unselected Start Layer")
+		}
+	} else {
+		for _, address := range []string{p.reply.Layer, p.reply.Physical} {
+			value, err := netip.ParseAddrPort(address)
+			if err != nil || value.Addr() != local || value.Port() == 0 {
+				t.Fatal("PQ reference substituted its captured Start Layer", err)
+			}
+		}
+	}
+	for lane, remote := range p.lanes() {
+		nonce := nodePQWFPNonce(t)
+		if p.probe(t, "arm", lane, nonce) != 0 {
+			t.Fatal("PQ fresh positive marker was already observed")
+		}
+		selected := ""
+		if lane == "layer" {
+			selected = layer
+		}
+		echo, err := nodePQWFPProbe(remote, nonce, selected, request.Password)
+		if err != nil || !echo || p.probe(t, "observe", lane, nonce) == 0 {
+			t.Fatal("PQ original-token positive marker did not transfer before BFE", err)
+		}
+	}
+	return p
+}
+
+func (p *nodePQWFPReference) original(t *testing.T, fault, kill string) *mobilemultihop.NodeProfile {
+	t.Helper()
+	if fault != "" && fault != "kem-peer" && fault != "packet-peer" && fault != "aes-key" {
+		t.Fatal("PQ native source has an unknown negative case")
+	}
+	packetPublic := p.reply.Public
+	if fault == "packet-peer" {
+		other, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		packetPublic = other.PublicKey().Bytes()
+	}
+	public := base64.StdEncoding.EncodeToString(packetPublic)
+	proof := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+	var parameters strings.Builder
+	if p.request.Mode == "awg2-pq" {
+		for _, name := range []string{"jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"} {
+			fmt.Fprintf(&parameters, "%s=%s\n", name, p.reply.Parameters[name])
+		}
+	}
+	packetProfile := "[Interface]\nAddress=10.78.0.2/32,fd78:78::2/128\nPrivateKey=" + base64.StdEncoding.EncodeToString(p.private.Bytes()) + "\nDNS=192.168.50.133\n" + parameters.String() + "[Peer]\nPublicKey=" + public + "\nEndpoint=" + p.reply.WG + "\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n"
+	asset, tool := "wg.conf", "wg"
+	if p.request.Mode == "awg2-pq" {
+		asset, tool = "awg.conf", "awg"
+	}
+	peerName := "server"
+	if fault == "kem-peer" {
+		peerName = "other"
+	}
+	kem := netip.MustParseAddrPort(p.reply.KEM)
+	files := map[string][]byte{asset: []byte(packetProfile), "rosenpass.env": []byte(fmt.Sprintf("ROSENPASS_TOOL=%s\nROSENPASS_INTERFACE=%s\nROSENPASS_WG_PEER=%s\nROSENPASS_KEY_OUT=rosenpass.psk\nROSENPASS_PORT=%d\n", tool, tool, public, kem.Port())), "rosenpass.toml": []byte(fmt.Sprintf("public_key = \"rosenpass-client-public\"\nsecret_key = \"rosenpass-client-secret\"\nlisten = []\nverbosity = \"Quiet\"\n[[peers]]\npublic_key = \"rosenpass-server-public\"\nendpoint = \"%s\"\nkey_out = \"rosenpass.psk\"\n", kem)), "rosenpass-client-secret": realKeys(t, "client", "secret"), "rosenpass-client-public": realKeys(t, "client", "public"), "rosenpass-server-public": realKeys(t, peerName, "public")}
+	encodedFiles := make(map[string]string, len(files))
+	for name, value := range files {
+		encodedFiles[name] = base64.StdEncoding.EncodeToString(value)
+		clear(value)
+	}
+	rawFiles, _ := json.Marshal(encodedFiles)
+	startAssets := ""
+	if p.request.Layer != "" {
+		password := p.request.Password
+		if fault == "aes-key" {
+			var secret [32]byte
+			if _, err := rand.Read(secret[:]); err != nil {
+				t.Fatal(err)
+			}
+			password = base64.StdEncoding.EncodeToString(secret[:])
+			clear(secret[:])
+		}
+		layer := netip.MustParseAddrPort(p.reply.Layer)
+		config, _ := json.Marshal(map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "address": []string{"172.19.0.1/30"}, "auto_route": true, "strict_route": true, "stack": "gvisor"}}, "outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": p.local.String(), "server_port": int(layer.Port()), "method": mobilemultihop.NativeStartLayerMethod, "password": password}}, "route": map[string]any{"final": "proxy"}})
+		encoded, _ := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(config)})
+		startAssets = string(encoded)
+	}
+	profile, _ := json.Marshal(map[string]any{"id": "captured-pq-node", "node_kind": "router-vpn", "node_proof_id": hex.EncodeToString(proof[:]), "router_api": "http://10.78.0.1:8787", "api_token": "private-pq-fixture-token", "endpoint": p.local.String(), "start_layer": p.request.Layer, "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "kill_switch_policy": kill, "ipv6_mode": "on", "home_lan_access": false, "mtu_policy": "auto"})
+	original, err := mobilemultihop.NewNodeProfile(p.request.Mode, string(rawFiles), string(profile), startAssets, "")
+	if err != nil {
+		t.Fatal("actual Windows PQ original source constructor", err)
+	}
+	return original
+}
+
+type nodePQWFPFixture struct {
+	*nodePQFixture
+	prepared mobiletor.DesktopWindowsProtectionTarget
+	admitted int
+}
+
+func nodePQWFPBox(t *testing.T, original *mobilemultihop.NodeProfile, predecessor *mobiletor.DesktopWindowsProtectionTarget, prepare bool) *nodePQWFPFixture {
+	t.Helper()
+	policy, err := mobilemultihop.NewDesktopNodePolicy(original, nodePQWFPNonce(t), "windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &nodePQWFPFixture{nodePQFixture: &nodePQFixture{policy: policy}}
+	buildNodePQCapturedBox(t, f.nodePQFixture, func(ctx context.Context) (context.Context, error) {
+		admit := func(ctx context.Context, prepared routervpndesktoppt.NodePhysicalPrepared) error {
+			if f.network == nil || f.tun == nil || f.network.SocketCurrent() || f.network.Current() || f.tun.ready.Load() || f.admitted != 0 {
+				return errors.New("PQ native handoff was late, missing or repeated")
+			}
+			target := mobiletor.DesktopWindowsProtectionTarget{Capture: prepared.Capture, Policy: prepared.Policy, BaselineSHA256: prepared.BaselineSHA256}
+			if err := mobiletor.DesktopWindowsNodeCompositionVerifyPrepared(ctx, target); err != nil {
+				return err
+			}
+			f.prepared, f.admitted = target, 1
+			return nil
+		}
+		if predecessor == nil {
+			return routervpndesktoppt.WithNodePhysicalAdmission(ctx, policy, admit)
+		}
+		return routervpndesktoppt.WithNodePhysicalSuccessorAdmission(ctx, policy, *predecessor, admit)
+	}, nil)
+	if prepare {
+		if err := f.box.RouterVPNDesktopNodePreparePhysical(policy); err != nil {
+			t.Fatal("actual sealed Windows PQ factory preparation", err)
+		}
+	}
+	outer, found := f.box.Outbound().Outbound("proxy")
+	if !found {
+		t.Fatal("native PQ Box omitted its actual endpoint")
+	}
+	f.endpoint, _ = outer.(*Endpoint)
+	if f.endpoint == nil || f.endpoint.owner.Ready() || f.endpoint.owner.TransportReady() {
+		t.Fatal("native PQ Box fabricated readiness or substituted its runtime")
+	}
+	return f
+}
+func nodePQWFPCleanup(t *testing.T, target *mobiletor.DesktopWindowsProtectionTarget) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if partial, err := mobiletor.DesktopWindowsNodeCompositionRetainedTarget(ctx); err == nil {
+			*target = partial
+		}
+		if target.Validate() != nil {
+			if err := mobiletor.DesktopWindowsNodeCompositionAbsent(ctx); err != nil {
+				t.Error("unacknowledged PQ state has no exact cleanup owner", err)
+			}
+			return
+		}
+		if err := mobiletor.DesktopWindowsNodeCompositionRetire(ctx, *target); err != nil {
+			t.Error("exact PQ test-owned deny did not retire", err)
+		}
+	})
+}
+func nodePQWFPRequireBlocked(t *testing.T, p *nodePQWFPReference) {
+	t.Helper()
+	for lane, remote := range p.lanes() {
+		if p.probe(t, "positive", lane, nodePQWFPNonce(t)) != 1 {
+			t.Fatal("PQ separate-reference positive marker had no independent receipt")
+		}
+		nonce := nodePQWFPNonce(t)
+		if p.probe(t, "arm", lane, nonce) != 0 {
+			t.Fatal("PQ denied marker already had traffic")
+		}
+		layer := ""
+		if lane == "layer" {
+			layer = p.request.Layer
+		}
+		echo, err := nodePQWFPProbe(remote, nonce, layer, p.request.Password)
+		received := p.probe(t, "observe", lane, nonce)
+		if p.probe(t, "positive", lane, nodePQWFPNonce(t)) != 1 {
+			t.Fatal("PQ separate-reference positive marker lost its actual route")
+		}
+		after := p.probe(t, "observe", lane, nonce)
+		if after < received || after != 0 || echo {
+			t.Fatal("ordinary token crossed PQ actual outer deny: independent peer marker receipt", lane, after)
+		}
+		var timeout net.Error
+		if !errors.Is(err, syscall.Errno(10013)) && !(errors.As(err, &timeout) && timeout.Timeout()) {
+			t.Fatal("PQ ordinary rejection had no bounded native access or timeout observation", err)
+		}
+	}
+}
+func nodePQWFPRequireNative(t *testing.T, f *nodePQWFPFixture, p *nodePQWFPReference) {
+	t.Helper()
+	if f.admitted != 1 || f.prepared.Validate() != nil || f.network.Current() || !f.network.SocketCurrent() {
+		t.Fatal("PQ native startup skipped prepared handoff or fabricated application readiness")
+	}
+	capture, err := f.policy.Capture()
+	if err != nil || capture.SelectedDNS.Host != "192.168.50.133" || capture.SelectedDNS.Detour != "proxy" || capture.SelectedDNS.Physical || len(capture.BootstrapDNS) != 0 || capture.HomeLANAccess || capture.IPv6Mode != "on" {
+		t.Fatal("PQ actual WFP lost selected policy", err)
+	}
+	type tuple struct {
+		network string
+		remote  netip.AddrPort
+	}
+	expected := make(map[tuple]bool)
+	for _, root := range capture.PhysicalRoots {
+		for _, d := range root.Destinations {
+			ip, err := netip.ParseAddr(d.Host)
+			if err != nil || d.Network != "tcp" && d.Network != "udp" || d.Port < 1 || d.Port > 65535 {
+				t.Fatal("PQ captured root has an invalid native transport")
+			}
+			expected[tuple{d.Network, netip.AddrPortFrom(ip, uint16(d.Port))}] = true
+		}
+	}
+	original := make(map[tuple]bool)
+	for _, remote := range p.lanes() {
+		original[tuple{"udp", remote}] = true
+	}
+	if !reflect.DeepEqual(expected, original) {
+		t.Fatal("PQ actual WFP substituted its exact KEM/packet or Start Layer roots")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	snapshot, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+	if err != nil || snapshot.Closed || snapshot.Target != f.prepared || snapshot.Owner.Kind != "windows-isolated-token" || !snapshot.Options.RetainBaselineForHandoff || len(snapshot.Grants) == 0 {
+		t.Fatal("PQ encrypted graph has no actual retained WFP/socket readback", err)
+	}
+	seen := make(map[tuple]bool)
+	for _, grant := range snapshot.Grants {
+		key := tuple{grant.Network, grant.Remote}
+		if !expected[key] || grant.Capture != f.prepared.Capture || grant.Local.Addr() != p.local || grant.Binding.Owner != snapshot.Owner {
+			t.Fatal("PQ native grant changed its captured protocol, peer or lower owner")
+		}
+		seen[key] = true
+	}
+	if !reflect.DeepEqual(seen, expected) {
+		t.Fatal("PQ native WFP omitted a captured packet/KEM lane")
+	}
+}
+func nodePQWFPAgreedKey(t *testing.T, f *nodePQWFPFixture, p *nodePQWFPReference, previous [32]byte, epoch int) [32]byte {
+	t.Helper()
+	native, ok := f.endpoint.base.(nativePQReadback)
+	if !ok {
+		t.Fatal("actual PQ endpoint lost native readback")
+	}
+	for deadline := time.Now().Add(2 * time.Second); ; {
+		local, err := native.RouterVPNTestPQSnapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		remote := p.observe(t, "stats")
+		if remote.Updates >= int64(epoch+1) && local.KeyDigest == remote.Snapshot.KeyDigest && local.KeyDigest != previous {
+			return local.KeyDigest
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("both isolated native peers did not adopt the same fresh PQ key", epoch)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+func nodePQWFPDrain(t *testing.T, f *nodePQWFPFixture) mobiletor.DesktopWindowsProtectionTarget {
+	t.Helper()
+	if err := f.close(); err != nil {
+		t.Fatal("actual Windows PQ owner did not join", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	snapshot, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+	if err != nil || !snapshot.Closed || len(snapshot.Grants) != 0 || snapshot.Target != f.prepared || f.network.SocketCurrent() || f.network.Current() || f.endpoint.owner.Ready() || f.endpoint.owner.TransportReady() {
+		t.Fatal("PQ native drain did not retain only its exact deny", err)
+	}
+	return snapshot.Target
+}
+func nodePQWFPRequireTraffic(t *testing.T, f *nodePQWFPFixture, p *nodePQWFPReference, rekey bool) {
+	t.Helper()
+	var previous [32]byte
+	var priorLocal, priorRemote int64
+	epochs := 1
+	if rekey {
+		epochs = 2
+	}
+	for epoch := 0; epoch < epochs; epoch++ {
+		if epoch != 0 {
+			p.observe(t, "rekey")
+		}
+		previous = nodePQWFPAgreedKey(t, f, p, previous, epoch)
+		native := f.endpoint.base.(nativePQReadback)
+		if epoch != 0 {
+			p.observe(t, "rehandshake")
+			if err := native.RouterVPNTestPQRehandshake(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, network := range []string{"tcp", "udp"} {
+			for _, host := range []string{"192.0.2.99", "2001:db8::99"} {
+				if err := f.exchange(network, host, epoch); err != nil {
+					t.Fatal("actual WFP PQ encrypted payload failed", network, host, epoch, err)
+				}
+			}
+		}
+		local, err := native.RouterVPNTestPQSnapshot()
+		remote := p.observe(t, "stats")
+		if err != nil || local.KeyDigest != previous || remote.Snapshot.KeyDigest != previous || local.HandshakeNanos <= priorLocal || remote.Snapshot.HandshakeNanos <= priorRemote {
+			t.Fatal("actual WFP PQ traffic used an old or different native key/handshake", epoch, err)
+		}
+		priorLocal, priorRemote = local.HandshakeNanos, remote.Snapshot.HandshakeNanos
+	}
+	if err := f.box.RouterVPNStrategyDNSProof(); err != nil {
+		t.Fatal("actual WFP PQ selected Home DNS proof failed", err)
+	}
+	before := p.observe(t, "fail-dns")
+	if before.Queries == 0 {
+		t.Fatal("actual WFP PQ DNS never reached its selected peer")
+	}
+	if err := f.box.RouterVPNStrategyDNSProof(); err == nil {
+		t.Fatal("actual WFP PQ reused cached selected DNS success")
+	}
+	after := p.observe(t, "restore-dns")
+	if after.Queries <= before.Queries {
+		t.Fatal("actual WFP PQ DNS failure did not reach the selected route")
+	}
+	if err := f.box.RouterVPNStrategyDNSProof(); err != nil {
+		t.Fatal("actual WFP PQ selected DNS did not recover", err)
+	}
+	final := p.observe(t, "stats")
+	if final.Queries <= after.Queries || final.Packets == 0 || final.KEMReceived == 0 || final.Plain || final.Rejected != 0 || p.request.Layer != "" && (final.Lanes != 2 || final.LayerRaw == 0) {
+		t.Fatal("actual WFP PQ omitted ciphertext, both lanes or fresh selected DNS")
+	}
+	nodePQWFPRequireNative(t, f, p)
+	nodePQWFPRequireBlocked(t, p)
+}
+
+// The prerequisite runner executes this under the exact current predicate,
+// without its prospective two-mode overlay. Source construction is real and
+// rejection must precede every native source/admission effect.
+func TestRouterVPNDesktopNodeWindowsPQCapabilityClosed(t *testing.T) {
+	for _, mode := range []string{"wg-pq", "awg2-pq"} {
+		t.Run(mode, func(t *testing.T) {
+			if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			for _, layer := range []string{"", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+				if mobilemultihop.DesktopNodePhysicalGraphSupported(mode, layer) {
+					t.Fatal("unmodified current predicate already admits prospective PQ")
+				}
+			}
+			peer := nodePQWFPStartReference(t, mode, "")
+			f := nodePQWFPBox(t, peer.original(t, "", "always"), nil, false)
+			if err := f.box.RouterVPNDesktopNodePreparePhysical(f.policy); err == nil || f.admitted != 0 || f.network.SocketCurrent() {
+				t.Fatal("closed PQ capability reached a native physical owner")
+			}
+			if err := f.close(); err != nil {
+				t.Fatal(err)
+			}
+			if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+				t.Fatal("closed PQ capability changed BFE", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeWindowsPQTraffic(t *testing.T) {
+	for _, mode := range []string{"wg-pq", "awg2-pq"} {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(mode+"/"+nodePQLayerName(layer), func(t *testing.T) {
+				if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+				peer := nodePQWFPStartReference(t, mode, layer)
+				var retained mobiletor.DesktopWindowsProtectionTarget
+				nodePQWFPCleanup(t, &retained)
+				f := nodePQWFPBox(t, peer.original(t, "", "always"), nil, true)
+				f.start(t)
+				retained = f.prepared
+				nodePQWFPRequireTraffic(t, f, peer, true)
+				f.network.InterfaceUpdated(context.Background())
+				if f.network.SocketCurrent() || f.network.Current() {
+					t.Fatal("PQ interface transition retained old native admission")
+				}
+				retained = nodePQWFPDrain(t, f)
+				nodePQWFPRequireBlocked(t, peer)
+				before := peer.observe(t, "stats")
+				if f.exchange("tcp", "192.0.2.99", 3) == nil || f.box.RouterVPNStrategyDNSProof() == nil {
+					t.Fatal("retired actual WFP PQ owner accepted traffic or DNS proof")
+				}
+				after := peer.observe(t, "stats")
+				if after.Queries != before.Queries {
+					t.Fatal("retired PQ owner issued a stale DNS query")
+				}
+			})
+		}
+	}
+}
+func TestRouterVPNDesktopNodeWindowsPQCredentials(t *testing.T) {
+	for _, mode := range []string{"wg-pq", "awg2-pq"} {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			faults := []string{"kem-peer", "packet-peer"}
+			if layer != "" {
+				faults = append(faults, "aes-key")
+			}
+			for _, fault := range faults {
+				t.Run(mode+"/"+nodePQLayerName(layer)+"/"+fault, func(t *testing.T) {
+					if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+						t.Fatal(err)
+					}
+					peer := nodePQWFPStartReference(t, mode, layer)
+					var retained mobiletor.DesktopWindowsProtectionTarget
+					nodePQWFPCleanup(t, &retained)
+					f := nodePQWFPBox(t, peer.original(t, fault, "always"), nil, true)
+					if fault == "packet-peer" {
+						f.start(t)
+						retained = f.prepared
+						nodePQWFPAgreedKey(t, f, peer, [32]byte{}, 0)
+						ctx, cancel := context.WithTimeout(context.Background(), 350*time.Millisecond)
+						defer cancel()
+						connection, err := f.endpoint.DialContext(ctx, "tcp", M.ParseSocksaddr("192.0.2.99:9999"))
+						if connection != nil {
+							_ = connection.Close()
+						}
+						observed := peer.observe(t, "stats")
+						if err == nil || observed.Packets == 0 || observed.Echoes != 0 || observed.Queries != 0 {
+							t.Fatal("actual WFP PQ accepted the wrong captured packet peer after native KEM")
+						}
+					} else {
+						done := make(chan error, 1)
+						go func() { done <- f.box.RouterVPNStrategyStart() }()
+						completed := false
+						for deadline := time.Now().Add(2 * time.Second); ; {
+							select {
+							case err := <-done:
+								completed = true
+								if err == nil {
+									t.Fatal("actual WFP PQ accepted untrusted KEM or Start Layer credentials")
+								}
+							default:
+							}
+							observed := peer.observe(t, "stats")
+							rejected := fault == "kem-peer" && observed.KEMRejected > 0 || fault == "aes-key" && observed.LayerRejected > 0
+							if rejected {
+								break
+							}
+							if completed || time.Now().After(deadline) {
+								f.network.Cancel()
+								if !completed {
+									select {
+									case <-done:
+									case <-time.After(time.Second):
+										t.Error("failed PQ credential startup did not join")
+									}
+								}
+								t.Fatal("actual WFP PQ credential negative never reached native authenticated rejection")
+							}
+							time.Sleep(time.Millisecond)
+						}
+						observed := peer.observe(t, "stats")
+						if f.endpoint.owner.Ready() || f.endpoint.owner.TransportReady() || observed.Updates != 0 || observed.Packets != 0 || observed.Queries != 0 {
+							t.Fatal("untrusted native PQ gained packet or DNS readiness")
+						}
+						f.network.Cancel()
+						if !completed {
+							select {
+							case err := <-done:
+								if err == nil {
+									t.Fatal("cancelled native PQ became successful")
+								}
+							case <-time.After(time.Second):
+								t.Fatal("cancelled native PQ handshake did not join")
+							}
+						}
+						retained = f.prepared
+					}
+					if retained.Validate() != nil || f.admitted != 1 {
+						t.Fatal("PQ credential rejection bypassed exact native prepared ownership")
+					}
+					retained = nodePQWFPDrain(t, f)
+					nodePQWFPRequireBlocked(t, peer)
+				})
+			}
+		}
+	}
+}
+
+func nodePQWFPRestoration(first, restored *nodePQWFPFixture) error {
+	before, after := first.policy.Metadata(), restored.policy.Metadata()
+	if first.prepared.Validate() != nil || restored.prepared.Validate() != nil || before.SessionID == after.SessionID || before.SourceSHA256 == after.SourceSHA256 || before.ConfigSHA256 == after.ConfigSHA256 || first.prepared.Capture.SourceSHA256 != before.SourceSHA256 || restored.prepared.Capture.SourceSHA256 != after.SourceSHA256 {
+		return errors.New("PQ restoration reused or replaced its actual runtime identity")
+	}
+	before.SessionID, before.SourceSHA256, before.ConfigSHA256 = "", "", ""
+	after.SessionID, after.SourceSHA256, after.ConfigSHA256 = "", "", ""
+	if !reflect.DeepEqual(before, after) {
+		return errors.New("PQ restoration replaced its saved original source or policy")
+	}
+	return nil
+}
+func TestRouterVPNDesktopNodeWindowsPQSuccession(t *testing.T) {
+	for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		t.Run(nodePQLayerName(layer), func(t *testing.T) {
+			if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			// Only one XOR peer owns the fixed shipping relay port. The intervening
+			// independently keyed AWG-PQ trial uses its separately captured direct roots.
+			firstPeer := nodePQWFPStartReference(t, "wg-pq", layer)
+			trialPeer := nodePQWFPStartReference(t, "awg2-pq", "")
+			var retained mobiletor.DesktopWindowsProtectionTarget
+			nodePQWFPCleanup(t, &retained)
+			original := firstPeer.original(t, "", "always")
+			first := nodePQWFPBox(t, original, nil, true)
+			first.start(t)
+			retained = first.prepared
+			nodePQWFPRequireTraffic(t, first, firstPeer, false)
+			retained = nodePQWFPDrain(t, first)
+			trial := nodePQWFPBox(t, trialPeer.original(t, "", "on-connect"), &retained, true)
+			trial.start(t)
+			retained = trial.prepared
+			nodePQWFPRequireTraffic(t, trial, trialPeer, false)
+			trial.network.InterfaceUpdated(context.Background())
+			retained = nodePQWFPDrain(t, trial)
+			// The old client is fully joined and its exact BFE grant set is empty before
+			// the private reference resets just its captured client-side forwarding.
+			firstPeer.observe(t, "reset-joined-client")
+			restored := nodePQWFPBox(t, original, &retained, true)
+			restored.start(t)
+			retained = restored.prepared
+			if err := nodePQWFPRestoration(first, restored); err != nil || retained.Policy != "always" {
+				t.Fatal("actual PQ reverse handoff lost its saved capture", err)
+			}
+			first.network.InterfaceUpdated(context.Background())
+			if err := first.close(); err != nil {
+				t.Fatal(err)
+			}
+			nodePQWFPRequireTraffic(t, restored, firstPeer, false)
+			retained = nodePQWFPDrain(t, restored)
+		})
+	}
+}
+func TestRouterVPNDesktopNodeWindowsPQForeignPredecessor(t *testing.T) {
+	if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	peer := nodePQWFPStartReference(t, "wg-pq", "")
+	var retained mobiletor.DesktopWindowsProtectionTarget
+	nodePQWFPCleanup(t, &retained)
+	original := peer.original(t, "", "always")
+	first := nodePQWFPBox(t, original, nil, true)
+	first.start(t)
+	retained = first.prepared
+	nodePQWFPRequireTraffic(t, first, peer, false)
+	retained = nodePQWFPDrain(t, first)
+	wrong := retained
+	wrong.Capture.SourceSHA256 = strings.Repeat("f", 64)
+	candidate := nodePQWFPBox(t, original, &wrong, true)
+	if err := candidate.box.RouterVPNStrategyStart(); err == nil || candidate.admitted != 0 {
+		if candidate.admitted != 0 {
+			retained = candidate.prepared
+		}
+		t.Fatal("foreign PQ predecessor reached actual native encrypted startup")
+	}
+	if err := candidate.close(); err != nil {
+		t.Fatal("rejected PQ successor did not join", err)
+	}
+	if err := mobiletor.DesktopWindowsNodeCompositionVerifyRetained(context.Background(), retained); err != nil {
+		t.Fatal("rejected PQ successor changed the original retained deny", err)
+	}
+}
+
+func TestRouterVPNDesktopNodeWindowsPQCapabilityOpen(t *testing.T) {
+	for _, mode := range []string{"wg-pq", "awg2-pq"} {
+		for _, layer := range []string{"", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			if !mobilemultihop.DesktopNodePhysicalGraphSupported(mode, layer) {
+				t.Fatal("prospective native PQ graph was not admitted by its exact capability", mode, layer)
+			}
+		}
+		if mobilemultihop.DesktopNodePhysicalGraphSupported(mode, "uncaptured-layer") {
+			t.Fatal("PQ capability widened the Start Layer contract")
+		}
+	}
+	if mobilemultihop.DesktopNodePhysicalGraphSupported("unrelated-graph", "") {
+		t.Fatal("PQ capability widened unrelated graph admission")
+	}
+}

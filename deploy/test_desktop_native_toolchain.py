@@ -47,7 +47,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                 source = root/'core'
                 (source/'cmd/sing-box').mkdir(parents=True)
                 system, arch = target.split('/')
-                env = {'GOOS': system, 'GOARCH': arch, 'CGO_LDFLAGS': '', 'GOTOOLCHAIN': N.TOOLCHAIN}
+                env = {'GOOS': system, 'GOARCH': arch, 'CGO_ENABLED': '1', 'CGO_LDFLAGS': '', 'GOTOOLCHAIN': N.TOOLCHAIN}
                 calls = []
 
                 def run(command, **kwargs):
@@ -140,6 +140,20 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
                         self.assertLessEqual(kwargs['timeout'], 1200)
                         return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_pq_runner.py'):
+                        self.assertEqual(system, 'windows')
+                        self.assertEqual(args[2:], [])
+                        self.assertEqual(kwargs['cwd'], ROOT)
+                        return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_pq.py'):
+                        self.assertEqual(system, 'windows')
+                        self.assertEqual(args[2:], [str(source.resolve()), str(root/'pq'), '--cache', str(ROOT/'dist/.native-pq-cache'), '--prospective'])
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['CGO_ENABLED'], '1')
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertIn('-L'+str(root/'pq'), shlex.split(kwargs['env']['CGO_LDFLAGS']))
+                        self.assertLessEqual(kwargs['timeout'], 2400)
+                        return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_guardian.py'):
                         self.assertEqual(system, 'darwin')
                         self.assertEqual(args[2:], [str(source.resolve()), '--mutations'])
@@ -222,6 +236,16 @@ class NativeSocketUIDGate(unittest.TestCase):
                 for name in ('test_windows_node_physical.py', 'test_windows_node_physical_runner.py'):
                     self.assertIn(ROOT/'deploy'/name, N.inputs())
                 self.assertIn(ROOT/'deploy/fixtures/windows-node-physical/kernel_observer.go', N.inputs())
+                pq_kernel_runner = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_pq_runner.py')]
+                pq_kernel = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_node_pq.py')]
+                self.assertEqual(len(pq_kernel_runner), len(kernel_runner))
+                self.assertEqual(len(pq_kernel), len(kernel_node))
+                if pq_kernel:
+                    self.assertEqual(calls.index(pq_kernel_runner[0]), calls.index(kernel_node[0])+1)
+                    self.assertEqual(calls.index(pq_kernel[0]), calls.index(pq_kernel_runner[0])+1)
+                for name in ('test_windows_node_pq.py', 'test_windows_node_pq_runner.py'):
+                    self.assertIn(ROOT/'deploy'/name, N.inputs())
+                self.assertIn(ROOT/'mobile/desktop/node_pq_peer_windows_test.go.tmpl', N.inputs())
                 traffic = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_windows_traffic.py')]
                 self.assertEqual(len(traffic), 1 if system == 'windows' else 0)
                 self.assertIn(ROOT/'deploy/test_desktop_windows_traffic.py', N.inputs())

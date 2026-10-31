@@ -47,6 +47,7 @@ import (
 	WG "github.com/sagernet/sing-box/protocol/wireguard"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-box/service/routervpnperformance"
 	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
 	"github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/buf"
@@ -774,42 +775,7 @@ func newNodePQFixture(t *testing.T, mode, layer, fault string) *nodePQFixture {
 			t.Fatal("PQ Node captured a substituted physical destination")
 		}
 	}
-	ins := inbound.NewRegistry()
-	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
-		f.tun = &nodePQTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag)}
-		return f.tun, nil
-	})
-	outs := outbound.NewRegistry()
-	routervpndesktoppt.RegisterNodePhysicalOutbound(outs)
-	SS.RegisterOutbound(outs)
-	WH.RegisterOutbound(outs)
-	endpoints := endpoint.NewRegistry()
-	RegisterEndpoint(endpoints)
-	AWG.RegisterEndpoint(endpoints)
-	WG.RegisterEndpoint(endpoints)
-	dnsRegistry := boxDNS.NewTransportRegistry()
-	DNST.RegisterUDP(dnsRegistry)
-	DNST.RegisterTCP(dnsRegistry)
-	services := boxService.NewRegistry()
-	boxService.Register[routervpndesktoppt.NodeCaptureOptions](services, mobilemultihop.DesktopNodeNetworkType, func(ctx context.Context, logger log.ContextLogger, tag string, options routervpndesktoppt.NodeCaptureOptions) (adapter.Service, error) {
-		owned, err := routervpndesktoppt.NewNodeNetworkOwner(ctx, logger, tag, options)
-		if err == nil {
-			f.network = owned.(*routervpndesktoppt.NodeNetworkOwner)
-		}
-		return owned, err
-	})
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	ctx = box.Context(ctx, ins, outs, endpoints, dnsRegistry, services, certificate.NewRegistry())
-	native, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(f.policy.Config()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	native.Log = &option.LogOptions{Disabled: true}
-	f.box, err = box.New(box.Options{Context: ctx, Options: native})
-	if err != nil {
-		t.Fatal("actual PQ Node Box constructor", err)
-	}
+	buildNodePQCapturedBox(t, f, nil, nil)
 	f.kernel = &nodePQKernel{owner: mobiletor.DesktopSocketKernelOwner{Kind: "unix-isolated-uid", IdentitySHA256: strings.Repeat("d", 64), Generation: 1, ProcessID: uint32(os.Getpid())},
 		iface: iface, local: ip, allowed: allowed, network: f.network, tun: f.tun, grants: make(map[string]mobiletor.DesktopSocketGrant), seen: make(map[netip.AddrPort]int)}
 	f.kernel.live.Store(true)
@@ -838,6 +804,72 @@ func newNodePQFixture(t *testing.T, mode, layer, fault string) *nodePQFixture {
 		t.Fatal("PQ Node omitted its real native owner or declared readiness during construction")
 	}
 	return f
+}
+
+// buildNodePQCapturedBox constructs the real complete Box for an already sealed
+// policy. Native callers supply only their captured admission context; the
+// actual physical source is prepared separately by the shipping Box method.
+// Extra graph outbounds remain their real registered runtimes. This helper
+// neither grants a modeled socket nor assumes that a physical root is UDP.
+func buildNodePQCapturedBox(t *testing.T, f *nodePQFixture,
+	captureContext func(context.Context) (context.Context, error), registerExtra func(*outbound.Registry)) {
+	t.Helper()
+	if f == nil || f.policy == nil || f.box != nil || f.network != nil || f.tun != nil {
+		t.Fatal("captured Node Box was missing or already owned")
+	}
+	ins := inbound.NewRegistry()
+	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+		f.tun = &nodePQTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag)}
+		return f.tun, nil
+	})
+	outs := outbound.NewRegistry()
+	routervpndesktoppt.RegisterNodePhysicalOutbound(outs)
+	if registerExtra != nil {
+		registerExtra(outs)
+	}
+	SS.RegisterOutbound(outs)
+	WH.RegisterOutbound(outs)
+	endpoints := endpoint.NewRegistry()
+	RegisterEndpoint(endpoints)
+	AWG.RegisterEndpoint(endpoints)
+	WG.RegisterEndpoint(endpoints)
+	dnsRegistry := boxDNS.NewTransportRegistry()
+	DNST.RegisterUDP(dnsRegistry)
+	DNST.RegisterTCP(dnsRegistry)
+	services := boxService.NewRegistry()
+	routervpnperformance.RegisterService(services)
+	boxService.Register[routervpndesktoppt.NodeCaptureOptions](services, mobilemultihop.DesktopNodeNetworkType, func(ctx context.Context, logger log.ContextLogger, tag string, options routervpndesktoppt.NodeCaptureOptions) (adapter.Service, error) {
+		owned, err := routervpndesktoppt.NewNodeNetworkOwner(ctx, logger, tag, options)
+		if err == nil {
+			f.network = owned.(*routervpndesktoppt.NodeNetworkOwner)
+		}
+		return owned, err
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	if captureContext != nil {
+		owned, err := captureContext(ctx)
+		if err != nil || owned == nil || owned.Err() != nil {
+			t.Fatal("captured native Node context preparation", err)
+		}
+		ctx = owned
+	}
+	ctx = box.Context(ctx, ins, outs, endpoints, dnsRegistry, services, certificate.NewRegistry())
+	native, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(f.policy.Config()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	native.Log = &option.LogOptions{Disabled: true}
+	f.box, err = box.New(box.Options{Context: ctx, Options: native})
+	if err != nil {
+		t.Fatal("actual PQ Node Box constructor", err)
+	}
+
+	t.Cleanup(func() {
+		if err := f.close(); err != nil {
+			t.Error("captured Node Box did not join", err)
+		}
+	})
 }
 
 func (f *nodePQFixture) start(t *testing.T) {

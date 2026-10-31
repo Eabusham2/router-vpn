@@ -1,0 +1,113 @@
+name: Windows captured PQ and native WFP
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches: [main]
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - 'internal/**'
+      - 'mobile/desktop/**'
+      - 'mobile/pq/**'
+      - 'mobile/amnezia/**'
+      - 'mobile/rosenpass/**'
+      - 'mobile/startwhitening/**'
+      - 'cmd/start-layer-relay/**'
+      - 'deploy/prepare-*.py'
+      - 'deploy/build*pq*.py'
+      - 'deploy/build-native-runtime.py'
+      - 'deploy/test_windows_node_pq*.py'
+      - 'deploy/test_desktop_node_pq.py'
+      - 'deploy/test_server_pq_traffic.py'
+      - 'deploy/test_windows_node_physical*.py'
+      - 'deploy/fixtures/windows-node-physical/**'
+      - 'deploy/setup-desktop-native-toolchain.py'
+      - 'deploy/install-desktop-windows-toolchain.py'
+      - '.github/workflows/windows-node-pq-contract.yml'
+  pull_request:
+    paths:
+      - 'go.mod'
+      - 'go.sum'
+      - 'internal/**'
+      - 'mobile/desktop/**'
+      - 'mobile/pq/**'
+      - 'mobile/amnezia/**'
+      - 'mobile/rosenpass/**'
+      - 'mobile/startwhitening/**'
+      - 'cmd/start-layer-relay/**'
+      - 'deploy/prepare-*.py'
+      - 'deploy/build*pq*.py'
+      - 'deploy/build-native-runtime.py'
+      - 'deploy/test_windows_node_pq*.py'
+      - 'deploy/test_desktop_node_pq.py'
+      - 'deploy/test_server_pq_traffic.py'
+      - 'deploy/test_windows_node_physical*.py'
+      - 'deploy/fixtures/windows-node-physical/**'
+      - 'deploy/setup-desktop-native-toolchain.py'
+      - 'deploy/install-desktop-windows-toolchain.py'
+      - '.github/workflows/windows-node-pq-contract.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-node-pq-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-pq:
+    name: Actual PQ and WFP on ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            target: windows/amd64
+            slug: windows-amd64
+          - runner: windows-11-arm
+            target: windows/arm64
+            slug: windows-arm64
+    env:
+      CARGO_BUILD_JOBS: '2'
+      CARGO_INCREMENTAL: '0'
+      CGO_ENABLED: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Verify native scope and prospective admission boundaries
+        shell: pwsh
+        run: |
+          python deploy/test_windows_node_pq_runner.py
+          if ($LASTEXITCODE -ne 0) { throw 'Captured PQ native source/scope boundary failed' }
+      - name: Select exact native Rust target and verified LLVM compiler
+        shell: pwsh
+        run: |
+          python deploy/setup-desktop-native-toolchain.py '${{ matrix.target }}' (Join-Path $env:RUNNER_TEMP 'routervpn-pq-native-toolchain')
+          if ($LASTEXITCODE -ne 0) { throw 'Exact PQ native toolchain preparation failed' }
+      - name: Execute actual PQ ABI, BFE, two-root transport and retained reversal
+        timeout-minutes: 45
+        shell: pwsh
+        run: |
+          # Real CGO and target Rust/C library on each actual architecture.
+          # WFP is scoped to this executable; only TUN is a harmless fixture.
+          # Public PQ admission remains closed until this prospective gate passes.
+          python deploy/test_windows_node_pq.py --standalone --prospective --receipt (Join-Path $env:RUNNER_TEMP 'routervpn-windows-pq-receipt.json')
+          if ($LASTEXITCODE -ne 0) { throw 'Actual Windows PQ/WFP composition failed' }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-pq-native-${{ matrix.slug }}-${{ github.sha }}
+          path: ${{ runner.temp }}/routervpn-windows-pq-receipt.json
+          if-no-files-found: error
+          retention-days: 7
