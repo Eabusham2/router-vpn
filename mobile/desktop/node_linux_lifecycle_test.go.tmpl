@@ -11,6 +11,7 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/linuxprocess"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
@@ -19,12 +20,16 @@ import (
 // and joined broker/service cleanup are the actual shipping composition.
 type nodeLinuxLifecycleSource struct {
 	*nodeUnixFactorySource
-	record      mobiletor.DesktopLinuxProtectionRecord
-	reads       int
-	observe     func(int, *mobiletor.DesktopLinuxProtectionRecord) error
-	retired     func(*mobiletor.DesktopLinuxProtectionRecord) error
-	retention   *nodeLinuxLifecycleRetention
-	retainError error
+	record          mobiletor.DesktopLinuxProtectionRecord
+	reads           int
+	observe         func(int, *mobiletor.DesktopLinuxProtectionRecord) error
+	retired         func(*mobiletor.DesktopLinuxProtectionRecord) error
+	retention       *nodeLinuxLifecycleRetention
+	retainError     error
+	guardian        mobiletor.DesktopLinuxGuardianRecord
+	guardianReads   int
+	observeGuardian func(int, *mobiletor.DesktopLinuxGuardianRecord) error
+	retiredGuardian func(*mobiletor.DesktopLinuxGuardianRecord) error
 }
 
 type nodeLinuxLifecycleRetention struct {
@@ -112,6 +117,46 @@ func (s *nodeLinuxLifecycleSource) ObserveRetiredProtection(ctx context.Context,
 	return value, nil
 }
 
+func (s *nodeLinuxLifecycleSource) ObservePreparedGuardian(ctx context.Context, capture mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxGuardianRecord, error) {
+	s.guardianReads++
+	value := s.guardian
+	if ctx.Err() != nil || capture != s.record.Capture || s.closed.Load() {
+		return value, errors.New("fixture guardian lost its exact live source")
+	}
+	if s.observeGuardian != nil {
+		err := s.observeGuardian(s.guardianReads, &value)
+		return value, err
+	}
+	return value, nil
+}
+
+func (s *nodeLinuxLifecycleSource) ObserveRetiredGuardian(ctx context.Context, capture mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxGuardianRecord, error) {
+	value := s.guardian
+	if ctx.Err() != nil || capture != s.record.Capture || !s.closed.Load() || !s.cancelled.Load() {
+		return value, errors.New("fixture guardian was not joined")
+	}
+	if s.retiredGuardian != nil {
+		err := s.retiredGuardian(&value)
+		return value, err
+	}
+	return value, nil
+}
+
+func nodeLinuxLifecycleGuardianFixture(pid uint32) mobiletor.DesktopLinuxGuardianRecord {
+	// These are explicit constructor fixtures, not a claim of native identity.
+	// The separate namespace case executes clone/procfd capture and retirement.
+	engine := linuxprocess.Observation{BootID: "11111111-2222-3333-4444-555555555555",
+		ProcessID: int(pid) + 1, ProcProcessID: int(pid) + 1001,
+		ProcParentID: 1, StartTicks: 100,
+		Image:            linuxprocess.Object{Device: 1, Inode: 2, Mode: 0100755},
+		NetworkNamespace: linuxprocess.Object{Device: 2, Inode: 3, Mode: 0100444},
+		PIDNamespace:     linuxprocess.Object{Device: 2, Inode: 4, Mode: 0100444}}
+	guardian := engine
+	guardian.ProcessID, guardian.ProcProcessID, guardian.ProcParentID, guardian.StartTicks =
+		int(pid), int(pid)+1000, engine.ProcProcessID, 101
+	return mobiletor.DesktopLinuxGuardianRecord{Engine: engine, Guardian: guardian}
+}
+
 func nodeLinuxLifecycleFixture(t *testing.T, kill string, admit NodeLinuxPhysicalAdmission) (*nodeUnixFactoryFixture, *nodeLinuxLifecycleSource) {
 	t.Helper()
 	f := newNodeUnixFactoryFixture(t, "shadowsocks", "linux", "on", kill, false)
@@ -125,6 +170,7 @@ func nodeLinuxLifecycleFixture(t *testing.T, kill string, admit NodeLinuxPhysica
 		Capture: f.node.network.brokerCapture(), Owner: f.source.owner, UID: 22171,
 		PermitPrefix: "rvpn_" + strings.Repeat("e", 20), TableHandle: 11, ChainHandle: 12, BaselineSHA256: strings.Repeat("f", 64),
 	}
+	source.guardian = nodeLinuxLifecycleGuardianFixture(source.record.Owner.ProcessID)
 	t.Cleanup(func() {
 		if source.retention != nil {
 			if err := f.node.network.Close(); err != nil {
@@ -188,14 +234,14 @@ func TestRouterVPNNodeLinuxLifecycleRejectsMissingOrReusedCapability(t *testing.
 
 func TestRouterVPNNodeLinuxLifecycleBracketsAdmissionAndRetainsSource(t *testing.T) {
 	for _, kill := range []string{"on-connect", "always"} {
-		for _, fault := range []string{"live", "partial", "missing-reader", "before-error", "before-capture", "before-owner", "callback-error", "cancel", "after-error", "after-baseline", "after-network"} {
+		for _, fault := range []string{"live", "partial", "missing-reader", "before-error", "before-capture", "before-owner", "before-guardian-error", "before-guardian-owner", "before-guardian-engine", "callback-error", "cancel", "after-error", "after-baseline", "after-network", "after-guardian-error", "after-guardian-birth"} {
 			t.Run(kill+"/"+fault, func(t *testing.T) {
 				var f *nodeUnixFactoryFixture
 				var source *nodeLinuxLifecycleSource
 				admissions := 0
 				f, source = nodeLinuxLifecycleFixture(t, kill, func(ctx context.Context, prepared NodeLinuxPhysicalPrepared) error {
 					admissions++
-					if source.reads != 1 || prepared.Protection != source.record || prepared.Policy != kill || ctx.Err() != nil ||
+					if source.reads != 1 || source.guardianReads != 1 || prepared.Protection != source.record || prepared.Guardian != source.guardian || prepared.Policy != kill || ctx.Err() != nil ||
 						f.node.network.SocketCurrent() || f.node.network.Current() {
 						t.Error("Linux admission did not retain its selected policy between pre-TUN native observations")
 					}
@@ -229,6 +275,26 @@ func TestRouterVPNNodeLinuxLifecycleBracketsAdmissionAndRetainsSource(t *testing
 					}
 					return nil
 				}
+				source.observeGuardian = func(read int, value *mobiletor.DesktopLinuxGuardianRecord) error {
+					if read == 1 {
+						switch fault {
+						case "before-guardian-error":
+							return errors.New("native guardian witness was not current")
+						case "before-guardian-owner":
+							value.Guardian.ProcessID += 2
+						case "before-guardian-engine":
+							value.Guardian.ProcParentID++
+						}
+					} else {
+						switch fault {
+						case "after-guardian-error":
+							return errors.New("native guardian exited during admission")
+						case "after-guardian-birth":
+							value.Guardian.StartTicks++
+						}
+					}
+					return nil
+				}
 				constructors := 0
 				if err := f.node.network.prepareNodePhysicalLinuxLifecycle(f.node.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
 					constructors++
@@ -254,7 +320,7 @@ func TestRouterVPNNodeLinuxLifecycleBracketsAdmissionAndRetainsSource(t *testing
 					t.Fatal("Linux lifecycle skipped native preparation or replayed its admission", admissions)
 				}
 				if fault == "live" {
-					if err != nil || source.reads != 2 || !f.node.network.SocketCurrent() || f.node.network.Current() {
+					if err != nil || source.reads != 2 || source.guardianReads != 2 || !f.node.network.SocketCurrent() || f.node.network.Current() {
 						t.Fatal("Linux lifecycle lost its distinct admitted pre-ready phase", err)
 					}
 					if err := f.node.network.CheckLinuxPhysicalAdmission(f.node.policy); err == nil {
@@ -285,7 +351,7 @@ func TestRouterVPNNodeLinuxLifecycleBracketsAdmissionAndRetainsSource(t *testing
 					if err == nil || retained != nil || !returned {
 						t.Fatal("Linux lifecycle inferred an outcome without its retained native reader")
 					}
-				} else if err != nil || retained == nil || retained.Protection != source.record || retained.Policy != kill || !returned || admissions > 1 {
+				} else if err != nil || retained == nil || retained.Protection != source.record || retained.Guardian != source.guardian || retained.Policy != kill || !returned || admissions > 1 {
 					t.Fatal("Linux lifecycle did not retain its exact selected-policy outcome", err)
 				}
 			})
@@ -345,6 +411,29 @@ func TestRouterVPNNodeLinuxLifecycleRetirementRequiresSuccessfulJoinAndSameRecor
 		})
 	}
 	source.retired = nil
+	for _, fault := range []string{"error", "guardian-birth", "engine-birth", "owner", "namespace"} {
+		t.Run("guardian-"+fault, func(t *testing.T) {
+			source.retiredGuardian = func(value *mobiletor.DesktopLinuxGuardianRecord) error {
+				switch fault {
+				case "error":
+					return errors.New("guardian witnesses did not close")
+				case "guardian-birth":
+					value.Guardian.StartTicks++
+				case "engine-birth":
+					value.Engine.StartTicks--
+				case "owner":
+					value.Guardian.ProcessID += 2
+				case "namespace":
+					value.Guardian.NetworkNamespace.Inode++
+				}
+				return nil
+			}
+			if target, returned, err := f.node.network.RetainedLinuxPhysicalProtection(context.Background(), f.node.policy); err == nil || target != nil || !returned {
+				t.Fatal("Linux lifecycle adopted a changed retired guardian process")
+			}
+		})
+	}
+	source.retiredGuardian = nil
 	if target, returned, err := f.node.network.RetainedLinuxPhysicalProtection(context.Background(), f.node.policy); err != nil || target == nil || !returned {
 		t.Fatal("Linux lifecycle could not retry its exact acknowledged retirement", err)
 	}
@@ -493,6 +582,7 @@ func TestRouterVPNNodeLinuxLifecycleCreatesBaselineBeforeGuardian(t *testing.T) 
 			source.record = mobiletor.DesktopLinuxProtectionRecord{Capture: f.node.network.brokerCapture(), Owner: source.owner,
 				UID: 22171, PermitPrefix: "rvpn_" + strings.Repeat("e", 20), TableName: "router_vpn_node_" + f.node.policy.Metadata().SessionID,
 				TableHandle: 11, ChainHandle: 12, BaselineSHA256: strings.Repeat("f", 64)}
+			source.guardian = nodeLinuxLifecycleGuardianFixture(source.record.Owner.ProcessID)
 			baselines, constructors, admissions := 0, 0, 0
 			ctx, err := WithNodeLinuxPhysicalBaseline(f.node.network.ctx, f.node.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture) error {
 				baselines++

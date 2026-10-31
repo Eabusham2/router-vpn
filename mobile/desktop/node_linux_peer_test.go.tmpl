@@ -286,7 +286,8 @@ func desktopNodeLinuxBox(t *testing.T, original *mobilemultihop.NodeProfile, res
 		return err
 	}, func(ctx context.Context, prepared routervpndesktoppt.NodeLinuxPhysicalPrepared) error {
 		if f.network.SocketCurrent() || f.network.Current() || f.admissions != 0 || ctx.Err() != nil ||
-			prepared.Policy != meta.KillSwitchPolicy || prepared.Protection.Validate() != nil || prepared.Protection.Capture.SessionID != meta.SessionID || prepared.Protection.Capture.SourceSHA256 != meta.SourceSHA256 {
+			prepared.Policy != meta.KillSwitchPolicy || prepared.Protection.Validate() != nil || prepared.Protection.Capture.SessionID != meta.SessionID || prepared.Protection.Capture.SourceSHA256 != meta.SourceSHA256 ||
+			prepared.Guardian.Validate() != nil || prepared.Guardian.Engine.ProcessID != os.Getpid() || uint32(prepared.Guardian.Guardian.ProcessID) != prepared.Protection.Owner.ProcessID {
 			return errors.New("Linux actual Node admission lost its pre-TUN selected capture")
 		}
 		if _, err := net.InterfaceByName("router-vpn"); err == nil {

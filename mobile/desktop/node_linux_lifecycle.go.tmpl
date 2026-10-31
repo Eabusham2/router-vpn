@@ -16,6 +16,7 @@ import (
 // not create a source, authorize replacement, or hold a kernel transaction.
 type NodeLinuxPhysicalPrepared struct {
 	Protection mobiletor.DesktopLinuxProtectionRecord
+	Guardian   mobiletor.DesktopLinuxGuardianRecord
 	Policy     string
 }
 
@@ -31,6 +32,7 @@ type nodeLinuxPhysicalAdmissionOwner struct {
 	source    desktopLinuxPhysicalPolicy
 	capture   mobiletor.DesktopSocketCapture
 	prepared  *mobiletor.DesktopLinuxProtectionRecord
+	guardian  *mobiletor.DesktopLinuxGuardianRecord
 	retention mobiletor.DesktopLinuxProtectionOwner
 	entered   bool
 	admitted  bool
@@ -43,6 +45,11 @@ type nodeLinuxProtectionReader interface {
 
 type nodeLinuxProtectionRetainer interface {
 	RetainProtection(context.Context, mobiletor.DesktopSocketCapture, string) (mobiletor.DesktopLinuxProtectionOwner, error)
+}
+
+type nodeLinuxGuardianReader interface {
+	ObservePreparedGuardian(context.Context, mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxGuardianRecord, error)
+	ObserveRetiredGuardian(context.Context, mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxGuardianRecord, error)
 }
 
 // WithNodeLinuxPhysicalAdmission installs one in-memory capability for one
@@ -150,16 +157,27 @@ func (n *NodeNetworkOwner) prepareNodePhysicalLinuxLifecycle(policy *mobilemulti
 			ctx.Err() != nil || !n.Matches(capture.SessionID, capture.SourceSHA256) {
 			return owned, errors.Join(err, identityErr, errors.New("Linux Router node preparation lost its exact native source readback"))
 		}
+		guardianReader, ok := owned.(nodeLinuxGuardianReader)
+		if !ok {
+			return owned, errors.New("Linux Router node has no original native guardian witness")
+		}
+		guardian, err := guardianReader.ObservePreparedGuardian(ctx, capture)
+		if err != nil || guardian.Validate() != nil || uint32(guardian.Guardian.ProcessID) != before.Owner.ProcessID {
+			return owned, errors.Join(err, errors.New("Linux Router node preparation lost its created guardian process"))
+		}
 		owner.mu.Lock()
 		copy := before
 		owner.prepared = &copy
+		guardianCopy := guardian
+		owner.guardian = &guardianCopy
 		owner.mu.Unlock()
-		if err = owner.admit(ctx, NodeLinuxPhysicalPrepared{Protection: before, Policy: policy.Metadata().KillSwitchPolicy}); err != nil {
+		if err = owner.admit(ctx, NodeLinuxPhysicalPrepared{Protection: before, Guardian: guardian, Policy: policy.Metadata().KillSwitchPolicy}); err != nil {
 			return owned, err
 		}
 		after, err := retention.Prepared(ctx)
-		if err != nil || after != before || ctx.Err() != nil || !n.Matches(capture.SessionID, capture.SourceSHA256) {
-			return owned, errors.Join(err, errors.New("Linux Router node admission changed its captured empty native baseline"))
+		afterGuardian, guardianErr := guardianReader.ObservePreparedGuardian(ctx, capture)
+		if err != nil || guardianErr != nil || after != before || afterGuardian != guardian || ctx.Err() != nil || !n.Matches(capture.SessionID, capture.SourceSHA256) {
+			return owned, errors.Join(err, guardianErr, errors.New("Linux Router node admission changed its captured guardian or empty native baseline"))
 		}
 		owner.mu.Lock()
 		owner.admitted = true
@@ -181,7 +199,7 @@ func (n *NodeNetworkOwner) CheckLinuxPhysicalAdmission(policy *mobilemultihop.De
 		return err
 	}
 	owner.mu.Lock()
-	valid := owner.network == n && owner.entered && owner.admitted && owner.prepared != nil
+	valid := owner.network == n && owner.entered && owner.admitted && owner.prepared != nil && owner.guardian != nil
 	source, capture, retention := owner.source, owner.capture, owner.retention
 	owner.mu.Unlock()
 	n.mu.Lock()
@@ -210,9 +228,14 @@ func (n *NodeNetworkOwner) RetainedLinuxPhysicalProtection(ctx context.Context, 
 	valid := owner.network == n
 	source, capture, retention := owner.source, owner.capture, owner.retention
 	var prepared *mobiletor.DesktopLinuxProtectionRecord
+	var guardian *mobiletor.DesktopLinuxGuardianRecord
 	if owner.prepared != nil {
 		copy := *owner.prepared
 		prepared = &copy
+	}
+	if owner.guardian != nil {
+		copy := *owner.guardian
+		guardian = &copy
 	}
 	owner.mu.Unlock()
 	n.mu.Lock()
@@ -240,7 +263,15 @@ func (n *NodeNetworkOwner) RetainedLinuxPhysicalProtection(ctx context.Context, 
 	if err != nil || record.Validate() != nil || record.Capture != capture || prepared != nil && record != *prepared || ctx.Err() != nil {
 		return nil, true, errors.Join(err, ctx.Err(), errors.New("Linux Router node retirement changed its captured native baseline"))
 	}
-	return &NodeLinuxPhysicalPrepared{Protection: record, Policy: policy.Metadata().KillSwitchPolicy}, true, nil
+	reader, ok := source.(nodeLinuxGuardianReader)
+	if !ok {
+		return nil, true, errors.New("Linux Router node retirement has no original guardian witness")
+	}
+	retired, err := reader.ObserveRetiredGuardian(ctx, capture)
+	if err != nil || retired.Validate() != nil || uint32(retired.Guardian.ProcessID) != record.Owner.ProcessID || guardian != nil && retired != *guardian || ctx.Err() != nil {
+		return nil, true, errors.Join(err, ctx.Err(), errors.New("Linux Router node retirement changed its captured guardian process"))
+	}
+	return &NodeLinuxPhysicalPrepared{Protection: record, Guardian: retired, Policy: policy.Metadata().KillSwitchPolicy}, true, nil
 }
 
 // These operations retain the same sealed policy, network and original source

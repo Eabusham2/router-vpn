@@ -33,13 +33,14 @@ KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGua
                 'SocketRetirementReusesCapacity', 'RejectsChangedBaseline', 'NativeParentCrash',
                 'BlockedControlRetainsSourcePort', 'RejectsStaleCaptureAndGeneration',
                 'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement',
-                'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions', 'RetainedBaseline', 'NodeBaselineSuccession')
+                'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions', 'RetainedBaseline', 'NodeBaselineSuccession', 'NodeProcessWitness')
 ACCOUNT_FILES = ('passwd', 'group', 'shadow', 'gshadow', 'subuid', 'subgid')
 BASELINE_CASES = ('RequiresCommittedBatchReceipt', 'ReplyRejectsUnrelatedDatagrams',
                   'GenerationRejectsMissingOrAmbiguousIdentity', 'EndpointRequiresRetainedOwner',
                   'SemanticFailureRetiresOriginalEndpoint', 'RetentionRequiresOriginalUnusedSource',
                   'RetentionPartialCloseOwnsOnlyOriginalDescriptors', 'RetentionCancelledWaitCannotEnterAnotherOperation',
-                  'NodeCreationReceiptRequiresExactOperations', 'NodeScopeAndAbsence', 'NodePartialOwnerCannotMutate')
+                  'NodeCreationReceiptRequiresExactOperations', 'NodeScopeAndAbsence', 'NodePartialOwnerCannotMutate',
+                  'GuardianRecordRequiresNativeRelationship', 'GuardianPartialWitnessCannotCreateProof')
 
 
 def account_mount(source, target, flags):
@@ -307,7 +308,9 @@ def execute(source: Path, go='go', *, env=None):
                 'desktop_socket_linux_baseline_netlink_native_test.go', 'desktop_socket_linux_baseline_owner.go',
                 'desktop_socket_linux_baseline_owner_test.go', 'desktop_socket_linux_baseline_owner_native_test.go',
                 'desktop_socket_linux_node_baseline.go', 'desktop_socket_linux_node_baseline_test.go',
-                'desktop_socket_linux_node_baseline_native_test.go'}
+                'desktop_socket_linux_node_baseline_native_test.go', 'desktop_socket_linux_guardian_process.go',
+                'desktop_socket_linux_guardian_record.go', 'desktop_socket_linux_guardian_record_test.go',
+                'desktop_socket_linux_guardian_process_test.go', 'desktop_socket_linux_guardian_process_native_test.go'}
     if not required.issubset(before):
         raise ValueError('The complete production guardian and actual kernel tests were not copied')
     captured = dict(os.environ if env is None else env, GOWORK='off')
@@ -377,12 +380,16 @@ def execute_mutations(source: Path, go='go', *, env=None):
         'joined retained baseline source': 'live guardian authorized baseline removal',
         'retained Always selection': 'disconnect changed the captured On-connect/Always semantics',
         'retained native namespace': 'changed native namespace substituted absence for the original replacement',
+        'original live guardian witness': 'dead guardian passed its retained native pidfd/task witness',
         'original Node creation receipt': 'changed create receipt became original baseline ownership',
         'closed Node predecessor': 'unretired Node predecessor authorized successor deletion',
         'closed Node successor': 'rejected successor changed old deny baseline',
         'reserved Node initial absence': 'scoped Node baseline was hidden from initial journal absence',
     }
     mutations = (
+        ('original live guardian witness', 'NodeProcessWitness', 'desktop_socket_linux_guardian_process.go', (
+            ('guardian, guardianErr := w.child.Current(ctx)', 'guardian, guardianErr := w.record.Guardian, error(nil)'),
+        )),
         ('original Node creation receipt', 'TestLinuxBaselineNodeCreationReceiptRequiresExactOperations', 'desktop_socket_linux_node_baseline.go', (
             ('!reflect.DeepEqual(row, request[index])', '!reflect.DeepEqual(row, row)'),
         )),

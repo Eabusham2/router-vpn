@@ -456,7 +456,18 @@ func RunDesktopLinuxSocketHelper(role string) error {
 		return err
 	}
 	reply := desktopLinuxReply{Sequence: request.Sequence, Capture: g.capture, Owner: g.owner, UID: uid, Account: account, NFT: g.nft}
-	if err = desktopLinuxSend(channel, reply, nil); err != nil {
+	var originalTask *os.File
+	if request.NodeScoped {
+		originalTask, err = os.Open("/proc/self")
+		if err != nil {
+			return err
+		}
+	}
+	err = desktopLinuxSend(channel, reply, originalTask)
+	if originalTask != nil {
+		err = errors.Join(err, originalTask.Close())
+	}
+	if err != nil {
 		return err
 	}
 	sequence := request.Sequence

@@ -156,6 +156,7 @@ type DesktopLinuxSocketPolicy struct {
 	monitorDone         chan struct{}
 	joinErr             error
 	parentStop          func() bool
+	nativeGuardian      *desktopLinuxGuardianProcess
 	protectionRetention *desktopLinuxRetainedProtection // One native retention for this exact source, under mu.
 }
 
@@ -187,6 +188,10 @@ func newDesktopLinuxSocketPolicy(ctx context.Context, capture DesktopSocketCaptu
 	command.Stderr = os.Stderr
 	command.ExtraFiles = []*os.File{child}
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	clonePIDFD := -1
+	if node {
+		command.SysProcAttr.PidFD = &clonePIDFD
+	}
 	if err := command.Start(); err != nil {
 		channel.Close()
 		child.Close()
@@ -194,10 +199,18 @@ func newDesktopLinuxSocketPolicy(ctx context.Context, capture DesktopSocketCaptu
 	}
 	child.Close()
 	p := &DesktopLinuxSocketPolicy{capture: capture, options: options, channel: channel, command: command, joined: make(chan struct{}), monitorDone: make(chan struct{})}
+	if node {
+		p.nativeGuardian = desktopLinuxNewGuardianProcess(clonePIDFD)
+	}
 	go func() { p.joinErr = command.Wait(); p.current.Store(false); close(p.joined) }()
 	request := desktopLinuxRequest{Operation: "prepare", Capture: capture, Options: options, NodeScoped: node}
 	reply, file, err := p.call(ctx, request, nil, false)
-	if file != nil {
+	if node {
+		p.nativeGuardian.directory = file // Keep even a partial received owner.
+		if file == nil || clonePIDFD < 0 {
+			err = errors.Join(err, errors.New("Linux Node guardian omitted its original task or clone-created pidfd"))
+		}
+	} else if file != nil {
 		file.Close()
 		err = errors.New("Linux guardian prepare unexpectedly transferred a descriptor")
 	}
@@ -213,6 +226,13 @@ func newDesktopLinuxSocketPolicy(ctx context.Context, capture DesktopSocketCaptu
 		channel.Close()
 		close(p.monitorDone)
 		return p, errors.New("Linux physical identity/firewall independent readback failed")
+	}
+	if node {
+		if err := p.nativeGuardian.capture(ctx, command.Process.Pid); err != nil {
+			channel.Close()
+			close(p.monitorDone)
+			return p, err
+		}
 	}
 	p.current.Store(true)
 	p.observed.Store(time.Now().UnixMilli())
@@ -338,8 +358,11 @@ func (p *DesktopLinuxSocketPolicy) Close(ctx context.Context) (closeErr error) {
 		return net.ErrClosed
 	}
 	defer func() {
-		if closeErr == nil && p.nft != nil {
-			p.closeAcknowledged.Store(true)
+		if closeErr == nil {
+			closeErr = p.nativeGuardian.close(ctx)
+			if closeErr == nil && p.nft != nil {
+				p.closeAcknowledged.Store(true)
+			}
 		}
 	}()
 	p.Cancel()
