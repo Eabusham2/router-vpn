@@ -66,10 +66,13 @@ def readonly_account_source(work):
     (source/'nsswitch.conf').write_text('passwd: files\ngroup: files\n')
     nested = source/'nested-config'
     nested.mkdir()
-    subprocess.run(['mount', '-t', 'tmpfs', 'tmpfs', str(nested)], check=True)
+    subprocess.run(['mount', '-t', 'tmpfs', '-o', 'nodev,nosuid,noexec', 'tmpfs', str(nested)], check=True)
     try:
         (nested/'keep').write_text('nested configuration')
         with GUARDIAN.private_account_directory(source, owner) as private:
+            mounts = {path: options for _, path, options in GUARDIAN.account_mounts(private)}
+            if not {'ro', 'nodev', 'nosuid', 'noexec'}.issubset(mounts.get(private/'nested-config', set())):
+                raise AssertionError('Private account remount lost original native security flags')
             for path in (private/'nsswitch.conf', private/'nested-config/keep'):
                 try:
                     path.write_text('unexpected mutation')
@@ -102,7 +105,7 @@ def readonly_account_source(work):
             raise AssertionError('Private account source retained an owned mount after exit')
     finally:
         subprocess.run(['umount', str(nested)], check=True)
-    print('Private account files, backups and locks are independent; NSS and nested configuration retain read-only ownership.', flush=True)
+    print('Private account files, backups and locks are independent; NSS and nested configuration retain read-only ownership and native security flags.', flush=True)
 
 
 def cases():

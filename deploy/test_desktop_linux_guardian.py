@@ -40,6 +40,34 @@ BASELINE_CASES = ('RequiresCommittedBatchReceipt', 'ReplyRejectsUnrelatedDatagra
                   'SemanticFailureRetiresOriginalEndpoint')
 
 
+def account_mount(source, target, flags):
+    # This fixture owns a private mount namespace. Do not fork one mount(8)
+    # process per /etc entry: on hosted runners that overhead exceeds the
+    # bounded multi-case regression despite each account operation succeeding.
+    library = ctypes.CDLL(None, use_errno=True)
+    mount = library.mount
+    mount.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_void_p)
+    mount.restype = ctypes.c_int
+    if mount(None if source is None else os.fsencode(source), os.fsencode(target), None, flags, None) != 0:
+        failure = ctypes.get_errno()
+        raise OSError(failure, os.strerror(failure), str(target))
+
+
+def account_readonly_flags(options):
+    # A bind remount updates VFS flags. Retain the original security/atime
+    # restrictions, including inherited locked flags in nested namespaces.
+    native = {'ro': 1, 'rw': 0, 'nosuid': 2, 'nodev': 4, 'noexec': 8,
+              'sync': 16, 'mand': 64, 'dirsync': 128, 'nosymfollow': 256,
+              'noatime': 1024, 'nodiratime': 2048, 'relatime': 1 << 21,
+              'iversion': 1 << 23, 'strictatime': 1 << 24, 'lazytime': 1 << 25}
+    if not options.issubset(native):
+        raise ValueError('Private account source has unrecognized native mount flags')
+    flags = 4096 | 32 | 1  # MS_BIND | MS_REMOUNT | MS_RDONLY
+    for option in options:
+        flags |= native[option]
+    return flags
+
+
 def account_mounts(directory):
     result = []
     for line in Path('/proc/self/mountinfo').read_text().splitlines():
@@ -71,7 +99,13 @@ def unmount_account_mounts(mounted):
         if len(native) != 1 or native[0] not in by_path[path]:
             raise ValueError('Private account cleanup lost its original visible mount')
         captured = {identity for identity, target, _ in mounted if target == path or target.is_relative_to(path)}
-        subprocess.run(['umount', '--lazy', '--no-canonicalize', '--', str(path)], check=True)
+        library = ctypes.CDLL(None, use_errno=True)
+        unmount = library.umount2
+        unmount.argtypes = (ctypes.c_char_p, ctypes.c_int)
+        unmount.restype = ctypes.c_int
+        if unmount(os.fsencode(path), 2 | 8) != 0:  # MNT_DETACH | UMOUNT_NOFOLLOW
+            failure = ctypes.get_errno()
+            raise OSError(failure, os.strerror(failure), str(path))
         if any(identity in captured for identity, _, _ in account_mounts(path)):
             raise ValueError('Private account cleanup retained its captured mount tree')
 
@@ -79,7 +113,7 @@ def unmount_account_mounts(mounted):
 @contextlib.contextmanager
 def bind_account_directory(source, target):
     before = {identity for identity, _, _ in account_mounts(target)}
-    subprocess.run(['mount', '--rbind', str(source), str(target)], check=True)
+    account_mount(source, target, 4096 | 16384)  # MS_BIND | MS_REC
     owned = [record for record in account_mounts(target) if record[0] not in before]
     try:
         if not any(path == target for _, path, _ in owned):
@@ -101,18 +135,19 @@ def private_account_directory(source, workspace):
     workspace.chmod(0o711)
     backing, private = workspace/'original-etc', workspace/'etc'
     backing.mkdir()
-    subprocess.run(['mount', '--rbind', str(source), str(backing)], check=True)
+    account_mount(source, backing, 4096 | 16384)
     mounted = account_mounts(backing)
     private_mounts = []
     try:
         if not any(path == backing for _, path, _ in mounted):
             raise ValueError('Private account source lost its captured bind mount')
-        for _, path, _ in sorted(mounted, key=lambda item: len(item[1].parts), reverse=True):
-            subprocess.run(['mount', '-o', 'remount,bind,ro', str(path)], check=True)
+        for _, path, options in sorted(mounted, key=lambda item: len(item[1].parts), reverse=True):
+            account_mount(None, path, account_readonly_flags(options))
         observed = account_mounts(backing)
+        expected_options = {(identity, path): (options-{'rw'}) | {'ro'} for identity, path, options in mounted}
         if ({(identity, path) for identity, path, _ in observed} !=
                 {(identity, path) for identity, path, _ in mounted}
-                or any('ro' not in options for _, _, options in observed)):
+                or any(options != expected_options[(identity, path)] for identity, path, options in observed)):
             raise ValueError('Private account source is not recursively read-only')
         source_info = source.stat()
         private.mkdir(mode=stat.S_IMODE(source_info.st_mode))
@@ -138,11 +173,11 @@ def private_account_directory(source, workspace):
             else:
                 if entry.is_dir():
                     target.mkdir()
-                    operation = '--rbind'
+                    flags = 4096 | 16384
                 else:
                     target.touch()
-                    operation = '--bind'
-                subprocess.run(['mount', operation, str(entry), str(target)], check=True)
+                    flags = 4096
+                account_mount(entry, target, flags)
                 private_mounts.extend(account_mounts(target))
         if any(not (private/name).is_file() or (private/name).is_symlink() for name in ACCOUNT_FILES[:4]):
             raise ValueError('Private account source is missing a required local database')
