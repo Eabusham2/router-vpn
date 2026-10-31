@@ -111,6 +111,10 @@ def inputs():
                              ROOT/'deploy/test_windows_physical_tunnel.py',
                              ROOT/'deploy/test_windows_physical_tunnel_runner.py',
                              ROOT/'deploy/test_desktop_node_physical.py',
+                             ROOT/'deploy/test_desktop_node_pq.py',
+                             ROOT/'deploy/build_pq_reference_fixture.py',
+                             ROOT/'deploy/test_server_pq_traffic.py',
+                             ROOT/'mobile/rosenpass/examples/native_keys.rs',
                              ROOT/'go.mod',
                              *([ROOT/'go.sum'] if (ROOT/'go.sum').exists() or (ROOT/'go.sum').is_symlink() else []),
                              *sorted((ROOT/'cmd/start-layer-relay').glob('*.go')),
@@ -526,6 +530,12 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 # OS permits and TUN as explicit composition boundaries.
                 run([sys.executable, ROOT/'deploy/test_desktop_node_physical.py', source],
                     env=env, timeout=900)
+                # The PQ matrix uses the same verified native archive and
+                # compiler cache, fresh KEM keys, and real packet/Start Layer
+                # peers. Native firewall/public admission remains separate.
+                run([sys.executable, ROOT/'deploy/test_desktop_node_pq.py', source, pq,
+                     '--cache', cache or ROOT/'dist/.native-pq-cache'],
+                    env=env, timeout=1800)
             if target.startswith(('linux/', 'darwin/')):
                 run([sys.executable, ROOT/'deploy/test_desktop_socket_uid.py', source],
                     env=env, timeout=300)

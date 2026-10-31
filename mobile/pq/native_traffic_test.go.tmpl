@@ -119,6 +119,7 @@ type pqTrafficServer struct {
 	initialKey chan struct{}
 	adopted    sync.Once
 	received   atomic.Int64
+	rejected   atomic.Int64
 }
 
 func newPQTrafficServer(t *testing.T, peer *routervpnamnezia.NativePQTrafficReference, version int) *pqTrafficServer {
@@ -198,6 +199,7 @@ func (s *pqTrafficServer) run() {
 		s.received.Add(1)
 		event, err := s.protocol.Step(1, packet[:n])
 		if errors.Is(err, mobilepq.ErrPacket) {
+			s.rejected.Add(1)
 			clear(event.Key)
 			continue
 		}

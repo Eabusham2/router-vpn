@@ -1,0 +1,1065 @@
+//go:build cgo && routervpn_native_pq && routervpn_pq_traffic_test
+
+package routervpnpq
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	C "github.com/sagernet/sing-box/constant"
+	boxDNS "github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
+	WH "github.com/sagernet/sing-box/protocol/routervpnwhitening"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	WG "github.com/sagernet/sing-box/protocol/wireguard"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/buf"
+	"github.com/sagernet/sing/common/bufio"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// This prerequisite composes the exact Node compiler, Box, physical broker,
+// native Rust KEM and WG/AWG packet owner. The only modeled boundaries are the
+// OS socket permits and TUN. Each peer uses actual ciphertext sockets and fresh
+// independent keys. It does not grant public/native-host graph admission.
+const nodePQPayload = "routervpn-authenticated-pq-data-owned-node/"
+
+type nodePQInner struct {
+	mu       sync.Mutex
+	closing  bool
+	owned    map[io.Closer]bool
+	workers  sync.WaitGroup
+	failed   atomic.Bool
+	queries  atomic.Int64
+	echoes   atomic.Int64
+	rejected atomic.Int64
+}
+
+func nodePQEcho(destination netip.AddrPort) bool {
+	return destination.Port() == 9999 && (destination.Addr() == netip.MustParseAddr("192.0.2.99") || destination.Addr() == netip.MustParseAddr("2001:db8::99"))
+}
+
+func (h *nodePQInner) JudgeFlow(protocol uint8, _, destination netip.AddrPort, _ []byte) tun.FlowVerdict {
+	if protocol == 17 && destination == netip.MustParseAddrPort("192.168.50.133:53") {
+		return tun.FlowVerdict{Action: tun.ActionHijackDNS}
+	}
+	if (protocol == 6 || protocol == 17) && nodePQEcho(destination) {
+		return tun.FlowVerdict{Action: tun.ActionAccept}
+	}
+	h.rejected.Add(1)
+	return tun.FlowVerdict{Action: tun.ActionReject}
+}
+
+func (h *nodePQInner) NewDNSPacket(packet []byte, _, destination M.Socksaddr, writer N.PacketWriter) {
+	query := new(dns.Msg)
+	if destination.String() != "192.168.50.133:53" || query.Unpack(packet) != nil || len(query.Question) != 1 ||
+		query.Question[0].Name != "example.com." || query.Question[0].Qtype != dns.TypeA || query.Question[0].Qclass != dns.ClassINET {
+		h.rejected.Add(1)
+		return
+	}
+	h.queries.Add(1)
+	answer := new(dns.Msg).SetReply(query)
+	if h.failed.Load() {
+		answer.Rcode = dns.RcodeNameError
+	} else {
+		answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.IPv4(93, 184, 216, 34)}}
+	}
+	raw, err := answer.Pack()
+	if err == nil {
+		_ = writer.WritePacket(buf.As(raw), destination)
+	}
+}
+
+func (h *nodePQInner) enter(connection io.Closer) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closing {
+		return false
+	}
+	h.owned[connection] = true
+	h.workers.Add(1)
+	return true
+}
+
+func (h *nodePQInner) leave(connection io.Closer) {
+	_ = connection.Close()
+	h.mu.Lock()
+	delete(h.owned, connection)
+	h.mu.Unlock()
+	h.workers.Done()
+}
+
+func (h *nodePQInner) NewConnectionEx(_ context.Context, connection net.Conn, _, destination M.Socksaddr, done N.CloseHandlerFunc) {
+	if !nodePQEcho(destination.AddrPort()) || !h.enter(connection) {
+		_ = connection.Close()
+		if done != nil {
+			done(net.ErrClosed)
+		}
+		return
+	}
+	go func() {
+		defer h.leave(connection)
+		h.echoes.Add(1)
+		_, err := io.Copy(connection, connection)
+		if done != nil {
+			done(err)
+		}
+	}()
+}
+
+func (h *nodePQInner) NewPacketConnectionEx(_ context.Context, connection N.PacketConn, _, destination M.Socksaddr, done N.CloseHandlerFunc) {
+	if !nodePQEcho(destination.AddrPort()) || !h.enter(connection) {
+		_ = connection.Close()
+		if done != nil {
+			done(net.ErrClosed)
+		}
+		return
+	}
+	go func() {
+		defer h.leave(connection)
+		for {
+			packet := buf.NewPacket()
+			actual, err := connection.ReadPacket(packet)
+			if err == nil && actual != destination {
+				err = errors.New("PQ inner UDP escaped its captured destination")
+			}
+			if err != nil {
+				packet.Release()
+				if done != nil {
+					done(err)
+				}
+				return
+			}
+			h.echoes.Add(1)
+			if err = connection.WritePacket(packet, destination); err != nil {
+				if done != nil {
+					done(err)
+				}
+				return
+			}
+		}
+	}()
+}
+
+func (h *nodePQInner) close() {
+	h.mu.Lock()
+	h.closing = true
+	connections := make([]io.Closer, 0, len(h.owned))
+	for connection := range h.owned {
+		connections = append(connections, connection)
+	}
+	h.mu.Unlock()
+	for _, connection := range connections {
+		_ = connection.Close()
+	}
+	h.workers.Wait()
+}
+
+// A front retains one exact real UDP peer and a single captured client tuple.
+// The reference's initial key barrier only orders reference PSK installation;
+// it cannot create a successful packet, peer identity, or client readiness.
+type nodePQFront struct {
+	listener *net.UDPConn
+	peer     *net.UDPConn
+	ctx      context.Context
+	cancel   context.CancelFunc
+	workers  sync.WaitGroup
+	mu       sync.Mutex
+	remote   netip.AddrPort
+	packets  atomic.Int64
+	plain    atomic.Bool
+	barrier  <-chan struct{}
+	once     sync.Once
+}
+
+func newNodePQFront(t *testing.T, ip netip.Addr, target string, barrier <-chan struct{}) *nodePQFront {
+	t.Helper()
+	listener, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(ip, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	address, err := net.ResolveUDPAddr("udp4", target)
+	if err != nil || !address.IP.IsLoopback() {
+		_ = listener.Close()
+		t.Fatal("PQ front lost its exact loopback reference", err)
+	}
+	peer, err := net.DialUDP("udp4", nil, address)
+	if err != nil {
+		_ = listener.Close()
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	f := &nodePQFront{listener: listener, peer: peer, ctx: ctx, cancel: cancel, barrier: barrier}
+	f.workers.Add(2)
+	go func() {
+		defer f.workers.Done()
+		packet := make([]byte, 65535)
+		for {
+			n, remote, err := listener.ReadFromUDPAddrPort(packet)
+			if err != nil {
+				return
+			}
+			f.mu.Lock()
+			valid := remote.Addr() == ip && (!f.remote.IsValid() || f.remote == remote)
+			if valid {
+				f.remote = remote
+			}
+			f.mu.Unlock()
+			if !valid {
+				continue
+			}
+			f.packets.Add(1)
+			if bytes.Contains(packet[:n], []byte(nodePQPayload)) {
+				f.plain.Store(true)
+			}
+			if barrier != nil {
+				select {
+				case <-barrier:
+				case <-ctx.Done():
+					return
+				}
+			}
+			if _, err = peer.Write(packet[:n]); err != nil {
+				return
+			}
+		}
+	}()
+	go func() {
+		defer f.workers.Done()
+		packet := make([]byte, 65535)
+		for {
+			n, err := peer.Read(packet)
+			if err != nil {
+				return
+			}
+			f.mu.Lock()
+			remote := f.remote
+			f.mu.Unlock()
+			if !remote.IsValid() {
+				continue
+			}
+			if _, err = listener.WriteToUDPAddrPort(packet[:n], remote); err != nil {
+				return
+			}
+		}
+	}()
+	t.Cleanup(f.close)
+	return f
+}
+
+func (f *nodePQFront) address() netip.AddrPort {
+	return f.listener.LocalAddr().(*net.UDPAddr).AddrPort()
+}
+func (f *nodePQFront) close() {
+	f.once.Do(func() { f.cancel(); _ = f.listener.Close(); _ = f.peer.Close(); f.workers.Wait() })
+}
+
+// The layer allows exactly the captured WG and KEM destinations. DNS and inner
+// application traffic can only traverse the authenticated WG/AWG packet peer.
+type nodePQLayer struct {
+	ctx      context.Context
+	cancel   context.CancelFunc
+	udp      *net.UDPConn
+	routes   map[M.Socksaddr]string
+	barrier  <-chan struct{}
+	wg       M.Socksaddr
+	mu       sync.Mutex
+	closing  bool
+	owned    map[io.Closer]bool
+	workers  sync.WaitGroup
+	raw      atomic.Int64
+	rejected atomic.Int64
+	plain    atomic.Bool
+	lanes    sync.Map
+	once     sync.Once
+}
+
+func (s *nodePQLayer) enter(connection io.Closer) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closing {
+		return false
+	}
+	s.owned[connection] = true
+	s.workers.Add(1)
+	return true
+}
+func (s *nodePQLayer) leave(connection io.Closer) {
+	_ = connection.Close()
+	s.mu.Lock()
+	delete(s.owned, connection)
+	s.mu.Unlock()
+	s.workers.Done()
+}
+func (*nodePQLayer) NewConnection(context.Context, net.Conn, M.Metadata) error {
+	return errors.New("PQ layer has no captured TCP forwarding destination")
+}
+func (*nodePQLayer) NewError(context.Context, error) {}
+
+func (s *nodePQLayer) NewPacketConnection(_ context.Context, connection N.PacketConn, metadata M.Metadata) error {
+	target, allowed := s.routes[metadata.Destination]
+	if !allowed || !s.enter(connection) {
+		return errors.New("PQ layer rejected an uncaptured inner UDP destination")
+	}
+	defer s.leave(connection)
+	peer, err := (&net.Dialer{}).DialContext(s.ctx, "udp4", target)
+	if err != nil {
+		return err
+	}
+	defer peer.Close()
+	stop := context.AfterFunc(s.ctx, func() { _ = peer.Close(); _ = connection.Close() })
+	defer stop()
+	joined := make(chan struct{})
+	go func() {
+		defer close(joined)
+		defer peer.Close()
+		for {
+			packet := buf.NewSize(65535)
+			actual, err := connection.ReadPacket(packet)
+			if err == nil && actual != metadata.Destination {
+				err = errors.New("PQ layer changed its captured inner tuple")
+			}
+			if err == nil && actual == s.wg {
+				select {
+				case <-s.barrier:
+				case <-s.ctx.Done():
+					err = s.ctx.Err()
+				}
+			}
+			if err == nil {
+				counter, _ := s.lanes.LoadOrStore(actual, &atomic.Int64{})
+				counter.(*atomic.Int64).Add(1)
+				_, err = peer.Write(packet.Bytes())
+			}
+			packet.Release()
+			if err != nil {
+				return
+			}
+		}
+	}()
+	defer func() { _ = peer.Close(); _ = connection.Close(); <-joined }()
+	for {
+		packet := buf.NewSize(65535 + 2048)
+		packet.Resize(2048, 0)
+		n, err := peer.Read(packet.FreeBytes())
+		packet.Truncate(n)
+		if err == nil {
+			err = connection.WritePacket(packet, metadata.Destination)
+		} else {
+			packet.Release()
+		}
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func newNodePQLayer(t *testing.T, ip netip.Addr, password string, wg, kem M.Socksaddr, reference *AWG.NativePQTrafficReference, server *pqTrafficServer) *nodePQLayer {
+	t.Helper()
+	packet, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(ip, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Darwin's send reserve must contain one complete bounded SS datagram.
+	if err = packet.SetWriteBuffer(65535); err != nil {
+		_ = packet.Close()
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &nodePQLayer{ctx: ctx, cancel: cancel, udp: packet, wg: wg, barrier: server.initialKey,
+		routes: map[M.Socksaddr]string{wg: reference.Address(), kem: server.conn.LocalAddr().String()}, owned: make(map[io.Closer]bool)}
+	service, err := shadowaead_2022.NewServiceWithPassword(mobilemultihop.NativeStartLayerMethod, password, 10, s, nil)
+	if err != nil {
+		cancel()
+		_ = packet.Close()
+		t.Fatal(err)
+	}
+	s.workers.Add(1)
+	go func() {
+		defer s.workers.Done()
+		reader := bufio.NewPacketConn(packet)
+		for {
+			body := buf.NewSize(65535)
+			source, err := reader.ReadPacket(body)
+			if err != nil {
+				body.Release()
+				return
+			}
+			s.raw.Add(1)
+			if bytes.Contains(body.Bytes(), []byte(nodePQPayload)) {
+				s.plain.Store(true)
+			}
+			if service.NewPacket(ctx, reader, body, M.Metadata{Source: source}) != nil {
+				s.rejected.Add(1)
+				body.Release()
+			}
+		}
+	}()
+	t.Cleanup(s.close)
+	return s
+}
+
+func (s *nodePQLayer) address() netip.AddrPort { return s.udp.LocalAddr().(*net.UDPAddr).AddrPort() }
+func (s *nodePQLayer) close() {
+	s.once.Do(func() {
+		s.mu.Lock()
+		s.closing = true
+		connections := make([]io.Closer, 0, len(s.owned))
+		for connection := range s.owned {
+			connections = append(connections, connection)
+		}
+		s.mu.Unlock()
+		s.cancel()
+		_ = s.udp.Close()
+		for _, connection := range connections {
+			_ = connection.Close()
+		}
+		s.workers.Wait()
+	})
+}
+
+func nodePQRelay(t *testing.T, ip netip.Addr, target, password string) netip.AddrPort {
+	t.Helper()
+	binary := os.Getenv("ROUTER_VPN_WHITENING_TEST_BINARY")
+	if !filepath.IsAbs(binary) {
+		t.Fatal("PQ whitening requires the exact built shipping relay")
+	}
+	raw, err := json.Marshal(map[string]any{"outbounds": []any{map[string]any{"type": "shadowsocks", "method": mobilemultihop.NativeStartLayerMethod, "password": password}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(t.TempDir(), "captured-aes.json")
+	if err = os.WriteFile(config, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	address := netip.AddrPortFrom(ip, 8389)
+	ctx, cancel := context.WithCancel(context.Background())
+	command := exec.CommandContext(ctx, binary, "--mode", "server", "--listen", address.String(), "--target", target, "--key-config", config)
+	var diagnostic bytes.Buffer
+	command.Stdout, command.Stderr = &diagnostic, &diagnostic
+	if err = command.Start(); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	joined := make(chan error, 1)
+	go func() { joined <- command.Wait() }()
+	t.Cleanup(func() { cancel(); <-joined })
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+		connection, err := net.DialTimeout("tcp4", address.String(), 50*time.Millisecond)
+		if err == nil {
+			_ = connection.Close()
+			return address
+		}
+		select {
+		case err := <-joined:
+			joined <- err
+			t.Fatal("PQ shipping whitening reference exited before readiness", err, diagnostic.String())
+		default:
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("PQ shipping whitening reference did not bind")
+	return netip.AddrPort{}
+}
+
+func nodePQInterface(t *testing.T) (net.Interface, netip.Addr) {
+	t.Helper()
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		addresses, err := iface.Addrs()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, value := range addresses {
+			prefix, err := netip.ParsePrefix(value.String())
+			if err == nil && prefix.Addr().Is4() && prefix.Addr().IsPrivate() {
+				return iface, prefix.Addr()
+			}
+		}
+	}
+	t.Fatal("PQ Node prerequisite requires an actual private non-loopback interface")
+	return net.Interface{}, netip.Addr{}
+}
+
+type nodePQTUN struct {
+	inbound.Adapter
+	ready, closed atomic.Bool
+}
+
+func (n *nodePQTUN) Start(stage adapter.StartStage) error {
+	if stage == adapter.StartStateStart {
+		n.ready.Store(true)
+	}
+	return nil
+}
+func (n *nodePQTUN) Close() error { n.closed.Store(true); return nil }
+
+type nodePQKernel struct {
+	capture mobiletor.DesktopSocketCapture
+	owner   mobiletor.DesktopSocketKernelOwner
+	iface   net.Interface
+	local   netip.Addr
+	allowed map[netip.AddrPort]bool
+	network *routervpndesktoppt.NodeNetworkOwner
+	tun     *nodePQTUN
+	mu      sync.Mutex
+	grants  map[string]mobiletor.DesktopSocketGrant
+	seen    map[netip.AddrPort]int
+	preTUN  int
+	live    atomic.Bool
+	closed  atomic.Bool
+	bad     atomic.Int64
+}
+
+func (k *nodePQKernel) Owner() (mobiletor.DesktopSocketKernelOwner, error) { return k.owner, nil }
+func (k *nodePQKernel) Current(c mobiletor.DesktopSocketCapture, o mobiletor.DesktopSocketKernelOwner) bool {
+	return k.live.Load() && c == k.capture && o == k.owner
+}
+func (k *nodePQKernel) Select(ctx context.Context, c mobiletor.DesktopSocketCapture, network string, remote netip.AddrPort) (mobiletor.DesktopSocketBinding, error) {
+	if ctx.Err() != nil || !k.Current(c, k.owner) || network != "udp" || !k.allowed[remote] {
+		k.bad.Add(1)
+		return mobiletor.DesktopSocketBinding{}, errors.New("PQ Node physical kernel rejected an uncaptured outer tuple")
+	}
+	return mobiletor.DesktopSocketBinding{Owner: k.owner, InterfaceName: k.iface.Name, InterfaceIndex: uint32(k.iface.Index), LocalAddress: k.local}, nil
+}
+func (k *nodePQKernel) Bind(ctx context.Context, c mobiletor.DesktopSocketCapture, binding mobiletor.DesktopSocketBinding, network string, raw syscall.RawConn) error {
+	if ctx.Err() != nil || !k.Current(c, binding.Owner) || binding.LocalAddress != k.local || binding.InterfaceName != k.iface.Name ||
+		binding.InterfaceIndex != uint32(k.iface.Index) || network != "udp4" || raw == nil {
+		k.bad.Add(1)
+		return errors.New("PQ Node lost its exact physical socket binding")
+	}
+	return raw.Control(func(uintptr) {}) // Explicit OS-permit fixture, never an actual native guardian receipt.
+}
+func (k *nodePQKernel) Grant(ctx context.Context, q mobiletor.DesktopSocketGrant) (mobiletor.DesktopSocketReceipt, error) {
+	if ctx.Err() != nil || !k.Current(q.Capture, q.Binding.Owner) || q.Network != "udp" || !k.allowed[q.Remote] ||
+		q.Local.Addr() != k.local || q.Local.Port() == 0 || !k.network.SocketCurrent() {
+		k.bad.Add(1)
+		return mobiletor.DesktopSocketReceipt{}, errors.New("PQ Node socket preceded captured native admission")
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if old, exists := k.grants[q.SocketID]; exists {
+		identity := q
+		identity.Sequence = old.Sequence
+		if identity != old {
+			return mobiletor.DesktopSocketReceipt{}, errors.New("PQ Node socket renewal changed its exact owner")
+		}
+	}
+	k.grants[q.SocketID] = q
+	k.seen[q.Remote]++
+	if !k.tun.ready.Load() && !k.network.Current() {
+		k.preTUN++
+	}
+	now := time.Now()
+	return mobiletor.DesktopSocketReceipt{Grant: q, ObservedAt: now.UnixMilli(), ExpiresAt: now.Add(10 * time.Second).UnixMilli()}, nil
+}
+func (k *nodePQKernel) Revoke(_ context.Context, q mobiletor.DesktopSocketGrant) error {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if old, exists := k.grants[q.SocketID]; exists && (old.Capture != q.Capture || old.Local != q.Local || old.Remote != q.Remote) {
+		return errors.New("PQ Node revoke changed the captured socket owner")
+	}
+	delete(k.grants, q.SocketID)
+	return nil
+}
+
+// Keep the modeled permit policy separate from the retained source. Passing
+// this source as the broker's native socket constructor would require actual
+// imported handles and must not fabricate them in a composed peer fixture.
+type nodePQSource struct{ *nodePQKernel }
+
+func (*nodePQSource) CreateSocket(context.Context, mobiletor.DesktopSocketCreation) (mobiletor.DesktopSocketCreated, error) {
+	return mobiletor.DesktopSocketCreated{}, errors.New("PQ fixture cannot manufacture a socket")
+}
+func (k *nodePQKernel) Cancel() { k.live.Store(false) }
+func (k *nodePQKernel) Close(ctx context.Context) error {
+	k.Cancel()
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if ctx.Err() != nil || len(k.grants) != 0 {
+		return errors.New("PQ Node physical owner closed before its actual sockets joined")
+	}
+	k.closed.Store(true)
+	return nil
+}
+
+type nodePQFixture struct {
+	box       *box.Box
+	policy    *mobilemultihop.DesktopNodePolicy
+	network   *routervpndesktoppt.NodeNetworkOwner
+	kernel    *nodePQKernel
+	source    *nodePQSource
+	tun       *nodePQTUN
+	inner     *nodePQInner
+	reference *AWG.NativePQTrafficReference
+	server    *pqTrafficServer
+	wg, kem   *nodePQFront
+	layer     *nodePQLayer
+	endpoint  *Endpoint
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (f *nodePQFixture) close() error {
+	f.closeOnce.Do(func() { f.closeErr = f.box.Close() })
+	return f.closeErr
+}
+
+func newNodePQFixture(t *testing.T, mode, layer, fault string) *nodePQFixture {
+	t.Helper()
+	if mode != "wg-pq" && mode != "awg2-pq" || layer != "" && layer != "aes-256-gcm" && layer != "aes-256-gcm+xor-whitening" ||
+		fault != "" && fault != "kem-peer" && fault != "packet-peer" && fault != "aes-key" {
+		t.Fatal("PQ reference escaped its exact mode, layer or negative case")
+	}
+	iface, ip := nodePQInterface(t)
+	private, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &nodePQFixture{inner: &nodePQInner{owned: make(map[io.Closer]bool)}}
+	t.Cleanup(f.inner.close)
+	f.reference = AWG.NewNativePQTrafficReferenceWithHandler(t, private.PublicKey().Bytes(), mode == "awg2-pq", f.inner)
+	f.server = newPQTrafficServer(t, f.reference, 2)
+	f.wg = newNodePQFront(t, ip, f.reference.Address(), f.server.initialKey)
+	f.kem = newNodePQFront(t, ip, f.server.conn.LocalAddr().String(), nil)
+	wgAddress, kemAddress := f.wg.address(), f.kem.address()
+	if wgAddress == kemAddress {
+		t.Fatal("PQ fixture must retain different packet and KEM ports")
+	}
+	allowed := map[netip.AddrPort]bool{wgAddress: true, kemAddress: true}
+	startAssets := ""
+	if layer != "" {
+		var secret [32]byte
+		if _, err = rand.Read(secret[:]); err != nil {
+			t.Fatal(err)
+		}
+		password := base64.StdEncoding.EncodeToString(secret[:])
+		clear(secret[:])
+		wgInner := M.SocksaddrFrom(netip.MustParseAddr("10.78.0.1"), wgAddress.Port())
+		kemInner := M.SocksaddrFrom(netip.MustParseAddr("10.78.0.1"), kemAddress.Port())
+		f.layer = newNodePQLayer(t, ip, password, wgInner, kemInner, f.reference, f.server)
+		physical := f.layer.address()
+		if layer == "aes-256-gcm+xor-whitening" {
+			physical = nodePQRelay(t, ip, f.layer.address().String(), password)
+		}
+		allowed = map[netip.AddrPort]bool{physical: true}
+		if fault == "aes-key" {
+			if _, err = rand.Read(secret[:]); err != nil {
+				t.Fatal(err)
+			}
+			password = base64.StdEncoding.EncodeToString(secret[:])
+			clear(secret[:])
+		}
+		ssJSON, _ := json.Marshal(map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "address": []string{"172.19.0.1/30"}, "auto_route": true, "strict_route": true, "stack": "gvisor"}},
+			"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": ip.String(), "server_port": int(f.layer.address().Port()), "method": mobilemultihop.NativeStartLayerMethod, "password": password}},
+			"route":     map[string]any{"final": "proxy"}})
+		encoded, _ := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(ssJSON)})
+		startAssets = string(encoded)
+	}
+	packetPublic := f.reference.Public
+	if fault == "packet-peer" {
+		other, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		packetPublic = other.PublicKey().Bytes()
+	}
+	public := base64.StdEncoding.EncodeToString(packetPublic)
+	proof := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+	var parameters strings.Builder
+	if mode == "awg2-pq" {
+		for _, name := range []string{"jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"} {
+			fmt.Fprintf(&parameters, "%s=%s\n", name, f.reference.Parameters[name])
+		}
+	}
+	packetProfile := "[Interface]\nAddress=10.78.0.2/32,fd78:78::2/128\nPrivateKey=" + base64.StdEncoding.EncodeToString(private.Bytes()) + "\nDNS=192.168.50.133\n" + parameters.String() +
+		"[Peer]\nPublicKey=" + public + "\nEndpoint=" + wgAddress.String() + "\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n"
+	asset, tool := "wg.conf", "wg"
+	if mode == "awg2-pq" {
+		asset, tool = "awg.conf", "awg"
+	}
+	peerName := "server"
+	if fault == "kem-peer" {
+		peerName = "other"
+	}
+	files := map[string][]byte{
+		asset:                     []byte(packetProfile),
+		"rosenpass.env":           []byte(fmt.Sprintf("ROSENPASS_TOOL=%s\nROSENPASS_INTERFACE=%s\nROSENPASS_WG_PEER=%s\nROSENPASS_KEY_OUT=rosenpass.psk\nROSENPASS_PORT=%d\n", tool, tool, public, kemAddress.Port())),
+		"rosenpass.toml":          []byte(fmt.Sprintf("public_key = \"rosenpass-client-public\"\nsecret_key = \"rosenpass-client-secret\"\nlisten = []\nverbosity = \"Quiet\"\n[[peers]]\npublic_key = \"rosenpass-server-public\"\nendpoint = \"%s\"\nkey_out = \"rosenpass.psk\"\n", kemAddress)),
+		"rosenpass-client-secret": realKeys(t, "client", "secret"), "rosenpass-client-public": realKeys(t, "client", "public"), "rosenpass-server-public": realKeys(t, peerName, "public"),
+	}
+	encodedFiles := make(map[string]string, len(files))
+	for name, value := range files {
+		encodedFiles[name] = base64.StdEncoding.EncodeToString(value)
+		clear(value)
+	}
+	rawFiles, _ := json.Marshal(encodedFiles)
+	profile, _ := json.Marshal(map[string]any{"id": "captured-pq-node", "node_kind": "router-vpn", "node_proof_id": hex.EncodeToString(proof[:]), "router_api": "http://10.78.0.1:8787", "api_token": "private-pq-fixture-token", "endpoint": ip.String(),
+		"start_layer": layer, "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "kill_switch_policy": "always", "ipv6_mode": "on", "home_lan_access": false, "mtu_policy": "auto"})
+	original, err := mobilemultihop.NewNodeProfile(mode, string(rawFiles), string(profile), startAssets, "")
+	if err != nil {
+		t.Fatal("actual PQ Node profile constructor", err)
+	}
+	var session [16]byte
+	if _, err = rand.Read(session[:]); err != nil {
+		t.Fatal(err)
+	}
+	f.policy, err = mobilemultihop.NewDesktopNodePolicy(original, hex.EncodeToString(session[:]), runtime.GOOS)
+	if err != nil {
+		t.Fatal("actual PQ Node policy constructor", err)
+	}
+	capture, err := f.policy.Capture()
+	if err != nil || capture.SelectedDNS.Host != "192.168.50.133" || capture.SelectedDNS.Detour != "proxy" || capture.SelectedDNS.Physical || len(capture.BootstrapDNS) != 0 || capture.HomeLANAccess || capture.IPv6Mode != "on" || capture.KillSwitchPolicy != "always" {
+		t.Fatal("PQ Node lost its complete selected policy", err)
+	}
+	actual := make(map[netip.AddrPort]bool)
+	for _, root := range capture.PhysicalRoots {
+		for _, tuple := range root.Destinations {
+			address, err := netip.ParseAddr(tuple.Host)
+			if err != nil || tuple.Network != "udp" || tuple.Port < 1 || tuple.Port > 65535 {
+				t.Fatal("PQ Node captured an unexpected physical destination")
+			}
+			actual[netip.AddrPortFrom(address, uint16(tuple.Port))] = true
+		}
+	}
+	if len(actual) != len(allowed) {
+		t.Fatal("PQ Node omitted a packet/KEM tuple or broadened its Start Layer")
+	}
+	for address := range actual {
+		if !allowed[address] {
+			t.Fatal("PQ Node captured a substituted physical destination")
+		}
+	}
+	ins := inbound.NewRegistry()
+	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+		f.tun = &nodePQTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag)}
+		return f.tun, nil
+	})
+	outs := outbound.NewRegistry()
+	routervpndesktoppt.RegisterNodePhysicalOutbound(outs)
+	SS.RegisterOutbound(outs)
+	WH.RegisterOutbound(outs)
+	endpoints := endpoint.NewRegistry()
+	RegisterEndpoint(endpoints)
+	AWG.RegisterEndpoint(endpoints)
+	WG.RegisterEndpoint(endpoints)
+	dnsRegistry := boxDNS.NewTransportRegistry()
+	DNST.RegisterUDP(dnsRegistry)
+	DNST.RegisterTCP(dnsRegistry)
+	services := boxService.NewRegistry()
+	boxService.Register[routervpndesktoppt.NodeCaptureOptions](services, mobilemultihop.DesktopNodeNetworkType, func(ctx context.Context, logger log.ContextLogger, tag string, options routervpndesktoppt.NodeCaptureOptions) (adapter.Service, error) {
+		owned, err := routervpndesktoppt.NewNodeNetworkOwner(ctx, logger, tag, options)
+		if err == nil {
+			f.network = owned.(*routervpndesktoppt.NodeNetworkOwner)
+		}
+		return owned, err
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ctx = box.Context(ctx, ins, outs, endpoints, dnsRegistry, services, certificate.NewRegistry())
+	native, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(f.policy.Config()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	native.Log = &option.LogOptions{Disabled: true}
+	f.box, err = box.New(box.Options{Context: ctx, Options: native})
+	if err != nil {
+		t.Fatal("actual PQ Node Box constructor", err)
+	}
+	f.kernel = &nodePQKernel{owner: mobiletor.DesktopSocketKernelOwner{Kind: "unix-isolated-uid", IdentitySHA256: strings.Repeat("d", 64), Generation: 1, ProcessID: uint32(os.Getpid())},
+		iface: iface, local: ip, allowed: allowed, network: f.network, tun: f.tun, grants: make(map[string]mobiletor.DesktopSocketGrant), seen: make(map[netip.AddrPort]int)}
+	f.kernel.live.Store(true)
+	f.source = &nodePQSource{f.kernel}
+	t.Cleanup(func() {
+		if err := f.close(); err != nil || !f.kernel.closed.Load() {
+			t.Error("actual PQ Node did not join its captured physical owner", err)
+		}
+	})
+	if err := f.network.PrepareNodePhysicalBroker(f.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		if f.tun.ready.Load() || f.network.SocketCurrent() || f.network.Current() {
+			t.Error("PQ Node source initialized after TUN or socket admission")
+		}
+		f.kernel.capture = capture
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, f.kernel, current)
+		return broker, f.source, err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	outer, found := f.box.Outbound().Outbound("proxy")
+	if !found {
+		t.Fatal("PQ Node lost its captured packet endpoint")
+	}
+	f.endpoint, _ = outer.(*Endpoint)
+	if f.endpoint == nil || f.endpoint.owner.Ready() || f.endpoint.owner.TransportReady() {
+		t.Fatal("PQ Node omitted its real native owner or declared readiness during construction")
+	}
+	return f
+}
+
+func (f *nodePQFixture) start(t *testing.T) {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { done <- f.box.RouterVPNStrategyStart() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal("actual PQ Node startup", err)
+		}
+	case <-time.After(12 * time.Second):
+		f.network.Cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("cancelled PQ Node startup did not join")
+		}
+		t.Fatal("actual PQ Node did not finish authenticated startup")
+	}
+}
+
+func (f *nodePQFixture) exchange(network, host string, epoch int) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	connection, err := f.endpoint.DialContext(ctx, network, M.ParseSocksaddr(net.JoinHostPort(host, "9999")))
+	if err != nil {
+		return err
+	}
+	defer connection.Close()
+	if err = connection.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		return err
+	}
+	payload := append([]byte(nodePQPayload), bytes.Repeat([]byte{byte(epoch + 11)}, 1200)...)
+	if n, err := connection.Write(payload); err != nil || n != len(payload) {
+		return errors.Join(err, io.ErrShortWrite)
+	}
+	answer := make([]byte, len(payload))
+	if _, err = io.ReadFull(connection, answer); err != nil {
+		return err
+	}
+	if !bytes.Equal(answer, payload) {
+		return errors.New("PQ Node encrypted echo changed its captured payload")
+	}
+	return nil
+}
+
+func nodePQLayerName(layer string) string {
+	if layer == "" {
+		return "off"
+	}
+	return layer
+}
+
+func TestRouterVPNDesktopNodePQTraffic(t *testing.T) {
+	for _, mode := range []string{"wg-pq", "awg2-pq"} {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(mode+"/"+nodePQLayerName(layer), func(t *testing.T) {
+				f := newNodePQFixture(t, mode, layer, "")
+				if f.wg.packets.Load() != 0 || f.kem.packets.Load() != 0 || f.server.received.Load() != 0 {
+					t.Fatal("PQ Node opened a transport before captured startup")
+				}
+				f.start(t)
+				var previous [32]byte
+				var priorLocal, priorRemote int64
+				native := f.endpoint.base.(nativePQReadback)
+				for epoch := 0; epoch < 2; epoch++ {
+					if epoch != 0 {
+						f.server.force(t)
+					}
+					previous = pqTrafficAgreedKeys(t, f.endpoint, f.server, f.reference, previous, epoch)
+					if epoch != 0 {
+						if err := f.reference.Rehandshake(); err != nil {
+							t.Fatal(err)
+						}
+						if err := native.RouterVPNTestPQRehandshake(); err != nil {
+							t.Fatal(err)
+						}
+					}
+					for _, network := range []string{"tcp", "udp"} {
+						for _, host := range []string{"192.0.2.99", "2001:db8::99"} {
+							if err := f.exchange(network, host, epoch); err != nil {
+								t.Fatal("actual PQ Node encrypted data", network, host, epoch, err)
+							}
+						}
+					}
+					local, localErr := native.RouterVPNTestPQSnapshot()
+					remote, remoteErr := f.reference.Snapshot()
+					if localErr != nil || remoteErr != nil || local.KeyDigest != previous || remote.KeyDigest != previous ||
+						local.HandshakeNanos <= priorLocal || remote.HandshakeNanos <= priorRemote {
+						t.Fatal("PQ Node traffic did not use the same fresh native key and handshake", epoch, localErr, remoteErr)
+					}
+					priorLocal, priorRemote = local.HandshakeNanos, remote.HandshakeNanos
+				}
+				if err := f.box.RouterVPNStrategyDNSProof(); err != nil || f.inner.queries.Load() == 0 {
+					t.Fatal("PQ Node did not prove its selected Home DNS through the packet peer", err)
+				}
+				previousQueries := f.inner.queries.Load()
+				f.inner.failed.Store(true)
+				if err := f.box.RouterVPNStrategyDNSProof(); err == nil || f.inner.queries.Load() <= previousQueries {
+					t.Fatal("PQ Node reused cached DNS success or bypassed its selected resolver")
+				}
+				f.inner.failed.Store(false)
+				if err := f.box.RouterVPNStrategyDNSProof(); err != nil {
+					t.Fatal("PQ Node did not recover its same selected live DNS route", err)
+				}
+				f.kernel.mu.Lock()
+				complete := f.kernel.preTUN > 0 && len(f.kernel.seen) == len(f.kernel.allowed)
+				for address := range f.kernel.allowed {
+					complete = complete && f.kernel.seen[address] > 0
+				}
+				f.kernel.mu.Unlock()
+				if !complete || f.kernel.bad.Load() != 0 || f.reference.PlaintextSeen() || f.inner.rejected.Load() != 0 {
+					t.Fatal("PQ Node omitted a captured KEM/packet lane, bypassed admission or leaked plaintext")
+				}
+				if layer == "" {
+					if f.wg.packets.Load() == 0 || f.kem.packets.Load() == 0 || f.wg.plain.Load() || f.kem.plain.Load() {
+						t.Fatal("PQ Node did not use both real ciphertext sockets")
+					}
+				} else {
+					lanes := 0
+					f.layer.lanes.Range(func(_, count any) bool {
+						if count.(*atomic.Int64).Load() > 0 {
+							lanes++
+						}
+						return true
+					})
+					if lanes != 2 || f.layer.raw.Load() == 0 || f.layer.plain.Load() || f.wg.packets.Load() != 0 || f.kem.packets.Load() != 0 {
+						t.Fatal("PQ Node Start Layer omitted one exact inner lane or used a direct fallback")
+					}
+				}
+				f.network.InterfaceUpdated(context.Background())
+				if err := f.close(); err != nil || !f.kernel.closed.Load() || f.network.Current() || f.network.SocketCurrent() || f.endpoint.owner.Ready() || f.endpoint.owner.TransportReady() {
+					t.Fatal("PQ Node retained readiness or socket ownership after retirement", err)
+				}
+				previousQueries = f.inner.queries.Load()
+				if err := f.exchange("tcp", "192.0.2.99", 3); err == nil {
+					t.Fatal("retired PQ Node accepted replacement traffic")
+				}
+				if err := f.box.RouterVPNStrategyDNSProof(); err == nil || f.inner.queries.Load() != previousQueries {
+					t.Fatal("retired PQ Node issued or accepted a stale DNS proof")
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodePQCredentials(t *testing.T) {
+	for _, mode := range []string{"wg-pq", "awg2-pq"} {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			faults := []string{"kem-peer", "packet-peer"}
+			if layer != "" {
+				faults = append(faults, "aes-key")
+			}
+			for _, fault := range faults {
+				t.Run(mode+"/"+nodePQLayerName(layer)+"/"+fault, func(t *testing.T) {
+					f := newNodePQFixture(t, mode, layer, fault)
+					if fault == "packet-peer" {
+						f.start(t)
+						pqTrafficAgreedKeys(t, f.endpoint, f.server, f.reference, [32]byte{}, 0)
+						ctx, cancel := context.WithTimeout(context.Background(), 350*time.Millisecond)
+						defer cancel()
+						connection, err := f.endpoint.DialContext(ctx, "tcp", M.ParseSocksaddr("192.0.2.99:9999"))
+						if connection != nil {
+							_ = connection.Close()
+						}
+						if err == nil || f.reference.Packets() == 0 || f.inner.echoes.Load() != 0 || f.inner.queries.Load() != 0 {
+							t.Fatal("PQ Node accepted the wrong captured packet peer after KEM authentication")
+						}
+					} else {
+						done := make(chan error, 1)
+						go func() { done <- f.box.RouterVPNStrategyStart() }()
+						completed := false
+						for deadline := time.Now().Add(2 * time.Second); ; {
+							select {
+							case err := <-done:
+								completed = true
+								if err == nil {
+									t.Fatal("PQ Node accepted untrusted KEM or Start Layer credentials")
+								}
+							default:
+							}
+							f.kernel.mu.Lock()
+							attempted := len(f.kernel.seen) != 0
+							f.kernel.mu.Unlock()
+							if fault == "kem-peer" {
+								attempted = attempted && f.server.rejected.Load() != 0
+							} else {
+								attempted = attempted && f.layer.rejected.Load() != 0
+							}
+							if attempted || completed {
+								if !attempted {
+									t.Fatal("PQ credential negative never reached its captured real transport")
+								}
+								break
+							}
+							if time.Now().After(deadline) {
+								f.network.Cancel()
+								t.Fatal("PQ credential negative never attempted its real encrypted path")
+							}
+							time.Sleep(time.Millisecond)
+						}
+						if f.endpoint.owner.Ready() || f.endpoint.owner.TransportReady() || f.reference.Updates() != 0 || f.reference.Packets() != 0 || f.inner.queries.Load() != 0 {
+							t.Fatal("untrusted PQ Node gained packet/DNS readiness before authenticated KEM")
+						}
+						f.network.Cancel()
+						if !completed {
+							select {
+							case err := <-done:
+								if err == nil {
+									t.Fatal("cancelled PQ Node handshake became successful")
+								}
+							case <-time.After(time.Second):
+								t.Fatal("PQ Node failed to join cancelled handshake startup")
+							}
+						}
+					}
+					if err := f.close(); err != nil || !f.kernel.closed.Load() || f.endpoint.owner.Ready() || f.endpoint.owner.TransportReady() || f.kernel.bad.Load() != 0 {
+						t.Fatal("PQ credential failure leaked or bypassed captured ownership", err)
+					}
+				})
+			}
+		}
+	}
+}

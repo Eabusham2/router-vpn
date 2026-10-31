@@ -43,8 +43,16 @@ type NativePQTrafficReference struct {
 
 func NewNativePQTrafficReference(t *testing.T, client []byte, obfuscated bool) *NativePQTrafficReference {
 	t.Helper()
-	if len(client) != 32 {
-		t.Fatal("reference requires a valid public identity")
+	return NewNativePQTrafficReferenceWithHandler(t, client, obfuscated, pqTrafficEcho{})
+}
+
+// The owned Node fixture supplies its bounded inner echo and selected-DNS
+// handler. It still uses this exact real packet peer and independently adopts
+// its negotiated PSK; no handler can select or replace the cryptographic base.
+func NewNativePQTrafficReferenceWithHandler(t *testing.T, client []byte, obfuscated bool, handler tun.Handler) *NativePQTrafficReference {
+	t.Helper()
+	if len(client) != 32 || handler == nil {
+		t.Fatal("reference requires a valid public identity and captured inner handler")
 	}
 	private, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
@@ -61,7 +69,7 @@ func NewNativePQTrafficReference(t *testing.T, client []byte, obfuscated bool) *
 		parameters = map[string]string{"jc": "3", "jmin": "40", "jmax": "900", "s1": "56", "s2": "48", "s3": "24", "s4": "32", "h1": "10000000-19999999", "h2": "20000000-29999999", "h3": "30000000-39999999", "h4": "40000000-49999999"}
 		padding = 32
 	}
-	stack, err := wg.NewDevice(wg.DeviceOptions{Context: context.Background(), Logger: log.NewNOPFactory().Logger(), Handler: pqTrafficEcho{}, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: 1400, Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.1/24"), netip.MustParsePrefix("fd78:78::1/64")}})
+	stack, err := wg.NewDevice(wg.DeviceOptions{Context: context.Background(), Logger: log.NewNOPFactory().Logger(), Handler: handler, UDPTimeout: 5 * time.Second, ICMPTimeout: time.Second, MTU: 1400, Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.1/24"), netip.MustParsePrefix("fd78:78::1/64")}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -106,6 +106,14 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
                         self.assertLessEqual(kwargs['timeout'], 900)
                         return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_pq.py'):
+                        self.assertIn(system, ('linux', 'windows'))
+                        self.assertEqual(args[2:], [str(source.resolve()), str(root/'pq'), '--cache', str(ROOT/'dist/.native-pq-cache')])
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertIn('-L'+str(root/'pq'), shlex.split(kwargs['env']['CGO_LDFLAGS']))
+                        self.assertLessEqual(kwargs['timeout'], 1800)
+                        return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_windows_physical_bootstrap.py'):
                         self.assertEqual(system, 'windows')
                         self.assertEqual(args[2:], [str(source.resolve()), '--prospective'])
@@ -166,6 +174,15 @@ class NativeSocketUIDGate(unittest.TestCase):
                 node = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_physical.py')]
                 self.assertEqual(len(node), 1 if system in ('linux', 'windows') else 0)
                 self.assertIn(ROOT/'deploy/test_desktop_node_physical.py', N.inputs())
+                node_pq = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_pq.py')]
+                self.assertEqual(len(node_pq), len(node))
+                if node_pq:
+                    self.assertEqual(calls.index(node_pq[0]), calls.index(node[0])+1)
+                for dependency in ('deploy/test_desktop_node_pq.py', 'deploy/build_pq_reference_fixture.py',
+                                   'deploy/test_server_pq_traffic.py', 'mobile/rosenpass/examples/native_keys.rs',
+                                   'mobile/pq/native_factory_real_test.go.tmpl', 'mobile/pq/native_traffic_test.go.tmpl',
+                                   'mobile/desktop/node_pq_peer_test.go.tmpl', 'mobile/amnezia/pq_reference_fixture.go.tmpl'):
+                    self.assertIn(ROOT/dependency, N.inputs())
                 native_factory = [args for args in calls if args[:2] == ['go', 'test'] and './routervpn/desktoppt' in args]
                 self.assertEqual(len(native_factory), 1)
                 selector = native_factory[0][native_factory[0].index('-run') + 1]
