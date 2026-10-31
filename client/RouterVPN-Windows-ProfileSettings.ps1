@@ -1,7 +1,9 @@
-if(-not(Get-Command New-RouterVPNControllerClient -ErrorAction SilentlyContinue)){
+# Inspect loaded functions without discovering/importing unrelated modules.
+# A missing UI-state function otherwise makes cold Get-Command scan the host.
+if($null-eq${function:New-RouterVPNControllerClient}){
     Import-Module (Join-Path $PSScriptRoot 'RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
 }
-if(-not(Get-Command Read-RouterVPNUIState -ErrorAction SilentlyContinue)){
+if($null-eq${function:Read-RouterVPNUIState}){
     # App reads this UTF-8 source into a ScriptBlock, whose PSScriptRoot is
     # empty. The already imported transport retains the actual package root.
     $UIStateHelpers=Join-Path (Get-Command Get-RouterVPNControllerDataRoot -ErrorAction Stop).Module.ModuleBase 'RouterVPN-Windows-UIState.psm1'

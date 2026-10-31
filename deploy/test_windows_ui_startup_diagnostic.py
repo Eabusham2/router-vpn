@@ -182,6 +182,73 @@ try{
     print(completed.stdout.strip())
 
 
+def execute_profile_helper_probe(powershell):
+    """Load the real UTF-8 helper with an unrelated discoverable module present."""
+    probe = r"""
+param([string]$Source,[string]$Package,[string]$Modules,[string]$Sentinel,[string]$State)
+$ErrorActionPreference='Stop'
+Set-StrictMode -Version 2
+$env:PSModulePath=$Modules+[IO.Path]::PathSeparator+[IO.Path]::Combine($PSHOME,'Modules')
+$env:ROUTERVPN_UI_PROBE_SENTINEL=$Sentinel
+$PSModuleAutoLoadingPreference='All'
+Import-Module ([IO.Path]::Combine($Package,'RouterVPN-Windows-ControllerTransport.psm1')) -Global -ErrorAction Stop
+$Transport=${function:New-RouterVPNControllerClient}
+$Expected=[IO.Path]::Combine($Package,'RouterVPN-Windows-UIState.psm1')
+if($State-ceq'loaded'){Import-Module $Expected -Global -ErrorAction Stop}
+$Before=${function:Read-RouterVPNUIState}
+if(($State-ceq'loaded')-ne($null-ne$Before)){throw 'fixture did not capture the requested module state'}
+# Match App's exact UTF-8 ScriptBlock composition, including empty PSScriptRoot.
+. ([ScriptBlock]::Create([IO.File]::ReadAllText($Source,[Text.Encoding]::UTF8)))
+if([IO.File]::Exists($Sentinel)){throw 'profile helper discovered an unrelated module'}
+$After=${function:Read-RouterVPNUIState}
+if($null-eq$After-or$null-eq$After.Module-or$After.Module.Path-cne$Expected){throw 'profile helper did not load its captured packaged state module'}
+if(-not[Object]::ReferenceEquals($Transport,${function:New-RouterVPNControllerClient})){throw 'profile helper replaced its captured transport'}
+if($State-ceq'loaded'-and-not[Object]::ReferenceEquals($Before,$After)){throw 'profile helper reloaded its existing state function'}
+[Console]::WriteLine('PASS actual profile helper preserves packaged '+$State+' module ownership')
+"""
+    with tempfile.TemporaryDirectory(prefix='routervpn-profile-loading-') as temporary:
+        root = Path(temporary) / 'packaged UI 路由器'
+        root.mkdir()
+        modules = root / 'modules'
+        decoy = modules / 'UnrelatedUIState'
+        decoy.mkdir(parents=True)
+        (decoy / 'UnrelatedUIState.psd1').write_text(
+            "@{RootModule='UnrelatedUIState.psm1';ModuleVersion='1.0.0';"
+            "GUID='ac09ca79-2c7e-4ef2-a84a-d7c43b35125a';FunctionsToExport=@('Read-RouterVPNUIState')}\n",
+            encoding='utf-8')
+        (decoy / 'UnrelatedUIState.psm1').write_text(
+            "[IO.File]::WriteAllText($env:ROUTERVPN_UI_PROBE_SENTINEL,'unexpected discovery')\n"
+            "function Read-RouterVPNUIState {throw 'unrelated state function'}\n"
+            "Export-ModuleMember -Function Read-RouterVPNUIState\n", encoding='utf-8')
+        script = root / 'probe.ps1'
+        script.write_text(probe, encoding='utf-8-sig')
+        source = (ROOT / 'client/RouterVPN-Windows-ProfileSettings.ps1').read_text(encoding='utf-8')
+        before = 'if($null-eq${function:Read-RouterVPNUIState})'
+        after = 'if(-not(Get-Command Read-RouterVPNUIState -ErrorAction SilentlyContinue))'
+        if source.count(before) != 1:
+            raise AssertionError('Profile helper lost its exact loaded-function boundary')
+        environment = dict(os.environ)
+        if sys.platform != 'win32':
+            environment.update(XDG_CACHE_HOME=str(root/'cache'), XDG_CONFIG_HOME=str(root/'config'),
+                               XDG_DATA_HOME=str(root/'data'))
+        for state, mutation in (('absent', False), ('loaded', False), ('absent', True)):
+            candidate = root / ('profile-' + state + ('-old-lookup' if mutation else '') + '.ps1')
+            candidate.write_text(source.replace(before, after, 1) if mutation else source, encoding='utf-8')
+            sentinel = root / (candidate.stem + '.observed')
+            completed = subprocess.run([str(powershell), '-NoProfile', '-NonInteractive', '-File', str(script),
+                                        str(candidate), str(ROOT/'client'), str(modules), str(sentinel), state],
+                                       capture_output=True, text=True, env=environment, timeout=45)
+            output = completed.stdout + completed.stderr
+            if not mutation:
+                if completed.returncode or ('PASS actual profile helper preserves packaged '+state+' module ownership') not in output:
+                    raise AssertionError('Actual profile helper loading failed:\n'+output[-8192:])
+                print(completed.stdout.strip())
+            elif completed.returncode == 0 or 'profile helper discovered an unrelated module' not in output or not sentinel.is_file():
+                raise AssertionError('Old discovery behavior missed its actual module-load rejection:\n'+output[-8192:])
+            else:
+                print('Rejected actual profile helper discovery of an unrelated module')
+
+
 def execute_management_binding_probe(powershell):
     """Run the exact first App/Tray path commands with qualified-only loading."""
     probe = r"""
@@ -303,4 +370,5 @@ if __name__ == "__main__":
         execute_hook_probe(arguments.powershell)
         execute_utility_binding_probe(arguments.powershell)
         execute_management_binding_probe(arguments.powershell)
+        execute_profile_helper_probe(arguments.powershell)
     unittest.main(argv=[__file__, *test_arguments])
