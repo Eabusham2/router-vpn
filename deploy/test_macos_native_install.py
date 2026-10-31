@@ -27,6 +27,8 @@ ROOT = Path(__file__).resolve().parents[1]
 TARGET = ROOT/'client/install-macos-native.py'
 SPEC = importlib.util.spec_from_file_location('mac_install_file_fixtures', ROOT/'deploy/test_linux_native_install.py')
 F = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(F)
+PROBE_SPEC = importlib.util.spec_from_file_location('mac_install_native_probe', ROOT/'deploy/macos_process_inventory_probe.py')
+PROBE = importlib.util.module_from_spec(PROBE_SPEC); PROBE_SPEC.loader.exec_module(PROBE)
 
 
 def load(source=None):
@@ -67,6 +69,7 @@ def native_inventory_with_failure_diagnostic(installer):
                     record.update(observed_start=[info.pbi_pid, info.pbi_start_tvsec, info.pbi_start_tvusec],
                                   ppid=info.pbi_ppid, status=info.pbi_status, uid=info.pbi_uid,
                                   comm=name(info.pbi_comm, 16), name=name(info.pbi_name, 32))
+                record['later_image_observation'] = PROBE.observe(library, pid)
                 print('Native inventory refusal diagnostic (not accepted identity): ' +
                       json.dumps(record, sort_keys=True), flush=True)
             except Exception:
@@ -146,6 +149,37 @@ class ProcessLibrary:
         struct.pack_into('<QQ', raw, 120, result.get('seconds', 1700000000), result.get('microseconds', 123))
         ctypes.memmove(buffer, bytes(raw), len(raw))
         return result.get('size', len(raw))
+
+
+class ProcessProbeLibrary:
+    """ABI double for diagnostic bounds, never native process evidence."""
+    def __init__(self, identities=None, regions=None):
+        self.identities = list(identities or [{}, {}])
+        self.regions = list(regions) if regions is not None else None
+        self.calls = []
+        self.proc_pidinfo = NativeCall(self.capture)
+
+    def capture(self, pid, flavor, argument, buffer, size):
+        self.calls.append((pid, flavor, argument, ctypes.get_errno()))
+        if flavor == 17:
+            if (argument, size) != (1, 56): raise AssertionError('Wrong native unique-identity ABI')
+            value = self.identities[0]
+            if len(self.identities) > 1: self.identities.pop(0)
+            info = ctypes.cast(buffer, ctypes.POINTER(PROBE.NativeUniqueInfo)).contents
+            info.uniqueid, info.idversion = value.get('uniqueid', 700), value.get('idversion', 9)
+            info.uuid[:] = value.get('uuid', b'a' * 16)
+            ctypes.set_errno(value.get('errno', 0))
+            return value.get('result', size)
+        if flavor != 22 or size != 1272:
+            raise AssertionError('Wrong native diagnostic region ABI')
+        value = {} if self.regions is None else (self.regions.pop(0) if self.regions else {'result': 0, 'errno': errno.EINVAL})
+        info = ctypes.cast(buffer, ctypes.POINTER(PROBE.NativeRegionVnode)).contents
+        info.region.address, info.region.size = value.get('address', argument), value.get('size', 4096)
+        info.vnode.dev, info.vnode.ino = 17, 900
+        info.vnode.nlink = value.get('nlink', 1)
+        info.path = value.get('path', b'/private/diagnostic-only-image')
+        ctypes.set_errno(value.get('errno', 0))
+        return value.get('result', size)
 
 
 class MacProcessInventory(unittest.TestCase):
@@ -335,6 +369,75 @@ class MacProcessInventory(unittest.TestCase):
                     self.assertGreater(record['observed_unix_ns'], 0)
                     self.assertEqual('fixture???bad', record['comm'])
                     self.assertEqual('fixture?name?with?control', record['name'])
+
+    def test_later_vnode_probe_never_grants_main_image_or_absence_authority(self):
+        library = ProcessProbeLibrary(regions=[{'nlink': 0}])
+        ctypes.set_errno(errno.ESRCH)
+        record = PROBE.observe(library, 101)
+        self.assertTrue(record['same_later_exec_observation'])
+        self.assertEqual(record['stop'], 'native-result-not-absence')
+        self.assertEqual(record['last_result']['errno'], errno.EINVAL)
+        self.assertEqual(len(record['regions']), 1)
+        self.assertEqual(record['regions'][0]['nlink'], 0)
+        self.assertNotIn('/private/', json.dumps(record))
+        self.assertEqual(len(record['regions'][0]['path_sha256']), 64)
+        for key in ('admission_authority', 'main_image_identified', 'complete_mapping_inventory'):
+            self.assertIs(record[key], False)
+        self.assertTrue(all(call[-1] == 0 for call in library.calls))
+
+    def test_later_vnode_probe_fences_process_reuse_exec_and_image_change(self):
+        for changed in ({'uniqueid': 701}, {'idversion': 10}, {'uuid': b'b' * 16}):
+            with self.subTest(changed=changed):
+                record = PROBE.observe(ProcessProbeLibrary(identities=[{}, changed], regions=[{}]), 101)
+                self.assertFalse(record['same_later_exec_observation'],
+                                 'Diagnostic joined a replacement process or executable image')
+                self.assertFalse(record['admission_authority'])
+
+    def test_later_vnode_probe_bounds_native_calls_and_never_calls_a_bound_complete(self):
+        library = ProcessProbeLibrary()
+        with mock.patch.object(PROBE.time, 'monotonic', return_value=0):
+            record = PROBE.observe(library, 101)
+        self.assertEqual(len(record['regions']), 16)
+        self.assertEqual(len(library.calls), 18)
+        self.assertEqual(record['stop'], 'record-bound')
+        self.assertFalse(record['complete_mapping_inventory'])
+        library = ProcessProbeLibrary()
+        with mock.patch.object(PROBE.time, 'monotonic', side_effect=[0, 1]):
+            record = PROBE.observe(library, 101)
+        self.assertEqual(record['stop'], 'time-bound')
+        self.assertEqual(record['regions'], [])
+        self.assertEqual([call[1] for call in library.calls], [17, 17])
+
+    def test_later_vnode_probe_does_not_accept_missing_or_malformed_native_records(self):
+        for value in ({'result': 0, 'errno': errno.ESRCH}, {'result': 1271}, {'result': 1273},
+                      {'size': 0}, {'address': 2**64-4096}):
+            with self.subTest(value=value):
+                record = PROBE.observe(ProcessProbeLibrary(regions=[value]), 101)
+                self.assertEqual(record['regions'], [])
+                self.assertFalse(record['admission_authority'])
+                self.assertFalse(record['complete_mapping_inventory'])
+        for value in ({'result': 0}, {'result': 55}, {'uniqueid': 0}, {'idversion': 0}):
+            with self.subTest(value=value):
+                library = ProcessProbeLibrary(identities=[value, {}])
+                record = PROBE.observe(library, 101)
+                self.assertEqual(record['stop'], 'identity-unavailable')
+                self.assertFalse(record['same_later_exec_observation'])
+                self.assertEqual([call[1] for call in library.calls], [17, 17])
+
+    def test_later_vnode_probe_checks_abi_and_cannot_replace_original_refusal(self):
+        library = ProcessProbeLibrary()
+        with mock.patch.object(PROBE.ctypes, 'sizeof', return_value=1), \
+             self.assertRaisesRegex(ValueError, 'Darwin layout'):
+            PROBE.observe(library, 101)
+        self.assertEqual(library.calls, [])
+        original = RuntimeError('original native process refusal survives failed image probe')
+        with mock.patch.object(self.installer.sys, 'platform', 'darwin'), \
+             mock.patch.object(self.installer.ctypes, 'CDLL', return_value=ProcessLibrary()), \
+             mock.patch.object(self.installer, 'native_executable', side_effect=original), \
+             mock.patch.object(PROBE, 'observe', side_effect=RuntimeError('native diagnostic failed')), \
+             self.assertRaises(RuntimeError) as failure:
+            native_inventory_with_failure_diagnostic(self.installer)
+        self.assertIs(failure.exception, original)
 
 
 class QuarantineLibrary:
@@ -818,6 +921,7 @@ class MacNativeProcesses(unittest.TestCase):
             executable = root/'owned-live-image'
             shutil.copyfile('/bin/sleep', executable)
             executable.chmod(0o755)
+            original_image = executable.stat()
             child = subprocess.Popen([str(executable), '30'], stdin=subprocess.DEVNULL,
                                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             try:
@@ -846,6 +950,18 @@ class MacNativeProcesses(unittest.TestCase):
                 self.assertIsNotNone(after)
                 self.assertEqual(captured[:3], after[:3])
                 self.assertNotEqual(5, after[3])
+                observation = PROBE.observe(library, child.pid)
+                self.assertTrue(observation['same_later_exec_observation'],
+                                'Owned native probe did not retain the same later process/exec identity')
+                self.assertTrue(any((region['dev'], region['ino']) ==
+                                    (original_image.st_dev & 0xffffffff, original_image.st_ino)
+                                    for region in observation['regions']),
+                                'Diagnostic did not capture the actual owned unlinked image vnode')
+                self.assertFalse(observation['admission_authority'])
+                self.assertFalse(observation['main_image_identified'])
+                self.assertFalse(observation['complete_mapping_inventory'])
+                print('Actual unlinked owned image observation (diagnostic only): ' +
+                      json.dumps(observation, sort_keys=True))
                 print(f'Actual unlinked live owner remains blocked (pid={child.pid}, errno={error}, result={size}, status={after[3]}).')
             finally:
                 if child.poll() is None: child.kill()
