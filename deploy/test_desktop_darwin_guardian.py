@@ -368,6 +368,34 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
             print('Darwin exact native libproc, isolated UID, scoped PF, actual utun ownership and crash cleanup passed.')
 
 
+def write_mutation_overlay(directory, index, target, names, replacements, label):
+    """Capture every exact source before writing a single- or paired-file mutant."""
+    paired = not isinstance(names, str)
+    if not paired:
+        names, replacements = (names,), (replacements,)
+    if (not names or len(names) > 2 or len(names) != len(replacements)
+            or len(set(names)) != len(names)
+            or any(Path(name).name != name for name in names)):
+        raise ValueError('Darwin mutation lost its exact source targets: '+label)
+    captured = []
+    for name, changes in zip(names, replacements):
+        original = target/name
+        raw = original.read_text()
+        for old, new in changes:
+            if old not in raw or paired and raw.count(old) != 1:
+                raise ValueError('Darwin mutation no longer matches its actual boundary: '+label)
+            raw = raw.replace(old, new)
+        captured.append((original, raw))
+    paths = {}
+    for original, raw in captured:
+        changed = directory/(str(index)+'-'+original.name)
+        changed.write_text(raw)
+        paths[str(original)] = str(changed)
+    overlay = directory/(str(index)+'-overlay.json')
+    overlay.write_text(json.dumps({'Replace': paths}))
+    return overlay
+
+
 def execute_mutations(source: Path, go='go', *, only_case=None):
     """Compile scoped, temporary broken versions and require their exact failure."""
     if platform.system() != 'Darwin':
@@ -485,9 +513,18 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
         ('foreign block composition', 'ForeignBlockAndLaterPass', 'owned permit bypassed a later foreign block',
          'desktop_socket_darwin_pf.go', (
              ('"pass out on %s %s proto %s', '"pass out quick on %s %s proto %s'),)),
+        # The production baseline now owns the final deny. The native fixture
+        # adds a redundant scoped generation deny; leaving either quick would
+        # mask the other's broken field. Change only these three exact lines
+        # together, preserving every UID, tag, label, scope and anchor check.
         ('quick deny before foreign pass', 'ForeignBlockAndLaterPass', 'later foreign pass bypassed nested quick deny',
-         'desktop_socket_darwin_pf.go', (
-             ('block drop out quick ', 'block drop out '),)),
+         ('desktop_socket_darwin_pf.go', 'desktop_socket_pf_baseline.go'), (
+             (('lines = append(lines, "block drop out quick "+desktopDarwinPFTestScope+" ! tagged \\\""+desktopDarwinPFAllowedTag(p.Capture)+"\\\"")',
+               'lines = append(lines, "block drop out "+desktopDarwinPFTestScope+" ! tagged \\\""+desktopDarwinPFAllowedTag(p.Capture)+"\\\"")'),),
+             (('lines = append(lines, fmt.Sprintf("block drop out quick %s ! tagged \\\"%s\\\" label \\\"%s\\\"", scope, allowed, label))',
+               'lines = append(lines, fmt.Sprintf("block drop out %s ! tagged \\\"%s\\\" label \\\"%s\\\"", scope, allowed, label))'),
+              ('lines = append(lines, fmt.Sprintf("block drop out quick all ! tagged \\\"%s\\\" label \\\"%s\\\"", allowed, label))',
+               'lines = append(lines, fmt.Sprintf("block drop out all ! tagged \\\"%s\\\" label \\\"%s\\\"", allowed, label))')))),
         ('per-socket descriptor retirement', 'SocketRetirementReusesCapacity', 'sequential owned socket 128:',
          'desktop_socket_broker.go', (
              ('ok && (s.sourceFile != nil || s.sourceNative != nil) {',
@@ -502,17 +539,8 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
             raise ValueError('Darwin mutation selection has no exact native case')
     with tempfile.TemporaryDirectory(prefix='routervpn-darwin-guardian-mutants-') as temporary:
         directory = Path(temporary)
-        for index, (label, case, message, name, replacements) in enumerate(mutations):
-            original = target/name
-            raw = original.read_text()
-            for old, new in replacements:
-                if old not in raw:
-                    raise ValueError('Darwin mutation no longer matches its actual boundary: '+label)
-                raw = raw.replace(old, new)
-            changed = directory/(str(index)+'-'+name)
-            changed.write_text(raw)
-            overlay = directory/(str(index)+'-overlay.json')
-            overlay.write_text(json.dumps({'Replace': {str(original): str(changed)}}))
+        for index, (label, case, message, names, replacements) in enumerate(mutations):
+            overlay = write_mutation_overlay(directory, index, target, names, replacements, label)
             binary = directory/(str(index)+'-guardian.test')
             reported_run([compiler, 'test', '-c', '-race', '-mod=readonly', '-tags=routervpn_darwin_guardian',
                      '-overlay='+str(overlay), '-o', binary, package], cwd=source, env=captured, timeout=300)

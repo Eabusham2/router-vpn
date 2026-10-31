@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Exercise actual subprocess success/failure reporting without native privilege."""
 from pathlib import Path
+import ast
 import contextlib
 import importlib.util
 import io
+import json
 import os
 import shlex
 import subprocess
@@ -46,6 +48,85 @@ class DarwinNativeDiagnostics(unittest.TestCase):
                     output = gate.reported_run([sys.executable, '-c', "print('actual successful command')"], timeout=5)
                 self.assertEqual(output, 'actual successful command\n')
                 self.assertEqual(shown.getvalue(), '')
+
+
+class DarwinMutationOverlays(unittest.TestCase):
+    def setUp(self):
+        self.gate = GATES[0]
+        tree = ast.parse(Path(self.gate.__file__).read_text())
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                        and node.name == 'execute_mutations')
+        assignment = next(node for node in function.body if isinstance(node, ast.Assign)
+                          and any(isinstance(name, ast.Name) and name.id == 'mutations' for name in node.targets))
+        self.mutations = ast.literal_eval(assignment.value)
+        self.quick = next(value for value in self.mutations if value[0] == 'quick deny before foreign pass')
+        self.directory = tempfile.TemporaryDirectory(prefix='routervpn-darwin-mutation-')
+        self.addCleanup(self.directory.cleanup)
+        self.output = Path(self.directory.name)
+        self.target = ROOT/'internal/mobiletor'
+
+    def test_all_current_mutations_capture_their_actual_source_without_editing_it(self):
+        for index, (label, case, witness, names, replacements) in enumerate(self.mutations):
+            with self.subTest(label=label):
+                paths = (names,) if isinstance(names, str) else names
+                original = {str(self.target/name): (self.target/name).read_text() for name in paths}
+                overlay = self.gate.write_mutation_overlay(self.output, index, self.target, names, replacements, label)
+                actual = json.loads(overlay.read_text())['Replace']
+                self.assertEqual(set(actual), set(original))
+                for source, changed in actual.items():
+                    self.assertEqual(Path(source).read_text(), original[source])
+                    self.assertNotEqual(Path(changed).read_text(), original[source])
+                    self.assertEqual(Path(changed).parent, self.output)
+                self.assertTrue(case and witness)
+
+    def test_quick_deny_control_reaches_both_baselines_without_changing_another_field(self):
+        label, case, witness, names, replacements = self.quick
+        self.assertEqual(case, 'ForeignBlockAndLaterPass')
+        self.assertEqual(witness, 'later foreign pass bypassed nested quick deny')
+        self.assertEqual(names, ('desktop_socket_darwin_pf.go', 'desktop_socket_pf_baseline.go'))
+        overlay = self.gate.write_mutation_overlay(self.output, 0, self.target, names, replacements, label)
+        changes = json.loads(overlay.read_text())['Replace']
+        altered = []
+        for source, changed in changes.items():
+            before, after = Path(source).read_text(), Path(changed).read_text()
+            self.assertEqual(len(before.splitlines()), len(after.splitlines()))
+            for old, new in zip(before.splitlines(), after.splitlines()):
+                if old != new:
+                    self.assertIn('block drop out quick ', old)
+                    self.assertEqual(new, old.replace('block drop out quick ', 'block drop out ', 1))
+                    altered.append((Path(source).name, old))
+        self.assertEqual([name for name, _ in altered], [names[0], names[1], names[1]])
+        self.assertIn('desktopDarwinPFTestScope', altered[0][1])
+        self.assertIn('scope, allowed, label', altered[1][1])
+        self.assertIn('quick all ! tagged', altered[2][1])
+        # Reproduce the obsolete single-file overlay's masking: the shared
+        # production and scoped baseline guards remain quick in that version.
+        old = self.gate.write_mutation_overlay(self.output, 1, self.target, names[0],
+                                               (('block drop out quick ', 'block drop out '),), label)
+        self.assertEqual(len(json.loads(old.read_text())['Replace']), 1)
+        baseline = (self.target/names[1]).read_text()
+        self.assertIn('block drop out quick %s ! tagged', baseline)
+        self.assertIn('block drop out quick all ! tagged', baseline)
+
+    def test_paired_control_rejects_missing_duplicate_or_repeated_targets_before_writing(self):
+        label, _, _, names, replacements = self.quick
+        for fault in ('missing', 'duplicate', 'repeated-target'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(prefix='routervpn-mutation-seam-') as temporary:
+                root = Path(temporary)
+                target, output = root/'source', root/'overlay'
+                target.mkdir(); output.mkdir()
+                for name in names:
+                    (target/name).write_bytes((self.target/name).read_bytes())
+                seam = replacements[1][0][0]
+                baseline = target/names[1]
+                if fault == 'missing':
+                    baseline.write_text(baseline.read_text().replace(seam, '// changed captured guard', 1))
+                elif fault == 'duplicate':
+                    baseline.write_text(baseline.read_text()+'\n'+seam+'\n')
+                selected = (names[0], names[0]) if fault == 'repeated-target' else names
+                with self.assertRaises(ValueError):
+                    self.gate.write_mutation_overlay(output, 0, target, selected, replacements, label)
+                self.assertEqual(list(output.iterdir()), [], 'partial mutation files escaped an unproved second source')
 
 
 class MacOSPythonDiscovery(unittest.TestCase):
