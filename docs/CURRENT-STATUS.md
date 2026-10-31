@@ -6,7 +6,71 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 5f7e8e97
+## Latest implementation continuation — through 2b1fb0c5
+
+The verified source cutoff is
+[`2b1fb0c58a613e8265f59ba259f7aa41c66cd25e`](https://github.com/Eabusham2/router-vpn/commit/2b1fb0c58a613e8265f59ba259f7aa41c66cd25e).
+All five coherent units below were committed and pushed directly to `main`,
+with the resulting remote parent/tree/head independently checked. The
+[journal, Xray and Linux native evidence](CONTINUATION-EVIDENCE-2026-10-30.md#journal-materialization-xray-families-and-linux-native-observations)
+records exact source identities, tests and remaining limits.
+
+- Windows app startup now consumes the native read-only absence proof and
+  closes its owner without creating a durable journal (`09912d6f`). A current
+  explicit protected source start independently reopens/reproves absence and
+  creates the journal before acquiring a connection attempt. Missing/incomplete
+  state and another private Data identity remain errors. A cancelled start
+  cannot authorize creation by a later read-only recovery call.
+- Owned native Node admission now includes REALITY Vision, PQ Vision and XHTTP
+  with Off/AES/AES-plus-XOR (`b131cd6e`). Nine actual encrypted traffic cases,
+  fourteen credential rejections, fresh selected Home DNS, nine complete CLI
+  constructors and all twenty-one compiled production defect controls passed.
+  The broader preparation matrix has 24 combinations. Local traffic uses real
+  engines/peers with explicit modeled OS-permit/TUN boundaries; actual Windows
+  execution and public app activation remain separate gates.
+- Linux sources expose exact prepared/retired kernel observations (`8f7c8d01`).
+  These bind captured source/owner and actual table/chain identities, require
+  empty exact permit sets before first use, and require acknowledged joined
+  cleanup before retirement. All twelve real nft guardian groups, including
+  eight new lifecycle cases, passed in isolated namespaces. Four compiled
+  production defects were rejected at their intended kernel assertions.
+  These observations are comparison records, not reconstructible authority,
+  a kernel transaction held through a journal write, or completed Unix app
+  integration. Selected policy, authenticated admission/readiness and durable
+  recovery integration remain in progress.
+
+### Native outcomes requiring continued work
+
+At `17ccd1fc`, the real Windows Node baseline passed corrected Unicode/long
+Portable write-through replacement and actual child retirement. The workflow
+then hit its ten-minute suite limit after 24 compiled negative controls.
+`db6f789b` budgets twenty minutes for the now 32-control step and twenty-five
+for its job; individual compiler, test and production timeouts are unchanged.
+This is scheduling evidence, not a claim that the expanded native run passed.
+
+At `09912d6f`, the normal installed Session authenticated both UI channels but
+its self-test exhausted the original 100-second operation. The separate
+instrumented first launch passed in 58.71 seconds with framework initialization
+and pipe connection both below one second. A faster failure-only rerun is not
+acceptance. `2b1fb0c5` adds fixed post-channel stage timings to the separate
+instrumented build, preserving script statements and PowerShell status guards.
+The normal installed/Portable Session outcome remains open.
+
+At `b131cd6e`, the hosted Shell token reports elevation type 1 and has no linked
+token. The unchanged mandatory linked-token UAC case still fails; protected
+runas and constructed Medium-token passes do not substitute for that evidence.
+The GLOBALROOT Shell support probe also fails before child creation. Production
+protected global-name bootstrap, UAC requirements and rejection coverage remain
+unchanged. The previously recorded macOS installer inventory blocker remains
+open; the corrected four-job PF run remains valid for its own older SHA.
+
+Public Connect/AUTO/SMART/Speed Lab activation and stale-start ownership are
+under focused verification. Naive H2/H3 owned Node composition and Linux native
+lifecycle integration are the next active source units. Original remaining
+families/platforms and live acceptance have not been removed from scope. There
+is no new all-green exact-SHA release or private deployment at this cutoff.
+
+## Earlier implementation continuation — through 5f7e8e97
 
 The verified source publication cutoff is
 [`5f7e8e9703dc7998675e3d36a1480d02c51fa043`](https://github.com/Eabusham2/router-vpn/commit/5f7e8e9703dc7998675e3d36a1480d02c51fa043).

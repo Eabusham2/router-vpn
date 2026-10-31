@@ -1522,3 +1522,144 @@ all 130 retirements and the corrected quick-deny negative.
 The old 745b3e41 release remains historical. Native build, package/image
 publication, current compose, physical/off-LAN acceptance and deliberate private
 deployment still require their own exact-source evidence.
+
+
+## Journal materialization, Xray families and Linux native observations
+
+This continuation records verified source publications through `2b1fb0c5`.
+Each unit was validated, committed and immediately published directly to `main`
+with normal ancestry and independent remote parent/tree/head readback. Earlier
+source and original requirement evidence remain intact.
+
+| Unit | Local reviewed commit | Verified remote commit |
+|---|---|---|
+| Current-call Windows journal materialization | `601e4c8e8930b180451048aba994a5b5e1fa407c` | [`09912d6fe15c779b8475f686197ff28d972cc5c9`](https://github.com/Eabusham2/router-vpn/commit/09912d6fe15c779b8475f686197ff28d972cc5c9) |
+| Owned REALITY/PQ Vision/XHTTP families | `cf81fe7afd6b4cbc6cb9808b5cf61e9de4ad6b5f` | [`b131cd6ec104ce715e01fb5b9569ae00f4c72ba4`](https://github.com/Eabusham2/router-vpn/commit/b131cd6ec104ce715e01fb5b9569ae00f4c72ba4) |
+| Complete compiled Node control budget | `9b211d9e74b080ea0296a1300719f35e39458a4e` | [`db6f789bcf389a1d12c5b0769981fc0ba6c3ce74`](https://github.com/Eabusham2/router-vpn/commit/db6f789bcf389a1d12c5b0769981fc0ba6c3ce74) |
+| Linux exact prepared/retired observations | `6944d5578ae09a0ea50973155b5ff4832b27f40b` | [`8f7c8d019f2536a06df7397a4f36bb248ea1bb98`](https://github.com/Eabusham2/router-vpn/commit/8f7c8d019f2536a06df7397a4f36bb248ea1bb98) |
+| Post-channel first Windows App timing | `dab094d317218ff40783398ac760f6aed90d89be` | [`2b1fb0c58a613e8265f59ba259f7aa41c66cd25e`](https://github.com/Eabusham2/router-vpn/commit/2b1fb0c58a613e8265f59ba259f7aa41c66cd25e) |
+
+### Journal creation belongs to a current source request
+
+The eight-file `09912d6f` app unit consumes the native `InitialAbsence` witness,
+joins that read-only owner's Close, and leaves fresh startup without a global
+journal. Before a protected source attempt, it reopens and independently
+reproves the namespace, creates the durable journal, and completes ordinary
+recovery. `slot.begin` requires that actual durable store. Partial open/create
+owners remain retained for checked cleanup. No ordinary ENOENT, nil store,
+missing peer or foreign Data header is converted into absence.
+
+Review rejected an earlier sticky creation-intent flag: cancellation of an
+explicit start could otherwise lend creation authority to a later read-only
+recovery. The published call takes its own `requireJournal` value. The exact
+regression cancels after the absence owner's Close, proves subsequent read-only
+recovery creates nothing, then permits one newly explicit source request.
+
+Nine new groups cover 26 cases. The frozen revised initial/recovery race groups
+passed twice (6.553 seconds). A broader pre-review run of unchanged durable
+release/Off/protection/startup/restore paths passed twice (81.206 seconds);
+that earlier count is not misrepresented as a complete rerun of the revision.
+Six executed mutation cases rejected the intended defects. Baseline and five
+new mutation binaries compiled for both Windows architectures with native tags
+and checkptr (twelve builds). Seven runner and ten source-gate tests passed.
+App fixtures model native journal/BFE boundaries; actual execution remains
+separate. Frozen manifest SHA-256:
+`da79fbadc5dea89ab1952fc4d5296998fafc95ab7cd340a01dc2e32534c3fcc8`.
+
+### Actual Xray owned Node families
+
+`b131cd6e` adds three families to the existing sealed Node composition without
+removing unsupported catalog requirements. Actual pinned Xray peers exercise
+Vision, PQ Vision and XHTTP across Off/AES/AES-plus-XOR. All nine cases passed
+IPv4/IPv6 TCP/UDP, fresh selected Home DNS and retirement. Fourteen incorrect
+credential/key cases failed as required. Nine actual CLI constructors and the
+24-case captured preparation matrix passed. Four Windows checkptr binaries
+compiled (AMD64/ARM64 WFP composition and sealed command); they are compilation
+evidence, not native execution.
+
+The complete frozen runtime gate passed its old WG/AWG/SS/HY2, DNS, MTU,
+handoff/cleanup cases and all twenty-one compiled production mutations. In
+particular, restoring Xray's old `Begin` lifetime in both outbound calls failed
+actual Vision/Off Home DNS at its required witness. Replacing captured dialing
+with an ordinary dialer failed the captured socket-grant witness. Timeouts,
+races, skipped tests or unrelated compile errors were not accepted as defect
+rejections. Python registration/toolchain verification passed 28 tests with one
+existing optional platform skip. Frozen manifest SHA-256:
+`0e3f759cc6af1e96542135b4381b0a0eadcfafa517b2dd13c1cb3dfa4dcb4d67`.
+
+### Real Linux protection readback
+
+`8f7c8d01` adds `ObservePreparedProtection` and `ObserveRetiredProtection` on
+the retained Linux source. Prepared observation is serialized with native
+requests and requires no prior socket admission plus four exact empty owned
+sets/rules. Socket activity is monotonic even if a receipt is lost. Retired
+observation requires successful Close acknowledgment and both native joins,
+then independently reads the original closed baseline. Unknown cleanup,
+nonempty sets, duplicate/foreign objects, dormant tables, changed handles and
+unselected exemptions are rejected. Old cleanup leaves replacement rules intact.
+
+The Linux-specific record binds source/network capture, isolated owner, UID,
+permit prefix, table/chain handles and baseline hash. It is neither a Windows
+Target alias nor authority reconstructed from JSON. It does not hold a kernel
+transaction across later durable acknowledgment. The current Linux guardian
+has no separate On-connect/Always field; the next host/journal integration must
+bind the chosen protection policy explicitly.
+
+Actual testing used Linux 6.18.57 x86_64, nftables 1.0.9 and Go 1.26.3. All twelve
+guardian parent groups passed (51.63 summed group seconds); the new eight-case
+lifecycle group passed in 8.27 seconds. Four real-kernel production mutations
+were rejected: forgotten socket activity, accepted live tuple, missing join
+acknowledgment, and skipped retained-baseline readback. Four parser/record groups
+passed race testing three times. Linux ARM64 native-tag and Windows AMD64
+package cross-compiles passed. The existing namespace teardown regression also
+passed, preserving failure/signal results and rejecting both teardown defects.
+Account, nft, interface and peer changes stayed inside fresh test namespaces.
+Individual native/readback/request bounds remain unchanged. Frozen manifest
+SHA-256: `906cad3624cb20003e7ff6dd2f616b746c41a3a38156ae74b9bea674174b047c`.
+
+### New native outcomes and unclosed acceptance
+
+[Windows Node job 124415831743 at 17ccd1fc](https://github.com/Eabusham2/router-vpn/actions/runs/41160188132/job/124415831743)
+passed real child retirement, missing-controller rejection, corrected Unicode
+and long Portable file replacement, write-through flags, failure/retry and
+invalid-target cases. It rejected 24 successive mutations before the workflow
+step reached ten minutes. Observed mutation intervals were 21.12 seconds median
+and 25.818 maximum. `db6f789b` supplies twenty minutes for the current 32-control
+step and twenty-five for the job, retaining all individual compiler/test/process
+deadlines. Seven runner tests passed and parsed workflow comparison proved no
+unrelated jobs, permissions or execution changed.
+
+[Normal Session job 124418557513 at 09912d6f](https://github.com/Eabusham2/router-vpn/actions/runs/41161081340/job/124418557513)
+failed the installed self-test after both GUI channels authenticated, exhausting
+its original 100-second operation. A failure-only diagnostic passed in 13.69
+seconds; that different build does not replace the failure. The independent
+[first instrumented Session, job 124418557460](https://github.com/Eabusham2/router-vpn/actions/runs/41161081340/job/124418557460)
+passed in 58.71 seconds, with framework/pipe stages each below one second.
+`2b1fb0c5` adds fixed timing lines around later WPF/helper/transform/self-test
+stages in disposable diagnostic copies only. Original statements remain byte
+identical after removing instrumentation, and PowerShell `$?` guards remain
+adjacent to their original invocations. Six diagnostic tests passed; all three
+instrumented scripts parsed in PowerShell 7. Actual Windows timing and normal
+installed/Portable acceptance remain open. No warm-up, retry acceptance, longer
+production deadline or shipping script modification was introduced.
+
+[Shell job 124418634963 at b131cd6e](https://github.com/Eabusham2/router-vpn/actions/runs/41161107113/job/124418634963)
+failed the unchanged mandatory linked-token case with elevation type 1. Microsoft's
+[token enumeration](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ne-winnt-token_elevation_type)
+defines this as no linked token; this does not by itself establish why the host
+has that topology. The real protected-global runas bootstrap, constructed primary
+Medium and constructed-Medium thread denial passed. Ordinary/cross-account UAC
+acceptance remains required under the earlier `56c7724e` contract.
+
+The same job's GLOBALROOT support probe opened/revalidated the exact file, but
+Shell execution returned file-not-found/instance 2 before any creation callback.
+Microsoft documents that [Shell and file-system path requirements differ](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation)
+and documents [ShellExecuteEx failure results](https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-shellexecuteexw).
+That observation is not a reason to loosen production image or token checks.
+The production protected global-name path and its required checks remain.
+
+Public Windows connection/SMART/Speed Lab ownership, Naive graph coverage and
+Linux generated lifecycle integration are active follow-on work. No complete
+new release, private deployment, signing or physical/off-LAN acceptance is
+established by these source units. Historical all-green `745b3e41` results must
+not be assigned to newer source.
