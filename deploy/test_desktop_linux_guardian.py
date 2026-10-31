@@ -29,7 +29,8 @@ SPEC.loader.exec_module(UID)
 KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGuardianCrash', 'HeartbeatAdmission',
                 'SocketRetirementReusesCapacity', 'RejectsChangedBaseline', 'NativeParentCrash',
                 'BlockedControlRetainsSourcePort', 'RejectsStaleCaptureAndGeneration',
-                'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement')
+                'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement',
+                'ClosedProtectionObservations')
 
 
 def namespace_test(binary: Path, case=None) -> int:
@@ -118,7 +119,9 @@ def execute(source: Path, go='go', *, env=None):
         raise ValueError('The Linux guardian kernel gate requires a matching Linux host')
     source, before = UID.checked_sources(source)
     required = {'desktop_socket_linux_policy.go', 'desktop_socket_linux_helper.go',
-                'desktop_socket_linux_nft.go', 'desktop_socket_linux_guardian_test.go'}
+                'desktop_socket_linux_nft.go', 'desktop_socket_linux_guardian_test.go',
+                'desktop_socket_linux_protection.go', 'desktop_socket_linux_protection_record.go',
+                'desktop_socket_linux_protection_native_test.go'}
     if not required.issubset(before):
         raise ValueError('The complete production guardian and actual kernel tests were not copied')
     captured = dict(os.environ if env is None else env, GOWORK='off')
@@ -171,6 +174,10 @@ def execute_mutations(source: Path, go='go', *, env=None):
         'admitted heartbeat deadline': 'queued heartbeat lost its admitted readback budget',
         'failed heartbeat cannot refresh proof': 'failed or stale heartbeat refreshed captured proof',
         'cancelled heartbeat cannot enter stream': 'cancelled heartbeat entered or refreshed its captured stream',
+        'prepared source activity history': 'used source was relabelled as a fresh preparation',
+        'prepared native tuple emptiness': 'active native tuple was accepted as closed preparation',
+        'retired native join acknowledgment': 'empty inventory substituted for native close acknowledgment',
+        'retired complete native baseline': 'changed native baseline was accepted as retained protection',
     }
     mutations = (
         ('admitted heartbeat deadline', 'HeartbeatAdmission', 'desktop_socket_linux_policy.go', (
@@ -205,6 +212,20 @@ def execute_mutations(source: Path, go='go', *, env=None):
         )),
         ('native descriptor acknowledgment', 'FinishRequiresDescriptorRetirement', 'desktop_socket_linux_helper.go', (
             ('if release && len(g.sockets) != 0 {', 'if false && release && len(g.sockets) != 0 {'),
+        )),
+        ('prepared source activity history', 'ClosedProtectionObservations', 'desktop_socket_linux_policy.go', (
+            ('p.socketActivity = true', 'p.socketActivity = false'),
+        )),
+        ('prepared native tuple emptiness', 'ClosedProtectionObservations', 'desktop_socket_linux_protection.go', (
+            ('!desktopLinuxProtectionEmpty(value, "elem") || ', ''),
+        )),
+        ('retired native join acknowledgment', 'ClosedProtectionObservations', 'desktop_socket_linux_protection.go', (
+            ('!p.closeAcknowledged.Load() || !p.closing.Load() || !desktopLinuxJoined(p.joined) || !desktopLinuxJoined(p.monitorDone)',
+             'false'),
+        )),
+        ('retired complete native baseline', 'ClosedProtectionObservations', 'desktop_socket_linux_protection.go', (
+            ('if err = p.readProtection(ctx, false); err != nil {',
+             'if err = error(nil); err != nil {'),
         )),
     )
     with tempfile.TemporaryDirectory(prefix='routervpn-guardian-mutations-') as temporary:

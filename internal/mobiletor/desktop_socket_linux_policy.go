@@ -135,23 +135,27 @@ func (o DesktopLinuxSocketOptions) binding(owner DesktopSocketKernelOwner, remot
 // guardian. Each physical socket is created by an otherwise empty child under
 // a dedicated locked account and transferred without changing kernel identity.
 type DesktopLinuxSocketPolicy struct {
-	capture     DesktopSocketCapture
-	options     DesktopLinuxSocketOptions
-	owner       DesktopSocketKernelOwner
-	uid         uint32
-	account     string
-	nft         *desktopLinuxNFT
-	channel     *net.UnixConn
-	command     *exec.Cmd
-	mu          sync.Mutex
-	sequence    uint64
-	current     atomic.Bool
-	observed    atomic.Int64
-	closing     atomic.Bool
-	joined      chan struct{}
-	monitorDone chan struct{}
-	joinErr     error
-	parentStop  func() bool
+	capture  DesktopSocketCapture
+	options  DesktopLinuxSocketOptions
+	owner    DesktopSocketKernelOwner
+	uid      uint32
+	account  string
+	nft      *desktopLinuxNFT
+	channel  *net.UnixConn
+	command  *exec.Cmd
+	mu       sync.Mutex
+	sequence uint64
+	// socketActivity is monotonic under mu. Empty sets after an earlier socket
+	// retires cannot turn an already used source into a fresh preparation.
+	socketActivity    bool
+	closeAcknowledged atomic.Bool
+	current           atomic.Bool
+	observed          atomic.Int64
+	closing           atomic.Bool
+	joined            chan struct{}
+	monitorDone       chan struct{}
+	joinErr           error
+	parentStop        func() bool
 }
 
 var _ DesktopSocketPolicy = (*DesktopLinuxSocketPolicy)(nil)
@@ -313,13 +317,18 @@ func (p *DesktopLinuxSocketPolicy) Cancel() {
 	}
 }
 
-func (p *DesktopLinuxSocketPolicy) Close(ctx context.Context) error {
+func (p *DesktopLinuxSocketPolicy) Close(ctx context.Context) (closeErr error) {
 	if p == nil {
 		return nil
 	}
 	if ctx == nil || ctx.Err() != nil {
 		return net.ErrClosed
 	}
+	defer func() {
+		if closeErr == nil && p.nft != nil {
+			p.closeAcknowledged.Store(true)
+		}
+	}()
 	p.Cancel()
 	if p.parentStop != nil {
 		p.parentStop()
@@ -451,6 +460,11 @@ func (p *DesktopLinuxSocketPolicy) call(ctx context.Context, request desktopLinu
 func (p *DesktopLinuxSocketPolicy) callLocked(ctx context.Context, request desktopLinuxRequest, file *os.File, requireCurrent bool) (desktopLinuxReply, *os.File, error) {
 	if ctx.Err() != nil || requireCurrent && !p.Current(p.capture, p.owner) {
 		return desktopLinuxReply{}, nil, net.ErrClosed
+	}
+	if request.Operation == "create" || request.Operation == "bind" || request.Operation == "grant" {
+		// The request may complete after a lost receipt. Mark admission before
+		// sending, even if the resulting native owner needs exceptional cleanup.
+		p.socketActivity = true
 	}
 	p.sequence++
 	request.Sequence = p.sequence
