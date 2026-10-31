@@ -313,15 +313,16 @@ class NativePQScope(unittest.TestCase):
         self.assertEqual(len(result['compiled_negative_controls']), 6)
         self.assertEqual(len(state['removed_controls']), 6)
         self.assertTrue(all(not path.exists() for path in state['paths']))
-        for parent, budget in ((GATE.TRAFFIC, 480), (GATE.CREDENTIALS, 900), (GATE.SUCCESSION, 720)):
-            calls = [args for args in state['native_calls'] if '-test.run=^' + parent + '$' in args]
+        for parent, budget in ((GATE.TRAFFIC, 480), (GATE.CREDENTIALS, 900), (GATE.SUCCESSION, 720), (GATE.FOREIGN, 160)):
+            calls = [args for args in state['native_calls']
+                     if Path(args[0]).parent.name == 'native-composition' and '-test.run=^' + parent + '$' in args]
             self.assertEqual(len(calls), 1)
             self.assertIn('-test.timeout=' + str(budget) + 's', calls[0])
         for args, outer_timeout in zip(state['native_calls'], state['native_timeouts'], strict=True):
             inner_timeout = int(next(value for value in args if value.startswith('-test.timeout=')).split('=', 1)[1][:-1])
             self.assertEqual(outer_timeout, inner_timeout + 15)
             if Path(args[0]).parent.name not in ('current-closed-capability', 'native-composition'):
-                self.assertIn('-test.timeout=90s', args)
+                self.assertEqual(inner_timeout, 160 if Path(args[0]).parent.name == 'legacy-pq-adoption' else 90)
 
     def test_execute_cleanup_error_or_unremoved_workspace_never_publishes(self):
         for cleanup, failure in (('error', OSError), ('retained', ValueError)):

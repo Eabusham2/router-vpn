@@ -42,6 +42,10 @@ TRAFFIC = 'TestRouterVPNDesktopNodeWindowsPQTraffic'
 CREDENTIALS = 'TestRouterVPNDesktopNodeWindowsPQCredentials'
 SUCCESSION = 'TestRouterVPNDesktopNodeWindowsPQSuccession'
 FOREIGN = 'TestRouterVPNDesktopNodeWindowsPQForeignPredecessor'
+# The foreign-predecessor fixture prepares an original owner and a successor.
+# Match Traffic's 80-second aggregate share per owner; all per-operation
+# handshake, socket and cleanup deadlines remain in the unchanged Go fixture.
+FOREIGN_BUDGET = 160
 PROSPECTIVE_BEFORE = '\tswitch mode {\n'
 PROSPECTIVE_AFTER = PROSPECTIVE_BEFORE + '\tcase "wg-pq", "awg2-pq":\n\t\treturn true\n'
 CLEANUP_DIAGNOSTICS = (
@@ -238,7 +242,7 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
             # six. Keep each socket/handshake/cleanup bound unchanged and scale
             # only this aggregate execution budget for the required work.
             for test, cases, timeout in ((OPEN, (), 15), (TRAFFIC, PQ.TRAFFIC, 480),
-                                         (CREDENTIALS, PQ.CREDENTIALS, 900), (SUCCESSION, PQ.LAYERS, 720), (FOREIGN, (), 90)):
+                                         (CREDENTIALS, PQ.CREDENTIALS, 900), (SUCCESSION, PQ.LAYERS, 720), (FOREIGN, (), FOREIGN_BUDGET)):
                 status, output = NODE.run([binary, '-test.run=^' + test + '$', '-test.count=1', '-test.timeout=' + str(timeout) + 's', '-test.v'],
                                           cwd=source, env=captured, timeout=timeout + 15)
                 print(output, end='', flush=True)
@@ -251,8 +255,9 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
                 name, test, selector, witness, _, _ = mutation
                 negative = compile_in(name, prospective, mutation)
                 negative_digest = PQ.regular_digest(negative)
-                status, output = NODE.run([negative, '-test.run=' + selector, '-test.count=1', '-test.timeout=90s', '-test.v'],
-                                          cwd=source, env=captured, timeout=105)
+                timeout = FOREIGN_BUDGET if test == FOREIGN else 90
+                status, output = NODE.run([negative, '-test.run=' + selector, '-test.count=1', '-test.timeout=' + str(timeout) + 's', '-test.v'],
+                                          cwd=source, env=captured, timeout=timeout + 15)
                 rejected_control(status, output, mutation)
                 if PQ.regular_digest(negative) != negative_digest:
                     raise ValueError('Windows PQ control executable changed during execution')
