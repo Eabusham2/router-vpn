@@ -160,11 +160,11 @@ func desktopOwnedNodePreparationAES(t *testing.T, endpoint string) map[string][]
 }
 
 func TestDesktopOwnedNodePreparationKeepsCapturedAESAndWhitening(t *testing.T) {
-	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2"} {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp"} {
 		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 			t.Run(mode+"/"+layer, func(t *testing.T) {
 				base := mode
-				if mode == "shadowsocks" || mode == "hysteria2" {
+				if mode == "shadowsocks" || mode == "hysteria2" || mobilemultihop.XrayEntryMode(mode) {
 					base = "wg"
 				}
 				f := newDesktopOwnedNodePreparationFixture(t, base)
@@ -205,6 +205,18 @@ func TestDesktopOwnedNodePreparationKeepsCapturedAESAndWhitening(t *testing.T) {
 					}
 					if err := os.WriteFile(filepath.Join(directory, "sing-box.json"), raw, 0600); err != nil {
 						t.Fatal(err)
+					}
+				}
+				if mobilemultihop.XrayEntryMode(mode) {
+					f.files = nativeMultihopProxyExitAssets(t, f.profile, mode)
+					directory := filepath.Join(f.capture.dataRoot, "generated", f.profile.ID, mode)
+					if err := os.MkdirAll(directory, 0700); err != nil {
+						t.Fatal(err)
+					}
+					for name, raw := range f.files {
+						if err := os.WriteFile(filepath.Join(directory, name), raw, 0600); err != nil {
+							t.Fatal(err)
+						}
 					}
 				}
 				command, previous := f.a.cmd, f.a.state
@@ -350,7 +362,7 @@ func TestDesktopOwnedNodePreparationRejectsUnsupportedAdmission(t *testing.T) {
 			case "layer":
 				f.profile.StartLayer = "xor-only"
 			case "mode":
-				mode = "reality-vision"
+				mode = "naive-h2"
 			case "no-operation":
 				f.operation = nil
 			case "wrong-operation":

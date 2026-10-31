@@ -1,0 +1,27 @@
+//go:build windows && routervpn_windows_node_composition
+
+package routervpnamnezia
+
+import "testing"
+
+func TestRouterVPNDesktopNodeWindowsWFPXrayTraffic(t *testing.T) {
+	desktopNodeXrayCases(t, desktopNodeWFPLayerTrafficCase)
+}
+
+func TestRouterVPNDesktopNodeWindowsWFPXraySuccession(t *testing.T) {
+	for _, mode := range []string{"reality-vision", "reality-pq-vision", "reality-xhttp"} {
+		t.Run(mode, func(t *testing.T) { desktopNodeWFPLayerSuccession(t, mode) })
+	}
+}
+
+func TestRouterVPNDesktopNodeWindowsWFPXrayWrongCredential(t *testing.T) {
+	for _, test := range []struct{ mode, layer, fault string }{
+		{"reality-vision", "", "xray-reality-key"}, {"reality-pq-vision", "", "xray-reality-key"}, {"reality-xhttp", "", "xray-reality-key"},
+		{"reality-pq-vision", "", "xray-pq-key"}, {"reality-xhttp", "", "xray-pq-key"},
+		{"reality-vision", "aes-256-gcm+xor-whitening", "aes-key"},
+	} {
+		t.Run(test.mode+"/"+test.fault, func(t *testing.T) {
+			desktopNodeWFPLayerWrongCredential(t, test.mode, test.layer, test.fault)
+		})
+	}
+}

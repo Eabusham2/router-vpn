@@ -25,7 +25,7 @@ TAG = b"//go:build windows && routervpn_windows_node_composition\n"
 TAGS = (*NODE.TAGS, "routervpn_windows_node_composition")
 REQUIRED = tuple("TestRouterVPNDesktopNodeWindowsWFP" + suffix for suffix in (
     "EncryptedTraffic", "EncryptedSuccession", "RejectsForeignPredecessor", "WrongPeerRejected", "RestorationCapture",
-    "LayerTraffic", "LayerSuccession", "LayerWrongCredential"))
+    "LayerTraffic", "LayerSuccession", "LayerWrongCredential", "XrayTraffic", "XraySuccession", "XrayWrongCredential"))
 
 
 def checked_sources(source):
@@ -125,6 +125,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     with tempfile.TemporaryDirectory(prefix="routervpn-node-kernel-") as temporary:
         workspace = Path(temporary)
         relay, relay_digest = NODE.build_layer_reference(compiler, workspace, captured, race)
+        xray_binary, xray_digest, xray_source, xray_records = NODE.build_xray_reference(compiler, source, workspace, captured, race)
         base = workspace / "baseline"
         base.mkdir()
         selected = overlay(source, base)
@@ -154,6 +155,16 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         for case in ("shadowsocks/aes-key", "hysteria2/hysteria-trust", "hysteria2/hysteria-password"):
             if "--- PASS: TestRouterVPNDesktopNodeWindowsWFPLayerWrongCredential/" + case + " (" not in output:
                 raise ValueError("Actual WFP Node omitted its encrypted credential negative: " + case)
+        for case in NODE.XRAY_CASES:
+            if "--- PASS: TestRouterVPNDesktopNodeWindowsWFPXrayTraffic/" + case + " (" not in output:
+                raise ValueError("Actual WFP Xray omitted an admitted graph/Start Layer: " + case)
+        for mode in NODE.XRAY_MODES:
+            if "--- PASS: TestRouterVPNDesktopNodeWindowsWFPXraySuccession/" + mode + " (" not in output:
+                raise ValueError("Actual WFP Xray omitted its exact cross-family restoration: " + mode)
+        for case in (*(mode + "/xray-reality-key" for mode in NODE.XRAY_MODES),
+                     "reality-pq-vision/xray-pq-key", "reality-xhttp/xray-pq-key", "reality-vision/aes-key"):
+            if "--- PASS: TestRouterVPNDesktopNodeWindowsWFPXrayWrongCredential/" + case + " (" not in output:
+                raise ValueError("Actual WFP Xray omitted its encrypted credential negative: " + case)
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("Actual WFP Node executable changed during its retained test")
         for mutation in mutants(source):
@@ -173,9 +184,11 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             print("Rejected actual WFP encrypted Node production mutant: " + name, flush=True)
         if relay.is_symlink() or hashlib.sha256(relay.read_bytes()).hexdigest() != relay_digest:
             raise ValueError("Actual WFP whitening reference changed during execution")
+        if xray_binary.is_symlink() or hashlib.sha256(xray_binary.read_bytes()).hexdigest() != xray_digest or NODE.xray_reference_sources(xray_source) != xray_records:
+            raise ValueError("Actual WFP pinned Xray reference changed during execution")
     if checked_sources(source)[1] != before:
         raise ValueError("WFP Node source changed during actual native execution")
-    print("Actual Windows BFE, isolated TCP/UDP grants with exact permitted peers, WG/AWG/Shadowsocks/Hysteria2 AES/XOR encrypted IPv4/IPv6 payloads, fresh selected DNS, exact cross-family forward/reverse native succession and wrong-key/ordinary-token controls passed. TUN, node identity proof, host adoption and device acceptance remain separate.", flush=True)
+    print("Actual Windows BFE, isolated TCP/UDP grants with exact permitted peers, WG/AWG/Shadowsocks/Hysteria2/REALITY Vision/PQ/XHTTP AES/XOR encrypted IPv4/IPv6 payloads, fresh selected DNS, exact cross-family forward/reverse native succession and wrong-key/ordinary-token controls passed. TUN, node identity proof, host adoption and device acceptance remain separate.", flush=True)
 
 
 if __name__ == "__main__":

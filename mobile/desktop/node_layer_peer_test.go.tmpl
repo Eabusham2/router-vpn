@@ -40,6 +40,7 @@ import (
 	"github.com/sagernet/sing-box/option"
 	HY "github.com/sagernet/sing-box/protocol/hysteria2"
 	WH "github.com/sagernet/sing-box/protocol/routervpnwhitening"
+	XR "github.com/sagernet/sing-box/protocol/routervpnxray"
 	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
 	WG "github.com/sagernet/sing-box/protocol/wireguard"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
@@ -77,6 +78,7 @@ type desktopNodeLayerReply struct {
 	BaseAddress    string `json:"base_address,omitempty"`
 	ProtocolFiles  string `json:"protocol_files,omitempty"`
 	ProtocolRawUDP int64  `json:"protocol_raw_udp,omitempty"`
+	ProtocolRawTCP int64  `json:"protocol_raw_tcp,omitempty"`
 	ProtocolTCP    int64  `json:"protocol_tcp,omitempty"`
 	ProtocolUDP    int64  `json:"protocol_udp,omitempty"`
 	AppID          []byte `json:"app_id,omitempty"`
@@ -87,6 +89,7 @@ type desktopNodeLayerReply struct {
 	DNSQueries     uint32 `json:"dns_queries"`
 	Probe          string `json:"probe,omitempty"`
 	ProbeCount     int64  `json:"probe_count,omitempty"`
+	ProbeNetwork   string `json:"probe_network"`
 }
 
 type desktopNodeLayerServer struct {
@@ -95,6 +98,7 @@ type desktopNodeLayerServer struct {
 	tcp                  net.Listener
 	udp                  net.PacketConn
 	inner, innerPhysical string
+	innerNetwork         string
 	dnsAddress           string
 	mu                   sync.Mutex
 	closing              bool
@@ -129,7 +133,34 @@ func desktopNodeLayerEcho(destination M.Socksaddr) bool {
 }
 
 func (s *desktopNodeLayerServer) NewConnection(_ context.Context, connection net.Conn, metadata M.Metadata) error {
-	if s.inner != "" || !desktopNodeLayerEcho(metadata.Destination) {
+	if s.inner != "" {
+		if s.innerNetwork != "tcp" || metadata.Destination.String() != s.inner {
+			return errors.New("layer peer rejected an unowned inner stream")
+		}
+		peer, err := (&net.Dialer{}).DialContext(s.ctx, "tcp", s.innerPhysical)
+		if err != nil {
+			return err
+		}
+		if !s.enter(peer) {
+			_ = peer.Close()
+			return net.ErrClosed
+		}
+		defer s.leave(peer)
+		s.plainTCP.Add(1)
+		joined := make(chan struct{})
+		go func() {
+			defer close(joined)
+			_, _ = io.Copy(peer, connection)
+			_ = peer.Close()
+			_ = connection.Close()
+		}()
+		_, err = io.Copy(connection, peer)
+		_ = peer.Close()
+		_ = connection.Close()
+		<-joined
+		return err
+	}
+	if !desktopNodeLayerEcho(metadata.Destination) {
 		return errors.New("layer peer rejected an unowned TCP destination")
 	}
 	s.plainTCP.Add(1)
@@ -148,7 +179,7 @@ func (s *desktopNodeLayerServer) NewPacketConnection(_ context.Context, connecti
 	defer stop()
 	var target string
 	if s.inner != "" {
-		if metadata.Destination.String() != s.inner {
+		if s.innerNetwork != "udp" || metadata.Destination.String() != s.inner {
 			return errors.New("layer peer rejected an unowned inner tunnel")
 		}
 		target = s.innerPhysical
@@ -221,7 +252,7 @@ func (s *desktopNodeLayerServer) NewPacketConnection(_ context.Context, connecti
 	}
 }
 
-func startDesktopNodeLayerServer(t *testing.T, ip netip.Addr, password, inner, innerPhysical, dnsAddress string) *desktopNodeLayerServer {
+func startDesktopNodeLayerServer(t *testing.T, ip netip.Addr, password, inner, innerPhysical, innerNetwork, dnsAddress string) *desktopNodeLayerServer {
 	t.Helper()
 	listener, err := net.Listen("tcp4", net.JoinHostPort(ip.String(), "0"))
 	if err != nil {
@@ -233,7 +264,7 @@ func startDesktopNodeLayerServer(t *testing.T, ip netip.Addr, password, inner, i
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, tcp: listener, udp: packet, inner: inner, innerPhysical: innerPhysical,
+	s := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, tcp: listener, udp: packet, inner: inner, innerPhysical: innerPhysical, innerNetwork: innerNetwork,
 		dnsAddress: dnsAddress, connections: make(map[io.Closer]bool)}
 	service, err := shadowaead_2022.NewServiceWithPassword(mobilemultihop.NativeStartLayerMethod, password, 10, s, nil)
 	if err != nil {
@@ -250,7 +281,6 @@ func startDesktopNodeLayerServer(t *testing.T, ip netip.Addr, password, inner, i
 			if err != nil {
 				return
 			}
-			s.rawTCP.Add(1)
 			if !s.enter(connection) {
 				_ = connection.Close()
 				return
@@ -258,7 +288,12 @@ func startDesktopNodeLayerServer(t *testing.T, ip netip.Addr, password, inner, i
 			go func() {
 				defer s.leave(connection)
 				_ = connection.SetDeadline(time.Now().Add(30 * time.Second))
-				_ = service.NewConnection(ctx, connection, M.Metadata{Source: M.SocksaddrFromNet(connection.RemoteAddr())})
+				reader := STD.NewReader(connection)
+				if marker, err := desktopNodeXrayMarker(&s.observation, reader, connection); marker || err != nil {
+					return
+				}
+				s.rawTCP.Add(1)
+				_ = service.NewConnection(ctx, &desktopNodeLayerBufferedConn{Conn: connection, reader: reader}, M.Metadata{Source: M.SocksaddrFromNet(connection.RemoteAddr())})
 			}()
 		}
 	}()
@@ -360,7 +395,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	var trailing any
 	if decoder.Decode(&request) != nil || decoder.Decode(&trailing) != io.EOF || request.Schema != 1 ||
 		!mobilemultihop.DesktopNodePhysicalGraphSupported(request.Mode, request.Layer) ||
-		request.Mode != "shadowsocks" && request.Mode != "hysteria2" && request.Layer == "" || len(request.Configuration.Forward) != 0 {
+		request.Mode != "shadowsocks" && request.Mode != "hysteria2" && !desktopNodeXrayMode(request.Mode) && request.Layer == "" || len(request.Configuration.Forward) != 0 {
 		t.Fatal("layer reference request escaped its captured fixture")
 	}
 	key, keyErr := base64.StdEncoding.Strict().DecodeString(request.Password)
@@ -406,8 +441,15 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	go func() { dnsJoined <- dnsServer.ActivateAndServe() }()
 	t.Cleanup(func() { _ = dnsServer.Shutdown(); _ = dnsListener.Close(); <-dnsJoined })
 	var inner, baseAddress, protocolFiles string
+	innerNetwork, probeNetwork := "udp", "udp"
 	var protocolServer *desktopNodeLayerServer
-	if request.Mode == "hysteria2" {
+	if desktopNodeXrayMode(request.Mode) {
+		protocolServer, protocolFiles = startDesktopNodeXrayServer(t, request.Mode, ip, dnsListener.LocalAddr().String())
+		baseAddress = protocolServer.tcp.Addr().String()
+		base := netip.MustParseAddrPort(baseAddress)
+		inner = netip.AddrPortFrom(netip.MustParseAddr("10.78.0.1"), base.Port()).String()
+		innerNetwork, probeNetwork = "tcp", "tcp"
+	} else if request.Mode == "hysteria2" {
 		protocolServer, protocolFiles = startDesktopNodeHysteria2Server(t, ip, dnsListener.LocalAddr().String())
 		baseAddress = protocolServer.udp.LocalAddr().String()
 		base := netip.MustParseAddrPort(baseAddress)
@@ -425,8 +467,8 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	}
 	server := protocolServer
 	address, aesAddress := baseAddress, ""
-	if request.Mode != "hysteria2" || request.Layer != "" {
-		server = startDesktopNodeLayerServer(t, ip, request.Password, inner, baseAddress, dnsListener.LocalAddr().String())
+	if request.Mode != "hysteria2" && !desktopNodeXrayMode(request.Mode) || request.Layer != "" {
+		server = startDesktopNodeLayerServer(t, ip, request.Password, inner, baseAddress, innerNetwork, dnsListener.LocalAddr().String())
 		address = server.tcp.Addr().String()
 		aesAddress = address
 	}
@@ -447,9 +489,10 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 			}
 		}
 		reply := desktopNodeLayerReply{Schema: 1, Address: address, AESAddress: aesAddress, BaseAddress: baseAddress, ProtocolFiles: protocolFiles,
-			AppID: scope, RawTCP: server.rawTCP.Load(), RawUDP: server.rawUDP.Load(), PlainTCP: server.plainTCP.Load(), PlainUDP: server.plainUDP.Load(), DNSQueries: dnsQueries.Load(), Probe: nonce, ProbeCount: count}
+			AppID: scope, RawTCP: server.rawTCP.Load(), RawUDP: server.rawUDP.Load(), PlainTCP: server.plainTCP.Load(), PlainUDP: server.plainUDP.Load(), DNSQueries: dnsQueries.Load(), Probe: nonce, ProbeCount: count, ProbeNetwork: probeNetwork}
 		if protocolServer != nil {
 			reply.ProtocolRawUDP, reply.ProtocolTCP, reply.ProtocolUDP = protocolServer.rawUDP.Load(), protocolServer.plainTCP.Load(), protocolServer.plainUDP.Load()
+			reply.ProtocolRawTCP = protocolServer.rawTCP.Load()
 		}
 		err := json.NewEncoder(os.Stdout).Encode(reply)
 		if err != nil {
@@ -482,7 +525,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 			}
 		}
 		if action == "positive" {
-			if ok, err := desktopNodeLayerProbeExchange(netip.MustParseAddrPort(address), nonce, request.Layer, request.Password); err != nil || !ok {
+			if ok, err := desktopNodeLayerProbeExchange(netip.MustParseAddrPort(address), nonce, probeNetwork, request.Layer, request.Password); err != nil || !ok {
 				t.Fatal("actual independent layer observer could not reach its socket", err)
 			}
 		}
@@ -540,8 +583,11 @@ func (p *desktopNodeLayerReference) read() (desktopNodeLayerReply, error) {
 	}
 }
 
-func desktopNodeLayerProbeExchange(remote netip.AddrPort, nonce, layer, password string) (bool, error) {
-	connection, err := net.DialUDP("udp4", nil, net.UDPAddrFromAddrPort(remote))
+func desktopNodeLayerProbeExchange(remote netip.AddrPort, nonce, network, layer, password string) (bool, error) {
+	if network != "udp" && network != "tcp" {
+		return false, errors.New("layer observer has no captured transport")
+	}
+	connection, err := net.DialTimeout(network+"4", remote.String(), 750*time.Millisecond)
 	if err != nil {
 		return false, err
 	}
@@ -564,7 +610,12 @@ func desktopNodeLayerProbeExchange(remote netip.AddrPort, nonce, layer, password
 		return false, errors.Join(err, io.ErrShortWrite)
 	}
 	answer := make([]byte, len(payload)+1)
-	n, err := connection.Read(answer)
+	var n int
+	if network == "tcp" {
+		n, err = io.ReadFull(connection, answer[:len(payload)])
+	} else {
+		n, err = connection.Read(answer)
+	}
 	if err != nil {
 		return false, err
 	}
@@ -580,7 +631,7 @@ func (p *desktopNodeLayerReference) probe(t *testing.T, action, nonce string) in
 		t.Fatal(err)
 	}
 	result, err := p.read()
-	if err != nil || result.Address != p.reply.Address || !bytes.Equal(result.AppID, p.reply.AppID) || result.Probe != nonce || result.ProbeCount < 0 {
+	if err != nil || result.Address != p.reply.Address || result.ProbeNetwork != p.reply.ProbeNetwork || !bytes.Equal(result.AppID, p.reply.AppID) || result.Probe != nonce || result.ProbeCount < 0 {
 		t.Fatal("layer observation changed its original process, socket or nonce", err)
 	}
 	return result.ProbeCount
@@ -595,7 +646,7 @@ func (p *desktopNodeLayerReference) observe(t *testing.T, action string) desktop
 		t.Fatal(err)
 	}
 	result, err := p.read()
-	if err != nil || result.Address != p.reply.Address || result.AESAddress != p.reply.AESAddress || result.BaseAddress != p.reply.BaseAddress || result.ProtocolFiles != p.reply.ProtocolFiles || !bytes.Equal(result.AppID, p.reply.AppID) {
+	if err != nil || result.Address != p.reply.Address || result.AESAddress != p.reply.AESAddress || result.BaseAddress != p.reply.BaseAddress || result.ProtocolFiles != p.reply.ProtocolFiles || result.ProbeNetwork != p.reply.ProbeNetwork || !bytes.Equal(result.AppID, p.reply.AppID) {
 		t.Fatal("layer peer observation changed its original owner", err)
 	}
 	return result
@@ -667,13 +718,20 @@ func startDesktopNodeLayerReference(t *testing.T, mode, layer string, ip netip.A
 		}
 		cancel()
 		_ = p.output.Close()
+		if t.Failed() && p.diagnostic.Len() != 0 {
+			t.Logf("retained layer reference diagnostics: %s", p.diagnostic.String())
+		}
 	})
 	if err := json.NewEncoder(p.input).Encode(p.request); err != nil {
 		t.Fatal(err)
 	}
 	p.reply, err = p.read()
 	p.remote, _ = netip.ParseAddrPort(p.reply.Address)
-	if err != nil || p.remote.Addr() != ip || p.remote.Port() == 0 {
+	expectedNetwork := "udp"
+	if desktopNodeXrayMode(mode) {
+		expectedNetwork = "tcp"
+	}
+	if err != nil || p.remote.Addr() != ip || p.remote.Port() == 0 || p.reply.ProbeNetwork != expectedNetwork {
 		t.Fatal("layer reference did not return its exact physical endpoint", err)
 	}
 	return p
@@ -701,7 +759,12 @@ func (p *desktopNodeLayerReference) original(t *testing.T, kill, fault string) *
 		"router_api": "http://10.78.0.1:8787", "api_token": "captured-layer-node-token", "endpoint": p.request.Address,
 		"start_layer": p.request.Layer, "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "kill_switch_policy": kill,
 		"ipv6_mode": "on", "home_lan_access": false, "mtu_policy": "auto"}
-	if p.request.Mode == "hysteria2" {
+	if desktopNodeXrayMode(p.request.Mode) {
+		files = desktopNodeXrayAssets(t, p.reply.ProtocolFiles, fault)
+		if p.request.Layer != "" {
+			start = string(aesFiles)
+		}
+	} else if p.request.Mode == "hysteria2" {
 		files = desktopNodeHysteria2Assets(t, p.reply.ProtocolFiles, fault)
 		if p.request.Layer != "" {
 			start = string(aesFiles)
@@ -790,6 +853,7 @@ func newDesktopNodeLayerFixture(t *testing.T, peer *desktopNodeLayerReference, f
 	})
 	outs := outbound.NewRegistry()
 	HY.RegisterOutbound(outs)
+	XR.RegisterOutbound(outs)
 	SS.RegisterOutbound(outs)
 	WH.RegisterOutbound(outs)
 	routervpndesktoppt.RegisterNodePhysicalOutbound(outs)
@@ -815,6 +879,19 @@ func newDesktopNodeLayerFixture(t *testing.T, peer *desktopNodeLayerReference, f
 		t.Fatal(err)
 	}
 	options.Log = &option.LogOptions{Disabled: true}
+	if desktopNodeXrayMode(peer.request.Mode) {
+		diagnostic := filepath.Join(t.TempDir(), "owned-native-graph.log")
+		options.Log = &option.LogOptions{Level: "debug", Output: diagnostic}
+		t.Cleanup(func() {
+			if t.Failed() {
+				if file, err := os.Open(diagnostic); err == nil {
+					defer file.Close()
+					raw, _ := io.ReadAll(io.LimitReader(file, 64<<10))
+					t.Logf("captured native graph diagnostics: %s", raw)
+				}
+			}
+		})
+	}
 	f.box, err = box.New(box.Options{Context: ctx, Options: options})
 	if err != nil {
 		t.Fatal(err)
@@ -858,42 +935,52 @@ func desktopNodeLayerCases(t *testing.T, test func(*testing.T, string, string)) 
 }
 
 func TestRouterVPNDesktopNodeEncryptedLayerTraffic(t *testing.T) {
-	desktopNodeLayerCases(t, func(t *testing.T, mode, layer string) {
-		_, ip := desktopNodePeerInterface(t)
-		peer := startDesktopNodeLayerReference(t, mode, layer, ip)
-		f := newDesktopNodeLayerFixture(t, peer, "")
-		if err := f.box.RouterVPNStrategyStart(); err != nil {
-			t.Fatal("actual layered native startup failed", err)
-		}
-		for _, network := range []string{"tcp", "udp"} {
-			for _, host := range []string{"192.0.2.99", "2001:db8::99"} {
-				if err := f.exchange(network, host); err != nil {
-					t.Fatal("layered encrypted payload escaped or lost its exact native lower", network, host, err)
-				}
+	desktopNodeLayerCases(t, desktopNodeLayerTraffic)
+}
+
+func desktopNodeLayerTraffic(t *testing.T, mode, layer string) {
+	t.Helper()
+	_, ip := desktopNodePeerInterface(t)
+	peer := startDesktopNodeLayerReference(t, mode, layer, ip)
+	f := newDesktopNodeLayerFixture(t, peer, "")
+	if err := f.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal("actual layered native startup failed", err)
+	}
+	for _, network := range []string{"tcp", "udp"} {
+		for _, host := range []string{"192.0.2.99", "2001:db8::99"} {
+			if err := f.exchange(network, host); err != nil {
+				t.Fatal("layered encrypted payload escaped or lost its exact native lower", network, host, err)
 			}
 		}
-		observed := peer.observe(t, "stats")
-		if observed.RawUDP == 0 || observed.PlainUDP == 0 || mode == "shadowsocks" && (observed.RawTCP == 0 || observed.PlainTCP == 0) || f.network.Current() {
-			t.Fatal("layered payload omitted real ciphertext or fabricated readiness", observed)
-		}
-		if mode == "hysteria2" && (observed.ProtocolRawUDP == 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP == 0) {
-			t.Fatal("captured Hysteria payload bypassed its authenticated protocol", observed)
-		}
-		if err := f.box.RouterVPNStrategyDNSProof(); err != nil || peer.observe(t, "stats").DNSQueries != 1 {
-			t.Fatal("selected Home DNS did not traverse the actual layered graph", err)
-		}
-		peer.observe(t, "fail-dns")
-		if err := f.box.RouterVPNStrategyDNSProof(); err == nil || peer.observe(t, "stats").DNSQueries != 2 {
-			t.Fatal("layered selected DNS accepted a stale answer or skipped the captured resolver")
-		}
-		f.network.InterfaceUpdated(context.Background())
-		if f.network.SocketCurrent() || f.kernel.live.Load() || f.exchange("udp") == nil {
-			t.Fatal("retired layered node delivered another encrypted payload")
-		}
-		if err := f.close(); err != nil || !f.source.closed.Load() {
-			t.Fatal("layered native graph did not join its retained owner", err)
-		}
-	})
+	}
+	f.kernel.mu.Lock()
+	requests := f.kernel.requests
+	f.kernel.mu.Unlock()
+	if requests == 0 {
+		t.Fatal("layered graph bypassed its captured socket grants")
+	}
+	observed := peer.observe(t, "stats")
+	if desktopNodeXrayMode(mode) && (observed.RawTCP == 0 || observed.PlainTCP == 0 || observed.ProtocolRawTCP == 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP == 0) ||
+		!desktopNodeXrayMode(mode) && (observed.RawUDP == 0 || observed.PlainUDP == 0 || mode == "shadowsocks" && (observed.RawTCP == 0 || observed.PlainTCP == 0)) || f.network.Current() {
+		t.Fatal("layered payload omitted real ciphertext or fabricated readiness", observed)
+	}
+	if mode == "hysteria2" && (observed.ProtocolRawUDP == 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP == 0) {
+		t.Fatal("captured Hysteria payload bypassed its authenticated protocol", observed)
+	}
+	if err := f.box.RouterVPNStrategyDNSProof(); err != nil || peer.observe(t, "stats").DNSQueries != 1 {
+		t.Fatal("selected Home DNS did not traverse the actual layered graph", err)
+	}
+	peer.observe(t, "fail-dns")
+	if err := f.box.RouterVPNStrategyDNSProof(); err == nil || peer.observe(t, "stats").DNSQueries != 2 {
+		t.Fatal("layered selected DNS accepted a stale answer or skipped the captured resolver")
+	}
+	f.network.InterfaceUpdated(context.Background())
+	if f.network.SocketCurrent() || f.kernel.live.Load() || f.exchange("udp") == nil {
+		t.Fatal("retired layered node delivered another encrypted payload")
+	}
+	if err := f.close(); err != nil || !f.source.closed.Load() {
+		t.Fatal("layered native graph did not join its retained owner", err)
+	}
 }
 
 func TestRouterVPNDesktopNodeEncryptedLayerWrongCredential(t *testing.T) {

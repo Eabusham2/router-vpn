@@ -30,6 +30,12 @@ HYSTERIA2_CREDENTIAL_CASES = (
     "off/hysteria-password", "off/hysteria-trust", "off/hysteria-salamander",
     "aes-256-gcm/hysteria-password", "aes-256-gcm+xor-whitening/hysteria-password",
     "aes-256-gcm/aes-key", "aes-256-gcm+xor-whitening/aes-key")
+XRAY_MODES = ("reality-vision", "reality-pq-vision", "reality-xhttp")
+XRAY_CASES = tuple(mode + "/" + layer for mode in XRAY_MODES
+                   for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening"))
+XRAY_CREDENTIAL_CASES = (*XRAY_CASES, "reality-pq-vision/off/xray-pq-key", "reality-xhttp/off/xray-pq-key",
+                         "reality-vision/off/xray-user", "reality-vision/aes-256-gcm/aes-key",
+                         "reality-vision/aes-256-gcm+xor-whitening/aes-key")
 
 
 def layer_reference_sources():
@@ -81,6 +87,10 @@ def checked_sources(source):
     if ss.is_symlink() or PREP.RELAY.WHITENING.STREAM.patch(ss.read_text(encoding="utf-8")).encode() != ss.read_bytes():
         raise ValueError("Node native Shadowsocks stream/packet owner differs from its exact pinned source")
     records["protocol/shadowsocks/outbound.go"] = hashlib.sha256(ss.read_bytes()).hexdigest()
+    native_xray = source / "protocol/routervpnxray/outbound.go"
+    if native_xray.is_symlink() or native_xray.read_bytes() != (ROOT / "mobile/applexray/outbound.go.tmpl").read_bytes():
+        raise ValueError("Node native Xray instance lost its exact captured socket owner")
+    records["protocol/routervpnxray/outbound.go"] = hashlib.sha256(native_xray.read_bytes()).hexdigest()
     for name in ("go.mod", "go.sum"):
         path = source / name
         if path.is_symlink() or not path.is_file():
@@ -145,9 +155,41 @@ def build_layer_reference(compiler, workspace, captured, race):
     return binary, hashlib.sha256(binary.read_bytes()).hexdigest()
 
 
+def xray_reference_sources(source):
+    PREP.RELAY.XRAY.checkout(source, PREP.RELAY.XRAY.XRAY_PIN, "github.com/xtls/xray-core")
+    records = {}
+    for path in (*sorted(source.rglob("*.go")), source / "go.mod", source / "go.sum"):
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("Xray reference lost its retained prepared source")
+        records[path.relative_to(source).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return records
+
+
+def build_xray_reference(compiler, source, workspace, captured, race):
+    status, output = run([compiler, "list", "-m", "-mod=readonly", "-json", "github.com/xtls/xray-core"],
+                         cwd=source, env=captured, timeout=30)
+    if status:
+        raise ValueError("Node reference lost its captured Xray dependency:\n" + output[-8192:])
+    xray = Path(json.loads(output).get("Dir", ""))
+    if not xray.is_absolute() or xray.is_symlink():
+        raise ValueError("Node Xray reference has no exact prepared dependency directory")
+    records = xray_reference_sources(xray)
+    binary = workspace / ("xray-reference.exe" if captured["GOOS"] == "windows" else "xray-reference")
+    status, output = run([compiler, "build", "-mod=readonly", "-trimpath", *race, "-ldflags=-checklinkname=0", "-o", binary, "./main"],
+                         cwd=xray, env=captured, timeout=600)
+    if status or binary.is_symlink() or not binary.is_file() or xray_reference_sources(xray) != records:
+        raise ValueError("Node actual pinned Xray reference did not build from its captured source:\n" + output[-16384:])
+    captured["ROUTER_VPN_XRAY_TEST_BINARY"] = str(binary)
+    return binary, hashlib.sha256(binary.read_bytes()).hexdigest(), xray, records
+
+
 def mutants(source, windows):
-    def changed(relative, before, after):
+    def changed(relative, before, after, count=1):
         raw = (source / relative).read_text(encoding="utf-8")
+        if count != 1:
+            if raw.count(before) != count:
+                raise ValueError("Node native mutation lost its exact source count: " + relative)
+            return raw.replace(before, after)
         return BOOT.IDENTITY.replace_once(raw, before, after)
     lower = "routervpn/desktoppt/node_physical.go"
     network = "routervpn/desktoppt/node_network.go"
@@ -158,6 +200,13 @@ def mutants(source, windows):
     selected_dns = "routervpn_desktop_node_box_dns.go"
     node_command = "cmd/sing-box/routervpn_mtu_node.go"
     result = [
+        ("caller-owned-xray-dns", "protocol/routervpnxray/outbound.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeXrayTraffic", "reality-vision/off",
+         "selected Home DNS did not traverse the actual layered graph", changed("protocol/routervpnxray/outbound.go",
+         "h.connections.BeginDial(ctx)", "h.connections.Begin(ctx)", count=2)),
+        ("uncaptured-xray-physical-dial", "protocol/routervpnxray/outbound.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeXrayTraffic", "reality-vision/off",
+         "layered graph bypassed its captured socket grants", changed("protocol/routervpnxray/outbound.go",
+         "conn, err := b.dialer.DialContext(cctx, N.NetworkTCP, M.ParseSocksaddr(b.server.String()))",
+         "conn, err := (&net.Dialer{}).DialContext(cctx, N.NetworkTCP, b.server.String())")),
         ("ignored-hysteria2-tls-identity", "protocol/hysteria2/outbound.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeHysteria2WrongCredential", "off/hysteria-trust",
          "wrong captured Hysteria credential delivered encrypted payload", changed("protocol/hysteria2/outbound.go",
          "tlsConfig, err := tls.NewClient(ctx, logger, tlsServerAddress, tlsOptions)",
@@ -237,7 +286,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         ("ss-packet", "./protocol/shadowsocks", "^TestRouterVPNShadowsocks",
          ("TestRouterVPNShadowsocksCompleteCiphertextPacket", "TestRouterVPNShadowsocksPacketWrongKey")),
         ("command", "./cmd/sing-box", "^TestRouterVPNDesktopNodePhysicalCommand",
-         tuple("TestRouterVPNDesktopNodePhysicalCommand" + name for name in ("SourceBoundary", "RestoredMTU", "TransferInput", "RetirementReceipt", "ReadyRequiresFreshDNS", "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionExactStop", "AdmissionRejectsForeignStop", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "JournalBeforePrivateInputs", "PublicRequiresJournal"))),
+         tuple("TestRouterVPNDesktopNodePhysicalCommand" + name for name in ("SourceBoundary", "Hysteria2CompleteStartSource", "XrayCompleteStartSource", "RestoredMTU", "TransferInput", "RetirementReceipt", "ReadyRequiresFreshDNS", "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionExactStop", "AdmissionRejectsForeignStop", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "JournalBeforePrivateInputs", "PublicRequiresJournal"))),
         ("factory", "./routervpn/desktoppt", "^TestRouterVPNNodePhysical",
          tuple("TestRouterVPNNodePhysical" + name for name in ("SeparateRegistriesAndUnpreparedRejection", "HandshakePhaseAndExactPolicy", "FactoryCancellationJoinsPartialOwner", "RetirementKeepsExactJoinedSource", "AdmissionRetainsExactPolicy", "AdmissionCapturesExactPredecessor", "JournalAdmissionCapturesDurableBarrier")) +
          (tuple("TestRouterVPNNodePhysicalWindows" + name for name in ("CapturesPreparedOwner", "AdmissionRejectsChangedOwners", "CloseJoinsAdmission")) if windows else
@@ -250,10 +299,15 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
           "TestRouterVPNDesktopNodeEncryptedLayerTraffic", "TestRouterVPNDesktopNodeEncryptedLayerWrongCredential")),
         ("hysteria2-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeHysteria2",
          ("TestRouterVPNDesktopNodeHysteria2WrongCredential",)),
+        ("xray-traffic", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeXrayTraffic$",
+         ("TestRouterVPNDesktopNodeXrayTraffic",)),
+        ("xray-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeXrayWrongCredential$",
+         ("TestRouterVPNDesktopNodeXrayWrongCredential",)),
     ]
     with tempfile.TemporaryDirectory(prefix="routervpn-node-physical-") as directory:
         workspace = Path(directory)
         relay, relay_digest = build_layer_reference(compiler, workspace, captured, race)
+        xray_binary, xray_digest, xray_source, xray_records = build_xray_reference(compiler, source, workspace, captured, race)
         build = [compiler, "test", "-c", "-mod=readonly", "-tags=" + ",".join(TAGS), *race, "-ldflags=-checklinkname=0"]
         suffix = ".exe" if windows else ""
         for name, package, selector, required in suites:
@@ -272,6 +326,10 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Node encrypted gate omitted an admitted graph/Start Layer")
             if name == "hysteria2-credentials" and any("--- PASS: TestRouterVPNDesktopNodeHysteria2WrongCredential/" + case + " (" not in output for case in HYSTERIA2_CREDENTIAL_CASES):
                 raise ValueError("Node Hysteria2 gate omitted a captured protocol, trust or layer credential negative")
+            if name == "xray-traffic" and any("--- PASS: TestRouterVPNDesktopNodeXrayTraffic/" + case + " (" not in output for case in XRAY_CASES):
+                raise ValueError("Node Xray gate omitted a complete graph/Start Layer")
+            if name == "xray-credentials" and any("--- PASS: TestRouterVPNDesktopNodeXrayWrongCredential/" + case + " (" not in output for case in XRAY_CREDENTIAL_CASES):
+                raise ValueError("Node Xray gate omitted a captured REALITY, PQ, user or layer credential negative")
             if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
                 raise ValueError("Node native executable changed during execution")
         for label, relative, package, test, subtest, witness, replacement in mutants(source, windows):
@@ -290,9 +348,11 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             print("Rejected native Node production mutant: " + label, flush=True)
         if relay.is_symlink() or hashlib.sha256(relay.read_bytes()).hexdigest() != relay_digest:
             raise ValueError("Node shipping whitening reference changed during actual execution")
+        if xray_binary.is_symlink() or hashlib.sha256(xray_binary.read_bytes()).hexdigest() != xray_digest or xray_reference_sources(xray_source) != xray_records:
+            raise ValueError("Node pinned Xray reference changed during actual execution")
     if checked_sources(source)[1] != before:
         raise ValueError("Node native source changed during actual execution")
-    print("Exact native Node startup, captured IPC, retained TUN/MTU rollback, real WG/AWG/Shadowsocks/Hysteria2 plus AES/XOR encrypted TCP/UDP, fresh selected DNS and wrong-key controls passed. OS permits/TUN remain explicit fixtures; kernel composition and both-direction host activation remain separate.", flush=True)
+    print("Exact native Node startup, captured IPC, retained TUN/MTU rollback, real WG/AWG/Shadowsocks/Hysteria2/REALITY Vision/PQ/XHTTP plus AES/XOR encrypted TCP/UDP, fresh selected DNS and wrong-key controls passed. OS permits/TUN remain explicit fixtures; kernel composition and both-direction host activation remain separate.", flush=True)
 
 
 if __name__ == "__main__":

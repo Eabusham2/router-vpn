@@ -1,0 +1,624 @@
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/mlkem"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+)
+
+func desktopNodeXrayMode(mode string) bool {
+	return mode == "reality-vision" || mode == "reality-pq-vision" || mode == "reality-xhttp"
+}
+
+type desktopNodeLayerBufferedConn struct {
+	net.Conn
+	reader io.Reader
+}
+
+func (c *desktopNodeLayerBufferedConn) Read(body []byte) (int, error) { return c.reader.Read(body) }
+
+// The retained private-interface listener only forwards captured ciphertext to
+// the separately pinned Xray server. VLESS, REALITY, ML-KEM, Vision and XHTTP
+// execute in the actual engines. Its narrow server routes can reach only this
+// fixture's echo endpoints and selected Home DNS; it has no Internet fallback.
+// Native lower ownership is proved by the enclosing Box/WFP composition, not
+// by this reference server or a documentation-address-to-loopback client map.
+func desktopNodeXrayCamouflage(t *testing.T) (string, func()) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: "www.example.com"},
+		DNSNames: []string{"www.example.com"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, spec, spec, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := tls.X509KeyPair(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
+	clear(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	server.EnableHTTP2 = true
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13,
+		MaxVersion: tls.VersionTLS13, CurvePreferences: []tls.CurveID{tls.X25519}}
+	server.StartTLS()
+	return server.Listener.Addr().String(), server.Close
+}
+
+// Raw markers are armed through the separate reference process's captured pipe.
+// They witness actual TCP arrival and are never passed to Xray or counted as an
+// authenticated protocol exchange. Ordinary encrypted records stay byte-exact.
+func desktopNodeXrayMarker(observation *desktopNodePeerObservation, reader *bufio.Reader, connection net.Conn) (bool, error) {
+	first, err := reader.Peek(1)
+	if err != nil || first[0] != desktopNodePeerProbePrefix[0] {
+		return false, err
+	}
+	prefix, err := reader.Peek(len(desktopNodePeerProbePrefix))
+	if err != nil || !bytes.Equal(prefix, []byte(desktopNodePeerProbePrefix)) {
+		return false, err // Preserve ordinary encrypted bytes, including random SS salt.
+	}
+	payload := make([]byte, len(desktopNodePeerProbePrefix)+32)
+	if _, err := io.ReadFull(reader, payload); err != nil {
+		return true, err
+	}
+	if !bytes.HasPrefix(payload, []byte(desktopNodePeerProbePrefix)) {
+		return true, errors.New("Xray reference rejected an unrecognized plaintext marker")
+	}
+	nonce := string(payload[len(desktopNodePeerProbePrefix):])
+	observation.mu.Lock()
+	count, armed := observation.counts[nonce]
+	if armed {
+		observation.counts[nonce] = count + 1
+	}
+	observation.mu.Unlock()
+	if !armed {
+		return true, errors.New("Xray reference rejected an unarmed marker")
+	}
+	n, err := connection.Write(payload)
+	if err == nil && n != len(payload) {
+		err = io.ErrShortWrite
+	}
+	return true, err
+}
+
+func desktopNodeXrayAssets(t *testing.T, files, fault string) string {
+	t.Helper()
+	var assets map[string]string
+	if json.Unmarshal([]byte(files), &assets) != nil || len(assets) != 2 || assets["sing-box.json"] == "" {
+		t.Fatal("Xray reference lost its complete captured private assets")
+	}
+	raw, err := base64.StdEncoding.Strict().DecodeString(assets["xray.json"])
+	var graph map[string]any
+	if err != nil || json.Unmarshal(raw, &graph) != nil {
+		t.Fatal("Xray reference lost its actual captured client graph", err)
+	}
+	outbound := graph["outbounds"].([]any)[0].(map[string]any)
+	user := outbound["settings"].(map[string]any)["vnext"].([]any)[0].(map[string]any)["users"].([]any)[0].(map[string]any)
+	switch fault {
+	case "xray-reality-key":
+		key, err := ecdh.X25519().GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		outbound["streamSettings"].(map[string]any)["realitySettings"].(map[string]any)["password"] = base64.RawURLEncoding.EncodeToString(key.PublicKey().Bytes())
+	case "xray-pq-key":
+		var seed [64]byte
+		if _, err := rand.Read(seed[:]); err != nil {
+			t.Fatal(err)
+		}
+		pq, err := mlkem.NewDecapsulationKey768(seed[:])
+		clear(seed[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		user["encryption"] = "mlkem768x25519plus.native.0rtt." + base64.RawURLEncoding.EncodeToString(pq.EncapsulationKey().Bytes())
+	case "xray-user":
+		user["id"] = "11111111-1111-4111-8111-111111111111"
+	case "", "aes-key":
+	default:
+		t.Fatal("unrecognized Xray reference fault")
+	}
+	raw, err = json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets["xray.json"] = base64.StdEncoding.EncodeToString(raw)
+	raw, err = json.Marshal(assets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func desktopNodeXrayCases(t *testing.T, test func(*testing.T, string, string)) {
+	t.Helper()
+	for _, mode := range []string{"reality-vision", "reality-pq-vision", "reality-xhttp"} {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			label := layer
+			if label == "" {
+				label = "off"
+			}
+			t.Run(mode+"/"+label, func(t *testing.T) { test(t, mode, layer) })
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeXrayTraffic(t *testing.T) {
+	desktopNodeXrayCases(t, desktopNodeLayerTraffic)
+}
+
+func TestRouterVPNDesktopNodeXrayWrongCredential(t *testing.T) {
+	desktopNodeXrayCases(t, func(t *testing.T, mode, layer string) {
+		desktopNodeXrayWrongCredential(t, mode, layer, "xray-reality-key")
+	})
+	for _, test := range []struct{ mode, layer, fault string }{
+		{"reality-pq-vision", "", "xray-pq-key"}, {"reality-xhttp", "", "xray-pq-key"},
+		{"reality-vision", "", "xray-user"},
+		{"reality-vision", "aes-256-gcm", "aes-key"}, {"reality-vision", "aes-256-gcm+xor-whitening", "aes-key"},
+	} {
+		label := test.layer
+		if label == "" {
+			label = "off"
+		}
+		t.Run(test.mode+"/"+label+"/"+test.fault, func(t *testing.T) {
+			desktopNodeXrayWrongCredential(t, test.mode, test.layer, test.fault)
+		})
+	}
+}
+
+func desktopNodeXrayWrongCredential(t *testing.T, mode, layer, fault string) {
+	t.Helper()
+	_, ip := desktopNodePeerInterface(t)
+	peer := startDesktopNodeLayerReference(t, mode, layer, ip)
+	f := newDesktopNodeLayerFixture(t, peer, fault)
+	if err := f.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal("Xray wrong credential did not reach actual captured startup", err)
+	}
+	if err := f.exchange("tcp"); err == nil {
+		t.Fatal("wrong captured Xray credential delivered encrypted payload")
+	}
+	observed := peer.observe(t, "stats")
+	if observed.RawTCP == 0 || observed.ProtocolTCP != 0 || observed.ProtocolUDP != 0 ||
+		strings.HasPrefix(fault, "xray-") && observed.ProtocolRawTCP == 0 || f.network.Current() {
+		t.Fatal("Xray negative missed its real encrypted peer or fabricated readiness", observed)
+	}
+}
+
+func desktopNodeXrayForward(server *desktopNodeLayerServer, incoming net.Conn, target string) {
+	defer server.leave(incoming)
+	if err := incoming.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		return
+	}
+	reader := bufio.NewReader(incoming)
+	if marker, err := desktopNodeXrayMarker(&server.observation, reader, incoming); marker || err != nil {
+		return
+	}
+	server.rawTCP.Add(1)
+	ctx, cancel := context.WithTimeout(server.ctx, 5*time.Second)
+	defer cancel()
+	outgoing, err := (&net.Dialer{}).DialContext(ctx, "tcp4", target)
+	if err != nil {
+		return
+	}
+	if !server.enter(outgoing) {
+		_ = outgoing.Close()
+		return
+	}
+	defer server.leave(outgoing)
+	if err := outgoing.SetDeadline(time.Now().Add(30 * time.Second)); err != nil {
+		return
+	}
+	joined := make(chan struct{})
+	go func() {
+		defer close(joined)
+		_, _ = io.Copy(outgoing, reader)
+		_ = outgoing.Close()
+		_ = incoming.Close()
+	}()
+	_, _ = io.Copy(incoming, outgoing)
+	_ = incoming.Close()
+	_ = outgoing.Close()
+	<-joined
+}
+
+func startDesktopNodeXrayServer(t *testing.T, mode string, ip netip.Addr, dnsAddress string) (*desktopNodeLayerServer, string) {
+	t.Helper()
+	if mode != "reality-vision" && mode != "reality-pq-vision" && mode != "reality-xhttp" {
+		t.Fatal("Xray reference requires an exact native REALITY graph family")
+	}
+	if !ip.Is4() || ip.IsUnspecified() || ip.IsLoopback() {
+		t.Fatal("Xray reference requires its captured physical IPv4 interface")
+	}
+	dnsEndpoint, err := netip.ParseAddrPort(dnsAddress)
+	if err != nil || !dnsEndpoint.Addr().Is4() || !dnsEndpoint.Addr().IsLoopback() || dnsEndpoint.Port() == 0 {
+		t.Fatal("Xray reference lost its separately retained Home DNS endpoint", err)
+	}
+	binary := os.Getenv("ROUTER_VPN_XRAY_TEST_BINARY")
+	if !filepath.IsAbs(binary) {
+		t.Fatal("Xray reference requires the exact prepared server executable")
+	}
+	// Retain the front and candidate before constructing any other listener.
+	// A later bounded retry may change the private server port, never the
+	// captured client endpoint, credentials, routes or selected resolver.
+	front, err := net.Listen("tcp4", net.JoinHostPort(ip.String(), "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, tcp: front, dnsAddress: dnsAddress, connections: make(map[io.Closer]bool)}
+	directory := t.TempDir() // Removed only after the captured child has joined.
+	var process *desktopNodeXrayProcess
+	var closeCamouflage func()
+	var owned []io.Closer
+	t.Cleanup(func() {
+		s.mu.Lock()
+		s.closing = true
+		connections := make([]io.Closer, 0, len(s.connections))
+		for connection := range s.connections {
+			connections = append(connections, connection)
+		}
+		s.mu.Unlock()
+		cancel()
+		_ = front.Close()
+		for _, object := range owned {
+			_ = object.Close()
+		}
+		for _, connection := range connections {
+			_ = connection.Close()
+		}
+		if process != nil {
+			if err := process.close(); err != nil {
+				t.Error(err)
+			}
+			// Keep bounded server diagnostics on the retained stderr pipe. The
+			// parent prints them only when its graph assertion fails; this child
+			// cannot infer that assertion's result from a normal pipe shutdown.
+			_, _ = fmt.Fprintln(os.Stderr, process.diagnostics())
+		}
+		if closeCamouflage != nil {
+			closeCamouflage()
+		}
+		s.workers.Wait()
+	})
+	reservation, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned = append(owned, reservation)
+	camouflage, closeTLS := desktopNodeXrayCamouflage(t)
+	closeCamouflage = closeTLS
+	echoTCP, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned = append(owned, echoTCP)
+	echoUDP, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned = append(owned, echoUDP)
+	s.workers.Add(2)
+	go func() {
+		defer s.workers.Done()
+		for {
+			connection, err := echoTCP.Accept()
+			if err != nil {
+				return
+			}
+			if !s.enter(connection) {
+				_ = connection.Close()
+				return
+			}
+			s.plainTCP.Add(1)
+			go func() {
+				defer s.leave(connection)
+				_ = connection.SetDeadline(time.Now().Add(30 * time.Second))
+				_, _ = io.Copy(connection, connection)
+			}()
+		}
+	}()
+	go func() {
+		defer s.workers.Done()
+		body := make([]byte, 65535)
+		for {
+			n, source, err := echoUDP.ReadFrom(body)
+			if err != nil {
+				return
+			}
+			s.plainUDP.Add(1)
+			if _, err := echoUDP.WriteTo(body[:n], source); err != nil {
+				return
+			}
+		}
+	}()
+	reality, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var credential [24]byte
+	if _, err := rand.Read(credential[:]); err != nil {
+		t.Fatal(err)
+	}
+	credential[6], credential[8] = credential[6]&15|64, credential[8]&63|128
+	uuid := fmt.Sprintf("%x-%x-%x-%x-%x", credential[:4], credential[4:6], credential[6:8], credential[8:10], credential[10:16])
+	shortID := fmt.Sprintf("%x", credential[16:])
+	clear(credential[:])
+	user := map[string]any{"id": uuid, "flow": "xtls-rprx-vision", "encryption": "none"}
+	decryption := "none"
+	if mode != "reality-vision" {
+		var seed [64]byte
+		if _, err := rand.Read(seed[:]); err != nil {
+			t.Fatal(err)
+		}
+		pq, err := mlkem.NewDecapsulationKey768(seed[:])
+		if err != nil {
+			t.Fatal(err)
+		}
+		user["encryption"] = "mlkem768x25519plus.native.0rtt." + base64.RawURLEncoding.EncodeToString(pq.EncapsulationKey().Bytes())
+		decryption = "mlkem768x25519plus.native.600s." + base64.RawURLEncoding.EncodeToString(seed[:])
+		clear(seed[:])
+	}
+	clientStream := map[string]any{"network": "raw", "security": "reality", "realitySettings": map[string]any{
+		"serverName": "www.example.com", "fingerprint": "chrome", "password": base64.RawURLEncoding.EncodeToString(reality.PublicKey().Bytes()), "shortId": shortID}}
+	serverStream := map[string]any{"network": "raw", "security": "reality", "realitySettings": map[string]any{
+		"target": camouflage, "serverNames": []string{"www.example.com"}, "privateKey": base64.RawURLEncoding.EncodeToString(reality.Bytes()), "shortIds": []string{shortID}}}
+	serverUser := map[string]any{"id": uuid, "flow": "xtls-rprx-vision"}
+	if mode == "reality-xhttp" {
+		delete(user, "flow")
+		delete(serverUser, "flow")
+		clientStream["network"], serverStream["network"] = "xhttp", "xhttp"
+		transport := map[string]any{"path": "/assets/sync", "mode": "auto"}
+		clientStream["xhttpSettings"], serverStream["xhttpSettings"] = transport, transport
+		mask := map[string]any{"tcp": []any{map[string]any{"type": "fragment", "settings": map[string]any{
+			"packets": "tlshello", "length": "100-300", "delay": "10-30", "maxSplit": "3-7"}}}}
+		clientStream["finalmask"], serverStream["finalmask"] = mask, mask
+	}
+	client := map[string]any{"log": map[string]any{"loglevel": "warning"},
+		"inbounds": []any{map[string]any{"tag": "socks", "listen": "127.0.0.1", "port": 1090, "protocol": "socks", "settings": map[string]any{"auth": "noauth", "udp": true}}},
+		"outbounds": []any{map[string]any{"tag": "proxy", "protocol": "vless", "settings": map[string]any{"vnext": []any{map[string]any{
+			"address": ip.String(), "port": front.Addr().(*net.TCPAddr).Port, "users": []any{user}}}}, "streamSettings": clientStream}}}
+	outputs := []any{map[string]any{"tag": "blocked", "protocol": "blackhole"}}
+	rules := []any{}
+	for _, route := range []struct {
+		tag, network, redirect, port string
+		ips                          []string
+	}{
+		{"owned-tcp", "tcp", echoTCP.Addr().String(), "9999", []string{"192.0.2.99/32", "2001:db8::99/128"}},
+		{"owned-udp", "udp", echoUDP.LocalAddr().String(), "9999", []string{"192.0.2.99/32", "2001:db8::99/128"}},
+		{"owned-home-dns", "udp", dnsAddress, "53", []string{"192.168.50.133/32"}},
+	} {
+		target := netip.MustParseAddrPort(route.redirect)
+		outputs = append(outputs, map[string]any{"tag": route.tag, "protocol": "freedom", "settings": map[string]any{
+			"redirect": route.redirect, "finalRules": []any{map[string]any{"action": "allow", "network": route.network,
+				"ip": []string{target.Addr().String() + "/32"}, "port": fmt.Sprint(target.Port())}, map[string]any{"action": "block", "blockDelay": "0-0"}}}})
+		rules = append(rules, map[string]any{"type": "field", "network": route.network, "ip": route.ips, "port": route.port, "outboundTag": route.tag})
+	}
+	server := map[string]any{"log": map[string]any{"loglevel": "debug"}, "inbounds": []any{map[string]any{
+		"tag": "captured-xray-node", "listen": "127.0.0.1", "port": reservation.Addr().(*net.TCPAddr).Port,
+		"protocol": "vless", "settings": map[string]any{"clients": []any{serverUser}, "decryption": decryption}, "streamSettings": serverStream}},
+		"outbounds": outputs, "routing": map[string]any{"domainStrategy": "AsIs", "rules": rules}}
+	process, port, err := launchDesktopNodeXray(binary, directory, server, reservation)
+	if err != nil {
+		t.Fatal("actual Xray reference server did not start", err)
+	}
+	inner := net.JoinHostPort("127.0.0.1", fmt.Sprint(port))
+	s.workers.Add(1)
+	go func() {
+		defer s.workers.Done()
+		for {
+			connection, err := front.Accept()
+			if err != nil {
+				return
+			}
+			if !s.enter(connection) {
+				_ = connection.Close()
+				return
+			}
+			go desktopNodeXrayForward(s, connection, inner)
+		}
+	}()
+	wrapper := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
+		"outbounds": []any{map[string]any{"type": "socks", "tag": "proxy", "server": "127.0.0.1", "server_port": 1090, "version": "5"}},
+		"route":     map[string]any{"final": "proxy", "rules": []any{}}}
+	assets := make(map[string]string)
+	for name, object := range map[string]any{"sing-box.json": wrapper, "xray.json": client} {
+		raw, err := json.Marshal(object)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assets[name] = base64.StdEncoding.EncodeToString(raw)
+	}
+	files, err := json.Marshal(assets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, string(files)
+}
+
+type desktopNodeXrayProcess struct {
+	command   *exec.Cmd
+	log       *os.File
+	done      chan struct{}
+	err       error // Published only by closing done after the actual Wait.
+	closeMu   sync.Mutex
+	joined    bool
+	logClosed bool
+}
+
+func (p *desktopNodeXrayProcess) diagnostics() string {
+	file, err := os.Open(p.log.Name())
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	raw, _ := io.ReadAll(io.LimitReader(file, 64<<10))
+	return string(raw)
+}
+
+func (p *desktopNodeXrayProcess) close() error {
+	p.closeMu.Lock()
+	defer p.closeMu.Unlock()
+	if !p.joined {
+		select {
+		case <-p.done:
+		default:
+			killErr := p.command.Process.Kill()
+			select {
+			case <-p.done:
+			case <-time.After(3 * time.Second):
+				return errors.Join(killErr, errors.New("owned Xray fixture process did not join"))
+			}
+		}
+		p.joined = true
+	}
+	if !p.logClosed {
+		if err := p.log.Close(); err != nil && !errors.Is(err, os.ErrClosed) {
+			return err
+		}
+		p.logClosed = true
+	}
+	return nil
+}
+
+func (p *desktopNodeXrayProcess) ready(address string) (bool, error) {
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-p.done:
+			// Only a naturally exited child with its own exact bind diagnostic
+			// permits another port. TLS, key, config and timeout errors do not.
+			diagnostic := p.diagnostics()
+			bindError := syscall.EADDRINUSE.Error()
+			if runtime.GOOS == "windows" {
+				// Windows net.Listen returns the localized Winsock error, not
+				// the synthetic POSIX EADDRINUSE text in package syscall.
+				bindError = syscall.Errno(10048).Error() // WSAEADDRINUSE
+			}
+			collision := p.err != nil && strings.Contains(diagnostic, "listen tcp "+address+": bind: "+bindError)
+			return collision, fmt.Errorf("owned Xray fixture exited before readiness: %v\n%s", p.err, diagnostic)
+		default:
+		}
+		diagnostic := p.diagnostics()
+		// A TCP accept alone might belong to the port thief. These two records
+		// come from this captured child's private log and prove its actual bind
+		// and completed startup before the final live-process/socket checks.
+		bound := strings.Contains(diagnostic, "transport/internet/tcp: listening TCP on "+address+"\n") ||
+			strings.Contains(diagnostic, "transport/internet/splithttp: listening TCP for XHTTP on "+address+"\n")
+		started := strings.Contains(diagnostic, "core: Xray ") && strings.Contains(diagnostic, " started\n")
+		if bound && started {
+			connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+			if err == nil {
+				_ = connection.Close()
+				select {
+				case <-p.done:
+					return false, errors.New("owned Xray fixture exited during readiness")
+				default:
+					return false, nil
+				}
+			}
+		}
+		select {
+		case <-p.done:
+		case <-deadline.C:
+			return false, errors.New("owned Xray fixture did not publish its listener and startup within the bound")
+		case <-tick.C:
+		}
+	}
+}
+
+// Retain the generated identity, credentials, routes and TLS parameters across
+// at most three private-port attempts. Only this child's actual bind collision
+// permits retry; successful connection to a foreign listener is insufficient.
+func launchDesktopNodeXray(binary, directory string, server map[string]any, reservation net.Listener) (*desktopNodeXrayProcess, int, error) {
+	defer func() {
+		if reservation != nil {
+			_ = reservation.Close()
+		}
+	}()
+	for attempt := 0; attempt < 3; attempt++ {
+		address := reservation.Addr().String()
+		port := reservation.Addr().(*net.TCPAddr).Port
+		server["inbounds"].([]any)[0].(map[string]any)["port"] = port
+		path := filepath.Join(directory, fmt.Sprintf("owned-server-%d.json", attempt))
+		raw, err := json.Marshal(server)
+		if err != nil {
+			return nil, 0, err
+		}
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			return nil, 0, err
+		}
+		log, err := os.OpenFile(filepath.Join(directory, fmt.Sprintf("owned-server-%d.log", attempt)), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			return nil, 0, err
+		}
+		command := exec.Command(binary, "run", "-c", path)
+		command.Stdout, command.Stderr = log, log
+		if err := reservation.Close(); err != nil {
+			_ = log.Close()
+			return nil, 0, err
+		}
+		if err := command.Start(); err != nil {
+			_ = log.Close()
+			return nil, 0, err
+		}
+		process := &desktopNodeXrayProcess{command: command, log: log, done: make(chan struct{})}
+		go func() { process.err = command.Wait(); close(process.done) }()
+		collision, err := process.ready(address)
+		if err == nil {
+			return process, port, nil
+		}
+		if joinErr := process.close(); joinErr != nil {
+			// The caller's cleanup must retain the partially joined exact child.
+			// A timeout cannot discard its owner or authorize a replacement.
+			return process, port, errors.Join(err, joinErr)
+		}
+		if !collision || attempt == 2 {
+			return nil, 0, err
+		}
+		reservation, err = net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return nil, 0, errors.New("owned Xray fixture exhausted bounded bind attempts")
+}
