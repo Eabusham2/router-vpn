@@ -30,7 +30,7 @@ KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGua
                 'SocketRetirementReusesCapacity', 'RejectsChangedBaseline', 'NativeParentCrash',
                 'BlockedControlRetainsSourcePort', 'RejectsStaleCaptureAndGeneration',
                 'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement',
-                'ClosedProtectionObservations')
+                'ClosedProtectionObservations', 'RejectsDormantTable')
 
 
 def namespace_test(binary: Path, case=None) -> int:
@@ -121,7 +121,7 @@ def execute(source: Path, go='go', *, env=None):
     required = {'desktop_socket_linux_policy.go', 'desktop_socket_linux_helper.go',
                 'desktop_socket_linux_nft.go', 'desktop_socket_linux_guardian_test.go',
                 'desktop_socket_linux_protection.go', 'desktop_socket_linux_protection_record.go',
-                'desktop_socket_linux_protection_native_test.go'}
+                'desktop_socket_linux_protection_native_test.go', 'desktop_socket_linux_flags_test.go'}
     if not required.issubset(before):
         raise ValueError('The complete production guardian and actual kernel tests were not copied')
     captured = dict(os.environ if env is None else env, GOWORK='off')
@@ -178,6 +178,7 @@ def execute_mutations(source: Path, go='go', *, env=None):
         'prepared native tuple emptiness': 'active native tuple was accepted as closed preparation',
         'retired native join acknowledgment': 'empty inventory substituted for native close acknowledgment',
         'retired complete native baseline': 'changed native baseline was accepted as retained protection',
+        'active table flags': 'actual heartbeat accepted the dormant native baseline',
     }
     mutations = (
         ('admitted heartbeat deadline', 'HeartbeatAdmission', 'desktop_socket_linux_policy.go', (
@@ -226,6 +227,10 @@ def execute_mutations(source: Path, go='go', *, env=None):
         ('retired complete native baseline', 'ClosedProtectionObservations', 'desktop_socket_linux_protection.go', (
             ('if err = p.readProtection(ctx, false); err != nil {',
              'if err = error(nil); err != nil {'),
+        )),
+        ('active table flags', 'RejectsDormantTable', 'desktop_socket_linux_nft.go', (
+            ('values, ok := flags.([]any)\n\treturn ok && len(values) == 0',
+             '_ = flags\n\treturn true'),
         )),
     )
     with tempfile.TemporaryDirectory(prefix='routervpn-guardian-mutations-') as temporary:

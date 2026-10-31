@@ -198,6 +198,15 @@ func desktopLinuxNumber(v any) uint64 {
 	return uint64(n)
 }
 
+func desktopLinuxNFTTableActive(table map[string]any) bool {
+	flags, present := table["flags"]
+	if !present {
+		return true
+	}
+	values, ok := flags.([]any)
+	return ok && len(values) == 0
+}
+
 func (n *desktopLinuxNFT) captureChain(ctx context.Context, options DesktopLinuxSocketOptions) error {
 	rows, err := desktopLinuxNFTRead(ctx)
 	if err != nil {
@@ -205,6 +214,9 @@ func (n *desktopLinuxNFT) captureChain(ctx context.Context, options DesktopLinux
 	}
 	for _, row := range rows {
 		if table, ok := row["table"].(map[string]any); ok && table["family"] == "inet" && table["name"] == desktopLinuxNFTTable {
+			if !desktopLinuxNFTTableActive(table) {
+				return errors.New("Linux physical baseline table is inactive or has unselected flags")
+			}
 			n.TableHandle = desktopLinuxNumber(table["handle"])
 		}
 		if chain, ok := row["chain"].(map[string]any); ok && chain["family"] == "inet" && chain["table"] == desktopLinuxNFTTable && chain["name"] == "output" && chain["type"] == "filter" && chain["hook"] == "output" && chain["policy"] == "drop" && chain["prio"] == float64(-310) && chain["comment"] == "routervpn-owned-baseline:"+n.Capture.SessionID+":"+n.Capture.SourceSHA256 {
@@ -296,7 +308,7 @@ func (n *desktopLinuxNFT) verifyRows(rows []map[string]any, required bool) error
 	baselineFound := make(map[uint64]bool)
 	for _, row := range rows {
 		if table, ok := row["table"].(map[string]any); ok && table["family"] == "inet" && table["name"] == desktopLinuxNFTTable {
-			tableOK = desktopLinuxNumber(table["handle"]) == n.TableHandle
+			tableOK = desktopLinuxNumber(table["handle"]) == n.TableHandle && desktopLinuxNFTTableActive(table)
 		}
 		if chain, ok := row["chain"].(map[string]any); ok && chain["name"] == "output" {
 			chainOK = chain["family"] == "inet" && chain["table"] == desktopLinuxNFTTable && desktopLinuxNumber(chain["handle"]) == n.ChainHandle && chain["policy"] == "drop" && chain["type"] == "filter" && chain["hook"] == "output" && chain["prio"] == float64(-310) && chain["comment"] == "routervpn-owned-baseline:"+n.Capture.SessionID+":"+n.Capture.SourceSHA256
