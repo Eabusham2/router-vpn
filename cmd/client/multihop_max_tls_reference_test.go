@@ -334,6 +334,58 @@ func nativeMAXTLSStartXray(t *testing.T, binary string, graph map[string]any, re
 	return nil, 0
 }
 
+// Xray emits platform.LineSeparator(): CRLF on Windows and LF elsewhere.
+// Only complete records from the retained child log can witness its exact bind
+// and startup. A different listener or an unrelated "started" line cannot.
+func nativeMAXTLSStartupRecords(diagnostic, address string, binding string) bool {
+	if address == "" || binding == "" {
+		return false
+	}
+	bound, started := false, false
+	for _, record := range strings.SplitAfter(diagnostic, "\n") {
+		if !strings.HasSuffix(record, "\n") {
+			continue
+		}
+		line := strings.TrimSuffix(strings.TrimSuffix(record, "\n"), "\r")
+		bound = bound || strings.HasSuffix(line, binding+address)
+		started = started || strings.Contains(line, "core: Xray ") && strings.HasSuffix(line, " started")
+	}
+	return bound && started
+}
+
+func TestNativeMAXTLSStartupRecords(t *testing.T) {
+	address := "127.0.0.1:40981"
+	for _, binding := range []string{"transport/internet/tcp: listening TCP on ", "transport/internet/splithttp: listening TCP for XHTTP on "} {
+		for _, ending := range []string{"\n", "\r\n"} {
+			bound := "2026/10/31 00:00:00 [Info] " + binding + address + ending
+			started := "2026/10/31 00:00:00 [Warning] core: Xray 26.10 started" + ending
+			if !nativeMAXTLSStartupRecords(bound+started, address, binding) {
+				t.Fatalf("exact owned Xray records were rejected: binding=%q ending=%q", binding, ending)
+			}
+			for name, diagnostic := range map[string]string{
+				"missing-bind":     started,
+				"missing-start":    bound,
+				"wrong-address":    strings.ReplaceAll(bound, address, "127.0.0.2:40981") + started,
+				"extended-address": strings.ReplaceAll(bound, address, address+"0") + started,
+				"bind-suffix":      strings.ReplaceAll(bound, address, address+" trailing") + started,
+				"truncated-bind":   started + strings.TrimSuffix(bound, ending),
+				"truncated-start":  bound + strings.TrimSuffix(started, ending),
+				"unrelated-start":  bound + "core: Xray 26.10" + ending + "other component started" + ending,
+			} {
+				if nativeMAXTLSStartupRecords(diagnostic, address, binding) {
+					t.Errorf("unowned or incomplete Xray record was accepted: %s ending=%q", name, ending)
+				}
+			}
+			if nativeMAXTLSStartupRecords(bound+started, "", binding) {
+				t.Fatal("empty listener identity was accepted")
+			}
+			if nativeMAXTLSStartupRecords(bound+started, address, "") {
+				t.Fatal("empty listener kind was accepted")
+			}
+		}
+	}
+}
+
 func (p *nativeMAXTLSXrayProcess) ready(address, binding string) (bool, error) {
 	deadline := time.NewTimer(5 * time.Second)
 	defer deadline.Stop()
@@ -351,8 +403,7 @@ func (p *nativeMAXTLSXrayProcess) ready(address, binding string) (bool, error) {
 		default:
 		}
 		diagnostic := p.diagnostics()
-		bound := binding != "" && strings.Contains(diagnostic, binding+address+"\n")
-		if bound && strings.Contains(diagnostic, "core: Xray ") && strings.Contains(diagnostic, " started\n") {
+		if nativeMAXTLSStartupRecords(diagnostic, address, binding) {
 			connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
 			if err == nil {
 				_ = connection.Close()
