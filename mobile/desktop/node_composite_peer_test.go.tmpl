@@ -355,8 +355,22 @@ func desktopNodeCompositeCredential(t *testing.T, peer *desktopNodeLayerReferenc
 		if err := f.exchange("udp"); err == nil {
 			t.Fatal("wrong shared AES credential admitted the other composite branch")
 		}
-	} else if err := f.exchange(healthy); err != nil {
-		t.Fatal("composite credential fault changed the separately authenticated healthy branch", fault, err)
+	} else {
+		var err error
+		if healthy == "tcp" && peer.request.Mode != "ss-v2ray" {
+			// This is the first authenticated Xray transfer for this fresh
+			// composite owner. The pinned REALITY peer may still be completing
+			// its five-second camouflage detection; use the same bounded first
+			// transfer as the single-Xray and simultaneous composite positives.
+			started := time.Now()
+			err = f.exchangeWithin(10*time.Second, 8*time.Second, healthy)
+			t.Logf("first healthy composite Xray transfer elapsed %s; fault %s; socket_current %t; application_current %t", time.Since(started), fault, f.network.SocketCurrent(), f.network.Current())
+		} else {
+			err = f.exchange(healthy)
+		}
+		if err != nil {
+			t.Fatal("composite credential fault changed the separately authenticated healthy branch", fault, err)
+		}
 	}
 	observed := peer.observe(t, "stats")
 	if f.network.Current() {
