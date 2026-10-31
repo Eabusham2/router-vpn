@@ -81,9 +81,16 @@ func (p *routerVPNSSPacketPeer) NewPacketConnection(_ context.Context, connectio
 
 func routerVPNStartSSPacketPeer(t *testing.T) (*routerVPNSSPacketPeer, string) {
 	t.Helper()
-	listener, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	listener, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Darwin's default UDP send reserve is 9216 bytes. This owned loopback
+	// reference must return the complete 32 KiB ciphertext case below; reserve
+	// one bounded datagram locally without changing any host/path MTU policy.
+	// https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/netinet/udp_usrreq.c
+	if err := listener.SetWriteBuffer(65535); err != nil {
+		t.Fatal("packet reference UDP send reserve", errors.Join(err, listener.Close()))
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &routerVPNSSPacketPeer{listener: listener, ctx: ctx, cancel: cancel, connections: make(map[N.PacketConn]bool), processed: make(chan struct{}, 16)}
@@ -139,7 +146,18 @@ func (d routerVPNSSPacketLower) DialContext(ctx context.Context, network string,
 	if network != "udp" || address.String() != d.address {
 		return nil, errors.New("packet fixture rejected another physical tuple")
 	}
-	return (&net.Dialer{}).DialContext(ctx, "udp4", d.address)
+	connection, err := (&net.Dialer{}).DialContext(ctx, "udp4", d.address)
+	if err != nil {
+		return nil, err
+	}
+	udp, ok := connection.(*net.UDPConn)
+	if !ok {
+		return nil, errors.Join(errors.New("packet fixture did not capture native UDP"), connection.Close())
+	}
+	if err := udp.SetWriteBuffer(65535); err != nil {
+		return nil, errors.Join(err, connection.Close())
+	}
+	return connection, nil
 }
 func (routerVPNSSPacketLower) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
 	return nil, errors.New("packet fixture denies an unowned listener")
