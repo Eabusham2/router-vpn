@@ -4,6 +4,7 @@ from pathlib import Path
 import argparse
 import gzip
 import importlib.util
+import inspect
 import io
 import json
 import os
@@ -137,6 +138,66 @@ def checkout_bytes_test():
         check(not any('maintenance' in command or '--detach' in command for command in children),
               'Checkout fixture launched detached or automatic Git maintenance')
     print(f'Actual Git autocrlf=true checkout preserved all {len(inputs)} native inputs; omitted attributes exposed CRLF drift', flush=True)
+
+
+def dependency_checkout_bytes_test():
+    """Exercise the shipping upstream checkout under inherited Windows EOLs."""
+    with tempfile.TemporaryDirectory(prefix='native-dependency-checkout-') as temporary:
+        root = Path(temporary).resolve()
+        source = root/'upstream'
+        source.mkdir()
+
+        def git(*args):
+            return subprocess.check_output(['git', '-c', 'user.name=Native checkout fixture',
+                '-c', 'user.email=native-fixture@example.invalid', '-c', 'commit.gpgsign=false',
+                '-c', 'maintenance.auto=false', '-c', 'gc.auto=0', *map(str, args)],
+                stderr=subprocess.PIPE, timeout=60)
+
+        git('init', '-q', source)
+        git('-C', source, 'config', 'core.autocrlf', 'false')
+        inputs = {
+            '.gitattributes': b'*.go text\n',
+            'common/uot/router.go': b'package uot\n\nfunc captured() {}\n',
+            'protocol/naive/outbound.go': b'package naive\n',
+            'transport/sip003/plugin.go': b'package sip003\n',
+            'reference.bin': b'\x00\r\n\x01\r\n',
+        }
+        for name, raw in inputs.items():
+            path = source/name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw)
+        git('-C', source, 'add', '--', '.')
+        git('-C', source, 'commit', '-qm', 'Pinned upstream checkout fixture')
+        revision = git('-C', source, 'rev-parse', 'HEAD').decode().strip()
+        expected = {name: git('-C', source, 'show', revision+':'+name) for name in inputs}
+        configuration = root/'inherited.gitconfig'
+        configuration.write_text('[core]\n\tautocrlf = true\n\teol = crlf\n'
+                                 '[maintenance]\n\tauto = false\n[gc]\n\tauto = 0\n')
+        with patch.dict(os.environ, {'GIT_CONFIG_GLOBAL': str(configuration), 'GIT_CONFIG_NOSYSTEM': '1'}):
+            target = root/'captured'
+            BUILD.checkout(target, source.as_uri(), revision)
+            BUILD.pristine(target, revision)
+            for name, raw in expected.items():
+                check((target/name).read_bytes() == raw,
+                      'Native dependency checkout changed pinned blob bytes: '+name)
+            # Remove only the two production EOL settings. The original
+            # checkout remains Git-clean while its real files drift to CRLF.
+            code = inspect.getsource(BUILD.checkout)
+            for setting, value in (('core.autocrlf', 'false'), ('core.eol', 'lf')):
+                command = "    run(['git', '-C', path, 'config', '"+setting+"', '"+value+"'])\n"
+                check(code.count(command) == 1, 'Native dependency checkout lost its exact EOL control')
+                code = code.replace(command, '', 1)
+            scope = {'run': BUILD.run}
+            exec(compile(code, str(BUILD.__file__), 'exec'), scope)
+            broken = root/'without-eol-controls'
+            scope['checkout'](broken, source.as_uri(), revision)
+            BUILD.pristine(broken, revision)
+            check((broken/'common/uot/router.go').read_bytes() != expected['common/uot/router.go']
+                  and b'\r\n' in (broken/'common/uot/router.go').read_bytes(),
+                  'Missing EOL controls did not expose actual pinned-source drift')
+            check((broken/'reference.bin').read_bytes() == expected['reference.bin'],
+                  'Native checkout diagnostic changed the binary control')
+    print('Actual dependency checkout preserved pinned blobs under inherited Windows EOLs; missing controls exposed Git-clean CRLF drift', flush=True)
 
 
 def archive_boundaries(root):
@@ -473,6 +534,7 @@ def boundary_tests():
         windows_dependency_boundaries(root)
         pt_notice_boundaries(root)
     checkout_bytes_test()
+    dependency_checkout_bytes_test()
     print(f'{checks} native delivery/signing boundary checks passed', flush=True)
 
 

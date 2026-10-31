@@ -402,6 +402,10 @@ def reuse(directory, target, policy=None, env=None):
 
 def checkout(path, repository, revision):
     run(['git', 'init', path])
+    # Keep pinned upstream blobs identical on Windows too. The application's
+    # attributes do not govern these separate disposable dependency repos.
+    run(['git', '-C', path, 'config', 'core.autocrlf', 'false'])
+    run(['git', '-C', path, 'config', 'core.eol', 'lf'])
     run(['git', '-C', path, 'remote', 'add', 'origin', repository])
     run(['git', '-C', path, 'fetch', '--depth=1', 'origin', revision])
     run(['git', '-C', path, 'checkout', '--detach', 'FETCH_HEAD'])
