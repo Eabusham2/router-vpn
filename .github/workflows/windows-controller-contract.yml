@@ -128,6 +128,14 @@ jobs:
         run: |
           python deploy/diagnose_windows_ui_startup.py
           if ($LASTEXITCODE -ne 0) { throw 'Instrumented first UI launch failed; original stage timings are above' }
+      - name: Verify system command binding after the first-launch observation
+        if: ${{ success() || failure() }}
+        shell: pwsh
+        run: |
+          foreach ($shell in @('powershell.exe', 'pwsh')) {
+            python deploy/test_windows_ui_startup_diagnostic.py --powershell $shell
+            if ($LASTEXITCODE -ne 0) { throw "First system command binding failed in $shell" }
+          }
     # This fresh job locates a cold-start delay. Its instrumented result cannot
     # replace acceptance in the independent exact-source Session job below.
   node-process:

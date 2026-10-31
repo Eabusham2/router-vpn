@@ -41,7 +41,7 @@ class FirstLaunchDiagnostic(unittest.TestCase):
         self.assertTrue({"app-script-entered", "tray-script-entered", "module-entered", "initialize-entered",
                          "framework-http-begin", "framework-http-complete", "transport-compile-begin",
                          "transport-compile-complete", "pipe-connect-begin", "pipe-connect-complete"}.issubset(stages))
-        for label in ("app-first-status", "app-wpf-assemblies", "app-helpers", "app-product-input",
+        for label in ("app-first-status", "app-first-path", "app-wpf-assemblies", "app-helpers", "app-product-input",
                       "app-unified-transform", "app-telemetry-transform", "app-speedlab-transform",
                       "app-tor-transform", "app-help-binding", "app-product-script",
                       "app-help-regressions", "app-product-selftest"):
@@ -172,6 +172,65 @@ try{
     print(completed.stdout.strip())
 
 
+def execute_management_binding_probe(powershell):
+    """Run the exact first App/Tray path commands with qualified-only loading."""
+    probe = r"""
+param([string]$Source,[string]$Role)
+$ErrorActionPreference='Stop'
+Set-StrictMode -Version 2
+if(Get-Module -Name Microsoft.PowerShell.Management){throw 'path binding probe was already initialized'}
+if($PSVersionTable.PSEdition-eq'Desktop'){
+    $env:PSModulePath=[IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::System),'WindowsPowerShell','v1.0','Modules')
+}else{$env:PSModulePath=[IO.Path]::Combine($PSHOME,'Modules')}
+$Tokens=$null;$Errors=$null
+$Ast=[System.Management.Automation.Language.Parser]::ParseInput([IO.File]::ReadAllText($Source),[ref]$Tokens,[ref]$Errors)
+if($Errors.Count-ne0){throw 'actual app path source did not parse'}
+$Name=if($Role-ceq'App'){'Join-Path'}else{'Split-Path'}
+$Calls=@($Ast.FindAll({param($Node)$Node-is[System.Management.Automation.Language.CommandAst]-and$Node.GetCommandName()-cmatch('(^|\\)'+$Name+'$')},$true))
+if($Calls.Count-lt1){throw 'actual first path command is missing'}
+$Fragment=[IO.Path]::Combine($PSScriptRoot,'actual-first-command.ps1')
+[IO.File]::WriteAllText($Fragment,$Calls[0].Extent.Text,[Text.UTF8Encoding]::new($false))
+$PSModuleAutoLoadingPreference='ModuleQualified'
+try{$Value=& $Fragment}catch [System.Management.Automation.CommandNotFoundException]{throw 'first path command requires unqualified module discovery'}
+$Expected=if($Role-ceq'App'){[IO.Path]::Combine($PSScriptRoot,'RouterVPN-Windows-MTU.ps1')}else{[IO.Directory]::GetParent($PSScriptRoot).FullName}
+if($Value-cne$Expected){throw 'actual first path command changed its path result'}
+$Qualified=$ExecutionContext.InvokeCommand.GetCommand(('Microsoft.PowerShell.Management\'+$Name),[System.Management.Automation.CommandTypes]::Cmdlet)
+$Ordinary=$ExecutionContext.InvokeCommand.GetCommand($Name,[System.Management.Automation.CommandTypes]::Cmdlet)
+if($null-eq$Qualified-or$null-eq$Ordinary-or$Qualified.ModuleName-cne'Microsoft.PowerShell.Management'-or
+   -not[Object]::ReferenceEquals($Qualified.ImplementingType,$Ordinary.ImplementingType)){throw 'first path command resolved a different system cmdlet'}
+[Console]::WriteLine('PASS actual '+$Role+' binds the same path cmdlet without unqualified discovery')
+"""
+    with tempfile.TemporaryDirectory(prefix='routervpn-path-binding-') as temporary:
+        root = Path(temporary) / 'App and Tray 路由器'
+        root.mkdir()
+        script = root / 'probe.ps1'
+        script.write_text(probe, encoding='utf-8-sig')
+        environment = dict(os.environ)
+        if sys.platform != 'win32':
+            environment.update(XDG_CACHE_HOME=str(root / 'cache'), XDG_CONFIG_HOME=str(root / 'config'),
+                               XDG_DATA_HOME=str(root / 'data'))
+        for role, command in (('App', 'Join-Path'), ('Tray', 'Split-Path')):
+            source = (ROOT / ('client/RouterVPN-Windows-' + role + '.ps1')).read_bytes()
+            qualified = ('Microsoft.PowerShell.Management\\' + command).encode()
+            if source.count(qualified) != 1:
+                raise AssertionError('Actual first path command lost its exact module binding')
+            for name, body in (('actual', source), ('unqualified', source.replace(qualified, command.encode(), 1))):
+                candidate = root / (role + '-' + name + '.ps1')
+                candidate.write_bytes(body)
+                completed = subprocess.run([str(powershell), '-NoProfile', '-NonInteractive', '-File', str(script), str(candidate), role],
+                                           capture_output=True, text=True, env=environment, timeout=45)
+                output = completed.stdout + completed.stderr
+                if name == 'actual':
+                    witness = 'PASS actual ' + role + ' binds the same path cmdlet without unqualified discovery'
+                    if completed.returncode or witness not in output:
+                        raise AssertionError('Actual first path binding failed:\n' + output[-8192:])
+                    print(completed.stdout.strip())
+                elif completed.returncode == 0 or 'first path command requires unqualified module discovery' not in output:
+                    raise AssertionError('Unqualified first path missed its exact rejection:\n' + output[-8192:])
+                else:
+                    print('Rejected actual ' + role + ' dependence on unqualified path discovery')
+
+
 def execute_utility_binding_probe(powershell):
     """Execute the actual initializer command without unqualified discovery."""
     probe = r"""
@@ -233,4 +292,5 @@ if __name__ == "__main__":
     if arguments.powershell is not None:
         execute_hook_probe(arguments.powershell)
         execute_utility_binding_probe(arguments.powershell)
+        execute_management_binding_probe(arguments.powershell)
     unittest.main(argv=[__file__, *test_arguments])

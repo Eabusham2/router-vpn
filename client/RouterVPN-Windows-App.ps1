@@ -36,7 +36,9 @@ Add-Type -AssemblyName WindowsBase
 # code page. Read helper source explicitly as UTF-8 and dot-source ScriptBlocks so
 # the unified shell may safely contain normal Unicode display glyphs without the
 # parser turning an arrow into quote-like mojibake.
-$MTUHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-MTU.ps1'
+# Bind the first filesystem cmdlet to its system module, as the transport does
+# for its first Add-Type. Cold unqualified discovery must not delay the app.
+$MTUHelpers=Microsoft.PowerShell.Management\Join-Path $PSScriptRoot 'RouterVPN-Windows-MTU.ps1'
 if(-not(Test-Path -LiteralPath $MTUHelpers)){throw "Router VPN MTU helpers are missing: $MTUHelpers"}
 $MTUSource=Get-Content -LiteralPath $MTUHelpers -Raw -Encoding UTF8
 . ([ScriptBlock]::Create($MTUSource))

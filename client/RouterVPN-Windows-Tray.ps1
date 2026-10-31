@@ -36,7 +36,7 @@ public static class RouterVPNWindowNative {
 }
 '@
 
-$Root = Split-Path -Parent $PSScriptRoot
+$Root = Microsoft.PowerShell.Management\Split-Path -Parent $PSScriptRoot
 $IconPath = Join-Path $Root 'RouterVPN.ico'
 $PrivateState = Join-Path $PSScriptRoot 'Private-RouterVPN-State.ps1'
 if (-not (Test-Path -LiteralPath $PrivateState -PathType Leaf)) { throw 'Router VPN private-state helper is missing.' }

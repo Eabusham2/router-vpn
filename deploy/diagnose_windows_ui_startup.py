@@ -117,9 +117,10 @@ def app_post_channel_stages(source):
         checked + "\n    " + marker("app-product-selftest-complete"))
     # Each actual helper has its own parser/transform work; preserve its exact
     # loaded text and dot-source operation while measuring the complete group.
-    start = "$MTUHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-MTU.ps1'"
+    start = "$MTUHelpers=Microsoft.PowerShell.Management\\Join-Path $PSScriptRoot 'RouterVPN-Windows-MTU.ps1'"
     end = ". ([ScriptBlock]::Create($TorBridgeSource))"
-    source = NATIVE.replace_once(source, start, marker("app-helpers-begin") + "\n" + start)
+    source = NATIVE.replace_once(source, start, marker("app-helpers-begin") + "\n" +
+        marker("app-first-path-begin") + "\n" + start + "\n" + marker("app-first-path-complete"))
     return NATIVE.replace_once(source, end, end + "\n" + marker("app-helpers-complete"))
 
 
