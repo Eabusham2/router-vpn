@@ -39,6 +39,46 @@ def load(source=None):
 M = load()
 
 
+def native_inventory_with_failure_diagnostic(installer):
+    """Keep the real inventory failure; subsequent BSD data is diagnostic only."""
+    original = installer.native_executable
+
+    def executable(library, pid):
+        try:
+            return original(library, pid)
+        except Exception:
+            # This later read may observe a reused PID. It grants no identity,
+            # disappearance or installation authority, including on success.
+            try:
+                info = installer.NativeProcessBSDInfo()
+                observed = time.time_ns()
+                ctypes.set_errno(0)
+                size = library.proc_pidinfo(pid, 3, 1, ctypes.byref(info), ctypes.sizeof(info))
+                error = ctypes.get_errno()
+                record = {'requested_pid': pid, 'observed_unix_ns': observed,
+                          'identity_accepted': False, 'pid_reuse_possible': True,
+                          'bsd_result': size, 'bsd_errno': error,
+                          'expected_bsd_bytes': ctypes.sizeof(info)}
+                if size == ctypes.sizeof(info):
+                    def name(value, limit):
+                        allowed = b'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-'
+                        return ''.join(chr(byte) if byte in allowed else '?'
+                                       for byte in bytes(value)[:limit].split(b'\0', 1)[0])
+                    record.update(observed_start=[info.pbi_pid, info.pbi_start_tvsec, info.pbi_start_tvusec],
+                                  ppid=info.pbi_ppid, status=info.pbi_status, uid=info.pbi_uid,
+                                  comm=name(info.pbi_comm, 16), name=name(info.pbi_name, 32))
+                print('Native inventory refusal diagnostic (not accepted identity): ' +
+                      json.dumps(record, sort_keys=True), flush=True)
+            except Exception:
+                # Even a failed diagnostic write must not replace the original
+                # shipping error or convert its failed gate to success.
+                pass
+            raise
+
+    with mock.patch.object(installer, 'native_executable', executable):
+        return installer.running_executables()
+
+
 class NativeCall:
     def __init__(self, implementation):
         self.implementation = implementation
@@ -255,6 +295,46 @@ class MacProcessInventory(unittest.TestCase):
              self.assertRaisesRegex(RuntimeError, f'pid=101, errno={errno.EACCES}, result=0, status=2'):
             self.read(library)
         pause.assert_not_called()
+
+    def test_failure_diagnostic_keeps_original_exception_even_if_capture_or_output_fails(self):
+        original = RuntimeError('original native inventory refusal')
+        for diagnostic_failure in (None, 'capture', 'output'):
+            with self.subTest(diagnostic_failure=diagnostic_failure):
+                library = ProcessLibrary()
+
+                def capture(pid, flavor, argument, buffer, size):
+                    self.assertEqual((101, 3, 1, 136, 0),
+                                     (pid, flavor, argument, size, ctypes.get_errno()))
+                    if diagnostic_failure == 'capture':
+                        raise OSError('diagnostic capture failed')
+                    info = ctypes.cast(buffer, ctypes.POINTER(self.installer.NativeProcessBSDInfo)).contents
+                    # A different start tuple is deliberately only a later
+                    # observation; no diagnostic can adopt the replacement.
+                    info.pbi_pid, info.pbi_start_tvsec, info.pbi_start_tvusec = 101, 1700000001, 124
+                    info.pbi_status, info.pbi_ppid, info.pbi_uid = 2, 1, 501
+                    info.pbi_comm, info.pbi_name = b'fixture\n::bad', b'fixture/name\\with\tcontrol'
+                    return size
+
+                library.proc_pidinfo = NativeCall(capture)
+                output = mock.Mock(side_effect=OSError('diagnostic output failed')
+                                   if diagnostic_failure == 'output' else None)
+                with mock.patch.object(self.installer.sys, 'platform', 'darwin'), \
+                     mock.patch.object(self.installer.ctypes, 'CDLL', return_value=library), \
+                     mock.patch.object(self.installer, 'native_executable', side_effect=original) as target, \
+                     mock.patch('builtins.print', output), \
+                     self.assertRaises(RuntimeError) as rejected:
+                    native_inventory_with_failure_diagnostic(self.installer)
+                self.assertIs(original, rejected.exception)
+                target.assert_called_once_with(library, 101)
+                if diagnostic_failure != 'capture':
+                    output.assert_called_once()
+                    record = json.loads(output.call_args.args[0].split(': ', 1)[1])
+                    self.assertEqual([101, 1700000001, 124], record['observed_start'])
+                    self.assertFalse(record['identity_accepted'])
+                    self.assertTrue(record['pid_reuse_possible'])
+                    self.assertGreater(record['observed_unix_ns'], 0)
+                    self.assertEqual('fixture???bad', record['comm'])
+                    self.assertEqual('fixture?name?with?control', record['name'])
 
 
 class QuarantineLibrary:
@@ -827,7 +907,7 @@ def main():
         if not result.wasSuccessful(): raise SystemExit(1)
         result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(MacNativeProcesses))
         if not result.wasSuccessful(): raise SystemExit(1)
-        actual = {str(Path(path).resolve()) for path in M.running_executables()}
+        actual = {str(Path(path).resolve()) for path in native_inventory_with_failure_diagnostic(M)}
         if str(Path(sys.executable).resolve()) not in actual:
             raise AssertionError('Native process inventory lost the actual executing interpreter')
         print('Actual macOS libproc inventory captured the executing interpreter.')
