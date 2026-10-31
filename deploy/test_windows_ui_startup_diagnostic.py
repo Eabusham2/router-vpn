@@ -41,6 +41,33 @@ class FirstLaunchDiagnostic(unittest.TestCase):
         self.assertTrue({"app-script-entered", "tray-script-entered", "module-entered", "initialize-entered",
                          "framework-http-begin", "framework-http-complete", "transport-compile-begin",
                          "transport-compile-complete", "pipe-connect-begin", "pipe-connect-complete"}.issubset(stages))
+        for label in ("app-first-status", "app-wpf-assemblies", "app-helpers", "app-product-input",
+                      "app-unified-transform", "app-telemetry-transform", "app-speedlab-transform",
+                      "app-tor-transform", "app-help-binding", "app-product-script",
+                      "app-help-regressions", "app-product-selftest"):
+            self.assertIn(label + "-begin", stages)
+            self.assertIn(label + "-complete", stages)
+
+    def test_changed_post_channel_stage_cannot_trace_a_different_selftest(self):
+        source = (ROOT / "client/RouterVPN-Windows-App.ps1").read_bytes().decode("utf-8")
+        for boundary in ("$ProductSource=Add-RouterVPNUnifiedWindowsShell -ProductSource $ProductSource",
+                         "        & $HelpBindingTest -Root (Split-Path $PSScriptRoot -Parent)\n        if(-not$?){throw 'Windows composed Help binding regressions failed.'}",
+                         "        & $ProductScript -BaseUrl $BaseUrl -SelfTest"):
+            for changed in (source.replace(boundary, "# removed actual operation", 1),
+                            source + "\n" + boundary):
+                with self.subTest(boundary=boundary), self.assertRaisesRegex(ValueError, "exact production boundary"):
+                    DIAGNOSTIC.app_post_channel_stages(changed)
+
+    def test_post_channel_markers_preserve_original_status_guards(self):
+        source = DIAGNOSTIC.instrumented_scripts()["client/RouterVPN-Windows-App.ps1"].decode("utf-8")
+        for original in (
+            "        & $HelpBindingTest -Root (Split-Path $PSScriptRoot -Parent)\n"
+            "        if(-not$?){throw 'Windows composed Help binding regressions failed.'}",
+            "        & $ProductScript -BaseUrl $BaseUrl -SelfTest\n"
+            "    }else{Show-RouterVPNProductOnboarding;& $ProductScript -BaseUrl $BaseUrl}\n"
+            "    if(-not$?){throw 'Router VPN native Windows product shell failed.'}",
+        ):
+            self.assertIn(original, source)
 
     def test_lookup_observers_only_observe_the_fixed_command(self):
         before, after = DIAGNOSTIC.lookup_observers()

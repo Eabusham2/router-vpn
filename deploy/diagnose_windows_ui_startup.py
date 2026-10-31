@@ -81,6 +81,48 @@ def lookup_observers():
     return before, after
 
 
+def timed_stage(source, boundary, label):
+    """Bracket one original statement/block without replacing its behavior."""
+    indent = boundary[:len(boundary) - len(boundary.lstrip())]
+    return NATIVE.replace_once(source, boundary,
+        indent + marker(label + "-begin") + "\n" + boundary + "\n" +
+        indent + marker(label + "-complete"))
+
+
+def app_post_channel_stages(source):
+    # The 09912d6f shipping Session authenticated both channels, then its App
+    # self-test exhausted the original 100-second operation. Locate that later
+    # first-run work; a faster diagnostic must never replace the shipping verdict.
+    stages = (
+        ("    $CapturedStatus=Invoke-RouterVPNControllerRequest -Uri ($BaseUrl+'/api/status') -Method Get -TimeoutSec 10", "app-first-status"),
+        ("Add-Type -AssemblyName PresentationFramework\nAdd-Type -AssemblyName PresentationCore\nAdd-Type -AssemblyName WindowsBase", "app-wpf-assemblies"),
+        ("$ProductSource=Get-Content -LiteralPath $Product -Raw -Encoding UTF8\n$ProductSource=Convert-RouterVPNWindowsProductSessionMutation -Source $ProductSource", "app-product-input"),
+        ("$ProductSource=Add-RouterVPNUnifiedWindowsShell -ProductSource $ProductSource", "app-unified-transform"),
+        ("$ProductSource=Add-RouterVPNTelemetryWindowsShell -ProductSource $ProductSource", "app-telemetry-transform"),
+        ("$ProductSource=Add-RouterVPNSpeedLabWindowsShell -ProductSource $ProductSource", "app-speedlab-transform"),
+        ("$ProductSource=Add-RouterVPNTorBridgeWindowsShell -ProductSource $ProductSource", "app-tor-transform"),
+        ("$ProductSource=Set-RouterVPNProductHelpBinding -Source $ProductSource", "app-help-binding"),
+        ("$ProductScript=[ScriptBlock]::Create($ProductSource)", "app-product-script"),
+        ("        & $HelpBindingTest -Root (Split-Path $PSScriptRoot -Parent)\n        if(-not$?){throw 'Windows composed Help binding regressions failed.'}", "app-help-regressions"),
+    )
+    for boundary, label in stages:
+        source = timed_stage(source, boundary, label)
+    # Console output changes PowerShell's $?. Never insert it between an
+    # original invocation and its status guard, including across the if/else.
+    product = "        & $ProductScript -BaseUrl $BaseUrl -SelfTest"
+    checked = "    if(-not$?){throw 'Router VPN native Windows product shell failed.'}"
+    source = NATIVE.replace_once(source, product,
+        "        " + marker("app-product-selftest-begin") + "\n" + product)
+    source = NATIVE.replace_once(source, checked,
+        checked + "\n    " + marker("app-product-selftest-complete"))
+    # Each actual helper has its own parser/transform work; preserve its exact
+    # loaded text and dot-source operation while measuring the complete group.
+    start = "$MTUHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-MTU.ps1'"
+    end = ". ([ScriptBlock]::Create($TorBridgeSource))"
+    source = NATIVE.replace_once(source, start, marker("app-helpers-begin") + "\n" + start)
+    return NATIVE.replace_once(source, end, end + "\n" + marker("app-helpers-complete"))
+
+
 def instrumented_scripts():
     result = {}
     for role in ("App", "Tray"):
@@ -91,6 +133,8 @@ def instrumented_scripts():
         boundary = "    Import-Module ([IO.Path]::Combine($PSScriptRoot,'RouterVPN-Windows-ControllerTransport.psm1')) -Global -ErrorAction Stop"
         source = NATIVE.replace_once(source, boundary,
             "    " + marker(role.lower() + "-module-begin") + "\n" + boundary + "\n    " + marker(role.lower() + "-module-complete"))
+        if role == "App":
+            source = app_post_channel_stages(source)
         result[path] = source.encode("utf-8")
     path = "client/RouterVPN-Windows-ControllerTransport.psm1"
     source = (ROOT / path).read_bytes().decode("utf-8")
