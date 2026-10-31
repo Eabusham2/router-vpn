@@ -5,7 +5,6 @@ package main
 import (
 	"bytes"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +12,7 @@ import (
 	"testing"
 )
 
-func retainWindowsPrivateStoreFile(t *testing.T, path string) (*os.File, os.FileInfo) {
+func captureWindowsPrivateStoreIdentity(t *testing.T, path string) os.FileInfo {
 	t.Helper()
 	name, err := windowsPrivateStoreName(path)
 	if err != nil {
@@ -21,7 +20,9 @@ func retainWindowsPrivateStoreFile(t *testing.T, path string) (*os.File, os.File
 	}
 	// Ordinary os.Stat defers its Windows file-ID lookup until os.SameFile,
 	// which would reopen the replacement pathname. Capture the ID from a
-	// retained native file instead, sharing DELETE so replacement stays real.
+	// native file instead. Close it before the production MoveFileEx call:
+	// ordinary Windows rename cannot replace a target with open handles.
+	// A separate fixture-owned hard link preserves the old object and bytes.
 	handle, err := syscall.CreateFile(name, syscall.GENERIC_READ,
 		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE,
 		nil, syscall.OPEN_EXISTING, syscall.FILE_ATTRIBUTE_NORMAL, 0)
@@ -42,7 +43,10 @@ func retainWindowsPrivateStoreFile(t *testing.T, path string) (*os.File, os.File
 	if err != nil || !info.Mode().IsRegular() {
 		t.Fatal("retained Windows private file has no regular native identity", err)
 	}
-	return file, info
+	if err := file.Close(); err != nil {
+		t.Fatal("captured Windows private file could not release its read handle", err)
+	}
+	return info
 }
 
 func requireWindowsPrivateStoreBytes(t *testing.T, path string, want []byte) {
@@ -72,17 +76,28 @@ func TestWindowsPrivateStoreWriteThroughReplace(t *testing.T) {
 				t.Fatal("first actual Windows private publication", err)
 			}
 			requireWindowsPrivateStoreBytes(t, path, first)
-			retained, before := retainWindowsPrivateStoreFile(t, path)
+			// Keep the original file's identity alive without holding a handle
+			// across the production write-through replacement. The hard link is
+			// exclusively inside this new fixture's private directory; an
+			// in-place overwrite still changes both aliases and fails below.
+			original := filepath.Join(root, "captured-original.json")
+			if err := os.Link(path, original); err != nil {
+				t.Fatal("capture original private file in its owned fixture", err)
+			}
+			before := captureWindowsPrivateStoreIdentity(t, path)
+			if !os.SameFile(before, captureWindowsPrivateStoreIdentity(t, original)) {
+				t.Fatal("captured original private file does not retain the same native identity")
+			}
 			if err := atomicWritePrivate(path, next); err != nil {
 				t.Fatal("replacement actual Windows private publication", err)
 			}
 			requireWindowsPrivateStoreBytes(t, path, next)
-			_, after := retainWindowsPrivateStoreFile(t, path)
+			after := captureWindowsPrivateStoreIdentity(t, path)
 			if os.SameFile(before, after) {
 				t.Fatal("private replacement modified the old file instead of promoting its new private file")
 			}
-			preserved, err := io.ReadAll(retained)
-			if err != nil || !bytes.Equal(preserved, first) {
+			preserved, err := os.ReadFile(original)
+			if err != nil || !bytes.Equal(preserved, first) || !os.SameFile(before, captureWindowsPrivateStoreIdentity(t, original)) {
 				t.Fatal("private replacement changed the retained original file bytes", err)
 			}
 		})
