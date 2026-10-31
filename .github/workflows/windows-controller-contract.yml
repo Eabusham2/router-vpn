@@ -13,14 +13,9 @@ on:
       - 'internal/windowsuibridge/**'
       - 'internal/windowsapp/**'
       - 'internal/mobiletor/desktop_socket_windows_probe*'
-      - 'cmd/client/controller_*'
-      - 'cmd/client/desktop_node_process*'
-      - 'cmd/client/desktop_node_journal*'
-      - 'cmd/client/desktop_node_owned*'
-      - 'cmd/client/desktop_node_protection*'
-      - 'cmd/client/bundled_*.go'
-      - 'cmd/client/private_runtime_permissions_windows.go'
-      - 'cmd/client/main.go'
+      # These gates compile the complete shipping client, including recovery,
+      # private publication, health proof and captured connection restoration.
+      - 'cmd/client/**'
       - 'cmd/windows-app-launcher/**'
       - 'cmd/portable-launcher/**'
       - 'cmd/app-update/**'
@@ -49,6 +44,7 @@ on:
       - 'deploy/test_desktop_windows_identity.py'
       - 'deploy/install-desktop-windows-toolchain.py'
       - 'go.mod'
+      - 'go.sum'
   pull_request:
     paths:
       - '.github/workflows/windows-controller-contract.yml'
@@ -60,14 +56,9 @@ on:
       - 'internal/windowsuibridge/**'
       - 'internal/windowsapp/**'
       - 'internal/mobiletor/desktop_socket_windows_probe*'
-      - 'cmd/client/controller_*'
-      - 'cmd/client/desktop_node_process*'
-      - 'cmd/client/desktop_node_journal*'
-      - 'cmd/client/desktop_node_owned*'
-      - 'cmd/client/desktop_node_protection*'
-      - 'cmd/client/bundled_*.go'
-      - 'cmd/client/private_runtime_permissions_windows.go'
-      - 'cmd/client/main.go'
+      # These gates compile the complete shipping client, including recovery,
+      # private publication, health proof and captured connection restoration.
+      - 'cmd/client/**'
       - 'cmd/windows-app-launcher/**'
       - 'cmd/portable-launcher/**'
       - 'cmd/app-update/**'
@@ -96,6 +87,7 @@ on:
       - 'deploy/test_desktop_windows_identity.py'
       - 'deploy/install-desktop-windows-toolchain.py'
       - 'go.mod'
+      - 'go.sum'
   workflow_dispatch:
 
 permissions:
