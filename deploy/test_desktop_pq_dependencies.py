@@ -3,9 +3,11 @@
 from pathlib import Path
 import contextlib
 import copy
+import ctypes
 import importlib.util
 import io
 import json
+import os
 import shutil
 import struct
 import tempfile
@@ -86,6 +88,52 @@ class OQSDependency(unittest.TestCase):
             for output in outputs:
                 with self.subTest(output=output), self.assertRaises(ValueError):
                     PQ.built_oqs_archive(output, 'windows/amd64', cache)
+
+    def test_cargo_cache_alias_retains_actual_directory_identity(self):
+        for target in ('windows/amd64', 'windows/arm64'):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp).resolve()
+                cache, path, raw, event = self.fixture(root, target)
+                if os.name == 'nt':
+                    short_path = ctypes.WinDLL('kernel32', use_last_error=True).GetShortPathNameW
+                    short_path.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_uint32]
+                    short_path.restype = ctypes.c_uint32
+                    length = short_path(str(cache), None, 0)
+                    self.assertGreater(length, 0, 'Native cache alias read failed')
+                    buffer = ctypes.create_unicode_buffer(length)
+                    written = short_path(str(cache), buffer, length)
+                    self.assertTrue(0 < written < length, 'Native cache alias changed while reading')
+                    alias = Path(buffer.value)
+                else:
+                    # Exercise the same kernel identity boundary on hosts
+                    # without Windows 8.3 names; linked children remain denied.
+                    alias = root/'CARGO~1'
+                    alias.symlink_to(cache, target_is_directory=True)
+                self.assertTrue(alias.samefile(cache))
+                reported = alias/path.parent.parent.relative_to(cache)
+                changed = {**event, 'out_dir': str(reported),
+                           'linked_paths': ['native='+str(reported/name) for name in ('lib', 'lib64')]}
+                self.assertEqual(PQ.built_oqs_archive(build_output(changed), target, cache), raw)
+                # Equal bytes and an identical relative target layout do not
+                # make another build cache the one captured by this invocation.
+                other = root/'other-cache'
+                shutil.copytree(cache, other)
+                foreign = other/path.parent.parent.relative_to(cache)
+                changed.update(out_dir=str(foreign),
+                               linked_paths=['native='+str(foreign/name) for name in ('lib', 'lib64')])
+                with self.assertRaisesRegex(ValueError, 'different target cache'):
+                    PQ.built_oqs_archive(build_output(changed), target, cache)
+
+    def test_cache_alias_does_not_hide_linked_target_components(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            cache, path, _, event = self.fixture(root)
+            owned = path.parents[2]
+            retained = owned.with_name('original-fingerprint')
+            owned.rename(retained)
+            owned.symlink_to(retained, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'linked directory'):
+                PQ.built_oqs_archive(build_output(event), 'windows/amd64', cache)
 
     def test_native_and_cross_host_linkage_must_match_rustcs_exact_flags(self):
         with tempfile.TemporaryDirectory() as tmp:

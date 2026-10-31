@@ -192,10 +192,20 @@ def built_oqs_archive(output, target, cache):
     out = Path(event['out_dir'])
     if not out.is_absolute() or '..' in out.parts:
         raise ValueError('OQS build output is not an absolute target-owned path')
-    relative = out.relative_to(cache)
+    # Cargo may spell the same Windows cache through an 8.3 ancestor while
+    # resolve() above returns its long name. Match that root by filesystem
+    # identity, then validate every target-owned component without resolving
+    # away a linked child directory.
+    relative = Path(*out.parts[-5:])
     if (len(relative.parts) != 5 or relative.parts[:3] != (TARGETS[target], 'release', 'build') or
             not re.fullmatch(r'oqs-sys-[a-f0-9]{16}', relative.parts[3]) or relative.parts[4] != 'out'):
         raise ValueError('OQS build output differs from the requested target cache')
+    try:
+        same_cache = out.parents[4].samefile(cache)
+    except OSError as error:
+        raise ValueError('OQS build output cache identity could not be verified') from error
+    if not same_cache:
+        raise ValueError('OQS build output belongs to a different target cache')
     current = cache
     for part in relative.parts:
         current /= part
