@@ -115,6 +115,31 @@ JOURNAL_ATTEMPT_REQUIRED = (
     'TestWindowsProtectionJournalAttemptRejectsNewerCheckpoint',
     'TestWindowsProtectionJournalAttemptNoWrite',
 )
+JOURNAL_RECOVERY_REQUIRED = (
+    'TestWindowsProtectionJournalRecoveryExactOutcomes',
+    'TestWindowsProtectionJournalRecoveryKeepsPendingOff',
+    'TestWindowsProtectionJournalRecoveryRejectsChangedProvenance',
+    'TestWindowsProtectionJournalRecoveryRequiresBoundIntactHead',
+    'TestWindowsProtectionJournalRecoveryProcessProvenance',
+    'TestWindowsProtectionJournalRecoveryOwnedOrdering',
+    'TestWindowsProtectionJournalRecoveryRejectsMissingProof',
+    'TestWindowsProtectionJournalRecoveryExactWriteRetry',
+    'TestWindowsProtectionJournalRecoveryDurableErrorRetries',
+    'TestWindowsProtectionJournalRecoveryCancellationJoinsWriter',
+    'TestWindowsProtectionJournalRecoveryCapturesImmutableInputs',
+    'TestWindowsProtectionJournalRecoveryLostSnapshotStaysUnresolved',
+)
+JOURNAL_RECOVERY_NATIVE_REQUIRED = (
+    'TestWindowsProtectionJournalRecoveryNativeControllerRetirement',
+    'TestWindowsProtectionJournalRecoveryNativeEngineRetirement',
+    'TestWindowsProtectionJournalRecoveryNativePendingOff',
+    'TestWindowsProtectionJournalRecoveryNativePIDReuseAndToken',
+    'TestWindowsProtectionJournalRecoveryNativeExactAppendRetry',
+    'TestWindowsProtectionJournalRecoveryNativeLegacyAndTornState',
+    'TestWindowsProtectionJournalRecoveryNativeSnapshotAndExit',
+    'TestWindowsProtectionJournalRecoveryNativeCloseJoinsObservation',
+    'TestWindowsProtectionJournalRecoveryNativeStickyClose',
+)
 REQUIRED_SUBCASES = {
     REQUIRED[6]: ("record-write", "record-delete", "record-rename", "root-rename", "parent-rename"),
     REQUIRED[8]: ("session", "source", "config", "network", "generation"),
@@ -125,9 +150,14 @@ REQUIRED_SUBCASES = {
     JOURNAL_STORE_REQUIRED[5]: ("desktop-user", "private-directory", "unknown-file"),
     JOURNAL_STORE_REQUIRED[6]: ("initial", "later"),
     JOURNAL_STORE_REQUIRED[9]: ("unproved-absence", "user-owner", "broad-write", "inherited", "legacy-file"),
+    JOURNAL_STORE_REQUIRED[11]: ("new-candidate", "old-release-to-absence", "old-off-to-absence"),
     JOURNAL_CHANNEL_REQUIRED[6]: ("server", "client"),
     JOURNAL_ADMISSION_NATIVE_REQUIRED[1]: ("before-flush", "after-flush"),
     JOURNAL_ATTEMPT_REQUIRED[0]: ("intent", "settled"),
+    JOURNAL_RECOVERY_NATIVE_REQUIRED[1]: ("settled-live", "pending-successor"),
+    JOURNAL_RECOVERY_NATIVE_REQUIRED[2]: ("retained", "absence-unsaved"),
+    JOURNAL_RECOVERY_NATIVE_REQUIRED[3]: ("reused-creation", "wrong-token"),
+    JOURNAL_RECOVERY_NATIVE_REQUIRED[5]: ("legacy-unbound", "torn-peer", "retired-desktop"),
 }
 
 
@@ -139,7 +169,10 @@ def sources():
                 "journal_channel_windows.go", "journal_channel_windows_test.go",
                 "journal_admission_record.go", "journal_admission_record_test.go",
                 "journal_admission_windows.go", "journal_admission_windows_test.go",
-                "journal_admission_capture_windows_test.go", "journal_attempt_windows_test.go"}
+                "journal_admission_capture_windows_test.go", "journal_attempt_windows_test.go",
+                "journal_recovery_record.go", "journal_recovery_record_test.go",
+                "journal_recovery.go", "journal_recovery_test.go",
+                "journal_recovery_windows.go", "journal_recovery_windows_test.go"}
     owned = sorted(TARGET.glob("*.go"))
     if {path.name for path in owned} != expected:
         raise ValueError("Windows protection owner source/test closure changed")
@@ -173,6 +206,8 @@ def mutants():
     channel = read("journal_channel_windows.go")
     admission = read("journal_admission_record.go")
     native_admission = read("journal_admission_windows.go")
+    recovery_record, recovery = read("journal_recovery_record.go"), read("journal_recovery.go")
+    recovery_native, journal_record = read("journal_recovery_windows.go"), read("journal_record.go")
     if native_admission.count("server.currentOwner()") != 6:
         raise ValueError("Native prepared admission changed its captured ownership checks")
     peer_call = "client.pipe.VerifyPeer(client.parent, client.parentImage)"
@@ -183,6 +218,29 @@ def mutants():
     changed_bytes = once(changed_bytes, "if err != nil || actual != owner.record {",
                          "if err != nil || false && actual != owner.record {")
     return (
+        ("journal_record.go", "mutable-adoption-provenance", JOURNAL_RECOVERY_REQUIRED[2],
+         "ordinary checkpoint rewrote immutable adoption provenance",
+         once(journal_record, "!sameJournalAdoption(previous.Adoption, next.Adoption)", "false && !sameJournalAdoption(previous.Adoption, next.Adoption)")),
+        ("journal_recovery_record.go", "recovery-erases-pending-off", JOURNAL_RECOVERY_REQUIRED[0],
+         "recovery erased the accepted Off before its actual profile-save acknowledgment",
+         once(recovery_record, 'if previous.Phase != "intent" || previous.Intent.Action != "off" {', 'if true {')),
+        ("journal_recovery.go", "recovery-changes-first-outcome", JOURNAL_RECOVERY_REQUIRED[7],
+         "retry replaced the first observed native outcome after uncertain persistence",
+         once(recovery, "if owner.selected >= 0 && owner.selected != matched {", "if false && owner.selected >= 0 && owner.selected != matched {")),
+        ("journal_recovery_record.go", "recovery-forgets-candidate-engine", JOURNAL_RECOVERY_REQUIRED[4],
+         "recovery omitted its previous controller or possible native source",
+         function(recovery_record, "func journalRecoveryProcesses(", "if record.Intent != nil {", "if false && record.Intent != nil {")),
+        ("journal_recovery_windows.go", "recovery-adopts-live-controller", JOURNAL_RECOVERY_NATIVE_REQUIRED[0],
+         "a live old controller reached native observation or journal adoption",
+         once(recovery_native, '\tif process.Alive() == nil {\n\t\treturn errors.New("Windows journal recovery still has a live recorded controller or engine")\n\t}',
+              '\tif process.Alive() == nil {\n\t\twitness.retired = true\n\t\treturn nil\n\t}')),
+        ("journal_recovery_windows.go", "recovery-accepts-wrong-primary-token", JOURNAL_RECOVERY_NATIVE_REQUIRED[6],
+         "exited process with a different recorded primary token was accepted",
+         once(recovery_native, "if err != nil || !identity.Primary || identity.SID != witness.recorded.SID ||\n\t\tidentity.AuthenticationID != witness.recorded.AuthenticationID || identity.SessionID != witness.recorded.SessionID {",
+              "if false && (err != nil || !identity.Primary || identity.SID != witness.recorded.SID ||\n\t\tidentity.AuthenticationID != witness.recorded.AuthenticationID || identity.SessionID != witness.recorded.SessionID) {")),
+        ("journal_recovery_windows.go", "recovery-confuses-reused-pid", JOURNAL_RECOVERY_NATIVE_REQUIRED[3],
+         "recorded prior creation was confused with the live replacement process",
+         once(recovery_native, "if started != witness.recorded.StartTimeUTCTicks {", "if false && started != witness.recorded.StartTimeUTCTicks {")),
         ("journal_commit_record.go", "lost-captured-profile-binding", "TestWindowsProtectionJournalRetainsCapturedProfileRevision",
          "successor lost its actual captured profile binding",
          once(commit, "ProfileID: capture.ProfileID, ProfileRevision: capture.ProfileRevision, Engine: &actualEngine", "ProfileID: capture.ProfileID, Engine: &actualEngine")),
@@ -427,7 +485,7 @@ def execute(go="go"):
                                      "-test.timeout=90s", "-test.v"], cwd=ROOT, env=captured, timeout=105)
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if (status or "--- SKIP:" in output or "DATA RACE" in output or
-                any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *JOURNAL_REQUIRED, *JOURNAL_STORE_REQUIRED, *JOURNAL_COMMIT_REQUIRED, *JOURNAL_CHANNEL_REQUIRED, *JOURNAL_ADMISSION_REQUIRED, *JOURNAL_ADMISSION_NATIVE_REQUIRED, *JOURNAL_CAPTURE_REQUIRED, *JOURNAL_ATTEMPT_REQUIRED))):
+                any("--- PASS: " + test + " (" not in output for test in (*REQUIRED, *JOURNAL_REQUIRED, *JOURNAL_STORE_REQUIRED, *JOURNAL_COMMIT_REQUIRED, *JOURNAL_CHANNEL_REQUIRED, *JOURNAL_ADMISSION_REQUIRED, *JOURNAL_ADMISSION_NATIVE_REQUIRED, *JOURNAL_CAPTURE_REQUIRED, *JOURNAL_ATTEMPT_REQUIRED, *JOURNAL_RECOVERY_REQUIRED, *JOURNAL_RECOVERY_NATIVE_REQUIRED))):
             raise ValueError("Protection owner baseline did not execute every native ownership case")
         for test, names in REQUIRED_SUBCASES.items():
             if any("--- PASS: " + test + "/" + name + " (" not in output for name in names):
@@ -458,8 +516,8 @@ def execute(go="go"):
         if sources() != before:
             raise ValueError("Protection owner shipping sources changed during the actual native gate")
     print("Native protection preparation passed five strict-owner-record groups, nine intent-record groups, two native-file header groups, "
-          f"ten preparation ownership groups, ten durable journal storage groups, three durable profile-binding groups, seven commit-record groups, seven native commit-channel groups, seven admission-record groups, seven native prepared-admission groups, four captured-host admission groups, three attempted-write drain groups and {len(mutants())} production negative controls. "
-          "Firewall mutation, transfer, recovery and ordinary-path activation remain separate requirements.", flush=True)
+          f"ten preparation ownership groups, ten durable journal storage groups, three durable profile-binding groups, seven commit-record groups, seven native commit-channel groups, seven admission-record groups, seven native prepared-admission groups, four captured-host admission groups, three attempted-write drain groups, twelve recovery record/lifecycle groups, nine native retirement/adoption groups and {len(mutants())} production negative controls. "
+          "This suite models only BFE observations; actual scoped BFE proof, application recovery wiring and ordinary-path activation remain separate requirements.", flush=True)
 
 
 if __name__ == "__main__":

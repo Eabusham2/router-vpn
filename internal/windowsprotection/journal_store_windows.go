@@ -37,28 +37,30 @@ var journalSlotNames = [2]string{"slot-0.json", "slot-1.json"}
 // An ordinary Append cannot change the controller creation identity; process
 // restart recovery needs a separate independently proved adoption operation.
 type ProtectionJournal struct {
-	mu             sync.Mutex
-	api            *protectionNativeAPI
-	self, desktop  *windowscontroller.Process
-	identity       windowscontroller.TokenIdentity
-	controller     Controller
-	desktopCapture Controller
-	data           *protectionObject
-	dataPins       []*protectionObject
-	pins           []*protectionObject
-	root           *protectionObject
-	file           *protectionObject
-	lock           *protectionObject
-	slots          [2]*protectionObject
-	header         journalHeader
-	headerBytes    []byte
-	lockBytes      []byte
-	current        JournalSelection
-	currentBytes   []byte
-	pending        *journalPendingAppend
-	initialized    bool
-	closed         bool
-	closeErr       error
+	mu              sync.Mutex
+	api             *protectionNativeAPI
+	self, desktop   *windowscontroller.Process
+	identity        windowscontroller.TokenIdentity
+	controller      Controller
+	desktopCapture  Controller
+	desktopIdentity windowscontroller.TokenIdentity
+	data            *protectionObject
+	dataPins        []*protectionObject
+	pins            []*protectionObject
+	root            *protectionObject
+	file            *protectionObject
+	lock            *protectionObject
+	slots           [2]*protectionObject
+	header          journalHeader
+	headerBytes     []byte
+	lockBytes       []byte
+	current         JournalSelection
+	currentBytes    []byte
+	pending         *journalPendingAppend
+	recovery        *JournalRecovery
+	initialized     bool
+	closed          bool
+	closeErr        error
 }
 
 type journalPendingAppend struct {
@@ -194,6 +196,7 @@ func newProtectionJournal(ctx context.Context, machineDirectory string, desktop 
 	if err != nil || retained != store.desktopCapture || identity != originalIdentity {
 		return store, errors.Join(err, errors.New("journal desktop capture changed its retained creation identity"))
 	}
+	store.desktopIdentity = identity
 	if err := desktop.Alive(); err != nil {
 		return store, err
 	}
@@ -568,6 +571,9 @@ func (store *ProtectionJournal) Snapshot(ctx context.Context) (JournalSelection,
 	if store.pending != nil {
 		return JournalSelection{}, errors.New("journal durable append remains pending its exact flush and readback")
 	}
+	if store.recovery != nil {
+		return JournalSelection{}, errors.New("journal controller recovery has not joined its native observation")
+	}
 	if err := store.verifyObjects(); err != nil {
 		return JournalSelection{}, err
 	}
@@ -593,6 +599,9 @@ func (store *ProtectionJournal) Append(ctx context.Context, previousSHA256 strin
 	if err := store.verifyController(ctx); err != nil {
 		return JournalSelection{}, err
 	}
+	if store.recovery != nil {
+		return JournalSelection{}, errors.New("journal ordinary append cannot replace its captured recovery owner")
+	}
 	next = cloneJournalRecord(next)
 	body, err := CanonicalJournalRecord(next)
 	if err != nil || next.Controller != store.controller || previousSHA256 != store.current.SHA256 || store.current.Incomplete {
@@ -607,6 +616,13 @@ func (store *ProtectionJournal) Append(ctx context.Context, previousSHA256 strin
 	if err := requireJournalProfileBindings(next); err != nil {
 		return JournalSelection{}, err
 	}
+	return store.appendCanonicalLocked(ctx, previousSHA256, next, body)
+}
+
+// The caller already checked either the strict ordinary transition or the
+// private native recovery capability. This helper never selects a controller,
+// candidate or alternate write; it flushes only the captured immutable bytes.
+func (store *ProtectionJournal) appendCanonicalLocked(ctx context.Context, previousSHA256 string, next JournalRecord, body []byte) (JournalSelection, error) {
 	if err := store.verifyObjects(); err != nil {
 		return JournalSelection{}, err
 	}
@@ -660,9 +676,18 @@ func (store *ProtectionJournal) Close() error {
 		return nil
 	}
 	store.mu.Lock()
-	defer store.mu.Unlock()
 	store.closed = true
-	var failure error
+	recovery := store.recovery
+	store.mu.Unlock()
+	// Recovery's synchronous callback may need the journal mutex to observe
+	// cancellation. Never close its files or wait for its gate under that lock.
+	var recoveryErr error
+	if recovery != nil {
+		recoveryErr = recovery.Close(context.Background())
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	failure := recoveryErr
 	for _, file := range []*protectionObject{store.slots[0], store.slots[1], store.file, store.lock, store.root} {
 		failure = errors.Join(failure, file.close())
 	}

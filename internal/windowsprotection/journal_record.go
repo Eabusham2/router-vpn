@@ -59,6 +59,9 @@ type JournalRecord struct {
 	Phase          string         `json:"phase"`
 	Committed      JournalState   `json:"committed"`
 	Intent         *JournalIntent `json:"intent"`
+	// The latest checked controller handover remains immutable through all
+	// ordinary checkpoints. Omission preserves legacy canonical bytes.
+	Adoption *JournalAdoption `json:"adoption,omitempty"`
 }
 
 func journalProfileID(value string) bool {
@@ -97,6 +100,9 @@ func (r JournalRecord) Validate() error {
 	}
 	if r.Sequence == 1 && (r.Phase != "settled" || r.Committed.Target != nil || r.Intent != nil) {
 		return errors.New("a new Windows journal must begin at independently proved absence")
+	}
+	if err := validateJournalAdoption(r); err != nil {
+		return err
 	}
 	if r.Phase == "settled" {
 		if r.Intent != nil {
@@ -162,6 +168,11 @@ func cloneJournalRecord(r JournalRecord) JournalRecord {
 		intent := *r.Intent
 		intent.Candidate = cloneJournalState(intent.Candidate)
 		r.Intent = &intent
+	}
+	if r.Adoption != nil {
+		adoption := *r.Adoption
+		adoption.Observed = cloneJournalState(adoption.Observed)
+		r.Adoption = &adoption
 	}
 	return r
 }
@@ -252,7 +263,8 @@ func JournalRecordSHA256(raw []byte) (string, error) {
 // forget the process that owned a live engine or unresolved intent.
 func CheckJournalTransition(previous, next JournalRecord) error {
 	if previous.Validate() != nil || next.Validate() != nil || previous.Sequence == math.MaxUint64 ||
-		next.Sequence != previous.Sequence+1 || next.JournalID != previous.JournalID || next.Controller != previous.Controller {
+		next.Sequence != previous.Sequence+1 || next.JournalID != previous.JournalID || next.Controller != previous.Controller ||
+		!sameJournalAdoption(previous.Adoption, next.Adoption) {
 		return errors.New("Windows journal transition lost its exact previous generation")
 	}
 	raw, err := CanonicalJournalRecord(previous)
@@ -264,7 +276,12 @@ func CheckJournalTransition(previous, next JournalRecord) error {
 		return errors.New("Windows journal transition lost its previous canonical digest")
 	}
 	if previous.Phase == "intent" {
-		if next.Phase != "settled" || !settledJournalState(next.Committed, previous.Committed) && !settledJournalState(next.Committed, previous.Intent.Candidate) {
+		candidates, err := JournalRecoveryCandidates(previous)
+		proved := false
+		for _, candidate := range candidates {
+			proved = proved || settledJournalState(next.Committed, candidate)
+		}
+		if err != nil || next.Phase != "settled" || !proved {
 			return errors.New("Windows journal must prove one exact intent outcome before another mutation")
 		}
 		return nil
@@ -288,6 +305,13 @@ func CheckJournalTransition(previous, next JournalRecord) error {
 func JournalRecoveryCandidates(record JournalRecord) ([]JournalState, error) {
 	if err := record.Validate(); err != nil {
 		return nil, err
+	}
+	// Once a checked handover has proved the pending Off's absence, it cannot
+	// later resurrect that old baseline. A retained-target handover still
+	// permits the already accepted Off to finish its recorded removal.
+	if record.Phase == "intent" && record.Intent.Action == "off" && record.Adoption != nil &&
+		record.Adoption.Sequence == record.Sequence && record.Adoption.Observed.Target == nil {
+		return []JournalState{{}}, nil
 	}
 	states := []JournalState{cloneJournalState(record.Committed)}
 	if record.Intent != nil && !sameJournalState(record.Committed, record.Intent.Candidate) {
@@ -346,7 +370,9 @@ func SelectJournalRecord(journalID string, slots [2][]byte) (JournalSelection, e
 		older, newer = 1, 0
 	}
 	if err := CheckJournalTransition(*records[older], *records[newer]); err != nil {
-		return JournalSelection{}, err
+		if recoveryErr := CheckJournalRecoveryTransition(*records[older], *records[newer]); recoveryErr != nil {
+			return JournalSelection{}, errors.Join(err, recoveryErr)
+		}
 	}
 	return JournalSelection{cloneJournalRecord(*records[newer]), digests[newer], newer, false}, nil
 }

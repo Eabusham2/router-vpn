@@ -31,8 +31,10 @@ type Capture struct {
 	Generation   uint64 `json:"generation"`
 }
 
-// Controller is a comparison value, never a request to open the supplied PID.
-// Its Windows constructor reads all fields from the retained current process.
+// Controller is comparison data; a parsed caller value is never a request to
+// open or signal its PID. Native restart recovery may query a value captured
+// from its protected, locked journal, retaining only read/synchronize handles.
+// Its constructor reads all fields from an independently retained process.
 // StartTimeUTCTicks is an identity component, not a freshness assertion.
 type Controller struct {
 	PID               uint32 `json:"pid"`
