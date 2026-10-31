@@ -26,7 +26,7 @@ TAGS = (*NODE.TAGS, "routervpn_windows_node_composition")
 REQUIRED = tuple("TestRouterVPNDesktopNodeWindowsWFP" + suffix for suffix in (
     "EncryptedTraffic", "EncryptedSuccession", "RejectsForeignPredecessor", "WrongPeerRejected", "RestorationCapture",
     "LayerTraffic", "LayerSuccession", "LayerWrongCredential", "XrayTraffic", "XraySuccession", "XrayWrongCredential",
-    "NaiveTraffic", "NaiveSuccession", "NaiveWrongCredential"))
+    "NaiveTraffic", "NaiveSuccession", "NaiveWrongCredential", "CompositeTraffic", "CompositeSuccession", "CompositeWrongCredential"))
 
 
 def checked_sources(source):
@@ -140,8 +140,11 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         # The admitted layered graphs and cross-family reversals run in the
         # same native host with independent retained peers. This bounds the
         # complete expanded suite; individual production/fixture deadlines stay unchanged.
-        status, output = BOOT.IDENTITY.run([binary, "-test.run=^TestRouterVPNDesktopNodeWindowsWFP", "-test.count=1", "-test.timeout=360s", "-test.v"],
-                                           cwd=source, env=captured, timeout=375)
+        # Composite adds six simultaneous two-lane graphs, twenty independently
+        # authenticated failures and two reversals. Keep every per-operation
+        # deadline and require each new leaf in this bounded aggregate run.
+        status, output = BOOT.IDENTITY.run([binary, "-test.run=^TestRouterVPNDesktopNodeWindowsWFP", "-test.count=1", "-test.timeout=600s", "-test.v"],
+                                           cwd=source, env=captured, timeout=615)
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if status or any("--- PASS: " + test + " (" not in output for test in REQUIRED) or any(value in output for value in ("--- SKIP:", "DATA RACE")):
             raise ValueError("Actual WFP encrypted Node omitted a required native proof")
@@ -176,6 +179,15 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         for case in (mode + "/" + fault for mode in NODE.NAIVE_MODES for fault in ("naive-user", "naive-server-name", "naive-certificate", "naive-password", "aes-key")):
             if "--- PASS: TestRouterVPNDesktopNodeWindowsWFPNaiveWrongCredential/" + case + " (" not in output:
                 raise ValueError("Actual WFP Naive omitted its encrypted credential negative: " + case)
+        for case in NODE.COMPOSITE_CASES:
+            if "--- PASS: TestRouterVPNDesktopNodeWindowsWFPCompositeTraffic/" + case + " (" not in output:
+                raise ValueError("Actual WFP composite omitted simultaneous captured TCP/UDP branches or a Start Layer: " + case)
+        for mode in NODE.COMPOSITE_MODES:
+            if "--- PASS: TestRouterVPNDesktopNodeWindowsWFPCompositeSuccession/" + mode + " (" not in output:
+                raise ValueError("Actual WFP composite omitted its exact cross-family restoration: " + mode)
+        for case in NODE.COMPOSITE_CREDENTIAL_CASES:
+            if "--- PASS: TestRouterVPNDesktopNodeWindowsWFPCompositeWrongCredential/" + case + " (" not in output:
+                raise ValueError("Actual WFP composite omitted an original branch or shared-layer credential negative: " + case)
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("Actual WFP Node executable changed during its retained test")
         for mutation in mutants(source):
@@ -200,7 +212,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         NODE.verify_naive_library(naive_library)
     if checked_sources(source)[1] != before:
         raise ValueError("WFP Node source changed during actual native execution")
-    print("Actual Windows BFE, isolated TCP/UDP grants with exact permitted peers, WG/AWG/Shadowsocks/Hysteria2/REALITY Vision/PQ/XHTTP/Naive H2/H3 AES/XOR encrypted IPv4/IPv6 payloads, fresh selected DNS, exact cross-family forward/reverse native succession and wrong-key/ordinary-token controls passed. TUN, node identity proof, host adoption and device acceptance remain separate.", flush=True)
+    print("Actual Windows BFE, isolated TCP/UDP grants with exact permitted peers, WG/AWG/Shadowsocks/Hysteria2/REALITY Vision/PQ/XHTTP/Naive H2/H3/split/raw-MAX AES/XOR encrypted IPv4/IPv6 payloads, fresh selected DNS, exact cross-family forward/reverse native succession and wrong-key/ordinary-token controls passed. TUN, node identity proof, host adoption and device acceptance remain separate.", flush=True)
 
 
 if __name__ == "__main__":

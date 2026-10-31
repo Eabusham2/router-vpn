@@ -41,6 +41,13 @@ NAIVE_CASES = tuple(mode + "/" + layer for mode in NAIVE_MODES
                     for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening"))
 NAIVE_CREDENTIAL_CASES = (*NAIVE_CASES, *(mode + "/" + case for mode in NAIVE_MODES for case in (
     "off/naive-user", "off/naive-server-name", "off/naive-certificate", "aes-256-gcm/aes-key", "aes-256-gcm+xor-whitening/aes-key")))
+COMPOSITE_MODES = ("split", "max")
+COMPOSITE_CASES = tuple(mode + "/" + layer for mode in COMPOSITE_MODES
+                       for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening"))
+COMPOSITE_CREDENTIAL_CASES = (
+    *(case + "/" + fault for case in COMPOSITE_CASES for fault in ("xray-reality-key", "hysteria-password")),
+    *(case + "/aes-key" for case in COMPOSITE_CASES if not case.endswith("/off")),
+    "max/off/xray-pq-key", "split/off/xray-user", "split/off/hysteria-trust", "split/off/hysteria-salamander")
 
 
 def layer_reference_sources():
@@ -73,6 +80,8 @@ def checked_sources(source):
                 copies["routervpn/" + package + "/" + path.name] = PREP.relocated_shared_source(path.read_bytes())
     for path in sorted((ROOT / "mobile/amnezia").glob("*.tmpl")):
         copies["protocol/routervpnamnezia/" + path.name.removesuffix(".tmpl")] = path.read_bytes()
+    for path in sorted((ROOT / "mobile/composite").glob("*.tmpl")):
+        copies["protocol/routervpncomposite/" + path.name.removesuffix(".tmpl")] = path.read_bytes()
     for name, target in PREP.RELAY.WHITENING.STREAM.TEMPLATES.items():
         copies["protocol/shadowsocks/" + target] = (ROOT / "mobile/startwhitening" / name).read_bytes()
     for path in sorted((ROOT / "internal/startwhitening").glob("*.go")):
@@ -84,6 +93,17 @@ def checked_sources(source):
         if target.is_symlink() or not target.is_file() or target.read_bytes() != expected:
             raise ValueError("Node native source differs from shipping bytes: " + relative)
         records[relative] = hashlib.sha256(expected).hexdigest()
+    registry = source / "include/registry.go"
+    if registry.is_symlink() or not registry.is_file():
+        raise ValueError("Node composite lost its shipping native outbound registry")
+    original_registry = registry.read_text(encoding="utf-8")
+    registered = PREP.RELAY.COMPOSITE.insert_once(original_registry,
+        '\t"github.com/sagernet/sing-box/protocol/group"', '\t"github.com/sagernet/sing-box/protocol/routervpncomposite"')
+    registered = PREP.RELAY.COMPOSITE.insert_once(registered,
+        '\tgroup.RegisterURLTest(registry)', '\troutervpncomposite.RegisterOutbound(registry)')
+    if registered != original_registry:
+        raise ValueError("Node composite is missing from the actual shipping native registry")
+    records["include/registry.go"] = hashlib.sha256(registry.read_bytes()).hexdigest()
     box = source / "box.go"
     if box.is_symlink() or PREP.node_capture_source(box.read_text(encoding="utf-8")) != box.read_bytes():
         raise ValueError("Node source snapshot is absent or moved from actual Box construction")
@@ -266,6 +286,16 @@ def mutants(source, windows):
     selected_dns = "routervpn_desktop_node_box_dns.go"
     node_command = "cmd/sing-box/routervpn_mtu_node.go"
     result = [
+        ("composite-tcp-substituted-udp", "protocol/routervpncomposite/outbound.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeCompositeTraffic", "split/off",
+         "simultaneous composite traffic omitted one retained native lane grant", changed("protocol/routervpncomposite/outbound.go",
+         "return h.tcp, nil", "return h.udp, nil")),
+        ("composite-udp-substituted-tcp", "protocol/routervpncomposite/outbound.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeCompositeTraffic", "split/off",
+         "simultaneous composite traffic omitted one retained native lane grant", changed("protocol/routervpncomposite/outbound.go",
+         "return h.udp, nil", "return h.tcp, nil")),
+        ("composite-uncaptured-tcp", "protocol/routervpnxray/outbound.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeCompositeTraffic", "max/off",
+         "simultaneous composite traffic omitted one retained native lane grant", changed("protocol/routervpnxray/outbound.go",
+         "conn, err := b.dialer.DialContext(cctx, N.NetworkTCP, M.ParseSocksaddr(b.server.String()))",
+         "conn, err := (&net.Dialer{}).DialContext(cctx, N.NetworkTCP, b.server.String())")),
         ("uncaptured-naive-physical-dial", "protocol/naive/outbound.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeNaiveTraffic", "naive-h2/off",
          "layered graph bypassed its captured socket grants", changed("protocol/naive/outbound.go",
          "Dialer:                   outboundDialer,", "Dialer:                   N.SystemDialer,")),
@@ -373,7 +403,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         ("ss-packet", "./protocol/shadowsocks", "^TestRouterVPNShadowsocks",
          ("TestRouterVPNShadowsocksCompleteCiphertextPacket", "TestRouterVPNShadowsocksPacketWrongKey")),
         ("command", "./cmd/sing-box", "^TestRouterVPNDesktopNodePhysicalCommand",
-         tuple("TestRouterVPNDesktopNodePhysicalCommand" + name for name in ("SourceBoundary", "Hysteria2CompleteStartSource", "XrayCompleteStartSource", "NaiveCompleteStartSource", "RestoredMTU", "TransferInput", "RetirementReceipt", "ReadyRequiresFreshDNS", "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionExactStop", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "JournalBeforePrivateInputs", "PublicRequiresJournal"))),
+         tuple("TestRouterVPNDesktopNodePhysicalCommand" + name for name in ("SourceBoundary", "Hysteria2CompleteStartSource", "XrayCompleteStartSource", "NaiveCompleteStartSource", "CompositeCompleteStartSource", "RestoredMTU", "TransferInput", "RetirementReceipt", "ReadyRequiresFreshDNS", "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionExactStop", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "JournalBeforePrivateInputs", "PublicRequiresJournal"))),
         ("factory", "./routervpn/desktoppt", "^TestRouterVPNNodePhysical" if windows else "^TestRouterVPNNode(Physical|LinuxLifecycle)",
          tuple("TestRouterVPNNodePhysical" + name for name in ("SeparateRegistriesAndUnpreparedRejection", "HandshakePhaseAndExactPolicy", "FactoryCancellationJoinsPartialOwner", "RetirementKeepsExactJoinedSource", "AdmissionRetainsExactPolicy", "AdmissionCapturesExactPredecessor", "JournalAdmissionCapturesDurableBarrier")) +
          (tuple("TestRouterVPNNodePhysicalWindows" + name for name in ("CapturesPreparedOwner", "AdmissionRejectsChangedOwners", "CloseJoinsAdmission")) if windows else
@@ -395,6 +425,10 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          ("TestRouterVPNDesktopNodeNaiveTraffic",)),
         ("naive-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeNaiveWrongCredential$",
          ("TestRouterVPNDesktopNodeNaiveWrongCredential",)),
+        ("composite-traffic", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeCompositeTraffic$",
+         ("TestRouterVPNDesktopNodeCompositeTraffic",)),
+        ("composite-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeCompositeWrongCredential$",
+         ("TestRouterVPNDesktopNodeCompositeWrongCredential",)),
     ]
     with tempfile.TemporaryDirectory(prefix="routervpn-node-physical-") as directory:
         workspace = Path(directory)
@@ -409,7 +443,10 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             if status:
                 raise ValueError("Node " + name + " native compilation failed:\n" + output[-32768:])
             digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-            status, output = run([binary, "-test.run=" + selector, "-test.count=1", "-test.timeout=90s", "-test.v"], cwd=source, env=captured, timeout=105)
+            # The composite suite adds twenty independent real credential
+            # attempts; each network deadline remains unchanged.
+            duration = 180 if name == "composite-credentials" else 90
+            status, output = run([binary, "-test.run=" + selector, "-test.count=1", "-test.timeout=" + str(duration) + "s", "-test.v"], cwd=source, env=captured, timeout=duration + 15)
             print(output, end="" if output.endswith("\n") else "\n", flush=True)
             if status or any("--- PASS: " + test + " (" not in output for test in required) or "--- SKIP:" in output or "DATA RACE" in output:
                 raise ValueError("Node " + name + " omitted a required native boundary")
@@ -427,6 +464,10 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Node Naive gate omitted a complete HTTP version/Start Layer")
             if name == "naive-credentials" and any("--- PASS: TestRouterVPNDesktopNodeNaiveWrongCredential/" + case + " (" not in output for case in NAIVE_CREDENTIAL_CASES):
                 raise ValueError("Node Naive gate omitted a captured user, password, certificate or layer credential negative")
+            if name == "composite-traffic" and any("--- PASS: TestRouterVPNDesktopNodeCompositeTraffic/" + case + " (" not in output for case in COMPOSITE_CASES):
+                raise ValueError("Node composite gate omitted simultaneous original TCP/UDP branches or a Start Layer")
+            if name == "composite-credentials" and any("--- PASS: TestRouterVPNDesktopNodeCompositeWrongCredential/" + case + " (" not in output for case in COMPOSITE_CREDENTIAL_CASES):
+                raise ValueError("Node composite gate omitted an independent TCP, UDP or shared Start Layer credential negative")
             if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
                 raise ValueError("Node native executable changed during execution")
         for label, relative, package, test, subtest, witness, replacement in mutants(source, windows):
@@ -450,7 +491,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         verify_naive_library(naive_library)
     if checked_sources(source)[1] != before:
         raise ValueError("Node native source changed during actual execution")
-    print("Exact native Node startup, captured IPC, retained TUN/MTU rollback, real WG/AWG/Shadowsocks/Hysteria2/REALITY Vision/PQ/XHTTP/Naive H2/H3 plus AES/XOR encrypted TCP/UDP, fresh selected DNS and wrong-key controls passed. OS permits/TUN remain explicit fixtures; kernel composition and both-direction host activation remain separate.", flush=True)
+    print("Exact native Node startup, captured IPC, retained TUN/MTU rollback, real WG/AWG/Shadowsocks/Hysteria2/REALITY Vision/PQ/XHTTP/Naive H2/H3/split/raw-MAX plus AES/XOR encrypted TCP/UDP, fresh selected DNS and wrong-key controls passed. OS permits/TUN remain explicit fixtures; kernel composition and both-direction host activation remain separate.", flush=True)
 
 
 if __name__ == "__main__":

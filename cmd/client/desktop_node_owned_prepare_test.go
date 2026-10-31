@@ -161,11 +161,11 @@ func desktopOwnedNodePreparationAES(t *testing.T, endpoint string) map[string][]
 }
 
 func TestDesktopOwnedNodePreparationKeepsCapturedAESAndWhitening(t *testing.T) {
-	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3"} {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max"} {
 		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 			t.Run(mode+"/"+layer, func(t *testing.T) {
 				base := mode
-				if mode == "shadowsocks" || mode == "hysteria2" || mobilemultihop.XrayEntryMode(mode) || multihoprelay.NaiveMode(mode) {
+				if mode == "shadowsocks" || mode == "hysteria2" || mobilemultihop.XrayEntryMode(mode) || multihoprelay.NaiveMode(mode) || mobilemultihop.CompositeMode(mode) {
 					base = "wg"
 				}
 				f := newDesktopOwnedNodePreparationFixture(t, base)
@@ -208,8 +208,12 @@ func TestDesktopOwnedNodePreparationKeepsCapturedAESAndWhitening(t *testing.T) {
 						t.Fatal(err)
 					}
 				}
-				if mobilemultihop.XrayEntryMode(mode) || multihoprelay.NaiveMode(mode) {
-					f.files = nativeMultihopProxyExitAssets(t, f.profile, mode)
+				if mobilemultihop.XrayEntryMode(mode) || multihoprelay.NaiveMode(mode) || mobilemultihop.CompositeMode(mode) {
+					if mobilemultihop.CompositeMode(mode) {
+						f.files = nativeMultihopCompositeExitAssets(t, f.profile, mode)
+					} else {
+						f.files = nativeMultihopProxyExitAssets(t, f.profile, mode)
+					}
 					directory := filepath.Join(f.capture.dataRoot, "generated", f.profile.ID, mode)
 					if err := os.MkdirAll(directory, 0700); err != nil {
 						t.Fatal(err)

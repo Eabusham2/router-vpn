@@ -123,7 +123,7 @@ ARGUMENT_CASES = (
     "flag-injection",
 )
 PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2",
-                "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3")
+                "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max")
 PUBLIC_LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
 EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES),
             *("TestDesktopNodePublicConnectUsesCapturedOwnedHost/" + mode + "/" + layer

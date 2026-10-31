@@ -1,0 +1,356 @@
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"strings"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativecomposite"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+func desktopNodeCompositeMode(mode string) bool { return mode == "split" || mode == "max" }
+
+// Both independently authenticated peers remain in the one retained reference
+// process. The client consumes their original private assets in the shipping
+// composite compiler; no payload can fall back to a single transport fixture.
+func startDesktopNodeCompositeServer(t *testing.T, mode string, ip netip.Addr, dnsAddress string) (*desktopNodeLayerServer, *desktopNodeLayerServer, string) {
+	t.Helper()
+	xrayMode := "reality-vision"
+	if mode == "max" {
+		xrayMode = "reality-pq-vision"
+	} else if mode != "split" {
+		t.Fatal("composite reference has another TCP graph")
+	}
+	tcp, tcpFiles := startDesktopNodeXrayServer(t, xrayMode, ip, dnsAddress)
+	// Reserve the TCP numeric port in UDP while the second peer binds. This
+	// makes the two captured endpoints deliberately distinct without depending
+	// on the OS ephemeral-port lottery or redirecting either original socket.
+	reservation, reserveErr := net.ListenPacket("udp4", tcp.tcp.Addr().String())
+	if reserveErr != nil {
+		t.Fatal("could not reserve distinct composite peer ports", reserveErr)
+	}
+	t.Cleanup(func() { _ = reservation.Close() })
+	udp, udpFiles := startDesktopNodeHysteria2Server(t, ip, dnsAddress)
+	if err := reservation.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var tcpAssets, udpAssets map[string]string
+	if json.Unmarshal([]byte(tcpFiles), &tcpAssets) != nil || json.Unmarshal([]byte(udpFiles), &udpAssets) != nil || len(tcpAssets) != 2 || len(udpAssets) != 2 {
+		t.Fatal("composite peer lost one complete original branch")
+	}
+	decode := func(asset string) map[string]any {
+		raw, err := base64.StdEncoding.Strict().DecodeString(asset)
+		var graph map[string]any
+		if err != nil || json.Unmarshal(raw, &graph) != nil {
+			t.Fatal("composite peer received another private graph", err)
+		}
+		return graph
+	}
+	tcpGraph, udpGraph := decode(tcpAssets["sing-box.json"]), decode(udpAssets["sing-box.json"])
+	tcpOut := tcpGraph["outbounds"].([]any)[0].(map[string]any)
+	udpOut := udpGraph["outbounds"].([]any)[0].(map[string]any)
+	if tcpOut["type"] != "socks" || udpOut["type"] != "hysteria2" {
+		t.Fatal("composite reference replaced an original lane")
+	}
+	tcpOut["tag"], udpOut["tag"] = "tcp-stack", "udp-stack"
+	wrapper := map[string]any{
+		"inbounds":  tcpGraph["inbounds"],
+		"outbounds": []any{tcpOut, udpOut, map[string]any{"type": "direct", "tag": "direct"}},
+		"dns":       map[string]any{"servers": []any{map[string]any{"type": "udp", "tag": "selected", "server": "192.168.50.133", "detour": "udp-stack"}}, "final": "selected"},
+		"route":     map[string]any{"rules": []any{map[string]any{"protocol": "dns", "action": "hijack-dns"}, map[string]any{"network": "tcp", "action": "route", "outbound": "tcp-stack"}, map[string]any{"network": "udp", "action": "route", "outbound": "udp-stack"}}, "auto_detect_interface": true, "final": "tcp-stack"},
+	}
+	raw, err := json.Marshal(wrapper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets, err := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(raw), "xray.json": tcpAssets["xray.json"], "cert.pem": udpAssets["cert.pem"]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tcp, udp, string(assets)
+}
+
+func desktopNodeCompositeAssets(t *testing.T, files, fault string) string {
+	t.Helper()
+	var assets map[string]string
+	if json.Unmarshal([]byte(files), &assets) != nil || len(assets) != 3 || assets["cert.pem"] == "" || assets["xray.json"] == "" {
+		t.Fatal("composite source lost either authenticated branch")
+	}
+	if strings.HasPrefix(fault, "xray-") {
+		tcp, _ := json.Marshal(map[string]string{"sing-box.json": assets["sing-box.json"], "xray.json": assets["xray.json"]})
+		var changed map[string]string
+		if json.Unmarshal([]byte(desktopNodeXrayAssets(t, string(tcp), fault)), &changed) != nil {
+			t.Fatal("invalid changed Xray asset")
+		}
+		assets["xray.json"] = changed["xray.json"]
+	} else if strings.HasPrefix(fault, "hysteria-") {
+		raw, err := base64.StdEncoding.Strict().DecodeString(assets["sing-box.json"])
+		var wrapper map[string]any
+		if err != nil || json.Unmarshal(raw, &wrapper) != nil {
+			t.Fatal("invalid composite wrapper", err)
+		}
+		lane := wrapper["outbounds"].([]any)[1].(map[string]any)
+		if lane["type"] != "hysteria2" || lane["tag"] != "udp-stack" {
+			t.Fatal("missing composite UDP lane")
+		}
+		switch fault {
+		case "hysteria-password":
+			lane["password"] = "wrong-node-" + lane["password"].(string)
+		case "hysteria-trust":
+			lane["tls"].(map[string]any)["server_name"] = "another-node.test"
+		case "hysteria-salamander":
+			lane["obfs"].(map[string]any)["password"] = "wrong-node-" + lane["obfs"].(map[string]any)["password"].(string)
+		default:
+			t.Fatal("uncaptured composite UDP fault")
+		}
+		raw, err = json.Marshal(wrapper)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assets["sing-box.json"] = base64.StdEncoding.EncodeToString(raw)
+	} else if fault != "" && fault != "aes-key" {
+		t.Fatal("uncaptured composite credential fault")
+	}
+	raw, err := json.Marshal(assets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func (p *desktopNodeLayerReference) compositeRemotes(t *testing.T) map[string]netip.AddrPort {
+	t.Helper()
+	if !desktopNodeCompositeMode(p.request.Mode) {
+		t.Fatal("composite endpoint requested from another graph")
+	}
+	tcp, err := netip.ParseAddrPort(p.reply.BaseAddress)
+	udp, udpErr := netip.ParseAddrPort(p.reply.UDPBranchAddress)
+	ip := netip.MustParseAddr(p.request.Address)
+	if err != nil || udpErr != nil || tcp.Addr() != ip || udp.Addr() != ip || tcp.Port() == 0 || udp.Port() == 0 || tcp.Port() == udp.Port() {
+		t.Fatal("composite reference omitted its two distinct retained peer endpoints", err, udpErr)
+	}
+	if p.request.Layer != "" {
+		tcp, udp = p.remote, p.remote
+	}
+	return map[string]netip.AddrPort{"tcp": tcp, "udp": udp}
+}
+
+func (p *desktopNodeLayerReference) compositeProjection(t *testing.T, original *mobilemultihop.NodeProfile) {
+	t.Helper()
+	remotes := p.compositeRemotes(t)
+	egress, err := original.PhysicalEgress()
+	if err != nil || len(egress) != 2 {
+		t.Fatal("composite projection omitted one captured physical lane", err, egress)
+	}
+	seen := make(map[string]bool)
+	for _, endpoint := range egress {
+		remote, ok := remotes[endpoint.Network]
+		if !ok || seen[endpoint.Network] || endpoint.Host != remote.Addr().String() || endpoint.Port != int(remote.Port()) {
+			t.Fatal("composite projection replaced a captured branch tuple", egress)
+		}
+		seen[endpoint.Network] = true
+	}
+}
+
+func desktopNodeCompositeCases(t *testing.T, test func(*testing.T, string, string)) {
+	t.Helper()
+	for _, mode := range []string{"split", "max"} {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			label := layer
+			if label == "" {
+				label = "off"
+			}
+			t.Run(mode+"/"+label, func(t *testing.T) { test(t, mode, layer) })
+		}
+	}
+}
+
+// Both logical sockets remain open while their original native grants and
+// independent peer counters are read. A sequential fallback or one-lane echo
+// cannot satisfy this test, even if both application payload shapes work.
+func desktopNodeCompositeExchange(t *testing.T, native *box.Box, host string, during func()) {
+	t.Helper()
+	outer, ok := native.Outbound().Outbound("proxy")
+	if !ok || outer.Type() != nativecomposite.Type {
+		t.Fatal("composite lost its fixed native dispatcher", outer)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	connections := make([]net.Conn, 0, 2)
+	defer func() {
+		for _, connection := range connections {
+			_ = connection.Close()
+		}
+	}()
+	for _, network := range []string{"tcp", "udp"} {
+		connection, err := outer.DialContext(ctx, network, M.ParseSocksaddr(net.JoinHostPort(host, "9999")))
+		if err != nil {
+			t.Fatal("composite could not retain both original lane sockets", network, err)
+		}
+		connections = append(connections, connection)
+		if err := connection.SetDeadline(time.Now().Add(8 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	start, joined := make(chan struct{}), make(chan error, 2)
+	for index, connection := range connections {
+		go func(index int, connection net.Conn) {
+			<-start
+			payload := bytes.Repeat([]byte("captured-composite-lane-"+string(rune('0'+index))+"/"), 20)
+			_, err := connection.Write(payload)
+			answer := make([]byte, len(payload))
+			if err == nil {
+				_, err = io.ReadFull(connection, answer)
+			}
+			if err == nil && !bytes.Equal(payload, answer) {
+				err = errors.New("composite branch returned another payload")
+			}
+			joined <- err
+		}(index, connection)
+	}
+	close(start)
+	first, second := <-joined, <-joined
+	if err := errors.Join(first, second); err != nil {
+		t.Fatal("simultaneous composite traffic lost an authenticated branch", err)
+	}
+	during()
+}
+
+func desktopNodeCompositePeerTraffic(t *testing.T, peer *desktopNodeLayerReference) {
+	t.Helper()
+	observed := peer.observe(t, "stats")
+	if observed.ProtocolRawTCP == 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP != 0 || observed.UDPBranchRawUDP == 0 || observed.UDPBranchUDP == 0 || observed.UDPBranchTCP != 0 {
+		t.Fatal("composite traffic crossed or omitted an original authenticated branch", observed)
+	}
+	if peer.request.Layer != "" && (observed.RawTCP == 0 || observed.RawUDP == 0 || observed.PlainTCP == 0 || observed.PlainUDP == 0) {
+		t.Fatal("composite Start Layer did not enclose both actual lanes", observed)
+	}
+}
+
+func desktopNodeCompositeGrants(t *testing.T, peer *desktopNodeLayerReference, grants []mobiletor.DesktopSocketGrant, capture mobiletor.DesktopSocketCapture, owner mobiletor.DesktopSocketKernelOwner) {
+	t.Helper()
+	remotes, seen := peer.compositeRemotes(t), make(map[string]bool)
+	for _, grant := range grants {
+		if grant.Capture != capture || grant.Binding.Owner != owner || grant.Local.Addr() != netip.MustParseAddr(peer.request.Address) || grant.Remote != remotes[grant.Network] {
+			t.Fatal("composite graph used an uncaptured native lane permission")
+		}
+		seen[grant.Network] = true
+	}
+	if !seen["tcp"] || !seen["udp"] {
+		t.Fatal("simultaneous composite traffic omitted one retained native lane grant")
+	}
+}
+
+func TestRouterVPNDesktopNodeCompositeTraffic(t *testing.T) {
+	desktopNodeCompositeCases(t, func(t *testing.T, mode, layer string) {
+		_, ip := desktopNodePeerInterface(t)
+		peer := startDesktopNodeLayerReference(t, mode, layer, ip)
+		peer.compositeProjection(t, peer.original(t, "always", ""))
+		f := newDesktopNodeLayerFixture(t, peer, "")
+		if err := f.box.RouterVPNStrategyStart(); err != nil {
+			t.Fatal("composite native startup failed", err)
+		}
+		for _, host := range []string{"192.0.2.99", "2001:db8::99"} {
+			desktopNodeCompositeExchange(t, f.box, host, func() {
+				f.kernel.mu.Lock()
+				var grants []mobiletor.DesktopSocketGrant
+				for _, grant := range f.kernel.grants {
+					grants = append(grants, grant)
+				}
+				f.kernel.mu.Unlock()
+				desktopNodeCompositeGrants(t, peer, grants, f.kernel.capture, f.kernel.owner)
+				desktopNodeCompositePeerTraffic(t, peer)
+			})
+		}
+		if f.network.Current() {
+			t.Fatal("composite traffic fabricated readiness")
+		}
+		if err := f.box.RouterVPNStrategyDNSProof(); err != nil || peer.observe(t, "stats").DNSQueries != 1 {
+			t.Fatal("composite selected Home DNS missed its captured UDP branch", err)
+		}
+		peer.observe(t, "fail-dns")
+		if err := f.box.RouterVPNStrategyDNSProof(); err == nil || peer.observe(t, "stats").DNSQueries != 2 {
+			t.Fatal("composite selected DNS reused stale or failed proof")
+		}
+		desktopNodeCompositePeerTraffic(t, peer)
+		f.network.InterfaceUpdated(context.Background())
+		if f.network.SocketCurrent() || f.kernel.live.Load() || f.exchange("tcp") == nil || f.exchange("udp") == nil {
+			t.Fatal("retired composite delivered traffic on an old branch")
+		}
+		if err := f.close(); err != nil || !f.source.closed.Load() {
+			t.Fatal("composite native graph did not join its retained owner", err)
+		}
+	})
+}
+
+func desktopNodeCompositeCredentialCases(t *testing.T, test func(*testing.T, string, string, string)) {
+	t.Helper()
+	desktopNodeCompositeCases(t, func(t *testing.T, mode, layer string) {
+		for _, fault := range []string{"xray-reality-key", "hysteria-password"} {
+			t.Run(fault, func(t *testing.T) { test(t, mode, layer, fault) })
+		}
+		if layer != "" {
+			t.Run("aes-key", func(t *testing.T) { test(t, mode, layer, "aes-key") })
+		}
+	})
+	for _, item := range []struct{ mode, fault string }{{"max", "xray-pq-key"}, {"split", "xray-user"}, {"split", "hysteria-trust"}, {"split", "hysteria-salamander"}} {
+		t.Run(item.mode+"/off/"+item.fault, func(t *testing.T) { test(t, item.mode, "", item.fault) })
+	}
+}
+
+func desktopNodeCompositeCredential(t *testing.T, peer *desktopNodeLayerReference, f *desktopNodePeerFixture, fault string) {
+	t.Helper()
+	failed, healthy := "tcp", "udp"
+	if strings.HasPrefix(fault, "hysteria-") {
+		failed, healthy = "udp", "tcp"
+	}
+	if err := f.exchange(failed); err == nil {
+		t.Fatal("wrong composite branch credential delivered authenticated payload", fault)
+	}
+	if fault == "aes-key" {
+		if err := f.exchange("udp"); err == nil {
+			t.Fatal("wrong shared AES credential admitted the other composite branch")
+		}
+	} else if err := f.exchange(healthy); err != nil {
+		t.Fatal("composite credential fault changed the separately authenticated healthy branch", fault, err)
+	}
+	observed := peer.observe(t, "stats")
+	if f.network.Current() {
+		t.Fatal("failed composite credential fabricated readiness")
+	}
+	if fault == "aes-key" {
+		if observed.RawTCP == 0 || observed.RawUDP == 0 || observed.PlainTCP != 0 || observed.PlainUDP != 0 || observed.ProtocolTCP != 0 || observed.UDPBranchUDP != 0 {
+			t.Fatal("shared AES negative missed the two real composite lanes", observed)
+		}
+	} else if failed == "tcp" {
+		if observed.ProtocolRawTCP == 0 || observed.ProtocolTCP != 0 || observed.ProtocolUDP != 0 || observed.UDPBranchRawUDP == 0 || observed.UDPBranchUDP == 0 || observed.UDPBranchTCP != 0 {
+			t.Fatal("composite TCP credential negative missed its independently working UDP branch", observed)
+		}
+	} else if observed.UDPBranchRawUDP == 0 || observed.UDPBranchUDP != 0 || observed.UDPBranchTCP != 0 || observed.ProtocolRawTCP == 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP != 0 {
+		t.Fatal("composite UDP credential negative missed its independently working TCP branch", observed)
+	}
+}
+
+func TestRouterVPNDesktopNodeCompositeWrongCredential(t *testing.T) {
+	desktopNodeCompositeCredentialCases(t, func(t *testing.T, mode, layer, fault string) {
+		_, ip := desktopNodePeerInterface(t)
+		peer := startDesktopNodeLayerReference(t, mode, layer, ip)
+		f := newDesktopNodeLayerFixture(t, peer, fault)
+		if err := f.box.RouterVPNStrategyStart(); err != nil {
+			t.Fatal("wrong composite key did not reach real owned startup", err)
+		}
+		desktopNodeCompositeCredential(t, peer, f, fault)
+	})
+}

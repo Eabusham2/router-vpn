@@ -40,6 +40,7 @@ import (
 	"github.com/sagernet/sing-box/option"
 	HY "github.com/sagernet/sing-box/protocol/hysteria2"
 	NV "github.com/sagernet/sing-box/protocol/naive"
+	CO "github.com/sagernet/sing-box/protocol/routervpncomposite"
 	WH "github.com/sagernet/sing-box/protocol/routervpnwhitening"
 	XR "github.com/sagernet/sing-box/protocol/routervpnxray"
 	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
@@ -73,41 +74,49 @@ type desktopNodeLayerRequest struct {
 }
 
 type desktopNodeLayerReply struct {
-	Schema         int    `json:"schema"`
-	Address        string `json:"address"`
-	AESAddress     string `json:"aes_address"`
-	BaseAddress    string `json:"base_address,omitempty"`
-	ProtocolFiles  string `json:"protocol_files,omitempty"`
-	ProtocolRawUDP int64  `json:"protocol_raw_udp,omitempty"`
-	ProtocolRawTCP int64  `json:"protocol_raw_tcp,omitempty"`
-	ProtocolTCP    int64  `json:"protocol_tcp,omitempty"`
-	ProtocolUDP    int64  `json:"protocol_udp,omitempty"`
-	AppID          []byte `json:"app_id,omitempty"`
-	RawTCP         int64  `json:"raw_tcp"`
-	RawUDP         int64  `json:"raw_udp"`
-	PlainTCP       int64  `json:"plain_tcp"`
-	PlainUDP       int64  `json:"plain_udp"`
-	DNSQueries     uint32 `json:"dns_queries"`
-	Probe          string `json:"probe,omitempty"`
-	ProbeCount     int64  `json:"probe_count,omitempty"`
-	ProbeNetwork   string `json:"probe_network"`
+	Schema           int    `json:"schema"`
+	Address          string `json:"address"`
+	AESAddress       string `json:"aes_address"`
+	BaseAddress      string `json:"base_address,omitempty"`
+	ProtocolFiles    string `json:"protocol_files,omitempty"`
+	ProtocolRawUDP   int64  `json:"protocol_raw_udp,omitempty"`
+	ProtocolRawTCP   int64  `json:"protocol_raw_tcp,omitempty"`
+	ProtocolTCP      int64  `json:"protocol_tcp,omitempty"`
+	ProtocolUDP      int64  `json:"protocol_udp,omitempty"`
+	UDPBranchAddress string `json:"udp_branch_address,omitempty"`
+	UDPBranchRawUDP  int64  `json:"udp_branch_raw_udp,omitempty"`
+	UDPBranchTCP     int64  `json:"udp_branch_tcp,omitempty"`
+	UDPBranchUDP     int64  `json:"udp_branch_udp,omitempty"`
+	AppID            []byte `json:"app_id,omitempty"`
+	RawTCP           int64  `json:"raw_tcp"`
+	RawUDP           int64  `json:"raw_udp"`
+	PlainTCP         int64  `json:"plain_tcp"`
+	PlainUDP         int64  `json:"plain_udp"`
+	DNSQueries       uint32 `json:"dns_queries"`
+	Probe            string `json:"probe,omitempty"`
+	ProbeCount       int64  `json:"probe_count,omitempty"`
+	ProbeNetwork     string `json:"probe_network"`
+	ProbeTarget      string `json:"probe_target,omitempty"`
+}
+
+type desktopNodeLayerRoute struct {
+	Network, Destination, Physical string
 }
 
 type desktopNodeLayerServer struct {
-	ctx                  context.Context
-	cancel               context.CancelFunc
-	tcp                  net.Listener
-	udp                  net.PacketConn
-	inner, innerPhysical string
-	innerNetwork         string
-	dnsAddress           string
-	mu                   sync.Mutex
-	closing              bool
-	connections          map[io.Closer]bool
-	workers              sync.WaitGroup
-	rawTCP, rawUDP       atomic.Int64
-	plainTCP, plainUDP   atomic.Int64
-	observation          desktopNodePeerObservation
+	ctx                context.Context
+	cancel             context.CancelFunc
+	tcp                net.Listener
+	udp                net.PacketConn
+	routes             []desktopNodeLayerRoute
+	dnsAddress         string
+	mu                 sync.Mutex
+	closing            bool
+	connections        map[io.Closer]bool
+	workers            sync.WaitGroup
+	rawTCP, rawUDP     atomic.Int64
+	plainTCP, plainUDP atomic.Int64
+	observation        desktopNodePeerObservation
 }
 
 func (s *desktopNodeLayerServer) enter(c io.Closer) bool {
@@ -133,12 +142,22 @@ func desktopNodeLayerEcho(destination M.Socksaddr) bool {
 	return destination.Port == 9999 && (destination.Addr == netip.MustParseAddr("192.0.2.99") || destination.Addr == netip.MustParseAddr("2001:db8::99"))
 }
 
+func (s *desktopNodeLayerServer) route(network, destination string) (string, bool) {
+	for _, route := range s.routes {
+		if route.Network == network && route.Destination == destination {
+			return route.Physical, true
+		}
+	}
+	return "", false
+}
+
 func (s *desktopNodeLayerServer) NewConnection(_ context.Context, connection net.Conn, metadata M.Metadata) error {
-	if s.inner != "" {
-		if s.innerNetwork != "tcp" || metadata.Destination.String() != s.inner {
+	if len(s.routes) != 0 {
+		target, found := s.route("tcp", metadata.Destination.String())
+		if !found {
 			return errors.New("layer peer rejected an unowned inner stream")
 		}
-		peer, err := (&net.Dialer{}).DialContext(s.ctx, "tcp", s.innerPhysical)
+		peer, err := (&net.Dialer{}).DialContext(s.ctx, "tcp", target)
 		if err != nil {
 			return err
 		}
@@ -179,11 +198,12 @@ func (s *desktopNodeLayerServer) NewPacketConnection(_ context.Context, connecti
 	stop := context.AfterFunc(s.ctx, func() { _ = connection.Close() })
 	defer stop()
 	var target string
-	if s.inner != "" {
-		if s.innerNetwork != "udp" || metadata.Destination.String() != s.inner {
+	if len(s.routes) != 0 {
+		var found bool
+		target, found = s.route("udp", metadata.Destination.String())
+		if !found {
 			return errors.New("layer peer rejected an unowned inner tunnel")
 		}
-		target = s.innerPhysical
 	} else if metadata.Destination.String() == "192.168.50.133:53" {
 		target = s.dnsAddress
 	} else if !desktopNodeLayerEcho(metadata.Destination) {
@@ -255,6 +275,28 @@ func (s *desktopNodeLayerServer) NewPacketConnection(_ context.Context, connecti
 
 func startDesktopNodeLayerServer(t *testing.T, ip netip.Addr, password, inner, innerPhysical, innerNetwork, dnsAddress string) *desktopNodeLayerServer {
 	t.Helper()
+	var routes []desktopNodeLayerRoute
+	if inner != "" {
+		routes = []desktopNodeLayerRoute{{innerNetwork, inner, innerPhysical}}
+	}
+	return startDesktopNodeLayerRoutedServer(t, ip, password, routes, dnsAddress)
+}
+
+func startDesktopNodeLayerRoutedServer(t *testing.T, ip netip.Addr, password string, routes []desktopNodeLayerRoute, dnsAddress string) *desktopNodeLayerServer {
+	t.Helper()
+	if len(routes) > 2 {
+		t.Fatal("layer peer exceeded its captured inner route count")
+	}
+	seen := make(map[string]bool)
+	for _, route := range routes {
+		inner, err := netip.ParseAddrPort(route.Destination)
+		physical, physicalErr := netip.ParseAddrPort(route.Physical)
+		key := route.Network + "/" + route.Destination
+		if route.Network != "tcp" && route.Network != "udp" || err != nil || physicalErr != nil || !inner.Addr().Is4() || inner.Port() == 0 || physical.Addr() != ip || physical.Port() != inner.Port() || seen[key] {
+			t.Fatal("layer peer has an unowned or duplicate inner route")
+		}
+		seen[key] = true
+	}
 	listener, err := net.Listen("tcp4", net.JoinHostPort(ip.String(), "0"))
 	if err != nil {
 		t.Fatal(err)
@@ -265,7 +307,7 @@ func startDesktopNodeLayerServer(t *testing.T, ip netip.Addr, password, inner, i
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, tcp: listener, udp: packet, inner: inner, innerPhysical: innerPhysical, innerNetwork: innerNetwork,
+	s := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, tcp: listener, udp: packet, routes: append([]desktopNodeLayerRoute(nil), routes...),
 		dnsAddress: dnsAddress, connections: make(map[io.Closer]bool)}
 	service, err := shadowaead_2022.NewServiceWithPassword(mobilemultihop.NativeStartLayerMethod, password, 10, s, nil)
 	if err != nil {
@@ -396,7 +438,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	var trailing any
 	if decoder.Decode(&request) != nil || decoder.Decode(&trailing) != io.EOF || request.Schema != 1 ||
 		!mobilemultihop.DesktopNodePhysicalGraphSupported(request.Mode, request.Layer) ||
-		request.Mode != "shadowsocks" && request.Mode != "hysteria2" && !desktopNodeXrayMode(request.Mode) && !desktopNodeNaiveMode(request.Mode) && request.Layer == "" || len(request.Configuration.Forward) != 0 {
+		request.Mode != "shadowsocks" && request.Mode != "hysteria2" && !desktopNodeXrayMode(request.Mode) && !desktopNodeNaiveMode(request.Mode) && !desktopNodeCompositeMode(request.Mode) && request.Layer == "" || len(request.Configuration.Forward) != 0 {
 		t.Fatal("layer reference request escaped its captured fixture")
 	}
 	key, keyErr := base64.StdEncoding.Strict().DecodeString(request.Password)
@@ -444,7 +486,18 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	var inner, baseAddress, protocolFiles string
 	innerNetwork, probeNetwork := "udp", "udp"
 	var protocolServer *desktopNodeLayerServer
-	if desktopNodeNaiveMode(request.Mode) {
+	var udpBranch *desktopNodeLayerServer
+	var routes []desktopNodeLayerRoute
+	if desktopNodeCompositeMode(request.Mode) {
+		protocolServer, udpBranch, protocolFiles = startDesktopNodeCompositeServer(t, request.Mode, ip, dnsListener.LocalAddr().String())
+		baseAddress = protocolServer.tcp.Addr().String()
+		probeNetwork = "tcp"
+		for _, route := range []desktopNodeLayerRoute{{Network: "tcp", Physical: baseAddress}, {Network: "udp", Physical: udpBranch.udp.LocalAddr().String()}} {
+			physical := netip.MustParseAddrPort(route.Physical)
+			route.Destination = netip.AddrPortFrom(netip.MustParseAddr("10.78.0.1"), physical.Port()).String()
+			routes = append(routes, route)
+		}
+	} else if desktopNodeNaiveMode(request.Mode) {
 		protocolServer, protocolFiles = startDesktopNodeNaiveServer(t, request.Mode, ip, dnsListener.LocalAddr().String())
 		if request.Mode == "naive-h2" {
 			baseAddress = protocolServer.tcp.Addr().String()
@@ -478,8 +531,12 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	}
 	server := protocolServer
 	address, aesAddress := baseAddress, ""
-	if request.Mode != "hysteria2" && !desktopNodeXrayMode(request.Mode) && !desktopNodeNaiveMode(request.Mode) || request.Layer != "" {
-		server = startDesktopNodeLayerServer(t, ip, request.Password, inner, baseAddress, innerNetwork, dnsListener.LocalAddr().String())
+	if request.Mode != "hysteria2" && !desktopNodeXrayMode(request.Mode) && !desktopNodeNaiveMode(request.Mode) && !desktopNodeCompositeMode(request.Mode) || request.Layer != "" {
+		if len(routes) != 0 {
+			server = startDesktopNodeLayerRoutedServer(t, ip, request.Password, routes, dnsListener.LocalAddr().String())
+		} else {
+			server = startDesktopNodeLayerServer(t, ip, request.Password, inner, baseAddress, innerNetwork, dnsListener.LocalAddr().String())
+		}
 		address = server.tcp.Addr().String()
 		aesAddress = address
 	}
@@ -490,27 +547,31 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal("layer reference has no exact process scope", err)
 	}
-	respond := func(nonce string) {
+	respond := func(nonce, target string, observer *desktopNodeLayerServer) {
 		var count int64
 		if nonce != "" {
 			var err error
-			count, err = server.observation.count(nonce)
+			count, err = observer.observation.count(nonce)
 			if err != nil {
 				t.Fatal(err)
 			}
 		}
 		reply := desktopNodeLayerReply{Schema: 1, Address: address, AESAddress: aesAddress, BaseAddress: baseAddress, ProtocolFiles: protocolFiles,
-			AppID: scope, RawTCP: server.rawTCP.Load(), RawUDP: server.rawUDP.Load(), PlainTCP: server.plainTCP.Load(), PlainUDP: server.plainUDP.Load(), DNSQueries: dnsQueries.Load(), Probe: nonce, ProbeCount: count, ProbeNetwork: probeNetwork}
+			AppID: scope, RawTCP: server.rawTCP.Load(), RawUDP: server.rawUDP.Load(), PlainTCP: server.plainTCP.Load(), PlainUDP: server.plainUDP.Load(), DNSQueries: dnsQueries.Load(), Probe: nonce, ProbeCount: count, ProbeNetwork: probeNetwork, ProbeTarget: target}
 		if protocolServer != nil {
 			reply.ProtocolRawUDP, reply.ProtocolTCP, reply.ProtocolUDP = protocolServer.rawUDP.Load(), protocolServer.plainTCP.Load(), protocolServer.plainUDP.Load()
 			reply.ProtocolRawTCP = protocolServer.rawTCP.Load()
+		}
+		if udpBranch != nil {
+			reply.UDPBranchAddress, reply.UDPBranchRawUDP = udpBranch.udp.LocalAddr().String(), udpBranch.rawUDP.Load()
+			reply.UDPBranchTCP, reply.UDPBranchUDP = udpBranch.plainTCP.Load(), udpBranch.plainUDP.Load()
 		}
 		err := json.NewEncoder(os.Stdout).Encode(reply)
 		if err != nil {
 			t.Fatal("layer reference lost its retained reply pipe", err)
 		}
 	}
-	respond("")
+	respond("", "", server)
 	for {
 		line, err := reader.ReadSlice('\n')
 		if errors.Is(err, io.EOF) && len(line) == 0 {
@@ -523,24 +584,35 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 			if string(line) == "fail-dns\n" {
 				failedDNS.Store(true)
 			}
-			respond("")
+			respond("", "", server)
 			continue
 		}
 		action, nonce, found := strings.Cut(strings.TrimSuffix(string(line), "\n"), " ")
+		target := ""
+		observer, probeAddress, network := server, address, probeNetwork
+		if prefix, suffix, selected := strings.Cut(action, "-"); selected {
+			if !desktopNodeCompositeMode(request.Mode) || suffix != "tcp" && suffix != "udp" {
+				t.Fatal("layer reference received an uncaptured branch observation")
+			}
+			action, target, network = prefix, suffix, suffix
+			if request.Layer == "" && suffix == "udp" {
+				observer, probeAddress = udpBranch, udpBranch.udp.LocalAddr().String()
+			}
+		}
 		if !found || len(nonce) != 32 || action != "arm" && action != "observe" && action != "positive" {
 			t.Fatal("layer reference received an unrelated observation")
 		}
 		if action != "observe" {
-			if err := server.observation.arm(nonce); err != nil {
+			if err := observer.observation.arm(nonce); err != nil {
 				t.Fatal(err)
 			}
 		}
 		if action == "positive" {
-			if ok, err := desktopNodeLayerProbeExchange(netip.MustParseAddrPort(address), nonce, probeNetwork, request.Layer, request.Password); err != nil || !ok {
+			if ok, err := desktopNodeLayerProbeExchange(netip.MustParseAddrPort(probeAddress), nonce, network, request.Layer, request.Password); err != nil || !ok {
 				t.Fatal("actual independent layer observer could not reach its socket", err)
 			}
 		}
-		respond(nonce)
+		respond(nonce, target, observer)
 	}
 }
 
@@ -657,7 +729,7 @@ func (p *desktopNodeLayerReference) observe(t *testing.T, action string) desktop
 		t.Fatal(err)
 	}
 	result, err := p.read()
-	if err != nil || result.Address != p.reply.Address || result.AESAddress != p.reply.AESAddress || result.BaseAddress != p.reply.BaseAddress || result.ProtocolFiles != p.reply.ProtocolFiles || result.ProbeNetwork != p.reply.ProbeNetwork || !bytes.Equal(result.AppID, p.reply.AppID) {
+	if err != nil || result.Address != p.reply.Address || result.AESAddress != p.reply.AESAddress || result.BaseAddress != p.reply.BaseAddress || result.UDPBranchAddress != p.reply.UDPBranchAddress || result.ProtocolFiles != p.reply.ProtocolFiles || result.ProbeNetwork != p.reply.ProbeNetwork || !bytes.Equal(result.AppID, p.reply.AppID) {
 		t.Fatal("layer peer observation changed its original owner", err)
 	}
 	return result
@@ -739,7 +811,7 @@ func startDesktopNodeLayerReference(t *testing.T, mode, layer string, ip netip.A
 	p.reply, err = p.read()
 	p.remote, _ = netip.ParseAddrPort(p.reply.Address)
 	expectedNetwork := "udp"
-	if desktopNodeXrayMode(mode) || mode == "naive-h2" {
+	if desktopNodeXrayMode(mode) || desktopNodeCompositeMode(mode) || mode == "naive-h2" {
 		expectedNetwork = "tcp"
 	}
 	if err != nil || p.remote.Addr() != ip || p.remote.Port() == 0 || p.reply.ProbeNetwork != expectedNetwork {
@@ -770,7 +842,12 @@ func (p *desktopNodeLayerReference) original(t *testing.T, kill, fault string) *
 		"router_api": "http://10.78.0.1:8787", "api_token": "captured-layer-node-token", "endpoint": p.request.Address,
 		"start_layer": p.request.Layer, "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "kill_switch_policy": kill,
 		"ipv6_mode": "on", "home_lan_access": false, "mtu_policy": "auto"}
-	if desktopNodeNaiveMode(p.request.Mode) {
+	if desktopNodeCompositeMode(p.request.Mode) {
+		files = desktopNodeCompositeAssets(t, p.reply.ProtocolFiles, fault)
+		if p.request.Layer != "" {
+			start = string(aesFiles)
+		}
+	} else if desktopNodeNaiveMode(p.request.Mode) {
 		files = desktopNodeNaiveAssets(t, p.reply.ProtocolFiles, fault)
 		if p.request.Layer != "" {
 			start = string(aesFiles)
@@ -810,10 +887,13 @@ func (p *desktopNodeLayerReference) original(t *testing.T, kill, fault string) *
 	return original
 }
 
-type desktopNodeLayerKernel struct{ *desktopNodePeerKernel }
+type desktopNodeLayerKernel struct {
+	*desktopNodePeerKernel
+	allowed map[string]netip.AddrPort
+}
 
 func (p *desktopNodeLayerKernel) Select(ctx context.Context, c mobiletor.DesktopSocketCapture, network string, remote netip.AddrPort) (mobiletor.DesktopSocketBinding, error) {
-	if ctx.Err() != nil || !p.Current(c, p.owner) || network != "tcp" && network != "udp" || remote != p.remote {
+	if ctx.Err() != nil || !p.Current(c, p.owner) || network != "tcp" && network != "udp" || remote != p.allowed[network] {
 		return mobiletor.DesktopSocketBinding{}, errors.New("layer peer fixture rejected another outer tuple")
 	}
 	return mobiletor.DesktopSocketBinding{Owner: p.owner, InterfaceName: p.iface.Name, InterfaceIndex: uint32(p.iface.Index), LocalAddress: p.local}, nil
@@ -828,7 +908,7 @@ func (p *desktopNodeLayerKernel) Bind(ctx context.Context, c mobiletor.DesktopSo
 }
 
 func (p *desktopNodeLayerKernel) Grant(ctx context.Context, q mobiletor.DesktopSocketGrant) (mobiletor.DesktopSocketReceipt, error) {
-	if ctx.Err() != nil || !p.Current(q.Capture, q.Binding.Owner) || q.Network != "tcp" && q.Network != "udp" || q.Remote != p.remote ||
+	if ctx.Err() != nil || !p.Current(q.Capture, q.Binding.Owner) || q.Network != "tcp" && q.Network != "udp" || q.Remote != p.allowed[q.Network] ||
 		q.Local.Addr() != p.local || q.Local.Port() == 0 || !p.network.SocketCurrent() {
 		return mobiletor.DesktopSocketReceipt{}, errors.New("layer socket preceded captured native admission")
 	}
@@ -874,6 +954,7 @@ func newDesktopNodeLayerFixture(t *testing.T, peer *desktopNodeLayerReference, f
 	HY.RegisterOutbound(outs)
 	NV.RegisterOutbound(outs)
 	XR.RegisterOutbound(outs)
+	CO.RegisterOutbound(outs)
 	SS.RegisterOutbound(outs)
 	WH.RegisterOutbound(outs)
 	routervpndesktoppt.RegisterNodePhysicalOutbound(outs)
@@ -899,7 +980,7 @@ func newDesktopNodeLayerFixture(t *testing.T, peer *desktopNodeLayerReference, f
 		t.Fatal(err)
 	}
 	options.Log = &option.LogOptions{Disabled: true}
-	if desktopNodeXrayMode(peer.request.Mode) || desktopNodeNaiveMode(peer.request.Mode) {
+	if desktopNodeXrayMode(peer.request.Mode) || desktopNodeNaiveMode(peer.request.Mode) || desktopNodeCompositeMode(peer.request.Mode) {
 		diagnostic := filepath.Join(t.TempDir(), "owned-native-graph.log")
 		options.Log = &option.LogOptions{Level: "debug", Output: diagnostic}
 		t.Cleanup(func() {
@@ -930,7 +1011,11 @@ func newDesktopNodeLayerFixture(t *testing.T, peer *desktopNodeLayerReference, f
 			t.Error("layered physical factory ran after socket or TUN readiness")
 		}
 		f.kernel.capture = capture
-		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, &desktopNodeLayerKernel{f.kernel}, current)
+		allowed := map[string]netip.AddrPort{"tcp": peer.remote, "udp": peer.remote}
+		if desktopNodeCompositeMode(peer.request.Mode) {
+			allowed = peer.compositeRemotes(t)
+		}
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, &desktopNodeLayerKernel{desktopNodePeerKernel: f.kernel, allowed: allowed}, current)
 		return broker, f.source, err
 	}); err != nil {
 		t.Fatal(err)

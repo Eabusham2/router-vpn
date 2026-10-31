@@ -1,0 +1,105 @@
+//go:build windows && routervpn_windows_node_composition
+
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"net"
+	"syscall"
+	"testing"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func (p *desktopNodeLayerReference) compositeProbe(t *testing.T, network, action, nonce string) int64 {
+	t.Helper()
+	if !desktopNodeCompositeMode(p.request.Mode) || network != "tcp" && network != "udp" || action != "positive" && action != "arm" && action != "observe" {
+		t.Fatal("composite marker escaped its captured branch")
+	}
+	if _, err := io.WriteString(p.input, action+"-"+network+" "+nonce+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := p.read()
+	if err != nil || reply.Address != p.reply.Address || reply.BaseAddress != p.reply.BaseAddress || reply.UDPBranchAddress != p.reply.UDPBranchAddress || reply.ProtocolFiles != p.reply.ProtocolFiles || reply.AESAddress != p.reply.AESAddress || !bytes.Equal(reply.AppID, p.reply.AppID) || reply.ProbeNetwork != p.reply.ProbeNetwork || reply.ProbeTarget != network || reply.Probe != nonce || reply.ProbeCount < 0 {
+		t.Fatal("composite marker changed its original branch, owner or nonce", err)
+	}
+	return reply.ProbeCount
+}
+
+func desktopNodeWFPCompositeBlocked(t *testing.T, peer *desktopNodeLayerReference) {
+	t.Helper()
+	remotes := peer.compositeRemotes(t)
+	for _, network := range []string{"tcp", "udp"} {
+		if peer.compositeProbe(t, network, "positive", desktopNodeWFPProbeNonce(t)) != 1 {
+			t.Fatal("composite observer did not prove its live independent branch", network)
+		}
+		nonce := desktopNodeWFPProbeNonce(t)
+		if peer.compositeProbe(t, network, "arm", nonce) != 0 {
+			t.Fatal("composite observer reused its branch nonce")
+		}
+		delivered, err := desktopNodeLayerProbeExchange(remotes[network], nonce, network, peer.request.Layer, peer.request.Password)
+		if peer.compositeProbe(t, network, "observe", nonce) != 0 || delivered {
+			t.Fatal("ordinary token crossed composite WFP deny on an observed branch", network)
+		}
+		var timeout net.Error
+		if !errors.Is(err, syscall.Errno(10013)) && !(errors.As(err, &timeout) && timeout.Timeout()) {
+			t.Fatal("composite ordinary branch rejection has no bounded native observation", network, err)
+		}
+		if peer.compositeProbe(t, network, "positive", desktopNodeWFPProbeNonce(t)) != 1 {
+			t.Fatal("composite observer lost its independent branch after denial", network)
+		}
+	}
+}
+
+func desktopNodeWFPCompositeTraffic(t *testing.T, f *desktopNodeWFPFixture, peer *desktopNodeLayerReference) {
+	t.Helper()
+	if f.admitted != 1 || f.prepared.Validate() != nil || f.network.Current() || !f.network.SocketCurrent() {
+		t.Fatal("composite WFP startup skipped captured admission or fabricated readiness")
+	}
+	desktopNodeWFPCompositeBlocked(t, peer)
+	for _, host := range []string{"192.0.2.99", "2001:db8::99"} {
+		desktopNodeCompositeExchange(t, f.box, host, func() {
+			snapshot, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(context.Background())
+			if err != nil || snapshot.Closed || snapshot.Target != f.prepared || snapshot.Owner.Kind != "windows-isolated-token" || !snapshot.Options.RetainBaselineForHandoff {
+				t.Fatal("composite payload lost its retained native WFP source", err)
+			}
+			desktopNodeCompositeGrants(t, peer, snapshot.Grants, f.prepared.Capture, snapshot.Owner)
+			desktopNodeCompositePeerTraffic(t, peer)
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeWindowsWFPCompositeTraffic(t *testing.T) {
+	desktopNodeCompositeCases(t, desktopNodeWFPLayerTrafficCase)
+}
+
+func TestRouterVPNDesktopNodeWindowsWFPCompositeSuccession(t *testing.T) {
+	for _, mode := range []string{"split", "max"} {
+		t.Run(mode, func(t *testing.T) { desktopNodeWFPLayerSuccession(t, mode) })
+	}
+}
+
+func TestRouterVPNDesktopNodeWindowsWFPCompositeWrongCredential(t *testing.T) {
+	desktopNodeCompositeCredentialCases(t, func(t *testing.T, mode, layer, fault string) {
+		if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		peer := desktopNodeWFPLayerReference(t, mode, layer)
+		var retained mobiletor.DesktopWindowsProtectionTarget
+		desktopNodeWFPCleanup(t, &retained)
+		original := peer.original(t, "always", fault)
+		peer.compositeProjection(t, original)
+		f := desktopNodeWFPBox(t, original, nil)
+		if err := f.box.RouterVPNStrategyStart(); err != nil {
+			t.Fatal("wrong composite key did not reach actual WFP startup", err)
+		}
+		retained = f.prepared
+		desktopNodeWFPCompositeBlocked(t, peer)
+		desktopNodeCompositeCredential(t, peer, f.desktopNodePeerFixture, fault)
+		retained = desktopNodeWFPDrain(t, f)
+		desktopNodeWFPCompositeBlocked(t, peer)
+	})
+}

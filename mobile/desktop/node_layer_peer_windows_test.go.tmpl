@@ -31,6 +31,10 @@ func desktopNodeWFPLayerReference(t *testing.T, mode, layer string) *desktopNode
 
 func desktopNodeWFPLayerBlocked(t *testing.T, peer *desktopNodeLayerReference) {
 	t.Helper()
+	if desktopNodeCompositeMode(peer.request.Mode) {
+		desktopNodeWFPCompositeBlocked(t, peer)
+		return
+	}
 	if peer.probe(t, "positive", desktopNodeWFPProbeNonce(t)) != 1 {
 		t.Fatal("independent layer observer did not prove its live receive path")
 	}
@@ -53,6 +57,10 @@ func desktopNodeWFPLayerBlocked(t *testing.T, peer *desktopNodeLayerReference) {
 
 func desktopNodeWFPLayerTraffic(t *testing.T, f *desktopNodeWFPFixture, peer *desktopNodeLayerReference) {
 	t.Helper()
+	if desktopNodeCompositeMode(peer.request.Mode) {
+		desktopNodeWFPCompositeTraffic(t, f, peer)
+		return
+	}
 	if f.admitted != 1 || f.prepared.Validate() != nil || f.network.Current() || !f.network.SocketCurrent() {
 		t.Fatal("layered WFP startup skipped captured admission or fabricated readiness")
 	}
@@ -133,7 +141,11 @@ func desktopNodeWFPLayerTrafficCase(t *testing.T, mode, layer string) {
 	peer := desktopNodeWFPLayerReference(t, mode, layer)
 	var retained mobiletor.DesktopWindowsProtectionTarget
 	desktopNodeWFPCleanup(t, &retained)
-	f := desktopNodeWFPBox(t, peer.original(t, "always", ""), nil)
+	original := peer.original(t, "always", "")
+	if desktopNodeCompositeMode(mode) {
+		peer.compositeProjection(t, original)
+	}
+	f := desktopNodeWFPBox(t, original, nil)
 	if err := f.box.RouterVPNStrategyStart(); err != nil {
 		t.Fatal("actual WFP layered native startup failed", err)
 	}
@@ -147,7 +159,7 @@ func desktopNodeWFPLayerTrafficCase(t *testing.T, mode, layer string) {
 		t.Fatal("actual WFP layered DNS accepted cached or failed proof")
 	}
 	f.network.InterfaceUpdated(context.Background())
-	if f.network.SocketCurrent() || f.network.Current() || f.exchange("udp") == nil {
+	if f.network.SocketCurrent() || f.network.Current() || f.exchange("udp") == nil || desktopNodeCompositeMode(mode) && f.exchange("tcp") == nil {
 		t.Fatal("retired WFP layered graph delivered another payload")
 	}
 	retained = desktopNodeWFPDrain(t, f)

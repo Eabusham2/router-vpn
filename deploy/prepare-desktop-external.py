@@ -97,6 +97,8 @@ PEER_TEMPLATES = {
     'node_naive_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_peer_windows_test.go',
     'node_naive_loader_purego_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_loader_purego_test.go',
     'node_xray_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_xray_peer_test.go',
+    'node_composite_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_composite_peer_test.go',
+    'node_composite_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_composite_peer_windows_test.go',
     'node_xray_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_xray_peer_windows_test.go',
     'node_layer_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_layer_peer_windows_test.go',
 }
@@ -582,7 +584,7 @@ def prepare(vendor, go='go', *, env=None):
     for name, relative in PEER_TEMPLATES.items():
         path = ROOT/'mobile/desktop'/name
         prefix = b'package routervpnamnezia\n'
-        if name in ('node_peer_windows_test.go.tmpl', 'node_layer_peer_windows_test.go.tmpl', 'node_xray_peer_windows_test.go.tmpl', 'node_naive_peer_windows_test.go.tmpl'):
+        if name in ('node_peer_windows_test.go.tmpl', 'node_layer_peer_windows_test.go.tmpl', 'node_xray_peer_windows_test.go.tmpl', 'node_naive_peer_windows_test.go.tmpl', 'node_composite_peer_windows_test.go.tmpl'):
             prefix = b'//go:build windows && routervpn_windows_node_composition\n\n' + prefix
         elif name == 'node_naive_loader_purego_test.go.tmpl':
             prefix = b'//go:build with_purego\n\n' + prefix
