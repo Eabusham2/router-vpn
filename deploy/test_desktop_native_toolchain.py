@@ -84,6 +84,21 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
                         self.assertLessEqual(kwargs['timeout'], 300)
                         return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_node_lifecycle_runner.py'):
+                        self.assertEqual(system, 'linux')
+                        self.assertEqual(args[2:], [])
+                        self.assertEqual(kwargs['cwd'], ROOT)
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertLessEqual(kwargs['timeout'], 60)
+                        return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_node_lifecycle.py'):
+                        self.assertEqual(system, 'linux')
+                        self.assertEqual(args[2:], [str(source.resolve())])
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertLessEqual(kwargs['timeout'], 600)
+                        return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_physical.py'):
                         self.assertIn(system, ('linux', 'windows'))
                         self.assertEqual(args[2:], [str(source.resolve())])
@@ -209,6 +224,15 @@ class NativeSocketUIDGate(unittest.TestCase):
                 guardian = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_linux_guardian.py')]
                 self.assertEqual(len(guardian), 1 if system == 'linux' else 0)
                 self.assertIn(ROOT/'deploy/test_desktop_linux_guardian.py', N.inputs())
+                lifecycle_checks = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_node_lifecycle_runner.py')]
+                lifecycle = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_node_lifecycle.py')]
+                self.assertEqual(len(lifecycle_checks), 1 if system == 'linux' else 0)
+                self.assertEqual(len(lifecycle), len(lifecycle_checks))
+                if lifecycle:
+                    self.assertEqual(calls.index(lifecycle_checks[0]), calls.index(guardian[0])+1)
+                    self.assertEqual(calls.index(lifecycle[0]), calls.index(lifecycle_checks[0])+1)
+                for name in ('test_linux_node_lifecycle.py', 'test_linux_node_lifecycle_runner.py'):
+                    self.assertIn(ROOT/'deploy'/name, N.inputs())
                 darwin = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_guardian.py')]
                 self.assertEqual(len(darwin), 1 if system == 'darwin' else 0)
                 self.assertIn(ROOT/'deploy/test_desktop_darwin_guardian.py', N.inputs())
