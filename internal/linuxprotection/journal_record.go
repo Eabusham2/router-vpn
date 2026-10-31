@@ -45,12 +45,13 @@ type JournalState struct {
 }
 
 type JournalIntent struct {
-	Action                string       `json:"action"`
-	RequestID             string       `json:"request_id"`
-	ProfileID             string       `json:"profile_id"`
-	ProfileRevision       string       `json:"profile_revision"`
-	ResultProfileRevision string       `json:"result_profile_revision"`
-	Candidate             JournalState `json:"candidate"`
+	Action                string              `json:"action"`
+	RequestID             string              `json:"request_id"`
+	ProfileID             string              `json:"profile_id"`
+	ProfileRevision       string              `json:"profile_revision"`
+	ResultProfileRevision string              `json:"result_profile_revision"`
+	Candidate             JournalState        `json:"candidate"`
+	Preparation           *JournalPreparation `json:"preparation,omitempty"`
 }
 
 type JournalRecord struct {
@@ -121,6 +122,12 @@ func (r JournalRecord) Validate() error {
 		return errors.New("Linux journal intent lost its accepted request or joined predecessor")
 	}
 	switch i.Action {
+	case "prepare":
+		p := i.Preparation
+		if i.ResultProfileRevision != i.ProfileRevision || p == nil || p.Validate(r.Controller) != nil || !sameState(i.Candidate, JournalState{}) ||
+			r.Committed.Target != nil && p.Capture.SessionID == r.Committed.Target.Native.Capture.SessionID {
+			return errors.New("Linux preparation lost its new captured baseline or retained predecessor")
+		}
 	case "successor":
 		c, owner := i.Candidate, r.Controller
 		if i.ResultProfileRevision != i.ProfileRevision || c.Target == nil || c.Engine == nil || c.ProfileID != i.ProfileID || c.ProfileRevision != i.ProfileRevision ||
@@ -128,8 +135,15 @@ func (r JournalRecord) Validate() error {
 			r.Committed.Target != nil && (c.Target.Native.Capture.SessionID == r.Committed.Target.Native.Capture.SessionID || c.Target.Guardian == r.Committed.Target.Guardian) {
 			return errors.New("Linux successor lost its new native engine, source or exact profile")
 		}
+		if c.Target.Native.TableName != "" {
+			if i.Preparation == nil || i.Preparation.Validate(r.Controller) != nil || !preparationMatchesCandidate(i.Preparation, c) {
+				return errors.New("Linux Node successor lost its original prepared creation receipt")
+			}
+		} else if i.Preparation != nil {
+			return errors.New("fixed Linux baseline cannot adopt a per-session creation receipt")
+		}
 	case "release", "off":
-		if r.Committed.Target == nil || i.ProfileID != r.Committed.ProfileID ||
+		if i.Preparation != nil || r.Committed.Target == nil || i.ProfileID != r.Committed.ProfileID ||
 			i.Action == "release" && (i.ProfileRevision != r.Committed.ProfileRevision || i.ResultProfileRevision != i.ProfileRevision) {
 			return errors.New("Linux retirement lost its exact retained profile")
 		}
@@ -167,6 +181,7 @@ func CloneRecord(r JournalRecord) JournalRecord {
 	if r.Intent != nil {
 		copy := *r.Intent
 		copy.Candidate = CloneState(copy.Candidate)
+		copy.Preparation = clonePreparation(copy.Preparation)
 		r.Intent = &copy
 	}
 	return r
@@ -237,6 +252,9 @@ func CheckJournalTransition(previous, next JournalRecord) error {
 		return errors.New("Linux journal transition lost its preceding canonical digest")
 	}
 	if previous.Phase == "intent" {
+		if previous.Intent.Action == "prepare" {
+			return checkPreparationTransition(previous, next)
+		}
 		allowed := settledState(next.Committed, previous.Committed) || settledState(next.Committed, previous.Intent.Candidate)
 		if next.Phase != "settled" || !allowed {
 			return errors.New("Linux journal must settle one exact recorded intent outcome")
@@ -246,6 +264,10 @@ func CheckJournalTransition(previous, next JournalRecord) error {
 	if next.Phase == "intent" {
 		if !sameState(next.Committed, previous.Committed) {
 			return errors.New("Linux intent changed its last independently proved state")
+		}
+		if next.Intent.Action == "prepare" && next.Intent.Preparation.Created != nil ||
+			next.Intent.Action == "successor" && next.Intent.Candidate.Target.Native.TableName != "" {
+			return errors.New("Linux Node mutation bypassed its durable preparation intent")
 		}
 		return nil
 	}

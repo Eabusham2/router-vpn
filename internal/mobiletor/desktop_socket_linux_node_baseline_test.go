@@ -111,6 +111,9 @@ func TestLinuxBaselineNodePartialOwnerCannotMutate(t *testing.T) {
 		if b != nil && b.gate != nil {
 			b.gate <- struct{}{}
 		}
+		if _, err := b.Created(ctx); err == nil {
+			t.Fatal("partial creator supplied an original creation receipt")
+		}
 		if err := b.Release(ctx); err == nil {
 			t.Fatal("partial creator authorized a native deletion")
 		}

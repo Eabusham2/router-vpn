@@ -34,6 +34,7 @@ type DesktopLinuxNodeBaseline struct {
 	prepared                  *desktopLinuxNFT
 	preparedRecord            DesktopLinuxProtectionRecord
 	successor                 *DesktopLinuxNodeBaseline
+	homeLAN                   bool
 	complete, removed, closed bool
 	uncertain, closeErr       error
 }
@@ -49,7 +50,7 @@ func NewDesktopLinuxNodeBaseline(ctx context.Context, capture DesktopSocketCaptu
 	}
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
-	b := &DesktopLinuxNodeBaseline{gate: make(chan struct{}, 1), nft: desktopLinuxNFTForCapture(capture, true)}
+	b := &DesktopLinuxNodeBaseline{gate: make(chan struct{}, 1), nft: desktopLinuxNFTForCapture(capture, true), homeLAN: homeLAN}
 	defer func() { b.gate <- struct{}{} }()
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
