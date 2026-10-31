@@ -149,6 +149,45 @@ class NativePQScope(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'native/CGO/test-only scope'):
                 GATE.checked_sources(self.source)
 
+    @contextmanager
+    def shared_private_reference_source(self, name):
+        # Only prepared-core identity is modeled. Capture all actual shared PQ
+        # dependency bytes, including the script invoked before key generation.
+        shared = GATE.PQ
+        with patch.object(shared.NODE, 'checked_sources', side_effect=lambda _source: (self.source, {})), \
+             patch.object(shared.REFERENCE, 'verify_sources', return_value=self.source):
+            _, original = shared.checked_sources(self.source)
+            root = self.directory(name)
+            for key in original:
+                relative = key.removeprefix('pq-source/')
+                self.assertNotEqual(relative, key)
+                target = root / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT / relative).read_bytes())
+            with patch.object(shared, 'ROOT', root):
+                yield root, original
+
+    def test_shared_source_capture_requires_actual_private_acl_dependencies(self):
+        with self.shared_private_reference_source('private-reference-source') as (root, before):
+            self.assertEqual(GATE.PQ.checked_sources(self.source)[1], before)
+            for relative in ('client/Protect-RouterVPN-Windows-PrivateRoot.ps1',
+                             'client/test-windows-private-acl.ps1',
+                             'deploy/test_pq_reference_preparation.py'):
+                path = root / relative
+                original = path.read_bytes()
+                key = 'pq-source/' + relative
+                self.assertEqual(before[key], GATE.PQ.regular_digest(ROOT / relative))
+                path.write_bytes(original + b'\n# changed captured dependency\n')
+                self.assertNotEqual(GATE.PQ.checked_sources(self.source)[1][key], before[key])
+                path.unlink()
+                with self.assertRaisesRegex(ValueError, 'captured regular file'):
+                    GATE.PQ.checked_sources(self.source)
+                path.symlink_to(ROOT / relative)
+                with self.assertRaisesRegex(ValueError, 'captured regular file'):
+                    GATE.PQ.checked_sources(self.source)
+                path.unlink()
+                path.write_bytes(original)
+
     @staticmethod
     def negative_output(mutation):
         _, parent, selector, witness, _, _ = mutation
@@ -288,6 +327,36 @@ class NativePQScope(unittest.TestCase):
                 with self.assertRaisesRegex(failure, 'workspace cleanup'):
                     GATE.execute(self.source, self.work / 'pq', self.work / 'cache',
                                  prospective=True, receipt_path=receipt)
+            self.assertFalse(receipt.exists())
+
+    def test_private_acl_change_or_loss_cannot_publish_native_evidence(self):
+        real_capture = GATE.checked_sources
+        for change in ('changed', 'missing', 'aliased'):
+            receipt = self.work / (change + '-private-acl-receipt.json')
+            with self.subTest(change=change), \
+                 self.shared_private_reference_source(change + '-private-acl-source') as (root, _before), \
+                 self.receipt_harness(receipt) as state, \
+                 patch.object(GATE.WFP, 'checked_sources', side_effect=lambda _source: (self.source, {})):
+                captures = 0
+                def capture(source):
+                    nonlocal captures
+                    captures += 1
+                    if captures == 2:
+                        helper = root / 'client/Protect-RouterVPN-Windows-PrivateRoot.ps1'
+                        if change == 'changed':
+                            helper.write_bytes(helper.read_bytes() + b'\n# helper changed during native execution\n')
+                        else:
+                            helper.unlink()
+                            if change == 'aliased':
+                                helper.symlink_to(ROOT / 'client/Protect-RouterVPN-Windows-PrivateRoot.ps1')
+                    return real_capture(source)
+                with patch.object(GATE, 'checked_sources', side_effect=capture), \
+                     self.assertRaisesRegex(ValueError, 'prepared source changed|captured regular file'):
+                    GATE.execute(self.source, self.work / 'pq', self.work / 'cache',
+                                 prospective=True, receipt_path=receipt)
+                self.assertEqual(captures, 2)
+                self.assertTrue(state['native_calls'], 'receipt boundary was not reached after modeled execution')
+                self.assertTrue(all(not path.exists() for path in state['paths']))
             self.assertFalse(receipt.exists())
 
     def test_standalone_defers_receipt_until_its_outer_workspace_joins(self):

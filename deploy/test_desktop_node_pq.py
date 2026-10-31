@@ -52,6 +52,8 @@ def checked_sources(source):
         raise ValueError('PQ Node source identity changed during capture')
     for relative in ('mobile/desktop/node_pq_peer_test.go.tmpl', 'mobile/amnezia/pq_reference_fixture.go.tmpl',
                      'deploy/build_pq_reference_fixture.py', 'deploy/build-desktop-pq.py', 'deploy/test_server_pq_traffic.py',
+                     'client/Protect-RouterVPN-Windows-PrivateRoot.ps1', 'client/test-windows-private-acl.ps1',
+                     'deploy/test_pq_reference_preparation.py',
                      'deploy/test_desktop_node_pq.py', 'mobile/rosenpass/examples/native_keys.rs', *REFERENCE.COPIES):
         records['pq-source/' + relative] = regular_digest(ROOT / relative)
     for relative in REFERENCE.SERVER.COPIES:
