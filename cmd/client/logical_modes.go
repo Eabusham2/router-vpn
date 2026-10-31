@@ -459,7 +459,7 @@ func (a *app) connectLogical(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "connection request was cancelled before ownership", http.StatusRequestTimeout)
 		return
 	}
-	_, finish, guardErr := a.beginConnectionOperation()
+	operation, finish, guardErr := a.beginConnectionOperation()
 	if guardErr != nil {
 		http.Error(w, guardErr.Error(), http.StatusConflict)
 		return
@@ -485,26 +485,24 @@ func (a *app) connectLogical(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	preferred := a.preferredBase(q.Base)
+	basePreference, err := a.stageLogicalBasePreference(operation, q.Base)
+	if err != nil {
+		http.Error(w, "preferred base could not be saved before connection preparation: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
 	used, err := a.startLogicalMode(q.Mode, q.Base)
 	if err != nil {
 		status := http.StatusServiceUnavailable
 		if errors.Is(err, errConnectionOperationCancelled) {
 			status = http.StatusConflict
 		}
-		http.Error(w, err.Error(), status)
+		http.Error(w, errors.Join(err, a.rollbackLogicalBasePreference(basePreference)).Error(), status)
 		return
 	}
 	if err := a.checkConnectionOperation(); err != nil {
 		_ = a.stopMode()
-		http.Error(w, a.finalizeCancelledFallback("LOGICAL "+q.Mode).Error(), http.StatusConflict)
+		http.Error(w, errors.Join(a.finalizeCancelledFallback("LOGICAL "+q.Mode), a.rollbackLogicalBasePreference(basePreference)).Error(), http.StatusConflict)
 		return
-	}
-	if normalizeBase(q.Base) != "auto" {
-		if err := a.persistBasePreference(q.Base); err != nil {
-			_ = a.stopMode()
-			http.Error(w, "logical path was proven but preferred-base persistence failed; the path was stopped: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
 	}
 	fallbackUsed := used.Base != "native" && used.Base != "auto" && used.Base != preferred
 	a.mu.Lock()

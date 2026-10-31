@@ -91,10 +91,11 @@ class NodeProcessRunner(unittest.TestCase):
                       "cmd/client/desktop_node_health.go", "cmd/client/desktop_node_startup.go",
                       "cmd/client/desktop_node_recovery_initial.go", "cmd/client/desktop_node_owned.go",
                       "cmd/client/desktop_node_connection_host.go", "cmd/client/desktop_node_native.go",
-                      "cmd/client/strategy_requirements.go", "cmd/client/desktop_node_smart.go", "cmd/client/start_layer_routes.go")}
+                      "cmd/client/strategy_requirements.go", "cmd/client/desktop_node_smart.go", "cmd/client/start_layer_routes.go",
+                      "cmd/client/logical_modes.go", "cmd/client/logical_base_preference.go")}
         changes = GATE.mutants()
-        self.assertEqual(len(changes), 40)
-        self.assertEqual(len({change[1] for change in changes}), 40)
+        self.assertEqual(len(changes), 44)
+        self.assertEqual(len({change[1] for change in changes}), 44)
         for filename, _, test, witness, replacement in changes:
             self.assertIn(filename, originals)
             self.assertNotEqual(replacement.encode(), originals[filename])

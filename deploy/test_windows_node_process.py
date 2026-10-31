@@ -116,6 +116,12 @@ SHARED_TESTS = (
     "TestDesktopNodePublicOrdinaryCancellationRetainsCapturedCleanup",
     "TestDesktopNodeStartAssetsMAXKeepsEmbeddedOwner",
     "TestDesktopNodeStartAssetsSeparateOwnerStillRequired",
+    "TestDesktopNodePublicLogicalBasePreferenceRetainsCapturedSource",
+    "TestDesktopNodePublicLogicalBasePreferencePreparationFailureRollsBack",
+    "TestDesktopNodePublicLogicalBasePreferenceFailedSuccessorKeepsMatchingSource",
+    "TestLogicalBaseRollbackRejectsChangedOrUnjoinedOwners",
+    "TestLogicalBaseRollbackPreservesDurablePredecessorAndCancellation",
+    "TestLogicalBaseRollbackWriteFailureRetainsSavedStagedValue",
 )
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
@@ -136,9 +142,17 @@ EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES
             *("TestDesktopNodePublicConnectCancellationAndProofReplacement/" + case
               for case in ("cancel-at-start", "request-during-proof", "runtime-during-proof", "native-owner-during-proof")),
             *("TestDesktopNodeSmartRetainRechecksPublicationOwner/" + case for case in ("cancel", "native-owner")),
+            *("TestDesktopNodePublicLogicalBasePreferenceRetainsCapturedSource/" + policy + "/" + case
+              for policy in ("always", "on-connect") for case in ("wg", "awg", "proxy", "fallback")),
+            *("TestDesktopNodePublicLogicalBasePreferencePreparationFailureRollsBack/" + case for case in ("verify", "cancel", "save")),
+            *("TestDesktopNodePublicLogicalBasePreferenceFailedSuccessorKeepsMatchingSource/" + policy for policy in ("always", "on-connect")),
+            *("TestLogicalBaseRollbackRejectsChangedOrUnjoinedOwners/" + case
+              for case in ("operation", "selection", "profile", "command", "workspace", "new-unknown-slot", "replaced-slot", "lost-slot",
+                           "active", "retiring", "off", "journal-close", "new-target", "revision")),
             "TestWindowsPrivateStoreWriteThroughReplace/unicode",
             "TestWindowsPrivateStoreWriteThroughReplace/long-portable-path")
 REQUIRED_SOURCES = (
+    "cmd/client/logical_modes.go", "cmd/client/logical_base_preference.go", "cmd/client/logical_base_preference_test.go",
     "cmd/client/desktop_node_start_assets_test.go",
     "cmd/client/desktop_node_process.go",
     "cmd/client/desktop_node_process_other.go",
@@ -261,11 +275,18 @@ def mutants():
     smart = (ROOT / smart_file).read_text(encoding="utf-8")
     capability_file = "cmd/client/start_layer_routes.go"
     capability = (ROOT / capability_file).read_text(encoding="utf-8")
+    logical_file = "cmd/client/logical_modes.go"
+    logical = (ROOT / logical_file).read_text(encoding="utf-8")
+    base_file = "cmd/client/logical_base_preference.go"
+    base = (ROOT / base_file).read_text(encoding="utf-8")
     once = NATIVE.replace_once
     alive = NATIVE.function_mutant(original, "func (owner *desktopNodeProcessOwner) Alive()",
         "\tif err := owner.controller(); err != nil {\n\t\treturn err\n\t}\n", "")
     alive = NATIVE.function_mutant(alive, "func (owner *desktopNodeProcessOwner) Alive()",
                                   "return owner.controller()", "return nil")
+    late_base = once(logical, "basePreference, err := a.stageLogicalBasePreference(operation, q.Base)",
+                     "basePreference, err := (*logicalBasePreferenceTransaction)(nil), error(nil)\n\t_ = operation")
+    late_base = once(late_base, "\tfallbackUsed := used.Base !=", "\tif err := a.persistBasePreference(q.Base); err != nil {\n\t\thttp.Error(w, err.Error(), http.StatusInternalServerError)\n\t\treturn\n\t}\n\tfallbackUsed := used.Base !=")
     return (
         (filename, "retired-controller-authority", NATIVE_TESTS[0],
          "retired controller still authorized the native child", alive),
@@ -404,6 +425,17 @@ def mutants():
          "cancelled ordinary publication lost its exact mode cleanup identity or acknowledged a connection",
          once(host, "if !a.sameConnectionOperationLocked(operation) {",
               "if a.checkCapturedConnectionOperationLocked(operation) != nil {")),
+        (logical_file, "logical-base-mutates-proved-source", "TestDesktopNodePublicLogicalBasePreferenceRetainsCapturedSource/always/wg",
+         "logical preference changed the complete profile after native graph capture", late_base),
+        (base_file, "logical-base-rolls-back-retained-successor", "TestLogicalBaseRollbackRejectsChangedOrUnjoinedOwners/new-target",
+         "logical rollback replaced another captured owner or source",
+         once(base, "!capture.protectionUnchangedLocked(slot)", "false && !capture.protectionUnchangedLocked(slot)")),
+        (base_file, "logical-base-rolls-back-replacement-operation", "TestLogicalBaseRollbackRejectsChangedOrUnjoinedOwners/operation",
+         "logical rollback replaced another captured owner or source",
+         once(base, "a.connectionContext != capture.operation", "false && a.connectionContext != capture.operation")),
+        (base_file, "logical-base-rollback-diverges-on-write-failure", "TestLogicalBaseRollbackWriteFailureRetainsSavedStagedValue",
+         "failed logical rollback diverged from the durably staged preference",
+         once(base, "profile.BaseTunnel = stagedBase", "_ = stagedBase")),
     )
 
 
