@@ -1,0 +1,526 @@
+//go:build linux && routervpn_linux_node_composition
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	"github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
+	TUN "github.com/sagernet/sing-box/protocol/tun"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-box/service/routervpnperformance"
+	SJ "github.com/sagernet/sing/common/json"
+	"golang.org/x/sys/unix"
+)
+
+func init() {
+	if len(os.Args) == 3 && os.Args[1] == "routervpn-owned-socket-helper" {
+		if err := mobiletor.RunDesktopLinuxSocketHelper(os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(81)
+		}
+		os.Exit(0)
+	}
+}
+
+func desktopNodeLinuxCommand(t *testing.T, input string, arguments ...string) []byte {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, arguments[0], arguments[1:]...)
+	command.Stdin = strings.NewReader(input)
+	raw, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("isolated Linux Node command failed: %v: %s", err, raw)
+	}
+	return raw
+}
+
+// This setup may run only in the guardian runner's fresh user/network/mount/
+// PID namespaces. The veth, routes, private account files and nft policy
+// disappear with that namespace; no host network or device is changed.
+func desktopNodeLinuxNamespace(t *testing.T) {
+	t.Helper()
+	device, inode, present := strings.Cut(os.Getenv("ROUTERVPN_NODE_OUTER_NETNS_ID"), ":")
+	outerDevice, deviceErr := strconv.ParseUint(device, 10, 64)
+	outerInode, inodeErr := strconv.ParseUint(inode, 10, 64)
+	var current unix.Stat_t
+	currentErr := unix.Stat("/proc/self/ns/net", &current)
+	if os.Getenv("ROUTERVPN_LINUX_GUARDIAN_TEST_NS") != "1" || os.Geteuid() != 0 ||
+		!present || deviceErr != nil || inodeErr != nil || outerInode == 0 || currentErr != nil ||
+		current.Dev == outerDevice && current.Ino == outerInode {
+		t.Fatal("Linux Node native gate requires its explicit isolated kernel namespace")
+	}
+	for _, command := range []struct{ create, remove []string }{
+		{[]string{"ip", "addr", "add", "192.168.210.1/30", "dev", "rvpn-test"}, []string{"ip", "addr", "del", "192.168.210.1/30", "dev", "rvpn-test"}},
+		{[]string{"ip", "netns", "exec", "rvpn-peer", "ip", "addr", "add", "192.168.210.2/30", "dev", "rvpn-peer"}, []string{"ip", "netns", "exec", "rvpn-peer", "ip", "addr", "del", "192.168.210.2/30", "dev", "rvpn-peer"}},
+		{[]string{"ip", "route", "add", "default", "via", "192.168.210.2", "dev", "rvpn-test"}, []string{"ip", "route", "del", "default", "via", "192.168.210.2", "dev", "rvpn-test"}},
+	} {
+		desktopNodeLinuxCommand(t, "", command.create...)
+		t.Cleanup(func() { desktopNodeLinuxCommand(t, "", command.remove...) })
+	}
+}
+
+// A device node is provisioned by the matching native test host. Creating one
+// requires privilege in the initial user namespace and is not a property that
+// an isolated child can fabricate. Missing TUN support fails the actual gate.
+func desktopNodeLinuxRequireTUN(t *testing.T) {
+	t.Helper()
+	var native unix.Stat_t
+	err := unix.Stat("/dev/net/tun", &native)
+	if err != nil || native.Mode&unix.S_IFMT != unix.S_IFCHR || unix.Major(native.Rdev) != 10 || unix.Minor(native.Rdev) != 200 {
+		t.Fatal("Linux Node native gate requires the actual provisioned TUN character device", err)
+	}
+}
+
+func desktopNodeLinuxReference(t *testing.T) *desktopNodeLayerReference {
+	t.Helper()
+	config, options := desktopReferenceFixture(t)
+	config.Echo = append(config.Echo, desktopReferenceRule{Network: "tcp", Address: "2001:db8::99", Port: 9999},
+		desktopReferenceRule{Network: "udp", Address: "2001:db8::99", Port: 9999})
+	var key [32]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	p := &desktopNodeLayerReference{ctx: ctx, cancel: cancel, options: options, done: make(chan error, 1),
+		request: desktopNodeLayerRequest{Schema: 1, Mode: "shadowsocks", Address: "192.168.210.2",
+			Password: base64.StdEncoding.EncodeToString(key[:]), Configuration: config}}
+	clear(key[:])
+	p.command = exec.CommandContext(ctx, "ip", "netns", "exec", "rvpn-peer", executable,
+		"-test.run=^TestRouterVPNDesktopNodeLayerReferenceProcess$", "-test.count=1", "-test.timeout=85s")
+	p.command.Env = append(os.Environ(), "ROUTERVPN_NODE_LAYER_REFERENCE_CHILD=1")
+	p.input, err = p.command.StdinPipe()
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	var writer *os.File
+	p.output, writer, err = os.Pipe()
+	if err != nil {
+		cancel()
+		_ = p.input.Close()
+		t.Fatal(err)
+	}
+	p.reader = bufio.NewReaderSize(p.output, desktopNodeLayerReferenceLimit+1)
+	p.command.Stdout, p.command.Stderr = writer, &p.diagnostic
+	if err = p.command.Start(); err != nil {
+		cancel()
+		_ = p.input.Close()
+		_ = p.output.Close()
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	_ = writer.Close()
+	go func() { p.done <- p.command.Wait() }()
+	t.Cleanup(func() {
+		_ = p.input.Close()
+		select {
+		case err := <-p.done:
+			if err != nil {
+				t.Error("actual Linux SS2022 reference failed", err, p.diagnostic.String())
+			}
+		case <-time.After(5 * time.Second):
+			cancel()
+			<-p.done
+			t.Error("actual Linux SS2022 reference did not join its owned channel", p.diagnostic.String())
+		}
+		cancel()
+		_ = p.output.Close()
+		if t.Failed() && p.diagnostic.Len() != 0 {
+			t.Logf("actual retained SS2022 peer: %s", p.diagnostic.String())
+		}
+	})
+	if err = json.NewEncoder(p.input).Encode(p.request); err != nil {
+		t.Fatal(err)
+	}
+	p.reply, err = p.read()
+	p.remote, _ = netip.ParseAddrPort(p.reply.Address)
+	if err != nil || p.remote.Addr().String() != p.request.Address || p.remote.Port() == 0 || p.reply.ProbeNetwork != "udp" {
+		t.Fatal("actual Linux encrypted peer did not return its captured private endpoint", err)
+	}
+	return p
+}
+
+func desktopNodeLinuxProbe(t *testing.T, peer *desktopNodeLayerReference, blocked bool) {
+	t.Helper()
+	positive := func() {
+		var nonce [16]byte
+		if _, err := rand.Read(nonce[:]); err != nil {
+			t.Fatal(err)
+		}
+		if peer.probe(t, "positive", hex.EncodeToString(nonce[:])) != 1 {
+			t.Fatal("independent Linux peer did not prove its actual receive path")
+		}
+	}
+	positive()
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		t.Fatal(err)
+	}
+	marker := hex.EncodeToString(nonce[:])
+	if peer.probe(t, "arm", marker) != 0 {
+		t.Fatal("fresh Linux raw marker already existed")
+	}
+	dialer := net.Dialer{Timeout: 500 * time.Millisecond, LocalAddr: &net.UDPAddr{IP: net.ParseIP("192.168.210.1")},
+		Control: func(_, _ string, raw syscall.RawConn) error {
+			var bindErr error
+			err := raw.Control(func(fd uintptr) {
+				bindErr = unix.SetsockoptString(int(fd), unix.SOL_SOCKET, unix.SO_BINDTODEVICE, "rvpn-test")
+			})
+			return errors.Join(err, bindErr)
+		}}
+	connection, err := dialer.DialContext(context.Background(), "udp4", peer.remote.String())
+	echo := false
+	if err == nil {
+		defer connection.Close()
+		_ = connection.SetDeadline(time.Now().Add(500 * time.Millisecond))
+		payload := []byte(desktopNodePeerProbePrefix + marker)
+		if count, writeErr := connection.Write(payload); writeErr == nil && count == len(payload) {
+			answer := make([]byte, len(payload)+1)
+			count, readErr := connection.Read(answer)
+			echo = readErr == nil && bytes.Equal(answer[:count], payload)
+		}
+	}
+	count := peer.probe(t, "observe", marker)
+	if blocked && (echo || count != 0) || !blocked && (!echo || count != 1) {
+		t.Fatal("actual Linux nft physical bypass witness changed", blocked, echo, count, err)
+	}
+	positive()
+}
+
+type desktopNodeLinuxFixture struct {
+	*desktopNodePeerFixture
+	preparation *box.RouterVPNDesktopLinuxNodePreparation
+	prepared    routervpndesktoppt.NodeLinuxPhysicalPrepared
+	admissions  int
+}
+
+func desktopNodeLinuxBox(t *testing.T, original *mobilemultihop.NodeProfile, restoredMTU int, fault string) *desktopNodeLinuxFixture {
+	t.Helper()
+	var session [16]byte
+	if _, err := rand.Read(session[:]); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewDesktopNodePolicyWithMTU(original, hex.EncodeToString(session[:]), "linux", restoredMTU)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &desktopNodeLinuxFixture{desktopNodePeerFixture: &desktopNodePeerFixture{policy: policy}}
+	meta := policy.Metadata()
+	script := fmt.Sprintf(`add table inet router_vpn_killswitch
+add chain inet router_vpn_killswitch output { type filter hook output priority -310; policy drop; comment "routervpn-owned-baseline:%s:%s"; }
+add rule inet router_vpn_killswitch output oifname "lo" accept
+add rule inet router_vpn_killswitch output oifname { "wg", "awg", "router-vpn" } accept
+add rule inet router_vpn_killswitch output ip protocol udp udp sport 68 udp dport 67 accept
+add rule inet router_vpn_killswitch output ip6 nexthdr ipv6-icmp icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
+`, meta.SessionID, meta.SourceSHA256)
+	desktopNodeLinuxCommand(t, script, "nft", "-f", "-")
+	t.Cleanup(func() { desktopNodeLinuxCommand(t, "", "nft", "delete", "table", "inet", "router_vpn_killswitch") })
+	ins := inbound.NewRegistry()
+	TUN.RegisterInbound(ins)
+	outs := outbound.NewRegistry()
+	SS.RegisterOutbound(outs)
+	routervpndesktoppt.RegisterNodePhysicalOutbound(outs)
+	dnsRegistry := dns.NewTransportRegistry()
+	DNST.RegisterUDP(dnsRegistry)
+	DNST.RegisterTCP(dnsRegistry)
+	services := boxService.NewRegistry()
+	routervpnperformance.RegisterService(services)
+	boxService.Register[routervpndesktoppt.NodeCaptureOptions](services, mobilemultihop.DesktopNodeNetworkType, func(ctx context.Context, logger log.ContextLogger, tag string, options routervpndesktoppt.NodeCaptureOptions) (adapter.Service, error) {
+		native, err := routervpndesktoppt.NewNodeNetworkOwner(ctx, logger, tag, options)
+		if err == nil {
+			f.network = native.(*routervpndesktoppt.NodeNetworkOwner)
+		}
+		return native, err
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ctx, err = routervpndesktoppt.WithNodeLinuxPhysicalAdmission(ctx, policy, func(ctx context.Context, prepared routervpndesktoppt.NodeLinuxPhysicalPrepared) error {
+		if f.network.SocketCurrent() || f.network.Current() || f.admissions != 0 || ctx.Err() != nil ||
+			prepared.Policy != meta.KillSwitchPolicy || prepared.Protection.Validate() != nil || prepared.Protection.Capture.SessionID != meta.SessionID || prepared.Protection.Capture.SourceSHA256 != meta.SourceSHA256 {
+			return errors.New("Linux actual Node admission lost its pre-TUN selected capture")
+		}
+		if _, err := net.InterfaceByName("router-vpn"); err == nil {
+			return errors.New("Linux actual TUN started before native admission")
+		}
+		f.prepared, f.admissions = prepared, 1
+		switch fault {
+		case "cancel":
+			cancel()
+		case "callback-error":
+			return errors.New("captured Linux callback refused admission")
+		case "changed-baseline":
+			desktopNodeLinuxCommand(t, "add rule inet router_vpn_killswitch output ip daddr 192.0.2.70 accept\n", "nft", "-f", "-")
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx = box.Context(ctx, ins, outs, endpoint.NewRegistry(), dnsRegistry, services, certificate.NewRegistry())
+	native, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(policy.Config()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	native.Log = &option.LogOptions{Disabled: true}
+	f.box, err = box.New(box.Options{Context: ctx, Options: native})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.close(); err != nil {
+			t.Error("actual Linux Node Box failed its joined cleanup", err)
+		}
+	})
+	f.preparation, err = f.box.RouterVPNDesktopLinuxNodePreparePhysicalOwned(policy)
+	if err != nil || f.preparation == nil {
+		t.Fatal("actual Linux sealed preparation", err)
+	}
+	return f
+}
+
+func desktopNodeLinuxDrain(t *testing.T, f *desktopNodeLinuxFixture) routervpndesktoppt.NodeLinuxPhysicalPrepared {
+	t.Helper()
+	if err := f.close(); err != nil || f.network.Current() || f.network.SocketCurrent() {
+		t.Fatal("actual Linux Node did not join its exact source", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	retained, returned, err := f.preparation.RetainedProtection(ctx)
+	if err != nil || !returned || retained == nil || *retained != f.prepared {
+		t.Fatal("actual Linux Node retirement changed its original native baseline or selected policy", err)
+	}
+	if _, err := net.InterfaceByName("router-vpn"); err == nil {
+		t.Fatal("actual Linux Node retirement retained its TUN")
+	}
+	return *retained
+}
+
+func desktopNodeLinuxTUNTraffic(network, host string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	connection, err := (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(host, "9999"))
+	if err != nil {
+		return err
+	}
+	defer connection.Close()
+	_ = connection.SetDeadline(time.Now().Add(3 * time.Second))
+	payload := bytes.Repeat([]byte("actual-linux-tun-ss2022-"), 20)
+	if n, err := connection.Write(payload); err != nil || n != len(payload) {
+		return errors.Join(err, io.ErrShortWrite)
+	}
+	answer := make([]byte, len(payload))
+	if _, err := io.ReadFull(connection, answer); err != nil {
+		return err
+	}
+	if !bytes.Equal(answer, payload) {
+		return errors.New("actual Linux TUN returned another encrypted payload")
+	}
+	return nil
+}
+
+func TestDesktopLinuxGuardianKernelNodeLifecycle(t *testing.T) {
+	desktopNodeLinuxNamespace(t)
+	desktopNodeLinuxRequireTUN(t)
+	for _, kill := range []string{"on-connect", "always"} {
+		t.Run(kill, func(t *testing.T) {
+			peer := desktopNodeLinuxReference(t)
+			desktopNodeLinuxProbe(t, peer, false)
+			f := desktopNodeLinuxBox(t, peer.original(t, kill, ""), 0, "")
+			desktopNodeLinuxProbe(t, peer, true)
+			if err := f.box.RouterVPNStrategyStart(); err != nil {
+				t.Fatal("actual Linux TUN/guardian native startup", err)
+			}
+			if f.admissions != 1 || f.network.Current() || !f.network.SocketCurrent() {
+				t.Fatal("actual Linux native startup fabricated completed readiness")
+			}
+			owner, err := f.box.RouterVPNDesktopLinuxNodeActivatePhysical(context.Background(), f.policy)
+			if err != nil || owner == nil || !owner.Current() || peer.observe(t, "stats").DNSQueries != 1 {
+				t.Fatal("actual Linux owner missed its selected DNS/TUN proof", err)
+			}
+			name, index, mtu, err := owner.ClaimTUN(owner.Current)
+			capture, captureErr := f.policy.Capture()
+			if err != nil || captureErr != nil || name != "router-vpn" || index <= 0 || mtu != capture.ConfiguredMTU {
+				t.Fatal("actual Linux TUN readback changed the sealed configuration", err, captureErr)
+			}
+			for _, network := range []string{"tcp", "udp"} {
+				for _, address := range []string{"192.0.2.99", "2001:db8::99"} {
+					if err := desktopNodeLinuxTUNTraffic(network, address); err != nil {
+						t.Fatal("actual Linux TUN payload did not traverse the owned encrypted path", network, address, err)
+					}
+				}
+			}
+			observed := peer.observe(t, "stats")
+			if observed.RawTCP == 0 || observed.RawUDP == 0 || observed.PlainTCP == 0 || observed.PlainUDP == 0 {
+				t.Fatal("Linux native TUN payload lacked actual encrypted peer evidence", observed)
+			}
+			desktopNodeLinuxProbe(t, peer, true)
+			peer.observe(t, "fail-dns")
+			if err := owner.ProveSelectedDNS(context.Background()); err == nil || peer.observe(t, "stats").DNSQueries != 2 {
+				t.Fatal("Linux native selected DNS accepted a stale or substituted answer")
+			}
+			f.network.InterfaceUpdated(context.Background())
+			if owner.Current() || f.network.SocketCurrent() || f.exchange("udp") == nil {
+				t.Fatal("Linux native network transition retained the old encrypted generation")
+			}
+			desktopNodeLinuxDrain(t, f)
+			desktopNodeLinuxProbe(t, peer, true)
+		})
+	}
+}
+
+func TestDesktopLinuxGuardianKernelNodeFailedAdmission(t *testing.T) {
+	desktopNodeLinuxNamespace(t)
+	for _, fault := range []string{"cancel", "callback-error", "changed-baseline"} {
+		t.Run(fault, func(t *testing.T) {
+			peer := desktopNodeLinuxReference(t)
+			f := desktopNodeLinuxBox(t, peer.original(t, "always", ""), 0, fault)
+			if err := f.box.RouterVPNStrategyStart(); err == nil || f.admissions != 1 || f.network.SocketCurrent() || f.network.Current() {
+				t.Fatal("Linux native startup accepted a cancelled, failed or changed admission", err)
+			}
+			if _, err := net.InterfaceByName("router-vpn"); err == nil {
+				t.Fatal("rejected Linux admission reached actual TUN creation")
+			}
+			if err := f.close(); err != nil {
+				t.Fatal("failed Linux admission discarded its exact partial owner", err)
+			}
+			if fault == "changed-baseline" {
+				if record, returned, err := f.preparation.RetainedProtection(context.Background()); err == nil || record != nil || !returned {
+					t.Fatal("Linux retirement adopted a changed native baseline")
+				}
+			} else {
+				desktopNodeLinuxDrain(t, f)
+			}
+			desktopNodeLinuxProbe(t, peer, true)
+		})
+	}
+}
+
+func TestDesktopLinuxGuardianKernelNodeFailedDNS(t *testing.T) {
+	desktopNodeLinuxNamespace(t)
+	desktopNodeLinuxRequireTUN(t)
+	for _, fault := range []string{"resolver-failure", "wrong-key"} {
+		t.Run(fault, func(t *testing.T) {
+			peer := desktopNodeLinuxReference(t)
+			credential := ""
+			if fault == "wrong-key" {
+				credential = "aes-key"
+			} else {
+				peer.observe(t, "fail-dns")
+			}
+			f := desktopNodeLinuxBox(t, peer.original(t, "always", credential), 0, "")
+			if err := f.box.RouterVPNStrategyStart(); err != nil {
+				t.Fatal(err)
+			}
+			owner, err := f.box.RouterVPNDesktopLinuxNodeActivatePhysical(context.Background(), f.policy)
+			observed := peer.observe(t, "stats")
+			if err == nil || owner != nil || f.network.Current() || f.network.SocketCurrent() || observed.RawUDP == 0 ||
+				fault == "wrong-key" && (observed.PlainUDP != 0 || observed.DNSQueries != 0) || fault == "resolver-failure" && observed.DNSQueries != 1 {
+				t.Fatal("Linux activation accepted unproved DNS or missed the actual wrong-key path", err, observed)
+			}
+			desktopNodeLinuxDrain(t, f)
+			desktopNodeLinuxProbe(t, peer, true)
+		})
+	}
+}
+
+func TestDesktopLinuxGuardianKernelNodeRestoreCaptured(t *testing.T) {
+	desktopNodeLinuxNamespace(t)
+	desktopNodeLinuxRequireTUN(t)
+	peer := desktopNodeLinuxReference(t)
+	original := peer.original(t, "always", "")
+	var first *desktopNodeLinuxFixture
+	var firstOwner *box.RouterVPNDesktopNodePhysical
+	var captured routervpndesktoppt.NodeLinuxPhysicalPrepared
+	t.Run("capture", func(t *testing.T) {
+		first = desktopNodeLinuxBox(t, original, 0, "")
+		if err := first.box.RouterVPNStrategyStart(); err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		firstOwner, err = first.box.RouterVPNDesktopLinuxNodeActivatePhysical(context.Background(), first.policy)
+		if err != nil || firstOwner == nil || !firstOwner.Current() {
+			t.Fatal("captured Linux native owner did not prove its selected path", err)
+		}
+		captured = desktopNodeLinuxDrain(t, first)
+	})
+	if t.Failed() {
+		return
+	}
+	// Each child owns and removes only its fixture baseline after retirement.
+	// This exercises captured graph restoration, not an atomic parent journal
+	// or Always succession transition, which remains a separate contract.
+	t.Run("restore", func(t *testing.T) {
+		restored := desktopNodeLinuxBox(t, original, 1392, "")
+		before, after := first.policy.Metadata(), restored.policy.Metadata()
+		if before.SessionID == after.SessionID || before.SourceSHA256 == after.SourceSHA256 ||
+			before.OriginalSourceSHA256 != after.OriginalSourceSHA256 || before.OriginalConfigSHA256 != after.OriginalConfigSHA256 ||
+			before.OriginalMetadataSHA256 != after.OriginalMetadataSHA256 || before.OriginalCaptureSHA256 != after.OriginalCaptureSHA256 ||
+			before.NodeID != after.NodeID || before.ProfileID != after.ProfileID || before.Mode != after.Mode || before.StartLayer != after.StartLayer ||
+			before.KillSwitchPolicy != after.KillSwitchPolicy || before.IPv6Mode != after.IPv6Mode || before.HomeLANAccess != after.HomeLANAccess || after.RestoredMTU != 1392 {
+			t.Fatal("Linux restore changed its complete original source or reused its retired runtime identity")
+		}
+		if err := restored.box.RouterVPNStrategyStart(); err != nil {
+			t.Fatal(err)
+		}
+		owner, err := restored.box.RouterVPNDesktopLinuxNodeActivatePhysical(context.Background(), restored.policy)
+		if err != nil || owner == nil || !owner.Current() || firstOwner.Current() || peer.observe(t, "stats").DNSQueries != 2 {
+			t.Fatal("Linux captured restoration adopted an old proof or failed its fresh selected path", err)
+		}
+		name, index, mtu, err := owner.ClaimTUN(owner.Current)
+		if err != nil || name != "router-vpn" || index <= 0 || mtu != 1392 || restored.prepared.Policy != captured.Policy ||
+			restored.prepared.Protection.Capture == captured.Protection.Capture || restored.prepared.Protection.Owner == captured.Protection.Owner {
+			t.Fatal("Linux restoration missed its selected live MTU or reused the retired native owner", err)
+		}
+		if _, err := restored.box.RouterVPNDesktopLinuxNodePreparePhysicalOwned(first.policy); err == nil || !owner.Current() {
+			t.Fatal("old Linux policy could prepare the replacement Box")
+		}
+		if record, returned, err := first.preparation.RetainedProtection(context.Background()); err == nil || record != nil || !returned || !owner.Current() {
+			t.Fatal("retired Linux owner adopted or changed the replacement baseline")
+		}
+		if err := first.network.Close(); err != nil || !owner.Current() {
+			t.Fatal("old Linux cleanup changed the replacement native owner", err)
+		}
+		if err := desktopNodeLinuxTUNTraffic("udp", "192.0.2.99"); err != nil {
+			t.Fatal("restored Linux TUN did not carry the captured encrypted payload", err)
+		}
+		desktopNodeLinuxDrain(t, restored)
+		desktopNodeLinuxProbe(t, peer, true)
+	})
+}

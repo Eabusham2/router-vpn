@@ -1,0 +1,81 @@
+//go:build linux
+
+package box
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+)
+
+// Linux retains its own native source and observation type. This capability is
+// not a Windows target alias or a serialized cleanup command. The ordinary
+// public command gate remains closed until its authenticated parent journal
+// and baseline succession use this complete Linux lifecycle.
+type RouterVPNDesktopLinuxNodePreparation struct {
+	network *routervpndesktoppt.NodeNetworkOwner
+	policy  *mobilemultihop.DesktopNodePolicy
+}
+
+func routerVPNDesktopLinuxNodeLifecycleAvailable(policy *mobilemultihop.DesktopNodePolicy) bool {
+	if policy == nil || policy.Validate() != nil {
+		return false
+	}
+	meta := policy.Metadata()
+	// The first actual Linux TUN/nft/DNS composition is the direct encrypted
+	// Shadowsocks graph. Other catalog families keep their existing paths and
+	// require the same native lifecycle acceptance before this gate expands.
+	return meta.TargetOS == "linux" && meta.Mode == "shadowsocks" && (meta.StartLayer == "" || meta.StartLayer == "off")
+}
+
+func (s *Box) RouterVPNDesktopLinuxNodePreparePhysicalOwned(policy *mobilemultihop.DesktopNodePolicy) (*RouterVPNDesktopLinuxNodePreparation, error) {
+	if !routerVPNDesktopLinuxNodeLifecycleAvailable(policy) {
+		return nil, errors.New("this Linux Router node graph has no admitted native lifecycle")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopLinuxNodePreparation{network: network, policy: policy}
+	return owner, network.PrepareNodePhysicalPolicy(policy)
+}
+
+func (p *RouterVPNDesktopLinuxNodePreparation) RetainedProtection(ctx context.Context) (*routervpndesktoppt.NodeLinuxPhysicalPrepared, bool, error) {
+	if p == nil || p.network == nil || p.policy == nil {
+		return nil, false, errors.New("Linux Router node preparation lost its captured retirement owner")
+	}
+	return p.network.RetainedLinuxPhysicalProtection(ctx, p.policy)
+}
+
+// Activation uses the actual native TUN reader and an uncached selected-DNS
+// exchange through this exact graph. A cancelled or failed proof revokes the
+// same native generation and leaves its partial owners available for Close.
+// Authenticated Router node HTTP proof and parent publication still follow;
+// this method does not report the application Connected state.
+func (s *Box) RouterVPNDesktopLinuxNodeActivatePhysical(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (*RouterVPNDesktopNodePhysical, error) {
+	if ctx == nil || ctx.Err() != nil || !routerVPNDesktopLinuxNodeLifecycleAvailable(policy) {
+		return nil, errors.New("Linux Router node activation lost its captured proof request")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	if err = network.CheckLinuxPhysicalAdmission(policy); err != nil {
+		return nil, err
+	}
+	owner, err := s.routerVPNDesktopNodeActivatePhysical(policy)
+	if err != nil {
+		return nil, err
+	}
+	if err = owner.ProveSelectedDNS(ctx); err != nil {
+		owner.Cancel()
+		return nil, err
+	}
+	if err = network.CheckLinuxPhysicalAdmission(policy); err != nil || ctx.Err() != nil || !owner.Current() {
+		owner.Cancel()
+		return nil, errors.Join(err, ctx.Err(), errors.New("Linux Router node selected-DNS proof lost its original native owner"))
+	}
+	return owner, nil
+}

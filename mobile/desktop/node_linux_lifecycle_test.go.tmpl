@@ -1,0 +1,317 @@
+//go:build linux
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// Only the native constructor/readback is replaced in these portable cases.
+// The sealed compiler, live interface capture, Node lower, lifecycle capability
+// and joined broker/service cleanup are the actual shipping composition.
+type nodeLinuxLifecycleSource struct {
+	*nodeUnixFactorySource
+	record  mobiletor.DesktopLinuxProtectionRecord
+	reads   int
+	observe func(int, *mobiletor.DesktopLinuxProtectionRecord) error
+	retired func(*mobiletor.DesktopLinuxProtectionRecord) error
+}
+
+func (s *nodeLinuxLifecycleSource) ObservePreparedProtection(ctx context.Context, capture mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxProtectionRecord, error) {
+	s.reads++
+	value := s.record
+	if ctx.Err() != nil || capture != value.Capture || s.closed.Load() {
+		return value, errors.New("fixture closed observation lost its exact live source")
+	}
+	if s.observe != nil {
+		err := s.observe(s.reads, &value)
+		return value, err
+	}
+	return value, nil
+}
+
+func (s *nodeLinuxLifecycleSource) ObserveRetiredProtection(ctx context.Context, capture mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxProtectionRecord, error) {
+	value := s.record
+	if ctx.Err() != nil || capture != value.Capture || !s.closed.Load() || !s.cancelled.Load() {
+		return value, errors.New("fixture retired observation was requested before source join")
+	}
+	if s.retired != nil {
+		err := s.retired(&value)
+		return value, err
+	}
+	return value, nil
+}
+
+func nodeLinuxLifecycleFixture(t *testing.T, kill string, admit NodeLinuxPhysicalAdmission) (*nodeUnixFactoryFixture, *nodeLinuxLifecycleSource) {
+	t.Helper()
+	f := newNodeUnixFactoryFixture(t, "shadowsocks", "linux", "on", kill, false)
+	ctx, err := WithNodeLinuxPhysicalAdmission(f.node.network.ctx, f.node.policy, admit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.node.network.ctx = ctx
+	source := &nodeLinuxLifecycleSource{nodeUnixFactorySource: f.source}
+	source.record = mobiletor.DesktopLinuxProtectionRecord{
+		Capture: f.node.network.brokerCapture(), Owner: f.source.owner, UID: 22171,
+		PermitPrefix: "rvpn_" + strings.Repeat("e", 20), TableHandle: 11, ChainHandle: 12, BaselineSHA256: strings.Repeat("f", 64),
+	}
+	return f, source
+}
+
+func TestRouterVPNNodeLinuxLifecycleRejectsMissingOrReusedCapability(t *testing.T) {
+	f := newNodeUnixFactoryFixture(t, "shadowsocks", "linux", "on", "always", false)
+	called := false
+	create := func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+		called = true
+		return f.source, nil
+	}
+	if err := f.node.network.prepareNodePhysicalLinuxLifecycle(f.node.policy, create); err == nil || called {
+		t.Fatal("Linux Node entered construction without its captured admission capability")
+	}
+	admit := func(context.Context, NodeLinuxPhysicalPrepared) error { return nil }
+	foreign := nodeUnixFactoryPolicy(t, "shadowsocks", "windows", "on", "always", false)
+	if _, err := WithNodeLinuxPhysicalAdmission(f.node.network.ctx, foreign, admit); err == nil {
+		t.Fatal("Linux admission accepted a Windows target alias")
+	}
+	ctx, err := WithNodeLinuxPhysicalAdmission(f.node.network.ctx, f.node.policy, admit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WithNodeLinuxPhysicalAdmission(ctx, f.node.policy, admit); err == nil {
+		t.Fatal("Linux admission replaced an already captured callback")
+	}
+	f.node.network.ctx = ctx
+	copy, err := mobilemultihop.NewDesktopNodePolicy(f.node.policy.OriginalProfile(), f.node.policy.Metadata().SessionID, "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.node.network.prepareNodePhysicalLinuxLifecycle(copy, create); err == nil || called {
+		t.Fatal("Linux admission accepted an equivalent replacement policy object")
+	}
+	if err := f.node.network.prepareNodePhysicalLinuxLifecycle(f.node.policy, create); err != nil || called {
+		t.Fatal("Linux admission did not defer native preparation until Initialize", err)
+	}
+	if err := f.node.network.prepareNodePhysicalLinuxLifecycle(f.node.policy, create); err == nil || called {
+		t.Fatal("Linux admission was reusable for a second preparation")
+	}
+	raw, err := NewNodeNetworkOwner(ctx, nil, mobilemultihop.DesktopNodeNetworkTag, f.node.network.capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement := raw.(*NodeNetworkOwner)
+	defer replacement.Close()
+	if err := replacement.prepareNodePhysicalLinuxLifecycle(f.node.policy, create); err == nil || called {
+		t.Fatal("Linux admission was transferable to another network owner")
+	}
+}
+
+func TestRouterVPNNodeLinuxLifecycleBracketsAdmissionAndRetainsSource(t *testing.T) {
+	for _, kill := range []string{"on-connect", "always"} {
+		for _, fault := range []string{"live", "partial", "missing-reader", "before-error", "before-capture", "before-owner", "callback-error", "cancel", "after-error", "after-baseline", "after-network"} {
+			t.Run(kill+"/"+fault, func(t *testing.T) {
+				var f *nodeUnixFactoryFixture
+				var source *nodeLinuxLifecycleSource
+				admissions := 0
+				f, source = nodeLinuxLifecycleFixture(t, kill, func(ctx context.Context, prepared NodeLinuxPhysicalPrepared) error {
+					admissions++
+					if source.reads != 1 || prepared.Protection != source.record || prepared.Policy != kill || ctx.Err() != nil ||
+						f.node.network.SocketCurrent() || f.node.network.Current() {
+						t.Error("Linux admission did not retain its selected policy between pre-TUN native observations")
+					}
+					if fault == "callback-error" {
+						return errors.New("captured callback refused admission")
+					}
+					if fault == "cancel" {
+						f.node.network.Cancel()
+					}
+					return nil
+				})
+				source.observe = func(read int, value *mobiletor.DesktopLinuxProtectionRecord) error {
+					if read == 1 {
+						switch fault {
+						case "before-error":
+							return errors.New("native preparation was not closed")
+						case "before-capture":
+							value.Capture.SourceSHA256 = strings.Repeat("a", 64)
+						case "before-owner":
+							value.Owner.ProcessID++
+						}
+					} else {
+						switch fault {
+						case "after-error":
+							return errors.New("native admission acquired an active permit")
+						case "after-baseline":
+							value.TableHandle++
+						case "after-network":
+							value.Capture.NetworkID = strings.Repeat("a", 32)
+						}
+					}
+					return nil
+				}
+				constructors := 0
+				if err := f.node.network.prepareNodePhysicalLinuxLifecycle(f.node.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+					constructors++
+					if capture != source.record.Capture || len(options.PrivateDestinations) != 2 || ctx.Err() != nil {
+						t.Error("Linux lifecycle replaced its exact captured source or tuples")
+					}
+					if fault == "partial" {
+						return source, errors.New("native preparation retained partial owner")
+					}
+					if fault == "missing-reader" {
+						return f.source, nil
+					}
+					return source, nil
+				}); err != nil || constructors != 0 || admissions != 0 {
+					t.Fatal("Linux lifecycle entered before native Initialize", err)
+				}
+				err := f.node.network.Start(adapter.StartStateInitialize)
+				if constructors != 1 || fault != "missing-reader" && f.node.network.source != source || fault == "missing-reader" && f.node.network.source != f.source {
+					t.Fatal("Linux lifecycle discarded its exact returned native owner")
+				}
+				wantAdmission := fault == "live" || fault == "callback-error" || fault == "cancel" || strings.HasPrefix(fault, "after-")
+				if (admissions == 1) != wantAdmission || admissions > 1 {
+					t.Fatal("Linux lifecycle skipped native preparation or replayed its admission", admissions)
+				}
+				if fault == "live" {
+					if err != nil || source.reads != 2 || !f.node.network.SocketCurrent() || f.node.network.Current() {
+						t.Fatal("Linux lifecycle lost its distinct admitted pre-ready phase", err)
+					}
+					if err := f.node.network.CheckLinuxPhysicalAdmission(f.node.policy); err == nil {
+						t.Fatal("Linux lifecycle fabricated a started service before actual startup")
+					}
+					for _, stage := range []adapter.StartStage{adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+						if err := f.node.network.Start(stage); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if err := f.node.network.CheckLinuxPhysicalAdmission(f.node.policy); err != nil {
+						t.Fatal("Linux lifecycle lost its exact completed native preparation", err)
+					}
+				} else if err == nil || f.node.network.SocketCurrent() || f.node.network.Current() || !source.cancelled.Load() {
+					t.Fatal("Linux lifecycle admitted an unobserved, changed, failed or cancelled baseline", err)
+				}
+				if target, _, err := f.node.network.RetainedLinuxPhysicalProtection(context.Background(), f.node.policy); err == nil || target != nil {
+					t.Fatal("Linux lifecycle fabricated retirement before exact source join")
+				}
+				if err := f.node.network.Close(); err != nil || !source.closed.Load() || !source.cancelled.Load() {
+					t.Fatal("Linux lifecycle lost its partial or admitted cleanup owner", err)
+				}
+				if err := f.node.network.CheckLinuxPhysicalAdmission(f.node.policy); err == nil {
+					t.Fatal("Linux lifecycle retained admission after close")
+				}
+				retained, returned, err := f.node.network.RetainedLinuxPhysicalProtection(context.Background(), f.node.policy)
+				if fault == "missing-reader" {
+					if err == nil || retained != nil || !returned {
+						t.Fatal("Linux lifecycle inferred an outcome without its retained native reader")
+					}
+				} else if err != nil || retained == nil || retained.Protection != source.record || retained.Policy != kill || !returned || admissions > 1 {
+					t.Fatal("Linux lifecycle did not retain its exact selected-policy outcome", err)
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNNodeLinuxLifecycleRetirementRequiresSuccessfulJoinAndSameRecord(t *testing.T) {
+	f, source := nodeLinuxLifecycleFixture(t, "always", func(context.Context, NodeLinuxPhysicalPrepared) error { return nil })
+	if err := f.node.network.prepareNodePhysicalLinuxLifecycle(f.node.policy, func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+		return source, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.node.network.Start(adapter.StartStateInitialize); err != nil {
+		t.Fatal(err)
+	}
+	source.failClose.Store(true)
+	if err := f.node.network.Close(); err == nil {
+		t.Fatal("Linux lifecycle hid a failed native cleanup")
+	}
+	if target, returned, err := f.node.network.RetainedLinuxPhysicalProtection(context.Background(), f.node.policy); err == nil || target != nil || !returned {
+		t.Fatal("Linux lifecycle acknowledged an unjoined native source")
+	}
+	source.failClose.Store(false)
+	if err := f.node.network.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, fault := range []string{"error", "capture", "network", "owner", "uid", "table", "chain", "prefix", "baseline"} {
+		t.Run(fault, func(t *testing.T) {
+			source.retired = func(value *mobiletor.DesktopLinuxProtectionRecord) error {
+				switch fault {
+				case "error":
+					return errors.New("native retired baseline was not proved")
+				case "capture":
+					value.Capture.SourceSHA256 = strings.Repeat("a", 64)
+				case "network":
+					value.Capture.NetworkID = strings.Repeat("a", 32)
+				case "owner":
+					value.Owner.ProcessID++
+				case "uid":
+					value.UID++
+				case "table":
+					value.TableHandle++
+				case "chain":
+					value.ChainHandle++
+				case "prefix":
+					value.PermitPrefix = "rvpn_" + strings.Repeat("d", 20)
+				case "baseline":
+					value.BaselineSHA256 = strings.Repeat("a", 64)
+				}
+				return nil
+			}
+			if target, returned, err := f.node.network.RetainedLinuxPhysicalProtection(context.Background(), f.node.policy); err == nil || target != nil || !returned {
+				t.Fatal("Linux lifecycle adopted a changed retired native baseline")
+			}
+		})
+	}
+	source.retired = nil
+	if target, returned, err := f.node.network.RetainedLinuxPhysicalProtection(context.Background(), f.node.policy); err != nil || target == nil || !returned {
+		t.Fatal("Linux lifecycle could not retry its exact acknowledged retirement", err)
+	}
+}
+
+func TestRouterVPNNodeLinuxLifecycleJoinsCancelledLateConstructor(t *testing.T) {
+	admissions := 0
+	f, source := nodeLinuxLifecycleFixture(t, "on-connect", func(context.Context, NodeLinuxPhysicalPrepared) error {
+		admissions++
+		return nil
+	})
+	entered, release := make(chan struct{}), make(chan struct{})
+	if err := f.node.network.prepareNodePhysicalLinuxLifecycle(f.node.policy, func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+		close(entered)
+		<-release
+		return source, errors.New("late native constructor returned its partial owner")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan error, 1)
+	go func() { started <- f.node.network.Start(adapter.StartStateInitialize) }()
+	<-entered
+	cancelled := make(chan struct{})
+	originalCancel := f.node.network.cancel
+	var once sync.Once
+	f.node.network.cancel = func() { originalCancel(); once.Do(func() { close(cancelled) }) }
+	closed := make(chan error, 1)
+	go func() { closed <- f.node.network.Close() }()
+	<-cancelled
+	if f.node.network.SocketCurrent() || f.node.network.Current() {
+		t.Error("Linux late preparation retained socket admission after cancellation")
+	}
+	close(release)
+	if err := <-started; err == nil {
+		t.Fatal("Linux late native source was accepted after cancellation")
+	}
+	if err := <-closed; err != nil || !source.closed.Load() || !source.cancelled.Load() || admissions != 0 {
+		t.Fatal("Linux cleanup did not join the late exact native owner", err, admissions)
+	}
+	if target, returned, err := f.node.network.RetainedLinuxPhysicalProtection(context.Background(), f.node.policy); err != nil || target == nil || !returned || target.Protection != source.record {
+		t.Fatal("Linux cancelled partial owner lost its acknowledged retirement", err)
+	}
+}

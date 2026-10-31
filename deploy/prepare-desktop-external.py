@@ -56,12 +56,14 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'node_network.go.tmpl', 'node_network_test.go.tmpl', 'node_physical.go.tmpl', 'node_admission.go.tmpl', 'node_admission_test.go.tmpl',
                 'node_physical_linux.go.tmpl', 'node_physical_darwin.go.tmpl',
                 'node_physical_linux_test.go.tmpl', 'node_physical_darwin_test.go.tmpl', 'node_physical_unix_test.go.tmpl',
+                'node_linux_lifecycle.go.tmpl', 'node_linux_lifecycle_test.go.tmpl',
                 'node_physical_windows.go.tmpl', 'node_physical_windows_test.go.tmpl', 'node_physical_other.go.tmpl')
 BOX_TEMPLATES = {
     'node_box_physical.go.tmpl': 'routervpn_desktop_node_box_physical.go',
     'node_box_physical_test.go.tmpl': 'routervpn_desktop_node_box_physical_test.go',
     'node_box_dns.go.tmpl': 'routervpn_desktop_node_box_dns.go',
     'node_box_dns_test.go.tmpl': 'routervpn_desktop_node_box_dns_test.go',
+    'node_box_linux_lifecycle.go.tmpl': 'routervpn_desktop_node_box_linux_lifecycle.go',
     'external_box_physical.go.tmpl': 'routervpn_desktop_external_box_physical.go',
     'external_box_physical_test.go.tmpl': 'routervpn_desktop_external_box_physical_test.go',
     'external_box_integration_test.go.tmpl': 'routervpn_desktop_external_box_integration_test.go',
@@ -85,6 +87,7 @@ BOX_TEMPLATES = {
     'tor_plain_box_test.go.tmpl': 'routervpn_desktop_tor_plain_box_test.go',
 }
 PEER_TEMPLATES = {
+    'node_linux_peer_test.go.tmpl': 'protocol/routervpnamnezia/node_linux_peer_test.go',
     'node_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_test.go',
     'node_peer_dns_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_dns_test.go',
     'node_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_windows_test.go',
@@ -225,6 +228,8 @@ def pt_copies():
                    'node_physical_linux_test.go.tmpl': b'//go:build linux\n\n',
                    'node_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
                    'node_physical_unix_test.go.tmpl': b'//go:build linux || darwin\n\n',
+                   'node_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
+                   'node_linux_lifecycle_test.go.tmpl': b'//go:build linux\n\n',
                    'node_physical_other.go.tmpl': b'//go:build !linux && !darwin && !windows\n\n',
                    'external_physical_other.go.tmpl': b'//go:build !linux && !darwin && !windows\n\n' }.get(name, b'')
         if path.is_symlink() or not raw.startswith(prefix+b'package routervpndesktoppt\n'):
@@ -233,7 +238,8 @@ def pt_copies():
     for name, relative in BOX_TEMPLATES.items():
         path = ROOT/'mobile/desktop'/name
         raw = path.read_bytes()
-        if path.is_symlink() or not raw.startswith(b'package box\n'):
+        prefix = {'node_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n'}.get(name, b'')
+        if path.is_symlink() or not raw.startswith(prefix+b'package box\n'):
             raise ValueError('Desktop Tor Box package boundary changed')
         content[relative] = raw
     for name, relative in TUN_TEMPLATES.items():
@@ -580,6 +586,8 @@ def prepare(vendor, go='go', *, env=None):
             prefix = b'//go:build windows && routervpn_windows_node_composition\n\n' + prefix
         elif name == 'node_naive_loader_purego_test.go.tmpl':
             prefix = b'//go:build with_purego\n\n' + prefix
+        elif name == 'node_linux_peer_test.go.tmpl':
+            prefix = b'//go:build linux && routervpn_linux_node_composition\n\n' + prefix
         if path.is_symlink() or not path.read_bytes().startswith(prefix):
             raise ValueError('Desktop encrypted peer test changed its test-only package')
         write(vendor, relative, path.read_bytes())

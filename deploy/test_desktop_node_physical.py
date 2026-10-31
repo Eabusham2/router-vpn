@@ -336,6 +336,21 @@ def mutants(source, windows):
              "Unix Node factory dropped or replaced its exact returned source",
              changed(factory, "return nil, owned, err", "return nil, nil, err")),
         ))
+        lifecycle = "routervpn/desktoppt/node_linux_lifecycle.go"
+        result.extend((
+            ('linux-node-exact-policy-pointer', lifecycle, './routervpn/desktoppt', 'TestRouterVPNNodeLinuxLifecycleRejectsMissingOrReusedCapability', '',
+             'Linux admission accepted an equivalent replacement policy object', changed(lifecycle, 'owner.policy != policy || owner.admit == nil', 'owner.admit == nil')),
+            ('linux-node-native-prepared-owner', lifecycle, './routervpn/desktoppt', 'TestRouterVPNNodeLinuxLifecycleBracketsAdmissionAndRetainsSource', 'always/before-owner',
+             'Linux admission did not retain its selected policy between pre-TUN native observations', changed(lifecycle, 'before.Owner != identity ||', '(before.Owner != identity && false) ||')),
+            ('linux-node-callback-refusal', lifecycle, './routervpn/desktoppt', 'TestRouterVPNNodeLinuxLifecycleBracketsAdmissionAndRetainsSource', 'always/callback-error',
+             'Linux lifecycle admitted an unobserved, changed, failed or cancelled baseline', changed(lifecycle, 'if err = owner.admit(ctx, NodeLinuxPhysicalPrepared{Protection: before, Policy: policy.Metadata().KillSwitchPolicy}); err != nil {\n\t\t\treturn owned, err\n\t\t}', 'if err = owner.admit(ctx, NodeLinuxPhysicalPrepared{Protection: before, Policy: policy.Metadata().KillSwitchPolicy}); false {\n\t\t\treturn owned, err\n\t\t}')),
+            ('linux-node-post-admission-record', lifecycle, './routervpn/desktoppt', 'TestRouterVPNNodeLinuxLifecycleBracketsAdmissionAndRetainsSource', 'always/after-baseline',
+             'Linux lifecycle admitted an unobserved, changed, failed or cancelled baseline', changed(lifecycle, 'err != nil || after != before || ctx.Err() != nil', 'err != nil || (after != before && false) || ctx.Err() != nil')),
+            ('linux-node-partial-source-retention', lifecycle, './routervpn/desktoppt', 'TestRouterVPNNodeLinuxLifecycleBracketsAdmissionAndRetainsSource', 'always/partial',
+             'Linux lifecycle discarded its exact returned native owner', changed(lifecycle, 'if err != nil {\n\t\t\treturn owned, err\n\t\t}\n\t\treader, ok := owned.(nodeLinuxProtectionReader)', 'if err != nil {\n\t\t\treturn nil, err\n\t\t}\n\t\treader, ok := owned.(nodeLinuxProtectionReader)')),
+            ('linux-node-retired-original-record', lifecycle, './routervpn/desktoppt', 'TestRouterVPNNodeLinuxLifecycleRetirementRequiresSuccessfulJoinAndSameRecord', 'baseline',
+             'Linux lifecycle adopted a changed retired native baseline', changed(lifecycle, 'prepared != nil && record != *prepared || ctx.Err() != nil', '(prepared != nil && record != *prepared && false) || ctx.Err() != nil')),
+        ))
     return result
 
 
@@ -352,10 +367,11 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          ("TestRouterVPNShadowsocksCompleteCiphertextPacket", "TestRouterVPNShadowsocksPacketWrongKey")),
         ("command", "./cmd/sing-box", "^TestRouterVPNDesktopNodePhysicalCommand",
          tuple("TestRouterVPNDesktopNodePhysicalCommand" + name for name in ("SourceBoundary", "Hysteria2CompleteStartSource", "XrayCompleteStartSource", "NaiveCompleteStartSource", "RestoredMTU", "TransferInput", "RetirementReceipt", "ReadyRequiresFreshDNS", "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionExactStop", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "JournalBeforePrivateInputs", "PublicRequiresJournal"))),
-        ("factory", "./routervpn/desktoppt", "^TestRouterVPNNodePhysical",
+        ("factory", "./routervpn/desktoppt", "^TestRouterVPNNodePhysical" if windows else "^TestRouterVPNNode(Physical|LinuxLifecycle)",
          tuple("TestRouterVPNNodePhysical" + name for name in ("SeparateRegistriesAndUnpreparedRejection", "HandshakePhaseAndExactPolicy", "FactoryCancellationJoinsPartialOwner", "RetirementKeepsExactJoinedSource", "AdmissionRetainsExactPolicy", "AdmissionCapturesExactPredecessor", "JournalAdmissionCapturesDurableBarrier")) +
          (tuple("TestRouterVPNNodePhysicalWindows" + name for name in ("CapturesPreparedOwner", "AdmissionRejectsChangedOwners", "CloseJoinsAdmission")) if windows else
-          tuple("TestRouterVPNNodePhysicalUnix" + name for name in ("CapturesPolicyAndRetainsLateOwner", "RejectsUncapturedSourceBeforeConstructor", "CloseJoinsLateFactoryAndRetriesSource")))),
+          tuple("TestRouterVPNNodePhysicalUnix" + name for name in ("CapturesPolicyAndRetainsLateOwner", "RejectsUncapturedSourceBeforeConstructor", "CloseJoinsLateFactoryAndRetriesSource")) +
+          tuple("TestRouterVPNNodeLinuxLifecycle" + name for name in ("RejectsMissingOrReusedCapability", "BracketsAdmissionAndRetainsSource", "RetirementRequiresSuccessfulJoinAndSameRecord", "JoinsCancelledLateConstructor")))),
         ("box", ".", "^TestRouterVPNDesktopNodePhysical",
          tuple("TestRouterVPNDesktopNodePhysicalBox" + name for name in ("RejectsSubstitutedGraph", "RequiresPreparedOwner", "RetainsMTUAndExactRollback", "RestoresCapturedMTU")) +
          ("TestRouterVPNDesktopNodePhysicalDNSCapturedOwner", "TestRouterVPNDesktopNodePhysicalDNSRetirementCancelsQuery")),

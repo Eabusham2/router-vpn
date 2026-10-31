@@ -1,0 +1,199 @@
+//go:build linux
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"sync"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// This is a readback through the actual retained Linux source. The selected
+// protection policy remains part of the sealed Node capability. A record does
+// not create a source, authorize replacement, or hold a kernel transaction.
+type NodeLinuxPhysicalPrepared struct {
+	Protection mobiletor.DesktopLinuxProtectionRecord
+	Policy     string
+}
+
+type NodeLinuxPhysicalAdmission func(context.Context, NodeLinuxPhysicalPrepared) error
+type nodeLinuxPhysicalAdmissionKey struct{}
+type nodeLinuxPhysicalAdmissionOwner struct {
+	mu       sync.Mutex
+	policy   *mobilemultihop.DesktopNodePolicy
+	admit    NodeLinuxPhysicalAdmission
+	network  *NodeNetworkOwner
+	source   desktopLinuxPhysicalPolicy
+	capture  mobiletor.DesktopSocketCapture
+	prepared *mobiletor.DesktopLinuxProtectionRecord
+	entered  bool
+	admitted bool
+}
+
+type nodeLinuxProtectionReader interface {
+	ObservePreparedProtection(context.Context, mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxProtectionRecord, error)
+	ObserveRetiredProtection(context.Context, mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxProtectionRecord, error)
+}
+
+// WithNodeLinuxPhysicalAdmission installs one in-memory capability for one
+// exact compiled policy and one native service. The callback runs before any
+// socket or TUN admission, between two complete empty-inventory readbacks.
+// It is not an authenticated parent journal or an atomic succession barrier;
+// public command activation still requires those separate Linux contracts.
+func WithNodeLinuxPhysicalAdmission(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy,
+	admit NodeLinuxPhysicalAdmission) (context.Context, error) {
+	if ctx == nil || ctx.Err() != nil || policy == nil || policy.Validate() != nil || admit == nil ||
+		ctx.Value(nodeLinuxPhysicalAdmissionKey{}) != nil {
+		return nil, errors.New("Linux Router node admission requires its unique captured capability")
+	}
+	meta := policy.Metadata()
+	if meta.TargetOS != "linux" || (meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always") {
+		return nil, errors.New("Linux Router node admission lost its selected native protection policy")
+	}
+	return context.WithValue(ctx, nodeLinuxPhysicalAdmissionKey{}, &nodeLinuxPhysicalAdmissionOwner{policy: policy, admit: admit}), nil
+}
+
+func nodeLinuxPhysicalAdmissionFor(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy, live bool) (*nodeLinuxPhysicalAdmissionOwner, error) {
+	if ctx == nil || policy == nil || policy.Validate() != nil || live && ctx.Err() != nil {
+		return nil, errors.New("Linux Router node admission lost its captured lifetime")
+	}
+	owner, ok := ctx.Value(nodeLinuxPhysicalAdmissionKey{}).(*nodeLinuxPhysicalAdmissionOwner)
+	if !ok || owner == nil || owner.policy != policy || owner.admit == nil {
+		return nil, errors.New("Linux Router node admission belongs to another sealed policy")
+	}
+	return owner, nil
+}
+
+func (n *NodeNetworkOwner) prepareNodePhysicalLinuxLifecycle(policy *mobilemultihop.DesktopNodePolicy,
+	create func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error)) error {
+	if n == nil || create == nil {
+		return errors.New("Linux Router node admission has no captured native service")
+	}
+	owner, err := nodeLinuxPhysicalAdmissionFor(n.ctx, policy, true)
+	if err != nil {
+		return err
+	}
+	owner.mu.Lock()
+	if owner.network != nil || owner.entered {
+		owner.mu.Unlock()
+		return errors.New("Linux Router node admission cannot be reused by another preparation")
+	}
+	owner.network = n
+	owner.mu.Unlock()
+	return n.prepareNodePhysicalLinux(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+		owner.mu.Lock()
+		if owner.network != n || owner.entered || ctx.Err() != nil {
+			owner.mu.Unlock()
+			return nil, errors.New("Linux Router node preparation was cancelled, replaced or already entered")
+		}
+		owner.entered, owner.capture = true, capture
+		owner.mu.Unlock()
+		owned, err := create(ctx, capture, options)
+		owner.mu.Lock()
+		owner.source = owned
+		owner.mu.Unlock()
+		// The outer factory retains this exact owner even when construction,
+		// readback, admission or cancellation fails. Close must join it.
+		if err != nil {
+			return owned, err
+		}
+		reader, ok := owned.(nodeLinuxProtectionReader)
+		if !ok || owned == nil {
+			return owned, errors.New("Linux Router node source has no native closed-baseline observations")
+		}
+		before, err := reader.ObservePreparedProtection(ctx, capture)
+		identity, identityErr := owned.Owner()
+		if err != nil || identityErr != nil || before.Validate() != nil || before.Capture != capture || before.Owner != identity ||
+			ctx.Err() != nil || !n.Matches(capture.SessionID, capture.SourceSHA256) {
+			return owned, errors.Join(err, identityErr, errors.New("Linux Router node preparation lost its exact native source readback"))
+		}
+		owner.mu.Lock()
+		copy := before
+		owner.prepared = &copy
+		owner.mu.Unlock()
+		if err = owner.admit(ctx, NodeLinuxPhysicalPrepared{Protection: before, Policy: policy.Metadata().KillSwitchPolicy}); err != nil {
+			return owned, err
+		}
+		after, err := reader.ObservePreparedProtection(ctx, capture)
+		if err != nil || after != before || ctx.Err() != nil || !n.Matches(capture.SessionID, capture.SourceSHA256) {
+			return owned, errors.Join(err, errors.New("Linux Router node admission changed its captured empty native baseline"))
+		}
+		owner.mu.Lock()
+		owner.admitted = true
+		owner.mu.Unlock()
+		return owned, nil
+	})
+}
+
+// CheckLinuxPhysicalAdmission is an additional gate for the Linux Box entry.
+// It cannot manufacture preparation from public metadata or a different
+// service with the same session labels. Actual TUN and selected-DNS proof still
+// follow this pre-TUN boundary before the Linux Box returns its ready owner.
+func (n *NodeNetworkOwner) CheckLinuxPhysicalAdmission(policy *mobilemultihop.DesktopNodePolicy) error {
+	if n == nil {
+		return errors.New("Linux Router node admission has no live native service")
+	}
+	owner, err := nodeLinuxPhysicalAdmissionFor(n.ctx, policy, true)
+	if err != nil {
+		return err
+	}
+	owner.mu.Lock()
+	valid := owner.network == n && owner.entered && owner.admitted && owner.prepared != nil
+	source, capture := owner.source, owner.capture
+	owner.mu.Unlock()
+	n.mu.Lock()
+	valid = valid && source != nil && n.source == source && n.policy == policy && n.brokerCapture() == capture &&
+		!n.retired && !n.closed && n.ready && n.sockets && n.ctx.Err() == nil
+	n.mu.Unlock()
+	if !valid || !n.SocketCurrent() {
+		return errors.New("Linux Router node admission is incomplete, replaced or retired")
+	}
+	return nil
+}
+
+// RetainedLinuxPhysicalProtection reads through this exact joined source. The
+// bool reports whether a native source was returned, not proof of absence.
+// Even a failed/cancelled admission retains its owner for close and retry;
+// another baseline may never be adopted or removed to complete that cleanup.
+func (n *NodeNetworkOwner) RetainedLinuxPhysicalProtection(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (*NodeLinuxPhysicalPrepared, bool, error) {
+	if n == nil || ctx == nil || ctx.Err() != nil || policy == nil || policy.Validate() != nil {
+		return nil, false, errors.New("Linux Router node retirement lost its captured request")
+	}
+	owner, err := nodeLinuxPhysicalAdmissionFor(n.ctx, policy, false)
+	if err != nil {
+		return nil, false, err
+	}
+	owner.mu.Lock()
+	valid := owner.network == n
+	source, capture := owner.source, owner.capture
+	var prepared *mobiletor.DesktopLinuxProtectionRecord
+	if owner.prepared != nil {
+		copy := *owner.prepared
+		prepared = &copy
+	}
+	owner.mu.Unlock()
+	n.mu.Lock()
+	valid = valid && n.closed && n.retired && !n.ready && !n.sockets && n.policy == policy && n.source == source
+	if source != nil {
+		valid = valid && n.brokerCapture() == capture
+	}
+	n.mu.Unlock()
+	if !valid {
+		return nil, source != nil, errors.New("Linux Router node retirement is unjoined or belongs to another source")
+	}
+	if source == nil {
+		return nil, false, nil
+	}
+	reader, ok := source.(nodeLinuxProtectionReader)
+	if !ok {
+		return nil, true, errors.New("Linux Router node source cannot observe its joined baseline")
+	}
+	record, err := reader.ObserveRetiredProtection(ctx, capture)
+	if err != nil || record.Validate() != nil || record.Capture != capture || prepared != nil && record != *prepared || ctx.Err() != nil {
+		return nil, true, errors.Join(err, ctx.Err(), errors.New("Linux Router node retirement changed its captured native baseline"))
+	}
+	return &NodeLinuxPhysicalPrepared{Protection: record, Policy: policy.Metadata().KillSwitchPolicy}, true, nil
+}
