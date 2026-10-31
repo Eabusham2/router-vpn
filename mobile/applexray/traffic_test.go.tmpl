@@ -365,3 +365,65 @@ func TestNativeXrayEncryptedLoopbackTCPAndUDP(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeXrayCompletedDialRetainsOwnedConnections(t *testing.T) {
+	installScopedDialer()
+	camouflage := loopbackCamouflage(t)
+	tcp, udp := loopbackEcho(t)
+	for _, mode := range []string{"reality-vision", "reality-pq-vision", "reality-xhttp"} {
+		t.Run(mode, func(t *testing.T) {
+			endpoint, raw := startLoopbackXray(t, mode, camouflage, tcp, udp, nativeConfig(t, mode))
+			plan, err := applexray.Prepare(mode, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lifetime, retire := context.WithCancel(context.Background())
+			defer retire()
+			underlay := &loopbackUnderlay{destination: endpoint}
+			binding := &binding{ctx: lifetime, dialer: underlay, server: netip.MustParseAddrPort("192.0.2.1:443"), sockets: map[*ownedConn]bool{}}
+			h := &Outbound{ctx: context.WithValue(lifetime, bindingKey{}, binding), cancel: retire, binding: binding, plan: plan}
+			if err := h.Start(adapter.StartStateStart); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = h.Close() })
+			var connections []net.Conn
+			for _, target := range []struct{ network, address string }{{"tcp", tcp}, {"udp", udp}} {
+				pending, cancel := context.WithCancel(context.Background())
+				cancel()
+				if connection, err := h.DialContext(pending, target.network, M.ParseSocksaddr(target.address)); err == nil || connection != nil {
+					if connection != nil {
+						_ = connection.Close()
+					}
+					t.Fatal("cancelled caller published an actual native dispatch")
+				}
+				caller, dialFinished := context.WithCancel(context.Background())
+				connection, err := h.DialContext(caller, target.network, M.ParseSocksaddr(target.address))
+				dialFinished() // Same lifetime transition used by the actual DNS pool.
+				if err != nil {
+					t.Fatal(err)
+				}
+				connections = append(connections, connection)
+				defer connection.Close()
+				if err := connection.SetDeadline(time.Now().Add(8 * time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				message := bytes.Repeat([]byte("captured-native-owner/"), 24)
+				if _, err := connection.Write(message); err != nil {
+					t.Fatal("completed actual Xray dial retained its caller cancellation", target.network, err)
+				}
+				answer := make([]byte, len(message))
+				if _, err := io.ReadFull(connection, answer); err != nil || !bytes.Equal(answer, message) {
+					t.Fatal("completed actual Xray dial lost authenticated traffic", target.network, err)
+				}
+			}
+			if err := h.Close(); err != nil {
+				t.Fatal(err)
+			}
+			for _, connection := range connections {
+				if n, err := connection.Write([]byte("retired")); err == nil || n != 0 {
+					t.Fatal("actual native retirement lost a returned connection", n, err)
+				}
+			}
+		})
+	}
+}

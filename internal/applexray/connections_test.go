@@ -8,6 +8,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -258,3 +259,135 @@ func TestConnectionsRejectInvalidAndDuplicatePublicationWithoutLosingOwner(t *te
 }
 
 var _ io.Closer = (*Connections)(nil)
+
+func TestDialConnectionsReturnedPacketBelongsToNativeOwner(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		type key struct{}
+		parent, cancel := context.WithTimeout(context.WithValue(context.Background(), key{}, "captured DNS policy"), time.Second)
+		defer cancel()
+		var owner Connections
+		defer owner.Close()
+		request, err := owner.BeginDial(parent)
+		if err != nil || request.Context.Value(key{}) != "captured DNS policy" {
+			t.Fatal("native dial lost its captured caller policy", err)
+		}
+		backend := fakePackets(false)
+		packet := NewPacketConn(request.Context, backend)
+		if err := request.Publish(packet); err != nil {
+			t.Fatal(err)
+		}
+		// The actual DNS pool cancels its dial context before its first write.
+		// Let both cancellation and the old deadline pass deterministically.
+		cancel()
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		if request.Context.Err() != nil {
+			t.Fatal("completed native dial retained caller lifetime")
+		}
+		address := &net.UDPAddr{IP: net.IPv4(192, 168, 50, 133), Port: 53}
+		if _, err := packet.WriteTo([]byte("owned query after completed dial"), address); err != nil {
+			t.Fatal("completed DNS dial cancelled its returned connection", err)
+		}
+		<-backend.writes
+		if err := owner.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if request.Context.Err() == nil || backend.closes.Load() != 1 {
+			t.Fatal("native retirement lost the returned DNS connection")
+		}
+		if _, err := packet.WriteTo([]byte("stale"), address); !errors.Is(err, net.ErrClosed) {
+			t.Fatal("retired DNS connection accepted another query", err)
+		}
+	})
+}
+
+func TestDialConnectionsPendingCallerCancellationAndDeadlineRejectPublication(t *testing.T) {
+	for _, deadline := range []bool{false, true} {
+		synctest.Test(t, func(t *testing.T) {
+			var owner Connections
+			defer owner.Close()
+			parent, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			request, err := owner.BeginDial(parent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if deadline {
+				time.Sleep(time.Second)
+			} else {
+				cancel() // Do not yield to AfterFunc before attempting publication.
+			}
+			probe := &connectionCloseProbe{onClose: request.Release}
+			if err := request.Publish(probe); !errors.Is(err, net.ErrClosed) || probe.calls.Load() != 1 || request.Context.Err() == nil {
+				t.Fatal("cancelled pending caller published or leaked its native result", err)
+			}
+		})
+	}
+}
+
+func TestDialConnectionsCancellationDuringPublicationKeepsExactOwner(t *testing.T) {
+	for iteration := 0; iteration < 100; iteration++ {
+		var owner Connections
+		parent, cancel := context.WithCancel(context.Background())
+		request, err := owner.BeginDial(parent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		probe := &connectionCloseProbe{onClose: request.Release}
+		start, joined := make(chan struct{}), make(chan struct{})
+		go func() { <-start; cancel(); close(joined) }()
+		close(start)
+		err = request.Publish(probe)
+		<-joined
+		if err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Fatal(err)
+		}
+		if err == nil && (request.Context.Err() != nil || probe.calls.Load() != 0) {
+			t.Fatal("caller revoked a successfully handed-over connection")
+		}
+		if err != nil && (request.Context.Err() == nil || probe.calls.Load() != 1) {
+			t.Fatal("rejected handover retained a pending connection")
+		}
+		if err := owner.Close(); err != nil || request.Context.Err() == nil || probe.calls.Load() != 1 {
+			t.Fatal("handover race lost exact native retirement", err)
+		}
+	}
+}
+
+type dialPublicationContext struct {
+	context.Context
+	intercept       atomic.Bool
+	entered, resume chan struct{}
+}
+
+func (p *dialPublicationContext) Err() error {
+	if p.intercept.CompareAndSwap(true, false) {
+		close(p.entered)
+		<-p.resume
+	}
+	return p.Context.Err()
+}
+
+func TestDialConnectionsCancellationAfterCallbackStopCannotPublish(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	parent := &dialPublicationContext{Context: ctx, entered: make(chan struct{}), resume: make(chan struct{})}
+	var owner Connections
+	defer owner.Close()
+	request, err := owner.BeginDial(parent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := &connectionCloseProbe{onClose: request.Release}
+	parent.intercept.Store(true)
+	done := make(chan error, 1)
+	go func() { done <- request.Publish(probe) }()
+	wait(t, parent.entered)
+	// Publish has stopped AfterFunc and still holds the owner lock. This
+	// cancellation must be caught by its synchronous caller observation.
+	cancel()
+	close(parent.resume)
+	if err := <-done; !errors.Is(err, net.ErrClosed) || probe.calls.Load() != 1 || request.Context.Err() == nil {
+		t.Fatal("caller cancelled during native publication was adopted", err)
+	}
+}

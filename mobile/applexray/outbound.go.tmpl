@@ -154,7 +154,7 @@ func (h *Outbound) DialContext(ctx context.Context, network string, destination 
 		return nil, errors.New("unsupported Xray connection network")
 	}
 	dest := xnet.Destination{Network: xnet.Network_TCP, Address: xnet.ParseAddress(destination.AddrString()), Port: xnet.Port(destination.Port)}
-	request, err := h.connections.Begin(ctx)
+	request, err := h.connections.BeginDial(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +177,7 @@ func (h *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (n
 	if err != nil {
 		return nil, err
 	}
-	request, err := h.connections.Begin(ctx)
+	request, err := h.connections.BeginDial(ctx)
 	if err != nil {
 		return nil, err
 	}

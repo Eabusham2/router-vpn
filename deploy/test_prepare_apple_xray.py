@@ -63,7 +63,7 @@ class Prepare(unittest.TestCase):
             self.assertIn('xcore.RouterVPNIsNativeContext(ctx)',native)
             self.assertIn('activeNative.Load()',native)
             self.assertIn('bindings.Delete(instance)',native)
-            self.assertEqual(native.count('h.connections.Begin(ctx)'), 2)
+            self.assertEqual(native.count('h.connections.BeginDial(ctx)'), 2)
             self.assertIn('request.Publish(stream)', native)
             self.assertIn('request.Publish(packet)', native)
             self.assertLess(native.index('connectionErr := h.connections.Close()'), native.index('err := instance.Close()'))
