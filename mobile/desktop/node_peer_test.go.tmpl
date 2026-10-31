@@ -394,10 +394,16 @@ func desktopNodePeerInterface(t *testing.T) (net.Interface, netip.Addr) {
 type desktopNodePeerTUN struct {
 	inbound.Adapter
 	ready, closed atomic.Bool
+	beforeStart   func() error
 }
 
 func (t *desktopNodePeerTUN) Start(stage adapter.StartStage) error {
 	if stage == adapter.StartStateStart {
+		if t.beforeStart != nil {
+			if err := t.beforeStart(); err != nil {
+				return err
+			}
+		}
 		t.ready.Store(true)
 	}
 	return nil
@@ -416,6 +422,7 @@ type desktopNodePeerKernel struct {
 	mu               sync.Mutex
 	grants           map[string]mobiletor.DesktopSocketGrant
 	preTUN, requests int
+	preTUNGrant      chan struct{}
 }
 
 func (p *desktopNodePeerKernel) Owner() (mobiletor.DesktopSocketKernelOwner, error) {
@@ -453,6 +460,12 @@ func (p *desktopNodePeerKernel) Grant(ctx context.Context, q mobiletor.DesktopSo
 	p.requests++
 	if !p.tun.ready.Load() && !p.network.Current() {
 		p.preTUN++
+		if p.preTUNGrant != nil {
+			select {
+			case p.preTUNGrant <- struct{}{}:
+			default:
+			}
+		}
 	}
 	now := time.Now()
 	return mobiletor.DesktopSocketReceipt{Grant: q, ObservedAt: now.UnixMilli(), ExpiresAt: now.Add(10 * time.Second).UnixMilli()}, nil
@@ -665,6 +678,19 @@ func TestRouterVPNDesktopNodeEncryptedPreReadyHandshake(t *testing.T) {
 	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		t.Run(mode, func(t *testing.T) {
 			f := newDesktopNodePeerFixture(t, mode, false)
+			// WG's first keepalive can run after endpoint.Start returns. Retain
+			// this modeled TUN stage until the real captured grant has arrived,
+			// so the pre-TUN witness does not depend on scheduler speed. A late
+			// socket-admission regression still fails at the bounded barrier.
+			f.kernel.preTUNGrant = make(chan struct{}, 1)
+			f.tun.beforeStart = func() error {
+				select {
+				case <-f.kernel.preTUNGrant:
+					return nil
+				case <-time.After(5 * time.Second):
+					return errors.New("actual eager encrypted socket did not reach captured pre-TUN admission")
+				}
+			}
 			if err := f.box.RouterVPNStrategyStart(); err != nil {
 				t.Fatal("actual eager encrypted Box startup", err)
 			}
