@@ -43,22 +43,30 @@ class Tests(unittest.TestCase):
         for text in ('X','A\nA','A\nother\nB','A\nB\nB'):
             with self.subTest(text=text),self.assertRaises(ValueError):MODULE.replace_once(text,'A','A\nB')
 class StreamPolicy(unittest.TestCase):
+    def fixture(self,policy):
+        return ('package shadowsocks\nfunc dial() { '+policy.OLD+' }\n'+
+                'func packet() { '+policy.PACKET_OLD+'; '+policy.PACKET_OLD+' }\n')
     def test_exact_upstream_pin_and_all_or_nothing_transformation(self):
         policy=MODULE.STREAM
         self.assertEqual(policy.SOURCE_SHA,'10dd204d5f2516e5e7501c610484ed7103c8884f')
-        fixture='package shadowsocks\nfunc dial() { '+policy.OLD+' }\n'
+        fixture=self.fixture(policy)
         with mock.patch.object(policy,'SOURCE_SHA',policy.blobsha(fixture.encode())):
             corrected=policy.patch(fixture)
             self.assertEqual(policy.patch(corrected),corrected)
             self.assertIn('routerVPNDialStream(ctx, outConn, h.method, destination)',corrected)
+            self.assertEqual(corrected.count(policy.PACKET_NEW),2)
+            self.assertEqual(policy.patch(fixture.replace(policy.OLD,policy.NEW)),corrected)
             legacy=fixture.replace(policy.OLD,policy.LEGACY)
             self.assertEqual(policy.patch(legacy),corrected)
-            for changed in (fixture+'drift',corrected+'drift',legacy+'drift',corrected.replace('routerVPNDialStream','wrongGuard'),legacy.replace('routerVPNGuardStream','wrongGuard')):
+            for changed in (fixture+'drift',corrected+'drift',legacy+'drift',corrected.replace('routerVPNDialStream','wrongGuard'),legacy.replace('routerVPNGuardStream','wrongGuard'),
+                            corrected.replace(policy.PACKET_NEW,policy.PACKET_OLD,1),
+                            fixture.replace(policy.PACKET_OLD,policy.PACKET_NEW),
+                            corrected.replace('routerVPNGuardPacket','foreignPacket')):
                 with self.assertRaises(ValueError):policy.patch(changed)
         with self.assertRaises(ValueError):policy.patch(fixture)
     def test_helper_is_installed_in_the_correct_package(self):
         policy=MODULE.STREAM
-        fixture='package shadowsocks\nfunc dial() { '+policy.OLD+' }\n'
+        fixture=self.fixture(policy)
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(policy,'SOURCE_SHA',policy.blobsha(fixture.encode())):
             core=Path(tmp);source=core/'protocol/shadowsocks/outbound.go';source.parent.mkdir(parents=True)
             source.write_text(fixture)
@@ -66,6 +74,8 @@ class StreamPolicy(unittest.TestCase):
             helper=source.with_name('routervpn_stream_guard.go')
             self.assertEqual(helper.read_bytes(),(ROOT/'mobile/startwhitening/ss_stream_guard.go.tmpl').read_bytes())
             self.assertTrue(helper.read_text().startswith('package shadowsocks'))
+            self.assertEqual(source.with_name('routervpn_packet_guard_test.go').read_bytes(),
+                             (ROOT/'mobile/startwhitening/ss_packet_guard_test.go.tmpl').read_bytes())
             snapshot=(source.read_bytes(),helper.read_bytes())
             policy.prepare(core)
             self.assertEqual(snapshot,(source.read_bytes(),helper.read_bytes()))
@@ -74,7 +84,7 @@ class StreamPolicy(unittest.TestCase):
             self.assertEqual(helper.read_bytes(),snapshot[1])
     def test_source_and_helper_symlinks_are_never_followed(self):
         policy=MODULE.STREAM
-        for which in ('outbound.go','routervpn_stream_guard.go'):
+        for which in ('outbound.go','routervpn_stream_guard.go','routervpn_packet_guard_test.go'):
             with tempfile.TemporaryDirectory() as tmp:
                 core=Path(tmp);directory=core/'protocol/shadowsocks';directory.mkdir(parents=True)
                 target=core/'foreign';target.write_text('unchanged')
@@ -87,5 +97,8 @@ class StreamPolicy(unittest.TestCase):
         self.assertIn(ROOT/'deploy/mobile_shadowsocks_stream_policy.py',paths)
         self.assertIn(ROOT/'internal/startwhitening/stream_guard.go',paths)
         self.assertIn(ROOT/'internal/startwhitening/stream_guard_test.go',paths)
+        self.assertIn(ROOT/'internal/startwhitening/packet_guard.go',paths)
+        self.assertIn(ROOT/'internal/startwhitening/packet_guard_test.go',paths)
+        self.assertIn(ROOT/'mobile/startwhitening/ss_packet_guard_test.go.tmpl',paths)
 
 if __name__=='__main__':unittest.main()

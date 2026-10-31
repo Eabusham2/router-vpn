@@ -1,0 +1,250 @@
+package shadowsocks
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"errors"
+	"net"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	shadowsocks "github.com/sagernet/sing-shadowsocks2"
+	"github.com/sagernet/sing/common/buf"
+	"github.com/sagernet/sing/common/bufio"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// The reference uses the independent pinned SS2022 server. Both client entry
+// points below are the actual patched shipping shadowsocksDialer methods;
+// only the already-captured physical dialer is a private loopback fixture.
+type routerVPNSSPacketPeer struct {
+	listener    net.PacketConn
+	ctx         context.Context
+	cancel      context.CancelFunc
+	mu          sync.Mutex
+	closing     bool
+	connections map[N.PacketConn]bool
+	workers     sync.WaitGroup
+	raw, plain  atomic.Int32
+	processed   chan struct{}
+}
+
+func (*routerVPNSSPacketPeer) NewConnection(context.Context, net.Conn, M.Metadata) error {
+	return errors.New("packet reference denies unrequested TCP")
+}
+func (*routerVPNSSPacketPeer) NewError(context.Context, error) {}
+func (p *routerVPNSSPacketPeer) NewPacketConnection(_ context.Context, connection N.PacketConn, metadata M.Metadata) error {
+	p.mu.Lock()
+	if p.closing {
+		p.mu.Unlock()
+		return net.ErrClosed
+	}
+	p.connections[connection] = true
+	p.workers.Add(1)
+	p.mu.Unlock()
+	defer func() {
+		_ = connection.Close()
+		p.mu.Lock()
+		delete(p.connections, connection)
+		p.mu.Unlock()
+		p.workers.Done()
+	}()
+	stop := context.AfterFunc(p.ctx, func() { _ = connection.Close() })
+	defer stop()
+	if metadata.Destination.String() != "192.0.2.99:9999" {
+		return errors.New("packet reference rejected another destination")
+	}
+	for {
+		packet := buf.NewPacket()
+		destination, err := connection.ReadPacket(packet)
+		if err == nil && destination != metadata.Destination {
+			err = errors.New("packet reference destination changed")
+		}
+		if err == nil {
+			p.plain.Add(1)
+			reply := buf.NewSize(65535 + 2048)
+			reply.Resize(2048, 0)
+			_, _ = reply.Write(packet.Bytes())
+			err = connection.WritePacket(reply, destination)
+		}
+		packet.Release()
+		if err != nil {
+			return err
+		}
+	}
+}
+
+func routerVPNStartSSPacketPeer(t *testing.T) (*routerVPNSSPacketPeer, string) {
+	t.Helper()
+	listener, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &routerVPNSSPacketPeer{listener: listener, ctx: ctx, cancel: cancel, connections: make(map[N.PacketConn]bool), processed: make(chan struct{}, 16)}
+	password := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{19}, 32))
+	service, err := shadowaead_2022.NewServiceWithPassword("2022-blake3-aes-256-gcm", password, 10, p, nil)
+	if err != nil {
+		_ = listener.Close()
+		cancel()
+		t.Fatal(err)
+	}
+	p.workers.Add(1)
+	go func() {
+		defer p.workers.Done()
+		reader := bufio.NewPacketConn(listener)
+		for {
+			packet := buf.NewPacket()
+			source, err := reader.ReadPacket(packet)
+			if err != nil {
+				packet.Release()
+				return
+			}
+			p.raw.Add(1)
+			if service.NewPacket(ctx, reader, packet, M.Metadata{Source: source}) != nil {
+				packet.Release()
+			}
+			select {
+			case p.processed <- struct{}{}:
+			default:
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		p.mu.Lock()
+		p.closing = true
+		connections := make([]N.PacketConn, 0, len(p.connections))
+		for connection := range p.connections {
+			connections = append(connections, connection)
+		}
+		p.mu.Unlock()
+		cancel()
+		_ = listener.Close()
+		for _, connection := range connections {
+			_ = connection.Close()
+		}
+		p.workers.Wait()
+	})
+	return p, password
+}
+
+type routerVPNSSPacketLower struct{ address string }
+
+func (d routerVPNSSPacketLower) DialContext(ctx context.Context, network string, address M.Socksaddr) (net.Conn, error) {
+	if network != "udp" || address.String() != d.address {
+		return nil, errors.New("packet fixture rejected another physical tuple")
+	}
+	return (&net.Dialer{}).DialContext(ctx, "udp4", d.address)
+}
+func (routerVPNSSPacketLower) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("packet fixture denies an unowned listener")
+}
+
+func routerVPNSSPacketClient(t *testing.T, peer *routerVPNSSPacketPeer, password string, connected bool) net.PacketConn {
+	t.Helper()
+	method, err := shadowsocks.CreateMethod(context.Background(), "2022-blake3-aes-256-gcm", shadowsocks.MethodOptions{Password: password})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower := routerVPNSSPacketLower{peer.listener.LocalAddr().String()}
+	dialer := &shadowsocksDialer{method: method, dialer: lower, serverAddr: M.ParseSocksaddr(lower.address)}
+	if connected {
+		connection, err := dialer.DialContext(context.Background(), "udp", M.ParseSocksaddr("192.0.2.99:9999"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		// BindPacketConn exposes net.Conn without bypassing its actual packet
+		// implementation; the adapter preserves exact-size reads in this case.
+		return &routerVPNSSConnectedPacket{Conn: connection}
+	}
+	connection, err := dialer.ListenPacket(context.Background(), M.ParseSocksaddr("192.0.2.99:9999"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return connection
+}
+
+type routerVPNSSConnectedPacket struct{ net.Conn }
+
+func (c *routerVPNSSConnectedPacket) ReadFrom(p []byte) (int, net.Addr, error) {
+	n, err := c.Read(p)
+	return n, M.ParseSocksaddr("192.0.2.99:9999"), err
+}
+func (c *routerVPNSSConnectedPacket) WriteTo(p []byte, _ net.Addr) (int, error) { return c.Write(p) }
+
+func TestRouterVPNShadowsocksCompleteCiphertextPacket(t *testing.T) {
+	for _, connected := range []bool{true, false} {
+		name := "ListenPacket"
+		if connected {
+			name = "DialContext"
+		}
+		t.Run(name, func(t *testing.T) {
+			peer, password := routerVPNStartSSPacketPeer(t)
+			client := routerVPNSSPacketClient(t, peer, password, connected)
+			t.Cleanup(func() { _ = client.Close() })
+			address := M.ParseSocksaddr("192.0.2.99:9999")
+			for _, size := range []int{1, 32, 1024, 32768} {
+				payload := bytes.Repeat([]byte{byte(size%251 + 1)}, size)
+				_ = client.SetDeadline(time.Now().Add(2 * time.Second))
+				if n, err := client.WriteTo(payload, address); err != nil || n != len(payload) {
+					t.Fatal("actual SS packet write failed", size, n, err)
+				}
+				answer := make([]byte, size)
+				n, from, err := client.ReadFrom(answer)
+				if err != nil || n != size || from.String() != address.String() || !bytes.Equal(payload, answer) {
+					t.Fatal("actual SS exact-size plaintext read lost complete ciphertext", size, n, err)
+				}
+			}
+			for i, small := range []bool{true, false} {
+				payload := bytes.Repeat([]byte{byte(71 + i)}, 1024)
+				if _, err := client.WriteTo(payload, address); err != nil {
+					t.Fatal(err)
+				}
+				size := len(payload)
+				if small {
+					size = 7
+				}
+				answer := make([]byte, size)
+				n, _, err := client.ReadFrom(answer)
+				if err != nil || n != size || !bytes.Equal(answer, payload[:size]) {
+					t.Fatal("actual SS packet truncation corrupted authentication or the next datagram", n, err)
+				}
+			}
+			if peer.raw.Load() != 6 || peer.plain.Load() != 6 {
+				t.Fatal("packet proof missed real independent ciphertext and plaintext", peer.raw.Load(), peer.plain.Load())
+			}
+			if err := client.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.WriteTo([]byte("late"), address); err == nil {
+				t.Fatal("retired SS packet delivered another payload")
+			}
+		})
+	}
+}
+
+func TestRouterVPNShadowsocksPacketWrongKey(t *testing.T) {
+	peer, _ := routerVPNStartSSPacketPeer(t)
+	client := routerVPNSSPacketClient(t, peer, base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{29}, 32)), false)
+	defer client.Close()
+	if _, err := client.WriteTo([]byte("wrong-key"), M.ParseSocksaddr("192.0.2.99:9999")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-peer.processed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("wrong-key packet did not reach the independent encrypted peer")
+	}
+	_ = client.SetDeadline(time.Now().Add(150 * time.Millisecond))
+	answer := make([]byte, 32)
+	n, _, err := client.ReadFrom(answer)
+	var timeout net.Error
+	if n != 0 || !errors.As(err, &timeout) || !timeout.Timeout() || peer.raw.Load() != 1 || peer.plain.Load() != 0 {
+		t.Fatal("wrong SS key escaped actual authentication", n, err, peer.raw.Load(), peer.plain.Load())
+	}
+}

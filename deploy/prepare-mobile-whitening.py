@@ -50,7 +50,7 @@ def prepare(vendor):
     for p in (ROOT/'internal/startwhitening').glob('*.go'): (policy/p.name).write_bytes(p.read_bytes())
     adapter=vendor/'protocol/routervpnwhitening';adapter.mkdir(parents=True,exist_ok=True)
     for p in (ROOT/'mobile/startwhitening').glob('*.tmpl'):
-        if p.name=='ss_stream_guard.go.tmpl': continue
+        if p.name in STREAM.TEMPLATES: continue
         (adapter/p.name.removesuffix('.tmpl')).write_bytes(p.read_bytes())
     registry.write_text(text)
     print('Native authenticated Start Layer source:',digest())

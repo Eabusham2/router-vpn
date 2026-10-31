@@ -6,6 +6,7 @@ import (
 
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
 	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
 )
 
 func routerVPNDialStream(ctx context.Context, raw net.Conn, method interface {
@@ -13,5 +14,13 @@ func routerVPNDialStream(ctx context.Context, raw net.Conn, method interface {
 }, destination M.Socksaddr) (net.Conn, error) {
 	return startwhitening.DialAuthenticatedStream(ctx, raw, func(owned net.Conn) (net.Conn, error) {
 		return method.DialConn(owned, destination)
+	})
+}
+
+func routerVPNGuardPacket(raw net.Conn, method interface {
+	DialPacketConn(net.Conn) N.NetPacketConn
+}) net.PacketConn {
+	return startwhitening.GuardAuthenticatedPacket(raw, func(owned net.Conn) net.PacketConn {
+		return method.DialPacketConn(owned)
 	})
 }

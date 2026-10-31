@@ -241,7 +241,7 @@ sys.exit(status)
             self.assertIn('routervpnwhitening.RegisterOutbound(registry)', registry.read_text())
             self.assertEqual(stream.call_count,2)
             for p in (ROOT/'mobile/startwhitening').glob('*.tmpl'):
-                if p.name=='ss_stream_guard.go.tmpl':continue
+                if p.name in module.STREAM.TEMPLATES:continue
                 self.assertEqual((core/'protocol/routervpnwhitening'/p.name.removesuffix('.tmpl')).read_bytes(), p.read_bytes())
 
     def test_original_native_packet_gates_remain_required(self):

@@ -50,6 +50,10 @@ def checked_sources(source):
                 copies["routervpn/" + package + "/" + path.name] = PREP.relocated_shared_source(path.read_bytes())
     for path in sorted((ROOT / "mobile/amnezia").glob("*.tmpl")):
         copies["protocol/routervpnamnezia/" + path.name.removesuffix(".tmpl")] = path.read_bytes()
+    for name, target in PREP.RELAY.WHITENING.STREAM.TEMPLATES.items():
+        copies["protocol/shadowsocks/" + target] = (ROOT / "mobile/startwhitening" / name).read_bytes()
+    for path in sorted((ROOT / "internal/startwhitening").glob("*.go")):
+        copies["experimental/libbox/routervpn/startwhitening/" + path.name] = path.read_bytes()
     copies["service/routervpnperformance/service.go"] = (ROOT / "mobile/performance/service.go.tmpl").read_bytes()
     copies["routervpn_services.go"] = (ROOT / "mobile/performance/box.go.tmpl").read_bytes()
     for relative, expected in copies.items():
@@ -61,6 +65,10 @@ def checked_sources(source):
     if box.is_symlink() or PREP.node_capture_source(box.read_text(encoding="utf-8")) != box.read_bytes():
         raise ValueError("Node source snapshot is absent or moved from actual Box construction")
     records["box.go"] = hashlib.sha256(box.read_bytes()).hexdigest()
+    ss = source / "protocol/shadowsocks/outbound.go"
+    if ss.is_symlink() or PREP.RELAY.WHITENING.STREAM.patch(ss.read_text(encoding="utf-8")).encode() != ss.read_bytes():
+        raise ValueError("Node native Shadowsocks stream/packet owner differs from its exact pinned source")
+    records["protocol/shadowsocks/outbound.go"] = hashlib.sha256(ss.read_bytes()).hexdigest()
     for name in ("go.mod", "go.sum"):
         path = source / name
         if path.is_symlink() or not path.is_file():
@@ -123,6 +131,10 @@ def mutants(source, windows):
     selected_dns = "routervpn_desktop_node_box_dns.go"
     node_command = "cmd/sing-box/routervpn_mtu_node.go"
     result = [
+        ("truncated-shadowsocks-ciphertext", "protocol/shadowsocks/outbound.go", "./protocol/shadowsocks", "TestRouterVPNShadowsocksCompleteCiphertextPacket", "DialContext",
+         "actual SS exact-size plaintext read lost complete ciphertext", changed("protocol/shadowsocks/outbound.go",
+         "return bufio.NewBindPacketConn(routerVPNGuardPacket(outConn, h.method), destination), nil",
+         "return bufio.NewBindPacketConn(h.method.DialPacketConn(outConn), destination), nil")),
         ("private-input-before-journal-auth", node_command, "./cmd/sing-box", "TestRouterVPNDesktopNodePhysicalCommandJournalBeforePrivateInputs", "",
          "private node input preceded actual parent authentication", changed(node_command,
          "\tif journal != nil {\n\t\tif err := journal.authenticate(parent, files); err != nil {\n\t\t\treturn err\n\t\t}\n\t}\n", "")),
@@ -173,6 +185,8 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     race = [] if bootstrap_only or windows and arch == "arm64" else ["-race"]
     captured["CGO_ENABLED"] = "1" if race else "0"
     suites = [
+        ("ss-packet", "./protocol/shadowsocks", "^TestRouterVPNShadowsocks",
+         ("TestRouterVPNShadowsocksCompleteCiphertextPacket", "TestRouterVPNShadowsocksPacketWrongKey")),
         ("command", "./cmd/sing-box", "^TestRouterVPNDesktopNodePhysicalCommand",
          tuple("TestRouterVPNDesktopNodePhysicalCommand" + name for name in ("SourceBoundary", "RestoredMTU", "TransferInput", "RetirementReceipt", "ReadyRequiresFreshDNS", "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionExactStop", "AdmissionRejectsForeignStop", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "JournalBeforePrivateInputs", "PublicRequiresJournal"))),
         ("factory", "./routervpn/desktoppt", "^TestRouterVPNNodePhysical",
