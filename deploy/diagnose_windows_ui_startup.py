@@ -32,6 +32,55 @@ def marker(label):
     return "[Console]::Error.WriteLine('" + PREFIX + " " + label + " ticks=' + [DateTime]::UtcNow.Ticks)"
 
 
+def lookup_observers():
+    # Both hooks are public in the Windows PowerShell 5.1 reference API.
+    # They bracket normal command discovery, including module auto-loading.
+    # Observe the original Add-Type lookup; do not pre-load or resolve it.
+    # https://learn.microsoft.com/dotnet/api/system.management.automation.commandinvocationintrinsics.precommandlookupaction
+    # https://learn.microsoft.com/dotnet/api/system.management.automation.commandinvocationintrinsics.postcommandlookupaction
+    before = """    $RouterVPNDiagnosticInvocation=$null
+    $RouterVPNDiagnosticCaptured=$false
+    try{
+        $RouterVPNDiagnosticInvocation=$ExecutionContext.InvokeCommand
+        $RouterVPNDiagnosticPre=$RouterVPNDiagnosticInvocation.PreCommandLookupAction
+        $RouterVPNDiagnosticPost=$RouterVPNDiagnosticInvocation.PostCommandLookupAction
+        if($null-ne$RouterVPNDiagnosticPre-or$null-ne$RouterVPNDiagnosticPost){throw 'Existing lookup observers remain untouched.'}
+        $RouterVPNDiagnosticCaptured=$true
+        $RouterVPNDiagnosticInvocation.PreCommandLookupAction=[System.EventHandler[System.Management.Automation.CommandLookupEventArgs]]{
+            param($Sender,$Lookup)
+            try{if($Sender-ceq'Add-Type'){
+                PRE_MARKER
+            }}catch{}
+        }
+        $RouterVPNDiagnosticInvocation.PostCommandLookupAction=[System.EventHandler[System.Management.Automation.CommandLookupEventArgs]]{
+            param($Sender,$Lookup)
+            try{if($Sender-ceq'Add-Type'){
+                POST_MARKER
+            }}catch{}
+        }
+    }catch{try{
+        UNAVAILABLE_MARKER
+    }catch{}}
+    try{
+"""
+    after = """    }finally{
+        if($RouterVPNDiagnosticCaptured){
+            try{$RouterVPNDiagnosticInvocation.PreCommandLookupAction=$RouterVPNDiagnosticPre}catch{try{
+                RESTORE_MARKER
+            }catch{}}
+            try{$RouterVPNDiagnosticInvocation.PostCommandLookupAction=$RouterVPNDiagnosticPost}catch{try{
+                RESTORE_MARKER
+            }catch{}}
+        }
+    }
+"""
+    before = before.replace('PRE_MARKER', marker('framework-command-lookup-begin'))
+    before = before.replace('POST_MARKER', marker('framework-command-lookup-complete'))
+    before = before.replace('UNAVAILABLE_MARKER', marker('framework-command-observers-unavailable'))
+    after = after.replace('RESTORE_MARKER', marker('framework-command-observers-restore-failed'))
+    return before, after
+
+
 def instrumented_scripts():
     result = {}
     for role in ("App", "Tray"):
@@ -62,6 +111,9 @@ def instrumented_scripts():
         replacement = boundary + "\n" + indent + marker(label if not around else label + "-complete")
         if around:
             replacement = indent + marker(label + "-begin") + "\n" + replacement
+        if label == "framework-http":
+            before_lookup, after_lookup = lookup_observers()
+            replacement = before_lookup + replacement + "\n" + after_lookup.rstrip("\n")
         initialize = NATIVE.replace_once(initialize, boundary, replacement)
     result[path] = (source[:start] + initialize + source[end:]).encode("utf-8")
     return result
