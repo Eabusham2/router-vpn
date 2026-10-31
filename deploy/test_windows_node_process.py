@@ -10,6 +10,9 @@ sing-box dataplane test; those remain separate required composition gates.
 The application restart cases use real admission/settings/private-store code
 with explicit process/BFE/journal-I/O models. Native journal retirement/adoption
 and actual BFE observation are verified by their separate Windows gates.
+Public Connect/AUTO/SMART/Speed Lab cases run the complete shipping catalog,
+compiler, private staging and HTTP proof parser. Their native child/BFE boundary
+and transport are modeled; passing them is not physical network acceptance.
 """
 from pathlib import Path
 import argparse
@@ -100,6 +103,17 @@ SHARED_TESTS = (
     "TestDesktopNodeInitialCreateRetryRetainsPartialOwner",
     "TestDesktopNodeInitialCreateCancellationRetainsWrittenJournal",
     "TestDesktopNodeInitialCancelledStartCannotAuthorizeReadOnlyCreate",
+    "TestDesktopNodePublicConnectUsesCapturedOwnedHost",
+    "TestDesktopNodePublicAutoRetainsCatalogAndExactPredecessor",
+    "TestDesktopNodePublicSmartRestoresCapturedSourceAndLiveMTU",
+    "TestDesktopNodePublicSpeedLabCancellationRestoresExactWinner",
+    "TestDesktopNodePublicConnectRejectsReplacedRequest",
+    "TestDesktopNodePublicConnectCancellationAndProofReplacement",
+    "TestDesktopNodePublicDisconnectAndOffRetainUnjoinedOwners",
+    "TestDesktopNodePublicCapabilitiesRequireCapturedReadiness",
+    "TestDesktopOwnedNodeUnstagedDiscardClearsOnlyUnusedPrivateSource",
+    "TestDesktopNodeSmartRetainRechecksPublicationOwner",
+    "TestDesktopNodePublicOrdinaryCancellationRetainsCapturedCleanup",
 )
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
@@ -108,7 +122,15 @@ ARGUMENT_CASES = (
     "upper-transfer", "zero-mtu", "low-mtu", "large-mtu", "noncanonical-mtu",
     "flag-injection",
 )
+PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2",
+                "reality-vision", "reality-pq-vision", "reality-xhttp")
+PUBLIC_LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
 EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES),
+            *("TestDesktopNodePublicConnectUsesCapturedOwnedHost/" + mode + "/" + layer
+              for mode in PUBLIC_MODES for layer in PUBLIC_LAYERS),
+            *("TestDesktopNodePublicConnectCancellationAndProofReplacement/" + case
+              for case in ("cancel-at-start", "request-during-proof", "runtime-during-proof", "native-owner-during-proof")),
+            *("TestDesktopNodeSmartRetainRechecksPublicationOwner/" + case for case in ("cancel", "native-owner")),
             "TestWindowsPrivateStoreWriteThroughReplace/unicode",
             "TestWindowsPrivateStoreWriteThroughReplace/long-portable-path")
 REQUIRED_SOURCES = (
@@ -127,6 +149,11 @@ REQUIRED_SOURCES = (
     "cmd/client/desktop_node_recovery_other.go", "cmd/client/desktop_node_recovery_test.go",
     "cmd/client/desktop_node_recovery_initial.go", "cmd/client/desktop_node_recovery_initial_test.go",
     "cmd/client/desktop_node_owned.go",
+    "cmd/client/desktop_node_connection_host.go", "cmd/client/desktop_node_connection_host_test.go",
+    "cmd/client/desktop_node_owned_prepare.go", "cmd/client/desktop_node_owned_test.go",
+    "cmd/client/desktop_node_owned_restore_cleanup_test.go", "cmd/client/desktop_node_smart.go", "cmd/client/desktop_node_smart_test.go",
+    "cmd/client/desktop_node_native.go", "cmd/client/strategy_modes.go",
+    "cmd/client/strategy_requirements.go", "cmd/client/start_layer_routes.go",
     "cmd/client/desktop_node_health.go", "cmd/client/desktop_node_health_test.go",
     "cmd/client/desktop_node_startup.go", "cmd/client/desktop_node_startup_test.go",
     "cmd/client/node_proof.go", "cmd/client/speed_lab_transaction.go",
@@ -218,6 +245,16 @@ def mutants():
     initial = (ROOT / initial_file).read_text(encoding="utf-8")
     owned_file = "cmd/client/desktop_node_owned.go"
     owned = (ROOT / owned_file).read_text(encoding="utf-8")
+    host_file = "cmd/client/desktop_node_connection_host.go"
+    host = (ROOT / host_file).read_text(encoding="utf-8")
+    native_file = "cmd/client/desktop_node_native.go"
+    native = (ROOT / native_file).read_text(encoding="utf-8")
+    strategy_file = "cmd/client/strategy_requirements.go"
+    strategy = (ROOT / strategy_file).read_text(encoding="utf-8")
+    smart_file = "cmd/client/desktop_node_smart.go"
+    smart = (ROOT / smart_file).read_text(encoding="utf-8")
+    capability_file = "cmd/client/start_layer_routes.go"
+    capability = (ROOT / capability_file).read_text(encoding="utf-8")
     once = NATIVE.replace_once
     alive = NATIVE.function_mutant(original, "func (owner *desktopNodeProcessOwner) Alive()",
         "\tif err := owner.controller(); err != nil {\n\t\treturn err\n\t}\n", "")
@@ -329,6 +366,38 @@ def mutants():
         (initial_file, "initial-absence-creates-for-read-only-recovery", "TestDesktopNodeInitialCancelledStartCannotAuthorizeReadOnlyCreate",
          "cancelled source start lent creation authority to later read-only startup",
          once(initial, "if !requireJournal {", "if false && !requireJournal {")),
+        (host_file, "public-protected-node-uses-ordinary-helper", "TestDesktopNodePublicConnectUsesCapturedOwnedHost/wg/off",
+         "public Connect did not execute its captured owned native path",
+         once(host, 'if a.desktopNodeConnectionHost() != nil && desktopOwnedNodeProtectionPolicy(profile) != "off" {',
+              'if false && a.desktopNodeConnectionHost() != nil && desktopOwnedNodeProtectionPolicy(profile) != "off" {')),
+        (native_file, "public-node-borrows-mutable-package", "TestDesktopNodePublicConnectUsesCapturedOwnedHost/wg/off",
+         "public Connect did not execute its captured owned native path",
+         once(native, 'desktopNativeEnvironmentForPackage(os.Environ(), root, launch.profileID, "", packageRoot)',
+              'desktopNativeEnvironment(os.Environ(), root, launch.profileID, "")')),
+        (strategy_file, "smart-filters-captured-native-layer", "TestDesktopNodePublicSmartRestoresCapturedSourceAndLiveMTU",
+         "public SMART did not restore its proved captured graph after an actual failed trial",
+         once(strategy, "desktopStartLayerSupportsRawMode(mode.ID) || a.desktopNodeConnectionSelected(mode.ID)",
+              "desktopStartLayerSupportsRawMode(mode.ID)")),
+        (smart_file, "public-node-adopts-replacement-request", "TestDesktopNodePublicConnectRejectsReplacedRequest",
+         "public Connect adopted or mutated a replacement request from an old native completion",
+         once(smart, "return ctx != nil && (a.connectionContext == ctx || a.connectionContext == nil && ctx == context.Background())",
+              "return ctx != nil")),
+        (owned_file, "unstarted-node-keeps-private-source", "TestDesktopOwnedNodeUnstagedDiscardClearsOnlyUnusedPrivateSource",
+         "pre-stage discard retained its unused private source bytes",
+         NATIVE.function_mutant(owned, "func (a *app) discardDesktopOwnedNodeUnstarted(",
+                               "clear(launch.ownedNode.source)", "// negative control retains the unused source")),
+        (capability_file, "public-layer-without-current-readiness", "TestDesktopNodePublicCapabilitiesRequireCapturedReadiness",
+         "public capabilities called an unproved native Start Layer active",
+         once(capability, "if _, err := a.readDesktopOwnedNodeReady(nodeOwner, false); err != nil {",
+              "if _, err := a.readDesktopOwnedNodeReady(nodeOwner, false); false && err != nil {")),
+        (smart_file, "smart-retains-replaced-publication-owner", "TestDesktopNodeSmartRetainRechecksPublicationOwner",
+         "SMART retention published after its exact request or native owner changed",
+         once(smart, "if err := a.checkDesktopNodeStartupOwnerLocked(saved.operation, saved.launch, saved.launch.command); err != nil || a.nodeProtection != owned.slot {",
+              "if err := a.checkDesktopNodeStartupOwnerLocked(saved.operation, saved.launch, saved.launch.command); false && err != nil || a.nodeProtection != owned.slot {")),
+        (host_file, "cancelled-ordinary-start-loses-cleanup", "TestDesktopNodePublicOrdinaryCancellationRetainsCapturedCleanup",
+         "cancelled ordinary publication lost its exact mode cleanup identity or acknowledged a connection",
+         once(host, "if !a.sameConnectionOperationLocked(operation) {",
+              "if a.checkCapturedConnectionOperationLocked(operation) != nil {")),
     )
 
 
@@ -385,6 +454,7 @@ def execute(go="go", *, env=None):
         print(json.dumps({"schema": 1, "host": "windows/" + architecture,
                           "native_process_cases": len(NATIVE_TESTS), "shared_ownership_cases": len(SHARED_TESTS),
                           "command_rejection_cases": len(ARGUMENT_CASES), "negative_controls": len(changes),
+                          "public_connection_mode_layer_cases": len(PUBLIC_MODES) * len(PUBLIC_LAYERS),
                           "actual_child_fixture_sha256": digest, "source_files": len(before),
                           "source_sha256": hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest(),
                           "authenticated_package_launch": "separate-required-composition-gate",

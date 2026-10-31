@@ -129,3 +129,33 @@ func TestDesktopOwnedNodeRestorePlanCleanupTransfersSourceOwnership(t *testing.T
 		})
 	}
 }
+
+func TestDesktopOwnedNodeUnstagedDiscardClearsOnlyUnusedPrivateSource(t *testing.T) {
+	prior := newDesktopOwnedNodeTestFixture(t)
+	if err := prior.start(t, context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	defer prior.process.Close(context.Background())
+	unused, err := prior.a.captureDesktopOwnedNodeRestore(prior.launch, prior.profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unused.directory != "" || unused.ownedNode.attempt != nil || unused.ownedNode.process != nil {
+		t.Fatal("fixture unused capture already owns staged or running resources")
+	}
+	backing := [][]byte{unused.ownedNode.source, unused.config, unused.metadata}
+	before := append([]byte(nil), prior.launch.ownedNode.source...)
+	if err := prior.a.discardDesktopOwnedNodeUnstarted(unused); err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range backing {
+		if len(body) == 0 || !bytes.Equal(body, make([]byte, len(body))) {
+			t.Fatal("pre-stage discard retained its unused private source bytes")
+		}
+	}
+	current, exists := desktopNodeOwners.Load(prior.a)
+	if !exists || current != prior.launch || prior.a.cmd != prior.launch.command || prior.process.closed ||
+		!bytes.Equal(prior.launch.ownedNode.source, before) || prior.launch.ownedNode.slot.active != prior.launch.ownedNode.attempt {
+		t.Fatal("pre-stage discard erased or retired the current active owner")
+	}
+}

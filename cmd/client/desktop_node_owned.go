@@ -23,6 +23,7 @@ import (
 // lifetimes. Only the original private input is retained by a restore plan;
 // every new process acquires its predecessor from the app's joined slot.
 type desktopOwnedNodeRuntime struct {
+	host         *desktopNodeConnectionOwner // original controller/package; retained by captured restoration
 	policy       *mobilemultihop.DesktopNodePolicy
 	source       []byte
 	network      string
@@ -176,6 +177,9 @@ func (a *app) desktopOwnedNodeCurrent(launch *desktopNodeLaunch, processRequired
 	if owned.policy == nil || owned.policy.Validate() != nil || owned.network == "" || physicalNetworkIdentity() != owned.network {
 		return false
 	}
+	if owned.host != nil && owned.host.current() != nil {
+		return false
+	}
 	if raw, exists := desktopNodeOwners.Load(a); !exists || raw != launch {
 		return false
 	}
@@ -199,6 +203,9 @@ func stageDesktopOwnedNodeInputs(a *app, launch *desktopNodeLaunch) error {
 		return errors.New("native Router staging has no captured private owner")
 	}
 	owned := launch.ownedNode
+	if owned.host != nil && owned.host.current() != nil {
+		return errors.New("native Router staging lost its captured controller")
+	}
 	if owned.policy == nil || owned.policy.Validate() != nil || owned.attempt != nil || string(launch.config) != owned.policy.Config() ||
 		launch.mtuSession != owned.policy.Metadata().SessionID || physicalNetworkIdentity() != owned.network {
 		return errors.New("native Router staging changed its captured graph or network")
@@ -213,10 +220,19 @@ func stageDesktopOwnedNodeInputs(a *app, launch *desktopNodeLaunch) error {
 		return err
 	}
 	ctx := a.connectionOperationContextOrBackground()
+	if captured := desktopOwnedNodeOperation(launch); captured != nil {
+		ctx = captured
+	}
+	if err := a.checkCapturedConnectionOperation(ctx); err != nil {
+		return err
+	}
 	if err := a.ensureDesktopNodeRecovery(ctx, slot); err != nil {
 		return err
 	}
 	if err := a.ensureDesktopNodeJournalForStart(ctx, slot); err != nil {
+		return err
+	}
+	if err := a.checkCapturedConnectionOperation(ctx); err != nil {
 		return err
 	}
 	attempt, err := slot.begin(ctx, launch, owned.policy)
@@ -253,8 +269,18 @@ func startDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 	if launch.ownedNode == nil {
 		return launch.command.Start()
 	}
-	return startDesktopOwnedNodeLaunchWith(a.connectionOperationContextOrBackground(), a, launch,
+	ctx := desktopOwnedNodeOperation(launch)
+	if ctx == nil {
+		ctx = a.connectionOperationContextOrBackground()
+	}
+	return startDesktopOwnedNodeLaunchWith(ctx, a, launch,
 		func(ctx context.Context, arguments, environment []string, directory string) (desktopNodeProcess, error) {
+			if owner := launch.ownedNode.host; owner != nil {
+				if err := owner.current(); err != nil {
+					return nil, err
+				}
+				return owner.host.start(ctx, a, launch, arguments, environment, directory)
+			}
 			return startDesktopOwnedNodeJournalProcess(ctx, a, launch, arguments, environment, directory)
 		})
 }
@@ -263,6 +289,9 @@ func startDesktopOwnedNodeLaunchWith(ctx context.Context, a *app, launch *deskto
 	start func(context.Context, []string, []string, string) (desktopNodeProcess, error)) error {
 	if ctx == nil || ctx.Err() != nil || start == nil || !a.desktopOwnedNodeCurrent(launch, false) {
 		return errors.New("native Router process no longer belongs to its captured operation")
+	}
+	if err := a.checkCapturedConnectionOperation(ctx); err != nil {
+		return err
 	}
 	owned := launch.ownedNode
 	args, err := desktopOwnedNodeArguments(launch)
@@ -285,10 +314,11 @@ func startDesktopOwnedNodeLaunchWith(ctx context.Context, a *app, launch *deskto
 	launch.workspaceMu.Lock()
 	owned.process = process // Retain partial native creation even when start failed.
 	launch.workspaceMu.Unlock()
-	if err != nil || ctx.Err() != nil || process == nil || !process.Started() || !a.desktopOwnedNodeCurrent(launch, true) {
-		return errors.Join(err, ctx.Err(), errors.New("native Router process did not retain its exact child owner"))
+	operationErr := a.checkCapturedConnectionOperation(ctx)
+	if err != nil || operationErr != nil || process == nil || !process.Started() || !a.desktopOwnedNodeCurrent(launch, true) {
+		return errors.Join(err, operationErr, errors.New("native Router process did not retain its exact child owner"))
 	}
-	return a.admitDesktopOwnedNode(ctx, launch)
+	return errors.Join(a.admitDesktopOwnedNode(ctx, launch), a.checkCapturedConnectionOperation(ctx))
 }
 
 func desktopNodeHandoff(raw []byte, launch *desktopNodeLaunch) (desktopNodeHandoffRecord, mobiletor.DesktopWindowsProtectionTarget, error) {
@@ -328,7 +358,9 @@ func (a *app) admitDesktopOwnedNode(parent context.Context, launch *desktopNodeL
 	if owned.attempt == nil || owned.attempt.launch != launch || owned.slot == nil {
 		return errors.New("native Router handoff has no exact transfer owner")
 	}
-	current := func() bool { return parent.Err() == nil && a.desktopOwnedNodeCurrent(launch, true) }
+	current := func() bool {
+		return a.checkCapturedConnectionOperation(parent) == nil && a.desktopOwnedNodeCurrent(launch, true)
+	}
 	ctx, cancel := context.WithTimeout(parent, 45*time.Second)
 	defer cancel()
 	ticker := time.NewTicker(25 * time.Millisecond)
@@ -561,19 +593,32 @@ func (a *app) discardDesktopOwnedNodeUnstarted(launch *desktopNodeLaunch) error 
 }
 
 func (a *app) publishDesktopOwnedNodeStart(launch *desktopNodeLaunch, phase, base string) error {
+	return a.publishDesktopOwnedNodeStartFor(launch, phase, base, a.connectionOperationContextOrBackground())
+}
+
+func (a *app) publishDesktopOwnedNodeStartFor(launch *desktopNodeLaunch, phase, base string, operation context.Context) error {
 	if launch == nil || launch.ownedNode == nil || launch.command == nil || launch.ownedNode.attempt == nil || launch.ownedNode.attempt.launch != launch {
 		return errors.New("native Router start has no staged operation")
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.closing || a.cmd != nil {
+	if err := a.checkCapturedConnectionOperationLocked(operation); err != nil {
+		return err
+	}
+	if a.cmd != nil {
 		return errors.New("native Router start cannot replace another process")
+	}
+	launch.workspaceMu.Lock()
+	captured := launch.ownedNode.operation
+	launch.workspaceMu.Unlock()
+	if captured != nil && captured != operation {
+		return errors.Join(errConnectionOperationCancelled, errors.New("native Router publication changed its captured initiating request"))
 	}
 	if prior, exists := desktopNodeOwners.LoadOrStore(a, launch); exists && prior != launch {
 		return errors.New("native Router start cannot replace another native owner")
 	}
 	launch.workspaceMu.Lock()
-	launch.ownedNode.operation = a.connectionContext
+	launch.ownedNode.operation = operation
 	launch.workspaceMu.Unlock()
 	a.cmd = launch.command
 	a.state.Connected, a.state.Phase, a.state.LastError = false, phase, ""
@@ -819,6 +864,7 @@ func (a *app) captureDesktopOwnedNodeRestore(launch *desktopNodeLaunch, profile 
 	if err != nil {
 		return nil, err
 	}
+	restored.ownedNode.host = owned.host
 	if !a.desktopOwnedNodeCurrent(launch, true) {
 		clear(restored.config)
 		clear(restored.metadata)

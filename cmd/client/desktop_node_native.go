@@ -291,6 +291,10 @@ func compileDesktopNode(ctx context.Context, p common.RouterProfile, mode string
 }
 
 func desktopNativeEnvironment(environment []string, root, profile, endpoint string) []string {
+	return desktopNativeEnvironmentForPackage(environment, root, profile, endpoint, desktopAmneziaPackageRoot())
+}
+
+func desktopNativeEnvironmentForPackage(environment []string, root, profile, endpoint, packageRoot string) []string {
 	result := desktopStandardEngineEnvironment(environment, false)
 	clean := result[:0]
 	for _, entry := range result {
@@ -302,7 +306,6 @@ func desktopNativeEnvironment(environment []string, root, profile, endpoint stri
 		clean = append(clean, entry)
 	}
 	executable, _ := os.Executable()
-	packageRoot := desktopAmneziaPackageRoot()
 	clean = append(clean, "HOMEVPN_STANDARD_ENGINE=native", "HOMEVPN_NATIVE_CONTROLLER="+executable, "HOMEVPN_NATIVE_PACKAGE="+packageRoot, "HOMEVPN_ROOT="+root, "HOMEVPN_PROFILE_ID="+profile, "HOMEVPN_POLICY_PROFILE_ID="+profile, "HOMEVPN_ENDPOINT="+endpoint)
 	return nativeLibraryEnvironment(clean, filepath.Join(packageRoot, "runtime", "native"))
 }
@@ -459,11 +462,11 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) (resultErr error)
 		if err = stageDesktopOwnedNodeInputs(a, launch); err != nil {
 			return err
 		}
-		packageRoot, err := desktopOwnedNodePackageRoot()
+		packageRoot, err := desktopNodeConnectionPackageRoot(launch)
 		if err != nil {
 			return err
 		}
-		command, err := desktopOwnedNodeDescriptor(launch, packageRoot, desktopNativeEnvironment(os.Environ(), root, launch.profileID, ""))
+		command, err := desktopOwnedNodeDescriptor(launch, packageRoot, desktopNativeEnvironmentForPackage(os.Environ(), root, launch.profileID, "", packageRoot))
 		if err != nil {
 			return err
 		}

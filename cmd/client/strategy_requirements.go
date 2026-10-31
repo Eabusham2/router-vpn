@@ -18,11 +18,24 @@ func desktopStartLayerSupportsRawMode(mode string) bool {
 // Manual logical modes and CUSTOM remain explicit user choices and are not
 // silently rewritten by these convenience filters.
 func modeMeetsAutoRequirements(mode common.Mode, profile common.RouterProfile) (bool, string) {
+	return modeMeetsAutoRequirementsWithStartLayer(mode, profile, desktopStartLayerSupportsRawMode(mode.ID))
+}
+
+func (a *app) modeMeetsAutoRequirements(mode common.Mode, profile common.RouterProfile) (bool, string) {
+	// The owned Windows controller captures App and Data separately. Its
+	// candidate selection must agree with Connect rather than search Data for
+	// an unrelated package marker. Actual preparation still verifies package,
+	// supported graph, credentials and policy before stopping a proved path.
+	return modeMeetsAutoRequirementsWithStartLayer(mode, profile,
+		desktopStartLayerSupportsRawMode(mode.ID) || a.desktopNodeConnectionSelected(mode.ID))
+}
+
+func modeMeetsAutoRequirementsWithStartLayer(mode common.Mode, profile common.RouterProfile, startLayerSupported bool) (bool, string) {
 	startLayer, err := common.NormalizeStartLayerMode(profile.StartLayer)
 	if err != nil {
 		return false, fmt.Sprintf("%s filtered: invalid Start Layer preference: %v", mode.ID, err)
 	}
-	if startLayer != common.StartLayerOff && !desktopStartLayerSupportsRawMode(mode.ID) {
+	if startLayer != common.StartLayerOff && !startLayerSupported {
 		return false, fmt.Sprintf("%s filtered: Start Layer %s is enabled and this runtime has no proved AES pre-tunnel composition path", mode.ID, startLayer)
 	}
 	if profile.AutoRequireEncrypted && !modeHasEncryptedTransport(mode) {

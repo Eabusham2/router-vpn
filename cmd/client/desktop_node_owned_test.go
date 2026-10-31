@@ -190,6 +190,11 @@ func (f *desktopOwnedNodeTestFixture) ready(t *testing.T, when time.Time) (mobil
 
 func (f *desktopOwnedNodeTestFixture) start(t *testing.T, ctx context.Context, afterPrepared func()) error {
 	t.Helper()
+	f.a.mu.Lock()
+	if f.a.connectionContext == nil && ctx != context.Background() {
+		f.a.connectionContext = ctx
+	}
+	f.a.mu.Unlock()
 	base := f.launch.ownedNode.slot.backend.prepared
 	if afterPrepared != nil {
 		f.launch.ownedNode.slot.backend.prepared = func(ctx context.Context, target mobiletor.DesktopWindowsProtectionTarget) error {
@@ -420,6 +425,7 @@ func TestDesktopOwnedNodeStartFailureRetainsPartialOwnerAndPredecessor(t *testin
 			f := newDesktopOwnedNodeTestFixture(t)
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
+			f.a.connectionContext = ctx
 			if fault == "before-start" {
 				cancel()
 			}

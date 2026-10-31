@@ -289,6 +289,66 @@ func TestDesktopNodeSmartPreflightCannotRetainReplacementSlot(t *testing.T) {
 	}
 }
 
+type desktopNodeRetainPublicationProcess struct {
+	desktopNodeProcess
+	checks int
+	change func()
+}
+
+func (process *desktopNodeRetainPublicationProcess) Alive() error {
+	if err := process.desktopNodeProcess.Alive(); err != nil {
+		return err
+	}
+	process.checks++
+	// This second liveness return is the last native boundary of readiness.
+	// The final presentation check must still reject what changed after it.
+	if process.checks == 2 {
+		process.change()
+	}
+	return nil
+}
+
+func TestDesktopNodeSmartRetainRechecksPublicationOwner(t *testing.T) {
+	for _, change := range []string{"cancel", "native-owner"} {
+		t.Run(change, func(t *testing.T) {
+			f := newDesktopNodeSmartFixture(t)
+			f.a.operationMu.Lock()
+			defer f.a.operationMu.Unlock()
+			saved, err := f.a.captureSmartDesktopNode(f.operation, f.profile)
+			if err != nil || saved == nil {
+				t.Fatal("fixture could not capture the actual proved SMART predecessor", err)
+			}
+			replacement := &desktopNodeLaunch{command: f.original.launch.command}
+			var expected state
+			process := &desktopNodeRetainPublicationProcess{desktopNodeProcess: desktopOwnedNodeProcess(f.original.launch)}
+			process.change = func() {
+				if change == "cancel" {
+					f.cancel()
+				} else {
+					desktopNodeOwners.Store(f.a, replacement)
+				}
+				f.a.mu.Lock()
+				f.a.state.Connected, f.a.state.Phase, f.a.state.LastError = false, "replacement-pending", "replacement retained"
+				expected = f.a.state
+				f.a.mu.Unlock()
+			}
+			f.original.launch.workspaceMu.Lock()
+			f.original.launch.ownedNode.process = process
+			f.original.launch.workspaceMu.Unlock()
+			err = f.a.retainSmartDesktopNode(saved)
+			if err == nil || process.checks != 2 || f.a.state != expected || f.original.process.closes != 0 {
+				t.Fatal("SMART retention published after its exact request or native owner changed", err, process.checks)
+			}
+			if change == "native-owner" {
+				current, _ := desktopNodeOwners.Load(f.a)
+				if current != replacement || f.a.cmd != replacement.command {
+					t.Fatal("SMART retention overwrote a same-command replacement native owner")
+				}
+			}
+		})
+	}
+}
+
 func TestDesktopNodeSmartTrialRestoresCapturedGraphAndLiveMTU(t *testing.T) {
 	f := newDesktopNodeSmartFixture(t, "awg2-fast")
 	live, err := readDesktopNodeMTU(f.original.launch)

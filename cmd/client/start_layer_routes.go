@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemultihop"
 )
 
 type startLayerModeCapability struct {
@@ -82,11 +83,24 @@ func (a *app) startLayerCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Unlock()
 	var externalOwner *desktopNodeLaunch
+	var nodeOwner *desktopNodeLaunch
 	if active {
 		if value, ok := desktopNodeOwners.Load(a); ok {
-			if launch, ok := value.(*desktopNodeLaunch); ok && launch.command == command && launch.external != nil && launch.external.profile.ID == effectiveID {
-				externalOwner = launch
-				effective, effectiveFound = cloneRouterProfile(launch.external.profile), true
+			if launch, ok := value.(*desktopNodeLaunch); ok && launch != nil && launch.command == command {
+				if launch.external != nil && launch.external.profile.ID == effectiveID {
+					externalOwner = launch
+					effective, effectiveFound = cloneRouterProfile(launch.external.profile), true
+				} else if launch.ownedNode != nil && launch.ownedNode.policy != nil && launch.ownedNode.policy.Validate() == nil {
+					meta := launch.ownedNode.policy.Metadata()
+					if launch.profileID == effectiveID && meta.ProfileID == effectiveID {
+						nodeOwner = launch
+						// Presentation needs only this non-secret projection of the
+						// captured graph. Today's saved preference is not live proof.
+						effective = common.RouterProfile{ID: effectiveID, NodeKind: "router-vpn", StartLayer: meta.StartLayer,
+							KillSwitch: true, KillSwitchPolicy: meta.KillSwitchPolicy}
+						effectiveFound = true
+					}
+				}
 			}
 		}
 	}
@@ -106,6 +120,9 @@ func (a *app) startLayerCapabilities(w http.ResponseWriter, r *http.Request) {
 		if externalOwner != nil && runtimeMode == externalOwner.mode {
 			runtimeSupported = true
 		}
+		if nodeOwner != nil {
+			runtimeSupported = runtimeMode == nodeOwner.mode && mobilemultihop.DesktopNodePhysicalGraphSupported(runtimeMode, effectiveLayer)
+		}
 		if runtimeSupported {
 			runtimeReason = ""
 		} else {
@@ -122,11 +139,32 @@ func (a *app) startLayerCapabilities(w http.ResponseWriter, r *http.Request) {
 			runtimeReason = "The captured external path has no current native proof."
 		}
 	}
+	if nodeOwner != nil && provedConnected {
+		if _, err := a.readDesktopOwnedNodeReady(nodeOwner, false); err != nil {
+			provedConnected = false
+			runtimeReason = "The captured Router Node has no current native readiness proof."
+		}
+	}
 	supportedRawModes := append([]string(nil), common.StartLayerSupportedRawModes...)
+	ownedCapabilities := a.desktopNodeConnectionHost() != nil && effectiveFound && effective.NodeKind != "external" &&
+		desktopOwnedNodeProtectionPolicy(effective) != "off"
+	if ownedCapabilities {
+		supportedRawModes = nil
+		if provedConnected && nodeOwner == nil {
+			provedConnected = false
+			runtimeReason = "The protected Router Node has no matching active native owner."
+		}
+	}
 	seenModes := make(map[string]bool, len(supportedRawModes))
-	for _, mode := range supportedRawModes { seenModes[mode] = true }
+	for _, mode := range supportedRawModes {
+		seenModes[mode] = true
+	}
 	for _, mode := range modesSnapshot {
-		if !seenModes[mode.ID] && desktopStartLayerSupportsRawMode(mode.ID) {
+		supported := desktopStartLayerSupportsRawMode(mode.ID)
+		if ownedCapabilities {
+			supported = mobilemultihop.DesktopNodePhysicalGraphSupported(mode.ID, common.StartLayerAES256GCMXOR)
+		}
+		if !seenModes[mode.ID] && supported {
 			supportedRawModes = append(supportedRawModes, mode.ID)
 			seenModes[mode.ID] = true
 		}
@@ -140,7 +178,7 @@ func (a *app) startLayerCapabilities(w http.ResponseWriter, r *http.Request) {
 		{
 			ID: common.StartLayerAES256GCM, Name: "AES-256-GCM",
 			AuthenticatedEncryption: true,
-			Description: "Authenticated Shadowsocks 2022 BLAKE3 AES-256-GCM pre-tunnel layer.",
+			Description:             "Authenticated Shadowsocks 2022 BLAKE3 AES-256-GCM pre-tunnel layer.",
 		},
 		{
 			ID: common.StartLayerAES256GCMXOR, Name: "AES-256-GCM + XOR whitening",
@@ -152,24 +190,24 @@ func (a *app) startLayerCapabilities(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok":                              true,
-		"modes":                           modes,
-		"aes_transport":                   common.StartLayerAES256GCMTransport,
-		"supported_raw_modes":             supportedRawModes,
-		"selected_profile_id":             selectedID,
-		"selected_start_layer":            selectedLayer,
-		"selected_node_supported":         selectedNodeSupported,
-		"selected_node_reason":            selectedNodeReason,
-		"effective_profile_id":            effectiveID,
-		"effective_start_layer":           effectiveLayer,
-		"effective_node_supported":        effectiveNodeSupported,
-		"effective_node_reason":           effectiveNodeReason,
-		"current_runtime_mode":            runtimeMode,
-		"current_runtime_supported":       runtimeSupported,
-		"current_runtime_reason":          runtimeReason,
-		"current_runtime_layer_active":    provedConnected && effectiveNodeSupported && effectiveLayer != common.StartLayerOff && runtimeSupported,
-		"xor_counts_as_encryption":        false,
-		"xor_without_aead_allowed":        false,
-		"authenticated_aead_required":     true,
+		"ok":                           true,
+		"modes":                        modes,
+		"aes_transport":                common.StartLayerAES256GCMTransport,
+		"supported_raw_modes":          supportedRawModes,
+		"selected_profile_id":          selectedID,
+		"selected_start_layer":         selectedLayer,
+		"selected_node_supported":      selectedNodeSupported,
+		"selected_node_reason":         selectedNodeReason,
+		"effective_profile_id":         effectiveID,
+		"effective_start_layer":        effectiveLayer,
+		"effective_node_supported":     effectiveNodeSupported,
+		"effective_node_reason":        effectiveNodeReason,
+		"current_runtime_mode":         runtimeMode,
+		"current_runtime_supported":    runtimeSupported,
+		"current_runtime_reason":       runtimeReason,
+		"current_runtime_layer_active": provedConnected && effectiveNodeSupported && effectiveLayer != common.StartLayerOff && runtimeSupported,
+		"xor_counts_as_encryption":     false,
+		"xor_without_aead_allowed":     false,
+		"authenticated_aead_required":  true,
 	})
 }

@@ -784,9 +784,34 @@ func (a *app) restartCapturedDesktopNode(plan speedLabRestorePlan, scope string)
 	if scope != "speed-lab:restore" && scope != "smart:restore" {
 		return errors.New("captured native restore has no recognized operation")
 	}
+	operation := a.connectionOperationContextOrBackground()
+	if err := a.checkCapturedConnectionOperation(operation); err != nil {
+		return err
+	}
 	launch := plan.native
 	if launch == nil || launch.external != nil {
 		return errors.New("previous native node capture is unavailable")
+	}
+	if launch.ownedNode != nil {
+		launch.workspaceMu.Lock()
+		prior := launch.ownedNode.operation
+		if prior == nil || prior == operation {
+			launch.ownedNode.operation = operation
+		}
+		launch.workspaceMu.Unlock()
+		if prior != nil && prior != operation {
+			return errors.Join(errConnectionOperationCancelled, errDesktopNodeOperationReplaced)
+		}
+	}
+	stopRestore := func() error {
+		if launch.ownedNode != nil {
+			_, err := a.stopDesktopNodeForOperationWithIntent(operation, true)
+			return err
+		}
+		if !a.sameConnectionOperation(operation) {
+			return errors.Join(errConnectionOperationCancelled, errDesktopNodeOperationReplaced)
+		}
+		return a.stopModeWithIntent(true)
 	}
 	if err := stageDesktopNodeLaunch(a, launch); err != nil {
 		return err
@@ -814,39 +839,43 @@ func (a *app) restartCapturedDesktopNode(plan speedLabRestorePlan, scope string)
 	if err := registerActiveDNSRuntimeConfig(a, launch.profileID, launch.mode, filepath.Join(launch.directory, "sing-box.json")); err != nil {
 		return err
 	}
-	if err := a.checkConnectionOperation(); err != nil {
+	if err := a.checkCapturedConnectionOperation(operation); err != nil {
 		return err
 	}
 	if launch.ownedNode != nil {
-		if err := a.publishDesktopOwnedNodeStart(launch, scope+":proving-node", plan.request.Base); err != nil {
+		if err := a.publishDesktopOwnedNodeStartFor(launch, scope+":proving-node", plan.request.Base, operation); err != nil {
 			return err
 		}
 		started = true
 		if err := a.speedLabOwnRuntime(launch.command); err != nil {
-			return errors.Join(err, a.stopModeWithIntent(true))
+			return errors.Join(err, stopRestore())
 		}
 		if err := startDesktopNodeLaunch(a, launch); err != nil {
-			return errors.Join(err, a.stopModeWithIntent(true))
+			return errors.Join(err, stopRestore())
 		}
 	} else {
 		if err := launch.command.Start(); err != nil {
 			return err
 		}
 	}
+	if err := a.publishStartedDesktopNode(operation, launch, launch.command, launch.profileID, launch.mode, scope+":proving-node", plan.request.Base); err != nil {
+		if launch.ownedNode != nil {
+			return errors.Join(err, stopRestore())
+		}
+		if a.ownsConnectionRuntime(launch.command) {
+			started = true
+			return errors.Join(err, a.speedLabOwnRuntime(launch.command), stopRestore())
+		}
+		return errors.Join(err, joinUnpublishedDesktopCommand(launch.command))
+	}
 	started = true
-	desktopNodeOwners.Store(a, launch)
 	sessionTrackerFor(a).declareRequest(scope+":"+launch.mode, plan.request.Base)
-	a.mu.Lock()
-	a.cmd = launch.command
-	a.state.Connected, a.state.Phase = false, scope+":proving-node"
-	a.state.Mode, a.state.RuntimeMode, a.state.RouterID, a.state.Base = launch.mode, launch.mode, launch.profileID, plan.request.Base
-	a.mu.Unlock()
 	if err := a.speedLabOwnRuntime(launch.command); err != nil {
 		return err
 	}
 	deadline := time.Now().Add(25 * time.Second)
 	for {
-		if err := a.checkConnectionOperation(); err != nil {
+		if err := a.checkCapturedConnectionOperation(operation); err != nil {
 			return err
 		}
 		if !a.ownsConnectionRuntime(launch.command) {
@@ -854,7 +883,7 @@ func (a *app) restartCapturedDesktopNode(plan speedLabRestorePlan, scope string)
 		}
 		var proofErr error
 		if launch.ownedNode != nil {
-			_, proofErr = a.testDesktopOwnedNodeHealth(a.connectionOperationContextOrBackground(), plan.profile, launch)
+			_, proofErr = a.testDesktopOwnedNodeHealth(operation, plan.profile, launch)
 		} else {
 			_, proofErr = a.testHealth(plan.profile)
 		}
@@ -865,13 +894,13 @@ func (a *app) restartCapturedDesktopNode(plan speedLabRestorePlan, scope string)
 		}
 		timer := time.NewTimer(150 * time.Millisecond)
 		select {
-		case <-a.connectionOperationContextOrBackground().Done():
+		case <-operation.Done():
 			timer.Stop()
 			return errConnectionOperationCancelled
 		case <-timer.C:
 		}
 	}
-	if err := a.checkConnectionOperation(); err != nil || !a.ownsConnectionRuntime(launch.command) {
+	if err := a.checkCapturedConnectionOperation(operation); err != nil || !a.ownsConnectionRuntime(launch.command) {
 		return errors.Join(err, errors.New("restored native proof completed for a retired runtime"))
 	}
 	if launch.ownedNode != nil {
@@ -880,6 +909,10 @@ func (a *app) restartCapturedDesktopNode(plan speedLabRestorePlan, scope string)
 		}
 	}
 	a.mu.Lock()
+	if err := a.checkDesktopNodeStartupOwnerLocked(operation, launch, launch.command); err != nil {
+		a.mu.Unlock()
+		return errors.Join(err, errors.New("restored proof belongs to a replaced operation or runtime"))
+	}
 	a.state.Connected, a.state.Phase, a.state.LastError = true, "connected", ""
 	daita := a.state.DAITA
 	a.mu.Unlock()

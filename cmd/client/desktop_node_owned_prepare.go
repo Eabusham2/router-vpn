@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"net"
-	"net/netip"
 	"path/filepath"
 	"time"
 
@@ -32,14 +30,20 @@ func prepareDesktopOwnedNodeLaunch(a *app, profile common.RouterProfile, mode st
 	if operation == nil || operation.Err() != nil {
 		return nil, errors.New("native Router preparation requires its active connection operation")
 	}
-	capture, err := captureDesktopOwnedNodePreparation(a)
+	host := a.desktopNodeConnectionHost()
+	if host == nil || host.capture == nil || host.verify == nil || host.start == nil {
+		return nil, errors.New("native Router preparation requires its captured Windows host")
+	}
+	capture, err := host.capture(a)
 	if err != nil {
 		return nil, err
 	}
-	return prepareDesktopOwnedNodeLaunchWith(a, profile, mode, operation, capture, verifyBundledNativeContext,
-		func(ctx context.Context, host string) ([]netip.Addr, error) {
-			return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
-		}, physicalNetworkIdentity)
+	launch, err := prepareDesktopOwnedNodeLaunchWith(a, profile, mode, operation, capture, host.verify, host.lookup, physicalNetworkIdentity)
+	if err != nil {
+		return nil, err
+	}
+	launch.ownedNode.host = &desktopNodeConnectionOwner{host: *host, capture: capture}
+	return launch, nil
 }
 
 // The private arguments expose only read-only native verification and lookup
@@ -134,5 +138,6 @@ func prepareDesktopOwnedNodeLaunchWith(a *app, profile common.RouterProfile, mod
 		clear(launch.ownedNode.source)
 		return nil, err
 	}
+	launch.ownedNode.operation = operation
 	return launch, nil
 }

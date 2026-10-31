@@ -42,21 +42,22 @@ type state struct {
 }
 
 type app struct {
-	cfg               common.ClientConfig
-	localController   *linuxOwnedController
-	modes             []common.Mode
-	profiles          common.RouterProfileStore
-	mu                sync.Mutex
-	operationMu       sync.Mutex
-	closing           bool // protected by mu; terminal controller shutdown admission
-	connectionContext context.Context
-	connectionCancel  context.CancelFunc
-	state             state
-	cmd               *exec.Cmd
-	daitaCancel       context.CancelFunc
-	dnsMeasurements   *desktopDNSSlot               // protected by mu; bounded current native DNS operation
-	nodeProtection    *desktopNodeProtectionSlot    // protected by mu; exact successor outlives its runtime workspace
-	nodeRecovery      *desktopNodeRecoveryOperation // protected by mu; cancellable pre-admission recovery, separate from a connection
+	cfg                common.ClientConfig
+	localController    *linuxOwnedController
+	modes              []common.Mode
+	profiles           common.RouterProfileStore
+	mu                 sync.Mutex
+	operationMu        sync.Mutex
+	closing            bool // protected by mu; terminal controller shutdown admission
+	connectionContext  context.Context
+	connectionCancel   context.CancelFunc
+	state              state
+	cmd                *exec.Cmd
+	daitaCancel        context.CancelFunc
+	dnsMeasurements    *desktopDNSSlot               // protected by mu; bounded current native DNS operation
+	nodeProtection     *desktopNodeProtectionSlot    // protected by mu; exact successor outlives its runtime workspace
+	nodeRecovery       *desktopNodeRecoveryOperation // protected by mu; cancellable pre-admission recovery, separate from a connection
+	nodeConnectionHost *desktopNodeConnectionHost    // immutable after initialization; native controller/process boundary
 }
 
 func main() {
@@ -893,13 +894,10 @@ func (a *app) listModes(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *app) checkMode(m common.Mode) (bool, string) {
-	if desktopNodeNativeSelected(m.ID) {
+	if a.desktopNodeConnectionSelected(m.ID) {
 		// Native transport/configuration validation occurs for the exact captured
 		// node at launch. A catalog request must not resolve hosts or open tunnels.
-		if _, err := os.Stat(filepath.Join(desktopAmneziaPackageRoot(), "runtime", "native", nativeBinaryName())); err != nil {
-			return false, "The packaged native engine is missing."
-		}
-		return true, ""
+		return a.checkDesktopNodeConnectionPackage()
 	}
 	if len(m.CheckCommand) == 0 {
 		return true, ""
@@ -1010,6 +1008,7 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*mod
 	if len(transition) > 1 {
 		return errors.New("connection attempt has more than one transition owner")
 	}
+	startupCtx := a.connectionOperationContextOrBackground()
 	p, err := a.activeProfile()
 	if err != nil {
 		return err
@@ -1021,7 +1020,7 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*mod
 	if ok, reason := a.checkMode(m); !ok {
 		return fmt.Errorf("mode unavailable: %s", reason)
 	}
-	if err = a.checkConnectionOperation(); err != nil {
+	if err = a.checkCapturedConnectionOperation(startupCtx); err != nil {
 		return err
 	}
 	a.mu.Lock()
@@ -1034,9 +1033,9 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*mod
 		return errors.New("Jumbo TUN is not available for this mode; leave it off for WireGuard/AWG")
 	}
 	var native *desktopNodeLaunch
-	if desktopNodeNativeSelected(id) {
+	if a.desktopNodeConnectionSelected(id) {
 		p.DAITAEnabled, p.JumboTUN, p.SocksEnabled = daita, jumbo, socks
-		native, err = prepareDesktopNodeLaunch(a, p, id)
+		native, err = a.prepareDesktopNodeConnection(p, id)
 		if err != nil {
 			return err
 		}
@@ -1046,12 +1045,10 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*mod
 		if native != nil && !nativeStarted {
 			clear(native.config)
 			clear(native.metadata)
-			if native.directory != "" {
-				if native.ownedNode != nil {
-					_ = a.discardDesktopOwnedNodeUnstarted(native)
-				} else {
-					_ = cleanupDesktopNodeLaunch(native)
-				}
+			if native.ownedNode != nil {
+				_ = a.discardDesktopOwnedNodeUnstarted(native)
+			} else if native.directory != "" {
+				_ = cleanupDesktopNodeLaunch(native)
 			}
 			if raw, ok := activeDNSRuntimeIdentities.Load(a); ok {
 				if identity, ok := raw.(activeDNSRuntimeIdentity); ok && identity.Config == filepath.Join(native.directory, "sing-box.json") {
@@ -1061,6 +1058,9 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*mod
 		}
 	}()
 	if err = a.guardDesktopOwnedNodeTransition(native); err != nil {
+		return err
+	}
+	if err = a.checkCapturedConnectionOperation(startupCtx); err != nil {
 		return err
 	}
 	if len(transition) == 1 && transition[0] != nil {
@@ -1074,22 +1074,35 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*mod
 	env := append(os.Environ(), fmt.Sprintf("HOMEVPN_DAITA=%t", a.state.DAITA), fmt.Sprintf("HOMEVPN_JUMBO=%t", a.state.Jumbo), fmt.Sprintf("HOMEVPN_SOCKS=%t", a.state.Socks), fmt.Sprintf("HOMEVPN_MTU=%d", m.MTU), "HOMEVPN_PROFILE_ID="+p.ID, "HOMEVPN_ENDPOINT="+p.Endpoint, "HOMEVPN_ADGUARD4="+p.AdGuardIPv4, "HOMEVPN_ADGUARD6="+p.AdGuardIPv6, "HOMEVPN_SOCKS_HOST="+p.SocksHost, fmt.Sprintf("HOMEVPN_SOCKS_PORT=%d", p.SocksPort), "HOMEVPN_SOCKS_USER="+p.SocksUsername, "HOMEVPN_SOCKS_PASSWORD="+p.SocksPassword)
 	a.mu.Unlock()
 	if native == nil && len(m.Command) == 0 {
-		if !holdOnFailure {
+		if !holdOnFailure && a.sameConnectionOperation(startupCtx) {
 			_ = a.releaseTransitionKillSwitch()
 		}
 		return errors.New("mode has no command")
 	}
 	var cmd *exec.Cmd
+	stopAttempt := func() error {
+		if native != nil && native.ownedNode != nil {
+			_, stopErr := a.stopDesktopNodeForOperationWithIntent(startupCtx, holdOnFailure)
+			return stopErr
+		}
+		if !a.sameConnectionOperation(startupCtx) {
+			return errors.Join(errConnectionOperationCancelled, errDesktopNodeOperationReplaced)
+		}
+		if a.ownsConnectionRuntime(cmd) {
+			return a.stopModeWithIntent(holdOnFailure)
+		}
+		return nil
+	}
 	if native != nil {
 		if err = stageDesktopNodeLaunch(a, native); err != nil {
-			if !holdOnFailure {
+			if !holdOnFailure && a.sameConnectionOperation(startupCtx) {
 				_ = a.releaseTransitionKillSwitch()
 			}
 			return err
 		}
 		cmd = native.command
 		if err = registerActiveDNSRuntimeConfig(a, p.ID, id, filepath.Join(native.directory, "sing-box.json")); err != nil {
-			if !holdOnFailure {
+			if !holdOnFailure && a.sameConnectionOperation(startupCtx) {
 				_ = a.releaseTransitionKillSwitch()
 			}
 			return err
@@ -1101,21 +1114,21 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*mod
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 	}
-	if err = a.checkConnectionOperation(); err != nil {
-		if !holdOnFailure {
+	if err = a.checkCapturedConnectionOperation(startupCtx); err != nil {
+		if !holdOnFailure && a.sameConnectionOperation(startupCtx) {
 			_ = a.releaseTransitionKillSwitch()
 		}
 		return err
 	}
 	if native != nil && native.ownedNode != nil {
-		if err = a.publishDesktopOwnedNodeStart(native, "starting", ""); err != nil {
+		if err = a.publishDesktopOwnedNodeStartFor(native, "starting", "", startupCtx); err != nil {
 			return err
 		}
 		// From publication onward even a partial native creation owns checked
 		// Stop. An unstarted-defer must not discard its protection workspace.
 		nativeStarted = true
 		if err = a.speedLabOwnRuntime(cmd); err != nil {
-			return errors.Join(err, a.stopModeWithIntent(holdOnFailure))
+			return errors.Join(err, stopAttempt())
 		}
 		err = startDesktopNodeLaunch(a, native)
 	} else {
@@ -1123,56 +1136,50 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*mod
 	}
 	if err != nil {
 		if native != nil && native.ownedNode != nil {
-			return errors.Join(err, a.stopModeWithIntent(holdOnFailure))
+			return errors.Join(err, stopAttempt())
 		}
 		if native != nil {
 			clearActiveDNSRuntimeConfig(a)
 		}
-		if !holdOnFailure {
+		if !holdOnFailure && a.sameConnectionOperation(startupCtx) {
 			_ = a.releaseTransitionKillSwitch()
 		}
 		return err
 	}
-	if native != nil {
-		desktopNodeOwners.Store(a, native)
-		nativeStarted = true
+	if err = a.publishStartedDesktopNode(startupCtx, native, cmd, p.ID, id, "starting", ""); err != nil {
+		if native != nil && native.ownedNode != nil {
+			return errors.Join(err, stopAttempt())
+		}
+		if a.ownsConnectionRuntime(cmd) {
+			nativeStarted = native != nil
+			return errors.Join(err, a.speedLabOwnRuntime(cmd), stopAttempt())
+		}
+		return errors.Join(err, joinUnpublishedDesktopCommand(cmd))
 	}
-
-	a.mu.Lock()
-	a.cmd = cmd
-	a.state.Connected = false
-	a.state.Mode = id
-	a.state.LogicalMode = ""
-	a.state.RuntimeMode = id
-	a.state.Base = ""
-	a.state.RouterID = p.ID
-	a.state.Phase = "starting"
-	a.state.LastError = ""
-	a.mu.Unlock()
+	nativeStarted = native != nil
 	if err := a.speedLabOwnRuntime(cmd); err != nil {
 		return err
 	}
-	if err = a.checkConnectionOperation(); err != nil {
-		a.stopOwnedConnectionRuntime(cmd)
+	if err = a.checkCapturedConnectionOperation(startupCtx); err != nil {
+		_ = stopAttempt()
 		return err
 	}
 
-	startupCtx := a.connectionOperationContextOrBackground()
 	startupDelay := time.NewTimer(1200 * time.Millisecond)
 	select {
 	case <-startupCtx.Done():
 		if !startupDelay.Stop() {
 			<-startupDelay.C
 		}
-		a.stopOwnedConnectionRuntime(cmd)
+		_ = stopAttempt()
 		return errConnectionOperationCancelled
 	case <-startupDelay.C:
 	}
-	if err := a.checkConnectionOperation(); err != nil {
-		a.stopOwnedConnectionRuntime(cmd)
-		return err
-	}
 	a.mu.Lock()
+	if err := a.checkDesktopNodeStartupOwnerLocked(startupCtx, native, cmd); err != nil {
+		a.mu.Unlock()
+		return errors.Join(err, stopAttempt())
+	}
 	a.state.Phase = "checking"
 	a.mu.Unlock()
 	latency, healthErr := a.testStartedModeHealth(startupCtx, p, native)
@@ -1185,23 +1192,30 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*mod
 		}
 	}
 	if healthErr != nil {
-		if cancelErr := a.checkConnectionOperation(); cancelErr != nil {
-			a.stopOwnedConnectionRuntime(cmd)
+		if cancelErr := a.checkCapturedConnectionOperation(startupCtx); cancelErr != nil {
+			_ = stopAttempt()
 			return cancelErr
 		}
 		failure := fmt.Errorf("%s started but selected-router path proof failed: %w", m.Name, healthErr)
 		if !a.ownsConnectionRuntime(cmd) {
 			return failure
 		}
-		_ = a.stopModeWithIntent(holdOnFailure)
+		if stopErr := stopAttempt(); stopErr != nil {
+			return errors.Join(failure, stopErr)
+		}
 		a.mu.Lock()
+		_, nativeOwnerPresent := desktopNodeOwners.Load(a)
+		if err := a.checkCapturedConnectionOperationLocked(startupCtx); err != nil || a.cmd != nil || nativeOwnerPresent {
+			a.mu.Unlock()
+			return errors.Join(err, failure, errors.New("failed connection cannot replace another runtime's presentation"))
+		}
 		a.state.LastError = failure.Error()
 		a.state.Phase = "failed"
 		a.mu.Unlock()
 		return failure
 	}
-	if err := a.checkConnectionOperation(); err != nil {
-		a.stopOwnedConnectionRuntime(cmd)
+	if err := a.checkCapturedConnectionOperation(startupCtx); err != nil {
+		_ = stopAttempt()
 		return err
 	}
 	if !a.ownsConnectionRuntime(cmd) {
@@ -1209,6 +1223,10 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*mod
 	}
 
 	a.mu.Lock()
+	if err := a.checkDesktopNodeStartupOwnerLocked(startupCtx, native, cmd); err != nil {
+		a.mu.Unlock()
+		return errors.Join(err, errors.New("connection proof belongs to a replaced operation or runtime"), stopAttempt())
+	}
 	a.state.Connected = true
 	a.state.Phase = "connected"
 	daitaEnabled := a.state.DAITA

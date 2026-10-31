@@ -56,13 +56,25 @@ func (a *app) sameConnectionOperation(ctx context.Context) bool {
 		return false
 	}
 	a.mu.Lock()
-	current := a.connectionContext
-	a.mu.Unlock()
-	return current == ctx || current == nil && ctx == context.Background()
+	defer a.mu.Unlock()
+	return a.sameConnectionOperationLocked(ctx)
+}
+
+func (a *app) sameConnectionOperationLocked(ctx context.Context) bool {
+	return ctx != nil && (a.connectionContext == ctx || a.connectionContext == nil && ctx == context.Background())
 }
 
 func (a *app) checkCapturedConnectionOperation(ctx context.Context) error {
-	if !a.sameConnectionOperation(ctx) || ctx.Err() != nil || a.controllerClosing() {
+	if a == nil {
+		return errConnectionOperationCancelled
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.checkCapturedConnectionOperationLocked(ctx)
+}
+
+func (a *app) checkCapturedConnectionOperationLocked(ctx context.Context) error {
+	if !a.sameConnectionOperationLocked(ctx) || ctx.Err() != nil || a.controllerClosingLocked() {
 		return errConnectionOperationCancelled
 	}
 	return nil
@@ -128,8 +140,8 @@ func (a *app) retainSmartDesktopNode(saved *desktopSmartNodeCapture) error {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.connectionContext != saved.operation || a.cmd != saved.launch.command || a.nodeProtection != owned.slot || a.closing {
-		return errors.New("SMART predecessor was replaced before retaining presentation")
+	if err := a.checkDesktopNodeStartupOwnerLocked(saved.operation, saved.launch, saved.launch.command); err != nil || a.nodeProtection != owned.slot {
+		return errors.Join(err, errors.New("SMART predecessor was replaced before retaining presentation"))
 	}
 	a.state.Connected, a.state.Phase, a.state.LastError = true, "connected", ""
 	a.state.Mode, a.state.RuntimeMode, a.state.LogicalMode = saved.state.Mode, saved.state.RuntimeMode, saved.state.LogicalMode
@@ -140,7 +152,14 @@ func (a *app) retainSmartDesktopNode(saved *desktopSmartNodeCapture) error {
 // Cancellation and failed SMART trials may join only a runtime created by the
 // captured request. A successful connection outlives that request context;
 // this identity is consulted only while the same fallback transaction owns it.
+// Callers must retain operationMu through these checks and Stop. The checks
+// refuse asynchronous cancellation/replacement; they do not replace that
+// serialization contract with a lock held across native teardown.
 func (a *app) stopDesktopNodeForOperation(ctx context.Context) (bool, error) {
+	return a.stopDesktopNodeForOperationWithIntent(ctx, true)
+}
+
+func (a *app) stopDesktopNodeForOperationWithIntent(ctx context.Context, hold bool) (bool, error) {
 	if !a.sameConnectionOperation(ctx) {
 		return true, errors.Join(errConnectionOperationCancelled, errDesktopNodeOperationReplaced)
 	}
@@ -155,7 +174,7 @@ func (a *app) stopDesktopNodeForOperation(ctx context.Context) (bool, error) {
 	if !current || desktopOwnedNodeOperation(launch) != ctx {
 		return true, errors.Join(errConnectionOperationCancelled, errDesktopNodeOperationReplaced)
 	}
-	return true, a.stopModeWithIntent(true)
+	return true, a.stopModeWithIntent(hold)
 }
 
 func (a *app) restoreSmartDesktopNode(saved *desktopSmartNodeCapture, runtime smartStrategyRuntime) error {

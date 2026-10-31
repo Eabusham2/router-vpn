@@ -259,7 +259,7 @@ func (a *app) firstWorkingAuto(strategy string, p common.RouterProfile, result *
 		if !mode.AutoEligible {
 			continue
 		}
-		if allowed, reason := modeMeetsAutoRequirements(mode, p); !allowed {
+		if allowed, reason := a.modeMeetsAutoRequirements(mode, p); !allowed {
 			result.Attempts = append(result.Attempts, strategyAttempt{Mode: mode.ID, Action: "filtered", Success: false, Error: reason})
 			sessionTrackerFor(a).strategyEvent("strategy-filtered", reason)
 			continue
@@ -347,7 +347,7 @@ func (a *app) runSmartStrategyWith(runtime smartStrategyRuntime) (strategyResult
 				result.Attempts = append(result.Attempts, strategyAttempt{Mode: candidateID, Action: "simplify", Success: false, Error: "unknown simplification runtime"})
 				continue
 			}
-			if allowed, reason := modeMeetsAutoRequirements(candidate, p); !allowed {
+			if allowed, reason := a.modeMeetsAutoRequirements(candidate, p); !allowed {
 				result.Attempts = append(result.Attempts, strategyAttempt{Mode: candidateID, Action: "simplify-filtered", Success: false, Error: reason})
 				sessionTrackerFor(a).strategyEvent("strategy-filtered", reason)
 				continue
