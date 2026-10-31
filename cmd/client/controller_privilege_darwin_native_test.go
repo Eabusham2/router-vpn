@@ -129,7 +129,23 @@ func macOSControllerFixturePeer() error {
 		return err
 	}
 	defer file.Close()
-	return syscall.Sendmsg(3, []byte{1}, syscall.UnixRights(int(file.Fd())), nil, 0)
+	if err = syscall.Sendmsg(3, []byte{1}, syscall.UnixRights(int(file.Fd())), nil, 0); err != nil {
+		return err
+	}
+	// The real AppKit process retains its authenticated socket throughout the
+	// session. Keep this ordinary-user peer alive after transferring a duplicate
+	// for test I/O; process exit is not a substitute for lifetime half-close.
+	control := os.NewFile(3, "fixture-peer-lifetime")
+	if control == nil {
+		return errors.New("native peer lost its captured lifetime channel")
+	}
+	defer control.Close()
+	var release [1]byte
+	n, err := control.Read(release[:])
+	if n != 0 || !errors.Is(err, io.EOF) {
+		return fmt.Errorf("native peer lifetime received an unexpected frame: n=%d error=%v", n, err)
+	}
+	return nil
 }
 
 func macOSControllerFixtureChild() error {
@@ -195,7 +211,14 @@ func macOSControllerFixtureChild() error {
 	return <-done
 }
 
+type macOSControllerNativePeer struct {
+	command *exec.Cmd
+	joined  chan struct{}
+	err     error // Read only after joined closes.
+}
+
 type macOSControllerNativeFixture struct {
+	peers      []*macOSControllerNativePeer
 	t          *testing.T
 	uid        uint32
 	root       os.FileInfo
@@ -281,6 +304,14 @@ func macOSControllerNativeInstall(t *testing.T) *macOSControllerNativeFixture {
 			case <-fixture.joined:
 			case <-time.After(20 * time.Second):
 				t.Error("captured supervisor did not join; fixture paths retained")
+				return
+			}
+		}
+		for _, peer := range fixture.peers {
+			select {
+			case <-peer.joined:
+			default:
+				t.Error("native fixture retains its ordinary desktop peer; refusing path cleanup")
 				return
 			}
 		}
@@ -393,11 +424,16 @@ func macOSControllerNativeAwait(t *testing.T, ready func() bool, message string)
 
 func (f *macOSControllerNativeFixture) connection(uid uint32) *net.UnixConn {
 	f.t.Helper()
-	pair, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_DGRAM, 0)
+	pair, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	defer syscall.Close(pair[0])
+	// Only ExtraFiles may cross exec. A leaked copy of the parent's end would
+	// let the peer keep its own release channel alive after parent shutdown.
+	syscall.CloseOnExec(pair[0])
+	syscall.CloseOnExec(pair[1])
+	control := os.NewFile(uintptr(pair[0]), "fixture-peer-lifetime")
+	f.t.Cleanup(func() { _ = control.Close() })
 	child := os.NewFile(uintptr(pair[1]), "fixture-peer-rights")
 	defer child.Close()
 	command := exec.Command(macOSOwnedExecutable(), "--routervpn-test-macos-peer")
@@ -408,18 +444,36 @@ func (f *macOSControllerNativeFixture) connection(uid uint32) *net.UnixConn {
 	if err = command.Start(); err != nil {
 		f.t.Fatal(err)
 	}
+	peer := &macOSControllerNativePeer{command: command, joined: make(chan struct{})}
+	f.peers = append(f.peers, peer)
+	go func() { peer.err = command.Wait(); close(peer.joined) }()
+	var connection *net.UnixConn
+	f.t.Cleanup(func() {
+		if connection != nil {
+			_ = connection.Close()
+		}
+		_ = control.Close()
+		select {
+		case <-peer.joined:
+			if peer.err != nil {
+				f.t.Error("captured ordinary desktop peer failed to join", peer.err)
+			}
+		case <-time.After(8 * time.Second):
+			f.t.Error("captured ordinary desktop peer did not join; fixture paths retained")
+		}
+	})
 	_ = child.Close()
 	timeout := syscall.NsecToTimeval((5 * time.Second).Nanoseconds())
 	if err = syscall.SetsockoptTimeval(pair[0], syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, &timeout); err != nil {
 		f.t.Fatal(err)
 	}
 	payload, rights := make([]byte, 1), make([]byte, syscall.CmsgSpace(4))
-	n, control, flags, _, err := syscall.Recvmsg(pair[0], payload, rights, 0)
-	waitErr := command.Wait()
-	if err != nil || waitErr != nil || n != 1 || flags != 0 {
-		f.t.Fatal("actual ordinary-user peer failed", err, waitErr)
+	n, controlSize, flags, _, err := syscall.Recvmsg(pair[0], payload, rights, 0)
+	if err != nil || n != 1 || payload[0] != 1 || flags != 0 {
+		f.t.Fatal("actual ordinary-user peer failed", err, n, flags)
 	}
-	messages, err := syscall.ParseSocketControlMessage(rights[:control])
+	f.requireLivePeers()
+	messages, err := syscall.ParseSocketControlMessage(rights[:controlSize])
 	if err != nil || len(messages) != 1 {
 		f.t.Fatal("peer did not transfer exactly its socket", err)
 	}
@@ -429,11 +483,28 @@ func (f *macOSControllerNativeFixture) connection(uid uint32) *net.UnixConn {
 	}
 	file := os.NewFile(uintptr(fds[0]), "fixture-authorized-user-socket")
 	defer file.Close()
-	connection, err := net.FileConn(file)
+	transferred, err := net.FileConn(file)
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	return connection.(*net.UnixConn)
+	var ok bool
+	connection, ok = transferred.(*net.UnixConn)
+	if !ok {
+		_ = transferred.Close()
+		f.t.Fatal("ordinary peer transferred a non-Unix connection")
+	}
+	return connection
+}
+
+func (f *macOSControllerNativeFixture) requireLivePeers() {
+	f.t.Helper()
+	for _, peer := range f.peers {
+		select {
+		case <-peer.joined:
+			f.t.Fatal("captured ordinary desktop exited before its lifetime was released", peer.command.Process.Pid, peer.err)
+		default:
+		}
+	}
 }
 
 func macOSControllerNativeFrame() []byte {
@@ -473,6 +544,7 @@ func TestMacOSOwnedControllerNativeLifetimeAndInheritedLocks(t *testing.T) {
 				t.Fatal(err)
 			}
 			started := macOSControllerNativeReceipt(t, connection, "started", 0)
+			fixture.requireLivePeers()
 			client := macOSControllerNativeHTTP(t)
 			macOSControllerNativeAwait(t, func() bool {
 				request, _ := http.NewRequest("GET", "http://"+linuxOwnedControllerAddress+"/api/status", nil)
@@ -528,6 +600,7 @@ func TestMacOSOwnedControllerNativeLifetimeAndInheritedLocks(t *testing.T) {
 				t.Fatal(err)
 			}
 			joined := macOSControllerNativeReceipt(t, connection, "joined", started.ProcessID)
+			fixture.requireLivePeers()
 			if joined.ExitCode != 0 {
 				t.Fatal("captured controller did not join successfully", joined.ExitCode)
 			}

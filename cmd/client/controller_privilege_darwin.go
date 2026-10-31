@@ -176,7 +176,7 @@ func macOSOwnedPeer(raw syscall.RawConn) (macOSOwnedPeerIdentity, error) {
 		}
 		peer, err := syscall.Getpeername(fd)
 		if _, ok := peer.(*syscall.SockaddrUnix); err != nil || !ok {
-			result = errors.New("the desktop lifetime has no connected local peer")
+			result = fmt.Errorf("the desktop lifetime has no connected local peer (error=%v address=%T)", err, peer)
 			return
 		}
 		// Apple's public xucred layout is version, uid, short group count,
