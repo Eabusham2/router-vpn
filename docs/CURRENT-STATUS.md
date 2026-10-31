@@ -1,12 +1,50 @@
 # Current implementation status
 
-Updated October 30, 2026 (America/Chicago). This file distinguishes published source,
+Updated October 31, 2026 (America/Chicago). This file distinguishes published source,
 local commits, unfinished integration and remaining delivery evidence. The
 binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 7517ed24
+## Latest implementation continuation — through 5d903f67
+
+The verified source cutoff is
+[`5d903f677c3edbb8ff95cf5e1aeab7978fe04f64`](https://github.com/Eabusham2/router-vpn/commit/5d903f677c3edbb8ff95cf5e1aeab7978fe04f64).
+The [October 31 evidence](CONTINUATION-EVIDENCE-2026-10-31.md) records the
+individual source manifests, executable results and native acceptance limits.
+
+- The actual Linux CI source-closure failure is repaired (`c6cc6589`). Native
+  preparation now copies all five required existing Unix socket tests. The
+  empty-destination copier regression, all five omission controls and the real
+  privileged UID socket gate passed. The next older-SHA Linux run was cancelled;
+  a fresh native build pass is still required.
+- The owned WG-PQ/AWG-PQ cryptographic prerequisite is published (`f3a27e9e`):
+  seven native ABI groups, six real encrypted paths across all three Start
+  Layers, sixteen credential cases and all eight compiled controls passed.
+  Two real PSK/handshake epochs, selected Home DNS failure/recovery and joined
+  retirement are covered. Actual Windows WFP/TUN and public PQ admission remain
+  under development; modeled OS permits are explicitly distinguished.
+- The Linux durable protection journal is published (`d5c973e7`). Original
+  parent, directory, file, flock and controller ownership survives partial
+  writes, cancellation and joined retirement. Twelve actual namespace parent
+  groups, nineteen race groups repeated three times and nine compiled defects
+  passed. Saved journal intent cannot reconstruct native authority. The actual
+  authenticated child channel, native admission and Always succession remain
+  implementation work.
+- SS-v2ray now enters the owned public Node path (`5d903f67`) through real
+  SS2022/TLS/WebSocket/mux TCP and independent HY2 UDP. The full composite gate
+  passed nine traffic paths, thirty-two credentials and thirty-six compiled
+  controls; the current public controller passed 121 cases including 39
+  mode/layer Connect cases. Windows app, WFP and command compositions compile
+  for AMD64 and ARM64. Matching-host execution remains pending CI.
+
+The four complete MAX helper families still have separate owned-host work in
+progress. The existing full scope, Linux activation, macOS inventory boundary,
+current-SHA release convergence, signing, physical devices and deliberate
+private deployment remain open. These publications are coherent source units,
+not a claim of full product or current release completion.
+
+## Earlier implementation continuation — through 7517ed24
 
 The verified source cutoff is
 [`7517ed24664b2313b0568004a5057828a9016c59`](https://github.com/Eabusham2/router-vpn/commit/7517ed24664b2313b0568004a5057828a9016c59).
