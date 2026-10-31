@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Exercise ownership and negative boundaries of the test-only PQ build gate."""
 import importlib.util
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -175,6 +177,70 @@ class PQReferencePreparation(unittest.TestCase):
                     P.generate_keys('linux/amd64', root/'cache', root/'private/keys')
             self.assertFalse((root/'private').exists())
             self.assertEqual(foreign.read_text(), 'unrelated')
+
+    def test_windows_acl_uses_native_interpreter_modules_before_generating_keys(self):
+        for acl_failure in (False, True):
+            with self.subTest(acl_failure=acl_failure), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                executable = root/'system/WindowsPowerShell/v1.0/powershell.exe'
+                executable.parent.mkdir(parents=True)
+                executable.write_bytes(b'fixture interpreter; not executed')
+                environment = {'PATH': 'unrelated build tools', 'PsMoDuLePaTh': 'PowerShell Core modules',
+                               'PQ_FIXTURE_OWNER': 'captured'}
+
+                def acl(arguments, **options):
+                    self.assertEqual(arguments, [executable, '-NoProfile', '-NonInteractive', '-ExecutionPolicy',
+                        'Bypass', '-File', str(ROOT/'client/Protect-RouterVPN-Windows-PrivateRoot.ps1'),
+                        '-Root', str(root/'private')])
+                    self.assertEqual(options, {'env': {'PATH': environment['PATH'], 'PQ_FIXTURE_OWNER': 'captured',
+                        'PSModulePath': str(executable.parent/'Modules')}, 'check': True, 'timeout': 30})
+                    self.assertTrue((root/'private').is_dir())
+                    self.assertFalse((root/'private/keys').exists())
+                    if acl_failure:
+                        raise subprocess.CalledProcessError(1, arguments)
+
+                with mock.patch.dict(os.environ, environment, clear=True), \
+                     mock.patch.object(P, 'system_powershell', return_value=executable), \
+                     mock.patch.object(P.subprocess, 'run', side_effect=acl) as command, \
+                     mock.patch.object(P.BUILD.PQ, 'environment', return_value={}), \
+                     mock.patch.object(P.BUILD.PQ, 'run', return_value='rustc wrong-version') as compiler:
+                    with self.assertRaises(subprocess.CalledProcessError if acl_failure else ValueError):
+                        P.generate_keys('windows/amd64', root/'cache', root/'private/keys')
+                    command.assert_called_once()
+                    self.assertEqual(dict(os.environ), environment)
+                    if acl_failure:
+                        compiler.assert_not_called()
+                    else:
+                        compiler.assert_called_once()
+                self.assertFalse((root/'private').exists())
+
+    def test_windows_system_interpreter_requires_bounded_native_directory_and_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            executable = root/'WindowsPowerShell/v1.0/powershell.exe'
+            executable.parent.mkdir(parents=True)
+            executable.write_bytes(b'fixture interpreter; not executed')
+            library = mock.Mock()
+
+            def directory(buffer, size):
+                self.assertEqual(size, 32768)
+                buffer.value = str(root)
+                return len(str(root))
+
+            with mock.patch.object(P.ctypes, 'WinDLL', return_value=library, create=True) as native:
+                library.GetSystemDirectoryW.side_effect = directory
+                self.assertEqual(P.system_powershell(), executable)
+                native.assert_called_once_with('kernel32', use_last_error=True)
+                self.assertEqual(library.GetSystemDirectoryW.argtypes, [P.ctypes.c_wchar_p, P.ctypes.c_uint])
+                self.assertEqual(library.GetSystemDirectoryW.restype, P.ctypes.c_uint)
+                executable.unlink()
+                with self.assertRaisesRegex(ValueError, 'private ACL support'):
+                    P.system_powershell()
+                library.GetSystemDirectoryW.side_effect = None
+                for length in (0, 32768, 32769):
+                    library.GetSystemDirectoryW.return_value = length
+                    with self.assertRaisesRegex(ValueError, 'native system interpreter'):
+                        P.system_powershell()
 
     def test_key_output_shape_does_not_accept_duplicates_or_extra_files(self):
         # These bytes exercise only the file-shape validator. Genuine KEM keys

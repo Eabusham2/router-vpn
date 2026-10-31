@@ -20,6 +20,7 @@ on:
       - 'deploy/build-native-runtime.py'
       - 'deploy/test_windows_node_pq*.py'
       - 'deploy/test_desktop_node_pq.py'
+      - 'deploy/test_pq_reference_preparation.py'
       - 'deploy/test_server_pq_traffic.py'
       - 'deploy/test_windows_node_physical*.py'
       - 'deploy/fixtures/windows-node-physical/**'
@@ -42,6 +43,7 @@ on:
       - 'deploy/build-native-runtime.py'
       - 'deploy/test_windows_node_pq*.py'
       - 'deploy/test_desktop_node_pq.py'
+      - 'deploy/test_pq_reference_preparation.py'
       - 'deploy/test_server_pq_traffic.py'
       - 'deploy/test_windows_node_physical*.py'
       - 'deploy/fixtures/windows-node-physical/**'
@@ -91,6 +93,8 @@ jobs:
         run: |
           python deploy/test_windows_node_pq_runner.py
           if ($LASTEXITCODE -ne 0) { throw 'Captured PQ native source/scope boundary failed' }
+          python deploy/test_pq_reference_preparation.py
+          if ($LASTEXITCODE -ne 0) { throw 'Captured PQ private reference preparation failed' }
       - name: Select exact native Rust target and verified LLVM compiler
         shell: pwsh
         run: |

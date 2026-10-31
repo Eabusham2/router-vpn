@@ -7,6 +7,7 @@ after the separately bounded desktop traffic gate has joined its child peers.
 """
 import argparse
 import contextlib
+import ctypes
 import importlib.util
 import json
 import os
@@ -122,6 +123,23 @@ def key_files(keys):
     return contents
 
 
+def system_powershell():
+    # Do not resolve an ACL helper through the build's PATH. The native system
+    # directory also selects the correct Windows PowerShell architecture.
+    library = ctypes.WinDLL('kernel32', use_last_error=True)
+    directory = library.GetSystemDirectoryW
+    directory.argtypes = [ctypes.c_wchar_p, ctypes.c_uint]
+    directory.restype = ctypes.c_uint
+    buffer = ctypes.create_unicode_buffer(32768)
+    length = directory(buffer, len(buffer))
+    if not 0 < length < len(buffer):
+        raise ValueError('PQ test key generation cannot select the native system interpreter')
+    executable = Path(buffer.value)/'WindowsPowerShell/v1.0/powershell.exe'
+    if not executable.is_absolute() or not executable.is_file():
+        raise ValueError('PQ test key generation requires Windows private ACL support')
+    return executable
+
+
 def generate_keys(target, cache, keys):
     # The key generator itself also uses create_new. An old test's keys must not
     # silently satisfy a new traffic gate, even when the compiler cache is reused.
@@ -132,12 +150,16 @@ def generate_keys(target, cache, keys):
     succeeded = False
     try:
         if target.startswith('windows/'):
-            powershell = shutil.which('powershell.exe')
-            if not powershell:
-                raise ValueError('PQ test key generation requires Windows private ACL support')
+            powershell = system_powershell()
+            # PowerShell 7's inherited module path can select Core assemblies
+            # in this Windows PowerShell 5.1 child. Capture only its own system
+            # modules; key generation still requires the real ACL helper.
+            acl_environment = {key: value for key, value in os.environ.items()
+                               if key.casefold() != 'psmodulepath'}
+            acl_environment['PSModulePath'] = str(powershell.parent/'Modules')
             subprocess.run([powershell, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
                             '-File', str(ROOT/'client/Protect-RouterVPN-Windows-PrivateRoot.ps1'),
-                            '-Root', str(private)], check=True, timeout=30)
+                            '-Root', str(private)], env=acl_environment, check=True, timeout=30)
         env = BUILD.PQ.environment(target, cache)
         for compiler in ('rustc', 'cargo'):
             if not BUILD.PQ.run([compiler, '--version'], env=env).startswith(compiler+' '+BUILD.PQ.RUST+' '):
