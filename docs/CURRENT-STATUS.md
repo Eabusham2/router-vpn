@@ -6,10 +6,10 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through b36ddc98
+## Latest implementation continuation — through 7517ed24
 
 The verified source cutoff is
-[`b36ddc985bc5b06d735ed0dc40bf5a63c07da87c`](https://github.com/Eabusham2/router-vpn/commit/b36ddc985bc5b06d735ed0dc40bf5a63c07da87c).
+[`7517ed24664b2313b0568004a5057828a9016c59`](https://github.com/Eabusham2/router-vpn/commit/7517ed24664b2313b0568004a5057828a9016c59).
 The [October 31 UTC evidence](CONTINUATION-EVIDENCE-2026-10-31.md) records exact
 source identities, test receipts and remaining acceptance boundaries.
 
@@ -30,7 +30,11 @@ source identities, test receipts and remaining acceptance boundaries.
 - The normal installed/Portable Windows Session passed again at `9f20f6e7`:
   installed 13.48 seconds, Portable 9.46 seconds and outer Portable 9.29 seconds,
   with the complete native/protected/control matrix. Actual interactive UAC,
-  the drain-wrapper diagnosis and full native dataplane acceptance are separate.
+  the historical drain-wrapper timeout and full native dataplane acceptance
+  remain separate observations. The complete controller job subsequently
+  passed its native GUI, TLS/drain, both PowerShell adapters and kernel-baseline
+  groups. Its shipping drain helper/deadlines are unchanged; the earlier timeout
+  did not recur, and no causal production repair is claimed.
 - The actual Windows Node job at that same SHA subsequently passed six native
   process cases, 73 shared ownership cases, 14 command rejection cases, thirty
   public mode/layer cases and all forty compiled negative controls. Its receipt
@@ -42,7 +46,19 @@ source identities, test receipts and remaining acceptance boundaries.
   that helper's PATH lookup. Real executable selection, the missing-fix control
   and actual pinned Naive library staging passed; fresh native CI is pending.
 
-Composite and PQ graph work is still being validated. The original full scope,
+- Linux bootstrap now retains the actual authenticated parent and exact native
+  root/image/pipe/lock/process/namespace identities through joined retirement
+  (`8a638acd`). Twelve focused groups repeated under race, 34 related controller
+  groups, eight native namespace parents and seven deliberate defects passed.
+  Known already-closed handles retire; genuine close errors remain sticky.
+- Split and raw MAX now enter the owned public Node path (`7517ed24`) after six
+  real dual-protocol traffic cases, twenty credential cases and 32 compiled
+  controls passed. The public Connect matrix now has 36 mode/layer cases.
+  Both Windows architectures compile the real WFP/command/app compositions;
+  actual new WFP execution is still pending. Complete MAX helper chains,
+  SS-v2ray and PQ owned admission remain distinct subsequent work.
+
+PQ and complete-MAX graph work is still being validated. The original full scope,
 macOS inventory boundary, current-SHA release convergence, signing, physical
 devices and deliberate private deployment remain open.
 
