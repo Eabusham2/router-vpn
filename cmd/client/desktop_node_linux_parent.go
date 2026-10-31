@@ -9,10 +9,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 	"syscall"
 
+	"router-vpn/internal/linuxprocess"
 	"router-vpn/internal/linuxprotection"
 )
 
@@ -34,6 +33,7 @@ type desktopLinuxNodeParent struct {
 	installationAnchor, root              *os.Root
 	image, networkNamespace, pidNamespace *os.File
 	imageInfo                             os.FileInfo
+	processWitness                        *linuxprocess.Witness
 	record                                desktopLinuxNodeParentRecord
 	complete, closed                      bool // Serialized by gate after constructor publication.
 	retirementErr                         error
@@ -52,25 +52,8 @@ func desktopLinuxNodeObjectOf(info os.FileInfo) (desktopLinuxNodeObject, error) 
 }
 
 func desktopLinuxNodeProcessStart(raw []byte) (int, uint64, error) {
-	invalid := errors.New("Linux Node parent has no bounded native process start")
-	if len(raw) == 0 || len(raw) > 8192 {
-		return 0, 0, invalid
-	}
-	text := string(raw)
-	begin, end := strings.Index(text, " ("), strings.LastIndex(text, ") ")
-	if begin < 1 || end <= begin+1 {
-		return 0, 0, invalid
-	}
-	pid, err := strconv.ParseUint(text[:begin], 10, 31)
-	fields := strings.Fields(text[end+2:])
-	if err != nil || pid == 0 || strconv.FormatUint(pid, 10) != text[:begin] || len(fields) < 20 || len(fields) > 64 || len(fields[0]) != 1 {
-		return 0, 0, invalid
-	}
-	start, err := strconv.ParseUint(fields[19], 10, 64) // stat field 22; comm may contain spaces or parentheses.
-	if err != nil || start == 0 || strconv.FormatUint(start, 10) != fields[19] {
-		return 0, 0, invalid
-	}
-	return int(pid), start, nil
+	stat, err := linuxprocess.ParseStat(raw)
+	return stat.ProcessID, stat.Start, err
 }
 
 func readDesktopLinuxNodeProcessStart() (int, uint64, error) {
@@ -87,18 +70,7 @@ func readDesktopLinuxNodeProcessStart() (int, uint64, error) {
 }
 
 func readDesktopLinuxNodeBootID() (string, error) {
-	file, err := os.Open("/proc/sys/kernel/random/boot_id")
-	if err != nil {
-		return "", err
-	}
-	body, readErr := io.ReadAll(io.LimitReader(file, 38))
-	if err := errors.Join(readErr, file.Close()); err != nil {
-		return "", err
-	}
-	if len(body) != 37 || body[36] != '\n' || !linuxprotection.BootIDValid(string(body[:36])) {
-		return "", errors.New("Linux Node parent lost its bounded native boot identity")
-	}
-	return string(body[:36]), nil
+	return linuxprocess.ReadBootID()
 }
 
 func desktopLinuxNodeCredentials(owner *ownedDesktopController) [32]byte {
@@ -213,6 +185,10 @@ func newDesktopLinuxNodeParent(owner *ownedDesktopController) (*desktopLinuxNode
 	if err != nil {
 		return p, err
 	}
+	p.processWitness, err = linuxprocess.CaptureSelf(ctx)
+	if err != nil {
+		return p, err
+	}
 	if err := p.record.Validate(); err != nil {
 		return p, err
 	}
@@ -247,7 +223,7 @@ func desktopLinuxNodeRetainedObject(file *os.File, wanted desktopLinuxNodeObject
 }
 
 func (p *desktopLinuxNodeParent) currentLocked(published bool) error {
-	if p == nil || p.closed || !p.complete || p.ctx == nil || p.ctx.Err() != nil || p.installationAnchor == nil || p.root == nil || p.image == nil || p.imageInfo == nil ||
+	if p == nil || p.closed || !p.complete || p.ctx == nil || p.ctx.Err() != nil || p.installationAnchor == nil || p.root == nil || p.image == nil || p.imageInfo == nil || p.processWitness == nil ||
 		p.controller == nil || os.Getuid() != 0 || os.Geteuid() != 0 || os.Getpid() != p.record.ProcessID {
 		return errors.New("Linux Node parent has no live complete native capture")
 	}
@@ -332,6 +308,13 @@ func (p *desktopLinuxNodeParent) currentLocked(published bool) error {
 	if err != nil || bootErr != nil || procPID != p.record.ProcProcessID || start != p.record.StartTicks || boot != p.record.BootID || p.ctx.Err() != nil {
 		return errors.Join(err, bootErr, errors.New("Linux Node parent lost its original native process start or boot"))
 	}
+	process, err := p.processWitness.Current(p.ctx)
+	if err != nil || process.ProcessID != p.record.ProcessID || process.ProcProcessID != p.record.ProcProcessID ||
+		process.StartTicks != p.record.StartTicks || process.BootID != p.record.BootID ||
+		linuxprotection.NativeObject(process.Image) != p.record.Image || linuxprotection.NativeObject(process.NetworkNamespace) != p.record.NetworkNamespace ||
+		linuxprotection.NativeObject(process.PIDNamespace) != p.record.PIDNamespace {
+		return errors.Join(err, errors.New("Linux Node parent lost its original retained task directory"))
+	}
 	return nil
 }
 
@@ -398,6 +381,13 @@ func (p *desktopLinuxNodeParent) Close(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-p.joined:
+	}
+	if p.processWitness != nil {
+		if err := p.processWitness.Close(ctx); err != nil {
+			p.retirementErr = errors.Join(p.retirementErr, err)
+			return err
+		}
+		p.processWitness = nil
 	}
 	for _, retained := range []**os.File{&p.image, &p.networkNamespace, &p.pidNamespace} {
 		if ctx.Err() != nil {

@@ -55,6 +55,10 @@ func linuxNodeParentFixture(owner *ownedDesktopController, scenario string) erro
 	case "application-owner":
 		a.localController = &ownedDesktopController{processID: owner.processID, callerUID: owner.callerUID,
 			accessToken: owner.accessToken, ownerToken: owner.ownerToken, nodeParent: owner.nodeParent, ownerDone: owner.ownerDone}
+	case "process-witness":
+		if err := capture.parent.processWitness.Close(context.Background()); err != nil {
+			return err
+		}
 	case "image-descriptor", "network-namespace-descriptor", "pid-namespace-descriptor":
 		original := capture.parent.image
 		if scenario == "network-namespace-descriptor" {
@@ -109,7 +113,7 @@ func linuxNodeParentFixture(owner *ownedDesktopController, scenario string) erro
 		return err
 	}
 	if !capture.parent.closed || capture.parent.image != nil || capture.parent.networkNamespace != nil ||
-		capture.parent.pidNamespace != nil || capture.parent.root != nil || capture.parent.installationAnchor != nil {
+		capture.parent.pidNamespace != nil || capture.parent.root != nil || capture.parent.installationAnchor != nil || capture.parent.processWitness != nil {
 		return errors.New("Linux Node parent retained unjoined native witnesses after retirement")
 	}
 	for _, original := range []*os.File{owner.input, owner.installLock, owner.processLock} {
@@ -223,7 +227,7 @@ func (p *linuxNodeParentProcess) retire(t *testing.T, ending string) {
 }
 
 func TestLinuxOwnedControllerNamespaceNodeParentRetainsExactObjects(t *testing.T) {
-	for _, scenario := range []string{"root", "image", "image-descriptor", "root-descriptor", "anchor-descriptor", "network-namespace-descriptor", "pid-namespace-descriptor", "install-lock", "process-lock", "profile-root", "application-owner", "retire"} {
+	for _, scenario := range []string{"root", "image", "image-descriptor", "root-descriptor", "anchor-descriptor", "network-namespace-descriptor", "pid-namespace-descriptor", "process-witness", "install-lock", "process-lock", "profile-root", "application-owner", "retire"} {
 		t.Run(scenario, func(t *testing.T) {
 			installed := linuxControllerNamespaceInstall(t)
 			child := startLinuxNodeParentProcess(t, installed, scenario)
