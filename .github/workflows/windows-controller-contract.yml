@@ -133,7 +133,11 @@ jobs:
   node-process:
     name: Actual retained Windows Node child process
     runs-on: windows-latest
-    timeout-minutes: 12
+    # Native run 41160188132 passed the baseline, then reached the old ten-minute
+    # step limit after 24 compiled negative controls (21.12 seconds median each).
+    # The full gate now has 32 controls. Budget their sequential compilation and
+    # execution without changing any individual build, test or process deadline.
+    timeout-minutes: 25
     concurrency:
       group: windows-node-process-${{ github.ref }}
       cancel-in-progress: false
@@ -162,8 +166,8 @@ jobs:
           if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'Pinned Windows Node process C compiler is missing' }
           "CC=$compiler" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           $compilerBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      - name: Execute actual Node child ownership and the three negative controls
-        timeout-minutes: 10
+      - name: Execute actual Node child ownership and every compiled negative control
+        timeout-minutes: 20
         shell: pwsh
         run: |
           python deploy/test_windows_node_process.py
