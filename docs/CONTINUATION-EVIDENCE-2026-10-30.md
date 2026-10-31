@@ -1802,3 +1802,170 @@ reconciled original graph/platform scope, source/native/package convergence,
 private/off-LAN acceptance, real-device UI and networking, signing and deliberate
 deployment remain binding. No private server/router change or new all-green
 exact-SHA release was performed or established by this continuation.
+
+## Public Windows Node ownership, Naive composition and confirmed startup improvement
+
+The source cutoff advances to
+[`9f20f6e734b2ced6a6e609f2f0bd5f311aabe997`](https://github.com/Eabusham2/router-vpn/commit/9f20f6e734b2ced6a6e609f2f0bd5f311aabe997).
+Publication retained normal `main` ancestry and independently verified each
+remote commit/tree/ref. Separately owned Linux preparer changes stayed outside
+the Naive commit and remain pending work.
+
+| Local commit | Verified published commit | Change |
+|---|---|---|
+| `4879d5a0ecad9d68f8a40badbe3ac8bc3055fc1e` | [`85e42217f28fc45d91b7a0ec3e424a8d19b9336e`](https://github.com/Eabusham2/router-vpn/commit/85e42217f28fc45d91b7a0ec3e424a8d19b9336e) | Public protected Node connection, AUTO/SMART, captured restoration and cancellation ownership. |
+| `f7fb9c35ace03a2cb23892007d25a82ed2a9aec3` | [`f34d15a9636fd4a390293b33468a8cc78f93a850`](https://github.com/Eabusham2/router-vpn/commit/f34d15a9636fd4a390293b33468a8cc78f93a850) | Add the existing Medium-image fixture to the exact native GUI source manifest. |
+| `e43c40f38ae6064bb993609630d13782c1e46658` | [`0bd8da4dec2cc9e28a00f6056eb6e7b70e0cefce`](https://github.com/Eabusham2/router-vpn/commit/0bd8da4dec2cc9e28a00f6056eb6e7b70e0cefce) | Admit actual Naive H2/H3 owned paths and retain exact native-library evidence. |
+| `1fd39325989bfda72882f18393598df02566c63a` | [`d9cfc86c57cc762279537fd809bd24701a731de6`](https://github.com/Eabusham2/router-vpn/commit/d9cfc86c57cc762279537fd809bd24701a731de6) | Require all six new Naive combinations through public Connect and captured capability responses. |
+| `04143902f39823057262be06f3c29da3e7613c16` | [`9f20f6e734b2ced6a6e609f2f0bd5f311aabe997`](https://github.com/Eabusham2/router-vpn/commit/9f20f6e734b2ced6a6e609f2f0bd5f311aabe997) | Observe the first native drain-wrapper boundary without changing shipping helper bytes, deadlines or assertions. |
+
+### Public connection, cancellation and restoration
+
+The Windows host now supplies captured controller/package authority, native
+verification and child creation to the real public handlers. The host cannot
+select or compile another profile, stage different inputs, accept a proof, or
+restore a connection. Those operations remain the shipping application path.
+App and private Data roots are distinct; a restore retains the original host,
+private source and complete configuration while acquiring the latest joined
+protection predecessor. Unsupported protected graphs reject before Stop, keep
+their catalog entries and remain requirements to implement.
+
+The initiating operation is captured through preparation, staging, child
+creation, admission, actual HTTP proof and final publication. Final Connected,
+SMART retention and restore publication check that operation and the exact
+command/native owner under the application mutex. Cancellation or a late
+completion cannot adopt another request, command, or native map entry even
+when the latter reuses the same command. An ordinary child that actually starts
+just before cancellation retains its exact cleanup identity so its real Stop
+command executes; it is never acknowledged as Connected. Failed native join or
+explicit Off retains its owner, private source and workspace until exact retry.
+The Start Layer capability response uses captured active policy and current
+native readiness instead of today's mutable saved selection.
+
+The isolated sixteen-file candidate passed 142 parent groups / 435 groups and
+subcases under Go's race detector in 118.827 seconds. Nine public groups include
+24 Connect mode/layer combinations, complete AUTO/SMART selection, cancelled
+Speed Lab restoration, four replacement/cancellation boundaries, failed
+Disconnect/Off retry, capability truth and ordinary Stop cleanup. The private
+host and HTTP transport boundaries are modeled; the real catalog, compiler,
+private-file protocol, public handlers and HTTP parser execute. The ordinary
+cleanup case also starts a real local process. Seventeen runner/source tests
+and baseline Windows AMD64/ARM64 native-tag builds with checkptr=2 passed.
+
+All eight new production mutants were subsequently rejected at their intended
+assertions under Linux race testing, and all sixteen corresponding Windows
+control binaries compiled. This follow-up changes no published source and
+closes the four controls still running when the initial receipt was frozen.
+The source manifest digest is
+`df70b235c88e0645590454918c41563f0a40d897218202d57cf26a2d17bc0dfb`;
+the initial receipt is
+`72859f6691ce74136529d7f286cd3cf10ff9cdccd505bb553bf053bdc1ed7307`;
+the completed follow-up receipt is
+`6882e6e48cdfba7ea85b0b95669024a6a67deafefca5b49eb877a25e101e80e9`.
+The expanded native runner now requires 73 shared groups, six native groups
+and 40 compiled controls. That is a registered gate, not a claim of actual
+Windows execution at this newer SHA. Device networking remains separate.
+
+### Actual Naive H2/H3 composition
+
+The shared owned admission predicate now includes Naive H2 and H3 after the
+complete native peer gate passed. Six real encrypted TCP/UDP paths cover both
+protocols with Off, AES-256-GCM and AES-plus-XOR. Selected Home DNS is freshly
+queried through each graph, failed DNS is refused, and retirement joins its
+actual owned runtime. Sixteen negative cases exercise credentials, server name,
+an unrelated signing certificate with the same valid SAN, and incorrect AES
+keys. H3 exposes only QUIC/UDP with exact ALPN and independent raw-protocol
+counters; a production mutation forcing H3 off cannot succeed through H2.
+
+All six complete CLI source constructors, thirty captured preparation
+combinations and all 23 compiled native production controls passed. The latter
+retain the previous WG/AWG/Shadowsocks/Hysteria2/Xray, DNS, MTU, IPC, cleanup and
+Unix ownership negatives, adding physical-dial bypass and H3 downgrade checks.
+The runtime's existing pinned Naive implementation needed no source workaround.
+The runner stages the packaging-pinned same-target Cronet module, verifies its
+module files, seals the explicit library path/hash/size, and rechecks those
+bytes after execution. No ambient library lookup is accepted. A test-only
+`with_purego` loader preserves compilation of shared peers in Darwin CGO suites
+without claiming that those suites proved a dynamic-library load.
+
+Four Windows binaries compiled with checkptr=2: actual WFP and sealed command
+suites on AMD64 and ARM64. Runner checks report 28 passes and one existing
+platform skip. The frozen twelve-file manifest digest is
+`3f417d129ae4965638c8be8803eb6c8add0316e4af419c636331fa6920888d31`;
+the full native gate log digest is
+`f6b87b1eb46c93f8af63dd6d18836401dff8ca4e9e30f55ccd0934bdfd8a6db0`;
+the verified source receipt is
+`7b48fc96b2ad32d0907438c0e1882787b37fe0a1924cf181c9f9c813c59c236a`.
+These actual engine/peer tests use explicit modeled OS-permit and TUN
+boundaries. Actual Windows kernel execution, Darwin static-CGO Naive acceptance
+and real devices are separate. Preparation coverage remains distinct from
+public handler coverage.
+
+The subsequent two-file `d9cfc86c` unit independently executes all six new Naive
+combinations through the actual public handler, compiler, private source and
+proof parser with the documented native-process/BFE and HTTP transport fixtures.
+All six passed under race in 3.714 seconds, both Windows native-tag/checkptr
+builds passed and seven runner tests passed. The native runner now requires
+thirty public mode/layer cases and preserves all forty controls. Its manifest
+digest is `1cee467a3fb5e7934d1dc57da670d6f2356f06badced8579375534e61cbcc3f3`
+and receipt is `01135bb7c6af3c50e6208c0effe257459c17abcf495eb01c27b3047696c1db1f`.
+Actual split/raw-max composite traffic is the next family integration unit.
+
+### Confirmed first-launch improvement and precise remaining failures
+
+The native first instrumented launch at
+[`d02bc9f6`, job 124425177269](https://github.com/Eabusham2/router-vpn/actions/runs/41163236809/job/124425177269)
+passed in 13.81 seconds. Profile-helper loading took 0.0470966 seconds and the
+whole helper group 0.6575441 seconds, versus 45.2144777 and 45.8473583 seconds
+respectively in the preceding `882fecca` diagnostic. These are observations
+from those two runs, not a general hardware performance guarantee. The actual
+packaged-helper ownership cases and old-discovery negative passed in both
+Windows PowerShell 5.1 and 7 after that first launch.
+
+The independent normal installed/Portable job also passed at
+[`d02bc9f6`, job 124425177216](https://github.com/Eabusham2/router-vpn/actions/runs/41163236809/job/124425177216).
+Installed self-test took 15.67 seconds; Portable and outer Portable took 9.31
+and 9.30 seconds. All eight native cases, four protected-shell cases and prior
+Session/Portable/updater controls passed. The source digest is
+`ee4ac74fe7bee5b0798ef49d88eedce669a9783b5efa8252b88b6ef6a71cc318`
+and shipping digest is
+`648ddbeed26b56bc471dc0ec00573c687ea1dff29d2a5f097b9e2b6ad042ffdd`.
+Elevated fixture execution remains distinct from interactive UAC and traffic.
+
+The completed [`2b1fb0c5` controller log, job 124420410265](https://github.com/Eabusham2/router-vpn/actions/runs/41161688315/job/124420410265)
+identifies two specific failures. The GUI runner's exact source manifest lacked
+the existing `medium_image_windows_test.go`; `f34d15a9` adds that single entry
+while preserving all 24 native cases, 24 compiled controls and regular-file/
+exact-set checks. The current manifest now captures all 46 required sources.
+Separately, `TestLocalControllerPinnedDrainUtilityWindowsExecution/wrapper/running`
+hit its eight-second fixture bound. Direct utility cases and subsequent wrapper
+cases passed. The published `9f20f6e7` harness-only phase/lookup observer will
+locate the first cold boundary. It records fixed command names and bounded
+phase markers without arguments, credentials, command replacement or lookup
+short-circuiting. Previous hooks are restored after success, failure and partial
+installation. Its eight-second wrapper, five-second utility and enclosing
+deadlines remain unchanged, as do every original assertion and the exact
+shipping helper bytes. Other completed controller steps passed, including
+actual C#/PowerShell composition and independent non-admin BFE denial.
+
+The observer's local PowerShell semantic checks preserve result/error identity,
+existing hooks, unsupported hooks, partial installation, failed output and the
+record cap; a mutation omitting hook restoration is rejected. Both Windows
+architecture native-tag/checkptr builds pass. The frozen one-file manifest
+digest is `264f520dc5d529b34fa2d5acf14920602b32c1e37864bdc392e36d47470ca08e`.
+The semantic receipt is
+`2b54f1f164d7eea586b3790b5f7b1bf9ede1c390e67d05ba9b4dee5715d30ef4`
+and compile receipt is
+`bdcca1cd3507bc4439fc8438217f7869cede276da14662ac0ba87e9b529f3e44`.
+Fresh native execution is pending; this diagnostic publication does not itself
+repair or close the timeout.
+
+Linux generated-host lifecycle work is still pending. This local executor has
+no `/dev/net/tun` and lacks device-node creation capability, so portable
+ownership tests and compilation cannot be described as real TUN acceptance.
+The matching-host CI gate must execute the real isolated TUN/nft/DNS path and
+must not skip unavailable hardware. Its public durable parent/journal and
+baseline succession remain separate unfinished integration. The previously
+recorded UAC and macOS process-identity failures, broader graph families and
+full original release/device/private requirements remain open. No deployment,
+signing or universal completion is established by these source milestones.

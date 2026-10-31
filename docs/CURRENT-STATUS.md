@@ -6,7 +6,56 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through d02bc9f6
+## Latest implementation continuation — through 9f20f6e7
+
+The verified source cutoff is
+[`9f20f6e734b2ced6a6e609f2f0bd5f311aabe997`](https://github.com/Eabusham2/router-vpn/commit/9f20f6e734b2ced6a6e609f2f0bd5f311aabe997).
+The [public Node and Naive evidence](CONTINUATION-EVIDENCE-2026-10-30.md#public-windows-node-ownership-naive-composition-and-confirmed-startup-improvement)
+records the exact validation and remaining boundaries.
+
+- Public Windows Connect/AUTO/SMART/Speed Lab now use the captured owned native
+  host for admitted protected Router Node graphs (`85e42217`). Preparation
+  captures App/Data roots, original private source and controller lifetime before
+  Stop. Stale starts/proofs cannot publish over replacement requests or owners.
+  SMART and cancelled Speed Lab restore the original source, host, live MTU and
+  proved choice. Failed Disconnect/Off retains its exact owner for retry.
+- That exact sixteen-file unit passed 142 race-instrumented parent groups
+  (435 including subcases), with 24 public Connect mode/layer cases. Both Windows
+  architecture builds passed. All eight added production defects were rejected
+  locally and their sixteen Windows control binaries compiled; the new expanded
+  actual Windows gate remains separate from those cross-compiles.
+- Owned Naive H2/H3 admission now follows actual encrypted path evidence
+  (`0bd8da4d`): six H2/H3 and Start Layer combinations, sixteen credential/TLS/AES
+  rejection cases, six complete CLI sources, fresh selected Home DNS and all 23
+  compiled production controls. A UDP-only H3 peer and raw-protocol observations
+  reject an H2 fallback. Thirty controller preparation combinations pass. The
+  separate six-case public Naive verification (`d9cfc86c`) also passed, bringing
+  the required public matrix to thirty while retaining all forty controls.
+  Windows actual execution and Darwin static-CGO Naive acceptance remain separate.
+- The profile-helper startup correction is now confirmed on native Windows at
+  `d02bc9f6`: helper load 0.0471 seconds versus 45.2145 seconds in the preceding
+  instrumented run, complete first instrumented launch 13.81 seconds, and the
+  independent normal installed Session 15.67 seconds. The complete normal
+  installed/Portable job and semantic checks in PowerShell 5.1 and 7 passed.
+- The completed older controller log identified a stale GUI source manifest;
+  `f34d15a9` adds its actual existing Medium-image test to the unchanged exact
+  source set. All 24 native cases and 24 production controls remain required.
+  A distinct first drain-wrapper timeout is under diagnosis. The published
+  test-only observer (`9f20f6e7`) records bounded phase and command-lookup
+  events while preserving the exact shipping helper, deadlines and assertions.
+  Both Windows architecture builds and local observer-preservation checks pass;
+  the fresh native run must identify the delayed boundary before a repair is
+  claimed. No warm-up is used as acceptance.
+
+The full catalog remains intact. Remaining protected graph families, Linux
+durable parent/journal and generated-host integration, macOS legacy migration,
+native UAC/process-inventory failures, exact-SHA release convergence and the
+original device/private acceptance requirements remain open. The local Linux
+environment has no TUN device or permission to create one; its new mandatory
+real-TUN CI gate must establish that integration independently of portable
+fixtures. No private router deployment, signing or full completion is claimed.
+
+## Earlier implementation continuation — through d02bc9f6
 
 The verified source cutoff is
 [`d02bc9f68fb9ea522e50daa84b5fbab28c9f14f7`](https://github.com/Eabusham2/router-vpn/commit/d02bc9f68fb9ea522e50daa84b5fbab28c9f14f7).
