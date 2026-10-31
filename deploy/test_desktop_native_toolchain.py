@@ -786,5 +786,79 @@ class VerifiedWindowsInstaller(unittest.TestCase):
             download.assert_not_called()
 
 
+class SelectedNodeCompiler(unittest.TestCase):
+    @staticmethod
+    def runner():
+        spec = importlib.util.spec_from_file_location('selected_node_compiler', ROOT/'deploy/test_desktop_node_physical.py')
+        node = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(node)
+        return node
+
+    def test_reused_module_helper_executes_selected_compiler_before_ambient_go(self):
+        node = self.runner()
+        if node.platform.system() not in ('Linux', 'Windows'):
+            self.skipTest('Node compiler selection executes on Linux and Windows')
+        go = shutil.which('go')
+        self.assertIsNotNone(go, 'The executable compiler regression requires Go')
+        with tempfile.TemporaryDirectory(prefix='node compiler ') as tmp:
+            root = Path(tmp)
+            source = root/'source'
+            file(source/'go.mod', b'module example.test/node-compiler\n\ngo 1.26.0\n')
+            env = dict(os.environ, GOTOOLCHAIN=N.TOOLCHAIN, GOWORK='off', GOFLAGS='', CGO_ENABLED='0')
+            compiler, captured, _ = node.selected_compiler(go, source, env)
+            decoy = root/'ambient compiler'
+            decoy.mkdir()
+            marker = root/'ambient-invocations'
+            fake = file(root/'ambient.go', b'package main\nimport ("os"; "fmt")\nfunc main(){os.WriteFile(os.Getenv("ROUTERVPN_COMPILER_TEST_MARKER"), []byte("ambient compiler executed"), 0600); fmt.Fprintln(os.Stderr,"ambient compiler must not execute"); os.Exit(97)}\n')
+            N.run([compiler, 'build', '-mod=readonly', '-o', decoy/compiler.name, fake], cwd=source, env=captured, timeout=60)
+
+            # A private file proxy gives the real Go helper checksum-bearing
+            # module metadata without network access or mocked subprocesses.
+            dependency = 'example.test/compiler-fixture'
+            version = 'v1.0.0'
+            proxy = root/'proxy'
+            prefix = proxy/dependency/'@v'
+            module = b'module example.test/compiler-fixture\n\ngo 1.26.0\n'
+            file(prefix/(version+'.mod'), module)
+            file(prefix/(version+'.info'), json.dumps({'Version': version, 'Time': '2026-01-01T00:00:00Z'}).encode())
+            with zipfile.ZipFile(prefix/(version+'.zip'), 'w') as archive:
+                archive.writestr(dependency+'@'+version+'/go.mod', module)
+            (source/'go.mod').write_text('module example.test/node-compiler\n\ngo 1.26.0\n\nrequire '+dependency+' '+version+'\n')
+            incoming = dict(env, PATH=str(decoy)+os.pathsep+env.get('PATH', os.defpath),
+                            GOPROXY=proxy.as_uri(), GOSUMDB='off', GOPRIVATE='', GONOPROXY='',
+                            GOMODCACHE=str(root/'module-cache'), ROUTERVPN_COMPILER_TEST_MARKER=str(marker))
+            before = incoming.copy()
+            selected, captured, _ = node.selected_compiler(compiler, source, incoming)
+            self.assertEqual(incoming, before)
+            self.assertEqual(selected, compiler)
+            N.run([selected, 'mod', 'download', dependency], cwd=source, env=captured, timeout=30)
+            info = N.module(source, dependency, captured)
+            self.assertEqual(info['Version'], version)
+            self.assertTrue(info['Sum'].startswith('h1:'))
+            self.assertFalse(marker.exists(), 'A packaging helper executed the ambient compiler')
+            self.assertEqual(captured['PATH'].split(os.pathsep)[1:], incoming['PATH'].split(os.pathsep))
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(subprocess.CalledProcessError) as caught:
+                N.module(source, dependency, dict(captured, PATH=incoming['PATH']))
+            self.assertEqual(caught.exception.returncode, 97)
+            self.assertEqual(marker.read_text(), 'ambient compiler executed')
+
+    def test_windows_path_case_is_preserved_and_ambiguity_is_rejected(self):
+        node = self.runner()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            file(root/'bin/go.exe')
+            identity = {'GOROOT': str(root), 'GOVERSION': N.TOOLCHAIN, 'GOHOSTOS': 'windows', 'GOHOSTARCH': 'amd64'}
+            for key in ('PATH', 'Path', 'pAtH'):
+                with self.subTest(key=key), patch.object(node.platform, 'system', return_value='Windows'), \
+                     patch.object(node, 'run', return_value=(0, json.dumps(identity))):
+                    _, captured, _ = node.selected_compiler('bootstrap-go', root, {key: 'preserved-native-tools'})
+                    self.assertEqual([key for key in captured if key.upper() == 'PATH'], ['PATH'])
+                    self.assertEqual(captured['PATH'], str(root/'bin')+os.pathsep+'preserved-native-tools')
+            with patch.object(node.platform, 'system', return_value='Windows'), \
+                 patch.object(node, 'run', return_value=(0, json.dumps(identity))), \
+                 self.assertRaisesRegex(ValueError, 'ambiguous executable search paths'):
+                node.selected_compiler('bootstrap-go', root, {'PATH': 'first', 'Path': 'second'})
+
+
 if __name__ == '__main__':
     unittest.main()

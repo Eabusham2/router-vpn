@@ -158,6 +158,13 @@ def selected_compiler(go, source, env):
     if not root.is_absolute() or not compiler.is_file():
         raise ValueError("Node composition lost its selected compiler")
     captured = dict(env, GOROOT=str(root), GOTOOLCHAIN="local", GOOS=system, GOARCH=arch, GOFLAGS="", GOWORK="off")
+    # Packaging's module/library helpers invoke `go` by name. They must use
+    # this verified compiler after automatic toolchain selection is disabled.
+    path_keys = [key for key in captured if key == "PATH" or (system == "windows" and key.upper() == "PATH")]
+    if len(path_keys) > 1:
+        raise ValueError("Node compiler has ambiguous executable search paths")
+    ambient_path = captured.pop(path_keys[0]) if path_keys else os.defpath
+    captured["PATH"] = str(compiler.parent) + os.pathsep + ambient_path
     status, again = run([compiler, "env", "-json", "GOROOT", "GOVERSION", "GOHOSTOS", "GOHOSTARCH"], cwd=source, env=captured, timeout=30)
     if status or json.loads(again) != identity:
         raise ValueError("Node native compiler changed during selection")
