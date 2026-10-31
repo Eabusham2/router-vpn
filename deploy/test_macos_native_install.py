@@ -41,7 +41,7 @@ def load(source=None):
 M = load()
 
 
-def native_inventory_with_failure_diagnostic(installer):
+def native_inventory_with_failure_diagnostic(installer, *, baseline=None, observations=None, emit=True):
     """Keep the real inventory failure; subsequent BSD data is diagnostic only."""
     original = installer.native_executable
 
@@ -70,8 +70,13 @@ def native_inventory_with_failure_diagnostic(installer):
                                   ppid=info.pbi_ppid, status=info.pbi_status, uid=info.pbi_uid,
                                   comm=name(info.pbi_comm, 16), name=name(info.pbi_name, 32))
                 record['later_image_observation'] = PROBE.observe(library, pid)
-                print('Native inventory refusal diagnostic (not accepted identity): ' +
-                      json.dumps(record, sort_keys=True), flush=True)
+                record['later_parentage'] = PROBE.observe_parentage(library, pid, installer.NativeProcessBSDInfo)
+                record['pre_fixture_comparison'] = PROBE.compare_baseline(baseline, record)
+                if observations is not None:
+                    observations.append(record)
+                if emit:
+                    print('Native inventory refusal diagnostic (not accepted identity): ' +
+                          json.dumps(record, sort_keys=True), flush=True)
             except Exception:
                 # Even a failed diagnostic write must not replace the original
                 # shipping error or convert its failed gate to success.
@@ -80,6 +85,18 @@ def native_inventory_with_failure_diagnostic(installer):
 
     with mock.patch.object(installer, 'native_executable', executable):
         return installer.running_executables()
+
+
+def pre_fixture_inventory(installer):
+    report = {'schema': 1, 'phase': 'before-fixtures', 'admission_authority': False,
+              'observed_unix_ns': time.time_ns(), 'records': [], 'failure_type': None}
+    try:
+        native_inventory_with_failure_diagnostic(installer, observations=report['records'], emit=False)
+    except Exception as error:
+        report['failure_type'] = type(error).__name__
+    # This only records the early failure. The later ordinary installation gate
+    # still executes and raises its own actual failure, including for this PID.
+    return report
 
 
 class NativeCall:
@@ -179,6 +196,40 @@ class ProcessProbeLibrary:
         info.vnode.nlink = value.get('nlink', 1)
         info.path = value.get('path', b'/private/diagnostic-only-image')
         ctypes.set_errno(value.get('errno', 0))
+        return value.get('result', size)
+
+
+class ProcessParentageLibrary:
+    """ABI double for bounded ancestry observations, never native authority."""
+    def __init__(self, nodes=None, replacements=None):
+        self.nodes = nodes or {101: {'ppid': 51}, 51: {'ppid': 1}, 1: {'ppid': 0}}
+        self.replacements = replacements or {}
+        self.counts, self.calls = {}, []
+        self.proc_pidinfo = NativeCall(self.capture)
+
+    def capture(self, pid, flavor, argument, buffer, size):
+        self.calls.append((pid, flavor, argument, ctypes.get_errno()))
+        self.counts[pid, flavor] = self.counts.get((pid, flavor), 0) + 1
+        value = dict(self.nodes[pid])
+        value.update(self.replacements.get((pid, flavor, self.counts[pid, flavor]), {}))
+        ctypes.set_errno(value.get('errno', 0))
+        if flavor == 17:
+            if (argument, size) != (1, 56): raise AssertionError('Parent diagnostic changed the unique-identity ABI')
+            info = ctypes.cast(buffer, ctypes.POINTER(PROBE.NativeUniqueInfo)).contents
+            info.uniqueid, info.idversion = value.get('uniqueid', pid+1000), value.get('idversion', 9)
+            info.uuid[:] = value.get('uuid', b'a'*16)
+            parent = self.nodes.get(value['ppid'], {})
+            info.parent_uniqueid = value.get('parent_uniqueid', value['ppid']+1000 if value['ppid'] else 0)
+            info.parent_idversion = value.get('parent_idversion', parent.get('idversion', 9) if value['ppid'] else 0)
+        elif flavor == 3:
+            if (argument, size) != (1, 136): raise AssertionError('Parent diagnostic changed the native BSD ABI')
+            info = ctypes.cast(buffer, ctypes.POINTER(M.NativeProcessBSDInfo)).contents
+            info.pbi_pid, info.pbi_ppid = value.get('pid', pid), value['ppid']
+            info.pbi_uid, info.pbi_gid, info.pbi_status = 0, 0, 2
+            info.pbi_start_tvsec, info.pbi_start_tvusec = value.get('seconds', 1700000000), value.get('microseconds', 123)
+            info.pbi_comm, info.pbi_name = b'fixture\nname', b'fixture/name'
+        else:
+            raise AssertionError('Parent diagnostic used an unrelated native flavor')
         return value.get('result', size)
 
 
@@ -438,6 +489,134 @@ class MacProcessInventory(unittest.TestCase):
              self.assertRaises(RuntimeError) as failure:
             native_inventory_with_failure_diagnostic(self.installer)
         self.assertIs(failure.exception, original)
+
+    def test_later_parentage_preserves_original_parent_generation_and_numeric_start(self):
+        library = ProcessParentageLibrary()
+        ctypes.set_errno(errno.ESRCH)
+        report = PROBE.observe_parentage(library, 101, M.NativeProcessBSDInfo)
+        self.assertEqual(report['stop'], 'no-current-parent')
+        self.assertEqual([record['state']['pid'] for record in report['records']], [101, 51, 1])
+        self.assertEqual(len(library.calls), 12)
+        for record in report['records']:
+            self.assertTrue(record['same_later_process_observation'])
+            self.assertEqual(record['state']['start_seconds'], 1700000000)
+            self.assertEqual(record['state']['start_microseconds'], 123)
+            self.assertEqual(record['state']['comm'], 'fixture?name')
+            self.assertEqual(record['state']['name'], 'fixture?name')
+        self.assertTrue(report['records'][1]['matches_child_original_parent_generation'])
+        self.assertTrue(all(call[-1] == 0 for call in library.calls))
+        self.assertFalse(report['admission_authority'])
+        self.assertFalse(report['original_lookup_identity_proved'])
+        for field in ('parent_uniqueid', 'parent_idversion'):
+            with self.subTest(field=field):
+                library = ProcessParentageLibrary(nodes={101: {'ppid': 51, field: 777}, 51: {'ppid': 0}})
+                report = PROBE.observe_parentage(library, 101, M.NativeProcessBSDInfo)
+                self.assertFalse(report['records'][1]['matches_child_original_parent_generation'],
+                                 'Parent diagnostic adopted another original parent generation')
+
+    def test_later_parentage_rejects_reuse_exec_and_reparenting_during_observation(self):
+        for flavor, changed in ((17, {'uniqueid': 999}), (17, {'idversion': 10}), (17, {'uuid': b'b'*16}),
+                                (3, {'seconds': 1700000001}), (3, {'ppid': 52}), (3, {'pid': 102}),
+                                (3, {'result': 135}), (3, {'microseconds': 1000000})):
+            with self.subTest(flavor=flavor, changed=changed):
+                library = ProcessParentageLibrary(replacements={(101, flavor, 2): changed})
+                report = PROBE.observe_parentage(library, 101, M.NativeProcessBSDInfo)
+                self.assertEqual(report['stop'], 'identity-unavailable-or-changed')
+                self.assertEqual(len(report['records']), 1)
+                self.assertFalse(report['records'][0]['same_later_process_observation'])
+                self.assertFalse(report['admission_authority'])
+
+    def test_later_parentage_bounds_depth_time_and_cycles(self):
+        library = ProcessParentageLibrary(nodes={101: {'ppid': 100}, 100: {'ppid': 99}, 99: {'ppid': 98}, 98: {'ppid': 0}})
+        with mock.patch.object(PROBE.time, 'monotonic', return_value=0):
+            report = PROBE.observe_parentage(library, 101, M.NativeProcessBSDInfo)
+        self.assertEqual(report['stop'], 'record-bound')
+        self.assertEqual(len(report['records']), 3, 'Parent diagnostic exceeded its three-process bound')
+        self.assertEqual(len(library.calls), 12)
+        library = ProcessParentageLibrary()
+        with mock.patch.object(PROBE.time, 'monotonic', side_effect=[0, 1]):
+            report = PROBE.observe_parentage(library, 101, M.NativeProcessBSDInfo)
+        self.assertEqual(report['stop'], 'time-bound')
+        self.assertEqual(library.calls, [])
+        report = PROBE.observe_parentage(ProcessParentageLibrary(nodes={101: {'ppid': 101}}), 101, M.NativeProcessBSDInfo)
+        self.assertEqual(report['stop'], 'parent-cycle-or-boundary')
+        self.assertEqual(len(report['records']), 1)
+
+    def test_pre_fixture_comparison_is_bounded_data_and_never_adopts_another_execution(self):
+        lineage = PROBE.observe_parentage(ProcessParentageLibrary(), 101, M.NativeProcessBSDInfo)
+        current = {'requested_pid': 101, 'observed_unix_ns': 200, 'later_parentage': lineage}
+        baseline = {'schema': 1, 'phase': 'before-fixtures', 'admission_authority': False,
+                    'observed_unix_ns': 100, 'records': [current], 'failure_type': 'RuntimeError'}
+        result = PROBE.compare_baseline(baseline, current)
+        self.assertTrue(result['same_later_process_as_before_fixtures'])
+        self.assertFalse(result['admission_authority'])
+        self.assertFalse(result['saved_data_is_authority'])
+        for field, value in (('uniqueid', 2000), ('idversion', 10), ('main_uuid', 'b'*32)):
+            changed = json.loads(json.dumps(current))
+            for side in ('before', 'after'): changed['later_parentage']['records'][0][side][field] = value
+            result = PROBE.compare_baseline(baseline, changed)
+            self.assertFalse(result['same_later_process_as_before_fixtures'],
+                             'Pre-fixture comparison adopted a different execution')
+        for field, value in (('start_seconds', 1700000001), ('start_microseconds', 124), ('pid', 102)):
+            changed = json.loads(json.dumps(current))
+            for side in ('state', 'state_after'): changed['later_parentage']['records'][0][side][field] = value
+            self.assertFalse(PROBE.compare_baseline(baseline, changed)['same_later_process_as_before_fixtures'])
+        changed = json.loads(json.dumps(current)); changed['later_parentage']['records'][0]['same_later_process_observation'] = False
+        self.assertFalse(PROBE.compare_baseline(baseline, changed)['same_later_process_as_before_fixtures'])
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)/'before.json'
+            path.write_text(json.dumps(baseline))
+            self.assertEqual(PROBE.load_baseline(path), baseline)
+            link = Path(temporary)/'link.json'; link.symlink_to(path)
+            with self.assertRaises(OSError): PROBE.load_baseline(link)
+            for invalid in ({**baseline, 'admission_authority': True}, {**baseline, 'schema': True},
+                            {**baseline, 'records': [current, current]}, {**baseline, 'unexpected': True}):
+                path.write_text(json.dumps(invalid))
+                with self.assertRaises(ValueError): PROBE.load_baseline(path)
+            path.write_bytes(b'x'*65537)
+            with self.assertRaises(ValueError): PROBE.load_baseline(path)
+
+    def test_pre_fixture_capture_never_suppresses_the_later_original_inventory_failure(self):
+        original = RuntimeError('original native inventory refusal still blocks the later gate')
+        library = ProcessLibrary()
+        with mock.patch.object(self.installer.sys, 'platform', 'darwin'), \
+             mock.patch.object(self.installer.ctypes, 'CDLL', return_value=library), \
+             mock.patch.object(self.installer, 'native_executable', side_effect=original) as target:
+            baseline = pre_fixture_inventory(self.installer)
+            self.assertEqual(baseline['failure_type'], 'RuntimeError',
+                             'Diagnostic snapshot erased the original inventory refusal')
+            self.assertFalse(baseline['admission_authority'])
+            self.assertEqual(len(baseline['records']), 1)
+            with self.assertRaises(RuntimeError) as failure:
+                native_inventory_with_failure_diagnostic(self.installer, baseline=baseline, emit=False)
+        self.assertIs(failure.exception, original)
+        self.assertEqual(target.call_count, 2)
+
+    def test_pre_fixture_cli_finishes_before_any_native_fixture(self):
+        captured = {'schema': 1, 'phase': 'before-fixtures', 'admission_authority': False,
+                    'observed_unix_ns': 100, 'records': [], 'failure_type': 'RuntimeError'}
+        with mock.patch.dict(os.environ, {}, clear=True), \
+             mock.patch.object(sys, 'argv', ['test_macos_native_install.py', '--observe-before-fixtures']), \
+             mock.patch.object(sys, 'platform', 'darwin'), mock.patch.object(os, 'geteuid', return_value=0), \
+             mock.patch(__name__+'.pre_fixture_inventory', return_value=captured) as observe, \
+             mock.patch.object(unittest, 'TextTestRunner', side_effect=AssertionError('Pre-fixture mode executed a fixture')), \
+             mock.patch('builtins.print') as output:
+            main()
+        observe.assert_called_once_with(M)
+        output.assert_called_once()
+        self.assertEqual(json.loads(output.call_args.args[0]), captured)
+
+    def test_fixture_object_diagnostic_uses_the_actual_file_without_path_or_identity_substitution(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            original = Path(temporary)/'native-fixture'
+            original.write_bytes(b'actual compiled fixture stand-in')
+            info = original.stat()
+            record = PROBE.fixture_image(original, 'controller-native-test')
+            self.assertEqual((record['dev'], record['ino']), (info.st_dev & 0xffffffff, info.st_ino))
+            self.assertNotIn(temporary, json.dumps(record))
+            alias = Path(temporary)/'alias'; alias.symlink_to(original)
+            with self.assertRaises(OSError): PROBE.fixture_image(alias, 'controller-native-test')
+            with self.assertRaises(ValueError): PROBE.fixture_image(original, 'unbounded/path')
 
 
 class QuarantineLibrary:
@@ -960,8 +1139,19 @@ class MacNativeProcesses(unittest.TestCase):
                 self.assertFalse(observation['admission_authority'])
                 self.assertFalse(observation['main_image_identified'])
                 self.assertFalse(observation['complete_mapping_inventory'])
+                parentage = PROBE.observe_parentage(library, child.pid, M.NativeProcessBSDInfo)
+                self.assertGreaterEqual(len(parentage['records']), 2)
+                created, parent = parentage['records'][:2]
+                self.assertTrue(created['same_later_process_observation'])
+                self.assertEqual((created['state']['pid'], created['state']['ppid']), (child.pid, os.getpid()))
+                self.assertEqual(parent['state']['pid'], os.getpid())
+                self.assertTrue(parent['same_later_process_observation'])
+                self.assertTrue(parent['matches_child_original_parent_generation'])
+                self.assertFalse(parentage['admission_authority'])
+                self.assertFalse(parentage['original_lookup_identity_proved'])
                 print('Actual unlinked owned image observation (diagnostic only): ' +
                       json.dumps(observation, sort_keys=True))
+                print('Actual owned child parentage matched its created PID and original parent generation.')
                 print(f'Actual unlinked live owner remains blocked (pid={child.pid}, errno={error}, result={size}, status={after[3]}).')
             finally:
                 if child.poll() is None: child.kill()
@@ -971,6 +1161,10 @@ class MacNativeProcesses(unittest.TestCase):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--package', type=Path)
+    parser.add_argument('--observe-before-fixtures', action='store_true',
+                        help='Print bounded diagnostic data before any fixture; never qualifies installation')
+    parser.add_argument('--inventory-baseline', type=Path, default=os.environ.get('ROUTERVPN_MACOS_INVENTORY_BASELINE'),
+                        help='Optional diagnostic comparison only, without installation authority')
     arguments = parser.parse_args()
     if os.geteuid() != 0:
         tool = F.INSTALLER_PATH.parent.parent/'deploy/test_desktop_socket_uid.py'
@@ -978,7 +1172,23 @@ def main():
         owner = importlib.util.module_from_spec(spec); spec.loader.exec_module(owner)
         sudo = owner.privilege_tool()
         if sudo is None: raise RuntimeError('Installer ownership tests require actual root in temporary directories')
-        raise SystemExit(subprocess.run([sudo, '-n', '--', sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]]).returncode)
+        forwarded = list(sys.argv[1:])
+        if arguments.inventory_baseline is not None:
+            # sudo need not retain the build user's environment. Carry only
+            # this explicit diagnostic input to the same script invocation.
+            forwarded += ['--inventory-baseline', str(arguments.inventory_baseline)]
+        raise SystemExit(subprocess.run([sudo, '-n', '--', sys.executable, str(Path(__file__).resolve()), *forwarded]).returncode)
+    if arguments.observe_before_fixtures:
+        if sys.platform != 'darwin' or arguments.package is not None or arguments.inventory_baseline is not None:
+            raise RuntimeError('Pre-fixture observation requires its separate actual macOS invocation')
+        print(json.dumps(pre_fixture_inventory(M), sort_keys=True), flush=True)
+        return
+    baseline = None
+    if arguments.inventory_baseline is not None:
+        try:
+            baseline = PROBE.load_baseline(arguments.inventory_baseline)
+        except Exception as error:
+            print('Pre-fixture comparison unavailable (no authority): '+type(error).__name__, flush=True)
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(MacInstallTransactions))
     if not result.wasSuccessful(): raise SystemExit(1)
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(MacProcessInventory))
@@ -1023,7 +1233,7 @@ def main():
         if not result.wasSuccessful(): raise SystemExit(1)
         result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(MacNativeProcesses))
         if not result.wasSuccessful(): raise SystemExit(1)
-        actual = {str(Path(path).resolve()) for path in native_inventory_with_failure_diagnostic(M)}
+        actual = {str(Path(path).resolve()) for path in native_inventory_with_failure_diagnostic(M, baseline=baseline)}
         if str(Path(sys.executable).resolve()) not in actual:
             raise AssertionError('Native process inventory lost the actual executing interpreter')
         print('Actual macOS libproc inventory captured the executing interpreter.')

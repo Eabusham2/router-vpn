@@ -85,6 +85,10 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - name: Observe process inventory before native fixtures without granting installation authority
+        run: |
+          python3 deploy/test_macos_native_install.py --observe-before-fixtures > "$RUNNER_TEMP/routervpn-macos-before.json"
+          cat "$RUNNER_TEMP/routervpn-macos-before.json"
       - name: Prove installed supervisor, native peer identity and joined AppKit shutdown
         run: |
           python3 deploy/test_desktop_darwin_guardian_runner.py
@@ -93,7 +97,7 @@ jobs:
         run: |
           python3 deploy/test_macos_installer_entry.py
           python3 deploy/test_macos_installer_trust.py
-          python3 deploy/test_macos_native_install.py
+          python3 deploy/test_macos_native_install.py --inventory-baseline "$RUNNER_TEMP/routervpn-macos-before.json"
 
   contract:
     concurrency:
