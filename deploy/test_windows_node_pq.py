@@ -3,8 +3,9 @@
 
 Only the native test executable's AppID scopes the WFP fixture. The separately
 retained peer exchanges real Rosenpass/WG/AWG/Start Layer bytes. TUN stays a
-harmless test boundary. --prospective admits exactly the two future PQ modes
-in the test compilation and first proves current shipping admission is closed.
+harmless test boundary. Normal execution exercises unchanged shipping
+admission and independently compiles an exact two-mode closed control.
+--prospective retains the closed-source prerequisite before public activation.
 """
 from pathlib import Path
 import argparse
@@ -87,6 +88,25 @@ def prospective_predicate(raw):
     return WFP.BOOT.IDENTITY.replace_once(raw, PROSPECTIVE_BEFORE, PROSPECTIVE_AFTER)
 
 
+def closed_admission(raw, modes):
+    signature = 'func DesktopNodePhysicalGraphSupported(mode, startLayer string) bool {\n'
+    case = '\tcase ' + ', '.join(json.dumps(mode) for mode in modes) + ':\n\t\treturn true\n'
+    if (not modes or len(set(modes)) != len(modes) or
+            any(re.fullmatch('[a-z0-9-]+', mode) is None for mode in modes) or
+            raw.count(signature) != 1 or raw.count(case) != 1 or
+            any(raw.count(json.dumps(mode)) != 1 for mode in modes)):
+        raise ValueError('Closed native admission control lost its exact shipping family')
+    start = raw.index(signature)
+    end = raw.find('\n}', start)
+    if end < 0 or not start < raw.index(case) < end:
+        raise ValueError('Closed native admission control escaped its captured function')
+    return WFP.BOOT.IDENTITY.replace_once(raw, case, '')
+
+
+def closed_predicate(raw):
+    return closed_admission(raw, PQ.MODES)
+
+
 def mutations(source):
     kernel = WFP.mutants(source)
     result = (
@@ -112,7 +132,9 @@ def mutations(source):
     return result
 
 
-def overlay(source, directory, *, prospective, mutation=None):
+def overlay(source, directory, *, prospective, mutation=None, closed=False):
+    if closed and (prospective or mutation is not None):
+        raise ValueError('Closed PQ admission control cannot alter native execution controls')
     if mutation is not None and mutation not in mutations(source):
         raise ValueError('PQ mutation is not one of its exact compiled controls')
     kernel = mutation[4] if mutation is not None else None
@@ -130,16 +152,37 @@ def overlay(source, directory, *, prospective, mutation=None):
 
     if prospective:
         add(PREDICATE, prospective_predicate((source / PREDICATE).read_text(encoding='utf-8')), 'prospective-pq-predicate')
+    if closed:
+        add(PREDICATE, closed_predicate((source / PREDICATE).read_text(encoding='utf-8')), 'closed-pq-predicate')
     if mutation is not None and mutation[5] is not None:
         add(*mutation[5], 'pq-negative')
     result.write_text(json.dumps(records, sort_keys=True), encoding='utf-8')
     return result
 
 
-def required_output(output, test, cases):
-    if ('--- PASS: ' + test + ' (' not in output or
-            any('--- PASS: ' + test + '/' + case + ' (' not in output for case in cases) or
-            any(value in output for value in ('--- SKIP:', 'DATA RACE'))):
+def overlay_source_hashes(source, overlay_path):
+    value = json.loads(overlay_path.read_text(encoding='utf-8'))
+    if set(value) != {'Replace'} or not isinstance(value['Replace'], dict) or not value['Replace']:
+        raise ValueError('Windows PQ lost its exact compiled overlay')
+    records = {}
+    for original, replacement in value['Replace'].items():
+        relative = Path(original).relative_to(source)
+        path = Path(replacement)
+        if '..' in relative.parts or path.parent != overlay_path.parent:
+            raise ValueError('Windows PQ compiled overlay escaped its captured workspace')
+        records[relative.as_posix()] = PQ.regular_digest(path)
+    return records
+
+
+def required_output(status, output, test, cases):
+    passed = re.findall(r'^\s*--- PASS: ([^\s]+) \([0-9.]+s\)\r?$', output, re.MULTILINE)
+    required = (test, *(test + '/' + case for case in cases))
+    invalid = ('--- SKIP:', 'DATA RACE', 'panic:', 'fatal error:', 'fatal:',
+               'no tests to run', 'testing: warning:', *CLEANUP_DIAGNOSTICS)
+    if (status != 0 or any(passed.count(name) != 1 for name in required) or
+            re.search(r'^(?:\s*--- FAIL:|FAIL\r?$)', output, re.MULTILINE) is not None or
+            re.search(r'^PASS\r?$', output, re.MULTILINE) is None or
+            any(value.casefold() in output.casefold() for value in invalid)):
         raise ValueError('Windows PQ omitted a required real native case: ' + test)
 
 
@@ -191,6 +234,8 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
     target = captured['GOOS'] + '/' + architecture
     if target not in ('windows/amd64', 'windows/arm64') or captured.get('CGO_ENABLED', '1') != '1':
         raise ValueError('PQ WFP requires matching-host Windows and the real CGO ABI')
+    predicate = (source / PREDICATE).read_text(encoding='utf-8')
+    (prospective_predicate if prospective else closed_predicate)(predicate)
     pq, cache = Path(pq).absolute(), Path(cache).absolute()
     native = REFERENCE.BUILD.PQ.verify(pq, target)
     captured['CGO_ENABLED'] = '1'
@@ -214,27 +259,49 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
         captured['ROUTERVPN_PQ_TEST_KEYS'] = str(keys)
         relay, relay_digest = NODE.build_layer_reference(compiler, work, captured, race)
         build = [compiler, 'test', '-c', '-p=1', '-mod=readonly', '-tags=' + TAGS, *race, '-ldflags=-checklinkname=0']
-        controls = []
+        controls, suites = [], []
         with REFERENCE.test_sources(source):
-            def compile_in(name, prospective, mutation=None):
+            compiled_overlays = {}
+
+            def compile_in(name, prospective, mutation=None, closed=False):
                 owned = work / name
                 owned.mkdir()
-                mapping = overlay(source, owned, prospective=prospective, mutation=mutation)
+                mapping = overlay(source, owned, prospective=prospective, mutation=mutation, closed=closed)
+                before_overlay = overlay_source_hashes(source, mapping)
                 binary = owned / 'node-pq-native.test.exe'
                 status, output = NODE.run([*build, '-overlay=' + str(mapping), '-o', binary, './protocol/routervpnpq'],
                                           cwd=source, env=captured, timeout=600)
                 if status:
                     raise ValueError('Windows PQ native compilation failed: ' + name + '\n' + output[-32768:])
+                if overlay_source_hashes(source, mapping) != before_overlay:
+                    raise ValueError('Windows PQ overlay changed during native compilation: ' + name)
+                compiled_overlays[name] = before_overlay
                 return binary
 
-            if prospective:
-                closed = compile_in('current-closed-capability', False)
-                status, output = NODE.run([closed, '-test.run=^' + CLOSED + '$', '-test.count=1', '-test.timeout=120s', '-test.v'],
-                                          cwd=source, env=captured, timeout=135)
+            def run_suite(binary, test, cases, timeout):
+                digest = PQ.regular_digest(binary)
+                name = binary.parent.name
+                mapping = binary.parent / 'overlay.json'
+                if overlay_source_hashes(source, mapping) != compiled_overlays[name]:
+                    raise ValueError('Windows PQ overlay changed before native execution: ' + name)
+                status, output = NODE.run([binary, '-test.run=^' + test + '$', '-test.count=1', '-test.timeout=' + str(timeout) + 's', '-test.v'],
+                                          cwd=source, env=captured, timeout=timeout + 15)
                 print(output, end='', flush=True)
-                if status:
-                    raise ValueError('Current unmodified PQ admission no longer rejects before native ownership')
-                required_output(output, CLOSED, PQ.MODES)
+                required_output(status, output, test, cases)
+                if PQ.regular_digest(binary) != digest or overlay_source_hashes(source, mapping) != compiled_overlays[name]:
+                    raise ValueError('Windows PQ executable or overlay changed during native execution: ' + name)
+                record = {'parent': test, 'cases': cases, 'binary_sha256': digest,
+                          'source_overlay_sha256': compiled_overlays[name],
+                          'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
+                suites.append(record)
+                return record
+
+            closed_name = 'current-closed-capability' if prospective else 'shipping-closed-capability'
+            closed = compile_in(closed_name, False, closed=not prospective)
+            closed_control = run_suite(closed, CLOSED, PQ.MODES, 120)
+            closed.unlink()
+            if closed.exists() or closed.is_symlink():
+                raise ValueError('Windows PQ closed-admission executable did not retire')
             binary = compile_in('native-composition', prospective)
             digest = PQ.regular_digest(binary)
             # Succession constructs original, trial and restored owners for all
@@ -243,25 +310,23 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
             # only this aggregate execution budget for the required work.
             for test, cases, timeout in ((OPEN, (), 15), (TRAFFIC, PQ.TRAFFIC, 480),
                                          (CREDENTIALS, PQ.CREDENTIALS, 900), (SUCCESSION, PQ.LAYERS, 720), (FOREIGN, (), FOREIGN_BUDGET)):
-                status, output = NODE.run([binary, '-test.run=^' + test + '$', '-test.count=1', '-test.timeout=' + str(timeout) + 's', '-test.v'],
-                                          cwd=source, env=captured, timeout=timeout + 15)
-                print(output, end='', flush=True)
-                if status:
-                    raise ValueError('Actual Windows PQ composition failed: ' + test)
-                required_output(output, test, cases)
-                if PQ.regular_digest(binary) != digest:
-                    raise ValueError('Windows PQ executable changed during native execution')
+                run_suite(binary, test, cases, timeout)
             for mutation in mutations(source):
                 name, test, selector, witness, _, _ = mutation
                 negative = compile_in(name, prospective, mutation)
                 negative_digest = PQ.regular_digest(negative)
+                if overlay_source_hashes(source, negative.parent / 'overlay.json') != compiled_overlays[name]:
+                    raise ValueError('Windows PQ control overlay changed before execution')
                 timeout = FOREIGN_BUDGET if test == FOREIGN else 90
                 status, output = NODE.run([negative, '-test.run=' + selector, '-test.count=1', '-test.timeout=' + str(timeout) + 's', '-test.v'],
                                           cwd=source, env=captured, timeout=timeout + 15)
                 rejected_control(status, output, mutation)
                 if PQ.regular_digest(negative) != negative_digest:
                     raise ValueError('Windows PQ control executable changed during execution')
-                controls.append({'name': name, 'binary_sha256': negative_digest, 'output_sha256': hashlib.sha256(output.encode()).hexdigest(), 'witness': witness})
+                if overlay_source_hashes(source, negative.parent / 'overlay.json') != compiled_overlays[name]:
+                    raise ValueError('Windows PQ control overlay changed during execution')
+                controls.append({'name': name, 'binary_sha256': negative_digest, 'source_overlay_sha256': compiled_overlays[name],
+                                 'output_sha256': hashlib.sha256(output.encode()).hexdigest(), 'witness': witness})
                 negative.unlink()
                 if negative.exists() or negative.is_symlink():
                     raise ValueError('Windows PQ joined control executable did not retire: ' + name)
@@ -273,10 +338,12 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
         result = {'schema': 1, 'target': target, 'source': before, 'native_pq': native,
                   'test_binary_sha256': digest, 'relay_sha256': relay_digest, 'prospective': prospective,
                   'prospective_predicate': {'before': PROSPECTIVE_BEFORE, 'after': PROSPECTIVE_AFTER} if prospective else None,
-                  'current_closed_admission_proved': prospective, 'native_firewall': 'actual-appid-scoped-wfp',
+                  'current_closed_admission_proved': prospective, 'closed_admission_control': closed_control,
+                  'closed_admission_source': 'unmodified' if prospective else 'exact-family-removed',
+                  'native_firewall': 'actual-appid-scoped-wfp',
                   'native_socket_source': 'actual-isolated-token', 'tun': 'modeled',
                   'traffic_cases': PQ.TRAFFIC, 'credential_cases': PQ.CREDENTIALS,
-                  'succession_cases': PQ.LAYERS, 'compiled_negative_controls': controls,
+                  'succession_cases': PQ.LAYERS, 'suites': suites, 'compiled_negative_controls': controls,
                   'public_admission': 'separate' if prospective else 'shipping-predicate', 'device_acceptance': 'separate'}
     publish_receipt(receipt_path, result, work)
     print('Actual Windows WFP, isolated two-root PQ transport, native rekey/readback, selected Home DNS, all three Start Layers, joined reversal and credential/ordinary-token controls passed; TUN, public host and device acceptance are separate.', flush=True)

@@ -3,9 +3,9 @@
 
 The retained separate peer executes the original MAX reference graph. Client
 permits and socket ownership use the actual shipping Windows factories; TUN is
-an explicit harmless boundary. --prospective adds only the four complete MAX
-families to the test compilation and first proves unmodified admission closed.
-It does not modify or enable the shipping/public predicate.
+an explicit harmless boundary. Normal execution uses unchanged shipping
+admission and a separately compiled exact-four-family closed control.
+--prospective retains the closed-source prerequisite before public activation.
 """
 from pathlib import Path
 import argparse
@@ -83,6 +83,10 @@ def prospective_predicate(raw):
             any('"' + mode + '"' in raw for mode in MODES)):
         raise ValueError('Prospective complete MAX lost its exact closed four-family source')
     return WFP.BOOT.IDENTITY.replace_once(raw, PROSPECTIVE_BEFORE, PROSPECTIVE_AFTER)
+
+
+def closed_predicate(raw):
+    return WPQ.closed_admission(raw, MODES)
 
 
 def native_parent(parent):
@@ -276,7 +280,9 @@ def mutations(source):
     return tuple(result)
 
 
-def overlay(source, directory, *, prospective, mutation=None):
+def overlay(source, directory, *, prospective, mutation=None, closed=False):
+    if closed and (prospective or mutation is not None):
+        raise ValueError('Closed MAX admission control cannot alter native execution controls')
     if mutation is not None and mutation not in mutations(source):
         raise ValueError('MAX mutation is not one of its exact compiled controls')
     selected = mutation[4] if mutation is not None else None
@@ -294,6 +300,8 @@ def overlay(source, directory, *, prospective, mutation=None):
 
     if prospective:
         add(PREDICATE, prospective_predicate((source / PREDICATE).read_text(encoding='utf-8')), 'prospective-max-predicate')
+    if closed:
+        add(PREDICATE, closed_predicate((source / PREDICATE).read_text(encoding='utf-8')), 'closed-max-predicate')
     if mutation is not None and mutation[5] is not None:
         sources = observed_control_sources(source, mutation)
         for index, (relative, raw) in enumerate(sorted(sources.items())):
@@ -348,6 +356,8 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
     target = captured['GOOS'] + '/' + architecture
     if target not in ('windows/amd64', 'windows/arm64') or captured.get('CGO_ENABLED', '1') != '1':
         raise ValueError('Complete MAX WFP requires matching-host Windows and the real CGO ABI')
+    predicate = (source / PREDICATE).read_text(encoding='utf-8')
+    (prospective_predicate if prospective else closed_predicate)(predicate)
     pq, cache = Path(pq).absolute(), Path(cache).absolute()
     native = REFERENCE.BUILD.PQ.verify(pq, target)
     captured['CGO_ENABLED'] = '1'
@@ -384,10 +394,10 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
         with REFERENCE.test_sources(source):
             compiled_overlays = {}
 
-            def compile_in(name, prospective, mutation=None):
+            def compile_in(name, prospective, mutation=None, closed=False):
                 owned = workspace / name
                 owned.mkdir()
-                selected = overlay(source, owned, prospective=prospective, mutation=mutation)
+                selected = overlay(source, owned, prospective=prospective, mutation=mutation, closed=closed)
                 before_overlay = overlay_source_hashes(source, selected)
                 binary = owned / 'complete-max-native.test.exe'
                 status, output = NODE.run([*build, '-overlay=' + str(selected), '-o', binary, './protocol/routervpnpq'], cwd=source, env=captured, timeout=600)
@@ -400,19 +410,30 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
 
             def run_suite(binary, parent, cases, timeout):
                 digest = MAX.regular_digest(binary)
+                name = binary.parent.name
+                mapping = binary.parent / 'overlay.json'
+                if overlay_source_hashes(source, mapping) != compiled_overlays[name]:
+                    raise ValueError('Windows MAX overlay changed before native execution: ' + name)
                 status, output = NODE.run([binary, '-test.run=^' + parent + '$', '-test.count=1', '-test.timeout=' + str(timeout) + 's', '-test.v'],
                                           cwd=source, env=captured, timeout=timeout + 15)
                 print(output, end='' if output.endswith('\n') else '\n', flush=True)
                 MAX.required_output(status, output, parent, cases)
                 if MAX.regular_digest(binary) != digest:
                     raise ValueError('Windows MAX executable changed during native execution')
-                suites.append({'parent': parent, 'cases': cases, 'binary_sha256': digest,
-                               'output_sha256': hashlib.sha256(output.encode('utf-8')).hexdigest()})
+                if overlay_source_hashes(source, mapping) != compiled_overlays[name]:
+                    raise ValueError('Windows MAX overlay changed during native execution: ' + name)
+                record = {'parent': parent, 'cases': cases, 'binary_sha256': digest,
+                          'source_overlay_sha256': compiled_overlays[name],
+                          'output_sha256': hashlib.sha256(output.encode('utf-8')).hexdigest()}
+                suites.append(record)
+                return record
 
-            if prospective:
-                closed = compile_in('unmodified-closed-capability', False)
-                run_suite(closed, CLOSED, MODES, 600)
-                closed.unlink()
+            closed_name = 'unmodified-closed-capability' if prospective else 'shipping-closed-capability'
+            closed = compile_in(closed_name, False, closed=not prospective)
+            closed_control = run_suite(closed, CLOSED, MODES, 600)
+            closed.unlink()
+            if closed.exists() or closed.is_symlink():
+                raise ValueError('Windows MAX closed-admission executable did not retire')
             binary = compile_in('native-composition', prospective)
             digest = MAX.regular_digest(binary)
             run_suite(binary, OPEN, (), 15)
@@ -433,6 +454,8 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
                 name, parent, case, witness, _, replacement = mutation
                 negative = compile_in(name, prospective, mutation)
                 negative_digest = MAX.regular_digest(negative)
+                if overlay_source_hashes(source, negative.parent / 'overlay.json') != compiled_overlays[name]:
+                    raise ValueError('Windows MAX control overlay changed before execution')
                 status, output = NODE.run([negative, '-test.run=' + MAX.selector(parent, case), '-test.count=1', '-test.timeout=90s', '-test.v'],
                                           cwd=source, env=captured, timeout=105)
                 try:
@@ -462,6 +485,8 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
                   'xray_pin': NODE.PREP.RELAY.XRAY.XRAY_PIN, 'xray_source': xray_records,
                   'key_generator_sha256': generator_digest, 'fresh_independent_keypairs': 3,
                   'prospective': prospective, 'current_closed_admission_proved': prospective,
+                  'closed_admission_control': closed_control,
+                  'closed_admission_source': 'unmodified' if prospective else 'exact-family-removed',
                   'prospective_predicate': {'before': PROSPECTIVE_BEFORE, 'after': PROSPECTIVE_AFTER} if prospective else None,
                   'traffic_cases': MAX.TRAFFIC, 'credential_cases': MAX.CREDENTIALS,
                   'succession_cases': tuple(mode + '/' + layer for mode in MODES for layer in LAYERS),

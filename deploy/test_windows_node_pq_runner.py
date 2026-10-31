@@ -35,6 +35,10 @@ class NativePQScope(unittest.TestCase):
             path = self.source / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             raw = (ROOT / actual).read_bytes()
+            if relative == GATE.PREDICATE and any(json.dumps(mode).encode() in raw for mode in GATE.PQ.MODES):
+                # Counterfactual closed-source fixture only; real shipping
+                # execution is covered independently below without overlays.
+                raw = GATE.closed_predicate(raw.decode()).encode()
             path.write_bytes(raw)
             self.original[relative] = raw
 
@@ -75,6 +79,48 @@ class NativePQScope(unittest.TestCase):
             with self.subTest(value=value[-40:]):
                 with self.assertRaises(ValueError):
                     GATE.prospective_predicate(value)
+
+    def shipping_predicate(self):
+        raw = GATE.prospective_predicate(self.original[GATE.PREDICATE].decode())
+        self.original[GATE.PREDICATE] = raw.encode()
+        (self.source / GATE.PREDICATE).write_text(raw)
+        return raw
+
+    def test_shipping_execution_keeps_its_predicate_and_only_closed_control_removes_pq(self):
+        raw = self.shipping_predicate()
+        shipping = self.assert_scope(GATE.overlay(self.source, self.directory('shipping'), prospective=False))
+        self.assertNotIn(str(self.source / GATE.PREDICATE), shipping)
+        closed = self.assert_scope(GATE.overlay(self.source, self.directory('shipping-closed'), prospective=False, closed=True))
+        self.assertEqual(set(closed) - set(shipping), {str(self.source / GATE.PREDICATE)})
+        actual = Path(closed[str(self.source / GATE.PREDICATE)]).read_text()
+        self.assertEqual(actual, raw.replace(GATE.PROSPECTIVE_AFTER[len(GATE.PROSPECTIVE_BEFORE):], '', 1))
+        for original in shipping:
+            self.assertEqual(Path(shipping[original]).read_bytes(), Path(closed[original]).read_bytes())
+        for mutation in GATE.mutations(self.source):
+            mapping = self.assert_scope(GATE.overlay(self.source, self.directory('shipping-' + mutation[0]), prospective=False, mutation=mutation))
+            self.assertNotIn(str(self.source / GATE.PREDICATE), mapping)
+
+    def test_closed_control_preserves_other_family_in_either_case_order(self):
+        raw = self.original[GATE.PREDICATE].decode()
+        other = ('max-quic-wg', 'max-quic-awg', 'max-tls-wg', 'max-tls-awg')
+        if any(json.dumps(mode) in raw for mode in other):
+            raw = GATE.closed_admission(raw, other)
+        own_case = GATE.PROSPECTIVE_AFTER[len(GATE.PROSPECTIVE_BEFORE):]
+        other_case = '\tcase ' + ', '.join(json.dumps(mode) for mode in other) + ':\n\t\treturn true\n'
+        for cases in (own_case + other_case, other_case + own_case):
+            combined = raw.replace(GATE.PROSPECTIVE_BEFORE, GATE.PROSPECTIVE_BEFORE + cases, 1)
+            self.assertEqual(GATE.closed_predicate(combined), combined.replace(own_case, '', 1))
+        opened = GATE.prospective_predicate(raw)
+        for wrong in (raw, opened + '\n// "wg-pq"\n', opened.replace('"awg2-pq"', '"other-pq"'),
+                      opened.replace(own_case, own_case.replace('return true', 'return false')),
+                      opened.replace('func DesktopNodePhysicalGraphSupported', 'func unrelated'),
+                      raw + '\n' + own_case):
+            with self.assertRaisesRegex(ValueError, 'exact shipping family|captured function'):
+                GATE.closed_predicate(wrong)
+        for kwargs in ({'prospective': True, 'closed': True},
+                       {'prospective': False, 'closed': True, 'mutation': GATE.mutations(self.source)[0]}):
+            with self.assertRaisesRegex(ValueError, 'cannot alter native execution controls'):
+                GATE.overlay(self.source, self.directory('conflict-' + str(len(kwargs))), **kwargs)
 
     def test_all_six_real_controls_keep_exact_native_scope_and_two_mode_admission(self):
         controls = GATE.mutations(self.source)
@@ -127,17 +173,56 @@ class NativePQScope(unittest.TestCase):
                     GATE.execute(self.source, self.work / 'pq', self.work / 'cache')
                 archive.assert_not_called()
 
+    def test_closed_main_requires_explicit_prospective_before_native_actions(self):
+        with patch.object(GATE.platform, 'system', return_value='Windows'), \
+             patch.object(GATE.WFP.BOOT.IDENTITY.ctypes, 'windll', create=True) as native, \
+             patch.object(GATE, 'checked_sources', return_value=(self.source, {})), \
+             patch.object(GATE.NODE, 'selected_compiler', return_value=(Path('go'), {'GOOS': 'windows', 'CGO_ENABLED': '1'}, 'arm64')), \
+             patch.object(GATE.REFERENCE.BUILD.PQ, 'verify') as archive:
+            native.shell32.IsUserAnAdmin.return_value = True
+            with self.assertRaisesRegex(ValueError, 'exact shipping family'):
+                GATE.execute(self.source, self.work / 'pq', self.work / 'cache')
+            archive.assert_not_called()
+
     def test_leaf_or_parent_omission_and_skip_cannot_satisfy_native_evidence(self):
         test = GATE.TRAFFIC
-        complete = '--- PASS: ' + test + ' (1s)\n' + ''.join('--- PASS: ' + test + '/' + case + ' (1s)\n' for case in GATE.PQ.TRAFFIC)
-        GATE.required_output(complete, test, GATE.PQ.TRAFFIC)
+        complete = '--- PASS: ' + test + ' (1s)\n' + ''.join('--- PASS: ' + test + '/' + case + ' (1s)\n' for case in GATE.PQ.TRAFFIC) + 'PASS\n'
+        GATE.required_output(0, complete, test, GATE.PQ.TRAFFIC)
+        GATE.required_output(0, complete.replace('\n', '\r\n'), test, GATE.PQ.TRAFFIC)
         for line in complete.splitlines():
             with self.subTest(line=line):
                 with self.assertRaisesRegex(ValueError, 'required real native case'):
-                    GATE.required_output(complete.replace(line, ''), test, GATE.PQ.TRAFFIC)
-        for marker in ('--- SKIP:', 'DATA RACE'):
+                    GATE.required_output(0, complete.replace(line, ''), test, GATE.PQ.TRAFFIC)
+        for marker in ('--- SKIP:', 'DATA RACE', 'FAIL', 'panic:', 'fatal:', 'testing: warning:', *GATE.CLEANUP_DIAGNOSTICS):
             with self.assertRaises(ValueError):
-                GATE.required_output(complete + marker, test, GATE.PQ.TRAFFIC)
+                GATE.required_output(0, complete + marker, test, GATE.PQ.TRAFFIC)
+        for line in complete.splitlines():
+            with self.assertRaises(ValueError):
+                GATE.required_output(0, complete.replace(line, 'fixture.go:1: ' + line), test, GATE.PQ.TRAFFIC)
+            if line != 'PASS':
+                with self.assertRaises(ValueError):
+                    GATE.required_output(0, complete + line + '\n', test, GATE.PQ.TRAFFIC)
+        with self.assertRaises(ValueError):
+            GATE.required_output(1, complete, test, GATE.PQ.TRAFFIC)
+
+    def test_compiled_overlay_receipt_rejects_aliases_and_changed_or_escaped_input(self):
+        selected = GATE.overlay(self.source, self.directory('overlay-source'), prospective=True)
+        captured = GATE.overlay_source_hashes(self.source, selected)
+        mapping = json.loads(selected.read_text())['Replace']
+        path = Path(mapping[str(self.source / GATE.PREDICATE)])
+        raw = path.read_bytes()
+        path.write_bytes(raw + b'\n// altered compiled predicate\n')
+        self.assertNotEqual(GATE.overlay_source_hashes(self.source, selected), captured)
+        path.unlink()
+        path.symlink_to(self.source / GATE.PREDICATE)
+        with self.assertRaises(ValueError):
+            GATE.overlay_source_hashes(self.source, selected)
+        path.unlink()
+        path.write_bytes(raw)
+        mapping[str(self.work / 'foreign.go')] = str(path)
+        selected.write_text(json.dumps({'Replace': mapping}))
+        with self.assertRaises(ValueError):
+            GATE.overlay_source_hashes(self.source, selected)
 
     def test_native_peer_cannot_drop_its_windows_cgo_or_test_tag(self):
         root = self.directory('tag-root')
@@ -234,7 +319,7 @@ class NativePQScope(unittest.TestCase):
         # Native execution is deliberately modeled here. Actual file lifetimes
         # and the real execute/standalone receipt paths are exercised on this OS.
         real_temporary = tempfile.TemporaryDirectory
-        state = {'paths': [], 'removed_controls': [], 'native_calls': [], 'native_timeouts': []}
+        state = {'paths': [], 'removed_controls': [], 'native_calls': [], 'native_timeouts': [], 'compiled_overlays': {}, 'closed_binary': None}
         controls = {item[0]: item for item in GATE.mutations(self.source)}
 
         @contextmanager
@@ -271,13 +356,26 @@ class NativePQScope(unittest.TestCase):
                 return 0, json.dumps({'Version': pinned.VERSION, 'Sum': pinned.SUM})
             if args[1:3] == ['test', '-c']:
                 binary = Path(args[args.index('-o') + 1])
+                closed = state['closed_binary']
+                if closed is not None:
+                    self.assertFalse(closed.exists(), 'closed-admission executable survived into positive compilation')
+                selected = Path(next(value.removeprefix('-overlay=') for value in args if value.startswith('-overlay=')))
+                mapping = json.loads(selected.read_text())['Replace']
+                state['compiled_overlays'][binary.parent.name] = {str(Path(original).relative_to(self.source)): Path(replacement).read_text()
+                                                                for original, replacement in mapping.items()}
                 binary.write_bytes(('test-only compiled ' + binary.parent.name).encode())
+                if binary.parent.name.endswith('closed-capability'):
+                    state['closed_binary'] = binary
+                if 'on_compile' in state:
+                    state['on_compile'](binary, selected)
                 return 0, ''
             binary = Path(args[0])
             for previous in state['removed_controls']:
                 self.assertFalse(previous.exists(), 'joined mutant accumulated before the next native case')
             state['native_calls'].append(args)
             state['native_timeouts'].append(_kwargs.get('timeout'))
+            if 'on_run' in state:
+                state['on_run'](binary)
             if binary.parent.name in controls:
                 state['removed_controls'].append(binary)
                 return 1, self.negative_output(controls[binary.parent.name])
@@ -321,8 +419,45 @@ class NativePQScope(unittest.TestCase):
         for args, outer_timeout in zip(state['native_calls'], state['native_timeouts'], strict=True):
             inner_timeout = int(next(value for value in args if value.startswith('-test.timeout=')).split('=', 1)[1][:-1])
             self.assertEqual(outer_timeout, inner_timeout + 15)
-            if Path(args[0]).parent.name not in ('current-closed-capability', 'native-composition'):
+            if Path(args[0]).parent.name not in ('current-closed-capability', 'shipping-closed-capability', 'native-composition'):
                 self.assertEqual(inner_timeout, 160 if Path(args[0]).parent.name == 'legacy-pq-adoption' else 90)
+
+    def test_shipping_execution_requires_separate_closed_proof_and_retains_all_six_controls(self):
+        raw = self.shipping_predicate()
+        receipt = self.work / 'shipping-native.json'
+        with self.receipt_harness(receipt) as state:
+            result = GATE.execute(self.source, self.work / 'pq', self.work / 'cache', receipt_path=receipt)
+        self.assertEqual(result['public_admission'], 'shipping-predicate')
+        self.assertFalse(result['prospective'])
+        self.assertEqual(result['closed_admission_source'], 'exact-family-removed')
+        self.assertEqual(len(result['compiled_negative_controls']), 6)
+        self.assertEqual(result['closed_admission_control']['parent'], GATE.CLOSED)
+        self.assertIn(GATE.PREDICATE, result['closed_admission_control']['source_overlay_sha256'])
+        self.assertFalse(state['closed_binary'].exists())
+        for name, mapping in state['compiled_overlays'].items():
+            if name == 'shipping-closed-capability':
+                self.assertEqual(mapping[GATE.PREDICATE], GATE.closed_predicate(raw))
+            else:
+                self.assertNotIn(GATE.PREDICATE, mapping)
+        self.assertTrue(all(item['source_overlay_sha256'] for item in result['compiled_negative_controls']))
+        self.assertEqual((self.source / GATE.PREDICATE).read_text(), raw)
+
+    def test_compiled_or_running_overlay_change_cannot_publish_any_receipt(self):
+        for phase in ('compile', 'closed', 'positive', 'negative'):
+            receipt = self.work / (phase + '-changed-overlay.json')
+            def changed(binary, selected=None):
+                applies = phase == 'compile' or phase == 'closed' and binary.parent.name == 'current-closed-capability' or \
+                    phase == 'positive' and binary.parent.name == 'native-composition' or phase == 'negative' and binary.parent.name == 'legacy-pq-adoption'
+                if not applies:
+                    return
+                mapping = json.loads((selected or binary.parent / 'overlay.json').read_text())['Replace']
+                path = Path(next(iter(mapping.values())))
+                path.write_text(path.read_text() + '\n// changed after exact capture\n')
+            with self.subTest(phase=phase), self.receipt_harness(receipt) as state:
+                state['on_compile' if phase == 'compile' else 'on_run'] = changed
+                with self.assertRaisesRegex(ValueError, 'overlay changed|executable or overlay changed'):
+                    GATE.execute(self.source, self.work / 'pq', self.work / 'cache', prospective=True, receipt_path=receipt)
+            self.assertFalse(receipt.exists())
 
     def test_execute_cleanup_error_or_unremoved_workspace_never_publishes(self):
         for cleanup, failure in (('error', OSError), ('retained', ValueError)):

@@ -4,7 +4,7 @@
 Subprocess models below exercise publication boundaries only. They cannot
 establish native Windows, WFP, cryptographic or physical-device acceptance.
 """
-from contextlib import ExitStack, redirect_stdout
+from contextlib import ExitStack, contextmanager, nullcontext, redirect_stdout
 from pathlib import Path
 import importlib.util
 import io
@@ -43,6 +43,10 @@ class MAXNativeBoundaries(unittest.TestCase):
             path = self.source / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             self.original[relative] = (ROOT / real).read_bytes()
+            if relative == GATE.PREDICATE and any(json.dumps(mode).encode() in self.original[relative] for mode in GATE.MODES):
+                # Closed-source compatibility fixture only; shipping-positive
+                # execution below retains its actual predicate unchanged.
+                self.original[relative] = GATE.closed_predicate(self.original[relative].decode()).encode()
             path.write_bytes(self.original[relative])
         # The source-only tests deliberately suppress modeled subprocess output.
         self.output = io.StringIO()
@@ -84,6 +88,50 @@ class MAXNativeBoundaries(unittest.TestCase):
                     expected, raw+'\n// "max-tls-awg"\n'):
             with self.assertRaises(ValueError):
                 GATE.prospective_predicate(raw)
+
+    def shipping_predicate(self):
+        raw = GATE.prospective_predicate(self.original[GATE.PREDICATE].decode())
+        self.original[GATE.PREDICATE] = raw.encode()
+        (self.source / GATE.PREDICATE).write_text(raw)
+        return raw
+
+    def test_shipping_positive_and_native_scope_controls_leave_predicate_unchanged(self):
+        scope = patch.object(GATE.MAX, 'mutations', return_value=())
+        scope.start()
+        self.addCleanup(scope.stop)
+        raw = self.shipping_predicate()
+        shipping = self.assert_native_scope(GATE.overlay(self.source, self.directory('shipping'), prospective=False))
+        self.assertNotIn(str(self.source / GATE.PREDICATE), shipping)
+        closed = self.assert_native_scope(GATE.overlay(self.source, self.directory('shipping-closed'), prospective=False, closed=True))
+        self.assertEqual(set(closed) - set(shipping), {str(self.source / GATE.PREDICATE)})
+        self.assertEqual(Path(closed[str(self.source / GATE.PREDICATE)]).read_text(), GATE.closed_predicate(raw))
+        for original in shipping:
+            self.assertEqual(Path(shipping[original]).read_bytes(), Path(closed[original]).read_bytes())
+        mutations = GATE.mutations(self.source)
+        self.assertEqual(len(mutations), 6)
+        for mutation in mutations:
+            selected = GATE.overlay(self.source, self.directory('shipping-' + mutation[0]), prospective=False, mutation=mutation)
+            self.assertNotIn(str(self.source / GATE.PREDICATE), self.assert_native_scope(selected))
+
+    def test_exact_max_closure_preserves_pq_admission_in_either_order(self):
+        raw = self.original[GATE.PREDICATE].decode()
+        if any(json.dumps(mode) in raw for mode in GATE.WPQ.PQ.MODES):
+            raw = GATE.WPQ.closed_predicate(raw)
+        own_case = GATE.PROSPECTIVE_AFTER[len(GATE.PROSPECTIVE_BEFORE):]
+        pq_case = GATE.WPQ.PROSPECTIVE_AFTER[len(GATE.WPQ.PROSPECTIVE_BEFORE):]
+        for cases in (own_case + pq_case, pq_case + own_case):
+            combined = raw.replace(GATE.PROSPECTIVE_BEFORE, GATE.PROSPECTIVE_BEFORE + cases, 1)
+            self.assertEqual(GATE.closed_predicate(combined), combined.replace(own_case, '', 1))
+        opened = GATE.prospective_predicate(raw)
+        for wrong in (raw, opened + '\n// "max-quic-wg"\n', opened.replace('"max-tls-awg"', '"other-max"'),
+                      opened.replace(own_case, own_case.replace('return true', 'return false')),
+                      opened.replace('func DesktopNodePhysicalGraphSupported', 'func unrelated')):
+            with self.assertRaises(ValueError):
+                GATE.closed_predicate(wrong)
+        for kwargs in ({'prospective': True, 'closed': True},
+                       {'prospective': False, 'closed': True, 'mutation': ('unrelated-control',)}):
+            with self.assertRaisesRegex(ValueError, 'cannot alter native execution controls'):
+                GATE.overlay(self.source, self.directory('conflict-' + str(len(kwargs))), **kwargs)
 
     def test_native_mutations_remain_scoped_and_cannot_replace_another_owner(self):
         with patch.object(GATE.MAX, 'mutations', return_value=()):
@@ -335,6 +383,180 @@ class MAXNativeBoundaries(unittest.TestCase):
         GATE.WPQ.publish_receipt(missing,{'joined':True},owner)
         self.assertTrue(json.loads(missing.read_text())['joined'])
 
+    def test_closed_main_requires_explicit_prospective_before_native_actions(self):
+        with patch.object(GATE.platform, 'system', return_value='Windows'), \
+             patch.object(GATE.WFP.BOOT.IDENTITY.ctypes, 'windll', create=True) as native, \
+             patch.object(GATE, 'repository_identity', return_value={'commit': 'a' * 40}), \
+             patch.object(GATE, 'checked_sources', return_value=(self.source, {})), \
+             patch.object(GATE.NODE, 'selected_compiler', return_value=(Path('go'), {'GOOS': 'windows', 'CGO_ENABLED': '1'}, 'arm64')), \
+             patch.object(GATE.REFERENCE.BUILD.PQ, 'verify') as archive:
+            native.shell32.IsUserAnAdmin.return_value = True
+            with self.assertRaisesRegex(ValueError, 'exact shipping family'):
+                GATE.execute(self.source, self.work / 'pq', self.work / 'cache')
+            archive.assert_not_called()
+
+    @contextmanager
+    def execution_harness(self, receipt):
+        # Native subprocesses and the separately tested generic 16-control
+        # driver are modeled. The six native scope controls, complete case
+        # registration, exact overlays, file hashes and cleanup execute here.
+        stack = ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(patch.object(GATE.MAX, 'mutations', return_value=()))
+        state = {'closed_binary': None, 'compiled_overlays': {}, 'native_calls': [], 'removed_controls': []}
+        controls = {item[0]: item for item in GATE.mutations(self.source)}
+        cache = self.work / 'cache'
+
+        def keys(target, _cache, path):
+            path.mkdir(parents=True)
+            (path / 'private-fixture-key').write_bytes(b'owned test-only key marker')
+            generator = cache / GATE.REFERENCE.BUILD.PQ.TARGETS[target] / 'release/examples/native_keys.exe'
+            generator.parent.mkdir(parents=True, exist_ok=True)
+            generator.write_bytes(b'owned test-only key generator')
+
+        def relay(_compiler, workspace, _env, _race):
+            binary = workspace / 'relay.exe'
+            binary.write_bytes(b'owned test-only relay')
+            return binary, GATE.MAX.regular_digest(binary)
+
+        def xray(_compiler, _source, workspace, _env, _race):
+            binary = workspace / 'xray.exe'
+            binary.write_bytes(b'owned test-only Xray')
+            source = workspace / 'xray-source'
+            source.mkdir()
+            return binary, GATE.MAX.regular_digest(binary), source, {'test-only-xray': 'source'}
+
+        def output(parent, cases=()):
+            return '\n'.join('--- PASS: ' + name + ' (0.01s)' for name in (parent, *(parent + '/' + case for case in cases))) + '\n'
+
+        def command(arguments, **kwargs):
+            self.assertFalse(receipt.exists(), 'success receipt preceded native proof and private cleanup')
+            args = [str(value) for value in arguments]
+            if args[1:3] == ['mod', 'verify']:
+                return 0, 'all modules verified\n'
+            if args[1:3] == ['list', '-m']:
+                pinned = GATE.REFERENCE.BUILD.POLICY.AMNEZIA
+                return 0, json.dumps({'Version': pinned.VERSION, 'Sum': pinned.SUM})
+            if args[1:3] == ['test', '-c']:
+                binary = Path(args[args.index('-o') + 1])
+                if state['closed_binary'] is not None:
+                    self.assertFalse(state['closed_binary'].exists(), 'closed-admission executable survived into positive compilation')
+                selected = Path(next(value.removeprefix('-overlay=') for value in args if value.startswith('-overlay=')))
+                mapping = json.loads(selected.read_text())['Replace']
+                state['compiled_overlays'][binary.parent.name] = {str(Path(original).relative_to(self.source)): Path(replacement).read_text()
+                                                                for original, replacement in mapping.items()}
+                binary.write_bytes(('owned test-only compiled ' + binary.parent.name).encode())
+                if binary.parent.name.endswith('closed-capability'):
+                    state['closed_binary'] = binary
+                if 'on_compile' in state:
+                    state['on_compile'](binary, selected)
+                return 0, ''
+            if args[1] == 'test':
+                return 0, output('TestWindowsNodeObserverTransportPeer') + 'PASS\n'
+            binary = Path(args[0])
+            for previous in state['removed_controls']:
+                self.assertFalse(previous.exists(), 'native mutants accumulated after their owned completion')
+            state['native_calls'].append((args, kwargs['timeout']))
+            if 'on_run' in state:
+                state['on_run'](binary)
+            if binary.parent.name in controls:
+                state['removed_controls'].append(binary)
+                _, parent, case, witness, _, _ = controls[binary.parent.name]
+                return 1, failure(parent, case, witness)
+            selector = next(value.removeprefix('-test.run=') for value in args if value.startswith('-test.run='))
+            if selector.startswith('^Test(RealPinnedFactory'):
+                return 0, ''.join(output(parent, ('v2', 'v3') if parent == 'TestRealPinnedFactoryExchangeAndRekey' else ())
+                                   for parent in GATE.MAX.PQ.NATIVE_CASES) + output(GATE.STARTUP_RECORDS) + 'PASS\n'
+            parent = selector[1:-1]
+            cases = {GATE.CLOSED: GATE.MODES, GATE.OPEN: (), GATE.MARKERS: GATE.MARKER_CASES,
+                     GATE.SUCCESSION: tuple(mode + '/' + layer for mode in GATE.MODES for layer in GATE.LAYERS), GATE.FOREIGN: GATE.MODES}
+            for family in GATE.MAX.FAMILIES:
+                cases['TestRouterVPNDesktopNodeWindowsMAX' + family] = GATE.MAX.TRAFFIC[family]
+                cases['TestRouterVPNDesktopNodeWindowsMAX' + family + 'Credentials'] = GATE.MAX.CREDENTIALS[family]
+            result = output(parent, cases[parent]) + 'PASS\n'
+            if parent == GATE.CLOSED and state.get('omit_closed_leaf'):
+                result = result.replace('--- PASS: ' + parent + '/' + GATE.MODES[-1] + ' (0.01s)\n', '')
+            return 0, result
+
+        with stack:
+            stack.enter_context(patch.object(GATE.platform, 'system', return_value='Windows'))
+            native = stack.enter_context(patch.object(GATE.WFP.BOOT.IDENTITY.ctypes, 'windll', create=True))
+            native.shell32.IsUserAnAdmin.return_value = True
+            stack.enter_context(patch.object(GATE, 'repository_identity', return_value={'commit': 'a' * 40, 'clean': True}))
+            stack.enter_context(patch.object(GATE, 'checked_sources', return_value=(self.source, {'test-model': 'source'})))
+            stack.enter_context(patch.object(GATE.NODE, 'selected_compiler', return_value=(Path('go'), dict(os.environ, GOOS='windows', CGO_ENABLED='1'), 'arm64')))
+            stack.enter_context(patch.object(GATE.MAX, 'tool_receipts', return_value={'test-only-tools': 'pinned'}))
+            stack.enter_context(patch.object(GATE.MAX, 'dependency_receipt', return_value={'test-only-dependencies': 'pinned'}))
+            stack.enter_context(patch.object(GATE.REFERENCE.BUILD.PQ, 'verify', return_value={'native_static_libs': []}))
+            stack.enter_context(patch.object(GATE.REFERENCE, 'generate_keys', side_effect=keys))
+            stack.enter_context(patch.object(GATE.REFERENCE, 'key_files', return_value={'test-only-key': 'unchanged'}))
+            stack.enter_context(patch.object(GATE.REFERENCE, 'test_sources', side_effect=lambda _source: nullcontext()))
+            stack.enter_context(patch.object(GATE.NODE, 'build_layer_reference', side_effect=relay))
+            stack.enter_context(patch.object(GATE.NODE, 'build_xray_reference', side_effect=xray))
+            stack.enter_context(patch.object(GATE.NODE, 'xray_reference_sources', return_value={'test-only-xray': 'source'}))
+            stack.enter_context(patch.object(GATE.NODE, 'run', side_effect=command))
+            yield state
+
+    def test_shipping_driver_requires_retired_closed_control_and_all_native_cases(self):
+        raw = self.shipping_predicate()
+        receipt = self.work / 'shipping-native-max.json'
+        with self.execution_harness(receipt) as state:
+            result = GATE.execute(self.source, self.work / 'pq', self.work / 'cache', receipt_path=receipt)
+        self.assertEqual(result['public_admission'], 'shipping-predicate')
+        self.assertFalse(result['prospective'])
+        self.assertEqual(result['closed_admission_source'], 'exact-family-removed')
+        self.assertEqual(result['closed_admission_control']['parent'], GATE.CLOSED)
+        self.assertEqual(len(result['compiled_negative_controls']), 6)
+        self.assertEqual(len(state['removed_controls']), 6)
+        self.assertTrue(result['private_key_workspace_removed'])
+        self.assertFalse(state['closed_binary'].exists())
+        for name, mapping in state['compiled_overlays'].items():
+            if name == 'shipping-closed-capability':
+                self.assertEqual(mapping[GATE.PREDICATE], GATE.closed_predicate(raw))
+            else:
+                self.assertNotIn(GATE.PREDICATE, mapping)
+        self.assertEqual((self.source / GATE.PREDICATE).read_text(), raw)
+        self.assertEqual(json.loads(receipt.read_text()), json.loads(json.dumps(result)))
+        for args, outer_timeout in state['native_calls']:
+            inner = int(next(value.removeprefix('-test.timeout=')[:-1] for value in args if value.startswith('-test.timeout=')))
+            self.assertEqual(outer_timeout, inner + 15)
+
+    def test_prospective_driver_preserves_unmodified_closed_prerequisite(self):
+        receipt = self.work / 'prospective-native-max.json'
+        with self.execution_harness(receipt) as state:
+            result = GATE.execute(self.source, self.work / 'pq', self.work / 'cache', prospective=True, receipt_path=receipt)
+        self.assertTrue(result['current_closed_admission_proved'])
+        self.assertEqual(result['closed_admission_source'], 'unmodified')
+        for name, mapping in state['compiled_overlays'].items():
+            self.assertEqual(GATE.PREDICATE in mapping, name != 'unmodified-closed-capability')
+
+    def test_missing_closed_leaf_blocks_positive_compilation_and_receipt(self):
+        self.shipping_predicate()
+        receipt = self.work / 'missing-closed-max.json'
+        with self.execution_harness(receipt) as state:
+            state['omit_closed_leaf'] = True
+            with self.assertRaisesRegex(ValueError, 'omitted or duplicated'):
+                GATE.execute(self.source, self.work / 'pq', self.work / 'cache', receipt_path=receipt)
+        self.assertEqual(set(state['compiled_overlays']), {'shipping-closed-capability'})
+        self.assertFalse(receipt.exists())
+
+    def test_changed_compile_or_execution_overlay_prevents_publication(self):
+        for phase in ('compile', 'closed', 'positive', 'negative'):
+            receipt = self.work / (phase + '-changed-max.json')
+            def changed(binary, selected=None):
+                applies = phase == 'compile' or phase == 'closed' and binary.parent.name == 'unmodified-closed-capability' or \
+                    phase == 'positive' and binary.parent.name == 'native-composition' or phase == 'negative' and binary.parent.name == GATE.mutations(self.source)[0][0]
+                if not applies:
+                    return
+                mapping = json.loads((selected or binary.parent / 'overlay.json').read_text())['Replace']
+                path = Path(next(iter(mapping.values())))
+                path.write_text(path.read_text() + '\n// changed after exact source capture\n')
+            with self.subTest(phase=phase), self.execution_harness(receipt) as state:
+                state['on_compile' if phase == 'compile' else 'on_run'] = changed
+                with self.assertRaisesRegex(ValueError, 'overlay changed'):
+                    GATE.execute(self.source, self.work / 'pq', self.work / 'cache', prospective=True, receipt_path=receipt)
+            self.assertFalse(receipt.exists())
+
     def test_standalone_receipt_waits_for_source_workspace_cleanup(self):
         for fail in (False, True):
             with self.subTest(cleanup_failure=fail):
@@ -392,7 +614,14 @@ class MAXNativeBoundaries(unittest.TestCase):
             self.assertIn('target: '+target,workflow)
         self.assertIn('timeout-minutes: 180',workflow)
         self.assertIn('timeout-minutes: 150',workflow)
-        self.assertIn('--standalone --prospective --sha $env:GITHUB_SHA --receipt',workflow)
+        shipping = (ROOT/'internal/mobilemultihop/desktop_node_admission.go').read_text()
+        try:
+            GATE.prospective_predicate(shipping)
+        except ValueError:
+            GATE.closed_predicate(shipping)
+            self.assertIn('--standalone --sha $env:GITHUB_SHA --receipt',workflow)
+        else:
+            self.assertIn('--standalone --prospective --sha $env:GITHUB_SHA --receipt',workflow)
         self.assertIn('if-no-files-found: error',workflow)
         self.assertIn('name: windows-max-native-${{ matrix.slug }}-${{ github.sha }}',workflow)
         self.assertIn("go-version: '1.26.3'",workflow)
