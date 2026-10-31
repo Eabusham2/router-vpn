@@ -48,7 +48,7 @@ type desktopLinuxNodeProcess struct {
 	joined                                    chan struct{}
 	waitErr                                   error // Read only after joined closes.
 	waitCode                                  uint32
-	closed, released                          bool
+	closed, released, finishing               bool
 	closeErr                                  error
 }
 

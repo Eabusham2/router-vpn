@@ -130,6 +130,7 @@ def execute(go='go'):
                 'internal/linuxprocess/close_on_exec_linux_test.go', 'internal/linuxprocess/close_on_exec_linux_native_test.go',
                 'internal/linuxprocess/channel_eof_linux_native_test.go',
                 'cmd/client/desktop_node_process_linux.go', 'cmd/client/desktop_node_process_linux_native_test.go',
+                'cmd/client/desktop_node_process_finish_linux.go', 'cmd/client/desktop_node_process_finish_linux_native_test.go',
                 'internal/linuxprotection/command_capture.go', 'internal/linuxprotection/command_capture_test.go'}
     if not required.issubset(before):
         raise ValueError('The actual controller privilege source/test closure is incomplete')
@@ -208,7 +209,7 @@ def execute(go='go'):
             if '--- PASS: TestLinuxOwnedControllerNamespaceJournalSurvivesUpgradeWithoutAdoption/'+case+' (' not in output:
                 raise ValueError('Linux journal omitted its stable inode/explicit creator recovery boundary: '+case)
         for case in ('live', 'engine-exit', 'parent-retirement', 'image-replacement', 'workspace-replacement',
-                     'wrong-capture', 'cancelled', 'wrong-verifier'):
+                     'wrong-capture', 'cancelled', 'wrong-verifier', 'finish-joined', 'finish-cancelled'):
             if '--- PASS: TestLinuxOwnedControllerNamespaceNodeEngineLauncher/'+case+' (' not in output:
                 raise ValueError('Linux engine launcher omitted its actual captured process boundary: '+case)
         after = binary.stat()

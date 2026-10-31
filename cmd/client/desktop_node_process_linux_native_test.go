@@ -95,6 +95,8 @@ func linuxNodeLauncherEngineFixture() error {
 			}
 		case "exit":
 			return nil
+		case "finish-hold":
+			return linuxNodeFinishEngineFixture(ctx, bootstrap, values["--runtime-dir"])
 		default:
 			return errors.New("native engine fixture received an unrelated message")
 		}
@@ -218,6 +220,10 @@ func linuxNodeLauncherFixture(controller *ownedDesktopController, scenario strin
 		}
 		switch scenario {
 		case "live":
+		case "finish-joined", "finish-cancelled":
+			if err := linuxNodeFinishParentFixture(ctx, process, bootstrap, directory, scenario == "finish-cancelled"); err != nil {
+				return err
+			}
 		case "engine-exit":
 			if err := bootstrap.Send(ctx, []byte("exit")); err != nil {
 				return err
@@ -301,7 +307,7 @@ func linuxNodeLauncherFixture(controller *ownedDesktopController, scenario strin
 }
 
 func TestLinuxOwnedControllerNamespaceNodeEngineLauncher(t *testing.T) {
-	for _, scenario := range []string{"live", "engine-exit", "parent-retirement", "image-replacement", "workspace-replacement", "wrong-capture", "cancelled", "wrong-verifier"} {
+	for _, scenario := range []string{"live", "engine-exit", "parent-retirement", "image-replacement", "workspace-replacement", "wrong-capture", "cancelled", "wrong-verifier", "finish-joined", "finish-cancelled"} {
 		t.Run(scenario, func(t *testing.T) {
 			installed := linuxControllerNamespaceInstall(t)
 			child := startLinuxNodeParentProcess(t, installed, "launcher/"+scenario)
