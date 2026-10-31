@@ -43,6 +43,7 @@ LAYERS = MAX.LAYERS
 CLOSED = 'TestRouterVPNDesktopNodeWindowsMAXCapabilityClosed'
 OPEN = 'TestRouterVPNDesktopNodeWindowsMAXCapabilityOpen'
 MARKERS = 'TestRouterVPNDesktopNodeWindowsMAXMarkers'
+MARKER_CASES = ('bounded-input', 'unarmed-and-wrong-owner', 'encrypted-fragments', 'exact-armed-stream', 'marker-and-authentication')
 STARTUP_RECORDS = MAX.STARTUP_RECORDS
 SUCCESSION = 'TestRouterVPNDesktopNodeWindowsMAXSuccession'
 FOREIGN = 'TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor'
@@ -415,7 +416,7 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
             binary = compile_in('native-composition', prospective)
             digest = MAX.regular_digest(binary)
             run_suite(binary, OPEN, (), 15)
-            run_suite(binary, MARKERS, ('bounded-input', 'unarmed-and-wrong-owner', 'encrypted-fragments', 'exact-armed-stream'), 30)
+            run_suite(binary, MARKERS, MARKER_CASES, 30)
             status, output = NODE.run([binary, '-test.run=^Test(RealPinnedFactory|RealFactory|RealPQTraffic)|^' + STARTUP_RECORDS + '$', '-test.v', '-test.count=1', '-test.timeout=120s'],
                                       cwd=source, env=captured, timeout=135)
             print(output, end='' if output.endswith('\n') else '\n', flush=True)

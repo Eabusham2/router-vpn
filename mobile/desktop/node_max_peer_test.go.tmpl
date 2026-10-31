@@ -40,6 +40,7 @@ import (
 	XR "github.com/sagernet/sing-box/protocol/routervpnxray"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	HY "github.com/sagernet/sing-quic/hysteria2"
+	SS "github.com/sagernet/sing-shadowsocks"
 	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
@@ -188,16 +189,23 @@ func nodeMAXSS(t *testing.T, packet *net.UDPConn, stream net.Listener, secret st
 					_ = connection.Close()
 					return
 				}
-				go func(connection net.Conn) {
-					defer s.leave(connection)
-					if err := service.NewConnection(ctx, &nodeMAXTLSCountedConn{hooks.stream(s, connection), s}, M.Metadata{Source: M.SocksaddrFromNet(connection.RemoteAddr())}); err != nil {
-						s.rejected.Add(1)
-					}
-				}(connection)
+				go nodeMAXSSStream(s, service, connection, hooks)
 			}
 		}()
 	}
 	return s
+}
+
+func nodeMAXSSStream(s *nodePQLayer, service SS.Service, connection net.Conn, hooks *nodeMAXReferenceHooks) error {
+	defer s.leave(connection)
+	counted := &nodeMAXTLSCountedConn{Conn: hooks.stream(s, connection), owner: s}
+	err := service.NewConnection(s.ctx, counted, M.Metadata{Source: M.SocksaddrFromNet(connection.RemoteAddr())})
+	// A consumed private marker and an empty readiness connection both end at
+	// EOF before any ciphertext reaches SS2022. Neither is a key rejection.
+	if err != nil && counted.received.Load() != 0 {
+		s.rejected.Add(1)
+	}
+	return err
 }
 
 func nodeMAXHY(t *testing.T, packet *net.UDPConn, secret, certificate, key string, middle M.Socksaddr, target string, hooks *nodeMAXReferenceHooks) *nodePQLayer {
@@ -251,10 +259,10 @@ type nodeMAXFixture struct {
 type nodeMAXAssembler func(*testing.T, *nodePQFixture, net.Interface, netip.Addr, string, string, []byte, []byte, map[netip.AddrPort]bool) *nodePQFixture
 
 type nodeMAXReferenceHooks struct {
-	Interface func(*testing.T) (net.Interface, netip.Addr)
+	Interface   func(*testing.T) (net.Interface, netip.Addr)
 	InnerRoutes func(*testing.T, *nodePQFixture, netip.Addr, map[M.Socksaddr]string) map[M.Socksaddr]string
-	Packet func(*nodePQLayer, net.PacketConn, string) net.PacketConn
-	Stream func(*nodePQLayer, net.Conn) net.Conn
+	Packet      func(*nodePQLayer, net.PacketConn, string) net.PacketConn
+	Stream      func(*nodePQLayer, net.Conn) net.Conn
 }
 
 func (h *nodeMAXReferenceHooks) packet(owner *nodePQLayer, connection net.PacketConn, password string) net.PacketConn {

@@ -32,6 +32,7 @@ import (
 	XR "github.com/sagernet/sing-box/protocol/routervpnxray"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
 	M "github.com/sagernet/sing/common/metadata"
 )
 
@@ -1054,6 +1055,7 @@ func nodeMAXWFPCredentials(t *testing.T, modes, outerFaults []string) {
 							t.Fatal("actual WFP MAX accepted a wrong captured packet peer after native KEM")
 						}
 					} else {
+						before := peer.observe(t, "stats")
 						done := make(chan error, 1)
 						go func() { done <- f.box.RouterVPNStrategyStart() }()
 						completed := false
@@ -1070,17 +1072,17 @@ func nodeMAXWFPCredentials(t *testing.T, modes, outerFaults []string) {
 							witnessed := false
 							switch fault {
 							case "kem-peer":
-								witnessed = observed.KEMRejected != 0
+								witnessed = observed.KEMRejected > before.KEMRejected
 							case "middle-key":
-								witnessed = observed.MiddleRejected != 0
+								witnessed = observed.MiddleRejected > before.MiddleRejected && observed.MiddleRaw > before.MiddleRaw
 							case "outer-password":
-								witnessed = completed && observed.OuterRejected != 0
+								witnessed = completed && observed.OuterRejected > before.OuterRejected
 							case "outer-mlkem-key":
-								witnessed = completed && observed.OuterRaw != 0 && observed.MLKEMRejected
+								witnessed = completed && observed.OuterRaw > before.OuterRaw && !before.MLKEMRejected && observed.MLKEMRejected
 							case "outer-user":
-								witnessed = completed && observed.OuterRaw != 0 && observed.UserRejected
+								witnessed = completed && observed.OuterRaw > before.OuterRaw && !before.UserRejected && observed.UserRejected
 							case "outer-name", "outer-trust", "outer-reality-key":
-								witnessed = completed && observed.OuterRaw != 0 && observed.OuterRejected == 0
+								witnessed = completed && observed.OuterRaw > before.OuterRaw && observed.OuterRejected == before.OuterRejected
 							}
 							if witnessed || completed {
 								if !witnessed {
@@ -1122,8 +1124,8 @@ func nodeMAXWFPCredentials(t *testing.T, modes, outerFaults []string) {
 						}
 					}
 					retained = f.prepared
-					if retained.Validate() != nil || f.admitted != 1 {
-						t.Fatal("MAX credential rejection bypassed exact native prepared ownership")
+					if err := retained.Validate(); err != nil || f.admitted != 1 {
+						t.Fatal("MAX credential rejection bypassed exact native prepared ownership", "admissions", f.admitted, "prepared", err)
 					}
 					retained = nodePQWFPDrain(t, f)
 					nodeMAXWFPRequireBlocked(t, peer)
@@ -1219,6 +1221,7 @@ func TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor(t *testing.T) {
 }
 
 func TestRouterVPNDesktopNodeWindowsMAXMarkers(t *testing.T) {
+	t.Run("marker-and-authentication", nodeMAXWFPMarkerAuthentication)
 	t.Run("bounded-input", func(t *testing.T) {
 		for _, value := range []string{"short\n", strings.Repeat("x", 8192) + "\n"} {
 			got, err := nodeMAXWFPReadLine(bufio.NewReaderSize(strings.NewReader(value), 32), len(value))
@@ -1320,4 +1323,88 @@ func TestRouterVPNDesktopNodeWindowsMAXMarkers(t *testing.T) {
 			t.Fatal("MAX armed marker lost its exact echo or joined observation", writeErr, readErr, joined, countErr)
 		}
 	})
+}
+
+func nodeMAXWFPMarkerAuthentication(t *testing.T) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	owner := &nodePQLayer{ctx: ctx, cancel: cancel, owned: make(map[io.Closer]bool)}
+	observed := &nodeMAXWFPObservation{owner: owner}
+	password := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32))
+	service, err := shadowaead_2022.NewServiceWithPassword(mobilemultihop.NativeStartLayerMethod, password, 10, owner, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks := &nodeMAXReferenceHooks{Stream: func(actual *nodePQLayer, connection net.Conn) net.Conn {
+		return &nodeMAXWFPObservedStream{Conn: connection, owner: actual, observation: observed, reader: bufio.NewReader(connection)}
+	}}
+	run := func(client func(net.Conn) error) (error, error) {
+		left, right := net.Pipe()
+		defer left.Close()
+		defer right.Close()
+		deadline := time.Now().Add(2 * time.Second)
+		if err := errors.Join(left.SetDeadline(deadline), right.SetDeadline(deadline)); err != nil {
+			t.Fatal("MAX marker authentication fixture lost its bounded pipes", err)
+		}
+		if !owner.enter(left) {
+			t.Fatal("MAX marker authentication fixture lost its retained connection")
+		}
+		done := make(chan error, 1)
+		go func() { done <- nodeMAXSSStream(owner, service, left, hooks) }()
+		clientErr := client(right)
+		_ = right.Close()
+		_ = left.Close()
+		select {
+		case serverErr := <-done:
+			owner.workers.Wait()
+			owner.mu.Lock()
+			remaining := len(owner.owned)
+			owner.mu.Unlock()
+			if remaining != 0 {
+				t.Fatal("MAX marker authentication retained a completed connection")
+			}
+			return serverErr, clientErr
+		case <-time.After(3 * time.Second):
+			t.Fatal("MAX marker authentication service did not join")
+			return nil, nil
+		}
+	}
+	nonce := strings.Repeat("d", 32)
+	if err := observed.arm(nonce); err != nil {
+		t.Fatal(err)
+	}
+	serverErr, clientErr := run(func(connection net.Conn) error {
+		marker := []byte(nodeMAXWFPProbePrefix + nonce)
+		if n, err := connection.Write(marker); err != nil || n != len(marker) {
+			return errors.Join(err, io.ErrShortWrite)
+		}
+		answer := make([]byte, len(marker))
+		if _, err := io.ReadFull(connection, answer); err != nil {
+			return err
+		}
+		if !bytes.Equal(answer, marker) {
+			return errors.New("MAX marker authentication received another owner's response")
+		}
+		return nil
+	})
+	count, countErr := observed.count(nonce)
+	if clientErr != nil || !errors.Is(serverErr, io.EOF) || countErr != nil || count != 1 || owner.raw.Load() != 0 || owner.rejected.Load() != 0 {
+		t.Fatal("MAX armed marker EOF counted as a credential rejection", serverErr, clientErr, countErr, "raw", owner.raw.Load(), "rejected", owner.rejected.Load())
+	}
+	wrong := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x24}, 32))
+	method, err := shadowaead_2022.NewWithPassword(mobilemultihop.NativeStartLayerMethod, wrong, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverErr, clientErr = run(func(connection net.Conn) error {
+		encrypted, err := method.DialConn(connection, M.ParseSocksaddr("192.0.2.99:9999"))
+		if encrypted != nil {
+			_ = encrypted.Close()
+		}
+		return err
+	})
+	if serverErr == nil || !strings.Contains(serverErr.Error(), "cipher: message authentication failed") || owner.raw.Load() == 0 || owner.rejected.Load() != 1 {
+		t.Fatal("MAX actual AES key rejection has no authenticated ciphertext witness", serverErr, clientErr, "raw", owner.raw.Load(), "rejected", owner.rejected.Load())
+	}
 }

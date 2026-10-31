@@ -166,12 +166,14 @@ func nodeMAXTLS(t *testing.T, ip netip.Addr, middle M.Socksaddr, target, fault s
 
 type nodeMAXTLSCountedConn struct {
 	net.Conn
-	owner *nodePQLayer
+	owner    *nodePQLayer
+	received atomic.Int64
 }
 
 func (c *nodeMAXTLSCountedConn) Read(body []byte) (int, error) {
 	n, err := c.Conn.Read(body)
 	if n > 0 {
+		c.received.Add(int64(n))
 		c.owner.raw.Add(1)
 		if bytes.Contains(body[:n], []byte(nodePQPayload)) {
 			c.owner.plain.Store(true)
@@ -200,7 +202,7 @@ func nodeMAXTLSForward(s *nodePQLayer, incoming net.Conn, target string, hooks *
 	joined := make(chan struct{})
 	go func() {
 		defer close(joined)
-		_, _ = io.Copy(outgoing, &nodeMAXTLSCountedConn{readable, s})
+		_, _ = io.Copy(outgoing, &nodeMAXTLSCountedConn{Conn: readable, owner: s})
 		_ = outgoing.Close()
 		_ = incoming.Close()
 	}()
