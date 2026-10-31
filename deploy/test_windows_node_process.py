@@ -428,9 +428,13 @@ def execute(go="go", *, env=None):
             raise ValueError("Actual Windows Node process fixture did not compile:\n" + output[-32768:])
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
         expression = "^(" + "|".join(REQUIRED) + ")$"
+        # The expanded public graph/layer matrix is sequential: the actual
+        # Windows baseline already spent 119 s in passing cases before its
+        # final ownership leaves. Bound the aggregate separately from every
+        # unchanged operation deadline and 60 s individual negative control.
         status, output = NATIVE.run(
-            [binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=120s", "-test.v"],
-            cwd=ROOT / "cmd/client", env=captured, timeout=135)
+            [binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=240s", "-test.v"],
+            cwd=ROOT / "cmd/client", env=captured, timeout=255)
         report_baseline(status, output)
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("Native Node process fixture changed during execution")

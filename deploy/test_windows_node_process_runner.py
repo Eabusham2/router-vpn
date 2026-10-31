@@ -4,6 +4,7 @@ from pathlib import Path
 import importlib.util
 import io
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -106,6 +107,35 @@ class NodeProcessRunner(unittest.TestCase):
         with patch.object(GATE.platform, "system", return_value="Linux"):
             with self.assertRaisesRegex(ValueError, "actual Windows execution"):
                 GATE.execute()
+
+    def test_expanded_baseline_keeps_individual_control_deadlines(self):
+        controls = {name: (test, witness) for _, name, test, witness, _ in GATE.mutants()}
+        executions = []
+
+        def run(command, *, cwd, env, timeout):
+            if "-o" in command:
+                Path(command[command.index("-o") + 1]).write_bytes(b"retained compiled fixture")
+                return 0, ""
+            executions.append((command, timeout))
+            if Path(command[0]).name == "node-process.test.exe":
+                return 0, "\n".join("--- PASS: " + name + " (0.01s)" for name in GATE.EXPECTED)
+            test, witness = controls[Path(command[0]).name.removesuffix(".test.exe")]
+            return 1, "--- FAIL: " + test + " (0.01s)\n    source_test.go:1: " + witness + "\n"
+
+        native = SimpleNamespace(shell32=SimpleNamespace(IsUserAnAdmin=lambda: True))
+        with patch.object(GATE.platform, "system", return_value="Windows"), \
+             patch.object(GATE.ctypes, "windll", native, create=True), \
+             patch.object(GATE.NATIVE, "selected_compiler", return_value=("go", {}, "amd64")), \
+             patch.object(GATE.NATIVE, "run", side_effect=run), \
+             patch.object(GATE, "report_baseline", wraps=GATE.check_baseline), \
+             patch("sys.stdout", new_callable=io.StringIO):
+            GATE.execute()
+        self.assertEqual(len(executions), 1 + len(controls))
+        self.assertIn("-test.timeout=240s", executions[0][0])
+        self.assertEqual(executions[0][1], 255)
+        for command, timeout in executions[1:]:
+            self.assertIn("-test.timeout=60s", command)
+            self.assertEqual(timeout, 75)
 
 
 if __name__ == "__main__":

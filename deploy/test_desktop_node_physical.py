@@ -481,9 +481,10 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             if status:
                 raise ValueError("Node " + name + " native compilation failed:\n" + output[-32768:])
             digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-            # The composite suite has independent real credential
-            # attempts; each network deadline remains unchanged.
-            duration = 180 if name == "composite-credentials" else 90
+            # Encrypted graph/layer and selected-DNS cases alone consumed
+            # 89.58 s on Windows before the required pre-ready cases began.
+            # These two expanded aggregates retain every per-operation bound.
+            duration = 180 if name in ("encrypted", "composite-credentials") else 90
             status, output = run([binary, "-test.run=" + selector, "-test.count=1", "-test.timeout=" + str(duration) + "s", "-test.v"], cwd=source, env=captured, timeout=duration + 15)
             print(output, end="" if output.endswith("\n") else "\n", flush=True)
             if status or any("--- PASS: " + test + " (" not in output for test in required) or "--- SKIP:" in output or "DATA RACE" in output:

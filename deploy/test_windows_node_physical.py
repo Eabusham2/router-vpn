@@ -143,8 +143,8 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         # Composite adds six simultaneous two-lane graphs, twenty independently
         # authenticated failures and two reversals. Keep every per-operation
         # deadline and require each new leaf in this bounded aggregate run.
-        status, output = BOOT.IDENTITY.run([binary, "-test.run=^TestRouterVPNDesktopNodeWindowsWFP", "-test.count=1", "-test.timeout=600s", "-test.v"],
-                                           cwd=source, env=captured, timeout=615)
+        status, output = BOOT.IDENTITY.run([binary, "-test.run=^TestRouterVPNDesktopNodeWindowsWFP", "-test.count=1", "-test.timeout=1200s", "-test.v"],
+                                           cwd=source, env=captured, timeout=1215)
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if status or any("--- PASS: " + test + " (" not in output for test in REQUIRED) or any(value in output for value in ("--- SKIP:", "DATA RACE")):
             raise ValueError("Actual WFP encrypted Node omitted a required native proof")
