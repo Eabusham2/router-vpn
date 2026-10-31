@@ -73,6 +73,7 @@ func linuxControllerFixtureCreatePipe() error {
 
 func linuxControllerFixtureBootstrap() error {
 	held := os.Getenv("ROUTERVPN_CONTROLLER_FIXTURE_HELD") == "1"
+	nodeParentCase := os.Getenv("ROUTERVPN_CONTROLLER_NODE_PARENT_CASE")
 	owned, err := prepareLinuxOwnedController(os.Args[1:])
 	if err != nil {
 		return err
@@ -108,6 +109,9 @@ func linuxControllerFixtureBootstrap() error {
 		if err != nil || bytes.Contains(raw, []byte(testLocalControllerAccess)) || bytes.Contains(raw, []byte(testControllerOwner)) {
 			return errors.New("private stdin credentials entered actual process discovery")
 		}
+	}
+	if nodeParentCase != "" {
+		return linuxNodeParentFixture(owned, nodeParentCase)
 	}
 	if !held {
 		fmt.Fprintln(os.Stdout, "prepared")

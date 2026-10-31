@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -29,7 +30,11 @@ func validateLinuxOwnedStartup(owned *linuxOwnedController) error {
 			owned.input == nil || owned.installLock == nil || owned.processLock == nil || owned.ownerDone == nil {
 			return errors.New("the installed controller lost its captured privileged launch")
 		}
-		return nil
+		parent, ok := owned.nodeParent.(*desktopLinuxNodeParent)
+		if !ok || parent == nil || parent.controller != owned {
+			return errors.New("the installed controller lost its retained Linux parent")
+		}
+		return parent.Current(context.Background())
 	}
 	if os.Geteuid() != 0 {
 		return nil
@@ -139,6 +144,11 @@ func prepareLinuxOwnedController(arguments []string) (_ *linuxOwnedController, f
 	syscall.Umask(0077)
 	done := make(chan struct{})
 	owned.ownerDone = done
+	parent, err := newDesktopLinuxNodeParent(owned)
+	owned.nodeParent = parent // Retain every returned partial native owner for teardown.
+	if err != nil {
+		return nil, err
+	}
 	go func() {
 		// EOF (desktop death) or any second message permanently retires this
 		// owner. The HTTP lifecycle drains all native work before process exit.

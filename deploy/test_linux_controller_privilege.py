@@ -24,7 +24,7 @@ UID = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UID)
 CASES = ('FixedInstallAndPipeLifetime', 'RejectsUnsafeInstallAndConfig',
          'RejectsForeignIdentityAndInput', 'HonorsInstallAndProcessLocks', 'RequiresBoundedHandshake',
-         'RejectsUnownedInstalledMainPreservesUtilities')
+         'RejectsUnownedInstalledMainPreservesUtilities', 'NodeParentRetainsExactObjects', 'NodeParentLifetimeAndRestart')
 
 
 def source_identity():
@@ -86,7 +86,8 @@ def execute(go='go'):
     before = source_identity()
     required = {'cmd/client/controller_local_auth.go', 'cmd/client/controller_local_auth_test.go',
                 'cmd/client/controller_privilege_linux.go', 'cmd/client/controller_privilege_linux_test.go',
-                'cmd/client/controller_privilege_linux_namespace_test.go'}
+                'cmd/client/controller_privilege_linux_namespace_test.go', 'cmd/client/desktop_node_linux_parent.go',
+                'cmd/client/desktop_node_linux_parent_native_test.go'}
     if not required.issubset(before):
         raise ValueError('The actual controller privilege source/test closure is incomplete')
     env = dict(os.environ, GOWORK='off')
@@ -113,6 +114,12 @@ def execute(go='go'):
         for ending in ('eof', 'second-byte'):
             if '--- PASS: TestLinuxOwnedControllerNamespaceFixedInstallAndPipeLifetime/'+ending+' (' not in output:
                 raise ValueError('Controller did not execute its actual anonymous-pipe retirement case')
+            if '--- PASS: TestLinuxOwnedControllerNamespaceNodeParentLifetimeAndRestart/'+ending+' (' not in output:
+                raise ValueError('Node parent did not execute its actual retained GUI lifetime and restart')
+        for case in ('root', 'image', 'image-descriptor', 'root-descriptor', 'network-namespace-descriptor',
+                     'pid-namespace-descriptor', 'install-lock', 'process-lock', 'profile-root', 'application-owner', 'retire'):
+            if '--- PASS: TestLinuxOwnedControllerNamespaceNodeParentRetainsExactObjects/'+case+' (' not in output:
+                raise ValueError('Node parent omitted its captured native object substitution or retirement: '+case)
         after = binary.stat()
         if (after.st_dev, after.st_ino, after.st_size) != (info.st_dev, info.st_ino, info.st_size) or hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError('The actual controller test executable changed during verification')

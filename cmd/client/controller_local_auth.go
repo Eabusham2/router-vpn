@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"time"
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/controllertransport"
@@ -36,6 +38,14 @@ type ownedDesktopController struct {
 	closeOnce   sync.Once
 	pinnedTLS   *controllertransport.Identity
 	nativeOwner ownedDesktopNativeOwner
+	nodeParent  ownedDesktopNodeParent
+}
+
+// A Unix Node parent retains only its own additional native witnesses. The
+// controller's original GUI input and install/process locks remain owned by
+// this controller until every retained parent witness has joined.
+type ownedDesktopNodeParent interface {
+	Close(context.Context) error
 }
 
 // Native Windows ownership is a retained kernel process/pipe capture, not a
@@ -56,6 +66,16 @@ type linuxOwnedController = ownedDesktopController
 func (c *ownedDesktopController) close() {
 	if c == nil {
 		return
+	}
+	if c.nodeParent != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := c.nodeParent.Close(ctx)
+		cancel()
+		if err != nil {
+			// Retain the original locks on a partial join. A later close may
+			// retry this same parent; never close a replacement's descriptors.
+			return
+		}
 	}
 	c.closeOnce.Do(func() {
 		if c.nativeOwner != nil {
