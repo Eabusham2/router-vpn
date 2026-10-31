@@ -35,7 +35,11 @@ func desktopNodeCommandOriginalWithLayer(t *testing.T, layer string) *mobilemult
 	profile, _ := json.Marshal(map[string]any{"id": "captured-router", "node_kind": "router-vpn", "node_proof_id": hex.EncodeToString(node[:]), "router_api": "http://10.77.0.1:8787", "api_token": "private-fixture-token", "endpoint": "192.0.2.44", "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "kill_switch_policy": "always", "ipv6_mode": "off", "home_lan_access": false, "mtu_policy": "auto", "start_layer": layer})
 	var start string
 	if layer != "" {
-		graph, _ := json.Marshal(map[string]any{"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "192.0.2.44", "server_port": 443, "method": "2022-blake3-aes-256-gcm", "password": private}}})
+		graph, _ := json.Marshal(map[string]any{
+			"inbounds":  []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
+			"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "192.0.2.44", "server_port": 443, "method": "2022-blake3-aes-256-gcm", "password": private}},
+			"route":     map[string]any{"final": "proxy", "rules": []any{}},
+		})
 		assets, _ := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(graph)})
 		start = string(assets)
 	}
@@ -44,6 +48,25 @@ func desktopNodeCommandOriginalWithLayer(t *testing.T, layer string) *mobilemult
 		t.Fatal(err)
 	}
 	return original
+}
+
+// Compile the exact private source consumed by the Windows command before any
+// OS-specific file/IPC work. This also catches incomplete same-node Start Layer
+// assets on hosts where the sealed Windows command itself cannot execute.
+func TestRouterVPNDesktopNodePhysicalCommandHysteria2CompleteStartSource(t *testing.T) {
+	for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		label := layer
+		if label == "" {
+			label = "off"
+		}
+		t.Run(label, func(t *testing.T) {
+			original := desktopNodeCommandHysteria2Original(t, layer)
+			policy, err := mobilemultihop.NewDesktopNodePolicy(original, desktopExternalSession, "windows")
+			if err != nil || policy == nil || policy.Config() == "" {
+				t.Fatal("complete Hysteria command source did not compile its exact native policy", err)
+			}
+		})
+	}
 }
 
 // This fixture runs the actual private-file handshake independently of the
