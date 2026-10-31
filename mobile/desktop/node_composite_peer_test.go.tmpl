@@ -20,20 +20,30 @@ import (
 	M "github.com/sagernet/sing/common/metadata"
 )
 
-func desktopNodeCompositeMode(mode string) bool { return mode == "split" || mode == "max" }
+func desktopNodeCompositeMode(mode string) bool {
+	return mode == "split" || mode == "max" || mode == "ss-v2ray"
+}
 
 // Both independently authenticated peers remain in the one retained reference
 // process. The client consumes their original private assets in the shipping
 // composite compiler; no payload can fall back to a single transport fixture.
 func startDesktopNodeCompositeServer(t *testing.T, mode string, ip netip.Addr, dnsAddress string) (*desktopNodeLayerServer, *desktopNodeLayerServer, string) {
 	t.Helper()
-	xrayMode := "reality-vision"
-	if mode == "max" {
-		xrayMode = "reality-pq-vision"
-	} else if mode != "split" {
-		t.Fatal("composite reference has another TCP graph")
+	var tcp *desktopNodeLayerServer
+	var tcpFiles string
+	helper := "xray.json"
+	if mode == "ss-v2ray" {
+		helper = "sslocal.json"
+		tcp, tcpFiles = startDesktopNodeSIP003Server(t, ip, dnsAddress)
+	} else {
+		xrayMode := "reality-vision"
+		if mode == "max" {
+			xrayMode = "reality-pq-vision"
+		} else if mode != "split" {
+			t.Fatal("composite reference has another TCP graph")
+		}
+		tcp, tcpFiles = startDesktopNodeXrayServer(t, xrayMode, ip, dnsAddress)
 	}
-	tcp, tcpFiles := startDesktopNodeXrayServer(t, xrayMode, ip, dnsAddress)
 	// Reserve the TCP numeric port in UDP while the second peer binds. This
 	// makes the two captured endpoints deliberately distinct without depending
 	// on the OS ephemeral-port lottery or redirecting either original socket.
@@ -75,7 +85,7 @@ func startDesktopNodeCompositeServer(t *testing.T, mode string, ip netip.Addr, d
 	if err != nil {
 		t.Fatal(err)
 	}
-	assets, err := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(raw), "xray.json": tcpAssets["xray.json"], "cert.pem": udpAssets["cert.pem"]})
+	assets, err := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(raw), helper: tcpAssets[helper], "cert.pem": udpAssets["cert.pem"]})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,10 +95,18 @@ func startDesktopNodeCompositeServer(t *testing.T, mode string, ip netip.Addr, d
 func desktopNodeCompositeAssets(t *testing.T, files, fault string) string {
 	t.Helper()
 	var assets map[string]string
-	if json.Unmarshal([]byte(files), &assets) != nil || len(assets) != 3 || assets["cert.pem"] == "" || assets["xray.json"] == "" {
+	if json.Unmarshal([]byte(files), &assets) != nil || len(assets) != 3 || assets["cert.pem"] == "" || (assets["xray.json"] == "") == (assets["sslocal.json"] == "") {
 		t.Fatal("composite source lost either authenticated branch")
 	}
-	if strings.HasPrefix(fault, "xray-") {
+	if strings.HasPrefix(fault, "sip003-") {
+		if assets["sslocal.json"] == "" {
+			t.Fatal("SIP003 fault attempted to replace another composite family")
+		}
+		assets["sslocal.json"] = desktopNodeSIP003Asset(t, assets["sslocal.json"], fault)
+	} else if strings.HasPrefix(fault, "xray-") {
+		if assets["xray.json"] == "" {
+			t.Fatal("Xray fault attempted to replace another composite family")
+		}
 		tcp, _ := json.Marshal(map[string]string{"sing-box.json": assets["sing-box.json"], "xray.json": assets["xray.json"]})
 		var changed map[string]string
 		if json.Unmarshal([]byte(desktopNodeXrayAssets(t, string(tcp), fault)), &changed) != nil {
@@ -166,7 +184,7 @@ func (p *desktopNodeLayerReference) compositeProjection(t *testing.T, original *
 
 func desktopNodeCompositeCases(t *testing.T, test func(*testing.T, string, string)) {
 	t.Helper()
-	for _, mode := range []string{"split", "max"} {
+	for _, mode := range []string{"split", "max", "ss-v2ray"} {
 		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 			label := layer
 			if label == "" {
@@ -237,6 +255,9 @@ func desktopNodeCompositePeerTraffic(t *testing.T, peer *desktopNodeLayerReferen
 	if peer.request.Layer != "" && (observed.RawTCP == 0 || observed.RawUDP == 0 || observed.PlainTCP == 0 || observed.PlainUDP == 0) {
 		t.Fatal("composite Start Layer did not enclose both actual lanes", observed)
 	}
+	if peer.request.Mode == "ss-v2ray" {
+		desktopNodeSIP003Stages(t, observed, "")
+	}
 }
 
 func desktopNodeCompositeGrants(t *testing.T, peer *desktopNodeLayerReference, grants []mobiletor.DesktopSocketGrant, capture mobiletor.DesktopSocketCapture, owner mobiletor.DesktopSocketKernelOwner) {
@@ -284,6 +305,10 @@ func TestRouterVPNDesktopNodeCompositeTraffic(t *testing.T) {
 		if err := f.box.RouterVPNStrategyDNSProof(); err == nil || peer.observe(t, "stats").DNSQueries != 2 {
 			t.Fatal("composite selected DNS reused stale or failed proof")
 		}
+		peer.observe(t, "restore-dns")
+		if err := f.box.RouterVPNStrategyDNSProof(); err != nil || peer.observe(t, "stats").DNSQueries != 3 {
+			t.Fatal("composite selected DNS did not recover through a fresh query on its original UDP branch", err)
+		}
 		desktopNodeCompositePeerTraffic(t, peer)
 		f.network.InterfaceUpdated(context.Background())
 		if f.network.SocketCurrent() || f.kernel.live.Load() || f.exchange("tcp") == nil || f.exchange("udp") == nil {
@@ -298,7 +323,11 @@ func TestRouterVPNDesktopNodeCompositeTraffic(t *testing.T) {
 func desktopNodeCompositeCredentialCases(t *testing.T, test func(*testing.T, string, string, string)) {
 	t.Helper()
 	desktopNodeCompositeCases(t, func(t *testing.T, mode, layer string) {
-		for _, fault := range []string{"xray-reality-key", "hysteria-password"} {
+		tcpFault := "xray-reality-key"
+		if mode == "ss-v2ray" {
+			tcpFault = "sip003-key"
+		}
+		for _, fault := range []string{tcpFault, "hysteria-password"} {
 			t.Run(fault, func(t *testing.T) { test(t, mode, layer, fault) })
 		}
 		if layer != "" {
@@ -307,6 +336,9 @@ func desktopNodeCompositeCredentialCases(t *testing.T, test func(*testing.T, str
 	})
 	for _, item := range []struct{ mode, fault string }{{"max", "xray-pq-key"}, {"split", "xray-user"}, {"split", "hysteria-trust"}, {"split", "hysteria-salamander"}} {
 		t.Run(item.mode+"/off/"+item.fault, func(t *testing.T) { test(t, item.mode, "", item.fault) })
+	}
+	for _, fault := range []string{"sip003-host", "sip003-path", "sip003-server-name", "sip003-certificate"} {
+		t.Run("ss-v2ray/off/"+fault, func(t *testing.T) { test(t, "ss-v2ray", "", fault) })
 	}
 }
 
@@ -340,6 +372,9 @@ func desktopNodeCompositeCredential(t *testing.T, peer *desktopNodeLayerReferenc
 		}
 	} else if observed.UDPBranchRawUDP == 0 || observed.UDPBranchUDP != 0 || observed.UDPBranchTCP != 0 || observed.ProtocolRawTCP == 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP != 0 {
 		t.Fatal("composite UDP credential negative missed its independently working TCP branch", observed)
+	}
+	if peer.request.Mode == "ss-v2ray" {
+		desktopNodeSIP003Stages(t, observed, fault)
 	}
 }
 

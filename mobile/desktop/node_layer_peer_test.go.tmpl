@@ -74,29 +74,32 @@ type desktopNodeLayerRequest struct {
 }
 
 type desktopNodeLayerReply struct {
-	Schema           int    `json:"schema"`
-	Address          string `json:"address"`
-	AESAddress       string `json:"aes_address"`
-	BaseAddress      string `json:"base_address,omitempty"`
-	ProtocolFiles    string `json:"protocol_files,omitempty"`
-	ProtocolRawUDP   int64  `json:"protocol_raw_udp,omitempty"`
-	ProtocolRawTCP   int64  `json:"protocol_raw_tcp,omitempty"`
-	ProtocolTCP      int64  `json:"protocol_tcp,omitempty"`
-	ProtocolUDP      int64  `json:"protocol_udp,omitempty"`
-	UDPBranchAddress string `json:"udp_branch_address,omitempty"`
-	UDPBranchRawUDP  int64  `json:"udp_branch_raw_udp,omitempty"`
-	UDPBranchTCP     int64  `json:"udp_branch_tcp,omitempty"`
-	UDPBranchUDP     int64  `json:"udp_branch_udp,omitempty"`
-	AppID            []byte `json:"app_id,omitempty"`
-	RawTCP           int64  `json:"raw_tcp"`
-	RawUDP           int64  `json:"raw_udp"`
-	PlainTCP         int64  `json:"plain_tcp"`
-	PlainUDP         int64  `json:"plain_udp"`
-	DNSQueries       uint32 `json:"dns_queries"`
-	Probe            string `json:"probe,omitempty"`
-	ProbeCount       int64  `json:"probe_count,omitempty"`
-	ProbeNetwork     string `json:"probe_network"`
-	ProbeTarget      string `json:"probe_target,omitempty"`
+	Schema            int    `json:"schema"`
+	Address           string `json:"address"`
+	AESAddress        string `json:"aes_address"`
+	BaseAddress       string `json:"base_address,omitempty"`
+	ProtocolFiles     string `json:"protocol_files,omitempty"`
+	ProtocolRawUDP    int64  `json:"protocol_raw_udp,omitempty"`
+	ProtocolRawTCP    int64  `json:"protocol_raw_tcp,omitempty"`
+	ProtocolTCP       int64  `json:"protocol_tcp,omitempty"`
+	ProtocolUDP       int64  `json:"protocol_udp,omitempty"`
+	ProtocolTLSHTTP   int64  `json:"protocol_tls_http,omitempty"`
+	ProtocolWebSocket int64  `json:"protocol_websocket,omitempty"`
+	ProtocolMux       int64  `json:"protocol_mux,omitempty"`
+	UDPBranchAddress  string `json:"udp_branch_address,omitempty"`
+	UDPBranchRawUDP   int64  `json:"udp_branch_raw_udp,omitempty"`
+	UDPBranchTCP      int64  `json:"udp_branch_tcp,omitempty"`
+	UDPBranchUDP      int64  `json:"udp_branch_udp,omitempty"`
+	AppID             []byte `json:"app_id,omitempty"`
+	RawTCP            int64  `json:"raw_tcp"`
+	RawUDP            int64  `json:"raw_udp"`
+	PlainTCP          int64  `json:"plain_tcp"`
+	PlainUDP          int64  `json:"plain_udp"`
+	DNSQueries        uint32 `json:"dns_queries"`
+	Probe             string `json:"probe,omitempty"`
+	ProbeCount        int64  `json:"probe_count,omitempty"`
+	ProbeNetwork      string `json:"probe_network"`
+	ProbeTarget       string `json:"probe_target,omitempty"`
 }
 
 type desktopNodeLayerRoute struct {
@@ -104,19 +107,20 @@ type desktopNodeLayerRoute struct {
 }
 
 type desktopNodeLayerServer struct {
-	ctx                context.Context
-	cancel             context.CancelFunc
-	tcp                net.Listener
-	udp                net.PacketConn
-	routes             []desktopNodeLayerRoute
-	dnsAddress         string
-	mu                 sync.Mutex
-	closing            bool
-	connections        map[io.Closer]bool
-	workers            sync.WaitGroup
-	rawTCP, rawUDP     atomic.Int64
-	plainTCP, plainUDP atomic.Int64
-	observation        desktopNodePeerObservation
+	ctx                                        context.Context
+	cancel                                     context.CancelFunc
+	tcp                                        net.Listener
+	udp                                        net.PacketConn
+	routes                                     []desktopNodeLayerRoute
+	dnsAddress                                 string
+	mu                                         sync.Mutex
+	closing                                    bool
+	connections                                map[io.Closer]bool
+	workers                                    sync.WaitGroup
+	rawTCP, rawUDP                             atomic.Int64
+	plainTCP, plainUDP                         atomic.Int64
+	tlsRequests, websocketUpgrades, muxStreams atomic.Int64
+	observation                                desktopNodePeerObservation
 }
 
 func (s *desktopNodeLayerServer) enter(c io.Closer) bool {
@@ -561,6 +565,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 		if protocolServer != nil {
 			reply.ProtocolRawUDP, reply.ProtocolTCP, reply.ProtocolUDP = protocolServer.rawUDP.Load(), protocolServer.plainTCP.Load(), protocolServer.plainUDP.Load()
 			reply.ProtocolRawTCP = protocolServer.rawTCP.Load()
+			reply.ProtocolTLSHTTP, reply.ProtocolWebSocket, reply.ProtocolMux = protocolServer.tlsRequests.Load(), protocolServer.websocketUpgrades.Load(), protocolServer.muxStreams.Load()
 		}
 		if udpBranch != nil {
 			reply.UDPBranchAddress, reply.UDPBranchRawUDP = udpBranch.udp.LocalAddr().String(), udpBranch.rawUDP.Load()
@@ -580,9 +585,11 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 		if err != nil || len(line) > 64 {
 			t.Fatal("layer reference received another control operation", err)
 		}
-		if string(line) == "stats\n" || string(line) == "fail-dns\n" {
+		if string(line) == "stats\n" || string(line) == "fail-dns\n" || string(line) == "restore-dns\n" {
 			if string(line) == "fail-dns\n" {
 				failedDNS.Store(true)
+			} else if string(line) == "restore-dns\n" {
+				failedDNS.Store(false)
 			}
 			respond("", "", server)
 			continue
@@ -722,7 +729,7 @@ func (p *desktopNodeLayerReference) probe(t *testing.T, action, nonce string) in
 
 func (p *desktopNodeLayerReference) observe(t *testing.T, action string) desktopNodeLayerReply {
 	t.Helper()
-	if action != "stats" && action != "fail-dns" {
+	if action != "stats" && action != "fail-dns" && action != "restore-dns" {
 		t.Fatal("unexpected layer observation operation")
 	}
 	if _, err := io.WriteString(p.input, action+"\n"); err != nil {

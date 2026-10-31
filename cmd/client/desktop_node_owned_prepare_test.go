@@ -161,7 +161,7 @@ func desktopOwnedNodePreparationAES(t *testing.T, endpoint string) map[string][]
 }
 
 func TestDesktopOwnedNodePreparationKeepsCapturedAESAndWhitening(t *testing.T) {
-	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max"} {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max", "ss-v2ray"} {
 		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 			t.Run(mode+"/"+layer, func(t *testing.T) {
 				base := mode

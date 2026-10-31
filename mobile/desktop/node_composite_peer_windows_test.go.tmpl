@@ -77,7 +77,7 @@ func TestRouterVPNDesktopNodeWindowsWFPCompositeTraffic(t *testing.T) {
 }
 
 func TestRouterVPNDesktopNodeWindowsWFPCompositeSuccession(t *testing.T) {
-	for _, mode := range []string{"split", "max"} {
+	for _, mode := range []string{"split", "max", "ss-v2ray"} {
 		t.Run(mode, func(t *testing.T) { desktopNodeWFPLayerSuccession(t, mode) })
 	}
 }

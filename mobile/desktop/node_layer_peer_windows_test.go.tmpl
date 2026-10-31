@@ -158,6 +158,12 @@ func desktopNodeWFPLayerTrafficCase(t *testing.T, mode, layer string) {
 	if err := f.box.RouterVPNStrategyDNSProof(); err == nil || peer.observe(t, "stats").DNSQueries != 2 {
 		t.Fatal("actual WFP layered DNS accepted cached or failed proof")
 	}
+	if desktopNodeCompositeMode(mode) {
+		peer.observe(t, "restore-dns")
+		if err := f.box.RouterVPNStrategyDNSProof(); err != nil || peer.observe(t, "stats").DNSQueries != 3 {
+			t.Fatal("actual WFP composite DNS did not recover through a fresh original-path query", err)
+		}
+	}
 	f.network.InterfaceUpdated(context.Background())
 	if f.network.SocketCurrent() || f.network.Current() || f.exchange("udp") == nil || desktopNodeCompositeMode(mode) && f.exchange("tcp") == nil {
 		t.Fatal("retired WFP layered graph delivered another payload")

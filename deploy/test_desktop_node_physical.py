@@ -41,13 +41,14 @@ NAIVE_CASES = tuple(mode + "/" + layer for mode in NAIVE_MODES
                     for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening"))
 NAIVE_CREDENTIAL_CASES = (*NAIVE_CASES, *(mode + "/" + case for mode in NAIVE_MODES for case in (
     "off/naive-user", "off/naive-server-name", "off/naive-certificate", "aes-256-gcm/aes-key", "aes-256-gcm+xor-whitening/aes-key")))
-COMPOSITE_MODES = ("split", "max")
+COMPOSITE_MODES = ("split", "max", "ss-v2ray")
 COMPOSITE_CASES = tuple(mode + "/" + layer for mode in COMPOSITE_MODES
                        for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening"))
 COMPOSITE_CREDENTIAL_CASES = (
-    *(case + "/" + fault for case in COMPOSITE_CASES for fault in ("xray-reality-key", "hysteria-password")),
+    *(case + "/" + fault for case in COMPOSITE_CASES for fault in (("sip003-key" if case.startswith("ss-v2ray/") else "xray-reality-key"), "hysteria-password")),
     *(case + "/aes-key" for case in COMPOSITE_CASES if not case.endswith("/off")),
-    "max/off/xray-pq-key", "split/off/xray-user", "split/off/hysteria-trust", "split/off/hysteria-salamander")
+    "max/off/xray-pq-key", "split/off/xray-user", "split/off/hysteria-trust", "split/off/hysteria-salamander",
+    *("ss-v2ray/off/" + fault for fault in ("sip003-host", "sip003-path", "sip003-server-name", "sip003-certificate")))
 
 
 def layer_reference_sources():
@@ -129,6 +130,19 @@ def checked_sources(source):
         expected = subprocess.check_output(["git", "show", PREP.PIN + ":" + relative], cwd=source)
         if path.is_symlink() or not path.is_file() or path.read_bytes() != expected:
             raise ValueError("Node Naive native implementation differs from its pinned source: " + relative)
+        records[relative] = hashlib.sha256(expected).hexdigest()
+    # SIP003 uses the pinned actual TLS/WebSocket/mux plugin. Bind every
+    # implementation file before applying explicit negative-control overlays.
+    sip_paths = subprocess.check_output(["git", "ls-tree", "-r", "--name-only", PREP.PIN, "--", "transport/sip003", "transport/v2raywebsocket"], cwd=source, text=True).splitlines()
+    expected_sip = {relative for relative in sip_paths if relative.endswith(".go")}
+    actual_sip = {path.relative_to(source).as_posix() for directory in ("transport/sip003", "transport/v2raywebsocket") for path in (source / directory).rglob("*.go")}
+    if not expected_sip or actual_sip != expected_sip:
+        raise ValueError("Node SIP003 transport differs from its pinned file set")
+    for relative in sorted(expected_sip):
+        path = source / relative
+        expected = subprocess.check_output(["git", "show", PREP.PIN + ":" + relative], cwd=source)
+        if path.is_symlink() or not path.is_file() or path.read_bytes() != expected:
+            raise ValueError("Node SIP003 transport differs from its pinned source: " + relative)
         records[relative] = hashlib.sha256(expected).hexdigest()
     for name in ("go.mod", "go.sum"):
         path = source / name
@@ -286,6 +300,20 @@ def mutants(source, windows):
     selected_dns = "routervpn_desktop_node_box_dns.go"
     node_command = "cmd/sing-box/routervpn_mtu_node.go"
     result = [
+        ("sip003-uncaptured-transport", "transport/sip003/v2ray.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeCompositeTraffic", "ss-v2ray/off",
+         "simultaneous composite traffic omitted one retained native lane grant", changed("transport/sip003/v2ray.go",
+         "v2ray.NewClientTransport(context.Background(), dialer, serverAddr, transportOptions, tlsClient)",
+         "v2ray.NewClientTransport(context.Background(), N.SystemDialer, serverAddr, transportOptions, tlsClient)")),
+        ("sip003-ignored-certificate", "transport/sip003/v2ray.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeCompositeWrongCredential", "ss-v2ray/off/sip003-certificate",
+         "wrong composite branch credential delivered authenticated payload", changed("transport/sip003/v2ray.go",
+         "tlsClient, err = tls.NewClient(ctx, logger.NOP(), serverAddr.AddrString(), tlsOptions)",
+         "tlsOptions.Insecure = true\n\t\ttlsClient, err = tls.NewClient(ctx, logger.NOP(), serverAddr.AddrString(), tlsOptions)")),
+        ("sip003-ignored-websocket-host", "transport/sip003/v2ray.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeCompositeWrongCredential", "ss-v2ray/off/sip003-host",
+         "wrong composite branch credential delivered authenticated payload", changed("transport/sip003/v2ray.go",
+         '"Host": []string{host}', '"Host": []string{func() string { _ = host; return "captured-sip003.test" }()}')),
+        ("sip003-ignored-websocket-path", "transport/sip003/v2ray.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeCompositeWrongCredential", "ss-v2ray/off/sip003-path",
+         "wrong composite branch credential delivered authenticated payload", changed("transport/sip003/v2ray.go",
+         "Path: path,", 'Path: func() string { _ = path; return "/captured-shadowsocks" }(),')),
         ("composite-tcp-substituted-udp", "protocol/routervpncomposite/outbound.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeCompositeTraffic", "split/off",
          "simultaneous composite traffic omitted one retained native lane grant", changed("protocol/routervpncomposite/outbound.go",
          "return h.tcp, nil", "return h.udp, nil")),
@@ -443,7 +471,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             if status:
                 raise ValueError("Node " + name + " native compilation failed:\n" + output[-32768:])
             digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-            # The composite suite adds twenty independent real credential
+            # The composite suite has independent real credential
             # attempts; each network deadline remains unchanged.
             duration = 180 if name == "composite-credentials" else 90
             status, output = run([binary, "-test.run=" + selector, "-test.count=1", "-test.timeout=" + str(duration) + "s", "-test.v"], cwd=source, env=captured, timeout=duration + 15)

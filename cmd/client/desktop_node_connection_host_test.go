@@ -98,7 +98,7 @@ func newDesktopNodeConnectionFixture(t *testing.T, policy, layer string) *deskto
 	for _, mode := range []string{"reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3"} {
 		f.writeAssets(t, mode, nativeMultihopProxyExitAssets(t, profile, mode))
 	}
-	for _, mode := range []string{"split", "max"} {
+	for _, mode := range []string{"split", "max", "ss-v2ray"} {
 		f.writeAssets(t, mode, nativeMultihopCompositeExitAssets(t, profile, mode))
 	}
 	nativeDir := filepath.Join(packageDir, "runtime", "native")
@@ -434,7 +434,7 @@ func (f *desktopNodeConnectionFixture) close(t *testing.T) {
 }
 
 func TestDesktopNodePublicConnectUsesCapturedOwnedHost(t *testing.T) {
-	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max"} {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max", "ss-v2ray"} {
 		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 			label := layer
 			if label == "" {

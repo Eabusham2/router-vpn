@@ -10,7 +10,7 @@ func DesktopNodePhysicalGraphSupported(mode, startLayer string) bool {
 		return false
 	}
 	switch mode {
-	case "wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max":
+	case "wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max", "ss-v2ray":
 		return true
 	default:
 		return false

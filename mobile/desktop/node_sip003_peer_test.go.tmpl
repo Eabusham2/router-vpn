@@ -1,0 +1,300 @@
+package routervpnamnezia
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/netip"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/transport/v2raywebsocket"
+	shadowsocks "github.com/sagernet/sing-shadowsocks"
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	vmess "github.com/sagernet/sing-vmess"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/ws"
+)
+
+const desktopNodeSIP003Host = "captured-sip003.test"
+const desktopNodeSIP003Alias = "captured-sip003-alias.test"
+const desktopNodeSIP003Path = "/captured-shadowsocks"
+
+func desktopNodeSIP003Certificate(t *testing.T) ([]byte, tls.Certificate) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject: pkix.Name{CommonName: desktopNodeSIP003Host}, DNSNames: []string{desktopNodeSIP003Host, desktopNodeSIP003Alias},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, IsCA: true, BasicConstraintsValid: true}
+	der, err := x509.CreateCertificate(rand.Reader, certificate, certificate, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(private)
+	pair, err := tls.X509KeyPair(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return der, pair
+}
+
+// The real V2Ray-plugin mux carries SS2022 ciphertext. Its accepted stream is
+// handed to the pinned Shadowsocks service; only that service can reach the
+// authenticated echo callback. UDP is rejected here and belongs to HY2.
+type desktopNodeSIP003Mux struct {
+	server  *desktopNodeLayerServer
+	service shadowsocks.Service
+}
+
+func (h desktopNodeSIP003Mux) NewConnectionEx(ctx context.Context, connection net.Conn, source, _ M.Socksaddr, onClose N.CloseHandlerFunc) {
+	if !h.server.enter(connection) {
+		_ = connection.Close()
+		if onClose != nil {
+			onClose(net.ErrClosed)
+		}
+		return
+	}
+	defer h.server.leave(connection)
+	h.server.muxStreams.Add(1)
+	err := h.service.NewConnection(ctx, connection, M.Metadata{Source: source})
+	if onClose != nil {
+		onClose(err)
+	}
+}
+
+func (h desktopNodeSIP003Mux) NewPacketConnectionEx(_ context.Context, connection N.PacketConn, _, _ M.Socksaddr, onClose N.CloseHandlerFunc) {
+	_ = connection.Close()
+	if onClose != nil {
+		onClose(errors.New("captured SIP003 peer is TCP-only"))
+	}
+}
+
+// The physical front remains the exact captured peer socket and marker target.
+// Its joined forwarding pair leads only to this retained TLS/WebSocket server.
+// The full SS/TLS/WS/mux client implementation is the unmodified pinned plugin.
+func startDesktopNodeSIP003Server(t *testing.T, ip netip.Addr, dnsAddress string) (*desktopNodeLayerServer, string) {
+	t.Helper()
+	if !ip.Is4() || ip.IsLoopback() || ip.IsUnspecified() {
+		t.Fatal("SIP003 peer requires its captured physical IPv4 interface")
+	}
+	der, certificate := desktopNodeSIP003Certificate(t)
+	var key [32]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		t.Fatal(err)
+	}
+	password := base64.StdEncoding.EncodeToString(key[:])
+	clear(key[:])
+	front, err := net.Listen("tcp4", net.JoinHostPort(ip.String(), "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, tcp: front, dnsAddress: dnsAddress, connections: make(map[io.Closer]bool)}
+	var inner net.Listener
+	var server *http.Server
+	serveError := make(chan error, 1)
+	t.Cleanup(func() {
+		s.mu.Lock()
+		s.closing = true
+		connections := make([]io.Closer, 0, len(s.connections))
+		for connection := range s.connections {
+			connections = append(connections, connection)
+		}
+		s.mu.Unlock()
+		cancel()
+		_ = front.Close()
+		if server != nil {
+			_ = server.Close()
+		}
+		if inner != nil {
+			_ = inner.Close()
+		}
+		for _, connection := range connections {
+			_ = connection.Close()
+		}
+		s.workers.Wait()
+		select {
+		case err := <-serveError:
+			if !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+				t.Error("captured SIP003 TLS server failed", err)
+			}
+		default:
+		}
+	})
+	service, err := shadowaead_2022.NewServiceWithPassword("2022-blake3-aes-256-gcm", password, 10, s, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner, err = net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server = &http.Server{ReadHeaderTimeout: 3 * time.Second, IdleTimeout: 5 * time.Second, MaxHeaderBytes: 16 << 10,
+		Handler: http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			s.mu.Lock()
+			if s.closing {
+				s.mu.Unlock()
+				http.Error(response, "retired captured peer", http.StatusServiceUnavailable)
+				return
+			}
+			s.workers.Add(1)
+			s.mu.Unlock()
+			defer s.workers.Done()
+			s.tlsRequests.Add(1)
+			if request.Host != desktopNodeSIP003Host || request.URL.Path != desktopNodeSIP003Path || request.URL.RawQuery != "" {
+				http.Error(response, "wrong captured WebSocket destination", http.StatusForbidden)
+				return
+			}
+			connection, _, _, err := ws.UpgradeHTTP(request, response)
+			if err != nil {
+				return
+			}
+			if !s.enter(connection) {
+				_ = connection.Close()
+				return
+			}
+			defer s.leave(connection)
+			s.websocketUpgrades.Add(1)
+			source := M.ParseSocksaddr(request.RemoteAddr)
+			stream := v2raywebsocket.NewConn(connection, source, ws.StateServerSide)
+			_ = vmess.HandleMuxConnection(ctx, stream, source, desktopNodeSIP003Mux{s, service})
+			_ = stream.Close()
+		})}
+	tlsListener := tls.NewListener(inner, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}, NextProtos: []string{"http/1.1"}})
+	s.workers.Add(2)
+	go func() {
+		defer s.workers.Done()
+		serveError <- server.Serve(tlsListener)
+	}()
+	go func() {
+		defer s.workers.Done()
+		for {
+			connection, err := front.Accept()
+			if err != nil {
+				return
+			}
+			if !s.enter(connection) {
+				_ = connection.Close()
+				return
+			}
+			go desktopNodeXrayForward(s, connection, inner.Addr().String())
+		}
+	}()
+	wrapper := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
+		"outbounds": []any{map[string]any{"type": "socks", "tag": "proxy", "server": "127.0.0.1", "server_port": 1092, "version": "5"}},
+		"route":     map[string]any{"final": "proxy", "rules": []any{}}}
+	helper := map[string]any{"server": ip.String(), "server_port": front.Addr().(*net.TCPAddr).Port,
+		"method": "2022-blake3-aes-256-gcm", "password": password, "local_address": "127.0.0.1", "local_port": 1092,
+		"mode": "tcp_only", "plugin": "v2ray-plugin", "plugin_opts": "tls;host=" + desktopNodeSIP003Host + ";path=" + desktopNodeSIP003Path + ";certRaw=" + base64.StdEncoding.EncodeToString(der)}
+	assets := make(map[string]string)
+	for name, object := range map[string]any{"sing-box.json": wrapper, "sslocal.json": helper} {
+		raw, err := json.Marshal(object)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assets[name] = base64.StdEncoding.EncodeToString(raw)
+	}
+	raw, err := json.Marshal(assets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, string(raw)
+}
+
+func desktopNodeSIP003Asset(t *testing.T, encoded, fault string) string {
+	t.Helper()
+	raw, err := base64.StdEncoding.Strict().DecodeString(encoded)
+	var helper map[string]any
+	if err != nil || json.Unmarshal(raw, &helper) != nil || helper["plugin"] != "v2ray-plugin" {
+		t.Fatal("SIP003 fault lost its original TLS/WebSocket helper", err)
+	}
+	options, ok := helper["plugin_opts"].(string)
+	if !ok {
+		t.Fatal("SIP003 helper omitted its captured plugin options")
+	}
+	replace := func(before, after string) {
+		if strings.Count(options, before) != 1 {
+			t.Fatal("SIP003 credential substitution lost its exact source field")
+		}
+		options = strings.Replace(options, before, after, 1)
+	}
+	switch fault {
+	case "sip003-key":
+		var key [32]byte
+		if _, err := rand.Read(key[:]); err != nil {
+			t.Fatal(err)
+		}
+		helper["password"] = base64.StdEncoding.EncodeToString(key[:])
+		clear(key[:])
+	case "sip003-host":
+		// The peer certificate also covers this alias. TLS succeeds, but the
+		// exact HTTP Host must still be rejected before WebSocket admission.
+		replace("host="+desktopNodeSIP003Host+";", "host="+desktopNodeSIP003Alias+";")
+	case "sip003-server-name":
+		replace("host="+desktopNodeSIP003Host+";", "host=another-sip003.test;")
+	case "sip003-path":
+		replace("path="+desktopNodeSIP003Path+";", "path=/another-captured-path;")
+	case "sip003-certificate":
+		index := strings.Index(options, ";certRaw=")
+		if index < 0 || strings.Contains(options[index+1:], ";") {
+			t.Fatal("SIP003 source lost its inline trust certificate")
+		}
+		der, _ := desktopNodeSIP003Certificate(t)
+		options = options[:index] + ";certRaw=" + base64.StdEncoding.EncodeToString(der)
+	default:
+		t.Fatal("uncaptured SIP003 credential fault")
+	}
+	helper["plugin_opts"] = options
+	raw, err = json.Marshal(helper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return base64.StdEncoding.EncodeToString(raw)
+}
+
+func desktopNodeSIP003Stages(t *testing.T, observed desktopNodeLayerReply, fault string) {
+	t.Helper()
+	if fault == "aes-key" {
+		if observed.ProtocolTLSHTTP != 0 || observed.ProtocolWebSocket != 0 || observed.ProtocolMux != 0 {
+			t.Fatal("wrong shared AES key reached the inner SIP003 transport", observed)
+		}
+		return
+	}
+	switch fault {
+	case "sip003-server-name", "sip003-certificate":
+		if observed.ProtocolTLSHTTP != 0 || observed.ProtocolWebSocket != 0 || observed.ProtocolMux != 0 {
+			t.Fatal("wrong SIP003 TLS identity or trust reached WebSocket admission", observed)
+		}
+	case "sip003-host", "sip003-path":
+		if observed.ProtocolTLSHTTP == 0 || observed.ProtocolWebSocket != 0 || observed.ProtocolMux != 0 {
+			t.Fatal("SIP003 Host/path rejection did not follow real successful TLS", observed)
+		}
+	default:
+		if observed.ProtocolTLSHTTP == 0 || observed.ProtocolWebSocket == 0 || observed.ProtocolMux == 0 {
+			t.Fatal("SIP003 SS2022 evidence omitted real TLS, WebSocket or mux admission", observed)
+		}
+	}
+}
