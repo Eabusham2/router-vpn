@@ -6,7 +6,75 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 060f2e2c
+## Latest implementation continuation — through 4b095b06
+
+The independently verified source cutoff is
+[`4b095b069cc37f304137991d9286091af2df7424`](https://github.com/Eabusham2/router-vpn/commit/4b095b069cc37f304137991d9286091af2df7424).
+The [new continuation evidence](CONTINUATION-EVIDENCE-2026-10-31.md#native-graph-continuation-through-4b095b06)
+records the source publications, real native outcomes, and remaining integration.
+The earlier sections below retain their original dated scope.
+
+- Both full native Windows PQ jobs passed at `5bece489`, including the actual
+  packet/Start Layer and WFP ownership gates. `4b095b06` activates public
+  protected WG-PQ/AWG-PQ with six new mode/layer positives and twelve private
+  source/wrong-node-proof rejection cases. The integrated local race run passed
+  eighty-seven shared groups plus nine existing restoration groups, all 224
+  required results, and all twenty-six prospective ALL results. Actual native
+  process/firewall/transport boundaries were modeled in this application run.
+  `7cf0f788` separates shipping execution from a separately compiled control
+  that removes only the tested family. `a2954cfa` repairs the Windows byte/path
+  portability failure in that driver; all four native runner steps passed on
+  the two architectures, while their complete newer jobs remain separate.
+- Native ALL orchestration is published in `20378481`: candidates retain their
+  complete source and operation, failed owners join before successors, and
+  cancellation cannot mutate a replacement. `9720614a` repairs actual temporary
+  Speed Lab fallback cleanup so protection remains owned until the exact proved
+  connection is restored. All four new restoration scenarios, shared regression
+  tests and three compiled defects passed locally with modeled native boundaries.
+  Complete MAX admission remains closed pending full native proof; this also
+  bounds protected native ALL availability.
+- Linux now has strict canonical control records (`58548303`), an authenticated
+  original-parent preparation/retirement exchange (`b60c77c5`), and two-owner
+  retired succession readback (`e60d1084`). `8ec83cbc` adds the durable application
+  transaction, source/engine join, and separate disconnect release. Seven real
+  transaction scenarios, eleven native control scenarios, the mandatory
+  controller/journal/launcher gates and three compiled defects passed in private
+  namespaces. Ordered shutdown, generated child integration, real TUN/DNS and
+  public Linux admission are still unfinished.
+- MAX credential evidence now counts actual SS2022 authentication failures;
+  empty marker EOF, truncated ciphertext and unrelated errors cannot stand in
+  for them (`b6b03578`). The new full native MAX jobs remain required.
+  Standalone Xray positives passed on both Windows architectures after
+  `060f2e2c`; `ae5de8fa` applies that same existing first-transfer allowance to
+  the healthy composite Xray branch. Credential deadlines remain unchanged.
+- The macOS diagnostic proved the unresolved process predates installation
+  fixtures. That observation does not authorize skipping it. `b11ae8b5` adds
+  retained Mach-O and kernel main-image identity with mandatory copied/unlinked
+  native cases. The installer is still unchanged at this cutoff; complete
+  protected-generation comparison and native acceptance remain open.
+- Windows native TLS/drain and installed/Portable Session checks passed in the
+  later `20378481` controller run. Its separate Node step passed the baseline
+  and 41 compiled controls before the aggregate deadline. `144755cb` budgets
+  the complete sequence at thirty minutes, with unchanged individual limits.
+  `e5379414` owns native build descendants before command admission and joins
+  them before workspace deletion; actual Windows job tests are required on
+  both architectures and are not claimed as locally executed.
+- `239cec77` reduces redundant baseline compilation while preserving all twelve
+  native selectors and every mutation. Real Windows execution then exposed a
+  pathname-versus-descriptor identity mismatch before traffic. Its repair is
+  separate from the earlier outer AMD64 timeout. Neither is labeled resolved
+  by a successful Linux fixture.
+
+The latest independently observed published prerelease still targets
+`745b3e41e5a78d734391976af9b7cd0637660a0b`, with twelve assets. There is no newer
+all-green exact-SHA release. The separate exploratory UAC/Shell diagnostic
+cannot establish a real split-token user environment on the hosted account;
+it is not an authoritative-release dependency and is not reported as passed.
+Physical/off-LAN acceptance, required signing and deliberate private deployment
+remain unproved. No live router, AdGuard, ASUS forwarding or Portainer target
+was changed.
+
+## Earlier implementation continuation — through 060f2e2c
 
 The independently verified source cutoff is
 [`060f2e2c8264be1ecc3b654cc698585ddfba1250`](https://github.com/Eabusham2/router-vpn/commit/060f2e2c8264be1ecc3b654cc698585ddfba1250).

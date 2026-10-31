@@ -1,6 +1,6 @@
 # Router VPN reconciled product and release contract
 
-This file records the newest surviving requirement set after reconciling the Router VPN handoffs, `mm.md`, recovered requirements 1–356, corrections C1–C7, the later UI/product prompt, transaction and durability corrections, and subsequent user overrides.
+This file records the newest surviving requirement set after reconciling the original Router VPN user passages, `mm.md`, the recovered historical audit indexed 1–356, corrections C1–C7, the later UI/product prompt, transaction and durability corrections, and subsequent user overrides. The numbered audit is an assistant's historical organization of the requirements, not 356 verbatim user messages. Its full scope remains binding alongside the original sources and later corrections.
 
 ## Authority and superseded directions
 
@@ -29,7 +29,7 @@ The following older directions are superseded or canceled:
 The binding implementation basis is:
 
 ```text
-356 explicit requirements
+Original user requirements, indexed by the recovered 356-item historical audit
 + C1–C7 corrections
 + latest product/breakage items
 + the later map-first UI prompt
