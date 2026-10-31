@@ -136,6 +136,11 @@ func TestLocalControllerPinnedDrainUtilityWindowsExecution(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer powershell.Close()
+	machine, err := windowscontroller.MachineDirectories()
+	if err != nil {
+		t.Fatal(err)
+	}
+	frameworkModules := filepath.Join(machine.System, "WindowsPowerShell", "v1.0", "Modules")
 	helper, err := filepath.Abs(filepath.Join("..", "..", "client", "Private-RouterVPN-State.ps1"))
 	if err != nil {
 		t.Fatal(err)
@@ -162,12 +167,15 @@ func TestLocalControllerPinnedDrainUtilityWindowsExecution(t *testing.T) {
 		var environment []string
 		for _, item := range os.Environ() {
 			name, _, _ := strings.Cut(item, "=")
-			if strings.HasPrefix(strings.ToUpper(name), "HOMEVPN_") {
+			if strings.HasPrefix(strings.ToUpper(name), "HOMEVPN_") || strings.EqualFold(name, "PSModulePath") {
 				continue
 			}
 			environment = append(environment, item)
 		}
-		return append(environment, "HOMEVPN_CLIENT_CONFIG="+config, "HOMEVPN_ROOT="+workspace)
+		// The shipping controller reconstructs this same Framework module
+		// path. An intermediate Go process must not pass CI PowerShell 7's
+		// module search path into the pinned Windows PowerShell 5.1 child.
+		return append(environment, "PSModulePath="+frameworkModules, "HOMEVPN_CLIENT_CONFIG="+config, "HOMEVPN_ROOT="+workspace)
 	}
 	run := func(t *testing.T, command *exec.Cmd) (string, string, error) {
 		t.Helper()
@@ -272,7 +280,10 @@ func TestLocalControllerPinnedDrainUtilityWindowsExecution(t *testing.T) {
 			} else if mode == "malformed" {
 				pin = "invalid"
 			}
-			script := "$ErrorActionPreference='Stop'\nWrite-RouterVPNDrainObservation 'helper-load-begin'\n. " + quote(helper) + "\nWrite-RouterVPNDrainObservation 'helper-load-complete'\n"
+			// Windows PowerShell can prepend its standard AllUsers directory at
+			// startup. Require the captured Framework path without resolving or
+			// warming any command before the actual helper acceptance.
+			script := "$ErrorActionPreference='Stop'\nif(($env:PSModulePath-split';')-notcontains " + quote(frameworkModules) + "){throw 'drain fixture lost its captured Framework module path'}\nWrite-RouterVPNDrainObservation 'helper-load-begin'\n. " + quote(helper) + "\nWrite-RouterVPNDrainObservation 'helper-load-complete'\n"
 			if mode == "captured-once" {
 				script += "$env:HOMEVPN_CONTROLLER_TRANSPORT='foreign';$env:HOMEVPN_CONTROLLER_PID='0';$env:HOMEVPN_CONTROLLER_TLS_PIN='foreign';$env:HOMEVPN_CONTROLLER_EXECUTABLE='foreign'\n"
 			}
