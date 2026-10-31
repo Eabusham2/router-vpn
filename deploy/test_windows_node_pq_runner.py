@@ -234,7 +234,7 @@ class NativePQScope(unittest.TestCase):
         # Native execution is deliberately modeled here. Actual file lifetimes
         # and the real execute/standalone receipt paths are exercised on this OS.
         real_temporary = tempfile.TemporaryDirectory
-        state = {'paths': [], 'removed_controls': [], 'native_calls': []}
+        state = {'paths': [], 'removed_controls': [], 'native_calls': [], 'native_timeouts': []}
         controls = {item[0]: item for item in GATE.mutations(self.source)}
 
         @contextmanager
@@ -277,6 +277,7 @@ class NativePQScope(unittest.TestCase):
             for previous in state['removed_controls']:
                 self.assertFalse(previous.exists(), 'joined mutant accumulated before the next native case')
             state['native_calls'].append(args)
+            state['native_timeouts'].append(_kwargs.get('timeout'))
             if binary.parent.name in controls:
                 state['removed_controls'].append(binary)
                 return 1, self.negative_output(controls[binary.parent.name])
@@ -312,11 +313,13 @@ class NativePQScope(unittest.TestCase):
         self.assertEqual(len(result['compiled_negative_controls']), 6)
         self.assertEqual(len(state['removed_controls']), 6)
         self.assertTrue(all(not path.exists() for path in state['paths']))
-        for parent, budget in ((GATE.TRAFFIC, 480), (GATE.CREDENTIALS, 900), (GATE.SUCCESSION, 480)):
+        for parent, budget in ((GATE.TRAFFIC, 480), (GATE.CREDENTIALS, 900), (GATE.SUCCESSION, 720)):
             calls = [args for args in state['native_calls'] if '-test.run=^' + parent + '$' in args]
             self.assertEqual(len(calls), 1)
             self.assertIn('-test.timeout=' + str(budget) + 's', calls[0])
-        for args in state['native_calls']:
+        for args, outer_timeout in zip(state['native_calls'], state['native_timeouts'], strict=True):
+            inner_timeout = int(next(value for value in args if value.startswith('-test.timeout=')).split('=', 1)[1][:-1])
+            self.assertEqual(outer_timeout, inner_timeout + 15)
             if Path(args[0]).parent.name not in ('current-closed-capability', 'native-composition'):
                 self.assertIn('-test.timeout=90s', args)
 

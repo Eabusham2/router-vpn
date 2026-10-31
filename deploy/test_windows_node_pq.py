@@ -233,8 +233,12 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
                 required_output(output, CLOSED, PQ.MODES)
             binary = compile_in('native-composition', prospective)
             digest = PQ.regular_digest(binary)
+            # Succession constructs original, trial and restored owners for all
+            # three Start Layers: nine complete native owners versus Traffic's
+            # six. Keep each socket/handshake/cleanup bound unchanged and scale
+            # only this aggregate execution budget for the required work.
             for test, cases, timeout in ((OPEN, (), 15), (TRAFFIC, PQ.TRAFFIC, 480),
-                                         (CREDENTIALS, PQ.CREDENTIALS, 900), (SUCCESSION, PQ.LAYERS, 480), (FOREIGN, (), 90)):
+                                         (CREDENTIALS, PQ.CREDENTIALS, 900), (SUCCESSION, PQ.LAYERS, 720), (FOREIGN, (), 90)):
                 status, output = NODE.run([binary, '-test.run=^' + test + '$', '-test.count=1', '-test.timeout=' + str(timeout) + 's', '-test.v'],
                                           cwd=source, env=captured, timeout=timeout + 15)
                 print(output, end='', flush=True)
