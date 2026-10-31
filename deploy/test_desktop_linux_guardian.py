@@ -33,8 +33,11 @@ KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGua
                 'SocketRetirementReusesCapacity', 'RejectsChangedBaseline', 'NativeParentCrash',
                 'BlockedControlRetainsSourcePort', 'RejectsStaleCaptureAndGeneration',
                 'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement',
-                'ClosedProtectionObservations', 'RejectsDormantTable')
+                'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions')
 ACCOUNT_FILES = ('passwd', 'group', 'shadow', 'gshadow', 'subuid', 'subgid')
+BASELINE_CASES = ('RequiresCommittedBatchReceipt', 'ReplyRejectsUnrelatedDatagrams',
+                  'GenerationRejectsMissingOrAmbiguousIdentity', 'EndpointRequiresRetainedOwner',
+                  'SemanticFailureRetiresOriginalEndpoint')
 
 
 def account_mounts(directory):
@@ -262,7 +265,9 @@ def execute(source: Path, go='go', *, env=None):
     required = {'desktop_socket_linux_policy.go', 'desktop_socket_linux_helper.go',
                 'desktop_socket_linux_nft.go', 'desktop_socket_linux_guardian_test.go',
                 'desktop_socket_linux_protection.go', 'desktop_socket_linux_protection_record.go',
-                'desktop_socket_linux_protection_native_test.go', 'desktop_socket_linux_flags_test.go'}
+                'desktop_socket_linux_protection_native_test.go', 'desktop_socket_linux_flags_test.go',
+                'desktop_socket_linux_baseline_netlink.go', 'desktop_socket_linux_baseline_netlink_test.go',
+                'desktop_socket_linux_baseline_netlink_native_test.go'}
     if not required.issubset(before):
         raise ValueError('The complete production guardian and actual kernel tests were not copied')
     captured = dict(os.environ if env is None else env, GOWORK='off')
@@ -283,6 +288,11 @@ def execute(source: Path, go='go', *, env=None):
         if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_mode & 0o022 or info.st_size == 0:
             raise ValueError('Linux guardian compiler did not produce its owned executable')
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+        baseline_output = UID.run([str(binary), '-test.run=^TestLinuxBaseline', '-test.count=1',
+                                   '-test.timeout=20s', '-test.v'], cwd=source)
+        if any('--- PASS: TestLinuxBaseline' + name + ' (' not in baseline_output for name in BASELINE_CASES) or '--- SKIP:' in baseline_output:
+            raise ValueError('Linux baseline receipt gate omitted an owned transaction boundary')
+        print(baseline_output, end='' if baseline_output.endswith('\n') else '\n')
         command = [sys.executable, str(Path(__file__).resolve()), '--namespace-test-binary', str(binary)]
         if sudo is not None:
             command = [sudo, '-n', '--', *command]
@@ -320,6 +330,10 @@ def execute_mutations(source: Path, go='go', *, env=None):
         'retired native join acknowledgment': 'empty inventory substituted for native close acknowledgment',
         'retired complete native baseline': 'changed native baseline was accepted as retained protection',
         'active table flags': 'actual heartbeat accepted the dormant native baseline',
+        'conditional baseline generation': 'stale ruleset generation did not reject the actual conditional transaction',
+        'original baseline table handle': 'retired handle deleted or adopted a same-name replacement',
+        'committed baseline receipt': 'substituted for committed batch receipt',
+        'uncertain baseline receipt': 'semantic receipt failure left its original endpoint reusable',
     }
     mutations = (
         ('admitted heartbeat deadline', 'HeartbeatAdmission', 'desktop_socket_linux_policy.go', (
@@ -373,6 +387,19 @@ def execute_mutations(source: Path, go='go', *, env=None):
             ('values, ok := flags.([]any)\n\treturn ok && len(values) == 0',
              '_ = flags\n\treturn true'),
         )),
+        ('conditional baseline generation', 'BaselineTransactions', 'desktop_socket_linux_baseline_netlink.go', (
+            ('binary.BigEndian.PutUint32(gen[:], generation)', 'binary.BigEndian.PutUint32(gen[:], 0)'),
+        )),
+        ('original baseline table handle', 'BaselineTransactions', 'desktop_socket_linux_baseline_netlink.go', (
+            ('desktopLinuxBaselineAttribute(4, object[:])',
+             'desktopLinuxBaselineAttribute(1, []byte("rvpn_baseline_transaction\\x00"))'),
+        )),
+        ('committed baseline receipt', 'TestLinuxBaselineRequiresCommittedBatchReceipt', 'desktop_socket_linux_baseline_netlink.go', (
+            ('if index != 2 {', 'if index != 1 && index != 2 {'),
+        )),
+        ('uncertain baseline receipt', 'TestLinuxBaselineSemanticFailureRetiresOriginalEndpoint', 'desktop_socket_linux_baseline_netlink.go', (
+            ('\t\tn.uncertain = err\n', '\t\t_ = err\n'),
+        )),
     )
     with tempfile.TemporaryDirectory(prefix='routervpn-guardian-mutations-') as temporary:
         directory = Path(temporary)
@@ -390,16 +417,21 @@ def execute_mutations(source: Path, go='go', *, env=None):
             binary = directory/(str(index)+'-guardian.test')
             UID.run([compiler, 'test', '-c', '-race', '-mod=readonly', '-tags=routervpn_linux_guardian',
                      '-overlay='+str(overlay), '-o', binary, './routervpn/mobiletor'], cwd=source, env=captured)
-            command = [sys.executable, str(Path(__file__).resolve()), '--namespace-test-binary', str(binary),
-                       '--kernel-case', case]
-            if sudo is not None:
-                command = [sudo, '-n', '--', *command]
+            native = not case.startswith('TestLinuxBaseline')
+            expected_case = 'TestDesktopLinuxGuardianKernel'+case if native else case
+            if native:
+                command = [sys.executable, str(Path(__file__).resolve()), '--namespace-test-binary', str(binary),
+                           '--kernel-case', case]
+                if sudo is not None:
+                    command = [sudo, '-n', '--', *command]
+            else:
+                command = [str(binary), '-test.run=^'+case+'$', '-test.count=1', '-test.timeout=20s', '-test.v']
             try:
                 UID.run(command, cwd=source, timeout=150, sudo=sudo)
             except subprocess.CalledProcessError as error:
                 output = error.output.decode('utf-8', errors='replace')
                 witness = heartbeat_witnesses.get(label)
-                if ('--- FAIL: TestDesktopLinuxGuardianKernel'+case+' (' not in output
+                if ('--- FAIL: '+expected_case+' (' not in output
                         or witness is not None and witness not in output):
                     raise ValueError('Guardian mutation failed before its intended kernel assertion: '+label+'\n'+output) from error
                 print('Rejected broken '+label+' through '+case+'.', flush=True)
