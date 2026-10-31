@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"maps"
 	"path/filepath"
 	"runtime"
@@ -97,8 +98,8 @@ func fixtureInspectMediumStartup(t *testing.T, api *fixtureRestrictedAPI, token 
 			t.Fatal(nativeError("Medium startup native AccessCheck", callErr))
 		}
 		t.Logf("Actual constructed-Medium startup access: %s desired=0x%x granted=0x%x allowed=%t", name, wanted, granted, allowed == 1)
-		if kind == 6 && (allowed != 1 || granted&wanted != wanted) {
-			t.Fatal("new Medium fixture process/thread denies its own captured token", name)
+		if allowed != 1 || granted&wanted != wanted {
+			t.Fatal("new Medium fixture denies required access to its captured token", name)
 		}
 	}
 	t.Logf("Constructed primary-Medium startup: captured session=%d child=%d; original private desktop ACLs and token authority remain unchanged", session, process.ProcessId)
@@ -108,7 +109,34 @@ func fixtureInspectMediumStartup(t *testing.T, api *fixtureRestrictedAPI, token 
 	func() {
 		image.mu.Lock()
 		defer image.mu.Unlock()
-		check("captured-executable", image.handles[len(image.handles)-1], 1, 0x001f01ff, 0x001200a9)
+		reopen, err := api.native.event.Dll.FindProc("ReOpenFile")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for index, held := range image.handles {
+			value, _, callErr := reopen.Call(uintptr(held), 0x00020080,
+				syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE|syscall.FILE_SHARE_DELETE, 0x02200000)
+			if syscall.Handle(value) == syscall.InvalidHandle || value == 0 {
+				t.Fatal(nativeError("Medium captured executable ancestry security readback", callErr))
+			}
+			func() {
+				handle := syscall.Handle(value)
+				defer func() {
+					if err := syscall.CloseHandle(handle); err != nil {
+						t.Error(err)
+					}
+				}()
+				var information syscall.ByHandleFileInformation
+				if err := syscall.GetFileInformationByHandle(handle, &information); err != nil {
+					t.Fatal(err)
+				}
+				wanted := uint32(0x001200a9)
+				if information.FileAttributes&syscall.FILE_ATTRIBUTE_DIRECTORY != 0 {
+					wanted = 0x81 // Actual PinImage ancestor LIST_DIRECTORY | READ_ATTRIBUTES.
+				}
+				check(fmt.Sprintf("captured-executable-component-%d", index), handle, 1, 0x001f01ff, wanted)
+			}()
+		}
 	}()
 	for _, library := range []string{"ntdll.dll", "kernel32.dll", "KernelBase.dll", "user32.dll", "gdi32.dll", "bcryptprimitives.dll"} {
 		name, _ := syscall.UTF16PtrFromString(filepath.Join(api.native.systemDirectory, library))

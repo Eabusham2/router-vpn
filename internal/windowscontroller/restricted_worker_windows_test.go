@@ -152,16 +152,17 @@ func fixtureSamePrimary(a, b TokenIdentity) bool {
 }
 
 type fixtureRestrictedWorker struct {
-	api        *fixtureRestrictedAPI
-	directory  string
-	desktop    string
-	inspect    func(syscall.ProcessInformation, *Image)
-	job        syscall.Handle
-	process    syscall.ProcessInformation
-	image      *Image
-	report     *os.File
-	parent     syscall.Token
-	privileges map[fixturePrivilegeLUID]uint32
+	api          *fixtureRestrictedAPI
+	directory    string
+	desktop      string
+	inspect      func(syscall.ProcessInformation, *Image)
+	job          syscall.Handle
+	process      syscall.ProcessInformation
+	image        *Image
+	privateImage *fixtureMediumImage
+	report       *os.File
+	parent       syscall.Token
+	privileges   map[fixturePrivilegeLUID]uint32
 }
 
 func fixtureStartRestrictedDACLWorker(t *testing.T, api *fixtureRestrictedAPI, test string) *fixtureRestrictedWorker {
@@ -318,6 +319,16 @@ func fixtureStartPrimaryWorker(t *testing.T, worker *fixtureRestrictedWorker, to
 	worker.image, err = PinCurrentImage()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if marker == fixtureMediumWorkerEnvironment {
+		worker.privateImage, err = fixtureCaptureMediumImage(api, worker.image, parentIdentity.SID)
+		if err != nil {
+			t.Fatal("private Medium executable fixture could not capture its exact readable image", err)
+		}
+		if err := worker.image.Close(); err != nil {
+			t.Fatal(err)
+		}
+		worker.image = worker.privateImage.image
 	}
 	// The full native runner may execute through a short TEMP component. Use
 	// the held file's normalized DOS spelling for this suspended candidate,
@@ -522,5 +533,8 @@ func (worker *fixtureRestrictedWorker) close() error {
 		result = errors.Join(result, worker.report.Close())
 		worker.report = nil
 	}
-	return errors.Join(result, worker.image.Close())
+	if err := worker.image.Close(); err != nil {
+		return errors.Join(result, err)
+	}
+	return errors.Join(result, worker.privateImage.close())
 }
