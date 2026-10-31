@@ -17,7 +17,7 @@ import (
 
 func (n *NodeNetworkOwner) PrepareNodePhysicalPolicy(policy *mobilemultihop.DesktopNodePolicy) error {
 	return n.prepareNodePhysicalLinuxLifecycle(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, options mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
-		owned, err := mobiletor.NewDesktopLinuxSocketPolicy(ctx, capture, options)
+		owned, err := mobiletor.NewDesktopLinuxNodeSocketPolicy(ctx, capture, options)
 		if owned == nil {
 			return nil, err
 		}

@@ -20,10 +20,9 @@ import (
 	"time"
 )
 
-const desktopLinuxNFTTable = "router_vpn_killswitch"
-
 type desktopLinuxNFT struct {
 	Capture     DesktopSocketCapture
+	TableName   string `json:",omitempty"`
 	UID         uint32
 	Prefix      string
 	TableHandle uint64
@@ -101,7 +100,7 @@ func (n *desktopLinuxNFT) captureBaseline(rows []map[string]any, options Desktop
 			continue
 		}
 		handle := desktopLinuxNumber(rule["handle"])
-		if handle == 0 || rule["family"] != "inet" || rule["table"] != desktopLinuxNFTTable || rule["chain"] != "output" {
+		if handle == 0 || rule["family"] != "inet" || rule["table"] != n.table() || rule["chain"] != "output" {
 			return errors.New("Linux physical baseline has an unrelated rule")
 		}
 		matched := -1
@@ -167,7 +166,14 @@ func desktopLinuxNFTRows(raw []byte) ([]map[string]any, error) {
 }
 
 func desktopLinuxNFTRead(ctx context.Context) ([]map[string]any, error) {
-	raw, err := desktopLinuxNFTCommand(ctx, []string{"-j", "-n", "list", "table", "inet", desktopLinuxNFTTable}, "")
+	return desktopLinuxNFTReadTable(ctx, desktopLinuxNFTTable)
+}
+
+func desktopLinuxNFTReadTable(ctx context.Context, tableName string) ([]map[string]any, error) {
+	if tableName != desktopLinuxNFTTable && (!strings.HasPrefix(tableName, desktopLinuxNodeTablePrefix) || !desktopSocketHex(strings.TrimPrefix(tableName, desktopLinuxNodeTablePrefix), 32)) {
+		return nil, errors.New("Linux physical readback rejected an unowned table name")
+	}
+	raw, err := desktopLinuxNFTCommand(ctx, []string{"-j", "-n", "list", "table", "inet", tableName}, "")
 	if err == nil {
 		return desktopLinuxNFTRows(raw)
 	}
@@ -181,13 +187,25 @@ func desktopLinuxNFTRead(ctx context.Context) ([]map[string]any, error) {
 	if listErr != nil {
 		return nil, listErr
 	}
-	for _, row := range rows {
-		table, _ := row["table"].(map[string]any)
-		if table["family"] == "inet" && table["name"] == desktopLinuxNFTTable {
-			return nil, err
-		}
+	if err := desktopLinuxTableListAbsent(rows, func(name string) bool { return name == tableName }); err != nil {
+		return nil, err
 	}
 	return nil, nil
+}
+
+func (n *desktopLinuxNFT) table() string {
+	if n.TableName == "" {
+		return desktopLinuxNFTTable
+	}
+	return n.TableName
+}
+
+func desktopLinuxNFTForCapture(c DesktopSocketCapture, node bool) *desktopLinuxNFT {
+	n := &desktopLinuxNFT{Capture: c, Baseline: make(map[uint64]any)}
+	if node {
+		n.TableName = desktopLinuxNodeTable(c)
+	}
+	return n
 }
 
 func desktopLinuxNumber(v any) uint64 {
@@ -208,18 +226,18 @@ func desktopLinuxNFTTableActive(table map[string]any) bool {
 }
 
 func (n *desktopLinuxNFT) captureChain(ctx context.Context, options DesktopLinuxSocketOptions) error {
-	rows, err := desktopLinuxNFTRead(ctx)
+	rows, err := desktopLinuxNFTReadTable(ctx, n.table())
 	if err != nil {
 		return err
 	}
 	for _, row := range rows {
-		if table, ok := row["table"].(map[string]any); ok && table["family"] == "inet" && table["name"] == desktopLinuxNFTTable {
+		if table, ok := row["table"].(map[string]any); ok && table["family"] == "inet" && table["name"] == n.table() {
 			if !desktopLinuxNFTTableActive(table) {
 				return errors.New("Linux physical baseline table is inactive or has unselected flags")
 			}
 			n.TableHandle = desktopLinuxNumber(table["handle"])
 		}
-		if chain, ok := row["chain"].(map[string]any); ok && chain["family"] == "inet" && chain["table"] == desktopLinuxNFTTable && chain["name"] == "output" && chain["type"] == "filter" && chain["hook"] == "output" && chain["policy"] == "drop" && chain["prio"] == float64(-310) && chain["comment"] == "routervpn-owned-baseline:"+n.Capture.SessionID+":"+n.Capture.SourceSHA256 {
+		if chain, ok := row["chain"].(map[string]any); ok && chain["family"] == "inet" && chain["table"] == n.table() && chain["name"] == "output" && chain["type"] == "filter" && chain["hook"] == "output" && chain["policy"] == "drop" && chain["prio"] == float64(-310) && chain["comment"] == "routervpn-owned-baseline:"+n.Capture.SessionID+":"+n.Capture.SourceSHA256 {
 			n.ChainHandle = desktopLinuxNumber(chain["handle"])
 		}
 	}
@@ -229,17 +247,18 @@ func (n *desktopLinuxNFT) captureChain(ctx context.Context, options DesktopLinux
 	return n.captureBaseline(rows, options)
 }
 
-func desktopLinuxValidateNFTBaseline(ctx context.Context, c DesktopSocketCapture, options DesktopLinuxSocketOptions) error {
-	n := &desktopLinuxNFT{Capture: c, Baseline: make(map[uint64]any)}
+func desktopLinuxValidateNFTBaseline(ctx context.Context, c DesktopSocketCapture, options DesktopLinuxSocketOptions, node bool) error {
+	n := desktopLinuxNFTForCapture(c, node)
 	return n.captureChain(ctx, options)
 }
 
-func desktopLinuxNewNFT(c DesktopSocketCapture, uid uint32, options DesktopLinuxSocketOptions) (*desktopLinuxNFT, error) {
+func desktopLinuxNewNFT(c DesktopSocketCapture, uid uint32, options DesktopLinuxSocketOptions, node bool) (*desktopLinuxNFT, error) {
 	var nonce [10]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		return nil, err
 	}
-	n := &desktopLinuxNFT{Capture: c, UID: uid, Prefix: "rvpn_" + hex.EncodeToString(nonce[:]), Rules: make(map[string]uint64), Sets: make(map[string]uint64), Baseline: make(map[uint64]any)}
+	n := desktopLinuxNFTForCapture(c, node)
+	n.UID, n.Prefix, n.Rules, n.Sets = uid, "rvpn_"+hex.EncodeToString(nonce[:]), make(map[string]uint64), make(map[string]uint64)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if err := n.captureChain(ctx, options); err != nil {
@@ -252,13 +271,13 @@ func desktopLinuxNewNFT(c DesktopSocketCapture, uid uint32, options DesktopLinux
 			family = "ip6"
 		}
 		name := n.Prefix + "_" + kind
-		fmt.Fprintf(&script, "add set inet %s %s { typeof meta oif . %s saddr . %s sport . %s daddr . %s dport; flags timeout; timeout 9s; size 4096; }\n", desktopLinuxNFTTable, name, family, network, family, network)
-		fmt.Fprintf(&script, "insert rule inet %s output meta skuid %d meta l4proto %s meta oif . %s saddr . %s sport . %s daddr . %s dport @%s accept comment %s\n", desktopLinuxNFTTable, uid, network, family, network, family, network, name, strconv.Quote(n.comment(kind)))
+		fmt.Fprintf(&script, "add set inet %s %s { typeof meta oif . %s saddr . %s sport . %s daddr . %s dport; flags timeout; timeout 9s; size 4096; }\n", n.table(), name, family, network, family, network)
+		fmt.Fprintf(&script, "insert rule inet %s output meta skuid %d meta l4proto %s meta oif . %s saddr . %s sport . %s daddr . %s dport @%s accept comment %s\n", n.table(), uid, network, family, network, family, network, name, strconv.Quote(n.comment(kind)))
 	}
 	if _, err := desktopLinuxNFTCommand(ctx, []string{"-f", "-"}, script.String()); err != nil {
 		return n, err
 	}
-	rows, err := desktopLinuxNFTRead(ctx)
+	rows, err := desktopLinuxNFTReadTable(ctx, n.table())
 	if err != nil {
 		return n, err
 	}
@@ -300,25 +319,25 @@ func (n *desktopLinuxNFT) ruleExpressions(kind string) any {
 }
 
 func (n *desktopLinuxNFT) verifyRows(rows []map[string]any, required bool) error {
-	if n == nil || !n.Capture.valid() || n.UID == 0 || len(n.Prefix) != 25 || !strings.HasPrefix(n.Prefix, "rvpn_") {
+	if n == nil || !desktopLinuxTableValid(n.Capture, n.TableName) || n.UID == 0 || len(n.Prefix) != 25 || !strings.HasPrefix(n.Prefix, "rvpn_") {
 		return errors.New("Linux physical nft identity is malformed")
 	}
 	tableOK, chainOK := false, false
 	foundRules, foundSets := make(map[string]bool), make(map[string]bool)
 	baselineFound := make(map[uint64]bool)
 	for _, row := range rows {
-		if table, ok := row["table"].(map[string]any); ok && table["family"] == "inet" && table["name"] == desktopLinuxNFTTable {
+		if table, ok := row["table"].(map[string]any); ok && table["family"] == "inet" && table["name"] == n.table() {
 			tableOK = desktopLinuxNumber(table["handle"]) == n.TableHandle && desktopLinuxNFTTableActive(table)
 		}
 		if chain, ok := row["chain"].(map[string]any); ok && chain["name"] == "output" {
-			chainOK = chain["family"] == "inet" && chain["table"] == desktopLinuxNFTTable && desktopLinuxNumber(chain["handle"]) == n.ChainHandle && chain["policy"] == "drop" && chain["type"] == "filter" && chain["hook"] == "output" && chain["prio"] == float64(-310) && chain["comment"] == "routervpn-owned-baseline:"+n.Capture.SessionID+":"+n.Capture.SourceSHA256
+			chainOK = chain["family"] == "inet" && chain["table"] == n.table() && desktopLinuxNumber(chain["handle"]) == n.ChainHandle && chain["policy"] == "drop" && chain["type"] == "filter" && chain["hook"] == "output" && chain["prio"] == float64(-310) && chain["comment"] == "routervpn-owned-baseline:"+n.Capture.SessionID+":"+n.Capture.SourceSHA256
 		}
 		if rule, ok := row["rule"].(map[string]any); ok && required {
 			comment, _ := rule["comment"].(string)
 			if !strings.Contains(comment, ":"+n.Prefix+":") {
 				handle := desktopLinuxNumber(rule["handle"])
 				expected, found := n.Baseline[handle]
-				if !found || baselineFound[handle] || rule["family"] != "inet" || rule["table"] != desktopLinuxNFTTable || rule["chain"] != "output" || !reflect.DeepEqual(rule["expr"], expected) {
+				if !found || baselineFound[handle] || rule["family"] != "inet" || rule["table"] != n.table() || rule["chain"] != "output" || !reflect.DeepEqual(rule["expr"], expected) {
 					return errors.New("Linux fail-closed baseline gained or changed an output exemption")
 				}
 				baselineFound[handle] = true
@@ -326,7 +345,7 @@ func (n *desktopLinuxNFT) verifyRows(rows []map[string]any, required bool) error
 		}
 		for _, kind := range []string{"tcp4", "udp4", "tcp6", "udp6"} {
 			if rule, ok := row["rule"].(map[string]any); ok && rule["comment"] == n.comment(kind) {
-				if foundRules[kind] || rule["family"] != "inet" || rule["table"] != desktopLinuxNFTTable || rule["chain"] != "output" || n.Rules[kind] == 0 || desktopLinuxNumber(rule["handle"]) != n.Rules[kind] || !reflect.DeepEqual(rule["expr"], n.ruleExpressions(kind)) {
+				if foundRules[kind] || rule["family"] != "inet" || rule["table"] != n.table() || rule["chain"] != "output" || n.Rules[kind] == 0 || desktopLinuxNumber(rule["handle"]) != n.Rules[kind] || !reflect.DeepEqual(rule["expr"], n.ruleExpressions(kind)) {
 					return errors.New("Linux physical rule lost exact UID/interface/tuple ownership")
 				}
 				foundRules[kind] = true
@@ -336,7 +355,7 @@ func (n *desktopLinuxNFT) verifyRows(rows []map[string]any, required bool) error
 				if kind[3] == '6' {
 					addressType = "ipv6_addr"
 				}
-				if foundSets[kind] || set["family"] != "inet" || set["table"] != desktopLinuxNFTTable || n.Sets[kind] == 0 || desktopLinuxNumber(set["handle"]) != n.Sets[kind] || !reflect.DeepEqual(set["type"], []any{"iface_index", addressType, "inet_service", addressType, "inet_service"}) || !reflect.DeepEqual(set["flags"], []any{"timeout"}) || set["timeout"] != float64(9) || set["size"] != float64(4096) {
+				if foundSets[kind] || set["family"] != "inet" || set["table"] != n.table() || n.Sets[kind] == 0 || desktopLinuxNumber(set["handle"]) != n.Sets[kind] || !reflect.DeepEqual(set["type"], []any{"iface_index", addressType, "inet_service", addressType, "inet_service"}) || !reflect.DeepEqual(set["flags"], []any{"timeout"}) || set["timeout"] != float64(9) || set["size"] != float64(4096) {
 					return errors.New("Linux physical tuple set lost its exact timed bound")
 				}
 				foundSets[kind] = true
@@ -350,7 +369,7 @@ func (n *desktopLinuxNFT) verifyRows(rows []map[string]any, required bool) error
 }
 
 func (n *desktopLinuxNFT) verify(ctx context.Context, required bool) error {
-	rows, err := desktopLinuxNFTRead(ctx)
+	rows, err := desktopLinuxNFTReadTable(ctx, n.table())
 	if err != nil {
 		return err
 	}
@@ -402,11 +421,11 @@ func (n *desktopLinuxNFT) grant(ctx context.Context, g DesktopSocketGrant) (Desk
 	started := time.Now()
 	set := n.Prefix + "_" + n.kind(g)
 	comment := g.SocketID + ":" + strconv.FormatUint(g.Sequence, 10)
-	script := fmt.Sprintf("destroy element inet %s %s { %s }\nadd element inet %s %s { %s timeout 9s comment %s }\n", desktopLinuxNFTTable, set, n.key(g), desktopLinuxNFTTable, set, n.key(g), strconv.Quote(comment))
+	script := fmt.Sprintf("destroy element inet %s %s { %s }\nadd element inet %s %s { %s timeout 9s comment %s }\n", n.table(), set, n.key(g), n.table(), set, n.key(g), strconv.Quote(comment))
 	if _, err := desktopLinuxNFTCommand(ctx, []string{"-f", "-"}, script); err != nil {
 		return DesktopSocketReceipt{}, err
 	}
-	rows, err := desktopLinuxNFTRead(ctx)
+	rows, err := desktopLinuxNFTReadTable(ctx, n.table())
 	if err != nil {
 		return DesktopSocketReceipt{}, err
 	}
@@ -421,7 +440,7 @@ func (n *desktopLinuxNFT) grant(ctx context.Context, g DesktopSocketGrant) (Desk
 }
 
 func (n *desktopLinuxNFT) absent(ctx context.Context, g DesktopSocketGrant) error {
-	rows, err := desktopLinuxNFTRead(ctx)
+	rows, err := desktopLinuxNFTReadTable(ctx, n.table())
 	if err != nil {
 		return err
 	}
@@ -436,7 +455,7 @@ func (n *desktopLinuxNFT) absent(ctx context.Context, g DesktopSocketGrant) erro
 }
 
 func (n *desktopLinuxNFT) revoke(ctx context.Context, g DesktopSocketGrant) error {
-	rows, err := desktopLinuxNFTRead(ctx)
+	rows, err := desktopLinuxNFTReadTable(ctx, n.table())
 	if err != nil {
 		return err
 	}
@@ -445,7 +464,7 @@ func (n *desktopLinuxNFT) revoke(ctx context.Context, g DesktopSocketGrant) erro
 		return err
 	}
 	if found {
-		_, err = desktopLinuxNFTCommand(ctx, []string{"-f", "-"}, fmt.Sprintf("destroy element inet %s %s { %s }\n", desktopLinuxNFTTable, n.Prefix+"_"+n.kind(g), n.key(g)))
+		_, err = desktopLinuxNFTCommand(ctx, []string{"-f", "-"}, fmt.Sprintf("destroy element inet %s %s { %s }\n", n.table(), n.Prefix+"_"+n.kind(g), n.key(g)))
 		if err != nil {
 			return err
 		}
@@ -454,7 +473,7 @@ func (n *desktopLinuxNFT) revoke(ctx context.Context, g DesktopSocketGrant) erro
 }
 
 func (n *desktopLinuxNFT) allAbsent(ctx context.Context) error {
-	rows, err := desktopLinuxNFTRead(ctx)
+	rows, err := desktopLinuxNFTReadTable(ctx, n.table())
 	if err != nil {
 		return err
 	}
@@ -474,7 +493,7 @@ func (n *desktopLinuxNFT) allAbsent(ctx context.Context) error {
 }
 
 func (n *desktopLinuxNFT) close(ctx context.Context) error {
-	rows, err := desktopLinuxNFTRead(ctx)
+	rows, err := desktopLinuxNFTReadTable(ctx, n.table())
 	if err != nil {
 		return err
 	}
@@ -486,7 +505,7 @@ func (n *desktopLinuxNFT) close(ctx context.Context) error {
 		rule, _ := row["rule"].(map[string]any)
 		for _, kind := range []string{"tcp4", "udp4", "tcp6", "udp6"} {
 			if rule["comment"] == n.comment(kind) {
-				fmt.Fprintf(&script, "delete rule inet %s output handle %d\n", desktopLinuxNFTTable, n.Rules[kind])
+				fmt.Fprintf(&script, "delete rule inet %s output handle %d\n", n.table(), n.Rules[kind])
 			}
 		}
 	}
@@ -494,7 +513,7 @@ func (n *desktopLinuxNFT) close(ctx context.Context) error {
 		set, _ := row["set"].(map[string]any)
 		for _, kind := range []string{"tcp4", "udp4", "tcp6", "udp6"} {
 			if set["name"] == n.Prefix+"_"+kind {
-				fmt.Fprintf(&script, "delete set inet %s %s\n", desktopLinuxNFTTable, n.Prefix+"_"+kind)
+				fmt.Fprintf(&script, "delete set inet %s %s\n", n.table(), n.Prefix+"_"+kind)
 			}
 		}
 	}

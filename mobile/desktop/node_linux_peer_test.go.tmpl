@@ -227,6 +227,7 @@ func desktopNodeLinuxProbe(t *testing.T, peer *desktopNodeLayerReference, blocke
 type desktopNodeLinuxFixture struct {
 	*desktopNodePeerFixture
 	preparation *box.RouterVPNDesktopLinuxNodePreparation
+	baseline    *mobiletor.DesktopLinuxNodeBaseline
 	prepared    routervpndesktoppt.NodeLinuxPhysicalPrepared
 	admissions  int
 }
@@ -243,17 +244,18 @@ func desktopNodeLinuxBox(t *testing.T, original *mobilemultihop.NodeProfile, res
 	}
 	f := &desktopNodeLinuxFixture{desktopNodePeerFixture: &desktopNodePeerFixture{policy: policy}}
 	meta := policy.Metadata()
-	script := fmt.Sprintf(`add table inet router_vpn_killswitch
-add chain inet router_vpn_killswitch output { type filter hook output priority -310; policy drop; comment "routervpn-owned-baseline:%s:%s"; }
-add rule inet router_vpn_killswitch output oifname "lo" accept
-add rule inet router_vpn_killswitch output oifname { "wg", "awg", "router-vpn" } accept
-add rule inet router_vpn_killswitch output ip protocol udp udp sport 68 udp dport 67 accept
-add rule inet router_vpn_killswitch output ip6 nexthdr ipv6-icmp icmpv6 type { nd-neighbor-solicit, nd-neighbor-advert, nd-router-solicit, nd-router-advert } accept
-`, meta.SessionID, meta.SourceSHA256)
-	desktopNodeLinuxCommand(t, script, "nft", "-f", "-")
+	table := "router_vpn_node_" + meta.SessionID
 	t.Cleanup(func() {
-		if err := mobiletor.ReadDesktopLinuxProtectionAbsence(context.Background()); err != nil {
-			desktopNodeLinuxCommand(t, "", "nft", "delete", "table", "inet", "router_vpn_killswitch")
+		if f.baseline != nil {
+			if err := f.baseline.Close(context.Background()); err != nil {
+				t.Error("Linux original baseline descriptor cleanup failed", err)
+			}
+		}
+		// The isolated fixture owns only this strictly derived session table.
+		// Unrelated fixed/global and predecessor tables remain untouched.
+		command := exec.Command("nft", "list", "table", "inet", table)
+		if err := command.Run(); err == nil {
+			desktopNodeLinuxCommand(t, "", "nft", "delete", "table", "inet", table)
 		}
 	})
 	ins := inbound.NewRegistry()
@@ -275,13 +277,26 @@ add rule inet router_vpn_killswitch output ip6 nexthdr ipv6-icmp icmpv6 type { n
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
-	ctx, err = routervpndesktoppt.WithNodeLinuxPhysicalAdmission(ctx, policy, func(ctx context.Context, prepared routervpndesktoppt.NodeLinuxPhysicalPrepared) error {
+	ctx, err = routervpndesktoppt.WithNodeLinuxPhysicalBaseline(ctx, policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture) error {
+		if f.baseline != nil || capture.SessionID != meta.SessionID || capture.SourceSHA256 != meta.SourceSHA256 || f.network.SocketCurrent() {
+			return errors.New("Linux baseline factory changed its original captured owner")
+		}
+		var err error
+		f.baseline, err = mobiletor.NewDesktopLinuxNodeBaseline(ctx, capture, meta.HomeLANAccess)
+		return err
+	}, func(ctx context.Context, prepared routervpndesktoppt.NodeLinuxPhysicalPrepared) error {
 		if f.network.SocketCurrent() || f.network.Current() || f.admissions != 0 || ctx.Err() != nil ||
 			prepared.Policy != meta.KillSwitchPolicy || prepared.Protection.Validate() != nil || prepared.Protection.Capture.SessionID != meta.SessionID || prepared.Protection.Capture.SourceSHA256 != meta.SourceSHA256 {
 			return errors.New("Linux actual Node admission lost its pre-TUN selected capture")
 		}
 		if _, err := net.InterfaceByName("router-vpn"); err == nil {
 			return errors.New("Linux actual TUN started before native admission")
+		}
+		if f.baseline == nil {
+			return errors.New("Linux admission bypassed its original baseline creation")
+		}
+		if err := f.baseline.BindPrepared(ctx, prepared.Protection); err != nil {
+			return err
 		}
 		f.prepared, f.admissions = prepared, 1
 		switch fault {
@@ -290,7 +305,7 @@ add rule inet router_vpn_killswitch output ip6 nexthdr ipv6-icmp icmpv6 type { n
 		case "callback-error":
 			return errors.New("captured Linux callback refused admission")
 		case "changed-baseline":
-			desktopNodeLinuxCommand(t, "add rule inet router_vpn_killswitch output ip daddr 192.0.2.70 accept\n", "nft", "-f", "-")
+			desktopNodeLinuxCommand(t, "add rule inet "+table+" output ip daddr 192.0.2.70 accept\n", "nft", "-f", "-")
 		}
 		return nil
 	})

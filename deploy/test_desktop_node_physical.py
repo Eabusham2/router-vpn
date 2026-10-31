@@ -403,6 +403,9 @@ def mutants(source, windows):
         ))
         lifecycle = "routervpn/desktoppt/node_linux_lifecycle.go"
         result.extend((
+            ('linux-node-baseline-before-guardian', lifecycle, './routervpn/desktoppt', 'TestRouterVPNNodeLinuxLifecycleCreatesBaselineBeforeGuardian', 'callback-error',
+             'failed or cancelled baseline reached native guardian construction', changed(lifecycle,
+             'if err := baseline(ctx, capture); err != nil {', 'if err := baseline(ctx, capture); false {')),
             ('linux-node-exact-policy-pointer', lifecycle, './routervpn/desktoppt', 'TestRouterVPNNodeLinuxLifecycleRejectsMissingOrReusedCapability', '',
              'Linux admission accepted an equivalent replacement policy object', changed(lifecycle, 'owner.policy != policy || owner.admit == nil', 'owner.admit == nil')),
             ('linux-node-native-prepared-owner', lifecycle, './routervpn/desktoppt', 'TestRouterVPNNodeLinuxLifecycleBracketsAdmissionAndRetainsSource', 'always/before-owner',
@@ -443,7 +446,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          tuple("TestRouterVPNNodePhysical" + name for name in ("SeparateRegistriesAndUnpreparedRejection", "HandshakePhaseAndExactPolicy", "FactoryCancellationJoinsPartialOwner", "RetirementKeepsExactJoinedSource", "AdmissionRetainsExactPolicy", "AdmissionCapturesExactPredecessor", "JournalAdmissionCapturesDurableBarrier")) +
          (tuple("TestRouterVPNNodePhysicalWindows" + name for name in ("CapturesPreparedOwner", "AdmissionRejectsChangedOwners", "CloseJoinsAdmission")) if windows else
           tuple("TestRouterVPNNodePhysicalUnix" + name for name in ("CapturesPolicyAndRetainsLateOwner", "RejectsUncapturedSourceBeforeConstructor", "CloseJoinsLateFactoryAndRetriesSource")) +
-          tuple("TestRouterVPNNodeLinuxLifecycle" + name for name in ("RejectsMissingOrReusedCapability", "BracketsAdmissionAndRetainsSource", "RetirementRequiresSuccessfulJoinAndSameRecord", "JoinsCancelledLateConstructor", "RetainedCapabilityOwnsDisconnectAndTeardown", "KeepsPartialRetentionUntilSourceJoin")))),
+          tuple("TestRouterVPNNodeLinuxLifecycle" + name for name in ("RejectsMissingOrReusedCapability", "BracketsAdmissionAndRetainsSource", "RetirementRequiresSuccessfulJoinAndSameRecord", "JoinsCancelledLateConstructor", "RetainedCapabilityOwnsDisconnectAndTeardown", "KeepsPartialRetentionUntilSourceJoin", "CreatesBaselineBeforeGuardian")))),
         ("box", ".", "^TestRouterVPNDesktopNodePhysical",
          tuple("TestRouterVPNDesktopNodePhysicalBox" + name for name in ("RejectsSubstitutedGraph", "RequiresPreparedOwner", "RetainsMTUAndExactRollback", "RestoresCapturedMTU")) +
          ("TestRouterVPNDesktopNodePhysicalDNSCapturedOwner", "TestRouterVPNDesktopNodePhysicalDNSRetirementCancelsQuery")),

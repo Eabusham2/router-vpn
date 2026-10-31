@@ -25,12 +25,13 @@ import (
 )
 
 type desktopLinuxRequest struct {
-	Operation string
-	Sequence  uint64
-	Capture   DesktopSocketCapture
-	Options   DesktopLinuxSocketOptions
-	Creation  DesktopSocketCreation
-	Grant     DesktopSocketGrant
+	Operation  string
+	Sequence   uint64
+	Capture    DesktopSocketCapture
+	Options    DesktopLinuxSocketOptions
+	NodeScoped bool `json:",omitempty"`
+	Creation   DesktopSocketCreation
+	Grant      DesktopSocketGrant
 }
 
 type desktopLinuxReply struct {
@@ -428,7 +429,7 @@ func RunDesktopLinuxSocketHelper(role string) error {
 		return errors.Join(err, errors.New("Linux physical preparation rejected"))
 	}
 	baselineCtx, baselineCancel := context.WithTimeout(context.Background(), 2*time.Second)
-	err = desktopLinuxValidateNFTBaseline(baselineCtx, request.Capture, request.Options)
+	err = desktopLinuxValidateNFTBaseline(baselineCtx, request.Capture, request.Options, request.NodeScoped)
 	baselineCancel()
 	if err != nil {
 		return err
@@ -450,7 +451,7 @@ func RunDesktopLinuxSocketHelper(role string) error {
 	// proves exact rules/sets absent, then closes retained sockets. It cannot
 	// release UID ownership on an unacknowledged native crash.
 	defer g.cleanup(false)
-	g.nft, err = desktopLinuxNewNFT(g.capture, g.uid, g.options)
+	g.nft, err = desktopLinuxNewNFT(g.capture, g.uid, g.options, request.NodeScoped)
 	if err != nil {
 		return err
 	}

@@ -484,3 +484,61 @@ func TestRouterVPNNodeLinuxLifecycleKeepsPartialRetentionUntilSourceJoin(t *test
 		t.Fatal("joined source leaked its partial retained endpoint", err)
 	}
 }
+
+func TestRouterVPNNodeLinuxLifecycleCreatesBaselineBeforeGuardian(t *testing.T) {
+	for _, fault := range []string{"live", "callback-error", "callback-cancel"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newNodeUnixFactoryFixture(t, "shadowsocks", "linux", "on", "always", false)
+			source := &nodeLinuxLifecycleSource{nodeUnixFactorySource: f.source}
+			source.record = mobiletor.DesktopLinuxProtectionRecord{Capture: f.node.network.brokerCapture(), Owner: source.owner,
+				UID: 22171, PermitPrefix: "rvpn_" + strings.Repeat("e", 20), TableName: "router_vpn_node_" + f.node.policy.Metadata().SessionID,
+				TableHandle: 11, ChainHandle: 12, BaselineSHA256: strings.Repeat("f", 64)}
+			baselines, constructors, admissions := 0, 0, 0
+			ctx, err := WithNodeLinuxPhysicalBaseline(f.node.network.ctx, f.node.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture) error {
+				baselines++
+				if constructors != 0 || admissions != 0 || capture != f.node.network.brokerCapture() || ctx.Err() != nil || f.node.network.SocketCurrent() {
+					return errors.New("baseline callback ran after native socket admission or with another capture")
+				}
+				if fault == "callback-error" {
+					return errors.New("original parent refused baseline creation")
+				}
+				if fault == "callback-cancel" {
+					f.node.network.cancel()
+				}
+				return nil
+			}, func(context.Context, NodeLinuxPhysicalPrepared) error {
+				admissions++
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.node.network.ctx = ctx
+			if err := f.node.network.prepareNodePhysicalLinuxLifecycle(f.node.policy, func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+				constructors++
+				if baselines != 1 {
+					return source, errors.New("guardian construction bypassed the actual baseline callback")
+				}
+				return source, nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			err = f.node.network.Start(adapter.StartStateInitialize)
+			if fault == "live" {
+				if err != nil || baselines != 1 || constructors != 1 || admissions != 1 {
+					t.Fatal("actual Node factory omitted its original baseline before native admission", err, baselines, constructors, admissions)
+				}
+			} else if err == nil || baselines != 1 || constructors != 0 || admissions != 0 {
+				t.Fatal("failed or cancelled baseline reached native guardian construction", err, baselines, constructors, admissions)
+			}
+			if err := f.node.network.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if source.retention != nil {
+				if err := f.node.network.CloseLinuxPhysicalProtection(context.Background(), f.node.policy); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}

@@ -20,11 +20,13 @@ type NodeLinuxPhysicalPrepared struct {
 }
 
 type NodeLinuxPhysicalAdmission func(context.Context, NodeLinuxPhysicalPrepared) error
+type NodeLinuxPhysicalBaseline func(context.Context, mobiletor.DesktopSocketCapture) error
 type nodeLinuxPhysicalAdmissionKey struct{}
 type nodeLinuxPhysicalAdmissionOwner struct {
 	mu        sync.Mutex
 	policy    *mobilemultihop.DesktopNodePolicy
 	admit     NodeLinuxPhysicalAdmission
+	baseline  NodeLinuxPhysicalBaseline
 	network   *NodeNetworkOwner
 	source    desktopLinuxPhysicalPolicy
 	capture   mobiletor.DesktopSocketCapture
@@ -50,6 +52,23 @@ type nodeLinuxProtectionRetainer interface {
 // public command activation still requires those separate Linux contracts.
 func WithNodeLinuxPhysicalAdmission(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy,
 	admit NodeLinuxPhysicalAdmission) (context.Context, error) {
+	return withNodeLinuxPhysicalAdmission(ctx, policy, nil, admit)
+}
+
+// WithNodeLinuxPhysicalBaseline lets the retained parent create the per-session
+// deny baseline after the actual network generation is captured, but before
+// guardian/socket creation. A failed callback retains its original parent
+// capability for joined cleanup. It does not grant public command admission.
+func WithNodeLinuxPhysicalBaseline(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy,
+	baseline NodeLinuxPhysicalBaseline, admit NodeLinuxPhysicalAdmission) (context.Context, error) {
+	if baseline == nil {
+		return nil, errors.New("Linux Router node baseline requires its original parent callback")
+	}
+	return withNodeLinuxPhysicalAdmission(ctx, policy, baseline, admit)
+}
+
+func withNodeLinuxPhysicalAdmission(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy,
+	baseline NodeLinuxPhysicalBaseline, admit NodeLinuxPhysicalAdmission) (context.Context, error) {
 	if ctx == nil || ctx.Err() != nil || policy == nil || policy.Validate() != nil || admit == nil ||
 		ctx.Value(nodeLinuxPhysicalAdmissionKey{}) != nil {
 		return nil, errors.New("Linux Router node admission requires its unique captured capability")
@@ -58,7 +77,7 @@ func WithNodeLinuxPhysicalAdmission(ctx context.Context, policy *mobilemultihop.
 	if meta.TargetOS != "linux" || (meta.KillSwitchPolicy != "on-connect" && meta.KillSwitchPolicy != "always") {
 		return nil, errors.New("Linux Router node admission lost its selected native protection policy")
 	}
-	return context.WithValue(ctx, nodeLinuxPhysicalAdmissionKey{}, &nodeLinuxPhysicalAdmissionOwner{policy: policy, admit: admit}), nil
+	return context.WithValue(ctx, nodeLinuxPhysicalAdmissionKey{}, &nodeLinuxPhysicalAdmissionOwner{policy: policy, baseline: baseline, admit: admit}), nil
 }
 
 func nodeLinuxPhysicalAdmissionFor(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy, live bool) (*nodeLinuxPhysicalAdmissionOwner, error) {
@@ -95,7 +114,16 @@ func (n *NodeNetworkOwner) prepareNodePhysicalLinuxLifecycle(policy *mobilemulti
 			return nil, errors.New("Linux Router node preparation was cancelled, replaced or already entered")
 		}
 		owner.entered, owner.capture = true, capture
+		baseline := owner.baseline
 		owner.mu.Unlock()
+		if baseline != nil {
+			if err := baseline(ctx, capture); err != nil {
+				return nil, err
+			}
+			if ctx.Err() != nil || !n.Matches(capture.SessionID, capture.SourceSHA256) {
+				return nil, errors.New("Linux Router node baseline callback lost its original captured generation")
+			}
+		}
 		owned, err := create(ctx, capture, options)
 		owner.mu.Lock()
 		owner.source = owned

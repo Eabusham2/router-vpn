@@ -94,10 +94,10 @@ func (p *DesktopLinuxSocketPolicy) protectionRecord() (DesktopLinuxProtectionRec
 			return DesktopLinuxProtectionRecord{}, errors.New("Linux baseline handle is not an exact JSON integer")
 		}
 		baselineRows = append(baselineRows, map[string]any{"rule": map[string]any{
-			"family": "inet", "table": desktopLinuxNFTTable, "chain": "output", "handle": float64(handle), "expr": expressions,
+			"family": "inet", "table": n.table(), "chain": "output", "handle": float64(handle), "expr": expressions,
 		}})
 	}
-	captured := &desktopLinuxNFT{Baseline: make(map[uint64]any)}
+	captured := &desktopLinuxNFT{Capture: n.Capture, TableName: n.TableName, Baseline: make(map[uint64]any)}
 	if err := captured.captureBaseline(baselineRows, p.options); err != nil {
 		return DesktopLinuxProtectionRecord{}, err
 	}
@@ -112,7 +112,7 @@ func (p *DesktopLinuxSocketPolicy) protectionRecord() (DesktopLinuxProtectionRec
 	}
 	digest := sha256.Sum256(encoded)
 	record := DesktopLinuxProtectionRecord{Capture: p.capture, Owner: p.owner, UID: p.uid, PermitPrefix: n.Prefix,
-		TableHandle: n.TableHandle, ChainHandle: n.ChainHandle, BaselineSHA256: hex.EncodeToString(digest[:])}
+		TableName: n.TableName, TableHandle: n.TableHandle, ChainHandle: n.ChainHandle, BaselineSHA256: hex.EncodeToString(digest[:])}
 	if err = record.Validate(); err != nil {
 		return DesktopLinuxProtectionRecord{}, err
 	}
@@ -122,7 +122,7 @@ func (p *DesktopLinuxSocketPolicy) protectionRecord() (DesktopLinuxProtectionRec
 func (p *DesktopLinuxSocketPolicy) readProtection(parent context.Context, prepared bool) error {
 	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 	defer cancel()
-	rows, err := desktopLinuxNFTRead(ctx)
+	rows, err := desktopLinuxNFTReadTable(ctx, p.nft.table())
 	if err != nil {
 		return err
 	}
@@ -165,6 +165,12 @@ func desktopLinuxProtectionRows(n *desktopLinuxNFT, rows []map[string]any, prepa
 	if err := n.verifyRows(rows, prepared); err != nil {
 		return err
 	}
+	return desktopLinuxProtectionInventoryRows(n, rows, prepared)
+}
+
+// The creator uses this inventory check without adopting a guardian UID or
+// permission. No permit rule or set is allowed in its closed baseline.
+func desktopLinuxProtectionInventoryRows(n *desktopLinuxNFT, rows []map[string]any, prepared bool) error {
 	tables, chains, metadata, rules, sets := 0, 0, 0, 0, 0
 	baseline := make(map[uint64]bool)
 	for _, row := range rows {
@@ -185,14 +191,14 @@ func desktopLinuxProtectionRows(n *desktopLinuxNFT, rows []map[string]any, prepa
 			case "table":
 				tables++
 				if !desktopLinuxProtectionKeys(value, "family", "name", "handle", "flags") || value["family"] != "inet" ||
-					value["name"] != desktopLinuxNFTTable || desktopLinuxNumber(value["handle"]) != n.TableHandle ||
+					value["name"] != n.table() || desktopLinuxNumber(value["handle"]) != n.TableHandle ||
 					!desktopLinuxProtectionEmpty(value, "flags") {
 					return errors.New("Linux closed protection table was replaced or is not active")
 				}
 			case "chain":
 				chains++
 				if !desktopLinuxProtectionKeys(value, "family", "table", "name", "handle", "type", "hook", "prio", "policy", "comment") ||
-					value["family"] != "inet" || value["table"] != desktopLinuxNFTTable || value["name"] != "output" ||
+					value["family"] != "inet" || value["table"] != n.table() || value["name"] != "output" ||
 					desktopLinuxNumber(value["handle"]) != n.ChainHandle || value["type"] != "filter" || value["hook"] != "output" ||
 					value["prio"] != float64(-310) || value["policy"] != "drop" ||
 					value["comment"] != "routervpn-owned-baseline:"+n.Capture.SessionID+":"+n.Capture.SourceSHA256 {
@@ -200,7 +206,7 @@ func desktopLinuxProtectionRows(n *desktopLinuxNFT, rows []map[string]any, prepa
 				}
 			case "rule":
 				if !desktopLinuxProtectionKeys(value, "family", "table", "chain", "handle", "expr", "comment") ||
-					value["family"] != "inet" || value["table"] != desktopLinuxNFTTable || value["chain"] != "output" {
+					value["family"] != "inet" || value["table"] != n.table() || value["chain"] != "output" {
 					return errors.New("Linux closed protection contains an unrelated rule")
 				}
 				handle := desktopLinuxNumber(value["handle"])

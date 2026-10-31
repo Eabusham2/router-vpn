@@ -33,12 +33,13 @@ KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGua
                 'SocketRetirementReusesCapacity', 'RejectsChangedBaseline', 'NativeParentCrash',
                 'BlockedControlRetainsSourcePort', 'RejectsStaleCaptureAndGeneration',
                 'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement',
-                'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions', 'RetainedBaseline')
+                'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions', 'RetainedBaseline', 'NodeBaselineSuccession')
 ACCOUNT_FILES = ('passwd', 'group', 'shadow', 'gshadow', 'subuid', 'subgid')
 BASELINE_CASES = ('RequiresCommittedBatchReceipt', 'ReplyRejectsUnrelatedDatagrams',
                   'GenerationRejectsMissingOrAmbiguousIdentity', 'EndpointRequiresRetainedOwner',
                   'SemanticFailureRetiresOriginalEndpoint', 'RetentionRequiresOriginalUnusedSource',
-                  'RetentionPartialCloseOwnsOnlyOriginalDescriptors', 'RetentionCancelledWaitCannotEnterAnotherOperation')
+                  'RetentionPartialCloseOwnsOnlyOriginalDescriptors', 'RetentionCancelledWaitCannotEnterAnotherOperation',
+                  'NodeCreationReceiptRequiresExactOperations', 'NodeScopeAndAbsence', 'NodePartialOwnerCannotMutate')
 
 
 def account_mount(source, target, flags):
@@ -304,7 +305,9 @@ def execute(source: Path, go='go', *, env=None):
                 'desktop_socket_linux_protection_native_test.go', 'desktop_socket_linux_flags_test.go',
                 'desktop_socket_linux_baseline_netlink.go', 'desktop_socket_linux_baseline_netlink_test.go',
                 'desktop_socket_linux_baseline_netlink_native_test.go', 'desktop_socket_linux_baseline_owner.go',
-                'desktop_socket_linux_baseline_owner_test.go', 'desktop_socket_linux_baseline_owner_native_test.go'}
+                'desktop_socket_linux_baseline_owner_test.go', 'desktop_socket_linux_baseline_owner_native_test.go',
+                'desktop_socket_linux_node_baseline.go', 'desktop_socket_linux_node_baseline_test.go',
+                'desktop_socket_linux_node_baseline_native_test.go'}
     if not required.issubset(before):
         raise ValueError('The complete production guardian and actual kernel tests were not copied')
     captured = dict(os.environ if env is None else env, GOWORK='off')
@@ -374,8 +377,24 @@ def execute_mutations(source: Path, go='go', *, env=None):
         'joined retained baseline source': 'live guardian authorized baseline removal',
         'retained Always selection': 'disconnect changed the captured On-connect/Always semantics',
         'retained native namespace': 'changed native namespace substituted absence for the original replacement',
+        'original Node creation receipt': 'changed create receipt became original baseline ownership',
+        'closed Node predecessor': 'unretired Node predecessor authorized successor deletion',
+        'closed Node successor': 'rejected successor changed old deny baseline',
+        'reserved Node initial absence': 'scoped Node baseline was hidden from initial journal absence',
     }
     mutations = (
+        ('original Node creation receipt', 'TestLinuxBaselineNodeCreationReceiptRequiresExactOperations', 'desktop_socket_linux_node_baseline.go', (
+            ('!reflect.DeepEqual(row, request[index])', '!reflect.DeepEqual(row, row)'),
+        )),
+        ('closed Node predecessor', 'NodeBaselineSuccession', 'desktop_socket_linux_node_baseline.go', (
+            ('\t\tif err := b.read(ctx, false); err != nil {\n\t\t\treturn err\n\t\t}\n', ''),
+        )),
+        ('closed Node successor', 'NodeBaselineSuccession', 'desktop_socket_linux_node_baseline.go', (
+            ('\t\tif err := successor.read(ctx, true); err != nil {\n\t\t\treturn err\n\t\t}\n', ''),
+        )),
+        ('reserved Node initial absence', 'NodeBaselineSuccession', 'desktop_socket_linux_expectation.go', (
+            ('strings.HasPrefix(name, desktopLinuxNodeTablePrefix)', 'strings.HasPrefix(name, "unowned_node_prefix_")'),
+        )),
         ('admitted heartbeat deadline', 'HeartbeatAdmission', 'desktop_socket_linux_policy.go', (
             ('p.mu.Lock()\n\tdefer p.mu.Unlock()\n\tif p.closing.Load() {\n\t\treturn false, nil\n\t}\n\tctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)\n\tdefer cancel()',
              'ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)\n\tdefer cancel()\n\tp.mu.Lock()\n\tdefer p.mu.Unlock()\n\tif p.closing.Load() {\n\t\treturn false, nil\n\t}'),

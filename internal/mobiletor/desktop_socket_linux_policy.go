@@ -163,6 +163,18 @@ var _ DesktopSocketPolicy = (*DesktopLinuxSocketPolicy)(nil)
 var _ DesktopSocketSource = (*DesktopLinuxSocketPolicy)(nil)
 
 func NewDesktopLinuxSocketPolicy(ctx context.Context, capture DesktopSocketCapture, options DesktopLinuxSocketOptions) (*DesktopLinuxSocketPolicy, error) {
+	return newDesktopLinuxSocketPolicy(ctx, capture, options, false)
+}
+
+// NewDesktopLinuxNodeSocketPolicy binds only the per-session Node baseline.
+// It cannot adopt the fixed Tor/global table, another session, or an arbitrary
+// name supplied by configuration. The original parent must create this exact
+// deny baseline before the guardian receives any private socket work.
+func NewDesktopLinuxNodeSocketPolicy(ctx context.Context, capture DesktopSocketCapture, options DesktopLinuxSocketOptions) (*DesktopLinuxSocketPolicy, error) {
+	return newDesktopLinuxSocketPolicy(ctx, capture, options, true)
+}
+
+func newDesktopLinuxSocketPolicy(ctx context.Context, capture DesktopSocketCapture, options DesktopLinuxSocketOptions, node bool) (*DesktopLinuxSocketPolicy, error) {
 	if ctx == nil || ctx.Err() != nil || !capture.valid() || os.Geteuid() != 0 || options.validate() != nil {
 		return nil, errors.New("Linux owned physical sockets require captured policy and the privileged native host")
 	}
@@ -183,7 +195,7 @@ func NewDesktopLinuxSocketPolicy(ctx context.Context, capture DesktopSocketCaptu
 	child.Close()
 	p := &DesktopLinuxSocketPolicy{capture: capture, options: options, channel: channel, command: command, joined: make(chan struct{}), monitorDone: make(chan struct{})}
 	go func() { p.joinErr = command.Wait(); p.current.Store(false); close(p.joined) }()
-	request := desktopLinuxRequest{Operation: "prepare", Capture: capture, Options: options}
+	request := desktopLinuxRequest{Operation: "prepare", Capture: capture, Options: options, NodeScoped: node}
 	reply, file, err := p.call(ctx, request, nil, false)
 	if file != nil {
 		file.Close()
@@ -197,7 +209,7 @@ func NewDesktopLinuxSocketPolicy(ctx context.Context, capture DesktopSocketCaptu
 	p.owner, p.uid, p.account, p.nft = reply.Owner, reply.UID, reply.Account, reply.NFT
 	readback, cancelReadback := context.WithTimeout(ctx, 2*time.Second)
 	defer cancelReadback()
-	if p.nft.Capture != capture || p.nft.UID != p.uid || desktopLinuxVerifyAccount(p.account, p.uid) != nil || p.nft.verify(readback, true) != nil {
+	if p.nft.Capture != capture || p.nft.TableName != desktopLinuxNFTForCapture(capture, node).TableName || p.nft.UID != p.uid || desktopLinuxVerifyAccount(p.account, p.uid) != nil || p.nft.verify(readback, true) != nil {
 		channel.Close()
 		close(p.monitorDone)
 		return p, errors.New("Linux physical identity/firewall independent readback failed")

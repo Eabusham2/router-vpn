@@ -176,8 +176,8 @@ func (b *desktopLinuxRetainedProtection) proveAbsence(ctx context.Context) error
 	if err != nil {
 		return err
 	}
-	if err := ReadDesktopLinuxProtectionAbsence(ctx); err != nil {
-		return err
+	if rows, err := desktopLinuxNFTReadTable(ctx, b.source.nft.table()); err != nil || len(rows) != 0 {
+		return errors.Join(err, errors.New("Linux original protection table is not absent"))
 	}
 	after, err := b.netlink.generation(ctx)
 	if err != nil || before != after || b.currentNamespace(ctx) != nil {
