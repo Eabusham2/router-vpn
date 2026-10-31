@@ -133,6 +133,25 @@ class NativeBuildDiagnostics(unittest.TestCase):
             self.assertEqual(result['value'], 'captured')
             self.assertEqual(diagnostic.getvalue(), 'warning remains stderr\n')
 
+    def test_real_timeout_preserves_deadline_and_bounded_partial_diagnostics(self):
+        command = [sys.executable, '-c', 'import os,time; os.write(1,b"EARLY_STDOUT"+b"x"*200000+b"LAST_COMPLETED_NATIVE_CASE\\n"); os.write(2,b"EARLY_STDERR"+b"y"*200000+b"ACTIVE_COMPILER_STAGE\\xff\\n"); time.sleep(30)']
+        diagnostic = io.StringIO()
+        with contextlib.redirect_stderr(diagnostic), self.assertRaises(subprocess.TimeoutExpired) as caught:
+            N.run(command, timeout=5)
+        error = caught.exception
+        report = diagnostic.getvalue()
+        self.assertEqual(error.cmd, command)
+        self.assertEqual(error.timeout, 5)
+        self.assertTrue(error.stdout.startswith(b'EARLY_STDOUT'))
+        self.assertTrue(error.stderr.startswith(b'EARLY_STDERR'))
+        self.assertTrue(error.stdout.endswith(b'LAST_COMPLETED_NATIVE_CASE\n'))
+        self.assertTrue(error.stderr.endswith(b'ACTIVE_COMPILER_STAGE\xff\n'))
+        self.assertLessEqual(len(report.encode('utf-8')), N.MAX_BUILD_DIAGNOSTIC+256)
+        self.assertIn('LAST_COMPLETED_NATIVE_CASE', report)
+        self.assertIn('ACTIVE_COMPILER_STAGE\ufffd', report)
+        self.assertNotIn('EARLY_STDOUT', report)
+        self.assertNotIn('EARLY_STDERR', report)
+
     def test_completed_builder_stages_and_seals_actual_pt_notices_for_every_target(self):
         # Only expensive compiler/native dependency operations are doubled.
         # The actual builder stages notices, seals receipt hashes, verifies its

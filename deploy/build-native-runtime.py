@@ -65,10 +65,10 @@ def run(command, *, cwd=None, env=None, timeout=1800):
         completed = subprocess.run([str(arg) for arg in command], cwd=cwd, env=env,
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    timeout=timeout, check=True)
-    except subprocess.CalledProcessError as error:
-        # A native test failure must expose its actual diagnostic, not only
-        # check_output's traceback. Retain both stream tails within one bound;
-        # leave the exception's code, argv and full captured bytes untouched.
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        # A failed or timed-out native gate must expose its actual diagnostic,
+        # not only the wrapper traceback. Retain both stream tails within one
+        # bound; leave the original exception and captured bytes untouched.
         stdout, stderr = error.stdout or b'', error.stderr or b''
         def diagnostic_tail(raw, limit):
             # Replacement characters must not expand malformed bytes beyond
