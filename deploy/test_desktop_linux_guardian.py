@@ -20,6 +20,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('desktop_linux_guardian_uid', ROOT / 'deploy/test_desktop_socket_uid.py')
@@ -33,38 +34,56 @@ KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGua
                 'ClosedProtectionObservations', 'RejectsDormantTable')
 
 
+def namespace_progress(message):
+    # Keep the exact entered phase in UID.run's bounded timeout output. A
+    # native setup hang must identify its operation before process-group
+    # cleanup, without extending the fixture's existing deadlines.
+    print('Linux guardian namespace phase: ' + message +
+          ' (pid=' + str(os.getpid()) + ', monotonic=' + format(time.monotonic(), '.3f') + ')', flush=True)
+
+
 def namespace_test(binary: Path, case=None) -> int:
     if os.geteuid() != 0 or platform.system() != 'Linux' or not binary.is_absolute() or not binary.is_file():
         raise ValueError('The Linux guardian namespace runner requires its real root-owned invocation')
     libc = ctypes.CDLL(None, use_errno=True)
     ready_read, ready_write = os.pipe()
     map_read, map_write = os.pipe()
+    namespace_progress('fork user-namespace child')
     child = os.fork()
     if child == 0:
         try:
             os.close(ready_read)
             os.close(map_write)
+            namespace_progress('enter user namespace')
             if libc.unshare(0x10000000) != 0:  # CLONE_NEWUSER
                 raise OSError(ctypes.get_errno(), 'Linux guardian user namespace')
             os.write(ready_write, b'1')
+            namespace_progress('wait for original parent UID/GID mapping')
             if os.read(map_read, 1) != b'1':
                 raise RuntimeError('Linux guardian UID map was not acknowledged')
             os.close(ready_write)
             os.close(map_read)
+            namespace_progress('UID/GID mapping acknowledged')
             # PID 1 owns the entire test process tree, including deliberately
             # crashed native parents and independent guardians. Its exit ends
             # every descendant even if a negative control leaves one alive.
             if libc.unshare(0x40000000 | 0x00020000 | 0x20000000) != 0:
                 raise OSError(ctypes.get_errno(), 'Linux guardian network/mount/PID namespaces')
+            namespace_progress('fork private namespace init')
             init = os.fork()
             if init:
+                namespace_progress('wait for private namespace init')
                 _, status = os.waitpid(init, 0)
                 os._exit(os.waitstatus_to_exitcode(status))
+            namespace_progress('make inherited mounts private')
             subprocess.run(['mount', '--make-rprivate', '/'], check=True)
             with tempfile.TemporaryDirectory(prefix='routervpn-guardian-namespace-') as temporary:
                 etc = Path(temporary) / 'etc'
+                namespace_progress('copy private account directory')
                 shutil.copytree('/etc', etc, symlinks=True)
+                namespace_progress('bind private account directory')
                 subprocess.run(['mount', '--bind', str(etc), '/etc'], check=True)
+                namespace_progress('mount private runtime directory')
                 subprocess.run(['mount', '-t', 'tmpfs', '-o', 'mode=755', 'tmpfs', '/run'], check=True)
                 for arguments in [
                     ['link', 'set', 'lo', 'up'],
@@ -79,19 +98,24 @@ def namespace_test(binary: Path, case=None) -> int:
                     ['netns', 'exec', 'rvpn-peer', 'ip', '-6', 'addr', 'add', 'fd50::2/64', 'dev', 'rvpn-peer', 'nodad'],
                     ['netns', 'exec', 'rvpn-peer', 'ip', 'link', 'set', 'rvpn-peer', 'up'],
                 ]:
+                    namespace_progress('ip ' + ' '.join(arguments))
                     subprocess.run(['ip', *arguments], check=True)
                 environment = dict(os.environ, ROUTERVPN_LINUX_GUARDIAN_TEST_NS='1')
                 selector = '^TestDesktopLinuxGuardianKernel' + (case + '$' if case else '')
+                namespace_progress('execute owned test process')
                 result = subprocess.run([str(binary), '-test.run=' + selector,
                                          '-test.count=1', '-test.timeout=120s', '-test.v'],
                                         env=environment, timeout=135).returncode
+                namespace_progress('retire owned peer namespace; test status ' + str(result))
                 subprocess.run(['ip', 'netns', 'delete', 'rvpn-peer'], check=True)
                 # /run is a private tmpfs owned by this PID/mount namespace.
                 # Its remaining mounts disappear when this namespace exits.
                 # Recursive umount also enumerates hidden inherited mounts
                 # (for example a runner's /run/user/1001), which this test
                 # neither created nor has authority to retire.
+                namespace_progress('unmount private account directory')
                 subprocess.run(['umount', '/etc'], check=True)
+            namespace_progress('private account workspace removed; return test status ' + str(result))
             os._exit(result if result >= 0 else 128 - result)
         except BaseException as error:
             print('Linux guardian namespace failed: ' + str(error), file=sys.stderr, flush=True)
@@ -99,18 +123,22 @@ def namespace_test(binary: Path, case=None) -> int:
     os.close(ready_write)
     os.close(map_read)
     try:
+        namespace_progress('wait for user-namespace child readiness')
         if os.read(ready_read, 1) != b'1':
             raise RuntimeError('Linux guardian user namespace did not start')
         # The privileged parent writes the maps. No newuidmap installation or
         # host subuid/account edit is needed. A complete mapping allows the
         # production helper to drop all supplementary groups normally.
+        namespace_progress('write original child UID/GID mappings')
         Path(f'/proc/{child}/uid_map').write_text('0 0 2147483647\n')
         Path(f'/proc/{child}/gid_map').write_text('0 0 2147483647\n')
         os.write(map_write, b'1')
     finally:
         os.close(map_write)
         os.close(ready_read)
+    namespace_progress('wait for original namespace child')
     _, status = os.waitpid(child, 0)
+    namespace_progress('original namespace child joined')
     return os.waitstatus_to_exitcode(status)
 
 

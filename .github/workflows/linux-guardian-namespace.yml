@@ -1,0 +1,59 @@
+name: Linux guardian namespace regression
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/test_desktop_linux_guardian.py'
+      - 'deploy/test_linux_guardian_namespace.py'
+      - 'deploy/test_linux_guardian_cleanup.py'
+      - 'deploy/test_desktop_socket_uid.py'
+      - '.github/workflows/linux-guardian-namespace.yml'
+  pull_request:
+    paths:
+      - 'deploy/test_desktop_linux_guardian.py'
+      - 'deploy/test_linux_guardian_namespace.py'
+      - 'deploy/test_linux_guardian_cleanup.py'
+      - 'deploy/test_desktop_socket_uid.py'
+      - '.github/workflows/linux-guardian-namespace.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-guardian-namespace-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  namespace:
+    name: Actual namespace isolation on ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install native namespace tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends iproute2 util-linux sudo
+      - name: Verify nested mount ownership, test verdicts and timeout cleanup
+        timeout-minutes: 3
+        run: |
+          # The same mandatory regression also runs inside the full native
+          # build. This early job exposes its actual phase without waiting
+          # for unrelated Go/Rust compilation. Existing case limits remain.
+          python3 deploy/test_linux_guardian_namespace.py
