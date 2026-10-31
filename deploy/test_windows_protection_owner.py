@@ -67,6 +67,9 @@ JOURNAL_STORE_REQUIRED = (
     "TestWindowsProtectionJournalStoreInitialAuthorityAndACL",
     "TestWindowsProtectionJournalStoreConcurrentClose",
     "TestWindowsProtectionJournalStoreRejectsUnboundTarget",
+    "TestWindowsProtectionJournalStartupAbsentWithoutCreation",
+    "TestWindowsProtectionJournalStartupExistingAndIncomplete",
+    "TestWindowsProtectionJournalStartupRejectsChangedObservation",
 )
 JOURNAL_COMMIT_REQUIRED = (
     "TestJournalCommitExactRoundTrip",
@@ -151,6 +154,8 @@ REQUIRED_SUBCASES = {
     JOURNAL_STORE_REQUIRED[6]: ("initial", "later"),
     JOURNAL_STORE_REQUIRED[9]: ("unproved-absence", "user-owner", "broad-write", "inherited", "legacy-file"),
     JOURNAL_STORE_REQUIRED[11]: ("new-candidate", "old-release-to-absence", "old-off-to-absence"),
+    JOURNAL_STORE_REQUIRED[13]: ("complete", "files.json", "journal.lock", "slot-0.json", "slot-1.json", "other-data", "unknown-root"),
+    JOURNAL_STORE_REQUIRED[14]: ("native-protection", "cancelled", "namespace-appeared", "desktop", "data", "machine-ancestor", "missing-reader"),
     JOURNAL_CHANNEL_REQUIRED[6]: ("server", "client"),
     JOURNAL_ADMISSION_NATIVE_REQUIRED[1]: ("before-flush", "after-flush"),
     JOURNAL_ATTEMPT_REQUIRED[0]: ("intent", "settled"),
@@ -165,6 +170,7 @@ def sources():
     expected = {"record.go", "record_test.go", "owner_windows.go", "owner_windows_test.go",
                 "path_windows.go", "security_windows.go", "journal_record.go", "journal_record_test.go", "journal_profile_binding_test.go",
                 "journal_header.go", "journal_header_test.go", "journal_store_windows.go", "journal_store_windows_test.go",
+                "journal_startup_windows.go", "journal_startup_windows_test.go",
                 "journal_commit_record.go", "journal_commit_record_test.go",
                 "journal_channel_windows.go", "journal_channel_windows_test.go",
                 "journal_admission_record.go", "journal_admission_record_test.go",
@@ -202,6 +208,7 @@ def mutants():
     once, function = NATIVE.replace_once, NATIVE.function_mutant
     owner, path, security = read("owner_windows.go"), read("path_windows.go"), read("security_windows.go")
     journal, header = read("journal_store_windows.go"), read("journal_header.go")
+    startup = read("journal_startup_windows.go")
     commit = read("journal_commit_record.go")
     channel = read("journal_channel_windows.go")
     admission = read("journal_admission_record.go")
@@ -218,6 +225,17 @@ def mutants():
     changed_bytes = once(changed_bytes, "if err != nil || actual != owner.record {",
                          "if err != nil || false && actual != owner.record {")
     return (
+        ("journal_startup_windows.go", "startup-ignores-native-absence", JOURNAL_STORE_REQUIRED[14],
+         "startup accepted changed native protection, namespace or retained identity",
+         once(startup, "\tif err := read(ctx, nil); err != nil {\n\t\treturn false, err\n\t}\n", "")),
+        ("journal_startup_windows.go", "startup-ignores-appeared-namespace", JOURNAL_STORE_REQUIRED[14],
+         "startup accepted changed native protection, namespace or retained identity",
+         once(startup, "// into an absent store. Retain an unexpected opened root for checked Close.\n\tif err := store.verifyInitialNamespaceAbsent(); err != nil {\n\t\treturn false, err\n\t}\n",
+              "// Test-only defect: omit the second native namespace observation.\n")),
+        ("journal_startup_windows.go", "startup-ignores-retired-capture", JOURNAL_STORE_REQUIRED[14],
+         "startup accepted changed native protection, namespace or retained identity",
+         once(startup, "\tif err := store.verifyInitialAbsenceCapture(ctx); err != nil {\n\t\treturn false, err\n\t}\n\treturn true, nil",
+              "\treturn true, nil")),
         ("journal_record.go", "mutable-adoption-provenance", JOURNAL_RECOVERY_REQUIRED[2],
          "ordinary checkpoint rewrote immutable adoption provenance",
          once(journal_record, "!sameJournalAdoption(previous.Adoption, next.Adoption)", "false && !sameJournalAdoption(previous.Adoption, next.Adoption)")),
@@ -516,7 +534,7 @@ def execute(go="go"):
         if sources() != before:
             raise ValueError("Protection owner shipping sources changed during the actual native gate")
     print("Native protection preparation passed five strict-owner-record groups, nine intent-record groups, two native-file header groups, "
-          f"ten preparation ownership groups, ten durable journal storage groups, three durable profile-binding groups, seven commit-record groups, seven native commit-channel groups, seven admission-record groups, seven native prepared-admission groups, four captured-host admission groups, three attempted-write drain groups, twelve recovery record/lifecycle groups, nine native retirement/adoption groups and {len(mutants())} production negative controls. "
+          f"ten preparation ownership groups, thirteen durable journal storage/startup groups, three durable profile-binding groups, seven commit-record groups, seven native commit-channel groups, seven admission-record groups, seven native prepared-admission groups, four captured-host admission groups, three attempted-write drain groups, twelve recovery record/lifecycle groups, nine native retirement/adoption groups and {len(mutants())} production negative controls. "
           "This suite models only BFE observations; actual scoped BFE proof, application recovery wiring and ordinary-path activation remain separate requirements.", flush=True)
 
 

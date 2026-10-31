@@ -59,6 +59,7 @@ type ProtectionJournal struct {
 	pending         *journalPendingAppend
 	recovery        *JournalRecovery
 	initialized     bool
+	initialAbsent   bool
 	closed          bool
 	closeErr        error
 }
@@ -303,6 +304,11 @@ func createProtectionJournal(ctx context.Context, machineDirectory string, deskt
 }
 
 func openProtectionJournal(ctx context.Context, machineDirectory string, desktop *windowscontroller.Process, data *os.File) (*ProtectionJournal, error) {
+	return openProtectionJournalWithStartup(ctx, machineDirectory, desktop, data, nil)
+}
+
+func openProtectionJournalWithStartup(ctx context.Context, machineDirectory string, desktop *windowscontroller.Process, data *os.File,
+	readAbsent func(context.Context, *mobiletor.DesktopWindowsProtectionTarget) error) (*ProtectionJournal, error) {
 	store, err := newProtectionJournal(ctx, machineDirectory, desktop, data)
 	if err != nil {
 		return store, err
@@ -311,6 +317,12 @@ func openProtectionJournal(ctx context.Context, machineDirectory string, desktop
 	store.root, err = openProtectionObject(filepath.Join(machine, journalDirectoryName), true,
 		syscall.FILE_LIST_DIRECTORY|protectionReadAttributes|protectionReadControl, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE)
 	if err != nil {
+		// Only absence of the root itself can begin an absence proof. Missing
+		// peers in an existing root remain incomplete recovery state below.
+		if readAbsent != nil && store.root == nil && journalNamespaceNotFound(err) {
+			store.initialAbsent = true
+			_, err = store.initialAbsence(ctx, readAbsent)
+		}
 		return store, err
 	}
 	if err := verifyProtectionSecurity(store.api, store.root.handle, true); err != nil {
