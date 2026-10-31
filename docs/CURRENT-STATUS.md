@@ -6,7 +6,37 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 9f20f6e7
+## Latest implementation continuation — through 3ec57003
+
+The verified source cutoff is
+[`3ec570037fb2268504d625969c868369952b3c73`](https://github.com/Eabusham2/router-vpn/commit/3ec570037fb2268504d625969c868369952b3c73).
+The [October 31 UTC evidence](CONTINUATION-EVIDENCE-2026-10-31.md) records exact
+source identities, test receipts and remaining acceptance boundaries.
+
+- Linux Node preparation now retains a Linux-specific captured policy/source
+  capability, observes the native baseline before and after admission, and
+  joins the same source on failure or retirement. Seven race groups repeated
+  three times, six executable negative controls and three real pre-TUN nftables
+  cases passed. AMD64 native/race and ARM64 native/factory compiles passed.
+- Its new real TUN/nft/selected-DNS/restore gate is mandatory in matching Linux
+  builds. The three TUN-dependent parents fail locally because `/dev/net/tun`
+  is absent; no full native pass is claimed. The separate Linux Box entry is
+  initially bounded to direct Shadowsocks/Start Layer Off. Authenticated parent
+  journal, Always succession and public app activation remain unfinished.
+- The captured-operation source audit and launch-order contract now match the
+  actual locked request/command/native-owner publication (`a875d3be`). Seven
+  groups pass three times under race, and both relevant production controls
+  still reject. Both complete recovered UI workflows passed on that exact SHA.
+- The normal installed/Portable Windows Session passed again at `9f20f6e7`:
+  installed 13.48 seconds, Portable 9.46 seconds and outer Portable 9.29 seconds,
+  with the complete native/protected/control matrix. Actual interactive UAC,
+  the drain-wrapper diagnosis and full native dataplane acceptance are separate.
+
+Composite and PQ graph work is still being validated. The original full scope,
+macOS inventory boundary, current-SHA release convergence, signing, physical
+devices and deliberate private deployment remain open.
+
+## Earlier implementation continuation — through 9f20f6e7
 
 The verified source cutoff is
 [`9f20f6e734b2ced6a6e609f2f0bd5f311aabe997`](https://github.com/Eabusham2/router-vpn/commit/9f20f6e734b2ced6a6e609f2f0bd5f311aabe997).
