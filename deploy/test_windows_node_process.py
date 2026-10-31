@@ -114,6 +114,8 @@ SHARED_TESTS = (
     "TestDesktopOwnedNodeUnstagedDiscardClearsOnlyUnusedPrivateSource",
     "TestDesktopNodeSmartRetainRechecksPublicationOwner",
     "TestDesktopNodePublicOrdinaryCancellationRetainsCapturedCleanup",
+    "TestDesktopNodeStartAssetsMAXKeepsEmbeddedOwner",
+    "TestDesktopNodeStartAssetsSeparateOwnerStillRequired",
 )
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
@@ -126,6 +128,9 @@ PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "shadowsocks", "hysteria2",
                 "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max", "ss-v2ray")
 PUBLIC_LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
 EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES),
+            *("TestDesktopNodeStartAssetsMAXKeepsEmbeddedOwner/" + mode + "/" + layer
+              for mode in ("max-quic-wg", "max-quic-awg", "max-tls-wg", "max-tls-awg")
+              for layer in PUBLIC_LAYERS),
             *("TestDesktopNodePublicConnectUsesCapturedOwnedHost/" + mode + "/" + layer
               for mode in PUBLIC_MODES for layer in PUBLIC_LAYERS),
             *("TestDesktopNodePublicConnectCancellationAndProofReplacement/" + case
@@ -134,6 +139,7 @@ EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES
             "TestWindowsPrivateStoreWriteThroughReplace/unicode",
             "TestWindowsPrivateStoreWriteThroughReplace/long-portable-path")
 REQUIRED_SOURCES = (
+    "cmd/client/desktop_node_start_assets_test.go",
     "cmd/client/desktop_node_process.go",
     "cmd/client/desktop_node_process_other.go",
     "cmd/client/desktop_node_process_test.go",

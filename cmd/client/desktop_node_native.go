@@ -310,6 +310,16 @@ func desktopNativeEnvironmentForPackage(environment []string, root, profile, end
 	return nativeLibraryEnvironment(clean, filepath.Join(packageRoot, "runtime", "native"))
 }
 
+// MAX captures its Start Layer credential from its own complete chain. A
+// separate Shadowsocks bundle belongs only to the other layered raw modes;
+// reading it for MAX adds an unused owner and can borrow another credential.
+func readDesktopNodeStartAssets(root string, p common.RouterProfile, mode string) (map[string][]byte, error) {
+	if p.StartLayer == "" || p.StartLayer == "off" || mobilemultihop.MAXMode(mode) || mode == "shadowsocks" {
+		return nil, nil
+	}
+	return readDesktopNodeAssets(root, p.ID, "shadowsocks")
+}
+
 func prepareDesktopNodeLaunch(a *app, p common.RouterProfile, mode string) (*desktopNodeLaunch, error) {
 	if _, err := verifyBundledNative(desktopAmneziaPackageRoot()); err != nil {
 		return nil, err
@@ -327,18 +337,15 @@ func prepareDesktopNodeLaunch(a *app, p common.RouterProfile, mode string) (*des
 			clear(body)
 		}
 	}()
-	var start map[string][]byte
-	if p.StartLayer != "" && p.StartLayer != "off" && !mobilemultihop.MAXMode(mode) && mode != "shadowsocks" {
-		start, err = readDesktopNodeAssets(root, p.ID, "shadowsocks")
-		if err != nil {
-			return nil, err
-		}
-		defer func() {
-			for _, body := range start {
-				clear(body)
-			}
-		}()
+	start, err := readDesktopNodeStartAssets(root, p, mode)
+	if err != nil {
+		return nil, err
 	}
+	defer func() {
+		for _, body := range start {
+			clear(body)
+		}
+	}()
 	ctx, cancel := context.WithTimeout(a.connectionOperationContextOrBackground(), 10*time.Second)
 	defer cancel()
 	compiled, endpoint, err := compileDesktopNode(ctx, p, mode, files, start, func(ctx context.Context, host string) ([]netip.Addr, error) {

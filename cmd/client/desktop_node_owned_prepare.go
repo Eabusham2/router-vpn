@@ -103,18 +103,15 @@ func prepareDesktopOwnedNodeLaunchWith(a *app, profile common.RouterProfile, mod
 			clear(body)
 		}
 	}()
-	var start map[string][]byte
-	if profile.StartLayer != "" && profile.StartLayer != "off" && mode != "shadowsocks" {
-		start, err = readDesktopNodeAssets(capture.dataRoot, profile.ID, "shadowsocks")
-		if err != nil {
-			return nil, err
-		}
-		defer func() {
-			for _, body := range start {
-				clear(body)
-			}
-		}()
+	start, err := readDesktopNodeStartAssets(capture.dataRoot, profile, mode)
+	if err != nil {
+		return nil, err
 	}
+	defer func() {
+		for _, body := range start {
+			clear(body)
+		}
+	}()
 	compileContext, cancelCompile := context.WithTimeout(ctx, 10*time.Second)
 	defer cancelCompile()
 	original, endpoint, err := compileDesktopNode(compileContext, profile, mode, files, start, lookup)
