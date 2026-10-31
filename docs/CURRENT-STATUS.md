@@ -6,7 +6,62 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 61587921
+## Latest implementation continuation — through 060f2e2c
+
+The independently verified source cutoff is
+[`060f2e2c8264be1ecc3b654cc698585ddfba1250`](https://github.com/Eabusham2/router-vpn/commit/060f2e2c8264be1ecc3b654cc698585ddfba1250).
+The [fresh continuation evidence](CONTINUATION-EVIDENCE-2026-10-31.md#fresh-recovery-and-verification-through-060f2e2c)
+records ten further implementation publications after the previous status
+document, their actual tests, and the remaining requirements.
+
+- Linux now proves source retirement after both successful and partial native
+  construction (`3b515fe7`), distinguishes closure of the original channel from
+  empty packets, cancellation and local teardown (`b09af180`), and explicitly
+  joins its original child after final acknowledgement while retaining package
+  pins and the parent dependency (`54045777`). These changes passed real native
+  namespace tests and targeted compiled defects. The durable parent/child
+  transaction and public app integration are still being implemented.
+- The Linux guardian CI fixture now executes an exact verified copy in its
+  private installation namespace (`495fd10e`). This fixes the real build-user
+  executable ownership mismatch without weakening production validation. All
+  four affected native groups passed from an actual unprivileged-owned input;
+  source bytes/ownership and parent mounts were preserved.
+- Windows PQ at `61587921` passed the full ARM64 job. AMD64 passed traffic,
+  credentials and the complete succession aggregate in 501.72 seconds, then
+  exceeded the separate foreign-predecessor aggregate. `5bece489` budgets that
+  two-owner aggregate at 160 seconds with a 175-second wrapper; individual
+  deadlines and the other controls are unchanged. Fresh full jobs remain open.
+- The Windows MAX reference no longer counts a private readiness marker's
+  empty EOF as a credential rejection (`bf436373`). Ten real SS2022 race runs
+  and three compiled controls passed. Its live counter's treatment of truncated
+  ciphertext is a separate follow-up; full native MAX acceptance remains open.
+- Xray's first positive TCP transfer now uses the existing native first-transfer
+  allowance (`060f2e2c`). Nine actual graph cases and fourteen wrong-credential
+  cases passed under race. A cold real reference passed in 5.019 seconds while
+  the compiled old two-second limit failed in 2.003 seconds. Subsequent traffic,
+  credential and retirement deadlines are unchanged; Windows proof is pending.
+- The Windows device-owner negative control again targets the exact captured
+  guard (`70fe02a0`). The macOS installer now emits bounded native process-image
+  evidence (`fb9088cc`); that diagnostic does not resolve its live-image failure.
+  Timed-out native builds preserve their bounded partial output (`f17ac320`),
+  allowing the unresolved Windows outer-gate timeout to identify its actual phase.
+
+An execution-environment replacement removed the earlier local scratch tree.
+The repository was restored from verified GitHub history, without replaying old
+commits. Recovered changes were compared by exact hash where those hashes
+survived, or reimplemented and freshly validated with a new source identity.
+Earlier descriptions of unpublished ALL/PQ/MAX candidates and eight Linux
+transaction drafts as locally staged are historical: those old files are not
+claimed to remain available. Rebuilt units must earn their own current evidence.
+
+The latest observed published prerelease remains `745b3e41` with twelve assets.
+No all-green release is established for this new cutoff. Native ALL and protected
+PQ/MAX admission, Linux public integration, the macOS installer boundary, one
+verified current-SHA package/image/compose publication, signing, physical/off-LAN
+acceptance and deliberate private deployment remain separate unfinished work.
+No live router, AdGuard, ASUS forwarding or Portainer deployment was changed.
+
+## Earlier implementation continuation — through 61587921
 
 The verified source cutoff is
 [`6158792145becb0ef3bce579e020bdc663eddf9a`](https://github.com/Eabusham2/router-vpn/commit/6158792145becb0ef3bce579e020bdc663eddf9a).

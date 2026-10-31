@@ -556,3 +556,87 @@ and those five controls; it is not published public admission or Windows
 execution. Source preparation for shipping-positive and deliberately-closed
 PQ/MAX controls is also staged. A successful prerequisite does not silently
 activate an unfinished graph or replace the full original requirement ledger.
+
+## Fresh recovery and verification through 060f2e2c
+
+The verified source cutoff for this section is
+[`060f2e2c8264be1ecc3b654cc698585ddfba1250`](https://github.com/Eabusham2/router-vpn/commit/060f2e2c8264be1ecc3b654cc698585ddfba1250).
+Each unit below was published directly to `main` with normal ancestry and an
+expected-head check, then confirmed by a separate remote read. This is source
+publication evidence; no completed release or private/device acceptance is
+inferred from it.
+
+### Environment recovery and preservation
+
+The execution environment was replaced while the previous status document was
+being published. That document had reached GitHub as `d6a1218f`; the fresh clone
+started from the verified remote commit. No historical patch was replayed over
+newer history. Previously committed work was recovered from GitHub.
+
+The macOS probe and its test matched both retained source hashes. Four of five
+MAX files and one of two Xray files matched their retained hashes. The other
+MAX/Xray fixture bodies were recreated with new hashes and new executable
+evidence. The ten-file Linux source-join unit was also freshly validated; its
+unavailable original snapshot hash was not claimed to have been reproduced.
+
+The earlier isolated ALL/PQ/MAX admission candidates and eight unpublished
+Linux transaction drafts were lost. Earlier descriptions of those files as
+staged are dated observations, not proof of current availability or publication.
+The remaining implementation is being rebuilt as new source from the retained
+requirements and published interfaces. Public graph predicates remain closed
+until their required shipping composition is proved.
+
+### Ten additional implementation publications
+
+| Commit | Change and executed evidence | Remaining boundary |
+|---|---|---|
+| [`fb9088cc`](https://github.com/Eabusham2/router-vpn/commit/fb9088ccd920a52c1ce357172836397578f4d4b1) | Adds bounded native macOS image diagnostics and mandatory workflow coverage. Twenty installer checks, twenty-one probe/inventory checks, twelve shipping defects and an independent identity-version defect passed on the recovered exact sources. | The live installer inventory failure is still open; diagnostic fields do not grant installation authority. |
+| [`70fe02a0`](https://github.com/Eabusham2/router-vpn/commit/70fe02a0e4cb47e68f7c30c0a8750113eabd5e67) | Repairs the Windows device-owner negative control to mutate its exact captured guard. 994 actual PowerShell checks and twenty-three controls passed. | Actual WPF was unavailable on the Linux host; current Windows CI must supply that evidence. |
+| [`5bece489`](https://github.com/Eabusham2/router-vpn/commit/5bece4899519e3e14feb4f3e4462b605e9cdca5d) | Gives the two-owner PQ foreign-predecessor and legacy-adoption aggregates 160/175-second inner/outer budgets. Fifteen runner checks passed. | The other five controls keep their 90/105-second bounds. Individual protocol, credential, cancellation and cleanup deadlines are unchanged. |
+| [`3b515fe7`](https://github.com/Eabusham2/router-vpn/commit/3b515fe72a66df4c3df0b3289313927c9e31e9d7) | Proves the original Linux source join after complete or partial construction. Three actual native cases, generated lifecycle checks, exact preparation of 628 shipping-source records and two compiled defects passed on freshly restored sources. | Does not implement the complete durable parent/child transaction or public Linux activation. |
+| [`b09af180`](https://github.com/Eabusham2/router-vpn/commit/b09af1806078406787ab76363c810f3672bf3f23) | Separates original peer EOF from empty frames, cancelled reads and local teardown. Twelve actual native parent groups, thirteen new boundary leaves, six compiled defects, pure race checks and the ARM64 compile passed. | Closure is evidence about the retained channel, not independent firewall or journal retirement. |
+| [`bf436373`](https://github.com/Eabusham2/router-vpn/commit/bf436373189c937546e30dcb6fa42ff813c6ca30) | Excludes zero-ciphertext marker EOF from the MAX rejection counter and requires fresh per-attempt observations. Real pinned SS2022 with the exact marker/counter/owner functions passed ten race runs; old-counter, dropped-rejection and valid-key controls each failed ten of ten at the intended assertion. Sixteen native, twelve generic and twelve release-runner checks passed. | The extracted helper cross-compiled on both Windows architectures; full WFP/PQ compilation and execution are separate. Truncated-ciphertext classification requires the follow-up below. |
+| [`495fd10e`](https://github.com/Eabusham2/router-vpn/commit/495fd10e39cbfa850a18da9205912c59b7997ffd) | Executes the compiled Linux guardian fixture from an exact protected copy inside namespace-private `/opt`. Four affected actual native groups passed from a UID/GID 65534-owned input. Namespace account/mount/status/hash/copy negatives and four wrapper checks passed with the existing timeout. | Production ownership validation is unchanged. The original executable, its owner and parent mounts were checked unchanged. |
+| [`54045777`](https://github.com/Eabusham2/router-vpn/commit/540457779c82522672efad0da95ea33ded2792b9) | Adds explicit original-child finish/join after final authenticated acknowledgement. All ten native launcher cases passed under race in 4.42 seconds; early-return and premature-pin-close compiled defects failed at their intended witnesses. ARM64 full controller compile passed. | Pins, workspace root and parent dependency remain retained until ordinary cleanup. The method does not settle a durable journal or retire firewall state. |
+| [`f17ac320`](https://github.com/Eabusham2/router-vpn/commit/f17ac32035d107b431367c845d92c0943427ea4a) | Preserves bounded partial stdout/stderr for native gate timeouts and rethrows the original exception. Eighteen tests passed, including an actual timed-out child with oversized output and invalid UTF-8. | The unresolved outer build timeout is not marked fixed; its duration is unchanged. Grandchild cleanup is also not established by this logging change. |
+| [`060f2e2c`](https://github.com/Eabusham2/router-vpn/commit/060f2e2c8264be1ecc3b654cc698585ddfba1250) | Uses the existing native ten-second context/eight-second I/O bound for only the first Xray TCP/IPv4 positive transfer. Nine real graph cases and fourteen wrong-credential cases passed under race. A cold reference completed the transfer in 5.018938372 seconds; the compiled old bound failed at 2.003048944 seconds while the captured socket owner remained current. Seven bootstrap, eight physical and fifteen PQ runner checks passed. | The cold reference delays its real asynchronous detector; authentication remains real. Later traffic, credentials and retirement retain their two-second bounds. Actual Windows results remain required. |
+
+### Current native failures and corrected historical findings
+
+The [PQ workflow at `61587921`](https://github.com/Eabusham2/router-vpn/actions/runs/41186751396)
+completed successfully on ARM64 (job `124502815583`). AMD64 job `124502815655`
+passed traffic, credential cases and the whole succession aggregate in 501.72
+seconds. This closes the earlier succession-timeout diagnosis at that commit.
+The later foreign-predecessor aggregate exceeded ninety seconds while building
+its second native owner. The separate `5bece489` correction addresses that
+aggregate; its full native result is still pending.
+
+Both [complete-MAX jobs at `bf63f173`](https://github.com/Eabusham2/router-vpn/actions/runs/41184970844)
+finished with failure. All twelve traffic paths and all twenty-four QUIC
+credential cases passed. Four TLS middle-key cases failed the strict prepared
+ownership assertion after the reference counted an earlier marker EOF as a
+rejection. `bf436373` corrects that demonstrated zero-byte case. Further review
+found that a truncated ciphertext error could still increment the generic
+counter; it must be distinguished from actual cipher authentication failure
+before treating the new native negative evidence as complete.
+
+The [authoritative workflow at `61587921`](https://github.com/Eabusham2/router-vpn/actions/runs/41186751496)
+did not publish a successful release. Its Linux build-user image ownership
+failure is addressed by `495fd10e`. Its Windows native-build jobs exceeded the
+outer 900-second physical-source-gate deadline; the prior wrapper discarded
+the captured phase output. `f17ac320` preserves that output for diagnosis and
+does not claim a successful build. The macOS installer still rejects an
+unresolved live executable; the [probe run at `fb9088cc`](https://github.com/Eabusham2/router-vpn/actions/runs/41249185650)
+also completed with failure. Newer queued, cancelled and running jobs are not
+reported as passed.
+
+### Remaining requirement ledger
+
+| Requirement area | Published progress | Actual unfinished work |
+|---|---|---|
+| Captured full profiles and logical modes | Saved-base transaction and current owned-connection capture remain published. | Rebuild and publish native ALL; finish required protected PQ/MAX admission with native proof. Earlier lost candidates are not available artifacts. |
+| Linux protection and lifecycle | Original kernel baseline/guardian/process, durable records, source-join, strict channel EOF and explicit original-child join are published and locally exercised. | Canonical authenticated control exchange, ordered durable parent mutations, Always succession through the app, real TUN/selected-DNS composition and public graph activation. |
+| Windows protected graphs | Both native bootstrap architectures and earlier WFP/PQ successes; fresh Xray, MAX and PQ fixture repairs above. | Full fresh PQ/MAX execution, precise authentication negatives, outer-build timeout diagnosis, current package/install/upgrade/Portable proof and physical acceptance. |
+| macOS controller and installer | Retained socket-peer fixture and bounded actual image diagnostics. | Resolve the live image-inventory failure through an authoritative native identity; do not treat ENOENT, a process name or generic signing as absence. |
+| One exact release | New source is preserved on main; workflow gates remain mandatory. | Converge all native packages, server images, compose and publication on one current SHA. The latest observed prerelease still targets `745b3e41`. |
+| Physical, private and signing requirements | No substitute evidence claimed. | Real-device/off-LAN networking, leaks/transitions and visual/accessibility checks; private admin/benchmark/provider/update/rollback; required signing; deliberate AI Board/ASUS deployment and regression. |
