@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Exercise ownership and negative boundaries of the test-only PQ build gate."""
 import importlib.util
+from contextlib import redirect_stdout
+import io
 import os
 from pathlib import Path
 import subprocess
@@ -179,7 +181,7 @@ class PQReferencePreparation(unittest.TestCase):
             self.assertEqual(foreign.read_text(), 'unrelated')
 
     def test_windows_acl_uses_native_interpreter_modules_before_generating_keys(self):
-        for acl_failure in (False, True):
+        for acl_failure in (None, 'exit', 'timeout'):
             with self.subTest(acl_failure=acl_failure), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 executable = root/'system/WindowsPowerShell/v1.0/powershell.exe'
@@ -191,21 +193,26 @@ class PQReferencePreparation(unittest.TestCase):
                 def acl(arguments, **options):
                     self.assertEqual(arguments, [executable, '-NoProfile', '-NonInteractive', '-ExecutionPolicy',
                         'Bypass', '-File', str(ROOT/'client/Protect-RouterVPN-Windows-PrivateRoot.ps1'),
-                        '-Root', str(root/'private')])
+                        '-Root', str(root/'private'), '-TraceSetup'])
                     self.assertEqual(options, {'env': {'PATH': environment['PATH'], 'PQ_FIXTURE_OWNER': 'captured',
-                        'PSModulePath': str(executable.parent/'Modules')}, 'check': True, 'timeout': 30})
+                        'PSModulePath': str(executable.parent/'Modules')}, 'stdin': subprocess.DEVNULL,
+                        'check': True, 'timeout': 120})
                     self.assertTrue((root/'private').is_dir())
                     self.assertFalse((root/'private/keys').exists())
-                    if acl_failure:
+                    if acl_failure == 'exit':
                         raise subprocess.CalledProcessError(1, arguments)
+                    if acl_failure == 'timeout':
+                        raise subprocess.TimeoutExpired(arguments, options['timeout'])
 
-                with mock.patch.dict(os.environ, environment, clear=True), \
+                output = io.StringIO()
+                with redirect_stdout(output), mock.patch.dict(os.environ, environment, clear=True), \
                      mock.patch.object(P, 'system_powershell', return_value=executable), \
                      mock.patch.object(P.subprocess, 'run', side_effect=acl) as command, \
                      mock.patch.object(P.BUILD.PQ, 'environment', return_value={}), \
                      mock.patch.object(P.BUILD.PQ, 'run', return_value='rustc wrong-version') as compiler:
                     captured = dict(os.environ)  # Windows normalizes environment names to uppercase.
-                    with self.assertRaises(subprocess.CalledProcessError if acl_failure else ValueError):
+                    expected = {'exit': subprocess.CalledProcessError, 'timeout': subprocess.TimeoutExpired}.get(acl_failure, ValueError)
+                    with self.assertRaises(expected):
                         P.generate_keys('windows/amd64', root/'cache', root/'private/keys')
                     command.assert_called_once()
                     self.assertEqual(dict(os.environ), captured)
@@ -214,6 +221,12 @@ class PQReferencePreparation(unittest.TestCase):
                     else:
                         compiler.assert_called_once()
                 self.assertFalse((root/'private').exists())
+                self.assertIn('bounded startup 120s', output.getvalue())
+                if acl_failure:
+                    self.assertIn('no keys generated', output.getvalue())
+                    self.assertNotIn('readback completed', output.getvalue())
+                else:
+                    self.assertIn('readback completed', output.getvalue())
 
     def test_windows_system_interpreter_requires_bounded_native_directory_and_file(self):
         with tempfile.TemporaryDirectory() as tmp:

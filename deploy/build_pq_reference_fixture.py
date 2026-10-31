@@ -15,6 +15,7 @@ from pathlib import Path
 import shlex
 import shutil
 import subprocess
+import time
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,6 +31,7 @@ BUILD = load('pq_reference_native', 'build-native-runtime.py')
 TRAFFIC = load('pq_reference_traffic', 'test_server_pq_traffic.py')
 SERVER = BUILD.POLICY.PQ
 TAGS = 'with_quic,with_wireguard,with_gvisor,routervpn_native_pq,routervpn_pq_traffic_test'
+WINDOWS_ACL_SETUP_TIMEOUT = 120
 COPIES = {**TRAFFIC.COPIES,
           'mobile/pq/desktop_reference_test.go.tmpl': 'protocol/routervpnpq/desktop_reference_test.go'}
 
@@ -157,9 +159,23 @@ def generate_keys(target, cache, keys):
             acl_environment = {key: value for key, value in os.environ.items()
                                if key.casefold() != 'psmodulepath'}
             acl_environment['PSModulePath'] = str(powershell.parent/'Modules')
-            subprocess.run([powershell, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-                            '-File', str(ROOT/'client/Protect-RouterVPN-Windows-PrivateRoot.ps1'),
-                            '-Root', str(private)], env=acl_environment, check=True, timeout=30)
+            # This bound covers a cold system interpreter/module bootstrap and
+            # exact ACL readback before any private KEM material exists. Native
+            # key, transport, handshake and retirement deadlines are unchanged.
+            started = time.monotonic()
+            print('Preparing Windows reference private ACLs (bounded startup '
+                  + str(WINDOWS_ACL_SETUP_TIMEOUT) + 's)', flush=True)
+            try:
+                subprocess.run([powershell, '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+                                '-File', str(ROOT/'client/Protect-RouterVPN-Windows-PrivateRoot.ps1'),
+                                '-Root', str(private), '-TraceSetup'], env=acl_environment,
+                               stdin=subprocess.DEVNULL, check=True, timeout=WINDOWS_ACL_SETUP_TIMEOUT)
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                print('Windows reference private ACL setup failed after '
+                      + format(time.monotonic() - started, '.3f') + 's; no keys generated', flush=True)
+                raise
+            print('Windows reference private ACL setup and readback completed in '
+                  + format(time.monotonic() - started, '.3f') + 's', flush=True)
         env = BUILD.PQ.environment(target, cache)
         for compiler in ('rustc', 'cargo'):
             if not BUILD.PQ.run([compiler, '--version'], env=env).startswith(compiler+' '+BUILD.PQ.RUST+' '):

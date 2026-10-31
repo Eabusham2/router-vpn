@@ -15,6 +15,8 @@ on:
       - 'mobile/rosenpass/**'
       - 'mobile/startwhitening/**'
       - 'cmd/start-layer-relay/**'
+      - 'client/Protect-RouterVPN-Windows-PrivateRoot.ps1'
+      - 'client/test-windows-private-acl.ps1'
       - 'deploy/prepare-*.py'
       - 'deploy/build*pq*.py'
       - 'deploy/build-native-runtime.py'
@@ -38,6 +40,8 @@ on:
       - 'mobile/rosenpass/**'
       - 'mobile/startwhitening/**'
       - 'cmd/start-layer-relay/**'
+      - 'client/Protect-RouterVPN-Windows-PrivateRoot.ps1'
+      - 'client/test-windows-private-acl.ps1'
       - 'deploy/prepare-*.py'
       - 'deploy/build*pq*.py'
       - 'deploy/build-native-runtime.py'
@@ -95,6 +99,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Captured PQ native source/scope boundary failed' }
           python deploy/test_pq_reference_preparation.py
           if ($LASTEXITCODE -ne 0) { throw 'Captured PQ private reference preparation failed' }
+      - name: Private ACL readback in Windows PowerShell 5.1 and 7
+        timeout-minutes: 6
+        shell: pwsh
+        run: |
+          $systemShell = [IO.Path]::Combine([Environment]::GetFolderPath([Environment+SpecialFolder]::System), 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+          $coreShell = [IO.Path]::Combine($PSHOME, 'pwsh.exe')
+          foreach ($shell in @($systemShell, $coreShell)) {
+            & $shell -NoProfile -NonInteractive -ExecutionPolicy Bypass -File client/test-windows-private-acl.ps1
+            if ($LASTEXITCODE -ne 0) { throw 'Actual private ACL readback/failure controls failed' }
+          }
       - name: Select exact native Rust target and verified LLVM compiler
         shell: pwsh
         run: |
