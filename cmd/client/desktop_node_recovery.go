@@ -22,20 +22,22 @@ type desktopNodeRecoveryBackend struct {
 	controller windowsprotection.Controller
 	current    func() error
 	open       func(context.Context) (desktopNodeProtectionJournal, error)
+	create     func(context.Context) (desktopNodeProtectionJournal, error)
 	begin      func(context.Context, desktopNodeProtectionJournal) (desktopNodeJournalRecovery, error)
 }
 
 type desktopNodeRecoveryState struct {
-	backend     desktopNodeRecoveryBackend
-	opened      bool
-	head        *windowsprotection.JournalSelection
-	owner       desktopNodeJournalRecovery
-	result      *windowsprotection.JournalRecoveryResult
-	proved      bool
-	ownerClosed bool
-	ready       bool
-	closing     bool
-	failure     error
+	backend        desktopNodeRecoveryBackend
+	opened         bool
+	head           *windowsprotection.JournalSelection
+	owner          desktopNodeJournalRecovery
+	result         *windowsprotection.JournalRecoveryResult
+	proved         bool
+	ownerClosed    bool
+	ready          bool
+	closing        bool
+	failure        error
+	absenceClosing bool // joined before a fresh namespace proof on retry
 }
 
 type desktopNodeRecoveryOperation struct {
@@ -98,6 +100,14 @@ func copyDesktopNodeJournalSelection(selection windowsprotection.JournalSelectio
 }
 
 func (a *app) ensureDesktopNodeRecovery(ctx context.Context, slot *desktopNodeProtectionSlot) error {
+	return a.ensureDesktopNodeRecoveryMode(ctx, slot, false)
+}
+
+func (a *app) ensureDesktopNodeJournalForStart(ctx context.Context, slot *desktopNodeProtectionSlot) error {
+	return a.ensureDesktopNodeRecoveryMode(ctx, slot, true)
+}
+
+func (a *app) ensureDesktopNodeRecoveryMode(ctx context.Context, slot *desktopNodeProtectionSlot, requireJournal bool) error {
 	if a == nil || slot == nil || ctx == nil || ctx.Err() != nil {
 		return errors.New("native startup recovery has no captured application slot")
 	}
@@ -114,10 +124,14 @@ func (a *app) ensureDesktopNodeRecovery(ctx context.Context, slot *desktopNodePr
 		return ctx.Err() == nil && a.nodeProtection == slot && a.profiles.SelectedID == selected &&
 			a.cfg.ProfilesFile == profiles && !a.controllerClosingLocked()
 	}
-	return slot.initializeRecovery(ctx, selected, profiles, guard)
+	return slot.initializeRecoveryWithJournal(ctx, selected, profiles, guard, requireJournal)
 }
 
 func (s *desktopNodeProtectionSlot) initializeRecovery(ctx context.Context, selectedID, profiles string, current func() bool) (failure error) {
+	return s.initializeRecoveryWithJournal(ctx, selectedID, profiles, current, false)
+}
+
+func (s *desktopNodeProtectionSlot) initializeRecoveryWithJournal(ctx context.Context, selectedID, profiles string, current func() bool, requireJournal bool) (failure error) {
 	if s == nil || ctx == nil || ctx.Err() != nil || current == nil || !current() {
 		return errors.New("native startup recovery lost its captured operation")
 	}
@@ -127,7 +141,16 @@ func (s *desktopNodeProtectionSlot) initializeRecovery(ctx context.Context, sele
 		return nil // explicit modeled/pre-captured test backends have no native store
 	}
 	if s.recovery != nil && s.recovery.ready {
-		return nil
+		if !requireJournal || s.journal != nil {
+			return nil
+		}
+		if !s.known || s.target != nil || s.active != nil || s.retirement != nil || s.off != nil || s.journalClosing {
+			return errors.New("native journal creation cannot replace an existing protection owner")
+		}
+		// Read-only startup absence is not a durable launch authority. Reopen
+		// the exact namespace and materialize before capturing a predecessor.
+		s.known, s.recovery.ready, s.recovery.opened = false, false, false
+		s.recovery.head = nil
 	}
 	if s.active != nil || s.retirement != nil || s.off != nil || s.journalClosing || s.known || s.target != nil || s.backend.read == nil {
 		return errors.New("startup recovery cannot replace an active, retiring or already captured slot")
@@ -159,21 +182,13 @@ func (s *desktopNodeProtectionSlot) initializeRecovery(ctx context.Context, sele
 	if err := check(); err != nil {
 		return err
 	}
-	if !r.opened {
-		if s.journal != nil {
-			if err := s.journal.Close(); err != nil {
-				return err
-			}
-			s.journal = nil
-		}
-		store, err := r.backend.open(ctx)
-		if store != nil {
-			s.journal = store // partial native files/lock remain owned on failure
-		}
-		if err != nil || store == nil {
-			return errors.Join(err, errors.New("startup recovery could not retain its original private journal"))
-		}
-		r.opened = true
+	initialAbsence, err := s.openRecoveryJournalLocked(ctx, check, requireJournal)
+	if err != nil {
+		return err
+	}
+	if initialAbsence {
+		s.known, r.ready = true, true
+		return nil
 	}
 	if r.head == nil {
 		selection, err := s.journal.Snapshot(ctx)

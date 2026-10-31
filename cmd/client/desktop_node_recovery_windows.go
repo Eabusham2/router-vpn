@@ -5,7 +5,6 @@ package main
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -52,6 +51,12 @@ func desktopNodeRecoveryBootstrap(controller *windowsOwnedController) func(conte
 			open: func(ctx context.Context) (desktopNodeProtectionJournal, error) {
 				return openDesktopNodeStartupJournal(ctx, controller)
 			},
+			create: func(ctx context.Context) (desktopNodeProtectionJournal, error) {
+				if err := currentDesktopNodeController(controller); err != nil {
+					return nil, err
+				}
+				return windowsprotection.CreateProtectionJournal(ctx, controller.parent, controller.directories[0])
+			},
 			begin: func(ctx context.Context, journal desktopNodeProtectionJournal) (desktopNodeJournalRecovery, error) {
 				if err := currentDesktopNodeController(controller); err != nil {
 					return nil, err
@@ -69,18 +74,7 @@ func openDesktopNodeStartupJournal(ctx context.Context, controller *windowsOwned
 	if err := currentDesktopNodeController(controller); err != nil {
 		return nil, err
 	}
-	store, err := windowsprotection.OpenProtectionJournal(ctx, controller.parent, controller.directories[0])
-	if !errors.Is(err, os.ErrNotExist) {
-		return store, err
-	}
-	if store != nil {
-		if closeErr := store.Close(); closeErr != nil {
-			return store, errors.Join(err, closeErr)
-		}
-	}
-	// Creation independently proves native absence and the exact empty
-	// protected namespace; a missing peer/header never authorizes repair.
-	return windowsprotection.CreateProtectionJournal(ctx, controller.parent, controller.directories[0])
+	return windowsprotection.OpenProtectionJournalForStartup(ctx, controller.parent, controller.directories[0])
 }
 
 func (a *app) initializeDesktopNodeRecovery() error {

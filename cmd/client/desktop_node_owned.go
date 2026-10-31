@@ -216,6 +216,9 @@ func stageDesktopOwnedNodeInputs(a *app, launch *desktopNodeLaunch) error {
 	if err := a.ensureDesktopNodeRecovery(ctx, slot); err != nil {
 		return err
 	}
+	if err := a.ensureDesktopNodeJournalForStart(ctx, slot); err != nil {
+		return err
+	}
 	attempt, err := slot.begin(ctx, launch, owned.policy)
 	if err != nil {
 		return err

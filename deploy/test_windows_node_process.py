@@ -91,6 +91,15 @@ SHARED_TESTS = (
     "TestDesktopOwnedNodeHealthUsesSealedSourceAfterSavedBundleChanges",
     "TestDesktopOwnedNodeHealthRejectsWrongOrRetiredProof",
     "TestDesktopOwnedNodeHealthRejectsUncapturedProfileBeforeNetwork",
+    "TestDesktopNodeInitialStartupDoesNotCreateJournal",
+    "TestDesktopNodeInitialSourceCreatesBeforeCapturedAttempt",
+    "TestDesktopNodeInitialSourceRejectsUnmaterializedJournal",
+    "TestDesktopNodeInitialStartupRejectsMissingAndForeignState",
+    "TestDesktopNodeInitialAbsenceRequiresCurrentJoinedOwner",
+    "TestDesktopNodeInitialCloseRetryReopensExactNamespace",
+    "TestDesktopNodeInitialCreateRetryRetainsPartialOwner",
+    "TestDesktopNodeInitialCreateCancellationRetainsWrittenJournal",
+    "TestDesktopNodeInitialCancelledStartCannotAuthorizeReadOnlyCreate",
 )
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
@@ -116,6 +125,8 @@ REQUIRED_SOURCES = (
     "cmd/client/desktop_node_journal_off.go", "cmd/client/desktop_node_journal_off_test.go",
     "cmd/client/desktop_node_recovery.go", "cmd/client/desktop_node_recovery_windows.go",
     "cmd/client/desktop_node_recovery_other.go", "cmd/client/desktop_node_recovery_test.go",
+    "cmd/client/desktop_node_recovery_initial.go", "cmd/client/desktop_node_recovery_initial_test.go",
+    "cmd/client/desktop_node_owned.go",
     "cmd/client/desktop_node_health.go", "cmd/client/desktop_node_health_test.go",
     "cmd/client/desktop_node_startup.go", "cmd/client/desktop_node_startup_test.go",
     "cmd/client/node_proof.go", "cmd/client/speed_lab_transaction.go",
@@ -203,6 +214,10 @@ def mutants():
     health = (ROOT / health_file).read_text(encoding="utf-8")
     startup_file = "cmd/client/desktop_node_startup.go"
     startup = (ROOT / startup_file).read_text(encoding="utf-8")
+    initial_file = "cmd/client/desktop_node_recovery_initial.go"
+    initial = (ROOT / initial_file).read_text(encoding="utf-8")
+    owned_file = "cmd/client/desktop_node_owned.go"
+    owned = (ROOT / owned_file).read_text(encoding="utf-8")
     once = NATIVE.replace_once
     alive = NATIVE.function_mutant(original, "func (owner *desktopNodeProcessOwner) Alive()",
         "\tif err := owner.controller(); err != nil {\n\t\treturn err\n\t}\n", "")
@@ -260,7 +275,7 @@ def mutants():
          once(off_capture, "if capture.profileWritten.Load() {", "if false && capture.profileWritten.Load() {")),
         (protection_file, "successor-without-startup-recovery", "TestDesktopNodeRecoveryRequiresJoinedInitializationBeforeBegin/not-initialized",
          "native successor entered before checked startup recovery joined",
-         once(protection, "s.backend.bootstrap != nil && (s.recovery == nil || !s.recovery.ready) ||", "")),
+         once(protection, "s.backend.bootstrap != nil && (s.recovery == nil || !s.recovery.ready || s.journal == nil) ||", "")),
         (recovery_file, "adoption-with-lost-native-proof", "TestDesktopNodeRecoveryRejectsUnprovedReceiptAndChangedProfile/durable-with-error",
          "unproved recovery or changed accepted profile reached native removal or saved settlement",
          once(recovery, '\t\tif err != nil {\n\t\t\treturn errors.Join(err, errors.New("native startup recovery has not joined its process and BFE proof"))\n\t\t}',
@@ -297,6 +312,23 @@ def mutants():
         (health_file, "owned-proof-skips-native-target-readback", "TestDesktopOwnedNodeHealthRejectsWrongOrRetiredProof/target",
          "wrong or retired native HTTP proof was accepted",
          once(health, "\t\tif err := slot.backend.prepared(parent, *target); err != nil {\n\t\t\treturn err\n\t\t}\n", "")),
+        (owned_file, "source-skips-durable-journal-materialization", "TestDesktopNodeInitialSourceCreatesBeforeCapturedAttempt",
+         "protected source captured an attempt before materializing its rechecked durable journal",
+         once(owned, "\tif err := a.ensureDesktopNodeJournalForStart(ctx, slot); err != nil {\n\t\treturn err\n\t}\n", "")),
+        (initial_file, "initial-absence-ignores-native-close", "TestDesktopNodeInitialAbsenceRequiresCurrentJoinedOwner/close-failure",
+         "cancelled, replaced or unjoined absence admitted durable source creation",
+         once(initial, "\tr.absenceClosing = true\n\tif err := s.journal.Close(); err != nil {\n\t\treturn false, err\n\t}\n",
+              "\tr.absenceClosing = true\n\t_ = s.journal.Close()\n")),
+        (initial_file, "initial-absence-ignores-post-join-cancellation", "TestDesktopNodeInitialAbsenceRequiresCurrentJoinedOwner/cancel-after-close",
+         "cancelled, replaced or unjoined absence admitted durable source creation",
+         once(initial, "\ts.journal, r.opened, r.absenceClosing = nil, false, false\n\tif err := check(); err != nil {\n\t\treturn false, err\n\t}\n",
+              "\ts.journal, r.opened, r.absenceClosing = nil, false, false\n")),
+        (protection_file, "initial-absence-authorizes-unrecorded-attempt", "TestDesktopNodeInitialStartupDoesNotCreateJournal",
+         "read-only startup absence authorized a source without a durable journal",
+         once(protection, "!s.recovery.ready || s.journal == nil", "!s.recovery.ready")),
+        (initial_file, "initial-absence-creates-for-read-only-recovery", "TestDesktopNodeInitialCancelledStartCannotAuthorizeReadOnlyCreate",
+         "cancelled source start lent creation authority to later read-only startup",
+         once(initial, "if !requireJournal {", "if false && !requireJournal {")),
     )
 
 
