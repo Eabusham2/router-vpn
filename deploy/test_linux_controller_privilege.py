@@ -23,6 +23,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('controller_privilege_toolchain', ROOT/'deploy/test_desktop_socket_uid.py')
 UID = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UID)
+CONTROL_SPEC = importlib.util.spec_from_file_location('controller_node_control', ROOT/'deploy/test_linux_node_control.py')
+CONTROL = importlib.util.module_from_spec(CONTROL_SPEC)
+CONTROL_SPEC.loader.exec_module(CONTROL)
 CASES = ('FixedInstallAndPipeLifetime', 'RejectsUnsafeInstallAndConfig',
          'RejectsForeignIdentityAndInput', 'HonorsInstallAndProcessLocks', 'RequiresBoundedHandshake',
          'RejectsUnownedInstalledMainPreservesUtilities', 'NodeParentRetainsExactObjects', 'NodeParentLifetimeAndRestart',
@@ -35,7 +38,8 @@ PROCESS_CASES = ('Witness', 'CreatedBootstrap', 'RejectsForeignBootstrap', 'Reta
 
 
 def source_identity():
-    names = sorted([ROOT/'go.mod', ROOT/'go.sum', *(ROOT/'cmd/client').glob('*'), *(ROOT/'internal').rglob('*.go')])
+    names = sorted([ROOT/'go.mod', ROOT/'go.sum', *(ROOT/'cmd/client').glob('*'), *(ROOT/'internal').rglob('*.go'),
+                    *(ROOT/'deploy'/name for name in (*CONTROL.RUNNERS, 'test_linux_controller_privilege.py'))])
     return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in names if path.is_file() and not path.is_symlink()}
 
@@ -131,7 +135,10 @@ def execute(go='go'):
                 'internal/linuxprocess/channel_eof_linux_native_test.go',
                 'cmd/client/desktop_node_process_linux.go', 'cmd/client/desktop_node_process_linux_native_test.go',
                 'cmd/client/desktop_node_process_finish_linux.go', 'cmd/client/desktop_node_process_finish_linux_native_test.go',
-                'internal/linuxprotection/command_capture.go', 'internal/linuxprotection/command_capture_test.go'}
+                'internal/linuxprotection/command_capture.go', 'internal/linuxprotection/command_capture_test.go',
+                'internal/linuxprotection/node_control_record.go', 'internal/linuxprotection/node_control_record_test.go',
+                'internal/linuxprotection/node_control_linux.go', 'internal/linuxprotection/node_control_linux_native_test.go',
+                'deploy/test_linux_node_control.py', 'deploy/test_linux_node_control_runner.py'}
     if not required.issubset(before):
         raise ValueError('The actual controller privilege source/test closure is incomplete')
     env = dict(os.environ, GOWORK='off')
@@ -140,6 +147,10 @@ def execute(go='go'):
     sudo = UID.privilege_tool()
     compiler, env = UID.compiler_toolchain(ROOT, go, env)
     UID.run([compiler, 'test', '-race', '-mod=readonly', '-count=1', './internal/linuxprotection', './internal/linuxprocess'], cwd=ROOT, env=env)
+    UID.run([sys.executable, ROOT/'deploy/test_linux_node_control_runner.py'], cwd=ROOT, env=env)
+    CONTROL.execute(compiler, env=env)
+    if source_identity() != before:
+        raise ValueError('Original Node control source changed during its required native gate')
     with tempfile.TemporaryDirectory(prefix='routervpn-controller-privilege-') as temporary:
         process_binary = Path(temporary)/'native-process.test'
         UID.run([compiler, 'test', '-race', '-c', '-mod=readonly', '-tags=routervpn_controller_privileged',
