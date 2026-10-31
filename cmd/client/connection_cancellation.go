@@ -18,6 +18,9 @@ func (a *app) finalizeCancelledFallbackFor(scope string, operation context.Conte
 	if !a.sameConnectionOperation(operation) {
 		return errors.Join(errConnectionOperationCancelled, errors.New("cancelled fallback no longer owns the current operation"))
 	}
+	if temporary, err := a.speedLabDefersFallbackRelease(operation); temporary {
+		return errors.Join(errConnectionOperationCancelled, err)
+	}
 	a.mu.Lock()
 	slot := a.nodeProtection
 	command := a.cmd

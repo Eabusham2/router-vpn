@@ -13,6 +13,7 @@ orch = text("modes/orchestrate.py")
 main = text("cmd/client/main.go")
 logical = text("cmd/client/logical_modes.go")
 helper = text("cmd/client/kill_switch_transition.go")
+fallback = text("cmd/client/speed_lab_fallback.go")
 
 for required in (
     "HOMEVPN_KILLSWITCH_HOLD",
@@ -66,12 +67,14 @@ assert stop_body.index("stopDesktopNodeRuntime(a, cmd)") < mode_guard_at, "captu
 assert stop_body.index("finishDesktopNodeRuntime(a)") > release_at, "native retry identity is discarded before firewall release commits"
 
 assert "a.startModeAttempt(candidate.RuntimeID, true)" in logical
-assert "a.releaseTransitionKillSwitch()" in logical
+assert "a.releaseFallbackKillSwitch(a.connectionOperationContextOrBackground())" in logical
+assert "a.speedLabDefersFallbackRelease(operation)" in fallback
+assert "return a.releaseTransitionKillSwitch()" in fallback
 # Only the actual WG/AWG/native logical fallback loop must use the held-attempt
 # API. Other terminal wrappers (for example ALL, which implements its own held
 # internal branch transitions) may legitimately call startMode().
 try:
-    candidate_loop = logical.split("for _, candidate := range candidates {", 1)[1].split("if err := a.releaseTransitionKillSwitch()", 1)[0]
+    candidate_loop = logical.split("for _, candidate := range candidates {", 1)[1].split("if err := a.releaseFallbackKillSwitch(", 1)[0]
 except IndexError as exc:
     raise AssertionError("logical candidate fallback loop could not be located") from exc
 assert "a.startModeAttempt(candidate.RuntimeID, true)" in candidate_loop

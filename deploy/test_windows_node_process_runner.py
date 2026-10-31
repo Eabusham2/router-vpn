@@ -123,14 +123,15 @@ class NodeProcessRunner(unittest.TestCase):
                 GATE.check_all_composition(status, output)
 
     def test_all_controls_keep_the_shipping_capability_closed_and_source_unchanged(self):
-        names = (GATE.ALL_CAPABILITY_FILE, "cmd/client/logical_modes.go", "cmd/client/desktop_node_all.go")
+        names = (GATE.ALL_CAPABILITY_FILE, "cmd/client/logical_modes.go", "cmd/client/desktop_node_all.go",
+                 "cmd/client/connection_cancellation.go", "cmd/client/speed_lab_fallback.go")
         before = {name: (ROOT / name).read_bytes() for name in names}
         prospective = GATE.all_capability_source()
         self.assertNotEqual(prospective.encode(), before[GATE.ALL_CAPABILITY_FILE])
         self.assertIn('case "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg":', prospective)
         controls = GATE.all_mutants()
-        self.assertEqual(len(controls), 5)
-        self.assertEqual(len({item[1] for item in controls}), 5)
+        self.assertEqual(len(controls), 8)
+        self.assertEqual(len({item[1] for item in controls}), 8)
         for filename, _, test, witness, changed in controls:
             self.assertIn(filename, before)
             self.assertNotEqual(changed.encode(), before[filename])

@@ -125,6 +125,7 @@ SHARED_TESTS = (
     "TestDesktopNodeALLKeepsCompleteTLSFirstOrder",
     "TestDesktopNodePublicALLClosedGraphsKeepOriginalOwner",
     "TestDesktopNodePublicALLCancellationKeepsCapturedOperation",
+    "TestSpeedLabFallbackReleaseRequiresCapturedTransaction",
 )
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
@@ -154,10 +155,14 @@ EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES
                            "active", "retiring", "off", "journal-close", "new-target", "revision")),
             *("TestDesktopNodePublicALLClosedGraphsKeepOriginalOwner/" + policy for policy in ("always", "on-connect")),
             *("TestDesktopNodePublicALLCancellationKeepsCapturedOperation/" + case for case in ("cancel", "replacement")),
+            *("TestSpeedLabFallbackReleaseRequiresCapturedTransaction/" + case for case in
+              ("live", "test-cancelled", "intent-cancelled", "operation", "runtime", "not-mutated", "restored", "invalid-owner")),
             "TestWindowsPrivateStoreWriteThroughReplace/unicode",
             "TestWindowsPrivateStoreWriteThroughReplace/long-portable-path")
 REQUIRED_SOURCES = (
     "cmd/client/desktop_node_all.go", "cmd/client/desktop_node_all_test.go", "cmd/client/desktop_node_all_prospective_test.go",
+    "cmd/client/desktop_node_all_restore_prospective_test.go", "cmd/client/speed_lab_fallback.go",
+    "cmd/client/speed_lab_fallback_test.go", "cmd/client/connection_cancellation.go",
     "internal/mobilemultihop/desktop_node_admission.go",
     "cmd/client/logical_modes.go", "cmd/client/logical_base_preference.go", "cmd/client/logical_base_preference_test.go",
     "cmd/client/desktop_node_start_assets_test.go",
@@ -202,11 +207,14 @@ REQUIRED_SOURCES = (
 
 ALL_GROUPS = ("TestDesktopNodeProspectiveALLProvesOrderedFallback",
               "TestDesktopNodeProspectiveALLFailureRetainsSelectedProtection",
-              "TestDesktopNodeProspectiveALLStopsAtUnjoinedAttempt")
+              "TestDesktopNodeProspectiveALLStopsAtUnjoinedAttempt",
+              "TestDesktopNodeProspectiveALLTemporaryRestoreKeepsExactWinner")
 ALL_EXPECTED = (*ALL_GROUPS,
                 *(ALL_GROUPS[0] + "/" + policy + "/" + base + "/" + str(winner)
                   for policy in ("always", "on-connect") for base in ("wg", "awg") for winner in range(4)),
-                *(ALL_GROUPS[1] + "/" + policy for policy in ("always", "on-connect")))
+                *(ALL_GROUPS[1] + "/" + policy for policy in ("always", "on-connect")),
+                *(ALL_GROUPS[3] + "/" + policy + "/" + outcome
+                  for policy in ("always", "on-connect") for outcome in ("cancel", "failed")))
 ALL_CAPABILITY_FILE = "internal/mobilemultihop/desktop_node_admission.go"
 
 
@@ -228,8 +236,11 @@ def check_all_composition(status, output):
 
 def all_mutants():
     logical_file, all_file = "cmd/client/logical_modes.go", "cmd/client/desktop_node_all.go"
+    cancellation_file, fallback_file = "cmd/client/connection_cancellation.go", "cmd/client/speed_lab_fallback.go"
     logical = (ROOT / logical_file).read_text(encoding="utf-8")
     original = (ROOT / all_file).read_text(encoding="utf-8")
+    cancellation = (ROOT / cancellation_file).read_text(encoding="utf-8")
+    fallback = (ROOT / fallback_file).read_text(encoding="utf-8")
     once = NATIVE.replace_once
     return (
         (logical_file, "all-legacy-dispatch", ALL_GROUPS[0] + "/always/wg/0",
@@ -247,6 +258,15 @@ def all_mutants():
         (logical_file, "all-replacement-cancellation", "TestDesktopNodePublicALLCancellationKeepsCapturedOperation/replacement",
          "old ALL cancellation changed a replacement connection",
          once(logical, 'a.finalizeCancelledFallbackFor("ALL", operation)', 'a.finalizeCancelledFallbackFor("ALL", func() context.Context { _ = operation; return a.connectionOperationContextOrBackground() }())').replace('import (\n', 'import (\n\t"context"\n', 1)),
+        (cancellation_file, "all-temporary-cancel-release", ALL_GROUPS[3] + "/on-connect/cancel",
+         "temporary ALL did not restore its exact previously proved winner",
+         once(cancellation, "if temporary, err := a.speedLabDefersFallbackRelease(operation); temporary {", "if temporary, err := a.speedLabDefersFallbackRelease(operation); false && temporary {")),
+        (all_file, "all-temporary-failure-release", ALL_GROUPS[3] + "/on-connect/failed",
+         "temporary ALL did not restore its exact previously proved winner",
+         once(original, "a.releaseFallbackKillSwitch(operation)", "a.releaseTransitionKillSwitch()")),
+        (fallback_file, "all-temporary-replaced-runtime", "TestSpeedLabFallbackReleaseRequiresCapturedTransaction/runtime",
+         "fallback cleanup accepted a replaced or completed temporary transaction",
+         once(fallback, "a.cmd != nil && a.cmd != owner.runtime", "false && a.cmd != nil && a.cmd != owner.runtime")),
     )
 
 

@@ -73,7 +73,7 @@ func (a *app) startDesktopNodeALL(requestedBase string) (runtimeCandidate, error
 		if err := a.checkCapturedConnectionOperation(operation); err != nil {
 			return runtimeCandidate{}, err
 		}
-		if err := a.releaseTransitionKillSwitch(); err != nil {
+		if err := a.releaseFallbackKillSwitch(operation); err != nil {
 			failures = append(failures, err.Error())
 		}
 	}

@@ -429,7 +429,7 @@ func (a *app) startLogicalMode(id, requestedBase string) (runtimeCandidate, erro
 		}
 		return candidate, nil
 	}
-	if err := a.releaseTransitionKillSwitch(); err != nil {
+	if err := a.releaseFallbackKillSwitch(a.connectionOperationContextOrBackground()); err != nil {
 		failures = append(failures, err.Error())
 	}
 	return runtimeCandidate{}, fmt.Errorf("%s unavailable: %s", logical.Name, strings.Join(failures, " • "))

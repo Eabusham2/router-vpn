@@ -233,7 +233,7 @@ func (a *app) failStrategy(strategy string, failures []string) error {
 	if err := a.checkConnectionOperation(); errors.Is(err, errConnectionOperationCancelled) {
 		return a.finalizeCancelledFallback(strings.ToUpper(strategy))
 	}
-	if err := a.releaseTransitionKillSwitch(); err != nil {
+	if err := a.releaseFallbackKillSwitch(a.connectionOperationContextOrBackground()); err != nil {
 		failures = append(failures, "kill-switch transition release: "+err.Error())
 	}
 	message := strings.Join(failures, " • ")
