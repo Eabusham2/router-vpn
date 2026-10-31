@@ -6,7 +6,68 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through cf8b98e3
+## Latest implementation continuation — through 61587921
+
+The verified source cutoff is
+[`6158792145becb0ef3bce579e020bdc663eddf9a`](https://github.com/Eabusham2/router-vpn/commit/6158792145becb0ef3bce579e020bdc663eddf9a).
+The [continued implementation evidence](CONTINUATION-EVIDENCE-2026-10-31.md#linux-owned-engine-and-journal-windows-native-gates-through-61587921)
+records fifteen further implementation publications, their executable evidence,
+and the current remaining requirements. Earlier sections below are dated
+observations, not assertions that their former gaps are still present.
+
+- Logical WG/AWG base preference is now saved before capturing the complete
+  source and starting its owned connection (`140c873c`). Failed operations
+  roll back only their own unchanged preference; they cannot overwrite a newer
+  selection. Six race groups and four compiled defects passed. Public native
+  ALL and complete-PQ/MAX admission remain staged pending native evidence.
+- Complete MAX now has mandatory generic traffic, credential, native ABI and
+  compiled-control gates, plus actual WFP execution on both Windows architectures
+  in standalone and authoritative-release workflows (`a60f79da`, `515aced6`,
+  `bf63f173`). The new actual Windows MAX jobs are still running. Compilation
+  and local modeled-policy checks do not substitute for that execution.
+- The actual Windows PQ/WFP gate passed on ARM64 at `729ab8a`, including the
+  real PowerShell 5.1/7 private-ACL checks. AMD64 passed all six traffic cases
+  and all sixteen credential negatives, then hit the succession suite's
+  aggregate timeout. `61587921` budgets its nine complete native owners
+  separately from the unchanged individual deadlines; fifteen runner checks
+  passed and new native succession execution remains required.
+  Actual Windows bootstrap passed on both architectures at `57071218`;
+  its encrypted-path/WFP AMD64 job also passed, while ARM64 was cancelled.
+  Both captured-startup jobs failed on their first Vision/PQ-Vision TCP echo;
+  that distinct failure is being diagnosed without weakening authentication.
+- Linux retains exclusive per-session table creation and proved succession
+  (`d5fa2030`), the original guardian process (`d24c0524`), and live original
+  parent/engine observations (`ee03863d`). Its retained engine launcher now
+  pins the native executable and workspace and joins the actual process
+  (`73b34a6c`). Eight native launcher scenarios, six compiled defects, focused
+  race checks and an ARM64 full controller compile passed.
+- The Linux journal now requires durable preparation and the original native
+  creation receipt before accepting a per-session successor (`bf0fd4c3`).
+  Real kernel replacement refusal and retained-Always rollback tests passed.
+  The parent orchestration that actually appends each durable phase before
+  the matching mutation, authenticated child coordination and public Linux
+  activation are subsequent work. Retained inherited descriptors now receive
+  verified close-on-exec flags (`c166d615`); ten actual native process parents,
+  three compiled descriptor-leak defects, race checks and ARM64 compile passed.
+  Local TUN absence
+  still prevents claiming the complete TUN/DNS gate here.
+- The macOS lifetime fixture now retains its real ordinary-user socket peer
+  throughout the test (`87000620`); both Darwin architecture compiles and an
+  actual Unix descriptor-transfer regression passed. New native Darwin execution
+  remains separate. The installer's unresolved live executable-path inventory
+  boundary remains open; no process-name or signing-only bypass was added.
+- The unmodified broad release-orchestration audit passed at `bf63f173` in
+  45.170 seconds with all 3,125 tracked input hashes unchanged. This is a
+  source/toolchain audit at that commit, not current-SHA release publication.
+
+The latest observed published prerelease is still `745b3e41` with twelve assets.
+The remaining original scope includes native graph admission and ALL, Linux
+parent/child/public integration, the macOS inventory boundary, one current SHA
+passing all packages/images/compose and publication, required signing, physical
+and off-LAN acceptance, and deliberate private deployment. No live router,
+AdGuard, ASUS forwarding or Portainer deployment was changed.
+
+## Earlier implementation continuation — through cf8b98e3
 
 The verified source cutoff is
 [`cf8b98e3ea698dd109418c1c0e28eac96d877af3`](https://github.com/Eabusham2/router-vpn/commit/cf8b98e3ea698dd109418c1c0e28eac96d877af3).
