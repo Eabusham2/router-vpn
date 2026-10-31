@@ -151,6 +151,10 @@ class NativeSocketUIDGate(unittest.TestCase):
                 node = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_physical.py')]
                 self.assertEqual(len(node), 1 if system in ('linux', 'windows') else 0)
                 self.assertIn(ROOT/'deploy/test_desktop_node_physical.py', N.inputs())
+                self.assertIn(ROOT/'go.mod', N.inputs())
+                self.assertIn(ROOT/'cmd/start-layer-relay/main.go', N.inputs())
+                if (ROOT/'go.sum').exists() or (ROOT/'go.sum').is_symlink():
+                    self.assertIn(ROOT/'go.sum', N.inputs())
                 runner = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_windows_identity_runner.py')]
                 self.assertEqual(len(runner), 1 if system == 'windows' else 0)
                 windows = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_windows_identity.py')]

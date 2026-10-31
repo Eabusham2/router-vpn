@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/netip"
 	"os"
@@ -15,6 +17,7 @@ import (
 
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemultihop"
 )
 
 type desktopOwnedNodePreparationFixture struct {
@@ -141,6 +144,86 @@ func TestDesktopOwnedNodePreparationCapturesResolvedEndpointOnce(t *testing.T) {
 	}
 }
 
+func desktopOwnedNodePreparationAES(t *testing.T, endpoint string) map[string][]byte {
+	t.Helper()
+	graph := map[string]any{
+		"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
+		"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": endpoint, "server_port": 8388,
+			"method": mobilemultihop.NativeStartLayerMethod, "password": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{43}, 32))}},
+		"route": map[string]any{"final": "proxy", "rules": []any{}},
+	}
+	raw, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return map[string][]byte{"sing-box.json": raw}
+}
+
+func TestDesktopOwnedNodePreparationKeepsCapturedAESAndWhitening(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks"} {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(mode+"/"+layer, func(t *testing.T) {
+				base := mode
+				if mode == "shadowsocks" {
+					base = "wg"
+				}
+				f := newDesktopOwnedNodePreparationFixture(t, base)
+				f.profile.StartLayer = layer
+				f.a.profiles.Profiles[0] = f.profile
+				aes := desktopOwnedNodePreparationAES(t, f.profile.Endpoint)
+				directory := filepath.Join(f.capture.dataRoot, "generated", f.profile.ID, "shadowsocks")
+				if err := os.MkdirAll(directory, 0700); err != nil {
+					t.Fatal(err)
+				}
+				for name, raw := range aes {
+					if err := os.WriteFile(filepath.Join(directory, name), raw, 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var start map[string][]byte
+				if mode == "shadowsocks" {
+					f.files = aes
+				} else if layer != "" {
+					start = aes
+				}
+				command, previous := f.a.cmd, f.a.state
+				t.Setenv("HOMEVPN_ROOT", t.TempDir())
+				launch, err := f.prepare(mode, f.verify, f.lookup)
+				if err != nil {
+					t.Fatal("captured native graph lost its selected Start Layer", err)
+				}
+				defer clearSpeedLabRestorePlan(speedLabRestorePlan{native: launch})
+				original, _, err := compileDesktopNode(context.Background(), f.profile, mode, f.files, start, nil)
+				if err != nil || launch.ownedNode.policy.OriginalProfile().Config() != original.Config() ||
+					launch.ownedNode.policy.Metadata().StartLayer != layer || f.a.cmd != command || f.a.state != previous ||
+					f.a.nodeProtection != nil || f.lookupCalls != 0 {
+					t.Fatal("native preparation substituted a protocol, layer, private node or previous runtime", err)
+				}
+			})
+		}
+	}
+}
+
+func TestDesktopOwnedNodePreparationDoesNotBorrowAnotherNodesStartLayer(t *testing.T) {
+	f := newDesktopOwnedNodePreparationFixture(t, "wg")
+	f.profile.StartLayer = "aes-256-gcm"
+	f.a.profiles.Profiles[0] = f.profile
+	directory := filepath.Join(f.capture.dataRoot, "generated", "another-node", "shadowsocks")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, raw := range desktopOwnedNodePreparationAES(t, f.profile.Endpoint) {
+		if err := os.WriteFile(filepath.Join(directory, name), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	command, previous := f.a.cmd, f.a.state
+	if launch, err := f.prepare("wg", f.verify, f.lookup); err == nil || launch != nil || f.lookupCalls != 0 ||
+		f.a.cmd != command || f.a.state != previous || f.a.nodeProtection != nil {
+		t.Fatal("native preparation borrowed another node's Start Layer or changed the proved runtime", err)
+	}
+}
+
 func TestDesktopOwnedNodePreparationRejectsRetiredCapture(t *testing.T) {
 	for _, fault := range []string{"operation", "controller", "lifetime", "profile", "network", "replaced-operation", "wrong-executable", "verification"} {
 		t.Run(fault, func(t *testing.T) {
@@ -244,7 +327,7 @@ func TestDesktopOwnedNodePreparationRejectsUnsupportedAdmission(t *testing.T) {
 			case "off":
 				f.profile.KillSwitchPolicy = "off"
 			case "layer":
-				f.profile.StartLayer = "aes-256-gcm"
+				f.profile.StartLayer = "xor-only"
 			case "mode":
 				mode = "hysteria2"
 			case "no-operation":

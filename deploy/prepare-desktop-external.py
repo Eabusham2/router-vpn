@@ -86,6 +86,8 @@ PEER_TEMPLATES = {
     'node_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_test.go',
     'node_peer_dns_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_dns_test.go',
     'node_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_windows_test.go',
+    'node_layer_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_layer_peer_test.go',
+    'node_layer_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_layer_peer_windows_test.go',
 }
 ROUTE_TEMPLATES = {
     'tor_network_startup.go.tmpl': 'route/routervpn_desktop_tor_network_startup.go',
@@ -561,7 +563,7 @@ def prepare(vendor, go='go', *, env=None):
     for name, relative in PEER_TEMPLATES.items():
         path = ROOT/'mobile/desktop'/name
         prefix = b'package routervpnamnezia\n'
-        if name == 'node_peer_windows_test.go.tmpl':
+        if name in ('node_peer_windows_test.go.tmpl', 'node_layer_peer_windows_test.go.tmpl'):
             prefix = b'//go:build windows && routervpn_windows_node_composition\n\n' + prefix
         if path.is_symlink() or not path.read_bytes().startswith(prefix):
             raise ValueError('Desktop encrypted peer test changed its test-only package')

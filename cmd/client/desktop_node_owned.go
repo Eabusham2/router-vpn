@@ -64,8 +64,7 @@ func desktopOwnedNodeProfileToken(profile common.RouterProfile) string {
 
 func newDesktopOwnedNodeLaunch(profile common.RouterProfile, original *mobilemultihop.NodeProfile, mode, root, endpoint, network, session string, restoredMTU int) (*desktopNodeLaunch, error) {
 	if original == nil || network == "" || root == "" || profile.ID == "" ||
-		(mode != "wg" && mode != "awg2-fast" && mode != "awg2-strong") ||
-		(profile.StartLayer != "" && profile.StartLayer != "off") {
+		!mobilemultihop.DesktopNodePhysicalGraphSupported(mode, profile.StartLayer) {
 		return nil, errors.New("native Router ownership requires its captured supported graph")
 	}
 	policy, err := mobilemultihop.NewDesktopNodePolicyWithMTU(original, session, "windows", restoredMTU)
@@ -726,8 +725,7 @@ func desktopOwnedNodeProtectionPolicy(profile common.RouterProfile) string {
 func desktopOwnedNodeModeEligible(profile common.RouterProfile, mode string) bool {
 	policy := desktopOwnedNodeProtectionPolicy(profile)
 	return (profile.NodeKind == "" || profile.NodeKind == "router-vpn") && profile.External == nil &&
-		(mode == "wg" || mode == "awg2-fast" || mode == "awg2-strong") &&
-		(profile.StartLayer == "" || profile.StartLayer == "off") && (policy == "on-connect" || policy == "always")
+		mobilemultihop.DesktopNodePhysicalGraphSupported(mode, profile.StartLayer) && (policy == "on-connect" || policy == "always")
 }
 
 func (a *app) guardDesktopOwnedNodeTemporary(request speedLabRequest, snapshot speedLabTemporarySnapshot) error {

@@ -88,10 +88,9 @@ func routerVPNDesktopNodePhysicalAvailable(policy *mobilemultihop.DesktopNodePol
 		return false
 	}
 	meta := policy.Metadata()
-	// Other compiled families and Start Layers retain their original path until
-	// their actual eager/lazy lower composition is admitted by its peer gate.
-	return meta.TargetOS == "windows" && meta.StartLayer == "" &&
-		(meta.Mode == "wg" || meta.Mode == "awg2-fast" || meta.Mode == "awg2-strong")
+	// Each admitted eager/lazy composition uses the same sealed lower object.
+	// Other graph families retain their explicit native acceptance boundary.
+	return meta.TargetOS == "windows" && mobilemultihop.DesktopNodePhysicalGraphSupported(meta.Mode, meta.StartLayer)
 }
 
 func (s *Box) routerVPNDesktopNodePhysical(policy *mobilemultihop.DesktopNodePolicy) (option.Options, *routervpndesktoppt.NodeNetworkOwner, error) {

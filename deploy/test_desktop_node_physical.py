@@ -23,6 +23,14 @@ BOOT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(BOOT)
 PREP = BOOT.PREP
 TAGS = tuple(value for value in BOOT.TAGS if value not in ("routervpn_native_pq", "routervpn_windows_physical_composition"))
+LAYER_CASES = tuple(mode + "/" + layer for mode in ("shadowsocks", "wg", "awg2-fast", "awg2-strong")
+                    for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
+                    if mode == "shadowsocks" or layer != "off")
+
+
+def layer_reference_sources():
+    return [ROOT / "go.mod", *([ROOT / "go.sum"] if (ROOT / "go.sum").exists() else []),
+            *(path for path in sorted((ROOT / "cmd/start-layer-relay").glob("*.go")) if not path.name.endswith("_test.go"))]
 
 
 def checked_sources(source):
@@ -78,6 +86,10 @@ def checked_sources(source):
         if path.is_symlink():
             raise ValueError("Linked encrypted peer/native implementation")
         records[path.relative_to(source).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+    for path in layer_reference_sources():
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("Node layer reference lost its exact shipping source")
+        records["layer-reference/" + path.relative_to(ROOT).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     records["runner"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     return source, records
 
@@ -118,6 +130,17 @@ def selected_compiler(go, source, env):
     return compiler, captured, arch
 
 
+def build_layer_reference(compiler, workspace, captured, race):
+    binary = workspace / ("start-layer-relay.exe" if captured["GOOS"] == "windows" else "start-layer-relay")
+    status, output = run([compiler, "build", "-mod=readonly", "-trimpath", *race, "-o", binary, "./cmd/start-layer-relay"],
+                         cwd=ROOT, env=captured, timeout=300)
+    if status or binary.is_symlink() or not binary.is_file():
+        raise ValueError("Node actual shipping whitening peer did not build:\n" + output[-16384:])
+    captured["ROUTER_VPN_WHITENING_TEST_BINARY"] = str(binary)
+    captured.pop("ROUTERVPN_NODE_LAYER_REFERENCE_CHILD", None)
+    return binary, hashlib.sha256(binary.read_bytes()).hexdigest()
+
+
 def mutants(source, windows):
     def changed(relative, before, after):
         raw = (source / relative).read_text(encoding="utf-8")
@@ -131,6 +154,10 @@ def mutants(source, windows):
     selected_dns = "routervpn_desktop_node_box_dns.go"
     node_command = "cmd/sing-box/routervpn_mtu_node.go"
     result = [
+        ("missing-node-whitening", "protocol/routervpnwhitening/outbound.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeEncryptedLayerTraffic", "shadowsocks/aes-256-gcm\\+xor-whitening",
+         "layered encrypted payload escaped or lost its exact native lower", changed("protocol/routervpnwhitening/outbound.go",
+         "return h.owner.Open(ctx, h.key, network == N.NetworkUDP,",
+         "return h.owner.Open(ctx, [32]byte{}, network == N.NetworkUDP,")),
         ("truncated-shadowsocks-ciphertext", "protocol/shadowsocks/outbound.go", "./protocol/shadowsocks", "TestRouterVPNShadowsocksCompleteCiphertextPacket", "DialContext",
          "actual SS exact-size plaintext read lost complete ciphertext", changed("protocol/shadowsocks/outbound.go",
          "return bufio.NewBindPacketConn(routerVPNGuardPacket(outConn, h.method), destination), nil",
@@ -196,10 +223,12 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          tuple("TestRouterVPNDesktopNodePhysicalBox" + name for name in ("RejectsSubstitutedGraph", "RequiresPreparedOwner", "RetainsMTUAndExactRollback", "RestoresCapturedMTU")) +
          ("TestRouterVPNDesktopNodePhysicalDNSCapturedOwner", "TestRouterVPNDesktopNodePhysicalDNSRetirementCancelsQuery")),
         ("encrypted", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeEncrypted",
-         ("TestRouterVPNDesktopNodeEncryptedPreReadyHandshake", "TestRouterVPNDesktopNodeEncryptedWrongPeerRejected", "TestRouterVPNDesktopNodeEncryptedConfiguredCoverStartup", "TestRouterVPNDesktopNodeEncryptedSelectedDNSIsFresh")),
+         ("TestRouterVPNDesktopNodeEncryptedPreReadyHandshake", "TestRouterVPNDesktopNodeEncryptedWrongPeerRejected", "TestRouterVPNDesktopNodeEncryptedConfiguredCoverStartup", "TestRouterVPNDesktopNodeEncryptedSelectedDNSIsFresh",
+          "TestRouterVPNDesktopNodeEncryptedLayerTraffic", "TestRouterVPNDesktopNodeEncryptedLayerWrongCredential")),
     ]
     with tempfile.TemporaryDirectory(prefix="routervpn-node-physical-") as directory:
         workspace = Path(directory)
+        relay, relay_digest = build_layer_reference(compiler, workspace, captured, race)
         build = [compiler, "test", "-c", "-mod=readonly", "-tags=" + ",".join(TAGS), *race, "-ldflags=-checklinkname=0"]
         suffix = ".exe" if windows else ""
         for name, package, selector, required in suites:
@@ -214,6 +243,8 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Node " + name + " omitted a required native boundary")
             if name == "encrypted" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedPreReadyHandshake/" + mode + " (" not in output for mode in ("wg", "awg2-fast", "awg2-strong")):
                 raise ValueError("Node encrypted gate omitted a complete base profile")
+            if name == "encrypted" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedLayerTraffic/" + case + " (" not in output for case in LAYER_CASES):
+                raise ValueError("Node encrypted gate omitted an admitted graph/Start Layer")
             if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
                 raise ValueError("Node native executable changed during execution")
         for label, relative, package, test, subtest, witness, replacement in mutants(source, windows):
@@ -230,9 +261,11 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             if status == 0 or "--- FAIL: " + test + " (" not in output or witness not in output or any(value in output for value in ("--- SKIP:", "DATA RACE", "panic: test timed out")):
                 raise ValueError("Node negative control missed its precise production defect: " + label + "\n" + output[-16384:])
             print("Rejected native Node production mutant: " + label, flush=True)
+        if relay.is_symlink() or hashlib.sha256(relay.read_bytes()).hexdigest() != relay_digest:
+            raise ValueError("Node shipping whitening reference changed during actual execution")
     if checked_sources(source)[1] != before:
         raise ValueError("Node native source changed during actual execution")
-    print("Exact native Node startup, captured IPC, retained TUN/MTU rollback, real WG/AWG encrypted TCP/UDP and wrong-key controls passed. OS permits/TUN remain explicit fixtures; kernel composition and both-direction host activation remain separate.", flush=True)
+    print("Exact native Node startup, captured IPC, retained TUN/MTU rollback, real WG/AWG/Shadowsocks plus AES/XOR encrypted TCP/UDP, fresh selected DNS and wrong-key controls passed. OS permits/TUN remain explicit fixtures; kernel composition and both-direction host activation remain separate.", flush=True)
 
 
 if __name__ == "__main__":

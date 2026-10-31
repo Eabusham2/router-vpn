@@ -24,7 +24,8 @@ RESOURCES = ROOT / "deploy/fixtures/windows-node-physical"
 TAG = b"//go:build windows && routervpn_windows_node_composition\n"
 TAGS = (*NODE.TAGS, "routervpn_windows_node_composition")
 REQUIRED = tuple("TestRouterVPNDesktopNodeWindowsWFP" + suffix for suffix in (
-    "EncryptedTraffic", "EncryptedSuccession", "RejectsForeignPredecessor", "WrongPeerRejected", "RestorationCapture"))
+    "EncryptedTraffic", "EncryptedSuccession", "RejectsForeignPredecessor", "WrongPeerRejected", "RestorationCapture",
+    "LayerTraffic", "LayerSuccession", "LayerWrongCredential"))
 
 
 def checked_sources(source):
@@ -123,6 +124,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     build = [compiler, "test", "-c", "-mod=readonly", "-tags=" + ",".join(TAGS), *race, "-ldflags=-checklinkname=0"]
     with tempfile.TemporaryDirectory(prefix="routervpn-node-kernel-") as temporary:
         workspace = Path(temporary)
+        relay, relay_digest = NODE.build_layer_reference(compiler, workspace, captured, race)
         base = workspace / "baseline"
         base.mkdir()
         selected = overlay(source, base)
@@ -132,14 +134,20 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         if status:
             raise ValueError("Actual WFP encrypted Node compilation failed:\n" + output[-32768:])
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-        status, output = BOOT.IDENTITY.run([binary, "-test.run=^TestRouterVPNDesktopNodeWindowsWFP", "-test.count=1", "-test.timeout=180s", "-test.v"],
-                                           cwd=source, env=captured, timeout=195)
+        # The added nine layered graphs and cross-family reversal run in the
+        # same native host with independent retained peers. This bounds the
+        # complete expanded suite; individual production/fixture deadlines stay unchanged.
+        status, output = BOOT.IDENTITY.run([binary, "-test.run=^TestRouterVPNDesktopNodeWindowsWFP", "-test.count=1", "-test.timeout=360s", "-test.v"],
+                                           cwd=source, env=captured, timeout=375)
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if status or any("--- PASS: " + test + " (" not in output for test in REQUIRED) or any(value in output for value in ("--- SKIP:", "DATA RACE")):
             raise ValueError("Actual WFP encrypted Node omitted a required native proof")
         for mode in ("wg", "awg2-fast", "awg2-strong"):
             if "--- PASS: " + REQUIRED[0] + "/" + mode + " (" not in output:
                 raise ValueError("Actual WFP encrypted Node omitted a base protocol: " + mode)
+        for case in NODE.LAYER_CASES:
+            if "--- PASS: TestRouterVPNDesktopNodeWindowsWFPLayerTraffic/" + case + " (" not in output:
+                raise ValueError("Actual WFP encrypted Node omitted an admitted graph/Start Layer: " + case)
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("Actual WFP Node executable changed during its retained test")
         for mutation in mutants(source):
@@ -157,9 +165,11 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             if status == 0 or "--- FAIL: " + test + " (" not in output or witness not in output or any(value in output for value in ("--- SKIP:", "DATA RACE", "panic: test timed out")):
                 raise ValueError("WFP Node mutation missed its precise defect: " + name + "\n" + output[-16384:])
             print("Rejected actual WFP encrypted Node production mutant: " + name, flush=True)
+        if relay.is_symlink() or hashlib.sha256(relay.read_bytes()).hexdigest() != relay_digest:
+            raise ValueError("Actual WFP whitening reference changed during execution")
     if checked_sources(source)[1] != before:
         raise ValueError("WFP Node source changed during actual native execution")
-    print("Actual Windows BFE, isolated unconnected UDP grants with exact permitted peers, WG/AWG encrypted IPv4/IPv6 TCP/UDP, exact forward/reverse native succession and wrong-key/ordinary-token controls passed. TUN, node/DNS proof, host adoption and device acceptance remain separate.", flush=True)
+    print("Actual Windows BFE, isolated TCP/UDP grants with exact permitted peers, WG/AWG/Shadowsocks AES/XOR encrypted IPv4/IPv6 payloads, fresh selected DNS, exact cross-family forward/reverse native succession and wrong-key/ordinary-token controls passed. TUN, node identity proof, host adoption and device acceptance remain separate.", flush=True)
 
 
 if __name__ == "__main__":

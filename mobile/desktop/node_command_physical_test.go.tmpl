@@ -85,7 +85,7 @@ func TestRouterVPNDesktopNodePhysicalCommandSourceBoundary(t *testing.T) {
 			}
 			defer files.root.Close()
 			actual, err := routerVPNNodeCommandPhysical(files, session, config, source)
-			if fault == "exact" {
+			if fault == "exact" || fault == "layer-aes" || fault == "layer-whitening" {
 				if err != nil || actual == nil || actual.Config() != policy.Config() || !reflect.DeepEqual(actual.Metadata(), policy.Metadata()) {
 					t.Fatal("exact private inputs did not reconstruct their captured native policy", err)
 				}

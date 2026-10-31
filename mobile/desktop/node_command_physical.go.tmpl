@@ -45,8 +45,8 @@ func routerVPNNodeCommandPhysicalWithMTU(files *routerVPNExternalFiles, session,
 		return nil, routerVPNExternalFailure
 	}
 	meta := policy.Metadata()
-	if meta.SourceSHA256 != source || meta.ConfigSHA256 != config || meta.StartLayer != "" ||
-		(meta.Mode != "wg" && meta.Mode != "awg2-fast" && meta.Mode != "awg2-strong") {
+	if meta.SourceSHA256 != source || meta.ConfigSHA256 != config ||
+		!mobilemultihop.DesktopNodePhysicalGraphSupported(meta.Mode, meta.StartLayer) {
 		return nil, routerVPNExternalFailure
 	}
 	staged, err := files.read("sing-box.json", 4<<20)

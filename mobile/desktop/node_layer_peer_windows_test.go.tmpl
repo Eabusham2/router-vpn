@@ -1,0 +1,203 @@
+//go:build windows && routervpn_windows_node_composition
+
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+func init() { desktopNodeLayerReferenceScope = mobiletor.DesktopWindowsNodeCompositionAppID }
+
+func desktopNodeWFPLayerReference(t *testing.T, mode, layer string) *desktopNodeLayerReference {
+	t.Helper()
+	peer := startDesktopNodeLayerReference(t, mode, layer, desktopNodeWFPInterface(t))
+	scope, err := mobiletor.DesktopWindowsNodeCompositionAppID()
+	if err != nil || len(peer.reply.AppID) == 0 || bytes.Equal(scope, peer.reply.AppID) {
+		t.Fatal("layered reference is not a separate captured actual executable", err)
+	}
+	return peer
+}
+
+func desktopNodeWFPLayerBlocked(t *testing.T, peer *desktopNodeLayerReference) {
+	t.Helper()
+	if peer.probe(t, "positive", desktopNodeWFPProbeNonce(t)) != 1 {
+		t.Fatal("independent layer observer did not prove its live receive path")
+	}
+	nonce := desktopNodeWFPProbeNonce(t)
+	if peer.probe(t, "arm", nonce) != 0 {
+		t.Fatal("layer observer reused a nonce")
+	}
+	delivered, err := desktopNodeLayerProbeExchange(peer.remote, nonce, peer.request.Layer, peer.request.Password)
+	if peer.probe(t, "observe", nonce) != 0 || delivered {
+		t.Fatal("ordinary token crossed layered WFP deny: independent peer marker receipt")
+	}
+	var timeout net.Error
+	if !errors.Is(err, syscall.Errno(10013)) && !(errors.As(err, &timeout) && timeout.Timeout()) {
+		t.Fatal("ordinary layered UDP rejection has no bounded native observation", err)
+	}
+	if peer.probe(t, "positive", desktopNodeWFPProbeNonce(t)) != 1 {
+		t.Fatal("independent layer observer lost its live receive path after rejection")
+	}
+}
+
+func desktopNodeWFPLayerTraffic(t *testing.T, f *desktopNodeWFPFixture, peer *desktopNodeLayerReference) {
+	t.Helper()
+	if f.admitted != 1 || f.prepared.Validate() != nil || f.network.Current() || !f.network.SocketCurrent() {
+		t.Fatal("layered WFP startup skipped captured admission or fabricated readiness")
+	}
+	desktopNodeWFPLayerBlocked(t, peer)
+	outer, found := f.box.Outbound().Outbound("proxy")
+	if !found {
+		t.Fatal("layered native graph lost its final outbound")
+	}
+	for _, network := range []string{"tcp", "udp"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		connection, err := outer.DialContext(ctx, network, M.ParseSocksaddr("192.0.2.99:9999"))
+		if err != nil {
+			cancel()
+			t.Fatal("actual WFP layered encrypted dial failed", network, err)
+		}
+		_ = connection.SetDeadline(time.Now().Add(8 * time.Second))
+		payload := bytes.Repeat([]byte("captured-layered-native-payload/"), 16)
+		_, err = connection.Write(payload)
+		answer := make([]byte, len(payload))
+		if err == nil {
+			_, err = io.ReadFull(connection, answer)
+		}
+		if err != nil || !bytes.Equal(payload, answer) {
+			_ = connection.Close()
+			cancel()
+			t.Fatal("actual WFP layered encrypted payload lost its owned lower", network, err)
+		}
+		// Read the real endpoint while the logical stream is still retained.
+		// A lazy Shadowsocks flow may correctly remove its permit on Close.
+		snapshot, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+		expectedNetwork := network
+		if peer.request.Mode != "shadowsocks" {
+			expectedNetwork = "udp"
+		}
+		matched := false
+		for _, grant := range snapshot.Grants {
+			if grant.Capture != f.prepared.Capture || grant.Remote != peer.remote || grant.Local.Addr() != netip.MustParseAddr(peer.request.Address) || grant.Binding.Owner != snapshot.Owner {
+				_ = connection.Close()
+				cancel()
+				t.Fatal("layered encrypted graph used an uncaptured actual lower tuple")
+			}
+			matched = matched || grant.Network == expectedNetwork
+		}
+		closeErr := connection.Close()
+		cancel()
+		if err != nil || closeErr != nil || snapshot.Closed || snapshot.Target != f.prepared || snapshot.Owner.Kind != "windows-isolated-token" || !matched || !snapshot.Options.RetainBaselineForHandoff {
+			t.Fatal("layered payload lacked its actual retained native endpoint", err, closeErr)
+		}
+		if err := f.exchange(network, "2001:db8::99"); err != nil {
+			t.Fatal("actual WFP layered IPv6 payload failed", network, err)
+		}
+	}
+	observed := peer.observe(t, "stats")
+	if observed.RawUDP == 0 || observed.PlainUDP == 0 || peer.request.Mode == "shadowsocks" && (observed.RawTCP == 0 || observed.PlainTCP == 0) {
+		t.Fatal("actual WFP layered payload had no independent ciphertext observation", observed)
+	}
+}
+
+func TestRouterVPNDesktopNodeWindowsWFPLayerTraffic(t *testing.T) {
+	desktopNodeLayerCases(t, func(t *testing.T, mode, layer string) {
+		if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		peer := desktopNodeWFPLayerReference(t, mode, layer)
+		var retained mobiletor.DesktopWindowsProtectionTarget
+		desktopNodeWFPCleanup(t, &retained)
+		f := desktopNodeWFPBox(t, peer.original(t, "always", ""), nil)
+		if err := f.box.RouterVPNStrategyStart(); err != nil {
+			t.Fatal("actual WFP layered native startup failed", err)
+		}
+		retained = f.prepared
+		desktopNodeWFPLayerTraffic(t, f, peer)
+		if err := f.box.RouterVPNStrategyDNSProof(); err != nil || peer.observe(t, "stats").DNSQueries != 1 {
+			t.Fatal("actual WFP layered DNS skipped its captured Home resolver", err)
+		}
+		peer.observe(t, "fail-dns")
+		if err := f.box.RouterVPNStrategyDNSProof(); err == nil || peer.observe(t, "stats").DNSQueries != 2 {
+			t.Fatal("actual WFP layered DNS accepted cached or failed proof")
+		}
+		f.network.InterfaceUpdated(context.Background())
+		if f.network.SocketCurrent() || f.network.Current() || f.exchange("udp") == nil {
+			t.Fatal("retired WFP layered graph delivered another payload")
+		}
+		retained = desktopNodeWFPDrain(t, f)
+		desktopNodeWFPLayerBlocked(t, peer)
+	})
+}
+
+func TestRouterVPNDesktopNodeWindowsWFPLayerSuccession(t *testing.T) {
+	if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	firstPeer := desktopNodeWFPStartReference(t, "wg")
+	layerPeer := desktopNodeWFPLayerReference(t, "shadowsocks", "aes-256-gcm+xor-whitening")
+	var retained mobiletor.DesktopWindowsProtectionTarget
+	desktopNodeWFPCleanup(t, &retained)
+	original := firstPeer.original(t, "always", false)
+	first := desktopNodeWFPBox(t, original, nil)
+	if err := first.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal(err)
+	}
+	retained = first.prepared
+	desktopNodeWFPRequireTraffic(t, first, firstPeer)
+	retained = desktopNodeWFPDrain(t, first)
+	originalTarget := retained
+	trial := desktopNodeWFPBox(t, layerPeer.original(t, "on-connect", ""), &retained)
+	if err := trial.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal("captured base-to-layer succession failed", err)
+	}
+	retained = trial.prepared
+	desktopNodeWFPLayerTraffic(t, trial, layerPeer)
+	trial.network.InterfaceUpdated(context.Background())
+	retained = desktopNodeWFPDrain(t, trial)
+	restored := desktopNodeWFPBox(t, original, &retained)
+	if err := restored.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal("captured layer-to-base restoration failed", err)
+	}
+	retained = restored.prepared
+	if err := desktopNodeWFPCheckRestoration(first.policy, restored.policy, originalTarget, retained); err != nil {
+		t.Fatal(err)
+	}
+	desktopNodeWFPRequireTraffic(t, restored, firstPeer)
+	retained = desktopNodeWFPDrain(t, restored)
+}
+
+func TestRouterVPNDesktopNodeWindowsWFPLayerWrongCredential(t *testing.T) {
+	if err := mobiletor.DesktopWindowsNodeCompositionAbsent(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	peer := desktopNodeWFPLayerReference(t, "shadowsocks", "aes-256-gcm+xor-whitening")
+	var retained mobiletor.DesktopWindowsProtectionTarget
+	desktopNodeWFPCleanup(t, &retained)
+	f := desktopNodeWFPBox(t, peer.original(t, "always", "aes-key"), nil)
+	if err := f.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal("wrong layer key must reach actual owned native startup", err)
+	}
+	retained = f.prepared
+	desktopNodeWFPLayerBlocked(t, peer)
+	if err := f.exchange("udp"); err == nil {
+		t.Fatal("wrong AES/XOR key delivered an actual WFP encrypted payload")
+	}
+	observed := peer.observe(t, "stats")
+	if observed.RawUDP == 0 || observed.PlainUDP != 0 || f.network.Current() {
+		t.Fatal("wrong layered credential missed its actual encrypted native path", observed)
+	}
+	retained = desktopNodeWFPDrain(t, f)
+	desktopNodeWFPLayerBlocked(t, peer)
+}
