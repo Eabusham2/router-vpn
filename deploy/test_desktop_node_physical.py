@@ -36,6 +36,11 @@ XRAY_CASES = tuple(mode + "/" + layer for mode in XRAY_MODES
 XRAY_CREDENTIAL_CASES = (*XRAY_CASES, "reality-pq-vision/off/xray-pq-key", "reality-xhttp/off/xray-pq-key",
                          "reality-vision/off/xray-user", "reality-vision/aes-256-gcm/aes-key",
                          "reality-vision/aes-256-gcm+xor-whitening/aes-key")
+NAIVE_MODES = ("naive-h2", "naive-h3")
+NAIVE_CASES = tuple(mode + "/" + layer for mode in NAIVE_MODES
+                    for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening"))
+NAIVE_CREDENTIAL_CASES = (*NAIVE_CASES, *(mode + "/" + case for mode in NAIVE_MODES for case in (
+    "off/naive-user", "off/naive-server-name", "off/naive-certificate", "aes-256-gcm/aes-key", "aes-256-gcm+xor-whitening/aes-key")))
 
 
 def layer_reference_sources():
@@ -91,6 +96,20 @@ def checked_sources(source):
     if native_xray.is_symlink() or native_xray.read_bytes() != (ROOT / "mobile/applexray/outbound.go.tmpl").read_bytes():
         raise ValueError("Node native Xray instance lost its exact captured socket owner")
     records["protocol/routervpnxray/outbound.go"] = hashlib.sha256(native_xray.read_bytes()).hexdigest()
+    # Naive uses the pinned native outbound and real inbound/UoT reference,
+    # without a patched transport copy. Reject changed or extra implementation
+    # files before compiling either the baseline or deliberate Go overlays.
+    naive_paths = subprocess.check_output(["git", "ls-tree", "-r", "--name-only", PREP.PIN, "--", "protocol/naive", "common/uot"], cwd=source, text=True).splitlines()
+    expected_naive = {relative for relative in naive_paths if relative.endswith(".go")}
+    actual_naive = {path.relative_to(source).as_posix() for directory in ("protocol/naive", "common/uot") for path in (source / directory).rglob("*.go")}
+    if not expected_naive or actual_naive != expected_naive:
+        raise ValueError("Node Naive native implementation differs from its pinned file set")
+    for relative in sorted(expected_naive):
+        path = source / relative
+        expected = subprocess.check_output(["git", "show", PREP.PIN + ":" + relative], cwd=source)
+        if path.is_symlink() or not path.is_file() or path.read_bytes() != expected:
+            raise ValueError("Node Naive native implementation differs from its pinned source: " + relative)
+        records[relative] = hashlib.sha256(expected).hexdigest()
     for name in ("go.mod", "go.sum"):
         path = source / name
         if path.is_symlink() or not path.is_file():
@@ -105,6 +124,7 @@ def checked_sources(source):
             raise ValueError("Node layer reference lost its exact shipping source")
         records["layer-reference/" + path.relative_to(ROOT).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     records["runner"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    records["cronet-packaging"] = hashlib.sha256((ROOT / "deploy/build-native-runtime.py").read_bytes()).hexdigest()
     return source, records
 
 
@@ -155,6 +175,45 @@ def build_layer_reference(compiler, workspace, captured, race):
     return binary, hashlib.sha256(binary.read_bytes()).hexdigest()
 
 
+def stage_naive_library(compiler, source, workspace, captured):
+    # Use packaging's exact target, module revision, checksum and bounds. The
+    # tests load this retained explicit path; Cronet's ambient search is never
+    # an availability or provenance fallback.
+    spec = importlib.util.spec_from_file_location("node_cronet_packaging", ROOT / "deploy/build-native-runtime.py")
+    native = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(native)
+    target = captured["GOOS"] + "/" + captured["GOARCH"]
+    name = native.library_name(target)
+    if captured["GOOS"] not in ("linux", "windows") or not name:
+        raise ValueError("Node Naive fixture needs its actual native-library target")
+    library = workspace / name
+    if library.exists() or library.is_symlink() or (workspace / "CRONET-LICENSE").exists():
+        raise ValueError("Node Naive library stage is not owned by this invocation")
+    status, output = run([compiler, "mod", "verify"], cwd=source, env=captured, timeout=300)
+    if status:
+        raise ValueError("Node Naive native dependencies failed checksum verification:\n" + output[-8192:])
+    module_path = "github.com/sagernet/cronet-go/lib/" + target.replace("/", "_")
+    info = native.module(source, module_path, captured)
+    if info["Version"] != native.CRONET_VERSION or not Path(info["Dir"]).is_absolute():
+        raise ValueError("Node Naive native module changed its captured revision")
+    original = Path(info["Dir"]) / name
+    original_bytes = native.regular(original, native.MAX_LIBRARY)
+    original_digest = hashlib.sha256(original_bytes).hexdigest()
+    native.stage_cronet(source, workspace, target, captured)
+    if native.regular(library, native.MAX_LIBRARY) != original_bytes or native.regular(original, native.MAX_LIBRARY) != original_bytes:
+        raise ValueError("Node Naive library changed during its packaging capture")
+    captured.update(ROUTERVPN_NODE_CRONET_LIBRARY=str(library), ROUTERVPN_NODE_CRONET_SHA256=original_digest,
+                    ROUTERVPN_NODE_CRONET_BYTES=str(len(original_bytes)))
+    return library, original, original_digest, len(original_bytes)
+
+
+def verify_naive_library(receipt):
+    library, original, expected, size = receipt
+    for path in (library, original):
+        if path.is_symlink() or not path.is_file() or path.stat().st_size != size or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            raise ValueError("Node Naive library changed during actual encrypted execution")
+
+
 def xray_reference_sources(source):
     PREP.RELAY.XRAY.checkout(source, PREP.RELAY.XRAY.XRAY_PIN, "github.com/xtls/xray-core")
     records = {}
@@ -200,6 +259,12 @@ def mutants(source, windows):
     selected_dns = "routervpn_desktop_node_box_dns.go"
     node_command = "cmd/sing-box/routervpn_mtu_node.go"
     result = [
+        ("uncaptured-naive-physical-dial", "protocol/naive/outbound.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeNaiveTraffic", "naive-h2/off",
+         "layered graph bypassed its captured socket grants", changed("protocol/naive/outbound.go",
+         "Dialer:                   outboundDialer,", "Dialer:                   N.SystemDialer,")),
+        ("downgraded-naive-h3", "protocol/naive/outbound.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeNaiveTraffic", "naive-h3/off",
+         "layered encrypted payload escaped or lost its exact native lower", changed("protocol/naive/outbound.go",
+         "QUIC:                     options.QUIC,", "QUIC:                     false,")),
         ("caller-owned-xray-dns", "protocol/routervpnxray/outbound.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeXrayTraffic", "reality-vision/off",
          "selected Home DNS did not traverse the actual layered graph", changed("protocol/routervpnxray/outbound.go",
          "h.connections.BeginDial(ctx)", "h.connections.Begin(ctx)", count=2)),
@@ -286,7 +351,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         ("ss-packet", "./protocol/shadowsocks", "^TestRouterVPNShadowsocks",
          ("TestRouterVPNShadowsocksCompleteCiphertextPacket", "TestRouterVPNShadowsocksPacketWrongKey")),
         ("command", "./cmd/sing-box", "^TestRouterVPNDesktopNodePhysicalCommand",
-         tuple("TestRouterVPNDesktopNodePhysicalCommand" + name for name in ("SourceBoundary", "Hysteria2CompleteStartSource", "XrayCompleteStartSource", "RestoredMTU", "TransferInput", "RetirementReceipt", "ReadyRequiresFreshDNS", "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionExactStop", "AdmissionRejectsForeignStop", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "JournalBeforePrivateInputs", "PublicRequiresJournal"))),
+         tuple("TestRouterVPNDesktopNodePhysicalCommand" + name for name in ("SourceBoundary", "Hysteria2CompleteStartSource", "XrayCompleteStartSource", "NaiveCompleteStartSource", "RestoredMTU", "TransferInput", "RetirementReceipt", "ReadyRequiresFreshDNS", "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionExactStop", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "JournalBeforePrivateInputs", "PublicRequiresJournal"))),
         ("factory", "./routervpn/desktoppt", "^TestRouterVPNNodePhysical",
          tuple("TestRouterVPNNodePhysical" + name for name in ("SeparateRegistriesAndUnpreparedRejection", "HandshakePhaseAndExactPolicy", "FactoryCancellationJoinsPartialOwner", "RetirementKeepsExactJoinedSource", "AdmissionRetainsExactPolicy", "AdmissionCapturesExactPredecessor", "JournalAdmissionCapturesDurableBarrier")) +
          (tuple("TestRouterVPNNodePhysicalWindows" + name for name in ("CapturesPreparedOwner", "AdmissionRejectsChangedOwners", "CloseJoinsAdmission")) if windows else
@@ -303,11 +368,16 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          ("TestRouterVPNDesktopNodeXrayTraffic",)),
         ("xray-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeXrayWrongCredential$",
          ("TestRouterVPNDesktopNodeXrayWrongCredential",)),
+        ("naive-traffic", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeNaiveTraffic$",
+         ("TestRouterVPNDesktopNodeNaiveTraffic",)),
+        ("naive-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeNaiveWrongCredential$",
+         ("TestRouterVPNDesktopNodeNaiveWrongCredential",)),
     ]
     with tempfile.TemporaryDirectory(prefix="routervpn-node-physical-") as directory:
         workspace = Path(directory)
         relay, relay_digest = build_layer_reference(compiler, workspace, captured, race)
         xray_binary, xray_digest, xray_source, xray_records = build_xray_reference(compiler, source, workspace, captured, race)
+        naive_library = stage_naive_library(compiler, source, workspace, captured)
         build = [compiler, "test", "-c", "-mod=readonly", "-tags=" + ",".join(TAGS), *race, "-ldflags=-checklinkname=0"]
         suffix = ".exe" if windows else ""
         for name, package, selector, required in suites:
@@ -330,6 +400,10 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Node Xray gate omitted a complete graph/Start Layer")
             if name == "xray-credentials" and any("--- PASS: TestRouterVPNDesktopNodeXrayWrongCredential/" + case + " (" not in output for case in XRAY_CREDENTIAL_CASES):
                 raise ValueError("Node Xray gate omitted a captured REALITY, PQ, user or layer credential negative")
+            if name == "naive-traffic" and any("--- PASS: TestRouterVPNDesktopNodeNaiveTraffic/" + case + " (" not in output for case in NAIVE_CASES):
+                raise ValueError("Node Naive gate omitted a complete HTTP version/Start Layer")
+            if name == "naive-credentials" and any("--- PASS: TestRouterVPNDesktopNodeNaiveWrongCredential/" + case + " (" not in output for case in NAIVE_CREDENTIAL_CASES):
+                raise ValueError("Node Naive gate omitted a captured user, password, certificate or layer credential negative")
             if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
                 raise ValueError("Node native executable changed during execution")
         for label, relative, package, test, subtest, witness, replacement in mutants(source, windows):
@@ -350,9 +424,10 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             raise ValueError("Node shipping whitening reference changed during actual execution")
         if xray_binary.is_symlink() or hashlib.sha256(xray_binary.read_bytes()).hexdigest() != xray_digest or xray_reference_sources(xray_source) != xray_records:
             raise ValueError("Node pinned Xray reference changed during actual execution")
+        verify_naive_library(naive_library)
     if checked_sources(source)[1] != before:
         raise ValueError("Node native source changed during actual execution")
-    print("Exact native Node startup, captured IPC, retained TUN/MTU rollback, real WG/AWG/Shadowsocks/Hysteria2/REALITY Vision/PQ/XHTTP plus AES/XOR encrypted TCP/UDP, fresh selected DNS and wrong-key controls passed. OS permits/TUN remain explicit fixtures; kernel composition and both-direction host activation remain separate.", flush=True)
+    print("Exact native Node startup, captured IPC, retained TUN/MTU rollback, real WG/AWG/Shadowsocks/Hysteria2/REALITY Vision/PQ/XHTTP/Naive H2/H3 plus AES/XOR encrypted TCP/UDP, fresh selected DNS and wrong-key controls passed. OS permits/TUN remain explicit fixtures; kernel composition and both-direction host activation remain separate.", flush=True)
 
 
 if __name__ == "__main__":

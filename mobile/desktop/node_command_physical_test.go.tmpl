@@ -101,6 +101,50 @@ func desktopNodeCommandXrayOriginal(t *testing.T, mode, layer string) *mobilemul
 	return original
 }
 
+func desktopNodeCommandNaiveOriginal(t *testing.T, mode, layer string) *mobilemultihop.NodeProfile {
+	t.Helper()
+	input, err := desktopNodeCommandOriginalWithLayer(t, layer).LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source struct {
+		Profile string `json:"profile_json"`
+		Start   string `json:"start"`
+	}
+	if json.Unmarshal([]byte(input), &source) != nil || source.Profile == "" || mode != "naive-h2" && mode != "naive-h3" {
+		t.Fatal("Naive command lost its exact original node policy or HTTP version")
+	}
+	graph, _ := json.Marshal(map[string]any{"inbounds": []any{map[string]any{"type": "tun", "auto_route": true, "strict_route": true}},
+		"outbounds": []any{map[string]any{"type": "naive", "tag": "proxy", "server": "192.0.2.44", "server_port": 8443,
+			"username": "captured-naive-user", "password": "captured-naive-password", "quic": mode == "naive-h3",
+			"udp_over_tcp": map[string]any{"enabled": true, "version": 2},
+			"tls":          map[string]any{"enabled": true, "server_name": "captured-node.test"}}}, "route": map[string]any{"final": "proxy"}})
+	files, _ := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(graph)})
+	original, err := mobilemultihop.NewNodeProfile(mode, string(files), source.Profile, source.Start, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return original
+}
+
+func TestRouterVPNDesktopNodePhysicalCommandNaiveCompleteStartSource(t *testing.T) {
+	for _, mode := range []string{"naive-h2", "naive-h3"} {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			label := layer
+			if label == "" {
+				label = "off"
+			}
+			t.Run(mode+"/"+label, func(t *testing.T) {
+				original := desktopNodeCommandNaiveOriginal(t, mode, layer)
+				policy, err := mobilemultihop.NewDesktopNodePolicy(original, desktopExternalSession, "windows")
+				if err != nil || policy == nil || policy.Config() == "" {
+					t.Fatal("complete Naive command source did not compile its exact HTTP version/Start Layer policy", err)
+				}
+			})
+		}
+	}
+}
+
 func TestRouterVPNDesktopNodePhysicalCommandXrayCompleteStartSource(t *testing.T) {
 	for _, mode := range []string{"reality-vision", "reality-pq-vision", "reality-xhttp"} {
 		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
@@ -135,6 +179,11 @@ func TestRouterVPNDesktopNodePhysicalCommandSourceBoundary(t *testing.T) {
 			cases = append(cases, "xray/"+mode+"/"+layer)
 		}
 	}
+	for _, mode := range []string{"naive-h2", "naive-h3"} {
+		for _, layer := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			cases = append(cases, "naive/"+mode+"/"+layer)
+		}
+	}
 	for _, fault := range cases {
 		t.Run(fault, func(t *testing.T) {
 			original := desktopNodeCommandOriginal(t)
@@ -157,6 +206,13 @@ func TestRouterVPNDesktopNodePhysicalCommandSourceBoundary(t *testing.T) {
 					layer = ""
 				}
 				original = desktopNodeCommandXrayOriginal(t, parts[1], layer)
+			} else if strings.HasPrefix(fault, "naive/") {
+				parts := strings.Split(fault, "/")
+				layer := parts[2]
+				if layer == "off" {
+					layer = ""
+				}
+				original = desktopNodeCommandNaiveOriginal(t, parts[1], layer)
 			}
 			policy, err := mobilemultihop.NewDesktopNodePolicy(original, desktopExternalSession, "windows")
 			if err != nil {
@@ -207,7 +263,7 @@ func TestRouterVPNDesktopNodePhysicalCommandSourceBoundary(t *testing.T) {
 			}
 			defer files.root.Close()
 			actual, err := routerVPNNodeCommandPhysical(files, session, config, source)
-			if fault == "exact" || fault == "layer-aes" || fault == "layer-whitening" || strings.HasPrefix(fault, "hysteria2-") || strings.HasPrefix(fault, "xray/") {
+			if fault == "exact" || fault == "layer-aes" || fault == "layer-whitening" || strings.HasPrefix(fault, "hysteria2-") || strings.HasPrefix(fault, "xray/") || strings.HasPrefix(fault, "naive/") {
 				if err != nil || actual == nil || actual.Config() != policy.Config() || !reflect.DeepEqual(actual.Metadata(), policy.Metadata()) {
 					t.Fatal("exact private inputs did not reconstruct their captured native policy", err)
 				}

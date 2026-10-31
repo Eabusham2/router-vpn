@@ -25,7 +25,8 @@ TAG = b"//go:build windows && routervpn_windows_node_composition\n"
 TAGS = (*NODE.TAGS, "routervpn_windows_node_composition")
 REQUIRED = tuple("TestRouterVPNDesktopNodeWindowsWFP" + suffix for suffix in (
     "EncryptedTraffic", "EncryptedSuccession", "RejectsForeignPredecessor", "WrongPeerRejected", "RestorationCapture",
-    "LayerTraffic", "LayerSuccession", "LayerWrongCredential", "XrayTraffic", "XraySuccession", "XrayWrongCredential"))
+    "LayerTraffic", "LayerSuccession", "LayerWrongCredential", "XrayTraffic", "XraySuccession", "XrayWrongCredential",
+    "NaiveTraffic", "NaiveSuccession", "NaiveWrongCredential"))
 
 
 def checked_sources(source):
@@ -126,6 +127,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         workspace = Path(temporary)
         relay, relay_digest = NODE.build_layer_reference(compiler, workspace, captured, race)
         xray_binary, xray_digest, xray_source, xray_records = NODE.build_xray_reference(compiler, source, workspace, captured, race)
+        naive_library = NODE.stage_naive_library(compiler, source, workspace, captured)
         base = workspace / "baseline"
         base.mkdir()
         selected = overlay(source, base)
@@ -165,6 +167,15 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                      "reality-pq-vision/xray-pq-key", "reality-xhttp/xray-pq-key", "reality-vision/aes-key"):
             if "--- PASS: TestRouterVPNDesktopNodeWindowsWFPXrayWrongCredential/" + case + " (" not in output:
                 raise ValueError("Actual WFP Xray omitted its encrypted credential negative: " + case)
+        for case in NODE.NAIVE_CASES:
+            if "--- PASS: TestRouterVPNDesktopNodeWindowsWFPNaiveTraffic/" + case + " (" not in output:
+                raise ValueError("Actual WFP Naive omitted an admitted HTTP version/Start Layer: " + case)
+        for mode in NODE.NAIVE_MODES:
+            if "--- PASS: TestRouterVPNDesktopNodeWindowsWFPNaiveSuccession/" + mode + " (" not in output:
+                raise ValueError("Actual WFP Naive omitted its exact cross-family restoration: " + mode)
+        for case in (mode + "/" + fault for mode in NODE.NAIVE_MODES for fault in ("naive-user", "naive-server-name", "naive-certificate", "naive-password", "aes-key")):
+            if "--- PASS: TestRouterVPNDesktopNodeWindowsWFPNaiveWrongCredential/" + case + " (" not in output:
+                raise ValueError("Actual WFP Naive omitted its encrypted credential negative: " + case)
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("Actual WFP Node executable changed during its retained test")
         for mutation in mutants(source):
@@ -186,9 +197,10 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             raise ValueError("Actual WFP whitening reference changed during execution")
         if xray_binary.is_symlink() or hashlib.sha256(xray_binary.read_bytes()).hexdigest() != xray_digest or NODE.xray_reference_sources(xray_source) != xray_records:
             raise ValueError("Actual WFP pinned Xray reference changed during execution")
+        NODE.verify_naive_library(naive_library)
     if checked_sources(source)[1] != before:
         raise ValueError("WFP Node source changed during actual native execution")
-    print("Actual Windows BFE, isolated TCP/UDP grants with exact permitted peers, WG/AWG/Shadowsocks/Hysteria2/REALITY Vision/PQ/XHTTP AES/XOR encrypted IPv4/IPv6 payloads, fresh selected DNS, exact cross-family forward/reverse native succession and wrong-key/ordinary-token controls passed. TUN, node identity proof, host adoption and device acceptance remain separate.", flush=True)
+    print("Actual Windows BFE, isolated TCP/UDP grants with exact permitted peers, WG/AWG/Shadowsocks/Hysteria2/REALITY Vision/PQ/XHTTP/Naive H2/H3 AES/XOR encrypted IPv4/IPv6 payloads, fresh selected DNS, exact cross-family forward/reverse native succession and wrong-key/ordinary-token controls passed. TUN, node identity proof, host adoption and device acceptance remain separate.", flush=True)
 
 
 if __name__ == "__main__":

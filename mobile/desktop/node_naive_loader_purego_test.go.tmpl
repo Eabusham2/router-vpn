@@ -1,0 +1,7 @@
+//go:build with_purego
+
+package routervpnamnezia
+
+import "github.com/sagernet/cronet-go"
+
+func init() { desktopNodeNaiveLoadLibrary = cronet.LoadLibrary }

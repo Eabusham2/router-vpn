@@ -39,6 +39,7 @@ import (
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	HY "github.com/sagernet/sing-box/protocol/hysteria2"
+	NV "github.com/sagernet/sing-box/protocol/naive"
 	WH "github.com/sagernet/sing-box/protocol/routervpnwhitening"
 	XR "github.com/sagernet/sing-box/protocol/routervpnxray"
 	SS "github.com/sagernet/sing-box/protocol/shadowsocks"
@@ -395,7 +396,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	var trailing any
 	if decoder.Decode(&request) != nil || decoder.Decode(&trailing) != io.EOF || request.Schema != 1 ||
 		!mobilemultihop.DesktopNodePhysicalGraphSupported(request.Mode, request.Layer) ||
-		request.Mode != "shadowsocks" && request.Mode != "hysteria2" && !desktopNodeXrayMode(request.Mode) && request.Layer == "" || len(request.Configuration.Forward) != 0 {
+		request.Mode != "shadowsocks" && request.Mode != "hysteria2" && !desktopNodeXrayMode(request.Mode) && !desktopNodeNaiveMode(request.Mode) && request.Layer == "" || len(request.Configuration.Forward) != 0 {
 		t.Fatal("layer reference request escaped its captured fixture")
 	}
 	key, keyErr := base64.StdEncoding.Strict().DecodeString(request.Password)
@@ -443,7 +444,17 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	var inner, baseAddress, protocolFiles string
 	innerNetwork, probeNetwork := "udp", "udp"
 	var protocolServer *desktopNodeLayerServer
-	if desktopNodeXrayMode(request.Mode) {
+	if desktopNodeNaiveMode(request.Mode) {
+		protocolServer, protocolFiles = startDesktopNodeNaiveServer(t, request.Mode, ip, dnsListener.LocalAddr().String())
+		if request.Mode == "naive-h2" {
+			baseAddress = protocolServer.tcp.Addr().String()
+			innerNetwork, probeNetwork = "tcp", "tcp"
+		} else {
+			baseAddress = protocolServer.udp.LocalAddr().String()
+		}
+		base := netip.MustParseAddrPort(baseAddress)
+		inner = netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), base.Port()).String()
+	} else if desktopNodeXrayMode(request.Mode) {
 		protocolServer, protocolFiles = startDesktopNodeXrayServer(t, request.Mode, ip, dnsListener.LocalAddr().String())
 		baseAddress = protocolServer.tcp.Addr().String()
 		base := netip.MustParseAddrPort(baseAddress)
@@ -467,7 +478,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	}
 	server := protocolServer
 	address, aesAddress := baseAddress, ""
-	if request.Mode != "hysteria2" && !desktopNodeXrayMode(request.Mode) || request.Layer != "" {
+	if request.Mode != "hysteria2" && !desktopNodeXrayMode(request.Mode) && !desktopNodeNaiveMode(request.Mode) || request.Layer != "" {
 		server = startDesktopNodeLayerServer(t, ip, request.Password, inner, baseAddress, innerNetwork, dnsListener.LocalAddr().String())
 		address = server.tcp.Addr().String()
 		aesAddress = address
@@ -728,7 +739,7 @@ func startDesktopNodeLayerReference(t *testing.T, mode, layer string, ip netip.A
 	p.reply, err = p.read()
 	p.remote, _ = netip.ParseAddrPort(p.reply.Address)
 	expectedNetwork := "udp"
-	if desktopNodeXrayMode(mode) {
+	if desktopNodeXrayMode(mode) || mode == "naive-h2" {
 		expectedNetwork = "tcp"
 	}
 	if err != nil || p.remote.Addr() != ip || p.remote.Port() == 0 || p.reply.ProbeNetwork != expectedNetwork {
@@ -759,7 +770,12 @@ func (p *desktopNodeLayerReference) original(t *testing.T, kill, fault string) *
 		"router_api": "http://10.78.0.1:8787", "api_token": "captured-layer-node-token", "endpoint": p.request.Address,
 		"start_layer": p.request.Layer, "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "kill_switch_policy": kill,
 		"ipv6_mode": "on", "home_lan_access": false, "mtu_policy": "auto"}
-	if desktopNodeXrayMode(p.request.Mode) {
+	if desktopNodeNaiveMode(p.request.Mode) {
+		files = desktopNodeNaiveAssets(t, p.reply.ProtocolFiles, fault)
+		if p.request.Layer != "" {
+			start = string(aesFiles)
+		}
+	} else if desktopNodeXrayMode(p.request.Mode) {
 		files = desktopNodeXrayAssets(t, p.reply.ProtocolFiles, fault)
 		if p.request.Layer != "" {
 			start = string(aesFiles)
@@ -836,6 +852,9 @@ func (p *desktopNodeLayerKernel) Grant(ctx context.Context, q mobiletor.DesktopS
 
 func newDesktopNodeLayerFixture(t *testing.T, peer *desktopNodeLayerReference, fault string) *desktopNodePeerFixture {
 	t.Helper()
+	if desktopNodeNaiveMode(peer.request.Mode) {
+		desktopNodeNaiveLibrary(t)
+	}
 	iface, ip := desktopNodePeerInterface(t)
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -853,6 +872,7 @@ func newDesktopNodeLayerFixture(t *testing.T, peer *desktopNodeLayerReference, f
 	})
 	outs := outbound.NewRegistry()
 	HY.RegisterOutbound(outs)
+	NV.RegisterOutbound(outs)
 	XR.RegisterOutbound(outs)
 	SS.RegisterOutbound(outs)
 	WH.RegisterOutbound(outs)
@@ -879,7 +899,7 @@ func newDesktopNodeLayerFixture(t *testing.T, peer *desktopNodeLayerReference, f
 		t.Fatal(err)
 	}
 	options.Log = &option.LogOptions{Disabled: true}
-	if desktopNodeXrayMode(peer.request.Mode) {
+	if desktopNodeXrayMode(peer.request.Mode) || desktopNodeNaiveMode(peer.request.Mode) {
 		diagnostic := filepath.Join(t.TempDir(), "owned-native-graph.log")
 		options.Log = &option.LogOptions{Level: "debug", Output: diagnostic}
 		t.Cleanup(func() {
@@ -960,12 +980,16 @@ func desktopNodeLayerTraffic(t *testing.T, mode, layer string) {
 		t.Fatal("layered graph bypassed its captured socket grants")
 	}
 	observed := peer.observe(t, "stats")
-	if desktopNodeXrayMode(mode) && (observed.RawTCP == 0 || observed.PlainTCP == 0 || observed.ProtocolRawTCP == 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP == 0) ||
-		!desktopNodeXrayMode(mode) && (observed.RawUDP == 0 || observed.PlainUDP == 0 || mode == "shadowsocks" && (observed.RawTCP == 0 || observed.PlainTCP == 0)) || f.network.Current() {
+	tcpOuter := desktopNodeXrayMode(mode) || mode == "naive-h2"
+	if tcpOuter && (observed.RawTCP == 0 || observed.PlainTCP == 0 || observed.ProtocolRawTCP == 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP == 0) ||
+		!tcpOuter && (observed.RawUDP == 0 || observed.PlainUDP == 0 || mode == "shadowsocks" && (observed.RawTCP == 0 || observed.PlainTCP == 0)) || f.network.Current() {
 		t.Fatal("layered payload omitted real ciphertext or fabricated readiness", observed)
 	}
 	if mode == "hysteria2" && (observed.ProtocolRawUDP == 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP == 0) {
 		t.Fatal("captured Hysteria payload bypassed its authenticated protocol", observed)
+	}
+	if mode == "naive-h3" && (observed.ProtocolRawUDP == 0 || observed.ProtocolRawTCP != 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP == 0) {
+		t.Fatal("captured Naive H3 payload downgraded or bypassed its authenticated QUIC stream protocol", observed)
 	}
 	if err := f.box.RouterVPNStrategyDNSProof(); err != nil || peer.observe(t, "stats").DNSQueries != 1 {
 		t.Fatal("selected Home DNS did not traverse the actual layered graph", err)

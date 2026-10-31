@@ -1,0 +1,439 @@
+package routervpnamnezia
+
+import (
+	"bufio"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/quic-go"
+	"github.com/sagernet/quic-go/http3"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	NV "github.com/sagernet/sing-box/protocol/naive"
+	"github.com/sagernet/sing/common/auth"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+
+	"golang.org/x/net/http2"
+)
+
+func desktopNodeNaiveMode(mode string) bool { return mode == "naive-h2" || mode == "naive-h3" }
+
+// The dynamic-library proof runs in the existing Linux/Windows pure-Go gate.
+// Static CGO builds compile these shared peers without inventing a successful
+// dynamic load; their runtime/library acceptance requires its own native gate.
+var desktopNodeNaiveLoadLibrary = func(string) error {
+	return errors.New("Naive explicit dynamic-library proof requires the native pure-Go loader")
+}
+
+// The runner captures the exact same-target, checksum-verified Cronet module
+// used by packaging. An absent seal must not invoke Cronet's ambient search.
+func desktopNodeNaiveLibrary(t *testing.T) {
+	t.Helper()
+	path, expected := os.Getenv("ROUTERVPN_NODE_CRONET_LIBRARY"), os.Getenv("ROUTERVPN_NODE_CRONET_SHA256")
+	size, err := strconv.ParseInt(os.Getenv("ROUTERVPN_NODE_CRONET_BYTES"), 10, 64)
+	if err != nil || size <= 0 || size > 128<<20 || len(expected) != 64 || !filepath.IsAbs(path) {
+		t.Fatal("Naive peer requires its exact native-library module seal")
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() != size {
+		t.Fatal("Naive peer library is absent, linked or changed", err)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		t.Fatal("Naive peer library changed during capture", err)
+	}
+	digest := sha256.New()
+	n, err := io.Copy(digest, io.LimitReader(file, size+1))
+	if err != nil || n != size || hex.EncodeToString(digest.Sum(nil)) != expected {
+		t.Fatal("Naive peer library differs from its captured module", err)
+	}
+	if err := desktopNodeNaiveLoadLibrary(path); err != nil {
+		t.Fatal("actual pinned Cronet library did not load", err)
+	}
+	after, err := os.Lstat(path)
+	if err != nil || !os.SameFile(opened, after) || after.Size() != size {
+		t.Fatal("Naive peer library changed during native load", err)
+	}
+}
+
+// Authentication, padding and version-2 UDP-over-stream decoding use the
+// actual pinned Naive inbound. Only its final route boundary is replaced by
+// this bounded echo/Home-DNS peer; no arbitrary network destination is opened.
+type desktopNodeNaiveRouter struct {
+	adapter.Router
+	server *desktopNodeLayerServer
+}
+
+func (r *desktopNodeNaiveRouter) RouteConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext) error {
+	if !r.server.enter(conn) {
+		_ = conn.Close()
+		return net.ErrClosed
+	}
+	defer r.server.leave(conn)
+	return r.server.NewConnection(ctx, conn, M.Metadata{Source: metadata.Source, Destination: metadata.Destination})
+}
+
+func (r *desktopNodeNaiveRouter) RoutePacketConnection(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext) error {
+	return r.server.NewPacketConnection(ctx, conn, M.Metadata{Source: metadata.Source, Destination: metadata.Destination})
+}
+
+func (r *desktopNodeNaiveRouter) RouteConnectionEx(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, done N.CloseHandlerFunc) {
+	err := r.RouteConnection(ctx, conn, metadata)
+	if done != nil {
+		done(err)
+	}
+}
+
+func (r *desktopNodeNaiveRouter) RoutePacketConnectionEx(ctx context.Context, conn N.PacketConn, metadata adapter.InboundContext, done N.CloseHandlerFunc) {
+	err := r.RoutePacketConnection(ctx, conn, metadata)
+	if done != nil {
+		done(err)
+	}
+}
+
+type desktopNodeNaivePacket struct {
+	net.PacketConn
+	server *desktopNodeLayerServer
+}
+
+func (p *desktopNodeNaivePacket) ReadFrom(body []byte) (int, net.Addr, error) {
+	for {
+		n, source, err := p.PacketConn.ReadFrom(body)
+		if err != nil {
+			return n, source, err
+		}
+		address, ok := source.(*net.UDPAddr)
+		if !ok {
+			return 0, nil, errors.New("Naive H3 reference changed its retained UDP source")
+		}
+		if handled, _ := p.server.observation.receive(p.PacketConn.(*net.UDPConn), body[:n], address.AddrPort()); handled {
+			continue
+		}
+		p.server.rawUDP.Add(1)
+		return n, source, nil
+	}
+}
+
+type desktopNodeNaiveListener struct {
+	net.Listener
+	server *desktopNodeLayerServer
+}
+
+func (l *desktopNodeNaiveListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	owned := &desktopNodeNaiveConn{Conn: conn, server: l.server, reader: bufio.NewReader(conn)}
+	if !l.server.enter(owned) {
+		_ = conn.Close()
+		return nil, net.ErrClosed
+	}
+	return owned, nil
+}
+
+type desktopNodeNaiveConn struct {
+	net.Conn
+	server *desktopNodeLayerServer
+	reader *bufio.Reader
+	once   sync.Once
+	first  bool
+}
+
+func (c *desktopNodeNaiveConn) Read(body []byte) (int, error) {
+	if !c.first {
+		c.first = true
+		marker, err := desktopNodeXrayMarker(&c.server.observation, c.reader, c.Conn)
+		if err != nil || marker {
+			if err == nil {
+				err = io.EOF
+			}
+			return 0, err
+		}
+		c.server.rawTCP.Add(1)
+	}
+	return c.reader.Read(body)
+}
+
+func (c *desktopNodeNaiveConn) Close() (err error) {
+	c.once.Do(func() {
+		err = c.Conn.Close()
+		c.server.mu.Lock()
+		delete(c.server.connections, c)
+		c.server.mu.Unlock()
+		c.server.workers.Done()
+	})
+	return err
+}
+
+func desktopNodeNaiveCertificate(t *testing.T) (tls.Certificate, []byte) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: "captured-naive.test"},
+		DNSNames: []string{"captured-naive.test"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, IsCA: true, BasicConstraintsValid: true}
+	der, err := x509.CreateCertificate(rand.Reader, spec, spec, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	pair, err := tls.X509KeyPair(certificate, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
+	clear(private)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return pair, certificate
+}
+
+func startDesktopNodeNaiveServer(t *testing.T, mode string, ip netip.Addr, dnsAddress string) (*desktopNodeLayerServer, string) {
+	t.Helper()
+	if !desktopNodeNaiveMode(mode) {
+		t.Fatal("Naive reference requires its exact selected HTTP version")
+	}
+	pair, certificate := desktopNodeNaiveCertificate(t)
+	var secret [64]byte
+	if _, err := rand.Read(secret[:]); err != nil {
+		t.Fatal(err)
+	}
+	user, password := base64.RawURLEncoding.EncodeToString(secret[:32]), base64.RawURLEncoding.EncodeToString(secret[32:])
+	clear(secret[:])
+	ctx, cancel := context.WithCancel(context.Background())
+	s := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, dnsAddress: dnsAddress, connections: make(map[io.Closer]bool)}
+	logger := log.NewNOPFactory().NewLogger("captured-naive-peer")
+	native, err := NV.NewInbound(ctx, &desktopNodeNaiveRouter{server: s}, logger, "captured-naive", option.NaiveInboundOptions{
+		Network: option.NetworkList("tcp"), Users: []auth.User{{Username: user, Password: password}},
+	})
+	if err != nil {
+		cancel()
+		t.Fatal("actual pinned Naive inbound did not construct", err)
+	}
+	version := 2
+	if mode == "naive-h3" {
+		version = 3
+	}
+	handler := http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.ProtoMajor != version || request.TLS == nil || request.TLS.NegotiatedProtocol != map[int]string{2: "h2", 3: "h3"}[version] {
+			writer.WriteHeader(http.StatusHTTPVersionNotSupported)
+			return
+		}
+		native.(*NV.Inbound).ServeHTTP(writer, request)
+	})
+	tlsConfig := &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13}
+	joined := make(chan error, 1)
+	var closeServer func() error
+	var address netip.AddrPort
+	if mode == "naive-h2" {
+		listener, err := net.Listen("tcp4", net.JoinHostPort(ip.String(), "0"))
+		if err != nil {
+			cancel()
+			_ = native.Close()
+			t.Fatal(err)
+		}
+		s.tcp = listener
+		address = netip.MustParseAddrPort(listener.Addr().String())
+		tlsConfig.NextProtos = []string{"h2"}
+		server := &http.Server{Handler: handler, TLSConfig: tlsConfig, BaseContext: func(net.Listener) context.Context { return ctx }}
+		if err := http2.ConfigureServer(server, &http2.Server{}); err != nil {
+			_ = listener.Close()
+			cancel()
+			_ = native.Close()
+			t.Fatal(err)
+		}
+		closeServer = server.Close
+		go func() {
+			joined <- server.Serve(tls.NewListener(&desktopNodeNaiveListener{Listener: listener, server: s}, tlsConfig))
+		}()
+	} else {
+		packet, err := net.ListenPacket("udp4", net.JoinHostPort(ip.String(), "0"))
+		if err != nil {
+			cancel()
+			_ = native.Close()
+			t.Fatal(err)
+		}
+		s.udp = packet
+		address = netip.MustParseAddrPort(packet.LocalAddr().String())
+		tlsConfig.NextProtos = []string{"h3"}
+		server := &http3.Server{Handler: handler, TLSConfig: tlsConfig,
+			QUICConfig:  &quic.Config{Allow0RTT: true, DisablePathManager: true},
+			ConnContext: func(context.Context, *quic.Conn) context.Context { return ctx }}
+		closeServer = server.Close
+		go func() { joined <- server.Serve(&desktopNodeNaivePacket{PacketConn: packet, server: s}) }()
+	}
+	t.Cleanup(func() {
+		s.mu.Lock()
+		s.closing = true
+		connections := make([]io.Closer, 0, len(s.connections))
+		for connection := range s.connections {
+			connections = append(connections, connection)
+		}
+		s.mu.Unlock()
+		cancel()
+		_ = closeServer()
+		if s.tcp != nil {
+			_ = s.tcp.Close()
+		}
+		if s.udp != nil {
+			_ = s.udp.Close()
+		}
+		for _, connection := range connections {
+			_ = connection.Close()
+		}
+		_ = native.Close()
+		<-joined
+		s.workers.Wait()
+	})
+	graph := map[string]any{
+		"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
+		"outbounds": []any{map[string]any{"type": "naive", "tag": "proxy", "server": ip.String(), "server_port": int(address.Port()),
+			"username": user, "password": password, "quic": mode == "naive-h3", "udp_over_tcp": map[string]any{"enabled": true, "version": 2},
+			"tls": map[string]any{"enabled": true, "server_name": "captured-naive.test", "certificate_path": "cert.pem"}}},
+		"route": map[string]any{"final": "proxy", "rules": []any{}},
+	}
+	raw, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, err := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(raw), "cert.pem": base64.StdEncoding.EncodeToString(certificate)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s, string(files)
+}
+
+func desktopNodeNaiveAssets(t *testing.T, files, fault string) string {
+	t.Helper()
+	var assets map[string]string
+	if json.Unmarshal([]byte(files), &assets) != nil || len(assets) != 2 || assets["cert.pem"] == "" {
+		t.Fatal("Naive reference lost its complete captured node assets")
+	}
+	raw, err := base64.StdEncoding.Strict().DecodeString(assets["sing-box.json"])
+	var graph map[string]any
+	if err != nil || json.Unmarshal(raw, &graph) != nil {
+		t.Fatal("Naive reference lost its actual client graph", err)
+	}
+	outbound := graph["outbounds"].([]any)[0].(map[string]any)
+	switch fault {
+	case "naive-password":
+		outbound["password"] = "different-node-" + outbound["password"].(string)
+	case "naive-user":
+		outbound["username"] = "different-node-" + outbound["username"].(string)
+	case "naive-server-name":
+		outbound["tls"].(map[string]any)["server_name"] = "another-node.test"
+	case "naive-certificate":
+		// Keep the server name and valid CA syntax identical; only the freshly
+		// generated signing key differs from the captured serving certificate.
+		_, certificate := desktopNodeNaiveCertificate(t)
+		assets["cert.pem"] = base64.StdEncoding.EncodeToString(certificate)
+	case "", "aes-key":
+	default:
+		t.Fatal("unrecognized Naive reference fault")
+	}
+	raw, err = json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assets["sing-box.json"] = base64.StdEncoding.EncodeToString(raw)
+	raw, err = json.Marshal(assets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func desktopNodeNaiveCases(t *testing.T, test func(*testing.T, string, string)) {
+	t.Helper()
+	for _, mode := range []string{"naive-h2", "naive-h3"} {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			label := layer
+			if label == "" {
+				label = "off"
+			}
+			t.Run(mode+"/"+label, func(t *testing.T) { test(t, mode, layer) })
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeNaiveTraffic(t *testing.T) {
+	desktopNodeNaiveLibrary(t)
+	desktopNodeNaiveCases(t, desktopNodeLayerTraffic)
+}
+
+func TestRouterVPNDesktopNodeNaiveWrongCredential(t *testing.T) {
+	desktopNodeNaiveLibrary(t)
+	desktopNodeNaiveCases(t, func(t *testing.T, mode, layer string) {
+		desktopNodeNaiveWrongCredential(t, mode, layer, "naive-password")
+	})
+	for _, mode := range []string{"naive-h2", "naive-h3"} {
+		for _, test := range []struct{ layer, fault string }{
+			{"", "naive-user"}, {"", "naive-server-name"}, {"", "naive-certificate"},
+			{"aes-256-gcm", "aes-key"}, {"aes-256-gcm+xor-whitening", "aes-key"},
+		} {
+			label := test.layer
+			if label == "" {
+				label = "off"
+			}
+			t.Run(mode+"/"+label+"/"+test.fault, func(t *testing.T) {
+				desktopNodeNaiveWrongCredential(t, mode, test.layer, test.fault)
+			})
+		}
+	}
+}
+
+func desktopNodeNaiveWrongCredential(t *testing.T, mode, layer, fault string) {
+	t.Helper()
+	_, ip := desktopNodePeerInterface(t)
+	peer := startDesktopNodeLayerReference(t, mode, layer, ip)
+	f := newDesktopNodeLayerFixture(t, peer, fault)
+	if err := f.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal("Naive wrong credential did not reach actual captured startup", err)
+	}
+	if err := f.exchange("tcp"); err == nil {
+		t.Fatal("wrong captured Naive credential delivered encrypted payload")
+	}
+	observed := peer.observe(t, "stats")
+	raw, protocolRaw := observed.RawTCP, observed.ProtocolRawTCP
+	if mode == "naive-h3" {
+		raw, protocolRaw = observed.RawUDP, observed.ProtocolRawUDP
+	}
+	if raw == 0 || observed.ProtocolTCP != 0 || observed.ProtocolUDP != 0 ||
+		strings.HasPrefix(fault, "naive-") && protocolRaw == 0 || f.network.Current() {
+		t.Fatal("Naive negative missed its real encrypted peer or fabricated readiness", observed)
+	}
+}

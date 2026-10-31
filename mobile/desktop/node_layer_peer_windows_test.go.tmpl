@@ -84,7 +84,7 @@ func desktopNodeWFPLayerTraffic(t *testing.T, f *desktopNodeWFPFixture, peer *de
 		// A lazy Shadowsocks flow may correctly remove its permit on Close.
 		snapshot, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
 		expectedNetwork := network
-		if desktopNodeXrayMode(peer.request.Mode) {
+		if desktopNodeXrayMode(peer.request.Mode) || peer.request.Mode == "naive-h2" {
 			expectedNetwork = "tcp"
 		} else if peer.request.Mode != "shadowsocks" {
 			expectedNetwork = "udp"
@@ -108,12 +108,16 @@ func desktopNodeWFPLayerTraffic(t *testing.T, f *desktopNodeWFPFixture, peer *de
 		}
 	}
 	observed := peer.observe(t, "stats")
-	if desktopNodeXrayMode(peer.request.Mode) && (observed.RawTCP == 0 || observed.PlainTCP == 0 || observed.ProtocolRawTCP == 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP == 0) ||
-		!desktopNodeXrayMode(peer.request.Mode) && (observed.RawUDP == 0 || observed.PlainUDP == 0 || peer.request.Mode == "shadowsocks" && (observed.RawTCP == 0 || observed.PlainTCP == 0)) {
+	tcpOuter := desktopNodeXrayMode(peer.request.Mode) || peer.request.Mode == "naive-h2"
+	if tcpOuter && (observed.RawTCP == 0 || observed.PlainTCP == 0 || observed.ProtocolRawTCP == 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP == 0) ||
+		!tcpOuter && (observed.RawUDP == 0 || observed.PlainUDP == 0 || peer.request.Mode == "shadowsocks" && (observed.RawTCP == 0 || observed.PlainTCP == 0)) {
 		t.Fatal("actual WFP layered payload had no independent ciphertext observation", observed)
 	}
 	if peer.request.Mode == "hysteria2" && (observed.ProtocolRawUDP == 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP == 0) {
 		t.Fatal("actual WFP Hysteria traffic bypassed its authenticated protocol", observed)
+	}
+	if peer.request.Mode == "naive-h3" && (observed.ProtocolRawUDP == 0 || observed.ProtocolRawTCP != 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP == 0) {
+		t.Fatal("actual WFP Naive H3 downgraded or bypassed its authenticated QUIC stream protocol", observed)
 	}
 }
 
@@ -221,16 +225,18 @@ func desktopNodeWFPLayerWrongCredential(t *testing.T, mode, layer, fault string)
 	retained = f.prepared
 	desktopNodeWFPLayerBlocked(t, peer)
 	network := "udp"
-	if desktopNodeXrayMode(mode) {
+	if desktopNodeXrayMode(mode) || desktopNodeNaiveMode(mode) {
 		network = "tcp"
 	}
 	if err := f.exchange(network); err == nil {
 		t.Fatal("wrong captured layer or protocol credential delivered an actual WFP encrypted payload")
 	}
 	observed := peer.observe(t, "stats")
-	if !desktopNodeXrayMode(mode) && observed.RawUDP == 0 || mode == "shadowsocks" && observed.PlainUDP != 0 || f.network.Current() ||
+	tcpOuter := desktopNodeXrayMode(mode) || mode == "naive-h2"
+	if !tcpOuter && observed.RawUDP == 0 || mode == "shadowsocks" && observed.PlainUDP != 0 || f.network.Current() ||
 		mode == "hysteria2" && (observed.ProtocolRawUDP == 0 || observed.ProtocolTCP != 0 || observed.ProtocolUDP != 0) ||
-		desktopNodeXrayMode(mode) && (observed.RawTCP == 0 || observed.ProtocolTCP != 0 || observed.ProtocolUDP != 0 || fault != "aes-key" && observed.ProtocolRawTCP == 0) {
+		tcpOuter && (observed.RawTCP == 0 || observed.ProtocolTCP != 0 || observed.ProtocolUDP != 0 || fault != "aes-key" && observed.ProtocolRawTCP == 0) ||
+		mode == "naive-h3" && (observed.ProtocolTCP != 0 || observed.ProtocolUDP != 0 || fault != "aes-key" && observed.ProtocolRawUDP == 0) {
 		t.Fatal("wrong layered credential missed its actual encrypted native path", observed)
 	}
 	retained = desktopNodeWFPDrain(t, f)

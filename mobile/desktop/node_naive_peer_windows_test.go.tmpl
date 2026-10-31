@@ -1,0 +1,31 @@
+//go:build windows && routervpn_windows_node_composition
+
+package routervpnamnezia
+
+import "testing"
+
+func TestRouterVPNDesktopNodeWindowsWFPNaiveTraffic(t *testing.T) {
+	desktopNodeNaiveLibrary(t)
+	desktopNodeNaiveCases(t, desktopNodeWFPLayerTrafficCase)
+}
+
+func TestRouterVPNDesktopNodeWindowsWFPNaiveSuccession(t *testing.T) {
+	desktopNodeNaiveLibrary(t)
+	for _, mode := range []string{"naive-h2", "naive-h3"} {
+		t.Run(mode, func(t *testing.T) { desktopNodeWFPLayerSuccession(t, mode) })
+	}
+}
+
+func TestRouterVPNDesktopNodeWindowsWFPNaiveWrongCredential(t *testing.T) {
+	desktopNodeNaiveLibrary(t)
+	for _, mode := range []string{"naive-h2", "naive-h3"} {
+		for _, test := range []struct{ layer, fault string }{
+			{"", "naive-user"}, {"", "naive-server-name"}, {"", "naive-certificate"},
+			{"aes-256-gcm+xor-whitening", "naive-password"}, {"aes-256-gcm", "aes-key"},
+		} {
+			t.Run(mode+"/"+test.fault, func(t *testing.T) {
+				desktopNodeWFPLayerWrongCredential(t, mode, test.layer, test.fault)
+			})
+		}
+	}
+}
