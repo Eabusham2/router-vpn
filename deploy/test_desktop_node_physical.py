@@ -402,7 +402,12 @@ def mutants(source, windows):
              changed(factory, "return nil, owned, err", "return nil, nil, err")),
         ))
         lifecycle = "routervpn/desktoppt/node_linux_lifecycle.go"
+        joined_source = "routervpn/desktoppt/node_linux_source_join.go"
         result.extend((
+            ('linux-node-joined-original-guardian', joined_source, './routervpn/desktoppt', 'TestRouterVPNNodeLinuxLifecycleJoinedSourcePreservesOriginalPreparation', '',
+             'joined receipt substituted or erased the admitted native source', changed(joined_source,
+             'guardian != nil && (record.Original == nil || *record.Original != *guardian)',
+             'guardian != nil && false && (record.Original == nil || *record.Original != *guardian)')),
             ('linux-node-baseline-before-guardian', lifecycle, './routervpn/desktoppt', 'TestRouterVPNNodeLinuxLifecycleCreatesBaselineBeforeGuardian', 'callback-error',
              'failed or cancelled baseline reached native guardian construction', changed(lifecycle,
              'if err := baseline(ctx, capture); err != nil {', 'if err := baseline(ctx, capture); false {')),

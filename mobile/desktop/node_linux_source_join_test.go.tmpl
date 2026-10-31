@@ -1,0 +1,116 @@
+//go:build linux
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type nodeLinuxJoinedSourceFixture struct {
+	*nodeLinuxLifecycleSource
+	partial bool
+	change  func(*mobiletor.DesktopLinuxSourceJoinRecord)
+}
+
+func (s *nodeLinuxJoinedSourceFixture) ObserveJoinedSource(ctx context.Context, capture mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxSourceJoinRecord, error) {
+	if ctx.Err() != nil || capture != s.record.Capture || !s.closed.Load() || !s.cancelled.Load() {
+		return mobiletor.DesktopLinuxSourceJoinRecord{}, errors.New("fixture original source was not joined")
+	}
+	result := mobiletor.DesktopLinuxSourceJoinRecord{Capture: capture, ProcessID: s.record.Owner.ProcessID}
+	if !s.partial {
+		original := s.guardian
+		result.Original = &original
+	}
+	if s.change != nil {
+		s.change(&result)
+	}
+	return result, nil
+}
+
+func TestRouterVPNNodeLinuxLifecycleJoinedSourcePreservesOriginalPreparation(t *testing.T) {
+	f, original := nodeLinuxLifecycleFixture(t, "always", func(context.Context, NodeLinuxPhysicalPrepared) error { return nil })
+	source := &nodeLinuxJoinedSourceFixture{nodeLinuxLifecycleSource: original}
+	if err := f.node.network.prepareNodePhysicalLinuxLifecycle(f.node.policy, func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+		return source, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.node.network.Start(adapter.StartStateInitialize); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, _, err := f.node.network.JoinedLinuxPhysicalSource(ctx, f.node.policy); err == nil {
+		t.Fatal("live native network fabricated source retirement")
+	}
+	source.failClose.Store(true)
+	if err := f.node.network.Close(); err == nil {
+		t.Fatal("fixture native source did not fail cleanup")
+	}
+	if _, _, err := f.node.network.JoinedLinuxPhysicalSource(ctx, f.node.policy); err == nil {
+		t.Fatal("failed native source cleanup fabricated its joined receipt")
+	}
+	source.failClose.Store(false)
+	if err := f.node.network.Close(); err != nil {
+		t.Fatal(err)
+	}
+	joined, returned, err := f.node.network.JoinedLinuxPhysicalSource(ctx, f.node.policy)
+	if err != nil || !returned || joined == nil || joined.Original == nil || *joined.Original != source.guardian {
+		t.Fatal("joined source lost its original admitted guardian", err)
+	}
+	joined.Original.Guardian.StartTicks++
+	for _, change := range []func(*mobiletor.DesktopLinuxSourceJoinRecord){
+		func(r *mobiletor.DesktopLinuxSourceJoinRecord) { r.Original = nil },
+		func(r *mobiletor.DesktopLinuxSourceJoinRecord) { r.Original.Guardian.StartTicks++ },
+		func(r *mobiletor.DesktopLinuxSourceJoinRecord) { r.Capture.NetworkID = "" },
+	} {
+		source.change = change
+		if record, returned, err := f.node.network.JoinedLinuxPhysicalSource(ctx, f.node.policy); err == nil || record != nil || !returned {
+			t.Fatal("joined receipt substituted or erased the admitted native source", err)
+		}
+	}
+	source.change = nil
+	if record, _, err := f.node.network.JoinedLinuxPhysicalSource(ctx, f.node.policy); err != nil || record.Original == nil || *record.Original != source.guardian {
+		t.Fatal("returned comparison changed the original source owner", err)
+	}
+}
+
+func TestRouterVPNNodeLinuxLifecycleJoinedSourceRetainsIncompleteConstructor(t *testing.T) {
+	for _, returned := range []bool{true, false} {
+		t.Run(map[bool]string{true: "original-partial-source", false: "no-returned-source"}[returned], func(t *testing.T) {
+			f, original := nodeLinuxLifecycleFixture(t, "on-connect", func(context.Context, NodeLinuxPhysicalPrepared) error {
+				t.Fatal("failed constructor reached native admission")
+				return nil
+			})
+			source := &nodeLinuxJoinedSourceFixture{nodeLinuxLifecycleSource: original, partial: true}
+			if err := f.node.network.prepareNodePhysicalLinuxLifecycle(f.node.policy, func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopLinuxSocketOptions) (desktopLinuxPhysicalPolicy, error) {
+				if returned {
+					return source, errors.New("fixture original native birth capture failed")
+				}
+				return nil, errors.New("fixture failed before returning its native source")
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.node.network.Start(adapter.StartStateInitialize); err == nil {
+				t.Fatal("partial native constructor did not fail")
+			}
+			if _, _, err := f.node.network.JoinedLinuxPhysicalSource(context.Background(), f.node.policy); err == nil {
+				t.Fatal("incomplete construction bypassed actual network close")
+			}
+			if err := f.node.network.Close(); err != nil {
+				t.Fatal(err)
+			}
+			joined, hasSource, err := f.node.network.JoinedLinuxPhysicalSource(context.Background(), f.node.policy)
+			if err != nil || hasSource != returned || (joined != nil) != returned {
+				t.Fatal("partial cleanup changed whether an original source was returned", err)
+			}
+			if returned && (joined.Original != nil || joined.ProcessID != source.owner.ProcessID || !source.closed.Load()) {
+				t.Fatal("partial cleanup invented complete birth identity or lost source close")
+			}
+		})
+	}
+}

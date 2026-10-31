@@ -8,6 +8,7 @@ import (
 
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
 // Linux retains its own native source and observation type. This capability is
@@ -47,6 +48,13 @@ func (p *RouterVPNDesktopLinuxNodePreparation) RetainedProtection(ctx context.Co
 		return nil, false, errors.New("Linux Router node preparation lost its captured retirement owner")
 	}
 	return p.network.RetainedLinuxPhysicalProtection(ctx, p.policy)
+}
+
+func (p *RouterVPNDesktopLinuxNodePreparation) JoinedSource(ctx context.Context) (*mobiletor.DesktopLinuxSourceJoinRecord, bool, error) {
+	if p == nil || p.network == nil || p.policy == nil {
+		return nil, false, errors.New("Linux Router node cleanup lost its captured source")
+	}
+	return p.network.JoinedLinuxPhysicalSource(ctx, p.policy)
 }
 
 func (p *RouterVPNDesktopLinuxNodePreparation) DisconnectProtection(ctx context.Context) (bool, error) {

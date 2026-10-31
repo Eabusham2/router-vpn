@@ -57,6 +57,7 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'node_physical_linux.go.tmpl', 'node_physical_darwin.go.tmpl',
                 'node_physical_linux_test.go.tmpl', 'node_physical_darwin_test.go.tmpl', 'node_physical_unix_test.go.tmpl',
                 'node_linux_lifecycle.go.tmpl', 'node_linux_lifecycle_test.go.tmpl',
+                'node_linux_source_join.go.tmpl', 'node_linux_source_join_test.go.tmpl',
                 'node_physical_windows.go.tmpl', 'node_physical_windows_test.go.tmpl', 'node_physical_other.go.tmpl')
 BOX_TEMPLATES = {
     'node_box_physical.go.tmpl': 'routervpn_desktop_node_box_physical.go',
@@ -240,6 +241,8 @@ def pt_copies():
                    'node_physical_unix_test.go.tmpl': b'//go:build linux || darwin\n\n',
                    'node_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
                    'node_linux_lifecycle_test.go.tmpl': b'//go:build linux\n\n',
+                   'node_linux_source_join.go.tmpl': b'//go:build linux\n\n',
+                   'node_linux_source_join_test.go.tmpl': b'//go:build linux\n\n',
                    'node_physical_other.go.tmpl': b'//go:build !linux && !darwin && !windows\n\n',
                    'external_physical_other.go.tmpl': b'//go:build !linux && !darwin && !windows\n\n' }.get(name, b'')
         if path.is_symlink() or not raw.startswith(prefix+b'package routervpndesktoppt\n'):
@@ -562,6 +565,7 @@ def prepare(vendor, go='go', *, env=None):
                     'desktop_socket_linux_guardian_record_test.go', 'desktop_socket_linux_guardian_process_test.go',
                     'desktop_socket_linux_guardian_process_native_test.go',
                     'desktop_socket_linux_node_creation_record_test.go', 'desktop_socket_linux_node_creation_native_test.go',
+                    'desktop_socket_linux_source_join_test.go', 'desktop_socket_linux_source_join_native_test.go',
                     'desktop_socket_darwin_guardian_test.go', 'desktop_socket_pf_inventory_test.go',
                     'desktop_socket_pf_readback_test.go', 'desktop_socket_pf_filter_test.go', 'desktop_socket_pf_abi_test.go',
                     'desktop_socket_pf_filter_native_test.go', 'desktop_socket_darwin_filter_test.go',

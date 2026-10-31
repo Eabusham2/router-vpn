@@ -33,7 +33,7 @@ KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGua
                 'SocketRetirementReusesCapacity', 'RejectsChangedBaseline', 'NativeParentCrash',
                 'BlockedControlRetainsSourcePort', 'RejectsStaleCaptureAndGeneration',
                 'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement',
-                'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions', 'RetainedBaseline', 'NodeBaselineSuccession', 'NodeProcessWitness', 'NodeCreationJournalReceipt')
+                'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions', 'RetainedBaseline', 'NodeBaselineSuccession', 'NodeProcessWitness', 'NodeCreationJournalReceipt', 'NodeSourceJoin')
 ACCOUNT_FILES = ('passwd', 'group', 'shadow', 'gshadow', 'subuid', 'subgid')
 BASELINE_CASES = ('RequiresCommittedBatchReceipt', 'ReplyRejectsUnrelatedDatagrams',
                   'GenerationRejectsMissingOrAmbiguousIdentity', 'EndpointRequiresRetainedOwner',
@@ -41,7 +41,7 @@ BASELINE_CASES = ('RequiresCommittedBatchReceipt', 'ReplyRejectsUnrelatedDatagra
                   'RetentionPartialCloseOwnsOnlyOriginalDescriptors', 'RetentionCancelledWaitCannotEnterAnotherOperation',
                   'NodeCreationReceiptRequiresExactOperations', 'NodeScopeAndAbsence', 'NodePartialOwnerCannotMutate',
                   'GuardianRecordRequiresNativeRelationship', 'GuardianPartialWitnessCannotCreateProof',
-                  'NodeCreationRecordBindsPreparedIdentity')
+                  'NodeCreationRecordBindsPreparedIdentity', 'SourceJoinRecordPreservesPartialOwnership')
 
 
 def account_mount(source, target, flags):
@@ -385,12 +385,16 @@ def execute_mutations(source: Path, go='go', *, env=None):
         'retained native namespace': 'changed native namespace substituted absence for the original replacement',
         'original creation journal snapshot': 'same-name native replacement became the original creation receipt',
         'original live guardian witness': 'dead guardian passed its retained native pidfd/task witness',
+        'joined source native witness closure': 'actual process exit hid unacknowledged native witness teardown',
         'original Node creation receipt': 'changed create receipt became original baseline ownership',
         'closed Node predecessor': 'unretired Node predecessor authorized successor deletion',
         'closed Node successor': 'rejected successor changed old deny baseline',
         'reserved Node initial absence': 'scoped Node baseline was hidden from initial journal absence',
     }
     mutations = (
+        ('joined source native witness closure', 'NodeSourceJoin', 'desktop_socket_linux_source_join.go', (
+            ('if !w.closed || w.closeErr != nil', 'if w.closeErr != nil'),
+        )),
         ('original creation journal snapshot', 'NodeCreationJournalReceipt', 'desktop_socket_linux_node_creation.go', (
             ('if _, err := b.observe(ctx, false); err != nil {', 'if _, err := b.observe(ctx, false); false {'),
         )),

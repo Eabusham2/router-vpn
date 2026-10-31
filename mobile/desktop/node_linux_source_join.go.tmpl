@@ -1,0 +1,61 @@
+//go:build linux
+
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type nodeLinuxSourceJoinReader interface {
+	ObserveJoinedSource(context.Context, mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxSourceJoinRecord, error)
+}
+
+// JoinedLinuxPhysicalSource preserves the actual source returned by even a
+// cancelled or incomplete constructor. No source returned is distinct from
+// native absence; the parent still owes its own captured kernel readback.
+// This method never releases protection or manufactures an admitted target.
+func (n *NodeNetworkOwner) JoinedLinuxPhysicalSource(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (*mobiletor.DesktopLinuxSourceJoinRecord, bool, error) {
+	if n == nil || ctx == nil || ctx.Err() != nil || policy == nil || policy.Validate() != nil {
+		return nil, false, errors.New("Linux joined source lost its original network request")
+	}
+	owner, err := nodeLinuxPhysicalAdmissionFor(n.ctx, policy, false)
+	if err != nil {
+		return nil, false, err
+	}
+	owner.mu.Lock()
+	source, capture := owner.source, owner.capture
+	valid := owner.network == n
+	var guardian *mobiletor.DesktopLinuxGuardianRecord
+	if owner.guardian != nil {
+		copy := *owner.guardian
+		guardian = &copy
+	}
+	owner.mu.Unlock()
+	n.mu.Lock()
+	valid = valid && n.closed && n.retired && !n.ready && !n.sockets && n.policy == policy && n.source == source
+	if source != nil {
+		valid = valid && n.brokerCapture() == capture
+	}
+	n.mu.Unlock()
+	if !valid {
+		return nil, source != nil, errors.New("Linux joined source preceded its exact native cleanup")
+	}
+	if source == nil {
+		return nil, false, nil
+	}
+	reader, ok := source.(nodeLinuxSourceJoinReader)
+	if !ok {
+		return nil, true, errors.New("Linux source cannot prove its original native join")
+	}
+	record, err := reader.ObserveJoinedSource(ctx, capture)
+	if err != nil || record.Validate() != nil || record.Capture != capture ||
+		guardian != nil && (record.Original == nil || *record.Original != *guardian) || ctx.Err() != nil {
+		return nil, true, errors.Join(err, ctx.Err(), errors.New("Linux joined source changed its original captured guardian"))
+	}
+	copy := record.Clone()
+	return &copy, true, nil
+}
