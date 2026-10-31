@@ -6,7 +6,93 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 3e873649
+## Latest implementation continuation — through d342000f
+
+The latest verified source publication cutoff is
+[`d342000f2f41c36517ce3fedccf65611e13f608b`](https://github.com/Eabusham2/router-vpn/commit/d342000f2f41c36517ce3fedccf65611e13f608b).
+Completed units were committed and pushed directly to `main` with normal
+ancestry and independent remote parent/tree/head checks. The branch may advance.
+The [application recovery and graph evidence](CONTINUATION-EVIDENCE-2026-10-30.md#application-recovery-and-broader-node-execution)
+updates the older checkpoints below. Original requirements and their optional
+or feasible qualifications remain in the existing source reconciliation.
+
+### Newly published application behavior
+
+- Windows startup now opens and reconciles its captured protection journal
+  after profile loading and before listener admission (`c02c6ca3`). It consumes
+  the checked native recovery owner, joins its cleanup, rereads the exact
+  journal/firewall expectation and retains the original profile revision.
+  Uncertain receipts remain pending. The initial attempt is bounded to ten
+  seconds within the launcher's thirty-second identity deadline.
+- A recovered Off operation retains its accepted request and original/result
+  revisions. It preserves the startup-selected node, checks the actual private
+  store, and acknowledges an already-saved result without another write.
+  Disconnect, request cancellation and shutdown cancel pre-admission recovery
+  through its own captured operation. Older completion cannot clear a replacement.
+  Terminal cleanup preserves unresolved durable policy while joining owned
+  native resources. These application paths are now implemented in source.
+- The owned desktop Node composition now admits WG, AWG Fast/Strong,
+  Shadowsocks and Hysteria2 with the applicable Off/AES/AES-plus-XOR Start
+  Layers (`05354ad1`, `88f5dcd0`). Captured node assets and the sealed lower
+  policy reach the actual engines. Real peer coverage includes IPv4/IPv6
+  application TCP/UDP, fresh selected Home DNS, wrong credentials and retirement.
+  The public connection preparation selector and remaining graph families
+  are still being integrated; this does not establish every catalog choice.
+
+### Verification and actual remaining blockers
+
+The application recovery unit passed fourteen focused race-test groups and
+thirty-nine cases, a broader 135-group/535-case race regression, repeated
+admission cancellation, ten executable negative controls and both Windows
+native/checkptr cross-compiles. Its application tests explicitly model native
+process/BFE/journal I/O; actual Windows core and application execution remain
+separate evidence. `08b9cd05` repairs the native sticky-close fixture using an
+actual protected snapshot handle, preserving production rejection behavior.
+
+The Hysteria2 unit passed the exact-source Linux native race gate: 38 parent
+tests, twelve layer cases, seven actual Hysteria2 credential/trust/mask cases
+and all sixteen deliberate production defects. Actual-WFP and sealed-command
+fixtures compiled for both Windows architectures. Actual Windows execution,
+full public Connect/AUTO/SMART/restoration integration and other requested
+families remain required.
+
+At [3e873649, ARM64 PF job 124403339263](https://github.com/Eabusham2/router-vpn/actions/runs/41156173455/job/124403339263),
+the corrected native quick-deny negative passed, together with all 130 socket
+retirements. That closes the earlier ARM64 overlay failure; other platform and
+current-release results must still be checked independently.
+
+Windows native runs exposed lazy pathname identity in a persistence fixture,
+an unsuccessful fixture `ReOpenFile` operation, and cp1252 output failure before
+the native runner could report its result. Published `30e6d414`, `e8af9209` and
+`d342000f` address those exact fixture/runner problems. Production file identity,
+token and exit-status checks remain enforced. Their current native outcomes
+must be read after rerun rather than inferred from cross-compilation.
+
+The first unchanged PowerShell `Add-Type` call for `System.Net.Http` took about
+32 seconds in an instrumented successful launch at `08b9cd05`; the independent
+normal Session still failed its initial authenticated channel. `8bf959e1`
+adds observational lookup hooks to the separate diagnostic. Its actual Windows
+PowerShell 5.1 run, job 124408795380, places about 31.8 seconds inside command
+discovery and about 0.09 seconds in the assembly call after discovery completes.
+The diagnostic does not preload, retry or change production timeouts. A narrow
+system-module-qualified cmdlet repair and corrected normal startup are still
+being verified at this cutoff.
+
+The macOS installer diagnostic at `3491c91a` reports a live root process with
+an unresolved executable path and kernel name `provjobd2706848404`. That name
+does not establish executable identity. Native owned exit/unlinked fixtures
+pass, but complete host inventory still refuses this unknown process. No name
+exception or blanket ENOENT acceptance was introduced.
+
+There is no verified new all-green release at this cutoff. Native packages,
+server images, compose, manifests/checksums and publication must converge on
+one source commit after the remaining integration and native failures close.
+Physical/off-LAN traffic, transitions/leaks, UI/accessibility, applicable
+signing/distribution, private controls and authorized deployment remain
+distinct acceptance requirements. No live ASUS, AdGuard or Portainer change
+was made during these source units.
+
+## Earlier implementation continuation — through 3e873649
 
 The verified publication cutoff is
 [`3e873649794e3f692bc9009166f28b971faba05f`](https://github.com/Eabusham2/router-vpn/commit/3e873649794e3f692bc9009166f28b971faba05f).

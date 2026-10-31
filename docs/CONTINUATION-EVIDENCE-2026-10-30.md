@@ -1252,3 +1252,151 @@ path/leak/transition, UI/accessibility, off-LAN Methods, private server controls
 applicable signing/distribution and authorized deployment acceptance distinct.
 Original optional/feasible requirements retain their qualifications. No private
 router, AdGuard, AI Board/Portainer or signing-environment change is claimed.
+
+## Application recovery and broader Node execution
+
+This continuation was recorded on October 31 UTC / October 30 Chicago. Its
+source publication cutoff is
+[`d342000f2f41c36517ce3fedccf65611e13f608b`](https://github.com/Eabusham2/router-vpn/commit/d342000f2f41c36517ce3fedccf65611e13f608b).
+It supersedes the earlier application-recovery, graph-admission and native
+fixture status only where the evidence below is newer. The original requirement
+set, later corrections and live/device acceptance requirements remain binding.
+
+### Published units and preserved ancestry
+
+Each row was a separate reviewed commit, promptly published with an expected
+remote parent and non-forced ref update. The remote tree and branch were checked
+afterward. Local working ancestry and publication ancestry remain distinct.
+
+| Local commit | Verified remote commit | Completed source unit |
+|---|---|---|
+| `365cfa6179bdad2d17906acde20b797c40880ac4` | `3491c91a068a4716b1536ec1f00bc07e35460c24` | Bounded macOS refusal diagnostic preserves the original error |
+| `280d7a91d988017dbee3029e432ec54969eac167` | `05354ad1c8d5eb7a8ab40b3409f8cf1eab5b7bb5` | Captured Shadowsocks and WG/AWG Start Layers in owned desktop composition |
+| `12518646eb3ec597cb657b9e77420496761be514` | `08b9cd05b312cbddf8379e23e056422d03b65a88` | Real protected Toolhelp close failure in native recovery fixture |
+| `69cd362d136d658ffd1da5442d6384e33aa32ea0` | `30e6d4146bc85e5db24703a1715cb4034f407f93` | Retained native file identity across private-store replacement |
+| `4eb628eb6e6173a2a5494d4097f62ae412269879` | `c02c6ca3770d204f0808f182022dbdcfb9ab1db7` | Application startup recovery, pending Off and captured cancellation |
+| `2eb18857c8164070f5fc6f72d040c9941f8777ff` | `88f5dcd0e864fc61329a0d9285dee9154c15c94a` | Hysteria2 with Off/AES/XOR, actual peer proofs and wrong-credential controls |
+| `34f9a0fe358c9421c3e54f3e5d01bb1273ac5f30` | `8bf959e1464e718b687067ec0b7872a11cc912be` | First framework command lookup observation in separate startup diagnostic |
+| `8647cb2bac15474a8fd5ba5e14ef3ff4e5bbcdd1` | `e8af92098e2e77c70c503a310bdfed5ee0d52da3` | Identity-checked fixture file opens for Medium access readback and cleanup |
+| `2f478f1a8471cf76144c580fdc9a52d91dcb9b52` | `d342000f2f41c36517ce3fedccf65611e13f608b` | Exact Unicode native output with unchanged Windows Node result gate |
+
+### Application recovery is now wired into startup
+
+The shipping application calls `initializeDesktopNodeRecovery` after actual
+profile loading and before creating its HTTP listener. The Windows adapter uses
+the retained bootstrap, original Data handle, actual controller identity and
+native `ProtectionJournal`. A ten-second initial attempt leaves unresolved
+owners and truthful pending status available for later captured retry.
+
+The slot consumes an opaque checked recovery operation. A valid result with an
+error is retained as evidence and cannot admit a successor. Repeated uncertain
+results must be identical. Successful hydration requires native cleanup join,
+exact journal readback, current firewall expectation and the original source
+profile revision. Launch consumes that initialized journal before `slot.begin`
+can capture its predecessor.
+
+Pending Off retains the original accepted intent and both profile revisions.
+Recovery checks real private-store bytes before removal/save and after saving.
+An exact result already on disk is acknowledged without writing it again.
+Completing the old request preserves the separately selected node and unrelated
+profile/credential references. The actual joined native recovery owner can
+carry an absence observation; a fabricated no-op release cannot.
+
+Pre-admission recovery has its own cancellable app operation. Disconnect and
+shutdown cancel it before waiting for the operation mutex, and mutation requests
+also carry request cancellation. Completion clears only the captured pointer.
+Terminal shutdown joins unresolved native resources while preserving durable
+policy for the next controller; ordinary Disconnect cannot report unproved
+removal. Torn/unknown records and unbound legacy nonempty records remain
+preserved under their existing gates.
+
+Verification: fourteen focused race groups / thirty-nine cases; broader
+135 groups / 535 cases; repeated actual admission/request/shutdown cancellation;
+eight new and two affected existing executable negative controls; sixteen
+runner/audit tests; three product/private-state audits; and isolated Windows
+AMD64/ARM64 native/checkptr compilation. Application tests model process/BFE/
+journal I/O explicitly. Actual native core and application boundary execution
+remain separate. A later Windows run failed printing Unicode before exposing
+its native result; `d342000f` fixes that runner boundary with a real strict
+cp1252 stream regression, including preservation of an exit-1 rejection.
+
+### Actual encrypted graph coverage
+
+`05354ad1` admitted the existing sealed WG/AWG/Shadowsocks compositions and
+their captured Start Layers. The exact-source Linux race gate passed 37 parent
+tests, nine newly covered layer combinations, wrong keys and all fifteen
+production mutants. The shipping whitening relay is built and source-hashed
+as part of the reference fixture. Captured Start Layer assets come from the
+same node's private generated directory; missing assets from that node do not
+fall back to another node's secrets.
+
+`88f5dcd0` extends that actual path to Hysteria2. Its independent process uses
+the pinned QUIC service on a retained UDP socket, real TLS, password and
+Salamander. IPv4 and IPv6 application TCP/UDP pass with Off, AES and AES-plus-XOR.
+Fresh HomeDNS success is followed by a failing new DNS query, and retirement
+revokes the owned path. Seven negative cases cover wrong password, TLS node
+identity, Salamander, inner authentication through both Start Layers and outer
+AES keys. The complete Linux race gate passed 38 parent tests, twelve layer
+cases and sixteen production mutants, including a TLS-verification bypass.
+
+Windows actual-WFP and sealed-command fixtures compiled with checkptr for both
+architectures. Those source fixtures cover ordinary-token denial and WG to
+Hysteria2 to the captured original WG succession. They were not executed on
+Windows by the local Linux cross-compile. The public preparation selector,
+other graph families and full AUTO/SMART/Speed Lab transitions remain ongoing.
+An unsupported mode still in the catalog is not counted as completed.
+
+### Native results and precise outstanding failures
+
+At [3e873649, run 41156173455, ARM64 job 124403339263](https://github.com/Eabusham2/router-vpn/actions/runs/41156173455/job/124403339263),
+all 130 sequential PF socket retirements passed and the corrected quick-deny
+overlay was rejected through `ForeignBlockAndLaterPass`. This is actual
+corrected ARM64 execution, replacing the earlier pending overlay status.
+
+At [a20cd717, Shell job 124403215420](https://github.com/Eabusham2/router-vpn/actions/runs/41156133509/job/124403215420),
+the Medium fixture failed `ReOpenFile` during ancestry security readback and
+cleanup. Its production global-image checks passed independently. `e8af9209`
+opens the held object's normalized volume-GUID spelling with the exact requested
+rights, verifies volume/file identity and attributes against the still-retained
+original, and only then uses that handle. Cleanup deletes through retained
+handles. Both architecture/checkptr compiles pass; 43 source records and all
+29 existing negative overlays remain. Actual corrected Windows execution is
+still required; no internal cause of the rejected API is assumed.
+
+The persistence fixture failed because pathname `os.Stat` deferred identity
+lookup until after replacement. `30e6d414` retains a native read handle with
+DELETE sharing and proves both distinct replacement identity and unchanged old
+bytes. Production write-through replacement stays unchanged. `08b9cd05`
+likewise changes only the native recovery close-failure fixture: its exact
+Toolhelp snapshot receives real close protection and remains owned until the
+fixture removes that protection and closes it.
+
+At [08b9cd05, timing job 124405715753](https://github.com/Eabusham2/router-vpn/actions/runs/41156945498/job/124405715753),
+the instrumented Session passed with about 31.91 seconds spent in the first
+unchanged `Add-Type -AssemblyName System.Net.Http`, under a second compiling the
+transport, and about 0.05 seconds connecting the pipe. The independent normal
+Session at that SHA still failed its initial authenticated channel. Published
+`8bf959e1` adds fixed-label command-discovery observers only to the diagnostic,
+restores original hooks, preserves exceptions and does not preload or retry.
+Six semantic cases and two deliberate observer defects were exercised using
+PowerShell 7.4.6. The subsequent
+[8bf959e1 actual Windows PowerShell 5.1 timing job 124408795380](https://github.com/Eabusham2/router-vpn/actions/runs/41157938653/job/124408795380)
+passed and executed both lookup hooks without unavailable or restoration-failure
+markers. Approximately 31.8 seconds passed between the outer pre-lookup hook
+and its nested lookup; post-lookup then completed immediately. The assembly
+call finished about 0.09 seconds afterward. This locates the observed stall in
+command discovery, before the assembly body. A narrow module-qualified call
+repair is being prepared; the independent normal Session remains unproved.
+
+At [3491c91a, macOS installer job 124404031073](https://github.com/Eabusham2/router-vpn/actions/runs/41156396629/job/124404031073),
+the independent BSD diagnostic returned the expected 136-byte record for a
+live root process, status 2, PID 959, with kernel name `provjobd2706848404` and
+an unresolved executable path. The name is diagnostic data, not identity or
+permission to skip the process. Both owned exit/unlinked fixtures passed.
+Complete host inventory still refuses; arbitrary VM mappings, argv, a name
+allowlist or blanket ENOENT acceptance are not used as executable proof.
+
+No new complete release or private deployment is established by this section.
+Current source, native execution, packages, publication and physical/live
+acceptance remain distinct evidence. The old `745b3e41` release must not be
+attached to these newer changes.
