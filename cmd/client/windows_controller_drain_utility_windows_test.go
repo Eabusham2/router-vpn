@@ -5,6 +5,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,6 +22,97 @@ import (
 	"router-vpn/internal/controllertransport"
 	"router-vpn/internal/windowscontroller"
 )
+
+// These observers belong only to the native fixture. The shipping helper is
+// still dot-sourced at its original pathname with its original bytes. The
+// fixed, bounded receipt neither resolves a command nor records its arguments.
+// In particular it must not warm a first PowerShell launch before acceptance.
+const controllerDrainObservationBefore = `
+$script:RouterVPNDrainObservationCount=0
+function Write-RouterVPNDrainObservation([string]$Stage){
+    try{
+        if($Stage-cnotmatch'\A(?:script-entered|script-complete|helper-load-(?:begin|complete)|drain-call-(?:begin|complete)|enumeration-(?:begin|complete)|observers-unavailable|(?:pre|post)-observer-restore-failed|lookup-(?:test-path|get-item|split-path|new-object|json|get-process|drain|pinned-drain|ancestors)-(?:begin|complete))\z'){return}
+        if($script:RouterVPNDrainObservationCount-lt160){
+            $script:RouterVPNDrainObservationCount++
+            [IO.File]::AppendAllText($script:RouterVPNDrainObservationPath,$Stage+' ticks='+[DateTime]::UtcNow.Ticks+"` + "`n" + `")
+        }
+    }catch{}
+}
+Write-RouterVPNDrainObservation 'script-entered'
+$RouterVPNDrainInvocation=$null
+$RouterVPNDrainObserversCaptured=$false
+try{
+    $RouterVPNDrainInvocation=$ExecutionContext.InvokeCommand
+    $RouterVPNDrainPre=$RouterVPNDrainInvocation.PreCommandLookupAction
+    $RouterVPNDrainPost=$RouterVPNDrainInvocation.PostCommandLookupAction
+    if($null-ne$RouterVPNDrainPre-or$null-ne$RouterVPNDrainPost){throw 'Existing lookup observers remain untouched.'}
+    $RouterVPNDrainObserversCaptured=$true
+    $RouterVPNDrainInvocation.PreCommandLookupAction=[System.EventHandler[System.Management.Automation.CommandLookupEventArgs]]{
+        param($Sender,$Lookup)
+        try{
+            switch -CaseSensitive ($Sender){
+                'Test-Path' {Write-RouterVPNDrainObservation 'lookup-test-path-begin'}
+                'Get-Item' {Write-RouterVPNDrainObservation 'lookup-get-item-begin'}
+                'Split-Path' {Write-RouterVPNDrainObservation 'lookup-split-path-begin'}
+                'New-Object' {Write-RouterVPNDrainObservation 'lookup-new-object-begin'}
+                'ConvertFrom-Json' {Write-RouterVPNDrainObservation 'lookup-json-begin'}
+                'Get-Process' {Write-RouterVPNDrainObservation 'lookup-get-process-begin'}
+                'Test-RouterVPNControllerStopping' {Write-RouterVPNDrainObservation 'lookup-drain-begin'}
+                'Test-RouterVPNPinnedControllerStopping' {Write-RouterVPNDrainObservation 'lookup-pinned-drain-begin'}
+                'Assert-RouterVPNNoReparseAncestors' {Write-RouterVPNDrainObservation 'lookup-ancestors-begin'}
+            }
+        }catch{}
+    }
+    $RouterVPNDrainInvocation.PostCommandLookupAction=[System.EventHandler[System.Management.Automation.CommandLookupEventArgs]]{
+        param($Sender,$Lookup)
+        try{
+            switch -CaseSensitive ($Sender){
+                'Test-Path' {Write-RouterVPNDrainObservation 'lookup-test-path-complete'}
+                'Get-Item' {Write-RouterVPNDrainObservation 'lookup-get-item-complete'}
+                'Split-Path' {Write-RouterVPNDrainObservation 'lookup-split-path-complete'}
+                'New-Object' {Write-RouterVPNDrainObservation 'lookup-new-object-complete'}
+                'ConvertFrom-Json' {Write-RouterVPNDrainObservation 'lookup-json-complete'}
+                'Get-Process' {Write-RouterVPNDrainObservation 'lookup-get-process-complete'}
+                'Test-RouterVPNControllerStopping' {Write-RouterVPNDrainObservation 'lookup-drain-complete'}
+                'Test-RouterVPNPinnedControllerStopping' {Write-RouterVPNDrainObservation 'lookup-pinned-drain-complete'}
+                'Assert-RouterVPNNoReparseAncestors' {Write-RouterVPNDrainObservation 'lookup-ancestors-complete'}
+            }
+        }catch{}
+    }
+}catch{Write-RouterVPNDrainObservation 'observers-unavailable'}
+try{
+`
+
+const controllerDrainObservationAfter = `
+}finally{
+    if($RouterVPNDrainObserversCaptured){
+        try{$RouterVPNDrainInvocation.PreCommandLookupAction=$RouterVPNDrainPre}catch{Write-RouterVPNDrainObservation 'pre-observer-restore-failed'}
+        try{$RouterVPNDrainInvocation.PostCommandLookupAction=$RouterVPNDrainPost}catch{Write-RouterVPNDrainObservation 'post-observer-restore-failed'}
+    }
+    Write-RouterVPNDrainObservation 'script-complete'
+}
+`
+
+func controllerDrainObservationScript(body, path string) string {
+	return "$script:RouterVPNDrainObservationPath='" + strings.ReplaceAll(path, "'", "''") + "'\n" +
+		controllerDrainObservationBefore + body + controllerDrainObservationAfter
+}
+
+func controllerDrainObservationReceipt(t *testing.T, path string) {
+	t.Helper()
+	file, err := os.Open(path)
+	if err != nil {
+		t.Log("Drain fixture has no script-entry observation; the helper result remains subject to the original acceptance checks", err)
+		return
+	}
+	defer file.Close()
+	raw, err := io.ReadAll(io.LimitReader(file, 16385))
+	if err != nil || len(raw) > 16384 {
+		t.Log("Drain fixture observation is unavailable or exceeded its fixed bound", err)
+		return
+	}
+	t.Logf("Fixture-only first-launch phases; shipping helper remains unmodified:\n%s", raw)
+}
 
 func TestLocalControllerPinnedDrainUtilityWindowsExecution(t *testing.T) {
 	workspace := t.TempDir()
@@ -48,6 +140,18 @@ func TestLocalControllerPinnedDrainUtilityWindowsExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	helperBytes, err := os.ReadFile(helper)
+	if err != nil {
+		t.Fatal(err)
+	}
+	helperDigest := sha256.Sum256(helperBytes)
+	defer func() {
+		after, err := os.ReadFile(helper)
+		if err != nil || sha256.Sum256(after) != helperDigest {
+			t.Fatal("actual drain helper changed during native wrapper execution", err)
+		}
+	}()
+	t.Logf("Actual shipping drain helper SHA256 %x; additional phase observers are fixture-only", helperDigest)
 	// Make ordinary startup observably invalid. The real command must finish
 	// as a read-only utility before configuration/catalog/runtime preparation.
 	config := filepath.Join(workspace, "invalid-client.json")
@@ -168,7 +272,7 @@ func TestLocalControllerPinnedDrainUtilityWindowsExecution(t *testing.T) {
 			} else if mode == "malformed" {
 				pin = "invalid"
 			}
-			script := "$ErrorActionPreference='Stop'\n. " + quote(helper) + "\n"
+			script := "$ErrorActionPreference='Stop'\nWrite-RouterVPNDrainObservation 'helper-load-begin'\n. " + quote(helper) + "\nWrite-RouterVPNDrainObservation 'helper-load-complete'\n"
 			if mode == "captured-once" {
 				script += "$env:HOMEVPN_CONTROLLER_TRANSPORT='foreign';$env:HOMEVPN_CONTROLLER_PID='0';$env:HOMEVPN_CONTROLLER_TLS_PIN='foreign';$env:HOMEVPN_CONTROLLER_EXECUTABLE='foreign'\n"
 			}
@@ -176,13 +280,15 @@ func TestLocalControllerPinnedDrainUtilityWindowsExecution(t *testing.T) {
 			if mode == "cancelled" {
 				timeout = "50"
 			}
-			script += "$value=Test-RouterVPNControllerStopping -TimeoutMilliseconds " + timeout + "\n"
+			script += "Write-RouterVPNDrainObservation 'drain-call-begin'\n$value=Test-RouterVPNControllerStopping -TimeoutMilliseconds " + timeout + "\nWrite-RouterVPNDrainObservation 'drain-call-complete'\n"
 			// Every utility is a uniquely named test child. Read-only enumeration
 			// proves wrapper cancellation left none of those owned children alive.
-			script += "if(@(Get-Process -Name " + quote(strings.TrimSuffix(filepath.Base(binary), ".exe")) + " -ErrorAction SilentlyContinue).Count-ne0){throw 'drain wrapper left its owned utility running'}\n"
+			script += "Write-RouterVPNDrainObservation 'enumeration-begin'\nif(@(Get-Process -Name " + quote(strings.TrimSuffix(filepath.Base(binary), ".exe")) + " -ErrorAction SilentlyContinue).Count-ne0){throw 'drain wrapper left its owned utility running'}\nWrite-RouterVPNDrainObservation 'enumeration-complete'\n"
 			script += "if($value){[Console]::Out.WriteLine('true')}else{[Console]::Out.WriteLine('false')}\n"
 			path := filepath.Join(t.TempDir(), "observe.ps1")
-			if err := os.WriteFile(path, []byte(script), 0600); err != nil {
+			observation := filepath.Join(filepath.Dir(path), "fixed-phases.txt")
+			defer controllerDrainObservationReceipt(t, observation)
+			if err := os.WriteFile(path, []byte(controllerDrainObservationScript(script, observation)), 0600); err != nil {
 				t.Fatal(err)
 			}
 			operation, stop := context.WithTimeout(ctx, 8*time.Second)
