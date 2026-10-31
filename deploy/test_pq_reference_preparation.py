@@ -204,10 +204,11 @@ class PQReferencePreparation(unittest.TestCase):
                      mock.patch.object(P.subprocess, 'run', side_effect=acl) as command, \
                      mock.patch.object(P.BUILD.PQ, 'environment', return_value={}), \
                      mock.patch.object(P.BUILD.PQ, 'run', return_value='rustc wrong-version') as compiler:
+                    captured = dict(os.environ)  # Windows normalizes environment names to uppercase.
                     with self.assertRaises(subprocess.CalledProcessError if acl_failure else ValueError):
                         P.generate_keys('windows/amd64', root/'cache', root/'private/keys')
                     command.assert_called_once()
-                    self.assertEqual(dict(os.environ), environment)
+                    self.assertEqual(dict(os.environ), captured)
                     if acl_failure:
                         compiler.assert_not_called()
                     else:
