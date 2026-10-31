@@ -33,7 +33,7 @@ KERNEL_CASES = ('TCPAndUDP', 'RejectsWrongUIDAndPrivatePeer', 'ExpirySurvivesGua
                 'SocketRetirementReusesCapacity', 'RejectsChangedBaseline', 'NativeParentCrash',
                 'BlockedControlRetainsSourcePort', 'RejectsStaleCaptureAndGeneration',
                 'OldCleanupPreservesReplacement', 'FinishRequiresDescriptorRetirement',
-                'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions', 'RetainedBaseline', 'NodeBaselineSuccession', 'NodeProcessWitness', 'NodeCreationJournalReceipt', 'NodeSourceJoin')
+                'ClosedProtectionObservations', 'RejectsDormantTable', 'BaselineTransactions', 'RetainedBaseline', 'NodeBaselineSuccession', 'NodeProcessWitness', 'NodeCreationJournalReceipt', 'NodeSourceJoin', 'NodeRetiredSuccession')
 ACCOUNT_FILES = ('passwd', 'group', 'shadow', 'gshadow', 'subuid', 'subgid')
 BASELINE_CASES = ('RequiresCommittedBatchReceipt', 'ReplyRejectsUnrelatedDatagrams',
                   'GenerationRejectsMissingOrAmbiguousIdentity', 'EndpointRequiresRetainedOwner',
@@ -350,7 +350,8 @@ def execute(source: Path, go='go', *, env=None):
                 'desktop_socket_linux_guardian_record.go', 'desktop_socket_linux_guardian_record_test.go',
                 'desktop_socket_linux_guardian_process_test.go', 'desktop_socket_linux_guardian_process_native_test.go',
                 'desktop_socket_linux_node_creation.go', 'desktop_socket_linux_node_creation_record.go',
-                'desktop_socket_linux_node_creation_record_test.go', 'desktop_socket_linux_node_creation_native_test.go'}
+                'desktop_socket_linux_node_creation_record_test.go', 'desktop_socket_linux_node_creation_native_test.go',
+                'desktop_socket_linux_node_succession_retired.go', 'desktop_socket_linux_node_succession_retired_native_test.go'}
     if not required.issubset(before):
         raise ValueError('The complete production guardian and actual kernel tests were not copied')
     captured = dict(os.environ if env is None else env, GOWORK='off')
@@ -386,6 +387,10 @@ def execute(source: Path, go='go', *, env=None):
         for network in ('tcp4', 'udp4', 'tcp6', 'udp6'):
             if '--- PASS: TestDesktopLinuxGuardianKernelTCPAndUDP/' + network + ' (' not in output:
                 raise ValueError('Linux guardian omitted a real physical transport/address family')
+        for case in ('uncommitted-originals', 'committed-original-and-live-candidate', 'foreign-candidate',
+                     'unacknowledged-absence', 'replaced-original-table', 'cancelled-and-closed-native-owner'):
+            if '--- PASS: TestDesktopLinuxGuardianKernelNodeRetiredSuccession/' + case + ' (' not in output:
+                raise ValueError('Linux guardian omitted its original retired-succession boundary: ' + case)
         after = binary.stat()
         if (after.st_dev, after.st_ino, after.st_size) != (info.st_dev, info.st_ino, info.st_size) or hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError('Linux guardian executable changed during its actual kernel run')
@@ -428,8 +433,16 @@ def execute_mutations(source: Path, go='go', *, env=None):
         'closed Node predecessor': 'unretired Node predecessor authorized successor deletion',
         'closed Node successor': 'rejected successor changed old deny baseline',
         'reserved Node initial absence': 'scoped Node baseline was hidden from initial journal absence',
+        'original retired Node successor': 'acknowledged deletion adopted a different retained candidate',
+        'closed retired Node successor': 'live original successor became a closed retirement receipt',
     }
     mutations = (
+        ('original retired Node successor', 'NodeRetiredSuccession', 'desktop_socket_linux_node_succession_retired.go', (
+            ('b.removed && b.successor != successor || ', ''),
+        )),
+        ('closed retired Node successor', 'NodeRetiredSuccession', 'desktop_socket_linux_node_succession_retired.go', (
+            ('\tif err := successor.read(ctx, false); err != nil {\n\t\treturn false, err\n\t}\n', ''),
+        )),
         ('joined source native witness closure', 'NodeSourceJoin', 'desktop_socket_linux_source_join.go', (
             ('if !w.closed || w.closeErr != nil', 'if w.closeErr != nil'),
         )),
