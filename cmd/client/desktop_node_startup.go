@@ -14,6 +14,9 @@ import (
 // the ordinary private-node proof with its unchanged per-probe deadline. A
 // readback alone never reports Connected or supplies a path measurement.
 func (a *app) testStartedModeHealth(parent context.Context, profile common.RouterProfile, launch *desktopNodeLaunch) (time.Duration, error) {
+	if launch != nil && launch.ownedNode != nil {
+		return a.testDesktopOwnedNodeHealth(parent, profile, launch)
+	}
 	if launch == nil || multihoprelay.NativeStartupAllowance(launch.mode) == 0 {
 		return a.testHealthContext(parent, profile)
 	}

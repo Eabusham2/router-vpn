@@ -83,6 +83,13 @@ func validateSelectedNodeProof(p common.RouterProfile, body []byte) error {
 	if err != nil {
 		return err
 	}
+	return validateCapturedNodeProof(expected, body)
+}
+
+func validateCapturedNodeProof(expected string, body []byte) error {
+	if !common.ValidNodeProofID(expected) {
+		return errors.New("path proof has no captured Router VPN node identity")
+	}
 	var proof struct {
 		OK     bool   `json:"ok"`
 		NodeID string `json:"node_id"`

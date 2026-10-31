@@ -1427,6 +1427,10 @@ func (a *app) testHealth(p common.RouterProfile) (time.Duration, error) {
 }
 
 func (a *app) testHealthContext(parent context.Context, p common.RouterProfile) (time.Duration, error) {
+	return a.testHealthContextWithProof(parent, p, func(body []byte) error { return validateSelectedNodeProof(p, body) })
+}
+
+func (a *app) testHealthContextWithProof(parent context.Context, p common.RouterProfile, validate func([]byte) error) (time.Duration, error) {
 	target := strings.TrimSpace(p.PathProbeURL)
 	if target == "" {
 		target = strings.TrimSpace(a.cfg.HealthURL)
@@ -1457,7 +1461,7 @@ func (a *app) testHealthContext(parent context.Context, p common.RouterProfile) 
 	if resp.StatusCode/100 != 2 {
 		return 0, fmt.Errorf("path proof %s", resp.Status)
 	}
-	if err := validateSelectedNodeProof(p, body); err != nil {
+	if err := validate(body); err != nil {
 		return 0, err
 	}
 	return time.Since(t), nil

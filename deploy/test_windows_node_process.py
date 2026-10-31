@@ -88,6 +88,9 @@ SHARED_TESTS = (
     "TestDesktopNodeRecoveryHTTPDoesNotReuseUnknownOwnerToken",
     "TestDesktopNodeRecoveryAdmissionCancellation",
     "TestDesktopNodeRecoveryOldCompletionKeepsNewOperation",
+    "TestDesktopOwnedNodeHealthUsesSealedSourceAfterSavedBundleChanges",
+    "TestDesktopOwnedNodeHealthRejectsWrongOrRetiredProof",
+    "TestDesktopOwnedNodeHealthRejectsUncapturedProfileBeforeNetwork",
 )
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
@@ -113,6 +116,9 @@ REQUIRED_SOURCES = (
     "cmd/client/desktop_node_journal_off.go", "cmd/client/desktop_node_journal_off_test.go",
     "cmd/client/desktop_node_recovery.go", "cmd/client/desktop_node_recovery_windows.go",
     "cmd/client/desktop_node_recovery_other.go", "cmd/client/desktop_node_recovery_test.go",
+    "cmd/client/desktop_node_health.go", "cmd/client/desktop_node_health_test.go",
+    "cmd/client/desktop_node_startup.go", "cmd/client/desktop_node_startup_test.go",
+    "cmd/client/node_proof.go", "cmd/client/speed_lab_transaction.go",
     "cmd/client/controller_shutdown.go", "cmd/client/operation_guard.go",
     "cmd/client/profile_protection.go", "cmd/client/profile_protection_owned.go", "cmd/client/profile_protection_owned_test.go",
     "cmd/client/controller_privilege_windows.go",
@@ -193,6 +199,10 @@ def mutants():
     protection = (ROOT / protection_file).read_text(encoding="utf-8")
     operation_file = "cmd/client/operation_guard.go"
     operation = (ROOT / operation_file).read_text(encoding="utf-8")
+    health_file = "cmd/client/desktop_node_health.go"
+    health = (ROOT / health_file).read_text(encoding="utf-8")
+    startup_file = "cmd/client/desktop_node_startup.go"
+    startup = (ROOT / startup_file).read_text(encoding="utf-8")
     once = NATIVE.replace_once
     alive = NATIVE.function_mutant(original, "func (owner *desktopNodeProcessOwner) Alive()",
         "\tif err := owner.controller(); err != nil {\n\t\treturn err\n\t}\n", "")
@@ -275,6 +285,18 @@ def mutants():
         (operation_file, "disconnect-leaves-admission-recovery-running", "TestDesktopNodeRecoveryAdmissionCancellation/cancel-operation",
          "admission recovery ignored captured cancellation or installed a connection owner",
          once(operation, "\ta.cancelDesktopNodeRecovery()\n", "")),
+        (startup_file, "owned-proof-reopens-current-bundle", "TestDesktopOwnedNodeHealthUsesSealedSourceAfterSavedBundleChanges/missing",
+         "owned proof reread a replacement bundle or skipped its current captured path",
+         once(startup, "if launch != nil && launch.ownedNode != nil {", "if false && launch != nil && launch.ownedNode != nil {")),
+        (health_file, "owned-proof-accepts-wrong-node", "TestDesktopOwnedNodeHealthRejectsWrongOrRetiredProof/wrong-node",
+         "wrong or retired native HTTP proof was accepted",
+         once(health, "return validateCapturedNodeProof(node, body)", "return nil")),
+        (health_file, "owned-proof-skips-retirement-recheck", "TestDesktopOwnedNodeHealthRejectsWrongOrRetiredProof/generation",
+         "wrong or retired native HTTP proof was accepted",
+         once(health, "\tif ownershipErr := current(); ownershipErr != nil {\n\t\treturn 0, errors.Join(err, ownershipErr)\n\t}\n", "")),
+        (health_file, "owned-proof-skips-native-target-readback", "TestDesktopOwnedNodeHealthRejectsWrongOrRetiredProof/target",
+         "wrong or retired native HTTP proof was accepted",
+         once(health, "\t\tif err := slot.backend.prepared(parent, *target); err != nil {\n\t\t\treturn err\n\t\t}\n", "")),
     )
 
 

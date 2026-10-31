@@ -852,10 +852,16 @@ func (a *app) restartCapturedDesktopNode(plan speedLabRestorePlan, scope string)
 		if !a.ownsConnectionRuntime(launch.command) {
 			return errors.New("restored native runtime changed during startup")
 		}
-		if _, err := a.testHealth(plan.profile); err == nil {
+		var proofErr error
+		if launch.ownedNode != nil {
+			_, proofErr = a.testDesktopOwnedNodeHealth(a.connectionOperationContextOrBackground(), plan.profile, launch)
+		} else {
+			_, proofErr = a.testHealth(plan.profile)
+		}
+		if proofErr == nil {
 			break
 		} else if !time.Now().Before(deadline) {
-			return err
+			return proofErr
 		}
 		timer := time.NewTimer(150 * time.Millisecond)
 		select {
