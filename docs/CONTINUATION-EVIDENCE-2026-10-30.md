@@ -16,11 +16,13 @@ PF progress are separately identified. Earlier observations remain here with
 their original source identity; a newer failure is not hidden by an older pass.
 The current branch may advance after this document; read live `main` before editing.
 
-**Latest publication distinction:** the final recovery section below verifies
-source publication through `a4966ca453d70fa33b2b9819acc791545d161f4a`. It
-supersedes the earlier interrupted-publication status without changing the
-historical tests or claiming a new green release. Current work still includes
-unfinished lifecycle integration and native/live acceptance.
+**Latest publication distinction:** the final durable-recovery section below
+verifies source publication through
+`3e873649794e3f692bc9009166f28b971faba05f`. It supersedes earlier pending
+source/test labels only where newer evidence is supplied. The original
+publication-recovery record through `a4966ca4` remains intact below. Current
+work still includes unfinished lifecycle integration and native/live
+acceptance; no current green release is claimed.
 
 ## Requirement recovery and preservation
 
@@ -1082,3 +1084,171 @@ remaining Windows disconnect/Off/restart integration, broader graph/layer
 coverage, macOS legacy migration and applicable device/deployment acceptance
 remain separately tracked. No private router, server, DNS, signing identity
 or production deployment was changed by this recovery.
+
+
+## Durable recovery, datagram and native gate continuation
+
+Recorded October 30, 2026, America/Chicago (the final operations occurred
+October 31 UTC). This is a continuation of the same reconciled scope, not a
+replacement requirement list. The following coherent units were published
+with non-forced expected-head updates and verified remote parent/tree/head
+identity. Temporary connection/catalog interruptions did not update main;
+the prepared commits were preserved and retried only after reading its actual
+head. No empty or duplicate source change was published.
+
+| Verified remote commit | Published unit |
+|---|---|
+| [`21b2e009`](https://github.com/Eabusham2/router-vpn/commit/21b2e00972bd054343915675c569aafbea83971c) | Reconcile original source requirements and verify recovered main publication |
+| [`e44a3c8e`](https://github.com/Eabusham2/router-vpn/commit/e44a3c8eb835cfa101002f1e8509adaf90523217) | Run the current durability contract without obsolete predicate rewrites |
+| [`b905f138`](https://github.com/Eabusham2/router-vpn/commit/b905f1380e017b9c60b1ecedaf270b9c6722cd83) | Complete durable normal release for the captured Windows protection owner |
+| [`a0f58058`](https://github.com/Eabusham2/router-vpn/commit/a0f58058ab03b5a0b03ee39d43b83ee3e5262310) | Report bounded native macOS process inventory failures without skipping unknown owners |
+| [`584f509e`](https://github.com/Eabusham2/router-vpn/commit/584f509eea33dbcdae82a2e535a14c8bf649effd) | Require write-through Windows private profile replacement and native retry evidence |
+| [`69d6bd51`](https://github.com/Eabusham2/router-vpn/commit/69d6bd51b4c55a6a7bbcb7fad9100514009b8bf2) | Audit both platform-specific private profile publication paths |
+| [`ae1f4bf8`](https://github.com/Eabusham2/router-vpn/commit/ae1f4bf87b6fba49a1505a08184f78679d79efa6) | Verify restored Windows nodes keep the saved source and acquire fresh runtime identities |
+| [`544f53a5`](https://github.com/Eabusham2/router-vpn/commit/544f53a5a849444b783c536e7a0efe623c76e53e) | Keep explicit Windows Off durable through exact profile persistence and cleanup retries |
+| [`d9a83b8f`](https://github.com/Eabusham2/router-vpn/commit/d9a83b8fbcb9af961f5aa9fb93af146059d76e1f) | Trace durable Off persistence and native barriers through the product audit |
+| [`b4a0441a`](https://github.com/Eabusham2/router-vpn/commit/b4a0441a0036cd553cfeb31e0e2448a41cdceeca) | Retire macOS watchers through owned leases and retain child authority across crashes |
+| [`de48fcad`](https://github.com/Eabusham2/router-vpn/commit/de48fcad8f89ecab6a0ef355ca18a3ec12b1f411) | Corroborate missing macOS executable paths with exact native process state |
+| [`1654929a`](https://github.com/Eabusham2/router-vpn/commit/1654929a7c871db5d34555722313b2d991b038c5) | Abort the owned WFP transaction before independent cleanup readback |
+| [`9b4e5ab5`](https://github.com/Eabusham2/router-vpn/commit/9b4e5ab5224885621a3708eaf6b34c69f1d2f2d6) | Give the captured DNS fixture an actual measurable exchange interval |
+| [`7136e78d`](https://github.com/Eabusham2/router-vpn/commit/7136e78de46525ca4b15d799f593b6f25d0164cc) | Retain the captured profile revision in durable Windows protection records |
+| [`0bb8f06b`](https://github.com/Eabusham2/router-vpn/commit/0bb8f06b12e5275c7881c8742319069906921fa1) | Hold and verify the retained BFE snapshot through durable recovery acknowledgement |
+| [`37750daa`](https://github.com/Eabusham2/router-vpn/commit/37750daaf2b5a161a36c4cf25d1fe982f29c86c6) | Target the normal-release WFP mutation at its actual policy guard |
+| [`9cebe614`](https://github.com/Eabusham2/router-vpn/commit/9cebe6142d51d9575f7bebc86352db2bf77d0334) | Separate controller TLS compilation from bounded native execution |
+| [`8bd3c75e`](https://github.com/Eabusham2/router-vpn/commit/8bd3c75e377aa393d2c0130a22b41f51b07baf8b) | Read the captured native argument array consistently in Windows PowerShell 5.1 |
+| [`db57e64a`](https://github.com/Eabusham2/router-vpn/commit/db57e64a9fceb7d5a9d137ec4228ab540c07e8c1) | Recover intact Windows protection journals through retained process and BFE proofs |
+| [`d9f8bd7d`](https://github.com/Eabusham2/router-vpn/commit/d9f8bd7de4d04e44dd32619fd791a4a001f226b7) | Authenticate complete Shadowsocks datagrams before bounded plaintext reads |
+| [`a20cd717`](https://github.com/Eabusham2/router-vpn/commit/a20cd717fc4ae0fba08fe19862551622046567fb) | Give the restricted Medium fixture an owned readable executable without changing host ACLs |
+| [`3e873649`](https://github.com/Eabusham2/router-vpn/commit/3e873649794e3f692bc9009166f28b971faba05f) | Exercise the current macOS deny guard without redundant fixture masking |
+
+### Windows durable state and restart boundary
+
+Normal release and explicit Off preserve the captured protection target,
+request ownership, original source revision and exact private-profile write.
+Write-through replacement is Windows-specific; the other platform path keeps
+its original file/parent sync rules. Off retries retain the accepted intent
+rather than inventing a new request or claiming success before storage and
+native cleanup finish. Restored nodes keep the saved source identity while
+acquiring a fresh runtime/session identity.
+
+The native retained BFE observer is synchronous through its durable callback.
+A successful callback alone is insufficient: the exact read-only transaction
+must finish successfully, all witnesses must join, and native errors remain
+failures even if comparison bytes were written. Cancellation prevents stale
+admission and Close joins the captured operation. The portable observer suite
+passed seven groups repeatedly under the race detector; three portable
+negative controls were rejected and five native negative controls compiled.
+The actual native step subsequently passed at the exact Windows SHA below.
+
+The intact-journal recovery core has a separate admission boundary. It reads
+only the retained protected store for the authenticated original desktop/Data
+directory; checks a complete process snapshot or retained process creation,
+primary token and exit; never signals a saved PID; and freezes the first
+observed firewall outcome and immutable handover bytes. Ordinary Append still
+cannot change controllers. An observed absence does not resurrect a prior
+baseline, and pending Off retains original/result profile revisions.
+Seventy portable race-test groups (477 cases) and four new portable defects
+passed/rejected as intended; AMD64 and ARM64 native fixtures and three new
+native defects compiled. The protected-file/process fixtures explicitly model
+BFE, while the separate observer tests use real BFE. Public startup adoption
+and recovered-Off private-store reconciliation remain the next app integration
+unit at this cutoff. Torn/unknown peer slots and legacy unbound nonempty
+records are not silently adopted.
+
+### Observed Windows native execution
+
+At [8bd3c75e, run 41147341975, job 124382393376](https://github.com/Eabusham2/router-vpn/actions/runs/41147341975/job/124382393376),
+steps 6–21 passed: protected owner records, retained firewall snapshot and
+callback, pinned controller TLS, owned child/catalog, GUI framing and actual
+PowerShell 5.1/7 pipe transport, original-user GUI Job, C#/PowerShell through
+Go/TLS, installed/Portable Session, socket token/ALE identity, WFP baseline,
+retained TCP cleanup, actual WFP traffic/expiry/process death, ordinary
+external-host/native-wrapper identity, and protection/Portable dispatch.
+The earlier TLS runner, WFP mutation selector and PS5 array-reader failures
+are therefore no longer the blockers at this SHA.
+
+The same job failed step 5, TestWindowsControllerFoundationProtectedShellPrimaryMedium:
+its executable AccessCheck returned denied for 0x1200a9, then the actual Medium
+child failed PinCurrentImage with Access denied. Steps 22 onward were skipped;
+this job is not a successful complete Windows workflow. The fixture repair in
+a20cd717 creates a new exact-byte, read/execute-only copy for the captured user
+under native-registered ProgramData. It changes no existing host ACL and keeps
+the shipping image and protected global-namespace checks. The exact Job joins
+before retained-handle cleanup, including retained delete/disposition state
+on cleanup failure. Both architecture/checkptr builds pass, all 43 source
+records remain bound, and all 29 existing negative controls construct. Actual
+corrected execution is still required.
+
+At [1654929a, run 41145406207](https://github.com/Eabusham2/router-vpn/actions/runs/41145406207),
+both AMD64 and ARM64 bootstrap and actual encrypted Node jobs passed. The
+captured startup jobs (124369208553/124369208703) passed native protection
+succession and reversal after the abort-before-independent-readback fix,
+then failed a fixture that could measure a zero-duration synthetic DNS query.
+9b4e5ab5 adds a cancellable one-millisecond response interval only to that
+fixture. The old coarse-clock fixture failed repeatedly; corrected normal and
+coarse-clock cases and the stale-TUN negative control passed. Neither real
+DNS timings nor production timeout/cancellation policy changed.
+
+### Shadowsocks and broader graph admission
+
+d9f8bd7d fixes a reproduced ordinary Shadowsocks UDP defect in the exact pinned
+native dialer: caller-sized plaintext buffers previously truncated ciphertext
+before authentication. The guard supplies a bounded full datagram buffer,
+returns only authenticated bounded plaintext, retains one physical socket
+close across the cipher wrapper, and joins both I/O directions before releasing
+cipher state. Close failures remain visible.
+
+Actual independent SS2022 peer tests passed under race instrumentation for
+DialContext and ListenPacket at plaintext sizes 1, 32, 1024 and 32768 bytes,
+truncation followed by another intact datagram, wrong-key rejection and clean
+retirement. Replacing the shipping DialContext with the old call compiled and
+failed the exact-size plaintext witness. Three shared guard tests, eight pinned
+preparation tests and the native dependency check passed. The exact upstream
+source hash and both UDP call sites are checked; partial patches are rejected.
+This is ordinary SS UDP evidence, not proof that every Start Layer, graph,
+platform or public admission path is finished. Wider desktop composition is
+still being prepared and tested at this cutoff.
+
+### macOS native evidence and unresolved installation diagnostic
+
+The owned watcher changes in b4a0441a retain generation/lease authority across
+child processes and watcher loss. de48fcad independently corroborates missing
+executable paths through the bounded Darwin BSD process ABI; live ENOENT is
+not accepted as an exited process. Both owned zombie-to-exit and live-unlinked
+negative fixtures pass in native runs.
+
+At [8bd3c75e, macOS run 41147341956](https://github.com/Eabusham2/router-vpn/actions/runs/41147341956),
+PF jobs 124375676364 (Intel) and 124375676649 (ARM) passed the complete native
+baseline, including 130 sequential socket retirements. They then both rejected
+the test harness because the old quick-deny mutant was ineffective: it broke
+only the inner fixture rule, leaving the newer shared production guard intact.
+3e873649 applies a captured paired overlay to exactly three deny statements
+in the real/shared and inner fixture paths. All other UID, tag, label, scope,
+namespace and source bytes stay unchanged. It retains the same required
+native packet-leak witness and all native budgets. Nine runner tests, all 30
+overlay constructions, the original/old/corrected independent Go policy tests
+and both Darwin mutant cross-compiles passed their expected outcomes. The
+corrected actual packet-leak negative must still run. An older socket-30
+failure at de48fcad remains historical intermittent evidence, not this newer
+run's failure.
+
+The independent installer-contract diagnostic still fails on a live process
+whose kernel executable path is unresolved. Observed refusing PIDs differ
+from the two immediately preceding owned native fixtures, which synchronously
+reap their own children. Those passes do not identify the refusing host
+process. The final global scan is a separate diagnostic; the bundled
+installation/upgrade harness uses owned temporary roots and modeled empty
+process/service boundaries. Neither that harness nor a correct refusal is
+whole-host production installation acceptance. Production remains strict.
+
+### Remaining work and release identity
+
+The older full release at 745b3e41 is historical. A newer complete release has
+not been verified by this continuation. Finish app-level restart/pending-Off
+integration, broader actual graph/layer/public admission and native failures,
+then verify the exact same SHA through all requested native packages, server
+images, production compose, manifests/checksums and publication. Keep physical
+path/leak/transition, UI/accessibility, off-LAN Methods, private server controls,
+applicable signing/distribution and authorized deployment acceptance distinct.
+Original optional/feasible requirements retain their qualifications. No private
+router, AdGuard, AI Board/Portainer or signing-environment change is claimed.

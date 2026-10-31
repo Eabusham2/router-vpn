@@ -1,12 +1,100 @@
 # Current implementation status
 
-Updated October 30, 2026 (UTC). This file distinguishes published source,
+Updated October 30, 2026 (America/Chicago). This file distinguishes published source,
 local commits, unfinished integration and remaining delivery evidence. The
 binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation
+## Latest implementation continuation — through 3e873649
+
+The verified publication cutoff is
+[`3e873649794e3f692bc9009166f28b971faba05f`](https://github.com/Eabusham2/router-vpn/commit/3e873649794e3f692bc9009166f28b971faba05f).
+Every completed unit below was committed and pushed directly to `main`, with
+the resulting remote parent, tree and branch checked. The branch may advance.
+The [latest evidence section](CONTINUATION-EVIDENCE-2026-10-30.md#durable-recovery-datagram-and-native-gate-continuation)
+supersedes the older missing-feature and pending-test statements below only
+where it supplies newer evidence. Original scope and qualifications remain in
+the [source reconciliation](RECONCILIATION-2026-10-30-SOURCES.md).
+
+### Published behavior and integration boundaries
+
+- Windows normal disconnect and explicit Off now have durable intent,
+  native cleanup and exact private-profile persistence paths (`b905f138`,
+  `544f53a5`), including write-through replacement (`584f509e`). Journal
+  states retain the captured source profile revision (`7136e78d`). These
+  source implementations must no longer be listed as wholly absent.
+- The retained BFE observer holds the actual read-only firewall transaction
+  through the synchronous durable acknowledgment and rejects loss of that
+  snapshot (`0bb8f06b`). It now has actual Windows execution evidence at
+  `8bd3c75e`, separate from the newer restart core.
+- The intact-journal recovery core (`db57e64a`) independently proves old
+  controller/engine retirement, observes the recorded firewall alternatives,
+  and appends an immutable handover while preserving pending Off revisions.
+  Its 70 portable race-test groups passed, and both native architectures
+  compiled. Application startup adoption and pending-Off restoration are
+  still being integrated at this cutoff; core tests do not prove that public
+  startup uses the new recovery capability. Torn/unknown records and unbound
+  legacy nonempty states remain preserved and unadopted.
+- Shadowsocks ordinary UDP reads now authenticate the complete ciphertext
+  before copying bounded plaintext (`d9f8bd7d`). Actual pinned SS2022 peer
+  tests pass for both shipping dial entry points, exact-size reads,
+  plaintext truncation, subsequent datagram integrity, wrong-key rejection
+  and joined cleanup. The old dial behavior fails the intended regression.
+- macOS watcher lifecycle uses retained generation/lease ownership and
+  keeps child authority across watcher crashes (`b4a0441a`). Missing
+  executable paths require independent native process-state corroboration
+  (`de48fcad`); a live unresolved owner still prevents installation.
+
+Broader owned desktop graph/Start Layer admission and its actual public
+connection entry remain work in progress. Existing compiler projections,
+bounded WG/AWG peer passes, or a safely rejected graph do not establish every
+requested mode, layer, multihop or external-node composition. Source being
+edited locally is not counted as published here.
+
+### New native results and current blockers
+
+At [`8bd3c75e`, Windows job 124382393376](https://github.com/Eabusham2/router-vpn/actions/runs/41147341975/job/124382393376),
+the native retained-snapshot/callback, controller TLS, GUI/pipe composition,
+installed/Portable Session, socket identity, WFP baseline/traffic and ordinary
+external-host/native-wrapper steps passed. The workflow still failed its
+controller-foundation step: the constructed Medium worker could not read the
+elevated compiler's executable. Steps 22 onward were skipped. Published
+`a20cd717` creates only a new private readable fixture executable, preserves
+the actual production image/global-namespace checks, and joins/deletes its
+owned objects by retained handle. AMD64/ARM64 checkptr compilation passed;
+corrected actual Windows execution remains pending.
+
+At `1654929a`, both actual Windows architectures passed native protection
+succession/reversal and encrypted Node jobs. The captured startup jobs then
+failed a zero-duration DNS fixture; `9b4e5ab5` gives that fixture a real
+cancellable exchange interval without changing production measurements.
+Newer complete startup execution remains required.
+
+At `8bd3c75e`, both macOS PF jobs passed the full native baseline, including
+130 sequential socket retirements, then found a stale negative-control
+overlay. `3e873649` targets the current shared deny and redundant fixture deny
+together, preserving the same required packet-leak witness. Nine runner tests
+and both Darwin mutant cross-compiles pass; actual corrected negative-control
+execution remains pending. The earlier socket-30 failure is historical
+intermittent evidence, not the latest observed blocker.
+
+The separate macOS installer diagnostic still encounters an independently
+live process with an unresolved executable path. Owned linked, unlinked and
+zombie/exit fixtures pass, but that does not prove a complete host inventory.
+The bundled install/upgrade harness uses owned temporary roots and modeled
+process/service boundaries; it must not be called whole-host installation
+acceptance. The production refusal has not been relaxed.
+
+There is no verified all-green release of this new continuation. Exact-SHA
+native packages, images, compose, checksums and publication still need to
+converge after the remaining integration and native failures are closed.
+Physical/off-LAN traffic, leaks, transitions, real-device UI/accessibility,
+provider/server controls, applicable signing/distribution and deliberately
+authorized private deployment remain separate acceptance work. No live ASUS,
+AdGuard, AI Board or Portainer change was made by these commits.
+
+## Earlier published continuation — through a4966ca4
 
 The continuation recovered the original requirements and verified the preserved
 source against live `main`. The current verified publication cutoff is
