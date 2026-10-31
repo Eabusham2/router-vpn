@@ -6,7 +6,47 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 5d903f67
+## Latest implementation continuation — through cf8b98e3
+
+The verified source cutoff is
+[`cf8b98e3ea698dd109418c1c0e28eac96d877af3`](https://github.com/Eabusham2/router-vpn/commit/cf8b98e3ea698dd109418c1c0e28eac96d877af3).
+The [October 31 continuation evidence](CONTINUATION-EVIDENCE-2026-10-31.md#continued-source-and-native-verification-through-cf8b98e3)
+records fourteen additional guarded publications and their distinct evidence.
+
+- Requirement recovery again located the original August 11/13 user passages,
+  the historical numbered 1–356 audit and C1–C7, the later product/breakage,
+  map-first, external-node and all-device/Compare corrections. The numbered
+  audit is not misrepresented as 356 verbatim user messages. No shortened
+  handoff, older release or unavailable feature closes the remaining scope.
+- Windows source preparation now preserves exact pinned checkout bytes and
+  compares Cargo cache aliases by file identity. Private PQ preparation uses
+  the system PowerShell security module, verifies the resulting private ACL,
+  and binds native evidence to the exact invoked scripts. Real PowerShell
+  5.1/7 ACL acceptance is mandatory before expensive native tests.
+- Actual Windows AMD64 PQ traffic passed all six WG/AWG/Start Layer cases at
+  `d7d55208`. Wrong-key cases then exposed an inconsistent two-second fixture
+  startup allowance. `cf8b98e3` uses the same existing twelve-second allowance
+  as the positive helper while still requiring actual peer rejection. This
+  correction requires its new native CI result; a timeout is never a pass.
+- Linux now retains its original netlink/namespace baseline capability and
+  exact table handles through native factory admission and joined retirement
+  (`54d92d42`, `17850355`). Real kernel checks and compiled controls passed.
+  Per-session Always succession, authenticated child integration and public
+  Linux activation remain in progress. Local absence of `/dev/net/tun` means
+  the full TUN gate is not claimed as passed.
+- The owned complete-MAX preparation bug is repaired (`a88b4446`): MAX retains
+  its own authenticated Start Layer instead of importing an unrelated separate
+  Shadowsocks profile. Complete MAX/PQ public activation is still separate
+  work, awaiting the corresponding native composition evidence.
+
+The latest observed published prerelease remains `745b3e41`, not this newer
+source. Generic complete-MAX controls, Windows native acceptance, native ALL
+and logical preference/restoration work, Linux activation, the macOS live
+process-inventory boundary, current-SHA release convergence and all applicable
+private/device/signing checks remain open. No deployment or live router change
+was performed for this continuation.
+
+## Earlier implementation continuation — through 5d903f67
 
 The verified source cutoff is
 [`5d903f677c3edbb8ff95cf5e1aeab7978fe04f64`](https://github.com/Eabusham2/router-vpn/commit/5d903f677c3edbb8ff95cf5e1aeab7978fe04f64).
