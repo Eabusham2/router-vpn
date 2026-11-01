@@ -152,7 +152,10 @@ func (f *serverTorClientFixture) serve(w http.ResponseWriter, r *http.Request) {
 			f.sequence++
 			f.lease.Phase = multihoprelay.TorReady
 			capture := f.client.capture(f.lease)
-			response = multihoprelay.TorLeaseStatus{Lease: f.lease, Receipt: multihoprelay.TorReceipt{Schema: 1, SessionID: request.SessionID, OwnerID: f.lease.OwnerID, Peer: request.Peer, SourceSHA256: source.SourceSHA256, RegistrySHA256: f.lease.RegistrySHA256, DNSPolicySHA256: source.DNSPolicySHA256, FrontSHA256: capture.FrontSHA256(), Nonce: nonce, Sequence: f.sequence, HeartbeatAt: time.Now().UnixMilli(), Phase: multihoprelay.TorReady, Bootstrap: 100, FrontReady: true, TrafficAllowed: true, ExitIP: "198.51.100.80", IsTor: true, DNSProven: true, ProofAt: time.Now().UnixMilli()}}
+			// One fixture observation keeps proof at or before its heartbeat,
+			// including when the wall clock crosses a millisecond boundary.
+			observed := time.Now().UnixMilli()
+			response = multihoprelay.TorLeaseStatus{Lease: f.lease, Receipt: multihoprelay.TorReceipt{Schema: 1, SessionID: request.SessionID, OwnerID: f.lease.OwnerID, Peer: request.Peer, SourceSHA256: source.SourceSHA256, RegistrySHA256: f.lease.RegistrySHA256, DNSPolicySHA256: source.DNSPolicySHA256, FrontSHA256: capture.FrontSHA256(), Nonce: nonce, Sequence: f.sequence, HeartbeatAt: observed, Phase: multihoprelay.TorReady, Bootstrap: 100, FrontReady: true, TrafficAllowed: true, ExitIP: "198.51.100.80", IsTor: true, DNSProven: true, ProofAt: observed}}
 		case http.MethodDelete:
 			if f.deleteFail {
 				http.Error(w, "cleanup pending", 503)

@@ -382,7 +382,10 @@ func (f *mobileServerNativeFixture) api(connection net.Conn) error {
 		f.sequence++
 		f.lease.Phase = multihoprelay.TorReady
 		capture := multihoprelay.TorCapture{Schema: 1, Request: captured, Source: source, RegistrySHA256: f.lease.RegistrySHA256, OwnerID: f.lease.OwnerID, Peer: captured.Peer, Host: f.lease.Host, Port: f.lease.Port, Username: f.lease.Username, Password: f.lease.Password, BootstrapDeadline: f.lease.BootstrapDeadline}
-		receipt := multihoprelay.TorReceipt{Schema: 1, SessionID: captured.SessionID, OwnerID: f.lease.OwnerID, Peer: captured.Peer, SourceSHA256: source.SourceSHA256, RegistrySHA256: f.lease.RegistrySHA256, DNSPolicySHA256: source.DNSPolicySHA256, FrontSHA256: capture.FrontSHA256(), Nonce: nonce, Sequence: f.sequence, HeartbeatAt: time.Now().UnixMilli(), Phase: multihoprelay.TorReady, Bootstrap: 100, FrontReady: true, TrafficAllowed: true, ExitIP: "198.51.100.77", IsTor: true, DNSProven: true, ProofAt: time.Now().UnixMilli()}
+		// One fixture observation keeps proof at or before its heartbeat,
+		// including when the wall clock crosses a millisecond boundary.
+		observed := time.Now().UnixMilli()
+		receipt := multihoprelay.TorReceipt{Schema: 1, SessionID: captured.SessionID, OwnerID: f.lease.OwnerID, Peer: captured.Peer, SourceSHA256: source.SourceSHA256, RegistrySHA256: f.lease.RegistrySHA256, DNSPolicySHA256: source.DNSPolicySHA256, FrontSHA256: capture.FrontSHA256(), Nonce: nonce, Sequence: f.sequence, HeartbeatAt: observed, Phase: multihoprelay.TorReady, Bootstrap: 100, FrontReady: true, TrafficAllowed: true, ExitIP: "198.51.100.77", IsTor: true, DNSProven: true, ProofAt: observed}
 		if padding := policy.Padding(); padding.Enabled {
 			// The remote worker is the explicit fixture boundary. Native Tor C
 			// accounting is proved separately by its encoder/child/image gates.

@@ -46,6 +46,12 @@ func TestTorNativeReceiptRequiresExactPrivateOwnerAndRealProof(t *testing.T) {
 		"missing-exit":       func(r *TorReceipt) { r.ExitIP = "" },
 		"stale-proof":        func(r *TorReceipt) { r.ProofAt = now.Add(-31 * time.Second).UnixMilli() },
 		"future-proof":       func(r *TorReceipt) { r.ProofAt = now.Add(time.Second).UnixMilli() },
+		"proof-after-heartbeat": func(r *TorReceipt) {
+			// Both observations are in the past. Freshness alone must not
+			// admit a proof reported after its own containing heartbeat.
+			r.HeartbeatAt = now.Add(-10 * time.Millisecond).UnixMilli()
+			r.ProofAt = r.HeartbeatAt + 1
+		},
 		"missing-proof-time": func(r *TorReceipt) { r.ProofAt = 0 },
 		"not-bootstrapped":   func(r *TorReceipt) { r.Bootstrap = 99 },
 		"unopened-front":     func(r *TorReceipt) { r.TrafficAllowed = false },
