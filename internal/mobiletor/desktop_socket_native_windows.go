@@ -109,11 +109,13 @@ func desktopSocketNativeRaw(source DesktopSocketNative, network string, address 
 		kind, protocol = syscall.SOCK_DGRAM, syscall.IPPROTO_UDP
 	}
 	var result error
+	stage := "source raw control"
 	err = raw.Control(func(handle uintptr) {
 		fd := syscall.Handle(handle)
 		var info syscall.WSAProtocolInfo
 		size := int32(unsafe.Sizeof(info))
 		const protocolInfoW = 0x2005
+		stage = "protocol information readback"
 		if result = syscall.Getsockopt(fd, syscall.SOL_SOCKET, protocolInfoW, (*byte)(unsafe.Pointer(&info)), &size); result != nil {
 			return
 		}
@@ -126,24 +128,29 @@ func desktopSocketNativeRaw(source DesktopSocketNative, network string, address 
 		// SOCK_DGRAM/IPPROTO_UDP for a packet source; it cannot be a TCP listener.
 		// An unknown TCP listener state still fails rather than ignoring errors.
 		if network == "tcp" {
+			stage = "listener-state readback"
 			listening, readErr := syscall.GetsockoptInt(fd, syscall.SOL_SOCKET, 0x0002 /* SO_ACCEPTCONN */)
 			if readErr != nil || listening != 0 {
 				result = errors.Join(readErr, errors.New("Windows socket creator supplied a listener or unproved listening state"))
 				return
 			}
 		}
+		stage = "unbound local readback"
 		if _, readErr := syscall.Getsockname(fd); !errors.Is(readErr, syscall.Errno(10022) /* WSAEINVAL */) {
 			result = errors.New("Windows socket creator already bound a tuple")
 			return
 		}
+		stage = "unconnected peer readback"
 		if _, readErr := syscall.Getpeername(fd); !errors.Is(readErr, desktopSocketNotConnected) && !errors.Is(readErr, syscall.Errno(10022) /* WSAEINVAL */) {
 			result = errors.New("Windows socket creator connected before permission acknowledgment")
 			return
 		}
 		if family == syscall.AF_INET6 {
+			stage = "IPv6-only configuration"
 			if result = syscall.SetsockoptInt(fd, syscall.IPPROTO_IPV6, syscall.IPV6_V6ONLY, 1); result != nil {
 				return
 			}
+			stage = "IPv6-only readback"
 			only, readErr := syscall.GetsockoptInt(fd, syscall.IPPROTO_IPV6, syscall.IPV6_V6ONLY)
 			if readErr != nil || only != 1 {
 				result = errors.Join(readErr, errors.New("Windows source socket lost its exact IPv6 family"))
@@ -156,16 +163,18 @@ func desktopSocketNativeRaw(source DesktopSocketNative, network string, address 
 			// This changes error delivery only; every destination still requires
 			// its separately acknowledged physical permit before any datagram.
 			var disabled, returned uint32
+			stage = "UDP ICMP error configuration"
 			if result = syscall.WSAIoctl(fd, syscall.SIO_UDP_CONNRESET, (*byte)(unsafe.Pointer(&disabled)), uint32(unsafe.Sizeof(disabled)), nil, 0, &returned, nil, 0); result != nil {
 				return
 			}
 		}
+		stage = "noninheritable source handle"
 		if result = syscall.SetHandleInformation(fd, syscall.HANDLE_FLAG_INHERIT, 0); result != nil {
 			return
 		}
 	})
 	if err != nil || result != nil {
-		return nil, "", errors.Join(err, result)
+		return nil, "", fmt.Errorf("Windows %s %s: %w", actual, stage, errors.Join(err, result))
 	}
 	return raw, actual, nil
 }
@@ -249,41 +258,49 @@ func desktopSocketImportNativeTCPWithConnect(ctx context.Context, network string
 func desktopSocketImportNativePacket(ctx context.Context, network string, source DesktopSocketNative, local netip.Addr, control func(string, string, syscall.RawConn) error) (net.PacketConn, error) {
 	raw, actual, err := desktopSocketNativeRaw(source, "udp", local)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Windows UDP source validation: %w", err)
 	}
 	if ctx == nil || ctx.Err() != nil || control == nil || (network != "udp" && network != actual) {
 		return nil, net.ErrClosed
 	}
 	if err := control(actual, netip.AddrPortFrom(local, 0).String(), raw); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("Windows UDP captured bind control: %w", err)
 	}
 	var keeper *desktopSocketKeeper
 	var bound netip.AddrPort
 	var result error
+	stage := "bound source raw control"
 	err = raw.Control(func(handle uintptr) {
 		fd := syscall.Handle(handle)
 		var target syscall.Sockaddr = &syscall.SockaddrInet6{Addr: local.As16()}
 		if local.Is4() {
 			target = &syscall.SockaddrInet4{Addr: local.As4()}
 		}
+		stage = "socket bind"
 		if result = syscall.Bind(fd, target); result != nil {
 			return
 		}
+		stage = "bound local readback"
 		bound, result = desktopSocketLocal(fd)
 		if result != nil {
 			return
 		}
+		stage = "I/O descriptor duplication"
 		keeper, result = desktopSocketDuplicate(fd)
 	})
+	setupErr := errors.Join(err, result)
+	if setupErr != nil {
+		setupErr = fmt.Errorf("Windows UDP %s: %w", stage, setupErr)
+	}
 	if keeper == nil {
-		return nil, errors.Join(err, result)
+		return nil, setupErr
 	}
 	c := &desktopWindowsPacket{desktopWindowsSocket: &desktopWindowsSocket{handle: keeper.handle, local: bound}}
 	if err != nil || result != nil || ctx.Err() != nil {
-		return c, errors.Join(err, result, ctx.Err())
+		return c, errors.Join(setupErr, ctx.Err())
 	}
 	if err := desktopSocketNonblocking(c.handle); err != nil {
-		return c, err
+		return c, fmt.Errorf("Windows UDP nonblocking I/O configuration: %w", err)
 	}
 	return c, nil
 }

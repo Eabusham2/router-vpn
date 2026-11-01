@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"os"
@@ -464,19 +465,22 @@ func (b *DesktopSocketBroker) openPacket(ctx context.Context, network string, re
 		}
 	}()
 	if err := s.prepare(operation); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("desktop UDP source selection: %w", err)
 	}
 	if err := s.create(operation); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("desktop UDP source creation: %w", err)
 	}
 	listener := net.ListenConfig{Control: func(actualNetwork, _ string, raw syscall.RawConn) error {
 		if operation.Err() != nil || !b.Current() {
 			return net.ErrClosed
 		}
 		if err := b.policy.Bind(operation, b.capture, s.binding, actualNetwork, raw); err != nil {
-			return err
+			return fmt.Errorf("desktop UDP captured policy binding: %w", err)
 		}
-		return desktopSocketExclusive(raw)
+		if err := desktopSocketExclusive(raw); err != nil {
+			return fmt.Errorf("desktop UDP exclusive bind control: %w", err)
+		}
+		return nil
 	}}
 	var packet net.PacketConn
 	if b.source == nil {
@@ -490,7 +494,7 @@ func (b *DesktopSocketBroker) openPacket(ctx context.Context, network string, re
 	s.packet = packet
 	s.mu.Unlock()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("desktop UDP packet import: %w", err)
 	}
 	raw, ok := packet.(syscall.Conn)
 	if !ok {
@@ -498,18 +502,18 @@ func (b *DesktopSocketBroker) openPacket(ctx context.Context, network string, re
 	}
 	control, err := raw.SyscallConn()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("desktop UDP imported raw owner: %w", err)
 	}
 	keeper, local, err := desktopSocketRetain(control)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("desktop UDP retained handle and local readback: %w", err)
 	}
 	s.mu.Lock()
 	s.keeper, s.local = keeper, local
 	s.mu.Unlock()
 	if connected {
 		if _, err := s.permit(operation, remote); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("desktop UDP initial peer grant: %w", err)
 		}
 	}
 	if operation.Err() != nil || ctx.Err() != nil || !s.live() || (connected && !s.allowed(remote)) || local.Addr() != s.binding.LocalAddress || packet.LocalAddr().String() != local.String() {

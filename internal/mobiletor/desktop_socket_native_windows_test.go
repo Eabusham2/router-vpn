@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -282,6 +283,71 @@ func TestDesktopSocketWindowsNativeRejectsChangedCreationAndBoundSources(t *test
 			}
 		})
 	}
+	for _, stage := range []string{"source validation", "captured bind control", "socket bind"} {
+		t.Run("udp-"+stage, func(t *testing.T) {
+			source, err := desktopWindowsNativeTestSocket("udp", true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = source.Close() })
+			original, err := source.SyscallConn()
+			if err != nil {
+				t.Fatal(err)
+			}
+			failure := syscall.Errno(10022) // WSAEINVAL, including the real duplicate-bind control.
+			imported := source
+			if stage == "source validation" {
+				imported = desktopWindowsUDPErrorSource{DesktopSocketNative: source, failure: failure}
+			}
+			controls := 0
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			packet, err := desktopSocketImportNativePacket(ctx, "udp4", imported, netip.MustParseAddr("127.0.0.1"), func(_, _ string, raw syscall.RawConn) error {
+				controls++
+				if stage == "captured bind control" {
+					return failure
+				}
+				var bound error
+				if err := raw.Control(func(handle uintptr) {
+					bound = syscall.Bind(syscall.Handle(handle), &syscall.SockaddrInet4{Addr: [4]byte{127, 0, 0, 1}})
+				}); err != nil || bound != nil {
+					t.Fatal("UDP duplicate-bind control lacked its real retained bind", err, bound)
+				}
+				return nil
+			})
+			if packet != nil {
+				_ = packet.Close()
+			}
+			if packet != nil || !errors.Is(err, failure) || !strings.Contains(err.Error(), "Windows UDP "+stage+":") {
+				t.Fatal("native UDP failure lost its exact stage, Winsock cause or closed admission", stage, err)
+			}
+			expectedControls := 1
+			if stage == "source validation" {
+				expectedControls = 0
+			}
+			if controls != expectedControls {
+				t.Fatal("failed UDP source crossed an unadmitted bind control", stage, controls)
+			}
+			var localError error
+			if err := original.Control(func(handle uintptr) {
+				_, localError = syscall.Getsockname(syscall.Handle(handle))
+			}); err != nil {
+				t.Fatal("UDP diagnostic failure closed its separately retained source", err)
+			}
+			if stage == "socket bind" && localError != nil || stage != "socket bind" && !errors.Is(localError, failure) {
+				t.Fatal("UDP diagnostic failure changed the original bound/unbound state", stage, localError)
+			}
+		})
+	}
+}
+
+type desktopWindowsUDPErrorSource struct {
+	DesktopSocketNative
+	failure error
+}
+
+func (source desktopWindowsUDPErrorSource) SyscallConn() (syscall.RawConn, error) {
+	return nil, source.failure
 }
 
 func TestDesktopSocketWindowsNativeCancellationJoinsEnteredRead(t *testing.T) {

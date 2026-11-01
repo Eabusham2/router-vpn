@@ -210,6 +210,85 @@ func (p *desktopSocketPolicyFixture) Bind(ctx context.Context, _ DesktopSocketCa
 	p.bindCount.Add(1)
 	return nil
 }
+
+type desktopSocketUDPErrorFixture struct {
+	*desktopSocketPolicyFixture
+	stage   string
+	failure error
+}
+
+func (p *desktopSocketUDPErrorFixture) Select(ctx context.Context, capture DesktopSocketCapture, network string, hint netip.AddrPort) (DesktopSocketBinding, error) {
+	if p.stage == "source selection" {
+		return DesktopSocketBinding{}, p.failure
+	}
+	return p.desktopSocketPolicyFixture.Select(ctx, capture, network, hint)
+}
+
+func (p *desktopSocketUDPErrorFixture) Bind(ctx context.Context, capture DesktopSocketCapture, binding DesktopSocketBinding, network string, raw syscall.RawConn) error {
+	if p.stage == "captured policy binding" {
+		return p.failure
+	}
+	return p.desktopSocketPolicyFixture.Bind(ctx, capture, binding, network, raw)
+}
+
+func (p *desktopSocketUDPErrorFixture) Grant(ctx context.Context, grant DesktopSocketGrant) (DesktopSocketReceipt, error) {
+	receipt, err := p.desktopSocketPolicyFixture.Grant(ctx, grant)
+	if p.stage == "initial peer grant" {
+		return receipt, errors.Join(err, p.failure)
+	}
+	return receipt, err
+}
+
+func TestDesktopSocketUDPFailureContextRetainsCauseAndCleanup(t *testing.T) {
+	for _, stage := range []string{"source selection", "captured policy binding", "initial peer grant"} {
+		for _, cause := range []struct {
+			name string
+			err  error
+		}{{"native-invalid-argument", syscall.Errno(10022)}, {"cancelled", context.Canceled}, {"deadline", context.DeadlineExceeded}} {
+			t.Run(stage+"/"+cause.name, func(t *testing.T) {
+				peer, err := net.ListenPacket("udp4", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = peer.Close() })
+				policy := &desktopSocketUDPErrorFixture{desktopSocketPolicyFixture: desktopSocketFixturePolicy(), stage: stage, failure: cause.err}
+				broker, err := NewDesktopSocketBroker(context.Background(), desktopSocketFixtureCapture(), policy, func() bool { return true })
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer cancel()
+					if err := broker.Close(ctx); err != nil {
+						t.Error("failed UDP diagnostic operation did not join its original owner", err)
+					}
+				})
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				connection, err := broker.DialContext(ctx, "udp4", peer.LocalAddr().String())
+				if connection != nil {
+					_ = connection.Close()
+				}
+				if connection != nil || !errors.Is(err, cause.err) || !strings.Contains(err.Error(), "desktop UDP "+stage+":") {
+					t.Fatal("UDP failure lost its captured stage, original cause or closed admission", stage, cause.name, err)
+				}
+				if err := broker.Close(ctx); err != nil || policy.count() != 0 {
+					t.Fatal("UDP failure retained a grant or unjoined socket", stage, err)
+				}
+				if err := peer.SetReadDeadline(time.Now().Add(25 * time.Millisecond)); err != nil {
+					t.Fatal(err)
+				}
+				var payload [1]byte
+				_, _, err = peer.ReadFrom(payload[:])
+				var networkError net.Error
+				if !errors.As(err, &networkError) || !networkError.Timeout() {
+					t.Fatal("failed UDP admission sent bytes or lost its retained peer", stage, err)
+				}
+			})
+		}
+	}
+}
+
 func desktopSocketFixtureKey(q DesktopSocketGrant) string {
 	return q.Capture.SessionID + "|" + q.Capture.NetworkID + "|" + q.SocketID + "|" + q.Remote.String()
 }

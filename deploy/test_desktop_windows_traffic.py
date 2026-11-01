@@ -29,7 +29,9 @@ REQUIRED = (
     "TestDesktopSocketWindowsWFPOwnedTrafficAndRenewal",
     "TestDesktopSocketWindowsWFPBlockedControlRetainsEnteredIO",
     "TestDesktopSocketWindowsWFPActualProcessDeath",
+    "TestDesktopSocketWindowsNativeRejectsChangedCreationAndBoundSources",
 )
+NATIVE_UDP_FAILURE_CASES = ("source_validation", "captured_bind_control", "socket_bind")
 
 
 def mutants(target):
@@ -80,6 +82,9 @@ def execute(source=ROOT, go="go", *, env=None):
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if status or "--- SKIP:" in output or any("--- PASS: " + name + " (" not in output for name in REQUIRED):
             raise ValueError("WFP traffic did not execute every actual native proof")
+        for stage in NATIVE_UDP_FAILURE_CASES:
+            if "--- PASS: TestDesktopSocketWindowsNativeRejectsChangedCreationAndBoundSources/udp-" + stage + " (" not in output:
+                raise ValueError("WFP traffic omitted a native UDP error-context and ownership control: " + stage)
         for network in ("tcp4", "tcp6", "udp4", "udp6"):
             if "--- PASS: " + REQUIRED[4] + "/" + network + " (" not in output:
                 raise ValueError("WFP traffic omitted a required actual address/transport family: " + network)
