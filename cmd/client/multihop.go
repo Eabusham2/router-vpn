@@ -414,9 +414,11 @@ func (a *app) multihopConnect(w http.ResponseWriter, r *http.Request) {
 	a.state.Connected = true
 	a.state.Phase = "connected"
 	a.state.LastError = ""
+	usedAt := time.Now().UTC().Format(time.RFC3339)
 	for i := range a.profiles.Profiles {
 		if a.profiles.Profiles[i].ID == sel.Entry.ID || a.profiles.Profiles[i].ID == sel.Exit.ID {
 			a.profiles.Profiles[i].UseCount++
+			a.profiles.Profiles[i].LastUsedAt = usedAt
 		}
 	}
 	persistErr := a.persistProfilesLocked()

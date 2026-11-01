@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"time"
 
 	"router-vpn/internal/common"
 )
@@ -82,7 +83,7 @@ func (a *app) platformStandardExitConnect(w http.ResponseWriter, r *http.Request
 	}
 	a.mu.Lock(); if a.cmd != cmd { a.mu.Unlock(); sessionTrackerFor(a).markRequestFailure("standard exit runtime changed during proof"); http.Error(w, "standard exit runtime changed during proof", http.StatusConflict); return }
 	previousStore := cloneRouterProfileStore(a.profiles); a.state.Connected = true; a.state.Phase = "connected"; a.state.LastError = ""
-	if !q.Direct { for i := range a.profiles.Profiles { if a.profiles.Profiles[i].ID == entry.ID { a.profiles.Profiles[i].UseCount++ } } }
+	if !q.Direct { usedAt := time.Now().UTC().Format(time.RFC3339); for i := range a.profiles.Profiles { if a.profiles.Profiles[i].ID == entry.ID { a.profiles.Profiles[i].UseCount++; a.profiles.Profiles[i].LastUsedAt = usedAt } } }
 	persistErr := a.persistProfilesLocked(); if persistErr != nil { a.rollbackProfilesLocked(previousStore) }; a.mu.Unlock()
 	if persistErr != nil {
 		message, cleanupFailed := a.standardExitStopFailure(cmd, "platform standard-exit usage persistence failed: "+persistErr.Error()); if !cleanupFailed { message += "; runtime was torn down" }; sessionTrackerFor(a).markRequestFailure(message); http.Error(w, message, http.StatusInternalServerError); return

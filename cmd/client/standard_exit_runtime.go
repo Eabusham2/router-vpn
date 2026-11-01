@@ -539,9 +539,11 @@ func (a *app) standardExitConnect(w http.ResponseWriter, r *http.Request) {
 	a.state.Phase = "connected"
 	a.state.LastError = ""
 	if !q.Direct {
+		usedAt := time.Now().UTC().Format(time.RFC3339)
 		for i := range a.profiles.Profiles {
 			if a.profiles.Profiles[i].ID == entry.ID {
 				a.profiles.Profiles[i].UseCount++
+				a.profiles.Profiles[i].LastUsedAt = usedAt
 			}
 		}
 	}
