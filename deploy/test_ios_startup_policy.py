@@ -3,8 +3,11 @@
 
 Models, snapshots, startup selection, external preference/configuration handoff,
 and Settings load/save are shipping Swift. NetworkExtension, private-store
-publication and native proof completion are declared boundaries. This does not
-start a VPN or claim physical device, background or device-boot acceptance.
+publication, native proof completion and optional usage history are declared
+boundaries. The complete production usage owner/store composition executes in
+test_ios_owned_strategy_app.py; this fixture records its call intent without
+inventing a proved usage owner or changing the separate Last-choice store.
+This does not start a VPN or claim physical device, background or boot acceptance.
 """
 from pathlib import Path
 import argparse
@@ -103,12 +106,16 @@ enum IOSDNSRuntimePolicy {
  // SELECTED_PROFILE
 }
 private struct IOSLastRuntime:Codable {let routerID:String,rawProfileID:String,logicalModeID:String}
+// This uninhabited receipt cannot authorize optional history. The startup
+// fixture owns no real native status/proof from which to derive that authority.
+enum FixtureOptionalUsageOwner {}
 @MainActor final class RouterVPNModel {
  var bundle:ClientBundle?,entry:ClientBundle?
  var connected=false,tunnelTransitioning=false,iosUserDisconnectInProgress=false
  var profileMutationBlocked:Bool{connected || tunnelTransitioning || iosUserDisconnectInProgress}
  var iosConnectGeneration=UUID(),message="",auto=false,activeRawProfile="",activeEngine="libbox",imports=0,failImport=false
  var routerDispatches:[String]=[]
+ var usageCaptureCalls=0,usageHistoryIntents:[Bool]=[]
  var routerHook:(()async->Void)?
  let iosStartupPolicy=IOSStartupPolicy(),iosSpeedLabOwnership=IOSSpeedLabOwnership()
  var iosStrategyProfile:RouterProfile?{selectedNodeProfile}
@@ -120,6 +127,15 @@ private struct IOSLastRuntime:Codable {let routerID:String,rawProfileID:String,l
   iosConnectGeneration=UUID();IOSSpeedLabContext.startupClaimed?(iosConnectGeneration);await routerHook?();return false
  }
  func recordIOSLastRuntime(){}
+ func captureIOSNodeUsageOwner(_ manager:NETunnelProviderManager)->FixtureOptionalUsageOwner? {
+  usageCaptureCalls+=1;return nil
+ }
+ func recordIOSNodeUsage(manager:NETunnelProviderManager,source:ClientBundle,generation:UUID,
+                         expected:FixtureOptionalUsageOwner?,startup:Bool=false) {
+  // Observe the shipping caller's startup/manual intent only. No history is
+  // persisted and no source, preference, connection or Last-choice is changed.
+  usageHistoryIntents.append(startup)
+ }
  func refreshTunnelStatus()async {
   connected=NETunnelProviderManager.instances.contains{$0.connection.status == .connected}
   tunnelTransitioning=false
@@ -182,6 +198,7 @@ TESTS = r'''
     let m=model(p),before=try encoded(m.bundle!)
     await m.applyIOSStartupPolicyIfNeeded()
     try check("external startup dispatch "+kind+" "+choice,NETunnelProviderManager.starts==1 && m.routerDispatches.isEmpty && m.connected)
+    try check("startup preserves its optional-history exclusion",m.usageCaptureCalls==1 && m.usageHistoryIntents==[true])
     try check("startup did not rewrite saved policy or private assets",try encoded(m.bundle!)==before && m.imports==0)
     let manager=NETunnelProviderManager.instances[0],proto=manager.protocolConfiguration as! NETunnelProviderProtocol
     let saved=try JSONDecoder().decode(ClientBundle.self,from:proto.providerConfiguration!["bundle"] as! Data)
@@ -211,6 +228,7 @@ TESTS = r'''
   for choice in ["smart-auto","auto","last","manual"] {for enabled in [false,true] where !enabled || choice=="manual" {
    var p=profile();p.startupMode=choice;p.autoConnect=enabled;let m=model(p);await m.applyIOSStartupPolicyIfNeeded()
    try check("Off or Manual makes no VPN preference request",NETunnelProviderManager.loads==0 && NETunnelProviderManager.starts==0)
+   try check("disabled startup cannot request optional history",m.usageCaptureCalls==0 && m.usageHistoryIntents.isEmpty)
   }}
   var bad=profile();bad.startupMode="invented";let m=model(bad);await m.applyIOSStartupPolicyIfNeeded()
   try check("unknown startup cannot become another choice",NETunnelProviderManager.loads==0 && m.message.contains("invalid"))
@@ -332,6 +350,7 @@ TESTS = r'''
   IOSPrivateJSONStore.value=nil;IOSMTUControl.hook=nil;IOSMTUControl.winner="server"
   var p=profile();p.startupMode="manual";p.autoConnect=false
   let first=model(p);attachEntry(first,execution:"auto");await first.connectSelectedExternal()
+  try check("explicit Connect preserves manual optional-history intent",first.usageCaptureCalls==1 && first.usageHistoryIntents==[false])
   guard let remembered=IOSPrivateJSONStore.value else{throw NSError(domain:"StartupFixture",code:1,userInfo:[NSLocalizedDescriptionKey:"manual proved Compare records Last choice"])}
   let text=String(decoding:remembered,as:UTF8.self),object=try JSONSerialization.jsonObject(with:remembered) as! [String:Any]
   let records=object["records"] as! [[String:Any]]

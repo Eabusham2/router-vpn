@@ -35,6 +35,7 @@ TESTS = r'''
     try check("quick protection preserves the independent entry",try m.entry.map(encoded)==entryBefore)
     await m.connectSelectedExternal()
     try check("saved external protection reaches native Connect",NETunnelProviderManager.starts==1 && m.connected)
+    try check("quick protection keeps explicit Connect history intent",m.usageCaptureCalls==1 && m.usageHistoryIntents==[false])
     let manager=NETunnelProviderManager.instances[0],proto=manager.protocolConfiguration as! NETunnelProviderProtocol
     let strict=enabled || shape=="paired-strict"
     try check("quick protection enforces actual native route lockdown",proto.includeAllNetworks==strict && proto.enforceRoutes==strict && manager.isOnDemandEnabled==strict && !proto.excludeLocalNetworks)
