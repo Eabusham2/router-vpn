@@ -48,6 +48,18 @@ const nodeMAXWFPProbePrefix = "routervpn-complete-max-owned-marker/"
 var nodeMAXWFPModes = []string{"max-quic-wg", "max-quic-awg", "max-tls-wg", "max-tls-awg"}
 var nodeMAXWFPLayers = []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"}
 
+// Keep the private reply pipe separate from Go's test failure report. M.Run
+// captures os.Stdout for test diagnostics; changing it inside the test is too
+// late and can turn an actual reference error into an opaque JSON parse error.
+var nodeMAXWFPReplyOutput = os.Stdout
+
+func TestMain(m *testing.M) {
+	if os.Getenv("ROUTERVPN_NODE_MAX_WFP_REFERENCE_CHILD") != "" {
+		os.Stdout = os.Stderr
+	}
+	os.Exit(m.Run())
+}
+
 func nodeMAXWFPReadLine(reader *bufio.Reader, maximum int) ([]byte, error) {
 	var result []byte
 	for {
@@ -439,7 +451,7 @@ func TestRouterVPNDesktopNodeWindowsMAXReferenceProcess(t *testing.T) {
 		if err != nil || len(encoded)+1 > nodeMAXWFPLimit {
 			t.Fatal("MAX reply exceeded its captured bound", err)
 		}
-		if _, err = os.Stdout.Write(append(encoded, '\n')); err != nil {
+		if _, err = nodeMAXWFPReplyOutput.Write(append(encoded, '\n')); err != nil {
 			t.Fatal("MAX reference lost its private reply channel", err)
 		}
 		clear(encoded)
@@ -1224,6 +1236,7 @@ func TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor(t *testing.T) {
 }
 
 func TestRouterVPNDesktopNodeWindowsMAXMarkers(t *testing.T) {
+	t.Run("reference-failure-channel", nodeMAXWFPReferenceFailureChannel)
 	t.Run("marker-and-authentication", nodeMAXWFPMarkerAuthentication)
 	t.Run("packet-authentication", nodeMAXWFPSSPacketAuthentication)
 	t.Run("bounded-input", func(t *testing.T) {
@@ -1327,6 +1340,26 @@ func TestRouterVPNDesktopNodeWindowsMAXMarkers(t *testing.T) {
 			t.Fatal("MAX armed marker lost its exact echo or joined observation", writeErr, readErr, joined, countErr)
 		}
 	})
+}
+
+func nodeMAXWFPReferenceFailureChannel(t *testing.T) {
+	t.Helper()
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, binary, "-test.run=^TestRouterVPNDesktopNodeWindowsMAXReferenceProcess$", "-test.count=1", "-test.timeout=8s")
+	command.Env = append(os.Environ(), "ROUTERVPN_NODE_MAX_WFP_REFERENCE_CHILD=1")
+	command.Stdin = strings.NewReader("{\n")
+	var protocol, diagnostic bytes.Buffer
+	command.Stdout, command.Stderr = &protocol, &diagnostic
+	err = command.Run()
+	var exit *exec.ExitError
+	if ctx.Err() != nil || !errors.As(err, &exit) || exit.ExitCode() != 1 || protocol.Len() != 0 || !strings.Contains(diagnostic.String(), "MAX reference input is not its captured request") {
+		t.Fatalf("MAX failed reference lost its strict protocol or original diagnostic: exit=%v protocol=%d diagnostic=%q", err, protocol.Len(), diagnostic.String())
+	}
 }
 
 func nodeMAXWFPMarkerAuthentication(t *testing.T) {
