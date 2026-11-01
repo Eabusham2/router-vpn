@@ -6,11 +6,38 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 06a65417
+## Latest implementation continuation — through 60de6b39
+
+The independently verified published source cutoff is
+[`60de6b396f7078c09204c327a50e8ca90128fa3b`](https://github.com/Eabusham2/router-vpn/commit/60de6b396f7078c09204c327a50e8ca90128fa3b).
+[Current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-60de6b39)
+records the retained Linux Hysteria2 implementation and Tor test-receipt repair.
+
+- Linux Hysteria2/Off now uses the retained native controller, exact original
+  transport/auth/trust, selected DNS, physical UDP ownership and sealed restore.
+  Actual encrypted peer and ownership tests pass. The installed gate now has
+  63 required scenarios; it compiles but its completed native execution remains
+  separate. Broader retained graphs and nonempty/legacy recovery remain work.
+- The generated six-case Linux TUN gate passed on AMD64 and ARM64 at both
+  06a65417 and 26b294e9, closing the source-copy blocker for that gate. The full
+  installed-runtime builds at 26b294e9 were still running at this read.
+- Tor test receipts now use one heartbeat/proof observation and explicitly
+  reject reversed timestamps. The unchanged validator passed actual mobile
+  native Server Tor 28 subcases and desktop eight groups/21 subcases under race.
+  Exact-SHA APK/native reruns and public-network/device acceptance remain open.
+- Both mobile selected external fifty-sample paths are published. Their actual
+  all-node/Fastest comparison is being implemented and is outside this cutoff.
+  Router TCP and routed HTTPS history remain separate measurements.
+- Fresh macOS first/legacy inventory still fails on both architectures; ARM64
+  managed inventory passes, while Intel CodeDirectory capture still fails.
+  Full Windows gates, signing, release, private deployment and physical-device
+  acceptance remain unproved. Stopped PQ work is preserved and excluded.
+
+## Earlier implementation continuation — through 06a65417
 
 The independently verified published source cutoff is
 [`06a65417b09f993f98fde5efe3a9a5bea85e418c`](https://github.com/Eabusham2/router-vpn/commit/06a65417b09f993f98fde5efe3a9a5bea85e418c).
-[Current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-06a65417)
+[Earlier continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#earlier-source-and-native-evidence-through-06a65417)
 records five further source units and their separate native outcomes.
 
 - Both mobile apps now measure fifty routed HTTPS responses on the selected

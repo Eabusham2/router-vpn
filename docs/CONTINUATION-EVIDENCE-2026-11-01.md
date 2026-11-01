@@ -3,7 +3,7 @@
 This continues [October 31](CONTINUATION-EVIDENCE-2026-10-31.md), preserves
 [the reconciled requirement authority](REQUIREMENTS-RECONCILED.md), and records
 published source through
-[`06a65417b09f993f98fde5efe3a9a5bea85e418c`](https://github.com/Eabusham2/router-vpn/commit/06a65417b09f993f98fde5efe3a9a5bea85e418c).
+[`60de6b396f7078c09204c327a50e8ca90128fa3b`](https://github.com/Eabusham2/router-vpn/commit/60de6b396f7078c09204c327a50e8ca90128fa3b).
 The live `main` reference was independently read after publication. Later local
 work is not included in this source cutoff. Original requirements, C1–C7,
 the later product/breakage, map-first, external-node and all-device corrections
@@ -14,7 +14,51 @@ Native evidence below keeps its own exact source identity. The retained
 historical observations are not silently reassigned to this newer cutoff,
 and unrelated passing jobs are not combined into a release claim.
 
-## Latest source and native evidence through 06a65417
+## Latest source and native evidence through 60de6b39
+
+These two further source units were tested, published directly to `main` and
+independently read back. Android and Apple external all-node/Fastest comparison
+remain active unpublished work at this cutoff. The original requirement ledger
+still has 356 historical audit identifiers, their original-source passages and
+later corrections; no source-marker completion percentage is inferred.
+
+| Commit | Implemented behavior and executable evidence |
+|---|---|
+| [`26b294e9`](https://github.com/Eabusham2/router-vpn/commit/26b294e999555fe2fbbc2517335c4d5694f002c1) | Admit Linux Hysteria2 with Start Layer Off through public retained Connect and sealed restoration. Preserve the selected native QUIC/TLS/Salamander parameters, one captured physical UDP owner, Home DNS, node proof, MTU, protection and cover. Four graph groups/14 subcases, three public selection/preflight groups/28 subcases under race and eleven strict installed-runner checks passed. An actual encrypted Hysteria2 peer exercised health, wrong-node refusal, uncached selected DNS success/failure/recovery, IPv4/IPv6 TCP/UDP, wrong auth/name/Salamander, cancellation and join. Fifteen required installed cases bring that gate to 63, including public Connect, direct-LAN bypass rejection, source-preserving restore, cover and MTU rollback/commit. The complete controller compiles; local peer tests model kernel TUN and do not establish the installed 63-case result. |
+| [`60de6b39`](https://github.com/Eabusham2/router-vpn/commit/60de6b396f7078c09204c327a50e8ca90128fa3b) | Repair three Tor test fixtures that took heartbeat and proof timestamps from separate clock reads. A millisecond rollover could make an otherwise intended valid receipt correctly fail the production proof-order validator. Use one observation and add explicit proof-after-heartbeat rejection; production validation is unchanged. Nine internal race groups/66 subcases, twenty repeated authenticated client/SOCKS runs and two executed defect controls passed. Independently prepared actual mobile native Server Tor passed 28 subcases; the desktop native composition passed eight groups/21 subcases under race. These use explicit local TLS/lease/TUN fixtures, not public Tor, APK or device acceptance. |
+
+The Tor defect was observed in the actual
+[APK diagnostic job at a370a57c](https://github.com/Eabusham2/router-vpn/actions/runs/41352375427/job/124985548279),
+in `TestRouterTorServerNativeLeaseAndProof/snowflake/home=true/padding=64`.
+The old job remains failed; the published repair requires its normal exact-SHA
+APK/native rerun. No production timeout, ownership or receipt guard was weakened.
+
+The generated Linux Node TUN workflow now passed on both architectures at
+[`06a65417`](https://github.com/Eabusham2/router-vpn/actions/runs/41358587327)
+and [`26b294e9`](https://github.com/Eabusham2/router-vpn/actions/runs/41359617897).
+The latter completed ARM64 job `125007009197` and AMD64 job `125007009512`.
+This closes the previously reproduced source-copy blocker for the six generated
+command scenarios. It does not replace the expanded installed-host gate: the
+[complete Linux runtimes at 26b294e9](https://github.com/Eabusham2/router-vpn/actions/runs/41359617898)
+were still building on both architectures at this read.
+
+The [macOS installer rerun at c51c84fc](https://github.com/Eabusham2/router-vpn/actions/runs/41356697071)
+still refuses first/legacy inventory for live unlinked executable images on
+both architectures. Intel also fails managed main-image CodeDirectory capture
+with errno 85; ARM64 managed inventory passes for 472 paths and rejects its
+copied/unlinked owned child. The diagnostic repair grants no installer authority.
+Older c51c84fc Windows bootstrap jobs failed the same source-copy prefix defect
+already repaired by `06a65417`; do not reclassify that historical failure as a
+new native socket regression.
+
+Remaining work includes the actual mobile external comparison, broader Linux
+retained graphs and nonempty/legacy recovery, stock OverTLS UDP compatibility,
+complete native Windows/macOS gates and an exact-source published release.
+Signing, device/off-LAN behavior and private deployment retain their separate
+acceptance requirements. The eight stopped PQ fixture files are preserved and
+excluded; no live router, AdGuard, forwarding or Portainer target changed.
+
+## Earlier source and native evidence through 06a65417
 
 These five further units were tested and published directly to `main`, each
 with expected-parent protection and independent remote readback. The active

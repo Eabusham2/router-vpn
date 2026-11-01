@@ -18,21 +18,22 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
-## Implementation reconciliation through 06a65417
+## Implementation reconciliation through 60de6b39
 
 The original sources below have already been recovered. Continue their actual
 implementation and acceptance work without replacing their scope or repeating
 recovery. Published source through
-[`06a65417`](https://github.com/Eabusham2/router-vpn/commit/06a65417b09f993f98fde5efe3a9a5bea85e418c)
+[`60de6b39`](https://github.com/Eabusham2/router-vpn/commit/60de6b396f7078c09204c327a50e8ca90128fa3b)
 and exact local/native boundaries are recorded in
-[the current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-06a65417).
+[the current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-60de6b39).
 
 | Recovered scope | Current reconciliation |
 |---|---|
-| #112, #200–213, #337 and later Start Layers | Retained Linux SS Off/AES/AES+XOR, WG/Off, saved Off and settled-empty checkpoint recovery are published. The new WireGuard peer source-copy rejection is repaired; all 48 installed scenarios, broader graphs, legacy succession, nonempty Always/torn recovery and physical acceptance remain required. |
+| #112, #200–213, #337 and later Start Layers | Retained Linux SS Off/AES/AES+XOR, WG/Off, Hysteria2/Off, saved Off and settled-empty checkpoint recovery are published. The source-copy repair passed the generated six-case native TUN gate on both architectures at 06a65417 and 26b294e9. All 63 installed scenarios, broader graphs, legacy succession, nonempty Always/torn recovery and physical acceptance remain required. |
 | #141–148, #222–223, #335 and August 10/19 node requests | Most used, private proved usage and external map metadata remain published. Android and Apple selected external50 now retain exact source/execution/network-bound history after native completion and drain. External all-node/Fastest is active implementation; Router TCP ranking, packaged behavior and physical acceptance remain separate. |
 | #19–21, #26–30, #33–35, #265–269, selected DNS and Methods | Complete Hysteria CA/profile delivery now joins unchanged-client Shadowsocks, OverTLS TCP, SSR/Mihomo and manual SOCKS evidence. Preserve exact trust/auth/policy and real download bytes. Stock OverTLS UDP, finalized ARM64, C1 simple AWG and original off-LAN/device requirements remain. |
-| Native macOS and Windows | Windows bootstrap passed on both architectures at a88c9d61; cancelled WFP/startup work and complete release/5.1 recovery remain separate. Fresh macOS first/legacy inventory and Intel managed CodeDirectory still fail. The bounded ES diagnostic repair grants no installer authority. Ordinary UAC, signing and actual devices remain open. |
+| Tor native composition and fixture integrity | 60de6b39 fixes test receipt timestamp ordering without changing production validation. Actual mobile Server Tor 28 subcases and desktop eight groups/21 subcases pass under race. The original APK job remains failed, and its exact-SHA rerun, public-network and device acceptance remain separate. |
+| Native macOS and Windows | Windows bootstrap passed on both architectures at a88c9d61; cancelled WFP/startup work and complete release/5.1 recovery remain separate. Fresh c51c84fc macOS first/legacy inventory and Intel managed CodeDirectory still fail; ARM64 managed inventory passes with its copied/unlinked negative. The bounded ES diagnostic repair grants no installer authority. Ordinary UAC, signing and actual devices remain open. |
 | All other original and later requirements | Retain their existing source/native/live evidence. No percentage, reduced denominator, full-release claim or physical deployment follows from these units. The stopped unpublished PQ fixture work remains preserved and excluded. |
 
 ## Original-source recovery refreshed November 1, 2026
