@@ -3,7 +3,7 @@
 This continues [October 31](CONTINUATION-EVIDENCE-2026-10-31.md), preserves
 [the reconciled requirement authority](REQUIREMENTS-RECONCILED.md), and records
 published source through
-[`6e7032f52acecb13128443e52fadd82ee567068a`](https://github.com/Eabusham2/router-vpn/commit/6e7032f52acecb13128443e52fadd82ee567068a).
+[`06a65417b09f993f98fde5efe3a9a5bea85e418c`](https://github.com/Eabusham2/router-vpn/commit/06a65417b09f993f98fde5efe3a9a5bea85e418c).
 The live `main` reference was independently read after publication. Later local
 work is not included in this source cutoff. Original requirements, C1–C7,
 the later product/breakage, map-first, external-node and all-device corrections
@@ -14,7 +14,78 @@ Native evidence below keeps its own exact source identity. The retained
 historical observations are not silently reassigned to this newer cutoff,
 and unrelated passing jobs are not combined into a release claim.
 
-## Latest source and native evidence through 6e7032f5
+## Latest source and native evidence through 06a65417
+
+These five further units were tested and published directly to `main`, each
+with expected-parent protection and independent remote readback. The active
+Android/Apple external comparison and Linux Hysteria2 retained-host work is
+excluded from this cutoff until separately validated and published.
+
+### Published source since 6e7032f5
+
+| Commit | Implemented behavior and executable evidence |
+|---|---|
+| [`316c111b`](https://github.com/Eabusham2/router-vpn/commit/316c111bbba6e3dc6ad607addaa43519282ae9fd) | Add Apple selected external-path fifty-sample HTTPS measurements through the shared native latency-only operation. Bind private history to the exact node/source, paired entry, physical network, provider and independent MTU owners, original requested execution, proved Local/Server winner and actual native configuration digest. Re-read proof after drain and save atomically inside the MTU lease. The shipping app/controller/store fixture passed 262 checks and five executed defect controls; the actual engine fixture passed four whole-engine modes (1,297 checks in three modes, 1,298 in MTU-close), twelve runtime controls and its Swift concurrency negative. The provider aggregate and four result-rendering tests passed. Native handles/IPC remain explicit fixture boundaries; actual Xcode/framework builds, packaged IPA and device acceptance remain separate. |
+| [`29f0fd67`](https://github.com/Eabusham2/router-vpn/commit/29f0fd67d5705ad79ffe3db017b32d113ffd6904) | Replace an obsolete coordinates-comment grep in the Android standard-exit workflow with the existing executed shipping usage/catalog/map fixture. Install its pinned Java/Go and Android JSON prerequisites and include its source/test dependencies in workflow triggers. All 169 checks and nine defect controls passed, including explicit 0,0, lost external coordinates and invented-latency rejection; existing route/permission/OpenVPN checks remain. The old failure was a comment comparison, not evidence that map coordinates were absent. |
+| [`482eed69`](https://github.com/Eabusham2/router-vpn/commit/482eed6972e1d1fc90802335562e213769522c7f) | Deliver complete Hysteria imports: embed the selected CA in native sing-box JSON and add an official Hysteria 2.13.0 app-proxy profile with its matching PEM download. Preserve endpoint, auth, TLS name, leaf pin, Salamander and certificate verification; invalid private inputs abort publication and native-only settings retain complete JSON. Explicit Home DNS controls server destination resolution and the official profile's TCP/UDP resolver forwards. Actual final downloads passed thirteen cases with unchanged official client/server binaries, twenty-seven DNS receipt records and thirty-four A/AAAA queries, including trust/auth/obfuscation failures and identical-answer wrong-resolver controls. Eight focused suites passed; finalized ARM64 and physical/off-LAN acceptance remain CI/live gates. |
+| [`41625102`](https://github.com/Eabusham2/router-vpn/commit/416251029a8461aadd8d7cfead21509a02effccb) | Prevent the macOS diagnostic event drain from repeatedly creating its own proc_check backlog. Capture both original process identities before each bounded actual trigger and again before accepting a matching event; retain the original deadline, trigger/byte/record limits and all executable/event identity checks. Twenty-eight binding/pipe/join tests passed. The unchanged old loop fails the new queued-event regression with 132 reads instead of four. This diagnostic remains non-authoritative and does not fix or waive installer admission failures. |
+| [`06a65417`](https://github.com/Eabusham2/router-vpn/commit/06a65417b09f993f98fde5efe3a9a5bea85e418c) | Repair the shared desktop source preparer's rejection of the valid Linux-only WireGuard peer. Preserve its exact non-Android build constraint, every peer's test-only package and validated bytes; identify rejected filenames. The old failure reproduced through the actual preparer. Eleven source-copy cases pass, including the complete shared closure, all peer bytes, wrong platform/package and a real symlink. Generated TUN and full installed-host execution remain native gates. |
+
+### Newly verified native outcomes and remaining failures
+
+The [Android standard-exit job at 29f0fd67](https://github.com/Eabusham2/router-vpn/actions/runs/41358189912/job/125002688030)
+passed with the executed catalog/map fixture replacing the obsolete comment
+check. Its Windows OpenVPN companion passed; the desktop companion was still
+running at this read, so the whole workflow is not claimed complete.
+
+The [Windows physical bootstrap run at a88c9d61](https://github.com/Eabusham2/router-vpn/actions/runs/41356240869)
+passed both x64 and ARM64 native bootstrap jobs and the x64 actual WFP encrypted
+Node job. Its other captured-startup and ARM64 WFP jobs were cancelled. This
+closes the completed bootstrap observations for the earlier missing-source
+repair; it does not establish the complete Windows release or the separate
+PowerShell 5.1 final package-recovery rerun.
+
+The [generated Linux TUN run at 316c111b](https://github.com/Eabusham2/router-vpn/actions/runs/41358083666)
+failed on both architectures before compiling or opening TUN: the source copier
+rejected the new WireGuard peer's build constraint. The `06a65417` repair above
+addresses that exact reproduced failure. The old run remains failed and a
+completed native rerun is required; earlier generated-TUN passes retain their
+original source identity. All 48 installed-host scenarios remain separate.
+
+The [fresh macOS installer run at a88c9d61](https://github.com/Eabusham2/router-vpn/actions/runs/41356240809)
+passed privileged interpreter selection on both architectures, but first/legacy
+full-host inventory still refused live unresolved executable identities.
+Apple Silicon's managed full-host generation passed over 467 paths and rejected
+its owned copied/unlinked child; Intel's managed main-image CodeDirectory read
+failed with errno 85. The Apple Silicon diagnostic additionally reached its
+4 MiB event cap. Only that diagnostic's self-generated read amplification is
+addressed above; signing, entitlement and strict installer acceptance remain
+open. Constructed Windows tokens and diagnostic macOS observations grant no
+substitute admission authority.
+
+### Remaining recovered requirements
+
+- #141–148, #222–223 and #335: selected external fifty-sample measurements are
+  now published on Android and Apple. Actual external all-node comparison and
+  explicit compare-and-connect-fastest remain active implementation work. Keep
+  common-metric ranking, immutable source/network/user intent, invalid-candidate
+  rejection, original-state restoration and proved winner retention intact.
+- #19–21, #26–30, #33–35 and #265–269: complete Hysteria trust delivery joins
+  unchanged-client Shadowsocks, SSR/Mihomo, OverTLS TCP and manual SOCKS evidence.
+  Stock OverTLS UDP, finalized ARM64 verification, C1 simple AWG and original
+  third-party/off-LAN/device acceptance remain open.
+- #112, #200–213, #337 and #340–342: retained Linux SS Start Layers and WG/Off,
+  saved Off and settled-empty checkpoint recovery remain implemented. Broader
+  retained graphs, nonempty Always/torn recovery, legacy succession and all
+  48 installed scenarios still require completion and their appropriate proof.
+- Native release, ordinary Windows UAC, macOS installation, signing/distribution,
+  complete MAX/ALL, device networking/leaks/transitions and visual/accessibility
+  remain separate. No newer full package/image/compose/release publication or
+  private deployment is established. The eight stopped PQ fixture files remain
+  preserved and unpublished; no stopped validation was resumed. No live router,
+  AdGuard, forwarding or Portainer configuration changed.
+
+## Earlier source and native evidence through 6e7032f5
 
 These nine further source units were tested, published directly to `main`
 with expected-parent protection, independently read back, and synchronized

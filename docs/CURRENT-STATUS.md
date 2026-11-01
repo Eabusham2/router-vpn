@@ -6,11 +6,39 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 6e7032f5
+## Latest implementation continuation — through 06a65417
+
+The independently verified published source cutoff is
+[`06a65417b09f993f98fde5efe3a9a5bea85e418c`](https://github.com/Eabusham2/router-vpn/commit/06a65417b09f993f98fde5efe3a9a5bea85e418c).
+[Current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-06a65417)
+records five further source units and their separate native outcomes.
+
+- Both mobile apps now measure fifty routed HTTPS responses on the selected
+  external path and retain private history bound to its source and proved
+  execution. Apple rechecks native proof/configuration after drain and saves
+  inside the MTU lease. Actual external comparison/Fastest remains active work;
+  direct Router TCP ranking is kept separate.
+- Hysteria Methods now deliver embedded native CA material and a usable official
+  desktop profile with a matching PEM. The unchanged client passed actual
+  downloaded-profile TCP/UDP, trust/auth/Salamander and selected-DNS tests.
+  Finalized ARM64, device/off-LAN and stock OverTLS UDP acceptance remain open.
+- Windows native bootstrap passed on x64 and ARM64 at a88c9d61; the separate
+  x64 WFP encrypted Node job passed. Cancelled jobs and the full Windows release
+  remain unproved. Strict macOS installer failures remain; the diagnostic's
+  event read amplification was repaired without changing admission rules.
+- The Linux generated-TUN run at 316c111b exposed a source-copy rejection of the
+  new WireGuard test's valid Linux constraint. That exact failure is repaired
+  and locally reproduced/verified; native rerun and all 48 installed scenarios
+  remain required. Broader retained graphs and recovery remain active work.
+- No complete new release, signing/distribution, private deployment or physical
+  acceptance is established. Preserved stopped PQ work is excluded. No live
+  router, AdGuard, forwarding or Portainer target changed.
+
+## Earlier implementation continuation — through 6e7032f5
 
 The independently verified published source cutoff is
 [`6e7032f52acecb13128443e52fadd82ee567068a`](https://github.com/Eabusham2/router-vpn/commit/6e7032f52acecb13128443e52fadd82ee567068a).
-[Current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-6e7032f5)
+[Current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#earlier-source-and-native-evidence-through-6e7032f5)
 records nine further tested source units and the exact native observations.
 
 - Protected Linux WG/Off now uses the retained native session and sealed source,

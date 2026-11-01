@@ -18,22 +18,22 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
-## Implementation reconciliation through 6e7032f5
+## Implementation reconciliation through 06a65417
 
-The original sources below have already been recovered. The next step is to
-close their actual implementation and acceptance gaps; repeating recovery or
-substituting a smaller green gate does not satisfy them. The current published
-cutoff is [`6e7032f5`](https://github.com/Eabusham2/router-vpn/commit/6e7032f52acecb13128443e52fadd82ee567068a).
-Detailed commits, tests and exact native outcomes are in
-[the current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-6e7032f5).
+The original sources below have already been recovered. Continue their actual
+implementation and acceptance work without replacing their scope or repeating
+recovery. Published source through
+[`06a65417`](https://github.com/Eabusham2/router-vpn/commit/06a65417b09f993f98fde5efe3a9a5bea85e418c)
+and exact local/native boundaries are recorded in
+[the current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-06a65417).
 
 | Recovered scope | Current reconciliation |
 |---|---|
-| #112, #200–213, #337 and later Start Layers | Retained Linux SS Off/AES/AES+XOR, WG/Off, saved-policy Off and settled-empty checkpoint recovery are published with real encrypted peer/ownership tests. All 48 installed scenarios, broader graphs, legacy succession, nonempty Always/torn recovery and physical acceptance remain required. |
-| #141–148, #222–223, #335 and the August 10/19 node request | Most used, private proved usage and Android external map metadata remain published. Android selected external50 captures actual source, execution and native drain; temporary restoration now validates the original adopted source before Stop. Routed history stays separate from direct TCP. Apple parity, external all-node/Fastest comparison and packaged/device acceptance remain open at this cutoff. |
-| #19–21, #26–30, #33–35, #265–269, selected DNS and Methods | Final Shadowsocks, OverTLS TCP, SSR/Mihomo and manual SOCKS downloads have independent unchanged-client evidence. SOCKS preserves the actual finalized private endpoint/authentication. Stock OverTLS UDP, complete Hysteria CA/trust delivery, finalized ARM64 images and original off-LAN/device requirements remain. |
-| Native macOS and Windows | macOS guardian success at 9201f036 remains distinct from strict installer failure at 29497c54. Windows source-copy and 5.1 module-path repairs need completed native reruns; the 9559799d controller run still fails linked-token/GLOBALROOT diagnostic acceptance. Signing, ordinary UAC and actual devices remain separate. |
-| All other original and later requirements | Keep their existing source/native/live evidence boundaries. No percentage, reduced denominator, full-release claim or physical deployment follows from these units. |
+| #112, #200–213, #337 and later Start Layers | Retained Linux SS Off/AES/AES+XOR, WG/Off, saved Off and settled-empty checkpoint recovery are published. The new WireGuard peer source-copy rejection is repaired; all 48 installed scenarios, broader graphs, legacy succession, nonempty Always/torn recovery and physical acceptance remain required. |
+| #141–148, #222–223, #335 and August 10/19 node requests | Most used, private proved usage and external map metadata remain published. Android and Apple selected external50 now retain exact source/execution/network-bound history after native completion and drain. External all-node/Fastest is active implementation; Router TCP ranking, packaged behavior and physical acceptance remain separate. |
+| #19–21, #26–30, #33–35, #265–269, selected DNS and Methods | Complete Hysteria CA/profile delivery now joins unchanged-client Shadowsocks, OverTLS TCP, SSR/Mihomo and manual SOCKS evidence. Preserve exact trust/auth/policy and real download bytes. Stock OverTLS UDP, finalized ARM64, C1 simple AWG and original off-LAN/device requirements remain. |
+| Native macOS and Windows | Windows bootstrap passed on both architectures at a88c9d61; cancelled WFP/startup work and complete release/5.1 recovery remain separate. Fresh macOS first/legacy inventory and Intel managed CodeDirectory still fail. The bounded ES diagnostic repair grants no installer authority. Ordinary UAC, signing and actual devices remain open. |
+| All other original and later requirements | Retain their existing source/native/live evidence. No percentage, reduced denominator, full-release claim or physical deployment follows from these units. The stopped unpublished PQ fixture work remains preserved and excluded. |
 
 ## Original-source recovery refreshed November 1, 2026
 
