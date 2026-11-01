@@ -88,7 +88,7 @@ public class Context {public static final String CONNECTIVITY_SERVICE="connectiv
  public int length(){return value.length();}public char charAt(int index){return value.charAt(index);}
  public CharSequence subSequence(int start,int end){return value.subSequence(start,end);}public String toString(){return value;}
 }''',
-"android/text/InputType.java": "package android.text;public final class InputType {public static final int TYPE_CLASS_TEXT=1,TYPE_CLASS_NUMBER=2,TYPE_TEXT_VARIATION_PASSWORD=128,TYPE_TEXT_FLAG_MULTI_LINE=131072,TYPE_TEXT_FLAG_NO_SUGGESTIONS=524288;}",
+"android/text/InputType.java": "package android.text;public final class InputType {public static final int TYPE_CLASS_TEXT=1,TYPE_CLASS_NUMBER=2,TYPE_NUMBER_FLAG_SIGNED=4096,TYPE_NUMBER_FLAG_DECIMAL=8192,TYPE_TEXT_VARIATION_PASSWORD=128,TYPE_TEXT_FLAG_MULTI_LINE=131072,TYPE_TEXT_FLAG_NO_SUGGESTIONS=524288;}",
 "android/text/TextUtils.java": "package android.text;public final class TextUtils {public static String join(CharSequence delimiter,Iterable<?> values){java.util.List<String> strings=new java.util.ArrayList<>();for(Object value:values)strings.add(String.valueOf(value));return String.join(delimiter,strings);}}",
 "android/graphics/Typeface.java": "package android.graphics;public class Typeface {public static final int BOLD=1;}",
 "android/widget/TextView.java": r'''package android.widget;public class TextView extends android.view.View {
@@ -398,7 +398,7 @@ public final class TorFormHarness {
   check(!negative.itemsVisible(),"dialog double ignores Android message/list exclusivity");boolean hidden=false;try{negative.clickItem(0);}catch(IllegalStateException expected){hidden=true;}check(hidden,"hidden-list negative control cannot reject an item");negative.dismiss();
   for(String execution:new String[]{"local","server","auto"})for(String mode:ALL){
    Path directory=Files.createTempDirectory(root,"permission-");StandardExitActivity activity=activity(directory,null);AndroidNodeStore.Node node=node(directory);AndroidStandardExitStore.Entry selected=tor("custom","doh");store(activity).save(selected);
-   invoke(activity,"showExitActions",selected);AlertDialog actions=AlertDialog.last;check(actions.itemsVisible()&&actions.items.length==5&&actions.items[3].equals("Compare DNS on this connected path"),"saved Tor actions are hidden");
+   invoke(activity,"showExitActions",selected);AlertDialog actions=AlertDialog.last;check(actions.itemsVisible()&&actions.items.length==6&&actions.items[3].equals("Compare DNS on this connected path"),"saved Tor actions are hidden");
    check(!displayed(actions.customTitle).contains("cert=Y2VydA"),"actions header exposed bridge credentials");actions.clickItem(1);
    AlertDialog entries=AlertDialog.last;check(entries.itemsVisible()&&entries.items.length==1,"entry choices are hidden");entries.clickItem(0);
    AlertDialog modes=AlertDialog.last;check(modes.itemsVisible()&&modes.items.length==19,"exact native mode choices missing or duplicated");int index=-1;
@@ -667,7 +667,7 @@ public final class TorFormHarness {
    StandardExitActivity activity=activity(Files.createTempDirectory(root,"ordinary-form-"),null);AndroidStandardExitStore.Entry selected=ordinary(kind);
    selected.policy=policy(dns.equals("tcp")?"custom":dns,dns.equals("rescue")?"tcp":dns);selected.policy.put("effective_mtu",8800);
    store(activity).save(selected);String before=AndroidStandardExitStore.snapshot(selected);String compiled=AndroidExternalPolicy.compile(selected,null,"external").config;
-   invoke(activity,"showExitActions",selected);AlertDialog actions=AlertDialog.last;check(actions.itemsVisible()&&actions.items.length==5&&actions.items[2].contains("DNS")&&actions.items[3].equals("Compare DNS on this connected path"),"ordinary policy settings are unreachable");actions.clickItem(2);AlertDialog editor=AlertDialog.last;
+   invoke(activity,"showExitActions",selected);AlertDialog actions=AlertDialog.last;check(actions.itemsVisible()&&actions.items.length==6&&actions.items[2].contains("DNS")&&actions.items[3].equals("Compare DNS on this connected path"),"ordinary policy settings are unreachable");actions.clickItem(2);AlertDialog editor=AlertDialog.last;
    check(editor.showing&&editor.title.toString().contains("Connection settings"),"ordinary policy form was not opened");
    editor.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!editor.showing,"saved ordinary policy roundtrip rejected: "+kind+"/"+dns+" "+displayed(editor.view));
    AndroidStandardExitStore.Entry after=store(activity).get(selected.id);check(compiled.equals(AndroidExternalPolicy.compile(after,null,"external").config),"ordinary form replaced selected DNS or interface policy");
@@ -790,6 +790,35 @@ public final class TorFormHarness {
   AndroidHomeStateStore.Snapshot direct=new AndroidHomeStateStore.Snapshot();AndroidDNSSelectionDraft.Path path=AndroidDNSSelectionDraft.Path.capture(null,direct);check(path.entryID.isEmpty()&&path.entryMode.isEmpty(),"direct DNS draft borrowed ambient Router node");direct.activeEntryMode="wg";dnsReject(()->AndroidDNSSelectionDraft.Path.capture(null,direct),"direct DNS capture accepted an unexplained entry mode");
  }
  static CheckBox startupCheck(AlertDialog dialog){for(View view:views(dialog.view))if(view instanceof CheckBox&&((CheckBox)view).getText().toString().startsWith("Auto-connect this saved external path"))return (CheckBox)view;throw new AssertionError("Missing external startup control");}
+ static String withoutLocation(AndroidStandardExitStore.Entry entry)throws Exception{
+  JSONObject value=new JSONObject(AndroidStandardExitStore.snapshot(entry));for(String key:List.of("location","latitude","longitude"))value.remove(key);return value.toString();
+ }
+ static AlertDialog locationForm(StandardExitActivity activity,AndroidStandardExitStore.Entry entry)throws Exception{
+  invoke(activity,"showExitActions",entry);AlertDialog actions=AlertDialog.last;
+  check(actions.itemsVisible()&&actions.items[actions.items.length-2].equals("Location on map")&&actions.items[actions.items.length-1].equals("Delete"),"external location action is hidden or replaced Delete");
+  actions.clickItem(actions.items.length-2);AlertDialog form=AlertDialog.last;check(form!=actions&&form.showing,"external location form did not open");return form;
+ }
+ static void locationSettings()throws Exception{
+  for(String kind:List.of("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn","tor","tor-bridge")){
+   StandardExitActivity a=activity(Files.createTempDirectory(root,"location-form-"),null);AndroidStandardExitStore.Entry saved=AndroidTorProfile.isTor(kind)?tor(kind.equals("tor-bridge")?"obfs4":kind,"doh"):ordinary(kind);store(a).save(saved);
+   String original=AndroidStandardExitStore.snapshot(saved);check(!new JSONObject(original).has("location")&&!new JSONObject(original).has("latitude")&&!new JSONObject(original).has("longitude")&&original.equals(AndroidStandardExitStore.snapshot(AndroidStandardExitStore.copy(saved))),"legacy external location absence changed snapshot bytes");
+   AlertDialog form=locationForm(a,saved);check(field(form,"Location label (optional)").getText().length()==0&&field(form,"Latitude (-90 to 90)").getText().length()==0&&field(form,"Longitude (-180 to 180)").getText().length()==0,"legacy external acquired an inferred location");
+   field(form,"Location label (optional)").setText(" Chicago ");field(form,"Latitude (-90 to 90)").setText("41.8781");field(form,"Longitude (-180 to 180)").setText("-87.6298");form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+   AndroidStandardExitStore.Entry current=new AndroidStandardExitStore(a).get(saved.id);check(!form.showing&&current.location.equals("Chicago")&&current.latitude==41.8781&&current.longitude== -87.6298,"external location did not survive private-store round trip");
+   check(original.equals(withoutLocation(current))&&original.equals(AndroidStandardExitStore.snapshot(saved)),"location edit changed private credentials, policy or captured input");
+   JSONObject summary=current.summary();check(summary.getString("location").equals("Chicago")&&summary.getDouble("longitude")== -87.6298&&!summary.has("secret")&&!summary.has("password")&&!summary.has("wg_private_key"),"external public summary lost location or exposed credentials");
+   form=locationForm(a,current);check(field(form,"Location label (optional)").getText().toString().equals("Chicago")&&field(form,"Longitude (-180 to 180)").getText().toString().equals("-87.6298"),"external location editor lost retained metadata");form.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();check(AndroidStandardExitStore.snapshot(current).equals(store(a).storedSnapshot(saved.id)),"cancelled location edit changed saved node");
+   form=locationForm(a,current);field(form,"Location label (optional)").setText("");field(form,"Latitude (-90 to 90)").setText("");field(form,"Longitude (-180 to 180)").setText("");form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!form.showing&&original.equals(store(a).storedSnapshot(saved.id)),"clearing external location did not restore absent metadata bytes");
+  }
+  for(String[] coordinates:new String[][]{{"90","180"},{"-90","-180"},{"0","0"}}){StandardExitActivity a=activity(Files.createTempDirectory(root,"location-bound-"),null);AndroidStandardExitStore.Entry e=ordinary("socks5");store(a).save(e);AlertDialog form=locationForm(a,e);field(form,"Latitude (-90 to 90)").setText(coordinates[0]);field(form,"Longitude (-180 to 180)").setText(coordinates[1]);form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!form.showing&&store(a).get(e.id).latitude.doubleValue()==Double.parseDouble(coordinates[0]),"valid coordinate boundary was discarded");}
+  for(String[] invalid:new String[][]{{"91","0"},{"0","181"},{"-91","0"},{"0","-181"},{"0",""},{"","0"},{"NaN","0"},{"0","NaN"},{"Infinity","0"},{"0","-Infinity"},{"1e999","0"},{"text","0"}}){StandardExitActivity a=activity(Files.createTempDirectory(root,"location-invalid-"),null);AndroidStandardExitStore.Entry e=ordinary("socks5");store(a).save(e);String before=store(a).storedSnapshot(e.id);AlertDialog form=locationForm(a,e);field(form,"Latitude (-90 to 90)").setText(invalid[0]);field(form,"Longitude (-180 to 180)").setText(invalid[1]);form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(form.showing&&before.equals(store(a).storedSnapshot(e.id)),"invalid external coordinates replaced saved source: "+Arrays.toString(invalid));}
+  for(String invalid:List.of("x".repeat(161),"line\nbreak","in\u0000side")){StandardExitActivity a=activity(Files.createTempDirectory(root,"location-label-"),null);AndroidStandardExitStore.Entry e=ordinary("socks5");store(a).save(e);String before=store(a).storedSnapshot(e.id);AlertDialog form=locationForm(a,e);field(form,"Location label (optional)").setText(invalid);form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(form.showing&&before.equals(store(a).storedSnapshot(e.id)),"invalid location label changed saved source");}
+  for(String fault:List.of("changed","removed","busy")){StandardExitActivity a=activity(Files.createTempDirectory(root,"location-stale-"),null);AndroidStandardExitStore.Entry e=ordinary("socks5");store(a).save(e);AlertDialog form=locationForm(a,e);String expected=store(a).storedSnapshot(e.id);if(fault.equals("changed")){AndroidStandardExitStore.Entry newer=store(a).get(e.id);newer.password="replacement-credential";newer.username="replacement-user";store(a).save(newer);expected=store(a).storedSnapshot(e.id);}if(fault.equals("removed")){store(a).remove(e.id);expected="";}if(fault.equals("busy"))AndroidVpnMutationGuard.busy=true;
+   field(form,"Latitude (-90 to 90)").setText("10");field(form,"Longitude (-180 to 180)").setText("20");form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(form.showing&&expected.equals(store(a).storedSnapshot(e.id)),"stale external location form overwrote or resurrected its node: "+fault);AndroidVpnMutationGuard.busy=false;
+  }
+  java.lang.reflect.Method parse=AndroidStandardExitStore.class.getDeclaredMethod("fromJson",JSONObject.class);parse.setAccessible(true);JSONObject old=new JSONObject(AndroidStandardExitStore.snapshot(ordinary("socks5")));
+  for(String fault:List.of("label-null","label-number","lat-string","lon-string","lat-null","lon-null","partial","range")){JSONObject value=new JSONObject(old.toString());if(fault.startsWith("label"))value.put("location",fault.equals("label-null")?JSONObject.NULL:7);else{value.put("latitude",1).put("longitude",2);if(fault.equals("lat-string"))value.put("latitude","1");if(fault.equals("lon-string"))value.put("longitude","2");if(fault.equals("lat-null"))value.put("latitude",JSONObject.NULL);if(fault.equals("lon-null"))value.put("longitude",JSONObject.NULL);if(fault.equals("partial"))value.remove("longitude");if(fault.equals("range"))value.put("longitude",181);}boolean rejected=false;try{parse.invoke(null,value);}catch(Exception expected){rejected=true;}check(rejected,"malformed stored external location was accepted: "+fault);}
+ }
  static void startupSettings()throws Exception{
   for(String kind:List.of("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn","tor","tor-bridge")){
    StandardExitActivity a=activity(Files.createTempDirectory(root,"startup-form-"),null);AndroidStandardExitStore.Entry saved=AndroidTorProfile.isTor(kind)?tor(kind.equals("tor-bridge")?"obfs4":kind,"doh"):ordinary(kind);store(a).save(saved);
@@ -844,7 +873,7 @@ public final class TorFormHarness {
   }
  }
 
- public static void main(String[] args)throws Exception{root=Path.of(args[0]);if(args.length>1&&args[1].equals("padding-only")){paddingCompiler();return;}if(args.length>1&&args[1].equals("ordinary-tor-only")){ordinaryTorProfiles();return;}roundtrips();independentPolicyEdits();jumboPolicyEdits();paddingPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();ordinaryTorProfiles();ordinaryTorUI();externalExecutionForm();packetExecutionForms();openVPNExecutionForms();openVPNResponseMaps();openVPNLayerMaps();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();startupSettings();protectionSettings();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
+ public static void main(String[] args)throws Exception{root=Path.of(args[0]);if(args.length>1&&args[1].equals("location-only")){locationSettings();return;}if(args.length>1&&args[1].equals("padding-only")){paddingCompiler();return;}if(args.length>1&&args[1].equals("ordinary-tor-only")){ordinaryTorProfiles();return;}roundtrips();independentPolicyEdits();jumboPolicyEdits();paddingPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();ordinaryTorProfiles();ordinaryTorUI();externalExecutionForm();packetExecutionForms();openVPNExecutionForms();openVPNResponseMaps();openVPNLayerMaps();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();startupSettings();protectionSettings();locationSettings();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
 }
 '''
 
@@ -945,6 +974,18 @@ def main():
         # These controls establish that the Activity/Go checks fail for the
         # original behavior; neither working source nor positive classes change.
         controls = (
+            ("external-location-save", "AndroidStandardExitStore.java",
+             'writeLocation(o,e);return o;',
+             'return o;',
+             "external location did not survive private-store round trip"),
+            ("external-location-pair", "AndroidStandardExitStore.java",
+             'if((entry.latitude==null)!=(entry.longitude==null))',
+             'if(false)',
+             "invalid external coordinates replaced saved source"),
+            ("external-location-owner", "StandardExitActivity.java",
+             'AndroidStandardExitStore.validateLocation(next);exitStore.saveIfUnchanged(next,source);',
+             'AndroidStandardExitStore.validateLocation(next);exitStore.save(next);',
+             "stale external location form overwrote or resurrected its node"),
             ("tor-padding-choice", "StandardExitActivity.java",
              'p.put("daita_enabled",padding.isChecked())',
              'p.put("daita_enabled",false)',
@@ -1029,7 +1070,7 @@ def main():
             mutation.write_text(source.replace(before, after, 1))
             classpath = str(classes) + os.pathsep + str(jar)
             subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", classpath, "-d", str(classes), str(mutation)], check=True, timeout=60)
-            rejected = subprocess.run(["java", "-cp", classpath, "com.eabusham.routervpn.TorFormHarness", str(data)], env=environment, capture_output=True, text=True, timeout=120)
+            rejected = subprocess.run(["java", "-cp", classpath, "com.eabusham.routervpn.TorFormHarness", str(data)] + (["location-only"] if label.startswith("external-location-") else []), env=environment, capture_output=True, text=True, timeout=120)
             if rejected.returncode == 0 or failure not in rejected.stderr:
                 raise AssertionError("Original Tor form defect did not fail its executable check: " + label + "\n" + rejected.stderr)
         print(f"Android Tor form: all {len(controls)} original-source negative controls rejected")

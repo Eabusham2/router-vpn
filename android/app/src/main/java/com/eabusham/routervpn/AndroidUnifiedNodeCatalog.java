@@ -70,12 +70,11 @@ final class AndroidUnifiedNodeCatalog {
         String active=nodes.activeId();
         for(AndroidNodeStore.Node node:nodes.list())out.add(routerItem(node,node.id.equals(active)));
         for(AndroidStandardExitStore.Entry exit:exits.list()){
-            // The custom-exit store currently has no real coordinate/latency
-            // metadata. Keep these nodes list-only until the user supplies real
-            // coordinates or a measured value; never infer them from an IP.
+            // Only the user's explicit coordinates can place an external pin.
+            // Direct and routed measurements remain separately owned records.
             AndroidNodeUsage.Metric usage=AndroidNodeUsage.externalMetric(nodes.usageFile(),exit);
             out.add(new Item(KIND_EXTERNAL,exit.id,exit.name,exit.server+":"+exit.serverPort,
-                    exit.protocol,exit.expectedPublicIp,"",null,null,null,null,0,usage.count,usage.lastUsedAt(),false,null,usage.available));
+                    exit.protocol,exit.expectedPublicIp,exit.location,exit.latitude,exit.longitude,null,null,0,usage.count,usage.lastUsedAt(),false,null,usage.available));
         }
         Collections.sort(out,comparator(order));
         return out;

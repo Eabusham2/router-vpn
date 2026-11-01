@@ -34,10 +34,13 @@ final class RouterVpnNodeMapView extends View {
     static final class Marker {
         final String id, name, role;
         final double latitude, longitude, latencyMs;
-        final boolean selected;
+        final boolean selected, explicitCoordinates;
         Marker(String id,String name,double latitude,double longitude,boolean selected){this(id,name,latitude,longitude,selected?ROLE_SELECTED:ROLE_NORMAL,0);}
         Marker(String id,String name,double latitude,double longitude,String role){this(id,name,latitude,longitude,role,0);}
-        Marker(String id,String name,double latitude,double longitude,String role,double latencyMs){this.id=id;this.name=name;this.latitude=latitude;this.longitude=longitude;this.role=role==null?ROLE_NORMAL:role;this.selected=ROLE_SELECTED.equals(this.role);this.latencyMs=Double.isFinite(latencyMs)&&latencyMs>0?latencyMs:0;}
+        Marker(String id,String name,double latitude,double longitude,String role,double latencyMs){this(id,name,latitude,longitude,role,latencyMs,false);}
+        // Legacy Router profiles can use 0,0 as their unknown-location sentinel.
+        // Typed external metadata retains absence separately from an explicit pair.
+        Marker(String id,String name,double latitude,double longitude,String role,double latencyMs,boolean explicitCoordinates){this.id=id;this.name=name;this.latitude=latitude;this.longitude=longitude;this.role=role==null?ROLE_NORMAL:role;this.selected=ROLE_SELECTED.equals(this.role);this.latencyMs=Double.isFinite(latencyMs)&&latencyMs>0?latencyMs:0;this.explicitCoordinates=explicitCoordinates;}
     }
 
     private final Paint background=paint(Color.rgb(9,17,31),1f);
@@ -180,7 +183,7 @@ final class RouterVpnNodeMapView extends View {
 
     @Override public boolean performClick(){super.performClick();return true;}
     private RectF worldRect(){float pad=dp(14);return new RectF(pad,pad,getWidth()-pad,getHeight()-pad);}
-    private boolean valid(Marker m){return Double.isFinite(m.latitude)&&Double.isFinite(m.longitude)&&m.latitude>=-90&&m.latitude<=90&&m.longitude>=-180&&m.longitude<=180&&!(m.latitude==0&&m.longitude==0);}
+    private boolean valid(Marker m){return Double.isFinite(m.latitude)&&Double.isFinite(m.longitude)&&m.latitude>=-90&&m.latitude<=90&&m.longitude>=-180&&m.longitude<=180&&(m.explicitCoordinates||!(m.latitude==0&&m.longitude==0));}
     private float xFor(double lon,RectF world){return world.left+(float)((lon+180d)/360d)*world.width();}
     private float yFor(double lat,RectF world){return world.top+(float)((90d-lat)/180d)*world.height();}
     private Paint paintFor(String role){if(ROLE_ENTRY.equals(role))return entryPin;if(ROLE_EXIT.equals(role))return exitPin;if(ROLE_EXTERNAL.equals(role))return externalPin;if(ROLE_SELECTED.equals(role))return selectedPin;return normalPin;}

@@ -89,11 +89,28 @@ final class AndroidExternalProtection{static void validate(JSONObject p){}}
 '''
 
 ACTIVITY = r'''package com.eabusham.routervpn;
+import java.util.*;import android.content.SharedPreferences;
 final class UsageActivity extends android.app.Activity{
  final android.widget.TextView statusView=new android.widget.TextView(this);final android.widget.Button connectButton=new android.widget.Button(this);String toast="";
+ final android.widget.Button nodeButton=new android.widget.Button(this),fastestButton=new android.widget.Button(this);
+ // SHIPPING_MAP_CONSTANTS
+ AndroidNodeStore nodeStore;AndroidUnifiedNodeCatalog catalog;AndroidUnifiedConnectionController connection;RouterVpnNodeMapView mapView=new RouterVpnNodeMapView();UsageMapTelemetry telemetry=new UsageMapTelemetry();
+ // SHIPPING_PREFS
+ boolean mutationBusy(){return AndroidVpnMutationGuard.isBusy(this);}void map(){refreshNodes();}SharedPreferences mapPreferences(){return prefs();}
  boolean isDestroyed(){return false;}void toast(String message){toast=message;}void refreshAll(){statusView.setText("Refreshed current Home");}void refreshConnectionLater(){}AndroidUnifiedConnectionController.Callback userCallback(){return callback();}
  // SHIPPING_CALLBACK
+ // SHIPPING_MAP_PROJECTION
 }
+// The map receives the exact shipping marker projection. Android canvas drawing
+// and physical rendering remain separate device acceptance requirements.
+final class RouterVpnNodeMapView {
+ static final String ROLE_ENTRY="entry",ROLE_EXIT="exit",ROLE_SELECTED="selected",ROLE_EXTERNAL="external",ROLE_NORMAL="normal";
+ // SHIPPING_MAP_MARKER
+ // SHIPPING_MAP_VALID
+ boolean renders(Marker marker){return valid(marker);}
+ List<Marker> markers=new ArrayList<>();void setMarkers(List<Marker> values){markers=new ArrayList<>(values);}
+}
+final class UsageMapTelemetry {double cachedMedian(String id){return 0;}}
 '''
 
 EXTERNAL_ACTIVITY = r'''package com.eabusham.routervpn;
@@ -123,7 +140,7 @@ public final class NodeUsageTest{
  static JSONObject bundle(String proof,String name,int count)throws Exception{return new JSONObject().put("profileSchemaVersion",4).put("nodeProofId",proof).put("profiles",new JSONObject().put("wg",new JSONObject().put("fixture","engine-boundary"))).put("modes",new JSONArray().put(new JSONObject().put("id","wg"))).put("activeRouterProfileId","home").put("routerProfiles",new JSONArray().put(new JSONObject().put("id","home").put("name",name).put("node_proof_id",proof).put("endpoint","192.0.2.10").put("router_api","https://192.0.2.10:8443").put("api_token","private-api-token").put("use_count",count).put("last_used_at","2025-01-01T00:00:00Z").put("dns","home").put("mtu",1280)));}
  static final class Fixture implements AutoCloseable{
   final UsageActivity activity;final AndroidNodeStore store;final AndroidStandardExitStore exits;final AndroidUnifiedNodeCatalog catalog;final AndroidNodeStore.Node a,b;final AndroidStandardExitStore.Entry x,y;AndroidUnifiedConnectionController controller;Callback callback;
-  Fixture(Path root)throws Exception{Context.preferences.clear();Context.nextFiles=Files.createTempDirectory(root,"usage-").toFile();activity=new UsageActivity();NativeUsageBoundary.reset(activity);AndroidVpnMutationGuard.busy=false;AndroidRuntimeRegistry.instance=new AndroidRuntimeRegistry();android.net.VpnService.needsPermission=false;store=new AndroidNodeStore(activity);exits=new AndroidStandardExitStore(activity);catalog=new AndroidUnifiedNodeCatalog(store,exits);a=store.importBundle(bundle("a".repeat(64),"Alpha",5).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));b=store.importBundle(bundle("b".repeat(64),"Beta",1).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));store.select(a.id);x=external("provider-x","shadowsocks");y=external("provider-y","tor");exits.save(x);exits.save(y);controller=new AndroidUnifiedConnectionController(activity,store);callback=new Callback(activity,true);}
+  Fixture(Path root)throws Exception{Context.preferences.clear();Context.nextFiles=Files.createTempDirectory(root,"usage-").toFile();activity=new UsageActivity();NativeUsageBoundary.reset(activity);AndroidVpnMutationGuard.busy=false;AndroidRuntimeRegistry.instance=new AndroidRuntimeRegistry();android.net.VpnService.needsPermission=false;store=new AndroidNodeStore(activity);exits=new AndroidStandardExitStore(activity);catalog=new AndroidUnifiedNodeCatalog(store,exits);a=store.importBundle(bundle("a".repeat(64),"Alpha",5).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));b=store.importBundle(bundle("b".repeat(64),"Beta",1).toString().getBytes(java.nio.charset.StandardCharsets.UTF_8));store.select(a.id);x=external("provider-x","shadowsocks");y=external("provider-y","tor");exits.save(x);exits.save(y);controller=new AndroidUnifiedConnectionController(activity,store);activity.nodeStore=store;activity.catalog=catalog;activity.connection=controller;callback=new Callback(activity,true);}
   AndroidStandardExitStore.Entry external(String id,String protocol)throws Exception{AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.id=id;e.name=id;e.protocol=protocol;e.server="8.8.8.8";e.serverPort=443;e.method="aes-256-gcm";e.secret="private-external-secret";e.expectedPublicIp="8.8.4.4";e.responseProbe=new JSONObject().put("url","https://8.8.8.8/response");if(AndroidTorProfile.isTor(protocol))e.responseProbe=new JSONObject();return e;}
   File usage(){return store.usageFile();}byte[] read(File f)throws Exception{return Files.readAllBytes(f.toPath());}void idle(){AndroidHomeStateStore.disconnected(activity);callback=new Callback(activity,true);NativeUsageBoundary.beforeFinish=null;NativeUsageBoundary.fault="";NativeUsageBoundary.fail=false;NativeUsageBoundary.omitOwned=false;}
   int count(String kind,String id)throws Exception{if(!usage().exists())return 0;JSONArray rows=new JSONObject(Files.readString(usage().toPath())).getJSONArray("records");for(int i=0;i<rows.length();i++){JSONObject r=rows.getJSONObject(i);if(kind.equals(r.getString("kind"))&&id.equals(r.getString("node_id")))return r.getInt("count");}return 0;}
@@ -165,7 +182,7 @@ public final class NodeUsageTest{
  }
  static void stableIdentity(Path root)throws Exception{
   for(String change:List.of("name","dns","mtu","client-key","endpoint","api-token"))try(Fixture f=new Fixture(root)){f.connect();f.finish();f.idle();JSONObject b=new JSONObject(Files.readString(f.a.file.toPath()));JSONObject p=AndroidProfileSelection.selectedRouterProfile(b);if(change.equals("client-key"))b.getJSONObject("profiles").getJSONObject("wg").put("wg.conf",android.util.Base64.encodeToString("[Interface]\nPrivateKey = changed-client\n".getBytes(java.nio.charset.StandardCharsets.UTF_8),0));else p.put(change.equals("api-token")?"api_token":change,change.equals("mtu")?1376:"changed-"+change);AndroidPrivateFileStore.write(f.a.file,b.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8),AndroidNodeStore.MAX_BUNDLE);f.connect();f.finish();check(f.callback.ok&&f.count("router-vpn",f.a.id)==(change.equals("api-token")?6:7),"stable Router identity mixed or reset usage: "+change);}
-  for(String change:List.of("name","policy","credential","server"))try(Fixture f=new Fixture(root)){f.controller.connectExternal(null,f.x,true,"wg",f.callback);f.finish();f.idle();AndroidStandardExitStore.Entry e=f.exits.get(f.x.id);if(change.equals("name"))e.name="renamed";if(change.equals("policy"))e.policy=new JSONObject().put("mtu",1376).put("dns","selected");if(change.equals("credential"))e.secret="replacement-private-secret";if(change.equals("server"))e.server="8.8.4.4";e.responseProbe=new JSONObject();f.exits.save(e);f.controller.connectExternal(null,e,true,"wg",f.callback);f.finish();check(f.callback.ok&&f.count("external",e.id)==(change.equals("credential")||change.equals("server")?1:2),"stable external identity mixed or reset usage: "+change);}
+  for(String change:List.of("name","policy","location","credential","server"))try(Fixture f=new Fixture(root)){f.controller.connectExternal(null,f.x,true,"wg",f.callback);f.finish();f.idle();AndroidStandardExitStore.Entry e=f.exits.get(f.x.id);if(change.equals("name"))e.name="renamed";if(change.equals("policy"))e.policy=new JSONObject().put("mtu",1376).put("dns","selected");if(change.equals("location")){e.location="Chicago";e.latitude=41.8781;e.longitude= -87.6298;}if(change.equals("credential"))e.secret="replacement-private-secret";if(change.equals("server"))e.server="8.8.4.4";e.responseProbe=new JSONObject();f.exits.save(e);f.controller.connectExternal(null,e,true,"wg",f.callback);f.finish();check(f.callback.ok&&f.count("external",e.id)==(change.equals("credential")||change.equals("server")?1:2),"stable external identity mixed or reset usage: "+change);}
  }
  static void failedStore(Path root)throws Exception{
   for(String corrupt:List.of("duplicate-schema","duplicate-id","unknown-field","fractional-count","wrong-kind","oversize","directory"))try(Fixture f=new Fixture(root)){
@@ -208,7 +225,18 @@ public final class NodeUsageTest{
    f.finish();check(!f.usage().exists(),"management invalid final adoption counted: "+fault);if(!fault.equals("failed"))check(current.lastToast.contains("Node usage could not be saved"),"management refresh hid usage failure");current.onDestroy();first.onDestroy();
   }
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);ordinary(root);excluded(root);stableIdentity(root);failedStore(root);atomicOwner(root);ranking(root);externalActivity(root);System.out.println("Android node usage: "+checks+" shipping controller/store/Home/catalog/management checks PASS (native proof boundary controlled)");}
+ static void externalMap(Path root)throws Exception{
+  try(Fixture f=new Fixture(root)){
+   f.activity.map();check(f.activity.mapView.markers.isEmpty(),"external node acquired a fabricated coordinate before metadata was saved");
+   check(!f.activity.mapView.renders(new RouterVpnNodeMapView.Marker("legacy","Legacy",0,0,"normal",0)),"legacy Router placeholder became a false map pin");
+   AndroidStandardExitStore.Entry e=f.exits.get(f.x.id);String old=AndroidStandardExitStore.snapshot(e);e.location="Chicago";e.latitude=41.8781;e.longitude= -87.6298;f.exits.saveIfUnchanged(e,old);
+   AndroidUnifiedNodeCatalog.Item item=f.catalog.list().stream().filter(i->i.kind.equals("external")&&i.id.equals(e.id)).findFirst().orElseThrow();check(item.hasCoordinates()&&item.latitude==41.8781&&item.longitude== -87.6298&&item.location.equals("Chicago")&&item.subtitle().contains("Chicago")&&!item.hasMeasuredLatency(),"external catalog lost explicit coordinates/location or invented latency");
+   f.activity.mapPreferences().edit().putString("selected_kind","external").putString("selected_id",e.id).apply();f.activity.map();check(f.activity.mapView.markers.size()==1,"shipping map omitted the external pin or created an absent pin");RouterVpnNodeMapView.Marker marker=f.activity.mapView.markers.get(0);check(marker.id.equals("external:"+e.id)&&marker.latitude==e.latitude&&marker.longitude==e.longitude&&marker.role.equals("selected")&&marker.latencyMs==0&&f.activity.mapView.renders(marker),"shipping external pin changed exact coordinates/role or invented measurement");check(f.activity.nodeButton.getText().toString().contains("Chicago"),"selected external location label is not displayed");
+   e.latitude=0d;e.longitude=0d;f.exits.save(e);f.activity.map();check(f.activity.mapView.markers.size()==1&&f.activity.mapView.markers.get(0).latitude==0&&f.activity.mapView.markers.get(0).longitude==0&&f.activity.mapView.renders(f.activity.mapView.markers.get(0)),"valid explicit zero coordinates disappeared from shipping map");
+   e.latitude=null;e.longitude=null;f.exits.save(e);f.activity.map();check(f.activity.mapView.markers.isEmpty()&&f.activity.nodeButton.getText().toString().contains("Chicago"),"clearing coordinates retained the old pin or removed its independent label");
+  }
+ }
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);externalMap(root);ordinary(root);excluded(root);stableIdentity(root);failedStore(root);atomicOwner(root);ranking(root);externalActivity(root);System.out.println("Android node usage: "+checks+" shipping controller/store/Home/catalog/management checks PASS (native proof boundary controlled)");}
 }
 '''
 
@@ -250,6 +278,8 @@ def main():
         raise RuntimeError('Android JSON JAR is required')
     ui, boundaries = sources()
     callback = S.block((JAVA / 'ProductActivity.java').read_text(), '    private AndroidUnifiedConnectionController.Callback callback(')
+    product=(JAVA / 'ProductActivity.java').read_text()
+    map_constants='\n'.join(line for line in product.splitlines() if any(key in line for key in ('private static final String PREFS=', 'private static final String MODE_KEY=', 'private static final String MULTI_ON=')))
     with tempfile.TemporaryDirectory(prefix='routervpn-usage-') as directory, tempfile.TemporaryDirectory(prefix='.usage-json-', dir=ROOT) as validator_directory:
         root = Path(directory)
         validator_source = Path(validator_directory) / 'main.go'
@@ -263,7 +293,7 @@ def main():
         app = root / 'com/eabusham/routervpn'
         app.mkdir(parents=True)
         (app / 'Boundaries.java').write_text(boundaries)
-        (app / 'UsageActivity.java').write_text(ACTIVITY.replace(' // SHIPPING_CALLBACK', callback))
+        (app / 'UsageActivity.java').write_text(ACTIVITY.replace(' // SHIPPING_CALLBACK', callback).replace(' // SHIPPING_MAP_PROJECTION', S.block(product, '    private void refreshNodes(')).replace(' // SHIPPING_MAP_CONSTANTS', map_constants).replace(' // SHIPPING_PREFS', S.block(product, '    private SharedPreferences prefs(')).replace(' // SHIPPING_MAP_MARKER', S.block((JAVA / 'RouterVpnNodeMapView.java').read_text(), '    static final class Marker')).replace(' // SHIPPING_MAP_VALID', S.block((JAVA / 'RouterVpnNodeMapView.java').read_text(), '    private boolean valid(Marker m)')))
         external = (JAVA / 'StandardExitActivity.java').read_text()
         start = external.index('\n', external.index('public final class StandardExitActivity'))
         fields = external[start:external.index('    @Override protected void onCreate(')]
@@ -286,6 +316,8 @@ def main():
         subprocess.run(compile, check=True, timeout=45)
         subprocess.run(run, check=True, timeout=60)
         controls = (
+            ('UsageActivity.java', '(m.explicitCoordinates||!(m.latitude==0&&m.longitude==0))', '!(m.latitude==0&&m.longitude==0)', 'valid explicit zero coordinates disappeared from shipping map'),
+            ('AndroidUnifiedNodeCatalog.java', 'exit.protocol,exit.expectedPublicIp,exit.location,exit.latitude,exit.longitude,null,null,0,', 'exit.protocol,exit.expectedPublicIp,"",null,null,null,null,0,', 'external catalog lost explicit coordinates/location or invented latency'),
             ('AndroidNodeUsage.java', 'for(Node node:nodes)node.source.requireCurrent();', '/* broken: no source binding */', 'invalid adoption recorded usage: source'),
             ('AndroidNodeUsage.java', 'requireOwner(home);', '/* broken: no proved owner */', 'invalid adoption recorded usage: owner'),
             ('AndroidUnifiedConnectionController.java', 'if(!callback.recordsNodeUsage()||pendingStartup!=null)return null;', 'if(pendingStartup!=null)return null;', 'temporary trial counted as user adoption: router'),

@@ -61,7 +61,7 @@ def main():
         (app / "CatalogStores.java").write_text('''package com.eabusham.routervpn;
 import java.io.File;import java.util.*;
 final class AndroidNodeStore {static final int MAX_BUNDLE=32*1024*1024;static final class Node{String id,name,endpoint;File file;}String activeId(){return "";}List<Node> list(){return Collections.emptyList();}File usageFile(){throw new AssertionError("profile selection fixture does not load usage");}}
-final class AndroidStandardExitStore {static final class Entry{String id,name,server,protocol,expectedPublicIp;int serverPort;}List<Entry> list(){return Collections.emptyList();}}
+final class AndroidStandardExitStore {static final class Entry{String id,name,server,protocol,expectedPublicIp,location;Double latitude,longitude;int serverPort;}List<Entry> list(){return Collections.emptyList();}}
 // This fixture calls selectedProfile only. Full durable loading/ranking executes
 // in test_android_current_telemetry.py with the shipping statistics class.
 final class AndroidNodeStatistics {static final class Record{double median,p90;int samples;boolean eligible(){return false;}}static Record load(AndroidNodeStore.Node node){return null;}}

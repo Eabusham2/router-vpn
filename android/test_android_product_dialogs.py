@@ -55,7 +55,7 @@ final class AndroidNodeStore {
 final class AndroidUnifiedNodeCatalog {
  static final String SORT_CURRENT="current";
  static final class Item {
-  final String id,name;final boolean router;boolean usageAvailable=true;int useCount;Item(String id,boolean router){this.id=id;this.name="Catalog "+id;this.router=router;}
+  final String id,name;String location="";final boolean router;boolean usageAvailable=true;int useCount;Item(String id,boolean router){this.id=id;this.name="Catalog "+id;this.router=router;}
   boolean isRouterVpn(){return router;}boolean hasCoordinates(){return router;}Double latencyMedianMs;boolean hasMeasuredLatency(){return latencyMedianMs!=null;}
  }
  final List<Item> items=new ArrayList<>(Arrays.asList(new Item("a",true),new Item("external",false)));

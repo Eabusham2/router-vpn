@@ -369,9 +369,37 @@ public final class StandardExitActivity extends Activity {
     private void showExitActions(AndroidStandardExitStore.Entry e) {
         boolean tor=AndroidTorProfile.isTor(e.protocol);
         boolean ordinary=AndroidExternalPolicy.supports(e.protocol);
-        String[] actions=tor?new String[]{"Connect direct","Connect through Router VPN entry","Edit saved Tor settings","Compare DNS on this connected path","Delete"}:ordinary?new String[]{"Connect direct","Connect through Router VPN entry","Edit DNS, network and MTU settings","Compare DNS on this connected path","Delete"}:new String[]{"Connect direct","Connect through Router VPN entry","Delete"};
+        String[] actions=tor?new String[]{"Connect direct","Connect through Router VPN entry","Edit saved Tor settings","Compare DNS on this connected path","Location on map","Delete"}:ordinary?new String[]{"Connect direct","Connect through Router VPN entry","Edit DNS, network and MTU settings","Compare DNS on this connected path","Location on map","Delete"}:new String[]{"Connect direct","Connect through Router VPN entry","Location on map","Delete"};
         new AlertDialog.Builder(this).setCustomTitle(choiceHeader(e.name+" — "+e.protocol,exitSummary(e)+"\nCredentials and bridge blocks remain private."))
-                .setItems(actions,(d,w)->{if(w==0)requestDirect(e);else if(w==1)chooseEntry(e);else if(tor&&w==2)showTorForm(e.protocol,e);else if(ordinary&&w==2)showExternalPolicyForm(e);else if((tor||ordinary)&&w==3)showDNSComparison(e.id);else new AlertDialog.Builder(this).setTitle("Delete "+e.name+"?").setMessage("Only this app-private custom exit will be removed.").setPositiveButton("Delete",(x,y)->{if(activeOrTransitioning()){toast("VPN state changed; disconnect/finish before deleting a custom exit.");return;}try{exitStore.remove(e.id);refresh();toast("Deleted "+e.name);}catch(Exception err){toast(safe(err));}}).setNegativeButton("Cancel",null).show();}).setNegativeButton("Close",null).show();
+                .setItems(actions,(d,w)->{if(w==0)requestDirect(e);else if(w==1)chooseEntry(e);else if(tor&&w==2)showTorForm(e.protocol,e);else if(ordinary&&w==2)showExternalPolicyForm(e);else if((tor||ordinary)&&w==3)showDNSComparison(e.id);else if(w==actions.length-2)showLocationForm(e);else new AlertDialog.Builder(this).setTitle("Delete "+e.name+"?").setMessage("Only this app-private custom exit will be removed.").setPositiveButton("Delete",(x,y)->{if(activeOrTransitioning()){toast("VPN state changed; disconnect/finish before deleting a custom exit.");return;}try{exitStore.remove(e.id);refresh();toast("Deleted "+e.name);}catch(Exception err){toast(safe(err));}}).setNegativeButton("Cancel",null).show();}).setNegativeButton("Close",null).show();
+    }
+
+    private void showLocationForm(AndroidStandardExitStore.Entry selected){
+        if(activeOrTransitioning()){toast("Disconnect/finish the current VPN session before changing its saved location.");return;}
+        final AndroidStandardExitStore.Entry captured;final String source;
+        try{
+            captured=AndroidStandardExitStore.copy(selected);source=exitStore.storedSnapshot(captured.id);
+            if(source.isEmpty()||!source.equals(AndroidStandardExitStore.snapshot(captured)))throw new IllegalStateException("This external node changed or was removed. Reopen its current location.");
+        }catch(Exception stale){toast(safe(stale));return;}
+        LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);int p=dp(10);form.setPadding(p,p,p,p);
+        form.addView(text("Enter the node's known location and coordinates. A map pin appears only when both coordinates are supplied. Clear both to keep the node in the list without a pin.",14,false));
+        EditText location=field("Location label (optional)",false),latitude=field("Latitude (-90 to 90)",false),longitude=field("Longitude (-180 to 180)",false);
+        location.setText(captured.location);latitude.setText(captured.latitude==null?"":Double.toString(captured.latitude));longitude.setText(captured.longitude==null?"":Double.toString(captured.longitude));
+        latitude.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL|InputType.TYPE_NUMBER_FLAG_SIGNED);
+        longitude.setInputType(InputType.TYPE_CLASS_NUMBER|InputType.TYPE_NUMBER_FLAG_DECIMAL|InputType.TYPE_NUMBER_FLAG_SIGNED);
+        form.addView(location);form.addView(latitude);form.addView(longitude);TextView error=text("",13,false);form.addView(error);
+        ScrollView scroll=new ScrollView(this);scroll.addView(form);
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle(captured.name+" • Location on map").setView(scroll).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
+        dialog.setOnShowListener(ignored->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view->{
+            try{
+                if(activeOrTransitioning())throw new IllegalStateException("VPN state changed. Disconnect/finish before saving location.");
+                AndroidStandardExitStore.Entry next=AndroidStandardExitStore.copy(captured);next.location=location.getText().toString();
+                String lat=latitude.getText().toString().trim(),lon=longitude.getText().toString().trim();
+                next.latitude=lat.isEmpty()?null:Double.valueOf(lat);next.longitude=lon.isEmpty()?null:Double.valueOf(lon);
+                AndroidStandardExitStore.validateLocation(next);exitStore.saveIfUnchanged(next,source);dialog.dismiss();refresh();toast("Saved "+next.name+" location");
+            }catch(NumberFormatException invalid){error.setText("Enter numeric latitude and longitude, or leave both blank.");}
+            catch(Exception invalid){error.setText(safe(invalid));}
+        }));dialog.show();
     }
 
     private void showDNSComparison(String nodeID){
