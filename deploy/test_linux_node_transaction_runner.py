@@ -97,6 +97,21 @@ class LinuxNodeTransactionRunner(unittest.TestCase):
             self.assertEqual(RUNNER.namespace_test(path, digest, "NodeFallback"), 29)
         native.assert_called_once_with(path, "NodeFallback", digest)
 
+    def test_transition_preserves_original_legacy_and_native_owners(self):
+        self.assertEqual(RUNNER.TRANSITION_CASES,
+                         ("empty", "fixed-active", "fixed-wrong-family", "unrelated-table", "node-predecessor",
+                          "command-replaced", "operation-replaced", "cancelled", "entered-host"))
+        self.assertEqual(RUNNER.GROUPS["NodeTransition"], RUNNER.TRANSITION_CASES)
+        closure = RUNNER.checked_sources()
+        for relative in ("cmd/client/desktop_node_host_linux_transition.go",
+                         "cmd/client/desktop_node_host_linux_transition_native_test.go",
+                         "internal/mobiletor/desktop_socket_linux_legacy_transition.go"):
+            self.assertIn(relative, closure)
+        path, digest = Path("/captured/native-transition.test"), "b" * 64
+        with patch.object(RUNNER.GUARD, "namespace_test", return_value=31) as native:
+            self.assertEqual(RUNNER.namespace_test(path, digest, "NodeTransition"), 31)
+        native.assert_called_once_with(path, "NodeTransition", digest)
+
     def test_skipped_failed_and_empty_results_fail(self):
         for result in ("", "\n".join(completed()) + "\n--- SKIP: missing native dependency (0.10s)",
                        "\n".join(completed()) + "\n--- FAIL: actual child (0.10s)"):

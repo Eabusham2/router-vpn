@@ -41,8 +41,10 @@ STOP_CASES = ("on-connect", "hold-on-connect", "request-ended", "mtu-drain", "ca
               "released-legacy", "released-legacy-closing", "released-node-guard", "released-journal-change", "closing-active", "always")
 FALLBACK_CASES = ("held-on-connect", "strategy-failure", "cancelled-active", "older-active", "active-release",
                   "temporary-deferred", "duplicate-owner", "partial-journal", "empty-legacy", "always")
+TRANSITION_CASES = ("empty", "fixed-active", "fixed-wrong-family", "unrelated-table", "node-predecessor",
+                    "command-replaced", "operation-replaced", "cancelled", "entered-host")
 GROUPS = {"NodeSession": SESSION_CASES, "NodeTransaction": CASES, "NodeShutdown": SHUTDOWN_CASES, "NodeHost": HOST_CASES,
-          "NodeHostStart": HOST_START_CASES, "NodeProofSocket": PROOF_SOCKET_CASES, "NodeStop": STOP_CASES, "NodeFallback": FALLBACK_CASES}
+          "NodeHostStart": HOST_START_CASES, "NodeProofSocket": PROOF_SOCKET_CASES, "NodeStop": STOP_CASES, "NodeFallback": FALLBACK_CASES, "NodeTransition": TRANSITION_CASES}
 UNIT_CASES = {
     "TestDesktopLinuxNodeActivationProof": ("absent", "historical-clock", "historical-start", "historical-now", "stale", "future", "before-start",
                                             "zero-elapsed", "negative-elapsed", "unbounded-elapsed", "impossible-elapsed", "unbounded-deadline",
@@ -78,6 +80,8 @@ def checked_sources():
         "cmd/client/controller_shutdown.go", "cmd/client/desktop_node_shutdown_linux.go",
         "cmd/client/desktop_node_linux_retirement.go", "cmd/client/desktop_node_linux_shutdown_native_test.go",
         "cmd/client/desktop_node_host_linux.go", "cmd/client/desktop_node_host_linux_native_test.go",
+        "cmd/client/desktop_node_host_linux_transition.go", "cmd/client/desktop_node_host_linux_transition_native_test.go",
+        "internal/mobiletor/desktop_socket_linux_legacy_transition.go",
         "cmd/client/desktop_node_host_linux_start.go", "cmd/client/desktop_node_host_linux_start_native_test.go",
         "cmd/client/desktop_node_session_linux.go", "cmd/client/desktop_node_session_linux_native_test.go",
         "cmd/client/desktop_node_stop_linux.go", "cmd/client/desktop_node_stop_other.go", "cmd/client/desktop_node_stop_linux_native_test.go",
