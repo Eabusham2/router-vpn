@@ -14,6 +14,7 @@ import importlib.util
 import os
 import platform
 import stat
+import subprocess
 import sys
 import tempfile
 
@@ -128,16 +129,27 @@ def execute(source, go="go", *, env=None):
         print("Linux Node captured admission, actual nft/TUN/SS2022/DNS and joined retirement passed; parent journal and device acceptance are separate.")
 
 
-if __name__ == "__main__":
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path, nargs="?")
     parser.add_argument("--go", default="go")
     parser.add_argument("--namespace-test-binary", type=Path)
     parser.add_argument("--namespace-test-sha256")
     parser.add_argument("--kernel-case", choices=CASES)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.namespace_test_binary:
         raise SystemExit(namespace_test(args.namespace_test_binary, args.kernel_case, args.namespace_test_sha256))
     if args.source is None or args.kernel_case is not None:
         parser.error("an exact prepared source is required; kernel-case is only for the owned namespace invocation")
-    execute(args.source, args.go)
+    try:
+        execute(args.source, args.go)
+    except subprocess.CalledProcessError as error:
+        # UID.run already captured and joined this failed original child. Keep
+        # its failure while exposing the bounded native cause to the builder.
+        if error.output:
+            sys.stderr.write(error.output[-32768:].decode("utf-8", errors="replace"))
+        raise
+
+
+if __name__ == "__main__":
+    main()
