@@ -199,6 +199,14 @@ jobs:
             -t router-vpn-preflight-aux-interop:arm64 .
           bash deploy/run_aux_interoperability_container.sh router-vpn-preflight-aux:arm64 router-vpn-preflight-aux-interop:arm64 router-vpn-preflight-naive:arm64
 
+      - name: Prove selected private DNS through actual OverTLS
+        timeout-minutes: 12
+        run: |
+          docker buildx build --platform linux/arm64 --progress=plain --load \
+            --target aux-dns-interoperability -f server/aux-proxies/Dockerfile \
+            -t router-vpn-preflight-aux-dns-interop:arm64 .
+          bash deploy/run_aux_interoperability_container.sh router-vpn-preflight-aux:arm64 router-vpn-preflight-aux-dns-interop:arm64 router-vpn-preflight-naive:arm64 dns
+
       - name: Smoke-test built ARM64 binaries
         run: |
           docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-init:arm64 -c 'test -x /usr/local/bin/router-vpn-init && test -x /src/server/scripts/generate-setup-assets.py && test -x /src/server/scripts/generate-aux-proxies.py && test -x /src/server/scripts/create-bundle-json.py && test -x /src/server/scripts/build-download-on-demand.py && test -x /src/server/scripts/download-broker.py && test -x /src/server/scripts/apply-runtime.sh && command -v go >/dev/null'

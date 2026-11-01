@@ -1,0 +1,20 @@
+--- a/src/server.rs
++++ b/src/server.rs
+@@ -600,14 +600,9 @@
+         }
+     }
+     let info = format!("{src_addr} <> {dst_addr} All addresses failed to select");
+-    let mut dst_addr = ipv4_addr.or(ipv6_addr).ok_or(Error::from(info))?;
+-
+-    if dst_addr.port() == 53 && addr_is_private(&dst_addr) {
+-        match dst_addr {
+-            SocketAddr::V4(_) => dst_addr = "8.8.8.8:53".parse::<SocketAddr>()?,
+-            SocketAddr::V6(_) => dst_addr = "[2001:4860:4860::8888]:53".parse::<SocketAddr>()?,
+-        }
+-    }
++    // Honor the caller-selected resolver and destination. A private DNS
++    // address must never be silently replaced with a public resolver.
++    let dst_addr = ipv4_addr.or(ipv6_addr).ok_or(Error::from(info))?;
+ 
+     if dst_addr.is_ipv4() {
+         udp_socket.send_to(&pkt, &dst_addr).await?;

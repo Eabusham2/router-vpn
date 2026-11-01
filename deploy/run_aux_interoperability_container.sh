@@ -5,6 +5,13 @@ set -euo pipefail
 aux=${1:?built production auxiliary image is required}
 fixture=${2:?built auxiliary interoperability image is required}
 naive=${3:-}
+mode=${4:-payload}
+setup_caps=(--cap-add NET_ADMIN)
+case "$mode" in
+  payload) ;;
+  dns) setup_caps+=(--cap-add NET_BIND_SERVICE) ;;
+  *) echo 'Unknown auxiliary fixture mode' >&2; exit 2 ;;
+esac
 
 binary_hash() {
   local result value
@@ -32,10 +39,11 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 # NET_ADMIN is used only to assign TEST-NET-1 to this isolated loopback. The
-# entry point drops every effective/permitted/inheritable capability, and the
-# driver verifies that state before launching any protocol process.
+# DNS setup additionally binds owned resolver sockets on port 53. The entry
+# point drops every effective/permitted/inheritable capability, and the driver
+# verifies that state before launching any protocol process.
 owned=$(docker create --init --network none --platform linux/arm64 \
-  --cap-drop ALL --cap-add NET_ADMIN --security-opt no-new-privileges --pids-limit 256 \
+  --cap-drop ALL "${setup_caps[@]}" --security-opt no-new-privileges --pids-limit 256 \
   --memory 768m --cpus 2 --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
   --env ROUTERVPN_REQUIRE_PRODUCTION_HASHES=1 \
   --env "ROUTERVPN_SSR_SERVER_SHA256=$ssr_hash" \

@@ -265,6 +265,14 @@ jobs:
             -t router-vpn-ci-aux-interop:arm64 .
           bash deploy/run_aux_interoperability_container.sh router-vpn-ci-aux:arm64 router-vpn-ci-aux-interop:arm64
 
+      - name: Prove selected private DNS through actual OverTLS
+        timeout-minutes: 12
+        run: |
+          docker buildx build --platform linux/arm64 --progress=plain --load \
+            --target aux-dns-interoperability -f server/aux-proxies/Dockerfile \
+            -t router-vpn-ci-aux-dns-interop:arm64 .
+          bash deploy/run_aux_interoperability_container.sh router-vpn-ci-aux:arm64 router-vpn-ci-aux-dns-interop:arm64 "" dns
+
       - name: Smoke-test generated OverTLS and SSR services
         shell: bash
         run: |

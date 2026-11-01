@@ -130,17 +130,18 @@ class Children:
 
 class PayloadPeers:
     """Independent receipt counters make missing echoes insufficient rejection."""
-    def __init__(self):
+    def __init__(self, host=PEER_HOST):
         self.stop = threading.Event()
         self.lock = threading.Lock()
         self.received = {}
         self.errors = []
         self.connections = set()
         self.workers = []
-        self.tcp = socket.socket()
-        self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.tcp.bind((PEER_HOST, 0))
-        self.udp.bind((PEER_HOST, 0))
+        family = socket.AF_INET6 if ipaddress.ip_address(host).version == 6 else socket.AF_INET
+        self.tcp = socket.socket(family)
+        self.udp = socket.socket(family, socket.SOCK_DGRAM)
+        self.tcp.bind((host, 0))
+        self.udp.bind((host, 0))
         self.tcp.listen(8)
         self.tcp.settimeout(0.1)
         self.udp.settimeout(0.1)
@@ -235,7 +236,8 @@ class PayloadPeers:
 
 
 def socks_address(address):
-    return b"\x01" + socket.inet_aton(address[0]) + struct.pack("!H", address[1])
+    host = ipaddress.ip_address(address[0])
+    return bytes([1 if host.version == 4 else 4]) + host.packed + struct.pack("!H", address[1])
 
 
 def reply(connection):
@@ -345,16 +347,17 @@ def caddy_configuration(source, directory, ports, tunnel_path):
     return config
 
 
-def execute(source, overtls_server, overtls_client, ssr_server, ssr_client, ssr_stock_client, caddy, openssl):
-    for binary in (overtls_server, overtls_client, ssr_server, ssr_client, ssr_stock_client, caddy, openssl):
+def execute(source, overtls_server, overtls_client, overtls_stock_client, ssr_server, ssr_client, ssr_stock_client, caddy, openssl):
+    for binary in (overtls_server, overtls_client, overtls_stock_client, ssr_server, ssr_client, ssr_stock_client, caddy, openssl):
         if not binary.is_file() or not os.access(binary, os.X_OK):
             raise ValueError("required actual interoperability binary is unavailable: " + str(binary))
-    for binary in (overtls_server, overtls_client):
+    for binary in (overtls_server, overtls_client, overtls_stock_client):
         version = subprocess.check_output([str(binary), "--version"], timeout=5, text=True)
         if "0.3.12" not in version.split():
             raise ValueError("interoperability requires the pinned OverTLS version")
     binary_hashes = {}
     for name, binary in (("overtls-server", overtls_server), ("overtls-reference-client", overtls_client),
+                         ("overtls-stock-client", overtls_stock_client),
                          ("ssr-server", ssr_server), ("ssr-reference-client", ssr_client),
                          ("ssr-stock-client", ssr_stock_client), ("caddy", caddy)):
         with binary.open("rb") as stream:
@@ -446,7 +449,7 @@ def execute(source, overtls_server, overtls_client, ssr_server, ssr_client, ssr_
                 stock["client_settings"]["listen_port"] = stock_port
                 stock_path = directory / (protocol + "-stock.json")
                 private_json(stock_path, stock)
-                stock_command = [ssr_stock_client, "-c", stock_path] if protocol == "ssr" else [overtls_server, "-r", "client", "-c", stock_path]
+                stock_command = [ssr_stock_client, "-c", stock_path] if protocol == "ssr" else [overtls_stock_client, "-r", "client", "-c", stock_path]
                 children.start(protocol + "-stock-client", stock_command, stock_port)
                 payload = secrets.token_bytes(PAYLOAD_SIZE)
                 try:
@@ -487,7 +490,7 @@ def execute(source, overtls_server, overtls_client, ssr_server, ssr_client, ssr_
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, default=ROOT)
-    for name in ("overtls-server", "overtls-client", "ssr-server", "ssr-client", "ssr-stock-client", "caddy", "openssl"):
+    for name in ("overtls-server", "overtls-client", "overtls-stock-client", "ssr-server", "ssr-client", "ssr-stock-client", "caddy", "openssl"):
         parser.add_argument("--" + name, required=True, type=Path)
     args = parser.parse_args()
     def expired(_signal, _frame):
@@ -495,7 +498,7 @@ def main():
     signal.signal(signal.SIGALRM, expired)
     signal.alarm(180)
     try:
-        execute(args.source.resolve(), args.overtls_server.resolve(), args.overtls_client.resolve(), args.ssr_server.resolve(),
+        execute(args.source.resolve(), args.overtls_server.resolve(), args.overtls_client.resolve(), args.overtls_stock_client.resolve(), args.ssr_server.resolve(),
                 args.ssr_client.resolve(), args.ssr_stock_client.resolve(), args.caddy.resolve(), args.openssl.resolve())
     finally:
         signal.alarm(0)
