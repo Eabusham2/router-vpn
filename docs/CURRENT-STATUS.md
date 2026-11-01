@@ -6,7 +6,57 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 449abaad
+## Latest implementation continuation — through d8bb8018
+
+The independently verified source cutoff is
+[`d8bb8018f7f28bd5c1fb39121381be6be3034c9d`](https://github.com/Eabusham2/router-vpn/commit/d8bb8018f7f28bd5c1fb39121381be6be3034c9d).
+[November 1 continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md)
+preserves the earlier publications and records each native result against its
+own source SHA. Passing jobs from different commits do not establish a release
+of this cutoff. The original requirements and later corrections remain binding.
+
+- The generated Linux command passed actual encrypted TUN, selected-DNS,
+  captured-MTU/rollback and joined-retirement acceptance on both AMD64 and
+  ARM64 at `2533e146`. Each host passed all six required cases. Subsequent
+  source now binds readiness and private Router HTTP proof to the retained
+  kernel interface, and a cancelled read-only check preserves the original
+  retirement owners. The complete installed bundle, application host,
+  readiness, routed Router proof and durable retirement still need their
+  assembled acceptance gate. Public Linux Node admission remains closed.
+- Windows PQ passed its complete shipping-predicate native gate on both
+  architectures at `80dace69`: six traffic, sixteen credential and three
+  succession cases, foreign-predecessor rejection, the separately compiled
+  closed-family check and all six native controls. Actual retained Node and
+  controller jobs also passed at `ec35da9d`, including all eight prospective
+  ALL controls and four temporary restoration cases. These are bounded native
+  results, not physical-device or full-release acceptance.
+- Both actual Windows build-owner jobs passed at `7219127c`, including retained
+  descendant completion handles, denied post-seal nested creation, immediate
+  file deletion and survival of a foreign same-image process. At `2533e146`,
+  the captured Node and encrypted WFP ARM64 jobs passed; their AMD64 siblings
+  were cancelled. The latter success covers the retained peer-allocation
+  changes and ordinary graph families, not complete helper/PQ/MAX admission.
+- Complete MAX remains closed. The ARM64 job at `0c453351` passed all twelve
+  traffic and 48 credential-negative cases, then failed five restored QUIC
+  paths on their first encrypted transfer after fresh key agreement. This is
+  distinct from the older aggregate deadline. `d8bb8018` adds bounded retained
+  reference/key/policy diagnostics while preserving the original three-second
+  transfer limit and failing result; it does not claim a cause or repair.
+  Separate native UDP 10022 failures now retain their exact syscall stage and
+  original error (`ee6ec784`); their cause also remains unproved.
+- macOS ARM64 passed full-host managed inventory and its copied/unlinked
+  controls at `2cd8c91f`; first/legacy inventory and the unresolved Intel image
+  remain blocked. The Endpoint Security probe is diagnostic only and requires
+  actual copied/unlinked image evidence. Both native probes at `ee6ec784`
+  failed to obtain the required matching event before their deadline; workflow
+  continuation is not a diagnostic pass or installer admission.
+- The fresh release read for this refresh still reports prerelease `745b3e41`
+  with twelve assets. There is no verified all-green release for this newer
+  source series. Signing, physical/off-LAN checks, private deployment and live
+  ASUS/Portainer acceptance remain separate. No live router, forwarding,
+  AdGuard or deployment target was changed.
+
+## Earlier implementation continuation — through 449abaad
 
 The independently verified source cutoff is
 [`449abaad907b546229126869f047136b351f5415`](https://github.com/Eabusham2/router-vpn/commit/449abaad907b546229126869f047136b351f5415).
