@@ -3,7 +3,7 @@
 This continues [October 31](CONTINUATION-EVIDENCE-2026-10-31.md), preserves
 [the reconciled requirement authority](REQUIREMENTS-RECONCILED.md), and records
 published source through
-[`17a6eb67142a59abb93935f80d02ff5a925b02f3`](https://github.com/Eabusham2/router-vpn/commit/17a6eb67142a59abb93935f80d02ff5a925b02f3).
+[`c51e7b5944d835a4aa6a79881ec91a9c34bd779f`](https://github.com/Eabusham2/router-vpn/commit/c51e7b5944d835a4aa6a79881ec91a9c34bd779f).
 The live `main` reference was independently read after publication. Later local
 work is not included in this source cutoff. Original requirements, C1–C7,
 the later product/breakage, map-first, external-node and all-device corrections
@@ -14,7 +14,59 @@ Native evidence below keeps its own exact source identity. The retained
 historical observations are not silently reassigned to this newer cutoff,
 and unrelated passing jobs are not combined into a release claim.
 
-## Latest source and native evidence through 17a6eb67
+## Latest source and native evidence through c51e7b59
+
+This section updates the recovered requirement ledger against published source.
+The original audit identifiers, C1–C7 and later overlapping requests remain the
+authority; a completed source unit does not erase its native or live acceptance.
+Every change below was published directly to `main`, with expected-parent
+protection and independent remote readback. Unfinished work is excluded.
+
+### Published source since the preceding reconciliation
+
+| Commit | Implemented behavior and executable evidence |
+|---|---|
+| [`6d5b19de`](https://github.com/Eabusham2/router-vpn/commit/6d5b19de9a772f41f28042ecaab23a60755b93e6) | Add primary descending Most used sorting to the desktop public profile projection and native Windows/macOS/Linux controls. Deterministic ties use real recency, name and ID; selection and secret redaction remain unchanged. Existing sorting, HTTP projection and control checks passed. |
+| [`a0c1c2bc`](https://github.com/Eabusham2/router-vpn/commit/a0c1c2bca58b1a4c90ae94b7970809f72a73555f) | Implement saved Linux protection Off against the original retained session/journal: durable intent, native release and absence, complete private-profile save/readback, empty settlement, then close. Interrupted/save/cleanup failures retain the same accepted retry owner and truthful off-pending/off-unsaved state. Ordinary Always Disconnect still retains protection. Focused app/journal race tests, Windows compilation and installed-runner checks passed. Two installed scenarios bring the full gate to 31; actual installed execution remains required. |
+| [`c6f7d668`](https://github.com/Eabusham2/router-vpn/commit/c6f7d6680f95238c00db86687cd5954707225503) | Adapt the shipping macOS and Linux source transforms to the new Most used controls, preserving all existing mutation guards. Full transforms produced the same guarded output as the prior source after normalizing the intended UI additions; changed-anchor/source controls rejected. The exact-SHA native release-blocker source gate passed. |
+| [`d23ec9fe`](https://github.com/Eabusham2/router-vpn/commit/d23ec9fe801af2f0af3707780955883dc31ca1a6) | Repair the optimized SSR server startup crash caused by a conditional field changing the shared callback-structure layout with include order. The pinned production patch keeps that field unconditional; no runtime check is removed. Real header/ABI checks pass, and the original layout must reproduce its failure. Optimized native payload tests pass with explicitly corrected reference clients. |
+| [`23638e22`](https://github.com/Eabusham2/router-vpn/commit/23638e22ea263537a1ddf21774ebdfd064090a33) | Add real SSR and OverTLS TCP/UDP payload gates using generated profiles, the shipping Caddy TLS stanza, independent delivery receipts and wrong-password/path/TLS controls. All eight cases pass. Both pinned unmodified clients' UDP returned-address defects are executable negative controls; their explicit corrections remain test-only. CI compares fixture server bytes with the finalized ARM64 images. Local native success is not completed ARM64/image or delivered-client acceptance. |
+| [`29497c54`](https://github.com/Eabusham2/router-vpn/commit/29497c54450dfcb37854e55bf20aaa699bedefb3) | Update LastUsedAt with the existing successful-use mutation in three desktop multihop/standard-exit handlers. Preserve proof, owner and rollback checks. Focused usage, sorting and selection tests passed against an isolated published-source copy. |
+| [`d364b36d`](https://github.com/Eabusham2/router-vpn/commit/d364b36d37aff4e2089c4da1c6737fca2f0afe17) | Add Android daily ProductActivity usage accounting and Most used sorting. A process-owned permission receipt freezes user intent; final Home session, generation, topology, proof and exact private sources must still match before an atomic distinct-node update. Startup, trials, failures and duplicate callbacks do not count. Active bundles remain untouched; optional save failure preserves the proved connection and shows a warning. The shipping controller/Home/store/catalog fixture passed 101 checks and five defect controls; focused permission, startup, Speed Lab, telemetry, dialog/import and selection regressions also passed. Enabled StandardExitActivity's separate manual Connect remains a follow-up. |
+| [`644cc0fc`](https://github.com/Eabusham2/router-vpn/commit/644cc0fce4b9f73f9b79ccbb707d2721aee45336) | Add iOS private usage and Most used sorting, bound to the original source, native connection date, generation, provider/runtime identity and saved route/on-demand flags across final refresh. Count only successful final user adoption; failed restoration, startup, trials and stale owners are excluded. Distinct entry/exit history updates together without modifying raw bundles. Real-SHA256 sidecar/sort tests passed 45 checks; the app/provider composition passed 196 checks and all eight existing defect controls. The portable runtime contract also passed, including 185 SIP003 checks. Native OS/private-file boundaries remain explicit fixtures; Xcode/device evidence is separate. |
+| [`c51e7b59`](https://github.com/Eabusham2/router-vpn/commit/c51e7b5944d835a4aa6a79881ec91a9c34bd779f) | Remove OverTLS's silent replacement of caller-selected private UDP DNS endpoints with Google. Preserve literal IPv4/IPv6 destinations and existing private TCP restrictions. Twelve actual native DNS cases pass: A/AAAA selected-resolver receipts, an identical wrong-resolver answer rejected by proof, original-server substitution caught by owned local canaries, untrusted TLS with no delivery, and private TCP still rejected. Fourteen attempts produced the expected twelve resolver receipts. All eight payload cases and two stock-client controls also pass with the patched server. No DNS default or resolver allowlist is added; actual AdGuard, native-app DNS, ARM64 image and device acceptance remain separate. |
+
+### Newly completed native evidence
+
+At exact `9201f036`, the complete
+[macOS socket workflow](https://github.com/Eabusham2/router-vpn/actions/runs/41346784897)
+now passed all four jobs: Intel and Apple Silicon socket/PF/utun gates plus
+both single-filter gates. The actual logs include bounded frame admission,
+owner/permit expiry, descriptor retirement, private-peer identity and native
+firewall negative controls. This supersedes the earlier pending guardian
+observation, not the separate installer inventory/signing requirements.
+
+At exact `aaea06e7`, the running
+[Windows native job](https://github.com/Eabusham2/router-vpn/actions/runs/41345891242/job/124968205393)
+passed the installed/Portable Session step and the WFP traffic step that failed
+at `badfa9735`. At the November 1 21:12 UTC read it had reached native DNS
+measurements. That is a newer passing observation for the step, not a diagnosed
+cause of the older UDP4 mismatch or a completed workflow. The numeric diagnostic
+in `17a6eb67` remains, with every refusal unchanged. The six-case Linux generated
+TUN passes at `aaea06e7` retain their separate identity and scope below.
+
+### Actual remaining requirements at this cutoff
+
+| Area and original references | Remaining source or acceptance work |
+|---|---|
+| Linux protection and graph integration; #337, #340–342 | Saved-policy Off is implemented. Run the complete 31-case installed-host gate on both architectures. Legacy guard succession, crash/retained Always recovery and broader retained graph/Start Layer coverage remain source work. |
+| Node catalog, sorting and history; #141–148, #335 and later map request | Most used exists across all native surfaces, with published mobile daily-use accounting. Close the enabled Android management-screen Connect accounting path. Android external coordinates/location and durable source-bound measurements remain unfinished. Verify packaged rendering and actual device interactions separately. |
+| Methods; #19, #26–30, #34, #265–269 and C1 | Real auxiliary payload and selected UDP DNS gates now exist. The pinned upstream SSR/OverTLS UDP client defects are not fixed by shipping test-only reference clients. Complete usable client/import delivery and independent client/off-LAN acceptance, including the earlier Shadowsocks and AWG cases. |
+| Windows native and complete MAX / ALL | Finish current native installation, Portable, WFP and Tor cleanup gates; investigate any reproduced failures from their actual diagnostics. Complete MAX remains closed pending all full traffic/succession/negative cases. Ordinary composite support is not evidence for the complete MAX families. |
+| macOS installation and desktop PQ fixture | Guardian native acceptance passed at its exact SHA. Strict first/legacy inventory, unresolved executable identity and signing/entitlement requirements remain open. Eight unpublished PQ fixture files were preserved after an automated safety check stopped that validation; they are not included in the source cutoff or counted as passing. |
+| Exact-SHA publication and live acceptance | This newer source series has no verified complete release. The last observed published release remains the twelve-asset `745b3e41` prerelease. Physical networking/leaks/transitions, off-LAN methods, visual/accessibility checks, production signing/upgrade acceptance, live providers, deliberate private deployment and ASUS fail-open acceptance remain separate. No live target was changed. |
+
+## Earlier source and native evidence through 17a6eb67
 
 Original-source recovery is recorded in
 [Requirements Reconciliation](REQUIREMENTS-RECONCILIATION.md#original-source-recovery-refreshed-november-1-2026).

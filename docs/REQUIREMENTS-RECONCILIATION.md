@@ -18,6 +18,23 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
+## Implementation reconciliation through c51e7b59
+
+The original sources below have already been recovered. The next step is to
+close their actual implementation and acceptance gaps; repeating recovery or
+substituting a smaller green gate does not satisfy them. The current published
+cutoff is [`c51e7b59`](https://github.com/Eabusham2/router-vpn/commit/c51e7b5944d835a4aa6a79881ec91a9c34bd779f).
+Detailed commits, tests and exact native outcomes are in
+[the current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-c51e7b59).
+
+| Recovered scope | Current reconciliation |
+|---|---|
+| #112, #200–213 and #337 protection ownership | Linux saved-policy Off is now published with durable original-session release/save/settlement and bounded retry. Complete installed acceptance, legacy succession and crash/Always recovery remain separate. |
+| #143, #145, #335 and the August 10/19 node request | Primary Most used sorting exists across all native products. Android daily-app and iOS final user adoption now record private usage; the enabled Android management Connect path remains a follow-up. External Android map coordinates and durable measurements remain open. |
+| #26–30, #34, #265–269, selected DNS and Methods | Real SSR/OverTLS payload gates and an OverTLS selected private UDP DNS repair are published. Test-only corrected clients do not establish delivered third-party client compatibility, and the original off-LAN/import requests remain binding. |
+| Native macOS guardian | The complete four-job native workflow passed at exact `9201f036`; this closes that bounded pending observation. Installer inventory, signing and actual device acceptance are separate. |
+| All other original and later requirements | Keep their existing source/native/live evidence boundaries. No percentage, reduced denominator, full-release claim or physical deployment follows from these units. |
+
 ## Original-source recovery refreshed November 1, 2026
 
 The continuation recovered all 356 unique historical audit identifiers and

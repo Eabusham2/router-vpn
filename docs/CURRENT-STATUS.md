@@ -6,11 +6,48 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 17a6eb67
+## Latest implementation continuation — through c51e7b59
+
+The independently verified published source cutoff is
+[`c51e7b5944d835a4aa6a79881ec91a9c34bd779f`](https://github.com/Eabusham2/router-vpn/commit/c51e7b5944d835a4aa6a79881ec91a9c34bd779f).
+[Current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-c51e7b59)
+records each source unit, executable boundary and remaining original requirement.
+Older dated sections below retain their own cutoffs.
+
+- Linux saved protection Off now uses the original retained session and durable
+  journal through release, absence, complete private save/readback and settlement.
+  Cancellation or failed save/cleanup retains the exact retry owner. Ordinary
+  Always Disconnect retains protection. The complete installed-host gate now
+  has 31 cases; its packaged executions remain required. Broader retained graph/
+  Start Layer coverage, legacy succession and crash/Always recovery remain open.
+- Most used sorting is published in all five native products. Android daily-app
+  and iOS final user adoption now persist bounded private history without
+  modifying active bundles. Failed/restored/trial/startup work does not count.
+  Exact source, session and generation checks prevent stale credit. Desktop
+  graph handlers also update recency. The separate enabled Android management
+  Connect path and external map/measurement metadata remain source follow-ups.
+- The optimized SSR server layout crash is repaired. Real auxiliary TCP/UDP
+  payload and credential/TLS rejection gates pass locally. OverTLS preserves
+  caller-selected private IPv4/IPv6 UDP DNS instead of silently using Google;
+  actual resolver receipts and wrong-resolver/TLS controls pass. Corrected UDP
+  reference clients remain explicitly test-only. Final ARM64 image matching,
+  usable client/import delivery and off-LAN methods remain separate work.
+- All four macOS native guardian jobs passed at `9201f036`, including Intel and
+  Apple Silicon socket/PF/utun tests. Installer inventory and signing remain open.
+  The running Windows native job at `aaea06e7` passed the formerly failing WFP
+  traffic step; the complete workflow and the older failure's cause are not
+  established by that step. Complete MAX remains closed pending its full gate.
+- No complete release is established for this newer source series. The last
+  observed published release remains `745b3e41`. Physical/device/signing/private
+  deployment acceptance remains open. Unpublished PQ fixture work was preserved
+  after an automated safety check stopped validation and is not counted here.
+  No live router, forwarding, AdGuard or Portainer target was changed.
+
+## Earlier implementation continuation — through 17a6eb67
 
 The independently verified source cutoff is
 [`17a6eb67142a59abb93935f80d02ff5a925b02f3`](https://github.com/Eabusham2/router-vpn/commit/17a6eb67142a59abb93935f80d02ff5a925b02f3).
-The [latest November 1 evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-17a6eb67)
+The [earlier November 1 evidence](CONTINUATION-EVIDENCE-2026-11-01.md#earlier-source-and-native-evidence-through-17a6eb67)
 records the intervening source changes, original requirement recovery, focused
 validation and separate native outcomes. Earlier sections retain their own
 cutoffs; their pending source descriptions do not override this section.
