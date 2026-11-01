@@ -71,7 +71,7 @@ def checked_sources(source):
     for path in paths:
         copied = target / path.name
         if path.is_symlink() or copied.is_symlink() or not copied.is_file():
-            raise ValueError("Windows identity source must be the actual regular copied file")
+            raise ValueError("Windows identity source must be the actual regular copied file: " + path.name)
         raw = path.read_bytes()
         expected = raw if source == ROOT else PREP.relocated_shared_source(raw)
         if copied.read_bytes() != expected:

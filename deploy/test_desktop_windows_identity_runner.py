@@ -134,15 +134,17 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
                               for path in (ROOT / "internal/mobiletor").glob(pattern))
             self.assertEqual(records, {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
                                        for path in originals})
-            missing = target / "desktop_socket_pf_inventory_test.go"
-            expected = missing.read_bytes()
-            self.assertEqual(expected, prep.relocated_shared_source(
-                (ROOT / "internal/mobiletor" / missing.name).read_bytes()))
-            missing.unlink()
-            with self.assertRaisesRegex(ValueError, "actual regular copied file"):
-                GATE.checked_sources(vendor)
-            missing.write_bytes(expected)
-            GATE.checked_sources(vendor)
+            for name in ("desktop_socket_pf_inventory_test.go", "desktop_socket_darwin_frame_test.go"):
+                with self.subTest(name=name):
+                    missing = target / name
+                    expected = missing.read_bytes()
+                    self.assertEqual(expected, prep.relocated_shared_source(
+                        (ROOT / "internal/mobiletor" / name).read_bytes()))
+                    missing.unlink()
+                    with self.assertRaisesRegex(ValueError, "actual regular copied file: " + name):
+                        GATE.checked_sources(vendor)
+                    missing.write_bytes(expected)
+                    GATE.checked_sources(vendor)
 
 
 if __name__ == "__main__":
