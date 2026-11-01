@@ -224,14 +224,19 @@ class ModeledRun:
             return (0 if self.failure_kind == 'control-succeeded' else 1), output
         selected = next(value.removeprefix('-test.run=') for value in command if value.startswith('-test.run='))
         if selected.startswith('^Test(RealPinnedFactory'):
-            if not re.search(selected, GATE.STARTUP_RECORDS):
-                raise AssertionError('MAX execution omitted its startup parser regression')
+            if not re.search(selected, GATE.STARTUP_RECORDS) or not re.search(selected, GATE.PORT_PAIR):
+                raise AssertionError('MAX execution omitted its startup parser or retained port-pair regression')
             output = ''.join(success(parent, ('v2', 'v3') if parent == 'TestRealPinnedFactoryExchangeAndRekey' else ())
                              for parent in GATE.PQ.NATIVE_CASES)
             if self.failure_kind == 'failed-startup-records':
                 return 1, output + '--- FAIL: ' + GATE.STARTUP_RECORDS + ' (0.01s)\n'
             if self.failure_kind != 'missing-startup-records':
                 output += success(GATE.STARTUP_RECORDS)
+            if self.failure_kind == 'failed-port-pair':
+                return 1, output + '--- FAIL: ' + GATE.PORT_PAIR + ' (0.01s)\n'
+            if self.failure_kind != 'missing-port-pair':
+                cases = GATE.PORT_PAIR_CASES[:-1] if self.failure_kind == 'missing-port-pair-leaf' else GATE.PORT_PAIR_CASES
+                output += success(GATE.PORT_PAIR, cases)
             return 0, output
         parent = selected.strip('^$')
         family = 'QUIC' if 'QUIC' in parent else 'TLS'
@@ -277,6 +282,8 @@ class MAXOwnershipChecks(unittest.TestCase):
             self.assertTrue(all(not path.exists() for path in run.private))
             self.assertTrue(result['private_key_workspace_removed'])
             self.assertEqual(result['startup_record_case'], GATE.STARTUP_RECORDS)
+            self.assertEqual(result['port_pair_case'], GATE.PORT_PAIR)
+            self.assertEqual(result['port_pair_subcases'], GATE.PORT_PAIR_CASES)
             self.assertEqual(json.loads(run.receipt.read_text())['target'], 'linux/amd64')
             deadlines = [value for command in run.commands for value in command if value.startswith('-test.timeout=')]
             self.assertCountEqual(deadlines, ['-test.timeout=120s', '-test.timeout=600s', '-test.timeout=1800s',
@@ -284,7 +291,8 @@ class MAXOwnershipChecks(unittest.TestCase):
 
     def test_failed_compile_execution_or_postflight_never_publishes_a_receipt(self):
         for fault in ('control-compile', 'control-succeeded', 'missing-case', 'changed-source', 'changed-archive',
-                      'missing-startup-records', 'failed-startup-records'):
+                      'missing-startup-records', 'failed-startup-records',
+                      'missing-port-pair', 'missing-port-pair-leaf', 'failed-port-pair'):
             with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
                 run = ModeledRun(Path(directory), fault)
                 with run.installed(), self.assertRaises(ValueError):

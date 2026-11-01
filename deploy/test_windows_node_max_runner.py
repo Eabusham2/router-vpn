@@ -9,6 +9,7 @@ from pathlib import Path
 import importlib.util
 import io
 import json
+import re
 import os
 import tempfile
 import unittest
@@ -466,8 +467,15 @@ class MAXNativeBoundaries(unittest.TestCase):
                 return 1, failure(parent, case, witness)
             selector = next(value.removeprefix('-test.run=') for value in args if value.startswith('-test.run='))
             if selector.startswith('^Test(RealPinnedFactory'):
-                return 0, ''.join(output(parent, ('v2', 'v3') if parent == 'TestRealPinnedFactoryExchangeAndRekey' else ())
-                                   for parent in GATE.MAX.PQ.NATIVE_CASES) + output(GATE.STARTUP_RECORDS) + 'PASS\n'
+                self.assertIsNotNone(re.search(selector, GATE.PORT_PAIR), 'native MAX omitted retained port-pair execution')
+                result = ''.join(output(parent, ('v2', 'v3') if parent == 'TestRealPinnedFactoryExchangeAndRekey' else ())
+                                 for parent in GATE.MAX.PQ.NATIVE_CASES) + output(GATE.STARTUP_RECORDS)
+                if state.get('failed_port_pair'):
+                    return 1, result + '--- FAIL: ' + GATE.PORT_PAIR + ' (0.01s)\n'
+                if not state.get('omit_port_pair'):
+                    cases = GATE.PORT_PAIR_CASES[:-1] if state.get('omit_port_pair_leaf') else GATE.PORT_PAIR_CASES
+                    result += output(GATE.PORT_PAIR, cases)
+                return 0, result + 'PASS\n'
             parent = selector[1:-1]
             cases = {GATE.CLOSED: GATE.MODES, GATE.OPEN: (), GATE.MARKERS: GATE.MARKER_CASES,
                      GATE.SUCCESSION: tuple(mode + '/' + layer for mode in GATE.MODES for layer in GATE.LAYERS), GATE.FOREIGN: GATE.MODES}
@@ -511,6 +519,9 @@ class MAXNativeBoundaries(unittest.TestCase):
         self.assertEqual(len(state['removed_controls']), 6)
         self.assertTrue(result['private_key_workspace_removed'])
         self.assertFalse(state['closed_binary'].exists())
+        self.assertEqual(result['port_pair_case'], GATE.PORT_PAIR)
+        self.assertEqual(result['port_pair_subcases'], GATE.PORT_PAIR_CASES)
+        self.assertEqual(result['port_pair_output_sha256'], result['startup_record_output_sha256'])
         for name, mapping in state['compiled_overlays'].items():
             if name == 'shipping-closed-capability':
                 self.assertEqual(mapping[GATE.PREDICATE], GATE.closed_predicate(raw))
@@ -529,6 +540,16 @@ class MAXNativeBoundaries(unittest.TestCase):
         self.assertEqual(reversal_deadlines, [(2400, 2415)])
         self.assertEqual(control_deadlines, [(90, 105)] * 6,
                          'The reversal aggregate changed an individual native control deadline')
+
+    def test_missing_or_failed_pair_proof_prevents_native_receipt(self):
+        for fault in ('omit_port_pair', 'omit_port_pair_leaf', 'failed_port_pair'):
+            receipt = self.work / (fault + '.json')
+            with self.subTest(fault=fault), self.execution_harness(receipt) as state:
+                state[fault] = True
+                with self.assertRaises(ValueError):
+                    GATE.execute(self.source, self.work / 'pq', self.work / 'cache', prospective=True, receipt_path=receipt)
+            self.assertFalse(receipt.exists())
+            self.assertFalse(any('-test.run=^' + GATE.SUCCESSION + '$' in args for args, _ in state['native_calls']))
 
     def test_prospective_driver_preserves_unmodified_closed_prerequisite(self):
         receipt = self.work / 'prospective-native-max.json'

@@ -3,11 +3,16 @@
 package routervpnpq
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
+	"runtime"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -19,32 +24,443 @@ import (
 
 func nodeMAXBoth(t *testing.T, ip netip.Addr, excluded ...uint16) (net.Listener, *net.UDPConn) {
 	t.Helper()
-	for attempt := 0; attempt < 3; attempt++ {
-		tcp, err := net.ListenTCP("tcp4", net.TCPAddrFromAddrPort(netip.AddrPortFrom(ip, 0)))
-		if err != nil {
-			t.Fatal(err)
+	candidates, err := nodeMAXPortCandidates(runtime.GOOS == "windows", rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tcp, udp, err := nodeMAXBothCandidates(ip, candidates, excluded, nodeMAXListenUDP, net.Listen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = tcp.Close(); _ = udp.Close() })
+	return tcp, udp
+}
+
+func nodeMAXPortCandidates(windows bool, entropy io.Reader) ([3]uint16, error) {
+	var result [3]uint16
+	if !windows {
+		return result, nil
+	}
+	var seed [4]byte
+	if entropy == nil {
+		return result, errors.New("MAX pair has no candidate entropy")
+	}
+	if _, err := io.ReadFull(entropy, seed[:]); err != nil {
+		return result, fmt.Errorf("MAX pair candidate entropy: %w", err)
+	}
+	// The two transports have independent dynamic port allocation. Diversify
+	// three candidates; only both original native binds prove availability.
+	// An odd stride in the power-of-two ring makes these ports distinct.
+	start := uint32(seed[0])<<8 | uint32(seed[1])
+	stride := (uint32(seed[2])<<8 | uint32(seed[3])) | 1
+	for i := range result {
+		result[i] = uint16(16384 + ((start + uint32(i)*stride) & 32767))
+	}
+	return result, nil
+}
+
+func nodeMAXListenUDP(address netip.AddrPort) (*net.UDPConn, error) {
+	return net.ListenUDP("udp4", net.UDPAddrFromAddrPort(address))
+}
+
+func nodeMAXAllocationError(err error) bool {
+	if runtime.GOOS == "windows" {
+		return errors.Is(err, syscall.Errno(10048)) || errors.Is(err, syscall.Errno(10013))
+	}
+	return errors.Is(err, syscall.EADDRINUSE)
+}
+
+func nodeMAXBothCandidates(ip netip.Addr, candidates [3]uint16, excluded []uint16, listenUDP func(netip.AddrPort) (*net.UDPConn, error), listenTCP func(string, string) (net.Listener, error)) (net.Listener, *net.UDPConn, error) {
+	if !ip.Is4() || listenUDP == nil || listenTCP == nil {
+		return nil, nil, errors.New("MAX pair requires its captured IPv4 constructors")
+	}
+	if candidates != [3]uint16{} {
+		seen := make(map[uint16]bool)
+		for _, port := range candidates {
+			if port < 16384 || port >= 49152 || seen[port] {
+				return nil, nil, errors.New("MAX pair changed its three distinct candidate ports")
+			}
+			seen[port] = true
 		}
-		port := tcp.Addr().(*net.TCPAddr).AddrPort().Port()
+	}
+	var last error
+	for _, port := range candidates {
+		requested := netip.AddrPortFrom(ip, port)
+		udp, err := listenUDP(requested)
+		if err != nil {
+			if udp != nil {
+				if closeErr := udp.Close(); closeErr != nil {
+					return nil, nil, errors.Join(err, closeErr)
+				}
+			}
+			last = fmt.Errorf("MAX UDP listener: %w", err)
+			if nodeMAXAllocationError(err) {
+				continue
+			}
+			return nil, nil, last
+		}
+		var actual netip.AddrPort
+		if udp != nil {
+			if address, ok := udp.LocalAddr().(*net.UDPAddr); ok && address != nil {
+				actual = address.AddrPort()
+			}
+		}
+		if udp == nil || actual.Addr() != ip || actual.Port() == 0 || port != 0 && actual.Port() != port {
+			var closeErr error
+			if udp != nil {
+				closeErr = udp.Close()
+			}
+			return nil, nil, errors.Join(errors.New("MAX UDP listener replaced its captured candidate"), closeErr)
+		}
 		blocked := false
 		for _, reserved := range excluded {
-			blocked = blocked || port == reserved
+			blocked = blocked || actual.Port() == reserved
 		}
 		if blocked {
-			_ = tcp.Close()
+			last = errors.New("MAX pair selected a reserved graph port")
+			if closeErr := udp.Close(); closeErr != nil {
+				return nil, nil, errors.Join(last, closeErr)
+			}
 			continue
 		}
-		udp, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(tcp.Addr().(*net.TCPAddr).AddrPort()))
-		if err == nil {
-			t.Cleanup(func() { _ = tcp.Close(); _ = udp.Close() })
-			return tcp, udp
+		// The UDP owner remains retained while the exact matching TCP endpoint
+		// is bound. A failed attempt closes every partial original first.
+		tcp, err := listenTCP("tcp4", actual.String())
+		if err == nil && tcp != nil && tcp.Addr() != nil && tcp.Addr().String() == actual.String() {
+			return tcp, udp, nil
 		}
-		_ = tcp.Close()
-		if !errors.Is(err, syscall.EADDRINUSE) {
+		if err == nil {
+			err = errors.New("MAX TCP listener replaced its retained UDP endpoint")
+		}
+		var closeErr error
+		if tcp != nil {
+			closeErr = tcp.Close()
+		}
+		closeErr = errors.Join(closeErr, udp.Close())
+		if closeErr != nil {
+			return nil, nil, errors.Join(err, closeErr)
+		}
+		last = fmt.Errorf("MAX paired TCP listener: %w", err)
+		if !nodeMAXAllocationError(err) {
+			return nil, nil, last
+		}
+	}
+	return nil, nil, fmt.Errorf("MAX middle exhausted three retained TCP/UDP candidates: %w", last)
+}
+
+type nodeMAXPairCloseFailure struct {
+	net.Listener
+	failure error
+}
+
+func (p *nodeMAXPairCloseFailure) Close() error {
+	return errors.Join(p.Listener.Close(), p.failure)
+}
+
+func TestRouterVPNDesktopNodeMAXPortPair(t *testing.T) {
+	ip := netip.MustParseAddr("127.0.0.1")
+	closeReturned := func(tcp net.Listener, udp *net.UDPConn) {
+		if tcp != nil {
+			_ = tcp.Close()
+		}
+		if udp != nil {
+			_ = udp.Close()
+		}
+	}
+	type pair struct {
+		tcp  net.Listener
+		udp  *net.UDPConn
+		port uint16
+	}
+	retain := func(t *testing.T) ([3]uint16, [3]pair) {
+		t.Helper()
+		var ports [3]uint16
+		var pairs [3]pair
+		for i := range pairs {
+			candidates, err := nodeMAXPortCandidates(true, rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			tcp, udp, err := nodeMAXBothCandidates(ip, candidates, nil, nodeMAXListenUDP, net.Listen)
+			if err != nil {
+				t.Fatal("retain actual pair candidates", err)
+			}
+			ports[i] = udp.LocalAddr().(*net.UDPAddr).AddrPort().Port()
+			pairs[i] = pair{tcp, udp, ports[i]}
+			t.Cleanup(func() { _ = tcp.Close(); _ = udp.Close() })
+		}
+		return ports, pairs
+	}
+	rebindUDP := func(t *testing.T, port uint16) {
+		t.Helper()
+		udp, err := nodeMAXListenUDP(netip.AddrPortFrom(ip, port))
+		if err != nil {
+			t.Fatal("partial original UDP owner survived rejection", err)
+		}
+		if err := udp.Close(); err != nil {
 			t.Fatal(err)
 		}
 	}
-	t.Fatal("MAX middle could not retain its exact TCP/UDP port pair")
-	return nil, nil
+	rebindTCP := func(t *testing.T, port uint16) {
+		t.Helper()
+		tcp, err := net.Listen("tcp4", netip.AddrPortFrom(ip, port).String())
+		if err != nil {
+			t.Fatal("partial original TCP owner survived rejection", err)
+		}
+		if err := tcp.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("candidate-selection", func(t *testing.T) {
+		for _, seed := range [][]byte{{0, 0, 0, 0}, {255, 255, 255, 255}, {0, 0, 128, 0}, {128, 0, 0, 2}} {
+			ports, err := nodeMAXPortCandidates(true, bytes.NewReader(seed))
+			if err != nil || ports[0] == ports[1] || ports[1] == ports[2] || ports[0] == ports[2] {
+				t.Fatal("MAX changed its three distinct native candidates", ports, err)
+			}
+			for _, port := range ports {
+				if port < 16384 || port >= 49152 {
+					t.Fatal("MAX candidate escaped its bounded selection", port)
+				}
+			}
+		}
+		for _, entropy := range []io.Reader{nil, bytes.NewReader([]byte{1, 2, 3})} {
+			if _, err := nodeMAXPortCandidates(true, entropy); err == nil {
+				t.Fatal("MAX accepted missing candidate entropy")
+			}
+		}
+		if ports, err := nodeMAXPortCandidates(false, nil); err != nil || ports != [3]uint16{} {
+			t.Fatal("non-Windows pair replaced native port-zero selection", ports, err)
+		}
+		if nodeMAXAllocationError(errors.New("unrelated socket failure")) || nodeMAXAllocationError(syscall.EINVAL) {
+			t.Fatal("MAX retried a nonallocation error")
+		}
+		if runtime.GOOS == "windows" {
+			if !nodeMAXAllocationError(syscall.Errno(10048)) || !nodeMAXAllocationError(syscall.Errno(10013)) {
+				t.Fatal("MAX omitted the actual Winsock allocation errors")
+			}
+		} else if !nodeMAXAllocationError(syscall.EADDRINUSE) || nodeMAXAllocationError(syscall.EACCES) {
+			t.Fatal("MAX changed the native Unix allocation boundary")
+		}
+	})
+	t.Run("actual-retained-pair", func(t *testing.T) {
+		tcp, udp := nodeMAXBoth(t, ip)
+		address := udp.LocalAddr().(*net.UDPAddr).AddrPort()
+		if tcp.Addr().String() != address.String() || address.Addr() != ip || address.Port() == 0 {
+			t.Fatal("MAX did not retain both exact native endpoints")
+		}
+		if runtime.GOOS == "windows" && (address.Port() < 16384 || address.Port() >= 49152) {
+			t.Fatal("MAX native pair bypassed its bounded Windows candidates")
+		}
+		if other, err := nodeMAXListenUDP(address); err == nil {
+			_ = other.Close()
+			t.Fatal("MAX returned an unretained UDP endpoint")
+		}
+		if other, err := net.Listen("tcp4", address.String()); err == nil {
+			_ = other.Close()
+			t.Fatal("MAX returned an unretained TCP endpoint")
+		}
+		if err := errors.Join(tcp.Close(), udp.Close()); err != nil {
+			t.Fatal(err)
+		}
+		rebindUDP(t, address.Port())
+		rebindTCP(t, address.Port())
+	})
+	t.Run("occupied-udp-tcp", func(t *testing.T) {
+		ports, pairs := retain(t)
+		_ = pairs[0].tcp.Close()
+		_ = pairs[1].udp.Close()
+		_ = pairs[2].tcp.Close()
+		_ = pairs[2].udp.Close()
+		udpCalls, tcpCalls := 0, 0
+		tcp, udp, err := nodeMAXBothCandidates(ip, ports, nil, func(address netip.AddrPort) (*net.UDPConn, error) {
+			udpCalls++
+			if address.Port() == ports[2] {
+				rebindUDP(t, ports[1])
+			}
+			return nodeMAXListenUDP(address)
+		}, func(network, address string) (net.Listener, error) {
+			tcpCalls++
+			return net.Listen(network, address)
+		})
+		defer closeReturned(tcp, udp)
+		if err != nil || tcp == nil || udp == nil {
+			t.Fatal("MAX did not retain its third actual available pair", err)
+		}
+		defer tcp.Close()
+		defer udp.Close()
+		if udpCalls != 3 || tcpCalls != 2 || udp.LocalAddr().(*net.UDPAddr).AddrPort().Port() != ports[2] {
+			t.Fatal("MAX skipped a required native bind or exceeded three candidates", udpCalls, tcpCalls)
+		}
+	})
+	t.Run("excluded-graph-port", func(t *testing.T) {
+		ports, pairs := retain(t)
+		for _, pair := range pairs {
+			_ = pair.tcp.Close()
+			_ = pair.udp.Close()
+		}
+		udpCalls, tcpCalls := 0, 0
+		tcp, udp, err := nodeMAXBothCandidates(ip, ports, []uint16{ports[0]}, func(address netip.AddrPort) (*net.UDPConn, error) {
+			udpCalls++
+			if udpCalls == 2 {
+				rebindUDP(t, ports[0])
+			}
+			return nodeMAXListenUDP(address)
+		}, func(network, address string) (net.Listener, error) {
+			tcpCalls++
+			return net.Listen(network, address)
+		})
+		defer closeReturned(tcp, udp)
+		if err != nil || tcp == nil || udp == nil {
+			t.Fatal("MAX lost its available unreserved pair", err)
+		}
+		defer tcp.Close()
+		defer udp.Close()
+		if udpCalls != 2 || tcpCalls != 1 || udp.LocalAddr().(*net.UDPAddr).AddrPort().Port() != ports[1] {
+			t.Fatal("MAX adopted a reserved graph port or leaked its rejected owner")
+		}
+	})
+	t.Run("all-candidates-blocked", func(t *testing.T) {
+		ports, _ := retain(t)
+		calls := 0
+		tcp, udp, err := nodeMAXBothCandidates(ip, ports, nil, func(address netip.AddrPort) (*net.UDPConn, error) {
+			calls++
+			return nodeMAXListenUDP(address)
+		}, net.Listen)
+		defer closeReturned(tcp, udp)
+		if err == nil || tcp != nil || udp != nil || calls != 3 || !strings.Contains(err.Error(), "exhausted three") {
+			t.Fatal("MAX did not fail after its three actual occupied candidates", calls, err)
+		}
+	})
+	t.Run("unrelated-udp", func(t *testing.T) {
+		failure := errors.New("original unrelated UDP failure")
+		calls := 0
+		tcp, udp, err := nodeMAXBothCandidates(ip, [3]uint16{}, nil, func(netip.AddrPort) (*net.UDPConn, error) {
+			calls++
+			return nil, failure
+		}, net.Listen)
+		defer closeReturned(tcp, udp)
+		if !errors.Is(err, failure) || tcp != nil || udp != nil || calls != 1 {
+			t.Fatal("MAX retried or replaced a nonallocation failure", calls, err)
+		}
+	})
+	t.Run("foreign-tcp", func(t *testing.T) {
+		ports, pairs := retain(t)
+		_ = pairs[0].tcp.Close()
+		_ = pairs[0].udp.Close()
+		calls := 0
+		tcp, udp, err := nodeMAXBothCandidates(ip, ports, nil, nodeMAXListenUDP, func(string, string) (net.Listener, error) {
+			calls++
+			return pairs[1].tcp, nil
+		})
+		defer closeReturned(tcp, udp)
+		if err == nil || tcp != nil || udp != nil || calls != 1 || !strings.Contains(err.Error(), "replaced its retained UDP endpoint") {
+			t.Fatal("MAX accepted a foreign TCP endpoint", calls, err)
+		}
+		rebindUDP(t, ports[0])
+		rebindTCP(t, ports[1])
+	})
+	t.Run("foreign-udp", func(t *testing.T) {
+		ports, pairs := retain(t)
+		calls := 0
+		tcp, udp, err := nodeMAXBothCandidates(ip, ports, nil, func(netip.AddrPort) (*net.UDPConn, error) {
+			calls++
+			return pairs[1].udp, nil
+		}, func(string, string) (net.Listener, error) {
+			t.Fatal("foreign UDP endpoint reached TCP admission")
+			return nil, nil
+		})
+		defer closeReturned(tcp, udp)
+		if err == nil || tcp != nil || udp != nil || calls != 1 || !strings.Contains(err.Error(), "replaced its captured candidate") {
+			t.Fatal("MAX accepted a foreign UDP endpoint", calls, err)
+		}
+		rebindUDP(t, ports[1])
+	})
+	t.Run("partial-udp-cleanup", func(t *testing.T) {
+		ports, pairs := retain(t)
+		_, allocation := nodeMAXListenUDP(netip.AddrPortFrom(ip, ports[0]))
+		if allocation == nil || !nodeMAXAllocationError(allocation) {
+			t.Fatal("missing actual native UDP allocation refusal", allocation)
+		}
+		_ = pairs[0].tcp.Close()
+		_ = pairs[1].tcp.Close()
+		_ = pairs[1].udp.Close()
+		calls := 0
+		tcp, udp, err := nodeMAXBothCandidates(ip, ports, nil, func(address netip.AddrPort) (*net.UDPConn, error) {
+			calls++
+			if calls == 1 {
+				return pairs[0].udp, allocation
+			}
+			rebindUDP(t, ports[0])
+			return nodeMAXListenUDP(address)
+		}, net.Listen)
+		defer closeReturned(tcp, udp)
+		if err != nil || tcp == nil || udp == nil || calls != 2 {
+			t.Fatal("MAX did not join its partial UDP owner before retry", calls, err)
+		}
+		defer tcp.Close()
+		defer udp.Close()
+	})
+	t.Run("tcp-cleanup-error", func(t *testing.T) {
+		ports, pairs := retain(t)
+		_, allocation := nodeMAXListenUDP(netip.AddrPortFrom(ip, ports[1]))
+		_ = pairs[0].tcp.Close()
+		_ = pairs[0].udp.Close()
+		failure := errors.New("original TCP close failure")
+		calls := 0
+		tcp, udp, err := nodeMAXBothCandidates(ip, ports, nil, nodeMAXListenUDP, func(network, address string) (net.Listener, error) {
+			calls++
+			listener, err := net.Listen(network, address)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return &nodeMAXPairCloseFailure{listener, failure}, allocation
+		})
+		defer closeReturned(tcp, udp)
+		if !errors.Is(err, failure) || tcp != nil || udp != nil || calls != 1 {
+			t.Fatal("MAX retried after incomplete original TCP cleanup", calls, err)
+		}
+		rebindUDP(t, ports[0])
+		rebindTCP(t, ports[0])
+	})
+	t.Run("udp-cleanup-error", func(t *testing.T) {
+		ports, pairs := retain(t)
+		_, allocation := nodeMAXListenUDP(netip.AddrPortFrom(ip, ports[1]))
+		_ = pairs[0].udp.Close()
+		calls := 0
+		tcp, udp, err := nodeMAXBothCandidates(ip, ports, nil, func(netip.AddrPort) (*net.UDPConn, error) {
+			calls++
+			return pairs[0].udp, allocation
+		}, net.Listen)
+		defer closeReturned(tcp, udp)
+		if !errors.Is(err, net.ErrClosed) || tcp != nil || udp != nil || calls != 1 {
+			t.Fatal("MAX retried after incomplete original UDP cleanup", calls, err)
+		}
+	})
+	t.Run("invalid-candidates", func(t *testing.T) {
+		for _, ports := range [][3]uint16{{1, 2, 3}, {16384, 16384, 16385}, {16384, 49152, 16386}, {16384, 0, 16386}} {
+			tcp, udp, err := nodeMAXBothCandidates(ip, ports, nil, func(netip.AddrPort) (*net.UDPConn, error) {
+				t.Fatal("invalid candidates reached a native constructor")
+				return nil, nil
+			}, net.Listen)
+			if err == nil || tcp != nil || udp != nil {
+				t.Fatal("MAX accepted malformed candidate ports", ports, err)
+			}
+		}
+	})
+	t.Run("missing-udp", func(t *testing.T) {
+		calls := 0
+		tcp, udp, err := nodeMAXBothCandidates(ip, [3]uint16{}, nil, func(netip.AddrPort) (*net.UDPConn, error) {
+			calls++
+			return nil, nil
+		}, func(string, string) (net.Listener, error) {
+			t.Fatal("missing UDP owner reached TCP admission")
+			return nil, nil
+		})
+		defer closeReturned(tcp, udp)
+		if err == nil || tcp != nil || udp != nil || calls != 1 {
+			t.Fatal("MAX accepted or retried an absent native UDP owner", calls, err)
+		}
+	})
 }
 
 // The same generated SS2022 middle also provides the selected outer Start

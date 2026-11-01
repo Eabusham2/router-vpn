@@ -54,6 +54,10 @@ TEMPLATES = tuple('node_max_' + name + '_test.go.tmpl'
                   for name in ('peer', 'stream', 'tls_reference', 'credentials'))
 TAG = b'//go:build cgo && routervpn_native_pq && routervpn_pq_traffic_test\n\npackage routervpnpq\n'
 STARTUP_RECORDS = 'TestRouterVPNDesktopNodeMAXTLSStartupRecords'
+PORT_PAIR = 'TestRouterVPNDesktopNodeMAXPortPair'
+PORT_PAIR_CASES = ('candidate-selection', 'actual-retained-pair', 'occupied-udp-tcp', 'excluded-graph-port',
+                   'all-candidates-blocked', 'unrelated-udp', 'foreign-tcp', 'foreign-udp', 'partial-udp-cleanup',
+                   'tcp-cleanup-error', 'udp-cleanup-error', 'invalid-candidates', 'missing-udp')
 PASS = re.compile(r'^\s*--- PASS: ([^\s]+) \([0-9.]+s\)$', re.MULTILINE)
 FAIL = re.compile(r'^\s*--- FAIL: ([^\s]+) \([0-9.]+s\)$', re.MULTILINE)
 INVALID_OUTPUT = ('--- SKIP:', 'DATA RACE', 'panic:', 'fatal error:', 'no tests to run')
@@ -335,12 +339,13 @@ def execute(source, pq, cache, go='go', *, env=None, receipt_path=None):
             if status:
                 raise ValueError('Complete MAX native compilation failed:\n' + output[-32768:])
             digest = regular_digest(binary)
-            status, output = NODE.run([binary, '-test.run=^Test(RealPinnedFactory|RealFactory|RealPQTraffic|RouterVPNDesktopNodeMAXTLSStartupRecords)',
+            status, output = NODE.run([binary, '-test.run=^Test(RealPinnedFactory|RealFactory|RealPQTraffic)|^(' + STARTUP_RECORDS + '|' + PORT_PAIR + ')$',
                                       '-test.v', '-test.count=1', '-test.timeout=120s'], cwd=source, env=captured, timeout=135)
             print(output, end='' if output.endswith('\n') else '\n', flush=True)
             for parent in PQ.NATIVE_CASES:
                 required_output(status, output, parent, ('v2', 'v3') if parent == 'TestRealPinnedFactoryExchangeAndRekey' else ())
             required_output(status, output, STARTUP_RECORDS, ())
+            required_output(status, output, PORT_PAIR, PORT_PAIR_CASES)
             for family in FAMILIES:
                 for credentials, cases, duration in ((False, TRAFFIC[family], 600), (True, CREDENTIALS[family], 1800)):
                     parent = 'TestRouterVPNDesktopNodeCompleteMAX' + family + ('Credentials' if credentials else '')
@@ -368,7 +373,7 @@ def execute(source, pq, cache, go='go', *, env=None, receipt_path=None):
                   'key_generator_sha256': generator_digest, 'fresh_independent_keypairs': 3,
                   'traffic_cases': TRAFFIC, 'credential_cases': CREDENTIALS,
                   'native_abi_cases': PQ.NATIVE_CASES, 'compiled_negative_controls': controls,
-                  'startup_record_case': STARTUP_RECORDS,
+                  'startup_record_case': STARTUP_RECORDS, 'port_pair_case': PORT_PAIR, 'port_pair_subcases': PORT_PAIR_CASES,
                   'os_permits': 'modeled', 'tun': 'modeled', 'public_graph_admission': 'separate'}
     if workspace.exists():
         raise ValueError('Complete MAX retained its disposable private workspace')

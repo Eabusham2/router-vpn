@@ -45,6 +45,7 @@ OPEN = 'TestRouterVPNDesktopNodeWindowsMAXCapabilityOpen'
 MARKERS = 'TestRouterVPNDesktopNodeWindowsMAXMarkers'
 MARKER_CASES = ('bounded-input', 'unarmed-and-wrong-owner', 'encrypted-fragments', 'exact-armed-stream', 'marker-and-authentication', 'packet-authentication', 'reference-failure-channel', 'retained-reference-readback')
 STARTUP_RECORDS = MAX.STARTUP_RECORDS
+PORT_PAIR, PORT_PAIR_CASES = MAX.PORT_PAIR, MAX.PORT_PAIR_CASES
 SUCCESSION = 'TestRouterVPNDesktopNodeWindowsMAXSuccession'
 FOREIGN = 'TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor'
 PROSPECTIVE_BEFORE = '\tswitch mode {\n'
@@ -438,12 +439,13 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
             digest = MAX.regular_digest(binary)
             run_suite(binary, OPEN, (), 15)
             run_suite(binary, MARKERS, MARKER_CASES, 30)
-            status, output = NODE.run([binary, '-test.run=^Test(RealPinnedFactory|RealFactory|RealPQTraffic)|^' + STARTUP_RECORDS + '$', '-test.v', '-test.count=1', '-test.timeout=120s'],
+            status, output = NODE.run([binary, '-test.run=^Test(RealPinnedFactory|RealFactory|RealPQTraffic)|^(' + STARTUP_RECORDS + '|' + PORT_PAIR + ')$', '-test.v', '-test.count=1', '-test.timeout=120s'],
                                       cwd=source, env=captured, timeout=135)
             print(output, end='' if output.endswith('\n') else '\n', flush=True)
             for parent in MAX.PQ.NATIVE_CASES:
                 MAX.required_output(status, output, parent, ('v2', 'v3') if parent == 'TestRealPinnedFactoryExchangeAndRekey' else ())
             MAX.required_output(status, output, STARTUP_RECORDS, ())
+            MAX.required_output(status, output, PORT_PAIR, PORT_PAIR_CASES)
             startup_record_output = hashlib.sha256(output.encode('utf-8')).hexdigest()
             for family in MAX.FAMILIES:
                 for suffix, cases, timeout in (('', MAX.TRAFFIC[family], 600), ('Credentials', MAX.CREDENTIALS[family], 1800)):
@@ -495,6 +497,7 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
                   'succession_cases': tuple(mode + '/' + layer for mode in MODES for layer in LAYERS),
                   'foreign_predecessor_cases': MODES, 'native_abi_cases': MAX.PQ.NATIVE_CASES,
                   'startup_record_case': STARTUP_RECORDS, 'startup_record_output_sha256': startup_record_output,
+                  'port_pair_case': PORT_PAIR, 'port_pair_subcases': PORT_PAIR_CASES, 'port_pair_output_sha256': startup_record_output,
                   'suites': suites, 'compiled_negative_controls': controls,
                   'native_firewall': 'actual-appid-scoped-wfp', 'native_socket_source': 'actual-isolated-token',
                   'tun': 'modeled', 'public_admission': 'separate' if prospective else 'shipping-predicate', 'device_acceptance': 'separate'}
