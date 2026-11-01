@@ -544,6 +544,10 @@ type nodeMAXWFPReference struct {
 }
 
 func (p *nodeMAXWFPReference) read(timeout time.Duration) (nodeMAXWFPReply, error) {
+	return p.readContext(p.ctx, timeout)
+}
+
+func (p *nodeMAXWFPReference) readContext(parent context.Context, timeout time.Duration) (nodeMAXWFPReply, error) {
 	type result struct {
 		reply nodeMAXWFPReply
 		err   error
@@ -566,7 +570,7 @@ func (p *nodeMAXWFPReference) read(timeout time.Duration) (nodeMAXWFPReply, erro
 		}
 		done <- result{reply, err}
 	}()
-	ctx, cancel := context.WithTimeout(p.ctx, timeout)
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	select {
 	case value := <-done:
@@ -626,19 +630,34 @@ func (p *nodeMAXWFPReference) close() error {
 
 func (p *nodeMAXWFPReference) observe(t *testing.T, action string) nodeMAXWFPReply {
 	t.Helper()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	reply, err := p.observeLocked(p.ctx, action)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return reply
+}
+
+// Worker-side socket controls return errors instead of calling testing.Fatal.
+// Holding mu serializes complete replies and excludes reference retirement.
+func (p *nodeMAXWFPReference) observeLocked(ctx context.Context, action string) (nodeMAXWFPReply, error) {
+	if ctx == nil || ctx.Err() != nil || p.ctx.Err() != nil || p.inputClosed || p.joined || p.outputClosed {
+		return nodeMAXWFPReply{}, errors.New("MAX observation lost its live captured owner")
+	}
 	if len(action) > 255 || strings.Contains(action, "\n") {
-		t.Fatal("MAX observation escaped its fixed private request")
+		return nodeMAXWFPReply{}, errors.New("MAX observation escaped its fixed private request")
 	}
 	if _, err := io.WriteString(p.input, action+"\n"); err != nil {
-		t.Fatal("MAX observation lost its retained channel", err)
+		return nodeMAXWFPReply{}, errors.Join(err, errors.New("MAX observation lost its retained channel"))
 	}
-	reply, err := p.read(10 * time.Second)
+	reply, err := p.readContext(ctx, 10*time.Second)
 	old := p.reply
 	if err != nil || reply.Schema != 1 || !bytes.Equal(reply.AppID, old.AppID) || reply.SourceSHA256 != old.SourceSHA256 || reply.Source != nil || reply.Password != "" || reply.Updates < old.Updates || reply.Packets < old.Packets || reply.KEMReceived < old.KEMReceived || reply.KEMRejected < old.KEMRejected || !reply.PacketBridge.follows(old.PacketBridge) || !reply.KEMBridge.follows(old.KEMBridge) || reply.Queries < old.Queries || reply.Echoes < old.Echoes || reply.MiddleRaw < old.MiddleRaw || reply.MiddleRejected < old.MiddleRejected || reply.MiddlePacket < old.MiddlePacket || reply.MiddleKEM < old.MiddleKEM || reply.MiddleOuter < old.MiddleOuter || reply.OuterRaw < old.OuterRaw || reply.OuterRejected < old.OuterRejected || reply.OuterMiddle < old.OuterMiddle || old.MLKEMRejected && !reply.MLKEMRejected || old.UserRejected && !reply.UserRejected || old.Plain && !reply.Plain {
-		t.Fatal("MAX reference changed its original source or regressed actual observations", err)
+		return nodeMAXWFPReply{}, errors.Join(err, errors.New("MAX reference changed its original source or regressed actual observations"))
 	}
 	p.reply = reply
-	return reply
+	return reply, nil
 }
 
 func (p *nodeMAXWFPReference) probe(t *testing.T, action, nonce string) int64 {
@@ -760,7 +779,10 @@ func nodeMAXWFPStartReference(t *testing.T, mode, layer, fault string) *nodeMAXW
 
 func (p *nodeMAXWFPReference) original(t *testing.T, kill string) *mobilemultihop.NodeProfile {
 	t.Helper()
-	if p.source.digest() != p.reply.SourceSHA256 || kill != "always" && kill != "on-connect" {
+	p.mu.Lock()
+	sourceDigest := p.reply.SourceSHA256
+	p.mu.Unlock()
+	if p.source.digest() != sourceDigest || kill != "always" && kill != "on-connect" {
 		t.Fatal("MAX original source changed or lost its explicit protection choice")
 	}
 	profile := p.source.Profile
@@ -941,7 +963,9 @@ func nodeMAXWFPRequireTraffic(t *testing.T, f *nodePQWFPFixture, p *nodeMAXWFPRe
 					// Preserve the original failure even if a later diagnostic
 					// readback fails. Nothing here retries data or changes its bound.
 					t.Log("actual WFP complete MAX original transfer error", network, host, epoch, err)
+					p.mu.Lock()
 					before := p.reply
+					p.mu.Unlock()
 					local, localErr := native.RouterVPNTestPQSnapshot()
 					after := p.observe(t, "stats")
 					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

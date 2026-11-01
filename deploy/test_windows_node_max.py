@@ -37,6 +37,11 @@ PREDICATE = WPQ.PREDICATE
 PEER = 'protocol/routervpnpq/node_max_peer_windows_test.go'
 PEER_TEMPLATE = 'mobile/desktop/node_max_peer_windows_test.go.tmpl'
 PREFIX = WPQ.PREFIX
+UDP_CONTROL = ROOT / 'deploy' / 'fixtures' / 'windows-max-control'
+UDP_OBSERVATION = 'TestWindowsMAXUDPObservation'
+UDP_CASES = ('drop', 'denied', 'delivered', 'delivered-without-echo', 'deadline-error',
+             'reset-error', 'short', 'write-error', 'late-receipt', 'positive-error',
+             'foreign-local', 'foreign-remote', 'cancelled')
 TAGS = REFERENCE.TAGS + ',routervpn_windows_node_composition'
 MODES = tuple(mode for modes in MAX.FAMILIES.values() for mode in modes)
 LAYERS = MAX.LAYERS
@@ -73,6 +78,8 @@ def checked_sources(source):
     # any KEM material. Bind it and its executable acceptance/preparation
     # tests to the native evidence, not only the Python invocation wrapper.
     for relative in (PEER_TEMPLATE, 'deploy/test_windows_node_max.py', 'deploy/test_windows_node_max_runner.py',
+                     'deploy/fixtures/windows-max-control/udp_observation.go',
+                     'deploy/fixtures/windows-max-control/udp_observation_test.go',
                      'client/Protect-RouterVPN-Windows-PrivateRoot.ps1', 'client/test-windows-private-acl.ps1',
                      'deploy/build_pq_reference_fixture.py', 'deploy/test_pq_reference_preparation.py'):
         records['windows-max/' + relative] = MAX.regular_digest(ROOT / relative)
@@ -101,14 +108,18 @@ def ordinary_witness(protocol):
     return 'MAX native ordinary ' + protocol + ' socket denied by captured WFP'
 
 
+INVALID_ORDINARY = 'MAX native ordinary control invalid'
+
+
 def handshake_witness(protocol):
     return 'MAX native captured ' + protocol + ' handshake rejected before ready'
 
 
 # Only deliberate socket-bypass compilations receive this observer. It never
-# creates a socket grant or returns a different I/O result. A native WSAEACCES
-# must occur between two fresh, identical BFE/isolated-owner readbacks for the
-# exact captured outer tuple; a timeout or unrelated startup failure is silent.
+# creates a socket grant or returns a different dial/I/O result. TCP requires
+# native WSAEACCES. UDP may instead prove non-delivery of a fresh nonce through
+# this same connection, using its independently owned peer. Both require fresh
+# identical BFE/isolated-owner readbacks; a bare timeout is never evidence.
 ORDINARY_OBSERVER = r'''//go:build windows && routervpn_windows_node_composition
 
 package mobiletor
@@ -118,14 +129,57 @@ import (
     "errors"
     "net"
     "net/netip"
+    "sync"
     "sync/atomic"
     "syscall"
     "time"
 )
 
-// Bounded diagnostics are not rejection evidence. Only the unchanged exact
-// WSAEACCES and two live captured-policy readbacks below emit that witness.
+// Bounded diagnostics are not rejection evidence. The exact native denial or
+// independent UDP delivery observation must also retain its native policy.
 var desktopMAXControlDiagnosticCount atomic.Uint32
+var desktopMAXControlInvalidSeen atomic.Bool
+var desktopMAXControlUDP struct {
+    sync.Mutex
+    observe func(context.Context, net.Conn, netip.AddrPort) error
+}
+
+func DesktopWindowsMAXControlSetUDPObserver(observe func(context.Context, net.Conn, netip.AddrPort) error) error {
+    desktopMAXControlUDP.Lock()
+    defer desktopMAXControlUDP.Unlock()
+    if observe == nil || desktopMAXControlUDP.observe != nil {
+        return errors.New("MAX ordinary UDP observer cannot replace its captured reference")
+    }
+    desktopMAXControlUDP.observe = observe
+    return nil
+}
+
+func desktopMAXControlInvalid(stage string, err error) {
+    // An earlier valid witness cannot conceal a later leak or failed readback.
+    if !desktopMAXControlInvalidSeen.Swap(true) {
+        println("MAX native ordinary control invalid", stage)
+    }
+    desktopMAXControlDiagnostic(stage, "udp", err)
+}
+
+func desktopMAXControlObserveUDP(ctx context.Context, connection net.Conn, before DesktopWindowsNodeCompositionReadback, remote netip.AddrPort) {
+    desktopMAXControlUDP.Lock()
+    defer desktopMAXControlUDP.Unlock()
+    if desktopMAXControlUDP.observe == nil {
+        desktopMAXControlInvalid("missing-independent-reference", nil)
+        return
+    }
+    if err := desktopMAXControlUDP.observe(ctx, connection, remote); err != nil {
+        desktopMAXControlInvalid("independent-delivery-proof-failed", err)
+        return
+    }
+    after, current := desktopMAXControlSnapshot(ctx, "udp", remote)
+    if !current || before.Target != after.Target || before.Capture != after.Capture || before.Owner != after.Owner {
+        desktopMAXControlInvalid("delivery-readback-rejected", nil)
+        return
+    }
+    println("MAX native ordinary udp socket denied by captured WFP")
+}
 
 func desktopMAXControlDiagnostic(stage, network string, err error, fields ...int) {
     if desktopMAXControlDiagnosticCount.Add(1) > 16 {
@@ -189,6 +243,9 @@ func desktopMAXControlDenied(ctx context.Context, before DesktopWindowsNodeCompo
     after, current := desktopMAXControlSnapshot(ctx, network, remote)
     if !current || before.Target != after.Target || before.Capture != after.Capture || before.Owner != after.Owner {
         desktopMAXControlDiagnostic("denial-readback-rejected", network, err)
+        if network == "udp" {
+            desktopMAXControlInvalid("denial-readback-rejected", err)
+        }
         return
     }
     if network == "tcp" {
@@ -228,10 +285,18 @@ func DesktopWindowsMAXControlDial(ctx context.Context, network, address string, 
     before, current := desktopMAXControlSnapshot(ctx, network, remote)
     connection, err := dial()
     desktopMAXControlDiagnostic("ordinary-dial", network, err)
+    if network == "udp" && (parseErr != nil || !current) {
+        desktopMAXControlInvalid("udp-captured-input-rejected", parseErr)
+    }
     if parseErr == nil && current {
         desktopMAXControlDenied(ctx, before, network, remote, err)
         if connection != nil {
+            if network == "udp" && err == nil {
+                desktopMAXControlObserveUDP(ctx, connection, before, remote)
+            }
             connection = &desktopMAXControlConn{Conn: connection, ctx: ctx, before: before, network: network, remote: remote}
+        } else if network == "udp" && !errors.Is(err, syscall.Errno(10013)) {
+            desktopMAXControlInvalid("udp-dial-lost-captured-socket", err)
         }
     }
     return connection, err
@@ -303,6 +368,34 @@ func (d nodeMAXOrdinaryDialer) DialContext(ctx context.Context, network string, 
 }
 '''
     sources[relative] = WFP.BOOT.IDENTITY.replace_once(raw, before, after)
+    if protocol == 'udp':
+        if mutation[1:3] != ('TestRouterVPNDesktopNodeWindowsMAXQUIC', 'max-quic-wg/off'):
+            raise ValueError('Ordinary UDP observer escaped its one captured MAX case')
+        peer = (source / PEER).read_text(encoding='utf-8')
+        boundary = '\t\t\t\tf := nodeMAXWFPBox(t, peer.original(t, "always"), nil, true)\n\t\t\t\tf.start(t)'
+        observed = '''\t\t\t\tf := nodeMAXWFPBox(t, peer.original(t, "always"), nil, true)
+                if err := mobiletor.DesktopWindowsMAXControlSetUDPObserver(func(ctx context.Context, connection net.Conn, remote netip.AddrPort) error {
+                    peer.mu.Lock()
+                    defer peer.mu.Unlock()
+                    if peer.request.Mode != "max-quic-wg" || peer.request.Layer != "" || peer.request.Fault != "" || peer.source.Protocol != "udp" || peer.source.Physical != remote.String() || peer.source.digest() != peer.reply.SourceSHA256 {
+                        return errors.New("ordinary UDP observer replaced its original MAX reference")
+                    }
+                    return nodeMAXWFPObserveOrdinaryUDP(ctx, connection, peer.local, remote, func(ctx context.Context, action, nonce string) (int64, error) {
+                        reply, err := peer.observeLocked(ctx, action+" "+nonce)
+                        if err != nil || reply.Probe != nonce || reply.ProbeCount < 0 {
+                            return 0, errors.Join(err, errors.New("ordinary UDP observer lost its independent private nonce"))
+                        }
+                        return reply.ProbeCount, nil
+                    })
+                }); err != nil {
+                    t.Fatal(err)
+                }
+                f.start(t)'''
+        sources[PEER] = WFP.BOOT.IDENTITY.replace_once(peer, boundary, observed)
+        helper_path = 'protocol/routervpnpq/node_max_udp_control_test.go'
+        if (source / helper_path).exists() or (source / helper_path).is_symlink():
+            raise ValueError('MAX native observer would replace an unowned source')
+        sources[helper_path] = PREFIX.decode().split('package ', 1)[0] + (UDP_CONTROL / 'udp_observation.go').read_text(encoding='utf-8')
     for path, contents in (
             ('routervpn/mobiletor/desktop_socket_windows_max_control_overlay.go', ORDINARY_OBSERVER),
             (str(Path(relative).parent / 'routervpn_max_wfp_control_overlay.go'), helper)):
@@ -384,6 +477,8 @@ def overlay_source_hashes(source, overlay_path):
 
 def rejected_output(status, output, parent, case, witness):
     output = output.replace('\r\n', '\n')
+    if INVALID_ORDINARY in output:
+        raise ValueError('Windows MAX control invalidated its captured delivery evidence')
     invalid = ('fatal:', 'testing: warning:', *JOIN_FAILURES)
     if any(value.casefold() in output.casefold() for value in invalid):
         raise ValueError('Windows MAX control failed its owned cleanup')
@@ -437,6 +532,10 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
         WFP.RESOURCES / 'socket_peer.go', WFP.RESOURCES / 'socket_peer_test.go'], cwd=source, env=captured, timeout=90)
     print(output, end='' if output.endswith('\n') else '\n', flush=True)
     MAX.required_output(status, output, 'TestWindowsNodeObserverTransportPeer', ())
+    status, output = NODE.run([compiler, 'test', *race, '-count=1', '-timeout=30s', '-v',
+        UDP_CONTROL / 'udp_observation.go', UDP_CONTROL / 'udp_observation_test.go'], cwd=source, env=captured, timeout=45)
+    print(output, end='' if output.endswith('\n') else '\n', flush=True)
+    MAX.required_output(status, output, UDP_OBSERVATION, UDP_CASES)
     with tempfile.TemporaryDirectory(prefix='routervpn-windows-complete-max-') as directory:
         workspace = Path(directory)
         keys = workspace / 'private' / 'keys'

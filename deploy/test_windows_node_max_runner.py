@@ -184,7 +184,7 @@ class MAXNativeBoundaries(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         GATE.rejected_output(1, actual.replace(witness, unrelated), native_parent, case, witness)
 
-    def test_ordinary_bypass_controls_require_native_access_denial_for_the_captured_owner(self):
+    def test_ordinary_bypass_controls_require_captured_native_or_independent_delivery_denial(self):
         for protocol, family, relative, replacement in (
                 ('tcp', 'TLS', 'protocol/routervpnxray/outbound.go',
                  'conn, err := (&net.Dialer{}).DialContext(cctx, N.NetworkTCP, b.server.String())'),
@@ -207,6 +207,18 @@ class MAXNativeBoundaries(unittest.TestCase):
                 denial = body[body.index('func desktopMAXControlDenied('):body.index('type desktopMAXControlConn struct')]
                 self.assertNotIn('timeout.Timeout()', denial)
                 self.assertIn(observer, GATE.overlay_source_hashes(self.source, selected))
+                if protocol == 'udp':
+                    peer = Path(mapping[str(self.source / GATE.PEER)]).read_text()
+                    self.assertIn('peer.mu.Lock()', peer)
+                    self.assertIn('peer.source.digest() != peer.reply.SourceSHA256', peer)
+                    self.assertIn('reply.Probe != nonce || reply.ProbeCount < 0', peer)
+                    self.assertIn('peer.observeLocked(ctx, action+" "+nonce)', peer)
+                    helper_path = 'protocol/routervpnpq/node_max_udp_control_test.go'
+                    self.assertEqual(Path(mapping[str(self.source / helper_path)]).read_text(),
+                                     GATE.PREFIX.decode().split('package ', 1)[0] +
+                                     (GATE.UDP_CONTROL / 'udp_observation.go').read_text())
+                else:
+                    self.assertNotIn(str(self.source / GATE.PEER), mapping)
                 witness = mutation[3]
                 actual = failure(GATE.native_parent(parent), case, witness)
                 GATE.rejected_output(1, actual, GATE.native_parent(parent), case, witness)
@@ -218,6 +230,19 @@ class MAXNativeBoundaries(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'unowned source'):
                     GATE.overlay(self.source, self.directory(label + '-occupied'), prospective=True, mutation=mutation)
                 owned.unlink()
+
+    def test_later_invalid_observation_cannot_reuse_an_earlier_denial(self):
+        parent, case = 'TestRouterVPNDesktopNodeWindowsMAXQUIC', 'max-quic-wg/off'
+        witness = GATE.ordinary_witness('udp')
+        valid = failure(parent, case, witness)
+        for reason in ('independent-delivery-proof-failed', 'delivery-readback-rejected',
+                       'missing-independent-reference', 'udp-captured-input-rejected',
+                       'denial-readback-rejected', 'udp-dial-lost-captured-socket'):
+            invalid = GATE.INVALID_ORDINARY + ' ' + reason + '\n'
+            for output in (valid + invalid, invalid + valid):
+                with self.subTest(reason=reason, before=output.startswith(invalid)):
+                    with self.assertRaisesRegex(ValueError, 'invalidated its captured delivery evidence'):
+                        GATE.rejected_output(1, output, parent, case, witness)
 
     def test_control_stage_diagnostics_never_replace_exact_native_denial(self):
         for protocol, family in (('tcp', 'TLS'), ('udp', 'QUIC')):
@@ -472,6 +497,10 @@ class MAXNativeBoundaries(unittest.TestCase):
                     state['on_compile'](binary, selected)
                 return 0, ''
             if args[1] == 'test':
+                if str(GATE.UDP_CONTROL / 'udp_observation.go') in args:
+                    if state.get('omit_udp_case'):
+                        return 0, output(GATE.UDP_OBSERVATION, GATE.UDP_CASES[:-1]) + 'PASS\n'
+                    return 0, output(GATE.UDP_OBSERVATION, GATE.UDP_CASES) + 'PASS\n'
                 return 0, output('TestWindowsNodeObserverTransportPeer') + 'PASS\n'
             binary = Path(args[0])
             for previous in state['removed_controls']:
@@ -586,6 +615,16 @@ class MAXNativeBoundaries(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'omitted or duplicated'):
                 GATE.execute(self.source, self.work / 'pq', self.work / 'cache', receipt_path=receipt)
         self.assertEqual(set(state['compiled_overlays']), {'shipping-closed-capability'})
+        self.assertFalse(receipt.exists())
+
+    def test_missing_udp_observation_case_blocks_native_compilation_and_receipt(self):
+        self.shipping_predicate()
+        receipt = self.work / 'missing-udp-observation.json'
+        with self.execution_harness(receipt) as state:
+            state['omit_udp_case'] = True
+            with self.assertRaisesRegex(ValueError, 'omitted or duplicated'):
+                GATE.execute(self.source, self.work / 'pq', self.work / 'cache', receipt_path=receipt)
+        self.assertEqual(state['compiled_overlays'], {})
         self.assertFalse(receipt.exists())
 
     def test_changed_compile_or_execution_overlay_prevents_publication(self):
