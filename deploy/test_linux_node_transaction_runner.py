@@ -133,6 +133,19 @@ class LinuxNodeTransactionRunner(unittest.TestCase):
         with self.assertRaises(ValueError):
             RUNNER.namespace_test(path, digest, "unrelated")
 
+    def test_mtu_terminal_hold_and_original_lease_sources_are_required(self):
+        self.assertIn("shutdown-mtu-held", RUNNER.SHUTDOWN_CASES)
+        self.assertIn("shutdown-mtu-cancelled", RUNNER.SHUTDOWN_CASES)
+        closure = RUNNER.checked_sources()
+        for relative in ("cmd/client/desktop_node_mtu_linux.go", "cmd/client/desktop_node_mtu_other.go",
+                         "cmd/client/desktop_node_mtu_linux_test.go", "cmd/client/desktop_node_mtu.go",
+                         "cmd/client/desktop_node_mtu_validation_test.go", "cmd/client/mtu_live_owner.go", "cmd/client/mtu_retest.go"):
+            self.assertIn(relative, closure)
+        self.assertIn("cmd/client/desktop_node_mtu_stop_linux.go", closure)
+        self.assertIn("cmd/client/mtu_stop.go", closure)
+        self.assertEqual(RUNNER.UNIT_CASES["TestDesktopNodeMTUCommitValidationRetainsOriginalRevert"], ("accepted", "rejected"))
+        self.assertIn("different-saved-runtime", RUNNER.UNIT_CASES["TestDesktopLinuxNodeMTUSnapshotRetainsAutoPolicyAndRuntime"])
+
 
 if __name__ == "__main__":
     unittest.main()

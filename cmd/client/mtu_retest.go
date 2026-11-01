@@ -39,6 +39,9 @@ type mtuLiveSnapshot struct {
 	Family      int
 	OriginalMTU int
 	Owner       *mtuLiveOwner
+	// Comparison only: the Linux consumer independently retains the original
+	// active host before opening its private lease. A route/name cannot supply it.
+	nodeRecord *desktopNodeMTURecord
 }
 
 type mtuWinner struct {
@@ -148,7 +151,7 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	baseEnv := mtuRetestEnvironment(root, snapshot.Profile, snapshot.State, snapshot.Mode, snapshot)
-	liveSnapshot, err := captureMTULiveSnapshot(snapshot.Profile)
+	liveSnapshot, err := captureMTUConnectionSnapshot(a, snapshot)
 	if err != nil {
 		http.Error(w, "MTU Retest could not snapshot the live tunnel MTU before measurement: "+err.Error(), http.StatusConflict)
 		return
@@ -366,6 +369,14 @@ func captureMTULiveSnapshot(p common.RouterProfile) (mtuLiveSnapshot, error) {
 		return mtuLiveSnapshot{}, fmt.Errorf("live tunnel interface returned unsafe MTU %d", mtu)
 	}
 	return mtuLiveSnapshot{Interface: iface, Family: family, OriginalMTU: mtu}, nil
+}
+
+func captureMTUConnectionSnapshot(a *app, snapshot mtuRetestSnapshot) (mtuLiveSnapshot, error) {
+	live, handled, err := captureDesktopPlatformMTUSnapshot(a, snapshot)
+	if handled || err != nil {
+		return live, err
+	}
+	return captureMTULiveSnapshot(snapshot.Profile)
 }
 
 func validateMTURetestSnapshot(a *app, snapshot mtuRetestSnapshot) error {

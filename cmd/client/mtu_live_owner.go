@@ -70,8 +70,11 @@ func captureMTULiveOwner(a *app, snapshot mtuRetestSnapshot, live mtuLiveSnapsho
 	if command == nil {
 		return nil, errors.New("MTU capture has no owned connection runtime")
 	}
-	var kernel mtuKernelOwner
-	if raw, found := desktopNodeOwners.Load(a); found {
+	kernel, handled, err := openDesktopPlatformMTUOwner(a, snapshot, live, token, command)
+	if handled || err != nil {
+		// Partial native begin remains with the same live owner below, even
+		// when its acknowledgement or final host readback failed.
+	} else if raw, found := desktopNodeOwners.Load(a); found {
 		launch, ok := raw.(*desktopNodeLaunch)
 		if !ok || launch.command != command || launch.external != nil {
 			return nil, errors.New("MTU capture belongs to another native runtime")
@@ -156,7 +159,9 @@ func (owner *mtuLiveOwner) ValidateMTU(expected int) error {
 func (owner *mtuLiveOwner) Environment() []string {
 	executable, _ := os.Executable()
 	minimum := "576"
-	if _, native := owner.kernel.(*desktopNodeMTUOwner); native || owner.initial.Family == 6 {
+	if _, native := owner.kernel.(interface {
+		Restore() (mtuKernelState, error)
+	}); native || owner.initial.Family == 6 {
 		minimum = "1280"
 	}
 	return []string{"HOMEVPN_MTU_OWNER_URL=" + owner.endpoint, "HOMEVPN_MTU_OWNER_TOKEN=" + owner.token, "HOMEVPN_MTU_OWNER_HELPER=" + executable, "HOMEVPN_MTU_MINIMUM=" + minimum}

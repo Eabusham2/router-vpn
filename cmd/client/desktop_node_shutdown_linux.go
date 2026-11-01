@@ -22,8 +22,12 @@ func (a *app) retireNativeNodeForShutdownContext(ctx context.Context) error {
 		return errors.New("Linux terminal retirement requires its bounded caller")
 	}
 	a.mu.Lock()
-	controller, closing := a.localController, a.closing
+	controller, closing, command, operation := a.localController, a.closing, a.cmd, a.connectionContext
 	a.mu.Unlock()
+	var capturedMTU *mtuLiveOwner
+	if raw, found := mtuLiveOwners.Load(a); found {
+		capturedMTU, _ = raw.(*mtuLiveOwner)
+	}
 	if controller == nil || controller.nodeParent == nil {
 		return nil
 	}
@@ -45,16 +49,40 @@ func (a *app) retireNativeNodeForShutdownContext(ctx context.Context) error {
 		}
 	}
 	parent.gate <- struct{}{}
-	if len(transactions) == 0 {
+	if len(transactions) == 0 && !closing {
 		return nil
 	}
 	if !closing {
 		return errors.New("Linux terminal retirement requires the application's permanent shutdown latch")
 	}
+	// Join the outstanding original MTU lease before retiring its child or
+	// clearing cmd. Ordinary Stop cannot take over a closed admission lifetime,
+	// and a failed drain must retain both the native engine and lease for retry.
+	releaseMTU, err := a.holdCapturedMTU(ctx)
+	if err != nil {
+		if ctx.Err() != nil {
+			return errors.Join(err, ctx.Err())
+		}
+		handled, retireErr := prepareDesktopPlatformMTUStop(ctx, a, command, operation, capturedMTU, true, err)
+		if !handled || retireErr != nil {
+			return errors.Join(err, retireErr)
+		}
+		releaseMTU, err = a.holdCapturedMTU(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	defer releaseMTU()
+	if len(transactions) == 0 {
+		return nil
+	}
 	// Capture the selected actual command before touching any engine. A late
 	// old shutdown must neither stop nor clear a replacement command/owner.
 	a.mu.Lock()
-	command := a.cmd
+	if a.cmd != command || a.connectionContext != operation {
+		a.mu.Unlock()
+		return errors.New("Linux terminal MTU drain changed its original command or operation")
+	}
 	var selected *desktopLinuxNodeTransaction
 	for _, transaction := range transactions {
 		if transaction.parent == nil || transaction.parent.app != a || transaction.parent.controller != controller ||

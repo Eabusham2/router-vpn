@@ -24,7 +24,7 @@ SPEC.loader.exec_module(GUARD)
 CASES = ("on-connect", "request-ended", "always-successor", "cancelled-before-prepare", "cancel-intent-before-prepare",
          "changed-profile", "partial-prepare-write", "engine-join")
 SHUTDOWN_CASES = ("shutdown-on-connect", "shutdown-request-ended", "shutdown-before-prepare", "shutdown-before-admission",
-                  "shutdown-retry", "shutdown-successor-first", "shutdown-replacement", "shutdown-always")
+                  "shutdown-retry", "shutdown-successor-first", "shutdown-replacement", "shutdown-mtu-held", "shutdown-mtu-cancelled", "shutdown-always")
 HOST_CASES = ("complete", "restored-mtu", "wrong-package", "request-replaced", "profile-replaced", "options-replaced",
               "network-replaced", "source-replaced", "workspace-replaced", "cancelled-retirement", "entered-command",
               "runtime-options", "runtime-options-replaced")
@@ -46,6 +46,16 @@ TRANSITION_CASES = ("empty", "fixed-active", "fixed-wrong-family", "unrelated-ta
 GROUPS = {"NodeSession": SESSION_CASES, "NodeTransaction": CASES, "NodeShutdown": SHUTDOWN_CASES, "NodeHost": HOST_CASES,
           "NodeHostStart": HOST_START_CASES, "NodeProofSocket": PROOF_SOCKET_CASES, "NodeStop": STOP_CASES, "NodeFallback": FALLBACK_CASES, "NodeTransition": TRANSITION_CASES}
 UNIT_CASES = {
+    "TestDesktopLinuxNodeMTUReadbackComparison": ("schema", "session", "config", "path", "generation", "request", "lease", "active", "restored", "expired", "reader", "interface", "index", "mtu", "failure"),
+    "TestDesktopLinuxNodeMTUOriginalOwnerComparison": ("valid", "host-lease", "activation", "process", "transaction", "launch", "native-launch", "session-parent", "process-parent",
+                                                     "transaction-parent", "journal", "transaction-process", "policy", "selection", "runtime-options", "saved-options", "transaction-options", "transaction-saved-options",
+                                                     "command", "session", "config", "path", "interface", "launch-session", "launch-config"),
+    "TestDesktopLinuxNodeMTUCaptureRefusesPartialOwnerAndFallback": ("cancelled", "partial-session", "foreign-parent", "lost-controller"),
+    "TestDesktopLinuxNodeMTUFamilyRetainsPrivateTarget": ("default-v4", "private-v4", "private-v6", "hostname", "public", "invalid"),
+    "TestDesktopLinuxNodeMTUSnapshotRetainsAutoPolicyAndRuntime": ("auto", "different-saved-runtime", "fixed", "manual", "source-profile", "mode", "node", "saved-options", "runtime-options", "disconnected"),
+    "TestDesktopLinuxNodeMTURetirementRetainsUndischargedLease": (),
+    "TestDesktopLinuxNodeMTUStopRejectsUnadmittedCleanup": ("no-failure", "cancelled-hold", "deadline-hold", "cancelled-call", "registry", "command", "held-retest", "undrained"),
+    "TestDesktopNodeMTUCommitValidationRetainsOriginalRevert": ("accepted", "rejected"),
     "TestDesktopLinuxNodeActivationProof": ("absent", "historical-clock", "historical-start", "historical-now", "stale", "future", "before-start",
                                             "zero-elapsed", "negative-elapsed", "unbounded-elapsed", "impossible-elapsed", "unbounded-deadline",
                                             "changed-ready", "changed-live", "active-mtu", "failed-reader"),
@@ -91,6 +101,9 @@ def checked_sources():
         "cmd/client/desktop_node_host_linux_ready.go", "cmd/client/desktop_node_host_linux_proof.go",
         "cmd/client/desktop_node_host_linux_proof_test.go", "cmd/client/desktop_node_host_linux_proof_native_test.go",
         "cmd/client/desktop_node_host_linux_active.go", "cmd/client/desktop_node_host_linux_active_test.go",
+        "cmd/client/desktop_node_mtu_linux.go", "cmd/client/desktop_node_mtu_other.go", "cmd/client/desktop_node_mtu_linux_test.go",
+        "cmd/client/desktop_node_mtu.go", "cmd/client/desktop_node_mtu_validation_test.go", "cmd/client/mtu_live_owner.go", "cmd/client/mtu_retest.go",
+        "cmd/client/desktop_node_mtu_stop_linux.go", "cmd/client/mtu_stop.go",
         "cmd/client/operation_guard.go", "cmd/client/operation_guard_cancellation_intent_test.go", "cmd/client/main.go",
         "internal/linuxprotection/node_control_linux.go", "internal/linuxprocess/bootstrap_linux.go",
         "internal/mobiletor/desktop_socket_linux_node_baseline.go", "internal/mobiletor/desktop_socket_linux_node_absence.go",

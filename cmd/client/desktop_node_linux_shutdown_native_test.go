@@ -149,6 +149,77 @@ func linuxShutdownRejectReplacement(ctx context.Context, a *app, transaction *de
 	return nil
 }
 
+// This is an actual original-engine/retirement observation in the private
+// namespace. It proves terminal ordering around the Retest mutex; only the
+// separate full-bundle cases prove a real TUN lease and kernel rollback.
+func linuxShutdownMTUHold(ctx context.Context, a *app, transaction *desktopLinuxNodeTransaction, cancelDrain bool) (failure error) {
+	lock := mtuRetestLockFor(a)
+	lock.Lock()
+	locked := true
+	joined := false
+	drain, cancel := context.WithCancel(ctx)
+	defer cancel()
+	a.mu.Lock()
+	a.closing = true
+	a.mu.Unlock()
+	done := make(chan error, 1)
+	go func() { done <- a.retireNativeNodeForShutdownContext(drain) }()
+	defer func() {
+		cancel()
+		if locked {
+			lock.Unlock()
+		}
+		if !joined {
+			failure = errors.Join(failure, <-done)
+		}
+	}()
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		suspension := mtuSuspensionFor(a)
+		suspension.mu.Lock()
+		waiting := suspension.users > 0
+		suspension.mu.Unlock()
+		if waiting {
+			break
+		}
+		select {
+		case err := <-done:
+			joined = true
+			return errors.Join(err, errors.New("terminal Linux shutdown passed an outstanding original MTU hold"))
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+	if transaction.stopRequested.Load() || transaction.bootstrap.Current(ctx) != nil || transaction.control.Current(ctx) != nil {
+		return errors.New("terminal Linux shutdown retired the authenticated engine before its MTU hold")
+	}
+	select {
+	case <-transaction.process.joined:
+		return errors.New("terminal Linux shutdown joined the original engine before its MTU hold")
+	case err := <-done:
+		joined = true
+		return errors.Join(err, errors.New("terminal Linux shutdown passed an outstanding original MTU hold"))
+	default:
+	}
+	if cancelDrain {
+		cancel()
+	} else {
+		lock.Unlock()
+		locked = false
+	}
+	err := <-done
+	joined = true
+	if cancelDrain {
+		if err == nil || transaction.stopRequested.Load() || transaction.bootstrap.Current(ctx) != nil || transaction.control.Current(ctx) != nil {
+			return errors.Join(err, errors.New("cancelled terminal MTU hold lost its retained authenticated engine"))
+		}
+		return nil
+	}
+	return err
+}
+
 func linuxTransactionShutdownFixture(ctx context.Context, a *app, parent *desktopLinuxNodeParentCapture, journal *desktopLinuxNodeJournal,
 	transaction *desktopLinuxNodeTransaction, scenario, directory string, stopOperation context.CancelFunc) error {
 	var preparation <-chan error
@@ -210,6 +281,11 @@ func linuxTransactionShutdownFixture(ctx context.Context, a *app, parent *deskto
 	joinedReceipt := transaction.retirement
 	if scenario == "shutdown-replacement" {
 		if err := linuxShutdownRejectReplacement(ctx, a, transaction); err != nil {
+			return err
+		}
+	}
+	if scenario == "shutdown-mtu-held" || scenario == "shutdown-mtu-cancelled" {
+		if err := linuxShutdownMTUHold(ctx, a, transaction, scenario == "shutdown-mtu-cancelled"); err != nil {
 			return err
 		}
 	}
@@ -284,7 +360,7 @@ func TestDesktopLinuxGuardianKernelNodeShutdown(t *testing.T) {
 	// Always is last: its real closed table intentionally survives controller
 	// exit until this private network namespace itself is destroyed.
 	for _, scenario := range []string{"shutdown-on-connect", "shutdown-request-ended", "shutdown-before-prepare", "shutdown-before-admission",
-		"shutdown-retry", "shutdown-successor-first", "shutdown-replacement", "shutdown-always"} {
+		"shutdown-retry", "shutdown-successor-first", "shutdown-replacement", "shutdown-mtu-held", "shutdown-mtu-cancelled", "shutdown-always"} {
 		t.Run(scenario, func(t *testing.T) {
 			installed := linuxControllerNamespaceInstall(t)
 			if err := os.RemoveAll(filepath.Join("/opt", desktopLinuxNodeJournalDirectory)); err != nil {

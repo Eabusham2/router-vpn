@@ -43,6 +43,7 @@ type desktopLinuxNodeHost struct {
 	proof        *desktopLinuxNodeProof
 	activation   *desktopLinuxNodeActivation
 	monitor      *atomic.Pointer[desktopLinuxNodeMonitor] // Immutable holder, allocated before host publication.
+	mtu          *desktopLinuxNodeMTUOwner
 	stageEntered bool
 	startEntered bool
 	started      time.Time

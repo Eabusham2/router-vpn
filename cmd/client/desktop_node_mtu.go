@@ -124,6 +124,13 @@ func (owner *desktopNodeMTUOwner) Change(expected mtuKernelState, mtu int) (mtuK
 	return owner.state(), err
 }
 func (owner *desktopNodeMTUOwner) Commit() error {
+	return owner.commitWithValidation(nil)
+}
+
+// The Linux host must retain the exact unconfirmed revert capability until
+// the post-command original host/kernel observation also succeeds. Other
+// consumers preserve their existing commit contract through Commit above.
+func (owner *desktopNodeMTUOwner) commitWithValidation(current func() error) error {
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
 	if _, err := owner.readLocked(); err != nil {
@@ -137,6 +144,11 @@ func (owner *desktopNodeMTUOwner) Commit() error {
 	}
 	if err := owner.exchange("commit", 0); err != nil {
 		return err
+	}
+	if current != nil {
+		if err := current(); err != nil {
+			return err
+		}
 	}
 	owner.committed = true
 	owner.discardCommitRevert()

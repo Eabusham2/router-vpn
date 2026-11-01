@@ -15,8 +15,12 @@ func (a *app) holdMTUForStop() (func(), *exec.Cmd, error) {
 // unresolved MTU lease. Speed Lab's measurement hold never takes this fallback.
 func (a *app) holdMTUForStopWith(hold func(context.Context) (func(), error)) (func(), *exec.Cmd, error) {
 	a.mu.Lock()
-	command := a.cmd
+	command, operation := a.cmd, a.connectionContext
 	a.mu.Unlock()
+	var capturedMTU *mtuLiveOwner
+	if raw, found := mtuLiveOwners.Load(a); found {
+		capturedMTU, _ = raw.(*mtuLiveOwner)
+	}
 	current := func() bool {
 		a.mu.Lock()
 		defer a.mu.Unlock()
@@ -39,6 +43,19 @@ func (a *app) holdMTUForStopWith(hold func(context.Context) (func(), error)) (fu
 	if command == nil || !current() {
 		return nil, command, holdErr
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	handled, retireErr := prepareDesktopPlatformMTUStop(ctx, a, command, operation, capturedMTU, false, holdErr)
+	cancel()
+	if handled {
+		if retireErr != nil || !current() {
+			return nil, command, errors.Join(holdErr, retireErr, errors.New("captured native MTU teardown has not completed"))
+		}
+		release, err := tryHold()
+		if err != nil {
+			return nil, command, errors.Join(holdErr, err)
+		}
+		return release, command, nil
+	}
 	raw, exists := desktopNodeOwners.Load(a)
 	launch, native := raw.(*desktopNodeLaunch)
 	if !exists || !native || launch == nil || launch.command != command || launch.command.Process == nil && !desktopOwnedNodeCreated(launch) || launch.external == nil && launch.tor == nil && launch.mtuSession == "" {
@@ -47,7 +64,7 @@ func (a *app) holdMTUForStopWith(hold func(context.Context) (func(), error)) (fu
 	// An unconfirmed commit can outlive its revert deadline. Stop this exact
 	// child, with protection retained, so its checked TUN retirement can close
 	// the MTU owner. Process death alone cannot satisfy either stop helper.
-	var retireErr error
+	retireErr = nil
 	if launch.external != nil || launch.tor != nil {
 		retireErr = a.prepareDesktopMeasurementStop(launch)
 	} else {

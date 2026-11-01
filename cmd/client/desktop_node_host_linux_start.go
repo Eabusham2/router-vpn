@@ -163,6 +163,17 @@ func (h *desktopLinuxNodeHost) Retire(ctx context.Context, disconnect bool) erro
 }
 
 func (h *desktopLinuxNodeHost) retireLocked(ctx context.Context, disconnect bool) error {
+	if h.mtu != nil {
+		if err := h.mtu.closeLocked(ctx); err != nil {
+			// A naturally closing graph may already be waiting for this
+			// parent's retirement ACK and can no longer serve rollback. Keep
+			// the exact lease while joining only its original transaction;
+			// failed mailbox cleanup is never a discharge receipt.
+			if currentErr := h.mtu.cleanupCurrentLocked(ctx); currentErr != nil {
+				return errors.Join(err, currentErr)
+			}
+		}
+	}
 	h.revokeActivationLocked()
 	if h.process == nil {
 		if h.launch != nil && h.launch.command != nil {
@@ -191,11 +202,21 @@ func (h *desktopLinuxNodeHost) retireLocked(ctx context.Context, disconnect bool
 				if err := t.Retire(ctx); err != nil {
 					return err
 				}
+				if h.mtu != nil {
+					if err := h.mtu.finishRetirementLocked(ctx); err != nil {
+						return err
+					}
+				}
 				if disconnect {
 					if err := t.ReleaseOnDisconnect(ctx); err != nil {
 						return err
 					}
 				}
+			}
+		}
+		if h.mtu != nil {
+			if err := h.mtu.finishRetirementLocked(ctx); err != nil {
+				return err
 			}
 		}
 		if err := t.enter(ctx); err != nil {
