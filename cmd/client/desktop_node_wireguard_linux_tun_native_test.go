@@ -26,12 +26,18 @@ func linuxHostTUNAction(scenario string) string {
 	if linuxHostTUNWireGuardCase(scenario) {
 		return strings.TrimPrefix(scenario, "wg-")
 	}
+	if linuxHostTUNHysteria2Case(scenario) {
+		return strings.TrimPrefix(scenario, "hy2-")
+	}
 	return scenario
 }
 
 func linuxHostTUNMode(scenario string) string {
 	if linuxHostTUNWireGuardCase(scenario) {
 		return "wg"
+	}
+	if linuxHostTUNHysteria2Case(scenario) {
+		return "hysteria2"
 	}
 	return "shadowsocks"
 }
@@ -40,7 +46,7 @@ func linuxHostTUNEncryptedTCP(peer *linuxHostTUNPeer, before, after linuxHostTUN
 	if after.PlainTCP <= before.PlainTCP {
 		return false
 	}
-	if peer.mode == "wg" {
+	if peer.mode == "wg" || peer.mode == "hysteria2" {
 		return before.RawTCP == 0 && after.RawTCP == 0 && after.RawUDP > before.RawUDP
 	}
 	return after.RawTCP > before.RawTCP

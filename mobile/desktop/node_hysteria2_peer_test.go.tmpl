@@ -87,16 +87,16 @@ func (h desktopNodeHysteria2Handler) NewPacketConnectionEx(ctx context.Context, 
 	}
 }
 
-func startDesktopNodeHysteria2Server(t *testing.T, ip netip.Addr, dnsAddress string) (*desktopNodeLayerServer, string) {
+func startDesktopNodeHysteria2Server(t *testing.T, ip netip.Addr, dnsAddress string, routerAddresses ...string) (*desktopNodeLayerServer, string) {
 	t.Helper()
 	packet, err := net.ListenPacket("udp4", net.JoinHostPort(ip.String(), "0"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return startDesktopNodeHysteria2ServerWithPacket(t, ip, dnsAddress, packet)
+	return startDesktopNodeHysteria2ServerWithPacket(t, ip, dnsAddress, packet, routerAddresses...)
 }
 
-func startDesktopNodeHysteria2ServerWithPacket(t *testing.T, ip netip.Addr, dnsAddress string, packet net.PacketConn) (*desktopNodeLayerServer, string) {
+func startDesktopNodeHysteria2ServerWithPacket(t *testing.T, ip netip.Addr, dnsAddress string, packet net.PacketConn, routerAddresses ...string) (*desktopNodeLayerServer, string) {
 	t.Helper()
 	started := false
 	defer func() {
@@ -111,6 +111,17 @@ func startDesktopNodeHysteria2ServerWithPacket(t *testing.T, ip netip.Addr, dnsA
 	}
 	if addressErr != nil || !ip.Is4() || address.Addr() != ip || address.Port() == 0 {
 		t.Fatal("Hysteria2 reference lost its retained UDP endpoint", addressErr)
+	}
+	routerAddress := ""
+	if len(routerAddresses) > 1 {
+		t.Fatal("Hysteria2 reference has multiple private Router mappings")
+	}
+	if len(routerAddresses) == 1 && routerAddresses[0] != "" {
+		router, err := netip.ParseAddrPort(routerAddresses[0])
+		if err != nil || router.Addr() != ip || !ip.IsPrivate() || router.Port() == 0 {
+			t.Fatal("Hysteria2 reference changed its captured private Router destination", err)
+		}
+		routerAddress = router.String()
 	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -137,7 +148,7 @@ func startDesktopNodeHysteria2ServerWithPacket(t *testing.T, ip netip.Addr, dnsA
 	password, mask := base64.StdEncoding.EncodeToString(credential[:32]), base64.StdEncoding.EncodeToString(credential[32:])
 	clear(credential[:])
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, udp: packet, dnsAddress: dnsAddress, connections: make(map[io.Closer]bool)}
+	s := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, udp: packet, dnsAddress: dnsAddress, routerAddress: routerAddress, connections: make(map[io.Closer]bool)}
 	logger := log.NewNOPFactory().NewLogger("captured-hysteria2-peer")
 	tlsConfig, err := boxTLS.NewServer(ctx, logger, option.InboundTLSOptions{Enabled: true, Certificate: []string{certificate}, Key: []string{privatePEM}})
 	if err != nil {

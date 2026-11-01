@@ -686,7 +686,9 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 		inner = netip.AddrPortFrom(netip.MustParseAddr("10.78.0.1"), base.Port()).String()
 		innerNetwork, probeNetwork = "tcp", "tcp"
 	} else if request.Mode == "hysteria2" {
-		protocolServer, protocolFiles = startDesktopNodeHysteria2Server(t, ip, dnsListener.LocalAddr().String())
+		// The private Router mapping is fixed before the actual QUIC service
+		// starts. It grants no other TCP destination or DNS/physical exception.
+		protocolServer, protocolFiles = startDesktopNodeHysteria2Server(t, ip, dnsListener.LocalAddr().String(), routerHealth.address())
 		baseAddress = protocolServer.udp.LocalAddr().String()
 		base := netip.MustParseAddrPort(baseAddress)
 		inner = netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), base.Port()).String()
@@ -1095,9 +1097,9 @@ func (p *desktopNodeLayerReference) original(t *testing.T, kill, fault string) *
 	if p.request.NodeProofID != "" {
 		// The optional health responder is part of this original private
 		// profile. WG retains the key-derived identity, including a deliberate
-		// wrong-peer control; SS uses its explicitly captured Router identity.
+		// wrong-peer control; SS/Hysteria2 use the captured Router identity.
 		profile["router_api"] = "http://" + desktopNodeRouterHealthTarget
-		if p.request.Mode == "shadowsocks" {
+		if p.request.Mode == "shadowsocks" || p.request.Mode == "hysteria2" {
 			profile["node_proof_id"] = p.request.NodeProofID
 		}
 	}

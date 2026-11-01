@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	M "github.com/sagernet/sing/common/metadata"
 )
 
@@ -23,7 +24,7 @@ const (
 )
 
 // The optional private test service reproduces the shipping agent's public
-// /health shape. The selected SS2022 graph authenticates transport; /health
+// /health shape. The selected SS2022 or Hysteria2 graph authenticates transport; /health
 // does not require the bearer token used by the agent's administrative APIs.
 // This mapping is separate from the bounded inner routes so enabling it can
 // neither remove the selected Home DNS mapping nor add arbitrary forwarding.
@@ -32,9 +33,10 @@ func desktopNodeRouterHealthCaptureValid(request desktopNodeLayerRequest) bool {
 		return !request.DirectRouter && !request.Cover
 	}
 	raw, err := hex.DecodeString(request.NodeProofID)
+	plain := request.Layer == "" || request.Layer == "off"
 	return err == nil && len(raw) == 32 && hex.EncodeToString(raw) == request.NodeProofID &&
-		request.Mode == "shadowsocks" && (request.Layer == "" || request.Layer == "off" ||
-		request.Layer == "aes-256-gcm" || request.Layer == "aes-256-gcm+xor-whitening")
+		(request.Mode == "hysteria2" && plain || request.Mode == "shadowsocks" &&
+			(plain || request.Layer == "aes-256-gcm" || request.Layer == "aes-256-gcm+xor-whitening"))
 }
 
 type desktopNodeRouterHealth struct {
@@ -146,6 +148,10 @@ func TestRouterVPNDesktopNodeRouterHealthCapture(t *testing.T) {
 		if !desktopNodeRouterHealthCaptureValid(covered) {
 			t.Fatal("captured private Router cover or exact Start Layer was rejected", layer)
 		}
+		covered.Mode = "hysteria2"
+		if desktopNodeRouterHealthCaptureValid(covered) != (layer == "" || layer == "off") {
+			t.Fatal("Hysteria2 Router capture changed its plain-only retained boundary", layer)
+		}
 	}
 	for _, change := range []struct {
 		name string
@@ -171,15 +177,14 @@ func TestRouterVPNDesktopNodeRouterHealthCapture(t *testing.T) {
 // whitening relay. Kernel policy and TUN remain the existing explicit modeled
 // boundary here; the installed gate separately requires the real native host.
 func TestRouterVPNDesktopNodeEncryptedRouterHealthLayers(t *testing.T) {
-	for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
-		label := layer
-		if label == "" {
-			label = "off"
-		}
-		t.Run(label, func(t *testing.T) {
+	for _, test := range []struct{ mode, layer, label string }{
+		{"shadowsocks", "", "off"}, {"shadowsocks", "aes-256-gcm", "aes-256-gcm"},
+		{"shadowsocks", "aes-256-gcm+xor-whitening", "aes-256-gcm+xor-whitening"}, {"hysteria2", "", "hy2-off"},
+	} {
+		t.Run(test.label, func(t *testing.T) {
 			_, ip := desktopNodePeerInterface(t)
 			nodeID := strings.Repeat("a", 64)
-			peer := startDesktopNodeLayerReference(t, "shadowsocks", layer, ip, nodeID)
+			peer := startDesktopNodeLayerReference(t, test.mode, test.layer, ip, nodeID)
 			f := newDesktopNodeLayerFixture(t, peer, "")
 			if err := f.box.RouterVPNStrategyStart(); err != nil {
 				t.Fatal("captured Router reference did not enter actual encrypted startup", err)
@@ -220,9 +225,13 @@ func TestRouterVPNDesktopNodeEncryptedRouterHealthLayers(t *testing.T) {
 					Proof  string `json:"proof"`
 				}
 				after := peer.observe(t, "stats")
+				ciphertext := after.RawTCP > before.RawTCP
+				if test.mode == "hysteria2" {
+					ciphertext = before.RawTCP == 0 && after.RawTCP == 0 && after.RawUDP > before.RawUDP
+				}
 				if readErr != nil || closeErr != nil || len(body) > 1024 || response.StatusCode != http.StatusOK || json.Unmarshal(body, &actual) != nil ||
 					!actual.OK || actual.Proof != "router-vpn-private-agent-v1" || (actual.NodeID == nodeID) == (action == "wrong-node") ||
-					after.RouterQueries != before.RouterQueries+1 || after.DirectQueries != 0 || after.RawTCP <= before.RawTCP || after.PlainTCP != before.PlainTCP+1 {
+					after.RouterQueries != before.RouterQueries+1 || after.DirectQueries != 0 || !ciphertext || after.PlainTCP != before.PlainTCP+1 {
 					t.Fatal("captured layered Router response lost its original identity or encrypted counters", action, readErr, closeErr, before, after)
 				}
 			}
@@ -232,6 +241,41 @@ func TestRouterVPNDesktopNodeEncryptedRouterHealthLayers(t *testing.T) {
 				after := peer.observe(t, "stats")
 				if (err == nil) == (action == "fail-dns") || after.DNSQueries != before.DNSQueries+1 || after.RawUDP <= before.RawUDP || after.PlainUDP <= before.PlainUDP {
 					t.Fatal("captured layered Router peer substituted the selected resolver or a cached answer", action, err, before, after)
+				}
+			}
+			if test.mode == "hysteria2" {
+				capture, err := f.policy.Capture()
+				if err != nil || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Type != "hysteria2" ||
+					len(capture.PhysicalRoots[0].Destinations) != 1 || capture.PhysicalRoots[0].Destinations[0] !=
+					(mobilemultihop.PhysicalEgress{Host: ip.String(), Port: int(peer.remote.Port()), Network: "udp"}) ||
+					capture.SelectedDNS.Host != "192.168.50.133" || capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != "proxy" ||
+					capture.ConfiguredMTU != 1280 || capture.KillSwitchPolicy != "always" {
+					t.Fatal("Hysteria2 Router graph changed its exact UDP lower, selected DNS, MTU or protection", err)
+				}
+				for _, network := range []string{"tcp", "udp"} {
+					for _, destination := range []string{"192.0.2.99", "2001:db8::99"} {
+						if err := f.exchange(network, destination); err != nil {
+							t.Fatal("Hysteria2 Router graph lost independent encrypted IPv4/IPv6 payload", network, destination, err)
+						}
+					}
+				}
+				f.kernel.mu.Lock()
+				requests := f.kernel.requests
+				for _, grant := range f.kernel.grants {
+					if grant.Network != "udp" || grant.Remote != peer.remote || grant.Capture != f.kernel.capture {
+						t.Error("Hysteria2 borrowed a TCP, DNS or foreign physical socket grant", grant.Network, grant.Remote)
+					}
+				}
+				f.kernel.mu.Unlock()
+				if requests == 0 || f.network.Current() {
+					t.Fatal("Hysteria2 bypassed socket ownership or treated modeled kernel/TUN policy as ready")
+				}
+				f.source.Cancel()
+				if f.exchange("udp") == nil {
+					t.Fatal("cancelled Hysteria2 owner delivered replacement encrypted payload")
+				}
+				if err := f.close(); err != nil || !f.source.closed.Load() {
+					t.Fatal("Hysteria2 Router graph did not join its original native socket owner", err)
 				}
 			}
 		})

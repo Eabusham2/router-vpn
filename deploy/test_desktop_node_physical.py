@@ -632,7 +632,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Node encrypted gate omitted a complete base profile")
             if name == "encrypted" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedLayerTraffic/" + case + " (" not in output for case in (*LAYER_CASES, *LAYER_ALLOCATION_CASES)):
                 raise ValueError("Node encrypted gate omitted an admitted graph/Start Layer")
-            if name == "encrypted" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedRouterHealthLayers/" + layer + " (" not in output for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")):
+            if name == "encrypted" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedRouterHealthLayers/" + layer + " (" not in output for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening", "hy2-off")):
                 raise ValueError("Node encrypted gate omitted captured Router health and selected DNS for a Start Layer")
             if name == "encrypted" and platform.system() == "Linux" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedPlainWireGuard/" + case + " (" not in output for case in ("proved", "wrong-peer", "wrong-psk")):
                 raise ValueError("Node encrypted gate omitted plain WireGuard selected DNS, identity or captured-key rejection")

@@ -24,7 +24,7 @@ func routerVPNDesktopLinuxNodeLifecycleAvailable(policy *mobilemultihop.DesktopN
 		return false
 	}
 	meta := policy.Metadata()
-	// Only exact plain WireGuard or the admitted Shadowsocks Start Layers may
+	// Only exact plain WireGuard/Hysteria2 or admitted Shadowsocks Start Layers may
 	// enter this native TUN/nft/DNS lifecycle. The seal rederives each actual
 	// endpoint/outbound, credential, port and physical lower.
 	return meta.TargetOS == "linux" && mobilemultihop.DesktopLinuxNodePhysicalGraphSupported(meta.Mode, meta.StartLayer)

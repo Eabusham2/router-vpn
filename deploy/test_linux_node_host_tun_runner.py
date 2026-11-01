@@ -28,13 +28,14 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:2: verified installed host active lifetime: ' + case for case in cases if case in G.ACTIVE_CASES),
                           *('    native_test.go:3: verified installed host retained DNS observation: ' + case for case in cases if case in ('active-request-ended', *G.PUBLIC_CASES)),
                           *('    native_test.go:4: verified installed host original MTU lease: ' + case for case in cases if case in G.MTU_CASES),
-                          *('    native_test.go:5: verified installed host live MTU status: ' + case for case in cases if case in ('active-request-ended', *G.PUBLIC_CASES) or case.startswith('mtu-')),
+                          *('    native_test.go:5: verified installed host live MTU status: ' + case for case in cases if case in ('active-request-ended', *G.PUBLIC_CASES, *G.MTU_CASES)),
                           *('    native_test.go:6: verified installed host sealed temporary restoration: ' + case for case in cases if case in G.RESTORE_CASES),
                           *('    native_test.go:7: verified installed host public Connect and Disconnect: ' + case for case in cases if case in G.PUBLIC_CASES),
                           *('    native_test.go:8: verified installed host native cover: ' + case for case in cases if case in G.COVER_CASES),
                           *('    native_test.go:9: verified installed host saved Linux protection Off: ' + case for case in cases if case in G.OFF_CASES),
                           *('    native_test.go:10: verified installed host captured Start Layer: ' + case for case in cases if case in G.LAYER_CASES),
-                          *('    native_test.go:11: verified installed host plain WireGuard: ' + case for case in cases if case in G.WIREGUARD_CASES)]) + '\n'
+                          *('    native_test.go:11: verified installed host plain WireGuard: ' + case for case in cases if case in G.WIREGUARD_CASES),
+                          *('    native_test.go:12: verified installed host plain Hysteria2: ' + case for case in cases if case in G.HYSTERIA2_CASES)]) + '\n'
 
     def test_requires_every_real_positive_negative_and_joined_lifecycle(self):
         output = self.completed()

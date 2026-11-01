@@ -79,6 +79,13 @@ func linuxHostTUNSealedRestore(ctx context.Context, a *app, session *desktopLinu
 	if err := os.WriteFile(generated, []byte("not the captured private graph\n"), 0600); err != nil {
 		return nil, result, err
 	}
+	if saved.mode == "hysteria2" {
+		// The restored TLS trust must come from the sealed original source,
+		// including its certificate, rather than today's generated files.
+		if err := os.WriteFile(filepath.Join(filepath.Dir(generated), "cert.pem"), []byte("not the captured private CA\n"), 0600); err != nil {
+			return nil, result, err
+		}
+	}
 	if err := a.speedLabSuspendPrevious(snapshot, false); err != nil {
 		return nil, result, err
 	}

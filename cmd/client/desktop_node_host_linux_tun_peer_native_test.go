@@ -170,6 +170,12 @@ type linuxHostTUNPeerReply struct {
 	Schema          int    `json:"schema"`
 	Address         string `json:"address"`
 	AESAddress      string `json:"aes_address"`
+	BaseAddress     string `json:"base_address"`
+	ProtocolFiles   string `json:"protocol_files"`
+	ProtocolRawTCP  int64  `json:"protocol_raw_tcp"`
+	ProtocolRawUDP  int64  `json:"protocol_raw_udp"`
+	ProtocolTCP     int64  `json:"protocol_tcp"`
+	ProtocolUDP     int64  `json:"protocol_udp"`
 	RawTCP          int64  `json:"raw_tcp"`
 	RawUDP          int64  `json:"raw_udp"`
 	PlainTCP        int64  `json:"plain_tcp"`
@@ -185,22 +191,23 @@ type linuxHostTUNPeerReply struct {
 }
 
 type linuxHostTUNPeer struct {
-	command      *exec.Cmd
-	input        io.WriteCloser
-	output       *os.File
-	reader       *bufio.Reader
-	diagnostic   linuxHostTUNOutput
-	done         chan struct{}
-	waitErr      error
-	address      netip.AddrPort
-	aesAddress   netip.AddrPort
-	layer        string
-	password     string
-	mode         string
-	nodeID       string
-	clientKey    string
-	serverKey    string
-	serverPublic string
+	command       *exec.Cmd
+	input         io.WriteCloser
+	output        *os.File
+	reader        *bufio.Reader
+	diagnostic    linuxHostTUNOutput
+	done          chan struct{}
+	waitErr       error
+	address       netip.AddrPort
+	aesAddress    netip.AddrPort
+	layer         string
+	password      string
+	mode          string
+	nodeID        string
+	clientKey     string
+	serverKey     string
+	serverPublic  string
+	protocolFiles string
 }
 
 func (peer *linuxHostTUNPeer) read(t *testing.T) linuxHostTUNPeerReply {
@@ -221,6 +228,18 @@ func (peer *linuxHostTUNPeer) read(t *testing.T) linuxHostTUNPeerReply {
 			t.Fatal("installed WireGuard reference changed its original UDP-only peer")
 		}
 		peer.address = endpoint
+		return reply
+	}
+	if peer.mode == "hysteria2" {
+		// These are the same peer's atomic counters, read again later in the
+		// reply. QUIC/cover may receive packets between those observations.
+		if err != nil || endpoint.Addr().String() != "192.168.210.2" || endpoint.Port() == 0 || reply.AESAddress != "" || reply.BaseAddress != reply.Address ||
+			peer.address.IsValid() && peer.address != endpoint || reply.ProtocolFiles == "" || peer.protocolFiles != "" && peer.protocolFiles != reply.ProtocolFiles ||
+			reply.RawTCP != 0 || reply.RawUDP < 0 || reply.PlainTCP < 0 || reply.PlainUDP < 0 || reply.ProtocolRawTCP != 0 ||
+			reply.ProtocolRawUDP < reply.RawUDP || reply.ProtocolTCP < reply.PlainTCP || reply.ProtocolUDP < reply.PlainUDP {
+			t.Fatal("installed Hysteria2 reference changed its exact UDP peer, TLS source or protocol counters")
+		}
+		peer.address, peer.protocolFiles = endpoint, reply.ProtocolFiles
 		return reply
 	}
 	aes, aesErr := netip.ParseAddrPort(reply.AESAddress)
@@ -327,7 +346,7 @@ func linuxHostTUNStartPeer(t *testing.T, scenario string) *linuxHostTUNPeer {
 		cancel()
 		_ = peer.output.Close()
 	})
-	request := map[string]any{"schema": 1, "mode": "shadowsocks", "layer": peer.layer, "address": "192.168.210.2",
+	request := map[string]any{"schema": 1, "mode": peer.mode, "layer": peer.layer, "address": "192.168.210.2",
 		"password": peer.password, "node_proof_id": linuxHostTUNNodeID, "direct_router": true, "configuration": map[string]any{}}
 	if peer.mode == "wg" {
 		request = map[string]any{"schema": 1, "address": "192.168.210.2", "client_address": "192.168.210.1",
@@ -418,6 +437,15 @@ func linuxHostTUNInstallProfile(t *testing.T, peer *linuxHostTUNPeer, scenario s
 		graph := fmt.Sprintf("[Interface]\nAddress=10.78.0.2/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=1280\n[Peer]\nPublicKey=%s\nPresharedKey=%s\nEndpoint=%s\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n", private, peer.serverPublic, peer.password, peer.address.String())
 		if err := os.WriteFile(filepath.Join(directory, "wg.conf"), []byte(graph), 0600); err != nil {
 			t.Fatal("installed WireGuard lost its exact paired private source", err)
+		}
+		return
+	}
+	if peer.mode == "hysteria2" {
+		assets := linuxHostTUNHysteria2Assets(t, peer, scenario)
+		for _, name := range []string{"sing-box.json", "cert.pem"} {
+			if err := os.WriteFile(filepath.Join(directory, name), assets[name], 0600); err != nil {
+				t.Fatal("installed Hysteria2 lost its exact independent source bytes", err)
+			}
 		}
 		return
 	}

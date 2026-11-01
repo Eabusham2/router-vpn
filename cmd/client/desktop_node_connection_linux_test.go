@@ -18,11 +18,11 @@ func TestDesktopLinuxPublicSelectionStaysBounded(t *testing.T) {
 	profile := common.RouterProfile{NodeKind: "router-vpn", KillSwitch: true, KillSwitchPolicy: "on-connect"}
 	a := &app{}
 	for _, mode := range []string{"wg", "awg2-fast", "wg-pq", "hysteria2", "reality-vision", "ss-v2ray", "split", "max", "naive-h2", "tor", "openvpn", "smart-auto", "shadowsocks"} {
-		if got := a.desktopLinuxNodeConnectionSelected(profile, mode); got != (mode == "shadowsocks" || mode == "wg") {
+		if got := a.desktopLinuxNodeConnectionSelected(profile, mode); got != (mode == "shadowsocks" || mode == "wg" || mode == "hysteria2") {
 			t.Fatal("Linux public dispatcher changed an unrelated graph", mode, got)
 		}
 	}
-	for _, mode := range []string{"shadowsocks", "wg"} {
+	for _, mode := range []string{"shadowsocks", "wg", "hysteria2"} {
 		for _, policy := range []string{"off", "on-connect", "always", "malformed"} {
 			profile.KillSwitchPolicy = policy
 			if got := a.desktopLinuxNodeConnectionSelected(profile, mode); got != (policy != "off") {
@@ -32,7 +32,7 @@ func TestDesktopLinuxPublicSelectionStaysBounded(t *testing.T) {
 	}
 	profile.KillSwitchPolicy = "on-connect"
 	a.nodeConnectionHost = &desktopNodeConnectionHost{}
-	for _, mode := range []string{"shadowsocks", "wg"} {
+	for _, mode := range []string{"shadowsocks", "wg", "hysteria2"} {
 		if a.desktopLinuxNodeConnectionSelected(profile, mode) {
 			t.Fatal("Linux dispatcher replaced the separately captured platform host", mode)
 		}
@@ -40,7 +40,7 @@ func TestDesktopLinuxPublicSelectionStaysBounded(t *testing.T) {
 }
 
 func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
-	for _, scenario := range []string{"cover-runtime", "start-aes", "start-whitening", "malformed-layer", "external", "unknown-policy", "missing-controller", "cancelled", "wg-plain", "wg-aes", "wg-whitening", "wg-cancelled"} {
+	for _, scenario := range []string{"cover-runtime", "start-aes", "start-whitening", "malformed-layer", "external", "unknown-policy", "missing-controller", "cancelled", "wg-plain", "wg-aes", "wg-whitening", "wg-cancelled", "hysteria2-plain", "hysteria2-aes", "hysteria2-whitening", "hysteria2-cancelled"} {
 		t.Run(scenario, func(t *testing.T) {
 			root := t.TempDir()
 			t.Setenv("HOMEVPN_ROOT", root)
@@ -56,6 +56,10 @@ func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
 			mode := "shadowsocks"
 			if strings.HasPrefix(scenario, "wg-") {
 				mode = "wg"
+				a.modes[0].ID = mode
+			}
+			if strings.HasPrefix(scenario, "hysteria2-") {
+				mode = "hysteria2"
 				a.modes[0].ID = mode
 			}
 			expected := "supported protected graph and exact Start Layer"
@@ -77,13 +81,13 @@ func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
 				profile.KillSwitchPolicy = "malformed"
 			case "missing-controller":
 				expected = "Linux Node"
-			case "wg-plain":
+			case "wg-plain", "hysteria2-plain":
 				expected = "Linux Node"
-			case "wg-aes":
+			case "wg-aes", "hysteria2-aes":
 				profile.StartLayer = common.StartLayerAES256GCM
-			case "wg-whitening":
+			case "wg-whitening", "hysteria2-whitening":
 				profile.StartLayer = common.StartLayerAES256GCMXOR
-			case "cancelled", "wg-cancelled":
+			case "cancelled", "wg-cancelled", "hysteria2-cancelled":
 				cancel()
 			}
 			a.profiles = common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}}
@@ -95,7 +99,7 @@ func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
 			if err == nil || transition.StopBegun || a.state != before || a.cmd != command || !reflect.DeepEqual(a.profiles, profiles) {
 				t.Fatal("Linux public preflight changed its original connection before rejecting unsupported launch", err)
 			}
-			if scenario == "cancelled" || scenario == "wg-cancelled" {
+			if scenario == "cancelled" || scenario == "wg-cancelled" || scenario == "hysteria2-cancelled" {
 				if !errors.Is(err, errConnectionOperationCancelled) {
 					t.Fatal("public Linux cancellation lost the shared operation sentinel", err)
 				}

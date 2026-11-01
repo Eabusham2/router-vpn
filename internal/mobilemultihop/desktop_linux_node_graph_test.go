@@ -8,6 +8,47 @@ import (
 	"testing"
 )
 
+func TestDesktopLinuxNodeRetainsExactPlainHysteria2(t *testing.T) {
+	for _, layer := range []string{"", "off"} {
+		t.Run(layer, func(t *testing.T) {
+			if !DesktopLinuxNodePhysicalGraphSupported("hysteria2", layer) {
+				t.Fatal("plain Hysteria2 has no retained Linux path")
+			}
+			files, profile, _ := nodeProfileFixture(t, "hysteria2", "")
+			profile["start_layer"], profile["kill_switch_policy"] = layer, "always"
+			original, err := NewNodeProfile("hysteria2", files, startJSON(t, profile), "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy := desktopNodePlan(t, original, desktopNodeTestSession, "linux")
+			assertDesktopNodeExactDerivation(t, policy)
+			capture, err := policy.Capture()
+			if err != nil || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Type != "hysteria2" ||
+				capture.PhysicalRoots[0].Family != "outbounds" || len(capture.PhysicalRoots[0].Destinations) != 1 ||
+				capture.PhysicalRoots[0].Destinations[0] != (PhysicalEgress{Host: "192.0.2.44", Port: 443, Network: "udp"}) ||
+				capture.SelectedDNS.Host != "192.168.50.133" || capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != "proxy" ||
+				capture.ConfiguredMTU != 1280 || capture.KillSwitchPolicy != "always" {
+				t.Fatal("plain Linux Hysteria2 lost its exact UDP peer, selected DNS, MTU or protection", err)
+			}
+			before := desktopNodeObject(t, startObject(t, original.Config()), "outbounds", "proxy")
+			actual := desktopNodeObject(t, startObject(t, policy.Config()), "outbounds", "proxy")
+			if actual["detour"] != DesktopNodePhysicalTag || actual["server"] != before["server"] || actual["server_port"] != before["server_port"] ||
+				actual["password"] != before["password"] || !reflect.DeepEqual(actual["obfs"], before["obfs"]) || !reflect.DeepEqual(actual["tls"], before["tls"]) {
+				t.Fatal("plain Linux Hysteria2 changed the captured endpoint, authentication, Salamander or TLS trust")
+			}
+			tls := actual["tls"].(map[string]any)
+			if tls["enabled"] != true || tls["server_name"] != "entry.example" || tls["insecure"] == true || tls["certificate"] == nil || tls["certificate_path"] != nil {
+				t.Fatal("plain Linux Hysteria2 lost its embedded selected certificate")
+			}
+		})
+	}
+	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening", "OFF", "plain", " off", "unknown"} {
+		if DesktopLinuxNodePhysicalGraphSupported("hysteria2", layer) {
+			t.Fatal("plain Hysteria2 opened an unproved Start Layer", layer)
+		}
+	}
+}
+
 func TestDesktopLinuxNodeRetainsExactPlainWireGuard(t *testing.T) {
 	for _, layer := range []string{"", "off"} {
 		t.Run(layer, func(t *testing.T) {

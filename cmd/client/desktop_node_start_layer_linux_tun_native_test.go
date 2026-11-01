@@ -22,6 +22,9 @@ func linuxHostTUNStartLayer(scenario string) string {
 }
 
 func linuxHostTUNWrongKeyCase(scenario string) bool {
+	if scenario == "hy2-wrong-trust" || scenario == "hy2-wrong-salamander" {
+		return true
+	}
 	scenario = linuxHostTUNAction(scenario)
 	return scenario == "wrong-key" || scenario == "layer-whitening-wrong-key"
 }
@@ -52,6 +55,9 @@ func linuxHostTUNLayerSource(ctx context.Context, host *desktopLinuxNodeHost, sc
 	mode, kind, roots := linuxHostTUNMode(scenario), "shadowsocks", 2
 	if mode == "wg" {
 		kind, roots = "wireguard", 1
+	}
+	if mode == "hysteria2" {
+		kind, roots = "hysteria2", 1
 	}
 	if layer == common.StartLayerAES256GCMXOR {
 		kind = "routervpn-aes-xor"
