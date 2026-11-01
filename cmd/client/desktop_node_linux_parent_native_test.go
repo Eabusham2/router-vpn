@@ -22,6 +22,9 @@ import (
 )
 
 func linuxNodeParentFixture(owner *ownedDesktopController, scenario string) error {
+	if strings.HasPrefix(scenario, "fallback/") {
+		return linuxNodeFallbackFixture(owner, strings.TrimPrefix(scenario, "fallback/"))
+	}
 	if strings.HasPrefix(scenario, "stop/") {
 		return linuxNodeStopFixture(owner, strings.TrimPrefix(scenario, "stop/"))
 	}

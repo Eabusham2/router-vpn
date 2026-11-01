@@ -163,6 +163,9 @@ func (a *app) stopDesktopNodeForOperationWithIntent(ctx context.Context, hold bo
 	if !a.sameConnectionOperation(ctx) {
 		return true, errors.Join(errConnectionOperationCancelled, errDesktopNodeOperationReplaced)
 	}
+	if owned, err := a.stopDesktopLinuxNodeForOperation(ctx, hold); owned {
+		return true, err
+	}
 	raw, exists := desktopNodeOwners.Load(a)
 	launch, _ := raw.(*desktopNodeLaunch)
 	if !exists || launch == nil || launch.ownedNode == nil {

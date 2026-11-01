@@ -82,6 +82,21 @@ class LinuxNodeTransactionRunner(unittest.TestCase):
                 with self.subTest(missing=rows[missing]), self.assertRaises(ValueError):
                     RUNNER.check_verdict("\n".join(rows[:missing] + rows[missing + 1:]), group)
 
+    def test_fallback_requires_original_session_release_and_legacy_dispatch(self):
+        self.assertEqual(RUNNER.FALLBACK_CASES,
+                         ("held-on-connect", "strategy-failure", "cancelled-active", "older-active", "active-release",
+                          "temporary-deferred", "duplicate-owner", "partial-journal", "empty-legacy", "always"))
+        self.assertEqual(RUNNER.GROUPS["NodeFallback"], RUNNER.FALLBACK_CASES)
+        closure = RUNNER.checked_sources()
+        for relative in ("cmd/client/desktop_node_fallback_linux.go", "cmd/client/desktop_node_fallback_other.go",
+                         "cmd/client/desktop_node_fallback_linux_native_test.go", "cmd/client/desktop_node_smart.go",
+                         "cmd/client/kill_switch_transition.go", "cmd/client/speed_lab_fallback.go", "cmd/client/connection_cancellation.go"):
+            self.assertIn(relative, closure)
+        path, digest = Path("/captured/native-fallback.test"), "a" * 64
+        with patch.object(RUNNER.GUARD, "namespace_test", return_value=29) as native:
+            self.assertEqual(RUNNER.namespace_test(path, digest, "NodeFallback"), 29)
+        native.assert_called_once_with(path, "NodeFallback", digest)
+
     def test_skipped_failed_and_empty_results_fail(self):
         for result in ("", "\n".join(completed()) + "\n--- SKIP: missing native dependency (0.10s)",
                        "\n".join(completed()) + "\n--- FAIL: actual child (0.10s)"):

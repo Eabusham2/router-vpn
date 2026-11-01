@@ -39,8 +39,10 @@ SESSION_CASES = ("on-connect-repeat", "hold-on-connect", "always-successor", "fa
 STOP_CASES = ("on-connect", "hold-on-connect", "request-ended", "mtu-drain", "cancelled-retirement", "retirement-retry",
               "replaced-command", "replaced-operation", "replaced-session", "duplicate-legacy-owner", "partial-journal", "unused-session",
               "released-legacy", "released-legacy-closing", "released-node-guard", "released-journal-change", "closing-active", "always")
+FALLBACK_CASES = ("held-on-connect", "strategy-failure", "cancelled-active", "older-active", "active-release",
+                  "temporary-deferred", "duplicate-owner", "partial-journal", "empty-legacy", "always")
 GROUPS = {"NodeSession": SESSION_CASES, "NodeTransaction": CASES, "NodeShutdown": SHUTDOWN_CASES, "NodeHost": HOST_CASES,
-          "NodeHostStart": HOST_START_CASES, "NodeProofSocket": PROOF_SOCKET_CASES, "NodeStop": STOP_CASES}
+          "NodeHostStart": HOST_START_CASES, "NodeProofSocket": PROOF_SOCKET_CASES, "NodeStop": STOP_CASES, "NodeFallback": FALLBACK_CASES}
 UNIT_CASES = {
     "TestDesktopLinuxNodeActivationProof": ("absent", "historical-clock", "historical-start", "historical-now", "stale", "future", "before-start",
                                             "zero-elapsed", "negative-elapsed", "unbounded-elapsed", "impossible-elapsed", "unbounded-deadline",
@@ -79,6 +81,8 @@ def checked_sources():
         "cmd/client/desktop_node_host_linux_start.go", "cmd/client/desktop_node_host_linux_start_native_test.go",
         "cmd/client/desktop_node_session_linux.go", "cmd/client/desktop_node_session_linux_native_test.go",
         "cmd/client/desktop_node_stop_linux.go", "cmd/client/desktop_node_stop_other.go", "cmd/client/desktop_node_stop_linux_native_test.go",
+        "cmd/client/desktop_node_fallback_linux.go", "cmd/client/desktop_node_fallback_other.go", "cmd/client/desktop_node_fallback_linux_native_test.go",
+        "cmd/client/desktop_node_smart.go", "cmd/client/kill_switch_transition.go", "cmd/client/speed_lab_fallback.go", "cmd/client/connection_cancellation.go",
         "cmd/client/desktop_node_linux_journal_cleanup.go", "cmd/client/desktop_node_linux_journal_cleanup_native_test.go",
         "cmd/client/desktop_node_host_linux_ready.go", "cmd/client/desktop_node_host_linux_proof.go",
         "cmd/client/desktop_node_host_linux_proof_test.go", "cmd/client/desktop_node_host_linux_proof_native_test.go",

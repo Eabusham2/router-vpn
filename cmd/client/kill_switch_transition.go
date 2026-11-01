@@ -31,6 +31,9 @@ func (a *app) stopCommandEnv(hold bool) []string {
 }
 
 func (a *app) releaseTransitionKillSwitch() error {
+	if owned, err := a.releaseDesktopLinuxNodeFallbackProtection(); owned {
+		return err
+	}
 	if owned, err := a.releaseDesktopOwnedNodeProtection(); owned {
 		return err
 	}
