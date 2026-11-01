@@ -277,6 +277,7 @@ def main():
     if not jar.is_file():
         raise RuntimeError('Android JSON JAR is required')
     ui, boundaries = sources()
+    boundaries = boundaries.replace('final class AndroidStandardExitRuntime {', 'final class AndroidStandardExitRuntime {' + P.UNOWNED_EXTERNAL_RESTORE_SOURCE)
     callback = S.block((JAVA / 'ProductActivity.java').read_text(), '    private AndroidUnifiedConnectionController.Callback callback(')
     product=(JAVA / 'ProductActivity.java').read_text()
     map_constants='\n'.join(line for line in product.splitlines() if any(key in line for key in ('private static final String PREFS=', 'private static final String MODE_KEY=', 'private static final String MULTI_ON=')))

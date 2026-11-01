@@ -146,6 +146,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         final String externalDigest;
         final String ordinaryEntryDigest;
         final AndroidMultihopRuntime.RestoreCapture multihopCapture;
+        final AndroidStandardExitRuntime.MeasurementSource externalSource;
         RestorePoint(AndroidHomeStateStore.Snapshot home,String topology,AndroidNodeStore.Node node,
                      AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,AndroidStandardExitStore.Entry external,
                      String execution,String selectedExecution,String source,java.util.Map<File,String> files,String externalDigest,AndroidMultihopRuntime.RestoreCapture multihopCapture){
@@ -154,10 +155,16 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         RestorePoint(AndroidHomeStateStore.Snapshot home,String topology,AndroidNodeStore.Node node,
                      AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,AndroidStandardExitStore.Entry external,AndroidStandardExitStore.Entry ordinaryEntry,
                      String execution,String selectedExecution,String source,java.util.Map<File,String> files,String externalDigest,String ordinaryEntryDigest,AndroidMultihopRuntime.RestoreCapture multihopCapture){
+            this(home,topology,node,entry,exit,external,ordinaryEntry,execution,selectedExecution,source,files,externalDigest,ordinaryEntryDigest,multihopCapture,null);
+        }
+        RestorePoint(AndroidHomeStateStore.Snapshot home,String topology,AndroidNodeStore.Node node,
+                     AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,AndroidStandardExitStore.Entry external,AndroidStandardExitStore.Entry ordinaryEntry,
+                     String execution,String selectedExecution,String source,java.util.Map<File,String> files,String externalDigest,String ordinaryEntryDigest,AndroidMultihopRuntime.RestoreCapture multihopCapture,
+                     AndroidStandardExitRuntime.MeasurementSource externalSource){
             this.home=home;this.topology=topology;this.node=node;this.entry=entry;this.exit=exit;this.external=external;
             this.ordinaryEntry=ordinaryEntry;this.ordinaryEntryDigest=ordinaryEntryDigest;
             this.execution=execution;this.selectedExecution=selectedExecution;this.source=source;this.files=Collections.unmodifiableMap(new java.util.LinkedHashMap<>(files));this.externalDigest=externalDigest;
-            this.multihopCapture=multihopCapture;
+            this.multihopCapture=multihopCapture;this.externalSource=externalSource;
         }
         boolean connected(){return home.connected;}
     }
@@ -173,6 +180,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         String topology="router",execution="",selectedExecution="",source="",savedExternal="",savedOrdinary="";
         AndroidNodeStore.Node node=null,entry=null,exit=null;AndroidStandardExitStore.Entry external=null,ordinaryEntry=null;
         AndroidMultihopRuntime.RestoreCapture multihopCapture=null;
+        AndroidStandardExitRuntime.MeasurementSource externalSource=null;
         java.util.Map<File,String> files=new java.util.LinkedHashMap<>();
         if("multihop".equals(home.logicalMode)){
             topology="multihop";entry=requiredNode(home.activeEntryId);exit=requiredNode(home.activeExitId);
@@ -186,6 +194,8 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
             files.put(entry.file,multihopCapture.entrySource.digest);files.put(exit.file,multihopCapture.exitSource.digest);
         }else if("external".equals(home.logicalMode)){
             topology="external";
+            externalSource=runtime.standardExit.captureMeasurementSource(home.activeExternalId);
+            externalSource.requireHome(home);
             execution=runtime.standardExit.capturedRequestedExecution(home);selectedExecution=runtime.standardExit.capturedExternalExecution(home);
             external=AndroidStandardExitStore.copy(exitStore.get(home.activeExternalId));AndroidStandardExitStore.validate(external);
             if(!home.activeExternalProtocol.equals(external.protocol))throw new IllegalStateException("The active external protocol changed.");
@@ -199,13 +209,24 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         }else{
             node=requiredNode(home.activeNodeId);source=orchestrator.captureSource(node.file,home.sessionId,home.runtimeMode);files.put(node.file,entryDigest(node));
         }
+        RestorePoint point=new RestorePoint(home,topology,node,entry,exit,external,ordinaryEntry,execution,selectedExecution,source,files,savedExternal,savedOrdinary,multihopCapture,externalSource);
+        if(externalSource!=null){validateRestorePoint(point);runtime.standardExit.requireMeasurementSource(externalSource);}
         if(!samePath(home,AndroidHomeStateStore.snapshot(activity))||multihopCapture!=null&&!multihop.captureCurrent(multihopCapture))throw new IllegalStateException("The original connection changed while its restoration state was captured.");
-        return new RestorePoint(home,topology,node,entry,exit,external,ordinaryEntry,execution,selectedExecution,source,files,savedExternal,savedOrdinary,multihopCapture);
+        return point;
     }
 
     boolean restorePointCurrent(RestorePoint point){
-        return point!=null&&(point.connected()?samePath(point.home,AndroidHomeStateStore.snapshot(activity))
-                &&(!"multihop".equals(point.topology)||multihop.captureCurrent(point.multihopCapture)):idleCurrent(point.home));
+        if(point==null)return false;
+        if(!point.connected())return idleCurrent(point.home);
+        if(!samePath(point.home,AndroidHomeStateStore.snapshot(activity))||"multihop".equals(point.topology)&&!multihop.captureCurrent(point.multihopCapture))return false;
+        if("external".equals(point.topology))try{
+            validateRestorePoint(point);
+            runtime.standardExit.requireMeasurementSource(point.externalSource);
+            AndroidStandardExitStore.Entry ordinary=runtime.standardExit.capturedOrdinaryEntry(point.home);
+            if(point.ordinaryEntry==null?ordinary!=null:ordinary==null||!point.ordinaryEntryDigest.equals(externalDigest(ordinary)))return false;
+            return samePath(point.home,AndroidHomeStateStore.snapshot(activity));
+        }catch(Exception changed){return false;}
+        return true;
     }
     AndroidHomeStateStore.Snapshot captureIdle() throws Exception {
         AndroidHomeStateStore.Snapshot idle=AndroidHomeStateStore.snapshot(activity);
@@ -227,7 +248,33 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     private AndroidNodeStore.Node requiredNode(String id)throws Exception{
         AndroidNodeStore.Node node=findNode(id);if(node==null||node.file==null||!node.file.isFile())throw new IllegalStateException("An original connection node disappeared.");return node;
     }
+    /** The running native launch is authoritative; today's saved node cannot
+     * become the source of an older proved connection merely by retaining its ID. */
+    private void validateExternalRestoreSource(RestorePoint point)throws Exception{
+        AndroidStandardExitRuntime.MeasurementSource captured=point.externalSource;
+        if(captured==null||point.external==null)throw new IllegalStateException("The original external launch source is unavailable for restoration.");
+        captured.requireHome(point.home);
+        if(!captured.exitSource.equals(AndroidStandardExitStore.snapshot(point.external))
+                ||!captured.requestedExecution.equals(point.execution)||!captured.selectedExecution.equals(point.selectedExecution))
+            throw new IllegalStateException("The saved external node or execution changed from the original proved connection.");
+        boolean matches;
+        if("router-vpn".equals(captured.entryKind)){
+            AndroidNodeStore.Node saved=requiredNode(point.home.activeEntryId);
+            matches=point.entry!=null&&point.ordinaryEntry==null&&captured.routerEntry!=null
+                    &&captured.routerEntry.equals(point.entry.file.getCanonicalFile())&&point.files.size()==1
+                    &&point.home.activeEntryId.equals(point.entry.id)&&captured.routerEntry.equals(saved.file.getCanonicalFile())
+                    &&captured.entrySource.equals(point.files.get(point.entry.file));
+        }else if("external".equals(captured.entryKind)){
+            matches=point.entry==null&&point.ordinaryEntry!=null&&captured.routerEntry==null&&point.files.isEmpty()
+                    &&captured.entrySource.equals(AndroidStandardExitStore.snapshot(point.ordinaryEntry));
+        }else{
+            matches="direct".equals(captured.entryKind)&&point.entry==null&&point.ordinaryEntry==null
+                    &&captured.routerEntry==null&&captured.entrySource.isEmpty()&&point.files.isEmpty()&&point.home.activeEntryId.isEmpty();
+        }
+        if(!matches)throw new IllegalStateException("The original external entry source, kind or private file changed before restoration capture.");
+    }
     private void validateRestorePoint(RestorePoint point)throws Exception{
+        if("external".equals(point.topology))validateExternalRestoreSource(point);
         if("multihop".equals(point.topology)){
             if(point.multihopCapture==null||!point.multihopCapture.owner.matchesHome(point.home))throw new IllegalStateException("The original multihop home capture changed.");
             point.multihopCapture.require(point.entry,point.exit);

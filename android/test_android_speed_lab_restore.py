@@ -10,16 +10,18 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 JAVA = ROOT / 'android/app/src/main/java/com/eabusham/routervpn'
-spec = importlib.util.spec_from_file_location('restore_permissions', ROOT/'android/test_android_external_permission.py')
-P = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(P)
+spec = importlib.util.spec_from_file_location('restore_startup_boundaries', ROOT/'android/test_android_startup_policy.py')
+S = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(S)
+P = S.P
 
 OWNERS = r'''
 final class AndroidHomeStateStore {
- static final class Snapshot {boolean connected;long pathGeneration;String sessionId="",phase="off",pathProof="not-run",logicalMode="",runtimeMode="",fallback="",activeNodeId="",activeEntryId="",activeExitId="",activeEntryMode="",activeExternalId="",activeExternalProtocol="";}
- static volatile Snapshot current=new Snapshot();static int serial;
+ static final class Snapshot {boolean connected;long pathGeneration;String sessionId="",phase="off",pathProof="not-run",logicalMode="",runtimeMode="",actualBase="",expectedExternalIp="",fallback="",activeNodeId="",activeEntryId="",activeExitId="",activeEntryMode="",activeExternalId="",activeExternalProtocol="";}
+ static volatile Snapshot current=new Snapshot();static int serial;static boolean emergency;
  static Snapshot snapshot(Context c){return current;}
- static Snapshot copy(){Snapshot a=current,b=new Snapshot();b.connected=a.connected;b.pathGeneration=a.pathGeneration;b.sessionId=a.sessionId;b.phase=a.phase;b.pathProof=a.pathProof;b.logicalMode=a.logicalMode;b.runtimeMode=a.runtimeMode;b.fallback=a.fallback;b.activeNodeId=a.activeNodeId;b.activeEntryId=a.activeEntryId;b.activeExitId=a.activeExitId;b.activeEntryMode=a.activeEntryMode;b.activeExternalId=a.activeExternalId;b.activeExternalProtocol=a.activeExternalProtocol;return b;}
+ static boolean emergencyDisconnectPending(Context c){return emergency;}
+ static Snapshot copy(){Snapshot a=current,b=new Snapshot();b.connected=a.connected;b.pathGeneration=a.pathGeneration;b.sessionId=a.sessionId;b.phase=a.phase;b.pathProof=a.pathProof;b.logicalMode=a.logicalMode;b.runtimeMode=a.runtimeMode;b.actualBase=a.actualBase;b.expectedExternalIp=a.expectedExternalIp;b.fallback=a.fallback;b.activeNodeId=a.activeNodeId;b.activeEntryId=a.activeEntryId;b.activeExitId=a.activeExitId;b.activeEntryMode=a.activeEntryMode;b.activeExternalId=a.activeExternalId;b.activeExternalProtocol=a.activeExternalProtocol;return b;}
  static long advancePathGeneration(Context c){Snapshot s=copy();s.pathGeneration++;current=s;return s.pathGeneration;}
  static Snapshot begin(String topology,String raw,String entry,String exit,String mode,String external){Snapshot s=new Snapshot();s.pathGeneration=current.pathGeneration+1;s.sessionId="native-"+(++serial);s.logicalMode=topology;s.phase="connecting";s.pathProof="pending";s.runtimeMode=raw;s.activeNodeId=exit;s.activeEntryId=entry;s.activeExitId=exit;s.activeEntryMode=mode;s.activeExternalId=external;s.activeExternalProtocol=topology.equals("external")?raw:"";current=s;return s;}
  static void proved(){Snapshot s=copy();s.connected=true;s.phase="connected";s.pathProof="passed";current=s;RuntimeBoundary.proofs++;}
@@ -61,8 +63,21 @@ final class AndroidMultihopRuntime {
  List<NativeSingBoxController.ModeInfo> listSupportedExitModes(File f){return Collections.emptyList();}
 }
 final class AndroidStandardExitRuntime {
+ // EXTERNAL_CAPTURE_TYPES
+ final Context context=new Context();MeasurementSource activeMeasurementSource;
+ boolean disconnectRequested,revalidationTeardown,teardownInProgress;
+ final java.util.concurrent.atomic.AtomicBoolean closed=new java.util.concurrent.atomic.AtomicBoolean();
+ String requestedExecution="local",torNativeSession="",externalNativeSession="";
  String execution="local",selected="local",restoredResponseMap="";
  AndroidStandardExitStore.Entry ordinaryEntry;
+ // Explicit native adoption boundary. The source receipt and its current checks
+ // above are shipping code; this fixture does not claim a real Android tunnel.
+ void adopted(File router,AndroidStandardExitStore.Entry ordinary,AndroidStandardExitStore.Entry exit)throws Exception{
+  String kind=router!=null?"router-vpn":ordinary!=null?"external":"direct";
+  String source=router!=null?AndroidTorProfile.digest(AndroidPrivateFileStore.read(router,AndroidNodeStore.MAX_BUNDLE)):ordinary!=null?AndroidStandardExitStore.snapshot(ordinary):"";
+  requestedExecution=execution;torNativeSession=externalNativeSession=AndroidHomeStateStore.current.sessionId;
+  activeMeasurementSource=new MeasurementSource(AndroidHomeStateStore.copy(),externalNativeSession,AndroidStandardExitStore.snapshot(exit),kind,source,router==null?null:router.getCanonicalFile(),execution,selected);
+ }
  AndroidStandardExitStore.Entry capturedOrdinaryEntry(AndroidHomeStateStore.Snapshot s){if(ordinaryEntry==null)return null;if(!s.connected||!s.sessionId.equals(AndroidHomeStateStore.current.sessionId)||!s.activeEntryId.equals(ordinaryEntry.id))throw new IllegalStateException("ordinary runtime owner changed");return AndroidStandardExitStore.copy(ordinaryEntry);}
  String capturedRequestedExecution(AndroidHomeStateStore.Snapshot s){return execution;}String capturedExternalExecution(AndroidHomeStateStore.Snapshot s){return selected;}
  void connect(File f,AndroidStandardExitStore.Entry e,String mode,String execution,Callback cb){this.execution=execution;selected=execution.equals("auto")?"server":execution;connect(f,e,mode,cb);}
@@ -71,11 +86,17 @@ final class AndroidStandardExitRuntime {
  boolean isActiveOrTransitioning(){return AndroidHomeStateStore.current.connected&&AndroidHomeStateStore.current.logicalMode.equals("external");}
  String capturedTorExit(AndroidHomeStateStore.Snapshot s){return "8.8.4.4";}String capturedExternalExit(AndroidHomeStateStore.Snapshot s){return "8.8.4.4";}
  void disconnect(){}boolean disconnectCaptured(String id)throws Exception{return RuntimeBoundary.stop(id);}boolean disconnectAndDrainCaptured(String id)throws Exception{return RuntimeBoundary.stop(id);}
- void connectDirect(AndroidStandardExitStore.Entry e,Callback cb){connect(null,e,"",cb);}void connect(File f,AndroidStandardExitStore.Entry e,String mode,Callback cb){ordinaryEntry=null;RuntimeBoundary.starts++;AndroidHomeStateStore.begin("external",e.protocol,f==null?"":AndroidModeOrchestrator.node(f),"",mode,e.id);cb.owned(AndroidHomeStateStore.current.sessionId);RuntimeBoundary.ready(()->{AndroidHomeStateStore.proved();cb.finished(true,"proved external");});}
- void connectOrdinary(AndroidStandardExitStore.Entry entry,AndroidStandardExitStore.Entry exit,String execution,Callback cb){ordinaryEntry=AndroidStandardExitStore.copy(entry);this.execution=execution;selected=execution;RuntimeBoundary.starts++;AndroidHomeStateStore.begin("external",exit.protocol,entry.id,"",AndroidExternalPolicy.protocol(entry.protocol),exit.id);cb.owned(AndroidHomeStateStore.current.sessionId);RuntimeBoundary.ready(()->{AndroidHomeStateStore.proved();if(RuntimeBoundary.afterOrdinaryProof!=null)RuntimeBoundary.afterOrdinaryProof.run();cb.finished(true,"proved ordinary Tor");});}
+ void connectDirect(AndroidStandardExitStore.Entry e,Callback cb){connect(null,e,"",cb);}void connect(File f,AndroidStandardExitStore.Entry e,String mode,Callback cb){ordinaryEntry=null;RuntimeBoundary.starts++;AndroidHomeStateStore.begin("external",e.protocol,f==null?"":AndroidModeOrchestrator.node(f),"",mode,e.id);cb.owned(AndroidHomeStateStore.current.sessionId);RuntimeBoundary.ready(()->{try{AndroidHomeStateStore.proved();adopted(f,null,e);cb.finished(true,"proved external");}catch(Exception failure){cb.finished(false,failure.toString());}});}
+ void connectOrdinary(AndroidStandardExitStore.Entry entry,AndroidStandardExitStore.Entry exit,String execution,Callback cb){ordinaryEntry=AndroidStandardExitStore.copy(entry);this.execution=execution;selected=execution;RuntimeBoundary.starts++;AndroidHomeStateStore.begin("external",exit.protocol,entry.id,"",AndroidExternalPolicy.protocol(entry.protocol),exit.id);cb.owned(AndroidHomeStateStore.current.sessionId);RuntimeBoundary.ready(()->{try{AndroidHomeStateStore.proved();adopted(null,ordinaryEntry,exit);if(RuntimeBoundary.afterOrdinaryProof!=null)RuntimeBoundary.afterOrdinaryProof.run();cb.finished(true,"proved ordinary Tor");}catch(Exception failure){cb.finished(false,failure.toString());}});}
 }
 '''
 OWNERS = OWNERS.replace('// MULTIHOP_CAPTURE_TYPES',P.MULTIHOP_CAPTURE_TYPES)
+external_runtime=(JAVA/'AndroidStandardExitRuntime.java').read_text()
+EXTERNAL_CAPTURE_TYPES='\n'.join(S.block(external_runtime, signature) for signature in (
+    'static final class MeasurementSource {',
+    'synchronized MeasurementSource captureMeasurementSource(',
+    'synchronized void requireMeasurementSource('))
+OWNERS = OWNERS.replace('// EXTERNAL_CAPTURE_TYPES',EXTERNAL_CAPTURE_TYPES)
 
 METERS = r'''
 // Saved preference/private-store boundary; the real profile store has its own
@@ -110,24 +131,26 @@ public final class SpeedLabRestoreTest {
  static final class Result implements AndroidSpeedLabController.Callback {volatile int count;volatile Throwable error;volatile AndroidSpeedLab.Result result;public void progress(String s){}public void finished(AndroidSpeedLab.Result r,Throwable e){result=r;error=e;count++;}}
  static final class Fixture {
   final Activity activity=new Activity();final AndroidNodeStore nodes=new AndroidNodeStore(activity);final AndroidUnifiedConnectionController connection;final AndroidSpeedLabController controller;final Result result=new Result();final AndroidSpeedLabController.Request request=new AndroidSpeedLabController.Request();
-  final AndroidNodeStore.Node original,first,last;final AndroidStandardExitStore.Entry external=new AndroidStandardExitStore.Entry();AndroidStandardExitStore.Entry originalOrdinary;final String type,raw;String originalSession,originalWinner="server";
+  final AndroidNodeStore.Node original,first,last;final AndroidStandardExitStore.Entry external=new AndroidStandardExitStore.Entry();AndroidStandardExitStore.Entry originalOrdinary;final String type,raw;String originalSession,originalWinner="server";boolean originalDirect;
   Fixture(Path directory,String type,String topology)throws Exception{check(!AndroidMTUMeasurementGate.held(),"previous case leaked hold");this.type=type;this.raw=type.equals("multihop")?"max-quic-awg":type.startsWith("external")?type.substring(9):"reality-pq-vision";
-   RuntimeBoundary.reset();android.content.Context.speedPreferences.clear();AndroidConnectionProfileStore.saved=null;AndroidHomeStateStore.current=new AndroidHomeStateStore.Snapshot();AndroidRuntimeRegistry.instance=new AndroidRuntimeRegistry();AndroidVpnMutationGuard.busy=false;AndroidNodeStore.nodes.clear();AndroidStandardExitStore.saved.clear();android.net.VpnService.needsPermission=false;AndroidSpeedLab.starts=AndroidSpeedLab.cancels=0;AndroidSpeedLab.pending=null;AndroidNativeHopMeasurement.starts=AndroidNativeHopMeasurement.cancels=0;AndroidNativeHopMeasurement.hold=false;AndroidNativeHopMeasurement.pending=null;LayeredVpnService.quiesce=null;LayeredVpnService.automatic=0;
+   RuntimeBoundary.reset();android.content.Context.speedPreferences.clear();AndroidConnectionProfileStore.saved=null;AndroidHomeStateStore.current=new AndroidHomeStateStore.Snapshot();AndroidHomeStateStore.emergency=false;AndroidRuntimeRegistry.instance=new AndroidRuntimeRegistry();AndroidVpnMutationGuard.busy=false;AndroidNodeStore.nodes.clear();AndroidStandardExitStore.saved.clear();android.net.VpnService.needsPermission=false;AndroidSpeedLab.starts=AndroidSpeedLab.cancels=0;AndroidSpeedLab.pending=null;AndroidNativeHopMeasurement.starts=AndroidNativeHopMeasurement.cancels=0;AndroidNativeHopMeasurement.hold=false;AndroidNativeHopMeasurement.pending=null;LayeredVpnService.quiesce=null;LayeredVpnService.automatic=0;
    original=node(directory,"original");first=node(directory,"entry");last=node(directory,"exit");external.protocol=type.startsWith("external")?raw:"tor-bridge";if(type.equals("external-openvpn"))external.responseMap="captured-private-two-host-map";AndroidStandardExitStore.saved.put(external.id,AndroidStandardExitStore.copy(external));
    connection=new AndroidUnifiedConnectionController(activity,nodes);controller=new AndroidSpeedLabController(activity,connection);
    if(type.equals("router")){AndroidHomeStateStore.begin("SMART AUTO",raw,"",original.id,"","");AndroidRuntimeRegistry.instance.orchestrator.source=Files.readString(original.file.toPath());AndroidHomeStateStore.proved();}
    if(type.equals("multihop")){AndroidHomeStateStore.begin("multihop",raw,original.id,last.id,"reality-xhttp","");AndroidRuntimeRegistry.instance.multihop.execution="auto";AndroidRuntimeRegistry.instance.multihop.selected="server";AndroidHomeStateStore.proved();}
-   if(type.startsWith("external")){AndroidHomeStateStore.begin("external",raw,original.id,"","max-quic-awg",external.id);AndroidHomeStateStore.proved();}
+   if(type.startsWith("external")){AndroidHomeStateStore.begin("external",raw,original.id,"","max-quic-awg",external.id);AndroidHomeStateStore.proved();captureOriginal();}
    originalSession=AndroidHomeStateStore.current.sessionId;
    request.scope="temporary";request.topology=topology;request.node=first;request.entry=first;request.exit=last;request.mode="all";request.entryMode="wg-pq";request.exitMode="shadowsocks";request.execution="external".equals(topology)?"local":"server";request.standardExit=external;request.externalDirect=false;
   }
   AndroidNodeStore.Node node(Path root,String id)throws Exception{Path folder=Files.createTempDirectory(root,id);Path file=folder.resolve(id+".json");Files.writeString(file,"{\"private\":\""+id+"\",\"dns\":\"home-adguard\",\"mtu\":\"auto\"}");AndroidNodeStore.Node n=new AndroidNodeStore.Node(id,file.toFile());AndroidNodeStore.nodes.add(n);return n;}
-  void start(){controller.run(request,result);}void quiesce(){LayeredVpnService.quiesce.accept(null);}void measured()throws Exception{waitFor(()->AndroidSpeedLab.pending!=null,"measurement never started");AndroidSpeedLab.drained(false);}
+  void start(){controller.run(request,result);}void quiesce(){check(LayeredVpnService.quiesce!=null,"transaction rejected its valid original before MTU drain: "+result.error);LayeredVpnService.quiesce.accept(null);}void measured()throws Exception{waitFor(()->AndroidSpeedLab.pending!=null,"measurement never started");AndroidSpeedLab.drained(false);}
   void complete()throws Exception{waitFor(()->result.count>0,"transaction never completed");check(result.count==1&&!controller.isRunning()&&!AndroidMTUMeasurementGate.held(),"completion did not release its drained lease exactly once");}
   AndroidStandardExitStore.Entry ordinary(String protocol,String id){AndroidStandardExitStore.Entry value=new AndroidStandardExitStore.Entry();value.id=id;value.name="Ordinary "+protocol;value.protocol=protocol;value.secret="ordinary-private-"+id;value.policy="ordinary-policy-"+id;AndroidStandardExitStore.saved.put(id,AndroidStandardExitStore.copy(value));return value;}
-  void ordinaryOriginal(String protocol){originalOrdinary=ordinary(protocol,original.id);AndroidStandardExitRuntime runtime=AndroidRuntimeRegistry.instance.standardExit;runtime.ordinaryEntry=AndroidStandardExitStore.copy(originalOrdinary);runtime.execution=runtime.selected="local";AndroidHomeStateStore.begin("external",external.protocol,original.id,"",AndroidExternalPolicy.protocol(protocol),external.id);AndroidHomeStateStore.proved();originalSession=AndroidHomeStateStore.current.sessionId;}
+  void captureOriginal()throws Exception{AndroidStandardExitRuntime runtime=AndroidRuntimeRegistry.instance.standardExit;runtime.adopted(originalOrdinary!=null||AndroidHomeStateStore.current.activeEntryId.isEmpty()?null:original.file,originalOrdinary,external);}
+  void ordinaryOriginal(String protocol)throws Exception{originalOrdinary=ordinary(protocol,original.id);AndroidStandardExitRuntime runtime=AndroidRuntimeRegistry.instance.standardExit;runtime.ordinaryEntry=AndroidStandardExitStore.copy(originalOrdinary);runtime.execution=runtime.selected="local";AndroidHomeStateStore.begin("external",external.protocol,original.id,"",AndroidExternalPolicy.protocol(protocol),external.id);AndroidHomeStateStore.proved();captureOriginal();originalSession=AndroidHomeStateStore.current.sessionId;}
+  void directOriginal()throws Exception{originalDirect=true;AndroidStandardExitRuntime runtime=AndroidRuntimeRegistry.instance.standardExit;runtime.ordinaryEntry=null;runtime.execution=runtime.selected="local";AndroidHomeStateStore.begin("external",external.protocol,"","","",external.id);AndroidHomeStateStore.proved();captureOriginal();originalSession=AndroidHomeStateStore.current.sessionId;}
   void ordinaryTemporary(String protocol){request.ordinaryEntry=ordinary(protocol,first.id);request.entry=null;request.entryMode=AndroidExternalPolicy.protocol(protocol);request.execution="local";request.externalDirect=false;request.topology="external";}
-  void originalRestored()throws Exception{AndroidHomeStateStore.Snapshot s=AndroidHomeStateStore.current;check(s.connected&&s.pathProof.equals("passed")&&!s.sessionId.equals(originalSession),"original lacks fresh proof/session");check(s.runtimeMode.equals(raw),"original raw transport changed");if(type.equals("router"))check(s.logicalMode.equals("SMART AUTO")&&s.activeNodeId.equals(original.id)&&RuntimeBoundary.restoredRaw.equals(raw),"SMART AUTO was reselected or node changed");if(type.equals("multihop"))check(s.activeEntryId.equals(original.id)&&s.activeEntryMode.equals("reality-xhttp")&&s.activeExitId.equals(last.id)&&AndroidRuntimeRegistry.instance.multihop.execution.equals("auto")&&AndroidRuntimeRegistry.instance.multihop.selected.equals(originalWinner)&&RuntimeBoundary.restoredExecution.equals(originalWinner),"original multihop execution/entry changed");if(type.startsWith("external")){if(originalOrdinary==null)check(s.activeExternalId.equals(external.id)&&s.activeEntryMode.equals("max-quic-awg")&&s.activeEntryId.equals(original.id),"external original entry or profile changed");else{AndroidStandardExitStore.Entry actual=AndroidRuntimeRegistry.instance.standardExit.capturedOrdinaryEntry(s);check(actual!=null&&AndroidStandardExitStore.snapshot(actual).equals(AndroidStandardExitStore.snapshot(originalOrdinary))&&s.activeEntryMode.equals(AndroidExternalPolicy.protocol(originalOrdinary.protocol))&&s.activeExternalId.equals(external.id),"ordinary original source/kind/path changed");}}check(nodes.activeId().equals("original"),"temporary path rewrote selected saved node");}
+  void originalRestored()throws Exception{AndroidHomeStateStore.Snapshot s=AndroidHomeStateStore.current;check(s.connected&&s.pathProof.equals("passed")&&!s.sessionId.equals(originalSession),"original lacks fresh proof/session");check(s.runtimeMode.equals(raw),"original raw transport changed");if(type.equals("router"))check(s.logicalMode.equals("SMART AUTO")&&s.activeNodeId.equals(original.id)&&RuntimeBoundary.restoredRaw.equals(raw),"SMART AUTO was reselected or node changed");if(type.equals("multihop"))check(s.activeEntryId.equals(original.id)&&s.activeEntryMode.equals("reality-xhttp")&&s.activeExitId.equals(last.id)&&AndroidRuntimeRegistry.instance.multihop.execution.equals("auto")&&AndroidRuntimeRegistry.instance.multihop.selected.equals(originalWinner)&&RuntimeBoundary.restoredExecution.equals(originalWinner),"original multihop execution/entry changed");if(type.startsWith("external")){if(originalDirect)check(s.activeExternalId.equals(external.id)&&s.activeEntryId.isEmpty()&&s.activeEntryMode.isEmpty(),"direct external restoration acquired another entry");else if(originalOrdinary==null)check(s.activeExternalId.equals(external.id)&&s.activeEntryMode.equals("max-quic-awg")&&s.activeEntryId.equals(original.id),"external original entry or profile changed");else{AndroidStandardExitStore.Entry actual=AndroidRuntimeRegistry.instance.standardExit.capturedOrdinaryEntry(s);check(actual!=null&&AndroidStandardExitStore.snapshot(actual).equals(AndroidStandardExitStore.snapshot(originalOrdinary))&&s.activeEntryMode.equals(AndroidExternalPolicy.protocol(originalOrdinary.protocol))&&s.activeExternalId.equals(external.id),"ordinary original source/kind/path changed");}}check(nodes.activeId().equals("original"),"temporary path rewrote selected saved node");}
  }
  static void matrix(Path root)throws Exception{
   for(String original:new String[]{"router","multihop","external-openvpn","external-amneziawg","external-tor","external-tor-bridge"})for(String topology:new String[]{"router","multihop","external","system-direct"}){
@@ -142,22 +165,85 @@ public final class SpeedLabRestoreTest {
  }
  static void exactExternalWinner(Path root)throws Exception{
   for(String kind:new String[]{"external-shadowsocks","external-openvpn","external-tor","external-tor-bridge"})for(String selected:new String[]{"local","server"})for(String topology:new String[]{"router","multihop","external","system-direct"}){
-   Fixture f=new Fixture(root,kind,topology);AndroidStandardExitRuntime owner=AndroidRuntimeRegistry.instance.standardExit;owner.execution="auto";owner.selected=selected;
+   Fixture f=new Fixture(root,kind,topology);AndroidStandardExitRuntime owner=AndroidRuntimeRegistry.instance.standardExit;owner.execution="auto";owner.selected=selected;f.captureOriginal();
    f.start();f.quiesce();f.measured();f.complete();check(f.result.error==null,"external winner restoration failed");f.originalRestored();
    check(owner.execution.equals("auto")&&owner.selected.equals(selected)&&RuntimeBoundary.restoredExecution.equals(selected)&&owner.restoredResponseMap.equals(f.external.responseMap),"external Compare was rerun instead of restoring its proved winner");
   }
  }
  static void exactTorExecution(Path root)throws Exception{
   for(String kind:new String[]{"external-tor","external-tor-bridge"})for(String selected:new String[]{"local","server"})for(String topology:new String[]{"router","multihop","external","system-direct"}){
-   Fixture f=new Fixture(root,kind,topology);AndroidStandardExitRuntime owner=AndroidRuntimeRegistry.instance.standardExit;owner.execution=selected;owner.selected=selected;
+   Fixture f=new Fixture(root,kind,topology);AndroidStandardExitRuntime owner=AndroidRuntimeRegistry.instance.standardExit;owner.execution=selected;owner.selected=selected;f.captureOriginal();
    if(topology.equals("external"))f.request.execution=selected;
    f.start();f.quiesce();f.measured();f.complete();check(f.result.error==null,"captured Tor execution restoration failed");f.originalRestored();
    check(owner.execution.equals(selected)&&owner.selected.equals(selected),"Tor Server was replaced by Local during restore");
    if(selected.equals("server"))check(RuntimeBoundary.restoredExecution.equals("server"),"Tor Server did not use captured restoration");
   }
-  Fixture replaced=new Fixture(root,"external-tor-bridge","router");AndroidStandardExitRuntime owner=AndroidRuntimeRegistry.instance.standardExit;owner.execution="server";owner.selected="server";
+  Fixture replaced=new Fixture(root,"external-tor-bridge","router");AndroidStandardExitRuntime owner=AndroidRuntimeRegistry.instance.standardExit;owner.execution="server";owner.selected="server";replaced.captureOriginal();
   RuntimeBoundary.afterRestoredProof=()->owner.selected="local";replaced.start();replaced.quiesce();replaced.measured();replaced.complete();
   check(replaced.result.error!=null&&replaced.result.result==null,"Tor retained a score after restoration switched execution");
+ }
+ static void changeOriginalSource(Fixture f,String change)throws Exception{
+  AndroidStandardExitRuntime runtime=AndroidRuntimeRegistry.instance.standardExit;
+  AndroidStandardExitStore.Entry saved=AndroidStandardExitStore.saved.get(f.external.id);
+  switch(change){
+   case "exit-key":saved.secret="same-ID replacement private credential";break;
+   case "exit-policy":saved.policy="same-ID replacement DNS and MTU";break;
+   case "exit-expected":saved.expectedPublicIp="1.1.1.1";break;
+   case "exit-response":saved.responseMap="replacement private response map";break;
+   case "exit-removed":AndroidStandardExitStore.saved.remove(f.external.id);break;
+   case "entry-file":Files.writeString(f.original.file.toPath(),"{\"private\":\"same-ID replacement Router key\"}");break;
+   case "entry-relocated":{Path file=Files.createTempDirectory(f.original.file.toPath().getParent(),"relinked").resolve(f.original.file.getName());Files.copy(f.original.file.toPath(),file);AndroidNodeStore.nodes.removeIf(n->n.id.equals(f.original.id));AndroidNodeStore.nodes.add(new AndroidNodeStore.Node(f.original.id,file.toFile()));break;}
+   case "entry-removed":if(f.originalOrdinary==null)AndroidNodeStore.nodes.removeIf(n->n.id.equals(f.original.id));else AndroidStandardExitStore.saved.remove(f.originalOrdinary.id);break;
+   case "ordinary-key":AndroidStandardExitStore.saved.get(f.originalOrdinary.id).secret="same-ID replacement ordinary credential";break;
+   case "ordinary-policy":AndroidStandardExitStore.saved.get(f.originalOrdinary.id).policy="same-ID replacement ordinary DNS";break;
+   case "ordinary-protocol":AndroidStandardExitStore.saved.get(f.originalOrdinary.id).protocol="https";break;
+   case "ordinary-native":runtime.ordinaryEntry.secret="replacement native entry snapshot";break;
+   case "native-session":runtime.externalNativeSession=runtime.torNativeSession="replacement-native-owner";break;
+   case "native-requested":runtime.requestedExecution="auto";break;
+   case "native-selected":runtime.selected="server";break;
+   case "native-missing":runtime.activeMeasurementSource=null;break;
+   case "native-replaced":f.captureOriginal();break;
+   case "native-disconnect":runtime.disconnectRequested=true;break;
+   case "native-closed":runtime.closed.set(true);break;
+   case "native-revalidation":runtime.revalidationTeardown=true;break;
+   case "native-teardown":runtime.teardownInProgress=true;break;
+   case "emergency":AndroidHomeStateStore.emergency=true;break;
+   default:{AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.copy();switch(change){
+    case "home-generation":home.pathGeneration++;break;
+    case "home-base":home.actualBase="replacement-base";break;
+    case "home-expected":home.expectedExternalIp="1.0.0.1";break;
+    case "home-proof":home.pathProof="failed";break;
+    default:throw new AssertionError("unknown source mutation "+change);
+   }AndroidHomeStateStore.current=home;}
+  }
+ }
+ static void externalOriginalSources(Path root)throws Exception{
+  for(String kind:List.of("direct","router","ordinary"))for(String stage:List.of("capture","drain")){
+   List<String> changes=new ArrayList<>(List.of("exit-key","exit-policy","exit-expected","exit-response","exit-removed","native-session","native-requested","native-selected","native-missing","native-disconnect","native-closed","native-revalidation","native-teardown","home-generation","home-base","home-expected","home-proof","emergency"));
+   if(kind.equals("router"))changes.addAll(List.of("entry-file","entry-relocated","entry-removed"));
+   if(kind.equals("ordinary"))changes.addAll(List.of("ordinary-key","ordinary-policy","ordinary-protocol","ordinary-native","entry-removed"));
+   if(stage.equals("drain"))changes.add("native-replaced");
+   for(String change:changes){
+    Fixture f=new Fixture(root,kind.equals("ordinary")?"external-tor-bridge":"external-openvpn","router");
+    if(kind.equals("ordinary"))f.ordinaryOriginal("socks5");else if(kind.equals("direct"))f.directOriginal();
+    if(stage.equals("drain")){f.start();check(f.result.count==0&&AndroidMTUMeasurementGate.held(),"original source capture failed before the drift boundary");}
+    changeOriginalSource(f,change);
+    String label=kind+"/"+stage+"/"+change;
+    if(stage.equals("capture"))f.start();else f.quiesce();
+    try{f.complete();}catch(AssertionError failure){throw new AssertionError("original source rejection did not complete: "+label+", starts="+RuntimeBoundary.starts+", stops="+RuntimeBoundary.stops,failure);}
+    check(f.result.error!=null&&f.result.result==null,"changed original external source was accepted: "+label);
+    check(RuntimeBoundary.stops==0&&RuntimeBoundary.starts==0&&RuntimeBoundary.restores==0,"source drift stopped or replaced the original connection: "+label);
+    check(AndroidSpeedLab.starts==0&&AndroidNativeHopMeasurement.starts==0,"source drift reached a measurement: "+label);
+    check(AndroidHomeStateStore.current.connected&&AndroidHomeStateStore.current.sessionId.equals(f.originalSession),"source drift tore down the original owner: "+label);
+   }
+  }
+  // A direct path has no Router source. Mutation of the colliding saved Router
+  // record must not invent that dependency, and restoration still needs new proof.
+  for(String topology:List.of("router","multihop","external","system-direct")){
+   Fixture direct=new Fixture(root,"external-openvpn",topology);direct.directOriginal();
+   direct.start();Files.writeString(direct.original.file.toPath(),"unrelated same-ID Router change");direct.quiesce();direct.measured();direct.complete();
+   check(direct.result.error==null,"direct external inherited an unrelated Router source");direct.originalRestored();
+  }
  }
  static void ordinaryRestoration(Path root)throws Exception{
   for(String protocol:List.of("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"))for(String topology:List.of("router","multihop","external","ordinary","system-direct")){
@@ -311,7 +397,7 @@ public final class SpeedLabRestoreTest {
   }
   android.app.AlertDialog.last.dismiss();
  }
- public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);matrix(root);externalUI(root);ordinaryUI(root);ordinaryRestoration(root);ordinaryRestoreChanges(root);exactMultihopWinner(root);exactExternalWinner(root);exactTorExecution(root);cancellation(root);stale(root);multihopPins(root);permissionCapture(root);permissionSelection(root);uiCancellation(root);System.out.println("Shipping Android Speed Lab restoration: "+checks+" checks; captured winners,40 ordinary graph restores,8-protocol typed picker,cleanup/permission source changes,saved/test selection separation,8 cancellation phases and newer-user ownership");}
+ public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);matrix(root);externalUI(root);ordinaryUI(root);ordinaryRestoration(root);ordinaryRestoreChanges(root);exactMultihopWinner(root);exactExternalWinner(root);exactTorExecution(root);externalOriginalSources(root);cancellation(root);stale(root);multihopPins(root);permissionCapture(root);permissionSelection(root);uiCancellation(root);System.out.println("Shipping Android Speed Lab restoration: "+checks+" checks; original native sources before capture and stop,captured winners,40 ordinary graph restores,8-protocol typed picker,cleanup/permission source changes,saved/test selection separation,8 cancellation phases and newer-user ownership");}
 }
 '''
 
@@ -377,6 +463,11 @@ def main():
             ('AndroidUnifiedConnectionController.java','multihop.restoredMatches(point.multihopCapture,point.entry,point.exit,now)','true','restored Server pin owner'),
             ('AndroidUnifiedConnectionController.java','execution=runtime.standardExit.capturedRequestedExecution(home);selectedExecution=runtime.standardExit.capturedExternalExecution(home);','execution="local";selectedExecution="local";','captured Tor Server execution'),
             ('AndroidUnifiedConnectionController.java','ordinaryEntry=runtime.standardExit.capturedOrdinaryEntry(home);','ordinaryEntry=null;','captured ordinary source kind'),
+            ('AndroidUnifiedConnectionController.java','if("external".equals(point.topology))validateExternalRestoreSource(point);','','original native external source'),
+            ('AndroidUnifiedConnectionController.java','validateRestorePoint(point);\n            runtime.standardExit.requireMeasurementSource(point.externalSource);','runtime.standardExit.requireMeasurementSource(point.externalSource);','saved source before original stop'),
+            ('AndroidUnifiedConnectionController.java','runtime.standardExit.requireMeasurementSource(point.externalSource);','','native owner before original stop'),
+            ('AndroidUnifiedConnectionController.java','&&point.home.activeEntryId.equals(point.entry.id)&&captured.routerEntry.equals(saved.file.getCanonicalFile())','&&point.home.activeEntryId.equals(point.entry.id)','same-ID private file relink'),
+            ('Boundaries.java','captured!=activeMeasurementSource||','','retained native source identity'),
             ('AndroidUnifiedConnectionController.java','if(point.ordinaryEntry==null?restored!=null:restored==null||!point.ordinaryEntryDigest.equals(externalDigest(restored)))return false;','','restored ordinary source identity'),
         )
         for filename,old,new,label in cases:

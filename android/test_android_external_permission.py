@@ -21,6 +21,20 @@ MULTIHOP_CAPTURE_TYPES = r'''
  static final class RestoreCapture {final String policy,selected;final CapturedOwner owner;final CapturedSource entrySource,exitSource;RestoreCapture(String policy,String selected,AndroidHomeStateStore.Snapshot home,AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String pins)throws Exception{this.policy=policy;this.selected=selected;owner=new CapturedOwner(home,pins);entrySource=new CapturedSource(entry.file);exitSource=new CapturedSource(exit.file);}void require(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit)throws Exception{if(!owner.entryId.equals(entry.id)||!owner.exitId.equals(exit.id))throw new IllegalStateException("wrong captured nodes");entrySource.require(entry.file);exitSource.require(exit.file);}}
 '''
 
+# Permission and usage fixtures do not own an adopted native launch source.
+# Keep this boundary explicitly uninhabited; restoration has its separate
+# shipping-source fixture and must never infer authority from these doubles.
+UNOWNED_EXTERNAL_RESTORE_SOURCE = r'''
+ static final class MeasurementSource {
+  final AndroidHomeStateStore.Snapshot home;final File routerEntry;
+  final String nativeSession,exitSource,entryKind,entrySource,requestedExecution,selectedExecution;
+  private MeasurementSource(){throw new AssertionError("permission fixture cannot mint a native restoration source");}
+  void requireHome(AndroidHomeStateStore.Snapshot home){throw new AssertionError("permission fixture has no native restoration source");}
+ }
+ MeasurementSource captureMeasurementSource(String id){throw new IllegalStateException("this fixture owns no adopted external launch source");}
+ void requireMeasurementSource(MeasurementSource source){throw new IllegalStateException("this fixture owns no adopted external launch source");}
+'''
+
 BOUNDARIES = r'''package com.eabusham.routervpn;
 import android.content.Context;import java.io.*;import java.util.*;import java.nio.file.*;import java.nio.charset.*;import org.json.*;
 final class AndroidPrivateFileStore {static byte[] read(File f,int max)throws Exception{byte[] b=Files.readAllBytes(f.toPath());if(b.length==0||b.length>max)throw new IllegalArgumentException("bounded private input required");return b;}}
@@ -104,6 +118,7 @@ final class AndroidStartupPolicy {
 }
 '''
 BOUNDARIES = BOUNDARIES.replace('// MULTIHOP_CAPTURE_TYPES', MULTIHOP_CAPTURE_TYPES)
+BOUNDARIES = BOUNDARIES.replace('final class AndroidStandardExitRuntime {', 'final class AndroidStandardExitRuntime {' + UNOWNED_EXTERNAL_RESTORE_SOURCE)
 
 PREFS = r'''package android.content;public interface SharedPreferences {
  String getString(String key,String fallback);boolean getBoolean(String key,boolean fallback);java.util.Map<String,?> getAll();
