@@ -35,6 +35,52 @@ def message():
 
 
 class EventBinding(unittest.TestCase):
+    def test_canonical_string_start_matches_only_the_original_native_timeval(self):
+        event = message()
+        event['process']['start_time'] = '1970-01-01T00:06:41.000501Z'
+        event['event']['proc_check']['target']['start_time'] = '1970-01-01T00:06:42.000502Z'
+        self.assertEqual(M.event_record(event, SOURCE, TARGET, 600, 800),
+                         M.event_record(message(), SOURCE, TARGET, 600, 800))
+        actual_start = {**TARGET, 'start_seconds': 1793520796, 'start_microseconds': 204200}
+        self.assertTrue(M.start_matches('2026-11-01T08:13:16.204200Z', actual_start))
+        self.assertFalse(M.start_matches('2026-11-01T08:13:16.204201Z', actual_start))
+
+    def test_unknown_rounded_or_changed_string_start_cannot_supply_native_identity(self):
+        values = ('1970-01-01T00:06:42.000503Z', '1970-01-01T00:06:42Z',
+                  '1970-01-01T00:06:42.0005020Z', '1970-01-01T00:06:42.00050Z',
+                  '1970-01-01T00:06:42.000502+00:00', '1970-01-01T01:06:42.000502+01:00',
+                  '1970-01-01T00:06:42.000502', '1970-01-01 00:06:42.000502Z',
+                  '1970-01-01T00:06:42.000502Z ', '1970-01-01T00:06:42.000502Z\n',
+                  '1970-01-01T00:06:42.000502z', 402.000502, None, [], True)
+        for role in ('process', 'target'):
+            for value in values:
+                if role == 'process' and type(value) is str:
+                    value = value.replace('06:42', '06:41').replace('.000502', '.000501')
+                with self.subTest(role=role, value=value):
+                    event = message()
+                    selected = event['process'] if role == 'process' else event['event']['proc_check']['target']
+                    selected['start_time'] = value
+                    with self.assertRaisesRegex(M.Rejected, 'start-does-not-match'):
+                        M.event_record(event, SOURCE, TARGET, 600, 800)
+        self.assertFalse(M.start_matches('1970-01-01T00:06:42.000502Z',
+                                        {**TARGET, 'start_seconds': 2**63-1}))
+        for value in ({'tv_sec': 402, 'tv_usec': 502.0}, {'tv_sec': True, 'tv_usec': 502}):
+            self.assertFalse(M.start_matches(value, TARGET))
+
+    def test_string_start_does_not_replace_tokens_phase_or_final_native_capture(self):
+        event = message()
+        event['process']['start_time'] = '1970-01-01T00:06:41.000501Z'
+        event['event']['proc_check']['target']['start_time'] = '1970-01-01T00:06:42.000502Z'
+        event['event']['proc_check']['target']['audit_token']['pidversion'] += 1
+        self.assertIsNone(M.event_record(event, SOURCE, TARGET, 600, 800))
+        event['event']['proc_check']['target']['audit_token']['pidversion'] -= 1
+        self.assertIsNone(M.event_record(event, SOURCE, TARGET, 701, 800))
+        stream = types.SimpleNamespace(read=lambda timeout: [event], process=types.SimpleNamespace(poll=lambda: None))
+        with mock.patch.object(M, 'capture', side_effect=[TARGET, SOURCE, {**TARGET, 'start_microseconds': 503}]), \
+             mock.patch.object(M, 'trigger', return_value={'errno': 0, 'result': 57}):
+            with self.assertRaisesRegex(M.Rejected, 'changed-after-query'):
+                M.query(object(), object(), stream, SOURCE, TARGET, time.monotonic()+1, iter((600, 800)).__next__)
+
     def test_target_executable_is_reduced_without_path_or_other_event_data(self):
         event = message()
         event['private_unrelated_data'] = 'do-not-persist'
@@ -229,6 +275,79 @@ class RejectionDiagnostics(unittest.TestCase):
 
 
 class OriginalPipeAndJoin(unittest.TestCase):
+    @staticmethod
+    def native_capture_for(child):
+        original = {**TARGET, 'pid': child.pid}
+        instigator = {**SOURCE, 'pid': os.getpid()}
+        def capture(installer, library, pid):
+            if pid == child.pid:
+                return dict(original)
+            if pid == os.getpid():
+                return dict(instigator)
+            raise AssertionError('unexpected process capture')
+        return original, instigator, capture
+
+    def test_actual_logger_group_is_separate_in_same_session_and_only_original_is_joined(self):
+        # Only the executable is substituted. The actual production Popen
+        # group/pipe options run against the local kernel; ES is not simulated.
+        command = [sys.executable, '-c', 'import time;time.sleep(10)']
+        real_popen = subprocess.Popen
+        foreign = real_popen(command)
+        child = None
+        try:
+            def executable(arguments, **options):
+                self.assertEqual(arguments, ['/usr/bin/eslogger', 'proc_check'])
+                return real_popen(command, **options)
+            with mock.patch.object(M.subprocess, 'Popen', side_effect=executable):
+                child = M.start_logger()
+            original, instigator, capture = self.native_capture_for(child)
+            with mock.patch.object(M, 'capture', side_effect=capture):
+                scope = M.logger_group(child, object(), object(), instigator)
+            self.assertEqual(scope['logger_process'], original)
+            self.assertEqual(scope['logger_group'], child.pid)
+            self.assertNotEqual(scope['logger_group'], scope['instigator_group'])
+            self.assertEqual(scope['session'], os.getsid(0))
+            self.assertEqual(os.getsid(child.pid), scope['session'])
+            self.assertEqual(os.getpgid(foreign.pid), scope['instigator_group'])
+            M.join_owned(child)
+            self.assertIsNotNone(child.returncode)
+            self.assertIsNone(foreign.poll())
+        finally:
+            if child is not None:
+                M.join_owned(child)
+                child.stdout.close(); child.stderr.close()
+            M.join_owned(foreign)
+
+    def test_actual_inherited_group_or_changed_session_is_rejected_and_original_joined(self):
+        for options in ({}, {'start_new_session': True}):
+            child = subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(10)'], **options)
+            try:
+                _, instigator, capture = self.native_capture_for(child)
+                with mock.patch.object(M, 'capture', side_effect=capture):
+                    with self.assertRaisesRegex(M.Rejected, 'process-group-not-isolated-in-original-session'):
+                        M.logger_group(child, object(), object(), instigator)
+            finally:
+                M.join_owned(child)
+            self.assertIsNotNone(child.returncode)
+
+    def test_group_readback_retains_partial_owner_and_rejects_native_generation_change(self):
+        child = subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(10)'], process_group=0)
+        try:
+            original, instigator, capture = self.native_capture_for(child)
+            with mock.patch.object(M, 'capture', side_effect=capture), \
+                 mock.patch.object(M.os, 'getpgid', side_effect=OSError('native group unavailable')):
+                with self.assertRaisesRegex(OSError, 'native group unavailable'):
+                    M.logger_group(child, object(), object(), instigator)
+            self.assertIsNone(child.poll())
+            with mock.patch.object(M, 'capture', side_effect=[original, {**original, 'idversion': original['idversion']+1}]):
+                with self.assertRaisesRegex(M.Rejected, 'group-owner-changed'):
+                    M.logger_group(child, object(), object(), instigator)
+        finally:
+            M.join_owned(child)
+        with mock.patch.object(M, 'capture', side_effect=AssertionError('closed owner must not be queried')):
+            with self.assertRaisesRegex(M.Rejected, 'exited-before-group-readback'):
+                M.logger_group(child, object(), object(), instigator)
+
     def test_real_owned_pipe_preserves_fda_error_and_parses_only_complete_records(self):
         script = 'import os,time;os.write(2,b"Full Disk Access denied\\n");os.write(1,b\'{"version":8}\');time.sleep(.1);os.write(1,b"\\n")'
         child = subprocess.Popen([sys.executable, '-c', script], stdout=subprocess.PIPE, stderr=subprocess.PIPE)

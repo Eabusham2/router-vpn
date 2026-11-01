@@ -43,7 +43,56 @@ and existing Full Disk Access approval. It is a diagnostic tool whose output
 may change, and is not an application API. This experiment neither obtains nor
 changes approval. An application integration would need the native ES API and
 its own authorized entitlement; this probe grants no installation authority.
-Native execution of this new experiment is still pending.
+Native execution and its remaining diagnostic failures are recorded below.
+
+### Observed logger-group and timestamp mismatch
+
+At exact source `c91a54defbbbe90fdeb01ab3b735df9dc4bb72d9`, the
+[installer workflow](https://github.com/Eabusham2/router-vpn/actions/runs/41286804908)
+completed both native jobs. The bounded diagnostic found no original owned
+event on either host: all 1,499 Apple Silicon records and all 1,007 Intel
+records had a different instigator PID. Both made 24 successful original
+`proc_pidpath_audittoken` calls; the final result was 57 bytes with errno zero.
+Those successful pathname calls did not manufacture an ES observation. All
+present process start fields were strings, while the original decoder expected
+timeval objects. Both diagnostic outcomes therefore remained unsuccessful.
+
+Apple's [`eslogger(1)` manual, mirrored from the SDK](https://keith.github.io/xcode-man-pages/eslogger.1.html),
+documents suppression of events originating in the logger's own process group.
+The original probe launched the logger in the same group as the Python trigger.
+That is a concrete cause to test for the missing events; these logs alone do
+not establish that it is the only cause. The diagnostic now starts only its
+owned logger in a separate group, using
+[Python's `process_group=0`](https://docs.python.org/3.12/library/subprocess.html#subprocess.Popen),
+and checks the actual group and unchanged session around repeated native
+process-identity reads. It requests no change to FDA approval, entitlement,
+process responsibility, or event selection. Cleanup still signals and joins only the
+original `Popen` child, never a numeric process group or an unrelated process.
+
+The decoder also recognizes one canonical UTC string with exactly six decimal
+microsecond digits, comparing it directly with the serialization of the
+already captured native timeval. It does not derive identity from the event's
+string, round away precision, infer a timezone, or relax any PID, exec-version,
+native-start, phase, or original-file comparison. Other string formats remain
+unrecognized. The exact canonical representation and group repair still need
+the real owned linked/unlinked ES observations in a subsequent native run.
+Local POSIX group/join and decoder tests do not establish that native result.
+
+The ordinary installation boundary is unchanged. The
+[Intel job](https://github.com/Eabusham2/router-vpn/actions/runs/41286804908/job/124789647977)
+still refused the preexisting PID 1048's unavailable main-image CodeDirectory
+with `EBADEXEC`; neither first/legacy installation nor managed inventory passed
+there. The
+[Apple Silicon job](https://github.com/Eabusham2/router-vpn/actions/runs/41286804908/job/124789647981)
+passed the separate actual managed inventory over 441 paths, rejected its exact
+copied/unlinked original child, then passed again only after that child was
+joined. Its first/legacy installation still failed. No unknown executable is
+excluded by this diagnostic repair.
+
+Decoded log SHA256 values:
+
+- Apple Silicon: `b95de8e8be0bf86b634da875fe18b62926d55ccc7d5352da49cd56ad352f28ed`
+- Intel: `5b1f0d207a7493021296c3d220100034650ae3af6d28bf7ba01fd842a1b458f3`
 
 ## Actual observation
 

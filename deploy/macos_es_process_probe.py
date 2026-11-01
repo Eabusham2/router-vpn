@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import ctypes
+import datetime
 import hashlib
 import importlib.util
 import json
@@ -90,6 +91,26 @@ def token_matches(value, expected):
     return (type(value) is dict and type(value.get('pid')) is int and
             type(value.get('pidversion')) is int and
             (value['pid'], value['pidversion']) == key(expected)[:2])
+
+
+def start_matches(value, expected):
+    """Compare with native capture; serialized event data never supplies identity."""
+    seconds, microseconds = key(expected)[3:]
+    if type(value) is dict:
+        return (type(value.get('tv_sec')) is int and type(value.get('tv_usec')) is int and
+                (value['tv_sec'], value['tv_usec']) == (seconds, microseconds))
+    if type(value) is str:
+        # eslogger's native output uses a string. Recognize only the exact UTC
+        # microsecond representation of the original native timeval. Do not
+        # parse, round, truncate, infer a timezone, or take an event's value as
+        # a substitute for that independently captured process start.
+        try:
+            native = (datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc) +
+                      datetime.timedelta(seconds=seconds, microseconds=microseconds))
+        except (OverflowError, ValueError):
+            return False
+        return value == native.isoformat(timespec='microseconds').replace('+00:00', 'Z')
+    return False
 
 
 class EventDiagnostics:
@@ -199,15 +220,10 @@ def event_record(message, instigator, target, earliest, latest, diagnostics=None
         # A delayed linked-image event is not the later unlinked observation.
         note('event-before-phase' if emitted < earliest else 'event-after-observation')
         return None
-    start = process.get('start_time')
-    if (type(start) is not dict or type(start.get('tv_sec')) is not int or type(start.get('tv_usec')) is not int or
-            (start['tv_sec'], start['tv_usec']) != key(target)[3:]):
+    if not start_matches(process.get('start_time'), target):
         note('target-start-not-captured')
         raise Rejected('event-target-start-does-not-match')
-    source_start = message['process'].get('start_time')
-    if (type(source_start) is not dict or type(source_start.get('tv_sec')) is not int or
-            type(source_start.get('tv_usec')) is not int or
-            (source_start['tv_sec'], source_start['tv_usec']) != key(instigator)[3:]):
+    if not start_matches(message['process'].get('start_time'), instigator):
         note('instigator-start-not-captured')
         raise Rejected('event-instigator-start-does-not-match')
     executable = process.get('executable')
@@ -283,6 +299,33 @@ class EventStream:
         self.selector.close()
         self.process.stdout.close()
         self.process.stderr.close()
+
+
+def start_logger():
+    # Apple's eslogger manual documents suppression of its own process group.
+    # A separate group keeps the original session; the existing FDA and
+    # entitlement requirements and event filters are untouched.
+    return subprocess.Popen(['/usr/bin/eslogger', 'proc_check'], stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            close_fds=True, process_group=0)
+
+
+def logger_group(process, installer, library, instigator):
+    """Read back only the retained child; a group never grants signal authority."""
+    if process.poll() is not None:
+        raise Rejected('eslogger-exited-before-group-readback')
+    original = capture(installer, library, process.pid)
+    parent_group, parent_session = os.getpgrp(), os.getsid(0)
+    group, session = os.getpgid(process.pid), os.getsid(process.pid)
+    if group != process.pid or group == parent_group or session != parent_session:
+        raise Rejected('eslogger-process-group-not-isolated-in-original-session')
+    if (capture(installer, library, process.pid) != original or
+            capture(installer, library, os.getpid()) != instigator or
+            os.getpgrp() != parent_group or os.getsid(0) != parent_session or
+            process.poll() is not None):
+        raise Rejected('eslogger-group-owner-changed-during-readback')
+    return {'logger_process': original, 'logger_group': group,
+            'instigator_group': parent_group, 'session': parent_session}
 
 
 def join_owned(process):
@@ -361,9 +404,9 @@ def run(baseline_path):
         if (target['pid'], target['start_seconds'], target['start_microseconds'], target['uniqueid'], target['idversion']) != baseline_key[:5]:
             raise Rejected('pre-fixture-process-replaced-or-unknown')
         instigator = capture(installer, library, os.getpid())
-        logger = subprocess.Popen(['/usr/bin/eslogger', 'proc_check'], stdin=subprocess.DEVNULL,
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True)
+        logger = start_logger()
         stream = EventStream(logger)
+        report['logger_scope'] = logger_group(logger, installer, library, instigator)
         deadline = time.monotonic()+8
         image = work/'owned-sleep'
         shutil.copyfile('/bin/sleep', image)
