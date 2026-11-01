@@ -297,12 +297,18 @@ func (f *nodePQWFPBridge) address() netip.AddrPort {
 	return f.listener.LocalAddr().(*net.UDPAddr).AddrPort()
 }
 func (f *nodePQWFPBridge) reset() {
+	f.resetWithKeyBarrier(nil)
+}
+func (f *nodePQWFPBridge) resetWithKeyBarrier(next <-chan struct{}) {
 	f.dispatch.Lock()
 	f.mu.Lock()
 	if f.remote.IsValid() {
 		f.retired[f.remote] = true
 	}
 	f.remote = netip.AddrPort{}
+	if next != nil {
+		f.barrier = next
+	}
 	joined := make([]<-chan struct{}, 0, len(f.peers))
 	for remote, peer := range f.peers {
 		f.retired[remote] = true
@@ -577,7 +583,11 @@ func TestRouterVPNDesktopNodeWindowsPQReferenceProcess(t *testing.T) {
 			respond("", "")
 			continue
 		case "reset-joined-client":
-			wg.reset()
+			next, err := server.nextKeyBarrier()
+			if err != nil {
+				t.Fatal("PQ restored reference lost its next actual key epoch", err)
+			}
+			wg.resetWithKeyBarrier(next)
 			kem.reset()
 			if outer != nil {
 				outer.reset()

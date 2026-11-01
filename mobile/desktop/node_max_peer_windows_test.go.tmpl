@@ -6,6 +6,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/ecdh"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -30,6 +32,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilepq"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
 	HYOUT "github.com/sagernet/sing-box/protocol/hysteria2"
+	AWG "github.com/sagernet/sing-box/protocol/routervpnamnezia"
 	XR "github.com/sagernet/sing-box/protocol/routervpnxray"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
@@ -491,7 +494,11 @@ func TestRouterVPNDesktopNodeWindowsMAXReferenceProcess(t *testing.T) {
 			respond(false, "")
 			continue
 		case "reset-joined-client":
-			wg.reset()
+			next, err := f.server.nextKeyBarrier()
+			if err != nil {
+				t.Fatal("MAX restored reference lost its next actual key epoch", err)
+			}
+			wg.resetWithKeyBarrier(next)
 			kem.reset()
 			respond(false, "")
 			continue
@@ -1250,6 +1257,7 @@ func TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor(t *testing.T) {
 }
 
 func TestRouterVPNDesktopNodeWindowsMAXMarkers(t *testing.T) {
+	t.Run("key-epoch-barrier", nodeMAXWFPNativeKeyEpochBarrier)
 	t.Run("retained-reference-readback", nodeMAXWFPRetainedReferenceReadback)
 	t.Run("reference-failure-channel", nodeMAXWFPReferenceFailureChannel)
 	t.Run("marker-and-authentication", nodeMAXWFPMarkerAuthentication)
@@ -1355,6 +1363,153 @@ func TestRouterVPNDesktopNodeWindowsMAXMarkers(t *testing.T) {
 			t.Fatal("MAX armed marker lost its exact echo or joined observation", writeErr, readErr, joined, countErr)
 		}
 	})
+}
+
+func nodeMAXWFPNativeKeyEpochBarrier(t *testing.T) {
+	private, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := AWG.NewNativePQTrafficReference(t, private.PublicKey().Bytes(), false)
+	nodeMAXWFPRequireKeyEpochBarrier(t, reference.SetKey, func() [32]byte {
+		snapshot, err := reference.Snapshot()
+		if err != nil {
+			t.Fatal("key epoch lost its original native packet readback", err)
+		}
+		return snapshot.KeyDigest
+	})
+}
+
+// This regression proves the reference's actual native key application and
+// retained UDP gate. Complete KEM/MAX traffic remains the separate native
+// matrix; an echo here cannot replace that cryptographic acceptance.
+func nodeMAXWFPRequireKeyEpochBarrier(t *testing.T, install func([]byte) error, installed func() [32]byte) {
+	t.Helper()
+	var epoch pqTrafficKeyEpoch
+	if gate, err := epoch.afterCurrent(); err == nil || gate != nil {
+		t.Fatal("reference armed an epoch without an actual prior key")
+	}
+	oldKey, nextKey := bytes.Repeat([]byte{0x63}, 32), bytes.Repeat([]byte{0x74}, 32)
+	defer clear(oldKey)
+	defer clear(nextKey)
+	if err := epoch.apply(oldKey, install); err != nil || installed() != sha256.Sum256(oldKey) {
+		t.Fatal("reference initial epoch omitted its actual native key", err)
+	}
+	gate, err := epoch.afterCurrent()
+	if err != nil || gate == nil {
+		t.Fatal("reference did not capture its next owned key epoch", err)
+	}
+	if other, err := epoch.afterCurrent(); err == nil || other != nil {
+		t.Fatal("reference replaced an already pending key epoch")
+	}
+	ip := netip.MustParseAddr("127.0.0.1")
+	echo, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(ip, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := make(chan struct{})
+	var received atomic.Int64
+	go func() {
+		defer close(joined)
+		body := make([]byte, 4096)
+		for {
+			n, remote, err := echo.ReadFromUDPAddrPort(body)
+			if err != nil {
+				return
+			}
+			received.Add(1)
+			if _, err = echo.WriteToUDPAddrPort(body[:n], remote); err != nil {
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() { _ = echo.Close(); <-joined })
+	oldGate := make(chan struct{})
+	close(oldGate)
+	bridge := newNodePQWFPBridge(t, ip, echo.LocalAddr().String(), true, oldGate)
+	bridge.resetWithKeyBarrier(gate)
+	connection, err := net.DialUDP("udp4", nil, net.UDPAddrFromAddrPort(bridge.address()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	if err := connection.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	const body = "retained-next-native-key-epoch"
+	if _, err := connection.Write([]byte(body)); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(time.Second); bridge.snapshot().Accepted != 1; {
+		if time.Now().After(deadline) {
+			t.Fatal("next key epoch never captured its actual packet")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	held := func() {
+		t.Helper()
+		select {
+		case <-gate:
+			t.Fatal("reference released a key epoch without its new native key")
+		default:
+		}
+		if actual := bridge.snapshot(); actual.Forwarded != 0 || actual.Returned != 0 || received.Load() != 0 {
+			t.Fatal("restored reference used a stale one-shot key barrier", actual)
+		}
+	}
+	held()
+	if err := connection.SetReadDeadline(time.Now().Add(150 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	probe := make([]byte, 4096)
+	if n, err := connection.Read(probe); n != 0 || err == nil {
+		t.Fatal("restored reference crossed its pending key gate", err)
+	} else {
+		var timeout net.Error
+		if !errors.As(err, &timeout) || !timeout.Timeout() {
+			t.Fatal("pending key gate lost its original socket", err)
+		}
+	}
+	held()
+	if err := epoch.apply(oldKey, install); err != nil || installed() != sha256.Sum256(oldKey) {
+		t.Fatal("same-key native application changed its original key", err)
+	}
+	held()
+	if err := epoch.apply(nextKey, func([]byte) error { return install(nil) }); err == nil || installed() != sha256.Sum256(oldKey) {
+		t.Fatal("failed native key application released or changed an epoch", err)
+	}
+	held()
+	if err := epoch.apply(nextKey, install); err != nil || installed() != sha256.Sum256(nextKey) {
+		t.Fatal("fresh epoch omitted its real native key application", err)
+	}
+	select {
+	case <-gate:
+	default:
+		t.Fatal("successful original native key application did not release its epoch")
+	}
+	if err := connection.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	answer := make([]byte, 4096)
+	if n, err := connection.Read(answer); err != nil || string(answer[:n]) != body {
+		t.Fatal("fresh native key did not release the original retained packet", err)
+	}
+	pending, err := epoch.afterCurrent()
+	if err != nil || pending == nil {
+		t.Fatal("next original key epoch could not be captured", err)
+	}
+	epoch.retire()
+	select {
+	case <-pending:
+		t.Fatal("reference retirement fabricated successful key application")
+	default:
+	}
+	if _, err := epoch.afterCurrent(); err == nil {
+		t.Fatal("retired reference accepted a new key epoch")
+	}
+	if err := epoch.apply(oldKey, install); err == nil || installed() != sha256.Sum256(nextKey) {
+		t.Fatal("retired reference mutated its original native key", err)
+	}
 }
 
 func nodeMAXWFPRetainedReferenceReadback(t *testing.T) {

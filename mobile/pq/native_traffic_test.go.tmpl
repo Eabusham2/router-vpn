@@ -105,6 +105,55 @@ func (pqTrafficNetwork) InterfaceFinder() control.InterfaceFinder      { return 
 func (pqTrafficNetwork) InterfaceMonitor() tun.DefaultInterfaceMonitor { return nil }
 func (pqTrafficNetwork) AutoRedirectOutputMark() uint32                { return 0 }
 
+// A restored client negotiates a fresh key while the reference keeps its
+// original packet engine. Its first keepalive must wait for that real key
+// application, not the already-closed barrier from the previous client.
+// The gate records only a digest after the original native install succeeds;
+// repeated keys, failed installs and other owners cannot release a new epoch.
+type pqTrafficKeyEpoch struct {
+	mu      sync.Mutex
+	digest  [32]byte
+	known   bool
+	retired bool
+	waiting chan struct{}
+}
+
+func (e *pqTrafficKeyEpoch) apply(key []byte, install func([]byte) error) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.retired || install == nil || len(key) != 32 || bytes.Equal(key, make([]byte, 32)) {
+		return errors.New("reference key epoch has no live native application")
+	}
+	digest := sha256.Sum256(key)
+	if err := install(key); err != nil {
+		return err
+	}
+	if e.waiting != nil && digest != e.digest {
+		close(e.waiting)
+		e.waiting = nil
+	}
+	e.digest, e.known = digest, true
+	return nil
+}
+
+func (e *pqTrafficKeyEpoch) afterCurrent() (<-chan struct{}, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.retired || !e.known || e.waiting != nil {
+		return nil, errors.New("reference key epoch is absent, retired or already pending")
+	}
+	e.waiting = make(chan struct{})
+	return e.waiting, nil
+}
+
+func (e *pqTrafficKeyEpoch) retire() {
+	e.mu.Lock()
+	e.retired = true
+	// Retirement cannot masquerade as a successful key installation. The
+	// original bridge's own cancellation joins any blocked packet worker.
+	e.mu.Unlock()
+}
+
 // Every event is processed by the real compiled Rust server owner, then its key
 // is installed into the independently generated WG/AWG reference peer before
 // sending the protocol's next packet. No expected/derived key is supplied.
@@ -118,6 +167,7 @@ type pqTrafficServer struct {
 	stop       sync.Once
 	initialKey chan struct{}
 	adopted    sync.Once
+	keyEpoch   pqTrafficKeyEpoch
 	received   atomic.Int64
 	rejected   atomic.Int64
 }
@@ -138,7 +188,15 @@ func newPQTrafficServerForPeer(t *testing.T, peer *routervpnamnezia.NativePQTraf
 	return server
 }
 func (s *pqTrafficServer) close() {
-	s.stop.Do(func() { _ = s.conn.Close(); <-s.done; _ = s.protocol.Close() })
+	s.stop.Do(func() { _ = s.conn.Close(); <-s.done; s.keyEpoch.retire(); _ = s.protocol.Close() })
+}
+func (s *pqTrafficServer) nextKeyBarrier() (<-chan struct{}, error) {
+	select {
+	case <-s.done:
+		return nil, errors.New("reference key epoch lost its original protocol owner")
+	default:
+	}
+	return s.keyEpoch.afterCurrent()
 }
 func (s *pqTrafficServer) run() {
 	defer close(s.done)
@@ -149,7 +207,7 @@ func (s *pqTrafficServer) run() {
 			return errors.New("reference PQ key expired")
 		}
 		if len(event.Key) != 0 {
-			if err := s.peer.SetKey(event.Key); err != nil {
+			if err := s.keyEpoch.apply(event.Key, s.peer.SetKey); err != nil {
 				return err
 			}
 			s.adopted.Do(func() { close(s.initialKey) })
