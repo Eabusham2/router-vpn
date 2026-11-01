@@ -60,6 +60,7 @@ def linux_form(directory):
 #include <json-glib/json-glib.h>
 #include <stdlib.h>
 #include <string.h>
+#include "routervpn-controller-auth-v1.h"
 typedef struct { GtkWidget *router_combo; GPtrArray *router_ids; } App;
 typedef struct { char *data; size_t len; } Buffer;
 STRUCT
