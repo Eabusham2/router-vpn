@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	M "github.com/sagernet/sing/common/metadata"
 )
 
@@ -35,7 +34,7 @@ func desktopNodeRouterHealthCaptureValid(request desktopNodeLayerRequest) bool {
 	raw, err := hex.DecodeString(request.NodeProofID)
 	plain := request.Layer == "" || request.Layer == "off"
 	return err == nil && len(raw) == 32 && hex.EncodeToString(raw) == request.NodeProofID &&
-		(request.Mode == "hysteria2" && plain || request.Mode == "shadowsocks" &&
+		((request.Mode == "hysteria2" || request.Mode == "shadowsocks") &&
 			(plain || request.Layer == "aes-256-gcm" || request.Layer == "aes-256-gcm+xor-whitening"))
 }
 
@@ -149,8 +148,8 @@ func TestRouterVPNDesktopNodeRouterHealthCapture(t *testing.T) {
 			t.Fatal("captured private Router cover or exact Start Layer was rejected", layer)
 		}
 		covered.Mode = "hysteria2"
-		if desktopNodeRouterHealthCaptureValid(covered) != (layer == "" || layer == "off") {
-			t.Fatal("Hysteria2 Router capture changed its plain-only retained boundary", layer)
+		if !desktopNodeRouterHealthCaptureValid(covered) {
+			t.Fatal("Hysteria2 Router capture rejected its exact retained layer", layer)
 		}
 	}
 	for _, change := range []struct {
@@ -180,6 +179,7 @@ func TestRouterVPNDesktopNodeEncryptedRouterHealthLayers(t *testing.T) {
 	for _, test := range []struct{ mode, layer, label string }{
 		{"shadowsocks", "", "off"}, {"shadowsocks", "aes-256-gcm", "aes-256-gcm"},
 		{"shadowsocks", "aes-256-gcm+xor-whitening", "aes-256-gcm+xor-whitening"}, {"hysteria2", "", "hy2-off"},
+		{"hysteria2", "aes-256-gcm", "hy2-aes"}, {"hysteria2", "aes-256-gcm+xor-whitening", "hy2-whitening"},
 	} {
 		t.Run(test.label, func(t *testing.T) {
 			_, ip := desktopNodePeerInterface(t)
@@ -226,12 +226,14 @@ func TestRouterVPNDesktopNodeEncryptedRouterHealthLayers(t *testing.T) {
 				}
 				after := peer.observe(t, "stats")
 				ciphertext := after.RawTCP > before.RawTCP
+				plainTCP := after.PlainTCP == before.PlainTCP+1
 				if test.mode == "hysteria2" {
-					ciphertext = before.RawTCP == 0 && after.RawTCP == 0 && after.RawUDP > before.RawUDP
+					ciphertext = before.RawTCP == 0 && after.RawTCP == 0 && after.RawUDP > before.RawUDP && after.ProtocolRawUDP > before.ProtocolRawUDP
+					plainTCP = after.ProtocolTCP == before.ProtocolTCP+1
 				}
 				if readErr != nil || closeErr != nil || len(body) > 1024 || response.StatusCode != http.StatusOK || json.Unmarshal(body, &actual) != nil ||
 					!actual.OK || actual.Proof != "router-vpn-private-agent-v1" || (actual.NodeID == nodeID) == (action == "wrong-node") ||
-					after.RouterQueries != before.RouterQueries+1 || after.DirectQueries != 0 || !ciphertext || after.PlainTCP != before.PlainTCP+1 {
+					after.RouterQueries != before.RouterQueries+1 || after.DirectQueries != 0 || !ciphertext || !plainTCP {
 					t.Fatal("captured layered Router response lost its original identity or encrypted counters", action, readErr, closeErr, before, after)
 				}
 			}
@@ -239,18 +241,32 @@ func TestRouterVPNDesktopNodeEncryptedRouterHealthLayers(t *testing.T) {
 				before := peer.observe(t, action)
 				err := f.box.RouterVPNStrategyDNSProof()
 				after := peer.observe(t, "stats")
-				if (err == nil) == (action == "fail-dns") || after.DNSQueries != before.DNSQueries+1 || after.RawUDP <= before.RawUDP || after.PlainUDP <= before.PlainUDP {
+				if (err == nil) == (action == "fail-dns") || after.DNSQueries != before.DNSQueries+1 || after.RawUDP <= before.RawUDP || after.PlainUDP <= before.PlainUDP || test.mode == "hysteria2" && after.ProtocolUDP <= before.ProtocolUDP {
 					t.Fatal("captured layered Router peer substituted the selected resolver or a cached answer", action, err, before, after)
 				}
 			}
 			if test.mode == "hysteria2" {
 				capture, err := f.policy.Capture()
-				if err != nil || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Type != "hysteria2" ||
-					len(capture.PhysicalRoots[0].Destinations) != 1 || capture.PhysicalRoots[0].Destinations[0] !=
-					(mobilemultihop.PhysicalEgress{Host: ip.String(), Port: int(peer.remote.Port()), Network: "udp"}) ||
+				kind, destinations := "hysteria2", 1
+				if test.layer != "" {
+					kind, destinations = "shadowsocks", 1
+				}
+				if test.layer == "aes-256-gcm+xor-whitening" {
+					kind = "routervpn-aes-xor"
+				}
+				if err != nil || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Type != kind ||
+					len(capture.PhysicalRoots[0].Destinations) != destinations ||
 					capture.SelectedDNS.Host != "192.168.50.133" || capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != "proxy" ||
 					capture.ConfiguredMTU != 1280 || capture.KillSwitchPolicy != "always" {
 					t.Fatal("Hysteria2 Router graph changed its exact UDP lower, selected DNS, MTU or protection", err)
+				}
+				seen := map[string]bool{}
+				for _, destination := range capture.PhysicalRoots[0].Destinations {
+					if destination.Host != ip.String() || destination.Port != int(peer.remote.Port()) ||
+						destination.Network != "udp" || seen[destination.Network] {
+						t.Fatal("Hysteria2 layer opened an inner, DNS or unrelated physical destination")
+					}
+					seen[destination.Network] = true
 				}
 				for _, network := range []string{"tcp", "udp"} {
 					for _, destination := range []string{"192.0.2.99", "2001:db8::99"} {

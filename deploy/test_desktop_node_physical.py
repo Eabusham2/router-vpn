@@ -36,7 +36,13 @@ LAYER_ALLOCATION_CASES = tuple("paired-listeners/" + case for case in (
 HYSTERIA2_CREDENTIAL_CASES = (
     "off/hysteria-password", "off/hysteria-trust", "off/hysteria-salamander",
     "aes-256-gcm/hysteria-password", "aes-256-gcm+xor-whitening/hysteria-password",
-    "aes-256-gcm/aes-key", "aes-256-gcm+xor-whitening/aes-key")
+    "aes-256-gcm/aes-key", "aes-256-gcm+xor-whitening/aes-key",
+    "aes-256-gcm/hysteria-trust", "aes-256-gcm+xor-whitening/hysteria-trust",
+    "aes-256-gcm/hysteria-salamander", "aes-256-gcm+xor-whitening/hysteria-salamander")
+HYSTERIA2_IDENTITY_CASES = tuple(layer + "/" + identity for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
+                                for identity in ("ip-absent", "ip-empty", "ip-wrong-certificate"))
+HYSTERIA2_COVER_CASES = tuple(layer + "/" + fault for layer in ("aes-256-gcm", "aes-256-gcm+xor-whitening")
+                             for fault in ("owned", "wrong-node", "drop-cover"))
 XRAY_MODES = ("reality-vision", "reality-pq-vision", "reality-xhttp")
 XRAY_CASES = tuple(mode + "/" + layer for mode in XRAY_MODES
                    for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening"))
@@ -466,6 +472,9 @@ def mutants(source, windows):
          "layered graph bypassed its captured socket grants", changed("protocol/routervpnxray/outbound.go",
          "conn, err := b.dialer.DialContext(cctx, N.NetworkTCP, M.ParseSocksaddr(b.server.String()))",
          "conn, err := (&net.Dialer{}).DialContext(cctx, N.NetworkTCP, b.server.String())")),
+        ("lost-hysteria2-original-ip-identity", "experimental/libbox/routervpn/mobilemultihop/node_profile.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeHysteria2LayerTLSIdentity", "aes-256-gcm/ip-absent",
+         "original IP-SAN identity did not survive its transport detour", changed("experimental/libbox/routervpn/mobilemultihop/node_profile.go",
+         'tls["server_name"] = out["server"]', 'tls["server_name"] = ""')),
         ("ignored-hysteria2-tls-identity", "protocol/hysteria2/outbound.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeHysteria2WrongCredential", "off/hysteria-trust",
          "wrong captured Hysteria credential delivered encrypted payload", changed("protocol/hysteria2/outbound.go",
          "tlsConfig, err := tls.NewClient(ctx, logger, tlsServerAddress, tlsOptions)",
@@ -594,7 +603,9 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
           "TestRouterVPNDesktopNodeEncryptedLayerTraffic", "TestRouterVPNDesktopNodeEncryptedLayerWrongCredential", "TestRouterVPNDesktopNodeEncryptedRouterHealthLayers") +
          (("TestRouterVPNDesktopNodeEncryptedPlainWireGuard", "TestRouterVPNDesktopNodeEncryptedPlainAmnezia", "TestRouterVPNDesktopNodeEncryptedAmneziaReferenceCapture") if platform.system() == "Linux" else ())),
         ("hysteria2-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeHysteria2",
-         ("TestRouterVPNDesktopNodeHysteria2WrongCredential",)),
+         ("TestRouterVPNDesktopNodeHysteria2WrongCredential", "TestRouterVPNDesktopNodeHysteria2LayerTLSIdentity",
+          "TestRouterVPNDesktopNodeHysteria2WrongWhitening", "TestRouterVPNDesktopNodeHysteria2LayerCover",
+          "TestRouterVPNDesktopNodeHysteria2OuterCannotBypassFinal", "TestRouterVPNDesktopNodeHysteria2ReferenceCapture")),
         ("xray-traffic", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeXrayTraffic$",
          ("TestRouterVPNDesktopNodeXrayTraffic",)),
         ("xray-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeXrayWrongCredential$",
@@ -632,7 +643,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Node encrypted gate omitted a complete base profile")
             if name == "encrypted" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedLayerTraffic/" + case + " (" not in output for case in (*LAYER_CASES, *LAYER_ALLOCATION_CASES)):
                 raise ValueError("Node encrypted gate omitted an admitted graph/Start Layer")
-            if name == "encrypted" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedRouterHealthLayers/" + layer + " (" not in output for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening", "hy2-off")):
+            if name == "encrypted" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedRouterHealthLayers/" + layer + " (" not in output for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening", "hy2-off", "hy2-aes", "hy2-whitening")):
                 raise ValueError("Node encrypted gate omitted captured Router health and selected DNS for a Start Layer")
             if name == "encrypted" and platform.system() == "Linux" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedPlainWireGuard/" + case + " (" not in output for case in ("proved", "wrong-peer", "wrong-psk")):
                 raise ValueError("Node encrypted gate omitted plain WireGuard selected DNS, identity or captured-key rejection")
@@ -646,6 +657,12 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                     raise ValueError("Node encrypted gate omitted AWG2 captured source and canonical identity rejection")
             if name == "hysteria2-credentials" and any("--- PASS: TestRouterVPNDesktopNodeHysteria2WrongCredential/" + case + " (" not in output for case in HYSTERIA2_CREDENTIAL_CASES):
                 raise ValueError("Node Hysteria2 gate omitted a captured protocol, trust or layer credential negative")
+            if name == "hysteria2-credentials":
+                for group, cases in (("LayerTLSIdentity", HYSTERIA2_IDENTITY_CASES), ("LayerCover", HYSTERIA2_COVER_CASES),
+                                     ("OuterCannotBypassFinal", ("aes-256-gcm", "aes-256-gcm+xor-whitening")),
+                                     ("ReferenceCapture", ("unchanged", "ip-absent", "ip-empty", "wrong-ip", "unknown-identity", "other-mode", "whitening", "wrong-layer", "wrong-mode"))):
+                    if any("--- PASS: TestRouterVPNDesktopNodeHysteria2" + group + "/" + case + " (" not in output for case in cases):
+                        raise ValueError("Node Hysteria2 gate omitted original IP trust or final encrypted cover ownership")
             if name == "xray-traffic" and any("--- PASS: TestRouterVPNDesktopNodeXrayTraffic/" + case + " (" not in output for case in XRAY_CASES):
                 raise ValueError("Node Xray gate omitted a complete graph/Start Layer")
             if name == "xray-credentials" and any("--- PASS: TestRouterVPNDesktopNodeXrayWrongCredential/" + case + " (" not in output for case in XRAY_CREDENTIAL_CASES):

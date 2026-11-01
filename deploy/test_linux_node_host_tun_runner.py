@@ -36,7 +36,20 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:10: verified installed host captured Start Layer: ' + case for case in cases if case in G.LAYER_CASES),
                           *('    native_test.go:11: verified installed host plain WireGuard: ' + case for case in cases if case in G.WIREGUARD_CASES),
                           *('    native_test.go:12: verified installed host plain Hysteria2: ' + case for case in cases if case in G.HYSTERIA2_CASES),
-                          *('    native_test.go:13: verified installed host captured AWG2: ' + case for case in cases if case in G.AMNEZIA_CASES)]) + '\n'
+                          *('    native_test.go:13: verified installed host captured AWG2: ' + case for case in cases if case in G.AMNEZIA_CASES),
+                          *('    native_test.go:14: verified installed host layered Hysteria2: ' + case for case in cases if case in G.HYSTERIA2_LAYER_CASES)]) + '\n'
+
+    def test_new_hysteria2_layers_preserve_every_original_case_and_receipt(self):
+        self.assertEqual(len(G.CASES), 126)
+        self.assertEqual(len(G.HYSTERIA2_LAYER_CASES), 33)
+        self.assertEqual(len(set(G.CASES) - set(G.HYSTERIA2_LAYER_CASES)), 93)
+        self.assertEqual(len(G.CASES), len(set(G.CASES)))
+        self.assertEqual(set(G.HYSTERIA2_LAYER_CASES) & set(G.WHITENING_CASES),
+                         {case for case in G.HYSTERIA2_LAYER_CASES if case.startswith('hy2-whitening-')})
+        for case in G.HYSTERIA2_LAYER_CASES:
+            self.assertIn(case, G.LAYER_CASES)
+        with self.assertRaises(ValueError):
+            G.check_verdict(self.completed(tuple(case for case in G.CASES if case not in G.HYSTERIA2_LAYER_CASES)))
 
     def test_requires_every_real_positive_negative_and_joined_lifecycle(self):
         output = self.completed()

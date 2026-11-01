@@ -11,6 +11,9 @@ import (
 )
 
 func linuxHostTUNStartLayer(scenario string) string {
+	if linuxHostTUNHysteria2LayerCase(scenario) {
+		return linuxHostTUNHysteria2Layer(scenario)
+	}
 	switch scenario {
 	case "layer-aes-connect", "layer-aes-restore":
 		return common.StartLayerAES256GCM
@@ -22,7 +25,7 @@ func linuxHostTUNStartLayer(scenario string) string {
 }
 
 func linuxHostTUNWrongKeyCase(scenario string) bool {
-	if scenario == "hy2-wrong-trust" || scenario == "hy2-wrong-salamander" {
+	if linuxHostTUNHysteria2Case(scenario) && (linuxHostTUNAction(scenario) == "wrong-trust" || linuxHostTUNAction(scenario) == "wrong-salamander" || linuxHostTUNAction(scenario) == "wrong-layer-key" || linuxHostTUNAction(scenario) == "wrong-whitening") {
 		return true
 	}
 	scenario = linuxHostTUNAction(scenario)
@@ -61,6 +64,9 @@ func linuxHostTUNLayerSource(ctx context.Context, host *desktopLinuxNodeHost, sc
 	}
 	if mode == "hysteria2" {
 		kind, roots = "hysteria2", 1
+		if layer != "" {
+			kind = "shadowsocks"
+		}
 	}
 	if layer == common.StartLayerAES256GCMXOR {
 		kind = "routervpn-aes-xor"

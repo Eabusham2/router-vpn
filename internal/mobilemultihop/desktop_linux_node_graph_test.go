@@ -42,7 +42,7 @@ func TestDesktopLinuxNodeRetainsExactPlainHysteria2(t *testing.T) {
 			}
 		})
 	}
-	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening", "OFF", "plain", " off", "unknown"} {
+	for _, layer := range []string{"OFF", "plain", " off", "unknown", "aes-256-gcm-xor", "xor"} {
 		if DesktopLinuxNodePhysicalGraphSupported("hysteria2", layer) {
 			t.Fatal("plain Hysteria2 opened an unproved Start Layer", layer)
 		}
@@ -179,7 +179,7 @@ func TestDesktopLinuxNodeRetainsExactShadowsocksLayers(t *testing.T) {
 		})
 	}
 	for _, mode := range append(append([]string(nil), predecessorFamilies...), "", "auto", "smart-auto", "tor", "openvpn", "external") {
-		if mode != "shadowsocks" && DesktopLinuxNodePhysicalGraphSupported(mode, "aes-256-gcm+xor-whitening") {
+		if mode != "shadowsocks" && mode != "hysteria2" && DesktopLinuxNodePhysicalGraphSupported(mode, "aes-256-gcm+xor-whitening") {
 			t.Fatal("Start Layer admission opened an unrelated Linux family", mode)
 		}
 	}
@@ -219,6 +219,107 @@ func TestDesktopLinuxNodeStartLayerRejectsForeignOrIncompleteAESSource(t *testin
 				}
 				if compiled, err := NewNodeProfile("shadowsocks", files, startJSON(t, profile), start, ""); err == nil || compiled != nil {
 					t.Fatal("Linux layer accepted missing authentication or borrowed another source")
+				}
+			})
+		}
+	}
+}
+
+func TestDesktopLinuxNodeRetainsExactHysteria2Layers(t *testing.T) {
+	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		for _, identity := range []string{"explicit", "absent", "empty", "malformed"} {
+			t.Run(layer+"/"+identity, func(t *testing.T) {
+				if !DesktopLinuxNodePhysicalGraphSupported("hysteria2", layer) {
+					t.Fatal("exact layered Hysteria2 has no retained Linux path")
+				}
+				files, profile, start := nodeProfileFixture(t, "hysteria2", layer)
+				profile["kill_switch_policy"] = "always"
+				var assets map[string]string
+				if json.Unmarshal([]byte(files), &assets) != nil {
+					t.Fatal("missing complete HY2 source")
+				}
+				raw, err := base64.StdEncoding.Strict().DecodeString(assets["sing-box.json"])
+				if err != nil {
+					t.Fatal(err)
+				}
+				graph := startObject(t, string(raw))
+				source := desktopNodeObject(t, graph, "outbounds", "proxy")
+				tls := source["tls"].(map[string]any)
+				switch identity {
+				case "absent":
+					delete(tls, "server_name")
+				case "empty":
+					tls["server_name"] = ""
+				case "malformed":
+					tls["server_name"] = false
+				}
+				raw, err = json.Marshal(graph)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assets["sing-box.json"] = base64.StdEncoding.EncodeToString(raw)
+				raw, err = json.Marshal(assets)
+				if err != nil {
+					t.Fatal(err)
+				}
+				files = string(raw)
+				original, err := NewNodeProfile("hysteria2", files, startJSON(t, profile), start, "")
+				if identity == "malformed" {
+					if err == nil || original != nil {
+						t.Fatal("malformed TLS name became an inferred identity")
+					}
+					return
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				policy := desktopNodePlan(t, original, desktopNodeTestSession, "linux")
+				assertDesktopNodeExactDerivation(t, policy)
+				capture, err := policy.Capture()
+				if err != nil || len(capture.PhysicalRoots) != 1 || len(capture.PhysicalRoots[0].Destinations) != 1 ||
+					capture.SelectedDNS.Host != "192.168.50.133" || capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != "proxy" ||
+					capture.ConfiguredMTU != 1280 || capture.KillSwitchPolicy != "always" {
+					t.Fatal("layered HY2 changed selected DNS, MTU, protection or physical ownership", err, capture.PhysicalRoots, capture.SelectedDNS, capture.ConfiguredMTU, capture.KillSwitchPolicy)
+				}
+				final := startObject(t, policy.Config())
+				inner := desktopNodeObject(t, final, "outbounds", "proxy")
+				outer := desktopNodeObject(t, final, "outbounds", NativeStartLayerTag)
+				kind := "shadowsocks"
+				if layer == "aes-256-gcm+xor-whitening" {
+					kind = "routervpn-aes-xor"
+				}
+				if capture.PhysicalRoots[0].Type != kind || outer["type"] != kind || outer["method"] != NativeStartLayerMethod ||
+					outer["password"] != base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32))) || outer["detour"] != DesktopNodePhysicalTag ||
+					inner["type"] != "hysteria2" || inner["detour"] != NativeStartLayerTag || inner["server"] != "127.0.0.1" ||
+					inner["server_port"] != source["server_port"] || inner["password"] != source["password"] || !reflect.DeepEqual(inner["obfs"], source["obfs"]) {
+					t.Fatal("layered HY2 replaced its protocol, exact credentials or captured inner UDP transport")
+				}
+				if layer == "aes-256-gcm+xor-whitening" && outer["server_port"] != float64(8389) {
+					t.Fatal("changed native whitening port")
+				}
+				name := "entry.example"
+				if identity != "explicit" {
+					name = source["server"].(string)
+				}
+				actualTLS := inner["tls"].(map[string]any)
+				if actualTLS["server_name"] != name || actualTLS["enabled"] != true || actualTLS["insecure"] == true || actualTLS["certificate"] == nil || actualTLS["certificate_path"] != nil {
+					t.Fatal("layered HY2 changed original explicit/implicit TLS identity or trust")
+				}
+				seen := map[string]bool{}
+				for _, destination := range capture.PhysicalRoots[0].Destinations {
+					if destination.Host != source["server"] || float64(destination.Port) != outer["server_port"] ||
+						destination.Network != "udp" || seen[destination.Network] {
+						t.Fatal("inner or DNS target acquired physical authority")
+					}
+					seen[destination.Network] = true
+				}
+				launch, err := original.LaunchInput()
+				var input struct {
+					Files      string `json:"files"`
+					StartFiles string `json:"start"`
+				}
+				if err != nil || json.Unmarshal([]byte(launch), &input) != nil || input.Files != files || input.StartFiles != start {
+					t.Fatal("layered compiler lost byte-exact sealed original HY2/CA/AES sources", err)
 				}
 			})
 		}

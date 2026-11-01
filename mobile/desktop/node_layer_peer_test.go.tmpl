@@ -48,6 +48,7 @@ import (
 	WG "github.com/sagernet/sing-box/protocol/wireguard"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	routervpnperformance "github.com/sagernet/sing-box/service/routervpnperformance"
 	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
@@ -77,15 +78,17 @@ func desktopNodeLayerPreparationError(t *testing.T, stage string, err error) {
 }
 
 type desktopNodeLayerRequest struct {
-	Schema        int                           `json:"schema"`
-	Mode          string                        `json:"mode"`
-	Layer         string                        `json:"layer"`
-	Address       string                        `json:"address"`
-	Password      string                        `json:"password"`
-	NodeProofID   string                        `json:"node_proof_id,omitempty"`
-	DirectRouter  bool                          `json:"direct_router,omitempty"`
-	Cover         bool                          `json:"cover,omitempty"`
-	Configuration desktopReferenceConfiguration `json:"configuration"`
+	Schema              int                           `json:"schema"`
+	Mode                string                        `json:"mode"`
+	Layer               string                        `json:"layer"`
+	Address             string                        `json:"address"`
+	Password            string                        `json:"password"`
+	NodeProofID         string                        `json:"node_proof_id,omitempty"`
+	DirectRouter        bool                          `json:"direct_router,omitempty"`
+	Cover               bool                          `json:"cover,omitempty"`
+	HysteriaTLSIdentity string                        `json:"hysteria_tls_identity,omitempty"`
+	WhiteningMismatch   bool                          `json:"whitening_mismatch,omitempty"`
+	Configuration       desktopReferenceConfiguration `json:"configuration"`
 }
 
 type desktopNodeLayerReply struct {
@@ -599,7 +602,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	var trailing any
 	if decoder.Decode(&request) != nil || decoder.Decode(&trailing) != io.EOF || request.Schema != 1 ||
 		!mobilemultihop.DesktopNodePhysicalGraphSupported(request.Mode, request.Layer) ||
-		request.Mode != "shadowsocks" && request.Mode != "hysteria2" && !desktopNodeXrayMode(request.Mode) && !desktopNodeNaiveMode(request.Mode) && !desktopNodeCompositeMode(request.Mode) && request.Layer == "" || len(request.Configuration.Forward) != 0 || !desktopNodeRouterHealthCaptureValid(request) {
+		request.Mode != "shadowsocks" && request.Mode != "hysteria2" && !desktopNodeXrayMode(request.Mode) && !desktopNodeNaiveMode(request.Mode) && !desktopNodeCompositeMode(request.Mode) && request.Layer == "" || len(request.Configuration.Forward) != 0 || !desktopNodeRouterHealthCaptureValid(request) || !desktopNodeHysteria2CaptureValid(request) {
 		t.Fatal("layer reference request escaped its captured fixture")
 	}
 	key, keyErr := base64.StdEncoding.Strict().DecodeString(request.Password)
@@ -689,7 +692,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	} else if request.Mode == "hysteria2" {
 		// The private Router mapping is fixed before the actual QUIC service
 		// starts. It grants no other TCP destination or DNS/physical exception.
-		protocolServer, protocolFiles = startDesktopNodeHysteria2Server(t, ip, dnsListener.LocalAddr().String(), routerHealth.address())
+		protocolServer, protocolFiles = startDesktopNodeHysteria2ServerWithIdentity(t, ip, dnsListener.LocalAddr().String(), request.HysteriaTLSIdentity, routerHealth.address())
 		baseAddress = protocolServer.udp.LocalAddr().String()
 		base := netip.MustParseAddrPort(baseAddress)
 		inner = netip.AddrPortFrom(netip.MustParseAddr("127.0.0.1"), base.Port()).String()
@@ -711,17 +714,37 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 		if len(routes) != 0 {
 			server = startDesktopNodeLayerRoutedServer(t, ip, request.Password, routes, dnsListener.LocalAddr().String())
 		} else {
-			server = startDesktopNodeLayerServer(t, ip, request.Password, inner, baseAddress, innerNetwork, dnsListener.LocalAddr().String(), routerHealth.address())
+			routerAddress := ""
+			if inner == "" {
+				routerAddress = routerHealth.address()
+			}
+			// A layered peer may forward only its captured inner transport.
+			// Node proof, DNS, payload and cover terminate at the inner peer.
+			server = startDesktopNodeLayerServer(t, ip, request.Password, inner, baseAddress, innerNetwork, dnsListener.LocalAddr().String(), routerAddress)
 		}
 		address = server.tcp.Addr().String()
 		aesAddress = address
 	}
 	if request.Layer == "aes-256-gcm+xor-whitening" {
 		stage = "shipping whitening relay"
-		address = startDesktopNodeLayerRelay(t, ip, address, request.Password)
+		password := request.Password
+		if request.WhiteningMismatch {
+			key, err := base64.StdEncoding.Strict().DecodeString(password)
+			if err != nil || len(key) != 32 {
+				t.Fatal("whitening negative lost its captured key")
+			}
+			key[0] ^= 0xff
+			password = base64.StdEncoding.EncodeToString(key)
+			clear(key)
+		}
+		address = startDesktopNodeLayerRelay(t, ip, address, password)
+	}
+	coverServer := server
+	if request.Mode == "hysteria2" {
+		coverServer = protocolServer
 	}
 	if request.Cover {
-		server.cover.Store(&desktopNodeRouterCover{})
+		coverServer.cover.Store(&desktopNodeRouterCover{})
 	}
 	stage = "native process scope"
 	scope, err := desktopNodeLayerReferenceScope()
@@ -741,7 +764,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 			AppID: scope, RawTCP: server.rawTCP.Load(), RawUDP: server.rawUDP.Load(), PlainTCP: server.plainTCP.Load(), PlainUDP: server.plainUDP.Load(), DNSQueries: dnsQueries.Load(), Probe: nonce, ProbeCount: count, ProbeNetwork: probeNetwork, ProbeTarget: target}
 		reply.RouterQueries = routerHealth.count()
 		reply.DirectQueries = directHealth.count()
-		if cover := server.cover.Load(); cover != nil {
+		if cover := coverServer.cover.Load(); cover != nil {
 			cover.observe(&reply)
 		}
 		if protocolServer != nil {
@@ -786,7 +809,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 			continue
 		}
 		if string(line) == "drop-cover\n" {
-			cover := server.cover.Load()
+			cover := coverServer.cover.Load()
 			if cover == nil {
 				t.Fatal("layer reference received an uncaptured private cover operation")
 			}
@@ -929,7 +952,7 @@ func (p *desktopNodeLayerReference) probe(t *testing.T, action, nonce string) in
 
 func (p *desktopNodeLayerReference) observe(t *testing.T, action string) desktopNodeLayerReply {
 	t.Helper()
-	if action != "stats" && action != "fail-dns" && action != "restore-dns" && (p.request.NodeProofID == "" || action != "wrong-node" && action != "restore-node") {
+	if action != "stats" && action != "fail-dns" && action != "restore-dns" && !(action == "drop-cover" && p.request.Cover) && (p.request.NodeProofID == "" || action != "wrong-node" && action != "restore-node") {
 		t.Fatal("unexpected layer observation operation")
 	}
 	if _, err := io.WriteString(p.input, action+"\n"); err != nil {
@@ -953,6 +976,16 @@ func startDesktopNodeLayerReference(t *testing.T, mode, layer string, ip netip.A
 	} else if len(proofIDs) != 0 {
 		t.Fatal("layer reference exceeded its captured Router identity")
 	}
+	return startDesktopNodeLayerReferenceConfigured(t, mode, layer, ip, desktopNodeLayerReferenceOptions{NodeProofID: proofID})
+}
+
+type desktopNodeLayerReferenceOptions struct {
+	NodeProofID, HysteriaTLSIdentity string
+	WhiteningMismatch, Cover         bool
+}
+
+func startDesktopNodeLayerReferenceConfigured(t *testing.T, mode, layer string, ip netip.Addr, capture desktopNodeLayerReferenceOptions) *desktopNodeLayerReference {
+	t.Helper()
 	config, options := desktopReferenceFixture(t)
 	if mode == "awg2-strong" {
 		config.Parameters["jc"], config.Parameters["jmax"] = "8", "1200"
@@ -976,7 +1009,7 @@ func startDesktopNodeLayerReference(t *testing.T, mode, layer string, ip netip.A
 	clear(raw)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	p := &desktopNodeLayerReference{ctx: ctx, cancel: cancel, options: options, done: make(chan error, 1),
-		request: desktopNodeLayerRequest{Schema: 1, Mode: mode, Layer: layer, Address: ip.String(), NodeProofID: proofID, Password: base64.StdEncoding.EncodeToString(key[:]), Configuration: config}}
+		request: desktopNodeLayerRequest{Schema: 1, Mode: mode, Layer: layer, Address: ip.String(), NodeProofID: capture.NodeProofID, HysteriaTLSIdentity: capture.HysteriaTLSIdentity, WhiteningMismatch: capture.WhiteningMismatch, Cover: capture.Cover, Password: base64.StdEncoding.EncodeToString(key[:]), Configuration: config}}
 	clear(key[:])
 	p.command = exec.CommandContext(ctx, copyPath, "-test.run=^TestRouterVPNDesktopNodeLayerReferenceProcess$", "-test.count=1", "-test.timeout=85s")
 	p.command.Env = append(os.Environ(), "ROUTERVPN_NODE_LAYER_REFERENCE_CHILD=1")
@@ -1104,6 +1137,9 @@ func (p *desktopNodeLayerReference) original(t *testing.T, kill, fault string) *
 			profile["node_proof_id"] = p.request.NodeProofID
 		}
 	}
+	if p.request.Cover {
+		profile["daita_enabled"], profile["daita_host"], profile["daita_rate_kbps"] = true, "10.77.0.1", 64
+	}
 	captured, _ := json.Marshal(profile)
 	original, err := mobilemultihop.NewNodeProfile(p.request.Mode, files, string(captured), start, "")
 	if err != nil {
@@ -1190,6 +1226,7 @@ func newDesktopNodeLayerFixture(t *testing.T, peer *desktopNodeLayerReference, f
 	DNST.RegisterUDP(dnsRegistry)
 	DNST.RegisterTCP(dnsRegistry)
 	services := boxService.NewRegistry()
+	routervpnperformance.RegisterService(services)
 	boxService.Register[routervpndesktoppt.NodeCaptureOptions](services, mobilemultihop.DesktopNodeNetworkType, func(ctx context.Context, logger log.ContextLogger, tag string, options routervpndesktoppt.NodeCaptureOptions) (adapter.Service, error) {
 		owned, err := routervpndesktoppt.NewNodeNetworkOwner(ctx, logger, tag, options)
 		if err == nil {

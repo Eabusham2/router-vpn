@@ -40,6 +40,7 @@ func init() {
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNWireGuardCases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNHysteria2Cases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNAmneziaCases...)
+	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNHysteria2LayerCases...)
 }
 
 func linuxHostTUNCoverCase(scenario string) bool {
@@ -83,6 +84,17 @@ func linuxHostTUNAssertReadinessClassification(t *testing.T) {
 		"hy2-wrong-key", "hy2-wrong-trust", "hy2-wrong-salamander", "hy2-resolver-failure",
 		"awg2-fast-wrong-key", "awg2-fast-wrong-header", "awg2-fast-wrong-padding", "awg2-fast-resolver-failure",
 		"awg2-strong-wrong-key", "awg2-strong-wrong-header", "awg2-strong-wrong-padding", "awg2-strong-resolver-failure",
+		"hy2-aes-wrong-key",
+		"hy2-aes-wrong-trust",
+		"hy2-aes-wrong-salamander",
+		"hy2-aes-wrong-layer-key",
+		"hy2-aes-resolver-failure",
+		"hy2-whitening-wrong-key",
+		"hy2-whitening-wrong-trust",
+		"hy2-whitening-wrong-salamander",
+		"hy2-whitening-wrong-layer-key",
+		"hy2-whitening-resolver-failure",
+		"hy2-whitening-wrong-whitening",
 	} {
 		negative[scenario] = true
 	}
@@ -787,7 +799,7 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				if linuxHostTUNCoverCase(scenario) {
 					wrongProofs = before.RouterQueries < expectedProofs // Periodic same-worker reproof remains live.
 				}
-				if before.DNSQueries < 2 || before.RawUDP == 0 || before.PlainUDP == 0 || wrongProofs ||
+				if before.DNSQueries < 2 || before.RawUDP == 0 || before.PlainUDP == 0 || peer.mode == "hysteria2" && (before.ProtocolRawUDP == 0 || before.ProtocolUDP == 0) || wrongProofs ||
 					linuxHostTUNPublicCase(scenario) && !linuxHostTUNEncryptedTCP(peer, linuxHostTUNPeerReply{}, before) {
 					t.Fatal("installed readiness bypassed the selected encrypted DNS path", before)
 				}
@@ -855,7 +867,7 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				}
 				if result.Outcome != "rejected-ready" || result.Ready != nil || after.RouterQueries != expectedProofs ||
 					linuxHostTUNResolverFailureCase(scenario) && after.DNSQueries == 0 ||
-					linuxHostTUNWrongKeyCase(scenario) && (after.RawUDP == 0 || after.PlainUDP != 0) {
+					linuxHostTUNWrongKeyCase(scenario) && (after.RawUDP == 0 || peer.mode != "hysteria2" && after.PlainUDP != 0 || peer.mode == "hysteria2" && (after.ProtocolTCP != 0 || after.ProtocolUDP != 0 || after.DNSQueries != 0)) {
 					t.Fatal("failed key/resolver fabricated readiness or a Router response", result, after)
 				}
 			} else {
@@ -994,7 +1006,11 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				t.Log("verified installed host captured AWG2:", scenario)
 			}
 			if peer.mode == "hysteria2" {
-				t.Log("verified installed host plain Hysteria2:", scenario)
+				if peer.layer == "" {
+					t.Log("verified installed host plain Hysteria2:", scenario)
+				} else {
+					t.Log("verified installed host layered Hysteria2:", scenario)
+				}
 			}
 			t.Log("verified installed host native lifecycle:", scenario)
 			if peer.layer != "" {

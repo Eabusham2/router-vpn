@@ -208,6 +208,7 @@ type linuxHostTUNPeer struct {
 	clientKey        string
 	serverKey        string
 	serverPublic     string
+	baseAddress      netip.AddrPort
 	protocolFiles    string
 	parameters       map[string]string
 	parametersSHA256 string
@@ -246,13 +247,29 @@ func (peer *linuxHostTUNPeer) read(t *testing.T) linuxHostTUNPeerReply {
 	if peer.mode == "hysteria2" {
 		// These are the same peer's atomic counters, read again later in the
 		// reply. QUIC/cover may receive packets between those observations.
-		if err != nil || endpoint.Addr().String() != "192.168.210.2" || endpoint.Port() == 0 || reply.AESAddress != "" || reply.BaseAddress != reply.Address ||
-			peer.address.IsValid() && peer.address != endpoint || reply.ProtocolFiles == "" || peer.protocolFiles != "" && peer.protocolFiles != reply.ProtocolFiles ||
+		base, baseErr := netip.ParseAddrPort(reply.BaseAddress)
+		if err != nil || baseErr != nil || endpoint.Addr().String() != "192.168.210.2" || endpoint.Port() == 0 || base.Addr() != endpoint.Addr() || base.Port() == 0 ||
+			peer.address.IsValid() && peer.address != endpoint || peer.baseAddress.IsValid() && peer.baseAddress != base ||
+			reply.ProtocolFiles == "" || peer.protocolFiles != "" && peer.protocolFiles != reply.ProtocolFiles ||
 			reply.RawTCP != 0 || reply.RawUDP < 0 || reply.PlainTCP < 0 || reply.PlainUDP < 0 || reply.ProtocolRawTCP != 0 ||
-			reply.ProtocolRawUDP < reply.RawUDP || reply.ProtocolTCP < reply.PlainTCP || reply.ProtocolUDP < reply.PlainUDP {
+			reply.ProtocolRawUDP < 0 || reply.ProtocolTCP < 0 || reply.ProtocolUDP < 0 {
 			t.Fatal("installed Hysteria2 reference changed its exact UDP peer, TLS source or protocol counters")
 		}
-		peer.address, peer.protocolFiles = endpoint, reply.ProtocolFiles
+		if peer.layer == "" {
+			if reply.AESAddress != "" || base != endpoint || reply.ProtocolRawUDP < reply.RawUDP || reply.ProtocolTCP < reply.PlainTCP || reply.ProtocolUDP < reply.PlainUDP {
+				t.Fatal("plain Hysteria2 changed its same-peer observations")
+			}
+		} else {
+			aes, aesErr := netip.ParseAddrPort(reply.AESAddress)
+			whitening := peer.layer == common.StartLayerAES256GCMXOR
+			if aesErr != nil || aes.Addr() != endpoint.Addr() || aes.Port() == 0 || base == aes || base == endpoint || reply.PlainTCP != 0 ||
+				peer.layer != common.StartLayerAES256GCM && !whitening || whitening && (endpoint.Port() != 8389 || aes == endpoint) || !whitening && aes != endpoint ||
+				peer.aesAddress.IsValid() && peer.aesAddress != aes {
+				t.Fatal("layered Hysteria2 replaced its separate captured AES/QUIC UDP owners")
+			}
+			peer.aesAddress = aes
+		}
+		peer.address, peer.baseAddress, peer.protocolFiles = endpoint, base, reply.ProtocolFiles
 		return reply
 	}
 	aes, aesErr := netip.ParseAddrPort(reply.AESAddress)
@@ -372,6 +389,9 @@ func linuxHostTUNStartPeer(t *testing.T, scenario string) *linuxHostTUNPeer {
 	if linuxHostTUNIsAmnezia(peer.mode) {
 		request["mode"], request["parameters"] = peer.mode, peer.parameters
 	}
+	if linuxHostTUNHysteria2LayerCase(scenario) && linuxHostTUNAction(scenario) == "wrong-whitening" {
+		request["whitening_mismatch"] = true
+	}
 	if linuxHostTUNCoverCase(scenario) {
 		request["cover"] = true
 	}
@@ -438,7 +458,7 @@ func linuxHostTUNInstallProfile(t *testing.T, peer *linuxHostTUNPeer, scenario s
 		}
 	}
 	password := peer.password
-	if linuxHostTUNWrongKeyCase(scenario) {
+	if peer.mode != "hysteria2" && linuxHostTUNWrongKeyCase(scenario) || peer.mode == "hysteria2" && linuxHostTUNAction(scenario) == "wrong-layer-key" {
 		password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x27}, 32))
 	}
 	store, err := json.Marshal(common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}})
@@ -473,7 +493,13 @@ func linuxHostTUNInstallProfile(t *testing.T, peer *linuxHostTUNPeer, scenario s
 				t.Fatal("installed Hysteria2 lost its exact independent source bytes", err)
 			}
 		}
-		return
+		if peer.layer == "" {
+			return
+		}
+		directory = filepath.Join(linuxOwnedControllerRoot, "generated", profile.ID, "shadowsocks")
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	graph, err := json.Marshal(map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
 		"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": profile.Endpoint, "server_port": int(peer.aesAddress.Port()),

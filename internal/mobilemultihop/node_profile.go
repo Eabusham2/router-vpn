@@ -334,6 +334,24 @@ func compileNodeProxy(mode, files, start, layer string) (string, error) {
 			outer["type"], outer["server_port"] = "routervpn-aes-xor", float64(8389)
 		}
 		if mode != "shadowsocks" {
+			if mode == "hysteria2" {
+				// The transport detour changes only the dial destination. An
+				// omitted/empty SNI previously verified the captured server IP;
+				// freeze that identity before replacing its transport address.
+				tls, ok := out["tls"].(map[string]any)
+				if !ok {
+					return "", errors.New("Hysteria2 Start Layer lost its captured TLS policy")
+				}
+				name, exists := tls["server_name"]
+				if exists {
+					if _, ok := name.(string); !ok {
+						return "", errors.New("Hysteria2 Start Layer requires an exact TLS identity")
+					}
+				}
+				if !exists || name == "" {
+					tls["server_name"] = out["server"]
+				}
+			}
 			outer["tag"] = NativeStartLayerTag
 			out["server"], out["detour"] = "127.0.0.1", NativeStartLayerTag
 			outs = append(outs, outer)

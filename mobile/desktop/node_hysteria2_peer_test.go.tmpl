@@ -19,9 +19,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/miekg/dns"
 	boxTLS "github.com/sagernet/sing-box/common/tls"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	routervpnperformance "github.com/sagernet/sing-box/service/routervpnperformance"
 	HY "github.com/sagernet/sing-quic/hysteria2"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -89,14 +92,24 @@ func (h desktopNodeHysteria2Handler) NewPacketConnectionEx(ctx context.Context, 
 
 func startDesktopNodeHysteria2Server(t *testing.T, ip netip.Addr, dnsAddress string, routerAddresses ...string) (*desktopNodeLayerServer, string) {
 	t.Helper()
+	return startDesktopNodeHysteria2ServerWithIdentity(t, ip, dnsAddress, "", routerAddresses...)
+}
+
+func startDesktopNodeHysteria2ServerWithIdentity(t *testing.T, ip netip.Addr, dnsAddress, identity string, routerAddresses ...string) (*desktopNodeLayerServer, string) {
+	t.Helper()
 	packet, err := net.ListenPacket("udp4", net.JoinHostPort(ip.String(), "0"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return startDesktopNodeHysteria2ServerWithPacket(t, ip, dnsAddress, packet, routerAddresses...)
+	return startDesktopNodeHysteria2ServerWithPacketIdentity(t, ip, dnsAddress, packet, identity, routerAddresses...)
 }
 
 func startDesktopNodeHysteria2ServerWithPacket(t *testing.T, ip netip.Addr, dnsAddress string, packet net.PacketConn, routerAddresses ...string) (*desktopNodeLayerServer, string) {
+	t.Helper()
+	return startDesktopNodeHysteria2ServerWithPacketIdentity(t, ip, dnsAddress, packet, "", routerAddresses...)
+}
+
+func startDesktopNodeHysteria2ServerWithPacketIdentity(t *testing.T, ip netip.Addr, dnsAddress string, packet net.PacketConn, identity string, routerAddresses ...string) (*desktopNodeLayerServer, string) {
 	t.Helper()
 	started := false
 	defer func() {
@@ -130,6 +143,18 @@ func startDesktopNodeHysteria2ServerWithPacket(t *testing.T, ip netip.Addr, dnsA
 	spec := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: "captured-node.test"},
 		DNSNames: []string{"captured-node.test"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
 		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, IsCA: true, BasicConstraintsValid: true}
+	if identity != "" {
+		switch identity {
+		case "ip-absent", "ip-empty", "ip-wrong-certificate":
+		default:
+			t.Fatal("Hysteria reference changed its bounded certificate identity")
+		}
+		spec.DNSNames = nil
+		spec.IPAddresses = []net.IP{net.ParseIP(ip.String())}
+		if identity == "ip-wrong-certificate" {
+			spec.IPAddresses = []net.IP{net.ParseIP("192.0.2.201")}
+		}
+	}
 	der, err := x509.CreateCertificate(rand.Reader, spec, spec, &key.PublicKey, key)
 	if err != nil {
 		t.Fatal(err)
@@ -192,11 +217,17 @@ func startDesktopNodeHysteria2ServerWithPacket(t *testing.T, ip netip.Addr, dnsA
 		s.workers.Wait()
 	})
 	started = true
+	tls := map[string]any{"enabled": true, "certificate_path": "cert.pem"}
+	if identity == "" {
+		tls["server_name"] = "captured-node.test"
+	} else if identity == "ip-empty" {
+		tls["server_name"] = ""
+	}
 	graph := map[string]any{
 		"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
 		"outbounds": []any{map[string]any{"type": "hysteria2", "tag": "proxy", "server": ip.String(), "server_port": packet.LocalAddr().(*net.UDPAddr).Port,
 			"password": password, "obfs": map[string]any{"type": "salamander", "password": mask},
-			"tls": map[string]any{"enabled": true, "server_name": "captured-node.test", "certificate_path": "cert.pem"}}},
+			"tls": tls}},
 		"route": map[string]any{"final": "proxy", "rules": []any{}},
 	}
 	raw, err := json.Marshal(graph)
@@ -249,6 +280,8 @@ func TestRouterVPNDesktopNodeHysteria2WrongCredential(t *testing.T) {
 	for _, test := range []struct{ layer, fault string }{
 		{"", "hysteria-password"}, {"", "hysteria-trust"}, {"", "hysteria-salamander"},
 		{"aes-256-gcm", "hysteria-password"}, {"aes-256-gcm+xor-whitening", "hysteria-password"},
+		{"aes-256-gcm", "hysteria-trust"}, {"aes-256-gcm+xor-whitening", "hysteria-trust"},
+		{"aes-256-gcm", "hysteria-salamander"}, {"aes-256-gcm+xor-whitening", "hysteria-salamander"},
 		{"aes-256-gcm", "aes-key"}, {"aes-256-gcm+xor-whitening", "aes-key"},
 	} {
 		label := test.layer
@@ -269,6 +302,212 @@ func TestRouterVPNDesktopNodeHysteria2WrongCredential(t *testing.T) {
 			if observed.RawUDP == 0 || observed.ProtocolTCP != 0 || observed.ProtocolUDP != 0 ||
 				strings.HasPrefix(test.fault, "hysteria-") && observed.ProtocolRawUDP == 0 || f.network.Current() {
 				t.Fatal("Hysteria negative missed its real encrypted peer or fabricated readiness", observed)
+			}
+		})
+	}
+}
+
+// Fixture-only controls are admitted before any peer socket is opened. They
+// never change a production profile or weaken the actual runtime validator.
+func desktopNodeHysteria2CaptureValid(request desktopNodeLayerRequest) bool {
+	if request.HysteriaTLSIdentity != "" {
+		if request.Mode != "hysteria2" {
+			return false
+		}
+		switch request.HysteriaTLSIdentity {
+		case "ip-absent", "ip-empty", "ip-wrong-certificate":
+		default:
+			return false
+		}
+	}
+	return !request.WhiteningMismatch || request.Mode == "hysteria2" && request.Layer == "aes-256-gcm+xor-whitening"
+}
+
+func TestRouterVPNDesktopNodeHysteria2LayerTLSIdentity(t *testing.T) {
+	for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		label := layer
+		if label == "" {
+			label = "off"
+		}
+		for _, identity := range []string{"ip-absent", "ip-empty", "ip-wrong-certificate"} {
+			t.Run(label+"/"+identity, func(t *testing.T) {
+				_, ip := desktopNodePeerInterface(t)
+				peer := startDesktopNodeLayerReferenceConfigured(t, "hysteria2", layer, ip, desktopNodeLayerReferenceOptions{HysteriaTLSIdentity: identity})
+				f := newDesktopNodeLayerFixture(t, peer, "")
+				if err := f.box.RouterVPNStrategyStart(); err != nil {
+					t.Fatal(err)
+				}
+				err := f.exchange("udp")
+				observed := peer.observe(t, "stats")
+				if identity == "ip-wrong-certificate" {
+					if err == nil || observed.ProtocolTCP != 0 || observed.ProtocolUDP != 0 || observed.DNSQueries != 0 {
+						t.Fatal("wrong original IP certificate delivered payload", err, observed)
+					}
+				} else {
+					if err != nil || f.exchange("tcp") != nil || f.box.RouterVPNStrategyDNSProof() != nil {
+						t.Fatal("original IP-SAN identity did not survive its transport detour", err)
+					}
+					observed = peer.observe(t, "stats")
+					if observed.ProtocolTCP == 0 || observed.ProtocolUDP == 0 || observed.DNSQueries != 1 {
+						t.Fatal("IP-SAN proof skipped real payload or selected DNS", observed)
+					}
+				}
+				if observed.RawUDP == 0 || observed.ProtocolRawUDP == 0 || observed.RawTCP != 0 || f.network.Current() {
+					t.Fatal("IP-SAN test missed actual TLS traffic or invented kernel readiness", observed)
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeHysteria2WrongWhitening(t *testing.T) {
+	_, ip := desktopNodePeerInterface(t)
+	peer := startDesktopNodeLayerReferenceConfigured(t, "hysteria2", "aes-256-gcm+xor-whitening", ip, desktopNodeLayerReferenceOptions{WhiteningMismatch: true})
+	f := newDesktopNodeLayerFixture(t, peer, "")
+	if err := f.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.exchange("udp"); err == nil {
+		t.Fatal("mismatched whitening with the correct independent AES key delivered payload")
+	}
+	observed := peer.observe(t, "stats")
+	if observed.RawUDP == 0 || observed.PlainUDP != 0 || observed.ProtocolRawUDP != 0 || observed.ProtocolTCP != 0 || observed.ProtocolUDP != 0 || f.network.Current() {
+		t.Fatal("whitening-only negative bypassed its actual outer relay and AES rejection", observed)
+	}
+}
+
+// This invokes the real worker and encrypted proof, but keeps the common
+// explicit modeled TUN/kernel boundary. The installed host separately proves
+// that only its exact admitted native activation may publish Connected.
+func TestRouterVPNDesktopNodeHysteria2LayerCover(t *testing.T) {
+	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		for _, fault := range []string{"", "wrong-node", "drop-cover"} {
+			label := fault
+			if label == "" {
+				label = "owned"
+			}
+			t.Run(layer+"/"+label, func(t *testing.T) {
+				_, ip := desktopNodePeerInterface(t)
+				peer := startDesktopNodeLayerReferenceConfigured(t, "hysteria2", layer, ip, desktopNodeLayerReferenceOptions{NodeProofID: strings.Repeat("a", 64), Cover: true})
+				f := newDesktopNodeLayerFixture(t, peer, "")
+				if err := f.box.RouterVPNStrategyStart(); err != nil {
+					t.Fatal(err)
+				}
+				var cover *routervpnperformance.Service
+				for _, service := range f.box.RouterVPNServices() {
+					if actual, ok := service.(*routervpnperformance.Service); ok {
+						if cover != nil {
+							t.Fatal("multiple cover workers")
+						}
+						cover = actual
+					}
+				}
+				if cover == nil || cover.Healthy() || peer.observe(t, "stats").CoverPackets != 0 {
+					t.Fatal("cover started before its actual node proof")
+				}
+				if err := f.box.RouterVPNStrategyDNSProof(); err != nil {
+					t.Fatal(err)
+				}
+				if fault != "" {
+					peer.observe(t, fault)
+				}
+				err := cover.Activate()
+				observed := peer.observe(t, "stats")
+				if (err == nil) != (fault == "") || cover.Healthy() != (fault == "") || observed.RouterQueries == 0 || observed.DirectQueries != 0 || observed.DNSQueries != 1 || observed.RawTCP != 0 || observed.RawUDP == 0 || observed.ProtocolRawUDP == 0 || observed.ProtocolTCP == 0 || f.network.Current() {
+					t.Fatal("layered cover changed proof, path or native boundary", err, observed)
+				}
+				if fault == "wrong-node" {
+					if observed.CoverPackets != 0 {
+						t.Fatal("wrong node started cover")
+					}
+				} else if observed.CoverPackets == 0 || observed.CoverBytes < 128 || observed.CoverMaximum > 1200 || (observed.CoverReplies > 0) != (fault == "") {
+					t.Fatal("cover did not reach the final Hysteria peer", observed)
+				}
+				if err := cover.Close(); err != nil || cover.Healthy() {
+					t.Fatal("layered cover worker did not retire", err)
+				}
+				f.source.Cancel()
+				if err := f.close(); err != nil || !f.source.closed.Load() {
+					t.Fatal("layered cover retained its old socket source", err)
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeHysteria2OuterCannotBypassFinal(t *testing.T) {
+	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		t.Run(layer, func(t *testing.T) {
+			_, ip := desktopNodePeerInterface(t)
+			peer := startDesktopNodeLayerReference(t, "hysteria2", layer, ip, strings.Repeat("a", 64))
+			f := newDesktopNodeLayerFixture(t, peer, "")
+			if err := f.box.RouterVPNStrategyStart(); err != nil {
+				t.Fatal(err)
+			}
+			outer, found := f.box.Outbound().Outbound(mobilemultihop.NativeStartLayerTag)
+			if !found {
+				t.Fatal("missing captured outer AES transport")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			connection, err := outer.DialContext(ctx, "tcp", M.ParseSocksaddr(desktopNodeRouterHealthTarget))
+			if connection != nil {
+				_ = connection.Close()
+			}
+			if err == nil {
+				t.Fatal("Hysteria2 outer acquired an uncaptured physical TCP grant")
+			}
+			target := M.ParseSocksaddr("192.168.50.133:53")
+			packet, err := outer.ListenPacket(ctx, target)
+			if err != nil {
+				t.Fatal("outer negative missed actual owned UDP transport", err)
+			}
+			_ = packet.SetDeadline(time.Now().Add(350 * time.Millisecond))
+			query := new(dns.Msg).SetQuestion("example.com.", dns.TypeA)
+			raw, err := query.Pack()
+			if err != nil {
+				_ = packet.Close()
+				t.Fatal(err)
+			}
+			n, writeErr := packet.WriteTo(raw, target)
+			answer := make([]byte, 512)
+			_, _, readErr := packet.ReadFrom(answer)
+			_ = packet.Close()
+			observed := peer.observe(t, "stats")
+			if writeErr != nil || n != len(raw) || readErr == nil || observed.RawTCP != 0 || observed.RawUDP == 0 || observed.PlainUDP != 0 ||
+				observed.ProtocolRawUDP != 0 || observed.ProtocolTCP != 0 || observed.ProtocolUDP != 0 || observed.RouterQueries != 0 || observed.DNSQueries != 0 {
+				t.Fatal("outer AES bypassed its sole captured inner UDP route", writeErr, readErr, observed)
+			}
+			if err := f.exchange("tcp"); err != nil || f.box.RouterVPNStrategyDNSProof() != nil {
+				t.Fatal("outer rejection concealed an unavailable final Hysteria2 path", err)
+			}
+			observed = peer.observe(t, "stats")
+			if observed.ProtocolRawUDP == 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP == 0 || observed.DNSQueries != 1 || f.network.Current() {
+				t.Fatal("final selected DNS positive control skipped its encrypted peer", observed)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopNodeHysteria2ReferenceCapture(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		request desktopNodeLayerRequest
+		allowed bool
+	}{
+		{"unchanged", desktopNodeLayerRequest{}, true},
+		{"ip-absent", desktopNodeLayerRequest{Mode: "hysteria2", HysteriaTLSIdentity: "ip-absent"}, true},
+		{"ip-empty", desktopNodeLayerRequest{Mode: "hysteria2", HysteriaTLSIdentity: "ip-empty"}, true},
+		{"wrong-ip", desktopNodeLayerRequest{Mode: "hysteria2", HysteriaTLSIdentity: "ip-wrong-certificate"}, true},
+		{"unknown-identity", desktopNodeLayerRequest{Mode: "hysteria2", HysteriaTLSIdentity: "skip-trust"}, false},
+		{"other-mode", desktopNodeLayerRequest{Mode: "shadowsocks", HysteriaTLSIdentity: "ip-absent"}, false},
+		{"whitening", desktopNodeLayerRequest{Mode: "hysteria2", Layer: "aes-256-gcm+xor-whitening", WhiteningMismatch: true}, true},
+		{"wrong-layer", desktopNodeLayerRequest{Mode: "hysteria2", Layer: "aes-256-gcm", WhiteningMismatch: true}, false},
+		{"wrong-mode", desktopNodeLayerRequest{Mode: "shadowsocks", Layer: "aes-256-gcm+xor-whitening", WhiteningMismatch: true}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if desktopNodeHysteria2CaptureValid(test.request) != test.allowed {
+				t.Fatal("Hysteria2 peer admitted another captured trust/layer control")
 			}
 		})
 	}

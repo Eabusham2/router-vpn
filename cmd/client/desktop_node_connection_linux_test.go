@@ -88,9 +88,15 @@ func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
 				expected = "Linux Node"
 			case "wg-plain", "hysteria2-plain", "awg2-fast-plain", "awg2-strong-plain":
 				expected = "Linux Node"
-			case "wg-aes", "hysteria2-aes", "awg2-fast-aes", "awg2-strong-aes":
+			case "hysteria2-aes":
 				profile.StartLayer = common.StartLayerAES256GCM
-			case "wg-whitening", "hysteria2-whitening", "awg2-fast-whitening", "awg2-strong-whitening":
+				expected = "Linux Node"
+			case "hysteria2-whitening":
+				profile.StartLayer = common.StartLayerAES256GCMXOR
+				expected = "Linux Node"
+			case "wg-aes", "awg2-fast-aes", "awg2-strong-aes":
+				profile.StartLayer = common.StartLayerAES256GCM
+			case "wg-whitening", "awg2-fast-whitening", "awg2-strong-whitening":
 				profile.StartLayer = common.StartLayerAES256GCMXOR
 			case "cancelled", "wg-cancelled", "hysteria2-cancelled", "awg2-fast-cancelled", "awg2-strong-cancelled":
 				cancel()
