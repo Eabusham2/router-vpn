@@ -22,6 +22,9 @@ def completed_units():
 
 class LinuxNodeTransactionRunner(unittest.TestCase):
     def test_activation_requires_all_captured_unit_boundaries(self):
+        for group in ("TestSpeedLabLinuxRetainsActivatedPath", "TestSpeedLabLinuxRejectsChangedPath", "TestSpeedLabLinuxBracketsNativeRead",
+                      "TestSpeedLabLinuxRejectsOmittedOrMixedIdentity", "TestSpeedLabLinuxCaptureCannotFallThrough", "TestSpeedLabLinuxGateCancellation"):
+            self.assertIn(group, RUNNER.UNIT_CASES)
         rows = completed_units()
         RUNNER.check_unit_verdict("\n".join(rows))
         for missing, marker in enumerate(rows):

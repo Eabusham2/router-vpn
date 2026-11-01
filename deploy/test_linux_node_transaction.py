@@ -46,6 +46,15 @@ TRANSITION_CASES = ("empty", "fixed-active", "fixed-wrong-family", "unrelated-ta
 GROUPS = {"NodeSession": SESSION_CASES, "NodeTransaction": CASES, "NodeShutdown": SHUTDOWN_CASES, "NodeHost": HOST_CASES,
           "NodeHostStart": HOST_START_CASES, "NodeProofSocket": PROOF_SOCKET_CASES, "NodeStop": STOP_CASES, "NodeFallback": FALLBACK_CASES, "NodeTransition": TRANSITION_CASES}
 UNIT_CASES = {
+    "TestSpeedLabLinuxRetainsActivatedPath": ("original", "request-finished", "smart-phase", "runtime-options", "display-only", "live-mtu"),
+    "TestSpeedLabLinuxRejectsChangedPath": ("command", "session-host", "parent-session", "controller", "host-parent", "activation", "process", "transaction",
+                                           "journal", "launch", "policy", "host-registration", "session-registration", "parent-stopping", "app-closing", "duplicate-owner",
+                                           "profile", "dns", "mtu", "ipv6", "saved-options", "runtime-options", "network", "ready", "joined", "retiring", "cancelled-lifetime", "external", "multihop"),
+    "TestSpeedLabLinuxBracketsNativeRead": tuple(name for case in ("failure", "changed-record", "command-during-read", "profile-during-read", "session-during-read", "cancel-during-read", "missing-reader")
+                                                for name in (case, case + "/capture", case + "/result")),
+    "TestSpeedLabLinuxRejectsOmittedOrMixedIdentity": ("omitted", "unproved-capture", "external", "tor", "node", "graph", "entry"),
+    "TestSpeedLabLinuxCaptureCannotFallThrough": ("legacy", "unused-parent", "missing-retained-session", "wrong-parent", "unproved-empty-session", "missing-session-gate", "missing-host-gate", "foreign-session", "cancelled", "foreign-app"),
+    "TestSpeedLabLinuxGateCancellation": ("session", "host", "parent"),
     "TestDesktopLinuxNodeMTUReadbackComparison": ("schema", "session", "config", "path", "generation", "request", "lease", "active", "restored", "expired", "reader", "interface", "index", "mtu", "failure"),
     "TestDesktopLinuxNodeMTUOriginalOwnerComparison": ("valid", "host-lease", "activation", "process", "transaction", "launch", "native-launch", "session-parent", "process-parent",
                                                      "transaction-parent", "journal", "transaction-process", "policy", "selection", "runtime-options", "saved-options", "transaction-options", "transaction-saved-options",
@@ -84,6 +93,7 @@ def checked_sources():
             raise ValueError("Linux Node transaction lost its actual source: " + str(path.relative_to(ROOT)))
         records[str(path.relative_to(ROOT))] = hashlib.sha256(path.read_bytes()).hexdigest()
     required = {
+        "cmd/client/speed_lab_paths.go", "cmd/client/speed_lab_node_linux.go", "cmd/client/speed_lab_node_other.go", "cmd/client/speed_lab_node_linux_test.go",
         "cmd/client/desktop_node_linux_transaction.go", "cmd/client/desktop_node_linux_transaction_retire.go",
         "cmd/client/desktop_node_linux_transaction_native_test.go", "cmd/client/desktop_node_linux_parent_native_test.go",
         "cmd/client/desktop_node_linux_journal.go", "cmd/client/desktop_node_process_linux.go",

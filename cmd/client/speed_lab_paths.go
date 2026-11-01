@@ -83,6 +83,7 @@ type speedLabPathIdentity struct {
 	Node            *desktopNodeLaunch
 	NodeSession     string
 	NodeSource      string
+	Linux           *desktopLinuxNodePath
 	Execution       string
 	Options         [3]bool
 }
@@ -122,6 +123,17 @@ func captureSpeedLabIdentity(a *app) (speedLabPathIdentity, speedLabPath, error)
 	if identity.Network == "" {
 		return speedLabPathIdentity{}, speedLabPath{}, errors.New("Speed Lab cannot capture the current physical network")
 	}
+	linuxPath, retainedLinux, err := captureDesktopLinuxNodePath(context.Background(), a, command)
+	if err != nil {
+		return speedLabPathIdentity{}, speedLabPath{}, err
+	}
+	if retainedLinux {
+		if linuxPath == nil {
+			return speedLabPathIdentity{}, speedLabPath{}, errors.New("Speed Lab lost its retained Linux path capture")
+		}
+		identity.Linux = linuxPath
+		identity.ProfileToken = desktopOwnedNodeProfileToken(profile)
+	}
 	path := speedLabPath{Scope: "current", Topology: "router", NodeID: profile.ID, NodeName: profile.Name, RuntimeMode: st.RuntimeMode, LogicalMode: st.LogicalMode, Base: st.Base, Description: "actual currently connected Router VPN path; mutable selection is not used as path proof"}
 	if strings.EqualFold(profile.NodeKind, "external") || profile.External != nil {
 		path.Topology = "external"
@@ -129,7 +141,12 @@ func captureSpeedLabIdentity(a *app) (speedLabPathIdentity, speedLabPath, error)
 			path.ExternalProtocol = profile.External.Protocol
 		}
 	}
-	if st.Mode == "multihop" {
+	if identity.Linux != nil {
+		if identity.GraphOK || st.Mode == "external-node" || profile.External != nil || strings.EqualFold(profile.NodeKind, "external") {
+			return speedLabPathIdentity{}, speedLabPath{}, errors.New("Speed Lab Linux path conflicts with another selected topology")
+		}
+		path.Description = "actual retained Linux Router path with original activation, process, source, selected DNS and current TUN proof"
+	} else if st.Mode == "multihop" {
 		path.Topology = "multihop"
 		path.EntryID, path.ExitID = graph.EntryID, graph.ExitID
 		path.EntryMode = graph.EntryMode
@@ -226,6 +243,9 @@ func validateSpeedLabIdentity(a *app, identity speedLabPathIdentity) error {
 		identity.Node != nil && (identity.Node.ownedNode == nil || identity.Node.external != nil || identity.Node.tor != nil || identity.External != nil || identity.Tor != nil || identity.GraphOK) {
 		return errors.New("Speed Lab identity mixes incompatible native path owners")
 	}
+	if identity.Linux != nil && (identity.External != nil || identity.Tor != nil || identity.TorEntry != nil || identity.Node != nil || identity.GraphOK) {
+		return errors.New("Speed Lab identity mixes its retained Linux path with another native owner")
+	}
 	session := sessionTrackerFor(a).snapshot(0)
 	if identity.SessionID == "" || session.ID != identity.SessionID || !session.Connected || session.Phase != "connected" || session.PathProof != "passed" || session.RouterID != identity.RouterID {
 		return errors.New("Speed Lab result became stale because the VPN session/path changed")
@@ -234,7 +254,7 @@ func validateSpeedLabIdentity(a *app, identity speedLabPathIdentity) error {
 	st, command := a.state, a.cmd
 	profile, profileOK := a.profileByIDLocked(identity.RouterID)
 	profileToken := liveMeasurementProfileToken(profile)
-	if identity.Node != nil {
+	if identity.Node != nil || identity.Linux != nil {
 		profileToken = desktopOwnedNodeProfileToken(profile)
 	}
 	entryID := identity.Graph.EntryID
@@ -297,7 +317,7 @@ func validateSpeedLabIdentity(a *app, identity speedLabPathIdentity) error {
 			return errors.Join(err, errors.New("Speed Lab result belongs to a changed native Router source"))
 		}
 	}
-	return nil
+	return validateDesktopLinuxNodePath(context.Background(), a, identity.Linux)
 }
 
 func (a *app) speedLabSnapshotTemporary() (speedLabTemporarySnapshot, error) {
