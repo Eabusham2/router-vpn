@@ -96,6 +96,7 @@ jobs:
       - name: Capture original copied and unlinked native main-image identities
         run: python3 deploy/test_macos_image_identity.py
       - name: Prove complete managed generation and original-image refusal
+        id: managed-generation
         run: python3 deploy/test_macos_generation.py
       - name: Prove installed supervisor, native peer identity and joined AppKit shutdown
         run: |
@@ -106,6 +107,9 @@ jobs:
           python3 deploy/test_macos_installer_entry.py
           python3 deploy/test_macos_installer_trust.py
           python3 deploy/test_macos_native_install.py --inventory-baseline "$RUNNER_TEMP/routervpn-macos-before.json"
+      - name: Prove managed inventory through the actual complete host process list
+        if: ${{ !cancelled() && steps.managed-generation.outcome == 'success' }}
+        run: python3 deploy/test_macos_generation.py --native-full-host-inventory
 
   contract:
     concurrency:

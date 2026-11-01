@@ -2,6 +2,7 @@
 """Exercise managed generation receipts using original filesystem objects."""
 from __future__ import annotations
 
+import argparse
 import ctypes
 import hashlib
 import importlib.util
@@ -268,7 +269,7 @@ class NativeGenerationReceipt(F.NativeMainImage):
                       (result.stdout + result.stderr)[-8000:])
         return result
 
-    def test_actual_unlinked_matching_copy_is_blocked_by_complete_original_generation(self):
+    def complete_native_installation(self):
         installed = self.base/'installed'; installed.mkdir(mode=0o755)
         for tree in I.CODE_TREES: (installed/tree).mkdir(mode=0o755)
         for name in M.REQUIRED_IMAGES:
@@ -290,6 +291,10 @@ class NativeGenerationReceipt(F.NativeMainImage):
         self.codesign('--verify', '--deep', '--strict', application)
         for name in M.REQUIRED_IMAGES:
             self.codesign('--verify', '--strict', installed/name)
+        return installed, application
+
+    def test_actual_unlinked_matching_copy_is_blocked_by_complete_original_generation(self):
+        installed, application = self.complete_native_installation()
         # The negative control uses a separate copy that first verifies, then
         # loses exactly its sealed Info.plist. The original receipt fixture and
         # its executable bytes remain untouched by this deliberate defect.
@@ -320,16 +325,135 @@ class NativeGenerationReceipt(F.NativeMainImage):
         print('Actual complete generation blocked its copied/unlinked native image and refused a missing original member.', flush=True)
 
 
+class NativeHostManagedInventory(NativeGenerationReceipt):
+    inventory_installer = I
+
+    def test_actual_full_host_inventory_requires_the_original_complete_generation(self):
+        installer = self.inventory_installer
+        generation = installer.GENERATION
+        installed, _ = self.complete_native_installation()
+        generation.write_prepared(installed, installed, generation.receipt_path(installed),
+                                  installer.CODE_TREES, installer.CODE_FILES, installer.FILES.ordinary)
+        foreign, foreign_file = self.copy_image('/bin/cat', 'full-host-foreign-image')
+        unrelated = self.launch(foreign)
+        foreign_identity = generation.IMAGE.main_image_identity(
+            self.library, unrelated.pid, installer.native_process_state, system=self.system)
+        self.assertIn(foreign_identity['code_directory_hash'], foreign_file['code_directory_hashes'])
+        foreign.unlink()
+        with generation.capture_receipt(installed, installer.CODE_TREES,
+                                        installer.CODE_FILES, installer.FILES.ordinary) as captured:
+            self.assertNotIn(foreign_identity['code_directory_hash'], captured.hashes)
+
+            def scan(observations):
+                original = captured.require_foreign_image
+
+                def observe(identity):
+                    record = {'identity': dict(identity), 'accepted': False}
+                    observations.append(record)
+                    original(identity)
+                    record['accepted'] = True
+
+                # Observe the exact shipping decision, without replacing its
+                # process list, libproc, code identity, or receipt validation.
+                with mock.patch.object(captured, 'require_foreign_image', side_effect=observe):
+                    return installer.running_executables(captured)
+
+            def require_positive_scan():
+                observations = []
+                try:
+                    paths = scan(observations)
+                except Exception as error:
+                    print('Actual full-host managed inventory remains refused; '
+                          'no successful inventory or defect evidence is claimed: ' + str(error)[-1000:], flush=True)
+                    raise
+                self.assertIn(str(Path(sys.executable).resolve()), {str(Path(path).resolve()) for path in paths},
+                              'Full-host managed inventory lost the actual executing interpreter')
+                self.assertIn({'identity': foreign_identity, 'accepted': True}, observations,
+                              'Full-host inventory did not prove the exact original foreign child')
+                self.assertIsNone(unrelated.poll(), 'Foreign original child exited before the complete host scan')
+                captured.verify()
+                return len(paths)
+
+            before_count = require_positive_scan()
+            owned, owned_file = self.copy_image(installed/'router-vpn-client', 'full-host-owned-image')
+            owner = self.launch(owned, '120')
+            owned_identity = generation.IMAGE.main_image_identity(
+                self.library, owner.pid, installer.native_process_state, system=self.system)
+            self.assertIn(owned_identity['code_directory_hash'], owned_file['code_directory_hashes'])
+            self.assertIn(owned_identity['code_directory_hash'], captured.hashes)
+            owned.unlink()
+            rejected = []
+            with self.assertRaisesRegex(RuntimeError, 'previous owned native processes',
+                                        msg='Matching copied/unlinked original child did not block the full host inventory'):
+                scan(rejected)
+            self.assertIn({'identity': owned_identity, 'accepted': False}, rejected,
+                          'An unrelated failure replaced the exact matching original-image refusal')
+            self.assertEqual(owned_identity, generation.IMAGE.main_image_identity(
+                self.library, owner.pid, installer.native_process_state, system=self.system))
+            self.assertIsNone(owner.poll(), 'Matching original child exited before its refusal was proved')
+            owner.kill(); owner.communicate(timeout=3)
+            self.assertIsNotNone(owner.returncode, 'Original matching child was not joined before revalidation')
+            after_count = require_positive_scan()
+        print('Actual full-host managed inventory passed, rejected its exact copied/unlinked original child, '
+              'and passed again only after that child was joined: ' +
+              json.dumps({'before_paths': before_count, 'after_paths': after_count,
+                          'foreign': foreign_identity, 'owned': owned_identity,
+                          'scope': 'managed inventory; first-install, legacy and package acceptance remain separate'},
+                         sort_keys=True), flush=True)
+
+
+def full_host_inventory_gate():
+    method = 'test_actual_full_host_inventory_requires_the_original_complete_generation'
+    result = unittest.TextTestRunner(verbosity=2).run(NativeHostManagedInventory(method))
+    if not result.wasSuccessful():
+        raise SystemExit(1)
+    # Only a successful real full-host baseline authorizes reporting these
+    # executed defects. Each variant still uses real native files/processes.
+    mutations = (
+        ('fabricated-empty-inventory', ROOT/'client/install-macos-native.py',
+         'def running_executables(generation=None):\n',
+         'def running_executables(generation=None):\n    return [] # fabricate empty full-host inventory\n',
+         'Full-host managed inventory lost the actual executing interpreter'),
+        ('accept-matching-native-image', TARGET, 'if value in self.hashes:', 'if False:',
+         'Matching copied/unlinked original child did not block the full host inventory'),
+    )
+    for name, target, needle, replacement, witness in mutations:
+        source = target.read_text()
+        if source.count(needle) != 1:
+            raise AssertionError('Full-host native control lost its exact shipping source seam: ' + name)
+        changed = source.replace(needle, replacement, 1)
+        installer = T.load(changed) if target != TARGET else T.load((ROOT/'client/install-macos-native.py').read_text())
+        if target == TARGET: installer.GENERATION = generation_source(changed)
+        broken = type('BrokenNativeHostManagedInventory', (NativeHostManagedInventory,), {'inventory_installer': installer})
+        output = io.StringIO()
+        result = unittest.TextTestRunner(stream=output).run(broken(method))
+        if result.wasSuccessful() or result.errors or not result.failures or witness not in output.getvalue():
+            raise AssertionError('Full-host native defect lacked its intended actual assertion: ' + name + '\n' + output.getvalue()[-8000:])
+        print('Rejected executed full-host managed-inventory defect: ' + name +
+              ' source_sha256=' + hashlib.sha256(changed.encode()).hexdigest(), flush=True)
+
+
 def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--native-full-host-inventory', action='store_true',
+                        help='Require actual full-host managed inventory; unknown native images remain failures')
+    arguments = parser.parse_args()
+    if arguments.native_full_host_inventory and sys.platform != 'darwin':
+        raise RuntimeError('Full-host native managed inventory requires actual macOS; no skipped success is permitted')
     if os.geteuid() != 0:
         owner = load(ROOT/'deploy/test_desktop_socket_uid.py', 'managed_generation_elevation')
         sudo = owner.privilege_tool()
         if sudo is None: raise RuntimeError('Generation ownership tests require root in temporary directories')
-        raise SystemExit(subprocess.run([sudo, '-n', '--', sys.executable, str(Path(__file__).resolve())]).returncode)
+        raise SystemExit(subprocess.run([sudo, '-n', '--', sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]]).returncode)
     paths = [TARGET, ROOT/'client/install-macos-image.py', ROOT/'client/install-macos-native.py',
              ROOT/'client/install-linux-native.py', ROOT/'cmd/client/install_macos_bootstrap_darwin.go',
              ROOT/'deploy/test_macos_image_identity.py', ROOT/'deploy/test_macos_native_install.py', Path(__file__).resolve()]
     before = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+    if arguments.native_full_host_inventory:
+        full_host_inventory_gate()
+        if before != {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}:
+            raise RuntimeError('Full-host managed-inventory source changed during verification')
+        return
     suites = [GenerationReceipt, ManagedProcessInventory]
     if sys.platform == 'darwin': suites.append(NativeGenerationReceipt)
     for case in suites:
