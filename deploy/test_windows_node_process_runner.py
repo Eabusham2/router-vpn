@@ -171,8 +171,8 @@ class NodeProcessRunner(unittest.TestCase):
              patch("sys.stdout", new_callable=io.StringIO):
             GATE.execute()
         self.assertEqual(len(executions), 2 + len(controls))
-        self.assertIn("-test.timeout=240s", executions[0][0])
-        self.assertEqual(executions[0][1], 255)
+        self.assertIn("-test.timeout=360s", executions[0][0])
+        self.assertEqual(executions[0][1], 375)
         for command, timeout in executions[1:]:
             if Path(command[0]).name == "node-all.test.exe":
                 self.assertIn("-test.timeout=240s", command)

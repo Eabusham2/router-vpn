@@ -580,13 +580,14 @@ def execute(go="go", *, env=None):
             raise ValueError("Actual Windows Node process fixture did not compile:\n" + output[-32768:])
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
         expression = "^(" + "|".join(REQUIRED) + ")$"
-        # The expanded public graph/layer matrix is sequential: the actual
-        # Windows baseline already spent 119 s in passing cases before its
-        # final ownership leaves. Bound the aggregate separately from every
-        # unchanged operation deadline and 60 s individual negative control.
+        # The expanded public graph/layer matrix is sequential.
+        # The native 74db baseline passed 82 groups in 237.10 s, then reached
+        # its old 240 s cap three seconds into another required group. Keep a
+        # bounded aggregate for the complete selection without changing any
+        # operation deadline or the 60/75 s individual negative-control bounds.
         status, output = NATIVE.run(
-            [binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=240s", "-test.v"],
-            cwd=ROOT / "cmd/client", env=captured, timeout=255)
+            [binary, "-test.run=" + expression, "-test.count=1", "-test.timeout=360s", "-test.v"],
+            cwd=ROOT / "cmd/client", env=captured, timeout=375)
         report_baseline(status, output)
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("Native Node process fixture changed during execution")
