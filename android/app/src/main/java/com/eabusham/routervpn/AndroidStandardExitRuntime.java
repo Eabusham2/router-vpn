@@ -33,7 +33,31 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
     private String externalNativeSession="",externalHomeSession="",externalID="";
     private String requestedExecution="local";
     private AndroidStandardExitStore.Entry activeOrdinaryEntry;
+    private MeasurementSource activeMeasurementSource;
     private AndroidTorCompareRuntime torComparison;
+
+    /** Original launch sources retained with the final adopted native path.
+     * A later measurement must not attach today's saved profile to an older Box. */
+    static final class MeasurementSource {
+        final AndroidHomeStateStore.Snapshot home;
+        final String nativeSession,exitSource,entryKind,entrySource,requestedExecution,selectedExecution;
+        final File routerEntry;
+        private MeasurementSource(AndroidHomeStateStore.Snapshot home,String nativeSession,String exitSource,
+                                  String entryKind,String entrySource,File routerEntry,String requested,String selected){
+            this.home=home;this.nativeSession=nativeSession;this.exitSource=exitSource;this.entryKind=entryKind;
+            this.entrySource=entrySource;this.routerEntry=routerEntry;requestedExecution=requested;selectedExecution=selected;
+        }
+        void requireHome(AndroidHomeStateStore.Snapshot current){
+            if(current==null||!home.sessionId.equals(current.sessionId)||home.pathGeneration!=current.pathGeneration
+                    ||!current.connected||!"connected".equals(current.phase)||!"passed".equals(current.pathProof)
+                    ||!"external".equals(current.logicalMode)||!home.runtimeMode.equals(current.runtimeMode)
+                    ||!home.actualBase.equals(current.actualBase)||!home.activeExternalId.equals(current.activeExternalId)
+                    ||!home.activeExternalProtocol.equals(current.activeExternalProtocol)||!home.activeEntryId.equals(current.activeEntryId)
+                    ||!home.activeEntryMode.equals(current.activeEntryMode)||!home.expectedExternalIp.equals(current.expectedExternalIp)
+                    ||!current.activeNodeId.isEmpty()||!current.activeExitId.isEmpty())
+                throw new IllegalStateException("The external benchmark belongs to another proved path.");
+        }
+    }
 
     AndroidStandardExitRuntime(Context context,NativeSingBoxController singBox){
         this.context=context.getApplicationContext();
@@ -84,6 +108,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         disconnectRequested=false;revalidationTeardown=false;teardownInProgress=false;
         torNativeSession="";torHomeSession="";torExternalID="";
         activeOrdinaryEntry=null;
+        activeMeasurementSource=null;
         externalNativeSession="";externalHomeSession="";externalID="";requestedExecution=execution;
         AndroidHomeStateStore.Snapshot initialHome=AndroidHomeStateStore.snapshot(context);
         // Capture test ownership before asynchronous work. A late callback after
@@ -203,6 +228,9 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                     AndroidStartupPolicy.recordExternalExecution(context,last,capturedHome);
                     LayeredVpnService.startExternalAutomaticMTU(externalNativeSession,externalID,capturedHome.sessionId);
                 }
+                activeMeasurementSource=new MeasurementSource(AndroidHomeStateStore.snapshot(context),session.sessionId,
+                        AndroidStandardExitStore.snapshot(exit),direct?"direct":ordinaryEntry!=null?"external":"router-vpn",
+                        capturedEntry,direct||ordinaryEntry!=null?null:entry.getCanonicalFile(),execution,selectedExecution);
             }
             cb.finished(true,tor?"Connected: "+(direct?"direct Tor":entryMode+" entry → Tor ["+selectedExecution+"]")+". Captured circuit and DNS proof passed; current exit "+observed
                     :"Connected: "+(direct?"direct ":entryMode+" entry → ")+exit.protocol+(direct?"":" ["+selectedExecution+"]")+". Captured entry, selected DNS and public exit proof passed: "+observed);
@@ -281,6 +309,24 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
     synchronized String capturedRequestedExecution(AndroidHomeStateStore.Snapshot owner)throws Exception {
         if(owner!=null&&AndroidTorProfile.isTor(owner.activeExternalProtocol))capturedTorExit(owner);else capturedExternalExit(owner);
         return requestedExecution;
+    }
+
+    synchronized MeasurementSource captureMeasurementSource(String exitID)throws Exception {
+        MeasurementSource captured=activeMeasurementSource;
+        if(captured==null||exitID==null||!exitID.equals(captured.home.activeExternalId))
+            throw new IllegalStateException("Connect and prove the selected external node before its 50-sample test.");
+        requireMeasurementSource(captured);return captured;
+    }
+
+    synchronized void requireMeasurementSource(MeasurementSource captured)throws Exception {
+        if(captured==null||captured!=activeMeasurementSource||disconnectRequested||closed.get()||revalidationTeardown||teardownInProgress)
+            throw new IllegalStateException("The original external benchmark owner changed.");
+        captured.requireHome(AndroidHomeStateStore.snapshot(context));
+        if(AndroidHomeStateStore.emergencyDisconnectPending(context)
+                ||!captured.selectedExecution.equals(capturedExternalExecution(captured.home))
+                ||!captured.requestedExecution.equals(requestedExecution)
+                ||!captured.nativeSession.equals(AndroidTorProfile.isTor(captured.home.activeExternalProtocol)?torNativeSession:externalNativeSession))
+            throw new IllegalStateException("The external benchmark lost its captured execution or native owner.");
     }
 
     synchronized AndroidStandardExitStore.Entry capturedOrdinaryEntry(AndroidHomeStateStore.Snapshot owner)throws Exception {

@@ -6,7 +6,12 @@ import java.util.UUID;
 
 /** A bounded request on one retained native path, with MTU exclusion through drain. */
 final class AndroidNativeHopMeasurement {
-    interface Callback { void progress(String status); void finished(String status,Throwable error); }
+    interface Callback {
+        void progress(String status); void finished(String status,Throwable error);
+        /** Called after the exact native workers drain, while cancellation and
+         * the MTU hold still belong to this request. */
+        default void commit(LayeredVpnService.HopMeasurementOwner owner,String status)throws Exception{}
+    }
     private static final class Job {
         final String id=UUID.randomUUID().toString().replace("-","");
         final Object lease;
@@ -21,6 +26,15 @@ final class AndroidNativeHopMeasurement {
     boolean isRunning(){return active!=null;}
 
     void run(Object borrowedLease,Callback callback){
+        run(borrowedLease,null,"","",-1,callback);
+    }
+
+    void runLatency(String exitID,String nativeSession,String homeSession,long pathGeneration,Callback callback){
+        if(exitID==null||exitID.isEmpty()){callback.finished(null,new IllegalArgumentException("Select a captured external node."));return;}
+        run(null,exitID,nativeSession,homeSession,pathGeneration,callback);
+    }
+
+    private void run(Object borrowedLease,String exitID,String nativeSession,String homeSession,long pathGeneration,Callback callback){
         final Job job;
         synchronized(this){
             if(active!=null){callback.finished(null,new IllegalStateException("A native path measurement still owns its request."));return;}
@@ -28,7 +42,8 @@ final class AndroidNativeHopMeasurement {
             try{
                 lease=borrowedLease==null?AndroidMTUMeasurementGate.acquire():borrowedLease;
                 if(!AndroidMTUMeasurementGate.owns(lease))throw new IllegalStateException("The captured MTU measurement hold changed.");
-                job=new Job(lease,borrowedLease==null,callback);job.owner=LayeredVpnService.captureHopMeasurement(job.id);active=job;
+                job=new Job(lease,borrowedLease==null,callback);
+                job.owner=exitID==null?LayeredVpnService.captureHopMeasurement(job.id):LayeredVpnService.captureExternalHopMeasurement(job.id,exitID,nativeSession,homeSession,pathGeneration);active=job;
             }catch(Throwable error){if(borrowedLease==null)AndroidMTUMeasurementGate.release(lease);callback.finished(null,error);return;}
         }
         LayeredVpnService.quiesceMTUForSpeedLab(error->{
@@ -37,7 +52,7 @@ final class AndroidNativeHopMeasurement {
         });
     }
 
-    void cancel(){Job job=active;if(job==null)return;job.cancelled=true;job.owner.cancel();}
+    void cancel(){final Job job;synchronized(this){job=active;if(job==null)return;job.cancelled=true;}job.owner.cancel();}
 
     private void measure(Job job,Throwable initial){
         Throwable failure=initial;String result=null;
@@ -72,8 +87,12 @@ final class AndroidNativeHopMeasurement {
                 catch(Throwable error){failure=error;}
             }
         }
-        if(job.cancelled&&failure==null)failure=new IllegalStateException("Path measurement cancelled.");
-        synchronized(this){if(active!=job)return;active=null;if(job.releaseLease)AndroidMTUMeasurementGate.release(job.lease);}
+        synchronized(this){
+            if(active!=job)return;
+            if(job.cancelled&&failure==null)failure=new IllegalStateException("Path measurement cancelled.");
+            if(failure==null)try{job.callback.commit(job.owner,result);}catch(Throwable error){failure=error;}
+            active=null;if(job.releaseLease)AndroidMTUMeasurementGate.release(job.lease);
+        }
         job.callback.finished(failure==null?result:null,failure);
     }
 

@@ -202,7 +202,7 @@ final class AndroidHomeStateStore {
     static final class Snapshot {
         boolean connected;
         long pathGeneration;
-        String expectedExternalIp="";
+        String expectedExternalIp="",pathProof="pending",actualBase="",activeNodeId="";
         String logicalMode="", phase="off", activeEntryId="", activeExitId="", activeEntryMode="wg", runtimeMode="",sessionId="home-session",activeExternalId="external",activeExternalProtocol="socks5";
     }
     static volatile Snapshot current = new Snapshot();
@@ -221,17 +221,17 @@ final class AndroidHomeStateStore {
         s.activeEntryId=entry; s.activeEntryMode=entryMode; s.activeExitId=exit; s.runtimeMode=mode; s.sessionId="multi-session"; current=s; return s.sessionId;
     }
     static void connectedMultihop(Context c, String entry, String exit, String mode, String entryMode) {
-        beginMultihop(c,entry,exit,mode,entryMode); beforeConnectedWrite(); current.connected=true; current.phase="connected";
+        beginMultihop(c,entry,exit,mode,entryMode); beforeConnectedWrite(); current.connected=true; current.phase="connected"; current.pathProof="passed";
     }
     static void beginExternal(Context c, String id, String name, String protocol, String ip, String base) {
         Snapshot s=new Snapshot();s.logicalMode="external";s.phase="connecting";current=s;
     }
-    static String beginTorExternal(Context c,String id,String name,String protocol,String entry,String mode){beginExternal(c,id,name,protocol,"",mode);current.activeExternalProtocol=protocol;current.activeExternalId=id;current.activeEntryId=entry;current.activeEntryMode=mode;return "home-session";}
-    static boolean connectedTorExternal(Context c,Snapshot s,String ip){if(!s.sessionId.equals(current.sessionId))return false;beforeConnectedWrite();current.connected=true;current.phase="connected";return true;}
+    static String beginTorExternal(Context c,String id,String name,String protocol,String entry,String mode){beginExternal(c,id,name,protocol,"",mode);current.activeExternalProtocol=protocol;current.activeExternalId=id;current.activeEntryId=entry;current.activeEntryMode=entry.isEmpty()?"":mode;return "home-session";}
+    static boolean connectedTorExternal(Context c,Snapshot s,String ip){if(!s.sessionId.equals(current.sessionId))return false;beforeConnectedWrite();current.connected=true;current.phase="connected";current.pathProof="passed";return true;}
     static String beginPolicyExternal(Context c,String id,String name,String protocol,String expected,String entry,String mode){beginTorExternal(c,id,name,protocol,entry,mode);current.expectedExternalIp=expected;return "home-session";}
-    static boolean connectedPolicyExternal(Context c,Snapshot s,String ip){if(!s.sessionId.equals(current.sessionId)||s.pathGeneration!=current.pathGeneration)return false;beforeConnectedWrite();current.connected=true;current.phase="connected";return true;}
+    static boolean connectedPolicyExternal(Context c,Snapshot s,String ip){if(!s.sessionId.equals(current.sessionId)||s.pathGeneration!=current.pathGeneration)return false;beforeConnectedWrite();current.connected=true;current.phase="connected";current.pathProof="passed";return true;}
     static void connectedExternal(Context c, String id, String name, String protocol, String ip, String base, String observed) {
-        beginExternal(c,id,name,protocol,ip,base); beforeConnectedWrite(); current.connected=true; current.phase="connected";
+        beginExternal(c,id,name,protocol,ip,base); beforeConnectedWrite(); current.connected=true; current.phase="connected"; current.pathProof="passed";
     }
     static void beginPathRevalidation(Context c, String reason) { current.connected=false;current.phase="disconnecting"; }
     static void warning(Context c, String warning) {}
@@ -453,7 +453,7 @@ public final class RuntimeTeardownHarness {
     }
     static void tests(String kind) {
         if("tor".equals(kind)){torTests();ordinaryTorTests();torCompareRuntimeTests();torLastRuntimeTests();}
-        if("external".equals(kind)){externalTests();ordinaryLastRuntimeTests();}
+        if("external".equals(kind)){externalTests();ordinaryLastRuntimeTests();benchmarkSourceTests();}
         {
             test(kind+" temporary cleanup retains its exact Home owner",()->{
                 try(Owner owner=new Owner(kind)){Callback cb=new Callback(0);owner.connect(cb);cb.awaitDone();check(cb.ok&&cb.ownerCalls==1&&cb.homeOwner.equals(AndroidHomeStateStore.current.sessionId),"runtime did not expose its exact captured Home owner");
@@ -670,6 +670,36 @@ public final class RuntimeTeardownHarness {
         });
     }
 
+
+    static void benchmarkSourceTests(){
+        for(String shape:new String[]{"direct","router","ordinary"})test("benchmark retains original adopted "+shape+" sources",()->{
+            try(Owner owner=new Owner(shape.equals("ordinary")?"tor":"external")){
+                AndroidStandardExitStore.Entry exit=shape.equals("ordinary")?torExit():new AndroidStandardExitStore.Entry();
+                AndroidStandardExitStore.Entry entry=shape.equals("ordinary")?ordinary("shadowsocks"):null;
+                String expected=AndroidStandardExitStore.snapshot(exit),entrySource=entry==null?"captured-measure-entry":AndroidStandardExitStore.snapshot(entry);
+                AndroidExternalPolicy.entryVersion=entrySource;Callback cb=new Callback(0);java.io.File file=new java.io.File("a".repeat(32)+".json");
+                if(shape.equals("direct"))owner.external.connectDirect(exit,cb);else if(shape.equals("ordinary"))owner.external.connectOrdinary(entry,exit,"local",cb);else owner.external.connect(file,exit,"shadowsocks","auto",cb);
+                cb.awaitDone();check(cb.ok,"benchmark fixture path failed to adopt");AndroidStandardExitRuntime.MeasurementSource receipt=owner.external.captureMeasurementSource(exit.id);
+                check(receipt.exitSource.equals(expected)&&receipt.nativeSession.equals("native-session")&&receipt.home.connected&&receipt.home.pathProof.equals("passed"),"benchmark source was not captured after final native proof");
+                check(receipt.entryKind.equals(shape.equals("router")?"router-vpn":shape.equals("ordinary")?"external":"direct")&&receipt.entrySource.equals(shape.equals("direct")?"":entrySource),"benchmark borrowed selected or mutable entry source");
+                if(shape.equals("router"))check(receipt.routerEntry.equals(file.getCanonicalFile())&&receipt.requestedExecution.equals("auto")&&receipt.selectedExecution.equals("server"),"benchmark lost exact Router path or selected Compare result");
+                exit.name="later caller mutation";if(entry!=null)entry.name="later entry mutation";
+                check(owner.external.captureMeasurementSource(receipt.home.activeExternalId)==receipt&&receipt.exitSource.equals(expected),"benchmark source was rebuilt from caller selection");
+                owner.disconnect();awaitIdle(owner);boolean rejected=false;try{owner.external.requireMeasurementSource(receipt);}catch(Exception e){rejected=true;}check(rejected,"disconnected native measurement source remained current");
+            }
+        });
+        for(String fault:new String[]{"wrong-selection","generation","proof","execution","native","replacement"})test("benchmark source rejects "+fault,()->{
+            try(Owner owner=new Owner("external")){
+                Callback cb=new Callback(0);owner.connect(cb);cb.awaitDone();check(cb.ok,"benchmark fixture failed");AndroidStandardExitRuntime.MeasurementSource receipt=owner.external.captureMeasurementSource("external");
+                if(fault.equals("generation")){AndroidHomeStateStore.Snapshot before=AndroidHomeStateStore.current,next=new AndroidHomeStateStore.Snapshot();for(java.lang.reflect.Field field:AndroidHomeStateStore.Snapshot.class.getDeclaredFields()){field.setAccessible(true);field.set(next,field.get(before));}next.pathGeneration++;AndroidHomeStateStore.current=next;}
+                if(fault.equals("proof"))AndroidHomeStateStore.current.pathProof="pending";
+                if(fault.equals("execution"))LayeredVpnService.externalExecutionOverride="server";
+                if(fault.equals("native"))LayeredVpnService.externalHealthy=false;
+                if(fault.equals("replacement")){java.lang.reflect.Field f=AndroidStandardExitRuntime.class.getDeclaredField("activeMeasurementSource");f.setAccessible(true);f.set(owner.external,null);}
+                boolean rejected=false;try{if(fault.equals("wrong-selection"))owner.external.captureMeasurementSource("other");else owner.external.requireMeasurementSource(receipt);}catch(Exception e){rejected=true;}check(rejected,"stale benchmark receipt accepted: "+fault);
+            }
+        });
+    }
     static void externalTests(){
         test("external startup deadline covers shared execution and final proof",()->{
             check(AndroidStandardExitRuntime.startTimeoutMillis(false,"local")==90000L,"ordinary local startup budget changed");

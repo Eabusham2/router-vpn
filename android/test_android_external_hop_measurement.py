@@ -19,9 +19,10 @@ spec.loader.exec_module(T)
 SOURCES = dict(T.SOURCES)
 SOURCES["io/nekohasekai/libbox/RouterHopMeasurement.java"] = r'''package io.nekohasekai.libbox;
 public class RouterHopMeasurement {
- public int closes,invalidations,starts,cancels,drains;public String request="";public boolean closePending;public Runnable onStart,onStatus;
+ public int closes,invalidations,starts,latencyStarts,cancels,drains;public String exitID="";public String request="";public boolean closePending;public Runnable onStart,onStatus;
  public void close(){closes++;if(closePending)throw new IllegalStateException("native worker pending");}public void networkChanged(){invalidations++;}
  public void start(String id,long bytes){if(bytes!=8388608)throw new AssertionError("unbounded request");starts++;request=id;if(onStart!=null)onStart.run();}
+ public void startLatency(String id,String exit){latencyStarts++;request=id;exitID=exit;if(onStart!=null)onStart.run();}
  public void cancel(String id){if(!id.equals(request))throw new AssertionError("cancel lost request");cancels++;}
  public void drain(String id){if(!id.equals(request))throw new AssertionError("drain lost request");drains++;}
  public String statusJSON(){if(onStatus!=null)onStatus.run();return "{\"request_id\":\""+request+"\",\"complete\":false}";}
@@ -125,7 +126,31 @@ public class ExternalHopMeasurementTest {
   }
   reject(()->LayeredVpnService.captureHopMeasurement("not-a-request"));
  }
- public static void main(String[] args)throws Exception{exactAndRejected();lateFactory();serviceAdoption();capturedRequests();System.out.println("Android external/Tor measurement ownership: "+checks+" checks; exact proof, late factories, native adoption, captured requests and retained teardown");}
+
+ static AndroidHomeStateStore.Snapshot externalHome(boolean tor){AndroidHomeStateStore.Snapshot h=new AndroidHomeStateStore.Snapshot();h.connected=true;h.phase="connected";h.pathProof="passed";h.logicalMode="external";h.runtimeMode=tor?"tor":"socks5";h.actualBase="wg";h.sessionId="home-owned";h.pathGeneration=7;h.activeExternalId="exit-owned";h.activeExternalProtocol=h.runtimeMode;h.activeEntryId="entry-owned";h.activeEntryMode="wg";h.activeNodeId="";h.activeExitId="";h.expectedExternalIp=tor?"":"8.8.4.4";return h;}
+ static void externalLatencyRequests()throws Exception{
+  final String request="a".repeat(32);
+  for(boolean tor:new boolean[]{false,true})for(String fault:new String[]{"valid","wrong-exit","wrong-native","wrong-home","wrong-generation","proof","config","session-file","Home-generation","Home-entry","Home-DNS-proof","owner","network","emergency","late-start"}){
+   Libbox.measurementReset();Fixture f=new Fixture(tor,true);f.prove();LayeredVpnService s=service(f.server);RouterHopMeasurement probe=f.create();adopt(s,probe,f.server,0);
+   AndroidHomeStateStore.Snapshot home=externalHome(tor);AndroidHomeStateStore.value=home;AndroidHomeStateStore.emergency=false;
+   field(tor?"torSession":"externalSession").set(s,tor?f.tor:f.external);field(tor?"torHomeOwner":"externalHomeOwner").set(s,home);field("executionProved").setBoolean(s,true);field("state").set(s,"UP");field("activeConfig").set(s,"original-sealed-DNS-and-route");java.io.File session=java.nio.file.Files.createTempDirectory("external50-service-").toFile();field("activeSession").set(s,session);field("currentService").set(null,new java.lang.ref.WeakReference<>(s));
+   if(fault.startsWith("wrong-")){
+    reject(()->LayeredVpnService.captureExternalHopMeasurement(request,fault.equals("wrong-exit")?"other":"exit-owned",fault.equals("wrong-native")?"other":"session-owned",fault.equals("wrong-home")?"other":"home-owned",fault.equals("wrong-generation")?8:7));
+    check(probe.starts==0&&probe.latencyStarts==0,"unowned latency capture started traffic: "+fault);s.onDestroy();continue;
+   }
+   LayeredVpnService.HopMeasurementOwner owner=LayeredVpnService.captureExternalHopMeasurement(request,"exit-owned","session-owned","home-owned",7);
+   java.util.concurrent.atomic.AtomicLong generation=(java.util.concurrent.atomic.AtomicLong)field("lifecycle").get(s);
+   if(fault.equals("late-start"))probe.onStart=()->generation.incrementAndGet();
+   if(fault.equals("late-start"))reject(owner::start);else owner.start();
+   check(owner.started()&&probe.latencyStarts==1&&probe.starts==0&&probe.exitID.equals("exit-owned"),"latency request invoked transfer API or changed native exit");
+   if(fault.equals("proof"))f.cancel();if(fault.equals("config"))field("activeConfig").set(s,"changed-DNS-or-route");if(fault.equals("session-file"))field("activeSession").set(s,new java.io.File(session.getPath()));if(fault.equals("owner"))field("hopMeasurement").set(s,new RouterHopMeasurement());if(fault.equals("network"))android.net.ConnectivityManager.networks=new android.net.Network[]{};if(fault.equals("emergency"))AndroidHomeStateStore.emergency=true;
+   if(fault.startsWith("Home-")){AndroidHomeStateStore.Snapshot next=externalHome(tor);if(fault.equals("Home-generation"))next.pathGeneration++;if(fault.equals("Home-entry"))next.activeEntryId="replacement-entry";if(fault.equals("Home-DNS-proof"))next.pathProof="pending";AndroidHomeStateStore.value=next;}
+   AtomicInteger writes=new AtomicInteger();if(fault.equals("valid")){owner.status();owner.commit(writes::incrementAndGet);check(writes.get()==1&&owner.requestID().equals(request)&&!owner.configIdentity().isEmpty()&&!owner.networkIdentity().isEmpty(),"current native receipt could not publish its bound identity");}
+   else{reject(owner::status);reject(()->owner.commit(writes::incrementAndGet));check(writes.get()==0,"stale native owner allowed durable result: "+fault);}
+   owner.cancel();owner.drain();check(probe.cancels==1&&probe.drains==1,"latency replacement lost original cancel/drain handle");field("hopMeasurement").set(s,probe);AndroidHomeStateStore.emergency=false;s.onDestroy();
+  }
+ }
+ public static void main(String[] args)throws Exception{exactAndRejected();lateFactory();serviceAdoption();capturedRequests();externalLatencyRequests();System.out.println("Android external/Tor measurement ownership: "+checks+" checks; exact proof, late factories, native adoption, captured requests and retained teardown");}
 }'''
 
 

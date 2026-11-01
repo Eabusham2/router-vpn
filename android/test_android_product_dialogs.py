@@ -103,10 +103,11 @@ public final class ProductDialogHarness extends android.app.Activity {
  final AndroidUnifiedNodeCatalog catalog=new AndroidUnifiedNodeCatalog();final AndroidTelemetry telemetry=new AndroidTelemetry();
  final Connection connection=new Connection();final Button fastestButton=new Button(this);final CheckBox multihopToggle=new CheckBox(this);
  final TextView liveLatency=new TextView(this);AndroidTelemetry.PathResult currentPathReceipt;boolean resumed=true,telemetryBusy;long lastTelemetryAt,telemetryGeneration;double currentPathMs;
- boolean busy;String selected="",profile="",pair="",entry="",exit="",message="",infoTitle="",info="";int routed,refreshes;
+ boolean busy;String selected="",profile="",pair="",entry="",exit="",message="",infoTitle="",info="";int routed,refreshes,externalBenchmarks;
  SharedPreferences prefs(){return saved;}boolean mutationBusy(){return busy;}void toast(String text){message=text;}
  void refreshNodes(){}void refreshAll(){refreshes++;}void refreshMap(){}void dialog(String title,String text){infoTitle=title;info=text;}
  public boolean isDestroyed(){return false;}void showNodeSort(){pair="sort";}void showSavedStatistics(){infoTitle="Saved statistics";}void runCurrentSpeed(){if(!connection.isConnected()){toast("Connect first");return;}telemetry.speedTest(8<<20,(r,e)->dialog("Real VPN path speed",r.detail()));}void showAddRouter(){showPairDialog();}void showPairDialog(){pair="router";}void openStandardExits(){pair="external";}
+ boolean isExternalSelected(){return "external".equals(saved.getString(SELECTED_KIND,"router-vpn"));}void runExternalBenchmark(){externalBenchmarks++;}
  boolean openSelectedExternal(boolean selectPath){return false;}
  void selectCatalog(AndroidUnifiedNodeCatalog.Item item){selected=item.id;}
  void showProfileActions(AndroidNodeStore.Node node){profile=node.id;}
@@ -140,6 +141,7 @@ HARNESS_SUFFIX = r'''
   h=new ProductDialogHarness();h.showFastConnectMenu();d=shown(4,"Select node");h.telemetry.results.get(0).stale=true;d.clickItem(0);check(h.nodeStore.selections==0&&h.saved.writes==0,"stale measured source cannot be selected");
  }
  static void performance(){
+  ProductDialogHarness selected=new ProductDialogHarness();selected.saved.values.put(SELECTED_KIND,"external");selected.saved.values.put(SELECTED_ID,"provider-only");selected.showPerformance();shown(7,"Performance").clickItem(1);check(selected.externalBenchmarks==1&&selected.telemetry.nodeSamples==0,"selected external benchmark fell back to the active Router node");
   for(int action=0;action<7;action++){
    ProductDialogHarness h=new ProductDialogHarness();h.showPerformance();AlertDialog d=shown(7,"Performance");d.clickItem(action);
    switch(action){case 0:check(h.telemetry.currentSamples==5,"current path actual callback");break;

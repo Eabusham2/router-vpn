@@ -33,6 +33,7 @@ func (m *RouterHopMeasurement) Start(request string, bytes int64)error{
  if bytes<65536||bytes>hopmeasure.MaxBytes{return errors.New("hop transfer size is outside the bounded range")}
  return m.service.Start(request,int(bytes))
 }
+func (m *RouterHopMeasurement) StartLatency(request, exitID string)error{return m.service.StartLatency(request,exitID)}
 func (m *RouterHopMeasurement) Cancel(request string){m.service.Cancel(request)}
 func (m *RouterHopMeasurement) Drain(request string)error{return m.service.Drain(request)}
 func (m *RouterHopMeasurement) StatusJSON()string{return m.service.StatusJSON()}

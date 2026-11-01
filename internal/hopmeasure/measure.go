@@ -78,15 +78,16 @@ type Transfer struct {
 	Bufferbloat  *float64 `json:"bufferbloat_ms,omitempty"`
 }
 type Result struct {
-	ID       string    `json:"node_id"`
-	Role     string    `json:"role"`
-	Kind     string    `json:"kind"`
-	Label    string    `json:"label"`
-	Ready    bool      `json:"ready"`
-	Failure  string    `json:"failure,omitempty"`
-	Idle     *Latency  `json:"idle,omitempty"`
-	Download *Transfer `json:"download,omitempty"`
-	Upload   *Transfer `json:"upload,omitempty"`
+	ID        string            `json:"node_id"`
+	Role      string            `json:"role"`
+	Kind      string            `json:"kind"`
+	Label     string            `json:"label"`
+	Ready     bool              `json:"ready"`
+	Failure   string            `json:"failure,omitempty"`
+	Idle      *Latency          `json:"idle,omitempty"`
+	Download  *Transfer         `json:"download,omitempty"`
+	Upload    *Transfer         `json:"upload,omitempty"`
+	Benchmark *LatencyBenchmark `json:"benchmark,omitempty"`
 }
 type Status struct {
 	Request  string   `json:"request_id"`
@@ -185,7 +186,14 @@ func (s *Service) valid(ctx context.Context) error {
 	return nil
 }
 func (s *Service) Start(id string, size int) error {
-	if !tokenID.MatchString(id) || size < 64<<10 || size > MaxBytes {
+	if size < 64<<10 || size > MaxBytes {
+		return errors.New("invalid bounded hop measurement request")
+	}
+	return s.start(id, func(ctx context.Context) { s.run(ctx, id, size) })
+}
+
+func (s *Service) start(id string, work func(context.Context)) error {
+	if !tokenID.MatchString(id) || work == nil {
 		return errors.New("invalid bounded hop measurement request")
 	}
 	s.mu.Lock()
@@ -219,7 +227,7 @@ func (s *Service) Start(id string, size int) error {
 	s.done = make(chan struct{})
 	done := s.done
 	s.state = Status{Request: id, Stage: "starting", Results: []Result{}}
-	go func() { defer close(done); defer cancel(); defer release(); s.run(ctx, id, size) }()
+	go func() { defer close(done); defer cancel(); defer release(); work(ctx) }()
 	return nil
 }
 func (s *Service) Cancel(id string) {
