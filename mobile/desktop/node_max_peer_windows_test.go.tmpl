@@ -271,6 +271,8 @@ type nodeMAXWFPReply struct {
 	Packets        int64                     `json:"packets"`
 	KEMReceived    int64                     `json:"kem_received"`
 	KEMRejected    int64                     `json:"kem_rejected"`
+	PacketBridge   nodePQWFPBridgeSnapshot   `json:"packet_bridge"`
+	KEMBridge      nodePQWFPBridgeSnapshot   `json:"kem_bridge"`
 	MiddleRaw      int64                     `json:"middle_raw"`
 	MiddleRejected int64                     `json:"middle_rejected"`
 	MiddlePacket   int64                     `json:"middle_packet"`
@@ -432,7 +434,7 @@ func TestRouterVPNDesktopNodeWindowsMAXReferenceProcess(t *testing.T) {
 		if err != nil {
 			t.Fatal("MAX actual native reference readback failed", err)
 		}
-		reply := nodeMAXWFPReply{Schema: 1, AppID: scope, SourceSHA256: digest, Snapshot: snapshot, Updates: f.reference.Updates(), Packets: f.reference.Packets(), KEMReceived: f.server.received.Load(), KEMRejected: f.server.rejected.Load(), MiddleRaw: f.middle.raw.Load(), MiddleRejected: f.middle.rejected.Load(), MiddlePacket: lane(f.middle, f.packet), MiddleKEM: lane(f.middle, f.kem), MiddleOuter: lane(f.middle, f.outerDestination), OuterRaw: f.outer.raw.Load(), OuterRejected: f.outer.rejected.Load(), OuterMiddle: lane(f.outer, f.middleDestination), Queries: f.inner.queries.Load(), Echoes: f.inner.echoes.Load(), Rejected: f.inner.rejected.Load(), Plain: f.reference.PlaintextSeen() || f.middle.plain.Load() || f.outer.plain.Load() || wg.plain.Load() || kem.plain.Load(), Probe: nonce}
+		reply := nodeMAXWFPReply{Schema: 1, AppID: scope, SourceSHA256: digest, Snapshot: snapshot, Updates: f.reference.Updates(), Packets: f.reference.Packets(), KEMReceived: f.server.received.Load(), KEMRejected: f.server.rejected.Load(), PacketBridge: wg.snapshot(), KEMBridge: kem.snapshot(), MiddleRaw: f.middle.raw.Load(), MiddleRejected: f.middle.rejected.Load(), MiddlePacket: lane(f.middle, f.packet), MiddleKEM: lane(f.middle, f.kem), MiddleOuter: lane(f.middle, f.outerDestination), OuterRaw: f.outer.raw.Load(), OuterRejected: f.outer.rejected.Load(), OuterMiddle: lane(f.outer, f.middleDestination), Queries: f.inner.queries.Load(), Echoes: f.inner.echoes.Load(), Rejected: f.inner.rejected.Load(), Plain: f.reference.PlaintextSeen() || f.middle.plain.Load() || f.outer.plain.Load() || wg.plain.Load() || kem.plain.Load(), Probe: nonce}
 		if f.tlsReference != nil {
 			diagnostic := f.tlsReference.process.diagnostics()
 			reply.MLKEMRejected = strings.Contains(diagnostic, "ML-KEM-768 handshake failed > chacha20poly1305: message authentication failed")
@@ -625,7 +627,7 @@ func (p *nodeMAXWFPReference) observe(t *testing.T, action string) nodeMAXWFPRep
 	}
 	reply, err := p.read(10 * time.Second)
 	old := p.reply
-	if err != nil || reply.Schema != 1 || !bytes.Equal(reply.AppID, old.AppID) || reply.SourceSHA256 != old.SourceSHA256 || reply.Source != nil || reply.Password != "" || reply.Updates < old.Updates || reply.Packets < old.Packets || reply.KEMReceived < old.KEMReceived || reply.KEMRejected < old.KEMRejected || reply.Queries < old.Queries || reply.Echoes < old.Echoes || reply.MiddleRaw < old.MiddleRaw || reply.MiddleRejected < old.MiddleRejected || reply.MiddlePacket < old.MiddlePacket || reply.MiddleKEM < old.MiddleKEM || reply.MiddleOuter < old.MiddleOuter || reply.OuterRaw < old.OuterRaw || reply.OuterRejected < old.OuterRejected || reply.OuterMiddle < old.OuterMiddle || old.MLKEMRejected && !reply.MLKEMRejected || old.UserRejected && !reply.UserRejected || old.Plain && !reply.Plain {
+	if err != nil || reply.Schema != 1 || !bytes.Equal(reply.AppID, old.AppID) || reply.SourceSHA256 != old.SourceSHA256 || reply.Source != nil || reply.Password != "" || reply.Updates < old.Updates || reply.Packets < old.Packets || reply.KEMReceived < old.KEMReceived || reply.KEMRejected < old.KEMRejected || !reply.PacketBridge.follows(old.PacketBridge) || !reply.KEMBridge.follows(old.KEMBridge) || reply.Queries < old.Queries || reply.Echoes < old.Echoes || reply.MiddleRaw < old.MiddleRaw || reply.MiddleRejected < old.MiddleRejected || reply.MiddlePacket < old.MiddlePacket || reply.MiddleKEM < old.MiddleKEM || reply.MiddleOuter < old.MiddleOuter || reply.OuterRaw < old.OuterRaw || reply.OuterRejected < old.OuterRejected || reply.OuterMiddle < old.OuterMiddle || old.MLKEMRejected && !reply.MLKEMRejected || old.UserRejected && !reply.UserRejected || old.Plain && !reply.Plain {
 		t.Fatal("MAX reference changed its original source or regressed actual observations", err)
 	}
 	p.reply = reply
@@ -929,6 +931,18 @@ func nodeMAXWFPRequireTraffic(t *testing.T, f *nodePQWFPFixture, p *nodeMAXWFPRe
 		for _, network := range []string{"tcp", "udp"} {
 			for _, host := range []string{"192.0.2.99", "2001:db8::99"} {
 				if err := f.exchange(network, host, epoch); err != nil {
+					// Preserve the original failure even if a later diagnostic
+					// readback fails. Nothing here retries data or changes its bound.
+					t.Log("actual WFP complete MAX original transfer error", network, host, epoch, err)
+					before := p.reply
+					local, localErr := native.RouterVPNTestPQSnapshot()
+					after := p.observe(t, "stats")
+					ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+					live, liveErr := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+					cancel()
+					t.Logf("MAX failed transfer key readback: local_error=%v keys_equal=%t local_handshake=%d remote_handshake_before=%d remote_handshake_after=%d", localErr, localErr == nil && local.KeyDigest == previous && after.Snapshot.KeyDigest == previous, local.HandshakeNanos, before.Snapshot.HandshakeNanos, after.Snapshot.HandshakeNanos)
+					t.Logf("MAX failed transfer reference readback: packet_before=%+v packet_after=%+v kem_before=%+v kem_after=%+v middle_packet=%d->%d middle_kem=%d->%d outer_middle=%d->%d reference_packets=%d->%d queries=%d->%d echoes=%d->%d", before.PacketBridge, after.PacketBridge, before.KEMBridge, after.KEMBridge, before.MiddlePacket, after.MiddlePacket, before.MiddleKEM, after.MiddleKEM, before.OuterMiddle, after.OuterMiddle, before.Packets, after.Packets, before.Queries, after.Queries, before.Echoes, after.Echoes)
+					t.Logf("MAX failed transfer native readback: socket_current=%t network_current=%t ready=%t transport_ready=%t bfe_error=%v bfe_target_matches=%t bfe_closed=%t bfe_grants=%d", f.network.SocketCurrent(), f.network.Current(), f.endpoint.owner.Ready(), f.endpoint.owner.TransportReady(), liveErr, liveErr == nil && live.Target == f.prepared, live.Closed, len(live.Grants))
 					t.Fatal("actual WFP complete MAX encrypted payload failed", network, host, epoch, err)
 				}
 			}
@@ -1236,6 +1250,7 @@ func TestRouterVPNDesktopNodeWindowsMAXForeignPredecessor(t *testing.T) {
 }
 
 func TestRouterVPNDesktopNodeWindowsMAXMarkers(t *testing.T) {
+	t.Run("retained-reference-readback", nodeMAXWFPRetainedReferenceReadback)
 	t.Run("reference-failure-channel", nodeMAXWFPReferenceFailureChannel)
 	t.Run("marker-and-authentication", nodeMAXWFPMarkerAuthentication)
 	t.Run("packet-authentication", nodeMAXWFPSSPacketAuthentication)
@@ -1340,6 +1355,136 @@ func TestRouterVPNDesktopNodeWindowsMAXMarkers(t *testing.T) {
 			t.Fatal("MAX armed marker lost its exact echo or joined observation", writeErr, readErr, joined, countErr)
 		}
 	})
+}
+
+func nodeMAXWFPRetainedReferenceReadback(t *testing.T) {
+	t.Helper()
+	ip := netip.MustParseAddr("127.0.0.1")
+	echo, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(ip, 0)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := make(chan struct{})
+	var received atomic.Int64
+	go func() {
+		defer close(joined)
+		body := make([]byte, 4096)
+		for {
+			n, remote, err := echo.ReadFromUDPAddrPort(body)
+			if err != nil {
+				return
+			}
+			received.Add(1)
+			if _, err = echo.WriteToUDPAddrPort(body[:n], remote); err != nil {
+				return
+			}
+		}
+	}()
+	t.Cleanup(func() { _ = echo.Close(); <-joined })
+	bridge := newNodePQWFPBridge(t, ip, echo.LocalAddr().String(), true, nil)
+	otherOwner := newNodePQWFPBridge(t, ip, echo.LocalAddr().String(), true, nil)
+	dial := func() *net.UDPConn {
+		connection, err := net.DialUDP("udp4", nil, net.UDPAddrFromAddrPort(bridge.address()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = connection.Close() })
+		return connection
+	}
+	first, replacement := dial(), dial()
+	exchange := func(connection *net.UDPConn, body string, allowed bool) {
+		deadline := 150 * time.Millisecond
+		if allowed {
+			deadline = time.Second
+		}
+		if err := connection.SetDeadline(time.Now().Add(deadline)); err != nil {
+			t.Fatal(err)
+		}
+		if n, err := connection.Write([]byte(body)); err != nil || n != len(body) {
+			t.Fatal("retained reference observation lost its real packet", err)
+		}
+		answer := make([]byte, 4096)
+		n, err := connection.Read(answer)
+		if allowed {
+			if err != nil || string(answer[:n]) != body {
+				t.Fatal("retained reference observation changed the actual permitted echo", err)
+			}
+		} else {
+			var timeout net.Error
+			if !errors.As(err, &timeout) || !timeout.Timeout() || n != 0 {
+				t.Fatal("retained reference observation admitted a stale or foreign sender", err)
+			}
+		}
+	}
+	wait := func(owner *nodePQWFPBridge, expected nodePQWFPBridgeSnapshot) nodePQWFPBridgeSnapshot {
+		for deadline := time.Now().Add(time.Second); ; {
+			actual := owner.snapshot()
+			if actual == expected {
+				return actual
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("retained reference counters lost actual packet ownership: got=%+v expected=%+v", actual, expected)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	exchange(first, "captured-first", true)
+	before := wait(bridge, nodePQWFPBridgeSnapshot{Accepted: 1, Forwarded: 1, Returned: 1, Captured: true})
+	exchange(replacement, "uncaptured-replacement", false)
+	before.OtherDrops = 1
+	wait(bridge, before)
+	bridge.reset()
+	reset := before
+	reset.Captured = false
+	if actual := wait(bridge, reset); !actual.follows(before) {
+		t.Fatal("joined reset incorrectly erased the retained lifetime observations")
+	}
+	exchange(first, "retired-first", false)
+	reset.RetiredDrops = 1
+	wait(bridge, reset)
+	exchange(replacement, "captured-replacement", true)
+	after := wait(bridge, nodePQWFPBridgeSnapshot{Accepted: 2, Forwarded: 2, Returned: 2, RetiredDrops: 1, OtherDrops: 1, Captured: true})
+	if received.Load() != 2 || !after.follows(before) || otherOwner.snapshot() != (nodePQWFPBridgeSnapshot{}) {
+		t.Fatal("reference counters mixed owners, fabricated forwarding, or lost joined succession")
+	}
+	for _, regress := range []func(*nodePQWFPBridgeSnapshot){
+		func(value *nodePQWFPBridgeSnapshot) { value.Accepted-- },
+		func(value *nodePQWFPBridgeSnapshot) { value.Forwarded-- },
+		func(value *nodePQWFPBridgeSnapshot) { value.Returned-- },
+		func(value *nodePQWFPBridgeSnapshot) { value.RetiredDrops-- },
+		func(value *nodePQWFPBridgeSnapshot) { value.OtherDrops-- },
+	} {
+		changed := after
+		regress(&changed)
+		if changed.follows(after) {
+			t.Fatal("reference accepted a regressed retained observation")
+		}
+	}
+	// An accepted packet may still be waiting for the reference's actual key
+	// barrier. Diagnostics must distinguish that state without releasing it.
+	barrier := make(chan struct{})
+	held := newNodePQWFPBridge(t, ip, echo.LocalAddr().String(), true, barrier)
+	connection, err := net.DialUDP("udp4", nil, net.UDPAddrFromAddrPort(held.address()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	if err := connection.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := connection.Write([]byte("captured-key-barrier")); err != nil {
+		t.Fatal(err)
+	}
+	wait(held, nodePQWFPBridgeSnapshot{Accepted: 1, Captured: true})
+	if received.Load() != 2 {
+		t.Fatal("reference readback crossed its retained key barrier")
+	}
+	close(barrier)
+	body := make([]byte, 4096)
+	if n, err := connection.Read(body); err != nil || string(body[:n]) != "captured-key-barrier" {
+		t.Fatal("reference key barrier did not release its original actual packet", err)
+	}
+	wait(held, nodePQWFPBridgeSnapshot{Accepted: 1, Forwarded: 1, Returned: 1, Captured: true})
 }
 
 func nodeMAXWFPReferenceFailureChannel(t *testing.T) {

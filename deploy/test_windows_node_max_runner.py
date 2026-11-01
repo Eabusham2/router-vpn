@@ -283,11 +283,11 @@ class MAXNativeBoundaries(unittest.TestCase):
     def test_marker_prerequisite_requires_actual_authentication_boundary(self):
         self.assertEqual(GATE.MARKER_CASES, ('bounded-input', 'unarmed-and-wrong-owner', 'encrypted-fragments',
                                            'exact-armed-stream', 'marker-and-authentication', 'packet-authentication',
-                                           'reference-failure-channel'))
+                                           'reference-failure-channel', 'retained-reference-readback'))
         complete = '\n'.join('--- PASS: ' + value + ' (0.01s)' for value in
                              (GATE.MARKERS, *(GATE.MARKERS + '/' + case for case in GATE.MARKER_CASES))) + '\nPASS\n'
         GATE.MAX.required_output(0, complete, GATE.MARKERS, GATE.MARKER_CASES)
-        for case in ('marker-and-authentication', 'packet-authentication', 'reference-failure-channel'):
+        for case in ('marker-and-authentication', 'packet-authentication', 'reference-failure-channel', 'retained-reference-readback'):
             marker = '--- PASS: ' + GATE.MARKERS + '/' + case + ' (0.01s)'
             for status, output in ((0, complete.replace(marker, '')), (1, complete.replace(marker, marker.replace('PASS', 'FAIL'))),
                                    (0, complete.replace(marker, 'fixture.go:1: ' + marker)), (0, complete + marker + '\n')):

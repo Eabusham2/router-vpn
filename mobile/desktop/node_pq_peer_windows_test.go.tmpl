@@ -114,8 +114,36 @@ type nodePQWFPBridge struct {
 	peers       map[netip.AddrPort]*nodePQWFPBridgePeer
 	workers     sync.WaitGroup
 	packets     atomic.Int64
+	forwarded   atomic.Int64
+	returned    atomic.Int64
+	retiredDrop atomic.Int64
+	otherDrop   atomic.Int64
 	plain       atomic.Bool
 	once        sync.Once
+}
+
+// Readback belongs to this retained reference only. It contains no packet,
+// address, key or socket identity and cannot make a rejected transfer succeed.
+type nodePQWFPBridgeSnapshot struct {
+	Accepted     int64 `json:"accepted"`
+	Forwarded    int64 `json:"forwarded"`
+	Returned     int64 `json:"returned"`
+	RetiredDrops int64 `json:"retired_drops"`
+	OtherDrops   int64 `json:"other_drops"`
+	Captured     bool  `json:"captured"`
+}
+
+func (f *nodePQWFPBridge) snapshot() nodePQWFPBridgeSnapshot {
+	f.mu.Lock()
+	captured := f.remote.IsValid()
+	f.mu.Unlock()
+	return nodePQWFPBridgeSnapshot{Accepted: f.packets.Load(), Forwarded: f.forwarded.Load(), Returned: f.returned.Load(), RetiredDrops: f.retiredDrop.Load(), OtherDrops: f.otherDrop.Load(), Captured: captured}
+}
+
+func (s nodePQWFPBridgeSnapshot) follows(old nodePQWFPBridgeSnapshot) bool {
+	// Independent packet workers advance these counters. Capture may clear on
+	// the existing joined reset, while every lifetime counter stays monotonic.
+	return s.Accepted >= old.Accepted && s.Forwarded >= old.Forwarded && s.Returned >= old.Returned && s.RetiredDrops >= old.RetiredDrops && s.OtherDrops >= old.OtherDrops
 }
 
 type nodePQWFPBridgePeer struct {
@@ -188,12 +216,14 @@ func (f *nodePQWFPBridge) forward(packet []byte, remote netip.AddrPort) error {
 		return f.ctx.Err()
 	}
 	if f.retired[remote] {
+		f.retiredDrop.Add(1)
 		f.mu.Unlock()
 		return nil
 	}
 	peer := f.single
 	if peer != nil {
 		if f.remote.IsValid() && f.remote != remote {
+			f.otherDrop.Add(1)
 			f.mu.Unlock()
 			return nil
 		}
@@ -233,7 +263,10 @@ func (f *nodePQWFPBridge) forward(packet []byte, remote netip.AddrPort) error {
 	if err := peer.SetWriteDeadline(time.Now().Add(3 * time.Second)); err != nil {
 		return err
 	}
-	_, err := peer.Write(packet)
+	n, err := peer.Write(packet)
+	if err == nil && n == len(packet) {
+		f.forwarded.Add(1)
+	}
 	return err
 }
 
@@ -257,6 +290,7 @@ func (f *nodePQWFPBridge) returnPackets(peer *net.UDPConn, captured netip.AddrPo
 		if _, err = f.listener.WriteToUDPAddrPort(packet[:n], remote); err != nil {
 			return
 		}
+		f.returned.Add(1)
 	}
 }
 func (f *nodePQWFPBridge) address() netip.AddrPort {
