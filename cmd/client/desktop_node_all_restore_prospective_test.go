@@ -1,4 +1,4 @@
-//go:build routervpn_node_all_prospective
+//go:build routervpn_node_all_prospective && go1.25
 
 package main
 

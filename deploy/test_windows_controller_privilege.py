@@ -52,6 +52,7 @@ def sources():
         records[path.relative_to(ROOT).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     required = {"cmd/client/controller_privilege_windows.go",
                 "cmd/client/controller_privilege_windows_native_test.go",
+                "cmd/client/controller_privilege_toolchain_windows_test.go",
                 "cmd/client/controller_windows_catalog.go", "cmd/client/private_store_owner_windows.go",
                 "internal/windowsbootstrap/protocol.go"}
     if not required.issubset(records):

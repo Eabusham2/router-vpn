@@ -29,15 +29,21 @@ class NodeProcessRunner(unittest.TestCase):
                 target = root / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(b"captured source\n")
-            missing = root / "cmd/client/desktop_node_process_windows_native_test.go"
             with patch.object(GATE, "ROOT", root):
-                GATE.sources()
-                missing.unlink()
-                with self.assertRaisesRegex(ValueError, "actual regular source"):
-                    GATE.sources()
-                missing.symlink_to(root / "cmd/client/desktop_node_process_test.go")
-                with self.assertRaisesRegex(ValueError, "actual regular source"):
-                    GATE.sources()
+                for relative in ("cmd/client/desktop_node_process_windows_native_test.go",
+                                 "cmd/client/desktop_node_toolchain_test.go",
+                                 "cmd/client/desktop_node_all_toolchain_test.go"):
+                    with self.subTest(required=relative):
+                        missing = root / relative
+                        GATE.sources()
+                        missing.unlink()
+                        with self.assertRaisesRegex(ValueError, "actual regular source"):
+                            GATE.sources()
+                        missing.symlink_to(root / "cmd/client/desktop_node_process_test.go")
+                        with self.assertRaisesRegex(ValueError, "actual regular source"):
+                            GATE.sources()
+                        missing.unlink()
+                        missing.write_bytes(b"captured source\n")
 
     def test_baseline_requires_every_native_shared_and_command_case(self):
         output = "\n".join("--- PASS: " + name + " (0.01s)" for name in GATE.EXPECTED)

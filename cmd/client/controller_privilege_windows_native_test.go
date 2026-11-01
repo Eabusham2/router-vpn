@@ -1,4 +1,4 @@
-//go:build windows && routervpn_controller_windows_native
+//go:build windows && routervpn_controller_windows_native && go1.25
 
 package main
 

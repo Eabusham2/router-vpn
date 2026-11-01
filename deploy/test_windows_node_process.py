@@ -164,6 +164,7 @@ EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES
             "TestWindowsPrivateStoreWriteThroughReplace/unicode",
             "TestWindowsPrivateStoreWriteThroughReplace/long-portable-path")
 REQUIRED_SOURCES = (
+    "cmd/client/desktop_node_toolchain_test.go", "cmd/client/desktop_node_all_toolchain_test.go",
     "cmd/client/desktop_node_all.go", "cmd/client/desktop_node_all_test.go", "cmd/client/desktop_node_all_prospective_test.go",
     "cmd/client/desktop_node_all_restore_prospective_test.go", "cmd/client/speed_lab_fallback.go",
     "cmd/client/speed_lab_fallback_test.go", "cmd/client/connection_cancellation.go",
