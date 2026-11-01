@@ -21,7 +21,7 @@ W = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(W)
 
 SIGNATURES = (
-    "void showFastConnectMenu(", "void showPerformance(", "void showNodes(",
+    "void showRouterFastConnectMenu(", "void showPerformance(", "void showNodes(",
     "void showProfileManager(",
     "void chooseMultihopExecution(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String mode,String entryMode,AndroidViaEntryLatencyProbe.Result selection)",
     "void configureMultihop(", "void showViaEntryExitPicker(",
@@ -103,11 +103,12 @@ public final class ProductDialogHarness extends android.app.Activity {
  final AndroidUnifiedNodeCatalog catalog=new AndroidUnifiedNodeCatalog();final AndroidTelemetry telemetry=new AndroidTelemetry();
  final Connection connection=new Connection();final Button fastestButton=new Button(this);final CheckBox multihopToggle=new CheckBox(this);
  final TextView liveLatency=new TextView(this);AndroidTelemetry.PathResult currentPathReceipt;boolean resumed=true,telemetryBusy;long lastTelemetryAt,telemetryGeneration;double currentPathMs;
- boolean busy;String selected="",profile="",pair="",entry="",exit="",message="",infoTitle="",info="";int routed,refreshes,externalBenchmarks;
+ boolean busy;String selected="",profile="",pair="",entry="",exit="",message="",infoTitle="",info="";int routed,refreshes,externalBenchmarks,externalComparisons;boolean externalComparisonAdopt;
  SharedPreferences prefs(){return saved;}boolean mutationBusy(){return busy;}void toast(String text){message=text;}
  void refreshNodes(){}void refreshAll(){refreshes++;}void refreshMap(){}void dialog(String title,String text){infoTitle=title;info=text;}
  public boolean isDestroyed(){return false;}void showNodeSort(){pair="sort";}void showSavedStatistics(){infoTitle="Saved statistics";}void runCurrentSpeed(){if(!connection.isConnected()){toast("Connect first");return;}telemetry.speedTest(8<<20,(r,e)->dialog("Real VPN path speed",r.detail()));}void showAddRouter(){showPairDialog();}void showPairDialog(){pair="router";}void openStandardExits(){pair="external";}
  boolean isExternalSelected(){return "external".equals(saved.getString(SELECTED_KIND,"router-vpn"));}void runExternalBenchmark(){externalBenchmarks++;}
+ void showExternalComparison(boolean connectFastest){externalComparisons++;externalComparisonAdopt=connectFastest;}
  boolean openSelectedExternal(boolean selectPath){return false;}
  void selectCatalog(AndroidUnifiedNodeCatalog.Item item){selected=item.id;}
  void showProfileActions(AndroidNodeStore.Node node){profile=node.id;}
@@ -132,28 +133,32 @@ HARNESS_SUFFIX = r'''
   check(((TextView)header.children.get(1)).getText().length()>20,title+" explanation retained");return value;
  }
  static void fastest(){
-  ProductDialogHarness h=new ProductDialogHarness();h.showFastConnectMenu();AlertDialog d=shown(4,"Select node");d.clickItem(0);
+  ProductDialogHarness h=new ProductDialogHarness();h.showRouterFastConnectMenu();AlertDialog d=shown(4,"Select node");d.clickItem(0);
   check(h.telemetry.allSamples==3&&h.nodeStore.selected.equals("b")&&h.saved.getString(SELECTED_ID,"").equals("b"),"Fastest chooses measured first node");
   check(h.message.contains("Press Connect"),"Fastest selects without connecting");
-  h=new ProductDialogHarness();h.showFastConnectMenu();d=shown(4,"Select node");d.clickItem(2);check(h.nodeStore.selected.equals("a"),"specific Fastest list choice exact");
-  h=new ProductDialogHarness();h.showFastConnectMenu();d=shown(4,"Select node");h.busy=true;d.clickItem(0);check(h.nodeStore.selections==0&&h.saved.writes==0,"late busy prevents Fastest mutation");
-  h=new ProductDialogHarness();h.busy=true;h.showFastConnectMenu();check(h.telemetry.allSamples==0,"initial busy avoids measurement");
-  h=new ProductDialogHarness();h.showFastConnectMenu();d=shown(4,"Select node");h.telemetry.results.get(0).stale=true;d.clickItem(0);check(h.nodeStore.selections==0&&h.saved.writes==0,"stale measured source cannot be selected");
+  h=new ProductDialogHarness();h.showRouterFastConnectMenu();d=shown(4,"Select node");d.clickItem(2);check(h.nodeStore.selected.equals("a"),"specific Fastest list choice exact");
+  h=new ProductDialogHarness();h.showRouterFastConnectMenu();d=shown(4,"Select node");h.busy=true;d.clickItem(0);check(h.nodeStore.selections==0&&h.saved.writes==0,"late busy prevents Fastest mutation");
+  h=new ProductDialogHarness();h.busy=true;h.showRouterFastConnectMenu();check(h.telemetry.allSamples==0,"initial busy avoids measurement");
+  h=new ProductDialogHarness();h.showRouterFastConnectMenu();d=shown(4,"Select node");h.telemetry.results.get(0).stale=true;d.clickItem(0);check(h.nodeStore.selections==0&&h.saved.writes==0,"stale measured source cannot be selected");
  }
  static void performance(){
-  ProductDialogHarness selected=new ProductDialogHarness();selected.saved.values.put(SELECTED_KIND,"external");selected.saved.values.put(SELECTED_ID,"provider-only");selected.showPerformance();shown(7,"Performance").clickItem(1);check(selected.externalBenchmarks==1&&selected.telemetry.nodeSamples==0,"selected external benchmark fell back to the active Router node");
-  for(int action=0;action<7;action++){
-   ProductDialogHarness h=new ProductDialogHarness();h.showPerformance();AlertDialog d=shown(7,"Performance");d.clickItem(action);
+  ProductDialogHarness selected=new ProductDialogHarness();selected.saved.values.put(SELECTED_KIND,"external");selected.saved.values.put(SELECTED_ID,"provider-only");selected.showPerformance();shown(9,"Performance").clickItem(1);check(selected.externalBenchmarks==1&&selected.telemetry.nodeSamples==0,"selected external benchmark fell back to the active Router node");
+  for(int action=0;action<9;action++){
+   ProductDialogHarness h=new ProductDialogHarness();h.showPerformance();AlertDialog d=shown(9,"Performance");d.clickItem(action);
    switch(action){case 0:check(h.telemetry.currentSamples==5,"current path actual callback");break;
     case 1:check(h.telemetry.nodeSamples==50&&h.telemetry.measuredNode.equals("a"),"durable 50-sample selected node");break;
     case 2:check(h.telemetry.allSamples==5,"all-node callback");break;
     case 3:check(h.telemetry.speedBytes==8<<20,"real transfer requested8MiB");break;
     case 4:check(h.routed==1,"native routed hop speed action");break;
     case 6:check(h.infoTitle.equals("Saved statistics"),"saved durable statistics action");break;
+    case 7:check(h.externalComparisons==1&&!h.externalComparisonAdopt,"external comparison dispatch preserves compare-only choice");break;
+    case 8:check(h.externalComparisons==1&&h.externalComparisonAdopt,"external comparison dispatch preserves compare-and-connect choice");break;
     default:check(h.infoTitle.equals("Path throughput / Auto MTU")&&h.info.contains("No proven"),"unmeasured MTU is truthful");
    }
+   check(action>=7||h.externalComparisons==0,"existing Performance actions cannot start an external comparison");
+   check(action<7||h.telemetry.allSamples==0&&h.telemetry.nodeSamples==0&&h.telemetry.currentSamples==0&&h.telemetry.speedBytes==0&&h.routed==0,"external comparison dispatch cannot substitute Router or current-path measurement");
   }
-  for(int action:new int[]{0,3}){ProductDialogHarness h=new ProductDialogHarness();h.connection.connected=false;h.showPerformance();shown(7,"Performance").clickItem(action);check(h.telemetry.currentSamples==0&&h.telemetry.speedBytes==0,"disconnected path speed cannot run");}
+  for(int action:new int[]{0,3}){ProductDialogHarness h=new ProductDialogHarness();h.connection.connected=false;h.showPerformance();shown(9,"Performance").clickItem(action);check(h.telemetry.currentSamples==0&&h.telemetry.speedBytes==0,"disconnected path speed cannot run");}
  }
  static void nodes(){
   ProductDialogHarness h=new ProductDialogHarness();h.showNodes();AlertDialog d=shown(2,"Choose node");check(d.items[1].contains("list only"),"no invented external coordinates");d.clickItem(1);check(h.selected.equals("external"),"exact external node callback");
