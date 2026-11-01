@@ -230,7 +230,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
     return result
 
 
-if __name__ == '__main__':
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source', type=Path, nargs='?')
     parser.add_argument('--bundle', type=Path, required=True)
@@ -242,7 +242,7 @@ if __name__ == '__main__':
     parser.add_argument('--peer-sha256', help=argparse.SUPPRESS)
     parser.add_argument('--bundle-sha256', help=argparse.SUPPRESS)
     parser.add_argument('--case', choices=CASES, help=argparse.SUPPRESS)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.namespace_test_binary is not None:
         if args.source is not None or args.receipt is not None or args.peer_binary is None:
             parser.error('native namespace entry requires only its original compiled artifacts and scenario')
@@ -250,4 +250,15 @@ if __name__ == '__main__':
                                        args.peer_sha256, args.bundle_sha256, args.case))
     if args.source is None or any(value is not None for value in (args.peer_binary, args.namespace_test_sha256, args.peer_sha256, args.bundle_sha256, args.case)):
         parser.error('the full gate requires its exact prepared source and completed native bundle')
-    execute(args.source, args.bundle, args.go, receipt_path=args.receipt)
+    try:
+        execute(args.source, args.bundle, args.go, receipt_path=args.receipt)
+    except subprocess.CalledProcessError as error:
+        # The existing runner already joined this original failed child.
+        # Preserve its failure while exposing the bounded native cause.
+        if error.output:
+            sys.stderr.write(error.output[-32768:].decode('utf-8', errors='replace'))
+        raise
+
+
+if __name__ == '__main__':
+    main()

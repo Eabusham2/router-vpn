@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Require real installed-host lifecycle evidence and exact namespace inputs."""
 from pathlib import Path
+from contextlib import redirect_stderr
 import hashlib
 import importlib.util
+import io
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -45,6 +49,62 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                        self.completed() + '--- FAIL: original-controller (1s)', self.completed() + '--- SKIP: unavailable-TUN (1s)'):
             with self.subTest(output=output[-100:]), self.assertRaises(ValueError):
                 G.check_verdict(output)
+
+    def test_failed_original_child_retains_status_and_bounded_native_output(self):
+        for noisy in (False, True):
+            with self.subTest(noisy=noisy):
+                command = [sys.executable, '-c',
+                           'import os; ' + ("os.write(1, b'old-prefix\\n' + b'x' * 60000 + b'\\xff'); "
+                           "os.write(2, b'original installed host failure\\n'); " if noisy else '') + 'raise SystemExit(37)']
+                failures = []
+                def failed(source, bundle, go, *, receipt_path):
+                    self.assertEqual((source, bundle, go, receipt_path),
+                                     (Path('/captured-core'), Path('/captured-bundle'), '/captured-go', Path('/captured-receipt')))
+                    try:
+                        G.GUARD.UID.run(command, timeout=5)
+                    except subprocess.CalledProcessError as error:
+                        failures.append(error)
+                        raise
+                diagnostic = io.StringIO()
+                with patch.object(G, 'execute', side_effect=failed), redirect_stderr(diagnostic):
+                    with self.assertRaises(subprocess.CalledProcessError) as caught:
+                        G.main(['/captured-core', '--bundle', '/captured-bundle', '--go', '/captured-go', '--receipt', '/captured-receipt'])
+                self.assertEqual(len(failures), 1)
+                self.assertIs(caught.exception, failures[0])
+                self.assertEqual(caught.exception.returncode, 37)
+                self.assertEqual(caught.exception.cmd, command)
+                original = caught.exception.output
+                self.assertEqual(diagnostic.getvalue(), original[-32768:].decode('utf-8', errors='replace'))
+                if noisy:
+                    self.assertNotIn('old-prefix', diagnostic.getvalue())
+                    self.assertIn('\uFFFDoriginal installed host failure', diagnostic.getvalue())
+                    self.assertLessEqual(len(diagnostic.getvalue()), 32768)
+                else:
+                    self.assertEqual(diagnostic.getvalue(), '')
+
+    def test_cli_preserves_success_namespace_and_other_failure_types(self):
+        arguments = ['/captured-core', '--bundle', '/captured-bundle', '--go', '/captured-go']
+        diagnostic = io.StringIO()
+        with patch.object(G, 'execute') as execute, redirect_stderr(diagnostic):
+            G.main(arguments)
+        execute.assert_called_once_with(Path('/captured-core'), Path('/captured-bundle'), '/captured-go', receipt_path=None)
+        self.assertEqual(diagnostic.getvalue(), '')
+        with patch.object(G, 'namespace_test', return_value=23) as enter, patch.object(G, 'execute') as execute:
+            with self.assertRaises(SystemExit) as caught:
+                G.main(['--bundle', '/captured-bundle', '--namespace-test-binary', '/captured-controller',
+                        '--peer-binary', '/captured-peer', '--namespace-test-sha256', 'a' * 64,
+                        '--peer-sha256', 'b' * 64, '--bundle-sha256', 'c' * 64, '--case', 'home-lan'])
+        self.assertEqual(caught.exception.code, 23)
+        enter.assert_called_once_with(Path('/captured-controller'), Path('/captured-peer'), Path('/captured-bundle'),
+                                      'a' * 64, 'b' * 64, 'c' * 64, 'home-lan')
+        execute.assert_not_called()
+        for error in (subprocess.TimeoutExpired(['original-child'], 5), ValueError('original native validation')):
+            diagnostic = io.StringIO()
+            with self.subTest(error=type(error).__name__), patch.object(G, 'execute', side_effect=error), redirect_stderr(diagnostic):
+                with self.assertRaises(type(error)) as caught:
+                    G.main(arguments)
+            self.assertIs(caught.exception, error)
+            self.assertEqual(diagnostic.getvalue(), '')
 
     def images(self, root):
         images = []
