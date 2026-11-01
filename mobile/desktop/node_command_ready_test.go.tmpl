@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,6 +19,96 @@ type desktopNodeDNSReadyOwner struct {
 	mtu     int
 	calls   int
 	prove   func(context.Context) error
+}
+
+type desktopNodeCoverReadyOwner struct {
+	current bool
+	count   int
+	digest  string
+}
+
+func (o *desktopNodeCoverReadyOwner) Current() bool { return o.current }
+func (o *desktopNodeCoverReadyOwner) Readiness() (int, string, error) {
+	if !o.current {
+		return 0, "", errors.New("fixture cover worker stopped")
+	}
+	return o.count, o.digest, nil
+}
+
+// These doubles exercise the private receipt boundary only. Successful
+// native worker proof and actual packets are separately required by the
+// installed Linux cover gate; metadata cannot activate a real service here.
+func TestRouterVPNDesktopNodePhysicalCommandReadyRequiresCapturedCover(t *testing.T) {
+	input, err := desktopNodeCommandOriginal(t).LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var source struct {
+		Mode    string `json:"mode"`
+		Files   string `json:"files"`
+		Profile string `json:"profile_json"`
+	}
+	var profile map[string]any
+	if json.Unmarshal([]byte(input), &source) != nil || json.Unmarshal([]byte(source.Profile), &profile) != nil {
+		t.Fatal("cover fixture lost its complete original compiler input")
+	}
+	profile["daita_enabled"], profile["daita_host"], profile["daita_rate_kbps"] = true, "10.77.0.1", 64
+	encoded, _ := json.Marshal(profile)
+	original, err := mobilemultihop.NewNodeProfile(source.Mode, source.Files, string(encoded), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewDesktopNodePolicy(original, desktopExternalSession, "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, digest, err := policy.CoverPolicy()
+	if err != nil || len(options) != 1 {
+		t.Fatal(err)
+	}
+	capture, _ := policy.Capture()
+	for _, fault := range []string{"exact", "missing", "wrong-count", "wrong-policy", "stopped", "lost-during-dns"} {
+		t.Run(fault, func(t *testing.T) {
+			directory := t.TempDir()
+			if err := os.Chmod(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
+			files, err := routerVPNOpenExternalFiles(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer files.root.Close()
+			dns := &desktopNodeDNSReadyOwner{current: true, mtu: capture.ConfiguredMTU}
+			observed := &desktopNodeCoverReadyOwner{current: true, count: 1, digest: digest}
+			var worker routerVPNNodeCoverOwner = observed
+			switch fault {
+			case "missing":
+				worker = nil
+			case "wrong-count":
+				observed.count = 0
+			case "wrong-policy":
+				observed.digest = strings.Repeat("b", 64)
+			case "stopped":
+				observed.current = false
+			case "lost-during-dns":
+				dns.prove = func(context.Context) error { observed.current = false; return nil }
+			}
+			transfer := strings.Repeat("a", 64)
+			err = routerVPNProveNodeReadyCapturedCover(context.Background(), files, policy, transfer, dns, worker)
+			if (err == nil) != (fault == "exact") {
+				t.Fatal("cover readiness accepted absent or replaced active evidence", fault, err)
+			}
+			raw, readErr := files.read("node-ready.json", mobilemultihop.DesktopNodeReadyRecordLimit)
+			if fault == "exact" {
+				record, parseErr := mobilemultihop.ParseDesktopNodeReadyRecord(raw, policy, transfer)
+				if readErr != nil || parseErr != nil || record.CoverServices != 1 || record.CoverSHA256 != digest {
+					t.Fatal("exact cover evidence was lost before readiness", readErr, parseErr)
+				}
+			} else if !errors.Is(readErr, os.ErrNotExist) {
+				t.Fatal("failed cover witness published successful native readiness", readErr)
+			}
+		})
+	}
 }
 
 func (o *desktopNodeDNSReadyOwner) Current() bool { return o.current }

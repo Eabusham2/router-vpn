@@ -35,9 +35,12 @@ CHILD = load('linux_installed_host_child', 'test_linux_node_child_tun.py')
 TRANSACTION = load('linux_installed_host_transaction', 'test_linux_node_transaction.py')
 BUILD, NODE, GUARD = CHILD.BUILD, CHILD.NODE, CHILD.GUARD
 MTU_CASES = ('mtu-rollback', 'mtu-commit', 'mtu-stale-profile', 'mtu-stale-network', 'mtu-hold', 'mtu-retire-undrained')
-ACTIVE_CASES = ('active-request-ended', 'cancel-adoption', 'active-profile-change', 'active-network-change', 'active-command-change', *MTU_CASES, 'restore-sealed', 'public-connect')
+PUBLIC_CASES = ('public-connect', 'cover-connect', 'cover-replies-lost')
+RESTORE_CASES = ('restore-sealed', 'cover-restore')
+COVER_CASES = ('cover-connect', 'cover-replies-lost', 'cover-wrong-node', 'cover-no-replies', 'cover-restore')
+ACTIVE_CASES = ('active-request-ended', 'cancel-adoption', 'active-profile-change', 'active-network-change', 'active-command-change', *MTU_CASES, *RESTORE_CASES, *PUBLIC_CASES)
 CASES = ('on-connect', 'home-lan', 'wrong-node', 'resolver-failure', 'wrong-key', 'stale-ready', 'cancelled-proof',
-         'replaced-host', 'request-ended', 'shutdown', 'always', *ACTIVE_CASES)
+         'replaced-host', 'request-ended', 'shutdown', 'always', *ACTIVE_CASES, 'cover-wrong-node', 'cover-no-replies')
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256')
 
@@ -104,16 +107,18 @@ def check_verdict(output, case=None):
             raise ValueError('Installed Linux host omitted its actual complete owned lifecycle: ' + value)
         if value in ACTIVE_CASES and 'verified installed host active lifetime: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its actual activation, request completion and native lifetime: ' + value)
-        if value in ('active-request-ended', 'public-connect') and 'verified installed host retained DNS observation: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in ('active-request-ended', *PUBLIC_CASES) and 'verified installed host retained DNS observation: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its actual retained session DNS consumer: ' + value)
         if value in MTU_CASES and 'verified installed host original MTU lease: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its original actual MTU lease: ' + value)
-        if (value in ('active-request-ended', 'public-connect') or value.startswith('mtu-')) and 'verified installed host live MTU status: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if (value in ('active-request-ended', *PUBLIC_CASES) or value.startswith('mtu-')) and 'verified installed host live MTU status: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its current interface MTU status: ' + value)
-        if value == 'restore-sealed' and 'verified installed host sealed temporary restoration: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in RESTORE_CASES and 'verified installed host sealed temporary restoration: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its frozen execution, live MTU and fresh native restoration: ' + value)
-        if value == 'public-connect' and 'verified installed host public Connect and Disconnect: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in PUBLIC_CASES and 'verified installed host public Connect and Disconnect: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its real public Connect and Disconnect composition: ' + value)
+        if value in COVER_CASES and 'verified installed host native cover: ' + value + '\n' not in output.replace('\r\n', '\n'):
+            raise ValueError('Installed Linux host omitted its captured native cover activation/failure/retirement: ' + value)
 
 
 def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case):

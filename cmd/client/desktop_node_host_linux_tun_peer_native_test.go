@@ -165,16 +165,21 @@ func linuxHostTUNInstallBundle(t *testing.T) {
 }
 
 type linuxHostTUNPeerReply struct {
-	Schema        int    `json:"schema"`
-	Address       string `json:"address"`
-	AESAddress    string `json:"aes_address"`
-	RawTCP        int64  `json:"raw_tcp"`
-	RawUDP        int64  `json:"raw_udp"`
-	PlainTCP      int64  `json:"plain_tcp"`
-	PlainUDP      int64  `json:"plain_udp"`
-	DNSQueries    uint32 `json:"dns_queries"`
-	RouterQueries uint32 `json:"router_queries"`
-	DirectQueries uint32 `json:"direct_router_queries"`
+	Schema          int    `json:"schema"`
+	Address         string `json:"address"`
+	AESAddress      string `json:"aes_address"`
+	RawTCP          int64  `json:"raw_tcp"`
+	RawUDP          int64  `json:"raw_udp"`
+	PlainTCP        int64  `json:"plain_tcp"`
+	PlainUDP        int64  `json:"plain_udp"`
+	DNSQueries      uint32 `json:"dns_queries"`
+	RouterQueries   uint32 `json:"router_queries"`
+	DirectQueries   uint32 `json:"direct_router_queries"`
+	CoverPackets    uint64 `json:"cover_packets"`
+	CoverBytes      uint64 `json:"cover_bytes"`
+	CoverReplies    uint64 `json:"cover_replies"`
+	CoverReplyBytes uint64 `json:"cover_reply_bytes"`
+	CoverMaximum    uint32 `json:"cover_maximum"`
 }
 
 type linuxHostTUNPeer struct {
@@ -211,7 +216,7 @@ func (peer *linuxHostTUNPeer) read(t *testing.T) linuxHostTUNPeerReply {
 
 func (peer *linuxHostTUNPeer) observe(t *testing.T, action string) linuxHostTUNPeerReply {
 	t.Helper()
-	if action != "stats" && action != "fail-dns" && action != "restore-dns" && action != "wrong-node" && action != "restore-node" {
+	if action != "stats" && action != "fail-dns" && action != "restore-dns" && action != "wrong-node" && action != "restore-node" && action != "drop-cover" {
 		t.Fatal("uncaptured installed-host peer observation")
 	}
 	if _, err := io.WriteString(peer.input, action+"\n"); err != nil {
@@ -220,7 +225,7 @@ func (peer *linuxHostTUNPeer) observe(t *testing.T, action string) linuxHostTUNP
 	return peer.read(t)
 }
 
-func linuxHostTUNStartPeer(t *testing.T) *linuxHostTUNPeer {
+func linuxHostTUNStartPeer(t *testing.T, scenario string) *linuxHostTUNPeer {
 	t.Helper()
 	directory, err := os.MkdirTemp("/opt", "routervpn-host-peer-")
 	if err != nil {
@@ -279,6 +284,9 @@ func linuxHostTUNStartPeer(t *testing.T) *linuxHostTUNPeer {
 	})
 	request := map[string]any{"schema": 1, "mode": "shadowsocks", "layer": "", "address": "192.168.210.2",
 		"password": peer.password, "node_proof_id": linuxHostTUNNodeID, "direct_router": true, "configuration": map[string]any{}}
+	if linuxHostTUNCoverCase(scenario) {
+		request["cover"] = true
+	}
 	if err := json.NewEncoder(peer.input).Encode(request); err != nil {
 		t.Fatal(err)
 	}
@@ -322,7 +330,11 @@ func linuxHostTUNProfile(peer *linuxHostTUNPeer, scenario string) common.RouterP
 	if scenario == "always" {
 		profile.KillSwitchPolicy = "always"
 	}
-	if linuxHostTUNMTUCase(scenario) || scenario == "restore-sealed" {
+	if linuxHostTUNCoverCase(scenario) {
+		profile.DAITAHost, profile.DAITAPort, profile.DAITARateKbps = "10.77.0.1", 45999, 64
+		profile.DAITAEnabled = !linuxHostTUNPublicCase(scenario) && !linuxHostTUNRestoreCase(scenario)
+	}
+	if linuxHostTUNMTUCase(scenario) || linuxHostTUNRestoreCase(scenario) {
 		profile.MTUPolicy, profile.ManualMTU = "auto", 0
 	}
 	return profile
@@ -331,7 +343,7 @@ func linuxHostTUNProfile(peer *linuxHostTUNPeer, scenario string) common.RouterP
 func linuxHostTUNInstallProfile(t *testing.T, peer *linuxHostTUNPeer, scenario string) {
 	t.Helper()
 	profile := linuxHostTUNProfile(peer, scenario)
-	if scenario == "public-connect" {
+	if linuxHostTUNPublicCase(scenario) {
 		catalog, err := os.ReadFile(filepath.Join("..", "..", "configs", "client", "modes.json"))
 		if err != nil || os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "modes.json"), catalog, 0600) != nil {
 			t.Fatal("actual installed public Connect lost the shipping runtime catalog", err)

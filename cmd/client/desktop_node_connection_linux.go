@@ -27,9 +27,6 @@ func validateDesktopLinuxNodeConnection(profile common.RouterProfile, mode strin
 		profile.StartLayer != "" && profile.StartLayer != "off" || policy != "on-connect" && policy != "always" {
 		return errors.New("Linux retained connection requires the supported protected Shadowsocks graph and plain Start Layer")
 	}
-	if options[0] {
-		return errors.New("Linux retained connection requires native activation for the selected cover policy")
-	}
 	return nil
 }
 

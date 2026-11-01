@@ -1,0 +1,81 @@
+package routervpnamnezia
+
+import (
+	"errors"
+	"sync"
+	"sync/atomic"
+
+	"github.com/sagernet/sing/common/buf"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+const desktopNodeRouterCoverTarget = "10.77.0.1:45999"
+
+// The independent encrypted peer exposes only the captured private sink. It
+// echoes at most the datagram it actually received and never opens an outer
+// listener or forwards to arbitrary targets. Counters belong to decrypted
+// payload, separately from raw SS transport and selected DNS traffic.
+type desktopNodeRouterCover struct {
+	packets, bytes, replies, replyBytes atomic.Uint64
+	maximum                             atomic.Uint32
+	mu                                  sync.Mutex
+	drop                                bool
+}
+
+func (cover *desktopNodeRouterCover) stopReplies() {
+	cover.mu.Lock()
+	defer cover.mu.Unlock()
+	cover.drop = true
+}
+
+func (cover *desktopNodeRouterCover) observe(reply *desktopNodeLayerReply) {
+	cover.mu.Lock()
+	defer cover.mu.Unlock()
+	reply.CoverPackets, reply.CoverBytes = cover.packets.Load(), cover.bytes.Load()
+	reply.CoverReplies, reply.CoverReplyBytes = cover.replies.Load(), cover.replyBytes.Load()
+	reply.CoverMaximum = cover.maximum.Load()
+}
+
+func (cover *desktopNodeRouterCover) exchange(connection N.PacketConn, expected M.Socksaddr) error {
+	if cover == nil || expected.String() != desktopNodeRouterCoverTarget {
+		return errors.New("Router cover peer lost its captured private sink")
+	}
+	for {
+		packet := buf.NewPacket()
+		destination, err := connection.ReadPacket(packet)
+		if err != nil {
+			packet.Release()
+			return err
+		}
+		length := packet.Len()
+		if destination != expected || length < 1 || length > 1200 {
+			packet.Release()
+			return errors.New("Router cover peer received an unbounded or redirected datagram")
+		}
+		cover.mu.Lock()
+		cover.packets.Add(1)
+		cover.bytes.Add(uint64(length))
+		for previous := cover.maximum.Load(); uint32(length) > previous; previous = cover.maximum.Load() {
+			if cover.maximum.CompareAndSwap(previous, uint32(length)) {
+				break
+			}
+		}
+		if cover.drop {
+			cover.mu.Unlock()
+			packet.Release()
+			continue
+		}
+		reply := buf.NewSize(length + 2048)
+		reply.Resize(2048, 0)
+		_, _ = reply.Write(packet.Bytes())
+		packet.Release()
+		if err := connection.WritePacket(reply, destination); err != nil {
+			cover.mu.Unlock()
+			return err
+		}
+		cover.replies.Add(1)
+		cover.replyBytes.Add(uint64(length))
+		cover.mu.Unlock()
+	}
+}

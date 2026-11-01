@@ -52,8 +52,8 @@ func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
 			expected := "supported protected Shadowsocks graph and plain Start Layer"
 			switch scenario {
 			case "cover-runtime":
-				a.state.DAITA = true // Saved false remains independent from this actual selection.
-				expected = "native activation for the selected cover policy"
+				a.state.DAITA = true    // Saved false remains independent from this actual selection.
+				expected = "Linux Node" // Requested cover still requires the installed captured native owner.
 			case "start-aes":
 				profile.StartLayer = "aes-256-gcm"
 			case "start-whitening":

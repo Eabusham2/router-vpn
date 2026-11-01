@@ -23,10 +23,18 @@ import (
 // kernel callback is substituted. The outer peer independently counts the
 // encrypted DNS and Router responses before this original runtime is stopped.
 func linuxHostTUNPublicConnection(ctx context.Context, a *app, parent *desktopLinuxNodeParentCapture,
-	controller *ownedDesktopController, gate *os.File) (failure error) {
+	controller *ownedDesktopController, gate *os.File, scenario string) (failure error) {
+	cover := linuxHostTUNCoverCase(scenario)
 	raw, err := readPrivateRegular(a.cfg.ModesFile, 256<<10)
 	if err != nil || json.Unmarshal(raw, &a.modes) != nil || len(a.modes) != 20 {
 		return errors.Join(err, errors.New("installed public Connect lost the original runtime catalog"))
+	}
+	if cover {
+		options := httptest.NewRecorder()
+		a.options(options, httptest.NewRequest(http.MethodPost, "/api/options", strings.NewReader(`{"daita":true}`)).WithContext(ctx))
+		if options.Code != http.StatusOK || strings.TrimSpace(options.Body.String()) != `{"ok":true}` {
+			return errors.New("public cover selection did not reach its actual runtime option handler")
+		}
 	}
 	request := httptest.NewRequest(http.MethodPost, "/api/connect", strings.NewReader(`{"mode":"shadowsocks"}`)).WithContext(ctx)
 	response := httptest.NewRecorder()
@@ -49,6 +57,7 @@ func linuxHostTUNPublicConnection(ctx context.Context, a *app, parent *desktopLi
 		return errors.Join(err, errors.New("installed public Connect used a legacy or unproved runtime"))
 	}
 	host, session, journal := path.host, path.session, path.journal
+	var monitor *desktopLinuxNodeMonitor
 	defer func() {
 		if failure != nil {
 			cleanup, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -63,9 +72,12 @@ func linuxHostTUNPublicConnection(ctx context.Context, a *app, parent *desktopLi
 			host.activation.operation.Err() == nil || host.activation.lifetime.Err() != nil || host.monitor == nil || host.monitor.Load() == nil ||
 			host.policy == nil || host.ready == nil || host.ready.MTU != 1376 || host.policy.Metadata().RestoredMTU != 0 ||
 			a.cmd != command || !a.state.Connected || a.state.Phase != "connected" ||
-			a.profiles.Profiles[0].UseCount != 1 || a.daitaCancel != nil {
+			a.profiles.Profiles[0].UseCount != 1 || a.daitaCancel != nil || a.state.DAITA != cover ||
+			host.options[0] != cover || host.savedOptions[0] || a.profiles.Profiles[0].DAITAEnabled ||
+			(host.ready.CoverServices == 1) != cover || (host.ready.CoverSHA256 != "") != cover {
 			return errors.New("public Connect omitted its completed request, independent monitor, usage or actual fixed MTU")
 		}
+		monitor = host.monitor.Load()
 		return nil
 	}); err != nil {
 		return err
@@ -84,8 +96,11 @@ func linuxHostTUNPublicConnection(ctx context.Context, a *app, parent *desktopLi
 	if err != nil {
 		return err
 	}
-	result := linuxHostTUNResult{Stage: "ready", Scenario: "public-connect", SessionID: path.selection.SessionID,
+	result := linuxHostTUNResult{Stage: "ready", Scenario: scenario, SessionID: path.selection.SessionID,
 		Outcome: "proved", Ready: &path.ready, Activation: "retained-after-request", DNSProof: &dns, MTUView: &view, Public: true}
+	if cover {
+		result.Cover = "native-active"
+	}
 	a.operationMu.Unlock()
 	locked = false
 	if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
@@ -93,6 +108,31 @@ func linuxHostTUNPublicConnection(ctx context.Context, a *app, parent *desktopLi
 	}
 	if err := linuxHostTUNRendezvous(gate, 2); err != nil {
 		return err
+	}
+	if scenario == "cover-replies-lost" {
+		// The independent peer has stopped UDP replies. The actual native
+		// worker must invalidate the original child and its installed monitor
+		// must retire that exact source while retaining fail-closed protection.
+		wait, cancel := context.WithTimeout(ctx, 20*time.Second)
+		defer cancel()
+		select {
+		case <-wait.Done():
+			return errors.New("dead native cover did not retire its original active source")
+		case <-monitor.finished:
+		}
+		if err := linuxHostTUNRestoreCheck(ctx, session, host, func() error {
+			a.mu.Lock()
+			defer a.mu.Unlock()
+			if a.state.Connected || a.state.Phase != "failed" || a.state.LastError == "" || a.cmd != nil ||
+				session.active != nil || session.predecessor != host.transaction || !host.closed ||
+				host.activation.lifetime.Err() == nil {
+				return errors.New("dead native cover left Connected or retired a replacement source")
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		result.Cover = "retired-after-reply-loss"
 	}
 	stop := httptest.NewRecorder()
 	a.disconnect(stop, httptest.NewRequest(http.MethodPost, "/api/disconnect", nil).WithContext(ctx))

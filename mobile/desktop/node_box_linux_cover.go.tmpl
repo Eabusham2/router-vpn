@@ -1,0 +1,138 @@
+//go:build linux
+
+package box
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobileperf"
+	performance "github.com/sagernet/sing-box/service/routervpnperformance"
+)
+
+// This owner retains the exact services constructed from the sealed Box. It
+// never discovers a later replacement, starts an ambient socket, or turns a
+// saved preference into proof. The original Box remains their joined lifetime.
+type RouterVPNDesktopLinuxNodeCover struct {
+	instance *Box
+	policy   *mobilemultihop.DesktopNodePolicy
+	physical *RouterVPNDesktopNodePhysical
+	options  []mobilemultihop.DesktopNodeCoverService
+	services []*performance.Service
+	digest   string
+}
+
+func (owner *RouterVPNDesktopLinuxNodeCover) same() bool {
+	if owner == nil || owner.instance == nil || owner.instance.ctx == nil || owner.instance.ctx.Err() != nil ||
+		owner.instance.service == nil || owner.policy == nil || owner.physical == nil ||
+		owner.physical.instance != owner.instance || owner.physical.policy != owner.policy || !owner.physical.Current() ||
+		len(owner.options) != len(owner.services) || len(owner.services) > 1 || (len(owner.services) == 0) != (owner.digest == "") {
+		return false
+	}
+	count := 0
+	for _, service := range owner.instance.RouterVPNServices() {
+		if service.Type() != mobileperf.CoverType {
+			continue
+		}
+		if count >= len(owner.services) || service != owner.services[count] ||
+			service.Tag() != owner.options[count].Tag || !owner.services[count].Matches(owner.options[count].Options) {
+			return false
+		}
+		count++
+	}
+	return count == len(owner.services)
+}
+
+func (owner *RouterVPNDesktopLinuxNodeCover) Current() bool {
+	if !owner.same() {
+		return false
+	}
+	for _, service := range owner.services {
+		if !service.Healthy() {
+			return false
+		}
+	}
+	return true
+}
+
+func (owner *RouterVPNDesktopLinuxNodeCover) Readiness() (int, string, error) {
+	if !owner.Current() {
+		return 0, "", errors.New("Linux Router cover lost its actual captured native worker")
+	}
+	return len(owner.services), owner.digest, nil
+}
+
+func (owner *RouterVPNDesktopLinuxNodeCover) invalidate() {
+	for _, service := range owner.services {
+		service.InterfaceUpdated(nil)
+	}
+}
+
+func (owner *RouterVPNDesktopLinuxNodeCover) close() (failure error) {
+	for _, service := range owner.services {
+		failure = errors.Join(failure, service.Close())
+	}
+	return failure
+}
+
+// The caller has already proved selected DNS on this exact native physical
+// owner. Each worker now performs its own encrypted private Router identity
+// proof and bounded UDP confirmation. Parent routed proof and Connected still
+// follow; startup cancellation invalidates and joins these exact services.
+func (s *Box) RouterVPNDesktopLinuxNodeActivateCover(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy,
+	physical *RouterVPNDesktopNodePhysical) (active *RouterVPNDesktopLinuxNodeCover, failure error) {
+	if ctx == nil || ctx.Err() != nil || !routerVPNDesktopLinuxNodeLifecycleAvailable(policy) || physical == nil ||
+		physical.instance != s || physical.policy != policy || !physical.Current() {
+		return nil, errors.New("Linux Router cover activation lost its original proved native path")
+	}
+	_, network, err := s.routerVPNDesktopNodePhysical(policy)
+	if err != nil || physical.network != network {
+		return nil, errors.Join(err, errors.New("Linux Router cover changed its complete native Box policy"))
+	}
+	options, digest, err := policy.CoverPolicy()
+	if err != nil {
+		return nil, err
+	}
+	owner := &RouterVPNDesktopLinuxNodeCover{instance: s, policy: policy, physical: physical, options: options, digest: digest}
+	for _, selected := range options {
+		actual, found := s.service.Get(selected.Tag)
+		service, ok := actual.(*performance.Service)
+		if !found || !ok || service == nil || service.Tag() != selected.Tag || service.Type() != mobileperf.CoverType || !service.Matches(selected.Options) {
+			return nil, errors.New("Linux Router cover differs from its captured constructor input")
+		}
+		owner.services = append(owner.services, service)
+	}
+	if !owner.same() {
+		return nil, errors.New("Linux Router cover lost an original service before activation")
+	}
+	joined := make(chan struct{})
+	var cancellationFailure error
+	// InterfaceUpdated deliberately ignores a not-yet-activated service. Close
+	// also cancels its context when cancellation wins between our last check
+	// and Activate, so no worker can start on the longer Box lifetime then.
+	stop := context.AfterFunc(ctx, func() { cancellationFailure = owner.close(); close(joined) })
+	defer func() {
+		if !stop() {
+			<-joined
+			failure = errors.Join(failure, cancellationFailure)
+		}
+		if failure == nil && (ctx.Err() != nil || !owner.Current()) {
+			failure = errors.Join(ctx.Err(), errors.New("Linux Router cover changed before activation delivery"))
+		}
+		if failure != nil {
+			owner.invalidate()
+			failure = errors.Join(failure, owner.close())
+			active = nil
+		}
+	}()
+	for _, service := range owner.services {
+		if ctx.Err() != nil || !owner.same() {
+			return nil, errors.New("Linux Router cover activation lost its request or captured service")
+		}
+		if err := service.Activate(); err != nil {
+			return nil, err
+		}
+	}
+	return owner, nil
+}

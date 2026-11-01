@@ -1,0 +1,101 @@
+//go:build linux
+
+package box
+
+import (
+	"context"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobileperf"
+	"github.com/sagernet/sing-box/log"
+	performance "github.com/sagernet/sing-box/service/routervpnperformance"
+)
+
+type desktopNodeForeignCover struct{ boxService.Adapter }
+
+func (*desktopNodeForeignCover) Start(adapter.StartStage) error { return nil }
+func (*desktopNodeForeignCover) Close() error                   { return nil }
+
+func desktopLinuxCoverProfile(profile map[string]any) {
+	profile["daita_enabled"], profile["daita_host"], profile["daita_rate_kbps"] = true, "10.77.0.1", 64
+}
+
+// The native managers, policy, service and worker are real. This existing
+// fixture models only OS/TUN ownership and refuses sockets, so these tests
+// establish rejection and pointer retention, never successful cover proof.
+func TestRouterVPNDesktopLinuxNodeCoverRejectsIncompleteNativeOwner(t *testing.T) {
+	for _, fault := range []string{"missing", "wrong-type", "wrong-options", "cancelled", "foreign-physical", "failed-live-proof"} {
+		t.Run(fault, func(t *testing.T) {
+			var registryEdit func(*boxService.Registry)
+			if fault == "wrong-type" {
+				registryEdit = func(registry *boxService.Registry) {
+					boxService.Register[performance.Options](registry, mobileperf.CoverType,
+						func(context.Context, log.ContextLogger, string, performance.Options) (adapter.Service, error) {
+							return &desktopNodeForeignCover{boxService.NewAdapter(mobileperf.CoverType, "routervpn-cover-exit")}, nil
+						})
+				}
+			}
+			f := newDesktopNodeBoxFixtureWithOptions(t, nil, 0, desktopLinuxCoverProfile, registryEdit)
+			physical := f.start(t)
+			options, _, err := f.policy.CoverPolicy()
+			if err != nil || len(options) != 1 {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			switch fault {
+			case "missing":
+				if err := f.box.service.Remove(options[0].Tag); err != nil {
+					t.Fatal(err)
+				}
+			case "wrong-options":
+				changed := options[0].Options
+				changed.RateKbps = 192
+				actual := performance.Options(changed)
+				if err := f.box.service.Create(f.box.ctx, log.NewNOPFactory().Logger(), options[0].Tag, mobileperf.CoverType, &actual); err != nil {
+					t.Fatal(err)
+				}
+			case "cancelled":
+				cancel()
+			case "foreign-physical":
+				physical = newDesktopNodeBoxFixture(t, nil).start(t)
+			}
+			if owner, err := f.box.RouterVPNDesktopLinuxNodeActivateCover(ctx, f.policy, physical); err == nil || owner != nil {
+				t.Fatal("incomplete native cover acquired active readiness", fault)
+			}
+			for _, raw := range f.box.RouterVPNServices() {
+				if service, ok := raw.(*performance.Service); ok && service.Healthy() {
+					t.Fatal("rejected native cover retained an active worker")
+				}
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopLinuxNodeCoverCannotAdoptReplacementOrEmptySet(t *testing.T) {
+	f := newDesktopNodeBoxFixtureWithOptions(t, nil, 0, desktopLinuxCoverProfile, nil)
+	physical := f.start(t)
+	options, digest, err := f.policy.CoverPolicy()
+	if err != nil || len(options) != 1 {
+		t.Fatal(err)
+	}
+	raw, _ := f.box.service.Get(options[0].Tag)
+	service := raw.(*performance.Service)
+	owner := &RouterVPNDesktopLinuxNodeCover{instance: f.box, policy: f.policy, physical: physical,
+		options: options, services: []*performance.Service{service}, digest: digest}
+	if !owner.same() || owner.Current() {
+		t.Fatal("matching constructor input was mistaken for active proof")
+	}
+	if err := f.box.service.Remove(options[0].Tag); err != nil || owner.same() || owner.Current() {
+		t.Fatal("missing requested worker became healthy empty coverage", err)
+	}
+	replacement := performance.Options(options[0].Options)
+	if err := f.box.service.Create(f.box.ctx, log.NewNOPFactory().Logger(), options[0].Tag, mobileperf.CoverType, &replacement); err != nil || owner.same() || owner.Current() {
+		t.Fatal("identical constructor metadata adopted a replacement native service", err)
+	}
+	if _, _, err := owner.Readiness(); err == nil {
+		t.Fatal("replaced worker delivered an activation receipt")
+	}
+}

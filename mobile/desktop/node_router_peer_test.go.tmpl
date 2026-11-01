@@ -26,7 +26,7 @@ const (
 // neither remove the selected Home DNS mapping nor add arbitrary forwarding.
 func desktopNodeRouterHealthCaptureValid(request desktopNodeLayerRequest) bool {
 	if request.NodeProofID == "" {
-		return !request.DirectRouter
+		return !request.DirectRouter && !request.Cover
 	}
 	raw, err := hex.DecodeString(request.NodeProofID)
 	return err == nil && len(raw) == 32 && hex.EncodeToString(raw) == request.NodeProofID &&
@@ -132,6 +132,14 @@ func TestRouterVPNDesktopNodeRouterHealthCapture(t *testing.T) {
 	}
 	if desktopNodeRouterHealthCaptureValid(desktopNodeLayerRequest{Mode: "shadowsocks", DirectRouter: true}) {
 		t.Fatal("direct Router control accepted an uncaptured identity")
+	}
+	if desktopNodeRouterHealthCaptureValid(desktopNodeLayerRequest{Mode: "shadowsocks", Cover: true}) {
+		t.Fatal("private cover control accepted an uncaptured Router identity")
+	}
+	covered := valid
+	covered.Cover = true
+	if !desktopNodeRouterHealthCaptureValid(covered) {
+		t.Fatal("captured private Router cover control was rejected")
 	}
 	for _, change := range []struct {
 		name string

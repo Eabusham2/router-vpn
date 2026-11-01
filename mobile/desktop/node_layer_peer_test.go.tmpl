@@ -84,6 +84,7 @@ type desktopNodeLayerRequest struct {
 	Password      string                        `json:"password"`
 	NodeProofID   string                        `json:"node_proof_id,omitempty"`
 	DirectRouter  bool                          `json:"direct_router,omitempty"`
+	Cover         bool                          `json:"cover,omitempty"`
 	Configuration desktopReferenceConfiguration `json:"configuration"`
 }
 
@@ -112,6 +113,11 @@ type desktopNodeLayerReply struct {
 	DNSQueries        uint32 `json:"dns_queries"`
 	RouterQueries     uint32 `json:"router_queries,omitempty"`
 	DirectQueries     uint32 `json:"direct_router_queries,omitempty"`
+	CoverPackets      uint64 `json:"cover_packets,omitempty"`
+	CoverBytes        uint64 `json:"cover_bytes,omitempty"`
+	CoverReplies      uint64 `json:"cover_replies,omitempty"`
+	CoverReplyBytes   uint64 `json:"cover_reply_bytes,omitempty"`
+	CoverMaximum      uint32 `json:"cover_maximum,omitempty"`
 	Probe             string `json:"probe,omitempty"`
 	ProbeCount        int64  `json:"probe_count,omitempty"`
 	ProbeNetwork      string `json:"probe_network"`
@@ -130,6 +136,7 @@ type desktopNodeLayerServer struct {
 	routes                                     []desktopNodeLayerRoute
 	dnsAddress                                 string
 	routerAddress                              string
+	cover                                      atomic.Pointer[desktopNodeRouterCover]
 	mu                                         sync.Mutex
 	closing                                    bool
 	connections                                map[io.Closer]bool
@@ -224,6 +231,9 @@ func (s *desktopNodeLayerServer) NewPacketConnection(_ context.Context, connecti
 	defer s.leave(connection)
 	stop := context.AfterFunc(s.ctx, func() { _ = connection.Close() })
 	defer stop()
+	if cover := s.cover.Load(); cover != nil && metadata.Destination.String() == desktopNodeRouterCoverTarget {
+		return cover.exchange(connection, metadata.Destination)
+	}
 	var target string
 	if len(s.routes) != 0 {
 		var found bool
@@ -707,6 +717,9 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 		stage = "shipping whitening relay"
 		address = startDesktopNodeLayerRelay(t, ip, address, request.Password)
 	}
+	if request.Cover {
+		server.cover.Store(&desktopNodeRouterCover{})
+	}
 	stage = "native process scope"
 	scope, err := desktopNodeLayerReferenceScope()
 	if err != nil {
@@ -725,6 +738,9 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 			AppID: scope, RawTCP: server.rawTCP.Load(), RawUDP: server.rawUDP.Load(), PlainTCP: server.plainTCP.Load(), PlainUDP: server.plainUDP.Load(), DNSQueries: dnsQueries.Load(), Probe: nonce, ProbeCount: count, ProbeNetwork: probeNetwork, ProbeTarget: target}
 		reply.RouterQueries = routerHealth.count()
 		reply.DirectQueries = directHealth.count()
+		if cover := server.cover.Load(); cover != nil {
+			cover.observe(&reply)
+		}
 		if protocolServer != nil {
 			reply.ProtocolRawUDP, reply.ProtocolTCP, reply.ProtocolUDP = protocolServer.rawUDP.Load(), protocolServer.plainTCP.Load(), protocolServer.plainUDP.Load()
 			reply.ProtocolRawTCP = protocolServer.rawTCP.Load()
@@ -763,6 +779,15 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 				t.Fatal("layer reference received an uncaptured Router identity operation")
 			}
 			routerHealth.wrongNode.Store(string(line) == "wrong-node\n")
+			respond("", "", server)
+			continue
+		}
+		if string(line) == "drop-cover\n" {
+			cover := server.cover.Load()
+			if cover == nil {
+				t.Fatal("layer reference received an uncaptured private cover operation")
+			}
+			cover.stopReplies()
 			respond("", "", server)
 			continue
 		}

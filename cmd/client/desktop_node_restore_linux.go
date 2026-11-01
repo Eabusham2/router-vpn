@@ -195,11 +195,6 @@ func (a *app) restartCapturedDesktopLinuxNode(plan speedLabRestorePlan, scope st
 	if err := saved.restartAppCurrent(a, operation, profile); err != nil {
 		return err
 	}
-	// Native cover activation remains a separate unfinished capability. A
-	// restored graph must not silently replace requested cover with ambient UDP.
-	if saved.options[0] {
-		return errors.New("Linux restore requires native activation for the captured cover policy")
-	}
 	saved.entered = true
 	h, err := newDesktopLinuxNodeHostWithSource(ctx, saved.parent, operation, profile, saved.mode,
 		original, saved.endpoint, saved.network, saved.savedOptions, saved.mtu)

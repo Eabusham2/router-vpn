@@ -14,6 +14,11 @@ type routerVPNNodeDNSOwner interface {
 	MeasureSelectedDNS(context.Context) (time.Duration, error)
 }
 
+type routerVPNNodeCoverOwner interface {
+	Current() bool
+	Readiness() (int, string, error)
+}
+
 // Ready is published only after an actual fresh native DNS query and an exact
 // TUN readback. The private record is bound to the same source and predecessor
 // as the handoff; the controller still owes its authenticated selected-node
@@ -42,6 +47,11 @@ func routerVPNProveNodeReady(ctx context.Context, files *routerVPNExternalFiles,
 // performs the same real selected resolver exchange and native TUN readback.
 func routerVPNProveNodeReadyCaptured(ctx context.Context, files *routerVPNExternalFiles, policy *mobilemultihop.DesktopNodePolicy,
 	transfer string, owner routerVPNNodeDNSOwner) error {
+	return routerVPNProveNodeReadyCapturedCover(ctx, files, policy, transfer, owner, nil)
+}
+
+func routerVPNProveNodeReadyCapturedCover(ctx context.Context, files *routerVPNExternalFiles, policy *mobilemultihop.DesktopNodePolicy,
+	transfer string, owner routerVPNNodeDNSOwner, cover routerVPNNodeCoverOwner) error {
 	if ctx == nil || ctx.Err() != nil || files == nil || files.root == nil || policy == nil || policy.Validate() != nil ||
 		!routerVPNExternalSource.MatchString(transfer) || owner == nil || !owner.Current() {
 		return routerVPNExternalFailure
@@ -66,7 +76,13 @@ func routerVPNProveNodeReadyCaptured(ctx context.Context, files *routerVPNExtern
 		SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, TransferSHA256: transfer,
 		DNSConfigSHA256: capture.SelectedDNS.ConfigSHA256, InterfaceName: name, InterfaceIndex: uint32(index), MTU: mtu, ProvedAt: time.Now().UnixMilli(),
 		DNSMilliseconds: float64(elapsed.Nanoseconds()) / 1e6}
-	if record.Validate(policy, transfer) != nil || files.publish("node-ready.json", record) != nil || ctx.Err() != nil || !owner.Current() {
+	if cover != nil {
+		record.CoverServices, record.CoverSHA256, err = cover.Readiness()
+		if err != nil {
+			return routerVPNExternalFailure
+		}
+	}
+	if record.Validate(policy, transfer) != nil || files.publish("node-ready.json", record) != nil || ctx.Err() != nil || !owner.Current() || cover != nil && !cover.Current() {
 		return routerVPNExternalFailure
 	}
 	return nil

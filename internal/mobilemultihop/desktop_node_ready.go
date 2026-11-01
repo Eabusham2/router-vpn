@@ -27,6 +27,8 @@ type DesktopNodeReadyRecord struct {
 	MTU             int     `json:"mtu"`
 	ProvedAt        int64   `json:"proved_at"`
 	DNSMilliseconds float64 `json:"dns_milliseconds"`
+	CoverServices   int     `json:"cover_services,omitempty"`
+	CoverSHA256     string  `json:"cover_sha256,omitempty"`
 }
 
 func (r DesktopNodeReadyRecord) Validate(policy *DesktopNodePolicy, transfer string) error {
@@ -38,6 +40,18 @@ func (r DesktopNodeReadyRecord) Validate(policy *DesktopNodePolicy, transfer str
 	if err != nil {
 		return errors.New("native Router readiness lost its original source")
 	}
+	// Linux starts its exact captured native cover service before readiness.
+	// The count and digest describe that initial activation; its continuing
+	// health is required by the same native heartbeat/lifetime guard. Existing
+	// targets cannot claim this Linux proof merely by adding receipt fields.
+	coverCount, coverSHA256 := 0, ""
+	if meta.TargetOS == "linux" {
+		cover, digest, err := policy.CoverPolicy()
+		if err != nil {
+			return err
+		}
+		coverCount, coverSHA256 = len(cover), digest
+	}
 	mtu := capture.ConfiguredMTU
 	if meta.RestoredMTU != 0 {
 		mtu = meta.RestoredMTU
@@ -45,6 +59,7 @@ func (r DesktopNodeReadyRecord) Validate(policy *DesktopNodePolicy, transfer str
 	if r.Schema != 1 || r.Kind != "routervpn-node-ready-v1" || (meta.TargetOS != "windows" && meta.TargetOS != "linux") ||
 		r.SessionID != meta.SessionID || r.SourceSHA256 != meta.SourceSHA256 || r.ConfigSHA256 != meta.ConfigSHA256 ||
 		r.TransferSHA256 != transfer || r.DNSConfigSHA256 != capture.SelectedDNS.ConfigSHA256 ||
+		r.CoverServices != coverCount || r.CoverSHA256 != coverSHA256 ||
 		r.InterfaceName != "router-vpn" || r.InterfaceIndex == 0 || r.MTU != mtu || r.ProvedAt <= 0 ||
 		r.DNSMilliseconds <= 0 || r.DNSMilliseconds > 5000 || math.IsNaN(r.DNSMilliseconds) || math.IsInf(r.DNSMilliseconds, 0) {
 		return errors.New("native Router readiness differs from its captured path")

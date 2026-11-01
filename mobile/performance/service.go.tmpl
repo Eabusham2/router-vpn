@@ -97,6 +97,13 @@ func (s *Service) InterfaceUpdated(context.Context) {
 func (s *Service) Healthy() bool {
 	return !s.invalid.Load() && s.ready.Load() && s.worker.Healthy() && s.Identity() != ""
 }
+
+// Matches compares only immutable constructor input. It grants no activation
+// or health; desktop hosts retain this same service pointer separately and
+// require the worker's actual encrypted proof and packet confirmation.
+func (s *Service) Matches(options mobileperf.CoverOptions) bool {
+	return s != nil && s.options == options
+}
 func (s *Service) StatusJSON() string { return s.worker.StatusJSON() }
 func (s *Service) resolve(tag string, seen map[string]bool) (adapter.Outbound, string, error) {
 	if seen[tag] || len(seen) > 12 {

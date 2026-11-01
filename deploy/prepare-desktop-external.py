@@ -65,6 +65,8 @@ BOX_TEMPLATES = {
     'node_box_dns.go.tmpl': 'routervpn_desktop_node_box_dns.go',
     'node_box_dns_test.go.tmpl': 'routervpn_desktop_node_box_dns_test.go',
     'node_box_linux_lifecycle.go.tmpl': 'routervpn_desktop_node_box_linux_lifecycle.go',
+    'node_box_linux_cover.go.tmpl': 'routervpn_desktop_node_box_linux_cover.go',
+    'node_box_linux_cover_test.go.tmpl': 'routervpn_desktop_node_box_linux_cover_test.go',
     'external_box_physical.go.tmpl': 'routervpn_desktop_external_box_physical.go',
     'external_box_physical_test.go.tmpl': 'routervpn_desktop_external_box_physical_test.go',
     'external_box_integration_test.go.tmpl': 'routervpn_desktop_external_box_integration_test.go',
@@ -94,6 +96,7 @@ PEER_TEMPLATES = {
     'node_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_windows_test.go',
     'node_layer_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_layer_peer_test.go',
     'node_router_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_router_peer_test.go',
+    'node_router_cover_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_router_cover_peer_test.go',
     'node_router_peer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_router_peer_linux_test.go',
     'node_hysteria2_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_hysteria2_peer_test.go',
     'node_naive_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_peer_test.go',
@@ -253,7 +256,9 @@ def pt_copies():
     for name, relative in BOX_TEMPLATES.items():
         path = ROOT/'mobile/desktop'/name
         raw = path.read_bytes()
-        prefix = {'node_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n'}.get(name, b'')
+        prefix = {'node_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
+                  'node_box_linux_cover.go.tmpl': b'//go:build linux\n\n',
+                  'node_box_linux_cover_test.go.tmpl': b'//go:build linux\n\n'}.get(name, b'')
         if path.is_symlink() or not raw.startswith(prefix+b'package box\n'):
             raise ValueError('Desktop Tor Box package boundary changed')
         content[relative] = raw

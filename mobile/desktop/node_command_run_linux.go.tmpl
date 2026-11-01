@@ -159,8 +159,14 @@ func routerVPNRunLinuxNodeControlled(parent context.Context, directory, session,
 	if err != nil {
 		return err
 	}
+	activation, stopActivation := context.WithTimeout(graph, routerVPNNodeAdmissionLimit)
+	cover, err := instance.RouterVPNDesktopLinuxNodeActivateCover(activation, policy, physical)
+	stopActivation()
+	if err != nil {
+		return err
+	}
 	current := func() bool {
-		if stopped.Load() || parent.Err() != nil || graph.Err() != nil {
+		if stopped.Load() || parent.Err() != nil || graph.Err() != nil || !cover.Current() {
 			return false
 		}
 		ctx, cancel := context.WithTimeout(graph, 2*time.Second)
@@ -173,7 +179,7 @@ func routerVPNRunLinuxNodeControlled(parent context.Context, directory, session,
 		if err := control.current(ctx); err != nil {
 			return err
 		}
-		if err := routerVPNProveNodeReadyCaptured(ctx, files, policy, control.selectionHash, physical); err != nil {
+		if err := routerVPNProveNodeReadyCapturedCover(ctx, files, policy, control.selectionHash, physical, cover); err != nil {
 			return err
 		}
 		return control.current(ctx)

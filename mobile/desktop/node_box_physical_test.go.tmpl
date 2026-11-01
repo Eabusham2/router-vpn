@@ -26,6 +26,7 @@ import (
 	"github.com/sagernet/sing-box/protocol/shadowsocks"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-box/service/routervpnperformance"
 	SJ "github.com/sagernet/sing/common/json"
 )
 
@@ -45,6 +46,11 @@ func newDesktopNodeBoxFixture(t *testing.T, edit func(map[string]any)) *desktopN
 }
 
 func newDesktopNodeBoxFixtureWithMTU(t *testing.T, edit func(map[string]any), restoredMTU int) *desktopNodeBoxFixture {
+	return newDesktopNodeBoxFixtureWithOptions(t, edit, restoredMTU, nil, nil)
+}
+
+func newDesktopNodeBoxFixtureWithOptions(t *testing.T, edit func(map[string]any), restoredMTU int,
+	profileEdit func(map[string]any), registryEdit func(*boxService.Registry)) *desktopNodeBoxFixture {
 	t.Helper()
 	if runtime.GOOS != "linux" && runtime.GOOS != "windows" {
 		t.Skip("node native composition fixture requires Linux or Windows")
@@ -55,9 +61,13 @@ func newDesktopNodeBoxFixtureWithMTU(t *testing.T, edit func(map[string]any), re
 		"route": map[string]any{"final": "proxy", "rules": []any{}}}
 	config, _ := json.Marshal(graph)
 	files, _ := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(config)})
-	profile, _ := json.Marshal(map[string]any{"id": "captured-router", "node_kind": "router-vpn", "node_proof_id": strings.Repeat("a", 64),
+	profileOptions := map[string]any{"id": "captured-router", "node_kind": "router-vpn", "node_proof_id": strings.Repeat("a", 64),
 		"router_api": "http://10.77.0.1:8787", "api_token": "captured-node-token", "endpoint": "192.0.2.44", "dns_mode": "home", "adguard_ipv4": "192.168.50.133",
-		"kill_switch_policy": "always", "mtu_policy": "auto", "ipv6_mode": "off", "home_lan_access": false})
+		"kill_switch_policy": "always", "mtu_policy": "auto", "ipv6_mode": "off", "home_lan_access": false}
+	if profileEdit != nil {
+		profileEdit(profileOptions)
+	}
+	profile, _ := json.Marshal(profileOptions)
 	original, err := mobilemultihop.NewNodeProfile("shadowsocks", string(files), string(profile), "", "")
 	if err != nil {
 		t.Fatal(err)
@@ -93,6 +103,10 @@ func newDesktopNodeBoxFixtureWithMTU(t *testing.T, edit func(map[string]any), re
 	DNST.RegisterTCP(dnsRegistry)
 	services := boxService.NewRegistry()
 	routervpndesktoppt.RegisterNodeNetworkOwner(services)
+	routervpnperformance.RegisterService(services)
+	if registryEdit != nil {
+		registryEdit(services)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	ctx = Context(ctx, ins, outs, endpoint.NewRegistry(), dnsRegistry, services, certificate.NewRegistry())
