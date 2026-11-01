@@ -1,0 +1,17 @@
+diff --git a/src/obfs/obfs.h b/src/obfs/obfs.h
+index 8f54408..3eb7801 100755
+--- a/src/obfs/obfs.h
++++ b/src/obfs/obfs.h
+@@ -48,9 +48,9 @@ struct obfs_t {
+     struct server_info_t server_info;
+     void *l_data;
+ 
+-#if !defined(NDEBUG) || (defined(DEBUG) || defined(_DEBUG))
+-    bool auth_success; // just for debugging only
+-#endif
++    // Keep the ABI independent of include order: generated config.h can undefine
++    // NDEBUG after a translation unit has already included this declaration.
++    bool auth_success; // used by debug checks only
+ 
+     void * (*generate_global_init_data)(void);
+     size_t (*get_overhead)(struct obfs_t *obfs);
