@@ -119,6 +119,7 @@ jobs:
           python3 server/scripts/test_setup_center_release.py
           python3 server/scripts/test_setup_center_update.py
           python3 server/scripts/test_setup_imports.py
+          python3 server/scripts/test_setup_socks_method.py
           python3 server/scripts/test_setup_center_server.py
           python3 server/scripts/test_setup_center_server_control.py
           python3 server/scripts/test_setup_center_requirement_349.py

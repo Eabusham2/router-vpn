@@ -231,6 +231,14 @@ jobs:
             -t router-vpn-preflight-method-imports:arm64 .
           bash deploy/run_setup_methods_interoperability_container.sh router-vpn-preflight-method-imports:arm64
 
+      - name: Use final private SOCKS downloads with unchanged curl and selected DNS receipts
+        timeout-minutes: 8
+        run: |
+          docker buildx build --platform linux/arm64 --progress=plain --load \
+            --target socks-method-import -f deploy/setup-methods-interoperability.Dockerfile \
+            -t router-vpn-preflight-socks-method-import:arm64 .
+          bash deploy/run_setup_methods_interoperability_container.sh router-vpn-preflight-socks-method-import:arm64 socks
+
       - name: Smoke-test built ARM64 binaries
         run: |
           docker run --rm --platform linux/arm64 --entrypoint /bin/sh router-vpn-preflight-init:arm64 -c 'test -x /usr/local/bin/router-vpn-init && test -x /src/server/scripts/generate-setup-assets.py && test -x /src/server/scripts/generate-aux-proxies.py && test -x /src/server/scripts/create-bundle-json.py && test -x /src/server/scripts/build-download-on-demand.py && test -x /src/server/scripts/download-broker.py && test -x /src/server/scripts/apply-runtime.sh && command -v go >/dev/null'

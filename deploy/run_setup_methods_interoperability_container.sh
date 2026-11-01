@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 fixture=${1:?built Setup Center native-import fixture is required}
+mode=${2:-shadowsocks}
+setup_options=()
+case "$mode" in
+  shadowsocks) ;;
+  socks) setup_options=(--cap-add NET_ADMIN --cap-add NET_BIND_SERVICE --dns 127.0.0.55) ;;
+  *) echo 'Unknown Setup Center interoperability mode' >&2; exit 2 ;;
+esac
 transport=ghcr.io/sagernet/sing-box:v1.13.12
 workspace=$(mktemp -d)
 source_container=''
@@ -22,7 +29,7 @@ production_hash=${production_hash%% *}
 docker rm "$source_container" >/dev/null
 source_container=''
 owned=$(docker create --init --network none --platform linux/arm64 \
-  --cap-drop ALL --security-opt no-new-privileges --pids-limit 256 \
+  --cap-drop ALL "${setup_options[@]}" --security-opt no-new-privileges --pids-limit 256 \
   --memory 768m --cpus 2 --read-only --tmpfs /tmp:rw,noexec,nosuid,size=128m \
   --env ROUTERVPN_REQUIRE_PRODUCTION_HASHES=1 --env "ROUTERVPN_SINGBOX_SHA256=$production_hash" "$fixture")
 timeout --signal=TERM --kill-after=10 240 docker start --attach "$owned"

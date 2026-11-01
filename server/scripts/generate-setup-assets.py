@@ -3,9 +3,12 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from html import escape
 from importlib.util import module_from_spec, spec_from_file_location
+import ipaddress
 import json
 import pathlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -103,7 +106,96 @@ def generic_config(gen: pathlib.Path, ident: str, label: str, rel: str, note: st
     )
 
 
-def build_methods(gen: pathlib.Path, endpoint: str, socks_host: str) -> list[dict]:
+def private_socks_method(config: dict | None, home_host: str) -> dict:
+    """Describe the finalized listener; never invent its endpoint or credentials."""
+    item = asset(
+        "socks5", "SOCKS5 (inside VPN)", "Private app proxy",
+        apps=["Potatso (manual setup on home LAN)", "curl (SOCKS5 remote DNS)", "Apps with SOCKS5 support", "Router VPN"],
+        note="Private LAN/in-tunnel proxy only. Never WAN-forward its listener. The private host is intentional and is not the public VPN exit IP.",
+        simple=True,
+    )
+    if config is None:
+        item["native"] = "Finalize this home node first; its private SOCKS5 server configuration is missing."
+        return item
+    if not isinstance(config, dict) or not isinstance(config.get("inbounds"), list):
+        raise ValueError("private SOCKS5 server configuration must contain an inbound list")
+    listeners = [value for value in config["inbounds"] if isinstance(value, dict) and value.get("type") == "socks"]
+    if len(listeners) != 1:
+        raise ValueError("private SOCKS5 method requires one unambiguous socks listener")
+    listener = listeners[0]
+    port = listener.get("listen_port")
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError("private SOCKS5 listener port must be an integer between 1 and 65535")
+    listen = listener.get("listen")
+    if not isinstance(listen, str) or "%" in listen:
+        raise ValueError("private SOCKS5 listener must use an unscoped literal IP")
+    try:
+        bound = ipaddress.ip_address(listen)
+        host = home_host if bound.is_unspecified else listen
+        if not isinstance(host, str) or "%" in host:
+            raise ValueError("invalid private host")
+        address = ipaddress.ip_address(host)
+    except ValueError as error:
+        raise ValueError("private SOCKS5 listener/home host must use a valid literal IP") from error
+    if address.is_unspecified or address.is_multicast or not address.is_private or address.is_link_local:
+        raise ValueError("private SOCKS5 method requires a private unicast LAN, tunnel or loopback address")
+    if bound.version == 4 and address.version != 4:
+        raise ValueError("an IPv4 SOCKS5 listener cannot advertise an IPv6 home address")
+    users = listener.get("users", [])
+    if not isinstance(users, list) or len(users) > 1:
+        raise ValueError("private SOCKS5 method requires no authentication or one explicitly selected user")
+    settings = {"host": host, "port": port, "authentication": "none"}
+    lines = [f"SOCKS5 host: {host}", f"Port: {port}", "TLS: off (private LAN/VPN connection)"]
+    if users:
+        user = users[0]
+        if not isinstance(user, dict) or set(user) != {"username", "password"}:
+            raise ValueError("private SOCKS5 credentials must contain exactly username and password")
+        for key in ("username", "password"):
+            value = user[key]
+            if (not isinstance(value, str) or not 1 <= len(value.encode("utf-8")) <= 255
+                    or any(ord(character) < 32 or ord(character) == 127 or character in "\x85\u2028\u2029" for character in value)):
+                raise ValueError("private SOCKS5 credentials cannot be empty, oversized or multiline/control text")
+        settings.update(authentication="username/password", username=user["username"], password=user["password"])
+        lines.extend(["Authentication: username/password", "Username: " + user["username"], "Password: " + user["password"]])
+        auth_instruction = "Enable username/password authentication and copy both exact fields below."
+    else:
+        lines.append("Authentication: none")
+        auth_instruction = "Leave authentication off; do not enter a username or password."
+    lines.extend([
+        "DNS: resolve destination hostnames through the proxy (SOCKS5 remote DNS).",
+        "Use only on the home LAN or through an existing VPN that keeps this private endpoint reachable.",
+        "Never forward this listener to the public Internet. This app proxy does not configure all device DNS.",
+    ])
+    item.update(config="\n".join(lines) + "\n", available=True, socksSettings=settings,
+                native=(f"1. Reach the home LAN or keep your existing VPN route home active. "
+                        f"2. Add a manual SOCKS5 server in your app: host {host}, port {port}, TLS off. "
+                        f"{auth_instruction} 3. Choose remote/proxy hostname resolution when the app offers it. "
+                        "Potatso can use this manual method on the home LAN; do not assume two independent phone VPNs stay active together. "
+                        "The downloaded text contains manual fields, not a QR/import link."))
+    return item
+
+
+def read_private_socks_config(path: pathlib.Path) -> dict | None:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return None
+    # A present but unsafe/malformed source must abort before the private output
+    # transaction. Do not turn it into plausible default no-auth instructions.
+    def unique_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("private SOCKS5 server JSON contains a duplicated field")
+            value[key] = item
+        return value
+    value = json.loads(read_verified_regular(path, private=True).decode("utf-8"), object_pairs_hook=unique_object)
+    if not isinstance(value, dict):
+        raise ValueError("private SOCKS5 server configuration must be an object")
+    return value
+
+
+def build_methods(gen: pathlib.Path, endpoint: str, socks_host: str, socks_config: dict | None = None) -> list[dict]:
     methods: list[dict] = []
     methods.append(asset(
         "wireguard", "WireGuard Raw", "Simple VPN", config=read_text(gen/"wg"/"wg.conf"),
@@ -159,17 +251,9 @@ def build_methods(gen: pathlib.Path, endpoint: str, socks_host: str) -> list[dic
         note="Legacy compatibility only; prefer WireGuard, Shadowsocks 2022, Hysteria2, or Router VPN.", native="Import only into an SSR-compatible client.", simple=True,
     ))
 
-    # SOCKS5 is intentionally private and only useful after the device already
-    # has a route home. Never turn its LAN host into a WAN QR or expose 1080.
-    socks=f"SOCKS5 host: {socks_host}\nPort: 1080\nAuthentication: none\nUse only after the device already reaches home through Router VPN/WireGuard/AmneziaWG."
-    item=asset(
-        "socks5", "SOCKS5 (inside VPN)", "Private app proxy", config=socks,
-        apps=["Potatso (manual SOCKS5 profile)", "Apps with SOCKS5 support", "Router VPN"],
-        note="Private in-tunnel proxy only. Never WAN-forward TCP 1080. The private host is intentional and is not the public VPN exit IP.",
-        native=f"Potatso/manual client: add SOCKS5 host {socks_host}, port 1080, no authentication, only after the device is already connected home through a VPN tunnel.", simple=True,
-    )
-    item["qrPayload"]=""; item["qrPngBase64"]=""
-    methods.append(item)
+    # Keep manual fields separate from real URI/QR imports. Use the actual
+    # finalized listener, including an explicitly bound address and saved port.
+    methods.append(private_socks_method(socks_config, socks_host))
     return methods
 
 
@@ -217,7 +301,7 @@ UDP      51822   → 51822</pre><p class="small">Do not expose 1080, 8786–8793
 
 <section class="panel" data-tab="modes"><div class="card"><h2>All Router VPN raw runtimes — lightest to strongest</h2><p class="small"><b>Server/source readiness</b> below means the home-node profile/catalog entry was generated. It does <b>not</b> promise every platform has that engine. The installed Router VPN app revalidates platform engine/path availability and shows the exact live reason before Connect. The app groups these 20 raw runtimes into the 16 logical modes.</p><div class="scroll"><table><thead><tr><th># / mode</th><th>Protection/layers</th><th>Engine</th><th>Added ping</th><th>Traffic</th><th>Speed loss</th><th>Server/source readiness</th><th>Reason / next gate</th></tr></thead><tbody id="modeRows"></tbody></table></div></div><div class="card"><h3>AUTO / SMART AUTO / CUSTOM / ALL</h3><p><b>AUTO</b> tries the lightest eligible validated mode first and stops at the first healthy connection. <b>SMART AUTO</b> connects, then attempts simplifications while keeping a last-good stack. <b>CUSTOM</b> chooses a compatible validated stack containing the requested layers. <b>MAX</b> fails closed. <b>ALL</b> reports the strongest validated branch and cannot silently claim an unavailable stronger path.</p><p><b>DAITA-like</b> is bounded cover traffic; it is not claimed to be Mullvad's exact Maybenot DAITA implementation. <b>Jumbo TUN</b> is for compatible proxy/TUN paths, not raw WireGuard/AWG.</p></div></section>
 
-<section class="panel" data-tab="forward"><div class="card"><h2>Port forwarding after you connect</h2><ol><li>Connect using WireGuard or AmneziaWG so the home router-agent can identify your tunnel peer.</li><li>In the Router VPN app open <b>Port forwarding</b>.</li><li>Choose TCP, UDP, or both; enter From/To; target 0 preserves the same range.</li><li><b>Protected DMZ</b> forwards unused ports only. Router VPN listeners and management ports remain reserved.</li><li>Use <b>Clear</b> when finished.</li></ol><p class="small">Proxy-only modes are outbound paths and cannot receive peer-targeted inbound forwarding the same way.</p></div><div class="card"><h2>SOCKS5</h2><p>Internal proxy: <code>__SOCKS__:1080</code>, no authentication, only after the VPN reaches home. The app separately tests/displays the <b>public exit IP</b>; do not interpret this private SOCKS address as the public internet address.</p></div></section>
+<section class="panel" data-tab="forward"><div class="card"><h2>Port forwarding after you connect</h2><ol><li>Connect using WireGuard or AmneziaWG so the home router-agent can identify your tunnel peer.</li><li>In the Router VPN app open <b>Port forwarding</b>.</li><li>Choose TCP, UDP, or both; enter From/To; target 0 preserves the same range.</li><li><b>Protected DMZ</b> forwards unused ports only. Router VPN listeners and management ports remain reserved.</li><li>Use <b>Clear</b> when finished.</li></ol><p class="small">Proxy-only modes are outbound paths and cannot receive peer-targeted inbound forwarding the same way.</p></div><div class="card"><h2>SOCKS5</h2><pre>__PRIVATE_SOCKS__</pre><p>The app separately tests/displays the <b>public exit IP</b>; do not interpret this private SOCKS address as the public internet address.</p></div></section>
 
 <section class="panel" data-tab="guide"><div class="card"><h2>Complete guide</h2><div id="fullGuide"></div></div><div class="card"><h2>Multiple routers / nodes</h2><p>Install the app once, then pair/import one or many Router VPN or validated external nodes. The app remembers selection/recent use and can store optional real location/latitude/longitude. Desktop node ranking uses at least 50 TCP handshake samples and shows robust measured latency statistics; automatic fastest selection is never guessed.</p><p class="small"><b>Multihop truth:</b> Windows, macOS and Linux have real desktop entry→exit source paths; Android supports a narrower real subset; full desktop-equivalent iOS Router VPN multihop remains unavailable. The installed app still revalidates compatibility, DNS/exit proof, rollback and kill-switch interaction before claiming a chain is connected.</p></div><div class="card"><h2>Kill switch / client control</h2><p>Emergency Stop is separate from strict kill-switch policy. Windows/Linux/macOS have platform firewall source paths; Android and iOS use their platform VPN/route-lockdown mechanisms with truthful limits. Final Wi‑Fi/cellular/reconnect/sleep/failure leak proof is a physical-device release gate, not something this Setup Center page can prove.</p></div></section>
 
@@ -269,7 +353,12 @@ const WIZKEY='routervpn.setupcenter.done.v5',WIZSTEP='routervpn.setupcenter.step
 ['Finished',`Setup is complete. This full guide never disappears: use the Setup Center tabs or reopen this wizard at any time.`]
 ];let wi=+(localStorage.getItem(WIZSTEP)||0);function startWizard(force=false){if(force||localStorage.getItem(WIZKEY)!=='1'){$('wizard').hidden=false;renderWiz()}}function renderWiz(){wi=Math.max(0,Math.min(wi,wiz.length-1));localStorage.setItem(WIZSTEP,wi);$('wizardProgress').textContent=`Step ${wi+1} of ${wiz.length}`;$('wizardTitle').textContent=wiz[wi][0];$('wizardBody').innerHTML=`<p>${wiz[wi][1]}</p>`;$('wizardNext').textContent=wi===wiz.length-1?'Finish':'Next'}function wizardNext(){if(wi===wiz.length-1){localStorage.setItem(WIZKEY,'1');$('wizard').hidden=true;return}wi++;renderWiz()}function wizardBack(){if(wi>0)wi--;renderWiz()}function closeWizard(){$('wizard').hidden=true}if(localStorage.getItem(WIZKEY)!=='1')startWizard(false);
 </script></body></html>'''
-    return page.replace("__DATA__", packed).replace("__SOCKS__", data.get("socksHost", "home node"))
+    socks = next((value for value in data.get("methods", []) if value.get("id") == "socks5"), {})
+    private_socks = socks.get("config") or socks.get("native") or "Finalize the home node's private SOCKS5 configuration first."
+    values = {"DATA": packed, "SOCKS": escape(data.get("socksHost", "home node")), "PRIVATE_SOCKS": escape(private_socks)}
+    # Substitute only original template markers. A saved credential can contain
+    # marker-like text; substituting again inside inserted JSON corrupts it.
+    return re.sub(r"__(DATA|SOCKS|PRIVATE_SOCKS)__", lambda match: values[match[1]], page)
 
 
 def main() -> int:
@@ -280,7 +369,7 @@ def main() -> int:
     endpoint = sys.argv[2].strip().strip("[]")
     socks_host = sys.argv[3].strip()
     gen = base / "client-bundle" / "generated"
-    methods = build_methods(gen, endpoint, socks_host)
+    methods = build_methods(gen, endpoint, socks_host, read_private_socks_config(base / "config/socks5.json"))
 
     devices={
       "ios":{"label":"iPhone / iPad","customApp":"Router VPN is a real native app. Raw WireGuard uses the PacketTunnel engine today; supported Libbox paths are source-wired; unsupported AWG/OpenVPN/full desktop-equivalent multihop combinations stay visibly unavailable instead of being faked.","steps":["Install Router VPN or a simple compatible protocol app.","Import/pair router-vpn-bundle.json to add this node without reinstalling Router VPN.","For independent WireGuard, import/scan the generated profile in the WireGuard app.","Only choose a Setup Center Method whose client explicitly supports that protocol."]},

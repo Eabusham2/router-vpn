@@ -7,13 +7,26 @@ RUN cargo install shadowsocks-rust --version 1.24.0 --locked --no-default-featur
 
 FROM ghcr.io/sagernet/sing-box:v1.13.12 AS production-transport
 
-FROM debian:bookworm-slim
+FROM debian:bookworm-slim AS method-base
 RUN apt-get update \
  && apt-get install -y --no-install-recommends python3 bash openssl ca-certificates qrencode \
  && rm -rf /var/lib/apt/lists/*
-COPY --from=independent-client /out/bin/sslocal /out/bin/ssurl /usr/local/bin/
 COPY --from=production-transport /usr/local/bin/sing-box /usr/local/bin/sing-box
-COPY deploy/test_setup_shadowsocks_interoperability.py deploy/test_aux_interoperability.py /src/deploy/
+COPY deploy/test_aux_interoperability.py /src/deploy/
 COPY server/scripts/generate-transports.sh server/scripts/generate-setup-assets.py server/scripts/normalize-setup-imports.py server/scripts/import_payloads.py /src/server/scripts/
 COPY server/scripts/atomic-private-write.py server/scripts/atomic-private-batch.py server/scripts/verified-regular-read.py server/scripts/preserve-generated-state.py /src/server/scripts/
+
+FROM method-base AS socks-method-import
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl nodejs iproute2 \
+ && rm -rf /var/lib/apt/lists/*
+COPY deploy/test_setup_socks_interoperability.py deploy/test_setup_overtls_interoperability.py deploy/run_aux_interoperability.py /src/deploy/
+COPY configs/router/socks5.json.example /src/configs/router/socks5.json.example
+COPY server/finalize/finalize.sh server/finalize/upgrade-safe.sh /src/server/finalize/
+ENTRYPOINT ["python3", "/src/deploy/test_setup_socks_interoperability.py", "--sing-box", "/usr/local/bin/sing-box", "--curl", "/usr/bin/curl", "--node", "/usr/bin/node"]
+
+# Keep the existing unqualified build target as the Shadowsocks import gate.
+FROM method-base AS shadowsocks-method-import
+COPY --from=independent-client /out/bin/sslocal /out/bin/ssurl /usr/local/bin/
+COPY deploy/test_setup_shadowsocks_interoperability.py /src/deploy/
 ENTRYPOINT ["python3", "/src/deploy/test_setup_shadowsocks_interoperability.py", "--sing-box", "/usr/local/bin/sing-box", "--sslocal", "/usr/local/bin/sslocal", "--ssurl", "/usr/local/bin/ssurl"]

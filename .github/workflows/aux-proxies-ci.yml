@@ -298,6 +298,14 @@ jobs:
             -t router-vpn-ci-method-imports:arm64 .
           bash deploy/run_setup_methods_interoperability_container.sh router-vpn-ci-method-imports:arm64
 
+      - name: Use final private SOCKS downloads with unchanged curl and selected DNS receipts
+        timeout-minutes: 8
+        run: |
+          docker buildx build --platform linux/arm64 --progress=plain --load \
+            --target socks-method-import -f deploy/setup-methods-interoperability.Dockerfile \
+            -t router-vpn-ci-socks-method-import:arm64 .
+          bash deploy/run_setup_methods_interoperability_container.sh router-vpn-ci-socks-method-import:arm64 socks
+
       - name: Smoke-test generated OverTLS and SSR services
         shell: bash
         run: |

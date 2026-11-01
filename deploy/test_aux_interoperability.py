@@ -69,7 +69,7 @@ class Children:
         self.directory = directory
         self.children = []
 
-    def start(self, name, command, listen):
+    def start(self, name, command, listen, *, host=HOST):
         log = (self.directory / (name + ".log")).open("wb")
         environment = dict(os.environ, XDG_CONFIG_HOME=str(self.directory / "xdg-config"),
                            XDG_DATA_HOME=str(self.directory / "xdg-data"))
@@ -85,7 +85,7 @@ class Children:
             if child.poll() is not None:
                 raise RuntimeError(name + " exited before its owned listener: " + str(child.returncode))
             try:
-                with socket.create_connection((HOST, listen), timeout=0.1):
+                with socket.create_connection((host, listen), timeout=0.1):
                     return child
             except OSError:
                 time.sleep(0.02)

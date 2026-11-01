@@ -54,7 +54,7 @@ const input=JSON.parse(fs.readFileSync(0,'utf8'));
  vm.runInNewContext(input.script+'\ndownloadMethodConfig(variant);',context,{timeout:1000});
  const selected=input.variant==='compatible'?input.method.compatibleConfig:{filename:input.method.configFilename,content:input.method.config};
  assert(clicked&&removed&&revoked);assert.equal(anchor.download,selected.filename);
- assert.equal(blob.type,'application/json;charset=utf-8');
+ assert.equal(blob.type,selected.filename.endsWith('.json')?'application/json;charset=utf-8':'text/plain;charset=utf-8');
  const content=await blob.text();assert.equal(content,selected.content);
  for(const invalid of ['missing-selection','../../private.json']){
   if(invalid==='missing-selection')current='different-method';else{current=input.method.id;if(input.variant==='compatible')input.method.compatibleConfig.filename=invalid;else input.method.configFilename=invalid}
