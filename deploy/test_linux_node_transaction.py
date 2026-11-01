@@ -29,8 +29,9 @@ HOST_CASES = ("complete", "restored-mtu", "wrong-package", "request-replaced", "
 HOST_START_CASES = ("admitted", "active-connection", "retained-workspace", "cancelled-before-start", "source-replaced",
                     "foreign-journal", "request-during-launch", "replacement-during-launch", "request-ended",
                     "replacement-after-start", "shutdown", "always-successor")
+PROOF_SOCKET_CASES = ("tcp4", "tcp6", "udp-rejected", "wrong-family", "wrong-index", "wrong-name", "wrong-mtu", "cancelled", "closed-original")
 GROUPS = {"NodeTransaction": CASES, "NodeShutdown": SHUTDOWN_CASES, "NodeHost": HOST_CASES,
-          "NodeHostStart": HOST_START_CASES}
+          "NodeHostStart": HOST_START_CASES, "NodeProofSocket": PROOF_SOCKET_CASES}
 RUNNERS = ("test_linux_node_transaction.py", "test_linux_node_transaction_runner.py", "test_desktop_linux_guardian.py",
            "test_desktop_socket_uid.py", "prepare-desktop-external.py")
 
@@ -53,6 +54,8 @@ def checked_sources():
         "cmd/client/desktop_node_linux_retirement.go", "cmd/client/desktop_node_linux_shutdown_native_test.go",
         "cmd/client/desktop_node_host_linux.go", "cmd/client/desktop_node_host_linux_native_test.go",
         "cmd/client/desktop_node_host_linux_start.go", "cmd/client/desktop_node_host_linux_start_native_test.go",
+        "cmd/client/desktop_node_host_linux_ready.go", "cmd/client/desktop_node_host_linux_proof.go",
+        "cmd/client/desktop_node_host_linux_proof_test.go", "cmd/client/desktop_node_host_linux_proof_native_test.go",
         "internal/linuxprotection/node_control_linux.go", "internal/linuxprocess/bootstrap_linux.go",
         "internal/mobiletor/desktop_socket_linux_node_baseline.go", "internal/mobiletor/desktop_socket_linux_node_absence.go",
         "internal/mobiletor/desktop_socket_linux_node_succession_retired.go",

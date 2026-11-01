@@ -17,6 +17,7 @@ import (
 	"router-vpn/internal/common"
 	"router-vpn/internal/linuxprotection"
 	"router-vpn/internal/mobilemultihop"
+	"router-vpn/internal/mobiletor"
 )
 
 // The Linux host retains the actual installed controller and sealed private
@@ -36,6 +37,9 @@ type desktopLinuxNodeHost struct {
 	network      string
 	revision     string
 	options      [3]bool
+	physical     mobiletor.DesktopLinuxNodeRunningSelection
+	ready        *mobilemultihop.DesktopNodeReadyRecord
+	proof        *desktopLinuxNodeProof
 	stageEntered bool
 	startEntered bool
 	started      time.Time
@@ -132,6 +136,13 @@ func prepareDesktopLinuxNodeHostWith(operation context.Context, a *app, profile 
 	if err != nil {
 		return nil, err
 	}
+	physical, err := captureDesktopLinuxNodeRunningPath(policy)
+	if err != nil {
+		return nil, err
+	}
+	if err := current(); err != nil {
+		return nil, err
+	}
 	meta := policy.Metadata()
 	selection := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256,
 		ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
@@ -145,7 +156,7 @@ func prepareDesktopLinuxNodeHostWith(operation context.Context, a *app, profile 
 		return nil, err
 	}
 	host := &desktopLinuxNodeHost{gate: make(chan struct{}, 1), parent: parent, operation: operation, policy: policy,
-		selection: selection, source: []byte(input), network: network, revision: revision, options: options,
+		selection: selection, source: []byte(input), network: network, revision: revision, options: options, physical: physical,
 		launch: &desktopNodeLaunch{root: linuxOwnedControllerRoot, endpoint: endpoint, profileID: profile.ID, mode: mode,
 			config: []byte(policy.Config()), metadata: metadata, configSHA256: meta.ConfigSHA256, mtuSession: session}}
 	p := parent.parent
