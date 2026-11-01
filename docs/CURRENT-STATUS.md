@@ -6,11 +6,44 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 49a0c3be
+## Latest implementation continuation — through 6e7032f5
+
+The independently verified published source cutoff is
+[`6e7032f52acecb13128443e52fadd82ee567068a`](https://github.com/Eabusham2/router-vpn/commit/6e7032f52acecb13128443e52fadd82ee567068a).
+[Current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-6e7032f5)
+records nine further tested source units and the exact native observations.
+
+- Protected Linux WG/Off now uses the retained native session and sealed source,
+  alongside SS Off/AES/AES+XOR. Settled-empty same-boot checkpoint recovery proves
+  the old controller absent before cleanup. Real encrypted WG/SS peers and
+  ownership/restoration tests pass; all 48 installed scenarios, broader graph
+  families, nonempty Always/torn recovery and legacy succession remain required.
+- Android selected external nodes now receive their own fifty-sample routed
+  HTTPS response test and private source/execution-bound history. Terminal
+  completion and native drain are required before save. Temporary restoration
+  now validates the original adopted external source before capture and Stop,
+  preserving the already proved winner. Apple parity and external all-node/
+  Fastest comparison remain work. Direct Router TCP rankings stay separate.
+- Final OverTLS TCP, SSR/Mihomo and manual SOCKS imports now have actual unchanged
+  client evidence, joining the Shadowsocks import work. SOCKS exports preserve
+  the real saved listener/authentication; selected DNS uses independent receipt
+  checks. Stock OverTLS UDP, complete Hysteria trust-material delivery, finalized
+  ARM64 execution and original off-LAN/device acceptance remain open.
+- Shared desktop source copying now includes the missing Darwin frame test that
+  blocked Windows bootstrap composition. The actual Windows 5.1 module-path
+  and bootstrap reruns remain separate. Windows hosted Shell diagnostics still
+  lack a linked limited token and reject the GLOBALROOT probe. macOS strict
+  installer identity remains open; its earlier guardian pass is preserved.
+- No newer complete release, signing/distribution, private deployment or
+  physical-device acceptance is established. The eight unpublished PQ fixture
+  files remain preserved after the earlier automated safety stop; their work
+  was not retried. No live router, DNS, forwarding or Portainer target changed.
+
+## Earlier implementation continuation — through 49a0c3be
 
 The independently verified published source cutoff is
 [`49a0c3bef8d3c0952bb8eb93ecb39e5e8bce004b`](https://github.com/Eabusham2/router-vpn/commit/49a0c3bef8d3c0952bb8eb93ecb39e5e8bce004b).
-[Current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-49a0c3be)
+[Earlier continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#earlier-source-and-native-evidence-through-49a0c3be)
 records the eight newly published units and their separate native outcomes.
 
 - Linux retained Shadowsocks now supports all three requested Start Layers:

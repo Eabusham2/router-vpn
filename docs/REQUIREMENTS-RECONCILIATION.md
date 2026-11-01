@@ -18,21 +18,21 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
-## Implementation reconciliation through 49a0c3be
+## Implementation reconciliation through 6e7032f5
 
 The original sources below have already been recovered. The next step is to
 close their actual implementation and acceptance gaps; repeating recovery or
 substituting a smaller green gate does not satisfy them. The current published
-cutoff is [`49a0c3be`](https://github.com/Eabusham2/router-vpn/commit/49a0c3bef8d3c0952bb8eb93ecb39e5e8bce004b).
+cutoff is [`6e7032f5`](https://github.com/Eabusham2/router-vpn/commit/6e7032f52acecb13128443e52fadd82ee567068a).
 Detailed commits, tests and exact native outcomes are in
-[the current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-49a0c3be).
+[the current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-6e7032f5).
 
 | Recovered scope | Current reconciliation |
 |---|---|
-| #112, #200–213, #337 and later Start Layers | Linux saved-policy Off retains its durable original-session transaction. Retained Shadowsocks now admits Off/AES/AES+XOR with real encrypted peer and ownership checks. All 37 installed scenarios, broader graphs, legacy succession and crash/Always recovery remain required. |
-| #141–148, #335 and the August 10/19 node request | Most used sorting exists across native products; Android daily and management Connect and iOS final adoption record private proved usage. Android external map metadata/editor/projection is published. External 50-sample measurements and selected-node dispatch plus packaged/device acceptance remain open. |
-| #19, #26–30, #34, #265–269, selected DNS and Methods | Real auxiliary payload/DNS gates and final Shadowsocks canonical imports with unchanged-client IPv4/IPv6 traffic evidence are published. OverTLS/SSR usable delivery, corrected test-only client boundaries, finalized ARM64 images and original off-LAN requirements remain. |
-| Native macOS and Windows | macOS's four-job guardian gate passed at exact 9201f036; strict installer inventory still fails at 29497c54. Windows aaea06e7 passed Session/WFP/Tor cleanup/runtime gates before failing final 5.1 recovery; its module-environment source repair needs the native rerun. Signing and actual devices remain separate. |
+| #112, #200–213, #337 and later Start Layers | Retained Linux SS Off/AES/AES+XOR, WG/Off, saved-policy Off and settled-empty checkpoint recovery are published with real encrypted peer/ownership tests. All 48 installed scenarios, broader graphs, legacy succession, nonempty Always/torn recovery and physical acceptance remain required. |
+| #141–148, #222–223, #335 and the August 10/19 node request | Most used, private proved usage and Android external map metadata remain published. Android selected external50 captures actual source, execution and native drain; temporary restoration now validates the original adopted source before Stop. Routed history stays separate from direct TCP. Apple parity, external all-node/Fastest comparison and packaged/device acceptance remain open at this cutoff. |
+| #19–21, #26–30, #33–35, #265–269, selected DNS and Methods | Final Shadowsocks, OverTLS TCP, SSR/Mihomo and manual SOCKS downloads have independent unchanged-client evidence. SOCKS preserves the actual finalized private endpoint/authentication. Stock OverTLS UDP, complete Hysteria CA/trust delivery, finalized ARM64 images and original off-LAN/device requirements remain. |
+| Native macOS and Windows | macOS guardian success at 9201f036 remains distinct from strict installer failure at 29497c54. Windows source-copy and 5.1 module-path repairs need completed native reruns; the 9559799d controller run still fails linked-token/GLOBALROOT diagnostic acceptance. Signing, ordinary UAC and actual devices remain separate. |
 | All other original and later requirements | Keep their existing source/native/live evidence boundaries. No percentage, reduced denominator, full-release claim or physical deployment follows from these units. |
 
 ## Original-source recovery refreshed November 1, 2026
