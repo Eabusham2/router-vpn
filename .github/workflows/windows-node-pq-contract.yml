@@ -66,7 +66,7 @@ jobs:
   native-pq:
     name: Actual PQ and WFP on ${{ matrix.target }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
@@ -115,9 +115,11 @@ jobs:
           python deploy/setup-desktop-native-toolchain.py '${{ matrix.target }}' (Join-Path $env:RUNNER_TEMP 'routervpn-pq-native-toolchain')
           if ($LASTEXITCODE -ne 0) { throw 'Exact PQ native toolchain preparation failed' }
       - name: Execute actual PQ ABI, BFE, two-root transport and retained reversal
-        timeout-minutes: 45
+        timeout-minutes: 60
         shell: pwsh
         run: |
+          # Observed AMD64 preparation and positive suites took about 42 minutes.
+          # Retain time for all six compiled controls; individual deadlines are unchanged.
           # Real CGO and target Rust/C library on each actual architecture.
           # WFP is scoped to this executable; only TUN is a harmless fixture.
           # Positive execution uses the unchanged shipping PQ predicate.
