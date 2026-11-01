@@ -50,6 +50,22 @@ def _pairs_for(mode: str):
             decoded = decoded.replace(request, 'body: ["profile_id": exitID, "direct": true], timeout: 180)', 1)
             retargeted.append(base64.b64encode(decoded.encode("utf-8")).decode("ascii"))
         current[direct[0]] = retargeted
+        # Most used is appended after the four established choices. Retarget
+        # both sides of the exact neighboring latency-selection anchor without
+        # changing any of its preflight or asynchronous commit guards.
+        sort = [i for i, (old64, _) in enumerate(current)
+                if '@objc func nodeSortChanged()' in base64.b64decode(old64).decode("utf-8")]
+        if len(sort) != 1:
+            raise SystemExit("node sort callback mutation pair changed")
+        before = '["current", "last-used", "latency", "name"][max(0, min(nodeSortPopup.indexOfSelectedItem, 3))]'
+        after = '["current", "last-used", "latency", "name", "most-used"][max(0, min(nodeSortPopup.indexOfSelectedItem, 4))]'
+        retargeted = []
+        for encoded in current[sort[0]]:
+            decoded = base64.b64decode(encoded).decode("utf-8")
+            if decoded.count(before) != 1:
+                raise SystemExit("node sort selection mutation pair changed")
+            retargeted.append(base64.b64encode(decoded.replace(before, after, 1).encode("utf-8")).decode("ascii"))
+        current[sort[0]] = retargeted
         return current
     if mode != "unified":
         return pairs
