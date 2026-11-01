@@ -247,9 +247,15 @@ func TestDesktopNativeStagingOwnsExactDirectoryAndEnvironment(t *testing.T) {
 		t.Fatal("same capture staged twice")
 	}
 	for _, name := range []string{"sing-box.json", "capture.json"} {
-		info, err := os.Stat(filepath.Join(launch.directory, name))
-		if err != nil || info.Mode().Perm()&0077 != 0 {
-			t.Fatal("private capture not protected", err)
+		path := filepath.Join(launch.directory, name)
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() {
+			t.Fatal("private capture is not its regular staged file", name, err)
+		}
+		// Windows FileMode reports DOS read-only state, not private access.
+		// Use the original opened object and its platform permission authority.
+		if err := validatePrivateRuntimePathPermissions(path, info); err != nil {
+			t.Fatal("private capture not protected", name, err)
 		}
 	}
 	if runtimeDir, err := nativeMultihopRuntimeDirFromCommand(launch.command); err != nil || runtimeDir != launch.directory {
