@@ -64,8 +64,45 @@ func linuxHostTUNOffCase(scenario string) bool {
 }
 
 func linuxHostTUNFailedReadyCase(scenario string) bool {
+	// Credential classifiers require the complete protocol-specific case name.
+	// Stripping hy2- first loses the selected TLS and Salamander negatives.
+	if linuxHostTUNWrongKeyCase(scenario) || linuxHostTUNResolverFailureCase(scenario) {
+		return true
+	}
 	scenario = linuxHostTUNAction(scenario)
-	return linuxHostTUNWrongKeyCase(scenario) || linuxHostTUNResolverFailureCase(scenario) || scenario == "cover-wrong-node" || scenario == "cover-no-replies"
+	return scenario == "cover-wrong-node" || scenario == "cover-no-replies"
+}
+
+func linuxHostTUNAssertReadinessClassification(t *testing.T) {
+	t.Helper()
+	negative := map[string]bool{}
+	for _, scenario := range []string{
+		"wrong-key", "resolver-failure", "cover-wrong-node", "cover-no-replies",
+		"layer-whitening-wrong-key", "layer-whitening-resolver-failure",
+		"wg-wrong-key", "wg-resolver-failure",
+		"hy2-wrong-key", "hy2-wrong-trust", "hy2-wrong-salamander", "hy2-resolver-failure",
+		"awg2-fast-wrong-key", "awg2-fast-wrong-header", "awg2-fast-wrong-padding", "awg2-fast-resolver-failure",
+		"awg2-strong-wrong-key", "awg2-strong-wrong-header", "awg2-strong-wrong-padding", "awg2-strong-resolver-failure",
+	} {
+		negative[scenario] = true
+	}
+	seen := make(map[string]bool, len(linuxHostTUNCases))
+	for _, scenario := range linuxHostTUNCases {
+		if seen[scenario] || linuxHostTUNFailedReadyCase(scenario) != negative[scenario] {
+			t.Fatal("installed host changed its exact negative-readiness classification", scenario)
+		}
+		seen[scenario] = true
+	}
+	for scenario := range negative {
+		if !seen[scenario] {
+			t.Fatal("installed host omitted an original negative-readiness case", scenario)
+		}
+	}
+	t.Logf("verified installed host readiness classification: %d scenarios, %d expected rejections", len(seen), len(negative))
+}
+
+func TestDesktopLinuxInstalledHostNegativeReadinessClassification(t *testing.T) {
+	linuxHostTUNAssertReadinessClassification(t)
 }
 
 func linuxHostTUNMTUCase(scenario string) bool {
@@ -681,6 +718,7 @@ func (process *linuxHostTUNController) read(t *testing.T, scenario string) linux
 }
 
 func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
+	linuxHostTUNAssertReadinessClassification(t)
 	linuxHostTUNNamespace(t)
 	for _, scenario := range linuxHostTUNCases {
 		t.Run(scenario, func(t *testing.T) {
