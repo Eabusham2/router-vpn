@@ -1,12 +1,75 @@
 # Current implementation status
 
-Updated November 1, 2026 UTC (October 31 in America/Chicago). This file distinguishes published source,
+Updated November 1, 2026 UTC. This file distinguishes published source,
 local commits, unfinished integration and remaining delivery evidence. The
 binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through d8bb8018
+## Latest implementation continuation — through 74dbd3d4
+
+The independently read source cutoff is
+[`74dbd3d43584cc38e77ea7730a97147d9bd3ae4b`](https://github.com/Eabusham2/router-vpn/commit/74dbd3d43584cc38e77ea7730a97147d9bd3ae4b).
+The [updated November 1 evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-74dbd3d4)
+records the intervening publications and their separate native results. The
+historical sections below retain their original cutoffs and requirement scope.
+
+- Linux now has private final-proof activation that survives completion of its
+  original Connect request (`adaa45f1`), one retained session journal and closed
+  predecessor across requests (`5e8ce3d6`), and a native preparation guard against
+  cancellation intent before its callback runs (`0b7becef`). Their focused
+  race, actual namespace and compiled-defect evidence does not establish the
+  complete installed encrypted connection. The required installed-host gate
+  was added in `855e9910` and expanded from eleven to sixteen cases in
+  `200ce3b1`, including actual Prove/Activate/request-finish/Current and original
+  activation retirement. Both controller architectures compile; the assembled
+  native gate has no verified complete pass yet. The manually dispatched
+  [Linux run 41286519880](https://github.com/Eabusham2/router-vpn/actions/runs/41286519880)
+  is still in progress at exact `0b7becef`, so it contains the earlier eleven
+  cases, not the later sixteen. Clean terminal restart for the original
+  settled empty session journal is implemented in `74dbd3d4`: eighteen actual
+  Linux race cases and three compiled defects passed. Public Linux Node
+  integration, saved-policy Off, crash recovery and retained Always recovery
+  remain unfinished at this cutoff.
+- Windows PQ again passed both complete native gates at `86e0491b`. At
+  `0b7becef`, the retained-Node and controller jobs passed, including 44 Node
+  controls and eight prospective ALL controls; the separate Shell diagnostic
+  failed, so that workflow is not all green. Both build-owner jobs also passed.
+  The distinct native staging assertion failed on Windows and is repaired in
+  `b5eb348e` by using the existing native permission/object validator; its
+  matching actual Windows rerun remains required.
+- Complete MAX remains closed. At exact `855e9910`, ARM64 again passed twelve
+  traffic and 48 credential cases, then failed five restored QUIC transfers.
+  Its retained-reference/key/policy diagnostics do not yet establish a cause.
+  AMD64 passed every positive, all twelve succession cases and four
+  foreign-predecessor cases, then failed the fourth compiled control because
+  it lacked the required uncaptured-outer-UDP rejection witness. Neither host
+  passed the full gate or all 22 controls. The separate retained TCP/UDP
+  allocator repair `ac0c95a2` addresses an earlier observed bind failure; its
+  native rerun is in progress and does not close either `855e9910` blocker.
+  `7bb02f35` adds bounded socket-error and ownership-readback diagnostics to
+  the failing control; exact denial requirements and the failing verdict stay
+  unchanged, with no new complete native pass claimed.
+- The macOS ES diagnostic still has no accepted owned linked/unlinked event.
+  `c91a54de` adds bounded rejection-stage/schema/trigger evidence while keeping
+  every identity requirement and installer refusal unchanged; its matching
+  installer workflow is queued. Managed ARM64 inventory evidence remains
+  separate from unresolved Intel identity and strict first/legacy installation.
+- Linux lifecycle and installed-host CLI failures now expose bounded original
+  child output and rethrow the same failure (`1426a83d`, `2efa329e`). The Linux
+  Speed Lab fixture now includes its shipping authentication declaration
+  (`50b9d9ac`). The server-Tor preparation now includes all six original Linux
+  process-owner files and exact relocated imports (`da10ee18`); real pinned
+  Linux compilation passed and the old-import defect reproduced the shipping
+  setup failure. Full native images, runtime acceptance and publication remain
+  separate from these source and fixture repairs.
+- The fresh release list still reports prerelease `745b3e41` with twelve
+  assets. This source series has no verified all-green exact-SHA release.
+  Physical/off-LAN networking and UI, production signing, private deployment,
+  live providers and ASUS/Portainer acceptance remain unproved. Unpublished
+  work is not included here; no live deployment or router change is claimed.
+
+## Earlier implementation continuation — through d8bb8018
 
 The independently verified source cutoff is
 [`d8bb8018f7f28bd5c1fb39121381be6be3034c9d`](https://github.com/Eabusham2/router-vpn/commit/d8bb8018f7f28bd5c1fb39121381be6be3034c9d).
