@@ -51,6 +51,9 @@ NAIVE_CREDENTIAL_CASES = (*NAIVE_CASES, *(mode + "/" + case for mode in NAIVE_MO
 COMPOSITE_MODES = ("split", "max", "ss-v2ray")
 COMPOSITE_CASES = tuple(mode + "/" + layer for mode in COMPOSITE_MODES
                        for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening"))
+COMPOSITE_ALLOCATION_CASES = ("retained-udp-owner", *("distinct-ports/" + case for case in (
+    "retained-distinct-peer", "same-port-retries", "same-port-bound", "allocation-bound", "access-denied-bound",
+    "unrelated-error", "foreign-address", "nil-owner", "cleanup-failure", "invalid-capture")))
 COMPOSITE_CREDENTIAL_CASES = (
     *(case + "/" + fault for case in COMPOSITE_CASES for fault in (("sip003-key" if case.startswith("ss-v2ray/") else "xray-reality-key"), "hysteria-password")),
     *(case + "/aes-key" for case in COMPOSITE_CASES if not case.endswith("/off")),
@@ -637,7 +640,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Node Naive gate omitted a complete HTTP version/Start Layer")
             if name == "naive-credentials" and any("--- PASS: TestRouterVPNDesktopNodeNaiveWrongCredential/" + case + " (" not in output for case in NAIVE_CREDENTIAL_CASES):
                 raise ValueError("Node Naive gate omitted a captured user, password, certificate or layer credential negative")
-            if name == "composite-traffic" and any("--- PASS: TestRouterVPNDesktopNodeCompositeTraffic/" + case + " (" not in output for case in COMPOSITE_CASES):
+            if name == "composite-traffic" and any("--- PASS: TestRouterVPNDesktopNodeCompositeTraffic/" + case + " (" not in output for case in (*COMPOSITE_CASES, *COMPOSITE_ALLOCATION_CASES)):
                 raise ValueError("Node composite gate omitted simultaneous original TCP/UDP branches or a Start Layer")
             if name == "composite-credentials" and any("--- PASS: TestRouterVPNDesktopNodeCompositeWrongCredential/" + case + " (" not in output for case in COMPOSITE_CREDENTIAL_CASES):
                 raise ValueError("Node composite gate omitted an independent TCP, UDP or shared Start Layer credential negative")

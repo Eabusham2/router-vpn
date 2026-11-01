@@ -6,10 +6,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/netip"
+	"os"
+	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -22,6 +26,53 @@ import (
 
 func desktopNodeCompositeMode(mode string) bool {
 	return mode == "split" || mode == "max" || mode == "ss-v2ray"
+}
+
+func desktopNodeCompositeUDPListener(ip netip.Addr, tcp net.Listener, listenUDP func(string, string) (net.PacketConn, error)) (net.PacketConn, error) {
+	if !ip.Is4() || tcp == nil || tcp.Addr() == nil || listenUDP == nil {
+		return nil, errors.New("composite UDP allocation requires its retained IPv4 TCP peer")
+	}
+	captured, err := netip.ParseAddrPort(tcp.Addr().String())
+	if err != nil || captured.Addr() != ip || captured.Port() == 0 {
+		return nil, errors.New("composite UDP allocation lost its captured TCP endpoint")
+	}
+	var last error
+	for attempt := 0; attempt < 3; attempt++ {
+		// UDP selects an available port independently. Reserving the TCP
+		// numeric port in UDP is unnecessary and may be forbidden by Windows.
+		packet, err := listenUDP("udp4", netip.AddrPortFrom(ip, 0).String())
+		if err != nil {
+			if packet != nil {
+				if closeErr := packet.Close(); closeErr != nil {
+					return nil, errors.Join(err, closeErr)
+				}
+			}
+			if !desktopNodeLayerAllocationError(err) {
+				return nil, err
+			}
+			last = err
+			continue
+		}
+		var actual netip.AddrPort
+		if packet != nil && packet.LocalAddr() != nil {
+			actual, err = netip.ParseAddrPort(packet.LocalAddr().String())
+		}
+		if packet == nil || err != nil || actual.Addr() != ip || actual.Port() == 0 || tcp.Addr() == nil || tcp.Addr().String() != captured.String() {
+			var closeErr error
+			if packet != nil {
+				closeErr = packet.Close()
+			}
+			return nil, errors.Join(errors.New("composite UDP allocation replaced a captured endpoint"), err, closeErr)
+		}
+		if actual.Port() != captured.Port() {
+			return packet, nil
+		}
+		if err := packet.Close(); err != nil {
+			return nil, err
+		}
+		last = errors.New("composite UDP candidate reused its TCP peer's numeric port")
+	}
+	return nil, fmt.Errorf("composite UDP allocation exhausted three retained candidates: %w", last)
 }
 
 // Both independently authenticated peers remain in the one retained reference
@@ -44,18 +95,11 @@ func startDesktopNodeCompositeServer(t *testing.T, mode string, ip netip.Addr, d
 		}
 		tcp, tcpFiles = startDesktopNodeXrayServer(t, xrayMode, ip, dnsAddress)
 	}
-	// Reserve the TCP numeric port in UDP while the second peer binds. This
-	// makes the two captured endpoints deliberately distinct without depending
-	// on the OS ephemeral-port lottery or redirecting either original socket.
-	reservation, reserveErr := net.ListenPacket("udp4", tcp.tcp.Addr().String())
-	if reserveErr != nil {
-		desktopNodeLayerPreparationError(t, "distinct composite peer ports", reserveErr)
+	packet, err := desktopNodeCompositeUDPListener(ip, tcp.tcp, net.ListenPacket)
+	if err != nil {
+		desktopNodeLayerPreparationError(t, "distinct retained composite UDP peer", err)
 	}
-	t.Cleanup(func() { _ = reservation.Close() })
-	udp, udpFiles := startDesktopNodeHysteria2Server(t, ip, dnsAddress)
-	if err := reservation.Close(); err != nil {
-		t.Fatal(err)
-	}
+	udp, udpFiles := startDesktopNodeHysteria2ServerWithPacket(t, ip, dnsAddress, packet)
 	var tcpAssets, udpAssets map[string]string
 	if json.Unmarshal([]byte(tcpFiles), &tcpAssets) != nil || json.Unmarshal([]byte(udpFiles), &udpAssets) != nil || len(tcpAssets) != 2 || len(udpAssets) != 2 {
 		t.Fatal("composite peer lost one complete original branch")
@@ -274,7 +318,187 @@ func desktopNodeCompositeGrants(t *testing.T, peer *desktopNodeLayerReference, g
 	}
 }
 
+type desktopNodeCompositeAddressPacket struct {
+	net.PacketConn
+	address net.Addr
+}
+
+func (p *desktopNodeCompositeAddressPacket) LocalAddr() net.Addr { return p.address }
+
+func desktopNodeCompositeUDPAllocationTests(t *testing.T) {
+	ip := netip.MustParseAddr("127.0.0.1")
+	fixture := func(t *testing.T) (net.Listener, net.PacketConn) {
+		t.Helper()
+		tcp, packet, err := desktopNodeLayerPortPair(ip, net.Listen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = tcp.Close(); _ = packet.Close() })
+		return tcp, packet
+	}
+	retired := func(t *testing.T, address string) {
+		t.Helper()
+		packet, err := net.ListenPacket("udp4", address)
+		if err != nil {
+			t.Fatal("composite UDP allocation retained a rejected original socket", err)
+		}
+		if err := packet.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("retained-distinct-peer", func(t *testing.T) {
+		tcp, _ := fixture(t)
+		calls := 0
+		packet, err := desktopNodeCompositeUDPListener(ip, tcp, func(network, address string) (net.PacketConn, error) {
+			calls++
+			if network != "udp4" || address != netip.AddrPortFrom(ip, 0).String() {
+				return nil, errors.New("composite allocator tried to reserve its TCP port in UDP")
+			}
+			return net.ListenPacket(network, address)
+		})
+		if packet != nil {
+			t.Cleanup(func() { _ = packet.Close() })
+		}
+		if err != nil || packet == nil || calls != 1 || packet.LocalAddr().String() == tcp.Addr().String() {
+			t.Fatal("composite did not retain its independently available distinct UDP peer", calls, err)
+		}
+		other, bindErr := net.Listen("tcp4", tcp.Addr().String())
+		if other != nil {
+			_ = other.Close()
+		}
+		if !desktopNodeLayerAddressInUse(bindErr) {
+			t.Fatal("composite UDP allocation released its original TCP peer", bindErr)
+		}
+	})
+	t.Run("same-port-retries", func(t *testing.T) {
+		tcp, blocker := fixture(t)
+		final, err := net.ListenPacket("udp4", netip.AddrPortFrom(ip, 0).String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = final.Close() })
+		if err := blocker.Close(); err != nil {
+			t.Fatal(err)
+		}
+		calls := 0
+		packet, err := desktopNodeCompositeUDPListener(ip, tcp, func(network, address string) (net.PacketConn, error) {
+			calls++
+			if calls == 3 {
+				retired(t, tcp.Addr().String())
+				return final, nil
+			}
+			return net.ListenPacket(network, tcp.Addr().String())
+		})
+		if err != nil || packet != final || calls != 3 {
+			t.Fatal("composite same-port candidates did not join before retaining the third original peer", calls, err)
+		}
+		retired(t, tcp.Addr().String())
+	})
+	t.Run("same-port-bound", func(t *testing.T) {
+		tcp, blocker := fixture(t)
+		if err := blocker.Close(); err != nil {
+			t.Fatal(err)
+		}
+		calls := 0
+		packet, err := desktopNodeCompositeUDPListener(ip, tcp, func(network, address string) (net.PacketConn, error) {
+			calls++
+			return net.ListenPacket(network, tcp.Addr().String())
+		})
+		if packet != nil {
+			t.Cleanup(func() { _ = packet.Close() })
+		}
+		if err == nil || packet != nil || calls != 3 {
+			t.Fatal("composite same-port allocation escaped its three-candidate bound", calls, err)
+		}
+		retired(t, tcp.Addr().String())
+	})
+	for _, kind := range []string{"allocation-bound", "access-denied-bound", "unrelated-error", "foreign-address", "nil-owner", "cleanup-failure"} {
+		t.Run(kind, func(t *testing.T) {
+			tcp, _ := fixture(t)
+			fatal := errors.New("intentional composite constructor failure")
+			closeFailure := errors.New("intentional composite close failure")
+			var addresses []string
+			calls := 0
+			packet, err := desktopNodeCompositeUDPListener(ip, tcp, func(network, address string) (net.PacketConn, error) {
+				calls++
+				if kind == "nil-owner" {
+					return nil, nil
+				}
+				partial, err := net.ListenPacket(network, address)
+				if err != nil {
+					return nil, err
+				}
+				addresses = append(addresses, partial.LocalAddr().String())
+				switch kind {
+				case "allocation-bound":
+					other, collision := net.ListenPacket(network, tcp.Addr().String())
+					if other != nil {
+						_ = other.Close()
+					}
+					if !desktopNodeLayerAddressInUse(collision) {
+						_ = partial.Close()
+						t.Fatal("composite collision control lacked its actual occupied UDP peer", collision)
+					}
+					return partial, collision
+				case "access-denied-bound":
+					return partial, &net.OpError{Op: "listen", Net: network, Err: os.NewSyscallError("bind", syscall.Errno(10013))}
+				case "foreign-address":
+					return &desktopNodeCompositeAddressPacket{PacketConn: partial, address: &net.UDPAddr{IP: net.ParseIP("127.0.0.2"), Port: 12345}}, nil
+				case "cleanup-failure":
+					return &desktopNodeLayerFailedClosePacket{PacketConn: partial, failure: closeFailure}, fatal
+				default:
+					return partial, fatal
+				}
+			})
+			if packet != nil {
+				t.Cleanup(func() { _ = packet.Close() })
+			}
+			count := 1
+			if kind == "allocation-bound" || kind == "access-denied-bound" && runtime.GOOS == "windows" {
+				count = 3
+			}
+			if err == nil || packet != nil || calls != count {
+				t.Fatal("composite UDP error escaped its bounded original ownership", kind, calls, err)
+			}
+			if kind == "unrelated-error" && !errors.Is(err, fatal) || kind == "cleanup-failure" && (!errors.Is(err, fatal) || !errors.Is(err, closeFailure)) {
+				t.Fatal("composite UDP allocation discarded its exact constructor or close failure", err)
+			}
+			for _, address := range addresses {
+				retired(t, address)
+			}
+		})
+	}
+	t.Run("invalid-capture", func(t *testing.T) {
+		called := false
+		packet, err := desktopNodeCompositeUDPListener(ip, nil, func(string, string) (net.PacketConn, error) {
+			called = true
+			return nil, nil
+		})
+		if err == nil || packet != nil || called {
+			t.Fatal("composite missing TCP capture reached UDP allocation")
+		}
+	})
+}
+
 func TestRouterVPNDesktopNodeCompositeTraffic(t *testing.T) {
+	t.Run("distinct-ports", desktopNodeCompositeUDPAllocationTests)
+	t.Run("retained-udp-owner", func(t *testing.T) {
+		ip := netip.MustParseAddr("127.0.0.1")
+		tcp, blocker, err := desktopNodeLayerPortPair(ip, net.Listen)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = tcp.Close(); _ = blocker.Close() })
+		packet, err := desktopNodeCompositeUDPListener(ip, tcp, net.ListenPacket)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = packet.Close() })
+		server, _ := startDesktopNodeHysteria2ServerWithPacket(t, ip, "", packet)
+		if server.udp != packet || server.udp.LocalAddr().String() == tcp.Addr().String() {
+			t.Fatal("Hysteria2 startup replaced its captured distinct UDP owner")
+		}
+	})
 	desktopNodeCompositeCases(t, func(t *testing.T, mode, layer string) {
 		_, ip := desktopNodePeerInterface(t)
 		peer := startDesktopNodeLayerReference(t, mode, layer, ip)
