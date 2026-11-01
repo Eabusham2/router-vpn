@@ -308,18 +308,134 @@ def overtls_uri(config: dict, *, label: str = "Router VPN OverTLS") -> str:
 
 
 def validate_hysteria2_uri(uri: str) -> dict:
+    if not isinstance(uri, str) or any(ord(char) <= 32 or ord(char) == 127 for char in uri):
+        raise ValueError("invalid Hysteria2 whitespace/control character")
     parts = urllib.parse.urlsplit(uri)
-    if parts.scheme not in ("hysteria2", "hy2") or not parts.hostname or not parts.port or not parts.username:
+    if (parts.scheme not in ("hysteria2", "hy2") or not parts.hostname or not parts.port
+            or not parts.username or parts.netloc.count("@") != 1):
         raise ValueError("invalid Hysteria2 URI")
-    if not 1 <= int(parts.port) <= 65535:
-        raise ValueError("invalid Hysteria2 port")
+    if parts.path not in ("", "/") or any(char in parts.hostname for char in "%@/?#[]\\<>\"{}|^`"):
+        raise ValueError("invalid Hysteria2 endpoint/path")
+    if ":" in parts.hostname:
+        ipaddress.IPv6Address(parts.hostname)
+    for value in (parts.username, parts.password, parts.query, parts.fragment):
+        if value is not None:
+            _uri_decode(value)
+    query = urllib.parse.parse_qs(parts.query, keep_blank_values=True, strict_parsing=True)
+    allowed = {"sni", "insecure", "pinSHA256", "obfs", "obfs-password"}
+    if set(query) - allowed or any(len(values) != 1 or not values[0] for values in query.values()):
+        raise ValueError("ambiguous or unsupported Hysteria2 URI parameter")
+    if "insecure" in query and query["insecure"][0] not in ("0", "1", "true", "false"):
+        raise ValueError("invalid Hysteria2 insecure parameter")
+    if "pinSHA256" in query and not re.fullmatch(r"[a-fA-F0-9]{64}", query["pinSHA256"][0].replace(":", "")):
+        raise ValueError("invalid Hysteria2 certificate fingerprint")
+    if "sni" in query and any(char.isspace() or char in "\x00/@?#\\" for char in query["sni"][0]):
+        raise ValueError("invalid Hysteria2 TLS name")
+    if ("obfs" in query) != ("obfs-password" in query) or query.get("obfs", ["salamander"])[0] != "salamander":
+        raise ValueError("invalid Hysteria2 Salamander parameters")
+    password = _uri_decode(parts.username)
+    if parts.password is not None:
+        password += ":" + _uri_decode(parts.password)
     return {
-        "password": urllib.parse.unquote(parts.username),
+        "password": password,
         "host": parts.hostname,
         "port": parts.port,
-        "query": urllib.parse.parse_qs(parts.query, keep_blank_values=True),
-        "label": urllib.parse.unquote(parts.fragment),
+        "query": query,
+        "label": _uri_decode(parts.fragment),
     }
+
+
+class Hysteria2JSONRequired(ValueError):
+    """A valid native setting cannot be represented by the named desktop profile."""
+
+
+def hysteria2_certificate(pem: str) -> list[bytes]:
+    if not isinstance(pem, str) or not 1 <= len(pem.encode("utf-8")) <= 1 << 20:
+        raise ValueError("Hysteria2 requires a bounded selected PEM certificate")
+    blocks = re.findall(r"-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----", pem)
+    remainder = re.sub(r"-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----", "", pem)
+    if not blocks or len(blocks) > 16 or remainder.strip():
+        raise ValueError("Hysteria2 certificate contains missing or non-certificate material")
+    try:
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.load_verify_locations(cadata=pem)
+        return [ssl.PEM_cert_to_DER_cert(block) for block in blocks]
+    except (ValueError, ssl.SSLError) as exc:
+        raise ValueError("invalid selected Hysteria2 certificate") from exc
+
+
+def hysteria2_config(text: str) -> tuple[dict, dict]:
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Hysteria2 JSON contains a duplicated field")
+            result[key] = value
+        return result
+    config = json.loads(text, object_pairs_hook=unique)
+    if not isinstance(config, dict) or not isinstance(config.get("outbounds"), list):
+        raise ValueError("Hysteria2 download requires a complete sing-box configuration")
+    proxies = [item for item in config["outbounds"] if isinstance(item, dict) and item.get("tag") == "proxy"]
+    if len(proxies) != 1 or proxies[0].get("type") != "hysteria2":
+        raise ValueError("Hysteria2 requires one unambiguous selected proxy outbound")
+    proxy = proxies[0]
+    tls = proxy.get("tls")
+    if not isinstance(tls, dict) or tls.get("enabled") is not True or tls.get("insecure", False) is not False:
+        raise ValueError("Hysteria2 import requires enabled TLS with certificate verification")
+    if not isinstance(tls.get("server_name"), str) or not tls["server_name"]:
+        raise ValueError("Hysteria2 requires its selected TLS server name")
+    return config, proxy
+
+
+def hysteria2_official_profile(config: dict, server_pin: str, home_dns: dict) -> tuple[dict, str]:
+    # This named app-proxy export is additional to the complete native TUN
+    # configuration. Do not silently discard selected outbound/TLS options.
+    _, proxy = hysteria2_config(json.dumps(config))
+    tls, obfs = proxy["tls"], proxy.get("obfs")
+    certificate = tls.get("certificate")
+    if isinstance(certificate, list) and all(isinstance(line, str) for line in certificate):
+        certificate = "\n".join(certificate)
+    hysteria2_certificate(certificate)
+    if tls.get("certificate_path"):
+        raise ValueError("Hysteria2 download still refers to an external certificate path")
+    if not isinstance(server_pin, str) or not re.fullmatch(r"[a-f0-9]{64}", server_pin):
+        raise ValueError("Hysteria2 download lacks its captured server certificate fingerprint")
+    host, port, password = proxy.get("server"), proxy.get("server_port"), proxy.get("password")
+    if (not isinstance(host, str) or not host or host != host.strip() or type(port) is not int
+            or not 1 <= port <= 65535 or not isinstance(password, str) or not password
+            or any(ord(char) < 32 or ord(char) == 127 for char in password)):
+        raise ValueError("invalid selected Hysteria2 endpoint or password")
+    if (not isinstance(obfs, dict) or obfs.get("type") != "salamander"
+            or not isinstance(obfs.get("password"), str) or not obfs["password"]):
+        raise ValueError("Hysteria2 requires the selected Salamander secret")
+    # Validate trust/identity before deciding that optional settings need the
+    # native JSON. Invalid material is never a representability fallback.
+    query = {"sni": tls["server_name"], "insecure": "0", "pinSHA256": server_pin,
+             "obfs": "salamander", "obfs-password": obfs["password"]}
+    uri = ("hysteria2://" + urllib.parse.quote(password, safe="") + "@" + _hostport(host, port)
+           + "/?" + urllib.parse.urlencode(query) + "#Router%20VPN%20Hysteria2")
+    validate_hysteria2_uri(uri)
+    if (set(proxy) - {"type", "tag", "server", "server_port", "password", "obfs", "tls"}
+            or set(tls) - {"enabled", "server_name", "insecure", "certificate"}
+            or set(obfs) - {"type", "password"}):
+        raise Hysteria2JSONRequired("Additional selected transport/TLS settings require the complete sing-box JSON")
+    if not isinstance(home_dns, dict) or home_dns.get("protocol") != "udp" or home_dns.get("port") != 53:
+        raise ValueError("Hysteria2 requires the explicitly captured home UDP DNS policy")
+    try:
+        resolver = ipaddress.ip_address(home_dns.get("host", ""))
+    except ValueError as exc:
+        raise ValueError("Hysteria2 Home DNS must be an explicit literal IP") from exc
+    if resolver.is_unspecified or resolver.is_multicast or resolver.is_link_local or "%" in str(resolver):
+        raise ValueError("Hysteria2 Home DNS must be an unscoped unicast IP")
+    expected_dns = {"servers": [{"type": "udp", "tag": "home-dns", "server": str(resolver),
+                                "server_port": 53, "detour": "proxy"}], "final": "home-dns"}
+    if config.get("dns") != expected_dns:
+        raise Hysteria2JSONRequired("The selected DNS policy requires the complete sing-box JSON")
+    remote = _hostport(str(resolver), 53)
+    return ({"server": uri, "tls": {"ca": "router-vpn-hysteria2-ca.pem", "insecure": False},
+             "socks5": {"listen": "127.0.0.1:1080"},
+             "tcpForwarding": [{"listen": "127.0.0.1:1053", "remote": remote}],
+             "udpForwarding": [{"listen": "127.0.0.1:1053", "remote": remote, "timeout": "30s"}]}, certificate)
 
 
 def json_config(value: str) -> dict:

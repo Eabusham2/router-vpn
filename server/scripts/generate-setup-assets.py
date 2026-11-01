@@ -24,6 +24,11 @@ if _verified_spec is None or _verified_spec.loader is None:
 _verified = module_from_spec(_verified_spec)
 _verified_spec.loader.exec_module(_verified)
 read_verified_regular = _verified.read_verified_regular
+_imports_spec = spec_from_file_location("router_vpn_setup_import_payloads", SCRIPT_DIR / "import_payloads.py")
+if _imports_spec is None or _imports_spec.loader is None:
+    raise RuntimeError("cannot load import_payloads.py")
+imports = module_from_spec(_imports_spec)
+_imports_spec.loader.exec_module(imports)
 
 
 def hostport(host: str, port: int) -> str:
@@ -195,6 +200,53 @@ def read_private_socks_config(path: pathlib.Path) -> dict | None:
     return value
 
 
+def hysteria2_method(gen: pathlib.Path, home_dns: str) -> dict:
+    item = asset("hysteria2", "Hysteria2 + QUIC", "Simple QUIC VPN/proxy",
+                 apps=["sing-box", "Hysteria2", "Router VPN"], simple=True,
+                 note="The complete sing-box download includes the selected certificate.",
+                 native="Use the complete configuration with a compatible client.")
+    path = gen / "hysteria2/sing-box.json"
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return item
+    config, proxy = imports.hysteria2_config(read_verified_regular(path, private=True).decode("utf-8"))
+    tls = proxy["tls"]
+    # This is the server's certificate copied by generate-transports.sh, not
+    # an arbitrary selected CA root. The URI pin must identify the leaf.
+    server_path = gen / "hysteria2/cert.pem"
+    server_pem = read_verified_regular(server_path, private=True).decode("utf-8")
+    server_der = imports.hysteria2_certificate(server_pem)[0]
+    if tls.get("certificate_path"):
+        if tls.get("certificate"):
+            raise ValueError("Hysteria2 has ambiguous inline and file certificate selections")
+        selected = tls["certificate_path"]
+        if not isinstance(selected, str):
+            raise ValueError("Hysteria2 certificate path must be a string")
+        selected_path = path.parent / selected
+        certificate = (server_pem if selected_path == server_path
+                       else read_verified_regular(selected_path, private=True).decode("utf-8"))
+        imports.hysteria2_certificate(certificate)
+        tls.pop("certificate_path")
+        tls["certificate"] = [certificate]
+    else:
+        certificate = tls.get("certificate")
+        if isinstance(certificate, list) and all(isinstance(line, str) for line in certificate):
+            certificate = "\n".join(certificate)
+        imports.hysteria2_certificate(certificate)
+    server_pin = hashlib.sha256(server_der).hexdigest()
+    try:
+        imports.hysteria2_official_profile(config, server_pin, {"protocol": "udp", "host": home_dns, "port": 53})
+    except imports.Hysteria2JSONRequired:
+        # Preserve valid native-only options. Invalid identity/trust still
+        # aborts before replacing either private publication artifact.
+        pass
+    item.update(config=json.dumps(config, indent=2) + "\n", available=True,
+                hysteria2ServerPin=server_pin,
+                qrPayload="", qrPngBase64="", qrSupported=False)
+    return item
+
+
 def build_methods(gen: pathlib.Path, endpoint: str, socks_host: str, socks_config: dict | None = None) -> list[dict]:
     methods: list[dict] = []
     methods.append(asset(
@@ -222,20 +274,7 @@ def build_methods(gen: pathlib.Path, endpoint: str, socks_host: str, socks_confi
         native="Import the SIP002 URL/QR in a client that explicitly supports its Shadowsocks 2022 method.", simple=True,
     ))
 
-    hy=outbound(gen/"hysteria2"/"sing-box.json"); hy_url=""
-    if endpoint and endpoint != "router.invalid" and hy:
-        tls=hy.get("tls") if isinstance(hy.get("tls"),dict) else {}; obfs=hy.get("obfs") if isinstance(hy.get("obfs"),dict) else {}; q=[]
-        if tls.get("server_name"): q.append(("sni",str(tls["server_name"])))
-        pin=cert_sha256(gen/"hysteria2"/"cert.pem")
-        if pin:q.append(("pinSHA256",pin))
-        if obfs.get("type"):q.append(("obfs",str(obfs["type"])))
-        if obfs.get("password"):q.append(("obfs-password",str(obfs["password"])))
-        hy_url="hysteria2://"+urllib.parse.quote(str(hy.get("password") or ""),safe="")+"@"+hostport(endpoint,int(hy.get("server_port") or 8443))+"/?"+urllib.parse.urlencode(q)+"#Router%20VPN%20Hysteria2"
-    methods.append(asset(
-        "hysteria2", "Hysteria2 + QUIC", "Simple QUIC VPN/proxy", url=hy_url,
-        config=read_text(gen/"hysteria2"/"sing-box.json"), apps=["Hysteria2", "sing-box", "Router VPN"],
-        note="Public-endpoint Hysteria2 import URL plus full config.", native="Import into a Hysteria2/sing-box-compatible client.", simple=True,
-    ))
+    methods.append(hysteria2_method(gen, socks_host))
 
     overtls=read_text(gen/"overtls"/"overtls-client.json")
     methods.append(asset(
@@ -278,7 +317,7 @@ def build_html(data: dict) -> str:
 
 <section class="panel" data-tab="downloads"><div class="card"><h2>Small downloads first</h2><p class="small">You do not need the all-platform private ZIP for normal setup. Use the direct profile/helper or the package matching this device. The complete bundle remains an offline/advanced fallback.</p><div id="downloads"></div></div><div class="card"><h2>macOS security warning / “malware” or developer warning</h2><p>Router VPN includes locally-built/open-source networking binaries. macOS may quarantine an unsigned binary. <b>Do not bypass a warning blindly.</b> First verify the file came from this Setup Center and compare the included checksum.</p><ol><li>Open <b>System Settings → Privacy & Security</b> and use <b>Open Anyway</b> for the Router VPN binary/app you just verified.</li><li>If you intentionally need to remove quarantine from the trusted extracted Router VPN folder, Terminal can use:</li></ol><pre>xattr -dr com.apple.quarantine /path/to/router-vpn</pre><p class="small">Use that command only on the Router VPN folder you verified; never run it broadly on Downloads or your whole Mac.</p></div></section>
 
-<section class="panel" data-tab="devices"><div class="card"><h2>Device & method setup</h2><div class="row"><select id="device" class="grow"></select><select id="method" class="grow"></select></div><div id="deviceHelp" class="card"></div><div id="methodHelp" class="grid2"><div><h3 id="methodLabel"></h3><div id="methodApps"></div><p id="methodNote"></p><p><b>System/native:</b> <span id="methodNative"></span></p><p><a id="methodClientRelease" class="btn" target="_blank" rel="noopener noreferrer" hidden>Get the compatible client</a></p><div id="urlBox" hidden><h4>Import URL</h4><pre id="urlText"></pre><button onclick="copyText('urlText')">Copy URL</button></div><div id="cfgBox" hidden><h4>Config/settings</h4><pre id="cfgText"></pre><button onclick="copyText('cfgText')">Copy config</button><button id="methodConfigDownload" onclick="downloadMethodConfig()" hidden>Download config file</button><button id="methodCompatibleConfig" onclick="downloadMethodConfig('compatible')" hidden></button></div></div><div id="qrBox"></div></div></div></section>
+<section class="panel" data-tab="devices"><div class="card"><h2>Device & method setup</h2><div class="row"><select id="device" class="grow"></select><select id="method" class="grow"></select></div><div id="deviceHelp" class="card"></div><div id="methodHelp" class="grid2"><div><h3 id="methodLabel"></h3><div id="methodApps"></div><p id="methodNote"></p><p><b>System/native:</b> <span id="methodNative"></span></p><p><a id="methodClientRelease" class="btn" target="_blank" rel="noopener noreferrer" hidden>Get the compatible client</a></p><div id="urlBox" hidden><h4>Import URL</h4><pre id="urlText"></pre><button onclick="copyText('urlText')">Copy URL</button></div><div id="cfgBox" hidden><h4>Config/settings</h4><pre id="cfgText"></pre><button onclick="copyText('cfgText')">Copy config</button><button id="methodConfigDownload" onclick="downloadMethodConfig()" hidden>Download config file</button><button id="methodCompatibleConfig" onclick="downloadMethodConfig('compatible')" hidden></button><button id="methodCertificateConfig" onclick="downloadMethodConfig('certificate')" hidden></button></div></div><div id="qrBox"></div></div></div></section>
 
 <section class="panel" data-tab="router"><div class="card"><h2>ASUS / Asuswrt-Merlin forwarding</h2><p>The helper is downloadable directly—no huge ZIP required. It preserves existing <code>nat-start</code>/<code>firewall-start</code> contents and installs only direct tagged IPv4 WAN-interface + protocol + exact-port rules. There is no broad Router VPN WAN catch-all; failures leave ordinary household Internet untouched.</p><label>ASUS SSH username <input id="routerUser" autocomplete="username" value="ROUTER_USER" oninput="updateRouterInstall()"></label><p class="small">This value stays in your browser and is used only to render the commands below.</p><div class="row"><a class="btn primary" href="/asus-merlin-router-vpn-forwards.sh" download>Download forwarding helper</a><button onclick="copyText('routerInstall')">Copy install commands</button></div><pre id="routerInstall"></pre></div><div class="card"><h3>Enable SSH safely</h3><ol><li>ASUS GUI → <b>Administration → System</b> (wording can vary by firmware).</li><li>Enable the SSH daemon for <b>LAN only</b>. Do not enable WAN SSH.</li><li>Enter the ASUS username above and test the generated SSH command.</li></ol><p class="small">Some newer ASUS builds have an SFTP-incomplete SSH server, so the Setup Center uses SSH stdin instead of <code>scp</code>.</p></div><div class="card"><h3>Check compatibility / existing rules before changing anything</h3><pre>/usr/sbin/iptables --version
 nvram get vts_rulelist
@@ -327,13 +366,13 @@ const devices=DATA.devices||{};for(const [id,d] of Object.entries(devices)){cons
 const availableMethods=(DATA.methods||[]).filter(x=>x.available);availableMethods.sort((a,b)=>(b.simple?1:0)-(a.simple?1:0)||a.label.localeCompare(b.label));for(const m of availableMethods){const o=document.createElement('option');o.value=m.id;o.textContent=(m.simple?'Easy — ':'Advanced — ')+m.label;$('method').appendChild(o)}
 function renderDevice(){const d=devices[$('device').value]||{};$('deviceHelp').innerHTML=`<h3>${d.label||''}</h3><p>${d.customApp||''}</p><ol>${(d.steps||[]).map(s=>`<li>${s}</li>`).join('')}</ol>`}
 function downloadMethodConfig(variant='native'){
- const m=availableMethods.find(x=>x.id===$('method').value),selected=m&&(variant==='native'?{filename:m.configFilename,content:m.config}:variant==='compatible'?m.compatibleConfig:null);
- if(!selected||typeof selected.content!=='string'||!selected.content||selected.content.length>4194304||!/^router-vpn-[a-z0-9-]+\.(json|conf|txt)$/.test(selected.filename||''))throw new Error('No valid selected method config');
+ const m=availableMethods.find(x=>x.id===$('method').value),selected=m&&(variant==='native'?{filename:m.configFilename,content:m.config}:variant==='compatible'?m.compatibleConfig:variant==='certificate'?m.certificateConfig:null);
+ if(!selected||typeof selected.content!=='string'||!selected.content||selected.content.length>4194304||!/^router-vpn-[a-z0-9-]+\.(json|conf|txt|pem)$/.test(selected.filename||''))throw new Error('No valid selected method config');
  const type=selected.filename.endsWith('.json')?'application/json;charset=utf-8':'text/plain;charset=utf-8';
  const objectURL=URL.createObjectURL(new Blob([selected.content],{type})),a=document.createElement('a');
  try{a.href=objectURL;a.download=selected.filename;a.hidden=true;document.body.appendChild(a);a.click()}finally{a.remove();setTimeout(()=>URL.revokeObjectURL(objectURL),0)}
 }
-function renderMethod(){const m=availableMethods.find(x=>x.id===$('method').value)||{};$('methodLabel').textContent=m.label||'';$('methodApps').innerHTML=(m.apps||[]).map(a=>`<span class="pill">${a}</span>`).join('');$('methodNote').textContent=m.note||'';$('methodNative').textContent=m.native||'';const release=$('methodClientRelease');release.hidden=!['https://github.com/ShadowsocksR-Live/overtls/releases/tag/v0.3.12','https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.33'].includes(m.clientReleaseURL);release.href=release.hidden?'#':m.clientReleaseURL;$('methodConfigDownload').hidden=!m.configFilename||!m.config;const compatible=$('methodCompatibleConfig');compatible.hidden=!m.compatibleConfig;compatible.textContent=m.compatibleConfig?.label||'';$('urlBox').hidden=!m.url;$('urlText').textContent=m.url||'';$('cfgBox').hidden=!m.config;$('cfgText').textContent=m.config||'';const q=$('qrBox');q.innerHTML=m.qrPngBase64?`<h3>QR code</h3><img class="qr" alt="${m.label||'Setup'} QR" src="data:image/png;base64,${m.qrPngBase64}"><p class="small">This QR may contain private credentials. Scan only with a client you trust.</p>`:'<p class="small">No compact QR for this method; use the config/import file.</p>'}
+function renderMethod(){const m=availableMethods.find(x=>x.id===$('method').value)||{};$('methodLabel').textContent=m.label||'';$('methodApps').innerHTML=(m.apps||[]).map(a=>`<span class="pill">${a}</span>`).join('');$('methodNote').textContent=m.note||'';$('methodNative').textContent=m.native||'';const release=$('methodClientRelease');release.hidden=!['https://github.com/ShadowsocksR-Live/overtls/releases/tag/v0.3.12','https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.33','https://github.com/HyNetworks/hysteria/releases/tag/app/v2.13.0'].includes(m.clientReleaseURL);release.href=release.hidden?'#':m.clientReleaseURL;$('methodConfigDownload').hidden=!m.configFilename||!m.config;const compatible=$('methodCompatibleConfig');compatible.hidden=!m.compatibleConfig;compatible.textContent=m.compatibleConfig?.label||'';const certificate=$('methodCertificateConfig');certificate.hidden=!m.certificateConfig;certificate.textContent=m.certificateConfig?.label||'';$('urlBox').hidden=!m.url;$('urlText').textContent=m.url||'';$('cfgBox').hidden=!m.config;$('cfgText').textContent=m.config||'';const q=$('qrBox');q.innerHTML=m.qrPngBase64?`<h3>QR code</h3><img class="qr" alt="${m.label||'Setup'} QR" src="data:image/png;base64,${m.qrPngBase64}"><p class="small">This QR may contain private credentials. Scan only with a client you trust.</p>`:'<p class="small">No compact QR for this method; use the config/import file.</p>'}
 $('device').onchange=renderDevice;$('method').onchange=renderMethod;renderDevice();renderMethod();
 const layerLabel=x=>({'wireguard':'WireGuard','amneziawg2':'AmneziaWG 2','rosenpass-pq':'Rosenpass PQ','vless':'VLESS','vless-pq':'PQ VLESS','reality':'REALITY','xtls-vision':'XTLS Vision','utls-chrome':'Chrome uTLS','hysteria2':'Hysteria2','quic':'QUIC','shadowsocks2022':'Shadowsocks 2022','xhttp':'XHTTP','finalmask':'FinalMask','salamander':'Salamander'}[x]||x);$('modeRows').innerHTML=(DATA.modes||[]).filter(x=>!['smart-auto','custom'].includes(x.id)).map((x,i)=>{const ready=(x.maturity||'catalog').toLowerCase()==='generated'?'Generated':'Catalog';const why=ready==='Generated'?'Home-node profile was generated; installed client still revalidates its platform engine/path and reports the exact live reason before Connect.':'Server/source catalog entry only; installed client must report a runnable platform variant and exact live reason before Connect.';return `<tr><td><b>${x.name}</b><div class="small">${x.maturity||''}</div></td><td>${x.protection}<div class="small">${(x.layers||[]).map(layerLabel).join(' → ')}</div></td><td>${x.engine}</td><td>${x.ping_min_ms}–${x.ping_max_ms} ms</td><td>+${x.traffic_min_pct}–${x.traffic_max_pct}%</td><td>${x.speed_loss_min_pct}–${x.speed_loss_max_pct}%</td><td>${ready}</td><td>${why}</td></tr>`}).join('');
 function updateRouterInstall(){const raw=($('routerUser')?.value||'ROUTER_USER').trim();const user=/^[A-Za-z0-9._-]{1,64}$/.test(raw)?raw:'ROUTER_USER';$('routerInstall').textContent=`# On your Mac/Linux computer\ncurl -fsS http://${DATA.socksHost}:8786/asus-merlin-router-vpn-forwards.sh -o /tmp/router-vpn-forwards.sh\nssh ${user}@192.168.50.1 'cat > /tmp/router-vpn-forwards.sh && chmod 755 /tmp/router-vpn-forwards.sh' < /tmp/router-vpn-forwards.sh\nssh ${user}@192.168.50.1 'sh /tmp/router-vpn-forwards.sh install && /jffs/scripts/router-vpn-forward.sh verify && /jffs/scripts/router-vpn-forward.sh status'`;}updateRouterInstall();

@@ -48,6 +48,7 @@ CONTRACTS = {
 SETUP_METHOD_LANES = ("simple-native", "universal", "universal-compat", "manual-app-proxy")
 OVERTLS_CLIENT_RELEASE = "https://github.com/ShadowsocksR-Live/overtls/releases/tag/v0.3.12"
 MIHOMO_CLIENT_RELEASE = "https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.33"
+HYSTERIA_CLIENT_RELEASE = "https://github.com/HyNetworks/hysteria/releases/tag/app/v2.13.0"
 
 
 def load_private_setup_assets(path: Path) -> dict:
@@ -79,6 +80,7 @@ def normalize_method(method: dict, endpoint: str, home_dns: dict | None = None) 
     method["configFilename"] = ""
     method.pop("clientReleaseURL", None)
     method.pop("compatibleConfig", None)
+    method.pop("certificateConfig", None)
     if ident in CONTRACTS and method.get("config"):
         extension = "conf" if ident in ("wireguard", "amneziawg2") else "txt" if ident == "socks5" else "json"
         method["configFilename"] = "router-vpn-" + ident + "." + extension
@@ -148,8 +150,51 @@ def normalize_method(method: dict, endpoint: str, home_dns: dict | None = None) 
         except imports.OverTLSJSONRequired as exc:
             method["url"] = ""
             method["note"] += " " + str(exc) + "."
+    elif ident == "hysteria2" and method.get("config"):
+        config, proxy = imports.hysteria2_config(str(method["config"]))
+        method["url"] = ""
+        method["qrSupported"] = qr_supported = False
+        method["importType"] = "hysteria2-config-with-ca"
+        method["apps"] = ["sing-box", "Router VPN"]
+        method["native"] = "Import router-vpn-hysteria2.json into sing-box; its selected certificate is embedded."
+        method["note"] = "A compact Hysteria URI cannot carry this node's selected CA. Use the complete configuration downloads; certificate verification stays enabled."
+        try:
+            profile, certificate = imports.hysteria2_official_profile(config, method.get("hysteria2ServerPin"), home_dns)
+        except imports.Hysteria2JSONRequired as exc:
+            method["note"] += " " + str(exc) + "."
+        else:
+            if proxy["server"].lower() == "router.invalid":
+                method["note"] += " Set this node's reachable endpoint before connecting."
+            else:
+                method["compatibleConfig"] = {"label": "Download official Hysteria profile",
+                                              "filename": "router-vpn-hysteria2-official.json",
+                                              "content": json.dumps(profile, indent=2) + "\n"}
+                method["certificateConfig"] = {"label": "Download matching Hysteria CA",
+                                               "filename": "router-vpn-hysteria2-ca.pem", "content": certificate}
+                method["clientReleaseURL"] = HYSTERIA_CLIENT_RELEASE
+                method["apps"] = ["Hysteria 2.13.0 desktop core (Windows, macOS, Linux)", "sing-box", "Router VPN"]
+                method["native"] = (
+                    "1. Open the official Hysteria 2.13.0 release and download the binary for your desktop OS and amd64/arm64 CPU. "
+                    "Rename it to hysteria (Windows: hysteria.exe); on macOS/Linux run chmod u+x ./hysteria. "
+                    "2. Download both the official Hysteria profile and matching CA from this card into that same folder. "
+                    "3. From that folder run ./hysteria client -c ./router-vpn-hysteria2-official.json "
+                    "(Windows PowerShell: .\\hysteria.exe client -c .\\router-vpn-hysteria2-official.json). "
+                    "4. Keep it running and set your application's SOCKS5 proxy to 127.0.0.1:1080, with remote hostname resolution. Ctrl+C stops it. "
+                    "The separate router-vpn-hysteria2.json is the complete sing-box TUN configuration with embedded CA."
+                )
+                method["note"] += (
+                    " The official desktop profile retains the selected endpoint, TLS name, leaf fingerprint, password and Salamander secret. "
+                    "Its local TCP/UDP DNS listener 127.0.0.1:1053 forwards to Home AdGuard " + str(home_dns["host"]) +
+                    ":53 through Hysteria, with no public fallback. Apps with a custom DNS setting can use that listener. "
+                    "Resolving a hostname node endpoint uses the device's existing system DNS before the tunnel can connect. "
+                    "This app-proxy profile does not change device-wide DNS or install a system VPN. Device and off-LAN acceptance are separate."
+                )
     elif ident == "hysteria2" and method.get("url"):
         imports.validate_hysteria2_uri(str(method["url"]))
+        # Historical metadata with only a URI has no captured trust material.
+        method["url"] = ""
+        method["qrSupported"] = qr_supported = False
+        method["note"] = "Regenerate the complete Hysteria configuration and selected certificate before using this method."
 
     if qr_supported:
         payload = str(method.get("config") or "") if ident == "wireguard" else str(method.get("url") or "")

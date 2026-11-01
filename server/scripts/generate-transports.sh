@@ -100,7 +100,8 @@ server={
    "method":"2022-blake3-aes-256-gcm","password":sskey}
  ],
  "outbounds":[{"type":"direct","tag":"direct"}],
- "route":{"final":"direct"}
+ "dns":{"servers":[{"type":"udp","tag":"home-dns","server":dns,"server_port":53}],"final":"home-dns"},
+ "route":{"final":"direct","default_domain_resolver":"home-dns"}
 }
 
 def client(outbound,mtu):

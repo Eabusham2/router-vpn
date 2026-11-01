@@ -52,12 +52,12 @@ const input=JSON.parse(fs.readFileSync(0,'utf8'));
   document:{createElement:tag=>{assert.equal(tag,'a');anchor={click(){assert(attached);clicked=true},remove(){removed=true}};return anchor},body:{appendChild:value=>{assert.equal(value,anchor);attached=true}}}};
  context.variant=input.variant;
  vm.runInNewContext(input.script+'\ndownloadMethodConfig(variant);',context,{timeout:1000});
- const selected=input.variant==='compatible'?input.method.compatibleConfig:{filename:input.method.configFilename,content:input.method.config};
+ const selected=input.variant==='compatible'?input.method.compatibleConfig:input.variant==='certificate'?input.method.certificateConfig:{filename:input.method.configFilename,content:input.method.config};
  assert(clicked&&removed&&revoked);assert.equal(anchor.download,selected.filename);
  assert.equal(blob.type,selected.filename.endsWith('.json')?'application/json;charset=utf-8':'text/plain;charset=utf-8');
  const content=await blob.text();assert.equal(content,selected.content);
  for(const invalid of ['missing-selection','../../private.json']){
-  if(invalid==='missing-selection')current='different-method';else{current=input.method.id;if(input.variant==='compatible')input.method.compatibleConfig.filename=invalid;else input.method.configFilename=invalid}
+  if(invalid==='missing-selection')current='different-method';else{current=input.method.id;if(input.variant==='compatible')input.method.compatibleConfig.filename=invalid;else if(input.variant==='certificate')input.method.certificateConfig.filename=invalid;else input.method.configFilename=invalid}
   assert.throws(()=>vm.runInNewContext('downloadMethodConfig(variant);',context,{timeout:1000}),/No valid selected method config/);
  }
  process.stdout.write(JSON.stringify({content,filename:anchor.download}));

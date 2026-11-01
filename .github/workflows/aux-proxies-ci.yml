@@ -306,6 +306,14 @@ jobs:
             -t router-vpn-ci-socks-method-import:arm64 .
           bash deploy/run_setup_methods_interoperability_container.sh router-vpn-ci-socks-method-import:arm64 socks
 
+      - name: Import complete Hysteria downloads with unchanged client and selected DNS receipts
+        timeout-minutes: 8
+        run: |
+          docker buildx build --platform linux/arm64 --progress=plain --load \
+            --target hysteria-method-import -f deploy/setup-methods-interoperability.Dockerfile \
+            -t router-vpn-ci-hysteria-method-import:arm64 .
+          bash deploy/run_setup_methods_interoperability_container.sh router-vpn-ci-hysteria-method-import:arm64 hysteria
+
       - name: Smoke-test generated OverTLS and SSR services
         shell: bash
         run: |

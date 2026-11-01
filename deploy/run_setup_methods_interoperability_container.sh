@@ -5,7 +5,7 @@ mode=${2:-shadowsocks}
 setup_options=()
 case "$mode" in
   shadowsocks) ;;
-  socks) setup_options=(--cap-add NET_ADMIN --cap-add NET_BIND_SERVICE --dns 127.0.0.55) ;;
+  socks|hysteria) setup_options=(--cap-add NET_ADMIN --cap-add NET_BIND_SERVICE --dns 127.0.0.55) ;;
   *) echo 'Unknown Setup Center interoperability mode' >&2; exit 2 ;;
 esac
 transport=ghcr.io/sagernet/sing-box:v1.13.12
