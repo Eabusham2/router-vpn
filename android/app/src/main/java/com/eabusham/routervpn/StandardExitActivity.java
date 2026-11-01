@@ -44,6 +44,16 @@ public final class StandardExitActivity extends Activity {
     private boolean requestedExitHandled;
     private AndroidDNSMeasurementDialog dnsComparison;
     private volatile boolean destroyed;
+    private static final String STATE_USAGE_PERMISSION="pending_usage_permission";
+    private static final class UsagePermission {
+        final String nonce=java.util.UUID.randomUUID().toString().replace("-","");
+        final String request;final AndroidNodeUsage.Attempt usage;Object attachment;
+        UsagePermission(String request,AndroidNodeUsage.Attempt usage,Object attachment){this.request=request;this.usage=usage;this.attachment=attachment;}
+    }
+    private static UsagePermission usagePermissionOwner;
+    private final Object usageAttachment=new Object();
+    private UsagePermission pendingUsage;
+    private boolean pendingUsageSaved;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -58,7 +68,7 @@ public final class StandardExitActivity extends Activity {
     }
 
     @Override protected void onResume() { super.onResume(); refresh(); openRequestedExitOnce(); }
-    @Override protected void onDestroy() { destroyed=true;if(dnsComparison!=null)dnsComparison.close();super.onDestroy(); }
+    @Override protected void onDestroy() { destroyed=true;releaseUsage(pendingUsageSaved&&!isFinishing());clearPending();if(dnsComparison!=null)dnsComparison.close();super.onDestroy(); }
     @Override protected void onSaveInstanceState(Bundle out){
         super.onSaveInstanceState(out);
         if(pendingEntry!=null)out.putString(STATE_PENDING_ENTRY,pendingEntry.id);
@@ -70,6 +80,7 @@ public final class StandardExitActivity extends Activity {
         out.putString("pending_execution",pendingExecution);out.putString("pending_request_digest",pendingRequestDigest);
         out.putString("pending_entry_digest",pendingEntryDigest);
         out.putString("pending_exit_digest",pendingExitDigest);
+        synchronized(StandardExitActivity.class){if(ownsUsage()){out.putString(STATE_USAGE_PERMISSION,pendingUsage.nonce);pendingUsageSaved=true;}}
     }
 
     private void restorePending(Bundle state){
@@ -84,6 +95,13 @@ public final class StandardExitActivity extends Activity {
         try{if(!entryId.isEmpty())for(AndroidNodeStore.Node n:nodeStore.list())if(entryId.equals(n.id)){pendingEntry=n;break;}}catch(Exception ignored){}
         try{if(!exitId.isEmpty())pendingExit=exitStore.get(exitId);}catch(Exception ignored){}
         try{String ordinary=state.getString("pending_ordinary_entry","");if(!ordinary.isEmpty())pendingOrdinaryEntry=exitStore.get(ordinary);}catch(Exception ignored){clearPending();}
+        synchronized(StandardExitActivity.class){
+            String nonce=state.getString(STATE_USAGE_PERMISSION,"");
+            if(!nonce.isEmpty()&&usagePermissionOwner!=null&&nonce.equals(usagePermissionOwner.nonce)
+                    &&pendingRequestDigest.equals(usagePermissionOwner.request)){
+                pendingUsage=usagePermissionOwner;pendingUsage.attachment=usageAttachment;
+            }else if(!nonce.isEmpty())clearPending();
+        }
     }
 
     private void openRequestedExitOnce() {
@@ -585,6 +603,7 @@ public final class StandardExitActivity extends Activity {
             pendingEntry=null;pendingOrdinaryEntry=capturedEntry;pendingExit=capturedExit;pendingDirect=false;pendingEntryMode=AndroidExternalPolicy.protocol(entry.protocol);pendingExecution="local";
             pendingEntryDigest=AndroidTorProfile.digest(entrySource.getBytes(StandardCharsets.UTF_8));pendingExitDigest=AndroidTorProfile.digest(exitSource.getBytes(StandardCharsets.UTF_8));
             pendingRequestDigest=ordinaryRequestDigest(pendingEntryMode,pendingEntryDigest,pendingExitDigest);
+            captureUsage();
         }catch(Exception invalid){clearPending();toast(safe(invalid));return;}
         if(selectionOnly()){clearPending();toast("Ordinary entry → Tor selected. Press Connect when ready.");finish();return;}
         Intent permission=VpnService.prepare(this);if(permission!=null){statusView.setText("Waiting for Android VPN permission…");startActivityForResult(permission,PREPARE_STANDARD_EXIT);}else startPending();
@@ -629,14 +648,48 @@ public final class StandardExitActivity extends Activity {
         pendingExitDigest=AndroidTorProfile.digest(AndroidStandardExitStore.snapshot(pendingExit).getBytes(StandardCharsets.UTF_8));
         pendingEntryDigest=entry==null?"":AndroidTorProfile.digest(AndroidPrivateFileStore.read(entry.file,AndroidNodeStore.MAX_BUNDLE));
         pendingRequestDigest=requestDigest(direct,entryMode,execution,pendingEntryDigest,pendingExitDigest);
+        captureUsage();
     }
     private static String requestDigest(boolean direct,String mode,String execution,String entry,String exit)throws Exception{return AndroidTorProfile.digest(("external-request-v1\n"+direct+"\n"+mode+"\n"+execution+"\n"+entry+"\n"+exit).getBytes(StandardCharsets.UTF_8));}
     private static String ordinaryRequestDigest(String mode,String entry,String exit)throws Exception{return AndroidTorProfile.digest(("external-request-v2\nexternal\n"+mode+"\nlocal\n"+entry+"\n"+exit).getBytes(StandardCharsets.UTF_8));}
 
-    private void clearPending(){pendingEntry=null;pendingOrdinaryEntry=null;pendingExit=null;pendingDirect=false;pendingEntryMode="wg";pendingExecution="local";pendingEntryDigest="";pendingExitDigest="";pendingRequestDigest="";}
+    // The only saved-state capability is a random nonce. A recreated Activity
+    // may reattach this exact process receipt, never mint usage from Bundle data.
+    private void captureUsage(){
+        if(selectionOnly()){releaseUsage(false);return;}
+        AndroidNodeUsage.Attempt captured;
+        try{
+            captured=AndroidNodeUsage.external(this,pendingEntry,pendingOrdinaryEntry,pendingExit,pendingDirect,pendingEntryMode);
+            if(pendingEntry!=null)captured.requireRouterSource(pendingEntry.id,pendingEntryDigest);
+        }catch(Exception unavailable){captured=AndroidNodeUsage.unavailable();}
+        synchronized(StandardExitActivity.class){
+            if(usagePermissionOwner!=null)usagePermissionOwner.usage.cancel();
+            pendingUsage=usagePermissionOwner=new UsagePermission(pendingRequestDigest,captured,usageAttachment);pendingUsageSaved=false;
+        }
+    }
+    private boolean ownsUsage(){return pendingUsage!=null&&pendingUsage==usagePermissionOwner&&pendingUsage.attachment==usageAttachment;}
+    private void releaseUsage(boolean transfer){
+        synchronized(StandardExitActivity.class){
+            if(ownsUsage()){
+                if(transfer)pendingUsage.attachment=null;
+                else{pendingUsage.usage.cancel();usagePermissionOwner=null;}
+            }
+            pendingUsage=null;pendingUsageSaved=false;
+        }
+    }
+    private UsagePermission takeUsage(String request){
+        synchronized(StandardExitActivity.class){
+            if(pendingUsage==null)return null;
+            if(!ownsUsage()||!request.equals(pendingUsage.request))throw new IllegalStateException("The original custom-exit request was replaced.");
+            UsagePermission captured=pendingUsage;usagePermissionOwner=null;pendingUsage=null;pendingUsageSaved=false;return captured;
+        }
+    }
+    private void clearPending(){releaseUsage(false);pendingEntry=null;pendingOrdinaryEntry=null;pendingExit=null;pendingDirect=false;pendingEntryMode="wg";pendingExecution="local";pendingEntryDigest="";pendingExitDigest="";pendingRequestDigest="";}
 
     private void startPending() {
         AndroidNodeStore.Node entry=pendingEntry;AndroidStandardExitStore.Entry exit=pendingExit,ordinary=pendingOrdinaryEntry;boolean direct=pendingDirect;String entryMode=pendingEntryMode,execution=pendingExecution,request=pendingRequestDigest,entryDigest=pendingEntryDigest,exitDigest=pendingExitDigest;
+        final UsagePermission usage;
+        try{usage=takeUsage(request);}catch(Exception replaced){clearPending();toast(safe(replaced));return;}
         clearPending();if(exit==null)return;if(!direct&&entry==null&&ordinary==null)return;
         if(activeOrTransitioning()){toast("VPN state changed while permission was open; disconnect before starting the custom exit.");refresh();return;}
         try{
@@ -651,7 +704,7 @@ public final class StandardExitActivity extends Activity {
                     ||!entryDigest.equals(AndroidTorProfile.digest(AndroidStandardExitStore.snapshot(exitStore.get(ordinary.id)).getBytes(StandardCharsets.UTF_8)))))throw new IllegalStateException("Ordinary entry changed.");
         }catch(Exception changed){toast("A captured node changed while Android permission was open. Select the path again.");refresh();return;}
         busy=true;statusView.setText(direct?"Preparing direct external exit…":ordinary!=null?"Preparing ordinary entry → Local Tor…":"Preparing Router VPN entry → external exit…");
-        AndroidStandardExitRuntime.Callback cb=new AndroidStandardExitRuntime.Callback(){public void progress(String m){runOnUiThread(()->{if(!isFinishing())statusView.setText(m);});}public void finished(boolean ok,String m){runOnUiThread(()->{busy=false;if(!isFinishing()){statusView.setText(m);if(!ok)toast(m);refresh();}});}};
+        AndroidStandardExitRuntime.Callback cb=new AndroidStandardExitRuntime.Callback(){public void owned(String session){if(usage!=null)usage.usage.owned(StandardExitActivity.this,session);}public void progress(String m){runOnUiThread(()->{if(!isFinishing())statusView.setText(m);});}public void finished(boolean ok,String m){String result=m+(usage==null?"":usage.usage.finished(StandardExitActivity.this,usage.nonce,ok));runOnUiThread(()->{busy=false;if(!isFinishing()){statusView.setText(result);String warning=AndroidNodeUsage.saveWarning(result);if(!ok)toast(result);else if(!warning.isEmpty())toast(warning);refresh();}});}};
         if(ordinary!=null)runtime.connectOrdinary(ordinary,exit,execution,cb);else if(direct)runtime.connectDirect(exit,cb);else runtime.connect(entry.file,exit,entryMode,execution,cb);
     }
 

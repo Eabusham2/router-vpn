@@ -163,6 +163,13 @@ public final class AlertDialog implements DialogInterface {
 }
 
 APP = r'''
+// This form fixture stops at native dispatch and never emits successful proof.
+// Actual management usage adoption executes in test_android_node_usage.py.
+final class AndroidNodeUsage {
+ static final class Attempt{void cancel(){}void requireRouterSource(String id,String source){}void owned(android.content.Context c,String session){}String finished(android.content.Context c,String request,boolean success){throw new AssertionError("form-only fixture emitted final usage proof");}}
+ static Attempt external(android.content.Context c,AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry ordinary,AndroidStandardExitStore.Entry exit,boolean direct,String mode){return new Attempt();}
+ static Attempt unavailable(){return new Attempt();}static String saveWarning(String message){return "";}
+}
 // Selection persistence is exercised with the shipping stores by test_android_connection_profiles.py.
 // Here its API boundary records only public references so permission/UI behavior stays isolated.
 final class AndroidConnectionProfileStore {

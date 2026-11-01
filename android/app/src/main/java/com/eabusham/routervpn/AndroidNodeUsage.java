@@ -82,6 +82,16 @@ final class AndroidNodeUsage {
             generation=home.pathGeneration;
         }
 
+        synchronized void cancel(){completed=true;}
+
+        void requireRouterSource(String id,String sha256){
+            for(Node node:nodes)if("router-vpn".equals(node.kind)&&node.id.equals(id)){
+                if(node.source.sha256.equals(sha256))return;
+                throw new IllegalStateException("The captured permission source changed.");
+            }
+            throw new IllegalStateException("The captured permission has no matching Router source.");
+        }
+
         synchronized String finished(Context context,String request,boolean success){
             if(completed)return "";
             completed=true;

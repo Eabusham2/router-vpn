@@ -53,7 +53,7 @@ final class NativeUsageBoundary {
   String id=a!=null?a.id:f==null?"":AndroidHomeStateStore.nodeIdFromBundleFile(f);boolean tor=AndroidTorProfile.isTor(e.protocol);
   String session=tor?AndroidHomeStateStore.beginTorExternal(context,e.id,e.name,e.protocol,id,entry):AndroidHomeStateStore.beginPolicyExternal(context,e.id,e.name,e.protocol,e.expectedPublicIp,id,entry);
   AndroidHomeStateStore.Snapshot owner=AndroidHomeStateStore.snapshot(context);if(!omitOwned)cb.owned(session);
-  pending=()->{if(fail){AndroidHomeStateStore.failed(context,"controlled external proof failure");cb.finished(false,"proof failed");return;}boolean adopted=tor?AndroidHomeStateStore.connectedTorExternal(context,owner,"8.8.4.4"):AndroidHomeStateStore.connectedPolicyExternal(context,owner,"8.8.4.4");if(!adopted)throw new AssertionError("fixture Home adoption failed");alter();cb.finished(true,"proved external connection");};
+  pending=()->{if(fail){AndroidHomeStateStore.failed(context,"controlled external proof failure");cb.finished(false,"proof failed");return;}boolean adopted=tor?AndroidHomeStateStore.connectedTorExternal(context,owner,"8.8.4.4"):AndroidHomeStateStore.connectedPolicyExternal(context,owner,"8.8.4.4");if(!adopted)throw new AssertionError("fixture Home adoption failed");alter();last=()->cb.finished(true,"proved external connection");last.run();};
  }
  static void alter(){if(fault.equals("owner"))AndroidHomeStateStore.begin(context,"replacement","wg","wg","other");if(fault.equals("proof"))AndroidHomeStateStore.failedPreservingOwnership(context,"proof invalidated");if(fault.equals("emergency"))AndroidHomeStateStore.warning(context,"Emergency Disconnect requested; retained guard");if(fault.equals("generation"))AndroidHomeStateStore.advancePathGeneration(context);if(fault.equals("path"))context.getSharedPreferences("routervpn_home_state_v1",0).edit().putString("active_node_id","other").apply();if(beforeFinish!=null)beforeFinish.run();}
 }
@@ -94,6 +94,21 @@ final class UsageActivity extends android.app.Activity{
  boolean isDestroyed(){return false;}void toast(String message){toast=message;}void refreshAll(){statusView.setText("Refreshed current Home");}void refreshConnectionLater(){}AndroidUnifiedConnectionController.Callback userCallback(){return callback();}
  // SHIPPING_CALLBACK
 }
+'''
+
+EXTERNAL_ACTIVITY = r'''package com.eabusham.routervpn;
+import android.app.Activity;import android.content.Intent;import android.net.VpnService;import android.os.Bundle;import android.widget.*;import java.util.*;import java.nio.charset.StandardCharsets;import org.json.*;
+// Exact request, permission, recreation, owner and completion methods. Forms
+// and native engine proof remain the separately exercised UI/runtime boundary.
+final class StandardExitActivity extends Activity{
+ // SHIPPING_FIELDS
+ String lastToast="";int selections;
+ StandardExitActivity(Bundle state){nodeStore=new AndroidNodeStore(this);exitStore=new AndroidStandardExitStore(this);runtime=AndroidRuntimeRegistry.get(this).standardExit;statusView=new TextView(this);restorePending(state);}
+ void direct(AndroidStandardExitStore.Entry e){requestDirect(e);}void router(AndroidNodeStore.Node n,AndroidStandardExitStore.Entry e){requestConnect(n,e,"wg","auto");}void ordinary(AndroidStandardExitStore.Entry n,AndroidStandardExitStore.Entry e){requestOrdinaryTor(n,e);}
+ void rememberExternalPath(AndroidNodeStore.Node n,AndroidStandardExitStore.Entry e,String mode){selections++;}void refresh(){statusView.setText("Refreshed current external state");}void toast(String message){lastToast=message;}static String safe(Throwable t){return t.getMessage();}
+ // SHIPPING_METHODS
+}
+final class AndroidDNSMeasurementDialog{void close(){}}
 '''
 
 HARNESS = r'''package com.eabusham.routervpn;
@@ -171,7 +186,29 @@ public final class NodeUsageTest{
  static void ranking(Path root)throws Exception{
   try(Fixture f=new Fixture(root)){f.connect();f.finish();f.idle();f.controller.connectNode(f.b,"wg",List.of(),f.callback);f.finish();List<AndroidUnifiedNodeCatalog.Item> items=f.catalog.list(AndroidUnifiedNodeCatalog.SORT_MOST_USED);check(items.get(0).id.equals(f.a.id)&&items.get(0).useCount==6,"Most used did not sort by durable count descending");check(f.catalog.list(AndroidUnifiedNodeCatalog.SORT_LAST_USED).get(0).id.equals(f.b.id),"Last used order was replaced by Most used");check(f.catalog.list(AndroidUnifiedNodeCatalog.SORT_NAME).get(0).name.equals("Alpha"),"existing Name order changed");JSONObject data=new JSONObject(Files.readString(f.usage().toPath()));JSONArray rows=data.getJSONArray("records");long second=(System.currentTimeMillis()/1000-10)*1000;for(int i=0;i<rows.length();i++){JSONObject r=rows.getJSONObject(i);r.put("count",10).put("used_at_ms",r.getString("node_id").equals(f.a.id)?second:second+100);}AndroidPrivateFileStore.write(f.usage(),data.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8),96*1024);check(f.catalog.list(AndroidUnifiedNodeCatalog.SORT_MOST_USED).get(0).id.equals(f.b.id),"Most used tie compared variable timestamp strings incorrectly");}
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);ordinary(root);excluded(root);stableIdentity(root);failedStore(root);atomicOwner(root);ranking(root);System.out.println("Android node usage: "+checks+" shipping controller/store/Home/catalog checks PASS (native proof boundary controlled)");}
+ static void externalActivity(Path root)throws Exception{
+  for(String shape:List.of("direct","router","ordinary"))for(boolean rotate:new boolean[]{false,true})try(Fixture f=new Fixture(root)){
+   android.net.VpnService.needsPermission=true;StandardExitActivity first=new StandardExitActivity(null);if(shape.equals("direct"))first.direct(f.x);else if(shape.equals("router"))first.router(f.a,f.x);else first.ordinary(f.x,f.y);
+   check(!f.usage().exists()&&NativeUsageBoundary.pending==null,"management screen counted before permission");Bundle state=new Bundle();first.onSaveInstanceState(state);String nonce=state.getString("pending_usage_permission","");check(nonce.matches("[0-9a-f]{32}")&&!state.values.toString().contains("private-"),"management usage state exposed sources or lacked receipt");
+   StandardExitActivity current=first;if(rotate){current=new StandardExitActivity(state);first.onActivityResult(2101,android.app.Activity.RESULT_OK,null);check(NativeUsageBoundary.pending==null,"old recreated Activity consumed transferred permission");first.onDestroy();}
+   current.onActivityResult(2101,android.app.Activity.RESULT_OK,null);check(!f.usage().exists()&&NativeUsageBoundary.pending!=null,"management usage counted without final proof");f.finish();check(f.count("external",f.x.id)==1,"management final node use missing: "+shape+"/"+rotate);if(shape.equals("router"))check(f.count("router-vpn",f.a.id)==6,"management Router entry use missing");if(shape.equals("ordinary"))check(f.count("external",f.y.id)==1,"management ordinary path did not count distinct final nodes");byte[] saved=f.read(f.usage());NativeUsageBoundary.last.run();check(Arrays.equals(saved,f.read(f.usage())),"management duplicate native callback counted twice");current.onActivityResult(2101,android.app.Activity.RESULT_OK,null);check(NativeUsageBoundary.pending==null,"management consumed permission replay started runtime");current.onDestroy();
+  }
+  for(String fault:List.of("failed","owner","generation","source","cancelled","destroyed","missing-process-owner","wrong-nonce","wrong-request","selection-only"))try(Fixture f=new Fixture(root)){
+   android.net.VpnService.needsPermission=true;StandardExitActivity first=new StandardExitActivity(null);if(fault.equals("selection-only"))first.intent.putExtra("routervpn.select_external_path",true);first.router(f.a,f.x);
+   if(fault.equals("selection-only")){check(NativeUsageBoundary.pending==null&&first.isFinishing(),"selection-only manager started runtime");Bundle saved=new Bundle();first.onSaveInstanceState(saved);check(saved.getString("pending_usage_permission","").isEmpty(),"selection-only manager minted usage intent");continue;}
+   Bundle state=new Bundle();first.onSaveInstanceState(state);
+   if(fault.equals("cancelled"))first.onActivityResult(2101,0,null);
+   if(fault.equals("destroyed")||fault.equals("missing-process-owner")){first.finished=true;first.onDestroy();first.onActivityResult(2101,android.app.Activity.RESULT_OK,null);check(NativeUsageBoundary.pending==null,"destroyed management Activity launched its old permission");}
+   if(fault.equals("wrong-nonce"))state.putString("pending_usage_permission","0".repeat(32));
+   if(fault.equals("wrong-request"))state.putString("pending_request_digest","0".repeat(64));
+   boolean rejected=Set.of("cancelled","destroyed","missing-process-owner","wrong-nonce","wrong-request").contains(fault);
+   StandardExitActivity current=new StandardExitActivity(state);current.onActivityResult(2101,android.app.Activity.RESULT_OK,null);
+   if(rejected){check(NativeUsageBoundary.pending==null&&!f.usage().exists(),"cancelled/recreated management receipt was replayed: "+fault);first.onDestroy();current.onDestroy();continue;}
+   if(fault.equals("failed"))NativeUsageBoundary.fail=true;else if(fault.equals("source"))NativeUsageBoundary.beforeFinish=()->{try{AndroidPrivateFileStore.write(f.a.file,(Files.readString(f.a.file.toPath())+" ").getBytes(java.nio.charset.StandardCharsets.UTF_8),AndroidNodeStore.MAX_BUNDLE);}catch(Exception e){throw new AssertionError(e);}};else NativeUsageBoundary.fault=fault;
+   f.finish();check(!f.usage().exists(),"management invalid final adoption counted: "+fault);if(!fault.equals("failed"))check(current.lastToast.contains("Node usage could not be saved"),"management refresh hid usage failure");current.onDestroy();first.onDestroy();
+  }
+ }
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);ordinary(root);excluded(root);stableIdentity(root);failedStore(root);atomicOwner(root);ranking(root);externalActivity(root);System.out.println("Android node usage: "+checks+" shipping controller/store/Home/catalog/management checks PASS (native proof boundary controlled)");}
 }
 '''
 
@@ -197,6 +234,7 @@ def sources():
     boundaries = boundaries.replace('final class NativeWireGuardController {}', 'final class NativeWireGuardController {com.wireguard.android.backend.Tunnel.State getState(){return com.wireguard.android.backend.Tunnel.State.DOWN;}}').replace('final class NativeAmneziaWGController {}', 'final class NativeAmneziaWGController {org.amnezia.awg.backend.Tunnel.State getState(){return org.amnezia.awg.backend.Tunnel.State.DOWN;}}').replace('final class NativeXrayController {}', 'final class NativeXrayController {String getState(){return "DOWN";}}')
     boundaries = boundaries.replace('final class NativeSingBoxController {', 'final class NativeSingBoxController {String getState(){return "DOWN";}')
     boundaries = boundaries.replace('static boolean isTor(String p)', 'static void validate(AndroidStandardExitStore.Entry e){}static boolean isTor(String p)')
+    boundaries = boundaries.replace('ExternalSelection currentExternalPath(String id)', 'void selectOrdinaryTorPath(AndroidStandardExitStore.Entry exit,AndroidStandardExitStore.Entry entry){}ExternalSelection currentExternalPath(String id)')
     native = (JAVA / 'NativeSingBoxController.java').read_text()
     methods = [S.block(native, '    static boolean ' + name + '(') for name in ('nativeMultihopEntry', 'nativeWireGuardFamily', 'nativeNaiveFamily', 'nativePQFamily')]
     boundaries = boundaries.replace(' // PRODUCTION_TRANSPORT_PREDICATES', '\n'.join(methods)).replace(' // PRODUCTION_COMPOSITE_PREDICATE', S.block((JAVA / 'AndroidNativeCompositeProfile.java').read_text(), '    static boolean isMode('))
@@ -226,6 +264,18 @@ def main():
         app.mkdir(parents=True)
         (app / 'Boundaries.java').write_text(boundaries)
         (app / 'UsageActivity.java').write_text(ACTIVITY.replace(' // SHIPPING_CALLBACK', callback))
+        external = (JAVA / 'StandardExitActivity.java').read_text()
+        start = external.index('\n', external.index('public final class StandardExitActivity'))
+        fields = external[start:external.index('    @Override protected void onCreate(')]
+        signatures = ('    @Override protected void onDestroy()', '    @Override protected void onSaveInstanceState(', '    private void restorePending(',
+                      '    private boolean selectionOnly(', '    private void requestDirect(', '    private void requestOrdinaryTor(',
+                      '    private void requestConnect(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,String entryMode,String execution)',
+                      '    private void capturePending(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode)',
+                      '    private void capturePending(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode,String execution)',
+                      '    private static String requestDigest(', '    private static String ordinaryRequestDigest(', '    private void captureUsage(',
+                      '    private boolean ownsUsage(', '    private void releaseUsage(', '    private UsagePermission takeUsage(', '    private void clearPending(',
+                      '    private void startPending(', '    private boolean activeOrTransitioning(', '    @Override protected void onActivityResult(')
+        (app / 'StandardExitActivity.java').write_text(EXTERNAL_ACTIVITY.replace(' // SHIPPING_FIELDS', fields).replace(' // SHIPPING_METHODS', '\n'.join(S.block(external, signature) for signature in signatures)))
         (app / 'NodeUsageTest.java').write_text(HARNESS)
         names = ('AndroidPrivateFileStore', 'AndroidNodeUsage', 'AndroidHomeStateStore', 'AndroidNodeStore', 'AndroidStandardExitStore', 'AndroidProfileSelection', 'AndroidUnifiedNodeCatalog', 'AndroidConnectionSelection', 'AndroidUnifiedConnectionController', 'AndroidNumericAddress')
         for name in names:
@@ -241,6 +291,8 @@ def main():
             ('AndroidUnifiedConnectionController.java', 'if(!callback.recordsNodeUsage()||pendingStartup!=null)return null;', 'if(pendingStartup!=null)return null;', 'temporary trial counted as user adoption: router'),
             ('AndroidUnifiedConnectionController.java', 'if(!callback.recordsNodeUsage()||pendingStartup!=null)return null;', 'if(!callback.recordsNodeUsage())return null;', 'automatic startup counted as user adoption'),
             ('AndroidNodeUsage.java', 'Math.max(node.imported.count,same?previous.getInt("count"):0)', 'node.imported.count+(same?previous.getInt("count"):0)', 'imported count was repeatedly added instead of maximum'),
+            ('StandardExitActivity.java', 'if(usage!=null)usage.usage.owned(StandardExitActivity.this,session);', '/* broken: management owner omitted */', 'management final node use missing'),
+            ('StandardExitActivity.java', '}else if(!nonce.isEmpty())clearPending();', '}/* broken: cancelled process receipt ignored */', 'cancelled/recreated management receipt was replayed: cancelled'),
         )
         for name, old, new, assertion in controls:
             target = app / name
