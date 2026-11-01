@@ -60,12 +60,12 @@ func macOSInstallerUtility(arguments []string) (bool, error) {
 	// Snapshot installer code into a root-owned private directory before Python
 	// imports it. Application/runtime inputs have their own descriptor-based
 	// capture, verification and transaction inside the installer.
-	for _, name := range []string{"install-macos-native.py", "install-linux-native.py"} {
+	for _, name := range []string{"install-macos-native.py", "install-linux-native.py", "install-macos-generation.py", "install-macos-image.py"} {
 		if err = copyMacInstallerModule(filepath.Join(source, "client", name), filepath.Join(private, name)); err != nil {
 			return true, err
 		}
 	}
-	command := exec.Command(python, "-EsS", filepath.Join(private, "install-macos-native.py"), source, "--caller-uid", strconv.FormatUint(caller, 10), "--python", python)
+	command := exec.Command(python, "-BEsS", filepath.Join(private, "install-macos-native.py"), source, "--caller-uid", strconv.FormatUint(caller, 10), "--python", python)
 	command.Env = macOSPythonEnvironment()
 	command.Dir = private
 	command.Stdin, command.Stdout, command.Stderr = os.Stdin, os.Stdout, os.Stderr

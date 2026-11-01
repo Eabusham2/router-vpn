@@ -29,6 +29,8 @@ SPEC = importlib.util.spec_from_file_location('mac_install_file_fixtures', ROOT/
 F = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(F)
 PROBE_SPEC = importlib.util.spec_from_file_location('mac_install_native_probe', ROOT/'deploy/macos_process_inventory_probe.py')
 PROBE = importlib.util.module_from_spec(PROBE_SPEC); PROBE_SPEC.loader.exec_module(PROBE)
+IMAGE_FIXTURE_SPEC = importlib.util.spec_from_file_location('mac_install_image_fixtures', ROOT/'deploy/test_macos_image_identity.py')
+IMAGE_FIXTURES = importlib.util.module_from_spec(IMAGE_FIXTURE_SPEC); IMAGE_FIXTURE_SPEC.loader.exec_module(IMAGE_FIXTURES)
 
 
 def load(source=None):
@@ -718,7 +720,11 @@ class MacInstallTransactions(unittest.TestCase):
         self.root, self.system = self.base/'installed', self.base/'system'
         self.system.mkdir()
         self.source = F.package_fixture(self.base/'package')
-        F.write(self.source/'RouterVPN.app/Contents/MacOS/RouterVPN', '#!/bin/sh\nexit 0\n', 0o755)
+        # Transaction tests use bounded Mach-O records with an explicitly
+        # injected verifier. Actual signed executable identity is independently
+        # exercised by the mandatory native image/generation gates.
+        for name in self.installer.GENERATION.REQUIRED_IMAGES:
+            F.write(self.source/name, IMAGE_FIXTURES.thin([(0, IMAGE_FIXTURES.directory(identity=name.encode()))]), 0o755)
         F.write(self.source/'RouterVPN.app/Contents/Info.plist', plistlib.dumps({'CFBundleIdentifier': 'com.eabusham.routervpn'}))
         F.write(self.source/'modes/kill-switch-platform.py', '# test only\n')
         self.uid = pwd.getpwnam('daemon').pw_uid
@@ -749,7 +755,7 @@ class MacInstallTransactions(unittest.TestCase):
         self.assertEqual({'schema': 1, 'caller_uid': self.uid}, record)
         self.assertEqual(0o600, (self.root/'controller-owner.json').stat().st_mode & 0o777)
         self.assertEqual(0o755, self.root.stat().st_mode & 0o777)
-        self.assertIn(str(self.python)+' -EsS "$@"', (self.root/'bin/python3').read_text())
+        self.assertIn(str(self.python)+' -BEsS "$@"', (self.root/'bin/python3').read_text())
         definition = plistlib.loads((self.system/M.PLIST.lstrip('/')).read_bytes())
         self.assertEqual(M.launch_definition_arguments(), definition['ProgramArguments'])
         self.assertNotIn('EnvironmentVariables', definition)
@@ -783,21 +789,23 @@ class MacInstallTransactions(unittest.TestCase):
         (untrusted/'json.py').write_text('open(' + repr(str(cwd_marker)) + ',"w").write("cwd imported")\nraise RuntimeError("untrusted CWD module")\n')
         self.install()
         script = self.root/'client/interpreter-proof.py'
-        script.write_text('import json, os, sys\nprint(json.dumps([sys.flags.ignore_environment, sys.flags.no_user_site, sys.flags.no_site, os.environ.get("DYLD_FALLBACK_LIBRARY_PATH"), os.environ.get("DYLD_FALLBACK_FRAMEWORK_PATH")]))\n')
+        script.write_text('import json, os, sys\nimport captured_module\nprint(json.dumps([sys.flags.ignore_environment, sys.flags.no_user_site, sys.flags.no_site, sys.flags.dont_write_bytecode, os.environ.get("DYLD_FALLBACK_LIBRARY_PATH"), os.environ.get("DYLD_FALLBACK_FRAMEWORK_PATH")]))\n')
+        (script.parent/'captured_module.py').write_text('value = "original protected code"\n')
         wrapper = self.root/'bin/python3'
         environment = dict(os.environ, PYTHONPATH=str(untrusted), PYTHONHOME=str(untrusted))
         result = subprocess.run([wrapper, script], cwd=untrusted, env=environment, capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), [1, 1, 1, '/usr/lib', '/System/Library/Frameworks'])
+        self.assertEqual(json.loads(result.stdout), [1, 1, 1, 1, '/usr/lib', '/System/Library/Frameworks'])
+        self.assertFalse((script.parent/'__pycache__').exists(), 'owned wrapper mutated the managed code tree with bytecode')
         self.assertFalse(site_marker.exists(), 'global site initialization ran before the protected helper')
         self.assertFalse(cwd_marker.exists(), 'an untrusted CWD/PYTHONPATH module replaced the captured helper dependency')
         # The negative control executes the same generated wrapper with only
         # -S removed, proving this fixture really exposes global site code.
         broken = self.root/'bin/python-with-site'
-        broken.write_text(wrapper.read_text().replace(' -EsS ', ' -Es ')); broken.chmod(0o700)
+        broken.write_text(wrapper.read_text().replace(' -BEsS ', ' -BEs ')); broken.chmod(0o700)
         result = subprocess.run([broken, script], cwd=untrusted, env=environment, capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(result.stdout), [1, 1, 0, '/usr/lib', '/System/Library/Frameworks'])
+        self.assertEqual(json.loads(result.stdout), [1, 1, 0, 1, '/usr/lib', '/System/Library/Frameworks'])
         self.assertTrue(site_marker.exists(), 'the global-site negative control did not reach its actual startup hook')
         self.assertFalse(cwd_marker.exists())
 
@@ -810,9 +818,12 @@ class MacInstallTransactions(unittest.TestCase):
         try:
             self.renew_boundary(); self.install()
             os.write(old, b'old open handle cannot rewrite trusted code')
-            self.assertEqual('#!/bin/sh\nexit 0\n', (self.root/'RouterVPN.app/Contents/MacOS/RouterVPN').read_text())
+            self.assertEqual((self.source/'RouterVPN.app/Contents/MacOS/RouterVPN').read_bytes(),
+                             (self.root/'RouterVPN.app/Contents/MacOS/RouterVPN').read_bytes())
         finally:
             os.close(old)
+        self.assertTrue((self.root/'generated/private.conf').is_file(), 'upgrade discarded captured private configuration')
+        self.assertTrue((self.root/'state.json').is_file(), 'upgrade discarded the saved connection state')
         self.assertEqual('private bytes', (self.root/'generated/private.conf').read_text())
         self.assertIn('keep-secret', (self.root/'routers.json').read_text())
         self.assertEqual('{"mode":"last"}', (self.root/'state.json').read_text())
@@ -858,11 +869,88 @@ class MacInstallTransactions(unittest.TestCase):
     def test_system_failure_restores_old_root_files_and_supervisor(self):
         self.install(); F.write(self.root/'private-sentinel', 'old private state', 0o600)
         before, system = F.snapshot(self.root, metadata=True), F.file_bytes(self.system)
+        receipt = self.installer.GENERATION.receipt_path(self.root)
+        old_receipt = receipt.read_bytes(), receipt.stat().st_dev, receipt.stat().st_ino
         self.renew_boundary(); self.boundary.fail = 'bootstrap'
         with self.assertRaises(subprocess.CalledProcessError): self.install()
         self.assertEqual(before, F.snapshot(self.root, metadata=True))
         self.assertEqual(system, F.file_bytes(self.system))
+        self.assertTrue(receipt.exists(), 'rollback lost the original generation receipt')
+        self.assertEqual(old_receipt, (receipt.read_bytes(), receipt.stat().st_dev, receipt.stat().st_ino))
         self.assertTrue(self.boundary.loaded)
+
+    def test_receipt_promotion_failure_restores_original_generation_and_private_state(self):
+        self.install(); F.write(self.root/'private-sentinel', 'original private owner', 0o600)
+        before = F.snapshot(self.root, metadata=True)
+        receipt = self.installer.GENERATION.receipt_path(self.root)
+        original = receipt.read_bytes(), receipt.stat().st_dev, receipt.stat().st_ino
+        self.renew_boundary()
+        rename = os.rename
+        failures = []
+        def fail_new_receipt(source, target, *args, **options):
+            if Path(source).name == 'new-generation.json' and Path(target) == receipt:
+                failures.append((source, target))
+                raise OSError('controlled new receipt promotion failure')
+            return rename(source, target, *args, **options)
+        with mock.patch.object(self.installer.os, 'rename', fail_new_receipt), \
+             self.assertRaisesRegex(OSError, 'controlled new receipt promotion failure'):
+            self.install()
+        self.assertEqual(len(failures), 1)
+        self.assertEqual(before, F.snapshot(self.root, metadata=True))
+        self.assertTrue(receipt.exists(), 'receipt promotion failure lost the original generation receipt')
+        self.assertEqual(original, (receipt.read_bytes(), receipt.stat().st_dev, receipt.stat().st_ino))
+        self.assertTrue(self.boundary.loaded)
+        with self.installer.GENERATION.capture_receipt(self.root, self.installer.CODE_TREES,
+                                                       self.installer.CODE_FILES, self.installer.FILES.ordinary) as captured:
+            captured.verify()
+
+    def test_old_generation_changed_during_inventory_cannot_be_promoted_over(self):
+        self.install()
+        original_root = self.root.stat().st_dev, self.root.stat().st_ino
+        receipt = self.installer.GENERATION.receipt_path(self.root)
+        original_receipt = receipt.read_bytes()
+        self.renew_boundary()
+        def changed_during_inventory():
+            target = self.root/'router-vpn-client'
+            target.write_bytes(IMAGE_FIXTURES.thin([(0, IMAGE_FIXTURES.directory(identity=b'changed-during-inventory'))]))
+            return []
+        with self.assertRaisesRegex(ValueError, 'Managed code members changed'):
+            self.installer.install(self.source, self.uid, self.python, root=self.root,
+                                   integration=self.integration, verifier=self.verify,
+                                   process_reader=changed_during_inventory)
+        self.assertEqual(original_root, (self.root.stat().st_dev, self.root.stat().st_ino))
+        self.assertEqual(original_receipt, receipt.read_bytes())
+        self.assertTrue(self.boundary.loaded)
+
+    def test_first_or_legacy_install_never_infers_empty_prior_native_inventory(self):
+        def unresolved():
+            raise RuntimeError('captured unresolved native owner')
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                if legacy:
+                    self.install()
+                    self.installer.GENERATION.receipt_path(self.root).unlink()
+                    self.renew_boundary()
+                before = F.snapshot(self.root, metadata=True)
+                with self.assertRaisesRegex(RuntimeError, 'captured unresolved native owner'):
+                    self.installer.install(self.source, self.uid, self.python, root=self.root,
+                                           integration=self.integration, verifier=self.verify,
+                                           process_reader=unresolved)
+                self.assertEqual(before, F.snapshot(self.root, metadata=True))
+                self.assertFalse(self.installer.GENERATION.receipt_path(self.root).exists())
+
+    def test_successful_upgrade_promotes_the_matching_new_generation_receipt(self):
+        self.install()
+        receipt = self.installer.GENERATION.receipt_path(self.root)
+        previous = json.loads(receipt.read_text())
+        F.write(self.root/'generated/private-upgrade-sentinel', 'private survives generation promotion', 0o600)
+        self.renew_boundary(); self.install()
+        current = json.loads(receipt.read_text())
+        self.assertNotEqual(previous['generation'], current['generation'])
+        self.assertNotEqual(previous['root_object'], current['root_object'])
+        self.assertEqual(current['root_object'], [self.root.stat().st_dev, self.root.stat().st_ino])
+        self.assertEqual('private survives generation promotion', (self.root/'generated/private-upgrade-sentinel').read_text())
+        self.assertEqual(0o600, receipt.stat().st_mode & 0o777)
 
     def test_rollback_failure_retains_backup_and_blocks_next_attempt(self):
         self.install(); self.renew_boundary()
@@ -906,6 +994,10 @@ class MacInstallTransactions(unittest.TestCase):
                   for name, value in expected.items() for path in [self.source/name]}
         native = QuarantineLibrary(values)
         self.install_with_quarantine(native)
+        for name in expected:
+            path = self.root/name
+            self.assertIn((path.stat().st_dev, path.stat().st_ino), native.values,
+                          'installation discarded the original download quarantine')
         self.assertEqual(expected, {name: native.values[(path.stat().st_dev, path.stat().st_ino)]
                                   for name in expected for path in [self.root/name]})
         self.assertEqual(len(expected)*2, len(native.values), 'installation copied unrelated extended metadata')
@@ -1195,10 +1287,17 @@ def main():
     if not result.wasSuccessful(): raise SystemExit(1)
     for before, after, case in (
         ('with FILES.installation_lock(root):', 'with __import__("contextlib").nullcontext():', 'test_live_install_lock_prevents_even_service_probe'),
-        ('            verifier(stage, python)', '            pass # bypass runtime validation', 'test_verification_failure_preserves_existing_bytes_and_service'),
-        ('            reject_running_previous(root, process_reader)', '            pass # ignore legacy owner', 'test_running_legacy_native_owner_prevents_promotion'),
+        ('        verifier(stage, python)', '        pass # bypass runtime validation', 'test_verification_failure_preserves_existing_bytes_and_service'),
+        ('        reject_running_previous(root, process_reader)', '        pass # ignore legacy owner', 'test_running_legacy_native_owner_prevents_promotion'),
         ('                FILES.copy_checked(child, stage/child.name, private=True)', '                pass # discard private state', 'test_upgrade_preserves_private_owner_settings_and_open_file_isolation'),
-        ('                integration.restore()', '                pass # omit restoration', 'test_system_failure_restores_old_root_files_and_supervisor'),
+        ('            integration.restore()', '            pass # omit restoration', 'test_system_failure_restores_old_root_files_and_supervisor'),
+        ('                os.rename(previous_receipt, installed_receipt)', '                pass # omit generation rollback', 'test_receipt_promotion_failure_restores_original_generation_and_private_state'),
+        ('        reject_running_previous(root, process_reader)\n        if generation is not None:\n            generation.verify()',
+         '        reject_running_previous(root, process_reader)\n        if generation is not None:\n            pass # omit final original generation proof', 'test_old_generation_changed_during_inventory_cannot_be_promoted_over'),
+        ('    if generation is not None and process_reader is running_executables:',
+         '    if generation is None:\n        process_reader = lambda: [] # fabricate empty legacy inventory\n    if generation is not None and process_reader is running_executables:',
+         'test_first_or_legacy_install_never_infers_empty_prior_native_inventory'),
+        (' -BEsS "$@"\\n', ' -EsS "$@"\\n', 'test_actual_runtime_wrapper_excludes_global_site_and_untrusted_current_directory'),
         ('        preserve_download_quarantine(source, stage)', '        pass # discard download provenance', 'test_existing_download_quarantine_is_preserved_on_code'),
         ('        if self.read(descriptor) != value:', '        if False:', 'test_quarantine_write_and_readback_fail_before_promotion'),
         ('            if attributes.read(incoming) != quarantine:', '            if False:', 'test_quarantine_write_and_readback_fail_before_promotion'),
@@ -1207,7 +1306,8 @@ def main():
         if source.count(before) != 1: raise AssertionError('Mutation lost its actual production seam')
         broken = type('BrokenMacInstall', (MacInstallTransactions,), {'installer': load(source.replace(before, after, 1))})
         result = unittest.TextTestRunner(stream=io.StringIO()).run(broken(case))
-        if result.wasSuccessful(): raise AssertionError('Broken native installation was accepted: '+case)
+        if result.wasSuccessful() or result.errors or not result.failures:
+            raise AssertionError('Broken native installation did not fail its actual assertion: '+case)
         print('Rejected macOS installer defect: '+case)
     for before, after, case in (
         ('    captured = native_process_state(library, pid)', '    return None\n    captured = native_process_state(library, pid)',

@@ -1,8 +1,10 @@
 # macOS installer: unresolved live executable identity
 
-Recorded from native CI on October 31, 2026. This is an open installation
-blocker, not a completed native-installation requirement. The shipping installer
-still rejects a live process whose executable location it cannot establish.
+Recorded from native CI on October 31, 2026. First-install and legacy inventory
+remain an open installation blocker. Managed upgrades now have a separate,
+bounded main-image comparison path backed by a complete original-generation
+receipt. Its native acceptance is tracked separately below; neither a protected
+receipt alone nor the diagnostic parent chain authorizes installation.
 
 ## Actual observation
 
@@ -88,7 +90,7 @@ The thread-path call also resolves through `fill_taskthreadinfo` and
 This bounds the interfaces investigated; it is not a claim that the product
 requirement is impossible or that all native architectures have been exhausted.
 
-## Next native experiment
+## Extended native observation
 
 The native workflows now collect a separate diagnostic snapshot before any
 project fixture. The later ordinary installer gate still runs and still fails
@@ -104,12 +106,104 @@ silently presented as the same original parent. The controller fixture logs
 the actual compiled controller and AppKit file objects before launch, allowing
 their device/inode pairs to be compared with the unresolved mappings.
 
-The owned unlinked-child negative control calibrates these parent-generation
-reads against the actual created child and its current test parent. Native
-execution of the extended diagnostics remains pending until that exact source
-passes on both Mac architectures.
+The [Intel job for `3c45a711`](https://github.com/Eabusham2/router-vpn/actions/runs/41251802590/job/124686698217)
+executed the extended diagnostics. Before fixtures at 23:18:30 UTC and at the
+later refusal at 23:21:57, it retained the same PID 963, native start
+22:57:34.339848, unique ID 963 and exec version 2293. The original-parent fields
+matched PID 961 (`sudo`, unique ID 961 / exec version 2289), then PID 959
+(`hosted-compute-agent`, unique ID 959 / exec version 2285). Both parent edges
+were checked against their native original generations. This process predates
+the job's first log at 23:17:23 and the later project fixtures.
+
+The unlinked mapping's device/inode was `16777220 / 12888350633`. The actual
+controller and AppKit fixture images had inodes `12888402784` and `12888408218`
+on that device. The separately created copied/unlinked owner had inode
+`12888417620`; its negative control and original-parent calibration passed.
+These records identify a preexisting hosted-agent process chain, not a project
+fixture. The mapped vnode still does not become main-image authority, and the
+installer continued to refuse it. Decoded Intel log SHA256:
+`5de4f3f7a131f34b225f61db6e9131c6b723f863ec92967c64173d1280ebe418`.
+The companion Apple Silicon job was cancelled while pending, so this extended
+observation does not establish both-architecture acceptance.
 
 No unknown process is excluded or killed. No broad retry expansion is justified
 by the persistent ages above. A future retry may accept only actual resolution
 or independently proved disappearance of the same captured process; waiting
 longer by itself cannot close this blocker.
+
+## Managed original-generation comparison
+
+`client/install-macos-image.py` captures every CodeDirectory alternative from
+every slice of an original retained Mach-O descriptor. It rejects unsupported,
+unsigned, truncated and overlapping signature structures, and reads the file
+identity back after hashing. This capture supplies identifiers; it is not a
+replacement for the package's actual runtime and codesign verification.
+
+Apple's supported `CS_OPS_CDHASH` operation (opcode 5) is distinct from the
+obsolete pathname opcode. In the examined
+[`kern_proc.c`](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/kern_proc.c),
+it reads the retained process's `p_textvp` and `p_textoff`.
+[`ubc_cs_getcdhash`](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/ubc_subr.c)
+returns the corresponding cached CodeDirectory hash. The audit-token entry
+point compares only the supplied PID and exec version; this code uses it as a
+kernel generation fence, not a fabricated authenticated audit token. Native
+BSD start and unique/exec identity are repeated around the call. Any unknown
+hash, error, changed process, changed exec generation or zombie refuses this
+identity path.
+
+After the ordinary installer has captured and verified a fresh stage,
+`client/install-macos-generation.py` records the exact root device/inode,
+target path, fixed code scope, every immutable directory identity, every
+immutable file identity and digest, and every native CodeDirectory alternative. The protected receipt is
+stored beside the fixed installation as `router-vpn-client.generation.json`.
+The source manifest remains ordinary captured metadata. It never substitutes
+for the actual complete file inventory.
+
+A managed upgrade retains the original installation lock and receipt. It
+rechecks the full code inventory and protected receipt around the native process
+inventory. Missing, added, changed or replaced code, an incomplete native image
+set, executable private files, receipt replacement and changed directory
+ownership all refuse the upgrade. Mutable private settings remain separate.
+The owned Python wrapper uses `-B -E -s -S`, preventing generated bytecode from
+changing the captured code trees while preserving interpreter isolation.
+
+For an unresolved path, the shipping inventory can exclude a live native image
+only when its actual kernel hash is outside that fully revalidated original
+image set and its PID/start/exec identity matches the unresolved capture. A
+matching copied/unlinked executable still blocks. This decision is explicitly
+an exclusion from the captured generation, not proof of process absence.
+Unknown code signatures and denied native reads continue to block.
+
+The [Intel identity job at `b11ae8b5`](https://github.com/Eabusham2/router-vpn/actions/runs/41253535068/job/124691810048)
+passed both actual kernel controls: copied/unlinked `sleep` and `cat` retained
+their distinct captured CodeDirectory hashes, and a wrong exec-version token
+was rejected with `ESRCH`. The preexisting unresolved PID 1038 still returned
+`-1 / EBADEXEC (85)` from the main-image hash operation. Its captured UUID was
+all zero. That result supplies no usable image identity and remains refused;
+the later original global inventory also failed on the same live process.
+Apple Silicon execution was still queued at this read. Decoded Intel log
+SHA256: `c1ed351bfa3d68ca5a91af240b0960b13496dcf8704d3d67c0b97fe3c163acfe`.
+This is native evidence for the identity primitive and for the remaining hosted
+blocker, not native acceptance of the later generation transaction.
+
+The new root and receipt are promoted together under the existing transaction.
+Failure restores the original application, original receipt inode/bytes, private
+state and launchd integration. An interrupted or failed rollback retains the
+owned recovery directory. The installed generation is revalidated before the
+transaction completes.
+
+There is no retrospective receipt adoption. A missing receipt selects the
+original strict legacy/first-install inventory, including an absent target
+directory; it does not establish that an older deleted executable never
+existed. This implementation therefore does not claim that first-install or
+legacy acceptance on the affected hosted runner is complete.
+
+The required native gates are `deploy/test_macos_image_identity.py` and
+`deploy/test_macos_generation.py`. They execute real copied/unlinked signed
+images, wrong exec-generation tokens, matching versus foreign original-image
+comparisons, and missing-member refusal on Intel and Apple Silicon. Parser and
+transaction tests also execute defective source variants for omitted member
+proof, omitted receipt ownership, matching-image acceptance, stale exec
+adoption, legacy empty-inventory fabrication and rollback loss. Linux test
+results cover those executable filesystem/control contracts; actual Darwin
+kernel and packaged-install acceptance requires the corresponding native jobs.

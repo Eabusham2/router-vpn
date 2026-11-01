@@ -31,6 +31,9 @@ import time
 SPEC = importlib.util.spec_from_file_location('routervpn_install_files', Path(__file__).with_name('install-linux-native.py'))
 FILES = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(FILES)
+GENERATION_SPEC = importlib.util.spec_from_file_location('routervpn_install_generation', Path(__file__).with_name('install-macos-generation.py'))
+GENERATION = importlib.util.module_from_spec(GENERATION_SPEC)
+GENERATION_SPEC.loader.exec_module(GENERATION)
 ROOT = Path('/opt/router-vpn-client')
 LABEL = 'com.routervpn.client'
 PLIST = '/Library/LaunchDaemons/' + LABEL + '.plist'
@@ -427,7 +430,14 @@ def native_process_path(library, pid):
     return (os.fsdecode(buffer.raw[:size]) if size > 0 else None, error, size)
 
 
-def native_executable(library, pid):
+class NativeExecutableUnresolved(RuntimeError):
+    def __init__(self, pid, captured, execution, error, size):
+        super().__init__('Cannot prove the previous native processes have exited '
+                         f'(pid={pid}, errno={error}, result={size}, status={captured[3]})')
+        self.pid, self.captured, self.execution = pid, captured, execution
+
+
+def native_executable(library, pid, *, capture_generation=False):
     path, error, size = native_process_path(library, pid)
     if path is not None:
         return path
@@ -441,6 +451,7 @@ def native_executable(library, pid):
     captured = native_process_state(library, pid)
     if captured is None:
         return None
+    execution = GENERATION.IMAGE.native_unique(library, pid) if capture_generation and captured[3] != 5 else None
     for attempt in range(3):
         path, error, size = native_process_path(library, pid)
         current = native_process_state(library, pid)
@@ -456,15 +467,19 @@ def native_executable(library, pid):
             break
         if attempt < 2:
             time.sleep(0.01)
-    raise RuntimeError('Cannot prove the previous native processes have exited '
-                       f'(pid={pid}, errno={error}, result={size}, status={current[3]})')
+    if error not in (errno.ENOENT, errno.ESRCH):
+        raise RuntimeError('Cannot prove the previous native processes have exited '
+                           f'(pid={pid}, errno={error}, result={size}, status={current[3]})')
+    raise NativeExecutableUnresolved(pid, captured, execution, error, size)
 
 
-def running_executables():
+def running_executables(generation=None):
     # Apple libproc returns a PID count here (not the byte count returned by
     # proc_listpids). Paths come from the kernel, not mutable argv or ps text.
     # https://github.com/apple-oss-distributions/xnu/blob/main/libsyscall/wrappers/libproc/libproc.c
     library = native_process_library()
+    if generation is not None:
+        generation.verify()
     for attempt in range(4):
         ctypes.set_errno(0)
         count = library.proc_listallpids(None, 0)
@@ -484,9 +499,25 @@ def running_executables():
     for pid in array[:actual]:
         if pid <= 0:
             continue
-        path = native_executable(library, pid)
+        if generation is None:
+            path = native_executable(library, pid)
+        else:
+            try:
+                path = native_executable(library, pid, capture_generation=True)
+            except NativeExecutableUnresolved as unresolved:
+                identity = GENERATION.IMAGE.main_image_identity(library, pid, native_process_state)
+                if ((identity['pid'], identity['start_seconds'], identity['start_microseconds']) != unresolved.captured[:3] or
+                        (identity['uniqueid'], identity['idversion'], identity['main_uuid']) != unresolved.execution):
+                    raise RuntimeError('Unresolved native image changed its captured process or exec generation')
+                generation.require_foreign_image(identity)
+                # This is an independently identified live image outside this
+                # complete original generation, not process absence. Unknown
+                # hashes and any matching copied/unlinked image still refuse.
+                continue
         if path is not None:
             paths.append(path)
+    if generation is not None:
+        generation.verify()
     return paths
 
 
@@ -527,7 +558,7 @@ def stage_application(source, root, stage, installing_uid, python):
                        'DYLD_FALLBACK_LIBRARY_PATH=/usr/lib\n'
                        'DYLD_FALLBACK_FRAMEWORK_PATH=/System/Library/Frameworks\n'
                        'export DYLD_FALLBACK_LIBRARY_PATH DYLD_FALLBACK_FRAMEWORK_PATH\n'
-                       'exec ' + shlex.quote(str(python)) + ' -EsS "$@"\n')
+                       'exec ' + shlex.quote(str(python)) + ' -BEsS "$@"\n')
     os.chown(wrapper, 0, 0); wrapper.chmod(0o700)
     for name in REQUIRED & {'router-vpn-client', 'router-vpn-dns', 'router-vpn-start-layer-relay', 'router-vpn-update'}:
         if not os.access(stage/name, os.X_OK):
@@ -552,7 +583,7 @@ def stage_application(source, root, stage, installing_uid, python):
 def verify_runtimes(stage, python):
     for flag in ('--verify-native-runtime', '--verify-amnezia-runtime'):
         run([stage/'router-vpn-client', flag, stage])
-    run([python, '-EsS', stage/'client/verify-bundled-xray.py', stage/'runtime/xray'])
+    run([python, '-BEsS', stage/'client/verify-bundled-xray.py', stage/'runtime/xray'])
     for path in ('RouterVPN.app', 'router-vpn-client', 'router-vpn-dns', 'router-vpn-start-layer-relay', 'router-vpn-update'):
         run(['/usr/bin/codesign', '--verify', '--deep', '--strict', stage/path])
 
@@ -568,34 +599,66 @@ def install(source, installing_uid, python, *, root=ROOT, integration=None, veri
         pending = list(root.parent.glob(prefix + '*'))
         if pending:
             raise RuntimeError('An interrupted native installation needs recovery; retained files: ' + ', '.join(map(str, pending)))
-        temporary = Path(tempfile.mkdtemp(prefix=prefix, dir=root.parent))
-        stage, previous = temporary/'new', temporary/'previous'
-        stage.mkdir(mode=0o700); os.chown(stage, 0, 0)
-        promoted = False
+        with GENERATION.previous_generation(root, CODE_TREES, CODE_FILES, FILES.ordinary) as generation:
+            install_generation(source, installing_uid, python, root, integration, verifier, process_reader, generation)
+
+
+def install_generation(source, installing_uid, python, root, integration, verifier, process_reader, generation):
+    # The caller retains the original installation EX lock and prior receipt
+    # through this complete root/receipt/service transaction.
+    if generation is not None and process_reader is running_executables:
+        process_reader = lambda: running_executables(generation)
+    prefix = '.' + root.name + '.install-'
+    temporary = Path(tempfile.mkdtemp(prefix=prefix, dir=root.parent))
+    stage, previous = temporary/'new', temporary/'previous'
+    prepared_receipt, previous_receipt = temporary/'new-generation.json', temporary/'previous-generation.json'
+    installed_receipt = GENERATION.receipt_path(root)
+    stage.mkdir(mode=0o700); os.chown(stage, 0, 0)
+    promoted, receipt_promoted = False, False
+    try:
+        stage_application(source, root, stage, installing_uid, python)
+        verifier(stage, python)
+        GENERATION.write_prepared(stage, root, prepared_receipt, CODE_TREES, CODE_FILES, FILES.ordinary)
+        integration.prepare(root)
+        if generation is not None:
+            generation.verify()
+        reject_running_previous(root, process_reader)
+        if generation is not None:
+            generation.verify()
+        elif installed_receipt.exists() or installed_receipt.is_symlink():
+            raise ValueError('A managed receipt appeared during the original legacy installation')
+        with GENERATION.capture_receipt(stage, CODE_TREES, CODE_FILES, FILES.ordinary,
+                                        path=prepared_receipt, target_root=root) as prepared:
+            prepared.verify()
+        if root.exists():
+            os.rename(root, previous)
+        os.rename(stage, root)
+        promoted = True
+        root.chmod(0o755)
+        if generation is not None:
+            os.rename(installed_receipt, previous_receipt)
+        os.rename(prepared_receipt, installed_receipt)
+        receipt_promoted = True
+        integration.install(root)
+        with GENERATION.capture_receipt(root, CODE_TREES, CODE_FILES, FILES.ordinary) as installed:
+            installed.verify()
+    except BaseException:
         try:
-            stage_application(source, root, stage, installing_uid, python)
-            verifier(stage, python)
-            integration.prepare(root)
-            reject_running_previous(root, process_reader)
-            if root.exists():
-                os.rename(root, previous)
-            os.rename(stage, root)
-            promoted = True
-            root.chmod(0o755)
-            integration.install(root)
-        except BaseException:
-            try:
-                if promoted:
-                    integration.retire_new(root)
-                    os.rename(root, stage)
-                if previous.exists():
-                    os.rename(previous, root)
-                integration.restore()
-            except BaseException as rollback_error:
-                raise RuntimeError('Native installation rollback needs recovery; previous bytes retained at ' + str(temporary)) from rollback_error
-            shutil.rmtree(temporary)
-            raise
+            if promoted:
+                integration.retire_new(root)
+                os.rename(root, stage)
+            if receipt_promoted:
+                os.rename(installed_receipt, prepared_receipt)
+            if previous_receipt.exists():
+                os.rename(previous_receipt, installed_receipt)
+            if previous.exists():
+                os.rename(previous, root)
+            integration.restore()
+        except BaseException as rollback_error:
+            raise RuntimeError('Native installation rollback needs recovery; previous bytes retained at ' + str(temporary)) from rollback_error
         shutil.rmtree(temporary)
+        raise
+    shutil.rmtree(temporary)
 
 
 if __name__ == '__main__':

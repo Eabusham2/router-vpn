@@ -24,6 +24,7 @@ on:
       - 'deploy/test_macos_installer_trust.py'
       - 'deploy/test_macos_native_install.py'
       - 'deploy/test_macos_image_identity.py'
+      - 'deploy/test_macos_generation.py'
       - 'deploy/macos_process_inventory_probe.py'
       - 'deploy/test_macos_installer_entry.py'
       - 'deploy/test_linux_controller_privilege.py'
@@ -51,6 +52,7 @@ on:
       - 'deploy/test_macos_installer_trust.py'
       - 'deploy/test_macos_native_install.py'
       - 'deploy/test_macos_image_identity.py'
+      - 'deploy/test_macos_generation.py'
       - 'deploy/macos_process_inventory_probe.py'
       - 'deploy/test_macos_installer_entry.py'
       - 'deploy/test_linux_controller_privilege.py'
@@ -93,6 +95,8 @@ jobs:
           cat "$RUNNER_TEMP/routervpn-macos-before.json"
       - name: Capture original copied and unlinked native main-image identities
         run: python3 deploy/test_macos_image_identity.py
+      - name: Prove complete managed generation and original-image refusal
+        run: python3 deploy/test_macos_generation.py
       - name: Prove installed supervisor, native peer identity and joined AppKit shutdown
         run: |
           python3 deploy/test_desktop_darwin_guardian_runner.py

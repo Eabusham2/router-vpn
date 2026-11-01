@@ -10,6 +10,8 @@ mkdir -p "$WORK"
 
 python3 "$ROOT/deploy/test_macos_controller_privilege.py" --go "$(command -v go)"
 python3 "$ROOT/deploy/test_macos_installer_trust.py"
+python3 "$ROOT/deploy/test_macos_image_identity.py"
+python3 "$ROOT/deploy/test_macos_generation.py"
 python3 "$ROOT/deploy/test_macos_native_install.py"
 
 write_blank_routers() {
