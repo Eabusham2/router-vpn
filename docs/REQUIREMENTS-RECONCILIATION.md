@@ -17,3 +17,51 @@ Unsupported platform capabilities are disabled with a truthful reason; no UI may
 Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
+
+## Original-source recovery refreshed November 1, 2026
+
+The continuation recovered all 356 unique historical audit identifiers and
+read the complete addendum containing 312–356 and C1–C7. These are an
+assistant's historical organization of requirements, not 356 verbatim user
+messages, and their old Done/Partial/Missing labels are not current verdicts.
+Original user passages were also retrieved; the shorter handoffs were not used
+as their replacement. The source dates below are those recorded in the copied
+documents, without inventing a missing message date or timezone.
+
+| Source | Original material recovered |
+|---|---|
+| `mm.md` | Audit identifiers 1–311 and the August 11 native application/product request. |
+| `router_vpn_chat_audit_addendum_v2` (retrieved duplicate filename) | Complete August 11 addendum, identifiers 312–356 and C1–C7, including multiline platform details. |
+| `Continue Storage Diagnostics.md` | August 10 original onboarding, Setup Center controls, multiple nodes, DNS and at-least-50-sample measurement request. |
+| `Router VPN Handoff Audit.md` | August 12 original native/all-device, breakage, methods and separate generic installation/node-linking request. The distinct shorter `(1)` document was not assumed newer because of its suffix. |
+| `Router VPN Progress Update.md` | August 19 original map-first layout, settings, measured paths, complete Add/Load/Update/Delete profiles and external-node request. |
+| `Pasted text(20261019-065229)` | Original Local/Server/Compare request and surrounding same-endpoint/reproof rules. The copied passage does not retain an original message date beside it. |
+
+Project/personal context was actively queried as a continuity index and the
+original files were retrieved separately. This does not claim access to every
+historical conversation. Current source and exact-SHA native/release evidence
+are recorded separately in [the November 1 continuation](CONTINUATION-EVIDENCE-2026-11-01.md).
+Private transcripts and account/file identifiers are not reproduced here.
+
+### Corrections retained during implementation
+
+| Reference | Surviving contract |
+|---|---|
+| C1 / #17 | The simple AWG method still needs real off-LAN third-party interoperability evidence. |
+| C2 / #91 | Onboarding continues until completion, stores progress/completion and offers a permanent rerun. Setup Center and the native app teach their own tasks. |
+| C3 / #63 | Multiple administrator accounts are optional; authentication and authorization for sensitive changes remain required. |
+| C4 / #169 | A blank AdGuard Allowed Clients list is unrestricted. Never create a restrictive list just to add VPN subnets; an existing restrictive list must be read before changing it. |
+| C5 / #101; C7 | Generic installed/Portable applications remain separate from private node bundles/pairing and support multiple nodes without reinstalling. |
+| C6 | Production is exact-SHA, image-only deployment without the Docker socket. A bounded desktop-package fallback does not authorize building the production stack on the AI Board. |
+| #324–325 | Portable relocation and clean exit must join owned processes and release their files. |
+| #337 | Manual Disconnect and failure/reconnect protection have distinct ownership and release semantics. |
+| #340–342 | MAX may not downgrade silently; ALL uses validated candidates; cover/padding remains bounded, private and non-amplifying. |
+| Later comparison correction | Compare uses `(last_node_response_time + external_server_response_time) / 2`, one shared randomly selected external endpoint, each candidate's actual route and repeat proof. Invalid or stale candidates receive no score. |
+| Later Start Layer correction | Off / AES-256-GCM / AES-256-GCM + XOR whitening; whitening supplements authenticated encryption. Capture entry and exit independently. |
+| Later download correction | Keep the completed package and its owned workspace for 30 minutes from READY; repeat downloads do not extend it, and Cancel/Delete/shutdown clean immediately. |
+
+The checked configuration still preserves SMART AUTO, IPv6 On, Home AdGuard,
+Auto MTU and AUTO encryption/obfuscation requirements Off. No earlier default
+was restored merely because it appeared in an old transcript. Older qualified
+Unix/BSD requests and all required desktop/mobile architectures remain in the
+scope even where their acceptance differs from the core native products.

@@ -3,7 +3,7 @@
 This continues [October 31](CONTINUATION-EVIDENCE-2026-10-31.md), preserves
 [the reconciled requirement authority](REQUIREMENTS-RECONCILED.md), and records
 published source through
-[`39fe1a02b9272611a0389c8c3880cff3d0fb9416`](https://github.com/Eabusham2/router-vpn/commit/39fe1a02b9272611a0389c8c3880cff3d0fb9416).
+[`17a6eb67142a59abb93935f80d02ff5a925b02f3`](https://github.com/Eabusham2/router-vpn/commit/17a6eb67142a59abb93935f80d02ff5a925b02f3).
 The live `main` reference was independently read after publication. Later local
 work is not included in this source cutoff. Original requirements, C1–C7,
 the later product/breakage, map-first, external-node and all-device corrections
@@ -14,7 +14,87 @@ Native evidence below keeps its own exact source identity. The retained
 historical observations are not silently reassigned to this newer cutoff,
 and unrelated passing jobs are not combined into a release claim.
 
-## Latest source and native evidence through 39fe1a02
+## Latest source and native evidence through 17a6eb67
+
+Original-source recovery is recorded in
+[Requirements Reconciliation](REQUIREMENTS-RECONCILIATION.md#original-source-recovery-refreshed-november-1-2026).
+All historical audit identifiers and the full addendum were recovered alongside
+the original user passages. Their old status labels were not imported as current
+completion claims. Live `main` at the start of this continuation was
+`3af8de0fe1b5b361dd7829496336a9d4d5f4585d`, 827 commits newer than the pasted
+`745b3e41` release checkpoint. Existing upstream work was preserved instead of
+replaying historical recovery packages. Every new unit below was published
+directly to `main` with expected-parent protection and independent branch
+readback, then synchronized locally without discarding the other active work.
+
+### Source published since the previous documentation cutoff
+
+| Commit | Implemented behavior and validation boundary |
+|---|---|
+| [`727c8111`](https://github.com/Eabusham2/router-vpn/commit/727c8111f0b83198adbad7acbdbb3224aa0515f4) | Shared captured Linux host construction, already upstream before this continuation. Its current source is part of the retained host foundation; it is not recovered unpushed work. |
+| [`ef4ce2ad`](https://github.com/Eabusham2/router-vpn/commit/ef4ce2ad18a47de97d1bfe07f1f0222372550681), [`6f644a44`](https://github.com/Eabusham2/router-vpn/commit/6f644a4413e1c43b7948959b16a32ce38743fd11) | Retained Linux MTU leases, failed-drain Stop and actual installed MTU cases were already upstream. They supersede the earlier unpublished-source description, while complete native execution remains separate. |
+| [`4bdacef8`](https://github.com/Eabusham2/router-vpn/commit/4bdacef89f04d46de11d9fd4d4b151f5c70bc8a4), [`3af8de0f`](https://github.com/Eabusham2/router-vpn/commit/3af8de0fe1b5b361dd7829496336a9d4d5f4585d) | Retained Linux Speed Lab path identity and actual Fixed/Auto MTU readback were already upstream. Current publication, not the older status paragraph, determines source availability. |
+| [`badfa973`](https://github.com/Eabusham2/router-vpn/commit/badfa9735ab87b074b7afcd60d08664e9363a9f4) | Decode the Windows mode catalog before array wrapping so PowerShell 5.1 and 7 count the same entries. Existing actual-process/alias checks and twelve negative controls remain; PowerShell 7 also exercised the 5.1 nested-array shape. The fresh native installed/Portable Session step now passes, separately from the workflow's later WFP failure. |
+| [`b4f461aa`](https://github.com/Eabusham2/router-vpn/commit/b4f461aab7c6941679944d1ad615bba8999a9538) | Test Linux ordinary-UDP denial after the actual baseline bind and before TUN admission. Preserve exactly-once coverage and prepared-only cancellation/cleanup. Real disposable-namespace preparation/cancel/callback/baseline cases, generated-source identity and runner checks passed. Full TUN proof is a separate gate. |
+| [`86a1f473`](https://github.com/Eabusham2/router-vpn/commit/86a1f473762ccbce52e3a5d5c4b6335686fd4106) | Restore Linux SMART/Speed Lab trials from the original sealed source, exact endpoint, saved/runtime options, live MTU and retained session/journal/network. Recreate and prove a fresh host without regenerating the captured choice or rerunning Compare. Focused race repetitions, Windows/macOS compilation and runner checks passed; a complete installed `restore-sealed` scenario was added. |
+| [`f6491ad8`](https://github.com/Eabusham2/router-vpn/commit/f6491ad82d07835f8988803a15172cb2c8de0114) | Give the aggregate Windows Node native suite 1200 seconds instead of 900, after its actual run completed twelve suites and 26 controls before timing out during the next compile. Inner operation deadlines stay unchanged; Linux keeps its original aggregate. The six-target dispatch contract passed. |
+| [`e511911a`](https://github.com/Eabusham2/router-vpn/commit/e511911ae5d3bedb524a28933de49950f87d1f6b) | Give all twelve Windows MAX succession cases a 3000-second aggregate, with a 3015-second enclosing process limit. The observed old deadline arrived just after entry into the twelfth case; unflushed earlier output is not claimed as a pass. Individual peer and control limits remain unchanged, and the existing driver contract passed. |
+| [`db39ea0a`](https://github.com/Eabusham2/router-vpn/commit/db39ea0a47bdf8e5992ebf069a4d0b24c23e63f9) | Diagnose a failed Windows Tor copied-executable deletion using bounded original/current identity, attributes, original error and a read-only exact-file Restart Manager query. Preserve the failed delete; no retry, permission change or foreign process termination is introduced. 409 checks and two controls passed; a native query checks the actual process creation identity. The underlying ARM64 holder remains unproved. |
+| [`204ec7dc`](https://github.com/Eabusham2/router-vpn/commit/204ec7dca8b40af19872c00c9eef5024dd35b2ed) | Wire public Linux protected Shadowsocks/plain Connect through captured preparation, legacy-guard absence, staging, held Stop, Start/readiness/Router proof, activation and monitor. Preserve replacement commands, partial startup ownership and On-connect/Always semantics. Focused app/race tests, platform compilation and installed-runner checks passed. The real handler scenario exercises selected DNS, live MTU, usage and exact Disconnect; its completed native bundle is still required. |
+| [`aaea06e7`](https://github.com/Eabusham2/router-vpn/commit/aaea06e7c023da59010dff08ac006aadaa23c692) | Strengthen the uncaptured MAX UDP control with a fresh nonce sent on the actual mutated UDP socket and independently observed peer receipt, between positive deliveries on that same listener. Require exact local/remote tuple, unchanged native owner and no grants; any invalid later callback vetoes earlier evidence. TCP retains its exact native access-denied requirement. Thirteen race cases, 27 driver checks, four executed controls and ARM64 helper compilation passed. Actual delivered-but-not-echoed packets are rejected. Complete native MAX remains separate. |
+| [`9201f036`](https://github.com/Eabusham2/router-vpn/commit/9201f03651c45fed8d0cb983583b2308c2f71060) | Separate Darwin's short idle poll from an admitted control frame's fixed completion deadline. Cap it by the existing control, owner and permit lifetimes; expire before each poll and refresh ownership only after complete identity validation. Both Darwin architectures compile. Seven actual Unix-socket/descriptor cases passed three race runs through a documented Linux ABI adapter, and three deadline/expiry controls rejected. Native macOS execution remains required. |
+| [`0b35b6b2`](https://github.com/Eabusham2/router-vpn/commit/0b35b6b22fc3dd1e54c0c5cc8027dc8b5148c692) | Activate the exact sealed Linux native cover service before readiness, require paired-node and private UDP proof, and make ongoing worker health part of connection ownership. Cancellation closes and joins even before activation; no ambient helper is started. Public Connect and sealed restoration preserve saved Off/runtime On. Shared/app/generated Box/service/command/peer race checks, privileged compilation and ten runner tests passed. Five additional native scenarios bring the complete installed-host gate to 29; successful packaged execution is not claimed. |
+| [`17a6eb67`](https://github.com/Eabusham2/router-vpn/commit/17a6eb67142a59abb93935f80d02ff5a925b02f3) | Report actual/expected native protocol structure size, family, type and protocol on the newly observed Windows UDP4 import rejection. Validation and failure remain unchanged. The actual WFP suite compiles for both Windows architectures; this is a diagnostic discriminator, not a repaired native result. |
+
+### Fresh native observations retain their source identity
+
+At exact `aaea06e7`, both
+[Linux AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/41345891317/job/124965493205)
+and [Linux ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/41345891317/job/124965493461)
+completed the generated-command TUN gate successfully. Each log records its
+exact source and all six required cases: On-connect, Always, captured MTU,
+MTU rollback, resolver failure and wrong key. This proves the actual generated
+child, selected DNS, encrypted TUN traffic and joined retirement at that SHA.
+It does not execute the separate completed-bundle application host, public
+Connect, sealed restore or later cover scenarios.
+
+At exact `badfa9735`, the
+[Windows native job](https://github.com/Eabusham2/router-vpn/actions/runs/41344201648/job/124960414826)
+completed with failure. The actual installed/Portable Session step passed,
+as did the isolated identity, WFP baseline/recovery, retained TCP cleanup and
+subsequent captured-host/protection steps. The separate WFP traffic case
+`TestDesktopSocketWindowsWFPOwnedTrafficAndRenewal/udp4` failed before Bind/Grant
+because `SO_PROTOCOL_INFOW` did not match the required size/family/type/protocol.
+TCP4, TCP6 and UDP6 passed in that test. The old message did not say which value
+differed; `17a6eb67` now records that distinction. No speculative retry or weaker
+identity check is justified by this observation.
+
+The initial `3af8de0f`
+[authoritative release run](https://github.com/Eabusham2/router-vpn/actions/runs/41294518427)
+failed; publication, final images and compose were skipped. Its logs also
+exposed the Windows aggregate deadlines and Tor cleanup failure, macOS desktop
+PQ startup race, Darwin guardian negative-control admission failure and macOS
+installer inventory refusals. Each is tracked separately from the corrections
+above. Later queued/running or cancelled attempts are not passes. At the latest
+read, the `9201f036`
+[macOS socket workflow](https://github.com/Eabusham2/router-vpn/actions/runs/41346784897)
+was still in progress; its ARM64 single-filter sibling passed, but complete
+socket/utun execution and the Intel jobs were not complete.
+
+### Current remaining requirements at this cutoff
+
+| Requirement area | Published source and actual remaining work/evidence |
+|---|---|
+| Native Linux daily-use path; selected-path proof and #337 | Public protected Shadowsocks/plain, DNS/Router proof, MTU, retained Stop, monitoring, restoration and native cover are published. Execute all 29 installed-bundle cases on both architectures. Saved-policy Off, legacy-to-retained guard succession, crash/retained Always recovery and broader graph/Start Layer integration remain source gaps. |
+| Portable lifecycle #324–325 and Windows native identity | The package Session step passes at its recorded SHA. Resolve actual UDP4 protocol mismatch and ARM64 Tor copied-image cleanup from native evidence; preserve exact process/source ownership. Complete current installed/Portable package verification on both architectures. |
+| MAX / ALL #340–341 | Four complete `max-quic-wg`, `max-quic-awg`, `max-tls-wg`, `max-tls-awg` candidate families remain closed pending matching full traffic, succession and all native controls. Supported ordinary composite `max`/`split` and earlier PQ evidence are separate; do not call every MAX or PQ path absent. |
+| Cover/padding #342 | Native Linux activation and failure retirement are implemented for the admitted path. Complete its packaged encrypted cases and the remaining requested platform/graph coverage; bounded private sinks and non-amplification remain mandatory. |
+| macOS native graph and installer | Verify the guardian deadline change natively and resolve the observed desktop PQ startup race. First/legacy inventory cannot classify an unresolved live executable as absent. Managed inventory and the ES diagnostic do not solve the production Intel identity or signing/entitlement boundary. |
+| Complete original product | Continue the original map, native platform, profile, DNS, MTU, measurement, external-node/hop/exit, Methods and Setup Center evidence across requested devices. These focused rows do not replace the original 356/C1–C7 and later overlapping requests, or close a feature merely because it reports unavailable. |
+| Current exact-SHA delivery | One stable source must complete all required native packages, production images, compose, provenance, checksums and publication. Passing jobs at different SHAs cannot be combined. The observed latest release is still the twelve-asset `745b3e41` prerelease. |
+| Live acceptance and deliberate deployment | Physical networking/leaks/transitions, off-LAN methods including C1, actual visual/accessibility behavior, live providers, signing/upgrade distribution and exact-SHA private AI Board/Portainer plus ASUS fail-open acceptance remain separate. No live target was changed by this continuation. |
+
+## Earlier source and native evidence through 39fe1a02
 
 This section supersedes the earlier status observations where newer evidence
 exists, while preserving their original source identities below. Every listed
@@ -607,7 +687,10 @@ compilations are not native execution. The unchanged native defect selectors
 remain mandatory. This closes the demonstrated language gate without claiming
 current all-platform packaging or device acceptance.
 
-## Requirement and delivery evidence still needed
+## Earlier requirement and delivery ledger — through 39fe1a02
+
+This retained historical table describes its original cutoff. The current
+ledger above supersedes rows closed or advanced by newer published source.
 
 | Requirement area | Actual remaining evidence/work at this cutoff |
 |---|---|

@@ -6,11 +6,58 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 39fe1a02
+## Latest implementation continuation — through 17a6eb67
+
+The independently verified source cutoff is
+[`17a6eb67142a59abb93935f80d02ff5a925b02f3`](https://github.com/Eabusham2/router-vpn/commit/17a6eb67142a59abb93935f80d02ff5a925b02f3).
+The [latest November 1 evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-17a6eb67)
+records the intervening source changes, original requirement recovery, focused
+validation and separate native outcomes. Earlier sections retain their own
+cutoffs; their pending source descriptions do not override this section.
+
+- Public Linux Connect now uses the retained native host for the protected
+  Shadowsocks/plain Start Layer path. Selected DNS, routed Router proof,
+  original-session activation and monitoring precede Connected. Live MTU
+  leases, Fixed/Auto readback, failed-drain Stop, captured path identity and
+  sealed SMART/Speed Lab restoration are published. Native cover activation
+  is also published: the exact sealed service proves its paired private node
+  and UDP sink, ongoing health is part of connection ownership, and cancellation
+  joins its original worker. Saved and runtime cover choices remain distinct
+  through restoration. These changes supersede the corresponding old source
+  gaps below, but not their native-package acceptance requirements.
+- The generated Linux command/TUN gate passed all six cases on both AMD64 and
+  ARM64 at `aaea06e7`. The complete installed-host gate is separate and now has
+  29 cases, including public Connect, live MTU, restoration and native cover
+  failure/retirement. Its exact-source completed-bundle execution remains
+  required. Saved-policy Off, legacy guard succession, crash/retained Always
+  recovery and broader retained-host graph/Start Layer coverage remain source
+  work; truthful rejection does not complete those requirements.
+- The Windows installed/Portable Session step now passes at `badfa9735` after
+  the PowerShell 5.1/7 catalog correction. That native workflow still fails:
+  its separate WFP traffic test rejected an IPv4 UDP socket during protocol
+  identity readback. `17a6eb67` preserves the refusal and adds exact numeric
+  actual/expected values; it is diagnostic, not a claimed repair. Complete MAX
+  remains closed pending the full native gate. Aggregate budget corrections,
+  actual-socket UDP rejection evidence and Tor cleanup diagnostics are published
+  with their own validation boundaries.
+- The Darwin guardian now admits a control frame under one bounded completion
+  deadline independent of its short idle poll, while enforcing the original
+  owner and permit expiry. Both Mac targets compile and actual Unix descriptor
+  tests pass through a documented Linux ABI adapter. Native macOS execution
+  remains required. macOS first/legacy installer inventory and the unresolved
+  Intel executable identity remain open; a diagnostic ES event is not production
+  installation authority. The newly observed desktop PQ startup race remains
+  under investigation and no unfinished local fixture change is counted here.
+- The live release list still reports the twelve-asset `745b3e41` prerelease.
+  This newer source series has no verified all-green release, production
+  signing, private deployment or full physical/off-LAN acceptance. No live
+  router, forwarding, AdGuard or Portainer target was changed.
+
+## Earlier implementation continuation — through 39fe1a02
 
 The independently verified source cutoff is
 [`39fe1a02b9272611a0389c8c3880cff3d0fb9416`](https://github.com/Eabusham2/router-vpn/commit/39fe1a02b9272611a0389c8c3880cff3d0fb9416).
-The [November 1 evidence update](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-39fe1a02)
+The [November 1 evidence update](CONTINUATION-EVIDENCE-2026-11-01.md#earlier-source-and-native-evidence-through-39fe1a02)
 records each publication and the current native results. Older sections below
 retain their original cutoffs; they do not override newer observations.
 
