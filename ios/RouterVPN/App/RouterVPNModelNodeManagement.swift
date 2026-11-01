@@ -47,6 +47,10 @@ extension RouterVPNModel {
         let lonRaw = longitudeText.trimmingCharacters(in: .whitespacesAndNewlines)
         let latitude = latRaw.isEmpty ? nil : Double(latRaw)
         let longitude = lonRaw.isEmpty ? nil : Double(lonRaw)
+        guard (latRaw.isEmpty || latitude != nil), (lonRaw.isEmpty || longitude != nil) else {
+            message = "Enter numeric latitude and longitude, or leave both blank"
+            return false
+        }
         if (latitude == nil) != (longitude == nil) {
             message = "Enter both latitude and longitude, or leave both blank"
             return false

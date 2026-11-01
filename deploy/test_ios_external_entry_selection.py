@@ -196,11 +196,17 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
    model.bundle=bundle(bad);IOSNodeBundleStore.shared.nodes=["entry":try JSONEncoder().encode(predecessor)]
    try reject("external comparison refuses "+invalid){_ = try model.iosMultihopEntryBundle(for:model.bundle!)}
   }
-  let edit=RouterVPNModel();ss.multihopExecution="local";edit.bundle=bundle(ss)
+  let edit=RouterVPNModel();ss.multihopExecution="local";ss.latitude=12.5;ss.longitude = -34.5;edit.bundle=bundle(ss)
   IOSNodeBundleStore.shared.nodes=[ss.id:try JSONEncoder().encode(edit.bundle!),"other-node":Data("unrelated private node bytes".utf8)]
   let savedExternal=ss.external!,savedAssets=edit.bundle!.profiles
-  try check("idle editor validates and saves exact response URL",edit.updateNodeMetadata(id:ss.id,name:"Edited",location:"",latitudeText:"",longitudeText:"",expectedExternal:savedExternal,responseProbeURL:"https://198.51.100.8:9443/new-response",responseProbeServerName:"new.example.test"))
+  let coordinateSource=try encoded(edit.bundle!),coordinateRecords=IOSNodeBundleStore.shared.nodes,coordinateWrites=edit.writes
+  for (latitude,longitude) in [("invalid","invalid"),("invalid",""),("","invalid"),("12.5","invalid"),("invalid","-34.5"),("NaN","0"),("0","infinity"),("91","0"),("0","-181"),("12.5","")] {
+   try check("invalid coordinate text cannot clear a saved pin "+latitude+"/"+longitude,!edit.updateNodeMetadata(id:ss.id,name:"Unaccepted",location:"Changed",latitudeText:latitude,longitudeText:longitude,expectedExternal:savedExternal,responseProbeURL:"https://198.51.100.8:9443/new-response",responseProbeServerName:"new.example.test"))
+   try check("rejected coordinates preserve exact linked records and active bundle",encoded(edit.bundle!)==coordinateSource && IOSNodeBundleStore.shared.nodes==coordinateRecords && edit.writes==coordinateWrites)
+  }
+  try check("idle editor validates and saves exact response URL",edit.updateNodeMetadata(id:ss.id,name:"Edited",location:"",latitudeText:" 41.8 ",longitudeText:" -87.6 ",expectedExternal:savedExternal,responseProbeURL:"https://198.51.100.8:9443/new-response",responseProbeServerName:"new.example.test"))
   let edited=edit.bundle!.routerProfiles[0]
+  try check("valid coordinate text preserves its explicit numeric pair",edited.latitude==41.8 && edited.longitude == -87.6)
   try check("response edit never replaces transport credentials or private assets",edited.external?.shadowsocks==savedExternal.shadowsocks && edit.bundle!.profiles==savedAssets && IOSNodeBundleStore.shared.nodes["other-node"]==Data("unrelated private node bytes".utf8))
   try check("response edit is retained in the private linked node",(try JSONDecoder().decode(ClientBundle.self,from:IOSNodeBundleStore.shared.nodes[ss.id]!)).routerProfiles[0].external?.responseProbe?.url=="https://198.51.100.8:9443/new-response")
   try reject("imported response cannot move to another protocol"){var imported=edit.bundle!;imported.routerProfiles[0].external?.protocolName="wireguard";try IOSExternalExecution.validateImported(imported)}
