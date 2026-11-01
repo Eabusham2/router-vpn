@@ -50,9 +50,16 @@ func main() {
     record:=os.Getenv("ROUTERVPN_PACKAGE_FIXTURE_RECORD")
     previous,err:=os.ReadFile(record);if err!=nil && !os.IsNotExist(err) {fail(94,err)}
     attempt:=strings.Count(string(previous),"\n")+1
+    var captured []string
+    if json.Unmarshal([]byte(os.Getenv("ROUTERVPN_PACKAGE_FIXTURE_ROOTS")),&captured)!=nil || len(captured)!=2 || attempt<1 || attempt>len(captured) {
+        fail(94,fmt.Errorf("missing captured package directory"))
+    }
+    expected,err:=os.Stat(captured[attempt-1]);if err!=nil {fail(94,err)}
+    directoryMatch:=expected.IsDir() && os.SameFile(want,expected) && os.SameFile(got,expected)
     file,err:=os.OpenFile(record,os.O_WRONLY|os.O_APPEND|os.O_CREATE,0600);if err!=nil {fail(94,err)}
-    err=json.NewEncoder(file).Encode(map[string]any{"args":os.Args[1:],"cwd":cwd,"root":root,"pid":os.Getpid(),"attempt":attempt})
+    err=json.NewEncoder(file).Encode(map[string]any{"args":os.Args[1:],"cwd":cwd,"root":root,"pid":os.Getpid(),"attempt":attempt,"captured_root":captured[attempt-1],"directory_match":directoryMatch})
     closed:=file.Close();if err!=nil || closed!=nil {fail(94,fmt.Errorf("fixture record write failed"))}
+    if !directoryMatch {fail(96,fmt.Errorf("captured-package-directory-mismatch"))}
     portable:=strings.Contains(strings.ToLower(filepath.Base(executable)),"portable")
     packageRoot,data:=root,root
     if portable {packageRoot=filepath.Join(root,"App","RouterVPN");data=filepath.Join(root,"Data")}
@@ -119,9 +126,11 @@ def check(shell):
             adapter=adapter.replace(GUARD,'# Explicit non-Windows adapter fixture; native acceptance remains separate.',1)
             adapter=TYPE.sub(lambda _:"Add-Type -TypeDefinition @'\n"+MODEL+"\n'@",adapter,count=1)
 
-        def trial(label, *, portable=False, relocate=False, mode='', missing='', held=False, text=None):
+        def trial(label, *, portable=False, relocate=False, mode='', missing='', held=False, alias=False, text=None):
             owned=root/label;owned.mkdir()
             package=owned/'Original package with spaces';package.mkdir()
+            if alias:
+                package=package/'..'/package.name
             installed=package/'App/RouterVPN' if portable else package
             (installed/'client').mkdir(parents=True)
             (installed/'modes').mkdir()
@@ -146,6 +155,16 @@ def check(shell):
             if portable:
                 command+=['-Portable']
             moved=owned/'Relocated package with spaces'
+            # Compare the actual directories while each original launch still
+            # exists. Portable relocation subsequently removes the first path;
+            # spelling, including Windows short-name aliases, is not identity.
+            captured=[str(package),str(moved)]
+            if mode=='wrong-directory':
+                foreign=owned/'Equal-content different package'
+                shutil.copytree(package,foreign)
+                require((foreign/launcher.name).read_bytes()==launcher.read_bytes(),
+                        'Different-directory rejection lost its equal-content child')
+                captured=[str(foreign),str(foreign)]
             if relocate:
                 command+=['-RelocateTo',str(moved)]
             if held:
@@ -154,24 +173,24 @@ def check(shell):
                                   "$pin=[IO.File]::Open($args[0],[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)\n"
                                   "try { & $args[1] -Root $args[2] } finally { $pin.Dispose() }\n",encoding='utf-8')
                 command=[shell,'-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',str(driver),str(installed/'router-vpn-client.exe'),str(script),str(package)]
-            result=execute(command,environment=dict(environment,ROUTERVPN_PACKAGE_FIXTURE_RECORD=str(record),ROUTERVPN_PACKAGE_FIXTURE_CASE=mode),cwd=owned)
+            result=execute(command,environment=dict(environment,ROUTERVPN_PACKAGE_FIXTURE_RECORD=str(record),
+                           ROUTERVPN_PACKAGE_FIXTURE_CASE=mode,ROUTERVPN_PACKAGE_FIXTURE_ROOTS=json.dumps(captured)),cwd=owned)
             events=[json.loads(line) for line in record.read_text(encoding='utf-8').splitlines()] if record.exists() else []
             require(len(events)==(0 if missing=='launcher' else (2 if relocate else 1)),
                     label+': adapter omitted or duplicated actual child dispatch:\n'+result.stdout+result.stderr)
             for index,event in enumerate(events):
-                expected=moved if index else package
                 require(event['args']==['--self-test'] and event['attempt']==index+1 and type(event['pid']) is int and event['pid']>0,
                         label+': actual child argv/identity changed')
-                require(os.path.normcase(event['cwd'])==os.path.normcase(str(expected)) and
-                        os.path.normcase(event['root'])==os.path.normcase(str(expected)),
-                        label+': actual child escaped its captured package directory')
+                require(event['captured_root']==captured[index] and event['directory_match'] is (mode!='wrong-directory'),
+                        label+': actual child changed its captured physical package directory: '+json.dumps(event))
             return result
 
-        for label,options in [('installed',{}),('portable-relocation',{'portable':True,'relocate':True})]:
+        for label,options in [('installed',{'alias':True}),('portable-relocation',{'portable':True,'relocate':True,'alias':True})]:
             result=trial(label,**options)
             require(result.returncode==0,label+' package adapter failed:\n'+result.stdout+result.stderr)
         negatives=[
             ('failed-child',{'mode':'exit37'},'self-test failed: 37'),
+            ('different-directory',{'mode':'wrong-directory'},'captured-package-directory-mismatch'),
             ('wrong-file',{'mode':'wrong-identity'},'selected another physical'),
             ('relative-portable',{'portable':True,'mode':'relative-portable'},'uncaptured relative'),
             ('relative-state',{'portable':True,'mode':'relative-state'},'uncaptured relative state path'),
@@ -198,7 +217,7 @@ def check(shell):
             result=trial(label,text=adapter.replace(before,after,1),**options)
             require(result.returncode==0,'Package adapter mutant did not expose the intended lost rejection: '+label+'\n'+result.stdout+result.stderr)
     require(hashlib.sha256(SOURCE.read_bytes()).hexdigest()==original_hash,'Adapter fixture changed the shipping script')
-    print('Packaged Session adapter: 2 actual-process positives, 11 rejection cases and 4 executed source controls PASS ('+shell+'; '+('native Windows file identity' if os.name=='nt' else 'explicit non-Windows file-identity model')+')')
+    print('Packaged Session adapter: 2 actual-process alias positives, 12 rejection cases and 4 executed source controls PASS ('+shell+'; '+('native Windows file identity' if os.name=='nt' else 'actual child directory identity; explicit C# file-identity model')+')')
 
 
 def main():
