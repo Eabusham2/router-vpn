@@ -41,6 +41,8 @@ class NativeRelayBuild(unittest.TestCase):
         inputs=M.inputs();self.assertEqual(len(inputs),len(set(inputs)))
         for p in (ROOT/'mobile/applexray/outbound.go.tmpl',ROOT/'deploy/prepare-apple-xray.py',ROOT/'internal/applexray/native_transport.go',ROOT/'internal/startwhitening/stream_guard.go',ROOT/'internal/nativecomposite/plan.go',ROOT/'internal/nativesip003/compile.go',ROOT/'mobile/composite/outbound.go.tmpl',ROOT/'deploy/prepare-server-tor.py',ROOT/'mobile/server_tor/native.go.tmpl'):
             self.assertIn(p,inputs)
+        for path in (ROOT/'internal/linuxprocess').glob('*.go'):
+            self.assertIn(path,inputs)
         docker=(ROOT/'deploy/router-agent.Dockerfile').read_text()
         self.assertIn('ARG RELAY_XRAY_COMMIT='+M.XRAY.XRAY_PIN,docker)
         self.assertIn('prepare-relay-core.py /core /xray-core',docker)

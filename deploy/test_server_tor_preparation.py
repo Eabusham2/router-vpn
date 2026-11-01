@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Check the exact server Tor source closure and no embedded/mobile lifecycle."""
 from pathlib import Path
+import hashlib
 import importlib.util
+import json
+import tempfile
 import unittest
+from unittest import mock
 
 ROOT=Path(__file__).resolve().parents[1]
 spec=importlib.util.spec_from_file_location('server_tor_preparation',ROOT/'deploy/prepare-server-tor.py')
@@ -13,7 +17,7 @@ spec.loader.exec_module(PREP)
 class ServerTorPreparation(unittest.TestCase):
     def test_all_copied_pure_and_pt_sources_enter_digest(self):
         inputs=set(PREP.inputs())
-        for package in ('common','mobiletor','awgpolicy','nativeopenvpn'):
+        for package in ('common','mobiletor','awgpolicy','nativeopenvpn','linuxprocess'):
             for path in (ROOT/'internal'/package).glob('*.go'):
                 if not path.name.endswith('_test.go'):
                     self.assertIn(path,inputs)
@@ -43,6 +47,85 @@ class ServerTorPreparation(unittest.TestCase):
                 self.assertNotIn(b'"router-vpn/internal/',raw,name)
                 self.assertNotIn(b'"router-vpn/mobile/',raw,name)
         self.assertIn('SERVER_TOR.prepare(vendor)',(ROOT/'deploy/prepare-relay-core.py').read_text())
+
+    def test_linux_process_owners_are_copied_without_substitution(self):
+        content=PREP.copies()
+        originals={path.name:path.read_bytes() for path in (ROOT/'internal/linuxprocess').glob('*.go')
+                   if not path.name.endswith('_test.go')}
+        self.assertTrue({'abi_linux.go','bootstrap_linux.go','channel_linux.go','pidfd_linux.go',
+                         'process_linux.go','record.go'}.issubset(originals))
+        copied={name.removeprefix('routervpn/linuxprocess/'):raw for name,raw in content.items()
+                if name.startswith('routervpn/linuxprocess/')}
+        self.assertEqual(copied,originals)
+        for name in ('desktop_socket_linux_guardian_process.go','desktop_socket_linux_guardian_record.go'):
+            expected=(ROOT/'internal/mobiletor'/name).read_bytes().replace(b'"router-vpn/internal/linuxprocess"',
+                b'"github.com/sagernet/sing-box/routervpn/linuxprocess"')
+            self.assertEqual(content['routervpn/mobiletor/'+name],expected)
+
+    def test_unrelocated_dependency_refuses_the_complete_copy(self):
+        original=PREP.TOR.rewrite
+        def foreign(raw):
+            return original(raw).replace(b'"router-vpn/internal/linuxprocess"',b'"router-vpn/internal/uncaptured-process"')
+        with mock.patch.object(PREP.TOR,'rewrite',side_effect=foreign):
+            with self.assertRaisesRegex(ValueError,'shared import closure is incomplete'):
+                PREP.copies()
+
+    def prepare_fixture(self, vendor):
+        # Only dependency Git/module/DNS preparation is a boundary fixture.
+        # Generated application bytes and ownership checks execute unchanged;
+        # actual pinned Linux compilation is a separate native build gate.
+        with mock.patch.object(PREP.subprocess,'check_output',return_value=PREP.CORE+'\n'), \
+             mock.patch.object(PREP.TOR,'prepare_modules'), \
+             mock.patch.object(PREP.TOR,'bootstrap_dns_source',return_value=b'package dns\n'):
+            PREP.prepare(vendor)
+
+    def test_process_receipt_is_exact_idempotent_and_removes_only_proved_old_members(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            vendor=Path(temporary);(vendor/'dns').mkdir()
+            self.prepare_fixture(vendor)
+            owner=vendor/PREP.OWNER
+            first=owner.read_bytes()
+            record=json.loads(first)
+            expected=PREP.copies()
+            for name,raw in expected.items():
+                if name.startswith('routervpn/linuxprocess/'):
+                    self.assertEqual((vendor/name).read_bytes(),raw)
+                    self.assertEqual(record['files'][name],hashlib.sha256(raw).hexdigest())
+            self.prepare_fixture(vendor)
+            self.assertEqual(owner.read_bytes(),first)
+            old='routervpn/linuxprocess/obsolete_owned.go'
+            (vendor/old).write_bytes(b'package linuxprocess\n')
+            record['files'][old]=hashlib.sha256((vendor/old).read_bytes()).hexdigest()
+            owner.write_text(json.dumps(record))
+            self.prepare_fixture(vendor)
+            self.assertFalse((vendor/old).exists())
+            self.assertEqual(owner.read_bytes(),first)
+
+    def test_changed_missing_or_unowned_process_member_is_never_repaired(self):
+        for change in ('changed','missing','unowned'):
+            with self.subTest(change=change),tempfile.TemporaryDirectory() as temporary:
+                vendor=Path(temporary);(vendor/'dns').mkdir()
+                target=vendor/'routervpn/linuxprocess/record.go'
+                if change!='unowned':
+                    self.prepare_fixture(vendor)
+                    receipt=(vendor/PREP.OWNER).read_bytes()
+                else:
+                    target.parent.mkdir(parents=True)
+                    receipt=None
+                if change=='missing':
+                    target.unlink()
+                else:
+                    target.write_bytes(b'package linuxprocess\n// different original\n')
+                with self.assertRaisesRegex(ValueError,'Changed server Tor generated source|Unowned server Tor generated source'):
+                    self.prepare_fixture(vendor)
+                if change=='missing':
+                    self.assertFalse(target.exists())
+                else:
+                    self.assertEqual(target.read_bytes(),b'package linuxprocess\n// different original\n')
+                if receipt is None:
+                    self.assertFalse((vendor/PREP.OWNER).exists())
+                else:
+                    self.assertEqual((vendor/PREP.OWNER).read_bytes(),receipt)
 
     def test_no_tun_worker_retains_exact_control_front_and_proof(self):
         native=(ROOT/'mobile/server_tor/native.go.tmpl').read_text()

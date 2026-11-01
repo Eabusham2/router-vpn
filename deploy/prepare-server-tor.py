@@ -28,6 +28,7 @@ def inputs():
         *list((ROOT/'internal/common').glob('*.go')),
         *list((ROOT/'internal/awgpolicy').glob('*.go')),
         *list((ROOT/'internal/nativeopenvpn').glob('*.go')),
+        *list((ROOT/'internal/linuxprocess').glob('*.go')),
         *[p for p in (ROOT/'mobile/torpt').rglob('*') if p.is_file()],
         *list((ROOT/'mobile/server_tor').glob('*.tmpl'))]))
 
@@ -43,11 +44,15 @@ def digest():
 
 def copies():
     content = {}
-    for package in ('common', 'mobiletor'):
+    for package in ('common', 'mobiletor', 'linuxprocess'):
         for path in sorted((ROOT/'internal'/package).glob('*.go')):
             if path.name.endswith('_test.go'):
                 continue
+            if path.is_symlink():
+                raise ValueError('Linked server Tor shared source')
             raw = TOR.rewrite(path.read_bytes())
+            raw = raw.replace(b'"router-vpn/internal/linuxprocess"',
+                              b'"github.com/sagernet/sing-box/routervpn/linuxprocess"')
             raw = raw.replace(b'"router-vpn/internal/mobilemultihop"',
                               b'"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"')
             raw = raw.replace(b'"router-vpn/internal/multihoprelay"',
@@ -83,6 +88,9 @@ def copies():
         else:
             destination = 'cmd/sing-box/routervpn_server_tor_'+name
         content[destination] = path.read_bytes()
+    for name, raw in content.items():
+        if name.endswith('.go') and (b'"router-vpn/internal/' in raw or b'"router-vpn/mobile/' in raw):
+            raise ValueError('Server Tor shared import closure is incomplete: '+name)
     return content
 
 
@@ -102,7 +110,7 @@ def prepare(vendor, go='go'):
         previous = record['files']
     for name, expected in previous.items():
         if name not in content and not name.startswith(('routervpn/common/', 'routervpn/mobiletor/',
-            'routervpn/awgpolicy/', 'routervpn/nativeopenvpn/', 'routervpn/torpt/', 'routervpn/servertor/',
+            'routervpn/awgpolicy/', 'routervpn/nativeopenvpn/', 'routervpn/linuxprocess/', 'routervpn/torpt/', 'routervpn/servertor/',
             'cmd/sing-box/routervpn_server_tor_', 'routervpn_server_tor_')):
             raise ValueError('Server Tor cannot own unrelated native source')
         path = TOR.destination(vendor, name)
