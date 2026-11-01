@@ -1,0 +1,136 @@
+package routervpnamnezia
+
+import (
+	"context"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/http"
+	"net/netip"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+)
+
+const (
+	desktopNodeRouterHealthTarget = "10.77.0.1:8787"
+	desktopNodeRouterHealthPort   = 8787
+)
+
+// The optional private test service reproduces the shipping agent's public
+// /health shape. The selected SS2022 graph authenticates transport; /health
+// does not require the bearer token used by the agent's administrative APIs.
+// This mapping is separate from the bounded inner routes so enabling it can
+// neither remove the selected Home DNS mapping nor add arbitrary forwarding.
+func desktopNodeRouterHealthCaptureValid(request desktopNodeLayerRequest) bool {
+	if request.NodeProofID == "" {
+		return true
+	}
+	raw, err := hex.DecodeString(request.NodeProofID)
+	return err == nil && len(raw) == 32 && hex.EncodeToString(raw) == request.NodeProofID &&
+		request.Mode == "shadowsocks" && request.Layer == ""
+}
+
+type desktopNodeRouterHealth struct {
+	physical  string
+	queries   atomic.Uint32
+	wrongNode atomic.Bool
+}
+
+func (h *desktopNodeRouterHealth) address() string {
+	if h == nil {
+		return ""
+	}
+	return h.physical
+}
+
+func (h *desktopNodeRouterHealth) count() uint32 {
+	if h == nil {
+		return 0
+	}
+	return h.queries.Load()
+}
+
+func startDesktopNodeRouterHealth(t *testing.T, ip netip.Addr, nodeID string) *desktopNodeRouterHealth {
+	t.Helper()
+	if nodeID == "" {
+		return nil
+	}
+	if !ip.Is4() || !ip.IsPrivate() || !desktopNodeRouterHealthCaptureValid(desktopNodeLayerRequest{Mode: "shadowsocks", NodeProofID: nodeID}) {
+		t.Fatal("Router HTTP peer lost its captured private address or exact node identity")
+	}
+	physical := netip.AddrPortFrom(ip, desktopNodeRouterHealthPort).String()
+	listener, err := net.Listen("tcp4", physical)
+	if err != nil {
+		desktopNodeLayerPreparationError(t, "captured Router HTTP listener", err)
+	}
+	health := &desktopNodeRouterHealth{physical: physical}
+	server := &http.Server{ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 2 * time.Second,
+		WriteTimeout: 2 * time.Second, IdleTimeout: time.Second, MaxHeaderBytes: 8 << 10,
+		Handler: http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+			if request.Method != http.MethodGet || request.URL.Path != "/health" || request.URL.RawQuery != "" ||
+				request.Host != desktopNodeRouterHealthTarget || request.ContentLength != 0 || len(request.TransferEncoding) != 0 {
+				http.Error(writer, "uncaptured Router health request", http.StatusNotFound)
+				return
+			}
+			health.queries.Add(1)
+			identity := nodeID
+			if health.wrongNode.Load() {
+				first := "0"
+				if identity[0] == '0' {
+					first = "1"
+				}
+				identity = first + identity[1:]
+			}
+			writer.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(writer).Encode(struct {
+				OK     bool   `json:"ok"`
+				NodeID string `json:"node_id"`
+				Proof  string `json:"proof"`
+			}{true, identity, "router-vpn-private-agent-v1"})
+		})}
+	joined := make(chan error, 1)
+	go func() { joined <- server.Serve(listener) }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		// Shutdown joins active HTTP handlers; Close on failure still releases
+		// this listener, but cannot turn a missed join into passing evidence.
+		if err := server.Shutdown(ctx); err != nil {
+			_ = server.Close()
+			t.Error("captured Router HTTP handlers did not join", err)
+		}
+		_ = listener.Close()
+		if err := <-joined; !errors.Is(err, http.ErrServerClosed) {
+			t.Error("captured Router HTTP listener did not join", err)
+		}
+	})
+	return health
+}
+
+func TestRouterVPNDesktopNodeRouterHealthCapture(t *testing.T) {
+	valid := desktopNodeLayerRequest{Mode: "shadowsocks", NodeProofID: strings.Repeat("a", 64)}
+	if !desktopNodeRouterHealthCaptureValid(valid) || !desktopNodeRouterHealthCaptureValid(desktopNodeLayerRequest{Mode: "wg"}) {
+		t.Fatal("captured optional Router identity or an existing peer was rejected")
+	}
+	for _, change := range []struct {
+		name string
+		edit func(*desktopNodeLayerRequest)
+	}{
+		{"short", func(r *desktopNodeLayerRequest) { r.NodeProofID = r.NodeProofID[:63] }},
+		{"upper-case", func(r *desktopNodeLayerRequest) { r.NodeProofID = strings.ToUpper(r.NodeProofID) }},
+		{"non-hex", func(r *desktopNodeLayerRequest) { r.NodeProofID = strings.Repeat("g", 64) }},
+		{"other-mode", func(r *desktopNodeLayerRequest) { r.Mode = "wg" }},
+		{"uncaptured-layer", func(r *desktopNodeLayerRequest) { r.Layer = "aes-256-gcm" }},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			changed := valid
+			change.edit(&changed)
+			if desktopNodeRouterHealthCaptureValid(changed) {
+				t.Fatal("Router reference accepted an uncaptured identity or graph")
+			}
+		})
+	}
+}

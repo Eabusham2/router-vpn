@@ -171,6 +171,9 @@ class DesktopPTPreparation(unittest.TestCase):
                 self.assertNotIn('cmd/sing-box/routervpn_'+name.removesuffix('.tmpl'), generated)
             for name, relative in PREP.PEER_TEMPLATES.items():
                 self.assertEqual(generated[relative], (ROOT/'mobile/desktop'/name).read_bytes())
+            for name in ('node_router_peer_test.go.tmpl', 'node_router_peer_linux_test.go.tmpl'):
+                relative = 'protocol/routervpnamnezia/routervpn_desktop_'+name.removesuffix('.tmpl')
+                self.assertEqual(generated[relative], (ROOT/'mobile/desktop'/name).read_bytes())
             for name in ('external_tor_comparison.go.tmpl', 'external_tor_comparison_test.go.tmpl',
                          'external_tor_comparison_whole_test.go.tmpl', 'external_socket_linux.go.tmpl',
                          'external_socket_linux_test.go.tmpl'):

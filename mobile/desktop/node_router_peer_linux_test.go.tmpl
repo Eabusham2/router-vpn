@@ -1,0 +1,173 @@
+//go:build linux && !android && routervpn_linux_node_composition
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+type desktopNodeRouterHealthReply struct {
+	OK     bool   `json:"ok"`
+	NodeID string `json:"node_id"`
+	Proof  string `json:"proof"`
+}
+
+func desktopNodeRouterHealthExchange(peer *desktopNodeLayerReference, password, destination string, encrypted bool) (desktopNodeRouterHealthReply, error) {
+	var result desktopNodeRouterHealthReply
+	connection, err := net.DialTimeout("tcp4", peer.remote.String(), 2*time.Second)
+	if err != nil {
+		return result, err
+	}
+	defer connection.Close()
+	if err := connection.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		return result, err
+	}
+	if encrypted {
+		method, err := shadowaead_2022.NewWithPassword(mobilemultihop.NativeStartLayerMethod, password, nil)
+		if err != nil {
+			return result, err
+		}
+		secured, err := method.DialConn(connection, M.ParseSocksaddr(destination))
+		if err != nil {
+			return result, err
+		}
+		defer secured.Close()
+		connection = secured
+	}
+	request, err := http.NewRequest(http.MethodGet, "http://"+desktopNodeRouterHealthTarget+"/health", nil)
+	if err != nil {
+		return result, err
+	}
+	request.Close = true
+	if err := request.Write(connection); err != nil {
+		return result, err
+	}
+	response, err := http.ReadResponse(bufio.NewReaderSize(connection, 4096), request)
+	if err != nil {
+		return result, err
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 1025))
+	if err != nil || len(raw) > 1024 || response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "application/json" {
+		return result, errors.Join(err, errors.New("actual Router peer returned an unbounded or unsuccessful health response"))
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	var trailing any
+	if decoder.Decode(&result) != nil || decoder.Decode(&trailing) != io.EOF || !result.OK || result.Proof != "router-vpn-private-agent-v1" ||
+		!desktopNodeRouterHealthCaptureValid(desktopNodeLayerRequest{Mode: "shadowsocks", NodeProofID: result.NodeID}) {
+		return desktopNodeRouterHealthReply{}, errors.New("actual Router peer returned another bounded proof shape")
+	}
+	return result, nil
+}
+
+func desktopNodeRouterHealthDNS(peer *desktopNodeLayerReference) (int, error) {
+	method, err := shadowaead_2022.NewWithPassword(mobilemultihop.NativeStartLayerMethod, peer.request.Password, nil)
+	if err != nil {
+		return 0, err
+	}
+	connection, err := net.DialTimeout("udp4", peer.remote.String(), 2*time.Second)
+	if err != nil {
+		return 0, err
+	}
+	defer connection.Close()
+	if err := connection.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		return 0, err
+	}
+	secured := method.DialPacketConn(connection)
+	defer secured.Close()
+	query := new(dns.Msg).SetQuestion("example.com.", dns.TypeA)
+	raw, err := query.Pack()
+	if err != nil {
+		return 0, err
+	}
+	target := &net.UDPAddr{IP: net.ParseIP("192.168.50.133"), Port: 53}
+	if n, err := secured.WriteTo(raw, target); err != nil || n != len(raw) {
+		return 0, errors.Join(err, io.ErrShortWrite)
+	}
+	raw = make([]byte, 4096)
+	n, from, err := secured.ReadFrom(raw)
+	if err != nil {
+		return 0, err
+	}
+	var answer dns.Msg
+	if from.String() != target.String() || answer.Unpack(raw[:n]) != nil || answer.Id != query.Id || !answer.Response ||
+		len(answer.Question) != 1 || answer.Question[0] != query.Question[0] {
+		return 0, errors.New("Router reference changed the selected DNS query or destination")
+	}
+	if answer.Rcode == dns.RcodeSuccess && (len(answer.Answer) != 1 || answer.Answer[0].String() != "example.com.\t300\tIN\tA\t93.184.216.34") {
+		return 0, errors.New("Router reference returned another selected DNS answer")
+	}
+	return answer.Rcode, nil
+}
+
+// Only the private guardian namespace may start these peers. This proves the
+// independently encrypted HTTP/DNS reference and its refusal controls. It
+// neither creates a TUN nor substitutes for the installed app's routed proof.
+func TestDesktopLinuxGuardianKernelNodeRouterHealthPeer(t *testing.T) {
+	desktopNodeLinuxNamespace(t)
+	nodeID := strings.Repeat("a", 64)
+	peer := desktopNodeLinuxReference(t, nodeID)
+	for _, scenario := range []string{"captured-health", "wrong-node", "restored-node", "selected-dns", "wrong-key", "unrelated-target", "plaintext"} {
+		t.Run(scenario, func(t *testing.T) {
+			before := peer.observe(t, "stats")
+			password, target, encrypted := peer.request.Password, desktopNodeRouterHealthTarget, true
+			switch scenario {
+			case "wrong-node":
+				peer.observe(t, "wrong-node")
+			case "restored-node":
+				peer.observe(t, "restore-node")
+			case "selected-dns":
+				for _, command := range []string{"restore-dns", "fail-dns", "restore-dns"} {
+					peer.observe(t, command)
+					code, err := desktopNodeRouterHealthDNS(peer)
+					expected := dns.RcodeSuccess
+					if command == "fail-dns" {
+						expected = dns.RcodeNameError
+					}
+					if err != nil || code != expected {
+						t.Fatal("Router HTTP mapping removed or bypassed the selected encrypted Home DNS path", code, err)
+					}
+				}
+				after := peer.observe(t, "stats")
+				if after.DNSQueries != before.DNSQueries+3 || after.RouterQueries != before.RouterQueries || after.RawUDP <= before.RawUDP || after.PlainUDP <= before.PlainUDP {
+					t.Fatal("selected DNS did not retain its actual encrypted traffic and own query counters", before, after)
+				}
+				return
+			case "wrong-key":
+				password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x29}, 32))
+			case "unrelated-target":
+				target = "10.77.0.2:8787"
+			case "plaintext":
+				encrypted = false
+			}
+			answer, err := desktopNodeRouterHealthExchange(peer, password, target, encrypted)
+			after := peer.observe(t, "stats")
+			if scenario == "wrong-key" || scenario == "unrelated-target" || scenario == "plaintext" {
+				if err == nil || after.RouterQueries != before.RouterQueries || after.PlainTCP != before.PlainTCP || after.RawTCP <= before.RawTCP {
+					t.Fatal("Router peer admitted an unauthenticated or unrelated connection", scenario, err, before, after)
+				}
+				return
+			}
+			if err != nil || (answer.NodeID == nodeID) == (scenario == "wrong-node") || after.RouterQueries != before.RouterQueries+1 ||
+				after.RawTCP <= before.RawTCP || after.PlainTCP != before.PlainTCP+1 || after.DNSQueries != before.DNSQueries {
+				t.Fatal("Router health did not traverse the actual captured encrypted peer and selected identity", scenario, answer, err, before, after)
+			}
+		})
+	}
+}

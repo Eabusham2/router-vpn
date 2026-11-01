@@ -29,12 +29,13 @@ def load(name, relative):
 
 NODE = load("linux_node_source", "test_desktop_node_physical.py")
 GUARD = load("linux_node_namespace", "test_desktop_linux_guardian.py")
-CASES = ("NodeLifecycle", "NodeFailedAdmission", "NodeFailedDNS", "NodeRestoreCaptured")
+CASES = ("NodeLifecycle", "NodeFailedAdmission", "NodeFailedDNS", "NodeRestoreCaptured", "NodeRouterHealthPeer")
 SUBCASES = {
     "NodeLifecycle": ("on-connect", "always"),
     "NodeFailedAdmission": ("cancel", "callback-error", "changed-baseline"),
     "NodeFailedDNS": ("resolver-failure", "wrong-key"),
     "NodeRestoreCaptured": ("capture", "restore"),
+    "NodeRouterHealthPeer": ("captured-health", "wrong-node", "restored-node", "selected-dns", "wrong-key", "unrelated-target", "plaintext"),
 }
 
 
@@ -74,6 +75,8 @@ def checked_sources(source):
         "routervpn/desktoppt/node_physical_linux.go",
         "routervpn_desktop_node_box_linux_lifecycle.go",
         "protocol/routervpnamnezia/node_linux_peer_test.go",
+        "protocol/routervpnamnezia/routervpn_desktop_node_router_peer_test.go",
+        "protocol/routervpnamnezia/routervpn_desktop_node_router_peer_linux_test.go",
         "routervpn/mobiletor/desktop_socket_linux_protection.go",
         "routervpn/mobiletor/desktop_socket_linux_nft.go",
     )

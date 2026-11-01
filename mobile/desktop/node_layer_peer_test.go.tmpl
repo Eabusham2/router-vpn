@@ -82,6 +82,7 @@ type desktopNodeLayerRequest struct {
 	Layer         string                        `json:"layer"`
 	Address       string                        `json:"address"`
 	Password      string                        `json:"password"`
+	NodeProofID   string                        `json:"node_proof_id,omitempty"`
 	Configuration desktopReferenceConfiguration `json:"configuration"`
 }
 
@@ -108,6 +109,7 @@ type desktopNodeLayerReply struct {
 	PlainTCP          int64  `json:"plain_tcp"`
 	PlainUDP          int64  `json:"plain_udp"`
 	DNSQueries        uint32 `json:"dns_queries"`
+	RouterQueries     uint32 `json:"router_queries,omitempty"`
 	Probe             string `json:"probe,omitempty"`
 	ProbeCount        int64  `json:"probe_count,omitempty"`
 	ProbeNetwork      string `json:"probe_network"`
@@ -125,6 +127,7 @@ type desktopNodeLayerServer struct {
 	udp                                        net.PacketConn
 	routes                                     []desktopNodeLayerRoute
 	dnsAddress                                 string
+	routerAddress                              string
 	mu                                         sync.Mutex
 	closing                                    bool
 	connections                                map[io.Closer]bool
@@ -168,11 +171,17 @@ func (s *desktopNodeLayerServer) route(network, destination string) (string, boo
 }
 
 func (s *desktopNodeLayerServer) NewConnection(_ context.Context, connection net.Conn, metadata M.Metadata) error {
-	if len(s.routes) != 0 {
-		target, found := s.route("tcp", metadata.Destination.String())
+	var target string
+	if s.routerAddress != "" && metadata.Destination.String() == desktopNodeRouterHealthTarget {
+		target = s.routerAddress
+	} else if len(s.routes) != 0 {
+		var found bool
+		target, found = s.route("tcp", metadata.Destination.String())
 		if !found {
 			return errors.New("layer peer rejected an unowned inner stream")
 		}
+	}
+	if target != "" {
 		peer, err := (&net.Dialer{}).DialContext(s.ctx, "tcp", target)
 		if err != nil {
 			return err
@@ -289,13 +298,13 @@ func (s *desktopNodeLayerServer) NewPacketConnection(_ context.Context, connecti
 	}
 }
 
-func startDesktopNodeLayerServer(t *testing.T, ip netip.Addr, password, inner, innerPhysical, innerNetwork, dnsAddress string) *desktopNodeLayerServer {
+func startDesktopNodeLayerServer(t *testing.T, ip netip.Addr, password, inner, innerPhysical, innerNetwork, dnsAddress string, routerAddresses ...string) *desktopNodeLayerServer {
 	t.Helper()
 	var routes []desktopNodeLayerRoute
 	if inner != "" {
 		routes = []desktopNodeLayerRoute{{innerNetwork, inner, innerPhysical}}
 	}
-	return startDesktopNodeLayerRoutedServer(t, ip, password, routes, dnsAddress)
+	return startDesktopNodeLayerRoutedServer(t, ip, password, routes, dnsAddress, routerAddresses...)
 }
 
 func desktopNodeLayerAddressInUse(err error) bool {
@@ -408,8 +417,20 @@ func desktopNodeLayerPortPairCandidates(ip netip.Addr, candidates [3]uint16, lis
 	return nil, nil, fmt.Errorf("layer pair exhausted three retained candidates: %w", last)
 }
 
-func startDesktopNodeLayerRoutedServer(t *testing.T, ip netip.Addr, password string, routes []desktopNodeLayerRoute, dnsAddress string) *desktopNodeLayerServer {
+func startDesktopNodeLayerRoutedServer(t *testing.T, ip netip.Addr, password string, routes []desktopNodeLayerRoute, dnsAddress string, routerAddresses ...string) *desktopNodeLayerServer {
 	t.Helper()
+	var routerAddress string
+	if len(routerAddresses) == 1 {
+		routerAddress = routerAddresses[0]
+	} else if len(routerAddresses) != 0 {
+		t.Fatal("layer peer exceeded its captured Router HTTP mapping")
+	}
+	if routerAddress != "" {
+		physical, err := netip.ParseAddrPort(routerAddress)
+		if err != nil || physical.Addr() != ip || !ip.Is4() || !ip.IsPrivate() || physical.Port() != desktopNodeRouterHealthPort || len(routes) != 0 || dnsAddress == "" {
+			t.Fatal("layer peer has an unrelated Router HTTP mapping")
+		}
+	}
 	if len(routes) > 2 {
 		t.Fatal("layer peer exceeded its captured inner route count")
 	}
@@ -429,7 +450,7 @@ func startDesktopNodeLayerRoutedServer(t *testing.T, ip netip.Addr, password str
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, tcp: listener, udp: packet, routes: append([]desktopNodeLayerRoute(nil), routes...),
-		dnsAddress: dnsAddress, connections: make(map[io.Closer]bool)}
+		dnsAddress: dnsAddress, routerAddress: routerAddress, connections: make(map[io.Closer]bool)}
 	service, err := shadowaead_2022.NewServiceWithPassword(mobilemultihop.NativeStartLayerMethod, password, 10, s, nil)
 	if err != nil {
 		cancel()
@@ -565,7 +586,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	var trailing any
 	if decoder.Decode(&request) != nil || decoder.Decode(&trailing) != io.EOF || request.Schema != 1 ||
 		!mobilemultihop.DesktopNodePhysicalGraphSupported(request.Mode, request.Layer) ||
-		request.Mode != "shadowsocks" && request.Mode != "hysteria2" && !desktopNodeXrayMode(request.Mode) && !desktopNodeNaiveMode(request.Mode) && !desktopNodeCompositeMode(request.Mode) && request.Layer == "" || len(request.Configuration.Forward) != 0 {
+		request.Mode != "shadowsocks" && request.Mode != "hysteria2" && !desktopNodeXrayMode(request.Mode) && !desktopNodeNaiveMode(request.Mode) && !desktopNodeCompositeMode(request.Mode) && request.Layer == "" || len(request.Configuration.Forward) != 0 || !desktopNodeRouterHealthCaptureValid(request) {
 		t.Fatal("layer reference request escaped its captured fixture")
 	}
 	key, keyErr := base64.StdEncoding.Strict().DecodeString(request.Password)
@@ -612,6 +633,8 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	dnsJoined := make(chan error, 1)
 	go func() { dnsJoined <- dnsServer.ActivateAndServe() }()
 	t.Cleanup(func() { _ = dnsServer.Shutdown(); _ = dnsListener.Close(); <-dnsJoined })
+	stage = "captured Router HTTP listener"
+	routerHealth := startDesktopNodeRouterHealth(t, ip, request.NodeProofID)
 	var inner, baseAddress, protocolFiles string
 	innerNetwork, probeNetwork := "udp", "udp"
 	var protocolServer *desktopNodeLayerServer
@@ -666,7 +689,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 		if len(routes) != 0 {
 			server = startDesktopNodeLayerRoutedServer(t, ip, request.Password, routes, dnsListener.LocalAddr().String())
 		} else {
-			server = startDesktopNodeLayerServer(t, ip, request.Password, inner, baseAddress, innerNetwork, dnsListener.LocalAddr().String())
+			server = startDesktopNodeLayerServer(t, ip, request.Password, inner, baseAddress, innerNetwork, dnsListener.LocalAddr().String(), routerHealth.address())
 		}
 		address = server.tcp.Addr().String()
 		aesAddress = address
@@ -691,6 +714,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 		}
 		reply := desktopNodeLayerReply{Schema: 1, Address: address, AESAddress: aesAddress, BaseAddress: baseAddress, ProtocolFiles: protocolFiles,
 			AppID: scope, RawTCP: server.rawTCP.Load(), RawUDP: server.rawUDP.Load(), PlainTCP: server.plainTCP.Load(), PlainUDP: server.plainUDP.Load(), DNSQueries: dnsQueries.Load(), Probe: nonce, ProbeCount: count, ProbeNetwork: probeNetwork, ProbeTarget: target}
+		reply.RouterQueries = routerHealth.count()
 		if protocolServer != nil {
 			reply.ProtocolRawUDP, reply.ProtocolTCP, reply.ProtocolUDP = protocolServer.rawUDP.Load(), protocolServer.plainTCP.Load(), protocolServer.plainUDP.Load()
 			reply.ProtocolRawTCP = protocolServer.rawTCP.Load()
@@ -721,6 +745,14 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 			} else if string(line) == "restore-dns\n" {
 				failedDNS.Store(false)
 			}
+			respond("", "", server)
+			continue
+		}
+		if string(line) == "wrong-node\n" || string(line) == "restore-node\n" {
+			if routerHealth == nil {
+				t.Fatal("layer reference received an uncaptured Router identity operation")
+			}
+			routerHealth.wrongNode.Store(string(line) == "wrong-node\n")
 			respond("", "", server)
 			continue
 		}
@@ -859,7 +891,7 @@ func (p *desktopNodeLayerReference) probe(t *testing.T, action, nonce string) in
 
 func (p *desktopNodeLayerReference) observe(t *testing.T, action string) desktopNodeLayerReply {
 	t.Helper()
-	if action != "stats" && action != "fail-dns" && action != "restore-dns" {
+	if action != "stats" && action != "fail-dns" && action != "restore-dns" && (p.request.NodeProofID == "" || action != "wrong-node" && action != "restore-node") {
 		t.Fatal("unexpected layer observation operation")
 	}
 	if _, err := io.WriteString(p.input, action+"\n"); err != nil {

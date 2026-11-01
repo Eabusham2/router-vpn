@@ -104,8 +104,14 @@ func desktopNodeLinuxRequireTUN(t *testing.T) {
 	}
 }
 
-func desktopNodeLinuxReference(t *testing.T) *desktopNodeLayerReference {
+func desktopNodeLinuxReference(t *testing.T, proofIDs ...string) *desktopNodeLayerReference {
 	t.Helper()
+	var proofID string
+	if len(proofIDs) == 1 {
+		proofID = proofIDs[0]
+	} else if len(proofIDs) != 0 {
+		t.Fatal("Linux reference exceeded its captured Router identity")
+	}
 	config, options := desktopReferenceFixture(t)
 	config.Echo = append(config.Echo, desktopReferenceRule{Network: "tcp", Address: "2001:db8::99", Port: 9999},
 		desktopReferenceRule{Network: "udp", Address: "2001:db8::99", Port: 9999})
@@ -119,7 +125,7 @@ func desktopNodeLinuxReference(t *testing.T) *desktopNodeLayerReference {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	p := &desktopNodeLayerReference{ctx: ctx, cancel: cancel, options: options, done: make(chan error, 1),
-		request: desktopNodeLayerRequest{Schema: 1, Mode: "shadowsocks", Address: "192.168.210.2",
+		request: desktopNodeLayerRequest{Schema: 1, Mode: "shadowsocks", Address: "192.168.210.2", NodeProofID: proofID,
 			Password: base64.StdEncoding.EncodeToString(key[:]), Configuration: config}}
 	clear(key[:])
 	p.command = exec.CommandContext(ctx, "ip", "netns", "exec", "rvpn-peer", executable,

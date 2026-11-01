@@ -93,6 +93,8 @@ PEER_TEMPLATES = {
     'node_peer_dns_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_dns_test.go',
     'node_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_windows_test.go',
     'node_layer_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_layer_peer_test.go',
+    'node_router_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_router_peer_test.go',
+    'node_router_peer_linux_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_router_peer_linux_test.go',
     'node_hysteria2_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_hysteria2_peer_test.go',
     'node_naive_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_peer_test.go',
     'node_naive_peer_windows_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_naive_peer_windows_test.go',
@@ -620,6 +622,8 @@ def prepare(vendor, go='go', *, env=None):
             prefix = b'//go:build cgo && routervpn_native_pq && routervpn_pq_traffic_test\n\npackage routervpnpq\n'
         elif name == 'node_linux_peer_test.go.tmpl':
             prefix = b'//go:build linux && routervpn_linux_node_composition\n\n' + prefix
+        elif name == 'node_router_peer_linux_test.go.tmpl':
+            prefix = b'//go:build linux && !android && routervpn_linux_node_composition\n\n' + prefix
         if path.is_symlink() or not path.read_bytes().startswith(prefix):
             raise ValueError('Desktop encrypted peer test changed its test-only package')
         write(vendor, relative, path.read_bytes())
