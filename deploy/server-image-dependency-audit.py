@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Source-level dependency pin contract for published Router VPN server images."""
 from pathlib import Path
+import hashlib
 import re
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -40,7 +41,7 @@ for required in (
     "FROM golang:1.24.13-alpine AS binaries",
     "FROM golang:1.25.12-bookworm AS go-build",
     "FROM golang:1.23.12-alpine AS plugin",
-    "FROM rust:1.88.0-bookworm AS overtls-build",
+    "FROM rust:1.88.0-bookworm AS overtls-upstream-build",
 ):
     assert required in joined, f"published image dependency pin missing: {required}"
 
@@ -59,6 +60,30 @@ for required in (
     "ARG OVERTLS_VERSION=0.3.12",
 ):
     assert required in joined, f"fixed transport dependency missing: {required}"
+
+# The upstream stage is retained only as the pinned source/reference boundary.
+# Production must inherit that compiler and build the verified selected-DNS
+# patch; merely finding the upstream version in a test stage is insufficient.
+aux = docs["server/aux-proxies/Dockerfile"]
+production_stage = "FROM overtls-upstream-build AS overtls-build\n"
+assert "FROM rust:1.88.0-bookworm AS overtls-upstream-build\n" in aux
+assert aux.count(production_stage) == 1, "OverTLS production compiler inheritance changed"
+production = aux.split(production_stage, 1)[1].split("\nFROM ", 1)[0]
+dns_patch = "server/aux-proxies/patches/overtls-preserve-selected-dns.patch"
+dns_hash = "a419065664a0abbf1bb13e2711c19aca4c0efea5b3df077ff33128d077a8a88e"
+assert hashlib.sha256((ROOT / dns_patch).read_bytes()).hexdigest() == dns_hash, "OverTLS selected-DNS patch changed"
+for required in (
+    "COPY " + dns_patch + " /patches/overtls-preserve-selected-dns.patch",
+    'RUN echo "' + dns_hash + '  /patches/overtls-preserve-selected-dns.patch" | sha256sum --check -',
+    "65ddf4401a40f832aaf0d368886c882c2acacfab787ee3bc5786f4b095a528f4  %s\\n",
+    "git -C /src/overtls-production apply --check /patches/overtls-preserve-selected-dns.patch",
+    "git -C /src/overtls-production apply /patches/overtls-preserve-selected-dns.patch",
+    "cargo install --path /src/overtls-production --locked --offline --force --root /out",
+):
+    assert required in production, f"OverTLS production source verification missing: {required}"
+final_aux = aux.rsplit("\nFROM ", 1)[1]
+assert "COPY --from=overtls-build /out/bin/overtls-bin /usr/local/bin/overtls-bin" in final_aux, "production OverTLS must use the patched build"
+assert "overtls-stock" not in final_aux and "overtls-reference-client" not in final_aux, "test-only OverTLS client entered production"
 
 assert "deploy/build-xray-runtime.py" in docs["server/init/Dockerfile"]
 assert "COPY --from=xray /xray/linux-${TARGETARCH}/xray" in docs["server/init/Dockerfile"]
