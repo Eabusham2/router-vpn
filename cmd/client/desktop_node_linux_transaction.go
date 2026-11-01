@@ -211,6 +211,8 @@ func (t *desktopLinuxNodeTransaction) enter(ctx context.Context) error {
 
 // accepted is never used to authorize cleanup. Retirement keeps its original
 // native owners when the saved profile, network, request or command changes.
+// Cancellation intent is checked under the same app lock as final adoption,
+// including the interval before the original cancel callback executes.
 func (t *desktopLinuxNodeTransaction) accepted(ctx context.Context) error {
 	if t == nil || ctx == nil || ctx.Err() != nil || t.operation == nil || t.operation.Err() != nil || t.stopRequested.Load() || t.retiring || t.retired || t.closed ||
 		t.policy == nil || t.policy.Validate() != nil || t.network == "" || physicalNetworkIdentity() != t.network {
@@ -223,7 +225,7 @@ func (t *desktopLinuxNodeTransaction) accepted(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	profile, exists := a.profileByIDLocked(t.profileID)
-	if err := a.checkCapturedConnectionOperationLocked(t.operation); err != nil || !exists || a.cmd != t.process.command ||
+	if err := a.checkCapturedConnectionOperationLocked(t.operation); err != nil || a.connectionCancelIntent == t.operation || !exists || a.cmd != t.process.command ||
 		a.state.RouterID != t.profileID || a.state.RuntimeMode != t.policy.Metadata().Mode ||
 		desktopOwnedNodeProfileToken(profile) != t.revision ||
 		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != t.options ||

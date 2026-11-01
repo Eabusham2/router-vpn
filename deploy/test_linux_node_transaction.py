@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location("linux_node_transaction_namespace", ROOT / "deploy/test_desktop_linux_guardian.py")
 GUARD = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GUARD)
-CASES = ("on-connect", "request-ended", "always-successor", "cancelled-before-prepare",
+CASES = ("on-connect", "request-ended", "always-successor", "cancelled-before-prepare", "cancel-intent-before-prepare",
          "changed-profile", "partial-prepare-write", "engine-join")
 SHUTDOWN_CASES = ("shutdown-on-connect", "shutdown-request-ended", "shutdown-before-prepare", "shutdown-before-admission",
                   "shutdown-retry", "shutdown-successor-first", "shutdown-replacement", "shutdown-always")

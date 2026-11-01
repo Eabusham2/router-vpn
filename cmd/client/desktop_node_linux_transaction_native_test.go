@@ -279,7 +279,72 @@ func linuxTransactionStart(ctx context.Context, a *app, parent *desktopLinuxNode
 	return transaction, cancelOperation, directory, err
 }
 
+// Hold the original callback after the actual application records cancellation
+// intent. The child still sends its authenticated baseline request while the
+// original operation context is live; that exact request must be refused before
+// any durable intent or native baseline can be created.
+func linuxTransactionPrepareAfterCancelIntent(ctx context.Context, transaction *desktopLinuxNodeTransaction) (result error) {
+	a := transaction.parent.app
+	entered, release, joined := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	a.mu.Lock()
+	original := a.connectionCancel
+	if a.connectionContext != transaction.operation || original == nil || transaction.operation.Err() != nil {
+		a.mu.Unlock()
+		return errors.New("cancel-intent fixture lost its original live application operation")
+	}
+	a.connectionCancel = func() {
+		close(entered)
+		<-release
+		original()
+	}
+	a.mu.Unlock()
+	go func() {
+		defer close(joined)
+		a.cancelConnectionOperation()
+	}()
+	defer func() {
+		close(release)
+		join, cancelJoin := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancelJoin()
+		select {
+		case <-joined:
+			if transaction.operation.Err() != context.Canceled {
+				result = errors.Join(result, errors.New("released cancellation did not join its original callback"))
+			}
+		case <-join.Done():
+			result = errors.Join(result, errors.New("original cancellation callback did not join"))
+		}
+	}()
+	select {
+	case <-entered:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	a.mu.Lock()
+	captured := a.connectionContext == transaction.operation && a.connectionCancelIntent == transaction.operation
+	a.mu.Unlock()
+	if !captured || transaction.operation.Err() != nil || ctx.Err() != nil {
+		return errors.New("cancellation intent was not captured before the original live callback")
+	}
+	before := transaction.head
+	err := transaction.ServePreparation(ctx)
+	if !errors.Is(err, linuxprotection.ErrNodeControlRefused) || !transaction.served || transaction.baseline != nil ||
+		transaction.created != nil || transaction.pending != nil || transaction.journal.pending != nil ||
+		transaction.nativeCommitted || transaction.admitted || transaction.operation.Err() != nil {
+		return errors.Join(err, errors.New("cancellation intent reached native preparation before its original callback ran"))
+	}
+	selected, snapshotErr := transaction.journal.Snapshot(ctx)
+	if snapshotErr != nil || !sameDesktopLinuxJournalSelection(selected, before.Record) || transaction.head.SHA256 != before.SHA256 ||
+		mobiletor.ReadDesktopLinuxProtectionAbsence(ctx) != nil {
+		return errors.Join(snapshotErr, errors.New("refused cancellation intent changed original durable or native protection"))
+	}
+	return nil
+}
+
 func linuxTransactionPrepare(ctx context.Context, transaction *desktopLinuxNodeTransaction, scenario, directory string, cancel context.CancelFunc) error {
+	if scenario == "cancel-intent-before-prepare" {
+		return linuxTransactionPrepareAfterCancelIntent(ctx, transaction)
+	}
 	if scenario == "cancelled-before-prepare" {
 		cancel()
 	}
@@ -495,7 +560,7 @@ func TestDesktopLinuxGuardianKernelNodeTransaction(t *testing.T) {
 		t.Fatal("Node transaction requires its actual isolated guardian namespace", err)
 	}
 	t.Setenv(linuxControllerNamespaceMarker, "1")
-	for _, scenario := range []string{"on-connect", "request-ended", "always-successor", "cancelled-before-prepare", "changed-profile", "partial-prepare-write", "engine-join"} {
+	for _, scenario := range []string{"on-connect", "request-ended", "always-successor", "cancelled-before-prepare", "cancel-intent-before-prepare", "changed-profile", "partial-prepare-write", "engine-join"} {
 		t.Run(scenario, func(t *testing.T) {
 			installed := linuxControllerNamespaceInstall(t)
 			if err := os.RemoveAll(filepath.Join("/opt", desktopLinuxNodeJournalDirectory)); err != nil {
