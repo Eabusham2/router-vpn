@@ -1092,6 +1092,15 @@ func (p *desktopNodeLayerReference) original(t *testing.T, kill, fault string) *
 		profile["start_layer"] = p.request.Layer
 		files, start = record.Files, string(aesFiles)
 	}
+	if p.request.NodeProofID != "" {
+		// The optional health responder is part of this original private
+		// profile. WG retains the key-derived identity, including a deliberate
+		// wrong-peer control; SS uses its explicitly captured Router identity.
+		profile["router_api"] = "http://" + desktopNodeRouterHealthTarget
+		if p.request.Mode == "shadowsocks" {
+			profile["node_proof_id"] = p.request.NodeProofID
+		}
+	}
 	captured, _ := json.Marshal(profile)
 	original, err := mobilemultihop.NewNodeProfile(p.request.Mode, files, string(captured), start, "")
 	if err != nil {

@@ -33,7 +33,8 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:7: verified installed host public Connect and Disconnect: ' + case for case in cases if case in G.PUBLIC_CASES),
                           *('    native_test.go:8: verified installed host native cover: ' + case for case in cases if case in G.COVER_CASES),
                           *('    native_test.go:9: verified installed host saved Linux protection Off: ' + case for case in cases if case in G.OFF_CASES),
-                          *('    native_test.go:10: verified installed host captured Start Layer: ' + case for case in cases if case in G.LAYER_CASES)]) + '\n'
+                          *('    native_test.go:10: verified installed host captured Start Layer: ' + case for case in cases if case in G.LAYER_CASES),
+                          *('    native_test.go:11: verified installed host plain WireGuard: ' + case for case in cases if case in G.WIREGUARD_CASES)]) + '\n'
 
     def test_requires_every_real_positive_negative_and_joined_lifecycle(self):
         output = self.completed()

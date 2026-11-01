@@ -18,25 +18,29 @@ func TestDesktopLinuxPublicSelectionStaysBounded(t *testing.T) {
 	profile := common.RouterProfile{NodeKind: "router-vpn", KillSwitch: true, KillSwitchPolicy: "on-connect"}
 	a := &app{}
 	for _, mode := range []string{"wg", "awg2-fast", "wg-pq", "hysteria2", "reality-vision", "ss-v2ray", "split", "max", "naive-h2", "tor", "openvpn", "smart-auto", "shadowsocks"} {
-		if got := a.desktopLinuxNodeConnectionSelected(profile, mode); got != (mode == "shadowsocks") {
+		if got := a.desktopLinuxNodeConnectionSelected(profile, mode); got != (mode == "shadowsocks" || mode == "wg") {
 			t.Fatal("Linux public dispatcher changed an unrelated graph", mode, got)
 		}
 	}
-	for _, policy := range []string{"off", "on-connect", "always", "malformed"} {
-		profile.KillSwitchPolicy = policy
-		if got := a.desktopLinuxNodeConnectionSelected(profile, "shadowsocks"); got != (policy != "off") {
-			t.Fatal("missing protection validation became a legacy fallback", policy, got)
+	for _, mode := range []string{"shadowsocks", "wg"} {
+		for _, policy := range []string{"off", "on-connect", "always", "malformed"} {
+			profile.KillSwitchPolicy = policy
+			if got := a.desktopLinuxNodeConnectionSelected(profile, mode); got != (policy != "off") {
+				t.Fatal("missing protection validation became a legacy fallback", mode, policy, got)
+			}
 		}
 	}
 	profile.KillSwitchPolicy = "on-connect"
 	a.nodeConnectionHost = &desktopNodeConnectionHost{}
-	if a.desktopLinuxNodeConnectionSelected(profile, "shadowsocks") {
-		t.Fatal("Linux dispatcher replaced the separately captured platform host")
+	for _, mode := range []string{"shadowsocks", "wg"} {
+		if a.desktopLinuxNodeConnectionSelected(profile, mode) {
+			t.Fatal("Linux dispatcher replaced the separately captured platform host", mode)
+		}
 	}
 }
 
 func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
-	for _, scenario := range []string{"cover-runtime", "start-aes", "start-whitening", "malformed-layer", "external", "unknown-policy", "missing-controller", "cancelled"} {
+	for _, scenario := range []string{"cover-runtime", "start-aes", "start-whitening", "malformed-layer", "external", "unknown-policy", "missing-controller", "cancelled", "wg-plain", "wg-aes", "wg-whitening", "wg-cancelled"} {
 		t.Run(scenario, func(t *testing.T) {
 			root := t.TempDir()
 			t.Setenv("HOMEVPN_ROOT", root)
@@ -49,7 +53,12 @@ func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
 					Command: []string{"this-legacy-fallback-must-never-start"}}},
 				state: state{Connected: true, Phase: "connected", Mode: "original", RuntimeMode: "original", RouterID: "previous"},
 				cmd:   &exec.Cmd{}}
-			expected := "supported protected Shadowsocks graph and exact Start Layer"
+			mode := "shadowsocks"
+			if strings.HasPrefix(scenario, "wg-") {
+				mode = "wg"
+				a.modes[0].ID = mode
+			}
+			expected := "supported protected graph and exact Start Layer"
 			switch scenario {
 			case "cover-runtime":
 				a.state.DAITA = true    // Saved false remains independent from this actual selection.
@@ -68,19 +77,25 @@ func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
 				profile.KillSwitchPolicy = "malformed"
 			case "missing-controller":
 				expected = "Linux Node"
-			case "cancelled":
+			case "wg-plain":
+				expected = "Linux Node"
+			case "wg-aes":
+				profile.StartLayer = common.StartLayerAES256GCM
+			case "wg-whitening":
+				profile.StartLayer = common.StartLayerAES256GCMXOR
+			case "cancelled", "wg-cancelled":
 				cancel()
 			}
 			a.profiles = common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}}
 			before, command, profiles := a.state, a.cmd, cloneRouterProfileStore(a.profiles)
 			transition := &modeAttemptTransition{}
 			a.operationMu.Lock()
-			err := a.startModeAttempt("shadowsocks", true, transition)
+			err := a.startModeAttempt(mode, true, transition)
 			a.operationMu.Unlock()
 			if err == nil || transition.StopBegun || a.state != before || a.cmd != command || !reflect.DeepEqual(a.profiles, profiles) {
 				t.Fatal("Linux public preflight changed its original connection before rejecting unsupported launch", err)
 			}
-			if scenario == "cancelled" {
+			if scenario == "cancelled" || scenario == "wg-cancelled" {
 				if !errors.Is(err, errConnectionOperationCancelled) {
 					t.Fatal("public Linux cancellation lost the shared operation sentinel", err)
 				}

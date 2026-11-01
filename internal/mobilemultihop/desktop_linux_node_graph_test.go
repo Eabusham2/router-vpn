@@ -3,9 +3,47 @@ package mobilemultihop
 import (
 	"encoding/base64"
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestDesktopLinuxNodeRetainsExactPlainWireGuard(t *testing.T) {
+	for _, layer := range []string{"", "off"} {
+		t.Run(layer, func(t *testing.T) {
+			if !DesktopLinuxNodePhysicalGraphSupported("wg", layer) {
+				t.Fatal("plain WireGuard has no retained Linux path")
+			}
+			files, profile, _ := nodeProfileFixture(t, "wg", "")
+			profile["start_layer"], profile["kill_switch_policy"] = layer, "always"
+			original, err := NewNodeProfile("wg", files, startJSON(t, profile), "", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy := desktopNodePlan(t, original, desktopNodeTestSession, "linux")
+			assertDesktopNodeExactDerivation(t, policy)
+			capture, err := policy.Capture()
+			if err != nil || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Type != "wireguard" ||
+				capture.PhysicalRoots[0].Family != "endpoints" || len(capture.PhysicalRoots[0].Destinations) != 1 ||
+				capture.PhysicalRoots[0].Destinations[0] != (PhysicalEgress{Host: "192.0.2.1", Port: 51820, Network: "udp"}) ||
+				capture.SelectedDNS.Host != "192.168.50.133" || capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != "proxy" ||
+				capture.ConfiguredMTU != 1280 || capture.KillSwitchPolicy != "always" {
+				t.Fatal("plain Linux WireGuard lost its one UDP peer, selected DNS, MTU or protection", err)
+			}
+			before := desktopNodeObject(t, startObject(t, original.Config()), "endpoints", "proxy")
+			actual := desktopNodeObject(t, startObject(t, policy.Config()), "endpoints", "proxy")
+			if actual["detour"] != DesktopNodePhysicalTag || actual["system"] != false ||
+				actual["private_key"] != before["private_key"] || !reflect.DeepEqual(actual["peers"], before["peers"]) {
+				t.Fatal("plain Linux WireGuard changed native transport, private key or peer source")
+			}
+		})
+	}
+	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening", "OFF", "plain", " off", "unknown"} {
+		if DesktopLinuxNodePhysicalGraphSupported("wg", layer) {
+			t.Fatal("plain WireGuard opened an unproved Start Layer", layer)
+		}
+	}
+}
 
 func TestDesktopLinuxNodeRetainsExactShadowsocksLayers(t *testing.T) {
 	for _, layer := range []string{"", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {

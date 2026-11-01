@@ -36,28 +36,36 @@ var linuxHostTUNCases = []string{"on-connect", "home-lan", "wrong-node", "resolv
 	"cover-connect", "cover-replies-lost", "cover-wrong-node", "cover-no-replies", "cover-restore", "public-off", "public-off-save-retry",
 	"layer-aes-connect", "layer-whitening-connect", "layer-whitening-wrong-key", "layer-whitening-resolver-failure", "layer-aes-restore", "layer-whitening-cover-restore"}
 
+func init() { linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNWireGuardCases...) }
+
 func linuxHostTUNCoverCase(scenario string) bool {
+	scenario = linuxHostTUNAction(scenario)
 	return scenario == "cover-connect" || scenario == "cover-replies-lost" || scenario == "cover-wrong-node" || scenario == "cover-no-replies" || scenario == "cover-restore" || scenario == "layer-whitening-cover-restore"
 }
 
 func linuxHostTUNRestoreCase(scenario string) bool {
+	scenario = linuxHostTUNAction(scenario)
 	return scenario == "restore-sealed" || scenario == "cover-restore" || scenario == "layer-aes-restore" || scenario == "layer-whitening-cover-restore"
 }
 
 func linuxHostTUNPublicCase(scenario string) bool {
+	scenario = linuxHostTUNAction(scenario)
 	return scenario == "public-connect" || scenario == "cover-connect" || scenario == "cover-replies-lost" || linuxHostTUNOffCase(scenario) ||
 		scenario == "layer-aes-connect" || scenario == "layer-whitening-connect"
 }
 
 func linuxHostTUNOffCase(scenario string) bool {
+	scenario = linuxHostTUNAction(scenario)
 	return scenario == "public-off" || scenario == "public-off-save-retry"
 }
 
 func linuxHostTUNFailedReadyCase(scenario string) bool {
+	scenario = linuxHostTUNAction(scenario)
 	return linuxHostTUNWrongKeyCase(scenario) || linuxHostTUNResolverFailureCase(scenario) || scenario == "cover-wrong-node" || scenario == "cover-no-replies"
 }
 
 func linuxHostTUNMTUCase(scenario string) bool {
+	scenario = linuxHostTUNAction(scenario)
 	return scenario == "mtu-rollback" || scenario == "mtu-commit" || scenario == "mtu-stale-profile" || scenario == "mtu-stale-network" || scenario == "mtu-hold" || scenario == "mtu-retire-undrained"
 }
 
@@ -189,6 +197,7 @@ func linuxHostTUNDNSObservation(ctx context.Context, a *app, host *desktopLinuxN
 // executable, source, native channel, TUN, DNS, Router proof and journal.
 // It changes no public capability predicate or verifier implementation.
 func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string) (failure error) {
+	action, mode := linuxHostTUNAction(scenario), linuxHostTUNMode(scenario)
 	found := false
 	for _, candidate := range linuxHostTUNCases {
 		found = found || candidate == scenario
@@ -208,7 +217,7 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 	if mtuCase || restoreCase {
 		policyValid = profile.MTUPolicy == "auto" && profile.ManualMTU == 0
 	}
-	if profile.ID != "installed-linux-node" || profile.NodeProofID != linuxHostTUNNodeID || profile.RouterAPI != "http://10.77.0.1:8787" ||
+	if profile.ID != "installed-linux-node" || (mode == "shadowsocks" && profile.NodeProofID != linuxHostTUNNodeID || mode == "wg" && !nativeDigest(profile.NodeProofID)) || profile.RouterAPI != "http://10.77.0.1:8787" ||
 		profile.DNSMode != "home" || profile.AdGuardIPv4 != "192.168.50.133" || profile.IPv6Mode != "on" || !policyValid || profile.EffectiveMTU != 9000 ||
 		profile.StartLayer != linuxHostTUNStartLayer(scenario) {
 		return errors.New("installed-host fixture changed its captured node, selected DNS or fixed MTU")
@@ -246,7 +255,7 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 	defer finish()
 	var journal *desktopLinuxNodeJournal
 	var retained *desktopLinuxNodeSession
-	if scenario == "active-request-ended" || mtuCase || restoreCase {
+	if action == "active-request-ended" || mtuCase || restoreCase {
 		retained, err = captureDesktopLinuxNodeSession(ctx, a)
 	} else {
 		journal, err = createDesktopLinuxNodeJournal(ctx, parent)
@@ -259,7 +268,7 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 	}
 	runtimeProfile := cloneRouterProfile(profile)
 	runtimeProfile.DAITAEnabled = a.state.DAITA
-	host, err := prepareDesktopLinuxNodeHost(operation, a, runtimeProfile, "shadowsocks", 0)
+	host, err := prepareDesktopLinuxNodeHost(operation, a, runtimeProfile, mode, 0)
 	if host != nil {
 		defer host.Close(context.Background())
 	}
@@ -324,7 +333,7 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 		}
 		proofContext := ctx
 		var activation *desktopLinuxNodeActivation
-		if scenario == "stale-ready" {
+		if action == "stale-ready" {
 			stale := ready
 			stale.ProvedAt = host.started.UnixMilli() - 1
 			body, err := json.Marshal(stale)
@@ -332,12 +341,12 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 				return errors.Join(err, errors.New("installed-host stale receipt control could not be written"))
 			}
 		}
-		if scenario == "cancelled-proof" {
+		if action == "cancelled-proof" {
 			short, stop := context.WithCancel(ctx)
 			stop()
 			proofContext = short
 		}
-		if scenario == "replaced-host" {
+		if action == "replaced-host" {
 			replacement = exec.Command("/bin/sleep", "60")
 			if err := replacement.Start(); err != nil {
 				return err
@@ -349,9 +358,9 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 			a.mu.Unlock()
 		}
 		elapsed, proofErr := host.Prove(proofContext)
-		failedProof := scenario == "wrong-node" || scenario == "stale-ready" || scenario == "cancelled-proof" || scenario == "replaced-host"
+		failedProof := action == "wrong-node" || action == "stale-ready" || action == "cancelled-proof" || action == "replaced-host"
 		if failedProof {
-			if proofErr == nil || elapsed != 0 || host.proof != nil || scenario != "replaced-host" && a.state.Connected {
+			if proofErr == nil || elapsed != 0 || host.proof != nil || action != "replaced-host" && a.state.Connected {
 				return errors.New("installed host accepted a failed, stale, cancelled or replaced Router proof")
 			}
 			result.Outcome = "rejected-proof"
@@ -360,13 +369,13 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 				return errors.Join(proofErr, errors.New("installed host did not retain its actual routed private Router response"))
 			}
 			result.Outcome = "proved"
-			if scenario == "cancel-adoption" {
+			if action == "cancel-adoption" {
 				a.cancelConnectionOperation()
 				if err := host.Activate(ctx); err == nil || a.state.Connected || host.activation != nil {
 					return errors.New("cancelled original Connect adopted an installed native session")
 				}
 				result.Activation = "rejected-adoption"
-			} else if strings.HasPrefix(scenario, "active-") || mtuCase || restoreCase {
+			} else if strings.HasPrefix(action, "active-") || mtuCase || restoreCase {
 				if host.Current(ctx) == nil || host.activation != nil {
 					return errors.New("installed host inferred active ownership from readiness or proof alone")
 				}
@@ -413,7 +422,7 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 					a.operationMu.Lock()
 					defer a.operationMu.Unlock()
 				}
-				if scenario == "active-request-ended" || strings.HasPrefix(scenario, "mtu-") {
+				if action == "active-request-ended" || strings.HasPrefix(action, "mtu-") {
 					view, err := linuxHostTUNMTUView(ctx, a, host)
 					if err != nil {
 						return err
@@ -430,7 +439,7 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 					}
 					result.MTU = &measurement
 				}
-				if scenario == "active-request-ended" {
+				if action == "active-request-ended" {
 					if retained == nil || retained.active != host || retained.journal != journal {
 						return errors.New("installed DNS consumer lost its original retained session")
 					}
@@ -440,7 +449,7 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 					}
 					result.DNSProof = &proof
 				}
-				switch scenario {
+				switch action {
 				case "active-profile-change":
 					a.mu.Lock()
 					a.profiles.Profiles[0].AdGuardIPv4 = "192.168.50.134"
@@ -468,13 +477,13 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 					a.cmd, a.state = replacement, replacementState
 					a.mu.Unlock()
 				}
-				if scenario != "active-request-ended" && !mtuCase && !restoreCase {
+				if action != "active-request-ended" && !mtuCase && !restoreCase {
 					if err := host.Current(ctx); err == nil {
 						return errors.New("retained installed host accepted a replaced active profile, network or command")
 					}
 					result.Activation = "rejected-active"
 				}
-			} else if scenario == "request-ended" {
+			} else if action == "request-ended" {
 				finish()
 				a.operationMu.Lock()
 				defer a.operationMu.Unlock()
@@ -483,14 +492,14 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 				}
 			}
 		}
-		if scenario == "shutdown" {
+		if action == "shutdown" {
 			a.mu.Lock()
 			a.closing = true
 			a.mu.Unlock()
 			if err := a.retireNativeNodeForShutdownContext(ctx); err != nil {
 				return fmt.Errorf("ordered original installed controller shutdown: %w", err)
 			}
-		} else if scenario == "mtu-retire-undrained" {
+		} else if action == "mtu-retire-undrained" {
 			if retained == nil || retained.active != nil || host.mtu != nil {
 				return errors.New("ordinary Stop retained its undrained original installed lease or active session")
 			}
@@ -519,7 +528,7 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 		return err
 	}
 	result.Journal = &settled
-	if scenario == "always" {
+	if action == "always" {
 		if settled.Record.Committed.Target == nil || host.transaction.baseline.ObserveClosed(ctx) != nil || host.transaction.baselineReleased {
 			return errors.New("installed host released its original closed Always protection")
 		}
@@ -551,7 +560,7 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 	}
 	if retained != nil {
 		target := host
-		if scenario == "mtu-retire-undrained" {
+		if action == "mtu-retire-undrained" {
 			target = nil // The ordinary application Stop already joined this exact host.
 		}
 		if err := retained.Retire(ctx, target, true); err != nil {
@@ -671,6 +680,7 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 	linuxHostTUNNamespace(t)
 	for _, scenario := range linuxHostTUNCases {
 		t.Run(scenario, func(t *testing.T) {
+			action := linuxHostTUNAction(scenario)
 			installed := linuxControllerNamespaceInstall(t)
 			if err := os.RemoveAll(filepath.Join("/opt", desktopLinuxNodeJournalDirectory)); err != nil {
 				t.Fatal(err)
@@ -682,10 +692,10 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			if linuxHostTUNResolverFailureCase(scenario) {
 				peer.observe(t, "fail-dns")
 			}
-			if scenario == "wrong-node" || scenario == "cover-wrong-node" {
+			if action == "wrong-node" || action == "cover-wrong-node" {
 				peer.observe(t, "wrong-node")
 			}
-			if scenario == "cover-no-replies" {
+			if action == "cover-no-replies" {
 				peer.observe(t, "drop-cover")
 			}
 			process := linuxHostTUNStartController(t, installed, scenario)
@@ -696,6 +706,9 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			physical := []mobilemultihop.PhysicalEgress{
 				{Host: peer.address.Addr().String(), Port: int(peer.address.Port()), Network: "tcp"},
 				{Host: peer.address.Addr().String(), Port: int(peer.address.Port()), Network: "udp"},
+			}
+			if peer.mode == "wg" {
+				physical = physical[1:]
 			}
 			if result.StartLayer != peer.layer || !reflect.DeepEqual(result.Physical, physical) {
 				t.Fatal("installed layer borrowed an inner AES, DNS or proof physical exception", result.Physical, physical)
@@ -711,7 +724,7 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				if result.Stage != "ready" || result.Ready == nil || result.Ready.MTU != expectedMTU || result.Ready.DNSMilliseconds <= 0 {
 					t.Fatal("installed host did not report its actual selected DNS and TUN")
 				}
-				if scenario == "home-lan" {
+				if action == "home-lan" {
 					// This direct same-node response is demonstrably available
 					// after the TUN starts. Prove must still use the captured TUN.
 					linuxHostTUNDirectHealth(t, peer)
@@ -733,10 +746,10 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 					wrongProofs = before.RouterQueries < expectedProofs // Periodic same-worker reproof remains live.
 				}
 				if before.DNSQueries < 2 || before.RawUDP == 0 || before.PlainUDP == 0 || wrongProofs ||
-					linuxHostTUNPublicCase(scenario) && (before.RawTCP == 0 || before.PlainTCP == 0) {
+					linuxHostTUNPublicCase(scenario) && !linuxHostTUNEncryptedTCP(peer, linuxHostTUNPeerReply{}, before) {
 					t.Fatal("installed readiness bypassed the selected encrypted DNS path", before)
 				}
-				if scenario == "cover-replies-lost" {
+				if action == "cover-replies-lost" {
 					dropped = peer.observe(t, "drop-cover")
 				}
 				if _, err := process.gate.Write([]byte{2}); err != nil {
@@ -767,15 +780,15 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				expected := "native-active"
 				if failedReady {
 					expected = "rejected-before-ready"
-				} else if scenario == "cover-replies-lost" {
+				} else if action == "cover-replies-lost" {
 					expected = "retired-after-reply-loss"
 				} else if linuxHostTUNRestoreCase(scenario) {
 					expected = "native-restored"
 				}
 				if result.Cover != expected || after.CoverMaximum > 400 || after.CoverReplyBytes > after.CoverBytes || after.CoverReplies > after.CoverPackets ||
-					scenario == "cover-wrong-node" && (after.CoverPackets != 0 || after.CoverReplies != 0) ||
-					scenario == "cover-no-replies" && (after.CoverPackets != 1 || after.CoverReplies != 0 || after.CoverBytes != 128) ||
-					scenario == "cover-replies-lost" && (after.CoverPackets <= dropped.CoverPackets || after.CoverReplies != dropped.CoverReplies || after.CoverReplyBytes != dropped.CoverReplyBytes) ||
+					action == "cover-wrong-node" && (after.CoverPackets != 0 || after.CoverReplies != 0) ||
+					action == "cover-no-replies" && (after.CoverPackets != 1 || after.CoverReplies != 0 || after.CoverBytes != 128) ||
+					action == "cover-replies-lost" && (after.CoverPackets <= dropped.CoverPackets || after.CoverReplies != dropped.CoverReplies || after.CoverReplyBytes != dropped.CoverReplyBytes) ||
 					linuxHostTUNRestoreCase(scenario) && (result.Ready == nil || result.Ready.CoverServices != 1 || !nativeDigest(result.Ready.CoverSHA256) || after.CoverReplies <= before.CoverReplies) {
 					t.Fatal("installed native cover bypassed proof, amplified payload, lost restoration or survived reply failure", result, before, dropped, after)
 				}
@@ -804,7 +817,7 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 					t.Fatal("failed key/resolver fabricated readiness or a Router response", result, after)
 				}
 			} else {
-				http := scenario != "stale-ready" && scenario != "cancelled-proof" && scenario != "replaced-host" && !linuxHostTUNPublicCase(scenario)
+				http := action != "stale-ready" && action != "cancelled-proof" && action != "replaced-host" && !linuxHostTUNPublicCase(scenario)
 				expectedHTTP := before.RouterQueries
 				if http {
 					expectedHTTP++
@@ -823,11 +836,11 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				if linuxHostTUNOffCase(scenario) {
 					expectedDirect++ // The same controller proves ordinary traffic only after explicit Off.
 				}
-				if wrongProofs || after.DirectQueries != expectedDirect || http && (after.RawTCP <= before.RawTCP || after.PlainTCP <= before.PlainTCP) {
+				if wrongProofs || after.DirectQueries != expectedDirect || http && !linuxHostTUNEncryptedTCP(peer, before, after) {
 					t.Fatal("installed Router proof used the direct LAN response or bypassed its exact encrypted graph", before, after)
 				}
 			}
-			if scenario == "always" {
+			if action == "always" {
 				readContext, stopRead := context.WithTimeout(context.Background(), 2*time.Second)
 				closed, err := linuxShutdownTable(readContext, result.SessionID)
 				stopRead()
@@ -846,7 +859,7 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			if linuxHostTUNRestoreCase(scenario) {
 				activation = "restored-after-temporary"
 			}
-			switch scenario {
+			switch action {
 			case "active-request-ended", "public-connect", "cover-connect", "cover-replies-lost", "public-off", "public-off-save-retry":
 				activation = "retained-after-request"
 			case "cancel-adoption":
@@ -859,7 +872,7 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			if result.Activation != activation {
 				t.Fatal("installed host omitted its actual captured activation and lifetime result", result.Activation, activation)
 			}
-			if scenario == "active-request-ended" || linuxHostTUNPublicCase(scenario) {
+			if action == "active-request-ended" || linuxHostTUNPublicCase(scenario) {
 				if result.DNSProof == nil || result.DNSProof.Status != "passed" || result.Ready == nil ||
 					result.DNSProof.LatencyMs != result.Ready.DNSMilliseconds || after.DNSQueries != before.DNSQueries ||
 					!strings.Contains(result.DNSProof.Reason, "before connection") {
@@ -881,7 +894,7 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			if linuxHostTUNOffCase(scenario) {
 				off := result.ProtectionOff
 				if off == nil || !off.RetainedAlways || !off.NetworkReleased || !off.ProfileSaved || !off.JournalSettled ||
-					!off.ReplacementRejected || !off.ReplayRejected || off.SaveRetried != (scenario == "public-off-save-retry") {
+					!off.ReplacementRejected || !off.ReplayRejected || off.SaveRetried != (action == "public-off-save-retry") {
 					t.Fatal("installed Off omitted exact Always retention, private persistence, retry or original native release", off)
 				}
 				t.Log("verified installed host saved Linux protection Off:", scenario)
@@ -903,16 +916,16 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			if linuxHostTUNMTUCase(scenario) {
 				mtu := result.MTU
 				if mtu == nil || mtu.OriginalMTU != 1280 || mtu.CandidateMTU != 1300 || mtu.InitialIndex < 1 ||
-					mtu.InitialReader != 1 || mtu.StopHeld != (scenario == "mtu-hold") {
+					mtu.InitialReader != 1 || mtu.StopHeld != (action == "mtu-hold") {
 					t.Fatal("installed MTU consumer omitted its original interface, reader or Stop barrier", mtu)
 				}
-				if scenario == "mtu-retire-undrained" {
+				if action == "mtu-retire-undrained" {
 					if mtu.Outcome != "retired-original" || mtu.FinalMTU != 0 || mtu.FinalIndex != 0 || mtu.FinalReader != 0 {
 						t.Fatal("retired installed MTU lease fabricated live readback or restored MTU", mtu)
 					}
 				} else if mtu.FinalIndex < 1 || mtu.FinalReader <= mtu.InitialReader {
 					t.Fatal("installed MTU consumer omitted its actual replacement reader", mtu)
-				} else if scenario == "mtu-commit" {
+				} else if action == "mtu-commit" {
 					if mtu.Outcome != "committed-candidate" || mtu.FinalMTU != 1300 {
 						t.Fatal("installed MTU consumer did not commit its actual candidate", mtu)
 					}
@@ -923,14 +936,17 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			} else if result.MTU != nil {
 				t.Fatal("installed MTU result belongs to another original scenario")
 			}
-			if scenario == "active-request-ended" || linuxHostTUNPublicCase(scenario) || strings.HasPrefix(scenario, "mtu-") {
+			if action == "active-request-ended" || linuxHostTUNPublicCase(scenario) || strings.HasPrefix(action, "mtu-") {
 				if result.MTUView == nil || result.Ready == nil || result.MTUView.Source != "live-captured-interface" ||
-					result.MTUView.EffectiveMTU != result.Ready.MTU || result.MTUView.Automatic != strings.HasPrefix(scenario, "mtu-") {
+					result.MTUView.EffectiveMTU != result.Ready.MTU || result.MTUView.Automatic != strings.HasPrefix(action, "mtu-") {
 					t.Fatal("installed MTU view omitted its original live Fixed/Auto readback", result.MTUView, result.Ready)
 				}
 				t.Log("verified installed host live MTU status:", scenario)
 			} else if result.MTUView != nil {
 				t.Fatal("installed MTU view belongs to another original native scenario")
+			}
+			if peer.mode == "wg" {
+				t.Log("verified installed host plain WireGuard:", scenario)
 			}
 			t.Log("verified installed host native lifecycle:", scenario)
 			if peer.layer != "" {

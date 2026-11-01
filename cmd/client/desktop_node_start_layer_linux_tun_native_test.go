@@ -22,10 +22,12 @@ func linuxHostTUNStartLayer(scenario string) string {
 }
 
 func linuxHostTUNWrongKeyCase(scenario string) bool {
+	scenario = linuxHostTUNAction(scenario)
 	return scenario == "wrong-key" || scenario == "layer-whitening-wrong-key"
 }
 
 func linuxHostTUNResolverFailureCase(scenario string) bool {
+	scenario = linuxHostTUNAction(scenario)
 	return scenario == "resolver-failure" || scenario == "layer-whitening-resolver-failure"
 }
 
@@ -47,13 +49,16 @@ func linuxHostTUNLayerSource(ctx context.Context, host *desktopLinuxNodeHost, sc
 	meta := host.policy.Metadata()
 	capture, err := host.policy.Capture()
 	layer := linuxHostTUNStartLayer(scenario)
-	kind := "shadowsocks"
+	mode, kind, roots := linuxHostTUNMode(scenario), "shadowsocks", 2
+	if mode == "wg" {
+		kind, roots = "wireguard", 1
+	}
 	if layer == common.StartLayerAES256GCMXOR {
 		kind = "routervpn-aes-xor"
 	}
-	if err != nil || meta.TargetOS != "linux" || meta.Mode != "shadowsocks" || meta.StartLayer != layer ||
+	if err != nil || meta.TargetOS != "linux" || meta.Mode != mode || meta.StartLayer != layer ||
 		capture.StartLayer != layer || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Type != kind ||
-		len(capture.PhysicalRoots[0].Destinations) != 2 || capture.SelectedDNS.Physical || capture.SelectedDNS.Host != "192.168.50.133" ||
+		len(capture.PhysicalRoots[0].Destinations) != roots || capture.SelectedDNS.Physical || capture.SelectedDNS.Host != "192.168.50.133" ||
 		capture.SelectedDNS.Detour != "proxy" || capture.ConfiguredMTU < 1280 || capture.ConfiguredMTU > 9000 {
 		return "", nil, errors.Join(err, errors.New("installed layer changed its exact native cipher, DNS, MTU or physical root"))
 	}

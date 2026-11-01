@@ -1,10 +1,13 @@
 package mobilemultihop
 
 // DesktopLinuxNodePhysicalGraphSupported is the retained Linux host's bounded
-// composition. Its three selections use the exact captured Shadowsocks source:
-// Off, authenticated SS2022 AES, or that AES ciphertext with the
-// native owned whitening adapter. Broader native families have separate gates.
+// composition. Plain WireGuard retains its one exact userspace peer and UDP
+// lower. Shadowsocks retains Off, authenticated SS2022 AES, or that ciphertext
+// with the native owned whitening adapter. Other compositions have separate gates.
 func DesktopLinuxNodePhysicalGraphSupported(mode, startLayer string) bool {
+	if mode == "wg" {
+		return startLayer == "" || startLayer == "off"
+	}
 	if mode != "shadowsocks" {
 		return false
 	}

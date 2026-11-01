@@ -1,0 +1,619 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdh"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/log"
+	wg "github.com/sagernet/sing-box/transport/wireguard"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	wgconn "github.com/sagernet/wireguard-go/conn"
+	wgdevice "github.com/sagernet/wireguard-go/device"
+)
+
+// This is a test-only independent WireGuard peer. It has one captured physical
+// client, one cryptographic peer and fixed inner DNS/health/echo destinations.
+// The application cannot launch it or supply an arbitrary forwarding rule.
+type desktopNodeWGRequest struct {
+	Schema          int    `json:"schema"`
+	Address         string `json:"address"`
+	ClientAddress   string `json:"client_address"`
+	PrivateKey      string `json:"private_key"`
+	ClientPublicKey string `json:"client_public_key"`
+	PreSharedKey    string `json:"pre_shared_key"`
+	NodeProofID     string `json:"node_proof_id"`
+	DirectRouter    bool   `json:"direct_router"`
+	Cover           bool   `json:"cover"`
+}
+
+func desktopNodeWGRequestIdentity(request desktopNodeWGRequest) (netip.Addr, netip.Addr, string, error) {
+	bad := errors.New("WireGuard reference requires its exact captured physical and cryptographic peers")
+	local, localErr := netip.ParseAddr(request.Address)
+	remote, remoteErr := netip.ParseAddr(request.ClientAddress)
+	if request.Schema != 1 || localErr != nil || remoteErr != nil || !local.Is4() || !remote.Is4() ||
+		!local.IsPrivate() || !remote.IsPrivate() || local.String() != request.Address || remote.String() != request.ClientAddress ||
+		local != remote && (local.String() != "192.168.210.2" || remote.String() != "192.168.210.1") {
+		return netip.Addr{}, netip.Addr{}, "", bad
+	}
+	var values [3][]byte
+	for index, value := range []string{request.PrivateKey, request.ClientPublicKey, request.PreSharedKey} {
+		raw, err := base64.StdEncoding.Strict().DecodeString(value)
+		if err != nil || len(raw) != 32 || base64.StdEncoding.EncodeToString(raw) != value || bytes.Equal(raw, make([]byte, 32)) {
+			clear(raw)
+			for _, previous := range values {
+				clear(previous)
+			}
+			return netip.Addr{}, netip.Addr{}, "", bad
+		}
+		values[index] = raw
+	}
+	defer func() {
+		for _, value := range values {
+			clear(value)
+		}
+	}()
+	private, err := ecdh.X25519().NewPrivateKey(values[0])
+	if err != nil {
+		return netip.Addr{}, netip.Addr{}, "", bad
+	}
+	public := base64.StdEncoding.EncodeToString(private.PublicKey().Bytes())
+	identity := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+	if request.NodeProofID != hex.EncodeToString(identity[:]) || public == request.ClientPublicKey {
+		return netip.Addr{}, netip.Addr{}, "", bad
+	}
+	ipc := fmt.Sprintf("private_key=%x\npublic_key=%x\npreshared_key=%x\nallowed_ip=10.78.0.2/32\nallowed_ip=fd78:78::2/128\n", values[0], values[1], values[2])
+	return local, remote, ipc, nil
+}
+
+type desktopNodeWGBind struct {
+	mu            sync.Mutex
+	local, remote netip.Addr
+	connection    *net.UDPConn
+	packets       atomic.Int64
+}
+
+func (b *desktopNodeWGBind) Open(port uint16) ([]wgconn.ReceiveFunc, uint16, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.connection != nil || port != 0 {
+		return nil, 0, errors.New("WireGuard reference attempted to replace its original UDP listener")
+	}
+	connection, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(b.local, 0)))
+	if err != nil {
+		return nil, 0, err
+	}
+	b.connection = connection
+	read := func(packets [][]byte, sizes []int, endpoints []wgconn.Endpoint) (int, error) {
+		for {
+			n, remote, err := connection.ReadFromUDPAddrPort(packets[0])
+			if err != nil {
+				return 0, err
+			}
+			if remote.Addr() != b.remote {
+				continue
+			}
+			b.packets.Add(1)
+			sizes[0], endpoints[0] = n, peerEndpoint(remote)
+			return 1, nil
+		}
+	}
+	return []wgconn.ReceiveFunc{read}, uint16(connection.LocalAddr().(*net.UDPAddr).Port), nil
+}
+func (b *desktopNodeWGBind) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.connection == nil {
+		return nil
+	}
+	err := b.connection.Close()
+	b.connection = nil
+	return err
+}
+func (b *desktopNodeWGBind) Send(packets [][]byte, endpoint wgconn.Endpoint, offset int) error {
+	remote, err := netip.ParseAddrPort(endpoint.DstToString())
+	if err != nil || remote.Addr() != b.remote || remote.Port() == 0 {
+		return errors.New("WireGuard reference tried another physical peer")
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.connection == nil {
+		return net.ErrClosed
+	}
+	for _, packet := range packets {
+		if offset < 0 || offset > len(packet) {
+			return errors.New("WireGuard reference lost its exact packet offset")
+		}
+		n, err := b.connection.WriteToUDPAddrPort(packet[offset:], remote)
+		if err != nil {
+			return err
+		}
+		if n != len(packet)-offset {
+			return io.ErrShortWrite
+		}
+	}
+	return nil
+}
+func (*desktopNodeWGBind) SetMark(mark uint32) error {
+	if mark != 0 {
+		return errors.New("WireGuard reference cannot acquire a routing mark")
+	}
+	return nil
+}
+func (*desktopNodeWGBind) BatchSize() int { return 1 }
+func (b *desktopNodeWGBind) ParseEndpoint(value string) (wgconn.Endpoint, error) {
+	remote, err := netip.ParseAddrPort(value)
+	if err != nil || remote.Addr() != b.remote || remote.Port() == 0 {
+		return nil, errors.New("WireGuard reference lost its one remote endpoint")
+	}
+	return peerEndpoint(remote), nil
+}
+func (*desktopNodeWGBind) SetReservedForEndpoint(_ netip.AddrPort, reserved [3]byte) {
+	if reserved != [3]byte{} {
+		panic("plain WireGuard reference has no reserved-byte policy")
+	}
+}
+func (b *desktopNodeWGBind) address() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.connection == nil {
+		return ""
+	}
+	return b.connection.LocalAddr().String()
+}
+
+type desktopNodeWGHandler struct {
+	*desktopReferenceHandler
+	tcp, udp atomic.Int64
+	cover    *desktopNodeRouterCover
+}
+
+func (h *desktopNodeWGHandler) NewConnectionEx(ctx context.Context, c net.Conn, source, destination M.Socksaddr, done N.CloseHandlerFunc) {
+	if _, ok := h.rule("tcp", destination); ok {
+		h.tcp.Add(1)
+	}
+	h.desktopReferenceHandler.NewConnectionEx(ctx, c, source, destination, done)
+}
+func (h *desktopNodeWGHandler) NewPacketConnectionEx(ctx context.Context, c N.PacketConn, source, destination M.Socksaddr, done N.CloseHandlerFunc) {
+	if _, ok := h.rule("udp", destination); ok {
+		h.udp.Add(1)
+	}
+	if destination.String() != desktopNodeRouterCoverTarget || h.cover == nil {
+		h.desktopReferenceHandler.NewPacketConnectionEx(ctx, c, source, destination, done)
+		return
+	}
+	if !h.adopt(c, true) {
+		if done != nil {
+			done(net.ErrClosed)
+		}
+		return
+	}
+	go func() {
+		defer h.workers.Done()
+		defer h.forget(c)
+		err := h.cover.exchange(c, destination)
+		if done != nil {
+			done(err)
+		}
+	}()
+}
+
+func desktopNodeWGHealth(t *testing.T, nodeID string) *desktopNodeRouterHealth {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	health := &desktopNodeRouterHealth{physical: listener.Addr().String()}
+	server := &http.Server{ReadHeaderTimeout: 2 * time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: 2 * time.Second, IdleTimeout: time.Second, MaxHeaderBytes: 8 << 10,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.URL.Path != "/health" || r.URL.RawQuery != "" || r.Host != desktopNodeRouterHealthTarget || r.ContentLength != 0 || len(r.TransferEncoding) != 0 {
+				http.Error(w, "uncaptured Router health request", http.StatusNotFound)
+				return
+			}
+			health.queries.Add(1)
+			identity := nodeID
+			if health.wrongNode.Load() {
+				first := "0"
+				if identity[0] == '0' {
+					first = "1"
+				}
+				identity = first + identity[1:]
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "node_id": identity, "proof": "router-vpn-private-agent-v1"})
+		})}
+	joined := make(chan error, 1)
+	go func() { joined <- server.Serve(listener) }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			_ = server.Close()
+			t.Error(err)
+		}
+		_ = listener.Close()
+		if err := <-joined; !errors.Is(err, http.ErrServerClosed) {
+			t.Error(err)
+		}
+	})
+	return health
+}
+
+// The control pipe binds every observation and fault to this original peer.
+// No HTTP response, packet success, DNS answer or count is supplied to the
+// client; those values are produced by real authenticated native exchanges.
+func TestRouterVPNDesktopNodeWireGuardReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_NODE_WG_REFERENCE_CHILD") == "" {
+		return
+	}
+	if os.Getenv("ROUTERVPN_NODE_WG_REFERENCE_CHILD") != "1" {
+		t.Fatal("WireGuard reference has an unrelated owner")
+	}
+	reader := bufio.NewReaderSize(os.Stdin, (64<<10)+1)
+	line, err := reader.ReadSlice('\n')
+	if err != nil || len(line) > 64<<10 {
+		t.Fatal("WireGuard reference requires one bounded request", err)
+	}
+	var request desktopNodeWGRequest
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF {
+		t.Fatal("WireGuard reference received another input shape")
+	}
+	local, remote, ipc, err := desktopNodeWGRequestIdentity(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interfaces, err := net.Interfaces()
+	found := false
+	for _, iface := range interfaces {
+		addresses, readErr := iface.Addrs()
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		for _, address := range addresses {
+			prefix, e := netip.ParsePrefix(address.String())
+			found = found || e == nil && prefix.Addr() == local && iface.Flags&net.FlagUp != 0 && iface.Flags&net.FlagLoopback == 0
+		}
+	}
+	if err != nil || !found {
+		t.Fatal("WireGuard reference has no original private interface", err)
+	}
+	var failedDNS atomic.Bool
+	var dnsQueries atomic.Uint32
+	dnsListener, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dnsServer := &dns.Server{PacketConn: dnsListener, Handler: dns.HandlerFunc(func(w dns.ResponseWriter, q *dns.Msg) {
+		dnsQueries.Add(1)
+		answer := new(dns.Msg).SetReply(q)
+		if len(q.Question) != 1 || q.Question[0].Name != "example.com." || q.Question[0].Qtype != dns.TypeA {
+			answer.Rcode = dns.RcodeRefused
+		} else if failedDNS.Load() {
+			answer.Rcode = dns.RcodeNameError
+		} else {
+			answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 300}, A: net.ParseIP("93.184.216.34")}}
+		}
+		_ = w.WriteMsg(answer)
+	})}
+	dnsJoined := make(chan error, 1)
+	go func() { dnsJoined <- dnsServer.ActivateAndServe() }()
+	t.Cleanup(func() {
+		_ = dnsServer.Shutdown()
+		_ = dnsListener.Close()
+		if err := <-dnsJoined; err != nil {
+			t.Error(err)
+		}
+	})
+	health := desktopNodeWGHealth(t, request.NodeProofID)
+	var direct *desktopNodeRouterHealth
+	if request.DirectRouter {
+		direct = startDesktopNodeRouterHealth(t, netip.MustParseAddr("10.77.0.1"), request.NodeProofID)
+	}
+	rules := map[string]desktopReferenceRule{}
+	for _, rule := range []desktopReferenceRule{
+		{Network: "udp", Address: "192.168.50.133", Port: 53, Target: dnsListener.LocalAddr().String()},
+		{Network: "tcp", Address: "10.77.0.1", Port: 8787, Target: health.address()},
+		{Network: "tcp", Address: "192.0.2.99", Port: 9999}, {Network: "udp", Address: "192.0.2.99", Port: 9999},
+		{Network: "tcp", Address: "2001:db8::99", Port: 9999}, {Network: "udp", Address: "2001:db8::99", Port: 9999},
+	} {
+		rules[rule.Network+"/"+net.JoinHostPort(rule.Address, fmt.Sprint(rule.Port))] = rule
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	handler := &desktopNodeWGHandler{desktopReferenceHandler: &desktopReferenceHandler{ctx: ctx, cancel: cancel, rules: rules, owned: map[io.Closer]bool{}}}
+	if request.Cover {
+		handler.cover = &desktopNodeRouterCover{}
+		rules["udp/"+desktopNodeRouterCoverTarget] = desktopReferenceRule{Network: "udp", Address: "10.77.0.1", Port: 45999}
+	}
+	stack, err := wg.NewDevice(wg.DeviceOptions{Context: ctx, Logger: log.NewNOPFactory().Logger(), Handler: handler, UDPTimeout: 30 * time.Second, ICMPTimeout: time.Second, MTU: 1400, Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.1/32"), netip.MustParsePrefix("fd78:78::1/128")}})
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	bind := &desktopNodeWGBind{local: local, remote: remote}
+	device := wgdevice.NewDevice(ctx, stack, bind, &wgdevice.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}}, 0)
+	stack.SetDevice(device)
+	t.Cleanup(func() { handler.close(); device.Close() })
+	if err := device.IpcSet(ipc); err != nil {
+		t.Fatal("WireGuard reference rejected its exact keys", err)
+	}
+	ipc = ""
+	request.PrivateKey = ""
+	request.PreSharedKey = ""
+	if err := stack.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := device.Up(); err != nil {
+		t.Fatal(err)
+	}
+	address := bind.address()
+	if address == "" {
+		t.Fatal("WireGuard reference lost its UDP listener")
+	}
+	respond := func() {
+		reply := desktopNodeLayerReply{Schema: 1, Address: address, BaseAddress: address, ProbeNetwork: "udp", RawUDP: bind.packets.Load(), PlainTCP: handler.tcp.Load(), PlainUDP: handler.udp.Load(), DNSQueries: dnsQueries.Load(), RouterQueries: health.count(), DirectQueries: direct.count()}
+		if handler.cover != nil {
+			handler.cover.observe(&reply)
+		}
+		if json.NewEncoder(os.Stdout).Encode(reply) != nil {
+			t.Fatal("WireGuard reference lost its captured reply pipe")
+		}
+	}
+	respond()
+	for {
+		line, err := reader.ReadSlice('\n')
+		if errors.Is(err, io.EOF) && len(line) == 0 {
+			return
+		}
+		if err != nil || len(line) > 32 {
+			t.Fatal("WireGuard reference control was replaced", err)
+		}
+		switch strings.TrimSuffix(string(line), "\n") {
+		case "stats":
+		case "fail-dns":
+			failedDNS.Store(true)
+		case "restore-dns":
+			failedDNS.Store(false)
+		case "wrong-node":
+			health.wrongNode.Store(true)
+		case "restore-node":
+			health.wrongNode.Store(false)
+		case "drop-cover":
+			if handler.cover == nil {
+				t.Fatal("WireGuard reference received uncaptured cover")
+			}
+			handler.cover.stopReplies()
+		default:
+			t.Fatal("WireGuard reference received another control operation")
+		}
+		respond()
+	}
+}
+
+func desktopNodeWGReference(t *testing.T) *desktopNodeLayerReference {
+	t.Helper()
+	_, ip := desktopNodePeerInterface(t)
+	config, options := desktopReferenceFixture(t)
+	digest := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + options.Peers[0].PublicKey))
+	request := desktopNodeWGRequest{Schema: 1, Address: ip.String(), ClientAddress: ip.String(), PrivateKey: config.PrivateKey,
+		ClientPublicKey: config.Peers[0].PublicKey, PreSharedKey: config.Peers[0].PreSharedKey, NodeProofID: hex.EncodeToString(digest[:])}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
+	p := &desktopNodeLayerReference{ctx: ctx, cancel: cancel, options: options, done: make(chan error, 1),
+		request: desktopNodeLayerRequest{Schema: 1, Mode: "wg", Address: ip.String(), NodeProofID: request.NodeProofID, Configuration: config}}
+	p.command = exec.CommandContext(ctx, executable, "-test.run=^TestRouterVPNDesktopNodeWireGuardReferenceProcess$", "-test.count=1", "-test.timeout=60s")
+	p.command.Env = append(os.Environ(), "ROUTERVPN_NODE_WG_REFERENCE_CHILD=1")
+	p.input, err = p.command.StdinPipe()
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	var writer *os.File
+	p.output, writer, err = os.Pipe()
+	if err != nil {
+		cancel()
+		_ = p.input.Close()
+		t.Fatal(err)
+	}
+	p.reader = bufio.NewReaderSize(p.output, (64<<10)+1)
+	p.command.Stdout, p.command.Stderr = writer, &p.diagnostic
+	if err := p.command.Start(); err != nil {
+		cancel()
+		_ = p.input.Close()
+		_ = p.output.Close()
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	_ = writer.Close()
+	go func() { p.done <- p.command.Wait() }()
+	t.Cleanup(func() {
+		_ = p.input.Close()
+		select {
+		case err := <-p.done:
+			if err != nil {
+				t.Error("independent WireGuard peer failed", err, p.diagnostic.String())
+			}
+		case <-time.After(5 * time.Second):
+			cancel()
+			<-p.done
+			t.Error("independent WireGuard peer did not join its owned control pipe", p.diagnostic.String())
+		}
+		cancel()
+		_ = p.output.Close()
+	})
+	if err := json.NewEncoder(p.input).Encode(request); err != nil {
+		t.Fatal(err)
+	}
+	p.reply, err = p.read()
+	p.remote, _ = netip.ParseAddrPort(p.reply.Address)
+	if err != nil || p.remote.Addr() != ip || p.remote.Port() == 0 || p.reply.BaseAddress != p.reply.Address || p.reply.AESAddress != "" || p.reply.ProbeNetwork != "udp" || p.reply.RawTCP != 0 {
+		t.Fatal("independent WireGuard peer did not retain its original UDP socket", err, p.diagnostic.String())
+	}
+	return p
+}
+
+func TestRouterVPNDesktopNodeEncryptedPlainWireGuard(t *testing.T) {
+	for _, fault := range []string{"proved", "wrong-peer", "wrong-psk"} {
+		t.Run(fault, func(t *testing.T) {
+			peer := desktopNodeWGReference(t)
+			fixtureFault := ""
+			if fault == "wrong-peer" {
+				fixtureFault = "base-key"
+			}
+			if fault == "wrong-psk" {
+				peer.options.Peers[0].PreSharedKey = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x24}, 32))
+			}
+			f := newDesktopNodeLayerFixture(t, peer, fixtureFault)
+			input, err := f.policy.OriginalProfile().LaunchInput()
+			var source struct {
+				Profile string `json:"profile_json"`
+			}
+			var captured struct {
+				API    string `json:"router_api"`
+				NodeID string `json:"node_proof_id"`
+			}
+			if err != nil || json.Unmarshal([]byte(input), &source) != nil || json.Unmarshal([]byte(source.Profile), &captured) != nil ||
+				captured.API != "http://"+desktopNodeRouterHealthTarget || (captured.NodeID == peer.request.NodeProofID) != (fault != "wrong-peer") {
+				t.Fatal("WireGuard reference source lost its exact routed API or key-derived proof identity", err)
+			}
+			f.tun.beforeStart = func() error {
+				deadline := time.NewTimer(5 * time.Second)
+				defer deadline.Stop()
+				tick := time.NewTicker(5 * time.Millisecond)
+				defer tick.Stop()
+				for {
+					f.kernel.mu.Lock()
+					observed := f.kernel.preTUN > 0
+					f.kernel.mu.Unlock()
+					if observed {
+						return nil
+					}
+					select {
+					case <-tick.C:
+					case <-deadline.C:
+						return errors.New("WireGuard did not enter its captured eager socket owner before TUN startup")
+					}
+				}
+			}
+			if err := f.box.RouterVPNStrategyStart(); err != nil {
+				t.Fatal("actual WireGuard Box startup failed", err)
+			}
+			if fault != "proved" {
+				if err := f.exchange("udp"); err == nil {
+					t.Fatal("wrong WireGuard credential delivered decrypted traffic")
+				}
+				actual := peer.observe(t, "stats")
+				if actual.RawUDP == 0 || actual.RawTCP != 0 || actual.PlainTCP != 0 || actual.PlainUDP != 0 || actual.DNSQueries != 0 || actual.RouterQueries != 0 || f.network.Current() {
+					t.Fatal("WireGuard credential control missed the actual peer or fabricated a response", actual)
+				}
+				return
+			}
+			for _, network := range []string{"tcp", "udp"} {
+				for _, host := range []string{"192.0.2.99", "2001:db8::99"} {
+					if err := f.exchange(network, host); err != nil {
+						t.Fatal("WireGuard did not carry actual IPv4/IPv6 payload", network, host, err)
+					}
+				}
+			}
+			for _, action := range []string{"restore-dns", "fail-dns", "restore-dns"} {
+				before := peer.observe(t, action)
+				err := f.box.RouterVPNStrategyDNSProof()
+				after := peer.observe(t, "stats")
+				if (err == nil) == (action == "fail-dns") || after.DNSQueries != before.DNSQueries+1 || after.RawUDP <= before.RawUDP || after.RawTCP != 0 {
+					t.Fatal("WireGuard selected DNS escaped the encrypted peer or reused a stale answer", action, err, before, after)
+				}
+			}
+			outer, found := f.box.Outbound().Outbound("proxy")
+			if !found {
+				t.Fatal("WireGuard lost its exact native outbound")
+			}
+			for _, action := range []string{"restore-node", "wrong-node", "restore-node"} {
+				before := peer.observe(t, action)
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				transport := &http.Transport{Proxy: nil, DisableKeepAlives: true, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+					if network != "tcp" || address != desktopNodeRouterHealthTarget {
+						return nil, errors.New("WireGuard Router proof changed its original routed destination")
+					}
+					return outer.DialContext(ctx, network, M.ParseSocksaddr(address))
+				}}
+				client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("WireGuard proof cannot redirect") }}
+				request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+desktopNodeRouterHealthTarget+"/health", nil)
+				if err != nil {
+					cancel()
+					t.Fatal(err)
+				}
+				response, err := client.Do(request)
+				if err != nil {
+					cancel()
+					transport.CloseIdleConnections()
+					t.Fatal("WireGuard Router response did not traverse actual encryption", err)
+				}
+				body, readErr := io.ReadAll(io.LimitReader(response.Body, 1025))
+				closeErr := response.Body.Close()
+				transport.CloseIdleConnections()
+				cancel()
+				var result struct {
+					OK     bool   `json:"ok"`
+					NodeID string `json:"node_id"`
+					Proof  string `json:"proof"`
+				}
+				after := peer.observe(t, "stats")
+				if readErr != nil || closeErr != nil || len(body) > 1024 || response.StatusCode != http.StatusOK || json.Unmarshal(body, &result) != nil || !result.OK || result.Proof != "router-vpn-private-agent-v1" ||
+					(result.NodeID == peer.request.NodeProofID) == (action == "wrong-node") || after.RouterQueries != before.RouterQueries+1 || after.DirectQueries != 0 || after.RawTCP != 0 || after.RawUDP <= before.RawUDP || after.PlainTCP != before.PlainTCP+1 {
+					t.Fatal("WireGuard routed proof lost its independent captured identity or encrypted counters", action, readErr, closeErr, before, after)
+				}
+			}
+			f.kernel.mu.Lock()
+			requests, early := f.kernel.requests, f.kernel.preTUN
+			for _, grant := range f.kernel.grants {
+				if grant.Remote != peer.remote || grant.Network != "udp" {
+					f.kernel.mu.Unlock()
+					t.Fatal("WireGuard acquired another protocol or physical endpoint")
+				}
+			}
+			f.kernel.mu.Unlock()
+			if requests == 0 || early == 0 || f.network.Current() {
+				t.Fatal("WireGuard bypassed captured eager physical ownership or fabricated native readiness")
+			}
+			f.network.InterfaceUpdated(context.Background())
+			before := peer.observe(t, "stats")
+			if f.network.SocketCurrent() || f.kernel.live.Load() || f.exchange("udp") == nil || f.box.RouterVPNStrategyDNSProof() == nil {
+				t.Fatal("retired WireGuard owner opened replacement encrypted traffic")
+			}
+			if err := f.close(); err != nil || !f.source.closed.Load() {
+				t.Fatal("WireGuard close did not join its original physical source", err)
+			}
+			after := peer.observe(t, "stats")
+			if after.DNSQueries != before.DNSQueries || after.RouterQueries != before.RouterQueries || after.PlainTCP != before.PlainTCP || after.PlainUDP != before.PlainUDP {
+				t.Fatal("retired WireGuard generation delivered decrypted traffic", before, after)
+			}
+		})
+	}
+}

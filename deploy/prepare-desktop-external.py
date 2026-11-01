@@ -90,6 +90,7 @@ BOX_TEMPLATES = {
     'tor_plain_box_test.go.tmpl': 'routervpn_desktop_tor_plain_box_test.go',
 }
 PEER_TEMPLATES = {
+    'node_wg_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_wg_peer_test.go',
     'node_linux_peer_test.go.tmpl': 'protocol/routervpnamnezia/node_linux_peer_test.go',
     'node_peer_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_test.go',
     'node_peer_dns_test.go.tmpl': 'protocol/routervpnamnezia/routervpn_desktop_node_peer_dns_test.go',

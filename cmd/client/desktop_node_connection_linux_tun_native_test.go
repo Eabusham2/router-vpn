@@ -36,7 +36,7 @@ func linuxHostTUNPublicConnection(ctx context.Context, a *app, parent *desktopLi
 			return errors.New("public cover selection did not reach its actual runtime option handler")
 		}
 	}
-	request := httptest.NewRequest(http.MethodPost, "/api/connect", strings.NewReader(`{"mode":"shadowsocks"}`)).WithContext(ctx)
+	request := httptest.NewRequest(http.MethodPost, "/api/connect", strings.NewReader(`{"mode":"`+linuxHostTUNMode(scenario)+`"}`)).WithContext(ctx)
 	response := httptest.NewRecorder()
 	a.connect(response, request)
 	if response.Code != http.StatusOK || strings.TrimSpace(response.Body.String()) != `{"ok":true}` {

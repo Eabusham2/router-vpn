@@ -27,13 +27,16 @@ func linuxSealedRestoreFixture(t *testing.T, runtimeCover bool) (*linuxSpeedLabP
 }
 
 func linuxSealedRestoreFixtureWithLayer(t *testing.T, runtimeCover bool, layer string) (*linuxSpeedLabPathFixture, common.RouterProfile) {
+	return linuxSealedRestoreFixtureWithGraph(t, runtimeCover, "shadowsocks", layer)
+}
+
+func linuxSealedRestoreFixtureWithGraph(t *testing.T, runtimeCover bool, mode, layer string) (*linuxSpeedLabPathFixture, common.RouterProfile) {
 	t.Helper()
 	f := newLinuxSpeedLabPathFixture(t)
 	profile := cloneRouterProfile(f.a.profiles.Profiles[0])
 	profile.StartLayer = layer
 	profile.EffectiveMTU = 9000
 	profile.DAITAHost, profile.DAITAPort, profile.DAITARateKbps = "10.77.0.1", 45999, 192
-	f.a.profiles.Profiles[0] = cloneRouterProfile(profile)
 	runtimeProfile := cloneRouterProfile(profile)
 	runtimeProfile.DAITAEnabled = runtimeCover
 	graph, err := json.Marshal(map[string]any{
@@ -45,7 +48,15 @@ func linuxSealedRestoreFixtureWithLayer(t *testing.T, runtimeCover bool, layer s
 	if err != nil {
 		t.Fatal(err)
 	}
-	original, endpoint, err := compileDesktopNode(context.Background(), runtimeProfile, "shadowsocks", map[string][]byte{"sing-box.json": graph}, nil, nil)
+	files := map[string][]byte{"sing-box.json": graph}
+	if mode == "wg" {
+		identity, captured := desktopNodeFixture(t, profile.Endpoint)
+		profile.NodeProofID, runtimeProfile.NodeProofID = identity.NodeProofID, identity.NodeProofID
+		files = captured
+		files["wg.conf"] = append(files["wg.conf"], []byte("PresharedKey = "+testWGKey('s')+"\n")...)
+	}
+	f.a.profiles.Profiles[0] = cloneRouterProfile(profile)
+	original, endpoint, err := compileDesktopNode(context.Background(), runtimeProfile, mode, files, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +85,36 @@ func linuxSealedRestoreFixtureWithLayer(t *testing.T, runtimeCover bool, layer s
 	f.a.state.Mode, f.a.state.RuntimeMode, f.a.state.DAITA = meta.Mode, meta.Mode, runtimeCover
 	f.live.MTU = 1392
 	return f, profile
+}
+
+func TestDesktopLinuxWireGuardSealedRestoreRetainsOriginalPrivateSource(t *testing.T) {
+	for _, cover := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ordinary", true: "captured-cover"}[cover], func(t *testing.T) {
+			f, profile := linuxSealedRestoreFixtureWithGraph(t, cover, "wg", "off")
+			_, saved := captureLinuxSealedRestore(t, f, profile)
+			original, source := f.h.policy.OriginalProfile().Config(), append([]byte(nil), f.h.source...)
+			defer clear(source)
+			if saved.mode != "wg" || saved.mtu != 1392 || saved.options[0] != cover || saved.savedOptions[0] || saved.session != f.s || saved.journal != f.s.journal {
+				t.Fatal("WireGuard restoration lost original graph, owners, options or observed MTU")
+			}
+			clear(f.h.source)
+			f.h.policy = nil
+			compiled, restored, err := saved.compiled(profile)
+			if err != nil || compiled.Config() != original || !bytes.Equal(saved.source, source) || restored.DAITAEnabled != cover ||
+				!strings.Contains(compiled.Config(), testWGKey('p')) || !strings.Contains(compiled.Config(), testWGKey('q')) || !strings.Contains(compiled.Config(), testWGKey('s')) {
+				t.Fatal("WireGuard restoration reread private inputs or substituted original credentials", err)
+			}
+			fresh, err := mobilemultihop.NewDesktopNodePolicyWithMTU(compiled, strings.Repeat("d", 32), "linux", saved.mtu)
+			if err != nil || fresh.Metadata().RestoredMTU != 1392 || fresh.Metadata().Mode != "wg" || fresh.Metadata().StartLayer != "" || restored.StartLayer != "off" || fresh.OriginalProfile().Config() != original {
+				t.Fatal("WireGuard restoration lost its fresh owned MTU or original execution", err)
+			}
+			changed := cloneRouterProfile(profile)
+			changed.APIToken += "replacement"
+			if next, _, err := saved.compiled(changed); err == nil || next != nil {
+				t.Fatal("WireGuard restore adopted a replacement private profile")
+			}
+		})
+	}
 }
 
 func captureLinuxSealedRestore(t *testing.T, f *linuxSpeedLabPathFixture, profile common.RouterProfile) (*desktopLinuxNodePath, *desktopLinuxNodeRestore) {

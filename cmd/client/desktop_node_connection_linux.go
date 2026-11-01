@@ -15,18 +15,18 @@ import (
 )
 
 // This is a narrow platform dispatcher, not a new graph capability predicate.
-// Other modes keep their existing host. A selected protected Shadowsocks graph
+// Other modes keep their existing host. Selected protected Shadowsocks and WG
 // must use its actual installed Linux owner even when its package is missing;
 // verification failure never falls back to a differently owned legacy helper.
 func (a *app) desktopLinuxNodeConnectionSelected(profile common.RouterProfile, mode string) bool {
-	return a.desktopNodeConnectionHost() == nil && mode == "shadowsocks" && desktopOwnedNodeProtectionPolicy(profile) != "off"
+	return a.desktopNodeConnectionHost() == nil && (mode == "shadowsocks" || mode == "wg") && desktopOwnedNodeProtectionPolicy(profile) != "off"
 }
 
 func validateDesktopLinuxNodeConnection(profile common.RouterProfile, mode string, options [3]bool) error {
 	policy := desktopOwnedNodeProtectionPolicy(profile)
 	if !mobilemultihop.DesktopLinuxNodePhysicalGraphSupported(mode, profile.StartLayer) || profile.External != nil ||
 		profile.NodeKind != "" && profile.NodeKind != "router-vpn" || policy != "on-connect" && policy != "always" {
-		return errors.New("Linux retained connection requires the supported protected Shadowsocks graph and exact Start Layer")
+		return errors.New("Linux retained connection requires a supported protected graph and exact Start Layer")
 	}
 	return nil
 }

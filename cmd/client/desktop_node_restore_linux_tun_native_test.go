@@ -60,7 +60,7 @@ func linuxHostTUNSealedRestore(ctx context.Context, a *app, session *desktopLinu
 	defer finish()
 	saved := snapshot.Plan.linux
 	if saved == nil || saved.session != session || saved.journal != session.journal || saved.parent != session.parent ||
-		saved.mtu != measurement.FinalMTU || snapshot.Plan.request.Mode != "shadowsocks" || snapshot.Plan.request.Execution != "local" {
+		saved.mtu != measurement.FinalMTU || snapshot.Plan.request.Mode != previous.launch.mode || snapshot.Plan.request.Execution != "local" {
 		return nil, result, errors.New("installed Speed Lab did not freeze its original execution and observed MTU")
 	}
 	sealed := append([]byte(nil), saved.source...)
@@ -71,7 +71,11 @@ func linuxHostTUNSealedRestore(ctx context.Context, a *app, session *desktopLinu
 	oldWorkspace, oldJournal := previous.launch.directory, session.journal
 	// Today's generated graph is no longer usable. Successful restoration must
 	// still reconstruct the independently retained exact previously proved one.
-	generated := filepath.Join(linuxOwnedControllerRoot, "generated", snapshot.Plan.profile.ID, "shadowsocks", "sing-box.json")
+	asset := "sing-box.json"
+	if saved.mode == "wg" {
+		asset = "wg.conf"
+	}
+	generated := filepath.Join(linuxOwnedControllerRoot, "generated", snapshot.Plan.profile.ID, saved.mode, asset)
 	if err := os.WriteFile(generated, []byte("not the captured private graph\n"), 0600); err != nil {
 		return nil, result, err
 	}

@@ -3,8 +3,8 @@
 
 The actual protected controller uses its ordinary bundle verifier, original
 FD-based engine launcher, durable transaction, selected DNS/MTU readiness and
-private Router proof. A separately compiled SS2022 peer and exact shipping
-whitening relay exercise the captured Start Layers; the peer also serves a
+private Router proof. Separately compiled WireGuard and SS2022 peers and the
+exact shipping whitening relay exercise the captured graphs; each peer serves a
 distinct same-identity direct-LAN control. Each case owns a private namespace.
 No fixture verifier, public admission override or created device is permitted.
 """
@@ -35,17 +35,20 @@ def load(name, relative):
 CHILD = load('linux_installed_host_child', 'test_linux_node_child_tun.py')
 TRANSACTION = load('linux_installed_host_transaction', 'test_linux_node_transaction.py')
 BUILD, NODE, GUARD = CHILD.BUILD, CHILD.NODE, CHILD.GUARD
+WIREGUARD_CASES = tuple('wg-' + case for case in ('public-connect', 'home-lan', 'wrong-key', 'resolver-failure', 'wrong-node',
+                                                'active-network-change', 'cancelled-proof', 'restore-sealed', 'always',
+                                                'cover-connect', 'cover-restore'))
 MTU_CASES = ('mtu-rollback', 'mtu-commit', 'mtu-stale-profile', 'mtu-stale-network', 'mtu-hold', 'mtu-retire-undrained')
 OFF_CASES = ('public-off', 'public-off-save-retry')
 WHITENING_CASES = ('layer-whitening-connect', 'layer-whitening-wrong-key', 'layer-whitening-resolver-failure', 'layer-whitening-cover-restore')
 LAYER_CASES = ('layer-aes-connect', 'layer-aes-restore', *WHITENING_CASES)
-PUBLIC_CASES = ('public-connect', 'cover-connect', 'cover-replies-lost', *OFF_CASES, 'layer-aes-connect', 'layer-whitening-connect')
-RESTORE_CASES = ('restore-sealed', 'cover-restore', 'layer-aes-restore', 'layer-whitening-cover-restore')
-COVER_CASES = ('cover-connect', 'cover-replies-lost', 'cover-wrong-node', 'cover-no-replies', 'cover-restore', 'layer-whitening-cover-restore')
-ACTIVE_CASES = ('active-request-ended', 'cancel-adoption', 'active-profile-change', 'active-network-change', 'active-command-change', *MTU_CASES, *RESTORE_CASES, *PUBLIC_CASES)
-CASES = ('on-connect', 'home-lan', 'wrong-node', 'resolver-failure', 'wrong-key', 'stale-ready', 'cancelled-proof',
+PUBLIC_CASES = ('public-connect', 'cover-connect', 'cover-replies-lost', *OFF_CASES, 'layer-aes-connect', 'layer-whitening-connect', 'wg-public-connect', 'wg-cover-connect')
+RESTORE_CASES = ('restore-sealed', 'cover-restore', 'layer-aes-restore', 'layer-whitening-cover-restore', 'wg-restore-sealed', 'wg-cover-restore')
+COVER_CASES = ('cover-connect', 'cover-replies-lost', 'cover-wrong-node', 'cover-no-replies', 'cover-restore', 'layer-whitening-cover-restore', 'wg-cover-connect', 'wg-cover-restore')
+ACTIVE_CASES = ('active-request-ended', 'cancel-adoption', 'active-profile-change', 'active-network-change', 'active-command-change', 'wg-active-network-change', *MTU_CASES, *RESTORE_CASES, *PUBLIC_CASES)
+CASES = tuple(dict.fromkeys(('on-connect', 'home-lan', 'wrong-node', 'resolver-failure', 'wrong-key', 'stale-ready', 'cancelled-proof',
          'replaced-host', 'request-ended', 'shutdown', 'always', *ACTIVE_CASES, 'cover-wrong-node', 'cover-no-replies',
-         'layer-whitening-wrong-key', 'layer-whitening-resolver-failure')
+         'layer-whitening-wrong-key', 'layer-whitening-resolver-failure', *WIREGUARD_CASES)))
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',
                          'ROUTERVPN_NODE_HOST_WHITENING_BINARY', 'ROUTERVPN_NODE_HOST_WHITENING_SHA256')
@@ -74,6 +77,7 @@ def checked_sources(source):
                 'cmd/client/desktop_node_restore_linux.go', 'cmd/client/desktop_node_restore_linux_tun_native_test.go',
                 'cmd/client/desktop_node_connection_linux.go', 'cmd/client/desktop_node_connection_linux_tun_native_test.go',
                 'cmd/client/desktop_node_start_layer_linux_tun_native_test.go',
+                'cmd/client/desktop_node_wireguard_linux_tun_native_test.go',
                 'cmd/client/profile_protection_platform_linux.go', 'cmd/client/desktop_node_protection_off_linux.go',
                 'cmd/client/desktop_node_protection_off_linux_tun_native_test.go',
                 'cmd/client/bundled_native.go', 'cmd/client/operation_guard.go'}
@@ -136,6 +140,8 @@ def check_verdict(output, case=None):
             raise ValueError('Installed Linux host omitted its exact Always retention, saved-policy Off and native release: ' + value)
         if value in LAYER_CASES and 'verified installed host captured Start Layer: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its exact cipher, outer physical authority and Start Layer lifecycle: ' + value)
+        if value in WIREGUARD_CASES and 'verified installed host plain WireGuard: ' + value + '\n' not in output.replace('\r\n', '\n'):
+            raise ValueError('Installed Linux host omitted its exact UDP WireGuard peer and native owned lifecycle: ' + value)
 
 
 def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case, *, whitening=None, whitening_sha256=None):
@@ -276,7 +282,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'source_sha256': hashlib.sha256(json.dumps(before, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
                   'native_bundle': payloads,
                   'artifacts': {name: {'bytes': identities[path][2], 'sha256': identities[path][-1]} for name, path in
-                                (('installed-controller-test', binary), ('independent-ss2022-peer', peer), ('shipping-whitening-relay', whitening))},
+                                (('installed-controller-test', binary), ('independent-wg-and-ss2022-peers', peer), ('shipping-whitening-relay', whitening))},
                   'cases': list(CASES), 'compiled_negative_controls': [defect], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
     CHILD.publish_receipt(receipt_path, result, workspace)
     print('Actual installed Linux host, complete bundle, selected TUN/DNS/MTU, routed Router identity, retained activation after request completion and durable joined retirement passed.')
