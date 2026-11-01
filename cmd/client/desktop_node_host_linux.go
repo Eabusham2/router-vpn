@@ -65,8 +65,8 @@ func prepareDesktopLinuxNodeHost(operation context.Context, a *app, profile comm
 // the same shipping owners. There is no environment or request override.
 func prepareDesktopLinuxNodeHostWith(operation context.Context, a *app, profile common.RouterProfile, mode string, restoredMTU int,
 	verify func(context.Context, string) (string, error), lookup applexray.Lookup) (*desktopLinuxNodeHost, error) {
-	if operation == nil || operation.Err() != nil || a == nil || verify == nil || mode != "shadowsocks" ||
-		profile.StartLayer != "" && profile.StartLayer != "off" || desktopOwnedNodeProtectionPolicy(profile) == "off" {
+	if operation == nil || operation.Err() != nil || a == nil || verify == nil ||
+		!mobilemultihop.DesktopLinuxNodePhysicalGraphSupported(mode, profile.StartLayer) || desktopOwnedNodeProtectionPolicy(profile) == "off" {
 		return nil, errors.New("Linux Node host requires its captured supported protected graph")
 	}
 	parent, err := captureDesktopLinuxNodeParent(a)

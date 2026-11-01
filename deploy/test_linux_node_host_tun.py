@@ -3,8 +3,9 @@
 
 The actual protected controller uses its ordinary bundle verifier, original
 FD-based engine launcher, durable transaction, selected DNS/MTU readiness and
-private Router proof. A separately compiled SS2022 peer also serves a distinct
-same-identity direct-LAN control. Each scenario owns a fresh private namespace.
+private Router proof. A separately compiled SS2022 peer and exact shipping
+whitening relay exercise the captured Start Layers; the peer also serves a
+distinct same-identity direct-LAN control. Each case owns a private namespace.
 No fixture verifier, public admission override or created device is permitted.
 """
 from pathlib import Path
@@ -36,14 +37,18 @@ TRANSACTION = load('linux_installed_host_transaction', 'test_linux_node_transact
 BUILD, NODE, GUARD = CHILD.BUILD, CHILD.NODE, CHILD.GUARD
 MTU_CASES = ('mtu-rollback', 'mtu-commit', 'mtu-stale-profile', 'mtu-stale-network', 'mtu-hold', 'mtu-retire-undrained')
 OFF_CASES = ('public-off', 'public-off-save-retry')
-PUBLIC_CASES = ('public-connect', 'cover-connect', 'cover-replies-lost', *OFF_CASES)
-RESTORE_CASES = ('restore-sealed', 'cover-restore')
-COVER_CASES = ('cover-connect', 'cover-replies-lost', 'cover-wrong-node', 'cover-no-replies', 'cover-restore')
+WHITENING_CASES = ('layer-whitening-connect', 'layer-whitening-wrong-key', 'layer-whitening-resolver-failure', 'layer-whitening-cover-restore')
+LAYER_CASES = ('layer-aes-connect', 'layer-aes-restore', *WHITENING_CASES)
+PUBLIC_CASES = ('public-connect', 'cover-connect', 'cover-replies-lost', *OFF_CASES, 'layer-aes-connect', 'layer-whitening-connect')
+RESTORE_CASES = ('restore-sealed', 'cover-restore', 'layer-aes-restore', 'layer-whitening-cover-restore')
+COVER_CASES = ('cover-connect', 'cover-replies-lost', 'cover-wrong-node', 'cover-no-replies', 'cover-restore', 'layer-whitening-cover-restore')
 ACTIVE_CASES = ('active-request-ended', 'cancel-adoption', 'active-profile-change', 'active-network-change', 'active-command-change', *MTU_CASES, *RESTORE_CASES, *PUBLIC_CASES)
 CASES = ('on-connect', 'home-lan', 'wrong-node', 'resolver-failure', 'wrong-key', 'stale-ready', 'cancelled-proof',
-         'replaced-host', 'request-ended', 'shutdown', 'always', *ACTIVE_CASES, 'cover-wrong-node', 'cover-no-replies')
+         'replaced-host', 'request-ended', 'shutdown', 'always', *ACTIVE_CASES, 'cover-wrong-node', 'cover-no-replies',
+         'layer-whitening-wrong-key', 'layer-whitening-resolver-failure')
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
-                         'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256')
+                         'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',
+                         'ROUTERVPN_NODE_HOST_WHITENING_BINARY', 'ROUTERVPN_NODE_HOST_WHITENING_SHA256')
 
 
 def checked_sources(source):
@@ -68,6 +73,7 @@ def checked_sources(source):
                 'cmd/client/desktop_node_session_linux.go',
                 'cmd/client/desktop_node_restore_linux.go', 'cmd/client/desktop_node_restore_linux_tun_native_test.go',
                 'cmd/client/desktop_node_connection_linux.go', 'cmd/client/desktop_node_connection_linux_tun_native_test.go',
+                'cmd/client/desktop_node_start_layer_linux_tun_native_test.go',
                 'cmd/client/profile_protection_platform_linux.go', 'cmd/client/desktop_node_protection_off_linux.go',
                 'cmd/client/desktop_node_protection_off_linux_tun_native_test.go',
                 'cmd/client/bundled_native.go', 'cmd/client/operation_guard.go'}
@@ -75,6 +81,10 @@ def checked_sources(source):
         raise ValueError('Installed Linux host gate lost its real verifier, startup, proof or retained native ownership')
     records = {'native/' + name: digest for name, digest in native.items()}
     records.update({'app/' + name: digest for name, digest in app.items()})
+    for path in NODE.layer_reference_sources():
+        if path.is_symlink() or not path.is_file():
+            raise ValueError('Installed Linux Start Layer lost its shipping whitening peer source')
+        records['reference/' + path.relative_to(ROOT).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     for name in ('test_linux_node_host_tun.py', 'test_linux_node_host_tun_runner.py', 'build-native-runtime.py'):
         path = ROOT / 'deploy' / name
         if path.is_symlink() or not path.is_file():
@@ -124,13 +134,20 @@ def check_verdict(output, case=None):
             raise ValueError('Installed Linux host omitted its captured native cover activation/failure/retirement: ' + value)
         if value in OFF_CASES and 'verified installed host saved Linux protection Off: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its exact Always retention, saved-policy Off and native release: ' + value)
+        if value in LAYER_CASES and 'verified installed host captured Start Layer: ' + value + '\n' not in output.replace('\r\n', '\n'):
+            raise ValueError('Installed Linux host omitted its exact cipher, outer physical authority and Start Layer lifecycle: ' + value)
 
 
-def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case):
+def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case, *, whitening=None, whitening_sha256=None):
     if case not in CASES:
         raise ValueError('Installed Linux host has no such captured native scenario')
     if CHILD.image_identity(binary)[-1] != image_sha256 or CHILD.image_identity(peer)[-1] != peer_sha256:
         raise ValueError('Installed Linux host lost an exact compiled image')
+    if whitening is None:
+        if case in WHITENING_CASES or whitening_sha256 is not None:
+            raise ValueError('Installed Linux whitening requires its captured shipping relay image')
+    elif CHILD.image_identity(whitening)[-1] != whitening_sha256:
+        raise ValueError('Installed Linux whitening lost its exact shipping relay image')
     bundle = Path(bundle)
     if not bundle.is_absolute() or bundle.is_symlink() or any(parent.is_symlink() for parent in bundle.parents) or re.fullmatch('[0-9a-f]{64}', bundle_sha256 or '') is None:
         raise ValueError('Installed Linux host lost its captured native bundle directory')
@@ -139,7 +156,8 @@ def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha25
     if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_mode & 0o6022 or not 0 < info.st_size <= 32768 or hashlib.sha256(receipt.read_bytes()).hexdigest() != bundle_sha256:
         raise ValueError('Installed Linux host lost its exact complete bundle receipt')
     current = os.stat('/proc/self/ns/net')
-    values = dict(zip(NAMESPACE_ENVIRONMENT, (str(current.st_dev) + ':' + str(current.st_ino), str(bundle), bundle_sha256, str(peer), peer_sha256)))
+    values = dict(zip(NAMESPACE_ENVIRONMENT, (str(current.st_dev) + ':' + str(current.st_ino), str(bundle), bundle_sha256,
+                                             str(peer), peer_sha256, str(whitening) if whitening is not None else '', whitening_sha256 or '')))
     previous = {name: os.environ.get(name) for name in values}
     os.environ.update(values)
     try:
@@ -227,14 +245,18 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
             status, output = NODE.run(command, cwd=cwd, env=captured, timeout=300)
             if status:
                 raise ValueError('Actual installed host or encrypted peer compilation failed:\n' + output[-16384:])
-        identities = {path: CHILD.image_identity(path) for path in (binary, peer)}
+        whitening, whitening_sha256 = NODE.build_layer_reference(compiler, workspace, captured, ['-race'])
+        identities = {path: CHILD.image_identity(path) for path in (binary, peer, whitening)}
+        if identities[whitening][-1] != whitening_sha256:
+            raise ValueError('Shipping whitening relay changed after its original build')
         if checked_sources(source)[1] != before or bundle_identity(bundle, 'linux/' + architecture, captured) != (receipt, payloads):
             raise ValueError('Installed Linux host source or completed bundle changed during compilation')
         logs = []
         for case in CASES:
             command = [sys.executable, str(Path(__file__).resolve()), '--namespace-test-binary', str(binary), '--peer-binary', str(peer),
                        '--bundle', str(bundle), '--namespace-test-sha256', identities[binary][-1], '--peer-sha256', identities[peer][-1],
-                       '--bundle-sha256', payloads['NATIVE-RUNTIME.json']['sha256'], '--case', case]
+                       '--bundle-sha256', payloads['NATIVE-RUNTIME.json']['sha256'], '--case', case,
+                       '--whitening-binary', str(whitening), '--whitening-sha256', whitening_sha256]
             if sudo is not None:
                 command = [sudo, '-n', '--', *command]
             output = GUARD.UID.run(command, cwd=ROOT, env=captured, timeout=150, sudo=sudo)
@@ -253,7 +275,8 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'pins': {'sing-box': BUILD.PIN, 'xray': BUILD.POLICY.XRAY.XRAY_PIN}, 'source_files': before,
                   'source_sha256': hashlib.sha256(json.dumps(before, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
                   'native_bundle': payloads,
-                  'artifacts': {name: {'bytes': identities[path][2], 'sha256': identities[path][-1]} for name, path in (('installed-controller-test', binary), ('independent-ss2022-peer', peer))},
+                  'artifacts': {name: {'bytes': identities[path][2], 'sha256': identities[path][-1]} for name, path in
+                                (('installed-controller-test', binary), ('independent-ss2022-peer', peer), ('shipping-whitening-relay', whitening))},
                   'cases': list(CASES), 'compiled_negative_controls': [defect], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
     CHILD.publish_receipt(receipt_path, result, workspace)
     print('Actual installed Linux host, complete bundle, selected TUN/DNS/MTU, routed Router identity, retained activation after request completion and durable joined retirement passed.')
@@ -272,6 +295,8 @@ def main(argv=None):
     parser.add_argument('--peer-binary', type=Path, help=argparse.SUPPRESS)
     parser.add_argument('--namespace-test-sha256', help=argparse.SUPPRESS)
     parser.add_argument('--peer-sha256', help=argparse.SUPPRESS)
+    parser.add_argument('--whitening-binary', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--whitening-sha256', help=argparse.SUPPRESS)
     parser.add_argument('--bundle-sha256', help=argparse.SUPPRESS)
     parser.add_argument('--case', choices=CASES, help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
@@ -279,8 +304,10 @@ def main(argv=None):
         if args.source is not None or args.receipt is not None or args.peer_binary is None:
             parser.error('native namespace entry requires only its original compiled artifacts and scenario')
         raise SystemExit(namespace_test(args.namespace_test_binary, args.peer_binary, args.bundle, args.namespace_test_sha256,
-                                       args.peer_sha256, args.bundle_sha256, args.case))
-    if args.source is None or any(value is not None for value in (args.peer_binary, args.namespace_test_sha256, args.peer_sha256, args.bundle_sha256, args.case)):
+                                       args.peer_sha256, args.bundle_sha256, args.case,
+                                       whitening=args.whitening_binary, whitening_sha256=args.whitening_sha256))
+    if args.source is None or any(value is not None for value in (args.peer_binary, args.namespace_test_sha256, args.peer_sha256,
+                                                               args.whitening_binary, args.whitening_sha256, args.bundle_sha256, args.case)):
         parser.error('the full gate requires its exact prepared source and completed native bundle')
     try:
         execute(args.source, args.bundle, args.go, receipt_path=args.receipt)

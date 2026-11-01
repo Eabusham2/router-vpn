@@ -32,7 +32,8 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:6: verified installed host sealed temporary restoration: ' + case for case in cases if case in G.RESTORE_CASES),
                           *('    native_test.go:7: verified installed host public Connect and Disconnect: ' + case for case in cases if case in G.PUBLIC_CASES),
                           *('    native_test.go:8: verified installed host native cover: ' + case for case in cases if case in G.COVER_CASES),
-                          *('    native_test.go:9: verified installed host saved Linux protection Off: ' + case for case in cases if case in G.OFF_CASES)]) + '\n'
+                          *('    native_test.go:9: verified installed host saved Linux protection Off: ' + case for case in cases if case in G.OFF_CASES),
+                          *('    native_test.go:10: verified installed host captured Start Layer: ' + case for case in cases if case in G.LAYER_CASES)]) + '\n'
 
     def test_requires_every_real_positive_negative_and_joined_lifecycle(self):
         output = self.completed()
@@ -103,7 +104,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                         '--peer-sha256', 'b' * 64, '--bundle-sha256', 'c' * 64, '--case', 'home-lan'])
         self.assertEqual(caught.exception.code, 23)
         enter.assert_called_once_with(Path('/captured-controller'), Path('/captured-peer'), Path('/captured-bundle'),
-                                      'a' * 64, 'b' * 64, 'c' * 64, 'home-lan')
+                                      'a' * 64, 'b' * 64, 'c' * 64, 'home-lan', whitening=None, whitening_sha256=None)
         execute.assert_not_called()
         for error in (subprocess.TimeoutExpired(['original-child'], 5), ValueError('original native validation')):
             diagnostic = io.StringIO()
@@ -160,10 +161,44 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                 self.assertEqual(os.environ['ROUTERVPN_NODE_HOST_BUNDLE_SHA256'], bundle_sha)
                 self.assertEqual(os.environ['ROUTERVPN_NODE_HOST_PEER_BINARY'], str(peer))
                 self.assertEqual(os.environ['ROUTERVPN_NODE_HOST_PEER_SHA256'], peer_sha)
+                self.assertEqual(os.environ['ROUTERVPN_NODE_HOST_WHITENING_BINARY'], '')
+                self.assertEqual(os.environ['ROUTERVPN_NODE_HOST_WHITENING_SHA256'], '')
                 raise RuntimeError('actual namespace refusal')
             with patch.object(G.GUARD, 'namespace_test', side_effect=native), self.assertRaisesRegex(RuntimeError, 'actual namespace refusal'):
                 G.namespace_test(binary, peer, bundle, image_sha, peer_sha, bundle_sha, 'home-lan')
             self.assertEqual({name: os.environ[name] for name in previous}, previous)
+
+    def test_whitening_requires_exact_shipping_image_before_namespace_entry(self):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ):
+            root = Path(temporary).resolve()
+            (binary, image_sha), (peer, peer_sha), bundle, bundle_sha = self.images(root)
+            relay = root / 'start-layer-relay'
+            relay.write_bytes(b'exact shipping relay image boundary')
+            relay.chmod(0o755)
+            digest = hashlib.sha256(relay.read_bytes()).hexdigest()
+            previous = {name: 'previous-' + str(index) for index, name in enumerate(G.NAMESPACE_ENVIRONMENT)}
+            os.environ.update(previous)
+            for selected, expected in ((None, None), (relay, None), (relay, '0' * 64)):
+                with self.subTest(selected=selected, expected=expected), patch.object(G.GUARD, 'namespace_test') as native, self.assertRaises(ValueError):
+                    G.namespace_test(binary, peer, bundle, image_sha, peer_sha, bundle_sha, 'layer-whitening-connect',
+                                     whitening=selected, whitening_sha256=expected)
+                native.assert_not_called()
+            def native(actual, selector, identity):
+                self.assertEqual((actual, selector, identity), (binary, 'NodeHostTUN/layer-whitening-connect', image_sha))
+                self.assertEqual(os.environ['ROUTERVPN_NODE_HOST_WHITENING_BINARY'], str(relay))
+                self.assertEqual(os.environ['ROUTERVPN_NODE_HOST_WHITENING_SHA256'], digest)
+                raise RuntimeError('original whitening namespace refusal')
+            with patch.object(G.GUARD, 'namespace_test', side_effect=native), self.assertRaisesRegex(RuntimeError, 'original whitening namespace refusal'):
+                G.namespace_test(binary, peer, bundle, image_sha, peer_sha, bundle_sha, 'layer-whitening-connect',
+                                 whitening=relay, whitening_sha256=digest)
+            self.assertEqual({name: os.environ[name] for name in previous}, previous)
+            original = root / 'original-relay'
+            relay.rename(original)
+            relay.symlink_to(original)
+            with patch.object(G.GUARD, 'namespace_test') as native, self.assertRaises(ValueError):
+                G.namespace_test(binary, peer, bundle, image_sha, peer_sha, bundle_sha, 'layer-whitening-connect',
+                                 whitening=relay, whitening_sha256=digest)
+            native.assert_not_called()
 
     def test_bundle_capture_calls_the_ordinary_complete_verifier_first(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -11,10 +11,9 @@ import (
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
-// Linux retains its own native source and observation type. This capability is
-// not a Windows target alias or a serialized cleanup command. The ordinary
-// public command gate remains closed until its authenticated parent journal
-// and baseline succession use this complete Linux lifecycle.
+// Linux retains its own native source and observation type. The admitted
+// public command owns its authenticated parent journal, baseline succession,
+// exact encrypted graph and complete Linux lifecycle.
 type RouterVPNDesktopLinuxNodePreparation struct {
 	network *routervpndesktoppt.NodeNetworkOwner
 	policy  *mobilemultihop.DesktopNodePolicy
@@ -25,10 +24,10 @@ func routerVPNDesktopLinuxNodeLifecycleAvailable(policy *mobilemultihop.DesktopN
 		return false
 	}
 	meta := policy.Metadata()
-	// The first actual Linux TUN/nft/DNS composition is the direct encrypted
-	// Shadowsocks graph. Other catalog families keep their existing paths and
-	// require the same native lifecycle acceptance before this gate expands.
-	return meta.TargetOS == "linux" && meta.Mode == "shadowsocks" && (meta.StartLayer == "" || meta.StartLayer == "off")
+	// Only the admitted exact Shadowsocks source and its captured AES/whitening
+	// selections may enter this native TUN/nft/DNS lifecycle. The policy seal
+	// rederives the actual outbound, credential, port and physical lower.
+	return meta.TargetOS == "linux" && mobilemultihop.DesktopLinuxNodePhysicalGraphSupported(meta.Mode, meta.StartLayer)
 }
 
 func (s *Box) RouterVPNDesktopLinuxNodePreparePhysicalOwned(policy *mobilemultihop.DesktopNodePolicy) (*RouterVPNDesktopLinuxNodePreparation, error) {

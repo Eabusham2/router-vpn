@@ -65,7 +65,7 @@ func captureDesktopLinuxNodeRestoreWith(ctx context.Context, a *app, path *deskt
 		return nil, err
 	}
 	h := path.host
-	if h.launch.mode != "shadowsocks" || profile.ID != h.launch.profileID || profile.External != nil ||
+	if !mobilemultihop.DesktopLinuxNodePhysicalGraphSupported(h.launch.mode, profile.StartLayer) || profile.ID != h.launch.profileID || profile.External != nil ||
 		profile.NodeKind != "" && profile.NodeKind != "router-vpn" ||
 		desktopOwnedNodeProfileToken(profile) != h.revision ||
 		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != h.savedOptions ||
@@ -97,7 +97,7 @@ func captureDesktopLinuxNodeRestoreWith(ctx context.Context, a *app, path *deskt
 func (saved *desktopLinuxNodeRestore) compiled(profile common.RouterProfile) (*mobilemultihop.NodeProfile, common.RouterProfile, error) {
 	var empty common.RouterProfile
 	if saved == nil || saved.cleared || len(saved.source) == 0 || len(saved.source) > mobilemultihop.NodeLaunchInputLimit ||
-		sha256.Sum256(saved.source) != saved.digest || saved.mode != "shadowsocks" ||
+		sha256.Sum256(saved.source) != saved.digest || !mobilemultihop.DesktopLinuxNodePhysicalGraphSupported(saved.mode, profile.StartLayer) ||
 		desktopOwnedNodeProfileToken(profile) != saved.revision ||
 		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != saved.savedOptions ||
 		saved.mtu < 1280 || saved.mtu > 9000 {

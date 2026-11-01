@@ -191,6 +191,8 @@ type linuxHostTUNPeer struct {
 	done       chan struct{}
 	waitErr    error
 	address    netip.AddrPort
+	aesAddress netip.AddrPort
+	layer      string
 	password   string
 }
 
@@ -206,11 +208,15 @@ func (peer *linuxHostTUNPeer) read(t *testing.T) linuxHostTUNPeerReply {
 		t.Fatal("installed-host encrypted reference lost its original bounded response", err, peer.diagnostic.String())
 	}
 	endpoint, err := netip.ParseAddrPort(reply.Address)
-	if err != nil || endpoint.Addr().String() != "192.168.210.2" || endpoint.Port() == 0 || reply.AESAddress != reply.Address ||
-		peer.address.IsValid() && peer.address != endpoint || reply.RawTCP < 0 || reply.RawUDP < 0 || reply.PlainTCP < 0 || reply.PlainUDP < 0 {
+	aes, aesErr := netip.ParseAddrPort(reply.AESAddress)
+	whitening := peer.layer == common.StartLayerAES256GCMXOR
+	if err != nil || aesErr != nil || endpoint.Addr().String() != "192.168.210.2" || endpoint.Port() == 0 || aes.Addr() != endpoint.Addr() || aes.Port() == 0 ||
+		whitening && (endpoint.Port() != 8389 || aes == endpoint) || !whitening && aes != endpoint ||
+		peer.address.IsValid() && peer.address != endpoint || peer.aesAddress.IsValid() && peer.aesAddress != aes ||
+		reply.RawTCP < 0 || reply.RawUDP < 0 || reply.PlainTCP < 0 || reply.PlainUDP < 0 {
 		t.Fatal("installed-host encrypted reference replaced its captured private endpoint")
 	}
-	peer.address = endpoint
+	peer.address, peer.aesAddress = endpoint, aes
 	return reply
 }
 
@@ -239,11 +245,17 @@ func linuxHostTUNStartPeer(t *testing.T, scenario string) *linuxHostTUNPeer {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Second)
-	peer := &linuxHostTUNPeer{password: base64.StdEncoding.EncodeToString(key[:]), done: make(chan struct{})}
+	t.Cleanup(cancel)
+	peer := &linuxHostTUNPeer{password: base64.StdEncoding.EncodeToString(key[:]), done: make(chan struct{}), layer: linuxHostTUNStartLayer(scenario)}
 	clear(key[:])
 	peer.command = exec.CommandContext(ctx, "ip", "netns", "exec", "rvpn-peer", image,
 		"-test.run=^TestRouterVPNDesktopNodeLayerReferenceProcess$", "-test.count=1", "-test.timeout=105s")
 	peer.command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_NODE_LAYER_REFERENCE_CHILD=1"}
+	if peer.layer == common.StartLayerAES256GCMXOR {
+		relay := filepath.Join(directory, "start-layer-relay")
+		linuxHostTUNCopy(t, os.Getenv("ROUTERVPN_NODE_HOST_WHITENING_BINARY"), relay, 128<<20, os.Getenv("ROUTERVPN_NODE_HOST_WHITENING_SHA256"), 0755)
+		peer.command.Env = append(peer.command.Env, "ROUTER_VPN_WHITENING_TEST_BINARY="+relay)
+	}
 	peer.input, err = peer.command.StdinPipe()
 	if err != nil {
 		cancel()
@@ -282,7 +294,7 @@ func linuxHostTUNStartPeer(t *testing.T, scenario string) *linuxHostTUNPeer {
 		cancel()
 		_ = peer.output.Close()
 	})
-	request := map[string]any{"schema": 1, "mode": "shadowsocks", "layer": "", "address": "192.168.210.2",
+	request := map[string]any{"schema": 1, "mode": "shadowsocks", "layer": peer.layer, "address": "192.168.210.2",
 		"password": peer.password, "node_proof_id": linuxHostTUNNodeID, "direct_router": true, "configuration": map[string]any{}}
 	if linuxHostTUNCoverCase(scenario) {
 		request["cover"] = true
@@ -322,7 +334,7 @@ func linuxHostTUNDirectHealth(t *testing.T, peer *linuxHostTUNPeer) {
 func linuxHostTUNProfile(peer *linuxHostTUNPeer, scenario string) common.RouterProfile {
 	profile := common.RouterProfile{ID: "installed-linux-node", Name: "Actual installed Linux node", NodeKind: "router-vpn", NodeProofID: linuxHostTUNNodeID,
 		Endpoint: peer.address.Addr().String(), RouterAPI: "http://10.77.0.1:8787", AdGuardIPv4: "192.168.50.133", DNSMode: "home", IPv6Mode: "on",
-		KillSwitch: true, KillSwitchPolicy: "on-connect", MTUPolicy: "fixed", ManualMTU: 1376, EffectiveMTU: 9000}
+		KillSwitch: true, KillSwitchPolicy: "on-connect", MTUPolicy: "fixed", ManualMTU: 1376, EffectiveMTU: 9000, StartLayer: peer.layer}
 	if scenario == "home-lan" {
 		profile.HomeLANAccess = true
 		profile.HomeLANCIDRs = []string{"10.77.0.0/24", "192.168.210.0/30"}
@@ -350,7 +362,7 @@ func linuxHostTUNInstallProfile(t *testing.T, peer *linuxHostTUNPeer, scenario s
 		}
 	}
 	password := peer.password
-	if scenario == "wrong-key" {
+	if linuxHostTUNWrongKeyCase(scenario) {
 		password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x27}, 32))
 	}
 	store, err := json.Marshal(common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}})
@@ -362,7 +374,7 @@ func linuxHostTUNInstallProfile(t *testing.T, peer *linuxHostTUNPeer, scenario s
 		t.Fatal(err)
 	}
 	graph, err := json.Marshal(map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
-		"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": profile.Endpoint, "server_port": int(peer.address.Port()),
+		"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": profile.Endpoint, "server_port": int(peer.aesAddress.Port()),
 			"method": "2022-blake3-aes-256-gcm", "password": password}}, "route": map[string]any{"final": "proxy"}})
 	if err != nil || os.WriteFile(filepath.Join(directory, "sing-box.json"), graph, 0600) != nil {
 		t.Fatal("actual installed host lost its private encrypted graph", err)

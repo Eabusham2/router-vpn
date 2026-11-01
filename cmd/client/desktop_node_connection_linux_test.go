@@ -36,7 +36,7 @@ func TestDesktopLinuxPublicSelectionStaysBounded(t *testing.T) {
 }
 
 func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
-	for _, scenario := range []string{"cover-runtime", "start-aes", "start-whitening", "external", "unknown-policy", "missing-controller", "cancelled"} {
+	for _, scenario := range []string{"cover-runtime", "start-aes", "start-whitening", "malformed-layer", "external", "unknown-policy", "missing-controller", "cancelled"} {
 		t.Run(scenario, func(t *testing.T) {
 			root := t.TempDir()
 			t.Setenv("HOMEVPN_ROOT", root)
@@ -49,14 +49,18 @@ func TestDesktopLinuxPublicPreflightRejectsBeforeStop(t *testing.T) {
 					Command: []string{"this-legacy-fallback-must-never-start"}}},
 				state: state{Connected: true, Phase: "connected", Mode: "original", RuntimeMode: "original", RouterID: "previous"},
 				cmd:   &exec.Cmd{}}
-			expected := "supported protected Shadowsocks graph and plain Start Layer"
+			expected := "supported protected Shadowsocks graph and exact Start Layer"
 			switch scenario {
 			case "cover-runtime":
 				a.state.DAITA = true    // Saved false remains independent from this actual selection.
 				expected = "Linux Node" // Requested cover still requires the installed captured native owner.
 			case "start-aes":
-				profile.StartLayer = "aes-256-gcm"
+				profile.StartLayer = common.StartLayerAES256GCM
+				expected = "Linux Node" // Capability is not permission to bypass its missing native owner.
 			case "start-whitening":
+				profile.StartLayer = common.StartLayerAES256GCMXOR
+				expected = "Linux Node"
+			case "malformed-layer":
 				profile.StartLayer = "aes-256-gcm-xor"
 			case "external":
 				profile.NodeKind = "external"

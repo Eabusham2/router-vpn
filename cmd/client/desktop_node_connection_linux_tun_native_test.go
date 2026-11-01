@@ -98,6 +98,10 @@ func linuxHostTUNPublicConnection(ctx context.Context, a *app, parent *desktopLi
 	}
 	result := linuxHostTUNResult{Stage: "ready", Scenario: scenario, SessionID: path.selection.SessionID,
 		Outcome: "proved", Ready: &path.ready, Activation: "retained-after-request", DNSProof: &dns, MTUView: &view, Public: true}
+	result.StartLayer, result.Physical, err = linuxHostTUNLayerSource(ctx, host, scenario)
+	if err != nil {
+		return err
+	}
 	if cover {
 		result.Cover = "native-active"
 	}

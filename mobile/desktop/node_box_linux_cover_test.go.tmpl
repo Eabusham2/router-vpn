@@ -26,51 +26,59 @@ func desktopLinuxCoverProfile(profile map[string]any) {
 // fixture models only OS/TUN ownership and refuses sockets, so these tests
 // establish rejection and pointer retention, never successful cover proof.
 func TestRouterVPNDesktopLinuxNodeCoverRejectsIncompleteNativeOwner(t *testing.T) {
-	for _, fault := range []string{"missing", "wrong-type", "wrong-options", "cancelled", "foreign-physical", "failed-live-proof"} {
-		t.Run(fault, func(t *testing.T) {
-			var registryEdit func(*boxService.Registry)
-			if fault == "wrong-type" {
-				registryEdit = func(registry *boxService.Registry) {
-					boxService.Register[performance.Options](registry, mobileperf.CoverType,
-						func(context.Context, log.ContextLogger, string, performance.Options) (adapter.Service, error) {
-							return &desktopNodeForeignCover{boxService.NewAdapter(mobileperf.CoverType, "routervpn-cover-exit")}, nil
-						})
+	for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		for _, fault := range []string{"missing", "wrong-type", "wrong-options", "cancelled", "foreign-physical", "failed-live-proof"} {
+			t.Run(layer+"/"+fault, func(t *testing.T) {
+				var registryEdit func(*boxService.Registry)
+				if fault == "wrong-type" {
+					registryEdit = func(registry *boxService.Registry) {
+						boxService.Register[performance.Options](registry, mobileperf.CoverType,
+							func(context.Context, log.ContextLogger, string, performance.Options) (adapter.Service, error) {
+								return &desktopNodeForeignCover{boxService.NewAdapter(mobileperf.CoverType, "routervpn-cover-exit")}, nil
+							})
+					}
 				}
-			}
-			f := newDesktopNodeBoxFixtureWithOptions(t, nil, 0, desktopLinuxCoverProfile, registryEdit)
-			physical := f.start(t)
-			options, _, err := f.policy.CoverPolicy()
-			if err != nil || len(options) != 1 {
-				t.Fatal(err)
-			}
-			ctx, cancel := context.WithCancel(context.Background())
-			defer cancel()
-			switch fault {
-			case "missing":
-				if err := f.box.service.Remove(options[0].Tag); err != nil {
+				f := newDesktopNodeBoxFixtureWithOptions(t, nil, 0, func(profile map[string]any) {
+					desktopLinuxCoverProfile(profile)
+					profile["start_layer"] = layer
+				}, registryEdit)
+				if !routerVPNDesktopLinuxNodeLifecycleAvailable(f.policy) {
+					t.Fatal("captured Linux Start Layer lost its exact native graph admission")
+				}
+				physical := f.start(t)
+				options, _, err := f.policy.CoverPolicy()
+				if err != nil || len(options) != 1 {
 					t.Fatal(err)
 				}
-			case "wrong-options":
-				changed := options[0].Options
-				changed.RateKbps = 192
-				actual := performance.Options(changed)
-				if err := f.box.service.Create(f.box.ctx, log.NewNOPFactory().Logger(), options[0].Tag, mobileperf.CoverType, &actual); err != nil {
-					t.Fatal(err)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				switch fault {
+				case "missing":
+					if err := f.box.service.Remove(options[0].Tag); err != nil {
+						t.Fatal(err)
+					}
+				case "wrong-options":
+					changed := options[0].Options
+					changed.RateKbps = 192
+					actual := performance.Options(changed)
+					if err := f.box.service.Create(f.box.ctx, log.NewNOPFactory().Logger(), options[0].Tag, mobileperf.CoverType, &actual); err != nil {
+						t.Fatal(err)
+					}
+				case "cancelled":
+					cancel()
+				case "foreign-physical":
+					physical = newDesktopNodeBoxFixture(t, nil).start(t)
 				}
-			case "cancelled":
-				cancel()
-			case "foreign-physical":
-				physical = newDesktopNodeBoxFixture(t, nil).start(t)
-			}
-			if owner, err := f.box.RouterVPNDesktopLinuxNodeActivateCover(ctx, f.policy, physical); err == nil || owner != nil {
-				t.Fatal("incomplete native cover acquired active readiness", fault)
-			}
-			for _, raw := range f.box.RouterVPNServices() {
-				if service, ok := raw.(*performance.Service); ok && service.Healthy() {
-					t.Fatal("rejected native cover retained an active worker")
+				if owner, err := f.box.RouterVPNDesktopLinuxNodeActivateCover(ctx, f.policy, physical); err == nil || owner != nil {
+					t.Fatal("incomplete native cover acquired active readiness", fault)
 				}
-			}
-		})
+				for _, raw := range f.box.RouterVPNServices() {
+					if service, ok := raw.(*performance.Service); ok && service.Healthy() {
+						t.Fatal("rejected native cover retained an active worker")
+					}
+				}
+			})
+		}
 	}
 }
 

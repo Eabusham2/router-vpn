@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemultihop"
 )
 
 // This is a narrow platform dispatcher, not a new graph capability predicate.
@@ -23,9 +24,9 @@ func (a *app) desktopLinuxNodeConnectionSelected(profile common.RouterProfile, m
 
 func validateDesktopLinuxNodeConnection(profile common.RouterProfile, mode string, options [3]bool) error {
 	policy := desktopOwnedNodeProtectionPolicy(profile)
-	if mode != "shadowsocks" || profile.External != nil || profile.NodeKind != "" && profile.NodeKind != "router-vpn" ||
-		profile.StartLayer != "" && profile.StartLayer != "off" || policy != "on-connect" && policy != "always" {
-		return errors.New("Linux retained connection requires the supported protected Shadowsocks graph and plain Start Layer")
+	if !mobilemultihop.DesktopLinuxNodePhysicalGraphSupported(mode, profile.StartLayer) || profile.External != nil ||
+		profile.NodeKind != "" && profile.NodeKind != "router-vpn" || policy != "on-connect" && policy != "always" {
+		return errors.New("Linux retained connection requires the supported protected Shadowsocks graph and exact Start Layer")
 	}
 	return nil
 }
