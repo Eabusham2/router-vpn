@@ -34,6 +34,10 @@ func linuxEmptyRecoveryApp(owner *ownedDesktopController) *app {
 }
 
 func linuxNodeEmptyRecoveryFixture(owner *ownedDesktopController, scenario string) error {
+	release := strings.HasPrefix(scenario, "release-")
+	if release {
+		scenario = strings.TrimPrefix(scenario, "release-")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 	a := linuxEmptyRecoveryApp(owner)
@@ -42,6 +46,9 @@ func linuxNodeEmptyRecoveryFixture(owner *ownedDesktopController, scenario strin
 		return err
 	}
 	if strings.HasPrefix(scenario, "seed") {
+		if release {
+			return linuxNodeReleaseRecoverySeed(ctx, a, parent, scenario)
+		}
 		return linuxNodeEmptyRecoverySeed(ctx, a, parent, scenario)
 	}
 	if err := json.NewEncoder(os.Stdout).Encode(parent.record); err != nil {
@@ -73,6 +80,21 @@ func linuxNodeEmptyRecoveryFixture(owner *ownedDesktopController, scenario strin
 		}
 	}()
 	if err := s.beginEmptyRecoveryLocked(ctx); err != nil {
+		if !release || scenario != "open-error" || s.emptyRecovery == nil || s.emptyRecovery.openErr == nil || s.journalErr == nil {
+			return err
+		}
+		if s.emptyRecovery.journal == nil || s.emptyRecovery.journal.removal != nil {
+			return errors.New("release recovery discarded an ambiguous original open")
+		}
+		s.gate <- struct{}{}
+		locked = false
+		if a.guardDesktopOwnedNodeTransition(nil) == nil {
+			return errors.New("release recovery admitted a replacement after an ambiguous open")
+		}
+		if err := parent.parent.Close(ctx); err != nil {
+			return err
+		}
+		_, err := fmt.Fprintln(os.Stdout, "captured-empty-recovery-rejected")
 		return err
 	}
 	r, j := s.emptyRecovery, s.emptyRecovery.journal
@@ -96,6 +118,16 @@ func linuxNodeEmptyRecoveryFixture(owner *ownedDesktopController, scenario strin
 		before := r.original
 		r.original.ProcessID = parent.record.ProcessID
 		restore = func() error { r.original = before; return nil }
+	case "checkpoint-drift":
+		before := j.current
+		j.current.Record = linuxprotection.CloneRecord(j.current.Record)
+		j.current.Record.Intent.RequestID = strings.Repeat("e", 32)
+		restore = func() error { j.current = before; return nil }
+	case "replacement-owner":
+		a.mu.Lock()
+		a.cmd = &exec.Cmd{}
+		a.mu.Unlock()
+		restore = func() error { a.mu.Lock(); a.cmd = nil; a.mu.Unlock(); return nil }
 	case "replaced-session":
 		p := parent.parent
 		<-p.gate

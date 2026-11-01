@@ -17,16 +17,20 @@ import (
 )
 
 // Empty recovery is a new, authenticated controller's ownership of these
-// exact old files. It never reconstructs a native baseline, adopts an engine,
+// exact old files after native protection is independently proved absent.
+// It accepts a settled empty checkpoint or an already-requested On-connect
+// release whose joined controller, engine and guardian are now absent. It
+// never reconstructs a native baseline, adopts an engine,
 // changes a saved policy, or signals a process named by a journal. The session
 // gate serializes every retry; its journalErr blocks competing admission until
 // the captured deletion and every original descriptor close have completed.
 type desktopLinuxEmptyJournalRecovery struct {
-	session  *desktopLinuxNodeSession
-	journal  *desktopLinuxNodeJournal
-	original linuxprotection.ParentRecord
-	openErr  error
-	ready    bool
+	session    *desktopLinuxNodeSession
+	journal    *desktopLinuxNodeJournal
+	original   linuxprotection.ParentRecord
+	checkpoint linuxprotection.JournalSelection
+	openErr    error
+	ready      bool
 }
 
 func (a *app) initializeDesktopNodeRecovery() error {
@@ -97,6 +101,8 @@ func (s *desktopLinuxNodeSession) beginEmptyRecoveryLocked(ctx context.Context) 
 	recovery.journal, recovery.openErr = openDesktopLinuxNodeJournal(ctx, s.parent)
 	if recovery.journal != nil {
 		recovery.original = recovery.journal.header.Creator
+		recovery.checkpoint = recovery.journal.current
+		recovery.checkpoint.Record = linuxprotection.CloneRecord(recovery.journal.current.Record)
 	}
 	return recovery.openErr
 }
@@ -145,12 +151,47 @@ func checkDesktopLinuxEmptyRecoveryCreator(original, current linuxprotection.Par
 	return nil
 }
 
+// This comparison identifies the exact processes which must be absent; it
+// creates no process or rule authority. A complete release intent is written
+// only after the original source and engine joined, and requests an empty
+// result. A crash after its native removal but before the final journal write
+// may therefore finish the same empty-file cleanup after independent proof.
+// Always, saved Off, prepared successors and partial records remain retained.
+func checkDesktopLinuxEmptyRecoveryCheckpoint(original, current linuxprotection.ParentRecord, checkpoint linuxprotection.JournalSelection) ([]int, error) {
+	r := checkpoint.Record
+	if checkDesktopLinuxEmptyRecoveryCreator(original, current) != nil || checkpoint.Incomplete ||
+		r.Validate() != nil || r.Controller != original {
+		return nil, errors.New("Linux recovery requires its complete original controller checkpoint")
+	}
+	pids := []int{original.ProcessID}
+	if r.Phase == "settled" && r.Intent == nil && reflect.DeepEqual(r.Committed, linuxprotection.JournalState{}) {
+		return pids, nil
+	}
+	target, intent := r.Committed.Target, r.Intent
+	if r.Phase != "intent" || target == nil || r.Committed.Engine != nil || target.Policy != "on-connect" ||
+		target.Native.TableName == "" || intent == nil || intent.Action != "release" || intent.Preparation != nil ||
+		intent.RequestID != target.Native.Capture.SessionID || intent.ProfileID != r.Committed.ProfileID ||
+		intent.ProfileRevision != r.Committed.ProfileRevision || intent.ResultProfileRevision != r.Committed.ProfileRevision ||
+		!reflect.DeepEqual(intent.Candidate, linuxprotection.JournalState{}) {
+		return nil, errors.New("Linux recovery preserves nonempty, incomplete or unresolved original protection records")
+	}
+	guardian := target.Guardian
+	if guardian.BootID != original.BootID || guardian.NetworkNamespace != original.NetworkNamespace || guardian.PIDNamespace != original.PIDNamespace ||
+		guardian.StartTicks < original.StartTicks || guardian.StartTicks > current.StartTicks ||
+		guardian.ProcessID == original.ProcessID || guardian.ProcessID == current.ProcessID ||
+		guardian.ProcProcessID == original.ProcProcessID || guardian.ProcProcessID == current.ProcProcessID ||
+		guardian.ParentProcessID == original.ProcessID || guardian.ParentProcessID == current.ProcessID {
+		return nil, errors.New("Linux release recovery lost its recorded same-boot engine and guardian identities")
+	}
+	return append(pids, guardian.ParentProcessID, guardian.ProcessID), nil
+}
+
 // pidfd_open is used only as an independent *absence* observation. A live,
 // zombie or reused PID is rejected; its returned descriptor is closed without
 // signaling, waiting, adopting or comparing it into authority. ESRCH is the
 // sole successful result. The original authenticated parent brackets the read
 // and fixes the calling thread's PID namespace, boot and process lifetime.
-func (r *desktopLinuxEmptyJournalRecovery) observeExitedCreator(ctx context.Context, retiring bool) error {
+func (r *desktopLinuxEmptyJournalRecovery) observeExitedProcesses(ctx context.Context, retiring bool) error {
 	if err := r.current(ctx, retiring); err != nil {
 		return err
 	}
@@ -159,19 +200,25 @@ func (r *desktopLinuxEmptyJournalRecovery) observeExitedCreator(ctx context.Cont
 	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
 		return errors.New("Linux empty recovery requires its proved native pidfd ABI")
 	}
-	if err := r.current(ctx, retiring); err != nil {
+	pids, err := checkDesktopLinuxEmptyRecoveryCheckpoint(r.original, r.session.parent.record, r.checkpoint)
+	if err != nil {
 		return err
 	}
-	descriptor, _, errno := syscall.Syscall(434, uintptr(r.original.ProcessID), 0, 0) // Linux __NR_pidfd_open on x64/ARM64.
-	if errno == 0 {
-		file := os.NewFile(descriptor, "linux-empty-journal-live-creator-observation")
-		if file == nil {
-			return errors.New("Linux empty recovery lost its rejected live-process descriptor")
+	for _, pid := range pids {
+		if err := r.current(ctx, retiring); err != nil {
+			return err
 		}
-		return errors.Join(errors.New("Linux empty recovery cannot prove the recorded controller has exited"), file.Close())
-	}
-	if errno != syscall.ESRCH {
-		return os.NewSyscallError("pidfd_open original empty-journal controller", errno)
+		descriptor, _, errno := syscall.Syscall(434, uintptr(pid), 0, 0) // Linux __NR_pidfd_open on x64/ARM64.
+		if errno == 0 {
+			file := os.NewFile(descriptor, "linux-empty-journal-live-process-observation")
+			if file == nil {
+				return errors.New("Linux empty recovery lost its rejected live-process descriptor")
+			}
+			return errors.Join(errors.New("Linux recovery cannot prove every recorded controller, engine and guardian has exited"), file.Close())
+		}
+		if errno != syscall.ESRCH {
+			return os.NewSyscallError("pidfd_open original journal process", errno)
+		}
 	}
 	return r.current(ctx, retiring)
 }
@@ -183,7 +230,7 @@ func (r *desktopLinuxEmptyJournalRecovery) current(ctx context.Context, retiring
 	s, j := r.session, r.journal
 	if s.emptyRecovery != r || s.closed || s.released || s.active != nil || s.predecessor != nil || s.off != nil || s.journal != nil ||
 		!sameDesktopLinuxParentCapture(s.parent, j.parent) || r.original != j.header.Creator ||
-		checkDesktopLinuxEmptyRecoveryCreator(r.original, s.parent.record) != nil {
+		checkDesktopLinuxEmptyRecoveryCreator(r.original, s.parent.record) != nil || !reflect.DeepEqual(r.checkpoint, j.current) {
 		return errors.New("Linux empty recovery cannot replace its captured session, files or controller")
 	}
 	var err error
@@ -227,7 +274,7 @@ func (r *desktopLinuxEmptyJournalRecovery) current(ctx context.Context, retiring
 }
 
 func (r *desktopLinuxEmptyJournalRecovery) removalCurrent(ctx context.Context, retiring bool) error {
-	if err := r.observeExitedCreator(ctx, retiring); err != nil {
+	if err := r.observeExitedProcesses(ctx, retiring); err != nil {
 		return err
 	}
 	if err := mobiletor.ReadDesktopLinuxProtectionAbsence(ctx); err != nil {
@@ -237,8 +284,8 @@ func (r *desktopLinuxEmptyJournalRecovery) removalCurrent(ctx context.Context, r
 }
 
 // The caller owns the session gate from the first accepted open through each
-// retry. Only a complete settled-empty original record enters deletion. An
-// error leaves this exact capability and its journalErr in the same session.
+// retry. Only the two complete original checkpoints described above enter
+// deletion. An error retains this capability and journalErr in the same session.
 func (s *desktopLinuxNodeSession) finishEmptyRecoveryLocked(ctx context.Context, retiring bool) (failure error) {
 	r := s.emptyRecovery
 	if r == nil || r.ready {
@@ -309,10 +356,11 @@ func (s *desktopLinuxNodeSession) finishEmptyRecoveryLocked(ctx context.Context,
 func (r *desktopLinuxEmptyJournalRecovery) removeLocked(ctx context.Context, retiring bool) error {
 	j := r.journal
 	if j.removal == nil {
-		if !j.initialized || j.closed || j.released || j.ctx.Err() != nil || j.pending != nil || j.current.Incomplete ||
-			j.current.Record.Controller != r.original || j.current.Record.Phase != "settled" || j.current.Record.Intent != nil ||
-			!reflect.DeepEqual(j.current.Record.Committed, linuxprotection.JournalState{}) {
-			return errors.New("Linux recovery preserves nonempty, incomplete or unresolved original protection records")
+		if !j.initialized || j.closed || j.released || j.ctx.Err() != nil || j.pending != nil {
+			return errors.New("Linux recovery requires its original complete and unused journal")
+		}
+		if _, err := checkDesktopLinuxEmptyRecoveryCheckpoint(r.original, r.session.parent.record, r.checkpoint); err != nil {
+			return err
 		}
 		if err := j.verifyObjects(); err != nil {
 			return err

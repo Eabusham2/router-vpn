@@ -23,8 +23,10 @@ type desktopLinuxNodeJournalRemovalFile struct {
 }
 
 // Terminal cleanup retains its original creator. The separately captured
-// startup capability is limited to a proved-dead creator's settled-empty
-// checkpoint. Both retain the original descriptors and each successful unlink;
+// startup capability requires a proved-dead creator and independently empty
+// native policy: a settled empty checkpoint or its complete On-connect release
+// intent after the recorded children are also absent. Both retain the original
+// descriptors and each successful unlink;
 // neither a pathname nor a decoded record can resume another removal.
 type desktopLinuxNodeJournalRemoval struct {
 	files            [4]desktopLinuxNodeJournalRemovalFile

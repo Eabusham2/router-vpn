@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Require the actual empty-checkpoint restart cases in the shipping gate."""
+"""Require actual empty/released-checkpoint restart cases in the shipping gate."""
 from pathlib import Path
 import importlib.util
 import unittest
@@ -10,7 +10,7 @@ SPEC.loader.exec_module(RUNNER)
 
 
 def markers(native):
-    groups = {'TestLinuxOwnedControllerNamespaceEmptyJournalRecovery': RUNNER.EMPTY_RECOVERY_CASES} if native else RUNNER.EMPTY_RECOVERY_UNITS
+    groups = RUNNER.RECOVERY_NATIVE_GROUPS if native else RUNNER.EMPTY_RECOVERY_UNITS
     return ['--- PASS: '+name+' (0.01s)' for group, leaves in groups.items()
             for name in (group, *(group+'/'+leaf for leaf in leaves))]
 
@@ -38,8 +38,10 @@ class LinuxEmptyRecoveryRunner(unittest.TestCase):
 
     def test_source_and_native_case_are_in_shipping_controller_gate(self):
         self.assertIn('EmptyJournalRecovery', RUNNER.CASES)
+        self.assertIn('ReleaseJournalRecovery', RUNNER.CASES)
         for name in ('cmd/client/desktop_node_recovery_linux.go', 'cmd/client/desktop_node_recovery_linux_test.go',
-                     'cmd/client/desktop_node_recovery_linux_native_test.go'):
+                     'cmd/client/desktop_node_recovery_linux_native_test.go', 'cmd/client/desktop_node_recovery_release_linux_test.go',
+                     'cmd/client/desktop_node_recovery_release_linux_native_test.go'):
             self.assertIn(name, RUNNER.source_identity())
 
 

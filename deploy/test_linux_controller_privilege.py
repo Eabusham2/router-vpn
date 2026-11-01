@@ -34,15 +34,30 @@ CASES = ('FixedInstallAndPipeLifetime', 'RejectsUnsafeInstallAndConfig',
          'RejectsForeignIdentityAndInput', 'HonorsInstallAndProcessLocks', 'RequiresBoundedHandshake',
          'RejectsUnownedInstalledMainPreservesUtilities', 'NodeParentRetainsExactObjects', 'NodeParentLifetimeAndRestart',
          'JournalRetainsNativeFiles', 'JournalRequiresActualAbsence', 'JournalRetainsFailedRetirement',
-         'JournalSurvivesUpgradeWithoutAdoption', 'NodeEngineLauncher', 'EmptyJournalRecovery')
+         'JournalSurvivesUpgradeWithoutAdoption', 'NodeEngineLauncher', 'EmptyJournalRecovery', 'ReleaseJournalRecovery')
 EMPTY_RECOVERY_CASES = ('startup', 'restart', 'cancel-retry', 'cancel-shutdown', 'live-creator',
                         'creator-drift', 'replaced-session', 'root-replaced', 'slot-replaced', 'slot-bytes', 'namespace-changed',
                         'foreign-node', 'fixed-legacy', 'unrelated-policy', 'partial-record', 'intent-record', 'nonempty-record')
+RELEASE_RECOVERY_CASES = ('startup', 'restart', 'cancel-retry', 'cancel-shutdown',
+    'live-controller', 'zombie-controller', 'different-birth-controller', 'live-engine', 'zombie-engine', 'different-birth-engine',
+    'live-guardian', 'zombie-guardian', 'different-birth-guardian', 'native-still-present', 'foreign-node', 'fixed-legacy', 'unrelated-policy',
+    'always-release', 'saved-off', 'partial-record', 'chain-mismatch', 'creator-drift', 'checkpoint-drift', 'replaced-session',
+    'replacement-owner', 'root-replaced', 'slot-replaced', 'slot-bytes', 'namespace-changed')
+RECOVERY_NATIVE_GROUPS = {
+    'TestLinuxOwnedControllerNamespaceEmptyJournalRecovery': EMPTY_RECOVERY_CASES,
+    'TestLinuxOwnedControllerNamespaceReleaseJournalRecovery': RELEASE_RECOVERY_CASES,
+}
 EMPTY_RECOVERY_UNITS = {
     'TestDesktopLinuxEmptyRecoveryCreatorComparison': ('distinct', 'package-upgrade', 'same-tick', 'same-capture', 'same-pid',
         'same-proc-pid', 'future-creator', 'boot', 'caller', 'anchor', 'install-lock', 'process-lock', 'network', 'pid-namespace',
         'old-invalid', 'new-invalid'),
     'TestDesktopLinuxEmptyRecoveryRequiresCapturedOwner': ('absent', 'no-session', 'no-journal', 'foreign-session'),
+    'TestDesktopLinuxReleaseRecoveryCheckpointComparison': ('complete-release', 'package-upgrade', 'settled-empty', 'incomplete',
+        'invalid-record', 'controller', 'always-release', 'saved-off', 'legacy-target', 'settled-target', 'missing-intent', 'missing-target',
+        'engine-not-joined', 'prepare', 'successor', 'preparation', 'nonempty-candidate', 'request', 'profile', 'revision', 'result-revision',
+        'guardian-boot', 'guardian-network', 'guardian-pid-namespace', 'guardian-before-parent', 'guardian-after-restart',
+        'guardian-is-old-controller', 'guardian-is-current-controller', 'guardian-proc-alias-old', 'guardian-proc-alias-current',
+        'engine-is-old-controller', 'engine-is-current-controller', 'engine-is-guardian'),
 }
 PROCESS_CASES = ('Witness', 'CreatedBootstrap', 'RejectsForeignBootstrap', 'RetainsOriginalProcView',
                  'RejectsRetiredAndReexecutedTask', 'RetainsFailedClose', 'RejectsForeignPidFD',
@@ -53,7 +68,7 @@ PROCESS_CASES = ('Witness', 'CreatedBootstrap', 'RejectsForeignBootstrap', 'Reta
 def check_empty_recovery_verdict(output, *, native=False):
     if '--- SKIP:' in output or '--- FAIL:' in output:
         raise ValueError('Linux empty recovery skipped or failed an original owner boundary')
-    groups = {'TestLinuxOwnedControllerNamespaceEmptyJournalRecovery': EMPTY_RECOVERY_CASES} if native else EMPTY_RECOVERY_UNITS
+    groups = RECOVERY_NATIVE_GROUPS if native else EMPTY_RECOVERY_UNITS
     passed = re.findall(r'(?m)^\s*--- PASS: (\S+) \([0-9]+(?:\.[0-9]+)?s\)$', output)
     for group, leaves in groups.items():
         for name in (group, *(group+'/'+leaf for leaf in leaves)):
@@ -152,6 +167,7 @@ def execute(go='go'):
                 'cmd/client/desktop_node_linux_journal_native_test.go', 'internal/linuxprotection/record.go',
                 'cmd/client/desktop_node_recovery_linux.go', 'cmd/client/desktop_node_recovery_linux_test.go',
                 'cmd/client/desktop_node_recovery_linux_native_test.go', 'cmd/client/desktop_node_linux_journal_cleanup.go',
+                'cmd/client/desktop_node_recovery_release_linux_test.go', 'cmd/client/desktop_node_recovery_release_linux_native_test.go',
                 'internal/linuxprotection/journal_record.go', 'internal/linuxprotection/journal_header.go',
                 'internal/linuxprotection/journal_record_test.go', 'internal/mobiletor/desktop_socket_linux_expectation.go',
                 'internal/linuxprocess/record.go', 'internal/linuxprocess/process_linux.go',
@@ -175,7 +191,7 @@ def execute(go='go'):
     compiler, env = UID.compiler_toolchain(ROOT, go, env)
     UID.run([compiler, 'test', '-race', '-mod=readonly', '-count=1', './internal/linuxprotection', './internal/linuxprocess'], cwd=ROOT, env=env)
     recovery_units = UID.run([compiler, 'test', '-race', '-mod=readonly', '-count=1', '-v',
-                              '-run=^TestDesktopLinuxEmptyRecovery', './cmd/client'], cwd=ROOT, env=env)
+                              '-run=^TestDesktopLinux(Empty|Release)Recovery', './cmd/client'], cwd=ROOT, env=env)
     check_empty_recovery_verdict(recovery_units)
     print(recovery_units, end='' if recovery_units.endswith('\n') else '\n')
     UID.run([sys.executable, ROOT/'deploy/test_linux_empty_recovery_runner.py'], cwd=ROOT, env=env)
