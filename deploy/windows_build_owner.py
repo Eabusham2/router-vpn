@@ -6,6 +6,7 @@ authority. Nested child jobs remain inside this non-breakaway owner.
 """
 import ctypes
 import json
+import math
 import os
 import subprocess
 import sys
@@ -13,6 +14,8 @@ import time
 
 JOIN_SECONDS = 10.0
 KILL_ON_CLOSE = 0x2000
+ACTIVE_PROCESS_LIMIT = 0x8
+MAX_RETAINED_PROCESSES = 4096
 MAX_REQUEST = 4 * 1024 * 1024
 
 # -I -S prevents user/site startup code before the admission barrier. The
@@ -68,11 +71,20 @@ class Accounting(ctypes.Structure):
                 ("terminated", ctypes.c_uint32)]
 
 
+class ProcessListHeader(ctypes.Structure):
+    _fields_ = [("assigned", ctypes.c_uint32), ("listed", ctypes.c_uint32)]
+
+
 class WindowsJob:
     def __init__(self):
         if os.name != "nt":
             raise RuntimeError("Windows build ownership requires the actual Windows host")
         api = self.api = ctypes.WinDLL("kernel32", use_last_error=True)
+        self.member_handles = {}
+        self.unverified_handles = set()
+        self.retiring = False
+        self.retirement_error = None
+        self.join_deadline = None
         handle, pointer, dword, boolean = ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int
         declarations = {
             "CreateJobObjectW": ([pointer, ctypes.c_wchar_p], handle),
@@ -82,6 +94,8 @@ class WindowsJob:
             "AssignProcessToJobObject": ([handle, handle], boolean),
             "IsProcessInJob": ([handle, handle, pointer], boolean),
             "TerminateJobObject": ([handle, dword], boolean),
+            "OpenProcess": ([dword, boolean, dword], handle),
+            "WaitForSingleObject": ([handle, dword], dword),
             "CloseHandle": ([handle], boolean),
         }
         for name, (arguments, result) in declarations.items():
@@ -127,20 +141,149 @@ class WindowsJob:
             raise RuntimeError("Windows build job accounting is incomplete")
         return record.active
 
+    def seal(self):
+        # Retirement cannot admit another descendant while an original member
+        # remains. Read back the original job, including the no-breakaway flag.
+        # Native coverage exercises a creator inside a nested child job too.
+        limits = ExtendedLimits()
+        limits.basic.flags = KILL_ON_CLOSE | ACTIVE_PROCESS_LIMIT
+        limits.basic.active_limit = 1
+        self.checked(self.api.SetInformationJobObject(self.handle, 9, ctypes.byref(limits), ctypes.sizeof(limits)))
+        actual, returned = ExtendedLimits(), ctypes.c_uint32()
+        self.checked(self.api.QueryInformationJobObject(self.handle, 9, ctypes.byref(actual), ctypes.sizeof(actual), ctypes.byref(returned)))
+        if (returned.value != ctypes.sizeof(actual) or actual.basic.flags != limits.basic.flags or
+                actual.basic.active_limit != 1):
+            raise RuntimeError("Windows build retirement did not seal its original job")
+
+    def members(self):
+        # JobObjectBasicProcessIdList includes descendants in nested jobs. PIDs
+        # are lookup hints only: membership on each retained handle is required.
+        capacity = 64
+        for _ in range(8):
+            self.remaining()
+            record = ctypes.create_string_buffer(ctypes.sizeof(ProcessListHeader) + capacity * ctypes.sizeof(ctypes.c_size_t))
+            returned = ctypes.c_uint32()
+            ok = self.api.QueryInformationJobObject(self.handle, 3, record, ctypes.sizeof(record), ctypes.byref(returned))
+            error = ctypes.get_last_error() if not ok else 0
+            if not ok and error != 234:  # Only ERROR_MORE_DATA permits another bounded query.
+                raise ctypes.WinError(error)
+            if not ok:
+                # A failed call supplies no membership authority. In particular,
+                # do not interpret a zero-initialized/partial header as empty.
+                capacity *= 2
+                if capacity > MAX_RETAINED_PROCESSES:
+                    raise RuntimeError("Windows build job membership exceeded its captured bound")
+                continue
+            header_size = ctypes.sizeof(ProcessListHeader)
+            if returned.value < header_size or returned.value > ctypes.sizeof(record):
+                raise RuntimeError("Windows build job membership has an incomplete returned length")
+            header = ProcessListHeader.from_buffer(record)
+            if header.assigned > MAX_RETAINED_PROCESSES or header.listed > capacity or header.listed > header.assigned:
+                raise RuntimeError("Windows build job membership is not bounded and complete")
+            required = header_size + header.listed * ctypes.sizeof(ctypes.c_size_t)
+            if returned.value < required:
+                raise RuntimeError("Windows build job membership omitted returned process identities")
+            if header.listed != header.assigned:
+                capacity = max(capacity * 2, header.assigned)
+                if capacity > MAX_RETAINED_PROCESSES:
+                    raise RuntimeError("Windows build job membership exceeded its captured bound")
+                continue
+            values = (ctypes.c_size_t * header.listed).from_buffer(record, ctypes.sizeof(ProcessListHeader))
+            members = set(values)
+            if len(members) != header.listed or any(pid <= 0 or pid > 0xffffffff for pid in members):
+                raise RuntimeError("Windows build job returned an invalid process snapshot")
+            return members
+        raise RuntimeError("Windows build job membership did not settle within its bounded snapshot")
+
+    def capture_members(self):
+        original = self.members()
+        for pid in sorted(original):
+            self.remaining()
+            # Query plus synchronization only. No enumerated PID receives
+            # PROCESS_TERMINATE, and no process-name scan grants authority.
+            handle = self.api.OpenProcess(0x100000 | 0x1000, False, pid)
+            if not handle:
+                raise RuntimeError("Windows build lost a member before retaining its completion handle")
+            self.unverified_handles.add(handle)
+            try:
+                assigned = ctypes.c_int()
+                self.checked(self.api.IsProcessInJob(handle, self.handle, ctypes.byref(assigned)))
+                if assigned.value != 1:
+                    raise RuntimeError("Windows build process lookup no longer belongs to its original job")
+                self.member_handles[pid] = handle
+                self.unverified_handles.remove(handle)
+            except BaseException:
+                self.checked(self.api.CloseHandle(handle))
+                self.unverified_handles.remove(handle)
+                raise
+        # Existing members may finish naturally; their original handles remain
+        # waitable. An uncaptured/new member makes this retirement incomplete.
+        if not self.members().issubset(original):
+            raise RuntimeError("Windows build admitted an uncaptured process during retirement")
+
+    def remaining(self):
+        now = time.monotonic()
+        if self.join_deadline is None or now >= self.join_deadline:
+            raise RuntimeError("Windows build descendants exceeded their original join deadline")
+        return self.join_deadline - now
+
     def terminate(self):
+        if not self.retiring:
+            self.retiring = True
+            self.join_deadline = time.monotonic() + JOIN_SECONDS
+            try:
+                self.seal()
+                self.capture_members()
+            except BaseException as error:
+                # Still terminate the original job. An incomplete capture must
+                # subsequently fail join, even if active accounting reaches zero.
+                self.retirement_error = error
         self.checked(self.api.TerminateJobObject(self.handle, 125))
 
     def join(self, timeout=JOIN_SECONDS):
-        deadline = time.monotonic() + timeout
+        if not self.retiring:
+            raise RuntimeError("Windows build retirement has no original process capture")
+        self.join_deadline = min(self.join_deadline, time.monotonic() + timeout)
+        self.remaining()
+        for handle in self.member_handles.values():
+            status = self.api.WaitForSingleObject(handle, max(1, math.ceil(self.remaining() * 1000)))
+            if status != 0:  # WAIT_OBJECT_0 is the actual process completion witness.
+                raise RuntimeError("Windows build original descendant did not signal completion")
+        self.close_members()
+        # Accounting is an additional check, not a replacement for waiting on
+        # the actual process objects. TerminateJobObject is asynchronous.
         while self.active():
-            if time.monotonic() >= deadline:
-                raise RuntimeError("Windows build descendants did not leave their retained job")
-            time.sleep(0.01)
+            time.sleep(min(0.01, self.remaining()))
+        self.remaining()
+        if self.retirement_error is not None:
+            # Join every successfully retained member even after an incomplete
+            # capture, but never turn those partial observations into success.
+            raise RuntimeError("Windows build retirement has no complete original process capture") from self.retirement_error
+
+    def close_members(self):
+        failure = None
+        for pid, handle in tuple(self.member_handles.items()):
+            if self.api.CloseHandle(handle):
+                del self.member_handles[pid]
+            else:
+                failure = ctypes.WinError(ctypes.get_last_error())
+        # A failed membership/close check retains cleanup ownership only. These
+        # handles never grant membership, wait, termination or success authority.
+        for handle in tuple(self.unverified_handles):
+            if self.api.CloseHandle(handle):
+                self.unverified_handles.remove(handle)
+            else:
+                failure = ctypes.WinError(ctypes.get_last_error())
+        if failure is not None:
+            raise failure
 
     def close(self):
-        if self.handle:
-            handle, self.handle = self.handle, None
-            self.checked(self.api.CloseHandle(handle))
+        try:
+            if self.handle:
+                self.checked(self.api.CloseHandle(self.handle))
+                self.handle = None
+        finally:
+            self.close_members()
 
 
 def close_created_process(process):
@@ -148,6 +291,37 @@ def close_created_process(process):
     if process.returncode is None:
         raise RuntimeError("Cannot release an unjoined build bootstrap")
     process._handle.Close()
+
+
+def retire_created_process(job, process, *, unadmitted):
+    """Finish original owners even when admission or a cleanup operation fails."""
+    failures = []
+    try:
+        # Assignment can have entered the native job before its readback fails.
+        # Capture that original membership before terminating the bootstrap.
+        job.terminate()
+    except BaseException as error:
+        failures.append(error)
+    try:
+        if unadmitted and process.poll() is None:
+            # This is the original retained Popen handle, never a reopened PID.
+            # Still stop it if original-job termination itself failed.
+            process.kill()
+    except BaseException as error:
+        failures.append(error)
+    try:
+        process.communicate(timeout=job.remaining())
+        close_created_process(process)
+    except BaseException as error:
+        failures.append(error)
+    try:
+        job.join()
+    except BaseException as error:
+        failures.append(error)
+    if len(failures) == 1:
+        raise failures[0]
+    if failures:
+        raise BaseExceptionGroup("Windows build cleanup could not join its original owners", failures)
 
 
 def run(command, *, cwd=None, env=None, timeout):
@@ -179,7 +353,7 @@ def run(command, *, cwd=None, env=None, timeout):
             job.terminate()
             # Terminating the retained job stops writers as well as the immediate
             # wrapper. communicate cannot wait forever on an orphaned pipe.
-            stdout, stderr = process.communicate(timeout=JOIN_SECONDS)
+            stdout, stderr = process.communicate(timeout=job.remaining())
             close_created_process(process)
             job.join()
             joined = True
@@ -196,14 +370,6 @@ def run(command, *, cwd=None, env=None, timeout):
     finally:
         try:
             if process is not None and not joined:
-                if assigned:
-                    job.terminate()
-                elif process.poll() is None:
-                    # Only the original bootstrap exists before admission.
-                    # Closing its input is never interpreted as permission.
-                    process.kill()
-                process.communicate(timeout=JOIN_SECONDS)
-                close_created_process(process)
-                job.join()
+                retire_created_process(job, process, unadmitted=not assigned)
         finally:
             job.close()
