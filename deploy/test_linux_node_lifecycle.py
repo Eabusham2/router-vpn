@@ -32,7 +32,7 @@ NODE = load("linux_node_source", "test_desktop_node_physical.py")
 GUARD = load("linux_node_namespace", "test_desktop_linux_guardian.py")
 CASES = ("NodeLifecycle", "NodeFailedAdmission", "NodeFailedDNS", "NodeRestoreCaptured", "NodeRouterHealthPeer", "NodeRouterDirectControl")
 SUBCASES = {
-    "NodeLifecycle": ("on-connect", "always"),
+    "NodeLifecycle": ("prepared-only", "on-connect", "always"),
     "NodeFailedAdmission": ("cancel", "callback-error", "changed-baseline"),
     "NodeFailedDNS": ("resolver-failure", "wrong-key"),
     "NodeRestoreCaptured": ("capture", "restore"),

@@ -241,6 +241,20 @@ type desktopNodeLinuxFixture struct {
 	baseline    *mobiletor.DesktopLinuxNodeBaseline
 	prepared    routervpndesktoppt.NodeLinuxPhysicalPrepared
 	admissions  int
+	beforeTUN   func()
+}
+
+func (f *desktopNodeLinuxFixture) close() error {
+	if err := f.desktopNodePeerFixture.close(); err != nil {
+		return err
+	}
+	// Preparation can precede ServiceManager.Initialize, so Box.Close alone
+	// has no started service to join. Retain and close the exact preparation
+	// before observing or closing its original protection descriptors.
+	if f.preparation != nil {
+		return f.preparation.CloseSource(context.Background())
+	}
+	return nil
 }
 
 func desktopNodeLinuxBox(t *testing.T, original *mobilemultihop.NodeProfile, restoredMTU int, fault string) *desktopNodeLinuxFixture {
@@ -309,6 +323,9 @@ func desktopNodeLinuxBox(t *testing.T, original *mobilemultihop.NodeProfile, res
 		}
 		if err := f.baseline.BindPrepared(ctx, prepared.Protection); err != nil {
 			return err
+		}
+		if f.beforeTUN != nil {
+			f.beforeTUN()
 		}
 		f.prepared, f.admissions = prepared, 1
 		switch fault {
@@ -394,17 +411,41 @@ func desktopNodeLinuxTUNTraffic(network, host string) error {
 
 func TestDesktopLinuxGuardianKernelNodeLifecycle(t *testing.T) {
 	desktopNodeLinuxNamespace(t)
-	desktopNodeLinuxRequireTUN(t)
+	t.Run("prepared-only", func(t *testing.T) {
+		peer := desktopNodeLinuxReference(t)
+		f := desktopNodeLinuxBox(t, peer.original(t, "always", ""), 0, "")
+		if f.admissions != 0 || f.baseline != nil || f.network.Current() || f.network.SocketCurrent() {
+			t.Fatal("Linux preparation entered native admission before startup")
+		}
+		if err := f.preparation.CloseProtection(context.Background()); err == nil {
+			t.Fatal("unstarted Linux preparation fabricated a joined source")
+		}
+		if err := f.close(); err != nil {
+			t.Fatal("unstarted Linux preparation did not join its exact service", err)
+		}
+		if record, returned, err := f.preparation.RetainedProtection(context.Background()); err != nil || record != nil || returned {
+			t.Fatal("unstarted Linux cleanup invented a native protection owner", err)
+		}
+		desktopNodeLinuxProbe(t, peer, false)
+	})
 	for _, kill := range []string{"on-connect", "always"} {
 		t.Run(kill, func(t *testing.T) {
+			desktopNodeLinuxRequireTUN(t)
 			peer := desktopNodeLinuxReference(t)
 			desktopNodeLinuxProbe(t, peer, false)
 			f := desktopNodeLinuxBox(t, peer.original(t, kill, ""), 0, "")
-			desktopNodeLinuxProbe(t, peer, true)
+			beforeTUNProbes := 0
+			// The baseline is created during Initialize after capture of the
+			// actual interface, before sockets and the TUN can be admitted.
+			// Probe at that barrier, not before the native factory has run.
+			f.beforeTUN = func() {
+				desktopNodeLinuxProbe(t, peer, true)
+				beforeTUNProbes++
+			}
 			if err := f.box.RouterVPNStrategyStart(); err != nil {
 				t.Fatal("actual Linux TUN/guardian native startup", err)
 			}
-			if f.admissions != 1 || f.network.Current() || !f.network.SocketCurrent() {
+			if f.admissions != 1 || beforeTUNProbes != 1 || f.network.Current() || !f.network.SocketCurrent() {
 				t.Fatal("actual Linux native startup fabricated completed readiness")
 			}
 			owner, err := f.box.RouterVPNDesktopLinuxNodeActivatePhysical(context.Background(), f.policy)
@@ -453,7 +494,12 @@ func TestDesktopLinuxGuardianKernelNodeFailedAdmission(t *testing.T) {
 		t.Run(fault, func(t *testing.T) {
 			peer := desktopNodeLinuxReference(t)
 			f := desktopNodeLinuxBox(t, peer.original(t, "always", ""), 0, fault)
-			if err := f.box.RouterVPNStrategyStart(); err == nil || f.admissions != 1 || f.network.SocketCurrent() || f.network.Current() {
+			beforeTUNProbes := 0
+			f.beforeTUN = func() {
+				desktopNodeLinuxProbe(t, peer, true)
+				beforeTUNProbes++
+			}
+			if err := f.box.RouterVPNStrategyStart(); err == nil || f.admissions != 1 || beforeTUNProbes != 1 || f.network.SocketCurrent() || f.network.Current() {
 				t.Fatal("Linux native startup accepted a cancelled, failed or changed admission", err)
 			}
 			if _, err := net.InterfaceByName("router-vpn"); err == nil {
