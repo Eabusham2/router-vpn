@@ -7,7 +7,10 @@ The six-target metadata cases are independent object-format fixtures. Only
 from pathlib import Path
 import argparse
 import copy
+import ctypes
+from contextlib import redirect_stderr
 import importlib.util
+import io
 import json
 import shutil
 import struct
@@ -87,8 +90,160 @@ def read_tests():
         reject(lambda: V.read_regular(path, 4096), 'empty native payload')
 
 
+def diagnostic_tests():
+    class NativeCall:
+        def __init__(self, function):
+            self.function = function
+        def __call__(self, *arguments):
+            return self.function(*arguments)
+    for scenario in ('users', 'empty', 'start-error', 'register-error', 'list-error',
+                     'oversized', 'changed-list', 'invalid-count', 'end-error'):
+        events, queries = [], 0
+        binary = Path('captured image.exe').absolute()
+        def start(session, flags, key):
+            check(flags == 0 and len(key) == 33, 'native diagnostic session arguments')
+            session._obj.value = 71
+            events.append('start')
+            return 353 if scenario == 'start-error' else 0
+        def register(session, files, names, applications, processes, services, service_names):
+            check(session.value == 71 and files == 1 and names[0] == str(binary) and
+                  applications == services == 0 and processes is service_names is None,
+                  'native diagnostic registers only its captured file')
+            events.append('register')
+            return 5 if scenario == 'register-error' else 0
+        def listed(session, needed, count, entries, reboot):
+            nonlocal queries
+            queries += 1
+            events.append('list')
+            check(session.value == 71 and queries <= 2, 'native diagnostic query has a fixed bound')
+            if scenario == 'list-error':
+                return 5
+            if scenario == 'empty':
+                return 0
+            if entries is None:
+                needed._obj.value = 33 if scenario == 'oversized' else 1
+                return 234
+            if scenario == 'changed-list':
+                needed._obj.value = 2
+                return 234
+            if scenario == 'invalid-count':
+                count._obj.value = 2
+                return 0
+            check(ctypes.sizeof(entries[0]) == 668, 'Restart Manager uses its exact native ABI')
+            entries[0].process.pid = 123
+            entries[0].process.started.low, entries[0].process.started.high = 5, 7
+            for field, value in (('name', 'captured \u03a9'), ('service', 'owned-service')):
+                encoded = value.encode('utf-16-le')
+                for index in range(len(encoded) // 2):
+                    getattr(entries[0], field)[index] = int.from_bytes(encoded[2*index:2*index+2], 'little')
+            entries[0].kind, entries[0].status, entries[0].session = 3, 1, 4
+            entries[0].restartable = 1
+            return 0
+        def end(session):
+            check(session.value == 71, 'diagnostic closes only its original native session')
+            events.append('end')
+            return 6 if scenario == 'end-error' else 0
+        library = SimpleNamespace(**{name: NativeCall(function) for name, function in (
+            ('RmStartSession', start), ('RmRegisterResources', register),
+            ('RmGetList', listed), ('RmEndSession', end))})
+        with patch.object(V.platform, 'system', return_value='Windows'), \
+                patch.object(ctypes, 'WinDLL', return_value=library, create=True) as load:
+            result = V.windows_image_users(binary)
+        load.assert_called_once_with('Rstrtmgr.dll', winmode=0x00000800)
+        check(events[-1] == ('start' if scenario == 'start-error' else 'end'),
+              'native diagnostic retires every successfully created session')
+        if scenario in ('users', 'end-error'):
+            check(result['processes'] == [{'pid': 123, 'started_filetime': (7 << 32) | 5,
+                'application': 'captured \u03a9', 'service': 'owned-service', 'kind': 3,
+                'status': 1, 'session': 4, 'restartable': True}], 'native diagnostic preserves process identity')
+        elif scenario == 'empty':
+            check(result['processes'] == [], 'successful empty query remains explicit')
+        else:
+            check('processes' not in result, 'failed or incomplete query cannot assert an empty holder list')
+        if scenario == 'end-error':
+            check(result['end_status'] == 6, 'native diagnostic preserves its cleanup failure')
+    with tempfile.TemporaryDirectory(prefix='desktop-tor-diagnostic-') as temporary:
+        root = Path(temporary).resolve()
+        binary = root / 'captured.exe'
+        binary.write_bytes(b'unchanged diagnostic payload')
+        captured = V.image_file_observation(binary)
+        original = PermissionError(13, 'captured cleanup failure', str(binary))
+        original.winerror = 5
+        valid = SimpleNamespace(returncode=0, stdout=b'{"processes":[]}', stderr=b'')
+        for child in (valid, SimpleNamespace(returncode=7, stdout=b'{}', stderr=b'native query refused'),
+                      SimpleNamespace(returncode=0, stdout=b'[]', stderr=b''),
+                      SimpleNamespace(returncode=0, stdout=b'x' * 32769, stderr=b''),
+                      V.subprocess.TimeoutExpired('exact diagnostic child', 5), OSError('diagnostic launch refused')):
+            output = io.StringIO()
+            with patch.object(V.subprocess, 'run', side_effect=child if isinstance(child, Exception) else None,
+                              return_value=child) as run, redirect_stderr(output):
+                V.report_relocation_failure(binary, 'windows/arm64', captured, original)
+            arguments, options = run.call_args
+            check(arguments[0][-2:] == ['--diagnose-windows-image', str(binary)] and
+                  options['timeout'] == 5 and options['check'] is False and run.call_count == 1,
+                  'diagnostic uses one bounded child for the exact image')
+            report = json.loads(output.getvalue().split(': ', 1)[1])
+            check(report['captured'] == report['failed'] == captured and
+                  report['original_error']['winerror'] == 5 and report['original_error']['filename'] == str(binary),
+                  'diagnostic keeps original native failure and file identity')
+        check(binary.read_bytes() == b'unchanged diagnostic payload' and V.image_file_observation(binary) == captured,
+              'diagnostic does not modify the captured file or attributes')
+        if V.platform.system() == 'Windows':
+            # Use the current running executable as the recognized resource,
+            # not an arbitrary Python read handle. RM_UNIQUE_PROCESS binds
+            # its PID to the FILETIME returned by GetProcessTimes.
+            class FileTime(ctypes.Structure):
+                _fields_ = [('low', ctypes.c_uint32), ('high', ctypes.c_uint32)]
+            kernel = ctypes.WinDLL('kernel32.dll', winmode=0x00000800, use_last_error=True)
+            kernel.GetCurrentProcess.argtypes, kernel.GetCurrentProcess.restype = [], ctypes.c_void_p
+            kernel.GetProcessTimes.argtypes = [ctypes.c_void_p, *([ctypes.POINTER(FileTime)] * 4)]
+            kernel.GetProcessTimes.restype = ctypes.c_int32
+            created, exited, system, user = FileTime(), FileTime(), FileTime(), FileTime()
+            if not kernel.GetProcessTimes(kernel.GetCurrentProcess(), ctypes.byref(created), ctypes.byref(exited),
+                                          ctypes.byref(system), ctypes.byref(user)):
+                raise ctypes.WinError(ctypes.get_last_error())
+            started = (created.high << 32) | created.low
+            image = Path(V.sys.executable).resolve()
+            image_error = PermissionError(13, 'known running image diagnostic probe', str(image))
+            image_error.winerror = 5
+            output = io.StringIO()
+            with redirect_stderr(output):
+                V.report_relocation_failure(image, V.host_target(), V.image_file_observation(image), image_error)
+            observed = json.loads(output.getvalue().split(': ', 1)[1])
+            native = observed.get('restart_manager', {})
+            check(native.get('list_status') == native.get('end_status') == 0 and
+                  started > 0 and any(item['pid'] == V.os.getpid() and item['started_filetime'] == started
+                      for item in native.get('processes', [])),
+                  'actual Windows diagnostic must identify its exact running-image owner: ' + repr(observed))
+        with patch.object(V.subprocess, 'run', side_effect=AssertionError('foreign host queried')):
+            V.report_relocation_failure(binary, 'linux/amd64', captured, original)
+        package = FIXTURE.write(root / 'package', 'windows/arm64')
+        for diagnostic_failure in (False, True):
+            relocated = root / ('relocation-' + str(diagnostic_failure))
+            relocated.mkdir()
+            class FailedCleanup:
+                def __enter__(self):
+                    return str(relocated)
+                def __exit__(self, *ignored):
+                    raise original
+            output = io.StringIO()
+            with patch.object(tempfile, 'TemporaryDirectory', return_value=FailedCleanup()), \
+                    patch.object(V, 'offline_self_test', return_value=V.offline_receipt()), \
+                    patch.object(V, 'report_relocation_failure', side_effect=RuntimeError('diagnostic failure') if diagnostic_failure else None) as report, \
+                    redirect_stderr(output):
+                try:
+                    actual_tests(package, 'windows/arm64')
+                except PermissionError as caught:
+                    check(caught is original and caught.winerror == 5, 'diagnostic must preserve the exact cleanup exception')
+                else:
+                    raise AssertionError('Relocation cleanup failure was suppressed')
+            check(report.call_count == 1 and report.call_args.args[1] == 'windows/arm64' and
+                  report.call_args.args[3] is original, 'actual relocation path diagnoses the original failed cleanup once')
+
+
 def metadata_tests():
     read_tests()
+    diagnostic_tests()
     for target in V.TARGETS:
         for exit_code in (0, 7):
             events = []
@@ -224,13 +379,27 @@ def metadata_tests():
 def actual_tests(package, target, within_native=False, unpatched=None):
     record = V.verify(package, target, source_root=ROOT, exact=not within_native)
     check(V.offline_self_test(package / V.binary_name(target), target) == V.offline_receipt(), 'actual offline owner/control proof')
-    with tempfile.TemporaryDirectory(prefix='desktop-tor-relocation-') as temporary:
-        moved = Path(temporary).resolve() / 'relocated app' / 'runtime' / 'native'
-        moved.mkdir(parents=True)
-        for name in V.names(target):
-            shutil.copy2(package / name, moved / name)
-        check(V.verify(moved, target, source_root=ROOT) == record, 'relocation changed receipt')
-        check(V.offline_self_test(moved / V.binary_name(target), target) == V.offline_receipt(), 'actual relocated offline owner')
+    completed, image, captured = False, None, None
+    try:
+        with tempfile.TemporaryDirectory(prefix='desktop-tor-relocation-') as temporary:
+            moved = Path(temporary).resolve() / 'relocated app' / 'runtime' / 'native'
+            moved.mkdir(parents=True)
+            for name in V.names(target):
+                shutil.copy2(package / name, moved / name)
+            image = moved / V.binary_name(target)
+            captured = V.image_file_observation(image)
+            check(V.verify(moved, target, source_root=ROOT) == record, 'relocation changed receipt')
+            check(V.offline_self_test(image, target) == V.offline_receipt(), 'actual relocated offline owner')
+            completed = True
+    except OSError as error:
+        if completed:
+            try:
+                V.report_relocation_failure(image, target, captured, error)
+            except Exception:
+                # Even an unavailable diagnostic or failed stderr write must
+                # leave the original cleanup error and native status intact.
+                pass
+        raise
     if unpatched:
         reject(lambda: V.offline_self_test(unpatched, target), 'actual stock Tor without owned padding')
     print('PASS actual source-built Tor and relocated offline control ' + target, flush=True)

@@ -17,6 +17,7 @@ import socket
 import stat
 import struct
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -308,6 +309,111 @@ def wait_owned_process(process, target, timeout):
     return code
 
 
+def image_file_observation(binary):
+    """Read file metadata without acquiring deletion or process authority."""
+    try:
+        info = Path(binary).lstat()
+    except OSError as error:
+        return {'error': type(error).__name__, 'errno': error.errno,
+                'winerror': getattr(error, 'winerror', None)}
+    return {name: getattr(info, name, None) for name in (
+        'st_dev', 'st_ino', 'st_mode', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns',
+        'st_file_attributes', 'st_reparse_tag')}
+
+
+def windows_image_users(binary):
+    """Query Restart Manager for one file; never shut down or restart owners.
+
+    The diagnostic child bounds the native call's lifetime. Record native
+    errors and process-list churn rather than treating an empty/partial query
+    as proof that an executable image is released.
+    https://learn.microsoft.com/windows/win32/api/restartmanager/nf-restartmanager-rmgetlist
+    """
+    if platform.system() != 'Windows':
+        raise ValueError('Windows image diagnostics require the actual Windows host')
+    import ctypes as C
+    class FileTime(C.Structure):
+        _fields_ = [('low', C.c_uint32), ('high', C.c_uint32)]
+    class UniqueProcess(C.Structure):
+        _fields_ = [('pid', C.c_uint32), ('started', FileTime)]
+    class ProcessInfo(C.Structure):
+        # WCHAR and all integer fields have fixed Windows ABI widths, even
+        # when portable tests exercise the query through a recording library.
+        _fields_ = [('process', UniqueProcess), ('name', C.c_uint16 * 256),
+                    ('service', C.c_uint16 * 64), ('kind', C.c_int32),
+                    ('status', C.c_uint32), ('session', C.c_uint32), ('restartable', C.c_int32)]
+    library = C.WinDLL('Rstrtmgr.dll', winmode=0x00000800)  # LOAD_LIBRARY_SEARCH_SYSTEM32
+    signatures = {
+        'RmStartSession': [C.POINTER(C.c_uint32), C.c_uint32, C.POINTER(C.c_wchar)],
+        'RmRegisterResources': [C.c_uint32, C.c_uint32, C.POINTER(C.c_wchar_p),
+                                C.c_uint32, C.POINTER(UniqueProcess), C.c_uint32, C.POINTER(C.c_wchar_p)],
+        'RmGetList': [C.c_uint32, C.POINTER(C.c_uint32), C.POINTER(C.c_uint32),
+                      C.POINTER(ProcessInfo), C.POINTER(C.c_uint32)],
+        'RmEndSession': [C.c_uint32],
+    }
+    for name, arguments in signatures.items():
+        function = getattr(library, name)
+        function.argtypes, function.restype = arguments, C.c_uint32
+    session, key = C.c_uint32(), C.create_unicode_buffer(33)
+    result = {'start_status': library.RmStartSession(C.byref(session), 0, key)}
+    if result['start_status']:
+        return result
+    try:
+        filenames = (C.c_wchar_p * 1)(str(Path(binary).absolute()))
+        result['register_status'] = library.RmRegisterResources(session, 1, filenames, 0, None, 0, None)
+        if result['register_status']:
+            return result
+        needed, count, reboot = C.c_uint32(), C.c_uint32(), C.c_uint32()
+        status = library.RmGetList(session, C.byref(needed), C.byref(count), None, C.byref(reboot))
+        result.update(list_status=status, needed=needed.value, reboot_reasons=reboot.value)
+        if status == 0 and needed.value == 0 and count.value == 0:
+            result['processes'] = []
+            return result
+        if status != 234 or not 0 < needed.value <= 32:
+            return result
+        capacity = needed.value
+        entries, count = (ProcessInfo * capacity)(), C.c_uint32(capacity)
+        status = library.RmGetList(session, C.byref(needed), C.byref(count), entries, C.byref(reboot))
+        result.update(list_status=status, needed=needed.value, returned=count.value, reboot_reasons=reboot.value)
+        if status or count.value > capacity:
+            return result
+        text = lambda value: bytes(value).decode('utf-16-le', errors='replace').split('\0', 1)[0]
+        result['processes'] = [{'pid': item.process.pid,
+            'started_filetime': (item.process.started.high << 32) | item.process.started.low,
+            'application': text(item.name), 'service': text(item.service), 'kind': item.kind,
+            'status': item.status, 'session': item.session, 'restartable': bool(item.restartable)}
+            for item in entries[:count.value]]
+        return result
+    finally:
+        result['end_status'] = library.RmEndSession(session)
+
+
+def report_relocation_failure(binary, target, captured, error):
+    """Add bounded evidence to a failed cleanup without changing its verdict."""
+    if not target.startswith('windows/'):
+        return
+    report = {'target': target, 'file': str(binary), 'captured': captured,
+              'failed': image_file_observation(binary),
+              'original_error': {'type': type(error).__name__, 'errno': error.errno,
+                                 'winerror': getattr(error, 'winerror', None),
+                                 'filename': str(error.filename)}}
+    try:
+        process = subprocess.run([sys.executable, str(Path(__file__).resolve()),
+                                  '--diagnose-windows-image', str(binary)],
+                                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                 timeout=5, check=False)
+        report['diagnostic_exit'] = process.returncode
+        if process.stderr:
+            report['diagnostic_stderr'] = process.stderr[-2048:].decode('utf-8', errors='replace')
+        if len(process.stdout) <= 32768:
+            report['restart_manager'] = SERVER.json_object(process.stdout)
+        else:
+            report['diagnostic_error'] = 'oversized native diagnostic'
+    except Exception as diagnostic_error:
+        report['diagnostic_error'] = type(diagnostic_error).__name__ + ': ' + str(diagnostic_error)[:2048]
+    print('Desktop Tor relocation cleanup evidence: ' + json.dumps(report, sort_keys=True), file=sys.stderr, flush=True)
+
+
 def offline_self_test(binary, target):
     require_host(target)
     binary = Path(binary).absolute()
@@ -490,3 +596,9 @@ def pe_dependencies(raw, target):
     if not dependencies:
         raise ValueError('Windows native PE dependency directories are missing or stripped')
     return dependencies
+
+
+if __name__ == '__main__':
+    if len(sys.argv) != 3 or sys.argv[1] != '--diagnose-windows-image':
+        raise SystemExit('Only an owned Windows image diagnostic is supported')
+    print(json.dumps(windows_image_users(Path(sys.argv[2]).absolute()), sort_keys=True), flush=True)
