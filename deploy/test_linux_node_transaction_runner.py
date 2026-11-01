@@ -15,7 +15,33 @@ def completed(group="NodeTransaction"):
     return [prefix + " (1.00s)", *(prefix + "/" + name + " (0.10s)" for name in RUNNER.GROUPS[group])]
 
 
+def completed_units():
+    return ["--- PASS: " + name + " (0.10s)" for group, leaves in RUNNER.UNIT_CASES.items()
+            for name in (group, *(group + "/" + leaf for leaf in leaves))]
+
+
 class LinuxNodeTransactionRunner(unittest.TestCase):
+    def test_activation_requires_all_captured_unit_boundaries(self):
+        rows = completed_units()
+        RUNNER.check_unit_verdict("\n".join(rows))
+        for missing, marker in enumerate(rows):
+            with self.subTest(missing=marker), self.assertRaises(ValueError):
+                RUNNER.check_unit_verdict("\n".join(rows[:missing] + rows[missing + 1:]))
+
+    def test_activation_rejects_logged_or_duplicate_pass_markers(self):
+        rows = completed_units()
+        for marker in rows:
+            for replacement in ("fixture.go:42: " + marker, marker + "\n" + marker):
+                with self.subTest(marker=marker, replacement=replacement), self.assertRaises(ValueError):
+                    RUNNER.check_unit_verdict("\n".join(rows).replace(marker, replacement))
+
+    def test_activation_rejects_skipped_failed_or_empty_verdicts(self):
+        complete = "\n".join(completed_units())
+        for output in ("", complete + "\n--- SKIP: missing original owner (0.01s)",
+                       complete + "\n--- FAIL: cancelled adoption (0.01s)"):
+            with self.subTest(output=output[-90:]), self.assertRaises(ValueError):
+                RUNNER.check_unit_verdict(output)
+
     def test_complete_actual_verdict_is_accepted(self):
         for group in RUNNER.GROUPS:
             RUNNER.check_verdict("\n".join(completed(group)), group)

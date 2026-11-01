@@ -130,10 +130,14 @@ func (h *desktopLinuxNodeHost) runningLocked(ctx context.Context) error {
 	}
 	defer func() { t.gate <- struct{}{} }()
 	if t.process != h.process || t.policy != h.policy || t.selection != h.selection || !t.complete || !t.served || !t.admitted ||
-		!t.nativeCommitted || t.retirement != nil || t.closed || t.retired || t.pending != nil {
+		!t.nativeCommitted || t.stopRequested.Load() || t.retiring || t.retirement != nil || t.closed || t.retired || t.pending != nil {
 		return errors.New("Linux Node lost its original admitted source and durable transaction")
 	}
-	if err := t.accepted(ctx); err != nil {
+	if h.activation == nil {
+		if err := t.accepted(ctx); err != nil {
+			return err
+		}
+	} else if err := h.activation.matches(h); err != nil {
 		return err
 	}
 	if err := t.checkHead(ctx); err != nil {
@@ -155,6 +159,7 @@ func (h *desktopLinuxNodeHost) Retire(ctx context.Context, disconnect bool) erro
 }
 
 func (h *desktopLinuxNodeHost) retireLocked(ctx context.Context, disconnect bool) error {
+	h.revokeActivationLocked()
 	if h.process == nil {
 		if h.launch != nil && h.launch.command != nil {
 			return errors.New("Linux prepared host cannot discard an entered native command")

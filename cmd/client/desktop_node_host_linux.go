@@ -40,6 +40,7 @@ type desktopLinuxNodeHost struct {
 	physical     mobiletor.DesktopLinuxNodeRunningSelection
 	ready        *mobilemultihop.DesktopNodeReadyRecord
 	proof        *desktopLinuxNodeProof
+	activation   *desktopLinuxNodeActivation
 	stageEntered bool
 	startEntered bool
 	started      time.Time
@@ -85,7 +86,7 @@ func prepareDesktopLinuxNodeHostWith(operation context.Context, a *app, profile 
 		a.mu.Lock()
 		defer a.mu.Unlock()
 		actual, exists := a.profileByIDLocked(profile.ID)
-		if a.checkCapturedConnectionOperationLocked(operation) != nil || !exists ||
+		if a.checkCapturedConnectionOperationLocked(operation) != nil || a.connectionCancelIntent == operation || !exists ||
 			desktopOwnedNodeProfileToken(actual) != revision || [3]bool{actual.DAITAEnabled, actual.JumboTUN, actual.SocksEnabled} != options {
 			return errors.New("Linux Node preparation changed its original request or complete private profile")
 		}
@@ -204,9 +205,16 @@ func (h *desktopLinuxNodeHost) enter(ctx context.Context) error {
 }
 
 func (h *desktopLinuxNodeHost) current(ctx context.Context) error {
-	if h == nil || ctx == nil || ctx.Err() != nil || h.operation == nil || h.operation.Err() != nil || h.closing || h.closed ||
+	if h == nil || ctx == nil || ctx.Err() != nil || h.operation == nil || h.closing || h.closed ||
 		h.parent == nil || h.policy == nil || h.policy.Validate() != nil || h.launch == nil || h.network == "" || physicalNetworkIdentity() != h.network {
 		return errors.New("Linux Node host no longer owns its captured operation and policy")
+	}
+	if h.activation == nil {
+		if h.operation.Err() != nil {
+			return errors.New("Linux Node host lost its original live startup request")
+		}
+	} else if err := h.activation.matches(h); err != nil {
+		return err
 	}
 	if err := h.parent.Current(ctx); err != nil {
 		return err
@@ -222,9 +230,17 @@ func (h *desktopLinuxNodeHost) current(ctx context.Context) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	profile, exists := a.profileByIDLocked(meta.ProfileID)
-	if a.checkCapturedConnectionOperationLocked(h.operation) != nil || !exists || desktopOwnedNodeProfileToken(profile) != h.revision ||
+	if !exists || desktopOwnedNodeProfileToken(profile) != h.revision ||
 		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != h.options {
 		return errors.New("Linux Node host belongs to a replaced request or private node")
+	}
+	if h.activation == nil {
+		if a.checkCapturedConnectionOperationLocked(h.operation) != nil || a.connectionCancelIntent == h.operation {
+			return errConnectionOperationCancelled
+		}
+	} else if a.cmd != h.process.command || a.state.RouterID != meta.ProfileID || a.state.RuntimeMode != meta.Mode ||
+		[3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} != h.options {
+		return errors.New("Linux active Node host belongs to another original connection")
 	}
 	return nil
 }

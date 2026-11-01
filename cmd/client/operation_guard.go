@@ -155,6 +155,7 @@ func (a *app) beginConnectionTransaction() (context.Context, func(), error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	a.connectionContext = ctx
 	a.connectionCancel = cancel
+	a.connectionCancelIntent = nil
 	a.state.Phase = "requested"
 	a.mu.Unlock()
 	finish := func() {
@@ -163,6 +164,9 @@ func (a *app) beginConnectionTransaction() (context.Context, func(), error) {
 		if a.connectionContext == ctx {
 			a.connectionContext = nil
 			a.connectionCancel = nil
+			if a.connectionCancelIntent == ctx {
+				a.connectionCancelIntent = nil
+			}
 			if !a.state.Connected && a.state.Phase == "requested" {
 				a.state.Phase = "off"
 			}
@@ -202,6 +206,11 @@ func (a *app) cancelConnectionOperation() {
 	a.cancelDesktopNodeRecovery()
 	a.mu.Lock()
 	cancel := a.connectionCancel
+	if cancel != nil && a.connectionContext != nil {
+		// Record intent before releasing the app lock. Final native adoption
+		// must not win the interval before the original cancel function runs.
+		a.connectionCancelIntent = a.connectionContext
+	}
 	a.mu.Unlock()
 	if cancel != nil {
 		cancel()

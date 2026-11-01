@@ -42,22 +42,23 @@ type state struct {
 }
 
 type app struct {
-	cfg                common.ClientConfig
-	localController    *linuxOwnedController
-	modes              []common.Mode
-	profiles           common.RouterProfileStore
-	mu                 sync.Mutex
-	operationMu        sync.Mutex
-	closing            bool // protected by mu; terminal controller shutdown admission
-	connectionContext  context.Context
-	connectionCancel   context.CancelFunc
-	state              state
-	cmd                *exec.Cmd
-	daitaCancel        context.CancelFunc
-	dnsMeasurements    *desktopDNSSlot               // protected by mu; bounded current native DNS operation
-	nodeProtection     *desktopNodeProtectionSlot    // protected by mu; exact successor outlives its runtime workspace
-	nodeRecovery       *desktopNodeRecoveryOperation // protected by mu; cancellable pre-admission recovery, separate from a connection
-	nodeConnectionHost *desktopNodeConnectionHost    // immutable after initialization; native controller/process boundary
+	cfg                    common.ClientConfig
+	localController        *linuxOwnedController
+	modes                  []common.Mode
+	profiles               common.RouterProfileStore
+	mu                     sync.Mutex
+	operationMu            sync.Mutex
+	closing                bool // protected by mu; terminal controller shutdown admission
+	connectionContext      context.Context
+	connectionCancel       context.CancelFunc
+	connectionCancelIntent context.Context // protected by mu; exact operation requested to cancel
+	state                  state
+	cmd                    *exec.Cmd
+	daitaCancel            context.CancelFunc
+	dnsMeasurements        *desktopDNSSlot               // protected by mu; bounded current native DNS operation
+	nodeProtection         *desktopNodeProtectionSlot    // protected by mu; exact successor outlives its runtime workspace
+	nodeRecovery           *desktopNodeRecoveryOperation // protected by mu; cancellable pre-admission recovery, separate from a connection
+	nodeConnectionHost     *desktopNodeConnectionHost    // immutable after initialization; native controller/process boundary
 }
 
 func main() {

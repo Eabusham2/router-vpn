@@ -11,6 +11,7 @@ import hashlib
 import importlib.util
 import os
 import platform
+import re
 import stat
 import subprocess
 import sys
@@ -32,6 +33,20 @@ HOST_START_CASES = ("admitted", "active-connection", "retained-workspace", "canc
 PROOF_SOCKET_CASES = ("tcp4", "tcp6", "udp-rejected", "wrong-family", "wrong-index", "wrong-name", "wrong-mtu", "cancelled", "closed-original")
 GROUPS = {"NodeTransaction": CASES, "NodeShutdown": SHUTDOWN_CASES, "NodeHost": HOST_CASES,
           "NodeHostStart": HOST_START_CASES, "NodeProofSocket": PROOF_SOCKET_CASES}
+UNIT_CASES = {
+    "TestDesktopLinuxNodeActivationProof": ("absent", "historical-clock", "historical-start", "historical-now", "stale", "future", "before-start",
+                                            "zero-elapsed", "negative-elapsed", "unbounded-elapsed", "impossible-elapsed", "unbounded-deadline",
+                                            "changed-ready", "changed-live", "active-mtu", "failed-reader"),
+    "TestDesktopLinuxNodeActivationRetainsCapturedLifetime": (),
+    "TestDesktopLinuxNodeActivationRejectsChangedCapture": ("host", "parent", "operation", "process", "transaction", "policy", "launch", "selection",
+                                                            "network", "profile", "options", "ready", "proof", "activation-time", "transaction-profile",
+                                                            "transaction-network", "transaction-parent", "command", "unstarted", "retiring", "joined", "controller-ended"),
+    "TestDesktopLinuxNodeConnectedCannotCreateActivation": (),
+    "TestConnectionCancellationIntentPrecedesCallback": (),
+    "TestConnectionCancellationIntentClearsWithOriginalFinish": (),
+    "TestConnectionOperationCancellationBlocksAdoption": (),
+    "TestOperationGuardSerializesConnectionAndMutationTransactions": (),
+}
 RUNNERS = ("test_linux_node_transaction.py", "test_linux_node_transaction_runner.py", "test_desktop_linux_guardian.py",
            "test_desktop_socket_uid.py", "prepare-desktop-external.py")
 
@@ -56,6 +71,8 @@ def checked_sources():
         "cmd/client/desktop_node_host_linux_start.go", "cmd/client/desktop_node_host_linux_start_native_test.go",
         "cmd/client/desktop_node_host_linux_ready.go", "cmd/client/desktop_node_host_linux_proof.go",
         "cmd/client/desktop_node_host_linux_proof_test.go", "cmd/client/desktop_node_host_linux_proof_native_test.go",
+        "cmd/client/desktop_node_host_linux_active.go", "cmd/client/desktop_node_host_linux_active_test.go",
+        "cmd/client/operation_guard.go", "cmd/client/operation_guard_cancellation_intent_test.go", "cmd/client/main.go",
         "internal/linuxprotection/node_control_linux.go", "internal/linuxprocess/bootstrap_linux.go",
         "internal/mobiletor/desktop_socket_linux_node_baseline.go", "internal/mobiletor/desktop_socket_linux_node_absence.go",
         "internal/mobiletor/desktop_socket_linux_node_succession_retired.go",
@@ -63,6 +80,16 @@ def checked_sources():
     if not required.issubset(records):
         raise ValueError("Linux Node transaction source closure omits an original native owner or its test")
     return records
+
+
+def check_unit_verdict(output):
+    if "--- FAIL:" in output or "--- SKIP:" in output:
+        raise ValueError("Linux Node activation failed or skipped its captured proof/cancellation checks")
+    passed = re.findall(r"(?m)^\s*--- PASS: (\S+) \([0-9]+(?:\.[0-9]+)?s\)$", output)
+    for group, leaves in UNIT_CASES.items():
+        for name in (group, *(group + "/" + leaf for leaf in leaves)):
+            if passed.count(name) != 1:
+                raise ValueError("Linux Node activation omitted or duplicated its required boundary: " + name)
 
 
 def check_verdict(output, group="NodeTransaction"):
@@ -91,6 +118,13 @@ def execute(go="go", *, env=None):
         raise ValueError("Linux Node transaction cannot execute a cross-compiled fixture")
     sudo = GUARD.UID.privilege_tool()
     compiler, captured = GUARD.UID.compiler_toolchain(ROOT, go, captured)
+    output = GUARD.UID.run([compiler, "test", "-race", "-mod=readonly", "-count=1", "-timeout=45s", "-v",
+                           "-run=^(" + "|".join(UNIT_CASES) + ")$", "./cmd/client"],
+                          cwd=ROOT, env=captured, timeout=300)
+    check_unit_verdict(output)
+    if checked_sources() != before:
+        raise ValueError("Linux Node activation source changed during its captured proof/cancellation checks")
+    print(output, end="" if output.endswith("\n") else "\n")
     with tempfile.TemporaryDirectory(prefix="routervpn-linux-node-transaction-") as temporary:
         binary = Path(temporary).resolve() / "node-transaction.test"
         GUARD.UID.run([compiler, "test", "-c", "-race", "-mod=readonly", "-tags=routervpn_controller_privileged",
