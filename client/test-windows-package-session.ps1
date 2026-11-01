@@ -109,7 +109,10 @@ function Test-PackagedNativeState([string]$Directory,[bool]$IsPortable) {
     }
     if([IO.Path]::GetFileName($state) -cne 'state.json') { throw 'Native Session changed its private state filename.' }
     [RouterVPN.PackageSessionIdentity]::RequireSame([IO.Path]::GetDirectoryName($state),$paths.Data,$true)
-    $logical=@(Get-Content -LiteralPath (Join-Path $paths.Package 'logical-modes.json') -Raw | ConvertFrom-Json)
+    # Windows PowerShell 5.1 emits the JSON array as one pipeline object.
+    # Capture it before normalizing, so both supported shells count its entries.
+    $logical=Get-Content -LiteralPath (Join-Path $paths.Package 'logical-modes.json') -Raw | ConvertFrom-Json
+    $logical=@($logical)
     if($logical.Count -ne 16) { throw 'Packaged immutable catalog lost its sixteen logical choices.' }
     # The native Session gate separately joins exact controller/App/Tray handles
     # and rejects missing receipts. These additional package checks prove that

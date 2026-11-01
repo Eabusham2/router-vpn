@@ -188,6 +188,28 @@ def check(shell):
         for label,options in [('installed',{'alias':True}),('portable-relocation',{'portable':True,'relocate':True,'alias':True})]:
             result=trial(label,**options)
             require(result.returncode==0,label+' package adapter failed:\n'+result.stdout+result.stderr)
+        # PowerShell 7 can exercise the original 5.1 JSON pipeline behavior
+        # explicitly. Actual 5.1 still executes this whole adapter in Windows CI.
+        result=execute([shell,'-NoProfile','-NonInteractive','-Command',
+                        '(Get-Command ConvertFrom-Json).Parameters.ContainsKey("NoEnumerate")'],
+                       environment=environment,cwd=root)
+        require(result.returncode==0,'Could not inspect the JSON cmdlet contract')
+        if result.stdout.strip()=='True':
+            catalog="Get-Content -LiteralPath (Join-Path $paths.Package 'logical-modes.json') -Raw | ConvertFrom-Json"
+            require(adapter.count(catalog)==1,'Package catalog JSON read changed')
+            legacy=adapter.replace(catalog,catalog+' -NoEnumerate',1)
+            result=trial('legacy-json-array',text=legacy)
+            require(result.returncode==0,'Non-enumerated catalog array failed:\n'+result.stdout+result.stderr)
+            result=trial('legacy-json-catalog15',mode='catalog15',text=legacy)
+            require(result.returncode!=0 and 'sixteen logical choices' in result.stdout+result.stderr,
+                    'Non-enumerated fifteen-choice catalog was accepted')
+            repaired='$logical='+catalog+' -NoEnumerate\n    $logical=@($logical)'
+            require(legacy.count(repaired)==1,'Package catalog normalization control drifted')
+            broken=legacy.replace(repaired,'$logical=@('+catalog+' -NoEnumerate)',1)
+            result=trial('legacy-json-old-wrapper',text=broken)
+            require(result.returncode!=0 and 'sixteen logical choices' in result.stdout+result.stderr,
+                    'Old array wrapper no longer reproduces the 5.1 failure')
+            print('Non-enumerated JSON catalog: valid array passes; fifteen choices and old nested wrapper reject')
         negatives=[
             ('failed-child',{'mode':'exit37'},'self-test failed: 37'),
             ('different-directory',{'mode':'wrong-directory'},'captured-package-directory-mismatch'),
