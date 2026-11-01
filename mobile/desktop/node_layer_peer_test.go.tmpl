@@ -298,6 +298,15 @@ func startDesktopNodeLayerServer(t *testing.T, ip netip.Addr, password, inner, i
 	return startDesktopNodeLayerRoutedServer(t, ip, password, routes, dnsAddress)
 }
 
+func desktopNodeLayerAddressInUse(err error) bool {
+	if runtime.GOOS == "windows" {
+		// Winsock returns WSAEADDRINUSE. Go's Windows EADDRINUSE is a
+		// different, synthetic POSIX value and does not match a native bind.
+		return errors.Is(err, syscall.Errno(10048))
+	}
+	return errors.Is(err, syscall.EADDRINUSE)
+}
+
 func desktopNodeLayerPortPair(ip netip.Addr, listenTCP func(string, string) (net.Listener, error)) (net.Listener, net.PacketConn, error) {
 	if !ip.Is4() || listenTCP == nil {
 		return nil, nil, errors.New("layer pair requires its captured IPv4 listener constructor")
@@ -327,7 +336,7 @@ func desktopNodeLayerPortPair(ip netip.Addr, listenTCP func(string, string) (net
 			return nil, nil, errors.Join(err, closeErr)
 		}
 		last = fmt.Errorf("paired TCP listener: %w", err)
-		if !errors.Is(err, syscall.EADDRINUSE) && !(runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(10013))) {
+		if !desktopNodeLayerAddressInUse(err) && !(runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(10013))) {
 			return nil, nil, last
 		}
 	}
@@ -1198,9 +1207,11 @@ func desktopNodeLayerPortPairTests(t *testing.T) {
 				count = 3
 			}
 			if err == nil || listener != nil || packet != nil || len(addresses) != count {
-				t.Fatal("layer allocation failure escaped its bounded original ownership", kind, len(addresses), err)
+				var nativeErrno syscall.Errno
+				_ = errors.As(err, &nativeErrno)
+				t.Fatal("layer allocation failure escaped its bounded original ownership", kind, len(addresses), err, "native_errno", uint64(nativeErrno))
 			}
-			if kind == "collision-bound" && !errors.Is(err, syscall.EADDRINUSE) || kind == "access-denied-bound" && !errors.Is(err, syscall.Errno(10013)) || kind == "fatal-error" && !errors.Is(err, fatal) {
+			if kind == "collision-bound" && !desktopNodeLayerAddressInUse(err) || kind == "access-denied-bound" && !errors.Is(err, syscall.Errno(10013)) || kind == "fatal-error" && !errors.Is(err, fatal) {
 				t.Fatal("layer allocator discarded its actual bind or constructor cause", err)
 			}
 			retired(t, addresses)
