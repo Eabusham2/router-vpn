@@ -46,6 +46,7 @@ CONTRACTS = {
 }
 
 SETUP_METHOD_LANES = ("simple-native", "universal", "universal-compat", "manual-app-proxy")
+OVERTLS_CLIENT_RELEASE = "https://github.com/ShadowsocksR-Live/overtls/releases/tag/v0.3.12"
 
 
 def load_private_setup_assets(path: Path) -> dict:
@@ -74,6 +75,11 @@ def normalize_method(method: dict, endpoint: str) -> None:
     method["fullVpnCapable"] = full_vpn
     method["proxyOnly"] = not full_vpn and ident not in ("router-vpn-app",)
     method["endpointScope"] = endpoint_scope
+    method["configFilename"] = ""
+    method.pop("clientReleaseURL", None)
+    if ident in CONTRACTS and method.get("config"):
+        extension = "conf" if ident in ("wireguard", "amneziawg2") else "txt" if ident == "socks5" else "json"
+        method["configFilename"] = "router-vpn-" + ident + "." + extension
 
     if ident == "shadowsocks" and method.get("config") and endpoint and endpoint != "router.invalid":
         method["url"] = imports.shadowsocks_from_singbox(str(method["config"]), endpoint)
@@ -81,6 +87,34 @@ def normalize_method(method: dict, endpoint: str) -> None:
         method["url"] = imports.shadowsocks_plugin_from_json(str(method["config"]), endpoint)
     elif ident == "shadowsocksr" and method.get("config"):
         method["url"] = imports.ssr_uri(imports.json_config(str(method["config"])))
+    elif ident == "overtls" and method.get("config"):
+        config = imports.json_config(str(method["config"]))
+        config.setdefault("remarks", "Router VPN OverTLS")
+        method["config"] = json.dumps(config, indent=2) + "\n"
+        method["clientReleaseURL"] = OVERTLS_CLIENT_RELEASE
+        method["apps"] = ["ShadowsocksR-Live OverTLS 0.3.12 (Windows, macOS, Linux)"]
+        method["native"] = (
+            "1. Open the OverTLS 0.3.12 client release and extract the package for your desktop OS/CPU. "
+            "2. Download this method's router-vpn-overtls.json into that folder. "
+            "3. In Terminal run ./overtls-bin -r client -c router-vpn-overtls.json; "
+            "in Windows PowerShell run .\\overtls-bin.exe -r client -c router-vpn-overtls.json. "
+            "4. Keep it running and set your application's SOCKS5 proxy to 127.0.0.1:1080. "
+            "Ctrl+C stops this foreground client. A URL-capable OverTLS client can also import the URL/QR when shown."
+        )
+        method["note"] = (
+            "This import requires the OverTLS extension of ssr://; a generic SOCKS5 or SSR scanner cannot read it. "
+            "The exact selected server, TLS name, tunnel path and certificate verification are retained. "
+            "The unchanged pinned desktop client has passed TCP import tests. Its UDP SOCKS reply-address defect "
+            "remains unresolved; full UDP and real-device/off-LAN acceptance remain required. "
+            "Upstream mobile libraries are not installable phone apps."
+        )
+        try:
+            method["url"] = imports.overtls_uri(config)
+            method["importType"] = "overtls-ssr-uri"
+            method["qrSupported"] = qr_supported = True
+        except imports.OverTLSJSONRequired as exc:
+            method["url"] = ""
+            method["note"] += " " + str(exc) + "."
     elif ident == "hysteria2" and method.get("url"):
         imports.validate_hysteria2_uri(str(method["url"]))
 

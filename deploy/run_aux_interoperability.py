@@ -8,7 +8,7 @@ import subprocess
 import sys
 
 
-def main():
+def prepare_namespace():
     interfaces = {line.split(":", 1)[0].strip() for line in Path("/proc/self/net/dev").read_text().splitlines()[2:]}
     if interfaces != {"lo"}:
         raise RuntimeError("auxiliary fixture requires Docker --network none or an owned unshared network namespace")
@@ -34,6 +34,10 @@ def main():
     if libc.capset(ctypes.byref(header), ctypes.byref(data)) != 0:
         raise OSError(ctypes.get_errno(), "could not drop setup capabilities")
     resource.setrlimit(resource.RLIMIT_FSIZE, (4 * 1024 * 1024, 4 * 1024 * 1024))
+
+
+def main():
+    prepare_namespace()
     driver = Path(__file__).resolve().with_name("test_aux_interoperability.py")
     os.execv(sys.executable, [sys.executable, str(driver), *sys.argv[1:]])
 

@@ -8,7 +8,7 @@ naive=${3:-}
 mode=${4:-payload}
 setup_caps=(--cap-add NET_ADMIN)
 case "$mode" in
-  payload) ;;
+  payload|import) ;;
   dns) setup_caps+=(--cap-add NET_BIND_SERVICE) ;;
   *) echo 'Unknown auxiliary fixture mode' >&2; exit 2 ;;
 esac

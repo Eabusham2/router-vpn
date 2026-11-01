@@ -12,7 +12,9 @@ import binascii
 import ipaddress
 import json
 import re
+import ssl
 import urllib.parse
+import uuid
 
 
 def b64url_encode(raw: bytes) -> str:
@@ -158,6 +160,99 @@ def parse_ssr(uri: str) -> dict:
         "obfs_param": dec("obfsparam"),
         "label": dec("remarks"),
     }
+
+
+class OverTLSJSONRequired(ValueError):
+    """A valid configuration needs the native JSON import to retain its fields."""
+
+
+def overtls_uri(config: dict, *, label: str = "Router VPN OverTLS") -> str:
+    """Match the pinned native OverTLS 0.3.12 import, including selected trust.
+
+    This is OverTLS's extension of ssr://, not a generic SSR client import.
+    Its upstream parser cannot represent IPv6 endpoints or local listener
+    policy faithfully; those configurations retain the real JSON download.
+    """
+    client = config.get("client_settings")
+    if not isinstance(client, dict):
+        raise ValueError("OverTLS client settings are required")
+    if config.get("method", "none") != "none" or not isinstance(config.get("password", ""), str):
+        raise ValueError("invalid OverTLS method/password")
+    if client.get("disable_tls", False) is not False or client.get("dangerous_mode", False) is not False:
+        raise ValueError("OverTLS imports require TLS and certificate verification")
+    host, domain, path = client.get("server_host"), client.get("server_domain"), config.get("tunnel_path")
+    port = client.get("server_port")
+    if not isinstance(host, str) or not host or len(host) > 253 or re.search(r"[\s%@/?#\[\]\\<>\"{}|^`]", host):
+        raise ValueError("invalid OverTLS endpoint")
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ValueError("invalid OverTLS port")
+    if not isinstance(domain, str) or not domain or len(domain) > 253 or re.search(r"[\s%@/?#\[\]\\<>\"{}|^`]", domain):
+        raise ValueError("OverTLS TLS name is required")
+    paths = path if isinstance(path, list) else [path]
+    if not paths or any(not isinstance(item, str) or not re.fullmatch(r"/[A-Za-z0-9._~/-]+/", item) or len(item) > 256 for item in paths):
+        raise ValueError("invalid OverTLS tunnel path")
+    is_ipv6 = ":" in host
+    if is_ipv6:
+        ipaddress.IPv6Address(host)
+    elif not re.fullmatch(r"[A-Za-z0-9.-]+", host):
+        raise ValueError("invalid OverTLS endpoint")
+    if ":" in domain:
+        ipaddress.IPv6Address(domain)
+    elif not re.fullmatch(r"[A-Za-z0-9.-]+", domain):
+        raise ValueError("invalid OverTLS TLS name")
+    remarks = config.get("remarks", label)
+    if not isinstance(remarks, str):
+        raise ValueError("invalid OverTLS remarks")
+    timeout = config.get("test_timeout_secs")
+    if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, int) or not 0 <= timeout < 1 << 64):
+        raise ValueError("invalid OverTLS test timeout")
+    # Validate trust and identity before considering any JSON-only setting.
+    # A malformed CA/UUID must not become a representability-only fallback.
+    certificate = client.get("cafile")
+    certificate_path = False
+    if certificate is not None:
+        if not isinstance(certificate, str) or not certificate:
+            raise ValueError("invalid selected OverTLS certificate")
+        if len(certificate.encode("utf-8")) > 65536 or "PRIVATE KEY" in certificate or "\x00" in certificate:
+            raise ValueError("invalid selected OverTLS certificate")
+        if certificate.startswith("-----BEGIN CERTIFICATE-----"):
+            try:
+                ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT).load_verify_locations(cadata=certificate)
+            except (ssl.SSLError, ValueError) as exc:
+                raise ValueError("invalid selected OverTLS certificate") from exc
+        elif "-----" in certificate or "\n" in certificate or "\r" in certificate:
+            raise ValueError("invalid selected OverTLS certificate")
+        else:
+            certificate_path = True
+    client_id = client.get("client_id")
+    if client_id is not None:
+        if not isinstance(client_id, str):
+            raise ValueError("invalid OverTLS client identity")
+        client_id = str(uuid.UUID(client_id))
+    if is_ipv6:
+        raise OverTLSJSONRequired("IPv6 endpoints require the OverTLS JSON file; the upstream URL parser cannot retain IPv6")
+    if host.lower() == "router.invalid":
+        raise OverTLSJSONRequired("Set this node's reachable endpoint before using an OverTLS URL; retain the JSON file for setup")
+    top_fields = {"method", "password", "remarks", "tunnel_path", "client_settings"}
+    if set(config) - top_fields or isinstance(path, list):
+        raise OverTLSJSONRequired("Additional top-level settings or multiple tunnel paths require the complete OverTLS JSON file")
+    representable = {"disable_tls", "dangerous_mode", "server_host", "server_port", "server_domain", "cafile",
+                     "client_id", "listen_host", "listen_port"}
+    if (set(client) - representable or client.get("listen_host", "127.0.0.1") != "127.0.0.1"
+            or client.get("listen_port", 1080) != 1080):
+        raise OverTLSJSONRequired("Additional listener/client settings require the complete OverTLS JSON file")
+    if certificate_path:
+        raise OverTLSJSONRequired("A selected certificate file path requires the complete OverTLS JSON file and that certificate")
+    query = {"remarks": b64url_encode(remarks.encode("utf-8")), "ot_enable": "1",
+             "ot_domain": b64url_encode(domain.encode("utf-8")), "ot_path": b64url_encode(path.encode("utf-8"))}
+    if certificate is not None:
+        query["ot_cert"] = b64url_encode(certificate.encode("utf-8"))
+    query["dangerous_mode"] = "false"
+    if client_id is not None:
+        query["client_id"] = client_id
+    password = b64url_encode(config.get("password", "").encode("utf-8"))
+    inner = f"{host}:{port}:origin:none:plain:{password}/?" + urllib.parse.urlencode(query)
+    return "ssr://" + b64url_encode(inner.encode("utf-8"))
 
 
 def validate_hysteria2_uri(uri: str) -> dict:

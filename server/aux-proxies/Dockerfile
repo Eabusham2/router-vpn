@@ -86,6 +86,16 @@ FROM aux-interoperability AS aux-dns-interoperability
 COPY deploy/test_aux_dns_interoperability.py /src/deploy/test_aux_dns_interoperability.py
 ENTRYPOINT ["python3", "/src/deploy/test_aux_dns_interoperability.py", "--overtls-server", "/usr/local/bin/overtls-bin", "--overtls-client", "/usr/local/bin/overtls-reference-client", "--overtls-stock-server", "/usr/local/bin/overtls-stock", "--caddy", "/usr/local/bin/caddy", "--openssl", "/usr/bin/openssl"]
 
+# This gate uses the original, unmodified 0.3.12 client. The explicit corrected
+# reference client above must never substitute for a delivered third-party app.
+FROM aux-interoperability AS overtls-method-import
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends nodejs qrencode \
+ && rm -rf /var/lib/apt/lists/*
+COPY deploy/test_setup_overtls_interoperability.py /src/deploy/test_setup_overtls_interoperability.py
+COPY server/scripts/generate-setup-assets.py server/scripts/normalize-setup-imports.py server/scripts/import_payloads.py server/scripts/verified-regular-read.py /src/server/scripts/
+ENTRYPOINT ["python3", "/src/deploy/test_setup_overtls_interoperability.py", "--prepare-network", "--overtls-server", "/usr/local/bin/overtls-bin", "--overtls-client", "/usr/local/bin/overtls-stock", "--caddy", "/usr/local/bin/caddy", "--openssl", "/usr/bin/openssl", "--node", "/usr/bin/node"]
+
 FROM debian:bookworm-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \

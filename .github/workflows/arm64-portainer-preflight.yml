@@ -207,6 +207,14 @@ jobs:
             -t router-vpn-preflight-aux-dns-interop:arm64 .
           bash deploy/run_aux_interoperability_container.sh router-vpn-preflight-aux:arm64 router-vpn-preflight-aux-dns-interop:arm64 router-vpn-preflight-naive:arm64 dns
 
+      - name: Import OverTLS Methods URLs and JSON downloads with the unchanged client
+        timeout-minutes: 12
+        run: |
+          docker buildx build --platform linux/arm64 --progress=plain --load \
+            --target overtls-method-import -f server/aux-proxies/Dockerfile \
+            -t router-vpn-preflight-overtls-method-import:arm64 .
+          bash deploy/run_aux_interoperability_container.sh router-vpn-preflight-aux:arm64 router-vpn-preflight-overtls-method-import:arm64 router-vpn-preflight-naive:arm64 import
+
       - name: Import final Setup Center Shadowsocks URLs with an unchanged client
         timeout-minutes: 15
         run: |

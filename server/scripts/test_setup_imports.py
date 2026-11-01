@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import copy
 import json
 from pathlib import Path
 
@@ -135,6 +136,74 @@ def test_method_lane_truth() -> None:
     check(not socks["qrSupported"], "SOCKS5 must not get a fake remote QR")
 
 
+def test_overtls_import() -> None:
+    config = {"method": "none", "password": "", "tunnel_path": "/rvpn-selected-path/",
+              "client_settings": {"server_host": "198.51.100.9", "server_port": 14443,
+                                  "server_domain": "tls.selected.example", "disable_tls": False,
+                                  "dangerous_mode": False, "listen_host": "127.0.0.1", "listen_port": 1080}}
+    method = {"id": "overtls", "config": json.dumps(config), "available": True}
+    norm.normalize_method(method, "different-outer-metadata.example")
+    check(method["qrSupported"] and method["qrPayload"] == method["url"], "OverTLS has an actual compatible QR import")
+    check(method["importType"] == "overtls-ssr-uri" and method["configFilename"] == "router-vpn-overtls.json", "OverTLS import/download identity")
+    raw = m.b64url_decode(method["url"][6:]).decode()
+    check(raw.startswith("198.51.100.9:14443:origin:none:plain:/?"), "OverTLS selected endpoint changed")
+    fields = dict(m.urllib.parse.parse_qsl(raw.split("/?", 1)[1]))
+    check(fields["ot_enable"] == "1" and fields["dangerous_mode"] == "false", "OverTLS import weakened verification")
+    check(m.b64url_decode(fields["ot_domain"]).decode() == config["client_settings"]["server_domain"], "OverTLS selected TLS name changed")
+    check(m.b64url_decode(fields["ot_path"]).decode() == config["tunnel_path"], "OverTLS selected path changed")
+    check(method["clientReleaseURL"].endswith("/v0.3.12"), "OverTLS client release must be pinned")
+    for change, value in (("server_host", "2001:db8::7"), ("cafile", "selected-root.crt"), ("listen_user", "selected-user")):
+        altered = copy.deepcopy(config)
+        altered["client_settings"][change] = value
+        selected = {"id": "overtls", "config": json.dumps(altered), "url": "stale-import", "available": True}
+        norm.normalize_method(selected, "198.51.100.9")
+        check(not selected["url"] and not selected["qrPayload"] and not selected["qrSupported"], "unrepresentable OverTLS URI published")
+        check(json.loads(selected["config"])["client_settings"][change] == value, "OverTLS JSON fallback changed the selected setting")
+        check(selected["configFilename"] == "router-vpn-overtls.json", "OverTLS JSON fallback is not downloadable")
+    for change, value in (("test_timeout_secs", 37), ("tunnel_path", ["/selected-first/", "/selected-second/"]),
+                          ("server_settings", {"listen_host": "127.0.0.1", "listen_port": 14444}),
+                          ("future_top_level_option", "preserve-me")):
+        altered = copy.deepcopy(config)
+        altered[change] = value
+        selected = {"id": "overtls", "config": json.dumps(altered), "available": True}
+        norm.normalize_method(selected, "198.51.100.9")
+        check(not selected["url"] and not selected["qrSupported"], "OverTLS URI silently dropped top-level settings")
+        check(json.loads(selected["config"])[change] == value, "OverTLS top-level JSON setting changed")
+    for fallback in ({"server_host": "2001:db8::7"}, {"listen_user": "selected-user"}, {"cafile": "selected-root.crt"}):
+        for invalid in ({"cafile": "-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----"},
+                        {"client_id": "invalid-id"}, {"client_id": 7}):
+            altered = copy.deepcopy(config)
+            altered["client_settings"].update(fallback)
+            altered["client_settings"].update(invalid)
+            try:
+                m.overtls_uri(altered)
+            except ValueError as exc:
+                check(not isinstance(exc, m.OverTLSJSONRequired), "malformed trust/identity accepted as a JSON-only config")
+            else:
+                raise AssertionError("malformed OverTLS trust/identity accepted")
+    for change, value in (("server_host", "host:14443@other"), ("server_host", "host/path"),
+                          ("server_port", 0), ("server_port", 65536), ("server_port", True),
+                          ("dangerous_mode", True), ("disable_tls", True),
+                          ("server_domain", ""), ("server_domain", "name\nother"),
+                          ("cafile", "-----BEGIN CERTIFICATE-----\ninvalid\n-----END CERTIFICATE-----")):
+        altered = copy.deepcopy(config)
+        altered["client_settings"][change] = value
+        try:
+            m.overtls_uri(altered)
+        except ValueError as exc:
+            check(not isinstance(exc, m.OverTLSJSONRequired), "invalid OverTLS settings cannot use the JSON fallback")
+        else:
+            raise AssertionError("invalid OverTLS setting accepted: " + change)
+    altered = copy.deepcopy(config)
+    altered["tunnel_path"] = "/selected/?other-path"
+    try:
+        m.overtls_uri(altered)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("ambiguous OverTLS tunnel path accepted")
+
+
 def test_setup_center_ui_contract() -> None:
     data = {
         "endpoint": "198.51.100.9",
@@ -172,6 +241,7 @@ def main() -> int:
     test_hysteria_validation()
     test_shadowsocks_config_builder()
     test_method_lane_truth()
+    test_overtls_import()
     test_setup_center_ui_contract()
     print("typed Setup Center import + UI contract tests: OK")
     return 0
