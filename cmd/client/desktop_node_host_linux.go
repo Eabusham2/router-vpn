@@ -30,11 +30,15 @@ type desktopLinuxNodeHost struct {
 	policy       *mobilemultihop.DesktopNodePolicy
 	selection    linuxprotection.NodeSelection
 	launch       *desktopNodeLaunch
+	process      *desktopLinuxNodeProcess
+	transaction  *desktopLinuxNodeTransaction
 	source       []byte
 	network      string
 	revision     string
 	options      [3]bool
 	stageEntered bool
+	startEntered bool
+	started      time.Time
 	staged       bool
 	closing      bool
 	closed       bool
@@ -260,6 +264,10 @@ func (h *desktopLinuxNodeHost) Arguments(ctx context.Context) ([]string, string,
 		return nil, "", err
 	}
 	defer func() { h.gate <- struct{}{} }()
+	return h.argumentsLocked(ctx)
+}
+
+func (h *desktopLinuxNodeHost) argumentsLocked(ctx context.Context) ([]string, string, error) {
 	if err := h.current(ctx); err != nil {
 		return nil, "", err
 	}
@@ -300,10 +308,9 @@ func (h *desktopLinuxNodeHost) Arguments(ctx context.Context) ([]string, string,
 	return arguments, capture, h.current(ctx)
 }
 
-// This preparation owns no engine or firewall mutation. Retirement uses the
-// retained directory even after Connect ends, but refuses a replacement path.
-// The later launched host must join its exact transaction before invoking this
-// workspace retirement; it cannot discard a running graph through this method.
+// Retirement joins the original launched transaction before touching private
+// inputs. A retained closed predecessor remains with that transaction; it is
+// not released by workspace cleanup. Replaced paths are always refused.
 func (h *desktopLinuxNodeHost) Close(ctx context.Context) error {
 	if h == nil {
 		return nil
@@ -316,8 +323,8 @@ func (h *desktopLinuxNodeHost) Close(ctx context.Context) error {
 		return nil
 	}
 	h.closing = true
-	if h.launch != nil && h.launch.command != nil {
-		return errors.New("Linux prepared host cannot discard an entered native command")
+	if err := h.retireLocked(ctx, false); err != nil {
+		return err
 	}
 	if !h.closed {
 		if err := cleanupDesktopNodeLaunch(h.launch); err != nil {
