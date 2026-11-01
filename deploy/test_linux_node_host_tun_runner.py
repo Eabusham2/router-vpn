@@ -20,7 +20,8 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
         cases = G.CASES if cases is None else cases
         prefix = '--- PASS: TestDesktopLinuxGuardianKernelNodeHostTUN'
         return '\n'.join([prefix + ' (0.1s)', *(prefix + '/' + case + ' (0.1s)' for case in cases),
-                          *('    native_test.go:1: verified installed host native lifecycle: ' + case for case in cases)]) + '\n'
+                          *('    native_test.go:1: verified installed host native lifecycle: ' + case for case in cases),
+                          *('    native_test.go:2: verified installed host active lifetime: ' + case for case in cases if case in G.ACTIVE_CASES)]) + '\n'
 
     def test_requires_every_real_positive_negative_and_joined_lifecycle(self):
         output = self.completed()

@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -30,7 +31,8 @@ import (
 )
 
 var linuxHostTUNCases = []string{"on-connect", "home-lan", "wrong-node", "resolver-failure", "wrong-key", "stale-ready", "cancelled-proof",
-	"replaced-host", "request-ended", "shutdown", "always"}
+	"replaced-host", "request-ended", "shutdown", "always", "active-request-ended", "cancel-adoption", "active-profile-change",
+	"active-network-change", "active-command-change"}
 
 type linuxHostTUNResult struct {
 	Stage             string                                 `json:"stage"`
@@ -40,6 +42,7 @@ type linuxHostTUNResult struct {
 	Ready             *mobilemultihop.DesktopNodeReadyRecord `json:"ready,omitempty"`
 	Journal           *linuxprotection.JournalSelection      `json:"journal,omitempty"`
 	ClosedTableSHA256 string                                 `json:"closed_table_sha256,omitempty"`
+	Activation        string                                 `json:"activation,omitempty"`
 }
 
 func linuxHostTUNRendezvous(gate *os.File, expected byte) error {
@@ -92,7 +95,7 @@ func linuxHostTUNTUNAbsent(record *mobilemultihop.DesktopNodeReadyRecord) error 
 // fixture uses the ordinary completed bundle verifier and real generated
 // executable, source, native channel, TUN, DNS, Router proof and journal.
 // It changes no public capability predicate or verifier implementation.
-func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string) error {
+func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string) (failure error) {
 	found := false
 	for _, candidate := range linuxHostTUNCases {
 		found = found || candidate == scenario
@@ -166,6 +169,8 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 	result := linuxHostTUNResult{Scenario: scenario, SessionID: host.selection.SessionID}
 	ready, readyErr := host.WaitReady(ctx)
 	failedReady := scenario == "wrong-key" || scenario == "resolver-failure"
+	var replacement *exec.Cmd
+	var replacementState state
 	if failedReady {
 		if readyErr == nil || ready != (mobilemultihop.DesktopNodeReadyRecord{}) || host.ready != nil || host.proof != nil || a.state.Connected {
 			return errors.New("installed host accepted a failed encrypted key or selected resolver as ready")
@@ -183,8 +188,7 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 			return err
 		}
 		proofContext := ctx
-		var replacement *exec.Cmd
-		var replacementState state
+		var activation *desktopLinuxNodeActivation
 		if scenario == "stale-ready" {
 			stale := ready
 			stale.ProvedAt = host.started.UnixMilli() - 1
@@ -221,7 +225,67 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 				return errors.Join(proofErr, errors.New("installed host did not retain its actual routed private Router response"))
 			}
 			result.Outcome = "proved"
-			if scenario == "request-ended" {
+			if scenario == "cancel-adoption" {
+				a.cancelConnectionOperation()
+				if err := host.Activate(ctx); err == nil || a.state.Connected || host.activation != nil {
+					return errors.New("cancelled original Connect adopted an installed native session")
+				}
+				result.Activation = "rejected-adoption"
+			} else if strings.HasPrefix(scenario, "active-") {
+				if host.Current(ctx) == nil || host.activation != nil {
+					return errors.New("installed host inferred active ownership from readiness or proof alone")
+				}
+				if err := host.Activate(ctx); err != nil {
+					return fmt.Errorf("activate original proved installed host: %w", err)
+				}
+				activation = host.activation
+				finish()
+				a.operationMu.Lock()
+				defer a.operationMu.Unlock()
+				if operation.Err() == nil || a.connectionContext != nil || a.connectionCancel != nil ||
+					!a.state.Connected || a.state.Phase != "connected" || a.cmd != host.process.command ||
+					activation == nil || activation.operation != operation || activation.lifetime.Err() != nil {
+					return errors.New("ordinary Connect completion discarded the original installed active owner")
+				}
+				if err := host.Current(ctx); err != nil {
+					return fmt.Errorf("original active native readback after request completion: %w", err)
+				}
+				result.Activation = "retained-after-request"
+				switch scenario {
+				case "active-profile-change":
+					a.mu.Lock()
+					a.profiles.Profiles[0].AdGuardIPv4 = "192.168.50.134"
+					a.mu.Unlock()
+				case "active-network-change":
+					command := exec.CommandContext(ctx, "ip", "addr", "add", "192.168.210.5/32", "dev", "rvpn-test")
+					if output, err := command.CombinedOutput(); err != nil {
+						return fmt.Errorf("owned active network replacement: %v: %s", err, output)
+					}
+					defer func() {
+						cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+						defer cancel()
+						if output, err := exec.CommandContext(cleanup, "ip", "addr", "del", "192.168.210.5/32", "dev", "rvpn-test").CombinedOutput(); err != nil {
+							failure = errors.Join(failure, fmt.Errorf("owned active network replacement cleanup: %v: %s", err, output))
+						}
+					}()
+				case "active-command-change":
+					replacement = exec.Command("/bin/sleep", "60")
+					if err := replacement.Start(); err != nil {
+						return err
+					}
+					defer func() { _ = replacement.Process.Kill(); _ = replacement.Wait() }()
+					replacementState = state{Connected: true, RouterID: "replacement", Mode: "replacement", RuntimeMode: "replacement", Phase: "connected"}
+					a.mu.Lock()
+					a.cmd, a.state = replacement, replacementState
+					a.mu.Unlock()
+				}
+				if scenario != "active-request-ended" {
+					if err := host.Current(ctx); err == nil {
+						return errors.New("retained installed host accepted a replaced active profile, network or command")
+					}
+					result.Activation = "rejected-active"
+				}
+			} else if scenario == "request-ended" {
 				finish()
 				a.operationMu.Lock()
 				defer a.operationMu.Unlock()
@@ -239,6 +303,9 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 			}
 		} else if err := host.Retire(ctx, true); err != nil {
 			return fmt.Errorf("joined original installed host retirement: %w", err)
+		}
+		if activation != nil && (activation.lifetime.Err() == nil || host.Current(ctx) == nil) {
+			return errors.New("joined installed host retirement retained active session authority")
 		}
 		if replacement != nil && (a.cmd != replacement || !reflect.DeepEqual(a.state, replacementState) || replacement.Process.Signal(syscall.Signal(0)) != nil) {
 			return errors.New("old installed host retirement changed or stopped the actual replacement command")
@@ -300,6 +367,9 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 		return err
 	}
 	controller.close()
+	if replacement != nil && (a.cmd != replacement || !reflect.DeepEqual(a.state, replacementState) || replacement.Process.Signal(syscall.Signal(0)) != nil) {
+		return errors.New("original installed host cleanup changed or stopped the replacement command after retirement")
+	}
 	result.Stage = "retired"
 	return json.NewEncoder(os.Stdout).Encode(result)
 }
@@ -475,6 +545,21 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				}
 			} else if result.Journal.Record.Committed.Target != nil || mobiletor.ReadDesktopLinuxNodeAbsence(context.Background(), result.SessionID) != nil {
 				t.Fatal("installed On-connect retirement left an unowned native table")
+			}
+			activation := ""
+			switch scenario {
+			case "active-request-ended":
+				activation = "retained-after-request"
+			case "cancel-adoption":
+				activation = "rejected-adoption"
+			case "active-profile-change", "active-network-change", "active-command-change":
+				activation = "rejected-active"
+			}
+			if result.Activation != activation {
+				t.Fatal("installed host omitted its actual captured activation and lifetime result", result.Activation, activation)
+			}
+			if activation != "" {
+				t.Log("verified installed host active lifetime:", scenario)
 			}
 			t.Log("verified installed host native lifecycle:", scenario)
 		})

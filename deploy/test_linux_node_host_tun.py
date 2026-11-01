@@ -34,8 +34,9 @@ def load(name, relative):
 CHILD = load('linux_installed_host_child', 'test_linux_node_child_tun.py')
 TRANSACTION = load('linux_installed_host_transaction', 'test_linux_node_transaction.py')
 BUILD, NODE, GUARD = CHILD.BUILD, CHILD.NODE, CHILD.GUARD
+ACTIVE_CASES = ('active-request-ended', 'cancel-adoption', 'active-profile-change', 'active-network-change', 'active-command-change')
 CASES = ('on-connect', 'home-lan', 'wrong-node', 'resolver-failure', 'wrong-key', 'stale-ready', 'cancelled-proof',
-         'replaced-host', 'request-ended', 'shutdown', 'always')
+         'replaced-host', 'request-ended', 'shutdown', 'always', *ACTIVE_CASES)
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256')
 
@@ -50,6 +51,7 @@ def checked_sources(source):
         app['cmd/client/' + name] = hashlib.sha256(path.read_bytes()).hexdigest()
     required = {'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_node_host_linux_ready.go', 'cmd/client/desktop_node_host_linux_proof.go',
+                'cmd/client/desktop_node_host_linux_active.go',
                 'cmd/client/bundled_native.go', 'cmd/client/operation_guard.go'}
     if not required.issubset(app):
         raise ValueError('Installed Linux host gate lost its real verifier, startup, proof or retained native ownership')
@@ -88,6 +90,8 @@ def check_verdict(output, case=None):
     for value in cases:
         if prefix + '/' + value + ' (' not in output or 'verified installed host native lifecycle: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its actual complete owned lifecycle: ' + value)
+        if value in ACTIVE_CASES and 'verified installed host active lifetime: ' + value + '\n' not in output.replace('\r\n', '\n'):
+            raise ValueError('Installed Linux host omitted its actual activation, request completion and native lifetime: ' + value)
 
 
 def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case):
@@ -220,8 +224,8 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'artifacts': {name: {'bytes': identities[path][2], 'sha256': identities[path][-1]} for name, path in (('installed-controller-test', binary), ('independent-ss2022-peer', peer))},
                   'cases': list(CASES), 'compiled_negative_controls': [defect], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
     CHILD.publish_receipt(receipt_path, result, workspace)
-    print('Actual installed Linux host, complete bundle, selected TUN/DNS/MTU, routed Router identity, original operation completion and durable joined retirement passed.')
-    print('Retained session activation, physical devices, off-LAN interoperability, restart recovery and public activation remain separate acceptance boundaries.')
+    print('Actual installed Linux host, complete bundle, selected TUN/DNS/MTU, routed Router identity, retained activation after request completion and durable joined retirement passed.')
+    print('Physical devices, off-LAN interoperability, restart recovery and public activation remain separate acceptance boundaries.')
     print(json.dumps({name: result[name] for name in ('gate', 'target', 'policy_sha256', 'source_sha256', 'output_sha256')}, sort_keys=True))
     return result
 
