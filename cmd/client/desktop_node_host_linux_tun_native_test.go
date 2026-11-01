@@ -32,7 +32,7 @@ import (
 
 var linuxHostTUNCases = []string{"on-connect", "home-lan", "wrong-node", "resolver-failure", "wrong-key", "stale-ready", "cancelled-proof",
 	"replaced-host", "request-ended", "shutdown", "always", "active-request-ended", "cancel-adoption", "active-profile-change",
-	"active-network-change", "active-command-change", "mtu-rollback", "mtu-commit", "mtu-stale-profile", "mtu-stale-network", "mtu-hold", "mtu-retire-undrained", "restore-sealed"}
+	"active-network-change", "active-command-change", "mtu-rollback", "mtu-commit", "mtu-stale-profile", "mtu-stale-network", "mtu-hold", "mtu-retire-undrained", "restore-sealed", "public-connect"}
 
 func linuxHostTUNMTUCase(scenario string) bool {
 	return scenario == "mtu-rollback" || scenario == "mtu-commit" || scenario == "mtu-stale-profile" || scenario == "mtu-stale-network" || scenario == "mtu-hold" || scenario == "mtu-retire-undrained"
@@ -51,6 +51,7 @@ type linuxHostTUNResult struct {
 	MTU               *linuxHostTUNMTUResult                 `json:"mtu,omitempty"`
 	MTUView           *linuxHostTUNMTUViewResult             `json:"mtu_view,omitempty"`
 	Restore           *linuxHostTUNRestoreResult             `json:"restore,omitempty"`
+	Public            bool                                   `json:"public,omitempty"`
 }
 
 func linuxHostTUNRendezvous(gate *os.File, expected byte) error {
@@ -205,6 +206,9 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
 	defer cancel()
+	if scenario == "public-connect" {
+		return linuxHostTUNPublicConnection(ctx, a, parent, controller, gate)
+	}
 	operation, finishOperation, err := a.beginConnectionTransaction()
 	if err != nil {
 		return err
@@ -646,7 +650,12 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 					linuxHostTUNDirectHealth(t, peer)
 				}
 				before = peer.observe(t, "stats")
-				if before.DNSQueries < 2 || before.RawUDP == 0 || before.PlainUDP == 0 || before.RouterQueries != 0 {
+				expectedProofs := uint32(0)
+				if scenario == "public-connect" {
+					expectedProofs = 1 // The actual handler has already completed its routed proof.
+				}
+				if before.DNSQueries < 2 || before.RawUDP == 0 || before.PlainUDP == 0 || before.RouterQueries != expectedProofs ||
+					scenario == "public-connect" && (before.RawTCP == 0 || before.PlainTCP == 0) {
 					t.Fatal("installed readiness bypassed the selected encrypted DNS path", before)
 				}
 				if _, err := process.gate.Write([]byte{2}); err != nil {
@@ -675,7 +684,7 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 					t.Fatal("failed key/resolver fabricated readiness or a Router response", result, after)
 				}
 			} else {
-				http := scenario != "stale-ready" && scenario != "cancelled-proof" && scenario != "replaced-host"
+				http := scenario != "stale-ready" && scenario != "cancelled-proof" && scenario != "replaced-host" && scenario != "public-connect"
 				expectedHTTP := before.RouterQueries
 				if http {
 					expectedHTTP++
@@ -704,7 +713,7 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				activation = "retained-after-request"
 			}
 			switch scenario {
-			case "active-request-ended":
+			case "active-request-ended", "public-connect":
 				activation = "retained-after-request"
 			case "cancel-adoption":
 				activation = "rejected-adoption"
@@ -716,7 +725,7 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			if result.Activation != activation {
 				t.Fatal("installed host omitted its actual captured activation and lifetime result", result.Activation, activation)
 			}
-			if scenario == "active-request-ended" {
+			if scenario == "active-request-ended" || scenario == "public-connect" {
 				if result.DNSProof == nil || result.DNSProof.Status != "passed" || result.Ready == nil ||
 					result.DNSProof.LatencyMs != result.Ready.DNSMilliseconds || after.DNSQueries != before.DNSQueries ||
 					!strings.Contains(result.DNSProof.Reason, "before connection") {
@@ -728,6 +737,12 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			}
 			if activation != "" {
 				t.Log("verified installed host active lifetime:", scenario)
+			}
+			if result.Public != (scenario == "public-connect") {
+				t.Fatal("installed public handler evidence belongs to another scenario")
+			}
+			if result.Public {
+				t.Log("verified installed host public Connect and Disconnect:", scenario)
 			}
 			if scenario == "restore-sealed" {
 				restored := result.Restore
@@ -764,7 +779,7 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			} else if result.MTU != nil {
 				t.Fatal("installed MTU result belongs to another original scenario")
 			}
-			if scenario == "active-request-ended" || strings.HasPrefix(scenario, "mtu-") {
+			if scenario == "active-request-ended" || scenario == "public-connect" || strings.HasPrefix(scenario, "mtu-") {
 				if result.MTUView == nil || result.Ready == nil || result.MTUView.Source != "live-captured-interface" ||
 					result.MTUView.EffectiveMTU != result.Ready.MTU || result.MTUView.Automatic != strings.HasPrefix(scenario, "mtu-") {
 					t.Fatal("installed MTU view omitted its original live Fixed/Auto readback", result.MTUView, result.Ready)

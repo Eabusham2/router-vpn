@@ -1033,6 +1033,9 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool, transition ...*mod
 	if jumbo && !m.JumboSupported {
 		return errors.New("Jumbo TUN is not available for this mode; leave it off for WireGuard/AWG")
 	}
+	if handled, err := a.startDesktopLinuxNodeConnection(startupCtx, p, m, [3]bool{daita, jumbo, socks}, holdOnFailure, transition...); handled {
+		return err
+	}
 	var native *desktopNodeLaunch
 	if a.desktopNodeConnectionSelected(id) {
 		p.DAITAEnabled, p.JumboTUN, p.SocksEnabled = daita, jumbo, socks

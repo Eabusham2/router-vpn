@@ -631,6 +631,9 @@ func (a *app) publishDesktopOwnedNodeStartFor(launch *desktopNodeLaunch, phase, 
 // own native successor and restore support; rejecting after Stop would destroy
 // a working connection while the new path cannot consume its retained deny.
 func (a *app) guardDesktopOwnedNodeTransition(next *desktopNodeLaunch) error {
+	if err := a.guardDesktopLinuxNodeLegacyTransition(); err != nil {
+		return err
+	}
 	if a.retainedDesktopNodeProtection() && (next == nil || next.ownedNode == nil) {
 		return errors.New("the selected path cannot yet inherit this captured native protection; disconnect the current on-connect path first")
 	}

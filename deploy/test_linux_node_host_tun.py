@@ -35,7 +35,7 @@ CHILD = load('linux_installed_host_child', 'test_linux_node_child_tun.py')
 TRANSACTION = load('linux_installed_host_transaction', 'test_linux_node_transaction.py')
 BUILD, NODE, GUARD = CHILD.BUILD, CHILD.NODE, CHILD.GUARD
 MTU_CASES = ('mtu-rollback', 'mtu-commit', 'mtu-stale-profile', 'mtu-stale-network', 'mtu-hold', 'mtu-retire-undrained')
-ACTIVE_CASES = ('active-request-ended', 'cancel-adoption', 'active-profile-change', 'active-network-change', 'active-command-change', *MTU_CASES, 'restore-sealed')
+ACTIVE_CASES = ('active-request-ended', 'cancel-adoption', 'active-profile-change', 'active-network-change', 'active-command-change', *MTU_CASES, 'restore-sealed', 'public-connect')
 CASES = ('on-connect', 'home-lan', 'wrong-node', 'resolver-failure', 'wrong-key', 'stale-ready', 'cancelled-proof',
          'replaced-host', 'request-ended', 'shutdown', 'always', *ACTIVE_CASES)
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
@@ -50,6 +50,10 @@ def checked_sources(source):
         if path.is_symlink() or not path.is_file():
             raise ValueError('Installed Linux host lost an actual embedded application input')
         app['cmd/client/' + name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    catalog = ROOT / 'configs/client/modes.json'
+    if catalog.is_symlink() or not catalog.is_file():
+        raise ValueError('Installed public Connect lost its actual runtime catalog')
+    app['configs/client/modes.json'] = hashlib.sha256(catalog.read_bytes()).hexdigest()
     required = {'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_node_host_linux_ready.go', 'cmd/client/desktop_node_host_linux_proof.go',
                 'cmd/client/desktop_node_host_linux_active.go',
@@ -59,6 +63,7 @@ def checked_sources(source):
                 'cmd/client/desktop_node_mtu_linux.go', 'cmd/client/desktop_node_mtu_linux_tun_native_test.go',
                 'cmd/client/desktop_node_session_linux.go',
                 'cmd/client/desktop_node_restore_linux.go', 'cmd/client/desktop_node_restore_linux_tun_native_test.go',
+                'cmd/client/desktop_node_connection_linux.go', 'cmd/client/desktop_node_connection_linux_tun_native_test.go',
                 'cmd/client/bundled_native.go', 'cmd/client/operation_guard.go'}
     if not required.issubset(app):
         raise ValueError('Installed Linux host gate lost its real verifier, startup, proof or retained native ownership')
@@ -99,14 +104,16 @@ def check_verdict(output, case=None):
             raise ValueError('Installed Linux host omitted its actual complete owned lifecycle: ' + value)
         if value in ACTIVE_CASES and 'verified installed host active lifetime: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its actual activation, request completion and native lifetime: ' + value)
-        if value == 'active-request-ended' and 'verified installed host retained DNS observation: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in ('active-request-ended', 'public-connect') and 'verified installed host retained DNS observation: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its actual retained session DNS consumer: ' + value)
         if value in MTU_CASES and 'verified installed host original MTU lease: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its original actual MTU lease: ' + value)
-        if (value == 'active-request-ended' or value.startswith('mtu-')) and 'verified installed host live MTU status: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if (value in ('active-request-ended', 'public-connect') or value.startswith('mtu-')) and 'verified installed host live MTU status: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its current interface MTU status: ' + value)
         if value == 'restore-sealed' and 'verified installed host sealed temporary restoration: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its frozen execution, live MTU and fresh native restoration: ' + value)
+        if value == 'public-connect' and 'verified installed host public Connect and Disconnect: ' + value + '\n' not in output.replace('\r\n', '\n'):
+            raise ValueError('Installed Linux host omitted its real public Connect and Disconnect composition: ' + value)
 
 
 def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case):
@@ -240,7 +247,7 @@ def execute(source, bundle, go='go', *, env=None, receipt_path=None):
                   'cases': list(CASES), 'compiled_negative_controls': [defect], 'output_sha256': hashlib.sha256(output.encode()).hexdigest()}
     CHILD.publish_receipt(receipt_path, result, workspace)
     print('Actual installed Linux host, complete bundle, selected TUN/DNS/MTU, routed Router identity, retained activation after request completion and durable joined retirement passed.')
-    print('Physical devices, off-LAN interoperability, restart recovery and public activation remain separate acceptance boundaries.')
+    print('Physical devices, off-LAN interoperability, restart recovery and other graph families remain separate acceptance boundaries.')
     print(json.dumps({name: result[name] for name in ('gate', 'target', 'policy_sha256', 'source_sha256', 'output_sha256')}, sort_keys=True))
     return result
 

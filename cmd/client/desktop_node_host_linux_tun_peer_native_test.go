@@ -331,6 +331,12 @@ func linuxHostTUNProfile(peer *linuxHostTUNPeer, scenario string) common.RouterP
 func linuxHostTUNInstallProfile(t *testing.T, peer *linuxHostTUNPeer, scenario string) {
 	t.Helper()
 	profile := linuxHostTUNProfile(peer, scenario)
+	if scenario == "public-connect" {
+		catalog, err := os.ReadFile(filepath.Join("..", "..", "configs", "client", "modes.json"))
+		if err != nil || os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "modes.json"), catalog, 0600) != nil {
+			t.Fatal("actual installed public Connect lost the shipping runtime catalog", err)
+		}
+	}
 	password := peer.password
 	if scenario == "wrong-key" {
 		password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x27}, 32))
