@@ -29,6 +29,9 @@ func linuxHostTUNAction(scenario string) string {
 	if linuxHostTUNHysteria2Case(scenario) {
 		return strings.TrimPrefix(scenario, "hy2-")
 	}
+	if linuxHostTUNAmneziaCase(scenario) {
+		return strings.TrimPrefix(scenario, linuxHostTUNAmneziaMode(scenario)+"-")
+	}
 	return scenario
 }
 
@@ -39,6 +42,9 @@ func linuxHostTUNMode(scenario string) string {
 	if linuxHostTUNHysteria2Case(scenario) {
 		return "hysteria2"
 	}
+	if linuxHostTUNAmneziaCase(scenario) {
+		return linuxHostTUNAmneziaMode(scenario)
+	}
 	return "shadowsocks"
 }
 
@@ -46,7 +52,7 @@ func linuxHostTUNEncryptedTCP(peer *linuxHostTUNPeer, before, after linuxHostTUN
 	if after.PlainTCP <= before.PlainTCP {
 		return false
 	}
-	if peer.mode == "wg" || peer.mode == "hysteria2" {
+	if peer.mode == "wg" || linuxHostTUNIsAmnezia(peer.mode) || peer.mode == "hysteria2" {
 		return before.RawTCP == 0 && after.RawTCP == 0 && after.RawUDP > before.RawUDP
 	}
 	return after.RawTCP > before.RawTCP

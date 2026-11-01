@@ -39,6 +39,7 @@ var linuxHostTUNCases = []string{"on-connect", "home-lan", "wrong-node", "resolv
 func init() {
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNWireGuardCases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNHysteria2Cases...)
+	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNAmneziaCases...)
 }
 
 func linuxHostTUNCoverCase(scenario string) bool {
@@ -220,7 +221,7 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 	if mtuCase || restoreCase {
 		policyValid = profile.MTUPolicy == "auto" && profile.ManualMTU == 0
 	}
-	if profile.ID != "installed-linux-node" || ((mode == "shadowsocks" || mode == "hysteria2") && profile.NodeProofID != linuxHostTUNNodeID || mode == "wg" && !nativeDigest(profile.NodeProofID)) || profile.RouterAPI != "http://10.77.0.1:8787" ||
+	if profile.ID != "installed-linux-node" || ((mode == "shadowsocks" || mode == "hysteria2") && profile.NodeProofID != linuxHostTUNNodeID || (mode == "wg" || linuxHostTUNIsAmnezia(mode)) && !nativeDigest(profile.NodeProofID)) || profile.RouterAPI != "http://10.77.0.1:8787" ||
 		profile.DNSMode != "home" || profile.AdGuardIPv4 != "192.168.50.133" || profile.IPv6Mode != "on" || !policyValid || profile.EffectiveMTU != 9000 ||
 		profile.StartLayer != linuxHostTUNStartLayer(scenario) {
 		return errors.New("installed-host fixture changed its captured node, selected DNS or fixed MTU")
@@ -710,7 +711,7 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				{Host: peer.address.Addr().String(), Port: int(peer.address.Port()), Network: "tcp"},
 				{Host: peer.address.Addr().String(), Port: int(peer.address.Port()), Network: "udp"},
 			}
-			if peer.mode == "wg" || peer.mode == "hysteria2" {
+			if peer.mode == "wg" || linuxHostTUNIsAmnezia(peer.mode) || peer.mode == "hysteria2" {
 				physical = physical[1:]
 			}
 			if result.StartLayer != peer.layer || !reflect.DeepEqual(result.Physical, physical) {
@@ -950,6 +951,9 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			}
 			if peer.mode == "wg" {
 				t.Log("verified installed host plain WireGuard:", scenario)
+			}
+			if linuxHostTUNIsAmnezia(peer.mode) {
+				t.Log("verified installed host captured AWG2:", scenario)
 			}
 			if peer.mode == "hysteria2" {
 				t.Log("verified installed host plain Hysteria2:", scenario)

@@ -86,6 +86,62 @@ func TestDesktopLinuxNodeRetainsExactPlainWireGuard(t *testing.T) {
 	}
 }
 
+func TestDesktopLinuxNodeRetainsExactPlainAmnezia(t *testing.T) {
+	for _, mode := range []string{"awg2-fast", "awg2-strong"} {
+		for _, layer := range []string{"", "off"} {
+			t.Run(mode+"/"+layer, func(t *testing.T) {
+				if !DesktopLinuxNodePhysicalGraphSupported(mode, layer) {
+					t.Fatal("plain AWG2 has no retained Linux path")
+				}
+				files, profile, _ := nodeProfileFixture(t, mode, "")
+				if mode == "awg2-strong" {
+					raw, _ := amneziaFixture()
+					raw = strings.Replace(strings.Replace(raw, "Jc=3\n", "Jc=8\n", 1), "Jmax=900\n", "Jmax=1200\n", 1)
+					encoded, err := json.Marshal(map[string]string{"awg.conf": base64.StdEncoding.EncodeToString([]byte(raw))})
+					if err != nil {
+						t.Fatal(err)
+					}
+					files = string(encoded)
+				}
+				profile["start_layer"], profile["kill_switch_policy"] = layer, "always"
+				original, err := NewNodeProfile(mode, files, startJSON(t, profile), "", "")
+				if err != nil {
+					t.Fatal(err)
+				}
+				policy := desktopNodePlan(t, original, desktopNodeTestSession, "linux")
+				assertDesktopNodeExactDerivation(t, policy)
+				capture, err := policy.Capture()
+				if err != nil || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Type != "routervpn-amneziawg" ||
+					capture.PhysicalRoots[0].Family != "endpoints" || len(capture.PhysicalRoots[0].Destinations) != 1 ||
+					capture.PhysicalRoots[0].Destinations[0] != (PhysicalEgress{Host: "192.0.2.1", Port: 51820, Network: "udp"}) ||
+					capture.SelectedDNS.Host != "192.168.50.133" || capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != "proxy" ||
+					capture.ConfiguredMTU != 1280 || capture.KillSwitchPolicy != "always" {
+					t.Fatal("plain Linux AWG2 lost its one UDP peer, selected DNS, MTU or protection", err)
+				}
+				before := desktopNodeObject(t, startObject(t, original.Config()), "endpoints", "proxy")
+				actual := desktopNodeObject(t, startObject(t, policy.Config()), "endpoints", "proxy")
+				parameters, ok := actual["amnezia"].(map[string]any)
+				expectedJunk, expectedMaximum := "3", "900"
+				if mode == "awg2-strong" {
+					expectedJunk, expectedMaximum = "8", "1200"
+				}
+				if !ok || len(parameters) != 11 || parameters["jc"] != expectedJunk || parameters["jmax"] != expectedMaximum {
+					t.Fatal("retained AWG graph changed its exact mode-specific source parameters")
+				}
+				if actual["detour"] != DesktopNodePhysicalTag || actual["type"] != "routervpn-amneziawg" ||
+					actual["private_key"] != before["private_key"] || !reflect.DeepEqual(actual["peers"], before["peers"]) || !reflect.DeepEqual(actual["amnezia"], before["amnezia"]) {
+					t.Fatal("plain Linux AWG2 changed native transport, private key or peer source")
+				}
+			})
+		}
+		for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening", "OFF", "plain", " off", "unknown"} {
+			if DesktopLinuxNodePhysicalGraphSupported(mode, layer) {
+				t.Fatal("plain AWG2 opened an unproved Start Layer", layer)
+			}
+		}
+	}
+}
+
 func TestDesktopLinuxNodeRetainsExactShadowsocksLayers(t *testing.T) {
 	for _, layer := range []string{"", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 		t.Run(layer, func(t *testing.T) {

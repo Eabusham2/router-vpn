@@ -35,7 +35,8 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:9: verified installed host saved Linux protection Off: ' + case for case in cases if case in G.OFF_CASES),
                           *('    native_test.go:10: verified installed host captured Start Layer: ' + case for case in cases if case in G.LAYER_CASES),
                           *('    native_test.go:11: verified installed host plain WireGuard: ' + case for case in cases if case in G.WIREGUARD_CASES),
-                          *('    native_test.go:12: verified installed host plain Hysteria2: ' + case for case in cases if case in G.HYSTERIA2_CASES)]) + '\n'
+                          *('    native_test.go:12: verified installed host plain Hysteria2: ' + case for case in cases if case in G.HYSTERIA2_CASES),
+                          *('    native_test.go:13: verified installed host captured AWG2: ' + case for case in cases if case in G.AMNEZIA_CASES)]) + '\n'
 
     def test_requires_every_real_positive_negative_and_joined_lifecycle(self):
         output = self.completed()

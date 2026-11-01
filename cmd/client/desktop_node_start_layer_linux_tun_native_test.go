@@ -26,7 +26,7 @@ func linuxHostTUNWrongKeyCase(scenario string) bool {
 		return true
 	}
 	scenario = linuxHostTUNAction(scenario)
-	return scenario == "wrong-key" || scenario == "layer-whitening-wrong-key"
+	return scenario == "wrong-key" || scenario == "wrong-header" || scenario == "wrong-padding" || scenario == "layer-whitening-wrong-key"
 }
 
 func linuxHostTUNResolverFailureCase(scenario string) bool {
@@ -55,6 +55,9 @@ func linuxHostTUNLayerSource(ctx context.Context, host *desktopLinuxNodeHost, sc
 	mode, kind, roots := linuxHostTUNMode(scenario), "shadowsocks", 2
 	if mode == "wg" {
 		kind, roots = "wireguard", 1
+	}
+	if linuxHostTUNIsAmnezia(mode) {
+		kind, roots = "routervpn-amneziawg", 1
 	}
 	if mode == "hysteria2" {
 		kind, roots = "hysteria2", 1

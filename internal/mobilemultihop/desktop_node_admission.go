@@ -1,11 +1,12 @@
 package mobilemultihop
 
 // DesktopLinuxNodePhysicalGraphSupported is the retained Linux host's bounded
-// composition. Plain WireGuard and Hysteria2 retain their exact authenticated
-// peer and UDP lower. Shadowsocks retains Off, authenticated SS2022 AES, or that ciphertext
+// composition. WireGuard, AWG2 Fast/Strong and Hysteria2 with Start Layer Off
+// retain their exact authenticated peer and UDP lower. Shadowsocks retains
+// Off, authenticated SS2022 AES, or that ciphertext
 // with the native owned whitening adapter. Other compositions have separate gates.
 func DesktopLinuxNodePhysicalGraphSupported(mode, startLayer string) bool {
-	if mode == "wg" || mode == "hysteria2" {
+	if mode == "wg" || mode == "awg2-fast" || mode == "awg2-strong" || mode == "hysteria2" {
 		return startLayer == "" || startLayer == "off"
 	}
 	if mode != "shadowsocks" {

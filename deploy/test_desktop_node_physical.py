@@ -592,7 +592,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         ("encrypted", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeEncrypted",
          ("TestRouterVPNDesktopNodeEncryptedPreReadyHandshake", "TestRouterVPNDesktopNodeEncryptedWrongPeerRejected", "TestRouterVPNDesktopNodeEncryptedConfiguredCoverStartup", "TestRouterVPNDesktopNodeEncryptedSelectedDNSIsFresh",
           "TestRouterVPNDesktopNodeEncryptedLayerTraffic", "TestRouterVPNDesktopNodeEncryptedLayerWrongCredential", "TestRouterVPNDesktopNodeEncryptedRouterHealthLayers") +
-         (("TestRouterVPNDesktopNodeEncryptedPlainWireGuard",) if platform.system() == "Linux" else ())),
+         (("TestRouterVPNDesktopNodeEncryptedPlainWireGuard", "TestRouterVPNDesktopNodeEncryptedPlainAmnezia", "TestRouterVPNDesktopNodeEncryptedAmneziaReferenceCapture") if platform.system() == "Linux" else ())),
         ("hysteria2-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeHysteria2",
          ("TestRouterVPNDesktopNodeHysteria2WrongCredential",)),
         ("xray-traffic", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeXrayTraffic$",
@@ -636,6 +636,14 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Node encrypted gate omitted captured Router health and selected DNS for a Start Layer")
             if name == "encrypted" and platform.system() == "Linux" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedPlainWireGuard/" + case + " (" not in output for case in ("proved", "wrong-peer", "wrong-psk")):
                 raise ValueError("Node encrypted gate omitted plain WireGuard selected DNS, identity or captured-key rejection")
+            if name == "encrypted" and platform.system() == "Linux":
+                required_awg = tuple(mode + "/" + fault for mode in ("awg2-fast", "awg2-strong")
+                                     for fault in ("proved", "wrong-peer", "wrong-psk", "wrong-header", "wrong-padding"))
+                if any("--- PASS: TestRouterVPNDesktopNodeEncryptedPlainAmnezia/" + case + " (" not in output for case in required_awg):
+                    raise ValueError("Node encrypted gate omitted AWG2 exact parameters, selected DNS, identity or real credential/padding rejection")
+                capture_cases = ("captured", "wrong-mode", "missing", "extra", "overlap", "wg-header", "wrong-client", "noncanonical-key", "self-peer", "private-alias-self-peer", "wrong-node")
+                if any("--- PASS: TestRouterVPNDesktopNodeEncryptedAmneziaReferenceCapture/" + case + " (" not in output for case in capture_cases):
+                    raise ValueError("Node encrypted gate omitted AWG2 captured source and canonical identity rejection")
             if name == "hysteria2-credentials" and any("--- PASS: TestRouterVPNDesktopNodeHysteria2WrongCredential/" + case + " (" not in output for case in HYSTERIA2_CREDENTIAL_CASES):
                 raise ValueError("Node Hysteria2 gate omitted a captured protocol, trust or layer credential negative")
             if name == "xray-traffic" and any("--- PASS: TestRouterVPNDesktopNodeXrayTraffic/" + case + " (" not in output for case in XRAY_CASES):

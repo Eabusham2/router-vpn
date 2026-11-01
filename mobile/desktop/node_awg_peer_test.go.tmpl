@@ -1,0 +1,302 @@
+//go:build linux && !android
+
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/netip"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	awgconn "github.com/amnezia-vpn/amneziawg-go/v3/conn"
+	awg "github.com/amnezia-vpn/amneziawg-go/v3/device"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/awgpolicy"
+	wg "github.com/sagernet/sing-box/transport/wireguard"
+	wgconn "github.com/sagernet/wireguard-go/conn"
+)
+
+// This child retains the same fixed DNS, health, echo and physical destinations
+// as the independent WG fixture. Its cipher is the actual pinned AWG device,
+// with the captured complete Fast/Strong parameters applied and read back.
+type desktopNodeAWGRequest struct {
+	desktopNodeWGRequest
+	Mode       string            `json:"mode"`
+	Parameters map[string]string `json:"parameters"`
+}
+
+func desktopNodeAWGRequestIdentity(request desktopNodeAWGRequest) (netip.Addr, netip.Addr, string, error) {
+	bad := errors.New("AWG reference requires its exact complete captured mode and parameters")
+	if !awgpolicy.IsMode(request.Mode) {
+		return netip.Addr{}, netip.Addr{}, "", bad
+	}
+	parameters, err := awgpolicy.ParametersUAPI(request.Parameters)
+	if err != nil {
+		return netip.Addr{}, netip.Addr{}, "", bad
+	}
+	local, remote, ipc, err := desktopNodeWGRequestIdentity(request.desktopNodeWGRequest)
+	if err != nil {
+		return netip.Addr{}, netip.Addr{}, "", err
+	}
+	first, rest, ok := strings.Cut(ipc, "\n")
+	if !ok {
+		return netip.Addr{}, netip.Addr{}, "", bad
+	}
+	return local, remote, first + "\n" + parameters + rest, nil
+}
+
+type desktopNodeAWGBind struct{ *desktopNodeWGBind }
+
+var _ awgconn.Bind = (*desktopNodeAWGBind)(nil)
+
+func (b *desktopNodeAWGBind) Open(port uint16) ([]awgconn.ReceiveFunc, uint16, error) {
+	reads, port, err := b.desktopNodeWGBind.Open(port)
+	if err != nil {
+		return nil, 0, err
+	}
+	converted := make([]awgconn.ReceiveFunc, len(reads))
+	for index, read := range reads {
+		converted[index] = func(packets [][]byte, sizes []int, endpoints []awgconn.Endpoint) (int, error) {
+			values := make([]wgconn.Endpoint, len(endpoints))
+			n, err := read(packets, sizes, values)
+			for i := 0; i < n; i++ {
+				endpoints[i] = values[i]
+			}
+			return n, err
+		}
+	}
+	return converted, port, nil
+}
+func (b *desktopNodeAWGBind) Send(packets [][]byte, endpoint awgconn.Endpoint) error {
+	return b.desktopNodeWGBind.Send(packets, endpoint, 0)
+}
+func (b *desktopNodeAWGBind) ParseEndpoint(value string) (awgconn.Endpoint, error) {
+	return b.desktopNodeWGBind.ParseEndpoint(value)
+}
+
+func desktopNodeAWGParameterDigest(parameters map[string]string) (string, error) {
+	text, err := awgpolicy.ParametersUAPI(parameters)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func desktopNodeAWGParameterReadback(device *awg.Device, expected string) (string, error) {
+	bad := errors.New("AWG native readback differs from its exact captured parameters")
+	raw, err := device.IpcGet()
+	if err != nil || len(raw) == 0 || len(raw) > 64<<10 {
+		return "", bad
+	}
+	// The native getter omits numeric zero values. It also includes private
+	// keys, which are neither returned nor printed by this receipt.
+	parameters := map[string]string{"jc": "0", "jmin": "0", "jmax": "0", "s1": "0", "s2": "0", "s3": "0", "s4": "0"}
+	seen := map[string]bool{}
+	for _, line := range strings.Split(raw, "\n") {
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || !awgpolicy.IsParameter(key) {
+			continue
+		}
+		if seen[key] {
+			return "", bad
+		}
+		seen[key], parameters[key] = true, value
+	}
+	raw = ""
+	actual, err := desktopNodeAWGParameterDigest(parameters)
+	if err != nil || actual != expected {
+		return "", bad
+	}
+	return actual, nil
+}
+
+func TestRouterVPNDesktopNodeAmneziaReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_NODE_AWG_REFERENCE_CHILD") != "1" {
+		return
+	}
+	reader := bufio.NewReaderSize(os.Stdin, (64<<10)+1)
+	line, err := reader.ReadSlice('\n')
+	if err != nil || len(line) > 64<<10 {
+		t.Fatal("AWG reference requires its bounded original pipe request")
+	}
+	var request desktopNodeAWGRequest
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF {
+		t.Fatal("AWG reference received another input shape")
+	}
+	local, remote, ipc, err := desktopNodeAWGRequestIdentity(request)
+	expected, digestErr := desktopNodeAWGParameterDigest(request.Parameters)
+	padding, paddingErr := strconv.Atoi(request.Parameters["s4"])
+	if err != nil || digestErr != nil || paddingErr != nil {
+		t.Fatal("AWG reference rejected its captured source", err, digestErr, paddingErr)
+	}
+	runDesktopNodeUDPReferenceProcess(t, reader, request.desktopNodeWGRequest, local, remote, ipc,
+		func(_ context.Context, stack wg.Device, bind *desktopNodeWGBind, ipc string) (desktopNodeUDPReferenceDevice, error) {
+			wrapped := wrapTun(stack)
+			device := awg.NewDevice(wrapped, &desktopNodeAWGBind{bind}, &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}})
+			err := device.IpcSet(ipc)
+			if err == nil {
+				err = wrapped.configuredPadding(padding)
+			}
+			if err == nil {
+				err = stack.Start()
+			}
+			if err == nil {
+				err = device.Up()
+			}
+			if err != nil {
+				device.Close()
+				return desktopNodeUDPReferenceDevice{}, err
+			}
+			return desktopNodeUDPReferenceDevice{close: device.Close,
+				readback: func() (string, error) { return desktopNodeAWGParameterReadback(device, expected) }}, nil
+		})
+}
+
+func desktopNodeAWGReference(t *testing.T, mode string) *desktopNodeLayerReference {
+	t.Helper()
+	_, ip := desktopNodePeerInterface(t)
+	config, options := desktopReferenceFixture(t)
+	if mode == "awg2-strong" {
+		config.Parameters["jc"], config.Parameters["jmax"] = "8", "1200"
+	}
+	digest := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + options.Peers[0].PublicKey))
+	request := desktopNodeAWGRequest{desktopNodeWGRequest: desktopNodeWGRequest{Schema: 1, Address: ip.String(), ClientAddress: ip.String(),
+		PrivateKey: config.PrivateKey, ClientPublicKey: config.Peers[0].PublicKey, PreSharedKey: config.Peers[0].PreSharedKey, NodeProofID: hex.EncodeToString(digest[:])},
+		Mode: mode, Parameters: config.Parameters}
+	expected, err := desktopNodeAWGParameterDigest(config.Parameters)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
+	p := &desktopNodeLayerReference{ctx: ctx, cancel: cancel, options: options, done: make(chan error, 1),
+		request: desktopNodeLayerRequest{Schema: 1, Mode: mode, Address: ip.String(), NodeProofID: request.NodeProofID, Configuration: config}}
+	p.command = exec.CommandContext(ctx, executable, "-test.run=^TestRouterVPNDesktopNodeAmneziaReferenceProcess$", "-test.count=1", "-test.timeout=60s")
+	p.command.Env = append(os.Environ(), "ROUTERVPN_NODE_AWG_REFERENCE_CHILD=1")
+	p.input, err = p.command.StdinPipe()
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	var writer *os.File
+	p.output, writer, err = os.Pipe()
+	if err != nil {
+		cancel()
+		_ = p.input.Close()
+		t.Fatal(err)
+	}
+	p.reader = bufio.NewReaderSize(p.output, (64<<10)+1)
+	p.command.Stdout, p.command.Stderr = writer, &p.diagnostic
+	if err := p.command.Start(); err != nil {
+		cancel()
+		_ = p.input.Close()
+		_ = p.output.Close()
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	_ = writer.Close()
+	go func() { p.done <- p.command.Wait() }()
+	t.Cleanup(func() {
+		_ = p.input.Close()
+		select {
+		case err := <-p.done:
+			if err != nil {
+				t.Error("independent AWG peer failed", err, p.diagnostic.String())
+			}
+		case <-time.After(5 * time.Second):
+			cancel()
+			<-p.done
+			t.Error("independent AWG peer did not join its owned control pipe", p.diagnostic.String())
+		}
+		cancel()
+		_ = p.output.Close()
+	})
+	if err := json.NewEncoder(p.input).Encode(request); err != nil {
+		t.Fatal(err)
+	}
+	p.reply, err = p.read()
+	p.remote, _ = netip.ParseAddrPort(p.reply.Address)
+	if err != nil || p.remote.Addr() != ip || p.remote.Port() == 0 || p.reply.BaseAddress != p.reply.Address || p.reply.AESAddress != "" ||
+		p.reply.ProbeNetwork != "udp" || p.reply.RawTCP != 0 || p.reply.ParametersSHA256 != expected || p.reply.ProtocolFiles != "" {
+		t.Fatal("independent AWG peer did not retain its original UDP socket and parameters", err, p.diagnostic.String())
+	}
+	return p
+}
+
+func TestRouterVPNDesktopNodeEncryptedPlainAmnezia(t *testing.T) {
+	for _, mode := range []string{"awg2-fast", "awg2-strong"} {
+		for _, fault := range []string{"proved", "wrong-peer", "wrong-psk", "wrong-header", "wrong-padding"} {
+			t.Run(mode+"/"+fault, func(t *testing.T) { testDesktopNodeEncryptedUDP(t, desktopNodeAWGReference(t, mode), fault) })
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeEncryptedAmneziaReferenceCapture(t *testing.T) {
+	for _, fault := range []string{"captured", "wrong-mode", "missing", "extra", "overlap", "wg-header", "wrong-client", "noncanonical-key", "self-peer", "private-alias-self-peer", "wrong-node"} {
+		t.Run(fault, func(t *testing.T) {
+			config, options := desktopReferenceFixture(t)
+			digest := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + options.Peers[0].PublicKey))
+			request := desktopNodeAWGRequest{desktopNodeWGRequest: desktopNodeWGRequest{Schema: 1, Address: "192.168.210.2", ClientAddress: "192.168.210.1",
+				PrivateKey: config.PrivateKey, ClientPublicKey: config.Peers[0].PublicKey, PreSharedKey: config.Peers[0].PreSharedKey, NodeProofID: hex.EncodeToString(digest[:])},
+				Mode: "awg2-fast", Parameters: config.Parameters}
+			switch fault {
+			case "wrong-mode":
+				request.Mode = "wg"
+			case "missing":
+				delete(request.Parameters, "s4")
+			case "extra":
+				request.Parameters["i1"] = "<b 0x01>"
+			case "overlap":
+				request.Parameters["h2"] = request.Parameters["h1"]
+			case "wg-header":
+				request.Parameters["h1"] = "1"
+			case "wrong-client":
+				request.ClientAddress = "192.168.210.3"
+			case "noncanonical-key":
+				request.PrivateKey = base64.RawStdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32))
+			case "self-peer":
+				request.ClientPublicKey = options.Peers[0].PublicKey
+			case "private-alias-self-peer":
+				raw, err := base64.StdEncoding.Strict().DecodeString(request.PrivateKey)
+				if err != nil || len(raw) != 32 {
+					t.Fatal("private identity fixture lost its original scalar", err)
+				}
+				raw[0] ^= 1 // X25519 clamps this bit; peer identity must remain the same.
+				request.PrivateKey = base64.StdEncoding.EncodeToString(raw)
+				clear(raw)
+				request.ClientPublicKey = options.Peers[0].PublicKey
+			case "wrong-node":
+				request.NodeProofID = strings.Repeat("f", 64)
+			}
+			local, remote, ipc, err := desktopNodeAWGRequestIdentity(request)
+			if fault != "captured" {
+				if err == nil {
+					t.Fatal("AWG reference accepted foreign source", fault)
+				}
+				return
+			}
+			parameters, parameterErr := awgpolicy.ParametersUAPI(config.Parameters)
+			if err != nil || parameterErr != nil || local.String() != request.Address || remote.String() != request.ClientAddress ||
+				!strings.Contains(ipc, "\n"+parameters+"public_key=") {
+				t.Fatal("AWG reference lost exact parameters or captured canonical identity", err, parameterErr)
+			}
+		})
+	}
+}

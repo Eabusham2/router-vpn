@@ -75,6 +75,9 @@ func linuxHostTUNSealedRestore(ctx context.Context, a *app, session *desktopLinu
 	if saved.mode == "wg" {
 		asset = "wg.conf"
 	}
+	if linuxHostTUNIsAmnezia(saved.mode) {
+		asset = "awg.conf"
+	}
 	generated := filepath.Join(linuxOwnedControllerRoot, "generated", snapshot.Plan.profile.ID, saved.mode, asset)
 	if err := os.WriteFile(generated, []byte("not the captured private graph\n"), 0600); err != nil {
 		return nil, result, err
