@@ -3,7 +3,7 @@
 This continues [October 31](CONTINUATION-EVIDENCE-2026-10-31.md), preserves
 [the reconciled requirement authority](REQUIREMENTS-RECONCILED.md), and records
 published source through
-[`74dbd3d43584cc38e77ea7730a97147d9bd3ae4b`](https://github.com/Eabusham2/router-vpn/commit/74dbd3d43584cc38e77ea7730a97147d9bd3ae4b).
+[`39fe1a02b9272611a0389c8c3880cff3d0fb9416`](https://github.com/Eabusham2/router-vpn/commit/39fe1a02b9272611a0389c8c3880cff3d0fb9416).
 The live `main` reference was independently read after publication. Later local
 work is not included in this source cutoff. Original requirements, C1–C7,
 the later product/breakage, map-first, external-node and all-device corrections
@@ -14,7 +14,106 @@ Native evidence below keeps its own exact source identity. The retained
 historical observations are not silently reassigned to this newer cutoff,
 and unrelated passing jobs are not combined into a release claim.
 
-## Latest source and native evidence through 74dbd3d4
+## Latest source and native evidence through 39fe1a02
+
+This section supersedes the earlier status observations where newer evidence
+exists, while preserving their original source identities below. Every listed
+source unit was published directly to `main` with expected-parent protection,
+independent remote readback and exact local synchronization. The in-progress
+Linux Connect, MTU, sealed restoration and cover-traffic changes are excluded
+from this published cutoff.
+
+### Published changes after 74dbd3d4
+
+| Commit | Implemented behavior and verification boundary |
+|---|---|
+| [`c83ae82b`](https://github.com/Eabusham2/router-vpn/commit/c83ae82b7056b96897376df21bbd855bedd28770) | Separate the macOS ES logger from its triggering process group and preserve exact timestamps when correlating designated-executable observations. Twenty-four local tests and six executed defects passed. The actual ARM64 diagnostic now passes, as detailed below; installer admission is unchanged. |
+| [`79ce550f`](https://github.com/Eabusham2/router-vpn/commit/79ce550fd3dda2d8bb2e3b9a068c837592337252) | Keep restored PQ/MAX test-reference forwarding closed until the next installed key epoch is observed. This repairs the reference's stale-key transition boundary; it is not a claimed production cipher defect or complete MAX pass. The later `57892bc9` PQ ARM64 gate executes this fixture successfully. |
+| [`e27f47c6`](https://github.com/Eabusham2/router-vpn/commit/e27f47c6afe73beb189b7dc4dbec7f5a6b15c810) | Report selected DNS through the original retained Linux session and host, preserving source, resolver, current ownership and the distinction between an earlier native query and fresh Retest. Focused race checks and three compiled defects passed. The sixteen-case installed-host gate now requires this actual DNS consumer in its retained-request case; complete native execution remains pending. |
+| [`57892bc9`](https://github.com/Eabusham2/router-vpn/commit/57892bc9f820b7fc7f44ddf2665facf1ccb8d96d) | Capture the original Linux session/host/command before the app's Stop drains MTU, and retain that owner through ordinary and terminal dispatch. Reject duplicate legacy ownership and preserve replacement commands. Eighteen actual namespace cases and four final dispatch defects passed; earlier semantic controls retain their own source identity. Graph readiness is modeled here. |
+| [`a75728d7`](https://github.com/Eabusham2/router-vpn/commit/a75728d7c2c18910bfa1f190840ce43e759a6880) | Capture active DAITA/Jumbo/SOCKS choices independently of the stored profile while binding both immutable option tuples through preparation, transaction, activation and DNS. Thirteen preparation plus thirteen actual start cases, 61 focused comparison cases, three compiled defects and ARM64 compilation passed. Neither option capture nor configuration proves active padding traffic. |
+| [`f40bc707`](https://github.com/Eabusham2/router-vpn/commit/f40bc70722206a59cd204ff66b3c31f2c65194d8) | Route AUTO/SMART fallback release and cancellation through the exact retained Linux session. A later cancelled request cannot adopt an older active host, and final release requires the original host to have joined. Ten real namespace cases, existing fallback regressions, four earlier compiled controls and Linux/Windows compilation passed. |
+| [`544832c8`](https://github.com/Eabusham2/router-vpn/commit/544832c836800631987e909ee3f65a714abbfecb) | Retain one monitor on the proved activation lifetime, retry gate contention, distinguish native-proof expiry, and cancel/join the exact observer before retirement. Startup WaitReady/Prove cannot replay failure cleanup against an activated host. Fifteen race groups, two startup-guard defects, nine earlier controls on the identical monitor, vet and ARM64 compilation passed. Actual Monitor invocation in app Connect and full TUN acceptance remain pending. |
+| [`61fed15e`](https://github.com/Eabusham2/router-vpn/commit/61fed15eedc80fc696e25ac8b542be64fec63148) | Increase only the expanded Windows Node baseline's aggregate budget from 240/255 to 360/375 seconds after 82 actual passing groups consumed 237.10 seconds. Every individual operation, ALL aggregate and 60/75-second compiled-control limit remains unchanged. Ten runner contracts passed; a matching native completion is still required. |
+| [`8b54559c`](https://github.com/Eabusham2/router-vpn/commit/8b54559c1d4549b311b367a87944bddad698a850) | Read the current fixed legacy guard before entering a prepared Linux transition, bracketing original namespace/generation/command/presentation. Reject unsupported succession before StopBegun, preserving the old connection. Nine actual namespace cases, three compiled defects, twelve runner checks and ARM64 compilation passed. This is read-only preflight; it does not implement cross-owner legacy-guard succession. |
+| [`7449e7b1`](https://github.com/Eabusham2/router-vpn/commit/7449e7b12ca25495d5fd489df0c4f31541d22f90) | Make the package Session test child compare actual cwd/executable/captured directory identity before Portable relocation removes the original pathname. Two actual-process alias positives, twelve rejections including an equal-content different directory, and four existing executed source defects passed with Linux PowerShell. Restoring the old string comparison fails the intended alias case. Windows native execution remains separate; production PowerShell is unchanged. |
+| [`39fe1a02`](https://github.com/Eabusham2/router-vpn/commit/39fe1a02b9272611a0389c8c3880cff3d0fb9416) | Give the eight Linux namespace/account lifecycles 180 seconds and their enclosing caller 210 seconds after both actual architectures exhausted the previous 60-second aggregate. All eight actual private-namespace cases passed locally, including original verdicts and executed defects; the real privileged timeout/pipe/pidfd cleanup and its negative control also passed. No individual runtime protection or process-group cleanup changed. |
+
+### New actual native observations
+
+The exact `0b7becef` [manual Linux run 41286519880](https://github.com/Eabusham2/router-vpn/actions/runs/41286519880)
+has now completed with failure on both
+[AMD64 124788836038](https://github.com/Eabusham2/router-vpn/actions/runs/41286519880/job/124788836038)
+and [ARM64 124788836009](https://github.com/Eabusham2/router-vpn/actions/runs/41286519880/job/124788836009).
+Both full logs identify the same 60-second namespace-regression aggregate,
+before complete guardian/runtime/installed-host acceptance. Protected-image
+assertions followed by explicit rejected-control messages are expected negative
+tests, not the failure cause. ARM64 account capture and cleanup alone consumed
+about 4.05 and 4.59 seconds per example lifecycle; AMD64 also exhausted the
+aggregate before all eight cases. `39fe1a02` repairs those enclosing budgets.
+Neither old job executed the current sixteen-case installed-host gate.
+
+The [Windows PQ run at `ac0c95a2`](https://github.com/Eabusham2/router-vpn/actions/runs/41286829302)
+is successful on both [AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/41286829302/job/124789720108)
+and [ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/41286829302/job/124789720207).
+Both actual logs contain six traffic cases, sixteen credential negatives,
+three succession cases, foreign-predecessor rejection, the shipping/open and
+compiled/closed predicates, and all six compiled controls. At newer
+`57892bc9`, [ARM64 124800495660](https://github.com/Eabusham2/router-vpn/actions/runs/41290197921/job/124800495660)
+also passes that complete gate with the `79ce550f` next-key fixture; its AMD64
+sibling remains in progress at this observation. These are bounded PQ
+composition results, not complete MAX, public TUN or physical-device acceptance.
+
+The retained Node job at `74dbd3d4` reached its 240-second alarm after 82
+complete groups, while the next group was only three seconds old;
+[`61fed15e`](https://github.com/Eabusham2/router-vpn/commit/61fed15eedc80fc696e25ac8b542be64fec63148)
+addresses that test aggregate. The later Windows package Session failure at
+`b5eb348e` came from the Python path-spelling assertion after its actual Go
+child had already passed cwd/executable `os.SameFile` comparison;
+`7449e7b1` repairs the expected-directory check without changing installer
+ownership. No matching all-green package run is inferred from local checks.
+
+Complete MAX remains closed. The `ac0c95a2` ARM64 run predates the next-key
+fixture and still fails restored QUIC traffic; its AMD64 sibling remains in
+progress. The `79ce550f` and `57892bc9` MAX workflows were cancelled while
+pending, so neither provides next-key MAX execution evidence. The earlier
+uncaptured-outer-UDP negative-control failure remains a separate acceptance
+case; allocator and epoch repairs cannot silently close it.
+
+At exact `c83ae82b`, the [actual macOS ARM64 diagnostic](https://github.com/Eabusham2/router-vpn/actions/runs/41288967955/job/124796034644)
+reports `diagnostic_passed=true` and `exec-bound-designated-file-observed`.
+The same owned process generation produced linked and unlinked observations
+of the same executable vnode; the logger and instigator used separate process
+groups. The refused pre-fixture process also yielded a designated-executable
+observation. This supersedes the earlier claim that no owned ES event had
+been obtained. Strict first/legacy installation still fails its original
+live-process `ENOENT` inventory check; managed full-host inventory separately
+passes 474-before/474-after plus copied/unlinked controls. The Intel job was
+cancelled and contributes no resolution of its unknown CodeDirectory/UUID
+case. Diagnostic success grants no production installation authority, signing
+entitlement, notarization or distribution acceptance.
+
+### Published foundation versus remaining implementation
+
+The current Linux foundation has retained DNS, original Stop/fallback,
+independent runtime options, monitoring and legacy-transition preflight.
+Daily-use Connect still needs the complete shipping composition. The pending
+MTU lease integration must make ordinary Stop and terminal shutdown reach
+authenticated retirement when an exited engine cannot acknowledge rollback.
+Fixed/Auto status must read the actual interface; SMART and Speed Lab must
+restore sealed inputs and the proved execution, and their path identity must
+include the retained Linux owner. Native cover activation remains required;
+the legacy ambient UDP sender is not an acceptable substitute. These are
+source gaps, not merely requests for physical access. Saved-policy Off,
+cross-owner guard succession, crash recovery and retained Always recovery
+also retain their existing requirements.
+
+The latest release observation remains the twelve-asset `745b3e41` prerelease.
+This newer source series has no verified all-green exact-SHA release. Live
+devices, off-LAN paths, production signing, private deployment and
+ASUS/Portainer acceptance remain separate. No live target was changed.
+
+## Earlier source and native evidence through 74dbd3d4
 
 This section updates the earlier `d8bb8018` checkpoint. The rows below identify
 published changes; the later historical sections keep their earlier evidence
@@ -512,10 +611,10 @@ current all-platform packaging or device acceptance.
 
 | Requirement area | Actual remaining evidence/work at this cutoff |
 |---|---|
-| Linux daily-use native connection | Complete both native sixteen-case installed-host gates and integrate the published private host/session/activation into the daily-use app. Clean terminal empty-journal restart is implemented and proved by eighteen native cases at `74dbd3d4`; saved-policy Off, crash/retained Always recovery and remaining graph/protection coverage remain open. Generated TUN/DNS already passed at `2533e146`; the current manual `0b7becef` run is still in progress with eleven cases. Public Linux Node admission remains closed. |
-| Windows complete MAX / ALL | Resolve the `855e9910` ARM64 restored QUIC failures and AMD64 uncaptured-outer-UDP control failure; require the full native matrix and all 22 controls before opening complete MAX. Both PQ gates pass at `86e0491b`; prospective ALL evidence does not complete its still-closed candidate families. |
-| Native packaging gates | Verify the published staging, Speed Lab fixture, bounded failure-output and server-Tor dependency repairs on their matching native/release builds. Both build-owner and the `0b7becef` Node/controller jobs have bounded success; the Shell diagnostic and complete MAX gate do not. One stable current-SHA package/image/compose build remains required. |
-| macOS installation | Obtain the required owned ES event before any foreign-image inference, resolve unknown Intel identity without accepting EBADEXEC/zero UUID as absence, and complete strict first/legacy and actual package transactions. ARM64 managed-inventory success remains bounded; `c91a54de` adds rejection diagnostics, not admission. |
+| Linux daily-use native connection | Complete both native installed-host gates and integrate the retained host/session, DNS, Stop/fallback, options, monitor and preflight into public Connect. MTU leases and failed-drain cleanup, actual Fixed/Auto status, sealed SMART/Speed Lab restoration and path identity, and native cover activation remain unpublished at this cutoff. Clean terminal empty-journal restart is proved; legacy guard succession, saved-policy Off and crash/retained Always recovery remain open. The old `0b7becef` manual run failed both namespace aggregates before installed-host acceptance; `39fe1a02` repairs those test budgets. Public Linux Node admission remains closed. |
+| Windows complete MAX / ALL | Require matching native complete MAX traffic, reversal and all 22 controls after the published `79ce550f` reference next-key barrier, preserving the distinct uncaptured-outer-UDP negative case. Both PQ gates pass at `ac0c95a2`; newer `57892bc9` ARM64 also passes, while AMD64 is still running. Cancelled pending MAX runs and prospective ALL evidence do not complete still-closed candidate families. |
+| Native packaging gates | Verify the Windows aggregate/physical-directory test fixes and Linux namespace aggregate fix on their matching native jobs, alongside the earlier staging, Speed Lab, failure-output and server-Tor repairs. Bounded build-owner and Node/controller successes remain valid at their own SHAs; Shell, complete MAX and a stable current-SHA package/image/compose release remain separate. |
+| macOS installation | The required owned linked/unlinked ES diagnostic now succeeds on ARM64 at `c83ae82b`; strict first/legacy installation still fails the unresolved live executable. Resolve the actual installation identity boundary and unknown Intel image without treating EBADEXEC/zero UUID as absence, then complete native package transactions. Managed inventory and diagnostic evidence do not grant a production exemption or signing/distribution acceptance. |
 | All applicable original requirements | Continue per-platform graph, lifecycle, DNS, profile, MTU, map/Setup and external-node evidence in the reconciled ledger. Safe exclusion is not completion and these rows do not replace the full original scope. |
 | Current release | One stable exact SHA must complete all required native packages, server images, compose, provenance, checksums and publication. Results from different SHAs cannot be combined into that release. |
 | Signing and physical/private acceptance | Required Apple signing/provisioning/notarization/distribution, Android production signing and upgrade, actual device networking/transitions/leaks/visual/accessibility, off-LAN methods and live provider checks remain separate. |

@@ -6,11 +6,50 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 74dbd3d4
+## Latest implementation continuation — through 39fe1a02
+
+The independently verified source cutoff is
+[`39fe1a02b9272611a0389c8c3880cff3d0fb9416`](https://github.com/Eabusham2/router-vpn/commit/39fe1a02b9272611a0389c8c3880cff3d0fb9416).
+The [November 1 evidence update](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-39fe1a02)
+records each publication and the current native results. Older sections below
+retain their original cutoffs; they do not override newer observations.
+
+- The retained Linux host now supplies selected-DNS reporting, original app
+  Stop/fallback ownership, separate saved/runtime options, activation-owned
+  monitoring and read-only legacy-transition preflight. Focused actual
+  namespace, race and compiled-defect checks passed with their documented
+  boundaries. Public Connect, actual MTU lease/failed-drain Stop integration,
+  Fixed/Auto live status, sealed SMART/Speed Lab restoration, retained path
+  identity and native cover activation remain in progress. These unfinished
+  source paths are not counted as delivered. Legacy guard succession,
+  saved-policy Off and crash/retained Always recovery remain required.
+- The older manual complete Linux run at `0b7becef` now failed on both
+  architectures before installed-host acceptance: eight namespace/account
+  lifecycles exhausted a 60-second aggregate. `39fe1a02` changes only the
+  enclosing budgets and passed all eight real local namespace cases plus
+  actual timeout cleanup and its negative control. The current complete
+  installed sixteen-case gate still needs both native executions.
+- Windows PQ passed both native architectures at `ac0c95a2`; newer
+  `57892bc9` ARM64 also passes with the restored-reference next-key fixture,
+  while AMD64 remains in progress. Complete MAX stays closed; its next-key
+  workflows were cancelled while pending and do not establish a repair.
+  The Windows Node suite aggregate and package directory-alias test failures
+  are repaired in `61fed15e` and `7449e7b1`; matching native completion remains
+  separate from their local test evidence.
+- macOS ARM64 now proves the owned linked/unlinked ES diagnostic at
+  `c83ae82b`. Strict first/legacy inventory still rejects its unresolved live
+  executable; managed full-host inventory passes separately. The Intel job
+  was cancelled. No production installer exemption or signed distribution
+  follows from this diagnostic result.
+- The latest observed published prerelease remains `745b3e41` with twelve
+  assets. This source series has no verified all-green release, private
+  deployment, production signing or full physical/off-LAN acceptance.
+
+## Earlier implementation continuation — through 74dbd3d4
 
 The independently read source cutoff is
 [`74dbd3d43584cc38e77ea7730a97147d9bd3ae4b`](https://github.com/Eabusham2/router-vpn/commit/74dbd3d43584cc38e77ea7730a97147d9bd3ae4b).
-The [updated November 1 evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-74dbd3d4)
+The [updated November 1 evidence](CONTINUATION-EVIDENCE-2026-11-01.md#earlier-source-and-native-evidence-through-74dbd3d4)
 records the intervening publications and their separate native results. The
 historical sections below retain their original cutoffs and requirement scope.
 
