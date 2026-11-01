@@ -43,6 +43,34 @@ def load(source=None):
 M = load()
 
 
+def capture_native_self(installer):
+    """Capture the test's current kernel image, not its Python launcher path."""
+    # The framework launcher executes Resources/Python.app while preserving
+    # its invocation path for sys.executable through __PYVENV_LAUNCHER__.
+    # https://github.com/python/cpython/blob/v3.12.10/Mac/Tools/pythonw.c
+    library, pid = installer.native_process_library(), os.getpid()
+    before = installer.native_process_state(library, pid)
+    if before is None or before[0] != pid or before[3] == 5:
+        raise RuntimeError('Cannot capture the original live test process')
+    execution = installer.GENERATION.IMAGE.native_unique(library, pid)
+    path = installer.native_executable(library, pid)
+    after_execution = installer.GENERATION.IMAGE.native_unique(library, pid)
+    after = installer.native_process_state(library, pid)
+    if (after is None or after[:3] != before[:3] or after[3] == 5 or execution != after_execution or
+            type(path) is not str or not Path(path).is_absolute()):
+        raise RuntimeError('The native executing image changed or became unknown during capture')
+    return {'path': path, 'process': before[:3], 'execution': execution}
+
+
+def require_native_self_inventory(installer, original, paths):
+    if capture_native_self(installer) != original:
+        raise AssertionError('Native inventory replaced the captured executing process or image')
+    if original['path'] not in paths:
+        # Keep failure output bounded; a failed test need not print every
+        # unrelated application installed on the actual host.
+        raise AssertionError('Native process inventory lost the captured executing image')
+
+
 def native_inventory_with_failure_diagnostic(installer, *, baseline=None, observations=None, emit=True):
     """Keep the real inventory failure; subsequent BSD data is diagnostic only."""
     original = installer.native_executable
@@ -236,6 +264,48 @@ class ProcessParentageLibrary:
 
 
 class MacProcessInventory(unittest.TestCase):
+    def native_self_fixture(self):
+        pid = os.getpid()
+        return types.SimpleNamespace(
+            native_process_library=mock.Mock(return_value=object()),
+            native_process_state=mock.Mock(return_value=(pid, 1700000000, 123, 2)),
+            native_executable=mock.Mock(return_value='/framework/Resources/Python.app/Contents/MacOS/Python'),
+            GENERATION=types.SimpleNamespace(IMAGE=types.SimpleNamespace(
+                native_unique=mock.Mock(return_value=(pid+1000, 9, 'a'*32)))))
+
+    def test_current_image_witness_uses_the_native_image_instead_of_the_framework_launcher(self):
+        fixture = self.native_self_fixture()
+        with mock.patch.object(sys, 'executable', '/framework/bin/python3.12'):
+            original = capture_native_self(fixture)
+            require_native_self_inventory(fixture, original, [original['path']])
+            for unrelated in (sys.executable, '/unrelated/Python', ''):
+                with self.subTest(unrelated=unrelated), self.assertRaisesRegex(AssertionError, 'lost the captured executing image'):
+                    require_native_self_inventory(fixture, original, [unrelated])
+
+    def test_current_image_witness_rejects_changed_process_exec_or_path_after_inventory(self):
+        for field, replacement in (
+            ('native_process_state', (os.getpid(), 1700000001, 123, 2)),
+            ('native_unique', (os.getpid()+1000, 10, 'a'*32)),
+            ('native_executable', '/replacement/Python'),
+        ):
+            fixture = self.native_self_fixture()
+            original = capture_native_self(fixture)
+            function = getattr(fixture.GENERATION.IMAGE if field == 'native_unique' else fixture, field)
+            function.return_value = replacement
+            with self.subTest(field=field), self.assertRaisesRegex(AssertionError, 'replaced the captured executing'):
+                require_native_self_inventory(fixture, original, [original['path'], '/replacement/Python'])
+
+    def test_current_image_capture_rejects_absent_foreign_zombie_unknown_or_racing_identity(self):
+        for state in (None, (os.getpid()+1, 1700000000, 123, 2), (os.getpid(), 1700000000, 123, 5)):
+            fixture = self.native_self_fixture(); fixture.native_process_state.return_value = state
+            with self.subTest(state=state), self.assertRaises(RuntimeError): capture_native_self(fixture)
+        for path in (None, '', 'Python'):
+            fixture = self.native_self_fixture(); fixture.native_executable.return_value = path
+            with self.subTest(path=path), self.assertRaises(RuntimeError): capture_native_self(fixture)
+        fixture = self.native_self_fixture()
+        fixture.GENERATION.IMAGE.native_unique.side_effect = [(os.getpid()+1000, 9, 'a'*32), (os.getpid()+1000, 10, 'a'*32)]
+        with self.assertRaisesRegex(RuntimeError, 'changed or became unknown'): capture_native_self(fixture)
+
     installer = M
 
     def read(self, library):
@@ -1333,9 +1403,9 @@ def main():
         if not result.wasSuccessful(): raise SystemExit(1)
         result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(MacNativeProcesses))
         if not result.wasSuccessful(): raise SystemExit(1)
-        actual = {str(Path(path).resolve()) for path in native_inventory_with_failure_diagnostic(M, baseline=baseline)}
-        if str(Path(sys.executable).resolve()) not in actual:
-            raise AssertionError('Native process inventory lost the actual executing interpreter')
+        original_self = capture_native_self(M)
+        actual = native_inventory_with_failure_diagnostic(M, baseline=baseline)
+        require_native_self_inventory(M, original_self, actual)
         print('Actual macOS libproc inventory captured the executing interpreter.')
     if arguments.package is not None:
         if sys.platform != 'darwin': raise RuntimeError('Bundled macOS runtime execution requires an actual matching Mac host')

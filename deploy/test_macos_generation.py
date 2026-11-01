@@ -331,6 +331,7 @@ class NativeHostManagedInventory(NativeGenerationReceipt):
     def test_actual_full_host_inventory_requires_the_original_complete_generation(self):
         installer = self.inventory_installer
         generation = installer.GENERATION
+        original_self = T.capture_native_self(installer)
         installed, _ = self.complete_native_installation()
         generation.write_prepared(installed, installed, generation.receipt_path(installed),
                                   installer.CODE_TREES, installer.CODE_FILES, installer.FILES.ordinary)
@@ -366,8 +367,7 @@ class NativeHostManagedInventory(NativeGenerationReceipt):
                     print('Actual full-host managed inventory remains refused; '
                           'no successful inventory or defect evidence is claimed: ' + str(error)[-1000:], flush=True)
                     raise
-                self.assertIn(str(Path(sys.executable).resolve()), {str(Path(path).resolve()) for path in paths},
-                              'Full-host managed inventory lost the actual executing interpreter')
+                T.require_native_self_inventory(installer, original_self, paths)
                 self.assertIn({'identity': foreign_identity, 'accepted': True}, observations,
                               'Full-host inventory did not prove the exact original foreign child')
                 self.assertIsNone(unrelated.poll(), 'Foreign original child exited before the complete host scan')
@@ -413,7 +413,7 @@ def full_host_inventory_gate():
         ('fabricated-empty-inventory', ROOT/'client/install-macos-native.py',
          'def running_executables(generation=None):\n',
          'def running_executables(generation=None):\n    return [] # fabricate empty full-host inventory\n',
-         'Full-host managed inventory lost the actual executing interpreter'),
+         'Native process inventory lost the captured executing image'),
         ('accept-matching-native-image', TARGET, 'if value in self.hashes:', 'if False:',
          'Matching copied/unlinked original child did not block the full host inventory'),
     )
