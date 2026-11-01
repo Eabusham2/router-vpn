@@ -26,7 +26,8 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
         return '\n'.join([prefix + ' (0.1s)', *(prefix + '/' + case + ' (0.1s)' for case in cases),
                           *('    native_test.go:1: verified installed host native lifecycle: ' + case for case in cases),
                           *('    native_test.go:2: verified installed host active lifetime: ' + case for case in cases if case in G.ACTIVE_CASES),
-                          *('    native_test.go:3: verified installed host retained DNS observation: ' + case for case in cases if case == 'active-request-ended')]) + '\n'
+                          *('    native_test.go:3: verified installed host retained DNS observation: ' + case for case in cases if case == 'active-request-ended'),
+                          *('    native_test.go:4: verified installed host original MTU lease: ' + case for case in cases if case in G.MTU_CASES)]) + '\n'
 
     def test_requires_every_real_positive_negative_and_joined_lifecycle(self):
         output = self.completed()

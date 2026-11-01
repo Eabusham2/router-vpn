@@ -32,7 +32,11 @@ import (
 
 var linuxHostTUNCases = []string{"on-connect", "home-lan", "wrong-node", "resolver-failure", "wrong-key", "stale-ready", "cancelled-proof",
 	"replaced-host", "request-ended", "shutdown", "always", "active-request-ended", "cancel-adoption", "active-profile-change",
-	"active-network-change", "active-command-change"}
+	"active-network-change", "active-command-change", "mtu-rollback", "mtu-commit", "mtu-stale-profile", "mtu-stale-network", "mtu-hold", "mtu-retire-undrained"}
+
+func linuxHostTUNMTUCase(scenario string) bool {
+	return scenario == "mtu-rollback" || scenario == "mtu-commit" || scenario == "mtu-stale-profile" || scenario == "mtu-stale-network" || scenario == "mtu-hold" || scenario == "mtu-retire-undrained"
+}
 
 type linuxHostTUNResult struct {
 	Stage             string                                 `json:"stage"`
@@ -44,6 +48,7 @@ type linuxHostTUNResult struct {
 	ClosedTableSHA256 string                                 `json:"closed_table_sha256,omitempty"`
 	Activation        string                                 `json:"activation,omitempty"`
 	DNSProof          *dnsProofState                         `json:"dns_proof,omitempty"`
+	MTU               *linuxHostTUNMTUResult                 `json:"mtu,omitempty"`
 }
 
 func linuxHostTUNRendezvous(gate *os.File, expected byte) error {
@@ -167,8 +172,13 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 		return errors.Join(err, errors.New("installed-host fixture lost its complete private saved profile"))
 	}
 	profile := profiles.Profiles[0]
+	mtuCase := linuxHostTUNMTUCase(scenario)
+	policyValid := profile.MTUPolicy == "fixed" && profile.ManualMTU == 1376
+	if mtuCase {
+		policyValid = profile.MTUPolicy == "auto" && profile.ManualMTU == 0
+	}
 	if profile.ID != "installed-linux-node" || profile.NodeProofID != linuxHostTUNNodeID || profile.RouterAPI != "http://10.77.0.1:8787" ||
-		profile.DNSMode != "home" || profile.AdGuardIPv4 != "192.168.50.133" || profile.IPv6Mode != "on" || profile.MTUPolicy != "fixed" || profile.ManualMTU != 1376 {
+		profile.DNSMode != "home" || profile.AdGuardIPv4 != "192.168.50.133" || profile.IPv6Mode != "on" || !policyValid || profile.EffectiveMTU != 9000 {
 		return errors.New("installed-host fixture changed its captured node, selected DNS or fixed MTU")
 	}
 	a := &app{localController: controller, profiles: profiles, state: state{Mode: "off", Phase: "off"},
@@ -201,7 +211,7 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 	defer finish()
 	var journal *desktopLinuxNodeJournal
 	var retained *desktopLinuxNodeSession
-	if scenario == "active-request-ended" {
+	if scenario == "active-request-ended" || mtuCase {
 		retained, err = captureDesktopLinuxNodeSession(ctx, a)
 	} else {
 		journal, err = createDesktopLinuxNodeJournal(ctx, parent)
@@ -218,6 +228,11 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 	}
 	if err != nil {
 		return fmt.Errorf("ordinary completed-bundle preparation: %w", err)
+	}
+	capture, err := host.policy.OriginalProfile().DesktopCapture()
+	if err != nil || capture.MTUPolicy != profile.MTUPolicy || capture.ConfiguredMTU != 1376 && !mtuCase ||
+		mtuCase && capture.ConfiguredMTU != 1280 {
+		return errors.Join(err, errors.New("installed host substituted historical MTU for the original configured policy"))
 	}
 	if err := host.Stage(ctx); err != nil {
 		return err
@@ -247,8 +262,8 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 		}
 		result.Outcome = "rejected-ready"
 	} else {
-		if readyErr != nil || host.ready == nil || *host.ready != ready || ready.MTU != profile.ManualMTU || ready.DNSMilliseconds <= 0 {
-			return errors.Join(readyErr, errors.New("installed host did not prove its actual selected DNS and fixed kernel MTU"))
+		if readyErr != nil || host.ready == nil || *host.ready != ready || ready.MTU != capture.ConfiguredMTU || ready.DNSMilliseconds <= 0 {
+			return errors.Join(readyErr, errors.New("installed host did not prove its actual selected DNS and configured kernel MTU"))
 		}
 		result.Stage, result.Ready = "ready", &ready
 		if err := json.NewEncoder(os.Stdout).Encode(result); err != nil {
@@ -301,7 +316,7 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 					return errors.New("cancelled original Connect adopted an installed native session")
 				}
 				result.Activation = "rejected-adoption"
-			} else if strings.HasPrefix(scenario, "active-") {
+			} else if strings.HasPrefix(scenario, "active-") || mtuCase {
 				if host.Current(ctx) == nil || host.activation != nil {
 					return errors.New("installed host inferred active ownership from readiness or proof alone")
 				}
@@ -321,6 +336,16 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 					return fmt.Errorf("original active native readback after request completion: %w", err)
 				}
 				result.Activation = "retained-after-request"
+				if mtuCase {
+					if retained == nil || retained.active != host || retained.journal != journal {
+						return errors.New("installed MTU consumer lost its original retained session")
+					}
+					measurement, err := linuxHostTUNMTUConsumer(ctx, a, host, scenario)
+					if err != nil {
+						return err
+					}
+					result.MTU = &measurement
+				}
 				if scenario == "active-request-ended" {
 					if retained == nil || retained.active != host || retained.journal != journal {
 						return errors.New("installed DNS consumer lost its original retained session")
@@ -359,7 +384,7 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 					a.cmd, a.state = replacement, replacementState
 					a.mu.Unlock()
 				}
-				if scenario != "active-request-ended" {
+				if scenario != "active-request-ended" && !mtuCase {
 					if err := host.Current(ctx); err == nil {
 						return errors.New("retained installed host accepted a replaced active profile, network or command")
 					}
@@ -381,8 +406,14 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 			if err := a.retireNativeNodeForShutdownContext(ctx); err != nil {
 				return fmt.Errorf("ordered original installed controller shutdown: %w", err)
 			}
-		} else if err := host.Retire(ctx, true); err != nil {
-			return fmt.Errorf("joined original installed host retirement: %w", err)
+		} else if scenario == "mtu-retire-undrained" {
+			if retained == nil || retained.active != nil || host.mtu != nil {
+				return errors.New("ordinary Stop retained its undrained original installed lease or active session")
+			}
+		} else {
+			if err := host.Retire(ctx, true); err != nil {
+				return fmt.Errorf("joined original installed host retirement: %w", err)
+			}
 		}
 		if activation != nil && (activation.lifetime.Err() == nil || host.Current(ctx) == nil) {
 			return errors.New("joined installed host retirement retained active session authority")
@@ -435,7 +466,11 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 		return errors.New("installed On-connect host did not release only its original settled protection")
 	}
 	if retained != nil {
-		if err := retained.Retire(ctx, host, true); err != nil {
+		target := host
+		if scenario == "mtu-retire-undrained" {
+			target = nil // The ordinary application Stop already joined this exact host.
+		}
+		if err := retained.Retire(ctx, target, true); err != nil {
 			return fmt.Errorf("joined original installed session retirement: %w", err)
 		}
 	}
@@ -574,7 +609,11 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			failedReady := scenario == "wrong-key" || scenario == "resolver-failure"
 			var before linuxHostTUNPeerReply
 			if !failedReady {
-				if result.Stage != "ready" || result.Ready == nil || result.Ready.MTU != 1376 || result.Ready.DNSMilliseconds <= 0 {
+				expectedMTU := 1376
+				if linuxHostTUNMTUCase(scenario) {
+					expectedMTU = 1280
+				}
+				if result.Stage != "ready" || result.Ready == nil || result.Ready.MTU != expectedMTU || result.Ready.DNSMilliseconds <= 0 {
 					t.Fatal("installed host did not report its actual selected DNS and TUN")
 				}
 				if scenario == "home-lan" {
@@ -634,6 +673,9 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				t.Fatal("installed On-connect retirement left an unowned native table")
 			}
 			activation := ""
+			if linuxHostTUNMTUCase(scenario) {
+				activation = "retained-after-request"
+			}
 			switch scenario {
 			case "active-request-ended":
 				activation = "retained-after-request"
@@ -657,6 +699,29 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			}
 			if activation != "" {
 				t.Log("verified installed host active lifetime:", scenario)
+			}
+			if linuxHostTUNMTUCase(scenario) {
+				mtu := result.MTU
+				if mtu == nil || mtu.OriginalMTU != 1280 || mtu.CandidateMTU != 1300 || mtu.InitialIndex < 1 ||
+					mtu.InitialReader != 1 || mtu.StopHeld != (scenario == "mtu-hold") {
+					t.Fatal("installed MTU consumer omitted its original interface, reader or Stop barrier", mtu)
+				}
+				if scenario == "mtu-retire-undrained" {
+					if mtu.Outcome != "retired-original" || mtu.FinalMTU != 0 || mtu.FinalIndex != 0 || mtu.FinalReader != 0 {
+						t.Fatal("retired installed MTU lease fabricated live readback or restored MTU", mtu)
+					}
+				} else if mtu.FinalIndex < 1 || mtu.FinalReader <= mtu.InitialReader {
+					t.Fatal("installed MTU consumer omitted its actual replacement reader", mtu)
+				} else if scenario == "mtu-commit" {
+					if mtu.Outcome != "committed-candidate" || mtu.FinalMTU != 1300 {
+						t.Fatal("installed MTU consumer did not commit its actual candidate", mtu)
+					}
+				} else if mtu.Outcome != "restored-original" || mtu.FinalMTU != 1280 {
+					t.Fatal("installed MTU consumer did not roll back its actual original interface", mtu)
+				}
+				t.Log("verified installed host original MTU lease:", scenario)
+			} else if result.MTU != nil {
+				t.Fatal("installed MTU result belongs to another original scenario")
 			}
 			t.Log("verified installed host native lifecycle:", scenario)
 		})
