@@ -1,0 +1,112 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"net"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// The standalone desktop Tor runtime has its own child, proof and native
+// activity owner. It cannot borrow the mobile Tor proof or an ambient SOCKS
+// listener to manufacture a measurement capability.
+func (r *RouterVPNDesktopTor) LatencyMeasurement() (*hopmeasure.Service, error) {
+	if r == nil || !r.Healthy() {
+		return nil, errors.New("desktop Tor latency requires its proved native path")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closing || !r.currentNative() {
+		return nil, errors.New("desktop Tor latency owner retired")
+	}
+	if r.latency == nil {
+		meta := r.policy.Metadata()
+		measurement, err := hopmeasure.New(&routerVPNDesktopTorLatency{owner: r}, []hopmeasure.Hop{{
+			ID: meta.NodeID, Role: "exit", Kind: "public-path", Tag: "custom-exit", Label: "External exit → Cloudflare edge",
+		}})
+		if err != nil {
+			return nil, err
+		}
+		r.latency = measurement
+	}
+	return r.latency, nil
+}
+
+type routerVPNDesktopTorLatency struct{ owner *RouterVPNDesktopTor }
+
+func (e *routerVPNDesktopTorLatency) Identity() string {
+	if e == nil || e.owner == nil || !e.owner.Healthy() {
+		return ""
+	}
+	meta := e.owner.policy.Metadata()
+	return e.owner.engine.Identity() + ":desktop-tor-latency:" + meta.SessionID + ":" + meta.ConfigSHA256
+}
+
+func (e *routerVPNDesktopTorLatency) BeginMeasurement() (func(), error) {
+	if e.Identity() == "" {
+		return nil, errors.New("desktop Tor latency owner retired")
+	}
+	release, err := e.owner.activity.beginMeasurement()
+	if err != nil {
+		return nil, err
+	}
+	if e.Identity() == "" {
+		release()
+		return nil, errors.New("desktop Tor latency source changed during capture")
+	}
+	return release, nil
+}
+
+func (e *routerVPNDesktopTorLatency) VerifyMeasurement(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil || e.Identity() == "" {
+		return errors.New("desktop Tor latency lost its captured source")
+	}
+	if err := e.owner.VerifyCurrentPath(ctx); err != nil {
+		return err
+	}
+	if ctx.Err() != nil || e.Identity() == "" {
+		return errors.New("desktop Tor latency proof became stale")
+	}
+	return nil
+}
+
+func (e *routerVPNDesktopTorLatency) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if ctx == nil || ctx.Err() != nil || e.Identity() == "" || tag != "custom-exit" || address != hopmeasure.PublicAddress {
+		return nil, errors.New("desktop Tor latency attempted another route or endpoint")
+	}
+	meta := e.owner.policy.Metadata()
+	owner := e.owner.engine.routes[meta.FinalTag]
+	if owner == nil {
+		return nil, errors.New("desktop Tor latency has no retained final outbound")
+	}
+	lookup, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	lookup = adapter.WithContext(lookup, &adapter.InboundContext{Inbound: meta.TUNTag, InboundType: C.TypeTun, Network: "udp", Protocol: "dns"})
+	addresses, err := e.owner.engine.box.dnsRouter.Lookup(lookup, hopmeasure.PublicHost, adapter.DNSQueryOptions{})
+	if err != nil || lookup.Err() != nil || ctx.Err() != nil || e.Identity() == "" {
+		return nil, errors.New("desktop Tor latency lost its selected DNS path")
+	}
+	for _, ip := range addresses {
+		if !routerVPNPublicMeasurementAddress(ip) || ip.Is6() && meta.IPv6Mode == "off" {
+			continue
+		}
+		if ctx.Err() != nil || e.Identity() == "" {
+			break
+		}
+		connection, err := owner.DialContext(ctx, "tcp", M.SocksaddrFrom(ip, 443))
+		if ctx.Err() != nil || e.Identity() == "" {
+			return connection, errors.New("desktop Tor latency dial became stale")
+		}
+		// The shared synchronous worker owns every returned socket and its
+		// Close result, including error-path sockets and late cancellation.
+		if connection != nil {
+			return connection, err
+		}
+	}
+	return nil, errors.New("desktop Tor selected DNS provided no usable latency path")
+}

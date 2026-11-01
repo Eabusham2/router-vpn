@@ -328,6 +328,7 @@ func (o *desktopDNSOperation) invalidate() {
 }
 
 func invalidateDesktopDNSResults(a *app) {
+	invalidateDesktopLatencyResults(a)
 	a.mu.Lock()
 	slot := a.dnsMeasurements
 	a.mu.Unlock()

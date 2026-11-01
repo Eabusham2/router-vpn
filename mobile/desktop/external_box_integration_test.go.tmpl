@@ -237,6 +237,7 @@ func (ca *desktopExternalIntegrationCA) certificate(t *testing.T, valid bool) tl
 	leaf := &x509.Certificate{SerialNumber: big.NewInt(96102), Subject: pkix.Name{CommonName: "captured external composition peer"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, DNSNames: []string{"captured-proxy.example"}}
 	if valid {
 		leaf.IPAddresses = []net.IP{net.ParseIP("1.1.1.1")}
+		leaf.DNSNames = append(leaf.DNSNames, "speed.cloudflare.com")
 	} else {
 		leaf.IPAddresses = []net.IP{net.ParseIP("1.0.0.1")}
 	}
@@ -263,6 +264,7 @@ type desktopExternalIntegrationPeer struct {
 	failure                                                                                     string
 	publicEntered, publicRelease                                                                chan struct{}
 	publicOnce                                                                                  sync.Once
+	latency                                                                                     *desktopExternalLatencyPeer
 	ctx                                                                                         context.Context
 	cancel                                                                                      context.CancelFunc
 }
@@ -363,7 +365,7 @@ func (p *desktopExternalIntegrationPeer) connect(c net.Conn) error {
 		return errors.New("native proxy credentials changed")
 	}
 	target := request.Host
-	if target != desktopExternalIntegrationDNS && target != "1.1.1.1:443" {
+	if target != desktopExternalIntegrationDNS && target != "1.1.1.1:443" && !(p.latency != nil && target == desktopExternalLatencyAddress) {
 		return errors.New("native proxy escaped selected destinations")
 	}
 	if _, err = io.WriteString(c, "HTTP/1.1 200 Connection Established\r\n\r\n"); err != nil {
@@ -393,7 +395,8 @@ func (p *desktopExternalIntegrationPeer) serve(c net.Conn, target string) error 
 			if err != nil {
 				return err
 			}
-			if len(q.Question) != 1 || q.Question[0].Name != "example.com." || q.Question[0].Qtype != mDNS.TypeA {
+			latency := p.latency != nil && len(q.Question) == 1 && q.Question[0].Name == "speed.cloudflare.com."
+			if len(q.Question) != 1 || (!latency && q.Question[0].Name != "example.com.") || q.Question[0].Qtype != mDNS.TypeA && !(latency && q.Question[0].Qtype == mDNS.TypeAAAA) {
 				return errors.New("native selected DNS question changed")
 			}
 			p.dnsQueries.Add(1)
@@ -404,10 +407,16 @@ func (p *desktopExternalIntegrationPeer) serve(c net.Conn, target string) error 
 				ip = net.IPv4(192, 168, 50, 1)
 			}
 			answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: q.Question[0].Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: ip}}
+			if latency {
+				p.latency.answer(q, answer)
+			}
 			if err = peer.WriteMsg(answer); err != nil {
 				return err
 			}
 		}
+	}
+	if p.latency != nil && target == desktopExternalLatencyAddress {
+		return p.latency.serve(p, c)
 	}
 	if target != "1.1.1.1:443" {
 		return errors.New("native encrypted peer escaped captured proof target")
@@ -571,6 +580,9 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	f.kernel = &desktopExternalIntegrationKernel{source: f.source, local: address, remote: remote, index: uint32(iface.Index), name: iface.Name, grants: make(map[string]mobiletor.DesktopSocketGrant)}
 	f.source.kernel = f.kernel
 	f.peer = &desktopExternalIntegrationPeer{listener: listener, kernel: f.kernel, protocol: protocol, certificate: ca.certificate(t, true), proxyCertificate: ca.certificate(t, true), connections: make(map[net.Conn]bool), ctx: ctx, cancel: cancel}
+	if strings.HasPrefix(fault, "latency-") {
+		f.peer.latency = newDesktopExternalLatencyPeer(t, ca, fault)
+	}
 	switch fault {
 	case "dns":
 		f.peer.badDNS = true
@@ -785,6 +797,7 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 	t.Setenv("SSL_CERT_FILE", rootPath)
 	t.Setenv("SSL_CERT_DIR", directory)
 	t.Run("delayed-accept-retains-prior-grant", desktopExternalIntegrationDelayedAccept)
+	desktopExternalLatencyIntegration(t, ca)
 	for _, protocol := range []string{"http-connect", "https-connect", "shadowsocks"} {
 		t.Run(protocol+"/proof-and-mtu", func(t *testing.T) {
 			f := newDesktopExternalIntegrationFixture(t, ca, protocol, "")

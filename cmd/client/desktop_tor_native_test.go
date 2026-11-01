@@ -64,7 +64,7 @@ func TestDesktopTorProofBindsPolicyDNSReadbackAndEverySession(t *testing.T) {
 	if _, err := validateDesktopTorProof(bytes, owner, now); err != nil {
 		t.Fatal(err)
 	}
-	for _, kind := range []string{"schema", "session", "source", "config", "node", "resolver", "transport", "port", "sni", "path", "lan", "ipv6", "kill", "mtu-policy", "configured-mtu", "proof-session", "ip", "private-ip", "multicast-ip", "dns", "tor", "checked-past", "checked-future", "heartbeat-past", "heartbeat-future", "heartbeat-before-proof", "interface", "index", "readback", "health"} {
+	for _, kind := range []string{"schema", "session", "source", "config", "node", "execution", "resolver", "transport", "port", "sni", "path", "lan", "ipv6", "kill", "mtu-policy", "configured-mtu", "proof-session", "ip", "private-ip", "multicast-ip", "dns", "tor", "checked-past", "checked-future", "heartbeat-past", "heartbeat-future", "heartbeat-before-proof", "interface", "index", "readback", "health"} {
 		t.Run(kind, func(t *testing.T) {
 			proof := valid
 			switch kind {
@@ -78,6 +78,8 @@ func TestDesktopTorProofBindsPolicyDNSReadbackAndEverySession(t *testing.T) {
 				proof.ConfigSHA256 = strings.Repeat("0", 64)
 			case "node":
 				proof.Policy.NodeID = "another-node"
+			case "execution":
+				proof.Policy.Execution = "server"
 			case "resolver":
 				proof.Policy.DNS.Address = "1.1.1.1"
 			case "transport":
@@ -193,12 +195,14 @@ func TestDesktopTorProcessFixture(t *testing.T) {
 	proof := desktopTorFixtureProof(expected, checked)
 	write("progress.json", desktopTorProgress{Schema: 1, SessionID: expected.SessionID, SourceSHA256: expected.SourceSHA256, ConfigSHA256: expected.ConfigSHA256, Stage: "proving"})
 	dnsTick := desktopTorDNSChildFixture(kind, directory, expected, write)
+	latencyTick := desktopTorLatencyChildFixture(kind, directory, expected, write)
 	mtuTick := desktopTorMTUChildFixture(kind, directory, expected, &proof, write)
 	pathTick := desktopTorPathChildFixture(kind, directory, expected, write)
 	comparisonTick := desktopTorComparisonChildFixture(kind, publisher.root, expected, write)
 	for {
 		desktopTorFixturePublicationBarrier(kind, expected)
 		dnsTick()
+		latencyTick()
 		mtuTick()
 		pathTick()
 		comparisonTick()

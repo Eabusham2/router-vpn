@@ -12,6 +12,8 @@ import (
 )
 
 func registerSpeedLabRoutes(h *http.ServeMux, a *app) {
+	h.HandleFunc("/api/speed-lab/external-latency", a.desktopLatencyMeasurement)
+	h.HandleFunc("/api/speed-lab/external-latency/cancel", a.cancelDesktopLatencyMeasurement)
 	h.HandleFunc("/api/speed-lab/options", a.speedLabOptions)
 	h.HandleFunc("/api/speed-lab/run", a.speedLabRun)
 	registerTorBridgeRoutes(h, a)

@@ -1,0 +1,230 @@
+package box
+
+import (
+	"bufio"
+	"context"
+	"crypto/tls"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+)
+
+const desktopExternalLatencyAddress = "93.184.216.34:443"
+
+// This peer runs behind the real encrypted/proxy native outbound and captured
+// physical broker. The TLS trust root is installed only in the existing
+// isolated test child; production endpoint and verifier code are unchanged.
+type desktopExternalLatencyPeer struct {
+	certificate                   tls.Certificate
+	fault                         string
+	queries, requests, handshakes atomic.Int32
+	entered, release              chan struct{}
+	once                          sync.Once
+}
+
+func newDesktopExternalLatencyPeer(t *testing.T, ca *desktopExternalIntegrationCA, fault string) *desktopExternalLatencyPeer {
+	p := &desktopExternalLatencyPeer{certificate: ca.certificate(t, fault != "latency-tls"), fault: fault}
+	if fault == "latency-held" {
+		p.entered, p.release = make(chan struct{}), make(chan struct{})
+	}
+	return p
+}
+
+func (p *desktopExternalLatencyPeer) answer(q, answer *mDNS.Msg) {
+	p.queries.Add(1)
+	answer.Answer = nil
+	if p.fault == "latency-dns" {
+		answer.Rcode = mDNS.RcodeServerFailure
+		return
+	}
+	if q.Question[0].Qtype == mDNS.TypeA {
+		answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: q.Question[0].Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: net.ParseIP("93.184.216.34")}}
+	}
+}
+
+func (p *desktopExternalLatencyPeer) serve(owner *desktopExternalIntegrationPeer, connection net.Conn) error {
+	secure := tls.Server(connection, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{p.certificate}, NextProtos: []string{"http/1.1"}})
+	if err := secure.HandshakeContext(owner.ctx); err != nil {
+		return err
+	}
+	p.handshakes.Add(1)
+	request, err := http.ReadRequest(bufio.NewReader(secure))
+	if err != nil {
+		return err
+	}
+	defer request.Body.Close()
+	nonce, err := hex.DecodeString(request.URL.Query().Get("routervpn"))
+	if err != nil || len(nonce) != 16 || request.Method != http.MethodGet || request.Host != hopmeasure.PublicHost || request.URL.Path != "/__down" || request.URL.Query().Get("bytes") != "1" || len(request.URL.Query()) != 2 || !request.Close || request.Header.Get("Authorization") != "" || request.Header.Get("Proxy-Authorization") != "" || request.Header.Get("Accept-Encoding") != "identity" {
+		return errors.New("native latency changed the fixed origin, exact payload or credential boundary")
+	}
+	p.requests.Add(1)
+	if p.entered != nil {
+		p.once.Do(func() { close(p.entered) })
+		select {
+		case <-p.release:
+		case <-owner.ctx.Done():
+			return owner.ctx.Err()
+		}
+	}
+	if p.fault == "latency-partial" {
+		_, err = fmt.Fprint(secure, "HTTP/1.1 206 Partial Content\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx")
+	} else {
+		_, err = fmt.Fprint(secure, "HTTP/1.1 200 OK\r\nContent-Length: 1\r\nConnection: close\r\n\r\nx")
+	}
+	return err
+}
+
+func desktopExternalLatencyStatus(t *testing.T, service *hopmeasure.Service) hopmeasure.Status {
+	t.Helper()
+	deadline := time.NewTimer(12 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		var status hopmeasure.Status
+		if err := json.Unmarshal([]byte(service.StatusJSON()), &status); err != nil {
+			t.Fatal(err)
+		}
+		if status.Complete && status.Drained {
+			return status
+		}
+		select {
+		case <-tick.C:
+		case <-deadline.C:
+			t.Fatal("native latency worker did not actually drain", status)
+		}
+	}
+}
+
+func desktopExternalLatencyIntegration(t *testing.T, ca *desktopExternalIntegrationCA) {
+	for _, protocol := range []string{"http-connect", "https-connect", "shadowsocks"} {
+		t.Run("latency50/"+protocol, func(t *testing.T) {
+			f := newDesktopExternalIntegrationFixture(t, ca, protocol, "latency-ok")
+			f.prove(t)
+			service, err := f.box.RouterVPNExternalHopMeasurement(f.proof, f.originalSource, f.originalCapture, f.policy.Metadata().SessionID, f.proof.Healthy)
+			if err != nil {
+				t.Fatal("derived physical graph lost exact original proof authority", err)
+			}
+			defer service.Close()
+			// DNS uses the same exact source translation; its construction must
+			// not grant an imported graph or another native Box ownership.
+			dns, err := f.box.RouterVPNExternalDNSMeasurement(f.proof, f.originalSource, f.originalCapture, f.policy.Metadata().SessionID, f.proof.Healthy)
+			if err != nil {
+				t.Fatal("captured physical DNS measurement factory", err)
+			}
+			defer dns.Close()
+			if err := service.StartLatency(strings.Repeat("b", 32), "selected-external-native"); err != nil {
+				t.Fatal(err)
+			}
+			status := desktopExternalLatencyStatus(t, service)
+			if status.Stage != "complete" || len(status.Results) != 1 || !status.Results[0].Ready || status.Results[0].Benchmark == nil {
+				t.Fatal("real native50 has no score", status, f.peer.diagnostic())
+			}
+			b := status.Results[0].Benchmark
+			if b.Attempts != 50 || b.Failed != 0 || b.Distribution == nil || b.Distribution.Samples != 50 || b.TrimmedMean <= 0 || b.Measurement != "routed-https-response-after-tls" || b.Endpoint != "https://speed.cloudflare.com/__down?bytes=1" || f.peer.latency.requests.Load() != 50 || f.peer.latency.handshakes.Load() != 50 || f.peer.latency.queries.Load() < 1 || f.peer.bypassed.Load() != 0 {
+				t.Fatal("native samples did not traverse selected DNS and exact encrypted physical owner", b, f.peer.latency.requests.Load(), f.peer.latency.handshakes.Load(), f.peer.latency.queries.Load())
+			}
+			release, err := f.proof.activity.beginMTU()
+			if err != nil {
+				t.Fatal("drained native50 retained MTU activity", err)
+			}
+			release()
+			if err := service.StartLatency(strings.Repeat("b", 32), "selected-external-native"); err == nil {
+				t.Fatal("native request replay was admitted")
+			}
+			for _, fault := range []string{"source", "capture", "session", "current"} {
+				t.Run(fault, func(t *testing.T) {
+					source, capture, session, current := f.originalSource, f.originalCapture, f.policy.Metadata().SessionID, f.proof.Healthy
+					switch fault {
+					case "source":
+						source += " "
+					case "capture":
+						capture += " "
+					case "session":
+						session = strings.Repeat("c", 32)
+					case "current":
+						current = func() bool { return false }
+					}
+					if actual, err := f.box.RouterVPNExternalHopMeasurement(f.proof, source, capture, session, current); err == nil || actual != nil {
+						t.Fatal("changed native measurement source was accepted", fault)
+					}
+				})
+			}
+		})
+	}
+	for _, fault := range []string{"latency-dns", "latency-tls", "latency-partial"} {
+		t.Run("latency50/"+fault, func(t *testing.T) {
+			f := newDesktopExternalIntegrationFixture(t, ca, "shadowsocks", fault)
+			f.prove(t)
+			service, err := f.box.RouterVPNExternalHopMeasurement(f.proof, f.originalSource, f.originalCapture, f.policy.Metadata().SessionID, f.proof.Healthy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer service.Close()
+			if err := service.StartLatency(strings.Repeat("d", 32), "selected-external-native"); err != nil {
+				t.Fatal(err)
+			}
+			status := desktopExternalLatencyStatus(t, service)
+			if len(status.Results) != 1 || status.Results[0].Ready || status.Results[0].Benchmark != nil || status.Results[0].Failure == "" {
+				t.Fatal("failed native sample acquired a score", status)
+			}
+			if fault != "latency-partial" && f.peer.latency.requests.Load() != 0 || fault == "latency-partial" && f.peer.latency.requests.Load() != 1 {
+				t.Fatal("negative did not reach the intended real transport boundary")
+			}
+		})
+	}
+	for _, reason := range []string{"cancel", "network", "native-owner"} {
+		t.Run("latency50/"+reason, func(t *testing.T) {
+			f := newDesktopExternalIntegrationFixture(t, ca, "shadowsocks", "latency-held")
+			f.prove(t)
+			service, err := f.box.RouterVPNExternalHopMeasurement(f.proof, f.originalSource, f.originalCapture, f.policy.Metadata().SessionID, f.proof.Healthy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer service.Close()
+			defer close(f.peer.latency.release)
+			request := strings.Repeat("e", 32)
+			if err := service.StartLatency(request, "selected-external-native"); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-f.peer.latency.entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("real HTTPS response never entered retained peer")
+			}
+			if release, err := f.proof.activity.beginMTU(); err == nil {
+				release()
+				t.Fatal("MTU mutation crossed the actual native50 worker")
+			}
+			switch reason {
+			case "cancel":
+				service.Cancel(request)
+			case "network":
+				f.network.InterfaceUpdated(context.Background())
+			case "native-owner":
+				f.proof.Cancel()
+			}
+			if reason != "cancel" {
+				service.Invalidate()
+			}
+			status := desktopExternalLatencyStatus(t, service)
+			if len(status.Results) != 0 || !status.Complete || !status.Drained {
+				t.Fatal("retired native path published or failed to drain", status)
+			}
+			if f.peer.latency.requests.Load() != 1 {
+				t.Fatal("cancelled native worker continued opening requests")
+			}
+		})
+	}
+}

@@ -248,6 +248,16 @@ func (b *routerVPNDesktopExternalBinding) mtuAuthority(config, authority string)
 	return b.policy.Config(), string(raw), nil
 }
 
+// Measurements keep the successful original proof's source authority while
+// verifying the actual, separately sealed desktop graph. Only the retained
+// physical binding can perform this translation; imported options cannot.
+func (b *routerVPNDesktopExternalBinding) measurementConfig(original string) (string, error) {
+	if !b.current() || b.policy == nil || b.policy.Validate() != nil || original != b.policy.OriginalPolicy().Config() {
+		return "", errors.New("ordinary desktop measurement belongs to another original graph")
+	}
+	return b.policy.Config(), nil
+}
+
 // A desktop MTU host must preserve the TUN already claimed before physical
 // proof. Existing nonphysical external paths still claim their native reader
 // once using the host's captured network guard.

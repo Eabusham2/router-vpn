@@ -21,6 +21,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
@@ -213,6 +214,7 @@ type routerVPNExternalNative struct {
 	partial      []io.Closer
 	mtu          *routerVPNDesktopMTU
 	dns          *dnsmeasure.Service
+	latency      *hopmeasure.Service
 }
 
 // Box.New registers each constructed component before constructing the next.
@@ -318,6 +320,9 @@ func (n *routerVPNExternalNative) Run() (string, error) {
 func (n *routerVPNExternalNative) Cancel() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.latency != nil {
+		n.latency.Invalidate()
+	}
 	if n.dns != nil {
 		n.dns.Invalidate()
 	}
@@ -348,6 +353,11 @@ func (n *routerVPNExternalNative) ProgressJSON() string {
 func (n *routerVPNExternalNative) Close() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.latency != nil {
+		if err := n.latency.Close(); err != nil {
+			return routerVPNExternalFailure
+		}
+	}
 	if n.dns != nil {
 		if err := n.dns.Close(); err != nil {
 			return routerVPNExternalFailure
@@ -433,7 +443,7 @@ func routerVPNRunExternal(parent context.Context, directory, session, physicalSo
 		return routerVPNExternalFailure
 	}
 	defer files.root.Close()
-	for _, name := range []string{"proof.json", "progress.json", "stopped.json", "mtu-status.json", "path-status.json", "dns-status.json"} {
+	for _, name := range []string{"proof.json", "progress.json", "stopped.json", "mtu-status.json", "path-status.json", "dns-status.json", "latency-status.json"} {
 		if !files.current(name) {
 			return routerVPNExternalFailure
 		}
@@ -548,6 +558,7 @@ func routerVPNRunExternal(parent context.Context, directory, session, physicalSo
 	var mtuFiles *routerVPNDesktopMTUFiles
 	var pathFiles *routerVPNDesktopPathFiles
 	var dnsFiles *routerVPNDesktopDNSFiles
+	var latencyFiles *routerVPNDesktopLatencyFiles
 	for !stopping {
 		select {
 		case outcome := <-done:
@@ -585,6 +596,11 @@ func routerVPNRunExternal(parent context.Context, directory, session, physicalSo
 				failure, stopping = routerVPNExternalFailure, true
 				break
 			}
+			latencyFiles, err = routerVPNOpenDesktopLatency(files, owner, session, measurementSource, measurementConfig, metadata.ExitID)
+			if err != nil {
+				failure, stopping = routerVPNExternalFailure, true
+				break
+			}
 		case <-parent.Done():
 			stopping = true
 		case <-ticker.C:
@@ -614,6 +630,10 @@ func routerVPNRunExternal(parent context.Context, directory, session, physicalSo
 					break
 				}
 			}
+			if connected && latencyFiles.tick() != nil {
+				failure, stopping = routerVPNExternalFailure, true
+				break
+			}
 			if !connected {
 				progress.Stage = "proving"
 			} else if time.Since(heartbeat) >= 500*time.Millisecond {
@@ -631,6 +651,9 @@ func routerVPNRunExternal(parent context.Context, directory, session, physicalSo
 		}
 	}
 	owner.Cancel()
+	if latencyFiles != nil {
+		latencyFiles.service.Invalidate()
+	}
 	if dnsFiles != nil {
 		dnsFiles.service.Invalidate()
 	}
@@ -656,6 +679,14 @@ func routerVPNRunExternal(parent context.Context, directory, session, physicalSo
 		progress.Stage = "cleanup-pending"
 		_ = files.publish("progress.json", progress)
 		<-ticker.C
+	}
+	for latencyFiles != nil && latencyFiles.service.Close() != nil {
+		progress.Stage = "cleanup-pending"
+		_ = files.publish("progress.json", progress)
+		<-ticker.C
+	}
+	if latencyFiles.close() != nil {
+		failure = routerVPNExternalFailure
 	}
 	if dnsFiles.close() != nil {
 		failure = routerVPNExternalFailure

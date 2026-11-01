@@ -20,6 +20,10 @@ func (s *Box) RouterVPNExternalDNSMeasurement(proof *RouterVPNExternalProofReque
 	if err != nil {
 		return nil, err
 	}
+	config, err = routerVPNExternalMeasurementConfig(proof, config)
+	if err != nil {
+		return nil, err
+	}
 	compiled, err := json.UnmarshalExtendedContext[option.Options](s.ctx, []byte(config))
 	if err != nil || routerVPNExternalOptionsDigest(s.ctx, compiled) != s.routerVPNExternalOptions {
 		return nil, errors.New("DNS measurement is not the running external graph")

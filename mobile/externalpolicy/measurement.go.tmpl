@@ -23,13 +23,18 @@ func (s *Box) RouterVPNExternalHopMeasurement(proof *RouterVPNExternalProofReque
 	if err != nil {
 		return nil, err
 	}
-	compiled, err := json.UnmarshalExtendedContext[option.Options](s.ctx, []byte(policy.Config()))
+	config, err := routerVPNExternalMeasurementConfig(proof, policy.Config())
+	if err != nil {
+		return nil, err
+	}
+	compiled, err := json.UnmarshalExtendedContext[option.Options](s.ctx, []byte(config))
 	if err != nil || routerVPNExternalOptionsDigest(s.ctx, compiled) != s.routerVPNExternalOptions {
 		return nil, errors.New("external measurement is not the running native graph")
 	}
 	var meta struct {
 		EntryTag string `json:"entry_tag"`
 		TUNTag   string `json:"tun_tag"`
+		IPv6Mode string `json:"ipv6_mode"`
 	}
 	if json.Unmarshal([]byte(policy.Metadata()), &meta) != nil {
 		return nil, errors.New("external measurement metadata invalid")
@@ -40,8 +45,20 @@ func (s *Box) RouterVPNExternalHopMeasurement(proof *RouterVPNExternalProofReque
 	if proof.engine.tunTag != meta.TUNTag || proof.engine.Identity() == "" {
 		return nil, errors.New("external measurement lost its captured native TUN")
 	}
-	engine := &routerVPNExternalMeasurementEngine{core: proof.engine, current: current, proof: proof, tunTag: meta.TUNTag}
+	engine := &routerVPNExternalMeasurementEngine{core: proof.engine, current: current, proof: proof, tunTag: meta.TUNTag, ipv6: meta.IPv6Mode != "off"}
 	return proof.request.NewHopMeasurement(source, capture, session, engine)
+}
+
+func routerVPNExternalMeasurementConfig(proof *RouterVPNExternalProofRequest, original string) (string, error) {
+	if proof == nil || proof.engine == nil || !proof.Healthy() {
+		return "", errors.New("external measurement has no current native proof")
+	}
+	proof.engine.mu.RLock()
+	defer proof.engine.mu.RUnlock()
+	if proof.engine.physical != nil {
+		return proof.engine.physical.measurementConfig(original)
+	}
+	return original, nil
 }
 
 type routerVPNExternalMeasurementEngine struct {
@@ -49,6 +66,7 @@ type routerVPNExternalMeasurementEngine struct {
 	current func() bool
 	proof   *RouterVPNExternalProofRequest
 	tunTag  string
+	ipv6    bool
 }
 
 func (e *routerVPNExternalMeasurementEngine) BeginMeasurement() (func(), error) {
@@ -87,7 +105,7 @@ func (e *routerVPNExternalMeasurementEngine) Dial(ctx context.Context, tag, addr
 		return nil, errors.New("captured external DNS lookup failed")
 	}
 	for _, ip := range addresses {
-		if !routerVPNPublicMeasurementAddress(ip) {
+		if !routerVPNPublicMeasurementAddress(ip) || ip.Is6() && !e.ipv6 {
 			continue
 		}
 		connection, err := e.core.Dial(ctx, tag, net.JoinHostPort(ip.String(), "443"))

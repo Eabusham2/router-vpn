@@ -1,0 +1,191 @@
+package box
+
+import (
+	"bufio"
+	"context"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+)
+
+// Standalone Tor/control and the TUN remain explicit protocol fixtures. The
+// Box, native SOCKS isolation, selected DNS, shared50, TLS chain/name checks
+// and final source/activity ownership execute their shipping implementations.
+func TestRouterVPNDesktopTorLatencyIntegration(t *testing.T) {
+	const marker = "ROUTERVPN_DESKTOP_TOR_LATENCY_CHILD"
+	if os.Getenv(marker) != "1" {
+		binary, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		command := exec.CommandContext(ctx, binary, "-test.run=^TestRouterVPNDesktopTorLatencyIntegration$", "-test.v", "-test.timeout=40s")
+		command.Env = append(os.Environ(), marker+"=1")
+		out, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("isolated Tor latency child failed: %v\n%s", err, out)
+		}
+		t.Log(string(out))
+		return
+	}
+	ca := newDesktopExternalIntegrationCA(t)
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		// These platform verifiers do not consume SSL_CERT_FILE. Install the
+		// isolated child-only fixture root without altering host trust or
+		// bypassing normal chain, server-name or wrong-root checks.
+		roots := x509.NewCertPool()
+		root, err := x509.ParseCertificate(ca.der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		roots.AddCert(root)
+		t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
+		x509.SetFallbackRoots(roots)
+	}
+	directory := t.TempDir()
+	root := filepath.Join(directory, "root.pem")
+	if err := os.WriteFile(root, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.der}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", root)
+	t.Setenv("SSL_CERT_DIR", directory)
+	for _, fault := range []string{"proved", "wrong-tls", "wrong-dns", "changed-reader", "cancel"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newDesktopTorBoxFixture(t, nil)
+			originFault := "latency-ok"
+			if fault == "wrong-tls" {
+				originFault = "latency-tls"
+			}
+			if fault == "cancel" {
+				originFault = "latency-held"
+			}
+			peer := newDesktopExternalLatencyPeer(t, ca, originFault)
+			// The test's existing synthetic Tor identity proof and the real TLS
+			// benchmark share one numeric exit target, each with distinct framing.
+			f.socks.comparison = func(connection net.Conn, target string) (bool, error) {
+				if target != desktopExternalLatencyAddress {
+					return false, nil
+				}
+				if _, err := connection.Write([]byte{5, 0, 0, 1, 127, 0, 0, 1, 0, 1}); err != nil {
+					return true, err
+				}
+				reader := bufio.NewReader(connection)
+				first, err := reader.Peek(1)
+				if err != nil {
+					return true, err
+				}
+				if first[0] == 42 {
+					_, _ = reader.ReadByte()
+					f.socks.proofCalls.Add(1)
+					_, err := io.WriteString(connection, "captured native SOCKS path")
+					return true, err
+				}
+				return true, peer.serve(&desktopExternalIntegrationPeer{ctx: f.ctx}, &desktopExternalBufferedConn{Conn: connection, reader: reader})
+			}
+			owner := f.capture(t)
+			if service, err := owner.LatencyMeasurement(); err == nil || service != nil {
+				t.Fatal("unproved Tor owner granted native50")
+			}
+			if err := owner.start(f.child); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := owner.run(f.prover(t)); err != nil {
+				t.Fatal(err)
+			}
+			service, err := owner.LatencyMeasurement()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if second, err := owner.LatencyMeasurement(); err != nil || second != service {
+				t.Fatal("native measurement owner was silently replaced")
+			}
+			adapter := &routerVPNDesktopTorLatency{owner: owner}
+			if connection, err := adapter.Dial(context.Background(), "external-entry", hopmeasure.PublicAddress); err == nil || connection != nil {
+				t.Fatal("unowned Tor hop was admitted")
+			}
+			if connection, err := adapter.Dial(context.Background(), "custom-exit", "other.example:443"); err == nil || connection != nil {
+				t.Fatal("unowned Tor endpoint was admitted")
+			}
+			if fault == "wrong-dns" {
+				f.socks.badDNS.Store(true)
+			}
+			if fault == "changed-reader" {
+				f.tun.mu.Lock()
+				f.tun.index++
+				f.tun.mu.Unlock()
+				// Start is an asynchronous request acknowledgement. Its actual
+				// VerifyMeasurement boundary must reject the changed reader
+				// before any benchmark dial or completed result can escape.
+				if err := service.StartLatency(strings.Repeat("b", 32), f.policy.Metadata().NodeID); err != nil {
+					t.Fatal(err)
+				}
+				status := desktopExternalLatencyStatus(t, service)
+				if status.Stage != "invalidated" || len(status.Results) != 0 || peer.requests.Load() != 0 || owner.Healthy() {
+					t.Fatal("replacement TUN acquired benchmark traffic or a score", status)
+				}
+				return
+			}
+			before := f.socks.dnsCalls.Load()
+			request := strings.Repeat("b", 32)
+			if err := service.StartLatency(request, f.policy.Metadata().NodeID); err != nil {
+				t.Fatal(err)
+			}
+			if fault == "cancel" {
+				defer close(peer.release)
+				select {
+				case <-peer.entered:
+				case <-time.After(3 * time.Second):
+					t.Fatal("real Tor-routed TLS request did not enter peer")
+				}
+				if release, err := owner.activity.beginMTU(); err == nil {
+					release()
+					t.Fatal("MTU crossed Tor native50 activity")
+				}
+				if release, err := owner.activity.beginMeasurement(); err == nil {
+					release()
+					t.Fatal("Tor comparison or DNS crossed native50 activity")
+				}
+				service.Cancel(request)
+			}
+			status := desktopExternalLatencyStatus(t, service)
+			if fault == "proved" {
+				if len(status.Results) != 1 || !status.Results[0].Ready || status.Results[0].Benchmark == nil || status.Results[0].Benchmark.Distribution.Samples != 50 || peer.requests.Load() != 50 || peer.handshakes.Load() != 50 || f.socks.dnsCalls.Load() <= before {
+					t.Fatal("Tor native50 skipped selected DNS, isolation or real HTTPS", status, peer.requests.Load())
+				}
+			} else {
+				for _, result := range status.Results {
+					if result.Ready || result.Benchmark != nil {
+						t.Fatal("failed/cancelled Tor acquired a score", status)
+					}
+				}
+				if fault != "cancel" && peer.requests.Load() != 0 {
+					t.Fatal("invalid DNS or TLS sent benchmark request bytes")
+				}
+			}
+			release, err := owner.activity.beginMTU()
+			if err != nil {
+				t.Fatal("Tor native50 did not release after actual drain", err)
+			}
+			release()
+			owner.Cancel()
+			if adapter.Identity() != "" {
+				t.Fatal("cancelled standalone owner retained measurement authority")
+			}
+			if err := adapter.VerifyMeasurement(context.Background()); err == nil || errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("cancelled native owner verified", err)
+			}
+		})
+	}
+}

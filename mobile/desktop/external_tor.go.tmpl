@@ -140,6 +140,7 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 	var heartbeat time.Time
 	var paddingPublished time.Time
 	var dnsFiles *routerVPNDesktopDNSFiles
+	var latencyFiles *routerVPNDesktopLatencyFiles
 	var mtuFiles *routerVPNDesktopMTUFiles
 	var pathFiles *routerVPNDesktopPathFiles
 	var comparisonFiles *routerVPNTorComparisonFiles
@@ -255,6 +256,11 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 				failure, stopping = routerVPNTorFailure, true
 				break
 			}
+			latencyFiles, err = routerVPNOpenDesktopLatency(routerVPNTorOutputFiles(files), owner, session, metadata.SourceSHA256, metadata.ConfigSHA256, metadata.NodeID)
+			if err != nil {
+				failure, stopping = routerVPNTorFailure, true
+				break
+			}
 			if measured, ok := owner.(routerVPNTorMeasurementOwner); ok {
 				mtuFiles, err = routerVPNOpenDesktopMTUProvider(routerVPNTorOutputFiles(files), measured, session, metadata.SourceSHA256, metadata.ConfigSHA256)
 				if err == nil {
@@ -327,7 +333,9 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 					completed := make(chan routerVPNTorMaintenance, 1)
 					maintenance = completed
 					captured := routerVPNTorMaintenance{version: proofVersion, proof: receipt, started: started, heartbeat: transitionDone == nil && time.Since(heartbeat) >= 500*time.Millisecond}
-					go func() { completed <- routerVPNTorMaintain(ctx, owner, files, dnsFiles, mtuFiles, pathFiles, captured) }()
+					go func() {
+						completed <- routerVPNTorMaintain(ctx, owner, files, dnsFiles, mtuFiles, pathFiles, latencyFiles, captured)
+					}()
 				}
 			} else {
 				progress.Stage = owner.Stage()
@@ -356,6 +364,9 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 	}
 	if dnsFiles != nil {
 		dnsFiles.service.Invalidate()
+	}
+	if latencyFiles != nil {
+		latencyFiles.service.Invalidate()
 	}
 	if mtuFiles != nil {
 		mtuFiles.owner.invalidate()
@@ -414,6 +425,11 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 		<-tick.C
 	}
 	for dnsFiles.close() != nil {
+		progress.Stage = "cleanup-pending"
+		_ = files.publish("progress.json", progress)
+		<-tick.C
+	}
+	for latencyFiles.close() != nil {
 		progress.Stage = "cleanup-pending"
 		_ = files.publish("progress.json", progress)
 		<-tick.C

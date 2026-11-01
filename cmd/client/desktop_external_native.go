@@ -32,6 +32,9 @@ type desktopExternalRuntime struct {
 	dnsMu                                  sync.Mutex
 	dnsGeneration                          uint64
 	dnsFailed                              bool
+	latencyMu                              sync.Mutex
+	latencyGeneration                      uint64
+	latencyFailed                          bool
 	source, capture                        []byte
 	predecessor                            string
 	session, network, selection, execution string

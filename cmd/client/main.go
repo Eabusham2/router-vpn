@@ -56,6 +56,7 @@ type app struct {
 	cmd                    *exec.Cmd
 	daitaCancel            context.CancelFunc
 	dnsMeasurements        *desktopDNSSlot               // protected by mu; bounded current native DNS operation
+	latencyMeasurements    *desktopLatencySlot           // protected by mu; exact current external 50-response operation
 	nodeProtection         *desktopNodeProtectionSlot    // protected by mu; exact successor outlives its runtime workspace
 	nodeRecovery           *desktopNodeRecoveryOperation // protected by mu; cancellable pre-admission recovery, separate from a connection
 	nodeConnectionHost     *desktopNodeConnectionHost    // immutable after initialization; native controller/process boundary

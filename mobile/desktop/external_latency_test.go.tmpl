@@ -1,0 +1,303 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// Explicit native transport boundary: a late failing dial exercises the real
+// shared worker, cancellation and activity drain. It cannot fabricate a TLS
+// response or successful score; those execute in the real Box peer suite.
+type desktopLatencyFixtureEngine struct {
+	base                        *desktopExternalFixture
+	active                      atomic.Bool
+	dials                       atomic.Int32
+	entered, cancelled, release chan struct{}
+	once                        sync.Once
+}
+
+func (e *desktopLatencyFixtureEngine) Identity() string {
+	if !e.base.Healthy() {
+		return ""
+	}
+	return "captured-native-latency-fixture"
+}
+func (e *desktopLatencyFixtureEngine) BeginMeasurement() (func(), error) {
+	if !e.active.CompareAndSwap(false, true) {
+		return nil, errors.New("activity already held")
+	}
+	return func() { e.active.Store(false) }, nil
+}
+func (e *desktopLatencyFixtureEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if tag != "custom-exit" || address != hopmeasure.PublicAddress {
+		return nil, errors.New("foreign native route")
+	}
+	e.dials.Add(1)
+	if e.entered != nil {
+		e.once.Do(func() { close(e.entered) })
+		<-ctx.Done()
+		close(e.cancelled)
+		<-e.release
+	}
+	return nil, errors.New("explicit failing native transport fixture")
+}
+
+type desktopLatencyFixtureOwner struct {
+	*desktopExternalFixture
+	measurement *hopmeasure.Service
+}
+
+func (o *desktopLatencyFixtureOwner) DesktopLatency() (*hopmeasure.Service, error) {
+	return o.measurement, nil
+}
+func (o *desktopLatencyFixtureOwner) Cancel() {
+	o.measurement.Invalidate()
+	o.desktopExternalFixture.Cancel()
+}
+func (o *desktopLatencyFixtureOwner) Close() error {
+	if err := o.measurement.Close(); err != nil {
+		return err
+	}
+	return o.desktopExternalFixture.Close()
+}
+
+func desktopLatencyNativeFixture(t *testing.T, blocked bool) (string, *mobilemultihop.ExternalPolicy, *desktopLatencyFixtureOwner, *desktopLatencyFixtureEngine) {
+	t.Helper()
+	directory, policy := desktopExternalWorkspace(t)
+	base := desktopExternalOwner(t, policy, false)
+	base.healthy.Store(true)
+	engine := &desktopLatencyFixtureEngine{base: base}
+	if blocked {
+		engine.entered, engine.cancelled, engine.release = make(chan struct{}), make(chan struct{}), make(chan struct{})
+	}
+	service, err := hopmeasure.New(engine, []hopmeasure.Hop{{ID: "selected-exit", Role: "exit", Kind: "public-path", Tag: "custom-exit"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return directory, policy, &desktopLatencyFixtureOwner{desktopExternalFixture: base, measurement: service}, engine
+}
+
+func desktopLatencyNativeInput(t *testing.T, directory, name string, request routerVPNDesktopLatencyRequest) {
+	t.Helper()
+	raw, err := json.Marshal(request)
+	if err != nil || os.WriteFile(filepath.Join(directory, name), raw, 0600) != nil {
+		t.Fatal("latency input", err)
+	}
+}
+func desktopLatencyNativeRecord(t *testing.T, directory string, condition func(routerVPNDesktopLatencyRecord) bool) routerVPNDesktopLatencyRecord {
+	t.Helper()
+	deadline := time.NewTimer(7 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		raw, err := os.ReadFile(filepath.Join(directory, "latency-status.json"))
+		var record routerVPNDesktopLatencyRecord
+		if err == nil && json.Unmarshal(raw, &record) == nil && condition(record) {
+			return record
+		}
+		select {
+		case <-tick.C:
+		case <-deadline.C:
+			t.Fatal("latency native mailbox boundary", err, record)
+		}
+	}
+}
+
+func desktopLatencyNativeCommand(t *testing.T, directory string, owner *desktopLatencyFixtureOwner) <-chan error {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		defer close(done)
+		done <- routerVPNRunExternal(ctx, directory, desktopExternalSession, "", func(context.Context, *mobilemultihop.ExternalPolicy, *mobilemultihop.DesktopExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
+			return owner, nil
+		})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(8 * time.Second):
+			t.Error("latency command did not drain")
+		}
+	})
+	return done
+}
+
+func TestRouterVPNDesktopExternalLatencyMailboxUsesRealWorkerAndNoPartialScore(t *testing.T) {
+	directory, _, owner, engine := desktopLatencyNativeFixture(t, false)
+	desktopLatencyNativeCommand(t, directory, owner)
+	initial := desktopLatencyNativeRecord(t, directory, func(r routerVPNDesktopLatencyRecord) bool { return r.Generation == 0 })
+	request := initial.routerVPNDesktopLatencyRequest
+	request.Generation, request.Request = 1, strings.Repeat("b", 32)
+	desktopLatencyNativeInput(t, directory, "latency-request.json", request)
+	result := desktopLatencyNativeRecord(t, directory, func(r routerVPNDesktopLatencyRecord) bool {
+		return r.Generation == 1 && r.Status.Complete && r.Status.Drained
+	})
+	if result.Status.Stage != "complete" || len(result.Status.Results) != 1 || result.Status.Results[0].Ready || result.Status.Results[0].Benchmark != nil || engine.active.Load() || engine.dials.Load() != 1 {
+		t.Fatal("failed real worker fabricated score or lost activity", result)
+	}
+	request.Generation++ // Retired nonce may not start again even in a new generation.
+	desktopLatencyNativeInput(t, directory, "latency-request.json", request)
+	result = desktopLatencyNativeRecord(t, directory, func(r routerVPNDesktopLatencyRecord) bool {
+		return r.Generation == 2 && r.Status.Complete && r.Status.Drained
+	})
+	if result.Status.Stage != "cancelled" || engine.dials.Load() != 1 {
+		t.Fatal("retired nonce opened another native dial", result)
+	}
+}
+
+func TestRouterVPNDesktopExternalLatencyMailboxForeignSourceAndQueuedCancel(t *testing.T) {
+	for _, fault := range []string{"session", "source", "config", "node", "generation", "duplicate"} {
+		t.Run(fault, func(t *testing.T) {
+			directory, _, owner, engine := desktopLatencyNativeFixture(t, false)
+			desktopLatencyNativeCommand(t, directory, owner)
+			initial := desktopLatencyNativeRecord(t, directory, func(r routerVPNDesktopLatencyRecord) bool { return r.Generation == 0 })
+			request := initial.routerVPNDesktopLatencyRequest
+			request.Generation, request.Request = 1, strings.Repeat("c", 32)
+			wrong := request
+			switch fault {
+			case "session":
+				wrong.Session = strings.Repeat("d", 32)
+			case "source":
+				wrong.SourceSHA256 = strings.Repeat("d", 64)
+			case "config":
+				wrong.ConfigSHA256 = strings.Repeat("d", 64)
+			case "node":
+				wrong.NodeID = "foreign"
+			case "generation":
+				wrong.Generation = 2
+			}
+			if fault == "duplicate" {
+				raw, _ := json.Marshal(wrong)
+				raw = append(raw[:len(raw)-1], []byte(`,"generation":1}`)...)
+				if os.WriteFile(filepath.Join(directory, "latency-request.json"), raw, 0600) != nil {
+					t.Fatal("duplicate fixture")
+				}
+			} else {
+				desktopLatencyNativeInput(t, directory, "latency-request.json", wrong)
+			}
+			desktopLatencyNativeInput(t, directory, "latency-cancel.json", request)
+			result := desktopLatencyNativeRecord(t, directory, func(r routerVPNDesktopLatencyRecord) bool {
+				return r.Generation == 1 && r.Status.Complete && r.Status.Drained
+			})
+			if result.Status.Stage != "cancelled" || engine.dials.Load() != 0 || engine.active.Load() {
+				t.Fatal("foreign/queued control opened native work", result)
+			}
+			if _, err := os.Stat(filepath.Join(directory, "latency-request.json")); err != nil {
+				t.Fatal("cleanup erased an unowned request", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopExternalLatencyMailboxRetainsLateDialAndReplacementInput(t *testing.T) {
+	for _, replacement := range []bool{false, true} {
+		t.Run(map[bool]string{false: "drain", true: "replacement"}[replacement], func(t *testing.T) {
+			directory, _, owner, engine := desktopLatencyNativeFixture(t, true)
+			done := desktopLatencyNativeCommand(t, directory, owner)
+			var release sync.Once
+			defer release.Do(func() { close(engine.release) })
+			initial := desktopLatencyNativeRecord(t, directory, func(r routerVPNDesktopLatencyRecord) bool { return r.Generation == 0 })
+			request := initial.routerVPNDesktopLatencyRequest
+			request.Generation, request.Request = 1, strings.Repeat("e", 32)
+			desktopLatencyNativeInput(t, directory, "latency-request.json", request)
+			select {
+			case <-engine.entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("real shared worker never entered retained dial")
+			}
+			foreign := []byte(`{"foreign":"untouched"}`)
+			if replacement {
+				if os.WriteFile(filepath.Join(directory, "foreign.pending"), foreign, 0600) != nil || os.Rename(filepath.Join(directory, "foreign.pending"), filepath.Join(directory, "latency-request.json")) != nil {
+					t.Fatal("replace exact input fixture")
+				}
+			}
+			desktopLatencyNativeInput(t, directory, "latency-cancel.json", request)
+			pending := desktopLatencyNativeRecord(t, directory, func(r routerVPNDesktopLatencyRecord) bool { return r.Status.Stage == "cancelled" })
+			if pending.Status.Drained || !engine.active.Load() {
+				t.Fatal("cancel acknowledgement fabricated worker drain", pending)
+			}
+			select {
+			case <-done:
+				t.Fatal("command closed while actual worker remained")
+			default:
+			}
+			release.Do(func() { close(engine.release) })
+			if !replacement {
+				final := desktopLatencyNativeRecord(t, directory, func(r routerVPNDesktopLatencyRecord) bool { return r.Status.Complete && r.Status.Drained })
+				if len(final.Status.Results) != 0 || engine.active.Load() {
+					t.Fatal("cancelled worker retained score/activity")
+				}
+			}
+			if replacement {
+				select {
+				case <-done:
+				case <-time.After(7 * time.Second):
+					t.Fatal("foreign input did not stop and join captured command")
+				}
+				actual, err := os.ReadFile(filepath.Join(directory, "latency-request.json"))
+				if err != nil || string(actual) != string(foreign) {
+					t.Fatal("native cleanup overwrote replacement input", err)
+				}
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopExternalLatencyNativeStopJoinsActualWorker(t *testing.T) {
+	directory, policy, owner, engine := desktopLatencyNativeFixture(t, true)
+	done := desktopLatencyNativeCommand(t, directory, owner)
+	var release sync.Once
+	defer release.Do(func() { close(engine.release) })
+	initial := desktopLatencyNativeRecord(t, directory, func(r routerVPNDesktopLatencyRecord) bool { return r.Generation == 0 })
+	request := initial.routerVPNDesktopLatencyRequest
+	request.Generation, request.Request = 1, strings.Repeat("f", 32)
+	desktopLatencyNativeInput(t, directory, "latency-request.json", request)
+	select {
+	case <-engine.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("real shared worker did not enter native dial")
+	}
+	desktopExternalStopFile(t, directory, desktopExternalSession, policy.SourceSHA256())
+	select {
+	case <-engine.cancelled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("native stop did not invalidate its actual measurement worker")
+	}
+	if !engine.active.Load() || owner.closes.Load() != 0 {
+		t.Fatal("native owner closed before its retained worker completed")
+	}
+	if _, err := os.Lstat(filepath.Join(directory, "stopped.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("native stop published closure before joining its worker", err)
+	}
+	select {
+	case <-done:
+		t.Fatal("native command returned before worker drain")
+	default:
+	}
+	release.Do(func() { close(engine.release) })
+	if err := desktopExternalWait(t, done); err != nil {
+		t.Fatal(err)
+	}
+	var stopped struct {
+		routerVPNExternalStop
+		Closed bool `json:"closed"`
+	}
+	if json.Unmarshal(desktopExternalWaitFile(t, directory, "stopped.json"), &stopped) != nil || !stopped.Closed || stopped.Session != desktopExternalSession || stopped.SourceSHA256 != policy.SourceSHA256() || engine.active.Load() || owner.closes.Load() != 1 {
+		t.Fatal("native stop lost its exact drained-owner receipt")
+	}
+}

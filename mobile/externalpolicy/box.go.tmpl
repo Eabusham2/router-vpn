@@ -78,6 +78,7 @@ type routerVPNExternalPhysicalBinding interface {
 	current() bool
 	validTUN(adapter.Inbound) bool
 	cancel()
+	measurementConfig(string) (string, error)
 	mtuAuthority(string, string) (string, string, error)
 	retireTUN(context.Context, adapter.Inbound) error
 	adoptTUN(context.Context, adapter.Inbound) error

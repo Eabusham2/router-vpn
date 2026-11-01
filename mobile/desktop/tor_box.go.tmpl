@@ -13,6 +13,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
@@ -65,6 +66,7 @@ type RouterVPNDesktopTor struct {
 	proved                      atomic.Bool
 	retired                     atomic.Bool
 	dns                         *dnsmeasure.Service
+	latency                     *hopmeasure.Service
 	activity                    routerVPNExternalActivity
 	mtuLease                    atomic.Pointer[RouterVPNDesktopTorMTULease]
 	mtuRevision                 uint64
@@ -582,9 +584,15 @@ func (r *RouterVPNDesktopTor) Close(ctx context.Context) error {
 	r.mu.Lock()
 	r.closing = true
 	measurement := r.dns
+	latency := r.latency
 	mtuLease := r.mtuLease.Load()
 	r.mu.Unlock()
 	r.Cancel()
+	if latency != nil {
+		if err := latency.Close(); err != nil {
+			return err
+		}
+	}
 	// A failed comparison CLOSE may need this exact remote child stopped.
 	// Whole-path teardown must revoke and join its owned Server lease before
 	// retrying comparison cleanup, just as the command joins a Local child.

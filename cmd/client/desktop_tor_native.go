@@ -28,6 +28,9 @@ type desktopTorRuntime struct {
 	dnsMu                 sync.Mutex
 	dnsGeneration         uint64
 	dnsFailed             bool
+	latencyMu             sync.Mutex
+	latencyGeneration     uint64
+	latencyFailed         bool
 	pathMu                sync.Mutex
 	pathGeneration        uint64
 	pathFailed            bool
@@ -542,6 +545,7 @@ func desktopTorMailbox(name string) bool {
 	switch name {
 	case "proof.json", "progress.json", "stop.json", "stopped.json", "prelaunch-failed.json", ".proof.json.pending", ".progress.json.pending", ".stopped.json.pending",
 		"dns-status.json", "dns-request.json", "dns-cancel.json", ".dns-status.json.pending",
+		"latency-status.json", "latency-request.json", "latency-cancel.json", ".latency-status.json.pending",
 		"mtu-status.json", "mtu-request.json", "mtu-commit.json", "mtu-cancel.json", ".mtu-status.json.pending",
 		"path-status.json", "path-request.json", "path-cancel.json", ".path-status.json.pending",
 		"tor-compare-request.json", "tor-compare-cancel.json", "tor-compare-status.json", ".tor-compare-status.json.pending",
