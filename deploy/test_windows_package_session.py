@@ -92,13 +92,27 @@ def execute(command, *, environment, cwd, timeout=90):
                           text=True, timeout=timeout)
 
 
+def shell_environment(shell):
+    # A Python child of PowerShell 7 inherits its Core module paths unchanged.
+    # Windows PowerShell 5.1 must use the selected interpreter's own modules,
+    # as the production Session does, rather than loading incompatible Core
+    # assemblies for Get-FileHash and the other actual package checks.
+    # https://learn.microsoft.com/powershell/module/microsoft.powershell.core/about/about_psmodulepath
+    environment = {key: value for key, value in os.environ.items()
+                   if key.casefold() != 'psmodulepath'}
+    modules = Path(shell).resolve().parent / 'Modules'
+    require(modules.is_dir(), 'The selected PowerShell installation has no module directory')
+    environment.update(PSModulePath=str(modules), GOWORK='off', GOTOOLCHAIN='local')
+    return environment
+
+
 def check(shell):
     original=SOURCE.read_text(encoding='utf-8')
     original_hash=hashlib.sha256(SOURCE.read_bytes()).hexdigest()
     found=TYPE.search(original)
     require(found is not None and original.count(GUARD)==1,
             'Packaged identity API or actual Windows guard changed')
-    environment=dict(os.environ, GOWORK='off', GOTOOLCHAIN='local')
+    environment=shell_environment(shell)
     result=execute(['go','test','-count=1','./internal/windowsapp','-run',
                     '^TestWindowsPublicEntriesUseOwnedMain$'],environment=environment,cwd=ROOT)
     require(result.returncode==0,'Public wrapper ownership regression failed:\n'+result.stdout+result.stderr)

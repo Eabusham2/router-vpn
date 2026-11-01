@@ -151,6 +151,7 @@ def main():
     audit_contracts()
     shell = shutil.which(args.shell)
     require(shell is not None, 'Required PowerShell executable is unavailable: '+args.shell)
+    from test_windows_package_session import check as check_package_session, shell_environment
     bash = package_bash()
     require(shutil.which('go') is not None, 'Go fixture compiler is required')
     with tempfile.TemporaryDirectory(prefix='routervpn-recovery-dispatch-') as temporary:
@@ -164,8 +165,7 @@ def main():
         if sys.platform == 'win32':
             command += ['-ldflags=-H=windowsgui']
         command += ['-o', str(executable), str(source)]
-        environment = dict(os.environ)
-        environment['GOWORK'] = 'off'; environment['GOTOOLCHAIN'] = 'local'
+        environment = shell_environment(shell)
         run(command, cwd=ROOT, env=environment)
         for number, (self_test, code) in enumerate(((False, 0), (False, 37), (True, 0), (True, 23))):
             record = root/f'invocation-{number}.json'
@@ -189,7 +189,6 @@ def main():
                                 capture_output=True, text=True, timeout=30)
         require(result.returncode != 0 and not missing_record.exists() and 'RouterVPN.exe is missing' in result.stderr,
                 'Missing adjacent launcher was silently replaced or accepted')
-    from test_windows_package_session import check as check_package_session
     check_package_session(shell)
     print('Packaged Windows recovery dispatch: 4 actual native exits + missing-launcher rejection + 6 lifecycle-audit negatives PASS ('+args.shell+')')
 
