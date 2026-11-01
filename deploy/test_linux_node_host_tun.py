@@ -35,7 +35,7 @@ CHILD = load('linux_installed_host_child', 'test_linux_node_child_tun.py')
 TRANSACTION = load('linux_installed_host_transaction', 'test_linux_node_transaction.py')
 BUILD, NODE, GUARD = CHILD.BUILD, CHILD.NODE, CHILD.GUARD
 MTU_CASES = ('mtu-rollback', 'mtu-commit', 'mtu-stale-profile', 'mtu-stale-network', 'mtu-hold', 'mtu-retire-undrained')
-ACTIVE_CASES = ('active-request-ended', 'cancel-adoption', 'active-profile-change', 'active-network-change', 'active-command-change', *MTU_CASES)
+ACTIVE_CASES = ('active-request-ended', 'cancel-adoption', 'active-profile-change', 'active-network-change', 'active-command-change', *MTU_CASES, 'restore-sealed')
 CASES = ('on-connect', 'home-lan', 'wrong-node', 'resolver-failure', 'wrong-key', 'stale-ready', 'cancelled-proof',
          'replaced-host', 'request-ended', 'shutdown', 'always', *ACTIVE_CASES)
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
@@ -58,6 +58,7 @@ def checked_sources(source):
                 'cmd/client/desktop_node_dns_linux_test.go', 'cmd/client/dns_proof.go',
                 'cmd/client/desktop_node_mtu_linux.go', 'cmd/client/desktop_node_mtu_linux_tun_native_test.go',
                 'cmd/client/desktop_node_session_linux.go',
+                'cmd/client/desktop_node_restore_linux.go', 'cmd/client/desktop_node_restore_linux_tun_native_test.go',
                 'cmd/client/bundled_native.go', 'cmd/client/operation_guard.go'}
     if not required.issubset(app):
         raise ValueError('Installed Linux host gate lost its real verifier, startup, proof or retained native ownership')
@@ -104,6 +105,8 @@ def check_verdict(output, case=None):
             raise ValueError('Installed Linux host omitted its original actual MTU lease: ' + value)
         if (value == 'active-request-ended' or value.startswith('mtu-')) and 'verified installed host live MTU status: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its current interface MTU status: ' + value)
+        if value == 'restore-sealed' and 'verified installed host sealed temporary restoration: ' + value + '\n' not in output.replace('\r\n', '\n'):
+            raise ValueError('Installed Linux host omitted its frozen execution, live MTU and fresh native restoration: ' + value)
 
 
 def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case):

@@ -322,7 +322,7 @@ func linuxHostTUNProfile(peer *linuxHostTUNPeer, scenario string) common.RouterP
 	if scenario == "always" {
 		profile.KillSwitchPolicy = "always"
 	}
-	if linuxHostTUNMTUCase(scenario) {
+	if linuxHostTUNMTUCase(scenario) || scenario == "restore-sealed" {
 		profile.MTUPolicy, profile.ManualMTU = "auto", 0
 	}
 	return profile

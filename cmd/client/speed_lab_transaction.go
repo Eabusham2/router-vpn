@@ -40,6 +40,7 @@ type speedLabRestorePlan struct {
 	profile  common.RouterProfile
 	request  speedLabRequest
 	native   *desktopNodeLaunch
+	linux    *desktopLinuxNodeRestore
 	external *speedLabExternalRestore
 	tor      *speedLabTorRestore
 	multihop *multihopSelection
@@ -245,6 +246,14 @@ func (a *app) beginSpeedLabTemporaryOperationExpected(request *speedLabRequest) 
 	if err != nil {
 		return nil, speedLabTemporarySnapshot{}, nil, err
 	}
+	// Until the temporary owner is installed, every refusal still owns this
+	// independent private restore copy. The successful finish closure assumes
+	// that cleanup responsibility below without erasing the running host.
+	defer func() {
+		if !ok {
+			clearSpeedLabRestorePlan(snapshot.Plan)
+		}
+	}()
 	intent, cancelIntent := context.WithCancel(context.Background())
 	test, cancelTest := context.WithCancel(intent)
 	owner := &speedLabTemporaryOwner{intent: intent, cancelIntent: cancelIntent, test: test, cancelTest: cancelTest, current: test, runtime: snapshot.Runtime, network: physicalNetworkIdentity()}
@@ -261,7 +270,6 @@ func (a *app) beginSpeedLabTemporaryOperationExpected(request *speedLabRequest) 
 		a.mu.Unlock()
 		cancelTest()
 		cancelIntent()
-		clearSpeedLabRestorePlan(snapshot.Plan)
 		return nil, speedLabTemporarySnapshot{}, nil, expectedErr
 	}
 	if a.closing || a.state != snapshot.State || a.cmd != snapshot.Runtime || !reflect.DeepEqual(a.profiles, snapshot.Profiles) || a.connectionContext != nil {
@@ -299,6 +307,7 @@ func (a *app) beginSpeedLabTemporaryOperationExpected(request *speedLabRequest) 
 }
 
 func clearSpeedLabRestorePlan(plan speedLabRestorePlan) {
+	clearDesktopLinuxNodeRestore(plan.linux)
 	if launch := plan.native; launch != nil {
 		launch.workspaceMu.Lock()
 		owner := launch.ownedNode
@@ -466,7 +475,13 @@ func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (sp
 	if plan.request.Mode == "" {
 		plan.request.Mode = st.Mode
 	}
-	if st.Mode == "multihop" {
+	if identity.Linux != nil {
+		plan.request.Execution = "local"
+		plan.linux, err = captureDesktopLinuxNodeRestore(context.Background(), a, identity.Linux, profile)
+		if err != nil {
+			return speedLabRestorePlan{}, err
+		}
+	} else if st.Mode == "multihop" {
 		graph := identity.Graph
 		if !identity.GraphOK || graph.Execution != "local" && graph.Execution != "server" {
 			return plan, errors.New("previous multihop connection has no proved execution choice")
@@ -744,6 +759,8 @@ func (a *app) speedLabRestartPlan(plan speedLabRestorePlan) error {
 func (a *app) speedLabRestartPlanWithTorRuntime(plan speedLabRestorePlan, torDriver desktopTorConnectRuntime) error {
 	var err error
 	switch {
+	case plan.linux != nil:
+		err = a.restartCapturedDesktopLinuxNode(plan, "speed-lab:restore")
 	case plan.tor != nil:
 		err = a.startSpeedLabTorRestoreWithRuntime(plan, torDriver)
 	case plan.external != nil:

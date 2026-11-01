@@ -48,6 +48,9 @@ func (r smartStrategyRuntime) restoreNode(a *app, plan speedLabRestorePlan) erro
 	if r.restore != nil {
 		return r.restore(a, plan)
 	}
+	if plan.linux != nil {
+		return a.restartCapturedDesktopLinuxNode(plan, "smart:restore")
+	}
 	return a.restartCapturedDesktopNode(plan, "smart:restore")
 }
 
@@ -97,6 +100,9 @@ type desktopSmartNodeCapture struct {
 }
 
 func (a *app) captureSmartDesktopNode(ctx context.Context, profile common.RouterProfile) (*desktopSmartNodeCapture, error) {
+	if saved, handled, err := a.captureSmartDesktopLinuxNode(ctx, profile); handled {
+		return saved, err
+	}
 	raw, exists := desktopNodeOwners.Load(a)
 	launch, _ := raw.(*desktopNodeLaunch)
 	if !exists || launch == nil || launch.ownedNode == nil {
@@ -124,6 +130,9 @@ func (a *app) captureSmartDesktopNode(ctx context.Context, profile common.Router
 // process and its exact source/MTU instead of reopening current saved inputs.
 // This is not a new path measurement or a claim that a trial was restored.
 func (a *app) retainSmartDesktopNode(saved *desktopSmartNodeCapture) error {
+	if saved != nil && saved.plan.linux != nil {
+		return a.retainSmartDesktopLinuxNode(saved)
+	}
 	if saved == nil || saved.launch == nil || a.checkCapturedConnectionOperation(saved.operation) != nil ||
 		desktopOwnedNodeOperation(saved.launch) != saved.operation {
 		return errors.New("SMART predecessor changed before it could be retained")
@@ -197,9 +206,15 @@ func (a *app) restoreSmartDesktopNode(saved *desktopSmartNodeCapture, runtime sm
 	if err := a.checkCapturedConnectionOperation(saved.operation); err != nil {
 		return err
 	}
-	if _, err := a.readDesktopOwnedNodeReady(saved.plan.native, false); err != nil {
+	var proofErr error
+	if saved.plan.linux != nil {
+		proofErr = currentRestoredDesktopLinuxNode(saved.operation, a, saved.plan.linux)
+	} else {
+		_, proofErr = a.readDesktopOwnedNodeReady(saved.plan.native, false)
+	}
+	if proofErr != nil {
 		_, stopErr := a.stopDesktopNodeForOperation(saved.operation)
-		return errors.Join(err, stopErr)
+		return errors.Join(proofErr, stopErr)
 	}
 	return nil
 }
