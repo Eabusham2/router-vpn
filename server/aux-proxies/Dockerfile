@@ -96,6 +96,19 @@ COPY deploy/test_setup_overtls_interoperability.py /src/deploy/test_setup_overtl
 COPY server/scripts/generate-setup-assets.py server/scripts/normalize-setup-imports.py server/scripts/import_payloads.py server/scripts/verified-regular-read.py /src/server/scripts/
 ENTRYPOINT ["python3", "/src/deploy/test_setup_overtls_interoperability.py", "--prepare-network", "--overtls-server", "/usr/local/bin/overtls-bin", "--overtls-client", "/usr/local/bin/overtls-stock", "--caddy", "/usr/local/bin/caddy", "--openssl", "/usr/bin/openssl", "--node", "/usr/bin/node"]
 
+FROM debian:bookworm-slim AS mihomo-test-client
+ARG TARGETARCH
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends python3 ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+COPY deploy/fetch_mihomo_test_client.py /fetch_mihomo_test_client.py
+RUN python3 /fetch_mihomo_test_client.py --arch "${TARGETARCH}" --output /out/mihomo
+
+FROM overtls-method-import AS ssr-method-import
+COPY --from=mihomo-test-client /out/mihomo /out/mihomo.json /usr/local/bin/
+COPY deploy/test_setup_ssr_interoperability.py deploy/fetch_mihomo_test_client.py /src/deploy/
+ENTRYPOINT ["python3", "/src/deploy/test_setup_ssr_interoperability.py", "--ssr-server", "/usr/local/bin/ssr-server", "--mihomo", "/usr/local/bin/mihomo", "--node", "/usr/bin/node"]
+
 FROM debian:bookworm-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \

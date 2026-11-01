@@ -47,6 +47,7 @@ CONTRACTS = {
 
 SETUP_METHOD_LANES = ("simple-native", "universal", "universal-compat", "manual-app-proxy")
 OVERTLS_CLIENT_RELEASE = "https://github.com/ShadowsocksR-Live/overtls/releases/tag/v0.3.12"
+MIHOMO_CLIENT_RELEASE = "https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.33"
 
 
 def load_private_setup_assets(path: Path) -> dict:
@@ -65,7 +66,7 @@ def load_private_setup_assets(path: Path) -> dict:
     return data
 
 
-def normalize_method(method: dict, endpoint: str) -> None:
+def normalize_method(method: dict, endpoint: str, home_dns: dict | None = None) -> None:
     ident = str(method.get("id") or "")
     contract = CONTRACTS.get(ident, ("config-file", "manual-advanced", False, False, "unknown"))
     import_type, lane, qr_supported, full_vpn, endpoint_scope = contract
@@ -77,6 +78,7 @@ def normalize_method(method: dict, endpoint: str) -> None:
     method["endpointScope"] = endpoint_scope
     method["configFilename"] = ""
     method.pop("clientReleaseURL", None)
+    method.pop("compatibleConfig", None)
     if ident in CONTRACTS and method.get("config"):
         extension = "conf" if ident in ("wireguard", "amneziawg2") else "txt" if ident == "socks5" else "json"
         method["configFilename"] = "router-vpn-" + ident + "." + extension
@@ -86,7 +88,38 @@ def normalize_method(method: dict, endpoint: str) -> None:
     elif ident == "ss-v2ray" and method.get("config") and endpoint:
         method["url"] = imports.shadowsocks_plugin_from_json(str(method["config"]), endpoint)
     elif ident == "shadowsocksr" and method.get("config"):
-        method["url"] = imports.ssr_uri(imports.json_config(str(method["config"])))
+        config = imports.json_config(str(method["config"]))
+        method["url"] = imports.ssr_uri(config)
+        missing_endpoint = str(config.get("client_settings", {}).get("server", "")).lower() == "router.invalid"
+        if missing_endpoint:
+            method["url"] = ""
+            method["note"] = "Set this node's reachable public endpoint before using an SSR import. The original JSON remains available for setup."
+        elif home_dns:
+            if home_dns.get("protocol") != "udp" or home_dns.get("port") != 53:
+                raise ValueError("SSR desktop export requires the explicitly captured home UDP DNS policy")
+            profile = imports.ssr_mihomo_profile(config, home_dns.get("host", ""))
+            method["compatibleConfig"] = {"label": "Download Mihomo SSR profile",
+                                          "filename": "router-vpn-shadowsocksr-mihomo.json",
+                                          "content": json.dumps(profile, indent=2) + "\n"}
+            method["clientReleaseURL"] = MIHOMO_CLIENT_RELEASE
+            method["apps"] = ["Mihomo 1.19.33 desktop core (Windows, macOS, Linux)", "SSR URI-compatible clients"]
+            method["native"] = (
+                "1. Get the Mihomo 1.19.33 package for your desktop OS/CPU and extract it. "
+                "Rename the extracted executable to mihomo (Windows: mihomo.exe); on macOS/Linux run chmod u+x ./mihomo. "
+                "2. Download the Mihomo SSR profile from this card into that folder. "
+                "3. Run ./mihomo -d ./router-vpn-ssr-state -f ./router-vpn-shadowsocksr-mihomo.json "
+                "(Windows PowerShell: .\\mihomo.exe -d .\\router-vpn-ssr-state -f .\\router-vpn-shadowsocksr-mihomo.json). "
+                "4. Keep it running and set your application's SOCKS5 proxy to 127.0.0.1:1080. Ctrl+C stops it. "
+                "The original SSR URL/QR and SSR-native JSON below remain available for other compatible clients."
+            )
+            method["note"] = (
+                "The named unchanged desktop client has passed TCP and UDP payload tests with this generated SSR method. "
+                "Its local DNS listener 127.0.0.1:1053 forwards to Home AdGuard " + str(home_dns["host"]) +
+                ":53 through SSR, with no public fallback. Apps with a custom DNS setting can use that listener. "
+                "Resolving a hostname node endpoint uses the device's existing system DNS before the proxy can connect. "
+                "This app-proxy profile does not change device-wide DNS or install "
+                "a system VPN. Mobile, device and off-LAN acceptance are separate."
+            )
     elif ident == "overtls" and method.get("config"):
         config = imports.json_config(str(method["config"]))
         config.setdefault("remarks", "Router VPN OverTLS")
@@ -286,7 +319,7 @@ def main() -> int:
         raise SystemExit("setup-assets.json methods must be an array")
     for method in methods:
         if isinstance(method, dict):
-            normalize_method(method, endpoint)
+            normalize_method(method, endpoint, data.get("homeDNS"))
     data["methodContractVersion"] = 2
     data["methodLaneOrder"] = ["simple-native", "app", "universal", "universal-compat", "manual-app-proxy", "manual-advanced"]
     data["setupCenterMethodLanes"] = list(SETUP_METHOD_LANES)

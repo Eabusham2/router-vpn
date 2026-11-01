@@ -162,6 +162,58 @@ def parse_ssr(uri: str) -> dict:
     }
 
 
+def ssr_mihomo_profile(config: dict, home_dns: str) -> dict:
+    """Export the generated SSR protocol to an unchanged Mihomo desktop client.
+
+    The home resolver comes from finalization's explicit ADGUARD4 argument.
+    System DNS is used only to bootstrap a hostname server endpoint; ordinary
+    application DNS uses the captured home resolver through this SSR proxy.
+    """
+    client = config.get("client_settings")
+    if not isinstance(client, dict):
+        raise ValueError("SSR client settings are required")
+    host, port = client.get("server"), client.get("server_port")
+    if not isinstance(host, str) or not host or len(host) > 253 or re.search(r"[\s%@/?#\[\]\\<>\"{}|^`]", host):
+        raise ValueError("invalid SSR server endpoint")
+    if ":" in host:
+        ipaddress.IPv6Address(host)
+    elif not re.fullmatch(r"[A-Za-z0-9.-]+", host):
+        raise ValueError("invalid SSR server endpoint")
+    if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ValueError("invalid SSR server port")
+    for field in ("password", "method", "protocol", "obfs"):
+        if not isinstance(config.get(field), str) or not config[field] or len(config[field]) > 4096:
+            raise ValueError("invalid SSR " + field)
+    for field in ("protocol_param", "obfs_param"):
+        if not isinstance(config.get(field, ""), str) or len(config.get(field, "")) > 4096:
+            raise ValueError("invalid SSR " + field)
+    if config.get("udp") is not True:
+        raise ValueError("the home-DNS SSR profile requires the generated UDP support")
+    over_tls = config.get("over_tls_settings")
+    if over_tls is not None and (not isinstance(over_tls, dict) or over_tls.get("enable", False) is not False):
+        raise ValueError("an SSR-over-TLS configuration cannot be reduced to plain SSR")
+    if not isinstance(home_dns, str) or "%" in home_dns:
+        raise ValueError("invalid selected home DNS resolver")
+    dns = ipaddress.ip_address(home_dns)
+    if dns.is_unspecified or dns.is_multicast:
+        raise ValueError("invalid selected home DNS resolver")
+    name = "RouterVPN-SSR"
+    proxy = {"name": name, "type": "ssr", "server": host, "port": port,
+             "cipher": config["method"], "password": config["password"],
+             "protocol": config["protocol"], "protocol-param": config.get("protocol_param", ""),
+             "obfs": config["obfs"], "obfs-param": config.get("obfs_param", ""), "udp": True}
+    return {
+        "socks-port": 1080, "allow-lan": False, "bind-address": "127.0.0.1", "ipv6": True,
+        "mode": "rule", "log-level": "warning", "external-controller": "",
+        "profile": {"store-selected": False, "store-fake-ip": False},
+        "dns": {"enable": True, "listen": "127.0.0.1:1053", "ipv6": True,
+                "enhanced-mode": "redir-host", "use-hosts": False, "use-system-hosts": False,
+                "default-nameserver": ["system"], "proxy-server-nameserver": ["system"],
+                "nameserver": ["udp://" + _hostport(str(dns), 53) + "#" + name], "fallback": []},
+        "proxies": [proxy], "rules": ["MATCH," + name],
+    }
+
+
 class OverTLSJSONRequired(ValueError):
     """A valid configuration needs the native JSON import to retain its fields."""
 

@@ -7,9 +7,11 @@ fixture=${2:?built auxiliary interoperability image is required}
 naive=${3:-}
 mode=${4:-payload}
 setup_caps=(--cap-add NET_ADMIN)
+resolver_options=()
 case "$mode" in
   payload|import) ;;
   dns) setup_caps+=(--cap-add NET_BIND_SERVICE) ;;
+  ssr-import) setup_caps+=(--cap-add NET_BIND_SERVICE); resolver_options=(--dns 127.0.0.55) ;;
   *) echo 'Unknown auxiliary fixture mode' >&2; exit 2 ;;
 esac
 
@@ -42,7 +44,7 @@ trap 'exit 143' TERM
 # DNS setup additionally binds owned resolver sockets on port 53. The entry
 # point drops every effective/permitted/inheritable capability, and the driver
 # verifies that state before launching any protocol process.
-owned=$(docker create --init --network none --platform linux/arm64 \
+owned=$(docker create --init --network none --platform linux/arm64 "${resolver_options[@]}" \
   --cap-drop ALL "${setup_caps[@]}" --security-opt no-new-privileges --pids-limit 256 \
   --memory 768m --cpus 2 --read-only --tmpfs /tmp:rw,noexec,nosuid,size=64m \
   --env ROUTERVPN_REQUIRE_PRODUCTION_HASHES=1 \

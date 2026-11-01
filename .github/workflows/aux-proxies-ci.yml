@@ -282,6 +282,14 @@ jobs:
             -t router-vpn-ci-overtls-method-import:arm64 .
           bash deploy/run_aux_interoperability_container.sh router-vpn-ci-aux:arm64 router-vpn-ci-overtls-method-import:arm64 pocat/naiveproxy:v2.11.4-uot import
 
+      - name: Import SSR Methods profile with unchanged client and selected DNS receipts
+        timeout-minutes: 12
+        run: |
+          docker buildx build --platform linux/arm64 --progress=plain --load \
+            --target ssr-method-import -f server/aux-proxies/Dockerfile \
+            -t router-vpn-ci-ssr-method-import:arm64 .
+          bash deploy/run_aux_interoperability_container.sh router-vpn-ci-aux:arm64 router-vpn-ci-ssr-method-import:arm64 "" ssr-import
+
       - name: Import final Setup Center Shadowsocks URLs with an unchanged client
         timeout-minutes: 15
         run: |

@@ -98,6 +98,59 @@ def test_ssr() -> None:
     check(parsed["label"] == "Home SSR", "SSR remarks round trip")
 
 
+def test_ssr_mihomo_download() -> None:
+    config = {"password": "private:@/?+credential", "method": "aes-256-ctr", "protocol": "auth_aes128_md5",
+              "protocol_param": "selected-protocol-param", "obfs": "tls1.2_ticket_auth",
+              "obfs_param": "selected-obfs.example", "udp": True,
+              "client_settings": {"server": "selected-node.example", "server_port": 15443,
+                                  "listen_address": "127.0.0.1", "listen_port": 1080}}
+    method = {"id": "shadowsocksr", "config": json.dumps(config), "available": True}
+    original = method["config"]
+    expected_uri = m.ssr_uri(config)
+    norm.normalize_method(method, "unselected.example", {"protocol": "udp", "host": "192.168.50.133", "port": 53})
+    check(method["config"] == original and method["url"] == expected_uri and method["qrPayload"] == expected_uri,
+          "new compatible SSR profile must preserve original native JSON and URI/QR")
+    alternate = method["compatibleConfig"]
+    check(alternate["filename"] == "router-vpn-shadowsocksr-mihomo.json", "named compatible SSR filename")
+    exported = json.loads(alternate["content"])
+    proxy = exported["proxies"][0]
+    for actual, source in (("cipher", "method"), ("password", "password"), ("protocol", "protocol"),
+                           ("protocol-param", "protocol_param"), ("obfs", "obfs"), ("obfs-param", "obfs_param")):
+        check(proxy[actual] == config[source], "compatible SSR profile changed " + source)
+    check(proxy["server"] == "selected-node.example" and proxy["port"] == 15443 and proxy["udp"] is True,
+          "compatible SSR profile changed selected node or UDP support")
+    check(exported["rules"] == ["MATCH,RouterVPN-SSR"] and exported["allow-lan"] is False, "compatible profile changed app-proxy ownership")
+    check(exported["dns"]["nameserver"] == ["udp://192.168.50.133:53#RouterVPN-SSR"] and exported["dns"]["fallback"] == [],
+          "compatible SSR profile substituted the explicitly selected home resolver")
+    check(exported["dns"]["proxy-server-nameserver"] == ["system"] and exported["dns"]["default-nameserver"] == ["system"],
+          "endpoint-only bootstrap must avoid public substitutions or a home-proxy loop")
+    check(method["clientReleaseURL"] == "https://github.com/MetaCubeX/mihomo/releases/tag/v1.19.33", "compatible client release must be pinned")
+    norm.normalize_method(method, "unselected.example", {"protocol": "udp", "host": "192.168.50.133", "port": 53})
+    check(method["config"] == original and method["compatibleConfig"] == alternate, "SSR export normalization is not idempotent")
+    for altered in ({"udp": False}, {"over_tls_settings": {"enable": True}}, {"password": ""}, {"protocol_param": []}):
+        invalid = copy.deepcopy(config)
+        invalid.update(altered)
+        try:
+            m.ssr_mihomo_profile(invalid, "192.168.50.133")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid/incompatible SSR source accepted")
+    for address in ("", "0.0.0.0", "224.0.0.1", "https://resolver.example/query", "fe80::1%unselected"):
+        try:
+            m.ssr_mihomo_profile(config, address)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("invalid home DNS selection accepted")
+    unresolved = copy.deepcopy(config)
+    unresolved["client_settings"]["server"] = "router.invalid"
+    pending = {"id": "shadowsocksr", "config": json.dumps(unresolved), "available": True}
+    norm.normalize_method(pending, "router.invalid", {"protocol": "udp", "host": "192.168.50.133", "port": 53})
+    check(not pending["url"] and not pending["qrSupported"] and not pending.get("compatibleConfig"),
+          "an unresolved SSR endpoint must not be advertised as a working QR or compatible profile")
+
+
 def test_hysteria_validation() -> None:
     parsed = m.validate_hysteria2_uri("hysteria2://secret@example.com:8443/?sni=edge.example#Home")
     check(parsed["host"] == "example.com" and parsed["port"] == 8443, "Hysteria endpoint")
@@ -238,6 +291,7 @@ def main() -> int:
     test_sip002_rejects_ambiguous_input()
     test_sip002_plugin()
     test_ssr()
+    test_ssr_mihomo_download()
     test_hysteria_validation()
     test_shadowsocks_config_builder()
     test_method_lane_truth()

@@ -16,7 +16,10 @@ def prepare_namespace():
     # the unmodified server's private-destination guard remain enabled.
     subprocess.run(["ip", "link", "set", "lo", "up"], check=True, timeout=5)
     subprocess.run(["ip", "address", "add", "192.0.2.1/32", "dev", "lo"], check=True, timeout=5)
+    drop_setup_capabilities()
 
+
+def drop_setup_capabilities():
     class Header(ctypes.Structure):
         _fields_ = [("version", ctypes.c_uint32), ("pid", ctypes.c_int)]
 

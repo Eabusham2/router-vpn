@@ -31,14 +31,14 @@ def call(command, *, source=None, timeout=30):
     return result.stdout
 
 
-def downloaded_config(node, html, method):
+def downloaded_config(node, html, method, variant="native"):
     """Execute the final page's real handler, with an owned DOM boundary.
 
     Node supplies the actual Blob implementation. The adapter records the
     selected download's bytes/name and checks object URL revocation; it does
     not claim a physical browser/QR acceptance run.
     """
-    marker, end = "function downloadMethodConfig(){", "\nfunction renderMethod(){"
+    marker, end = "function downloadMethodConfig(variant='native'){", "\nfunction renderMethod(){"
     if html.count(marker) != 1 or html.count(end) != 1:
         raise AssertionError("final Methods download handler changed")
     script = marker + html.split(marker, 1)[1].split(end, 1)[0]
@@ -50,18 +50,20 @@ const input=JSON.parse(fs.readFileSync(0,'utf8'));
  const context={Blob,availableMethods:[input.method],$:()=>({value:current}),setTimeout:fn=>fn(),
   URL:{createObjectURL:value=>{assert(!blob);blob=value;return 'blob:owned-method-config'},revokeObjectURL:value=>{assert.equal(value,'blob:owned-method-config');revoked=true}},
   document:{createElement:tag=>{assert.equal(tag,'a');anchor={click(){assert(attached);clicked=true},remove(){removed=true}};return anchor},body:{appendChild:value=>{assert.equal(value,anchor);attached=true}}}};
- vm.runInNewContext(input.script+'\ndownloadMethodConfig();',context,{timeout:1000});
- assert(clicked&&removed&&revoked);assert.equal(anchor.download,input.method.configFilename);
+ context.variant=input.variant;
+ vm.runInNewContext(input.script+'\ndownloadMethodConfig(variant);',context,{timeout:1000});
+ const selected=input.variant==='compatible'?input.method.compatibleConfig:{filename:input.method.configFilename,content:input.method.config};
+ assert(clicked&&removed&&revoked);assert.equal(anchor.download,selected.filename);
  assert.equal(blob.type,'application/json;charset=utf-8');
- const content=await blob.text();assert.equal(content,input.method.config);
+ const content=await blob.text();assert.equal(content,selected.content);
  for(const invalid of ['missing-selection','../../private.json']){
-  if(invalid==='missing-selection')current='different-method';else{current=input.method.id;input.method.configFilename=invalid}
-  assert.throws(()=>vm.runInNewContext('downloadMethodConfig();',context,{timeout:1000}),/No valid selected method config/);
+  if(invalid==='missing-selection')current='different-method';else{current=input.method.id;if(input.variant==='compatible')input.method.compatibleConfig.filename=invalid;else input.method.configFilename=invalid}
+  assert.throws(()=>vm.runInNewContext('downloadMethodConfig(variant);',context,{timeout:1000}),/No valid selected method config/);
  }
  process.stdout.write(JSON.stringify({content,filename:anchor.download}));
 })().catch(error=>{console.error(error);process.exitCode=1});
 '''
-    return json.loads(call([node, "-e", fixture], source=json.dumps({"method": method, "script": script})))
+    return json.loads(call([node, "-e", fixture], source=json.dumps({"method": method, "script": script, "variant": variant})))
 
 
 def run(args):

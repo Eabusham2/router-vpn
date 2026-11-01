@@ -215,6 +215,14 @@ jobs:
             -t router-vpn-preflight-overtls-method-import:arm64 .
           bash deploy/run_aux_interoperability_container.sh router-vpn-preflight-aux:arm64 router-vpn-preflight-overtls-method-import:arm64 router-vpn-preflight-naive:arm64 import
 
+      - name: Import SSR Methods profile with unchanged client and selected DNS receipts
+        timeout-minutes: 12
+        run: |
+          docker buildx build --platform linux/arm64 --progress=plain --load \
+            --target ssr-method-import -f server/aux-proxies/Dockerfile \
+            -t router-vpn-preflight-ssr-method-import:arm64 .
+          bash deploy/run_aux_interoperability_container.sh router-vpn-preflight-aux:arm64 router-vpn-preflight-ssr-method-import:arm64 "" ssr-import
+
       - name: Import final Setup Center Shadowsocks URLs with an unchanged client
         timeout-minutes: 15
         run: |
