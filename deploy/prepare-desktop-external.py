@@ -615,6 +615,12 @@ def prepare(vendor, go='go', *, env=None):
         write(vendor, 'cmd/sing-box/routervpn_'+template.name.removesuffix('.tmpl'), template.read_bytes())
     for relative, raw in controller_contract.items():
         write(vendor, relative, raw)
+    copy_encrypted_peer_templates(vendor)
+    print('Desktop native external proof source:', digest())
+
+
+def copy_encrypted_peer_templates(vendor):
+    """Keep each independent peer in its exact test-only package and platform."""
     for name, relative in PEER_TEMPLATES.items():
         path = ROOT/'mobile/desktop'/name
         prefix = b'package routervpnamnezia\n'
@@ -631,10 +637,14 @@ def prepare(vendor, go='go', *, env=None):
             prefix = b'//go:build linux && routervpn_linux_node_composition\n\n' + prefix
         elif name == 'node_router_peer_linux_test.go.tmpl':
             prefix = b'//go:build linux && !android && routervpn_linux_node_composition\n\n' + prefix
-        if path.is_symlink() or not path.read_bytes().startswith(prefix):
-            raise ValueError('Desktop encrypted peer test changed its test-only package')
-        write(vendor, relative, path.read_bytes())
-    print('Desktop native external proof source:', digest())
+        elif name == 'node_wg_peer_test.go.tmpl':
+            prefix = b'//go:build linux && !android\n\n' + prefix
+        if path.is_symlink():
+            raise ValueError('Desktop encrypted peer test is a symlink: ' + name)
+        raw = path.read_bytes()
+        if not raw.startswith(prefix):
+            raise ValueError('Desktop encrypted peer test changed its test-only package or platform: ' + name)
+        write(vendor, relative, raw)
 
 
 if __name__ == '__main__':

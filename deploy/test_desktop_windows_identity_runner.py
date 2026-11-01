@@ -134,6 +134,9 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
                               for path in (ROOT / "internal/mobiletor").glob(pattern))
             self.assertEqual(records, {path.name: hashlib.sha256(path.read_bytes()).hexdigest()
                                        for path in originals})
+            for name, relative in prep.PEER_TEMPLATES.items():
+                self.assertEqual((vendor / relative).read_bytes(),
+                                 (ROOT / 'mobile/desktop' / name).read_bytes())
             for name in ("desktop_socket_pf_inventory_test.go", "desktop_socket_darwin_frame_test.go"):
                 with self.subTest(name=name):
                     missing = target / name
@@ -145,6 +148,54 @@ class WindowsIdentitySourceCopies(unittest.TestCase):
                         GATE.checked_sources(vendor)
                     missing.write_bytes(expected)
                     GATE.checked_sources(vendor)
+
+
+class DesktopEncryptedPeerSourceCopies(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='desktop-peer-copy-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name).resolve() / 'repository'
+        self.sources = self.root / 'mobile/desktop'
+        self.sources.mkdir(parents=True)
+        self.vendor = self.root.parent / 'native'
+        self.prep = GATE.PREP
+        for name in self.prep.PEER_TEMPLATES:
+            (self.sources / name).write_bytes((ROOT / 'mobile/desktop' / name).read_bytes())
+        self.patch = patch.object(self.prep, 'ROOT', self.root)
+        self.patch.start()
+        self.addCleanup(self.patch.stop)
+
+    def test_all_shipping_peers_retain_exact_bytes_packages_and_platforms(self):
+        self.prep.copy_encrypted_peer_templates(self.vendor)
+        for name, relative in self.prep.PEER_TEMPLATES.items():
+            with self.subTest(name=name):
+                self.assertTrue(relative.endswith('_test.go'))
+                self.assertEqual((self.vendor / relative).read_bytes(), (self.sources / name).read_bytes())
+
+    def test_wireguard_changed_platform_or_package_is_rejected_before_copy(self):
+        name = 'node_wg_peer_test.go.tmpl'
+        source = self.sources / name
+        original = source.read_bytes()
+        for modified in (
+                original.replace(b'linux && !android', b'linux'),
+                original.replace(b'linux && !android', b'windows'),
+                original.replace(b'//go:build linux && !android\n\n', b''),
+                original.replace(b'package routervpnamnezia\n', b'package main\n')):
+            with self.subTest(prefix=modified.split(b'import', 1)[0]):
+                source.write_bytes(modified)
+                with self.assertRaisesRegex(ValueError, 'test-only package or platform: node_wg_peer_test'):
+                    self.prep.copy_encrypted_peer_templates(self.vendor)
+                self.assertFalse((self.vendor / self.prep.PEER_TEMPLATES[name]).exists())
+
+    def test_wireguard_source_symlink_cannot_enter_test_package(self):
+        name = 'node_wg_peer_test.go.tmpl'
+        source = self.sources / name
+        other = self.sources / 'borrowed.go'
+        source.rename(other)
+        source.symlink_to(other)
+        with self.assertRaisesRegex(ValueError, 'peer test is a symlink: node_wg_peer_test'):
+            self.prep.copy_encrypted_peer_templates(self.vendor)
+        self.assertFalse((self.vendor / self.prep.PEER_TEMPLATES[name]).exists())
 
 
 if __name__ == "__main__":
