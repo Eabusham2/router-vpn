@@ -31,7 +31,9 @@ HOST_START_CASES = ("admitted", "active-connection", "retained-workspace", "canc
                     "foreign-journal", "request-during-launch", "replacement-during-launch", "request-ended",
                     "replacement-after-start", "shutdown", "always-successor")
 PROOF_SOCKET_CASES = ("tcp4", "tcp6", "udp-rejected", "wrong-family", "wrong-index", "wrong-name", "wrong-mtu", "cancelled", "closed-original")
-GROUPS = {"NodeTransaction": CASES, "NodeShutdown": SHUTDOWN_CASES, "NodeHost": HOST_CASES,
+SESSION_CASES = ("on-connect-repeat", "hold-on-connect", "always-successor", "failed-successor",
+                 "stale-retirement", "wrong-parent", "cancelled-preflight", "partial-journal", "terminal")
+GROUPS = {"NodeSession": SESSION_CASES, "NodeTransaction": CASES, "NodeShutdown": SHUTDOWN_CASES, "NodeHost": HOST_CASES,
           "NodeHostStart": HOST_START_CASES, "NodeProofSocket": PROOF_SOCKET_CASES}
 UNIT_CASES = {
     "TestDesktopLinuxNodeActivationProof": ("absent", "historical-clock", "historical-start", "historical-now", "stale", "future", "before-start",
@@ -69,6 +71,7 @@ def checked_sources():
         "cmd/client/desktop_node_linux_retirement.go", "cmd/client/desktop_node_linux_shutdown_native_test.go",
         "cmd/client/desktop_node_host_linux.go", "cmd/client/desktop_node_host_linux_native_test.go",
         "cmd/client/desktop_node_host_linux_start.go", "cmd/client/desktop_node_host_linux_start_native_test.go",
+        "cmd/client/desktop_node_session_linux.go", "cmd/client/desktop_node_session_linux_native_test.go",
         "cmd/client/desktop_node_host_linux_ready.go", "cmd/client/desktop_node_host_linux_proof.go",
         "cmd/client/desktop_node_host_linux_proof_test.go", "cmd/client/desktop_node_host_linux_proof_native_test.go",
         "cmd/client/desktop_node_host_linux_active.go", "cmd/client/desktop_node_host_linux_active_test.go",

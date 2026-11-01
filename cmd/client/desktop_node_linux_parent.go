@@ -39,6 +39,7 @@ type desktopLinuxNodeParent struct {
 	retirementErr                         error
 	dependents                            map[ownedDesktopNodeParent]struct{}
 	shutdownTransactions                  []*desktopLinuxNodeTransaction
+	session                               *desktopLinuxNodeSession
 }
 
 func desktopLinuxNodeObjectOf(info os.FileInfo) (desktopLinuxNodeObject, error) {

@@ -42,6 +42,15 @@ class LinuxNodeTransactionRunner(unittest.TestCase):
             with self.subTest(output=output[-90:]), self.assertRaises(ValueError):
                 RUNNER.check_unit_verdict(output)
 
+    def test_retained_session_requires_every_original_native_owner_case(self):
+        self.assertEqual(RUNNER.SESSION_CASES,
+                         ("on-connect-repeat", "hold-on-connect", "always-successor", "failed-successor",
+                          "stale-retirement", "wrong-parent", "cancelled-preflight", "partial-journal", "terminal"))
+        self.assertEqual(RUNNER.GROUPS["NodeSession"], RUNNER.SESSION_CASES)
+        closure = RUNNER.checked_sources()
+        self.assertIn("cmd/client/desktop_node_session_linux.go", closure)
+        self.assertIn("cmd/client/desktop_node_session_linux_native_test.go", closure)
+
     def test_complete_actual_verdict_is_accepted(self):
         for group in RUNNER.GROUPS:
             RUNNER.check_verdict("\n".join(completed(group)), group)

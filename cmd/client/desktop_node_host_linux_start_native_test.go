@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -49,6 +50,9 @@ func linuxHostStartAssets(profile common.RouterProfile) error {
 // transaction child models only graph readiness: no TUN/DNS/Router pass is
 // claimed here, and the app must remain Starting after native admission.
 func linuxNodeHostStartFixture(controller *ownedDesktopController, scenario string) error {
+	if strings.HasPrefix(scenario, "session/") {
+		return linuxNodeSessionFixture(controller, strings.TrimPrefix(scenario, "session/"))
+	}
 	policyName := "on-connect"
 	if scenario == "always-successor" {
 		policyName = "always"
