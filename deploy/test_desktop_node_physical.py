@@ -591,7 +591,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          (("TestRouterVPNDesktopLinuxNodeCoverRejectsIncompleteNativeOwner", "TestRouterVPNDesktopLinuxNodeCoverCannotAdoptReplacementOrEmptySet") if platform.system() == "Linux" else ())),
         ("encrypted", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeEncrypted",
          ("TestRouterVPNDesktopNodeEncryptedPreReadyHandshake", "TestRouterVPNDesktopNodeEncryptedWrongPeerRejected", "TestRouterVPNDesktopNodeEncryptedConfiguredCoverStartup", "TestRouterVPNDesktopNodeEncryptedSelectedDNSIsFresh",
-          "TestRouterVPNDesktopNodeEncryptedLayerTraffic", "TestRouterVPNDesktopNodeEncryptedLayerWrongCredential")),
+          "TestRouterVPNDesktopNodeEncryptedLayerTraffic", "TestRouterVPNDesktopNodeEncryptedLayerWrongCredential", "TestRouterVPNDesktopNodeEncryptedRouterHealthLayers")),
         ("hysteria2-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeHysteria2",
          ("TestRouterVPNDesktopNodeHysteria2WrongCredential",)),
         ("xray-traffic", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeXrayTraffic$",
@@ -631,6 +631,8 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Node encrypted gate omitted a complete base profile")
             if name == "encrypted" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedLayerTraffic/" + case + " (" not in output for case in (*LAYER_CASES, *LAYER_ALLOCATION_CASES)):
                 raise ValueError("Node encrypted gate omitted an admitted graph/Start Layer")
+            if name == "encrypted" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedRouterHealthLayers/" + layer + " (" not in output for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")):
+                raise ValueError("Node encrypted gate omitted captured Router health and selected DNS for a Start Layer")
             if name == "hysteria2-credentials" and any("--- PASS: TestRouterVPNDesktopNodeHysteria2WrongCredential/" + case + " (" not in output for case in HYSTERIA2_CREDENTIAL_CASES):
                 raise ValueError("Node Hysteria2 gate omitted a captured protocol, trust or layer credential negative")
             if name == "xray-traffic" and any("--- PASS: TestRouterVPNDesktopNodeXrayTraffic/" + case + " (" not in output for case in XRAY_CASES):

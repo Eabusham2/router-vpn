@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -12,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	M "github.com/sagernet/sing/common/metadata"
 )
 
 const (
@@ -30,7 +33,8 @@ func desktopNodeRouterHealthCaptureValid(request desktopNodeLayerRequest) bool {
 	}
 	raw, err := hex.DecodeString(request.NodeProofID)
 	return err == nil && len(raw) == 32 && hex.EncodeToString(raw) == request.NodeProofID &&
-		request.Mode == "shadowsocks" && request.Layer == ""
+		request.Mode == "shadowsocks" && (request.Layer == "" || request.Layer == "off" ||
+		request.Layer == "aes-256-gcm" || request.Layer == "aes-256-gcm+xor-whitening")
 }
 
 type desktopNodeRouterHealth struct {
@@ -136,10 +140,12 @@ func TestRouterVPNDesktopNodeRouterHealthCapture(t *testing.T) {
 	if desktopNodeRouterHealthCaptureValid(desktopNodeLayerRequest{Mode: "shadowsocks", Cover: true}) {
 		t.Fatal("private cover control accepted an uncaptured Router identity")
 	}
-	covered := valid
-	covered.Cover = true
-	if !desktopNodeRouterHealthCaptureValid(covered) {
-		t.Fatal("captured private Router cover control was rejected")
+	for _, layer := range []string{"", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		covered := valid
+		covered.Cover, covered.Layer = true, layer
+		if !desktopNodeRouterHealthCaptureValid(covered) {
+			t.Fatal("captured private Router cover or exact Start Layer was rejected", layer)
+		}
 	}
 	for _, change := range []struct {
 		name string
@@ -149,13 +155,84 @@ func TestRouterVPNDesktopNodeRouterHealthCapture(t *testing.T) {
 		{"upper-case", func(r *desktopNodeLayerRequest) { r.NodeProofID = strings.ToUpper(r.NodeProofID) }},
 		{"non-hex", func(r *desktopNodeLayerRequest) { r.NodeProofID = strings.Repeat("g", 64) }},
 		{"other-mode", func(r *desktopNodeLayerRequest) { r.Mode = "wg" }},
-		{"uncaptured-layer", func(r *desktopNodeLayerRequest) { r.Layer = "aes-256-gcm" }},
+		{"uncaptured-layer", func(r *desktopNodeLayerRequest) { r.Layer = "aes-256-gcm-xor" }},
 	} {
 		t.Run(change.name, func(t *testing.T) {
 			changed := valid
 			change.edit(&changed)
 			if desktopNodeRouterHealthCaptureValid(changed) {
 				t.Fatal("Router reference accepted an uncaptured identity or graph")
+			}
+		})
+	}
+}
+
+// This uses the actual compiled client, independent encrypted peer and shipping
+// whitening relay. Kernel policy and TUN remain the existing explicit modeled
+// boundary here; the installed gate separately requires the real native host.
+func TestRouterVPNDesktopNodeEncryptedRouterHealthLayers(t *testing.T) {
+	for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		label := layer
+		if label == "" {
+			label = "off"
+		}
+		t.Run(label, func(t *testing.T) {
+			_, ip := desktopNodePeerInterface(t)
+			nodeID := strings.Repeat("a", 64)
+			peer := startDesktopNodeLayerReference(t, "shadowsocks", layer, ip, nodeID)
+			f := newDesktopNodeLayerFixture(t, peer, "")
+			if err := f.box.RouterVPNStrategyStart(); err != nil {
+				t.Fatal("captured Router reference did not enter actual encrypted startup", err)
+			}
+			outer, found := f.box.Outbound().Outbound("proxy")
+			if !found {
+				t.Fatal("captured Router reference lost its exact encrypted outbound")
+			}
+			for _, action := range []string{"restore-node", "wrong-node", "restore-node"} {
+				before := peer.observe(t, action)
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				transport := &http.Transport{Proxy: nil, DisableKeepAlives: true,
+					DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+						if network != "tcp" || address != desktopNodeRouterHealthTarget {
+							return nil, errors.New("Router reference changed its captured routed destination")
+						}
+						return outer.DialContext(ctx, network, M.ParseSocksaddr(address))
+					}}
+				client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("Router reference cannot redirect") }}
+				request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+desktopNodeRouterHealthTarget+"/health", nil)
+				if err != nil {
+					cancel()
+					t.Fatal(err)
+				}
+				response, err := client.Do(request)
+				if err != nil {
+					cancel()
+					transport.CloseIdleConnections()
+					t.Fatal("captured Router health did not cross its encrypted Start Layer", err)
+				}
+				body, readErr := io.ReadAll(io.LimitReader(response.Body, 1025))
+				closeErr := response.Body.Close()
+				transport.CloseIdleConnections()
+				cancel()
+				var actual struct {
+					OK     bool   `json:"ok"`
+					NodeID string `json:"node_id"`
+					Proof  string `json:"proof"`
+				}
+				after := peer.observe(t, "stats")
+				if readErr != nil || closeErr != nil || len(body) > 1024 || response.StatusCode != http.StatusOK || json.Unmarshal(body, &actual) != nil ||
+					!actual.OK || actual.Proof != "router-vpn-private-agent-v1" || (actual.NodeID == nodeID) == (action == "wrong-node") ||
+					after.RouterQueries != before.RouterQueries+1 || after.DirectQueries != 0 || after.RawTCP <= before.RawTCP || after.PlainTCP != before.PlainTCP+1 {
+					t.Fatal("captured layered Router response lost its original identity or encrypted counters", action, readErr, closeErr, before, after)
+				}
+			}
+			for _, action := range []string{"restore-dns", "fail-dns", "restore-dns"} {
+				before := peer.observe(t, action)
+				err := f.box.RouterVPNStrategyDNSProof()
+				after := peer.observe(t, "stats")
+				if (err == nil) == (action == "fail-dns") || after.DNSQueries != before.DNSQueries+1 || after.RawUDP <= before.RawUDP || after.PlainUDP <= before.PlainUDP {
+					t.Fatal("captured layered Router peer substituted the selected resolver or a cached answer", action, err, before, after)
+				}
 			}
 		})
 	}

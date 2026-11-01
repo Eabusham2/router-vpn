@@ -939,8 +939,17 @@ func (p *desktopNodeLayerReference) observe(t *testing.T, action string) desktop
 	return result
 }
 
-func startDesktopNodeLayerReference(t *testing.T, mode, layer string, ip netip.Addr) *desktopNodeLayerReference {
+func startDesktopNodeLayerReference(t *testing.T, mode, layer string, ip netip.Addr, proofIDs ...string) *desktopNodeLayerReference {
 	t.Helper()
+	var proofID string
+	if len(proofIDs) == 1 {
+		proofID = proofIDs[0]
+		if proofID == "" || !desktopNodeRouterHealthCaptureValid(desktopNodeLayerRequest{Mode: mode, Layer: layer, NodeProofID: proofID}) {
+			t.Fatal("layer reference lost its optional exact Router identity")
+		}
+	} else if len(proofIDs) != 0 {
+		t.Fatal("layer reference exceeded its captured Router identity")
+	}
 	config, options := desktopReferenceFixture(t)
 	if mode == "awg2-strong" {
 		config.Parameters["jc"], config.Parameters["jmax"] = "8", "1200"
@@ -964,7 +973,7 @@ func startDesktopNodeLayerReference(t *testing.T, mode, layer string, ip netip.A
 	clear(raw)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	p := &desktopNodeLayerReference{ctx: ctx, cancel: cancel, options: options, done: make(chan error, 1),
-		request: desktopNodeLayerRequest{Schema: 1, Mode: mode, Layer: layer, Address: ip.String(), Password: base64.StdEncoding.EncodeToString(key[:]), Configuration: config}}
+		request: desktopNodeLayerRequest{Schema: 1, Mode: mode, Layer: layer, Address: ip.String(), NodeProofID: proofID, Password: base64.StdEncoding.EncodeToString(key[:]), Configuration: config}}
 	clear(key[:])
 	p.command = exec.CommandContext(ctx, copyPath, "-test.run=^TestRouterVPNDesktopNodeLayerReferenceProcess$", "-test.count=1", "-test.timeout=85s")
 	p.command.Env = append(os.Environ(), "ROUTERVPN_NODE_LAYER_REFERENCE_CHILD=1")
