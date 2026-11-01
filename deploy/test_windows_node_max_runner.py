@@ -204,7 +204,8 @@ class MAXNativeBoundaries(unittest.TestCase):
                 self.assertIn('before.Target != after.Target || before.Capture != after.Capture || before.Owner != after.Owner', body)
                 self.assertIn('policy.Current(snapshot.Capture, snapshot.Owner)', body)
                 self.assertIn('snapshot.Options.PrivateDestinations[0] != (DesktopWindowsSocketDestination{Network: network, Address: remote})', body)
-                self.assertNotIn('timeout.Timeout()', body)
+                denial = body[body.index('func desktopMAXControlDenied('):body.index('type desktopMAXControlConn struct')]
+                self.assertNotIn('timeout.Timeout()', denial)
                 self.assertIn(observer, GATE.overlay_source_hashes(self.source, selected))
                 witness = mutation[3]
                 actual = failure(GATE.native_parent(parent), case, witness)
@@ -217,6 +218,23 @@ class MAXNativeBoundaries(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'unowned source'):
                     GATE.overlay(self.source, self.directory(label + '-occupied'), prospective=True, mutation=mutation)
                 owned.unlink()
+
+    def test_control_stage_diagnostics_never_replace_exact_native_denial(self):
+        for protocol, family in (('tcp', 'TLS'), ('udp', 'QUIC')):
+            parent = 'TestRouterVPNDesktopNodeWindowsMAX' + family
+            case = 'max-' + family.lower() + '-wg/off'
+            witness = GATE.ordinary_witness(protocol)
+            for stage in ('ordinary-dial', 'ordinary-write', 'ordinary-read',
+                          'native-readback-error', 'captured-policy-not-current',
+                          'denial-readback-rejected'):
+                diagnostic = ('MAX native ordinary control stage ' + stage + ' network ' + protocol +
+                              ' error true errno 10013 timeout false')
+                output = failure(parent, case, diagnostic)
+                with self.subTest(protocol=protocol, stage=stage):
+                    with self.assertRaisesRegex(ValueError, 'missed its exact executable rejection'):
+                        GATE.rejected_output(1, output, parent, case, witness)
+                    GATE.rejected_output(1, output.replace(diagnostic, diagnostic + '\n' + witness),
+                                         parent, case, witness)
 
     def test_late_handshake_witness_requires_the_live_unready_native_lower(self):
         with patch.object(GATE.MAX, 'mutations', return_value=()):

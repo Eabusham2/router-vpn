@@ -118,24 +118,68 @@ import (
     "errors"
     "net"
     "net/netip"
+    "sync/atomic"
     "syscall"
     "time"
 )
 
+// Bounded diagnostics are not rejection evidence. Only the unchanged exact
+// WSAEACCES and two live captured-policy readbacks below emit that witness.
+var desktopMAXControlDiagnosticCount atomic.Uint32
+
+func desktopMAXControlDiagnostic(stage, network string, err error, fields ...int) {
+    if desktopMAXControlDiagnosticCount.Add(1) > 16 {
+        return
+    }
+    var errno syscall.Errno
+    _ = errors.As(err, &errno)
+    var timeout net.Error
+    timedOut := errors.As(err, &timeout) && timeout.Timeout()
+    println("MAX native ordinary control stage", stage, "network", network,
+        "error", err != nil, "errno", uint64(errno), "timeout", timedOut)
+    for index, value := range fields {
+        println("MAX native ordinary control field", stage, index, value)
+    }
+}
+
 func desktopMAXControlSnapshot(ctx context.Context, network string, remote netip.AddrPort) (DesktopWindowsNodeCompositionReadback, bool) {
     if ctx == nil || ctx.Err() != nil || network != "tcp" && network != "udp" || !remote.IsValid() || remote.Port() == 0 {
+        desktopMAXControlDiagnostic("captured-input-rejected", network, nil)
         return DesktopWindowsNodeCompositionReadback{}, false
     }
     proof, cancel := context.WithTimeout(ctx, 2*time.Second)
     defer cancel()
     snapshot, err := DesktopWindowsNodeCompositionSnapshot(proof)
     if err != nil || snapshot.Closed || snapshot.Target.Validate() != nil || snapshot.Owner.Kind != "windows-isolated-token" || !snapshot.Options.RetainBaselineForHandoff || len(snapshot.Grants) != 0 || len(snapshot.Options.PrivateDestinations) != 1 || snapshot.Options.PrivateDestinations[0] != (DesktopWindowsSocketDestination{Network: network, Address: remote}) {
+        reason := "native-readback-error"
+        switch {
+        case err != nil:
+        case snapshot.Closed:
+            reason = "native-owner-closed"
+        case snapshot.Target.Validate() != nil:
+            reason = "native-target-invalid"
+        case snapshot.Owner.Kind != "windows-isolated-token":
+            reason = "native-owner-kind"
+        case !snapshot.Options.RetainBaselineForHandoff:
+            reason = "native-baseline-not-retained"
+        case len(snapshot.Grants) != 0:
+            reason = "native-owner-has-grants"
+        case len(snapshot.Options.PrivateDestinations) != 1:
+            reason = "native-private-tuple-count"
+        default:
+            reason = "native-private-tuple-changed"
+        }
+        desktopMAXControlDiagnostic(reason, network, err, len(snapshot.Grants), len(snapshot.Options.PrivateDestinations))
         return snapshot, false
     }
     desktopWindowsNodeComposition.Lock()
     policy := desktopWindowsNodeComposition.owner
     desktopWindowsNodeComposition.Unlock()
-    return snapshot, policy != nil && policy.Current(snapshot.Capture, snapshot.Owner)
+    current := policy != nil && policy.Current(snapshot.Capture, snapshot.Owner)
+    if !current {
+        desktopMAXControlDiagnostic("captured-policy-not-current", network, nil)
+    }
+    return snapshot, current
 }
 
 func desktopMAXControlDenied(ctx context.Context, before DesktopWindowsNodeCompositionReadback, network string, remote netip.AddrPort, err error) {
@@ -144,6 +188,7 @@ func desktopMAXControlDenied(ctx context.Context, before DesktopWindowsNodeCompo
     }
     after, current := desktopMAXControlSnapshot(ctx, network, remote)
     if !current || before.Target != after.Target || before.Capture != after.Capture || before.Owner != after.Owner {
+        desktopMAXControlDiagnostic("denial-readback-rejected", network, err)
         return
     }
     if network == "tcp" {
@@ -163,7 +208,18 @@ type desktopMAXControlConn struct {
 
 func (c *desktopMAXControlConn) Write(body []byte) (int, error) {
     count, err := c.Conn.Write(body)
+    desktopMAXControlDiagnostic("ordinary-write", c.network, err, count)
     desktopMAXControlDenied(c.ctx, c.before, c.network, c.remote, err)
+    return count, err
+}
+
+func (c *desktopMAXControlConn) Read(body []byte) (int, error) {
+    count, err := c.Conn.Read(body)
+    // Read errors are diagnostic only. They cannot satisfy the unchanged
+    // outbound socket/delivery rejection witness.
+    if err != nil {
+        desktopMAXControlDiagnostic("ordinary-read", c.network, err, count)
+    }
     return count, err
 }
 
@@ -171,6 +227,7 @@ func DesktopWindowsMAXControlDial(ctx context.Context, network, address string, 
     remote, parseErr := netip.ParseAddrPort(address)
     before, current := desktopMAXControlSnapshot(ctx, network, remote)
     connection, err := dial()
+    desktopMAXControlDiagnostic("ordinary-dial", network, err)
     if parseErr == nil && current {
         desktopMAXControlDenied(ctx, before, network, remote, err)
         if connection != nil {
