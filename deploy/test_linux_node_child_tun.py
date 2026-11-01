@@ -76,6 +76,10 @@ def check_verdict(output, *, peer_only=False):
     for suffix in suffixes:
         if prefix + suffix + ' (' not in output:
             raise ValueError('Generated Linux TUN command omitted its required boundary: ' + group + suffix)
+    if not peer_only:
+        for case in CASES:
+            if 'verified original TUN retirement: ' + case + '\n' not in output.replace('\r\n', '\n'):
+                raise ValueError('Generated Linux TUN command omitted its authenticated, acknowledged and joined retirement: ' + case)
 
 
 def namespace_test(binary, peer, expected_sha256, peer_sha256, *, peer_only=False):

@@ -18,7 +18,8 @@ spec.loader.exec_module(G)
 class LinuxChildTUNVerdict(unittest.TestCase):
     def output(self):
         prefix = '--- PASS: TestDesktopLinuxGuardianKernelNodeChildCommandTUN'
-        return '\n'.join(prefix + suffix + ' (0.1s)' for suffix in ('', *('/' + case for case in G.CASES)))
+        return '\n'.join([*(prefix + suffix + ' (0.1s)' for suffix in ('', *('/' + case for case in G.CASES))),
+                          *('    native_test.go:1: verified original TUN retirement: ' + case for case in G.CASES)]) + '\n'
 
     def test_requires_every_actual_positive_and_negative(self):
         output = self.output()
@@ -31,6 +32,18 @@ class LinuxChildTUNVerdict(unittest.TestCase):
         for marker in ('--- FAIL: other', '--- SKIP: unavailable'):
             with self.subTest(marker=marker), self.assertRaises(ValueError):
                 G.check_verdict(self.output() + '\n' + marker)
+
+    def test_passing_leaf_without_original_retirement_cannot_close_gate(self):
+        output = self.output()
+        for case in G.CASES:
+            with self.subTest(case=case), self.assertRaises(ValueError):
+                G.check_verdict(output.replace('verified original TUN retirement: ' + case, 'retirement was omitted: ' + case))
+
+    def test_original_receive_timeout_cannot_be_successful_retirement(self):
+        output = self.output().replace('verified original TUN retirement: wrong-key',
+                                      'generated TUN child lost its actual joined source receipt read unixpacket: i/o timeout')
+        with self.assertRaises(ValueError):
+            G.check_verdict(output)
 
     def test_peer_smoke_cannot_replace_actual_tun_command(self):
         smoke = '--- PASS: TestDesktopLinuxGuardianKernelNodeChildCommandPeer (0.1s)'

@@ -440,6 +440,40 @@ func linuxChildTUNAbsent(t *testing.T, indexes ...int) {
 	}
 }
 
+// A natural failed DNS/key trial may spend the complete five-second DNS
+// deadline before joining its native source. That work is not a channel
+// exchange: wait for this original baseline's actual closed inventory before
+// entering the unchanged short retirement receive. This readback does not
+// replace the authenticated joined-source record, final ACK or original Wait.
+func linuxChildTUNWaitFailedSource(t *testing.T, ctx context.Context, owner *linuxChildControlParent,
+	files *routerVPNExternalFiles) {
+	t.Helper()
+	if owner == nil || owner.baseline == nil || files == nil {
+		t.Fatal("failed TUN trial lost its original source observation")
+	}
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	var last error
+	for {
+		if ctx.Err() != nil {
+			t.Fatal("failed TUN trial did not close its original source before retirement", ctx.Err(), last)
+		}
+		if _, err := files.root.Lstat("node-ready.json"); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("failed TUN trial published readiness before original source retirement", err)
+		}
+		if last = owner.baseline.ObserveClosed(ctx); last == nil {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("failed TUN trial timed out before original source retirement", ctx.Err(), last)
+		case <-owner.done:
+			t.Fatal("failed TUN trial exited before its authenticated retirement", owner.waitErr, owner.output.String())
+		case <-ticker.C:
+		}
+	}
+}
+
 // This is the actual registered generated command around the existing native
 // TUN/SS2022/DNS peer. It supplies original parent callbacks, never fake TUN,
 // selected-DNS, source-join or readiness observations.
@@ -510,6 +544,8 @@ func TestDesktopLinuxGuardianKernelNodeChildCommandTUN(t *testing.T) {
 				if err := files.publish("stop.json", routerVPNExternalStop{Schema: 1, Session: policy.Metadata().SessionID, SourceSHA256: policy.Metadata().ConfigSHA256}); err != nil {
 					t.Fatal(err)
 				}
+			} else {
+				linuxChildTUNWaitFailedSource(t, ctx, owner, files)
 			}
 			receipt, err := control.ReceiveRetirement(ctx)
 			if err != nil || receipt.Validate() != nil || receipt.Source == nil || receipt.Source.Original == nil || receipt.Prepared == nil {
@@ -568,6 +604,7 @@ func TestDesktopLinuxGuardianKernelNodeChildCommandTUN(t *testing.T) {
 					t.Fatal("joined On-connect command failed original parent release", err)
 				}
 			}
+			t.Log("verified original TUN retirement:", scenario)
 		})
 	}
 }
