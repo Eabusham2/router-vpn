@@ -30,8 +30,12 @@ final class AndroidNativeHopMeasurement {
     }
 
     void runLatency(String exitID,String nativeSession,String homeSession,long pathGeneration,Callback callback){
+        runLatency(null,exitID,nativeSession,homeSession,pathGeneration,callback);
+    }
+
+    void runLatency(Object borrowedLease,String exitID,String nativeSession,String homeSession,long pathGeneration,Callback callback){
         if(exitID==null||exitID.isEmpty()){callback.finished(null,new IllegalArgumentException("Select a captured external node."));return;}
-        run(null,exitID,nativeSession,homeSession,pathGeneration,callback);
+        run(borrowedLease,exitID,nativeSession,homeSession,pathGeneration,callback);
     }
 
     private void run(Object borrowedLease,String exitID,String nativeSession,String homeSession,long pathGeneration,Callback callback){

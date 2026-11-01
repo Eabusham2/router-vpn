@@ -14,6 +14,33 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /** Captured connect-test-restore transaction; every traffic owner drains before reuse. */
 final class AndroidSpeedLabController {
     interface Callback { void progress(String message); void finished(AndroidSpeedLab.Result result, Throwable error); }
+    interface ExternalCallback {
+        void validate()throws Exception;
+        default void validateCommit(LayeredVpnService.HopMeasurementOwner owner)throws Exception{}
+        default void permissionDenied(){}
+        default void beforeStart()throws Exception{}
+        default void proved(AndroidUnifiedConnectionController.RestorePoint path)throws Exception{}
+        void progress(String message);
+        default void owned(String session){}
+        default void adopted(AndroidUnifiedConnectionController.RestorePoint path,String session)throws Exception{}
+        void finished(ExternalResult result,Throwable error);
+    }
+    static final class ExternalResult {
+        final AndroidExternalNodeStatistics.Record measurement;
+        final AndroidUnifiedConnectionController.RestorePoint measuredPath;
+        final AndroidHomeStateStore.Snapshot returnedHome;
+        final boolean adopted;
+        ExternalResult(AndroidExternalNodeStatistics.Record measurement,AndroidUnifiedConnectionController.RestorePoint path,AndroidHomeStateStore.Snapshot home,boolean adopted){this.measurement=measurement;measuredPath=path;returnedHome=home;this.adopted=adopted;}
+    }
+    private static final class ExternalWork {
+        final AndroidUnifiedConnectionController.RestorePoint target;
+        final ExternalCallback callback;
+        AndroidExternalNodeStatistics.Record measurement;
+        AndroidUnifiedConnectionController.RestorePoint measuredPath;
+        AndroidHomeStateStore.Snapshot returnedHome;
+        boolean adopted;
+        ExternalWork(AndroidUnifiedConnectionController.RestorePoint target,ExternalCallback callback){this.target=target;this.callback=callback;}
+    }
 
     static final class Request {
         String entryMode="wg", execution="local";
@@ -46,6 +73,9 @@ final class AndroidSpeedLabController {
     private AndroidUnifiedConnectionController.Callback connectingCallback;
     private Request activeRequest;
     private Map<File,String> capturedFiles=Collections.emptyMap();
+    private final AndroidExternalNodeBenchmark externalMeter;
+    private ExternalWork externalWork;
+    private boolean borrowedMTULease;
 
     private static Request capture(Request input)throws Exception{
         Request q=new Request();q.scope=normalize(input.scope,"current");q.topology=normalize(input.topology,"router");q.mode=normalize(input.mode,"smart-auto");q.entryMode=normalize(input.entryMode,"");q.exitMode=normalize(input.exitMode,"shadowsocks");q.execution=normalize(input.execution,"");q.externalDirect=input.externalDirect;
@@ -68,13 +98,33 @@ final class AndroidSpeedLabController {
     private synchronized boolean current(long owner){return running.get()&&generation==owner;}
 
 
-    AndroidSpeedLabController(Activity activity,AndroidUnifiedConnectionController connection){this.activity=activity;this.connection=connection;this.meter=new AndroidSpeedLab(activity);}
+    AndroidSpeedLabController(Activity activity,AndroidUnifiedConnectionController connection){this.activity=activity;this.connection=connection;this.meter=new AndroidSpeedLab(activity);this.externalMeter=new AndroidExternalNodeBenchmark(activity,AndroidRuntimeRegistry.get(activity).standardExit);}
     boolean isRunning(){return running.get();}
     List<AndroidSpeedLabHopMeter.Hop> hops(){return new ArrayList<>(lastHops);}
     String hopError(){return lastHopError;}
     String nativeHops(){return nativeHopStatus;}
 
     void run(Request request,Callback callback){
+        run(request,callback,null,null);
+    }
+
+    void runExternalLatency(Request request,Object lease,ExternalCallback callback){runExternal(request,lease,new ExternalWork(null,callback));}
+    void adoptExternal(AndroidUnifiedConnectionController.RestorePoint path,Object lease,ExternalCallback callback){
+        if(path==null||!"external".equals(path.topology)||path.external==null){callback.finished(null,new IllegalArgumentException("A measured external restoration receipt is required."));return;}
+        Request request=new Request();request.scope="temporary";request.topology="external";request.standardExit=path.external;
+        request.entry=path.entry;request.ordinaryEntry=path.ordinaryEntry;request.externalDirect=path.entry==null&&path.ordinaryEntry==null;
+        request.entryMode=request.externalDirect?"wg":path.home.activeEntryMode;request.execution=path.execution;
+        runExternal(request,lease,new ExternalWork(path,callback));
+    }
+    private void runExternal(Request request,Object lease,ExternalWork work){
+        if(!AndroidMTUMeasurementGate.owns(lease)){work.callback.finished(null,new IllegalStateException("The external comparison lost its MTU lease."));return;}
+        run(request,new Callback(){
+            public void progress(String message){work.callback.progress(message);}
+            public void finished(AndroidSpeedLab.Result ignored,Throwable error){work.callback.finished(new ExternalResult(error==null?work.measurement:null,error==null?work.measuredPath:null,work.returnedHome,work.adopted),error);}
+        },lease,work);
+    }
+
+    private void run(Request request,Callback callback,Object borrowedLease,ExternalWork work){
         if(request==null){callback.finished(null,new IllegalArgumentException("Speed Lab request is required."));return;}
         final long owner;final Request captured;final Map<File,String> sources=new LinkedHashMap<>();final Object lease;
         synchronized(this){
@@ -82,6 +132,7 @@ final class AndroidSpeedLabController {
             owner=++generation;temporaryHome="";temporaryExecution="";externalTemporary=false;completionStarted=false;originalSuspended=false;cancelled=false;pathDecisionChanged=false;original=null;idle=null;connectingCallback=null;phase="quiescing";
             try{
                 captured=capture(request);
+                if(work!=null){if(!"temporary".equals(captured.scope)||!"external".equals(captured.topology))throw new IllegalArgumentException("External comparison requires a captured temporary external graph.");work.callback.validate();}
                 if("temporary".equals(captured.scope)){
                     if("router".equals(captured.topology))captureNode(sources,captured.node);
                     if("multihop".equals(captured.topology)){captureNode(sources,captured.entry);captureNode(sources,captured.exit);if(captured.entry.id.equals(captured.exit.id))throw new IllegalArgumentException("Choose different entry and exit nodes.");}
@@ -95,7 +146,9 @@ final class AndroidSpeedLabController {
                 }
                 if("temporary".equals(captured.scope))original=connection.captureRestorePoint();
                 activeRequest=captured;capturedFiles=Collections.unmodifiableMap(new LinkedHashMap<>(sources));
-                lease=AndroidMTUMeasurementGate.acquire();mtuLease=lease;
+                lease=borrowedLease==null?AndroidMTUMeasurementGate.acquire():borrowedLease;
+                if(!AndroidMTUMeasurementGate.owns(lease))throw new IllegalStateException("The original MTU lease changed.");
+                mtuLease=lease;borrowedMTULease=borrowedLease!=null;externalWork=work;
             }catch(Throwable error){running.set(false);callback.finished(null,error);return;}
         }
         Callback ownedCallback=new Callback(){
@@ -106,7 +159,7 @@ final class AndroidSpeedLabController {
         LayeredVpnService.quiesceMTUForSpeedLab(error->activity.runOnUiThread(()->{
             if(!current(owner)||mtuLease!=lease||!quiesced.compareAndSet(false,true))return;
             if(error!=null){finish(ownedCallback,null,error);return;}
-            try{for(Map.Entry<File,String> source:sources.entrySet())if(!source.getValue().equals(digest(source.getKey())))throw new IllegalStateException("The captured Speed Lab node changed while MTU work was draining.");requireOrdinaryCurrent(captured);}
+            try{for(Map.Entry<File,String> source:sources.entrySet())if(!source.getValue().equals(digest(source.getKey())))throw new IllegalStateException("The captured Speed Lab node changed while MTU work was draining.");requireOrdinaryCurrent(captured);if(work!=null)work.callback.validate();}
             catch(Throwable changed){finish(ownedCallback,null,changed);return;}
             runOwned(captured,ownedCallback,owner);
         }));
@@ -139,21 +192,25 @@ final class AndroidSpeedLabController {
         try{
             if(!connection.idleCurrent(idle))throw new IllegalStateException("A newer connection decision cancelled this temporary test.");
             requireOrdinaryCurrent(request);
+            if(externalWork!=null){externalWork.callback.validate();externalWork.callback.beforeStart();}
             for(Map.Entry<File,String> source:capturedFiles.entrySet())if(!source.getValue().equals(digest(source.getKey())))throw new IllegalStateException("A captured test node changed before startup.");
             if(cancelled){complete(callback,null,cancelled());return;}
             if("system-direct".equals(request.topology)){callback.progress("Testing raw Android system Internet; the captured original path will be restored…");measure(request,callback);return;}
             phase="connecting";externalTemporary="external".equals(request.topology);
             final AtomicBoolean connectedCallback=new AtomicBoolean();
             AndroidUnifiedConnectionController.Callback bridge=new AndroidUnifiedConnectionController.Callback(){
+                public void permissionDenied(){if(externalWork!=null&&current(owner)&&!completionStarted){cancelled=true;externalWork.callback.permissionDenied();}}
                 public void validate()throws Exception{
                     if(!current(owner)||cancelled||completionStarted||!connection.idleCurrent(idle))throw new IllegalStateException("The captured temporary permission request was cancelled or replaced.");
                     for(Map.Entry<File,String> source:capturedFiles.entrySet())if(!source.getValue().equals(digest(source.getKey())))throw new IllegalStateException("The captured test node changed while Android permission was pending.");
                     requireOrdinaryCurrent(request);
+                    if(externalWork!=null){externalWork.callback.validate();externalWork.callback.beforeStart();}
                 }
                 public void owned(String homeSession){
                     if(!current(owner)||completionStarted)return;
                     if(homeSession==null||homeSession.isEmpty()||(!temporaryHome.isEmpty()&&!temporaryHome.equals(homeSession))){complete(callback,null,new IllegalStateException("Temporary path ownership changed."));return;}
                     temporaryHome=homeSession;
+                    if(externalWork!=null)externalWork.callback.owned(homeSession);
                     if(cancelled)complete(callback,null,cancelled());
                 }
                 public void progress(String message){if(current(owner)&&!completionStarted)callback.progress(message);}
@@ -163,10 +220,25 @@ final class AndroidSpeedLabController {
                     if(cancelled){complete(callback,null,cancelled());return;}
                     if(!ok){complete(callback,null,new IllegalStateException(message));return;}
                     if(!temporaryCurrent(request)){complete(callback,null,new IllegalStateException("The temporary path changed before measurement."));return;}
+                    if(externalWork!=null)try{externalWork.callback.proved(connection.captureRestorePoint());}catch(Throwable changed){complete(callback,null,changed);return;}
+                    if(externalWork!=null&&externalWork.target!=null){
+                        try{
+                            synchronized(AndroidSpeedLabController.this){
+                                if(cancelled||!current(owner)||!connection.restoredCurrent(externalWork.target,temporaryHome))throw cancelled();
+                                externalWork.callback.validate();
+                                externalWork.callback.adopted(externalWork.target,temporaryHome);
+                                externalWork.adopted=true;externalWork.measuredPath=externalWork.target;
+                                externalWork.returnedHome=AndroidHomeStateStore.snapshot(activity);
+                                finish(callback,null,null);
+                            }
+                        }catch(Throwable changed){complete(callback,null,changed);}
+                        return;
+                    }
                     callback.progress("Temporary path is proven. Running Speed Lab without changing saved profiles…");measure(request,callback);
                 }
             };
             connectingCallback=bridge;
+            if(externalWork!=null&&externalWork.target!=null){connection.restoreCaptured(externalWork.target,idle,bridge);return;}
             switch(request.topology){
                 case "router":String mode=request.mode;if("custom".equals(mode))mode="custom:speed-lab";connection.connectNode(request.node,mode,request.customLayers,bridge);break;
                 case "multihop":connection.connectMultihop(request.entry,request.exit,request.exitMode,request.execution,request.entryMode,bridge);break;
@@ -186,6 +258,7 @@ final class AndroidSpeedLabController {
             String stage=phase;
             if("measuring".equals(stage)){meter.cancel();return;}
             if("hops".equals(stage)){nativeHopMeter.cancel();return;}
+            if("external-latency".equals(stage)){externalMeter.cancel();return;}
             if("connecting".equals(stage)){
                 if(connection.cancelPending(connectingCallback))return;
                 if(!temporaryHome.isEmpty())complete(callback,null,cancelled());
@@ -198,6 +271,25 @@ final class AndroidSpeedLabController {
 
     private void measure(Request request,Callback callback){
         final long owner=generation;phase="measuring";
+        if(externalWork!=null){
+            final ExternalWork work=externalWork;phase="external-latency";
+            if(cancelled){complete(callback,null,cancelled());return;}
+            externalMeter.run(request.standardExit.id,mtuLease,new AndroidExternalNodeBenchmark.OwnedCallback(){
+                public void validateCommit(LayeredVpnService.HopMeasurementOwner nativeOwner)throws Exception{if(!current(owner)||cancelled||completionStarted)throw new java.util.concurrent.CancellationException("The captured comparison was cancelled before statistics commit.");work.callback.validateCommit(nativeOwner);}
+                public void progress(String status){if(current(owner))callback.progress("Measuring 50 routed HTTPS responses after TLS; the batch MTU lease remains held…");}
+                public void finished(AndroidExternalNodeStatistics.Record record,AndroidStandardExitRuntime.MeasurementSource source,Throwable error){activity.runOnUiThread(()->{
+                    if(!current(owner)||completionStarted)return;
+                    try{
+                        if(cancelled)throw cancelled();if(error!=null)throw error;
+                        if(record==null||source==null||!temporaryCurrent(request))throw new IllegalStateException("The measured external owner changed before capture.");
+                        work.callback.validate();
+                        AndroidUnifiedConnectionController.RestorePoint point=connection.captureRestorePoint();
+                        if(point.externalSource!=source)throw new IllegalStateException("The completed measurements belong to another native launch source.");
+                        work.measurement=record;work.measuredPath=point;complete(callback,null,null);
+                    }catch(Throwable failure){complete(callback,null,failure);}
+                });}
+            });return;
+        }
         if(cancelled){complete(callback,null,cancelled());return;}
         meter.run(request.durationMode,request.minSeconds,request.maxSeconds,(result,error)->activity.runOnUiThread(()->{
             if(!current(owner)||completionStarted)return;
@@ -257,7 +349,7 @@ final class AndroidSpeedLabController {
 
     private void restoreOriginal(Callback callback,long owner,AndroidSpeedLab.Result result,Throwable error){
         if(pathDecisionChanged||!connection.idleCurrent(idle)){finish(callback,null,withCause("A newer connection or Disconnect cancelled automatic restoration.",error));return;}
-        if(!originalSuspended||original==null||!original.connected()){finish(callback,result,error);return;}
+        if(!originalSuspended||original==null||!original.connected()){if(externalWork!=null)externalWork.returnedHome=idle;finish(callback,result,error);return;}
         phase="restoring";callback.progress("Restoring the exact original connection and obtaining fresh path proof…");
         final String[] restoredOwner={""};
         connection.restoreCaptured(original,idle,new AndroidUnifiedConnectionController.Callback(){
@@ -266,6 +358,11 @@ final class AndroidSpeedLabController {
             public void finished(boolean ok,String message){
                 if(!current(owner))return;
                 if(!ok||!connection.restoredCurrent(original,restoredOwner[0])){finish(callback,null,withCause("The original captured connection could not be restored or its fresh proof was superseded: "+message,error));return;}
+                if(externalWork!=null){
+                    AndroidHomeStateStore.Snapshot restored=AndroidHomeStateStore.snapshot(activity);
+                    if(!restoredOwner[0].equals(restored.sessionId)){finish(callback,null,new IllegalStateException("The restored Home owner changed before the comparison could retain it."));return;}
+                    externalWork.returnedHome=restored;
+                }
                 callback.progress("Original connection restored and proved. All temporary test owners have drained.");
                 finish(callback,cancelled?null:result,cancelled?cancelled():error);
             }
@@ -300,10 +397,12 @@ final class AndroidSpeedLabController {
 
     private static AndroidNodeStore.Node find(List<AndroidNodeStore.Node>nodes,String id){if(nodes==null||id==null)return null;for(AndroidNodeStore.Node node:nodes)if(node!=null&&id.equals(node.id))return node;return null;}
     private void finish(Callback callback,AndroidSpeedLab.Result result,Throwable error){
-        final Object lease;
-        synchronized(this){if(callback!=activeCallback||!running.get())return;lease=mtuLease;mtuLease=null;activeCallback=null;running.set(false);}
-        phase="idle";AndroidMTUMeasurementGate.release(lease);
-        try{LayeredVpnService.startAutomaticMTU();}catch(RuntimeException unavailable){if(error==null)error=unavailable;else error.addSuppressed(unavailable);}
+        final Object lease;final boolean borrowed;
+        if(externalWork!=null&&externalWork.returnedHome==null&&original!=null&&connection.restorePointCurrent(original))externalWork.returnedHome=original.home;
+        synchronized(this){if(callback!=activeCallback||!running.get())return;lease=mtuLease;borrowed=borrowedMTULease;mtuLease=null;activeCallback=null;running.set(false);}
+        phase="idle";
+        if(!borrowed){AndroidMTUMeasurementGate.release(lease);
+            try{LayeredVpnService.startAutomaticMTU();}catch(RuntimeException unavailable){if(error==null)error=unavailable;else error.addSuppressed(unavailable);}}
         callback.finished(cancelled?null:result,cancelled&&error==null?cancelled():error);
     }
     private static String normalize(String value,String fallback){String out=value==null?"":value.trim().toLowerCase(Locale.US);return out.isEmpty()?fallback:out;}

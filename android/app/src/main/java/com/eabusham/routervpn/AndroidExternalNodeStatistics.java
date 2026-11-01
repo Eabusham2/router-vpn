@@ -123,14 +123,17 @@ final class AndroidExternalNodeStatistics {
 
     /** Caller holds runtime → native service → Home → private I/O. Native work
      * has drained, but the original MTU and cancellation owners remain held. */
-    static void save(Context context,Captured source,Record record)throws Exception{
+    interface SaveGuard {void require()throws Exception;}
+    static void save(Context context,Captured source,Record record)throws Exception{save(context,source,record,()->{});}
+    static void save(Context context,Captured source,Record record,SaveGuard guard)throws Exception{
         synchronized(AndroidPrivateFileStore.class){
-            source.requireCurrent();
+            guard.require();source.requireCurrent();
             if(!record.id.equals(source.path.home.activeExternalId)||!record.exitSHA.equals(source.exitSHA)||!record.entrySHA.equals(source.entrySHA)
                     ||!record.entryKind.equals(source.path.entryKind)||!record.entryID.equals(source.path.home.activeEntryId)||!record.entryMode.equals(source.path.home.activeEntryMode)
                     ||!record.requested.equals(source.path.requestedExecution)||!record.selected.equals(source.path.selectedExecution))
                 throw new IllegalStateException("Benchmark source identity changed before save.");
             File file=new File(context.getApplicationContext().getFilesDir(),FILE_NAME);
+            byte[] original=file.exists()?AndroidPrivateFileStore.read(file,MAX_STORE):null;
             Map<String,Record> records=read(file);
             Record old=records.get(record.id);if(old!=null&&old.request.equals(record.request))throw new IllegalStateException("This benchmark request was already saved.");
             // The exact current external store was re-read under the same I/O
@@ -138,7 +141,18 @@ final class AndroidExternalNodeStatistics {
             records.keySet().retainAll(source.existingIDs);records.put(record.id,record);
             if(records.size()>AndroidStandardExitStore.MAX_EXITS)throw new IllegalStateException("The bounded external benchmark store is full.");
             JSONArray values=new JSONArray();for(Record item:records.values())values.put(item.json());
-            AndroidPrivateFileStore.write(file,new JSONObject().put("schema",1).put("records",values).toString().getBytes(StandardCharsets.UTF_8),MAX_STORE);
+            byte[] written=new JSONObject().put("schema",1).put("records",values).toString().getBytes(StandardCharsets.UTF_8);
+            try{
+                AndroidPrivateFileStore.write(file,written,MAX_STORE);
+                if(!java.util.Arrays.equals(written,AndroidPrivateFileStore.read(file,MAX_STORE)))throw new IllegalStateException("The external benchmark write was replaced before readback.");
+                source.requireCurrent();guard.require();
+            }catch(Exception failure){
+                // Remove only this exact unaccepted write. Never roll back a
+                // newer statistics owner, even if its contents are valid.
+                try{if(file.exists()&&java.util.Arrays.equals(written,AndroidPrivateFileStore.read(file,MAX_STORE))){if(original==null)AndroidPrivateFileStore.remove(file,MAX_STORE);else AndroidPrivateFileStore.write(file,original,MAX_STORE);}}
+                catch(Exception rollback){failure.addSuppressed(rollback);}
+                throw failure;
+            }
         }
     }
 

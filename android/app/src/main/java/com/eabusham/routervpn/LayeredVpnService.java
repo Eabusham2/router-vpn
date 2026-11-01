@@ -507,11 +507,13 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         private final AndroidTorSession tor;
         private final AndroidExternalSession external;
         private final AndroidHomeStateStore.Snapshot home;
+        private final Network physical;
         private volatile boolean started;
         private HopMeasurementOwner(LayeredVpnService service,String request){this(service,request,"","",null);}
         private HopMeasurementOwner(LayeredVpnService service,String request,String exitID,String nativeSession,AndroidHomeStateStore.Snapshot home){
             this.service=service;probe=service.hopMeasurement;server=service.commandServer;generation=service.lifecycle.get();network=service.executionNetwork;this.request=request;
             this.exitID=exitID;this.nativeSession=nativeSession;this.home=home;config=service.activeConfig;sessionFile=service.activeSession;tor=service.torSession;external=service.externalSession;
+            physical=tor!=null?service.torPhysicalNetwork:service.externalPhysicalNetwork;
         }
         private void requireCurrent(){
             if(probe==null||server==null||service.hopMeasurement!=probe||service.commandServer!=server||generation!=service.lifecycle.get()
@@ -545,6 +547,16 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         void drain()throws Exception{probe.drain(request);}
         interface Commit {void run()throws Exception;}
         void commit(Commit write)throws Exception{synchronized(service.lock){requireCurrent();write.run();}}
+        /** Read-only receipt from this exact proved Home/native owner. */
+        Network physicalNetwork(){
+            synchronized(service.lock){
+                requireCurrent();
+                if(exitID.isEmpty())throw new IllegalStateException("An exact external path receipt is required.");
+                if(physical==null||physical!=(tor!=null?service.torPhysicalNetwork:service.externalPhysicalNetwork))throw new IllegalStateException("The captured native physical owner changed.");
+                if(tor!=null)service.requireTorNetwork(physical);else service.requireExternalNetwork(physical);
+                requireCurrent();return physical;
+            }
+        }
         String requestID(){return request;}
         String configIdentity()throws Exception{return AndroidTorProfile.digest(config.getBytes(java.nio.charset.StandardCharsets.UTF_8));}
         String networkIdentity()throws Exception{return AndroidTorProfile.digest(network.getBytes(java.nio.charset.StandardCharsets.UTF_8));}

@@ -138,7 +138,11 @@ public class ExternalHopMeasurementTest {
     reject(()->LayeredVpnService.captureExternalHopMeasurement(request,fault.equals("wrong-exit")?"other":"exit-owned",fault.equals("wrong-native")?"other":"session-owned",fault.equals("wrong-home")?"other":"home-owned",fault.equals("wrong-generation")?8:7));
     check(probe.starts==0&&probe.latencyStarts==0,"unowned latency capture started traffic: "+fault);s.onDestroy();continue;
    }
+   android.net.Network physical=android.net.ConnectivityManager.networks[0];field(tor?"torPhysicalNetwork":"externalPhysicalNetwork").set(s,physical);field(tor?"torOwner":"externalOwner").setBoolean(s,true);
    LayeredVpnService.HopMeasurementOwner owner=LayeredVpnService.captureExternalHopMeasurement(request,"exit-owned","session-owned","home-owned",7);
+   check(owner.physicalNetwork()==physical,"read-only comparison receipt did not retain exact native physical network");
+   field(tor?"torPhysicalNetwork":"externalPhysicalNetwork").set(s,new android.net.Network());reject(owner::physicalNetwork);field(tor?"torPhysicalNetwork":"externalPhysicalNetwork").set(s,physical);
+   check(probe.starts==0&&probe.latencyStarts==0,"physical receipt started measurement traffic");
    java.util.concurrent.atomic.AtomicLong generation=(java.util.concurrent.atomic.AtomicLong)field("lifecycle").get(s);
    if(fault.equals("late-start"))probe.onStart=()->generation.incrementAndGet();
    if(fault.equals("late-start"))reject(owner::start);else owner.start();
@@ -146,7 +150,7 @@ public class ExternalHopMeasurementTest {
    if(fault.equals("proof"))f.cancel();if(fault.equals("config"))field("activeConfig").set(s,"changed-DNS-or-route");if(fault.equals("session-file"))field("activeSession").set(s,new java.io.File(session.getPath()));if(fault.equals("owner"))field("hopMeasurement").set(s,new RouterHopMeasurement());if(fault.equals("network"))android.net.ConnectivityManager.networks=new android.net.Network[]{};if(fault.equals("emergency"))AndroidHomeStateStore.emergency=true;
    if(fault.startsWith("Home-")){AndroidHomeStateStore.Snapshot next=externalHome(tor);if(fault.equals("Home-generation"))next.pathGeneration++;if(fault.equals("Home-entry"))next.activeEntryId="replacement-entry";if(fault.equals("Home-DNS-proof"))next.pathProof="pending";AndroidHomeStateStore.value=next;}
    AtomicInteger writes=new AtomicInteger();if(fault.equals("valid")){owner.status();owner.commit(writes::incrementAndGet);check(writes.get()==1&&owner.requestID().equals(request)&&!owner.configIdentity().isEmpty()&&!owner.networkIdentity().isEmpty(),"current native receipt could not publish its bound identity");}
-   else{reject(owner::status);reject(()->owner.commit(writes::incrementAndGet));check(writes.get()==0,"stale native owner allowed durable result: "+fault);}
+   else{reject(owner::status);reject(owner::physicalNetwork);reject(()->owner.commit(writes::incrementAndGet));check(writes.get()==0,"stale native owner allowed durable result: "+fault);}
    owner.cancel();owner.drain();check(probe.cancels==1&&probe.drains==1,"latency replacement lost original cancel/drain handle");field("hopMeasurement").set(s,probe);AndroidHomeStateStore.emergency=false;s.onDestroy();
   }
  }

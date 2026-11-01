@@ -107,7 +107,7 @@ final class AndroidConnectionProfileStore {
  AndroidConnectionProfileStore(Context c,AndroidNodeStore n,AndroidStandardExitStore e){}
  ExternalSelection currentExternalPath(String id){if(saved==null||!saved.exit.id.equals(id))throw new IllegalStateException("stale saved selection");return saved;}
 }
-final class LayeredVpnService {static java.util.function.Consumer<Throwable> quiesce;static int automatic;static void quiesceMTUForSpeedLab(java.util.function.Consumer<Throwable> cb){quiesce=cb;}static void startAutomaticMTU(){automatic++;}}
+final class LayeredVpnService {static final class HopMeasurementOwner{private HopMeasurementOwner(){throw new AssertionError("ordinary restoration fixture has no external benchmark owner");}}static java.util.function.Consumer<Throwable> quiesce;static int automatic;static void quiesceMTUForSpeedLab(java.util.function.Consumer<Throwable> cb){quiesce=cb;}static void startAutomaticMTU(){automatic++;}}
 final class AndroidSpeedLab {
  interface Callback{void finished(Result result,Throwable error);}static final class Latency{double medianMs,p90Ms;String detail(){return "latency";}}static final class Transfer{double mbps,bufferbloatMs;Latency loadedLatency=new Latency();}static final class Result{Latency idle=new Latency();Transfer download=new Transfer(),upload=new Transfer();String pathIdentity="captured";org.json.JSONObject json(){return new org.json.JSONObject();}String summary(){return "measured";}}
  // PRODUCTION_DURATION
@@ -122,6 +122,15 @@ final class AndroidNativeHopMeasurement {
 }
 final class AndroidHopMeasurementDialog{AndroidHopMeasurementDialog(android.app.Activity a,AndroidUnifiedConnectionController c){}void show(){}static String renderStatus(String s){return s;}}
 final class AndroidSpeedLabHopMeter{static final class Hop{String summary(){return "hop";}}}
+// Ordinary Speed Lab tests cannot mint a completed external 50-sample result.
+// The comparison fixture supplies its explicitly controlled native boundary.
+final class AndroidExternalNodeStatistics {static final class Record {private Record(){throw new AssertionError("no external native result in ordinary Speed Lab fixture");}}}
+final class AndroidExternalNodeBenchmark {
+ interface OwnedCallback {void progress(String status);void finished(AndroidExternalNodeStatistics.Record result,AndroidStandardExitRuntime.MeasurementSource source,Throwable error);}
+ AndroidExternalNodeBenchmark(Context c,AndroidStandardExitRuntime runtime){}
+ void run(String id,Object lease,OwnedCallback callback){throw new AssertionError("ordinary Speed Lab cannot request external native50");}
+ void cancel(){throw new AssertionError("ordinary Speed Lab cannot own external native50");}
+}
 '''
 HARNESS = r'''package com.eabusham.routervpn;
 import android.app.*;import java.nio.file.*;import java.util.*;import org.json.*;
@@ -257,7 +266,7 @@ public final class SpeedLabRestoreTest {
   for(String stage:List.of("cleanup","permission"))for(String source:List.of("entry-key","entry-policy","entry-removed","exit-key","exit-policy","exit-removed")){
    Fixture f=new Fixture(root,"external-tor-bridge","router");f.ordinaryOriginal("https");f.start();f.quiesce();waitFor(()->AndroidSpeedLab.pending!=null,"ordinary original test did not measure");
    if(stage.equals("cleanup")){RuntimeBoundary.holdStop=true;RuntimeBoundary.stopEntered=false;}else android.net.VpnService.needsPermission=true;AndroidSpeedLab.drained(false);
-   if(stage.equals("cleanup"))waitFor(()->RuntimeBoundary.stopEntered,"temporary cleanup was not captured");else waitFor(()->f.activity.permissionRequest!=0,"ordinary restoration never requested renewed permission");
+   if(stage.equals("cleanup"))waitFor(()->RuntimeBoundary.stopEntered,"temporary cleanup was not captured");else{waitFor(()->f.result.count>0,"revoked original permission did not finish restoration refusal");check(f.activity.permissionRequest==0&&!f.connection.isPermissionPending(),"automatic restoration opened a new permission prompt");}
    String id=source.startsWith("entry")?f.originalOrdinary.id:f.external.id;if(source.endsWith("removed"))AndroidStandardExitStore.saved.remove(id);else if(source.endsWith("policy"))AndroidStandardExitStore.saved.get(id).policy="changed during original restore";else AndroidStandardExitStore.saved.get(id).secret="replacement original private source";
    if(stage.equals("cleanup")){RuntimeBoundary.holdStop=false;RuntimeBoundary.stopRelease.countDown();}else{android.net.VpnService.needsPermission=false;f.connection.onActivityResult(f.activity.permissionRequest,Activity.RESULT_OK);}f.complete();
    check(f.result.error!=null&&f.result.result==null&&RuntimeBoundary.starts==1&&!AndroidHomeStateStore.current.connected,"changed ordinary original was restored or kept a successful result: "+stage+"/"+source);
@@ -407,8 +416,7 @@ def replace_class(text, name, replacement):
     if end<0:end=len(text)
     return text[:start]+replacement+text[end:]
 
-def main():
-    jar=Path(os.environ.get('ANDROID_JSON_JAR','/usr/share/java/com.android.json.jar'))
+def sources():
     ui=dict(P.T.UI)
     ui['android/content/Context.java']=ui['android/content/Context.java'].replace('public SharedPreferences getSharedPreferences(String name,int mode){return (key,fallback)->fallback;}', 'public static final java.util.Map<String,String> speedPreferences=new java.util.HashMap<>();public SharedPreferences getSharedPreferences(String name,int mode){return new SharedPreferences(){public String getString(String key,String fallback){return speedPreferences.getOrDefault(key,fallback);}public java.util.Map<String,?> getAll(){return new java.util.LinkedHashMap<>(speedPreferences);}};}')
     ui['android/content/SharedPreferences.java']='package android.content;public interface SharedPreferences{String getString(String key,String fallback);java.util.Map<String,?> getAll();}'
@@ -437,6 +445,11 @@ def main():
     composite=re.findall(r'(?ms)^    static boolean isMode\(String mode\) \{\n.*?^    \}',(JAVA/'AndroidNativeCompositeProfile.java').read_text())[0]
     speed=(JAVA/'AndroidSpeedLab.java').read_text();duration=speed[speed.index('    static final class DurationPolicy'):speed.index('    static final class Latency')]
     boundaries=boundaries.replace(' // PRODUCTION_TRANSPORT_PREDICATES','\n'.join(predicates)).replace(' // PRODUCTION_COMPOSITE_PREDICATE',composite)+OWNERS+METERS.replace(' // PRODUCTION_DURATION',duration)
+    return ui,boundaries
+
+def main():
+    jar=Path(os.environ.get('ANDROID_JSON_JAR','/usr/share/java/com.android.json.jar'))
+    ui,boundaries=sources()
     with tempfile.TemporaryDirectory(prefix='routervpn-speed-restore-') as directory:
         root=Path(directory)
         for name,body in ui.items():

@@ -42,6 +42,9 @@ final class AndroidPrivateFileStore {static byte[] read(File f,int max)throws Ex
 // node-usage fixture compiles the complete shipping recorder and controller.
 final class AndroidNodeUsage {static final class Attempt{void owned(Context c,String s){}String finished(Context c,String request,boolean ok){throw new AssertionError("permission-only fixture opted into usage");}}static Attempt unavailable(){return new Attempt();}static Attempt router(AndroidNodeStore.Node n){return new Attempt();}static Attempt multihop(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode){return new Attempt();}static Attempt external(Context c,AndroidNodeStore.Node a,AndroidStandardExitStore.Entry b,AndroidStandardExitStore.Entry e,boolean direct,String mode){return new Attempt();}}
 final class AndroidTorProfile {static String compileOrdinary(AndroidStandardExitStore.Entry entry,AndroidStandardExitStore.Entry exit,String session,String execution){if(!AndroidExternalPolicy.supports(entry.protocol)||!isTor(exit.protocol)||entry.id.equals(exit.id)||!execution.equals("local"))throw new IllegalArgumentException("invalid ordinary Tor selection");return "{}";}static boolean isTor(String p){return "tor".equals(p)||"tor-bridge".equals(p);}static String strictText(byte[] b)throws Exception{return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(b)).toString();}static String digest(byte[] b)throws Exception{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(b));}}
+// No comparison is created by this permission-only fixture. Its full owner is
+// executed in test_android_external_node_comparison.py.
+final class AndroidExternalNodeComparison {static boolean active;static int cancels;static boolean hasActiveOperation(){return active;}static boolean cancelActiveOperation(){if(active)cancels++;return active;}}
 final class AndroidVpnMutationGuard {static boolean busy;static boolean isBusy(Context c){return busy;}}
 final class AndroidHomeStateStore {static final class Snapshot{boolean connected;long pathGeneration;String sessionId="",phase="off",pathProof="not-run",logicalMode="",runtimeMode="",fallback="",activeNodeId="",activeEntryId="",activeExitId="",activeEntryMode="",activeExternalId="",activeExternalProtocol="";}static Snapshot current=new Snapshot();static Snapshot snapshot(Context c){return current;}static long advancePathGeneration(Context c){return ++current.pathGeneration;}}
 final class AndroidNodeStore {
@@ -274,6 +277,8 @@ public class ExternalPermissionTest {
   Fixture immediate=new Fixture(root);savedChoice(immediate);android.net.VpnService.needsPermission=false;request(immediate,"ordinary");check(immediate.callback.ok&&immediate.runtime().starts==1&&!immediate.controller.isPermissionPending()&&immediate.activity.permission==null,"existing Android permission bypassed captured dispatch or self-blocked");
  }
  static void activity(Path root)throws Exception{
+  Fixture retained=new Fixture(root);PermissionActivity retainedUI=new PermissionActivity();retainedUI.connection=retained.controller;retainedUI.nodeStore=retained.nodes;retainedUI.exitStore=new AndroidStandardExitStore(retainedUI);AndroidExternalNodeComparison.active=true;AndroidExternalNodeComparison.cancels=0;
+  try{retainedUI.display();retainedUI.editChoice();check(retainedUI.changes==0&&!retainedUI.fastestButton.isEnabled()&&retainedUI.connectButton.getText().toString().equals("Cancel test")&&retainedUI.statusView.getText().toString().contains("Comparing captured external paths"),"shipping Activity hid retained external comparison");retainedUI.press();check(AndroidExternalNodeComparison.cancels==1&&retained.callback.completions==0,"comparison Cancel entered a replacement connection");}finally{AndroidExternalNodeComparison.active=false;}
   Fixture f=new Fixture(root);savedChoice(f);f.request("wg",false);PermissionActivity ui=new PermissionActivity();ui.connection=f.controller;ui.nodeStore=f.nodes;ui.exitStore=new AndroidStandardExitStore(ui);ui.display();ui.editChoice();
   check(ui.changes==0&&!ui.nodeButton.isEnabled()&&!ui.fastestButton.isEnabled()&&!ui.killSwitch.isEnabled()&&!ui.multihopToggle.isEnabled()&&!ui.modeSpinner.isEnabled()&&!ui.dnsSpinner.isEnabled(),"shipping Product controls remained mutable during Android permission");
   check(ui.connectButton.getText().toString().equals("Cancel connection")&&ui.statusView.getText().toString().contains("Waiting for Android permission"),"shipping Product hid pending permission or cancellation");
@@ -326,6 +331,7 @@ def main():
         (app / "ExternalPermissionTest.java").write_text(HARNESS.replace(" // ALL_CAPTURED_MODES", modes))
         (app / 'PermissionActivity.java').write_text(PRODUCT.replace(' // SHIPPING_PRODUCT_METHODS', '\n'.join(methods)))
         shutil.copyfile(JAVA / 'AndroidConnectionSelection.java', app / 'AndroidConnectionSelection.java')
+        shutil.copyfile(JAVA / 'AndroidMTUMeasurementGate.java', app / 'AndroidMTUMeasurementGate.java')
         target = app / "AndroidUnifiedConnectionController.java"
         source = (JAVA / target.name).read_text()
         target.write_text(source)

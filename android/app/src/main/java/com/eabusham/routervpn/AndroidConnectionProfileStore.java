@@ -222,6 +222,34 @@ final class AndroidConnectionProfileStore {
         validateExternalGraph(exit,entry,ordinaryEntry,mode,execution);return new ExternalSelection(entry,ordinaryEntry,exit,mode,execution);
     }
 
+    /** A successful explicit Fastest adoption may publish its already-proved
+     * selection. It changes no private node policy or engine configuration. */
+    interface MeasuredSelection {ExternalSelection path();void requireBeforeSelection()throws Exception;void requireAfterSelection()throws Exception;}
+    synchronized void selectMeasuredExternal(MeasuredSelection receipt)throws Exception{
+        if(receipt==null)throw new IllegalArgumentException("An owned measured-path adoption is required.");
+        receipt.requireBeforeSelection();ExternalSelection path=receipt.path();
+        validateExternalGraph(path.exit,path.entry,path.ordinaryEntry,path.entryMode,path.execution);
+        requireExternalUnchanged(path.exit);if(path.ordinaryEntry!=null)requireExternalUnchanged(path.ordinaryEntry);
+        Map<String,Object> original=snapshotPreferences(),next=new LinkedHashMap<>(original);
+        next.put(SELECTED_KIND,"external");next.put(SELECTED_ID,path.exit.id);next.put(MODE_KEY,"external");
+        next.put(MULTI_ON,!path.direct());next.put(MULTI_ENTRY,path.entry!=null?path.entry.id:path.ordinaryEntry!=null?path.ordinaryEntry.id:"");
+        next.put(MULTI_EXIT,path.direct()?"":path.exit.id);next.put(MULTI_MODE,path.exit.protocol);
+        next.put(MULTI_ENTRY_KIND,path.ordinaryEntry==null?"router-vpn":"external");next.put("multihop_execution",path.execution);
+        next.put("multihop_entry_mode",path.direct()?"wg":path.entryMode);
+        try{
+            receipt.requireBeforeSelection();
+            if(!original.equals(snapshotPreferences()))throw new IllegalStateException("The user's selected connection changed before fastest adoption.");
+            restorePreferences(next);
+            if(!next.equals(snapshotPreferences()))throw new IllegalStateException("The measured selection did not persist exactly.");
+            receipt.requireAfterSelection();
+        }catch(Exception failure){
+            // Roll back only our exact selection write. A concurrent newer
+            // choice is not authority to overwrite the user's preferences.
+            if(next.equals(snapshotPreferences()))try{restorePreferences(original);}catch(Exception rollback){failure.addSuppressed(rollback);}
+            throw failure;
+        }
+    }
+
     private static final class NodeUpdate {
         final String id;final byte[] original,updated;
         NodeUpdate(String id,byte[] original,byte[] updated){this.id=id;this.original=original;this.updated=updated;}
@@ -292,7 +320,7 @@ final class AndroidConnectionProfileStore {
         validateExternalGraph(exit,entry,null,mode,execution);
     }
 
-    private static void validateExternalGraph(AndroidStandardExitStore.Entry exit,AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry ordinaryEntry,String mode,String execution)throws Exception{
+    static void validateExternalGraph(AndroidStandardExitStore.Entry exit,AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry ordinaryEntry,String mode,String execution)throws Exception{
         AndroidStandardExitStore.validate(exit);AndroidStandardExitStore.validateExecution(exit,entry!=null,execution);
         JSONObject policy=AndroidConnectionProfilePolicy.external(AndroidTorProfile.isTor(exit.protocol)?exit.torPolicy:exit.policy,exit.protocol);
         if(ordinaryEntry!=null){

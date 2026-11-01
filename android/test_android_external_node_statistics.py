@@ -289,10 +289,10 @@ def main():
             print('External statistics negative control rejected:', assertion)
         captured_files = {name: (app / name).read_text() for name in ('AndroidExternalNodeStatistics.java', 'AndroidExternalNodeBenchmark.java')}
         try:
-            # Remove both redundant publication checks. The actual filesystem
+            # Remove every pre/post-publication source check. The actual filesystem
             # mutation must now reach (and be caught by) the saved-byte witness.
             for name, source in captured_files.items():
-                assert source.count('source.requireCurrent();') == 1, name
+                assert source.count('source.requireCurrent();') == (2 if name == 'AndroidExternalNodeStatistics.java' else 1), name
                 (app / name).write_text(source.replace('source.requireCurrent();', '/* broken original source readback */'))
             subprocess.run(compile, check=True, timeout=45, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             broken = subprocess.run(run, capture_output=True, text=True, timeout=90)

@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Activity-owned UI bridge over app-process-owned VPN engines. */
 final class AndroidUnifiedConnectionController implements AutoCloseable {
-    interface Callback { void progress(String message); void finished(boolean ok, String message); default void owned(String homeSession) {} default void superseded() {} default void validate() throws Exception {} default boolean recordsNodeUsage() { return false; } }
+    interface Callback { void progress(String message); void finished(boolean ok, String message); default void owned(String homeSession) {} default void superseded() {} default void permissionDenied() {} default void validate() throws Exception {} default boolean recordsNodeUsage() { return false; } }
     // Activity request codes use only the lower 16 bits. This reserved range is
     // disjoint from import/via-entry and legacy native screens. Never reuse a
     // code in this process: a cancelled prompt may return after its successor.
@@ -228,6 +228,8 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         }catch(Exception changed){return false;}
         return true;
     }
+    void requireRestoreSource(RestorePoint point)throws Exception{if(point==null)throw new IllegalStateException("The original connection capture is missing.");validateRestorePoint(point);}
+    boolean pathCurrent(AndroidHomeStateStore.Snapshot home){return home!=null&&samePath(home,AndroidHomeStateStore.snapshot(activity));}
     AndroidHomeStateStore.Snapshot captureIdle() throws Exception {
         AndroidHomeStateStore.Snapshot idle=AndroidHomeStateStore.snapshot(activity);
         if(!idleCurrent(idle))throw new IllegalStateException("A new connection or undrained runtime owns the path.");
@@ -286,14 +288,22 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
             requireOrdinaryCapture(point.ordinaryEntry,point.external,point.home.activeEntryMode,point.execution,point.ordinaryEntryDigest,point.externalDigest);
         }
     }
+    /** Automatic restoration retains its exact recipe and may not open a new
+     * system permission prompt. Explicit Connect owns that separate decision. */
+    private final class CapturedRestoreCallback implements Callback {
+        final RestorePoint point;final AndroidHomeStateStore.Snapshot idle;final Callback downstream;
+        CapturedRestoreCallback(RestorePoint point,AndroidHomeStateStore.Snapshot idle,Callback downstream){this.point=point;this.idle=idle;this.downstream=downstream;}
+        public void validate()throws Exception{if(!idleCurrent(idle))throw new IllegalStateException("A newer decision cancelled the pending original connection.");validateRestorePoint(point);downstream.validate();}
+        public void owned(String session){downstream.owned(session);}
+        public void progress(String message){downstream.progress(message);}
+        public void permissionDenied(){downstream.permissionDenied();}
+        public void finished(boolean ok,String message){downstream.finished(ok,message);}
+    }
     void restoreCaptured(RestorePoint point,AndroidHomeStateStore.Snapshot idle,Callback callback){
-        try{if(point==null||!point.connected()||!idleCurrent(idle))throw new IllegalStateException("A newer connection decision prevents automatic restoration.");validateRestorePoint(point);}
+        try{if(point==null||!point.connected()||!idleCurrent(idle))throw new IllegalStateException("A newer connection decision prevents automatic restoration.");validateRestorePoint(point);if(VpnService.prepare(activity)!=null)throw new IllegalStateException("Android VPN permission changed; use Connect to grant permission before restoring the captured path.");}
         catch(Exception changed){callback.finished(false,safe(changed));return;}
         callback.progress("Restoring the original captured connection and checking its real path again…");
-        Callback guarded=new Callback(){
-            public void validate()throws Exception{if(!idleCurrent(idle))throw new IllegalStateException("A newer decision cancelled the pending original connection.");validateRestorePoint(point);callback.validate();}
-            public void owned(String session){callback.owned(session);}public void progress(String message){callback.progress(message);}public void finished(boolean ok,String message){callback.finished(ok,message);}
-        };
+        Callback guarded=new CapturedRestoreCallback(point,idle,callback);
         if("multihop".equals(point.topology)){
             if(VpnService.prepare(activity)!=null){callback.finished(false,"Android VPN permission changed; grant permission before restoring the original multihop connection.");return;}
             try{guarded.validate();}catch(Exception changed){callback.finished(false,safe(changed));return;}
@@ -600,7 +610,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         if(requestCode<PREPARE_UNIFIED||requestCode>0xffff)return false;
         if(!ownsPermission(pendingPermission,permissionAttachment)||pendingCallback==null||requestCode!=pendingPermission.requestCode)return true;
         Callback callback=pendingCallback;
-        if(resultCode!=Activity.RESULT_OK){if(pendingStartup!=null)pendingStartup.cancel();clearPending();callback.finished(false,"Android VPN permission was not granted; Router VPN stayed disconnected.");return true;}
+        if(resultCode!=Activity.RESULT_OK){if(pendingStartup!=null)pendingStartup.cancel();clearPending();callback.permissionDenied();callback.finished(false,"Android VPN permission was not granted; Router VPN stayed disconnected.");return true;}
         startPending();return true;
     }
 
@@ -609,6 +619,9 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         try{
             AndroidConnectionSelection.requireCurrent(activity,nodeStore,selection);
             Intent permission=VpnService.prepare(activity);
+            // Check the actual prompt decision too: permission can change after
+            // restoration preflight while private source validation runs.
+            if(permission!=null&&callback instanceof CapturedRestoreCallback){clearPending();callback.finished(false,"Android VPN permission changed before restoration dispatch; use Connect to grant it again.");return;}
             pendingPermission=createPermission(selection,pendingIdentity(),permission!=null,permissionAttachment,captureUsageIntent(callback));
             if(permission==null){startPending();return;}
             callback.progress("Waiting for Android VPN permission for "+label+"…");
