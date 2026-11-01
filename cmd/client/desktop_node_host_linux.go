@@ -5,7 +5,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"net"
 	"net/netip"
@@ -141,64 +140,7 @@ func prepareDesktopLinuxNodeHostWith(operation context.Context, a *app, profile 
 	if err := current(); err != nil {
 		return nil, err
 	}
-	session, err := randomHex(16)
-	if err != nil {
-		return nil, err
-	}
-	policy, err := mobilemultihop.NewDesktopNodePolicyWithMTU(original, session, "linux", restoredMTU)
-	if err != nil {
-		return nil, err
-	}
-	physical, err := captureDesktopLinuxNodeRunningPath(policy)
-	if err != nil {
-		return nil, err
-	}
-	if err := current(); err != nil {
-		return nil, err
-	}
-	meta := policy.Metadata()
-	selection := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256,
-		ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
-	input, err := original.LaunchInput()
-	if err != nil || selection.Validate() != nil || meta.ProfileID != profile.ID || meta.Mode != mode || meta.TargetOS != "linux" ||
-		validateDesktopOwnedNodeSourceProfile(profile, endpoint, input) != nil {
-		return nil, errors.Join(err, errors.New("Linux Node preparation substituted its sealed private source"))
-	}
-	metadata, err := json.Marshal(meta)
-	if err != nil {
-		return nil, err
-	}
-	host := &desktopLinuxNodeHost{gate: make(chan struct{}, 1), parent: parent, operation: operation, policy: policy,
-		monitor:   &atomic.Pointer[desktopLinuxNodeMonitor]{},
-		selection: selection, source: []byte(input), network: network, revision: revision, options: options, savedOptions: savedOptions, physical: physical,
-		launch: &desktopNodeLaunch{root: linuxOwnedControllerRoot, endpoint: endpoint, profileID: profile.ID, mode: mode,
-			config: []byte(policy.Config()), metadata: metadata, configSHA256: meta.ConfigSHA256, mtuSession: session}}
-	p := parent.parent
-	select {
-	case <-ctx.Done():
-		clear(host.source)
-		clear(host.launch.config)
-		clear(host.launch.metadata)
-		return nil, ctx.Err()
-	case <-p.gate:
-	}
-	if err := p.currentLocked(true); err != nil {
-		p.gate <- struct{}{}
-		clear(host.source)
-		clear(host.launch.config)
-		clear(host.launch.metadata)
-		return nil, err
-	}
-	if p.dependents == nil {
-		p.dependents = make(map[ownedDesktopNodeParent]struct{})
-	}
-	p.dependents[host] = struct{}{}
-	p.gate <- struct{}{}
-	host.gate <- struct{}{}
-	if err := current(); err != nil {
-		return host, err // The original parent retains even this cancelled capture.
-	}
-	return host, nil
+	return newDesktopLinuxNodeHostWithSource(ctx, parent, operation, profile, mode, original, endpoint, network, savedOptions, restoredMTU)
 }
 
 func (h *desktopLinuxNodeHost) enter(ctx context.Context) error {
