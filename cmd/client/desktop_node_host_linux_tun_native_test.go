@@ -49,6 +49,7 @@ type linuxHostTUNResult struct {
 	Activation        string                                 `json:"activation,omitempty"`
 	DNSProof          *dnsProofState                         `json:"dns_proof,omitempty"`
 	MTU               *linuxHostTUNMTUResult                 `json:"mtu,omitempty"`
+	MTUView           *linuxHostTUNMTUViewResult             `json:"mtu_view,omitempty"`
 }
 
 func linuxHostTUNRendezvous(gate *os.File, expected byte) error {
@@ -336,6 +337,13 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 					return fmt.Errorf("original active native readback after request completion: %w", err)
 				}
 				result.Activation = "retained-after-request"
+				if scenario == "active-request-ended" || strings.HasPrefix(scenario, "mtu-") {
+					view, err := linuxHostTUNMTUView(ctx, a, host)
+					if err != nil {
+						return err
+					}
+					result.MTUView = &view
+				}
 				if mtuCase {
 					if retained == nil || retained.active != host || retained.journal != journal {
 						return errors.New("installed MTU consumer lost its original retained session")
@@ -722,6 +730,15 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				t.Log("verified installed host original MTU lease:", scenario)
 			} else if result.MTU != nil {
 				t.Fatal("installed MTU result belongs to another original scenario")
+			}
+			if scenario == "active-request-ended" || strings.HasPrefix(scenario, "mtu-") {
+				if result.MTUView == nil || result.Ready == nil || result.MTUView.Source != "live-captured-interface" ||
+					result.MTUView.EffectiveMTU != result.Ready.MTU || result.MTUView.Automatic != strings.HasPrefix(scenario, "mtu-") {
+					t.Fatal("installed MTU view omitted its original live Fixed/Auto readback", result.MTUView, result.Ready)
+				}
+				t.Log("verified installed host live MTU status:", scenario)
+			} else if result.MTUView != nil {
+				t.Fatal("installed MTU view belongs to another original native scenario")
 			}
 			t.Log("verified installed host native lifecycle:", scenario)
 		})

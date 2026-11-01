@@ -276,6 +276,9 @@ func (a *app) writeDesktopMTUViewStatus(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid MTU status identity", http.StatusBadRequest)
 		return
 	}
+	if a.writeDesktopPlatformMTUViewStatus(w, r, request, session) {
+		return
+	}
 	identity, err := currentMTUViewIdentity(a)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)

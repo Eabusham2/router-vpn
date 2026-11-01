@@ -53,6 +53,7 @@ def checked_sources(source):
     required = {'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_node_host_linux_ready.go', 'cmd/client/desktop_node_host_linux_proof.go',
                 'cmd/client/desktop_node_host_linux_active.go',
+                'cmd/client/desktop_node_mtu_view_linux.go', 'cmd/client/desktop_node_mtu_view_linux_tun_native_test.go',
                 'cmd/client/desktop_node_dns_linux.go', 'cmd/client/desktop_node_dns_other.go',
                 'cmd/client/desktop_node_dns_linux_test.go', 'cmd/client/dns_proof.go',
                 'cmd/client/desktop_node_mtu_linux.go', 'cmd/client/desktop_node_mtu_linux_tun_native_test.go',
@@ -101,6 +102,8 @@ def check_verdict(output, case=None):
             raise ValueError('Installed Linux host omitted its actual retained session DNS consumer: ' + value)
         if value in MTU_CASES and 'verified installed host original MTU lease: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its original actual MTU lease: ' + value)
+        if (value == 'active-request-ended' or value.startswith('mtu-')) and 'verified installed host live MTU status: ' + value + '\n' not in output.replace('\r\n', '\n'):
+            raise ValueError('Installed Linux host omitted its current interface MTU status: ' + value)
 
 
 def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case):
