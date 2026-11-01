@@ -31,7 +31,7 @@ SPEC = importlib.util.spec_from_file_location('darwin_guardian_uid', ROOT/'deplo
 UID = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(UID)
 
-CASES = ('PFCompiler', 'PFSystemDispatch', 'FixtureAnchorRetirement', 'PFAnchorPaths', 'PFGenerationRetirement', 'ProtectedPathAuthority', 'IdentityRetirement', 'UIDObserver', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'HeartbeatAdmission', 'ForegroundAdmission', 'SocketRetirementReusesCapacity',
+CASES = ('PFCompiler', 'PFSystemDispatch', 'FixtureAnchorRetirement', 'PFAnchorPaths', 'PFGenerationRetirement', 'ProtectedPathAuthority', 'IdentityRetirement', 'UIDObserver', 'FrameAdmission', 'TCPAndUDP', 'WrongUIDAndPrivatePeer', 'HeartbeatAdmission', 'ForegroundAdmission', 'SocketRetirementReusesCapacity',
          'RetainedTunnel', 'BothOwnersCrashCannotReuseTuple', 'ForeignBlockAndLaterPass',
          'RejectsForeignStatefulDirections', 'BlockedControlRetainsSourcePort',
          'FinishRequiresDescriptorRetirement', 'FloatingStateRetirement',
@@ -304,6 +304,7 @@ def execute(source: Path, go='go', *, case=None, overlay=None):
         raise ValueError('The actual Darwin guardian gate requires a matching macOS host')
     source, package, before = checked_sources(source)
     if not {'desktop_socket_darwin_guardian_test.go', 'desktop_socket_darwin_kernel_cgo.go',
+            'desktop_socket_darwin_frame_test.go',
             'desktop_socket_darwin_pf.go', 'desktop_socket_darwin_state.go',
             'desktop_socket_darwin_readback.go', 'desktop_socket_darwin_pf_probe_cgo.go',
             'desktop_socket_darwin_pf_probe_nocgo.go', 'desktop_socket_darwin_filter_cgo.go',
@@ -513,6 +514,17 @@ def execute_mutations(source: Path, go='go', *, only_case=None):
         ('foreign block composition', 'ForeignBlockAndLaterPass', 'owned permit bypassed a later foreign block',
          'desktop_socket_darwin_pf.go', (
              ('"pass out on %s %s proto %s', '"pass out quick on %s %s proto %s'),)),
+        ('admitted frame completion deadline', 'FrameAdmission', 'admitted Darwin frame reused its idle polling deadline',
+         'desktop_socket_darwin_channel.go', (
+             ('if err := channel.SetReadDeadline(frameDeadline); err != nil {',
+              'if err := error(nil); err != nil {'),)),
+        ('admitted frame permit expiry', 'FrameAdmission', 'admitted frame postponed the earliest captured permit expiry',
+         'desktop_socket_darwin_helper.go', (
+             ('if permit.Expires.Before(deadline) {', 'if false && permit.Expires.Before(deadline) {'),)),
+        ('admitted frame final deadline', 'FrameAdmission', 'incomplete or unauthenticated admitted frame escaped its original owner',
+         'desktop_socket_darwin_channel.go', (
+             ('if !frameDeadline.IsZero() && !time.Now().Before(frameDeadline) {',
+              'if false && !frameDeadline.IsZero() && !time.Now().Before(frameDeadline) {'),)),
         # The production baseline now owns the final deny. The native fixture
         # adds a redundant scoped generation deny; leaving either quick would
         # mask the other's broken field. Change only these three exact lines

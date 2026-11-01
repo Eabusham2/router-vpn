@@ -34,6 +34,19 @@ type desktopDarwinGuardian struct {
 	tunnel  *os.File
 }
 
+func (g *desktopDarwinGuardian) receiveDeadline(now, lastRequest time.Time) time.Time {
+	deadline := now.Add(desktopSocketControlWait)
+	if idle := lastRequest.Add(6 * time.Second); idle.Before(deadline) {
+		deadline = idle
+	}
+	for _, permit := range g.pf.permits {
+		if permit.Expires.Before(deadline) {
+			deadline = permit.Expires
+		}
+	}
+	return deadline
+}
+
 // RunDesktopDarwinSocketHelper is called only by the packaged native command.
 // An inherited channel and kernel sender credentials, rather than CLI JSON or
 // stdout receipts, authenticate every operation and transferred descriptor.
@@ -101,16 +114,30 @@ func RunDesktopDarwinSocketHelper(role string) error {
 	sequence := request.Sequence
 	lastRequest := time.Now()
 	for {
-		channel.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+		// Valid traffic and partially received frames cannot postpone expiry.
+		// An idle poll has its own short bound; once a frame starts, retain one
+		// fixed completion bound without borrowing time from another request.
+		expireCtx, expireCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		err = g.pf.expire(expireCtx)
+		expireCancel()
+		if err != nil {
+			return err
+		}
+		now := time.Now()
+		frameDeadline := g.receiveDeadline(now, lastRequest)
+		if !now.Before(frameDeadline) {
+			return os.ErrDeadlineExceeded
+		}
+		idleDeadline := now.Add(100 * time.Millisecond)
+		if frameDeadline.Before(idleDeadline) {
+			idleDeadline = frameDeadline
+		}
+		if err := channel.SetReadDeadline(idleDeadline); err != nil {
+			return err
+		}
 		var next desktopDarwinRequest
-		file, err := desktopDarwinReceive(channel, &next, parent, 0)
+		file, err := desktopDarwinReceiveBounded(channel, &next, parent, 0, frameDeadline)
 		if errors.Is(err, desktopDarwinIdle) && time.Since(lastRequest) < 6*time.Second {
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			err = g.pf.expire(ctx)
-			cancel()
-			if err != nil {
-				return err
-			}
 			continue
 		}
 		if err != nil {
@@ -119,13 +146,13 @@ func RunDesktopDarwinSocketHelper(role string) error {
 			}
 			return err
 		}
-		lastRequest = time.Now()
 		if next.Sequence != sequence+1 || next.Capture != g.capture || file != nil && next.Operation != "bind" && next.Operation != "tunnel" {
 			if file != nil {
 				file.Close()
 			}
 			return errors.New("Darwin physical operation changed its capture, sequence, or descriptor authority")
 		}
+		lastRequest = time.Now()
 		sequence = next.Sequence
 		reply := desktopDarwinReply{Sequence: sequence, Capture: g.capture}
 		var transferred *os.File

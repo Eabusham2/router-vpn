@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"syscall"
+	"time"
 )
 
 type desktopDarwinRequest struct {
@@ -117,6 +118,19 @@ func desktopDarwinSend(channel *net.UnixConn, value any, file *os.File) error {
 }
 
 func desktopDarwinReceive(channel *net.UnixConn, value any, pid, uid uint32) (file *os.File, failure error) {
+	return desktopDarwinReceiveBounded(channel, value, pid, uid, time.Time{})
+}
+
+type desktopDarwinFrameReceiver interface {
+	ReadMsgUnix([]byte, []byte) (int, int, int, *net.UnixAddr, error)
+	SetReadDeadline(time.Time) error
+	SyscallConn() (syscall.RawConn, error)
+}
+
+// Only the guardian's idle polling supplies a separate frame deadline. The
+// caller captures it before polling, bounded by control, idle-owner and permit
+// expiry. Other receivers retain their original operation deadline unchanged.
+func desktopDarwinReceiveBounded(channel desktopDarwinFrameReceiver, value any, pid, uid uint32, frameDeadline time.Time) (file *os.File, failure error) {
 	var header [4]byte
 	control := make([]byte, syscall.CmsgSpace(4*8))
 	n, oob, flags, _, err := channel.ReadMsgUnix(header[:], control)
@@ -148,6 +162,14 @@ func desktopDarwinReceive(channel *net.UnixConn, value any, pid, uid uint32) (fi
 	}()
 	if err != nil || parseErr != nil || flags != 0 || n == 0 || len(files) > 1 {
 		return nil, errors.Join(err, parseErr, errors.New("Darwin physical channel lost its bounded frame"))
+	}
+	if !frameDeadline.IsZero() {
+		if !time.Now().Before(frameDeadline) {
+			return nil, os.ErrDeadlineExceeded
+		}
+		if err := channel.SetReadDeadline(frameDeadline); err != nil {
+			return nil, err
+		}
 	}
 	// Read every fragment with recvmsg. Ordinary Read/ReadFull would discard
 	// an unexpected descriptor attached to a later byte of this stream.
@@ -213,6 +235,9 @@ func desktopDarwinReceive(channel *net.UnixConn, value any, pid, uid uint32) (fi
 	var extra any
 	if decoder.Decode(&extra) != io.EOF {
 		return nil, errors.New("Darwin physical channel has trailing JSON data")
+	}
+	if !frameDeadline.IsZero() && !time.Now().Before(frameDeadline) {
+		return nil, os.ErrDeadlineExceeded
 	}
 	if len(files) == 1 {
 		return files[0], nil
