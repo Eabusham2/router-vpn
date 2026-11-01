@@ -56,6 +56,7 @@ def windows(directory,shell):
     composed.write_text(r'''
 param([string]$Helper,[string]$Product,[string]$Unified)
 $ErrorActionPreference='Stop'
+'''+windows_adapter_import()+r'''
 . $Helper
 $product=Convert-RouterVPNWindowsProductSessionMutation -Source ([IO.File]::ReadAllText($Product))
 $unified=Convert-RouterVPNWindowsUnifiedSessionMutation -Source ([IO.File]::ReadAllText($Unified))
