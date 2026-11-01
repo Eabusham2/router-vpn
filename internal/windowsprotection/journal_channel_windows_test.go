@@ -1,4 +1,4 @@
-//go:build windows && routervpn_windows_protection_native
+//go:build windows && routervpn_windows_protection_native && go1.25
 
 package windowsprotection
 

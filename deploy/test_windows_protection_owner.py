@@ -172,12 +172,12 @@ def sources():
                 "journal_header.go", "journal_header_test.go", "journal_store_windows.go", "journal_store_windows_test.go",
                 "journal_startup_windows.go", "journal_startup_windows_test.go",
                 "journal_commit_record.go", "journal_commit_record_test.go",
-                "journal_channel_windows.go", "journal_channel_windows_test.go",
+                "journal_channel_windows.go", "journal_channel_windows_test.go", "journal_native_toolchain_windows_test.go",
                 "journal_admission_record.go", "journal_admission_record_test.go",
                 "journal_admission_windows.go", "journal_admission_windows_test.go",
                 "journal_admission_capture_windows_test.go", "journal_attempt_windows_test.go",
                 "journal_recovery_record.go", "journal_recovery_record_test.go",
-                "journal_recovery.go", "journal_recovery_test.go",
+                "journal_recovery.go", "journal_recovery_test.go", "journal_recovery_toolchain_test.go",
                 "journal_recovery_windows.go", "journal_recovery_windows_test.go"}
     owned = sorted(TARGET.glob("*.go"))
     if {path.name for path in owned} != expected:
