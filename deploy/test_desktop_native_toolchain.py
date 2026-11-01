@@ -143,7 +143,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(args[2:], [str(source.resolve())])
                         self.assertEqual(kwargs['env']['GOOS'], system)
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
-                        self.assertLessEqual(kwargs['timeout'], 900)
+                        self.assertEqual(kwargs['timeout'], 1200 if system == 'windows' else 900)
                         return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_pq.py'):
                         self.assertIn(system, ('linux', 'windows'))
