@@ -87,7 +87,7 @@ func TestNodesHTTPUsesSecretFreeProjectionForEverySort(t *testing.T) {
 	p.LatencyP90Ms = 16.0
 	p.LastUsedAt = "2026-08-15T06:00:00Z"
 	a := &app{profiles: common.RouterProfileStore{SchemaVersion: common.RouterProfileStoreVersion, SelectedID: p.ID, Profiles: []common.RouterProfile{p}}}
-	for _, order := range []string{"current", "last-used", "latency", "name"} {
+	for _, order := range []string{"current", "last-used", "most-used", "latency", "name"} {
 		rr := httptest.NewRecorder()
 		a.listPublicNodes(rr, httptest.NewRequest("GET", "/api/nodes?sort="+order, nil))
 		if rr.Code != 200 {
@@ -100,7 +100,7 @@ func TestNodesHTTPUsesSecretFreeProjectionForEverySort(t *testing.T) {
 func TestInfoHTTPUsesSecretFreeProjection(t *testing.T) {
 	p := privateHTTPTestProfile()
 	a := &app{
-		cfg: common.ClientConfig{ProfilesFile: "/private/routers.json", Listen: "127.0.0.1:8788", HealthURL: "http://10.77.0.1:8787/health", AutoTestSeconds: 8},
+		cfg:      common.ClientConfig{ProfilesFile: "/private/routers.json", Listen: "127.0.0.1:8788", HealthURL: "http://10.77.0.1:8787/health", AutoTestSeconds: 8},
 		profiles: common.RouterProfileStore{SchemaVersion: common.RouterProfileStoreVersion, SelectedID: p.ID, Profiles: []common.RouterProfile{p}},
 	}
 	rr := httptest.NewRecorder()

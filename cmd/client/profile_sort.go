@@ -10,7 +10,7 @@ import (
 
 // sortPublicProfileStore returns a copy of the already-redacted public store in
 // a deterministic order. It never mutates the private on-disk profile store.
-// Supported orders are: current, last-used, latency, and name.
+// Supported orders are: current, last-used, most-used, latency, and name.
 func sortPublicProfileStore(store common.RouterProfileStore, order string) common.RouterProfileStore {
 	out := store
 	out.Profiles = append([]common.RouterProfile(nil), store.Profiles...)
@@ -43,6 +43,16 @@ func sortPublicProfileStore(store common.RouterProfileStore, order string) commo
 		a, b := out.Profiles[i], out.Profiles[j]
 		switch order {
 		case "name":
+			return nameLess(a, b)
+		case "most-used", "most_used", "usage":
+			ac, bc := max(0, a.UseCount), max(0, b.UseCount)
+			if ac != bc {
+				return ac > bc
+			}
+			at, bt := lastUsed(a), lastUsed(b)
+			if !at.Equal(bt) {
+				return at.After(bt)
+			}
 			return nameLess(a, b)
 		case "last-used", "last_used", "recent":
 			at, bt := lastUsed(a), lastUsed(b)

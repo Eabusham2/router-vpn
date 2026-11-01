@@ -370,7 +370,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         let split = NSSplitView(); split.isVertical = true; split.dividerStyle = .thin
         map.delegate = self; map.showsCompass = true; map.showsScale = true; split.addArrangedSubview(map)
         let right = NSStackView(); right.orientation = .vertical; right.spacing = 8; right.edgeInsets = NSEdgeInsets(top: 8, left: 8, bottom: 8, right: 8); right.addArrangedSubview(scroll(nodesText))
-        right.addArrangedSubview(label("Node order")); nodeSortPopup.addItems(withTitles: ["Current / recent", "Last used", "Lowest latency", "Name"]); nodeSortPopup.target = self; nodeSortPopup.action = #selector(nodeSortChanged); right.addArrangedSubview(nodeSortPopup)
+        right.addArrangedSubview(label("Node order")); nodeSortPopup.addItems(withTitles: ["Current / recent", "Last used", "Lowest latency", "Name", "Most used"]); nodeSortPopup.target = self; nodeSortPopup.action = #selector(nodeSortChanged); right.addArrangedSubview(nodeSortPopup)
         right.addArrangedSubview(button("Select lowest measured latency", #selector(selectLowestLatency)))
         right.addArrangedSubview(label("Selected node / external exit")); right.addArrangedSubview(nodePopup)
         right.addArrangedSubview(label("Optional external entry (Router VPN or supported external node)")); right.addArrangedSubview(externalEntryPopup)
@@ -606,7 +606,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     @objc func emergencyStop() { asyncAction { _ = try self.api.request("/api/emergency-stop", method: "POST", body: [:], timeout: 20); return "Emergency stop completed." } }
     @objc func refreshAction() { refreshAll() }
     @objc func refreshAdvancedAction() { refreshAdvanced() }
-    @objc func nodeSortChanged() { refreshProfiles(order: ["current", "last-used", "latency", "name"][max(0, min(nodeSortPopup.indexOfSelectedItem, 3))]) }
+    @objc func nodeSortChanged() { refreshProfiles(order: ["current", "last-used", "latency", "name", "most-used"][max(0, min(nodeSortPopup.indexOfSelectedItem, 4))]) }
     @objc func selectLowestLatency() {
         asyncAction {
             guard let o = try self.api.json("/api/nodes?sort=latency") as? [String: Any], let p = o["profiles"] as? [[String: Any]] else { return "Lowest-latency node list was unavailable." }
@@ -660,7 +660,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     func refreshLive() { refreshStatus(); refreshSessionEvents() }
     func refreshStatus() { DispatchQueue.global(qos: .utility).async { [weak self] in guard let self else { return }; do { guard let o = try api.json("/api/status") as? [String: Any] else { return }; DispatchQueue.main.async { let connected = o["connected"] as? Bool ?? false; let phase = o["phase"] as? String ?? "off"; self.statusLabel.stringValue = connected ? "● Connected" : "○ \(phase)"; self.statusLabel.textColor = connected ? .systemGreen : (phase == "failed" ? .systemRed : .secondaryLabelColor); self.detailLabel.stringValue = "Logical: \(o["logical_mode"] as? String ?? "—")   Runtime: \((o["runtime_mode"] as? String) ?? (o["mode"] as? String) ?? "—")   Base: \(o["base"] as? String ?? "—")   Router: \(o["router_id"] as? String ?? "—")"; self.errorLabel.stringValue = o["last_error"] as? String ?? "" } } catch { DispatchQueue.main.async { self.statusLabel.stringValue = "● Controller unavailable"; self.statusLabel.textColor = .systemRed; self.errorLabel.stringValue = error.localizedDescription } } } }
     func refreshSessionEvents() { let after = eventSeq; DispatchQueue.global(qos: .utility).async { [weak self] in guard let self else { return }; do { guard let o = try api.json("/api/session/events?after=\(after)") as? [String: Any] else { return }; let events = o["events"] as? [[String: Any]] ?? []; let last = (o["last_event_seq"] as? NSNumber)?.uint64Value ?? after; DispatchQueue.main.async { for e in events { let seq = (e["seq"] as? NSNumber)?.uint64Value ?? 0; guard seq > self.eventSeq else { continue }; var parts: [String] = [e["phase"] as? String ?? ""]; if let r = e["runtime_mode"] as? String, !r.isEmpty { parts.append("runtime=\(r)") }; if let b = e["base"] as? String, !b.isEmpty { parts.append("base=\(b)") }; if let m = e["message"] as? String, !m.isEmpty { parts.append(m) }; self.appendHelp("Session #\(seq) \(e["type"] as? String ?? "event"): " + parts.filter { !$0.isEmpty }.joined(separator: " | ")); self.eventSeq = seq }; self.eventSeq = max(self.eventSeq, last) } } catch { } } }
-    func refreshProfiles() { refreshProfiles(order: ["current", "last-used", "latency", "name"][max(0, min(nodeSortPopup.indexOfSelectedItem, 3))]) }
+    func refreshProfiles() { refreshProfiles(order: ["current", "last-used", "latency", "name", "most-used"][max(0, min(nodeSortPopup.indexOfSelectedItem, 4))]) }
     func refreshProfiles(order: String) {
         let capture = beginConnectionProfileRefresh(hops: false)
         DispatchQueue.global(qos: .utility).async { [weak self] in

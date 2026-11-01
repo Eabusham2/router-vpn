@@ -76,6 +76,7 @@ static void refresh_nodes_order_v4(App *app, const char *order) {
 
 static void on_sort_nodes_current(GtkButton *button, gpointer data) {(void)button;refresh_nodes_order_v4((App *)data,"current");}
 static void on_sort_nodes_recent(GtkButton *button, gpointer data) {(void)button;refresh_nodes_order_v4((App *)data,"last-used");}
+static void on_sort_nodes_usage(GtkButton *button, gpointer data) {(void)button;refresh_nodes_order_v4((App *)data,"most-used");}
 static void on_sort_nodes_latency(GtkButton *button, gpointer data) {(void)button;refresh_nodes_order_v4((App *)data,"latency");}
 static void on_sort_nodes_name(GtkButton *button, gpointer data) {(void)button;refresh_nodes_order_v4((App *)data,"name");}
 
@@ -447,6 +448,7 @@ static GtkWidget *build_nodes_page_v4(App *app) {
     gtk_box_pack_start(GTK_BOX(sort_row), gtk_label_new("Order:"), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(sort_row), make_button("Current / recent", G_CALLBACK(on_sort_nodes_current), app), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(sort_row), make_button("Last used", G_CALLBACK(on_sort_nodes_recent), app), FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(sort_row), make_button("Most used", G_CALLBACK(on_sort_nodes_usage), app), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(sort_row), make_button("Lowest latency", G_CALLBACK(on_sort_nodes_latency), app), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(sort_row), make_button("Name", G_CALLBACK(on_sort_nodes_name), app), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(sort_row), make_button("Select lowest latency", G_CALLBACK(on_select_lowest_latency), app), FALSE, FALSE, 0);
