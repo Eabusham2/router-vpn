@@ -3,7 +3,7 @@
 This continues [October 31](CONTINUATION-EVIDENCE-2026-10-31.md), preserves
 [the reconciled requirement authority](REQUIREMENTS-RECONCILED.md), and records
 published source through
-[`c51e7b5944d835a4aa6a79881ec91a9c34bd779f`](https://github.com/Eabusham2/router-vpn/commit/c51e7b5944d835a4aa6a79881ec91a9c34bd779f).
+[`49a0c3bef8d3c0952bb8eb93ecb39e5e8bce004b`](https://github.com/Eabusham2/router-vpn/commit/49a0c3bef8d3c0952bb8eb93ecb39e5e8bce004b).
 The live `main` reference was independently read after publication. Later local
 work is not included in this source cutoff. Original requirements, C1–C7,
 the later product/breakage, map-first, external-node and all-device corrections
@@ -14,7 +14,62 @@ Native evidence below keeps its own exact source identity. The retained
 historical observations are not silently reassigned to this newer cutoff,
 and unrelated passing jobs are not combined into a release claim.
 
-## Latest source and native evidence through c51e7b59
+## Latest source and native evidence through 49a0c3be
+
+The original requirement ledger remains intact. These eight source units were
+reviewed, tested and published directly to `main`, each with expected-parent
+protection and independent branch readback. Their separate native and live
+acceptance requirements remain recorded below.
+
+### Published source since c51e7b59
+
+| Commit | Implemented behavior and executable evidence |
+|---|---|
+| [`4935c48e`](https://github.com/Eabusham2/router-vpn/commit/4935c48ebdded2015dc96e31bbcb23475b43018e) | Repair the server dependency audit's stale OverTLS builder-stage expectation. Require pinned Rust inheritance, crate and patch hashes, checked patch application, locked offline production build and final copy from the patched stage. Baseline and five executed rejection controls passed. |
+| [`e96c4dea`](https://github.com/Eabusham2/router-vpn/commit/e96c4deab1dded781b10ac1d89527637dc6ef75c) | Extend Android usage accounting to the enabled external-node management Connect path. A process-owned permission receipt survives screen recreation through its nonce without reminting intent; final Home/source/generation/proof checks remain authoritative. Cancellation, destruction, replacement and replay do not count or launch a stale path. The final fixture passed 160 checks and seven defect controls. |
+| [`f00294bc`](https://github.com/Eabusham2/router-vpn/commit/f00294bc6d2abd3414aeb56801d059692d7f7482) | Repair the iOS startup/quick-protection fixtures' missing optional-history declarations after the shipping Connect method acquired usage accounting. Explicit nil-owner/uninhabited-receipt boundaries cannot manufacture proof. Startup 310 and quick-protection 501 checks plus all sixteen existing controls passed; actual usage and provider suites also passed. Production methods were unchanged. |
+| [`7a330ffc`](https://github.com/Eabusham2/router-vpn/commit/7a330ffc35c7bf555b31849c3df7679b859dbc64) | Preserve SIP002 AEAD-2022 percent-encoded credentials in final Setup Center links and QR payloads while retaining legacy Base64URL imports. Nineteen malformed/ambiguous cases reject. The actual generator, final normalizer and published Methods HTML fed unchanged shadowsocks-rust 1.24.0 tools: canonical import roundtrip and four real IPv4/IPv6 TCP/UDP cases, with wrong-key and before/after positive controls, passed. ARM64 finalized-image matching is now required in CI; local Docker, physical QR and off-LAN acceptance are separate. |
+| [`808124c9`](https://github.com/Eabusham2/router-vpn/commit/808124c9050f72673323c05a52d23069eaf7f114) | Reject nonblank unparsable iOS coordinate text before persistence, preventing two invalid values from becoming an empty pair that clears a saved pin. The shipping editor fixture passed 1,211 checks, including malformed/nonfinite/range/partial inputs and exact record preservation. Removing the new guard reproduced the original loss and failed its regression. |
+| [`2b80a499`](https://github.com/Eabusham2/router-vpn/commit/2b80a4995fa95cfe229a032661470940dfd13674) | Give the Windows recovery/package fixtures the selected interpreter's own module directory, matching production Session behavior. The actual native failure was Python-launched PowerShell 5.1 inheriting Core module paths and failing to resolve Get-FileHash. PowerShell 7 actual-child checks, package positives, twelve rejection cases and existing source controls passed with an unrelated inherited module path. No package identity or exit check changed; the actual 5.1 rerun is still required. |
+| [`a370a57c`](https://github.com/Eabusham2/router-vpn/commit/a370a57c295fc9df30a503a5fc2548eb6dc935cc) | Add typed private external-node location/coordinate metadata, an idle captured-source editor for all ten protocols, and daily catalog/map projection. Absent metadata preserves legacy snapshots; credentials and policy remain intact. The shipping marker predicate accepts explicitly supplied external 0,0 while legacy Router placeholders stay hidden. Final usage/map 169 checks plus nine controls, full editor 7,267 checks/162 compiler roundtrips plus 21 controls, and focused permission/telemetry/store regressions passed. APK/device/canvas rendering remain separate. |
+| [`49a0c3be`](https://github.com/Eabusham2/router-vpn/commit/49a0c3bef8d3c0952bb8eb93ecb39e5e8bce004b) | Extend the retained Linux Shadowsocks host to Off, AES-256-GCM and AES-256-GCM plus XOR whitening through one bounded capability predicate. Public Connect, preparation, sealed restoration and generated lifecycle retain exact source, credentials, outer physical authority, DNS, MTU, protection and cover. Real encrypted TCP/UDP, selected DNS success/failure, wrong keys, revoked ownership and joined cleanup passed with race detection; generated Box cover and source/restore suites passed. The privileged fixture compiles, eleven runner checks pass, and six additional scenarios bring required installed acceptance to 37. Actual completed-bundle TUN execution is still required. |
+
+### Native results retain their original source identity
+
+The [Windows native run at aaea06e7](https://github.com/Eabusham2/router-vpn/actions/runs/41345891242)
+finished with a failure in its final packaged-recovery step. Installed/Portable
+Session, WFP traffic, the native workspace/Tor cleanup step and standalone
+runtime verification passed. PowerShell 7 recovery passed; the 5.1 package
+adapter failed on missing Get-FileHash. Source repair `2b80a499` addresses that
+interpreter environment; this does not turn the older run into a pass or explain
+the separate historical UDP4 import mismatch.
+
+The [macOS installer run at 29497c54](https://github.com/Eabusham2/router-vpn/actions/runs/41350390608)
+finished with both native jobs failing their strict first/legacy inventory.
+Each encountered a still-live executable with an unlinked image. Intel's
+managed-generation inventory additionally could not obtain its main-image
+CodeDirectory (`errno=85`). These reproduce the separately investigated identity
+boundary; process names, parentage, mappings and diagnostic Endpoint Security
+output still grant no installation authority. The four-job guardian pass at
+`9201f036` remains valid for its own scope.
+
+The [Linux native app run at 29497c54](https://github.com/Eabusham2/router-vpn/actions/runs/41350390545)
+was still building its complete native engines at the November 1 21:32 UTC
+read. That source contains the earlier 31-case installed gate, not the six new
+Start Layer cases. No 31-case or 37-case completed installed result is claimed.
+
+### Actual remaining requirements at this cutoff
+
+| Area and original references | Remaining source or acceptance work |
+|---|---|
+| Linux protection and graphs; #337, #340–342 | Shadowsocks Start Layers and saved Off are implemented. Execute all 37 installed cases on both architectures. Broader retained graph families, legacy-guard succession and crash/retained Always recovery remain source work. |
+| Nodes, measurements and map; #141–148, #335 | Android external locations and both manual usage entry points are implemented. External source/path-bound 50-sample measurements and correct selected-node dispatch remain work. Keep routed HTTP responses distinct from direct TCP/ICMP measurements and verify packaged/physical map interaction. |
+| Methods; #19, #26–30, #34, #265–269 and C1 | Shadowsocks final imports now have unchanged-client native evidence. Complete usable OverTLS/SSR import/client delivery, finalized ARM64 image checks and original off-LAN acceptance. Corrected reference clients remain test-only; no unsupported UDP compatibility is claimed. |
+| Windows native and complete MAX / ALL | Run the repaired 5.1 recovery check and complete exact-SHA native release verification. Complete MAX remains closed pending its full positive, succession and negative gate; old b4f461aa UDP-control failure is not a verdict on the newer aaea06e7 control repair. |
+| macOS installer and blocked PQ fixture | Resolve the real installer identity boundary without waiving unknown-process rejection; production entitlement/signing and device evidence remain separate. The eight preserved PQ fixture files remain unpublished after an automated safety check stopped validation. |
+| Release and live acceptance | No newer complete release is established. The last observed release remains the twelve-asset 745b3e41 prerelease. Physical networking/leaks/transitions, signing, off-LAN and visual/accessibility acceptance, live providers, private deployment and ASUS fail-open validation remain open. No live target was changed. |
+
+## Earlier source and native evidence through c51e7b59
 
 This section updates the recovered requirement ledger against published source.
 The original audit identifiers, C1–C7 and later overlapping requests remain the

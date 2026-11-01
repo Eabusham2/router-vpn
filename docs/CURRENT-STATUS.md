@@ -6,11 +6,46 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through c51e7b59
+## Latest implementation continuation — through 49a0c3be
+
+The independently verified published source cutoff is
+[`49a0c3bef8d3c0952bb8eb93ecb39e5e8bce004b`](https://github.com/Eabusham2/router-vpn/commit/49a0c3bef8d3c0952bb8eb93ecb39e5e8bce004b).
+[Current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-49a0c3be)
+records the eight newly published units and their separate native outcomes.
+
+- Linux retained Shadowsocks now supports all three requested Start Layers:
+  Off, AES-256-GCM and AES plus XOR whitening. Real encrypted traffic, selected
+  DNS, incorrect-key rejection, ownership and cover checks pass locally. Exact
+  sealed restoration and physical endpoint capture remain required. The full
+  installed-host gate now has 37 cases; its completed native execution, broader
+  graph integration, legacy succession and crash/Always recovery remain open.
+- Android external nodes can store explicit location and paired coordinates,
+  edit them against the unchanged private source, and appear on the daily map.
+  Explicit external 0,0 is distinguished from legacy unknown-location sentinels.
+  Both daily-app and enabled management-screen Connect now record proved user
+  usage. External 50-sample measurements and correct selected-node benchmark
+  dispatch remain work. iOS malformed coordinate input preserves saved metadata.
+- Final Shadowsocks AEAD-2022 imports now match SIP002 and an unchanged native
+  client's canonical encoding. Generated final links passed actual IPv4/IPv6
+  TCP/UDP transfers and wrong-key checks. OverTLS/SSR usable client/import
+  delivery, stock UDP defects, finalized ARM64 images and off-LAN acceptance
+  remain separate. Earlier server payload and selected-DNS repairs are retained.
+- Windows native Session/WFP/Tor cleanup/standalone-runtime steps passed at
+  aaea06e7, but its final 5.1 recovery check failed on the inherited module path.
+  The fixture now uses its selected interpreter's own modules; native rerun is
+  required. iOS source-fixture closure and the OverTLS image audit are repaired.
+  The macOS guardian pass remains separate from reproduced strict installer
+  inventory failures on both architectures at 29497c54.
+- No newer complete release, private deployment or physical-device acceptance
+  is established. The preserved unpublished PQ work remains blocked by the
+  earlier automated safety check and is not counted. No live router, AdGuard,
+  forwarding or Portainer target was changed.
+
+## Earlier implementation continuation — through c51e7b59
 
 The independently verified published source cutoff is
 [`c51e7b5944d835a4aa6a79881ec91a9c34bd779f`](https://github.com/Eabusham2/router-vpn/commit/c51e7b5944d835a4aa6a79881ec91a9c34bd779f).
-[Current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-c51e7b59)
+[Earlier continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#earlier-source-and-native-evidence-through-c51e7b59)
 records each source unit, executable boundary and remaining original requirement.
 Older dated sections below retain their own cutoffs.
 
