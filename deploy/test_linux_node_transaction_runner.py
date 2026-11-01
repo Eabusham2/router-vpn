@@ -45,11 +45,15 @@ class LinuxNodeTransactionRunner(unittest.TestCase):
     def test_retained_session_requires_every_original_native_owner_case(self):
         self.assertEqual(RUNNER.SESSION_CASES,
                          ("on-connect-repeat", "hold-on-connect", "always-successor", "failed-successor",
-                          "stale-retirement", "wrong-parent", "cancelled-preflight", "partial-journal", "terminal"))
+                          "stale-retirement", "wrong-parent", "cancelled-preflight", "partial-journal", "terminal", "clean-restart",
+                          "cleanup-cancel", "cleanup-extra", "cleanup-root", "cleanup-file", "cleanup-bytes", "cleanup-foreign-nft",
+                          "cleanup-pending", "terminal-always"))
         self.assertEqual(RUNNER.GROUPS["NodeSession"], RUNNER.SESSION_CASES)
         closure = RUNNER.checked_sources()
         self.assertIn("cmd/client/desktop_node_session_linux.go", closure)
         self.assertIn("cmd/client/desktop_node_session_linux_native_test.go", closure)
+        self.assertIn("cmd/client/desktop_node_linux_journal_cleanup.go", closure)
+        self.assertIn("cmd/client/desktop_node_linux_journal_cleanup_native_test.go", closure)
 
     def test_complete_actual_verdict_is_accepted(self):
         for group in RUNNER.GROUPS:

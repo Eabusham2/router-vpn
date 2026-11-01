@@ -55,6 +55,7 @@ type desktopLinuxNodeJournal struct {
 	current                       linuxprotection.JournalSelection
 	currentBytes                  []byte
 	pending                       *desktopLinuxNodeJournalAppend
+	removal                       *desktopLinuxNodeJournalRemoval
 	initialized, closed, released bool
 	closeErr                      error
 }
@@ -575,8 +576,9 @@ func (j *desktopLinuxNodeJournal) append(ctx context.Context, previous string, n
 	return selection, j.checkOperation(ctx, retirement)
 }
 
-// Close joins before releasing the stable journal lock. It never removes the
-// directory or rewrites an ambiguous pending slot; restart must prove recovery.
+// Close joins before releasing the stable journal lock. Terminal parent cleanup
+// may already have removed its proved empty checkpoint; all retained recovery
+// records remain untouched here, including ambiguous pending slots.
 // A real close error is sticky and cannot become a successful public Stop.
 func (j *desktopLinuxNodeJournal) Close(ctx context.Context) error {
 	if j == nil {
@@ -595,6 +597,9 @@ func (j *desktopLinuxNodeJournal) Close(ctx context.Context) error {
 	case <-j.gate:
 	}
 	defer func() { j.gate <- struct{}{} }()
+	if j.removal != nil && !j.removal.complete {
+		return errors.New("Linux journal close retains its unfinished original empty-checkpoint removal")
+	}
 	if !j.closed {
 		for _, file := range []*desktopLinuxNodeJournalFile{j.slots[0], j.slots[1], j.headerFile} {
 			if file != nil && file.file != nil {

@@ -369,6 +369,9 @@ func (p *desktopLinuxNodeParent) Close(ctx context.Context) error {
 	if err := p.prepareTransactionShutdown(ctx); err != nil {
 		return err
 	}
+	if err := p.prepareEmptyJournalShutdown(ctx); err != nil {
+		return err
+	}
 	p.cancel()
 	select {
 	case <-ctx.Done():

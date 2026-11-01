@@ -172,8 +172,8 @@ func (j *desktopLinuxNodeJournal) checkRetirementAppend(ctx context.Context, t *
 
 // Stop admission before selecting dependents, while retaining the original
 // parent's native witnesses for their source/engine/journal retirement. Only
-// after every transaction has settled may the parent cancel its lifetime and
-// close remaining journal/process descriptors in any order.
+// after every transaction has settled may the parent join remaining dependents,
+// clean its original empty checkpoint and cancel the retained parent lifetime.
 func (p *desktopLinuxNodeParent) prepareTransactionShutdown(ctx context.Context) error {
 	select {
 	case <-ctx.Done():

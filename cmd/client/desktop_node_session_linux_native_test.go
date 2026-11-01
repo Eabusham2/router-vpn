@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,14 +20,15 @@ import (
 )
 
 var linuxNodeSessionCases = []string{"on-connect-repeat", "hold-on-connect", "always-successor", "failed-successor",
-	"stale-retirement", "wrong-parent", "cancelled-preflight", "partial-journal", "terminal"}
+	"stale-retirement", "wrong-parent", "cancelled-preflight", "partial-journal", "terminal", "clean-restart",
+	"cleanup-cancel", "cleanup-extra", "cleanup-root", "cleanup-file", "cleanup-bytes", "cleanup-foreign-nft", "cleanup-pending", "terminal-always"}
 
 // The actual authenticated controller creates and joins the actual engine,
 // source, guardian and nft baseline. The established transaction child still
 // models graph readiness; these cases make no TUN/DNS/Connected claim.
 func linuxNodeSessionFixture(controller *ownedDesktopController, scenario string) error {
 	initialPolicy := "on-connect"
-	if scenario == "always-successor" || scenario == "failed-successor" {
+	if scenario == "always-successor" || scenario == "failed-successor" || scenario == "terminal-always" {
 		initialPolicy = "always"
 	}
 	profile, _, err := linuxTransactionProfile(initialPolicy)
@@ -167,7 +169,7 @@ func linuxNodeSessionFixture(controller *ownedDesktopController, scenario string
 		if session.active != first || first.transaction == nil || !first.transaction.admitted || a.state.Connected {
 			return errors.New("Linux session lost its original admitted child or fabricated connection proof")
 		}
-		if scenario == "terminal" {
+		if scenario == "terminal" || scenario == "terminal-always" {
 			a.mu.Lock()
 			a.closing = true
 			a.mu.Unlock()
@@ -245,12 +247,24 @@ func linuxNodeSessionFixture(controller *ownedDesktopController, scenario string
 			}
 		}
 	}
+	if strings.HasPrefix(scenario, "cleanup-") {
+		if err := linuxNodeJournalCleanupFixture(ctx, session, scenario); err != nil {
+			return err
+		}
+	}
 	if err := parent.parent.Close(ctx); err != nil {
 		return err
 	}
-	if !session.closed || !session.released || a.cmd != nil || a.state.Connected ||
-		mobiletor.ReadDesktopLinuxProtectionAbsence(ctx) != nil {
+	if !session.closed || !session.released || a.cmd != nil || a.state.Connected {
 		return errors.New("Linux session terminal close lost its original joined owner or actual native absence")
+	}
+	if scenario == "terminal-always" {
+		if session.journal.removal != nil || first.transaction.head.Record.Committed.Target == nil ||
+			mobiletor.ReadDesktopLinuxProtectionAbsence(ctx) == nil {
+			return errors.New("Linux terminal cleanup removed the actual retained Always policy or recovery owner")
+		}
+	} else if mobiletor.ReadDesktopLinuxProtectionAbsence(ctx) != nil {
+		return errors.New("Linux session terminal close did not prove native protection absence")
 	}
 	controller.close()
 	_, err = fmt.Fprintln(os.Stdout, "captured-parent-retired")
@@ -271,6 +285,26 @@ func TestDesktopLinuxGuardianKernelNodeSession(t *testing.T) {
 			}
 			child := startLinuxNodeParentProcess(t, installed, "host-start/session/"+scenario)
 			child.retire(t, "")
+			root := filepath.Join("/opt", desktopLinuxNodeJournalDirectory)
+			if scenario == "partial-journal" || scenario == "cleanup-pending" || scenario == "terminal-always" {
+				if _, err := os.Lstat(root); err != nil {
+					t.Fatal("terminal cleanup discarded unresolved or retained recovery records", err)
+				}
+			} else if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("clean terminal session left an unusable original empty journal", err)
+			}
+			if scenario == "clean-restart" {
+				// Keep the actual package and stable locks; no test removal or
+				// installation may clear the first controller's journal for it.
+				next := startLinuxNodeParentProcess(t, installed, "host-start/session/on-connect-repeat")
+				if next.record.Generation == child.record.Generation || next.record.ProcessID == child.record.ProcessID {
+					t.Fatal("clean restart did not create a new actual controller generation")
+				}
+				next.retire(t, "")
+				if _, err := os.Lstat(root); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("second original controller did not clean its own empty checkpoint", err)
+				}
+			}
 		})
 	}
 }
