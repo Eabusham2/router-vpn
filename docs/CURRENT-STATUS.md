@@ -1,12 +1,50 @@
 # Current implementation status
 
-Updated October 31, 2026 (America/Chicago). This file distinguishes published source,
+Updated November 1, 2026 UTC (October 31 in America/Chicago). This file distinguishes published source,
 local commits, unfinished integration and remaining delivery evidence. The
 binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 4b095b06
+## Latest implementation continuation — through 449abaad
+
+The independently verified source cutoff is
+[`449abaad907b546229126869f047136b351f5415`](https://github.com/Eabusham2/router-vpn/commit/449abaad907b546229126869f047136b351f5415).
+[November 1 continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md)
+records each coherent direct-to-main publication, its validation boundaries,
+actual native failures and the remaining requirement ledger. Original scope
+and later user corrections remain binding.
+
+- Linux now composes captured host preparation, actual child launch, native
+  admission, durable retirement and ordered controller shutdown. The latest
+  host unit passed 38 actual namespace cases, five compiled defects, ARM64
+  compilation and independent lifecycle review. Generated child ownership and
+  ten pre-TUN cases are also published. Successful generated TUN/selected DNS,
+  Router proof, daily-use integration, restart recovery and remaining graph
+  families are still open; public Linux Node admission remains closed.
+- Windows PQ passed its shipping-predicate ARM64 native gate, while the AMD64
+  successor still needs completion with the corrected aggregate allowance.
+  MAX passed twelve actual WFP traffic and 48 credential-negative cases on
+  AMD64, then reached the old aggregate limit on reversal eleven. Its bounded
+  aggregate correction is published; full MAX admission remains closed pending
+  complete succession and all native controls.
+- Real Windows build cleanup exposed an ARM64 descendant-file lifetime
+  failure. The published repair retains and joins original job-member process
+  handles before workspace deletion. Native AMD64/ARM64 verification remains
+  required. Test-peer allocation and language/source-closure repairs are
+  published with their focused controls; new native outcomes remain separate.
+- macOS complete installation-generation ownership and native generation tests
+  are published. The full-host managed-inventory fixture now captures the
+  actual interpreter image. Intel's preexisting image with unavailable native
+  identity still fails closed; it is not excluded or labeled a completed
+  installation. Corrected native full-host results are tracked separately.
+- The latest published prerelease observed at 01:27:28 UTC remains `745b3e41`,
+  with twelve assets. This newer source series has no verified all-green
+  exact-SHA release yet. Signing, physical devices, off-LAN checks, private
+  deployment and live ASUS/Portainer acceptance are unproved. No live router,
+  forwarding, AdGuard or deployment target was changed.
+
+## Earlier implementation continuation — through 4b095b06
 
 The independently verified source cutoff is
 [`4b095b069cc37f304137991d9286091af2df7424`](https://github.com/Eabusham2/router-vpn/commit/4b095b069cc37f304137991d9286091af2df7424).
