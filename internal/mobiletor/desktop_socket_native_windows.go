@@ -120,7 +120,8 @@ func desktopSocketNativeRaw(source DesktopSocketNative, network string, address 
 			return
 		}
 		if size != int32(unsafe.Sizeof(info)) || info.AddressFamily != int32(family) || info.SocketType != int32(kind) || info.Protocol != int32(protocol) {
-			result = errors.New("Windows socket creator changed the kernel family or protocol")
+			result = fmt.Errorf("Windows socket creator changed the kernel family or protocol (bytes %d/%d, family %d/%d, type %d/%d, protocol %d/%d)",
+				size, unsafe.Sizeof(info), info.AddressFamily, family, info.SocketType, kind, info.Protocol, protocol)
 			return
 		}
 		// SO_ACCEPTCONN is defined only for connection-oriented sockets on
