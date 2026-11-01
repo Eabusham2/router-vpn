@@ -52,6 +52,9 @@ def checked_sources(source):
     required = {'cmd/client/desktop_node_host_linux_tun_native_test.go', 'cmd/client/desktop_node_host_linux_tun_peer_native_test.go',
                 'cmd/client/desktop_node_host_linux_ready.go', 'cmd/client/desktop_node_host_linux_proof.go',
                 'cmd/client/desktop_node_host_linux_active.go',
+                'cmd/client/desktop_node_dns_linux.go', 'cmd/client/desktop_node_dns_other.go',
+                'cmd/client/desktop_node_dns_linux_test.go', 'cmd/client/dns_proof.go',
+                'cmd/client/desktop_node_session_linux.go',
                 'cmd/client/bundled_native.go', 'cmd/client/operation_guard.go'}
     if not required.issubset(app):
         raise ValueError('Installed Linux host gate lost its real verifier, startup, proof or retained native ownership')
@@ -92,6 +95,8 @@ def check_verdict(output, case=None):
             raise ValueError('Installed Linux host omitted its actual complete owned lifecycle: ' + value)
         if value in ACTIVE_CASES and 'verified installed host active lifetime: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its actual activation, request completion and native lifetime: ' + value)
+        if value == 'active-request-ended' and 'verified installed host retained DNS observation: ' + value + '\n' not in output.replace('\r\n', '\n'):
+            raise ValueError('Installed Linux host omitted its actual retained session DNS consumer: ' + value)
 
 
 def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case):

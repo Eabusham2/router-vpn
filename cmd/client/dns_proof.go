@@ -373,6 +373,9 @@ func proveSelectedDNSWithLookup(parent context.Context, a *app, s observedConnec
 		result.Reason = selectionErr.Error()
 		return result
 	}
+	if proof, owned := proveDesktopLinuxNodeDNS(parent, a, s, runtimeID, selected); owned {
+		return proof
+	}
 	if raw, exists := desktopNodeOwners.Load(a); exists {
 		if launch, ok := raw.(*desktopNodeLaunch); ok && launch != nil && launch.ownedNode != nil {
 			return proveDesktopOwnedNodeDNS(parent, a, s, runtimeID, selected, launch)

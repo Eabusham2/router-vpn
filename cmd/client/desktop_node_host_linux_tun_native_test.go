@@ -43,6 +43,7 @@ type linuxHostTUNResult struct {
 	Journal           *linuxprotection.JournalSelection      `json:"journal,omitempty"`
 	ClosedTableSHA256 string                                 `json:"closed_table_sha256,omitempty"`
 	Activation        string                                 `json:"activation,omitempty"`
+	DNSProof          *dnsProofState                         `json:"dns_proof,omitempty"`
 }
 
 func linuxHostTUNRendezvous(gate *os.File, expected byte) error {
@@ -89,6 +90,63 @@ func linuxHostTUNTUNAbsent(record *mobilemultihop.DesktopNodeReadyRecord) error 
 		}
 	}
 	return nil
+}
+
+// Exercise the actual app reporter after the original Connect request has
+// finished. The receipt already contains the native query; this observer must
+// not query the ambient resolver or label that prior exchange a fresh Retest.
+func linuxHostTUNDNSObservation(ctx context.Context, a *app, host *desktopLinuxNodeHost) (dnsProofState, error) {
+	observed := (&sessionTracker{a: a}).capture()
+	calls := 0
+	lookup := func(context.Context, string) ([]string, error) {
+		calls++
+		return []string{"203.0.113.17"}, nil
+	}
+	proof := proveSelectedDNSWithLookup(ctx, a, observed, host.launch.mode, lookup)
+	if proof.Status != "passed" || host.ready == nil || proof.LatencyMs != host.ready.DNSMilliseconds || calls != 0 ||
+		!strings.Contains(proof.Reason, "before connection") {
+		return dnsProofState{}, errors.New("installed Linux DNS observation did not retain its original native receipt and owner")
+	}
+	for _, fault := range []string{"cancelled", "observation-node", "observation-key", "saved-dns", "presentation-starting", "duplicate-legacy"} {
+		capture, query := observed, ctx
+		if fault == "cancelled" {
+			cancelled, cancel := context.WithCancel(ctx)
+			cancel()
+			query = cancelled
+		}
+		if fault == "observation-node" {
+			capture.RouterID += "-replacement"
+		}
+		if fault == "observation-key" {
+			capture.Profile.APIToken += "-replacement"
+		}
+		a.mu.Lock()
+		original, phase := a.profiles.Profiles[0], a.state.Phase
+		if fault == "saved-dns" {
+			a.profiles.Profiles[0].AdGuardIPv4 = "192.168.50.134"
+		}
+		if fault == "presentation-starting" {
+			a.state.Phase = "starting"
+		}
+		if fault == "duplicate-legacy" {
+			desktopNodeOwners.Store(a, host.launch)
+		}
+		a.mu.Unlock()
+		refused := proveSelectedDNSWithLookup(query, a, capture, host.launch.mode, lookup)
+		a.mu.Lock()
+		a.profiles.Profiles[0], a.state.Phase = original, phase
+		if fault == "duplicate-legacy" {
+			desktopNodeOwners.Delete(a)
+		}
+		a.mu.Unlock()
+		if refused.Status != "failed" || refused.LatencyMs != 0 || calls != 0 {
+			return dnsProofState{}, fmt.Errorf("installed Linux DNS observer accepted %s or used an unrelated resolver", fault)
+		}
+	}
+	if err := host.Current(ctx); err != nil {
+		return dnsProofState{}, errors.Join(err, errors.New("rejected DNS observation changed the original installed active owner"))
+	}
+	return proof, nil
 }
 
 // The actual protected installed controller owns every operation here. This
@@ -141,9 +199,15 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 	var finished sync.Once
 	finish := func() { finished.Do(finishOperation) }
 	defer finish()
-	journal, err := createDesktopLinuxNodeJournal(ctx, parent)
-	if journal != nil {
-		defer journal.Close(context.Background())
+	var journal *desktopLinuxNodeJournal
+	var retained *desktopLinuxNodeSession
+	if scenario == "active-request-ended" {
+		retained, err = captureDesktopLinuxNodeSession(ctx, a)
+	} else {
+		journal, err = createDesktopLinuxNodeJournal(ctx, parent)
+		if journal != nil {
+			defer journal.Close(context.Background())
+		}
 	}
 	if err != nil {
 		return err
@@ -159,7 +223,13 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 		return err
 	}
 	workspace := host.launch.directory
-	if err := host.Start(ctx, journal, nil); err != nil {
+	if retained != nil {
+		err = retained.Start(ctx, host)
+		journal = retained.journal
+	} else {
+		err = host.Start(ctx, journal, nil)
+	}
+	if err != nil {
 		return fmt.Errorf("actual installed child and durable admission: %w", err)
 	}
 	if host.process == nil || host.transaction == nil || !host.transaction.admitted || !host.transaction.nativeCommitted ||
@@ -251,6 +321,16 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 					return fmt.Errorf("original active native readback after request completion: %w", err)
 				}
 				result.Activation = "retained-after-request"
+				if scenario == "active-request-ended" {
+					if retained == nil || retained.active != host || retained.journal != journal {
+						return errors.New("installed DNS consumer lost its original retained session")
+					}
+					proof, err := linuxHostTUNDNSObservation(ctx, a, host)
+					if err != nil {
+						return err
+					}
+					result.DNSProof = &proof
+				}
 				switch scenario {
 				case "active-profile-change":
 					a.mu.Lock()
@@ -354,14 +434,21 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 	} else if settled.Record.Committed.Target != nil || mobiletor.ReadDesktopLinuxNodeAbsence(ctx, result.SessionID) != nil {
 		return errors.New("installed On-connect host did not release only its original settled protection")
 	}
+	if retained != nil {
+		if err := retained.Retire(ctx, host, true); err != nil {
+			return fmt.Errorf("joined original installed session retirement: %w", err)
+		}
+	}
 	if err := host.Close(ctx); err != nil {
 		return err
 	}
 	if _, err := os.Lstat(workspace); !errors.Is(err, os.ErrNotExist) {
 		return errors.New("joined installed host retained its private launch workspace")
 	}
-	if err := journal.Close(ctx); err != nil {
-		return err
+	if retained == nil {
+		if err := journal.Close(ctx); err != nil {
+			return err
+		}
 	}
 	if err := parent.parent.Close(ctx); err != nil {
 		return err
@@ -557,6 +644,16 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			}
 			if result.Activation != activation {
 				t.Fatal("installed host omitted its actual captured activation and lifetime result", result.Activation, activation)
+			}
+			if scenario == "active-request-ended" {
+				if result.DNSProof == nil || result.DNSProof.Status != "passed" || result.Ready == nil ||
+					result.DNSProof.LatencyMs != result.Ready.DNSMilliseconds || after.DNSQueries != before.DNSQueries ||
+					!strings.Contains(result.DNSProof.Reason, "before connection") {
+					t.Fatal("installed DNS consumer substituted the original native query or called it a fresh Retest", result, before, after)
+				}
+				t.Log("verified installed host retained DNS observation:", scenario)
+			} else if result.DNSProof != nil {
+				t.Fatal("installed DNS result belongs to another original session scenario")
 			}
 			if activation != "" {
 				t.Log("verified installed host active lifetime:", scenario)
