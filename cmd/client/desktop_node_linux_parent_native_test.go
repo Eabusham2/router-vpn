@@ -22,6 +22,9 @@ import (
 )
 
 func linuxNodeParentFixture(owner *ownedDesktopController, scenario string) error {
+	if strings.HasPrefix(scenario, "empty-recovery/") {
+		return linuxNodeEmptyRecoveryFixture(owner, strings.TrimPrefix(scenario, "empty-recovery/"))
+	}
 	if strings.HasPrefix(scenario, "transition/") {
 		return linuxNodeTransitionFixture(owner, strings.TrimPrefix(scenario, "transition/"))
 	}

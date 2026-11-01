@@ -13,6 +13,7 @@ import hashlib
 import importlib.util
 import os
 import platform
+import re
 import shutil
 import stat
 import subprocess
@@ -33,16 +34,37 @@ CASES = ('FixedInstallAndPipeLifetime', 'RejectsUnsafeInstallAndConfig',
          'RejectsForeignIdentityAndInput', 'HonorsInstallAndProcessLocks', 'RequiresBoundedHandshake',
          'RejectsUnownedInstalledMainPreservesUtilities', 'NodeParentRetainsExactObjects', 'NodeParentLifetimeAndRestart',
          'JournalRetainsNativeFiles', 'JournalRequiresActualAbsence', 'JournalRetainsFailedRetirement',
-         'JournalSurvivesUpgradeWithoutAdoption', 'NodeEngineLauncher')
+         'JournalSurvivesUpgradeWithoutAdoption', 'NodeEngineLauncher', 'EmptyJournalRecovery')
+EMPTY_RECOVERY_CASES = ('startup', 'restart', 'cancel-retry', 'cancel-shutdown', 'live-creator',
+                        'creator-drift', 'replaced-session', 'root-replaced', 'slot-replaced', 'slot-bytes', 'namespace-changed',
+                        'foreign-node', 'fixed-legacy', 'unrelated-policy', 'partial-record', 'intent-record', 'nonempty-record')
+EMPTY_RECOVERY_UNITS = {
+    'TestDesktopLinuxEmptyRecoveryCreatorComparison': ('distinct', 'package-upgrade', 'same-tick', 'same-capture', 'same-pid',
+        'same-proc-pid', 'future-creator', 'boot', 'caller', 'anchor', 'install-lock', 'process-lock', 'network', 'pid-namespace',
+        'old-invalid', 'new-invalid'),
+    'TestDesktopLinuxEmptyRecoveryRequiresCapturedOwner': ('absent', 'no-session', 'no-journal', 'foreign-session'),
+}
 PROCESS_CASES = ('Witness', 'CreatedBootstrap', 'RejectsForeignBootstrap', 'RetainsOriginalProcView',
                  'RejectsRetiredAndReexecutedTask', 'RetainsFailedClose', 'RejectsForeignPidFD',
                  'PreservesBorrowedParent', 'ChannelBoundsAndCancellation', 'InheritedCloseOnExec',
                  'ChannelPeerClosed', 'AcknowledgedPeerClose')
 
 
+def check_empty_recovery_verdict(output, *, native=False):
+    if '--- SKIP:' in output or '--- FAIL:' in output:
+        raise ValueError('Linux empty recovery skipped or failed an original owner boundary')
+    groups = {'TestLinuxOwnedControllerNamespaceEmptyJournalRecovery': EMPTY_RECOVERY_CASES} if native else EMPTY_RECOVERY_UNITS
+    passed = re.findall(r'(?m)^\s*--- PASS: (\S+) \([0-9]+(?:\.[0-9]+)?s\)$', output)
+    for group, leaves in groups.items():
+        for name in (group, *(group+'/'+leaf for leaf in leaves)):
+            if passed.count(name) != 1:
+                raise ValueError('Linux empty recovery omitted or duplicated its original boundary: '+name)
+
+
 def source_identity():
     names = sorted([ROOT/'go.mod', ROOT/'go.sum', *(ROOT/'cmd/client').glob('*'), *(ROOT/'internal').rglob('*.go'),
-                    *(ROOT/'deploy'/name for name in (*CONTROL.RUNNERS, *TRANSACTION.RUNNERS, 'test_linux_controller_privilege.py'))])
+                    *(ROOT/'deploy'/name for name in (*CONTROL.RUNNERS, *TRANSACTION.RUNNERS, 'test_linux_controller_privilege.py',
+                                                     'test_linux_empty_recovery_runner.py'))])
     return {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
             for path in names if path.is_file() and not path.is_symlink()}
 
@@ -128,6 +150,8 @@ def execute(go='go'):
                 'cmd/client/controller_privilege_linux_namespace_test.go', 'cmd/client/desktop_node_linux_parent.go',
                 'cmd/client/desktop_node_linux_parent_native_test.go', 'cmd/client/desktop_node_linux_journal.go',
                 'cmd/client/desktop_node_linux_journal_native_test.go', 'internal/linuxprotection/record.go',
+                'cmd/client/desktop_node_recovery_linux.go', 'cmd/client/desktop_node_recovery_linux_test.go',
+                'cmd/client/desktop_node_recovery_linux_native_test.go', 'cmd/client/desktop_node_linux_journal_cleanup.go',
                 'internal/linuxprotection/journal_record.go', 'internal/linuxprotection/journal_header.go',
                 'internal/linuxprotection/journal_record_test.go', 'internal/mobiletor/desktop_socket_linux_expectation.go',
                 'internal/linuxprocess/record.go', 'internal/linuxprocess/process_linux.go',
@@ -150,6 +174,11 @@ def execute(go='go'):
     sudo = UID.privilege_tool()
     compiler, env = UID.compiler_toolchain(ROOT, go, env)
     UID.run([compiler, 'test', '-race', '-mod=readonly', '-count=1', './internal/linuxprotection', './internal/linuxprocess'], cwd=ROOT, env=env)
+    recovery_units = UID.run([compiler, 'test', '-race', '-mod=readonly', '-count=1', '-v',
+                              '-run=^TestDesktopLinuxEmptyRecovery', './cmd/client'], cwd=ROOT, env=env)
+    check_empty_recovery_verdict(recovery_units)
+    print(recovery_units, end='' if recovery_units.endswith('\n') else '\n')
+    UID.run([sys.executable, ROOT/'deploy/test_linux_empty_recovery_runner.py'], cwd=ROOT, env=env)
     UID.run([sys.executable, ROOT/'deploy/test_linux_node_control_runner.py'], cwd=ROOT, env=env)
     CONTROL.execute(compiler, env=env)
     UID.run([sys.executable, ROOT/'deploy/test_linux_node_transaction_runner.py'], cwd=ROOT, env=env)
@@ -208,6 +237,7 @@ def execute(go='go'):
         output = UID.run(command, cwd=ROOT, timeout=150, sudo=sudo)
         if any('--- PASS: TestLinuxOwnedControllerNamespace'+name+' (' not in output for name in CASES) or '--- SKIP:' in output:
             raise ValueError('The controller privilege gate did not execute every required actual boundary')
+        check_empty_recovery_verdict(output, native=True)
         for ending in ('eof', 'second-byte'):
             if '--- PASS: TestLinuxOwnedControllerNamespaceFixedInstallAndPipeLifetime/'+ending+' (' not in output:
                 raise ValueError('Controller did not execute its actual anonymous-pipe retirement case')

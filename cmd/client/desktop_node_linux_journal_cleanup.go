@@ -22,11 +22,13 @@ type desktopLinuxNodeJournalRemovalFile struct {
 	removed bool
 }
 
-// Only the original creator can remove its empty, fully joined checkpoint.
-// Keep each original descriptor and successful unlink across cancellation;
-// a later path, decoded record or replacement controller cannot resume this.
+// Terminal cleanup retains its original creator. The separately captured
+// startup capability is limited to a proved-dead creator's settled-empty
+// checkpoint. Both retain the original descriptors and each successful unlink;
+// neither a pathname nor a decoded record can resume another removal.
 type desktopLinuxNodeJournalRemoval struct {
 	files            [4]desktopLinuxNodeJournalRemovalFile
+	recovery         *desktopLinuxEmptyJournalRecovery
 	directoryRemoved bool
 	complete         bool
 }
@@ -225,11 +227,24 @@ func (j *desktopLinuxNodeJournal) removeEmptyCheckpoint(ctx context.Context) err
 		}
 		j.removal = removal
 	}
+	return j.finishEmptyCheckpointRemoval(ctx, nil, true)
+}
+
+func (j *desktopLinuxNodeJournal) finishEmptyCheckpointRemoval(ctx context.Context, recovery *desktopLinuxEmptyJournalRecovery, retiring bool) error {
+	if j.removal == nil || j.removal.recovery != recovery || recovery != nil && recovery.journal != j {
+		return errors.New("Linux journal removal lost its original terminal or startup capability")
+	}
+	current := func() error {
+		if recovery != nil {
+			return recovery.removalCurrent(ctx, retiring)
+		}
+		return j.removalParent(ctx)
+	}
 	if err := mobiletor.ReadDesktopLinuxProtectionAbsence(ctx); err != nil {
 		return err
 	}
 	for index := range j.removal.files {
-		if err := j.removalParent(ctx); err != nil {
+		if err := current(); err != nil {
 			return err
 		}
 		if err := j.removalObjects(); err != nil {
@@ -246,7 +261,7 @@ func (j *desktopLinuxNodeJournal) removeEmptyCheckpoint(ctx context.Context) err
 			}
 		}
 	}
-	if err := j.removalParent(ctx); err != nil {
+	if err := current(); err != nil {
 		return err
 	}
 	if err := j.removalObjects(); err != nil {
@@ -269,6 +284,9 @@ func (j *desktopLinuxNodeJournal) removeEmptyCheckpoint(ctx context.Context) err
 		return err
 	}
 	if err := mobiletor.ReadDesktopLinuxProtectionAbsence(ctx); err != nil {
+		return err
+	}
+	if err := current(); err != nil {
 		return err
 	}
 	j.removal.complete = true

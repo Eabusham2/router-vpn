@@ -17,15 +17,16 @@ import (
 // table name can create this owner. Callers retain operationMu around changes;
 // gate also joins terminal parent cleanup with any entered change.
 type desktopLinuxNodeSession struct {
-	gate        chan struct{}
-	parent      *desktopLinuxNodeParentCapture
-	journal     *desktopLinuxNodeJournal
-	journalErr  error
-	active      *desktopLinuxNodeHost
-	predecessor *desktopLinuxNodeTransaction
-	off         *desktopLinuxNodeProtectionOff
-	closed      bool
-	released    bool
+	gate          chan struct{}
+	parent        *desktopLinuxNodeParentCapture
+	journal       *desktopLinuxNodeJournal
+	journalErr    error
+	emptyRecovery *desktopLinuxEmptyJournalRecovery
+	active        *desktopLinuxNodeHost
+	predecessor   *desktopLinuxNodeTransaction
+	off           *desktopLinuxNodeProtectionOff
+	closed        bool
+	released      bool
 }
 
 func captureDesktopLinuxNodeSession(ctx context.Context, a *app) (*desktopLinuxNodeSession, error) {
@@ -289,6 +290,17 @@ func (s *desktopLinuxNodeSession) Close(ctx context.Context) error {
 		p.gate <- struct{}{}
 		if !stopping {
 			return errors.New("Linux Node session close requires its original terminal parent stop")
+		}
+		if recovery := s.emptyRecovery; recovery != nil && !recovery.ready && recovery.journal != nil {
+			if recovery.journal.removal != nil {
+				// Finish only the already accepted exact unlink. A shutdown
+				// cannot upgrade rejected/nonempty storage into recovery.
+				if err := s.finishEmptyRecoveryLocked(ctx, true); err != nil {
+					return err
+				}
+			} else if err := recovery.journal.Close(ctx); err != nil {
+				return err
+			}
 		}
 		if s.active != nil {
 			if err := s.active.Close(ctx); err != nil {

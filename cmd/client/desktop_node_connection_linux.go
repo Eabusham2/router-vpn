@@ -121,6 +121,9 @@ func (a *app) startDesktopLinuxNodeConnection(operation context.Context, profile
 	if err := a.checkCapturedConnectionOperation(operation); err != nil {
 		return true, err
 	}
+	if err := a.resumeDesktopLinuxEmptyRecovery(operation); err != nil {
+		return true, err
+	}
 	defer func() {
 		if failure != nil {
 			failure = errors.Join(failure, a.checkCapturedConnectionOperation(operation))
