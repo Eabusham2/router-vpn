@@ -151,6 +151,9 @@ func (h *desktopLinuxNodeHost) runningLocked(ctx context.Context) error {
 // Temporary operations retain the closed predecessor. Ordinary disconnect may
 // release On-connect; Always remains closed under the original transaction.
 func (h *desktopLinuxNodeHost) Retire(ctx context.Context, disconnect bool) error {
+	if err := h.stopMonitorBeforeRetirement(ctx); err != nil {
+		return err
+	}
 	if err := h.enter(ctx); err != nil {
 		return err
 	}

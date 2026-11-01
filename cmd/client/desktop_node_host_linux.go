@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"path/filepath"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"router-vpn/internal/applexray"
@@ -42,6 +43,7 @@ type desktopLinuxNodeHost struct {
 	ready        *mobilemultihop.DesktopNodeReadyRecord
 	proof        *desktopLinuxNodeProof
 	activation   *desktopLinuxNodeActivation
+	monitor      *atomic.Pointer[desktopLinuxNodeMonitor] // Immutable holder, allocated before host publication.
 	stageEntered bool
 	startEntered bool
 	started      time.Time
@@ -167,6 +169,7 @@ func prepareDesktopLinuxNodeHostWith(operation context.Context, a *app, profile 
 		return nil, err
 	}
 	host := &desktopLinuxNodeHost{gate: make(chan struct{}, 1), parent: parent, operation: operation, policy: policy,
+		monitor:   &atomic.Pointer[desktopLinuxNodeMonitor]{},
 		selection: selection, source: []byte(input), network: network, revision: revision, options: options, savedOptions: savedOptions, physical: physical,
 		launch: &desktopNodeLaunch{root: linuxOwnedControllerRoot, endpoint: endpoint, profileID: profile.ID, mode: mode,
 			config: []byte(policy.Config()), metadata: metadata, configSHA256: meta.ConfigSHA256, mtuSession: session}}
@@ -352,6 +355,9 @@ func (h *desktopLinuxNodeHost) argumentsLocked(ctx context.Context) ([]string, s
 func (h *desktopLinuxNodeHost) Close(ctx context.Context) error {
 	if h == nil {
 		return nil
+	}
+	if err := h.stopMonitorBeforeRetirement(ctx); err != nil {
+		return err
 	}
 	if err := h.enter(ctx); err != nil {
 		return err

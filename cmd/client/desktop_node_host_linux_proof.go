@@ -149,6 +149,11 @@ func (h *desktopLinuxNodeHost) Prove(parent context.Context) (elapsed time.Durat
 		return 0, err
 	}
 	defer func() { h.gate <- struct{}{} }()
+	// Preserve the original active proof and its retained observer. A new
+	// startup request must capture a new host instead of reusing this one.
+	if h.activation != nil {
+		return 0, errors.New("Linux Router proof cannot restart an activated host")
+	}
 	defer func() {
 		if failure != nil {
 			elapsed = 0

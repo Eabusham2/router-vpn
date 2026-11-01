@@ -188,6 +188,11 @@ func (h *desktopLinuxNodeHost) WaitReady(parent context.Context) (record mobilem
 		return record, err
 	}
 	defer func() { h.gate <- struct{}{} }()
+	// Startup proof cannot be replayed against an already activated owner.
+	// Its failure cleanup is only for the original pre-activation start.
+	if h.activation != nil {
+		return record, errors.New("Linux Router readiness cannot restart an activated host")
+	}
 	defer func() {
 		if failure != nil {
 			failure = h.failProofLocked(failure)
