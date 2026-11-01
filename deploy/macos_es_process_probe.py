@@ -92,47 +92,140 @@ def token_matches(value, expected):
             (value['pid'], value['pidversion']) == key(expected)[:2])
 
 
-def event_record(message, instigator, target, earliest, latest):
+class EventDiagnostics:
+    """Fixed counters/shapes only; no unrelated paths, tokens or event values."""
+    FIELDS = ('version', 'mach_time', 'process', 'process.audit_token',
+              'process.audit_token.pid', 'process.audit_token.pidversion',
+              'process.start_time', 'process.start_time.tv_sec', 'process.start_time.tv_usec',
+              'event', 'event.proc_check', 'event.proc_check.type', 'event.proc_check.flavor',
+              'event.proc_check.target', 'event.proc_check.target.audit_token',
+              'event.proc_check.target.audit_token.pid', 'event.proc_check.target.audit_token.pidversion',
+              'event.proc_check.target.start_time', 'event.proc_check.target.start_time.tv_sec',
+              'event.proc_check.target.start_time.tv_usec', 'event.proc_check.target.executable',
+              'event.proc_check.target.executable.stat')
+
+    def __init__(self, phase):
+        if phase not in ('owned-linked', 'owned-unlinked', 'pre-fixture-refused'):
+            raise Rejected('invalid-diagnostic-query-phase')
+        self.record = {'phase': phase, 'events_examined': 0, 'trigger_attempts': 0,
+                       'outcomes': {}, 'field_shapes': {}, 'matching_token_selectors': {}}
+
+    @staticmethod
+    def shape(value):
+        return {dict: 'object', list: 'array', str: 'string', int: 'integer',
+                float: 'number', bool: 'boolean', type(None): 'null'}.get(type(value), 'unsupported')
+
+    def examine(self, message):
+        self.record['events_examined'] += 1
+        for field in self.FIELDS:
+            value, missing = message, False
+            for part in field.split('.'):
+                if type(value) is not dict or part not in value:
+                    missing = True
+                    break
+                value = value[part]
+            shape = 'missing' if missing else self.shape(value)
+            counts = self.record['field_shapes'].setdefault(field, {})
+            counts[shape] = counts.get(shape, 0)+1
+
+    def outcome(self, name):
+        counts = self.record['outcomes']
+        counts[name] = counts.get(name, 0)+1
+
+    def token_mismatch(self, role, value, expected):
+        if type(value) is not dict or type(value.get('pid')) is not int or type(value.get('pidversion')) is not int:
+            suffix = 'token-schema'
+        elif value['pid'] != key(expected)[0]:
+            suffix = 'other-pid'
+        else:
+            suffix = 'other-exec-version'
+        self.outcome(role+'-'+suffix)
+
+    def selectors(self, event):
+        # These two nonprivate selector values are recorded only after both
+        # exact PID/exec-version pairs match. Arbitrary strings are discarded.
+        for field in ('type', 'flavor'):
+            value = event.get(field)
+            label = ('integer:'+str(value) if type(value) is int and 0 <= value <= 255 else
+                     'pidinfo-symbol' if type(value) is str and value == 'ES_PROC_CHECK_TYPE_PIDINFO' else self.shape(value))
+            counts = self.record['matching_token_selectors'].setdefault(field, {})
+            if label not in counts and len(counts) >= 8:
+                label = 'other-bounded-values'
+            counts[label] = counts.get(label, 0)+1
+
+
+def event_record(message, instigator, target, earliest, latest, diagnostics=None):
     """Discard all unrelated events; keep no command lines or native paths."""
+    note = diagnostics.outcome if diagnostics is not None else lambda _: None
+    if diagnostics is not None:
+        diagnostics.examine(message)
     if type(message) is not dict or type(message.get('process')) is not dict:
+        note('message-process-schema')
         return None
     if not token_matches(message['process'].get('audit_token'), instigator):
+        if diagnostics is not None:
+            diagnostics.token_mismatch('instigator', message['process'].get('audit_token'), instigator)
         return None
     event = message.get('event')
     event = event.get('proc_check') if type(event) is dict else None
     if type(event) is not dict:
+        note('proc-check-event-schema')
         return None
     process = event.get('target')
     if type(process) is not dict or not token_matches(process.get('audit_token'), target):
+        if diagnostics is not None:
+            diagnostics.token_mismatch('target', process.get('audit_token') if type(process) is dict else None, target)
         return None
+    if diagnostics is not None:
+        diagnostics.selectors(event)
     if not ((type(event.get('type')) is int and event['type'] == PIDINFO) or
             (type(event.get('type')) is str and event['type'] == 'ES_PROC_CHECK_TYPE_PIDINFO')):
+        note('check-type-not-pidinfo')
         return None
     if type(event.get('flavor')) is not int or event['flavor'] != PIDPATH:
+        note('check-flavor-not-pidpath')
         return None
-    integer(message.get('version'), 3, 2**32-1)
-    emitted = integer(message.get('mach_time'), 1, 2**64-1)
+    try:
+        integer(message.get('version'), 3, 2**32-1)
+    except Rejected:
+        note('message-version-invalid')
+        raise
+    try:
+        emitted = integer(message.get('mach_time'), 1, 2**64-1)
+    except Rejected:
+        note('event-mach-time-invalid')
+        raise
     if not earliest <= emitted <= latest:
         # A delayed linked-image event is not the later unlinked observation.
+        note('event-before-phase' if emitted < earliest else 'event-after-observation')
         return None
     start = process.get('start_time')
     if (type(start) is not dict or type(start.get('tv_sec')) is not int or type(start.get('tv_usec')) is not int or
             (start['tv_sec'], start['tv_usec']) != key(target)[3:]):
+        note('target-start-not-captured')
         raise Rejected('event-target-start-does-not-match')
     source_start = message['process'].get('start_time')
     if (type(source_start) is not dict or type(source_start.get('tv_sec')) is not int or
             type(source_start.get('tv_usec')) is not int or
             (source_start['tv_sec'], source_start['tv_usec']) != key(instigator)[3:]):
+        note('instigator-start-not-captured')
         raise Rejected('event-instigator-start-does-not-match')
     executable = process.get('executable')
     metadata = executable.get('stat') if type(executable) is dict else None
     if type(metadata) is not dict:
+        note('designated-executable-stat-schema')
         raise Rejected('event-designated-executable-stat-unavailable')
     widths = {'ino': 64, 'mode': 16, 'nlink': 16, 'uid': 32, 'gid': 32, 'size': 63}
-    result = {name: integer(metadata.get('st_'+name), 0, 2**bits-1) for name, bits in widths.items()}
-    result['dev'] = integer(metadata.get('st_dev'), -2**31, 2**32-1) & 0xffffffff
+    try:
+        result = {name: integer(metadata.get('st_'+name), 0, 2**bits-1) for name, bits in widths.items()}
+        result['dev'] = integer(metadata.get('st_dev'), -2**31, 2**32-1) & 0xffffffff
+    except Rejected:
+        note('designated-executable-stat-invalid')
+        raise
     if not result['ino'] or not stat.S_ISREG(result['mode']):
+        note('designated-executable-not-regular')
         raise Rejected('event-designated-executable-not-regular')
+    note('matched-exec-bound-candidate')
     return {'process': dict(target), 'executable_stat': result,
             'trigger': {'type': PIDINFO, 'flavor': PIDPATH}, 'admission_authority': False}
 
@@ -203,7 +296,7 @@ def join_owned(process):
         process.wait(timeout=2)
 
 
-def query(installer, library, stream, instigator, target, deadline, clock):
+def query(installer, library, stream, instigator, target, deadline, clock, diagnostics=None):
     last_trigger = None
     next_trigger, attempts = 0.0, 0
     earliest = integer(clock(), 1, 2**64-1)
@@ -213,9 +306,11 @@ def query(installer, library, stream, instigator, target, deadline, clock):
         if attempts < 24 and time.monotonic() >= next_trigger:
             last_trigger = trigger(library, target)
             attempts += 1
+            if diagnostics is not None:
+                diagnostics.record.update(trigger_attempts=attempts, last_pidpath_call=last_trigger)
             next_trigger = time.monotonic()+0.1
         for message in stream.read(min(0.05, max(0, deadline-time.monotonic()))):
-            found = event_record(message, instigator, target, earliest, integer(clock(), earliest, 2**64-1))
+            found = event_record(message, instigator, target, earliest, integer(clock(), earliest, 2**64-1), diagnostics)
             if found is not None:
                 if (capture(installer, library, target['pid']) != target or
                         capture(installer, library, os.getpid()) != instigator):
@@ -238,7 +333,7 @@ def require_fixture(record, original, *, unlinked):
 
 def run(baseline_path):
     report = {'schema': 1, 'diagnostic_only': True, 'admission_authority': False,
-              'diagnostic_passed': False, 'status': 'not-started', 'observations': []}
+              'diagnostic_passed': False, 'status': 'not-started', 'observations': [], 'queries': []}
     # Darwin's root-owned sticky temporary directory prevents another build
     # user from substituting this root-owned private parent after creation.
     work = Path(tempfile.mkdtemp(prefix='routervpn-es-diagnostic-',
@@ -280,18 +375,22 @@ def run(baseline_path):
         child = subprocess.Popen([str(image), '30'], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                  stderr=subprocess.DEVNULL, close_fds=True)
         owned = capture(installer, library, child.pid)
-        first = query(installer, library, stream, instigator, owned, min(deadline, time.monotonic()+3), clock)
+        def observed_query(phase, selected, until):
+            diagnostic = EventDiagnostics(phase)
+            report['queries'].append(diagnostic.record)
+            return query(installer, library, stream, instigator, selected, until, clock, diagnostic)
+        first = observed_query('owned-linked', owned, min(deadline, time.monotonic()+3))
         require_fixture(first, original, unlinked=False)
         report['observations'].append({'role': 'owned-linked', **first})
         image.unlink()
         if os.fstat(descriptor).st_nlink != 0 or child.poll() is not None:
             raise Rejected('fixture-original-unlinked-child-not-retained')
-        second = query(installer, library, stream, instigator, owned, min(deadline, time.monotonic()+3), clock)
+        second = observed_query('owned-unlinked', owned, min(deadline, time.monotonic()+3))
         require_fixture(second, original, unlinked=True)
         report['observations'].append({'role': 'owned-unlinked', **second})
         # Only the two real designated-vnode positive observations permit the
         # unrelated refused process query. Neither result permits installation.
-        refused = query(installer, library, stream, instigator, target, deadline, clock)
+        refused = observed_query('pre-fixture-refused', target, deadline)
         report['observations'].append({'role': 'pre-fixture-refused', **refused})
         report.update(diagnostic_passed=True, status='exec-bound-designated-file-observed')
     except Exception as error:

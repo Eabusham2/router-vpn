@@ -115,6 +115,119 @@ class EventBinding(unittest.TestCase):
                 M.query(object(), object(), stream, SOURCE, TARGET, time.monotonic()+1, iter((600, 800)).__next__)
 
 
+class RejectionDiagnostics(unittest.TestCase):
+    def test_each_original_rejection_keeps_its_exact_outcome_and_first_stage(self):
+        def set_field(event, path, value):
+            parts = path.split('.')
+            for part in parts[:-1]:
+                event = event[part]
+            event[parts[-1]] = value
+        cases = (
+            ('process', None, 'message-process-schema', False),
+            ('process.audit_token', 'private-token-value', 'instigator-token-schema', False),
+            ('process.audit_token.pid', 987654321, 'instigator-other-pid', False),
+            ('process.audit_token.pidversion', 999, 'instigator-other-exec-version', False),
+            ('event.proc_check', None, 'proc-check-event-schema', False),
+            ('event.proc_check.target', None, 'target-token-schema', False),
+            ('event.proc_check.target.audit_token.pid', 987654321, 'target-other-pid', False),
+            ('event.proc_check.target.audit_token.pidversion', 999, 'target-other-exec-version', False),
+            ('event.proc_check.type', 99, 'check-type-not-pidinfo', False),
+            ('event.proc_check.flavor', 99, 'check-flavor-not-pidpath', False),
+            ('version', 2, 'message-version-invalid', True),
+            ('mach_time', 0, 'event-mach-time-invalid', True),
+            ('mach_time', 599, 'event-before-phase', False),
+            ('mach_time', 801, 'event-after-observation', False),
+            ('event.proc_check.target.start_time.tv_usec', 999, 'target-start-not-captured', True),
+            ('process.start_time', 'private-time-value', 'instigator-start-not-captured', True),
+            ('event.proc_check.target.executable.stat', None, 'designated-executable-stat-schema', True),
+            ('event.proc_check.target.executable.stat.st_uid', True, 'designated-executable-stat-invalid', True),
+            ('event.proc_check.target.executable.stat.st_ino', 0, 'designated-executable-not-regular', True),
+        )
+        for field, value, outcome, rejected in cases:
+            with self.subTest(field=field, outcome=outcome):
+                event, diagnostics = message(), M.EventDiagnostics('owned-linked')
+                set_field(event, field, value)
+                if rejected:
+                    with self.assertRaises(M.Rejected) as original:
+                        M.event_record(event, SOURCE, TARGET, 600, 800)
+                    with self.assertRaises(M.Rejected) as observed:
+                        M.event_record(event, SOURCE, TARGET, 600, 800, diagnostics)
+                    self.assertEqual(str(original.exception), str(observed.exception))
+                else:
+                    self.assertIsNone(M.event_record(event, SOURCE, TARGET, 600, 800))
+                    self.assertIsNone(M.event_record(event, SOURCE, TARGET, 600, 800, diagnostics))
+                self.assertEqual(diagnostics.record['events_examined'], 1)
+                self.assertEqual(diagnostics.record['outcomes'], {outcome: 1})
+
+    def test_shapes_discard_unrelated_values_and_do_not_observe_selector_values_before_owners_match(self):
+        event = message()
+        event['private_unrelated_key'] = 'private-unrelated-value'
+        event['process']['audit_token']['pid'] = 987654321
+        event['process']['start_time'] = 'private-timestamp'
+        event['event']['proc_check']['type'] = 'private-selector'
+        diagnostic = M.EventDiagnostics('owned-linked')
+        self.assertIsNone(M.event_record(event, SOURCE, TARGET, 600, 800, diagnostic))
+        self.assertEqual(diagnostic.record['matching_token_selectors'], {})
+        self.assertEqual(diagnostic.record['field_shapes']['process.start_time'], {'string': 1})
+        self.assertEqual(diagnostic.record['field_shapes']['process.start_time.tv_sec'], {'missing': 1})
+        self.assertEqual(set(diagnostic.record['field_shapes']), set(M.EventDiagnostics.FIELDS))
+        encoded = json.dumps(diagnostic.record)
+        for private in ('987654321', 'private-unrelated', 'private-timestamp', 'private-selector', 'never-publish'):
+            self.assertNotIn(private, encoded)
+
+    def test_matching_candidate_keeps_original_identity_and_bounded_nonprivate_selectors(self):
+        diagnostic = M.EventDiagnostics('owned-unlinked')
+        expected = M.event_record(message(), SOURCE, TARGET, 600, 800)
+        self.assertEqual(M.event_record(message(), SOURCE, TARGET, 600, 800, diagnostic), expected)
+        self.assertEqual(diagnostic.record['outcomes'], {'matched-exec-bound-candidate': 1})
+        self.assertEqual(diagnostic.record['matching_token_selectors'], {'type': {'integer:2': 1}, 'flavor': {'integer:11': 1}})
+        for value in range(256):
+            event = message()
+            event['event']['proc_check']['type'] = value
+            M.event_record(event, SOURCE, TARGET, 600, 800, diagnostic)
+        for value in ('private-arbitrary-selector', 2**100, True, None, {'private-key': 'private-value'}):
+            event = message()
+            event['event']['proc_check']['type'] = value
+            M.event_record(event, SOURCE, TARGET, 600, 800, diagnostic)
+        self.assertLessEqual(len(diagnostic.record['matching_token_selectors']['type']), 9)
+        self.assertEqual(diagnostic.record['events_examined'], 262)
+        self.assertNotIn('private', json.dumps(diagnostic.record))
+        self.assertLess(len(json.dumps(diagnostic.record)), 8192)
+
+    def test_query_timeout_retains_actual_trigger_result_and_filter_stage_without_becoming_a_pass(self):
+        event = message()
+        event['process']['audit_token']['pid'] += 1
+        diagnostic = M.EventDiagnostics('owned-linked')
+        stream = types.SimpleNamespace(read=lambda timeout: [event], process=types.SimpleNamespace(poll=lambda: None))
+        with mock.patch.object(M, 'capture', side_effect=[TARGET, SOURCE]), \
+             mock.patch.object(M, 'trigger', return_value={'errno': 2, 'result': 0}), \
+             mock.patch.object(M.time, 'monotonic', side_effect=[0.0, 0.1, 0.1, 0.2, 2.0]):
+            with self.assertRaisesRegex(M.Rejected, 'no-matching-exec-bound-event-before-deadline'):
+                M.query(object(), object(), stream, SOURCE, TARGET, 1.0, iter((600, 800)).__next__, diagnostic)
+        self.assertEqual(diagnostic.record['trigger_attempts'], 1)
+        self.assertEqual(diagnostic.record['last_pidpath_call'], {'errno': 2, 'result': 0})
+        self.assertEqual(diagnostic.record['outcomes'], {'instigator-other-pid': 1})
+        self.assertEqual(diagnostic.record['events_examined'], 1)
+        self.assertNotIn('observations', diagnostic.record)
+
+    def test_matched_candidate_counter_cannot_replace_final_native_exec_fence(self):
+        diagnostic = M.EventDiagnostics('owned-linked')
+        stream = types.SimpleNamespace(read=lambda timeout: [message()], process=types.SimpleNamespace(poll=lambda: None))
+        with mock.patch.object(M, 'capture', side_effect=[TARGET, SOURCE, {**TARGET, 'idversion': 203}]), \
+             mock.patch.object(M, 'trigger', return_value={'errno': 2, 'result': 0}):
+            with self.assertRaisesRegex(M.Rejected, 'changed-after-query'):
+                M.query(object(), object(), stream, SOURCE, TARGET, time.monotonic()+1, iter((600, 800)).__next__, diagnostic)
+        self.assertEqual(diagnostic.record['outcomes'], {'matched-exec-bound-candidate': 1})
+        self.assertNotIn('diagnostic_passed', diagnostic.record)
+
+    def test_only_fixed_query_roles_can_enter_the_report(self):
+        for phase in ('owned-linked', 'owned-unlinked', 'pre-fixture-refused'):
+            self.assertEqual(M.EventDiagnostics(phase).record['phase'], phase)
+        for phase in ('private-path', '', 1, None):
+            with self.assertRaisesRegex(M.Rejected, 'invalid-diagnostic-query-phase'):
+                M.EventDiagnostics(phase)
+
+
 class OriginalPipeAndJoin(unittest.TestCase):
     def test_real_owned_pipe_preserves_fda_error_and_parses_only_complete_records(self):
         script = 'import os,time;os.write(2,b"Full Disk Access denied\\n");os.write(1,b\'{"version":8}\');time.sleep(.1);os.write(1,b"\\n")'
