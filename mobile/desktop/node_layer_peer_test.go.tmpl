@@ -83,6 +83,7 @@ type desktopNodeLayerRequest struct {
 	Address       string                        `json:"address"`
 	Password      string                        `json:"password"`
 	NodeProofID   string                        `json:"node_proof_id,omitempty"`
+	DirectRouter  bool                          `json:"direct_router,omitempty"`
 	Configuration desktopReferenceConfiguration `json:"configuration"`
 }
 
@@ -110,6 +111,7 @@ type desktopNodeLayerReply struct {
 	PlainUDP          int64  `json:"plain_udp"`
 	DNSQueries        uint32 `json:"dns_queries"`
 	RouterQueries     uint32 `json:"router_queries,omitempty"`
+	DirectQueries     uint32 `json:"direct_router_queries,omitempty"`
 	Probe             string `json:"probe,omitempty"`
 	ProbeCount        int64  `json:"probe_count,omitempty"`
 	ProbeNetwork      string `json:"probe_network"`
@@ -635,6 +637,13 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	t.Cleanup(func() { _ = dnsServer.Shutdown(); _ = dnsListener.Close(); <-dnsJoined })
 	stage = "captured Router HTTP listener"
 	routerHealth := startDesktopNodeRouterHealth(t, ip, request.NodeProofID)
+	var directHealth *desktopNodeRouterHealth
+	if request.DirectRouter {
+		// The assembled host gate assigns this address only inside the peer's
+		// private namespace. A same-identity direct response cannot increment
+		// the independent encrypted Router mapping's counter.
+		directHealth = startDesktopNodeRouterHealth(t, netip.MustParseAddr("10.77.0.1"), request.NodeProofID)
+	}
 	var inner, baseAddress, protocolFiles string
 	innerNetwork, probeNetwork := "udp", "udp"
 	var protocolServer *desktopNodeLayerServer
@@ -715,6 +724,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 		reply := desktopNodeLayerReply{Schema: 1, Address: address, AESAddress: aesAddress, BaseAddress: baseAddress, ProtocolFiles: protocolFiles,
 			AppID: scope, RawTCP: server.rawTCP.Load(), RawUDP: server.rawUDP.Load(), PlainTCP: server.plainTCP.Load(), PlainUDP: server.plainUDP.Load(), DNSQueries: dnsQueries.Load(), Probe: nonce, ProbeCount: count, ProbeNetwork: probeNetwork, ProbeTarget: target}
 		reply.RouterQueries = routerHealth.count()
+		reply.DirectQueries = directHealth.count()
 		if protocolServer != nil {
 			reply.ProtocolRawUDP, reply.ProtocolTCP, reply.ProtocolUDP = protocolServer.rawUDP.Load(), protocolServer.plainTCP.Load(), protocolServer.plainUDP.Load()
 			reply.ProtocolRawTCP = protocolServer.rawTCP.Load()

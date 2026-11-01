@@ -26,7 +26,7 @@ const (
 // neither remove the selected Home DNS mapping nor add arbitrary forwarding.
 func desktopNodeRouterHealthCaptureValid(request desktopNodeLayerRequest) bool {
 	if request.NodeProofID == "" {
-		return true
+		return !request.DirectRouter
 	}
 	raw, err := hex.DecodeString(request.NodeProofID)
 	return err == nil && len(raw) == 32 && hex.EncodeToString(raw) == request.NodeProofID &&
@@ -60,6 +60,21 @@ func startDesktopNodeRouterHealth(t *testing.T, ip netip.Addr, nodeID string) *d
 	}
 	if !ip.Is4() || !ip.IsPrivate() || !desktopNodeRouterHealthCaptureValid(desktopNodeLayerRequest{Mode: "shadowsocks", NodeProofID: nodeID}) {
 		t.Fatal("Router HTTP peer lost its captured private address or exact node identity")
+	}
+	interfaces, err := net.Interfaces()
+	found := false
+	for _, iface := range interfaces {
+		addresses, readErr := iface.Addrs()
+		if readErr != nil {
+			t.Fatal("Router HTTP peer lost its native interface inventory", readErr)
+		}
+		for _, address := range addresses {
+			prefix, parseErr := netip.ParsePrefix(address.String())
+			found = found || parseErr == nil && prefix.Addr() == ip && iface.Flags&net.FlagUp != 0 && iface.Flags&net.FlagLoopback == 0
+		}
+	}
+	if err != nil || !found {
+		t.Fatal("Router HTTP peer cannot bind an unowned private interface", err)
 	}
 	physical := netip.AddrPortFrom(ip, desktopNodeRouterHealthPort).String()
 	listener, err := net.Listen("tcp4", physical)
@@ -114,6 +129,9 @@ func TestRouterVPNDesktopNodeRouterHealthCapture(t *testing.T) {
 	valid := desktopNodeLayerRequest{Mode: "shadowsocks", NodeProofID: strings.Repeat("a", 64)}
 	if !desktopNodeRouterHealthCaptureValid(valid) || !desktopNodeRouterHealthCaptureValid(desktopNodeLayerRequest{Mode: "wg"}) {
 		t.Fatal("captured optional Router identity or an existing peer was rejected")
+	}
+	if desktopNodeRouterHealthCaptureValid(desktopNodeLayerRequest{Mode: "shadowsocks", DirectRouter: true}) {
+		t.Fatal("direct Router control accepted an uncaptured identity")
 	}
 	for _, change := range []struct {
 		name string

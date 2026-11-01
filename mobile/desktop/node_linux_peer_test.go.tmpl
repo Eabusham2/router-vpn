@@ -106,6 +106,11 @@ func desktopNodeLinuxRequireTUN(t *testing.T) {
 
 func desktopNodeLinuxReference(t *testing.T, proofIDs ...string) *desktopNodeLayerReference {
 	t.Helper()
+	return desktopNodeLinuxRouterReference(t, false, proofIDs...)
+}
+
+func desktopNodeLinuxRouterReference(t *testing.T, direct bool, proofIDs ...string) *desktopNodeLayerReference {
+	t.Helper()
 	var proofID string
 	if len(proofIDs) == 1 {
 		proofID = proofIDs[0]
@@ -125,7 +130,7 @@ func desktopNodeLinuxReference(t *testing.T, proofIDs ...string) *desktopNodeLay
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	p := &desktopNodeLayerReference{ctx: ctx, cancel: cancel, options: options, done: make(chan error, 1),
-		request: desktopNodeLayerRequest{Schema: 1, Mode: "shadowsocks", Address: "192.168.210.2", NodeProofID: proofID,
+		request: desktopNodeLayerRequest{Schema: 1, Mode: "shadowsocks", Address: "192.168.210.2", NodeProofID: proofID, DirectRouter: direct,
 			Password: base64.StdEncoding.EncodeToString(key[:]), Configuration: config}}
 	clear(key[:])
 	p.command = exec.CommandContext(ctx, "ip", "netns", "exec", "rvpn-peer", executable,

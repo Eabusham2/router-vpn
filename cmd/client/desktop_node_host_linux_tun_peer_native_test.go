@@ -1,0 +1,349 @@
+//go:build linux && routervpn_controller_privileged
+
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"router-vpn/internal/common"
+)
+
+const linuxHostTUNNodeID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+type linuxHostTUNOutput struct {
+	sync.Mutex
+	bytes.Buffer
+}
+
+func (w *linuxHostTUNOutput) Write(raw []byte) (int, error) {
+	w.Lock()
+	defer w.Unlock()
+	return w.Buffer.Write(raw)
+}
+
+func (w *linuxHostTUNOutput) String() string {
+	w.Lock()
+	defer w.Unlock()
+	return w.Buffer.String()
+}
+
+func linuxHostTUNCommand(t *testing.T, arguments ...string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if output, err := exec.CommandContext(ctx, arguments[0], arguments[1:]...).CombinedOutput(); err != nil {
+		t.Fatalf("owned installed-host namespace command failed: %v: %s", err, output)
+	}
+}
+
+func linuxHostTUNNamespace(t *testing.T) {
+	t.Helper()
+	device, inode, present := strings.Cut(os.Getenv("ROUTERVPN_NODE_OUTER_NETNS_ID"), ":")
+	outerDevice, deviceErr := strconv.ParseUint(device, 10, 64)
+	outerInode, inodeErr := strconv.ParseUint(inode, 10, 64)
+	var current, tun syscall.Stat_t
+	if os.Getenv("ROUTERVPN_LINUX_GUARDIAN_TEST_NS") != "1" || os.Geteuid() != 0 || !present || deviceErr != nil || inodeErr != nil ||
+		outerInode == 0 || syscall.Stat("/proc/self/ns/net", &current) != nil || current.Dev == outerDevice && current.Ino == outerInode {
+		t.Fatal("installed Linux host acceptance requires its original separate native namespace")
+	}
+	if err := syscall.Stat("/dev/net/tun", &tun); err != nil || tun.Mode&syscall.S_IFMT != syscall.S_IFCHR || uint64(tun.Rdev) != (10<<8)|200 {
+		t.Fatal("installed Linux host acceptance requires the actual provisioned TUN device", err)
+	}
+	for _, command := range []struct{ create, remove []string }{
+		{[]string{"ip", "addr", "add", "192.168.210.1/30", "dev", "rvpn-test"}, []string{"ip", "addr", "del", "192.168.210.1/30", "dev", "rvpn-test"}},
+		{[]string{"ip", "netns", "exec", "rvpn-peer", "ip", "addr", "add", "192.168.210.2/30", "dev", "rvpn-peer"}, []string{"ip", "netns", "exec", "rvpn-peer", "ip", "addr", "del", "192.168.210.2/30", "dev", "rvpn-peer"}},
+		{[]string{"ip", "netns", "exec", "rvpn-peer", "ip", "addr", "add", "10.77.0.1/32", "dev", "rvpn-peer"}, []string{"ip", "netns", "exec", "rvpn-peer", "ip", "addr", "del", "10.77.0.1/32", "dev", "rvpn-peer"}},
+		{[]string{"ip", "route", "add", "default", "via", "192.168.210.2", "dev", "rvpn-test"}, []string{"ip", "route", "del", "default", "via", "192.168.210.2", "dev", "rvpn-test"}},
+	} {
+		linuxHostTUNCommand(t, command.create...)
+		t.Cleanup(func() { linuxHostTUNCommand(t, command.remove...) })
+	}
+	t.Setenv(linuxControllerNamespaceMarker, "1")
+}
+
+// Only an exact regular original is copied into the private installation.
+// Keep the nofollow source descriptor through the copy/hash and metadata
+// readback; replacing a pathname cannot redirect this source midway.
+func linuxHostTUNCopy(t *testing.T, source, destination string, maximum int64, expected string, mode os.FileMode) {
+	t.Helper()
+	if !filepath.IsAbs(source) || filepath.Clean(source) != source || !nativeDigest(expected) || maximum <= 0 {
+		t.Fatal("installed-host fixture lost its exact original payload")
+	}
+	fd, err := syscall.Open(source, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := os.NewFile(uintptr(fd), "original-installed-host-payload")
+	defer input.Close()
+	var before, after syscall.Stat_t
+	if syscall.Fstat(fd, &before) != nil || before.Mode&syscall.S_IFMT != syscall.S_IFREG || before.Nlink != 1 || before.Mode&06022 != 0 || before.Size <= 0 || before.Size > maximum {
+		t.Fatal("installed-host fixture lost its bounded regular source")
+	}
+	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.New()
+	n, copyErr := io.Copy(io.MultiWriter(output, hash), io.LimitReader(input, maximum+1))
+	flushErr, closeErr := output.Sync(), output.Close()
+	if err := syscall.Fstat(fd, &after); err != nil || copyErr != nil || flushErr != nil || closeErr != nil || n != before.Size ||
+		before.Dev != after.Dev || before.Ino != after.Ino || before.Mode != after.Mode || before.Nlink != after.Nlink ||
+		before.Uid != after.Uid || before.Gid != after.Gid || before.Size != after.Size || before.Mtim != after.Mtim || before.Ctim != after.Ctim ||
+		hex.EncodeToString(hash.Sum(nil)) != expected {
+		t.Fatal("installed-host payload changed during its original bounded copy", err, copyErr, flushErr, closeErr)
+	}
+	var installed syscall.Stat_t
+	if syscall.Lstat(destination, &installed) != nil || installed.Mode&syscall.S_IFMT != syscall.S_IFREG || installed.Nlink != 1 || installed.Uid != 0 ||
+		installed.Gid != 0 || installed.Mode&07777 != uint32(mode.Perm()) || installed.Size != n {
+		t.Fatal("installed-host payload did not retain its exact protected private copy")
+	}
+}
+
+func linuxHostTUNInstallBundle(t *testing.T) {
+	t.Helper()
+	source, expected := os.Getenv("ROUTERVPN_NODE_HOST_BUNDLE"), os.Getenv("ROUTERVPN_NODE_HOST_BUNDLE_SHA256")
+	if !filepath.IsAbs(source) || filepath.Clean(source) != source || !nativeDigest(expected) {
+		t.Fatal("installed-host fixture has no actual completed native bundle")
+	}
+	directory := filepath.Join(linuxOwnedControllerRoot, "runtime", "native")
+	if err := os.MkdirAll(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	receiptName := filepath.Join(directory, "NATIVE-RUNTIME.json")
+	linuxHostTUNCopy(t, filepath.Join(source, "NATIVE-RUNTIME.json"), receiptName, 32768, expected, 0644)
+	raw, err := os.ReadFile(receiptName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := validateNativeReceipt(raw)
+	if err != nil {
+		t.Fatal("actual complete native receipt was not valid for this host", err)
+	}
+	entries, err := os.ReadDir(source)
+	if err != nil || len(entries) != len(receipt.Files)+1 {
+		t.Fatal("actual completed bundle omitted or added an unowned payload", err)
+	}
+	for _, entry := range entries {
+		if entry.Name() == "NATIVE-RUNTIME.json" {
+			continue
+		}
+		expected, found := receipt.Files[entry.Name()]
+		if !found || entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+			t.Fatal("actual completed bundle has an unrelated payload")
+		}
+		mode := os.FileMode(0644)
+		if entry.Name() == nativeBinaryName() || entry.Name() == bundledTorBinaryName(receipt.Target) {
+			mode = 0755
+		}
+		linuxHostTUNCopy(t, filepath.Join(source, entry.Name()), filepath.Join(directory, entry.Name()), expected.Size, expected.SHA256, mode)
+	}
+	if err := verifyNativePayload(directory, receipt); err != nil {
+		t.Fatal("installed complete native payload does not match its original receipt", err)
+	}
+	// The actual controller will execute verifyBundledNativeContext during
+	// preparation and launch. This copy grants no substitute verifier result.
+}
+
+type linuxHostTUNPeerReply struct {
+	Schema        int    `json:"schema"`
+	Address       string `json:"address"`
+	AESAddress    string `json:"aes_address"`
+	RawTCP        int64  `json:"raw_tcp"`
+	RawUDP        int64  `json:"raw_udp"`
+	PlainTCP      int64  `json:"plain_tcp"`
+	PlainUDP      int64  `json:"plain_udp"`
+	DNSQueries    uint32 `json:"dns_queries"`
+	RouterQueries uint32 `json:"router_queries"`
+	DirectQueries uint32 `json:"direct_router_queries"`
+}
+
+type linuxHostTUNPeer struct {
+	command    *exec.Cmd
+	input      io.WriteCloser
+	output     *os.File
+	reader     *bufio.Reader
+	diagnostic linuxHostTUNOutput
+	done       chan struct{}
+	waitErr    error
+	address    netip.AddrPort
+	password   string
+}
+
+func (peer *linuxHostTUNPeer) read(t *testing.T) linuxHostTUNPeerReply {
+	t.Helper()
+	if err := peer.output.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	defer peer.output.SetReadDeadline(time.Time{})
+	raw, err := peer.reader.ReadSlice('\n')
+	var reply linuxHostTUNPeerReply
+	if err != nil || len(raw) > 64<<10 || json.Unmarshal(raw, &reply) != nil || reply.Schema != 1 {
+		t.Fatal("installed-host encrypted reference lost its original bounded response", err, peer.diagnostic.String())
+	}
+	endpoint, err := netip.ParseAddrPort(reply.Address)
+	if err != nil || endpoint.Addr().String() != "192.168.210.2" || endpoint.Port() == 0 || reply.AESAddress != reply.Address ||
+		peer.address.IsValid() && peer.address != endpoint || reply.RawTCP < 0 || reply.RawUDP < 0 || reply.PlainTCP < 0 || reply.PlainUDP < 0 {
+		t.Fatal("installed-host encrypted reference replaced its captured private endpoint")
+	}
+	peer.address = endpoint
+	return reply
+}
+
+func (peer *linuxHostTUNPeer) observe(t *testing.T, action string) linuxHostTUNPeerReply {
+	t.Helper()
+	if action != "stats" && action != "fail-dns" && action != "restore-dns" && action != "wrong-node" && action != "restore-node" {
+		t.Fatal("uncaptured installed-host peer observation")
+	}
+	if _, err := io.WriteString(peer.input, action+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	return peer.read(t)
+}
+
+func linuxHostTUNStartPeer(t *testing.T) *linuxHostTUNPeer {
+	t.Helper()
+	directory, err := os.MkdirTemp("/opt", "routervpn-host-peer-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(directory) })
+	image := filepath.Join(directory, "peer.test")
+	linuxHostTUNCopy(t, os.Getenv("ROUTERVPN_NODE_HOST_PEER_BINARY"), image, 512<<20, os.Getenv("ROUTERVPN_NODE_HOST_PEER_SHA256"), 0755)
+	var key [32]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Second)
+	peer := &linuxHostTUNPeer{password: base64.StdEncoding.EncodeToString(key[:]), done: make(chan struct{})}
+	clear(key[:])
+	peer.command = exec.CommandContext(ctx, "ip", "netns", "exec", "rvpn-peer", image,
+		"-test.run=^TestRouterVPNDesktopNodeLayerReferenceProcess$", "-test.count=1", "-test.timeout=105s")
+	peer.command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_NODE_LAYER_REFERENCE_CHILD=1"}
+	peer.input, err = peer.command.StdinPipe()
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	var writer *os.File
+	peer.output, writer, err = os.Pipe()
+	if err != nil {
+		cancel()
+		_ = peer.input.Close()
+		t.Fatal(err)
+	}
+	peer.reader = bufio.NewReaderSize(peer.output, (64<<10)+1)
+	peer.command.Stdout, peer.command.Stderr = writer, &peer.diagnostic
+	if err := peer.command.Start(); err != nil {
+		cancel()
+		_ = peer.input.Close()
+		_ = peer.output.Close()
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	_ = writer.Close()
+	go func() { peer.waitErr = peer.command.Wait(); close(peer.done) }()
+	t.Cleanup(func() {
+		_ = peer.input.Close()
+		select {
+		case <-peer.done:
+			if peer.waitErr != nil {
+				t.Error("installed-host independent reference failed", peer.waitErr, peer.diagnostic.String())
+			}
+		case <-time.After(5 * time.Second):
+			cancel()
+			<-peer.done
+			t.Error("installed-host reference did not join its original owned pipe", peer.diagnostic.String())
+		}
+		cancel()
+		_ = peer.output.Close()
+	})
+	request := map[string]any{"schema": 1, "mode": "shadowsocks", "layer": "", "address": "192.168.210.2",
+		"password": peer.password, "node_proof_id": linuxHostTUNNodeID, "direct_router": true, "configuration": map[string]any{}}
+	if err := json.NewEncoder(peer.input).Encode(request); err != nil {
+		t.Fatal(err)
+	}
+	peer.read(t)
+	return peer
+}
+
+func linuxHostTUNDirectHealth(t *testing.T, peer *linuxHostTUNPeer) {
+	t.Helper()
+	before := peer.observe(t, "stats")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	transport := &http.Transport{Proxy: nil, DisableKeepAlives: true}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("direct Router control cannot redirect") }}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://10.77.0.1:8787/health", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal("same-identity direct LAN positive control was not reachable", err)
+	}
+	body, readErr := io.ReadAll(io.LimitReader(response.Body, 4097))
+	closeErr := response.Body.Close()
+	after := peer.observe(t, "stats")
+	if readErr != nil || closeErr != nil || len(body) > 4096 || response.StatusCode != http.StatusOK || validateCapturedNodeProof(linuxHostTUNNodeID, body) != nil ||
+		after.DirectQueries != before.DirectQueries+1 || after.RouterQueries != before.RouterQueries || after.RawTCP != before.RawTCP {
+		t.Fatal("direct LAN control did not retain its independent valid-node response counter", readErr, closeErr, before, after)
+	}
+}
+
+func linuxHostTUNProfile(peer *linuxHostTUNPeer, scenario string) common.RouterProfile {
+	profile := common.RouterProfile{ID: "installed-linux-node", Name: "Actual installed Linux node", NodeKind: "router-vpn", NodeProofID: linuxHostTUNNodeID,
+		Endpoint: peer.address.Addr().String(), RouterAPI: "http://10.77.0.1:8787", AdGuardIPv4: "192.168.50.133", DNSMode: "home", IPv6Mode: "on",
+		KillSwitch: true, KillSwitchPolicy: "on-connect", MTUPolicy: "fixed", ManualMTU: 1376, EffectiveMTU: 9000}
+	if scenario == "home-lan" {
+		profile.HomeLANAccess = true
+		profile.HomeLANCIDRs = []string{"10.77.0.0/24", "192.168.210.0/30"}
+	}
+	if scenario == "always" {
+		profile.KillSwitchPolicy = "always"
+	}
+	return profile
+}
+
+func linuxHostTUNInstallProfile(t *testing.T, peer *linuxHostTUNPeer, scenario string) {
+	t.Helper()
+	profile := linuxHostTUNProfile(peer, scenario)
+	password := peer.password
+	if scenario == "wrong-key" {
+		password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x27}, 32))
+	}
+	store, err := json.Marshal(common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}})
+	if err != nil || os.WriteFile(filepath.Join(linuxOwnedControllerRoot, "routers.json"), store, 0600) != nil {
+		t.Fatal("actual installed host lost its captured profile", err)
+	}
+	directory := filepath.Join(linuxOwnedControllerRoot, "generated", profile.ID, "shadowsocks")
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	graph, err := json.Marshal(map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
+		"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": profile.Endpoint, "server_port": int(peer.address.Port()),
+			"method": "2022-blake3-aes-256-gcm", "password": password}}, "route": map[string]any{"final": "proxy"}})
+	if err != nil || os.WriteFile(filepath.Join(directory, "sing-box.json"), graph, 0600) != nil {
+		t.Fatal("actual installed host lost its private encrypted graph", err)
+	}
+}

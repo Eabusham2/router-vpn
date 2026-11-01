@@ -5,6 +5,7 @@ package routervpnamnezia
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -170,4 +171,56 @@ func TestDesktopLinuxGuardianKernelNodeRouterHealthPeer(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The direct responder deliberately returns the same valid captured identity.
+// The later installed-host negative control can therefore distinguish a
+// missing TUN bind by actual independent traffic, not by different JSON.
+func TestDesktopLinuxGuardianKernelNodeRouterDirectControl(t *testing.T) {
+	desktopNodeLinuxNamespace(t)
+	desktopNodeLinuxCommand(t, "", "ip", "netns", "exec", "rvpn-peer", "ip", "addr", "add", "10.77.0.1/32", "dev", "rvpn-peer")
+	t.Cleanup(func() {
+		desktopNodeLinuxCommand(t, "", "ip", "netns", "exec", "rvpn-peer", "ip", "addr", "del", "10.77.0.1/32", "dev", "rvpn-peer")
+	})
+	nodeID := strings.Repeat("a", 64)
+	peer := desktopNodeLinuxRouterReference(t, true, nodeID)
+	t.Run("same-identity-direct", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		transport := &http.Transport{Proxy: nil, DisableKeepAlives: true}
+		defer transport.CloseIdleConnections()
+		client := &http.Client{Transport: transport}
+		request, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://"+desktopNodeRouterHealthTarget+"/health", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal("same-identity direct Router control is not actually reachable", err)
+		}
+		defer response.Body.Close()
+		body, err := io.ReadAll(io.LimitReader(response.Body, 1025))
+		var actual desktopNodeRouterHealthReply
+		if err != nil || len(body) > 1024 || response.StatusCode != http.StatusOK || json.Unmarshal(body, &actual) != nil || !actual.OK || actual.NodeID != nodeID || actual.Proof != "router-vpn-private-agent-v1" {
+			t.Fatal("direct Router control did not return the same valid captured node identity", err, actual)
+		}
+		observed := peer.observe(t, "stats")
+		if observed.DirectQueries != 1 || observed.RouterQueries != 0 || observed.RawTCP != 0 || observed.PlainTCP != 0 {
+			t.Fatal("direct Router control was counted as encrypted proof", observed)
+		}
+	})
+	t.Run("encrypted-independent", func(t *testing.T) {
+		answer, err := desktopNodeRouterHealthExchange(peer, peer.request.Password, desktopNodeRouterHealthTarget, true)
+		observed := peer.observe(t, "stats")
+		if err != nil || answer.NodeID != nodeID || observed.RouterQueries != 1 || observed.DirectQueries != 1 || observed.RawTCP != 1 || observed.PlainTCP != 1 {
+			t.Fatal("encrypted Router response did not retain its separate actual counter", err, observed)
+		}
+	})
+	t.Run("captured-dns", func(t *testing.T) {
+		code, err := desktopNodeRouterHealthDNS(peer)
+		observed := peer.observe(t, "stats")
+		if err != nil || code != dns.RcodeSuccess || observed.DNSQueries != 1 || observed.RouterQueries != 1 || observed.DirectQueries != 1 || observed.RawUDP == 0 || observed.PlainUDP == 0 {
+			t.Fatal("direct Router control displaced the selected encrypted DNS path", err, observed)
+		}
+	})
 }

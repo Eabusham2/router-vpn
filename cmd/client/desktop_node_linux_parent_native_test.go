@@ -22,6 +22,9 @@ import (
 )
 
 func linuxNodeParentFixture(owner *ownedDesktopController, scenario string) error {
+	if strings.HasPrefix(scenario, "host-tun/") {
+		return linuxNodeHostTUNFixture(owner, strings.TrimPrefix(scenario, "host-tun/"))
+	}
 	if strings.HasPrefix(scenario, "host-start/") {
 		return linuxNodeHostStartFixture(owner, strings.TrimPrefix(scenario, "host-start/"))
 	}

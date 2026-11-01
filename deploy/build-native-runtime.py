@@ -137,6 +137,11 @@ def inputs():
                              ROOT/'deploy/test_linux_node_child_control_runner.py',
                              ROOT/'deploy/test_linux_node_child_tun.py',
                              ROOT/'deploy/test_linux_node_child_tun_runner.py',
+                             ROOT/'deploy/test_linux_node_host_tun.py',
+                             ROOT/'deploy/test_linux_node_host_tun_runner.py',
+                             *sorted((ROOT/'cmd/client').glob('*.go')),
+                             ROOT/'cmd/client/ui.html', ROOT/'cmd/client/logical_ui.js',
+                             *sorted((ROOT/'internal').rglob('*.go')),
                              ROOT/'deploy/test_linux_node_lifecycle.py',
                              ROOT/'deploy/test_linux_node_lifecycle_runner.py',
                              ROOT/'deploy/test_desktop_darwin_guardian.py',
@@ -414,6 +419,17 @@ def reuse(directory, target, policy=None, env=None):
     return receipt
 
 
+def verify_installed_linux_host(source, bundle, target, env):
+    if target not in ('linux/amd64', 'linux/arm64') or env.get('GOOS') != 'linux' or env.get('GOARCH') != target.split('/')[1]:
+        raise ValueError('Installed Linux host gate requires its matching complete native target')
+    # The final installed-host gate consumes the completed bundle, including
+    # native libraries and Tor, after every original payload/provenance check.
+    # It runs before stage publication and uses the ordinary app verifier.
+    reuse(bundle, target, env=env)
+    run([sys.executable, ROOT/'deploy/test_linux_node_host_tun_runner.py'], cwd=ROOT, env=env, timeout=60)
+    run([sys.executable, ROOT/'deploy/test_linux_node_host_tun.py', source, '--bundle', bundle], cwd=ROOT, env=env, timeout=2400)
+
+
 def checkout(path, repository, revision):
     run(['git', 'init', path])
     # Keep pinned upstream blobs identical on Windows too. The application's
@@ -655,6 +671,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
             help_output = run([binary, 'routervpn-external', '--help'], env=env, timeout=20)
             if '--runtime-dir' not in help_output or '--session' not in help_output:
                 raise ValueError('Actual native engine omitted its captured external owner command')
+            if target.startswith('linux/'):
+                verify_installed_linux_host(source, stage, target, env)
         if destination.exists():
             destination.rmdir()
         os.replace(stage, destination)
