@@ -59,6 +59,22 @@ class LinuxNodeTransactionRunner(unittest.TestCase):
         for group in RUNNER.GROUPS:
             RUNNER.check_verdict("\n".join(completed(group)), group)
 
+    def test_app_stop_requires_its_owned_native_cases_and_sources(self):
+        self.assertEqual(RUNNER.STOP_CASES,
+                         ("on-connect", "hold-on-connect", "request-ended", "mtu-drain", "cancelled-retirement", "retirement-retry",
+                          "replaced-command", "replaced-operation", "replaced-session", "duplicate-legacy-owner", "partial-journal",
+                          "unused-session", "released-legacy", "released-legacy-closing", "released-node-guard",
+                          "released-journal-change", "closing-active", "always"))
+        self.assertEqual(RUNNER.GROUPS["NodeStop"], RUNNER.STOP_CASES)
+        closure = RUNNER.checked_sources()
+        for relative in ("cmd/client/main.go", "cmd/client/desktop_node_stop_linux.go", "cmd/client/desktop_node_stop_other.go",
+                         "cmd/client/desktop_node_stop_linux_native_test.go", "internal/mobiletor/desktop_socket_linux_node_stop_absence.go"):
+            self.assertIn(relative, closure)
+        path, digest = Path("/captured/native-app-stop.test"), "e" * 64
+        with patch.object(RUNNER.GUARD, "namespace_test", return_value=23) as native:
+            self.assertEqual(RUNNER.namespace_test(path, digest, "NodeStop"), 23)
+        native.assert_called_once_with(path, "NodeStop", digest)
+
     def test_every_actual_boundary_is_required(self):
         for group in RUNNER.GROUPS:
             rows = completed(group)

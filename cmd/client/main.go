@@ -1251,11 +1251,20 @@ func (a *app) stopMode() error {
 }
 
 func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
+	nativeStop, err := a.captureDesktopNodeStop()
+	if err != nil {
+		return err
+	}
 	releaseMTU, relayOwner, err := a.holdMTUForStop()
 	if err != nil {
 		return err
 	}
 	defer releaseMTU()
+	if nativeStop != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		return nativeStop.Retire(ctx, relayOwner, !holdKillSwitch)
+	}
 	if err := prepareDesktopTorStop(a, relayOwner); err != nil {
 		a.mu.Lock()
 		a.state.Connected, a.state.Phase, a.state.LastError = false, "failed", err.Error()

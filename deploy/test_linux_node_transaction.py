@@ -35,8 +35,11 @@ SESSION_CASES = ("on-connect-repeat", "hold-on-connect", "always-successor", "fa
                  "stale-retirement", "wrong-parent", "cancelled-preflight", "partial-journal", "terminal", "clean-restart",
                  "cleanup-cancel", "cleanup-extra", "cleanup-root", "cleanup-file", "cleanup-bytes", "cleanup-foreign-nft",
                  "cleanup-pending", "terminal-always")
+STOP_CASES = ("on-connect", "hold-on-connect", "request-ended", "mtu-drain", "cancelled-retirement", "retirement-retry",
+              "replaced-command", "replaced-operation", "replaced-session", "duplicate-legacy-owner", "partial-journal", "unused-session",
+              "released-legacy", "released-legacy-closing", "released-node-guard", "released-journal-change", "closing-active", "always")
 GROUPS = {"NodeSession": SESSION_CASES, "NodeTransaction": CASES, "NodeShutdown": SHUTDOWN_CASES, "NodeHost": HOST_CASES,
-          "NodeHostStart": HOST_START_CASES, "NodeProofSocket": PROOF_SOCKET_CASES}
+          "NodeHostStart": HOST_START_CASES, "NodeProofSocket": PROOF_SOCKET_CASES, "NodeStop": STOP_CASES}
 UNIT_CASES = {
     "TestDesktopLinuxNodeActivationProof": ("absent", "historical-clock", "historical-start", "historical-now", "stale", "future", "before-start",
                                             "zero-elapsed", "negative-elapsed", "unbounded-elapsed", "impossible-elapsed", "unbounded-deadline",
@@ -74,6 +77,7 @@ def checked_sources():
         "cmd/client/desktop_node_host_linux.go", "cmd/client/desktop_node_host_linux_native_test.go",
         "cmd/client/desktop_node_host_linux_start.go", "cmd/client/desktop_node_host_linux_start_native_test.go",
         "cmd/client/desktop_node_session_linux.go", "cmd/client/desktop_node_session_linux_native_test.go",
+        "cmd/client/desktop_node_stop_linux.go", "cmd/client/desktop_node_stop_other.go", "cmd/client/desktop_node_stop_linux_native_test.go",
         "cmd/client/desktop_node_linux_journal_cleanup.go", "cmd/client/desktop_node_linux_journal_cleanup_native_test.go",
         "cmd/client/desktop_node_host_linux_ready.go", "cmd/client/desktop_node_host_linux_proof.go",
         "cmd/client/desktop_node_host_linux_proof_test.go", "cmd/client/desktop_node_host_linux_proof_native_test.go",
@@ -81,6 +85,7 @@ def checked_sources():
         "cmd/client/operation_guard.go", "cmd/client/operation_guard_cancellation_intent_test.go", "cmd/client/main.go",
         "internal/linuxprotection/node_control_linux.go", "internal/linuxprocess/bootstrap_linux.go",
         "internal/mobiletor/desktop_socket_linux_node_baseline.go", "internal/mobiletor/desktop_socket_linux_node_absence.go",
+        "internal/mobiletor/desktop_socket_linux_node_stop_absence.go",
         "internal/mobiletor/desktop_socket_linux_node_succession_retired.go",
     }
     if not required.issubset(records):
