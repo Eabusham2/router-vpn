@@ -6,7 +6,45 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 60de6b39
+## Latest implementation continuation — through 2f62badb
+
+The independently verified published source cutoff is
+[`2f62badb9d9a74c8f93a8232f914ef63eb4f2d7f`](https://github.com/Eabusham2/router-vpn/commit/2f62badb9d9a74c8f93a8232f914ef63eb4f2d7f).
+[Current continuation evidence](CONTINUATION-EVIDENCE-2026-11-01.md#latest-source-and-native-evidence-through-2f62badb)
+records the two mobile comparison implementations, retained Linux AWG2 and
+the source/dialog fixture repairs, with their exact verification boundaries.
+
+- Android and Apple now expose external Compare all and Compare and connect.
+  Each measures fifty routed HTTPS responses, captures source/network/MTU
+  ownership, restores the complete original, and freshly proves the selected
+  measured execution without rerunning Local/Server selection. Failed/stale
+  candidates receive no score; only final adoption records user usage.
+  Compiled shipping-controller and negative-control suites pass. APK/IPA and
+  physical-device acceptance remain separate.
+- Desktop external fifty-sample measurement and owned all-node comparison
+  remain source work. Current desktop Fastest filters external nodes and
+  requests five Router samples; ordinary external TCP timing is not an
+  equivalent routed native benchmark. The separate two-probe Local/Server
+  comparison formula is unchanged.
+- Linux retained AWG2 Fast/Strong with Start Layer Off now joins SS with all
+  three layers, WG/Off and Hysteria2/Off. Actual selected AWG parameters and
+  encrypted peer/DNS/ownership tests pass. All 93 installed cases and ARM64
+  runtime execution remain required; broader retained layers/graphs and
+  nonempty/legacy recovery remain unfinished. Release-intent recovery is not
+  included until its isolated-source validation and publication finish.
+- The three previously failing mobile source gates pass at bbc224e7.
+  The Android dialog fixture also passes all 235 actual checks and its seven
+  existing hidden-list controls; its exact-source native rerun is separate.
+  The Linux installed fixture now correctly classifies Hysteria2 wrong-trust
+  and wrong-Salamander rejection; all 93 readiness classifications pass and
+  the original classifier fails the intended compiled negative control.
+  The older full Linux engine builds were still running on both architectures.
+- macOS first/legacy inventory and Intel managed image capture still fail;
+  a new staging directory does not resolve shared installed-service authority.
+  Full Windows gates, current release publication, signing, deployment and
+  physical acceptance remain unproved. Stopped PQ work is unpublished.
+
+## Earlier implementation continuation — through 60de6b39
 
 The independently verified published source cutoff is
 [`60de6b396f7078c09204c327a50e8ca90128fa3b`](https://github.com/Eabusham2/router-vpn/commit/60de6b396f7078c09204c327a50e8ca90128fa3b).

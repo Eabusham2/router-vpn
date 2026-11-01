@@ -3,7 +3,7 @@
 This continues [October 31](CONTINUATION-EVIDENCE-2026-10-31.md), preserves
 [the reconciled requirement authority](REQUIREMENTS-RECONCILED.md), and records
 published source through
-[`60de6b396f7078c09204c327a50e8ca90128fa3b`](https://github.com/Eabusham2/router-vpn/commit/60de6b396f7078c09204c327a50e8ca90128fa3b).
+[`2f62badb9d9a74c8f93a8232f914ef63eb4f2d7f`](https://github.com/Eabusham2/router-vpn/commit/2f62badb9d9a74c8f93a8232f914ef63eb4f2d7f).
 The live `main` reference was independently read after publication. Later local
 work is not included in this source cutoff. Original requirements, C1–C7,
 the later product/breakage, map-first, external-node and all-device corrections
@@ -14,7 +14,64 @@ Native evidence below keeps its own exact source identity. The retained
 historical observations are not silently reassigned to this newer cutoff,
 and unrelated passing jobs are not combined into a release claim.
 
-## Latest source and native evidence through 60de6b39
+## Latest source and native evidence through 2f62badb
+
+Six further source units were tested, published directly to `main` with an
+expected-parent check, and independently read back. Android and Apple external
+all-node comparison is now published source; desktop parity remains active
+implementation. None of these results establishes a new complete release or
+physical-device acceptance.
+
+| Commit | Implemented behavior and executable evidence |
+|---|---|
+| [`8cfe847b`](https://github.com/Eabusham2/router-vpn/commit/8cfe847ba61268ad878f456b9ef3d26ae0d798f0) | Android adds explicit external Compare all and Compare and connect actions. Each candidate uses the captured entry context, fifty routed HTTPS samples against the same endpoint, strict validity and a 10% trimmed mean. The batch captures private sources, physical-network identity and the original complete restore point; one owned MTU lease spans trials, original restoration and final selection. It restores the original between candidates and re-proves the winner using its already measured Local/Server choice. Source/network drift aborts; invalid candidates receive no score. Final adoption records usage once. Automatic restoration refuses renewed permission at both preflight and the actual VPN permission decision. The composed comparison passed 434 Java checks and twenty executed defect controls; focused restoration, statistics, permission, service, startup and usage suites also passed. Android framework calls and encrypted traffic are explicit fixture boundaries; actual APK/device results remain separate. |
+| [`f86e0d3b`](https://github.com/Eabusham2/router-vpn/commit/f86e0d3b3e7abfe8b17d4c1f060b8d53b8699cd9) | Apple adds the same two explicit external comparison actions with immutable candidate sources, one endpoint, fifty samples and a shared MTU lease. Bound the candidate set to 128 and private source storage to 64 MiB; keep only the best private adoption capability. Latch source/network/user drift for the round. Restore the complete original before publishing results, capture terminal native ownership before the asynchronous return, and require that exact protocol/entry/policy identity before every later stop or selection. Foreign replacement policy survives even if its protocol and date match. Own partial teardown can retry only after its durable intent; a newer owner is preserved. The shipping Swift composition passed 353 lifecycle checks and six compiled defect controls, selected-path measurement 262/five, native capture/restoration 209/three, and the existing external/Tor Speed Lab suite 433. These use Swift 6 strict concurrency and real SHA-256, with explicit native-handle/IPC fixtures; Xcode packaging and devices remain separate. |
+| [`45eaa1be`](https://github.com/Eabusham2/router-vpn/commit/45eaa1beded478b2941d86053a8b1b2bdf9c7269) | Update three source gates for the actual new mobile controls and terminal Apple restore capture. Preserve Router selection-only behavior, the pending/permission/startup/MTU guards, distinct compare-only/adopt actions and restoration identity. Five complete source gates, fourteen Speed Lab regressions and five executed defect controls passed locally. The three formerly failing GitHub source workflows subsequently passed at this commit; this is not native package evidence. |
+| [`e3f2675b`](https://github.com/Eabusham2/router-vpn/commit/e3f2675b25f70c2c74879c742e8fa22a34185232) | Admit retained Linux AWG2 Fast and Strong with Start Layer Off using the actual pinned AmneziaWG transport. Preserve all eleven selected parameters, original UDP ownership, node proof, selected DNS, cover, MTU and sealed restoration. Unsupported Start Layers still reject before stopping the current owner. Actual AWG/WG encrypted peer tests passed four race groups/24 subcases, including IPv4/IPv6 TCP/UDP, DNS, incorrect keys/headers/padding, canonical identity and cancellation/join. Graph admission passed five groups/18 subcases and public preflight three/36 under race. The strict installed runner and source copier each passed eleven checks. Thirty additional installed cases bring that gate to 93, preserving all earlier 63. The complete prepared native source closure and controller compile were checked; no local kernel-TUN execution of the 93-case installed gate or ARM64 runtime acceptance is claimed. |
+| [`bbc224e7`](https://github.com/Eabusham2/router-vpn/commit/bbc224e7c7fcbf0d394c91e0a17c47c0580fdc30) | Repair the Android product-dialog fixture exposed by the actual combined job at 8cfe847b. The old Router-only selector moved to its own handler, and Performance now has nine actions. Execute the actual Router handler and require exact compare-only/adopt dispatch for the new actions while preserving all seven original hidden-list negative controls. All 235 Java checks and seven compiled controls passed. This changes only the test fixture. |
+| [`2f62badb`](https://github.com/Eabusham2/router-vpn/commit/2f62badb9d9a74c8f93a8232f914ef63eb4f2d7f) | Classify installed Linux credential/resolver failures before stripping the protocol prefix. The old classifier incorrectly treated Hysteria2 wrong-trust and wrong-Salamander scenarios as successful readiness cases. An executed race guard checks all 93 cases and twenty expected rejections; the compiled original-function control fails specifically on wrong trust. The guard also runs inside the installed suite. This is fixture classification, not a change to production transport behavior or a claimed installed-TUN result. |
+
+The all-node benchmark statistic above does not replace the separate
+Local/Server/Compare formula. That contract remains the average of the two
+required routed response times at one common external endpoint, with repeat
+proof and no score for invalid candidates.
+
+### Current native and delivery boundaries
+
+The repaired source workflows also passed at `bbc224e7`:
+[recovered map-first](https://github.com/Eabusham2/router-vpn/actions/runs/41362488859),
+[recovered native UI](https://github.com/Eabusham2/router-vpn/actions/runs/41362489137),
+and [exact-head native release blockers](https://github.com/Eabusham2/router-vpn/actions/runs/41362489090).
+The other native/release jobs were queued, pending or running at the read;
+their eventual result is not inferred here. The observed old Android
+[combined job](https://github.com/Eabusham2/router-vpn/actions/runs/41361331496/job/125012132402)
+remains a failed historical job until the repaired composition completes its
+own build. No full current APK/IPA or published package claim follows.
+
+The [complete Linux engine build at 26b294e9](https://github.com/Eabusham2/router-vpn/actions/runs/41359617898)
+was still running on both architectures. Earlier generated six-case TUN
+successes remain valid for their own source identities; they do not establish
+the expanded 93-case retained-host gate. Same-boot settled-empty recovery is
+published. Complete On-connect release-intent recovery is still unpublished
+pending isolated validation; Always/torn/foreign and legacy succession remain
+separate unfinished work.
+
+The desktop native latency/comparison path is an actual remaining source gap.
+Existing desktop Fastest controls omit external nodes and request five Router
+samples; optional external TCP checks are not fifty routed HTTPS samples.
+The native measurement operation and owned batch must be completed before
+claiming Windows/macOS/Linux parity with the new mobile comparison.
+
+The current macOS first/legacy inventory refusal and Intel managed
+CodeDirectory failure remain unresolved. An independently staged directory
+does not provide authority to replace the existing fixed supervisor, socket,
+state and PF namespace, and the diagnostic event tool supplies no such
+authority. Full Windows native/ordinary-UAC gates, stock OverTLS UDP,
+broader Linux graphs and all original live/device/signing requirements also
+remain. The stopped eight-file PQ work remains unpublished. No live router,
+AdGuard, forwarding, private deployment or signing environment changed.
+
+## Earlier source and native evidence through 60de6b39
 
 These two further source units were tested, published directly to `main` and
 independently read back. Android and Apple external all-node/Fastest comparison
