@@ -30,7 +30,9 @@ LAYER_CASES = tuple(mode + "/" + layer for mode in ("shadowsocks", "hysteria2", 
                     for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
                     if mode in ("shadowsocks", "hysteria2") or layer != "off")
 LAYER_ALLOCATION_CASES = tuple("paired-listeners/" + case for case in (
-    "retained-pair", "collision-bound", "access-denied-bound", "fatal-error", "foreign-pair"))
+    "retained-pair", "collision-bound", "access-denied-bound", "fatal-error", "foreign-pair",
+    "candidate-selection", "retry-both-protocols", "udp-collision-bound", "udp-access-denied-bound",
+    "udp-fatal-error", "udp-foreign-pair", "partial-close-error"))
 HYSTERIA2_CREDENTIAL_CASES = (
     "off/hysteria-password", "off/hysteria-trust", "off/hysteria-salamander",
     "aes-256-gcm/hysteria-password", "aes-256-gcm+xor-whitening/hysteria-password",
