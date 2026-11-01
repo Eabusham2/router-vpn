@@ -126,7 +126,7 @@ func readDesktopRuntimeSnapshot(root *os.Root, name string, limit int64) ([]byte
 // The CLI ignores a not-yet-complete stop JSON record until this write finishes.
 func writeDesktopRuntimeFile(launch *desktopNodeLaunch, name string, data []byte, retry bool) error {
 	limit := 8 << 20
-	if launch != nil && launch.ownedNode != nil && name == "node-source.json" {
+	if launch != nil && name == "node-source.json" {
 		limit = mobilemultihop.NodeLaunchInputLimit
 	}
 	if launch == nil || !desktopRuntimeFilename(name) || len(data) == 0 || len(data) > limit {
