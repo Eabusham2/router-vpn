@@ -273,6 +273,14 @@ jobs:
             -t router-vpn-ci-aux-dns-interop:arm64 .
           bash deploy/run_aux_interoperability_container.sh router-vpn-ci-aux:arm64 router-vpn-ci-aux-dns-interop:arm64 "" dns
 
+      - name: Import final Setup Center Shadowsocks URLs with an unchanged client
+        timeout-minutes: 15
+        run: |
+          docker buildx build --platform linux/arm64 --progress=plain --load \
+            -f deploy/setup-methods-interoperability.Dockerfile \
+            -t router-vpn-ci-method-imports:arm64 .
+          bash deploy/run_setup_methods_interoperability_container.sh router-vpn-ci-method-imports:arm64
+
       - name: Smoke-test generated OverTLS and SSR services
         shell: bash
         run: |

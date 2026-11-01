@@ -25,14 +25,52 @@ def check(condition: bool, message: str) -> None:
 
 
 def test_sip002() -> None:
-    uri = m.sip002_uri("2022-blake3-aes-256-gcm", "p@ss:word/with+chars", "2001:db8::1", 8388, label="Home SS")
+    password = "YctPZ6U7xPPcU+gp3u+0tx/tRizJN9K8y+uKlW2qjlI="
+    uri = m.sip002_uri("2022-blake3-aes-256-gcm", password, "2001:db8::1", 8388, label="Home SS")
     parsed = m.parse_sip002(uri)
     check(parsed["method"] == "2022-blake3-aes-256-gcm", "SIP002 method round trip")
-    check(parsed["password"] == "p@ss:word/with+chars", "SIP002 password round trip")
+    check(parsed["password"] == password, "SIP002 password round trip")
     check(parsed["host"] == "2001:db8::1" and parsed["port"] == 8388, "SIP002 IPv6 endpoint round trip")
     check(parsed["label"] == "Home SS", "SIP002 label round trip")
     userinfo = uri.split("ss://", 1)[1].split("@", 1)[0]
-    check(":" not in userinfo, "SIP002 userinfo must be base64url, not raw/percent-encoded method:password")
+    check(userinfo == "2022-blake3-aes-256-gcm:YctPZ6U7xPPcU%2Bgp3u%2B0tx%2FtRizJN9K8y%2BuKlW2qjlI%3D",
+          "SIP002 AEAD-2022 must match the official percent-encoded userinfo vector")
+    legacy = m.sip002_uri("aes-256-gcm", "p@ss:word/with+chars%?#", "vpn.example", 8388, label="Home + SS")
+    check(":" not in legacy.split("ss://", 1)[1].split("@", 1)[0], "legacy SIP002 keeps Base64URL userinfo")
+    check(m.parse_sip002(legacy)["password"] == "p@ss:word/with+chars%?#", "legacy reserved credentials retained")
+    check(m.parse_sip002(legacy)["label"] == "Home + SS", "SIP002 fragment plus must not become a space")
+    check(m.parse_sip002("ss://aes-256-gcm:secret%3A%40%2F%2B@vpn.example:8388")["password"] == "secret:@/+",
+          "SIP002 also permits explicitly percent-encoded legacy userinfo")
+
+
+def test_sip002_rejects_ambiguous_input() -> None:
+    old_2022 = "ss://" + m.b64url_encode(b"2022-blake3-aes-256-gcm:secret") + "@vpn.example:8388"
+    for value in (
+        old_2022,
+        "ss://aes-256-gcm:secret@attacker@vpn.example:8388",
+        "ss://aes-256-gcm:secret@vpn.example:0",
+        "ss://aes-256-gcm:secret@vpn.example:65536",
+        "ss://aes-256-gcm:secret@vpn.example:8388/unselected-path",
+        "ss://aes-256-gcm:secret@2001:db8::1:8388",
+        "ss://aes-256-gcm:secret@vpn%2Eexample:8388",
+        "ss://aes-256-gcm:secret@vpn\\example:8388",
+        "ss://aes-256-gcm:secret%ZZ@vpn.example:8388",
+        "ss://aes-256-gcm:secret%FF@vpn.example:8388",
+        "ss://aes-256-gcm:secret+raw@vpn.example:8388",
+        "ss://aes-256-gcm:secret:raw@vpn.example:8388",
+        "ss://aes-256-gcm:@vpn.example:8388",
+        "ss://YWVzLTI1Ni1nY206c2VjcmV0$@vpn.example:8388",
+        "ss://YWVzLTI1Ni1nY206c2VjcmV0=@vpn.example:8388",
+        "ss://aes-256-gcm:secret@vpn.example:8388/?plugin=first&plugin=second",
+        "ss://aes-256-gcm:secret@vpn.example:8388/#bad%ZZ",
+        "ss://aes-256-gcm:secret@vpn.example:8388/#bad label",
+        "ss://aes-256-gcm:secret@vpn.example:8388\n",
+    ):
+        try:
+            m.parse_sip002(value)
+        except ValueError:
+            continue
+        raise AssertionError("malformed or ambiguous SIP002 input accepted: " + repr(value))
 
 
 def test_sip002_plugin() -> None:
@@ -76,6 +114,13 @@ def test_shadowsocks_config_builder() -> None:
     parsed = m.parse_sip002(uri)
     check(parsed["host"] == "198.51.100.9", "external endpoint override must be explicit")
     check(parsed["method"] == "aes-256-gcm", "sing-box method")
+    password = "YctPZ6U7xPPcU+gp3u+0tx/tRizJN9K8y+uKlW2qjlI="
+    doc["outbounds"][0].update(method="2022-blake3-aes-256-gcm", password=password)
+    final = {"id": "shadowsocks", "available": True, "config": json.dumps(doc)}
+    norm.normalize_method(final, "198.51.100.9")
+    check(final["url"].startswith("ss://2022-blake3-aes-256-gcm:"), "final normalization must preserve AEAD-2022 plain userinfo")
+    check(final["qrPayload"] == final["url"], "the published QR must carry the corrected final URI")
+    check(m.parse_sip002(final["url"])["password"] == password, "final normalized credential identity")
 
 
 def test_method_lane_truth() -> None:
@@ -121,6 +166,7 @@ def test_setup_center_ui_contract() -> None:
 
 def main() -> int:
     test_sip002()
+    test_sip002_rejects_ambiguous_input()
     test_sip002_plugin()
     test_ssr()
     test_hysteria_validation()

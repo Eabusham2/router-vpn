@@ -8,7 +8,10 @@ as magic QR codes merely because qrencode can encode the bytes.
 from __future__ import annotations
 
 import base64
+import binascii
+import ipaddress
 import json
+import re
 import urllib.parse
 
 
@@ -36,30 +39,71 @@ def sip002_uri(method: str, password: str, host: str, port: int, *, label: str =
     password = str(password)
     if not method or not password:
         raise ValueError("Shadowsocks method/password are required")
-    userinfo = b64url_encode(f"{method}:{password}".encode("utf-8"))
+    # SIP002 requires percent-encoded plain userinfo for AEAD-2022; wrapping
+    # those credentials in Base64URL is explicitly forbidden. Older methods
+    # retain their existing recommended Base64URL encoding.
+    if method.startswith("2022-"):
+        userinfo = urllib.parse.quote(method, safe="") + ":" + urllib.parse.quote(password, safe="")
+    else:
+        userinfo = b64url_encode(f"{method}:{password}".encode("utf-8"))
     query = urllib.parse.urlencode({"plugin": plugin}) if plugin else ""
     fragment = urllib.parse.quote(label, safe="")
-    return f"ss://{userinfo}@{_hostport(host, port)}" + (f"/?{query}" if query else "") + f"#{fragment}"
+    result = f"ss://{userinfo}@{_hostport(host, port)}" + (f"/?{query}" if query else "") + f"#{fragment}"
+    parse_sip002(result)
+    return result
+
+
+def _uri_decode(value: str) -> str:
+    if re.search(r"%(?![0-9A-Fa-f]{2})", value):
+        raise ValueError("invalid SIP002 percent escape")
+    try:
+        return urllib.parse.unquote(value, encoding="utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise ValueError("invalid SIP002 UTF-8") from exc
 
 
 def parse_sip002(uri: str) -> dict:
+    if not isinstance(uri, str) or any(ord(char) <= 32 or ord(char) == 127 for char in uri):
+        raise ValueError("invalid SIP002 whitespace/control character")
     parts = urllib.parse.urlsplit(uri)
-    if parts.scheme != "ss" or not parts.hostname or not parts.port or not parts.username:
+    if parts.scheme != "ss" or not parts.hostname or not parts.port or not parts.username or parts.netloc.count("@") != 1:
         raise ValueError("invalid SIP002 URI")
-    decoded = b64url_decode(parts.username).decode("utf-8")
-    if ":" not in decoded:
-        raise ValueError("invalid SIP002 userinfo")
-    method, password = decoded.split(":", 1)
-    if not method or not password:
+    if parts.path not in ("", "/") or any(char in parts.hostname for char in "%@/?#[]\\<>\"{}|^`"):
+        raise ValueError("invalid SIP002 endpoint or path")
+    if ":" in parts.hostname:
+        ipaddress.IPv6Address(parts.hostname)
+    if parts.password is not None:
+        for value in (parts.username, parts.password):
+            if not re.fullmatch(r"(?:[A-Za-z0-9._~-]|%[0-9A-Fa-f]{2})+", value):
+                raise ValueError("plain SIP002 credentials must be percent encoded")
+        method, password = _uri_decode(parts.username), _uri_decode(parts.password)
+    else:
+        encoded = _uri_decode(parts.username)
+        if not re.fullmatch(r"[A-Za-z0-9_-]+={0,2}", encoded) or ("=" in encoded and len(encoded) % 4):
+            raise ValueError("invalid SIP002 Base64URL credentials")
+        try:
+            raw = base64.b64decode(encoded + "=" * ((4 - len(encoded) % 4) % 4), altchars=b"-_", validate=True)
+            decoded = raw.decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError) as exc:
+            raise ValueError("invalid SIP002 Base64URL credentials") from exc
+        if b64url_encode(raw) != encoded.rstrip("=") or ":" not in decoded:
+            raise ValueError("invalid SIP002 Base64URL credential representation")
+        method, password = decoded.split(":", 1)
+        if method.startswith("2022-"):
+            raise ValueError("AEAD-2022 SIP002 userinfo must not use Base64URL")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", method) or not password:
         raise ValueError("invalid SIP002 credentials")
-    query = urllib.parse.parse_qs(parts.query, keep_blank_values=True)
+    _uri_decode(parts.query)
+    query = urllib.parse.parse_qs(parts.query, keep_blank_values=True, strict_parsing=True)
+    if len(query.get("plugin", [])) > 1:
+        raise ValueError("ambiguous SIP002 plugin parameter")
     return {
         "method": method,
         "password": password,
         "host": parts.hostname,
         "port": parts.port,
         "plugin": query.get("plugin", [""])[0],
-        "label": urllib.parse.unquote(parts.fragment),
+        "label": _uri_decode(parts.fragment),
     }
 
 
