@@ -344,9 +344,13 @@ def query(installer, library, stream, instigator, target, deadline, clock, diagn
     next_trigger, attempts = 0.0, 0
     earliest = integer(clock(), 1, 2**64-1)
     while time.monotonic() < deadline:
-        if capture(installer, library, target['pid']) != target or capture(installer, library, os.getpid()) != instigator:
-            raise Rejected('original-event-owner-changed-before-query')
         if attempts < 24 and time.monotonic() >= next_trigger:
+            # These proc_pidinfo captures themselves emit proc_check events.
+            # Repeating them for every readable unrelated batch can feed the
+            # diagnostic's own backlog. Bind each actual bounded trigger here;
+            # the independent native readback below still fences acceptance.
+            if capture(installer, library, target['pid']) != target or capture(installer, library, os.getpid()) != instigator:
+                raise Rejected('original-event-owner-changed-before-query')
             last_trigger = trigger(library, target)
             attempts += 1
             if diagnostics is not None:

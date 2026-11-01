@@ -274,6 +274,112 @@ class RejectionDiagnostics(unittest.TestCase):
                 M.EventDiagnostics(phase)
 
 
+class BoundedQueryReads(unittest.TestCase):
+    def test_unrelated_queued_records_do_not_trigger_more_native_inventory_reads(self):
+        unrelated = message()
+        unrelated['event']['proc_check']['target']['audit_token']['pid'] += 1
+        now, reads, captures = [0.0], [], []
+        def read(timeout):
+            self.assertLessEqual(timeout, 0.05)
+            reads.append(timeout)
+            now[0] += 0.001
+            return [unrelated] if len(reads) <= 64 else [message()]
+        def capture(installer, library, pid):
+            captures.append(pid)
+            return dict(TARGET if pid == TARGET['pid'] else SOURCE)
+        stream = types.SimpleNamespace(read=read, process=types.SimpleNamespace(poll=lambda: None))
+        diagnostic = M.EventDiagnostics('pre-fixture-refused')
+        clock = iter([600] + [800]*65).__next__
+        with mock.patch.object(M, 'capture', side_effect=capture), \
+             mock.patch.object(M, 'trigger', return_value={'errno': 2, 'result': 0}) as trigger, \
+             mock.patch.object(M.time, 'monotonic', side_effect=lambda: now[0]):
+            result = M.query(object(), object(), stream, SOURCE, TARGET, 1.0, clock, diagnostic)
+        self.assertEqual(len(reads), 65)
+        self.assertEqual(captures, [TARGET['pid'], os.getpid(), TARGET['pid'], os.getpid()])
+        trigger.assert_called_once()
+        self.assertEqual(result['process'], TARGET)
+        self.assertFalse(result['admission_authority'])
+        self.assertEqual(diagnostic.record['outcomes'], {'target-other-pid': 64, 'matched-exec-bound-candidate': 1})
+
+    def test_identity_drift_while_draining_still_rejects_before_candidate_acceptance(self):
+        for role in ('target', 'instigator'):
+            with self.subTest(role=role):
+                now, reads, captures = [0.0], [], []
+                unrelated = message()
+                unrelated['process']['audit_token']['pid'] += 1
+                def read(timeout):
+                    reads.append(timeout)
+                    now[0] += 0.001
+                    return [unrelated] if len(reads) <= 16 else [message()]
+                def capture(installer, library, pid):
+                    captures.append(pid)
+                    target = pid == TARGET['pid']
+                    selected = dict(TARGET if target else SOURCE)
+                    if reads and target == (role == 'target'):
+                        selected['idversion'] += 1
+                    return selected
+                stream = types.SimpleNamespace(read=read, process=types.SimpleNamespace(poll=lambda: None))
+                with mock.patch.object(M, 'capture', side_effect=capture), \
+                     mock.patch.object(M, 'trigger', return_value={'errno': 2, 'result': 0}) as trigger, \
+                     mock.patch.object(M.time, 'monotonic', side_effect=lambda: now[0]):
+                    with self.assertRaisesRegex(M.Rejected, 'original-event-owner-changed-after-query'):
+                        M.query(object(), object(), stream, SOURCE, TARGET, 1.0,
+                                iter([600] + [800]*17).__next__)
+                trigger.assert_called_once()
+                self.assertEqual(len(reads), 17)
+                self.assertEqual(len(captures), 3 if role == 'target' else 4)
+
+    def test_every_new_trigger_reproves_original_target_and_instigator(self):
+        for role in ('target', 'instigator'):
+            with self.subTest(role=role):
+                now, reads = [0.0], []
+                def read(timeout):
+                    reads.append(timeout)
+                    now[0] = 0.2
+                    return []
+                def capture(installer, library, pid):
+                    target = pid == TARGET['pid']
+                    selected = dict(TARGET if target else SOURCE)
+                    if reads and target == (role == 'target'):
+                        selected['uniqueid'] += 1
+                    return selected
+                stream = types.SimpleNamespace(read=read, process=types.SimpleNamespace(poll=lambda: None))
+                with mock.patch.object(M, 'capture', side_effect=capture), \
+                     mock.patch.object(M, 'trigger', return_value={'errno': 2, 'result': 0}) as trigger, \
+                     mock.patch.object(M.time, 'monotonic', side_effect=lambda: now[0]):
+                    with self.assertRaisesRegex(M.Rejected, 'original-event-owner-changed-before-query'):
+                        M.query(object(), object(), stream, SOURCE, TARGET, 1.0, lambda: 600)
+                trigger.assert_called_once()
+                self.assertEqual(len(reads), 1)
+
+    def test_trigger_limit_and_original_deadline_hold_under_unrelated_stream_load(self):
+        now, reads, captures = [0.0], [], []
+        unrelated = message()
+        unrelated['event']['proc_check']['target']['audit_token']['pid'] += 1
+        def read(timeout):
+            reads.append(timeout)
+            now[0] += 0.11
+            return [unrelated]
+        def capture(installer, library, pid):
+            captures.append(pid)
+            return dict(TARGET if pid == TARGET['pid'] else SOURCE)
+        stream = types.SimpleNamespace(read=read, process=types.SimpleNamespace(poll=lambda: None))
+        diagnostic = M.EventDiagnostics('pre-fixture-refused')
+        with mock.patch.object(M, 'capture', side_effect=capture), \
+             mock.patch.object(M, 'trigger', return_value={'errno': 2, 'result': 0}) as trigger, \
+             mock.patch.object(M.time, 'monotonic', side_effect=lambda: now[0]):
+            with self.assertRaisesRegex(M.Rejected, 'no-matching-exec-bound-event-before-deadline'):
+                M.query(object(), object(), stream, SOURCE, TARGET, 3.0, lambda: 600, diagnostic)
+        self.assertEqual(trigger.call_count, 24)
+        self.assertEqual(len(captures), 48)
+        self.assertEqual(len(reads), 28)
+        self.assertGreaterEqual(now[0], 3.0)
+        self.assertLess(now[0], 3.11)
+        self.assertEqual(diagnostic.record['trigger_attempts'], 24)
+        self.assertEqual(diagnostic.record['outcomes'], {'target-other-pid': 28})
+        self.assertNotIn('diagnostic_passed', diagnostic.record)
+
+
 class OriginalPipeAndJoin(unittest.TestCase):
     @staticmethod
     def native_capture_for(child):
