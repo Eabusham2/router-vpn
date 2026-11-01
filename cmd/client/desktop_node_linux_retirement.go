@@ -33,7 +33,7 @@ func (j *desktopLinuxNodeJournal) checkOperation(ctx context.Context, retiring *
 	if j == nil || ctx == nil || ctx.Err() != nil || j.ctx == nil || j.ctx.Err() != nil || j.closed ||
 		retiring.journal != j || !sameDesktopLinuxParentCapture(j.parent, retiring.parent) ||
 		!retiring.complete || !retiring.stopRequested.Load() || !retiring.retiring || !retiring.engineJoined ||
-		retiring.retirement == nil || retiring.closed || retiring.superseded || retiring.successor != nil {
+		retiring.retirement == nil || retiring.closed && (retiring.off == nil || !retiring.off.settled) || retiring.superseded || retiring.successor != nil {
 		return errors.New("Linux retirement journal requires its exact joined original transaction")
 	}
 	return j.parent.retirementCurrent(ctx)
@@ -112,6 +112,9 @@ func (j *desktopLinuxNodeJournal) checkRetirementAppend(ctx context.Context, t *
 	}
 	current := j.current.Record
 	if next.Phase == "intent" {
+		if next.Intent != nil && next.Intent.Action == "off" {
+			return t.checkProtectionOffIntent(ctx, next)
+		}
 		if !t.retired || t.selection.Policy != "on-connect" || next.Intent == nil || next.Intent.Action != "release" ||
 			current.Phase != "settled" || !reflect.DeepEqual(current.Committed, next.Committed) {
 			return errors.New("Linux retirement cannot create a prepare, successor or foreign release intent")
@@ -127,6 +130,8 @@ func (j *desktopLinuxNodeJournal) checkRetirementAppend(ctx context.Context, t *
 	}
 	if current.Phase == "intent" {
 		switch current.Intent.Action {
+		case "off":
+			return t.checkProtectionOffSettlement(ctx, next)
 		case "prepare":
 			if !reflect.DeepEqual(next.Committed, t.previous) {
 				return errors.New("Linux retired preparation cannot commit a new target")

@@ -33,7 +33,7 @@ import (
 var linuxHostTUNCases = []string{"on-connect", "home-lan", "wrong-node", "resolver-failure", "wrong-key", "stale-ready", "cancelled-proof",
 	"replaced-host", "request-ended", "shutdown", "always", "active-request-ended", "cancel-adoption", "active-profile-change",
 	"active-network-change", "active-command-change", "mtu-rollback", "mtu-commit", "mtu-stale-profile", "mtu-stale-network", "mtu-hold", "mtu-retire-undrained", "restore-sealed", "public-connect",
-	"cover-connect", "cover-replies-lost", "cover-wrong-node", "cover-no-replies", "cover-restore"}
+	"cover-connect", "cover-replies-lost", "cover-wrong-node", "cover-no-replies", "cover-restore", "public-off", "public-off-save-retry"}
 
 func linuxHostTUNCoverCase(scenario string) bool {
 	return scenario == "cover-connect" || scenario == "cover-replies-lost" || scenario == "cover-wrong-node" || scenario == "cover-no-replies" || scenario == "cover-restore"
@@ -44,7 +44,11 @@ func linuxHostTUNRestoreCase(scenario string) bool {
 }
 
 func linuxHostTUNPublicCase(scenario string) bool {
-	return scenario == "public-connect" || scenario == "cover-connect" || scenario == "cover-replies-lost"
+	return scenario == "public-connect" || scenario == "cover-connect" || scenario == "cover-replies-lost" || linuxHostTUNOffCase(scenario)
+}
+
+func linuxHostTUNOffCase(scenario string) bool {
+	return scenario == "public-off" || scenario == "public-off-save-retry"
 }
 
 func linuxHostTUNFailedReadyCase(scenario string) bool {
@@ -70,6 +74,7 @@ type linuxHostTUNResult struct {
 	Restore           *linuxHostTUNRestoreResult             `json:"restore,omitempty"`
 	Public            bool                                   `json:"public,omitempty"`
 	Cover             string                                 `json:"cover,omitempty"`
+	ProtectionOff     *linuxHostTUNOffResult                 `json:"protection_off,omitempty"`
 }
 
 func linuxHostTUNRendezvous(gate *os.File, expected byte) error {
@@ -789,7 +794,11 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				if linuxHostTUNCoverCase(scenario) {
 					wrongProofs = after.RouterQueries < expectedHTTP
 				}
-				if wrongProofs || after.DirectQueries != before.DirectQueries || http && (after.RawTCP <= before.RawTCP || after.PlainTCP <= before.PlainTCP) {
+				expectedDirect := before.DirectQueries
+				if linuxHostTUNOffCase(scenario) {
+					expectedDirect++ // The same controller proves ordinary traffic only after explicit Off.
+				}
+				if wrongProofs || after.DirectQueries != expectedDirect || http && (after.RawTCP <= before.RawTCP || after.PlainTCP <= before.PlainTCP) {
 					t.Fatal("installed Router proof used the direct LAN response or bypassed its exact encrypted graph", before, after)
 				}
 			}
@@ -810,7 +819,7 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				activation = "retained-after-request"
 			}
 			switch scenario {
-			case "active-request-ended", "public-connect", "cover-connect", "cover-replies-lost":
+			case "active-request-ended", "public-connect", "cover-connect", "cover-replies-lost", "public-off", "public-off-save-retry":
 				activation = "retained-after-request"
 			case "cancel-adoption":
 				activation = "rejected-adoption"
@@ -840,6 +849,16 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			}
 			if result.Public {
 				t.Log("verified installed host public Connect and Disconnect:", scenario)
+			}
+			if linuxHostTUNOffCase(scenario) {
+				off := result.ProtectionOff
+				if off == nil || !off.RetainedAlways || !off.NetworkReleased || !off.ProfileSaved || !off.JournalSettled ||
+					!off.ReplacementRejected || !off.ReplayRejected || off.SaveRetried != (scenario == "public-off-save-retry") {
+					t.Fatal("installed Off omitted exact Always retention, private persistence, retry or original native release", off)
+				}
+				t.Log("verified installed host saved Linux protection Off:", scenario)
+			} else if result.ProtectionOff != nil {
+				t.Fatal("installed Off result belongs to another original scenario")
 			}
 			if linuxHostTUNRestoreCase(scenario) {
 				restored := result.Restore

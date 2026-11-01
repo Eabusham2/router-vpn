@@ -55,6 +55,28 @@ func (a *app) retireNativeNodeForShutdownContext(ctx context.Context) error {
 	if !closing {
 		return errors.New("Linux terminal retirement requires the application's permanent shutdown latch")
 	}
+	// Finish only an already accepted Off on this retained session. Shutdown
+	// cannot invent a removal intent or adopt protection from a saved record.
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-parent.gate:
+	}
+	session := parent.session
+	parent.gate <- struct{}{}
+	if session != nil {
+		if err := session.enter(ctx); err != nil {
+			return err
+		}
+		var offErr error
+		if session.off != nil {
+			_, offErr = session.resumeProtectionOffLocked(ctx, session.off, true)
+		}
+		session.gate <- struct{}{}
+		if offErr != nil {
+			return offErr
+		}
+	}
 	// Join the outstanding original MTU lease before retiring its child or
 	// clearing cmd. Ordinary Stop cannot take over a closed admission lifetime,
 	// and a failed drain must retain both the native engine and lease for retry.

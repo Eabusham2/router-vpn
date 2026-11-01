@@ -63,7 +63,7 @@ func (a *app) captureDesktopNodeStop() (*desktopNodeStopCapture, error) {
 	// An unused or completely released session has no claim on a later legacy
 	// connection, including its terminal Stop. This read-only comparison uses
 	// the original retirement parent; it cannot reopen Node admission.
-	if session.active == nil && session.predecessor == nil && session.journalErr == nil {
+	if session.active == nil && session.predecessor == nil && session.off == nil && session.journalErr == nil {
 		if err := session.unclaimedStopLocked(ctx); err != nil {
 			return nil, err
 		}
@@ -94,7 +94,7 @@ func (a *app) captureDesktopNodeStop() (*desktopNodeStopCapture, error) {
 // The caller retains the original session gate and application operation lock.
 func (s *desktopLinuxNodeSession) unclaimedStopLocked(ctx context.Context) error {
 	current := func() error {
-		if s.closed || s.released || s.active != nil || s.predecessor != nil || s.journalErr != nil ||
+		if s.closed || s.released || s.active != nil || s.predecessor != nil || s.off != nil || s.journalErr != nil ||
 			s.parent == nil || s.parent.parent == nil {
 			return errors.New("Linux empty Stop dispatch lost its original unclaimed session")
 		}

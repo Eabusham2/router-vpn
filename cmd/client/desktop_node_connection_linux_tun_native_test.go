@@ -139,6 +139,12 @@ func linuxHostTUNPublicConnection(ctx context.Context, a *app, parent *desktopLi
 	if stop.Code != http.StatusOK || strings.TrimSpace(stop.Body.String()) != `{"ok":true}` {
 		return fmt.Errorf("installed public Disconnect failed its real handler: %d: %s", stop.Code, stop.Body.String())
 	}
+	if linuxHostTUNOffCase(scenario) {
+		result.ProtectionOff, err = linuxHostTUNPublicProtectionOff(ctx, a, session, host, scenario)
+		if err != nil {
+			return err
+		}
+	}
 	a.operationMu.Lock()
 	locked = true
 	if err := linuxHostTUNRestoreCheck(ctx, session, host, func() error {

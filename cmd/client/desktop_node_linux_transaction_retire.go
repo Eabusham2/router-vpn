@@ -268,7 +268,7 @@ func (t *desktopLinuxNodeTransaction) ReleaseOnDisconnect(ctx context.Context) e
 		return err
 	}
 	defer func() { t.gate <- struct{}{} }()
-	if !t.complete || !t.retired || !t.engineJoined || t.closed || t.successor != nil || t.superseded {
+	if !t.complete || !t.retired || !t.engineJoined || t.closed || t.successor != nil || t.superseded || t.off != nil {
 		return errors.New("Linux Node disconnect lost its exact joined original transaction")
 	}
 	if !t.nativeCommitted || t.selection.Policy == "always" {
@@ -327,6 +327,9 @@ func (t *desktopLinuxNodeTransaction) Close(ctx context.Context) error {
 	defer func() { t.gate <- struct{}{} }()
 	if t.closed && t.released {
 		return nil
+	}
+	if t.off != nil && !t.off.settled {
+		return errors.New("Linux Node Close retains its accepted unfinished saved-policy Off change")
 	}
 	if t.complete && (!t.retired || t.pending != nil || t.successor != nil ||
 		!t.superseded && t.nativeCommitted && t.head.Record.Committed.Target != nil) {

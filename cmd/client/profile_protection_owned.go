@@ -15,6 +15,7 @@ var errDesktopProtectionOffUnsaved = errors.New("kill switch is off, but its pre
 
 type profileProtectionCapture struct {
 	slot           *desktopNodeProtectionSlot
+	platform       *desktopPlatformProtectionCapture
 	view           desktopNodeProtectionView
 	revision       string
 	resultRevision string
@@ -33,12 +34,20 @@ func (a *app) captureProfileProtection(profile common.RouterProfile) profileProt
 	if slot != nil {
 		capture.view = slot.view()
 		capture.token = capture.view.token(capture.revision)
+	} else {
+		capture.platform = a.capturePlatformProfileProtection()
+		if capture.platform != nil {
+			capture.token = capture.platform.token(capture.revision)
+		}
 	}
 	return capture
 }
 
 func protectionSettingsWithCapture(profile common.RouterProfile, capture profileProtectionCapture) profileProtectionSettings {
 	result := profileProtectionSettings{ProfileID: profile.ID, ProfileToken: capture.token, KillSwitchPolicy: desktopOwnedNodeProtectionPolicy(profile)}
+	if capture.platform != nil {
+		return capture.platform.settings(result)
+	}
 	if capture.slot == nil {
 		return result
 	}
@@ -107,7 +116,7 @@ func (a *app) guardDesktopProtectionOffPending(caller ...context.Context) error 
 	if a.desktopProtectionOffPending() {
 		return errors.New("finish the pending Kill Switch Off change before starting a connection or changing node settings")
 	}
-	return nil
+	return a.guardPlatformProtectionOffPending()
 }
 
 // Broader settings editors cannot silently turn a retained native policy into
@@ -116,7 +125,7 @@ func (a *app) guardDesktopProtectionPreference(policy string) error {
 	if strings.EqualFold(strings.TrimSpace(policy), "off") && a.retainedDesktopNodeProtection() {
 		return errors.New("use the Kill switch control to finish turning retained protection off before saving Off here")
 	}
-	return nil
+	return a.guardPlatformProtectionPreference(policy)
 }
 
 func (a *app) capturedProtectionOffCurrent(slot *desktopNodeProtectionSlot, capture *desktopNodeProtectionOff, cleanup bool) bool {

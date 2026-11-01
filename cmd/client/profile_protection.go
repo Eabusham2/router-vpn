@@ -87,6 +87,9 @@ func (a *app) profileProtectionSettings(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "kill_switch_policy must be off, on-connect, or always", http.StatusBadRequest)
 		return
 	}
+	if a.handlePlatformProfileProtection(w, r, profile, capture, q.KillSwitchPolicy) {
+		return
+	}
 	if capture.slot != nil {
 		view := capture.slot.view()
 		if view.token(capture.revision) != capture.token || view.PendingOff && q.KillSwitchPolicy != "off" {
@@ -117,6 +120,7 @@ func (a *app) profileProtectionSettings(w http.ResponseWriter, r *http.Request) 
 	a.mu.Lock()
 	current, exists := a.profileByIDLocked(profile.ID)
 	if !exists || a.profiles.SelectedID != profile.ID || profileStartupSettingsToken(current) != capture.revision || a.nodeProtection != capture.slot ||
+		!capture.platform.currentAppLocked(a) ||
 		a.closing || a.cmd != nil || r.Context().Err() != nil || profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		a.mu.Unlock()
 		http.Error(w, "node or connection changed; refresh when disconnected", http.StatusConflict)

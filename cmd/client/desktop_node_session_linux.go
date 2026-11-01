@@ -23,6 +23,7 @@ type desktopLinuxNodeSession struct {
 	journalErr  error
 	active      *desktopLinuxNodeHost
 	predecessor *desktopLinuxNodeTransaction
+	off         *desktopLinuxNodeProtectionOff
 	closed      bool
 	released    bool
 }
@@ -110,7 +111,7 @@ func (s *desktopLinuxNodeSession) startWithVerifier(ctx context.Context, host *d
 	if err := s.currentLocked(ctx); err != nil {
 		return err
 	}
-	if s.active != nil || host == nil || verify == nil || !sameDesktopLinuxParentCapture(s.parent, host.parent) {
+	if s.active != nil || s.off != nil || host == nil || verify == nil || !sameDesktopLinuxParentCapture(s.parent, host.parent) {
 		return errors.New("Linux Node session cannot replace an unjoined or foreign host")
 	}
 	if err := host.enter(ctx); err != nil {
@@ -191,6 +192,13 @@ func (s *desktopLinuxNodeSession) Retire(ctx context.Context, host *desktopLinux
 		return err
 	}
 	defer func() { s.gate <- struct{}{} }()
+	if s.off != nil {
+		if host != nil || !disconnect {
+			return errors.New("finish the original pending Linux Kill Switch Off change before another retirement")
+		}
+		_, err := s.resumeProtectionOffLocked(ctx, s.off, true)
+		return err
+	}
 	if err := s.currentLocked(ctx); err != nil {
 		return err
 	}

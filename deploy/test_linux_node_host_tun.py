@@ -35,7 +35,8 @@ CHILD = load('linux_installed_host_child', 'test_linux_node_child_tun.py')
 TRANSACTION = load('linux_installed_host_transaction', 'test_linux_node_transaction.py')
 BUILD, NODE, GUARD = CHILD.BUILD, CHILD.NODE, CHILD.GUARD
 MTU_CASES = ('mtu-rollback', 'mtu-commit', 'mtu-stale-profile', 'mtu-stale-network', 'mtu-hold', 'mtu-retire-undrained')
-PUBLIC_CASES = ('public-connect', 'cover-connect', 'cover-replies-lost')
+OFF_CASES = ('public-off', 'public-off-save-retry')
+PUBLIC_CASES = ('public-connect', 'cover-connect', 'cover-replies-lost', *OFF_CASES)
 RESTORE_CASES = ('restore-sealed', 'cover-restore')
 COVER_CASES = ('cover-connect', 'cover-replies-lost', 'cover-wrong-node', 'cover-no-replies', 'cover-restore')
 ACTIVE_CASES = ('active-request-ended', 'cancel-adoption', 'active-profile-change', 'active-network-change', 'active-command-change', *MTU_CASES, *RESTORE_CASES, *PUBLIC_CASES)
@@ -67,6 +68,8 @@ def checked_sources(source):
                 'cmd/client/desktop_node_session_linux.go',
                 'cmd/client/desktop_node_restore_linux.go', 'cmd/client/desktop_node_restore_linux_tun_native_test.go',
                 'cmd/client/desktop_node_connection_linux.go', 'cmd/client/desktop_node_connection_linux_tun_native_test.go',
+                'cmd/client/profile_protection_platform_linux.go', 'cmd/client/desktop_node_protection_off_linux.go',
+                'cmd/client/desktop_node_protection_off_linux_tun_native_test.go',
                 'cmd/client/bundled_native.go', 'cmd/client/operation_guard.go'}
     if not required.issubset(app):
         raise ValueError('Installed Linux host gate lost its real verifier, startup, proof or retained native ownership')
@@ -119,6 +122,8 @@ def check_verdict(output, case=None):
             raise ValueError('Installed Linux host omitted its real public Connect and Disconnect composition: ' + value)
         if value in COVER_CASES and 'verified installed host native cover: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its captured native cover activation/failure/retirement: ' + value)
+        if value in OFF_CASES and 'verified installed host saved Linux protection Off: ' + value + '\n' not in output.replace('\r\n', '\n'):
+            raise ValueError('Installed Linux host omitted its exact Always retention, saved-policy Off and native release: ' + value)
 
 
 def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case):

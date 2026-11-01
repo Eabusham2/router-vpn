@@ -48,6 +48,7 @@ type desktopLinuxNodeTransaction struct {
 	created                *mobiletor.DesktopLinuxNodeCreationRecord
 	prepared               *linuxprotection.NodePreparedRecord
 	retirement             *linuxprotection.NodeRetirementRecord
+	off                    *desktopLinuxNodeProtectionOff
 
 	complete, served, admitted, retiring  bool
 	nativeCommitted, engineJoined         bool

@@ -327,7 +327,7 @@ func linuxHostTUNProfile(peer *linuxHostTUNPeer, scenario string) common.RouterP
 		profile.HomeLANAccess = true
 		profile.HomeLANCIDRs = []string{"10.77.0.0/24", "192.168.210.0/30"}
 	}
-	if scenario == "always" {
+	if scenario == "always" || linuxHostTUNOffCase(scenario) {
 		profile.KillSwitchPolicy = "always"
 	}
 	if linuxHostTUNCoverCase(scenario) {
