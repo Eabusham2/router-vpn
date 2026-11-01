@@ -365,7 +365,7 @@ def execute(source: Path, go='go', *, env=None):
     sudo = UID.privilege_tool()
     compiler, captured = UID.compiler_toolchain(source, go, captured)
     namespace_output = UID.run([sys.executable, str(ROOT/'deploy/test_linux_guardian_namespace.py')],
-                               cwd=ROOT, timeout=90, sudo=sudo)
+                               cwd=ROOT, timeout=210, sudo=sudo)
     print(namespace_output, end='' if namespace_output.endswith('\n') else '\n')
     with tempfile.TemporaryDirectory(prefix='routervpn-linux-guardian-') as directory:
         binary = Path(directory) / 'linux-guardian.test'

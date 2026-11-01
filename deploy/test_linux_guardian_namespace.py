@@ -283,7 +283,11 @@ def main():
     if sudo is not None:
         command = [sudo, '-n', '--', *command]
     before = Path('/proc/self/mountinfo').read_text()
-    output = GUARDIAN.UID.run(command, cwd=ROOT, timeout=60, sudo=sudo)
+    # Eight separate namespace/account lifecycles include their original
+    # teardown and executed defect controls. Native ARM64 exhausted the old
+    # 60-second aggregate after earlier cases passed; retain a finite suite
+    # budget without changing any process-group cleanup or case verdict.
+    output = GUARDIAN.UID.run(command, cwd=ROOT, timeout=180, sudo=sudo)
     if Path('/proc/self/mountinfo').read_text() != before:
         raise AssertionError('Guardian namespace regression changed host mounts')
     print(output, end='' if output.endswith('\n') else '\n')
