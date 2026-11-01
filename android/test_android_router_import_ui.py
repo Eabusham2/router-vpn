@@ -6,12 +6,14 @@ validation, atomic store logic, import capture, full statistics and ranking are
 the real classes; no VPN is connected and no imported credentials are printed.
 """
 from pathlib import Path
+import os
 import importlib.util
 import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 JAVA = ROOT / 'android/app/src/main/java/com/eabusham/routervpn'
+JSON_JAR=os.environ.get('ANDROID_JSON_JAR','/usr/share/java/com.android.json.jar')
 SOURCE = (JAVA / 'ProductActivity.java').read_text()
 
 def module(name, filename):
@@ -76,7 +78,7 @@ public final class RouterImportUITest extends android.app.Activity implements Au
   }
  }
  static void rankingAndPolicies()throws Exception{
-  try(RouterImportUITest h=new RouterImportUITest()){var a=h.nodeStore.importBundle(bundle("a".repeat(64),"Slow"));var b=h.nodeStore.importBundle(bundle("b".repeat(64),"Fast"));for(var node:List.of(a,b)){double n=node==a?20:3;AndroidNodeStatistics.save(node,new AndroidNodeStatistics.Record(node.id,AndroidNodeStatistics.source(node),node.endpoint,"direct",System.currentTimeMillis(),n,n,n,n,n,n,50,0));}h.nodeStore.select(a.id);h.showNodeSort();visible(5).clickItem(3);check(h.prefs().getString("node_sort","").equals(AndroidUnifiedNodeCatalog.SORT_LATENCY)&&h.shownNodes==1,"Lowest latency order is not reachable");h.showNodeSort();visible(5).clickItem(4);check(h.nodeStore.activeId().equals(b.id)&&h.message.contains("Press Connect"),"Lowest latency did not select actual durable winner separately");h.nodeStore.select(a.id);h.showNodeSort();AlertDialog old=visible(5);Files.writeString(b.file.toPath(),Files.readString(b.file.toPath())+" ");old.clickItem(4);check(h.nodeStore.activeId().equals(a.id)&&h.message.contains("at least two"),"stale record was selected through old sorting dialog");}
+  try(RouterImportUITest h=new RouterImportUITest()){var a=h.nodeStore.importBundle(bundle("a".repeat(64),"Slow"));var b=h.nodeStore.importBundle(bundle("b".repeat(64),"Fast"));for(var node:List.of(a,b)){double n=node==a?20:3;AndroidNodeStatistics.save(node,new AndroidNodeStatistics.Record(node.id,AndroidNodeStatistics.source(node),node.endpoint,"direct",System.currentTimeMillis(),n,n,n,n,n,n,50,0));}h.nodeStore.select(a.id);h.showNodeSort();visible(6).clickItem(3);check(h.prefs().getString("node_sort","").equals(AndroidUnifiedNodeCatalog.SORT_LATENCY)&&h.shownNodes==1,"Lowest latency order is not reachable");h.showNodeSort();visible(6).clickItem(4);check(h.nodeStore.activeId().equals(b.id)&&h.message.contains("Press Connect"),"Lowest latency did not select actual durable winner separately");h.showNodeSort();visible(6).clickItem(5);check(h.prefs().getString("node_sort","").equals(AndroidUnifiedNodeCatalog.SORT_MOST_USED)&&h.nodeStore.activeId().equals(b.id),"Most used menu changed selection or lost saved order");h.nodeStore.select(a.id);h.showNodeSort();AlertDialog old=visible(6);Files.writeString(b.file.toPath(),Files.readString(b.file.toPath())+" ");old.clickItem(4);check(h.nodeStore.activeId().equals(a.id)&&h.message.contains("at least two"),"stale record was selected through old sorting dialog");}
   try(RouterImportUITest h=new RouterImportUITest()){h.prefs().edit().putString(SELECTED_KIND,"external").putString(SELECTED_ID,"exit").apply();for(String protocol:List.of("shadowsocks","tor"))for(String value:new String[]{null,"","  ","home","rescue","custom"}){h.exitStore.entry.protocol=protocol;JSONObject policy=value==null?null:new JSONObject().put("dns_mode",value);h.exitStore.entry.policy=policy;h.exitStore.entry.torPolicy=policy;h.refreshDnsSelection();check(h.dnsSpinner.getSelectedItemPosition()==("rescue".equals(value)?6:"custom".equals(value)?2:0),"missing external DNS did not default Home or explicit choice lost: "+protocol+"/"+value);}
    AndroidConnectionProfileStore.path.entry=h.nodeStore.importBundle(bundle("a".repeat(64),"Entry"));AndroidConnectionProfileStore.path.exit=h.exitStore.entry;AndroidConnectionProfileStore.path.entryMode="max-wg";String[] execution={"local","server","auto"},labels={"Local","Server","Compare"};for(boolean ordinary:new boolean[]{false,true}){if(ordinary){AndroidConnectionProfileStore.path.entry=null;AndroidConnectionProfileStore.path.ordinaryEntry=new AndroidStandardExitStore.Entry();AndroidConnectionProfileStore.path.ordinaryEntry.name="Custom entry";}for(int i=0;i<execution.length;i++){AndroidConnectionProfileStore.path.execution=execution[i];h.refreshMultihopSummary();check(h.multihopHint.getText().toString().startsWith((ordinary?"Custom entry":"Entry")+" → "),"external entry summary lost "+ordinary);check(h.multihopHint.getText().toString().endsWith(labels[i]),"external execution summary lost "+labels[i]);}}AndroidConnectionProfileStore.path.entry=null;AndroidConnectionProfileStore.path.ordinaryEntry=null;h.refreshMultihopSummary();check(h.multihopHint.getText().toString().startsWith("Direct"),"direct external path summary changed");}
  }
@@ -106,9 +108,9 @@ def run(overrides=None):
         for name in T.PRODUCTION:
             (root/'com/eabusham/routervpn'/f'{name}.java').write_text((JAVA/(name+'.java')).read_text())
         (root/'com/eabusham/routervpn/RouterImportUITest.java').write_text(harness)
-        build=subprocess.run(['javac','--release','17','-cp','/usr/share/java/com.android.json.jar','-d',str(root),*map(str,root.rglob('*.java'))],capture_output=True,text=True,timeout=45)
+        build=subprocess.run(['javac','--release','17','-cp',JSON_JAR,'-d',str(root),*map(str,root.rglob('*.java'))],capture_output=True,text=True,timeout=45)
         assert build.returncode==0,build.stderr
-        return subprocess.run(['java','-cp',str(root)+':/usr/share/java/com.android.json.jar','com.eabusham.routervpn.RouterImportUITest'],capture_output=True,text=True,timeout=25)
+        return subprocess.run(['java','-cp',os.pathsep.join((str(root),JSON_JAR)),'com.eabusham.routervpn.RouterImportUITest'],capture_output=True,text=True,timeout=25)
 
 def main():
     assert 'if(requestCode==IMPORT_ROUTER_BUNDLE){receiveRouterBundle(resultCode,data);return;}' in SOURCE

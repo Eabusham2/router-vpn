@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Activity-owned UI bridge over app-process-owned VPN engines. */
 final class AndroidUnifiedConnectionController implements AutoCloseable {
-    interface Callback { void progress(String message); void finished(boolean ok, String message); default void owned(String homeSession) {} default void superseded() {} default void validate() throws Exception {} }
+    interface Callback { void progress(String message); void finished(boolean ok, String message); default void owned(String homeSession) {} default void superseded() {} default void validate() throws Exception {} default boolean recordsNodeUsage() { return false; } }
     // Activity request codes use only the lower 16 bits. This reserved range is
     // disjoint from import/via-entry and legacy native screens. Never reuse a
     // code in this process: a cancelled prompt may return after its successor.
@@ -32,8 +32,9 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         final String nonce=java.util.UUID.randomUUID().toString().replace("-","");
         final String selection,request;
         final int requestCode;
+        final AndroidNodeUsage.Attempt usage;
         Object attachment;
-        PermissionOwner(String selection,String request,int requestCode,Object attachment){this.selection=selection;this.request=request;this.requestCode=requestCode;this.attachment=attachment;}
+        PermissionOwner(String selection,String request,int requestCode,Object attachment,AndroidNodeUsage.Attempt usage){this.selection=selection;this.request=request;this.requestCode=requestCode;this.attachment=attachment;this.usage=usage;}
     }
     private static PermissionOwner permissionOwner;
 
@@ -561,7 +562,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         try{
             AndroidConnectionSelection.requireCurrent(activity,nodeStore,selection);
             Intent permission=VpnService.prepare(activity);
-            pendingPermission=createPermission(selection,pendingIdentity(),permission!=null,permissionAttachment);
+            pendingPermission=createPermission(selection,pendingIdentity(),permission!=null,permissionAttachment,captureUsageIntent(callback));
             if(permission==null){startPending();return;}
             callback.progress("Waiting for Android VPN permission for "+label+"…");
             if(pendingCallback==callback&&ownsPermission(pendingPermission,permissionAttachment))activity.startActivityForResult(permission,pendingPermission.requestCode);
@@ -575,7 +576,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         try{if(invalid!=null)throw invalid;AndroidConnectionSelection.requireCurrent(activity,nodeStore,permission.selection);if(isActiveOrTransitioning())throw new IllegalStateException("Another path owns the pending connection.");callback.validate();if(startup!=null){startup.requireCurrent(activity,nodeStore,this);startup.dispatched();}}catch(Exception stale){if(startup!=null)startup.cancel();callback.finished(false,safe(stale));return;}
         if("multihop".equals(mode)){
             if(entry==null||exit==null||entry.id.equals(exit.id)||exitMode.isEmpty()){callback.finished(false,"Multihop selection expired; choose entry and exit again.");return;}
-            AndroidMultihopRuntime.Callback bridge=new AndroidMultihopRuntime.Callback(){@Override public void owned(String session){activity.runOnUiThread(()->callback.owned(session));}@Override public void progress(String message){activity.runOnUiThread(()->callback.progress(message));}@Override public void finished(boolean ok,String message){activity.runOnUiThread(()->callback.finished(ok,message));}};
+            AndroidMultihopRuntime.Callback bridge=new AndroidMultihopRuntime.Callback(){@Override public void owned(String session){if(permission.usage!=null)permission.usage.owned(activity,session);activity.runOnUiThread(()->callback.owned(session));}@Override public void progress(String message){activity.runOnUiThread(()->callback.progress(message));}@Override public void finished(boolean ok,String message){String result=usageResult(permission,ok,message);activity.runOnUiThread(()->callback.finished(ok,result));}};
             if(startup!=null&&startup.lastMultihop!=null)multihop.connectLast(entry,exit,startup.lastMultihop,startup.idleOwner(),bridge);
             else multihop.connect(entry,exit,exitMode,execution,entryMode,bridge);
             return;
@@ -586,12 +587,27 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
                 else{requireExternalCapture(entry,standardExit,externalDirect,entryDigest,externalDigest);if(!externalDirect&&!NativeSingBoxController.nativeMultihopEntry(entryMode))throw new IllegalArgumentException("The captured entry mode changed.");}
             }
             catch(Exception changed){callback.finished(false,"The captured external path changed during Android permission; select it again.");return;}
-            AndroidStandardExitRuntime.Callback bridge=new AndroidStandardExitRuntime.Callback(){@Override public void owned(String homeSession){activity.runOnUiThread(()->callback.owned(homeSession));}@Override public void progress(String message){activity.runOnUiThread(()->callback.progress(message));}@Override public void finished(boolean ok,String message){activity.runOnUiThread(()->callback.finished(ok,message));}};
+            AndroidStandardExitRuntime.Callback bridge=new AndroidStandardExitRuntime.Callback(){@Override public void owned(String homeSession){if(permission.usage!=null)permission.usage.owned(activity,homeSession);activity.runOnUiThread(()->callback.owned(homeSession));}@Override public void progress(String message){activity.runOnUiThread(()->callback.progress(message));}@Override public void finished(boolean ok,String message){String result=usageResult(permission,ok,message);activity.runOnUiThread(()->callback.finished(ok,result));}};
             if(ordinaryEntry!=null)runtime.standardExit.connectOrdinary(ordinaryEntry,standardExit,execution,bridge);else if(externalDirect)runtime.standardExit.connectDirect(standardExit,bridge);else if(startup!=null&&!startup.lastExecution.isEmpty())runtime.standardExit.restoreCaptured(entry.file,standardExit,entryMode,execution,startup.lastExecution,bridge);else runtime.standardExit.connect(entry.file,standardExit,entryMode,execution,bridge);return;
         }
         final File bundle;try{bundle=node!=null?node.file:activeBundle();if(bundle==null||!bundle.isFile()||bundle.length()<=0)throw new IllegalStateException("Requested Router VPN node bundle is missing.");}catch(Exception error){callback.finished(false,safe(error));return;}
-        AndroidModeOrchestrator.Callback bridge=new AndroidModeOrchestrator.Callback(){@Override public void owned(String session){activity.runOnUiThread(()->callback.owned(session));}@Override public void proved(String session,String raw,String source){if(node==null||startup!=null)AndroidStartupPolicy.recordProven(activity,nodeStore,bundle,session,raw,source);}@Override public void progress(String message){activity.runOnUiThread(()->callback.progress(message));}@Override public void finished(boolean ok,String modeId,String message){activity.runOnUiThread(()->callback.finished(ok,message));}};
+        AndroidModeOrchestrator.Callback bridge=new AndroidModeOrchestrator.Callback(){@Override public void owned(String session){if(permission.usage!=null)permission.usage.owned(activity,session);activity.runOnUiThread(()->callback.owned(session));}@Override public void proved(String session,String raw,String source){if(node==null||startup!=null)AndroidStartupPolicy.recordProven(activity,nodeStore,bundle,session,raw,source);}@Override public void progress(String message){activity.runOnUiThread(()->callback.progress(message));}@Override public void finished(boolean ok,String modeId,String message){String result=usageResult(permission,ok,message);activity.runOnUiThread(()->callback.finished(ok,result));}};
         if(startup!=null)orchestrator.startup(bundle,startup.mode,startup.lastRaw,startup.source,bridge);else if("smart-auto".equals(mode))orchestrator.auto(bundle,true,bridge);else if("auto".equals(mode))orchestrator.auto(bundle,false,bridge);else if("all".equals(mode))orchestrator.all(bundle,bridge);else if(mode.startsWith("custom:")){if(layers.isEmpty())callback.finished(false,"CUSTOM requires at least one saved layer.");else orchestrator.custom(bundle,layers,bridge);}else orchestrator.logical(bundle,mode,bridge);
+    }
+
+    // Usage intent is part of the process-owned permission receipt. A recreated
+    // Activity cannot promote a test/restoration/startup request into a user use.
+    private AndroidNodeUsage.Attempt captureUsageIntent(Callback callback){
+        if(!callback.recordsNodeUsage()||pendingStartup!=null)return null;
+        try{
+            if("multihop".equals(pendingMode))return AndroidNodeUsage.multihop(pendingEntry,pendingExit,pendingEntryMode);
+            if("external".equals(pendingMode))return AndroidNodeUsage.external(activity,pendingEntry,pendingOrdinaryEntry,pendingStandardExit,pendingExternalDirect,pendingEntryMode);
+            AndroidNodeStore.Node node=pendingNode!=null?pendingNode:findNode(nodeStore.activeId());
+            return AndroidNodeUsage.router(node);
+        }catch(Exception unavailable){return AndroidNodeUsage.unavailable();}
+    }
+    private String usageResult(PermissionOwner permission,boolean success,String message){
+        return message+(permission.usage==null?"":permission.usage.finished(activity,permission.nonce,success));
     }
 
     private AndroidNodeStore.Node findNode(String id){if(id==null||id.isEmpty())return null;try{for(AndroidNodeStore.Node node:nodeStore.list())if(id.equals(node.id))return node;}catch(Exception ignored){}return null;}
@@ -609,10 +625,10 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         if(!ownsPermission(pendingPermission,permissionAttachment)||!pendingPermission.request.equals(pendingIdentity()))
             throw new IllegalStateException("The captured Android permission owner was cancelled, consumed or changed.");
     }
-    private static synchronized PermissionOwner createPermission(String selection,String request,boolean prompt,Object attachment){
+    private static synchronized PermissionOwner createPermission(String selection,String request,boolean prompt,Object attachment,AndroidNodeUsage.Attempt usage){
         if(permissionOwner!=null&&permissionOwner.attachment!=null)throw new IllegalStateException("Another screen owns Android VPN permission. Finish or cancel it first.");
         if(prompt&&nextPermissionCode>0xffff)throw new IllegalStateException("Android permission request identities are exhausted. Reopen the app in a new process before connecting.");
-        return permissionOwner=new PermissionOwner(selection,request,prompt?nextPermissionCode++:0,attachment);
+        return permissionOwner=new PermissionOwner(selection,request,prompt?nextPermissionCode++:0,attachment,usage);
     }
     private static synchronized PermissionOwner restorePermission(String nonce,String selection,Object attachment){
         if(permissionOwner==null||permissionOwner.attachment!=null||!permissionOwner.nonce.equals(nonce)||!permissionOwner.selection.equals(selection))

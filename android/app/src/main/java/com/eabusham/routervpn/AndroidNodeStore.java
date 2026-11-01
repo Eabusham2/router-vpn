@@ -149,6 +149,8 @@ final class AndroidNodeStore {
 
     String activeId() { return preferences().getString(ACTIVE_ID, ""); }
 
+    File usageFile() { return new File(context.getFilesDir(), "node-usage-v1.json"); }
+
     synchronized SelectionSnapshot snapshotSelection() throws Exception {
         return new SelectionSnapshot(activeId(), snapshotOptional(activeBundleFile()));
     }

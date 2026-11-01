@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 base = ROOT / "android/app/src/main/java/com/eabusham/routervpn"
@@ -19,7 +20,9 @@ for marker in (
     "perform a fallible chmod/stat after commit",
 ):
     assert marker in helper, f"Android private-file primitive lost {marker}"
-writer = helper[helper.index("    static void write("):helper.index("    static void remove(")]
+for signature in ("ensurePrivateDirectory", "read", "write", "remove"):
+    assert re.search(r"static synchronized \S+ " + signature + r"\(", helper), f"{signature} lost the shared source/adoption I/O monitor"
+writer = helper[helper.index("    static synchronized void write("):helper.index("    static synchronized void remove(")]
 rename_tail = writer.split("Os.rename(temporary.getAbsolutePath(), target.getAbsolutePath())", 1)[1]
 assert "Os.chmod(target.getAbsolutePath()" not in rename_tail
 assert "target.delete()" not in helper

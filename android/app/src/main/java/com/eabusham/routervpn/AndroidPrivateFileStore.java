@@ -16,7 +16,7 @@ import java.util.Locale;
 final class AndroidPrivateFileStore {
     private static final SecureRandom RANDOM = new SecureRandom();
 
-    static void ensurePrivateDirectory(File directory) throws Exception {
+    static synchronized void ensurePrivateDirectory(File directory) throws Exception {
         if (directory == null) throw new IllegalStateException("Private state directory is unavailable.");
         if (!directory.exists() && !directory.mkdirs()) throw new IllegalStateException("Cannot create private state directory.");
         StructStat stat = Os.lstat(directory.getAbsolutePath());
@@ -30,7 +30,7 @@ final class AndroidPrivateFileStore {
         }
     }
 
-    static byte[] read(File target, int maximumBytes) throws Exception {
+    static synchronized byte[] read(File target, int maximumBytes) throws Exception {
         if (target == null || maximumBytes <= 0) throw new IllegalArgumentException("Private state read limit is invalid.");
         StructStat before = requirePrivateRegular(target, maximumBytes, true);
         try (FileInputStream in = new FileInputStream(target); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
@@ -52,7 +52,7 @@ final class AndroidPrivateFileStore {
         }
     }
 
-    static void write(File target, byte[] bytes, int maximumBytes) throws Exception {
+    static synchronized void write(File target, byte[] bytes, int maximumBytes) throws Exception {
         if (target == null || bytes == null || bytes.length <= 0 || bytes.length > maximumBytes) {
             throw new IllegalArgumentException("Private state payload is invalid.");
         }
@@ -82,7 +82,7 @@ final class AndroidPrivateFileStore {
         }
     }
 
-    static void remove(File target, int maximumBytes) throws Exception {
+    static synchronized void remove(File target, int maximumBytes) throws Exception {
         if (target == null) return;
         try {
             StructStat before = requirePrivateRegular(target, maximumBytes, true);

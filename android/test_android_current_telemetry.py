@@ -6,11 +6,13 @@ all capture, HTTP framing, token ordering, cancellation, statistics and ranking
 logic below is the shipping Java. No public service, VPN or fabricated RTT.
 """
 from pathlib import Path
+import os
 import subprocess
 import tempfile
 
 ROOT=Path(__file__).resolve().parents[1]
 JAVA=ROOT/'android/app/src/main/java/com/eabusham/routervpn'
+JSON_JAR=os.environ.get('ANDROID_JSON_JAR','/usr/share/java/com.android.json.jar')
 SOURCES={}
 def stub(package,name,body):
     SOURCES[package.replace('.','/')+'/'+name+'.java']='package '+package+';public '+body
@@ -41,6 +43,10 @@ stub(APP,'AndroidPrivateFileStore','class AndroidPrivateFileStore {static void e
 stub(APP,'AndroidVpnMutationGuard','class AndroidVpnMutationGuard {static boolean busy;static boolean isBusy(android.content.Context c){return busy;}}')
 stub(APP,'AndroidHomeStateStore','class AndroidHomeStateStore {static class Snapshot {String sessionId="session-a",phase="connected",pathProof="passed",logicalMode="raw-tunnel",runtimeMode="wg",actualBase="wg",activeNodeId="",activeEntryId="",activeEntryMode="wg",activeExitId="",activeExternalId="";long pathGeneration=1;boolean connected=true;}static Snapshot home=new Snapshot();static Snapshot snapshot(android.content.Context c){return home;}}')
 stub(APP,'AndroidStandardExitStore','class AndroidStandardExitStore {static class Entry{String id,name,server,protocol,expectedPublicIp;int serverPort;}java.util.List<Entry> list(){return java.util.List.of();}}')
+# This telemetry fixture never adopts user connections or loads a usage sidecar.
+# The complete recorder/controller/private-store composition runs separately in
+# test_android_node_usage.py; preserve this fixture's independent latency scope.
+stub(APP,'AndroidNodeUsage','class AndroidNodeUsage {static final class Metric{int count;boolean available=true;String time="";String lastUsedAt(){return time;}}static Metric routerMetric(AndroidNodeStore.Node n,org.json.JSONObject p){Metric m=new Metric();if(p!=null){m.count=Math.max(0,p.optInt("use_count",0));m.time=p.optString("last_used_at","");}return m;}static Metric externalMetric(java.io.File f,AndroidStandardExitStore.Entry e){return new Metric();}}')
 stub(APP,'NativeSingBoxController','class NativeSingBoxController {static final String PREFS="runtime",STATE_KEY="state";String state="DOWN";String getState(){return state;}}')
 stub(APP,'NativeXrayController','class NativeXrayController {String state="DOWN";String getState(){return state;}}')
 stub(APP,'AndroidRuntimeRegistry','class AndroidRuntimeRegistry {static AndroidRuntimeRegistry instance;NativeWireGuardController wireGuard;NativeAmneziaWGController amneziaWG;NativeSingBoxController singBox=new NativeSingBoxController();NativeXrayController xray=new NativeXrayController();static AndroidRuntimeRegistry get(android.content.Context c){return instance;}}')
@@ -186,9 +192,9 @@ def run(overrides=None,group=None):
             path=root/'com/eabusham/routervpn'/f'{name}.java';path.write_text((overrides or {}).get(name,(JAVA/(name+'.java')).read_text()))
         (root/'com/eabusham/routervpn/CurrentTelemetryTest.java').write_text(HARNESS)
         files=[str(p) for p in root.rglob('*.java')]
-        build=subprocess.run(['javac','-cp','/usr/share/java/com.android.json.jar','-d',str(root),*files],capture_output=True,text=True,timeout=60)
+        build=subprocess.run(['javac','-cp',JSON_JAR,'-d',str(root),*files],capture_output=True,text=True,timeout=60)
         assert build.returncode==0,build.stderr
-        return subprocess.run(['java','-ea','-cp',str(root)+':/usr/share/java/com.android.json.jar','com.eabusham.routervpn.CurrentTelemetryTest',*([group] if group else [])],capture_output=True,text=True,timeout=35)
+        return subprocess.run(['java','-ea','-cp',os.pathsep.join((str(root),JSON_JAR)),'com.eabusham.routervpn.CurrentTelemetryTest',*([group] if group else [])],capture_output=True,text=True,timeout=35)
 
 def main():
     result=run();assert result.returncode==0,result.stdout+result.stderr;print(result.stdout.strip())

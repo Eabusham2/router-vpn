@@ -25,20 +25,21 @@ final class AndroidUnifiedNodeCatalog {
     static final String SORT_LAST_USED = "last-used";
     static final String SORT_LATENCY = "latency";
     static final String SORT_NAME = "name";
+    static final String SORT_MOST_USED = "most-used";
 
     static final class Item {
         final String kind, id, name, endpoint, protocol, expectedPublicIp, location, lastUsedAt;
         final Double latitude, longitude, latencyMedianMs, latencyP90Ms;
         final int latencySamples, useCount;
-        final boolean current;
+        final boolean current,usageAvailable;
         final File routerBundle;
         Item(String kind,String id,String name,String endpoint,String protocol,String expectedPublicIp,String location,
              Double latitude,Double longitude,Double latencyMedianMs,Double latencyP90Ms,int latencySamples,int useCount,
-             String lastUsedAt,boolean current,File routerBundle){
+             String lastUsedAt,boolean current,File routerBundle,boolean usageAvailable){
             this.kind=kind;this.id=id;this.name=name;this.endpoint=endpoint;this.protocol=protocol;
             this.expectedPublicIp=expectedPublicIp;this.location=location;this.latitude=latitude;this.longitude=longitude;
             this.latencyMedianMs=latencyMedianMs;this.latencyP90Ms=latencyP90Ms;this.latencySamples=latencySamples;
-            this.useCount=useCount;this.lastUsedAt=lastUsedAt;this.current=current;this.routerBundle=routerBundle;
+            this.useCount=useCount;this.lastUsedAt=lastUsedAt;this.current=current;this.routerBundle=routerBundle;this.usageAvailable=usageAvailable;
         }
         boolean isRouterVpn(){return KIND_ROUTER_VPN.equals(kind);}
         boolean hasCoordinates(){return latitude!=null&&longitude!=null&&Double.isFinite(latitude)&&Double.isFinite(longitude)&&latitude>=-90&&latitude<=90&&longitude>=-180&&longitude<=180;}
@@ -49,7 +50,8 @@ final class AndroidUnifiedNodeCatalog {
             if(!protocol.isEmpty()){if(s.length()>0)s.append(" • ");s.append(protocol);}
             if(!endpoint.isEmpty()){if(s.length()>0)s.append(" • ");s.append(endpoint);}
             if(hasMeasuredLatency()){if(s.length()>0)s.append(" • ");s.append(String.format(Locale.US,"%.1f ms median",latencyMedianMs));}
-            if(!lastUsedAt.isEmpty()){if(s.length()>0)s.append(" • ");s.append("last used ").append(lastUsedAt);}
+            if(!usageAvailable){if(s.length()>0)s.append(" • ");s.append("usage unavailable");}
+            else if(!lastUsedAt.isEmpty()){if(s.length()>0)s.append(" • ");s.append("last used ").append(lastUsedAt);}
             if(!location.isEmpty()){if(s.length()>0)s.append(" • ");s.append(location);}
             if(KIND_EXTERNAL.equals(kind)&&!expectedPublicIp.isEmpty()){if(s.length()>0)s.append(" • ");s.append("exit ").append(expectedPublicIp);}
             return s.toString();
@@ -71,8 +73,9 @@ final class AndroidUnifiedNodeCatalog {
             // The custom-exit store currently has no real coordinate/latency
             // metadata. Keep these nodes list-only until the user supplies real
             // coordinates or a measured value; never infer them from an IP.
+            AndroidNodeUsage.Metric usage=AndroidNodeUsage.externalMetric(nodes.usageFile(),exit);
             out.add(new Item(KIND_EXTERNAL,exit.id,exit.name,exit.server+":"+exit.serverPort,
-                    exit.protocol,exit.expectedPublicIp,"",null,null,null,null,0,0,"",false,null));
+                    exit.protocol,exit.expectedPublicIp,"",null,null,null,null,0,usage.count,usage.lastUsedAt(),false,null,usage.available));
         }
         Collections.sort(out,comparator(order));
         return out;
@@ -88,7 +91,7 @@ final class AndroidUnifiedNodeCatalog {
 
     private static Comparator<Item> comparator(String requested){
         String order=requested==null?SORT_CURRENT:requested.trim().toLowerCase(Locale.ROOT);
-        Comparator<Item> name=Comparator.comparing((Item i)->i.name.toLowerCase(Locale.ROOT)).thenComparing(i->i.id);
+        Comparator<Item> name=Comparator.comparing((Item i)->i.name.toLowerCase(Locale.ROOT)).thenComparing(i->i.id).thenComparing(i->i.kind);
         if(SORT_NAME.equals(order))return name;
         if(SORT_LATENCY.equals(order)||"lowest-latency".equals(order))return (a,b)->{
             if(a.hasMeasuredLatency()!=b.hasMeasuredLatency())return a.hasMeasuredLatency()?-1:1;
@@ -100,7 +103,16 @@ final class AndroidUnifiedNodeCatalog {
             }
             return name.compare(a,b);
         };
+        if(SORT_MOST_USED.equals(order))return (a,b)->{
+            if(a.usageAvailable!=b.usageAvailable)return a.usageAvailable?-1:1;
+            if(!a.usageAvailable)return name.compare(a,b);
+            int c=Integer.compare(b.useCount,a.useCount);if(c!=0)return c;
+            c=b.lastUsedAt.compareTo(a.lastUsedAt);if(c!=0)return c;
+            return name.compare(a,b);
+        };
         if(SORT_LAST_USED.equals(order)||"recent".equals(order))return (a,b)->{
+            if(a.usageAvailable!=b.usageAvailable)return a.usageAvailable?-1:1;
+            if(!a.usageAvailable)return name.compare(a,b);
             int c=b.lastUsedAt.compareTo(a.lastUsedAt);if(c!=0)return c;
             c=Integer.compare(b.useCount,a.useCount);if(c!=0)return c;
             return name.compare(a,b);
@@ -115,13 +127,14 @@ final class AndroidUnifiedNodeCatalog {
     private static Item routerItem(AndroidNodeStore.Node node,boolean current) throws Exception {
         JSONObject profile=selectedProfile(node.file);
         String location=profile==null?"":profile.optString("location","").trim();
-        String lastUsed=profile==null?"":profile.optString("last_used_at","").trim();
+        AndroidNodeUsage.Metric usage=AndroidNodeUsage.routerMetric(node,profile);
+        String lastUsed=usage.lastUsedAt();
         Double latitude=number(profile,"latitude"),longitude=number(profile,"longitude"),latency=null,p90=null;
         int samples=0;
         AndroidNodeStatistics.Record measured=AndroidNodeStatistics.load(node);
         if(measured!=null&&measured.eligible()){latency=measured.median;p90=measured.p90;samples=measured.samples;}
-        int useCount=profile==null?0:Math.max(0,profile.optInt("use_count",0));
-        return new Item(KIND_ROUTER_VPN,node.id,node.name,node.endpoint,"Router VPN","",location,latitude,longitude,latency,p90,samples,useCount,lastUsed,current,node.file);
+        int useCount=usage.count;
+        return new Item(KIND_ROUTER_VPN,node.id,node.name,node.endpoint,"Router VPN","",location,latitude,longitude,latency,p90,samples,useCount,lastUsed,current,node.file,usage.available);
     }
 
     static JSONObject selectedProfile(File file) throws Exception {

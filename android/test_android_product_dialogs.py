@@ -8,11 +8,13 @@ Each former broken builder is restored independently as a negative control.
 """
 from pathlib import Path
 import importlib.util
+import os
 import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 JAVA = ROOT / "android/app/src/main/java/com/eabusham/routervpn"
+JSON_JAR = os.environ.get("ANDROID_JSON_JAR", "/usr/share/java/com.android.json.jar")
 SOURCE = (JAVA / "ProductActivity.java").read_text()
 spec = importlib.util.spec_from_file_location("product_dialog_widgets", ROOT / "android/test_android_tor_form.py")
 W = importlib.util.module_from_spec(spec)
@@ -53,7 +55,7 @@ final class AndroidNodeStore {
 final class AndroidUnifiedNodeCatalog {
  static final String SORT_CURRENT="current";
  static final class Item {
-  final String id,name;final boolean router;Item(String id,boolean router){this.id=id;this.name="Catalog "+id;this.router=router;}
+  final String id,name;final boolean router;boolean usageAvailable=true;int useCount;Item(String id,boolean router){this.id=id;this.name="Catalog "+id;this.router=router;}
   boolean isRouterVpn(){return router;}boolean hasCoordinates(){return router;}Double latencyMedianMs;boolean hasMeasuredLatency(){return latencyMedianMs!=null;}
  }
  final List<Item> items=new ArrayList<>(Arrays.asList(new Item("a",true),new Item("external",false)));
@@ -219,9 +221,9 @@ interface Editor{Editor putString(String key,String value);Editor putBoolean(Str
         target = tmp / "com/eabusham/routervpn/ProductDialogHarness.java"
         def compile_run(parts, negative=None):
             target.write_text(HARNESS_PREFIX + "\n".join(parts) + support + HARNESS_SUFFIX)
-            build = subprocess.run(["javac", "--release", "17", "-cp", "/usr/share/java/com.android.json.jar", "-d", str(tmp), *map(str, tmp.rglob("*.java"))], text=True, capture_output=True, timeout=30)
+            build = subprocess.run(["javac", "--release", "17", "-cp", JSON_JAR, "-d", str(tmp), *map(str, tmp.rglob("*.java"))], text=True, capture_output=True, timeout=30)
             assert build.returncode == 0, build.stderr
-            run = subprocess.run(["java", "-cp", str(tmp)+":/usr/share/java/com.android.json.jar", "com.eabusham.routervpn.ProductDialogHarness", *([] if negative is None else [str(negative)])], text=True, capture_output=True, timeout=15)
+            run = subprocess.run(["java", "-cp", os.pathsep.join((str(tmp), JSON_JAR)), "com.eabusham.routervpn.ProductDialogHarness", *([] if negative is None else [str(negative)])], text=True, capture_output=True, timeout=15)
             if negative is None:
                 assert run.returncode == 0, run.stdout+run.stderr
                 print(run.stdout.strip())
