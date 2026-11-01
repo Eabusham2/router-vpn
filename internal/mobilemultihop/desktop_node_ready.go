@@ -42,7 +42,7 @@ func (r DesktopNodeReadyRecord) Validate(policy *DesktopNodePolicy, transfer str
 	if meta.RestoredMTU != 0 {
 		mtu = meta.RestoredMTU
 	}
-	if r.Schema != 1 || r.Kind != "routervpn-node-ready-v1" || meta.TargetOS != "windows" ||
+	if r.Schema != 1 || r.Kind != "routervpn-node-ready-v1" || (meta.TargetOS != "windows" && meta.TargetOS != "linux") ||
 		r.SessionID != meta.SessionID || r.SourceSHA256 != meta.SourceSHA256 || r.ConfigSHA256 != meta.ConfigSHA256 ||
 		r.TransferSHA256 != transfer || r.DNSConfigSHA256 != capture.SelectedDNS.ConfigSHA256 ||
 		r.InterfaceName != "router-vpn" || r.InterfaceIndex == 0 || r.MTU != mtu || r.ProvedAt <= 0 ||

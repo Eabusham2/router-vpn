@@ -8,8 +8,12 @@ import (
 )
 
 func desktopNodeReadyFixture(t *testing.T, restored int) (*DesktopNodePolicy, string, DesktopNodeReadyRecord) {
+	return desktopNodeReadyFixtureFor(t, restored, "windows")
+}
+
+func desktopNodeReadyFixtureFor(t *testing.T, restored int, target string) (*DesktopNodePolicy, string, DesktopNodeReadyRecord) {
 	t.Helper()
-	policy, err := NewDesktopNodePolicyWithMTU(desktopNodeFixture(t, "wg", ""), desktopNodeTestSession, "windows", restored)
+	policy, err := NewDesktopNodePolicyWithMTU(desktopNodeFixture(t, "wg", ""), desktopNodeTestSession, target, restored)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,6 +30,49 @@ func desktopNodeReadyFixture(t *testing.T, restored int) (*DesktopNodePolicy, st
 	return policy, transfer, DesktopNodeReadyRecord{Schema: 1, Kind: "routervpn-node-ready-v1", SessionID: meta.SessionID,
 		SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, TransferSHA256: transfer,
 		DNSConfigSHA256: capture.SelectedDNS.ConfigSHA256, InterfaceName: "router-vpn", InterfaceIndex: 771, MTU: mtu, ProvedAt: 1793366400123, DNSMilliseconds: 1.25}
+}
+
+func TestDesktopNodeReadyRecordBindsLinuxOriginalSelection(t *testing.T) {
+	for _, mtu := range []int{0, 1392} {
+		policy, transfer, record := desktopNodeReadyFixtureFor(t, mtu, "linux")
+		raw, err := CanonicalDesktopNodeReadyRecord(record, policy, transfer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual, err := ParseDesktopNodeReadyRecord(raw, policy, transfer)
+		if err != nil || actual != record {
+			t.Fatal("Linux native receipt lost its exact sealed selection", err)
+		}
+		for name, mutate := range map[string]func(*DesktopNodeReadyRecord){
+			"session":   func(r *DesktopNodeReadyRecord) { r.SessionID = strings.Repeat("f", 32) },
+			"source":    func(r *DesktopNodeReadyRecord) { r.SourceSHA256 = strings.Repeat("f", 64) },
+			"config":    func(r *DesktopNodeReadyRecord) { r.ConfigSHA256 = strings.Repeat("f", 64) },
+			"selection": func(r *DesktopNodeReadyRecord) { r.TransferSHA256 = strings.Repeat("f", 64) },
+			"dns":       func(r *DesktopNodeReadyRecord) { r.DNSConfigSHA256 = strings.Repeat("f", 64) },
+			"tun":       func(r *DesktopNodeReadyRecord) { r.InterfaceName = "unowned-tun" },
+			"index":     func(r *DesktopNodeReadyRecord) { r.InterfaceIndex = 0 },
+			"mtu":       func(r *DesktopNodeReadyRecord) { r.MTU++ },
+			"time":      func(r *DesktopNodeReadyRecord) { r.ProvedAt = 0 },
+			"query":     func(r *DesktopNodeReadyRecord) { r.DNSMilliseconds = 0 },
+		} {
+			t.Run(name, func(t *testing.T) {
+				changed := record
+				mutate(&changed)
+				if _, err := CanonicalDesktopNodeReadyRecord(changed, policy, transfer); err == nil {
+					t.Fatal("Linux readiness substituted its captured native field")
+				}
+			})
+		}
+		for _, target := range []string{"windows", "darwin"} {
+			other, _, _ := desktopNodeReadyFixtureFor(t, mtu, target)
+			if _, err := ParseDesktopNodeReadyRecord(raw, other, transfer); err == nil {
+				t.Fatal("Linux receipt accepted another platform's sealed native policy", target)
+			}
+		}
+		if _, err := ParseDesktopNodeReadyRecord(append(raw, '\n'), policy, transfer); err == nil {
+			t.Fatal("Linux readiness admitted a noncanonical receipt")
+		}
+	}
 }
 
 func TestDesktopNodeReadyRecordBindsExactCapturedPolicy(t *testing.T) {
