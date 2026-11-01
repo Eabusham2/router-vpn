@@ -6,6 +6,45 @@ bounded main-image comparison path backed by a complete original-generation
 receipt. Its native acceptance is tracked separately below; neither a protected
 receipt alone nor the diagnostic parent chain authorizes installation.
 
+## Bounded Endpoint Security experiment
+
+The diagnostic at `deploy/macos_es_process_probe.py` tests another native
+observation path without changing installer admission. Apple explicitly maps
+[`ES_PROC_CHECK_TYPE_PIDINFO`](https://developer.apple.com/documentation/endpointsecurity/es_proc_check_type_pidinfo)
+to `proc_pidinfo` and `proc_pidpath`. The event's
+[`target`](https://developer.apple.com/documentation/endpointsecurity/es_event_proc_check_t/target)
+is an `es_process_t`; its
+[`executable`](https://developer.apple.com/documentation/endpointsecurity/es_process_t/executable)
+designates the executed file, and that file's
+[`stat`](https://developer.apple.com/documentation/endpointsecurity/es_file_t/stat)
+contains native file metadata. This differs from a generic mapped-region vnode.
+
+The pinned XNU
+[`proc_pidpath_audittoken`](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/libsyscall/wrappers/libproc/libproc.c)
+passes the captured PID and exec version with `PIF_COMPARE_IDVERSION`.
+[`proc_info.c`](https://github.com/apple-oss-distributions/xnu/blob/f6217f891ac0bb64f3d375211650a4c1ff8ca1ea/bsd/kern/proc_info.c)
+compares that generation before calling the proc-info MAC hook. An `ENOENT`
+pathname result remains a failed lookup. A matching ES event must separately
+carry the original instigator/target audit-token generations and start times,
+between fresh native Mach-time bounds. Delayed linked-file events cannot stand
+in for the later unlinked-file observation.
+
+The existing macOS workflows first require actual ES observations matching the
+retained file object of an owned copied executable, then of that same live
+unlinked executable. Only then may the probe query the pre-fixture refused
+process. It retains reduced metadata for those targets only, joins its own
+children, and writes a private report. The ordinary installer gates still run.
+Missing events, changed identities, unsupported output, and permission errors
+remain explicit unsuccessful diagnostic outcomes.
+
+Apple's [WWDC22 description of eslogger](https://developer.apple.com/videos/play/wwdc2022/110345/)
+states that the tool already has the ES entitlement but still requires root
+and existing Full Disk Access approval. It is a diagnostic tool whose output
+may change, and is not an application API. This experiment neither obtains nor
+changes approval. An application integration would need the native ES API and
+its own authorized entitlement; this probe grants no installation authority.
+Native execution of this new experiment is still pending.
+
 ## Actual observation
 
 The [installer contract run for `fb9088cc`](https://github.com/Eabusham2/router-vpn/actions/runs/41249185650)

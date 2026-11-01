@@ -26,6 +26,8 @@ on:
       - 'deploy/test_macos_image_identity.py'
       - 'deploy/test_macos_generation.py'
       - 'deploy/macos_process_inventory_probe.py'
+      - 'deploy/macos_es_process_probe.py'
+      - 'deploy/test_macos_es_process_probe.py'
       - 'deploy/test_macos_installer_entry.py'
       - 'deploy/test_linux_controller_privilege.py'
       - 'deploy/test_linux_native_install.py'
@@ -54,6 +56,8 @@ on:
       - 'deploy/test_macos_image_identity.py'
       - 'deploy/test_macos_generation.py'
       - 'deploy/macos_process_inventory_probe.py'
+      - 'deploy/macos_es_process_probe.py'
+      - 'deploy/test_macos_es_process_probe.py'
       - 'deploy/test_macos_installer_entry.py'
       - 'deploy/test_linux_controller_privilege.py'
       - 'deploy/test_linux_native_install.py'
@@ -93,6 +97,12 @@ jobs:
         run: |
           python3 deploy/test_macos_native_install.py --observe-before-fixtures > "$RUNNER_TEMP/routervpn-macos-before.json"
           cat "$RUNNER_TEMP/routervpn-macos-before.json"
+      - name: Diagnose the exact refused executable through a bounded native ES event
+        # A missing FDA approval or event is an explicit failed diagnostic.
+        # It must not suppress or replace any ordinary installer acceptance.
+        continue-on-error: true
+        timeout-minutes: 1
+        run: python3 deploy/macos_es_process_probe.py --baseline "$RUNNER_TEMP/routervpn-macos-before.json"
       - name: Capture original copied and unlinked native main-image identities
         run: python3 deploy/test_macos_image_identity.py
       - name: Prove complete managed generation and original-image refusal
@@ -123,6 +133,7 @@ jobs:
           bash -n client/install-macos-final.sh
           bash -n client/install-macos-complete.sh
           python3 deploy/test_macos_installer_entry.py
+          python3 deploy/test_macos_es_process_probe.py
           grep -Fq 'native AppKit app is the daily-use UI' client/install-macos-complete.sh
           ! grep -Eq 'Google Chrome|Microsoft Edge|Brave Browser|Chromium|--app=' client/install-macos-final.sh
           ! grep -Eq 'Open http://127\.0\.0\.1:8788|open http://127\.0\.0\.1:8788' client/install-macos-final.sh client/install-macos-complete.sh

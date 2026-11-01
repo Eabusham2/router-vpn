@@ -10,6 +10,8 @@ on:
       - 'deploy/test_macos_image_identity.py'
       - 'deploy/test_macos_generation.py'
       - 'deploy/macos_process_inventory_probe.py'
+      - 'deploy/macos_es_process_probe.py'
+      - 'deploy/test_macos_es_process_probe.py'
       - 'deploy/test_macos_installer_trust.py'
       - 'deploy/test_macos_controller_privilege.py'
       - 'deploy/materialize-desktop-icons.py'
@@ -38,6 +40,8 @@ on:
       - 'deploy/test_macos_image_identity.py'
       - 'deploy/test_macos_generation.py'
       - 'deploy/macos_process_inventory_probe.py'
+      - 'deploy/macos_es_process_probe.py'
+      - 'deploy/test_macos_es_process_probe.py'
       - 'deploy/test_macos_installer_trust.py'
       - 'deploy/test_macos_controller_privilege.py'
       - 'deploy/materialize-desktop-icons.py'
@@ -96,6 +100,11 @@ jobs:
         run: |
           python3 deploy/test_macos_native_install.py --observe-before-fixtures > "$RUNNER_TEMP/routervpn-macos-before.json"
           cat "$RUNNER_TEMP/routervpn-macos-before.json"
+      - name: Diagnose the exact refused executable through a bounded native ES event
+        # Diagnostic failure remains explicit and cannot suppress native tests.
+        continue-on-error: true
+        timeout-minutes: 1
+        run: python3 deploy/macos_es_process_probe.py --baseline "$RUNNER_TEMP/routervpn-macos-before.json"
       - name: Desktop icon generator self-test
         run: python3 deploy/materialize-desktop-icons.py --self-test
       - name: Test controller and shared contracts
