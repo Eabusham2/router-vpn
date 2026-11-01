@@ -187,6 +187,8 @@ class DesktopPTPreparation(unittest.TestCase):
                          'desktop_socket_darwin_filter_cgo.go', 'desktop_socket_darwin_filter_nocgo.go',
                          'desktop_socket_darwin_filter_test.go', 'desktop_socket_pf_filter_native.go',
                          'desktop_socket_pf_filter_native_test.go',
+                         'desktop_socket_pf_readback.go', 'desktop_socket_pf_readback_test.go',
+                         'desktop_socket_pf_readback_toolchain_test.go',
                          'desktop_socket_pf_baseline.go', 'desktop_socket_pf_baseline_test.go',
                          'desktop_socket_pf_baseline_transition.go', 'desktop_socket_pf_baseline_transition_test.go',
                          'desktop_socket_darwin_baseline.go', 'desktop_socket_darwin_baseline_other.go',

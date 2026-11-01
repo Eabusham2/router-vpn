@@ -28,7 +28,16 @@ func desktopPFReadback(ctx context.Context, checks ...func(context.Context) erro
 	next := make(chan int)
 	var joined sync.WaitGroup
 	for range min(4, len(checks)) {
-		joined.Go(func() {
+		joined.Add(1)
+		go func() {
+			// Preserve the pinned WaitGroup.Go ordering on the module's Go 1.24:
+			// a fatal worker panic must not unblock a successful readback.
+			defer func() {
+				if failure := recover(); failure != nil {
+					panic(failure)
+				}
+				joined.Done()
+			}()
 			for index := range next {
 				if err := ctx.Err(); err != nil {
 					results[index] = err
@@ -43,7 +52,7 @@ func desktopPFReadback(ctx context.Context, checks ...func(context.Context) erro
 					cancel()
 				}
 			}
-		})
+		}()
 	}
 schedule:
 	for index := range checks {
