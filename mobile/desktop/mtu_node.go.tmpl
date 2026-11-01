@@ -304,10 +304,11 @@ func init() {
 	var directory, session, config, physicalSource, physicalTransfer string
 	var physicalMTU int
 	var journal routerVPNNodeJournalOptions
+	var linuxParent routerVPNNodeLinuxParentOptions
 	command := &cobra.Command{Use: "routervpn-node", Short: "Run one captured Router VPN node and its retained TUN", Args: cobra.NoArgs, SilenceUsage: true, RunE: func(*cobra.Command, []string) error {
 		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer cancel()
-		return routerVPNRunNodeMTUWithJournal(ctx, directory, session, config, physicalSource, physicalTransfer, physicalMTU, journal)
+		return routerVPNRunNodeMTUWithParents(ctx, directory, session, config, physicalSource, physicalTransfer, physicalMTU, journal, linuxParent)
 	}}
 	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private runtime directory")
 	command.Flags().StringVar(&session, "session", "", "captured runtime identity")
@@ -319,6 +320,9 @@ func init() {
 	command.Flags().StringVar(&journal.ParentImage, "journal-parent-image", "", "retained native controller image")
 	command.Flags().StringVar(&journal.Pipe, "journal-pipe", "", "native durable transaction rendezvous")
 	command.Flags().StringVar(&journal.CaptureSHA256, "journal-capture-sha256", "", "captured journal comparison digest")
+	command.Flags().IntVar(&linuxParent.ChannelFD, "linux-parent-channel", 0, "inherited original Linux parent channel")
+	command.Flags().IntVar(&linuxParent.DirectoryFD, "linux-parent-directory", 0, "inherited original Linux parent task directory")
+	command.Flags().StringVar(&linuxParent.CaptureSHA256, "linux-parent-capture", "", "captured Linux command identity")
 	mainCommand.AddCommand(command)
 }
 
@@ -483,6 +487,23 @@ func routerVPNRunNodeMTUCaptured(parent context.Context, directory, session, con
 			return routerVPNExternalFailure
 		}
 	}
+	return routerVPNRunNodeMTULoop(parent, ctx, files, instance, session, config, physical,
+		func() bool { return !stopped.Load() }, func() error {
+			if physical == nil {
+				return nil
+			}
+			return routerVPNProveNodeReady(ctx, files, physicalPolicy, protectionTransfer, physical)
+		})
+}
+
+// Both native child coordinators use the same retained TUN command loop. The
+// caller still owns its actual graph, admission, selected-DNS proof and joined
+// teardown; the extra guard cannot create or replace any of those owners.
+func routerVPNRunNodeMTULoop(parent, ctx context.Context, files *routerVPNExternalFiles, instance *box.Box,
+	session, config string, physical *box.RouterVPNDesktopNodePhysical, current func() bool, ready func() error) error {
+	if parent == nil || ctx == nil || files == nil || instance == nil || current == nil || ready == nil {
+		return routerVPNExternalFailure
+	}
 	var inbound adapter.Inbound
 	for _, candidate := range instance.Inbound().Inbounds() {
 		if candidate.Type() == "tun" {
@@ -497,17 +518,15 @@ func routerVPNRunNodeMTUCaptured(parent context.Context, directory, session, con
 	}
 	path := routerVPNDesktopPhysicalPath(instance)
 	guard := func() bool {
-		return !stopped.Load() && parent.Err() == nil && ctx.Err() == nil && path != "" && path == routerVPNDesktopPhysicalPath(instance) &&
+		return current() && parent.Err() == nil && ctx.Err() == nil && path != "" && path == routerVPNDesktopPhysicalPath(instance) &&
 			(physical == nil || physical.Current())
 	}
 	owner, err := newRouterVPNNodeMTU(&routerVPNNodeMTUBox{instance: instance, tag: inbound.Tag(), physical: physical}, session, config, path, guard)
 	if err != nil {
 		return routerVPNExternalFailure
 	}
-	if physical != nil {
-		if routerVPNProveNodeReady(ctx, files, physicalPolicy, protectionTransfer, physical) != nil {
-			return routerVPNExternalFailure
-		}
+	if err := ready(); err != nil {
+		return routerVPNExternalFailure
 	}
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()

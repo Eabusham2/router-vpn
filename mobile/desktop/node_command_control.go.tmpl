@@ -1,0 +1,22 @@
+package main
+
+import "context"
+
+// Linux inherits fixed original descriptors from its created parent. These
+// options select no path, PID or named socket that could be reopened later.
+// They are checked together before the child reads any private node input.
+type routerVPNNodeLinuxParentOptions struct {
+	ChannelFD, DirectoryFD int
+	CaptureSHA256          string
+}
+
+func routerVPNRunNodeMTUWithParents(parent context.Context, directory, session, config, source, transfer string,
+	mtu int, windows routerVPNNodeJournalOptions, linux routerVPNNodeLinuxParentOptions) error {
+	if linux != (routerVPNNodeLinuxParentOptions{}) {
+		if windows != (routerVPNNodeJournalOptions{}) {
+			return routerVPNExternalFailure
+		}
+		return routerVPNRunLinuxNodeControlled(parent, directory, session, config, source, transfer, mtu, linux)
+	}
+	return routerVPNRunNodeMTUWithJournal(parent, directory, session, config, source, transfer, mtu, windows)
+}

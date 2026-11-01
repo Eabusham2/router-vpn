@@ -1,0 +1,293 @@
+//go:build linux && !android
+
+package main
+
+import (
+	"context"
+	"errors"
+	"os"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	routervpndesktoppt "github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/linuxprocess"
+	"github.com/sagernet/sing-box/routervpn/linuxprotection"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// The child owns only its inherited originals and its captured native source.
+// The parent owns baseline creation, succession, durable commits and release.
+// No path, ready record, serialized receipt or EOF can confer those powers.
+type routerVPNLinuxNodeControl struct {
+	image         *os.File
+	imageObject   linuxprocess.Object
+	channel       *linuxprocess.Channel
+	directory     *os.File
+	bootstrap     *linuxprocess.Bootstrap
+	control       *linuxprotection.NodeControl
+	selection     linuxprotection.NodeSelection
+	policy        *mobilemultihop.DesktopNodePolicy
+	native        *routerVPNExternalNative
+	preparation   *box.RouterVPNDesktopLinuxNodePreparation
+	commandHash   string
+	selectionHash string
+	retiring      atomic.Bool
+	acknowledged  bool
+	joined        bool
+	retired       bool
+	closed        bool
+}
+
+func routerVPNLinuxImageObject(file *os.File) (linuxprocess.Object, error) {
+	if file == nil {
+		return linuxprocess.Object{}, routerVPNExternalFailure
+	}
+	info, err := file.Stat()
+	if err != nil {
+		return linuxprocess.Object{}, err
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok || !info.Mode().IsRegular() || info.Mode().Perm()&0111 == 0 || stat.Mode&06022 != 0 || stat.Uid != 0 || stat.Gid != 0 {
+		return linuxprocess.Object{}, routerVPNExternalFailure
+	}
+	return linuxprocess.Object{Device: uint64(stat.Dev), Inode: stat.Ino, Mode: stat.Mode, UID: stat.Uid, GID: stat.Gid}, nil
+}
+
+// Invalid public options consume no descriptors. Once the exact inherited
+// layout is accepted, every partial original remains with the returned owner
+// until Close; a constructor error never silently discards another owner.
+func routerVPNOpenLinuxNodeControl(session, source, config string, options routerVPNNodeLinuxParentOptions) (*routerVPNLinuxNodeControl, error) {
+	digest, err := linuxprotection.NodeCommandCaptureSHA256(session, source, config)
+	if err != nil || options.ChannelFD != 3 || options.DirectoryFD != 4 || options.CaptureSHA256 != digest {
+		return nil, routerVPNExternalFailure
+	}
+	owner := &routerVPNLinuxNodeControl{commandHash: digest, image: os.NewFile(5, "original-node-image"),
+		directory: os.NewFile(4, "original-node-parent")}
+	channelFile := os.NewFile(3, "original-node-channel")
+	// All three descriptors become close-on-exec before any source can start a
+	// guardian. CaptureChannel and BindInheritedParent also verify their own
+	// original descriptor flags; image FD5 is owned explicitly here.
+	if err := linuxprocess.SetCloseOnExec(owner.image); err != nil {
+		owner.channel, _ = linuxprocess.CaptureChannel(channelFile)
+		return owner, err
+	}
+	owner.imageObject, err = routerVPNLinuxImageObject(owner.image)
+	if err != nil {
+		owner.channel, _ = linuxprocess.CaptureChannel(channelFile)
+		return owner, err
+	}
+	owner.channel, err = linuxprocess.CaptureChannel(channelFile)
+	if err != nil {
+		return owner, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	channel, directory := owner.channel, owner.directory
+	owner.channel, owner.directory = nil, nil // Bootstrap consumes both originals on every result.
+	owner.bootstrap, err = linuxprocess.BindInheritedParent(ctx, channel, directory, digest)
+	if err != nil {
+		return owner, err
+	}
+	if err := owner.original(ctx); err != nil {
+		return owner, err
+	}
+	return owner, nil
+}
+
+func (owner *routerVPNLinuxNodeControl) original(ctx context.Context) error {
+	if owner == nil || owner.closed || owner.bootstrap == nil || ctx == nil || ctx.Err() != nil {
+		return routerVPNExternalFailure
+	}
+	if err := owner.bootstrap.CheckCapture(ctx, owner.commandHash); err != nil {
+		return err
+	}
+	_, engine, err := owner.bootstrap.Observations(ctx)
+	image, imageErr := routerVPNLinuxImageObject(owner.image)
+	if err != nil || imageErr != nil || image != owner.imageObject || engine.Image != image || engine.ProcessID != os.Getpid() {
+		return errors.Join(err, imageErr, routerVPNExternalFailure)
+	}
+	return ctx.Err()
+}
+
+// Private input is opened only after original authentication. The complete
+// constructor is recompiled here; neither a staged graph nor parent metadata
+// can manufacture the sealed policy used by the native service.
+func (owner *routerVPNLinuxNodeControl) compile(ctx context.Context, files *routerVPNExternalFiles,
+	session, source, config, transfer string, mtu int) (*mobilemultihop.DesktopNodePolicy, error) {
+	if owner == nil || owner.policy != nil || owner.control != nil || owner.retiring.Load() || files == nil || files.root == nil || owner.original(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	raw, err := files.read("node-source.json", mobilemultihop.NodeLaunchInputLimit)
+	if err != nil {
+		return nil, err
+	}
+	original, err := mobilemultihop.ParseNodeLaunchInput(string(raw))
+	clear(raw)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := mobilemultihop.NewDesktopNodePolicyWithMTU(original, session, "linux", mtu)
+	if err != nil {
+		return nil, err
+	}
+	meta := policy.Metadata()
+	selection := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256,
+		ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
+	command, commandErr := selection.CaptureSHA256()
+	selected, selectedErr := selection.ControlSHA256()
+	if commandErr != nil || selectedErr != nil || command != owner.commandHash || meta.SourceSHA256 != source ||
+		meta.ConfigSHA256 != config || selected != transfer {
+		return nil, routerVPNExternalFailure
+	}
+	staged, err := files.read("sing-box.json", 4<<20)
+	if err != nil || string(staged) != policy.Config() || owner.original(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	owner.control, err = linuxprotection.NewNodeChildControl(ctx, owner.bootstrap, selection)
+	if err != nil {
+		return nil, err
+	}
+	owner.policy, owner.selection, owner.selectionHash = policy, selection, selected
+	return policy, nil
+}
+
+func (owner *routerVPNLinuxNodeControl) prepare(ctx context.Context, policy *mobilemultihop.DesktopNodePolicy) (context.Context, error) {
+	if owner == nil || owner.control == nil || owner.policy != policy || owner.retiring.Load() || owner.original(ctx) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	return routervpndesktoppt.WithNodeLinuxPhysicalBaseline(ctx, policy, owner.baseline, owner.admit)
+}
+
+func (owner *routerVPNLinuxNodeControl) baseline(graph context.Context, capture mobiletor.DesktopSocketCapture) error {
+	if owner == nil || graph == nil || graph.Err() != nil || owner.retiring.Load() || owner.control == nil {
+		return routerVPNExternalFailure
+	}
+	// A cancelled graph must still receive its captured refusal/creation reply
+	// so its actual partial source can retire. The parent checks the user's
+	// current operation before every durable or native mutation.
+	ctx, cancel := context.WithTimeout(context.Background(), routerVPNNodeAdmissionLimit)
+	defer cancel()
+	_, err := owner.control.CreateBaseline(ctx, capture)
+	return errors.Join(err, graph.Err())
+}
+
+func (owner *routerVPNLinuxNodeControl) admit(graph context.Context, prepared routervpndesktoppt.NodeLinuxPhysicalPrepared) error {
+	if owner == nil || graph == nil || graph.Err() != nil || owner.retiring.Load() || owner.control == nil {
+		return routerVPNExternalFailure
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), routerVPNNodeAdmissionLimit)
+	defer cancel()
+	err := owner.control.AdmitSource(ctx, linuxprotection.NodePreparedRecord{Protection: prepared.Protection, Guardian: prepared.Guardian, Policy: prepared.Policy})
+	return errors.Join(err, graph.Err())
+}
+
+func (owner *routerVPNLinuxNodeControl) current(ctx context.Context) error {
+	if owner == nil || owner.control == nil || owner.retiring.Load() || owner.original(ctx) != nil {
+		return routerVPNExternalFailure
+	}
+	return owner.control.Current(ctx)
+}
+
+// The coordinator records the actual original graph join before its terminal
+// channel phase. A stopped context or a received record cannot replace Close.
+// The explicit retained source also closes a preparation that failed before
+// the upstream service manager reached Initialize.
+func (owner *routerVPNLinuxNodeControl) joinNative(ctx context.Context) error {
+	if owner == nil || owner.native == nil || ctx == nil || ctx.Err() != nil || owner.closed {
+		return routerVPNExternalFailure
+	}
+	owner.retiring.Store(true)
+	if owner.joined {
+		return nil
+	}
+	if err := owner.native.Close(); err != nil {
+		return err
+	}
+	if owner.preparation != nil {
+		if err := owner.preparation.CloseSource(ctx); err != nil {
+			return err
+		}
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	owner.joined = true
+	return nil
+}
+
+// Called only after the actual Box and every partial native service joined.
+// The child reports its retained source, waits for the exact parent ACK and
+// original-channel EOF, then closes its descriptors without removing a table.
+func (owner *routerVPNLinuxNodeControl) retire(ctx context.Context) error {
+	if owner == nil || owner.control == nil || !owner.joined || ctx == nil || ctx.Err() != nil || owner.closed {
+		return routerVPNExternalFailure
+	}
+	owner.retiring.Store(true)
+	if owner.retired {
+		return nil
+	}
+	var joined *mobiletor.DesktopLinuxSourceJoinRecord
+	if owner.preparation != nil {
+		var returned bool
+		var err error
+		joined, returned, err = owner.preparation.JoinedSource(ctx)
+		if err != nil || returned != (joined != nil) {
+			return errors.Join(err, routerVPNExternalFailure)
+		}
+	}
+	if !owner.acknowledged {
+		if err := owner.control.Retire(ctx, joined); err != nil {
+			return err
+		}
+		owner.acknowledged = true
+	}
+	if owner.preparation != nil {
+		if err := owner.preparation.CloseProtection(ctx); err != nil {
+			return err
+		}
+	}
+	owner.retired = true
+	return nil
+}
+
+func (owner *routerVPNLinuxNodeControl) close(ctx context.Context) error {
+	if owner == nil || owner.closed {
+		return nil
+	}
+	// A bound control may have created native state. Descriptor teardown must
+	// follow its actual acknowledged retirement, never replace that protocol.
+	if owner.control != nil && !owner.retired {
+		return errors.New("Linux Node control retains unacknowledged original retirement")
+	}
+	if ctx == nil || ctx.Err() != nil {
+		return routerVPNExternalFailure
+	}
+	if owner.bootstrap != nil {
+		if err := owner.bootstrap.Close(ctx); err != nil {
+			return err
+		}
+	}
+	if owner.channel != nil {
+		if err := owner.channel.Close(ctx); err != nil {
+			return err
+		}
+		owner.channel = nil
+	}
+	if owner.directory != nil {
+		if err := owner.directory.Close(); err != nil {
+			return err
+		}
+		owner.directory = nil
+	}
+	if owner.image != nil {
+		if err := owner.image.Close(); err != nil {
+			return err
+		}
+		owner.image = nil
+	}
+	owner.closed = true
+	return nil
+}

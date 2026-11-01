@@ -144,7 +144,7 @@ class DesktopPTPreparation(unittest.TestCase):
             startup.assert_called_once_with(self.vendor.resolve())
             node_capture.assert_called_once_with(self.vendor.resolve())
             generated = {call.args[1]: call.args[2] for call in writes.call_args_list}
-            for package in ('windowsbootstrap', 'windowscontroller', 'windowsprotection'):
+            for package in ('windowsbootstrap', 'windowscontroller', 'windowsprotection', 'linuxprocess', 'linuxprotection'):
                 for path in sorted((ROOT/'internal'/package).glob('*.go')):
                     if path.name.endswith('_test.go'):
                         continue
@@ -154,7 +154,11 @@ class DesktopPTPreparation(unittest.TestCase):
                     self.assertEqual((self.vendor/relative).read_bytes(), exact)
                     self.assertNotIn(b'"router-vpn/internal/', exact)
             for name in ('node_command_journal.go.tmpl', 'node_command_journal_windows.go.tmpl',
-                         'node_command_journal_other.go.tmpl', 'node_command_journal_test.go.tmpl'):
+                         'node_command_journal_other.go.tmpl', 'node_command_journal_test.go.tmpl',
+                         'node_command_control.go.tmpl', 'node_command_control_linux.go.tmpl',
+                         'node_command_control_other.go.tmpl', 'node_command_run_linux.go.tmpl',
+                         'node_command_control_test.go.tmpl', 'node_command_control_linux_test.go.tmpl',
+                         'node_command_control_linux_native_test.go.tmpl'):
                 relative = 'cmd/sing-box/routervpn_'+name.removesuffix('.tmpl')
                 self.assertEqual(generated[relative], (ROOT/'mobile/desktop'/name).read_bytes())
             for name, raw in PREP.PFABI.checked_files(ROOT/'internal/mobiletor').items():

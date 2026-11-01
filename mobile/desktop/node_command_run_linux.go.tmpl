@@ -1,0 +1,181 @@
+//go:build linux && !android
+
+package main
+
+import (
+	"context"
+	"errors"
+	"io"
+	"os"
+	"sync/atomic"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/service"
+)
+
+// The ordinary Linux host predicate stays closed until complete native
+// acceptance. This explicit command path additionally requires the original
+// created parent's descriptors, exact sealed policy and native ACKs; no flag
+// can substitute a file acknowledgment or construct those capabilities.
+func routerVPNRunLinuxNodeControlled(parent context.Context, directory, session, config, source, transfer string,
+	mtu int, options routerVPNNodeLinuxParentOptions) (failure error) {
+	if parent == nil {
+		return routerVPNExternalFailure
+	}
+	control, err := routerVPNOpenLinuxNodeControl(session, source, config, options)
+	if control != nil {
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			failure = errors.Join(failure, control.close(ctx))
+		}()
+	}
+	if err != nil {
+		return err
+	}
+	// Authentication above precedes opening this retained private workspace.
+	files, err := routerVPNOpenExternalFiles(directory)
+	if err != nil {
+		return err
+	}
+	defer files.root.Close()
+	ctx, stopPreparation := context.WithTimeout(context.Background(), routerVPNNodeAdmissionLimit)
+	policy, err := control.compile(ctx, files, session, source, config, transfer, mtu)
+	stopPreparation()
+	if err != nil {
+		return err
+	}
+	lifetime := globalCtx
+	if lifetime == nil {
+		lifetime = context.Background()
+	}
+	graph, cancel := context.WithCancel(service.ContextWithDefaultRegistry(service.ExtendContext(context.WithoutCancel(lifetime))))
+	native := &routerVPNExternalNative{cancel: cancel}
+	control.native = native
+	var stopped atomic.Bool
+	defer func() {
+		stopped.Store(true)
+		cancel()
+		readyErr := files.remove("node-ready.json")
+		cleanup, stop := context.WithTimeout(context.Background(), 15*time.Second)
+		defer stop()
+		// Retain only this original partial Box/source across cleanup retries.
+		// A failed Box close stays a failure; no replacement or named native
+		// object is discovered to manufacture a joined source receipt.
+		for {
+			if err := control.joinNative(cleanup); err == nil {
+				break
+			} else if cleanup.Err() != nil {
+				failure = errors.Join(failure, err, cleanup.Err())
+				return
+			}
+			select {
+			case <-cleanup.Done():
+				failure = errors.Join(failure, cleanup.Err())
+				return
+			case <-time.After(50 * time.Millisecond):
+			}
+		}
+		if err := control.retire(cleanup); err != nil {
+			failure = errors.Join(failure, err)
+			return
+		}
+		if readyErr != nil {
+			failure = errors.Join(failure, readyErr)
+			return
+		}
+		closed := struct {
+			routerVPNExternalStop
+			Closed bool `json:"closed"`
+		}{routerVPNExternalStop{Schema: 1, Session: session, SourceSHA256: config}, true}
+		failure = errors.Join(failure, files.publish("stopped.json", closed))
+	}()
+	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "node-ready.json", "node-protection-retired.json", "stopped.json", "node-protection-transfer.json"} {
+		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			return routerVPNExternalFailure
+		}
+	}
+	if parent.Err() != nil || files.stopRequested(session, config) {
+		return nil
+	}
+	graph, err = control.prepare(graph, policy)
+	if err != nil {
+		return err
+	}
+	parsed, err := SJ.UnmarshalExtendedContext[option.Options](graph, []byte(policy.Config()))
+	if err != nil {
+		return err
+	}
+	parsed.Log = &option.LogOptions{Disabled: true}
+	for _, existing := range routerVPNExternalConstructed(graph) {
+		if existing != nil {
+			return routerVPNExternalFailure
+		}
+	}
+	watchStop, watchDone := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		ticker := time.NewTicker(25 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if parent.Err() != nil || files.stopRequested(session, config) {
+				cancel()
+				return
+			}
+			select {
+			case <-watchStop:
+				return
+			case <-parent.Done():
+				cancel()
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	defer func() { close(watchStop); <-watchDone }()
+	instance, err := box.New(box.Options{Context: graph, Options: parsed})
+	if err != nil {
+		for _, partial := range routerVPNExternalConstructed(graph) {
+			if closer, ok := partial.(io.Closer); ok {
+				native.partial = append(native.partial, closer)
+			}
+		}
+		return err
+	}
+	native.box = instance
+	control.preparation, err = instance.RouterVPNDesktopLinuxNodePreparePhysicalOwned(policy)
+	if err != nil {
+		return err
+	}
+	if err := instance.RouterVPNStrategyStart(); err != nil {
+		return err
+	}
+	proof, stopProof := context.WithTimeout(graph, routerVPNNodeAdmissionLimit)
+	physical, err := instance.RouterVPNDesktopLinuxNodeActivatePhysical(proof, policy)
+	stopProof()
+	if err != nil {
+		return err
+	}
+	current := func() bool {
+		if stopped.Load() || parent.Err() != nil || graph.Err() != nil {
+			return false
+		}
+		ctx, cancel := context.WithTimeout(graph, 2*time.Second)
+		defer cancel()
+		return control.current(ctx) == nil
+	}
+	return routerVPNRunNodeMTULoop(parent, graph, files, instance, session, config, physical, current, func() error {
+		ctx, cancel := context.WithTimeout(graph, routerVPNNodeAdmissionLimit)
+		defer cancel()
+		if err := control.current(ctx); err != nil {
+			return err
+		}
+		if err := routerVPNProveNodeReadyCaptured(ctx, files, policy, control.selectionHash, physical); err != nil {
+			return err
+		}
+		return control.current(ctx)
+	})
+}

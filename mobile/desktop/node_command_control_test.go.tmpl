@@ -1,0 +1,19 @@
+package main
+
+import (
+	"context"
+	"strings"
+	"testing"
+)
+
+func TestRouterVPNDesktopNodePhysicalCommandRejectsMixedParents(t *testing.T) {
+	linux := routerVPNNodeLinuxParentOptions{ChannelFD: 3, DirectoryFD: 4, CaptureSHA256: strings.Repeat("a", 64)}
+	for _, windows := range []routerVPNNodeJournalOptions{
+		{ParentHandle: 1}, {ParentImage: "/other/image"}, {Pipe: "foreign-parent"}, {CaptureSHA256: strings.Repeat("b", 64)},
+	} {
+		if err := routerVPNRunNodeMTUWithParents(context.Background(), "/unopened-private-node", strings.Repeat("c", 32),
+			strings.Repeat("d", 64), strings.Repeat("e", 64), strings.Repeat("f", 64), 0, windows, linux); err == nil {
+			t.Fatal("native command mixed independent parent capabilities")
+		}
+	}
+}

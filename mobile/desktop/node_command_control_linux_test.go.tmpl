@@ -1,0 +1,29 @@
+//go:build linux && !android
+
+package main
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/routervpn/linuxprotection"
+)
+
+func TestRouterVPNDesktopNodePhysicalCommandLinuxParentBounds(t *testing.T) {
+	session, source, config := strings.Repeat("a", 32), strings.Repeat("b", 64), strings.Repeat("c", 64)
+	digest, err := linuxprotection.NodeCommandCaptureSHA256(session, source, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, options := range []routerVPNNodeLinuxParentOptions{
+		{}, {ChannelFD: 4, DirectoryFD: 3, CaptureSHA256: digest},
+		{ChannelFD: -1, DirectoryFD: 4, CaptureSHA256: digest}, {ChannelFD: 3, DirectoryFD: 7, CaptureSHA256: digest},
+		{ChannelFD: 3, DirectoryFD: 4}, {ChannelFD: 3, DirectoryFD: 4, CaptureSHA256: strings.Repeat("d", 64)},
+		{ChannelFD: 3, DirectoryFD: 4, CaptureSHA256: strings.ToUpper(digest)},
+	} {
+		owner, err := routerVPNOpenLinuxNodeControl(session, source, config, options)
+		if err == nil || owner != nil {
+			t.Fatal("invalid Linux command consumed unrelated inherited descriptors")
+		}
+	}
+}

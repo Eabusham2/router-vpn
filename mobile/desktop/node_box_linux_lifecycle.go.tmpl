@@ -57,6 +57,22 @@ func (p *RouterVPNDesktopLinuxNodePreparation) JoinedSource(ctx context.Context)
 	return p.network.JoinedLinuxPhysicalSource(ctx, p.policy)
 }
 
+// CloseSource joins only this original native service after the caller has
+// joined its Box. A partial preparation may predate ServiceManager.Initialize,
+// whose ordinary Close therefore has no started service to visit. Keeping the
+// retained preparation lets that exact source close without a later lookup or
+// an invented absence receipt. It never releases the parent-owned baseline.
+func (p *RouterVPNDesktopLinuxNodePreparation) CloseSource(ctx context.Context) error {
+	if p == nil || p.network == nil || p.policy == nil || p.policy.Validate() != nil || ctx == nil || ctx.Err() != nil {
+		return errors.New("Linux source cleanup lost its retained preparation")
+	}
+	if err := p.network.Close(); err != nil {
+		return err
+	}
+	_, _, err := p.network.JoinedLinuxPhysicalSource(ctx, p.policy)
+	return err
+}
+
 func (p *RouterVPNDesktopLinuxNodePreparation) DisconnectProtection(ctx context.Context) (bool, error) {
 	if p == nil || p.network == nil || p.policy == nil {
 		return false, errors.New("Linux disconnect lost its retained native preparation")

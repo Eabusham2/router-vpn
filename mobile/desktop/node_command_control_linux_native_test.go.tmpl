@@ -1,0 +1,608 @@
+//go:build linux && !android && routervpn_linux_node_control
+
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/option"
+	routervpndesktoppt "github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/linuxprocess"
+	"github.com/sagernet/sing-box/routervpn/linuxprotection"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	SJ "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/service"
+	"golang.org/x/sys/unix"
+)
+
+func init() {
+	if len(os.Args) == 3 && os.Args[1] == "routervpn-owned-socket-helper" {
+		if err := mobiletor.RunDesktopLinuxSocketHelper(os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(81)
+		}
+		os.Exit(0)
+	}
+}
+
+type linuxChildControlInvocation struct {
+	Directory string
+	Selection linuxprotection.NodeSelection
+	Transfer  string
+	Options   routerVPNNodeLinuxParentOptions
+}
+
+func linuxChildControlNamespace(t *testing.T) {
+	t.Helper()
+	iface, err := net.InterfaceByName("rvpn-test")
+	if os.Getenv("ROUTERVPN_LINUX_GUARDIAN_TEST_NS") != "1" || os.Geteuid() != 0 || err != nil || iface.Index < 1 {
+		t.Fatal("generated child control requires the actual isolated guardian namespace", err)
+	}
+}
+
+func linuxChildControlPolicy(t *testing.T) (*mobilemultihop.NodeProfile, *mobilemultihop.DesktopNodePolicy) {
+	t.Helper()
+	input, err := desktopNodeCommandOriginal(t).LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var original struct {
+		Profile string `json:"profile_json"`
+	}
+	if json.Unmarshal([]byte(input), &original) != nil || original.Profile == "" {
+		t.Fatal("missing original private profile")
+	}
+	var profile map[string]any
+	if json.Unmarshal([]byte(original.Profile), &profile) != nil {
+		t.Fatal("invalid private profile fixture")
+	}
+	profile["endpoint"], profile["kill_switch_policy"] = "198.18.0.2", "on-connect"
+	encoded, _ := json.Marshal(profile)
+	graph, _ := json.Marshal(map[string]any{"inbounds": []any{map[string]any{"type": "tun", "auto_route": true, "strict_route": true}},
+		"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "198.18.0.2", "server_port": 443,
+			"method": "2022-blake3-aes-256-gcm", "password": base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32)))}},
+		"route": map[string]any{"final": "proxy"}})
+	assets, _ := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(graph)})
+	node, err := mobilemultihop.NewNodeProfile("shadowsocks", string(assets), string(encoded), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewDesktopNodePolicy(node, hex.EncodeToString(random[:]), "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return node, policy
+}
+
+type linuxChildControlOutput struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (o *linuxChildControlOutput) Write(p []byte) (int, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.b.Write(p)
+}
+func (o *linuxChildControlOutput) String() string {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.b.String()
+}
+
+type linuxChildControlParent struct {
+	parent     *linuxprocess.Witness
+	bootstrap  *linuxprocess.Bootstrap
+	channel    *linuxprocess.Channel
+	process    *exec.Cmd
+	done       chan struct{}
+	waitErr    error
+	output     linuxChildControlOutput
+	baseline   *mobiletor.DesktopLinuxNodeBaseline
+	invocation linuxChildControlInvocation
+	watch      int
+}
+
+func linuxStartChildControl(t *testing.T, scenario string) (*linuxChildControlParent, error) {
+	t.Helper()
+	linuxChildControlNamespace(t)
+	node, policy := linuxChildControlPolicy(t)
+	meta := policy.Metadata()
+	selection := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256,
+		Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
+	transfer, _ := selection.ControlSHA256()
+	capture, _ := selection.CaptureSHA256()
+	owner := &linuxChildControlParent{done: make(chan struct{}), watch: -1}
+	directory, err := os.MkdirTemp("/run", "routervpn-child-control-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(directory) })
+	input, err := node.LaunchInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"node-source.json": input, "sing-box.json": policy.Config()} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if scenario == "changed-config" {
+		if err := os.WriteFile(filepath.Join(directory, "sing-box.json"), []byte(policy.Config()+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if scenario == "bootstrap-refused" {
+		owner.watch, err = unix.InotifyInit1(unix.IN_CLOEXEC | unix.IN_NONBLOCK)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := unix.InotifyAddWatch(owner.watch, directory, unix.IN_OPEN); err != nil {
+			t.Fatal(err)
+		}
+	}
+	owner.invocation = linuxChildControlInvocation{Directory: directory, Selection: selection, Transfer: transfer,
+		Options: routerVPNNodeLinuxParentOptions{ChannelFD: 3, DirectoryFD: 4, CaptureSHA256: capture}}
+	if scenario == "changed-selection" {
+		owner.invocation.Transfer = strings.Repeat("b", 64)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	owner.parent, err = linuxprocess.CaptureSelf(ctx)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	parentRecord, err := owner.parent.Current(ctx)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	parentDirectory, err := owner.parent.DuplicateDirectory(ctx)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	var childChannel *os.File
+	owner.channel, childChannel, err = linuxprocess.ChannelPair()
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	image, err := os.Open(executable)
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	childImage := image
+	if scenario == "foreign-image" {
+		childImage, err = os.Open(os.DevNull)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	body, _ := json.Marshal(owner.invocation)
+	// The ordinary native image executes from its retained FD5. The foreign
+	// image negative intentionally executes the protected original by path,
+	// while inheriting a different FD5; child ownership must reject it.
+	launch := "/proc/self/fd/5"
+	if scenario == "foreign-image" {
+		launch = executable
+	}
+	owner.process = exec.CommandContext(ctx, launch, "-test.run=^TestRouterVPNLinuxNodeControlWorker$", "-test.count=1", "-test.timeout=27s")
+	owner.process.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_LINUX_GUARDIAN_TEST_NS=1",
+		"ROUTERVPN_NODE_CHILD_CONTROL=" + scenario, "ROUTERVPN_NODE_CHILD_INVOCATION=" + string(body)}
+	owner.process.ExtraFiles = []*os.File{childChannel, parentDirectory, childImage}
+	pidfd := -1
+	owner.process.SysProcAttr = &syscall.SysProcAttr{PidFD: &pidfd}
+	owner.process.Stdout, owner.process.Stderr = &owner.output, &owner.output
+	if err := owner.process.Start(); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	go func() { owner.waitErr = owner.process.Wait(); close(owner.done) }()
+	t.Cleanup(func() {
+		if owner.bootstrap != nil {
+			_ = owner.bootstrap.Close(context.Background())
+		} else if owner.channel != nil {
+			_ = owner.channel.Close(context.Background())
+		}
+		// Closing the original channel lets a rejected child finish its own
+		// cleanup and report the actual assertion. Forced cancellation is a
+		// bounded fallback, never a successful-join or test-pass criterion.
+		select {
+		case <-owner.done:
+		case <-time.After(5 * time.Second):
+			cancel()
+			<-owner.done
+		}
+		cancel()
+		if t.Failed() {
+			// Wait has drained the original command's captured streams. A
+			// channel EOF can arrive before those readers; preserve the actual
+			// child assertion instead of losing it to that harmless ordering.
+			t.Log("joined original generated child output:", owner.output.String())
+		}
+		if owner.baseline != nil {
+			if err := owner.baseline.ObserveClosed(context.Background()); err == nil {
+				if err := owner.baseline.Release(context.Background()); err != nil {
+					t.Error(err)
+				}
+			}
+			if err := owner.baseline.Close(context.Background()); err != nil {
+				t.Error(err)
+			}
+		}
+		if err := owner.parent.Close(context.Background()); err != nil {
+			t.Error(err)
+		}
+		if owner.watch >= 0 {
+			_ = unix.Close(owner.watch)
+		}
+	})
+	if err := errors.Join(childChannel.Close(), parentDirectory.Close(), childImage.Close()); err != nil || pidfd < 0 {
+		t.Fatal("lost original inherited descriptors", err)
+	}
+	if childImage != image {
+		_ = image.Close()
+	}
+	if scenario == "bootstrap-refused" {
+		capture = strings.Repeat("a", 64)
+	}
+	channel := owner.channel
+	owner.channel = nil
+	owner.bootstrap, err = linuxprocess.BindCreatedChild(ctx, channel, owner.parent, os.NewFile(uintptr(pidfd), "original-child-clone"),
+		owner.process.Process.Pid, parentRecord.Image, capture)
+	return owner, err
+}
+
+func TestRouterVPNLinuxNodeControlWorker(t *testing.T) {
+	scenario := os.Getenv("ROUTERVPN_NODE_CHILD_CONTROL")
+	if scenario == "" {
+		return
+	}
+	linuxChildControlNamespace(t)
+	var invocation linuxChildControlInvocation
+	if json.Unmarshal([]byte(os.Getenv("ROUTERVPN_NODE_CHILD_INVOCATION")), &invocation) != nil {
+		t.Fatal("invalid private fixture invocation")
+	}
+	meta := invocation.Selection
+	globalCtx = include.Context(service.ContextWithDefaultRegistry(context.Background()))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if scenario == "before-prepare" {
+		cancel()
+	}
+	if scenario != "captured-prepare" && scenario != "cancelled-after-admission" && scenario != "prepared-before-start" {
+		var err error
+		if scenario == "before-prepare" {
+			err = routerVPNRunLinuxNodeControlled(ctx, invocation.Directory, meta.SessionID, meta.ConfigSHA256, meta.SourceSHA256,
+				invocation.Transfer, 0, invocation.Options)
+		} else {
+			// Use the actual registered command and its argument bindings. No
+			// fixture callback selects the Linux coordinator for these cases.
+			mainCommand.SilenceErrors, mainCommand.SilenceUsage = true, true
+			mainCommand.SetOut(io.Discard)
+			mainCommand.SetErr(io.Discard)
+			mainCommand.SetArgs([]string{"routervpn-node", "--runtime-dir", invocation.Directory,
+				"--session", meta.SessionID, "--config-sha256", meta.ConfigSHA256,
+				"--physical-source-sha256", meta.SourceSHA256, "--physical-transfer-sha256", invocation.Transfer,
+				"--linux-parent-channel", strconv.Itoa(invocation.Options.ChannelFD),
+				"--linux-parent-directory", strconv.Itoa(invocation.Options.DirectoryFD),
+				"--linux-parent-capture", invocation.Options.CaptureSHA256})
+			_, err = mainCommand.ExecuteC()
+		}
+		if scenario == "before-prepare" {
+			if err != nil {
+				t.Fatal("cancelled original command failed joined early retirement", err)
+			}
+		} else if err == nil {
+			t.Fatal("generated command admitted its rejected original preparation", scenario)
+		}
+		return
+	}
+	var inherited []linuxprocess.Object
+	for _, descriptor := range []int{3, 4, 5} {
+		var native unix.Stat_t
+		if err := unix.Fstat(descriptor, &native); err != nil {
+			t.Fatal("fixture lost an original inherited descriptor", err)
+		}
+		inherited = append(inherited, linuxprocess.Object{Device: uint64(native.Dev), Inode: native.Ino, Mode: native.Mode, UID: native.Uid, GID: native.Gid})
+	}
+	owner, err := routerVPNOpenLinuxNodeControl(meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, invocation.Options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := owner.close(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	if scenario == "captured-prepare" {
+		executable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := json.Marshal(inherited)
+		child := exec.Command(executable, "-test.run=^TestRouterVPNLinuxNodeInheritedInventory$", "-test.count=1")
+		child.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_NODE_INHERITED_OBJECTS=" + string(body)}
+		if output, err := child.CombinedOutput(); err != nil {
+			t.Fatalf("actual descendant retained a private original capability: %v: %s", err, output)
+		}
+	}
+	files, err := routerVPNOpenExternalFiles(invocation.Directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer files.root.Close()
+	policy, err := owner.compile(ctx, files, meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256, invocation.Transfer, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	graph, stopGraph := context.WithCancel(service.ContextWithDefaultRegistry(service.ExtendContext(globalCtx)))
+	defer stopGraph()
+	graph, err = owner.prepare(graph, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](graph, []byte(policy.Config()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Log = &option.LogOptions{Disabled: true}
+	instance, err := box.New(box.Options{Context: graph, Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer instance.Close()
+	owner.native = &routerVPNExternalNative{cancel: stopGraph, box: instance}
+	owner.preparation, err = instance.RouterVPNDesktopLinuxNodePreparePhysicalOwned(policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scenario == "prepared-before-start" {
+		retire, stop := context.WithTimeout(context.Background(), 10*time.Second)
+		defer stop()
+		if err := owner.joinNative(retire); err != nil {
+			t.Fatal("unstarted service manager lost the original partial source close", err)
+		}
+		if err := owner.retire(retire); err != nil {
+			t.Fatal("unstarted exact preparation lost its source-free retirement", err)
+		}
+		return
+	}
+	manager := service.FromContext[adapter.NetworkManager](graph)
+	if manager == nil {
+		t.Fatal("actual Box lost its original network manager")
+	}
+	if err := manager.Start(adapter.StartStateInitialize); err != nil {
+		t.Fatal(err)
+	}
+	services := service.FromContext[adapter.ServiceManager](graph)
+	raw, found := services.Get(mobilemultihop.DesktopNodeNetworkTag)
+	network, ok := raw.(*routervpndesktoppt.NodeNetworkOwner)
+	if !found || !ok {
+		t.Fatal("actual Box lost its original Node service")
+	}
+	if err := services.Start(adapter.StartStateInitialize); err != nil {
+		t.Fatal("actual native service did not reach original control admission", err)
+	}
+	if err := owner.current(ctx); err != nil {
+		t.Fatal("actual native child admission was not current", err)
+	}
+	if !network.SocketCurrent() {
+		t.Fatal("actual service manager lost its captured native socket generation")
+	}
+	if err := owner.retire(context.Background()); err == nil {
+		t.Fatal("child retirement bypassed the actual original Box/source join")
+	}
+	if scenario == "cancelled-after-admission" {
+		cancel()
+		stopGraph()
+	}
+	retire, stop := context.WithTimeout(context.Background(), 10*time.Second)
+	defer stop()
+	if err := owner.joinNative(retire); err != nil {
+		t.Fatal("actual partial Box failed original source join", err)
+	}
+	if err := owner.retire(retire); err != nil {
+		t.Fatal("actual child source did not finish original ACK and EOF", err)
+	}
+	if owner.current(retire) == nil || !owner.acknowledged || !owner.retired {
+		t.Fatal("retired child retained graph admission or lost its original receipt")
+	}
+	if err := owner.retire(retire); err != nil {
+		t.Fatal("retained actual retirement receipt was not idempotent", err)
+	}
+}
+
+func TestRouterVPNLinuxNodeInheritedInventory(t *testing.T) {
+	raw := os.Getenv("ROUTERVPN_NODE_INHERITED_OBJECTS")
+	if raw == "" {
+		return
+	}
+	var inherited []linuxprocess.Object
+	if json.Unmarshal([]byte(raw), &inherited) != nil || len(inherited) != 3 {
+		t.Fatal("descendant inventory lost its original comparison objects")
+	}
+	entries, err := os.ReadDir("/proc/self/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		var native unix.Stat_t
+		if err := unix.Stat("/proc/self/fd/"+entry.Name(), &native); errors.Is(err, unix.ENOENT) {
+			continue
+		} else if err != nil {
+			t.Fatal(err)
+		}
+		actual := linuxprocess.Object{Device: uint64(native.Dev), Inode: native.Ino, Mode: native.Mode, UID: native.Uid, GID: native.Gid}
+		for _, original := range inherited {
+			if actual == original {
+				t.Fatal("generated child leaked an original inherited object across descendant exec", entry.Name())
+			}
+		}
+	}
+}
+
+func TestDesktopLinuxGuardianKernelNodeChildControl(t *testing.T) {
+	linuxChildControlNamespace(t)
+	command := exec.Command("ip", "route", "add", "default", "via", "198.18.0.2", "dev", "rvpn-test")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("isolated physical route setup: %v: %s", err, output)
+	}
+	t.Cleanup(func() {
+		if output, err := exec.Command("ip", "route", "del", "default", "via", "198.18.0.2", "dev", "rvpn-test").CombinedOutput(); err != nil {
+			t.Errorf("owned route cleanup: %v: %s", err, output)
+		}
+	})
+	for _, scenario := range []string{"captured-prepare", "cancelled-after-admission", "prepared-before-start", "baseline-refused", "admission-refused", "before-prepare", "changed-config", "changed-selection", "bootstrap-refused", "foreign-image"} {
+		t.Run(scenario, func(t *testing.T) {
+			owner, bindErr := linuxStartChildControl(t, scenario)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			selection := owner.invocation.Selection
+			if scenario == "bootstrap-refused" || scenario == "foreign-image" {
+				if bindErr == nil {
+					t.Fatal("foreign bootstrap/image obtained original authentication")
+				}
+			} else {
+				if bindErr != nil {
+					t.Fatal("generated child lost original bootstrap", bindErr, owner.output.String())
+				}
+				control, err := linuxprotection.NewNodeParentControl(ctx, owner.bootstrap, selection)
+				if err != nil {
+					t.Fatal(err)
+				}
+				created, admitted := 0, 0
+				err = control.ServePreparation(ctx, func(ctx context.Context, capture mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxNodeCreationRecord, error) {
+					created++
+					if scenario == "baseline-refused" {
+						return mobiletor.DesktopLinuxNodeCreationRecord{}, errors.New("original fixture parent refused creation")
+					}
+					var err error
+					owner.baseline, err = mobiletor.NewDesktopLinuxNodeBaseline(ctx, capture, selection.HomeLAN)
+					if err != nil {
+						return mobiletor.DesktopLinuxNodeCreationRecord{}, err
+					}
+					return owner.baseline.Created(ctx)
+				}, func(ctx context.Context, prepared linuxprotection.NodePreparedRecord) error {
+					admitted++
+					if owner.baseline == nil {
+						return errors.New("native source preceded original baseline")
+					}
+					if err := owner.baseline.BindPrepared(ctx, prepared.Protection); err != nil {
+						return err
+					}
+					if scenario == "admission-refused" {
+						return errors.New("original fixture parent refused admission")
+					}
+					return nil
+				})
+				if scenario == "changed-config" || scenario == "changed-selection" {
+					if err == nil || created != 0 || admitted != 0 {
+						t.Fatal("changed private graph or selection reached original native creation", err)
+					}
+				} else {
+					switch scenario {
+					case "baseline-refused", "admission-refused":
+						if !errors.Is(err, linuxprotection.ErrNodeControlRefused) {
+							t.Fatal("generated child lost captured parent refusal", err, owner.output.String())
+						}
+					case "before-prepare", "prepared-before-start":
+						if !errors.Is(err, linuxprotection.ErrNodeControlRetired) || created != 0 || admitted != 0 {
+							t.Fatal("cancelled child created or admitted a new baseline", err)
+						}
+					default:
+						if err != nil || created != 1 || admitted != 1 {
+							t.Fatal("actual Box/source did not use both original parent callbacks", err, owner.output.String())
+						}
+					}
+					receipt, err := control.ReceiveRetirement(ctx)
+					if err != nil || receipt.Validate() != nil {
+						t.Fatal("generated child lost original joined source receipt", err, owner.output.String())
+					}
+					wantSource := scenario != "baseline-refused" && scenario != "before-prepare" && scenario != "prepared-before-start"
+					if (receipt.Source != nil) != wantSource || wantSource && (receipt.Source.Original == nil || receipt.Prepared == nil) {
+						t.Fatal("retirement substituted the actual prepared guardian")
+					}
+					if err := control.AcknowledgeRetirement(ctx, func(ctx context.Context, _ linuxprotection.NodeRetirementRecord) error {
+						if owner.baseline == nil {
+							return mobiletor.ReadDesktopLinuxNodeAbsence(ctx, selection.SessionID)
+						}
+						return owner.baseline.ObserveClosed(ctx)
+					}); err != nil {
+						t.Fatal("actual closed native readback did not precede final ACK", err)
+					}
+				}
+			}
+			if owner.bootstrap != nil {
+				if err := owner.bootstrap.Close(ctx); err != nil {
+					t.Fatal(err)
+				}
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatal("original child did not join after native ACK/EOF", ctx.Err(), owner.output.String())
+			case <-owner.done:
+			}
+			if owner.waitErr != nil {
+				t.Fatal("generated child failed its required native boundary", owner.waitErr, owner.output.String())
+			}
+			if scenario == "bootstrap-refused" {
+				var events [8192]byte
+				n, err := unix.Read(owner.watch, events[:])
+				if n > 0 || err != unix.EAGAIN {
+					t.Fatal("unauthenticated child opened private node input", n, err)
+				}
+			}
+			if _, err := os.Lstat(filepath.Join(owner.invocation.Directory, "node-ready.json")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("pre-TUN child published readiness", err)
+			}
+			if owner.baseline != nil {
+				if err := owner.baseline.ObserveClosed(ctx); err != nil {
+					t.Fatal("joined child left its original baseline unclosed", err)
+				}
+				if err := owner.baseline.Release(ctx); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := mobiletor.ReadDesktopLinuxNodeAbsence(ctx, selection.SessionID); err != nil {
+				t.Fatal("rejected child created unowned native protection", err)
+			}
+		})
+	}
+}
+
+// Keep the compiled fixture explicit about its process streams: no pipe from
+// a replacement owner or a serialized native record is used to join a child.
+var _ io.Writer = (*linuxChildControlOutput)(nil)
