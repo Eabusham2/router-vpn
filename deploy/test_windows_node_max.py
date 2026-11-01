@@ -508,9 +508,10 @@ def execute(source, pq, cache, go='go', *, prospective=False, env=None, receipt_
                 for suffix, cases, timeout in (('', MAX.TRAFFIC[family], 600), ('Credentials', MAX.CREDENTIALS[family], 1800)):
                     run_suite(binary, 'TestRouterVPNDesktopNodeWindowsMAX' + family + suffix, cases, timeout)
             # Twelve reversals each build, prove and retire three owned graphs.
-            # Actual AMD64 reached reversal 11 at the old 1800s aggregate;
-            # every individual startup, I/O and retirement bound is unchanged.
-            run_suite(binary, SUCCESSION, tuple(mode + '/' + layer for mode in MODES for layer in LAYERS), 2400)
+            # Actual AMD64 exhausted 2400s only 14s into the final reversal.
+            # Allow the measured full sequence and cleanup; every individual
+            # peer lifetime, startup, I/O and retirement bound is unchanged.
+            run_suite(binary, SUCCESSION, tuple(mode + '/' + layer for mode in MODES for layer in LAYERS), 3000)
             run_suite(binary, FOREIGN, MODES, 600)
             for mutation in mutations(source):
                 name, parent, case, witness, _, replacement = mutation

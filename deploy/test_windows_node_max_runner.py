@@ -555,7 +555,7 @@ class MAXNativeBoundaries(unittest.TestCase):
                 reversal_deadlines.append((inner, outer_timeout))
             if Path(args[0]) in state['removed_controls']:
                 control_deadlines.append((inner, outer_timeout))
-        self.assertEqual(reversal_deadlines, [(2400, 2415)])
+        self.assertEqual(reversal_deadlines, [(3000, 3015)])
         self.assertEqual(control_deadlines, [(90, 105)] * 6,
                          'The reversal aggregate changed an individual native control deadline')
 
