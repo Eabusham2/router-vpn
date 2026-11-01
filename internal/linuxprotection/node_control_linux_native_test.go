@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -67,6 +68,41 @@ type nodeControlNativeOwner struct {
 	cancel    context.CancelFunc
 	output    nodeControlOutput
 	baseline  *mobiletor.DesktopLinuxNodeBaseline
+}
+
+// The first Err read under the original control gate belongs to enter's
+// mandatory post-acquire cancellation check. The second cancels a genuinely
+// live caller after entry, without changing any native owner or kernel result.
+// With the old direct-context read it lands inside Bootstrap.CheckCapture;
+// with the independent observation it lands at Current's final caller check.
+type nodeControlCancelEntered struct {
+	context.Context
+	cancel context.CancelFunc
+	gate   <-chan struct{}
+	checks atomic.Uint32
+}
+
+func (c *nodeControlCancelEntered) Err() error {
+	if len(c.gate) == 0 && c.checks.Add(1) == 2 {
+		c.cancel()
+	}
+	return c.Context.Err()
+}
+
+func checkNodeControlEnteredCancellation(t *testing.T, ctx context.Context, control *NodeControl) {
+	t.Helper()
+	caller, cancel := context.WithCancel(ctx)
+	defer cancel()
+	entered := &nodeControlCancelEntered{Context: caller, cancel: cancel, gate: control.gate}
+	if err := control.Current(entered); !errors.Is(err, context.Canceled) || entered.checks.Load() < 2 || caller.Err() != context.Canceled {
+		t.Fatal("entered read-only Current did not retain its actual caller cancellation", err, entered.checks.Load())
+	}
+	if control.uncertain != nil {
+		t.Fatal("cancelled read-only Current poisoned its original retirement authority", control.uncertain)
+	}
+	if err := control.Current(ctx); err != nil {
+		t.Fatal("cancelled read-only Current lost its still-live original native participants", err)
+	}
 }
 
 func startNodeControlChild(t *testing.T, scenario string) (*nodeControlNativeOwner, NodeSelection) {
@@ -288,6 +324,9 @@ func TestLinuxNodeControlNativeWorker(t *testing.T) {
 			t.Fatal("actual native source was not admitted by its exact parent", err)
 		}
 	}
+	if scenario == "cancelled-current-child" {
+		checkNodeControlEnteredCancellation(t, ctx, control)
+	}
 	if err := source.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -317,6 +356,12 @@ func TestLinuxNodeControlNativeWorker(t *testing.T) {
 		t.Fatal("foreign source join entered the original terminal phase")
 	}
 	err = control.Retire(ctx, &joined)
+	if scenario == "current-original-closed" {
+		if err == nil {
+			t.Fatal("child completed retirement through its actually closed original bootstrap")
+		}
+		return
+	}
 	if scenario == "terminal-payload" {
 		if err == nil {
 			t.Fatal("child accepted a packet in place of original-channel EOF")
@@ -336,7 +381,8 @@ func TestLinuxNodeControlNativeWorker(t *testing.T) {
 
 func TestDesktopLinuxGuardianKernelNodeControl(t *testing.T) {
 	for _, scenario := range []string{"admitted", "refuse-creation", "refuse-admission", "before-baseline", "before-admission",
-		"foreign-selection", "foreign-sequence", "foreign-engine", "foreign-network", "terminal-payload", "wrong-retirement-ack"} {
+		"foreign-selection", "foreign-sequence", "foreign-engine", "foreign-network", "terminal-payload", "wrong-retirement-ack",
+		"cancelled-current-parent", "cancelled-current-child", "current-original-closed"} {
 		t.Run(scenario, func(t *testing.T) {
 			owner, selection := startNodeControlChild(t, scenario)
 			ctx, cancel := context.WithTimeout(context.Background(), 18*time.Second)
@@ -373,8 +419,25 @@ func TestDesktopLinuxGuardianKernelNodeControl(t *testing.T) {
 				}
 				return nil
 			})
+			if scenario == "cancelled-current-parent" {
+				if err != nil {
+					t.Fatal("actual native admission failed before entered cancellation", err, owner.output.String())
+				}
+				checkNodeControlEnteredCancellation(t, ctx, control)
+			}
 			foreign := strings.HasPrefix(scenario, "foreign-")
-			if foreign {
+			if scenario == "current-original-closed" {
+				if err != nil {
+					t.Fatal("actual native admission failed before original channel closure", err, owner.output.String())
+				}
+				if err := owner.bootstrap.Close(ctx); err != nil {
+					t.Fatal("original native bootstrap did not close", err)
+				}
+				failure := control.Current(ctx)
+				if failure == nil || control.uncertain == nil || failure != control.uncertain || control.Current(ctx) != failure {
+					t.Fatal("read-only Current revived an actually closed original native owner", failure)
+				}
+			} else if foreign {
 				if err == nil || admitCalls != 0 || scenario == "foreign-selection" && createCalls != 0 {
 					t.Fatal("foreign native selection, engine, network or order reached a native mutation callback", err, createCalls, admitCalls)
 				}

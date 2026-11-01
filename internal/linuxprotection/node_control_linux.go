@@ -310,6 +310,10 @@ func (c *NodeControl) AdmitSource(ctx context.Context, prepared NodePreparedReco
 
 // Current proves only this original native admission. Selected-path DNS,
 // Router-node proof and the application's Connected state remain separate.
+// Once this read has entered, caller cancellation cannot revoke the retained
+// native participants needed for authenticated retirement. The independently
+// bounded observation still fails permanently on actual owner loss; caller
+// cancellation is returned separately and never authorizes admission.
 func (c *NodeControl) Current(ctx context.Context) error {
 	if err := c.enter(ctx); err != nil {
 		return err
@@ -318,7 +322,12 @@ func (c *NodeControl) Current(ctx context.Context) error {
 	if !c.admitted || c.retired != nil || c.closedAck || c.peerEOF {
 		return errors.New("Linux Node control has no live admitted preparation")
 	}
-	return c.current(ctx)
+	observation, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := c.current(observation); err != nil {
+		return err
+	}
+	return ctx.Err()
 }
 
 // ReceiveRetirement retains a received original receipt even if a later
