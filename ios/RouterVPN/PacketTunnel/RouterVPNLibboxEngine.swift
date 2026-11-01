@@ -1,6 +1,9 @@
 import Foundation
 import CoreFoundation
 import Libbox
+#if canImport(CryptoKit)
+import CryptoKit
+#endif
 
 final class RouterVPNLibboxEngine {
     static let proofProxyPort = 1099
@@ -12,6 +15,7 @@ final class RouterVPNLibboxEngine {
     private var multihop: LibboxRouterMultihop?
     private var multihopExecutionSource: IOSMultihopExecution.Source?
     private var hopMeasurement: LibboxRouterHopMeasurement?
+    private var hopMeasurementExitID: String?
     private var dnsMeasurement: RouterVPNDNSMeasurementSession?
     private var multihopHealth: DispatchSourceTimer?
     private var performanceHealth: DispatchSourceTimer?
@@ -168,7 +172,7 @@ final class RouterVPNLibboxEngine {
             pendingTorCleanup = torCleanup
             Self.torServerRetirement.retain(torCleanup!)
         }
-        hopMeasurement = nil; multihop = nil; multihopExecutionSource = nil; server = nil; multihopHealth = nil; performanceHealth = nil; runtimeRoot = nil; configContent = ""; starting = false
+        hopMeasurement = nil; hopMeasurementExitID = nil; multihop = nil; multihopExecutionSource = nil; server = nil; multihopHealth = nil; performanceHealth = nil; runtimeRoot = nil; configContent = ""; starting = false
         torProofDelivery = nil
         self.torHealth = nil
         externalProofDelivery = nil; self.externalHealth = nil; externalPolicy = nil
@@ -414,6 +418,29 @@ final class RouterVPNLibboxEngine {
                   current(owner), request.healthy() else { return nil }
             return execution
         }
+        func measurementExecution(exitID: String) -> (requested: String, selected: String)? {
+            guard let owner, current(owner), request.healthy(),
+                  let capture = try? JSONSerialization.jsonObject(with: Data(policy.capture.utf8)) as? [String: Any],
+                  capture["exit_id"] as? String == exitID,
+                  let profile = capture["profile"] as? [String: Any], profile["id"] as? String == exitID else { return nil }
+            let requested: String
+            if let raw = profile["multihop_execution"] {
+                guard let value = raw as? String, value.isEmpty || ["local", "server", "auto"].contains(value) else { return nil }
+                requested = value.isEmpty ? "local" : value
+            } else { requested = "local" }
+            let selected: String
+            if policy.executionRequested != nil {
+                guard let proved = provedExecution(), requested == "auto" || requested == proved else { return nil }
+                selected = proved
+            } else {
+                // Explicit Local graphs, including paired entries, have no
+                // server execution proposal. Missing Compare/Server proof can
+                // never be reinterpreted as a Local winner.
+                guard requested == "local", capture["execution"] == nil else { return nil }
+                selected = "local"
+            }
+            return current(owner) && request.healthy() ? (requested, selected) : nil
+        }
         func run() {
             lock.lock()
             guard !started, !cancelled else { lock.unlock(); return }
@@ -596,6 +623,13 @@ final class RouterVPNLibboxEngine {
             guard let owner, current(owner), healthy() else { return nil }
             lock.lock(); let valid = proved && !cancelled; lock.unlock()
             return valid ? execution : nil
+        }
+        func measurementExecution(exitID: String) -> (requested: String, selected: String)? {
+            guard let source = try? JSONSerialization.jsonObject(with: Data(sourceProfile.utf8)) as? [String: Any],
+                  source["id"] as? String == exitID, let selected = provedExecution() else { return nil }
+            let requested = RouterVPNLibboxEngine.torExecutionSelection(source)
+            guard ["local", "server", "auto"].contains(requested), requested == "auto" || requested == selected else { return nil }
+            return (requested, selected)
         }
         func matches(_ source: IOSMultihopExecution.Source) -> Bool {
             guard (source.requested == "auto" || source.requested == execution), provedExecution() == execution,
@@ -953,6 +987,7 @@ final class RouterVPNLibboxEngine {
         hopMeasurement = probe
     }
     func enableExternalHopMeasurement(exitID: String) throws {
+        guard !exitID.isEmpty, exitID.utf8.count <= 128 else { throw error("External measurement has no captured exit identity") }
         ownershipLock.lock()
         let external = externalProofDelivery, tor = torProofDelivery, generation = ownershipGeneration
         let available = server != nil && !starting && !permanentlyStopped && hopMeasurement == nil
@@ -965,28 +1000,55 @@ final class RouterVPNLibboxEngine {
         ownershipLock.lock()
         let current = ownershipGeneration == generation && !permanentlyStopped && hopMeasurement == nil &&
             externalProofDelivery === external && torProofDelivery === tor
-        if current { hopMeasurement = probe }
+        if current { hopMeasurement = probe; hopMeasurementExitID = exitID }
         ownershipLock.unlock()
         guard current else { try probe.close(); throw error("External measurement belongs to a retired native generation") }
     }
     func hopMeasurementRequest(operation: String, request: String, session: String) -> Data? {
+        if operation == "hop-measure-info" {
+            guard session.isEmpty else { return nil }
+            return hopMeasurementInformation(request: request)
+        }
         ownershipLock.lock()
         defer { ownershipLock.unlock() }
         guard let probe = hopMeasurement, !permanentlyStopped else { return nil }
-        if operation == "hop-measure-info", session.isEmpty {
-            guard let data = platform.mtu.request(operation: "mtu-status", request: request, session: ""),
-                  let status = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  status["ack_id"] as? String == request, let mtuSession = status["session_id"] as? String,
-                  UUID(uuidString: mtuSession) != nil else { return nil }
-            return try? JSONSerialization.data(withJSONObject: ["request_id": request,
-                "session_id": settingsEpoch, "mtu_session_id": mtuSession])
-        }
         guard session == settingsEpoch else { return nil }
         if operation == "hop-measure-start" {
             guard !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
             return Self.retiredMeasurements.start(probe, request: request, session: session)
         }
+        if operation == "hop-measure-latency-start" {
+            guard let exitID = hopMeasurementExitID,
+                  !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
+            return Self.retiredMeasurements.start(probe, request: request, session: session, latencyExitID: exitID)
+        }
         return Self.retiredMeasurements.reply(operation: operation, request: request, session: session)
+    }
+
+    private func hopMeasurementInformation(request: String) -> Data? {
+        ownershipLock.lock()
+        let probe = hopMeasurement, exitID = hopMeasurementExitID, owned = server, generation = ownershipGeneration
+        let external = externalProofDelivery, tor = torProofDelivery, config = configContent
+        let available = !permanentlyStopped && !starting && probe != nil && owned != nil
+        ownershipLock.unlock()
+        guard available,
+              let data = platform.mtu.request(operation: "mtu-status", request: request, session: ""),
+              let status = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              status["ack_id"] as? String == request, let mtuSession = status["session_id"] as? String,
+              UUID(uuidString: mtuSession) != nil else { return nil }
+        var information: [String: Any] = ["request_id": request, "session_id": settingsEpoch, "mtu_session_id": mtuSession]
+        if let exitID {
+            guard (external != nil) != (tor != nil), !config.isEmpty,
+                  let execution = external?.measurementExecution(exitID: exitID) ?? tor?.measurementExecution(exitID: exitID) else { return nil }
+            information["node_id"] = exitID
+            information["execution"] = ["requested": execution.requested, "selected": execution.selected,
+                "config_sha256": SHA256.hash(data: Data(config.utf8)).map { String(format: "%02x", $0) }.joined()]
+        }
+        ownershipLock.lock()
+        let current = ownershipGeneration == generation && server === owned && hopMeasurement === probe &&
+            externalProofDelivery === external && torProofDelivery === tor && hopMeasurementExitID == exitID && !permanentlyStopped && !starting
+        ownershipLock.unlock()
+        return current ? (try? JSONSerialization.data(withJSONObject: information)) : nil
     }
 
     func enableExternalDNSMeasurement(exitID: String) throws {
@@ -1047,11 +1109,14 @@ final class RouterVPNLibboxEngine {
             guard let data = try? JSONSerialization.data(withJSONObject: value), data.count <= 16384 else { return nil }
             return data
         }
-        func start(_ probe: LibboxRouterHopMeasurement, request: String, session: String) -> Data? {
+        func start(_ probe: LibboxRouterHopMeasurement, request: String, session: String, latencyExitID: String? = nil) -> Data? {
             lock.lock(); defer { lock.unlock() }
             let id = key(request, session)
             guard owners[id] == nil, receipts[id] == nil, !owners.values.contains(where: { $0 === probe }) else { return nil }
-            do { try probe.start(request, bytes: 8388608) } catch { return nil }
+            do {
+                if let exitID = latencyExitID { try probe.startLatency(request, exitID: exitID) }
+                else { try probe.start(request, bytes: 8388608) }
+            } catch { return nil }
             owners[id] = probe
             return data(probe, request: request, session: session)
         }

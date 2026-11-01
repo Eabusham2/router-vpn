@@ -148,8 +148,11 @@ public final class LibboxRouterHopMeasurement {
     private let lock=NSLock()
     private var request="",closed=0,complete=false,drained=false,failClose=false
     private var cancelledRequests:[String]=[]
+    private var latencyExits:[String]=[]
     public init() {}
     public func start(_ request: String, bytes: Int64) throws {lock.lock();self.request=request;complete=false;drained=false;lock.unlock()}
+    public func startLatency(_ request: String, exitID: String) throws {lock.lock();self.request=request;latencyExits.append(exitID);complete=false;drained=false;lock.unlock()}
+    public func latencyExitCalls()->[String]{lock.lock();defer{lock.unlock()};return latencyExits}
     public func cancel(_ request: String) {lock.lock();cancelledRequests.append(request);if self.request==request{complete=true};lock.unlock()}
     public func cancellationCalls()->[String]{lock.lock();defer{lock.unlock()};return cancelledRequests}
     public func configure(closeFails:Bool){lock.lock();failClose=closeFails;lock.unlock()}
@@ -273,12 +276,13 @@ public final class LibboxExternalTestState: @unchecked Sendable {
     public static let shared = LibboxExternalTestState()
     private let lock = NSLock()
     private var block = false, invalid = false, nativeError = false
+    private var execution = ""
     private var request: LibboxRouterExternalProofRequest?
     private var capture: [String] = []
-    public func configure(block: Bool = false, invalid: Bool = false, nativeError: Bool = false) { lock.lock(); self.block=block; self.invalid=invalid; self.nativeError=nativeError; request=nil; lock.unlock() }
+    public func configure(block: Bool = false, invalid: Bool = false, nativeError: Bool = false, execution: String = "") { lock.lock(); self.block=block; self.invalid=invalid; self.nativeError=nativeError; self.execution=execution; request=nil; lock.unlock() }
     public func make(_ source: String, _ capture: String, _ session: String) -> LibboxRouterExternalProofRequest {
         lock.lock(); defer { lock.unlock() }
-        self.capture=[source,capture,session]; let value=LibboxRouterExternalProofRequest(session,block,invalid,nativeError);request=value;return value
+        self.capture=[source,capture,session]; let value=LibboxRouterExternalProofRequest(session,block,invalid,nativeError,execution);request=value;return value
     }
     public func current() -> LibboxRouterExternalProofRequest? { lock.lock(); defer { lock.unlock() }; return request }
     public func captured() -> [String] { lock.lock(); defer { lock.unlock() }; return capture }
@@ -289,8 +293,9 @@ public final class LibboxRouterExternalProofRequest {
     private let session: String, block: Bool, invalid: Bool, nativeError: Bool
     private let lock=NSLock(), release=DispatchSemaphore(value:0)
     private var cancels=0,proved=false
+    private var selectedExecution: String
     public let entered=DispatchSemaphore(value:0)
-    init(_ session:String,_ block:Bool,_ invalid:Bool,_ nativeError:Bool){self.session=session;self.block=block;self.invalid=invalid;self.nativeError=nativeError}
+    init(_ session:String,_ block:Bool,_ invalid:Bool,_ nativeError:Bool,_ execution:String){self.session=session;self.block=block;self.invalid=invalid;self.nativeError=nativeError;self.selectedExecution=execution}
     public func run(_ failure: NSErrorPointer) -> String {
         entered.signal();if block {_ = release.wait(timeout:.now()+4)}
         lock.lock();proved = !invalid;lock.unlock()
@@ -302,10 +307,10 @@ public final class LibboxRouterExternalProofRequest {
     public func close()throws{cancel()}
     public func cancelCount()->Int{lock.lock();defer{lock.unlock()};return cancels}
     public func healthy()->Bool{lock.lock();defer{lock.unlock()};return cancels==0 && proved}
-    // This existing fixture covers plain Local external policy. The separate
-    // execution-owner gate supplies real healthy winner/lease boundary states.
+    // These explicit native replies exercise the shipping host's validation.
+    // The separate execution-owner gate proves real comparison/lease traffic.
     public func progressJSON()->String{"{}"}
-    public func execution()->String{""}
+    public func execution()->String{lock.lock();defer{lock.unlock()};return selectedExecution}
 }
 public func LibboxRouterExternalCreateProof(_ server:LibboxCommandServer,_ source:String,_ capture:String,_ session:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterExternalProofRequest? { LibboxExternalTestState.shared.make(source,capture,session) }
 public func LibboxRouterExternalCreateHopMeasurement(_ server:LibboxCommandServer,_ proof:LibboxRouterExternalProofRequest,_ source:String,_ capture:String,_ session:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterHopMeasurement? {
@@ -329,11 +334,17 @@ public func LibboxRouterTorCreateDNSMeasurement(_ server:LibboxCommandServer,_ p
 HARNESS = r'''
 import Foundation
 import Libbox
+import CryptoKit
 // Policy compilation and schema validation have a real Swift/Go gate. This
 // boundary isolates foreign-handle delivery, cancellation and exact config use.
 struct RouterVPNExternalPolicy: Sendable {
-    let sourceConfig: String, capture: String, config: String
-    var executionRequested:String?{nil}
+    let sourceConfig: String, capture: String, config: String, metadata: String
+    init(sourceConfig:String,capture:String,config:String,metadata:String="{}") {
+        self.sourceConfig=sourceConfig;self.capture=capture;self.config=config;self.metadata=metadata
+    }
+    var executionRequested:String? {
+        (try? JSONSerialization.jsonObject(with:Data(metadata.utf8)) as? [String:Any])?["execution"] as? String
+    }
     func validateProof(_ result:String,sessionID:String,began:Date)throws {
         guard let value=try JSONSerialization.jsonObject(with:Data(result.utf8)) as? [String:Any],
               value["session_id"] as? String==sessionID,value["valid"] as? Bool==true else {throw NSError(domain:"ExternalPolicyFixture",code:1)}
@@ -352,6 +363,7 @@ final class MTUPlatformDouble {
     let independentSession = UUID().uuidString
     var hasOwner = false
     var measurementReady = true
+    var statusCallback: (() -> Void)?
     private var server:LibboxCommandServer?
     private var failures=0,drained=false
     private(set) var closeSnapshots:[[String]]=[]
@@ -382,7 +394,9 @@ final class MTUPlatformDouble {
     }
     func request(operation: String, request: String, session: String) -> Data? {
         guard operation == "mtu-status", session.isEmpty || session == independentSession else { return nil }
-        return try? JSONSerialization.data(withJSONObject:["ack_id":request,"session_id":independentSession])
+        let data=try? JSONSerialization.data(withJSONObject:["ack_id":request,"session_id":independentSession])
+        let callback=statusCallback;statusCallback=nil;callback?()
+        return data
     }
 }
 final class MTUActivationFixture:@unchecked Sendable {
@@ -681,7 +695,12 @@ final class CompletionState: @unchecked Sendable {
         let externalState=LibboxExternalTestState.shared
         let externalConfig="{\"inbounds\":[{\"type\":\"tun\",\"tag\":\"captured-tun\"}],\"outbounds\":[] }"
         let externalFiles=["sing-box.json":Data(externalConfig.utf8)]
-        let externalPolicy=RouterVPNExternalPolicy(sourceConfig:"exact source bytes",capture:"frozen profile/policy",config:externalConfig)
+        let externalCapture=String(decoding:try JSONSerialization.data(withJSONObject:[
+            "schema":1,"exit_id":"saved-exit","protocol":"shadowsocks","expected_public_ip":"198.51.100.9",
+            "profile":["id":"saved-exit","node_kind":"external","mtu_policy":"auto",
+                       "external":["protocol":"shadowsocks","expected_public_ip":"198.51.100.9"]]
+        ],options:[.sortedKeys]),as:UTF8.self)
+        let externalPolicy=RouterVPNExternalPolicy(sourceConfig:"exact source bytes",capture:externalCapture,config:externalConfig)
         for action in ["stable","stop","network","pause","invalid","native-error"] {
             state.configure();externalState.configure(block:["stop","network","pause"].contains(action),invalid:action=="invalid",nativeError:action=="native-error")
             let provider=PacketTunnelProvider(),owner=RouterVPNLibboxEngine(tunnel:provider)
@@ -893,6 +912,10 @@ final class CompletionState: @unchecked Sendable {
             try owner.enableExternalHopMeasurement(exitID:"captured-tor");try owner.enableExternalDNSMeasurement(exitID:"captured-tor");try owner.activateTorMTU();try owner.bindTorExecutionSource(source)
             let request=String(repeating:"c",count:32),snapshot=try IOSMultihopExecution.Capture.decode(owner.multihopExecutionSnapshot(request:request)!,source:source,request:request)
             check("Compare restoration receipt preserves original auto and proved leaf",snapshot.source.requested=="auto" && snapshot.execution==execution && snapshot.pins == .empty)
+            let info=owner.hopMeasurementRequest(operation:"hop-measure-info",request:request,session:"")!
+            let binding=try IOSHopMeasurementBinding.decode(info,request:request,mtuSession:MTUActivationFixture.shared.currentPlatform()!.mtu.independentSession)
+            let fingerprint=SHA256.hash(data:Data(state.currentServer()!.capturedConfiguration().utf8)).map{String(format:"%02x",$0)}.joined()
+            check("Tor measurement Info retains original auto and proved leaf",binding.node_id=="captured-tor" && binding.execution?.valid==true && binding.execution?.requested=="auto" && binding.execution?.selected==execution && binding.execution?.config_sha256==fingerprint)
             owner.stop();check("retired Tor cannot export comparison handles",owner.torComparisonNative()==nil)
             for field in ["dns_host","ipv6_mode","home_lan_access","manual_mtu","multihop_entry_id","external"] {
                 state.configure();torState.configure()
@@ -973,6 +996,9 @@ final class CompletionState: @unchecked Sendable {
                 let id=String(repeating:"d",count:32),receipt=owner!.multihopExecutionSnapshot(request:id)
                 let captured=try receipt.map{try IOSMultihopExecution.Capture.decode($0,source:source,request:id)}
                 check("actual proved Tor execution is retained for restoration",captured?.execution=="server")
+                let info=owner!.hopMeasurementRequest(operation:"hop-measure-info",request:id,session:"")!
+                let binding=try IOSHopMeasurementBinding.decode(info,request:id,mtuSession:platform.mtu.independentSession)
+                check("Tor Server measurement Info requires its actual proved execution",binding.node_id=="captured-tor" && binding.execution?.valid==true && binding.execution?.requested=="server" && binding.execution?.selected=="server")
             }
             if action=="hop-retry" {LibboxHopTestState.shared.current()!.configure(closeFails:true)}
             if action=="dns-retry" {LibboxDNSTestState.shared.current()!.configure(hold:true)}
@@ -1075,8 +1101,95 @@ final class CompletionState: @unchecked Sendable {
             check("Tor cannot connect without exact Boolean DNS/exit proof: "+fault,done.wait() && done.values()==(1,1));owner.stop()
         }
         let hopState=LibboxHopTestState.shared
-        for tor in [false,true] {for action in ["stable","cancel-proof","late-factory","retired-reply"] {
+        // Explicit compiler-receipt fixtures exercise the actual engine. The
+        // separate Swift/Go policy and native execution gates validate graph,
+        // credential, comparison and lease contents; no such traffic is doubled
+        // into a successful live native acceptance claim here.
+        let executionCases:[(name:String,requested:String?,entry:String?,receipt:String?,selected:String,valid:Bool)] = [
+            ("direct",nil,nil,nil,"",true),
+            ("ordinary-paired-local","local","external",nil,"",true),
+            ("router-paired-local","local","router-vpn",nil,"",true),
+            ("paired-server","server","router-vpn","server","server",true),
+            ("paired-auto-local","auto","router-vpn","auto","local",true),
+            ("paired-auto-server","auto","router-vpn","auto","server",true),
+            ("restored-auto-server","auto","router-vpn","server","server",true),
+            ("missing-paired-auto","auto","router-vpn",nil,"",false),
+            ("missing-paired-server","server","router-vpn",nil,"",false),
+            ("wrong-selected","server","router-vpn","server","local",false),
+            ("unfinished-selection","auto","router-vpn","auto","auto",false),
+            ("wrong-captured-profile",nil,nil,nil,"",false),
+            ("wrong-captured-exit",nil,nil,nil,"",false),
+            ("unrequested-receipt",nil,nil,nil,"",false),
+            ("wrong-type-requested",nil,nil,nil,"",false),
+        ]
+        var nativeFingerprints=Set<String>()
+        for (index,fixture) in executionCases.enumerated() {
+            state.configure();externalState.configure(execution:fixture.selected);hopState.configure();MTUActivationFixture.shared.configure()
+            var capture=try JSONSerialization.jsonObject(with:Data(externalCapture.utf8)) as! [String:Any]
+            var profile=capture["profile"] as! [String:Any]
+            if let requested=fixture.requested {profile["multihop_execution"]=requested}
+            if let kind=fixture.entry {
+                profile["multihop_enabled"]=true;profile["multihop_entry_id"]="captured-entry";profile["multihop_exit_id"]="saved-exit"
+                profile["multihop_entry_mode"]=kind=="external" ? "socks5":"wg";profile["multihop_exit_mode"]="shadowsocks"
+                capture["entry"]=["id":"captured-entry","node_kind":kind];capture["entry_tag"]="external-entry"
+            }
+            if fixture.name=="wrong-captured-profile" {profile["id"]="other-exit"}
+            if fixture.name=="wrong-captured-exit" {capture["exit_id"]="other-exit"}
+            if fixture.name=="wrong-type-requested" {profile["multihop_execution"]=42}
+            capture["profile"]=profile
+            var metadata:[String:Any]=[:]
+            if let selected=fixture.receipt {capture["execution"]=["selection":selected];metadata["execution"]=selected}
+            if fixture.name=="unrequested-receipt" {capture["execution"]=["selection":"server"]}
+            let captured=String(decoding:try JSONSerialization.data(withJSONObject:capture,options:[.sortedKeys]),as:UTF8.self)
+            let receipt=String(decoding:try JSONSerialization.data(withJSONObject:metadata,options:[.sortedKeys]),as:UTF8.self)
+            // Whitespace remains part of exact native configuration identity.
+            let config=externalConfig+String(repeating:" ",count:index+1)
+            let policy=RouterVPNExternalPolicy(sourceConfig:"captured source "+fixture.name,capture:captured,config:config,metadata:receipt)
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState()
+            try owner.start(files:["sing-box.json":Data(config.utf8)],strict:true,externalPolicy:policy)
+            owner.proveExternal(completion:done.finish)
+            check("execution fixture retains completed proof",done.wait() && done.values()==(1,0))
+            try owner.enableExternalHopMeasurement(exitID:"saved-exit")
+            let request=String(repeating:"f",count:32)
+            let information=owner.hopMeasurementRequest(operation:"hop-measure-info",request:request,session:"")
+            check("external execution Info matches captured policy: "+fixture.name,(information != nil)==fixture.valid)
+            if let information {
+                let mtu=MTUActivationFixture.shared.currentPlatform()!.mtu
+                let binding=try IOSHopMeasurementBinding.decode(information,request:request,mtuSession:mtu.independentSession)
+                let expected=fixture.receipt==nil ? "local":fixture.selected
+                let configFingerprint=SHA256.hash(data:Data(state.currentServer()!.capturedConfiguration().utf8)).map{String(format:"%02x",$0)}.joined()
+                check("execution Info preserves original request and actual winner",binding.node_id=="saved-exit" && binding.execution?.valid==true && binding.execution?.requested==(fixture.requested ?? "local") && binding.execution?.selected==expected)
+                check("execution Info fingerprints exact running native config",binding.execution?.config_sha256==configFingerprint && nativeFingerprints.insert(configFingerprint).inserted)
+                check("execution Info cannot use a foreign provider epoch",owner.hopMeasurementRequest(operation:"hop-measure-info",request:request,session:UUID().uuidString)==nil)
+            }
+            owner.stop()
+            check("retired execution cannot export an Info receipt",owner.hopMeasurementRequest(operation:"hop-measure-info",request:request,session:"")==nil)
+        }
+        for tor in [false,true] {for event in ["cancel-proof","network","pause","stop","during-mtu-stop","during-mtu-network","foreign-exit"] {
+            state.configure();externalState.configure();torState.configure();hopState.configure();MTUActivationFixture.shared.configure()
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState()
+            if tor {try owner.start(files:torFiles,strict:true);owner.proveTor(sessionID:"tor-session",profile:torProfile,completion:done.finish)}
+            else {try owner.start(files:externalFiles,strict:true,externalPolicy:externalPolicy);owner.proveExternal(completion:done.finish)}
+            check("Info staleness fixture owns a proved path",done.wait() && done.values()==(1,0))
+            let exitID=tor ? "captured-tor":"saved-exit"
+            try owner.enableExternalHopMeasurement(exitID:event=="foreign-exit" ? "foreign-exit":exitID)
+            let request=String(repeating:"9",count:32)
+            if event != "foreign-exit" {check("current Info exists before invalidation",owner.hopMeasurementRequest(operation:"hop-measure-info",request:request,session:"") != nil)}
+            switch event {
+            case "cancel-proof": if tor {torState.current()!.cancel()}else{externalState.current()!.cancel()}
+            case "network": owner.invalidateMultihop()
+            case "pause": owner.pause()
+            case "stop": owner.stop()
+            case "during-mtu-stop": MTUActivationFixture.shared.currentPlatform()!.mtu.statusCallback={owner.stop()}
+            case "during-mtu-network": MTUActivationFixture.shared.currentPlatform()!.mtu.statusCallback={owner.invalidateMultihop()}
+            default: break
+            }
+            check("Info rejects stale proof, session or foreign exit: "+event,owner.hopMeasurementRequest(operation:"hop-measure-info",request:request,session:"")==nil)
+            owner.stop()
+        }}
+        for tor in [false,true] {for action in ["stable","cancel-proof","late-factory","retired-reply","latency","latency-retired"] {
             state.configure();externalState.configure();torState.configure();hopState.configure()
+            let exitID=tor ? "captured-tor":"saved-exit"
             let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
             if tor {try owner.start(files:torFiles,strict:true)}else{try owner.start(files:externalFiles,strict:true,externalPolicy:externalPolicy)}
             let done=CompletionState()
@@ -1085,12 +1198,12 @@ final class CompletionState: @unchecked Sendable {
             if action=="cancel-proof" {if tor{torState.current()!.cancel()}else{externalState.current()!.cancel()}}
             if action=="late-factory" {hopState.configure {owner.stop()}}
             var failed=false
-            do{try owner.enableExternalHopMeasurement(exitID:"saved-exit")}catch{failed=true}
+            do{try owner.enableExternalHopMeasurement(exitID:exitID)}catch{failed=true}
             check("only the proved current factory is adopted",failed == ["cancel-proof","late-factory"].contains(action))
             let probe=hopState.current()
             if action=="cancel-proof" {check("failed native proof cannot call factory",probe==nil)}
             else {
-                let expected=tor ? ["tor","saved-exit"]:["external"]+externalState.captured()
+                let expected=tor ? ["tor",exitID]:["external"]+externalState.captured()
                 check("factory receives exact retained proof selection",hopState.captured()==expected)
             }
             if action=="late-factory" {check("late native measurement is closed",probe?.closeCount()==1)}
@@ -1102,22 +1215,31 @@ final class CompletionState: @unchecked Sendable {
                 let hopInfo=owner.hopMeasurementRequest(operation:"hop-measure-info",request:id,session:"")!
                 let binding=try IOSHopMeasurementBinding.decode(hopInfo,request:id,mtuSession:mtuSession)
                 check("Info binds provider epoch and exact MTU owner separately",binding.session_id==owner.settingsEpoch && binding.mtu_session_id==mtuSession)
+                check("Info exposes only the captured external exit",binding.node_id==exitID)
+                let nativeConfig=state.currentServer()!.capturedConfiguration()
+                let fingerprint=SHA256.hash(data:Data(nativeConfig.utf8)).map{String(format:"%02x",$0)}.joined()
+                check("Info binds exact running config and proved Local execution",binding.execution?.valid==true && binding.execution?.requested=="local" && binding.execution?.selected=="local" && binding.execution?.config_sha256==fingerprint)
                 var badMTU=false;do{_ = try IOSHopMeasurementBinding.decode(hopInfo,request:id,mtuSession:UUID().uuidString)}catch{badMTU=true}
                 check("foreign MTU echo cannot enable a hop measurement",badMTU)
-                check("bounded request starts on adopted owner",owner.hopMeasurementRequest(operation:"hop-measure-start",request:id,session:binding.session_id) != nil)
+                let startOperation=action.hasPrefix("latency") ? "hop-measure-latency-start":"hop-measure-start"
+                check("foreign MTU UUID cannot start routed50",owner.hopMeasurementRequest(operation:"hop-measure-latency-start",request:id,session:mtuSession)==nil)
+                check("bounded request starts on adopted owner",owner.hopMeasurementRequest(operation:startOperation,request:id,session:binding.session_id) != nil)
+                check("routed50 gets the native captured exit only",probe!.latencyExitCalls()==(action.hasPrefix("latency") ? [exitID]:[]))
                 let beforeCancel=try JSONSerialization.jsonObject(with:Data(probe!.statusJSON().utf8)) as! NSDictionary
                 let beforeCancelCalls=probe!.cancellationCalls()
                 check("early cancel receives bounded discard receipt",owner.hopMeasurementRequest(operation:"hop-measure-cancel",request:other,session:owner.settingsEpoch) != nil)
                 let afterCancel=try JSONSerialization.jsonObject(with:Data(probe!.statusJSON().utf8)) as! NSDictionary
                 check("foreign request cannot cancel current work",afterCancel.isEqual(beforeCancel) && probe!.cancellationCalls()==beforeCancelCalls)
                 check("late start after early cancel is rejected",owner.hopMeasurementRequest(operation:"hop-measure-start",request:other,session:owner.settingsEpoch)==nil)
+                check("late routed50 start after early cancel is rejected",owner.hopMeasurementRequest(operation:"hop-measure-latency-start",request:other,session:owner.settingsEpoch)==nil)
                 check("retired session cannot start on current native owner",owner.hopMeasurementRequest(operation:"hop-measure-start",request:other,session:UUID().uuidString)==nil)
-                if action=="retired-reply" {
+                if action=="retired-reply" || action=="latency-retired" {
                     owner.stop()
                     let response=RouterVPNLibboxEngine.retiredHopMeasurementRequest(operation:"hop-measure-status",request:id,session:owner.settingsEpoch)!
                     let value=try JSONSerialization.jsonObject(with:response) as! [String:Any]
                     check("retired request can prove its actual drain",value["request_id"] as? String==id && value["drained"] as? Bool==true)
                     check("retired receipt cannot start a new measurement",RouterVPNLibboxEngine.retiredHopMeasurementRequest(operation:"hop-measure-start",request:id,session:owner.settingsEpoch)==nil)
+                    check("retired receipt cannot start routed50",RouterVPNLibboxEngine.retiredHopMeasurementRequest(operation:"hop-measure-latency-start",request:id,session:owner.settingsEpoch)==nil)
                     check("retired receipt survives a late cancelled retry",RouterVPNLibboxEngine.retiredHopMeasurementRequest(operation:"hop-measure-cancel",request:id,session:owner.settingsEpoch) != nil)
                 }
             }
@@ -1126,6 +1248,7 @@ final class CompletionState: @unchecked Sendable {
         let dnsState=LibboxDNSTestState.shared
         for tor in [false,true] {for action in ["stable","cancel-proof","late-factory","before-proof"] {
             state.configure();externalState.configure();torState.configure();dnsState.configure();IOSDNSRetirementReceipts.shared.reset()
+            let exitID=tor ? "captured-tor":"saved-exit"
             let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState()
             if tor {try owner.start(files:torFiles,strict:true)}else{try owner.start(files:externalFiles,strict:true,externalPolicy:externalPolicy)}
             if action != "before-proof" {
@@ -1134,11 +1257,11 @@ final class CompletionState: @unchecked Sendable {
             }
             if action=="cancel-proof"{if tor{torState.current()!.cancel()}else{externalState.current()!.cancel()}}
             if action=="late-factory"{dnsState.configure{owner.stop()}}
-            var failed=false;do{try owner.enableExternalDNSMeasurement(exitID:"saved-exit")}catch{failed=true}
+            var failed=false;do{try owner.enableExternalDNSMeasurement(exitID:exitID)}catch{failed=true}
             check("only a current successful native proof creates DNS ownership",failed == (action != "stable"))
             if ["before-proof","cancel-proof"].contains(action){check("unproved DNS never calls its factory",dnsState.current()==nil)}
             else {
-                check("DNS factory receives the retained exact source/proof",dnsState.captured()==(tor ? ["tor","saved-exit"]:["external"]+externalState.captured()))
+                check("DNS factory receives the retained exact source/proof",dnsState.captured()==(tor ? ["tor",exitID]:["external"]+externalState.captured()))
                 if action=="late-factory"{check("late DNS factory handle drains before it is discarded",dnsState.current()!.counts().2==1)}
                 else {
                     let id=String(repeating:tor ? "e":"d",count:32)
@@ -1309,6 +1432,8 @@ def main():
             ('server-retirement-blocks-replacement', '        try Self.torServerRetirement.requireAvailable()', '        // missing retired Server owner', 'unacknowledged old lease blocks a replacement owner'),
             ('server-captured-execution', '              Self.torExecutionSelection(capturedProfile) == execution,\n              IOSMultihopExecution.torLeafMatches(source: sourceProfile ?? profile, leaf: profile, execution: execution),', '              true,', 'Server source cannot change its selected execution before proof'),
             ('tor-compare-source', '              IOSMultihopExecution.torLeafMatches(source: sourceProfile ?? profile, leaf: profile, execution: execution),', '              true,', 'Compare source mutation is rejected before native proof'),
+            ('measurement-execution-authority', '                guard requested == "local", capture["execution"] == nil else { return nil }', '                guard capture["execution"] == nil else { return nil }', 'external execution Info matches captured policy: missing-paired-auto'),
+            ('measurement-config-identity', 'SHA256.hash(data: Data(config.utf8))', 'SHA256.hash(data: Data("uncaptured configuration".utf8))', 'Tor measurement Info retains original auto and proved leaf'),
         ):
             assert text.count(before)==1,label
             broken.write_text(text.replace(before,after,1))

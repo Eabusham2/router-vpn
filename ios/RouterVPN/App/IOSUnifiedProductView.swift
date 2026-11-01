@@ -691,27 +691,41 @@ private struct IOSUnifiedPerformanceView: View {
     @EnvironmentObject var model: RouterVPNModel
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var telemetry: IOSUnifiedTelemetry
+    @ObservedObject private var externalBenchmark = IOSExternalNodeBenchmark.shared
     @State private var output = "Choose a real measurement."
     @State private var busy = false
     @State private var operation: Task<Void, Never>?
+    private var selectedExternalHistoryKey: String? { try? IOSExternalNodeStatistics.selectedKey(model) }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Current path") {
                     LabeledContent("Private node response", value: telemetry.livePathMs.map { String(format: "%.1f ms", $0) } ?? "No current measurement")
-                    Button("Measure current tunnel RTT") { runLive() }.disabled(!model.connected || busy || telemetry.measuring)
+                    Button("Measure private node response") { runLive() }.disabled(!model.connected || model.unifiedSelectedProfile?.normalizedNodeKind != "router-vpn" || busy || telemetry.measuring || externalBenchmark.running)
                     Button(telemetry.isSpeedTesting ? "Testing real VPN path speed…" : "Run real current VPN path speed") { runSpeed() }
-                        .disabled(!model.connected || model.unifiedSelectedProfile?.normalizedNodeKind != "router-vpn" || busy || telemetry.measuring)
+                        .disabled(!model.connected || model.unifiedSelectedProfile?.normalizedNodeKind != "router-vpn" || busy || telemetry.measuring || externalBenchmark.running)
                     if let speed = telemetry.lastSpeedResult {
                         Text(speed.detail).font(.caption.monospaced()).textSelection(.enabled)
                     }
                     Text("Real speed transfers 8 MiB down and 8 MiB up through the captured PacketTunnel after its private Router VPN node proves its identity. Auto MTU is held until native sockets finish cleanup. Response time includes a new TCP connection and the complete private health response.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Nodes") {
-                    Button("50-sample selected node") { runSelected() }.disabled(model.unifiedSelectedProfile == nil || model.profileMutationBlocked || busy || telemetry.measuring)
-                    Button("Benchmark all linked nodes") { runAll() }.disabled(model.profileMutationBlocked || busy || telemetry.measuring)
-                    Text("Disconnect for direct node TCP measurements. A complete 50-sample test atomically saves min, median, average, 10% trimmed mean, p90, max, sample count and test time to that exact node. The short all-node comparison does not replace these saved statistics.").font(.caption).foregroundStyle(.secondary)
+                    if model.unifiedSelectedProfile?.normalizedNodeKind == "external" {
+                        Button(externalBenchmark.running ? "Cancel 50 routed responses" : "50-sample selected external path") {
+                            if externalBenchmark.running { externalBenchmark.cancel() }
+                            else { externalBenchmark.start(model: model) }
+                        }.disabled(!externalBenchmark.running && (!IOSExternalNodeBenchmark.supported(model) || busy || telemetry.measuring || model.iosSpeedLabOwnership.active || IOSMTUMeasurementGate.held))
+                        Text("Connect this external node to measure 50 HTTPS responses through its captured route and selected DNS. Each sample downloads one byte from the labelled Cloudflare speed endpoint. Timings start after DNS, TCP and TLS preparation; they are separate from direct TCP latency, ICMP RTT and throughput.").font(.caption).foregroundStyle(.secondary)
+                        if !externalBenchmark.history(for: selectedExternalHistoryKey).isEmpty {
+                            Text(externalBenchmark.history(for: selectedExternalHistoryKey)).font(.caption.monospacedDigit()).textSelection(.enabled)
+                        }
+                        if !externalBenchmark.progress.isEmpty { Text(externalBenchmark.progress).font(.caption).textSelection(.enabled) }
+                    } else {
+                        Button("50-sample selected node") { runSelected() }.disabled(model.unifiedSelectedProfile == nil || model.profileMutationBlocked || busy || telemetry.measuring || externalBenchmark.running)
+                    }
+                    Button("Compare linked Router nodes (TCP)") { runAll() }.disabled(model.profileMutationBlocked || busy || telemetry.measuring || externalBenchmark.running)
+                    Text("Disconnect for direct Router node TCP measurements. A complete 50-sample test atomically saves min, median, average, 10% trimmed mean, p90, max, sample count and test time to that exact node. The short Router comparison does not replace these saved statistics or rank external paths.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Auto MTU") {
                     if let p = model.unifiedSelectedProfile, let mbps = p.effectiveMTUMbps, mbps > 0 {
@@ -729,12 +743,14 @@ private struct IOSUnifiedPerformanceView: View {
             }
             .navigationTitle("Performance")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { cancelMeasurement(); dismiss() } } }
-            .onAppear { telemetry.showPerformance(true); telemetry.invalidateResults(model: model) }
+            .onAppear { telemetry.showPerformance(true); telemetry.invalidateResults(model: model); externalBenchmark.refreshSaved(model: model) }
             .onDisappear { cancelMeasurement(); telemetry.showPerformance(false) }
-            .onChange(of: model.connected) { _ in telemetry.invalidateResults(model: model) }
+            .onChange(of: model.connected) { _ in telemetry.invalidateResults(model: model); externalBenchmark.cancel(); externalBenchmark.refreshSaved(model: model) }
+            .onChange(of: model.activeSessionIdentity) { _ in externalBenchmark.cancel(); externalBenchmark.refreshSaved(model: model) }
+            .onChange(of: selectedExternalHistoryKey) { _ in externalBenchmark.cancel(); externalBenchmark.refreshSaved(model: model) }
         }
     }
-    private func cancelMeasurement() { operation?.cancel(); telemetry.cancel() }
+    private func cancelMeasurement() { operation?.cancel(); telemetry.cancel(); externalBenchmark.cancel() }
     private func runLive() { busy = true; operation = Task { do { output = String(format: "Current private tunnel median response time: %.1f ms", try await telemetry.measureCurrentRTT(model: model)) } catch { output = error.localizedDescription }; busy = false } }
     private func runSpeed() { busy = true; operation = Task { do { output = try await telemetry.speedTest(model: model).detail } catch { output = error.localizedDescription }; busy = false } }
     private func runSelected() { guard let p = model.unifiedSelectedProfile else { return }; busy = true; operation = Task { do { output = try await telemetry.measureOne(p, model: model, samples: 50).detail + "\nSaved to this node." } catch { output = error.localizedDescription }; busy = false } }

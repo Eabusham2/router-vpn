@@ -137,4 +137,5 @@ subprocess.run([sys.executable, str(root.parents[1] / 'deploy/test_ios_multihop_
 assert 'fake Connected' not in provider
 subprocess.run([sys.executable, str(root.parents[1] / 'deploy/test_ios_direct_proof_lifecycle.py')], check=True, timeout=45)
 subprocess.run([sys.executable, str(root.parents[1] / 'deploy/test_ios_hop_measurement_transaction.py')], check=True, timeout=90)
+subprocess.run([sys.executable, str(root.parents[1] / 'deploy/test_ios_external_node_benchmark.py')], check=True, timeout=210)
 print('iOS PacketTunnel Libbox + async ownership/network-change/wake proof contract OK')

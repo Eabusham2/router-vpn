@@ -2,10 +2,22 @@ import SwiftUI
 @preconcurrency import NetworkExtension
 
 // HOP_RESULT_TYPES_BEGIN
+struct IOSHopExecutionReceipt: Codable, Equatable {
+    let requested: String
+    let selected: String
+    let config_sha256: String
+    var valid: Bool {
+        ["local", "server", "auto"].contains(requested) && ["local", "server"].contains(selected) &&
+            (requested == "auto" || requested == selected) &&
+            config_sha256.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil
+    }
+}
 struct IOSHopMeasurementBinding: Decodable {
     let request_id: String
     let session_id: String
     let mtu_session_id: String
+    let node_id: String?
+    let execution: IOSHopExecutionReceipt?
 
     static func decode(_ data: Data, request: String, mtuSession: String) throws -> Self {
         guard data.count <= 1024 else { throw CancellationError() }
@@ -25,6 +37,39 @@ struct IOSHopMeasurementStatus: Decodable {
     let results: [IOSHopMeasurementResult]
 }
 struct IOSHopMeasurementResult: Decodable {
+    struct Benchmark: Codable, Equatable {
+        struct Distribution: Codable, Equatable {
+            let samples: Int
+            let min_ms: Double
+            let median_ms: Double
+            let average_ms: Double
+            let p90_ms: Double
+            let max_ms: Double
+            let jitter_ms: Double
+        }
+        let schema: Int
+        let measurement: String
+        let endpoint: String
+        let attempts: Int
+        let failed: Int
+        let distribution: Distribution
+        let trimmed_mean_ms: Double
+        var valid: Bool {
+            let d = distribution
+            let values = [d.min_ms, d.median_ms, d.average_ms, d.p90_ms, d.max_ms, d.jitter_ms, trimmed_mean_ms]
+            return schema == 1 && measurement == "routed-https-response-after-tls" &&
+                endpoint == "https://speed.cloudflare.com/__down?bytes=1" && attempts == 50 && failed == 0 &&
+                d.samples == 50 && values.allSatisfy { $0.isFinite && $0 >= 0 && $0 <= 60_000 } &&
+                d.min_ms > 0 &&
+                d.min_ms <= d.median_ms && d.median_ms <= d.p90_ms && d.p90_ms <= d.max_ms &&
+                d.min_ms <= d.average_ms && d.average_ms <= d.max_ms &&
+                d.min_ms <= trimmed_mean_ms && trimmed_mean_ms <= d.max_ms
+        }
+        var detail: String {
+            let d = distribution
+            return String(format: "50 routed HTTPS responses after TLS\nMedian %.2f ms • min %.2f • average %.2f • 10%% trimmed mean %.2f\np90 %.2f • max %.2f • jitter %.2f", d.median_ms, d.min_ms, d.average_ms, trimmed_mean_ms, d.p90_ms, d.max_ms, d.jitter_ms)
+        }
+    }
     struct Latency: Decodable {
         let samples: Int
         let min_ms: Double
@@ -63,6 +108,7 @@ struct IOSHopMeasurementResult: Decodable {
     let idle: Latency?
     let download: Transfer?
     let upload: Transfer?
+    let benchmark: Benchmark?
     var summary: String {
         let safeLabel = !label.isEmpty && label.utf8.count <= 160 && !label.contains(where: { $0.isNewline || $0 == "\0" })
         let heading = "\(role.capitalized) • \(node_id) • \(safeLabel ? label : "unverified path")"
@@ -107,15 +153,17 @@ private final class IOSHopReply: @unchecked Sendable {
 @MainActor final class IOSHopMeasurementTransaction {
     typealias Send = @MainActor (String) async throws -> Data
     private let id: String, session: String
+    private let startOperation: String
     private let send: Send
     private let pause: @MainActor () async -> Void
     private var cancelled = false
     private var cancellation: Task<IOSHopMeasurementStatus?, Never>?
-    init(id: String, session: String, send: @escaping Send,
+    init(id: String, session: String, startOperation: String = "hop-measure-start", send: @escaping Send,
          pause: @escaping @MainActor () async -> Void = { try? await Task.sleep(for: .milliseconds(350)) }) throws {
         guard id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
-              UUID(uuidString: session) != nil else { throw CancellationError() }
-        self.id=id;self.session=session;self.send=send;self.pause=pause
+              UUID(uuidString: session) != nil,
+              ["hop-measure-start", "hop-measure-latency-start"].contains(startOperation) else { throw CancellationError() }
+        self.id=id;self.session=session;self.startOperation=startOperation;self.send=send;self.pause=pause
     }
     private func status(_ operation: String) async throws -> IOSHopMeasurementStatus {
         let data = try await send(operation)
@@ -138,7 +186,7 @@ private final class IOSHopReply: @unchecked Sendable {
     }
     func run(current: @MainActor () async -> Bool, update: @MainActor (IOSHopMeasurementStatus) -> Void) async throws {
         do {
-            var operation = "hop-measure-start"
+            var operation = startOperation
             let deadline = ProcessInfo.processInfo.systemUptime + 100
             while !cancelled && !Task.isCancelled && ProcessInfo.processInfo.systemUptime < deadline {
                 guard await current(), !cancelled, !Task.isCancelled else { throw CancellationError() }
