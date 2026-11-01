@@ -120,6 +120,7 @@ enum NEVPNStatus { case invalid, disconnected, connecting, connected, reassertin
 @MainActor final class NETunnelProviderManager {
     static var stored: [NETunnelProviderManager] = []
     static var saveHook: (@MainActor () async -> Void)?
+    static var loadHook: (@MainActor () async -> Void)?
     static var failLoad = false
     var protocolConfiguration: Any?
     var localizedDescription: String?
@@ -129,7 +130,8 @@ enum NEVPNStatus { case invalid, disconnected, connecting, connected, reassertin
     let connection: NEVPNConnection
     init() { let session = NETunnelProviderSession(); connection = session; session.manager = self }
     static func loadAllFromPreferences() async throws -> [NETunnelProviderManager] {
-        await Task.yield(); if failLoad { throw IOSStrategyWire.failure("fixture preferences unavailable") }; return stored
+        await Task.yield(); if failLoad { throw IOSStrategyWire.failure("fixture preferences unavailable") }
+        await loadHook?(); return stored
     }
     func saveToPreferences() async throws {
         saves += 1; if !Self.stored.contains(where: { $0 === self }) { Self.stored.append(self) }
@@ -188,11 +190,15 @@ enum IOSRuntimeSelectionError: LocalizedError {
     }
 }
 @MainActor enum IOSPrivateJSONStore {
-    static var value: Data?, failWrite = false
-    static func read(_ filename: String, maximumBytes: Int) throws -> Data? { value }
+    static var values: [String: Data] = [:], failWrite = false
+    static var value: Data? {
+        get { values["startup-execution-choices.json"] }
+        set { values["startup-execution-choices.json"] = newValue }
+    }
+    static func read(_ filename: String, maximumBytes: Int) throws -> Data? { values[filename] }
     static func write(_ data: Data, filename: String, maximumBytes: Int) throws {
         guard !failWrite, data.count <= maximumBytes else { throw IOSStrategyWire.failure("Historical receipt write failed") }
-        value = data
+        values[filename] = data
     }
 }
 @MainActor final class FixturePreferences {
@@ -307,11 +313,14 @@ func maxAppFixture(_ mode: String, role: String? = nil) throws -> ClientBundle {
             checks += 1
         }
         func fresh() throws -> RouterVPNModel {
-            RuntimeTrace.shared.reset(); NETunnelProviderManager.stored = []; NETunnelProviderManager.saveHook = nil
+            RuntimeTrace.shared.reset(); NETunnelProviderManager.stored = []; NETunnelProviderManager.saveHook = nil; NETunnelProviderManager.loadHook = nil
             NETunnelProviderManager.failLoad = false
-            IOSPrivateJSONStore.value = nil; IOSPrivateJSONStore.failWrite = false
+            IOSPrivateJSONStore.values = [:]; IOSPrivateJSONStore.failWrite = false
             IOSMTUControl.hook = nil; IOSMTUControl.winner = "server"; FixturePreferences.standard.values = [:]
             let value = RouterVPNModel(); value.bundle = try fixture(); return value
+        }
+        func usage(_ model: RouterVPNModel) -> Int {
+            IOSNodeUsage.display(model.bundle?.routerProfiles ?? []).profiles.first?.useCount ?? 0
         }
         var model = try fresh(); RuntimeTrace.shared.fail("wg")
         await model.connect()
@@ -321,19 +330,31 @@ func maxAppFixture(_ mode: String, role: String? = nil) throws -> ClientBundle {
         let proto = manager.protocolConfiguration as! NETunnelProviderProtocol
         check("strict routes and on-demand retained", proto.includeAllNetworks && proto.enforceRoutes && manager.isOnDemandEnabled && !proto.excludeLocalNetworks)
         check("single VPN start with no trial stop", session.starts == 1 && session.stops == 0)
+        let initialUsage = usage(model)
+        model.recordIOSNodeUsage(manager: manager, source: model.bundle!, generation: model.iosConnectGeneration,
+                                 expected: model.captureIOSNodeUsageOwner(manager, strategy: model.activeSessionIdentity), terminal: model.iosStrategyStatus)
+        await model.refreshTunnelStatus(); await model.refreshTunnelStatus()
+        let refreshedUsage = usage(model)
         let old = model.activeSessionIdentity, saves = manager.saves
         RuntimeTrace.shared.fail("wg")
         await model.runIOSSmartAuto()
         check("SMART failed reduction restores last good", model.connected && model.activeRawProfile == "awg2-fast")
         check("same mode fresh runtime invalidates measurement", model.activeSessionIdentity != old)
+        check("AUTO records final adoption once instead of its candidates", initialUsage == 1)
+        check("same terminal callback and repeated refresh do not recount", refreshedUsage == 1)
         check("SMART did not stop or rewrite VPN", session.starts == 1 && session.stops == 0 && manager.saves == saves && manager.isOnDemandEnabled)
+        check("SMART reduction and restore produce one final user adoption", usage(model) == 2)
         await model.runIOSSmartAuto()
         check("SMART simplification can retain WG", model.connected && model.activeRawProfile == "wg")
         await model.runIOSCustom(layers: ["wireguard"])
         check("CUSTOM uses captured policy in same session", model.connected && model.activeRawProfile == "wg" && session.starts == 1 && session.stops == 0)
+        check("each new successful user strategy records once", usage(model) == 4)
         let before = RuntimeTrace.shared.attempts.count
         await model.runIOSCustom(layers: ["amneziawg2"])
         check("new policy cannot mutate active frozen session", RuntimeTrace.shared.attempts.count == before && model.message.contains("captured policy"))
+        RuntimeTrace.shared.fail("wg"); RuntimeTrace.shared.fail("awg2-fast"); model.auto = true
+        await model.connect()
+        check("failed request restoring previous path adds no usage", model.connected && model.iosStrategyStatus?.outcome == .restored && usage(model) == 4)
         session.corruptStatus = true; await model.refreshTunnelStatus()
         check("invalid reply is not Connected", !model.connected && model.activeSessionIdentity == nil && model.tunnelTransitioning)
         session.corruptStatus = false; await model.refreshTunnelStatus()
@@ -344,6 +365,7 @@ func maxAppFixture(_ mode: String, role: String? = nil) throws -> ClientBundle {
         model = try fresh(); RuntimeTrace.shared.dns(false)
         await model.connect()
         check("node proof alone cannot connect", !model.connected && model.activeSessionIdentity == nil && model.iosStrategyStatus?.phase == .blocked)
+        check("failed DNS proof has no usage receipt", IOSPrivateJSONStore.values[IOSNodeUsage.filename] == nil)
         check("failed strategy retains protected hold", model.tunnelTransitioning && NETunnelProviderManager.stored[0].isOnDemandEnabled)
         model.disconnect(); await model.drainDisconnect()
         check("blocked strategy remains disconnectable", !model.profileMutationBlocked)
@@ -356,6 +378,37 @@ func maxAppFixture(_ mode: String, role: String? = nil) throws -> ClientBundle {
         let preparing = model.iosConnectGeneration
         model.disconnect(); await model.drainDisconnect(); await operation.value
         check("cancel revokes pending generation", model.iosConnectGeneration != preparing && !model.connected && !model.profileMutationBlocked)
+        check("cancelled user request adds no usage", IOSPrivateJSONStore.values[IOSNodeUsage.filename] == nil)
+
+        for fault in ["date", "source", "transport", "generation", "provider", "routes", "on-demand"] {
+            model = try fresh(); let changing = model
+            NETunnelProviderManager.loadHook = {
+                guard let manager = NETunnelProviderManager.stored.first, manager.connection.status == .connected else { return }
+                NETunnelProviderManager.loadHook = nil
+                switch fault {
+                case "date": manager.connection.connectedDate = manager.connection.connectedDate!.addingTimeInterval(1)
+                case "source": changing.bundle?.routerProfiles[0].apiToken = "relinked during final refresh"
+                case "transport": changing.bundle?.profiles["wg"]?["wg.conf"] = Data("refreshed client key".utf8).base64EncodedString()
+                case "generation": changing.iosConnectGeneration = UUID()
+                case "routes": (manager.protocolConfiguration as! NETunnelProviderProtocol).enforceRoutes.toggle()
+                case "on-demand": manager.isOnDemandEnabled.toggle()
+                default: (manager.protocolConfiguration as! NETunnelProviderProtocol).providerBundleIdentifier = "foreign.provider"
+                }
+            }
+            await model.connect()
+            check("final strategy refresh cannot credit stale owner " + fault, IOSPrivateJSONStore.values[IOSNodeUsage.filename] == nil)
+        }
+        for late in [false, true] {
+            model = try fresh(); let temporary = model
+            let token = try model.iosSpeedLabOwnership.begin(onSuperseded: {})
+            if late { NETunnelProviderManager.saveHook = { temporary.iosSpeedLabOwnership.finish(token) } }
+            await IOSSpeedLabContext.$owner.withValue(token) { await temporary.connect() }
+            check("temporary strategy never records even after owner drain", model.connected && IOSPrivateJSONStore.values[IOSNodeUsage.filename] == nil)
+            model.iosSpeedLabOwnership.finish(token)
+        }
+        model = try fresh(); IOSPrivateJSONStore.failWrite = true
+        await model.connect()
+        check("usage write failure preserves proved connection and reports failure", model.connected && IOSPrivateJSONStore.values[IOSNodeUsage.filename] == nil && model.message.contains("usage history could not be saved") && IOSNodeUsage.display(model.bundle!.routerProfiles).warning != nil)
 
         model = try fresh(); let duringSave = model
         NETunnelProviderManager.saveHook = { duringSave.disconnect(); await duringSave.drainDisconnect() }
@@ -379,6 +432,7 @@ func maxAppFixture(_ mode: String, role: String? = nil) throws -> ClientBundle {
             let owned = NETunnelProviderManager.stored.first { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel" }!
             check("owned startup proves the saved node only while all VPNs stay idle " + String(lateVPN),
                   (owned.connection as! NETunnelProviderSession).starts == (lateVPN ? 0 : 1) && model.connected == !lateVPN)
+            check("automatic startup does not increment user usage", IOSPrivateJSONStore.values[IOSNodeUsage.filename] == nil)
             model.disconnect(); await model.drainDisconnect()
         }
         model = try fresh(); model.bundle?.routerProfiles[0].multihopEnabled = true
@@ -389,7 +443,10 @@ func maxAppFixture(_ mode: String, role: String? = nil) throws -> ClientBundle {
         model = try fresh(); model.bundle = try externalFixture()
         await model.connectSelectedExternal()
         check("external startup obtains exact session identity", model.connected && model.activeSessionIdentity?.engine == "external-libbox")
+        check("external user adoption records once", usage(model) == 1)
         let externalManager = NETunnelProviderManager.stored[0], externalSession = externalManager.connection as! NETunnelProviderSession
+        await model.refreshTunnelStatus(); await model.refreshTunnelStatus()
+        check("external refresh does not count automatic reconnection", usage(model) == 1)
         model.disconnect(); await model.drainDisconnect()
         check("external explicit Disconnect keeps verified ownership", externalSession.stops == 1 && !externalManager.isOnDemandEnabled && !model.profileMutationBlocked)
         model = try fresh(); model.bundle = try externalFixture(); let externalCancelled = model
@@ -436,6 +493,7 @@ func maxAppFixture(_ mode: String, role: String? = nil) throws -> ClientBundle {
                 check("ordinary external app cannot retain a Tor owner",config["tor_entry_bundle"]==nil && config["tor_entry_mode"]==nil)
                 let identity=model.activeSessionIdentity
                 check("external status binds complete captured predecessor",identity?.entryBundleData==config["external_entry_bundle"] as? Data && identity?.entryMode=="wg")
+                check("external adopted path counts exact distinct entry and exit", usage(model) == 1 && IOSNodeUsage.display(entry.routerProfiles).profiles[0].useCount == 1)
                 let proto=manager.protocolConfiguration as! NETunnelProviderProtocol
                 proto.providerConfiguration?["external_entry_bundle"]=Data("replacement-entry-owner".utf8)
                 await model.refreshTunnelStatus()
@@ -511,6 +569,7 @@ func maxAppFixture(_ mode: String, role: String? = nil) throws -> ClientBundle {
             await model.connect(rawProfileID: raw); model.recordIOSLastRuntime()
             check("private Router fixture reaches the proved native boundary", model.connected)
             check("private Router proof records complete Last choice", model.connected && IOSPrivateJSONStore.value != nil)
+            check("Compare candidates count final private entry and exit only once " + raw + "/" + winner, usage(model) == 1 && IOSNodeUsage.display(model.entryBundle!.routerProfiles).profiles[0].useCount == 1)
             let history = IOSPrivateJSONStore.value!, rawHistory = FixturePreferences.standard.values
             let saved = model.bundle!, entry = model.entryBundle!
             let recordText = String(decoding: history, as: UTF8.self)
@@ -526,6 +585,7 @@ func maxAppFixture(_ mode: String, role: String? = nil) throws -> ClientBundle {
                 let session = NETunnelProviderManager.stored[0].connection as! NETunnelProviderSession
                 check("private Router Last retains the proved leaf without Compare", model.connected && session.starts == 1 && session.comparisons == (mode == "last" ? 0 : 1) && session.selectedExecution == (mode == "last" ? winner : IOSMTUControl.winner))
                 check("private Router Last preserves saved auto and ordinary launch ownership", model.bundle?.routerProfiles[0].multihopExecution == "auto" && session.launchOptions?[IOSMultihopExecution.launchKey] == nil && session.launchOptions?["routervpn_mtu_hold"] == nil)
+                check("private Router startup Last and fresh auto do not count user usage", IOSPrivateJSONStore.values[IOSNodeUsage.filename] == nil)
                 if mode == "last" {
                     let option = session.launchOptions?[IOSMultihopExecution.startupLaunchKey]
                     let choice = try IOSMultihopExecution.restoredStartupChoice(option: option, source: session.executionSource!)
@@ -587,6 +647,7 @@ func maxAppFixture(_ mode: String, role: String? = nil) throws -> ClientBundle {
             if late { NETunnelProviderManager.saveHook = { captured.iosSpeedLabOwnership.finish(token) } }
             await IOSSpeedLabContext.$owner.withValue(token) { await captured.connect(rawProfileID: "wg") }
             check("private Router temporary and late completion never saves Last", model.connected && IOSPrivateJSONStore.value == nil)
+            check("private Router temporary restore never records usage", IOSPrivateJSONStore.values[IOSNodeUsage.filename] == nil)
             model.iosSpeedLabOwnership.finish(token)
         }
         print("iOS app + provider owned strategies: PASS (\(checks) executable checks)")
@@ -614,6 +675,7 @@ def main(negative=True, selected_mutations=None):
     source += '\n@MainActor extension RouterVPNModel {\n' + external_properties + external_methods
     for text in [selection, (APP / 'Models.swift').read_text(), (APP / 'IOSSessionIdentity.swift').read_text(), wire,
                  (APP / 'IOSSpeedLabOwnership.swift').read_text(),
+                 (APP / 'IOSNodeUsage.swift').read_text(), (APP / 'IOSNodeUsageAccounting.swift').read_text(),
                  (APP / 'IOSStartupPolicy.swift').read_text(),
                  (APP / 'IOSMultihopExecution.swift').read_text(), (APP / 'IOSStartupLastChoice.swift').read_text(),
                  (APP / 'IOSOwnedStrategy.swift').read_text(), (APP / 'IOSStrategySupport.swift').read_text().replace('UserDefaults.standard', 'FixturePreferences.standard'),
@@ -630,7 +692,9 @@ def main(negative=True, selected_mutations=None):
                        cwd=ROOT, env=dict(os.environ, ROUTERVPN_MAX_PROFILE_FIXTURES=str(fixture), ROUTERVPN_MAX_MULTIHOP_FIXTURES=str(multihop)), check=True, timeout=90)
         file = Path(tmp) / 'AppTests.swift'; binary = Path(tmp) / 'app-tests'
         file.write_text(source)
-        subprocess.run([swift, '-swift-version', '6', '-parse-as-library', str(file), '-o', str(binary)], check=True, timeout=150)
+        compile_command = [swift, '-swift-version', '6', '-module-cache-path', str(Path(tmp) / 'modules'),
+                           '-parse-as-library', str(file), '-o', str(binary)]
+        subprocess.run(compile_command, check=True, timeout=150)
         subprocess.run([str(binary), str(compiler), str(fixture), str(multihop)], check=True, timeout=40)
         if not negative:
             return
@@ -648,7 +712,7 @@ def main(negative=True, selected_mutations=None):
                 continue
             assert source.count(before) == 1, label
             file.write_text(source.replace(before, after))
-            subprocess.run([swift, '-swift-version', '6', '-parse-as-library', str(file), '-o', str(binary)], check=True, timeout=150)
+            subprocess.run(compile_command, check=True, timeout=150)
             result = subprocess.run([str(binary), str(compiler), str(fixture), str(multihop)], capture_output=True, text=True, timeout=40)
             assert result.returncode != 0 and expected in result.stderr, label + ': ' + result.stderr[-3000:]
         print('Negative controls: premature connection, reused epoch, lost cancel owner, mutable source, replaced MAX entry and private Router Last defects are rejected')

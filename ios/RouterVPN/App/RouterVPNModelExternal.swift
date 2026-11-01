@@ -220,6 +220,7 @@ extension RouterVPNModel {
                 message = tor ? "Tor has not finished verifying its current circuit exit. You can disconnect while it is connecting." : "External \(protocolName) has not completed \(ordinary ? "selected DNS and node" : "public-exit") proof. Check its protected status or Disconnect."
                 return
             }
+            let usageIdentity = captureIOSNodeUsageOwner(manager)
             await refreshTunnelStatus()
             guard iosConnectGeneration == generation, !iosUserDisconnectInProgress else { return }
             if connected {
@@ -231,6 +232,8 @@ extension RouterVPNModel {
                         message += " • previous execution could not be saved for Last"
                     }
                 }
+                recordIOSNodeUsage(manager: manager, source: bundle, generation: generation,
+                                   expected: usageIdentity, startup: startupAdmission != nil)
             }
         } catch {
             guard iosConnectGeneration == generation, !iosUserDisconnectInProgress else { return }

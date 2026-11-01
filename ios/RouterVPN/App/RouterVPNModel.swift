@@ -346,6 +346,7 @@ final class RouterVPNModel: ObservableObject {
                 connected = true; activeEngine = selection.engine.rawValue; activeRawProfile = selection.rawProfileID
                 selectedLogicalMode = selection.logicalModeID; selectedMode = selection.rawProfileID
                 message = "Connected • \(engineName(selection)) • selected-node proof passed"
+                let usageIdentity = captureIOSNodeUsageOwner(manager)
                 await refreshTunnelStatus()
                 if connected, IOSSpeedLabContext.owner == nil, !iosSpeedLabOwnership.active {
                     do {
@@ -357,6 +358,7 @@ final class RouterVPNModel: ObservableObject {
                         message += " • previous execution could not be saved for Last"
                     }
                 }
+                recordIOSNodeUsage(manager: manager, source: bundle, generation: generation, expected: usageIdentity)
             } else {
                 connected = false
                 message = "The captured multihop graph did not complete both node proofs."

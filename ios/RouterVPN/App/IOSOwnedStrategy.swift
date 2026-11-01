@@ -255,9 +255,15 @@ import Libbox
                 let options: [String: NSObject]? = hold.isEmpty ? nil : ["routervpn_mtu_hold": hold as NSString]
                 try manager.connection.startVPNTunnel(options: options)
             }
-            let result = try await waitForIOSStrategy(manager, source: source, generation: generation,
+            let terminal = try await waitForIOSStrategy(manager, source: source, generation: generation,
                 data: data, catalog: catalog, plan: plan, providerSession: currentStatus?.providerSession)
+            let result = terminal.isProven && terminal.outcome == .success
+            let usageIdentity = captureIOSNodeUsageOwner(manager, strategy: activeSessionIdentity)
             if iosConnectGeneration == generation { await refreshTunnelStatus() }
+            if result {
+                recordIOSNodeUsage(manager: manager, source: source, generation: generation,
+                                   expected: usageIdentity, terminal: terminal)
+            }
             return result
         } catch {
             guard iosConnectGeneration == generation, !iosUserDisconnectInProgress else { return false }
@@ -269,7 +275,7 @@ import Libbox
 
     private func waitForIOSStrategy(_ manager: NETunnelProviderManager, source: ClientBundle, generation: UUID,
                                     data: Data, catalog: [IOSStrategyCandidate], plan: IOSStrategyPlan,
-                                    providerSession: String?) async throws -> Bool {
+                                    providerSession: String?) async throws -> IOSStrategyStatus {
         guard let connection = manager.connection as? NETunnelProviderSession else { throw IOSStrategyWire.failure("The VPN has no owned provider session.") }
         var owner = providerSession, sawTransition = false, missedReplies = 0
         let deadline = ContinuousClock.now.advanced(by: .seconds(900))
@@ -293,7 +299,7 @@ import Libbox
                     }
                     owner = status.providerSession; missedReplies = 0
                     try iosAdoptStrategyStatus(status, manager: manager, bundleData: data)
-                    if !status.isRunning { return status.isProven && status.outcome == .success }
+                    if !status.isRunning { return status }
                 } catch is CancellationError { throw CancellationError() }
                 catch { missedReplies += 1; if missedReplies >= 3 { throw error } }
             }
