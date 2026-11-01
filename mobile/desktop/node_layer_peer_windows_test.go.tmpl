@@ -130,6 +130,7 @@ func desktopNodeWFPLayerTraffic(t *testing.T, f *desktopNodeWFPFixture, peer *de
 }
 
 func TestRouterVPNDesktopNodeWindowsWFPLayerTraffic(t *testing.T) {
+	t.Run("paired-listeners", desktopNodeLayerPortPairTests)
 	desktopNodeLayerCases(t, desktopNodeWFPLayerTrafficCase)
 }
 

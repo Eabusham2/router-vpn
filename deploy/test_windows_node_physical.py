@@ -179,7 +179,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         for mode in ("wg", "awg2-fast", "awg2-strong"):
             if "--- PASS: " + REQUIRED[0] + "/" + mode + " (" not in output:
                 raise ValueError("Actual WFP encrypted Node omitted a base protocol: " + mode)
-        for case in NODE.LAYER_CASES:
+        for case in (*NODE.LAYER_CASES, *NODE.LAYER_ALLOCATION_CASES):
             if "--- PASS: TestRouterVPNDesktopNodeWindowsWFPLayerTraffic/" + case + " (" not in output:
                 raise ValueError("Actual WFP encrypted Node omitted an admitted graph/Start Layer: " + case)
         for mode in ("shadowsocks", "hysteria2"):

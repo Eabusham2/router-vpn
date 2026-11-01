@@ -29,6 +29,8 @@ TAGS = tuple(value for value in BOOT.TAGS if value not in ("routervpn_native_pq"
 LAYER_CASES = tuple(mode + "/" + layer for mode in ("shadowsocks", "hysteria2", "wg", "awg2-fast", "awg2-strong")
                     for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
                     if mode in ("shadowsocks", "hysteria2") or layer != "off")
+LAYER_ALLOCATION_CASES = tuple("paired-listeners/" + case for case in (
+    "retained-pair", "collision-bound", "access-denied-bound", "fatal-error", "foreign-pair"))
 HYSTERIA2_CREDENTIAL_CASES = (
     "off/hysteria-password", "off/hysteria-trust", "off/hysteria-salamander",
     "aes-256-gcm/hysteria-password", "aes-256-gcm+xor-whitening/hysteria-password",
@@ -621,7 +623,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Node " + name + " omitted a required native boundary")
             if name == "encrypted" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedPreReadyHandshake/" + mode + " (" not in output for mode in ("wg", "awg2-fast", "awg2-strong")):
                 raise ValueError("Node encrypted gate omitted a complete base profile")
-            if name == "encrypted" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedLayerTraffic/" + case + " (" not in output for case in LAYER_CASES):
+            if name == "encrypted" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedLayerTraffic/" + case + " (" not in output for case in (*LAYER_CASES, *LAYER_ALLOCATION_CASES)):
                 raise ValueError("Node encrypted gate omitted an admitted graph/Start Layer")
             if name == "hysteria2-credentials" and any("--- PASS: TestRouterVPNDesktopNodeHysteria2WrongCredential/" + case + " (" not in output for case in HYSTERIA2_CREDENTIAL_CASES):
                 raise ValueError("Node Hysteria2 gate omitted a captured protocol, trust or layer credential negative")

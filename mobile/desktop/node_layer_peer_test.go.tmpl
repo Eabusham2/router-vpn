@@ -298,6 +298,42 @@ func startDesktopNodeLayerServer(t *testing.T, ip netip.Addr, password, inner, i
 	return startDesktopNodeLayerRoutedServer(t, ip, password, routes, dnsAddress)
 }
 
+func desktopNodeLayerPortPair(ip netip.Addr, listenTCP func(string, string) (net.Listener, error)) (net.Listener, net.PacketConn, error) {
+	if !ip.Is4() || listenTCP == nil {
+		return nil, nil, errors.New("layer pair requires its captured IPv4 listener constructor")
+	}
+	var last error
+	for attempt := 0; attempt < 3; attempt++ {
+		// TCP and UDP have independent native allocation/reservation ranges.
+		// Retain UDP first; a TCP-selected port can be forbidden to UDP on
+		// Windows even though the original TCP bind succeeded.
+		packet, err := net.ListenPacket("udp4", net.JoinHostPort(ip.String(), "0"))
+		if err != nil {
+			return nil, nil, fmt.Errorf("UDP listener: %w", err)
+		}
+		listener, err := listenTCP("tcp4", packet.LocalAddr().String())
+		if err == nil && listener != nil && listener.Addr().String() == packet.LocalAddr().String() {
+			return listener, packet, nil
+		}
+		if err == nil {
+			err = errors.New("paired TCP listener replaced its retained UDP endpoint")
+		}
+		var closeErr error
+		if listener != nil {
+			closeErr = listener.Close()
+		}
+		closeErr = errors.Join(closeErr, packet.Close())
+		if closeErr != nil {
+			return nil, nil, errors.Join(err, closeErr)
+		}
+		last = fmt.Errorf("paired TCP listener: %w", err)
+		if !errors.Is(err, syscall.EADDRINUSE) && !(runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(10013))) {
+			return nil, nil, last
+		}
+	}
+	return nil, nil, fmt.Errorf("layer pair exhausted three retained candidates: %w", last)
+}
+
 func startDesktopNodeLayerRoutedServer(t *testing.T, ip netip.Addr, password string, routes []desktopNodeLayerRoute, dnsAddress string) *desktopNodeLayerServer {
 	t.Helper()
 	if len(routes) > 2 {
@@ -313,14 +349,9 @@ func startDesktopNodeLayerRoutedServer(t *testing.T, ip netip.Addr, password str
 		}
 		seen[key] = true
 	}
-	listener, err := net.Listen("tcp4", net.JoinHostPort(ip.String(), "0"))
+	listener, packet, err := desktopNodeLayerPortPair(ip, net.Listen)
 	if err != nil {
-		desktopNodeLayerPreparationError(t, "TCP listener", err)
-	}
-	packet, err := net.ListenPacket("udp4", listener.Addr().String())
-	if err != nil {
-		_ = listener.Close()
-		desktopNodeLayerPreparationError(t, "paired UDP listener", err)
+		desktopNodeLayerPreparationError(t, "retained TCP/UDP listener pair", err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, tcp: listener, udp: packet, routes: append([]desktopNodeLayerRoute(nil), routes...),
@@ -1072,7 +1103,118 @@ func desktopNodeLayerCases(t *testing.T, test func(*testing.T, string, string)) 
 }
 
 func TestRouterVPNDesktopNodeEncryptedLayerTraffic(t *testing.T) {
+	t.Run("paired-listeners", desktopNodeLayerPortPairTests)
 	desktopNodeLayerCases(t, desktopNodeLayerTraffic)
+}
+
+func desktopNodeLayerPortPairTests(t *testing.T) {
+	ip := netip.MustParseAddr("127.0.0.1")
+	retired := func(t *testing.T, addresses []string) {
+		t.Helper()
+		for _, address := range addresses {
+			packet, err := net.ListenPacket("udp4", address)
+			if err != nil {
+				t.Fatal("layer allocator retained a partial UDP owner", err)
+			}
+			if err := packet.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	t.Run("retained-pair", func(t *testing.T) {
+		var address string
+		listener, packet, err := desktopNodeLayerPortPair(ip, func(network, actual string) (net.Listener, error) {
+			address = actual
+			captured, err := netip.ParseAddrPort(actual)
+			if err != nil || network != "tcp4" || captured.Addr() != ip || captured.Port() == 0 {
+				return nil, errors.New("layer allocator did not capture its real UDP endpoint before TCP")
+			}
+			other, err := net.ListenPacket("udp4", actual)
+			if err == nil {
+				_ = other.Close()
+				return nil, errors.New("layer allocator released its UDP owner before the TCP bind")
+			}
+			return net.Listen(network, actual)
+		})
+		if listener != nil {
+			t.Cleanup(func() { _ = listener.Close() })
+		}
+		if packet != nil {
+			t.Cleanup(func() { _ = packet.Close() })
+		}
+		if err != nil || listener == nil || packet == nil {
+			t.Fatal("layer allocator failed its real same-port pair", err)
+		}
+		if listener.Addr().String() != address || packet.LocalAddr().String() != address {
+			t.Fatal("layer allocator substituted a successfully retained endpoint")
+		}
+		if err := errors.Join(listener.Close(), packet.Close()); err != nil {
+			t.Fatal(err)
+		}
+		retired(t, []string{address})
+	})
+	for _, kind := range []string{"collision-bound", "access-denied-bound", "fatal-error", "foreign-pair"} {
+		t.Run(kind, func(t *testing.T) {
+			var addresses []string
+			var tcpAddresses []string
+			fatal := errors.New("intentional non-allocation failure")
+			listener, packet, err := desktopNodeLayerPortPair(ip, func(network, address string) (net.Listener, error) {
+				addresses = append(addresses, address)
+				switch kind {
+				case "collision-bound":
+					blocker, err := net.Listen(network, address)
+					if err != nil {
+						return nil, err
+					}
+					defer blocker.Close()
+					return net.Listen(network, address)
+				case "access-denied-bound":
+					return nil, &net.OpError{Op: "listen", Net: network, Err: os.NewSyscallError("bind", syscall.Errno(10013))}
+				case "foreign-pair":
+					foreign, err := net.Listen(network, net.JoinHostPort(ip.String(), "0"))
+					if err == nil && foreign.Addr().String() == address {
+						// Keep the first TCP candidate held so port zero cannot
+						// accidentally pick the intended UDP endpoint twice.
+						other, nextErr := net.Listen(network, net.JoinHostPort(ip.String(), "0"))
+						err = errors.Join(nextErr, foreign.Close())
+						foreign = other
+					}
+					if foreign != nil {
+						tcpAddresses = append(tcpAddresses, foreign.Addr().String())
+					}
+					return foreign, err
+				default:
+					return nil, fatal
+				}
+			})
+			if listener != nil {
+				t.Cleanup(func() { _ = listener.Close() })
+			}
+			if packet != nil {
+				t.Cleanup(func() { _ = packet.Close() })
+			}
+			count := 1
+			if kind == "collision-bound" || kind == "access-denied-bound" && runtime.GOOS == "windows" {
+				count = 3
+			}
+			if err == nil || listener != nil || packet != nil || len(addresses) != count {
+				t.Fatal("layer allocation failure escaped its bounded original ownership", kind, len(addresses), err)
+			}
+			if kind == "collision-bound" && !errors.Is(err, syscall.EADDRINUSE) || kind == "access-denied-bound" && !errors.Is(err, syscall.Errno(10013)) || kind == "fatal-error" && !errors.Is(err, fatal) {
+				t.Fatal("layer allocator discarded its actual bind or constructor cause", err)
+			}
+			retired(t, addresses)
+			for _, address := range tcpAddresses {
+				other, err := net.Listen("tcp4", address)
+				if err != nil {
+					t.Fatal("layer allocator retained its rejected TCP owner", err)
+				}
+				if err := other.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
 }
 
 func desktopNodeLayerTraffic(t *testing.T, mode, layer string) {
