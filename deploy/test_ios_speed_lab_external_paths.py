@@ -112,7 +112,7 @@ enum Failure { static var error:NSError {NSError(domain:"SpeedLabFixture",code:1
   guard !model.connected,!model.tunnelTransitioning else{throw Failure.error}
  }
  static func retirementPending(_ error:Error)->Bool{let e=error as NSError;return e.domain=="RouterVPN.SpeedLab" && e.code==62}
- func restore(model:RouterVPNModel,owner:UUID,reconnect:Bool)async throws {
+ func restore(model:RouterVPNModel,owner:UUID,reconnect:Bool,captureRestoredOwner:@MainActor (IOSSessionIdentity?,UUID)throws->Void={_,_ in})async throws {
   Trace.restoreHook?()
   guard model.iosSpeedLabOwnership.mayRestoreSelection(owner)else{throw CancellationError()}
   if reconnect,let identity {
@@ -123,6 +123,7 @@ enum Failure { static var error:NSError {NSError(domain:"SpeedLabFixture",code:1
    model.activeSessionIdentity=try IOSSessionIdentity(connectedAt:identity.connectedAt.addingTimeInterval(1),engine:identity.engine,rawProfile:identity.rawProfile,bundleData:identity.bundleData,entryBundleData:identity.entryBundleData,entryMode:identity.entryMode)
    model.connected=true
   }
+  try captureRestoredOwner(model.activeSessionIdentity,model.iosConnectGeneration)
  }
 }
 @MainActor @main struct Tests {

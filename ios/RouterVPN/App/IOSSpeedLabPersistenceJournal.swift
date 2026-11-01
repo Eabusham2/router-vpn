@@ -65,6 +65,51 @@ enum IOSSpeedLabPersistenceJournal {
         }
     }
 
+    /// An explicit compare-and-connect action may replace the saved selection
+    /// only after the exact winner has passed fresh proof and native preference
+    /// readback. Trials never call this method. Retain the original recovery
+    /// receipt on any partial write; cleanup then restores or abandons it under
+    /// the same user-intent owner, without inventing a successful adoption.
+    static func commitSelection(owner: UUID, bundle: Data,
+                                retainsOwnership: @MainActor () -> Bool,
+                                validate: @MainActor () throws -> Void) throws {
+        let defaults = UserDefaults.standard
+        let journal = try load()
+        guard journal.transactionOwner == owner.uuidString, !bundle.isEmpty, bundle.count <= 32 * 1024 * 1024,
+              let receipt = defaults.data(forKey: journalKey) else { throw adoptionFailure() }
+        try verify(journal, defaults: defaults)
+        try validate()
+        do {
+            defaults.set(bundle, forKey: bundleKey)
+            guard defaults.synchronize(), defaults.data(forKey: bundleKey) == bundle,
+                  defaults.data(forKey: lastRuntimeKey) == journal.originalLastRuntime,
+                  defaults.data(forKey: journalKey) == receipt else { throw adoptionFailure() }
+            try validate()
+            defaults.removeObject(forKey: journalKey)
+            guard defaults.synchronize(), defaults.data(forKey: journalKey) == nil,
+                  defaults.data(forKey: bundleKey) == bundle else { throw adoptionFailure() }
+            try validate()
+        } catch {
+            // This receipt is still ours. A different receipt or replacement
+            // selection belongs to a newer writer and is never overwritten.
+            let current = defaults.data(forKey: journalKey)
+            if retainsOwnership(), current == nil || current == receipt {
+                if current == nil { defaults.set(receipt, forKey: journalKey) }
+                if defaults.data(forKey: bundleKey) == bundle,
+                   defaults.data(forKey: lastRuntimeKey) == journal.originalLastRuntime {
+                    restore(journal.originalBundle, key: bundleKey, defaults: defaults)
+                }
+                _ = defaults.synchronize()
+            }
+            throw adoptionFailure()
+        }
+    }
+
+    private static func adoptionFailure() -> NSError {
+        NSError(domain: "RouterVPN.SpeedLab", code: 52,
+                userInfo: [NSLocalizedDescriptionKey: "The proved winner's saved selection did not commit completely. Original-state recovery remains required; no successful adoption was reported."])
+    }
+
     /// A newer user profile/connection owns the current preferences. Clearing
     /// the old receipt must not reapply the transaction's original bytes.
     static func abandon() throws {

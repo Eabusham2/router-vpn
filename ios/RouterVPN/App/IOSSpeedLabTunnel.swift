@@ -80,6 +80,142 @@ import Foundation
         try await Self.stop(manager, expected: expected, model: model, owner: owner)
     }
 
+    /// A batch may receive a freshly proved original session after each trial,
+    /// but it cannot adopt another source, route policy or execution as its new
+    /// baseline. Runtime dates/proof epochs are the only renewed identities.
+    func requireSameRestorationSource(as original: IOSSpeedLabTunnel, owner: UUID) throws {
+        guard identity?.engine == original.identity?.engine,
+              identity?.rawProfile == original.identity?.rawProfile,
+              identity?.bundleData == original.identity?.bundleData,
+              identity?.entryBundleData == original.identity?.entryBundleData,
+              identity?.entryMode == original.identity?.entryMode else { throw CancellationError() }
+        if original.savedProtocol == nil {
+            guard identity == nil, !savedOnDemand,
+                  savedProtocol == nil || savedProtocol?.providerConfiguration?[Self.ownerKey] as? String == owner.uuidString else {
+                throw CancellationError()
+            }
+            return
+        }
+        guard let expected = try original.restorationProtocol(), let current = try restorationProtocol(),
+              Self.sameProtocol(current, expected), savedEnabled == original.savedEnabled,
+              savedOnDemand == original.savedOnDemand, savedDescription == original.savedDescription,
+              Self.sameRules(savedRules, original.savedRules),
+              multihopExecution?.source == original.multihopExecution?.source,
+              multihopExecution?.execution == original.multihopExecution?.execution,
+              multihopExecution?.pins == original.multihopExecution?.pins else { throw CancellationError() }
+    }
+
+    func requireMeasuredExecution(requested: String, selected: String) throws {
+        guard ["local", "server", "auto"].contains(requested), ["local", "server"].contains(selected),
+              requested == "auto" || requested == selected else { throw CancellationError() }
+        if let multihopExecution {
+            guard multihopExecution.source.requested == requested,
+                  multihopExecution.execution == selected else { throw CancellationError() }
+        } else {
+            guard requested == "local", selected == "local" else { throw CancellationError() }
+        }
+    }
+
+    /// Retains the exact just-proved winner across the final preference write.
+    /// Removal of the temporary tag does not discard teardown authority: an
+    /// unsuccessful selection commit may retire only these two exact protocol
+    /// images and this native connection date, never a replacement session.
+    @MainActor final class Adoption {
+        let manager: NETunnelProviderManager
+        let identity: IOSSessionIdentity
+        let generation: UUID
+        private let owner: UUID
+        private let before: NETunnelProviderProtocol
+        private let after: NETunnelProviderProtocol
+        private let enabled: Bool, onDemand: Bool
+        private let rules: [NEOnDemandRule]
+        private let description: String?
+        private var retirementPolicyWritten = false
+
+        fileprivate init(model: RouterVPNModel, manager: NETunnelProviderManager, owner: UUID,
+                         identity: IOSSessionIdentity, proto: NETunnelProviderProtocol) {
+            self.manager = manager; self.owner = owner; self.identity = identity
+            generation = model.iosConnectGeneration
+            before = proto.copy() as! NETunnelProviderProtocol
+            after = proto.copy() as! NETunnelProviderProtocol
+            after.providerConfiguration?.removeValue(forKey: IOSSpeedLabTunnel.ownerKey)
+            enabled = manager.isEnabled; onDemand = manager.isOnDemandEnabled
+            rules = (manager.onDemandRules ?? []).map { $0.copy() as! NEOnDemandRule }
+            description = manager.localizedDescription
+        }
+
+        func requireCurrent(model: RouterVPNModel, released: Bool = false) throws {
+            try model.iosSpeedLabOwnership.require(owner)
+            guard model.iosConnectGeneration == generation, model.activeSessionIdentity == identity,
+                  model.connected, !model.tunnelTransitioning, !model.iosUserDisconnectInProgress,
+                  manager.connection.status == .connected, manager.connection.connectedDate == identity.connectedAt,
+                  manager.isEnabled == enabled, manager.isOnDemandEnabled == onDemand,
+                  manager.localizedDescription == description,
+                  IOSSpeedLabTunnel.sameRules(manager.onDemandRules ?? [], rules),
+                  IOSSpeedLabTunnel.sameProtocol(manager.protocolConfiguration, after) ||
+                    (!released && IOSSpeedLabTunnel.sameProtocol(manager.protocolConfiguration, before)) else {
+                throw CancellationError()
+            }
+        }
+
+        func releaseTemporaryMarker(model: RouterVPNModel, validate: @MainActor () throws -> Void) async throws {
+            try Task.checkCancellation(); try requireCurrent(model: model); try validate()
+            manager.protocolConfiguration = after.copy() as! NETunnelProviderProtocol
+            try await manager.saveToPreferences()
+            try Task.checkCancellation(); try requireCurrent(model: model); try validate()
+            try await manager.loadFromPreferences()
+            try Task.checkCancellation(); try requireCurrent(model: model, released: true); try validate()
+        }
+
+        func retire(model: RouterVPNModel) async throws {
+            guard model.iosSpeedLabOwnership.owns(owner), !model.iosSpeedLabOwnership.userDisconnected(owner),
+                  !model.iosUserDisconnectInProgress else { throw CancellationError() }
+            do { try await manager.loadFromPreferences() }
+            catch { throw IOSSpeedLabTunnel.pendingRetirement(error) }
+            guard model.iosSpeedLabOwnership.owns(owner),
+                  let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
+                  IOSSpeedLabTunnel.sameProtocol(proto, before) || IOSSpeedLabTunnel.sameProtocol(proto, after),
+                  IOSSpeedLabTunnel.idle(manager) || manager.connection.connectedDate == identity.connectedAt else {
+                throw CancellationError()
+            }
+            try requireRetirementPolicy()
+            if IOSSpeedLabTunnel.idle(manager), !manager.isOnDemandEnabled { return }
+            do {
+                try await IOSSpeedLabTunnel.stop(manager, expected: proto.copy() as! NETunnelProviderProtocol,
+                    model: model, owner: owner, retiring: true, capturedAdoption: true,
+                    requireCapturedPolicy: { try self.requireRetirementPolicy() },
+                    capturedPolicyReleased: { self.retirementPolicyWritten = true })
+            } catch is CancellationError { throw CancellationError() }
+            catch { throw IOSSpeedLabTunnel.pendingRetirement(error) }
+        }
+
+        private func requireRetirementPolicy() throws {
+            guard manager.isEnabled == enabled, manager.localizedDescription == description,
+                  (manager.isOnDemandEnabled == onDemand && IOSSpeedLabTunnel.sameRules(manager.onDemandRules ?? [], rules)) ||
+                    (retirementPolicyWritten && !manager.isOnDemandEnabled && (manager.onDemandRules ?? []).isEmpty) else {
+                throw CancellationError()
+            }
+        }
+    }
+
+    static func captureAdoption(model: RouterVPNModel, owner: UUID, expected: IOSSpeedLabTunnel) async throws -> Adoption {
+        try model.iosSpeedLabOwnership.require(owner)
+        guard model.connected, !model.tunnelTransitioning, let identity = model.activeSessionIdentity else { throw CancellationError() }
+        let generation = model.iosConnectGeneration
+        guard let manager = try await ownedManager(), let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
+              expected.identity == identity, let frozen = expected.savedProtocol,
+              sameProtocol(proto, frozen), manager.isEnabled == expected.savedEnabled,
+              manager.isOnDemandEnabled == expected.savedOnDemand,
+              manager.localizedDescription == expected.savedDescription,
+              sameRules(manager.onDemandRules ?? [], expected.savedRules),
+              proto.providerConfiguration?[ownerKey] as? String == owner.uuidString,
+              proto.providerConfiguration?["bundle"] as? Data == identity.bundleData,
+              model.iosConnectGeneration == generation, model.activeSessionIdentity == identity else { throw CancellationError() }
+        let value = Adoption(model: model, manager: manager, owner: owner, identity: identity, proto: proto)
+        try value.requireCurrent(model: model)
+        return value
+    }
+
     static func stopTemporary(model: RouterVPNModel, owner: UUID) async throws {
         guard model.iosSpeedLabOwnership.owns(owner) else { throw CancellationError() }
         let captured: NETunnelProviderManager?
@@ -141,18 +277,23 @@ import Foundation
     }
 
     private static func stop(_ manager: NETunnelProviderManager, expected: NETunnelProviderProtocol,
-                             model: RouterVPNModel, owner: UUID, retiring: Bool = false) async throws {
+                             model: RouterVPNModel, owner: UUID, retiring: Bool = false,
+                             capturedAdoption: Bool = false,
+                             requireCapturedPolicy: (@MainActor () throws -> Void)? = nil,
+                             capturedPolicyReleased: (@MainActor () -> Void)? = nil) async throws {
         func requireOwner() throws {
             if retiring {
                 guard model.iosSpeedLabOwnership.owns(owner), !model.iosUserDisconnectInProgress,
                       !model.iosSpeedLabOwnership.userDisconnected(owner),
-                      (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?[ownerKey] as? String == owner.uuidString else { throw CancellationError() }
+                      capturedAdoption || (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?[ownerKey] as? String == owner.uuidString else { throw CancellationError() }
             } else { try model.iosSpeedLabOwnership.require(owner) }
+            try requireCapturedPolicy?()
         }
         try requireOwner()
         guard sameProtocol(manager.protocolConfiguration, expected) else { throw CancellationError() }
         let date = manager.connection.connectedDate
         manager.isOnDemandEnabled = false; manager.onDemandRules = []
+        capturedPolicyReleased?()
         try await manager.saveToPreferences()
         try requireOwner()
         try await manager.loadFromPreferences()
@@ -179,27 +320,21 @@ import Foundation
         guard !model.connected, !model.tunnelTransitioning else { throw issue("The captured native stop is not verified.") }
     }
 
-    func restore(model: RouterVPNModel, owner: UUID, reconnect: Bool) async throws {
+    func restore(model: RouterVPNModel, owner: UUID, reconnect: Bool,
+                 captureRestoredOwner: @MainActor (IOSSessionIdentity?, UUID) throws -> Void = { _, _ in }) async throws {
         func requireOwner() throws {
             guard reconnect ? model.iosSpeedLabOwnership.current(owner) : model.iosSpeedLabOwnership.mayRestoreSelection(owner) else { throw CancellationError() }
         }
         try requireOwner()
-        guard let savedProtocol else { return }
+        guard savedProtocol != nil else {
+            guard !model.connected, !model.tunnelTransitioning, model.activeSessionIdentity == nil else { throw CancellationError() }
+            try captureRestoredOwner(nil, model.iosConnectGeneration)
+            return
+        }
         guard let manager = try await Self.ownedManager() else { throw Self.issue("The original native VPN manager was removed.") }
         try requireOwner()
         guard Self.idle(manager), !model.connected, !model.tunnelTransitioning else { throw CancellationError() }
-        let proto = savedProtocol.copy() as! NETunnelProviderProtocol
-        if let identity, var configuration = proto.providerConfiguration, configuration["strategy_catalog"] != nil {
-            let candidates = try IOSStrategyWire.catalog(configuration).filter { $0.raw == identity.rawProfile }
-            guard candidates.count == 1 else { throw Self.issue("The exact original raw runtime is absent from its frozen catalog.") }
-            let plan = try IOSStrategyPlan(kind: .manual, candidates: candidates)
-            configuration["strategy"] = try plan.object()
-            configuration["mode"] = identity.rawProfile
-            configuration["rawProfileID"] = identity.rawProfile
-            configuration["modeCandidates"] = [identity.rawProfile]
-            configuration["logicalMode"] = candidates[0].logical
-            proto.providerConfiguration = configuration
-        }
+        guard let proto = try restorationProtocol() else { return }
         manager.protocolConfiguration = proto
         manager.localizedDescription = savedDescription
         manager.isEnabled = savedEnabled
@@ -219,7 +354,10 @@ import Foundation
               Self.sameRules(manager.onDemandRules ?? [], rules), Self.idle(manager) else {
             throw Self.issue("The original native VPN source did not survive preference readback.")
         }
-        guard reconnect, let identity else { return }
+        guard reconnect, let identity else {
+            try captureRestoredOwner(nil, model.iosConnectGeneration)
+            return
+        }
         model.iosConnectGeneration = UUID()
         let generation = model.iosConnectGeneration
         let hold = IOSMTUMeasurementGate.current
@@ -271,11 +409,33 @@ import Foundation
                         throw Self.issue("The restored reconnect policy belongs to another native session.")
                     }
                 }
+                try requireOwner()
+                guard model.iosConnectGeneration == generation, model.activeSessionIdentity == restored,
+                      manager.connection.status == .connected, manager.connection.connectedDate == restored.connectedAt,
+                      Self.sameProtocol(manager.protocolConfiguration, proto) else { throw CancellationError() }
+                try captureRestoredOwner(restored, generation)
                 return
             }
             try await Task.sleep(for: .milliseconds(150))
         }
         throw Self.issue("The original VPN has not completed its fresh path proof; inspect its status or Disconnect.")
+    }
+
+    private func restorationProtocol() throws -> NETunnelProviderProtocol? {
+        guard let savedProtocol else { return nil }
+        let proto = savedProtocol.copy() as! NETunnelProviderProtocol
+        if let identity, var configuration = proto.providerConfiguration, configuration["strategy_catalog"] != nil {
+            let candidates = try IOSStrategyWire.catalog(configuration).filter { $0.raw == identity.rawProfile }
+            guard candidates.count == 1 else { throw Self.issue("The exact original raw runtime is absent from its frozen catalog.") }
+            let plan = try IOSStrategyPlan(kind: .manual, candidates: candidates)
+            configuration["strategy"] = try plan.object()
+            configuration["mode"] = identity.rawProfile
+            configuration["rawProfileID"] = identity.rawProfile
+            configuration["modeCandidates"] = [identity.rawProfile]
+            configuration["logicalMode"] = candidates[0].logical
+            proto.providerConfiguration = configuration
+        }
+        return proto
     }
 
     private static func readExecution(_ manager: NETunnelProviderManager, model: RouterVPNModel,

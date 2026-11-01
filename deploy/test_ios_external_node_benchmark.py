@@ -234,6 +234,9 @@ def source():
     text = text.replace("static var values: [String: Data]", "static var beforeWrite: (() -> Void)?\n    static var values: [String: Data]")
     text = text.replace("values[filename] = data; writes += 1", "beforeWrite?(); values[filename] = data; writes += 1")
     boundaries = telemetry.BOUNDARIES.split("final class NetworkProofGuard", 1)[0]
+    # This selected-path fixture keeps one durable model selection; the batch
+    # fixture separately exercises different saved and temporary bundles.
+    boundaries = boundaries.replace("var bundle:ClientBundle?", "var persistedNodeBundle:ClientBundle?{bundle}\n var bundle:ClientBundle?", 1)
     # The shipping paired-entry serializer uses sorted keys and captures exact
     # bytes. Keep the explicit model boundary faithful to that source contract.
     boundaries = boundaries.replace("try entry.map{try JSONEncoder().encode($0)}", "try entry.map(encoded)")
