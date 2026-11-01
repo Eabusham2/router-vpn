@@ -9,6 +9,7 @@ import io
 import json
 import os
 from pathlib import Path
+import plistlib
 import shutil
 import subprocess
 import sys
@@ -258,6 +259,15 @@ class ManagedProcessInventory(unittest.TestCase):
 
 @unittest.skipUnless(sys.platform == 'darwin', 'actual Darwin kernel required')
 class NativeGenerationReceipt(F.NativeMainImage):
+    def codesign(self, *arguments, expected=True):
+        result = subprocess.run(['/usr/bin/codesign', *map(str, arguments)],
+                                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+        if expected and result.returncode != 0:
+            self.fail('Actual native fixture signature operation failed '
+                      f'(exit={result.returncode}, operation={arguments!r}):\n' +
+                      (result.stdout + result.stderr)[-8000:])
+        return result
+
     def test_actual_unlinked_matching_copy_is_blocked_by_complete_original_generation(self):
         installed = self.base/'installed'; installed.mkdir(mode=0o755)
         for tree in I.CODE_TREES: (installed/tree).mkdir(mode=0o755)
@@ -265,9 +275,33 @@ class NativeGenerationReceipt(F.NativeMainImage):
             path = installed/name; path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile('/bin/sleep', path); path.chmod(0o755)
         write(installed/'bin/python3', '#!/bin/sh\nexec /usr/bin/python3 -BEsS "$@"\n', 0o700)
+        # --strict validates the enclosing application, including its sealed
+        # Info.plist and resources. A copied standalone tool under .app is not
+        # a complete application bundle. Use an actual locally signed fixture,
+        # never relax the verifier to accommodate an incomplete test package.
+        # https://developer.apple.com/library/archive/technotes/tn2206/
+        application = installed/'RouterVPN.app'
+        write(application/'Contents/Info.plist', plistlib.dumps({
+            'CFBundleIdentifier': 'com.eabusham.routervpn.generation-fixture',
+            'CFBundleExecutable': 'RouterVPN', 'CFBundlePackageType': 'APPL',
+            'CFBundleVersion': '1', 'CFBundleShortVersionString': '1.0',
+        }))
+        self.codesign('--force', '--sign', '-', '--timestamp=none', application)
+        self.codesign('--verify', '--deep', '--strict', application)
         for name in M.REQUIRED_IMAGES:
-            subprocess.run(['/usr/bin/codesign', '--verify', '--strict', installed/name], check=True,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=15)
+            self.codesign('--verify', '--strict', installed/name)
+        # The negative control uses a separate copy that first verifies, then
+        # loses exactly its sealed Info.plist. The original receipt fixture and
+        # its executable bytes remain untouched by this deliberate defect.
+        broken = self.base/'broken-app/RouterVPN.app'
+        shutil.copytree(application, broken)
+        self.codesign('--verify', '--deep', '--strict', broken)
+        (broken/'Contents/Info.plist').unlink()
+        rejected = self.codesign('--verify', '--deep', '--strict', broken, expected=False)
+        self.assertNotEqual(rejected.returncode, 0, 'Actual native verifier accepted an app without its sealed Info.plist')
+        self.assertTrue((broken/'Contents/MacOS/RouterVPN').is_file())
+        print('Actual native verifier rejected the separately copied app after its sealed Info.plist was removed: ' +
+              (rejected.stdout + rejected.stderr)[-2000:].strip(), flush=True)
         receipt = M.receipt_path(installed)
         M.write_prepared(installed, installed, receipt, I.CODE_TREES, I.CODE_FILES, I.FILES.ordinary)
         owned, _ = self.copy_image(installed/'router-vpn-client', 'copied-prior-image')
