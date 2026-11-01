@@ -1,0 +1,593 @@
+//go:build linux && !android && routervpn_linux_node_control && routervpn_linux_node_tun
+
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/routervpn/linuxprotection"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/service"
+	"golang.org/x/sys/unix"
+)
+
+func linuxChildTUNCommand(t *testing.T, arguments ...string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if output, err := exec.CommandContext(ctx, arguments[0], arguments[1:]...).CombinedOutput(); err != nil {
+		t.Fatalf("owned child TUN namespace command failed: %v: %s", err, output)
+	}
+}
+
+func linuxChildTUNNamespace(t *testing.T, requireTUN bool) {
+	t.Helper()
+	linuxChildControlNamespace(t)
+	outerDevice, outerInode, found := strings.Cut(os.Getenv("ROUTERVPN_NODE_OUTER_NETNS_ID"), ":")
+	device, deviceErr := strconv.ParseUint(outerDevice, 10, 64)
+	inode, inodeErr := strconv.ParseUint(outerInode, 10, 64)
+	var current unix.Stat_t
+	if !found || deviceErr != nil || inodeErr != nil || inode == 0 || unix.Stat("/proc/self/ns/net", &current) != nil ||
+		current.Dev == device && current.Ino == inode {
+		t.Fatal("generated TUN command requires its actual separate network namespace")
+	}
+	if requireTUN {
+		var native unix.Stat_t
+		err := unix.Stat("/dev/net/tun", &native)
+		if err != nil || native.Mode&unix.S_IFMT != unix.S_IFCHR || unix.Major(native.Rdev) != 10 || unix.Minor(native.Rdev) != 200 {
+			t.Fatal("generated Linux command requires the actual provisioned TUN character device", err)
+		}
+	}
+	for _, command := range []struct{ create, remove []string }{
+		{[]string{"ip", "addr", "add", "192.168.210.1/30", "dev", "rvpn-test"}, []string{"ip", "addr", "del", "192.168.210.1/30", "dev", "rvpn-test"}},
+		{[]string{"ip", "netns", "exec", "rvpn-peer", "ip", "addr", "add", "192.168.210.2/30", "dev", "rvpn-peer"}, []string{"ip", "netns", "exec", "rvpn-peer", "ip", "addr", "del", "192.168.210.2/30", "dev", "rvpn-peer"}},
+		{[]string{"ip", "route", "add", "default", "via", "192.168.210.2", "dev", "rvpn-test"}, []string{"ip", "route", "del", "default", "via", "192.168.210.2", "dev", "rvpn-test"}},
+	} {
+		linuxChildTUNCommand(t, command.create...)
+		t.Cleanup(func() { linuxChildTUNCommand(t, command.remove...) })
+	}
+}
+
+// Copy the separately compiled existing peer into this runner's private /opt.
+// Its exact digest is supplied by the source-checking parent. It gains no
+// controller, Bootstrap or kernel-ownership capability from this comparison.
+func linuxChildTUNPeerImage(t *testing.T) string {
+	t.Helper()
+	source, expected := os.Getenv("ROUTERVPN_NODE_TUN_PEER_BINARY"), os.Getenv("ROUTERVPN_NODE_TUN_PEER_SHA256")
+	if !filepath.IsAbs(source) || filepath.Clean(source) != source || !routerVPNExternalSource.MatchString(expected) {
+		t.Fatal("generated TUN peer lost its exact compiled artifact")
+	}
+	fd, err := unix.Open(source, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := os.NewFile(uintptr(fd), "captured-native-peer-image")
+	defer input.Close()
+	var before, after unix.Stat_t
+	if unix.Fstat(fd, &before) != nil || before.Mode&unix.S_IFMT != unix.S_IFREG || before.Nlink != 1 ||
+		before.Mode&06022 != 0 || before.Mode&0111 == 0 || before.Size <= 0 || before.Size > 512<<20 {
+		t.Fatal("generated TUN peer lost its original regular executable")
+	}
+	directory, err := os.MkdirTemp("/opt", "routervpn-node-peer-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(directory) })
+	if err := os.Chmod(directory, 0755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "peer.test")
+	output, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.New()
+	size, copyErr := io.Copy(io.MultiWriter(output, hash), io.LimitReader(input, (512<<20)+1))
+	flushErr := output.Sync()
+	closeErr := output.Close()
+	if err := unix.Fstat(fd, &after); err != nil || copyErr != nil || flushErr != nil || closeErr != nil || size != before.Size ||
+		before.Dev != after.Dev || before.Ino != after.Ino || before.Mode != after.Mode || before.Nlink != after.Nlink ||
+		before.Uid != after.Uid || before.Gid != after.Gid || before.Size != after.Size || before.Mtim != after.Mtim || before.Ctim != after.Ctim ||
+		hex.EncodeToString(hash.Sum(nil)) != expected {
+		t.Fatal("generated TUN peer changed during its bounded private copy", err, copyErr, flushErr, closeErr)
+	}
+	var installed unix.Stat_t
+	if unix.Lstat(path, &installed) != nil || installed.Mode&unix.S_IFMT != unix.S_IFREG || installed.Nlink != 1 ||
+		installed.Uid != 0 || installed.Gid != 0 || installed.Mode&06022 != 0 || installed.Mode&0111 == 0 || installed.Size != size {
+		t.Fatal("generated TUN peer is not its exact protected private image")
+	}
+	return path
+}
+
+type linuxChildTUNPeerReply struct {
+	Schema     int    `json:"schema"`
+	Address    string `json:"address"`
+	AESAddress string `json:"aes_address"`
+	RawTCP     int64  `json:"raw_tcp"`
+	RawUDP     int64  `json:"raw_udp"`
+	PlainTCP   int64  `json:"plain_tcp"`
+	PlainUDP   int64  `json:"plain_udp"`
+	DNSQueries uint32 `json:"dns_queries"`
+}
+
+type linuxChildTUNPeer struct {
+	command    *exec.Cmd
+	input      io.WriteCloser
+	output     *os.File
+	reader     *bufio.Reader
+	diagnostic linuxChildControlOutput
+	done       chan struct{}
+	waitErr    error
+	address    netip.AddrPort
+	password   string
+}
+
+func (peer *linuxChildTUNPeer) read(t *testing.T) linuxChildTUNPeerReply {
+	t.Helper()
+	if err := peer.output.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	defer peer.output.SetReadDeadline(time.Time{})
+	raw, err := peer.reader.ReadSlice('\n')
+	var reply linuxChildTUNPeerReply
+	if err != nil || len(raw) > 64<<10 || json.Unmarshal(raw, &reply) != nil || reply.Schema != 1 {
+		t.Fatal("actual existing SS2022 peer lost its bounded response", err, peer.diagnostic.String())
+	}
+	endpoint, err := netip.ParseAddrPort(reply.Address)
+	if err != nil || endpoint.Addr().String() != "192.168.210.2" || endpoint.Port() == 0 || reply.AESAddress != reply.Address ||
+		peer.address.IsValid() && peer.address != endpoint || reply.RawTCP < 0 || reply.RawUDP < 0 || reply.PlainTCP < 0 || reply.PlainUDP < 0 {
+		t.Fatal("actual existing SS2022 peer substituted its captured endpoint")
+	}
+	peer.address = endpoint
+	return reply
+}
+
+func (peer *linuxChildTUNPeer) observe(t *testing.T, operation string) linuxChildTUNPeerReply {
+	t.Helper()
+	if operation != "stats" && operation != "fail-dns" && operation != "restore-dns" {
+		t.Fatal("unowned native peer observation")
+	}
+	if _, err := io.WriteString(peer.input, operation+"\n"); err != nil {
+		t.Fatal(err)
+	}
+	return peer.read(t)
+}
+
+func linuxStartChildTUNPeer(t *testing.T) *linuxChildTUNPeer {
+	t.Helper()
+	image := linuxChildTUNPeerImage(t)
+	var key [32]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+	peer := &linuxChildTUNPeer{password: base64.StdEncoding.EncodeToString(key[:]), done: make(chan struct{})}
+	clear(key[:])
+	peer.command = exec.CommandContext(ctx, "ip", "netns", "exec", "rvpn-peer", image,
+		"-test.run=^TestRouterVPNDesktopNodeLayerReferenceProcess$", "-test.count=1", "-test.timeout=95s")
+	peer.command.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_NODE_LAYER_REFERENCE_CHILD=1"}
+	var err error
+	peer.input, err = peer.command.StdinPipe()
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	var writer *os.File
+	peer.output, writer, err = os.Pipe()
+	if err != nil {
+		cancel()
+		_ = peer.input.Close()
+		t.Fatal(err)
+	}
+	peer.reader = bufio.NewReaderSize(peer.output, (64<<10)+1)
+	peer.command.Stdout, peer.command.Stderr = writer, &peer.diagnostic
+	if err := peer.command.Start(); err != nil {
+		cancel()
+		_ = peer.input.Close()
+		_ = peer.output.Close()
+		_ = writer.Close()
+		t.Fatal(err)
+	}
+	_ = writer.Close()
+	go func() { peer.waitErr = peer.command.Wait(); close(peer.done) }()
+	t.Cleanup(func() {
+		_ = peer.input.Close()
+		select {
+		case <-peer.done:
+			if peer.waitErr != nil {
+				t.Error("actual existing SS2022 peer failed", peer.waitErr, peer.diagnostic.String())
+			}
+		case <-time.After(5 * time.Second):
+			cancel()
+			<-peer.done
+			t.Error("actual existing SS2022 peer did not join its original channel", peer.diagnostic.String())
+		}
+		cancel()
+		_ = peer.output.Close()
+	})
+	request := map[string]any{"schema": 1, "mode": "shadowsocks", "layer": "", "address": "192.168.210.2",
+		"password": peer.password, "configuration": map[string]any{}}
+	if err := json.NewEncoder(peer.input).Encode(request); err != nil {
+		t.Fatal(err)
+	}
+	peer.read(t)
+	return peer
+}
+
+func linuxChildTUNPolicy(t *testing.T, peer *linuxChildTUNPeer, scenario string) (*mobilemultihop.NodeProfile, *mobilemultihop.DesktopNodePolicy) {
+	t.Helper()
+	password, kill, mtuPolicy, fixed, restored := peer.password, "on-connect", "auto", 0, 0
+	if scenario == "wrong-key" {
+		password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{29}, 32))
+	}
+	if scenario == "always" {
+		kill, mtuPolicy, fixed = "always", "fixed", 1376
+	}
+	if scenario == "captured-mtu" {
+		restored = 1392
+	}
+	profile, _ := json.Marshal(map[string]any{"id": "generated-linux-child", "node_kind": "router-vpn", "node_proof_id": strings.Repeat("a", 64),
+		"router_api": "http://10.78.0.1:8787", "api_token": "captured-linux-child-token", "endpoint": peer.address.Addr().String(),
+		"start_layer": "", "dns_mode": "home", "adguard_ipv4": "192.168.50.133", "kill_switch_policy": kill,
+		"ipv6_mode": "on", "home_lan_access": false, "mtu_policy": mtuPolicy, "manual_mtu": fixed})
+	graph, _ := json.Marshal(map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true}},
+		"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": peer.address.Addr().String(), "server_port": int(peer.address.Port()),
+			"method": mobilemultihop.NativeStartLayerMethod, "password": password}}, "route": map[string]any{"final": "proxy"}})
+	assets, _ := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(graph)})
+	node, err := mobilemultihop.NewNodeProfile("shadowsocks", string(assets), string(profile), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewDesktopNodePolicyWithMTU(node, hex.EncodeToString(nonce[:]), "linux", restored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return node, policy
+}
+
+func TestRouterVPNLinuxNodeTUNWorker(t *testing.T) {
+	scenario := os.Getenv("ROUTERVPN_NODE_CHILD_CONTROL")
+	if scenario == "" {
+		return
+	}
+	var invocation linuxChildControlInvocation
+	if json.Unmarshal([]byte(os.Getenv("ROUTERVPN_NODE_CHILD_INVOCATION")), &invocation) != nil || invocation.Selection.Validate() != nil {
+		t.Fatal("generated TUN child lost its complete captured invocation")
+	}
+	globalCtx = include.Context(service.ContextWithDefaultRegistry(context.Background()))
+	meta := invocation.Selection
+	mainCommand.SilenceErrors, mainCommand.SilenceUsage = true, true
+	mainCommand.SetOut(io.Discard)
+	mainCommand.SetErr(io.Discard)
+	mainCommand.SetArgs([]string{"routervpn-node", "--runtime-dir", invocation.Directory, "--session", meta.SessionID,
+		"--config-sha256", meta.ConfigSHA256, "--physical-source-sha256", meta.SourceSHA256,
+		"--physical-transfer-sha256", invocation.Transfer, "--physical-mtu", strconv.Itoa(invocation.RestoredMTU),
+		"--linux-parent-channel", strconv.Itoa(invocation.Options.ChannelFD), "--linux-parent-directory", strconv.Itoa(invocation.Options.DirectoryFD),
+		"--linux-parent-capture", invocation.Options.CaptureSHA256})
+	_, err := mainCommand.ExecuteC()
+	wantFailure := scenario == "resolver-failure" || scenario == "wrong-key"
+	if wantFailure != (err != nil) {
+		t.Fatal("actual generated Linux command changed its captured success/failure", scenario, err)
+	}
+}
+
+func linuxChildTUNWaitReady(t *testing.T, ctx context.Context, owner *linuxChildControlParent, files *routerVPNExternalFiles,
+	policy *mobilemultihop.DesktopNodePolicy) mobilemultihop.DesktopNodeReadyRecord {
+	t.Helper()
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if raw, err := files.read("node-ready.json", mobilemultihop.DesktopNodeReadyRecordLimit); err == nil {
+			record, err := mobilemultihop.ParseDesktopNodeReadyRecord(raw, policy, owner.invocation.Transfer)
+			iface, ifaceErr := net.InterfaceByName(record.InterfaceName)
+			if err != nil || ifaceErr != nil || iface.Index != int(record.InterfaceIndex) || iface.MTU != record.MTU ||
+				record.ProvedAt > time.Now().UnixMilli() || time.Now().UnixMilli()-record.ProvedAt > 10000 {
+				t.Fatal("generated command published a substituted DNS/TUN readiness", err, ifaceErr)
+			}
+			return record
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("generated command lost its owned readiness file", err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("actual generated command did not prove selected DNS/TUN readiness", ctx.Err(), owner.output.String())
+		case <-owner.done:
+			t.Fatal("original generated command exited before readiness", owner.waitErr, owner.output.String())
+		case <-tick.C:
+		}
+	}
+}
+
+func linuxChildTUNMTUStatus(t *testing.T, ctx context.Context, owner *linuxChildControlParent, files *routerVPNExternalFiles,
+	request string) routerVPNNodeMTURecord {
+	t.Helper()
+	tick := time.NewTicker(20 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if raw, err := files.read("node-mtu-status.json", 4096); err == nil {
+			var record routerVPNNodeMTURecord
+			if !routerVPNMTUStrict(raw, &record) || record.Schema != 1 || record.Session != owner.invocation.Selection.SessionID ||
+				record.Config != owner.invocation.Selection.ConfigSHA256 || !routerVPNExternalSource.MatchString(record.Path) ||
+				record.Reader == 0 || record.Index < 1 || record.Interface != "router-vpn" || record.MTU < 1280 || record.MTU > 9000 {
+				t.Fatal("generated command lost its complete retained MTU status")
+			}
+			if record.Request == request {
+				iface, err := net.InterfaceByIndex(record.Index)
+				if err != nil || iface.Name != record.Interface || iface.MTU != record.MTU || record.Failure != "" {
+					t.Fatal("generated MTU status differs from actual kernel interface", err, record.Failure)
+				}
+				return record
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("actual generated MTU transaction did not finish", ctx.Err(), owner.output.String())
+		case <-owner.done:
+			t.Fatal("original command exited during owned MTU operation", owner.waitErr, owner.output.String())
+		case <-tick.C:
+		}
+	}
+}
+
+func linuxChildTUNMTURollback(t *testing.T, ctx context.Context, owner *linuxChildControlParent, files *routerVPNExternalFiles) int {
+	t.Helper()
+	status := linuxChildTUNMTUStatus(t, ctx, owner, files, "")
+	original := status.MTU
+	lease := strings.Repeat("c", 32)
+	for step, action := range []string{"begin", "set", "rollback"} {
+		request := strings.Repeat(strconv.Itoa(step+1), 32)
+		command := routerVPNNodeMTUCommand{Schema: 1, Session: status.Session, Config: status.Config, Path: status.Path,
+			Generation: status.Generation + 1, Request: request, Lease: lease, Action: action, Reader: status.Reader, MTU: status.MTU}
+		if action == "set" {
+			command.Value = 1376
+		}
+		if err := files.publish("node-mtu-request.json", command); err != nil {
+			t.Fatal(err)
+		}
+		previous := status
+		status = linuxChildTUNMTUStatus(t, ctx, owner, files, request)
+		if status.Generation != command.Generation || status.Path != previous.Path || status.Lease != lease ||
+			action == "begin" && (!status.Active || status.MTU != original || status.Reader != previous.Reader) ||
+			action == "set" && (!status.Active || status.MTU != command.Value || status.Reader <= previous.Reader) ||
+			action == "rollback" && (status.Active || !status.Restored || status.MTU != original || status.Reader <= previous.Reader) {
+			t.Fatal("actual generated MTU lease changed its captured transaction", action, status)
+		}
+		// Status is published before the child removes this exact request.
+		// Wait for that owned consumption before reusing the basename; a
+		// replacement inode must never race the child's final identity check.
+		for {
+			actual, err := files.root.Lstat("node-mtu-request.json")
+			if errors.Is(err, os.ErrNotExist) {
+				delete(files.owned, "node-mtu-request.json")
+				break
+			}
+			if err != nil || files.owned["node-mtu-request.json"] == nil || !os.SameFile(actual, files.owned["node-mtu-request.json"]) {
+				t.Fatal("generated MTU request was replaced before owned consumption", err)
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatal("generated MTU request was not consumed", ctx.Err())
+			case <-owner.done:
+				t.Fatal("original command exited before consuming its MTU request", owner.waitErr, owner.output.String())
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+	}
+	return status.Index
+}
+
+func linuxChildTUNTraffic(t *testing.T, network, host string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	connection, err := (&net.Dialer{}).DialContext(ctx, network, net.JoinHostPort(host, "9999"))
+	if err != nil {
+		t.Fatal("actual generated TUN did not carry its encrypted destination", network, host, err)
+	}
+	defer connection.Close()
+	_ = connection.SetDeadline(time.Now().Add(3 * time.Second))
+	payload := bytes.Repeat([]byte("actual-generated-linux-command-"), 12)
+	if _, err := connection.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	received := make([]byte, len(payload))
+	if _, err := io.ReadFull(connection, received); err != nil || !bytes.Equal(payload, received) {
+		t.Fatal("actual generated TUN returned a different encrypted payload", network, host, err)
+	}
+}
+
+func linuxChildTUNAbsent(t *testing.T, indexes ...int) {
+	t.Helper()
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, iface := range interfaces {
+		captured := iface.Name == "router-vpn"
+		for _, index := range indexes {
+			captured = captured || index > 0 && iface.Index == index
+		}
+		if captured {
+			t.Fatal("generated child sent retirement before its actual captured TUN was gone", iface.Name, iface.Index)
+		}
+	}
+}
+
+// This is the actual registered generated command around the existing native
+// TUN/SS2022/DNS peer. It supplies original parent callbacks, never fake TUN,
+// selected-DNS, source-join or readiness observations.
+func TestDesktopLinuxGuardianKernelNodeChildCommandTUN(t *testing.T) {
+	linuxChildTUNNamespace(t, true)
+	for _, scenario := range []string{"on-connect", "always", "captured-mtu", "mtu-rollback", "resolver-failure", "wrong-key"} {
+		t.Run(scenario, func(t *testing.T) {
+			peer := linuxStartChildTUNPeer(t)
+			if scenario == "resolver-failure" {
+				peer.observe(t, "fail-dns")
+			}
+			node, policy := linuxChildTUNPolicy(t, peer, scenario)
+			owner, err := linuxStartCapturedChildControl(t, scenario, node, policy, "TestRouterVPNLinuxNodeTUNWorker", 90*time.Second)
+			if err != nil {
+				t.Fatal("generated TUN child lost its actual original bootstrap", err, owner.output.String())
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
+			defer cancel()
+			control, err := linuxprotection.NewNodeParentControl(ctx, owner.bootstrap, owner.invocation.Selection)
+			if err != nil {
+				t.Fatal(err)
+			}
+			created, admitted := 0, 0
+			err = control.ServePreparation(ctx, func(ctx context.Context, capture mobiletor.DesktopSocketCapture) (mobiletor.DesktopLinuxNodeCreationRecord, error) {
+				created++
+				var err error
+				owner.baseline, err = mobiletor.NewDesktopLinuxNodeBaseline(ctx, capture, owner.invocation.Selection.HomeLAN)
+				if err != nil {
+					return mobiletor.DesktopLinuxNodeCreationRecord{}, err
+				}
+				return owner.baseline.Created(ctx)
+			}, func(ctx context.Context, prepared linuxprotection.NodePreparedRecord) error {
+				admitted++
+				if owner.baseline == nil {
+					return errors.New("generated TUN source preceded original parent creation")
+				}
+				linuxChildTUNAbsent(t)
+				return owner.baseline.BindPrepared(ctx, prepared.Protection)
+			})
+			if err != nil || created != 1 || admitted != 1 {
+				t.Fatal("generated TUN command lost original native preparation", err, owner.output.String())
+			}
+			files, err := routerVPNOpenExternalFiles(owner.invocation.Directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer files.root.Close()
+			var indexes []int
+			failed := scenario == "resolver-failure" || scenario == "wrong-key"
+			if !failed {
+				ready := linuxChildTUNWaitReady(t, ctx, owner, files, policy)
+				indexes = append(indexes, int(ready.InterfaceIndex))
+				if observed := peer.observe(t, "stats"); observed.DNSQueries != 2 || observed.RawUDP == 0 || observed.PlainUDP == 0 {
+					t.Fatal("generated readiness lacks its two fresh selected-DNS exchanges", observed)
+				}
+				if scenario == "mtu-rollback" {
+					indexes = append(indexes, linuxChildTUNMTURollback(t, ctx, owner, files))
+				}
+				for _, network := range []string{"tcp", "udp"} {
+					for _, address := range []string{"192.0.2.99", "2001:db8::99"} {
+						linuxChildTUNTraffic(t, network, address)
+					}
+				}
+				observed := peer.observe(t, "stats")
+				if observed.RawTCP == 0 || observed.RawUDP == 0 || observed.PlainTCP == 0 || observed.PlainUDP == 0 {
+					t.Fatal("generated command payload lacks actual encrypted peer evidence", observed)
+				}
+				if err := files.publish("stop.json", routerVPNExternalStop{Schema: 1, Session: policy.Metadata().SessionID, SourceSHA256: policy.Metadata().ConfigSHA256}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			receipt, err := control.ReceiveRetirement(ctx)
+			if err != nil || receipt.Validate() != nil || receipt.Source == nil || receipt.Source.Original == nil || receipt.Prepared == nil {
+				t.Fatal("generated TUN child lost its actual joined source receipt", err, owner.output.String())
+			}
+			// Read kernel state before granting the final ACK. A later process
+			// exit or automatic descriptor cleanup cannot satisfy this check.
+			linuxChildTUNAbsent(t, indexes...)
+			if _, err := files.root.Lstat("node-ready.json"); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("retired generated command retained or fabricated readiness", err)
+			}
+			if failed {
+				observed := peer.observe(t, "stats")
+				if observed.RawUDP == 0 || scenario == "resolver-failure" && observed.DNSQueries != 1 ||
+					scenario == "wrong-key" && (observed.PlainUDP != 0 || observed.DNSQueries != 0) {
+					t.Fatal("generated command failure lacks its actual selected-DNS/key evidence", observed)
+				}
+			}
+			if err := control.AcknowledgeRetirement(ctx, func(ctx context.Context, _ linuxprotection.NodeRetirementRecord) error {
+				return owner.baseline.ObserveClosed(ctx)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := owner.bootstrap.Close(ctx); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatal("original generated TUN process did not join after exact ACK/EOF", ctx.Err(), owner.output.String())
+			case <-owner.done:
+			}
+			if owner.waitErr != nil {
+				t.Fatal("original generated TUN worker failed its required boundary", owner.waitErr, owner.output.String())
+			}
+			linuxChildTUNAbsent(t, indexes...)
+			var stopped struct {
+				routerVPNExternalStop
+				Closed bool `json:"closed"`
+			}
+			raw, err := files.read("stopped.json", 2048)
+			if err != nil || !routerVPNMTUStrict(raw, &stopped) || !stopped.Closed || stopped.Schema != 1 ||
+				stopped.Session != policy.Metadata().SessionID || stopped.SourceSHA256 != policy.Metadata().ConfigSHA256 {
+				t.Fatal("joined generated command lost its captured stopped receipt", err)
+			}
+			if err := owner.baseline.ObserveClosed(ctx); err != nil {
+				t.Fatal("joined generated child lost its exact closed baseline", err)
+			}
+			if policy.Metadata().KillSwitchPolicy == "always" {
+				if mobiletor.ReadDesktopLinuxNodeAbsence(ctx, policy.Metadata().SessionID) == nil {
+					t.Fatal("Always generated command released its retained original table")
+				}
+				// The enclosing isolated fixture will dispose its original table
+				// after these assertions. Production explicit Off is separate.
+			} else {
+				if err := owner.baseline.Release(ctx); err != nil || mobiletor.ReadDesktopLinuxNodeAbsence(ctx, policy.Metadata().SessionID) != nil {
+					t.Fatal("joined On-connect command failed original parent release", err)
+				}
+			}
+		})
+	}
+}
+
+// Validate the reused, separately compiled encrypted peer without claiming
+// TUN support on hosts where the required device is unavailable.
+func TestDesktopLinuxGuardianKernelNodeChildCommandPeer(t *testing.T) {
+	linuxChildTUNNamespace(t, false)
+	peer := linuxStartChildTUNPeer(t)
+	if observed := peer.observe(t, "stats"); observed.DNSQueries != 0 || observed.PlainTCP != 0 || observed.PlainUDP != 0 {
+		t.Fatal("independent captured peer fabricated traffic", observed)
+	}
+	for _, scenario := range []string{"on-connect", "always", "captured-mtu", "mtu-rollback", "resolver-failure", "wrong-key"} {
+		node, policy := linuxChildTUNPolicy(t, peer, scenario)
+		if node == nil || policy.Validate() != nil {
+			t.Fatal("captured generated child fixture did not compile", scenario)
+		}
+	}
+	if _, err := fmt.Fprintln(peer.input, "restore-dns"); err != nil {
+		t.Fatal(err)
+	}
+	peer.read(t)
+}

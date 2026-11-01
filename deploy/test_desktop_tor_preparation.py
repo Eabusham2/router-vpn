@@ -158,7 +158,8 @@ class DesktopPTPreparation(unittest.TestCase):
                          'node_command_control.go.tmpl', 'node_command_control_linux.go.tmpl',
                          'node_command_control_other.go.tmpl', 'node_command_run_linux.go.tmpl',
                          'node_command_control_test.go.tmpl', 'node_command_control_linux_test.go.tmpl',
-                         'node_command_control_linux_native_test.go.tmpl'):
+                         'node_command_control_linux_native_test.go.tmpl',
+                         'node_command_control_linux_tun_native_test.go.tmpl'):
                 relative = 'cmd/sing-box/routervpn_'+name.removesuffix('.tmpl')
                 self.assertEqual(generated[relative], (ROOT/'mobile/desktop'/name).read_bytes())
             for name, raw in PREP.PFABI.checked_files(ROOT/'internal/mobiletor').items():

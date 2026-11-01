@@ -1,0 +1,90 @@
+name: Linux generated Node command TUN acceptance
+
+on:
+  workflow_dispatch:
+  workflow_call:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/desktop/**'
+      - 'internal/mobileamnezia/**'
+      - 'internal/mobilemultihop/**'
+      - 'internal/mobiletor/**'
+      - 'internal/linuxprocess/**'
+      - 'internal/linuxprotection/**'
+      - 'internal/desktoptransport/**'
+      - 'internal/desktopidentity/**'
+      - 'deploy/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/linux-node-child-tun.yml'
+  pull_request:
+    paths:
+      - 'mobile/desktop/**'
+      - 'internal/mobileamnezia/**'
+      - 'internal/mobilemultihop/**'
+      - 'internal/mobiletor/**'
+      - 'internal/linuxprocess/**'
+      - 'internal/linuxprotection/**'
+      - 'internal/desktoptransport/**'
+      - 'internal/desktopidentity/**'
+      - 'deploy/**'
+      - 'go.mod'
+      - 'go.sum'
+      - '.github/workflows/linux-node-child-tun.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-node-child-tun-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  command:
+    name: Actual generated command and TUN on ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Install native namespace and compilation tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential git iproute2 nftables util-linux sudo passwd
+          test -c /dev/net/tun
+      - name: Verify actual verdict and receipt boundaries
+        run: python3 deploy/test_linux_node_child_tun_runner.py
+      - name: Require generated command DNS, TUN traffic, MTU rollback and joined stop
+        timeout-minutes: 45
+        env:
+          ROUTERVPN_EXPECTED_SOURCE: ${{ github.sha }}
+          ROUTERVPN_TUN_RECEIPT: ${{ runner.temp }}/linux-node-child-${{ matrix.arch }}.json
+          CGO_ENABLED: '1'
+        run: |
+          # This focused gate uses the same pinned preparation and mandatory
+          # native fixture as complete runtime builds. It creates no device
+          # and cannot substitute the bounded --peer-only prerequisite.
+          python3 deploy/test_linux_node_child_tun.py --standalone --require-commit "$ROUTERVPN_EXPECTED_SOURCE" --receipt "$ROUTERVPN_TUN_RECEIPT"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Linux-Node-command-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/linux-node-child-${{ matrix.arch }}.json
+          if-no-files-found: error
+          retention-days: 14

@@ -48,10 +48,11 @@ func init() {
 }
 
 type linuxChildControlInvocation struct {
-	Directory string
-	Selection linuxprotection.NodeSelection
-	Transfer  string
-	Options   routerVPNNodeLinuxParentOptions
+	Directory   string
+	Selection   linuxprotection.NodeSelection
+	Transfer    string
+	Options     routerVPNNodeLinuxParentOptions
+	RestoredMTU int
 }
 
 func linuxChildControlNamespace(t *testing.T) {
@@ -131,8 +132,18 @@ type linuxChildControlParent struct {
 
 func linuxStartChildControl(t *testing.T, scenario string) (*linuxChildControlParent, error) {
 	t.Helper()
-	linuxChildControlNamespace(t)
 	node, policy := linuxChildControlPolicy(t)
+	return linuxStartCapturedChildControl(t, scenario, node, policy, "TestRouterVPNLinuxNodeControlWorker", 30*time.Second)
+}
+
+func linuxStartCapturedChildControl(t *testing.T, scenario string, node *mobilemultihop.NodeProfile,
+	policy *mobilemultihop.DesktopNodePolicy, worker string, limit time.Duration) (*linuxChildControlParent, error) {
+	t.Helper()
+	linuxChildControlNamespace(t)
+	if node == nil || policy == nil || policy.Validate() != nil ||
+		(worker != "TestRouterVPNLinuxNodeControlWorker" && worker != "TestRouterVPNLinuxNodeTUNWorker") || limit < 10*time.Second || limit > 90*time.Second {
+		t.Fatal("native child fixture lost its bounded captured launch")
+	}
 	meta := policy.Metadata()
 	selection := linuxprotection.NodeSelection{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256,
 		Policy: meta.KillSwitchPolicy, HomeLAN: meta.HomeLANAccess}
@@ -167,12 +178,12 @@ func linuxStartChildControl(t *testing.T, scenario string) (*linuxChildControlPa
 			t.Fatal(err)
 		}
 	}
-	owner.invocation = linuxChildControlInvocation{Directory: directory, Selection: selection, Transfer: transfer,
+	owner.invocation = linuxChildControlInvocation{Directory: directory, Selection: selection, Transfer: transfer, RestoredMTU: meta.RestoredMTU,
 		Options: routerVPNNodeLinuxParentOptions{ChannelFD: 3, DirectoryFD: 4, CaptureSHA256: capture}}
 	if scenario == "changed-selection" {
 		owner.invocation.Transfer = strings.Repeat("b", 64)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
 	owner.parent, err = linuxprocess.CaptureSelf(ctx)
 	if err != nil {
 		cancel()
@@ -219,7 +230,7 @@ func linuxStartChildControl(t *testing.T, scenario string) (*linuxChildControlPa
 	if scenario == "foreign-image" {
 		launch = executable
 	}
-	owner.process = exec.CommandContext(ctx, launch, "-test.run=^TestRouterVPNLinuxNodeControlWorker$", "-test.count=1", "-test.timeout=27s")
+	owner.process = exec.CommandContext(ctx, launch, "-test.run=^"+worker+"$", "-test.count=1", "-test.timeout="+(limit-3*time.Second).String())
 	owner.process.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "GORACE=atexit_sleep_ms=0", "ROUTERVPN_LINUX_GUARDIAN_TEST_NS=1",
 		"ROUTERVPN_NODE_CHILD_CONTROL=" + scenario, "ROUTERVPN_NODE_CHILD_INVOCATION=" + string(body)}
 	owner.process.ExtraFiles = []*os.File{childChannel, parentDirectory, childImage}

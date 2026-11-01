@@ -104,6 +104,25 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
                         self.assertLessEqual(kwargs['timeout'], 900)
                         return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_node_child_tun_runner.py'):
+                        self.assertEqual(system, 'linux')
+                        self.assertEqual(args[2:], [])
+                        self.assertEqual(kwargs['cwd'], ROOT)
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOARCH'], arch)
+                        self.assertEqual(kwargs['env']['CGO_ENABLED'], '1')
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertLessEqual(kwargs['timeout'], 60)
+                        return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_node_child_tun.py'):
+                        self.assertEqual(system, 'linux')
+                        self.assertEqual(args[2:], [str(source.resolve())])
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOARCH'], arch)
+                        self.assertEqual(kwargs['env']['CGO_ENABLED'], '1')
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertLessEqual(kwargs['timeout'], 1500)
+                        return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_node_lifecycle_runner.py'):
                         self.assertEqual(system, 'linux')
                         self.assertEqual(args[2:], [])
@@ -335,6 +354,18 @@ class NativeSocketUIDGate(unittest.TestCase):
                     self.assertEqual(calls.index(lifecycle[0]), calls.index(lifecycle_checks[0])+1)
                 for name in ('test_linux_node_lifecycle.py', 'test_linux_node_lifecycle_runner.py'):
                     self.assertIn(ROOT/'deploy'/name, N.inputs())
+                tun_checks = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_node_child_tun_runner.py')]
+                tun = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_node_child_tun.py')]
+                self.assertEqual(len(tun_checks), 1 if system == 'linux' else 0)
+                self.assertEqual(len(tun), len(tun_checks))
+                if tun:
+                    self.assertEqual(calls.index(tun_checks[0]), calls.index(lifecycle[0])+1)
+                    self.assertEqual(calls.index(tun[0]), calls.index(tun_checks[0])+1)
+                for dependency in ('deploy/test_linux_node_child_tun.py', 'deploy/test_linux_node_child_tun_runner.py',
+                                   'mobile/desktop/node_command_control_linux_tun_native_test.go.tmpl',
+                                   'mobile/desktop/node_layer_peer_test.go.tmpl',
+                                   'mobile/amnezia/desktop_reference_test.go.tmpl'):
+                    self.assertIn(ROOT/dependency, N.inputs())
                 darwin = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_guardian.py')]
                 self.assertEqual(len(darwin), 1 if system == 'darwin' else 0)
                 self.assertIn(ROOT/'deploy/test_desktop_darwin_guardian.py', N.inputs())

@@ -135,6 +135,8 @@ def inputs():
                              ROOT/'deploy/test_desktop_linux_guardian.py',
                              ROOT/'deploy/test_linux_node_child_control.py',
                              ROOT/'deploy/test_linux_node_child_control_runner.py',
+                             ROOT/'deploy/test_linux_node_child_tun.py',
+                             ROOT/'deploy/test_linux_node_child_tun_runner.py',
                              ROOT/'deploy/test_linux_node_lifecycle.py',
                              ROOT/'deploy/test_linux_node_lifecycle_runner.py',
                              ROOT/'deploy/test_desktop_darwin_guardian.py',
@@ -605,6 +607,10 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                     cwd=ROOT, env=env, timeout=60)
                 run([sys.executable, ROOT/'deploy/test_linux_node_lifecycle.py', source],
                     env=env, timeout=600)
+                run([sys.executable, ROOT/'deploy/test_linux_node_child_tun_runner.py'],
+                    cwd=ROOT, env=env, timeout=60)
+                run([sys.executable, ROOT/'deploy/test_linux_node_child_tun.py', source],
+                    env=env, timeout=1500)
             if target.startswith('darwin/'):
                 run([sys.executable, ROOT/'deploy/test_desktop_darwin_guardian.py', source, '--mutations'],
                     env=env, timeout=1800)
