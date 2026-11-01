@@ -257,6 +257,14 @@ jobs:
       - name: Build auxiliary proxy ARM64 image
         run: docker buildx build --platform linux/arm64 --progress=plain --load -f server/aux-proxies/Dockerfile -t router-vpn-ci-aux:arm64 .
 
+      - name: Prove auxiliary payloads with explicit corrected reference clients
+        timeout-minutes: 12
+        run: |
+          docker buildx build --platform linux/arm64 --progress=plain --load \
+            --target aux-interoperability -f server/aux-proxies/Dockerfile \
+            -t router-vpn-ci-aux-interop:arm64 .
+          bash deploy/run_aux_interoperability_container.sh router-vpn-ci-aux:arm64 router-vpn-ci-aux-interop:arm64
+
       - name: Smoke-test generated OverTLS and SSR services
         shell: bash
         run: |

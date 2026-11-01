@@ -1,0 +1,16 @@
+diff --git a/src/udp_ssr_client.c b/src/udp_ssr_client.c
+index c647ee7..531ec2a 100644
+--- a/src/udp_ssr_client.c
++++ b/src/udp_ssr_client.c
+@@ -237,7 +237,10 @@ void client_udp_remote_recv_cb(uv_udp_t* handle, ssize_t nread, const uv_buf_t*
+             uv_udp_t *listener_udp = &remote_ctx->listener_ctx->udp;
+             union sockaddr_universal *incoming_addr = &remote_ctx->incoming_addr;
+             struct socks5_address s5addr = { {{0}}, 0, SOCKS5_ADDRTYPE_INVALID };
+-            universal_address_to_socks5(incoming_addr, &s5addr);
++            if (!socks5_address_parse(final_data, final_len, &s5addr, NULL)) {
++                pr_err("%s", "[udp] invalid returned destination");
++                break;
++            }
+ 
+             // Construct packet
+             udp_data = s5_build_udp_datagram(&s5addr, final_data + addr_header_len, final_len - addr_header_len, &malloc, &len);

@@ -32,6 +32,44 @@ RUN apt-get update \
  && test -x /src/ssr/build/src/ssr-server \
  && /src/ssr/build/src/ssr-server -h >/dev/null 2>&1
 
+# The two reference clients preserve their upstream wire protocols. Their
+# SOCKS UDP envelope corrections are explicit and confined to test-only stages.
+FROM ssr-build AS ssr-reference-client
+COPY server/aux-proxies/patches/ssr-client-udp-returned-address.patch /patches/ssr-client-udp-returned-address.patch
+RUN echo "99be69c6474a504f74f1894dcb5e97773b4ba9ad3121b48dea709beb7855259c  /patches/ssr-client-udp-returned-address.patch" | sha256sum --check - \
+ && git -C /src/ssr apply --check /patches/ssr-client-udp-returned-address.patch \
+ && git -C /src/ssr apply /patches/ssr-client-udp-returned-address.patch \
+ && cmake --build /src/ssr/build --target ssr-client --parallel 2
+
+FROM overtls-build AS overtls-reference-client
+COPY server/aux-proxies/patches/overtls-client-udp-returned-address.patch /patches/overtls-client-udp-returned-address.patch
+RUN echo "952d071aea5e60b06e349cc754a8b663309aff259d019a36d082f05c8bf2e9cb  /patches/overtls-client-udp-returned-address.patch" | sha256sum --check - \
+ && printf '65ddf4401a40f832aaf0d368886c882c2acacfab787ee3bc5786f4b095a528f4  %s\n' "${CARGO_HOME}/registry/cache/"*/"overtls-${OVERTLS_VERSION}.crate" | sha256sum --check - \
+ && mkdir -p /src \
+ && cp -a "${CARGO_HOME}/registry/src/"*/"overtls-${OVERTLS_VERSION}" /src/overtls \
+ && git -C /src/overtls apply --check /patches/overtls-client-udp-returned-address.patch \
+ && git -C /src/overtls apply /patches/overtls-client-udp-returned-address.patch \
+ && cargo install --path /src/overtls --locked --offline --root /reference-client
+
+FROM pocat/naiveproxy:v2.11.4-uot AS interop-caddy
+
+# Test-only clients and local TLS tooling. The final production image below
+# still contains only the existing server programs and start-layer relay.
+FROM debian:bookworm-slim AS aux-interoperability
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates python3 openssl iproute2 \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=overtls-build /out/bin/overtls-bin /usr/local/bin/overtls-bin
+COPY --from=overtls-reference-client /reference-client/bin/overtls-bin /usr/local/bin/overtls-reference-client
+COPY --from=ssr-build /src/ssr/build/src/ssr-server /usr/local/bin/ssr-server
+COPY --from=ssr-build /src/ssr/build/src/ssr-client /usr/local/bin/ssr-stock-client
+COPY --from=ssr-reference-client /src/ssr/build/src/ssr-client /usr/local/bin/ssr-reference-client
+COPY --from=interop-caddy /usr/bin/caddy /usr/local/bin/caddy
+COPY deploy/test_aux_interoperability.py deploy/run_aux_interoperability.py /src/deploy/
+COPY server/scripts/generate-aux-proxies.py server/scripts/atomic-private-batch.py /src/server/scripts/
+COPY server/naive/entrypoint.sh server/naive/Dockerfile /src/server/naive/
+ENTRYPOINT ["python3", "/src/deploy/run_aux_interoperability.py", "--overtls-server", "/usr/local/bin/overtls-bin", "--overtls-client", "/usr/local/bin/overtls-reference-client", "--ssr-server", "/usr/local/bin/ssr-server", "--ssr-client", "/usr/local/bin/ssr-reference-client", "--ssr-stock-client", "/usr/local/bin/ssr-stock-client", "--caddy", "/usr/local/bin/caddy", "--openssl", "/usr/bin/openssl"]
+
 FROM debian:bookworm-slim
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates \
