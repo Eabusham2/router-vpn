@@ -518,9 +518,17 @@ class MAXNativeBoundaries(unittest.TestCase):
                 self.assertNotIn(GATE.PREDICATE, mapping)
         self.assertEqual((self.source / GATE.PREDICATE).read_text(), raw)
         self.assertEqual(json.loads(receipt.read_text()), json.loads(json.dumps(result)))
+        reversal_deadlines, control_deadlines = [], []
         for args, outer_timeout in state['native_calls']:
             inner = int(next(value.removeprefix('-test.timeout=')[:-1] for value in args if value.startswith('-test.timeout=')))
             self.assertEqual(outer_timeout, inner + 15)
+            if '-test.run=^' + GATE.SUCCESSION + '$' in args:
+                reversal_deadlines.append((inner, outer_timeout))
+            if Path(args[0]) in state['removed_controls']:
+                control_deadlines.append((inner, outer_timeout))
+        self.assertEqual(reversal_deadlines, [(2400, 2415)])
+        self.assertEqual(control_deadlines, [(90, 105)] * 6,
+                         'The reversal aggregate changed an individual native control deadline')
 
     def test_prospective_driver_preserves_unmodified_closed_prerequisite(self):
         receipt = self.work / 'prospective-native-max.json'
