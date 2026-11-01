@@ -103,7 +103,8 @@ func (h *desktopLinuxNodeHost) publishStarting(ctx context.Context) error {
 	profile, exists := a.profileByIDLocked(h.launch.profileID)
 	if a.checkCapturedConnectionOperationLocked(h.operation) != nil || !exists || a.cmd != nil || a.state.Connected ||
 		desktopOwnedNodeProfileToken(profile) != h.revision ||
-		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != h.options {
+		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != h.savedOptions ||
+		[3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} != h.options {
 		return errors.New("Linux Node publication lost its original request, node or empty connection slot")
 	}
 	if _, exists := desktopNodeOwners.Load(a); exists {

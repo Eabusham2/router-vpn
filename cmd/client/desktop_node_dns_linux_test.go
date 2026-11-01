@@ -14,13 +14,14 @@ import (
 // These are sealed-source comparisons, not a fabricated native DNS success.
 // The complete installed-host case exercises the original session and TUN.
 func TestDesktopLinuxNodeDNSCapturedObservation(t *testing.T) {
-	for _, scenario := range []string{"original", "disconnected", "phase", "node", "runtime", "observed-runtime", "credential", "dns", "mtu", "ipv6",
+	for _, scenario := range []string{"original", "different-runtime-options", "disconnected", "phase", "node", "runtime", "observed-runtime", "credential", "dns", "mtu", "ipv6",
 		"daita", "jumbo", "socks", "resolver-protocol", "resolver-port", "resolver-name", "source", "missing-source"} {
 		t.Run(scenario, func(t *testing.T) {
 			host, profile := linuxHostProofFixture(t)
 			host.launch.mode = "wg"
 			host.revision = desktopOwnedNodeProfileToken(profile)
 			host.options = [3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled}
+			host.savedOptions = host.options
 			observed := observedConnection{Connected: true, Phase: "connected", RouterID: profile.ID, RuntimeMode: "wg", Profile: profile}
 			selected, err := expectedDNSSelection(profile)
 			if err != nil {
@@ -28,6 +29,8 @@ func TestDesktopLinuxNodeDNSCapturedObservation(t *testing.T) {
 			}
 			runtimeID := "wg"
 			switch scenario {
+			case "different-runtime-options":
+				host.options[0], host.options[1], host.options[2] = !host.options[0], !host.options[1], !host.options[2]
 			case "disconnected":
 				observed.Connected = false
 			case "phase":
@@ -63,7 +66,7 @@ func TestDesktopLinuxNodeDNSCapturedObservation(t *testing.T) {
 			case "missing-source":
 				host.source = nil
 			}
-			if err := host.matchesDNSObservation(observed, runtimeID, selected); (err == nil) != (scenario == "original") {
+			if err := host.matchesDNSObservation(observed, runtimeID, selected); (err == nil) != (scenario == "original" || scenario == "different-runtime-options") {
 				t.Fatal("Linux DNS observation accepted another captured node, resolver or policy", scenario, err)
 			}
 		})

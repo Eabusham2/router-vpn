@@ -38,6 +38,7 @@ type desktopLinuxNodeTransaction struct {
 	revision      string
 	network       string
 	options       [3]bool
+	savedOptions  [3]bool
 
 	predecessor, successor *desktopLinuxNodeTransaction
 	previous               linuxprotection.JournalState
@@ -112,14 +113,21 @@ func newDesktopLinuxNodeTransaction(operation context.Context, parent *desktopLi
 		ProfileJSON string `json:"profile_json"`
 	}
 	var captured common.RouterProfile
-	if json.Unmarshal([]byte(input), &envelope) != nil || json.Unmarshal([]byte(envelope.ProfileJSON), &captured) != nil ||
-		validateDesktopOwnedNodeSourceProfile(profile, captured.Endpoint, input) != nil {
+	if json.Unmarshal([]byte(input), &envelope) != nil || json.Unmarshal([]byte(envelope.ProfileJSON), &captured) != nil {
+		return nil, errors.New("Linux Node transaction lost its captured runtime source")
+	}
+	// Runtime toggles belong to the captured connection. They do not silently
+	// update the stored profile, whose independent options remain guarded.
+	sourceProfile := profile
+	sourceProfile.DAITAEnabled, sourceProfile.JumboTUN, sourceProfile.SocksEnabled = captured.DAITAEnabled, captured.JumboTUN, captured.SocksEnabled
+	if validateDesktopOwnedNodeSourceProfile(sourceProfile, captured.Endpoint, input) != nil {
 		return nil, errors.New("Linux Node transaction substituted private input from another saved profile")
 	}
 	t := &desktopLinuxNodeTransaction{gate: make(chan struct{}, 1), parent: parent, journal: journal, process: process,
 		policy: policy, operation: operation, selection: selection, profileID: meta.ProfileID,
 		revision: desktopOwnedNodeProfileToken(profile), network: physicalNetworkIdentity(),
-		options: [3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled}, predecessor: predecessor}
+		options:      [3]bool{captured.DAITAEnabled, captured.JumboTUN, captured.SocksEnabled},
+		savedOptions: [3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled}, predecessor: predecessor}
 	p := parent.parent
 	select {
 	case <-operation.Done():
@@ -228,7 +236,7 @@ func (t *desktopLinuxNodeTransaction) accepted(ctx context.Context) error {
 	if err := a.checkCapturedConnectionOperationLocked(t.operation); err != nil || a.connectionCancelIntent == t.operation || !exists || a.cmd != t.process.command ||
 		a.state.RouterID != t.profileID || a.state.RuntimeMode != t.policy.Metadata().Mode ||
 		desktopOwnedNodeProfileToken(profile) != t.revision ||
-		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != t.options ||
+		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != t.savedOptions ||
 		[3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} != t.options {
 		return errors.Join(err, errors.New("Linux Node preparation belongs to another saved profile, request or command"))
 	}

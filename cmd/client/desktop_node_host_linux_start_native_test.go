@@ -26,7 +26,7 @@ import (
 
 var linuxNodeHostStartCases = []string{"admitted", "active-connection", "retained-workspace", "cancelled-before-start",
 	"source-replaced", "foreign-journal", "request-during-launch", "replacement-during-launch", "request-ended",
-	"replacement-after-start", "shutdown", "always-successor"}
+	"replacement-after-start", "shutdown", "always-successor", "runtime-options"}
 
 func linuxHostStartAssets(profile common.RouterProfile) error {
 	directory := filepath.Join(linuxOwnedControllerRoot, "generated", profile.ID, "shadowsocks")
@@ -61,6 +61,9 @@ func linuxNodeHostStartFixture(controller *ownedDesktopController, scenario stri
 	if err != nil {
 		return err
 	}
+	if scenario == "runtime-options" || scenario == "runtime-options-replaced" {
+		profile.DAITAHost, profile.DAITAPort, profile.DAITARateKbps = "10.77.0.1", 45999, 192
+	}
 	operation, endOperation := context.WithCancel(context.Background())
 	defer endOperation()
 	a := &app{localController: controller, connectionContext: operation, connectionCancel: endOperation,
@@ -68,6 +71,9 @@ func linuxNodeHostStartFixture(controller *ownedDesktopController, scenario stri
 			ModesFile: filepath.Join(linuxOwnedControllerRoot, "modes.json"), ScriptsDir: filepath.Join(linuxOwnedControllerRoot, "modes"),
 			StateFile: filepath.Join(linuxOwnedControllerRoot, "state.json")},
 		profiles: common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}}}
+	if scenario == "runtime-options" {
+		profile.DAITAEnabled, a.state.DAITA = true, true
+	}
 	parent, err := captureDesktopLinuxNodeParent(a)
 	if err != nil {
 		return err
@@ -162,6 +168,10 @@ func linuxNodeHostStartFixture(controller *ownedDesktopController, scenario stri
 		}
 		if err := host.startWithVerifier(ctx, journal, nil, environment, verify); err == nil || verifies != 2 {
 			return errors.New("Linux host reused an already entered native command")
+		}
+		if scenario == "runtime-options" && (!host.options[0] || !host.transaction.options[0] || host.savedOptions[0] ||
+			host.transaction.savedOptions[0] || a.profiles.Profiles[0].DAITAEnabled || !a.state.DAITA) {
+			return errors.New("Linux native admission substituted runtime toggles or rewrote the stored profile")
 		}
 		if scenario == "request-ended" {
 			endOperation()

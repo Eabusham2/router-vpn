@@ -24,7 +24,8 @@ import (
 )
 
 var linuxNodeHostCases = []string{"complete", "restored-mtu", "wrong-package", "request-replaced", "profile-replaced",
-	"options-replaced", "network-replaced", "source-replaced", "workspace-replaced", "cancelled-retirement", "entered-command"}
+	"options-replaced", "network-replaced", "source-replaced", "workspace-replaced", "cancelled-retirement", "entered-command",
+	"runtime-options", "runtime-options-replaced"}
 
 // The actual installed controller, private asset compiler and workspace run in
 // the same isolated namespace as the shipping parent. Only package metadata
@@ -35,6 +36,9 @@ func linuxNodeHostFixture(controller *ownedDesktopController, scenario string) e
 		return err
 	}
 	profile.EffectiveMTU = 9000 // Historical readback must not become the new path MTU.
+	if scenario == "runtime-options" || scenario == "runtime-options-replaced" {
+		profile.DAITAHost, profile.DAITAPort, profile.DAITARateKbps = "10.77.0.1", 45999, 192
+	}
 	operation, endOperation := context.WithCancel(context.Background())
 	defer endOperation()
 	a := &app{localController: controller, connectionContext: operation, connectionCancel: endOperation,
@@ -43,6 +47,9 @@ func linuxNodeHostFixture(controller *ownedDesktopController, scenario string) e
 			StateFile: filepath.Join(linuxOwnedControllerRoot, "state.json")},
 		profiles: common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}},
 		cmd:      &exec.Cmd{}, state: state{Connected: true, Mode: "previous", RuntimeMode: "previous", Phase: "connected", RouterID: "previous"}}
+	if scenario == "runtime-options" || scenario == "runtime-options-replaced" {
+		profile.DAITAEnabled, a.state.DAITA = true, true
+	}
 	beforeCommand, beforeState := a.cmd, a.state
 	parent, err := captureDesktopLinuxNodeParent(a)
 	if err != nil {
@@ -117,11 +124,19 @@ func linuxNodeHostFixture(controller *ownedDesktopController, scenario string) e
 			host.selection.Policy != "always" || host.selection.HomeLAN || host.launch.command != nil {
 			return errors.New("Linux host substituted its original parent or sealed policy")
 		}
+		if scenario == "runtime-options" || scenario == "runtime-options-replaced" {
+			captured, err := host.capturedProofProfile()
+			if err != nil || !captured.DAITAEnabled || !host.options[0] || host.savedOptions[0] || a.profiles.Profiles[0].DAITAEnabled {
+				return errors.Join(err, errors.New("Linux host conflated saved options with its captured runtime selection"))
+			}
+		}
 		switch scenario {
 		case "profile-replaced":
 			a.profiles.Profiles[0].APIToken = "replacement-private-token"
 		case "options-replaced":
 			a.profiles.Profiles[0].DAITAEnabled = !profile.DAITAEnabled
+		case "runtime-options-replaced":
+			a.state.DAITA = false
 		case "network-replaced":
 			if output, err := exec.Command("ip", "link", "set", "dev", "rvpn-test", "name", "rvpn-changed").CombinedOutput(); err != nil {
 				return fmt.Errorf("isolated native link rename failed: %w: %s", err, output)
@@ -133,9 +148,12 @@ func linuxNodeHostFixture(controller *ownedDesktopController, scenario string) e
 				return fmt.Errorf("isolated native link restoration failed: %w: %s", err, output)
 			}
 		}
-		if scenario == "profile-replaced" || scenario == "options-replaced" || scenario == "network-replaced" {
+		if scenario == "profile-replaced" || scenario == "options-replaced" || scenario == "network-replaced" || scenario == "runtime-options-replaced" {
 			if stageErr == nil || host.launch.directory != "" || host.staged {
 				return errors.New("Linux host staged a replaced private source, options or network")
+			}
+			if scenario == "runtime-options-replaced" {
+				a.state.DAITA = beforeState.DAITA
 			}
 		} else {
 			if stageErr != nil {

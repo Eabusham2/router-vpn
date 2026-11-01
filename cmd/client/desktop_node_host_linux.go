@@ -37,6 +37,7 @@ type desktopLinuxNodeHost struct {
 	network      string
 	revision     string
 	options      [3]bool
+	savedOptions [3]bool
 	physical     mobiletor.DesktopLinuxNodeRunningSelection
 	ready        *mobilemultihop.DesktopNodeReadyRecord
 	proof        *desktopLinuxNodeProof
@@ -76,6 +77,14 @@ func prepareDesktopLinuxNodeHostWith(operation context.Context, a *app, profile 
 	network := physicalNetworkIdentity()
 	revision := desktopOwnedNodeProfileToken(profile)
 	options := [3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled}
+	a.mu.Lock()
+	saved, exists := a.profileByIDLocked(profile.ID)
+	savedOptions := [3]bool{saved.DAITAEnabled, saved.JumboTUN, saved.SocksEnabled}
+	selectedOptions := [3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks}
+	a.mu.Unlock()
+	if !exists || desktopOwnedNodeProfileToken(saved) != revision || selectedOptions != options {
+		return nil, errors.New("Linux Node preparation changed its saved profile or selected runtime options")
+	}
 	current := func() error {
 		if ctx.Err() != nil || network == "" || physicalNetworkIdentity() != network {
 			return errors.Join(ctx.Err(), errors.New("Linux Node preparation lost its captured physical network"))
@@ -87,7 +96,8 @@ func prepareDesktopLinuxNodeHostWith(operation context.Context, a *app, profile 
 		defer a.mu.Unlock()
 		actual, exists := a.profileByIDLocked(profile.ID)
 		if a.checkCapturedConnectionOperationLocked(operation) != nil || a.connectionCancelIntent == operation || !exists ||
-			desktopOwnedNodeProfileToken(actual) != revision || [3]bool{actual.DAITAEnabled, actual.JumboTUN, actual.SocksEnabled} != options {
+			desktopOwnedNodeProfileToken(actual) != revision || [3]bool{actual.DAITAEnabled, actual.JumboTUN, actual.SocksEnabled} != savedOptions ||
+			[3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} != options {
 			return errors.New("Linux Node preparation changed its original request or complete private profile")
 		}
 		return nil
@@ -157,7 +167,7 @@ func prepareDesktopLinuxNodeHostWith(operation context.Context, a *app, profile 
 		return nil, err
 	}
 	host := &desktopLinuxNodeHost{gate: make(chan struct{}, 1), parent: parent, operation: operation, policy: policy,
-		selection: selection, source: []byte(input), network: network, revision: revision, options: options, physical: physical,
+		selection: selection, source: []byte(input), network: network, revision: revision, options: options, savedOptions: savedOptions, physical: physical,
 		launch: &desktopNodeLaunch{root: linuxOwnedControllerRoot, endpoint: endpoint, profileID: profile.ID, mode: mode,
 			config: []byte(policy.Config()), metadata: metadata, configSHA256: meta.ConfigSHA256, mtuSession: session}}
 	p := parent.parent
@@ -231,7 +241,8 @@ func (h *desktopLinuxNodeHost) current(ctx context.Context) error {
 	defer a.mu.Unlock()
 	profile, exists := a.profileByIDLocked(meta.ProfileID)
 	if !exists || desktopOwnedNodeProfileToken(profile) != h.revision ||
-		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != h.options {
+		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != h.savedOptions ||
+		[3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} != h.options {
 		return errors.New("Linux Node host belongs to a replaced request or private node")
 	}
 	if h.activation == nil {

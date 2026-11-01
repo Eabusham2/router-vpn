@@ -15,7 +15,7 @@ func (h *desktopLinuxNodeHost) matchesDNSObservation(observed observedConnection
 		observed.RouterID != h.launch.profileID || runtimeID != h.launch.mode ||
 		observed.RuntimeMode != "" && observed.RuntimeMode != runtimeID ||
 		desktopOwnedNodeProfileToken(observed.Profile) != h.revision ||
-		[3]bool{observed.Profile.DAITAEnabled, observed.Profile.JumboTUN, observed.Profile.SocksEnabled} != h.options {
+		[3]bool{observed.Profile.DAITAEnabled, observed.Profile.JumboTUN, observed.Profile.SocksEnabled} != h.savedOptions {
 		return errors.New("selected Linux DNS proof belongs to another observed connection")
 	}
 	profile, err := h.capturedProofProfile()
@@ -115,7 +115,8 @@ func proveDesktopLinuxNodeDNS(ctx context.Context, a *app, observed observedConn
 		current.Connected && current.Phase == "connected" && current.RouterID == observed.RouterID &&
 		current.Mode == observed.Mode && current.LogicalMode == observed.LogicalMode && current.RuntimeMode == runtimeID && current.Base == observed.Base &&
 		exists && desktopOwnedNodeProfileToken(profile) == h.revision &&
-		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} == h.options
+		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} == h.savedOptions &&
+		[3]bool{current.DAITA, current.Jumbo, current.Socks} == h.options
 	a.mu.Unlock()
 	if !currentPath || ctx.Err() != nil {
 		return fail(errors.New("selected Linux DNS proof lost its captured active connection during readback"))

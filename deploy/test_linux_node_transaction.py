@@ -26,10 +26,11 @@ CASES = ("on-connect", "request-ended", "always-successor", "cancelled-before-pr
 SHUTDOWN_CASES = ("shutdown-on-connect", "shutdown-request-ended", "shutdown-before-prepare", "shutdown-before-admission",
                   "shutdown-retry", "shutdown-successor-first", "shutdown-replacement", "shutdown-always")
 HOST_CASES = ("complete", "restored-mtu", "wrong-package", "request-replaced", "profile-replaced", "options-replaced",
-              "network-replaced", "source-replaced", "workspace-replaced", "cancelled-retirement", "entered-command")
+              "network-replaced", "source-replaced", "workspace-replaced", "cancelled-retirement", "entered-command",
+              "runtime-options", "runtime-options-replaced")
 HOST_START_CASES = ("admitted", "active-connection", "retained-workspace", "cancelled-before-start", "source-replaced",
                     "foreign-journal", "request-during-launch", "replacement-during-launch", "request-ended",
-                    "replacement-after-start", "shutdown", "always-successor")
+                    "replacement-after-start", "shutdown", "always-successor", "runtime-options")
 PROOF_SOCKET_CASES = ("tcp4", "tcp6", "udp-rejected", "wrong-family", "wrong-index", "wrong-name", "wrong-mtu", "cancelled", "closed-original")
 SESSION_CASES = ("on-connect-repeat", "hold-on-connect", "always-successor", "failed-successor",
                  "stale-retirement", "wrong-parent", "cancelled-preflight", "partial-journal", "terminal", "clean-restart",
@@ -46,7 +47,7 @@ UNIT_CASES = {
                                             "changed-ready", "changed-live", "active-mtu", "failed-reader"),
     "TestDesktopLinuxNodeActivationRetainsCapturedLifetime": (),
     "TestDesktopLinuxNodeActivationRejectsChangedCapture": ("host", "parent", "operation", "process", "transaction", "policy", "launch", "selection",
-                                                            "network", "profile", "options", "ready", "proof", "activation-time", "transaction-profile",
+                                                            "network", "profile", "options", "saved-options", "transaction-saved-options", "ready", "proof", "activation-time", "transaction-profile",
                                                             "transaction-network", "transaction-parent", "command", "unstarted", "retiring", "joined", "controller-ended"),
     "TestDesktopLinuxNodeConnectedCannotCreateActivation": (),
     "TestConnectionCancellationIntentPrecedesCallback": (),

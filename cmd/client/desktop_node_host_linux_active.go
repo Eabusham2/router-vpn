@@ -16,21 +16,22 @@ import (
 // from the startup request, which ordinary request completion always cancels.
 // Neither Connected nor a saved/decoded readiness record creates this owner.
 type desktopLinuxNodeActivation struct {
-	host        *desktopLinuxNodeHost
-	parent      *desktopLinuxNodeParentCapture
-	operation   context.Context
-	process     *desktopLinuxNodeProcess
-	transaction *desktopLinuxNodeTransaction
-	policy      *mobilemultihop.DesktopNodePolicy
-	launch      *desktopNodeLaunch
-	selection   linuxprotection.NodeSelection
-	network     string
-	revision    string
-	options     [3]bool
-	proof       desktopLinuxNodeProof
-	activatedAt time.Time
-	lifetime    context.Context
-	cancel      context.CancelFunc
+	host         *desktopLinuxNodeHost
+	parent       *desktopLinuxNodeParentCapture
+	operation    context.Context
+	process      *desktopLinuxNodeProcess
+	transaction  *desktopLinuxNodeTransaction
+	policy       *mobilemultihop.DesktopNodePolicy
+	launch       *desktopNodeLaunch
+	selection    linuxprotection.NodeSelection
+	network      string
+	revision     string
+	options      [3]bool
+	savedOptions [3]bool
+	proof        desktopLinuxNodeProof
+	activatedAt  time.Time
+	lifetime     context.Context
+	cancel       context.CancelFunc
 }
 
 func validateDesktopLinuxNodeActivationProof(proof *desktopLinuxNodeProof, ready mobilemultihop.DesktopNodeReadyRecord,
@@ -55,7 +56,7 @@ func (active *desktopLinuxNodeActivation) matches(h *desktopLinuxNodeHost) error
 		active.parent != h.parent || active.operation == nil || active.operation != h.operation ||
 		active.process == nil || active.process != h.process || active.transaction == nil || active.transaction != h.transaction ||
 		active.policy == nil || active.policy != h.policy || active.launch == nil || active.launch != h.launch ||
-		active.selection != h.selection || active.network == "" || active.network != h.network || active.revision != h.revision || active.options != h.options ||
+		active.selection != h.selection || active.network == "" || active.network != h.network || active.revision != h.revision || active.options != h.options || active.savedOptions != h.savedOptions ||
 		active.lifetime == nil || active.lifetime.Err() != nil || active.cancel == nil || h.proof == nil || *h.proof != active.proof ||
 		h.ready == nil || *h.ready != active.proof.ready || active.activatedAt.IsZero() || active.activatedAt == active.activatedAt.Round(0) ||
 		active.activatedAt.Sub(active.proof.provedAt) < 0 || active.activatedAt.Sub(active.proof.provedAt) > 30*time.Second {
@@ -64,7 +65,7 @@ func (active *desktopLinuxNodeActivation) matches(h *desktopLinuxNodeHost) error
 	t, p := active.transaction, active.process
 	if !sameDesktopLinuxParentCapture(t.parent, active.parent) || !sameDesktopLinuxParentCapture(p.parent, active.parent) ||
 		t.process != p || t.policy != active.policy || t.selection != active.selection || t.operation != active.operation ||
-		t.profileID != active.launch.profileID || t.revision != active.revision || t.network != active.network || t.options != active.options ||
+		t.profileID != active.launch.profileID || t.revision != active.revision || t.network != active.network || t.options != active.options || t.savedOptions != active.savedOptions ||
 		p.ctx == nil || p.ctx.Err() != nil || !p.Started() || p.retiring.Load() || p.joined == nil || p.command == nil || p.command != active.launch.command {
 		return errors.New("Linux Node activation substituted an original transaction or process")
 	}
@@ -145,7 +146,7 @@ func (h *desktopLinuxNodeHost) Activate(parent context.Context) (failure error) 
 		a.checkCapturedConnectionOperationLocked(h.operation) != nil || a.connectionCancelIntent == h.operation ||
 		physicalNetworkIdentity() != h.network ||
 		!exists || desktopOwnedNodeProfileToken(profile) != h.revision ||
-		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != h.options ||
+		[3]bool{profile.DAITAEnabled, profile.JumboTUN, profile.SocksEnabled} != h.savedOptions ||
 		a.cmd != h.process.command || a.state.Connected || a.state.Phase != "starting" ||
 		a.state.RouterID != h.launch.profileID || a.state.RuntimeMode != h.launch.mode ||
 		[3]bool{a.state.DAITA, a.state.Jumbo, a.state.Socks} != h.options ||
@@ -168,7 +169,7 @@ func (h *desktopLinuxNodeHost) Activate(parent context.Context) (failure error) 
 	}
 	h.activation = &desktopLinuxNodeActivation{host: h, parent: h.parent, operation: h.operation, process: h.process,
 		transaction: t, policy: h.policy, launch: h.launch, selection: h.selection, network: h.network, revision: h.revision,
-		options: h.options, proof: *h.proof, activatedAt: now, lifetime: lifetime, cancel: stopLifetime}
+		options: h.options, savedOptions: h.savedOptions, proof: *h.proof, activatedAt: now, lifetime: lifetime, cancel: stopLifetime}
 	a.state.Connected, a.state.Phase, a.state.LastError = true, "connected", ""
 	return nil
 }

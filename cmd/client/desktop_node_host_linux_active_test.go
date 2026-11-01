@@ -117,7 +117,7 @@ func TestDesktopLinuxNodeActivationRetainsCapturedLifetime(t *testing.T) {
 }
 
 func TestDesktopLinuxNodeActivationRejectsChangedCapture(t *testing.T) {
-	for _, scenario := range []string{"host", "parent", "operation", "process", "transaction", "policy", "launch", "selection", "network", "profile", "options", "ready", "proof", "activation-time",
+	for _, scenario := range []string{"host", "parent", "operation", "process", "transaction", "policy", "launch", "selection", "network", "profile", "options", "saved-options", "transaction-saved-options", "ready", "proof", "activation-time",
 		"transaction-profile", "transaction-network", "transaction-parent", "command", "unstarted", "retiring", "joined", "controller-ended"} {
 		t.Run(scenario, func(t *testing.T) {
 			h, finish := linuxNodeActivationCaptureModel(t)
@@ -146,6 +146,10 @@ func TestDesktopLinuxNodeActivationRejectsChangedCapture(t *testing.T) {
 				h.revision += "replacement"
 			case "options":
 				h.options[0] = !h.options[0]
+			case "saved-options":
+				h.savedOptions[0] = !h.savedOptions[0]
+			case "transaction-saved-options":
+				h.transaction.savedOptions[0] = !h.transaction.savedOptions[0]
 			case "ready":
 				h.ready.InterfaceIndex++
 			case "proof":
