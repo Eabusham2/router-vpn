@@ -22,6 +22,9 @@ GUARD = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(GUARD)
 CASES = ("on-connect", "request-ended", "always-successor", "cancelled-before-prepare",
          "changed-profile", "partial-prepare-write", "engine-join")
+SHUTDOWN_CASES = ("shutdown-on-connect", "shutdown-request-ended", "shutdown-before-prepare", "shutdown-before-admission",
+                  "shutdown-retry", "shutdown-successor-first", "shutdown-replacement", "shutdown-always")
+GROUPS = {"NodeTransaction": CASES, "NodeShutdown": SHUTDOWN_CASES}
 RUNNERS = ("test_linux_node_transaction.py", "test_linux_node_transaction_runner.py", "test_desktop_linux_guardian.py",
            "test_desktop_socket_uid.py", "prepare-desktop-external.py")
 
@@ -40,6 +43,8 @@ def checked_sources():
         "cmd/client/desktop_node_linux_transaction.go", "cmd/client/desktop_node_linux_transaction_retire.go",
         "cmd/client/desktop_node_linux_transaction_native_test.go", "cmd/client/desktop_node_linux_parent_native_test.go",
         "cmd/client/desktop_node_linux_journal.go", "cmd/client/desktop_node_process_linux.go",
+        "cmd/client/controller_shutdown.go", "cmd/client/desktop_node_shutdown_linux.go",
+        "cmd/client/desktop_node_linux_retirement.go", "cmd/client/desktop_node_linux_shutdown_native_test.go",
         "internal/linuxprotection/node_control_linux.go", "internal/linuxprocess/bootstrap_linux.go",
         "internal/mobiletor/desktop_socket_linux_node_baseline.go", "internal/mobiletor/desktop_socket_linux_node_absence.go",
         "internal/mobiletor/desktop_socket_linux_node_succession_retired.go",
@@ -49,17 +54,21 @@ def checked_sources():
     return records
 
 
-def check_verdict(output):
+def check_verdict(output, group="NodeTransaction"):
+    if group not in GROUPS:
+        raise ValueError("Linux Node transaction has no such captured test group")
     if "--- FAIL:" in output or "--- SKIP:" in output:
         raise ValueError("Linux Node transaction failed or skipped actual native evidence")
-    prefix = "--- PASS: TestDesktopLinuxGuardianKernelNodeTransaction"
-    for suffix in ("", *("/" + case for case in CASES)):
+    prefix = "--- PASS: TestDesktopLinuxGuardianKernel" + group
+    for suffix in ("", *("/" + case for case in GROUPS[group])):
         if prefix + suffix + " (" not in output:
             raise ValueError("Linux Node transaction omitted its required native boundary: " + (suffix or "original group"))
 
 
-def namespace_test(binary, expected_sha256):
-    return GUARD.namespace_test(binary, "NodeTransaction", expected_sha256)
+def namespace_test(binary, expected_sha256, group="NodeTransaction"):
+    if group not in GROUPS:
+        raise ValueError("Linux Node transaction requires its exact native group")
+    return GUARD.namespace_test(binary, group, expected_sha256)
 
 
 def execute(go="go", *, env=None):
@@ -81,18 +90,22 @@ def execute(go="go", *, env=None):
         if not stat.S_ISREG(original.st_mode) or original.st_nlink != 1 or original.st_mode & 0o022 or original.st_size == 0:
             raise ValueError("Linux Node transaction compiler did not produce its owned executable")
         digest = hashlib.sha256(binary.read_bytes()).hexdigest()
-        command = [sys.executable, str(Path(__file__).resolve()), "--namespace-test-binary", str(binary),
-                   "--namespace-test-sha256", digest]
-        if sudo is not None:
-            command = [sudo, "-n", "--", *command]
-        output = GUARD.UID.run(command, cwd=ROOT, env=captured, timeout=150, sudo=sudo)
-        check_verdict(output)
-        after = binary.stat()
-        if ((after.st_dev, after.st_ino, after.st_size) != (original.st_dev, original.st_ino, original.st_size) or
-                hashlib.sha256(binary.read_bytes()).hexdigest() != digest or checked_sources() != before):
-            raise ValueError("Linux Node transaction executable or source changed during native verification")
-        print(output, end="" if output.endswith("\n") else "\n")
-        print("Linux Node original admission, durable prepare intent, native succession, retained protection, cancellation and actual engine-join settlement passed; full shutdown and device traffic remain separate.")
+        # Always intentionally survives controller exit. Give each complete
+        # group its own actual network namespace; never delete that table by
+        # name to pretend a new controller acquired its original capability.
+        for group in GROUPS:
+            command = [sys.executable, str(Path(__file__).resolve()), "--namespace-test-binary", str(binary),
+                       "--namespace-test-sha256", digest, "--namespace-test-group", group]
+            if sudo is not None:
+                command = [sudo, "-n", "--", *command]
+            output = GUARD.UID.run(command, cwd=ROOT, env=captured, timeout=150, sudo=sudo)
+            check_verdict(output, group)
+            after = binary.stat()
+            if ((after.st_dev, after.st_ino, after.st_size) != (original.st_dev, original.st_ino, original.st_size) or
+                    hashlib.sha256(binary.read_bytes()).hexdigest() != digest or checked_sources() != before):
+                raise ValueError("Linux Node transaction executable or source changed during native verification")
+            print(output, end="" if output.endswith("\n") else "\n")
+        print("Linux Node durable transactions and actual controller shutdown passed; restart recovery and device traffic remain separate.")
 
 
 if __name__ == "__main__":
@@ -100,10 +113,11 @@ if __name__ == "__main__":
     parser.add_argument("--go", default="go")
     parser.add_argument("--namespace-test-binary", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--namespace-test-sha256", help=argparse.SUPPRESS)
+    parser.add_argument("--namespace-test-group", choices=tuple(GROUPS), default="NodeTransaction", help=argparse.SUPPRESS)
     args = parser.parse_args()
     if args.namespace_test_binary is not None:
-        raise SystemExit(namespace_test(args.namespace_test_binary, args.namespace_test_sha256))
-    if args.namespace_test_sha256 is not None:
+        raise SystemExit(namespace_test(args.namespace_test_binary, args.namespace_test_sha256, args.namespace_test_group))
+    if args.namespace_test_sha256 is not None or args.namespace_test_group != "NodeTransaction":
         parser.error("the compiled digest is only valid with its original namespace executable")
     try:
         execute(args.go)

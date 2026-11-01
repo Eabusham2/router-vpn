@@ -76,7 +76,7 @@ func (t *desktopLinuxNodeTransaction) finishOriginalEngine(ctx context.Context) 
 			return err
 		}
 	}
-	if err := t.parent.Current(ctx); err != nil {
+	if err := t.parent.retirementCurrent(ctx); err != nil {
 		return err
 	}
 	t.engineJoined, t.exitCode, t.exitError = true, code, waitErr
@@ -84,7 +84,7 @@ func (t *desktopLinuxNodeTransaction) finishOriginalEngine(ctx context.Context) 
 }
 
 func (t *desktopLinuxNodeTransaction) verifyClosed(ctx context.Context, _ linuxprotection.NodeRetirementRecord) error {
-	if err := t.parent.Current(ctx); err != nil {
+	if err := t.parent.retirementCurrent(ctx); err != nil {
 		return err
 	}
 	if t.baseline == nil {
@@ -140,7 +140,7 @@ func (t *desktopLinuxNodeTransaction) Retire(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := t.flushPending(ctx); err != nil {
+	if err := t.resolveRetirementPending(ctx); err != nil {
 		return err
 	}
 	if err := t.checkHead(ctx); err != nil {
@@ -166,6 +166,7 @@ func (t *desktopLinuxNodeTransaction) settleJoined(ctx context.Context) error {
 			if err := t.baseline.Release(ctx); err != nil {
 				return err
 			}
+			t.baselineReleased = true
 		} else if err := mobiletor.ReadDesktopLinuxNodeAbsence(ctx, t.selection.SessionID); err != nil {
 			return err
 		}
@@ -196,8 +197,11 @@ func (t *desktopLinuxNodeTransaction) settleJoined(ctx context.Context) error {
 		if committed {
 			state = linuxprotection.CloneState(head.Intent.Candidate)
 			state.Engine = nil
-		} else if err := t.baseline.Release(ctx); err != nil {
-			return err
+		} else {
+			if err := t.baseline.Release(ctx); err != nil {
+				return err
+			}
+			t.baselineReleased = true
 		}
 		t.nativeCommitted = committed
 		next := t.nextRecord()
@@ -307,6 +311,7 @@ func (t *desktopLinuxNodeTransaction) ReleaseOnDisconnect(ctx context.Context) e
 	if err := t.baseline.Release(ctx); err != nil {
 		return err
 	}
+	t.baselineReleased = true
 	next := t.nextRecord()
 	next.Phase, next.Intent, next.Committed = "settled", nil, linuxprotection.JournalState{}
 	return t.appendRecord(ctx, next)

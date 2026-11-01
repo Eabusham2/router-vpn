@@ -50,6 +50,7 @@ type desktopLinuxNodeTransaction struct {
 
 	complete, served, admitted, retiring  bool
 	nativeCommitted, engineJoined         bool
+	baselineReleased                      bool
 	retired, superseded, closed, released bool
 	exitCode                              uint32
 	exitError                             error
@@ -267,7 +268,7 @@ func (t *desktopLinuxNodeTransaction) flushPending(ctx context.Context) error {
 		return nil
 	}
 	next := *t.pending
-	selected, readErr := t.journal.Snapshot(ctx)
+	selected, readErr := t.snapshotJournal(ctx)
 	if readErr == nil && sameDesktopLinuxJournalSelection(selected, next) {
 		t.head, t.pending = selected, nil
 		return ctx.Err()
@@ -275,7 +276,7 @@ func (t *desktopLinuxNodeTransaction) flushPending(ctx context.Context) error {
 	if readErr == nil && !sameDesktopLinuxJournalSelection(selected, t.head.Record) {
 		return errors.New("Linux Node pending append was replaced by another durable transaction")
 	}
-	saved, err := t.journal.Append(ctx, next.PreviousSHA256, next)
+	saved, err := t.appendJournal(ctx, next)
 	if sameDesktopLinuxJournalSelection(saved, next) {
 		t.head, t.pending = saved, nil
 		return err
@@ -287,7 +288,7 @@ func (t *desktopLinuxNodeTransaction) checkHead(ctx context.Context) error {
 	if t.pending != nil {
 		return errors.New("Linux Node mutation cannot pass a pending durable append")
 	}
-	selected, err := t.journal.Snapshot(ctx)
+	selected, err := t.snapshotJournal(ctx)
 	if err != nil || !sameDesktopLinuxJournalSelection(selected, t.head.Record) {
 		return errors.Join(err, errors.New("Linux Node mutation changed its exact original journal head"))
 	}

@@ -25,7 +25,7 @@ func (p *desktopLinuxNodeProcess) FinishAndWait(ctx context.Context) (uint32, er
 		return 0, errors.New("Linux Node finish lost its original started process owner")
 	}
 	if !p.finishing {
-		if err := p.currentFiles(ctx); err != nil {
+		if err := p.currentFilesMode(ctx, true); err != nil {
 			return 0, err
 		}
 		if p.bootstrap == nil {

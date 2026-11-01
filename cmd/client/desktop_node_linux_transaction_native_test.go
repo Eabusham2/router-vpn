@@ -167,7 +167,7 @@ func linuxNodeTransactionEngine() error {
 	if err != nil {
 		return err
 	}
-	if os.Getenv("ROUTERVPN_LINUX_TRANSACTION_CASE") == "changed-profile" {
+	if scenario := os.Getenv("ROUTERVPN_LINUX_TRANSACTION_CASE"); scenario == "changed-profile" || scenario == "shutdown-before-admission" {
 		if err := linuxTransactionMarker(directory, "prepared"); err != nil {
 			return err
 		}
@@ -198,7 +198,7 @@ func linuxNodeTransactionEngine() error {
 	if err := bootstrap.Close(ctx); err != nil {
 		return err
 	}
-	if os.Getenv("ROUTERVPN_LINUX_TRANSACTION_CASE") == "engine-join" {
+	if scenario := os.Getenv("ROUTERVPN_LINUX_TRANSACTION_CASE"); scenario == "engine-join" || scenario == "shutdown-retry" {
 		if err := linuxTransactionMarker(directory, "eof"); err != nil {
 			return err
 		}
@@ -411,7 +411,7 @@ func linuxNodeTransactionFixture(controller *ownedDesktopController, scenario st
 		return err
 	}
 	policyName := "on-connect"
-	if scenario == "always-successor" {
+	if scenario == "always-successor" || scenario == "shutdown-always" || scenario == "shutdown-successor-first" {
 		policyName = "always"
 	}
 	transaction, stopOperation, directory, err := linuxTransactionStart(ctx, a, parent, journal, nil, strings.Repeat("1", 32), policyName, scenario)
@@ -420,6 +420,9 @@ func linuxNodeTransactionFixture(controller *ownedDesktopController, scenario st
 	}
 	defer stopOperation()
 	defer transaction.Close(context.Background())
+	if strings.HasPrefix(scenario, "shutdown-") {
+		return linuxTransactionShutdownFixture(ctx, a, parent, journal, transaction, scenario, directory, stopOperation)
+	}
 	if err := linuxTransactionPrepare(ctx, transaction, scenario, directory, stopOperation); err != nil {
 		return err
 	}

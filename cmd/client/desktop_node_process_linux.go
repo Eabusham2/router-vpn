@@ -236,10 +236,18 @@ func (p *desktopLinuxNodeProcess) checkPin(pin *desktopLinuxNodePin) error {
 }
 
 func (p *desktopLinuxNodeProcess) currentFiles(ctx context.Context) error {
+	return p.currentFilesMode(ctx, false)
+}
+
+func (p *desktopLinuxNodeProcess) currentFilesMode(ctx context.Context, retirement bool) error {
 	if p == nil || ctx == nil || ctx.Err() != nil || p.ctx.Err() != nil || p.retiring.Load() || p.closed {
 		return errors.New("Linux Node process owner is retired")
 	}
-	if err := p.parent.Current(ctx); err != nil {
+	current := p.parent.Current
+	if retirement {
+		current = p.parent.retirementCurrent
+	}
+	if err := current(ctx); err != nil {
 		p.cancel()
 		return err
 	}
@@ -249,7 +257,7 @@ func (p *desktopLinuxNodeProcess) currentFiles(ctx context.Context) error {
 			return err
 		}
 	}
-	if err := p.parent.Current(ctx); err != nil {
+	if err := current(ctx); err != nil {
 		p.cancel()
 		return err
 	}

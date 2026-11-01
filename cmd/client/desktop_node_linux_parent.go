@@ -35,9 +35,10 @@ type desktopLinuxNodeParent struct {
 	imageInfo                             os.FileInfo
 	processWitness                        *linuxprocess.Witness
 	record                                desktopLinuxNodeParentRecord
-	complete, closed                      bool // Serialized by gate after constructor publication.
+	complete, closed, stopping            bool // Serialized by gate after constructor publication.
 	retirementErr                         error
 	dependents                            map[ownedDesktopNodeParent]struct{}
+	shutdownTransactions                  []*desktopLinuxNodeTransaction
 }
 
 func desktopLinuxNodeObjectOf(info os.FileInfo) (desktopLinuxNodeObject, error) {
@@ -223,6 +224,13 @@ func desktopLinuxNodeRetainedObject(file *os.File, wanted desktopLinuxNodeObject
 }
 
 func (p *desktopLinuxNodeParent) currentLocked(published bool) error {
+	if p != nil && p.stopping {
+		return errors.New("Linux Node parent has permanently stopped native admission")
+	}
+	return p.currentRetainedLocked(published)
+}
+
+func (p *desktopLinuxNodeParent) currentRetainedLocked(published bool) error {
 	if p == nil || p.closed || !p.complete || p.ctx == nil || p.ctx.Err() != nil || p.installationAnchor == nil || p.root == nil || p.image == nil || p.imageInfo == nil || p.processWitness == nil ||
 		p.controller == nil || os.Getuid() != 0 || os.Geteuid() != 0 || os.Getpid() != p.record.ProcessID {
 		return errors.New("Linux Node parent has no live complete native capture")
@@ -319,6 +327,10 @@ func (p *desktopLinuxNodeParent) currentLocked(published bool) error {
 }
 
 func (p *desktopLinuxNodeParent) Current(ctx context.Context) error {
+	return p.observeCurrent(ctx, false)
+}
+
+func (p *desktopLinuxNodeParent) observeCurrent(ctx context.Context, retirement bool) error {
 	if p == nil || ctx == nil || ctx.Err() != nil || p.ctx == nil || p.ctx.Err() != nil || p.gate == nil {
 		return errors.New("Linux Node parent readback has no live captured caller")
 	}
@@ -330,7 +342,10 @@ func (p *desktopLinuxNodeParent) Current(ctx context.Context) error {
 	case <-p.gate:
 	}
 	defer func() { p.gate <- struct{}{} }()
-	if err := p.currentLocked(true); err != nil {
+	if p.stopping && !retirement {
+		return errors.New("Linux Node parent has permanently stopped native admission")
+	}
+	if err := p.currentRetainedLocked(true); err != nil {
 		// A later path restoration cannot revive a parent whose native
 		// identity was observed missing or replaced. Keep its old descriptors
 		// solely for joined teardown; a new bootstrap captures a new parent.
@@ -347,10 +362,13 @@ func (p *desktopLinuxNodeParent) Close(ctx context.Context) error {
 	if ctx == nil || p.cancel == nil || p.gate == nil || p.joined == nil {
 		return errors.New("Linux Node parent retirement has no bounded native owner")
 	}
-	p.cancel()
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
+	if err := p.prepareTransactionShutdown(ctx); err != nil {
+		return err
+	}
+	p.cancel()
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -471,12 +489,23 @@ func captureDesktopLinuxNodeParent(a *app) (*desktopLinuxNodeParentCapture, erro
 }
 
 func (c *desktopLinuxNodeParentCapture) currentApp() error {
+	return c.currentAppMode(false)
+}
+
+func (c *desktopLinuxNodeParentCapture) currentAppMode(retirement bool) error {
 	if c == nil || c.app == nil || c.parent == nil || c.controller == nil || c.lifetime == nil || c.lifetime.Err() != nil {
 		return errors.New("Linux Node parent lost its captured application")
 	}
 	c.app.mu.Lock()
 	defer c.app.mu.Unlock()
-	if c.app.closing || c.app.localController != c.controller || c.controller.nodeParent != c.parent || c.record != c.parent.record ||
+	return c.currentAppLocked(retirement)
+}
+
+func (c *desktopLinuxNodeParentCapture) currentAppLocked(retirement bool) error {
+	if c == nil || c.app == nil || c.parent == nil || c.controller == nil || c.lifetime == nil || c.lifetime.Err() != nil {
+		return errors.New("Linux Node parent lost its captured application")
+	}
+	if c.app.closing && !retirement || c.app.localController != c.controller || c.controller.nodeParent != c.parent || c.record != c.parent.record ||
 		c.app.cfg.ProfilesFile != filepath.Join(linuxOwnedControllerRoot, "routers.json") ||
 		c.app.cfg.ModesFile != filepath.Join(linuxOwnedControllerRoot, "modes.json") ||
 		c.app.cfg.ScriptsDir != filepath.Join(linuxOwnedControllerRoot, "modes") ||

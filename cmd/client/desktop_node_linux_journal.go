@@ -486,11 +486,15 @@ func (j *desktopLinuxNodeJournal) enter(ctx context.Context) error {
 }
 
 func (j *desktopLinuxNodeJournal) Snapshot(ctx context.Context) (linuxprotection.JournalSelection, error) {
+	return j.snapshot(ctx, nil)
+}
+
+func (j *desktopLinuxNodeJournal) snapshot(ctx context.Context, retirement *desktopLinuxNodeTransaction) (linuxprotection.JournalSelection, error) {
 	if err := j.enter(ctx); err != nil {
 		return linuxprotection.JournalSelection{}, err
 	}
 	defer func() { j.gate <- struct{}{} }()
-	if err := j.checkParent(ctx); err != nil {
+	if err := j.checkOperation(ctx, retirement); err != nil {
 		return linuxprotection.JournalSelection{}, err
 	}
 	if j.pending != nil {
@@ -503,18 +507,22 @@ func (j *desktopLinuxNodeJournal) Snapshot(ctx context.Context) (linuxprotection
 	if err != nil || !bytes.Equal(body, j.currentBytes) || selection.SHA256 != j.current.SHA256 || selection.Slot != j.current.Slot || selection.Incomplete != j.current.Incomplete {
 		return linuxprotection.JournalSelection{}, errors.Join(err, errors.New("Linux journal changed without its captured durable transaction"))
 	}
-	return selection, j.checkParent(ctx)
+	return selection, j.checkOperation(ctx, retirement)
 }
 
 // Append changes comparison data only. Native mutation/admission must retain
 // its own real operation and callback barrier. A cancelled ACK cannot erase a
 // completed durable intent: the returned selection identifies what was saved.
 func (j *desktopLinuxNodeJournal) Append(ctx context.Context, previous string, next linuxprotection.JournalRecord) (linuxprotection.JournalSelection, error) {
+	return j.append(ctx, previous, next, nil)
+}
+
+func (j *desktopLinuxNodeJournal) append(ctx context.Context, previous string, next linuxprotection.JournalRecord, retirement *desktopLinuxNodeTransaction) (linuxprotection.JournalSelection, error) {
 	if err := j.enter(ctx); err != nil {
 		return linuxprotection.JournalSelection{}, err
 	}
 	defer func() { j.gate <- struct{}{} }()
-	if err := j.checkParent(ctx); err != nil {
+	if err := j.checkOperation(ctx, retirement); err != nil {
 		return linuxprotection.JournalSelection{}, err
 	}
 	next = linuxprotection.CloneRecord(next)
@@ -525,6 +533,11 @@ func (j *desktopLinuxNodeJournal) Append(ctx context.Context, previous string, n
 	}
 	if err := j.verifyObjects(); err != nil {
 		return linuxprotection.JournalSelection{}, err
+	}
+	if retirement != nil {
+		if err := j.checkRetirementAppend(ctx, retirement, next, body); err != nil {
+			return linuxprotection.JournalSelection{}, err
+		}
 	}
 	if j.pending == nil {
 		selection, actual, err := j.readSelection()
@@ -543,7 +556,7 @@ func (j *desktopLinuxNodeJournal) Append(ctx context.Context, previous string, n
 	if err != nil || !bytes.Equal(old, j.currentBytes) {
 		return linuxprotection.JournalSelection{}, errors.Join(err, errors.New("Linux pending append lost its last acknowledged slot"))
 	}
-	if err := j.checkParent(ctx); err != nil {
+	if err := j.checkOperation(ctx, retirement); err != nil {
 		return linuxprotection.JournalSelection{}, err
 	}
 	if err := j.writeFile(j.slots[j.pending.slot], j.pending.body); err != nil {
@@ -559,7 +572,7 @@ func (j *desktopLinuxNodeJournal) Append(ctx context.Context, previous string, n
 	j.current, j.currentBytes = selection, append([]byte(nil), actual...)
 	j.pending = nil
 	selection.Record = linuxprotection.CloneRecord(selection.Record)
-	return selection, j.checkParent(ctx)
+	return selection, j.checkOperation(ctx, retirement)
 }
 
 // Close joins before releasing the stable journal lock. It never removes the
