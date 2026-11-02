@@ -672,3 +672,131 @@ func TestRouterVPNNodeMTUOwnedCancellationInterruptsNativeStartup(t *testing.T) 
 		}
 	}
 }
+
+// Keep the actual Box, file owner and shared shipping loop. Only the native
+// TUN reader is substituted so cancellation can enter at a precise boundary
+// without creating a system tunnel or changing the host network policy.
+type desktopNodeMTUHeartbeatFixture struct {
+	inbound.Adapter
+	guard   func() bool
+	raw     string
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (*desktopNodeMTUHeartbeatFixture) Start(adapter.StartStage) error { return nil }
+func (*desktopNodeMTUHeartbeatFixture) Close() error                   { return nil }
+func (f *desktopNodeMTUHeartbeatFixture) RouterVPNDesktopMTU(guard func() bool) (string, int, int, error) {
+	f.guard = guard
+	return f.RouterVPNDesktopMTUInterface()
+}
+func (f *desktopNodeMTUHeartbeatFixture) RouterVPNDesktopMTUInterface() (string, int, int, error) {
+	if f.guard == nil || !f.guard() {
+		return "", 0, 0, routerVPNExternalFailure
+	}
+	return "router-vpn", 17, 1420, nil
+}
+func (f *desktopNodeMTUHeartbeatFixture) RouterVPNDesktopNetworkReceipt() (string, error) {
+	f.once.Do(func() { close(f.entered) })
+	<-f.release
+	return f.raw, nil
+}
+func TestRouterVPNNodeMTUHeartbeatStopOwnership(t *testing.T) {
+	for _, scenario := range []string{"stop-file", "parent-cancel", "unowned-cancel", "wrong-session-stop", "wrong-config-stop", "bad-proof", "bad-proof-with-stop"} {
+		t.Run(scenario, func(t *testing.T) {
+			directory, digest := desktopNodeMTUPrivateWorkspace(t)
+			files, err := routerVPNOpenExternalFiles(directory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer files.root.Close()
+			fixture := &desktopNodeMTUHeartbeatFixture{entered: make(chan struct{}), release: make(chan struct{}), raw: desktopNetworkReceiptFixture(t, 17, 1420, strings.Repeat("d", 32))}
+			registry := include.InboundRegistry()
+			inbound.Register[option.TunInboundOptions](registry, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+				fixture.Adapter = inbound.NewAdapter(C.TypeTun, tag)
+				return fixture, nil
+			})
+			graph, cancelGraph := context.WithCancel(box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry()))
+			defer cancelGraph()
+			options, err := SJ.UnmarshalExtendedContext[option.Options](graph, []byte(`{"log":{"disabled":true},"inbounds":[{"type":"tun","tag":"tun-in","interface_name":"router-vpn","mtu":1420,"address":["10.8.0.2/24"],"auto_route":false,"stack":"system"}],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"auto_detect_interface":true,"final":"direct"}}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			instance, err := box.New(box.Options{Context: graph, Options: options})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer instance.Close()
+			if err := instance.RouterVPNStrategyStart(); err != nil {
+				t.Fatal(err)
+			}
+			if routerVPNDesktopPhysicalPath(instance) == "" {
+				t.Fatal("actual native Box did not retain a physical network path")
+			}
+			parent, cancelParent := context.WithCancel(context.Background())
+			defer cancelParent()
+			done := make(chan error, 1)
+			go func() {
+				done <- routerVPNRunNodeMTULoop(parent, graph, files, instance, desktopExternalSession, digest, nil, func() bool { return true }, func() error { return nil })
+			}()
+			var release sync.Once
+			finished := false
+			defer func() {
+				release.Do(func() { close(fixture.release) })
+				cancelGraph()
+				cancelParent()
+				if !finished {
+					select {
+					case <-done:
+					case <-time.After(3 * time.Second):
+						t.Error("shipping heartbeat did not join its released reader")
+					}
+				}
+			}()
+			select {
+			case <-fixture.entered:
+			case err := <-done:
+				finished = true
+				t.Fatal("shipping loop failed before captured readback", err)
+			case <-time.After(3 * time.Second):
+				t.Fatal("shipping loop did not enter native readback")
+			}
+			switch scenario {
+			case "stop-file":
+				desktopExternalStopFile(t, directory, desktopExternalSession, digest)
+				cancelGraph()
+			case "parent-cancel":
+				cancelParent()
+				cancelGraph()
+			case "unowned-cancel":
+				cancelGraph()
+			case "wrong-session-stop":
+				desktopExternalStopFile(t, directory, strings.Repeat("e", 32), digest)
+				cancelGraph()
+			case "wrong-config-stop":
+				desktopExternalStopFile(t, directory, desktopExternalSession, strings.Repeat("f", 64))
+				cancelGraph()
+			case "bad-proof":
+				fixture.raw = "{}"
+			case "bad-proof-with-stop":
+				fixture.raw = "{}"
+				desktopExternalStopFile(t, directory, desktopExternalSession, digest)
+			}
+			release.Do(func() { close(fixture.release) })
+			select {
+			case err := <-done:
+				finished = true
+				shouldStop := scenario == "stop-file" || scenario == "parent-cancel"
+				if shouldStop != (err == nil) {
+					t.Fatal("shipping heartbeat changed its captured stop/failure outcome", scenario, err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("shipping loop did not join its completed native readback")
+			}
+			if _, err := files.root.Lstat("node-mtu-status.json"); err == nil {
+				t.Fatal("cancelled or invalid native evidence was published")
+			}
+		})
+	}
+}

@@ -567,6 +567,13 @@ func routerVPNRunNodeMTULoop(parent, ctx context.Context, files *routerVPNExtern
 			owner.record.Heartbeat = heartbeat.UnixMilli()
 			owner.record.NetworkReceipt, err = owner.DesktopNetworkReceipt()
 			if err != nil {
+				// The owned Stop watcher can cancel the graph while native
+				// readback is in flight. Join that requested shutdown without
+				// publishing stale evidence; unrelated cancellation or invalid
+				// proof remains a failure, even if a Stop record is present.
+				if parent.Err() != nil || ctx.Err() != nil && files.stopRequested(session, config) {
+					return nil
+				}
 				return routerVPNExternalFailure
 			}
 			if err = files.publish("node-mtu-status.json", owner.record); err != nil {
