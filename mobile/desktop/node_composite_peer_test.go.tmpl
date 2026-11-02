@@ -1,6 +1,7 @@
 package routervpnamnezia
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"runtime"
@@ -17,10 +19,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/miekg/dns"
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativecomposite"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	routervpnperformance "github.com/sagernet/sing-box/service/routervpnperformance"
 	M "github.com/sagernet/sing/common/metadata"
 )
 
@@ -78,14 +82,17 @@ func desktopNodeCompositeUDPListener(ip netip.Addr, tcp net.Listener, listenUDP 
 // Both independently authenticated peers remain in the one retained reference
 // process. The client consumes their original private assets in the shipping
 // composite compiler; no payload can fall back to a single transport fixture.
-func startDesktopNodeCompositeServer(t *testing.T, mode string, ip netip.Addr, dnsAddress string) (*desktopNodeLayerServer, *desktopNodeLayerServer, string) {
+func startDesktopNodeCompositeServer(t *testing.T, mode string, ip netip.Addr, dnsAddress string, routerAddresses ...string) (*desktopNodeLayerServer, *desktopNodeLayerServer, string) {
 	t.Helper()
+	if len(routerAddresses) > 1 || len(routerAddresses) != 0 && mode != "ss-v2ray" {
+		t.Fatal("composite Router proof has no captured SIP003 TCP owner")
+	}
 	var tcp *desktopNodeLayerServer
 	var tcpFiles string
 	helper := "xray.json"
 	if mode == "ss-v2ray" {
 		helper = "sslocal.json"
-		tcp, tcpFiles = startDesktopNodeSIP003Server(t, ip, dnsAddress)
+		tcp, tcpFiles = startDesktopNodeSIP003Server(t, ip, dnsAddress, routerAddresses...)
 	} else {
 		xrayMode := "reality-vision"
 		if mode == "max" {
@@ -626,4 +633,243 @@ func TestRouterVPNDesktopNodeCompositeWrongCredential(t *testing.T) {
 		}
 		desktopNodeCompositeCredential(t, peer, f, fault)
 	})
+}
+
+// The kernel TUN remains explicitly modeled here. These tests execute the
+// shipping Box, composite dispatcher, owned physical broker, selected DNS,
+// routed HTTP proof and cover service against independent encrypted peers.
+func desktopNodeSIP003HTTP(t *testing.T, native *box.Box, tag string) error {
+	t.Helper()
+	outbound, found := native.Outbound().Outbound(tag)
+	if !found {
+		t.Fatal("missing captured SIP003 HTTP owner", tag)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	connection, err := outbound.DialContext(ctx, "tcp", M.ParseSocksaddr(desktopNodeRouterHealthTarget))
+	if err != nil {
+		return err
+	}
+	defer connection.Close()
+	if err = connection.SetDeadline(time.Now().Add(1500 * time.Millisecond)); err != nil {
+		return err
+	}
+	request, err := http.NewRequest(http.MethodGet, "http://"+desktopNodeRouterHealthTarget+"/health", nil)
+	if err != nil {
+		return err
+	}
+	request.Close = true
+	if err = request.Write(connection); err != nil {
+		return err
+	}
+	response, err := http.ReadResponse(bufio.NewReaderSize(connection, 4096), request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, 4097))
+	var proof struct {
+		OK     bool   `json:"ok"`
+		NodeID string `json:"node_id"`
+		Proof  string `json:"proof"`
+	}
+	if err != nil || len(raw) > 4096 || response.StatusCode != http.StatusOK || json.Unmarshal(raw, &proof) != nil || !proof.OK || proof.NodeID != strings.Repeat("a", 64) || proof.Proof != "router-vpn-private-agent-v1" {
+		return errors.New("SIP003 HTTP path returned another captured node proof")
+	}
+	return nil
+}
+
+func TestRouterVPNDesktopNodeSIP003RetainedProof(t *testing.T) {
+	for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		label := layer
+		if label == "" {
+			label = "off"
+		}
+		for _, fault := range []string{"owned", "wrong-node", "drop-cover"} {
+			t.Run(label+"/"+fault, func(t *testing.T) {
+				if !mobilemultihop.DesktopLinuxNodePhysicalGraphSupported("ss-v2ray", layer) {
+					t.Fatal("SIP003 has no actual retained Linux admission")
+				}
+				_, ip := desktopNodePeerInterface(t)
+				peer := startDesktopNodeLayerReferenceConfigured(t, "ss-v2ray", layer, ip, desktopNodeLayerReferenceOptions{NodeProofID: strings.Repeat("a", 64), Cover: true})
+				original := peer.original(t, "always", "")
+				peer.compositeProjection(t, original)
+				f := newDesktopNodeLayerFixture(t, peer, "")
+				if err := f.box.RouterVPNStrategyStart(); err != nil {
+					t.Fatal(err)
+				}
+				var cover *routervpnperformance.Service
+				for _, service := range f.box.RouterVPNServices() {
+					if actual, ok := service.(*routervpnperformance.Service); ok {
+						if cover != nil {
+							t.Fatal("duplicate SIP003 cover owner")
+						}
+						cover = actual
+					}
+				}
+				if cover == nil || cover.Healthy() || peer.observe(t, "stats").CoverPackets != 0 {
+					t.Fatal("SIP003 cover started before captured Router proof")
+				}
+				for _, host := range []string{"192.0.2.99", "2001:db8::99"} {
+					desktopNodeCompositeExchange(t, f.box, host, func() {
+						f.kernel.mu.Lock()
+						var grants []mobiletor.DesktopSocketGrant
+						for _, grant := range f.kernel.grants {
+							grants = append(grants, grant)
+						}
+						f.kernel.mu.Unlock()
+						desktopNodeCompositeGrants(t, peer, grants, f.kernel.capture, f.kernel.owner)
+						desktopNodeCompositePeerTraffic(t, peer)
+					})
+				}
+				before := peer.observe(t, "stats")
+				if err := f.box.RouterVPNStrategyDNSProof(); err != nil {
+					t.Fatal(err)
+				}
+				selected := peer.observe(t, "stats")
+				if selected.DNSQueries != before.DNSQueries+1 || selected.UDPBranchUDP <= before.UDPBranchUDP || selected.UDPBranchRawUDP <= before.UDPBranchRawUDP || selected.RouterQueries != 0 || selected.DirectQueries != 0 || selected.ProtocolUDP != 0 || selected.UDPBranchTCP != 0 {
+					t.Fatal("SIP003 Home DNS bypassed its independent encrypted UDP lane", before, selected)
+				}
+				if fault != "owned" {
+					peer.observe(t, fault)
+				}
+				err := cover.Activate()
+				observed := peer.observe(t, "stats")
+				if (err == nil) != (fault == "owned") || cover.Healthy() != (fault == "owned") || observed.RouterQueries != 1 || observed.DirectQueries != 0 || observed.DNSQueries != 1 || observed.ProtocolTCP <= selected.ProtocolTCP || observed.ProtocolRawTCP <= selected.ProtocolRawTCP || observed.ProtocolUDP != 0 || observed.UDPBranchTCP != 0 || f.network.Current() {
+					t.Fatal("SIP003 cover lost independent TCP proof, UDP owner or truthful native boundary", err, observed)
+				}
+				desktopNodeSIP003Stages(t, observed, "")
+				if fault == "wrong-node" {
+					if observed.CoverPackets != 0 {
+						t.Fatal("wrong SIP003 node started cover")
+					}
+				} else if observed.CoverPackets == 0 || observed.CoverBytes < 128 || observed.CoverMaximum > 1200 || (observed.CoverReplies > 0) != (fault == "owned") || observed.UDPBranchRawUDP <= selected.UDPBranchRawUDP {
+					t.Fatal("SIP003 cover did not traverse final HY2 UDP peer", observed)
+				}
+				if err := cover.Close(); err != nil || cover.Healthy() {
+					t.Fatal("SIP003 cover worker did not join", err)
+				}
+				if fault == "owned" {
+					peer.observe(t, "fail-dns")
+					if err := f.box.RouterVPNStrategyDNSProof(); err == nil || peer.observe(t, "stats").DNSQueries != 2 {
+						t.Fatal("SIP003 reused failed selected DNS proof")
+					}
+					peer.observe(t, "restore-dns")
+					if err := f.box.RouterVPNStrategyDNSProof(); err != nil || peer.observe(t, "stats").DNSQueries != 3 {
+						t.Fatal("SIP003 DNS did not require a fresh routed query", err)
+					}
+				}
+				f.network.InterfaceUpdated(context.Background())
+				if f.network.SocketCurrent() || f.kernel.live.Load() || f.exchange("tcp") == nil || f.exchange("udp") == nil {
+					t.Fatal("retired SIP003 network delivered either old lane")
+				}
+				f.source.Cancel()
+				if err := f.close(); err != nil || !f.source.closed.Load() {
+					t.Fatal("retained SIP003 did not join exact physical source", err)
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeSIP003RetainedWrongCredential(t *testing.T) {
+	for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		label := layer
+		if label == "" {
+			label = "off"
+		}
+		faults := []string{"sip003-key", "sip003-host", "sip003-path", "sip003-server-name", "sip003-certificate", "hysteria-password", "hysteria-trust", "hysteria-salamander"}
+		if layer != "" {
+			faults = append(faults, "aes-key")
+		}
+		for _, fault := range faults {
+			t.Run(label+"/"+fault, func(t *testing.T) {
+				_, ip := desktopNodePeerInterface(t)
+				peer := startDesktopNodeLayerReference(t, "ss-v2ray", layer, ip, strings.Repeat("a", 64))
+				f := newDesktopNodeLayerFixture(t, peer, fault)
+				if err := f.box.RouterVPNStrategyStart(); err != nil {
+					t.Fatal("wrong SIP003 credential did not reach actual owned startup", err)
+				}
+				desktopNodeCompositeCredential(t, peer, f, fault)
+				httpErr := desktopNodeSIP003HTTP(t, f.box, "proxy")
+				dnsErr := f.box.RouterVPNStrategyDNSProof()
+				observed := peer.observe(t, "stats")
+				if strings.HasPrefix(fault, "sip003-") {
+					if httpErr == nil || dnsErr != nil || observed.RouterQueries != 0 || observed.DNSQueries != 1 {
+						t.Fatal("SIP003 TCP failure hid or replaced independently working selected DNS", httpErr, dnsErr, observed)
+					}
+				} else if strings.HasPrefix(fault, "hysteria-") {
+					if httpErr != nil || dnsErr == nil || observed.RouterQueries != 1 || observed.DNSQueries != 0 {
+						t.Fatal("SIP003 UDP failure hid or replaced independently working Router proof", httpErr, dnsErr, observed)
+					}
+				} else if httpErr == nil || dnsErr == nil || observed.RouterQueries != 0 || observed.DNSQueries != 0 {
+					t.Fatal("wrong outer AES key reached a final SIP003 proof", httpErr, dnsErr, observed)
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeSIP003WrongWhitening(t *testing.T) {
+	_, ip := desktopNodePeerInterface(t)
+	peer := startDesktopNodeLayerReferenceConfigured(t, "ss-v2ray", "aes-256-gcm+xor-whitening", ip, desktopNodeLayerReferenceOptions{NodeProofID: strings.Repeat("a", 64), WhiteningMismatch: true})
+	f := newDesktopNodeLayerFixture(t, peer, "")
+	if err := f.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal(err)
+	}
+	if f.exchange("tcp") == nil || f.exchange("udp") == nil || desktopNodeSIP003HTTP(t, f.box, "proxy") == nil || f.box.RouterVPNStrategyDNSProof() == nil {
+		t.Fatal("wrong SIP003 whitening delivered a final payload/proof")
+	}
+	observed := peer.observe(t, "stats")
+	if observed.RawTCP == 0 || observed.RawUDP == 0 || observed.PlainTCP != 0 || observed.PlainUDP != 0 || observed.ProtocolRawTCP != 0 || observed.UDPBranchRawUDP != 0 || observed.RouterQueries != 0 || observed.DNSQueries != 0 || f.network.Current() {
+		t.Fatal("SIP003 whitening negative missed both actual outer transports", observed)
+	}
+}
+
+func TestRouterVPNDesktopNodeSIP003OuterCannotBypassFinal(t *testing.T) {
+	for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		t.Run(layer, func(t *testing.T) {
+			_, ip := desktopNodePeerInterface(t)
+			peer := startDesktopNodeLayerReference(t, "ss-v2ray", layer, ip, strings.Repeat("a", 64))
+			f := newDesktopNodeLayerFixture(t, peer, "")
+			if err := f.box.RouterVPNStrategyStart(); err != nil {
+				t.Fatal(err)
+			}
+			if desktopNodeSIP003HTTP(t, f.box, nativecomposite.StartTag) == nil {
+				t.Fatal("outer SIP003 layer bypassed final TCP protocol identity")
+			}
+			outer, found := f.box.Outbound().Outbound(nativecomposite.StartTag)
+			if !found {
+				t.Fatal("missing exact SIP003 outer owner")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			target := M.ParseSocksaddr("192.168.50.133:53")
+			packet, err := outer.ListenPacket(ctx, target)
+			if err != nil {
+				t.Fatal("outer rejection missed real UDP owner", err)
+			}
+			_ = packet.SetDeadline(time.Now().Add(350 * time.Millisecond))
+			query := new(dns.Msg).SetQuestion("example.com.", dns.TypeA)
+			raw, err := query.Pack()
+			if err != nil {
+				t.Fatal(err)
+			}
+			n, writeErr := packet.WriteTo(raw, target)
+			answer := make([]byte, 512)
+			_, _, readErr := packet.ReadFrom(answer)
+			_ = packet.Close()
+			observed := peer.observe(t, "stats")
+			if writeErr != nil || n != len(raw) || readErr == nil || observed.RawTCP == 0 || observed.RawUDP == 0 || observed.RejectedUDP != 1 || observed.PlainTCP != 0 || observed.PlainUDP != 0 || observed.ProtocolRawTCP != 0 || observed.UDPBranchRawUDP != 0 || observed.RouterQueries != 0 || observed.DNSQueries != 0 {
+				t.Fatal("outer SIP003 layer bypassed exact two inner routes", writeErr, readErr, observed)
+			}
+			if err := desktopNodeSIP003HTTP(t, f.box, "proxy"); err != nil || f.box.RouterVPNStrategyDNSProof() != nil {
+				t.Fatal("outer rejection hid unavailable final protocol paths", err)
+			}
+			observed = peer.observe(t, "stats")
+			if observed.RouterQueries != 1 || observed.DNSQueries != 1 || observed.ProtocolTCP == 0 || observed.UDPBranchUDP == 0 || f.network.Current() {
+				t.Fatal("SIP003 positive proof controls skipped final encrypted peers", observed)
+			}
+		})
+	}
 }

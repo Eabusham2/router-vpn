@@ -95,10 +95,21 @@ func (h desktopNodeSIP003Mux) NewPacketConnectionEx(_ context.Context, connectio
 // The physical front remains the exact captured peer socket and marker target.
 // Its joined forwarding pair leads only to this retained TLS/WebSocket server.
 // The full SS/TLS/WS/mux client implementation is the unmodified pinned plugin.
-func startDesktopNodeSIP003Server(t *testing.T, ip netip.Addr, dnsAddress string) (*desktopNodeLayerServer, string) {
+func startDesktopNodeSIP003Server(t *testing.T, ip netip.Addr, dnsAddress string, routerAddresses ...string) (*desktopNodeLayerServer, string) {
 	t.Helper()
 	if !ip.Is4() || ip.IsLoopback() || ip.IsUnspecified() {
 		t.Fatal("SIP003 peer requires its captured physical IPv4 interface")
+	}
+	routerAddress := ""
+	if len(routerAddresses) > 1 {
+		t.Fatal("SIP003 peer received competing private Router mappings")
+	}
+	if len(routerAddresses) == 1 && routerAddresses[0] != "" {
+		router, err := netip.ParseAddrPort(routerAddresses[0])
+		if err != nil || router.Addr() != ip || router.Port() != desktopNodeRouterHealthPort || dnsAddress == "" {
+			t.Fatal("SIP003 peer lost its exact captured private Router mapping")
+		}
+		routerAddress = router.String()
 	}
 	der, certificate := desktopNodeSIP003Certificate(t)
 	var key [32]byte
@@ -112,7 +123,7 @@ func startDesktopNodeSIP003Server(t *testing.T, ip netip.Addr, dnsAddress string
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, tcp: front, dnsAddress: dnsAddress, connections: make(map[io.Closer]bool)}
+	s := &desktopNodeLayerServer{ctx: ctx, cancel: cancel, tcp: front, dnsAddress: dnsAddress, routerAddress: routerAddress, connections: make(map[io.Closer]bool)}
 	var inner net.Listener
 	var server *http.Server
 	serveError := make(chan error, 1)

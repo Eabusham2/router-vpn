@@ -43,6 +43,7 @@ func init() {
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNHysteria2LayerCases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNWireGuardLayerCases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNAmneziaLayerCases...)
+	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNSIP003Cases...)
 }
 
 func linuxHostTUNCoverCase(scenario string) bool {
@@ -132,6 +133,27 @@ func linuxHostTUNAssertReadinessClassification(t *testing.T) {
 		"awg2-strong-whitening-resolver-failure",
 		"awg2-fast-whitening-wrong-whitening",
 		"awg2-strong-whitening-wrong-whitening",
+		"ss-v2ray-off-udp-key",
+		"ss-v2ray-off-udp-trust",
+		"ss-v2ray-off-udp-salamander",
+		"ss-v2ray-off-resolver-failure",
+		"ss-v2ray-off-cover-wrong-node",
+		"ss-v2ray-off-cover-no-replies",
+		"ss-v2ray-aes-udp-key",
+		"ss-v2ray-aes-udp-trust",
+		"ss-v2ray-aes-udp-salamander",
+		"ss-v2ray-aes-resolver-failure",
+		"ss-v2ray-aes-cover-wrong-node",
+		"ss-v2ray-aes-cover-no-replies",
+		"ss-v2ray-whitening-udp-key",
+		"ss-v2ray-whitening-udp-trust",
+		"ss-v2ray-whitening-udp-salamander",
+		"ss-v2ray-whitening-resolver-failure",
+		"ss-v2ray-whitening-cover-wrong-node",
+		"ss-v2ray-whitening-cover-no-replies",
+		"ss-v2ray-aes-wrong-layer-key",
+		"ss-v2ray-whitening-wrong-layer-key",
+		"ss-v2ray-whitening-wrong-whitening",
 	} {
 		negative[scenario] = true
 	}
@@ -304,7 +326,7 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 	mtuCase := linuxHostTUNMTUCase(scenario)
 	restoreCase := linuxHostTUNRestoreCase(scenario)
 	policyValid := linuxHostTUNProfilePolicyValid(profile, scenario)
-	if profile.ID != "installed-linux-node" || ((mode == "shadowsocks" || mode == "hysteria2") && profile.NodeProofID != linuxHostTUNNodeID || (mode == "wg" || linuxHostTUNIsAmnezia(mode)) && !nativeDigest(profile.NodeProofID)) || profile.RouterAPI != "http://10.77.0.1:8787" ||
+	if profile.ID != "installed-linux-node" || ((mode == "shadowsocks" || mode == "hysteria2" || mode == "ss-v2ray") && profile.NodeProofID != linuxHostTUNNodeID || (mode == "wg" || linuxHostTUNIsAmnezia(mode)) && !nativeDigest(profile.NodeProofID)) || profile.RouterAPI != "http://10.77.0.1:8787" ||
 		profile.DNSMode != "home" || profile.AdGuardIPv4 != "192.168.50.133" || profile.IPv6Mode != "on" || !policyValid || profile.EffectiveMTU != 9000 {
 		return errors.New("installed-host fixture changed its captured node, selected DNS or fixed MTU")
 	}
@@ -444,7 +466,7 @@ func linuxNodeHostTUNFixture(controller *ownedDesktopController, scenario string
 			a.mu.Unlock()
 		}
 		elapsed, proofErr := host.Prove(proofContext)
-		failedProof := action == "wrong-node" || action == "stale-ready" || action == "cancelled-proof" || action == "replaced-host"
+		failedProof := action == "wrong-node" || action == "stale-ready" || action == "cancelled-proof" || action == "replaced-host" || linuxHostTUNSIP003TCPFault(scenario)
 		if failedProof {
 			if proofErr == nil || elapsed != 0 || host.proof != nil || action != "replaced-host" && a.state.Connected {
 				return errors.New("installed host accepted a failed, stale, cancelled or replaced Router proof")
@@ -797,6 +819,9 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 			if peer.mode == "wg" || linuxHostTUNIsAmnezia(peer.mode) || peer.mode == "hysteria2" {
 				physical = physical[1:]
 			}
+			if peer.mode == "ss-v2ray" && peer.layer == "" {
+				physical[1].Port = int(peer.udpBranchAddress.Port())
+			}
 			if result.StartLayer != peer.layer || !reflect.DeepEqual(result.Physical, physical) {
 				t.Fatal("installed layer borrowed an inner AES, DNS or proof physical exception", result.Physical, physical)
 			}
@@ -832,7 +857,11 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				if linuxHostTUNCoverCase(scenario) {
 					wrongProofs = before.RouterQueries < expectedProofs // Periodic same-worker reproof remains live.
 				}
-				if before.DNSQueries < 2 || before.RawUDP == 0 || before.PlainUDP == 0 || linuxHostTUNFinalProtocolCounters(peer) && (before.ProtocolRawUDP == 0 || before.ProtocolUDP == 0) || wrongProofs ||
+				dnsTraffic := before.RawUDP > 0 && before.PlainUDP > 0 && (!linuxHostTUNFinalProtocolCounters(peer) || before.ProtocolRawUDP > 0 && before.ProtocolUDP > 0)
+				if peer.mode == "ss-v2ray" {
+					dnsTraffic = linuxHostTUNSIP003DNS(peer, before)
+				}
+				if before.DNSQueries < 2 || !dnsTraffic || wrongProofs ||
 					linuxHostTUNPublicCase(scenario) && !linuxHostTUNEncryptedTCP(peer, linuxHostTUNPeerReply{}, before) {
 					t.Fatal("installed readiness bypassed the selected encrypted DNS path", before)
 				}
@@ -898,13 +927,16 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				if linuxHostTUNCoverCase(scenario) {
 					expectedProofs = 1
 				}
+				wrongCredential := linuxHostTUNWrongKeyCase(scenario) && (after.RawUDP == 0 || !linuxHostTUNFinalProtocolCounters(peer) && after.PlainUDP != 0 || linuxHostTUNFinalProtocolCounters(peer) && (after.ProtocolTCP != 0 || after.ProtocolUDP != 0 || after.DNSQueries != 0))
+				if peer.mode == "ss-v2ray" {
+					wrongCredential = linuxHostTUNWrongKeyCase(scenario) && !linuxHostTUNSIP003Rejected(scenario, after)
+				}
 				if result.Outcome != "rejected-ready" || result.Ready != nil || after.RouterQueries != expectedProofs ||
-					linuxHostTUNResolverFailureCase(scenario) && after.DNSQueries == 0 ||
-					linuxHostTUNWrongKeyCase(scenario) && (after.RawUDP == 0 || !linuxHostTUNFinalProtocolCounters(peer) && after.PlainUDP != 0 || linuxHostTUNFinalProtocolCounters(peer) && (after.ProtocolTCP != 0 || after.ProtocolUDP != 0 || after.DNSQueries != 0)) {
+					linuxHostTUNResolverFailureCase(scenario) && after.DNSQueries == 0 || wrongCredential {
 					t.Fatal("failed key/resolver fabricated readiness or a Router response", result, after)
 				}
 			} else {
-				http := action != "stale-ready" && action != "cancelled-proof" && action != "replaced-host" && !linuxHostTUNPublicCase(scenario)
+				http := action != "stale-ready" && action != "cancelled-proof" && action != "replaced-host" && !linuxHostTUNPublicCase(scenario) && !linuxHostTUNSIP003TCPFault(scenario)
 				expectedHTTP := before.RouterQueries
 				if http {
 					expectedHTTP++
@@ -926,6 +958,9 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				if wrongProofs || after.DirectQueries != expectedDirect || http && !linuxHostTUNEncryptedTCP(peer, before, after) {
 					t.Fatal("installed Router proof used the direct LAN response or bypassed its exact encrypted graph", before, after)
 				}
+			}
+			if linuxHostTUNSIP003TCPFault(scenario) {
+				linuxHostTUNSIP003AssertTCPRejected(t, peer, scenario, result, before, after)
 			}
 			if action == "always" {
 				readContext, stopRead := context.WithTimeout(context.Background(), 2*time.Second)
@@ -1052,6 +1087,9 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				} else {
 					t.Log("verified installed host layered Hysteria2:", scenario)
 				}
+			}
+			if peer.mode == "ss-v2ray" {
+				t.Log("verified installed host captured SIP003 lanes:", scenario)
 			}
 			t.Log("verified installed host native lifecycle:", scenario)
 			if peer.layer != "" {

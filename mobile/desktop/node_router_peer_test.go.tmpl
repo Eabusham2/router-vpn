@@ -23,7 +23,7 @@ const (
 )
 
 // The optional private test service reproduces the shipping agent's public
-// /health shape. The selected SS2022 or Hysteria2 graph authenticates transport; /health
+// /health shape. The selected SS2022, Hysteria2 or SIP003 graph authenticates transport; /health
 // does not require the bearer token used by the agent's administrative APIs.
 // This mapping is separate from the bounded inner routes so enabling it can
 // neither remove the selected Home DNS mapping nor add arbitrary forwarding.
@@ -34,7 +34,7 @@ func desktopNodeRouterHealthCaptureValid(request desktopNodeLayerRequest) bool {
 	raw, err := hex.DecodeString(request.NodeProofID)
 	plain := request.Layer == "" || request.Layer == "off"
 	return err == nil && len(raw) == 32 && hex.EncodeToString(raw) == request.NodeProofID &&
-		((request.Mode == "hysteria2" || request.Mode == "shadowsocks") &&
+		((request.Mode == "hysteria2" || request.Mode == "shadowsocks" || request.Mode == "ss-v2ray") &&
 			(plain || request.Layer == "aes-256-gcm" || request.Layer == "aes-256-gcm+xor-whitening"))
 }
 
@@ -150,6 +150,10 @@ func TestRouterVPNDesktopNodeRouterHealthCapture(t *testing.T) {
 		covered.Mode = "hysteria2"
 		if !desktopNodeRouterHealthCaptureValid(covered) {
 			t.Fatal("Hysteria2 Router capture rejected its exact retained layer", layer)
+		}
+		covered.Mode = "ss-v2ray"
+		if !desktopNodeRouterHealthCaptureValid(covered) {
+			t.Fatal("SIP003 Router capture rejected its exact retained layer", layer)
 		}
 	}
 	for _, change := range []struct {

@@ -66,6 +66,13 @@ COMPOSITE_CREDENTIAL_CASES = (
     "max/off/xray-pq-key", "split/off/xray-user", "split/off/hysteria-trust", "split/off/hysteria-salamander",
     *("ss-v2ray/off/" + fault for fault in ("sip003-host", "sip003-path", "sip003-server-name", "sip003-certificate")))
 
+SIP003_LAYERS = ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening')
+SIP003_PROOF_CASES = tuple(layer + '/' + case for layer in SIP003_LAYERS for case in ('owned', 'wrong-node', 'drop-cover'))
+SIP003_CREDENTIAL_CASES = tuple(layer + '/' + fault for layer in SIP003_LAYERS for fault in (
+    'sip003-key', 'sip003-host', 'sip003-path', 'sip003-server-name', 'sip003-certificate',
+    'hysteria-password', 'hysteria-trust', 'hysteria-salamander')) + tuple(layer + '/aes-key' for layer in SIP003_LAYERS[1:])
+SIP003_IDENTITY_CASES = ('owned', 'not-started', 'cancelled', 'closed', 'owner-replaced', 'tcp-replaced', 'udp-replaced', 'tcp-missing', 'udp-missing', 'split', 'max')
+
 
 def layer_reference_sources():
     return [ROOT / "go.mod", *([ROOT / "go.sum"] if (ROOT / "go.sum").exists() else []),
@@ -104,6 +111,7 @@ def checked_sources(source):
     for path in sorted((ROOT / "internal/startwhitening").glob("*.go")):
         copies["experimental/libbox/routervpn/startwhitening/" + path.name] = path.read_bytes()
     copies["service/routervpnperformance/service.go"] = (ROOT / "mobile/performance/service.go.tmpl").read_bytes()
+    copies["service/routervpnperformance/service_test.go"] = (ROOT / "mobile/performance/service_test.go.tmpl").read_bytes()
     copies["routervpn_services.go"] = (ROOT / "mobile/performance/box.go.tmpl").read_bytes()
     for relative, expected in copies.items():
         target = source / relative
@@ -435,6 +443,18 @@ def mutants(source, windows):
     selected_dns = "routervpn_desktop_node_box_dns.go"
     node_command = "cmd/sing-box/routervpn_mtu_node.go"
     result = [
+        ("sip003-cover-without-captured-composite", "service/routervpnperformance/service.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeSIP003RetainedProof", "off/owned",
+         "SIP003 cover lost independent TCP proof, UDP owner or truthful native boundary", changed("service/routervpnperformance/service.go",
+         "if composite, ok := out.(*routervpncomposite.Outbound); ok {", "if composite, ok := out.(*routervpncomposite.Outbound); false && ok {")),
+        ("sip003-cover-borrowed-tcp", "protocol/routervpncomposite/outbound.go", "./protocol/routervpncomposite", "TestNativeCompositePerformanceRequiresExactSIP003Owners", "tcp-replaced",
+         "cover capability inferred a mode/type, unopened lane or replaced lifecycle", changed("protocol/routervpncomposite/outbound.go",
+         "|| currentTCP != tcp ||", "|| false && currentTCP != tcp ||")),
+        ("sip003-cover-borrowed-udp", "protocol/routervpncomposite/outbound.go", "./protocol/routervpncomposite", "TestNativeCompositePerformanceRequiresExactSIP003Owners", "udp-replaced",
+         "cover capability inferred a mode/type, unopened lane or replaced lifecycle", changed("protocol/routervpncomposite/outbound.go",
+         "|| currentUDP != udp {", "|| false && currentUDP != udp {")),
+        ("sip003-cover-type-label", "service/routervpnperformance/service.go", "./service/routervpnperformance", "TestNativePerformanceCannotAdmitCompositeByTypeName", "",
+         "a composite type label replaced the captured concrete two-lane owner", changed("service/routervpnperformance/service.go",
+         "switch out.Type() {", 'switch out.Type() {\n\tcase "routervpn-composite":\n\t\treturn out, identity, nil')),
         ("sip003-uncaptured-transport", "transport/sip003/v2ray.go", "./protocol/routervpnamnezia", "TestRouterVPNDesktopNodeCompositeTraffic", "ss-v2ray/off",
          "simultaneous composite traffic omitted one retained native lane grant", changed("transport/sip003/v2ray.go",
          "v2ray.NewClientTransport(context.Background(), dialer, serverAddr, transportOptions, tlsClient)",
@@ -618,6 +638,12 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          ("TestRouterVPNDesktopNodeCompositeTraffic",)),
         ("composite-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeCompositeWrongCredential$",
          ("TestRouterVPNDesktopNodeCompositeWrongCredential",)),
+        ("sip003-retained", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeSIP003(RetainedProof|RetainedWrongCredential|WrongWhitening|OuterCannotBypassFinal)$",
+         tuple("TestRouterVPNDesktopNodeSIP003" + suffix for suffix in ("RetainedProof", "RetainedWrongCredential", "WrongWhitening", "OuterCannotBypassFinal"))),
+        ("sip003-cover-identity", "./protocol/routervpncomposite", "^TestNativeCompositePerformanceRequiresExactSIP003Owners$",
+         ("TestNativeCompositePerformanceRequiresExactSIP003Owners",)),
+        ("cover-lifecycle", "./service/routervpnperformance", "^TestNativePerformance",
+         tuple("TestNativePerformance" + suffix for suffix in ("NoIOUntilExplicitActivation", "StopsOnReplacementAndNetworkChange", "CannotUsePlaintextOrWrongNode", "DestinationCannotBeReplaced", "CapturedOptionsAndCancelledActivation", "CannotAdmitCompositeByTypeName"))),
     ]
     if platform.system() == "Linux":
         suites.append(("wireguard-layers", "./protocol/routervpnamnezia",
@@ -644,7 +670,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             # Encrypted graph/layer and selected-DNS cases alone consumed
             # 89.58 s on Windows before the required pre-ready cases began.
             # These two expanded aggregates retain every per-operation bound.
-            duration = 180 if name in ("encrypted", "composite-credentials") else 90
+            duration = 180 if name in ("encrypted", "composite-credentials", "sip003-retained") else 90
             status, output = baselines.execute(name, package, selector, duration)
             print(output, end="" if output.endswith("\n") else "\n", flush=True)
             if status or any("--- PASS: " + test + " (" not in output for test in required) or "--- SKIP:" in output or "DATA RACE" in output:
@@ -705,6 +731,13 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Node Naive gate omitted a complete HTTP version/Start Layer")
             if name == "naive-credentials" and any("--- PASS: TestRouterVPNDesktopNodeNaiveWrongCredential/" + case + " (" not in output for case in NAIVE_CREDENTIAL_CASES):
                 raise ValueError("Node Naive gate omitted a captured user, password, certificate or layer credential negative")
+            if name == "sip003-retained":
+                for group, cases in (("RetainedProof", SIP003_PROOF_CASES), ("RetainedWrongCredential", SIP003_CREDENTIAL_CASES),
+                                     ("OuterCannotBypassFinal", SIP003_LAYERS[1:])):
+                    if any("--- PASS: TestRouterVPNDesktopNodeSIP003" + group + "/" + case + " (" not in output for case in cases):
+                        raise ValueError("Node SIP003 gate omitted independent encrypted proof, selected DNS, cover or captured credential rejection")
+            if name == "sip003-cover-identity" and any("--- PASS: TestNativeCompositePerformanceRequiresExactSIP003Owners/" + case + " (" not in output for case in SIP003_IDENTITY_CASES):
+                raise ValueError("Node SIP003 cover capability omitted a captured lifecycle or lane replacement control")
             if name == "composite-traffic" and any("--- PASS: TestRouterVPNDesktopNodeCompositeTraffic/" + case + " (" not in output for case in (*COMPOSITE_CASES, *COMPOSITE_ALLOCATION_CASES)):
                 raise ValueError("Node composite gate omitted simultaneous original TCP/UDP branches or a Start Layer")
             if name == "composite-credentials" and any("--- PASS: TestRouterVPNDesktopNodeCompositeWrongCredential/" + case + " (" not in output for case in COMPOSITE_CREDENTIAL_CASES):

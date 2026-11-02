@@ -325,3 +325,57 @@ func TestNativeCompositeRejectsMissingOrSubstitutedLanes(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeCompositePerformanceRequiresExactSIP003Owners(t *testing.T) {
+	for _, change := range []string{"owned", "not-started", "cancelled", "closed", "owner-replaced", "tcp-replaced", "udp-replaced", "tcp-missing", "udp-missing", "split", "max"} {
+		t.Run(change, func(t *testing.T) {
+			mode := "ss-v2ray"
+			if change == "split" || change == "max" {
+				mode = change
+			}
+			owner, manager, _, _ := setup(t, mode)
+			switch change {
+			case "not-started":
+				value, err := NewOutbound(owner.ctx, nil, nil, "composite", owner.options)
+				if err != nil {
+					t.Fatal(err)
+				}
+				owner = value.(*Outbound)
+				manager.values["composite"] = owner
+				t.Cleanup(func() { _ = owner.Close() })
+			case "cancelled":
+				owner.cancel()
+			case "closed":
+				if err := owner.Close(); err != nil {
+					t.Fatal(err)
+				}
+			case "owner-replaced":
+				manager.values["composite"] = &testChild{Adapter: outbound.NewAdapter("routervpn-composite", "composite", []string{N.NetworkTCP, N.NetworkUDP}, nil)}
+			case "tcp-replaced":
+				manager.values["owned-tcp"] = &testChild{Adapter: outbound.NewAdapter("shadowsocks", "owned-tcp", []string{N.NetworkTCP}, nil)}
+			case "udp-replaced":
+				manager.values["owned-udp"] = &testChild{Adapter: outbound.NewAdapter("hysteria2", "owned-udp", []string{N.NetworkUDP}, nil)}
+			case "tcp-missing":
+				delete(manager.values, "owned-tcp")
+			case "udp-missing":
+				delete(manager.values, "owned-udp")
+			}
+			identity := owner.RouterVPNPerformanceIdentity()
+			if (identity != "") != (change == "owned") {
+				t.Fatal("cover capability inferred a mode/type, unopened lane or replaced lifecycle", change, identity)
+			}
+			if change == "owned" {
+				if owner.RouterVPNPerformanceIdentity() != identity {
+					t.Fatal("unchanged native lane identity drifted")
+				}
+				other, _, _, _ := setup(t, "ss-v2ray")
+				if other.RouterVPNPerformanceIdentity() == identity {
+					t.Fatal("fresh native lane owner borrowed previous cover identity")
+				}
+				if err := owner.Close(); err != nil || owner.RouterVPNPerformanceIdentity() != "" {
+					t.Fatal("closed native owner retained cover identity", err)
+				}
+			}
+		})
+	}
+}

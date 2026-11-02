@@ -39,12 +39,13 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                           *('    native_test.go:13: verified installed host captured AWG2: ' + case for case in cases if case in G.AMNEZIA_CASES),
                           *('    native_test.go:14: verified installed host layered Hysteria2: ' + case for case in cases if case in G.HYSTERIA2_LAYER_CASES),
                           *('    native_test.go:15: verified installed host layered WireGuard: ' + case for case in cases if case in G.WIREGUARD_LAYER_CASES),
-                          *('    native_test.go:16: verified installed host layered AWG2: ' + case for case in cases if case in G.AMNEZIA_LAYER_CASES)]) + '\n'
+                          *('    native_test.go:16: verified installed host layered AWG2: ' + case for case in cases if case in G.AMNEZIA_LAYER_CASES),
+                          *('    native_test.go:17: verified installed host captured SIP003 lanes: ' + case for case in cases if case in G.SIP003_CASES)]) + '\n'
 
     def test_new_hysteria2_layers_preserve_every_original_case_and_receipt(self):
-        self.assertEqual(len(G.CASES), 227)
+        self.assertEqual(len(G.CASES), 299)
         self.assertEqual(len(G.HYSTERIA2_LAYER_CASES), 33)
-        self.assertEqual(len(set(G.CASES) - set(G.HYSTERIA2_LAYER_CASES) - set(G.WIREGUARD_LAYER_CASES) - set(G.AMNEZIA_LAYER_CASES)), 93)
+        self.assertEqual(len(set(G.CASES) - set(G.SIP003_CASES) - set(G.HYSTERIA2_LAYER_CASES) - set(G.WIREGUARD_LAYER_CASES) - set(G.AMNEZIA_LAYER_CASES)), 93)
         self.assertEqual(len(G.CASES), len(set(G.CASES)))
         self.assertEqual(set(G.HYSTERIA2_LAYER_CASES) & set(G.WHITENING_CASES),
                          {case for case in G.HYSTERIA2_LAYER_CASES if case.startswith('hy2-whitening-')})
@@ -54,9 +55,9 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
             G.check_verdict(self.completed(tuple(case for case in G.CASES if case not in G.HYSTERIA2_LAYER_CASES)))
 
     def test_wireguard_layers_preserve_original_inventory_and_complete_receipts(self):
-        self.assertEqual(len(G.CASES), 227)
+        self.assertEqual(len(G.CASES), 299)
         self.assertEqual(len(G.WIREGUARD_LAYER_CASES), 31)
-        self.assertEqual(len(set(G.CASES) - set(G.WIREGUARD_LAYER_CASES) - set(G.AMNEZIA_LAYER_CASES)), 126)
+        self.assertEqual(len(set(G.CASES) - set(G.SIP003_CASES) - set(G.WIREGUARD_LAYER_CASES) - set(G.AMNEZIA_LAYER_CASES)), 126)
         self.assertEqual(len(G.CASES), len(set(G.CASES)))
         self.assertEqual(set(G.WIREGUARD_LAYER_CASES) & set(G.WHITENING_CASES),
                          {case for case in G.WIREGUARD_LAYER_CASES if case.startswith('wg-whitening-')})
@@ -72,9 +73,9 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
             G.check_verdict(self.completed(tuple(case for case in G.CASES if case not in G.WIREGUARD_LAYER_CASES)))
 
     def test_amnezia_layers_preserve_every_original_case_and_exact_native_receipt(self):
-        self.assertEqual(len(G.CASES), 227)
+        self.assertEqual(len(G.CASES), 299)
         self.assertEqual(len(G.AMNEZIA_LAYER_CASES), 70)
-        self.assertEqual(len(set(G.CASES) - set(G.AMNEZIA_LAYER_CASES)), 157)
+        self.assertEqual(len(set(G.CASES) - set(G.SIP003_CASES) - set(G.AMNEZIA_LAYER_CASES)), 157)
         self.assertEqual(len(G.CASES), len(set(G.CASES)))
         self.assertEqual(set(G.AMNEZIA_LAYER_CASES) & set(G.WHITENING_CASES),
                          {case for case in G.AMNEZIA_LAYER_CASES if '-whitening-' in case})
@@ -88,6 +89,24 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                                                'verified installed host captured AWG2:'), case)
         with self.assertRaises(ValueError):
             G.check_verdict(self.completed(tuple(case for case in G.CASES if case not in G.AMNEZIA_LAYER_CASES)))
+
+    def test_sip003_preserves_original_cases_and_both_lane_receipts(self):
+        self.assertEqual(len(G.SIP003_CASES), 72)
+        self.assertEqual(len(G.CASES), 299)
+        self.assertEqual(len(G.CASES), len(set(G.CASES)))
+        self.assertEqual(len(set(G.CASES) - set(G.SIP003_CASES)), 227)
+        self.assertEqual(G.CASES[-72:], G.SIP003_CASES)
+        self.assertEqual(set(G.SIP003_CASES) & set(G.WHITENING_CASES),
+                         {case for case in G.SIP003_CASES if case.startswith('ss-v2ray-whitening-')})
+        for case in G.SIP003_CASES:
+            self.assertEqual(case in G.LAYER_CASES, not case.startswith('ss-v2ray-off-'))
+            output = self.completed((case,))
+            G.check_verdict(output, case)
+            with self.assertRaises(ValueError):
+                G.check_verdict(output.replace('verified installed host captured SIP003 lanes:',
+                                               'verified installed host plain Hysteria2:'), case)
+        with self.assertRaises(ValueError):
+            G.check_verdict(self.completed(tuple(case for case in G.CASES if case not in G.SIP003_CASES)))
 
     def test_requires_every_real_positive_negative_and_joined_lifecycle(self):
         output = self.completed()

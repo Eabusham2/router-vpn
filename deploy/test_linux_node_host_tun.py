@@ -3,7 +3,7 @@
 
 The actual protected controller uses its ordinary bundle verifier, original
 FD-based engine launcher, durable transaction, selected DNS/MTU readiness and
-private Router proof. Separately compiled WG, AWG2, SS2022 and Hysteria2 peers and the
+private Router proof. Separately compiled WG, AWG2, SS2022, SIP003 and Hysteria2 peers and the
 exact shipping whitening relay exercise the captured graphs; each peer serves a
 distinct same-identity direct-LAN control. Each case owns a private namespace.
 No fixture verifier, public admission override or created device is permitted.
@@ -83,6 +83,21 @@ ACTIVE_CASES = (*tuple(case for case in AMNEZIA_LAYER_CASES if case.endswith('-a
 CASES = tuple(dict.fromkeys(('on-connect', 'home-lan', 'wrong-node', 'resolver-failure', 'wrong-key', 'stale-ready', 'cancelled-proof',
          'replaced-host', 'request-ended', 'shutdown', 'always', *ACTIVE_CASES, 'cover-wrong-node', 'cover-no-replies',
          'layer-whitening-wrong-key', 'layer-whitening-resolver-failure', *WIREGUARD_CASES, *HYSTERIA2_CASES, *AMNEZIA_CASES, *HYSTERIA2_LAYER_CASES, *WIREGUARD_LAYER_CASES, *AMNEZIA_LAYER_CASES)))
+SIP003_CASES = tuple(prefix + '-' + case for prefix in ('ss-v2ray-off', 'ss-v2ray-aes', 'ss-v2ray-whitening') for case in (
+    'public-connect', 'home-lan', 'tcp-key', 'tcp-host', 'tcp-path', 'tcp-server-name', 'tcp-certificate',
+    'udp-key', 'udp-trust', 'udp-salamander', 'resolver-failure', 'wrong-node', 'active-network-change', 'cancelled-proof',
+    'restore-sealed', 'always', 'cover-connect', 'cover-restore', 'cover-replies-lost', 'cover-wrong-node', 'cover-no-replies',
+    'mtu-rollback', 'mtu-commit')) + ('ss-v2ray-aes-wrong-layer-key', 'ss-v2ray-whitening-wrong-layer-key', 'ss-v2ray-whitening-wrong-whitening')
+# Preserve the original ordered 227 scenarios. These additional receipts prove
+# two independent final protocol lanes, including DNS-ready/TCP-proof failures.
+CASES += SIP003_CASES
+MTU_CASES += tuple(case for case in SIP003_CASES if case.endswith(('-mtu-rollback', '-mtu-commit')))
+PUBLIC_CASES += tuple(case for case in SIP003_CASES if case.endswith(('-public-connect', '-cover-connect', '-cover-replies-lost')))
+RESTORE_CASES += tuple(case for case in SIP003_CASES if case.endswith(('-restore-sealed', '-cover-restore')))
+COVER_CASES += tuple(case for case in SIP003_CASES if case.endswith(('-cover-connect', '-cover-restore', '-cover-replies-lost', '-cover-wrong-node', '-cover-no-replies')))
+LAYER_CASES += tuple(case for case in SIP003_CASES if not case.startswith('ss-v2ray-off-'))
+WHITENING_CASES += tuple(case for case in SIP003_CASES if case.startswith('ss-v2ray-whitening-'))
+ACTIVE_CASES += tuple(case for case in SIP003_CASES if case.endswith('-active-network-change') or case in MTU_CASES or case in RESTORE_CASES or case in PUBLIC_CASES)
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',
                          'ROUTERVPN_NODE_HOST_WHITENING_BINARY', 'ROUTERVPN_NODE_HOST_WHITENING_SHA256')
@@ -117,6 +132,7 @@ def checked_sources(source):
                 'cmd/client/desktop_node_hysteria2_layers_linux_tun_native_test.go',
                 'cmd/client/desktop_node_amnezia_linux_tun_native_test.go',
                 'cmd/client/desktop_node_amnezia_layers_linux_tun_native_test.go',
+                'cmd/client/desktop_node_sip003_linux_tun_native_test.go',
                 'cmd/client/profile_protection_platform_linux.go', 'cmd/client/desktop_node_protection_off_linux.go',
                 'cmd/client/desktop_node_protection_off_linux_tun_native_test.go',
                 'cmd/client/bundled_native.go', 'cmd/client/operation_guard.go'}
@@ -191,6 +207,8 @@ def check_verdict(output, case=None):
             raise ValueError('Installed Linux host omitted exact AWG parameters, separate layer owners or final encrypted lifecycle: ' + value)
         if value in AMNEZIA_CASES and 'verified installed host captured AWG2: ' + value + '\n' not in output.replace('\r\n', '\n'):
             raise ValueError('Installed Linux host omitted its exact UDP AWG2 peer, complete native parameters and owned lifecycle: ' + value)
+        if value in SIP003_CASES and 'verified installed host captured SIP003 lanes: ' + value + '\n' not in output.replace('\r\n', '\n'):
+            raise ValueError('Installed Linux host omitted independent SIP003 TCP/HY2 UDP identity, selected DNS or retained lifecycle: ' + value)
 
 
 def namespace_test(binary, peer, bundle, image_sha256, peer_sha256, bundle_sha256, case, *, whitening=None, whitening_sha256=None):

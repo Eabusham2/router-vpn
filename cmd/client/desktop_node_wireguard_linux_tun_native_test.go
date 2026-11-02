@@ -21,6 +21,9 @@ func linuxHostTUNWireGuardCase(scenario string) bool {
 }
 
 func linuxHostTUNAction(scenario string) string {
+	if linuxHostTUNSIP003Case(scenario) {
+		return linuxHostTUNSIP003Action(scenario)
+	}
 	if linuxHostTUNWireGuardCase(scenario) {
 		return linuxHostTUNWireGuardAction(scenario)
 	}
@@ -34,6 +37,9 @@ func linuxHostTUNAction(scenario string) string {
 }
 
 func linuxHostTUNMode(scenario string) string {
+	if linuxHostTUNSIP003Case(scenario) {
+		return "ss-v2ray"
+	}
 	if linuxHostTUNWireGuardCase(scenario) {
 		return "wg"
 	}
@@ -47,6 +53,9 @@ func linuxHostTUNMode(scenario string) string {
 }
 
 func linuxHostTUNEncryptedTCP(peer *linuxHostTUNPeer, before, after linuxHostTUNPeerReply) bool {
+	if peer.mode == "ss-v2ray" {
+		return after.ProtocolTCP > before.ProtocolTCP && after.ProtocolRawTCP >= before.ProtocolRawTCP && after.ProtocolRawTCP > 0 && after.ProtocolTLSHTTP > 0 && after.ProtocolWebSocket > 0 && after.ProtocolMux > before.ProtocolMux && after.RawTCP >= before.RawTCP && after.RawTCP > 0 && (peer.layer == "" || after.PlainTCP > 0)
+	}
 	if linuxHostTUNFinalProtocolCounters(peer) {
 		return after.ProtocolTCP > before.ProtocolTCP && after.ProtocolRawUDP > before.ProtocolRawUDP &&
 			before.RawTCP == 0 && after.RawTCP == 0 && after.RawUDP > before.RawUDP

@@ -175,6 +175,13 @@ type linuxHostTUNPeerReply struct {
 	RelaySourceAddress    string `json:"relay_source_address"`
 	RejectedUDP           int64  `json:"rejected_udp"`
 	ProtocolFiles         string `json:"protocol_files"`
+	UDPBranchAddress      string `json:"udp_branch_address"`
+	UDPBranchRawUDP       int64  `json:"udp_branch_raw_udp"`
+	UDPBranchTCP          int64  `json:"udp_branch_tcp"`
+	UDPBranchUDP          int64  `json:"udp_branch_udp"`
+	ProtocolTLSHTTP       int64  `json:"protocol_tls_http"`
+	ProtocolWebSocket     int64  `json:"protocol_websocket"`
+	ProtocolMux           int64  `json:"protocol_mux"`
 	ParametersSHA256      string `json:"parameters_sha256"`
 	ProtocolRawTCP        int64  `json:"protocol_raw_tcp"`
 	ProtocolRawUDP        int64  `json:"protocol_raw_udp"`
@@ -213,6 +220,7 @@ type linuxHostTUNPeer struct {
 	serverKey        string
 	serverPublic     string
 	baseAddress      netip.AddrPort
+	udpBranchAddress netip.AddrPort
 	protocolFiles    string
 	parameters       map[string]string
 	parametersSHA256 string
@@ -278,6 +286,30 @@ func (peer *linuxHostTUNPeer) read(t *testing.T) linuxHostTUNPeerReply {
 			peer.baseAddress, peer.aesAddress = base, aes
 		}
 		peer.address, peer.parametersSHA256 = endpoint, reply.ParametersSHA256
+		return reply
+	}
+	if peer.mode == "ss-v2ray" {
+		base, baseErr := netip.ParseAddrPort(reply.BaseAddress)
+		udp, udpErr := netip.ParseAddrPort(reply.UDPBranchAddress)
+		if err != nil || baseErr != nil || udpErr != nil || endpoint.Addr().String() != "192.168.210.2" || endpoint.Port() == 0 || base.Addr() != endpoint.Addr() || base.Port() == 0 || udp.Addr() != endpoint.Addr() || udp.Port() == 0 || base == udp ||
+			peer.address.IsValid() && peer.address != endpoint || peer.baseAddress.IsValid() && peer.baseAddress != base || peer.udpBranchAddress.IsValid() && peer.udpBranchAddress != udp || reply.ProtocolFiles == "" || peer.protocolFiles != "" && peer.protocolFiles != reply.ProtocolFiles ||
+			reply.RawTCP < 0 || reply.RawUDP < 0 || reply.PlainTCP < 0 || reply.PlainUDP < 0 || reply.ProtocolRawTCP < 0 || reply.ProtocolRawUDP != 0 || reply.ProtocolTCP < 0 || reply.ProtocolUDP != 0 || reply.UDPBranchRawUDP < 0 || reply.UDPBranchTCP != 0 || reply.UDPBranchUDP < 0 ||
+			reply.ProtocolTLSHTTP < 0 || reply.ProtocolWebSocket < 0 || reply.ProtocolMux < 0 || reply.PhysicalClientAddress != "" || reply.RelaySourceAddress != "" || reply.ParametersSHA256 != "" || reply.RejectedUDP != 0 {
+			t.Fatal("installed SIP003 lost its two exact private protocol endpoints or receipt fields")
+		}
+		if peer.layer == "" {
+			if reply.AESAddress != "" || base != endpoint || reply.RawUDP != 0 || reply.PlainUDP != 0 || reply.ProtocolRawTCP < reply.RawTCP || reply.ProtocolTCP < reply.PlainTCP {
+				t.Fatal("plain SIP003 borrowed an outer transport or changed its same-peer observations")
+			}
+		} else {
+			aes, aesErr := netip.ParseAddrPort(reply.AESAddress)
+			white := peer.layer == common.StartLayerAES256GCMXOR
+			if aesErr != nil || aes.Addr() != endpoint.Addr() || aes.Port() == 0 || aes == base || aes == udp || endpoint == base || endpoint == udp || peer.layer != common.StartLayerAES256GCM && !white || white && (endpoint.Port() != 8389 || aes == endpoint) || !white && aes != endpoint || peer.aesAddress.IsValid() && peer.aesAddress != aes {
+				t.Fatal("layered SIP003 replaced the independent AES and final TCP/UDP owners")
+			}
+			peer.aesAddress = aes
+		}
+		peer.address, peer.baseAddress, peer.udpBranchAddress, peer.protocolFiles = endpoint, base, udp, reply.ProtocolFiles
 		return reply
 	}
 	if peer.mode == "hysteria2" {
@@ -447,7 +479,7 @@ func linuxHostTUNStartPeer(t *testing.T, scenario string) *linuxHostTUNPeer {
 	if linuxHostTUNIsAmnezia(peer.mode) {
 		request["mode"], request["parameters"] = peer.mode, peer.parameters
 	}
-	if linuxHostTUNHysteria2LayerCase(scenario) && linuxHostTUNAction(scenario) == "wrong-whitening" {
+	if (linuxHostTUNHysteria2LayerCase(scenario) || linuxHostTUNSIP003Case(scenario)) && linuxHostTUNAction(scenario) == "wrong-whitening" {
 		request["whitening_mismatch"] = true
 	}
 	if linuxHostTUNCoverCase(scenario) {
@@ -523,8 +555,8 @@ func linuxHostTUNInstallProfile(t *testing.T, peer *linuxHostTUNPeer, scenario s
 	if peer.mode == "wg" || linuxHostTUNIsAmnezia(peer.mode) {
 		password = peer.layerPassword
 	}
-	if peer.mode != "wg" && !linuxHostTUNIsAmnezia(peer.mode) && peer.mode != "hysteria2" && linuxHostTUNWrongKeyCase(scenario) ||
-		(peer.mode == "wg" || linuxHostTUNIsAmnezia(peer.mode) || peer.mode == "hysteria2") && linuxHostTUNAction(scenario) == "wrong-layer-key" {
+	if peer.mode != "wg" && !linuxHostTUNIsAmnezia(peer.mode) && peer.mode != "hysteria2" && peer.mode != "ss-v2ray" && linuxHostTUNWrongKeyCase(scenario) ||
+		(peer.mode == "wg" || linuxHostTUNIsAmnezia(peer.mode) || peer.mode == "hysteria2" || peer.mode == "ss-v2ray") && linuxHostTUNAction(scenario) == "wrong-layer-key" {
 		password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x27}, 32))
 	}
 	store, err := json.Marshal(common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}})
@@ -575,6 +607,21 @@ func linuxHostTUNInstallProfile(t *testing.T, peer *linuxHostTUNPeer, scenario s
 		for _, name := range []string{"sing-box.json", "cert.pem"} {
 			if err := os.WriteFile(filepath.Join(directory, name), assets[name], 0600); err != nil {
 				t.Fatal("installed Hysteria2 lost its exact independent source bytes", err)
+			}
+		}
+		if peer.layer == "" {
+			return
+		}
+		directory = filepath.Join(linuxOwnedControllerRoot, "generated", profile.ID, "shadowsocks")
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if peer.mode == "ss-v2ray" {
+		assets := linuxHostTUNSIP003Assets(t, peer, scenario)
+		for _, name := range []string{"sing-box.json", "sslocal.json", "cert.pem"} {
+			if err := os.WriteFile(filepath.Join(directory, name), assets[name], 0600); err != nil {
+				t.Fatal("SIP003 lost a captured private source asset", err)
 			}
 		}
 		if peer.layer == "" {

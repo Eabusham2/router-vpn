@@ -253,3 +253,13 @@ func TestNativePerformanceCapturedOptionsAndCancelledActivation(t *testing.T) {
 		})
 	}
 }
+
+func TestNativePerformanceCannotAdmitCompositeByTypeName(t *testing.T) {
+	s, manager, out := fixtureService(t, false)
+	manager.set(&testOutbound{Adapter: outbound.NewAdapter("routervpn-composite", "proxy", []string{"tcp", "udp"}, nil), api: out.api})
+	s.Start(adapter.StartStateStarted)
+	if s.Identity() != "" || s.Activate() == nil || out.calls.Load() != 0 {
+		t.Fatal("a composite type label replaced the captured concrete two-lane owner")
+	}
+	s.Close()
+}

@@ -11,6 +11,9 @@ import (
 )
 
 func linuxHostTUNStartLayer(scenario string) string {
+	if linuxHostTUNSIP003Case(scenario) {
+		return linuxHostTUNSIP003Layer(scenario)
+	}
 	if linuxHostTUNAmneziaLayerCase(scenario) {
 		return linuxHostTUNAmneziaLayer(scenario)
 	}
@@ -31,6 +34,13 @@ func linuxHostTUNStartLayer(scenario string) string {
 }
 
 func linuxHostTUNWrongKeyCase(scenario string) bool {
+	if linuxHostTUNSIP003Case(scenario) {
+		switch linuxHostTUNSIP003Action(scenario) {
+		case "udp-key", "udp-trust", "udp-salamander", "wrong-layer-key", "wrong-whitening":
+			return true
+		}
+		return false
+	}
 	if linuxHostTUNAmneziaLayerCase(scenario) && (linuxHostTUNAction(scenario) == "wrong-psk" || linuxHostTUNAction(scenario) == "wrong-layer-key" || linuxHostTUNAction(scenario) == "wrong-whitening") {
 		return true
 	}
@@ -88,6 +98,41 @@ func linuxHostTUNLayerSource(ctx context.Context, host *desktopLinuxNodeHost, sc
 	}
 	if layer == common.StartLayerAES256GCMXOR {
 		kind = "routervpn-aes-xor"
+	}
+	if mode == "ss-v2ray" {
+		expected := 2
+		if layer != "" {
+			expected = 1
+		}
+		if err != nil || meta.TargetOS != "linux" || meta.Mode != mode || meta.StartLayer != layer || capture.StartLayer != layer || len(capture.PhysicalRoots) != expected || capture.SelectedDNS.Physical || capture.SelectedDNS.Host != "192.168.50.133" || capture.SelectedDNS.Detour != "proxy" || capture.ConfiguredMTU < 1280 || capture.ConfiguredMTU > 9000 {
+			return "", nil, errors.Join(err, errors.New("SIP003 lost its sealed two-lane native policy"))
+		}
+		var destinations []mobilemultihop.PhysicalEgress
+		for index, root := range capture.PhysicalRoots {
+			rootKind := "shadowsocks"
+			network := "tcp"
+			count := 1
+			if layer != "" {
+				rootKind = kind
+				count = 2
+			} else if index == 1 {
+				rootKind = "hysteria2"
+				network = "udp"
+			}
+			if root.Type != rootKind || root.Family != "outbounds" || len(root.Destinations) != count {
+				return "", nil, errors.New("SIP003 acquired another physical graph owner")
+			}
+			for _, destination := range root.Destinations {
+				if layer == "" && destination.Network != network {
+					return "", nil, errors.New("SIP003 final physical protocol changed")
+				}
+				destinations = append(destinations, destination)
+			}
+		}
+		if len(destinations) != 2 || destinations[0].Network != "tcp" || destinations[1].Network != "udp" {
+			return "", nil, errors.New("SIP003 physical root set lost one captured lane")
+		}
+		return layer, destinations, nil
 	}
 	if err != nil || meta.TargetOS != "linux" || meta.Mode != mode || meta.StartLayer != layer ||
 		capture.StartLayer != layer || len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Type != kind ||

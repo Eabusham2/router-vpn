@@ -670,12 +670,20 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	var routes []desktopNodeLayerRoute
 	stage = "authenticated protocol peers"
 	if desktopNodeCompositeMode(request.Mode) {
-		protocolServer, udpBranch, protocolFiles = startDesktopNodeCompositeServer(t, request.Mode, ip, dnsListener.LocalAddr().String())
+		var routerAddresses []string
+		innerAddress := netip.MustParseAddr("10.78.0.1")
+		if request.NodeProofID != "" {
+			// Only the final SIP003 TCP lane owns HTTP proof. The separate
+			// HY2 lane owns selected DNS and cover; the outer owns neither.
+			routerAddresses = []string{routerHealth.address()}
+			innerAddress = netip.MustParseAddr("10.77.0.1")
+		}
+		protocolServer, udpBranch, protocolFiles = startDesktopNodeCompositeServer(t, request.Mode, ip, dnsListener.LocalAddr().String(), routerAddresses...)
 		baseAddress = protocolServer.tcp.Addr().String()
 		probeNetwork = "tcp"
 		for _, route := range []desktopNodeLayerRoute{{Network: "tcp", Physical: baseAddress}, {Network: "udp", Physical: udpBranch.udp.LocalAddr().String()}} {
 			physical := netip.MustParseAddrPort(route.Physical)
-			route.Destination = netip.AddrPortFrom(netip.MustParseAddr("10.78.0.1"), physical.Port()).String()
+			route.Destination = netip.AddrPortFrom(innerAddress, physical.Port()).String()
 			routes = append(routes, route)
 		}
 	} else if desktopNodeNaiveMode(request.Mode) {
@@ -747,6 +755,8 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 	coverServer := server
 	if request.Mode == "hysteria2" {
 		coverServer = protocolServer
+	} else if request.Mode == "ss-v2ray" {
+		coverServer = udpBranch
 	}
 	if request.Cover {
 		coverServer.cover.Store(&desktopNodeRouterCover{})
@@ -767,6 +777,7 @@ func TestRouterVPNDesktopNodeLayerReferenceProcess(t *testing.T) {
 		}
 		reply := desktopNodeLayerReply{Schema: 1, Address: address, AESAddress: aesAddress, BaseAddress: baseAddress, ProtocolFiles: protocolFiles,
 			AppID: scope, RawTCP: server.rawTCP.Load(), RawUDP: server.rawUDP.Load(), PlainTCP: server.plainTCP.Load(), PlainUDP: server.plainUDP.Load(), DNSQueries: dnsQueries.Load(), Probe: nonce, ProbeCount: count, ProbeNetwork: probeNetwork, ProbeTarget: target}
+		reply.RejectedUDP = server.rejectedUDP.Load()
 		reply.RouterQueries = routerHealth.count()
 		reply.DirectQueries = directHealth.count()
 		if cover := coverServer.cover.Load(); cover != nil {
@@ -1138,7 +1149,7 @@ func (p *desktopNodeLayerReference) original(t *testing.T, kill, fault string) *
 		// profile. WG retains the key-derived identity, including a deliberate
 		// wrong-peer control; SS/Hysteria2 use the captured Router identity.
 		profile["router_api"] = "http://" + desktopNodeRouterHealthTarget
-		if p.request.Mode == "shadowsocks" || p.request.Mode == "hysteria2" {
+		if p.request.Mode == "shadowsocks" || p.request.Mode == "hysteria2" || p.request.Mode == "ss-v2ray" {
 			profile["node_proof_id"] = p.request.NodeProofID
 		}
 	}

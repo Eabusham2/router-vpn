@@ -320,7 +320,7 @@ func desktopNodeHysteria2CaptureValid(request desktopNodeLayerRequest) bool {
 			return false
 		}
 	}
-	return !request.WhiteningMismatch || request.Mode == "hysteria2" && request.Layer == "aes-256-gcm+xor-whitening"
+	return !request.WhiteningMismatch || (request.Mode == "hysteria2" || request.Mode == "ss-v2ray") && request.Layer == "aes-256-gcm+xor-whitening"
 }
 
 func TestRouterVPNDesktopNodeHysteria2LayerTLSIdentity(t *testing.T) {
@@ -502,6 +502,9 @@ func TestRouterVPNDesktopNodeHysteria2ReferenceCapture(t *testing.T) {
 		{"unknown-identity", desktopNodeLayerRequest{Mode: "hysteria2", HysteriaTLSIdentity: "skip-trust"}, false},
 		{"other-mode", desktopNodeLayerRequest{Mode: "shadowsocks", HysteriaTLSIdentity: "ip-absent"}, false},
 		{"whitening", desktopNodeLayerRequest{Mode: "hysteria2", Layer: "aes-256-gcm+xor-whitening", WhiteningMismatch: true}, true},
+		{"sip003-whitening", desktopNodeLayerRequest{Mode: "ss-v2ray", Layer: "aes-256-gcm+xor-whitening", WhiteningMismatch: true}, true},
+		{"sip003-wrong-layer", desktopNodeLayerRequest{Mode: "ss-v2ray", Layer: "aes-256-gcm", WhiteningMismatch: true}, false},
+		{"sip003-wrong-identity", desktopNodeLayerRequest{Mode: "ss-v2ray", HysteriaTLSIdentity: "ip-absent"}, false},
 		{"wrong-layer", desktopNodeLayerRequest{Mode: "hysteria2", Layer: "aes-256-gcm", WhiteningMismatch: true}, false},
 		{"wrong-mode", desktopNodeLayerRequest{Mode: "shadowsocks", Layer: "aes-256-gcm+xor-whitening", WhiteningMismatch: true}, false},
 	} {

@@ -5,6 +5,7 @@ package routervpncomposite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"slices"
@@ -87,6 +88,30 @@ func (h *Outbound) Start(stage adapter.StartStage) error {
 	}
 	h.tcp, h.udp = tcp, udp
 	return nil
+}
+
+// RouterVPNPerformanceIdentity binds cover to this started ss-v2ray owner and
+// both immutable protocol handles. It is ownership evidence only: the cover
+// worker still proves the selected Router and receives a final UDP reply.
+// Never hold h.mu while looking up the native manager: Remove may hold the
+// manager lock while joining this owner. Recheck the captured owner afterward.
+func (h *Outbound) RouterVPNPerformanceIdentity() string {
+	h.mu.Lock()
+	if h.closed || h.ctx.Err() != nil || h.options.Mode != "ss-v2ray" || h.tcp == nil || h.udp == nil {
+		h.mu.Unlock()
+		return ""
+	}
+	tcp, udp := h.tcp, h.udp
+	h.mu.Unlock()
+	current, hasOwner := h.manager.Outbound(h.Tag())
+	currentTCP, hasTCP := h.manager.Outbound(h.options.TCP)
+	currentUDP, hasUDP := h.manager.Outbound(h.options.UDP)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed || h.ctx.Err() != nil || h.tcp != tcp || h.udp != udp || !hasOwner || current != h || !hasTCP || currentTCP != tcp || !hasUDP || currentUDP != udp {
+		return ""
+	}
+	return fmt.Sprintf("%p:%s:%s:%p:%p", h, h.options.Mode, h.options.NodeID, tcp, udp)
 }
 
 func (h *Outbound) lane(network string) (adapter.Outbound, error) {

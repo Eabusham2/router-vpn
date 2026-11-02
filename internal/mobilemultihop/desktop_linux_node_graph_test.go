@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"router-vpn/internal/nativecomposite"
 )
 
 func TestDesktopLinuxNodeRetainsExactPlainHysteria2(t *testing.T) {
@@ -179,7 +181,7 @@ func TestDesktopLinuxNodeRetainsExactShadowsocksLayers(t *testing.T) {
 		})
 	}
 	for _, mode := range append(append([]string(nil), predecessorFamilies...), "", "auto", "smart-auto", "tor", "openvpn", "external") {
-		if mode != "shadowsocks" && mode != "hysteria2" && mode != "wg" && mode != "awg2-fast" && mode != "awg2-strong" && DesktopLinuxNodePhysicalGraphSupported(mode, "aes-256-gcm+xor-whitening") {
+		if mode != "shadowsocks" && mode != "hysteria2" && mode != "wg" && mode != "awg2-fast" && mode != "awg2-strong" && mode != "ss-v2ray" && DesktopLinuxNodePhysicalGraphSupported(mode, "aes-256-gcm+xor-whitening") {
 			t.Fatal("Start Layer admission opened an unrelated Linux family", mode)
 		}
 	}
@@ -438,4 +440,98 @@ func testDesktopLinuxRetainedBaseLayer(t *testing.T, mode, layer string) {
 		t.Fatal("native WG/AWG layer reconstruction changed its original identity or configuration", err)
 	}
 	assertDesktopNodeRestoredMTU(t, original, "linux", 1376)
+}
+
+// A retained SIP003 graph owns two distinct final protocol lanes. A common
+// authenticated Start Layer may carry those lanes but may not replace either.
+func TestDesktopLinuxNodeRetainsExactSIP003(t *testing.T) {
+	for _, layer := range []string{"", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+		t.Run(layer, func(t *testing.T) {
+			if !DesktopLinuxNodePhysicalGraphSupported("ss-v2ray", layer) {
+				t.Fatal("exact SIP003 graph has no retained Linux path")
+			}
+			sourceLayer := layer
+			if layer == "off" {
+				sourceLayer = ""
+			}
+			files, profile, start := nodeProfileFixture(t, "ss-v2ray", sourceLayer)
+			profile["start_layer"], profile["kill_switch_policy"] = layer, "always"
+			original, err := NewNodeProfile("ss-v2ray", files, startJSON(t, profile), start, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy := desktopNodePlan(t, original, desktopNodeTestSession, "linux")
+			assertDesktopNodeExactDerivation(t, policy)
+			capture, err := policy.Capture()
+			roots := 2
+			if sourceLayer != "" {
+				roots = 1
+			}
+			if err != nil || len(capture.PhysicalRoots) != roots || capture.Mode != "ss-v2ray" || capture.StartLayer != sourceLayer || capture.SelectedDNS.Host != "192.168.50.133" || capture.SelectedDNS.Physical || capture.SelectedDNS.Detour != "proxy" || capture.ConfiguredMTU != 1280 || capture.KillSwitchPolicy != "always" {
+				t.Fatal("retained SIP003 changed its two lanes, selected DNS, MTU or protection", err, capture)
+			}
+			graph := startObject(t, policy.Config())
+			tcp := desktopNodeObject(t, graph, "outbounds", nativecomposite.TCPTag)
+			udp := desktopNodeObject(t, graph, "outbounds", nativecomposite.UDPTag)
+			final := desktopNodeObject(t, graph, "outbounds", "proxy")
+			if final["type"] != nativecomposite.Type || final["mode"] != "ss-v2ray" || tcp["type"] != "shadowsocks" || tcp["plugin"] != "v2ray-plugin" || tcp["method"] != NativeStartLayerMethod ||
+				tcp["password"] != base64.StdEncoding.EncodeToString([]byte(strings.Repeat("c", 32))) || tcp["server_port"] != float64(10443) ||
+				!strings.Contains(tcp["plugin_opts"].(string), "host=entry.example") || !strings.Contains(tcp["plugin_opts"].(string), "path=/shadowsocks") ||
+				udp["type"] != "hysteria2" || udp["server_port"] != float64(8443) || udp["password"] != "captured-hysteria-credential" {
+				t.Fatal("retained SIP003 replaced its final dispatcher, TCP encryption/plugin or independent UDP authentication")
+			}
+			tls := udp["tls"].(map[string]any)
+			obfs := udp["obfs"].(map[string]any)
+			if tls["enabled"] != true || tls["insecure"] == true || tls["server_name"] != "entry.example" || tls["certificate"] == nil || tls["certificate_path"] != nil || obfs["type"] != "salamander" || obfs["password"] != "captured-mask" {
+				t.Fatal("retained SIP003 changed selected UDP trust/Salamander")
+			}
+			egress := []PhysicalEgress{{Host: "192.0.2.44", Port: 10443, Network: "tcp"}, {Host: "192.0.2.44", Port: 8443, Network: "udp"}}
+			if sourceLayer == "" {
+				if tcp["detour"] != DesktopNodePhysicalTag || udp["detour"] != DesktopNodePhysicalTag || tcp["server"] != "192.0.2.44" || udp["server"] != "192.0.2.44" {
+					t.Fatal("plain SIP003 changed its captured independent physical roots")
+				}
+			} else {
+				outer := desktopNodeObject(t, graph, "outbounds", nativecomposite.StartTag)
+				kind, port := "shadowsocks", float64(443)
+				if sourceLayer == "aes-256-gcm+xor-whitening" {
+					kind, port = "routervpn-aes-xor", 8389
+				}
+				if outer["type"] != kind || outer["method"] != NativeStartLayerMethod || outer["password"] != base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32))) || outer["server"] != "192.0.2.44" || outer["server_port"] != port || outer["detour"] != DesktopNodePhysicalTag ||
+					tcp["detour"] != nativecomposite.StartTag || udp["detour"] != nativecomposite.StartTag || tcp["server"] != "10.77.0.1" || udp["server"] != "10.77.0.1" {
+					t.Fatal("layered SIP003 borrowed another root, credential or private service")
+				}
+				egress[0].Port, egress[1].Port = int(port), int(port)
+			}
+			actual := map[PhysicalEgress]bool{}
+			for _, root := range capture.PhysicalRoots {
+				for _, destination := range root.Destinations {
+					if actual[destination] {
+						t.Fatal("duplicate physical permission")
+					}
+					actual[destination] = true
+				}
+			}
+			if len(actual) != 2 || !actual[egress[0]] || !actual[egress[1]] {
+				t.Fatal("SIP003 selected DNS or private service acquired physical authority", actual)
+			}
+			input, err := original.LaunchInput()
+			var source struct {
+				Files string `json:"files"`
+				Start string `json:"start"`
+			}
+			if err != nil || json.Unmarshal([]byte(input), &source) != nil || source.Files != files || source.Start != start {
+				t.Fatal("SIP003 lost its complete byte-exact two-lane/CA/Start Layer sources", err)
+			}
+			restored, err := ParseNodeLaunchInput(input)
+			if err != nil || restored.Config() != original.Config() || restored.Metadata() != original.Metadata() {
+				t.Fatal("SIP003 sealed restoration changed source identity", err)
+			}
+			assertDesktopNodeRestoredMTU(t, original, "linux", 1376)
+		})
+	}
+	for _, layer := range []string{"OFF", "xor", "aes-256-gcm-xor", "unknown", " off"} {
+		if DesktopLinuxNodePhysicalGraphSupported("ss-v2ray", layer) {
+			t.Fatal("SIP003 admitted an unproved Start Layer", layer)
+		}
+	}
 }
