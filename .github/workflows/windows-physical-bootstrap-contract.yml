@@ -59,7 +59,9 @@ jobs:
   native-node-kernel:
     name: Actual WFP encrypted Node on ${{ matrix.runner }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    # Run 41395919673 passed the native matrix and 3/4 compiled controls on
+    # both architectures before the old 20m job cap interrupted the last one.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -90,7 +92,9 @@ jobs:
   native-node-composition:
     name: Captured Node startup on ${{ matrix.runner }}
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    # Run 41395919673 passed all 15 baselines and 10/34 (AMD64) or 15/34
+    # (ARM64) controls before 20m, including the earlier succession/recovery.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
