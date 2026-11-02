@@ -53,6 +53,7 @@ on:
       - 'deploy/test_desktop_amnezia_runtime.py'
       - 'deploy/test_desktop_amnezia_forms.py'
       - 'deploy/test_desktop_tor_bridge_forms.py'
+      - 'deploy/test_desktop_tor_bridge_forms_runner.py'
       - 'deploy/test_desktop_speed_lab_forms.py'
       - 'deploy/test_desktop_external_comparison_forms.py'
       - 'deploy/test_desktop_network_cohort*.py'
@@ -105,6 +106,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          python3 deploy/test_desktop_tor_bridge_forms_runner.py
           python3 deploy/test_desktop_tor_bridge_forms.py 2>&1 | tee "$RUNNER_TEMP/desktop-tor-forms.log"
           if [ "$RUNNER_OS" = "Windows" ]; then
             python3 deploy/test_desktop_tor_bridge_forms.py --shell pwsh.exe 2>&1 | tee "$RUNNER_TEMP/desktop-tor-forms-pwsh.log"

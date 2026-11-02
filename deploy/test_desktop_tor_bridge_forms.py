@@ -2,7 +2,9 @@
 """Execute captured native Tor editor callbacks and their actual Go importer."""
 from pathlib import Path
 import argparse
+import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -17,6 +19,135 @@ SELECTIONS += tuple('plain-' + selection for selection in SELECTIONS)
 CATALOG_FILES = ('tor-update-capabilities.json', 'tor-update-input-lines.json', 'tor-fixed-input-sets.json') + tuple(
     'tor-update-' + (selection + '-' if selection != 'local' else '') + suffix
     for selection in SELECTIONS for suffix in ('source-catalog.json', 'always-source-catalog.json'))
+
+PAYLOAD_ROOT = 'TestDesktopTorBridgeUpdateFormPayload'
+PAYLOAD_PACKAGE = 'router-vpn/cmd/client'
+
+
+def payload_cases(directory, platform):
+    """Bind every importer leaf to the actual Go catalog and native form outputs."""
+    catalogs = {path.name for path in directory.glob('tor-update-*source-catalog.json')}
+    required = {name for name in CATALOG_FILES if name.endswith('source-catalog.json')}
+    if catalogs != required or len(set(SELECTIONS)) != len(SELECTIONS):
+        raise RuntimeError('Tor importer selections do not match the complete Go source catalog')
+    transports = json.loads((directory / 'tor-update-input-lines.json').read_text())
+    if not isinstance(transports, dict) or not transports or any(
+            not re.fullmatch(r'[a-z0-9][a-z0-9_-]{0,31}', name) or
+            not isinstance(lines, list) or any(not isinstance(line, str) for line in lines)
+            for name, lines in transports.items()):
+        raise RuntimeError('Tor importer transport catalog is malformed')
+    dynamic = {'tor-create-dynamic-' + transport + '-' + kill + '.json'
+               for transport in transports if transport != 'obfs4'
+               for kill in ('on-connect', 'always')} if platform == 'linux' else set()
+    if {path.name for path in directory.glob('tor-create-dynamic-*.json')} != dynamic:
+        raise RuntimeError('Tor importer omitted or added a protected Direct form payload')
+    cases = [*sorted(dynamic), 'new-plain-direct']
+    cases.extend('new-fixed/' + transport + '/' + str(count) + '/' + kill
+                 for transport in ('obfs4', 'custom') for count in (1, 2, 8)
+                 for kill in ('on-connect', 'always'))
+    for selection in SELECTIONS:
+        cases.append(selection + '/unchanged-saved-protection')
+        cases.extend(selection + '/' + transport + '/' + kill
+                     for transport in transports for kill in ('off', 'on-connect', 'always'))
+    if len(set(cases)) != len(cases):
+        raise RuntimeError('Tor importer expected cases contain a duplicate')
+    return frozenset(PAYLOAD_ROOT + '/' + case for case in cases)
+
+
+def payload_phases(expected):
+    # One Windows invocation passed all 365 leaves in 34.530s; its second shell
+    # exhausted the shared 60s alarm at the 13th of 22 execution selections.
+    # Keep durable writes and every assertion, but give independent families
+    # separate serial invocations with the original 60s test/180s outer bounds.
+    phases = {name: set() for name in ('direct-and-router', 'ordinary-entry', 'plain-ordinary-entry')}
+    for case in expected:
+        choice = case[len(PAYLOAD_ROOT) + 1:].split('/', 1)[0]
+        name = ('plain-ordinary-entry' if choice.startswith('plain-ordinary-') else
+                'ordinary-entry' if choice.startswith('ordinary-') else 'direct-and-router')
+        phases[name].add(case)
+    result = []
+    for name, cases in phases.items():
+        if not cases:
+            raise RuntimeError('Tor importer phase is empty: ' + name)
+        choices = sorted({case[len(PAYLOAD_ROOT) + 1:].split('/', 1)[0] for case in cases})
+        selector = '^' + PAYLOAD_ROOT + '$/^(' + '|'.join(re.escape(choice) for choice in choices) + ')$'
+        result.append((name, selector, frozenset(cases)))
+    return result
+
+
+def verify_payload_verdicts(output, expected):
+    required = set(expected) | {PAYLOAD_ROOT}
+    ran, passed, package_passed = set(), set(), False
+    for line in output.splitlines():
+        try:
+            event = json.loads(line)
+        except (ValueError, TypeError) as error:
+            raise RuntimeError('Tor importer emitted a malformed Go verdict') from error
+        if not isinstance(event, dict):
+            raise RuntimeError('Tor importer emitted a malformed Go verdict')
+        action, test, package = event.get('Action'), event.get('Test'), event.get('Package')
+        if action in ('fail', 'skip'):
+            raise RuntimeError('Tor importer emitted a failed or skipped verdict')
+        if package != PAYLOAD_PACKAGE:
+            raise RuntimeError('Tor importer verdict belongs to a different package')
+        if test is not None:
+            if test not in required:
+                raise RuntimeError('Tor importer executed an unexpected case: ' + str(test))
+            if action == 'run':
+                if test in ran or (test != PAYLOAD_ROOT and PAYLOAD_ROOT not in ran):
+                    raise RuntimeError('Tor importer duplicated or reordered a run verdict')
+                ran.add(test)
+            elif action == 'pass':
+                if test not in ran or test in passed or (test == PAYLOAD_ROOT and passed != set(expected)):
+                    raise RuntimeError('Tor importer duplicated or omitted an executed case')
+                passed.add(test)
+            elif action not in ('output', 'pause', 'cont'):
+                raise RuntimeError('Tor importer emitted an unknown test verdict')
+        elif action == 'pass':
+            if package_passed or passed != required:
+                raise RuntimeError('Tor importer duplicated or omitted the complete package verdict')
+            package_passed = True
+        elif action not in ('start', 'output'):
+            raise RuntimeError('Tor importer emitted an unknown package verdict')
+    if ran != required or passed != required or not package_passed:
+        raise RuntimeError('Tor importer omitted an executed case or final package verdict')
+
+
+def run_payload_phases(directory, platform, env):
+    expected = payload_cases(directory, platform)
+    phases = payload_phases(expected)
+    covered = set()
+    for _, _, cases in phases:
+        if covered.intersection(cases):
+            raise RuntimeError('Tor importer phases contain duplicate cases')
+        covered.update(cases)
+    if covered != set(expected):
+        raise RuntimeError('Tor importer phases omit expected cases')
+    for name, selector, cases in phases:
+        command = ['go', 'test', '-json', '-race', '-count=1', './cmd/client', '-run', selector, '-timeout=60s']
+        try:
+            result = subprocess.run(command, cwd=ROOT, env=env, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, encoding='utf-8', errors='replace', timeout=180)
+        except subprocess.TimeoutExpired as error:
+            output = error.stdout or ''
+            print(output.decode('utf-8', errors='replace') if isinstance(output, bytes) else output, end='', flush=True)
+            diagnostic = error.stderr or ''
+            print(diagnostic.decode('utf-8', errors='replace') if isinstance(diagnostic, bytes) else diagnostic,
+                  end='', file=sys.stderr, flush=True)
+            raise
+        # Go driver/download/compiler diagnostics are not test2json verdicts.
+        # Keep them visible on their original channel for every exit status.
+        if result.stderr:
+            print(result.stderr, end='', file=sys.stderr, flush=True)
+        try:
+            if result.returncode:
+                raise subprocess.CalledProcessError(result.returncode, command, output=result.stdout)
+            verify_payload_verdicts(result.stdout, cases)
+        except (RuntimeError, subprocess.CalledProcessError):
+            print(result.stdout, end='', flush=True)
+            raise
+        print('Native Tor importer ' + name + ': ' + str(len(cases)) + ' exact leaves PASS', flush=True)
+    print('Native Tor importer: ' + str(len(expected)) + ' distinct leaves PASS', flush=True)
 
 
 def swift_source(generated):
@@ -192,7 +323,7 @@ def main():
         if args.platform == 'linux': linux_form(directory)
         elif args.platform == 'darwin': swift_form(directory)
         else: windows_form(directory, args.shell)
-        subprocess.run(['go', 'test', '-race', '-count=1', './cmd/client', '-run', '^TestDesktopTorBridgeUpdateFormPayload$', '-timeout=60s'], cwd=ROOT, env=env, check=True, timeout=180)
+        run_payload_phases(directory, args.platform, env)
     print('Native Tor '+args.platform+' callback payloads and actual importer: PASS', flush=True)
 
 
