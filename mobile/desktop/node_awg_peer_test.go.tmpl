@@ -6,11 +6,16 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	routervpnperformance "github.com/sagernet/sing-box/service/routervpnperformance"
+	M "github.com/sagernet/sing/common/metadata"
 	"io"
 	"net/netip"
 	"os"
@@ -122,6 +127,29 @@ func desktopNodeAWGParameterReadback(device *awg.Device, expected string) (strin
 	return actual, nil
 }
 
+func desktopNodeAWGReferenceFactory(expected string, padding int) desktopNodeUDPReferenceFactory {
+	return func(_ context.Context, stack wg.Device, bind *desktopNodeWGBind, ipc string) (desktopNodeUDPReferenceDevice, error) {
+		wrapped := wrapTun(stack)
+		device := awg.NewDevice(wrapped, &desktopNodeAWGBind{bind}, &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}})
+		err := device.IpcSet(ipc)
+		if err == nil {
+			err = wrapped.configuredPadding(padding)
+		}
+		if err == nil {
+			err = stack.Start()
+		}
+		if err == nil {
+			err = device.Up()
+		}
+		if err != nil {
+			device.Close()
+			return desktopNodeUDPReferenceDevice{}, err
+		}
+		return desktopNodeUDPReferenceDevice{close: device.Close,
+			readback: func() (string, error) { return desktopNodeAWGParameterReadback(device, expected) }}, nil
+	}
+}
+
 func TestRouterVPNDesktopNodeAmneziaReferenceProcess(t *testing.T) {
 	if os.Getenv("ROUTERVPN_NODE_AWG_REFERENCE_CHILD") != "1" {
 		return
@@ -144,30 +172,18 @@ func TestRouterVPNDesktopNodeAmneziaReferenceProcess(t *testing.T) {
 		t.Fatal("AWG reference rejected its captured source", err, digestErr, paddingErr)
 	}
 	runDesktopNodeUDPReferenceProcess(t, reader, request.desktopNodeWGRequest, local, remote, ipc,
-		func(_ context.Context, stack wg.Device, bind *desktopNodeWGBind, ipc string) (desktopNodeUDPReferenceDevice, error) {
-			wrapped := wrapTun(stack)
-			device := awg.NewDevice(wrapped, &desktopNodeAWGBind{bind}, &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}})
-			err := device.IpcSet(ipc)
-			if err == nil {
-				err = wrapped.configuredPadding(padding)
-			}
-			if err == nil {
-				err = stack.Start()
-			}
-			if err == nil {
-				err = device.Up()
-			}
-			if err != nil {
-				device.Close()
-				return desktopNodeUDPReferenceDevice{}, err
-			}
-			return desktopNodeUDPReferenceDevice{close: device.Close,
-				readback: func() (string, error) { return desktopNodeAWGParameterReadback(device, expected) }}, nil
-		})
+		desktopNodeAWGReferenceFactory(expected, padding))
 }
 
 func desktopNodeAWGReference(t *testing.T, mode string) *desktopNodeLayerReference {
+	return desktopNodeAWGReferenceWithOptions(t, mode, desktopNodeWGReferenceOptions{})
+}
+
+func desktopNodeAWGReferenceWithOptions(t *testing.T, mode string, capture desktopNodeWGReferenceOptions) *desktopNodeLayerReference {
 	t.Helper()
+	if !awgpolicy.IsMode(mode) || capture.Layer != "" && capture.Layer != "aes-256-gcm" && capture.Layer != "aes-256-gcm+xor-whitening" || capture.WhiteningMismatch && capture.Layer != "aes-256-gcm+xor-whitening" {
+		t.Fatal("AWG reference changed its captured mode or exact Start Layer")
+	}
 	_, ip := desktopNodePeerInterface(t)
 	config, options := desktopReferenceFixture(t)
 	if mode == "awg2-strong" {
@@ -175,8 +191,17 @@ func desktopNodeAWGReference(t *testing.T, mode string) *desktopNodeLayerReferen
 	}
 	digest := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + options.Peers[0].PublicKey))
 	request := desktopNodeAWGRequest{desktopNodeWGRequest: desktopNodeWGRequest{Schema: 1, Address: ip.String(), ClientAddress: ip.String(),
-		PrivateKey: config.PrivateKey, ClientPublicKey: config.Peers[0].PublicKey, PreSharedKey: config.Peers[0].PreSharedKey, NodeProofID: hex.EncodeToString(digest[:])},
+		PrivateKey: config.PrivateKey, ClientPublicKey: config.Peers[0].PublicKey, PreSharedKey: config.Peers[0].PreSharedKey, NodeProofID: hex.EncodeToString(digest[:]), Cover: capture.Cover},
 		Mode: mode, Parameters: config.Parameters}
+	var layerKey [32]byte
+	password := ""
+	if capture.Layer != "" {
+		if _, err := rand.Read(layerKey[:]); err != nil {
+			t.Fatal(err)
+		}
+		password = base64.StdEncoding.EncodeToString(layerKey[:])
+		clear(layerKey[:])
+	}
 	expected, err := desktopNodeAWGParameterDigest(config.Parameters)
 	if err != nil {
 		t.Fatal(err)
@@ -187,9 +212,15 @@ func desktopNodeAWGReference(t *testing.T, mode string) *desktopNodeLayerReferen
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
 	p := &desktopNodeLayerReference{ctx: ctx, cancel: cancel, options: options, done: make(chan error, 1),
-		request: desktopNodeLayerRequest{Schema: 1, Mode: mode, Address: ip.String(), NodeProofID: request.NodeProofID, Configuration: config}}
-	p.command = exec.CommandContext(ctx, executable, "-test.run=^TestRouterVPNDesktopNodeAmneziaReferenceProcess$", "-test.count=1", "-test.timeout=60s")
-	p.command.Env = append(os.Environ(), "ROUTERVPN_NODE_AWG_REFERENCE_CHILD=1")
+		request: desktopNodeLayerRequest{Schema: 1, Mode: mode, Address: ip.String(), NodeProofID: request.NodeProofID, Configuration: config, Layer: capture.Layer, Password: password, Cover: capture.Cover, WhiteningMismatch: capture.WhiteningMismatch}}
+	selector, childOwner := "TestRouterVPNDesktopNodeAmneziaReferenceProcess", "ROUTERVPN_NODE_AWG_REFERENCE_CHILD=1"
+	var input any = request
+	if capture.Layer != "" {
+		selector, childOwner = "TestRouterVPNDesktopNodeAmneziaLayerReferenceProcess", "ROUTERVPN_NODE_AWG_LAYER_REFERENCE_CHILD=1"
+		input = desktopNodeAWGLayerRequest{desktopNodeAWGRequest: request, Layer: capture.Layer, AESPassword: password, RelaySource: ip.String(), WhiteningMismatch: capture.WhiteningMismatch}
+	}
+	p.command = exec.CommandContext(ctx, executable, "-test.run=^"+selector+"$", "-test.count=1", "-test.timeout=60s")
+	p.command.Env = append(os.Environ(), childOwner)
 	p.input, err = p.command.StdinPipe()
 	if err != nil {
 		cancel()
@@ -228,14 +259,27 @@ func desktopNodeAWGReference(t *testing.T, mode string) *desktopNodeLayerReferen
 		cancel()
 		_ = p.output.Close()
 	})
-	if err := json.NewEncoder(p.input).Encode(request); err != nil {
+	if err := json.NewEncoder(p.input).Encode(input); err != nil {
 		t.Fatal(err)
 	}
 	p.reply, err = p.read()
 	p.remote, _ = netip.ParseAddrPort(p.reply.Address)
-	if err != nil || p.remote.Addr() != ip || p.remote.Port() == 0 || p.reply.BaseAddress != p.reply.Address || p.reply.AESAddress != "" ||
+	if err != nil || p.remote.Addr() != ip || p.remote.Port() == 0 ||
 		p.reply.ProbeNetwork != "udp" || p.reply.RawTCP != 0 || p.reply.ParametersSHA256 != expected || p.reply.ProtocolFiles != "" {
 		t.Fatal("independent AWG peer did not retain its original UDP socket and parameters", err, p.diagnostic.String())
+	}
+	if capture.Layer == "" {
+		if p.reply.BaseAddress != p.reply.Address || p.reply.AESAddress != "" || p.reply.PhysicalClientAddress != "" || p.reply.RelaySourceAddress != "" {
+			t.Fatal("plain AWG acquired another reference owner")
+		}
+	} else {
+		base, baseErr := netip.ParseAddrPort(p.reply.BaseAddress)
+		aes, aesErr := netip.ParseAddrPort(p.reply.AESAddress)
+		if baseErr != nil || aesErr != nil || base.Addr() != ip || base.Port() == 0 || aes.Addr() != ip || aes.Port() == 0 || base == aes || base == p.remote ||
+			capture.Layer == "aes-256-gcm" && aes != p.remote || capture.Layer == "aes-256-gcm+xor-whitening" && (p.remote.Port() != 8389 || aes == p.remote) ||
+			p.reply.PhysicalClientAddress != request.ClientAddress || p.reply.RelaySourceAddress != request.Address {
+			t.Fatal("layered AWG changed original physical client, native parameters, local relay or encrypted endpoint")
+		}
 	}
 	return p
 }
@@ -298,5 +342,279 @@ func TestRouterVPNDesktopNodeEncryptedAmneziaReferenceCapture(t *testing.T) {
 				t.Fatal("AWG reference lost exact parameters or captured canonical identity", err, parameterErr)
 			}
 		})
+	}
+}
+
+// Layered AWG validates its complete parameter set and canonical crypto peer
+// before capturing a separate AES/whitening owner. The plain child's original
+// decoder cannot accept this input shape.
+type desktopNodeAWGLayerRequest struct {
+	desktopNodeAWGRequest
+	Layer             string `json:"layer"`
+	AESPassword       string `json:"aes_password"`
+	RelaySource       string `json:"relay_source"`
+	WhiteningMismatch bool   `json:"whitening_mismatch,omitempty"`
+}
+
+func desktopNodeAWGLayerIdentity(request desktopNodeAWGLayerRequest) (netip.Addr, netip.Addr, string, *desktopNodeWGLayerCapture, error) {
+	local, remote, ipc, err := desktopNodeAWGRequestIdentity(request.desktopNodeAWGRequest)
+	if err != nil {
+		return netip.Addr{}, netip.Addr{}, "", nil, err
+	}
+	layerLocal, layerRemote, _, capture, err := desktopNodeWGLayerIdentity(desktopNodeWGLayerRequest{
+		desktopNodeWGRequest: request.desktopNodeWGRequest, Layer: request.Layer, AESPassword: request.AESPassword,
+		RelaySource: request.RelaySource, WhiteningMismatch: request.WhiteningMismatch})
+	if err != nil || local != layerLocal || remote != layerRemote || capture == nil {
+		return netip.Addr{}, netip.Addr{}, "", nil, errors.New("AWG layer lost its exact independent physical and crypto capture")
+	}
+	return local, remote, ipc, capture, nil
+}
+
+func TestRouterVPNDesktopNodeAmneziaLayerReferenceProcess(t *testing.T) {
+	if os.Getenv("ROUTERVPN_NODE_AWG_LAYER_REFERENCE_CHILD") != "1" {
+		return
+	}
+	reader := bufio.NewReaderSize(os.Stdin, (64<<10)+1)
+	line, err := reader.ReadSlice('\n')
+	if err != nil || len(line) > 64<<10 {
+		t.Fatal("layered AWG requires its bounded original pipe request")
+	}
+	var request desktopNodeAWGLayerRequest
+	decoder := json.NewDecoder(bytes.NewReader(line))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF {
+		t.Fatal("layered AWG received another input shape")
+	}
+	local, remote, ipc, capture, err := desktopNodeAWGLayerIdentity(request)
+	expected, digestErr := desktopNodeAWGParameterDigest(request.Parameters)
+	padding, paddingErr := strconv.Atoi(request.Parameters["s4"])
+	if err != nil || digestErr != nil || paddingErr != nil {
+		t.Fatal("layered AWG rejected its captured source", err, digestErr, paddingErr)
+	}
+	runDesktopNodeUDPReferenceWithLayer(t, reader, request.desktopNodeWGRequest, local, remote, ipc,
+		desktopNodeAWGReferenceFactory(expected, padding), capture)
+}
+
+func TestRouterVPNDesktopNodeAmneziaLayers(t *testing.T) {
+	for _, mode := range []string{"awg2-fast", "awg2-strong"} {
+		for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, fault := range []string{"proved", "wrong-peer", "wrong-psk", "wrong-header", "wrong-padding", "wrong-aes", "wrong-whitening"} {
+				if fault == "wrong-whitening" && layer != "aes-256-gcm+xor-whitening" {
+					continue
+				}
+				t.Run(mode+"/"+layer+"/"+fault, func(t *testing.T) {
+					peer := desktopNodeAWGReferenceWithOptions(t, mode, desktopNodeWGReferenceOptions{Layer: layer, WhiteningMismatch: fault == "wrong-whitening"})
+					testDesktopNodeEncryptedUDP(t, peer, fault)
+				})
+			}
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeAmneziaLayerCapture(t *testing.T) {
+	for _, mode := range []string{"awg2-fast", "awg2-strong"} {
+		for _, fault := range []string{"captured", "whitening", "whitening-negative", "wrong-node", "wrong-client", "foreign-relay", "loopback-relay",
+			"plain-layer", "unknown-layer", "whitening-on-aes", "short-aes", "same-psk", "same-private-key", "self-peer", "private-alias-self-peer",
+			"wrong-mode", "missing", "extra", "overlap", "wg-header", "noncanonical-key"} {
+			t.Run(mode+"/"+fault, func(t *testing.T) {
+				config, options := desktopReferenceFixture(t)
+				if mode == "awg2-strong" {
+					config.Parameters["jc"], config.Parameters["jmax"] = "8", "1200"
+				}
+				digest := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + options.Peers[0].PublicKey))
+				request := desktopNodeAWGLayerRequest{desktopNodeAWGRequest: desktopNodeAWGRequest{desktopNodeWGRequest: desktopNodeWGRequest{
+					Schema: 1, Address: "192.168.210.2", ClientAddress: "192.168.210.1", PrivateKey: config.PrivateKey, ClientPublicKey: config.Peers[0].PublicKey,
+					PreSharedKey: config.Peers[0].PreSharedKey, NodeProofID: hex.EncodeToString(digest[:])}, Mode: mode, Parameters: config.Parameters},
+					Layer: "aes-256-gcm", AESPassword: base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x72}, 32)), RelaySource: "192.168.210.2"}
+				switch fault {
+				case "whitening":
+					request.Layer = "aes-256-gcm+xor-whitening"
+				case "whitening-negative":
+					request.Layer, request.WhiteningMismatch = "aes-256-gcm+xor-whitening", true
+				case "wrong-node":
+					request.NodeProofID = strings.Repeat("f", 64)
+				case "wrong-client":
+					request.ClientAddress = "192.168.211.1"
+				case "foreign-relay":
+					request.RelaySource = request.ClientAddress
+				case "loopback-relay":
+					request.RelaySource = "127.0.0.1"
+				case "plain-layer":
+					request.Layer = "off"
+				case "unknown-layer":
+					request.Layer = "aes-256-gcm-xor"
+				case "whitening-on-aes":
+					request.WhiteningMismatch = true
+				case "short-aes":
+					request.AESPassword = base64.StdEncoding.EncodeToString([]byte("short"))
+				case "same-psk":
+					request.AESPassword = request.PreSharedKey
+				case "same-private-key":
+					request.AESPassword = request.PrivateKey
+				case "self-peer":
+					request.ClientPublicKey = options.Peers[0].PublicKey
+				case "private-alias-self-peer":
+					raw, err := base64.StdEncoding.Strict().DecodeString(request.PrivateKey)
+					if err != nil || len(raw) != 32 {
+						t.Fatal(err)
+					}
+					raw[0] ^= 1 // X25519 clamps this bit; canonical public identity is unchanged.
+					request.PrivateKey, request.ClientPublicKey = base64.StdEncoding.EncodeToString(raw), options.Peers[0].PublicKey
+					clear(raw)
+				case "wrong-mode":
+					request.Mode = "wg"
+				case "missing":
+					delete(request.Parameters, "s4")
+				case "extra":
+					request.Parameters["i1"] = "<b 0x01>"
+				case "overlap":
+					request.Parameters["h2"] = request.Parameters["h1"]
+				case "wg-header":
+					request.Parameters["h1"] = "1"
+				case "noncanonical-key":
+					request.PrivateKey = base64.RawStdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32))
+				}
+				allowed := fault == "captured" || fault == "whitening" || fault == "whitening-negative"
+				local, remote, ipc, capture, err := desktopNodeAWGLayerIdentity(request)
+				if (err == nil) != allowed || (capture != nil) != allowed {
+					t.Fatal("layered AWG admitted a foreign source, parameters, canonical identity or layer owner", err)
+				}
+				if !allowed {
+					return
+				}
+				parameters, parameterErr := awgpolicy.ParametersUAPI(config.Parameters)
+				if parameterErr != nil || local.String() != request.Address || remote.String() != request.ClientAddress ||
+					capture.physicalClient != remote || capture.relaySource != local || capture.request != request.desktopNodeWGRequest ||
+					!strings.Contains(ipc, "\n"+parameters+"public_key=") || len(request.Parameters) != 11 {
+					t.Fatal("layered AWG lost its complete exact native configuration or independent source", parameterErr)
+				}
+				raw, err := json.Marshal(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var plain desktopNodeAWGRequest
+				decoder := json.NewDecoder(bytes.NewReader(raw))
+				decoder.DisallowUnknownFields()
+				if decoder.Decode(&plain) == nil {
+					t.Fatal("plain AWG reference accepted layered peer input")
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeAmneziaLayerCover(t *testing.T) {
+	for _, mode := range []string{"awg2-fast", "awg2-strong"} {
+		for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, fault := range []string{"owned", "wrong-node", "drop-cover"} {
+				t.Run(mode+"/"+layer+"/"+fault, func(t *testing.T) {
+					peer := desktopNodeAWGReferenceWithOptions(t, mode, desktopNodeWGReferenceOptions{Layer: layer, Cover: true})
+					f := newDesktopNodeLayerFixture(t, peer, "")
+					if err := f.box.RouterVPNStrategyStart(); err != nil {
+						t.Fatal(err)
+					}
+					var cover *routervpnperformance.Service
+					for _, service := range f.box.RouterVPNServices() {
+						if actual, ok := service.(*routervpnperformance.Service); ok {
+							if cover != nil {
+								t.Fatal("multiple cover workers")
+							}
+							cover = actual
+						}
+					}
+					if cover == nil || cover.Healthy() || peer.observe(t, "stats").CoverPackets != 0 {
+						t.Fatal("AWG layer started cover before its actual private-node proof")
+					}
+					if err := f.box.RouterVPNStrategyDNSProof(); err != nil {
+						t.Fatal(err)
+					}
+					if fault != "owned" {
+						peer.observe(t, fault)
+					}
+					err := cover.Activate()
+					observed := peer.observe(t, "stats")
+					if (err == nil) != (fault == "owned") || cover.Healthy() != (fault == "owned") || observed.RouterQueries == 0 || observed.DirectQueries != 0 || observed.DNSQueries != 1 || observed.RawTCP != 0 || observed.RawUDP == 0 || observed.ProtocolRawUDP == 0 || observed.ProtocolTCP == 0 || f.network.Current() {
+						t.Fatal("AWG cover changed its exact final protocol or source proof", err, observed)
+					}
+					if fault == "wrong-node" {
+						if observed.CoverPackets != 0 {
+							t.Fatal("wrong AWG node started cover")
+						}
+					} else if observed.CoverPackets == 0 || observed.CoverBytes < 128 || observed.CoverMaximum > 1200 || (observed.CoverReplies > 0) != (fault == "owned") {
+						t.Fatal("cover did not reach the final AWG peer", observed)
+					}
+					if err := cover.Close(); err != nil || cover.Healthy() {
+						t.Fatal("AWG layered worker did not retire", err)
+					}
+					f.source.Cancel()
+					if err := f.close(); err != nil || !f.source.closed.Load() {
+						t.Fatal("AWG layer retained its old cover/socket source", err)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestRouterVPNDesktopNodeAmneziaOuterCannotBypassFinal(t *testing.T) {
+	for _, mode := range []string{"awg2-fast", "awg2-strong"} {
+		for _, layer := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(mode+"/"+layer, func(t *testing.T) {
+				peer := desktopNodeAWGReferenceWithOptions(t, mode, desktopNodeWGReferenceOptions{Layer: layer})
+				f := newDesktopNodeLayerFixture(t, peer, "")
+				if err := f.box.RouterVPNStrategyStart(); err != nil {
+					t.Fatal(err)
+				}
+				// AWG eagerly handshakes at startup. Establish a real inner flow
+				// first so its handshake cannot masquerade as this negative's
+				// outer-only packet receipt; final payload/DNS counts must stay
+				// unchanged while the forbidden direct DNS request is sent.
+				if err := f.exchange("udp"); err != nil {
+					t.Fatal("AWG outer control lost its real encrypted positive path", err)
+				}
+				before := peer.observe(t, "stats")
+				outer, found := f.box.Outbound().Outbound(mobilemultihop.NativeStartLayerTag)
+				if !found {
+					t.Fatal("missing captured AWG outer AES transport")
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				defer cancel()
+				connection, err := outer.DialContext(ctx, "tcp", M.ParseSocksaddr(desktopNodeRouterHealthTarget))
+				if connection != nil {
+					_ = connection.Close()
+				}
+				if err == nil {
+					t.Fatal("AWG outer acquired an uncaptured physical TCP grant")
+				}
+				target := M.ParseSocksaddr("192.168.50.133:53")
+				packet, err := outer.ListenPacket(ctx, target)
+				if err != nil {
+					t.Fatal("AWG outer negative missed its actual owned UDP transport", err)
+				}
+				_ = packet.SetDeadline(time.Now().Add(350 * time.Millisecond))
+				query := new(dns.Msg).SetQuestion("example.com.", dns.TypeA)
+				raw, err := query.Pack()
+				if err != nil {
+					_ = packet.Close()
+					t.Fatal(err)
+				}
+				n, writeErr := packet.WriteTo(raw, target)
+				answer := make([]byte, 512)
+				_, _, readErr := packet.ReadFrom(answer)
+				_ = packet.Close()
+				observed := peer.observe(t, "stats")
+				if writeErr != nil || n != len(raw) || readErr == nil || observed.RawTCP != 0 || observed.RawUDP <= before.RawUDP || observed.RejectedUDP != before.RejectedUDP+1 ||
+					observed.ProtocolTCP != before.ProtocolTCP || observed.ProtocolUDP != before.ProtocolUDP || observed.RouterQueries != 0 || observed.DNSQueries != 0 {
+					t.Fatal("AWG outer AES bypassed its sole captured inner UDP route", writeErr, readErr, observed)
+				}
+				if err := f.exchange("tcp"); err != nil || f.box.RouterVPNStrategyDNSProof() != nil {
+					t.Fatal("outer rejection concealed an unavailable final AWG path", err)
+				}
+				observed = peer.observe(t, "stats")
+				if observed.ProtocolRawUDP == 0 || observed.ProtocolTCP == 0 || observed.ProtocolUDP == 0 || observed.DNSQueries != 1 || f.network.Current() {
+					t.Fatal("final AWG DNS positive control skipped its encrypted peer", observed)
+				}
+			})
+		}
 	}
 }

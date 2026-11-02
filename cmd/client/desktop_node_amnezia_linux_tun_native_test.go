@@ -31,7 +31,7 @@ func linuxHostTUNAmneziaCase(scenario string) bool {
 			return true
 		}
 	}
-	return false
+	return linuxHostTUNAmneziaLayerCase(scenario)
 }
 
 func linuxHostTUNIsAmnezia(mode string) bool { return awgpolicy.IsMode(mode) }
@@ -73,7 +73,7 @@ func linuxHostTUNAmneziaDigest(t *testing.T, parameters map[string]string) strin
 
 func linuxHostTUNAmneziaAsset(t *testing.T, peer *linuxHostTUNPeer, scenario string) []byte {
 	t.Helper()
-	if !linuxHostTUNAmneziaCase(scenario) || linuxHostTUNAmneziaMode(scenario) != peer.mode || peer.layer != "" ||
+	if !linuxHostTUNAmneziaCase(scenario) || linuxHostTUNAmneziaMode(scenario) != peer.mode || peer.layer != linuxHostTUNAmneziaLayer(scenario) ||
 		peer.parametersSHA256 == "" || linuxHostTUNAmneziaDigest(t, peer.parameters) != peer.parametersSHA256 {
 		t.Fatal("installed AWG lost its original complete peer/source capture")
 	}
@@ -81,10 +81,12 @@ func linuxHostTUNAmneziaAsset(t *testing.T, peer *linuxHostTUNPeer, scenario str
 	for name, value := range peer.parameters {
 		parameters[name] = value
 	}
-	private := peer.clientKey
+	private, psk := peer.clientKey, peer.password
 	switch linuxHostTUNAction(scenario) {
 	case "wrong-key":
 		private = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x27}, 32))
+	case "wrong-psk":
+		psk = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x28}, 32))
 	case "wrong-header":
 		parameters["h1"] = "50000000-59999999"
 	case "wrong-padding":
@@ -94,6 +96,10 @@ func linuxHostTUNAmneziaAsset(t *testing.T, peer *linuxHostTUNPeer, scenario str
 	if err != nil {
 		t.Fatal("installed AWG negative source became malformed rather than a real mismatched native peer", err)
 	}
+	endpoint := peer.address
+	if peer.layer != "" {
+		endpoint = peer.baseAddress
+	}
 	return []byte(fmt.Sprintf("[Interface]\nAddress=10.78.0.2/32,fd78:78::2/128\nPrivateKey=%s\nDNS=192.168.50.133\nMTU=1280\n%s[Peer]\nPublicKey=%s\nPresharedKey=%s\nEndpoint=%s\nAllowedIPs=0.0.0.0/0,::/0\nPersistentKeepalive=25\n",
-		private, ipc, peer.serverPublic, peer.password, peer.address.String()))
+		private, ipc, peer.serverPublic, psk, endpoint.String()))
 }

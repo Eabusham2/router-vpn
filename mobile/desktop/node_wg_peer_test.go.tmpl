@@ -730,7 +730,7 @@ func testDesktopNodeEncryptedUDP(t *testing.T, peer *desktopNodeLayerReference, 
 		payloadTCP, payloadUDP := actual.PlainTCP, actual.PlainUDP
 		if peer.request.Layer != "" {
 			payloadTCP, payloadUDP = actual.ProtocolTCP, actual.ProtocolUDP
-			if (fault == "wrong-peer" || fault == "wrong-psk") && actual.ProtocolRawUDP == 0 ||
+			if (fault == "wrong-peer" || fault == "wrong-psk" || fault == "wrong-header" || fault == "wrong-padding") && actual.ProtocolRawUDP == 0 ||
 				(fault == "wrong-aes" || fault == "wrong-whitening") && (actual.ProtocolRawUDP != 0 || actual.PlainUDP != 0) {
 				t.Fatal("layered WG credential negative reached the wrong protocol boundary", actual)
 			}

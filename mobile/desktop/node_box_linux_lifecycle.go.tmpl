@@ -24,7 +24,7 @@ func routerVPNDesktopLinuxNodeLifecycleAvailable(policy *mobilemultihop.DesktopN
 		return false
 	}
 	meta := policy.Metadata()
-	// Only exact AWG2 with Off or admitted WG/Shadowsocks/Hysteria2 layers may
+	// Only exact admitted WG/AWG2/Shadowsocks/Hysteria2 layers may
 	// enter this native TUN/nft/DNS lifecycle. The seal rederives each actual
 	// endpoint/outbound, credential, port and physical lower.
 	return meta.TargetOS == "linux" && mobilemultihop.DesktopLinuxNodePhysicalGraphSupported(meta.Mode, meta.StartLayer)

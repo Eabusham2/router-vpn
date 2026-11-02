@@ -624,6 +624,11 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                        "^TestRouterVPNDesktopNodeWireGuard(Layers|LayerCapture|LayerCover|OuterCannotBypassFinal)$",
                        tuple("TestRouterVPNDesktopNodeWireGuard" + name for name in
                              ("Layers", "LayerCapture", "LayerCover", "OuterCannotBypassFinal"))))
+        for mode in ("awg2-fast", "awg2-strong"):
+            suites.append(("amnezia-layers-" + mode, "./protocol/routervpnamnezia",
+                           "^TestRouterVPNDesktopNodeAmnezia(Layers|LayerCapture|LayerCover|OuterCannotBypassFinal)$/^" + mode + "$",
+                           tuple("TestRouterVPNDesktopNodeAmnezia" + name for name in
+                                 ("Layers", "LayerCapture", "LayerCover", "OuterCannotBypassFinal"))))
     with tempfile.TemporaryDirectory(prefix="routervpn-node-physical-") as directory:
         workspace = Path(directory)
         with stage("prepare shipping Start Layer reference"):
@@ -678,6 +683,20 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 for group, cases in (("Layers", traffic), ("LayerCapture", capture), ("LayerCover", cover), ("OuterCannotBypassFinal", layers)):
                     if any("--- PASS: TestRouterVPNDesktopNodeWireGuard" + group + "/" + case + " (" not in output for case in cases):
                         raise ValueError("Node WireGuard layer gate omitted exact peer, PSK, AES/whitening, final DNS/cover or physical-route ownership")
+            if name.startswith("amnezia-layers-"):
+                mode = name.removeprefix("amnezia-layers-")
+                if mode not in ("awg2-fast", "awg2-strong"):
+                    raise ValueError("AWG layer gate lost its original mode")
+                layers = ("aes-256-gcm", "aes-256-gcm+xor-whitening")
+                traffic = tuple(layer + "/" + fault for layer in layers
+                                for fault in ("proved", "wrong-peer", "wrong-psk", "wrong-header", "wrong-padding", "wrong-aes")) + (layers[1] + "/wrong-whitening",)
+                capture = ("captured", "whitening", "whitening-negative", "wrong-node", "wrong-client", "foreign-relay", "loopback-relay",
+                           "plain-layer", "unknown-layer", "whitening-on-aes", "short-aes", "same-psk", "same-private-key", "self-peer", "private-alias-self-peer",
+                           "wrong-mode", "missing", "extra", "overlap", "wg-header", "noncanonical-key")
+                cover = tuple(layer + "/" + fault for layer in layers for fault in ("owned", "wrong-node", "drop-cover"))
+                for group, cases in (("Layers", traffic), ("LayerCapture", capture), ("LayerCover", cover), ("OuterCannotBypassFinal", layers)):
+                    if any("--- PASS: TestRouterVPNDesktopNodeAmnezia" + group + "/" + mode + "/" + case + " (" not in output for case in cases):
+                        raise ValueError("Node AWG layer gate omitted complete parameters, canonical identity, layer credentials, final DNS/cover or physical-route ownership")
             if name == "xray-traffic" and any("--- PASS: TestRouterVPNDesktopNodeXrayTraffic/" + case + " (" not in output for case in XRAY_CASES):
                 raise ValueError("Node Xray gate omitted a complete graph/Start Layer")
             if name == "xray-credentials" and any("--- PASS: TestRouterVPNDesktopNodeXrayWrongCredential/" + case + " (" not in output for case in XRAY_CREDENTIAL_CASES):

@@ -255,11 +255,27 @@ func (peer *linuxHostTUNPeer) read(t *testing.T) linuxHostTUNPeerReply {
 		return reply
 	}
 	if linuxHostTUNIsAmnezia(peer.mode) {
-		if err != nil || endpoint.Addr().String() != "192.168.210.2" || endpoint.Port() == 0 || reply.AESAddress != "" || reply.BaseAddress != reply.Address ||
+		if err != nil || endpoint.Addr().String() != "192.168.210.2" || endpoint.Port() == 0 ||
 			peer.address.IsValid() && peer.address != endpoint || reply.RawTCP != 0 || reply.RawUDP < 0 || reply.PlainTCP < 0 || reply.PlainUDP < 0 ||
 			reply.ProtocolFiles != "" || reply.ParametersSHA256 != linuxHostTUNAmneziaDigest(t, peer.parameters) ||
 			peer.parametersSHA256 != "" && peer.parametersSHA256 != reply.ParametersSHA256 {
 			t.Fatal("installed AWG reference changed its exact UDP peer or captured native parameters")
+		}
+		if peer.layer == "" {
+			if reply.AESAddress != "" || reply.BaseAddress != reply.Address || reply.PhysicalClientAddress != "" || reply.RelaySourceAddress != "" {
+				t.Fatal("plain AWG reference acquired another source owner")
+			}
+		} else {
+			base, baseErr := netip.ParseAddrPort(reply.BaseAddress)
+			aes, aesErr := netip.ParseAddrPort(reply.AESAddress)
+			whitening := peer.layer == common.StartLayerAES256GCMXOR
+			if baseErr != nil || aesErr != nil || base.Addr() != endpoint.Addr() || base.Port() == 0 || aes.Addr() != endpoint.Addr() || aes.Port() == 0 || base == aes || base == endpoint ||
+				peer.layer != common.StartLayerAES256GCM && !whitening || whitening && (endpoint.Port() != 8389 || aes == endpoint) || !whitening && aes != endpoint ||
+				peer.baseAddress.IsValid() && peer.baseAddress != base || peer.aesAddress.IsValid() && peer.aesAddress != aes || reply.PlainTCP != 0 ||
+				reply.PhysicalClientAddress != "192.168.210.1" || reply.RelaySourceAddress != "192.168.210.2" || reply.RejectedUDP != 0 || reply.ProtocolRawTCP != 0 || reply.ProtocolRawUDP < 0 || reply.ProtocolTCP < 0 || reply.ProtocolUDP < 0 {
+				t.Fatal("layered AWG replaced original client, local AES relay or separate UDP owners")
+			}
+			peer.baseAddress, peer.aesAddress = base, aes
 		}
 		peer.address, peer.parametersSHA256 = endpoint, reply.ParametersSHA256
 		return reply
@@ -360,6 +376,14 @@ func linuxHostTUNStartPeer(t *testing.T, scenario string) *linuxHostTUNPeer {
 		if linuxHostTUNIsAmnezia(peer.mode) {
 			selector, childOwner = "TestRouterVPNDesktopNodeAmneziaReferenceProcess", "ROUTERVPN_NODE_AWG_REFERENCE_CHILD=1"
 			peer.parameters = linuxHostTUNAmneziaParameters(t, peer.mode)
+			if peer.layer != "" {
+				selector, childOwner = "TestRouterVPNDesktopNodeAmneziaLayerReferenceProcess", "ROUTERVPN_NODE_AWG_LAYER_REFERENCE_CHILD=1"
+				if _, err := rand.Read(key[:]); err != nil {
+					t.Fatal(err)
+				}
+				peer.layerPassword = base64.StdEncoding.EncodeToString(key[:])
+				clear(key[:])
+			}
 		}
 	}
 	peer.command = exec.CommandContext(ctx, "ip", "netns", "exec", "rvpn-peer", image,
@@ -414,7 +438,7 @@ func linuxHostTUNStartPeer(t *testing.T, scenario string) *linuxHostTUNPeer {
 		request = map[string]any{"schema": 1, "address": "192.168.210.2", "client_address": "192.168.210.1",
 			"private_key": peer.serverKey, "client_public_key": clientPublic, "pre_shared_key": peer.password, "node_proof_id": peer.nodeID, "direct_router": true}
 	}
-	if peer.mode == "wg" && peer.layer != "" {
+	if (peer.mode == "wg" || linuxHostTUNIsAmnezia(peer.mode)) && peer.layer != "" {
 		request["layer"], request["aes_password"], request["relay_source"] = peer.layer, peer.layerPassword, "192.168.210.2"
 		if linuxHostTUNAction(scenario) == "wrong-whitening" {
 			request["whitening_mismatch"] = true
@@ -492,11 +516,11 @@ func linuxHostTUNInstallProfile(t *testing.T, peer *linuxHostTUNPeer, scenario s
 		}
 	}
 	password := peer.password
-	if peer.mode == "wg" {
+	if peer.mode == "wg" || linuxHostTUNIsAmnezia(peer.mode) {
 		password = peer.layerPassword
 	}
-	if peer.mode != "wg" && peer.mode != "hysteria2" && linuxHostTUNWrongKeyCase(scenario) ||
-		(peer.mode == "wg" || peer.mode == "hysteria2") && linuxHostTUNAction(scenario) == "wrong-layer-key" {
+	if peer.mode != "wg" && !linuxHostTUNIsAmnezia(peer.mode) && peer.mode != "hysteria2" && linuxHostTUNWrongKeyCase(scenario) ||
+		(peer.mode == "wg" || linuxHostTUNIsAmnezia(peer.mode) || peer.mode == "hysteria2") && linuxHostTUNAction(scenario) == "wrong-layer-key" {
 		password = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x27}, 32))
 	}
 	store, err := json.Marshal(common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}})
@@ -534,7 +558,13 @@ func linuxHostTUNInstallProfile(t *testing.T, peer *linuxHostTUNPeer, scenario s
 		if err := os.WriteFile(filepath.Join(directory, "awg.conf"), linuxHostTUNAmneziaAsset(t, peer, scenario), 0600); err != nil {
 			t.Fatal("installed AWG lost its exact paired source and parameters", err)
 		}
-		return
+		if peer.layer == "" {
+			return
+		}
+		directory = filepath.Join(linuxOwnedControllerRoot, "generated", profile.ID, "shadowsocks")
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if peer.mode == "hysteria2" {
 		assets := linuxHostTUNHysteria2Assets(t, peer, scenario)

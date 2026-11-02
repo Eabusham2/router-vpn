@@ -75,5 +75,5 @@ func linuxHostTUNWireGuardAction(scenario string) string {
 }
 
 func linuxHostTUNFinalProtocolCounters(peer *linuxHostTUNPeer) bool {
-	return peer.mode == "hysteria2" || peer.mode == "wg" && peer.layer != ""
+	return peer.mode == "hysteria2" || (peer.mode == "wg" || linuxHostTUNIsAmnezia(peer.mode)) && peer.layer != ""
 }

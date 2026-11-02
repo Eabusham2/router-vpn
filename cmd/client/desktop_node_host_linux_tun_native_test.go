@@ -42,6 +42,7 @@ func init() {
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNAmneziaCases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNHysteria2LayerCases...)
 	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNWireGuardLayerCases...)
+	linuxHostTUNCases = append(linuxHostTUNCases, linuxHostTUNAmneziaLayerCases...)
 }
 
 func linuxHostTUNCoverCase(scenario string) bool {
@@ -105,6 +106,32 @@ func linuxHostTUNAssertReadinessClassification(t *testing.T) {
 		"wg-whitening-wrong-layer-key",
 		"wg-whitening-resolver-failure",
 		"wg-whitening-wrong-whitening",
+		"awg2-fast-aes-wrong-key",
+		"awg2-fast-aes-wrong-psk",
+		"awg2-fast-aes-wrong-layer-key",
+		"awg2-fast-aes-wrong-header",
+		"awg2-fast-aes-wrong-padding",
+		"awg2-fast-aes-resolver-failure",
+		"awg2-fast-whitening-wrong-key",
+		"awg2-fast-whitening-wrong-psk",
+		"awg2-fast-whitening-wrong-layer-key",
+		"awg2-fast-whitening-wrong-header",
+		"awg2-fast-whitening-wrong-padding",
+		"awg2-fast-whitening-resolver-failure",
+		"awg2-strong-aes-wrong-key",
+		"awg2-strong-aes-wrong-psk",
+		"awg2-strong-aes-wrong-layer-key",
+		"awg2-strong-aes-wrong-header",
+		"awg2-strong-aes-wrong-padding",
+		"awg2-strong-aes-resolver-failure",
+		"awg2-strong-whitening-wrong-key",
+		"awg2-strong-whitening-wrong-psk",
+		"awg2-strong-whitening-wrong-layer-key",
+		"awg2-strong-whitening-wrong-header",
+		"awg2-strong-whitening-wrong-padding",
+		"awg2-strong-whitening-resolver-failure",
+		"awg2-fast-whitening-wrong-whitening",
+		"awg2-strong-whitening-wrong-whitening",
 	} {
 		negative[scenario] = true
 	}
@@ -1017,7 +1044,11 @@ func TestDesktopLinuxGuardianKernelNodeHostTUN(t *testing.T) {
 				}
 			}
 			if linuxHostTUNIsAmnezia(peer.mode) {
-				t.Log("verified installed host captured AWG2:", scenario)
+				if peer.layer == "" {
+					t.Log("verified installed host captured AWG2:", scenario)
+				} else {
+					t.Log("verified installed host layered AWG2:", scenario)
+				}
 			}
 			if peer.mode == "hysteria2" {
 				if peer.layer == "" {

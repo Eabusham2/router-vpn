@@ -2,8 +2,6 @@
 
 package main
 
-import "strings"
-
 // Each name keeps a separate installed result while sharing the same complete
 // host lifecycle assertions. Only these explicitly enumerated WG/plain cases
 // can select the independent WireGuard peer; unknown graphs stay rejected.
@@ -30,7 +28,7 @@ func linuxHostTUNAction(scenario string) string {
 		return linuxHostTUNHysteria2Action(scenario)
 	}
 	if linuxHostTUNAmneziaCase(scenario) {
-		return strings.TrimPrefix(scenario, linuxHostTUNAmneziaMode(scenario)+"-")
+		return linuxHostTUNAmneziaAction(scenario)
 	}
 	return scenario
 }
