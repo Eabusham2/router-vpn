@@ -50,7 +50,12 @@ class NativeSocketUIDGate(unittest.TestCase):
             with self.subTest(failure=failure.__name__):
                 self.check_matching_hosts(forwarder_failure=failure)
 
-    def check_matching_hosts(self, node_failure=None, forwarder_failure=None):
+    def test_failed_or_timed_out_openvpn_gate_cannot_reach_later_gates_or_compilation(self):
+        for failure in (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            with self.subTest(failure=failure.__name__):
+                self.check_matching_hosts(openvpn_failure=failure)
+
+    def check_matching_hosts(self, node_failure=None, forwarder_failure=None, openvpn_failure=None):
         class CompilerBoundary(Exception):
             pass
 
@@ -65,6 +70,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                 calls = []
                 node_errors = []
                 forwarder_errors = []
+                openvpn_errors = []
 
                 def run(command, **kwargs):
                     args = [str(value) for value in command]
@@ -156,6 +162,31 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['CGO_ENABLED'], '1')
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
                         self.assertLessEqual(kwargs['timeout'], 1500)
+                        return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_external_openvpn_runner.py'):
+                        self.assertEqual(system, 'linux')
+                        self.assertEqual(args[2:], [])
+                        self.assertEqual(kwargs['cwd'], ROOT)
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOARCH'], arch)
+                        self.assertEqual(kwargs['env']['CGO_ENABLED'], '1')
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertLessEqual(kwargs['timeout'], 60)
+                        return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_external_openvpn.py'):
+                        self.assertEqual(system, 'linux')
+                        self.assertEqual(args[2:], [str(source.resolve()), '--pq', str(root/'pq')])
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOARCH'], arch)
+                        self.assertEqual(kwargs['env']['CGO_ENABLED'], '1')
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertIn('-L'+str(root/'pq'), kwargs['env']['CGO_LDFLAGS'])
+                        self.assertLessEqual(kwargs['timeout'], 900)
+                        if openvpn_failure:
+                            error = (openvpn_failure(37, args) if openvpn_failure is subprocess.CalledProcessError
+                                     else openvpn_failure(args, kwargs['timeout']))
+                            openvpn_errors.append(error)
+                            raise error
                         return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_node_lifecycle_runner.py'):
                         self.assertEqual(system, 'linux')
@@ -296,7 +327,8 @@ class NativeSocketUIDGate(unittest.TestCase):
                      patch.object(N.OPENVPN, 'prepare'), patch.object(N.BUFFERS, 'prepare'), \
                      patch.object(N.EXTERNAL, 'prepare'), patch.object(N.POLICY.AMNEZIA, 'verify'), \
                      patch.object(N, 'stage_cronet', side_effect=stage_cronet):
-                    expected_error = forwarder_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else CompilerBoundary)
+                    expected_error = forwarder_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
+                                                          openvpn_failure if openvpn_failure is not None and system == 'linux' else CompilerBoundary)
                     with self.assertRaises(expected_error) as caught:
                         N.build(target, root/'output', source=source, xray=root/'xray', pq=root/'pq')
                 timers = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_amnezia_timers_pinned.py')]
@@ -319,6 +351,16 @@ class NativeSocketUIDGate(unittest.TestCase):
                     self.assertEqual(len(node_errors), 1)
                     self.assertIs(caught.exception, node_errors[0], 'The original source-gate failure was replaced')
                     self.assertEqual(calls[-1], node[0], 'A failed source gate reached a later gate or shipping compilation')
+                    continue
+                if openvpn_failure and system == 'linux':
+                    gate = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_external_openvpn.py')]
+                    self.assertEqual(len(gate), 1)
+                    self.assertEqual(len(openvpn_errors), 1)
+                    self.assertIs(caught.exception, openvpn_errors[0], 'The original OpenVPN gate failure was replaced')
+                    self.assertEqual(calls[-1], gate[0], 'Failed native OpenVPN proof reached a later gate or compiler')
+                    checks = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_external_openvpn_runner.py')]
+                    self.assertEqual(len(checks), 1)
+                    self.assertEqual(calls.index(gate[0]), calls.index(checks[0]) + 1)
                     continue
                 box = [args for args in calls if args[:2] == ['go', 'test'] and '.' in args and
                        '-run' in args and args[args.index('-run')+1] == '^TestRouterVPNDesktop(Tor|External)']
@@ -446,12 +488,22 @@ class NativeSocketUIDGate(unittest.TestCase):
                     self.assertEqual(calls.index(external[0]), calls.index(external_checks[0])+1)
                 for name in ('test_linux_external_lifecycle.py', 'test_linux_external_lifecycle_runner.py'):
                     self.assertIn(ROOT/'deploy'/name, N.inputs())
+                openvpn_checks = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_external_openvpn_runner.py')]
+                openvpn = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_external_openvpn.py')]
+                self.assertEqual(len(openvpn_checks), 1 if system == 'linux' else 0)
+                self.assertEqual(len(openvpn), len(openvpn_checks))
+                if openvpn:
+                    self.assertEqual(calls.index(openvpn_checks[0]), calls.index(external[0]) + 1)
+                    self.assertEqual(calls.index(openvpn[0]), calls.index(openvpn_checks[0]) + 1)
+                for name in ('test_linux_external_openvpn.py', 'test_linux_external_openvpn_runner.py'):
+                    self.assertIn(ROOT/'deploy'/name, N.inputs())
+                self.assertIn(ROOT/'mobile/desktop/external_box_openvpn_test.go.tmpl', N.inputs())
                 lifecycle_checks = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_node_lifecycle_runner.py')]
                 lifecycle = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_node_lifecycle.py')]
                 self.assertEqual(len(lifecycle_checks), 1 if system == 'linux' else 0)
                 self.assertEqual(len(lifecycle), len(lifecycle_checks))
                 if lifecycle:
-                    self.assertEqual(calls.index(lifecycle_checks[0]), calls.index(external[0])+1)
+                    self.assertEqual(calls.index(lifecycle_checks[0]), calls.index(openvpn[0])+1)
                     self.assertEqual(calls.index(lifecycle[0]), calls.index(lifecycle_checks[0])+1)
                 for name in ('test_linux_node_lifecycle.py', 'test_linux_node_lifecycle_runner.py'):
                     self.assertIn(ROOT/'deploy'/name, N.inputs())

@@ -109,6 +109,11 @@ func desktopExternalIntegrationAWGParameters(protocol string) map[string]string 
 // Policy and lifecycle source are deliberately separate: the broker exercises
 // its ordinary real socket implementation while the OS constructor is an
 // explicit boundary. The source cannot supply or fabricate connected sockets.
+type desktopExternalIntegrationTuple struct {
+	network string
+	remote  netip.AddrPort
+}
+
 type desktopExternalIntegrationKernel struct {
 	source   *desktopExternalIntegrationSource
 	local    netip.Addr
@@ -116,6 +121,7 @@ type desktopExternalIntegrationKernel struct {
 	index    uint32
 	name     string
 	udp      bool
+	tuples   []desktopExternalIntegrationTuple
 	deny     atomic.Bool
 	denied   atomic.Int32
 	mu       sync.Mutex
@@ -156,8 +162,33 @@ func (p *desktopExternalIntegrationKernel) network() string {
 	}
 	return "tcp"
 }
+
+// An explicit OpenVPN import captures network/address pairs independently.
+// Existing single-remote fixtures retain their original exact predicate.
+func (p *desktopExternalIntegrationKernel) permits(network string, remote netip.AddrPort) bool {
+	if len(p.tuples) == 0 {
+		return network == p.network() && remote == p.remote
+	}
+	for _, tuple := range p.tuples {
+		if tuple.network == network && tuple.remote == remote {
+			return true
+		}
+	}
+	return false
+}
+func (p *desktopExternalIntegrationKernel) permitsBinding(network string) bool {
+	if len(p.tuples) == 0 {
+		return network == p.network()+"4"
+	}
+	for _, tuple := range p.tuples {
+		if network == tuple.network+"4" {
+			return true
+		}
+	}
+	return false
+}
 func (p *desktopExternalIntegrationKernel) Select(ctx context.Context, c mobiletor.DesktopSocketCapture, network string, remote netip.AddrPort) (mobiletor.DesktopSocketBinding, error) {
-	if ctx.Err() != nil || !p.Current(c, p.source.owner) || network != p.network() || remote != p.remote {
+	if ctx.Err() != nil || !p.Current(c, p.source.owner) || !p.permits(network, remote) {
 		return mobiletor.DesktopSocketBinding{}, errors.New("local composition source denied another path")
 	}
 	if p.deny.Load() {
@@ -167,13 +198,13 @@ func (p *desktopExternalIntegrationKernel) Select(ctx context.Context, c mobilet
 	return mobiletor.DesktopSocketBinding{Owner: p.source.owner, InterfaceName: p.name, InterfaceIndex: p.index, LocalAddress: p.local}, nil
 }
 func (p *desktopExternalIntegrationKernel) Bind(ctx context.Context, c mobiletor.DesktopSocketCapture, b mobiletor.DesktopSocketBinding, network string, raw syscall.RawConn) error {
-	if ctx.Err() != nil || !p.Current(c, b.Owner) || b.LocalAddress != p.local || b.InterfaceName != p.name || b.InterfaceIndex != p.index || network != p.network()+"4" || raw == nil {
+	if ctx.Err() != nil || !p.Current(c, b.Owner) || b.LocalAddress != p.local || b.InterfaceName != p.name || b.InterfaceIndex != p.index || !p.permitsBinding(network) || raw == nil {
 		return errors.New("local composition binding lost its captured source")
 	}
 	return raw.Control(func(uintptr) {})
 }
 func (p *desktopExternalIntegrationKernel) Grant(ctx context.Context, q mobiletor.DesktopSocketGrant) (mobiletor.DesktopSocketReceipt, error) {
-	if ctx.Err() != nil || !p.Current(q.Capture, q.Binding.Owner) || q.Network != p.network() || q.Remote != p.remote || q.Local.Addr() != p.local || q.Local.Port() == 0 || p.deny.Load() {
+	if ctx.Err() != nil || !p.Current(q.Capture, q.Binding.Owner) || !p.permits(q.Network, q.Remote) || q.Local.Addr() != p.local || q.Local.Port() == 0 || p.deny.Load() {
 		return mobiletor.DesktopSocketReceipt{}, errors.New("local composition source refused a different grant")
 	}
 	p.mu.Lock()

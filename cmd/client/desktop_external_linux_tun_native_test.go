@@ -25,7 +25,9 @@ import (
 	"router-vpn/internal/common"
 	"router-vpn/internal/desktopnetwork"
 	"router-vpn/internal/linuxprocess"
+	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/mobiletor"
+	"router-vpn/internal/nativeopenvpn"
 )
 
 func linuxHostTUNExternalFixture(controller *ownedDesktopController, scenario string) (failure error) {
@@ -263,6 +265,53 @@ func linuxHostTUNExternalActive(ctx context.Context, a *app, session *desktopLin
 			return host, proof, errors.Join(err, errors.New("external UDP transport acquired an extra physical root or bypassed selected DNS"))
 		}
 	}
+	if physical.Protocol == "openvpn" {
+		capture, err := host.external.Capture()
+		profile := native.external.profile.External
+		if err != nil || profile == nil || profile.OpenVPN == nil || profile.OpenVPNResponseProbes != nil || profile.ResponseProbe != nil ||
+			len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Family != "endpoints" || capture.PhysicalRoots[0].Type != "openvpn-client" ||
+			capture.SelectedDNS.Type != "udp" || capture.SelectedDNS.Physical || capture.SelectedDNS.Host != "203.0.113.53" || capture.SelectedDNS.Port != 5353 {
+			return host, proof, errors.Join(err, errors.New("installed provider lost its direct import or selected DNS authority"))
+		}
+		endpoint, err := nativeopenvpn.CompileProfile(*profile.OpenVPN, mobilemultihop.ExternalFinalTag, "")
+		if err != nil {
+			return host, proof, err
+		}
+		remotes, err := nativeopenvpn.Remotes(endpoint)
+		if err != nil || len(remotes) < 1 || len(remotes) > 2 || len(capture.PhysicalRoots[0].Destinations) != len(remotes) {
+			return host, proof, errors.New("installed provider lost ordered remote count")
+		}
+		wanted := make(map[mobilemultihop.PhysicalEgress]bool)
+		for _, remote := range remotes {
+			if remote.Host != "11.77.0.2" {
+				return host, proof, errors.New("installed provider replaced its actual peer address")
+			}
+			wanted[mobilemultihop.PhysicalEgress{Host: remote.Host, Port: remote.Port, Network: remote.Network}] = true
+		}
+		for _, destination := range capture.PhysicalRoots[0].Destinations {
+			if !wanted[destination] {
+				return host, proof, errors.New("installed provider multiplied physical network/port permissions")
+			}
+		}
+		for _, raw := range []string{host.external.OriginalPolicy().Config(), host.external.Config()} {
+			var graph map[string]any
+			if json.Unmarshal([]byte(raw), &graph) != nil {
+				return host, proof, errors.New("installed provider graph is malformed")
+			}
+			endpoints, ok := graph["endpoints"].([]any)
+			if !ok || len(endpoints) != 1 {
+				return host, proof, errors.New("installed provider endpoint owner changed")
+			}
+			selected, ok := endpoints[0].(map[string]any)
+			if !ok {
+				return host, proof, errors.New("installed provider endpoint is malformed")
+			}
+			actual, err := nativeopenvpn.Remotes(selected)
+			if err != nil || !reflect.DeepEqual(actual, remotes) {
+				return host, proof, errors.New("installed provider reordered or flattened its original fallback")
+			}
+		}
+	}
 	network, err := desktopnetwork.ParseDesktopNetworkReceipt(proof.NetworkReceipt)
 	if err != nil || network.TargetOS != "linux" || network.MTU != 1376 || proof.EntryID != "" || proof.EntryNodeID != "" || proof.EntryProven ||
 		!proof.DNSProven || !proof.Healthy || proof.Execution != "local" || proof.IP != "203.0.113.88" || proof.ExitID != "installed-linux-external" ||
@@ -325,6 +374,12 @@ func linuxHostTUNExternalPublic(ctx context.Context, a *app, session *desktopLin
 		key[0] ^= 255
 		foreign.Profile.External.WireGuard.PresharedKey = base64.StdEncoding.EncodeToString(key)
 		clear(key)
+	} else if foreign.Profile.External.OpenVPN != nil {
+		original := foreign.Profile.External.OpenVPN.Config
+		foreign.Profile.External.OpenVPN.Config = strings.ReplaceAll(original, strings.Repeat("a", 32), strings.Repeat("b", 32))
+		if original == foreign.Profile.External.OpenVPN.Config {
+			return host, errors.New("captured provider observer lost its real original control key")
+		}
 	} else if foreign.Profile.External.Hysteria2 != nil {
 		foreign.Profile.External.Hysteria2.Password += "-different-observed-source"
 	} else {

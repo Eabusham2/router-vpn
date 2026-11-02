@@ -52,7 +52,7 @@ func desktopLinuxExternalEligible(launch *desktopNodeLaunch) bool {
 		return false
 	}
 	switch launch.external.profile.External.Protocol {
-	case "shadowsocks", "http-connect", "https-connect", "hysteria2", "wireguard", "amneziawg":
+	case "shadowsocks", "http-connect", "https-connect", "hysteria2", "wireguard", "amneziawg", "openvpn":
 		return true
 	}
 	return false

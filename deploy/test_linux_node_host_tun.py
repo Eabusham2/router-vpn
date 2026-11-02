@@ -110,7 +110,10 @@ EXTERNAL_WIREGUARD_CASES = ('external-wg-on-connect', 'external-wg-always', 'ext
 EXTERNAL_AMNEZIA_CASES = tuple('external-' + variant + '-' + action for variant in ('awgfast', 'awgstrong')
                               for action in ('on-connect', 'always', 'public', 'cancelled', 'wrong-key', 'wrong-psk',
                                              'dns-failure', 'replacement', 'wrong-parameters'))
-EXTERNAL_CASES += EXTERNAL_HYSTERIA2_CASES + EXTERNAL_WIREGUARD_CASES + EXTERNAL_AMNEZIA_CASES
+EXTERNAL_OPENVPN_CASES = tuple('external-' + variant + '-' + action for variant in ('ovpntcp', 'ovpnudp')
+                              for action in ('on-connect', 'always', 'public', 'cancelled', 'wrong-trust', 'wrong-control',
+                                             'dns-failure', 'replacement', 'fallback'))
+EXTERNAL_CASES += EXTERNAL_HYSTERIA2_CASES + EXTERNAL_WIREGUARD_CASES + EXTERNAL_AMNEZIA_CASES + EXTERNAL_OPENVPN_CASES
 CASES += EXTERNAL_CASES
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',

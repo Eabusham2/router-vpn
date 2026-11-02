@@ -24,6 +24,7 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/sagernet/sing/common/control"
 	M "github.com/sagernet/sing/common/metadata"
@@ -109,7 +110,7 @@ func linuxExternalLifecycleNode(t *testing.T, remote netip.AddrPort, kill string
 	return policy
 }
 
-func newLinuxExternalNativeLifecycle(t *testing.T, kind, kill string, remote netip.AddrPort, prior *linuxExternalNativeLifecycle, fault string, original *mobilemultihop.NodeProfile) *linuxExternalNativeLifecycle {
+func newLinuxExternalNativeLifecycle(t *testing.T, kind, kill string, remote netip.AddrPort, prior *linuxExternalNativeLifecycle, fault string, original *mobilemultihop.NodeProfile, remotes ...nativeopenvpn.Remote) *linuxExternalNativeLifecycle {
 	t.Helper()
 	actual, err := net.InterfaceByName("rvpn-test")
 	if err != nil || os.Geteuid() != 0 || os.Getenv("ROUTERVPN_LINUX_GUARDIAN_TEST_NS") != "1" {
@@ -195,7 +196,7 @@ func newLinuxExternalNativeLifecycle(t *testing.T, kind, kill string, remote net
 			t.Fatal(err)
 		}
 	} else {
-		compiled := externalPhysicalDeviceFixture(t, kind, remote.Addr().String(), int(remote.Port()), false, "linux", "off", kill)
+		compiled := externalPhysicalDeviceFixtureRemotes(t, kind, remote.Addr().String(), int(remote.Port()), false, "linux", "off", kill, remotes)
 		policy, err := mobilemultihop.NewDesktopExternalPolicy(compiled.OriginalPolicy(), linuxExternalLifecycleSession(t), "linux")
 		if err != nil {
 			t.Fatal(err)
@@ -288,8 +289,12 @@ func (f *linuxExternalNativeLifecycle) join(t *testing.T) {
 }
 
 func linuxExternalLifecyclePeerMain(network string) error {
+	address := "172.31.217.2:0"
+	if selected, ok := strings.CutPrefix(network, "openvpn-"); ok {
+		network, address = selected, "11.77.0.2:0"
+	}
 	if network == "udp4" {
-		listener, err := net.ListenPacket(network, "172.31.217.2:0")
+		listener, err := net.ListenPacket(network, address)
 		if err != nil {
 			return err
 		}
@@ -313,7 +318,7 @@ func linuxExternalLifecyclePeerMain(network string) error {
 	if network != "tcp4" {
 		return errors.New("unknown lifecycle peer network")
 	}
-	listener, err := net.Listen(network, "172.31.217.2:0")
+	listener, err := net.Listen(network, address)
 	if err != nil {
 		return err
 	}
@@ -372,7 +377,11 @@ func linuxExternalLifecyclePeerNetwork(t *testing.T, network string) netip.AddrP
 		t.Fatal(err)
 	}
 	remote, err := netip.ParseAddrPort(strings.TrimSpace(line))
-	if err != nil || remote.Addr().String() != "172.31.217.2" || remote.Port() == 0 {
+	expected := "172.31.217.2"
+	if strings.HasPrefix(network, "openvpn-") {
+		expected = "11.77.0.2"
+	}
+	if err != nil || remote.Addr().String() != expected || remote.Port() == 0 {
 		t.Fatal("native peer returned a foreign endpoint", err)
 	}
 	return remote
@@ -428,9 +437,33 @@ func TestDesktopLinuxGuardianKernelExternalLifecycle(t *testing.T) {
 	if os.Getenv("ROUTERVPN_LINUX_GUARDIAN_TEST_NS") != "1" || os.Geteuid() != 0 {
 		t.Fatal("native lifecycle requires the original isolated namespace runner")
 	}
+	// OpenVPN deliberately requires a public-unicast provider; the guardian
+	// independently rejects documentation/benchmark ranges. Assign this exact
+	// literal pair only to the disconnected disposable veth. No physical host
+	// interface, gateway or public destination can be reached from either side.
+	interfaces, err := net.Interfaces()
+	if err != nil || len(interfaces) != 2 {
+		t.Fatal("native namespace is not the exact isolated loopback/veth pair", err)
+	}
+	for _, iface := range interfaces {
+		if iface.Name != "lo" && iface.Name != "rvpn-test" {
+			t.Fatal("native namespace contains a physical or unrelated interface")
+		}
+	}
+	for _, scope := range [][]string{nil, {"-n", "rvpn-peer"}} {
+		for _, family := range []string{"-4", "-6"} {
+			args := append(append([]string(nil), scope...), family, "-j", "route", "show", "default")
+			out, err := exec.Command("ip", args...).CombinedOutput()
+			if err != nil || strings.TrimSpace(string(out)) != "[]" {
+				t.Fatal("native namespace has an external route", err)
+			}
+		}
+	}
 	for _, addition := range [][]string{
 		{"addr", "add", "172.31.217.1/30", "dev", "rvpn-test"},
 		{"-n", "rvpn-peer", "addr", "add", "172.31.217.2/30", "dev", "rvpn-peer"},
+		{"addr", "add", "11.77.0.1/30", "dev", "rvpn-test"},
+		{"-n", "rvpn-peer", "addr", "add", "11.77.0.2/30", "dev", "rvpn-peer"},
 	} {
 		if out, err := exec.Command("ip", addition...).CombinedOutput(); err != nil {
 			t.Fatalf("create exact private fixture address: %v: %s", err, out)
@@ -447,18 +480,30 @@ func TestDesktopLinuxGuardianKernelExternalLifecycle(t *testing.T) {
 			}
 		})
 	}
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong"} {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed"} {
 		t.Run(protocol+"-succession", func(t *testing.T) {
 			network := "tcp"
-			if protocol == "hysteria2" || protocol == "wireguard" || strings.HasPrefix(protocol, "amneziawg-") {
+			if protocol == "hysteria2" || protocol == "wireguard" || strings.HasPrefix(protocol, "amneziawg-") || protocol == "openvpn-udp" {
 				network = "udp"
 			}
 			probe := func(owner *linuxExternalNativeLifecycle, remote netip.AddrPort, blocked bool) {
 				t.Helper()
 				linuxExternalLifecycleProbeNetwork(t, owner, network, remote, blocked)
 			}
-			remote := linuxExternalLifecyclePeerNetwork(t, network+"4")
-			foreign := linuxExternalLifecyclePeerNetwork(t, network+"4")
+			peerNetwork := network + "4"
+			if strings.HasPrefix(protocol, "openvpn-") {
+				peerNetwork = "openvpn-" + peerNetwork
+			}
+			remote := linuxExternalLifecyclePeerNetwork(t, peerNetwork)
+			foreign := linuxExternalLifecyclePeerNetwork(t, peerNetwork)
+			var remotes []nativeopenvpn.Remote
+			var fallback netip.AddrPort
+			if protocol == "openvpn-mixed" {
+				fallback = linuxExternalLifecyclePeerNetwork(t, "openvpn-udp4")
+				remotes = []nativeopenvpn.Remote{{Host: remote.Addr().String(), Port: int(remote.Port()), Network: "tcp"},
+					{Host: fallback.Addr().String(), Port: int(fallback.Port()), Network: "udp"}}
+				linuxExternalLifecycleProbeNetwork(t, nil, "udp", fallback, false)
+			}
 			probe(nil, remote, false)
 			probe(nil, foreign, false)
 			old := newLinuxExternalNativeLifecycle(t, "node", "always", remote, nil, "", nil)
@@ -470,7 +515,7 @@ func TestDesktopLinuxGuardianKernelExternalLifecycle(t *testing.T) {
 			old.join(t)
 			probe(old, remote, true)
 			probe(nil, remote, true)
-			next := newLinuxExternalNativeLifecycle(t, protocol, "always", remote, old, "", nil)
+			next := newLinuxExternalNativeLifecycle(t, protocol, "always", remote, old, "", nil, remotes...)
 			if err := next.start(); err != nil {
 				t.Fatal(err)
 			}
@@ -482,8 +527,18 @@ func TestDesktopLinuxGuardianKernelExternalLifecycle(t *testing.T) {
 			probe(nil, remote, true)
 			probe(next, foreign, true)
 			probe(next, remote, false)
+			if fallback.IsValid() {
+				linuxExternalLifecycleProbeNetwork(t, next, "udp", fallback, false)
+				linuxExternalLifecycleProbeNetwork(t, nil, "udp", fallback, true)
+				linuxExternalLifecycleProbeNetwork(t, next, "tcp", fallback, true)
+				linuxExternalLifecycleProbeNetwork(t, next, "udp", remote, true)
+			}
 			next.join(t)
 			probe(nil, remote, true)
+			if fallback.IsValid() {
+				linuxExternalLifecycleProbeNetwork(t, next, "udp", fallback, true)
+				linuxExternalLifecycleProbeNetwork(t, nil, "udp", fallback, true)
+			}
 			restored := newLinuxExternalNativeLifecycle(t, "node", "always", remote, next, "", old.policy.node.OriginalProfile())
 			if restored.policy.node.OriginalProfile() != old.policy.node.OriginalProfile() ||
 				old.policy.node.Metadata().OriginalSourceSHA256 != restored.policy.node.Metadata().OriginalSourceSHA256 ||
@@ -497,6 +552,9 @@ func TestDesktopLinuxGuardianKernelExternalLifecycle(t *testing.T) {
 			probe(restored, remote, false)
 			probe(next, remote, true)
 			probe(nil, remote, true)
+			if fallback.IsValid() {
+				linuxExternalLifecycleProbeNetwork(t, restored, "udp", fallback, true)
+			}
 			restored.join(t)
 			probe(nil, remote, true)
 			if err := restored.baseline.Release(context.Background()); err != nil {

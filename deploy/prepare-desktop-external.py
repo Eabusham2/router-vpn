@@ -75,6 +75,7 @@ BOX_TEMPLATES = {
     'external_box_physical_test.go.tmpl': 'routervpn_desktop_external_box_physical_test.go',
     'external_box_integration_test.go.tmpl': 'routervpn_desktop_external_box_integration_test.go',
     'external_box_latency_test.go.tmpl': 'routervpn_desktop_external_box_latency_test.go',
+    'external_box_openvpn_test.go.tmpl': 'routervpn_desktop_external_box_openvpn_test.go',
     'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go',
     'tor_box_latency.go.tmpl': 'routervpn_desktop_tor_box_latency.go',
     'tor_box_latency_test.go.tmpl': 'routervpn_desktop_tor_box_latency_test.go',
@@ -272,6 +273,7 @@ def pt_copies():
         raw = path.read_bytes()
         prefix = {'node_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
                   'external_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
+                  'external_box_openvpn_test.go.tmpl': b'//go:build linux\n\n',
                   'node_box_linux_cover.go.tmpl': b'//go:build linux\n\n',
                   'node_box_linux_cover_test.go.tmpl': b'//go:build linux\n\n'}.get(name, b'')
         if path.is_symlink() or not raw.startswith(prefix+b'package box\n'):

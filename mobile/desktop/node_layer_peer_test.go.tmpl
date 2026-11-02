@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -44,12 +45,16 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	boxDNS "github.com/sagernet/sing-box/dns"
 	DNST "github.com/sagernet/sing-box/dns/transport"
+	DNSL "github.com/sagernet/sing-box/dns/transport/local"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	DIRECT "github.com/sagernet/sing-box/protocol/direct"
 	HY "github.com/sagernet/sing-box/protocol/hysteria2"
 	NV "github.com/sagernet/sing-box/protocol/naive"
+	OVPN "github.com/sagernet/sing-box/protocol/openvpn"
 	CO "github.com/sagernet/sing-box/protocol/routervpncomposite"
 	WH "github.com/sagernet/sing-box/protocol/routervpnwhitening"
 	XR "github.com/sagernet/sing-box/protocol/routervpnxray"
@@ -1742,13 +1747,15 @@ var desktopExternalInstalledWireGuard func(*testing.T, *desktopNodeLayerServer, 
 var desktopExternalInstalledAmnezia func(*testing.T, *desktopNodeLayerServer, desktopExternalInstalledAWGRequest) desktopExternalInstalledWGPeer
 
 type desktopExternalInstalledPeerRequest struct {
-	Schema    int                                 `json:"schema"`
-	Protocol  string                              `json:"protocol"`
-	Address   string                              `json:"address"`
-	Password  string                              `json:"password"`
-	Hold      bool                                `json:"hold"`
-	WireGuard *desktopExternalInstalledWGRequest  `json:"wireguard,omitempty"`
-	Amnezia   *desktopExternalInstalledAWGRequest `json:"amneziawg,omitempty"`
+	Schema          int                                 `json:"schema"`
+	Protocol        string                              `json:"protocol"`
+	Address         string                              `json:"address"`
+	Password        string                              `json:"password"`
+	Hold            bool                                `json:"hold"`
+	WireGuard       *desktopExternalInstalledWGRequest  `json:"wireguard,omitempty"`
+	Amnezia         *desktopExternalInstalledAWGRequest `json:"amneziawg,omitempty"`
+	OpenVPNNetwork  string                              `json:"openvpn_network,omitempty"`
+	OpenVPNFallback bool                                `json:"openvpn_fallback,omitempty"`
 }
 
 type desktopExternalInstalledPeerReply struct {
@@ -1765,6 +1772,8 @@ type desktopExternalInstalledPeerReply struct {
 	PublicReplies    uint32 `json:"public_replies"`
 	AuthFailures     uint32 `json:"auth_failures"`
 	ParametersSHA256 string `json:"parameters_sha256,omitempty"`
+	OpenVPNNetwork   string `json:"openvpn_network,omitempty"`
+	OpenVPNProfile   string `json:"openvpn_profile,omitempty"`
 }
 
 func desktopExternalInstalledPeerCertificate(t *testing.T) (tls.Certificate, string) {
@@ -1841,6 +1850,164 @@ func startDesktopExternalInstalledHysteria2(t *testing.T, server *desktopNodeLay
 	return close
 }
 
+// This provider is the pinned OpenVPN server endpoint, on an address that
+// exists only in the installed fixture's original disconnected namespace.
+// Its encrypted listener is native-owned. The existing DNS/HTTPS responders
+// count only decrypted upper traffic; no fabricated raw counter is supplied.
+func startDesktopExternalInstalledOpenVPN(t *testing.T, server *desktopNodeLayerServer, request desktopExternalInstalledPeerRequest, dnsAddress, publicAddress string) (string, string, func()) {
+	t.Helper()
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	root := &x509.Certificate{SerialNumber: big.NewInt(74001), Subject: pkix.Name{CommonName: "isolated installed provider root"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour),
+		IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+	rootDER, err := x509.CreateCertificate(rand.Reader, root, root, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER}))
+	issue := func(serial int64, name string, usage x509.ExtKeyUsage) (string, string) {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaf := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: name}, NotBefore: root.NotBefore, NotAfter: root.NotAfter,
+			DNSNames: []string{name}, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{usage}}
+		der, err := x509.CreateCertificate(rand.Reader, leaf, root, &key.PublicKey, rootKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		private, err := x509.MarshalPKCS8PrivateKey(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
+	}
+	provider, providerKey := issue(74002, "provider.routervpn.test", x509.ExtKeyUsageServerAuth)
+	client, clientKey := issue(74003, "installed-client.routervpn.test", x509.ExtKeyUsageClientAuth)
+	used := make(map[int]bool)
+	port := func() int {
+		for attempt := 0; attempt < 128; attempt++ {
+			listener, err := net.Listen("tcp4", net.JoinHostPort(request.Address, "0"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			value := listener.Addr().(*net.TCPAddr).Port
+			if used[value] {
+				_ = listener.Close()
+				continue
+			}
+			packet, err := net.ListenPacket("udp4", net.JoinHostPort(request.Address, strconv.Itoa(value)))
+			_ = listener.Close()
+			if errors.Is(err, syscall.EADDRINUSE) {
+				continue
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = packet.Close()
+			used[value] = true
+			return value
+		}
+		t.Fatal("installed provider could not retain a distinct transport port")
+		return 0
+	}
+	unavailable := 0
+	if request.OpenVPNFallback {
+		unavailable = port()
+	}
+	control := "tls-auth"
+	if request.OpenVPNNetwork == "udp" {
+		control = "tls-crypt"
+	}
+	controlKey := "-----BEGIN OpenVPN Static key V1-----\n" + strings.Repeat(strings.Repeat("a", 32)+"\n", 16) + "-----END OpenVPN Static key V1-----\n"
+	wrap := map[string]any{"type": strings.ReplaceAll(control, "-", "_"), "key": []string{controlKey}}
+	if control == "tls-auth" {
+		wrap["direction"] = "server"
+	}
+	rule := func(network, inner, physical string) map[string]any {
+		original, err := netip.ParseAddrPort(inner)
+		if err != nil {
+			t.Fatal(err)
+		}
+		actual, err := netip.ParseAddrPort(physical)
+		if err != nil || !actual.Addr().IsLoopback() {
+			t.Fatal("provider lost its owned decrypted service", err)
+		}
+		return map[string]any{"network": []string{network}, "ip_cidr": []string{original.Addr().String() + "/32"}, "port": []int{int(original.Port())},
+			"action": "route", "outbound": "selected-services", "override_address": actual.Addr().String(), "override_port": int(actual.Port())}
+	}
+	var instance *box.Box
+	var listenPort int
+	for attempt := 0; attempt < 16; attempt++ {
+		listenPort = port()
+		graph := map[string]any{"log": map[string]any{"disabled": true}, "endpoints": []any{map[string]any{"type": "openvpn-server", "tag": "provider", "system": false,
+			"listen": request.Address, "listen_port": listenPort, "network": request.OpenVPNNetwork, "address": []string{"10.211.18.1/24"}, "data_ciphers": []string{"AES-256-GCM", "AES-128-GCM"},
+			"tls": map[string]any{"certificate": []string{provider}, "key": []string{providerKey}, "client_certificate": []string{ca}, "verify_client_certificate": "require", "remote_certificate_tls": "client", "control_wrap": wrap}}},
+			"outbounds": []any{map[string]any{"type": "direct", "tag": "selected-services"}}, "route": map[string]any{"rules": []any{
+				rule("udp", "203.0.113.53:5353", dnsAddress), rule("tcp", "1.1.1.1:443", publicAddress), map[string]any{"action": "reject"}}}}
+		ins, outs, endpoints := inbound.NewRegistry(), outbound.NewRegistry(), endpoint.NewRegistry()
+		DIRECT.RegisterOutbound(outs)
+		OVPN.RegisterEndpoint(endpoints)
+		transports := boxDNS.NewTransportRegistry()
+		DNST.RegisterUDP(transports)
+		DNST.RegisterTCP(transports)
+		DNSL.RegisterTransport(transports)
+		OVPN.RegisterDNSTransport(transports)
+		ctx := box.Context(server.ctx, ins, outs, endpoints, transports, boxService.NewRegistry(), certificate.NewRegistry())
+		raw, err := json.Marshal(graph)
+		if err != nil {
+			t.Fatal(err)
+		}
+		options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, raw)
+		if err != nil {
+			t.Fatal("actual installed provider options", err)
+		}
+		instance, err = box.New(box.Options{Context: ctx, Options: options})
+		if err != nil {
+			t.Fatal("actual installed provider construction", err)
+		}
+		if err = instance.Start(); err == nil {
+			break
+		}
+		closeErr := instance.Close()
+		instance = nil
+		if closeErr != nil || !errors.Is(err, syscall.EADDRINUSE) {
+			t.Fatal("actual installed provider startup", errors.Join(err, closeErr))
+		}
+	}
+	if instance == nil {
+		t.Fatal("installed provider could not bind its native transport")
+	}
+	var closeOnce sync.Once
+	closeProvider := func() {
+		closeOnce.Do(func() {
+			if err := instance.Close(); err != nil {
+				t.Error("actual installed provider failed joined close", err)
+			}
+		})
+	}
+	t.Cleanup(closeProvider)
+	config := "\n# Complete installed external provider import\r\nclient\n"
+	if unavailable != 0 {
+		config += fmt.Sprintf("remote %s %d tcp\n", request.Address, unavailable)
+	}
+	config += fmt.Sprintf("remote %s %d %s\n", request.Address, listenPort, request.OpenVPNNetwork)
+	config += "verify-x509-name provider.routervpn.test name\nremote-cert-tls server\ndata-ciphers AES-256-GCM:AES-128-GCM\ntun-mtu 1400\nhand-window 3\ntls-timeout 1\n<ca>\n" + ca + "</ca>\n<cert>\n" + client + "</cert>\n<key>\n" + clientKey + "</key>\n<" + control + ">\n" + controlKey + "</" + control + ">\n"
+	if control == "tls-auth" {
+		config += "key-direction 1\n"
+	}
+	if len(config) > 12<<10 {
+		t.Fatal("installed provider import exceeded its bounded private reply")
+	}
+	if _, err := nativeopenvpn.CompileProfile(nativeopenvpn.Profile{Config: config}, mobilemultihop.ExternalFinalTag, ""); err != nil {
+		t.Fatal("actual installed provider import compiler", err)
+	}
+	return net.JoinHostPort(request.Address, strconv.Itoa(listenPort)), config, closeProvider
+}
+
 func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 	if os.Getenv("ROUTERVPN_EXTERNAL_INSTALLED_REFERENCE_CHILD") == "" {
 		return
@@ -1855,8 +2022,11 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 	decoder.DisallowUnknownFields()
 	var trailing any
 	if err != nil || len(line) > desktopNodeLayerReferenceLimit || decoder.Decode(&request) != nil || decoder.Decode(&trailing) != io.EOF || request.Schema != 1 ||
-		request.Address != "11.77.0.2" || request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "wireguard" && request.Protocol != "amneziawg" {
+		request.Address != "11.77.0.2" || request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "wireguard" && request.Protocol != "amneziawg" && request.Protocol != "openvpn" {
 		t.Fatal("installed external reference lost its exact bounded request", err)
+	}
+	if request.Protocol != "openvpn" && (request.OpenVPNNetwork != "" || request.OpenVPNFallback) {
+		t.Fatal("ordinary external reference acquired uncaptured provider transport")
 	}
 	if request.Protocol == "wireguard" {
 		if request.Password != "" || request.WireGuard == nil || request.Amnezia != nil || desktopExternalInstalledWireGuard == nil {
@@ -1865,6 +2035,10 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 	} else if request.Protocol == "amneziawg" {
 		if request.Password != "" || request.WireGuard != nil || request.Amnezia == nil || desktopExternalInstalledAmnezia == nil {
 			t.Fatal("installed external AWG reference requires its actual Linux backend and complete independent parameters")
+		}
+	} else if request.Protocol == "openvpn" {
+		if request.Password != "" || request.WireGuard != nil || request.Amnezia != nil || request.OpenVPNNetwork != "tcp" && request.OpenVPNNetwork != "udp" {
+			t.Fatal("installed provider lost its exact original transport request")
 		}
 	} else {
 		key, keyErr := base64.StdEncoding.Strict().DecodeString(request.Password)
@@ -1902,7 +2076,7 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 	go func() { dnsDone <- dnsServer.ActivateAndServe() }()
 	t.Cleanup(func() { _ = dnsServer.Shutdown(); _ = dnsListener.Close(); <-dnsDone })
 	var dnsPacket net.PacketConn
-	if request.Protocol == "hysteria2" || request.Protocol == "wireguard" || request.Protocol == "amneziawg" {
+	if request.Protocol == "hysteria2" || request.Protocol == "wireguard" || request.Protocol == "amneziawg" || request.Protocol == "openvpn" {
 		dnsPacket, err = net.ListenPacket("udp4", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
@@ -1947,6 +2121,7 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 	address := ""
 	closeTransport := func() {}
 	var wgPeer desktopExternalInstalledWGPeer
+	var openvpnProfile string
 	if request.Protocol == "wireguard" || request.Protocol == "amneziawg" {
 		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: "203.0.113.53:5353", Physical: dnsPacket.LocalAddr().String()})
 		if request.Protocol == "amneziawg" {
@@ -1961,6 +2136,8 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 			t.Fatal("installed external WireGuard backend omitted its original owned device")
 		}
 		address, closeTransport = wgPeer.address, wgPeer.close
+	} else if request.Protocol == "openvpn" {
+		address, openvpnProfile, closeTransport = startDesktopExternalInstalledOpenVPN(t, server, request, dnsPacket.LocalAddr().String(), proofListener.Addr().String())
 	} else if request.Protocol == "hysteria2" {
 		packet, err := net.ListenPacket("udp4", net.JoinHostPort(request.Address, "0"))
 		if err != nil {
@@ -2055,6 +2232,9 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 		reply := desktopExternalInstalledPeerReply{Schema: 1, Protocol: request.Protocol, Address: address, CA: ca,
 			Connections: server.rawTCP.Load(), Streams: server.plainTCP.Load(), PhysicalUDP: server.rawUDP.Load(), Packets: server.plainUDP.Load(),
 			DNSQueries: dnsQueries.Load(), PublicAttempts: publicAttempts.Load(), PublicReplies: publicReplies.Load(), AuthFailures: authFailures.Load()}
+		if request.Protocol == "openvpn" {
+			reply.OpenVPNNetwork, reply.OpenVPNProfile = request.OpenVPNNetwork, openvpnProfile
+		}
 		if wgPeer.stats != nil {
 			reply.PhysicalUDP, reply.Streams, reply.Packets = wgPeer.stats()
 		}

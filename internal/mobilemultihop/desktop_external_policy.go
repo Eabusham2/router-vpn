@@ -72,9 +72,9 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 	kinds := map[string]string{"socks5": "socks", "http-connect": "http", "https-connect": "http", "shadowsocks": "shadowsocks"}
 	kind, supported := kinds[capture.Protocol]
 	family := "outbounds"
-	// These exact single-peer transports use the captured connected-UDP broker
-	// on the retained Linux host. Packet endpoints stay in their original
-	// table; they never become outbounds or borrow a Router node identity.
+	// Linux endpoints retain their original table and complete captured lower
+	// tuples. OpenVPN keeps every ordered TCP/UDP remote; it cannot collapse
+	// fallback into one peer or borrow a Router node identity.
 	if targetOS == "linux" {
 		switch capture.Protocol {
 		case "hysteria2":
@@ -83,6 +83,8 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 			family, kind, supported = "endpoints", "wireguard", true
 		case "amneziawg":
 			family, kind, supported = "endpoints", AmneziaType, true
+		case "openvpn":
+			family, kind, supported = "endpoints", "openvpn-client", true
 		}
 	}
 	root := capture.PhysicalRoots[0]

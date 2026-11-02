@@ -1,0 +1,1253 @@
+//go:build linux
+
+package box
+
+import (
+	"bufio"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	DNSL "github.com/sagernet/sing-box/dns/transport/local"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	DIRECT "github.com/sagernet/sing-box/protocol/direct"
+	OVPN "github.com/sagernet/sing-box/protocol/openvpn"
+	DESKTOP "github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	SJ "github.com/sagernet/sing/common/json"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// The original guardian carrier supplies these disconnected veth namespaces.
+// OpenVPN uses their real numeric TCP/UDP sockets and the actual pinned server.
+// OS admission/identity and TUN creation are explicit Box fixture boundaries;
+// separate actual-guardian and installed-system-TUN gates retain those duties.
+const desktopOpenVPNCompositionPeerAddress = "198.18.0.2"
+const desktopOpenVPNCompositionClientAddress = "198.18.0.1"
+const desktopOpenVPNCompositionPeerArgument = "routervpn-openvpn-composition-peer"
+
+var desktopOpenVPNCompositionCases = []string{
+	"tcp-proof-mtu-latency50", "udp-proof-mtu-latency50", "tcp-fallback", "mixed-fallback",
+	"tcp-reconnect-rejects-old-proof", "udp-reconnect-rejects-old-proof", "reconnect-during-public-proof",
+	"cancelled-proof", "wrong-provider-trust", "wrong-control-key", "selected-dns-failure", "captured-tuple-set",
+}
+
+type desktopOpenVPNCompositionPKI struct{ ca, provider, providerKey, client, clientKey string }
+
+func desktopOpenVPNCompositionCertificates(t *testing.T) desktopOpenVPNCompositionPKI {
+	t.Helper()
+	root := newDesktopExternalIntegrationCA(t)
+	pki := desktopOpenVPNCompositionPKI{ca: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.der}))}
+	issue := func(serial int64, name string, usage x509.ExtKeyUsage) (string, string) {
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaf := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: name},
+			NotBefore: root.root.NotBefore, NotAfter: root.root.NotAfter, KeyUsage: x509.KeyUsageDigitalSignature,
+			ExtKeyUsage: []x509.ExtKeyUsage{usage}, DNSNames: []string{name}}
+		der, err := x509.CreateCertificate(rand.Reader, leaf, root.root, &key.PublicKey, root.key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		private, err := x509.MarshalPKCS8PrivateKey(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
+	}
+	pki.provider, pki.providerKey = issue(2, "provider.routervpn.test", x509.ExtKeyUsageServerAuth)
+	pki.client, pki.clientKey = issue(3, "captured-client.routervpn.test", x509.ExtKeyUsageClientAuth)
+	return pki
+}
+
+func desktopOpenVPNCompositionControlKey() string {
+	return "-----BEGIN OpenVPN Static key V1-----\n" + strings.Repeat(strings.Repeat("a", 32)+"\n", 16) + "-----END OpenVPN Static key V1-----\n"
+}
+
+type desktopOpenVPNCompositionPeerInput struct {
+	Schema            int    `json:"schema"`
+	Network           string `json:"network"`
+	Control           string `json:"control"`
+	ControlKey        string `json:"control_key"`
+	CA                string `json:"ca"`
+	Certificate       string `json:"certificate"`
+	Key               string `json:"key"`
+	PublicCertificate string `json:"public_certificate"`
+	PublicKey         string `json:"public_key"`
+	Fault             string `json:"fault"`
+}
+
+type desktopOpenVPNCompositionPeerReply struct {
+	Schema            int    `json:"schema"`
+	Network           string `json:"network"`
+	Remote            string `json:"remote"`
+	UnavailableRemote string `json:"unavailable_remote"`
+	DNS               int32  `json:"dns"`
+	PublicAttempts    int32  `json:"public_attempts"`
+	PublicRequests    int32  `json:"public_requests"`
+	TLS               int32  `json:"tls"`
+	LatencyDNS        int32  `json:"latency_dns"`
+	LatencyRequests   int32  `json:"latency_requests"`
+	LatencyTLS        int32  `json:"latency_tls"`
+}
+
+func init() {
+	if len(os.Args) == 2 && os.Args[1] == desktopOpenVPNCompositionPeerArgument {
+		if err := desktopOpenVPNCompositionPeerMain(); err != nil {
+			fmt.Fprintln(os.Stderr, "owned OpenVPN provider fixture failed:", err)
+			os.Exit(84)
+		}
+		os.Exit(0)
+	}
+}
+
+func desktopOpenVPNCompositionProviderBox(ctx context.Context, graph map[string]any) (*Box, error) {
+	ins, outs, endpoints := inbound.NewRegistry(), outbound.NewRegistry(), endpoint.NewRegistry()
+	DIRECT.RegisterOutbound(outs)
+	OVPN.RegisterEndpoint(endpoints)
+	transports := dns.NewTransportRegistry()
+	DNST.RegisterUDP(transports)
+	DNST.RegisterTCP(transports)
+	DNSL.RegisterTransport(transports)
+	OVPN.RegisterDNSTransport(transports)
+	ctx = Context(ctx, ins, outs, endpoints, transports, boxService.NewRegistry(), certificate.NewRegistry())
+	raw, err := json.Marshal(graph)
+	if err != nil {
+		return nil, err
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, raw)
+	if err != nil {
+		return nil, err
+	}
+	return New(Options{Context: ctx, Options: options})
+}
+
+// Reserve distinct port numbers in this fixture; only genuine bind collisions
+// are retried. Both TCP and UDP are checked before the native server opens one.
+func desktopOpenVPNCompositionPort(used map[int]bool) (int, error) {
+	for attempt := 0; attempt < 128; attempt++ {
+		listener, err := net.Listen("tcp4", desktopOpenVPNCompositionPeerAddress+":0")
+		if err != nil {
+			return 0, err
+		}
+		port := listener.Addr().(*net.TCPAddr).Port
+		if used[port] {
+			_ = listener.Close()
+			continue
+		}
+		packet, packetErr := net.ListenPacket("udp4", net.JoinHostPort(desktopOpenVPNCompositionPeerAddress, strconv.Itoa(port)))
+		_ = listener.Close()
+		if errors.Is(packetErr, syscall.EADDRINUSE) {
+			continue
+		}
+		if packetErr != nil {
+			return 0, packetErr
+		}
+		_ = packet.Close()
+		used[port] = true
+		return port, nil
+	}
+	return 0, errors.New("owned OpenVPN provider has no distinct available port")
+}
+
+func desktopOpenVPNCompositionServeStream(p *desktopExternalIntegrationPeer, listener net.Listener, destination string) {
+	p.workers.Add(1)
+	go func() {
+		defer p.workers.Done()
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			p.mu.Lock()
+			if p.closing {
+				p.mu.Unlock()
+				_ = connection.Close()
+				return
+			}
+			p.connections[connection] = true
+			p.workers.Add(1)
+			p.mu.Unlock()
+			go func() {
+				defer p.workers.Done()
+				defer func() { _ = connection.Close(); p.mu.Lock(); delete(p.connections, connection); p.mu.Unlock() }()
+				_ = connection.SetDeadline(time.Now().Add(15 * time.Second))
+				p.recordFailure(p.serve(connection, destination))
+			}()
+		}
+	}()
+}
+
+func desktopOpenVPNCompositionServeDNS(p *desktopExternalIntegrationPeer) {
+	p.workers.Add(1)
+	go func() {
+		defer p.workers.Done()
+		buffer := make([]byte, 4096)
+		for {
+			n, source, err := p.packet.ReadFrom(buffer)
+			if err != nil {
+				return
+			}
+			query := new(mDNS.Msg)
+			if query.Unpack(buffer[:n]) != nil || len(query.Question) != 1 {
+				p.recordFailure(errors.New("provider received malformed selected DNS"))
+				continue
+			}
+			latency := query.Question[0].Name == "speed.cloudflare.com."
+			if !latency && query.Question[0].Name != "example.com." || query.Question[0].Qtype != mDNS.TypeA && !(latency && query.Question[0].Qtype == mDNS.TypeAAAA) {
+				p.recordFailure(errors.New("provider received unowned selected DNS question"))
+				continue
+			}
+			p.dnsQueries.Add(1)
+			answer := new(mDNS.Msg).SetReply(query)
+			ip := net.IPv4(93, 184, 216, 34)
+			if p.badDNS {
+				ip = net.IPv4(192, 168, 50, 1)
+			}
+			answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: query.Question[0].Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: ip}}
+			if latency {
+				p.latency.answer(query, answer)
+			}
+			raw, err := answer.Pack()
+			if err == nil {
+				_, err = p.packet.WriteTo(raw, source)
+			}
+			p.recordFailure(err)
+		}
+	}()
+}
+
+func desktopOpenVPNCompositionPeerMain() (failure error) {
+	if os.Geteuid() != 0 || os.Getenv("ROUTERVPN_LINUX_GUARDIAN_TEST_NS") != "1" {
+		return errors.New("provider requires original private namespace")
+	}
+	iface, err := net.InterfaceByName("rvpn-peer")
+	if err != nil || iface.Flags&net.FlagUp == 0 {
+		return errors.New("provider lost actual peer interface")
+	}
+	reader := json.NewDecoder(io.LimitReader(os.Stdin, 512<<10))
+	reader.DisallowUnknownFields()
+	var request desktopOpenVPNCompositionPeerInput
+	if err := reader.Decode(&request); err != nil || request.Schema != 1 || request.Network != "tcp" && request.Network != "udp" ||
+		request.Control != "tls-auth" && request.Control != "tls-crypt" || request.Fault != "" && request.Fault != "held-proof" && request.Fault != "dns" {
+		return errors.New("provider lost complete captured request")
+	}
+	public, err := tls.X509KeyPair([]byte(request.PublicCertificate), []byte(request.PublicKey))
+	if err != nil {
+		return errors.New("provider lost captured public TLS identity")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	peer := &desktopExternalIntegrationPeer{protocol: "openvpn", certificate: public, ctx: ctx, cancel: cancel,
+		connections: make(map[net.Conn]bool), packetConnections: make(map[N.PacketConn]bool)}
+	peer.latency = &desktopExternalLatencyPeer{certificate: public}
+	peer.badDNS = request.Fault == "dns"
+	if request.Fault == "held-proof" {
+		peer.publicEntered, peer.publicRelease = make(chan struct{}), make(chan struct{})
+	}
+	var provider *Box
+	var latency net.Listener
+	defer func() {
+		cancel()
+		if provider != nil {
+			failure = errors.Join(failure, provider.Close())
+		}
+		if latency != nil {
+			_ = latency.Close()
+		}
+		peer.close()
+	}()
+	peer.listener, err = net.Listen("tcp4", desktopOpenVPNCompositionPeerAddress+":0")
+	if err != nil {
+		return err
+	}
+	latency, err = net.Listen("tcp4", desktopOpenVPNCompositionPeerAddress+":0")
+	if err != nil {
+		return err
+	}
+	peer.packet, err = net.ListenPacket("udp4", desktopOpenVPNCompositionPeerAddress+":0")
+	if err != nil {
+		return err
+	}
+	desktopOpenVPNCompositionServeStream(peer, peer.listener, "1.1.1.1:443")
+	desktopOpenVPNCompositionServeStream(peer, latency, desktopExternalLatencyAddress)
+	desktopOpenVPNCompositionServeDNS(peer)
+	used := make(map[int]bool)
+	unavailable, err := desktopOpenVPNCompositionPort(used)
+	if err != nil {
+		return err
+	}
+	var port int
+	for attempt := 0; attempt < 16; attempt++ {
+		port, err = desktopOpenVPNCompositionPort(used)
+		if err != nil {
+			return err
+		}
+		control := map[string]any{"type": strings.ReplaceAll(request.Control, "-", "_"), "key": []string{request.ControlKey}}
+		if request.Control == "tls-auth" {
+			control["direction"] = "server"
+		}
+		rule := func(network, address string, original, actual int) map[string]any {
+			return map[string]any{"network": []string{network}, "ip_cidr": []string{address + "/32"}, "port": []int{original},
+				"action": "route", "outbound": "selected-services", "override_address": desktopOpenVPNCompositionPeerAddress, "override_port": actual}
+		}
+		graph := map[string]any{"log": map[string]any{"disabled": true},
+			"endpoints": []any{map[string]any{"type": "openvpn-server", "tag": "provider", "system": false,
+				"listen": desktopOpenVPNCompositionPeerAddress, "listen_port": port, "network": request.Network,
+				"address": []string{"10.211.18.1/24"}, "data_ciphers": []string{"AES-256-GCM", "AES-128-GCM"},
+				"tls": map[string]any{"certificate": []string{request.Certificate}, "key": []string{request.Key},
+					"client_certificate": []string{request.CA}, "verify_client_certificate": "require", "remote_certificate_tls": "client", "control_wrap": control}}},
+			"outbounds": []any{map[string]any{"type": "direct", "tag": "selected-services"}},
+			"route": map[string]any{"rules": []any{
+				rule("udp", "192.168.50.53", 5353, peer.packet.LocalAddr().(*net.UDPAddr).Port),
+				rule("tcp", "1.1.1.1", 443, peer.listener.Addr().(*net.TCPAddr).Port),
+				rule("tcp", "93.184.216.34", 443, latency.Addr().(*net.TCPAddr).Port), map[string]any{"action": "reject"}}}}
+		provider, err = desktopOpenVPNCompositionProviderBox(ctx, graph)
+		if err != nil {
+			return err
+		}
+		if err = provider.Start(); err == nil {
+			break
+		}
+		closeErr := provider.Close()
+		provider = nil
+		if closeErr != nil || !errors.Is(err, syscall.EADDRINUSE) {
+			return errors.Join(err, closeErr)
+		}
+	}
+	if provider == nil {
+		return errors.New("actual OpenVPN provider could not bind")
+	}
+	reply := func() desktopOpenVPNCompositionPeerReply {
+		return desktopOpenVPNCompositionPeerReply{Schema: 1, Network: request.Network,
+			Remote: net.JoinHostPort(desktopOpenVPNCompositionPeerAddress, strconv.Itoa(port)), UnavailableRemote: net.JoinHostPort(desktopOpenVPNCompositionPeerAddress, strconv.Itoa(unavailable)),
+			DNS: peer.dnsQueries.Load(), PublicAttempts: peer.publicAttempts.Load(), PublicRequests: peer.publicRequests.Load(), TLS: peer.tlsHandshakes.Load(),
+			LatencyDNS: peer.latency.queries.Load(), LatencyRequests: peer.latency.requests.Load(), LatencyTLS: peer.latency.handshakes.Load()}
+	}
+	writer := json.NewEncoder(os.Stdout)
+	if err := writer.Encode(reply()); err != nil {
+		return err
+	}
+	var release sync.Once
+	for {
+		var command struct {
+			Action string `json:"action"`
+		}
+		if err := reader.Decode(&command); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+		switch command.Action {
+		case "stats":
+		case "release":
+			if peer.publicRelease == nil {
+				return errors.New("provider has no captured held proof")
+			}
+			release.Do(func() { close(peer.publicRelease) })
+		case "close":
+			return nil
+		default:
+			return errors.New("provider refused unowned fixture operation")
+		}
+		if err := writer.Encode(reply()); err != nil {
+			return err
+		}
+	}
+}
+
+type desktopOpenVPNCompositionProcess struct {
+	command *exec.Cmd
+	input   io.WriteCloser
+	output  *os.File
+	reader  *bufio.Reader
+	done    chan struct{}
+	waitErr error
+	cancel  context.CancelFunc
+	initial desktopOpenVPNCompositionPeerReply
+}
+
+func (p *desktopOpenVPNCompositionProcess) read(t *testing.T) desktopOpenVPNCompositionPeerReply {
+	t.Helper()
+	if err := p.output.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	defer p.output.SetReadDeadline(time.Time{})
+	raw, err := p.reader.ReadSlice('\n')
+	var reply desktopOpenVPNCompositionPeerReply
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.DisallowUnknownFields()
+	var trailing any
+	if err != nil || len(raw) > 16<<10 || decoder.Decode(&reply) != nil || decoder.Decode(&trailing) != io.EOF || reply.Schema != 1 || reply.Network != "tcp" && reply.Network != "udp" {
+		t.Fatal("owned OpenVPN provider lost bounded reply", err)
+	}
+	remote, e1 := netip.ParseAddrPort(reply.Remote)
+	unavailable, e2 := netip.ParseAddrPort(reply.UnavailableRemote)
+	if e1 != nil || e2 != nil || remote.Addr().String() != desktopOpenVPNCompositionPeerAddress || unavailable.Addr() != remote.Addr() || remote.Port() == 0 || unavailable.Port() == 0 || unavailable == remote ||
+		p.initial.Schema != 0 && (reply.Network != p.initial.Network || reply.Remote != p.initial.Remote || reply.UnavailableRemote != p.initial.UnavailableRemote) {
+		t.Fatal("owned OpenVPN provider changed captured transport")
+	}
+	return reply
+}
+
+func (p *desktopOpenVPNCompositionProcess) observe(t *testing.T, action string) desktopOpenVPNCompositionPeerReply {
+	t.Helper()
+	if action != "stats" && action != "release" {
+		t.Fatal("unowned provider observation")
+	}
+	if err := json.NewEncoder(p.input).Encode(map[string]string{"action": action}); err != nil {
+		t.Fatal(err)
+	}
+	return p.read(t)
+}
+
+func desktopOpenVPNCompositionStartPeer(t *testing.T, request desktopOpenVPNCompositionPeerInput) *desktopOpenVPNCompositionProcess {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Second)
+	p := &desktopOpenVPNCompositionProcess{cancel: cancel, done: make(chan struct{})}
+	p.command = exec.CommandContext(ctx, "ip", "netns", "exec", "rvpn-peer", "/opt/routervpn-guardian-proof/guardian.test", desktopOpenVPNCompositionPeerArgument)
+	p.command.Env = append(os.Environ(), "GORACE=atexit_sleep_ms=0")
+	p.command.Stderr = os.Stderr
+	var err error
+	p.input, err = p.command.StdinPipe()
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	var writer *os.File
+	p.output, writer, err = os.Pipe()
+	if err != nil {
+		cancel()
+		_ = p.input.Close()
+		t.Fatal(err)
+	}
+	p.reader = bufio.NewReaderSize(p.output, (16<<10)+1)
+	p.command.Stdout = writer
+	if err := p.command.Start(); err != nil {
+		cancel()
+		_ = writer.Close()
+		_ = p.input.Close()
+		_ = p.output.Close()
+		t.Fatal(err)
+	}
+	_ = writer.Close()
+	go func() { p.waitErr = p.command.Wait(); close(p.done) }()
+	t.Cleanup(func() {
+		_ = p.input.Close()
+		select {
+		case <-p.done:
+			if p.waitErr != nil {
+				t.Error("actual OpenVPN provider failed", p.waitErr)
+			}
+		case <-time.After(8 * time.Second):
+			cancel()
+			<-p.done
+			t.Error("actual OpenVPN provider failed joined shutdown")
+		}
+		cancel()
+		_ = p.output.Close()
+	})
+	if err := json.NewEncoder(p.input).Encode(request); err != nil {
+		t.Fatal(err)
+	}
+	p.initial = p.read(t)
+	if p.initial.Network != request.Network || p.initial.DNS != 0 || p.initial.PublicRequests != 0 || p.initial.TLS != 0 || p.initial.LatencyRequests != 0 {
+		t.Fatal("provider reported traffic before captured native connection")
+	}
+	return p
+}
+
+type desktopOpenVPNCompositionFixture struct {
+	*desktopExternalIntegrationFixture
+	endpoint                    *OVPN.ClientEndpoint
+	process                     *desktopOpenVPNCompositionProcess
+	remotes                     []nativeopenvpn.Remote
+	originalEndpoint            map[string]any
+	sourceDigest, captureDigest string
+	closeOnce                   sync.Once
+	closeError                  error
+	cancel                      context.CancelFunc
+}
+
+func desktopOpenVPNCompositionHash(value string) string {
+	digest := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(digest[:])
+}
+
+func desktopOpenVPNCompositionProfile(pki desktopOpenVPNCompositionPKI, remotes []nativeopenvpn.Remote, control, fault string) nativeopenvpn.Profile {
+	// Preserve this exact original import, including its comments/newline form.
+	// A provider comparison URL is deliberately absent: transport generation
+	// must bind an ordinary imported connection independently of Compare.
+	config := "\n# Complete original provider import\r\nclient\n"
+	for _, remote := range remotes {
+		config += fmt.Sprintf("remote %s %d %s\n", remote.Host, remote.Port, remote.Network)
+	}
+	ca := pki.ca
+	key := desktopOpenVPNCompositionControlKey()
+	if fault == "wrong-control-key" {
+		key = strings.ReplaceAll(key, strings.Repeat("a", 32), strings.Repeat("b", 32))
+	}
+	config += "verify-x509-name provider.routervpn.test name\nremote-cert-tls server\ndata-ciphers AES-256-GCM:AES-128-GCM\ntun-mtu 1400\nhand-window 3\ntls-timeout 1\n<ca>\n" + ca + "</ca>\n<cert>\n" + pki.client + "</cert>\n<key>\n" + pki.clientKey + "</key>\n<" + control + ">\n" + key + "</" + control + ">\n"
+	if control == "tls-auth" {
+		config += "key-direction 1\n"
+	}
+	return nativeopenvpn.Profile{Config: config}
+}
+
+func desktopOpenVPNCompositionNew(t *testing.T, process *desktopOpenVPNCompositionProcess, profile nativeopenvpn.Profile, remotes []nativeopenvpn.Remote, session string) *desktopOpenVPNCompositionFixture {
+	t.Helper()
+	iface, err := net.InterfaceByName("rvpn-test")
+	if err != nil || iface.Flags&net.FlagUp == 0 {
+		t.Fatal("actual client veth is unavailable", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	f := &desktopOpenVPNCompositionFixture{desktopExternalIntegrationFixture: &desktopExternalIntegrationFixture{}, process: process, remotes: append([]nativeopenvpn.Remote(nil), remotes...), cancel: cancel}
+	f.source = &desktopExternalIntegrationSource{owner: mobiletor.DesktopSocketKernelOwner{Kind: "unix-isolated-uid", IdentitySHA256: strings.Repeat("c", 64), Generation: 1, ProcessID: uint32(os.Getpid())}}
+	f.source.live.Store(true)
+	f.kernel = &desktopExternalIntegrationKernel{source: f.source, local: netip.MustParseAddr(desktopOpenVPNCompositionClientAddress), name: iface.Name, index: uint32(iface.Index), grants: make(map[string]mobiletor.DesktopSocketGrant)}
+	f.source.kernel = f.kernel
+	for _, remote := range remotes {
+		f.kernel.tuples = append(f.kernel.tuples, desktopExternalIntegrationTuple{network: remote.Network, remote: netip.AddrPortFrom(netip.MustParseAddr(remote.Host), uint16(remote.Port))})
+	}
+	native, err := nativeopenvpn.CompileProfile(profile, mobilemultihop.ExternalFinalTag, "")
+	if err != nil {
+		cancel()
+		t.Fatal("complete inline provider import", err)
+	}
+	selection := map[string]any{"id": "selected-external-native", "node_kind": "external", "external": map[string]any{"protocol": "openvpn", "expected_public_ip": desktopExternalIntegrationIP, "openvpn": profile},
+		"dns_mode": "custom", "dns_protocol": "udp", "dns_host": "192.168.50.53", "dns_port": 5353, "mtu_policy": "auto", "home_lan_access": false, "ipv6_mode": "off", "kill_switch_policy": "always"}
+	capture := map[string]any{"schema": 1, "exit_id": selection["id"], "protocol": "openvpn", "expected_public_ip": desktopExternalIntegrationIP, "profile": selection}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": "router-vpn", "address": []string{"172.29.93.1/30", "fd29:93::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}},
+		"endpoints": []any{native}, "outbounds": []any{}, "route": map[string]any{"final": mobilemultihop.ExternalFinalTag, "auto_detect_interface": true}}
+	raw, _ := json.Marshal(graph)
+	captured, _ := json.Marshal(capture)
+	f.originalSource, f.originalCapture = string(raw), string(captured)
+	f.sourceDigest, f.captureDigest = desktopOpenVPNCompositionHash(f.originalSource), desktopOpenVPNCompositionHash(f.originalCapture)
+	original, err := mobilemultihop.NewExternalPolicy(f.originalSource, f.originalCapture)
+	if err != nil {
+		cancel()
+		t.Fatal("real provider source policy", err)
+	}
+	f.policy, err = mobilemultihop.NewDesktopExternalPolicy(original, session, "linux")
+	if err != nil {
+		cancel()
+		t.Fatal("retained provider lower policy", err)
+	}
+	f.assertCapture(t)
+	ins := inbound.NewRegistry()
+	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options option.TunInboundOptions) (adapter.Inbound, error) {
+		f.tun = &desktopTorBoxTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag), name: options.InterfaceName, index: 741, mtu: int(options.MTU)}
+		return f.tun, nil
+	})
+	outs := outbound.NewRegistry()
+	DESKTOP.RegisterExternalPhysicalOutbound(outs)
+	endpoints := endpoint.NewRegistry()
+	OVPN.RegisterEndpoint(endpoints)
+	transports := dns.NewTransportRegistry()
+	DNST.RegisterUDP(transports)
+	DNST.RegisterTCP(transports)
+	OVPN.RegisterDNSTransport(transports)
+	services := boxService.NewRegistry()
+	DESKTOP.RegisterExternalNetworkOwner(services)
+	ctx = Context(ctx, ins, outs, endpoints, transports, services, certificate.NewRegistry())
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(f.policy.Config()))
+	if err != nil {
+		cancel()
+		t.Fatal("actual OpenVPN Box parser", err)
+	}
+	options.Log = &option.LogOptions{Disabled: true}
+	f.box, err = New(Options{Context: ctx, Options: options})
+	if err != nil {
+		cancel()
+		t.Fatal("actual OpenVPN Box construction", err)
+	}
+	t.Cleanup(func() {
+		if err := f.close(); err != nil {
+			t.Error("captured provider Box did not join", err)
+		}
+	})
+	service, ok := f.box.service.Get(mobilemultihop.DesktopExternalNetworkTag)
+	if !ok {
+		t.Fatal("actual provider physical owner missing")
+	}
+	f.network, ok = service.(*DESKTOP.ExternalNetworkOwner)
+	if !ok {
+		t.Fatal("actual provider physical owner type changed")
+	}
+	if err = f.network.PrepareExternalPhysicalBroker(f.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		f.tun.mu.Lock()
+		started := f.tun.ready || f.tun.claimed
+		f.tun.mu.Unlock()
+		if started {
+			t.Error("physical preparation ran after provider TUN startup")
+		}
+		f.source.capture = capture
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, f.kernel, current)
+		return broker, f.source, err
+	}); err != nil {
+		t.Fatal("actual provider physical preparation", err)
+	}
+	if err = f.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal("actual provider native startup", err)
+	}
+	value, ok := f.box.endpoint.Get(mobilemultihop.ExternalFinalTag)
+	if !ok {
+		t.Fatal("actual captured provider endpoint missing")
+	}
+	f.endpoint, ok = value.(*OVPN.ClientEndpoint)
+	if !ok {
+		t.Fatal("captured provider endpoint was substituted")
+	}
+	f.proof, err = f.box.RouterVPNDesktopExternalCreateProof(f.policy)
+	if err != nil || f.proof == nil {
+		t.Fatal("actual provider shared proof construction", err)
+	}
+	if f.proof.Healthy() {
+		t.Fatal("provider preparation fabricated proof")
+	}
+	return f
+}
+
+func (f *desktopOpenVPNCompositionFixture) close() error {
+	f.closeOnce.Do(func() {
+		if f.proof != nil {
+			f.closeError = errors.Join(f.closeError, f.proof.Close())
+		}
+		if f.box != nil {
+			f.closeError = errors.Join(f.closeError, f.box.Close())
+		}
+		f.cancel()
+		if f.network != nil && (f.network.Current() || f.network.SocketCurrent()) || !f.source.closed.Load() {
+			f.closeError = errors.Join(f.closeError, errors.New("closed provider retained lower/proof authority"))
+		}
+		f.kernel.mu.Lock()
+		remaining := len(f.kernel.grants)
+		f.kernel.mu.Unlock()
+		if remaining != 0 {
+			f.closeError = errors.Join(f.closeError, errors.New("closed provider retained actual socket grants"))
+		}
+	})
+	return f.closeError
+}
+
+func (f *desktopOpenVPNCompositionFixture) assertCapture(t *testing.T) {
+	t.Helper()
+	capture, err := f.policy.Capture()
+	if err != nil || capture.Protocol != "openvpn" || capture.EntryID != "" || capture.Execution != "" || capture.StartLayer != "" ||
+		len(capture.PhysicalRoots) != 1 || capture.PhysicalRoots[0].Family != "endpoints" || capture.PhysicalRoots[0].Type != "openvpn-client" ||
+		capture.SelectedDNS.Type != "udp" || capture.SelectedDNS.Host != "192.168.50.53" || capture.SelectedDNS.Port != 5353 || capture.SelectedDNS.Physical ||
+		capture.SelectedDNS.Detour != mobilemultihop.ExternalFinalTag || capture.KillSwitchPolicy != "always" {
+		t.Fatal("provider lost endpoint, selected DNS, or direct protection authority", err)
+	}
+	wanted := make(map[desktopExternalIntegrationTuple]bool)
+	for _, remote := range f.remotes {
+		wanted[desktopExternalIntegrationTuple{network: remote.Network, remote: netip.AddrPortFrom(netip.MustParseAddr(remote.Host), uint16(remote.Port))}] = true
+	}
+	if len(capture.PhysicalRoots[0].Destinations) != len(wanted) {
+		t.Fatal("provider changed captured tuple count")
+	}
+	for _, remote := range capture.PhysicalRoots[0].Destinations {
+		if !wanted[desktopExternalIntegrationTuple{network: remote.Network, remote: netip.AddrPortFrom(netip.MustParseAddr(remote.Host), uint16(remote.Port))}] {
+			t.Fatal("provider broadened captured tuple set")
+		}
+	}
+	for _, raw := range []string{f.policy.OriginalPolicy().Config(), f.policy.Config()} {
+		var graph map[string]any
+		if json.Unmarshal([]byte(raw), &graph) != nil {
+			t.Fatal("provider policy JSON invalid")
+		}
+		rows, ok := graph["endpoints"].([]any)
+		if !ok || len(rows) != 1 {
+			t.Fatal("provider endpoint count changed")
+		}
+		native, ok := rows[0].(map[string]any)
+		if !ok {
+			t.Fatal("provider endpoint was replaced")
+		}
+		actual, err := nativeopenvpn.Remotes(native)
+		if err != nil || !reflect.DeepEqual(actual, f.remotes) {
+			t.Fatal("provider import lost ordered transport fallback", err)
+		}
+		if raw == f.policy.OriginalPolicy().Config() {
+			f.originalEndpoint = native
+		}
+	}
+	if desktopOpenVPNCompositionHash(f.originalSource) != f.sourceDigest || desktopOpenVPNCompositionHash(f.originalCapture) != f.captureDigest {
+		t.Fatal("provider original source or private import changed")
+	}
+}
+
+func (f *desktopOpenVPNCompositionFixture) grants(t *testing.T, requireCurrent bool) {
+	t.Helper()
+	f.kernel.mu.Lock()
+	defer f.kernel.mu.Unlock()
+	if len(f.kernel.issued) == 0 {
+		t.Fatal("real provider never requested a physical socket")
+	}
+	for _, issued := range f.kernel.issued {
+		q := issued.grant
+		if q.Capture != f.source.capture || q.Binding.Owner != f.source.owner || q.Binding.LocalAddress != f.kernel.local ||
+			q.Binding.InterfaceName != "rvpn-test" || q.Binding.InterfaceIndex != f.kernel.index || !f.kernel.permits(q.Network, q.Remote) ||
+			q.Local.Addr() != f.kernel.local || q.Local.Port() == 0 {
+			t.Fatal("provider issued a grant outside its exact captured tuple set")
+		}
+	}
+	if requireCurrent {
+		if len(f.kernel.grants) != 1 {
+			t.Fatal("connected provider lost its one actual transport grant", len(f.kernel.grants))
+		}
+		last := f.remotes[len(f.remotes)-1]
+		for _, q := range f.kernel.grants {
+			if q.Network != last.Network || q.Remote.String() != net.JoinHostPort(last.Host, strconv.Itoa(last.Port)) {
+				t.Fatal("provider retained an unavailable or cross-network grant")
+			}
+		}
+	}
+}
+
+func (f *desktopOpenVPNCompositionFixture) receipt(t *testing.T) nativeopenvpn.RemoteReceipt {
+	t.Helper()
+	receipt, err := f.endpoint.RouterVPNConnectedRemote()
+	if err != nil || receipt.Validate() != nil || !receipt.Matches(f.originalEndpoint) || receipt.Remote != f.remotes[len(f.remotes)-1] {
+		t.Fatal("actual connected provider remote did not match complete captured import", err)
+	}
+	return receipt
+}
+
+func (f *desktopOpenVPNCompositionFixture) prove(t *testing.T) nativeopenvpn.RemoteReceipt {
+	t.Helper()
+	raw, err := f.proof.Run()
+	var result mobilemultihop.ExternalProofResult
+	if err != nil || json.Unmarshal([]byte(raw), &result) != nil {
+		t.Fatal("real provider selected-DNS/public proof failed", err)
+	}
+	meta := f.policy.Metadata()
+	if result.Schema != 1 || result.SessionID != meta.SessionID || result.SourceSHA256 != meta.OriginalSourceSHA256 || result.ConfigSHA256 != meta.OriginalConfigSHA256 ||
+		result.ExitID != "selected-external-native" || result.IP != desktopExternalIntegrationIP || !result.DNSProven || result.EntryProven || result.CheckedAt <= 0 || !f.proof.Healthy() || !f.network.Current() {
+		t.Fatal("real provider proof changed source authority")
+	}
+	stats := f.process.observe(t, "stats")
+	if stats.DNS == 0 || stats.PublicRequests == 0 || stats.PublicAttempts != stats.PublicRequests || stats.TLS != stats.PublicRequests {
+		t.Fatal("provider proof skipped actual selected UDP DNS or HTTPS bytes", stats)
+	}
+	f.assertCapture(t)
+	f.grants(t, true)
+	if err = f.proof.VerifyCurrentPath(); err != nil {
+		t.Fatal("provider failed exact current transport proof", err)
+	}
+	return f.receipt(t)
+}
+
+func (f *desktopOpenVPNCompositionFixture) mtu(t *testing.T, connected nativeopenvpn.RemoteReceipt) {
+	t.Helper()
+	lease, err := f.box.RouterVPNExternalClaimMTU(f.proof, f.originalSource, f.originalCapture)
+	if err != nil {
+		t.Fatal("proved provider did not grant MTU owner", err)
+	}
+	defer lease.Close()
+	original, err := lease.Inbound()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var candidate, rollback *desktopTorMTUCandidate
+	current, err := lease.changeMTU(context.Background(), original, 1400, f.replacement(nil, &candidate, &rollback))
+	if err != nil || current != candidate || current == original {
+		t.Fatal("provider native MTU candidate was not published", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	returned, err := lease.changeMTU(ctx, current, 1500, f.replacement(func(stage adapter.StartStage) error {
+		if stage == adapter.StartStateStarted {
+			cancel()
+		}
+		return nil
+	}, &candidate, &rollback))
+	if err == nil || returned != rollback || returned == current || returned == candidate {
+		t.Fatal("provider cancelled MTU lost exact rollback", err)
+	}
+	actual, ok := f.box.inbound.Get("tun-in")
+	name, index, mtu, err := lease.ClaimDesktopTUN(func() bool { return true })
+	if !ok || actual != rollback || err != nil || name != "router-vpn" || index != 744 || mtu != 1400 || !lease.Healthy() || !f.proof.Healthy() || !f.network.Current() {
+		t.Fatal("provider rollback lost actual native reader", err)
+	}
+	f.source.mu.Lock()
+	binds, retires, boundIndex := f.source.binds, f.source.retires, f.source.index
+	f.source.mu.Unlock()
+	if binds != 3 || retires != 2 || boundIndex != 744 {
+		t.Fatal("provider MTU skipped physical retire/rebind", binds, retires, boundIndex)
+	}
+	if err = f.proof.engine.DNSProof(context.Background(), "tun-in"); err != nil {
+		t.Fatal("provider rollback lost selected DNS", err)
+	}
+	if err = mobilemultihop.ProveExternalPublicIP(context.Background(), f.proof.engine.Dial, mobilemultihop.ExternalFinalTag, desktopExternalIntegrationIP); err != nil {
+		t.Fatal("provider rollback lost real public HTTPS proof", err)
+	}
+	if f.receipt(t) != connected || f.process.observe(t, "stats").PublicRequests != 2 {
+		t.Fatal("provider rollback changed native transport or reused an old proof")
+	}
+	called := false
+	if _, err = lease.changeMTU(context.Background(), original, 1450, func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) { called = true; return nil, nil }); err == nil || called {
+		t.Fatal("retired provider reader mutated replacement")
+	}
+}
+
+func (f *desktopOpenVPNCompositionFixture) latency(t *testing.T, connected nativeopenvpn.RemoteReceipt) {
+	t.Helper()
+	service, err := f.box.RouterVPNExternalHopMeasurement(f.proof, f.originalSource, f.originalCapture, f.policy.Metadata().SessionID, f.proof.Healthy)
+	if err != nil {
+		t.Fatal("provider lost exact measurement owner", err)
+	}
+	defer service.Close()
+	dns, err := f.box.RouterVPNExternalDNSMeasurement(f.proof, f.originalSource, f.originalCapture, f.policy.Metadata().SessionID, f.proof.Healthy)
+	if err != nil {
+		t.Fatal("provider lost exact DNS measurement owner", err)
+	}
+	defer dns.Close()
+	if err = service.StartLatency(strings.Repeat("b", 32), "selected-external-native"); err != nil {
+		t.Fatal(err)
+	}
+	status := desktopExternalLatencyStatus(t, service)
+	if status.Stage != "complete" || len(status.Results) != 1 || !status.Results[0].Ready || status.Results[0].Benchmark == nil {
+		t.Fatal("real provider 50-sample benchmark has no score", status)
+	}
+	b := status.Results[0].Benchmark
+	stats := f.process.observe(t, "stats")
+	if b.Attempts != 50 || b.Failed != 0 || b.Distribution == nil || b.Distribution.Samples != 50 || b.TrimmedMean <= 0 || b.Measurement != "routed-https-response-after-tls" || b.Endpoint != "https://speed.cloudflare.com/__down?bytes=1" ||
+		stats.LatencyRequests != 50 || stats.LatencyTLS != 50 || stats.LatencyDNS < 1 || f.receipt(t) != connected {
+		t.Fatal("provider samples lost selected DNS, actual HTTPS bytes or transport generation", b, stats)
+	}
+	if err = service.StartLatency(strings.Repeat("b", 32), "selected-external-native"); err == nil {
+		t.Fatal("provider measurement accepted replayed request")
+	}
+	f.grants(t, true)
+}
+
+func (f *desktopOpenVPNCompositionFixture) awaitRemote(t *testing.T, previous uint64) nativeopenvpn.RemoteReceipt {
+	t.Helper()
+	deadline := time.NewTimer(12 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		changed := f.endpoint.StatusUpdated()
+		receipt, err := f.endpoint.RouterVPNConnectedRemote()
+		if err == nil {
+			if !receipt.Matches(f.originalEndpoint) || receipt.Remote != f.remotes[len(f.remotes)-1] || receipt.Generation < previous {
+				t.Fatal("provider reconnect escaped captured remote authority")
+			}
+			if receipt.Generation > previous {
+				return receipt
+			}
+		} else if !errors.Is(err, nativeopenvpn.ErrRemotePending) {
+			t.Fatal("actual provider transport status failed", err)
+		}
+		select {
+		case <-changed:
+		case <-tick.C:
+		case <-deadline.C:
+			t.Fatal("actual provider transport did not reach a fresh connected generation")
+		}
+	}
+}
+
+func (f *desktopOpenVPNCompositionFixture) reconnect(t *testing.T, profile nativeopenvpn.Profile) {
+	t.Helper()
+	before := f.prove(t)
+	lease, err := f.box.RouterVPNExternalClaimMTU(f.proof, f.originalSource, f.originalCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+	reader, err := lease.Inbound()
+	if err != nil {
+		t.Fatal(err)
+	}
+	measurement, err := f.box.RouterVPNExternalHopMeasurement(f.proof, f.originalSource, f.originalCapture, f.policy.Metadata().SessionID, f.proof.Healthy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer measurement.Close()
+	f.endpoint.InterfaceUpdated(context.Background())
+	after := f.awaitRemote(t, before.Generation)
+	if after.Generation == before.Generation || f.proof.Healthy() || lease.Healthy() {
+		t.Fatal("actual provider reconnect retained old successful proof/MTU authority")
+	}
+	if err = measurement.StartLatency(strings.Repeat("b", 32), "selected-external-native"); err == nil {
+		t.Fatal("stale provider generation started a new measurement")
+	}
+	called := false
+	if _, err = lease.changeMTU(context.Background(), reader, 1400, func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) { called = true; return nil, nil }); err == nil || called {
+		t.Fatal("stale provider generation reached a native MTU replacement")
+	}
+	if err = f.proof.VerifyCurrentPath(); err == nil || f.network.Current() {
+		t.Fatal("actual provider generation change was not retired")
+	}
+	if err = f.close(); err != nil {
+		t.Fatal("retired provider Box did not join before successor", err)
+	}
+	successor := desktopOpenVPNCompositionNew(t, f.process, profile, f.remotes, strings.Repeat("e", 32))
+	if successor.originalSource != f.originalSource || successor.originalCapture != f.originalCapture || successor.policy.Metadata().SessionID == f.policy.Metadata().SessionID {
+		t.Fatal("provider restore changed original import or reused retired session")
+	}
+	successor.prove(t)
+	if f.proof.Healthy() || f.network.Current() || lease.Healthy() {
+		t.Fatal("provider successor resurrected original owners")
+	}
+}
+
+type desktopOpenVPNCompositionProofResult struct {
+	raw string
+	err error
+}
+
+func (f *desktopOpenVPNCompositionFixture) runAsync(t *testing.T) <-chan desktopOpenVPNCompositionProofResult {
+	t.Helper()
+	done := make(chan desktopOpenVPNCompositionProofResult, 1)
+	joined := make(chan struct{})
+	go func() {
+		defer close(joined)
+		raw, err := f.proof.Run()
+		done <- desktopOpenVPNCompositionProofResult{raw, err}
+	}()
+	t.Cleanup(func() {
+		f.proof.Cancel()
+		select {
+		case <-joined:
+		case <-time.After(8 * time.Second):
+			t.Error("owned provider proof did not join cancellation")
+		}
+	})
+	return done
+}
+
+func (f *desktopOpenVPNCompositionFixture) rejected(t *testing.T, done <-chan desktopOpenVPNCompositionProofResult) {
+	t.Helper()
+	select {
+	case result := <-done:
+		if result.err == nil || result.raw != "" || f.proof.Healthy() || f.network.Current() {
+			t.Fatal("invalid provider path reported a connected proof", result.err)
+		}
+	case <-time.After(8 * time.Second):
+		f.proof.Cancel()
+		t.Fatal("failed provider proof did not join its exact cancellation")
+	}
+	if lease, err := f.box.RouterVPNExternalClaimMTU(f.proof, f.originalSource, f.originalCapture); err == nil || lease != nil {
+		if lease != nil {
+			lease.Close()
+		}
+		t.Fatal("failed provider proof acquired MTU ownership")
+	}
+	if service, err := f.box.RouterVPNExternalHopMeasurement(f.proof, f.originalSource, f.originalCapture, f.policy.Metadata().SessionID, f.proof.Healthy); err == nil || service != nil {
+		if service != nil {
+			_ = service.Close()
+		}
+		t.Fatal("failed provider proof acquired measurement ownership")
+	}
+}
+
+func (f *desktopOpenVPNCompositionFixture) heldProof(t *testing.T, reconnect bool) {
+	t.Helper()
+	done := f.runAsync(t)
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		stats := f.process.observe(t, "stats")
+		if stats.PublicRequests == 1 {
+			if stats.DNS == 0 || stats.PublicAttempts != 1 || stats.TLS != 1 {
+				t.Fatal("held provider proof did not reach real DNS and authenticated public request", stats)
+			}
+			break
+		}
+		select {
+		case result := <-done:
+			t.Fatal("provider proof ended before actual held request", result.err)
+		case <-tick.C:
+		case <-deadline.C:
+			t.Fatal("provider proof did not reach held public response")
+		}
+	}
+	if reconnect {
+		before := f.receipt(t)
+		f.endpoint.InterfaceUpdated(context.Background())
+		// RestartSession schedules native retirement. Keep the public response
+		// held until the actual endpoint reports Pending or another generation;
+		// a synchronous method return alone cannot establish that boundary.
+		retirement := time.NewTimer(10 * time.Second)
+		defer retirement.Stop()
+		for {
+			changed := f.endpoint.StatusUpdated()
+			current, err := f.endpoint.RouterVPNConnectedRemote()
+			if errors.Is(err, nativeopenvpn.ErrRemotePending) {
+				break
+			}
+			if err != nil || !current.Matches(f.originalEndpoint) {
+				t.Fatal("native restart lost captured provider status", err)
+			}
+			if current != before {
+				if current.Generation <= before.Generation {
+					t.Fatal("native restart substituted a stale generation")
+				}
+				break
+			}
+			select {
+			case <-changed:
+			case <-tick.C:
+			case <-retirement.C:
+				t.Fatal("native restart retained its old connected transport")
+			}
+		}
+	} else {
+		f.proof.Cancel()
+	}
+	f.process.observe(t, "release")
+	f.rejected(t, done)
+	stats := f.process.observe(t, "stats")
+	if stats.PublicRequests != 1 || stats.TLS != 1 {
+		t.Fatal("held request was silently replaced or retried", stats)
+	}
+}
+
+func (f *desktopOpenVPNCompositionFixture) authenticationFailure(t *testing.T, retryableControl bool) {
+	t.Helper()
+	done := f.runAsync(t)
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		changed := f.endpoint.StatusUpdated()
+		// Native status contains no private source contents. Observe the error
+		// category only; never print TLS/control-key error details.
+		status := f.endpoint.OpenVPNStatus()
+		if receipt, err := f.endpoint.RouterVPNConnectedRemote(); !errors.Is(err, nativeopenvpn.ErrRemotePending) || receipt != (nativeopenvpn.RemoteReceipt{}) {
+			t.Fatal("wrong provider authentication reached connected data channel")
+		}
+		if retryableControl {
+			// The pinned native client classifies a control-key handshake timeout
+			// as retryable. Require the actual first socket to retire and a distinct
+			// later socket to be admitted for that same captured UDP tuple. Waiting
+			// for a terminal status would invent an engine behavior it does not have.
+			f.kernel.mu.Lock()
+			retried := false
+			if len(f.kernel.grants) == 1 {
+				for currentID, current := range f.kernel.grants {
+					currentIssued := f.kernel.issued[currentID]
+					for priorID, prior := range f.kernel.issued {
+						_, priorCurrent := f.kernel.grants[priorID]
+						if priorID != currentID && !priorCurrent && currentIssued != nil && prior.at.Before(currentIssued.at) &&
+							prior.grant.Network == "udp" && current.Network == prior.grant.Network && current.Remote == prior.grant.Remote {
+							retried = true
+						}
+					}
+				}
+			}
+			f.kernel.mu.Unlock()
+			if retried {
+				if status.State != adapter.OpenVPNStateConnecting || status.Error != "" {
+					t.Fatal("retryable control handshake changed native status category")
+				}
+				break
+			}
+		} else if status.State == adapter.OpenVPNStateError && status.Error != "" {
+			break
+		}
+		select {
+		case result := <-done:
+			if result.err == nil || result.raw != "" {
+				t.Fatal("wrong provider authentication returned a proof")
+			}
+			t.Fatal("proof stopped before native authentication failure observation")
+		case <-changed:
+		case <-tick.C:
+		case <-deadline.C:
+			t.Fatal("wrong provider trust/control did not produce actual native rejection")
+		}
+	}
+	f.grants(t, false)
+	f.proof.Cancel()
+	f.rejected(t, done)
+	stats := f.process.observe(t, "stats")
+	if stats.DNS != 0 || stats.PublicAttempts != 0 || stats.PublicRequests != 0 || stats.TLS != 0 {
+		t.Fatal("wrong provider authentication delivered inner DNS or public proof bytes", stats)
+	}
+}
+
+func (f *desktopOpenVPNCompositionFixture) tuples(t *testing.T) {
+	t.Helper()
+	if len(f.remotes) != 2 || f.remotes[0].Network != "tcp" || f.remotes[1].Network != "udp" || f.remotes[0].Port == f.remotes[1].Port {
+		t.Fatal("tuple negative lost mixed ordered transports")
+	}
+	for _, remote := range f.remotes {
+		actual := netip.AddrPortFrom(netip.MustParseAddr(remote.Host), uint16(remote.Port))
+		if _, err := f.kernel.Select(context.Background(), f.source.capture, remote.Network, actual); err != nil {
+			t.Fatal("exact captured tuple was refused", err)
+		}
+		other := "tcp"
+		if remote.Network == "tcp" {
+			other = "udp"
+		}
+		if _, err := f.kernel.Select(context.Background(), f.source.capture, other, actual); err == nil {
+			t.Fatal("mixed provider multiplied network/port permissions")
+		}
+	}
+	for _, remote := range []string{"192.168.50.53:5353", "198.18.0.1:443", "198.18.0.2:443"} {
+		if _, err := f.kernel.Select(context.Background(), f.source.capture, "udp", netip.MustParseAddrPort(remote)); err == nil {
+			t.Fatal("provider granted uncaptured or selected-inner DNS physical access")
+		}
+	}
+	if !f.proof.Healthy() {
+		t.Fatal("negative tuple checks mutated valid provider proof")
+	}
+}
+
+func TestDesktopLinuxGuardianKernelExternalOpenVPN(t *testing.T) {
+	if os.Geteuid() != 0 || os.Getenv("ROUTERVPN_LINUX_GUARDIAN_TEST_NS") != "1" {
+		t.Fatal("mandatory OpenVPN composition requires the original owned namespace carrier")
+	}
+	iface, err := net.InterfaceByName("rvpn-test")
+	if err != nil || iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+		t.Fatal("actual OpenVPN client veth missing", err)
+	}
+	addresses, err := iface.Addrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	owned := false
+	for _, address := range addresses {
+		prefix, err := netip.ParsePrefix(address.String())
+		if err == nil && prefix.Addr().String() == desktopOpenVPNCompositionClientAddress && prefix.Bits() == 30 {
+			owned = true
+		}
+	}
+	if !owned {
+		t.Fatal("actual OpenVPN client address differs from namespace carrier")
+	}
+	ca := newDesktopExternalIntegrationCA(t)
+	directory := t.TempDir()
+	rootPath := filepath.Join(directory, "public-proof-ca.pem")
+	if err = os.WriteFile(rootPath, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.der}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", rootPath)
+	t.Setenv("SSL_CERT_DIR", directory)
+	for _, name := range desktopOpenVPNCompositionCases {
+		t.Run(name, func(t *testing.T) {
+			network, control := "tcp", "tls-auth"
+			if strings.HasPrefix(name, "udp-") || name == "mixed-fallback" || name == "captured-tuple-set" || name == "wrong-control-key" {
+				network, control = "udp", "tls-crypt"
+			}
+			pki := desktopOpenVPNCompositionCertificates(t)
+			certificate := ca.certificate(t, true)
+			private, err := x509.MarshalPKCS8PrivateKey(certificate.PrivateKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fault := ""
+			if name == "cancelled-proof" || name == "reconnect-during-public-proof" {
+				fault = "held-proof"
+			}
+			if name == "selected-dns-failure" {
+				fault = "dns"
+			}
+			process := desktopOpenVPNCompositionStartPeer(t, desktopOpenVPNCompositionPeerInput{Schema: 1, Network: network, Control: control, ControlKey: desktopOpenVPNCompositionControlKey(), CA: pki.ca,
+				Certificate: pki.provider, Key: pki.providerKey, PublicCertificate: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Certificate[0]})), PublicKey: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private})), Fault: fault})
+			remote, err := nativeopenvpn.ParseRemote(process.initial.Remote, network)
+			if err != nil {
+				t.Fatal(err)
+			}
+			remotes := []nativeopenvpn.Remote{remote}
+			if name == "tcp-fallback" || name == "mixed-fallback" || name == "captured-tuple-set" {
+				unavailable, err := nativeopenvpn.ParseRemote(process.initial.UnavailableRemote, "tcp")
+				if err != nil {
+					t.Fatal(err)
+				}
+				remotes = append([]nativeopenvpn.Remote{unavailable}, remotes...)
+			}
+			if name == "wrong-provider-trust" {
+				pki.ca = desktopOpenVPNCompositionCertificates(t).ca
+			}
+			profile := desktopOpenVPNCompositionProfile(pki, remotes, control, name)
+			f := desktopOpenVPNCompositionNew(t, process, profile, remotes, desktopTorBoxSession)
+			switch name {
+			case "tcp-proof-mtu-latency50", "udp-proof-mtu-latency50":
+				receipt := f.prove(t)
+				f.mtu(t, receipt)
+				f.latency(t, receipt)
+			case "tcp-fallback", "mixed-fallback":
+				f.prove(t)
+				f.kernel.mu.Lock()
+				first := false
+				for _, issued := range f.kernel.issued {
+					if issued.grant.Network == "tcp" && int(issued.grant.Remote.Port()) == remotes[0].Port {
+						first = true
+					}
+				}
+				f.kernel.mu.Unlock()
+				if !first {
+					t.Fatal("provider fallback skipped the original first transport")
+				}
+			case "tcp-reconnect-rejects-old-proof", "udp-reconnect-rejects-old-proof":
+				f.reconnect(t, profile)
+			case "reconnect-during-public-proof":
+				f.heldProof(t, true)
+			case "cancelled-proof":
+				f.heldProof(t, false)
+			case "wrong-provider-trust", "wrong-control-key":
+				f.authenticationFailure(t, name == "wrong-control-key")
+			case "selected-dns-failure":
+				done := f.runAsync(t)
+				f.rejected(t, done)
+				stats := f.process.observe(t, "stats")
+				if stats.DNS == 0 || stats.PublicAttempts != 0 || stats.PublicRequests != 0 || stats.TLS != 0 {
+					t.Fatal("selected DNS negative bypassed its actual encrypted resolver", stats)
+				}
+			case "captured-tuple-set":
+				f.prove(t)
+				f.tuples(t)
+			default:
+				t.Fatal("unimplemented mandatory OpenVPN composition case")
+			}
+			f.assertCapture(t)
+		})
+	}
+}

@@ -138,6 +138,8 @@ def inputs():
                              ROOT/'deploy/test_linux_node_child_control_runner.py',
                              ROOT/'deploy/test_linux_external_lifecycle.py',
                              ROOT/'deploy/test_linux_external_lifecycle_runner.py',
+                             ROOT/'deploy/test_linux_external_openvpn.py',
+                             ROOT/'deploy/test_linux_external_openvpn_runner.py',
                              ROOT/'deploy/test_linux_node_child_tun.py',
                              ROOT/'deploy/test_linux_node_child_tun_runner.py',
                              ROOT/'deploy/test_linux_node_host_tun.py',
@@ -635,6 +637,10 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 run([sys.executable, ROOT/'deploy/test_linux_external_lifecycle_runner.py'],
                     cwd=ROOT, env=env, timeout=60)
                 run([sys.executable, ROOT/'deploy/test_linux_external_lifecycle.py', source],
+                    env=env, timeout=900)
+                run([sys.executable, ROOT/'deploy/test_linux_external_openvpn_runner.py'],
+                    cwd=ROOT, env=env, timeout=60)
+                run([sys.executable, ROOT/'deploy/test_linux_external_openvpn.py', source, '--pq', pq],
                     env=env, timeout=900)
                 run([sys.executable, ROOT/'deploy/test_linux_node_lifecycle_runner.py'],
                     cwd=ROOT, env=env, timeout=60)

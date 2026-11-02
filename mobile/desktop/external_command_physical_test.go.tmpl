@@ -20,6 +20,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
@@ -260,22 +261,30 @@ func TestRouterVPNDesktopExternalPhysicalCommandUsesActualPreparedNativeFactory(
 // This verifies command/source admission and actual native construction only.
 // The separate Box/peer and installed suites exercise encryption, DNS and exit proof.
 func TestRouterVPNDesktopExternalPhysicalHysteria2CommandIsLinuxOnly(t *testing.T) {
-	desktopExternalPhysicalUDPCommand(t, "hysteria2", "")
+	desktopExternalPhysicalTransportCommand(t, "hysteria2", "")
 }
 
 func TestRouterVPNDesktopExternalPhysicalWireGuardCommandIsLinuxOnly(t *testing.T) {
-	desktopExternalPhysicalUDPCommand(t, "wireguard", "")
+	desktopExternalPhysicalTransportCommand(t, "wireguard", "")
 }
 
 func TestRouterVPNDesktopExternalPhysicalAmneziaCommandIsLinuxOnly(t *testing.T) {
 	for _, variant := range []string{"fast", "strong"} {
 		t.Run(variant, func(t *testing.T) {
-			desktopExternalPhysicalUDPCommand(t, "amneziawg", variant)
+			desktopExternalPhysicalTransportCommand(t, "amneziawg", variant)
 		})
 	}
 }
 
-func desktopExternalPhysicalUDPCommand(t *testing.T, protocol, variant string) {
+func TestRouterVPNDesktopExternalPhysicalOpenVPNCommandIsLinuxOnly(t *testing.T) {
+	for _, network := range []string{"tcp", "udp", "mixed"} {
+		t.Run(network, func(t *testing.T) {
+			desktopExternalPhysicalTransportCommand(t, "openvpn", network)
+		})
+	}
+}
+
+func desktopExternalPhysicalTransportCommand(t *testing.T, protocol, variant string) {
 	t.Helper()
 	var graph, captured map[string]any
 	if json.Unmarshal([]byte(desktopPhysicalCommandSource), &graph) != nil || json.Unmarshal([]byte(desktopPhysicalCommandCapture), &captured) != nil {
@@ -286,7 +295,23 @@ func desktopExternalPhysicalUDPCommand(t *testing.T, protocol, variant string) {
 	private := map[string]any{"protocol": protocol, "expected_public_ip": "203.0.113.88"}
 	faults := []string{"valid", "source", "credential", "tls-name", "session", "original-config"}
 	var parameters map[string]string
-	if protocol == "wireguard" || protocol == "amneziawg" {
+	if protocol == "openvpn" {
+		primary, fallback := variant, variant
+		if variant == "mixed" {
+			primary, fallback = "tcp", "udp"
+		}
+		config := "client\ndev tun\nproto " + primary + "\nremote 203.0.113.20 8443 " + primary + "\nremote 198.51.100.25 1195 " + fallback + "\n" +
+			"auth-user-pass\nremote-cert-tls server\nverify-x509-name captured-openvpn.example name\npeer-fingerprint " + strings.Repeat("ab", 32) +
+			"\ntun-mtu 1280\ndata-ciphers AES-256-GCM:AES-128-GCM\n"
+		endpoint, err := nativeopenvpn.CompileEndpoint(config, "captured-user", "captured-secret", mobilemultihop.ExternalFinalTag, "")
+		var compiled map[string]any
+		if err != nil || json.Unmarshal([]byte(endpoint), &compiled) != nil {
+			t.Fatal("OpenVPN command fixture lost its actual inline compiler", err)
+		}
+		graph["outbounds"], graph["endpoints"] = []any{}, []any{compiled}
+		private["openvpn"] = map[string]any{"config": config, "username": "captured-user", "password": "captured-secret"}
+		faults = []string{"valid", "source", "credential", "username", "endpoint", "tls-name", "fingerprint", "remote-order", "remote-network", "remote-removed", "session", "original-config"}
+	} else if protocol == "wireguard" || protocol == "amneziawg" {
 		graph["outbounds"] = []any{}
 		endpoint := map[string]any{"type": "wireguard", "tag": mobilemultihop.ExternalFinalTag,
 			"address": []string{"10.78.0.2/32", "fd78:78::2/128"}, "private_key": key(17), "mtu": 1280,
@@ -342,6 +367,8 @@ func desktopExternalPhysicalUDPCommand(t *testing.T, protocol, variant string) {
 				} else {
 					config = strings.Replace(config, "captured-secret", "foreign-secret", 1)
 				}
+			case "username":
+				config = strings.Replace(config, "captured-user", "foreign-user", 1)
 			case "peer-key":
 				config = strings.Replace(config, key(18), key(20), 1)
 			case "psk":
@@ -351,7 +378,39 @@ func desktopExternalPhysicalUDPCommand(t *testing.T, protocol, variant string) {
 			case "allowed-ips":
 				config = strings.Replace(config, "0.0.0.0/0", "192.0.2.0/24", 1)
 			case "tls-name":
-				config = strings.Replace(config, "captured-hy2.example", "foreign-hy2.example", 1)
+				if protocol == "openvpn" {
+					config = strings.Replace(config, "captured-openvpn.example", "foreign-openvpn.example", 1)
+				} else {
+					config = strings.Replace(config, "captured-hy2.example", "foreign-hy2.example", 1)
+				}
+			case "fingerprint":
+				config = strings.Replace(config, strings.Repeat("ab", 32), strings.Repeat("cd", 32), 1)
+			case "remote-order", "remote-network", "remote-removed":
+				var changed map[string]any
+				if json.Unmarshal([]byte(config), &changed) != nil {
+					t.Fatal("invalid compiled OpenVPN mutation fixture")
+				}
+				endpoint := changed["endpoints"].([]any)[0].(map[string]any)
+				remotes := endpoint["servers"].([]any)
+				switch fault {
+				case "remote-order":
+					remotes[0], remotes[1] = remotes[1], remotes[0]
+					endpoint["network"] = remotes[0].(map[string]any)["network"]
+				case "remote-network":
+					remote := remotes[1].(map[string]any)
+					if remote["network"] == "tcp" {
+						remote["network"] = "udp"
+					} else {
+						remote["network"] = "tcp"
+					}
+				case "remote-removed":
+					endpoint["servers"] = remotes[:1]
+				}
+				body, err := json.Marshal(changed)
+				if err != nil {
+					t.Fatal(err)
+				}
+				config = string(body)
 			case "session":
 				session = strings.Repeat("b", 32)
 			case "original-config":
@@ -373,6 +432,9 @@ func desktopExternalPhysicalUDPCommand(t *testing.T, protocol, variant string) {
 					config = strings.Replace(config, `"`+parameter+`":"`+value+`"`, `"`+parameter+`":"`+changed+`"`, 1)
 				}
 			}
+			if fault != "valid" && fault != "source" && fault != "session" && config == physical.Config() {
+				t.Fatal("physical command negative did not alter its captured source", protocol, fault)
+			}
 			if err := os.WriteFile(filepath.Join(directory, "sing-box.json"), []byte(config), 0600); err != nil {
 				t.Fatal(err)
 			}
@@ -384,12 +446,12 @@ func desktopExternalPhysicalUDPCommand(t *testing.T, protocol, variant string) {
 			selected, err := routerVPNExternalCommandPhysical(files, original, session, expected)
 			if runtime.GOOS != "linux" || fault != "valid" {
 				if err == nil || selected != nil {
-					t.Fatal("foreign host or changed UDP transport source reached native command admission", protocol)
+					t.Fatal("foreign host or changed transport source reached native command admission", protocol)
 				}
 				return
 			}
 			if err != nil || selected == nil || selected.Metadata() != physical.Metadata() || selected.OriginalPolicy() != original {
-				t.Fatal("Linux command lost its exact UDP transport policy", protocol, err)
+				t.Fatal("Linux command lost its exact transport policy", protocol, err)
 			}
 		})
 	}
@@ -403,16 +465,16 @@ func desktopExternalPhysicalUDPCommand(t *testing.T, protocol, variant string) {
 	ctx := box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
 	owner, err := routerVPNNewExternalNative(ctx, original, physical, source, capture, desktopExternalSession)
 	if err != nil || owner == nil {
-		t.Fatal("actual Linux UDP transport factory failed before startup", protocol, err)
+		t.Fatal("actual Linux transport factory failed before startup", protocol, err)
 	}
 	defer func() {
 		owner.Cancel()
 		if err := owner.Close(); err != nil {
-			t.Error("actual UDP transport native construction did not join", protocol, err)
+			t.Error("actual transport native construction did not join", protocol, err)
 		}
 	}()
 	native := owner.(*routerVPNExternalNative)
 	if native.physical != physical || native.box == nil || native.Healthy() || native.box.RouterVPNDesktopExternalPreparePhysical(physical) == nil {
-		t.Fatal("UDP transport native factory lost physical preparation or fabricated connection proof", protocol)
+		t.Fatal("transport native factory lost physical preparation or fabricated connection proof", protocol)
 	}
 }

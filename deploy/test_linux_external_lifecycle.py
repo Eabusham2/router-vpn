@@ -33,7 +33,8 @@ GUARD = load("linux_external_lifecycle_namespace", "test_desktop_linux_guardian.
 TAGS = (*NODE.TAGS, "routervpn_linux_external_lifecycle")
 CASES = ("shadowsocks-succession", "http-connect-succession", "https-connect-succession",
          "refused-preserves-original", "cancelled-preserves-original", "hysteria2-succession", "wireguard-succession",
-         "amneziawg-fast-succession", "amneziawg-strong-succession")
+         "amneziawg-fast-succession", "amneziawg-strong-succession",
+         "openvpn-tcp-succession", "openvpn-udp-succession", "openvpn-mixed-succession")
 MODEL = ("KeepsTypedSourceAndJoinedOwner", "RejectsForeignOrReusedCapabilities",
          "RetainsRefusedAndCancelledSources")
 RUNNERS = ("test_linux_external_lifecycle.py", "test_linux_external_lifecycle_runner.py",

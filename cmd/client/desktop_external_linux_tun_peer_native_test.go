@@ -28,6 +28,7 @@ import (
 	"router-vpn/internal/common"
 	"router-vpn/internal/linuxprotection"
 	"router-vpn/internal/mobiletor"
+	"router-vpn/internal/nativeopenvpn"
 )
 
 var linuxHostTUNExternalCases = []string{
@@ -43,6 +44,24 @@ var linuxHostTUNExternalCases = []string{
 	"external-awgfast-wrong-key", "external-awgfast-wrong-psk", "external-awgfast-dns-failure", "external-awgfast-replacement", "external-awgfast-wrong-parameters",
 	"external-awgstrong-on-connect", "external-awgstrong-always", "external-awgstrong-public", "external-awgstrong-cancelled",
 	"external-awgstrong-wrong-key", "external-awgstrong-wrong-psk", "external-awgstrong-dns-failure", "external-awgstrong-replacement", "external-awgstrong-wrong-parameters",
+	"external-ovpntcp-on-connect",
+	"external-ovpntcp-always",
+	"external-ovpntcp-public",
+	"external-ovpntcp-cancelled",
+	"external-ovpntcp-wrong-trust",
+	"external-ovpntcp-wrong-control",
+	"external-ovpntcp-dns-failure",
+	"external-ovpntcp-replacement",
+	"external-ovpntcp-fallback",
+	"external-ovpnudp-on-connect",
+	"external-ovpnudp-always",
+	"external-ovpnudp-public",
+	"external-ovpnudp-cancelled",
+	"external-ovpnudp-wrong-trust",
+	"external-ovpnudp-wrong-control",
+	"external-ovpnudp-dns-failure",
+	"external-ovpnudp-replacement",
+	"external-ovpnudp-fallback",
 }
 
 func linuxHostTUNExternalCase(scenario string) bool {
@@ -73,6 +92,9 @@ func linuxHostTUNExternalProtocol(scenario string) string {
 	if strings.HasPrefix(scenario, "external-awgfast-") || strings.HasPrefix(scenario, "external-awgstrong-") {
 		return "amneziawg"
 	}
+	if strings.HasPrefix(scenario, "external-ovpntcp-") || strings.HasPrefix(scenario, "external-ovpnudp-") {
+		return "openvpn"
+	}
 	return "shadowsocks"
 }
 
@@ -100,7 +122,7 @@ func linuxHostTUNExternalAction(scenario string) string {
 
 func linuxHostTUNExternalFailedProof(scenario string) bool {
 	switch linuxHostTUNExternalAction(scenario) {
-	case "dns-failure", "wrong-key", "wrong-trust", "wrong-psk", "wrong-parameters":
+	case "dns-failure", "wrong-key", "wrong-trust", "wrong-psk", "wrong-parameters", "wrong-control":
 		return true
 	}
 	return false
@@ -120,23 +142,27 @@ type linuxExternalTUNPeerReply struct {
 	PublicReplies    uint32 `json:"public_replies"`
 	AuthFailures     uint32 `json:"auth_failures"`
 	ParametersSHA256 string `json:"parameters_sha256,omitempty"`
+	OpenVPNNetwork   string `json:"openvpn_network,omitempty"`
+	OpenVPNProfile   string `json:"openvpn_profile,omitempty"`
 }
 
 type linuxExternalTUNPeer struct {
-	command                     *exec.Cmd
-	input                       io.WriteCloser
-	output                      *os.File
-	reader                      *bufio.Reader
-	diagnostic                  linuxHostTUNOutput
-	done                        chan struct{}
-	waitErr                     error
-	protocol                    string
-	password                    string
-	address                     netip.AddrPort
-	ca                          string
-	wireguard                   *common.ExternalWireGuardConfig
-	parameters                  map[string]string
-	serverPrivate, clientPublic string
+	command                        *exec.Cmd
+	input                          io.WriteCloser
+	output                         *os.File
+	reader                         *bufio.Reader
+	diagnostic                     linuxHostTUNOutput
+	done                           chan struct{}
+	waitErr                        error
+	protocol                       string
+	password                       string
+	address                        netip.AddrPort
+	ca                             string
+	wireguard                      *common.ExternalWireGuardConfig
+	parameters                     map[string]string
+	serverPrivate, clientPublic    string
+	openvpnNetwork, openvpnProfile string
+	openvpnFallback                bool
 }
 
 func (peer *linuxExternalTUNPeer) read(t *testing.T) linuxExternalTUNPeerReply {
@@ -165,6 +191,30 @@ func (peer *linuxExternalTUNPeer) read(t *testing.T) linuxExternalTUNPeerReply {
 		}
 	} else if reply.ParametersSHA256 != "" {
 		t.Fatal("ordinary external peer acquired an unrequested AWG parameter owner")
+	}
+	if peer.protocol == "openvpn" {
+		if len(reply.OpenVPNProfile) == 0 || len(reply.OpenVPNProfile) > 12<<10 || reply.OpenVPNNetwork != peer.openvpnNetwork ||
+			peer.openvpnProfile != "" && peer.openvpnProfile != reply.OpenVPNProfile {
+			t.Fatal("installed provider lost its complete original private import")
+		}
+		compiled, err := nativeopenvpn.CompileProfile(nativeopenvpn.Profile{Config: reply.OpenVPNProfile}, "exit", "")
+		if err != nil {
+			t.Fatal("installed provider import failed its actual compiler", err)
+		}
+		remotes, err := nativeopenvpn.Remotes(compiled)
+		want := 1
+		if peer.openvpnFallback {
+			want = 2
+		}
+		if err != nil || len(remotes) != want || remotes[len(remotes)-1] != (nativeopenvpn.Remote{Host: address.Addr().String(), Port: int(address.Port()), Network: peer.openvpnNetwork}) {
+			t.Fatal("installed provider changed its original ordered transport list", err)
+		}
+		if want == 2 && (remotes[0].Network != "tcp" || remotes[0].Host != address.Addr().String() || remotes[0].Port == int(address.Port())) {
+			t.Fatal("installed provider lost its distinct original TCP fallback")
+		}
+		peer.openvpnProfile = reply.OpenVPNProfile
+	} else if reply.OpenVPNNetwork != "" || reply.OpenVPNProfile != "" {
+		t.Fatal("ordinary external peer acquired an unrequested provider import")
 	}
 	return reply
 }
@@ -230,6 +280,14 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 		peer.password = ""
 		peer.parameters = linuxHostTUNExternalAWGParameters(scenario)
 	}
+	if peer.protocol == "openvpn" {
+		peer.password = ""
+		peer.openvpnNetwork = "tcp"
+		if strings.HasPrefix(scenario, "external-ovpnudp-") {
+			peer.openvpnNetwork = "udp"
+		}
+		peer.openvpnFallback = linuxHostTUNExternalAction(scenario) == "fallback"
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 110*time.Second)
 	t.Cleanup(cancel)
 	peer.command = exec.CommandContext(ctx, "ip", "netns", "exec", "rvpn-peer", image,
@@ -280,6 +338,9 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 		} else {
 			request["wireguard"] = keys
 		}
+	}
+	if peer.protocol == "openvpn" {
+		request["openvpn_network"], request["openvpn_fallback"] = peer.openvpnNetwork, peer.openvpnFallback
 	}
 	if err := json.NewEncoder(peer.input).Encode(request); err != nil {
 		t.Fatal(err)
@@ -378,6 +439,21 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 		} else {
 			profile.External.WireGuard = &config
 		}
+	case "openvpn":
+		profile.DNSProtocol = "udp"
+		config := peer.openvpnProfile
+		if linuxHostTUNExternalAction(scenario) == "wrong-control" {
+			config = strings.ReplaceAll(config, strings.Repeat("a", 32), strings.Repeat("b", 32))
+		}
+		if linuxHostTUNExternalAction(scenario) == "wrong-trust" {
+			before, rest, ok := strings.Cut(config, "<ca>\n")
+			_, after, closed := strings.Cut(rest, "</ca>\n")
+			if !ok || !closed {
+				t.Fatal("installed provider lost original inline CA")
+			}
+			config = before + "<ca>\n" + peer.ca + "</ca>\n" + after
+		}
+		profile.External.OpenVPN = &common.ExternalOpenVPNConfig{Config: config}
 	case "hysteria2":
 		profile.DNSProtocol = "udp"
 		profile.External.Hysteria2 = &common.ExternalHysteria2Config{Server: "11.77.0.2", Port: int(peer.address.Port()), Password: peer.password, TLSServerName: "captured-external.example"}
@@ -491,8 +567,8 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		if !middle.SourcePreserved || observed.Connections != 0 || observed.DNSQueries != 0 || observed.PublicAttempts != 0 {
 			t.Fatal("changed external source reached Stop or a new native engine", middle, observed)
 		}
-	} else if action == "wrong-key" || action == "wrong-trust" || action == "wrong-psk" || action == "wrong-parameters" {
-		if !middle.FailedProof || observed.PhysicalUDP == 0 || observed.Connections != 0 || observed.Streams != 0 || observed.Packets != 0 ||
+	} else if action == "wrong-key" || action == "wrong-trust" || action == "wrong-psk" || action == "wrong-parameters" || action == "wrong-control" {
+		if !middle.FailedProof || (peer.protocol != "openvpn" && observed.PhysicalUDP == 0) || observed.Connections != 0 || observed.Streams != 0 || observed.Packets != 0 ||
 			observed.DNSQueries != 0 || observed.PublicAttempts != 0 || observed.PublicReplies != 0 || middle.Proof != nil {
 			t.Fatal("wrong external peer credential or TLS identity reached an inner destination or Connected", middle, observed)
 		}
@@ -501,12 +577,18 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 			t.Fatal("failed selected DNS fabricated an exit proof or Connected", middle, observed)
 		}
 	} else if middle.Proof == nil || !middle.Proof.Healthy || !middle.Proof.DNSProven || middle.Proof.EntryProven ||
-		middle.MTU != 1376 || (peer.protocol != "hysteria2" && peer.protocol != "wireguard" && peer.protocol != "amneziawg" && observed.Connections == 0) || observed.Streams == 0 || observed.DNSQueries == 0 || observed.PublicReplies == 0 || observed.AuthFailures != 0 {
+		middle.MTU != 1376 || (peer.protocol != "hysteria2" && peer.protocol != "wireguard" && peer.protocol != "amneziawg" && peer.protocol != "openvpn" && observed.Connections == 0) || (peer.protocol != "openvpn" && observed.Streams == 0) || observed.DNSQueries == 0 || observed.PublicReplies == 0 || observed.AuthFailures != 0 {
 		t.Fatal("external succession bypassed its real encrypted/authenticated DNS and exit exchanges", middle, observed)
 	}
 	if (peer.protocol == "hysteria2" || peer.protocol == "wireguard" || peer.protocol == "amneziawg") && (observed.PhysicalUDP == 0 || observed.Connections != 0 ||
 		(action != "wrong-key" && action != "wrong-trust" && action != "wrong-psk" && action != "wrong-parameters" && observed.Packets == 0)) {
 		t.Fatal("external selected UDP DNS or TCP proof bypassed its single physical UDP peer", observed)
+	}
+	// The pinned provider owns its encrypted listener internally. Its decrypted
+	// DNS/HTTPS observations are real upper-layer counters, never substituted
+	// for unavailable raw physical TCP/UDP or netstack stream counts.
+	if peer.protocol == "openvpn" && (observed.Connections != 0 || observed.PhysicalUDP != 0 || observed.Streams != 0 || observed.Packets != 0) {
+		t.Fatal("provider fixture relabeled upper traffic as raw transport", observed)
 	}
 	if current := original.observe(t, "stats"); current.RouterQueries != before.RouterQueries || current.DirectQueries != before.DirectQueries {
 		t.Fatal("external proof borrowed the previous Router response", before, current)
