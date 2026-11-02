@@ -5,11 +5,119 @@ This continues [November 1](CONTINUATION-EVIDENCE-2026-11-01.md) and preserves
 source recovery is complete for the recorded collection; continue the actual
 implementation without replacing the original scope with this status record.
 The independently read-back published source cutoff is
-[d4096487](https://github.com/Eabusham2/router-vpn/commit/d40964870c1277c5b420cfdac70c03bbbc0a47f1).
+[60d91297](https://github.com/Eabusham2/router-vpn/commit/60d9129777d453bfe8e98238c8b49316090d0c8c).
 Later working files are outside this cutoff. No complete current release,
 private deployment, signing or physical-device acceptance is established.
 
-## Latest implementation and verification — through d4096487
+## Latest implementation and verification — through 60d91297
+
+The verified source tree is d86831fb7950d68d47800725005de4f554a9946b.
+Every unit below was committed directly to main, published with its expected
+parent and independently verified through the remote ref, tree and parent.
+The older sections retain their original evidence dates and boundaries.
+
+| Published unit | Change and verification boundary |
+|---|---|
+| [d43fd45f](https://github.com/Eabusham2/router-vpn/commit/d43fd45fbda65eeb3b82618d318ecf1e6ebe44c9) | Follow the captured Windows protection helper in the actual shipping audit after the earlier delegation. Preserve original owner capture, read/prepared checks, recovery/release and both journal barriers. Ten local audit tests pass, including eight new defects. Exact-SHA weighted, map-first and native-UI audit workflows all subsequently passed. |
+| [1ae64132](https://github.com/Eabusham2/router-vpn/commit/1ae64132dfad802ac1bea5976a3d33c5b09717cf) | Add failure-only numeric PF queue/run and grant-phase timings. Keep four workers, complete joins, original request deadlines, 32-check bounds, error identity and all protection assertions. Eight focused verdicts and both Darwin cross-builds pass. The observed native two-second grant expiry is not diagnosed or waived by these logs alone. |
+| [37ddfe02](https://github.com/Eabusham2/router-vpn/commit/37ddfe02c996cb6ce7b69543078f8f7db5f0693b) | Capture all five macOS Python bootstrap modules in the required client/modes layout. Retain original directory/file descriptors, reject linked or replaced source parents and leaves, and preserve private modes/argv/environment. Twenty-six actual import/help/ownership race verdicts pass; the old flat layout fails its intended import/entry assertions. Fifty-four removed/duplicate/skipped/failed verdict controls reject. Both complete tagged Mac controller packages cross-compile with checkptr=2. No local installation or native Mac acceptance is claimed. |
+| [14f8c8e5](https://github.com/Eabusham2/router-vpn/commit/14f8c8e55a1101757c7def314743efa86ecc98f1) | Add retained Windows Hysteria2 for direct Local, Start Layer Off and On-connect/Always. Preserve the lazy captured UDP socket, original credentials/trust, DNS/public proof, MTU, measurement identity, inherited process/Job/journal and complete restoration. Actual local encrypted and owner evidence is detailed below. New WFP/Wintun tests compile on both Windows targets; actual Windows execution remains required. |
+| [6e4499fc](https://github.com/Eabusham2/router-vpn/commit/6e4499fc7bb5f6748ef9447af752a2793b36407c) | Use original Darwin NET_RT_DUMP2 refcount, expiry and parent flags to prove the narrow idle-cache PROTO3 addition. Bind every original public field privately; JSON cannot mint proof or place it in an owned receipt. Ordinary notifications/deletes cannot borrow this snapshot authority. Preserve the exact three-file TUN transplant. The package passes 231 race verdicts, six compiled defects and fifteen runner tests; both Darwin targets and the actual receipt-copy composition compile. Native observer acceptance remains required. |
+| [60d91297](https://github.com/Eabusham2/router-vpn/commit/60d9129777d453bfe8e98238c8b49316090d0c8c) | Record original Linux route-owner comparison and canonical qualification fields only on the first receipt failure. Bound address/route rows, omit private values and preserve the exact sticky error and empty receipt. Seventy-one focused race verdicts and 24 runner tests pass; omitting the original-observation call fails the intended compiled assertion. This is diagnostic evidence, not acceptance of the still-unproved extra route. |
+
+### Windows Hysteria2 evidence
+
+The 21-file unit extends existing retained SS/HTTP/HTTPS integration without
+adding an eager endpoint phase or a new protection owner. Its normal final
+preparation is 37ddfe02 plus the exact published feature bytes. All five
+closures pass: 3,091 installed, 1,637 lifecycle, 1,638 OpenVPN namespace,
+608 Windows external and 1,635 Windows WFP source records. The policy digest
+is e8d09e8be372d74363f75ceb052c472fe6e16e57d325221c1ea82dee069ec023;
+the external digest is 46b2a5455a462f244b83a46a552f9e0c099f3f5baec700e31a2bf4d62b0082ee.
+
+- Shared policy and application race runs passed 217 and 171 verdicts.
+  The initial application run's restricted netlink failure is preserved;
+  unchanged source passed with supported interface observation. Thirty-seven
+  focused runner/source tests also passed.
+- The actual encrypted Hysteria2 Box run passed all fifteen required leaves
+  and seventeen total verdicts in 3.383 seconds, including selected UDP DNS,
+  HTTPS exit proof, all fifty response-time samples, MTU replacement/rollback,
+  wrong credentials/trust/DNS/exit, truncated response and cancellation.
+  Physical-control and generated-command runs passed nineteen and seven
+  verdicts. These used Linux race/production tags and verified native PQ;
+  their OS/TUN fixtures remain explicit boundaries.
+- The traffic runs used the earlier normal preparation. After the unrelated
+  macOS bootstrap publication, all actual selected code/dependency inputs
+  were compared against final preparation: 7,639 Box, 4,379 physical and 7,896
+  command records agree. Only the verified pinned Xray checkout location was
+  normalized; a preparer's earlier go.mod metadata checksum difference was
+  separately recorded. No source verifier or recorded closure was edited.
+- All six final Windows command/factory/Box test images and both complete
+  tagged app packages cross-compiled for AMD64/ARM64 with checkptr=2. The
+  actual selected app inputs stayed unchanged. These foreign-host builds
+  disable CGO and omit native PQ linking; they do not substitute for Windows
+  runtime/engine builds.
+- The new actual-Windows fixture requires BFE, isolated UDP socket receipts,
+  a separately copied provider image, captured predecessor and durable barrier,
+  real encrypted DNS/HTTPS, renewal/retirement/restoration, credential/policy
+  failures and two compiled defects. Its unique Wintun is route-free with
+  external configuration; it does not claim real TUN packet pumping or the
+  inherited installed-controller path. Native execution is still required.
+
+The encrypted test image SHA256 is
+76ff621ddc41f808ef29c9085eb79fcec93b5b2603f4dc3f2b623b61f3573bb1.
+Final app AMD64/ARM64 image SHA256 values are respectively
+8b249fb4d3e6662247ee1a1024992f645d65b8daf3861ed03c63f2991e5de393
+and 9229d55b0e9c323b4c14a93f949915158a09d3f25073179651c3b7176edfffed.
+Protected SOCKS, other Windows families and broader graph/Start Layer choices
+are not enabled by this unit; the generic Off path remains independently gated.
+
+### New actual native observations
+
+The [d4096487 Windows desktop job](https://github.com/Eabusham2/router-vpn/actions/runs/41525262293/job/125551229494)
+completed successfully. Both actual PowerShell 5.1 and 7 ran 4,186 Tor editor
+checks with WPF true, 54 phase records and 365 importer leaves. Their editor
+phases completed in 33.785 and 39.255 seconds within the unchanged sixty-second
+bound. This closes the counter regression on that native source and removes
+the earlier blanket statement that native WPF remains unexecuted. It does not
+establish that every future cold start meets its deadline. The same job also
+passed the packaged AWG and its mandatory socket/selection/cancellation
+checks. The workflow remained failed because its Darwin job rejected the
+separate PROTO3 cache state.
+
+At 2471342e, the [installed/Portable Session job](https://github.com/Eabusham2/router-vpn/actions/runs/41523509406/job/125545224624)
+passed eight entry/session cases and four protected-Shell cases using the
+actual shipping controller, App/Tray pipes, exact-volume source and checked
+retirement. Its own receipt explicitly bounds the protected cases to an
+elevated fixture desktop, not interactive/cross-account UAC or new external
+network acceptance. The [saved-state job](https://github.com/Eabusham2/router-vpn/actions/runs/41523509406/job/125545224144)
+also passed both PowerShell versions, including all 51 checks and eight
+production defects. The separate [controller job](https://github.com/Eabusham2/router-vpn/actions/runs/41523509406/job/125545225318)
+failed its first real PowerShell adapter connection after 57.52 seconds;
+the pipe server's context had expired. The displayed PASS ROUNDTRIP string was
+the expected assertion text, not a completed request. Four subsequent adapter
+cases passed. That startup failure remains under investigation.
+
+The [37ddfe02 Linux generated-TUN workflow](https://github.com/Eabusham2/router-vpn/actions/runs/41528675285)
+passed all six cases on [ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/41528675285/job/125562940782),
+but [AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/41528675285/job/125562940634)
+again failed MTU rollback's generation-2 routing receipt. The original delta
+contained one IPv4 default route and one IPv6 LOCAL-table route. The log still
+lacked canonical/address/owner fields needed to identify the second route;
+60d91297 adds those bounded observations without accepting it. Earlier
+both-architecture successes remain valid for their exact runs, not universal
+proof that this intermittent failure is closed. No local system TUN was opened.
+
+Current requirement recovery remains complete for the recorded collection.
+The latest independently reread release is still the twelve-asset
+[745b3e41 prerelease](https://github.com/Eabusham2/router-vpn/releases/tag/router-vpn-sha-745b3e41e5a78d734391976af9b7cd0637660a0b),
+published October 24. Source/native repairs, broader graphs/platforms,
+first/legacy macOS installation, PF timing, current package/image/compose
+publication, signing, physical/off-LAN/visual/accessibility acceptance,
+private providers and deliberately authorized deployment remain distinct.
+No private router, forwarding, AdGuard or Portainer configuration was changed.
+
+## Earlier implementation and verification — through d4096487
 
 The independently read-back source is [d4096487](https://github.com/Eabusham2/router-vpn/commit/d40964870c1277c5b420cfdac70c03bbbc0a47f1),
 with tree b5a1a5fbb501e1fa7a01f99b41e535d113c15eda. Each unit below was

@@ -18,7 +18,24 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
-## Implementation reconciliation through d4096487
+## Implementation reconciliation through 60d91297
+
+The verified source cutoff is [60d91297](https://github.com/Eabusham2/router-vpn/commit/60d9129777d453bfe8e98238c8b49316090d0c8c).
+[The current evidence](CONTINUATION-EVIDENCE-2026-11-02.md) preserves source,
+actual local execution, compilation, native CI and publication separately.
+Original requirements are already recovered for the recorded collection.
+These rows refine their evidence without shrinking scope or inventing a
+completion denominator.
+
+| Recovered scope | Current reconciliation |
+|---|---|
+| #112, #200–213, #337 and retained native external execution | Windows direct Local Hysteria2 now joins retained SS/HTTP/HTTPS with Start Layer Off and On-connect/Always. Its lazy UDP socket uses the existing captured process/Job/journal and native protection owner. Linux OpenVPN/SOCKS and older families retain their existing evidence. Broader Windows protocols, Start Layers, predecessors, multihop and Server/Compare remain required. |
+| Complete profiles, selected DNS and measurements/restoration | Actual local HY2 encrypted DNS/HTTPS, fifty response-time samples, MTU rollback, wrong credential/trust/DNS/exit and cancellation controls pass. The already-proved Local selection and original profile/controller are retained during restoration. All eight final Windows app/component images cross-compile; the real scoped WFP fixture compiles separately. None is relabeled as Windows installed/off-LAN/device networking. |
+| Native route and lifecycle integrity | Darwin DUMP2 admits only an original private idle-cache proof bound to all public fields and an exact unique parent. Notifications and JSON cannot borrow it. New Linux TUN CI passed ARM64 but again rejected AMD64 MTU rollback at 37ddfe02; 60d91297 records missing owner/route fields and preserves the refusal. Prior exact-run Linux successes are not erased or generalized. |
+| Native installation and delivery | The macOS bootstrap five-module layout and retained directory capture are fixed with actual import/help/negative execution and both target compiles; first/legacy activation remains open. Windows d4096487 Tor WPF passed both PowerShell versions, and 2471342e installed/Portable Session passed on the elevated fixture desktop. Its separate initial PowerShell pipe connection failed and remains under investigation. Current release publication has not converged. |
+| Original 356, C1–C7 and all later product requirements | Preserve every uncancelled request, including all devices/architectures, map-first UI, full mode/graph execution, generic installation/private linking, setup/admin/Methods, recovery, selected DNS/protection, signing and real physical/off-LAN/visual/accessibility/private-target acceptance. Latest published release remains 745b3e41. No safe refusal, test count or prior release establishes full completion. |
+
+## Earlier implementation reconciliation through d4096487
 
 The current published evidence cutoff is [d4096487](https://github.com/Eabusham2/router-vpn/commit/d40964870c1277c5b420cfdac70c03bbbc0a47f1).
 [The November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md) records the

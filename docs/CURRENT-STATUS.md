@@ -6,7 +6,53 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through d4096487
+## Latest implementation continuation — through 60d91297
+
+The independently verified published source is
+[60d91297](https://github.com/Eabusham2/router-vpn/commit/60d9129777d453bfe8e98238c8b49316090d0c8c),
+tree d86831fb7950d68d47800725005de4f554a9946b. The
+[November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md) records each source,
+test, native observation and publication boundary. Original requirement
+recovery is complete; continue implementation from that full scope.
+
+- Retained Windows ordinary Hysteria2 joins SS/HTTP/HTTPS for direct Local,
+  Start Layer Off and On-connect/Always. It preserves selected DNS, original
+  proof, MTU, fifty samples, captured process/journal and full restoration.
+  Actual local encrypted tests and ownership negatives pass, as do six native
+  component and two full app cross-builds. The new scoped WFP fixture also
+  compiles; native Windows networking and installed/device acceptance remain
+  separate. Other protocols, Start Layers and graphs remain required.
+- The macOS installer bootstrap now preserves the required five-module
+  client/modes layout and rejects linked or replaced source directories.
+  Twenty-six actual race/import/help cases and both tagged Mac cross-builds
+  pass. First-use/legacy activation and real native installation remain open.
+- Darwin snapshots now use original DUMP2 reference, expiry and parent fields
+  for a narrow idle-cache proof. JSON and ordinary route events cannot invent
+  that authority. Package race tests, six compiled defects, the exact TUN
+  receipt-copy composition and both Darwin compiles pass. Native confirmation
+  and the separate PF timing boundary are still required.
+- Actual d4096487 Windows desktop CI passed both native PowerShell versions
+  with WPF, all 4,186 Tor checks and 365 importer leaves. Actual 2471342e
+  installed/Portable Session and saved-state jobs also passed their bounded
+  inventories. A separate first PowerShell pipe connection timed out; its
+  displayed PASS text was an expectation, not a successful roundtrip.
+- New 37ddfe02 Linux TUN CI passed ARM64 but again rejected AMD64 MTU
+  rollback's additional route. The original fields needed for diagnosis are
+  now captured without private values or an admission waiver. All 71 focused
+  race verdicts and 24 runner tests pass; that intermittent native cause is
+  still unresolved. Earlier six-case successes retain exact-run scope.
+- The three shipping audits repaired in d43fd45f passed on that exact SHA.
+  Windows build-handle retention and original per-case deadlines remain in
+  force; PF diagnostics do not change the two-second grant deadline.
+
+The published release remains the twelve-asset 745b3e41 prerelease. There is
+no newer complete exact-SHA package/image/compose/publication chain. All
+remaining original platform/graph/Methods/recovery requirements, signing,
+physical/off-LAN/visual/accessibility tests, private providers and deliberate
+ASUS/Portainer deployment retain their separate acceptance gates. No private
+network or deployment configuration was changed.
+
+## Earlier implementation continuation — through d4096487
 
 The verified published source is [d4096487](https://github.com/Eabusham2/router-vpn/commit/d40964870c1277c5b420cfdac70c03bbbc0a47f1),
 with tree b5a1a5fbb501e1fa7a01f99b41e535d113c15eda. The
