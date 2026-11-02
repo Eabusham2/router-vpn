@@ -104,6 +104,25 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
                         self.assertLessEqual(kwargs['timeout'], 900)
                         return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_external_lifecycle_runner.py'):
+                        self.assertEqual(system, 'linux')
+                        self.assertEqual(args[2:], [])
+                        self.assertEqual(kwargs['cwd'], ROOT)
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOARCH'], arch)
+                        self.assertEqual(kwargs['env']['CGO_ENABLED'], '1')
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertLessEqual(kwargs['timeout'], 60)
+                        return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_external_lifecycle.py'):
+                        self.assertEqual(system, 'linux')
+                        self.assertEqual(args[2:], [str(source.resolve())])
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOARCH'], arch)
+                        self.assertEqual(kwargs['env']['CGO_ENABLED'], '1')
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertLessEqual(kwargs['timeout'], 900)
+                        return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_node_child_tun_runner.py'):
                         self.assertEqual(system, 'linux')
                         self.assertEqual(args[2:], [])
@@ -345,12 +364,21 @@ class NativeSocketUIDGate(unittest.TestCase):
                     self.assertIn(ROOT/'mobile/desktop'/name, N.inputs())
                 for name in ('node_control_record.go', 'node_control_linux.go'):
                     self.assertIn(ROOT/'internal/linuxprotection'/name, N.inputs())
+                external_checks = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_external_lifecycle_runner.py')]
+                external = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_external_lifecycle.py')]
+                self.assertEqual(len(external_checks), 1 if system == 'linux' else 0)
+                self.assertEqual(len(external), len(external_checks))
+                if external:
+                    self.assertEqual(calls.index(external_checks[0]), calls.index(child[0])+1)
+                    self.assertEqual(calls.index(external[0]), calls.index(external_checks[0])+1)
+                for name in ('test_linux_external_lifecycle.py', 'test_linux_external_lifecycle_runner.py'):
+                    self.assertIn(ROOT/'deploy'/name, N.inputs())
                 lifecycle_checks = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_node_lifecycle_runner.py')]
                 lifecycle = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_node_lifecycle.py')]
                 self.assertEqual(len(lifecycle_checks), 1 if system == 'linux' else 0)
                 self.assertEqual(len(lifecycle), len(lifecycle_checks))
                 if lifecycle:
-                    self.assertEqual(calls.index(lifecycle_checks[0]), calls.index(child[0])+1)
+                    self.assertEqual(calls.index(lifecycle_checks[0]), calls.index(external[0])+1)
                     self.assertEqual(calls.index(lifecycle[0]), calls.index(lifecycle_checks[0])+1)
                 for name in ('test_linux_node_lifecycle.py', 'test_linux_node_lifecycle_runner.py'):
                     self.assertIn(ROOT/'deploy'/name, N.inputs())
