@@ -19,6 +19,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -297,6 +298,53 @@ func linuxStartCapturedChildControl(t *testing.T, scenario string, node *mobilem
 	return owner, err
 }
 
+// Cancel at each actual caller Err boundary in the shipping owner. This
+// exercises pre-entry refusal and every entered observation boundary without
+// scheduling assumptions or substituting a native participant/readback.
+type linuxChildCancelOriginalRead struct {
+	context.Context
+	cancel context.CancelFunc
+	at     uint32
+	reads  atomic.Uint32
+}
+
+func (c *linuxChildCancelOriginalRead) Err() error {
+	if c.reads.Add(1) == c.at {
+		c.cancel()
+	}
+	return c.Context.Err()
+}
+
+func linuxChildCheckCancelledOriginalReads(t *testing.T, ctx context.Context, owner *routerVPNLinuxNodeControl) {
+	t.Helper()
+	cancelled := 0
+	for boundary := uint32(1); boundary <= 32; boundary++ {
+		caller, cancel := context.WithCancel(ctx)
+		observed := &linuxChildCancelOriginalRead{Context: caller, cancel: cancel, at: boundary}
+		err := owner.current(observed)
+		enteredCancellation := caller.Err() != nil
+		cancel()
+		if enteredCancellation {
+			cancelled++
+			if err == nil {
+				t.Fatal("cancelled native original observation admitted its caller", boundary)
+			}
+		} else if err != nil {
+			t.Fatal("uncancelled native original observation lost its captured owner", boundary, err)
+		}
+		if err := owner.current(ctx); err != nil {
+			t.Fatal("cancelled original observation poisoned actual native retirement authority", boundary, err)
+		}
+		if !enteredCancellation {
+			if cancelled < 2 || observed.reads.Load() >= boundary {
+				t.Fatal("original observation omitted an entered cancellation boundary", cancelled, observed.reads.Load())
+			}
+			return
+		}
+	}
+	t.Fatal("native original observation exceeded its bounded caller-check fixture")
+}
+
 func TestRouterVPNLinuxNodeControlWorker(t *testing.T) {
 	scenario := os.Getenv("ROUTERVPN_NODE_CHILD_CONTROL")
 	if scenario == "" {
@@ -438,6 +486,7 @@ func TestRouterVPNLinuxNodeControlWorker(t *testing.T) {
 		t.Fatal("child retirement bypassed the actual original Box/source join")
 	}
 	if scenario == "cancelled-after-admission" {
+		linuxChildCheckCancelledOriginalReads(t, ctx, owner)
 		cancel()
 		stopGraph()
 	}

@@ -109,10 +109,15 @@ func (owner *routerVPNLinuxNodeControl) original(ctx context.Context) error {
 	if owner == nil || owner.closed || owner.bootstrap == nil || ctx == nil || ctx.Err() != nil {
 		return routerVPNExternalFailure
 	}
-	if err := owner.bootstrap.CheckCapture(ctx, owner.commandHash); err != nil {
+	// Cancellation of a graph read must not revoke the original participants
+	// needed for authenticated retirement. Once entered, finish one bounded
+	// native observation; caller cancellation still prevents admission below.
+	observation, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := owner.bootstrap.CheckCapture(observation, owner.commandHash); err != nil {
 		return err
 	}
-	_, engine, err := owner.bootstrap.Observations(ctx)
+	_, engine, err := owner.bootstrap.Observations(observation)
 	image, imageErr := routerVPNLinuxImageObject(owner.image)
 	if err != nil || imageErr != nil || image != owner.imageObject || engine.Image != image || engine.ProcessID != os.Getpid() {
 		return errors.Join(err, imageErr, routerVPNExternalFailure)
