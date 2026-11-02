@@ -25,6 +25,15 @@ _spec.loader.exec_module(PREP)
 ORIGINAL = None
 
 
+def clone_pinned_checkout(source, target):
+    # The supplied checkout can be a filtered clone with unfetched historical
+    # blobs. Copy only its already-verified HEAD through upload-pack, retaining
+    # independent objects without asking the server to fetch older history.
+    subprocess.run(['git', 'clone', '--quiet', '--no-checkout', '--no-local',
+                    '--depth=1', '--single-branch', '--no-tags', str(source), str(target)], check=True)
+    subprocess.run(['git', '-C', str(target), 'checkout', '--quiet', '--detach', PREP.PIN], check=True)
+
+
 class AppleTimerPreparation(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -45,8 +54,7 @@ class AppleTimerPreparation(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve()
         self.kit = self.root / 'wireguard-apple'
-        subprocess.run(['git', 'clone', '--shared', '--quiet', '--no-checkout', str(ORIGINAL), str(self.kit)], check=True)
-        subprocess.run(['git', '-C', str(self.kit), 'checkout', '--quiet', '--detach', PREP.PIN], check=True)
+        clone_pinned_checkout(ORIGINAL, self.kit)
 
     def tearDown(self):
         PREP.checkout(ORIGINAL)
@@ -55,6 +63,43 @@ class AppleTimerPreparation(unittest.TestCase):
     def prepared(self):
         PREP.prepare(self.kit, self.go, self.env)
         return PREP.verify(self.kit, self.go, self.env)
+
+    def test_filtered_checkout_needs_only_complete_pinned_snapshot(self):
+        def git(directory, *arguments, input=None, env=None):
+            return subprocess.check_output(['git', '-C', str(directory), *arguments],
+                                           input=input, env=env, text=True).strip()
+
+        # Add an unrelated branch to this owned fixture, leaving its verified
+        # detached HEAD and worktree intact. Its one blob must remain absent
+        # from the filtered repository after the current pin is checked out.
+        blob = git(self.kit, 'hash-object', '-w', '--stdin', input='unfetched history control\n')
+        tree = git(self.kit, 'mktree', input='100644 blob ' + blob + '\tunfetched-control.txt\n')
+        commit = git(self.kit, '-c', 'user.name=Timer fixture', '-c',
+                     'user.email=timer@example.invalid', 'commit-tree', tree, input='Unfetched branch control\n')
+        git(self.kit, 'update-ref', 'refs/heads/unfetched-control', commit)
+        git(self.kit, 'config', 'uploadpack.allowFilter', 'true')
+        partial = self.root / 'filtered-kit'
+        subprocess.run(['git', 'clone', '--quiet', '--no-checkout', '--no-local',
+                        '--depth=1', '--no-single-branch', '--filter=blob:none', '--no-tags',
+                        str(self.kit), str(partial)], check=True)
+        git(partial, 'checkout', '--quiet', '--detach', PREP.PIN)
+        git(partial, 'update-ref', 'refs/heads/unfetched-control', commit)
+        git(partial, 'config', 'remote.origin.url', str(self.root / 'unavailable-upstream'))
+        env = dict(os.environ, GIT_NO_LAZY_FETCH='1', GIT_TERMINAL_PROMPT='0')
+        missing_before = git(partial, 'rev-list', '--objects', '--all', '--missing=print', env=env)
+        self.assertIn('?' + blob, missing_before.splitlines())
+
+        copied = self.root / 'copied-pin'
+        # file:// forces the real upload-pack path across Git versions; older
+        # --shared clones would request the deliberately absent branch blob.
+        with mock.patch.dict(os.environ, env, clear=True):
+            clone_pinned_checkout(partial.as_uri(), copied)
+        PREP.checkout(copied)
+        self.assertEqual(git(copied, 'rev-list', '--count', 'HEAD'), '1')
+        self.assertFalse((copied / '.git/objects/info/alternates').exists())
+        self.assertFalse(any(row.startswith('?') for row in
+                             git(copied, 'rev-list', '--objects', 'HEAD', '--missing=print', env=env).splitlines()))
+        self.assertEqual(git(partial, 'rev-list', '--objects', '--all', '--missing=print', env=env), missing_before)
 
     def test_real_go_selection_preserves_original_inputs_and_cached_identity(self):
         _, _, original = PREP.checkout(self.kit)
