@@ -633,8 +633,19 @@ func fixtureRunFreshUACWorker(t *testing.T, api *fixtureFreshUACAPI, account *fi
 		if closed {
 			return nil
 		}
-		if err := worker.close(); err != nil {
-			return err
+		// The generic worker closer also releases its image. A separate runas
+		// process may still own that protected source, so retain this exact pin
+		// when Full retirement is unproved, even after the Limited Job joins.
+		retainedImage := worker.image
+		if !fullJoined {
+			worker.image = nil
+		}
+		closeErr := worker.close()
+		if !fullJoined {
+			worker.image = retainedImage
+		}
+		if closeErr != nil {
+			return closeErr
 		}
 		if !fullJoined {
 			return errors.New("fresh runas Full join is unproved; retain the owned account, protected image and report receipts for disposable-host cleanup")
@@ -743,28 +754,14 @@ func fixtureRunFreshUACWorker(t *testing.T, api *fixtureFreshUACAPI, account *fi
 	if ok == 0 || size != uint32(unsafe.Sizeof(bound)) || bound.Flags != limits.Flags || bound.ActiveProcesses != limits.ActiveProcesses {
 		t.Fatal("fresh UAC Job bounds were not retained", callErr)
 	}
-	var attributeSize uintptr
-	ok, _, callErr = worker.api.initialize.Call(0, 1, 0, uintptr(unsafe.Pointer(&attributeSize)))
-	if ok != 0 || !errors.Is(callErr, syscall.ERROR_INSUFFICIENT_BUFFER) || attributeSize < 8 || attributeSize > 65536 {
-		t.Fatal("fresh UAC Job attribute bound is unavailable", callErr)
-	}
-	storage := make([]uintptr, (attributeSize+unsafe.Sizeof(uintptr(0))-1)/unsafe.Sizeof(uintptr(0)))
-	list := unsafe.Pointer(&storage[0])
-	ok, _, callErr = worker.api.initialize.Call(uintptr(list), 1, 0, uintptr(unsafe.Pointer(&attributeSize)))
-	if ok == 0 {
-		t.Fatal(nativeError("fresh UAC Job attribute initialization", callErr))
-	}
-	defer func() { worker.api.delete.Call(uintptr(list)); runtime.KeepAlive(storage) }()
-	ok, _, callErr = worker.api.update.Call(uintptr(list), 0, 0x0002000d /* JOB_LIST */, uintptr(unsafe.Pointer(&worker.job)), unsafe.Sizeof(worker.job), 0, 0)
-	if ok == 0 {
-		t.Fatal(nativeError("fresh UAC creation-time Job attribute", callErr))
-	}
-	startup := struct {
-		Info       syscall.StartupInfo
-		Attributes unsafe.Pointer
-	}{Attributes: list}
-	startup.Info.Cb = uint32(unsafe.Sizeof(startup))
-	startup.Info.Desktop, err = syscall.UTF16PtrFromString(worker.desktop)
+	// The real CreateProcessWithTokenW call rejected the extended Job-list
+	// creation request with ERROR_INVALID_PARAMETER. Use its basic documented
+	// STARTUPINFO form and retain the original creation suspension while binding
+	// and independently verifying the exact Job, token and executable.
+	// https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-createprocesswithtokenw
+	// https://learn.microsoft.com/windows/win32/api/jobapi2/nf-jobapi2-assignprocesstojobobject
+	startup := syscall.StartupInfo{Cb: uint32(unsafe.Sizeof(syscall.StartupInfo{}))}
+	startup.Desktop, err = syscall.UTF16PtrFromString(worker.desktop)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -773,7 +770,7 @@ func fixtureRunFreshUACWorker(t *testing.T, api *fixtureFreshUACAPI, account *fi
 	directory, _ := syscall.UTF16PtrFromString(worker.directory)
 	account.joined = false
 	ok, _, callErr = api.create.Call(uintptr(token), 0 /* no user profile or network-only logon */, uintptr(unsafe.Pointer(application)), uintptr(unsafe.Pointer(&command[0])),
-		0x08080404 /* NO_WINDOW | EXTENDED_STARTUPINFO | UNICODE_ENVIRONMENT | SUSPENDED */, uintptr(unsafe.Pointer(&environment[0])), uintptr(unsafe.Pointer(directory)),
+		0x08000404 /* NO_WINDOW | UNICODE_ENVIRONMENT | SUSPENDED */, uintptr(unsafe.Pointer(&environment[0])), uintptr(unsafe.Pointer(directory)),
 		uintptr(unsafe.Pointer(&startup)), uintptr(unsafe.Pointer(&worker.process)))
 	runtime.KeepAlive(startup)
 	runtime.KeepAlive(environment)
@@ -783,10 +780,26 @@ func fixtureRunFreshUACWorker(t *testing.T, api *fixtureFreshUACAPI, account *fi
 	if ok == 0 || worker.process.Process == 0 || worker.process.Thread == 0 {
 		t.Fatal(nativeError("fresh native Limited-token suspended worker creation", callErr))
 	}
+	suspend, err := api.native.processID.Dll.FindProc("SuspendThread")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous, _, callErr := suspend.Call(uintptr(worker.process.Thread))
+	if uint32(previous) != 1 {
+		t.Fatal("fresh Limited worker did not retain exactly its original creation suspension", callErr)
+	}
+	previous, _, callErr = worker.api.resume.Call(uintptr(worker.process.Thread))
+	if uint32(previous) != 2 {
+		t.Fatal("fresh Limited worker suspension observation did not restore the original count", callErr)
+	}
+	ok, _, callErr = api.native.assignJob.Call(uintptr(worker.job), uintptr(worker.process.Process))
+	if ok == 0 {
+		t.Fatal(nativeError("bind original still-suspended Limited worker to its exact Job", callErr))
+	}
 	var member uint32
 	ok, _, callErr = api.native.inJob.Call(uintptr(worker.process.Process), uintptr(worker.job), uintptr(unsafe.Pointer(&member)))
 	if ok == 0 || member != 1 {
-		t.Fatal("fresh Limited worker was not created in the exact bounded Job", callErr)
+		t.Fatal("fresh Limited worker has no verified bounded Job before its first resume", callErr)
 	}
 	var actualToken syscall.Token
 	if err := syscall.OpenProcessToken(worker.process.Process, syscall.TOKEN_QUERY, &actualToken); err != nil {
