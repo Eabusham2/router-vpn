@@ -6,7 +6,9 @@ an actual dry run of its upstream Makefile, not an Xcode compilation claim.
 """
 from pathlib import Path
 import argparse
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import subprocess
@@ -224,6 +226,33 @@ class AppleTimerPreparation(unittest.TestCase):
     def test_real_pinned_timer_controls_execute_through_apple_module_graph(self):
         self.prepared()
         PREP.test(self.kit, self.go, self.env)
+
+    def test_actual_timer_verdicts_remain_separate_from_driver_diagnostics(self):
+        self.prepared()
+        # Exercise real OS pipes and the actual pinned timer tests. This
+        # wrapper adds only the Go driver's cold-cache diagnostic reproduced
+        # from Apple CI, then replaces itself with the unchanged Go compiler.
+        diagnostic = 'go: downloading golang.org/x/crypto v0.54.0\n'
+        wrapper = self.root / 'go-with-driver-diagnostic'
+        wrapper.write_text('#!' + sys.executable + '\n'
+                           'import os, sys\n'
+                           'if sys.argv[1:3] == ["test", "-json"]:\n'
+                           '    os.write(2, ' + repr(diagnostic.encode()) + ')\n'
+                           'os.execv(' + repr(self.go) + ', [' + repr(self.go) + ', *sys.argv[1:]])\n')
+        wrapper.chmod(0o700)
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            PREP.test(self.kit, str(wrapper), self.env)
+        self.assertIn(diagnostic, stderr.getvalue())
+        self.assertNotIn(diagnostic, stdout.getvalue())
+        self.assertIn('All three actual Apple dependency timer controls passed', stdout.getvalue())
+        # Separating streams must never turn malformed stdout into an ignored
+        # diagnostic, including a non-JSON line before otherwise valid events.
+        rows = [{'Package': PREP.PACKAGE, 'Test': name, 'Action': action}
+                for name in sorted(PREP.REQUIRED) for action in ('run', 'pass')]
+        rows.append({'Package': PREP.PACKAGE, 'Action': 'pass'})
+        with self.assertRaises(json.JSONDecodeError):
+            PREP.verdicts(diagnostic + '\n'.join(json.dumps(row) for row in rows))
 
 
 if __name__ == '__main__':

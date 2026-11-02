@@ -15,6 +15,7 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -221,11 +222,16 @@ def test(kit, go, env):
         raise ValueError('Apple AWG timer controls must execute on the selected supported host')
     command = [go, 'test', '-json', '-race', PACKAGE, '-run', '^TestRouterVPNAmneziaTimer', '-count=1', '-timeout=30s']
     completed = subprocess.run(command, cwd=source, env=selected, stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT, check=False, timeout=180)
+                               stderr=subprocess.PIPE, check=False, timeout=180)
     output = completed.stdout.decode('utf-8')
     print(output, end='', flush=True)
+    # The Go driver reports dependency downloads and compiler diagnostics on
+    # stderr. Keep that stream visible without treating it as test2json input;
+    # every stdout record and all three actual test verdicts remain mandatory.
+    print(completed.stderr.decode('utf-8', errors='replace'), end='', file=sys.stderr, flush=True)
     if completed.returncode:
-        raise subprocess.CalledProcessError(completed.returncode, command)
+        raise subprocess.CalledProcessError(completed.returncode, command,
+                                            output=completed.stdout, stderr=completed.stderr)
     verdicts(output)
     verify(kit, go, env)
     print('All three actual Apple dependency timer controls passed with unchanged pinned source.', flush=True)
