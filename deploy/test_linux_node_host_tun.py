@@ -180,44 +180,55 @@ def check_verdict(output, case=None):
     if any(value not in CASES for value in cases) or '--- FAIL:' in output or '--- SKIP:' in output:
         raise ValueError('Installed Linux host did not complete its actual native acceptance')
     prefix = '--- PASS: TestDesktopLinuxGuardianKernelNodeHostTUN'
-    if prefix + ' (' not in output:
+    passed = set(re.findall(re.escape(prefix) + r'(?:/[^\s(]+)? \(', output))
+    # Native Go logs prefix each receipt with its source location. Preserve
+    # the exact suffix and required newline; neither a partial last line nor
+    # a longer similarly named scenario can stand in for a captured receipt.
+    # Index once so exhaustive missing-line controls stay within the build
+    # gate as the real installed scenario inventory grows.
+    receipts = set()
+    for line in output.replace('\r\n', '\n').split('\n')[:-1]:
+        _, marker, suffix = line.rpartition('verified installed host ')
+        if marker:
+            receipts.add(marker + suffix + '\n')
+    if prefix + ' (' not in passed:
         raise ValueError('Installed Linux host omitted its actual native group')
     for value in cases:
-        if prefix + '/' + value + ' (' not in output or 'verified installed host native lifecycle: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if prefix + '/' + value + ' (' not in passed or 'verified installed host native lifecycle: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its actual complete owned lifecycle: ' + value)
-        if value in ACTIVE_CASES and 'verified installed host active lifetime: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in ACTIVE_CASES and 'verified installed host active lifetime: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its actual activation, request completion and native lifetime: ' + value)
-        if value in ('active-request-ended', *PUBLIC_CASES) and 'verified installed host retained DNS observation: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in ('active-request-ended', *PUBLIC_CASES) and 'verified installed host retained DNS observation: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its actual retained session DNS consumer: ' + value)
-        if value in MTU_CASES and 'verified installed host original MTU lease: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in MTU_CASES and 'verified installed host original MTU lease: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its original actual MTU lease: ' + value)
-        if value in ('active-request-ended', *PUBLIC_CASES, *MTU_CASES) and 'verified installed host live MTU status: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in ('active-request-ended', *PUBLIC_CASES, *MTU_CASES) and 'verified installed host live MTU status: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its current interface MTU status: ' + value)
-        if value in RESTORE_CASES and 'verified installed host sealed temporary restoration: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in RESTORE_CASES and 'verified installed host sealed temporary restoration: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its frozen execution, live MTU and fresh native restoration: ' + value)
-        if value in PUBLIC_CASES and 'verified installed host public Connect and Disconnect: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in PUBLIC_CASES and 'verified installed host public Connect and Disconnect: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its real public Connect and Disconnect composition: ' + value)
-        if value in COVER_CASES and 'verified installed host native cover: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in COVER_CASES and 'verified installed host native cover: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its captured native cover activation/failure/retirement: ' + value)
-        if value in OFF_CASES and 'verified installed host saved Linux protection Off: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in OFF_CASES and 'verified installed host saved Linux protection Off: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its exact Always retention, saved-policy Off and native release: ' + value)
-        if value in LAYER_CASES and 'verified installed host captured Start Layer: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in LAYER_CASES and 'verified installed host captured Start Layer: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its exact cipher, outer physical authority and Start Layer lifecycle: ' + value)
-        if value in WIREGUARD_CASES and 'verified installed host plain WireGuard: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in WIREGUARD_CASES and 'verified installed host plain WireGuard: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its exact UDP WireGuard peer and native owned lifecycle: ' + value)
-        if value in WIREGUARD_LAYER_CASES and 'verified installed host layered WireGuard: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in WIREGUARD_LAYER_CASES and 'verified installed host layered WireGuard: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its captured layered UDP route, final WireGuard identity and owned lifecycle: ' + value)
-        if value in HYSTERIA2_CASES and 'verified installed host plain Hysteria2: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in HYSTERIA2_CASES and 'verified installed host plain Hysteria2: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its exact UDP Hysteria2 peer, selected TLS trust and native owned lifecycle: ' + value)
-        if value in HYSTERIA2_LAYER_CASES and 'verified installed host layered Hysteria2: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in HYSTERIA2_LAYER_CASES and 'verified installed host layered Hysteria2: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted final Hysteria2 identity and owned layered UDP path')
-        if value in AMNEZIA_LAYER_CASES and 'verified installed host layered AWG2: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in AMNEZIA_LAYER_CASES and 'verified installed host layered AWG2: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted exact AWG parameters, separate layer owners or final encrypted lifecycle: ' + value)
-        if value in AMNEZIA_CASES and 'verified installed host captured AWG2: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in AMNEZIA_CASES and 'verified installed host captured AWG2: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted its exact UDP AWG2 peer, complete native parameters and owned lifecycle: ' + value)
-        if value in SIP003_CASES and 'verified installed host captured SIP003 lanes: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in SIP003_CASES and 'verified installed host captured SIP003 lanes: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted independent SIP003 TCP/HY2 UDP identity, selected DNS or retained lifecycle: ' + value)
-        if value in EXTERNAL_CASES and 'verified installed host retained external succession: ' + value + '\n' not in output.replace('\r\n', '\n'):
+        if value in EXTERNAL_CASES and 'verified installed host retained external succession: ' + value + '\n' not in receipts:
             raise ValueError('Installed Linux host omitted actual external DNS/exit, source, cancellation, replacement or exact Router restoration: ' + value)
 
 

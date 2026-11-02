@@ -133,6 +133,19 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
             with self.subTest(line=line), self.assertRaises(ValueError):
                 G.check_verdict(output.replace(line, ''))
 
+    def test_indexed_verdict_preserves_exact_terminated_receipts(self):
+        case = G.EXTERNAL_CASES[-1]
+        output = self.completed((case,))
+        G.check_verdict(output.replace('\n', '\r\n'), case)
+        receipt = 'verified installed host retained external succession: ' + case
+        passed = '--- PASS: TestDesktopLinuxGuardianKernelNodeHostTUN/' + case
+        for changed in (output.removesuffix('\n'),
+                        output.replace(receipt + '\n', receipt + '-other\n'),
+                        output.replace(receipt + '\n', receipt + ' \n'),
+                        output.replace(passed + ' (', passed + '-other (')):
+            with self.subTest(output=changed), self.assertRaises(ValueError):
+                G.check_verdict(changed, case)
+
     def test_same_architecture_and_case_remain_required(self):
         for case in G.CASES:
             output = self.completed((case,))
