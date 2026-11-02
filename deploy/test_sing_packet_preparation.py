@@ -287,6 +287,106 @@ class PacketPreparation(unittest.TestCase):
         PATCH.verify_tree(self.target)
         self.assert_cache_unchanged()
 
+    def test_exact_prior_write_copy_upgrades_read_headroom_after_complete_module_verification(self):
+        plan = {'Require': [{'Path': PATCH.MODULE, 'Version': PATCH.VERSION}]}
+        def command(args, **kwargs):
+            return PATCH.CORE+'\n' if args[0] == 'git' else json.dumps(plan)
+        name = 'protocol/socks/packet.go'
+        fixed = (self.target/name).read_bytes()
+        previous = PATCH.without_payload_read_fix(name, fixed)
+        self.assertIn(b'\treturn c.writePayload(buffer.Bytes(), len(p))\n', previous)
+        self.assertIn(b'\t<-c.joined\n', previous)
+        self.assertIn(b'\tn, err = c.conn.Read(p)\n', previous)
+        for old_auth in (False, True):
+            with self.subTest(old_auth=old_auth):
+                (self.target/name).write_bytes(previous)
+                for auth in PATCH.AUTH_FILES:
+                    (self.target/auth).write_bytes(self.originals[auth] if old_auth else PATCH.transform(auth, self.originals[auth]))
+                preserved = {path: (self.target/path).read_bytes() for path in self.originals
+                             if path != name and not (old_auth and path in PATCH.AUTH_FILES)}
+                with self.assertRaises(ValueError):
+                    PATCH.verify_tree(self.target)
+                with mock.patch.object(PATCH.subprocess, 'check_output', side_effect=command), mock.patch.object(PATCH.subprocess, 'run'):
+                    PATCH.prepare(self.root)
+                    PATCH.prepare(self.root)
+                self.assertEqual((self.target/name).read_bytes(), fixed)
+                self.assertEqual({path: (self.target/path).read_bytes() for path in preserved}, preserved)
+                PATCH.verify_tree(self.target)
+        self.assert_cache_unchanged()
+
+    def test_read_upgrade_rejects_partial_foreign_or_incomplete_source_before_writing(self):
+        plan = {'Require': [{'Path': PATCH.MODULE, 'Version': PATCH.VERSION}]}
+        def command(args, **kwargs):
+            return PATCH.CORE+'\n' if args[0] == 'git' else json.dumps(plan)
+        name = 'protocol/socks/packet.go'
+        previous = PATCH.without_payload_read_fix(name, (self.target/name).read_bytes())
+        for fault in ('copy-only', 'buffer-only', 'foreign-packet', 'foreign-license', 'missing-control-peer'):
+            with self.subTest(fault=fault):
+                for path, original in self.originals.items():
+                    (self.target/path).write_bytes(PATCH.transform(path, original))
+                data = previous
+                if fault == 'copy-only':
+                    data = data.replace(b'\tn = copy(p, p[index:n])\n', b'\tn = copy(p, frame[index:n])\n', 1)
+                elif fault == 'buffer-only':
+                    data = data.replace(b'\tn, err = c.conn.Read(p)\n', b'\tframe := make([]byte, 65535)\n\tn, err = c.conn.Read(frame)\n', 1)
+                elif fault == 'foreign-packet':
+                    data += b'\n// unowned read policy\n'
+                elif fault == 'foreign-license':
+                    (self.target/'LICENSE').write_bytes(b'foreign license')
+                else:
+                    peer = 'protocol/socks/packet_wait.go'
+                    (self.target/peer).write_bytes(self.originals[peer])
+                (self.target/name).write_bytes(data)
+                before = {path: (self.target/path).read_bytes() for path in self.originals}
+                with mock.patch.object(PATCH.subprocess, 'check_output', side_effect=command), mock.patch.object(PATCH.subprocess, 'run'), self.assertRaises(ValueError):
+                    PATCH.prepare(self.root)
+                self.assertEqual({path: (self.target/path).read_bytes() for path in self.originals}, before)
+        self.assert_cache_unchanged()
+
+    def test_read_upgrade_rejects_aliased_prior_write_source(self):
+        plan = {'Require': [{'Path': PATCH.MODULE, 'Version': PATCH.VERSION}]}
+        def command(args, **kwargs):
+            return PATCH.CORE+'\n' if args[0] == 'git' else json.dumps(plan)
+        name = 'protocol/socks/packet.go'
+        path = self.target/name
+        fixed = path.read_bytes()
+        previous = PATCH.without_payload_read_fix(name, fixed)
+        for kind in ('symlink', 'hardlink'):
+            with self.subTest(kind=kind):
+                outside = self.root/('read-'+kind)
+                outside.write_bytes(previous)
+                path.unlink()
+                try:
+                    path.symlink_to(outside) if kind == 'symlink' else path.hardlink_to(outside)
+                except OSError:
+                    path.write_bytes(fixed)
+                    continue
+                before = {entry: (self.target/entry).read_bytes() for entry in self.originals}
+                with mock.patch.object(PATCH.subprocess, 'check_output', side_effect=command), mock.patch.object(PATCH.subprocess, 'run'), self.assertRaises(ValueError):
+                    PATCH.prepare(self.root)
+                self.assertEqual({entry: (self.target/entry).read_bytes() for entry in self.originals}, before)
+                self.assertEqual(outside.read_bytes(), previous)
+                path.unlink()
+                path.write_bytes(fixed)
+        PATCH.verify_tree(self.target)
+        self.assert_cache_unchanged()
+
+    def test_read_negative_control_keeps_exact_published_writes_and_original_authentication(self):
+        name = 'protocol/socks/packet.go'
+        fixed = (self.target/name).read_bytes()
+        previous = PATCH.without_payload_read_fix(name, fixed)
+        self.assertIn(b'func (c *AssociatePacketConn) writePayload(', previous)
+        self.assertIn(b'\tdefer buffer.Release()\n\tpayloadSize := buffer.Len()\n', previous)
+        self.assertIn(b'\t<-c.joined\n', previous)
+        self.assertNotEqual(previous, PATCH.without_payload_write_fix(name, fixed))
+        for data in (self.originals[name], previous, fixed+b'\n// foreign source\n'):
+            with self.assertRaises(ValueError):
+                PATCH.without_payload_read_fix(name, data)
+        with self.assertRaises(ValueError):
+            PATCH.without_payload_read_fix('protocol/socks/handshake.go', (self.target/'protocol/socks/handshake.go').read_bytes())
+        PATCH.verify_tree(self.target)
+        self.assert_cache_unchanged()
+
     def test_missing_extra_reverted_and_unrelated_edits_are_rejected(self):
         cases = [('common/bufio/bind.go', self.originals['common/bufio/bind.go']),
                  ('common/bufio/bind_wait.go', self.originals['common/bufio/bind_wait.go']),

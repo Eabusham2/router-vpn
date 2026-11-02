@@ -80,13 +80,14 @@ func (*socksAssociationDialer) ListenPacket(context.Context, M.Socksaddr) (net.P
 }
 
 type socksAssociationPeer struct {
-	listener net.Listener
-	udp      *net.UDPConn
-	control  chan net.Conn
-	joined   chan error
-	udpDone  chan error
-	mu       sync.Mutex
-	accepted net.Conn
+	listener        net.Listener
+	udp             *net.UDPConn
+	control         chan net.Conn
+	joined          chan error
+	udpDone         chan error
+	mu              sync.Mutex
+	accepted        net.Conn
+	receivedPackets atomic.Uint64
 }
 
 func newSocksAssociationPeer(t *testing.T, network, host string) *socksAssociationPeer {
@@ -133,6 +134,7 @@ func newSocksAssociationPeer(t *testing.T, network, host string) *socksAssociati
 				p.udpDone <- err
 				return
 			}
+			p.receivedPackets.Add(1)
 			if _, err := udp.WriteToUDP(packet[:n], address); err != nil {
 				p.udpDone <- err
 				return
@@ -692,4 +694,182 @@ func TestSocksAssociatePayloadWriteCounts(t *testing.T) {
 			})
 		}
 	})
+}
+
+// A packet caller supplies payload capacity, not room for the SOCKS envelope.
+// Each real case sends three distinct datagrams before reading. A short or
+// empty caller buffer must discard only the current datagram's excess bytes;
+// it must never borrow a following datagram to finish the current payload.
+func TestSocksAssociatePayloadReadBuffers(t *testing.T) {
+	for _, family := range []struct{ name, network, host, first, second, third string }{
+		{"IPv4", "4", "127.0.0.1", "203.0.113.8:5353", "203.0.113.9:5354", "203.0.113.10:5355"},
+		{"IPv6", "6", "::1", "[2001:db8::8]:5353", "[2001:db8::9]:5354", "[2001:db8::10]:5355"},
+	} {
+		t.Run(family.name, func(t *testing.T) {
+			for _, method := range []string{"Read", "ReadFrom"} {
+				t.Run(method, func(t *testing.T) {
+					for _, size := range []string{"exact", "smaller", "zero", "nil", "empty"} {
+						t.Run(size, func(t *testing.T) {
+							peer := newSocksAssociationPeer(t, family.network, family.host)
+							connection, dialer, _ := peer.client(t, nil)
+							t.Cleanup(func() {
+								if err := connection.Close(); err != nil {
+									t.Error("actual SOCKS payload reader did not join its control/socket", err)
+								}
+							})
+							association, ok := connection.(*socks.AssociatePacketConn)
+							if !ok || dialer.tcp == nil || dialer.udp == nil {
+								t.Fatal("actual SOCKS payload reader lost its authenticated association")
+							}
+							payloads := [][]byte{
+								[]byte("first-actual-datagram\x00payload\xff"),
+								[]byte("second-independent-packet\xfe"),
+								[]byte("third-datagram-has-no-borrowed-tail\x00"),
+							}
+							if size == "empty" {
+								payloads[0] = nil
+							}
+							destinations := []M.Socksaddr{M.ParseSocksaddr(family.first), M.ParseSocksaddr(family.second), M.ParseSocksaddr(family.third)}
+							if err := connection.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+								t.Fatal(err)
+							}
+							for i, payload := range payloads {
+								n, err := association.WriteTo(payload, destinations[i].UDPAddr())
+								if err != nil || n != len(payload) {
+									t.Fatal("actual SOCKS payload reader could not send its complete independent packet", i, n, len(payload), err)
+								}
+							}
+							for i, payload := range payloads {
+								capacity := len(payload)
+								if i == 0 {
+									switch size {
+									case "smaller":
+										capacity = 5
+									case "zero", "nil":
+										capacity = 0
+									}
+								}
+								response := make([]byte, capacity)
+								if i == 0 && size == "nil" {
+									response = nil
+								}
+								var n int
+								var address net.Addr
+								var err error
+								if method == "ReadFrom" {
+									n, address, err = association.ReadFrom(response)
+								} else {
+									n, err = association.Read(response)
+									address = association.RemoteAddr()
+								}
+								wantN := min(len(payload), capacity)
+								if err != nil || n != wantN {
+									t.Errorf("SOCKS read consumed caller payload as framing: packet=%d got=%d want=%d payload=%d caller=%d peer_packets=%d error=%v", i, n, wantN, len(payload), capacity, peer.receivedPackets.Load(), err)
+								} else if !bytes.Equal(response[:n], payload[:wantN]) {
+									t.Errorf("SOCKS packet read borrowed or changed another datagram: packet=%d bytes=%d", i, n)
+								}
+								if address == nil || M.SocksaddrFromNet(address) != destinations[i] || M.SocksaddrFromNet(association.RemoteAddr()) != destinations[i] {
+									t.Errorf("SOCKS packet read changed its complete captured destination: packet=%d", i)
+								}
+							}
+							if got := peer.receivedPackets.Load(); got != uint64(len(payloads)) {
+								t.Fatal("actual SOCKS peer did not receive exactly the three distinct datagrams", got)
+							}
+						})
+					}
+				})
+			}
+		})
+	}
+
+	t.Run("reader", func(t *testing.T) {
+		sentinel := errors.New("captured physical packet read failure")
+		original := M.ParseSocksaddr("[2001:db8:8::19]:5353")
+		alternate := M.ParseSocksaddr("203.0.113.9:5354")
+		var valid bytes.Buffer
+		valid.Write([]byte{0, 0, 0})
+		if err := M.SocksaddrSerializer.WriteAddrPort(&valid, alternate); err != nil {
+			t.Fatal(err)
+		}
+		valid.WriteString("received-payload")
+		for _, method := range []string{"Read", "ReadFrom"} {
+			t.Run(method, func(t *testing.T) {
+				for _, test := range []struct {
+					name    string
+					frame   []byte
+					count   func(int) int
+					err     error
+					wantErr error
+					exact   bool
+				}{
+					{"native-zero", valid.Bytes(), func(int) int { return 0 }, sentinel, sentinel, true},
+					{"native-data", valid.Bytes(), nil, sentinel, sentinel, true},
+					{"native-negative", valid.Bytes(), func(int) int { return -1 }, sentinel, sentinel, true},
+					{"native-over-count", valid.Bytes(), func(n int) int { return n + 1 }, sentinel, sentinel, true},
+					{"short-zero", nil, nil, nil, socks.ErrInvalidPacket, true},
+					{"short-one", []byte{0}, nil, nil, socks.ErrInvalidPacket, true},
+					{"short-two", []byte{0, 0}, nil, nil, socks.ErrInvalidPacket, true},
+					{"negative", valid.Bytes(), func(int) int { return -1 }, nil, socks.ErrInvalidPacket, true},
+					{"over-count", valid.Bytes(), func(n int) int { return n + 1 }, nil, socks.ErrInvalidPacket, true},
+					{"missing-address", []byte{0, 0, 0}, nil, nil, io.EOF, false},
+					{"truncated-address", []byte{0, 0, 0, 1, 203}, nil, nil, io.ErrUnexpectedEOF, false},
+					{"truncated-port", []byte{0, 0, 0, 1, 203, 0, 113, 9, 20}, nil, nil, io.ErrUnexpectedEOF, false},
+				} {
+					t.Run(test.name, func(t *testing.T) {
+						transport := &socksPayloadReadTransport{frame: bytes.Clone(test.frame), count: test.count, err: test.err}
+						association := socks.NewAssociatePacketConn(transport, original, nil)
+						response := bytes.Repeat([]byte{0xa5}, 32)
+						before := bytes.Clone(response)
+						var n int
+						var address net.Addr
+						var err error
+						var panicked any
+						func() {
+							defer func() { panicked = recover() }()
+							if method == "ReadFrom" {
+								n, address, err = association.ReadFrom(response)
+							} else {
+								n, err = association.Read(response)
+							}
+						}()
+						if panicked != nil {
+							t.Errorf("SOCKS packet reader panicked on its captured physical count: %T", panicked)
+						}
+						if n != 0 || address != nil || !bytes.Equal(response, before) {
+							t.Error("SOCKS packet reader exposed framing or updated caller bytes after a rejected receive", n)
+						}
+						if test.exact && err != test.wantErr || !test.exact && !errors.Is(err, test.wantErr) {
+							t.Errorf("SOCKS packet reader replaced or ignored its captured receive error: got=%v want=%v", err, test.wantErr)
+						}
+						if M.SocksaddrFromNet(association.RemoteAddr()) != original {
+							t.Error("SOCKS packet reader installed an endpoint from a rejected receive")
+						}
+						if transport.reads != 1 {
+							t.Error("SOCKS packet reader retried or split its rejected datagram", transport.reads)
+						}
+					})
+				}
+			})
+		}
+	})
+}
+
+// Only the physical reader's result is controlled in these negative cases.
+// Actual framing, metadata decoding and endpoint publication remain the native
+// dependency's public Read/ReadFrom implementation.
+type socksPayloadReadTransport struct {
+	net.Conn
+	frame []byte
+	count func(int) int
+	err   error
+	reads int
+}
+
+func (c *socksPayloadReadTransport) Read(p []byte) (int, error) {
+	c.reads++
+	n := copy(p, c.frame)
+	if c.count != nil {
+		n = c.count(len(p))
+	}
+	return n, c.err
 }

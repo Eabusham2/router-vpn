@@ -106,6 +106,26 @@ def prove_payload_write_counts(source, env):
         raise RuntimeError('Original SOCKS payload count missed its actual framed-write regression')
     print('Verified native SOCKS packet writes report payload bytes and reject incomplete frames', flush=True)
 
+def prove_payload_read_buffers(source, env):
+    patch = BUILD.POLICY.AMNEZIA.PACKET
+    captured = {name: (source/patch.COPY/name).read_bytes() for name in patch.READ_FILES}
+    try:
+        for name, fixed in captured.items():
+            (source/patch.COPY/name).write_bytes(patch.without_payload_read_fix(name, fixed))
+        control = subprocess.run(['go', 'test', '-race', '-ldflags=-checklinkname=0', '-tags='+BUILD.TAGS,
+                                  '-count=1', '-timeout=30s', './protocol/routervpnamnezia',
+                                  '-run', '^TestSocksAssociatePayloadReadBuffers$'],
+                                 cwd=source, env=env, text=True, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT, timeout=300)
+    finally:
+        for name, fixed in captured.items():
+            (source/patch.COPY/name).write_bytes(fixed)
+    patch.verify(source)
+    if control.returncode != 1 or 'SOCKS read consumed caller payload as framing' not in control.stdout or 'panic: test timed out' in control.stdout:
+        print(control.stdout)
+        raise RuntimeError('Original SOCKS payload read missed its actual datagram regression')
+    print('Verified native SOCKS reads preserve payload capacity and consume only their original datagram', flush=True)
+
 def test(source=None):
     target = subprocess.check_output(['go', 'env', 'GOHOSTOS', 'GOHOSTARCH'], text=True).split()
     target = '/'.join(target)
@@ -132,12 +152,13 @@ def test(source=None):
                        cwd=source, env=env, check=True, timeout=90)
         subprocess.run(['go', 'test', '-race', '-ldflags=-checklinkname=0', '-tags='+BUILD.TAGS,
                         '-count=2', '-timeout=90s', './protocol/routervpnamnezia', '-run',
-                        '^Test(DesktopAmneziaCLIEncryptedTrafficAndOwnerShutdown|BindPreservesPacketFramingAndShortWriteRejection|ActualAmneziaUnconnectedUDPReply|ServerPacketConcurrentEndpoint|ServerPacketBlockedReplyDoesNotBlockReceive|SocksClientAssociationControlLifetime|SocksClientAssociationCloseJoinsControlRead|SocksAssociateConcurrentEndpoint|SocksClientRequiresOfferedAuthentication|SocksAssociatePayloadWriteCounts)$'],
+                        '^Test(DesktopAmneziaCLIEncryptedTrafficAndOwnerShutdown|BindPreservesPacketFramingAndShortWriteRejection|ActualAmneziaUnconnectedUDPReply|ServerPacketConcurrentEndpoint|ServerPacketBlockedReplyDoesNotBlockReceive|SocksClientAssociationControlLifetime|SocksClientAssociationCloseJoinsControlRead|SocksAssociateConcurrentEndpoint|SocksClientRequiresOfferedAuthentication|SocksAssociatePayloadWriteCounts|SocksAssociatePayloadReadBuffers)$'],
                        cwd=source, env=env, check=True, timeout=300)
         prove_original_packet_race(source, env)
         prove_association_controls(source, env)
         prove_offered_authentication(source, env)
         prove_payload_write_counts(source, env)
+        prove_payload_read_buffers(source, env)
         BUILD.reuse(bundle, target, BUILD.digest(), BUILD.environment(target))
         env['ROUTERVPN_AWG_DESKTOP_BUNDLE'] = str(bundle)
         env['ROUTERVPN_VIA_ENTRY_NATIVE_CLI'] = str(binary)

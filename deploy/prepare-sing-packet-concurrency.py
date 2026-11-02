@@ -9,6 +9,7 @@ preparations use this owner, so neither can replace the other's dependency.
 The SOCKS client association also couples its UDP socket to the lifetime of
 its negotiated TCP control connection and synchronizes its own reply endpoint.
 Its write APIs report payload bytes and reject incomplete SOCKS UDP frames.
+Its ordinary read APIs reserve wire headroom outside the caller's payload.
 Preserve TCP capacities, upstream routing semantics, the whole-module h1
 checksum, and the license; never edit the Go module cache.
 """
@@ -190,6 +191,50 @@ func (c *AssociatePacketConn) ReadPacket('''),
 }
 PATCHES.update(PAYLOAD_FILES)
 
+# net.Conn/PacketConn callers supply payload capacity, not SOCKS framing
+# headroom. Receive one bounded datagram independently of that capacity so a
+# valid exact-size read does not discard a header-sized tail of its payload.
+READ_FILES = {
+    'protocol/socks/packet.go': (PAYLOAD_FILES['protocol/socks/packet.go'][0],
+        PAYLOAD_FILES['protocol/socks/packet.go'][1] + (
+        ('func (c *AssociatePacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {\n'
+         '\tn, err = c.conn.Read(p)\n\tif err != nil {\n\t\treturn\n\t}\n'
+         '\tif n < 3 {\n\t\treturn 0, nil, ErrInvalidPacket\n\t}\n'
+         '\treader := bytes.NewReader(p[3:n])\n'
+         '\tdestination, err := M.SocksaddrSerializer.ReadAddrPort(reader)\n'
+         '\tif err != nil {\n\t\treturn\n\t}\n'
+         '\tc.setRemoteAddress(destination)\n\taddr = destination.UDPAddr()\n'
+         '\tindex := 3 + int(reader.Size()) - reader.Len()\n'
+         '\tn = copy(p, p[index:n])\n\treturn\n}',
+         '''func (c *AssociatePacketConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+	// The caller owns payload capacity only. One private bounded frame keeps
+	// SOCKS headers from consuming that capacity; any excess payload belongs
+	// to this datagram and is discarded, never borrowed from the next one.
+	buffer := buf.NewPacket()
+	defer buffer.Release()
+	frame := buffer.FreeBytes()
+	n, err = c.conn.Read(frame)
+	if err != nil {
+		return 0, nil, err
+	}
+	if n < 3 || n > len(frame) {
+		return 0, nil, ErrInvalidPacket
+	}
+	reader := bytes.NewReader(frame[3:n])
+	destination, err := M.SocksaddrSerializer.ReadAddrPort(reader)
+	if err != nil {
+		return 0, nil, err
+	}
+	c.setRemoteAddress(destination)
+	addr = destination.UDPAddr()
+	index := 3 + int(reader.Size()) - reader.Len()
+	n = copy(p, frame[index:n])
+	return
+}'''),
+    )),
+}
+PATCHES.update(READ_FILES)
+
 
 def git_blob(data):
     return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
@@ -221,6 +266,13 @@ def without_payload_write_fix(relative, data):
     if relative not in PAYLOAD_FILES:
         raise ValueError('No pinned SOCKS payload transform for: ' + relative)
     return _transform(relative, transform(relative, data, reverse=True), ASSOCIATION_FILES)
+
+
+def without_payload_read_fix(relative, data):
+    """Exact published write/auth/control source for the read regression."""
+    if relative not in READ_FILES:
+        raise ValueError('No pinned SOCKS payload read transform for: ' + relative)
+    return _transform(relative, transform(relative, data, reverse=True), PAYLOAD_FILES)
 
 
 def h1(rows):
@@ -257,9 +309,13 @@ def verify_tree(directory, allow_packet_only=False):
             try:
                 original = transform(relative, data, reverse=True)
             except ValueError:
-                # This reverse accepts only the exact complete old association
-                # patch, never a partially applied payload fix or foreign edit.
-                original = _transform(relative, data, ASSOCIATION_FILES, reverse=True)
+                # Accept only complete published predecessors: write/auth/
+                # control, or the earlier association source. Every reverse
+                # must recover the same exact original blob before full h1.
+                try:
+                    original = _transform(relative, data, PAYLOAD_FILES, reverse=True)
+                except ValueError:
+                    original = _transform(relative, data, ASSOCIATION_FILES, reverse=True)
                 if path.stat().st_nlink != 1:
                     raise ValueError('Cannot upgrade an aliased SOCKS payload file')
                 upgrades[relative] = transform(relative, original)
@@ -339,7 +395,7 @@ def prepare(vendor):
             extract_verified(Path(info['Zip']), staged)
             staged.rename(target)
     subprocess.run(['go', 'mod', 'edit', '-replace=' + MODULE + '@' + VERSION + '=./' + COPY], cwd=vendor, check=True)
-    print('Prepared checksum-verified sing UDP endpoints, exact SOCKS authentication, payload counts, joined control ownership and complete ciphertext buffers:', VERSION)
+    print('Prepared checksum-verified sing UDP endpoints, exact SOCKS authentication, payload read/write contracts, joined control ownership and complete ciphertext buffers:', VERSION)
 
 
 def verify(vendor):
