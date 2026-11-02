@@ -25,9 +25,11 @@ const fixtureFreshUACName = "TestWindowsControllerUACAcceptanceFreshLogonThreadA
 const fixtureFreshUACEnvironment = "ROUTERVPN_CONTROLLER_FRESH_UAC_WORKER"
 
 type fixtureFreshUACReceipt struct {
-	Nonce, Report string
-	Limited, Full fixtureFreshUACIdentity
-	File          syscall.ByHandleFileInformation
+	Role, Nonce, Report string
+	FullReport          string
+	Limited, Full       fixtureFreshUACIdentity
+	File                syscall.ByHandleFileInformation
+	FullFile            syscall.ByHandleFileInformation
 }
 
 var fixtureFreshUACWorkerReceipt *fixtureFreshUACReceipt
@@ -42,13 +44,21 @@ func TestMain(m *testing.M) {
 		worker = worker || arg == selector
 	}
 	raw := os.Getenv(fixtureFreshUACEnvironment)
+	if fixtureFreshUACWorkerReceipt != nil {
+		encoded, err := json.Marshal(fixtureFreshUACWorkerReceipt)
+		if err != nil {
+			os.Exit(125)
+		}
+		raw = string(encoded)
+	}
 	if !worker || raw == "" {
 		os.Exit(m.Run())
 	}
 	var receipt fixtureFreshUACReceipt
 	decoder := json.NewDecoder(strings.NewReader(raw))
 	decoder.DisallowUnknownFields()
-	if len(raw) > 8192 || decoder.Decode(&receipt) != nil || decoder.Decode(new(any)) != io.EOF || len(receipt.Nonce) != 32 || receipt.Report == "" {
+	if len(raw) > 8192 || decoder.Decode(&receipt) != nil || decoder.Decode(new(any)) != io.EOF || len(receipt.Nonce) != 32 || receipt.Report == "" ||
+		(receipt.Role != "limited" && receipt.Role != "full") {
 		fmt.Fprintln(os.Stderr, "fresh UAC worker receipt is malformed")
 		os.Exit(125)
 	}
@@ -62,8 +72,12 @@ func TestMain(m *testing.M) {
 	api, err := native()
 	actual, tokenErr := fixtureFreshUACObserveToken(api, token)
 	closeErr := token.Close()
-	if err != nil || tokenErr != nil || closeErr != nil || !fixtureFreshUACSameIdentity(actual, receipt.Full) {
-		fmt.Fprintln(os.Stderr, "fresh UAC worker did not retain the captured native Full logon")
+	expected := receipt.Limited
+	if receipt.Role == "full" {
+		expected = receipt.Full
+	}
+	if err != nil || tokenErr != nil || closeErr != nil || !fixtureFreshUACPrimaryMatches(actual, expected) {
+		fmt.Fprintln(os.Stderr, "fresh UAC worker did not retain its captured native primary logon")
 		os.Exit(125)
 	}
 	name, err := syscall.UTF16PtrFromString(receipt.Report)
@@ -84,8 +98,12 @@ func TestMain(m *testing.M) {
 	report := os.NewFile(uintptr(handle), "owned-fresh-uac-report")
 	os.Stdout, os.Stderr = report, report
 	fixtureFreshUACWorkerReceipt = &receipt
-	fmt.Fprintln(report, "Fresh interactive UAC worker receipt:", receipt.Nonce)
+	fmt.Fprintln(report, "Fresh interactive UAC", receipt.Role, "worker receipt:", receipt.Nonce)
 	code := m.Run()
+	if err := fixtureFreshUACFinishBootstrap(); err != nil {
+		fmt.Fprintln(report, "fresh UAC bootstrap lifetime did not join:", err)
+		code = 125
+	}
 	if err := errors.Join(report.Sync(), report.Close()); err != nil {
 		code = 125
 	}
@@ -434,9 +452,17 @@ func fixtureFreshUACObserveToken(api *nativeAPI, token syscall.Token) (fixtureFr
 	if err != nil {
 		return result, err
 	}
-	statistics, err := fixtureTokenStatistics(token)
-	if err != nil {
-		return result, fmt.Errorf("native UAC primary statistics (observed_primary=%t observed_session=%d): %w", identity.Primary, identity.SessionID, err)
+	// Linked handles are evidence only. A SecurityIdentification link cannot
+	// become a worker token; every real worker is checked independently below.
+	var statistics tokenStatistics
+	var returned uint32
+	err = syscall.GetTokenInformation(token, 10, (*byte)(unsafe.Pointer(&statistics)), uint32(unsafe.Sizeof(statistics)), &returned)
+	if err != nil || unsafe.Sizeof(statistics) != 56 || returned != 56 || statistics.TokenID == 0 ||
+		(statistics.Type != 1 && statistics.Type != 2) || (statistics.Type == 2 && statistics.ImpersonationLevel != 1) {
+		return result, errors.Join(err, fmt.Errorf("native UAC observed carrier is unproved (bytes=%d type=%d level=%d)", returned, statistics.Type, statistics.ImpersonationLevel))
+	}
+	if statistics.Type == 1 {
+		statistics.ImpersonationLevel = 0 // This field has no meaning for primary tokens.
 	}
 	level, err := fixtureTokenElevationType(token)
 	if err != nil {
@@ -466,7 +492,7 @@ func fixtureFreshUACObserveToken(api *nativeAPI, token syscall.Token) (fixtureFr
 		return result, err
 	}
 	_, present := privileges[debug]
-	return fixtureFreshUACIdentity{SID: identity.SID, AuthenticationID: identity.AuthenticationID, TokenID: statistics.TokenID, Session: identity.SessionID,
+	return fixtureFreshUACIdentity{SID: identity.SID, AuthenticationID: identity.AuthenticationID, TokenID: statistics.TokenID, Session: identity.SessionID, ImpersonationLevel: statistics.ImpersonationLevel,
 		ElevationType: level, Integrity: uint32(numeric), Primary: identity.Primary, Elevated: identity.Elevated, Admin: identity.Administrator, DebugPresent: present}, nil
 }
 
@@ -504,13 +530,13 @@ func fixtureFreshUACReadPair(api *nativeAPI, token syscall.Token, sid string) (l
 	}
 	if root.ElevationType == 3 {
 		limited, full = root, other
-		err = fixtureFreshUACPairValid(sid, limited, full, backRoot, backOther)
+		err = fixtureFreshUACObservedPairValid(sid, root, limited, full, backRoot, backOther)
 		if err == nil {
 			err = fixtureDenyOnlyAdministrator(token)
 		}
 	} else {
 		limited, full = other, root
-		err = fixtureFreshUACPairValid(sid, limited, full, backOther, backRoot)
+		err = fixtureFreshUACObservedPairValid(sid, root, limited, full, backOther, backRoot)
 		if err == nil {
 			err = fixtureDenyOnlyAdministrator(linked)
 		}
@@ -520,6 +546,10 @@ func fixtureFreshUACReadPair(api *nativeAPI, token syscall.Token, sid string) (l
 
 func TestWindowsControllerUACAcceptanceFreshLogonThreadAccess(t *testing.T) {
 	if receipt := fixtureFreshUACWorkerReceipt; receipt != nil {
+		if receipt.Role == "limited" {
+			fixtureFreshUACNormalRunas(t, receipt)
+			return
+		}
 		token, err := syscall.OpenCurrentProcessToken()
 		if err != nil {
 			t.Fatal(err)
@@ -530,7 +560,8 @@ func TestWindowsControllerUACAcceptanceFreshLogonThreadAccess(t *testing.T) {
 			t.Fatal(err)
 		}
 		limited, full, err := fixtureFreshUACReadPair(api, token, receipt.Full.SID)
-		if err != nil || !fixtureFreshUACSameIdentity(limited, receipt.Limited) || !fixtureFreshUACSameIdentity(full, receipt.Full) {
+		if err != nil || !fixtureFreshUACPrimaryMatches(limited, receipt.Limited) || !fixtureFreshUACPrimaryMatches(full, receipt.Full) ||
+			fixtureFreshUACPairValid(receipt.Full.SID, limited, full, limited, full) != nil {
 			t.Fatal("Full worker lost its independently captured reciprocal interactive logons", err)
 		}
 		for _, item := range []struct {
@@ -545,7 +576,7 @@ func TestWindowsControllerUACAcceptanceFreshLogonThreadAccess(t *testing.T) {
 		} {
 			t.Run(item.name, item.run)
 		}
-		t.Logf("Fresh native Limited/Full pair: session=%d Limited authentication LUID=%d Full authentication LUID=%d; reciprocal identities and original native negative cases checked. No interactive consent, cross-account product or physical-device acceptance is established.", full.Session, limited.AuthenticationID, full.AuthenticationID)
+		t.Logf("Fresh native Limited/Full pair: session=%d Limited authentication LUID=%d Full authentication LUID=%d; normal runas, reciprocal identities and original native negative cases checked. Existing policy did not display a consent prompt; cross-account product and physical-device acceptance remain separate.", full.Session, limited.AuthenticationID, full.AuthenticationID)
 		return
 	}
 	if os.Getenv("GITHUB_ACTIONS") != "true" || os.Getenv("RUNNER_ENVIRONMENT") != "github-hosted" || os.Getenv("RUNNER_OS") != "Windows" {
@@ -559,6 +590,9 @@ func TestWindowsControllerUACAcceptanceFreshLogonThreadAccess(t *testing.T) {
 	for _, name := range []string{"EnableLUA", "ConsentPromptBehaviorAdmin", "FilterAdministratorToken", "PromptOnSecureDesktop"} {
 		value := policies[name]
 		t.Logf("Existing native UAC policy: %s present=%t value=%d (read-only)", name, value.Exists, value.Value)
+	}
+	if policies["ConsentPromptBehaviorAdmin"] != (fixtureFreshUACPolicyValue{true, 0}) {
+		t.Fatal("disposable noninteractive CI requires its existing no-prompt administrator policy; no UAC policy is changed or consent bypassed")
 	}
 	before, err := CurrentIdentity()
 	if err != nil || !before.Primary || !before.Elevated || !before.Administrator {
@@ -579,30 +613,22 @@ func TestWindowsControllerUACAcceptanceFreshLogonThreadAccess(t *testing.T) {
 	if observed, err := fixtureFreshUACObserveToken(api.native, logon); err != nil || observed.ElevationType != 3 {
 		t.Fatal("LogonUser did not return its native Limited interactive token", err)
 	}
-	fullToken, err := fixtureFreshUACLinked(logon)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := fullToken.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	if actual, err := fixtureFreshUACObserveToken(api.native, fullToken); err != nil || !fixtureFreshUACSameIdentity(actual, full) {
-		t.Fatal("fresh Full handle changed its captured logon", err)
-	}
-	fixtureRunFreshUACWorker(t, api, account, fullToken, limited, full)
+	t.Logf("Fresh native linked Full observation: primary=%t identification_level=%d; this handle is never supplied to a launcher", full.Primary, full.ImpersonationLevel)
+	fixtureRunFreshUACWorker(t, api, account, logon, limited, full)
 }
 
-// The worker uses the OS-produced Full token, never a filtered or relabeled
-// token. Only an already-present, enabled SeImpersonatePrivilege is accepted.
+// The first worker uses the OS-produced Limited primary token. It asks normal
+// Windows runas to create the Full owner through the shipping protected launch.
+// No linked identification token is converted or supplied to a launcher.
 // https://learn.microsoft.com/windows/win32/api/winbase/nf-winbase-createprocesswithtokenw
 func fixtureRunFreshUACWorker(t *testing.T, api *fixtureFreshUACAPI, account *fixtureFreshUACAccount, token syscall.Token, limited, full fixtureFreshUACIdentity) {
 	t.Helper()
 	worker := &fixtureRestrictedWorker{api: fixtureRestrictedAPIs(t)}
-	var image, reportOwner *fixtureMediumImage
+	var image, reportOwner, fullReportOwner *fixtureMediumImage
+	var fullReport *os.File
 	var closeDesktop func() error
 	closed := false
+	fullJoined := true // No runas process can exist before the Limited worker resumes.
 	closeAll := func() error {
 		if closed {
 			return nil
@@ -610,12 +636,19 @@ func fixtureRunFreshUACWorker(t *testing.T, api *fixtureFreshUACAPI, account *fi
 		if err := worker.close(); err != nil {
 			return err
 		}
+		if !fullJoined {
+			return errors.New("fresh runas Full join is unproved; retain the owned account, protected image and report receipts for disposable-host cleanup")
+		}
 		account.joined = true
 		var result error
 		if closeDesktop != nil {
 			result = errors.Join(result, closeDesktop())
 		}
-		result = errors.Join(result, reportOwner.close(), image.close())
+		if fullReport != nil {
+			result = errors.Join(result, fullReport.Close())
+			fullReport = nil
+		}
+		result = errors.Join(result, fullReportOwner.close(), reportOwner.close(), image.close())
 		if result == nil {
 			closed = true
 		}
@@ -656,13 +689,13 @@ func fixtureRunFreshUACWorker(t *testing.T, api *fixtureFreshUACAPI, account *fi
 		t.Fatal(err)
 	}
 	worker.directory = filepath.Dir(executable)
-	worker.desktop, closeDesktop = fixtureFreshUACDesktop(t, worker.api)
+	worker.desktop, closeDesktop = fixtureFreshUACDesktop(t, worker.api, account.sid)
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
 		t.Fatal(err)
 	}
-	reportPath := filepath.Join(worker.directory, "fresh-uac-report-"+hex.EncodeToString(nonce[:])+".txt")
-	reportOwner, worker.report, err = fixtureFreshUACReport(api.native, image.dispose, reportPath)
+	reportPath := filepath.Join(worker.directory, "fresh-uac-limited-"+hex.EncodeToString(nonce[:])+".txt")
+	reportOwner, worker.report, err = fixtureFreshUACReport(api.native, image.dispose, reportPath, account.sid, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,7 +703,16 @@ func fixtureRunFreshUACWorker(t *testing.T, api *fixtureFreshUACAPI, account *fi
 	if err := syscall.GetFileInformationByHandle(reportOwner.file, &file); err != nil {
 		t.Fatal(err)
 	}
-	receipt := fixtureFreshUACReceipt{Nonce: hex.EncodeToString(nonce[:]), Report: reportPath, Limited: limited, Full: full, File: file}
+	fullReportPath := filepath.Join(worker.directory, "fresh-uac-full-"+hex.EncodeToString(nonce[:])+".txt")
+	fullReportOwner, fullReport, err = fixtureFreshUACReport(api.native, image.dispose, fullReportPath, account.sid, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fullFile syscall.ByHandleFileInformation
+	if err := syscall.GetFileInformationByHandle(fullReportOwner.file, &fullFile); err != nil {
+		t.Fatal(err)
+	}
+	receipt := fixtureFreshUACReceipt{Role: "limited", Nonce: hex.EncodeToString(nonce[:]), Report: reportPath, FullReport: fullReportPath, Limited: limited, Full: full, File: file, FullFile: fullFile}
 	raw, err := json.Marshal(receipt)
 	if err != nil {
 		t.Fatal(err)
@@ -727,7 +769,7 @@ func fixtureRunFreshUACWorker(t *testing.T, api *fixtureFreshUACAPI, account *fi
 		t.Fatal(err)
 	}
 	application, _ := syscall.UTF16PtrFromString(executable)
-	command, _ := syscall.UTF16FromString(syscall.EscapeArg(executable) + " -test.run=^" + fixtureFreshUACName + "$ -test.count=1 -test.timeout=35s -test.v")
+	command, _ := syscall.UTF16FromString(syscall.EscapeArg(executable) + " -test.run=^" + fixtureFreshUACName + "$ -test.count=1 -test.timeout=65s -test.v")
 	directory, _ := syscall.UTF16PtrFromString(worker.directory)
 	account.joined = false
 	ok, _, callErr = api.create.Call(uintptr(token), 0 /* no user profile or network-only logon */, uintptr(unsafe.Pointer(application)), uintptr(unsafe.Pointer(&command[0])),
@@ -739,12 +781,12 @@ func fixtureRunFreshUACWorker(t *testing.T, api *fixtureFreshUACAPI, account *fi
 	runtime.KeepAlive(command)
 	runtime.KeepAlive(directory)
 	if ok == 0 || worker.process.Process == 0 || worker.process.Thread == 0 {
-		t.Fatal(nativeError("fresh native Full-token suspended worker creation", callErr))
+		t.Fatal(nativeError("fresh native Limited-token suspended worker creation", callErr))
 	}
 	var member uint32
 	ok, _, callErr = api.native.inJob.Call(uintptr(worker.process.Process), uintptr(worker.job), uintptr(unsafe.Pointer(&member)))
 	if ok == 0 || member != 1 {
-		t.Fatal("fresh Full worker was not created in the exact bounded Job", callErr)
+		t.Fatal("fresh Limited worker was not created in the exact bounded Job", callErr)
 	}
 	var actualToken syscall.Token
 	if err := syscall.OpenProcessToken(worker.process.Process, syscall.TOKEN_QUERY, &actualToken); err != nil {
@@ -752,8 +794,8 @@ func fixtureRunFreshUACWorker(t *testing.T, api *fixtureFreshUACAPI, account *fi
 	}
 	actual, observeErr := fixtureFreshUACObserveToken(api.native, actualToken)
 	closeErr := actualToken.Close()
-	if observeErr != nil || closeErr != nil || !fixtureFreshUACSameIdentity(actual, full) {
-		t.Fatal("fresh suspended worker changed its exact native Full logon/session", observeErr, closeErr)
+	if observeErr != nil || closeErr != nil || !fixtureFreshUACPrimaryMatches(actual, limited) {
+		t.Fatal("fresh suspended worker changed its exact native Limited logon/session", observeErr, closeErr)
 	}
 	var duplicate syscall.Handle
 	if err := syscall.DuplicateHandle(^syscall.Handle(0), worker.process.Process, ^syscall.Handle(0), &duplicate, 0, false, syscall.DUPLICATE_SAME_ACCESS); err != nil {
@@ -768,19 +810,24 @@ func fixtureRunFreshUACWorker(t *testing.T, api *fixtureFreshUACAPI, account *fi
 	if proofErr != nil || proofCloseErr != nil {
 		t.Fatal("fresh suspended worker lost its exact retained image", proofErr, proofCloseErr)
 	}
+	fullJoined = false
 	resumed, _, callErr := worker.api.resume.Call(uintptr(worker.process.Thread))
 	if resumed != 1 {
-		t.Fatal(nativeError("fresh native Full worker initial resume", callErr))
+		t.Fatal(nativeError("fresh native Limited worker initial resume", callErr))
 	}
-	if err := worker.wait(40 * time.Second); err != nil {
-		t.Fatal("fresh native Full worker did not join", err, worker.output())
+	if err := worker.wait(70 * time.Second); err != nil {
+		t.Fatal("fresh native Limited/Full workers did not join", err, worker.output())
 	}
 	var exit uint32
 	if err := syscall.GetExitCodeProcess(worker.process.Process, &exit); err != nil || exit != 0 {
-		t.Fatalf("fresh native Full worker failed (exit=%d): %v\n%s", exit, err, worker.output())
+		t.Fatalf("fresh native Limited worker failed (exit=%d): %v\n%s", exit, err, worker.output())
 	}
-	output := worker.output()
-	for _, marker := range []string{"Fresh interactive UAC worker receipt: " + receipt.Nonce, "--- PASS: " + fixtureFreshUACName + " (", "--- PASS: " + fixtureFreshUACName + "/linked-limited-access (", "--- PASS: " + fixtureFreshUACName + "/cancelled-uac (", "--- PASS: " + fixtureFreshUACName + "/replacement-image (", "--- PASS: " + fixtureFreshUACName + "/missing-callback (", "--- PASS: " + fixtureFreshUACName + "/cancelled-suspended-owner ("} {
+	fullOutput, err := io.ReadAll(io.LimitReader(fullReport, 1<<20))
+	if err != nil || len(fullOutput) == 1<<20 {
+		t.Fatal("fresh Full report has no bounded completed output", err)
+	}
+	output := worker.output() + "\n" + string(fullOutput)
+	for _, marker := range []string{"Fresh interactive UAC limited worker receipt: " + receipt.Nonce, "Fresh interactive UAC full worker receipt: " + receipt.Nonce, "Normal runas retained the genuine Limited/Full pair", "--- PASS: " + fixtureFreshUACName + " (", "--- PASS: " + fixtureFreshUACName + "/linked-limited-access (", "--- PASS: " + fixtureFreshUACName + "/cancelled-uac (", "--- PASS: " + fixtureFreshUACName + "/replacement-image (", "--- PASS: " + fixtureFreshUACName + "/missing-callback (", "--- PASS: " + fixtureFreshUACName + "/cancelled-suspended-owner ("} {
 		if !strings.Contains(output, marker) {
 			t.Fatal("fresh native UAC worker did not execute a required original case", marker, output)
 		}
@@ -788,11 +835,12 @@ func fixtureRunFreshUACWorker(t *testing.T, api *fixtureFreshUACAPI, account *fi
 	if strings.Contains(output, "--- SKIP:") || strings.Contains(output, "DATA RACE") || strings.Contains(output, "--- FAIL:") {
 		t.Fatal("fresh UAC worker did not establish all required native results", output)
 	}
+	fullJoined = true // Exact Limited owner waited for its actual Shell Full process.
 	t.Log(output)
 	if err := closeAll(); err != nil {
 		t.Fatal("fresh UAC worker cleanup did not join", err)
 	}
-	t.Log("Fresh worker and its exact descendants joined; original caller token and UAC policies remain unchanged. This is native linked-token evidence, not interactive consent or GLOBALROOT acceptance.")
+	t.Log("Fresh Limited worker, runas Full worker and their exact descendants joined; original caller token and UAC policies remain unchanged. A displayed consent prompt, cross-account product and GLOBALROOT acceptance remain separate.")
 }
 
 func fixtureFreshUACDOSImage(api *nativeAPI, image *Image) (string, error) {
@@ -809,9 +857,13 @@ func fixtureFreshUACDOSImage(api *nativeAPI, image *Image) (string, error) {
 	return localExecutablePath(strings.TrimPrefix(syscall.UTF16ToString(buffer[:length]), `\\?\`))
 }
 
-func fixtureFreshUACReport(api *nativeAPI, dispose *syscall.Proc, path string) (*fixtureMediumImage, *os.File, error) {
+func fixtureFreshUACReport(api *nativeAPI, dispose *syscall.Proc, path, sid string, limitedWrite bool) (*fixtureMediumImage, *os.File, error) {
 	owner := &fixtureMediumImage{native: api, dispose: dispose}
-	sddl, _ := syscall.UTF16PtrFromString("O:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)S:(ML;;NW;;;ME)")
+	access := "FR"
+	if limitedWrite {
+		access = "FRFW"
+	}
+	sddl, _ := syscall.UTF16PtrFromString("O:BAD:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;" + access + ";;;" + sid + ")S:(ML;;NW;;;ME)")
 	var descriptor unsafe.Pointer
 	ok, _, callErr := api.convertSD.Call(uintptr(unsafe.Pointer(sddl)), 1, uintptr(unsafe.Pointer(&descriptor)), 0)
 	if descriptor != nil {
@@ -838,7 +890,7 @@ func fixtureFreshUACReport(api *nativeAPI, dispose *syscall.Proc, path string) (
 	return owner, os.NewFile(uintptr(read), "captured-fresh-uac-report"), nil
 }
 
-func fixtureFreshUACDesktop(t *testing.T, api *fixtureRestrictedAPI) (string, func() error) {
+func fixtureFreshUACDesktop(t *testing.T, api *fixtureRestrictedAPI, sid string) (string, func() error) {
 	t.Helper()
 	library, err := syscall.LoadDLL(filepath.Join(api.native.systemDirectory, "user32.dll"))
 	if err != nil {
@@ -892,9 +944,9 @@ func fixtureFreshUACDesktop(t *testing.T, api *fixtureRestrictedAPI) (string, fu
 	stationName := "RouterVPN-FreshUAC-" + hex.EncodeToString(nonce[:])
 	stationText, _ := syscall.UTF16PtrFromString(stationName)
 	desktopText, _ := syscall.UTF16PtrFromString("default")
-	// Both callers are actual administrators. The Limited token is used only
-	// for the unchanged thread-access probe, not as a fabricated GUI session.
-	sddl, _ := syscall.UTF16PtrFromString("O:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)S:(ML;;NW;;;ME)")
+	// This is a newly created private fixture desktop. Grant its exact captured
+	// fresh user access without changing the shared interactive desktop ACL.
+	sddl, _ := syscall.UTF16PtrFromString("O:BAD:P(A;;GA;;;SY)(A;;GA;;;BA)(A;;GA;;;" + sid + ")S:(ML;;NW;;;ME)")
 	var descriptor unsafe.Pointer
 	ok, _, callErr := api.native.convertSD.Call(uintptr(unsafe.Pointer(sddl)), 1, uintptr(unsafe.Pointer(&descriptor)), 0)
 	if descriptor != nil {
@@ -935,8 +987,8 @@ func fixtureFreshUACDesktop(t *testing.T, api *fixtureRestrictedAPI) (string, fu
 	if desktop == 0 {
 		t.Fatal(nativeError("fresh UAC owned private desktop creation", callErr))
 	}
-	fixtureVerifyMediumUserObject(t, procedures[6], station, "S-1-5-32-544", 0x000f037f)
-	fixtureVerifyMediumUserObject(t, procedures[6], desktop, "S-1-5-32-544", 0x000f01ff)
+	fixtureVerifyMediumUserObjectPrincipals(t, procedures[6], station, "S-1-5-32-544", 0x000f037f, sid)
+	fixtureVerifyMediumUserObjectPrincipals(t, procedures[6], desktop, "S-1-5-32-544", 0x000f01ff, sid)
 	transferred = true
 	return stationName + `\default`, closeAll
 }

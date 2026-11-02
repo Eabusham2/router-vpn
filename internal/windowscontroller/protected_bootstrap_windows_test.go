@@ -26,7 +26,9 @@ func init() {
 	if !windowsbootstrap.Requested(os.Args[1:]) {
 		return
 	}
-	if err := fixtureProtectedBootstrapEntry(os.Args[1:]); err != nil {
+	if err := fixtureProtectedBootstrapEntry(os.Args[1:]); errors.Is(err, fixtureFreshUACContinue) {
+		return // The authenticated disposable UAC fixture continues in TestMain.
+	} else if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "protected bootstrap fixture:", err)
 		os.Exit(82)
 	}
@@ -86,7 +88,12 @@ func fixtureProtectedBootstrapEntry(arguments []string) error {
 	if err != nil {
 		return err
 	}
-	defer pipe.Close()
+	transferred := false
+	defer func() {
+		if !transferred {
+			_ = pipe.Close()
+		}
+	}()
 	peer, err := pipe.VerifyPeer(parent, parentImage)
 	if err != nil {
 		return err
@@ -101,10 +108,16 @@ func fixtureProtectedBootstrapEntry(arguments []string) error {
 	if err := pipe.WriteFrame(ctx, append(frame, '\n')); err != nil {
 		return err
 	}
-	if err := pipe.ObserveLifetime(ctx); !errors.Is(err, io.EOF) {
+	frame, err = pipe.ReadFrame(ctx)
+	if errors.Is(err, io.EOF) {
+		return nil
+	}
+	if err != nil {
 		return errors.Join(err, errors.New("protected bootstrap did not observe its retained caller closing"))
 	}
-	return nil
+	err = fixtureFreshUACBootstrapHandoff(ctx, pipe, parent, image, frame)
+	transferred = errors.Is(err, fixtureFreshUACContinue)
+	return err
 }
 
 type protectedBootstrapFixture struct {

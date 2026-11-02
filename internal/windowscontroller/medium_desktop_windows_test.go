@@ -126,7 +126,14 @@ func fixturePrivateMediumDesktop(t *testing.T, api *fixtureRestrictedAPI) string
 }
 
 func fixtureVerifyMediumUserObject(t *testing.T, read *syscall.Proc, handle uintptr, owner string, all uint32) {
+	fixtureVerifyMediumUserObjectPrincipals(t, read, handle, owner, all)
+}
+
+func fixtureVerifyMediumUserObjectPrincipals(t *testing.T, read *syscall.Proc, handle uintptr, owner string, all uint32, additional ...string) {
 	t.Helper()
+	if len(additional) > 1 {
+		t.Fatal("private USER object has too many captured fixture principals")
+	}
 	information := uint32(1 | 4 | 0x10) // OWNER | DACL | LABEL_SECURITY_INFORMATION.
 	var size uint32
 	ok, _, callErr := read.Call(handle, uintptr(unsafe.Pointer(&information)), 0, 0, uintptr(unsafe.Pointer(&size)))
@@ -144,6 +151,18 @@ func fixtureVerifyMediumUserObject(t *testing.T, read *syscall.Proc, handle uint
 		t.Fatal(err)
 	}
 	wantedBytes := unsafe.Slice((*byte)(unsafe.Pointer(wanted)), wanted.Len())
+	var extraSID *syscall.SID
+	var extraBytes []byte
+	if len(additional) == 1 {
+		if additional[0] == owner || additional[0] == "S-1-5-18" {
+			t.Fatal("private USER object duplicated a captured principal")
+		}
+		extraSID, err = syscall.StringToSid(additional[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		extraBytes = unsafe.Slice((*byte)(unsafe.Pointer(extraSID)), extraSID.Len())
+	}
 	offset := int(binary.LittleEndian.Uint32(data[4:8]))
 	_, length, err := systemImageSID(data, offset)
 	if err != nil || !bytes.Equal(data[offset:offset+length], wantedBytes) {
@@ -159,7 +178,7 @@ func fixtureVerifyMediumUserObject(t *testing.T, read *syscall.Proc, handle uint
 		}
 		acl := data[start:]
 		size, count := int(binary.LittleEndian.Uint16(acl[2:4])), int(binary.LittleEndian.Uint16(acl[4:6]))
-		if acl[0] != 2 || size < 8 || size > len(acl) || section.label && count != 1 || !section.label && count != 2 {
+		if acl[0] != 2 || size < 8 || size > len(acl) || section.label && count != 1 || !section.label && count != 2+len(additional) {
 			t.Fatal("private USER ACL has unexpected entries")
 		}
 		acl = acl[:size]
@@ -192,6 +211,9 @@ func fixtureVerifyMediumUserObject(t *testing.T, read *syscall.Proc, handle uint
 				if bytes.Equal(ace[8:], wantedBytes) {
 					principal = "owner"
 				}
+				if len(extraBytes) != 0 && bytes.Equal(ace[8:], extraBytes) {
+					principal = "captured-fresh-user"
+				}
 				if ace[0] != 0 || mask != all && mask != 0x10000000 || principal == "" || seen[principal] {
 					t.Fatal("private USER object admitted an unexpected access principal")
 				}
@@ -204,4 +226,5 @@ func fixtureVerifyMediumUserObject(t *testing.T, read *syscall.Proc, handle uint
 		}
 	}
 	runtime.KeepAlive(wanted)
+	runtime.KeepAlive(extraSID)
 }
