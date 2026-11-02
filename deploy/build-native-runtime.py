@@ -121,6 +121,7 @@ def inputs():
                              ROOT/'deploy/test_windows_physical_tunnel.py',
                              ROOT/'deploy/test_windows_physical_tunnel_runner.py',
                              ROOT/'deploy/test_desktop_node_physical.py',
+                             ROOT/'deploy/test_desktop_node_routing_runner.py',
                              ROOT/'deploy/test_desktop_node_pq.py',
                              ROOT/'deploy/test_desktop_node_max.py',
                              ROOT/'deploy/test_desktop_node_max_runner.py',

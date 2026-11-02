@@ -17,6 +17,7 @@ import platform
 import signal
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -187,6 +188,12 @@ def checked_sources(source):
         records["layer-reference/" + path.relative_to(ROOT).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     records["runner"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     records["cronet-packaging"] = hashlib.sha256((ROOT / "deploy/build-native-runtime.py").read_bytes()).hexdigest()
+    for key, name in (("namespace-launcher", "test_desktop_socket_uid.py"),
+                      ("routing-runner", "test_desktop_node_routing_runner.py")):
+        path = ROOT / "deploy" / name
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("Node routing gate lost its owned runner: " + name)
+        records[key] = hashlib.sha256(path.read_bytes()).hexdigest()
     return source, records
 
 
@@ -202,6 +209,36 @@ def run(command, *, cwd, env, timeout):
         raw, _ = process.communicate(timeout=10)
         raise RuntimeError("Node test process group timed out and was joined:\n" + raw[-16384:].decode("utf-8", errors="replace"))
     return process.returncode, raw.decode("utf-8", errors="replace")
+
+
+def namespace_runner():
+    spec = importlib.util.spec_from_file_location("node_routing_owned_namespace", ROOT / "deploy/test_desktop_socket_uid.py")
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    return runner
+
+
+def linux_routing_receipt_test(binary, *, cwd, env, duration):
+    if platform.system() != "Linux" or env.get("GOOS") != "linux":
+        raise ValueError("The native routing receipt fixture requires native Linux")
+    # Elevate only this already-compiled fixture. Its unchanged Go parent
+    # retains the actual network/user handles, creates the fresh namespaces
+    # and verifies both before any route mutation. The shared launcher owns
+    # and joins the full process group, including privileged descendants.
+    runner = namespace_runner()
+    sudo = runner.privilege_tool()
+    command = [str(binary), "-test.run=^TestRouterVPNNativeLinuxRouting", "-test.count=1",
+               "-test.timeout=" + str(duration) + "s", "-test.v"]
+    if sudo is not None:
+        command = [sudo, "-n", "--", *command]
+    captured = dict(env)
+    for name in ("ROUTERVPN_NATIVE_ROUTING_RECEIPT_CHILD", "ROUTERVPN_ROUTING_PARENT_NET", "ROUTERVPN_ROUTING_PARENT_USER"):
+        captured.pop(name, None)
+    try:
+        return 0, runner.run(command, cwd=cwd, env=captured, timeout=duration + 15, sudo=sudo)
+    except subprocess.CalledProcessError as error:
+        output = error.output or b""
+        return error.returncode, output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output
 
 
 @contextlib.contextmanager
@@ -285,6 +322,10 @@ class BaselineBinaries:
                 path = Path(__file__)
             elif relative == "cronet-packaging":
                 path = ROOT / "deploy/build-native-runtime.py"
+            elif relative == "namespace-launcher":
+                path = ROOT / "deploy/test_desktop_socket_uid.py"
+            elif relative == "routing-runner":
+                path = ROOT / "deploy/test_desktop_node_routing_runner.py"
             elif relative.startswith("layer-reference/"):
                 path = ROOT / relative.removeprefix("layer-reference/")
             else:
@@ -315,10 +356,16 @@ class BaselineBinaries:
         return self.verify(package)
 
     def execute(self, name, package, selector, duration):
+        if name == "native-routing-receipt" and (package != "github.com/sagernet/sing-tun" or
+                selector != "^TestRouterVPNNativeLinuxRouting"):
+            raise ValueError("Node routing privilege cannot execute another package or selector")
         binary = self.binary(package)
         with stage("execute baseline " + name):
-            status, output = run([binary, "-test.run=" + selector, "-test.count=1", "-test.timeout=" + str(duration) + "s", "-test.v"],
-                                 cwd=self.source, env=self.captured, timeout=duration + 15)
+            if name == "native-routing-receipt":
+                status, output = linux_routing_receipt_test(binary, cwd=self.source, env=self.captured, duration=duration)
+            else:
+                status, output = run([binary, "-test.run=" + selector, "-test.count=1", "-test.timeout=" + str(duration) + "s", "-test.v"],
+                                     cwd=self.source, env=self.captured, timeout=duration + 15)
             self.verify(package)
         return status, output
 
@@ -613,6 +660,11 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
     source, before = checked_sources(source)
     compiler, captured, arch = selected_compiler(go, source, dict(os.environ if env is None else env))
     windows = platform.system() == "Windows"
+    if not windows:
+        status, output = run([sys.executable, ROOT / "deploy/test_desktop_node_routing_runner.py"],
+                             cwd=ROOT, env=captured, timeout=30)
+        if status:
+            raise ValueError("Node routing runner checks failed:\n" + output[-16384:])
     race = [] if bootstrap_only or windows and arch == "arm64" else ["-race"]
     captured["CGO_ENABLED"] = "1" if race else "0"
     suites = [
