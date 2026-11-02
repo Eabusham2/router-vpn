@@ -163,6 +163,7 @@ class JobRetirementProtocol(unittest.TestCase):
         job.api, job.handle = self.api, 0x7777
         job.member_handles, job.unverified_handles = {}, set()
         job.retiring, job.retirement_error = False, None
+        job.bootstrap_pid = 11
         job.join_deadline = self.now + OWNER.JOIN_SECONDS
         return job
 
@@ -247,6 +248,8 @@ class JobRetirementProtocol(unittest.TestCase):
                 job = self.job()
                 job.terminate()
                 self.assertIsNotNone(job.retirement_error)
+                if kind == 'missing':
+                    self.assertIn('role=descendant winerror=0 listed=2 retained=1', str(job.retirement_error))
                 self.assertIn(('terminate', job.handle, 125), self.api.events)
                 with self.assertRaisesRegex(RuntimeError, 'no complete original process capture'):
                     job.join()
@@ -345,7 +348,72 @@ class JobRetirementProtocol(unittest.TestCase):
                 else:
                     OWNER.retire_created_process(Job(), Process(), unadmitted=True)
                 self.assertEqual(events, ['capture-and-terminate-original-job', 'kill-original-bootstrap',
-                                          'join-bootstrap', 'close-bootstrap', 'join-original-job'])
+                                          'join-bootstrap', 'join-original-job', 'close-bootstrap'])
+
+
+class OriginalBootstrapLifetime(unittest.TestCase):
+    """Exercise the public command/cleanup paths with a retained-handle witness."""
+    def test_every_exit_keeps_the_created_object_through_original_job_retirement(self):
+        for outcome in ('success', 'command-failure', 'timeout', 'unadmitted', 'join-failure'):
+            with self.subTest(outcome=outcome):
+                events = []
+                state = {'joined_job': False, 'closed': False, 'communicated': 0}
+                class Handle:
+                    def Close(inner):
+                        if not state['joined_job']:
+                            raise AssertionError('original bootstrap released before job retirement')
+                        state['closed'] = True
+                        events.append('close-original-bootstrap')
+                class Process:
+                    returncode, pid, _handle = None, 17, Handle()
+                    def communicate(inner, *, input=None, timeout):
+                        state['communicated'] += 1
+                        if outcome == 'timeout' and state['communicated'] == 1:
+                            raise subprocess.TimeoutExpired(['original-bootstrap'], timeout)
+                        events.append('join-original-bootstrap')
+                        inner.returncode = 7 if outcome == 'command-failure' else 125 if outcome in ('timeout', 'unadmitted') else 0
+                        return b'original stdout', b'original stderr'
+                    def poll(inner): return inner.returncode
+                    def kill(inner): events.append('kill-original-bootstrap')
+                class Job:
+                    def assign(inner, process):
+                        events.append('assign-original-bootstrap')
+                        if outcome == 'unadmitted':
+                            raise RuntimeError('original assignment refused')
+                    def terminate(inner):
+                        if state['closed']:
+                            raise AssertionError('original bootstrap released before job capture')
+                        events.append('capture-and-terminate-original-job')
+                    def remaining(inner): return 8.0
+                    def join(inner):
+                        if state['closed']:
+                            raise AssertionError('original bootstrap released before job join')
+                        state['joined_job'] = True
+                        events.append('join-original-job')
+                        if outcome == 'join-failure':
+                            raise RuntimeError('original descendant did not join')
+                    def close(inner): events.append('close-original-job')
+                with patch.object(OWNER, 'WindowsJob', Job), patch.object(OWNER.subprocess, 'Popen', return_value=Process()):
+                    if outcome == 'success':
+                        result = OWNER.run(['captured-command'], timeout=15)
+                        self.assertEqual((result.returncode, result.stdout, result.stderr), (0, b'original stdout', b'original stderr'))
+                    elif outcome == 'command-failure':
+                        with self.assertRaises(subprocess.CalledProcessError) as caught:
+                            OWNER.run(['captured-command'], timeout=15)
+                        self.assertEqual((caught.exception.returncode, caught.exception.stdout, caught.exception.stderr),
+                                         (7, b'original stdout', b'original stderr'))
+                    elif outcome == 'timeout':
+                        with self.assertRaises(subprocess.TimeoutExpired) as caught:
+                            OWNER.run(['captured-command'], timeout=15)
+                        self.assertEqual((caught.exception.cmd, caught.exception.timeout, caught.exception.stdout, caught.exception.stderr),
+                                         (['captured-command'], 15, b'original stdout', b'original stderr'))
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, 'original assignment refused|original descendant did not join'):
+                            OWNER.run(['captured-command'], timeout=15)
+                self.assertTrue(state['closed'], 'Joined original bootstrap handle was not released')
+                self.assertLess(events.index('join-original-job'), events.index('close-original-bootstrap'))
+                self.assertEqual(events.count('close-original-bootstrap'), 1)
+                self.assertEqual(events[-1], 'close-original-job')
 
 
 TREE_CHILD = r'''
@@ -442,6 +510,31 @@ class NativeRetirementObservation:
 
 @unittest.skipUnless(os.name == 'nt', 'actual Windows job APIs required')
 class NativeJobRetirement(unittest.TestCase):
+    def test_actual_completed_bootstrap_handle_survives_job_capture_and_join(self):
+        testcase, witnessed = self, []
+        class ObservedJob(OWNER.WindowsJob):
+            def assign(job, process):
+                super().assign(process)
+                job.original = process
+            def retain_original(job, phase):
+                handle = int(job.original._handle)
+                testcase.assertNotEqual(handle, 0, 'Original bootstrap handle released before native retirement')
+                testcase.assertEqual(job.api.WaitForSingleObject(handle, 0), 0,
+                                     'Actual completed bootstrap lost its original completion handle')
+                witnessed.append(phase)
+            def terminate(job):
+                job.retain_original('capture')
+                return super().terminate()
+            def join(job, timeout=OWNER.JOIN_SECONDS):
+                job.retain_original('before-join')
+                result = super().join(timeout)
+                job.retain_original('after-join')
+                return result
+        with patch.object(OWNER, 'WindowsJob', ObservedJob):
+            result = OWNER.run([sys.executable, '-I', '-S', '-c', 'pass'], timeout=15)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(witnessed, ['capture', 'before-join', 'after-join'])
+
     def test_success_failure_and_timeout_keep_original_subprocess_contract(self):
         for code in (0, 7):
             command = [sys.executable, '-I', '-S', '-c',

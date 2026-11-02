@@ -85,6 +85,7 @@ class WindowsJob:
         self.retiring = False
         self.retirement_error = None
         self.join_deadline = None
+        self.bootstrap_pid = None
         handle, pointer, dword, boolean = ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32, ctypes.c_int
         declarations = {
             "CreateJobObjectW": ([pointer, ctypes.c_wchar_p], handle),
@@ -128,6 +129,7 @@ class WindowsJob:
         # CPython's retained Popen handle refers to the created process; it is
         # not reopened using a potentially recycled PID.
         process_handle = int(process._handle)
+        self.bootstrap_pid = process.pid  # Failure diagnostics only; never handle authority.
         self.checked(self.api.AssignProcessToJobObject(self.handle, process_handle))
         assigned = ctypes.c_int()
         self.checked(self.api.IsProcessInJob(process_handle, self.handle, ctypes.byref(assigned)))
@@ -203,7 +205,10 @@ class WindowsJob:
             # PROCESS_TERMINATE, and no process-name scan grants authority.
             handle = self.api.OpenProcess(0x100000 | 0x1000, False, pid)
             if not handle:
-                raise RuntimeError("Windows build lost a member before retaining its completion handle")
+                error = ctypes.get_last_error()
+                role = "bootstrap" if pid == self.bootstrap_pid else "descendant"
+                raise RuntimeError("Windows build lost a member before retaining its completion handle "
+                                   f"(role={role} winerror={error} listed={len(original)} retained={len(self.member_handles)})")
             self.unverified_handles.add(handle)
             try:
                 assigned = ctypes.c_int()
@@ -311,11 +316,17 @@ def retire_created_process(job, process, *, unadmitted):
         failures.append(error)
     try:
         process.communicate(timeout=job.remaining())
-        close_created_process(process)
     except BaseException as error:
         failures.append(error)
     try:
         job.join()
+    except BaseException as error:
+        failures.append(error)
+    try:
+        # Keep the exact created object alive while the original job captures
+        # and joins every remaining member. A completed bootstrap can still be
+        # present in that bounded native membership snapshot.
+        close_created_process(process)
     except BaseException as error:
         failures.append(error)
     if len(failures) == 1:
@@ -354,15 +365,16 @@ def run(command, *, cwd=None, env=None, timeout):
             # Terminating the retained job stops writers as well as the immediate
             # wrapper. communicate cannot wait forever on an orphaned pipe.
             stdout, stderr = process.communicate(timeout=job.remaining())
-            close_created_process(process)
             job.join()
+            close_created_process(process)
             joined = True
             raise subprocess.TimeoutExpired(arguments, timeout, output=stdout, stderr=stderr) from expired
-        close_created_process(process)
         # Successful parent exit alone is insufficient. Clean up any retained
-        # descendants before the caller removes its compiler/source workspace.
+        # descendants before releasing the original bootstrap handle or letting
+        # the caller remove its compiler/source workspace.
         job.terminate()
         job.join()
+        close_created_process(process)
         joined = True
         result = subprocess.CompletedProcess(arguments, process.returncode, stdout, stderr)
         result.check_returncode()
