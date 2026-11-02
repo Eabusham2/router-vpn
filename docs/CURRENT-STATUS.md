@@ -6,7 +6,98 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 55d9f285
+## Latest implementation continuation — through f2e750aa
+
+The independently verified published implementation cutoff is
+[`f2e750aa458050106a9b7f509e2f08bba5580c8e`](https://github.com/Eabusham2/router-vpn/commit/f2e750aa458050106a9b7f509e2f08bba5580c8e),
+with Git tree `6491966010fba12b67ecae81b6a5b7fe54071cac`.
+[The November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md) records the
+source units, actual native tests and remaining delivery boundaries. Earlier
+sections preserve their own checkpoints; current findings here supersede their
+older active-gap wording without removing any original requirement.
+
+- Retained Linux ordinary external WireGuard now joins SS, HTTP/HTTPS CONNECT
+  and Hysteria2 for direct Local public Connect and temporary Speed Lab, Start
+  Layer Off and On-connect/Always protection. The original saved key, peer,
+  PSK, AllowedIPs, MTU and keepalive remain captured. Selected UDP DNS and
+  certificate-checked HTTPS public-exit proof traverse one owned physical
+  UDP destination. External proof remains distinct from Router authentication,
+  and temporary tests retain the complete original Router restoration path.
+- The real WG peer exposed an eager-startup defect: the captured keepalive
+  attempted its first handshake before the physical owner reached full
+  activation, then the DNS proof expired before the next handshake. The fix
+  mirrors the existing Router owner's separate socket phase, only for sealed
+  Linux WG after authenticated initialization and the deny baseline. Ordered
+  native stages remain mandatory; proof, TUN and measurement readiness still
+  require full activation. Keepalive, DNS/proof deadlines and rejection rules
+  are unchanged.
+- The complete five-family encrypted Box suite passes 76 subtest verdicts under
+  production tags and race in 34.58 seconds. Each family, including HY2 and
+  WG, completes its exact 50-response benchmark against owned local responders
+  with selected DNS, verified TLS, actual routed requests and source/session
+  ownership. Wrong WG peer/PSK,
+  failed DNS, wrong trust/IP, truncated bodies, denied lower sockets, cancelled
+  proof and MTU rollback remain rejected or restored as required. OS permit
+  identity and TUN creation are explicit Box fixture boundaries. A later
+  peer-helper integer conversion leaves all actual Box source dependencies
+  byte-identical; the corrected installed peer compiles separately.
+- All seven actual nft/kernel/guardian and local-byte succession cases pass on the current source in 50.94 seconds (the WG case takes 5.13 seconds), with the outer process and private namespace cleanup joined. Before/after closures remain identical across 2,125 installed-source and 700 lifecycle records.
+- The installed inventory is **325**, preserving all previous 317 cases and
+  appending eight WG cases: On-connect, Always, public Connect, cancellation,
+  wrong peer key, wrong PSK, selected-DNS failure and replacement ownership.
+  The 19-check verdict runner and 325-scenario readiness classification pass;
+  all 87 original readiness rejections remain. The actual installed peer
+  compiles with the runner's normal tags/race. The local host still has no
+  genuine `/dev/net/tun`, so these new installed scenarios remain unexecuted
+  locally and mandatory in native CI.
+- `6cff6226` canonicalizes newly created Tor/private-store test roots without
+  changing production private-file validation. `ed8640dd` adds bounded,
+  redacted native MTU diagnostics after the original failed verdict and joined
+  namespace, without converting a diagnostic replay into acceptance.
+  `ae43c489` preserves safe fixed failure stages for incomplete native
+  benchmarks while retaining the exact 50-response/no-score rules. The
+  latest Windows ordinary native50 logs report a combined duration/owner
+  failure from after benchmark response validation. Their older counters
+  describe the initial path proof; the elapsed value and causal diagnosis
+  remain unproved, as does actual native repair.
+- `8e5a8b57` uses Windows QueryPerformanceCounter ticks and the native
+  cached frequency for real short-interval public measurements. Integer ticks
+  are subtracted before conversion; unavailable, zero, backward or mismatched
+  clock data remain failures. TLS, byte validation, ownership, cancellation
+  and all 50 samples retain their original gates. The shared race suite passes
+  in 6.898 seconds and both Windows architectures compile with checkptr.
+  Coarse timing is an inference from the earlier logs, not an observed zero
+  value; successful native Windows benchmarks remain required.
+- `bd3df93c` fixes a reproduced shutdown race by recognizing the exact captured
+  Stop or parent cancellation after an interrupted heartbeat receipt; wrong
+  owner, malformed proof and unrelated cancellation remain failures. The
+  latest exact-SHA generated TUN gate passes all six cases on both AMD64 and
+  ARM64 at this commit. The earlier intermittent active-receipt omission has
+  no established cause; the current six-case pass does not accept the separate
+  325-case installed application inventory.
+- `74bd942a` Linux native runtime CI passed its 19 baseline suites on both
+  architectures, then reached the 900-second aggregate limit before any of
+  the 48 compiled defect controls produced a verdict. This is a timed-out
+  aggregate, not a complete native gate pass or an assertion failure.
+  Published `09f4dce1` gives the complete Linux source gate 1,800 seconds, preserving serial execution, all 19 baseline suites and 48 compiled controls, every individual deadline and every required verdict. Windows keeps its 1,200-second source-gate bound. The two-test regression passes in 86.182 seconds across six targets and injected failure/timeout propagation; a new complete native gate result remains required.
+- `f2e750aa` gives the two Windows diagnostic jobs 30-minute aggregate
+  budgets after the original 20-minute jobs expired during compiled defect
+  controls. All original baseline/control cases, inner compiler/test bounds
+  and prerequisite limits remain mandatory. Thirteen existing workflow
+  contract checks pass in 0.037 seconds; completed native job results remain
+  separate evidence.
+- The complete local Linux AMD64 runtime bundle from the WG feature source passes the normal production-tag link, verified PQ/Cronet/Tor payload checks, unchanged bundle verifier and actual version/external-help commands. It remains separate from application packaging and exact-SHA release publication.
+- Remaining retained host coverage for other ordinary external families,
+  predecessor/multihop/Server/Compare, ordinary external Start Layers,
+  unprotected admission, recovery and other platforms continues under the
+  full original ledger. Current
+  exact-SHA application packages, server images, compose and full publication,
+  macOS installer ownership, signing, physical/off-LAN networking, visual and
+  accessibility acceptance, private providers, ASUS/AdGuard/Portainer targets
+  and deliberate deployment retain their separate evidence requirements.
+
+
+## Earlier implementation continuation — through 55d9f285
 
 The independently verified published implementation cutoff is
 [`55d9f285ff6bae4c9f2d50ba4960ecd7c35020d4`](https://github.com/Eabusham2/router-vpn/commit/55d9f285ff6bae4c9f2d50ba4960ecd7c35020d4),

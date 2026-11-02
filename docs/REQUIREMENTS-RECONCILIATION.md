@@ -18,7 +18,28 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
-## Implementation reconciliation through 55d9f285
+## Implementation reconciliation through f2e750aa
+
+The current published implementation cutoff is
+[f2e750aa](https://github.com/Eabusham2/router-vpn/commit/f2e750aa458050106a9b7f509e2f08bba5580c8e).
+[The evidence record](CONTINUATION-EVIDENCE-2026-11-02.md) preserves the new
+WireGuard unit `a276af2c` and source units `6cff6226`, `ed8640dd`,
+`ae43c489`, `bd3df93c`, `8e5a8b57`, `09f4dce1` and `f2e750aa`.
+These units extend evidence and runtime coverage;
+the original 356 requirements, C1–C7, later product/breakage, map-first,
+external-node and lifecycle corrections retain their full authority.
+
+| Recovered scope | Current reconciliation |
+|---|---|
+| #112, #200–213, #337 and retained Linux ordinary external transitions | Direct Local WireGuard joins SS/HTTP/HTTPS/Hysteria2 for Start Layer Off and On-connect/Always protection. Public Connect/Speed Lab use the same retained host, session, journal, sole process waiter and complete original Router restoration. Captured private/public keys, PSK, AllowedIPs, MTU and keepalive remain exact; selected UDP DNS and HTTPS exit proof traverse one physical UDP peer. Further retained host coverage for other families, predecessors, Server/Compare, external Start Layers, unprotected admission and other platforms remains separately accountable. |
+| Native policy ownership, selected DNS and asynchronous lifecycle | The actual WG handshake exposed pre-activation startup ordering. Only the sealed Linux WG lower tuple becomes eligible after the authenticated factory and deny baseline; ordered stages and full activation remain required for proof/TUN/measurement readiness. No keepalive, proof timeout or validation was relaxed. The actual five-family encrypted Box suite passes 76 subtest verdicts, including wrong peer/PSK, DNS/TLS/IP/truncated-response and cancellation/MTU-restoration cases. Its OS/TUN fixtures remain distinct from kernel and installed acceptance. |
+| Complete profiles, public Connect persistence and temporary restoration | The installed inventory preserves all 317 earlier cases and adds eight WG cases, for 325. The exact peer compiles; 19 runner checks and the full readiness classification pass, preserving 87 original rejection cases. Public Connect persistence, source observation, On-connect/Always journal ownership, cancellation/replacement and exact original Router restoration remain actual installed assertions. Missing local TUN leaves those new scenarios unexecuted. |
+| #141–148, #222–223, #335 and real measurements | All five admitted Box families now complete the actual exact-50 routed HTTPS benchmark against owned local responders, with selected DNS and source/session negatives. `ae43c489` retains safe fixed failure stages without raw private errors and does not change the scoring formula, sample count, metric label or no-score behavior. The latest Windows native50 logs report a combined duration/owner failure from after response validation; their older traffic counters describe the initial path proof, not individual benchmark samples. `8e5a8b57` supplies a genuine Windows QPC clock with exact integer deltas and separate duration/owner failure reasons; full shared race tests and both Windows checkptr compilations pass. A zero elapsed interval was not directly logged, and successful native Windows execution remains unproved. |
+| Native MTU and delivery evidence | `bd3df93c` repairs deterministic exact-owner shutdown during heartbeat receipt readback; wrong Stop/source and malformed active evidence remain rejected. The latest exact bd3df93c generated-TUN CI passes six cases on both architectures, while the earlier intermittent active-receipt cause remains undetermined. `ed8640dd` adds diagnostics without replacing a failed verdict. The 74bd942a Linux native aggregate timed out at 900 seconds after baseline suites and before any compiled control verdict; that is distinct from failed native assertions or a green release. Published `09f4dce1` gives the complete Linux source gate 1,800 seconds, preserving serial execution, all 19 baseline suites and 48 compiled controls, every individual deadline and every required verdict. Windows keeps its 1,200-second source-gate bound. The two-test regression passes in 86.182 seconds across six targets and injected failure/timeout propagation; a new complete native gate result remains required. `f2e750aa` similarly raises only the two Windows diagnostic job aggregates to 30 minutes; all inner limits and required cases remain. Thirteen workflow contract checks pass, while actual completed jobs remain required. |
+| All original and later requirements | Full installed acceptance, broader graphs/platforms/recovery, macOS image ownership, exact-SHA packages/images/compose/publication, signing, real upgrades, private targets, ASUS forwarding/JFFS, deliberate deployment and physical/off-LAN/visual/accessibility checks retain their own gates. Source, actual local traffic, kernel tests, compilation, runtime bundles, publication and live deployment are separate states. No percentage, reduced denominator or full-product completion is claimed. |
+
+
+## Earlier implementation reconciliation through 55d9f285
 
 The current published implementation cutoff is
 [55d9f285](https://github.com/Eabusham2/router-vpn/commit/55d9f285ff6bae4c9f2d50ba4960ecd7c35020d4).

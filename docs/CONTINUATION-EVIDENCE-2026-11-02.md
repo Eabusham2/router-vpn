@@ -5,11 +5,148 @@ This continues [November 1](CONTINUATION-EVIDENCE-2026-11-01.md) and preserves
 source recovery is complete for the recorded collection; continue the actual
 implementation without replacing the original scope with this status record.
 The independently read-back published source cutoff is
-[`55d9f285ff6bae4c9f2d50ba4960ecd7c35020d4`](https://github.com/Eabusham2/router-vpn/commit/55d9f285ff6bae4c9f2d50ba4960ecd7c35020d4).
+[`f2e750aa458050106a9b7f509e2f08bba5580c8e`](https://github.com/Eabusham2/router-vpn/commit/f2e750aa458050106a9b7f509e2f08bba5580c8e).
 Later working files are outside this cutoff. No complete current release,
 private deployment, signing or physical-device acceptance is established.
 
-## Latest implementation and verification — through 55d9f285
+## Latest implementation and verification — through f2e750aa
+
+The published source cutoff has Git tree `6491966010fba12b67ecae81b6a5b7fe54071cac`. The WireGuard
+feature unit is `a276af2c2c3bcd760eec41bb40732adc04af8f64`, tree `c10beb4ace20bdfb7a809088613e95df239d0d43`.
+The Linux budget unit `09f4dce1` has tree
+`20125ec4ea7f3f41275d1ba7553b168da7386895`; the QPC unit `8e5a8b57` has tree
+`cbfb497ee9f0b76caf0875d9f9cbe776e1777c19`. These changes preserve normal
+ancestry on main. Earlier sections below keep their dated observations;
+their old active-gap wording is historical where this section supersedes it.
+
+| Commit | Implemented result and verification boundary |
+|---|---|
+| [6cff6226](https://github.com/Eabusham2/router-vpn/commit/6cff622696189c4d5d44b19605bf5613c837b0a0) | Canonicalize only newly created Tor/private-store fixture directories so the macOS `/var` alias cannot invalidate a positive comparison or mask a private-file negative. The original 409 refusal was reproduced using a symlinked Go test root; the same actual comparison, Tor predecessor and private-store groups then pass under race. Production symlink/private-store validation is unchanged. |
+| [ed8640dd](https://github.com/Eabusham2/router-vpn/commit/ed8640ddad5b0a4af38a6a31af96539c23fbde9d) | Add fixed MTU phase and numeric-owner diagnostics, with a controlled log-only native overlay only after the original receipt failure and acknowledged namespace join. Preserve the original failed verdict, source/image identity, cleanup and all original deadlines. Seventeen runner checks and the actual diagnostic command compilation pass. This adds evidence; it does not waive receipt validation or prove the missing active receipt repaired. |
+| [ae43c489](https://github.com/Eabusham2/router-vpn/commit/ae43c4898bbd803557299011acf53935fbc45142) | Preserve a safe fixed public-probe failure stage when an exact-50 benchmark is incomplete. Dial/deadline/TLS/response/cleanup remain distinguishable without raw native errors or private inputs. Actual TLS/race measurement tests include six stage/privacy cases, 49-of-50 refusal, stale ownership, cancellation, transferred-byte statistics and complete 50-sample benchmarks. The newest Windows logs report the combined duration/owner failure from after response validation; exact elapsed time, cause and actual native repair remain unproved. |
+| [bd3df93c](https://github.com/Eabusham2/router-vpn/commit/bd3df93c3828ac03395acef80bbff69282cb369f) | Recheck the exact captured Stop or parent cancellation after heartbeat receipt readback is interrupted during shutdown. The old shipping loop failure was reproduced deterministically; the repair passes 20 race repetitions and all existing NodeMTU cases. Foreign session/config Stop, unrelated cancellation and malformed proof remain failures. The exact-SHA generated TUN CI also passes all six cases on both architectures below. |
+| [a276af2c](https://github.com/Eabusham2/router-vpn/commit/a276af2c2c3bcd760eec41bb40732adc04af8f64) | Admit retained Linux direct Local ordinary WG with Start Layer Off and On-connect/Always protection, through public Connect, Speed Lab and complete Router restoration. Preserve the one captured UDP endpoint, separate WG keys/PSK/AllowedIPs/MTU/keepalive, selected UDP DNS, real HTTPS proof and sole native session owner. Real traffic exposed and repaired eager startup ordering using a WG-only authenticated lower-socket phase; full proof/TUN readiness is unchanged. The actual encrypted five-family suite, current native command checks, separate kernel evidence and corrected installed peer compilation are described below. |
+| [8e5a8b57](https://github.com/Eabusham2/router-vpn/commit/8e5a8b57e47a4c90f173559f8c9773773d118b0b) | Use genuine Windows QueryPerformanceCounter ticks with the cached native frequency for short public-response intervals. Subtract integer ticks before conversion and reject unavailable, zero, backward or mismatched clock data. Preserve TLS/bytes, current ownership, cancellation, timing boundaries and all 50 samples; split duration-invalid from owner-changed diagnostics. The full shared measurement race suite passes in 6.898 seconds and Windows AMD64/ARM64 checkptr test compilations pass. Native Windows success is still pending; the earlier logs did not record an exact zero duration. |
+| [09f4dce1](https://github.com/Eabusham2/router-vpn/commit/09f4dce10702d945c3f03db6b7a7591502a0473d) | Published `09f4dce1` gives the complete Linux source gate 1,800 seconds, preserving serial execution, all 19 baseline suites and 48 compiled controls, every individual deadline and every required verdict. Windows keeps its 1,200-second source-gate bound. The two-test regression passes in 86.182 seconds across six targets and injected failure/timeout propagation; a new complete native gate result remains required. |
+| [f2e750aa](https://github.com/Eabusham2/router-vpn/commit/f2e750aa458050106a9b7f509e2f08bba5580c8e) | Give `native-node-composition` and `native-node-kernel` Windows diagnostic jobs 30-minute aggregate budgets after all four 20-minute jobs were cancelled during compiled controls. Preserve every baseline/control, each individual compiler/test deadline and existing prerequisite step limit. Thirteen existing workflow contract tests pass in 0.037 seconds. Completed native jobs are still required. |
+
+### WireGuard source, encrypted traffic and ownership evidence
+
+The original positive failed before any encrypted packet reached its owned
+peer. The real endpoint attempted the saved 25-second keepalive during native
+startup, when the lower object correctly denied an unactivated owner. Its
+later five-second handshake retry came after selected-DNS proof cancellation.
+The corrected owner follows the existing Router design: after the original
+authenticated factory completes and proves its deny baseline, only the sealed
+Linux WG lower tuple may open its connected UDP socket. Ordered native stages,
+exact manager/source identity, revocation and joined cleanup remain required.
+`Current()` still requires full activation for TUN, DNS/exit proof and
+measurement. No timeout, keepalive, peer identity or proof check was weakened.
+
+| Evidence layer | Verified observation | Remaining boundary |
+|---|---|---|
+| Actual encrypted Box composition | The normal production-tag/race suite passes 76 subtest verdicts in 34.58 seconds across HTTP/HTTPS CONNECT, SS, Hysteria2 and WG. All five complete 50 real routed HTTPS samples against owned local responders. WG uses independently generated keys and PSK, actual selected UDP DNS and certificate-checked HTTPS over one captured physical UDP destination. Wrong peer/PSK, DNS, trust/IP, truncated bodies, denied lower sockets, cancelled proof and MTU commit/rollback/reproof retain their full checks. | OS permit identity and TUN creation are explicit fixture substitutes. This does not establish installed networking or physical-device acceptance. |
+| Source equivalence after peer-only repair | The installed peer required one explicit `uint16`-to-`int` port conversion in its test-only route helper. All 7,385 actual Box source/go.sum records remain byte-identical; the only module-file difference is the ordinary absolute checkout path to the same verified pinned Xray commit. The successful Box binary/log are preserved rather than claimed as a re-execution of a different source tree. | The peer helper is separately compiled from the corrected current source; provenance is recorded at each boundary. |
+| Native physical and startup checks | Sixteen top-level groups and 98 subtest verdicts pass under race in 36.584 seconds, including captured UDP bytes, pre-initialization/reordered-stage rejection, source replacement and startup revocation. After the peer-only cast, 4,250 source/dependency and go.sum records remain byte-identical with the same sole pinned-Xray module-path difference. | These focused controls preserve their tested source identity; the peer test does not change their production or test dependencies. |
+| Current native command | Twelve top-level groups plus 43 subtest verdicts pass on the current normal production-tag/race composition. Before/after source closures match. | A command test is distinct from a packaged application's real TUN and UI acceptance. |
+| Actual current Linux kernel lifecycle | All seven actual nft/kernel/guardian and local-byte succession cases pass on the current source in 50.94 seconds (the WG case takes 5.13 seconds), with the outer process and private namespace cleanup joined. Before/after closures remain identical across 2,125 installed-source and 700 lifecycle records. | This is isolated kernel/guardian succession and ownership evidence, distinct from encrypted Box proof and the installed application inventory. |
+| Installed application inventory | All 317 previous cases remain, followed by WG On-connect, Always, public Connect, cancellation, wrong peer, wrong PSK, DNS failure and replacement: 325 total. Nineteen runner checks and the 325-scenario readiness classification pass, preserving all 87 original rejection classifications. The exact corrected peer compiles under the runner's normal tags/race. | The local host has no genuine `/dev/net/tun`; none of the eight new installed scenarios has local acceptance evidence. All 325 remain required in native CI. |
+| Complete local runtime bundle | The complete local Linux AMD64 runtime bundle from the WG feature source passes the normal production-tag link, verified PQ/Cronet/Tor payload checks, unchanged bundle verifier and actual version/external-help commands. It remains separate from application packaging and exact-SHA release publication. | A local bundle does not establish current application packages, authoritative release publication, signing, private deployment or physical-device acceptance. |
+
+The WireGuard feature unit’s prepared external source digest is
+`d89aada3a408b66a37abdb070546a0a00d4249405654f0ce083efb6df4f371da`.
+Its final local runtime policy digest is `e304cebff91795ba241796830edb662399649f23298e5df2232e87aac9e4db5a`, and its native
+receipt SHA-256 is `7eed34a75e8e979f713da6dd247dc0f1933fe5caec82b23e1361051a062ea693`. Full preparation verifies 2,125
+installed-source records and 700 lifecycle records; that unit’s corrected
+installed peer SHA-256 is
+`e3adaa04a2540bb8d35bd1acae7d39a564b19bb1e42a456ef0331afe57e3265c`.
+Temporary startup diagnostics remain outside the published source.
+
+### Latest native CI and unresolved delivery boundaries
+
+The latest completed [generated TUN run at bd3df93c](https://github.com/Eabusham2/router-vpn/actions/runs/41395919836)
+passes both architectures with original namespace cleanup joined and no
+fallback, race report or failed case:
+
+| Exact native job | Verified result |
+|---|---|
+| [AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/41395919836/job/125117093782) | All six On-connect, Always, captured-MTU, MTU-rollback, resolver-failure and wrong-key cases pass; group time 21.33 seconds. |
+| [ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/41395919836/job/125117093572) | The same six cases pass; group time 24.13 seconds. |
+
+These are bounded exact-SHA native results, following the independently
+reproduced shutdown repair. The earlier intermittent active routing-receipt
+omission at `296461bd`/`c7b03676` still has no demonstrated cause. The newest
+pass supersedes those older failures as the latest observation; it does not
+prove causation or accept the separate 325-case installed application gate.
+
+The [74bd942a Linux native aggregate](https://github.com/Eabusham2/router-vpn/actions/runs/41393374409)
+instead ran out of its 900-second wrapper budget after all 19 baseline suites
+passed and before any of the 48 compiled controls produced a verdict.
+[AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/41393374409/job/125110055580)
+stopped during the first mutant compilation;
+[ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/41393374409/job/125110055657)
+completed that compilation in 11.157 seconds and stopped during its execution.
+No baseline assertion failure is shown. The aggregate remains incomplete,
+distinct from both the active-receipt investigation and shutdown behavior.
+Published `09f4dce1` gives the complete Linux source gate 1,800 seconds, preserving serial execution, all 19 baseline suites and 48 compiled controls, every individual deadline and every required verdict. Windows keeps its 1,200-second source-gate bound. The two-test regression passes in 86.182 seconds across six targets and injected failure/timeout propagation; a new complete native gate result remains required.
+
+The separate Windows diagnostic jobs at `bd3df93c` also exhausted their
+20-minute job budgets: captured Node AMD64/ARM64 passed all 15 baselines and
+rejected 10/34 and 15/34 controls respectively; both kernel jobs passed the
+baseline matrix and rejected three of four controls before cancellation
+while compiling the last. Published `f2e750aa` raises only those two job
+aggregates to 30 minutes, preserving all inner bounds, prerequisites and
+verdict requirements. Its 13 workflow contract checks pass; a future native
+completion is separate evidence.
+
+The newest Windows native logs at `bd3df93c` still fail the ordinary exact-50
+HTTP/HTTPS/SS benchmarks after passing the initial path proof:
+[AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/41395919673/job/125117821101)
+and [ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/41395919673/job/125117821011)
+both report the fixed “public measurement owner changed” reason. That
+condition is reached after the benchmark response has been validated, but it
+combines nonpositive elapsed time with invalid ownership. The older TLS/public
+counters describe the initial path proof, not individual benchmark samples.
+These logs therefore do not establish the elapsed value or which predicate
+failed. Safe-stage reporting is diagnostic evidence; a causal repair and
+successful native Windows execution remain required.
+
+Published `8e5a8b57` uses the native Windows QPC clock recommended by
+[Microsoft for short intervals](https://learn.microsoft.com/en-us/windows/win32/sysinfo/acquiring-high-resolution-time-stamps).
+The pinned Go Windows clock uses interrupt time, so a nonpositive very short
+interval is a plausible explanation for the earlier combined failure reason,
+not an observed value. The repair uses actual counter/frequency data without
+clamps, invented minima, sleeps, retries or longer proof timeouts. The shared
+race suite and both Windows checkptr compilations pass; actual Windows
+50-sample execution remains the acceptance gate.
+
+The macOS installer image ownership and other exact-SHA packaging/release gates
+also retain their own current evidence.
+
+### Current remaining implementation and acceptance work
+
+- Continue every applicable original requirement and later correction,
+  including additional retained host coverage for ordinary external families,
+  predecessors, multihop, Server/Compare, ordinary external Start Layers,
+  unprotected admission and remaining recovery/platform integrations. Direct protected Local WG is a
+  bounded addition, not universal graph or all-device support.
+- Execute all 325 installed scenarios, retain the exact native receipt and
+  source/owner checks, and investigate the earlier active-receipt omission if
+  it recurs. Verify the published Windows QPC measurement change on actual
+  native runners and complete every mandatory native suite/control within
+  the recorded runner contract.
+- Complete matching exact-SHA native applications, ARM64 server images,
+  production compose and authoritative publication. No green current full
+  release follows from local actual traffic, a complete local bundle or the
+  older `745b3e41` release.
+- Complete physical-device/off-LAN networking, leaks/transitions, visual and
+  accessibility checks, signing/provisioning/notarization and real upgrades,
+  private provider/server operations, ASUS forwarding/JFFS fail-open checks,
+  deliberate deployment and post-deployment acceptance on authorized targets.
+  These changes did not alter live ASUS, AdGuard, Portainer or household routing.
+
+
+## Earlier implementation and verification — through 55d9f285
 
 Six additional source units were committed directly to main and their remote
 identities verified. The cutoff tree is `e570e88b3337f01489e9601e8279a015068b42eb`;
@@ -56,7 +193,7 @@ and native receipt SHA-256
 Its prepared external source digest is
 `ef07c056ff365b8a388eb4acc51e0c48b175d6fec18a7720d77b8121fe454b95`.
 
-### Latest generated-TUN CI remains blocked
+### Historical generated-TUN CI — through c7b03676
 
 | Exact source | AMD64 | ARM64 |
 |---|---|---|
@@ -71,7 +208,7 @@ The cause remains under investigation. The check is mandatory, and no receipt
 validator or retry rule was relaxed. These six generated-TUN cases also do not
 substitute for the separate 317-case installed application inventory.
 
-### Current remaining implementation and acceptance work
+### Historical remaining implementation and acceptance work — through 55d9f285
 
 - Continue the full original requirement ledger, including additional retained
   ordinary external families, predecessors/multihop/Server/Compare, ordinary
@@ -247,7 +384,7 @@ attempt could not read process/task metadata; identical source passed with
 ordinary process visibility. Neither that failed attempt nor modeled native
 launches is represented as actual AppKit or Windows WPF acceptance.
 
-### Current native results and unresolved failures
+### Historical native results and unresolved failures — through f103637f
 
 - The full installed Linux jobs at `26b294e9` failed the invalid fixture MTU
   policy on both architectures. `b38464ef` repairs those inputs; the 299-case
