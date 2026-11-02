@@ -650,7 +650,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', '.', '-run', '^TestRouterVPNDesktop(Tor|External)',
-                 '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
+                 '-count=1', '-timeout=180s' if target.startswith('linux/') else '-timeout=120s'],
+                cwd=source, env=env, timeout=600)
         ldflags = '-s -w -buildid= -checklinkname=0 -X github.com/sagernet/sing-box/constant.Version='+marker(policy)
         if library_name(target):
             library = payload(regular(stage/library_name(target), MAX_LIBRARY))

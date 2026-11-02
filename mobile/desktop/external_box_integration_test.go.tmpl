@@ -1257,7 +1257,13 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		childTimeout, parentTimeout := "80s", 90*time.Second
+		if runtime.GOOS == "linux" {
+			// The full Linux family inventory retains every bounded authentication
+			// failure and joined teardown; budget their aggregate separately.
+			childTimeout, parentTimeout = "120s", 130*time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), parentTimeout)
 		defer cancel()
 		// A broad shipping selector must not run unrelated tests in this child
 		// before its isolated trust root is installed. Preserve only an exact
@@ -1267,7 +1273,7 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 		if strings.HasPrefix(requested, selector+"/") {
 			selector = requested
 		}
-		command := exec.CommandContext(ctx, executable, "-test.run="+selector, "-test.v", "-test.timeout=80s")
+		command := exec.CommandContext(ctx, executable, "-test.run="+selector, "-test.v", "-test.timeout="+childTimeout)
 		command.Env = append(os.Environ(), marker+"=1")
 		output, err := command.CombinedOutput()
 		if err != nil {

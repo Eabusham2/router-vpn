@@ -289,6 +289,14 @@ class NativeSocketUIDGate(unittest.TestCase):
                     self.assertIs(caught.exception, node_errors[0], 'The original source-gate failure was replaced')
                     self.assertEqual(calls[-1], node[0], 'A failed source gate reached a later gate or shipping compilation')
                     continue
+                box = [args for args in calls if args[:2] == ['go', 'test'] and '.' in args and
+                       '-run' in args and args[args.index('-run')+1] == '^TestRouterVPNDesktop(Tor|External)']
+                self.assertEqual(len(box), 1, 'Native build omitted the complete Box family suite')
+                self.assertEqual([arg for arg in box[0] if arg.startswith('-timeout=')],
+                                 ['-timeout=180s' if system == 'linux' else '-timeout=120s'])
+                for args in calls:
+                    if args[:2] == ['go', 'test'] and args != box[0]:
+                        self.assertNotIn('-timeout=180s', args, 'Box aggregate budget changed another native gate')
                 uid = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_socket_uid.py')]
                 self.assertEqual(len(uid), 0 if system == 'windows' else 1)
                 self.assertIn(ROOT/'deploy/test_desktop_socket_uid.py', N.inputs())
