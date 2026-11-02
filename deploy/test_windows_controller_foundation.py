@@ -95,6 +95,7 @@ def sources():
                 "suspended_launch_windows.go", "suspended_launch_windows_test.go",
                 "suspended_access_windows_test.go",
                 "fresh_uac_policy_test.go", "fresh_uac_windows_test.go", "fresh_uac_consent_windows_test.go",
+                "fresh_uac_parent_windows_test.go",
                 "restricted_worker_windows_test.go", "gui_windows_test.go", "stream_windows_test.go"}
     paths = sorted(TARGET.glob("*.go"))
     if {path.name for path in paths} != expected:

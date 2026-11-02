@@ -560,14 +560,14 @@ func TestWindowsControllerUACAcceptanceFreshLogonThreadAccess(t *testing.T) {
 			t.Fatal(err)
 		}
 		limited, full, err := fixtureFreshUACReadPair(api, token, receipt.Full.SID)
-		if err != nil || !fixtureFreshUACPrimaryMatches(limited, receipt.Limited) || !fixtureFreshUACPrimaryMatches(full, receipt.Full) ||
-			fixtureFreshUACPairValid(receipt.Full.SID, limited, full, limited, full) != nil {
+		if err != nil || !fixtureFreshUACFullWorkerMatches(limited, full, receipt.Limited, receipt.Full) {
 			t.Fatal("Full worker lost its independently captured reciprocal interactive logons", err)
 		}
 		for _, item := range []struct {
 			name string
 			run  func(*testing.T)
 		}{
+			{"retained-limited-parent", fixtureFreshUACVerifyLimitedParentLifetime},
 			{"linked-limited-access", TestWindowsControllerUACAcceptanceLimitedTokenThreadAccess},
 			{"cancelled-uac", TestWindowsControllerFoundationRejectCancelledUAC},
 			{"replacement-image", TestWindowsControllerFoundationSuspendedLaunchRejectsReplacement},
@@ -844,7 +844,7 @@ func fixtureRunFreshUACWorker(t *testing.T, api *fixtureFreshUACAPI, account *fi
 	if err := syscall.GetExitCodeProcess(worker.process.Process, &exit); err != nil || exit != 0 {
 		t.Fatalf("fresh native Limited worker failed (exit=%d): %v\n%s", exit, err, output)
 	}
-	for _, marker := range []string{"Fresh interactive UAC limited worker receipt: " + receipt.Nonce, "Fresh interactive UAC full worker receipt: " + receipt.Nonce, "Normal runas retained the genuine Limited/Full pair", "--- PASS: " + fixtureFreshUACName + " (", "--- PASS: " + fixtureFreshUACName + "/linked-limited-access (", "--- PASS: " + fixtureFreshUACName + "/cancelled-uac (", "--- PASS: " + fixtureFreshUACName + "/replacement-image (", "--- PASS: " + fixtureFreshUACName + "/missing-callback (", "--- PASS: " + fixtureFreshUACName + "/cancelled-suspended-owner ("} {
+	for _, marker := range []string{"Fresh interactive UAC limited worker receipt: " + receipt.Nonce, "Fresh interactive UAC full worker receipt: " + receipt.Nonce, "Normal runas retained the genuine Limited/Full pair", "--- PASS: " + fixtureFreshUACName + " (", "--- PASS: " + fixtureFreshUACName + "/retained-limited-parent (", "--- PASS: " + fixtureFreshUACName + "/linked-limited-access (", "--- PASS: " + fixtureFreshUACName + "/cancelled-uac (", "--- PASS: " + fixtureFreshUACName + "/replacement-image (", "--- PASS: " + fixtureFreshUACName + "/missing-callback (", "--- PASS: " + fixtureFreshUACName + "/cancelled-suspended-owner ("} {
 		if !strings.Contains(output, marker) {
 			t.Fatal("fresh native UAC worker did not execute a required original case", marker, output)
 		}

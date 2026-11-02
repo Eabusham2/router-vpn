@@ -117,10 +117,17 @@ type fixtureMediumThreadResult struct {
 }
 
 // Only this locked fixture thread adopts its independently verified medium token.
-// The calling case records whether it is a real linked token or a constructed one.
+// The calling case records its actual primary source or constructed-token boundary.
 // No privilege is enabled, no process token changes, and no consent or account
 // is supplied. A failed identity proof never falls through to OpenThread.
-func fixtureMediumThreadAccess(api *nativeAPI, token syscall.Token, expected TokenIdentity, debug fixturePrivilegeLUID, threadID, processID uint32) fixtureMediumThreadResult {
+func fixtureMediumThreadAccess(api *nativeAPI, token syscall.Token, expected TokenIdentity, debug fixturePrivilegeLUID, threadID, processID uint32, checkpoint ...func() error) fixtureMediumThreadResult {
+	current := func() error { return nil }
+	if len(checkpoint) > 1 || len(checkpoint) == 1 && checkpoint[0] == nil {
+		return fixtureMediumThreadResult{failure: errors.New("limited-token access has an ambiguous ownership checkpoint")}
+	}
+	if len(checkpoint) == 1 {
+		current = checkpoint[0]
+	}
 	done := make(chan fixtureMediumThreadResult, 1)
 	joined := make(chan struct{})
 	go func() {
@@ -132,101 +139,109 @@ func fixtureMediumThreadAccess(api *nativeAPI, token syscall.Token, expected Tok
 				runtime.UnlockOSThread()
 			}
 		}()
-		result := func() (result fixtureMediumThreadResult) {
-			var prior syscall.Token
-			ok, _, readErr := api.threadToken.Call(^uintptr(1), syscall.TOKEN_QUERY, 1, uintptr(unsafe.Pointer(&prior)))
-			if prior != 0 {
-				_ = prior.Close()
-			}
-			if ok != 0 || prior != 0 || !errors.Is(readErr, syscall.Errno(1008)) {
-				result.failure = errors.New("limited-token probe found an unowned thread identity")
-				return
-			}
-			impersonate, err := api.revert.Dll.FindProc("ImpersonateLoggedOnUser")
-			if err != nil {
-				clean = true // No identity-changing call was attempted.
-				result.failure = err
-				return
-			}
-			defer func() {
-				ok, _, revertErr := api.revert.Call()
-				var residual syscall.Token
-				found, _, readErr := api.threadToken.Call(^uintptr(1), syscall.TOKEN_QUERY, 1, uintptr(unsafe.Pointer(&residual)))
-				var closeErr error
-				if residual != 0 {
-					closeErr = residual.Close()
+		var result fixtureMediumThreadResult
+		result.failure = fixtureFreshUACCheckedAccess(current, func() error {
+			result = func() (result fixtureMediumThreadResult) {
+				var prior syscall.Token
+				ok, _, readErr := api.threadToken.Call(^uintptr(1), syscall.TOKEN_QUERY, 1, uintptr(unsafe.Pointer(&prior)))
+				if prior != 0 {
+					_ = prior.Close()
 				}
-				clean = ok != 0 && found == 0 && residual == 0 && errors.Is(readErr, syscall.Errno(1008)) && closeErr == nil
-				if !clean {
-					result.failure = errors.Join(result.failure, nativeError("limited-token probe reversion", revertErr), closeErr,
-						errors.New("limited-token probe did not independently restore its OS thread"))
+				if ok != 0 || prior != 0 || !errors.Is(readErr, syscall.Errno(1008)) {
+					result.failure = errors.New("limited-token probe found an unowned thread identity")
+					return
 				}
-			}()
-			ok, _, callErr := impersonate.Call(uintptr(token))
-			if ok == 0 {
-				result.failure = nativeError("verified medium token impersonation", callErr)
-				return
-			}
-			var actualToken syscall.Token
-			ok, _, callErr = api.threadToken.Call(^uintptr(1), syscall.TOKEN_QUERY, 1, uintptr(unsafe.Pointer(&actualToken)))
-			if actualToken != 0 {
-				defer func() { result.failure = errors.Join(result.failure, actualToken.Close()) }()
-			}
-			if ok == 0 || actualToken == 0 {
-				result.failure = nativeError("verified medium thread token", callErr)
-				return
-			}
-			actual, level, identityErr := readTokenIdentity(actualToken)
-			integrity, integrityErr := fixtureTokenIntegrity(actualToken)
-			privileges, privilegeErr := fixtureTokenPrivileges(actualToken)
-			_, hasDebug := privileges[debug]
-			if identityErr != nil || integrityErr != nil || privilegeErr != nil || actual.Primary || level != 2 || actual.SID != expected.SID ||
-				actual.AuthenticationID != expected.AuthenticationID || actual.SessionID != expected.SessionID || actual.Elevated || actual.Administrator ||
-				integrity != "S-1-16-8192" || hasDebug {
-				result.failure = errors.Join(identityErr, integrityErr, privilegeErr, errors.New("limited-token access probe retained elevated or foreign authority"))
-				return
-			}
-			names := []string{"OpenThread", "GetProcessIdOfThread", "SuspendThread", "ResumeThread"}
-			procedures := make([]*syscall.Proc, len(names))
-			for index, name := range names {
-				procedures[index], err = api.processID.Dll.FindProc(name)
+				impersonate, err := api.revert.Dll.FindProc("ImpersonateLoggedOnUser")
 				if err != nil {
+					clean = true // No identity-changing call was attempted.
 					result.failure = err
 					return
 				}
-			}
-			value, _, openErr := procedures[0].Call(0x0800|0x0002, 0, uintptr(threadID))
-			thread := syscall.Handle(value)
-			if thread == 0 {
-				if !errors.Is(openErr, syscall.ERROR_ACCESS_DENIED) {
-					result.failure = nativeError("limited-token exact thread access", openErr)
+				defer func() {
+					ok, _, revertErr := api.revert.Call()
+					var residual syscall.Token
+					found, _, readErr := api.threadToken.Call(^uintptr(1), syscall.TOKEN_QUERY, 1, uintptr(unsafe.Pointer(&residual)))
+					var closeErr error
+					if residual != 0 {
+						closeErr = residual.Close()
+					}
+					clean = ok != 0 && found == 0 && residual == 0 && errors.Is(readErr, syscall.Errno(1008)) && closeErr == nil
+					if !clean {
+						result.failure = errors.Join(result.failure, nativeError("limited-token probe reversion", revertErr), closeErr,
+							errors.New("limited-token probe did not independently restore its OS thread"))
+					}
+				}()
+				ok, _, callErr := impersonate.Call(uintptr(token))
+				if ok == 0 {
+					result.failure = nativeError("verified medium token impersonation", callErr)
 					return
 				}
-				result.denial = openErr
+				var actualToken syscall.Token
+				ok, _, callErr = api.threadToken.Call(^uintptr(1), syscall.TOKEN_QUERY, 1, uintptr(unsafe.Pointer(&actualToken)))
+				if actualToken != 0 {
+					defer func() { result.failure = errors.Join(result.failure, actualToken.Close()) }()
+				}
+				if ok == 0 || actualToken == 0 {
+					result.failure = nativeError("verified medium thread token", callErr)
+					return
+				}
+				actual, level, identityErr := readTokenIdentity(actualToken)
+				integrity, integrityErr := fixtureTokenIntegrity(actualToken)
+				privileges, privilegeErr := fixtureTokenPrivileges(actualToken)
+				_, hasDebug := privileges[debug]
+				if identityErr != nil || integrityErr != nil || privilegeErr != nil || actual.Primary || level != 2 || actual.SID != expected.SID ||
+					actual.AuthenticationID != expected.AuthenticationID || actual.SessionID != expected.SessionID || actual.Elevated || actual.Administrator ||
+					integrity != "S-1-16-8192" || hasDebug {
+					result.failure = errors.Join(identityErr, integrityErr, privilegeErr, errors.New("limited-token access probe retained elevated or foreign authority"))
+					return
+				}
+				names := []string{"OpenThread", "GetProcessIdOfThread", "SuspendThread", "ResumeThread"}
+				procedures := make([]*syscall.Proc, len(names))
+				for index, name := range names {
+					procedures[index], err = api.processID.Dll.FindProc(name)
+					if err != nil {
+						result.failure = err
+						return
+					}
+				}
+				if err := current(); err != nil {
+					result.failure = err
+					return
+				}
+				value, _, openErr := procedures[0].Call(0x0800|0x0002, 0, uintptr(threadID))
+				thread := syscall.Handle(value)
+				if thread == 0 {
+					if !errors.Is(openErr, syscall.ERROR_ACCESS_DENIED) {
+						result.failure = nativeError("limited-token exact thread access", openErr)
+						return
+					}
+					result.denial = openErr
+					return
+				}
+				defer func() { result.failure = errors.Join(result.failure, syscall.CloseHandle(thread)) }()
+				pid, _, ownerErr := procedures[1].Call(uintptr(thread))
+				if pid != uintptr(processID) {
+					result.failure = errors.Join(ownerErr, errors.New("limited-token probe opened a foreign thread owner"))
+					return
+				}
+				// The initial thread has its creation suspension plus the independent
+				// readback suspension. Counts 2->3->2 exercise rights without running
+				// child code; an unexpected count goes straight to owned retirement.
+				count, _, suspendErr := procedures[2].Call(uintptr(thread))
+				if uint32(count) != 2 {
+					result.failure = errors.Join(suspendErr, fmt.Errorf("limited-token suspend changed captured count: %d", uint32(count)))
+					return
+				}
+				count, _, resumeErr := procedures[3].Call(uintptr(thread))
+				if uint32(count) != 3 {
+					result.failure = errors.Join(resumeErr, fmt.Errorf("limited-token resume changed captured count: %d", uint32(count)))
+					return
+				}
+				result.allowed = true
 				return
-			}
-			defer func() { result.failure = errors.Join(result.failure, syscall.CloseHandle(thread)) }()
-			pid, _, ownerErr := procedures[1].Call(uintptr(thread))
-			if pid != uintptr(processID) {
-				result.failure = errors.Join(ownerErr, errors.New("limited-token probe opened a foreign thread owner"))
-				return
-			}
-			// The initial thread has its creation suspension plus the independent
-			// readback suspension. Counts 2->3->2 exercise rights without running
-			// child code; an unexpected count goes straight to owned retirement.
-			count, _, suspendErr := procedures[2].Call(uintptr(thread))
-			if uint32(count) != 2 {
-				result.failure = errors.Join(suspendErr, fmt.Errorf("limited-token suspend changed captured count: %d", uint32(count)))
-				return
-			}
-			count, _, resumeErr := procedures[3].Call(uintptr(thread))
-			if uint32(count) != 3 {
-				result.failure = errors.Join(resumeErr, fmt.Errorf("limited-token resume changed captured count: %d", uint32(count)))
-				return
-			}
-			result.allowed = true
-			return
-		}()
+			}()
+			return result.failure
+		})
 		done <- result
 	}()
 	result := <-done
@@ -324,13 +339,35 @@ func TestWindowsControllerUACAcceptanceLimitedTokenThreadAccess(t *testing.T) {
 	privileges, privilegeErr := fixtureTokenPrivileges(linked)
 	debug, debugErr := fixtureDebugPrivilege(fixtureRestrictedAPIs(t))
 	_, hasDebug := privileges[debug]
+	accessToken, accessIdentity := linked, limited
+	sourceLabel := "Actual linked medium token"
+	var checkpoint []func() error
+	if receipt := fixtureFreshUACWorkerReceipt; receipt != nil && receipt.Role == "full" {
+		observation, err := fixtureFreshUACObserveToken(api, linked)
+		if err != nil {
+			t.Fatal("fresh Full linked Limited observation is unproved", err)
+		}
+		var current func() error
+		var release func()
+		accessToken, accessIdentity, current, release, err = fixtureFreshUACParentAuthority.acquire(observation)
+		if err != nil {
+			t.Fatal("fresh Full lost its authenticated actual Limited primary source", err)
+		}
+		defer release() // fixtureMediumThreadAccess joins before returning.
+		checkpoint = []func() error{current}
+		sourceLabel = "Actual authenticated Limited parent primary token"
+	} else if !limited.Primary {
+		// A standalone identification link is still observation only. There
+		// is no constructed or duplicated-token fallback for this test.
+		t.Fatal("linked token is not the actual medium-integrity limited user without debug privilege")
+	}
 	if identityErr != nil || typeErr != nil || integrityErr != nil || privilegeErr != nil || debugErr != nil ||
-		!limited.Primary || limitedType != 3 || limited.SID != original.SID || limited.SessionID != original.SessionID || limited.Elevated || limited.Administrator ||
+		!accessIdentity.Primary || limitedType != 3 || limited.SID != original.SID || limited.SessionID != original.SessionID || limited.Elevated || limited.Administrator ||
 		integrity != "S-1-16-8192" || hasDebug {
 		t.Fatal("linked token is not the actual medium-integrity limited user without debug privilege", identityErr, typeErr, integrityErr, privilegeErr, debugErr)
 	}
 	process, threadID := fixtureSuspendedAccessTarget(t, api, image, pipe, original)
-	result := fixtureMediumThreadAccess(api, linked, limited, debug, uint32(threadID), process.PID())
+	result := fixtureMediumThreadAccess(api, accessToken, accessIdentity, debug, uint32(threadID), process.PID(), checkpoint...)
 	if result.failure != nil {
 		t.Fatal("actual linked-token thread access was not independently proved and reverted", result.failure)
 	}
@@ -342,9 +379,9 @@ func TestWindowsControllerUACAcceptanceLimitedTokenThreadAccess(t *testing.T) {
 	}
 	fixtureNoSuspendedChildHello(t, pipe)
 	if result.allowed {
-		t.Log("Actual linked medium token without SeDebug: exact elevated Shell thread rights 0x0802 granted; SuspendThread/ResumeThread preserved counts 2->3->2. No UAC consent or cross-account acceptance is established.")
+		t.Logf("%s without SeDebug: exact elevated Shell thread rights 0x0802 granted; SuspendThread/ResumeThread preserved counts 2->3->2. No UAC consent or cross-account acceptance is established.", sourceLabel)
 	} else if errors.Is(result.denial, syscall.ERROR_ACCESS_DENIED) {
-		t.Log("Actual linked medium token without SeDebug: exact elevated Shell thread rights 0x0802 denied with ERROR_ACCESS_DENIED. Ordinary-user suspended launch requires another supported owner; this is not UAC acceptance.")
+		t.Logf("%s without SeDebug: exact elevated Shell thread rights 0x0802 denied with ERROR_ACCESS_DENIED. Ordinary-user suspended launch requires another supported owner; this is not UAC acceptance.", sourceLabel)
 	} else {
 		t.Fatal("linked-token diagnostic produced no bounded access result")
 	}

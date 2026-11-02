@@ -237,7 +237,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $binary = Join-Path $env:RUNNER_TEMP 'routervpn-shell-elevation.test.exe'
           if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Native linked-token diagnostic has no compiled exact-source binary' }
-          & $binary '-test.run=^TestFixtureFreshUAC(RequiresReciprocalNativeAuthority|LinkedObservationIsNotLaunchAuthority)$' '-test.count=1' '-test.timeout=15s' '-test.v'
+          & $binary '-test.run=^TestFixtureFreshUAC' '-test.count=1' '-test.timeout=15s' '-test.v'
           if ($LASTEXITCODE -ne 0) { throw 'Native UAC reciprocal identity negative controls failed' }
           & $binary '-test.run=^TestWindowsControllerUACAcceptanceFreshLogonThreadAccess$' '-test.count=1' '-test.timeout=90s' '-test.v'
           if ($LASTEXITCODE -ne 0) { throw 'Actual linked-token thread access was not observed with verified identity and reversion' }

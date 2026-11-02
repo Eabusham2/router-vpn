@@ -73,8 +73,7 @@ func fixtureFreshUACBootstrapHandoff(ctx context.Context, pipe *Pipe, parent *Pr
 	}
 	limited, full, pairErr := fixtureFreshUACReadPair(api, token, caller.SID)
 	closeErr := token.Close()
-	if pairErr != nil || closeErr != nil || !fixtureFreshUACPrimaryMatches(full, receipt.Full) ||
-		!fixtureFreshUACAuthorityMatches(limited, receipt.Limited) || full.ElevationType != 2 {
+	if pairErr != nil || closeErr != nil || !fixtureFreshUACFullWorkerMatches(limited, full, receipt.Limited, receipt.Full) || full.ElevationType != 2 {
 		return errors.Join(pairErr, closeErr, errors.New("normal runas did not retain the originally observed reciprocal Full logon"))
 	}
 	executable, err := fixtureFreshUACDOSImage(api, image)
@@ -85,19 +84,36 @@ func fixtureFreshUACBootstrapHandoff(ctx context.Context, pipe *Pipe, parent *Pr
 	// Keep the exact private parent channel through the entire test run. A
 	// disappeared parent ends this dedicated process, whose already-owned Job
 	// closes its descendants. No PID search or unrelated process is used.
+	if fixtureFreshUACParentAuthority != nil || fixtureFreshUACBootstrapFinish != nil {
+		return errors.New("fresh Full continuation already has an owned Limited source")
+	}
 	lifetime, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ownedParent, err := fixtureRetainFreshUACLimitedParent(lifetime, api, parent, receipt.Limited, limited)
+	if err != nil {
+		cancel()
+		return err
+	}
+	fixtureFreshUACParentAuthority = ownedParent
 	joined := make(chan struct{})
 	go func() {
 		defer close(joined)
 		_ = pipe.ObserveLifetime(lifetime)
 		if !errors.Is(lifetime.Err(), context.Canceled) {
+			// Revoke the retained primary capability before process retirement.
+			cancel()
 			os.Exit(125)
 		}
 	}()
 	fixtureFreshUACBootstrapFinish = func() error {
 		cancel()
 		<-joined
-		return pipe.Close()
+		// TestMain calls this only after m.Run and each exact access thread
+		// have joined. A pending lease refuses early token/process closure.
+		closeErr := ownedParent.close()
+		if closeErr == nil && fixtureFreshUACParentAuthority == ownedParent {
+			fixtureFreshUACParentAuthority = nil
+		}
+		return errors.Join(closeErr, pipe.Close())
 	}
 	fixtureFreshUACWorkerReceipt = &receipt
 	os.Args = []string{os.Args[0], "-test.run=^" + fixtureFreshUACName + "$", "-test.count=1", "-test.timeout=35s", "-test.v"}
