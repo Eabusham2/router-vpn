@@ -382,6 +382,8 @@ class BaselineBinaries:
                 path = ROOT / "deploy/test_desktop_node_routing_runner.py"
             elif relative.startswith("layer-reference/"):
                 path = ROOT / relative.removeprefix("layer-reference/")
+            elif relative.startswith("gate/"):
+                path = ROOT / relative.removeprefix("gate/")
             else:
                 path = self.source / relative
             if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
