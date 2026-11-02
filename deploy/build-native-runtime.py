@@ -579,8 +579,13 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 # 125110055580 and 125110055657). Keep serial peer execution
                 # and every individual compiler/suite/control deadline; the
                 # full expanded Linux workload needs its own bounded budget.
+                # At f41514f7, Windows AMD64 completed all 17 baselines and
+                # 16 of 34 compiled controls, then its 1200s parent stopped
+                # the next compile (run 41507677662, job 125493850421).
+                # Give the complete Windows workload the same aggregate
+                # budget; compiler, suite and control deadlines stay intact.
                 run([sys.executable, ROOT/'deploy/test_desktop_node_physical.py', source],
-                    env=env, timeout=1200 if target.startswith('windows/') else 1800)
+                    env=env, timeout=1800)
                 # The PQ matrix uses the same verified native archive and
                 # compiler cache, fresh KEM keys, and real packet/Start Layer
                 # peers. Native firewall/public admission remains separate.
