@@ -231,8 +231,21 @@ class AppleTimerPreparation(unittest.TestCase):
         for path in (bridge / 'libwg-go-arm64.a', output / 'libwg-go.a'):
             path.write_bytes(b'old cached archive')
             os.utime(path, (future, future))
+        sdk = '/owned/fixture-sdk'
+        if sys.platform == 'darwin':
+            # Apple's /usr/bin/make dispatches through xcrun before reading
+            # even a dry-run Makefile. A fictitious SDKROOT makes that dispatch
+            # fail with status 72. Resolve the installed SDK without inheriting
+            # a caller's SDKROOT; the archive graph still runs only with -n.
+            sdk_environment = dict(selected)
+            sdk_environment.pop('SDKROOT', None)
+            sdk = subprocess.check_output(
+                ['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'],
+                env=sdk_environment, text=True).strip()
+            if not Path(sdk).is_absolute() or not Path(sdk).is_dir():
+                raise ValueError('The Apple make control requires the installed iPhoneOS SDK')
         selected.update(CONFIGURATION_TEMP_DIR=str(build_root), CONFIGURATION_BUILD_DIR=str(output),
-                        ARCHS='arm64', SDKROOT='/owned/fixture-sdk', PLATFORM_NAME='iphoneos')
+                        ARCHS='arm64', SDKROOT=sdk, PLATFORM_NAME='iphoneos')
         original = subprocess.run(['make', '-n', '-C', str(source), 'build'], env=selected,
                                   check=True, capture_output=True, text=True)
         self.assertNotIn('go build ', original.stdout)
