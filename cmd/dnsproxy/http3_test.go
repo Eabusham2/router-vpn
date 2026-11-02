@@ -77,24 +77,14 @@ func newDNSTestH3At(t *testing.T, handler http.HandlerFunc, address, identity st
 	if ip.To4() == nil {
 		udpNetwork, tcpNetwork = "udp6", "tcp6"
 	}
-	// Let TCP choose an allowed ephemeral port before reserving the same UDP
-	// endpoint. A UDP-selected ephemeral port may be reserved against explicit
-	// TCP binds on Windows. Keep both sockets owned before starting the server;
-	// TCP remains the live forbidden-downgrade witness for every test.
-	var tcp net.Listener
-	var udp *net.UDPConn
-	var err error
-	for range 8 {
-		tcp, err = net.Listen(tcpNetwork, net.JoinHostPort(address, "0"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		udp, err = net.ListenUDP(udpNetwork, &net.UDPAddr{IP: ip, Port: tcp.Addr().(*net.TCPAddr).Port})
-		if err == nil {
-			break
-		}
-		_ = tcp.Close()
-	}
+	// Exercise the production bounded paired allocator, including its Windows
+	// candidate policy. Both sockets remain owned; TCP is the actual forbidden
+	// downgrade witness for every HTTP/3 case.
+	udp, tcp, err := listenDNSProxyWith(net.JoinHostPort(address, "0"), func(selected *net.TCPAddr) (net.Listener, error) {
+		return net.ListenTCP(tcpNetwork, selected)
+	}, func(selected *net.UDPAddr) (*net.UDPConn, error) {
+		return net.ListenUDP(udpNetwork, selected)
+	})
 	if err != nil {
 		t.Fatal("could not reserve the same owned TCP/UDP fixture endpoint", err)
 	}

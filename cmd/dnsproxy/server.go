@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"runtime"
 	"sync"
 	"time"
 
@@ -40,40 +42,124 @@ func listenDNSProxy(listen string) (*net.UDPConn, net.Listener, error) {
 	})
 }
 
-// TCP owns the selected port before UDP adopts it. Windows may reserve TCP
-// ranges that its UDP ephemeral allocator can still select. A requested zero
-// port may retry a UDP collision, but every partial TCP owner is closed before
-// another attempt. A fixed port is never replaced with another port.
+// TCP owns the selected port before UDP adopts it. Windows TCP and UDP have
+// independent dynamic/excluded ranges, so repeated port-zero choices can all
+// land in a range rejected by the other transport. Only Windows port-zero
+// requests use eight distinct random candidates below its default dynamic
+// range; both actual binds still have to succeed. Fixed ports never change.
 func listenDNSProxyWith(listen string, openTCP func(*net.TCPAddr) (net.Listener, error), openUDP func(*net.UDPAddr) (*net.UDPConn, error)) (*net.UDPConn, net.Listener, error) {
 	address, err := net.ResolveTCPAddr("tcp", listen)
 	if err != nil {
 		return nil, nil, err
 	}
+	candidates, err := dnsListenerPortCandidates(address.Port == 0 && runtime.GOOS == "windows", rand.Reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	return listenDNSProxyCandidates(address, candidates, openTCP, openUDP)
+}
+
+func dnsListenerPortCandidates(windows bool, entropy io.Reader) ([8]uint16, error) {
+	var ports [8]uint16
+	if !windows {
+		return ports, nil
+	}
+	if entropy == nil {
+		return ports, errors.New("DNS listener candidates require captured entropy")
+	}
+	var data [16]byte
+	if _, err := io.ReadFull(entropy, data[:]); err != nil {
+		return ports, fmt.Errorf("DNS listener candidate entropy: %w", err)
+	}
+	seen := make(map[uint16]bool, len(ports))
+	for index := range ports {
+		port := uint16(16384) + binary.LittleEndian.Uint16(data[2*index:])%32768
+		for seen[port] {
+			port = 16384 + (port-16384+1)%32768
+		}
+		ports[index], seen[port] = port, true
+	}
+	return ports, nil
+}
+
+func listenDNSProxyCandidates(address *net.TCPAddr, candidates [8]uint16, openTCP func(*net.TCPAddr) (net.Listener, error), openUDP func(*net.UDPAddr) (*net.UDPConn, error)) (*net.UDPConn, net.Listener, error) {
+	if address == nil || address.Port < 0 || address.Port > 65535 || openTCP == nil || openUDP == nil {
+		return nil, nil, errors.New("DNS listeners require a captured endpoint and both constructors")
+	}
+	diverse := candidates != [8]uint16{}
+	if diverse {
+		seen := make(map[uint16]bool, len(candidates))
+		for _, port := range candidates {
+			if address.Port != 0 || port < 16384 || port >= 49152 || seen[port] {
+				return nil, nil, errors.New("DNS listeners require eight distinct bounded candidates only for port zero")
+			}
+			seen[port] = true
+		}
+	}
 	attempts := 1
 	if address.Port == 0 {
-		attempts = 8
+		attempts = len(candidates)
 	}
-	var lastUDPError error
-	for range attempts {
-		tcp, err := openTCP(address)
+	var failures []error
+	for index := range attempts {
+		requested := *address
+		requested.IP = append(net.IP(nil), address.IP...)
+		if diverse {
+			requested.Port = int(candidates[index])
+		}
+		requestedPort := requested.Port
+		tcp, err := openTCP(&requested)
+		// net.ListenTCP returns a pointer, whose nil failure value can be
+		// preserved inside this interface seam. It is not a partial owner.
+		if actual, ok := tcp.(*net.TCPListener); ok && actual == nil {
+			tcp = nil
+		}
 		if err != nil {
-			return nil, nil, err
+			if tcp != nil {
+				if closeErr := tcp.Close(); closeErr != nil {
+					return nil, nil, errors.Join(err, closeErr)
+				}
+			}
+			if !diverse {
+				return nil, nil, err
+			}
+			failures = append(failures, err)
+			continue
+		}
+		if tcp == nil {
+			return nil, nil, errors.New("DNS TCP listener has no captured owner")
 		}
 		selected, ok := tcp.Addr().(*net.TCPAddr)
-		if !ok || selected.Port == 0 {
+		if !ok || selected == nil || selected.Port <= 0 || selected.Port > 65535 || (requestedPort != 0 && selected.Port != requestedPort) {
 			return nil, nil, errors.Join(errors.New("DNS TCP listener did not own an actual port"), tcp.Close())
 		}
-		udp, udpErr := openUDP(&net.UDPAddr{IP: append(net.IP(nil), selected.IP...), Port: selected.Port, Zone: selected.Zone})
+		captured := net.UDPAddr{IP: append(net.IP(nil), selected.IP...), Port: selected.Port, Zone: selected.Zone}
+		udp, udpErr := openUDP(&captured)
 		if udpErr == nil {
-			return udp, tcp, nil
+			if udp != nil {
+				actual, ok := udp.LocalAddr().(*net.UDPAddr)
+				if ok && actual != nil && actual.Port == selected.Port && actual.IP.Equal(selected.IP) && actual.Zone == selected.Zone {
+					return udp, tcp, nil
+				}
+			}
+			udpErr = errors.New("DNS UDP listener did not retain the captured TCP endpoint")
+			var closeUDP error
+			if udp != nil {
+				closeUDP = udp.Close()
+			}
+			return nil, nil, errors.Join(udpErr, closeUDP, tcp.Close())
 		}
 		// Do not retry if releasing the previous owner failed.
-		if closeErr := tcp.Close(); closeErr != nil {
+		var closeUDP error
+		if udp != nil {
+			closeUDP = udp.Close()
+		}
+		if closeErr := errors.Join(closeUDP, tcp.Close()); closeErr != nil {
 			return nil, nil, errors.Join(udpErr, closeErr)
 		}
-		lastUDPError = udpErr
+		failures = append(failures, udpErr)
 	}
-	return nil, nil, fmt.Errorf("DNS could not reserve the same TCP/UDP port after %d attempt(s): %w", attempts, lastUDPError)
+	return nil, nil, fmt.Errorf("DNS could not reserve the same TCP/UDP port after %d attempt(s): %w", attempts, errors.Join(failures...))
 }
 
 // Listener loops stop before waiting for workers, so no late accepted request
