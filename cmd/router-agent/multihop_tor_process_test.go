@@ -68,7 +68,9 @@ func TestServerTorIPCChild(t *testing.T) {
 				r.ExitIP = "203.0.113.9"
 				r.IsTor = true
 				r.DNSProven = true
-				r.ProofAt = time.Now().UnixMilli()
+				// This synthetic proof and heartbeat are one observation. A
+				// second clock read could put the proof after its own heartbeat.
+				r.ProofAt = r.HeartbeatAt
 			}
 			switch mode {
 			case "wrong-source":
@@ -80,6 +82,10 @@ func TestServerTorIPCChild(t *testing.T) {
 			case "missing-dns":
 				if ready {
 					r.DNSProven = false
+				}
+			case "proof-after-heartbeat":
+				if ready {
+					r.ProofAt = r.HeartbeatAt + 1
 				}
 			case "nonce":
 				r.Nonce = strings.Repeat("f", 64)
@@ -181,7 +187,7 @@ func TestServerTorIPCRealChildNonceProofAndConfirmedCleanup(t *testing.T) {
 	}
 }
 func TestServerTorIPCRejectsWrongOwnerReplayAndUnprovedDNS(t *testing.T) {
-	for _, mode := range []string{"wrong-source", "wrong-front", "nonce", "replay", "missing-dns"} {
+	for _, mode := range []string{"wrong-source", "wrong-front", "nonce", "replay", "missing-dns", "proof-after-heartbeat"} {
 		t.Run(mode, func(t *testing.T) {
 			p, _ := torPipeProcess(t, mode)
 			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
@@ -195,7 +201,7 @@ func TestServerTorIPCRejectsWrongOwnerReplayAndUnprovedDNS(t *testing.T) {
 				nonce, _ = torIPCNonce()
 				_, err = p.Snapshot(ctx, nonce)
 			}
-			if mode == "missing-dns" {
+			if mode == "missing-dns" || mode == "proof-after-heartbeat" {
 				if err != nil {
 					t.Fatal(err)
 				}
