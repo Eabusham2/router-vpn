@@ -188,8 +188,10 @@ def need_desktop_tor_maintenance() -> None:
 
         admission = go_contract_block(command, "if maintenance == nil")
         for marker in ("ctx, cancel := context.WithCancel(parent)", "cancelMaintenance = cancel", "maintenance = completed", "version: proofVersion", "heartbeat: transitionDone == nil",
-                       "go func() { completed <- routerVPNTorMaintain(ctx, owner, files, dnsFiles, mtuFiles, pathFiles, captured) }()"):
+                       "go func() { completed <- routerVPNTorMaintain(ctx, owner, files, dnsFiles, mtuFiles, pathFiles, latencyFiles, captured) }()"):
             go_contract_at(admission, marker)
+        go_contract_at(worker, "dns.tick() != nil || latency.tick() != nil")
+        go_contract_at(command, "latencyFiles, err = routerVPNOpenDesktopLatency(routerVPNTorOutputFiles(files), owner, session, metadata.SourceSHA256, metadata.ConfigSHA256, metadata.NodeID)")
         start = go_contract_at(command, "case result := <-maintenance:")
         end = go_contract_at(command, "case result := <-done:")
         adopted = command[start:end]
@@ -208,6 +210,19 @@ def need_desktop_tor_maintenance() -> None:
         if not (go_contract_at(command, "if cancelMaintenance != nil") < go_contract_at(command, "owner.Cancel()") <
                 go_contract_at(command, "if maintenance != nil") < go_contract_at(command, "owner.Close(cleanup)")):
             raise ValueError("native close preceded retained maintenance cancellation/join")
+        go_contract_at(go_contract_block(command, "if latencyFiles != nil"), "latencyFiles.service.Invalidate()")
+        drained = go_contract_block(command, "for latencyFiles.close() != nil")
+        go_contract_at(drained, 'progress.Stage = "cleanup-pending"')
+        go_contract_at(drained, "<-tick.C")
+        teardown = command[go_contract_at(command, "if cancelMaintenance != nil"):]
+        if go_contract_at(teardown, "finish()") <= go_contract_at(teardown, "for latencyFiles.close() != nil"):
+            raise ValueError("Tor closed receipt preceded latency drain")
+        if not (go_contract_at(command, "if maintenance != nil") <
+                go_contract_at(command, "latencyFiles.service.Invalidate()") <
+                go_contract_at(command, "owner.Close(cleanup)") <
+                go_contract_at(command, "for latencyFiles.close() != nil") <
+                go_contract_at(command, "if err := finish(); err != nil")):
+            raise ValueError("Tor latency measurement escaped invalidation or joined native teardown")
 
         transition = go_contract_block(worker_source, "func routerVPNTorTransitionKeepsAlive(")
         for marker in ("value.ExpiresAt > now.UnixMilli()", "value.ExpiresAt-value.StartedAt > 0", "value.ExpiresAt-value.StartedAt <= mobiletor.DesktopBridgeMTUTransitionLimit.Milliseconds()",

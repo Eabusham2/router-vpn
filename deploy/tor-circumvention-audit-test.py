@@ -141,7 +141,7 @@ class TorMaintenanceAuditTests(unittest.TestCase):
             ("ctx, cancel := context.WithCancel(parent)", "ctx, cancel := context.WithCancel(context.Background())"),
             ("version: proofVersion, proof: receipt", "version: 0, proof: receipt"),
             ("heartbeat: transitionDone == nil && time.Since(heartbeat)", "heartbeat: time.Since(heartbeat)"),
-            ("completed <- routerVPNTorMaintain(ctx, owner, files, dnsFiles, mtuFiles, pathFiles, captured)", "completed <- captured"),
+            ("completed <- routerVPNTorMaintain(ctx, owner, files, dnsFiles, mtuFiles, pathFiles, latencyFiles, captured)", "completed <- captured"),
         ):
             with self.subTest(original=original):
                 self.reject(COMMAND, original, replacement)
@@ -165,6 +165,24 @@ class TorMaintenanceAuditTests(unittest.TestCase):
         ):
             with self.subTest(original=original):
                 self.reject(COMMAND, original, replacement)
+
+    def test_latency_service_retains_actual_node_and_worker(self):
+        self.reject(COMMAND, "pathFiles, latencyFiles, captured)", "pathFiles, nil, captured)")
+        self.reject(WORKER, "dns.tick() != nil || latency.tick() != nil", "dns.tick() != nil")
+        self.reject(COMMAND,
+                    "routerVPNOpenDesktopLatency(routerVPNTorOutputFiles(files), owner, session, metadata.SourceSHA256, metadata.ConfigSHA256, metadata.NodeID)",
+                    'routerVPNOpenDesktopLatency(routerVPNTorOutputFiles(files), owner, session, metadata.SourceSHA256, metadata.ConfigSHA256, "replacement")')
+
+    def test_latency_cannot_outlive_shutdown_or_claim_early_drain(self):
+        self.reject(COMMAND, "latencyFiles.service.Invalidate()", "/* latencyFiles.service.Invalidate() */")
+        self.reject(COMMAND, "for latencyFiles.close() != nil {", "if latencyFiles.close() != nil {")
+        source = MAINTENANCE_SOURCE[COMMAND]
+        block = ('\tfor latencyFiles.close() != nil {\n\t\tprogress.Stage = "cleanup-pending"\n'
+                 '\t\t_ = files.publish("progress.json", progress)\n\t\t<-tick.C\n\t}\n')
+        self.assertEqual(1, source.count(block))
+        changed = source.replace(block, "").replace('\tif err := finish(); err != nil {',
+                                                     '\t_ = finish()\n' + block + '\tif err := finish(); err != nil {')
+        self.assertTrue(self.errors({COMMAND: changed}), "a closed receipt before latency drain must fail")
 
     def test_transition_cannot_extend_expired_or_different_proof(self):
         for original, replacement in (
