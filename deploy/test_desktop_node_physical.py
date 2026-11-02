@@ -45,6 +45,17 @@ HYSTERIA2_IDENTITY_CASES = tuple(layer + "/" + identity for layer in ("off", "ae
                                 for identity in ("ip-absent", "ip-empty", "ip-wrong-certificate"))
 HYSTERIA2_COVER_CASES = tuple(layer + "/" + fault for layer in ("aes-256-gcm", "aes-256-gcm+xor-whitening")
                              for fault in ("owned", "wrong-node", "drop-cover"))
+HYSTERIA2_SUITES = (
+    ("hysteria2-credentials", "./protocol/routervpnamnezia",
+     "^TestRouterVPNDesktopNodeHysteria2(WrongCredential|WrongWhitening)$",
+     ("TestRouterVPNDesktopNodeHysteria2WrongCredential", "TestRouterVPNDesktopNodeHysteria2WrongWhitening")),
+    ("hysteria2-identity", "./protocol/routervpnamnezia",
+     "^TestRouterVPNDesktopNodeHysteria2(LayerTLSIdentity|ReferenceCapture)$",
+     ("TestRouterVPNDesktopNodeHysteria2LayerTLSIdentity", "TestRouterVPNDesktopNodeHysteria2ReferenceCapture")),
+    ("hysteria2-cover", "./protocol/routervpnamnezia",
+     "^TestRouterVPNDesktopNodeHysteria2(LayerCover|OuterCannotBypassFinal)$",
+     ("TestRouterVPNDesktopNodeHysteria2LayerCover", "TestRouterVPNDesktopNodeHysteria2OuterCannotBypassFinal")),
+)
 XRAY_MODES = ("reality-vision", "reality-pq-vision", "reality-xhttp")
 XRAY_CASES = tuple(mode + "/" + layer for mode in XRAY_MODES
                    for layer in ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening"))
@@ -728,6 +739,31 @@ def mutants(source, windows):
     return result
 
 
+def execute_baseline_suite(baselines, suite):
+    name, package, selector, required = suite
+    # Encrypted graph/layer and selected-DNS cases alone consumed 89.58 s on
+    # Windows before the required pre-ready cases began. Keep those aggregate
+    # bounds and every per-operation bound; each disjoint HY2 phase keeps 90 s.
+    duration = 180 if name in ("encrypted", "composite-credentials", "sip003-retained") else 90
+    status, output = baselines.execute(name, package, selector, duration)
+    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    if status or any("--- PASS: " + test + " (" not in output for test in required) or "--- SKIP:" in output or "DATA RACE" in output:
+        raise ValueError("Node " + name + " omitted a required native boundary")
+    if name == "hysteria2-credentials" and any("--- PASS: TestRouterVPNDesktopNodeHysteria2WrongCredential/" + case + " (" not in output for case in HYSTERIA2_CREDENTIAL_CASES):
+        raise ValueError("Node Hysteria2 gate omitted a captured protocol, trust or layer credential negative")
+    groups = ()
+    if name == "hysteria2-identity":
+        groups = (("LayerTLSIdentity", HYSTERIA2_IDENTITY_CASES),
+                  ("ReferenceCapture", ("unchanged", "ip-absent", "ip-empty", "wrong-ip", "unknown-identity", "other-mode", "whitening", "wrong-layer", "wrong-mode")))
+    elif name == "hysteria2-cover":
+        groups = (("LayerCover", HYSTERIA2_COVER_CASES),
+                  ("OuterCannotBypassFinal", ("aes-256-gcm", "aes-256-gcm+xor-whitening")))
+    for group, cases in groups:
+        if any("--- PASS: TestRouterVPNDesktopNodeHysteria2" + group + "/" + case + " (" not in output for case in cases):
+            raise ValueError("Node Hysteria2 gate omitted original IP trust or final encrypted cover ownership")
+    return output
+
+
 def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=False):
     if prospective:
         raise ValueError("Node native source gate does not admit a prospective OS predicate")
@@ -759,10 +795,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          ("TestRouterVPNDesktopNodeEncryptedPreReadyHandshake", "TestRouterVPNDesktopNodeEncryptedWrongPeerRejected", "TestRouterVPNDesktopNodeEncryptedConfiguredCoverStartup", "TestRouterVPNDesktopNodeEncryptedSelectedDNSIsFresh",
           "TestRouterVPNDesktopNodeEncryptedLayerTraffic", "TestRouterVPNDesktopNodeEncryptedLayerWrongCredential", "TestRouterVPNDesktopNodeEncryptedRouterHealthLayers") +
          (("TestRouterVPNDesktopNodeEncryptedPlainWireGuard", "TestRouterVPNDesktopNodeEncryptedPlainAmnezia", "TestRouterVPNDesktopNodeEncryptedAmneziaReferenceCapture") if platform.system() == "Linux" else ())),
-        ("hysteria2-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeHysteria2",
-         ("TestRouterVPNDesktopNodeHysteria2WrongCredential", "TestRouterVPNDesktopNodeHysteria2LayerTLSIdentity",
-          "TestRouterVPNDesktopNodeHysteria2WrongWhitening", "TestRouterVPNDesktopNodeHysteria2LayerCover",
-          "TestRouterVPNDesktopNodeHysteria2OuterCannotBypassFinal", "TestRouterVPNDesktopNodeHysteria2ReferenceCapture")),
+        *HYSTERIA2_SUITES,
         ("xray-traffic", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeXrayTraffic$",
          ("TestRouterVPNDesktopNodeXrayTraffic",)),
         ("xray-credentials", "./protocol/routervpnamnezia", "^TestRouterVPNDesktopNodeXrayWrongCredential$",
@@ -806,14 +839,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         suffix = ".exe" if windows else ""
         baselines = BaselineBinaries(source, workspace, build, captured, before)
         for name, package, selector, required in suites:
-            # Encrypted graph/layer and selected-DNS cases alone consumed
-            # 89.58 s on Windows before the required pre-ready cases began.
-            # These two expanded aggregates retain every per-operation bound.
-            duration = 180 if name in ("encrypted", "composite-credentials", "sip003-retained") else 90
-            status, output = baselines.execute(name, package, selector, duration)
-            print(output, end="" if output.endswith("\n") else "\n", flush=True)
-            if status or any("--- PASS: " + test + " (" not in output for test in required) or "--- SKIP:" in output or "DATA RACE" in output:
-                raise ValueError("Node " + name + " omitted a required native boundary")
+            output = execute_baseline_suite(baselines, (name, package, selector, required))
             if name == "encrypted" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedPreReadyHandshake/" + mode + " (" not in output for mode in ("wg", "awg2-fast", "awg2-strong")):
                 raise ValueError("Node encrypted gate omitted a complete base profile")
             if name == "encrypted" and any("--- PASS: TestRouterVPNDesktopNodeEncryptedLayerTraffic/" + case + " (" not in output for case in (*LAYER_CASES, *LAYER_ALLOCATION_CASES)):
@@ -830,14 +856,6 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 capture_cases = ("captured", "wrong-mode", "missing", "extra", "overlap", "wg-header", "wrong-client", "noncanonical-key", "self-peer", "private-alias-self-peer", "wrong-node")
                 if any("--- PASS: TestRouterVPNDesktopNodeEncryptedAmneziaReferenceCapture/" + case + " (" not in output for case in capture_cases):
                     raise ValueError("Node encrypted gate omitted AWG2 captured source and canonical identity rejection")
-            if name == "hysteria2-credentials" and any("--- PASS: TestRouterVPNDesktopNodeHysteria2WrongCredential/" + case + " (" not in output for case in HYSTERIA2_CREDENTIAL_CASES):
-                raise ValueError("Node Hysteria2 gate omitted a captured protocol, trust or layer credential negative")
-            if name == "hysteria2-credentials":
-                for group, cases in (("LayerTLSIdentity", HYSTERIA2_IDENTITY_CASES), ("LayerCover", HYSTERIA2_COVER_CASES),
-                                     ("OuterCannotBypassFinal", ("aes-256-gcm", "aes-256-gcm+xor-whitening")),
-                                     ("ReferenceCapture", ("unchanged", "ip-absent", "ip-empty", "wrong-ip", "unknown-identity", "other-mode", "whitening", "wrong-layer", "wrong-mode"))):
-                    if any("--- PASS: TestRouterVPNDesktopNodeHysteria2" + group + "/" + case + " (" not in output for case in cases):
-                        raise ValueError("Node Hysteria2 gate omitted original IP trust or final encrypted cover ownership")
             if name == "wireguard-layers":
                 layers = ("aes-256-gcm", "aes-256-gcm+xor-whitening")
                 traffic = tuple(layer + "/" + fault for layer in layers
