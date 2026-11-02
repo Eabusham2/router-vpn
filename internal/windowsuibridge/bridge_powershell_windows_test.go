@@ -171,6 +171,15 @@ func nativePowerShellFinished(t *testing.T, gui *nativeBridgeGUI, expected strin
 	// exchange plus ten seconds for this fixture's four bounded requests.
 	code, err := gui.child.Wait(nativeBridgeContext(t, 70*time.Second))
 	raw, readErr := os.ReadFile(gui.report)
+	// Preserve passive timestamps from the actual cold interpreter. Resolving
+	// commands or compiling its transport ahead of this launch would prewarm
+	// the failing boundary and hide it. These fixture-only phases contain no
+	// pipe names, user directories, request content or controller authority.
+	if phases, phaseErr := os.ReadFile(gui.report + ".phases"); phaseErr == nil {
+		t.Logf("Actual PowerShell fixture startup/retirement phases:\n%s", phases)
+	} else {
+		t.Log("Actual PowerShell phase report unavailable:", phaseErr)
+	}
 	if err != nil || code != 0 || readErr != nil || string(raw) != expected {
 		bridgeState := "retained bridge still running"
 		select {

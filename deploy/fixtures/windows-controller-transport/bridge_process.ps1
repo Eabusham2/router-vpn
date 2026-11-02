@@ -5,16 +5,26 @@ param([Parameter(Mandatory=$true)][string]$Root,[Parameter(Mandatory=$true)][str
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version 2
 $Client=$null;$Other=$null;$Request=$null;$Response=$null;$Cts=$null
+$Phases=[Diagnostics.Stopwatch]::StartNew()
+function Phase([string]$Name){[IO.File]::AppendAllText(($Report+'.phases'),($Name+' elapsed_ms='+$Phases.ElapsedMilliseconds+[Environment]::NewLine),[Text.UTF8Encoding]::new($false))}
 function Check([bool]$Value,[string]$Message){if(-not$Value){throw ('CONTROL '+$Message)}}
 function Reject([scriptblock]$Action,[string]$Message){$Rejected=$false;try{[void](&$Action)}catch{$Rejected=$true};Check $Rejected $Message}
 function Save([string]$Value){[IO.File]::WriteAllText($Report,$Value,[Text.UTF8Encoding]::new($false))}
 function global:Invoke-RestMethod {throw 'CONTROL owned PowerShell used ordinary HTTP'}
+# Match the shipping App/Tray's provider-free pre-authentication startup.
+# Looking up Join-Path in a cold host can discover ambient modules before the
+# exact runtime commands have been captured. Fail visibly if this regresses.
+function global:Join-Path {throw 'CONTROL native startup used provider discovery'}
+function global:Get-Command {throw 'CONTROL native startup searched ambient commands'}
 try{
-    Import-Module (Join-Path $Root 'client/RouterVPN-Windows-ControllerTransport.psm1') -Global -ErrorAction Stop
-    $env:HOMEVPN_ROOT=Join-Path ([IO.Path]::GetDirectoryName($Report)) 'captured-data'
+    Phase 'fixture-entered'
+    Import-Module ([IO.Path]::Combine($Root,'client','RouterVPN-Windows-ControllerTransport.psm1')) -Global -ErrorAction Stop
+    Phase 'module-imported'
+    $env:HOMEVPN_ROOT=[IO.Path]::Combine([IO.Path]::GetDirectoryName($Report),'captured-data')
     $CapturedDataRoot=$env:HOMEVPN_ROOT
     Check ($null-eq(Get-RouterVPNControllerDataRoot)) 'unproved PowerShell trusted its ambient Data directory'
-    if($StartupDelayMilliseconds-gt0){Start-Sleep -Milliseconds $StartupDelayMilliseconds}
+    if($StartupDelayMilliseconds-gt0){[Threading.Thread]::Sleep($StartupDelayMilliseconds)}
+    Phase 'initialize-entered'
     if($Mode-ceq'reject-peer'){
         Reject {Initialize-RouterVPNControllerTransport -ControllerPipe $ControllerPipe -ControllerParentHandle $ControllerParentHandle} 'unproved native parent acquired the PowerShell channel'
         Reject {Initialize-RouterVPNControllerTransport} 'failed native handoff reset to legacy'
@@ -23,8 +33,9 @@ try{
         Save 'REJECTED PEER'
     }else{
         $Base=Initialize-RouterVPNControllerTransport -ControllerPipe $ControllerPipe -ControllerParentHandle $ControllerParentHandle
+        Phase 'initialize-returned'
         Check ($Base-ceq'https://127.0.0.1:8788') 'native PowerShell lost the captured HTTPS origin'
-        $env:HOMEVPN_ROOT=Join-Path ([IO.Path]::GetDirectoryName($Report)) 'replacement-data'
+        $env:HOMEVPN_ROOT=[IO.Path]::Combine([IO.Path]::GetDirectoryName($Report),'replacement-data')
         Check ((Get-RouterVPNControllerDataRoot)-ceq$CapturedDataRoot) 'native PowerShell did not retain its authenticated Data directory'
         if($Mode-ceq'reject-request'){
             Reject {Invoke-RouterVPNControllerRequest -Uri ($Base+'/api/ui/status') -TimeoutSec 5} 'wrong TLS pin reached the PowerShell controller'
@@ -72,11 +83,13 @@ try{
         }
     }
 }catch{
+    Phase 'fixture-failed'
     Save ('FAIL '+$_.Exception.ToString())
     exit 1
 }finally{
     if($null-ne$Response){$Response.Dispose()};if($null-ne$Request){$Request.Dispose()}
     if($null-ne$Cts){$Cts.Cancel();$Cts.Dispose()}
     if($null-ne$Client){$Client.Dispose()};if($null-ne$Other){$Other.Dispose()}
-    if(Get-Command Close-RouterVPNControllerTransport -ErrorAction SilentlyContinue){Close-RouterVPNControllerTransport}
+    if($null-ne${function:Close-RouterVPNControllerTransport}){Close-RouterVPNControllerTransport}
+    Phase 'fixture-retired'
 }

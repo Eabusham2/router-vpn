@@ -35,6 +35,19 @@ CODE = (
 )
 
 
+def defects():
+    return (
+        ("ordinary-http-defect", CODE[0],
+         "$Response=$Client.SendAsync($Request,[Threading.CancellationToken]::None).GetAwaiter().GetResult()",
+         "return Invoke-RestMethod -Uri $Uri -Method $Method -TimeoutSec $TimeoutSec",
+         "CONTROL owned PowerShell used ordinary HTTP"),
+        ("cold-provider-discovery", CODE[2],
+         "([IO.Path]::Combine($Root,'client','RouterVPN-Windows-ControllerTransport.psm1'))",
+         "(Join-Path $Root 'client/RouterVPN-Windows-ControllerTransport.psm1')",
+         "CONTROL native startup used provider discovery"),
+    )
+
+
 def sources():
     paths = [ROOT / name for name in (*CODE, "go.mod", "deploy/test_windows_gui_powershell.py",
                                     "deploy/test_desktop_windows_identity.py")]
@@ -90,31 +103,31 @@ def execute(go="go", shell="powershell.exe"):
         if (status or "--- SKIP:" in output or "DATA RACE" in output or
                 any("--- PASS: " + name + " (" not in output for name in REQUIRED)):
             raise ValueError("Actual PowerShell did not execute every native adapter boundary")
-        # Exercise the same native executable against an isolated copy with one
-        # actual production defect. The fixture's HTTP spy must catch fallback;
-        # compile/launch failures and arbitrary nonzero exits are not evidence.
-        variant = owned / "ordinary-http-defect"
-        for name in CODE:
-            target = variant / name
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes((ROOT / name).read_bytes())
-        adapter = variant / CODE[0]
-        adapter.write_text(NATIVE.replace_once(adapter.read_text(encoding="utf-8"),
-            "$Response=$Client.SendAsync($Request,[Threading.CancellationToken]::None).GetAwaiter().GetResult()",
-            "return Invoke-RestMethod -Uri $Uri -Method $Method -TimeoutSec $TimeoutSec"), encoding="utf-8")
-        changed = dict(environment, ROUTERVPN_GUI_POWERSHELL_ROOT=str(variant))
-        status, output = NATIVE.run([binary, "-test.run=^" + REQUIRED[0] + "$", "-test.count=1", "-test.timeout=60s", "-test.v"],
-                                   cwd=ROOT, env=changed, timeout=75)
-        if (status == 0 or "--- FAIL: " + REQUIRED[0] + " (" not in output or
-                "CONTROL owned PowerShell used ordinary HTTP" not in output or "--- SKIP:" in output or
-                "panic: test timed out" in output or "DATA RACE" in output):
-            raise ValueError("Actual PowerShell fallback defect missed its exact rejection:\n" + output[-16384:])
-        print("Rejected executable native PowerShell ordinary-HTTP fallback defect", flush=True)
+        # Exercise the same real executable against an isolated adapter defect
+        # and a regression of this fixture's cold startup. Each must reach its
+        # exact sentinel; arbitrary nonzero exits are not rejection evidence.
+        for label, filename, before_text, after_text, witness in defects():
+            variant = owned / label
+            for name in CODE:
+                target = variant / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes((ROOT / name).read_bytes())
+            target = variant / filename
+            target.write_text(NATIVE.replace_once(target.read_text(encoding="utf-8"),
+                              before_text, after_text), encoding="utf-8")
+            changed = dict(environment, ROUTERVPN_GUI_POWERSHELL_ROOT=str(variant))
+            status, output = NATIVE.run([binary, "-test.run=^" + REQUIRED[0] + "$", "-test.count=1", "-test.timeout=60s", "-test.v"],
+                                       cwd=ROOT, env=changed, timeout=75)
+            if (status == 0 or "--- FAIL: " + REQUIRED[0] + " (" not in output or
+                    witness not in output or "--- SKIP:" in output or
+                    "panic: test timed out" in output or "DATA RACE" in output):
+                raise ValueError("Actual PowerShell defect missed its exact rejection: " + label + "\n" + output[-16384:])
+            print("Rejected executable native PowerShell defect:", label, flush=True)
         if hashlib.sha256(binary.read_bytes()).hexdigest() != binary_hash or hashlib.sha256(Path(shell).read_bytes()).hexdigest() != shell_hash:
             raise ValueError("Actual PowerShell or native bridge fixture changed during execution")
     if sources() != before:
         raise ValueError("Actual PowerShell source closure changed during execution")
-    print("Actual", edition, "PowerShell passed five native Go/pipe/TLS cases, including delayed cold startup, and an executable adapter fallback defect; WPF and cross-account UAC acceptance remain separate.", flush=True)
+    print("Actual", edition, "PowerShell passed five native Go/pipe/TLS cases, including delayed cold startup, and executable adapter fallback and cold provider-discovery defects; WPF and cross-account UAC acceptance remain separate.", flush=True)
 
 
 if __name__ == "__main__":
