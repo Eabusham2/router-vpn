@@ -504,7 +504,9 @@ final class IOSSpeedLabRunner: ObservableObject {
         var reconnect = model.iosSpeedLabOwnership.current(owner)
         var restoredIdentity: IOSSessionIdentity?
         var restoredGeneration: UUID?
-        @MainActor func captureNative(_ identity: IOSSessionIdentity?, _ generation: UUID) throws {
+        // Swift 6.1 does not infer Sendable for an actor-isolated local
+        // function reference. Keep this callback explicitly on the same actor.
+        let captureNative: @MainActor @Sendable (IOSSessionIdentity?, UUID) throws -> Void = { identity, generation in
             guard model.iosConnectGeneration == generation, model.activeSessionIdentity == identity,
                   model.connected == (identity != nil), !model.tunnelTransitioning else { throw CancellationError() }
             restoredIdentity = identity; restoredGeneration = generation
