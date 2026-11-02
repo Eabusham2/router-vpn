@@ -1,0 +1,645 @@
+package tcp
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/gvisor/pkg/buffer"
+	"github.com/sagernet/gvisor/pkg/tcpip"
+	"github.com/sagernet/gvisor/pkg/tcpip/header"
+	"github.com/sagernet/gvisor/pkg/tcpip/link/channel"
+	"github.com/sagernet/gvisor/pkg/tcpip/network/ipv4"
+	"github.com/sagernet/gvisor/pkg/tcpip/seqnum"
+	"github.com/sagernet/gvisor/pkg/tcpip/stack"
+	"github.com/sagernet/gvisor/pkg/waiter"
+)
+
+// These tests exchange real packets between two independent userspace TCP
+// stacks. They do not change a socket deadline, emulate a handshake, or claim
+// an operating-system TUN/firewall acceptance.
+type routerVPNForwarderPair struct {
+	ctx                        context.Context
+	cancel                     context.CancelFunc
+	client, peer               *stack.Stack
+	clientLink, peerLink       *channel.Endpoint
+	clientAddress, peerAddress tcpip.Address
+	forwarder                  *Forwarder
+	accepted                   chan *Endpoint
+	errors                     chan error
+	deny                       atomic.Bool
+	requests                   atomic.Int32
+	holdSYN                    atomic.Bool
+	heldSYN                    chan []byte
+	retainRequest              atomic.Bool
+	heldRequest                chan *ForwarderRequest
+	holdACK                    atomic.Bool
+	heldACK                    chan []byte
+	bridges, handlers          sync.WaitGroup
+	wireMu                     sync.Mutex
+	clientWire, peerWire       [][]byte
+}
+
+func routerVPNForwarderStack(t *testing.T, address tcpip.Address) (*stack.Stack, *channel.Endpoint) {
+	t.Helper()
+	s := stack.New(stack.Options{NetworkProtocols: []stack.NetworkProtocolFactory{ipv4.NewProtocol}, TransportProtocols: []stack.TransportProtocolFactory{NewProtocol}})
+	link := channel.New(256, 1500, "")
+	if err := s.CreateNIC(1, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.AddProtocolAddress(1, tcpip.ProtocolAddress{Protocol: ipv4.ProtocolNumber, AddressWithPrefix: address.WithPrefix()}, stack.AddressProperties{}); err != nil {
+		t.Fatal(err)
+	}
+	s.SetRouteTable([]tcpip.Route{{Destination: header.IPv4EmptySubnet, NIC: 1}})
+	return s, link
+}
+
+func newRouterVPNForwarderPair(t *testing.T) *routerVPNForwarderPair {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	f := &routerVPNForwarderPair{ctx: ctx, cancel: cancel, accepted: make(chan *Endpoint, 8), errors: make(chan error, 8), heldSYN: make(chan []byte, 8), heldRequest: make(chan *ForwarderRequest, 8), heldACK: make(chan []byte, 8),
+		clientAddress: tcpip.AddrFrom4([4]byte{192, 0, 2, 2}), peerAddress: tcpip.AddrFrom4([4]byte{192, 0, 2, 1})}
+	f.client, f.clientLink = routerVPNForwarderStack(t, f.clientAddress)
+	f.peer, f.peerLink = routerVPNForwarderStack(t, f.peerAddress)
+	f.forwarder = NewForwarder(f.peer, 0, 8, func(request *ForwarderRequest) {
+		f.handlers.Add(1)
+		defer f.handlers.Done()
+		f.requests.Add(1)
+		if f.retainRequest.Load() {
+			select {
+			case f.heldRequest <- request:
+			case <-f.ctx.Done():
+				request.Complete(false)
+			}
+			return
+		}
+		if f.deny.Load() {
+			request.Complete(true)
+			return
+		}
+		var queue waiter.Queue
+		endpoint, err := request.CreateEndpoint(&queue)
+		request.Complete(false)
+		if err != nil {
+			select {
+			case f.errors <- fmt.Errorf("actual forwarder handshake: %s", err):
+			case <-f.ctx.Done():
+			}
+			return
+		}
+		actual := endpoint.(*Endpoint)
+		select {
+		case f.accepted <- actual:
+		case <-f.ctx.Done():
+			actual.Close()
+		}
+	})
+	f.peer.SetTransportProtocolHandler(ProtocolNumber, f.forwarder.HandlePacket)
+	bridge := func(from, to *channel.Endpoint, client bool) {
+		defer f.bridges.Done()
+		for {
+			packet := from.ReadContext(ctx)
+			if packet == nil {
+				return
+			}
+			view := packet.ToView()
+			data := append([]byte(nil), view.AsSlice()...)
+			view.Release()
+			packet.DecRef()
+			f.wireMu.Lock()
+			if client {
+				f.clientWire = append(f.clientWire, append([]byte(nil), data...))
+			} else {
+				f.peerWire = append(f.peerWire, append([]byte(nil), data...))
+			}
+			f.wireMu.Unlock()
+			if client && f.holdSYN.Load() && routerVPNForwarderFlags(data)&(header.TCPFlagSyn|header.TCPFlagAck) == header.TCPFlagSyn {
+				select {
+				case f.heldSYN <- data:
+				case <-ctx.Done():
+					return
+				}
+				continue
+			}
+			if client && f.holdACK.Load() && routerVPNForwarderFlags(data) == header.TCPFlagAck {
+				select {
+				case f.heldACK <- data:
+				case <-ctx.Done():
+					return
+				}
+				continue
+			}
+			incoming := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(data)})
+			to.InjectInbound(ipv4.ProtocolNumber, incoming)
+			incoming.DecRef()
+		}
+	}
+	f.bridges.Add(2)
+	go bridge(f.clientLink, f.peerLink, true)
+	go bridge(f.peerLink, f.clientLink, false)
+	t.Cleanup(func() {
+		f.cancel()
+		f.client.Close()
+		f.peer.Close()
+		f.client.Wait()
+		f.peer.Wait()
+		f.clientLink.Close()
+		f.peerLink.Close()
+		f.bridges.Wait()
+		// Stack.Wait joins dispatchers; the original forwarder schedules its
+		// handlers separately. Drain admitted requests before waiting for
+		// handlers so even an early assertion cannot race a delayed Add.
+		routerVPNForwarderWait(t, "original forwarder admitted-request cleanup", func() bool {
+			for {
+				select {
+				case request := <-f.heldRequest:
+					request.Complete(false)
+				default:
+					f.forwarder.mu.Lock()
+					empty := len(f.forwarder.inFlight) == 0
+					f.forwarder.mu.Unlock()
+					return empty
+				}
+			}
+		})
+		f.handlers.Wait()
+	})
+	return f
+}
+
+func routerVPNForwarderWait(t *testing.T, what string, ready func() bool) {
+	t.Helper()
+	timeout := time.NewTimer(3 * time.Second)
+	defer timeout.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for !ready() {
+		select {
+		case <-timeout.C:
+			t.Fatal("actual forwarder did not complete: " + what)
+		case <-tick.C:
+		}
+	}
+}
+
+func (f *routerVPNForwarderPair) beginConnect(t *testing.T) *Endpoint {
+	t.Helper()
+	var queue waiter.Queue
+	endpoint, err := f.client.NewEndpoint(ProtocolNumber, ipv4.ProtocolNumber, &queue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := endpoint.(*Endpoint)
+	t.Cleanup(client.Close)
+	if err := client.Bind(tcpip.FullAddress{NIC: 1, Addr: f.clientAddress, Port: 43484}); err != nil {
+		t.Fatal("fixed original tuple bind", err)
+	}
+	if err := client.Connect(tcpip.FullAddress{NIC: 1, Addr: f.peerAddress, Port: 443}); err != nil {
+		if _, ok := err.(*tcpip.ErrConnectStarted); !ok {
+			t.Fatal("actual native connect", err)
+		}
+	}
+	return client
+}
+
+func routerVPNForwarderConnected(t *testing.T, client *Endpoint) {
+	t.Helper()
+	routerVPNForwarderWait(t, "fixed-tuple TCP handshake", func() bool {
+		state := EndpointState(client.State())
+		if state == StateError || state == StateClose {
+			t.Fatalf("actual TCP connect retired before proof: state=%s error=%v", state, client.LastError())
+		}
+		return state == StateEstablished
+	})
+}
+
+func (f *routerVPNForwarderPair) connect(t *testing.T) *Endpoint {
+	t.Helper()
+	client := f.beginConnect(t)
+	routerVPNForwarderConnected(t, client)
+	return client
+}
+
+func routerVPNForwarderFlags(data []byte) header.TCPFlags {
+	if len(data) < header.IPv4MinimumSize+header.TCPMinimumSize {
+		return 0
+	}
+	ip := header.IPv4(data)
+	return header.TCP(data[ip.HeaderLength():]).Flags()
+}
+
+func (f *routerVPNForwarderPair) segment(t *testing.T, data []byte) *segment {
+	t.Helper()
+	ip := header.IPv4(data)
+	tcp := header.TCP(data[ip.HeaderLength():])
+	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(append([]byte(nil), data...))})
+	defer pkt.DecRef()
+	pkt.NetworkProtocolNumber, pkt.TransportProtocolNumber, pkt.NICID = ipv4.ProtocolNumber, ProtocolNumber, 1
+	if _, ok := pkt.NetworkHeader().Consume(int(ip.HeaderLength())); !ok {
+		t.Fatal("captured SYN lost IPv4 header")
+	}
+	if _, ok := pkt.TransportHeader().Consume(int(tcp.DataOffset())); !ok {
+		t.Fatal("captured SYN lost TCP header")
+	}
+	id := stack.TransportEndpointID{LocalAddress: ip.DestinationAddress(), RemoteAddress: ip.SourceAddress(), LocalPort: tcp.DestinationPort(), RemotePort: tcp.SourcePort()}
+	s, err := newIncomingSegment(id, f.peer.Clock(), pkt)
+	if err != nil {
+		t.Fatal("actual captured incoming SYN", err)
+	}
+	return s
+}
+
+func (f *routerVPNForwarderPair) accept(t *testing.T) *Endpoint {
+	t.Helper()
+	select {
+	case ep := <-f.accepted:
+		if EndpointState(ep.State()) != StateEstablished {
+			t.Fatal("forwarder did not return a real established endpoint")
+		}
+		return ep
+	case err := <-f.errors:
+		t.Fatal(err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("original forwarder did not return the second actual handshake")
+	}
+	return nil
+}
+
+func routerVPNForwarderBytes(t *testing.T, sender, receiver *Endpoint, payload string) {
+	t.Helper()
+	n, err := sender.Write(bytes.NewReader([]byte(payload)), tcpip.WriteOptions{})
+	if err != nil || n != int64(len(payload)) {
+		t.Fatal("actual endpoint write", n, err)
+	}
+	var received bytes.Buffer
+	routerVPNForwarderWait(t, "real TCP bytes", func() bool {
+		_, err := receiver.Read(&received, tcpip.ReadOptions{})
+		if err != nil {
+			if _, ok := err.(*tcpip.ErrWouldBlock); !ok {
+				t.Fatal("actual endpoint read", err)
+			}
+		}
+		return received.Len() >= len(payload)
+	})
+	if received.String() != payload {
+		t.Fatal("native TCP changed transferred bytes")
+	}
+}
+
+func (f *routerVPNForwarderPair) timeWait(t *testing.T) (*Endpoint, *Endpoint) {
+	t.Helper()
+	client := f.connect(t)
+	peer := f.accept(t)
+	routerVPNForwarderBytes(t, client, peer, "first request")
+	routerVPNForwarderBytes(t, peer, client, "first complete response")
+	peer.Close()
+	routerVPNForwarderWait(t, "peer active close", func() bool { return EndpointState(client.State()) == StateCloseWait })
+	client.Close()
+	routerVPNForwarderWait(t, "original peer TIME-WAIT", func() bool { return EndpointState(peer.State()) == StateTimeWait })
+	if f.requests.Load() != 1 {
+		t.Fatal("first real flow changed admission count")
+	}
+	return client, peer
+}
+
+func TestRouterVPNForwarderTimeWaitRealTupleReopens(t *testing.T) {
+	f := newRouterVPNForwarderPair(t)
+	_, first := f.timeWait(t)
+	client := f.connect(t)
+	second := f.accept(t)
+	if second == first || f.requests.Load() != 2 {
+		t.Fatal("reused tuple did not receive a distinct original-forwarder owner")
+	}
+	routerVPNForwarderBytes(t, client, second, "second request through same tuple")
+	routerVPNForwarderBytes(t, second, client, "second complete response")
+	if EndpointState(first.State()) != StateClose {
+		t.Fatal("old TIME-WAIT endpoint was not retired before replacement")
+	}
+	client.Close()
+	second.Close()
+}
+
+func TestRouterVPNForwarderTimeWaitQueuedDuplicatesDoNotResetReplacement(t *testing.T) {
+	f := newRouterVPNForwarderPair(t)
+	_, first := f.timeWait(t)
+	f.holdSYN.Store(true)
+	client := f.beginConnect(t)
+	var raw []byte
+	select {
+	case raw = <-f.heldSYN:
+	case <-time.After(3 * time.Second):
+		t.Fatal("second native SYN never entered controlled link")
+	}
+	first.mu.Lock()
+	for i := 0; i < 3; i++ {
+		s := f.segment(t, raw)
+		if !s.csumValid || !first.rcv.RcvNxt.LessThan(s.sequenceNumber) || s.id != first.TransportEndpointInfo.ID {
+			first.mu.Unlock()
+			s.DecRef()
+			t.Fatal("duplicate control did not capture an eligible original-tuple SYN")
+		}
+		queued := first.segmentQueue.enqueue(s)
+		s.DecRef()
+		if !queued {
+			first.mu.Unlock()
+			t.Fatal("owned TIME-WAIT queue rejected the captured duplicate")
+		}
+	}
+	first.mu.Unlock()
+	f.wireMu.Lock()
+	before := len(f.peerWire)
+	f.wireMu.Unlock()
+	f.holdSYN.Store(false)
+	first.notifyProcessor()
+	routerVPNForwarderConnected(t, client)
+	second := f.accept(t)
+	routerVPNForwarderBytes(t, client, second, "one replacement after three queued SYNs")
+	if f.requests.Load() != 2 || second == first {
+		t.Fatal("duplicate SYNs created multiple forwarder owners")
+	}
+	f.wireMu.Lock()
+	defer f.wireMu.Unlock()
+	for _, packet := range f.peerWire[before:] {
+		if routerVPNForwarderFlags(packet).Contains(header.TCPFlagRst) {
+			t.Fatal("old TIME-WAIT drain reset the valid replacement")
+		}
+	}
+}
+
+func TestRouterVPNForwarderTimeWaitRechecksRetainedHandler(t *testing.T) {
+	f := newRouterVPNForwarderPair(t)
+	_, first := f.timeWait(t)
+	f.deny.Store(true)
+	var foreign atomic.Int32
+	f.peer.SetTransportProtocolHandler(ProtocolNumber, func(stack.TransportEndpointID, *stack.PacketBuffer) bool {
+		foreign.Add(1)
+		return false
+	})
+	client := f.beginConnect(t)
+	routerVPNForwarderWait(t, "retained handler rejected repeated tuple", func() bool {
+		return EndpointState(client.State()) == StateError || EndpointState(client.State()) == StateClose
+	})
+	if f.requests.Load() != 2 || foreign.Load() != 0 || EndpointState(first.State()) != StateClose {
+		t.Fatal("repeated tuple bypassed its original handler or retained the old owner", f.requests.Load(), foreign.Load(), first.State())
+	}
+	select {
+	case <-f.accepted:
+		t.Fatal("denied repeated tuple acquired a native endpoint")
+	default:
+	}
+}
+
+func TestRouterVPNForwarderTimeWaitRegisteredListenerPrecedesForwarder(t *testing.T) {
+	f := newRouterVPNForwarderPair(t)
+	_, first := f.timeWait(t)
+	var queue waiter.Queue
+	endpoint, err := f.peer.NewEndpoint(ProtocolNumber, ipv4.ProtocolNumber, &queue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener := endpoint.(*Endpoint)
+	t.Cleanup(listener.Close)
+	listener.SocketOptions().SetReuseAddress(true)
+	if err := listener.Bind(tcpip.FullAddress{NIC: 1, Addr: f.peerAddress, Port: 443}); err != nil {
+		t.Fatal("actual listener bind", err)
+	}
+	if err := listener.Listen(4); err != nil {
+		t.Fatal("actual listener start", err)
+	}
+	client := f.connect(t)
+	var accepted tcpip.Endpoint
+	routerVPNForwarderWait(t, "real registered listener acceptance", func() bool {
+		var err tcpip.Error
+		accepted, _, err = listener.Accept(nil)
+		if err != nil {
+			if _, ok := err.(*tcpip.ErrWouldBlock); !ok {
+				t.Fatal("actual listener accept", err)
+			}
+		}
+		return err == nil && accepted != nil
+	})
+	peer := accepted.(*Endpoint)
+	t.Cleanup(peer.Close)
+	if f.requests.Load() != 1 || peer == first {
+		t.Fatal("TIME-WAIT fallback took priority over its registered listener")
+	}
+	routerVPNForwarderBytes(t, client, peer, "registered listener owns replacement")
+	select {
+	case <-f.accepted:
+		t.Fatal("registered listener also admitted a forwarder endpoint")
+	default:
+	}
+}
+
+func TestRouterVPNForwarderRetainedRequestCannotEnterClosedStack(t *testing.T) {
+	f := newRouterVPNForwarderPair(t)
+	f.retainRequest.Store(true)
+	f.beginConnect(t)
+	var request *ForwarderRequest
+	select {
+	case request = <-f.heldRequest:
+	case <-time.After(3 * time.Second):
+		t.Fatal("actual incoming request never reached retained forwarder")
+	}
+	f.peer.Close()
+	type completion struct {
+		endpoint tcpip.Endpoint
+		err      tcpip.Error
+	}
+	finished := make(chan completion, 1)
+	go func() {
+		var queue waiter.Queue
+		ep, err := request.CreateEndpoint(&queue)
+		finished <- completion{ep, err}
+	}()
+	timeout := time.NewTimer(3 * time.Second)
+	defer timeout.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	late := false
+	var result completion
+	for {
+		select {
+		case result = <-finished:
+			if result.endpoint != nil {
+				result.endpoint.Abort()
+				late = true
+			}
+			request.Complete(false)
+			if late || result.err == nil {
+				t.Fatal("retained forwarder request created an endpoint after actual stack Close")
+			}
+			return
+		case <-tick.C:
+			for _, endpoint := range f.peer.RegisteredEndpoints() {
+				// This is failure cleanup of only this fixture's late endpoint.
+				// The observed late registration remains a test failure.
+				late = true
+				endpoint.Abort()
+			}
+		case <-timeout.C:
+			for _, endpoint := range f.peer.RegisteredEndpoints() {
+				endpoint.Abort()
+			}
+			select {
+			case result = <-finished:
+				if result.endpoint != nil {
+					result.endpoint.Abort()
+				}
+				request.Complete(false)
+			case <-time.After(3 * time.Second):
+				t.Fatal("late forwarder request could not join even after owned failure cleanup")
+			}
+			t.Fatal("retained forwarder request entered a handshake after actual stack Close")
+		}
+	}
+}
+
+func TestRouterVPNForwarderCloseJoinsHandshakeBeforePeerACK(t *testing.T) {
+	f := newRouterVPNForwarderPair(t)
+	f.holdACK.Store(true)
+	f.beginConnect(t)
+	var held []byte
+	select {
+	case held = <-f.heldACK:
+	case <-time.After(3 * time.Second):
+		t.Fatal("actual client handshake ACK never reached controlled link")
+	}
+	routerVPNForwarderWait(t, "registered forwarded handshake before held ACK", func() bool {
+		for _, endpoint := range f.peer.RegisteredEndpoints() {
+			if ep, ok := endpoint.(*Endpoint); ok && EndpointState(ep.State()) == StateSynRecv {
+				return true
+			}
+		}
+		return false
+	})
+	closed := make(chan struct{})
+	go func() { f.peer.Close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		// Release the exact held packet only to join a failing lock-scope
+		// implementation; this branch always remains a failed verdict.
+		f.holdACK.Store(false)
+		packet := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(held)})
+		f.peerLink.InjectInbound(ipv4.ProtocolNumber, packet)
+		packet.DecRef()
+		select {
+		case <-closed:
+		case <-time.After(3 * time.Second):
+			t.Fatal("owned close failed to join even after failure-only ACK release")
+		}
+		t.Fatal("forwarder admission lock was held across remote handshake wait")
+	}
+	select {
+	case <-f.errors:
+	case <-f.accepted:
+		t.Fatal("held peer ACK was bypassed by a fabricated completed handshake")
+	case <-time.After(3 * time.Second):
+		t.Fatal("stack close did not join the entered real forwarder handshake")
+	}
+	if !f.holdACK.Load() || len(f.peer.RegisteredEndpoints()) != 0 {
+		t.Fatal("close depended on ACK release or retained a TCP owner")
+	}
+}
+
+func TestRouterVPNForwarderTimeWaitQueuedEligibility(t *testing.T) {
+	for _, name := range []string{"newer", "stale", "equal", "syn-ack", "syn-rst", "syn-fin", "checksum", "foreign-port", "foreign-address", "wrong-network", "foreign-stack", "wrap-newer", "wrap-stale"} {
+		t.Run(name, func(t *testing.T) {
+			f := newRouterVPNForwarderPair(t)
+			_, first := f.timeWait(t)
+			// The real connection above supplies the endpoint and valid wire
+			// SYN. Stop packet bridges before isolated queued-boundary controls;
+			// these mathematical/metadata negatives are not handshake proofs.
+			f.cancel()
+			f.bridges.Wait()
+			f.handlers.Wait()
+			f.deny.Store(true)
+			var data []byte
+			f.wireMu.Lock()
+			for _, packet := range f.clientWire {
+				if routerVPNForwarderFlags(packet)&(header.TCPFlagSyn|header.TCPFlagAck) == header.TCPFlagSyn {
+					data = append([]byte(nil), packet...)
+					break
+				}
+			}
+			f.wireMu.Unlock()
+			if data == nil {
+				t.Fatal("real handshake omitted its original wire SYN")
+			}
+			ip := header.IPv4(data)
+			wire := header.TCP(data[ip.HeaderLength():])
+			first.mu.Lock()
+			next := first.rcv.RcvNxt
+			if name == "wrap-newer" {
+				first.rcv.RcvNxt, next = seqnum.Value(0xfffffff0), seqnum.Value(0xfffffff0)
+			}
+			if name == "wrap-stale" {
+				first.rcv.RcvNxt, next = seqnum.Value(0x10), seqnum.Value(0x10)
+			}
+			first.mu.Unlock()
+			wire.SetSequenceNumber(uint32(next.Add(32)))
+			allow := name == "newer" || name == "wrap-newer"
+			switch name {
+			case "stale":
+				wire.SetSequenceNumber(uint32(next - 1))
+			case "equal":
+				wire.SetSequenceNumber(uint32(next))
+			case "syn-ack":
+				wire.SetFlags(uint8(header.TCPFlagSyn | header.TCPFlagAck))
+			case "syn-rst":
+				wire.SetFlags(uint8(header.TCPFlagSyn | header.TCPFlagRst))
+			case "syn-fin":
+				wire.SetFlags(uint8(header.TCPFlagSyn | header.TCPFlagFin))
+			case "foreign-port":
+				wire.SetSourcePort(wire.SourcePort() + 1)
+			case "foreign-address":
+				ip.SetSourceAddressWithChecksumUpdate(tcpip.AddrFrom4([4]byte{192, 0, 2, 99}))
+			case "wrap-stale":
+				wire.SetSequenceNumber(0xfffffff0)
+			}
+			wire.SetChecksum(0)
+			wire.SetChecksum(^wire.CalculateChecksum(header.PseudoHeaderChecksum(ProtocolNumber, ip.SourceAddress(), ip.DestinationAddress(), uint16(len(data)-int(ip.HeaderLength())))))
+			if name == "checksum" {
+				wire.SetChecksum(wire.Checksum() ^ 1)
+			}
+			s := f.segment(t, data)
+			if s.csumValid == (name == "checksum") {
+				s.DecRef()
+				t.Fatal("queued checksum control did not reach its intended real parser state")
+			}
+			if name == "wrong-network" {
+				s.pkt.NetworkProtocolNumber = header.IPv6ProtocolNumber
+			}
+			if name == "foreign-stack" {
+				f.forwarder.stack = f.client
+				defer func() { f.forwarder.stack = f.peer }()
+			}
+			first.mu.Lock()
+			queued := first.segmentQueue.enqueue(s)
+			first.mu.Unlock()
+			s.DecRef()
+			if !queued {
+				t.Fatal("owned queued control was not admitted to original endpoint")
+			}
+			routerVPNForwarderWait(t, "actual queued TIME-WAIT processing", func() bool { handleTimeWait(first); return first.segmentQueue.empty() })
+			if allow {
+				routerVPNForwarderWait(t, "same retained handler after eligible sequence", func() bool { return f.requests.Load() == 2 })
+				if EndpointState(first.State()) != StateClose {
+					t.Fatal("eligible sequence did not retire old owner")
+				}
+			} else if f.requests.Load() != 1 || EndpointState(first.State()) != StateTimeWait {
+				t.Fatal("ineligible queued segment changed original owner or entered a handler", f.requests.Load(), first.State())
+			}
+			select {
+			case <-f.accepted:
+				t.Fatal("denied queued control fabricated a connection")
+			default:
+			}
+		})
+	}
+}

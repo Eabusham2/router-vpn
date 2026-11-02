@@ -553,6 +553,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 env=env, timeout=400)
             run([sys.executable, ROOT/'deploy/test_amnezia_timers_pinned.py', source],
                 env=env, timeout=200)
+            run([sys.executable, ROOT/'deploy/test_gvisor_forwarder_pinned.py', source],
+                env=env, timeout=200)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './protocol/wireguard', '-run', '^TestRouterVPNWireGuard',
                  '-count=1', '-timeout=60s'], cwd=source, env=env, timeout=120)

@@ -26,7 +26,7 @@ TIMERS=importlib.util.module_from_spec(_timers_spec)
 _timers_spec.loader.exec_module(TIMERS)
 
 def inputs():
-    return [Path(__file__).resolve(),ROOT/'deploy/prepare-gvisor-scheduler.py',ROOT/'deploy/prepare-sing-packet-concurrency.py']+sorted((ROOT/'mobile/amnezia').glob('*.tmpl'))+policy_inputs()+WIREGUARD_BIND.inputs()+TIMERS.inputs()
+    return [Path(__file__).resolve(),ROOT/'deploy/prepare-sing-packet-concurrency.py']+SCHEDULER.inputs()+sorted((ROOT/'mobile/amnezia').glob('*.tmpl'))+policy_inputs()+WIREGUARD_BIND.inputs()+TIMERS.inputs()
 def policy_inputs():
     return [path for package in POLICY_PACKAGES for path in sorted((ROOT/'internal'/package).glob('*.go')) if not path.name.endswith('_test.go')]
 def prepare_policies(vendor):

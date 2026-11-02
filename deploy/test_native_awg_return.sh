@@ -16,6 +16,7 @@ python3 "$ROOT/deploy/prepare-mobile-amnezia.py" "$WORK/core"
  go mod tidy
  python3 "$ROOT/deploy/prepare-mobile-amnezia.py" --verify-dependency "$WORK/core"
  python3 "$ROOT/deploy/test_amnezia_timers_pinned.py" "$WORK/core"
+ python3 "$ROOT/deploy/test_gvisor_forwarder_pinned.py" "$WORK/core"
  # On ARM64, prove that the original dependency fails the direct regression.
  # Restore the owned copy even on compiler/test errors; never edit module cache.
  python3 - "$ROOT" "$WORK/core" <<'PYPROOF'

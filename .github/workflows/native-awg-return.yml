@@ -6,6 +6,7 @@ on:
     paths:
       - 'mobile/amnezia/**'
       - 'mobile/amneziatimers/**'
+      - 'mobile/gvisorforwarder/**'
       - 'internal/awgpolicy/**'
       - 'internal/mobilemultihop/**'
       - 'deploy/prepare-mobile-amnezia.py'
@@ -13,6 +14,9 @@ on:
       - 'deploy/test_amnezia_timers_pinned.py'
       - 'deploy/test_amnezia_timer_preparation.py'
       - 'deploy/prepare-gvisor-scheduler.py'
+      - 'deploy/prepare-gvisor-forwarder.py'
+      - 'deploy/test_gvisor_forwarder_pinned.py'
+      - 'deploy/test_gvisor_forwarder_runner.py'
       - 'deploy/prepare-sing-packet-concurrency.py'
       - 'deploy/test_sing_packet_preparation.py'
       - 'deploy/test_gvisor_scheduler_preparation.py'
@@ -41,6 +45,8 @@ jobs:
         run: |
           python3 deploy/test_native_runner_dependencies.py
           python3 deploy/test_amnezia_timer_preparation.py
+          python3 deploy/test_gvisor_scheduler_preparation.py
+          python3 deploy/test_gvisor_forwarder_runner.py
       - name: Verify captured encrypted entry and nested return paths
         shell: bash
         run: |

@@ -45,7 +45,12 @@ class NativeSocketUIDGate(unittest.TestCase):
             with self.subTest(failure=failure.__name__):
                 self.check_matching_hosts(node_failure=failure)
 
-    def check_matching_hosts(self, node_failure=None):
+    def test_failed_or_timed_out_forwarder_gate_cannot_reach_transport_tests_or_compilation(self):
+        for failure in (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            with self.subTest(failure=failure.__name__):
+                self.check_matching_hosts(forwarder_failure=failure)
+
+    def check_matching_hosts(self, node_failure=None, forwarder_failure=None):
         class CompilerBoundary(Exception):
             pass
 
@@ -59,6 +64,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                 env = {'GOOS': system, 'GOARCH': arch, 'CGO_ENABLED': '1', 'CGO_LDFLAGS': '', 'GOTOOLCHAIN': N.TOOLCHAIN}
                 calls = []
                 node_errors = []
+                forwarder_errors = []
 
                 def run(command, **kwargs):
                     args = [str(value) for value in command]
@@ -261,6 +267,20 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
                         self.assertLessEqual(kwargs['timeout'], 600)
                         return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_gvisor_forwarder_pinned.py'):
+                        self.assertEqual(args[2:], [str(source.resolve())])
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOARCH'], arch)
+                        self.assertEqual(kwargs['env']['CGO_ENABLED'], '1')
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertEqual(kwargs['timeout'], 200)
+                        if forwarder_failure is not None:
+                            error = (forwarder_failure(29, args, output=b'captured forwarder failure')
+                                     if forwarder_failure is subprocess.CalledProcessError else
+                                     forwarder_failure(args, kwargs['timeout'], output=b'captured forwarder timeout'))
+                            forwarder_errors.append(error)
+                            raise error
+                        return ''
                     self.fail('Unexpected native command before build: '+repr(args))
 
                 def stage_cronet(_source, stage, actual, _env):
@@ -276,12 +296,23 @@ class NativeSocketUIDGate(unittest.TestCase):
                      patch.object(N.OPENVPN, 'prepare'), patch.object(N.BUFFERS, 'prepare'), \
                      patch.object(N.EXTERNAL, 'prepare'), patch.object(N.POLICY.AMNEZIA, 'verify'), \
                      patch.object(N, 'stage_cronet', side_effect=stage_cronet):
-                    expected_error = node_failure if node_failure is not None and system in ('linux', 'windows') else CompilerBoundary
+                    expected_error = forwarder_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else CompilerBoundary)
                     with self.assertRaises(expected_error) as caught:
                         N.build(target, root/'output', source=source, xray=root/'xray', pq=root/'pq')
                 timers = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_amnezia_timers_pinned.py')]
                 self.assertEqual(len(timers), 1, 'Native build omitted the actual pinned AWG timer gate')
                 self.assertIn(ROOT/'deploy/test_amnezia_timers_pinned.py', N.inputs())
+                forwarder = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_gvisor_forwarder_pinned.py')]
+                self.assertEqual(len(forwarder), 1, 'Native build omitted the actual pinned TCP forwarder gate')
+                self.assertEqual(calls.index(forwarder[0]), calls.index(timers[0]) + 1)
+                for dependency in ('deploy/prepare-gvisor-forwarder.py', 'deploy/test_gvisor_forwarder_pinned.py',
+                                   'deploy/test_gvisor_forwarder_runner.py', 'mobile/gvisorforwarder/forwarder_test.go.tmpl'):
+                    self.assertIn(ROOT/dependency, N.inputs())
+                if forwarder_errors:
+                    self.assertEqual(len(forwarder_errors), 1)
+                    self.assertIs(caught.exception, forwarder_errors[0])
+                    self.assertEqual(calls[-1], forwarder[0], 'A failed native forwarder gate reached a later operation')
+                    continue
                 if node_errors:
                     node = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_physical.py')]
                     self.assertEqual(len(node), 1)

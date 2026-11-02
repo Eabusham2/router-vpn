@@ -81,6 +81,8 @@ def test(source=None):
         env['ROUTERVPN_AWG_DESKTOP_CLI'] = str(binary)
         subprocess.run([sys.executable, str(ROOT/'deploy/test_amnezia_timers_pinned.py'), str(source)],
                        cwd=ROOT, env=env, check=True, timeout=200)
+        subprocess.run([sys.executable, str(ROOT/'deploy/test_gvisor_forwarder_pinned.py'), str(source)],
+                       cwd=ROOT, env=env, check=True, timeout=200)
         # Admission ends after ten seconds; its returned native packet socket
         # belongs to the bind until Close. Keep the real-clock lifetime proof
         # in a separate once-only bounded phase, preserving the traffic budget.
