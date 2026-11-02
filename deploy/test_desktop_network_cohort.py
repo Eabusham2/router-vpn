@@ -113,6 +113,12 @@ def main():
                     "./internal/desktopnetwork"], env=env)
     for parent in PARENTS:
         require_pass(base.stdout, parent)
+    if sys.platform == "darwin":
+        for parent in ("TestDarwinNetworkMessageAlignmentAndOwnership",
+                       "TestDarwinNetworkMessageSocketAddressBounds",
+                       "TestDarwinNetworkMessageRejectsIncompleteHeaders",
+                       "TestDarwinInformationalMessageFraming"):
+            require_pass(base.stdout, parent)
     if sys.platform == "linux":
         require_pass(base.stdout, "TestLinuxRouteTableCompatibilityAndOwnedCarrierTransition")
     print("Captured network state/receipt and transition cases passed.")
@@ -189,6 +195,30 @@ def main():
             finally:
                 target.write_text(original)
             print("Executed network shape negative control rejected:", name)
+        if sys.platform == "darwin":
+            target = mutant / "observer_darwin.go"
+            original = target.read_text()
+            native_controls = (
+                ("unsafe-unaligned-native-parser", "\t\tvar message syscall.RoutingMessage\n",
+                 "\t\t_, _ = syscall.ParseRoutingMessage(frame)\n\t\tvar message syscall.RoutingMessage\n",
+                 "fatal error: checkptr: misaligned pointer conversion"),
+                ("borrowed-receive-buffer", "return payload, nil",
+                 "return frame[size:], nil", "reused receive buffer mutated a captured native message"),
+            )
+            for name, before, after, witness in native_controls:
+                if original.count(before) != 1:
+                    raise RuntimeError("Darwin native decoding control boundary changed: " + name)
+                try:
+                    target.write_text(original.replace(before, after, 1))
+                    result = execute([go, "test", "-race", "-gcflags=all=-d=checkptr=2", "-v", "-count=1",
+                                      "-timeout=30s", ".", "-run", "^TestDarwinNetworkMessageAlignmentAndOwnership$"],
+                                     cwd=mutant, env=env, timeout=90, succeeds=False)
+                    if result.returncode == 0 or witness not in result.stdout or "[build failed]" in result.stdout:
+                        print(result.stdout, end="")
+                        raise RuntimeError("Darwin decoding control did not reject its actual defect: " + name)
+                finally:
+                    target.write_text(original)
+                print("Executed Darwin native decoding control rejected:", name)
     print("Desktop captured network observer gate passed; native device transition acceptance remains separate.")
 
 

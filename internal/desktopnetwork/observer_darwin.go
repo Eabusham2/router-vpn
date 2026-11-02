@@ -66,22 +66,61 @@ func darwinMessages(raw []byte) ([]syscall.RoutingMessage, error) {
 		// These typed records are observations/queries or multicast membership,
 		// not changes to unicast interface addresses or routing policy.
 		if kind == syscall.RTM_MISS || kind == syscall.RTM_RESOLVE || kind == syscall.RTM_NEWMADDR || kind == syscall.RTM_DELMADDR || kind == syscall.RTM_NEWMADDR2 {
-			minimum := 16
+			minimum := syscall.SizeofIfmaMsghdr
 			if kind == syscall.RTM_MISS || kind == syscall.RTM_RESOLVE {
-				minimum = int(unsafe.Sizeof(syscall.RtMsghdr{}))
+				minimum = syscall.SizeofRtMsghdr
+			} else if kind == syscall.RTM_NEWMADDR2 {
+				minimum = syscall.SizeofIfmaMsghdr2
 			}
 			if len(frame) < minimum {
 				return nil, errors.New("Darwin informational network message is truncated")
 			}
 			continue
 		}
-		messages, err := syscall.ParseRoutingMessage(frame)
-		if err != nil || len(messages) != 1 {
+		// Darwin frames are aligned for their wire headers, not for the Go
+		// RoutingMessage structs (which also contain a pointer-bearing slice).
+		// The deprecated syscall parser casts the input to those larger structs;
+		// a valid second route at a four-byte boundary trips checkptr on arm64.
+		// Decode the actual native header into its own value and retain the
+		// payload independently of the reusable route-socket receive buffer.
+		var message syscall.RoutingMessage
+		var err error
+		switch kind {
+		case syscall.RTM_ADD, syscall.RTM_DELETE, syscall.RTM_CHANGE, syscall.RTM_GET,
+			syscall.RTM_LOSING, syscall.RTM_REDIRECT, syscall.RTM_LOCK:
+			value := new(syscall.RouteMessage)
+			value.Data, err = darwinMessageHeader(frame, syscall.SizeofRtMsghdr, &value.Header)
+			message = value
+		case syscall.RTM_IFINFO:
+			value := new(syscall.InterfaceMessage)
+			value.Data, err = darwinMessageHeader(frame, syscall.SizeofIfMsghdr, &value.Header)
+			message = value
+		case syscall.RTM_NEWADDR, syscall.RTM_DELADDR:
+			value := new(syscall.InterfaceAddrMessage)
+			value.Data, err = darwinMessageHeader(frame, syscall.SizeofIfaMsghdr, &value.Header)
+			message = value
+		default:
+			err = errors.New("unknown Darwin network record")
+		}
+		if err != nil {
 			return nil, errors.New("Darwin network record is unrecognized or incomplete")
 		}
-		result = append(result, messages[0])
+		result = append(result, message)
 	}
 	return result, nil
+}
+
+func darwinMessageHeader(frame []byte, size int, header any) ([]byte, error) {
+	if len(frame) < size || binary.Size(header) != size {
+		return nil, errors.New("Darwin network header does not match its native size")
+	}
+	if count, err := binary.Decode(frame[:size], binary.LittleEndian, header); err != nil || count != size {
+		return nil, errors.New("Darwin network header could not be decoded completely")
+	}
+	length := len(frame) - size
+	payload := make([]byte, length)
+	copy(payload, frame[size:])
+	return payload, nil
 }
 
 func (o *darwinObserver) run() {
