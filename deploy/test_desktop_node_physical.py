@@ -84,6 +84,15 @@ def layer_reference_sources():
 def checked_sources(source):
     source = PREP.checked_vendor(Path(source))
     records = {}
+    # Bind both complete pinned endpoint files and the shared strict error
+    # classifier. A compiled baseline may not silently restore an unpatched
+    # server or borrow an unrelated helper with a matching filename.
+    close_policy = PREP.RELAY.OPENVPN_CLOSE
+    records.update(close_policy.verify(source))
+    for path in close_policy.inputs():
+        if path.is_symlink() or not path.is_file():
+            raise ValueError("OpenVPN close policy lost its original source authority")
+        records['gate/' + path.relative_to(ROOT).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
     copies = PREP.pt_copies()
     PREP.preflight_pt_files(source, copies)
     for name, relative in PREP.PEER_TEMPLATES.items():
