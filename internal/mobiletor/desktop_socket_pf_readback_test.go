@@ -119,15 +119,27 @@ func TestDesktopPFReadbackFailureAndCancellationJoin(t *testing.T) {
 					return captured.Err()
 				}
 				if failure {
-					checks[7] = func(context.Context) error {
-						<-entered
-						return want
+					checks[7] = func(captured context.Context) error {
+						select {
+						case <-entered:
+							return want
+						case <-captured.Done():
+							return captured.Err()
+						}
 					}
 				}
 				var global [6]func(context.Context) error
 				copy(global[:], checks[:6])
 				go func() { done <- desktopPFCompleteReadback(ctx, global, checks[6], checks[7], checks[8], checks[9]) }()
-				<-entered
+				// A broken missing join may return and cancel its workers before
+				// this captured owner check starts. Observe that same violation
+				// here instead of waiting forever for a skipped callback. The
+				// deferred cleanup still retires every admitted fixture worker.
+				select {
+				case <-entered:
+				case err := <-done:
+					t.Fatal("PF readback returned before its admitted native checks joined", err)
+				}
 				if !failure {
 					cancel()
 					want = context.Canceled
