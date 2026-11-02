@@ -3,9 +3,12 @@
 package tun
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"os"
@@ -17,6 +20,58 @@ import (
 
 	"github.com/sagernet/netlink"
 )
+
+func TestRouterVPNNativeLinuxRoutingFirstFailureDiagnostics(t *testing.T) {
+	private := "private-node-address-and-key"
+	added := []DesktopNetworkObject{{Kind: "route", Family: 6, Index: 8, Table: 254, Priority: 256, Destination: "fe80::/64", Gateway: private, Native: private}}
+	removed := []DesktopNetworkObject{{Kind: "rule", Family: 4, Table: 252, Priority: 9001, Destination: private, Native: private}}
+	var output bytes.Buffer
+	routervpnLinuxMTUDiagnostic(&output, "route", 8, added, removed)
+	want := "NODE-MTU-DIAGNOSTIC delta kind=route index=8 added=1 removed=1\n" +
+		"NODE-MTU-DIAGNOSTIC added kind=route family=6 index=8 table=254 priority=256 flags=0 destination=linklocal6\n" +
+		"NODE-MTU-DIAGNOSTIC removed kind=rule family=4 index=0 table=252 priority=9001 flags=0 destination=other\n"
+	if output.String() != want || strings.Contains(output.String(), private) {
+		t.Fatal("first native delta disclosed private fields or changed its classifications", output.String())
+	}
+	output.Reset()
+	foreign := added[0]
+	foreign.Kind, foreign.Destination = private, private
+	routervpnLinuxMTUDiagnostic(&output, private, 8, []DesktopNetworkObject{foreign}, nil)
+	if strings.Contains(output.String(), private) || !strings.Contains(output.String(), "kind=other") {
+		t.Fatal("unknown native diagnostic field escaped its fixed vocabulary")
+	}
+	output.Reset()
+	many := append([]DesktopNetworkObject(nil), added...)
+	for len(many) < 16 {
+		many = append(many, added[0])
+	}
+	routervpnLinuxMTUDiagnostic(&output, "route", 8, many[:3], many)
+	if len(strings.Split(strings.TrimSuffix(output.String(), "\n"), "\n")) != 9 {
+		t.Fatal("native first delta exceeded its total eight-object diagnostic bound")
+	}
+
+	// The same actual ledger operation retains its first error and emits no
+	// second cause. This test does not replace a native inventory or TUN.
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	original := os.Stderr
+	os.Stderr = writer
+	defer func() { os.Stderr = original; _ = writer.Close() }()
+	native := &NativeTun{routervpnOwnedIndex: 8}
+	first := errors.New("native Linux routing call has no unique owned addition")
+	native.routervpnLinuxAdditionFailure("route", first, added, removed)
+	native.routervpnLinuxAdditionFailure("rule", errors.New(private), nil, nil)
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(reader)
+	if err != nil || string(raw) != want || native.routervpnNetwork.failure != first || len(native.routervpnNetwork.objects) != 0 {
+		t.Fatal("diagnostics changed the original sticky failure or ledger", err)
+	}
+}
 
 func nativeRoutingRule(t *testing.T, family byte, priority, target, flags uint32, action byte) DesktopNetworkObject {
 	t.Helper()

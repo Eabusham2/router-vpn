@@ -138,6 +138,9 @@ type routerVPNNodeMTU struct {
 	original     int
 	deadline     time.Time
 	commitRevert *routerVPNNodeCommitRevert
+	// Diagnostic suppression belongs to this exact reader, not a session
+	// basename or a replacement owner. It is never serialized as evidence.
+	networkReceiptDiagnosticReader uint64
 }
 
 func newRouterVPNNodeMTU(engine routerVPNNodeMTUEngine, session, config, path string, guard func() bool) (*routerVPNNodeMTU, error) {

@@ -6,7 +6,9 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"os"
 	"syscall"
 )
 
@@ -103,12 +105,12 @@ func (t *NativeTun) routervpnLinuxAdded(kind string, before []DesktopNetworkObje
 	}
 	for _, count := range counts {
 		if count != 0 {
-			t.routervpnNetworkFailure(fmt.Errorf("native Linux routing inventory changed during its own add (kind=%s removed=%d added=%d)", kind, len(removed), len(added)))
+			t.routervpnLinuxAdditionFailure(kind, fmt.Errorf("native Linux routing inventory changed during its own add (kind=%s removed=%d added=%d)", kind, len(removed), len(added)), added, removed)
 			return
 		}
 	}
 	if len(added) != 1 || kind == "route" && added[0].Index != uint32(t.routervpnOwnedIndex) {
-		t.routervpnNetworkFailure(errors.New("native Linux routing call has no unique owned addition"))
+		t.routervpnLinuxAdditionFailure(kind, errors.New("native Linux routing call has no unique owned addition"), added, removed)
 		return
 	}
 	for _, object := range before {
@@ -118,6 +120,56 @@ func (t *NativeTun) routervpnLinuxAdded(kind string, before []DesktopNetworkObje
 		}
 	}
 	t.routervpnNetworkAdded(added[0])
+}
+
+// Preserve the same sticky first failure. Record its bounded delta while the
+// original constructor still owns these observations; a later recreated TUN
+// cannot explain why this exact before/after pair was refused.
+func (t *NativeTun) routervpnLinuxAdditionFailure(kind string, failure error, added, removed []DesktopNetworkObject) {
+	t.routervpnNetwork.mu.Lock()
+	if t.routervpnNetwork.failure != nil {
+		t.routervpnNetwork.mu.Unlock()
+		return
+	}
+	t.routervpnNetwork.failure = failure
+	t.routervpnNetwork.mu.Unlock()
+	routervpnLinuxMTUDiagnostic(os.Stderr, kind, t.routervpnOwnedIndex, added, removed)
+}
+
+func routervpnLinuxMTUDiagnostic(output io.Writer, kind string, index int, added, removed []DesktopNetworkObject) {
+	if kind != "route" && kind != "rule" {
+		kind = "other"
+	}
+	fmt.Fprintf(output, "NODE-MTU-DIAGNOSTIC delta kind=%s index=%d added=%d removed=%d\n", kind, index, len(added), len(removed))
+	reported := 0
+	for _, change := range []struct {
+		name    string
+		objects []DesktopNetworkObject
+	}{{"added", added}, {"removed", removed}} {
+		for _, object := range change.objects {
+			if reported == 8 {
+				return
+			}
+			reported++
+			destination := "other"
+			switch object.Destination {
+			case "0.0.0.0/0":
+				destination = "default4"
+			case "::/0":
+				destination = "default6"
+			case "fe80::/64":
+				destination = "linklocal6"
+			case "ff00::/8":
+				destination = "multicast6"
+			}
+			objectKind := object.Kind
+			if objectKind != "route" && objectKind != "rule" {
+				objectKind = "other"
+			}
+			fmt.Fprintf(output, "NODE-MTU-DIAGNOSTIC %s kind=%s family=%d index=%d table=%d priority=%d flags=%d destination=%s\n",
+				change.name, objectKind, object.Family, object.Index, object.Table, object.Priority, object.Flags, destination)
+		}
+	}
 }
 
 // RuleAdd of our final NOP also resolves our earlier GOTO rules. Keep every

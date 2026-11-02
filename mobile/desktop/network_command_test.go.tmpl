@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
+	"os"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -133,5 +135,102 @@ func TestRouterVPNNodeMTUNetworkOptionalEvidenceDoesNotFabricateReceipt(t *testi
 	}
 	if raw, err := routerVPNDesktopNetworkProjection(struct{}{}); err != nil || raw != "" {
 		t.Fatal("unknown engine fabricated a receipt", raw, err)
+	}
+}
+
+func desktopNetworkDiagnosticOutput(t *testing.T, operation func()) string {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	original := os.Stderr
+	os.Stderr = writer
+	defer func() {
+		os.Stderr = original
+		_ = writer.Close()
+	}()
+	operation()
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(raw)
+}
+
+func TestRouterVPNNodeMTUNetworkFirstFailurePreservesOptionalReaderOutcome(t *testing.T) {
+	owner, engine, inbound, _ := desktopNetworkOwnerFixture(t)
+	private := "private-node-key/192.0.2.17\nsecret-token"
+	inbound.err = errors.New("native Linux routing call has no unique owned addition: " + private)
+	before := owner.record
+	read := func() {
+		t.Helper()
+		if raw, err := owner.DesktopNetworkReceipt(); raw != "" || err != nil {
+			t.Fatal("diagnostics changed the original optional receipt result", err)
+		}
+	}
+	first := desktopNetworkDiagnosticOutput(t, func() { read(); read() })
+	if owner.record != before {
+		t.Fatal("diagnostics changed serialized ownership or acceptance state")
+	}
+	want := "NODE-MTU-DIAGNOSTIC receipt reason=unique-addition generation=0 reader=1 index=17 mtu=1420\n"
+	if runtime.GOOS != "linux" {
+		want = ""
+	}
+	if first != want || strings.Contains(first, private) {
+		t.Fatal("first reader diagnostic was repeated, private or mislabeled", first)
+	}
+	inbound.err = errors.New(private)
+	if repeated := desktopNetworkDiagnosticOutput(t, read); repeated != "" {
+		t.Fatal("a later failure replaced the same reader's first observation", repeated)
+	}
+	engine.change = func(ctx context.Context, expected adapter.Inbound, value int) (adapter.Inbound, error) {
+		old := expected.(*desktopNetworkInboundFixture)
+		next := &desktopNetworkInboundFixture{desktopMTUTUNFixture: &desktopMTUTUNFixture{index: old.index + 1, mtu: value, guard: old.guard}, err: errors.New(private)}
+		engine.current = next
+		return next, nil
+	}
+	desktopNodeMTUApply(t, owner, "begin", 0)
+	desktopNodeMTUApply(t, owner, "set", 1376)
+	second := desktopNetworkDiagnosticOutput(t, func() { read(); read() })
+	want = "NODE-MTU-DIAGNOSTIC receipt reason=unclassified generation=2 reader=2 index=18 mtu=1376\n"
+	if runtime.GOOS != "linux" {
+		want = ""
+	}
+	if second != want {
+		t.Fatal("replacement reader lost its own first bounded cause", second)
+	}
+	current := engine.current.(*desktopNetworkInboundFixture)
+	current.err = nil
+	current.raw = desktopNetworkReceiptFixture(t, 18, 1376, strings.Repeat("e", 32))
+	if output := desktopNetworkDiagnosticOutput(t, func() {
+		if raw, err := owner.DesktopNetworkReceipt(); err != nil || raw != current.raw {
+			t.Fatal("diagnostics changed later valid native evidence", err)
+		}
+	}); output != "" {
+		t.Fatal("valid evidence produced a diagnostic", output)
+	}
+}
+
+func TestRouterVPNNodeMTUNetworkMissingReaderDiagnosticCannotFabricateEvidence(t *testing.T) {
+	owner, _, _ := desktopNodeMTUFixture(t)
+	before := owner.record
+	output := desktopNetworkDiagnosticOutput(t, func() {
+		for i := 0; i < 2; i++ {
+			if raw, err := owner.DesktopNetworkReceipt(); raw != "" || err != nil {
+				t.Fatal("missing optional reader changed its result", err)
+			}
+		}
+	})
+	want := "NODE-MTU-DIAGNOSTIC receipt reason=reader-missing generation=0 reader=1 index=17 mtu=1420\n"
+	if runtime.GOOS != "linux" {
+		want = ""
+	}
+	if output != want || owner.record != before {
+		t.Fatal("missing reader diagnostic changed ownership or fabricated a receipt", output)
 	}
 }

@@ -1,8 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"github.com/sagernet/sing-box/routervpn/desktopnetwork"
+	"os"
 	"runtime"
+	"strings"
 )
 
 func routerVPNDesktopNetworkProjection(owner any) (string, error) {
@@ -53,6 +56,7 @@ func (owner *routerVPNNodeMTU) DesktopNetworkReceipt() (string, error) {
 	inbound := owner.inbound
 	reader, ok := inbound.(interface{ RouterVPNDesktopNetworkReceipt() (string, error) })
 	if !ok {
+		owner.reportNetworkReceiptFailure("native TUN cannot attest its actual routing calls")
 		return "", nil
 	}
 	raw, err := reader.RouterVPNDesktopNetworkReceipt()
@@ -60,6 +64,7 @@ func (owner *routerVPNNodeMTU) DesktopNetworkReceipt() (string, error) {
 		return "", routerVPNExternalFailure
 	}
 	if err != nil {
+		owner.reportNetworkReceiptFailure(err.Error())
 		return "", nil
 	}
 	receipt, err := desktopnetwork.ParseDesktopNetworkReceipt(raw)
@@ -67,4 +72,47 @@ func (owner *routerVPNNodeMTU) DesktopNetworkReceipt() (string, error) {
 		return "", routerVPNExternalFailure
 	}
 	return raw, nil
+}
+
+// Keep the original optional-readback outcome unchanged. The first actual
+// failure of each retained Linux reader records only a bounded reason and
+// numeric ownership metadata; a second run cannot recover that lost cause.
+func (owner *routerVPNNodeMTU) reportNetworkReceiptFailure(message string) {
+	if owner == nil || runtime.GOOS != "linux" || owner.record.Reader == 0 || owner.networkReceiptDiagnosticReader == owner.record.Reader {
+		return
+	}
+	owner.networkReceiptDiagnosticReader = owner.record.Reader
+	fmt.Fprintf(os.Stderr, "NODE-MTU-DIAGNOSTIC receipt reason=%s generation=%d reader=%d index=%d mtu=%d\n",
+		routerVPNNodeMTUDiagnosticReason(message), owner.record.Generation, owner.record.Reader, owner.record.Index, owner.record.MTU)
+}
+
+func routerVPNNodeMTUDiagnosticReason(message string) string {
+	for _, known := range []struct{ prefix, code string }{
+		{"native Linux routing call has no unique owned addition", "unique-addition"},
+		{"native Linux routing inventory changed during its own add", "inventory-changed"},
+		{"native Linux route before inventory:", "inventory-before"},
+		{"native Linux rule before inventory:", "inventory-before"},
+		{"native Linux route after inventory:", "inventory-after"},
+		{"native Linux rule after inventory:", "inventory-after"},
+		{"native Linux routing call has no complete before/after readback", "missing-inventory"},
+		{"native Linux routing call duplicated an existing object", "duplicate-object"},
+		{"native TUN routing call reused an earlier object", "duplicate-object"},
+		{"native Linux receipt lost its successful routing object", "missing-object"},
+		{"native Linux TUN has an unrelated route", "unrelated-route"},
+		{"network receipt requires the original native TUN constructor", "wrong-constructor"},
+		{"network receipt lost its current native interface", "missing-interface"},
+		{"native Linux routing receipt lost its original TUN", "missing-interface"},
+		{"network receipt observed an uncaptured TUN address", "uncaptured-address"},
+		{"network receipt lost a configured TUN address", "missing-address"},
+		{"native TUN changed while capturing its routing receipt", "changed-interface"},
+		{"native Linux routing dump was interrupted", "interrupted-inventory"},
+		{"native Linux routing dump contains an unknown result", "unknown-inventory"},
+		{"native Linux route inventory exceeded its bound", "inventory-bound"},
+		{"native TUN cannot attest its actual routing calls", "reader-missing"},
+	} {
+		if strings.HasPrefix(message, known.prefix) {
+			return known.code
+		}
+	}
+	return "unclassified"
 }

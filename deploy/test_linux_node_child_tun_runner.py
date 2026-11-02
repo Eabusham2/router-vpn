@@ -166,186 +166,159 @@ class LinuxChildTUNDiagnostics(unittest.TestCase):
     marker = 'generated MTU owner omitted its exact current native routing receipt\noriginal namespace child joined\n'
     safe = 'NODE-MTU-DIAGNOSTIC receipt reason=unique-addition generation=3 reader=2 index=9 mtu=1376'
 
-    def test_success_does_not_build_or_run_diagnostics(self):
-        diagnose = Mock()
+    def test_success_runs_only_original_native_command(self):
         with patch.object(G.GUARD.UID, 'run', return_value='mandatory success') as native:
-            self.assertEqual(G.run_native_acceptance(['actual'], captured={'owned': 'env'}, sudo=None,
-                                                    peer_only=False, diagnose=diagnose), 'mandatory success')
+            self.assertEqual(G.run_native_acceptance(['actual'], captured={'owned': 'env'}, sudo=None),
+                             'mandatory success')
         native.assert_called_once_with(['actual'], cwd=G.ROOT, env={'owned': 'env'}, timeout=150, sudo=None)
-        diagnose.assert_not_called()
 
-    def test_diagnostic_success_failure_and_exception_retain_exact_original_failure(self):
-        for result in ('diagnostic pass', subprocess.CalledProcessError(4, ['diagnostic'], output=b'private-password'),
-                       RuntimeError('private-password'), SystemExit(0), KeyboardInterrupt('private-password')):
-            with self.subTest(result=type(result).__name__):
-                original = subprocess.CalledProcessError(23, ['original'], output=self.marker.encode())
-                diagnose = Mock(side_effect=result if isinstance(result, BaseException) else None, return_value=result)
+    def test_first_run_diagnostics_preserve_exact_original_failure_without_replay(self):
+        for raw in ((self.marker + self.safe + '\nprivate-password').encode(),
+                    self.marker + self.safe + '\nprivate-password'):
+            with self.subTest(encoding=type(raw).__name__):
+                original = subprocess.CalledProcessError(23, ['original'], output=raw)
                 output = io.StringIO()
-                with patch.object(G.GUARD.UID, 'run', side_effect=original), contextlib.redirect_stdout(output):
+                with patch.object(G.GUARD.UID, 'run', side_effect=original) as native, contextlib.redirect_stdout(output):
                     with self.assertRaises(subprocess.CalledProcessError) as actual:
-                        G.run_native_acceptance(['actual'], captured={}, sudo=None, peer_only=False, diagnose=diagnose)
+                        G.run_native_acceptance(['actual'], captured={}, sudo=None)
                 self.assertIs(actual.exception, original)
                 self.assertEqual(actual.exception.returncode, 23)
-                self.assertEqual(actual.exception.output, self.marker.encode())
-                diagnose.assert_called_once_with()
+                self.assertIs(actual.exception.output, raw)
+                native.assert_called_once()
+                self.assertIn(self.safe, output.getvalue())
+                self.assertNotIn('private-password', output.getvalue())
+                self.assertIn('First-run', output.getvalue())
+
+    def test_absent_cause_unjoined_and_peer_failures_never_start_a_replay(self):
+        for raw in (self.marker, 'different failure', None,
+                    self.marker.replace('original namespace child joined', 'namespace still owned'),
+                    '--- FAIL: TestDesktopLinuxGuardianKernelNodeChildCommandPeer\n'):
+            with self.subTest(output=raw):
+                original = subprocess.CalledProcessError(9, ['actual'], output=raw)
+                output = io.StringIO()
+                with patch.object(G.GUARD.UID, 'run', side_effect=original) as native, contextlib.redirect_stdout(output):
+                    with self.assertRaises(subprocess.CalledProcessError) as actual:
+                        G.run_native_acceptance(['actual'], captured={}, sudo=None)
+                self.assertIs(actual.exception, original)
+                native.assert_called_once()
+                self.assertEqual(output.getvalue(), '')
+
+    def test_formatter_exceptions_cannot_replace_original_native_failure(self):
+        for diagnostic in (RuntimeError('private-password'), SystemExit(0), KeyboardInterrupt('private-password')):
+            with self.subTest(error=type(diagnostic).__name__):
+                original = subprocess.CalledProcessError(4, ['original'], output=self.marker)
+                output = io.StringIO()
+                with patch.object(G.GUARD.UID, 'run', side_effect=original) as native, \
+                     patch.object(G, 'receipt_diagnostic_output', side_effect=diagnostic), contextlib.redirect_stdout(output):
+                    with self.assertRaises(subprocess.CalledProcessError) as actual:
+                        G.run_native_acceptance(['actual'], captured={}, sudo=None)
+                self.assertIs(actual.exception, original)
+                native.assert_called_once()
                 self.assertNotIn('private-password', output.getvalue())
 
-    def test_unjoined_timeout_peer_and_unrelated_failures_cannot_start_another_trial(self):
-        cases = ((False, self.marker.replace('original namespace child joined', 'namespace still owned')),
-                 (False, 'different mandatory failure\noriginal namespace child joined\n'), (True, self.marker))
-        for peer, output in cases:
-            with self.subTest(peer=peer, output=output):
-                diagnose = Mock()
-                original = subprocess.CalledProcessError(1, ['actual'], output=output)
-                with patch.object(G.GUARD.UID, 'run', side_effect=original), self.assertRaises(subprocess.CalledProcessError):
-                    G.run_native_acceptance(['actual'], captured={}, sudo=None, peer_only=peer, diagnose=diagnose)
-                diagnose.assert_not_called()
-        diagnose = Mock()
-        with patch.object(G.GUARD.UID, 'run', side_effect=RuntimeError('owned join timed out')), self.assertRaises(RuntimeError):
-            G.run_native_acceptance(['actual'], captured={}, sudo=None, peer_only=False, diagnose=diagnose)
-        diagnose.assert_not_called()
+    def test_timeout_or_nonprocess_exception_is_not_retried_or_normalized(self):
+        for original in (RuntimeError('owned join timed out'), subprocess.TimeoutExpired(['actual'], 150)):
+            with self.subTest(error=type(original).__name__):
+                with patch.object(G.GUARD.UID, 'run', side_effect=original) as native:
+                    with self.assertRaises(type(original)) as actual:
+                        G.run_native_acceptance(['actual'], captured={}, sudo=None)
+                self.assertIs(actual.exception, original)
+                native.assert_called_once()
 
-    def test_diagnostics_emit_only_bounded_allowlisted_codes_and_numeric_metadata(self):
+    def test_diagnostics_emit_only_terminated_bounded_allowlisted_lines(self):
         private = 'secret-token-with-private-node-password'
+        added = 'NODE-MTU-DIAGNOSTIC added kind=route family=6 index=9 table=254 priority=256 flags=0 destination=linklocal6'
+        removed = 'NODE-MTU-DIAGNOSTIC removed kind=rule family=4 index=0 table=252 priority=9001 flags=0 destination=other'
         raw = '\n'.join((private, self.safe, self.safe + ' password=' + private,
                          'NODE-MTU-DIAGNOSTIC receipt reason=' + private + ' generation=3 reader=2 index=9 mtu=1376',
-                         'NODE-MTU-DIAGNOSTIC added kind=route family=6 index=9 table=254 priority=256 flags=0 destination=linklocal6',
-                         '--- PASS: an unrelated diagnostic result'))
+                         added, removed, '--- PASS: unrelated result', ''))
         safe = G.receipt_diagnostic_output(raw.encode())
-        self.assertEqual(len(safe.splitlines()), 2)
+        self.assertEqual(safe.splitlines(), [self.safe, added, removed])
         self.assertNotIn(private, safe)
         self.assertNotIn('PASS', safe)
-        self.assertEqual(G.receipt_diagnostic_output('native_test.go:265: joined child output: '+self.safe), self.safe)
-        self.assertEqual(G.receipt_diagnostic_output(private+' '+self.safe), self.safe)
-        self.assertEqual(G.receipt_diagnostic_output(self.safe.replace('index=9', 'index='+'1'*600)), '')
+        self.assertEqual(G.receipt_diagnostic_output('native_test.go:265: joined child output: '+self.safe+'\n'), self.safe)
+        self.assertEqual(G.receipt_diagnostic_output(private+' '+self.safe+'\n'), self.safe)
+        self.assertEqual(G.receipt_diagnostic_output(self.safe), '')
+        self.assertEqual(G.receipt_diagnostic_output(self.safe+'\n'+removed), self.safe)
+        self.assertEqual(G.receipt_diagnostic_output(self.safe.replace('index=9', 'index='+'1'*600)+'\n'), '')
         self.assertEqual(len(G.receipt_diagnostic_output((self.safe + '\n') * 100).splitlines()), 64)
 
-    def source(self, directory):
-        source = directory / 'source'
-        for relative, original in (
-            ('cmd/sing-box/routervpn_network_command.go', ROOT/'mobile/desktop/network_command.go.tmpl'),
-            ('routervpn-desktop-tun/routervpn_sing_tun_network_linux.go', ROOT/'mobile/desktop/sing_tun_network_linux.go.tmpl'),
-        ):
-            path = source / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(original.read_bytes())
-        return source
+    def test_diagnostic_output_cannot_satisfy_missing_native_acceptance(self):
+        with self.assertRaises(ValueError):
+            G.check_verdict(self.safe+'\n')
+        # Even complete-looking text cannot convert a nonzero original exit.
+        raw = LinuxChildTUNVerdict().output() + self.safe+'\n'
+        original = subprocess.CalledProcessError(7, ['actual'], output=raw)
+        with patch.object(G.GUARD.UID, 'run', side_effect=original) as native, contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaises(subprocess.CalledProcessError) as actual:
+                G.run_native_acceptance(['actual'], captured={}, sudo=None)
+        self.assertIs(actual.exception, original)
+        native.assert_called_once()
 
-    def test_overlay_retains_exact_original_sources_and_all_rejection_operations(self):
+    def test_actual_first_failure_functions_preserve_bounds_and_redaction(self):
+        # Compile the exact diagnostic functions with only their data-shape
+        # fixtures. No TUN, route inventory, owner proof or acceptance is mocked
+        # into passing by this small standard-library gate.
+        command = (ROOT/'mobile/desktop/network_command.go.tmpl').read_text()
+        start = command.index('func (owner *routerVPNNodeMTU) reportNetworkReceiptFailure(')
+        functions = command[start:]
+        native = (ROOT/'mobile/desktop/sing_tun_network_linux.go.tmpl').read_text()
+        start = native.index('func (t *NativeTun) routervpnLinuxAdditionFailure(')
+        end = native.index('// RuleAdd of our final NOP', start)
+        functions += '\n'+native[start:end]
+        cases = '\n'.join('{' + json.dumps(prefix + ' private-key=secret-token') + ', ' + json.dumps(code) + '},'
+                          for code, prefix in G.RECEIPT_DIAGNOSTIC_REASONS)
         with tempfile.TemporaryDirectory() as temporary:
-            workspace = Path(temporary)
-            source = self.source(workspace)
-            original = {path: path.read_bytes() for path in source.rglob('*.go')}
-            overlay, records = G.receipt_diagnostic_overlay(source, workspace)
-            changed = json.loads(overlay.read_text())['Replace']
-            self.assertEqual(len(changed), 2)
-            self.assertEqual(len(records), 2)
-            for path, raw in original.items():
-                self.assertEqual(path.read_bytes(), raw)
-                text = Path(changed[str(path)]).read_text()
-                for line in raw.decode().splitlines():
-                    self.assertIn(line, text)
-            network = Path(changed[str(source/'cmd/sing-box/routervpn_network_command.go')]).read_text()
-            self.assertNotIn('fmt.Fprint(os.Stderr, err)', network)
-            self.assertIn('routerVPNNodeMTUDiagnosticReason(err.Error())', network)
-            self.assertNotIn('record.Session', network)
-            self.assertNotIn('record.Config', network)
-            self.assertNotIn('record.Path', network)
-            self.assertNotIn('record.Request', network)
-            route = Path(changed[str(source/'routervpn-desktop-tun/routervpn_sing_tun_network_linux.go')]).read_text()
-            self.assertIn('if i == 8 { break }', route)
-            self.assertNotIn('object.Native)', route)
-            self.assertNotIn('object.Gateway)', route)
-
-    def test_changed_source_anchor_cannot_generate_a_different_overlay(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            workspace = Path(temporary)
-            source = self.source(workspace)
-            path = source/'cmd/sing-box/routervpn_network_command.go'
-            path.write_text(path.read_text().replace('reader.RouterVPNDesktopNetworkReceipt()', 'differentReader()'))
-            with self.assertRaisesRegex(ValueError, 'exact source'):
-                G.receipt_diagnostic_overlay(source, workspace)
-
-    def test_actual_generated_go_reason_classifier_redacts_arbitrary_error_content(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            workspace = Path(temporary)
-            source = self.source(workspace)
-            overlay, _ = G.receipt_diagnostic_overlay(source, workspace)
-            generated = Path(json.loads(overlay.read_text())['Replace'][str(source/'cmd/sing-box/routervpn_network_command.go')]).read_text()
-            start = generated.index('func routerVPNNodeMTUDiagnosticReason(')
-            end = generated.index('func routerVPNNodeMTUReceiptDiagnostic(', start)
-            module = workspace/'redaction'
-            module.mkdir()
-            (module/'go.mod').write_text('module native-diagnostic-redaction\n\ngo 1.20\n')
-            (module/'reason.go').write_text('package redaction\nimport "strings"\n'+generated[start:end])
-            cases = '\n'.join('{' + json.dumps(prefix + ' private-key=secret-token') + ', ' + json.dumps(code) + '},'
-                              for code, prefix in G.RECEIPT_DIAGNOSTIC_REASONS)
-            (module/'reason_test.go').write_text('''package redaction
-import "testing"
-func TestReasonNeverReturnsPrivateMessage(t *testing.T) {
+            module = Path(temporary)
+            (module/'go.mod').write_text('module native-first-diagnostic\n\ngo 1.20\n')
+            (module/'diagnostic.go').write_text('''package diagnostic
+import ("fmt"; "io"; "os"; "runtime"; "strings"; "sync")
+type routerVPNNodeMTURecord struct { Generation, Reader uint64; Index, MTU int; Session, Config, Path, Request string }
+type routerVPNNodeMTU struct { record routerVPNNodeMTURecord; networkReceiptDiagnosticReader uint64 }
+type DesktopNetworkObject struct { Kind, Destination, Gateway, Native string; Family int; Index, Table, Priority, Flags uint32 }
+type routerVPNNativeNetworkLedger struct { mu sync.Mutex; failure error; objects map[string]DesktopNetworkObject }
+type NativeTun struct { routervpnNetwork routerVPNNativeNetworkLedger; routervpnOwnedIndex int }
+'''+functions)
+            (module/'diagnostic_test.go').write_text('''package diagnostic
+import ("bytes"; "errors"; "io"; "os"; "runtime"; "strings"; "testing")
+func TestReasonsRedactEveryKnownAndUnknownNativeError(t *testing.T) {
  for _, c := range []struct{message, want string}{
-''' + cases + '''
+'''+cases+'''
  {"private-key=secret-token", "unclassified"},
  } { if got:=routerVPNNodeMTUDiagnosticReason(c.message);got!=c.want {t.Fatal("private or incorrect diagnostic reason",got)} }
 }
+func capture(t *testing.T, run func()) string {
+ t.Helper(); r,w,e:=os.Pipe(); if e!=nil {t.Fatal(e)}; defer r.Close()
+ old:=os.Stderr; os.Stderr=w; defer func(){os.Stderr=old;w.Close()}(); run()
+ if e=w.Close();e!=nil{t.Fatal(e)}; b,e:=io.ReadAll(r);if e!=nil{t.Fatal(e)};return string(b)
+}
+func TestActualOwnerReportsOnlyFirstFailurePerReader(t *testing.T) {
+ o:=&routerVPNNodeMTU{record:routerVPNNodeMTURecord{Reader:1,Index:8,MTU:1420,Session:"secret"}}
+ before:=o.record
+ text:=capture(t,func(){o.reportNetworkReceiptFailure("native Linux routing call has no unique owned addition secret");o.reportNetworkReceiptFailure("other secret")})
+ want:="NODE-MTU-DIAGNOSTIC receipt reason=unique-addition generation=0 reader=1 index=8 mtu=1420\\n"
+ if runtime.GOOS!="linux"{want=""};if text!=want||o.record!=before{t.Fatal("first report changed state or redaction",text)}
+ o.record.Reader=2;o.record.Generation=2;o.record.MTU=1376
+ text=capture(t,func(){o.reportNetworkReceiptFailure("secret");o.reportNetworkReceiptFailure("another secret")})
+ want="NODE-MTU-DIAGNOSTIC receipt reason=unclassified generation=2 reader=2 index=8 mtu=1376\\n"
+ if runtime.GOOS!="linux"{want=""};if text!=want{t.Fatal("replacement reader lost its separate first report",text)}
+}
+func TestActualNativeDeltaKeepsStickyFailureAndBounds(t *testing.T) {
+ o:=DesktopNetworkObject{Kind:"route",Family:6,Index:8,Table:254,Priority:256,Destination:"fe80::/64",Gateway:"secret",Native:"secret"}
+ gone:=DesktopNetworkObject{Kind:"rule",Family:4,Table:252,Priority:9001,Destination:"secret",Native:"secret"}
+ n:=&NativeTun{routervpnOwnedIndex:8}; original:=errors.New("private native failure secret")
+ text:=capture(t,func(){n.routervpnLinuxAdditionFailure("route",original,[]DesktopNetworkObject{o},[]DesktopNetworkObject{gone});n.routervpnLinuxAdditionFailure("secret",errors.New("replacement"),nil,nil)})
+ if n.routervpnNetwork.failure!=original||len(n.routervpnNetwork.objects)!=0||strings.Contains(text,"secret")||strings.Count(text,"NODE-MTU-DIAGNOSTIC")!=3||!strings.Contains(text,"removed kind=rule"){t.Fatal("native diagnostic changed ownership or disclosed private data",text)}
+ var output bytes.Buffer;many:=make([]DesktopNetworkObject,16);for i:=range many{many[i]=o}
+ routervpnLinuxMTUDiagnostic(&output,"route",8,many[:3],many)
+ if strings.Count(output.String(),"NODE-MTU-DIAGNOSTIC")!=9{t.Fatal("object diagnostic bound changed")}
+ output.Reset();o.Kind="secret";o.Destination="secret";routervpnLinuxMTUDiagnostic(&output,"secret",8,[]DesktopNetworkObject{o},nil)
+ if strings.Contains(output.String(),"secret")||!strings.Contains(output.String(),"kind=other"){t.Fatal("unknown field escaped the diagnostic vocabulary")}
+}
 ''')
-            subprocess.run(['go', 'test', '-mod=readonly', './...'], cwd=module, check=True,
-                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
-
-    def test_diagnostic_run_retains_images_sources_overlay_and_owned_cleanup(self):
-        for fault in ('none', 'diagnostic-failure', 'peer-during-compile', 'source-during-compile', 'overlay-during-compile', 'image-during-run'):
-            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as temporary:
-                workspace = Path(temporary)
-                source = self.source(workspace)
-                binary, peer = workspace/'original.test', workspace/'peer.test'
-                for image in (binary, peer):
-                    image.write_bytes(b'original compiled image')
-                    image.chmod(0o755)
-                identities = {image: G.image_identity(image) for image in (binary, peer)}
-                calls, owned = [], []
-                before = {'original': 'source-hash'}
-                def run(command, **options):
-                    calls.append((command, options))
-                    if 'test' in command:
-                        image = Path(command[command.index('-o') + 1])
-                        owned.append(image.parent)
-                        image.write_bytes(b'diagnostic compiled image')
-                        image.chmod(0o755)
-                        if fault == 'peer-during-compile':
-                            peer.write_bytes(b'replaced peer image')
-                        if fault == 'overlay-during-compile':
-                            overlay = Path(next(arg.removeprefix('-overlay=') for arg in command if isinstance(arg, str) and arg.startswith('-overlay=')))
-                            overlay.write_text('{}')
-                        return ''
-                    image = Path(command[command.index('--namespace-test-binary') + 1])
-                    if fault == 'image-during-run':
-                        image.write_bytes(b'replaced diagnostic image')
-                    if fault == 'diagnostic-failure':
-                        raise subprocess.CalledProcessError(7, command, output=(self.safe+'\nprivate-password').encode())
-                    return self.safe+'\nprivate-password\n--- PASS: diagnostic trial'
-                output = io.StringIO()
-                def source_capture(_):
-                    current = {'changed': 'source'} if fault == 'source-during-compile' and calls else before
-                    return source, current
-                with patch.object(G, 'checked_sources', side_effect=source_capture), \
-                     patch.object(G.GUARD.UID, 'run', side_effect=run), contextlib.redirect_stdout(output):
-                    if fault in ('none', 'diagnostic-failure'):
-                        G.native_receipt_diagnostics(source, '/original/go', {}, workspace, peer, identities, before, '/usr/bin/sudo')
-                    else:
-                        with self.assertRaises(ValueError):
-                            G.native_receipt_diagnostics(source, '/original/go', {}, workspace, peer, identities, before, '/usr/bin/sudo')
-                self.assertTrue(owned)
-                self.assertTrue(all(not path.exists() for path in owned))
-                self.assertEqual(calls[0][1]['timeout'], 120)
-                if fault.endswith('during-compile'):
-                    self.assertEqual(len(calls), 1)
-                else:
-                    self.assertEqual(len(calls), 2)
-                    self.assertEqual(calls[1][0][:3], ['/usr/bin/sudo', '-n', '--'])
-                    self.assertEqual(calls[1][1]['timeout'], 150)
-                    self.assertEqual(calls[1][1]['sudo'], '/usr/bin/sudo')
-                self.assertNotIn('private-password', output.getvalue())
-                self.assertNotIn('--- PASS:', output.getvalue())
+            result = subprocess.run(['go', 'test', '-race', '-count=1', '-timeout=30s', '-mod=readonly', './...'],
+                                    cwd=module, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90)
+            self.assertEqual(result.returncode, 0, result.stdout)
 
 
 if __name__ == '__main__':

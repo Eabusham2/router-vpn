@@ -142,8 +142,9 @@ def repository_identity(required_commit):
     return {'repository': 'Eabusham2/router-vpn', 'commit': commit, 'tree': tree}
 
 
-# The diagnostic compiler changes logging only in an owned Go overlay. Its
-# result can never satisfy acceptance or publish a release receipt.
+# The exact shipping source records the first original failure. These records
+# are bounded comparison data only: they cannot satisfy the native gate, and
+# no replay is allowed to replace the failed source or its exception.
 RECEIPT_DIAGNOSTIC_REASONS = (
     ('unique-addition', 'native Linux routing call has no unique owned addition'),
     ('inventory-changed', 'native Linux routing inventory changed during its own add'),
@@ -165,6 +166,7 @@ RECEIPT_DIAGNOSTIC_REASONS = (
     ('interrupted-inventory', 'native Linux routing dump was interrupted'),
     ('unknown-inventory', 'native Linux routing dump contains an unknown result'),
     ('inventory-bound', 'native Linux route inventory exceeded its bound'),
+    ('reader-missing', 'native TUN cannot attest its actual routing calls'),
 )
 RECEIPT_DIAGNOSTIC_PREFIX = 'NODE-MTU-DIAGNOSTIC '
 
@@ -174,11 +176,13 @@ def receipt_diagnostic_output(output):
     reasons = '|'.join(sorted({'reader-missing', 'unclassified', *(code for code, _ in RECEIPT_DIAGNOSTIC_REASONS)}))
     patterns = (
         r'receipt reason=(' + reasons + r') generation=[0-9]+ reader=[0-9]+ index=[0-9]+ mtu=[0-9]+',
-        r'delta kind=(route|rule) index=[0-9]+ added=[0-9]+ removed=[0-9]+',
-        r'added kind=(route|rule) family=[0-9]+ index=[0-9]+ table=[0-9]+ priority=[0-9]+ flags=[0-9]+ destination=(default4|default6|linklocal6|multicast6|other)',
+        r'delta kind=(route|rule|other) index=[0-9]+ added=[0-9]+ removed=[0-9]+',
+        r'(added|removed) kind=(route|rule|other) family=[0-9]+ index=[0-9]+ table=[0-9]+ priority=[0-9]+ flags=[0-9]+ destination=(default4|default6|linklocal6|multicast6|other)',
     )
     result = []
-    for line in text.splitlines():
+    for line in text.splitlines(keepends=True):
+        if not line.endswith("\n"):
+            continue
         # The Go parent prefixes its first joined-child line with a test
         # filename. Retain only the strictly parsed diagnostic suffix.
         offset = line.find(RECEIPT_DIAGNOSTIC_PREFIX)
@@ -195,131 +199,19 @@ def receipt_diagnostic_output(output):
     return '\n'.join(result)
 
 
-def receipt_diagnostic_overlay(source, workspace):
-    replacements, records = {}, {}
-    def transform(relative, edits, appendix=''):
-        original = source / relative
-        if original.is_symlink() or not original.is_file():
-            raise ValueError('Native receipt diagnostics lost a regular source input')
-        raw = original.read_text(encoding='utf-8')
-        changed = raw
-        for before, after in edits:
-            if changed.count(before) != 1:
-                raise ValueError('Native receipt diagnostic insertion no longer matches its exact source')
-            changed = changed.replace(before, after, 1)
-        target = workspace / original.name
-        with target.open('x', encoding='utf-8') as output:
-            output.write(changed + appendix)
-        replacements[str(original)] = str(target)
-        records[relative] = {'source': hashlib.sha256(raw.encode()).hexdigest(),
-                             'diagnostic': hashlib.sha256(target.read_bytes()).hexdigest()}
-    labels = '\n'.join('\t\t{' + json.dumps(prefix) + ', ' + json.dumps(code) + '},'
-                       for code, prefix in RECEIPT_DIAGNOSTIC_REASONS)
-    helper = '''
-func routerVPNNodeMTUDiagnosticReason(message string) string {
-    for _, known := range []struct{ prefix, code string }{
-LABELS
-    } {
-        if strings.HasPrefix(message, known.prefix) { return known.code }
-    }
-    return "unclassified"
-}
-func routerVPNNodeMTUReceiptDiagnostic(record routerVPNNodeMTURecord, reason string) {
-    fmt.Fprintf(os.Stderr, "NODE-MTU-DIAGNOSTIC receipt reason=%s generation=%d reader=%d index=%d mtu=%d\\n", reason, record.Generation, record.Reader, record.Index, record.MTU)
-}
-'''.replace('LABELS', labels)
-    transform('cmd/sing-box/routervpn_network_command.go', (
-        ('import (\n', 'import (\n\t"fmt"\n\t"os"\n\t"strings"\n'),
-        ('\tif !ok {\n\t\treturn "", nil\n\t}\n\traw, err := reader.RouterVPNDesktopNetworkReceipt()',
-         '\tif !ok {\n\t\trouterVPNNodeMTUReceiptDiagnostic(owner.record, "reader-missing")\n\t\treturn "", nil\n\t}\n\traw, err := reader.RouterVPNDesktopNetworkReceipt()'),
-        ('\tif err != nil {\n\t\treturn "", nil\n\t}\n\treceipt, err := desktopnetwork.ParseDesktopNetworkReceipt(raw)',
-         '\tif err != nil {\n\t\trouterVPNNodeMTUReceiptDiagnostic(owner.record, routerVPNNodeMTUDiagnosticReason(err.Error()))\n\t\treturn "", nil\n\t}\n\treceipt, err := desktopnetwork.ParseDesktopNetworkReceipt(raw)'),
-    ), helper)
-    delta = '''
-func routervpnLinuxMTUDiagnostic(kind string, index int, added, removed []DesktopNetworkObject) {
-    fmt.Fprintf(os.Stderr, "NODE-MTU-DIAGNOSTIC delta kind=%s index=%d added=%d removed=%d\\n", kind, index, len(added), len(removed))
-    for i, object := range added {
-        if i == 8 { break }
-        destination := "other"
-        switch object.Destination {
-        case "0.0.0.0/0": destination = "default4"
-        case "::/0": destination = "default6"
-        case "fe80::/64": destination = "linklocal6"
-        case "ff00::/8": destination = "multicast6"
-        }
-        fmt.Fprintf(os.Stderr, "NODE-MTU-DIAGNOSTIC added kind=%s family=%d index=%d table=%d priority=%d flags=%d destination=%s\\n", object.Kind, object.Family, object.Index, object.Table, object.Priority, object.Flags, destination)
-    }
-}
-'''
-    changed_inventory = '\t\t\tt.routervpnNetworkFailure(fmt.Errorf("native Linux routing inventory changed during its own add (kind=%s removed=%d added=%d)", kind, len(removed), len(added)))'
-    unique_addition = '\t\tt.routervpnNetworkFailure(errors.New("native Linux routing call has no unique owned addition"))'
-    transform('routervpn-desktop-tun/routervpn_sing_tun_network_linux.go', (
-        ('\t"net"\n', '\t"net"\n\t"os"\n'),
-        (changed_inventory, '\t\t\troutervpnLinuxMTUDiagnostic(kind, t.routervpnOwnedIndex, added, removed)\n' + changed_inventory),
-        (unique_addition, '\t\troutervpnLinuxMTUDiagnostic(kind, t.routervpnOwnedIndex, added, removed)\n' + unique_addition),
-    ), delta)
-    overlay = workspace / 'overlay.json'
-    with overlay.open('x', encoding='utf-8') as output:
-        json.dump({'Replace': replacements}, output, sort_keys=True)
-    return overlay, records
-
-
-def native_receipt_diagnostics(source, compiler, captured, workspace, peer, identities, before, sudo):
-    def verify_originals():
-        if checked_sources(source)[1] != before or any(image_identity(path) != identity for path, identity in identities.items()):
-            raise ValueError('Native receipt diagnostics lost its original source or executable capture')
-    verify_originals()
-    with tempfile.TemporaryDirectory(prefix='receipt-diagnostic-', dir=workspace) as temporary:
-        directory = Path(temporary)
-        overlay, records = receipt_diagnostic_overlay(source, directory)
-        overlay_paths = [overlay, *(Path(path) for path in json.loads(overlay.read_text())['Replace'].values())]
-        overlay_identities = {path: NODE.retained_binary(path) for path in overlay_paths}
-        def verify_diagnostic_source():
-            verify_originals()
-            if any(NODE.retained_binary(path) != identity for path, identity in overlay_identities.items()):
-                raise ValueError('Native receipt diagnostic overlay changed from its exact captured source')
-        verify_diagnostic_source()
-        diagnostic = directory / 'diagnostic.test'
-        GUARD.UID.run([compiler, 'test', '-c', '-race', '-mod=readonly', '-tags=' + ','.join(TAGS),
-                       '-ldflags=-checklinkname=0', '-overlay=' + str(overlay), '-o', diagnostic, './cmd/sing-box'],
-                      cwd=source, env=captured, timeout=120)
-        verify_diagnostic_source()
-        identity = image_identity(diagnostic)
-        command = [sys.executable, str(Path(__file__).resolve()), '--namespace-test-binary', str(diagnostic),
-                   '--peer-binary', str(peer), '--namespace-test-sha256', identity[-1], '--peer-sha256', identities[peer][-1]]
-        if sudo is not None:
-            command = [sudo, '-n', '--', *command]
-        status = 0
-        try:
-            output = GUARD.UID.run(command, cwd=ROOT, env=captured, timeout=150, sudo=sudo)
-        except subprocess.CalledProcessError as error:
-            status, output = error.returncode, error.output
-        finally:
-            verify_diagnostic_source()
-            if image_identity(diagnostic) != identity:
-                raise ValueError('Native receipt diagnostic executable changed during its owned run')
-        safe = receipt_diagnostic_output(output)
-        print('Bounded native receipt diagnostics completed; original mandatory failure retained. Diagnostic status: ' + str(status))
-        print('Diagnostic overlay SHA256: ' + hashlib.sha256(json.dumps(records, sort_keys=True).encode()).hexdigest())
-        print('Diagnostic executable SHA256: ' + identity[-1])
-        if safe:
-            print(safe)
-        else:
-            print('No allowlisted native receipt cause was observed in this diagnostic run.')
-
-
-def run_native_acceptance(command, *, captured, sudo, peer_only, diagnose):
+def run_native_acceptance(command, *, captured, sudo):
     try:
         return GUARD.UID.run(command, cwd=ROOT, env=captured, timeout=150, sudo=sudo)
     except subprocess.CalledProcessError as original:
-        output = original.output.decode('utf-8', errors='replace') if isinstance(original.output, bytes) else original.output or ''
-        if not peer_only and 'generated MTU owner omitted its exact current native routing receipt' in output and 'original namespace child joined' in output:
-            try:
-                diagnose()
-            except BaseException as diagnostic:
-                # Failure diagnostics are never an alternate verdict. Avoid
-                # echoing arbitrary compiler/runtime text or configuration.
-                print('Native receipt diagnostics unavailable (' + type(diagnostic).__name__ + '); original failure retained.')
+        try:
+            safe = receipt_diagnostic_output(original.output)
+            if safe:
+                print('First-run native receipt diagnostics; original mandatory failure retained.')
+                print(safe)
+        except BaseException as diagnostic:
+            # Diagnostic formatting cannot mask the exact original failure or
+            # start another trial. Never echo an arbitrary error or payload.
+            print('Original native receipt diagnostics unavailable (' + type(diagnostic).__name__ + '); original failure retained.')
         raise
 
 
@@ -352,9 +244,7 @@ def execute(source, go='go', *, env=None, peer_only=False, receipt_path=None):
             command.append('--peer-only')
         if sudo is not None:
             command = [sudo, '-n', '--', *command]
-        output = run_native_acceptance(command, captured=captured, sudo=sudo, peer_only=peer_only,
-                                       diagnose=lambda: native_receipt_diagnostics(source, compiler, captured, directory,
-                                                                                   peer, identities, before, sudo))
+        output = run_native_acceptance(command, captured=captured, sudo=sudo)
         check_verdict(output, peer_only=peer_only)
         if any(image_identity(path) != identity for path, identity in identities.items()) or checked_sources(source)[1] != before:
             raise ValueError('Generated Linux TUN source or original executable changed during native verification')
