@@ -96,6 +96,14 @@ func TestLocalControllerPinnedDrainUtilityReadOnly(t *testing.T) {
 			if err := writeCapturedControllerDrain(ctx, new(pinnedControllerTestProcess), identity.Pin(), &output); err != nil {
 				t.Fatal("actual utility read-only observation failed", err)
 			}
+			// The PowerShell consumer deliberately accepts the native writer's
+			// exact, bounded format without loading a generic JSON cmdlet. Keep
+			// field order, decimal PID, Boolean spelling and the encoder's LF tied
+			// to this actual authenticated production writer on every host.
+			want := `{"schema":1,"process_id":` + strconv.Itoa(os.Getpid()) + `,"draining":` + strconv.FormatBool(draining) + "}\n"
+			if output.String() != want {
+				t.Fatal("native drain writer changed its exact owned receipt format", output.String())
+			}
 			var receipt map[string]any
 			if err := json.Unmarshal(output.Bytes(), &receipt); err != nil || len(receipt) != 3 || len(output.Bytes()) > 1024 ||
 				receipt["schema"] != float64(1) || receipt["process_id"] != float64(os.Getpid()) || receipt["draining"] != draining || received.Load() != 1 {

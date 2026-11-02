@@ -334,4 +334,57 @@ func TestLocalControllerPinnedDrainUtilityWindowsExecution(t *testing.T) {
 			}
 		})
 	}
+
+	// Run these receipt boundaries after the real cold wrapper launches above.
+	// The helper and parser are the shipping bytes; no command or module is
+	// preloaded to make the first positive launch pass its existing deadline.
+	t.Run("wrapper/receipt-format", func(t *testing.T) {
+		const owner = uint32(731)
+		prefix := `{"schema":1,"process_id":731,"draining":`
+		cases := []struct {
+			name, text, want string
+			pid              uint32
+		}{
+			{"running", prefix + "false}\n", "false", owner},
+			{"draining", prefix + "true}\n", "true", owner},
+			{"foreign-owner", prefix + "true}\n", "unknown", owner + 1},
+			{"zero-owner", `{"schema":1,"process_id":0,"draining":true}` + "\n", "unknown", 0},
+			{"duplicate-field", prefix + `false,"draining":true}` + "\n", "unknown", owner},
+			{"extra-field", prefix + `true,"extra":0}` + "\n", "unknown", owner},
+			{"reordered", `{"process_id":731,"schema":1,"draining":true}` + "\n", "unknown", owner},
+			{"wrong-schema", `{"schema":2,"process_id":731,"draining":true}` + "\n", "unknown", owner},
+			{"string-boolean", prefix + `"true"}` + "\n", "unknown", owner},
+			{"numeric-boolean", prefix + "1}\n", "unknown", owner},
+			{"missing-newline", prefix + "true}", "unknown", owner},
+			{"foreign-newline", prefix + "true}\r\n", "unknown", owner},
+			{"trailing-data", prefix + "true}\n{}", "unknown", owner},
+			{"leading-space", " " + prefix + "true}\n", "unknown", owner},
+			{"empty", "", "unknown", owner},
+			{"oversized", strings.Repeat("x", 1025), "unknown", owner},
+		}
+		script := "$ErrorActionPreference='Stop'\n. " + quote(helper) + "\n"
+		for _, example := range cases {
+			script += "$value=Read-RouterVPNPinnedDrainReceipt " + quote(example.text) + " " + strconv.FormatUint(uint64(example.pid), 10) + "\n"
+			condition := "$null-ne$value"
+			if example.want != "unknown" {
+				condition = "$value-isnot[bool]-or$value-ne$" + example.want
+			}
+			script += "if(" + condition + "){throw " + quote("native drain receipt boundary failed: "+example.name) + "}\n"
+		}
+		script += "if($null-ne(Read-RouterVPNPinnedDrainReceipt $null 731)){throw 'null drain receipt was admitted'}\n"
+		script += "if($null-ne(Read-RouterVPNPinnedDrainReceipt @('not','a','string') 731)){throw 'array drain receipt was admitted'}\n"
+		script += "[Console]::Out.WriteLine('receipt-format-pass')\n"
+		path := filepath.Join(t.TempDir(), "receipt.ps1")
+		if err := os.WriteFile(path, []byte(script), 0600); err != nil {
+			t.Fatal(err)
+		}
+		operation, stop := context.WithTimeout(ctx, 8*time.Second)
+		defer stop()
+		command := exec.CommandContext(operation, `\\.\`+strings.TrimPrefix(powershell.Path(), `\\?\`), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path)
+		command.Env = baseEnvironment()
+		stdout, stderr, runErr := run(t, command)
+		if runErr != nil || operation.Err() != nil || stdout != "receipt-format-pass" || stderr != "" {
+			t.Fatal("actual native drain receipt parser changed its captured format", stdout, stderr, runErr, operation.Err())
+		}
+	})
 }

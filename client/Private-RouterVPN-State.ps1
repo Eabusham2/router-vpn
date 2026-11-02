@@ -417,6 +417,18 @@ function Stop-RouterVPNRecordedProcess([string]$Path) {
 # os.Interrupt signal. The controller publishes its terminal drain state before
 # the bounded wrapper wait. The owned TLS path uses the native retained-process
 # probe; a failure is unknown and never selects the legacy plaintext endpoint.
+# The owned native utility writes exactly this three-field record with one LF
+# from writeCapturedControllerDrain (cmd/client/windows_controller_drain_utility.go).
+# Literal comparison avoids cold Utility-module loading for this tiny protocol;
+# duplicate, additional, reordered or noncanonical fields never grant authority.
+function Read-RouterVPNPinnedDrainReceipt($Text,[uint32]$Owner) {
+  if($Owner-eq0-or$Text-isnot[string]-or$Text.Length-gt1024){return $null}
+  $prefix='{"schema":1,"process_id":'+$Owner.ToString([Globalization.CultureInfo]::InvariantCulture)+',"draining":'
+  if([string]::Equals($Text,$prefix+'true}'+"`n",[StringComparison]::Ordinal)){return $true}
+  if([string]::Equals($Text,$prefix+'false}'+"`n",[StringComparison]::Ordinal)){return $false}
+  return $null
+}
+
 function Test-RouterVPNPinnedControllerStopping($Capture,[int]$TimeoutMilliseconds) {
   $probe=$null
   $held=$null
@@ -431,33 +443,31 @@ function Test-RouterVPNPinnedControllerStopping($Capture,[int]$TimeoutMillisecon
     # Hold the exact utility leaf against replacement until its owned process
     # exits. The authenticated launch separately retains the full image ancestry.
     $held=[IO.File]::Open($Capture.Executable,[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::Read)
-    $start=New-Object Diagnostics.ProcessStartInfo
+    $start=[Diagnostics.ProcessStartInfo]::new()
     $start.FileName=$Capture.Executable
     $start.Arguments='--windows-controller-drain '+$Capture.ProcessId+' '+$Capture.Pin
     $start.UseShellExecute=$false
     $start.CreateNoWindow=$true
     $start.RedirectStandardOutput=$true
     $start.RedirectStandardError=$true
-    $probe=New-Object Diagnostics.Process
+    $probe=[Diagnostics.Process]::new()
     $probe.StartInfo=$start
     $started=$probe.Start()
     if(-not$started){return $false}
     # Both reads are independently bounded. Excess output blocks only this
     # owned utility until the deadline kills and joins it; it cannot grow the
     # dataplane owner's memory or masquerade as a complete small receipt.
-    $stdoutBuffer=New-Object char[] 1025
-    $stderrBuffer=New-Object char[] 1025
+    $stdoutBuffer=[char[]]::new(1025)
+    $stderrBuffer=[char[]]::new(1025)
     $stdout=$probe.StandardOutput.ReadBlockAsync($stdoutBuffer,0,$stdoutBuffer.Length)
     $stderr=$probe.StandardError.ReadBlockAsync($stderrBuffer,0,$stderrBuffer.Length)
     if(-not$probe.WaitForExit($TimeoutMilliseconds)){return $false}
     if(-not$stdout.Wait(100)-or-not$stderr.Wait(100)-or$probe.ExitCode-ne0){return $false}
     if($stdout.Result-gt1024-or$stderr.Result-ne0){return $false}
-    $text=New-Object string($stdoutBuffer,0,[int]$stdout.Result)
-    $receipt=$text|ConvertFrom-Json
-    $fields=@($receipt.PSObject.Properties.Name)
-    if($fields.Count-ne3-or$fields-cnotcontains'schema'-or$fields-cnotcontains'process_id'-or$fields-cnotcontains'draining'-or
-       $receipt.schema-ne1-or$receipt.process_id-ne$owner-or$receipt.draining-isnot[bool]){return $false}
-    return [bool]$receipt.draining
+    $text=[string]::new($stdoutBuffer,0,[int]$stdout.Result)
+    $receipt=Read-RouterVPNPinnedDrainReceipt $text $owner
+    if($receipt-isnot[bool]){return $false}
+    return $receipt
   } catch {
     return $false
   } finally {

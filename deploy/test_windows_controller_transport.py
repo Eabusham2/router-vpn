@@ -238,7 +238,7 @@ def execute(go="go"):
     if platform.system() == "Windows":
         for kind, cases in (("command", ("running", "draining", "wrong-pin", "wrong-owner", "timeout")),
                             ("wrapper", ("running", "draining", "captured-once", "wrong-pin", "malformed",
-                                         "plaintext-fallback", "legacy", "cancelled"))):
+                                         "plaintext-fallback", "legacy", "cancelled", "receipt-format"))):
             for case in cases:
                 name = "TestLocalControllerPinnedDrainUtilityWindowsExecution/" + kind + "/" + case
                 if "--- PASS: " + name + " (" not in output:
