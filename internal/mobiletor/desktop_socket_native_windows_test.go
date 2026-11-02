@@ -341,6 +341,77 @@ func TestDesktopSocketWindowsNativeRejectsChangedCreationAndBoundSources(t *test
 	}
 }
 
+func TestDesktopSocketWindowsNativeUDPRetainsBoundDescriptor(t *testing.T) {
+	for _, address := range []string{"127.0.0.1", "::1"} {
+		t.Run(address, func(t *testing.T) {
+			local := netip.MustParseAddr(address)
+			original, err := desktopWindowsNativeTestSocket("udp", local.Is4())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = original.Close() })
+			source := &desktopWindowsUDPCloser{DesktopSocketNative: original}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			var boundHandle uintptr
+			packet, err := desktopSocketImportNativePacket(ctx, "udp", source, local, func(_, _ string, raw syscall.RawConn) error {
+				return raw.Control(func(handle uintptr) { boundHandle = handle })
+			})
+			if err != nil {
+				t.Fatal("actual UDP import failed", err)
+			}
+			t.Cleanup(func() { _ = packet.Close() })
+			raw, err := packet.(syscall.Conn).SyscallConn()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var actualHandle uintptr
+			var actualLocal netip.AddrPort
+			var readErr error
+			if err := raw.Control(func(handle uintptr) {
+				actualHandle = handle
+				actualLocal, readErr = desktopSocketLocal(syscall.Handle(handle))
+			}); err != nil || readErr != nil || actualHandle != boundHandle || actualLocal.String() != packet.LocalAddr().String() {
+				t.Fatal("UDP I/O replaced the actual bound descriptor or local tuple", err, readErr, actualHandle == boundHandle)
+			}
+			// An unsuccessful native close must retain the exact source for a
+			// checked retry. Calling Closesocket independently would leave its
+			// retained owner holding a stale, potentially recycled handle.
+			source.failClose = true
+			if err := packet.Close(); !errors.Is(err, syscall.ERROR_ACCESS_DENIED) {
+				t.Fatal("UDP packet bypassed its original native close owner", err)
+			}
+			if _, err := original.SyscallConn(); err != nil {
+				t.Fatal("failed UDP close released its retained source", err)
+			}
+			source.failClose = false
+			if err := packet.Close(); err != nil {
+				t.Fatal("UDP close retry did not retire its original source", err)
+			}
+			if _, err := original.SyscallConn(); !errors.Is(err, net.ErrClosed) {
+				t.Fatal("UDP close left its native source open", err)
+			}
+			if err := packet.Close(); err != nil || source.calls != 2 {
+				t.Fatal("UDP repeated close reacquired a retired native descriptor", err, source.calls)
+			}
+		})
+	}
+}
+
+type desktopWindowsUDPCloser struct {
+	DesktopSocketNative
+	failClose bool
+	calls     int
+}
+
+func (source *desktopWindowsUDPCloser) Close() error {
+	source.calls++
+	if source.failClose {
+		return syscall.ERROR_ACCESS_DENIED
+	}
+	return source.DesktopSocketNative.Close()
+}
+
 type desktopWindowsUDPErrorSource struct {
 	DesktopSocketNative
 	failure error

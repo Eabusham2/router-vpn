@@ -267,7 +267,7 @@ func desktopSocketImportNativePacket(ctx context.Context, network string, source
 	if err := control(actual, netip.AddrPortFrom(local, 0).String(), raw); err != nil {
 		return nil, fmt.Errorf("Windows UDP captured bind control: %w", err)
 	}
-	var keeper *desktopSocketKeeper
+	var boundHandle syscall.Handle
 	var bound netip.AddrPort
 	var result error
 	stage := "bound source raw control"
@@ -286,19 +286,24 @@ func desktopSocketImportNativePacket(ctx context.Context, network string, source
 		if result != nil {
 			return
 		}
-		stage = "I/O descriptor duplication"
-		keeper, result = desktopSocketDuplicate(fd)
+		// A fresh Winsock duplicate can retain an unbound provider cache even
+		// though it names the same ALE endpoint. UDP has no Connect operation
+		// to refresh that state. Keep the descriptor that actually received
+		// Bind for both I/O and independent local readback. Its source owner
+		// remains the sole closer; the broker still acquires a separate keeper
+		// and retains the original ALE source through permit retirement.
+		boundHandle = fd
 	})
 	setupErr := errors.Join(err, result)
 	if setupErr != nil {
 		setupErr = fmt.Errorf("Windows UDP %s: %w", stage, setupErr)
 	}
-	if keeper == nil {
+	if setupErr != nil {
 		return nil, setupErr
 	}
-	c := &desktopWindowsPacket{desktopWindowsSocket: &desktopWindowsSocket{handle: keeper.handle, local: bound}}
-	if err != nil || result != nil || ctx.Err() != nil {
-		return c, errors.Join(setupErr, ctx.Err())
+	c := &desktopWindowsPacket{desktopWindowsSocket: &desktopWindowsSocket{handle: boundHandle, nativeOwner: source, local: bound}}
+	if ctx.Err() != nil {
+		return c, ctx.Err()
 	}
 	if err := desktopSocketNonblocking(c.handle); err != nil {
 		return c, fmt.Errorf("Windows UDP nonblocking I/O configuration: %w", err)

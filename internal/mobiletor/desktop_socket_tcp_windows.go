@@ -46,19 +46,20 @@ type desktopSocketPollFD struct {
 // there is no temporary unbind, guessed port, unsafe netFD or host dial fallback.
 // The separate duplicate still keeps the port until the policy absent readback.
 type desktopWindowsSocket struct {
-	handle     syscall.Handle
-	boundLocal netip.AddrPort // Captured before import; never overwritten by connected readback.
-	local      netip.AddrPort
-	remote     netip.AddrPort
-	mu         sync.Mutex
-	closing    bool
-	closed     bool
-	readUntil  time.Time
-	writeUntil time.Time
-	read       sync.Mutex
-	write      sync.Mutex
-	close      sync.Mutex
-	io         sync.WaitGroup
+	handle      syscall.Handle
+	nativeOwner DesktopSocketNative // UDP retains the descriptor that actually received Bind.
+	boundLocal  netip.AddrPort      // Captured before import; never overwritten by connected readback.
+	local       netip.AddrPort
+	remote      netip.AddrPort
+	mu          sync.Mutex
+	closing     bool
+	closed      bool
+	readUntil   time.Time
+	writeUntil  time.Time
+	read        sync.Mutex
+	write       sync.Mutex
+	close       sync.Mutex
+	io          sync.WaitGroup
 }
 
 type desktopWindowsRaw struct{ socket *desktopWindowsSocket }
@@ -400,7 +401,13 @@ func (c *desktopWindowsSocket) Close() error {
 	// No handle is closed while a poll or actual nonblocking I/O can still
 	// refer to it. New operations are excluded before this wait begins.
 	c.io.Wait()
-	if err := syscall.Closesocket(c.handle); err != nil {
+	var err error
+	if c.nativeOwner != nil {
+		err = c.nativeOwner.Close()
+	} else {
+		err = syscall.Closesocket(c.handle)
+	}
+	if err != nil {
 		return err
 	}
 	c.mu.Lock()

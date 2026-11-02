@@ -30,6 +30,7 @@ REQUIRED = (
     "TestDesktopSocketWindowsWFPBlockedControlRetainsEnteredIO",
     "TestDesktopSocketWindowsWFPActualProcessDeath",
     "TestDesktopSocketWindowsNativeRejectsChangedCreationAndBoundSources",
+    "TestDesktopSocketWindowsNativeUDPRetainsBoundDescriptor",
 )
 NATIVE_UDP_FAILURE_CASES = ("source_validation", "captured_bind_control", "socket_bind")
 
@@ -37,6 +38,7 @@ NATIVE_UDP_FAILURE_CASES = ("source_validation", "captured_bind_control", "socke
 def mutants(target):
     policy = (target / "desktop_socket_windows_policy.go").read_text(encoding="utf-8")
     network = (target / "desktop_socket_windows_network.go").read_text(encoding="utf-8")
+    imported = (target / "desktop_socket_native_windows.go").read_text(encoding="utf-8")
     return (
         ("ordinary-socket-bypass", "desktop_socket_windows_policy.go", REQUIRED[4],
          "ordinary process socket bypassed the captured WFP baseline",
@@ -48,6 +50,10 @@ def mutants(target):
          IDENTITY.replace_once(network,
                                'if adapter.Index != index {',
                                'if false && adapter.Index != index {')),
+        ("udp-original-close-owner", "desktop_socket_native_windows.go", REQUIRED[8],
+         "UDP packet bypassed its original native close owner",
+         IDENTITY.replace_once(imported, 'nativeOwner: source, local: bound',
+                               'nativeOwner: nil, local: bound')),
     )
 
 
@@ -108,7 +114,7 @@ def execute(source=ROOT, go="go", *, env=None):
             print("Rejected production WFP traffic mutant:", label, flush=True)
         if IDENTITY.checked_sources(source)[3] != before:
             raise ValueError("WFP traffic source changed during its actual native gate")
-    print("Owned Windows WFP traffic passed all four TCP/UDP address families, connected renewal, blocked control with entered I/O and retained source ports, native-process BFE rundown, selected-adapter DHCP capture, and two production negative controls. Native factory and device acceptance remain separately gated.", flush=True)
+    print("Owned Windows WFP traffic passed all four TCP/UDP address families, connected renewal, blocked control with entered I/O and retained source ports, native-process BFE rundown, selected-adapter DHCP capture, exact UDP bind/close ownership, and three production negative controls. Native factory and device acceptance remain separately gated.", flush=True)
 
 
 if __name__ == "__main__":
