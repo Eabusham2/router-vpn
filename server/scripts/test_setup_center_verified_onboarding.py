@@ -2,7 +2,11 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
 
 HERE = Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location("routervpn_verified_onboarding_tested", HERE / "setup_center_verified_onboarding.py")
@@ -30,7 +34,35 @@ assert "legacy generated wizard is superseded" in fixed
 assert "16 logical user modes" in fixed and "20 raw runtimes internally" in fixed
 assert "Multi-hop is intentionally not labeled ready" not in fixed
 assert "strict firewall kill switch" not in fixed
-assert "WireGuardKit" in fixed and "Libbox PacketTunnel" in fixed
+assert "WireGuard and AmneziaWG" in fixed and "system VPN" in fixed
+
+# Exercise the actual generator seam, not just the old hand-written sample.
+# A previous generator revision changed the iOS sentence without updating the
+# reconciler, leaving the obsolete AWG/multihop claims in the shipped page.
+with tempfile.TemporaryDirectory(prefix="router-vpn-setup-guidance-") as temporary:
+    base = Path(temporary)
+    subprocess.run(
+        [sys.executable, str(HERE / "generate-setup-assets.py"), str(base),
+         "router.invalid", "192.168.50.133"],
+        check=True, capture_output=True, timeout=15,
+    )
+    generated = json.loads((base / "client-bundle/setup-assets.json").read_text())
+    current = generated["devices"]["ios"]["customApp"]
+    page = (base / "client-bundle/router-vpn-device-setup.html").read_text()
+    rendered = MOD.reconcile_setup_text(page)
+    packed = rendered.split("const DATA=", 1)[1].split(";const $=", 1)[0]
+    assert json.loads(packed)["devices"]["ios"]["customApp"] == current
+    assert current in fixed, "the generator and legacy-page repair disagree about iOS support"
+    for obsolete in (
+        "Router VPN is a real native app. Raw WireGuard uses the PacketTunnel engine today; supported Libbox paths are source-wired; unsupported AWG/OpenVPN/full desktop-equivalent multihop combinations stay visibly unavailable instead of being faked.",
+        "Router VPN is a real native app. Raw WireGuard uses WireGuardKit; compatible imported sing-box profiles use the pinned Libbox PacketTunnel with exact selected-node proof. AWG/Xray-only, ALL/MAX and unsupported multihop combinations stay visibly unavailable instead of being faked.",
+    ):
+        legacy = page.replace(current, obsolete)
+        assert legacy != page, "fixture did not exercise the generated data"
+        repaired = MOD.reconcile_setup_text(legacy)
+        packed = repaired.split("const DATA=", 1)[1].split(";const $=", 1)[0]
+        assert json.loads(packed)["devices"]["ios"]["customApp"] == current
+        assert obsolete not in repaired
 
 panel = MOD.VERIFIED_ONBOARDING_PANEL
 for endpoint in (

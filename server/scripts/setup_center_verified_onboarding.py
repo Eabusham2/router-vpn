@@ -69,11 +69,16 @@ def reconcile_setup_text(text: str) -> str:
         '<p>Kill-switch behavior is platform-specific and fail-closed: supported desktop firewall policies, Android system lockdown checks, and Apple NetworkExtension route lockdown are enforced only where the runtime can prove them. Manual disconnect remains distinct from reconnect/failure recovery, and unsupported semantics stay unavailable.</p>',
         1,
     )
-    text = text.replace(
+    for obsolete in (
         'Router VPN is a real native app. Raw WireGuard uses the PacketTunnel engine today; unsupported layered/AWG/multihop combinations stay visibly unavailable instead of being faked.',
+        'Router VPN is a real native app. Raw WireGuard uses the PacketTunnel engine today; supported Libbox paths are source-wired; unsupported AWG/OpenVPN/full desktop-equivalent multihop combinations stay visibly unavailable instead of being faked.',
         'Router VPN is a real native app. Raw WireGuard uses WireGuardKit; compatible imported sing-box profiles use the pinned Libbox PacketTunnel with exact selected-node proof. AWG/Xray-only, ALL/MAX and unsupported multihop combinations stay visibly unavailable instead of being faked.',
-        1,
-    )
+    ):
+        text = text.replace(
+            obsolete,
+            'Router VPN for iPhone and iPad supports WireGuard and AmneziaWG, supported layered modes, and multihop through its system VPN. The app checks the selected mode and complete path before connecting and explains any unsupported combination.',
+            1,
+        )
     return text
 
 

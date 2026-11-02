@@ -94,7 +94,7 @@ GUIDE_PANEL = r'''
       <h3>6. First connection</h3>
       <ol>
         <li>Select the router/node.</li>
-        <li>Choose AUTO for the simplest validated route, or choose a supported manual mode.</li>
+        <li>Keep the default SMART AUTO for automatic path selection, or choose AUTO or a supported manual mode.</li>
         <li>Where the logical mode supports it, choose WireGuard/AmneziaWG base preference and fallback.</li>
         <li>Choose DNS: Home AdGuard, fastest measured home-exit public DNS, Rescue, or an explicitly configured encrypted/custom resolver. AdGuard Allowed Clients may stay blank (blank means unrestricted); only if you intentionally use a restrictive allowlist add 10.77.0.0/24, 10.78.0.0/24, fd77:77::/64, and fd78:78::/64.</li>
         <li>Choose home-LAN access, MTU/Jumbo, supported kill-switch policy, and supported multihop options.</li>
