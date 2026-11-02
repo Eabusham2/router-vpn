@@ -45,7 +45,7 @@ on:
       - 'deploy/test_desktop_tor_bridge_forms.py'
       - 'deploy/test_desktop_speed_lab_forms.py'
       - 'deploy/test_desktop_external_comparison_forms.py'
-      - 'deploy/test_desktop_network_cohort.py'
+      - 'deploy/test_desktop_network_cohort*.py'
       - 'internal/desktopnetwork/**'
       - 'deploy/test_macos_speed_lab_transport.py'
       - '.github/workflows/desktop-amnezia-runtime.yml'

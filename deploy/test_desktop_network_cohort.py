@@ -7,6 +7,7 @@ acceptance remains a separate native/device boundary. No sleep is a callback
 flush and no missing native capability is converted into a pass.
 """
 from pathlib import Path
+import importlib.util
 import os
 import shutil
 import subprocess
@@ -26,6 +27,12 @@ PARENTS = (
     "TestWindowsUnlimitedLoopbackMTURetainsNativeIdentity",
     "TestLinuxOwnedGotoRuleTransitions",
 )
+NATIVE_CASES = (
+    "unchanged-physical-owner", "gateway-away-and-back", "address-away-and-back",
+    "mtu-away-and-back", "unclaimed-virtual-start-and-stop",
+    "owned-interface-route-rule-and-drain", "foreign-rule-without-interface-key",
+    "proved-transient-closes-before-final-off",
+)
 
 
 def execute(argv, *, cwd=ROOT, env=None, timeout=150, succeeds=True):
@@ -43,6 +50,43 @@ def require_pass(output, name):
         raise RuntimeError("network gate omitted its executed case: " + name)
 
 
+def namespace_runner():
+    spec = importlib.util.spec_from_file_location("desktop_network_owned_namespace", ROOT / "deploy/test_desktop_socket_uid.py")
+    runner = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(runner)
+    return runner
+
+
+def linux_namespace_test(binary, env):
+    if sys.platform != "linux":
+        raise RuntimeError("the network mutation fixture requires native Linux")
+    # Only this already-compiled image elevates. The trusted runner retains and
+    # joins its exact new process group on timeout, including sudo descendants.
+    # No host policy is changed to permit an unprivileged user-namespace map.
+    runner = namespace_runner()
+    sudo = runner.privilege_tool()
+    parent = os.readlink("/proc/self/ns/net")
+    command = ["/usr/bin/env", "ROUTERVPN_NATIVE_NETWORK_EVENTS=1",
+               "ROUTERVPN_NETWORK_PARENT_NAMESPACE=" + parent,
+               "/usr/bin/unshare", "--user", "--map-root-user", "--net", "--fork", str(binary),
+               "-test.v", "-test.timeout=45s", "-test.run=^TestLinuxNativeNetworkCohortEvents$"]
+    if sudo is not None:
+        command = [sudo, "-n", "--", *command]
+    try:
+        output = runner.run(command, cwd=ROOT, env=env, timeout=60, sudo=sudo)
+    except subprocess.CalledProcessError as error:
+        output = error.output or b""
+        print(output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output, end="")
+        raise RuntimeError("isolated native network fixture failed") from error
+    parent = "TestLinuxNativeNetworkCohortEvents"
+    require_pass(output, parent)
+    for leaf in NATIVE_CASES:
+        require_pass(output, parent + "/" + leaf)
+    if "--- FAIL:" in output or "--- SKIP:" in output:
+        raise RuntimeError("isolated native network fixture returned a failed or skipped case")
+    return output
+
+
 def main():
     if sys.platform not in ("linux", "darwin", "win32"):
         raise RuntimeError("desktop network observer gate has no native adapter on this host")
@@ -53,6 +97,7 @@ def main():
     env.pop("ROUTERVPN_NATIVE_NETWORK_EVENTS", None)
     env.pop("ROUTERVPN_NETWORK_PARENT_NAMESPACE", None)
     env.update(GOWORK="off", GOFLAGS="")
+    execute([sys.executable, str(ROOT / "deploy/test_desktop_network_cohort_runner.py")], env=env, timeout=30)
     base = execute([go, "test", "-race", "-v", "-count=1", "-timeout=120s",
                     "./internal/desktopnetwork"], env=env)
     for parent in PARENTS:
@@ -72,18 +117,7 @@ def main():
         if sys.platform == "linux":
             binary = work / "network-native.test"
             execute([go, "test", "-race", "-c", "-o", str(binary), "./internal/desktopnetwork"], env=env)
-            parent = os.readlink("/proc/self/ns/net")
-            command = ["/usr/bin/env", "ROUTERVPN_NATIVE_NETWORK_EVENTS=1",
-                       "ROUTERVPN_NETWORK_PARENT_NAMESPACE=" + parent,
-                       "/usr/bin/unshare", "--user", "--map-root-user", "--net", "--fork", str(binary),
-                       "-test.v", "-test.timeout=45s", "-test.run=^TestLinuxNativeNetworkCohortEvents$"]
-            native = execute(command, env=env, timeout=60)
-            require_pass(native.stdout, "TestLinuxNativeNetworkCohortEvents")
-            for leaf in ("unchanged-physical-owner", "gateway-away-and-back", "address-away-and-back",
-                         "mtu-away-and-back", "unclaimed-virtual-start-and-stop",
-                         "owned-interface-route-rule-and-drain", "foreign-rule-without-interface-key",
-                         "proved-transient-closes-before-final-off"):
-                require_pass(native.stdout, "TestLinuxNativeNetworkCohortEvents/" + leaf)
+            linux_namespace_test(binary, env)
             print("Eight real isolated Linux link/address/gateway/route/rule and join cases passed.")
 
         mutant = work / "mutant"
