@@ -20,13 +20,16 @@ var desktopWindowsNodeComposition struct {
 }
 
 type DesktopWindowsNodeCompositionReadback struct {
-	Target  DesktopWindowsProtectionTarget
-	Capture DesktopSocketCapture
-	Owner   DesktopSocketKernelOwner
-	Options DesktopWindowsSocketOptions
-	Grants  []DesktopSocketGrant
-	Calls   int
-	Closed  bool
+	Target      DesktopWindowsProtectionTarget
+	Capture     DesktopSocketCapture
+	Owner       DesktopSocketKernelOwner
+	Options     DesktopWindowsSocketOptions
+	Grants      []DesktopSocketGrant
+	Calls       int
+	Closed      bool
+	TunnelName  string
+	TunnelIndex uint32
+	TunnelLUID  uint64
 }
 
 func DesktopWindowsNodeCompositionAppID() ([]byte, error) {
@@ -38,6 +41,17 @@ func DesktopWindowsNodeCompositionAppID() ([]byte, error) {
 }
 
 func desktopWindowsNodeCompositionConstruct(ctx context.Context, capture DesktopSocketCapture, options DesktopWindowsSocketOptions, predecessor *DesktopWindowsProtectionTarget, exact bool) (*DesktopWindowsSocketPolicy, error) {
+	return desktopWindowsNodeCompositionCaptured(ctx, capture, options, predecessor, exact, nil)
+}
+
+func desktopWindowsNodeCompositionWithBarrier(ctx context.Context, capture DesktopSocketCapture, options DesktopWindowsSocketOptions, predecessor *DesktopWindowsProtectionTarget, barrier DesktopWindowsProtectionCommitBarrier) (*DesktopWindowsSocketPolicy, error) {
+	if barrier == nil {
+		return nil, errors.New("external composition lost its durable intent capability")
+	}
+	return desktopWindowsNodeCompositionCaptured(ctx, capture, options, predecessor, true, barrier)
+}
+
+func desktopWindowsNodeCompositionCaptured(ctx context.Context, capture DesktopSocketCapture, options DesktopWindowsSocketOptions, predecessor *DesktopWindowsProtectionTarget, exact bool, barrier DesktopWindowsProtectionCommitBarrier) (*DesktopWindowsSocketPolicy, error) {
 	scope, err := DesktopWindowsNodeCompositionAppID()
 	if err != nil || len(scope) == 0 {
 		return nil, errors.Join(err, errors.New("Node composition has no actual executable scope"))
@@ -51,7 +65,9 @@ func desktopWindowsNodeCompositionConstruct(ctx context.Context, capture Desktop
 		}
 	}
 	var owned *DesktopWindowsSocketPolicy
-	if exact {
+	if exact && barrier != nil {
+		owned, err = newDesktopWindowsSocketPolicySuccessorWithBarrier(ctx, capture, options, predecessor, scope, barrier)
+	} else if exact {
 		owned, err = newDesktopWindowsSocketPolicySuccessor(ctx, capture, options, predecessor, scope)
 	} else {
 		// Preserve legacy constructor behavior for a deliberate production
@@ -74,7 +90,8 @@ func DesktopWindowsNodeCompositionSnapshot(ctx context.Context) (DesktopWindowsN
 	}
 	return desktopWindowsPolicyCall(p, ctx, true, func() (DesktopWindowsNodeCompositionReadback, error) {
 		result := DesktopWindowsNodeCompositionReadback{Capture: p.capture, Owner: p.owner, Options: p.options, Calls: calls, Closed: p.closed,
-			Target: desktopWindowsProtectionTarget(p.capture, p.options.KillSwitchPolicy, p.metadata)}
+			Target:     desktopWindowsProtectionTarget(p.capture, p.options.KillSwitchPolicy, p.metadata),
+			TunnelName: p.tunnelName, TunnelIndex: p.tunnelIndex, TunnelLUID: p.tunnelLUID}
 		result.Options.Interfaces = append([]DesktopWindowsSocketInterface(nil), p.options.Interfaces...)
 		result.Options.PrivateDestinations = append([]DesktopWindowsSocketDestination(nil), p.options.PrivateDestinations...)
 		result.Options.LANPrefixes = append(result.Options.LANPrefixes[:0:0], p.options.LANPrefixes...)

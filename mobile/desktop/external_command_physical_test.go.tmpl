@@ -264,7 +264,7 @@ func TestRouterVPNDesktopExternalPhysicalSOCKSCommandIsLinuxOnly(t *testing.T) {
 	desktopExternalPhysicalTransportCommand(t, "socks5", "")
 }
 
-func TestRouterVPNDesktopExternalPhysicalHysteria2CommandIsLinuxOnly(t *testing.T) {
+func TestRouterVPNDesktopExternalPhysicalCommandHysteria2SupportedTargets(t *testing.T) {
 	desktopExternalPhysicalTransportCommand(t, "hysteria2", "")
 }
 
@@ -356,7 +356,12 @@ func desktopExternalPhysicalTransportCommand(t *testing.T, protocol, variant str
 	if err != nil {
 		t.Fatal(err)
 	}
-	physical, err := mobilemultihop.NewDesktopExternalPolicy(original, desktopExternalSession, "linux")
+	target := "linux"
+	if protocol == "hysteria2" && runtime.GOOS == "windows" {
+		target = "windows"
+	}
+	supported := runtime.GOOS == "linux" || protocol == "hysteria2" && runtime.GOOS == "windows"
+	physical, err := mobilemultihop.NewDesktopExternalPolicy(original, desktopExternalSession, target)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -457,18 +462,18 @@ func desktopExternalPhysicalTransportCommand(t *testing.T, protocol, variant str
 			}
 			defer files.root.Close()
 			selected, err := routerVPNExternalCommandPhysical(files, original, session, expected)
-			if runtime.GOOS != "linux" || fault != "valid" {
+			if !supported || fault != "valid" {
 				if err == nil || selected != nil {
 					t.Fatal("foreign host or changed transport source reached native command admission", protocol)
 				}
 				return
 			}
 			if err != nil || selected == nil || selected.Metadata() != physical.Metadata() || selected.OriginalPolicy() != original {
-				t.Fatal("Linux command lost its exact transport policy", protocol, err)
+				t.Fatal("command lost its exact captured transport policy", protocol, err)
 			}
 		})
 	}
-	if runtime.GOOS != "linux" {
+	if !supported {
 		return
 	}
 	registry := include.InboundRegistry()
@@ -476,9 +481,17 @@ func desktopExternalPhysicalTransportCommand(t *testing.T, protocol, variant str
 		return &desktopExternalTUN{inbound.NewAdapter(C.TypeTun, tag)}, nil
 	})
 	ctx := box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	if runtime.GOOS == "windows" {
+		ctx, err = routervpndesktoppt.WithExternalPhysicalAdmission(ctx, physical, func(context.Context, routervpndesktoppt.ExternalPhysicalPrepared) error {
+			return errors.New("construction fixture must not start real kernel policy")
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	owner, err := routerVPNNewExternalNative(ctx, original, physical, source, capture, desktopExternalSession)
 	if err != nil || owner == nil {
-		t.Fatal("actual Linux transport factory failed before startup", protocol, err)
+		t.Fatal("actual transport factory failed before startup", protocol, err)
 	}
 	defer func() {
 		owner.Cancel()

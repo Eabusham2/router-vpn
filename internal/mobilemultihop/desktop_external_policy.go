@@ -73,13 +73,16 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 	kinds := map[string]string{"socks5": "socks", "http-connect": "http", "https-connect": "http", "shadowsocks": "shadowsocks"}
 	kind, supported := kinds[capture.Protocol]
 	family := "outbounds"
+	if capture.Protocol == "hysteria2" && (targetOS == "linux" || targetOS == "windows") {
+		// Hysteria2 opens its one captured UDP socket lazily, after the native
+		// external owner activates. It needs no eager endpoint startup phase.
+		kind, supported = "hysteria2", true
+	}
 	// Linux endpoints retain their original table and complete captured lower
 	// tuples. OpenVPN keeps every ordered TCP/UDP remote; it cannot collapse
 	// fallback into one peer or borrow a Router node identity.
 	if targetOS == "linux" {
 		switch capture.Protocol {
-		case "hysteria2":
-			kind, supported = "hysteria2", true
 		case "wireguard":
 			family, kind, supported = "endpoints", "wireguard", true
 		case "amneziawg":

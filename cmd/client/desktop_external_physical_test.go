@@ -50,7 +50,7 @@ func desktopExternalPhysicalLaunchVariant(t *testing.T, protocol, kill, ipv6 str
 
 func TestDesktopExternalPhysicalCapturePreservesProofAndMailboxOwners(t *testing.T) {
 	count := 0
-	for _, protocol := range []string{"http-connect", "https-connect", "shadowsocks"} {
+	for _, protocol := range []string{"http-connect", "https-connect", "shadowsocks", "hysteria2"} {
 		for _, kill := range []string{"on-connect", "always"} {
 			for _, ipv6 := range []string{"on", "off"} {
 				for _, lan := range []bool{false, true} {
@@ -90,7 +90,7 @@ func TestDesktopExternalPhysicalCapturePreservesProofAndMailboxOwners(t *testing
 			}
 		}
 	}
-	if count != 24 {
+	if count != 32 {
 		t.Fatal("physical policy matrix did not execute", count)
 	}
 }
@@ -104,7 +104,7 @@ func TestDesktopExternalPhysicalAdmissionPreservesOtherGraphs(t *testing.T) {
 				if err := prepareDesktopExternalPhysical(launch, target); err != nil {
 					t.Fatal(protocol, target, kill, err)
 				}
-				eligible := target == "windows" && kill != "off" && (protocol == "http-connect" || protocol == "https-connect" || protocol == "shadowsocks")
+				eligible := target == "windows" && kill != "off" && (protocol == "http-connect" || protocol == "https-connect" || protocol == "shadowsocks" || protocol == "hysteria2")
 				if (launch.external.physical != nil) != eligible {
 					t.Fatal("unsupported graph was admitted or an eligible graph silently fell back", protocol, target, kill)
 				}

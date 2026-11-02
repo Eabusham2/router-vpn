@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Check the native Node test overlay cannot lose its executable-only scope."""
 from pathlib import Path
+import contextlib
 import importlib.util
+import io
 import json
 import tempfile
 import unittest
@@ -148,6 +150,147 @@ class NativeNodeScope(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, "explicit native test scope"):
                         GATE.checked_sources(self.source)
                 (fixtures / name).write_bytes(original)
+
+
+class OrdinaryHysteria2Scope(unittest.TestCase):
+    def setUp(self):
+        NativeNodeScope.setUp(self)
+        for relative, actual in (
+                ("routervpn/mobiletor/desktop_socket_windows_commit.go", ROOT / "internal/mobiletor/desktop_socket_windows_commit.go"),
+                ("routervpn/desktoppt/external_physical_windows.go", ROOT / "mobile/desktop/external_physical_windows.go.tmpl")):
+            self.original[relative] = actual.read_bytes()
+            (self.source / relative).write_bytes(self.original[relative])
+
+    def test_durable_constructor_and_every_mutant_keep_actual_scope(self):
+        for mutation in (None, "ordinary-udp-deny", "missing-durable-intent"):
+            with self.subTest(mutation=mutation):
+                selected = GATE.external_overlay(self.source, self.observer, mutation)
+                mapping = json.loads(selected.read_text())["Replace"]
+                self.assertEqual(len(mapping), 6 if mutation == "missing-durable-intent" else 5)
+                policy = Path(mapping[str(self.source / "routervpn/mobiletor/desktop_socket_windows_policy.go")]).read_text()
+                transfer = Path(mapping[str(self.source / "routervpn/mobiletor/desktop_socket_windows_transfer.go")]).read_text()
+                commit = Path(mapping[str(self.source / "routervpn/mobiletor/desktop_socket_windows_commit.go")]).read_text()
+                self.assertIn("desktopWindowsNodeCompositionConstruct(ctx, capture, options, nil, false)", policy)
+                self.assertIn("desktopWindowsNodeCompositionConstruct(ctx, capture, options, predecessor, true)", transfer)
+                self.assertIn("desktopWindowsNodeCompositionWithBarrier(ctx, capture, options, predecessor, barrier)", commit)
+                self.assertIn(GATE.LOOPBACK_COMPOSITION, policy)
+                self.assertIn('p.pair("deny", family, 1, ' + ("true" if mutation == "ordinary-udp-deny" else "false") + ', true)', policy)
+                if mutation == "missing-durable-intent":
+                    factory = Path(mapping[str(self.source / "routervpn/desktoppt/external_physical_windows.go")]).read_text()
+                    self.assertIn("if false && commit != nil {", factory)
+                for relative, raw in self.original.items():
+                    self.assertEqual((self.source / relative).read_bytes(), raw)
+        with self.assertRaisesRegex(ValueError, "Unknown ordinary Hysteria2"):
+            GATE.external_overlay(self.source, self.observer, "permit-whole-host")
+
+    def test_changed_durable_constructor_is_rejected(self):
+        path = self.source / "routervpn/mobiletor/desktop_socket_windows_commit.go"
+        path.write_bytes(path.read_bytes().replace(b"predecessor, nil, barrier)", b"predecessor, foreignScope, barrier)"))
+        with self.assertRaisesRegex(ValueError, "exact production boundary"):
+            GATE.external_overlay(self.source, self.observer)
+
+    def test_external_native_fixture_cannot_lose_its_compile_time_tag(self):
+        root = self.workspace / "repository"
+        mobile = root / "mobile/desktop"
+        mobile.mkdir(parents=True)
+        for name in ("node_peer_windows_test.go.tmpl", "external_box_windows_hysteria2_test.go.tmpl"):
+            (mobile / name).write_bytes((ROOT / "mobile/desktop" / name).read_bytes())
+        source = mobile / "external_box_windows_hysteria2_test.go.tmpl"
+        original = source.read_bytes()
+        with patch.object(GATE, "ROOT", root), patch.object(GATE.NODE, "checked_sources", return_value=(self.source, {})):
+            _, before = GATE.checked_sources(self.source)
+            self.assertIn("external_hysteria2", before)
+            source.write_bytes(original.replace(GATE.TAG, b"//go:build windows\n", 1))
+            with self.assertRaisesRegex(ValueError, "explicit native test scope"):
+                GATE.checked_sources(self.source)
+            source.write_bytes(original)
+            self.assertEqual(GATE.checked_sources(self.source)[1], before)
+
+    def test_required_root_and_each_real_leaf_are_mandatory(self):
+        root = "TestRouterVPNDesktopExternalWindowsHysteria2WFP"
+        expected = (root, *(root + "/" + leaf for leaf in (
+            "on-connect", "always", "successor-and-original-restore", "reject/password", "reject/trust",
+            "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused")))
+        self.assertEqual(GATE.EXTERNAL_HY2_CASES, expected)
+        complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in expected)
+        with contextlib.redirect_stdout(io.StringIO()):
+            GATE.report_external_hysteria2(0, complete)
+        bad = [(1, complete), (0, complete + "--- SKIP: hidden (0.01s)\n"),
+               (0, complete + "WARNING: DATA RACE\n")]
+        bad += [(0, complete.replace("--- PASS: " + case + " (0.01s)\n", "")) for case in expected]
+        for status, output in bad:
+            with self.subTest(status=status, output=output), contextlib.redirect_stdout(io.StringIO()):
+                with self.assertRaisesRegex(ValueError, "required native result"):
+                    GATE.report_external_hysteria2(status, output)
+
+    def dispatch(self, fault=None):
+        calls = []
+        complete = "".join("--- PASS: " + case + " (0.01s)\n" for case in GATE.EXTERNAL_HY2_CASES)
+        witnesses = {"ordinary-udp-deny": "ordinary token bypassed actual external WFP UDP deny: independent peer marker",
+                     "missing-durable-intent": "actual HY2 source skipped its durable WFP intent"}
+
+        def run(command, **kwargs):
+            command = tuple(str(value) for value in command)
+            calls.append((command, kwargs["timeout"]))
+            self.assertEqual(kwargs["cwd"], self.source)
+            self.assertEqual(kwargs["env"], {"captured": "environment"})
+            if command[0] == "owned-go":
+                self.assertIn("-race", command)
+                self.assertIn("-mod=readonly", command)
+                self.assertEqual(command[-1], ".")
+                self.assertEqual(kwargs["timeout"], 600)
+                selected = next(value.removeprefix("-overlay=") for value in command if value.startswith("-overlay="))
+                self.assertEqual(len(json.loads(Path(selected).read_text())["Replace"]),
+                                 6 if Path(selected).parent.name == "external-hysteria2-missing-durable-intent" else 5)
+                binary = Path(command[command.index("-o") + 1])
+                binary.write_bytes(b"explicit native compiler boundary")
+                return 0, ""
+            binary = Path(command[0])
+            if binary.parent.name == "external-hysteria2":
+                self.assertIn("-test.run=^" + GATE.EXTERNAL_HY2_ROOT + "$", command)
+                self.assertIn("-test.timeout=180s", command)
+                self.assertEqual(kwargs["timeout"], 195)
+                if fault == "image":
+                    binary.write_bytes(b"replaced native image")
+                if fault == "leaf":
+                    return 0, complete.replace("--- PASS: " + GATE.EXTERNAL_HY2_ROOT + "/reject/trust (0.01s)\n", "")
+                return 0, complete
+            label = binary.parent.name.removeprefix("external-hysteria2-")
+            self.assertIn("-test.run=^" + GATE.EXTERNAL_HY2_ROOT + "$/^always$", command)
+            self.assertIn("-test.timeout=60s", command)
+            self.assertEqual(kwargs["timeout"], 75)
+            output = "--- FAIL: " + GATE.EXTERNAL_HY2_ROOT + "/always (0.01s)\n" + witnesses[label] + "\n"
+            if fault == label:
+                return 0, output
+            if fault == "timeout":
+                return 1, output + "panic: test timed out\n"
+            return 1, output
+
+        build = ["owned-go", "test", "-c", "-mod=readonly", "-race", "-tags=windows,routervpn_windows_node_composition"]
+        with patch.object(GATE.BOOT.IDENTITY, "run", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
+            GATE.execute_external_hysteria2(self.source, self.workspace, build, {"captured": "environment"})
+        return calls
+
+    def test_real_dispatch_keeps_binary_identity_all_cases_and_both_compiled_controls(self):
+        calls = self.dispatch()
+        self.assertEqual(len(calls), 6)
+        self.assertEqual([timeout for _, timeout in calls], [600, 195, 600, 75, 600, 75])
+
+    def test_native_dispatch_rejects_missing_result_replaced_image_or_successful_mutants(self):
+        for fault, message in (("leaf", "required native result"), ("image", "native executable changed"),
+                               ("ordinary-udp-deny", "exact defect"), ("missing-durable-intent", "exact defect"),
+                               ("timeout", "exact defect")):
+            with self.subTest(fault=fault):
+                # Each dispatch owns a fresh temporary fixture; an earlier
+                # failed child never supplies the next candidate's image.
+                previous = self.workspace
+                self.workspace = previous / fault
+                self.workspace.mkdir()
+                try:
+                    with self.assertRaisesRegex(ValueError, message):
+                        self.dispatch(fault)
+                finally:
+                    self.workspace = previous
 
 
 if __name__ == "__main__":

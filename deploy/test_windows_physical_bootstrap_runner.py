@@ -79,6 +79,10 @@ class ExternalRetainedJournalInventory(unittest.TestCase):
             names = set()
             for path in (ROOT / "mobile/desktop").glob("*.go.tmpl"):
                 names.update(re.findall(r"^func (Test\w+)\(", path.read_text(), re.MULTILINE))
+            # A parent/root PASS never substitutes for its exact native child
+            # verdicts at this explicit process boundary.
+            names.update(EXTERNAL.HYSTERIA2_BOX_CASES)
+            names.update(EXTERNAL.HYSTERIA2_FACTORY_CASES)
 
             def run(command, **kwargs):
                 calls.append(tuple(str(value) for value in command))
@@ -114,8 +118,36 @@ class ExternalRetainedJournalInventory(unittest.TestCase):
             self.assertEqual(set(observed), {"command", "box", "factory"})
             self.assertTrue(set(EXTERNAL.JOURNAL_COMMAND_CASES).issubset(observed["command"]))
             self.assertTrue(set(EXTERNAL.JOURNAL_FACTORY_CASES).issubset(observed["factory"]))
+            self.assertIn(EXTERNAL.HYSTERIA2_COMMAND, observed["command"])
+            self.assertTrue(set(EXTERNAL.HYSTERIA2_BOX_CASES).issubset(observed["box"]))
+            self.assertTrue(set(EXTERNAL.HYSTERIA2_FACTORY_CASES).issubset(observed["factory"]))
             self.assertEqual(len(calls), 6)
 
+
+
+class ExternalHysteria2Inventory(unittest.TestCase):
+    def test_actual_encrypted_udp_mtu_latency_and_negative_leaves_are_required(self):
+        self.assertEqual(EXTERNAL.HYSTERIA2_COMMAND,
+                         "TestRouterVPNDesktopExternalPhysicalCommandHysteria2SupportedTargets")
+        expected_box = tuple("TestRouterVPNDesktopExternalPhysicalIntegration/" + leaf for leaf in (
+            "hysteria2/proof-and-mtu", "hysteria2/reject/dns", "hysteria2/reject/exit", "hysteria2/reject/credential",
+            "hysteria2/reject/tls-name", "hysteria2/reject/tls-root", "hysteria2/reject/lower-denied",
+            "hysteria2/reject/peer-tls-name", "hysteria2/reject/truncated", "hysteria2/cancelled-proof",
+            "latency50/hysteria2", "latency50/hysteria2/source", "latency50/hysteria2/capture",
+            "latency50/hysteria2/session", "latency50/hysteria2/current"))
+        expected_factory = ("TestRouterVPNExternalPhysicalStartupSocketPhase/hysteria2",
+                            "TestRouterVPNExternalPhysicalActualBytesAndCapturedTuple/hysteria2-udp")
+        self.assertEqual(EXTERNAL.HYSTERIA2_BOX_CASES, expected_box)
+        self.assertEqual(EXTERNAL.HYSTERIA2_FACTORY_CASES, expected_factory)
+        for required in ((EXTERNAL.HYSTERIA2_COMMAND,), expected_box, expected_factory):
+            output = "".join("--- PASS: " + case + " (0.01s)\n" for case in required)
+            with contextlib.redirect_stdout(io.StringIO()):
+                EXTERNAL.report_baseline("hysteria2", required, 0, output)
+            for case in required:
+                with self.subTest(missing=case), contextlib.redirect_stdout(io.StringIO()):
+                    without = output.replace("--- PASS: " + case + " (0.01s)\n", "")
+                    with self.assertRaisesRegex(ValueError, "did not prove its native composition"):
+                        EXTERNAL.report_baseline("hysteria2", required, 0, without)
 
 
 class BootstrapOverlayBoundary(unittest.TestCase):

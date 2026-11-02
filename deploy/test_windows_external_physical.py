@@ -25,6 +25,15 @@ BOOT = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(BOOT)
 IDENTITY = BOOT.IDENTITY
 
+HYSTERIA2_COMMAND = "TestRouterVPNDesktopExternalPhysicalCommandHysteria2SupportedTargets"
+HYSTERIA2_BOX_CASES = tuple("TestRouterVPNDesktopExternalPhysicalIntegration/" + case for case in (
+    "hysteria2/proof-and-mtu", "hysteria2/reject/dns", "hysteria2/reject/exit", "hysteria2/reject/credential",
+    "hysteria2/reject/tls-name", "hysteria2/reject/tls-root", "hysteria2/reject/lower-denied",
+    "hysteria2/reject/peer-tls-name", "hysteria2/reject/truncated", "hysteria2/cancelled-proof",
+    "latency50/hysteria2", "latency50/hysteria2/source", "latency50/hysteria2/capture",
+    "latency50/hysteria2/session", "latency50/hysteria2/current"))
+HYSTERIA2_FACTORY_CASES = ("TestRouterVPNExternalPhysicalStartupSocketPhase/hysteria2",
+    "TestRouterVPNExternalPhysicalActualBytesAndCapturedTuple/hysteria2-udp")
 JOURNAL_COMMAND_CASES = tuple("TestRouterVPNDesktopExternalPhysicalCommandJournal" + name for name in (
     "BeforePrivateInputs", "PublicRequiresCompleteCapture", "WindowsHasNoFileFallback", "RetainedPipeline",
     "PartialRetirementRequiresJoin", "AdmissionCloseJoinsCallback", "TransferInput", "RetirementReceipt",
@@ -148,16 +157,16 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          tuple("TestRouterVPNDesktopExternalPhysicalCommand" + name for name in
              ("RequiresExactDerivedInputs", "SeparatesProofAndMailboxIdentity", "RejectsRelabeledNetworkProof", "UsesActualPreparedNativeFactory",
               "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionCannotSkipBarrier",
-              "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "AdmissionCleanupFailureCannotAcknowledgeStop")) + JOURNAL_COMMAND_CASES),
+              "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "AdmissionCleanupFailureCannotAcknowledgeStop")) + JOURNAL_COMMAND_CASES + (HYSTERIA2_COMMAND,)),
         ("box", ".", "^TestRouterVPNDesktopExternalPhysical",
          tuple("TestRouterVPNDesktopExternalPhysical" + name for name in
              ("BoxRejectsChangedDerivedGraph", "BoxRequiresPreparedStartedOwner", "BoxRetainsExactPolicyAndDerivedIdentity",
-              "BoxRejectsTUNReadbackAndBinding", "BoxCancelAndNetworkResetRetireExactOwner", "BoxMTUReadbackKeepsGuardAndDerivedPolicy", "Integration"))),
-        ("factory", "./routervpn/desktoppt", "^TestRouterVPNExternalPhysical(Windows|Admission|Journal|Retirement)",
+              "BoxRejectsTUNReadbackAndBinding", "BoxCancelAndNetworkResetRetireExactOwner", "BoxMTUReadbackKeepsGuardAndDerivedPolicy", "Integration")) + HYSTERIA2_BOX_CASES),
+        ("factory", "./routervpn/desktoppt", "^TestRouterVPNExternalPhysical(Windows|Admission|Journal|Retirement|StartupSocketPhase|ActualBytesAndCapturedTuple)",
          ("TestRouterVPNExternalPhysicalWindowsCapturesPolicyAndRetainsLateOwner",
           "TestRouterVPNExternalPhysicalWindowsAdmissionRetiresFailures",
           "TestRouterVPNExternalPhysicalWindowsAdmissionCloseJoinsEnteredCallback",
-          "TestRouterVPNExternalPhysicalAdmissionRetainsExactPolicy") + JOURNAL_FACTORY_CASES),
+          "TestRouterVPNExternalPhysicalAdmissionRetainsExactPolicy") + JOURNAL_FACTORY_CASES + HYSTERIA2_FACTORY_CASES),
     )
     with tempfile.TemporaryDirectory(prefix="routervpn-windows-external-") as directory:
         for name, package, selection, required in suites:
@@ -193,7 +202,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             print("Rejected actual ordinary native production mutant: " + label, flush=True)
     if checked_sources(source)[1] != before:
         raise ValueError("Ordinary Windows composition source changed during execution")
-    print("Exact ordinary Windows command, generated factory, Box, HTTP/HTTPS CONNECT and Shadowsocks "
+    print("Exact ordinary Windows command, generated factory, Box, HTTP/HTTPS CONNECT, Shadowsocks and Hysteria2 "
           "selected-DNS/exit proof and rejection suites passed. OS permits/TUN are explicit fixtures; "
           "the inherited journal and retirement controls passed with explicit models; actual native journal/WFP/TUN and device acceptance remain separate.", flush=True)
 

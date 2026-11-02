@@ -52,9 +52,9 @@ func TestDesktopExternalPolicyPreservesExactGraphAndSelectedPolicy(t *testing.T)
 					for _, lan := range []bool{true, false} {
 						t.Run(strings.Join([]string{protocol, target, kill, ipv6, map[bool]string{true: "lan", false: "no-lan"}[lan]}, "/"), func(t *testing.T) {
 							original := desktopExternalPolicyFixture(t, protocol, kill, ipv6, lan)
-							if protocol == "hysteria2" && target != "linux" {
+							if protocol == "hysteria2" && target == "darwin" {
 								if _, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); err == nil {
-									t.Fatal("Linux connected UDP broadened another desktop host's Hysteria2 admission")
+									t.Fatal("connected UDP broadened unimplemented Darwin Hysteria2 admission")
 								}
 								return
 							}
@@ -116,7 +116,7 @@ func TestDesktopExternalPolicyPreservesExactGraphAndSelectedPolicy(t *testing.T)
 			}
 		}
 	}
-	if count != 104 {
+	if count != 112 {
 		t.Fatal("missing complete direct proxy/device/target combinations", count)
 	}
 }
@@ -309,6 +309,9 @@ func TestDesktopExternalPolicyDoesNotBroadenInitialNativeScope(t *testing.T) {
 	for _, protocol := range []string{"wireguard", "hysteria2", "amneziawg"} {
 		original := desktopExternalPolicyFixture(t, protocol, "always", "on", true)
 		for _, target := range []string{"windows", "darwin"} {
+			if protocol == "hysteria2" && target == "windows" {
+				continue // This exact direct UDP owner is independently exercised above.
+			}
 			if _, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); err == nil {
 				t.Fatal("unintegrated outer transport acquired a claimed native physical implementation", protocol, target)
 			}
@@ -357,8 +360,14 @@ func desktopExternalPolicyKeepsUnsupportedSelectionGuards(t *testing.T, protocol
 			t.Fatal("negative case must retain a valid complete ordinary policy", err)
 		}
 		before := original.Config()
-		if derived, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, "linux"); err == nil || derived != nil || original.Config() != before {
-			t.Fatal("unsupported selection acquired or changed a Linux physical owner", protocol)
+		targets := []string{"linux"}
+		if protocol == "hysteria2" {
+			targets = append(targets, "windows")
+		}
+		for _, target := range targets {
+			if derived, err := NewDesktopExternalPolicy(original, desktopExternalTestSession, target); err == nil || derived != nil || original.Config() != before {
+				t.Fatal("unsupported selection acquired or changed a physical owner", protocol, target)
+			}
 		}
 	}
 	t.Run("off", func(t *testing.T) {

@@ -28,6 +28,10 @@ REQUIRED = tuple("TestRouterVPNDesktopNodeWindowsWFP" + suffix for suffix in (
     "LayerTraffic", "LayerSuccession", "LayerWrongCredential", "XrayTraffic", "XraySuccession", "XrayWrongCredential",
     "NaiveTraffic", "NaiveSuccession", "NaiveWrongCredential", "CompositeTraffic", "CompositeSuccession", "CompositeWrongCredential",
     "LoopbackIPC"))
+EXTERNAL_HY2_ROOT = "TestRouterVPNDesktopExternalWindowsHysteria2WFP"
+EXTERNAL_HY2_CASES = (EXTERNAL_HY2_ROOT, *(EXTERNAL_HY2_ROOT + "/" + leaf for leaf in (
+    "on-connect", "always", "successor-and-original-restore", "reject/password", "reject/trust",
+    "reject/dns", "reject/exit", "cancelled-proof", "foreign-predecessor", "commit-refused")))
 IPC_CASES = tuple("TestRouterVPNDesktopNodeWindowsWFPLoopbackIPC/" + network
                   for network in ("tcp4", "tcp6", "udp4", "udp6"))
 LOOPBACK_SOURCE = '''\t\tif len(p.fixtureScope) == 0 {
@@ -56,6 +60,10 @@ def checked_sources(source):
     peer = ROOT / "mobile/desktop/node_peer_windows_test.go.tmpl"
     if peer.is_symlink() or not peer.read_bytes().startswith(TAG):
         raise ValueError("Windows Node encrypted peer escaped its native test tag")
+    external = ROOT / "mobile/desktop/external_box_windows_hysteria2_test.go.tmpl"
+    if external.is_symlink() or not external.is_file() or not external.read_bytes().startswith(TAG):
+        raise ValueError("Ordinary Windows Hysteria2 escaped its explicit native test scope")
+    records["external_hysteria2"] = hashlib.sha256(external.read_bytes()).hexdigest()
     records["kernel_runner"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     return source, records
 
@@ -111,6 +119,74 @@ def overlay(source, directory, mutation=None):
     result = directory / "overlay.json"
     result.write_text(json.dumps({"Replace": replacements}, sort_keys=True), encoding="utf-8")
     return result
+
+
+def external_overlay(source, directory, mutation=None):
+    # Keep the existing exact constructor/loopback scoping, then additionally
+    # scope the durable constructor used by the real external journal owner.
+    # No socket, tunnel, proof, TLS or admission operation is replaced.
+    scope_mutation = mutants(source)[2] if mutation == "ordinary-udp-deny" else None
+    if mutation not in (None, "ordinary-udp-deny", "missing-durable-intent"):
+        raise ValueError("Unknown ordinary Hysteria2 native control")
+    path = overlay(source, directory, scope_mutation)
+    mapping = json.loads(path.read_text(encoding="utf-8"))["Replace"]
+    relative = "routervpn/mobiletor/desktop_socket_windows_commit.go"
+    raw = BOOT.IDENTITY.replace_once((source / relative).read_text(encoding="utf-8"),
+        "return newDesktopWindowsSocketPolicySuccessorWithBarrier(ctx, capture, options, predecessor, nil, barrier)",
+        "return desktopWindowsNodeCompositionWithBarrier(ctx, capture, options, predecessor, barrier)")
+    copied = directory / "external-durable-scope.go"
+    copied.write_bytes(raw.encode("utf-8"))
+    mapping[str(source / relative)] = str(copied)
+    if mutation == "missing-durable-intent":
+        relative = "routervpn/desktoppt/external_physical_windows.go"
+        raw = BOOT.IDENTITY.replace_once((source / relative).read_text(encoding="utf-8"),
+            "if commit != nil {", "if false && commit != nil {")
+        copied = directory / "external-missing-intent.go"
+        copied.write_bytes(raw.encode("utf-8"))
+        mapping[str(source / relative)] = str(copied)
+    path.write_text(json.dumps({"Replace": mapping}, sort_keys=True), encoding="utf-8")
+    return path
+
+
+def report_external_hysteria2(status, output):
+    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    if status or any("--- PASS: " + case + " (" not in output for case in EXTERNAL_HY2_CASES) or \
+            any(value in output for value in ("--- SKIP:", "DATA RACE")):
+        raise ValueError("Actual ordinary Windows Hysteria2 omitted its required native result")
+
+
+def execute_external_hysteria2(source, workspace, build, captured):
+    directory = workspace / "external-hysteria2"
+    directory.mkdir()
+    selected = external_overlay(source, directory)
+    binary = directory / "external-hysteria2.test.exe"
+    status, output = BOOT.IDENTITY.run([*build, "-overlay=" + str(selected), "-o", binary, "."],
+        cwd=source, env=captured, timeout=600)
+    if status:
+        raise ValueError("Actual ordinary Windows Hysteria2 compilation failed:\n" + output[-32768:])
+    digest = hashlib.sha256(binary.read_bytes()).hexdigest()
+    status, output = BOOT.IDENTITY.run([binary, "-test.run=^" + EXTERNAL_HY2_ROOT + "$", "-test.count=1", "-test.timeout=180s", "-test.v"],
+        cwd=source, env=captured, timeout=195)
+    report_external_hysteria2(status, output)
+    if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
+        raise ValueError("Actual ordinary Hysteria2 native executable changed")
+    for label, leaf, witness in (
+            ("ordinary-udp-deny", "always", "ordinary token bypassed actual external WFP UDP deny: independent peer marker"),
+            ("missing-durable-intent", "always", "actual HY2 source skipped its durable WFP intent")):
+        changed = workspace / ("external-hysteria2-" + label)
+        changed.mkdir()
+        selected = external_overlay(source, changed, label)
+        binary = changed / "external-hysteria2.test.exe"
+        status, output = BOOT.IDENTITY.run([*build, "-overlay=" + str(selected), "-o", binary, "."],
+            cwd=source, env=captured, timeout=600)
+        if status:
+            raise ValueError("Actual ordinary Hysteria2 control did not compile: " + label + "\n" + output[-16384:])
+        status, output = BOOT.IDENTITY.run([binary, "-test.run=^" + EXTERNAL_HY2_ROOT + "$/^" + leaf + "$", "-test.count=1", "-test.timeout=60s", "-test.v"],
+            cwd=source, env=captured, timeout=75)
+        if status == 0 or "--- FAIL: " + EXTERNAL_HY2_ROOT + "/" + leaf + " (" not in output or witness not in output or \
+                any(value in output for value in ("--- SKIP:", "DATA RACE", "panic: test timed out")):
+            raise ValueError("Actual ordinary Hysteria2 control missed its exact defect: " + label + "\n" + output[-16384:])
+        print("Rejected actual ordinary Hysteria2 native control: " + label, flush=True)
 
 
 def mutants(source):
@@ -218,6 +294,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
                 raise ValueError("Actual WFP composite omitted an original branch or shared-layer credential negative: " + case)
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("Actual WFP Node executable changed during its retained test")
+        execute_external_hysteria2(source, workspace, build, captured)
         for mutation in mutants(source):
             name, relative, test, witness, raw = mutation
             candidate = workspace / name
@@ -240,7 +317,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         NODE.verify_naive_library(naive_library)
     if checked_sources(source)[1] != before:
         raise ValueError("WFP Node source changed during actual native execution")
-    print("Actual Windows BFE, isolated TCP/UDP grants with exact permitted peers, WG/AWG/Shadowsocks/Hysteria2/REALITY Vision/PQ/XHTTP/Naive H2/H3/split/raw-MAX AES/XOR encrypted IPv4/IPv6 payloads, fresh selected DNS, exact cross-family forward/reverse native succession and wrong-key/ordinary-token controls passed. TUN, node identity proof, host adoption and device acceptance remain separate.", flush=True)
+    print("Actual Windows BFE, isolated TCP/UDP grants with exact permitted peers, WG/AWG/Shadowsocks/Hysteria2/REALITY Vision/PQ/XHTTP/Naive H2/H3/split/raw-MAX AES/XOR encrypted IPv4/IPv6 payloads, fresh selected DNS, exact cross-family forward/reverse native succession and wrong-key/ordinary-token controls passed. TUN routing, node identity proof, inherited controller adoption and device acceptance remain separate. Ordinary Hysteria2 also passed actual scoped WFP/TUN identity, encrypted DNS/public proof, renewal and exact retained succession with explicit journal-storage and packet-pump boundaries.", flush=True)
 
 
 if __name__ == "__main__":

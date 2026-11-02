@@ -1263,7 +1263,7 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	var remote netip.AddrPort
 	var err error
 	if desktopExternalIntegrationUDP(protocol) {
-		if runtime.GOOS != "linux" {
+		if runtime.GOOS != "linux" && !(runtime.GOOS == "windows" && protocol == "hysteria2") {
 			t.Fatal("direct UDP family has no admitted physical owner on this target")
 		}
 		packet, err = net.ListenPacket("udp4", net.JoinHostPort(address.String(), "0"))
@@ -1615,8 +1615,11 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 	t.Run("delayed-accept-retains-prior-grant", desktopExternalIntegrationDelayedAccept)
 	desktopExternalLatencyIntegration(t, ca)
 	protocols := []string{"http-connect", "https-connect", "shadowsocks"}
+	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
+		protocols = append(protocols, "hysteria2")
+	}
 	if runtime.GOOS == "linux" {
-		protocols = append(protocols, "hysteria2", "wireguard", "awg2-fast", "awg2-strong", "socks5")
+		protocols = append(protocols, "wireguard", "awg2-fast", "awg2-strong", "socks5")
 	}
 	for _, protocol := range protocols {
 		t.Run(protocol+"/proof-and-mtu", func(t *testing.T) {
@@ -1849,8 +1852,12 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 			t.Fatal("cancelled real TLS proof did not join")
 		}
 	})
-	if runtime.GOOS == "linux" {
-		for _, protocol := range []string{"hysteria2", "wireguard", "awg2-fast", "awg2-strong"} {
+	if runtime.GOOS == "linux" || runtime.GOOS == "windows" {
+		protocols := []string{"hysteria2"}
+		if runtime.GOOS == "linux" {
+			protocols = append(protocols, "wireguard", "awg2-fast", "awg2-strong")
+		}
+		for _, protocol := range protocols {
 			t.Run(protocol+"/cancelled-proof", func(t *testing.T) {
 				f := newDesktopExternalIntegrationFixture(t, ca, protocol, "held-proof")
 				result := make(chan error, 1)

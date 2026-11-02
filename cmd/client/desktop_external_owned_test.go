@@ -104,7 +104,7 @@ func newDesktopWindowsExternalFixture(t *testing.T, policy string) *desktopWindo
 		k.locked = true
 		return &desktopWindowsExternalRelease{f: f, target: target, barrier: barrier}, nil
 	}
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect"} {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
 		profile, _ := desktopExternalNativeFixture(t, protocol)
 		profile.ID = "external-" + protocol
 		profile.Name = protocol
@@ -487,7 +487,7 @@ func (f *desktopWindowsExternalFixture) connect(t *testing.T, protocol string) *
 
 func TestDesktopWindowsExternalPublicConnectAndDisconnect(t *testing.T) {
 	for _, policy := range []string{"on-connect", "always"} {
-		for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect"} {
+		for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
 			t.Run(policy+"/"+protocol, func(t *testing.T) {
 				synctest.Test(t, func(t *testing.T) {
 					f := newDesktopWindowsExternalFixture(t, policy)
@@ -708,7 +708,7 @@ func TestDesktopWindowsExternalStagesBeforeStoppingPrevious(t *testing.T) {
 }
 
 func TestDesktopWindowsExternalPolicyFamiliesStayDistinct(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect"} {
+	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2"} {
 		l := desktopExternalPhysicalLaunchFixture(t, protocol, "always", "off", false)
 		if err := prepareDesktopExternalPhysical(l, "windows"); err != nil {
 			t.Fatal(err)
@@ -858,7 +858,7 @@ func TestDesktopWindowsExternalUnsupportedGraphPreservesPrevious(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer finish()
-		for _, change := range []string{"server", "compare", "start-layer", "entry", "hysteria2"} {
+		for _, change := range []string{"server", "compare", "start-layer", "entry", "wireguard"} {
 			profile := cloneRouterProfile(f.profiles["https-connect"])
 			direct := true
 			entry := common.RouterProfile{}
@@ -872,8 +872,8 @@ func TestDesktopWindowsExternalUnsupportedGraphPreservesPrevious(t *testing.T) {
 				profile.KillSwitch, profile.KillSwitchPolicy = true, "always"
 			case "entry":
 				direct, entry = false, f.base.profile
-			case "hysteria2":
-				profile, _ = desktopExternalNativeFixture(t, "hysteria2")
+			case "wireguard":
+				profile, _ = desktopExternalNativeFixture(t, "wireguard")
 				profile.KillSwitch, profile.KillSwitchPolicy = true, "always"
 			}
 			exit, err := standardExitFromExternalProfile(profile)
@@ -1010,13 +1010,18 @@ func TestDesktopWindowsExternalDNSUsesOnlyOriginalNativeProof(t *testing.T) {
 }
 
 func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
-	for _, direction := range []string{"router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller"} {
+	for _, direction := range []string{"router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller", "router-hysteria2-router", "hysteria2-router-hysteria2"} {
 		t.Run(direction, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				f := newDesktopWindowsExternalFixture(t, "always")
 				a := f.base.a
+				protocol := "https-connect"
+				if strings.Contains(direction, "hysteria2") {
+					protocol = "hysteria2"
+				}
+				routerFirst := direction == "router-external-router" || direction == "router-hysteria2-router"
 				var original *desktopNodeLaunch
-				if direction == "router-external-router" {
+				if routerFirst {
 					response := httptest.NewRecorder()
 					a.connect(response, httptest.NewRequest(http.MethodPost, "/api/connect", strings.NewReader(`{"mode":"wg"}`)))
 					if response.Code != http.StatusOK {
@@ -1024,7 +1029,7 @@ func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
 					}
 					original = f.base.children[0].launch
 				} else {
-					original = f.connect(t, "https-connect")
+					original = f.connect(t, protocol)
 				}
 				for deadline := time.Now().Add(time.Second); ; {
 					if _, _, err := captureSpeedLabIdentity(a); err == nil {
@@ -1047,8 +1052,8 @@ func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				request := speedLabRequest{Scope: "temporary", DurationMode: "custom", MinSeconds: 1, MaxSeconds: 1}
-				if direction == "router-external-router" {
-					request.Topology, request.NodeID, request.Execution = "external", f.profiles["https-connect"].ID, "local"
+				if routerFirst {
+					request.Topology, request.NodeID, request.Execution = "external", f.profiles[protocol].ID, "local"
 					f.onAdmit = func(child *desktopWindowsExternalChild) error {
 						if child.launch.external != nil {
 							cancel()
@@ -1093,13 +1098,13 @@ func TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost(t *testing.T) {
 				if restored.attempt.transfer.Predecessor == nil || *restored.attempt.transfer.Predecessor != trial.target || restored.launch.command == original.command || restored.Alive() != nil {
 					t.Fatal("restoration reused an old predecessor or child")
 				}
-				if direction == "router-external-router" {
+				if routerFirst {
 					if restored.launch.ownedNode == nil || restored.launch.external != nil || restored.launch.ownedNode.host != original.ownedNode.host || !bytes.Equal(source, restored.launch.ownedNode.source) {
 						t.Fatal("Router restoration acquired external proof identity or reselected its host/source")
 					}
 				} else {
 					if restored.launch.ownedNode != nil || restored.launch.external == nil || restored.launch.external.windowsHost != original.external.windowsHost ||
-						!bytes.Equal(source, restored.launch.external.source) || restored.launch.external.selection != "local" || restored.launch.external.windows.policy.Metadata().Protocol != "https-connect" {
+						!bytes.Equal(source, restored.launch.external.source) || restored.launch.external.selection != "local" || restored.launch.external.windows.policy.Metadata().Protocol != protocol {
 						t.Fatal("ordinary restoration acquired Router proof identity or reselected its host/source/winner")
 					}
 					if mtu, err := captureDesktopMTURestore(restored.launch); err != nil || mtu != 1360 {

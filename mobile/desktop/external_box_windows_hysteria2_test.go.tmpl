@@ -1,0 +1,1068 @@
+//go:build windows && routervpn_windows_node_composition
+
+package box
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	boxTLS "github.com/sagernet/sing-box/common/tls"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	HY "github.com/sagernet/sing-box/protocol/hysteria2"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	HYQUIC "github.com/sagernet/sing-quic/hysteria2"
+	tun "github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
+	SJ "github.com/sagernet/sing/common/json"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// This fixture uses the shipping native external owner, BFE/isolated sockets,
+// encrypted Hysteria2, DNS/TLS proof and exact retained successor. Its observer
+// adds only the actual test AppID to every rule; the copied provider executable
+// is independently outside that scope. The uniquely owned Wintun reader never
+// installs routes, addresses or DNS. Journal storage callbacks and the inbound
+// packet pump remain explicit fixtures; this is not app/device acceptance.
+const desktopExternalWFPLimit = 64 << 10
+const desktopExternalWFPProbePrefix = "routervpn-ordinary-wfp:"
+
+type desktopExternalWFPRequest struct {
+	Schema                                       int    `json:"schema"`
+	Operation                                    string `json:"operation"`
+	Address                                      string `json:"address,omitempty"`
+	Fault                                        string `json:"fault,omitempty"`
+	Certificate, Key, ProxyCertificate, ProxyKey []byte
+	Nonce                                        string `json:"nonce,omitempty"`
+}
+
+type desktopExternalWFPReply struct {
+	Schema                                      int    `json:"schema"`
+	Address                                     string `json:"address"`
+	AppID                                       []byte `json:"app_id"`
+	Nonce                                       string `json:"nonce,omitempty"`
+	Observed                                    int    `json:"observed"`
+	Packets, DNS, UDPDNS, TLS, Public, Attempts int32
+	Closed                                      bool `json:"closed"`
+}
+
+func desktopExternalWFPAddress(t *testing.T) netip.Addr {
+	t.Helper()
+	logger := log.NewNOPFactory().Logger()
+	updates, err := tun.NewNetworkUpdateMonitor(logger)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := updates.Close(); err != nil {
+			t.Error("external physical monitor did not join", err)
+		}
+	}()
+	monitor, err := tun.NewDefaultInterfaceMonitor(updates, logger, tun.DefaultInterfaceMonitorOptions{InterfaceFinder: control.NewDefaultInterfaceFinder()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := monitor.Close(); err != nil {
+			t.Error("external default monitor did not join", err)
+		}
+	}()
+	if err := updates.Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := monitor.Start(); err != nil {
+		t.Fatal(err)
+	}
+	selected := monitor.DefaultInterface()
+	if selected == nil || selected.Flags&net.FlagUp == 0 || selected.Flags&net.FlagLoopback != 0 {
+		t.Fatal("external peer has no actual selected interface")
+	}
+	for _, prefix := range selected.Addresses {
+		if prefix.Addr().Is4() && prefix.Addr().IsPrivate() {
+			return prefix.Addr()
+		}
+	}
+	t.Fatal("external WFP fixture requires the selected private IPv4 interface")
+	return netip.Addr{}
+}
+
+func desktopExternalWFPCertificate(t *testing.T, cert tls.Certificate) ([]byte, []byte) {
+	t.Helper()
+	var chain []byte
+	for _, der := range cert.Certificate {
+		chain = append(chain, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...)
+	}
+	key, err := x509.MarshalPKCS8PrivateKey(cert.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(key)
+	return chain, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key})
+}
+
+type desktopExternalWFPDatagrams struct {
+	net.PacketConn
+	packets  atomic.Int32
+	mu       sync.Mutex
+	observed map[string]int
+}
+
+func (p *desktopExternalWFPDatagrams) ReadFrom(body []byte) (int, net.Addr, error) {
+	for {
+		n, source, err := p.PacketConn.ReadFrom(body)
+		if err != nil {
+			return n, source, err
+		}
+		if bytes.HasPrefix(body[:n], []byte(desktopExternalWFPProbePrefix)) {
+			nonce := string(body[len(desktopExternalWFPProbePrefix):n])
+			p.mu.Lock()
+			_, owned := p.observed[nonce]
+			if owned {
+				p.observed[nonce]++
+			}
+			p.mu.Unlock()
+			if owned {
+				_, _ = p.PacketConn.WriteTo(body[:n], source)
+			}
+			continue
+		}
+		p.packets.Add(1)
+		return n, source, nil
+	}
+}
+
+func desktopExternalWFPExchange(address netip.AddrPort, nonce string) (bool, error) {
+	connection, err := net.DialUDP("udp4", nil, net.UDPAddrFromAddrPort(address))
+	if err != nil {
+		return false, err
+	}
+	defer connection.Close()
+	if err := connection.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		return false, err
+	}
+	body := []byte(desktopExternalWFPProbePrefix + nonce)
+	if n, err := connection.Write(body); err != nil || n != len(body) {
+		return false, errors.Join(err, io.ErrShortWrite)
+	}
+	answer := make([]byte, len(body)+1)
+	n, err := connection.Read(answer)
+	return n == len(body) && bytes.Equal(answer[:n], body), err
+}
+
+func desktopExternalWFPReadRequest(input *bufio.Reader) (desktopExternalWFPRequest, error) {
+	raw, err := input.ReadSlice('\n')
+	if err != nil {
+		return desktopExternalWFPRequest{}, err
+	}
+	if len(raw) > desktopExternalWFPLimit {
+		return desktopExternalWFPRequest{}, errors.New("external peer request exceeded its bound")
+	}
+	var request desktopExternalWFPRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		return request, err
+	}
+	var trailing any
+	if decoder.Decode(&trailing) != io.EOF || request.Schema != 1 {
+		return request, errors.New("external peer request changed its exact schema")
+	}
+	return request, nil
+}
+
+// The provider is a separately retained executable, never a fixture-returned
+// connection or a resolver on the ordinary network. Its actual pinned QUIC
+// service accepts only the selected inner DNS and fixed TLS proof destination.
+func TestRouterVPNDesktopExternalWindowsHysteria2Peer(t *testing.T) {
+	if os.Getenv("ROUTERVPN_EXTERNAL_WFP_PEER") == "" {
+		return
+	}
+	if os.Getenv("ROUTERVPN_EXTERNAL_WFP_PEER") != "1" {
+		t.Fatal("unknown external peer owner")
+	}
+	input := bufio.NewReaderSize(os.Stdin, desktopExternalWFPLimit+1)
+	request, err := desktopExternalWFPReadRequest(input)
+	if err != nil || request.Operation != "start" || request.Address != desktopExternalWFPAddress(t).String() || request.Nonce != "" {
+		t.Fatal("external peer did not receive its exact initial capture", err)
+	}
+	switch request.Fault {
+	case "", "password", "trust", "dns", "exit", "held":
+	default:
+		t.Fatal("unknown external provider fault")
+	}
+	certificate, err := tls.X509KeyPair(request.Certificate, request.Key)
+	if err != nil {
+		t.Fatal("external inner TLS certificate", err)
+	}
+	proxy, err := tls.X509KeyPair(request.ProxyCertificate, request.ProxyKey)
+	if err != nil {
+		t.Fatal("external QUIC TLS certificate", err)
+	}
+	packet, err := net.ListenPacket("udp4", net.JoinHostPort(request.Address, "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := &desktopExternalWFPDatagrams{PacketConn: packet, observed: make(map[string]int)}
+	ctx, cancel := context.WithCancel(context.Background())
+	peer := &desktopExternalIntegrationPeer{packet: observed, protocol: "hysteria2", certificate: certificate, proxyCertificate: proxy,
+		connections: make(map[net.Conn]bool), packetConnections: make(map[N.PacketConn]bool), ctx: ctx, cancel: cancel,
+		badDNS: request.Fault == "dns", badIP: request.Fault == "exit"}
+	if request.Fault == "held" {
+		peer.publicEntered, peer.publicRelease = make(chan struct{}), make(chan struct{})
+	}
+	logger := log.NewNOPFactory().NewLogger("external-wfp-reference")
+	tlsConfig, err := boxTLS.NewServer(ctx, logger, option.InboundTLSOptions{Enabled: true, Certificate: []string{string(request.ProxyCertificate)}, Key: []string{string(request.ProxyKey)}})
+	clear(request.Key)
+	clear(request.ProxyKey)
+	if err != nil {
+		peer.close()
+		t.Fatal(err)
+	}
+	server, err := HYQUIC.NewService[int](HYQUIC.ServiceOptions{Context: ctx, Logger: logger, TLSConfig: tlsConfig, UDPTimeout: 10 * time.Second, Handler: peer})
+	var protocolErr error
+	peer.closeProtocol = func() {
+		if server != nil {
+			protocolErr = server.Close()
+		}
+		protocolErr = errors.Join(protocolErr, tlsConfig.Close())
+	}
+	closed := false
+	closePeer := func() {
+		if !closed {
+			closed = true
+			peer.close()
+		}
+	}
+	defer closePeer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	password := desktopExternalIntegrationPassword
+	if request.Fault == "password" {
+		password += "-wrong"
+	}
+	server.UpdateUsers([]int{1}, []string{password})
+	if err = tlsConfig.Start(); err == nil {
+		err = server.Start(observed)
+	}
+	if err != nil {
+		t.Fatal("actual external QUIC provider startup", err)
+	}
+	appID, err := mobiletor.DesktopWindowsNodeCompositionAppID()
+	if err != nil || len(appID) == 0 {
+		t.Fatal("external peer executable identity", err)
+	}
+	respond := func(nonce string, isClosed bool) {
+		observed.mu.Lock()
+		count := observed.observed[nonce]
+		observed.mu.Unlock()
+		if err := json.NewEncoder(os.Stdout).Encode(desktopExternalWFPReply{Schema: 1, Address: packet.LocalAddr().String(), AppID: appID, Nonce: nonce, Observed: count,
+			Packets: observed.packets.Load(), DNS: peer.dnsQueries.Load(), UDPDNS: peer.udpQueries.Load(), TLS: peer.tlsHandshakes.Load(), Public: peer.publicRequests.Load(), Attempts: peer.publicAttempts.Load(), Closed: isClosed}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	respond("", false)
+	for {
+		command, err := desktopExternalWFPReadRequest(input)
+		if errors.Is(err, io.EOF) {
+			closePeer()
+			if !desktopExternalWFPCloseJoined(protocolErr, 0) {
+				t.Fatal("actual external peer cleanup failed", protocolErr)
+			}
+			respond("", true)
+			return
+		}
+		if err != nil || command.Address != "" || command.Fault != "" || len(command.Certificate)+len(command.Key)+len(command.ProxyCertificate)+len(command.ProxyKey) != 0 {
+			t.Fatal("external peer command escaped captured owner", err)
+		}
+		switch command.Operation {
+		case "stats":
+			if command.Nonce != "" {
+				t.Fatal("statistics acquired a probe identity")
+			}
+		case "release":
+			if peer.publicRelease == nil || command.Nonce != "" {
+				t.Fatal("uncaptured held response release")
+			}
+			select {
+			case <-peer.publicRelease:
+				t.Fatal("duplicate held response release")
+			default:
+				close(peer.publicRelease)
+			}
+		case "arm", "observe", "self":
+			raw, err := hex.DecodeString(command.Nonce)
+			if err != nil || len(raw) != 16 || command.Nonce != hex.EncodeToString(raw) {
+				t.Fatal("external probe nonce changed")
+			}
+			observed.mu.Lock()
+			_, exists := observed.observed[command.Nonce]
+			if command.Operation == "arm" || command.Operation == "self" {
+				if exists {
+					observed.mu.Unlock()
+					t.Fatal("probe nonce was replayed")
+				}
+				observed.observed[command.Nonce] = 0
+			} else if !exists {
+				observed.mu.Unlock()
+				t.Fatal("uncaptured probe observation")
+			}
+			observed.mu.Unlock()
+			if command.Operation == "self" {
+				ok, err := desktopExternalWFPExchange(packet.LocalAddr().(*net.UDPAddr).AddrPort(), command.Nonce)
+				if !ok || err != nil {
+					t.Fatal("actual provider self probe failed", err)
+				}
+			}
+		default:
+			t.Fatal("unsupported external peer command")
+		}
+		respond(command.Nonce, false)
+	}
+}
+
+// Only an exact already-closed leaf is benign. A joined sibling failure,
+// empty unwrapping wrapper, or cyclic/deep error remains a cleanup failure.
+func desktopExternalWFPCloseJoined(err error, depth int) bool {
+	if err == nil {
+		return true
+	}
+	if depth >= 16 {
+		return false
+	}
+	if many, ok := err.(interface{ Unwrap() []error }); ok {
+		children := many.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if child == nil || !desktopExternalWFPCloseJoined(child, depth+1) {
+				return false
+			}
+		}
+		return true
+	}
+	if one, ok := err.(interface{ Unwrap() error }); ok {
+		child := one.Unwrap()
+		return child != nil && desktopExternalWFPCloseJoined(child, depth+1)
+	}
+	return err == net.ErrClosed
+}
+
+type desktopExternalWFPReference struct {
+	command     *exec.Cmd
+	input       io.WriteCloser
+	output      *os.File
+	reader      *bufio.Reader
+	diagnostics bytes.Buffer
+	done        chan error
+	cancel      context.CancelFunc
+	local       netip.Addr
+	remote      netip.AddrPort
+	initial     desktopExternalWFPReply
+	closed      bool
+}
+
+func (p *desktopExternalWFPReference) read() (desktopExternalWFPReply, error) {
+	type response struct {
+		raw []byte
+		err error
+	}
+	done := make(chan response, 1)
+	go func() { raw, err := p.reader.ReadSlice('\n'); done <- response{bytes.Clone(raw), err} }()
+	select {
+	case value := <-done:
+		if value.err != nil || len(value.raw) > desktopExternalWFPLimit {
+			return desktopExternalWFPReply{}, errors.Join(value.err, errors.New("external peer response is not bounded"))
+		}
+		var reply desktopExternalWFPReply
+		decoder := json.NewDecoder(bytes.NewReader(value.raw))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&reply); err != nil {
+			return reply, err
+		}
+		var extra any
+		if decoder.Decode(&extra) != io.EOF {
+			return reply, errors.New("external peer response has trailing data")
+		}
+		return reply, nil
+	case <-time.After(12 * time.Second):
+		p.cancel()
+		_ = p.output.Close()
+		<-done
+		return desktopExternalWFPReply{}, errors.New("external peer acknowledgement did not join")
+	}
+}
+
+func (p *desktopExternalWFPReference) call(t *testing.T, operation, nonce string) desktopExternalWFPReply {
+	t.Helper()
+	if p.closed {
+		t.Fatal("retired external provider command")
+	}
+	if err := json.NewEncoder(p.input).Encode(desktopExternalWFPRequest{Schema: 1, Operation: operation, Nonce: nonce}); err != nil {
+		t.Fatal(err)
+	}
+	reply, err := p.read()
+	if err != nil || reply.Schema != 1 || reply.Address != p.remote.String() || !bytes.Equal(reply.AppID, p.initial.AppID) || reply.Nonce != nonce || reply.Closed {
+		t.Fatal("external peer acknowledgement changed owner", err)
+	}
+	return reply
+}
+
+func (p *desktopExternalWFPReference) close() error {
+	if p.closed {
+		return nil
+	}
+	p.closed = true
+	failure := p.input.Close()
+	reply, err := p.read()
+	if err != nil || !reply.Closed || reply.Address != p.remote.String() || !bytes.Equal(reply.AppID, p.initial.AppID) {
+		failure = errors.Join(failure, err, errors.New("external provider did not acknowledge joined cleanup"))
+	}
+	select {
+	case err := <-p.done:
+		failure = errors.Join(failure, err)
+	case <-time.After(12 * time.Second):
+		p.cancel()
+		failure = errors.Join(failure, <-p.done, errors.New("external provider process did not join"))
+	}
+	failure = errors.Join(failure, p.output.Close())
+	p.cancel()
+	return failure
+}
+
+func desktopExternalWFPStartReference(t *testing.T, ca *desktopExternalIntegrationCA, fault string) *desktopExternalWFPReference {
+	t.Helper()
+	actual, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(actual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	copyPath := filepath.Join(t.TempDir(), "retained-external-provider.test.exe")
+	if err := os.WriteFile(copyPath, raw, 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	command := exec.CommandContext(ctx, copyPath, "-test.run=^TestRouterVPNDesktopExternalWindowsHysteria2Peer$", "-test.count=1", "-test.timeout=85s")
+	command.Env = append(os.Environ(), "ROUTERVPN_EXTERNAL_WFP_PEER=1")
+	input, err := command.StdinPipe()
+	if err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	output, childOutput, err := os.Pipe()
+	if err != nil {
+		_ = input.Close()
+		cancel()
+		t.Fatal(err)
+	}
+	p := &desktopExternalWFPReference{command: command, input: input, output: output, reader: bufio.NewReaderSize(output, desktopExternalWFPLimit+1), done: make(chan error, 1), cancel: cancel, local: desktopExternalWFPAddress(t)}
+	command.Stdout, command.Stderr = childOutput, &p.diagnostics
+	if err := command.Start(); err != nil {
+		_ = input.Close()
+		_ = output.Close()
+		_ = childOutput.Close()
+		cancel()
+		t.Fatal(err)
+	}
+	_ = childOutput.Close()
+	go func() { p.done <- command.Wait() }()
+	t.Cleanup(func() {
+		if err := p.close(); err != nil {
+			t.Error("external provider cleanup", err, p.diagnostics.String())
+		}
+	})
+	public, key := desktopExternalWFPCertificate(t, ca.certificate(t, true))
+	proxy, proxyKey := desktopExternalWFPCertificate(t, ca.certificate(t, true))
+	if fault == "trust" {
+		proxy, proxyKey = desktopExternalWFPCertificate(t, newDesktopExternalIntegrationCA(t).certificate(t, true))
+	}
+	request := desktopExternalWFPRequest{Schema: 1, Operation: "start", Address: p.local.String(), Fault: fault, Certificate: public, Key: key, ProxyCertificate: proxy, ProxyKey: proxyKey}
+	encoded, err := json.Marshal(request)
+	if err != nil || len(encoded)+1 > desktopExternalWFPLimit {
+		t.Fatal("external provider initial capture exceeded bound", err)
+	}
+	if _, err = input.Write(append(encoded, '\n')); err != nil {
+		t.Fatal(err)
+	}
+	clear(key)
+	clear(proxyKey)
+	clear(encoded)
+	p.initial, err = p.read()
+	p.remote, _ = netip.ParseAddrPort(p.initial.Address)
+	scope, scopeErr := mobiletor.DesktopWindowsNodeCompositionAppID()
+	if err != nil || scopeErr != nil || p.initial.Schema != 1 || p.remote.Addr() != p.local || p.remote.Port() == 0 || len(p.initial.AppID) == 0 || bytes.Equal(scope, p.initial.AppID) || p.initial.Packets != 0 || p.initial.DNS != 0 || p.initial.Public != 0 || p.initial.Closed {
+		t.Fatal("external provider has no separate actual captured executable", err, scopeErr)
+	}
+	return p
+}
+
+func desktopExternalWFPNonce(t *testing.T) string {
+	t.Helper()
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		t.Fatal(err)
+	}
+	return hex.EncodeToString(raw[:])
+}
+
+func desktopExternalWFPRequireBlocked(t *testing.T, p *desktopExternalWFPReference) {
+	t.Helper()
+	if p.call(t, "self", desktopExternalWFPNonce(t)).Observed != 1 {
+		t.Fatal("separate external provider did not prove actual UDP reachability")
+	}
+	nonce := desktopExternalWFPNonce(t)
+	if p.call(t, "arm", nonce).Observed != 0 {
+		t.Fatal("fresh external probe already observed")
+	}
+	echo, err := desktopExternalWFPExchange(p.remote, nonce)
+	if p.call(t, "observe", nonce).Observed != 0 || echo {
+		t.Fatal("ordinary token bypassed actual external WFP UDP deny: independent peer marker")
+	}
+	var timeout net.Error
+	if !errors.Is(err, syscall.Errno(10013)) && !(errors.As(err, &timeout) && timeout.Timeout()) {
+		t.Fatal("ordinary UDP denial lacked actual bounded result", err)
+	}
+	if p.call(t, "self", desktopExternalWFPNonce(t)).Observed != 1 || p.call(t, "observe", nonce).Observed != 0 {
+		t.Fatal("denied external marker arrived after independently live provider readback")
+	}
+}
+
+// The real Wintun handle supplies identity to the unchanged BFE BindTunnel.
+// Only packet pumping and route/address/DNS installation are omitted. MTU is
+// the captured reader option; the separate production routing gate owns its
+// kernel interface setting, and the ordinary Box suite owns MTU replacement.
+type desktopExternalWFPTUN struct {
+	inbound.Adapter
+	mu                     sync.Mutex
+	ctx                    context.Context
+	options                option.TunInboundOptions
+	reader                 *tun.NativeTun
+	index                  int
+	luid                   uint64
+	ready, claimed, closed bool
+	guard                  func() bool
+}
+
+func (t *desktopExternalWFPTUN) Start(stage adapter.StartStage) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if stage == adapter.StartStateStart {
+		if t.reader != nil || t.closed {
+			return errors.New("external Wintun reader startup repeated")
+		}
+		reader, err := tun.New(tun.Options{Name: t.options.InterfaceName, MTU: t.options.MTU, AutoRoute: false, DNSMode: tun.DNSModeDisabled, EXP_ExternalConfiguration: true})
+		if err != nil {
+			return err
+		}
+		var ok bool
+		t.reader, ok = reader.(*tun.NativeTun)
+		if !ok || t.reader == nil {
+			_ = reader.Close()
+			return errors.New("external Wintun fixture lost its actual native handle")
+		}
+		if err := t.reader.Start(); err != nil {
+			return err
+		}
+		t.luid = t.reader.LUID()
+		wait, cancel := context.WithTimeout(t.ctx, 10*time.Second)
+		defer cancel()
+		tick := time.NewTicker(10 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			actual, err := net.InterfaceByName(t.options.InterfaceName)
+			if err == nil && actual.Flags&net.FlagUp != 0 && actual.Flags&net.FlagLoopback == 0 {
+				t.index = actual.Index
+				break
+			}
+			select {
+			case <-wait.Done():
+				return errors.New("owned external Wintun interface never became ready")
+			case <-tick.C:
+			}
+		}
+	}
+	if stage == adapter.StartStateStarted {
+		if t.reader == nil || t.index <= 0 || t.luid == 0 {
+			return errors.New("external Wintun readiness preceded actual identity")
+		}
+		t.ready = true
+	}
+	return nil
+}
+func (t *desktopExternalWFPTUN) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.closed = true
+	t.ready = false
+	if t.reader != nil {
+		return t.reader.Close()
+	}
+	return nil
+}
+func (t *desktopExternalWFPTUN) readback() (string, int, int, error) {
+	if !t.ready || t.closed || t.reader == nil || t.luid == 0 || t.reader.LUID() != t.luid {
+		return "", 0, 0, errors.New("external Wintun owner is retired")
+	}
+	name, err := t.reader.Name()
+	actual, readErr := net.InterfaceByIndex(t.index)
+	mtu, mtuErr := t.reader.MTU()
+	if err != nil || readErr != nil || mtuErr != nil || actual.Name != name || name != t.options.InterfaceName || actual.Flags&net.FlagUp == 0 || actual.Flags&net.FlagLoopback != 0 || mtu != int(t.options.MTU) {
+		return "", 0, 0, errors.New("external Wintun actual handle/interface changed")
+	}
+	return name, t.index, mtu, nil
+}
+func (t *desktopExternalWFPTUN) RouterVPNDesktopMTU(guard func() bool) (string, int, int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.claimed || guard == nil || !guard() {
+		return "", 0, 0, errors.New("external Wintun claim is stale")
+	}
+	name, index, mtu, err := t.readback()
+	if err == nil {
+		t.claimed = true
+		t.guard = guard
+	}
+	return name, index, mtu, err
+}
+func (t *desktopExternalWFPTUN) RouterVPNDesktopMTUInterface() (string, int, int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.claimed || t.guard == nil || !t.guard() {
+		return "", 0, 0, errors.New("external Wintun readback is unclaimed or stale")
+	}
+	return t.readback()
+}
+
+type desktopExternalWFPFixture struct {
+	box                 *Box
+	policy              *mobilemultihop.DesktopExternalPolicy
+	original            *mobilemultihop.ExternalPolicy
+	source, capture     string
+	network             *routervpndesktoppt.ExternalNetworkOwner
+	preparation         *RouterVPNDesktopExternalPreparation
+	proof               *RouterVPNExternalProofRequest
+	tun                 *desktopExternalWFPTUN
+	prepared            mobiletor.DesktopWindowsProtectionTarget
+	commit              mobiletor.DesktopWindowsProtectionCommit
+	admitted, committed int
+	cancel              context.CancelFunc
+	closed              bool
+}
+
+func desktopExternalWFPOriginal(t *testing.T, p *desktopExternalWFPReference, kill string) (*mobilemultihop.ExternalPolicy, string, string) {
+	t.Helper()
+	name := "rvpn-hy2-" + desktopExternalWFPNonce(t)[:16]
+	profile := map[string]any{"id": "selected-external-native", "node_kind": "external", "external": map[string]any{"protocol": "hysteria2", "expected_public_ip": desktopExternalIntegrationIP, "hysteria2": map[string]any{"server": p.local.String(), "port": int(p.remote.Port()), "password": desktopExternalIntegrationPassword, "tls_server_name": "captured-proxy.example"}}, "dns_mode": "custom", "dns_protocol": "udp", "dns_host": "192.168.50.53", "dns_port": 5353, "mtu_policy": "manual", "manual_mtu": 1280, "home_lan_access": false, "ipv6_mode": "off", "kill_switch_policy": kill}
+	capture := map[string]any{"schema": 1, "exit_id": profile["id"], "protocol": "hysteria2", "expected_public_ip": desktopExternalIntegrationIP, "profile": profile}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "interface_name": name, "address": []string{"172.29.93.1/30", "fd29:93::1/126"}, "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"}}, "outbounds": []any{map[string]any{"type": "hysteria2", "tag": mobilemultihop.ExternalFinalTag, "server": p.local.String(), "server_port": int(p.remote.Port()), "password": desktopExternalIntegrationPassword, "tls": map[string]any{"enabled": true, "server_name": "captured-proxy.example"}}}, "route": map[string]any{"final": mobilemultihop.ExternalFinalTag, "auto_detect_interface": true}}
+	raw, _ := json.Marshal(graph)
+	saved, _ := json.Marshal(capture)
+	original, err := mobilemultihop.NewExternalPolicy(string(raw), string(saved))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return original, string(raw), string(saved)
+}
+
+func desktopExternalWFPBox(t *testing.T, original *mobilemultihop.ExternalPolicy, source, capture string, previous *mobiletor.DesktopWindowsProtectionTarget, refuse bool) *desktopExternalWFPFixture {
+	t.Helper()
+	policy, err := mobilemultihop.NewDesktopExternalPolicy(original, desktopExternalWFPNonce(t), "windows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	f := &desktopExternalWFPFixture{original: original, policy: policy, source: source, capture: capture, cancel: cancel}
+	t.Cleanup(func() {
+		if err := f.close(); err != nil {
+			t.Error("external WFP native source did not join", err)
+		}
+	})
+	ins := inbound.NewRegistry()
+	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options option.TunInboundOptions) (adapter.Inbound, error) {
+		f.tun = &desktopExternalWFPTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag), ctx: ctx, options: options}
+		return f.tun, nil
+	})
+	outs := outbound.NewRegistry()
+	HY.RegisterOutbound(outs)
+	routervpndesktoppt.RegisterExternalPhysicalOutbound(outs)
+	dnsRegistry := dns.NewTransportRegistry()
+	DNST.RegisterUDP(dnsRegistry)
+	DNST.RegisterTCP(dnsRegistry)
+	services := boxService.NewRegistry()
+	routervpndesktoppt.RegisterExternalNetworkOwner(services)
+	barrier := func(ctx context.Context, change mobiletor.DesktopWindowsProtectionCommit) error {
+		if ctx.Err() != nil || change.Validate() != nil || change.Action != "successor" || !reflect.DeepEqual(change.Previous, previous) || change.Candidate == nil || change.Candidate.Capture.SessionID != policy.Metadata().SessionID || change.Candidate.Capture.SourceSHA256 != policy.Metadata().SourceSHA256 || f.committed != 0 || f.network == nil || f.network.Current() || f.network.SocketCurrent() {
+			return errors.New("external durable barrier lost its exact pre-activation successor")
+		}
+		f.commit = change
+		f.committed++
+		if refuse {
+			return errors.New("controlled original journal refuses durable intent")
+		}
+		return nil
+	}
+	ctx, err = routervpndesktoppt.WithExternalPhysicalJournalAdmission(ctx, policy, previous, barrier, func(ctx context.Context, prepared routervpndesktoppt.ExternalPhysicalPrepared) error {
+		if f.committed != 1 || f.admitted != 0 || f.network.Current() || f.network.SocketCurrent() {
+			return errors.New("external admission preceded durable barrier or exposed early socket")
+		}
+		target := mobiletor.DesktopWindowsProtectionTarget{Capture: prepared.Capture, Policy: prepared.Policy, BaselineSHA256: prepared.BaselineSHA256}
+		if f.commit.Candidate == nil || *f.commit.Candidate != target {
+			return errors.New("external committed target changed before admission")
+		}
+		if err := mobiletor.DesktopWindowsNodeCompositionVerifyPrepared(ctx, target); err != nil {
+			return err
+		}
+		f.prepared = target
+		f.admitted++
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx = Context(ctx, ins, outs, endpoint.NewRegistry(), dnsRegistry, services, certificate.NewRegistry())
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(policy.Config()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Log = &option.LogOptions{Disabled: true}
+	f.box, err = New(Options{Context: ctx, Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service, ok := f.box.service.Get(mobilemultihop.DesktopExternalNetworkTag)
+	if !ok {
+		t.Fatal("external native owner missing")
+	}
+	f.network, ok = service.(*routervpndesktoppt.ExternalNetworkOwner)
+	if !ok {
+		t.Fatal("external native owner changed type")
+	}
+	f.preparation, err = f.box.RouterVPNDesktopExternalPreparePhysicalOwned(policy)
+	if err != nil {
+		t.Fatal("external native captured preparation", err)
+	}
+	return f
+}
+
+func (f *desktopExternalWFPFixture) start(t *testing.T) {
+	t.Helper()
+	if err := f.box.RouterVPNStrategyStart(); err != nil {
+		if f.committed != 1 {
+			t.Fatal("actual HY2 source skipped its durable WFP intent", err)
+		}
+		t.Fatal("external actual WFP startup", err)
+	}
+	if f.admitted != 1 || f.committed != 1 || f.network.Current() || f.network.SocketCurrent() {
+		t.Fatal("lazy Hysteria2 gained socket/proof authority before activation")
+	}
+	var err error
+	f.proof, err = f.box.RouterVPNDesktopExternalCreateProof(f.policy)
+	if err != nil || f.proof.Healthy() {
+		t.Fatal("external native proof preparation fabricated readiness", err)
+	}
+}
+func (f *desktopExternalWFPFixture) prove(t *testing.T, p *desktopExternalWFPReference) {
+	t.Helper()
+	raw, err := f.proof.Run()
+	var result mobilemultihop.ExternalProofResult
+	if err != nil || json.Unmarshal([]byte(raw), &result) != nil {
+		t.Fatal("real external WFP proof failed", err)
+	}
+	meta := f.policy.Metadata()
+	if result.SessionID != meta.SessionID || result.SourceSHA256 != meta.OriginalSourceSHA256 || result.ConfigSHA256 != meta.OriginalConfigSHA256 || result.EntryProven || !result.DNSProven || result.IP != desktopExternalIntegrationIP || !f.proof.Healthy() || !f.network.Current() {
+		t.Fatal("external WFP proof relabeled source or acquired Router identity")
+	}
+	reply := p.call(t, "stats", "")
+	if reply.Packets == 0 || reply.DNS == 0 || reply.UDPDNS != reply.DNS || reply.TLS == 0 || reply.Public == 0 {
+		t.Fatal("external WFP proof bypassed real selected UDP DNS and TLS", reply)
+	}
+	f.snapshot(t, p)
+}
+func (f *desktopExternalWFPFixture) snapshot(t *testing.T, p *desktopExternalWFPReference) mobiletor.DesktopWindowsNodeCompositionReadback {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	actual, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+	if err != nil || actual.Closed || actual.Target != f.prepared || actual.Owner.Kind != "windows-isolated-token" || len(actual.Grants) != 1 || !actual.Options.RetainBaselineForHandoff || actual.TunnelName != f.tun.options.InterfaceName || actual.TunnelIndex != uint32(f.tun.index) || actual.TunnelLUID != f.tun.luid {
+		t.Fatal("external WFP proof has no actual isolated tuple/TUN receipt", err)
+	}
+	grant := actual.Grants[0]
+	if grant.Network != "udp" || grant.Remote != p.remote || grant.Local.Addr() != p.local || grant.Capture != f.prepared.Capture || grant.Binding.Owner != actual.Owner || grant.Sequence == 0 {
+		t.Fatal("external HY2 WFP grant changed exact captured UDP tuple")
+	}
+	return actual
+}
+func (f *desktopExternalWFPFixture) close() error {
+	if f.closed {
+		return nil
+	}
+	var failure error
+	if f.proof != nil {
+		failure = f.proof.Close()
+	}
+	if f.box != nil {
+		failure = errors.Join(failure, f.box.Close())
+	}
+	if failure != nil {
+		return failure
+	}
+	f.closed = true
+	f.cancel()
+	return nil
+}
+func (f *desktopExternalWFPFixture) drain(t *testing.T) mobiletor.DesktopWindowsProtectionTarget {
+	t.Helper()
+	if err := f.close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	actual, err := mobiletor.DesktopWindowsNodeCompositionSnapshot(ctx)
+	if err != nil || !actual.Closed || len(actual.Grants) != 0 || actual.Target != f.prepared {
+		t.Fatal("external native drain lost exact retained deny", err)
+	}
+	target, entered, err := f.preparation.RetainedProtection(ctx)
+	if err != nil || !entered || target == nil || *target != actual.Target {
+		t.Fatal("external native retired preparation changed target", err)
+	}
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if current, err := net.InterfaceByName(f.tun.options.InterfaceName); err != nil && current == nil {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("owned external Wintun remained after native close")
+		case <-tick.C:
+		}
+	}
+	return actual.Target
+}
+
+func desktopExternalWFPCleanup(t *testing.T, target *mobiletor.DesktopWindowsProtectionTarget) {
+	t.Helper()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if actual, err := mobiletor.DesktopWindowsNodeCompositionRetainedTarget(ctx); err == nil {
+			*target = actual
+		}
+		if target.Validate() != nil {
+			if err := mobiletor.DesktopWindowsNodeCompositionAbsent(ctx); err != nil {
+				t.Error("external cleanup has no exact retained owner", err)
+			}
+			return
+		}
+		if err := mobiletor.DesktopWindowsNodeCompositionRetire(ctx, *target); err != nil {
+			t.Error("external exact retained cleanup", err)
+		}
+	})
+}
+
+func TestRouterVPNDesktopExternalWindowsHysteria2WFP(t *testing.T) {
+	ca := newDesktopExternalIntegrationCA(t)
+	roots := x509.NewCertPool()
+	certificate, err := x509.ParseCertificate(ca.der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots.AddCert(certificate)
+	t.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
+	x509.SetFallbackRoots(roots)
+	for _, kill := range []string{"on-connect", "always"} {
+		t.Run(kill, func(t *testing.T) {
+			var retained mobiletor.DesktopWindowsProtectionTarget
+			desktopExternalWFPCleanup(t, &retained)
+			peer := desktopExternalWFPStartReference(t, ca, "")
+			original, source, capture := desktopExternalWFPOriginal(t, peer, kill)
+			f := desktopExternalWFPBox(t, original, source, capture, nil, false)
+			f.start(t)
+			f.prove(t, peer)
+			desktopExternalWFPRequireBlocked(t, peer)
+			first := f.snapshot(t, peer).Grants[0]
+			deadline := time.Now().Add(8 * time.Second)
+			tick := time.NewTicker(50 * time.Millisecond)
+			defer tick.Stop()
+			for {
+				if err := f.proof.engine.DNSProof(context.Background(), "tun-in"); err != nil {
+					t.Fatal("renewed HY2 lost selected UDP DNS", err)
+				}
+				grant := f.snapshot(t, peer).Grants[0]
+				if grant.SocketID != first.SocketID || grant.Local != first.Local || grant.Remote != first.Remote {
+					t.Fatal("HY2 renewal replaced its captured actual UDP socket")
+				}
+				if grant.Sequence > first.Sequence {
+					break
+				}
+				if !time.Now().Before(deadline) {
+					t.Fatal("actual external HY2 UDP grant never renewed")
+				}
+				<-tick.C
+			}
+			retained = f.drain(t)
+			if err := mobiletor.DesktopWindowsNodeCompositionVerifyRetained(context.Background(), retained); err != nil {
+				t.Fatal(err)
+			}
+			desktopExternalWFPRequireBlocked(t, peer)
+		})
+	}
+	t.Run("successor-and-original-restore", func(t *testing.T) {
+		var retained mobiletor.DesktopWindowsProtectionTarget
+		desktopExternalWFPCleanup(t, &retained)
+		peer := desktopExternalWFPStartReference(t, ca, "")
+		original, source, capture := desktopExternalWFPOriginal(t, peer, "always")
+		first := desktopExternalWFPBox(t, original, source, capture, nil, false)
+		first.start(t)
+		first.prove(t, peer)
+		retained = first.drain(t)
+		for i := 0; i < 2; i++ {
+			previous := retained
+			next := desktopExternalWFPBox(t, original, source, capture, &previous, false)
+			next.start(t)
+			next.prove(t, peer)
+			if next.prepared.Capture.SessionID == previous.Capture.SessionID || next.original != original || next.source != source || next.capture != capture || !reflect.DeepEqual(next.commit.Previous, &previous) {
+				t.Fatal("HY2 restoration reselected original source or stale predecessor")
+			}
+			if first.proof.Healthy() || first.network.Current() {
+				t.Fatal("joined old HY2 owner revived during successor")
+			}
+			retained = next.drain(t)
+		}
+	})
+	for _, fault := range []string{"password", "trust", "dns", "exit"} {
+		t.Run("reject/"+fault, func(t *testing.T) {
+			var retained mobiletor.DesktopWindowsProtectionTarget
+			desktopExternalWFPCleanup(t, &retained)
+			peer := desktopExternalWFPStartReference(t, ca, fault)
+			original, source, capture := desktopExternalWFPOriginal(t, peer, "always")
+			f := desktopExternalWFPBox(t, original, source, capture, nil, false)
+			f.start(t)
+			raw, err := f.proof.Run()
+			if err == nil || raw != "" || f.proof.Healthy() || f.network.Current() {
+				t.Fatal("invalid real HY2 path acquired Windows proof")
+			}
+			reply := peer.call(t, "stats", "")
+			if reply.Packets == 0 {
+				t.Fatal("negative never reached actual encrypted UDP peer")
+			}
+			if (fault == "password" || fault == "trust") && (reply.DNS != 0 || reply.Attempts != 0) {
+				t.Fatal("invalid HY2 credentials carried inner proof bytes")
+			}
+			if fault == "dns" && (reply.DNS == 0 || reply.Attempts != 0) {
+				t.Fatal("failed selected DNS reached public proof")
+			}
+			if fault == "exit" && (reply.UDPDNS == 0 || reply.TLS != 1 || reply.Public != 1) {
+				t.Fatal("wrong exit negative bypassed authenticated public response")
+			}
+			retained = f.drain(t)
+		})
+	}
+	t.Run("cancelled-proof", func(t *testing.T) {
+		var retained mobiletor.DesktopWindowsProtectionTarget
+		desktopExternalWFPCleanup(t, &retained)
+		peer := desktopExternalWFPStartReference(t, ca, "held")
+		original, source, capture := desktopExternalWFPOriginal(t, peer, "always")
+		f := desktopExternalWFPBox(t, original, source, capture, nil, false)
+		f.start(t)
+		done := make(chan error, 1)
+		go func() {
+			raw, err := f.proof.Run()
+			if raw != "" {
+				err = nil
+			}
+			done <- err
+		}()
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			reply := peer.call(t, "stats", "")
+			if reply.Public == 1 && reply.TLS == 1 && reply.UDPDNS > 0 {
+				break
+			}
+			if !time.Now().Before(deadline) {
+				t.Fatal("held HY2 proof never reached actual provider")
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		f.network.InterfaceUpdated(context.Background())
+		peer.call(t, "release", "")
+		select {
+		case err := <-done:
+			if err == nil || f.proof.Healthy() || f.network.Current() {
+				t.Fatal("cancelled real HY2 result was adopted")
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("cancelled actual HY2 proof did not join")
+		}
+		retained = f.drain(t)
+	})
+	for _, fault := range []string{"foreign-predecessor", "commit-refused"} {
+		t.Run(fault, func(t *testing.T) {
+			var retained mobiletor.DesktopWindowsProtectionTarget
+			desktopExternalWFPCleanup(t, &retained)
+			peer := desktopExternalWFPStartReference(t, ca, "")
+			original, source, capture := desktopExternalWFPOriginal(t, peer, "always")
+			first := desktopExternalWFPBox(t, original, source, capture, nil, false)
+			first.start(t)
+			first.prove(t, peer)
+			retained = first.drain(t)
+			expected := retained
+			if fault == "foreign-predecessor" {
+				expected.Capture.SourceSHA256 = strings.Repeat("f", 64)
+			}
+			before := peer.call(t, "stats", "")
+			next := desktopExternalWFPBox(t, original, source, capture, &expected, fault == "commit-refused")
+			if err := next.box.RouterVPNStrategyStart(); err == nil || next.admitted != 0 || next.network.Current() || next.network.SocketCurrent() {
+				t.Fatal("uncommitted or foreign HY2 successor gained socket authority")
+			}
+			if err := next.close(); err != nil {
+				t.Fatal("failed HY2 successor did not join", err)
+			}
+			if err := mobiletor.DesktopWindowsNodeCompositionVerifyRetained(context.Background(), retained); err != nil {
+				t.Fatal("failed HY2 successor changed original deny", err)
+			}
+			after := peer.call(t, "stats", "")
+			if after.DNS != before.DNS || after.Public != before.Public {
+				t.Fatal("refused HY2 successor sent inner traffic")
+			}
+			desktopExternalWFPRequireBlocked(t, peer)
+		})
+	}
+	t.Log("Actual Windows scoped BFE/isolated UDP, native encrypted HY2, selected UDP DNS/TLS proof, renewals, exact retained succession/retirement and rejection passed. Wintun identity/binding is real; packet pump, route/DNS installation and journal storage remain explicit fixture boundaries.")
+}

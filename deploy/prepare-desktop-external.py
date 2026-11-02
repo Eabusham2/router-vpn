@@ -78,6 +78,7 @@ BOX_TEMPLATES = {
     'external_box_latency_test.go.tmpl': 'routervpn_desktop_external_box_latency_test.go',
     'external_box_socks_test.go.tmpl': 'routervpn_desktop_external_box_socks_test.go',
     'external_box_openvpn_test.go.tmpl': 'routervpn_desktop_external_box_openvpn_test.go',
+    'external_box_windows_hysteria2_test.go.tmpl': 'routervpn_desktop_external_box_windows_hysteria2_test.go',
     'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go',
     'tor_box_latency.go.tmpl': 'routervpn_desktop_tor_box_latency.go',
     'tor_box_latency_test.go.tmpl': 'routervpn_desktop_tor_box_latency_test.go',
@@ -278,6 +279,7 @@ def pt_copies():
         prefix = {'node_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
                   'external_box_linux_lifecycle.go.tmpl': b'//go:build linux\n\n',
                   'external_box_openvpn_test.go.tmpl': b'//go:build linux\n\n',
+                  'external_box_windows_hysteria2_test.go.tmpl': b'//go:build windows && routervpn_windows_node_composition\n\n',
                   'node_box_linux_cover.go.tmpl': b'//go:build linux\n\n',
                   'node_box_linux_cover_test.go.tmpl': b'//go:build linux\n\n'}.get(name, b'')
         if path.is_symlink() or not raw.startswith(prefix+b'package box\n'):
