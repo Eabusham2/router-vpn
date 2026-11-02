@@ -1,0 +1,537 @@
+package box
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"runtime"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/common/auth"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/protocol/socks"
+	"github.com/sagernet/sing/protocol/socks/socks5"
+)
+
+// The normal pinned SOCKS server handles authentication, CONNECT and UDP
+// framing. Only deliberately malicious server replies use the wire encoders
+// below. Each successful UDP control creates a real, independently retained
+// listener. Its exact address is admitted by the explicitly modeled OS
+// boundary, never by a new shared permission in the native physical outbound.
+type desktopExternalSOCKSPeer struct {
+	peer        *desktopExternalIntegrationPeer
+	fault       string
+	mu          sync.Mutex
+	relays      []*desktopExternalSOCKSRelay
+	refused     atomic.Int32
+	refusedDone chan struct{}
+	refusedOnce sync.Once
+	joinFailed  atomic.Bool
+}
+
+type desktopExternalSOCKSControl struct {
+	net.Conn
+	associated atomic.Bool
+	readDone   chan struct{}
+	readOnce   sync.Once
+}
+
+func (c *desktopExternalSOCKSControl) Read(body []byte) (int, error) {
+	// All request/authentication reads precede PacketListener.ListenPacket.
+	// The pinned server then owns the one TCP association observer.
+	if c.associated.Load() {
+		defer c.readOnce.Do(func() { close(c.readDone) })
+	}
+	return c.Conn.Read(body)
+}
+
+type desktopExternalSOCKSRelay struct {
+	net.PacketConn
+	owner       *desktopExternalSOCKSPeer
+	control     *desktopExternalSOCKSControl
+	address     netip.AddrPort
+	readStarted atomic.Bool
+	closeOnce   sync.Once
+	closed      chan struct{}
+	mu          sync.Mutex
+	client      netip.AddrPort
+	packets     int
+}
+
+func newDesktopExternalSOCKSPeer(peer *desktopExternalIntegrationPeer, fault string) *desktopExternalSOCKSPeer {
+	peer.kernel.socksRelays = make(map[netip.AddrPort]bool)
+	return &desktopExternalSOCKSPeer{peer: peer, fault: fault, refusedDone: make(chan struct{})}
+}
+
+func (p *desktopExternalSOCKSPeer) snapshot() []*desktopExternalSOCKSRelay {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]*desktopExternalSOCKSRelay(nil), p.relays...)
+}
+
+type desktopExternalSOCKSListener struct {
+	owner   *desktopExternalSOCKSPeer
+	control *desktopExternalSOCKSControl
+	relay   *desktopExternalSOCKSRelay
+}
+
+func (l *desktopExternalSOCKSListener) ListenPacket(config net.ListenConfig, ctx context.Context, network, address string) (net.PacketConn, error) {
+	peer := l.owner.peer
+	if network != "udp" || address != net.JoinHostPort(peer.kernel.local.String(), "0") || !peer.kernel.local.Is4() || l.relay != nil || ctx.Err() != nil {
+		return nil, errors.New("SOCKS peer changed its captured association listener")
+	}
+	var packet net.PacketConn
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		packet, err = config.ListenPacket(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		if packet.LocalAddr().(*net.UDPAddr).Port != int(peer.kernel.remote.Port()) {
+			break
+		}
+		_ = packet.Close()
+		packet = nil
+	}
+	if packet == nil {
+		return nil, errors.New("SOCKS fixture could not retain a distinct real relay port")
+	}
+	remote := packet.LocalAddr().(*net.UDPAddr).AddrPort()
+	if remote == peer.kernel.remote || remote.Addr() != peer.kernel.local || remote.Port() == 0 {
+		_ = packet.Close()
+		return nil, errors.New("SOCKS peer did not negotiate an independent UDP relay")
+	}
+	relay := &desktopExternalSOCKSRelay{PacketConn: packet, owner: l.owner, control: l.control, address: remote, closed: make(chan struct{})}
+	peer.kernel.mu.Lock()
+	if peer.kernel.socksRelays[remote] || !peer.kernel.source.live.Load() {
+		peer.kernel.mu.Unlock()
+		_ = packet.Close()
+		return nil, errors.New("SOCKS fixture attempted to reuse an active listener owner")
+	}
+	peer.kernel.socksRelays[remote] = true
+	peer.kernel.mu.Unlock()
+	l.relay = relay
+	l.control.associated.Store(true)
+	l.owner.mu.Lock()
+	l.owner.relays = append(l.owner.relays, relay)
+	l.owner.mu.Unlock()
+	return relay, nil
+}
+
+func (r *desktopExternalSOCKSRelay) ReadFrom(body []byte) (int, net.Addr, error) {
+	r.readStarted.Store(true)
+	for {
+		n, source, err := r.PacketConn.ReadFrom(body)
+		if err != nil {
+			return n, source, err
+		}
+		allowed, known, _ := r.owner.peer.kernel.grantedPacketTo(r.address, source, time.Now())
+		if !allowed {
+			if !known {
+				r.owner.peer.bypassed.Add(1)
+			}
+			continue
+		}
+		client := source.(*net.UDPAddr).AddrPort()
+		r.mu.Lock()
+		if r.client.IsValid() && r.client != client {
+			r.mu.Unlock()
+			r.owner.peer.bypassed.Add(1)
+			continue
+		}
+		r.client, r.packets = client, r.packets+1
+		r.mu.Unlock()
+		r.owner.peer.physicalUDP.Add(1)
+		if r.owner.fault == "control-eof" {
+			// Retire the actual authenticated control after seeing the first
+			// granted packet. No DNS/public success is substituted for its EOF.
+			_ = r.control.Conn.Close()
+			return 0, nil, net.ErrClosed
+		}
+		return n, source, nil
+	}
+}
+
+func (r *desktopExternalSOCKSRelay) Close() error {
+	var failure error
+	r.closeOnce.Do(func() {
+		failure = r.PacketConn.Close()
+		r.owner.peer.kernel.mu.Lock()
+		delete(r.owner.peer.kernel.socksRelays, r.address)
+		r.owner.peer.kernel.mu.Unlock()
+		close(r.closed)
+	})
+	return failure
+}
+
+func (p *desktopExternalSOCKSPeer) serve(connection net.Conn) (failure error) {
+	control := &desktopExternalSOCKSControl{Conn: connection, readDone: make(chan struct{})}
+	listener := &desktopExternalSOCKSListener{owner: p, control: control}
+	defer func() {
+		_ = control.Conn.Close()
+		if listener.relay != nil {
+			_ = listener.relay.Close()
+			// Reaching the pinned first-packet read proves its TCP observer
+			// was launched. Join that read before the provider worker retires.
+			if listener.relay.readStarted.Load() {
+				select {
+				case <-control.readDone:
+				case <-time.After(3 * time.Second):
+					p.joinFailed.Store(true)
+					failure = errors.Join(failure, errors.New("SOCKS provider TCP observer did not join"))
+				}
+			}
+		}
+	}()
+	if p.fault == "auth-downgrade" || p.fault == "relay-domain" || p.fault == "relay-wildcard" || p.fault == "relay-zero" || p.fault == "relay-uncaptured" {
+		return p.refuse(control)
+	}
+	password := desktopExternalIntegrationPassword
+	if p.peer.badAuth {
+		password += "-different-peer"
+	}
+	authenticator := auth.NewAuthenticator([]auth.User{{Username: desktopExternalIntegrationUser, Password: password}})
+	err := socks.HandleConnectionEx(p.peer.ctx, control, bufio.NewReader(control), authenticator, p.peer, listener,
+		5*time.Second, M.SocksaddrFromNet(connection.RemoteAddr()), nil)
+	if p.peer.badAuth && err != nil {
+		p.peer.authFailures.Add(1)
+		// The pinned server's diagnostic includes credentials. Keep only the
+		// fixed test phase, while its real authentication verdict is unchanged.
+		return errors.New("captured SOCKS authentication rejected")
+	}
+	return err
+}
+
+func (p *desktopExternalSOCKSPeer) refuse(connection net.Conn) error {
+	reader := bufio.NewReader(connection)
+	offer, err := socks5.ReadAuthRequest(reader)
+	if err != nil || len(offer.Methods) != 1 || offer.Methods[0] != socks5.AuthTypeUsernamePassword {
+		return errors.New("SOCKS negative peer lost the exact offered authentication method")
+	}
+	if p.fault == "auth-downgrade" {
+		if err := socks5.WriteAuthResponse(connection, socks5.AuthResponse{Method: socks5.AuthTypeNotRequired}); err != nil {
+			return err
+		}
+	} else {
+		if err := socks5.WriteAuthResponse(connection, socks5.AuthResponse{Method: socks5.AuthTypeUsernamePassword}); err != nil {
+			return err
+		}
+		credentials, err := socks5.ReadUsernamePasswordAuthRequest(reader)
+		if err != nil || credentials.Username != desktopExternalIntegrationUser || credentials.Password != desktopExternalIntegrationPassword {
+			return errors.New("SOCKS reply negative changed original credentials")
+		}
+		if err := socks5.WriteUsernamePasswordAuthResponse(connection, socks5.UsernamePasswordAuthResponse{Status: socks5.UsernamePasswordStatusSuccess}); err != nil {
+			return err
+		}
+		request, err := socks5.ReadRequest(reader)
+		if err != nil || request.Command != socks5.CommandUDPAssociate {
+			return errors.New("SOCKS reply negative lost its actual UDP association request")
+		}
+		bind := M.Socksaddr{Addr: p.peer.kernel.local, Port: p.peer.kernel.remote.Port()}
+		switch p.fault {
+		case "relay-domain":
+			bind = M.ParseSocksaddr("unrequested-relay.example:5353")
+		case "relay-wildcard":
+			bind.Addr = netip.IPv4Unspecified()
+		case "relay-zero":
+			bind.Port = 0
+		case "relay-uncaptured":
+			// The control port has no bound UDP listener or independent grant.
+			// This is an exact OS-fixture refusal, not a private-IP policy test.
+		}
+		if err := socks5.WriteResponse(connection, socks5.Response{ReplyCode: socks5.ReplyCodeSuccess, Bind: bind}); err != nil {
+			return err
+		}
+	}
+	var body [1]byte
+	n, err := reader.Read(body[:])
+	if n != 0 || !errors.Is(err, io.EOF) {
+		return errors.New("SOCKS rejected reply did not retire its original TCP control")
+	}
+	p.refused.Add(1)
+	p.refusedOnce.Do(func() { close(p.refusedDone) })
+	return nil
+}
+
+func (p *desktopExternalSOCKSPeer) joined(t *testing.T) {
+	t.Helper()
+	if p.joinFailed.Load() {
+		t.Error("SOCKS provider did not join its original TCP observer")
+	}
+	for _, relay := range p.snapshot() {
+		select {
+		case <-relay.closed:
+		default:
+			t.Error("SOCKS provider retained an owned UDP listener after peer cleanup")
+		}
+	}
+	p.peer.kernel.mu.Lock()
+	remaining := len(p.peer.kernel.socksRelays)
+	p.peer.kernel.mu.Unlock()
+	if remaining != 0 {
+		t.Error("SOCKS OS fixture retained a retired provider tuple")
+	}
+}
+
+func (p *desktopExternalSOCKSPeer) proved(t *testing.T, f *desktopExternalIntegrationFixture) {
+	t.Helper()
+	capture, err := f.policy.Capture()
+	if err != nil || len(capture.PhysicalRoots) != 1 || len(capture.PhysicalRoots[0].Destinations) != 1 ||
+		!capture.PhysicalRoots[0].DynamicSOCKSUDP || capture.PhysicalRoots[0].SOCKSVersion != "5" ||
+		capture.PhysicalRoots[0].SOCKSControl == nil || capture.PhysicalRoots[0].SOCKSControl.Network != "tcp" ||
+		capture.PhysicalRoots[0].Destinations[0].Network != "tcp" || capture.SelectedDNS.Type != "udp" || capture.SelectedDNS.Physical ||
+		p.peer.listener == nil || p.peer.packet != nil || p.peer.accepted.Load() < 2 ||
+		p.peer.physicalUDP.Load() == 0 || p.peer.udpQueries.Load() != p.peer.dnsQueries.Load() || p.peer.udpQueries.Load() == 0 {
+		t.Fatal("SOCKS proof lost its original TCP control, dynamic UDP association or selected DNS", err, p.peer.diagnostic())
+	}
+	relays := p.snapshot()
+	if len(relays) == 0 {
+		t.Fatal("SOCKS proof never negotiated a real relay")
+	}
+	for _, relay := range relays {
+		if relay.address == p.peer.kernel.remote || relay.address.Port() == 0 {
+			t.Fatal("SOCKS provider guessed the UDP control port")
+		}
+	}
+	physical, exists := f.box.outbound.Outbound(mobilemultihop.DesktopExternalPhysicalTag)
+	if !exists {
+		t.Fatal("SOCKS proof lost its actual lower manager")
+	}
+	if connection, err := physical.DialContext(context.Background(), "udp", M.SocksaddrFromNetIP(relays[0].address)); err == nil || connection != nil {
+		if connection != nil {
+			_ = connection.Close()
+		}
+		t.Fatal("authenticated SOCKS reply broadened the ordinary shared lower map")
+	}
+}
+
+func (p *desktopExternalSOCKSPeer) rejected(t *testing.T, fault string) {
+	t.Helper()
+	if fault == "auth-downgrade" || fault == "relay-domain" || fault == "relay-wildcard" || fault == "relay-zero" || fault == "relay-uncaptured" {
+		// Require actual client EOF before cleanup can close the provider end.
+		select {
+		case <-p.refusedDone:
+		case <-time.After(3 * time.Second):
+			t.Fatal("rejected SOCKS reply did not close its original native control", p.peer.diagnostic())
+		}
+		p.peer.close()
+		if p.refused.Load() == 0 || p.peer.accepted.Load() == 0 || len(p.snapshot()) != 0 || p.peer.physicalUDP.Load() != 0 ||
+			p.peer.dnsQueries.Load() != 0 || p.peer.publicAttempts.Load() != 0 || p.peer.bypassed.Load() != 0 {
+			t.Fatal("invalid SOCKS reply escaped the original control-only rejection", fault, p.peer.diagnostic())
+		}
+	}
+	if fault == "control-eof" && (len(p.snapshot()) == 0 || p.peer.physicalUDP.Load() == 0 || p.peer.dnsQueries.Load() != 0 || p.peer.publicAttempts.Load() != 0) {
+		t.Fatal("TCP control EOF did not retire the actual first UDP association", p.peer.diagnostic())
+	}
+}
+
+func desktopExternalSOCKSExchange(connection net.Conn, id uint16) error {
+	if err := connection.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		return err
+	}
+	question := new(mDNS.Msg).SetQuestion("example.com.", mDNS.TypeA)
+	question.Id = id
+	raw, err := question.Pack()
+	if err != nil {
+		return err
+	}
+	if n, err := connection.Write(raw); err != nil || n != len(raw) {
+		return errors.Join(err, errors.New("SOCKS independent association did not send complete DNS bytes"))
+	}
+	buffer := make([]byte, 4096)
+	n, err := connection.Read(buffer)
+	var response mDNS.Msg
+	if err != nil || response.Unpack(buffer[:n]) != nil || response.Id != id || !response.Response || len(response.Answer) != 1 {
+		return errors.Join(err, errors.New("SOCKS association returned another DNS transaction"))
+	}
+	answer, ok := response.Answer[0].(*mDNS.A)
+	if !ok || answer.A.String() != "93.184.216.34" {
+		return errors.New("SOCKS association bypassed selected DNS response validation")
+	}
+	return nil
+}
+
+func (r *desktopExternalSOCKSRelay) receipts(t *testing.T) (tcp, udp mobiletor.DesktopSocketGrant) {
+	t.Helper()
+	r.mu.Lock()
+	client, packets := r.client, r.packets
+	r.mu.Unlock()
+	if !client.IsValid() || packets == 0 {
+		t.Fatal("SOCKS association never observed a granted native packet")
+	}
+	control := r.control.RemoteAddr().(*net.TCPAddr).AddrPort()
+	kernel := r.owner.peer.kernel
+	kernel.mu.Lock()
+	defer kernel.mu.Unlock()
+	for _, receipt := range kernel.issued {
+		grant := receipt.grant
+		if grant.Network == "tcp" && grant.Local == control && grant.Remote == kernel.remote {
+			tcp = grant
+		}
+		if grant.Network == "udp" && grant.Local == client && grant.Remote == r.address {
+			udp = grant
+		}
+	}
+	if tcp.SocketID == "" || udp.SocketID == "" || tcp.SocketID == udp.SocketID || tcp.Capture != udp.Capture || tcp.Capture != kernel.source.capture {
+		t.Fatal("SOCKS peer lost its separate original control and UDP socket receipts")
+	}
+	return
+}
+
+func desktopExternalSOCKSIntegration(t *testing.T, ca *desktopExternalIntegrationCA) {
+	if runtime.GOOS != "linux" {
+		t.Fatal("ordinary SOCKS5 association acceptance requires the captured Linux host")
+	}
+	t.Run("socks5/independent-associations-control-eof", func(t *testing.T) {
+		f := newDesktopExternalIntegrationFixture(t, ca, "socks5", "")
+		f.prove(t)
+		before := len(f.peer.socks.snapshot())
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		root, exists := f.box.outbound.Outbound(mobilemultihop.ExternalFinalTag)
+		if !exists {
+			t.Fatal("actual native SOCKS root disappeared after proof")
+		}
+		a, err := root.DialContext(ctx, "udp", M.ParseSocksaddr(desktopExternalIntegrationDNS))
+		if err != nil {
+			t.Fatal("first actual association", err)
+		}
+		defer a.Close()
+		b, err := root.DialContext(ctx, "udp", M.ParseSocksaddr(desktopExternalIntegrationDNS))
+		if err != nil {
+			t.Fatal("second actual association", err)
+		}
+		defer b.Close()
+		if err := desktopExternalSOCKSExchange(a, 401); err != nil {
+			t.Fatal(err)
+		}
+		if err := desktopExternalSOCKSExchange(b, 402); err != nil {
+			t.Fatal(err)
+		}
+		relays := f.peer.socks.snapshot()
+		if len(relays) != before+2 {
+			t.Fatal("native associations did not retain separate original controls")
+		}
+		first, second := relays[before], relays[before+1]
+		aTCP, aUDP := first.receipts(t)
+		bTCP, bUDP := second.receipts(t)
+		if aTCP.SocketID == bTCP.SocketID || aUDP.SocketID == bUDP.SocketID || aUDP.Local == bUDP.Local || first.control == second.control {
+			t.Fatal("independent associations aliased an original control or physical socket")
+		}
+		_ = first.control.Conn.Close()
+		select {
+		case <-first.closed:
+		case <-ctx.Done():
+			t.Fatal("first control EOF did not retire its actual provider relay")
+		}
+		// Observe the native control observer revoke its exact two grants before
+		// testing closure. A timed-out DNS operation is not evidence of EOF.
+		deadline := time.NewTimer(2 * time.Second)
+		defer deadline.Stop()
+		tick := time.NewTicker(time.Millisecond)
+		defer tick.Stop()
+		for {
+			f.kernel.mu.Lock()
+			_, oldTCP := f.kernel.grants[aTCP.SocketID]
+			_, oldUDP := f.kernel.grants[aUDP.SocketID]
+			_, nextTCP := f.kernel.grants[bTCP.SocketID]
+			_, nextUDP := f.kernel.grants[bUDP.SocketID]
+			f.kernel.mu.Unlock()
+			if !nextTCP || !nextUDP {
+				t.Fatal("first control EOF revoked a sibling association grant")
+			}
+			if !oldTCP && !oldUDP {
+				break
+			}
+			select {
+			case <-deadline.C:
+				t.Fatal("first control EOF did not revoke its original TCP and UDP grants")
+			case <-tick.C:
+			}
+		}
+		if err := a.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Fatal(err)
+		}
+		var retired [1]byte
+		if _, err := a.Read(retired[:]); !errors.Is(err, net.ErrClosed) {
+			t.Fatal("retired first control did not close its exact UDP reader", err)
+		}
+		if _, err := a.Write(retired[:]); !errors.Is(err, net.ErrClosed) {
+			t.Fatal("retired first control retained UDP write authority", err)
+		}
+		if err := a.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			t.Fatal("first native association did not join", err)
+		}
+		f.kernel.mu.Lock()
+		_, oldTCP := f.kernel.grants[aTCP.SocketID]
+		_, oldUDP := f.kernel.grants[aUDP.SocketID]
+		_, nextTCP := f.kernel.grants[bTCP.SocketID]
+		_, nextUDP := f.kernel.grants[bUDP.SocketID]
+		f.kernel.mu.Unlock()
+		if oldTCP || oldUDP || !nextTCP || !nextUDP {
+			t.Fatal("association cleanup revoked a sibling or retained its own physical grants")
+		}
+		if err := desktopExternalSOCKSExchange(b, 404); err != nil || !f.proof.Healthy() || !f.network.Current() {
+			t.Fatal("retired association destroyed a current sibling or proof owner", err)
+		}
+		f.peer.socks.proved(t, f)
+	})
+	for _, replacement := range []bool{false, true} {
+		name := "cancelled-proof"
+		if replacement {
+			name = "replacement-keeps-new-source"
+		}
+		t.Run("socks5/"+name, func(t *testing.T) {
+			f := newDesktopExternalIntegrationFixture(t, ca, "socks5", "held-proof")
+			finished := make(chan error, 1)
+			go func() {
+				raw, err := f.proof.Run()
+				if raw != "" {
+					err = errors.New("retired SOCKS proof published a response")
+				}
+				finished <- err
+			}()
+			select {
+			case <-f.peer.publicEntered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("SOCKS cancellation did not reach real selected DNS and public TLS", f.peer.diagnostic())
+			}
+			var next *desktopExternalIntegrationFixture
+			if replacement {
+				next = newDesktopExternalIntegrationFixture(t, ca, "socks5", "")
+				next.prove(t)
+			}
+			f.network.InterfaceUpdated(context.Background())
+			close(f.peer.publicRelease)
+			select {
+			case err := <-finished:
+				if err == nil || f.proof.Healthy() || f.network.Current() || !f.source.cancelled.Load() {
+					t.Fatal("retired SOCKS proof retained native publication", err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("cancelled SOCKS proof did not join its captured operation")
+			}
+			if lease, err := f.box.RouterVPNExternalClaimMTU(f.proof, f.originalSource, f.originalCapture); err == nil || lease != nil {
+				t.Fatal("cancelled SOCKS proof acquired MTU authority")
+			}
+			if next != nil {
+				if !next.proof.Healthy() || !next.network.Current() || next.source.cancelled.Load() || next.policy.Metadata().OriginalSourceSHA256 == f.policy.Metadata().OriginalSourceSHA256 {
+					t.Fatal("old association cancellation changed its replacement source")
+				}
+				if err := mobilemultihop.ProveExternalPublicIP(context.Background(), next.proof.engine.Dial, mobilemultihop.ExternalFinalTag, desktopExternalIntegrationIP); err != nil {
+					t.Fatal(fmt.Errorf("replacement lost fresh public proof: %w", err))
+				}
+			}
+		})
+	}
+}

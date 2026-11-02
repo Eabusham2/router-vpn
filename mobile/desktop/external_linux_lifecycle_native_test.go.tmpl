@@ -57,6 +57,7 @@ type linuxExternalNativeLifecycle struct {
 	network    linuxPhysicalNetwork
 	service    adapter.Service
 	lower      adapter.Outbound
+	root       adapter.Outbound
 	baseline   *mobiletor.DesktopLinuxNodeBaseline
 	prepared   *LinuxPhysicalPrepared
 	prior      *linuxExternalNativeLifecycle
@@ -215,6 +216,20 @@ func newLinuxExternalNativeLifecycle(t *testing.T, kind, kill string, remote net
 		}
 		manager.replace(lower)
 		f.network, f.service, f.lower = n, n, lower
+		if kind == "socks5" {
+			var graph struct {
+				Outbounds []json.RawMessage `json:"outbounds"`
+			}
+			var options ExternalSOCKSOptions
+			if json.Unmarshal([]byte(policy.Config()), &graph) != nil || len(graph.Outbounds) != 2 || json.Unmarshal(graph.Outbounds[0], &options) != nil {
+				t.Fatal("native SOCKS guardian fixture lost its exact derived root")
+			}
+			f.root, err = NewExternalSOCKSOutbound(native.ctx, nil, nil, mobilemultihop.ExternalFinalTag, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			service.MustRegister[adapter.OutboundManager](native.ctx, &externalSOCKSManager{objects: map[string]adapter.Outbound{lower.Tag(): lower, f.root.Tag(): f.root}})
+		}
 		n.ctx, err = WithExternalLinuxPhysicalBaseline(n.ctx, policy, baseline, admit)
 		if err == nil {
 			err = n.PrepareExternalLinuxPhysicalPolicy(policy)
@@ -224,6 +239,11 @@ func newLinuxExternalNativeLifecycle(t *testing.T, kind, kill string, remote net
 		}
 	}
 	t.Cleanup(func() {
+		if f.root != nil {
+			if err := f.root.(io.Closer).Close(); err != nil {
+				t.Error(err)
+			}
+		}
 		if err := f.service.Close(); err != nil {
 			t.Error("join exact native lifecycle source", err)
 			return
@@ -274,6 +294,11 @@ func (f *linuxExternalNativeLifecycle) start() error {
 
 func (f *linuxExternalNativeLifecycle) join(t *testing.T) {
 	t.Helper()
+	if f.root != nil {
+		if err := f.root.(io.Closer).Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := f.service.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -480,6 +505,7 @@ func TestDesktopLinuxGuardianKernelExternalLifecycle(t *testing.T) {
 			}
 		})
 	}
+	linuxExternalSOCKSGuardianCases(t)
 	for _, protocol := range []string{"shadowsocks", "http-connect", "https-connect", "hysteria2", "wireguard", "amneziawg-fast", "amneziawg-strong", "openvpn-tcp", "openvpn-udp", "openvpn-mixed"} {
 		t.Run(protocol+"-succession", func(t *testing.T) {
 			network := "tcp"

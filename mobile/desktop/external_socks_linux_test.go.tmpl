@@ -1,0 +1,601 @@
+//go:build linux
+
+package routervpndesktoppt
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/protocol/socks/socks5"
+	"github.com/sagernet/sing/service"
+)
+
+type externalSOCKSManager struct {
+	adapter.OutboundManager
+	mu      sync.Mutex
+	objects map[string]adapter.Outbound
+}
+
+func (m *externalSOCKSManager) Outbound(tag string) (adapter.Outbound, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	value, found := m.objects[tag]
+	return value, found
+}
+func (m *externalSOCKSManager) replace(tag string, value adapter.Outbound) {
+	m.mu.Lock()
+	m.objects[tag] = value
+	m.mu.Unlock()
+}
+func (*externalSOCKSManager) Default() adapter.Outbound {
+	panic("retained SOCKS used an implicit native outbound")
+}
+
+type externalSOCKSFixture struct {
+	*externalPhysicalFixture
+	root    *ExternalSOCKSOutbound
+	manager *externalSOCKSManager
+	source  *physicalFactorySource
+	kernel  *externalSOCKSKernelFixture
+}
+
+func newExternalSOCKSFixture(t *testing.T, address netip.AddrPort, ipv6 string, relays ...netip.AddrPort) *externalSOCKSFixture {
+	t.Helper()
+	policy := externalPhysicalDeviceFixture(t, "socks5", address.Addr().String(), int(address.Port()), false, "linux", ipv6, "always")
+	f := newExternalPhysicalFixture(t, policy)
+	var graph struct {
+		Outbounds []json.RawMessage `json:"outbounds"`
+	}
+	var options ExternalSOCKSOptions
+	if json.Unmarshal([]byte(policy.Config()), &graph) != nil || len(graph.Outbounds) != 2 || json.Unmarshal(graph.Outbounds[0], &options) != nil {
+		t.Fatal("SOCKS fixture lost its derived native options")
+	}
+	raw, err := NewExternalSOCKSOutbound(f.native.ctx, nil, nil, mobilemultihop.ExternalFinalTag, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := raw.(*ExternalSOCKSOutbound)
+	manager := &externalSOCKSManager{objects: map[string]adapter.Outbound{root.Tag(): root, f.physical.Tag(): f.physical}}
+	service.MustRegister[adapter.OutboundManager](f.native.ctx, manager)
+	source := &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()}
+	kernel := &externalSOCKSKernelFixture{desktopPhysicalPolicyFixture: source.desktopPhysicalPolicyFixture, address: address.Addr(), control: address}
+	if len(relays) == 1 {
+		kernel.relay = relays[0]
+	} else if len(relays) != 0 {
+		t.Fatal("native association fixture has more than one captured relay")
+	}
+	fixture := &externalSOCKSFixture{f, root, manager, source, kernel}
+	t.Cleanup(func() {
+		if err := root.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	return fixture
+}
+
+// The peer runs at the runner's actual non-loopback IPv4 address. These
+// exact tuple permits model only OS admission; native SOCKS framing, auth,
+// per-socket broker grants and retirement execute unchanged.
+type externalSOCKSKernelFixture struct {
+	*desktopPhysicalPolicyFixture
+	address        netip.Addr
+	control, relay netip.AddrPort
+}
+
+func (p *externalSOCKSKernelFixture) permits(network string, remote netip.AddrPort) bool {
+	return network == "tcp" && remote == p.control || network == "udp" && p.relay.IsValid() && remote == p.relay
+}
+
+func (p *externalSOCKSKernelFixture) Select(_ context.Context, _ mobiletor.DesktopSocketCapture, network string, remote netip.AddrPort) (mobiletor.DesktopSocketBinding, error) {
+	if !p.permits(network, remote) {
+		return mobiletor.DesktopSocketBinding{}, errors.New("fixture refused a foreign SOCKS tuple")
+	}
+	return mobiletor.DesktopSocketBinding{Owner: p.owner, InterfaceName: "actual-fixture-address", InterfaceIndex: 1, LocalAddress: p.address}, nil
+}
+
+func (p *externalSOCKSKernelFixture) Grant(_ context.Context, grant mobiletor.DesktopSocketGrant) (mobiletor.DesktopSocketReceipt, error) {
+	if !p.permits(grant.Network, grant.Remote) || grant.Local.Addr() != p.address {
+		return mobiletor.DesktopSocketReceipt{}, errors.New("fixture refused a foreign SOCKS grant")
+	}
+	p.mu.Lock()
+	p.requests = append(p.requests, grant)
+	p.grants[grant.SocketID+grant.Remote.String()] = grant
+	p.mu.Unlock()
+	now := time.Now()
+	return mobiletor.DesktopSocketReceipt{Grant: grant, ObservedAt: now.UnixMilli(), ExpiresAt: now.Add(10 * time.Second).UnixMilli()}, nil
+}
+
+func (f *externalSOCKSFixture) prepare() error {
+	return f.network.PrepareExternalPhysicalBroker(f.policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+		broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, f.kernel, current)
+		return broker, f.source, err
+	})
+}
+
+func (f *externalSOCKSFixture) activate(t *testing.T) {
+	t.Helper()
+	if err := f.prepare(); err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart, adapter.StartStateStarted} {
+		if err := f.network.Start(stage); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.root.current(context.Background()); err == nil || f.network.Current() {
+			t.Fatal("SOCKS acquired socket or proof authority before exact activation")
+		}
+	}
+	if _, err := f.network.Activate(f.policy); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterVPNExternalSOCKSRequiresExactNativeRoot(t *testing.T) {
+	for _, fault := range []string{"unprepared", "missing-root", "wrong-root", "credential", "source", "repeated", "closed"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newExternalSOCKSFixture(t, netip.MustParseAddrPort("11.77.0.2:1080"), "off")
+			switch fault {
+			case "missing-root":
+				f.manager.replace(f.root.Tag(), nil)
+			case "wrong-root":
+				f.manager.replace(f.root.Tag(), f.physical)
+			case "credential":
+				f.root.options.Password = "foreign-password"
+			case "source":
+				f.root.options.SourceSHA256 = "b" + f.root.options.SourceSHA256[1:]
+				if f.root.options.SourceSHA256 == f.policy.Metadata().SourceSHA256 {
+					f.root.options.SourceSHA256 = "a" + f.root.options.SourceSHA256[1:]
+				}
+			case "repeated":
+				if err := f.prepare(); err != nil {
+					t.Fatal(err)
+				}
+			case "closed":
+				if err := f.root.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if fault != "unprepared" && f.prepare() == nil {
+				t.Fatal("SOCKS installed a factory without its original root", fault)
+			}
+			if _, err := f.root.current(context.Background()); err == nil || f.network.broker != nil {
+				t.Fatal("rejected SOCKS source acquired a native lower broker")
+			}
+		})
+	}
+}
+
+// Actual native SOCKS and broker sockets carry bytes; the independent OS
+// identity/firewall implementation is the explicit modeled boundary here.
+// The separate guardian gate exercises its unchanged real private/IP policy.
+type externalSOCKSPeer struct {
+	tcp                 net.Listener
+	udp                 *net.UDPConn
+	accepted            chan net.Conn
+	acceptDone, udpDone chan struct{}
+	mu                  sync.Mutex
+	controls            []net.Conn
+	workers             sync.WaitGroup
+	hold                <-chan struct{}
+	seen                chan struct{}
+}
+
+func newExternalSOCKSPeer(t *testing.T, hold <-chan struct{}) *externalSOCKSPeer {
+	t.Helper()
+	address := externalPhysicalByteAddress(t)
+	tcp, err := net.Listen("tcp4", net.JoinHostPort(address.String(), "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := net.ListenUDP("udp4", net.UDPAddrFromAddrPort(netip.AddrPortFrom(address, 0)))
+	if err != nil {
+		_ = tcp.Close()
+		t.Fatal(err)
+	}
+	p := &externalSOCKSPeer{tcp: tcp, udp: udp, accepted: make(chan net.Conn, 8), acceptDone: make(chan struct{}), udpDone: make(chan struct{}), hold: hold, seen: make(chan struct{}, 8)}
+	t.Cleanup(func() {
+		_ = p.tcp.Close()
+		<-p.acceptDone
+		_ = p.udp.Close()
+		p.mu.Lock()
+		controls := append([]net.Conn(nil), p.controls...)
+		p.mu.Unlock()
+		for _, control := range controls {
+			_ = control.Close()
+		}
+		p.workers.Wait()
+		<-p.udpDone
+	})
+	go func() {
+		defer close(p.udpDone)
+		var buffer [4096]byte
+		for {
+			n, address, err := p.udp.ReadFromUDP(buffer[:])
+			if err != nil {
+				return
+			}
+			if _, err := p.udp.WriteToUDP(buffer[:n], address); err != nil {
+				return
+			}
+		}
+	}()
+	go func() {
+		defer close(p.acceptDone)
+		for {
+			conn, err := p.tcp.Accept()
+			if err != nil {
+				return
+			}
+			p.mu.Lock()
+			p.controls = append(p.controls, conn)
+			p.mu.Unlock()
+			p.workers.Add(1)
+			go func() {
+				defer p.workers.Done()
+				defer conn.Close()
+				_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+				reader := bufio.NewReader(conn)
+				offer, err := socks5.ReadAuthRequest(reader)
+				if err != nil || !bytes.Equal(offer.Methods, []byte{socks5.AuthTypeUsernamePassword}) {
+					return
+				}
+				p.seen <- struct{}{}
+				if p.hold != nil {
+					<-p.hold
+				}
+				if socks5.WriteAuthResponse(conn, socks5.AuthResponse{Method: socks5.AuthTypeUsernamePassword}) != nil {
+					return
+				}
+				auth, err := socks5.ReadUsernamePasswordAuthRequest(reader)
+				if err != nil || auth.Username != "captured-user" || auth.Password != "captured-password" {
+					return
+				}
+				if socks5.WriteUsernamePasswordAuthResponse(conn, socks5.UsernamePasswordAuthResponse{}) != nil {
+					return
+				}
+				request, err := socks5.ReadRequest(reader)
+				if err != nil || request.Command != socks5.CommandUDPAssociate {
+					return
+				}
+				if socks5.WriteResponse(conn, socks5.Response{ReplyCode: socks5.ReplyCodeSuccess, Bind: M.SocksaddrFromNet(p.udp.LocalAddr())}) != nil {
+					return
+				}
+				_ = conn.SetDeadline(time.Time{})
+				p.accepted <- conn
+				var unexpected [1]byte
+				_, _ = reader.Read(unexpected[:])
+			}()
+		}
+	}()
+	return p
+}
+
+func externalSOCKSExchange(t *testing.T, packet net.PacketConn, text string) {
+	t.Helper()
+	if err := packet.SetDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	destination := net.UDPAddrFromAddrPort(netip.MustParseAddrPort("203.0.113.53:5353"))
+	if _, err := packet.WriteTo([]byte(text), destination); err != nil {
+		t.Fatal(err)
+	}
+	var response [256]byte
+	n, source, err := packet.ReadFrom(response[:])
+	if err != nil || source.String() != destination.String() || string(response[:n]) != text {
+		t.Fatal("SOCKS association lost its owned UDP framing", err)
+	}
+	_ = packet.SetDeadline(time.Time{})
+}
+
+func TestRouterVPNExternalSOCKSAssociationsOwnDistinctControlAndRelaySockets(t *testing.T) {
+	peer := newExternalSOCKSPeer(t, nil)
+	f := newExternalSOCKSFixture(t, netip.MustParseAddrPort(peer.tcp.Addr().String()), "off", peer.udp.LocalAddr().(*net.UDPAddr).AddrPort())
+	f.activate(t)
+	packets := make([]net.PacketConn, 2)
+	controls := make([]net.Conn, 2)
+	var workers sync.WaitGroup
+	for index := range packets {
+		workers.Add(1)
+		go func(index int) {
+			defer workers.Done()
+			packet, err := f.root.ListenPacket(context.Background(), M.ParseSocksaddr("203.0.113.53:5353"))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			packets[index] = packet
+		}(index)
+	}
+	workers.Wait()
+	for index, packet := range packets {
+		if packet == nil {
+			t.Fatal("concurrent SOCKS association did not complete")
+		}
+		t.Cleanup(func() { _ = packet.Close() })
+		controls[index] = <-peer.accepted
+		externalSOCKSExchange(t, packet, "owned-association")
+	}
+	if packets[0].LocalAddr().String() == packets[1].LocalAddr().String() {
+		t.Fatal("concurrent SOCKS associations reused one lower socket")
+	}
+	f.source.mu.Lock()
+	ids := make(map[string]string)
+	for _, grant := range f.source.requests {
+		ids[grant.SocketID] = grant.Network
+	}
+	f.source.mu.Unlock()
+	if len(ids) != 4 {
+		t.Fatal("concurrent SOCKS controls and UDP relays did not receive distinct exact socket permits", ids)
+	}
+	relay := M.SocksaddrFromNet(peer.udp.LocalAddr())
+	if _, err := f.physical.current(context.Background(), "udp", relay); err == nil {
+		t.Fatal("a negotiated relay became a shared static lower permission")
+	}
+	for _, packet := range packets {
+		operation := packet.(*externalSOCKSPacket).operation
+		if _, err := operation.DialContext(operation.ctx, "udp", relay); err == nil {
+			t.Fatal("an association reused its one authenticated relay authorization")
+		}
+		if _, err := operation.DialContext(context.Background(), "tcp", f.root.control); err == nil {
+			t.Fatal("another context adopted a captured SOCKS control")
+		}
+	}
+	// Match the actual accepted TCP peer to its native operation by source port,
+	// rather than assuming concurrent server accepts share client completion order.
+	first := packets[0].(*externalSOCKSPacket).operation
+	first.mu.Lock()
+	port := first.tcp.LocalAddr().String()
+	first.mu.Unlock()
+	for _, control := range controls {
+		if control.RemoteAddr().String() == port {
+			_ = control.Close()
+		}
+	}
+	// Observe actual asynchronous control-EOF revocation before issuing a new
+	// read; a read-deadline timeout is not evidence of retired socket authority.
+	deadline := time.NewTimer(2 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		f.source.mu.Lock()
+		live := len(f.source.grants)
+		f.source.mu.Unlock()
+		if live == 2 {
+			break
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("control EOF did not revoke exactly its original TCP and UDP grants")
+		case <-tick.C:
+		}
+	}
+	if err := packets[0].SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil && !errors.Is(err, net.ErrClosed) {
+		t.Fatal(err)
+	}
+	var buffer [1]byte
+	if _, _, err := packets[0].ReadFrom(buffer[:]); !errors.Is(err, net.ErrClosed) {
+		t.Fatal("closed SOCKS control did not revoke its UDP association", err)
+	}
+	if err := packets[0].Close(); err != nil {
+		t.Fatal(err)
+	}
+	externalSOCKSExchange(t, packets[1], "replacement-owner-still-live")
+	f.source.mu.Lock()
+	remaining := len(f.source.grants)
+	f.source.mu.Unlock()
+	if remaining != 2 {
+		t.Fatal("retiring one SOCKS association failed to revoke exactly its own two sockets", remaining)
+	}
+}
+
+func TestRouterVPNExternalSOCKSCancelledAuthenticationJoinsOnlyItsOperation(t *testing.T) {
+	release := make(chan struct{})
+	var once sync.Once
+	defer once.Do(func() { close(release) })
+	peer := newExternalSOCKSPeer(t, release)
+	f := newExternalSOCKSFixture(t, netip.MustParseAddrPort(peer.tcp.Addr().String()), "off", peer.udp.LocalAddr().(*net.UDPAddr).AddrPort())
+	f.activate(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		connection, err := f.root.ListenPacket(ctx, M.ParseSocksaddr("203.0.113.53:5353"))
+		if connection != nil {
+			_ = connection.Close()
+		}
+		done <- err
+	}()
+	select {
+	case <-peer.seen:
+	case <-time.After(3 * time.Second):
+		t.Fatal("SOCKS control did not reach actual authentication")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("cancelled SOCKS authentication returned a UDP association")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancelled SOCKS authentication did not join")
+	}
+	f.source.mu.Lock()
+	requests, live := len(f.source.requests), len(f.source.grants)
+	f.source.mu.Unlock()
+	f.root.mu.Lock()
+	operations := len(f.root.operations)
+	f.root.mu.Unlock()
+	if requests != 1 || live != 0 || operations != 0 || !f.network.Current() {
+		t.Fatal("cancelled authentication allocated a UDP relay or retired the captured replacement-capable owner", requests, live, operations)
+	}
+	once.Do(func() { close(release) })
+	// The same saved owner can establish a new independent association after
+	// one cancelled attempt; no retired grant or TCP channel is reused.
+	packet, err := f.root.ListenPacket(context.Background(), M.ParseSocksaddr("203.0.113.53:5353"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = packet.Close() })
+	externalSOCKSExchange(t, packet, "successor-after-cancel")
+}
+
+func TestRouterVPNExternalSOCKSRejectsRetiredManagersAndForeignRelayCalls(t *testing.T) {
+	for _, fault := range []string{"root", "lower", "network", "unregistered", "before-control", "ipv6-off", "domain", "wildcard", "zero-port"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newExternalSOCKSFixture(t, netip.MustParseAddrPort("11.77.0.2:1080"), "off")
+			f.activate(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			operation := &externalSOCKSOperation{root: f.root, ctx: ctx, cancel: cancel, done: make(chan struct{}), network: "udp"}
+			close(operation.done)
+			if fault != "unregistered" {
+				f.root.mu.Lock()
+				f.root.operations[operation] = struct{}{}
+				f.root.mu.Unlock()
+			}
+			address := M.ParseSocksaddr("127.0.0.1:5353")
+			// This explicit negative fixture supplies no authenticated exchange.
+			// The malformed reply controls bypass only that already-tested ordering
+			// to exercise numeric/IP policy before even a broker Select call.
+			if fault != "before-control" {
+				left, right := net.Pipe()
+				defer left.Close()
+				defer right.Close()
+				operation.tcpAsked, operation.tcp = true, left
+			}
+			switch fault {
+			case "root":
+				f.manager.replace(f.root.Tag(), f.physical)
+			case "lower":
+				f.manager.replace(f.physical.Tag(), f.root)
+			case "network":
+				f.network.Cancel()
+			case "ipv6-off":
+				address = M.ParseSocksaddr("[2606:4700:4700::1111]:5353")
+			case "domain":
+				address = M.ParseSocksaddr("unselected-relay.example:5353")
+			case "wildcard":
+				address = M.ParseSocksaddr("0.0.0.0:5353")
+			case "zero-port":
+				address = M.ParseSocksaddr("127.0.0.1:0")
+			}
+			connection, err := operation.DialContext(ctx, "udp", address)
+			if connection != nil {
+				_ = connection.Close()
+			}
+			f.source.mu.Lock()
+			requests := len(f.source.requests)
+			f.source.mu.Unlock()
+			if err == nil || requests != 0 {
+				t.Fatal("unowned SOCKS relay reached an actual socket grant", fault)
+			}
+		})
+	}
+}
+
+type externalSOCKSUnusualJoinedError struct{ children []error }
+
+func (*externalSOCKSUnusualJoinedError) Error() string     { return "unusual joined close error" }
+func (e *externalSOCKSUnusualJoinedError) Unwrap() []error { return e.children }
+
+func TestRouterVPNExternalSOCKSOwnedClosePreservesMixedFailures(t *testing.T) {
+	failure := errors.New("actual retained socket failure")
+	wrapped := fmt.Errorf("owned close: %w", net.ErrClosed)
+	deep := error(net.ErrClosed)
+	for index := 0; index < 34; index++ {
+		deep = fmt.Errorf("layer: %w", deep)
+	}
+	for _, test := range []struct {
+		name   string
+		err    error
+		closed bool
+	}{
+		{"nil", nil, true}, {"closed", net.ErrClosed, true}, {"wrapped", wrapped, true},
+		{"joined-closed", errors.Join(net.ErrClosed, wrapped), true},
+		{"mixed", errors.Join(net.ErrClosed, failure), false}, {"real", failure, false},
+		{"all-nil-wrapper", &externalSOCKSUnusualJoinedError{[]error{nil}}, false},
+		{"nil-and-closed-wrapper", &externalSOCKSUnusualJoinedError{[]error{nil, net.ErrClosed}}, false},
+		{"text", errors.New(net.ErrClosed.Error()), false}, {"depth", deep, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if externalSOCKSClosedOnly(test.err, 0) != test.closed {
+				t.Fatal("owned close lost an actual failure", test.name)
+			}
+		})
+	}
+}
+
+type externalSOCKSFailedCloseConn struct {
+	net.Conn
+	entered chan struct{}
+	release <-chan struct{}
+	failure error
+	once    sync.Once
+	calls   atomic.Int32
+}
+
+func (c *externalSOCKSFailedCloseConn) Close() error {
+	c.once.Do(func() {
+		c.calls.Add(1)
+		close(c.entered)
+		<-c.release
+		c.failure = errors.Join(c.failure, c.Conn.Close())
+	})
+	return c.failure
+}
+
+func TestRouterVPNExternalSOCKSRootCloseJoinsAndRetainsOriginalFailure(t *testing.T) {
+	// A real retained connection is the precise failing OS-close seam. The
+	// shipping root/operation close code supplies all joining and error state.
+	left, right := net.Pipe()
+	defer right.Close()
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	failure := errors.New("owned connection cleanup failed")
+	connection := &externalSOCKSFailedCloseConn{Conn: left, entered: make(chan struct{}), release: release, failure: failure}
+	root := &ExternalSOCKSOutbound{operations: make(map[*externalSOCKSOperation]struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	operation := &externalSOCKSOperation{root: root, ctx: ctx, cancel: cancel, done: make(chan struct{}), tcp: connection, result: connection}
+	close(operation.done)
+	root.operations[operation] = struct{}{}
+	answers := make(chan error, 2)
+	go func() { answers <- root.Close() }()
+	select {
+	case <-connection.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("root did not enter original owned connection close")
+	}
+	secondEntered := make(chan struct{})
+	go func() { close(secondEntered); answers <- root.Close() }()
+	<-secondEntered
+	releaseOnce.Do(func() { close(release) })
+	for index := 0; index < 2; index++ {
+		select {
+		case err := <-answers:
+			if !errors.Is(err, failure) {
+				t.Fatal("overlapping root close lost original cleanup failure", err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("overlapping root close did not join original operation")
+		}
+	}
+	if !errors.Is(root.Close(), failure) || !errors.Is(operation.close(), failure) || connection.calls.Load() != 1 || len(root.operations) != 0 || ctx.Err() == nil {
+		t.Fatal("late root close erased a joined error or reused its owned connection")
+	}
+}

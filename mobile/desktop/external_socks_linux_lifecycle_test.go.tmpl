@@ -1,0 +1,272 @@
+//go:build linux && routervpn_linux_external_lifecycle
+
+package routervpndesktoppt
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/protocol/socks/socks5"
+)
+
+func init() {
+	if len(os.Args) == 3 && os.Args[1] == "routervpn-external-socks-guardian-peer" {
+		if err := linuxExternalSOCKSPeerMain(os.Args[2]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(83)
+		}
+		os.Exit(0)
+	}
+}
+
+type linuxExternalSOCKSPeerAddress struct {
+	Control netip.AddrPort `json:"control"`
+	Relay   netip.AddrPort `json:"relay"`
+}
+
+// Both addresses exist only in the caller's existing disconnected namespace.
+// The server's real wire replies are parsed by the original pinned SOCKS
+// client. No tuple, network or authentication result is substituted in it.
+func linuxExternalSOCKSPeerMain(kind string) error {
+	if os.Geteuid() != 0 || os.Getenv("ROUTERVPN_LINUX_GUARDIAN_TEST_NS") != "1" || (kind != "public" && kind != "private") {
+		return errors.New("SOCKS guardian peer requires its exact isolated namespace")
+	}
+	tcp, err := net.Listen("tcp4", "11.77.0.2:0")
+	if err != nil {
+		return err
+	}
+	defer tcp.Close()
+	address := "11.77.0.2:0"
+	if kind == "private" {
+		address = "172.31.217.2:0"
+	}
+	udp, err := net.ListenPacket("udp4", address)
+	if err != nil {
+		return err
+	}
+	defer udp.Close()
+	if err := json.NewEncoder(os.Stdout).Encode(linuxExternalSOCKSPeerAddress{
+		Control: tcp.Addr().(*net.TCPAddr).AddrPort(), Relay: udp.LocalAddr().(*net.UDPAddr).AddrPort(),
+	}); err != nil {
+		return err
+	}
+	var mu sync.Mutex
+	var controls []net.Conn
+	var workers sync.WaitGroup
+	retired := false
+	closePeer := func() {
+		mu.Lock()
+		retired = true
+		current := append([]net.Conn(nil), controls...)
+		mu.Unlock()
+		_ = tcp.Close()
+		_ = udp.Close()
+		for _, control := range current {
+			_ = control.Close()
+		}
+	}
+	defer closePeer()
+	inputDone, packetsDone := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(inputDone)
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		closePeer()
+	}()
+	go func() {
+		defer close(packetsDone)
+		var buffer [2048]byte
+		for {
+			count, peer, err := udp.ReadFrom(buffer[:])
+			if err != nil {
+				return
+			}
+			// Return the actual RFC 1928 frame unchanged, so both directions
+			// exercise the native association's selected inner destination.
+			if _, err := udp.WriteTo(buffer[:count], peer); err != nil {
+				return
+			}
+		}
+	}()
+	for {
+		control, err := tcp.Accept()
+		if err != nil {
+			break
+		}
+		mu.Lock()
+		if retired {
+			mu.Unlock()
+			_ = control.Close()
+			continue
+		}
+		controls = append(controls, control)
+		workers.Add(1)
+		mu.Unlock()
+		go func() {
+			defer workers.Done()
+			defer control.Close()
+			_ = control.SetDeadline(time.Now().Add(5 * time.Second))
+			reader := bufio.NewReader(control)
+			offer, err := socks5.ReadAuthRequest(reader)
+			if err != nil || len(offer.Methods) != 1 || offer.Methods[0] != socks5.AuthTypeUsernamePassword {
+				return
+			}
+			if socks5.WriteAuthResponse(control, socks5.AuthResponse{Method: socks5.AuthTypeUsernamePassword}) != nil {
+				return
+			}
+			auth, err := socks5.ReadUsernamePasswordAuthRequest(reader)
+			if err != nil || auth.Username != "captured-user" || auth.Password != "captured-password" {
+				return
+			}
+			if socks5.WriteUsernamePasswordAuthResponse(control, socks5.UsernamePasswordAuthResponse{}) != nil {
+				return
+			}
+			request, err := socks5.ReadRequest(reader)
+			if err != nil || request.Command != socks5.CommandConnect && request.Command != socks5.CommandUDPAssociate {
+				return
+			}
+			bind := M.SocksaddrFromNet(udp.LocalAddr())
+			if request.Command == socks5.CommandConnect {
+				bind = M.SocksaddrFromNet(tcp.Addr())
+			}
+			if socks5.WriteResponse(control, socks5.Response{ReplyCode: socks5.ReplyCodeSuccess, Bind: bind}) != nil {
+				return
+			}
+			_ = control.SetDeadline(time.Time{})
+			if request.Command == socks5.CommandConnect {
+				_, _ = io.Copy(control, reader)
+			} else {
+				var unexpected [1]byte
+				_, _ = reader.Read(unexpected[:])
+			}
+		}()
+	}
+	workers.Wait()
+	<-packetsDone
+	<-inputDone
+	return nil
+}
+
+func linuxExternalSOCKSPeer(t *testing.T, kind string) linuxExternalSOCKSPeerAddress {
+	t.Helper()
+	image, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("ip", "netns", "exec", "rvpn-peer", image, "routervpn-external-socks-guardian-peer", kind)
+	output, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, err := command.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command.Stderr = os.Stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = input.Close()
+		if err := command.Wait(); err != nil {
+			t.Error("join original SOCKS guardian peer", err)
+		}
+	})
+	var addresses linuxExternalSOCKSPeerAddress
+	if err := json.NewDecoder(output).Decode(&addresses); err != nil {
+		t.Fatal(err)
+	}
+	expected := "11.77.0.2"
+	if kind == "private" {
+		expected = "172.31.217.2"
+	}
+	if addresses.Control.Addr().String() != "11.77.0.2" || addresses.Control.Port() == 0 ||
+		addresses.Relay.Addr().String() != expected || addresses.Relay.Port() == 0 {
+		t.Fatal("SOCKS guardian peer substituted its original control or relay tuple")
+	}
+	return addresses
+}
+
+func linuxExternalSOCKSGuardianCases(t *testing.T) {
+	for _, kind := range []string{"public", "private"} {
+		name := "socks5-succession"
+		if kind == "private" {
+			name = "socks5-private-relay-rejected"
+		}
+		t.Run(name, func(t *testing.T) {
+			routerPeer := linuxExternalLifecyclePeer(t)
+			peer := linuxExternalSOCKSPeer(t, kind)
+			old := newLinuxExternalNativeLifecycle(t, "node", "always", routerPeer, nil, "", nil)
+			if err := old.start(); err != nil {
+				t.Fatal(err)
+			}
+			linuxExternalLifecycleProbe(t, old, routerPeer, false)
+			old.join(t)
+			linuxExternalLifecycleProbe(t, nil, routerPeer, true)
+			next := newLinuxExternalNativeLifecycle(t, "socks5", "always", peer.Control, old, "", nil)
+			if err := next.start(); err != nil || next.root == nil {
+				t.Fatal("captured SOCKS guardian source did not activate", err)
+			}
+			if !old.superseded || old.baseline.Release(context.Background()) == nil {
+				t.Fatal("retired Router owner released its SOCKS successor")
+			}
+			root := next.root.(*ExternalSOCKSOutbound)
+			for _, network := range []string{"tcp", "udp"} {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+				err := linuxExternalLifecycleExchange(ctx, root.DialContext, network, netip.MustParseAddrPort("11.77.0.2:5353"))
+				cancel()
+				if (err != nil) != (network == "udp" && kind == "private") {
+					t.Fatal("SOCKS guardian lost exact authenticated relay admission", network, kind, err)
+				}
+			}
+			if _, err := next.lower.(*ExternalPhysicalOutbound).current(context.Background(), "udp", M.ParseSocksaddr(peer.Relay.String())); err == nil {
+				t.Fatal("negotiated SOCKS relay escaped into the shared lower allowlist")
+			}
+			if _, err := root.current(context.Background()); err != nil {
+				t.Fatal("per-operation relay refusal retired the original owner", err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			err := linuxExternalLifecycleExchange(ctx, root.DialContext, "tcp", netip.MustParseAddrPort("11.77.0.2:5353"))
+			cancel()
+			if err != nil {
+				t.Fatal("independent TCP successor lost the selected SOCKS control", err)
+			}
+			next.join(t)
+			if _, err := root.DialContext(context.Background(), "udp", M.ParseSocksaddr("11.77.0.2:5353")); err == nil {
+				t.Fatal("joined SOCKS owner created a late association")
+			}
+			restored := newLinuxExternalNativeLifecycle(t, "node", "always", routerPeer, next, "", old.policy.node.OriginalProfile())
+			if restored.policy.node.OriginalProfile() != old.policy.node.OriginalProfile() ||
+				old.policy.node.Metadata().OriginalSourceSHA256 != restored.policy.node.Metadata().OriginalSourceSHA256 ||
+				old.policy.node.Metadata().SourceSHA256 == restored.policy.node.Metadata().SourceSHA256 ||
+				old.policy.node.Metadata().SessionID == restored.policy.node.Metadata().SessionID {
+				t.Fatal("SOCKS retirement changed the sealed original Router or reused its old session")
+			}
+			if err := restored.start(); err != nil {
+				t.Fatal(err)
+			}
+			linuxExternalLifecycleProbe(t, restored, routerPeer, false)
+			linuxExternalLifecycleProbe(t, nil, routerPeer, true)
+			restored.join(t)
+			if err := restored.baseline.Release(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if err := mobiletor.ReadDesktopLinuxProtectionAbsence(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			linuxExternalLifecycleProbe(t, nil, routerPeer, false)
+		})
+	}
+}

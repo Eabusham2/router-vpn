@@ -96,6 +96,14 @@ func TestDesktopExternalPolicyPreservesExactGraphAndSelectedPolicy(t *testing.T)
 								t.Fatal("Hysteria2 lost its one captured UDP destination")
 							}
 							delete(root, "detour")
+							if protocol == "socks5" && target == "linux" {
+								if root["type"] != DesktopExternalSOCKSType || root["session_id"] != meta.SessionID || root["source_sha256"] != meta.SourceSHA256 {
+									t.Fatal("SOCKS association lost its exact derived source owner")
+								}
+								root["type"] = "socks"
+								delete(root, "session_id")
+								delete(root, "source_sha256")
+							}
 							graph["outbounds"] = rows[:1]
 							delete(graph, "services")
 							if !reflect.DeepEqual(graph, externalTestRead(t, before)) || original.Config() != before || original.Metadata() != oldMeta {

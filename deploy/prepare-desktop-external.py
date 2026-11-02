@@ -49,6 +49,7 @@ PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_tes
                 'tor_physical_source_unix_test.go.tmpl',
                 'external_network.go.tmpl', 'external_admission.go.tmpl', 'external_admission_test.go.tmpl',
                 'external_physical.go.tmpl', 'external_physical_test.go.tmpl',
+                'external_socks.go.tmpl', 'external_socks_linux_test.go.tmpl', 'external_socks_linux_lifecycle_test.go.tmpl',
                 'external_physical_linux.go.tmpl', 'external_physical_darwin.go.tmpl',
                 'external_physical_windows.go.tmpl', 'external_physical_other.go.tmpl',
                 'external_physical_linux_test.go.tmpl', 'external_physical_darwin_test.go.tmpl',
@@ -75,6 +76,7 @@ BOX_TEMPLATES = {
     'external_box_physical_test.go.tmpl': 'routervpn_desktop_external_box_physical_test.go',
     'external_box_integration_test.go.tmpl': 'routervpn_desktop_external_box_integration_test.go',
     'external_box_latency_test.go.tmpl': 'routervpn_desktop_external_box_latency_test.go',
+    'external_box_socks_test.go.tmpl': 'routervpn_desktop_external_box_socks_test.go',
     'external_box_openvpn_test.go.tmpl': 'routervpn_desktop_external_box_openvpn_test.go',
     'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go',
     'tor_box_latency.go.tmpl': 'routervpn_desktop_tor_box_latency.go',
@@ -246,6 +248,8 @@ def pt_copies():
                    'external_physical_darwin.go.tmpl': b'//go:build darwin\n\n',
                    'external_physical_windows.go.tmpl': b'//go:build windows\n\n',
                    'external_physical_linux_test.go.tmpl': b'//go:build linux\n\n',
+                   'external_socks_linux_test.go.tmpl': b'//go:build linux\n\n',
+                   'external_socks_linux_lifecycle_test.go.tmpl': b'//go:build linux && routervpn_linux_external_lifecycle\n\n',
                    'external_physical_darwin_test.go.tmpl': b'//go:build darwin\n\n',
                    'external_physical_windows_test.go.tmpl': b'//go:build windows\n\n',
                    'linux_physical_lifecycle.go.tmpl': b'//go:build linux\n\n',
@@ -328,6 +332,7 @@ def pt_registry_source(source):
             ('RegisterLocalTor', '\troutervpndesktoppt.RegisterServerTor(registry)', 'func OutboundRegistry() *outbound.Registry {'),
             ('RegisterPhysicalOutbound', '\troutervpndesktoppt.RegisterLocalTor(registry)', 'func OutboundRegistry() *outbound.Registry {'),
             ('RegisterExternalPhysicalOutbound', '\troutervpndesktoppt.RegisterPhysicalOutbound(registry)', 'func OutboundRegistry() *outbound.Registry {'),
+            ('RegisterExternalSOCKSOutbound', '\troutervpndesktoppt.RegisterExternalPhysicalOutbound(registry)', 'func OutboundRegistry() *outbound.Registry {'),
             ('RegisterNodePhysicalOutbound', '\troutervpndesktoppt.RegisterExternalPhysicalOutbound(registry)', 'func OutboundRegistry() *outbound.Registry {'),
             ('RegisterLocalTorDNS', '\ttransport.RegisterTCP(registry)', 'func DNSTransportRegistry() *dns.TransportRegistry {')):
         registered = '\troutervpndesktoppt.'+function+'(registry)'

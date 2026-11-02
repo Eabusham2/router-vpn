@@ -11,6 +11,7 @@ const (
 	DesktopExternalNetworkTag   = "routervpn-external-network-owner"
 	DesktopExternalPhysicalType = "routervpn-desktop-external-physical"
 	DesktopExternalPhysicalTag  = "routervpn-external-physical-egress"
+	DesktopExternalSOCKSType    = "routervpn-desktop-external-socks5"
 )
 
 var desktopExternalSessionID = regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -112,6 +113,13 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		desktopExternalObjectDigest(physical) != root.ConfigSHA256 {
 		return nil, desktopExternalPolicyError
 	}
+	if targetOS == "linux" && root.DynamicSOCKSUDP {
+		username, _ := physical["username"].(string)
+		password, _ := physical["password"].(string)
+		if len(username) > 255 || len(password) > 255 {
+			return nil, desktopExternalPolicyError
+		}
+	}
 	meta := DesktopExternalMetadata{
 		Schema: 1, SessionID: sessionID, TargetOS: targetOS,
 		OriginalSourceSHA256: capture.SourceSHA256, OriginalConfigSHA256: capture.ConfigSHA256,
@@ -131,6 +139,13 @@ func NewDesktopExternalPolicy(original *ExternalPolicy, sessionID, targetOS stri
 		return nil, desktopExternalPolicyError
 	}
 	physical["detour"] = DesktopExternalPhysicalTag
+	if targetOS == "linux" && root.DynamicSOCKSUDP {
+		// The original native SOCKS options remain sealed and unchanged. This
+		// derived host creates a distinct native client/lower owner per call,
+		// so a negotiated UDP relay cannot become another call's permission.
+		physical["type"] = DesktopExternalSOCKSType
+		physical["session_id"], physical["source_sha256"] = sessionID, meta.SourceSHA256
+	}
 	meta.DerivedRootSHA256 = desktopExternalObjectDigest(physical)
 	dns, ok := graph["dns"].(map[string]any)
 	if !ok {

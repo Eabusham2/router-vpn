@@ -26,6 +26,18 @@ type externalPhysicalDestination struct {
 // eligible. This is a request constraint, not an endpoint-wide firewall permit;
 // the broker still creates, proves and retires each individual kernel socket.
 func externalPhysicalDestinations(capture mobilemultihop.ExternalDesktopCapture) (map[externalPhysicalDestination]bool, error) {
+	if capture.Protocol == "socks5" && len(capture.PhysicalRoots) == 1 {
+		root := capture.PhysicalRoots[0]
+		if !root.DynamicSOCKSUDP || root.SOCKSVersion != "5" || root.SOCKSControl == nil || root.SOCKSControl.Network != "tcp" ||
+			len(root.Destinations) != 1 || root.Destinations[0] != *root.SOCKSControl {
+			return nil, errors.New("ordinary SOCKS5 lost its exact captured TCP control")
+		}
+		// Only the static TCP control enters this map. A separately prepared
+		// native association owns each dynamic UDP reply; it cannot mutate this
+		// map or enable dynamic relay admission for a Node/predecessor graph.
+		root.DynamicSOCKSUDP = false
+		return desktopPhysicalDestinations(capture.IPv6Mode, []mobilemultihop.ExternalDesktopPhysicalRoot{root}, capture.SelectedDNS, capture.BootstrapDNS)
+	}
 	return desktopPhysicalDestinations(capture.IPv6Mode, capture.PhysicalRoots, capture.SelectedDNS, capture.BootstrapDNS)
 }
 

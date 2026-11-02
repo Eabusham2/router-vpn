@@ -95,7 +95,7 @@ func (n *ExternalNetworkOwner) PrepareExternalPhysicalBroker(policy *mobilemulti
 		return errors.New("ordinary desktop physical preparation requires its original compiled authority")
 	}
 	meta := policy.Metadata()
-	if meta.TargetOS != runtime.GOOS || meta.SOCKSUDPAssociationRequired || !n.Matches(meta.SessionID, meta.SourceSHA256) {
+	if meta.TargetOS != runtime.GOOS || meta.SOCKSUDPAssociationRequired && !(runtime.GOOS == "linux" && meta.Protocol == "socks5") || !n.Matches(meta.SessionID, meta.SourceSHA256) {
 		// A live SOCKS TCP socket alone does not establish permission for its
 		// negotiated UDP relay. Do not start a partially protected SOCKS graph.
 		return errors.New("ordinary desktop physical transport requires a proved native target and complete association capability")
@@ -117,6 +117,14 @@ func (n *ExternalNetworkOwner) PrepareExternalPhysicalBroker(policy *mobilemulti
 	if !exists || !ok || physical == nil || physical.options != n.capture {
 		return errors.New("ordinary desktop physical preparation found another native lower object")
 	}
+	var socks *ExternalSOCKSOutbound
+	if meta.SOCKSUDPAssociationRequired {
+		selected, exists := manager.Outbound(meta.RootTag)
+		socks, ok = selected.(*ExternalSOCKSOutbound)
+		if !exists || !ok || socks == nil || socks.options.ExternalCaptureOptions != n.capture {
+			return errors.New("ordinary SOCKS5 preparation has no captured per-association native root")
+		}
+	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	if n.retired || n.ready || n.active || n.ctx.Err() != nil || n.factory != nil || n.policy != nil || n.preparing != nil {
@@ -124,6 +132,11 @@ func (n *ExternalNetworkOwner) PrepareExternalPhysicalBroker(policy *mobilemulti
 	}
 	if err := physical.prepare(n, allowed); err != nil {
 		return err
+	}
+	if socks != nil {
+		if err := socks.prepare(policy, n, physical); err != nil {
+			return err
+		}
 	}
 	n.policy, n.factory, n.physical = policy, factory, physical
 	return nil

@@ -260,6 +260,10 @@ func TestRouterVPNDesktopExternalPhysicalCommandUsesActualPreparedNativeFactory(
 
 // This verifies command/source admission and actual native construction only.
 // The separate Box/peer and installed suites exercise encryption, DNS and exit proof.
+func TestRouterVPNDesktopExternalPhysicalSOCKSCommandIsLinuxOnly(t *testing.T) {
+	desktopExternalPhysicalTransportCommand(t, "socks5", "")
+}
+
 func TestRouterVPNDesktopExternalPhysicalHysteria2CommandIsLinuxOnly(t *testing.T) {
 	desktopExternalPhysicalTransportCommand(t, "hysteria2", "")
 }
@@ -295,7 +299,12 @@ func desktopExternalPhysicalTransportCommand(t *testing.T, protocol, variant str
 	private := map[string]any{"protocol": protocol, "expected_public_ip": "203.0.113.88"}
 	faults := []string{"valid", "source", "credential", "tls-name", "session", "original-config"}
 	var parameters map[string]string
-	if protocol == "openvpn" {
+	if protocol == "socks5" {
+		graph["outbounds"] = []any{map[string]any{"type": "socks", "tag": mobilemultihop.ExternalFinalTag,
+			"server": "203.0.113.20", "server_port": 1080, "version": "5", "username": "captured-user", "password": "captured-secret"}}
+		private["socks5"] = map[string]any{"host": "203.0.113.20", "port": 1080, "username": "captured-user", "password": "captured-secret"}
+		faults = []string{"valid", "source", "credential", "username", "endpoint", "socks-version", "socks-native-root", "session", "original-config"}
+	} else if protocol == "openvpn" {
 		primary, fallback := variant, variant
 		if variant == "mixed" {
 			primary, fallback = "tcp", "udp"
@@ -369,6 +378,10 @@ func desktopExternalPhysicalTransportCommand(t *testing.T, protocol, variant str
 				}
 			case "username":
 				config = strings.Replace(config, "captured-user", "foreign-user", 1)
+			case "socks-version":
+				config = strings.Replace(config, `"version":"5"`, `"version":"4"`, 1)
+			case "socks-native-root":
+				config = strings.Replace(config, mobilemultihop.DesktopExternalSOCKSType, "socks", 1)
 			case "peer-key":
 				config = strings.Replace(config, key(18), key(20), 1)
 			case "psk":

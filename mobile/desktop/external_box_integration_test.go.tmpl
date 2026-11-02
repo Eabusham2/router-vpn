@@ -93,6 +93,10 @@ func desktopExternalIntegrationUDP(protocol string) bool {
 	return protocol == "hysteria2" || desktopExternalIntegrationPacketEndpoint(protocol)
 }
 
+func desktopExternalIntegrationUDPDNS(protocol string) bool {
+	return protocol == "socks5" || desktopExternalIntegrationUDP(protocol)
+}
+
 // These complete Fast/Strong imports are test inputs, not product defaults.
 func desktopExternalIntegrationAWGParameters(protocol string) map[string]string {
 	if !awgpolicy.IsMode(protocol) {
@@ -115,19 +119,20 @@ type desktopExternalIntegrationTuple struct {
 }
 
 type desktopExternalIntegrationKernel struct {
-	source   *desktopExternalIntegrationSource
-	local    netip.Addr
-	remote   netip.AddrPort
-	index    uint32
-	name     string
-	udp      bool
-	tuples   []desktopExternalIntegrationTuple
-	deny     atomic.Bool
-	denied   atomic.Int32
-	mu       sync.Mutex
-	grants   map[string]mobiletor.DesktopSocketGrant
-	issued   map[string]*desktopExternalIntegrationGrant
-	requests int
+	source      *desktopExternalIntegrationSource
+	local       netip.Addr
+	remote      netip.AddrPort
+	index       uint32
+	name        string
+	udp         bool
+	tuples      []desktopExternalIntegrationTuple
+	socksRelays map[netip.AddrPort]bool
+	deny        atomic.Bool
+	denied      atomic.Int32
+	mu          sync.Mutex
+	grants      map[string]mobiletor.DesktopSocketGrant
+	issued      map[string]*desktopExternalIntegrationGrant
+	requests    int
 }
 
 // Accept can be scheduled after the sender has already closed its socket and
@@ -166,6 +171,14 @@ func (p *desktopExternalIntegrationKernel) network() string {
 // An explicit OpenVPN import captures network/address pairs independently.
 // Existing single-remote fixtures retain their original exact predicate.
 func (p *desktopExternalIntegrationKernel) permits(network string, remote netip.AddrPort) bool {
+	if network == "udp" {
+		p.mu.Lock()
+		owned := p.socksRelays[remote]
+		p.mu.Unlock()
+		if owned {
+			return true
+		}
+	}
 	if len(p.tuples) == 0 {
 		return network == p.network() && remote == p.remote
 	}
@@ -177,6 +190,12 @@ func (p *desktopExternalIntegrationKernel) permits(network string, remote netip.
 	return false
 }
 func (p *desktopExternalIntegrationKernel) permitsBinding(network string) bool {
+	p.mu.Lock()
+	socksUDP := p.socksRelays != nil && network == "udp4"
+	p.mu.Unlock()
+	if socksUDP {
+		return true
+	}
 	if len(p.tuples) == 0 {
 		return network == p.network()+"4"
 	}
@@ -258,19 +277,25 @@ func (p *desktopExternalIntegrationKernel) grantedPeer(address net.Addr, accepte
 // A packet queued before a revoke may arrive later; discard it without treating
 // the historical receipt as permission to resume a retired QUIC connection.
 func (p *desktopExternalIntegrationKernel) grantedPacket(address net.Addr, receivedAt time.Time) (allowed, known, first bool) {
+	if !p.udp {
+		return false, false, false
+	}
+	return p.grantedPacketTo(p.remote, address, receivedAt)
+}
+func (p *desktopExternalIntegrationKernel) grantedPacketTo(destination netip.AddrPort, address net.Addr, receivedAt time.Time) (allowed, known, first bool) {
 	peer, err := netip.ParseAddrPort(address.String())
-	if err != nil || !p.udp {
+	if err != nil {
 		return false, false, false
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for id, receipt := range p.issued {
 		grant := receipt.grant
-		if grant.Network != "udp" || receipt.at.After(receivedAt) || grant.Local != peer || grant.Remote != p.remote {
+		if grant.Network != "udp" || receipt.at.After(receivedAt) || grant.Local != peer || grant.Remote != destination {
 			continue
 		}
 		current, exists := p.grants[id]
-		if !exists || current.Network != "udp" || current.Local != peer || current.Remote != p.remote ||
+		if !exists || current.Network != "udp" || current.Local != peer || current.Remote != destination ||
 			current.Capture != p.source.capture || !p.source.live.Load() || p.deny.Load() {
 			return false, true, false
 		}
@@ -381,6 +406,7 @@ type desktopExternalIntegrationPeer struct {
 	publicEntered, publicRelease                                                                chan struct{}
 	publicOnce                                                                                  sync.Once
 	latency                                                                                     *desktopExternalLatencyPeer
+	socks                                                                                       *desktopExternalSOCKSPeer
 	ctx                                                                                         context.Context
 	cancel                                                                                      context.CancelFunc
 }
@@ -440,7 +466,9 @@ func (p *desktopExternalIntegrationPeer) start(t *testing.T) {
 				}
 				p.accepted.Add(1)
 				_ = c.SetDeadline(time.Now().Add(12 * time.Second))
-				if serveSS != nil {
+				if p.socks != nil {
+					p.recordFailure(p.socks.serve(c))
+				} else if serveSS != nil {
 					p.recordFailure(serveSS(c))
 				} else {
 					p.recordFailure(p.connect(c))
@@ -997,7 +1025,7 @@ func (p *desktopExternalIntegrationPeer) NewConnection(_ context.Context, c net.
 	return p.serve(c, m.Destination.String())
 }
 func (p *desktopExternalIntegrationPeer) NewPacketConnection(ctx context.Context, connection N.PacketConn, metadata M.Metadata) error {
-	if !desktopExternalIntegrationUDP(p.protocol) || metadata.Destination.String() != desktopExternalIntegrationDNS {
+	if !desktopExternalIntegrationUDPDNS(p.protocol) || metadata.Destination.String() != desktopExternalIntegrationDNS {
 		return errors.New("composition peer denies unrequested UDP")
 	}
 	stop := context.AfterFunc(p.ctx, func() { _ = connection.Close() })
@@ -1007,7 +1035,7 @@ func (p *desktopExternalIntegrationPeer) NewPacketConnection(ctx context.Context
 		destination, err := connection.ReadPacket(packet)
 		question := new(mDNS.Msg)
 		if err == nil && (destination != metadata.Destination || packet.Len() > 4096) {
-			err = errors.New("Hysteria2 UDP changed its exact selected DNS destination")
+			err = errors.New("native UDP changed its exact selected DNS destination")
 		}
 		if err == nil {
 			err = question.Unpack(packet.Bytes())
@@ -1258,6 +1286,9 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	f.kernel = &desktopExternalIntegrationKernel{source: f.source, local: address, remote: remote, index: uint32(iface.Index), name: iface.Name, udp: desktopExternalIntegrationUDP(protocol), grants: make(map[string]mobiletor.DesktopSocketGrant)}
 	f.source.kernel = f.kernel
 	f.peer = &desktopExternalIntegrationPeer{listener: listener, packet: packet, kernel: f.kernel, protocol: protocol, certificate: ca.certificate(t, true), proxyCertificate: ca.certificate(t, true), connections: make(map[net.Conn]bool), packetConnections: make(map[N.PacketConn]bool), ctx: ctx, cancel: cancel}
+	if protocol == "socks5" {
+		f.peer.socks = newDesktopExternalSOCKSPeer(f.peer, fault)
+	}
 	if strings.HasPrefix(fault, "latency-") {
 		f.peer.latency = newDesktopExternalLatencyPeer(t, ca, fault)
 	}
@@ -1296,6 +1327,9 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 		password := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
 		transport = map[string]any{"type": "shadowsocks", "tag": mobilemultihop.ExternalFinalTag, "server": address.String(), "server_port": int(remote.Port()), "method": "2022-blake3-aes-256-gcm", "password": password}
 		private["shadowsocks"] = map[string]any{"server": address.String(), "port": int(remote.Port()), "method": "2022-blake3-aes-256-gcm", "password": password}
+	}
+	if protocol == "socks5" {
+		transport["type"], transport["version"] = "socks", "5"
 	}
 	if protocol == "hysteria2" {
 		name := "captured-proxy.example"
@@ -1341,7 +1375,7 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 		private[actualProtocol] = credentials
 	}
 	profile := map[string]any{"id": "selected-external-native", "node_kind": "external", "external": private, "dns_mode": "custom", "dns_protocol": "tcp", "dns_host": "192.168.50.53", "dns_port": 5353, "mtu_policy": "auto", "home_lan_access": false, "ipv6_mode": "off", "kill_switch_policy": "always"}
-	if desktopExternalIntegrationUDP(protocol) {
+	if desktopExternalIntegrationUDPDNS(protocol) {
 		profile["dns_protocol"] = "udp"
 	}
 	capture := map[string]any{"schema": 1, "exit_id": profile["id"], "protocol": actualProtocol, "expected_public_ip": desktopExternalIntegrationIP, "profile": profile}
@@ -1370,6 +1404,7 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 	shadowsocks.RegisterOutbound(outs)
 	HY.RegisterOutbound(outs)
 	routervpndesktoppt.RegisterExternalPhysicalOutbound(outs)
+	routervpndesktoppt.RegisterExternalSOCKSOutbound(outs)
 	dnsRegistry := dns.NewTransportRegistry()
 	DNST.RegisterTCP(dnsRegistry)
 	DNST.RegisterUDP(dnsRegistry)
@@ -1405,6 +1440,9 @@ func newDesktopExternalIntegrationFixture(t *testing.T, ca *desktopExternalInteg
 		}
 		// Join accepted peer work before observing its receipt failures.
 		f.peer.close()
+		if f.peer.socks != nil {
+			f.peer.socks.joined(t)
+		}
 		if f.peer.bypassed.Load() != 0 {
 			t.Error("physical proxy accepted a connection without its prior broker grant")
 		}
@@ -1477,6 +1515,9 @@ func (f *desktopExternalIntegrationFixture) prove(t *testing.T) {
 		if _, err := f.kernel.Select(context.Background(), f.source.capture, "tcp", f.kernel.remote); err == nil {
 			t.Fatal("UDP fixture granted an unrequested physical TCP destination")
 		}
+	}
+	if f.peer.protocol == "socks5" {
+		f.peer.socks.proved(t, f)
 	}
 	if awgpolicy.IsMode(f.peer.protocol) {
 		if f.peer.awgReadback == nil {
@@ -1575,7 +1616,7 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 	desktopExternalLatencyIntegration(t, ca)
 	protocols := []string{"http-connect", "https-connect", "shadowsocks"}
 	if runtime.GOOS == "linux" {
-		protocols = append(protocols, "hysteria2", "wireguard", "awg2-fast", "awg2-strong")
+		protocols = append(protocols, "hysteria2", "wireguard", "awg2-fast", "awg2-strong", "socks5")
 	}
 	for _, protocol := range protocols {
 		t.Run(protocol+"/proof-and-mtu", func(t *testing.T) {
@@ -1655,6 +1696,9 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 		if awgpolicy.IsMode(protocol) {
 			faults = append(faults, "parameters")
 		}
+		if protocol == "socks5" {
+			faults = append(faults, "truncated", "auth-downgrade", "relay-domain", "relay-wildcard", "relay-zero", "relay-uncaptured", "control-eof")
+		}
 		for _, fault := range faults {
 			t.Run(protocol+"/reject/"+fault, func(t *testing.T) {
 				f := newDesktopExternalIntegrationFixture(t, ca, protocol, fault)
@@ -1704,8 +1748,14 @@ func TestRouterVPNDesktopExternalPhysicalIntegration(t *testing.T) {
 				if fault == "peer-tls-name" && (f.peer.physicalUDP.Load() == 0 || f.peer.dnsQueries.Load() != 0 || f.peer.publicAttempts.Load() != 0) {
 					t.Fatal("wrong Hysteria2 server identity bypassed the actual QUIC/TLS boundary", f.peer.diagnostic())
 				}
+				if protocol == "socks5" {
+					f.peer.socks.rejected(t, fault)
+				}
 			})
 		}
+	}
+	if runtime.GOOS == "linux" {
+		desktopExternalSOCKSIntegration(t, ca)
 	}
 	for _, afterPublication := range []bool{false, true} {
 		name := "network-reset-during-mtu"

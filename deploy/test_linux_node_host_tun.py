@@ -113,7 +113,10 @@ EXTERNAL_AMNEZIA_CASES = tuple('external-' + variant + '-' + action for variant 
 EXTERNAL_OPENVPN_CASES = tuple('external-' + variant + '-' + action for variant in ('ovpntcp', 'ovpnudp')
                               for action in ('on-connect', 'always', 'public', 'cancelled', 'wrong-trust', 'wrong-control',
                                              'dns-failure', 'replacement', 'fallback'))
-EXTERNAL_CASES += EXTERNAL_HYSTERIA2_CASES + EXTERNAL_WIREGUARD_CASES + EXTERNAL_AMNEZIA_CASES + EXTERNAL_OPENVPN_CASES
+EXTERNAL_SOCKS_CASES = tuple('external-socks-' + action for action in
+                             ('on-connect', 'always', 'public', 'cancelled', 'wrong-auth', 'auth-downgrade',
+                              'relay-domain', 'control-eof', 'dns-failure', 'replacement', 'source'))
+EXTERNAL_CASES += EXTERNAL_HYSTERIA2_CASES + EXTERNAL_WIREGUARD_CASES + EXTERNAL_AMNEZIA_CASES + EXTERNAL_OPENVPN_CASES + EXTERNAL_SOCKS_CASES
 CASES += EXTERNAL_CASES
 NAMESPACE_ENVIRONMENT = ('ROUTERVPN_NODE_OUTER_NETNS_ID', 'ROUTERVPN_NODE_HOST_BUNDLE', 'ROUTERVPN_NODE_HOST_BUNDLE_SHA256',
                          'ROUTERVPN_NODE_HOST_PEER_BINARY', 'ROUTERVPN_NODE_HOST_PEER_SHA256',

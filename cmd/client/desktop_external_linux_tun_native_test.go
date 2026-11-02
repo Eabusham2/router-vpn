@@ -101,7 +101,7 @@ func linuxHostTUNExternalFixture(controller *ownedDesktopController, scenario st
 	if err := linuxHostTUNRendezvous(gate, 2); err != nil {
 		return err
 	}
-	if scenario == "external-ss-source" {
+	if linuxHostTUNExternalAction(scenario) == "source" {
 		if err := linuxHostTUNExternalRefuseSource(ctx, a, session, original); err != nil {
 			return err
 		}
@@ -201,7 +201,11 @@ func linuxHostTUNExternalRefuseSource(ctx context.Context, a *app, session *desk
 		calls++
 		owner.mu.Lock()
 		owner.profiles.Profiles[1] = cloneRouterProfile(saved)
-		owner.profiles.Profiles[1].External.Shadowsocks.Password = "changed-after-captured-native-preparation"
+		if owner.profiles.Profiles[1].External.SOCKS5 != nil {
+			owner.profiles.Profiles[1].External.SOCKS5.Password = "changed-after-captured-native-preparation"
+		} else {
+			owner.profiles.Profiles[1].External.Shadowsocks.Password = "changed-after-captured-native-preparation"
+		}
 		owner.mu.Unlock()
 		return retained, nil
 	}}
@@ -256,6 +260,16 @@ func linuxHostTUNExternalActive(ctx context.Context, a *app, session *desktopLin
 		return host, proof, err
 	}
 	physical := host.external.Metadata()
+	if physical.Protocol == "socks5" {
+		capture, err := host.external.Capture()
+		if err != nil || len(capture.PhysicalRoots) != 1 || len(capture.PhysicalRoots[0].Destinations) != 1 ||
+			!capture.PhysicalRoots[0].DynamicSOCKSUDP || capture.PhysicalRoots[0].SOCKSVersion != "5" ||
+			capture.PhysicalRoots[0].SOCKSControl == nil || capture.PhysicalRoots[0].SOCKSControl.Network != "tcp" ||
+			capture.PhysicalRoots[0].Destinations[0].Network != "tcp" || capture.PhysicalRoots[0].Destinations[0].Host != "11.77.0.2" ||
+			capture.SelectedDNS.Type != "udp" || capture.SelectedDNS.Physical || capture.SelectedDNS.Host != "203.0.113.53" || capture.SelectedDNS.Port != 5353 {
+			return host, proof, errors.Join(err, errors.New("installed SOCKS host lost its original control or borrowed a fixed UDP port"))
+		}
+	}
 	if physical.Protocol == "hysteria2" || physical.Protocol == "wireguard" {
 		capture, err := host.external.Capture()
 		if err != nil || len(capture.PhysicalRoots) != 1 || len(capture.PhysicalRoots[0].Destinations) != 1 ||
@@ -382,6 +396,8 @@ func linuxHostTUNExternalPublic(ctx context.Context, a *app, session *desktopLin
 		}
 	} else if foreign.Profile.External.Hysteria2 != nil {
 		foreign.Profile.External.Hysteria2.Password += "-different-observed-source"
+	} else if foreign.Profile.External.SOCKS5 != nil {
+		foreign.Profile.External.SOCKS5.Password += "-different-observed-source"
 	} else {
 		foreign.Profile.External.Shadowsocks.Password += "-different-observed-source"
 	}

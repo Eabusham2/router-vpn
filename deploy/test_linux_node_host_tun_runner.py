@@ -112,8 +112,8 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
     def test_external_succession_keeps_all_original_cases_and_real_lifecycle(self):
         self.assertEqual(len(G.ORIGINAL_CASES), 299)
         self.assertEqual(len(G.EXTERNAL_PROXY_CASES), 11)
-        self.assertEqual(len(G.EXTERNAL_CASES), 62)
-        self.assertEqual(len(G.CASES), 361)
+        self.assertEqual(len(G.EXTERNAL_CASES), 73)
+        self.assertEqual(len(G.CASES), 372)
         self.assertEqual(G.CASES[:299], G.ORIGINAL_CASES)
         self.assertEqual(G.CASES[299:310], G.EXTERNAL_PROXY_CASES)
         self.assertEqual(G.CASES[299:], G.EXTERNAL_CASES)
@@ -185,7 +185,7 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
         self.assertEqual(len(G.EXTERNAL_OPENVPN_CASES), 18)
         self.assertEqual(G.CASES[:343], G.ORIGINAL_CASES + G.EXTERNAL_PROXY_CASES +
                          G.EXTERNAL_HYSTERIA2_CASES + G.EXTERNAL_WIREGUARD_CASES + G.EXTERNAL_AMNEZIA_CASES)
-        self.assertEqual(G.CASES[343:], G.EXTERNAL_OPENVPN_CASES)
+        self.assertEqual(G.CASES[343:361], G.EXTERNAL_OPENVPN_CASES)
         self.assertEqual(set(G.EXTERNAL_OPENVPN_CASES) & set(G.CASES[:343]), set())
         self.assertEqual(G.EXTERNAL_OPENVPN_CASES, tuple('external-' + variant + '-' + action
                          for variant in ('ovpntcp', 'ovpnudp')
@@ -199,6 +199,24 @@ class InstalledLinuxHostVerdict(unittest.TestCase):
                                                'verified installed host plain Hysteria2:'), case)
         with self.assertRaises(ValueError):
             G.check_verdict(self.completed(G.CASES[:343]))
+
+    def test_external_socks_requires_original_controls_and_all_prior_cases(self):
+        self.assertEqual(G.CASES[:361], G.ORIGINAL_CASES + G.EXTERNAL_PROXY_CASES +
+                         G.EXTERNAL_HYSTERIA2_CASES + G.EXTERNAL_WIREGUARD_CASES +
+                         G.EXTERNAL_AMNEZIA_CASES + G.EXTERNAL_OPENVPN_CASES)
+        self.assertEqual(G.CASES[361:], G.EXTERNAL_SOCKS_CASES)
+        self.assertEqual(G.EXTERNAL_SOCKS_CASES, tuple('external-socks-' + action for action in
+                         ('on-connect', 'always', 'public', 'cancelled', 'wrong-auth', 'auth-downgrade',
+                          'relay-domain', 'control-eof', 'dns-failure', 'replacement', 'source')))
+        self.assertEqual(set(G.EXTERNAL_SOCKS_CASES) & set(G.CASES[:361]), set())
+        for case in G.EXTERNAL_SOCKS_CASES:
+            output = self.completed((case,))
+            G.check_verdict(output, case)
+            with self.subTest(case=case), self.assertRaises(ValueError):
+                G.check_verdict(output.replace('verified installed host retained external succession:',
+                                               'verified installed host plain Shadowsocks:'), case)
+        with self.assertRaises(ValueError):
+            G.check_verdict(self.completed(G.CASES[:361]))
 
     def test_requires_every_real_positive_negative_and_joined_lifecycle(self):
         output = self.completed()

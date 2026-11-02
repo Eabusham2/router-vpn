@@ -1,0 +1,420 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/netip"
+	"reflect"
+	"runtime"
+	"sync"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/protocol/socks"
+	"github.com/sagernet/sing/service"
+)
+
+type ExternalSOCKSOptions struct {
+	option.SOCKSOutboundOptions
+	ExternalCaptureOptions
+}
+
+func RegisterExternalSOCKSOutbound(registry *outbound.Registry) {
+	outbound.Register[ExternalSOCKSOptions](registry, mobilemultihop.DesktopExternalSOCKSType, NewExternalSOCKSOutbound)
+}
+
+// The original SOCKS option bytes remain in ExternalPolicy. This derived host
+// adds one private lower dialer per native Client call. No shared destination
+// map or imported JSON field can authorize a negotiated UDP relay.
+type ExternalSOCKSOutbound struct {
+	outbound.Adapter
+	mu         sync.Mutex
+	ctx        context.Context
+	options    ExternalSOCKSOptions
+	control    M.Socksaddr
+	owner      *ExternalNetworkOwner
+	lower      *ExternalPhysicalOutbound
+	policy     *mobilemultihop.DesktopExternalPolicy
+	operations map[*externalSOCKSOperation]struct{}
+	closed     bool
+	closeOnce  sync.Once
+	closeErr   error
+}
+
+func NewExternalSOCKSOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options ExternalSOCKSOptions) (adapter.Outbound, error) {
+	address, err := netip.ParseAddr(options.Server)
+	if runtime.GOOS != "linux" || ctx == nil || ctx.Err() != nil || tag != mobilemultihop.ExternalFinalTag ||
+		!networkSessionID.MatchString(options.SessionID) || !networkSourceID.MatchString(options.SourceSHA256) ||
+		err != nil || address.String() != options.Server || address.Is4In6() || address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() || options.ServerPort == 0 ||
+		options.Version != "5" || options.Network != "" || options.UDPOverTCP != nil ||
+		!reflect.DeepEqual(options.DialerOptions, option.DialerOptions{Detour: mobilemultihop.DesktopExternalPhysicalTag}) ||
+		(options.Username == "") != (options.Password == "") || len(options.Username) > 255 || len(options.Password) > 255 {
+		return nil, errors.New("retained SOCKS5 requires its exact Linux control, authentication and native lower owner")
+	}
+	return &ExternalSOCKSOutbound{
+		Adapter: outbound.NewAdapterWithDialerOptions(mobilemultihop.DesktopExternalSOCKSType, tag, []string{"tcp", "udp"}, options.DialerOptions),
+		ctx:     ctx, options: options, control: options.ServerOptions.Build(), operations: make(map[*externalSOCKSOperation]struct{}),
+	}, nil
+}
+
+func (o *ExternalSOCKSOutbound) prepare(policy *mobilemultihop.DesktopExternalPolicy, owner *ExternalNetworkOwner, lower *ExternalPhysicalOutbound) error {
+	if o == nil || policy == nil || policy.Validate() != nil || owner == nil || lower == nil || runtime.GOOS != "linux" {
+		return errors.New("retained SOCKS5 has no original native preparation")
+	}
+	meta := policy.Metadata()
+	if meta.TargetOS != "linux" || meta.Protocol != "socks5" || !meta.SOCKSUDPAssociationRequired ||
+		owner.capture != o.options.ExternalCaptureOptions || lower.options != owner.capture ||
+		meta.SessionID != o.options.SessionID || meta.SourceSHA256 != o.options.SourceSHA256 {
+		return errors.New("retained SOCKS5 belongs to another captured native policy")
+	}
+	var graph struct {
+		Outbounds []json.RawMessage `json:"outbounds"`
+	}
+	if json.Unmarshal([]byte(policy.Config()), &graph) != nil || len(graph.Outbounds) != 2 {
+		return errors.New("retained SOCKS5 graph has another lower composition")
+	}
+	var original struct {
+		Type string `json:"type"`
+		Tag  string `json:"tag"`
+		ExternalSOCKSOptions
+	}
+	if json.Unmarshal(graph.Outbounds[0], &original) != nil || original.Type != mobilemultihop.DesktopExternalSOCKSType ||
+		original.Tag != o.Tag() || !reflect.DeepEqual(original.ExternalSOCKSOptions, o.options) {
+		return errors.New("retained SOCKS5 substituted captured credentials or control options")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.closed || o.ctx.Err() != nil || o.owner != nil || o.lower != nil || o.policy != nil || len(o.operations) != 0 {
+		return errors.New("retained SOCKS5 preparation is repeated, retired or late")
+	}
+	o.owner, o.lower, o.policy = owner, lower, policy
+	return nil
+}
+
+func (o *ExternalSOCKSOutbound) current(ctx context.Context) (*mobiletor.DesktopSocketBroker, error) {
+	if o == nil || ctx == nil || ctx.Err() != nil || o.ctx == nil || o.ctx.Err() != nil {
+		return nil, net.ErrClosed
+	}
+	o.mu.Lock()
+	owner, lower, policy, closed := o.owner, o.lower, o.policy, o.closed
+	o.mu.Unlock()
+	if closed || owner == nil || lower == nil || policy == nil || policy.Validate() != nil || !owner.SocketCurrent() {
+		return nil, net.ErrClosed
+	}
+	manager := service.FromContext[adapter.OutboundManager](o.ctx)
+	if manager == nil {
+		return nil, errors.New("retained SOCKS5 lost its native outbound manager")
+	}
+	selected, found := manager.Outbound(o.Tag())
+	if !found || selected != o {
+		return nil, errors.New("retained SOCKS5 was replaced by another native root")
+	}
+	// The permanently captured TCP control tuple still constrains this source.
+	// A private per-call dialer alone can use its authenticated UDP reply below.
+	return lower.current(ctx, "tcp", o.control)
+}
+
+func (o *ExternalSOCKSOutbound) dial(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, *externalSOCKSOperation, error) {
+	if _, err := o.current(ctx); err != nil {
+		return nil, nil, err
+	}
+	network = N.NetworkName(network)
+	if network != "tcp" && network != "udp" {
+		return nil, nil, errors.New("retained SOCKS5 supports only captured TCP and UDP operations")
+	}
+	ctx, metadata := adapter.ExtendContext(ctx)
+	metadata.Outbound, metadata.Destination = o.Tag(), destination
+	operationCtx, cancel := context.WithCancel(ctx)
+	operation := &externalSOCKSOperation{root: o, ctx: operationCtx, cancel: cancel, network: network, done: make(chan struct{})}
+	o.mu.Lock()
+	if o.closed || len(o.operations) >= mobiletor.DesktopSocketLimit {
+		o.mu.Unlock()
+		cancel()
+		return nil, nil, errors.New("retained SOCKS5 operation owner is retired or full")
+	}
+	o.operations[operation] = struct{}{}
+	o.mu.Unlock()
+	// This native client is private to one operation. Its exact checked code
+	// authenticates this TCP channel before invoking the same dialer for the
+	// UDP reply, then owns the existing TCP-control/UDP retirement observer.
+	client := socks.NewClient(operation, o.control, socks.Version5, o.options.Username, o.options.Password)
+	connection, failure := client.DialContext(operationCtx, network, destination)
+	operation.mu.Lock()
+	operation.result = connection
+	retired := operation.retired
+	operation.mu.Unlock()
+	if failure == nil && (connection == nil || retired || operationCtx.Err() != nil) {
+		failure = net.ErrClosed
+	}
+	if failure == nil {
+		_, failure = o.current(operationCtx)
+	}
+	close(operation.done)
+	if failure != nil {
+		return nil, nil, errors.Join(failure, operation.close())
+	}
+	return connection, operation, nil
+}
+
+func (o *ExternalSOCKSOutbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	connection, operation, err := o.dial(ctx, network, destination)
+	if err != nil {
+		return nil, err
+	}
+	return &externalSOCKSConn{Conn: connection, operation: operation}, nil
+}
+
+func (o *ExternalSOCKSOutbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	connection, operation, err := o.dial(ctx, "udp", destination)
+	if err != nil {
+		return nil, err
+	}
+	packet, ok := connection.(net.PacketConn)
+	if !ok {
+		return nil, errors.Join(errors.New("retained SOCKS5 did not return its native UDP association"), operation.close())
+	}
+	return &externalSOCKSPacket{PacketConn: packet, operation: operation}, nil
+}
+
+// Each object is reachable only by its one native Client. No caller, context
+// key or sibling association can supply a control identifier or UDP grant.
+type externalSOCKSOperation struct {
+	mu                 sync.Mutex
+	root               *ExternalSOCKSOutbound
+	ctx                context.Context
+	cancel             context.CancelFunc
+	network            string
+	done               chan struct{}
+	tcp, udp, result   net.Conn
+	tcpAsked, udpAsked bool
+	retired            bool
+	closeOnce          sync.Once
+	closeErr           error
+}
+
+func (s *externalSOCKSOperation) DialContext(ctx context.Context, network string, address M.Socksaddr) (net.Conn, error) {
+	if s == nil || ctx != s.ctx {
+		return nil, errors.New("retained SOCKS5 lower call has another operation")
+	}
+	if !s.owned() {
+		return nil, errors.New("retained SOCKS5 lower call lost its exact operation owner")
+	}
+	broker, err := s.root.current(ctx)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	valid := !s.retired
+	switch network {
+	case "tcp":
+		valid = valid && !s.tcpAsked && !s.udpAsked && address == s.root.control
+		if valid {
+			s.tcpAsked = true
+		}
+	case "udp":
+		valid = valid && s.network == "udp" && s.tcpAsked && s.tcp != nil && !s.udpAsked
+		if valid {
+			s.udpAsked = true
+		}
+	default:
+		valid = false
+	}
+	s.mu.Unlock()
+	if !valid {
+		return nil, errors.New("retained SOCKS5 relay has no matching single native control operation")
+	}
+	remote, parseErr := netip.ParseAddrPort(address.String())
+	if parseErr != nil || address.IsDomain() || !remote.IsValid() || remote.Port() == 0 ||
+		remote.Addr().IsUnspecified() || remote.Addr().IsMulticast() || remote.Addr().Is4In6() || remote.Addr().Zone() != "" ||
+		remote.Addr().Is6() && s.root.policy.Metadata().IPv6Mode == "off" {
+		return nil, errors.New("retained SOCKS5 reply requires an admitted numeric relay and selected IP family")
+	}
+	// The actual source independently checks IPv4/IPv6, LAN/private policy and
+	// its current interface, then acknowledges only this bound socket tuple.
+	// No dynamic relay is added to ExternalPhysicalOutbound.allowed.
+	connection, err := broker.DialContext(ctx, network, remote.String())
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	valid = !s.retired && ctx.Err() == nil
+	if valid {
+		if network == "tcp" {
+			s.tcp = connection
+		} else {
+			s.udp = connection
+		}
+	}
+	s.mu.Unlock()
+	if !valid {
+		_ = connection.Close()
+		return nil, net.ErrClosed
+	}
+	return connection, nil
+}
+
+func (*externalSOCKSOperation) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("retained SOCKS5 must use its exact connected UDP relay")
+}
+
+func (s *externalSOCKSOperation) owned() bool {
+	if s == nil || s.root == nil {
+		return false
+	}
+	s.root.mu.Lock()
+	_, retained := s.root.operations[s]
+	current := retained && !s.root.closed
+	s.root.mu.Unlock()
+	return current
+}
+
+func (s *externalSOCKSOperation) current() error {
+	s.mu.Lock()
+	retired := s.retired
+	s.mu.Unlock()
+	if retired || !s.owned() {
+		return net.ErrClosed
+	}
+	// Establishment deadlines do not own a successfully returned association.
+	// Its native root, original network generation and TCP control do.
+	_, err := s.root.current(s.root.ctx)
+	return err
+}
+
+// Only complete closed-error trees are harmless during owned duplicate close.
+// A mixed real failure, a textual lookalike or an unbounded unwrap stays visible.
+func externalSOCKSClosedOnly(err error, depth int) bool {
+	if err == nil || err == net.ErrClosed {
+		return true
+	}
+	if depth >= 32 {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 || len(children) > 32 {
+			return false
+		}
+		for _, child := range children {
+			if child == nil || !externalSOCKSClosedOnly(child, depth+1) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		child := wrapped.Unwrap()
+		return child != nil && externalSOCKSClosedOnly(child, depth+1)
+	}
+	return false
+}
+
+func (s *externalSOCKSOperation) close() error {
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.retired = true
+		udp, tcp := s.udp, s.tcp
+		s.mu.Unlock()
+		s.cancel()
+		for _, connection := range []net.Conn{udp, tcp} {
+			if connection != nil {
+				if err := connection.Close(); err != nil && !externalSOCKSClosedOnly(err, 0) {
+					s.closeErr = errors.Join(s.closeErr, err)
+				}
+			}
+		}
+		// A returned or late native UDP association must join its original TCP
+		// observer. A pending dial cannot escape the root's captured close.
+		<-s.done
+		s.mu.Lock()
+		result := s.result
+		s.mu.Unlock()
+		if result != nil {
+			if err := result.Close(); err != nil && !externalSOCKSClosedOnly(err, 0) {
+				s.closeErr = errors.Join(s.closeErr, err)
+			}
+		}
+		s.root.mu.Lock()
+		delete(s.root.operations, s)
+		s.root.mu.Unlock()
+	})
+	return s.closeErr
+}
+
+func (o *ExternalSOCKSOutbound) Close() error {
+	o.closeOnce.Do(func() {
+		o.mu.Lock()
+		o.closed = true
+		operations := make([]*externalSOCKSOperation, 0, len(o.operations))
+		for operation := range o.operations {
+			operations = append(operations, operation)
+		}
+		o.mu.Unlock()
+		for _, operation := range operations {
+			o.closeErr = errors.Join(o.closeErr, operation.close())
+		}
+	})
+	return o.closeErr
+}
+
+type externalSOCKSConn struct {
+	net.Conn
+	operation *externalSOCKSOperation
+}
+
+func (c *externalSOCKSConn) Read(data []byte) (int, error) {
+	if err := c.operation.current(); err != nil {
+		return 0, errors.Join(err, c.operation.close())
+	}
+	n, err := c.Conn.Read(data)
+	if current := c.operation.current(); current != nil {
+		err = errors.Join(err, current, c.operation.close())
+	}
+	return n, err
+}
+func (c *externalSOCKSConn) Write(data []byte) (int, error) {
+	if err := c.operation.current(); err != nil {
+		return 0, errors.Join(err, c.operation.close())
+	}
+	n, err := c.Conn.Write(data)
+	if current := c.operation.current(); current != nil {
+		err = errors.Join(err, current, c.operation.close())
+	}
+	return n, err
+}
+func (c *externalSOCKSConn) Close() error { return c.operation.close() }
+
+type externalSOCKSPacket struct {
+	net.PacketConn
+	operation *externalSOCKSOperation
+}
+
+func (c *externalSOCKSPacket) ReadFrom(data []byte) (int, net.Addr, error) {
+	if err := c.operation.current(); err != nil {
+		return 0, nil, errors.Join(err, c.operation.close())
+	}
+	n, address, err := c.PacketConn.ReadFrom(data)
+	if current := c.operation.current(); current != nil {
+		err = errors.Join(err, current, c.operation.close())
+	}
+	return n, address, err
+}
+func (c *externalSOCKSPacket) WriteTo(data []byte, address net.Addr) (int, error) {
+	if err := c.operation.current(); err != nil {
+		return 0, errors.Join(err, c.operation.close())
+	}
+	n, err := c.PacketConn.WriteTo(data, address)
+	if current := c.operation.current(); current != nil {
+		err = errors.Join(err, current, c.operation.close())
+	}
+	return n, err
+}
+func (c *externalSOCKSPacket) Close() error { return c.operation.close() }

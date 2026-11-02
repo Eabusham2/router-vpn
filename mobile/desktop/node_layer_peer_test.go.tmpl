@@ -65,11 +65,14 @@ import (
 	routervpnperformance "github.com/sagernet/sing-box/service/routervpnperformance"
 	HYQUIC "github.com/sagernet/sing-quic/hysteria2"
 	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	"github.com/sagernet/sing/common/auth"
 	"github.com/sagernet/sing/common/buf"
 	"github.com/sagernet/sing/common/bufio"
 	SJ "github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/protocol/socks"
+	"github.com/sagernet/sing/protocol/socks/socks5"
 )
 
 // The peer is a separate retained executable using the pinned SS2022 server,
@@ -1756,24 +1759,211 @@ type desktopExternalInstalledPeerRequest struct {
 	Amnezia         *desktopExternalInstalledAWGRequest `json:"amneziawg,omitempty"`
 	OpenVPNNetwork  string                              `json:"openvpn_network,omitempty"`
 	OpenVPNFallback bool                                `json:"openvpn_fallback,omitempty"`
+	SOCKSFault      string                              `json:"socks_fault,omitempty"`
 }
 
 type desktopExternalInstalledPeerReply struct {
-	Schema           int    `json:"schema"`
-	Protocol         string `json:"protocol"`
-	Address          string `json:"address"`
-	CA               string `json:"ca"`
-	Connections      int64  `json:"connections"`
-	Streams          int64  `json:"streams"`
-	PhysicalUDP      int64  `json:"physical_udp"`
-	Packets          int64  `json:"packets"`
-	DNSQueries       uint32 `json:"dns_queries"`
-	PublicAttempts   uint32 `json:"public_attempts"`
-	PublicReplies    uint32 `json:"public_replies"`
-	AuthFailures     uint32 `json:"auth_failures"`
-	ParametersSHA256 string `json:"parameters_sha256,omitempty"`
-	OpenVPNNetwork   string `json:"openvpn_network,omitempty"`
-	OpenVPNProfile   string `json:"openvpn_profile,omitempty"`
+	Schema               int      `json:"schema"`
+	Protocol             string   `json:"protocol"`
+	Address              string   `json:"address"`
+	CA                   string   `json:"ca"`
+	Connections          int64    `json:"connections"`
+	Streams              int64    `json:"streams"`
+	PhysicalUDP          int64    `json:"physical_udp"`
+	Packets              int64    `json:"packets"`
+	DNSQueries           uint32   `json:"dns_queries"`
+	PublicAttempts       uint32   `json:"public_attempts"`
+	PublicReplies        uint32   `json:"public_replies"`
+	AuthFailures         uint32   `json:"auth_failures"`
+	ParametersSHA256     string   `json:"parameters_sha256,omitempty"`
+	OpenVPNNetwork       string   `json:"openvpn_network,omitempty"`
+	OpenVPNProfile       string   `json:"openvpn_profile,omitempty"`
+	SOCKSRelays          []string `json:"socks_relays,omitempty"`
+	SOCKSRejectedReplies uint32   `json:"socks_rejected_replies,omitempty"`
+}
+
+// This actual SOCKS provider has one retained listener per authenticated UDP
+// control. Its only inner destinations are the existing private test DNS and
+// HTTPS responders. The native client must negotiate its real port; there is
+// no final-socket mapping or guessed UDP control-port permission.
+type desktopExternalInstalledSOCKSPeer struct {
+	server       *desktopNodeLayerServer
+	request      desktopExternalInstalledPeerRequest
+	authFailures *atomic.Uint32
+	mu           sync.Mutex
+	relays       []string
+	rejected     atomic.Uint32
+	joinFailed   atomic.Bool
+}
+
+type desktopExternalInstalledSOCKSControl struct {
+	net.Conn
+	peer        *desktopExternalInstalledSOCKSPeer
+	associated  atomic.Bool
+	readDone    chan struct{}
+	readOnce    sync.Once
+	authWritten bool
+}
+
+func (c *desktopExternalInstalledSOCKSControl) Read(body []byte) (int, error) {
+	if c.associated.Load() {
+		defer c.readOnce.Do(func() { close(c.readDone) })
+	}
+	return c.Conn.Read(body)
+}
+func (c *desktopExternalInstalledSOCKSControl) Write(body []byte) (int, error) {
+	// Observe the pinned server's actual authentication response once, before
+	// its TCP/UDP handler starts. Never turn a generic transport error into an
+	// authentication counter or expose the server's credential-bearing error.
+	if !c.authWritten && len(body) == 2 && body[0] == 1 {
+		c.authWritten = true
+		if body[1] == socks5.UsernamePasswordStatusFailure {
+			c.peer.authFailures.Add(1)
+		}
+	}
+	return c.Conn.Write(body)
+}
+
+type desktopExternalInstalledSOCKSListener struct {
+	peer    *desktopExternalInstalledSOCKSPeer
+	control *desktopExternalInstalledSOCKSControl
+	relay   *desktopExternalInstalledSOCKSRelay
+}
+type desktopExternalInstalledSOCKSRelay struct {
+	net.PacketConn
+	listener    *desktopExternalInstalledSOCKSListener
+	readStarted atomic.Bool
+	closeOnce   sync.Once
+}
+
+func (l *desktopExternalInstalledSOCKSListener) ListenPacket(config net.ListenConfig, ctx context.Context, network, address string) (net.PacketConn, error) {
+	if ctx.Err() != nil || l.relay != nil || network != "udp" || l.peer.request.Address != "11.77.0.2" || address != net.JoinHostPort(l.peer.request.Address, "0") {
+		return nil, errors.New("installed SOCKS peer changed its actual association bind")
+	}
+	var packet net.PacketConn
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		packet, err = config.ListenPacket(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		if packet.LocalAddr().(*net.UDPAddr).Port != l.control.LocalAddr().(*net.TCPAddr).Port {
+			break
+		}
+		_ = packet.Close()
+		packet = nil
+	}
+	if packet == nil {
+		return nil, errors.New("installed SOCKS fixture could not retain a distinct real relay port")
+	}
+	if !l.peer.server.enter(packet) {
+		_ = packet.Close()
+		return nil, net.ErrClosed
+	}
+	l.relay = &desktopExternalInstalledSOCKSRelay{PacketConn: packet, listener: l}
+	l.control.associated.Store(true)
+	l.peer.mu.Lock()
+	l.peer.relays = append(l.peer.relays, packet.LocalAddr().String())
+	l.peer.mu.Unlock()
+	return l.relay, nil
+}
+
+func (r *desktopExternalInstalledSOCKSRelay) ReadFrom(body []byte) (int, net.Addr, error) {
+	r.readStarted.Store(true)
+	n, source, err := r.PacketConn.ReadFrom(body)
+	if err == nil {
+		r.listener.peer.server.rawUDP.Add(1)
+		if r.listener.peer.request.SOCKSFault == "control-eof" {
+			_ = r.listener.control.Conn.Close()
+			return 0, nil, net.ErrClosed
+		}
+	}
+	return n, source, err
+}
+func (r *desktopExternalInstalledSOCKSRelay) Close() error {
+	r.closeOnce.Do(func() { r.listener.peer.server.leave(r.PacketConn) })
+	return nil
+}
+
+func (p *desktopExternalInstalledSOCKSPeer) NewConnectionEx(ctx context.Context, connection net.Conn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	defer connection.Close()
+	var err error
+	if _, owned := p.server.route("tcp", destination.String()); !owned {
+		err = errors.New("installed SOCKS peer refused an unowned TCP destination")
+	} else if err = N.ReportConnHandshakeSuccess(connection, connection); err == nil {
+		err = p.server.NewConnection(ctx, connection, M.Metadata{Source: source, Destination: destination})
+	}
+	if onClose != nil {
+		onClose(err)
+	}
+}
+func (p *desktopExternalInstalledSOCKSPeer) NewPacketConnectionEx(ctx context.Context, connection N.PacketConn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	defer connection.Close()
+	err := p.server.NewPacketConnection(ctx, connection, M.Metadata{Source: source, Destination: destination})
+	if onClose != nil {
+		onClose(err)
+	}
+}
+
+func (p *desktopExternalInstalledSOCKSPeer) serve(connection net.Conn) error {
+	control := &desktopExternalInstalledSOCKSControl{Conn: connection, peer: p, readDone: make(chan struct{})}
+	listener := &desktopExternalInstalledSOCKSListener{peer: p, control: control}
+	defer func() {
+		_ = control.Conn.Close()
+		if listener.relay != nil {
+			_ = listener.relay.Close()
+			if listener.relay.readStarted.Load() {
+				select {
+				case <-control.readDone:
+				case <-time.After(3 * time.Second):
+					p.joinFailed.Store(true)
+				}
+			}
+		}
+	}()
+	if p.request.SOCKSFault == "auth-downgrade" || p.request.SOCKSFault == "relay-domain" {
+		return p.refuse(control)
+	}
+	authenticator := auth.NewAuthenticator([]auth.User{{Username: "captured-native-user", Password: p.request.Password}})
+	return socks.HandleConnectionEx(p.server.ctx, control, STD.NewReader(control), authenticator, p, listener,
+		5*time.Second, M.SocksaddrFromNet(connection.RemoteAddr()), nil)
+}
+
+func (p *desktopExternalInstalledSOCKSPeer) refuse(connection net.Conn) error {
+	reader := STD.NewReader(connection)
+	offer, err := socks5.ReadAuthRequest(reader)
+	if err != nil || len(offer.Methods) != 1 || offer.Methods[0] != socks5.AuthTypeUsernamePassword {
+		return errors.New("installed SOCKS negative lost its exact offered method")
+	}
+	if p.request.SOCKSFault == "auth-downgrade" {
+		if err := socks5.WriteAuthResponse(connection, socks5.AuthResponse{Method: socks5.AuthTypeNotRequired}); err != nil {
+			return err
+		}
+	} else {
+		if err := socks5.WriteAuthResponse(connection, socks5.AuthResponse{Method: socks5.AuthTypeUsernamePassword}); err != nil {
+			return err
+		}
+		credentials, err := socks5.ReadUsernamePasswordAuthRequest(reader)
+		if err != nil || credentials.Username != "captured-native-user" || credentials.Password != p.request.Password {
+			return errors.New("installed SOCKS reply negative changed original authentication")
+		}
+		if err := socks5.WriteUsernamePasswordAuthResponse(connection, socks5.UsernamePasswordAuthResponse{Status: socks5.UsernamePasswordStatusSuccess}); err != nil {
+			return err
+		}
+		request, err := socks5.ReadRequest(reader)
+		if err != nil || request.Command != socks5.CommandUDPAssociate {
+			return errors.New("installed SOCKS negative lost its UDP association request")
+		}
+		if err := socks5.WriteResponse(connection, socks5.Response{ReplyCode: socks5.ReplyCodeSuccess, Bind: M.ParseSocksaddr("unrequested-relay.example:5353")}); err != nil {
+			return err
+		}
+	}
+	var body [1]byte
+	if n, err := reader.Read(body[:]); n != 0 || !errors.Is(err, io.EOF) {
+		return errors.New("installed native client did not close its rejected SOCKS control")
+	}
+	p.rejected.Add(1)
+	return nil
 }
 
 func desktopExternalInstalledPeerCertificate(t *testing.T) (tls.Certificate, string) {
@@ -2022,11 +2212,14 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 	decoder.DisallowUnknownFields()
 	var trailing any
 	if err != nil || len(line) > desktopNodeLayerReferenceLimit || decoder.Decode(&request) != nil || decoder.Decode(&trailing) != io.EOF || request.Schema != 1 ||
-		request.Address != "11.77.0.2" || request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "wireguard" && request.Protocol != "amneziawg" && request.Protocol != "openvpn" {
+		request.Address != "11.77.0.2" || request.Protocol != "shadowsocks" && request.Protocol != "http-connect" && request.Protocol != "https-connect" && request.Protocol != "hysteria2" && request.Protocol != "wireguard" && request.Protocol != "amneziawg" && request.Protocol != "openvpn" && request.Protocol != "socks5" {
 		t.Fatal("installed external reference lost its exact bounded request", err)
 	}
 	if request.Protocol != "openvpn" && (request.OpenVPNNetwork != "" || request.OpenVPNFallback) {
 		t.Fatal("ordinary external reference acquired uncaptured provider transport")
+	}
+	if request.SOCKSFault != "" && (request.Protocol != "socks5" || request.SOCKSFault != "auth-downgrade" && request.SOCKSFault != "relay-domain" && request.SOCKSFault != "control-eof") {
+		t.Fatal("ordinary external reference acquired an unowned SOCKS reply mutation")
 	}
 	if request.Protocol == "wireguard" {
 		if request.Password != "" || request.WireGuard == nil || request.Amnezia != nil || desktopExternalInstalledWireGuard == nil {
@@ -2076,7 +2269,7 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 	go func() { dnsDone <- dnsServer.ActivateAndServe() }()
 	t.Cleanup(func() { _ = dnsServer.Shutdown(); _ = dnsListener.Close(); <-dnsDone })
 	var dnsPacket net.PacketConn
-	if request.Protocol == "hysteria2" || request.Protocol == "wireguard" || request.Protocol == "amneziawg" || request.Protocol == "openvpn" {
+	if request.Protocol == "hysteria2" || request.Protocol == "wireguard" || request.Protocol == "amneziawg" || request.Protocol == "openvpn" || request.Protocol == "socks5" {
 		dnsPacket, err = net.ListenPacket("udp4", "127.0.0.1:0")
 		if err != nil {
 			t.Fatal(err)
@@ -2122,6 +2315,7 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 	closeTransport := func() {}
 	var wgPeer desktopExternalInstalledWGPeer
 	var openvpnProfile string
+	var socksPeer *desktopExternalInstalledSOCKSPeer
 	if request.Protocol == "wireguard" || request.Protocol == "amneziawg" {
 		server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: "203.0.113.53:5353", Physical: dnsPacket.LocalAddr().String()})
 		if request.Protocol == "amneziawg" {
@@ -2162,6 +2356,10 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 			serve = func(connection net.Conn) error {
 				return service.NewConnection(ctx, connection, M.Metadata{Source: M.SocksaddrFromNet(connection.RemoteAddr())})
 			}
+		} else if request.Protocol == "socks5" {
+			server.routes = append(server.routes, desktopNodeLayerRoute{Network: "udp", Destination: "203.0.113.53:5353", Physical: dnsPacket.LocalAddr().String()})
+			socksPeer = &desktopExternalInstalledSOCKSPeer{server: server, request: request, authFailures: &authFailures}
+			serve = socksPeer.serve
 		} else {
 			serve = func(connection net.Conn) error {
 				if request.Protocol == "https-connect" {
@@ -2227,6 +2425,9 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 			_ = connection.Close()
 		}
 		server.workers.Wait()
+		if socksPeer != nil && socksPeer.joinFailed.Load() {
+			t.Error("installed SOCKS provider did not join its original TCP observer")
+		}
 	})
 	respond := func() {
 		reply := desktopExternalInstalledPeerReply{Schema: 1, Protocol: request.Protocol, Address: address, CA: ca,
@@ -2234,6 +2435,12 @@ func TestRouterVPNDesktopExternalInstalledReferenceProcess(t *testing.T) {
 			DNSQueries: dnsQueries.Load(), PublicAttempts: publicAttempts.Load(), PublicReplies: publicReplies.Load(), AuthFailures: authFailures.Load()}
 		if request.Protocol == "openvpn" {
 			reply.OpenVPNNetwork, reply.OpenVPNProfile = request.OpenVPNNetwork, openvpnProfile
+		}
+		if socksPeer != nil {
+			socksPeer.mu.Lock()
+			reply.SOCKSRelays = append([]string(nil), socksPeer.relays...)
+			socksPeer.mu.Unlock()
+			reply.SOCKSRejectedReplies = socksPeer.rejected.Load()
 		}
 		if wgPeer.stats != nil {
 			reply.PhysicalUDP, reply.Streams, reply.Packets = wgPeer.stats()

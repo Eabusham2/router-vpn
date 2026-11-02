@@ -62,6 +62,9 @@ var linuxHostTUNExternalCases = []string{
 	"external-ovpnudp-dns-failure",
 	"external-ovpnudp-replacement",
 	"external-ovpnudp-fallback",
+	"external-socks-on-connect", "external-socks-always", "external-socks-public", "external-socks-cancelled",
+	"external-socks-wrong-auth", "external-socks-auth-downgrade", "external-socks-relay-domain", "external-socks-control-eof",
+	"external-socks-dns-failure", "external-socks-replacement", "external-socks-source",
 }
 
 func linuxHostTUNExternalCase(scenario string) bool {
@@ -82,6 +85,9 @@ func linuxHostTUNExternalProtocol(scenario string) string {
 	}
 	if strings.HasPrefix(scenario, "external-http-") {
 		return "http-connect"
+	}
+	if strings.HasPrefix(scenario, "external-socks-") {
+		return "socks5"
 	}
 	if strings.HasPrefix(scenario, "external-hy2-") {
 		return "hysteria2"
@@ -122,28 +128,30 @@ func linuxHostTUNExternalAction(scenario string) string {
 
 func linuxHostTUNExternalFailedProof(scenario string) bool {
 	switch linuxHostTUNExternalAction(scenario) {
-	case "dns-failure", "wrong-key", "wrong-trust", "wrong-psk", "wrong-parameters", "wrong-control":
+	case "dns-failure", "wrong-key", "wrong-trust", "wrong-psk", "wrong-parameters", "wrong-control", "wrong-auth", "auth-downgrade", "relay-domain", "control-eof":
 		return true
 	}
 	return false
 }
 
 type linuxExternalTUNPeerReply struct {
-	Schema           int    `json:"schema"`
-	Protocol         string `json:"protocol"`
-	Address          string `json:"address"`
-	CA               string `json:"ca"`
-	Connections      int64  `json:"connections"`
-	Streams          int64  `json:"streams"`
-	PhysicalUDP      int64  `json:"physical_udp"`
-	Packets          int64  `json:"packets"`
-	DNSQueries       uint32 `json:"dns_queries"`
-	PublicAttempts   uint32 `json:"public_attempts"`
-	PublicReplies    uint32 `json:"public_replies"`
-	AuthFailures     uint32 `json:"auth_failures"`
-	ParametersSHA256 string `json:"parameters_sha256,omitempty"`
-	OpenVPNNetwork   string `json:"openvpn_network,omitempty"`
-	OpenVPNProfile   string `json:"openvpn_profile,omitempty"`
+	Schema               int      `json:"schema"`
+	Protocol             string   `json:"protocol"`
+	Address              string   `json:"address"`
+	CA                   string   `json:"ca"`
+	Connections          int64    `json:"connections"`
+	Streams              int64    `json:"streams"`
+	PhysicalUDP          int64    `json:"physical_udp"`
+	Packets              int64    `json:"packets"`
+	DNSQueries           uint32   `json:"dns_queries"`
+	PublicAttempts       uint32   `json:"public_attempts"`
+	PublicReplies        uint32   `json:"public_replies"`
+	AuthFailures         uint32   `json:"auth_failures"`
+	ParametersSHA256     string   `json:"parameters_sha256,omitempty"`
+	OpenVPNNetwork       string   `json:"openvpn_network,omitempty"`
+	OpenVPNProfile       string   `json:"openvpn_profile,omitempty"`
+	SOCKSRelays          []string `json:"socks_relays,omitempty"`
+	SOCKSRejectedReplies uint32   `json:"socks_rejected_replies,omitempty"`
 }
 
 type linuxExternalTUNPeer struct {
@@ -215,6 +223,19 @@ func (peer *linuxExternalTUNPeer) read(t *testing.T) linuxExternalTUNPeerReply {
 		peer.openvpnProfile = reply.OpenVPNProfile
 	} else if reply.OpenVPNNetwork != "" || reply.OpenVPNProfile != "" {
 		t.Fatal("ordinary external peer acquired an unrequested provider import")
+	}
+	if peer.protocol == "socks5" {
+		if len(reply.SOCKSRelays) > 64 {
+			t.Fatal("installed SOCKS provider exceeded bounded association observations")
+		}
+		for _, value := range reply.SOCKSRelays {
+			relay, err := netip.ParseAddrPort(value)
+			if err != nil || relay.Addr() != peer.address.Addr() || relay.Port() == 0 || relay == peer.address {
+				t.Fatal("installed SOCKS provider guessed its control port or changed the owned peer")
+			}
+		}
+	} else if len(reply.SOCKSRelays) != 0 || reply.SOCKSRejectedReplies != 0 {
+		t.Fatal("ordinary external peer acquired an unrequested SOCKS association")
 	}
 	return reply
 }
@@ -342,11 +363,18 @@ func linuxHostTUNStartExternalPeer(t *testing.T, scenario string) *linuxExternal
 	if peer.protocol == "openvpn" {
 		request["openvpn_network"], request["openvpn_fallback"] = peer.openvpnNetwork, peer.openvpnFallback
 	}
+	if peer.protocol == "socks5" {
+		switch action := linuxHostTUNExternalAction(scenario); action {
+		case "auth-downgrade", "relay-domain", "control-eof":
+			request["socks_fault"] = action
+		}
+	}
 	if err := json.NewEncoder(peer.input).Encode(request); err != nil {
 		t.Fatal(err)
 	}
 	initial := peer.read(t)
-	if initial.Connections != 0 || initial.Streams != 0 || initial.PhysicalUDP != 0 || initial.Packets != 0 || initial.DNSQueries != 0 || initial.PublicAttempts != 0 || initial.PublicReplies != 0 || initial.AuthFailures != 0 {
+	if initial.Connections != 0 || initial.Streams != 0 || initial.PhysicalUDP != 0 || initial.Packets != 0 || initial.DNSQueries != 0 || initial.PublicAttempts != 0 || initial.PublicReplies != 0 || initial.AuthFailures != 0 ||
+		len(initial.SOCKSRelays) != 0 || initial.SOCKSRejectedReplies != 0 {
 		t.Fatal("external reference reported traffic before its selected native child")
 	}
 	return peer
@@ -415,6 +443,12 @@ func linuxHostTUNInstallExternalProfile(t *testing.T, peer *linuxExternalTUNPeer
 		profile.External.Shadowsocks = &common.ExternalShadowsocksConfig{Server: "11.77.0.2", Port: int(peer.address.Port()), Method: "2022-blake3-aes-256-gcm", Password: peer.password}
 	case "http-connect":
 		profile.External.HTTPConnect = connect
+	case "socks5":
+		profile.DNSProtocol = "udp"
+		profile.External.SOCKS5 = &common.ExternalSOCKS5Config{Host: "11.77.0.2", Port: int(peer.address.Port()), Username: "captured-native-user", Password: peer.password}
+		if linuxHostTUNExternalAction(scenario) == "wrong-auth" {
+			profile.External.SOCKS5.Password += "-different-credential"
+		}
 	case "https-connect":
 		connect.TLSServerName = "captured-external.example"
 		profile.External.HTTPSConnect = connect
@@ -540,7 +574,7 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 	stage := "external"
 	if action == "cancelled" {
 		stage = "external-pending"
-	} else if scenario == "external-ss-source" {
+	} else if action == "source" {
 		stage = "source-refused"
 	} else if linuxHostTUNExternalFailedProof(scenario) {
 		stage = "proof-refused"
@@ -563,9 +597,18 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		if observed.DNSQueries == 0 || observed.PublicReplies != 0 || middle.Proof != nil {
 			t.Fatal("cancelled external path fabricated proof before its original HTTPS reply", middle, observed)
 		}
-	} else if scenario == "external-ss-source" {
+	} else if action == "source" {
 		if !middle.SourcePreserved || observed.Connections != 0 || observed.DNSQueries != 0 || observed.PublicAttempts != 0 {
 			t.Fatal("changed external source reached Stop or a new native engine", middle, observed)
+		}
+	} else if peer.protocol == "socks5" && (action == "wrong-auth" || action == "auth-downgrade" || action == "relay-domain" || action == "control-eof") {
+		if !middle.FailedProof || middle.Proof != nil || observed.Connections == 0 || observed.Streams != 0 || observed.Packets != 0 || observed.DNSQueries != 0 || observed.PublicAttempts != 0 || observed.PublicReplies != 0 {
+			t.Fatal("failed SOCKS control acquired selected DNS or a connected proof", middle, observed)
+		}
+		if action == "wrong-auth" && observed.AuthFailures == 0 ||
+			(action == "auth-downgrade" || action == "relay-domain") && (observed.SOCKSRejectedReplies == 0 || observed.PhysicalUDP != 0 || len(observed.SOCKSRelays) != 0) ||
+			action == "control-eof" && (observed.PhysicalUDP == 0 || len(observed.SOCKSRelays) == 0) {
+			t.Fatal("SOCKS rejection did not reach its real selected authentication or association boundary", observed)
 		}
 	} else if action == "wrong-key" || action == "wrong-trust" || action == "wrong-psk" || action == "wrong-parameters" || action == "wrong-control" {
 		if !middle.FailedProof || (peer.protocol != "openvpn" && observed.PhysicalUDP == 0) || observed.Connections != 0 || observed.Streams != 0 || observed.Packets != 0 ||
@@ -590,6 +633,10 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 	if peer.protocol == "openvpn" && (observed.Connections != 0 || observed.PhysicalUDP != 0 || observed.Streams != 0 || observed.Packets != 0) {
 		t.Fatal("provider fixture relabeled upper traffic as raw transport", observed)
 	}
+	if peer.protocol == "socks5" && !linuxHostTUNExternalFailedProof(scenario) && action != "source" &&
+		(observed.Connections < 2 || observed.PhysicalUDP == 0 || observed.Packets == 0 || len(observed.SOCKSRelays) == 0) {
+		t.Fatal("installed SOCKS path did not carry UDP DNS and TCP HTTPS on its separately owned sockets", observed)
+	}
 	if current := original.observe(t, "stats"); current.RouterQueries != before.RouterQueries || current.DirectQueries != before.DirectQueries {
 		t.Fatal("external proof borrowed the previous Router response", before, current)
 	}
@@ -610,7 +657,7 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 		t.Fatal("installed external lifecycle left its child or real TUN alive", process.waitErr, process.diagnostic.String())
 	}
 	after := original.observe(t, "stats")
-	if scenario == "external-ss-source" {
+	if action == "source" {
 		if !final.SourcePreserved || final.FinalSession != final.OriginalSession || after.RouterQueries != before.RouterQueries {
 			t.Fatal("source refusal replaced the original proved Router", final, after)
 		}
@@ -638,7 +685,7 @@ func linuxHostTUNExternalParent(t *testing.T, installed, scenario string) {
 	} else if final.Journal.Record.Committed.Target != nil || mobiletor.ReadDesktopLinuxNodeAbsence(context.Background(), final.FinalSession) != nil {
 		t.Fatal("external succession retained an unowned On-connect table")
 	}
-	if end := peer.observe(t, "stats"); end.AuthFailures != 0 || action == "cancelled" && end.PublicReplies != 0 {
+	if end := peer.observe(t, "stats"); (action != "wrong-auth" && end.AuthFailures != 0) || action == "cancelled" && end.PublicReplies != 0 {
 		t.Fatal("retired external proof was adopted after cancellation", end)
 	}
 	t.Log("verified installed host retained external succession:", scenario)

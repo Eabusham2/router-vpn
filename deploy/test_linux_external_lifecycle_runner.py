@@ -34,6 +34,10 @@ class LinuxExternalLifecycleRunner(unittest.TestCase):
         with self.assertRaises(ValueError):
             RUNNER.check_verdict("")
 
+    def test_socks_requires_actual_owned_success_and_private_reply_refusal(self):
+        self.assertEqual(RUNNER.CASES[-2:], ("socks5-succession", "socks5-private-relay-rejected"))
+        self.assertEqual(len(RUNNER.CASES), 14)
+
     def test_only_original_digest_enters_namespace(self):
         binary, digest = Path("/captured/external-lifecycle.test"), "b" * 64
         with patch.object(RUNNER.GUARD, "namespace_test", return_value=23) as native:
