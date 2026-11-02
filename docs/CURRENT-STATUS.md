@@ -6,7 +6,72 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 520050fc
+## Latest implementation continuation — through 771abdea
+
+The independently verified published source cutoff is
+[`771abdea26822191ada7c1245390ca4a0042e455`](https://github.com/Eabusham2/router-vpn/commit/771abdea26822191ada7c1245390ca4a0042e455),
+with Git tree `46c171389ba87a059096acec5dcd3bb336ea479e`. The newer section in
+[the November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md) records each
+coherent commit, native result and remaining boundary. Requirement recovery
+remains complete for the recorded collection; the full implementation scope
+has not been reduced.
+
+- Retained Linux direct Local ordinary OpenVPN now joins SS, HTTP/HTTPS
+  CONNECT, Hysteria2, WG and AWG2 Fast/Strong, with Start Layer Off and
+  On-connect/Always protection. TCP, UDP and ordered mixed remote fallback
+  retain the original import, credentials, exact lower tuples, selected DNS,
+  proof generation, MTU and complete restoration. The twelve-case real
+  encrypted OpenVPN gate passed with strict cleanup, two fifty-response HTTP
+  benchmarks and negative controls. All twelve actual kernel guardian handoff
+  cases and 67 focused native startup/control verdicts passed. The installed
+  inventory is now 361, preserving the original 343 cases and 87 expected
+  readiness rejections; classification and the actual peer compilation passed.
+  Full installed system-TUN/device acceptance remains separate.
+- The real OpenVPN provider exposed a duplicate listener-close error after
+  its server had already joined. The pinned repair normalizes only the exact
+  closed-listener condition using the existing strict classifier; server and
+  device errors, cancellation, ownership and joins remain enforced. Actual
+  pristine-source failures and the corrected 26 native verdicts were verified.
+- Windows paired DNS listeners now reserve the same exact TCP/UDP endpoint
+  using bounded candidate ports, retiring partial owners before retry. The
+  real HTTP/3 fixture uses that production allocator. Local race, original
+  failure controls and both Windows compilations passed; native Windows
+  acceptance of this new repair is still required. Separately, the full
+  `e1ee627a` Windows controller/native GUI/WFP job has now passed, including
+  the earlier cold PowerShell TLS/drain boundary.
+- Darwin route reception now preserves raw AF_ROUTE data through recvmsg
+  without the generic socket-address conversion. Actual `163ce4a0` CI advances
+  past the former unsupported-family error but rejects a distinct zero-MTU
+  interface snapshot. That incomplete snapshot remains a failure; the native
+  interface type/readback and any repair are not yet established.
+- Apple dependency preparation passed the real timer controls at `163ce4a0`,
+  then exposed a fixture clone demanding absent historical objects from its
+  filtered checkout. The published fixture now copies only the independently
+  owned exact pinned snapshot. All twelve preparation tests pass; the previous
+  clone fails the new real missing-object regression. Actual Xcode acceptance
+  of the newer source remains required.
+- Managed macOS upgrades now retain a fenced executable UUID only for the
+  exact EBADEXEC CodeDirectory failure. A complete verified original generation
+  must prove it disjoint from every original Mach-O slice. Missing original
+  UUIDs contribute zero; matching, stale or incomplete evidence still blocks.
+  All 88 local image/generation/installer tests and 37 defect controls pass.
+  Native Intel/ARM acceptance and first/legacy installation remain unresolved.
+- Linux routing diagnostics now record the first original retained-reader and
+  ledger failure with fixed reasons and bounded numeric/classified fields.
+  The runner preserves the same failed exception without a second execution.
+  Seventeen runner groups and 28 actual generated native verdicts pass. The
+  intermittent routing-receipt cause is still unproved, and no local system-TUN
+  operation was attempted for these changes.
+
+The latest published release remains the twelve-asset `745b3e41` prerelease.
+At this cutoff the newer authoritative release is pending/queued, not complete.
+Retained SOCKS5 dynamic relay ownership, broader graph/Start Layer/protection
+combinations, other native platforms, recovery and Methods, signing,
+physical/off-LAN/visual/accessibility acceptance, private providers and
+explicit ASUS/Portainer deployment retain their full original requirements.
+No private router, AdGuard or deployment settings were changed.
+
+## Earlier implementation continuation — through 520050fc
 
 The independently verified published source cutoff is
 [`520050fcf97455bf7820f2af8d42d0133bcfcf8a`](https://github.com/Eabusham2/router-vpn/commit/520050fcf97455bf7820f2af8d42d0133bcfcf8a),

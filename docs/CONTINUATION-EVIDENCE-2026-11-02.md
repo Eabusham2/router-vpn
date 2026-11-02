@@ -5,11 +5,106 @@ This continues [November 1](CONTINUATION-EVIDENCE-2026-11-01.md) and preserves
 source recovery is complete for the recorded collection; continue the actual
 implementation without replacing the original scope with this status record.
 The independently read-back published source cutoff is
-[`520050fcf97455bf7820f2af8d42d0133bcfcf8a`](https://github.com/Eabusham2/router-vpn/commit/520050fcf97455bf7820f2af8d42d0133bcfcf8a).
+[`771abdea26822191ada7c1245390ca4a0042e455`](https://github.com/Eabusham2/router-vpn/commit/771abdea26822191ada7c1245390ca4a0042e455).
 Later working files are outside this cutoff. No complete current release,
 private deployment, signing or physical-device acceptance is established.
 
-## Latest implementation and verification — through 520050fc
+## Latest implementation and verification — through 771abdea
+
+Published source has tree `46c171389ba87a059096acec5dcd3bb336ea479e`.
+Every source unit below was committed after focused validation, published
+straight to main with its expected parent, independently read back, and aligned
+locally only after equal-tree verification. No force push or historical patch
+replay was used. Older sections retain their own historical cutoffs.
+
+| Published unit | Result and verification boundary |
+|---|---|
+| [163ce4a0](https://github.com/Eabusham2/router-vpn/commit/163ce4a021c03b7ed496980b232b793a63b82533) | Receive Darwin AF_ROUTE messages without Go's unrelated sockaddr conversion while retaining raw flags, truncation/error rejection, RawConn lifecycle and exact decoding. Local race/checkptr projections, two deliberate receive defects, both Darwin target compilations and fifteen runner tests passed. The subsequent actual native snapshot failure is described below. |
+| [8179a4ac](https://github.com/Eabusham2/router-vpn/commit/8179a4acb2cc7bf1a345b69d2f2df269db5ae906) | Windows automatic DNS listener selection tries at most eight distinct candidate ports and must own both TCP and UDP at the same address. Partial owners close before retry; failed close aborts. Fixed ports retain one attempt, other platforms retain their prior selection, and the real HTTP/3 fixture retains its TCP fallback witness. All 25 DNS race roots, ten repeated focused runs, five compiled defect controls and both Windows checkptr compilations passed. Actual Windows acceptance remains pending. |
+| [2b4ef05c](https://github.com/Eabusham2/router-vpn/commit/2b4ef05ca5ee818db3ae1bb7c58ca601a440ee1d) | The exact pinned OpenVPN server closes its listener through Server.Close, joins its loops, then closes that same listener again. Normalize only the final listener's exact already-closed condition through the unchanged all-leaf classifier. Server/device errors and join order remain intact. Ten preparation/policy groups, seven existing composition controls and 26 actual native verdicts passed; the pristine assignment reproduced the four intended failures with unrelated controls still passing. |
+| [70c58293](https://github.com/Eabusham2/router-vpn/commit/70c582931c5f91ca7c604af1e5d92f1fd2d5200a) | Retain ordinary direct Local Linux OpenVPN TCP/UDP and ordered fallback with Start Layer Off and On-connect/Always protection. Preserve complete import, credentials, selected DNS, exact lower tuples, proof generation, MTU and restoration. Add a mandatory real encrypted twelve-case gate and eighteen installed cases. Actual results and OS/TUN boundaries are below. |
+| [a8e8e160](https://github.com/Eabusham2/router-vpn/commit/a8e8e1609ab7ca33f5d87af8458bbe905e8c77b4) | Clone only the already verified Apple dependency HEAD through upload-pack with independent depth-one objects. Keep exact pin, clean source, module checksums and default lazy-fetch protection. All twelve actual preparation tests passed in 9.47 seconds; reverting the clone fails the new filtered-source regression at a deliberately absent advertised blob. The original transfer also reproduced the exact historical object missing in CI. This is fixture repair, not a completed Xcode build. |
+| [a8a8db3b](https://github.com/Eabusham2/router-vpn/commit/a8a8db3badf8ec660028906c2903bfede25293d5) | Only a typed, fully fenced EBADEXEC failure retains the independent kernel main-executable UUID. Managed inventory compares it with all UUIDs freshly read from the complete original receipt-bound Mach-O set. Zero participates for every original slice missing LC_UUID; collision, changed receipt/member and replaced process/exec remain refusals. Official pinned XNU semantics were checked. Fourteen image, sixteen generation and 58 unchanged installer tests pass, as do all 37 deliberate defect controls. Native Darwin acceptance and first/legacy admission remain separate. |
+| [771abdea](https://github.com/Eabusham2/router-vpn/commit/771abdea26822191ada7c1245390ca4a0042e455) | Record only the first original Linux receipt/ledger failure with fixed reasons, numeric owners and at most eight redacted object classifications. Preserve the same optional receipt outcome, sticky failure and mandatory failed exception. Remove the later diagnostic compilation/replay. Seventeen runner groups, four deliberately unsafe diagnostic controls and 28 actual generated native verdicts pass. This does not identify or repair the intermittent original receipt cause. |
+
+### OpenVPN execution and preservation evidence
+
+The new source adds OpenVPN to the retained Linux host only for direct Local,
+Start Layer Off, and On-connect/Always protection. Other platforms, predecessor
+paths, server/Compare execution, Start Layers and protection-off are not newly
+admitted by this unit. It does not replace the separately implemented shared
+and mobile OpenVPN capabilities.
+
+The repaired v8 preparation used the normal generators, exact upstream pins,
+full module verification, Go 1.26.3 and the verified native PQ archive. Its
+3,061 installed, 1,621 lifecycle and 1,622 OpenVPN source records stayed unchanged
+through the native gates. The OpenVPN closure digest was
+`3d82df10bc988446575cd0e59811ce7be3cb2ad3b8c3cb3b349a735a2967f8c3`.
+
+- The twelve OpenVPN cases passed under race in 23.68 seconds of actual test
+  execution (65.73 seconds including compilation). Real TCP/UDP encrypted data,
+  selected UDP DNS, certificate-checked HTTPS proof, TCP and mixed fallback,
+  new-generation reconnect, cancellation, wrong provider trust/control key,
+  selected-DNS failure and exact tuple rejection were exercised. Both successful
+  paths took fifty real routed HTTP-response samples and restored exact MTU.
+  Strict provider cleanup stayed enabled. Log SHA256:
+  `022ec6bb6108c1968c60d5f90440a0f5598a13306545739cb271f8077d889416`.
+- The separate original twelve-case Linux guardian/nft/socket-byte handoff gate
+  passed in 87.46 seconds of namespace execution on v7, including OpenVPN TCP,
+  UDP and mixed remotes. All 1,565 source records remained unchanged. This used
+  the production destination predicate in a disconnected namespace, without
+  a system TUN. Log SHA256:
+  `a83548169e2af7714765232aa72dd52f3fbe40b6c495d9559fbbbb2d9f80dac4`.
+- The unchanged seven-family regression passed all 108 subverdicts and 350
+  routed HTTPS samples on v7 before the separate server-close repair. Its
+  original deadlines and 1,566 source records stayed intact. Log SHA256:
+  `ed383013413eab616e5bcac1bc5459145ee29ed555db0eda09fc1023ada9e63c`.
+- The actual v8 generated physical and command packages passed 27 and forty
+  verdicts respectively under race/normal production tags/PQ, without overlays.
+  They verify lower-socket startup separation, cancellation/replacement,
+  exact ordered remote tuples and unchanged original source/configuration.
+- The actual installed peer package compiled under its normal tags and race
+  in 39.72 seconds, with all 3,061 source records unchanged. Binary SHA256:
+  `58fe1440d674b40d77f7e8bd3bfaf53406b2e938d5af6d376f7687458c1dcc36`.
+  The tagged controller classified all 361 scenarios, preserving every prior
+  343 case and all 87 expected readiness rejections. Its 21 runner groups pass.
+  These are compile/classification results, not installed networking execution.
+
+The Box suite explicitly substitutes OS permit admission and TUN construction
+while using actual crypto, sockets and isolated veth traffic. No local system
+TUN was created or opened. Full installed, device and off-LAN acceptance remains
+mandatory. The older v7 OpenVPN run reached every functional assertion but
+failed all twelve provider cleanup paths; it is not counted as a passing run.
+The separate close repair and complete v8 rerun closed that observed failure.
+
+### New native CI observations and remaining blockers
+
+- The full [Windows controller/native job at e1ee627a](https://github.com/Eabusham2/router-vpn/actions/runs/41491525184/job/125435480646) is now completed/success. It passed pinned controller TLS, original-user GUI ownership, actual CSharp and PowerShell UI adapters, PowerShell 5.1/7 pipe transport and native WFP checks. This closes that bounded cold-wrapper gate, not every Windows package or later source change.
+- [Apple preparation at 163ce4a0](https://github.com/Eabusham2/router-vpn/actions/runs/41494070733/job/125444768434) passed all three actual timer controls, then all eleven fixture tests failed before assertions because a filtered clone could not provide historical object `a5a1b970868360834b01ec4b99889b0a9bf35f44`. The published pinned-snapshot fixture repair above has real local regression evidence; later actual Xcode acceptance is still required.
+- [Darwin network observation at 163ce4a0](https://github.com/Eabusham2/router-vpn/actions/runs/41494070035/job/125444795699) passed the source/receipt transition controls and reached a distinct rejection: interface index 5, MTU zero, projected flags zero. The read-only barrier and joined close both retained that failure. Native interface type/raw flags were not in that log. No interface-name exemption or invented MTU was introduced.
+- First/legacy macOS inventory still refuses an unidentifiable live unlinked image. A missing fixed root or prior receipt does not prove that a legacy controller or its shared PF ownership has retired. The new complete-managed-generation UUID comparison cannot supply unknown historical authority; this remains an implementation/acceptance blocker.
+- Generated Linux TUN acceptance subsequently passed at `e1ee627a` and `163ce4a0`, but those later passes do not explain the earlier intermittent missing receipt or original-channel retirement failures. The original-operation diagnostics above retain both as unresolved observations. The 361-case installed-host run remains separate.
+- The recorded Aux Hysteria2 aggregate timeout still needs current source-gate work: its four completed groups consumed 89.84 of a shared ninety seconds before the next required group began. It is not evidence that the newly started zero-duration leaf hung. Full Windows MAX, new Windows DNS pairing, current native packages/images/compose and publication retain their required gates.
+
+A fresh releases read still identifies
+`router-vpn-sha-745b3e41e5a78d734391976af9b7cd0637660a0b` as the latest published
+prerelease with twelve assets. The exact `771abdea` query returned 26 workflows,
+all queued/pending/in progress at that observation; the
+[authoritative release run](https://github.com/Eabusham2/router-vpn/actions/runs/41499993596)
+is not yet successful. No current full release or private deployment is claimed.
+
+### Remaining scope
+
+The full reconciled ledger still governs retained SOCKS5 negotiated UDP relay
+ownership, other native platforms, broader graph/Start Layer/protection
+combinations, recovery, Methods interoperability, signing and distribution,
+physical/off-LAN/visual/accessibility acceptance, private providers and explicit
+ASUS/Portainer deployment. No private router, AdGuard, forwarding, container or
+deployment configuration was changed. New source and concise verification
+records are preserved in Git; workspace-only binaries/logs remain temporary
+artifacts and are not substitutes for published source or release evidence.
+
+## Earlier implementation and verification — through 520050fc
 
 Published source has tree `4af6a558ba506e2b0840844937394bd8415825c4`.
 Every unit below was committed with normal ancestry, published directly to
