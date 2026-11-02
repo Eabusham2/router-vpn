@@ -567,11 +567,14 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 # Private Node startup uses its own sealed policy and eager
                 # WG/AWG lower phase. The exact native command/Box tests keep
                 # OS permits and TUN as explicit composition boundaries.
-                # Windows completed all 12 suites and 26 of 29 compiled
-                # controls before the old 900s aggregate expired. Keep the
-                # individual compiler/test deadlines; allow the final controls.
+                # At 74bd942a both Linux architectures completed all 19
+                # baseline suites, then exhausted the old 900s aggregate at
+                # the first of 48 compiled controls (run 41393374409, jobs
+                # 125110055580 and 125110055657). Keep serial peer execution
+                # and every individual compiler/suite/control deadline; the
+                # full expanded Linux workload needs its own bounded budget.
                 run([sys.executable, ROOT/'deploy/test_desktop_node_physical.py', source],
-                    env=env, timeout=1200 if target.startswith('windows/') else 900)
+                    env=env, timeout=1200 if target.startswith('windows/') else 1800)
                 # The PQ matrix uses the same verified native archive and
                 # compiler cache, fresh KEM keys, and real packet/Start Layer
                 # peers. Native firewall/public admission remains separate.

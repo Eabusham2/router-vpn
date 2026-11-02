@@ -38,6 +38,14 @@ def file(path, data=b'tool', executable=False):
 
 class NativeSocketUIDGate(unittest.TestCase):
     def test_matching_hosts_require_actual_unix_uid_or_windows_identity_gate(self):
+        self.check_matching_hosts()
+
+    def test_failed_or_timed_out_node_gate_cannot_reach_later_gates_or_compilation(self):
+        for failure in (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            with self.subTest(failure=failure.__name__):
+                self.check_matching_hosts(node_failure=failure)
+
+    def check_matching_hosts(self, node_failure=None):
         class CompilerBoundary(Exception):
             pass
 
@@ -50,6 +58,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                 system, arch = target.split('/')
                 env = {'GOOS': system, 'GOARCH': arch, 'CGO_ENABLED': '1', 'CGO_LDFLAGS': '', 'GOTOOLCHAIN': N.TOOLCHAIN}
                 calls = []
+                node_errors = []
 
                 def run(command, **kwargs):
                     args = [str(value) for value in command]
@@ -162,7 +171,13 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(args[2:], [str(source.resolve())])
                         self.assertEqual(kwargs['env']['GOOS'], system)
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
-                        self.assertEqual(kwargs['timeout'], 1200 if system == 'windows' else 900)
+                        self.assertEqual(kwargs['timeout'], 1200 if system == 'windows' else 1800)
+                        if node_failure is not None:
+                            error = (node_failure(23, args, output=b'captured source gate failure')
+                                     if node_failure is subprocess.CalledProcessError else
+                                     node_failure(args, kwargs['timeout'], output=b'captured source gate timeout'))
+                            node_errors.append(error)
+                            raise error
                         return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_pq.py'):
                         self.assertIn(system, ('linux', 'windows'))
@@ -253,8 +268,16 @@ class NativeSocketUIDGate(unittest.TestCase):
                      patch.object(N.OPENVPN, 'prepare'), patch.object(N.BUFFERS, 'prepare'), \
                      patch.object(N.EXTERNAL, 'prepare'), patch.object(N.POLICY.AMNEZIA, 'verify'), \
                      patch.object(N, 'stage_cronet', side_effect=stage_cronet):
-                    with self.assertRaises(CompilerBoundary):
+                    expected_error = node_failure if node_failure is not None and system in ('linux', 'windows') else CompilerBoundary
+                    with self.assertRaises(expected_error) as caught:
                         N.build(target, root/'output', source=source, xray=root/'xray', pq=root/'pq')
+                if node_errors:
+                    node = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_node_physical.py')]
+                    self.assertEqual(len(node), 1)
+                    self.assertEqual(len(node_errors), 1)
+                    self.assertIs(caught.exception, node_errors[0], 'The original source-gate failure was replaced')
+                    self.assertEqual(calls[-1], node[0], 'A failed source gate reached a later gate or shipping compilation')
+                    continue
                 uid = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_socket_uid.py')]
                 self.assertEqual(len(uid), 0 if system == 'windows' else 1)
                 self.assertIn(ROOT/'deploy/test_desktop_socket_uid.py', N.inputs())
