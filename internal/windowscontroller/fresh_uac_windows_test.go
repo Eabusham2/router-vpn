@@ -831,15 +831,19 @@ func fixtureRunFreshUACWorker(t *testing.T, api *fixtureFreshUACAPI, account *fi
 	if err := worker.wait(70 * time.Second); err != nil {
 		t.Fatal("fresh native Limited/Full workers did not join", err, worker.output())
 	}
-	var exit uint32
-	if err := syscall.GetExitCodeProcess(worker.process.Process, &exit); err != nil || exit != 0 {
-		t.Fatalf("fresh native Limited worker failed (exit=%d): %v\n%s", exit, err, worker.output())
-	}
+	// The Limited worker may fail because an original case in its actual
+	// runas Full child failed. Read both retained, bounded reports before
+	// rejecting its exit status so the native cause remains observable.
+	// Diagnostic output does not establish Full retirement or permit cleanup.
 	fullOutput, err := io.ReadAll(io.LimitReader(fullReport, 1<<20))
 	if err != nil || len(fullOutput) == 1<<20 {
 		t.Fatal("fresh Full report has no bounded completed output", err)
 	}
 	output := worker.output() + "\n" + string(fullOutput)
+	var exit uint32
+	if err := syscall.GetExitCodeProcess(worker.process.Process, &exit); err != nil || exit != 0 {
+		t.Fatalf("fresh native Limited worker failed (exit=%d): %v\n%s", exit, err, output)
+	}
 	for _, marker := range []string{"Fresh interactive UAC limited worker receipt: " + receipt.Nonce, "Fresh interactive UAC full worker receipt: " + receipt.Nonce, "Normal runas retained the genuine Limited/Full pair", "--- PASS: " + fixtureFreshUACName + " (", "--- PASS: " + fixtureFreshUACName + "/linked-limited-access (", "--- PASS: " + fixtureFreshUACName + "/cancelled-uac (", "--- PASS: " + fixtureFreshUACName + "/replacement-image (", "--- PASS: " + fixtureFreshUACName + "/missing-callback (", "--- PASS: " + fixtureFreshUACName + "/cancelled-suspended-owner ("} {
 		if !strings.Contains(output, marker) {
 			t.Fatal("fresh native UAC worker did not execute a required original case", marker, output)
