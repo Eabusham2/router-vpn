@@ -1,6 +1,10 @@
 package main
 
 import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"strings"
 	"testing"
@@ -59,7 +63,111 @@ func TestEveryShippingConnectionStartIsGuardedBeforeAndAfterLaunch(t *testing.T)
 	assertGuardedProcessStart(t, "multihop_native_routes.go", "func (a *app) nativeMultihopConnect", "if err = cmd.Start(); err != nil", "a.cmd = cmd")
 	assertGuardedProcessStart(t, "multihop.go", "func (a *app) multihopConnect", "if err := cmd.Start(); err != nil", "a.cmd = cmd")
 	assertGuardedProcessStart(t, "external_profile_connect.go", "func (a *app) externalProfileConnectOwned", "if err = cmd.Start(); err != nil", "a.cmd = cmd")
-	assertGuardedProcessStart(t, "external_profile_connect.go", "func (a *app) externalProfileConnectOwned", "if err = realCmd.Start(); err != nil", "a.cmd = realCmd")
+	assertGuardedProcessStart(t, "external_profile_connect.go", "func (a *app) externalProfileConnectOwned", "err = nativeRetained.Start(a.connectionOperationContextOrBackground())", "a.cmd = realCmd")
+	assertGuardedProcessStart(t, "external_profile_connect.go", "func (a *app) externalProfileConnectOwned", "err = realCmd.Start()", "a.cmd = realCmd")
+	fn := sourceFunctionForTest(t, "external_profile_connect.go", "func (a *app) externalProfileConnectOwned")
+	if err := sharedNativeExternalLaunchGuards(fn); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Both native branches must share guards and publication in their own enclosing
+// block. Checks in the separate OpenVPN branch, or inside only one native start
+// branch, cannot stand in for the common cancellation boundary.
+func sharedNativeExternalLaunchGuards(fn string) error {
+	source := "package fixture\n" + fn
+	positions := token.NewFileSet()
+	file, err := parser.ParseFile(positions, "external_profile_connect.go", source, 0)
+	if err != nil {
+		return err
+	}
+	text := func(node ast.Node) string {
+		return source[positions.Position(node.Pos()).Offset:positions.Position(node.End()).Offset]
+	}
+	var blocks []*ast.BlockStmt
+	ast.Inspect(file, func(node ast.Node) bool {
+		block, ok := node.(*ast.BlockStmt)
+		if !ok {
+			return true
+		}
+		for _, statement := range block.List {
+			if _, declaration := statement.(*ast.DeclStmt); declaration && text(statement) == "var realCmd *exec.Cmd" {
+				blocks = append(blocks, block)
+			}
+		}
+		return true
+	})
+	if len(blocks) != 1 {
+		return fmt.Errorf("native external launch must have one command ownership block, found %d", len(blocks))
+	}
+	before, launch, publication, after := -1, -1, -1, -1
+	for index, statement := range blocks[0].List {
+		switch value := statement.(type) {
+		case *ast.AssignStmt:
+			switch text(value) {
+			case "err = a.checkConnectionOperation()":
+				before = index
+			case "a.cmd = realCmd":
+				publication = index
+			}
+		case *ast.IfStmt:
+			if value.Init != nil && text(value.Init) == "err = a.checkConnectionOperation()" {
+				after = index
+			}
+			if text(value.Cond) == "nativeRetained != nil" && value.Else != nil &&
+				strings.Contains(text(value.Body), "err = nativeRetained.Start(a.connectionOperationContextOrBackground())") &&
+				strings.Contains(text(value.Else), "err = realCmd.Start()") {
+				launch = index
+			}
+		}
+	}
+	if before < 0 || launch <= before || publication <= launch || after <= publication {
+		return fmt.Errorf("native external starts lost their shared guard/publication order: before=%d launch=%d publication=%d after=%d", before, launch, publication, after)
+	}
+	return nil
+}
+
+func TestNativeExternalSharedLaunchGuardsRejectMutations(t *testing.T) {
+	fn := sourceFunctionForTest(t, "external_profile_connect.go", "func (a *app) externalProfileConnectOwned")
+	if err := sharedNativeExternalLaunchGuards(fn); err != nil {
+		t.Fatal("shipping launch prerequisite:", err)
+	}
+	// Select the last occurrence so the original OpenVPN guards remain in
+	// place and cannot accidentally make a broken native branch look guarded.
+	replaceLast := func(source, old, replacement string) string {
+		index := strings.LastIndex(source, old)
+		if index < 0 {
+			t.Fatalf("missing mutation prerequisite %q", old)
+		}
+		return source[:index] + replacement + source[index+len(old):]
+	}
+	for _, mutation := range []struct{ name, old, replacement string }{
+		{"retained start omitted", "err = nativeRetained.Start(a.connectionOperationContextOrBackground())", "err = nil"},
+		{"direct start omitted", "err = realCmd.Start()", "err = nil"},
+		{"shared prelaunch guard omitted", "err = a.checkConnectionOperation()\n", "err = nil\n"},
+		{"shared post-publication guard omitted", "if err = a.checkConnectionOperation(); err != nil {", "if err = error(nil); err != nil {"},
+		{"wrong command published", "a.cmd = realCmd", "a.cmd = nil"},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			if err := sharedNativeExternalLaunchGuards(replaceLast(fn, mutation.old, mutation.replacement)); err == nil {
+				t.Fatal("broken native launch satisfied shared cancellation ownership")
+			}
+		})
+	}
+	t.Run("retained-only guard cannot protect direct start", func(t *testing.T) {
+		broken := replaceLast(fn, "err = a.checkConnectionOperation()\n", "err = nil\n")
+		broken = replaceLast(broken, "err = nativeRetained.Start(a.connectionOperationContextOrBackground())", "err = a.checkConnectionOperation()\n\t\t\terr = nativeRetained.Start(a.connectionOperationContextOrBackground())")
+		if err := sharedNativeExternalLaunchGuards(broken); err == nil {
+			t.Fatal("branch-local guard authorized the other native start")
+		}
+	})
+	t.Run("publication before launch", func(t *testing.T) {
+		broken := replaceLast(fn, "a.cmd = realCmd", "a.cmd = nil")
+		broken = replaceLast(broken, "if nativeRetained != nil {\n\t\t\terr = nativeRetained.Start", "a.cmd = realCmd\n\t\tif nativeRetained != nil {\n\t\t\terr = nativeRetained.Start")
+		if err := sharedNativeExternalLaunchGuards(broken); err == nil {
+			t.Fatal("unstarted native command was accepted as published ownership")
+		}
+	})
 }
 
 func TestFallbackLoopsRecognizeStableCancellationSentinel(t *testing.T) {
