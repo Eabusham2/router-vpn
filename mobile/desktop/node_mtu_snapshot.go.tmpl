@@ -1,0 +1,93 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"io"
+	"os"
+	"runtime"
+)
+
+// This result never authorizes a status record. A caller may retry only while
+// its original runtime/source/request and deadline still hold. Immutable input
+// reads keep the existing read() behavior and never use this opt-in path.
+var routerVPNNodeMTUSnapshotChanged = errors.New("captured native MTU status was atomically replaced during read")
+
+// The read-only fence borrows an already captured runtime validator. It does
+// not create native authority, retry, or replace the caller's deadline.
+func (f *routerVPNExternalFiles) readOwnedNodeMTUSnapshot(ctx context.Context, current func() error) ([]byte, error) {
+	if ctx == nil || current == nil {
+		return nil, routerVPNExternalFailure
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := current(); err != nil {
+		return nil, err
+	}
+	raw, err := f.readNodeMTUSnapshot()
+	if currentErr := ctx.Err(); currentErr != nil {
+		return nil, currentErr
+	}
+	if currentErr := current(); currentErr != nil {
+		return nil, currentErr
+	}
+	return raw, err
+}
+
+func routerVPNNodeMTUSnapshotFile(info os.FileInfo) bool {
+	return info != nil && info.Mode().IsRegular() && info.Size() > 0 && info.Size() <= routerVPNNodeMTURecordLimit &&
+		(runtime.GOOS == "windows" || info.Mode().Perm()&0077 == 0)
+}
+
+func routerVPNNodeMTUSnapshotSame(a, b os.FileInfo) bool {
+	return a != nil && b != nil && os.SameFile(a, b) && a.Size() == b.Size() && a.Mode() == b.Mode() && a.ModTime().Equal(b.ModTime())
+}
+
+// readNodeMTUSnapshot is deliberately limited to the periodically republished
+// status basename. Every admitted version must be a complete private regular
+// file; an in-place write, missing/foreign metadata or generic read error is
+// not an atomic replacement and cannot receive the retryable result.
+func (f *routerVPNExternalFiles) readNodeMTUSnapshot() ([]byte, error) {
+	const name = "node-mtu-status.json"
+	info, err := f.root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !routerVPNNodeMTUSnapshotFile(info) {
+		return nil, routerVPNExternalFailure
+	}
+	file, err := f.root.Open(name)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !routerVPNNodeMTUSnapshotFile(opened) {
+		return nil, routerVPNExternalFailure
+	}
+	if !os.SameFile(info, opened) {
+		after, err := f.root.Lstat(name)
+		if err == nil && routerVPNNodeMTUSnapshotFile(after) && routerVPNNodeMTUSnapshotSame(opened, after) {
+			return nil, routerVPNNodeMTUSnapshotChanged
+		}
+		return nil, routerVPNExternalFailure
+	}
+	if !routerVPNNodeMTUSnapshotSame(info, opened) {
+		return nil, routerVPNExternalFailure
+	}
+	raw, readErr := io.ReadAll(io.LimitReader(file, routerVPNNodeMTURecordLimit+1))
+	retained, retainedErr := file.Stat()
+	after, afterErr := f.root.Lstat(name)
+	if readErr != nil || retainedErr != nil || afterErr != nil || !routerVPNNodeMTUSnapshotFile(after) ||
+		!routerVPNNodeMTUSnapshotSame(opened, retained) || int64(len(raw)) != opened.Size() || len(raw) > routerVPNNodeMTURecordLimit {
+		return nil, routerVPNExternalFailure
+	}
+	if !os.SameFile(opened, after) {
+		return nil, routerVPNNodeMTUSnapshotChanged
+	}
+	if !routerVPNNodeMTUSnapshotSame(opened, after) {
+		return nil, routerVPNExternalFailure
+	}
+	return raw, nil
+}

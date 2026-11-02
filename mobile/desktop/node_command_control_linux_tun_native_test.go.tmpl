@@ -327,10 +327,44 @@ func linuxChildTUNWaitReady(t *testing.T, ctx context.Context, owner *linuxChild
 func linuxChildTUNMTUStatus(t *testing.T, ctx context.Context, owner *linuxChildControlParent, files *routerVPNExternalFiles,
 	request string) routerVPNNodeMTURecord {
 	t.Helper()
+	invocation, bootstrap, process, done, root := owner.invocation, owner.bootstrap, owner.process, owner.done, files.root
+	directory, err := root.Stat(".")
+	if err != nil || !directory.IsDir() || directory.Mode().Perm()&0077 != 0 || bootstrap == nil || process == nil || done == nil {
+		t.Fatal("MTU status poll has no complete original workspace and runtime", err)
+	}
+	child := process.Process
+	if child == nil {
+		t.Fatal("MTU status poll has no original started child")
+	}
+	capture, err := invocation.Selection.CaptureSHA256()
+	if err != nil || capture != invocation.Options.CaptureSHA256 {
+		t.Fatal("MTU status poll lost its immutable source capture", err)
+	}
+	current := func() error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if owner.invocation != invocation || owner.bootstrap != bootstrap || owner.process != process || process.Process != child || owner.done != done || files.root != root {
+			return errors.New("MTU status poll replaced its original source, runtime or workspace")
+		}
+		select {
+		case <-done:
+			return errors.New("MTU status runtime retired before its captured result")
+		default:
+		}
+		path, pathErr := os.Lstat(invocation.Directory)
+		retained, retainedErr := root.Stat(".")
+		if pathErr != nil || retainedErr != nil || !path.IsDir() || path.Mode().Perm()&0077 != 0 ||
+			!os.SameFile(path, directory) || !os.SameFile(retained, directory) {
+			return errors.New("MTU status poll lost its original private directory identity")
+		}
+		return bootstrap.CheckCapture(ctx, capture)
+	}
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if raw, err := files.read("node-mtu-status.json", routerVPNNodeMTURecordLimit); err == nil {
+		raw, err := files.readOwnedNodeMTUSnapshot(ctx, current)
+		if err == nil {
 			var record routerVPNNodeMTURecord
 			if !routerVPNMTUStrict(raw, &record) || record.Schema != 1 || record.Session != owner.invocation.Selection.SessionID ||
 				record.Config != owner.invocation.Selection.ConfigSHA256 || !routerVPNExternalSource.MatchString(record.Path) ||
@@ -369,7 +403,7 @@ func linuxChildTUNMTUStatus(t *testing.T, ctx context.Context, owner *linuxChild
 				}
 				return record
 			}
-		} else if !errors.Is(err, os.ErrNotExist) {
+		} else if !errors.Is(err, os.ErrNotExist) && !errors.Is(err, routerVPNNodeMTUSnapshotChanged) {
 			t.Fatal(err)
 		}
 		select {

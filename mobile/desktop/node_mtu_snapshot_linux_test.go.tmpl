@@ -1,0 +1,295 @@
+//go:build linux && !android
+
+package main
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"sync/atomic"
+	"syscall"
+	"testing"
+	"time"
+)
+
+var desktopNodeMTUSnapshotPayload = []byte(`{"schema":1,"generation":0,"heartbeat_at":1}`)
+
+func desktopNodeMTUSnapshotFiles(t *testing.T) (string, *routerVPNExternalFiles) {
+	t.Helper()
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(directory, "node-mtu-status.json"), desktopNodeMTUSnapshotPayload, 0600); err != nil {
+		t.Fatal(err)
+	}
+	files, err := routerVPNOpenExternalFiles(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = files.root.Close() })
+	return directory, files
+}
+
+// A lease on this fixture's private original inode stops the actual Open after
+// its first metadata lookup. No shipping callback or mutable syscall seam is
+// inserted. The kernel's SIGIO is the synchronization boundary for a real
+// atomic publication, followed by release and join of that exact read.
+func desktopNodeMTUSnapshotDuringOpen(t *testing.T, directory string, read func() ([]byte, error), change func(*os.File)) ([]byte, error) {
+	t.Helper()
+	leased, err := os.OpenFile(filepath.Join(directory, "node-mtu-status.json"), os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer leased.Close()
+	setLease := func(kind int) error {
+		_, _, errno := syscall.Syscall(syscall.SYS_FCNTL, leased.Fd(), syscall.F_SETLEASE, uintptr(kind))
+		if errno != 0 {
+			return errno
+		}
+		return nil
+	}
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGIO)
+	defer signal.Stop(signals)
+	if _, _, errno := syscall.Syscall(syscall.SYS_FCNTL, leased.Fd(), syscall.F_SETOWN, uintptr(os.Getpid())); errno != 0 {
+		t.Fatal(errno)
+	}
+	if err := setLease(syscall.F_WRLCK); err != nil {
+		t.Fatal("owned private-file lease unavailable", err)
+	}
+	type result struct {
+		raw []byte
+		err error
+	}
+	done := make(chan result, 1)
+	joined := false
+	defer func() {
+		_ = setLease(syscall.F_UNLCK)
+		if !joined {
+			select {
+			case <-done:
+			case <-time.After(3 * time.Second):
+				t.Error("original status reader did not drain")
+			}
+		}
+	}()
+	go func() { raw, err := read(); done <- result{raw, err} }()
+	wait := time.NewTimer(3 * time.Second)
+	defer wait.Stop()
+waitForOriginalLeaseBreak:
+	for {
+		select {
+		case <-signals:
+			kind, _, errno := syscall.Syscall(syscall.SYS_FCNTL, leased.Fd(), syscall.F_GETLEASE, 0)
+			if errno != 0 {
+				t.Fatal(errno)
+			}
+			if kind == syscall.F_RDLCK {
+				break waitForOriginalLeaseBreak
+			}
+			if kind != syscall.F_WRLCK {
+				t.Fatal("original lease lost its exact read-break transition", kind)
+			}
+		case r := <-done:
+			joined = true
+			t.Fatal("shipping status reader did not enter kernel lease boundary", r.err)
+		case <-wait.C:
+			t.Fatal("kernel did not signal original blocked status Open")
+		}
+	}
+	change(leased)
+	if err := setLease(syscall.F_UNLCK); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case r := <-done:
+		joined = true
+		return r.raw, r.err
+	case <-time.After(3 * time.Second):
+		t.Fatal("original status reader did not finish after lease release")
+		return nil, nil
+	}
+}
+
+func desktopNodeMTUSnapshotPublish(t *testing.T, directory string, payload []byte, mode os.FileMode) {
+	t.Helper()
+	pending := filepath.Join(directory, "owned-status.pending")
+	if err := os.WriteFile(pending, payload, mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(pending, mode); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(pending, filepath.Join(directory, "node-mtu-status.json")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterVPNNodeMTUSnapshotActualAtomicReplacement(t *testing.T) {
+	for _, ordinary := range []bool{false, true} {
+		name := "owned-status"
+		if ordinary {
+			name = "immutable-input"
+		}
+		t.Run(name, func(t *testing.T) {
+			directory, files := desktopNodeMTUSnapshotFiles(t)
+			read := files.readNodeMTUSnapshot
+			if ordinary {
+				read = func() ([]byte, error) { return files.read("node-mtu-status.json", routerVPNNodeMTURecordLimit) }
+			}
+			got, err := desktopNodeMTUSnapshotDuringOpen(t, directory, read, func(_ *os.File) { desktopNodeMTUSnapshotPublish(t, directory, desktopNodeMTUSnapshotPayload, 0600) })
+			want := routerVPNNodeMTUSnapshotChanged
+			if ordinary {
+				want = routerVPNExternalFailure
+			}
+			if !errors.Is(err, want) || got != nil {
+				t.Fatal("actual atomic replacement lost its strictly scoped result", err)
+			}
+			got, err = read()
+			if err != nil || !bytes.Equal(got, desktopNodeMTUSnapshotPayload) {
+				t.Fatal("fresh complete version was unavailable after original read joined", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeMTUSnapshotRejectsUnvalidatedChanges(t *testing.T) {
+	for _, scenario := range []string{"empty", "oversized", "public", "missing", "symlink", "in-place-size", "in-place-same-size"} {
+		t.Run(scenario, func(t *testing.T) {
+			directory, files := desktopNodeMTUSnapshotFiles(t)
+			got, err := desktopNodeMTUSnapshotDuringOpen(t, directory, files.readNodeMTUSnapshot, func(leased *os.File) {
+				name := filepath.Join(directory, "node-mtu-status.json")
+				switch scenario {
+				case "empty":
+					desktopNodeMTUSnapshotPublish(t, directory, nil, 0600)
+				case "oversized":
+					desktopNodeMTUSnapshotPublish(t, directory, make([]byte, routerVPNNodeMTURecordLimit+1), 0600)
+				case "public":
+					desktopNodeMTUSnapshotPublish(t, directory, desktopNodeMTUSnapshotPayload, 0644)
+				case "missing":
+					if err := os.Remove(name); err != nil {
+						t.Fatal(err)
+					}
+				case "symlink":
+					other := filepath.Join(directory, "foreign-status.json")
+					if err := os.WriteFile(other, desktopNodeMTUSnapshotPayload, 0600); err != nil {
+						t.Fatal(err)
+					}
+					pending := filepath.Join(directory, "owned-status.pending")
+					if err := os.Symlink(other, pending); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Rename(pending, name); err != nil {
+						t.Fatal(err)
+					}
+				case "in-place-size":
+					if err := leased.Truncate(1); err != nil {
+						t.Fatal(err)
+					}
+				case "in-place-same-size":
+					old, err := leased.Stat()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := leased.WriteAt([]byte("!"), 0); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Chtimes(name, old.ModTime().Add(time.Second), old.ModTime().Add(time.Second)); err != nil {
+						t.Fatal(err)
+					}
+				}
+			})
+			if !errors.Is(err, routerVPNExternalFailure) || errors.Is(err, routerVPNNodeMTUSnapshotChanged) || got != nil {
+				t.Fatal("unvalidated change became retryable", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeMTUSnapshotOwnedFence(t *testing.T) {
+	for _, scenario := range []string{"same-owner", "source-generation-replaced", "cancelled", "deadline"} {
+		t.Run(scenario, func(t *testing.T) {
+			directory, files := desktopNodeMTUSnapshotFiles(t)
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			deadline, _ := ctx.Deadline()
+			var revision, calls atomic.Int32
+			revision.Store(1)
+			retired := errors.New("modeled original source/session generation retired")
+			current := func() error {
+				calls.Add(1)
+				if revision.Load() != 1 {
+					return retired
+				}
+				return nil
+			}
+			got, err := desktopNodeMTUSnapshotDuringOpen(t, directory, func() ([]byte, error) { return files.readOwnedNodeMTUSnapshot(ctx, current) }, func(_ *os.File) {
+				desktopNodeMTUSnapshotPublish(t, directory, desktopNodeMTUSnapshotPayload, 0600)
+				switch scenario {
+				case "source-generation-replaced":
+					revision.Store(2)
+				case "cancelled":
+					cancel()
+				case "deadline":
+					<-ctx.Done()
+				}
+			})
+			if got != nil {
+				t.Fatal("invalidated or changed snapshot returned bytes")
+			}
+			switch scenario {
+			case "same-owner":
+				if !errors.Is(err, routerVPNNodeMTUSnapshotChanged) || calls.Load() != 2 {
+					t.Fatal("owned snapshot did not retain both runtime checks", err, calls.Load())
+				}
+			case "source-generation-replaced":
+				if !errors.Is(err, retired) || errors.Is(err, routerVPNNodeMTUSnapshotChanged) {
+					t.Fatal("foreign source/session became retryable", err)
+				}
+			case "cancelled":
+				if !errors.Is(err, context.Canceled) {
+					t.Fatal("cancellation lost original caller", err)
+				}
+			case "deadline":
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("status read replaced original deadline", err)
+				}
+			}
+			if final, _ := ctx.Deadline(); final != deadline {
+				t.Fatal("status retry extended its captured deadline")
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeMTUSnapshotMalformedPayloadStillNeedsStatusValidation(t *testing.T) {
+	directory, files := desktopNodeMTUSnapshotFiles(t)
+	desktopNodeMTUSnapshotPublish(t, directory, []byte("not-json"), 0600)
+	raw, err := files.readOwnedNodeMTUSnapshot(context.Background(), func() error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status routerVPNNodeMTURecord
+	if routerVPNMTUStrict(raw, &status) {
+		t.Fatal("status validator accepted malformed data after a complete metadata read")
+	}
+	if _, err := files.readOwnedNodeMTUSnapshot(context.Background(), nil); err == nil {
+		t.Fatal("status read accepted an absent captured owner")
+	}
+}
+
+func TestRouterVPNNodeMTUSnapshotOwnedFencePreservesGenericFailure(t *testing.T) {
+	directory, files := desktopNodeMTUSnapshotFiles(t)
+	if err := os.Chmod(filepath.Join(directory, "node-mtu-status.json"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	var checks atomic.Int32
+	raw, err := files.readOwnedNodeMTUSnapshot(context.Background(), func() error { checks.Add(1); return nil })
+	if raw != nil || !errors.Is(err, routerVPNExternalFailure) || errors.Is(err, routerVPNNodeMTUSnapshotChanged) || checks.Load() != 2 {
+		t.Fatal("generic private-file failure became a retryable snapshot", err, checks.Load())
+	}
+}
