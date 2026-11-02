@@ -6,7 +6,88 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 771abdea
+## Latest implementation continuation — through e97c8d22
+
+The independently read-back source cutoff is
+[`e97c8d22102ffbbfa82d6769bac6e25c91fcb224`](https://github.com/Eabusham2/router-vpn/commit/e97c8d22102ffbbfa82d6769bac6e25c91fcb224),
+with Git tree `94ebf287b0c79eb1405e9bed458de2e4146b9d8e`.
+[The November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md) records the
+coherent source units, real native observations and remaining boundaries.
+Original requirement recovery is complete for the recorded collection;
+implementation and delivery remain open wherever the full ledger lacks proof.
+
+- The exact pinned SOCKS client now rejects any unoffered authentication
+  method and preserves application payload capacity/counts in its datagram APIs.
+  Reads consume one bounded original frame without borrowing the next packet. It
+  rejects incomplete frames without retry, preserves transport errors and
+  retires owned buffers. Whole-module checksums and prior TCP-control lifetime
+  fixes remain enforced. Actual old-code failures and corrected native race
+  results are recorded separately from broader host acceptance.
+- Darwin network capture now preserves a kernel-proved unused zero-MTU link
+  with its exact original identity instead of inventing an MTU or skipping
+  it. Address/routing use, altered raw flags, malformed frames, lossy identity
+  and adoption as an owned TUN remain refusals. Local tests, defect controls
+  and both Darwin compilations passed; the first subsequent native job was
+  cancelled without execution, so hosted acceptance is still required.
+- The Windows OpenVPN preparation failure was caused by a later text writer
+  converting canonical source bytes to CRLF. The byte writer is repaired and
+  the strict verifier is unchanged. Both earlier Windows jobs had already
+  passed the separate paired TCP/UDP DNS step before this later failure.
+- The six Hysteria2 native roots and the native Tor importer now run in
+  disjoint serial phases with their original per-invocation time limits.
+  All cases, durable private writes, source-replacement negatives and both
+  Windows shells remain required. The Tor gate also separates diagnostic
+  stderr from strict test JSON and requires every expected verdict once.
+  Real Linux original/split comparisons passed. The exact `d6260e05`
+  hosted Windows step then passed all 365 importer leaves, 4,186 editor checks
+  and seven form mutants in each shell. Its later AWG step was cancelled;
+  the complete Linux job passed. Later Windows AMD64 completed all three
+  Hysteria2 baseline phases; its complete engine wrapper still timed out
+  during a later negative-control compilation.
+- Managed macOS inventory has now passed against both actual complete Intel
+  and Apple Silicon host process lists. Owned copied/unlinked children remain
+  blocked until joined; empty-inventory and matching-image defects are rejected.
+  Both whole jobs still fail their separate first/legacy ownership step.
+  That boundary is not closed by the managed-upgrade result.
+
+- The actual Apple native composition job at `a8e8e160` has passed: real
+  Libbox slices/API, the pinned WireGuardKit archive with three actual timer
+  controls and the iPhoneOS PacketTunnel/app Xcode import probe. This is an
+  exact-source native result, separate from a release IPA, signing/device
+  acceptance and the independent repaired clone fixture gate.
+
+- Retained direct Local Linux SOCKS5 now owns each authenticated TCP control
+  and its exact negotiated UDP socket, with Start Layer Off and On-connect/
+  Always protection. The complete 130-verdict Box gate, 400 routed HTTPS
+  samples, 168 physical controls, 48 command controls, fourteen actual kernel
+  lifecycle cases, installed peer compilation and real controller admission
+  of the normal linked bundle passed. Full installed TUN/device and broader
+  platform/graph acceptance remain separate. Repeated preparation now verifies
+  its exact generated registry order without changing the resulting bytes.
+- Linux route receipts retain one explicit add plus only fully canonical
+  configured-address IPv6 LOCAL routes proved against unchanged original
+  interface/address records. Real veth tests reproduce the concurrent kernel
+  publication and preserve rejection after route removal. Seventy race
+  verdicts, seven compiled defect controls and the complete namespace suite
+  passed. The observed ARM64 TUN failure's hidden route fields and the repaired
+  current TUN runs remain unproved.
+
+The latest published release remains the twelve-asset `745b3e41` prerelease.
+No newer complete release, private deployment, signing or physical-device
+acceptance is established. Other native platforms, broader graph/Start Layer/
+protection combinations, recovery and Methods, unresolved first/legacy macOS
+ownership, Darwin cloned-route/PF readback failures, Windows editor/aggregate
+build deadlines and current Linux TUN acceptance, full native gates,
+physical/off-LAN/visual/accessibility checks, private providers and authorized
+ASUS/Portainer deployment retain their original requirements. No private
+router, AdGuard, forwarding or deployment settings were changed.
+
+The Windows retained SS/HTTP/HTTPS application/native integration is still
+an unpublished draft at this cutoff. Its model and cross-build results are
+not publication or actual inherited-parent/Job/journal/WFP acceptance. The
+full original all-platform and graph requirements continue to govern it.
+
+## Earlier implementation continuation — through 771abdea
 
 The independently verified published source cutoff is
 [`771abdea26822191ada7c1245390ca4a0042e455`](https://github.com/Eabusham2/router-vpn/commit/771abdea26822191ada7c1245390ca4a0042e455),

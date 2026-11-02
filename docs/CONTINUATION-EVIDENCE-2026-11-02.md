@@ -5,11 +5,192 @@ This continues [November 1](CONTINUATION-EVIDENCE-2026-11-01.md) and preserves
 source recovery is complete for the recorded collection; continue the actual
 implementation without replacing the original scope with this status record.
 The independently read-back published source cutoff is
-[`771abdea26822191ada7c1245390ca4a0042e455`](https://github.com/Eabusham2/router-vpn/commit/771abdea26822191ada7c1245390ca4a0042e455).
+[`e97c8d22102ffbbfa82d6769bac6e25c91fcb224`](https://github.com/Eabusham2/router-vpn/commit/e97c8d22102ffbbfa82d6769bac6e25c91fcb224).
 Later working files are outside this cutoff. No complete current release,
 private deployment, signing or physical-device acceptance is established.
 
-## Latest implementation and verification — through 771abdea
+## Latest implementation and verification — through e97c8d22
+
+Published source has tree `94ebf287b0c79eb1405e9bed458de2e4146b9d8e`.
+Each coherent unit below was validated, committed directly to main, published
+with its expected parent, independently read back and aligned locally only
+after equal-tree verification. Requirement recovery is complete for the
+recorded collection; the full original scope remains binding. Earlier dated
+sections retain their historical observations.
+
+| Published unit | Result and verification boundary |
+|---|---|
+| [e116117c](https://github.com/Eabusham2/router-vpn/commit/e116117cc15384cafc34e04cef51c92b2e1345f2) | Preserve failure-only numeric Darwin interface readback, bounded to the exact interface index and original snapshot. The subsequent native observation identified an actual kernel MTU-zero link; diagnostics themselves never grant admission. |
+| [79398822](https://github.com/Eabusham2/router-vpn/commit/7939882263b57379e0cd20bc3bce1d55548ecc1f) | Run the six original Hysteria2 native roots in three serial credential, identity and cover phases. Each retains the existing 90-second Go / 105-second joined-parent limits and all original assertions. Twenty-four runner tests and 46 actual Linux native race verdicts passed. The later f415 Windows AMD64 baseline completed all three phases; full engine acceptance remains required. |
+| [a8fece7c](https://github.com/Eabusham2/router-vpn/commit/a8fece7c20b1414305298a97cd61ceac0a8a0621) | Require the exact SOCKS authentication method offered by the captured client before sending credentials or requests. Preserve the exact upstream pin, full original module checksum, private-copy boundaries and joined TCP-control ownership. All 25 actual native race verdicts and fourteen preparation tests passed; original code failed the intended credential-downgrade/unoffered-method controls. |
+| [7d434770](https://github.com/Eabusham2/router-vpn/commit/7d434770d88207afda85e8e33e0a9e013dc61373) | Retain a genuinely unused zero-MTU Darwin interface in the captured network cohort only with a complete exact native IFINFO and AF_LINK proof. Preserve its zero value and original identity; address/routing use, altered flags, malformed or additional frames, lossy names and TUN adoption remain refusals. All 158 local package race verdicts, fifteen runner tests, six compiled defect controls and both Darwin target compilations passed. Native Darwin acceptance remains unproved. |
+| [7f3acd35](https://github.com/Eabusham2/router-vpn/commit/7f3acd3505ef9e3aef57d076ad550730464c6a7d) | Write the pinned OpenVPN remote-policy transform as canonical UTF-8 bytes so Windows text translation cannot invalidate the separately verified close policy. The full-byte verifier is unchanged. Three remote-composition and ten close-policy tests, two executed defects and an actual pinned producer reproduction passed. The original writer reproduced the precise CI refusal. Later Windows preparation passed; complete engine acceptance remains required. |
+| [f41514f7](https://github.com/Eabusham2/router-vpn/commit/f41514f72e7d31abab5c1d35fda38e2bda64d326) | Report payload bytes from SOCKS Write/WriteTo and reject incomplete or invalid single-frame WritePacket results while preserving transport errors and buffer release. Upgrade only exact previous private variants after full original-h1 validation. All 83 actual native race verdicts and eighteen preparation tests passed; previous packet code produced 46 intended failed verdicts while all existing authentication/control checks still passed. The mandatory runtime negative control restored all 332 source records. |
+| [d6260e05](https://github.com/Eabusham2/router-vpn/commit/d6260e05dcc8ef4cb03f029c2c775f10a82d00ef) | Split the native Tor importer into three serial catalog-bound phases with the original 60-second test / 180-second parent limits. Preserve durable profile writes, both Windows shells, every original leaf and native form defect. Require each leaf, root and package verdict exactly once; keep Go stderr separate from strict JSON. Seventeen runner tests, four executed runner defects, 31,688 actual GTK checks across 1,156 dialogs and nine form defects passed. Original and split Go importers passed the same 373 Linux leaves under race. Actual Windows acceptance of both 365-leaf shell paths subsequently passed as detailed below. |
+| [f60370fc](https://github.com/Eabusham2/router-vpn/commit/f60370fc652c2c9cd75a50e7a4f76d88314f11d8) | Receive one bounded SOCKS wire datagram independently of the caller's payload capacity, preserving exact-size and truncating reads without borrowing the next packet. Native errors and malformed headers/counts leave caller bytes and the saved endpoint untouched. All 137 actual native race verdicts and 22 preparation tests passed. Reverting only read decapsulation produced 52 intended failed verdicts; all 83 prior controls still passed. The mandatory control restored all 332 source records. |
+| [9022e2dc](https://github.com/Eabusham2/router-vpn/commit/9022e2dc8bb4fe0fe47cbe5222acffc76150c8e3) | Retain direct Local Linux SOCKS5 with Start Layer Off and On-connect/Always protection. Each real native association owns its authenticated TCP control and exact negotiated UDP socket. Selected DNS, captured IPv6/LAN policy, source identity, MTU, proof and restoration remain bound to that owner. Actual native evidence is detailed below; this does not newly admit other platforms or graph combinations. |
+| [79651e65](https://github.com/Eabusham2/router-vpn/commit/79651e65de2d9035f2dbd236f43af9339fba792c) | Preserve the exact already-generated registry order on repeated preparation by anchoring SOCKS after the Node registration. All 23 pinned preparation tests and nine Windows bootstrap runner tests pass. The original producer fails the new repeat regression; generated registry bytes are identical. Swapped, duplicate and foreign registrations remain rejected. |
+| [e97c8d22](https://github.com/Eabusham2/router-vpn/commit/e97c8d22102ffbbfa82d6769bac6e25c91fcb224) | Capture the original Linux interface and complete configured address records around each route add. Retain one explicit add plus only separately proved canonical IPv6 LOCAL routes, atomically recording every object. Seventy actual sing-tun race verdicts, the complete private veth routing suite, 24 runner tests and seven compiled defect controls pass. The original hosted route's hidden fields and new TUN/ARM64 acceptance remain unproved. |
+
+### Retained Linux SOCKS5 evidence
+
+The 26-file feature was prepared from `f60370fc` with its exact proposed bytes,
+then published as `9022e2dc`. The normal generators, original module checksums,
+verified Go/PQ/Tor inputs and sealed source closures were retained. All 3,073
+installed, 1,627 lifecycle and 1,628 Box source records remained unchanged
+through their respective gates. The external closure digest was
+`a1274b2841b69c1ad10f24b7a093aa4656a80ca9b6140c6fc6b8626524249c8d`.
+
+- The complete Box suite passed 130 subverdicts and 400 actual routed HTTPS
+  response samples. Original families remain included. Log SHA256:
+  `76c201627fe5daacabe04b4798676df3c71ee1365ac19da4fa3ff0829cee400a`.
+- Actual generated physical ownership and command gates passed 168 and 48
+  verdicts under race, with normal production tags and verified PQ where
+  required. Separate associations cannot borrow each other's TCP/UDP grants;
+  original control EOF revokes its grants before explicit Close, while the
+  replacement remains usable. Timeout is not accepted as that EOF result.
+- All fourteen native guardian/nft/socket cases passed, including SOCKS
+  succession and rejection of a disallowed private relay. The namespace
+  wrapper took 104.22 seconds with its original bound. After an interrupted
+  wrapper, a same-source rebuild reproduced the exact original test-image
+  SHA256 before only the missing native phase resumed. Log SHA256:
+  `ad2bb07468a9e8315eb791d46e0069915dc64ee6251b20fdaa9cf25fef9c7a0f`.
+- The real installed peer package compiled in 32.14 seconds. All 372 readiness
+  scenarios and 87 expected refusals retain their prior execution evidence
+  with byte-identical application/shared inputs; 239 app verdicts have the
+  same explicitly checked equivalence. These were not rerun and relabeled
+  as new native executions. Current installed/lifecycle runners passed 22
+  and five tests, independently repeated during root integration.
+- The normal final linker and receipt checks passed, and the real controller's
+  `--verify-native-runtime` admitted the exact built bundle. Actual engine
+  version and external-command help were checked. Engine SHA256:
+  `2816408103b1aa15075df1ebc577e29ae1b9e3c242c553a5491b555fab17bb22`;
+  receipt SHA256:
+  `ef5d3d34712b7d3aeaddfc70c3fbe21c258e2661fdea8add16aff1e4be973665`.
+  The standard executable-only loader was recorded as the sole new generated
+  input, not an unchanged earlier test source. Finalization resumed after
+  exact locked Cargo metadata dependencies were retrieved for license output.
+
+The older v4 guardian failed the exact payload-size read; its failure remains
+recorded. The separately published `f60370fc` repair and current full gate
+close that observed failure. Box tests explicitly substitute OS admission and
+TUN construction while exercising real crypto, sockets and isolated veth
+traffic. Guardian tests exercise real kernel protection separately. No local
+system TUN was created or opened. The local final bundle is evidence for its
+captured source, not the later Linux-route source, a full build/release gate,
+an installed-device run or a published application package. Numeric relays
+remain bound to the actual captured LAN/IPv6 policy; wildcard/domain/zero-port
+relay replies and broader graph/platform combinations remain guarded scope.
+
+### Current native observations
+
+The two complete managed macOS inventory steps at `a8a8db3b` passed against the
+actual full host process lists. [Intel](https://github.com/Eabusham2/router-vpn/actions/runs/41499791113/job/125464013231)
+verified 449 paths before and after an owned copied/unlinked child; [Apple
+Silicon](https://github.com/Eabusham2/router-vpn/actions/runs/41499791113/job/125464013494)
+verified 447. Both refused that original child until it was joined and rejected
+the fabricated-empty-inventory and accept-matching-native-image defects.
+Both whole jobs still failed their separate first/legacy installation step.
+The native Intel refusal retained EBADEXEC/zero-UUID evidence for the same
+pre-fixture process; neither its name nor its parentage grants an exemption.
+Managed upgrade acceptance does not establish first/legacy or package acceptance.
+
+The actual `e116117c` Darwin readback showed one complete IFINFO for index 5:
+MTU zero, raw flags zero, type 1, physical zero, no hardware address or address
+records. The next source repair represents that exact unused state instead of
+inventing an MTU or removing the link. Its `7d434770` Darwin job was cancelled
+without steps, so no native pass or failure of the repair can be inferred.
+
+Both Windows Aux jobs at `a8fece7c` passed the paired TCP/UDP DNS module step
+(AMD64 3.004 seconds, ARM64 1.152 seconds), then failed before native Node
+execution because remote-policy preparation converted the already verified
+OpenVPN server file to CRLF. This is the failure repaired by `7f3acd35`; the
+older whole-job failure is not a DNS regression. The earlier full Windows
+controller/native GUI/WFP job at `e1ee627a` remains a bounded successful result.
+
+At `7d434770`, PowerShell 5.1 passed all 4,186 actual Tor editor checks, seven
+form mutants and the full importer in 34.530 seconds. PowerShell 7 passed its
+same editor/mutant checks, then the single importer root exhausted its own
+60-second timer during real atomic private-profile persistence. This is an
+aggregate workload observation, not proof that a zero-duration leaf or one
+FlushFileBuffers call hung. The published split preserves all 365 Windows
+leaves, 353 actual writes and 954 inline source-replacement rejections per shell.
+
+The repaired [Windows Tor step at d6260e05](https://github.com/Eabusham2/router-vpn/actions/runs/41508564740/job/125494930119)
+subsequently passed on both PowerShell 5.1 and PowerShell 7. The actual log
+records 4,186 editor checks, all seven native form mutants and exactly
+109 + 128 + 128 = 365 distinct importer leaves for each shell. The seventeen
+runner contracts also passed. The whole Windows job was cancelled later during
+packaged AWG verification; its completed Tor result remains bounded to this
+source and step. The [Linux job](https://github.com/Eabusham2/router-vpn/actions/runs/41508564740/job/125494930694)
+completed successfully, including its 373-leaf Tor matrix and packaged AWG.
+The same run's Darwin job was cancelled without steps and supplied no result.
+
+The exact [Apple native composition job at a8e8e160](https://github.com/Eabusham2/router-vpn/actions/runs/41499589135/job/125463312328)
+has completed successfully. It built the real Libbox XCFramework, verified its
+pinned slices/generated API, executed all three actual Apple timer controls,
+built the pinned WireGuardKit archive and completed the iPhoneOS PacketTunnel/
+app Xcode import-probe build. The uploaded signature artifact was 128,152 bytes.
+This closes that exact native composition boundary. It does not establish a
+release IPA, device signing/distribution or the separate twelve-case clone
+fixture gate at a newer source.
+
+### Later observed blockers and route repair boundary
+
+At exact `f60370fc`, the [AMD64 generated-TUN job](https://github.com/Eabusham2/router-vpn/actions/runs/41510806210/job/125501848822)
+passed, while [ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/41510806210/job/125501849113)
+failed MTU rollback with an active generation-2 owner and an empty routing
+receipt. The first failure records two additions, no removals: an IPv4 default
+route and an IPv6 table-255 route on the same index. The later channel EOF is
+teardown after that failure. A real private veth reproduction produced this
+shape when configured-address DAD completion published its LOCAL /128 during
+the explicit route add. The repair requires the complete canonical body and
+unchanged owner/address proof, then retains every admitted object. Its actual
+native test also deletes the recorded host route and verifies rejection.
+Neither the original log's unreported protocol/type/scope/address relation nor
+new hosted TUN acceptance is inferred from this local class reproduction.
+
+The [f603 Windows Tor job](https://github.com/Eabusham2/router-vpn/actions/runs/41510806122/job/125502485312)
+passed all PowerShell 5.1 editor, mutant and 365 importer leaves, then its
+PowerShell 7 editor-shell invocation exceeded the existing sixty-second
+bound before the importer. This is distinct from the already repaired
+single-importer aggregate timeout and from the earlier `d6260e05` successful
+both-shell step. The [Darwin job](https://github.com/Eabusham2/router-vpn/actions/runs/41510806122/job/125502485648)
+reached a different network snapshot rejection: a cloned route lacked a
+unique exact captured parent. Its log does not contain the route fields;
+no generic route, interface-name or ownership exemption is justified.
+
+The [f415 Windows AMD64 engine job](https://github.com/Eabusham2/router-vpn/actions/runs/41507677662/job/125493850421)
+passed canonical OpenVPN preparation and all three Hysteria2 baseline phases
+(46.594, 26.968 and 27.031 seconds), plus many other Node/negative phases,
+then exhausted the unchanged 1,200-second aggregate child wrapper during a
+later mutant compilation. This is not the earlier CRLF refusal or evidence
+that the newly begun compile hung. The separate [f603 Intel guardian job](https://github.com/Eabusham2/router-vpn/actions/runs/41510806389/job/125501862617)
+failed at sequential socket 110 during PF system-children readback. The
+two-second grant context spans pre-readback, installation and post-readback;
+the final pfctl's 94 milliseconds does not describe that entire request.
+It is a request deadline failure, not an aggregate test timeout. These remain
+separate blockers requiring evidence and source work.
+
+### Delivery and unfinished scope
+
+The latest independently read published release remains the twelve-asset
+[`745b3e41` prerelease](https://github.com/Eabusham2/router-vpn/releases/tag/router-vpn-sha-745b3e41e5a78d734391976af9b7cd0637660a0b).
+Newer source is not a complete published release. Full native packages, images,
+compose, checksums and publication must still converge on the same current SHA.
+
+The original ledger still requires retained ordinary execution across the
+other native platforms, broader graph/Start Layer/protection combinations,
+recovery and Methods interoperability, first/legacy macOS ownership, remaining
+native acceptance, signing/distribution, physical/off-LAN/visual/accessibility
+checks, private providers and explicitly authorized ASUS/Portainer deployment.
+The published Linux repair closes the exact reproduced address-route class;
+Hidden original fields and new native acceptance remain separate evidence.
+No private router, AdGuard, forwarding, container or deployment configuration
+was changed. Workspace logs
+and binaries are verification artifacts, not published application packages.
+
+## Earlier implementation and verification — through 771abdea
 
 Published source has tree `46c171389ba87a059096acec5dcd3bb336ea479e`.
 Every source unit below was committed after focused validation, published
