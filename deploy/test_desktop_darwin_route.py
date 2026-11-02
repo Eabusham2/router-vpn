@@ -36,7 +36,15 @@ UID = load('test_desktop_socket_uid')
 PACKAGE = 'github.com/sagernet/sing-tun'
 TEMPLATE = 'sing_tun_route_darwin_test.go.tmpl'
 GROUPS = ('TestRouterVPNDarwinRouteConflictPreservesExisting', 'TestRouterVPNDarwinRouteOwnedAddAndRemove')
-REQUIRED = frozenset((*GROUPS, *(root + '/' + family for root in GROUPS for family in ('ipv4', 'ipv6'))))
+INVENTORY_CASES = {
+    'TestRouterVPNDarwinRouteDump2OriginalInventory': ('ipv4', 'ipv6'),
+    'TestRouterVPNDarwinRouteDump2RefusesUnprovedCache': (
+        'referenced', 'no-expiry', 'wrong-parent', 'foreign-interface', 'foreign-gateway',
+        'missing-parent', 'duplicate-parent', 'ordinary-dump', 'truncated'),
+    'TestRouterVPNDarwinRouteDump2ReadBoundary': ('native-error', 'oversized', 'empty'),
+}
+REQUIRED = frozenset((*GROUPS, *(root + '/' + family for root in GROUPS for family in ('ipv4', 'ipv6')),
+                      *INVENTORY_CASES, *(root + '/' + case for root, cases in INVENTORY_CASES.items() for case in cases)))
 WITNESS = 'Darwin route conflict took over an existing route'
 
 
@@ -105,7 +113,8 @@ def checked_sources(source, go='go', env=None):
         if path.is_file():
             records[path.relative_to(source).as_posix()] = digest(path)
     for relative in ('deploy/prepare-desktop-mtu.py', 'deploy/test_desktop_darwin_route.py',
-                     'deploy/test_desktop_darwin_route_runner.py', 'mobile/desktop/' + TEMPLATE):
+                     'deploy/test_desktop_darwin_route_runner.py', 'mobile/desktop/' + TEMPLATE,
+                     'mobile/desktop/sing_tun_network_darwin_test.go.tmpl'):
         path = ROOT / relative
         if path.is_symlink() or not path.is_file():
             raise ValueError('Darwin route gate lost an original source authority')

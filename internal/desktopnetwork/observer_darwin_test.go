@@ -557,8 +557,15 @@ func TestDarwinRouteDump2OriginalIdleCapture(t *testing.T) {
 			}
 			input := append(append([]byte(nil), parentWire...), childWire...)
 			original := append([]byte(nil), input...)
-			objects, err := darwinRouteDump2(input)
-			if err != nil || len(objects) != 2 || objects[0] != parent || objects[1].Key() != child.Key() || objects[1].darwinCache == nil || !bytes.Equal(input, original) {
+			calls := 0
+			objects, err := desktopDarwinReadRouteDump2(func(kind, parameter int) ([]byte, error) {
+				calls++
+				if kind != syscall.NET_RT_DUMP2 || parameter != 0 || calls != 1 {
+					return nil, errors.New("original native route inventory changed its ABI or retried")
+				}
+				return input, nil
+			})
+			if err != nil || calls != 1 || len(objects) != 2 || objects[0] != parent || objects[1].Key() != child.Key() || objects[1].darwinCache == nil || !bytes.Equal(input, original) {
 				t.Fatal("DUMP2 changed its original route or lost private native fields", err)
 			}
 			if derived, err := DesktopDarwinDerivedRoute(objects[1], objects[:1]); !derived || err != nil {

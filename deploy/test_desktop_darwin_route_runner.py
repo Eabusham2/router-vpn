@@ -18,12 +18,12 @@ spec.loader.exec_module(G)
 
 
 def transcript(mutant=False):
-    roots = G.GROUPS[:1] if mutant else G.GROUPS
+    roots = G.GROUPS[:1] if mutant else (*G.GROUPS, *G.INVENTORY_CASES)
     lines = []
     for root in roots:
         lines.append('=== RUN   ' + root)
-        for family in ('ipv4', 'ipv6'):
-            name = root + '/' + family
+        for case in G.INVENTORY_CASES.get(root, ('ipv4', 'ipv6')):
+            name = root + '/' + case
             lines.append('=== RUN   ' + name)
             if mutant:
                 lines.append('    route_test.go:1: ' + G.WITNESS + ': expected original EEXIST, got <nil>')

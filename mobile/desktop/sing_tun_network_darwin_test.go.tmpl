@@ -1,0 +1,172 @@
+//go:build darwin
+
+package tun
+
+import (
+	"bytes"
+	"encoding/binary"
+	"errors"
+	"net"
+	"net/netip"
+	"syscall"
+	"testing"
+)
+
+// These fixtures execute the actual copied wire decoder, original cache proof
+// and native TUN inventory function. Only the read syscall is injected; they
+// do not claim an actual kernel route or interface mutation.
+func routerVPNDarwinDump2Objects(family string) (DesktopNetworkObject, DesktopNetworkObject, DesktopNetworkObject) {
+	parent := DesktopNetworkObject{Kind: "route", Family: 4, Index: 7,
+		Destination: "0.0.0.0/0", Gateway: "192.0.2.1", MTU: 1500, Flags: 0x2 | 0x800 | 0x10000}
+	child := DesktopNetworkObject{Kind: "route", Family: 4, Index: 7,
+		Destination: "198.51.100.5/32", Gateway: parent.Gateway, MTU: 1500,
+		Flags: 0x2 | 0x4 | 0x20000 | 0x40000 | 0x1000000}
+	owned := DesktopNetworkObject{Kind: "route", Family: 4, Index: 7,
+		Destination: "198.51.100.6/32", Gateway: parent.Gateway, MTU: 1376, Flags: 0x2 | 0x4 | 0x800}
+	if family == "ipv6" {
+		parent.Family, child.Family, owned.Family = 6, 6, 6
+		parent.Destination, parent.Gateway = "::/0", "2001:db8::1"
+		child.Destination, child.Gateway = "2001:db8:2::5/128", parent.Gateway
+		owned.Destination, owned.Gateway = "2001:db8:2::6/128", parent.Gateway
+	}
+	return parent, child, owned
+}
+
+func routerVPNDarwinDump2Wire(t *testing.T, object DesktopNetworkObject, parentFlags uint32, references, expiry int32) []byte {
+	t.Helper()
+	prefix := netip.MustParsePrefix(object.Destination)
+	address := func(value []byte) []byte {
+		if object.Family == 4 {
+			wire := make([]byte, syscall.SizeofSockaddrInet4)
+			wire[0], wire[1] = byte(len(wire)), syscall.AF_INET
+			copy(wire[4:8], value)
+			return wire
+		}
+		wire := make([]byte, syscall.SizeofSockaddrInet6)
+		wire[0], wire[1] = byte(len(wire)), syscall.AF_INET6
+		copy(wire[8:24], value)
+		return wire
+	}
+	data := address(prefix.Addr().AsSlice())
+	addrs := int32(syscall.RTA_DST)
+	if object.Gateway != "" {
+		data = append(data, address(netip.MustParseAddr(object.Gateway).AsSlice())...)
+		addrs |= syscall.RTA_GATEWAY
+	}
+	if object.Flags&syscall.RTF_HOST == 0 {
+		data = append(data, address(net.CIDRMask(prefix.Bits(), prefix.Addr().BitLen()))...)
+		addrs |= syscall.RTA_NETMASK
+	}
+	header := desktopDarwinRouteHeader2{Msglen: uint16(syscall.SizeofRtMsghdr + len(data)),
+		Version: syscall.RTM_VERSION, Type: syscall.RTM_GET2, Index: uint16(object.Index),
+		Flags: int32(object.Flags) | syscall.RTF_UP, Addrs: addrs,
+		References: references, ParentFlags: int32(parentFlags),
+		Rmx: syscall.RtMetrics{Mtu: object.MTU, Hopcount: object.Priority, Expire: expiry}}
+	var output bytes.Buffer
+	if err := binary.Write(&output, binary.LittleEndian, header); err != nil || output.Len() != syscall.SizeofRtMsghdr {
+		t.Fatal("native DUMP2 fixture lost its exact Darwin ABI", err)
+	}
+	output.Write(data)
+	return output.Bytes()
+}
+
+func TestRouterVPNDarwinRouteDump2OriginalInventory(t *testing.T) {
+	for _, family := range []string{"ipv4", "ipv6"} {
+		t.Run(family, func(t *testing.T) {
+			parent, child, owned := routerVPNDarwinDump2Objects(family)
+			wire := routerVPNDarwinDump2Wire(t, parent, 0, 8, 0)
+			wire = append(wire, routerVPNDarwinDump2Wire(t, child, parent.Flags|syscall.RTF_UP, 0, 1700000000)...)
+			wire = append(wire, routerVPNDarwinDump2Wire(t, owned, 0, 3, 0)...)
+			original := append([]byte(nil), wire...)
+			calls := 0
+			actual, err := routervpnDarwinNetworkObjectsFrom(func(kind, parameter int) ([]byte, error) {
+				calls++
+				if kind != syscall.NET_RT_DUMP2 || parameter != 0 || calls != 1 {
+					return nil, errors.New("native TUN requested another inventory or retried its observation")
+				}
+				return wire, nil
+			})
+			if err != nil || calls != 1 || len(actual) != 2 || actual[0] != parent || actual[1] != owned || !bytes.Equal(wire, original) {
+				t.Fatal("native TUN did not retain its original DUMP2 inventory", err)
+			}
+			clear(wire)
+			if actual[0] != parent || actual[1] != owned {
+				t.Fatal("native TUN inventory borrowed its original read buffer")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDarwinRouteDump2RefusesUnprovedCache(t *testing.T) {
+	for _, fault := range []string{"referenced", "no-expiry", "wrong-parent", "foreign-interface", "foreign-gateway", "missing-parent", "duplicate-parent", "ordinary-dump", "truncated"} {
+		t.Run(fault, func(t *testing.T) {
+			parent, child, _ := routerVPNDarwinDump2Objects("ipv4")
+			refs, expiry, flags := int32(0), int32(1700000000), parent.Flags|syscall.RTF_UP
+			switch fault {
+			case "referenced":
+				refs = 1
+			case "no-expiry":
+				expiry = 0
+			case "wrong-parent":
+				flags ^= 0x4000
+			case "foreign-interface":
+				child.Index++
+			case "foreign-gateway":
+				child.Gateway = "192.0.2.99"
+			}
+			wire := routerVPNDarwinDump2Wire(t, parent, 0, 8, 0)
+			if fault == "missing-parent" {
+				wire = nil
+			} else if fault == "duplicate-parent" {
+				wire = append(wire, routerVPNDarwinDump2Wire(t, parent, 0, 8, 0)...)
+			}
+			wire = append(wire, routerVPNDarwinDump2Wire(t, child, flags, refs, expiry)...)
+			if fault == "ordinary-dump" {
+				wire[3] = syscall.RTM_GET
+			} else if fault == "truncated" {
+				wire = wire[:len(wire)-1]
+			}
+			calls := 0
+			actual, err := routervpnDarwinNetworkObjectsFrom(func(kind, parameter int) ([]byte, error) {
+				calls++
+				if kind != syscall.NET_RT_DUMP2 || parameter != 0 {
+					t.Fatal("native TUN lost its original read ABI")
+				}
+				return wire, nil
+			})
+			if err == nil || actual != nil || calls != 1 {
+				t.Fatal("native TUN admitted, partly published or retried an unproved cache", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDarwinRouteDump2ReadBoundary(t *testing.T) {
+	if result, err := routervpnDarwinNetworkObjectsFrom(nil); err == nil || result != nil {
+		t.Fatal("native TUN admitted an absent route reader")
+	}
+	for _, fault := range []string{"native-error", "oversized", "empty"} {
+		t.Run(fault, func(t *testing.T) {
+			original := errors.New("original native read failure")
+			calls := 0
+			result, err := routervpnDarwinNetworkObjectsFrom(func(kind, parameter int) ([]byte, error) {
+				calls++
+				if kind != syscall.NET_RT_DUMP2 || parameter != 0 {
+					t.Fatal("native TUN changed its exact read contract")
+				}
+				switch fault {
+				case "native-error":
+					return []byte{1, 2, 3}, original
+				case "oversized":
+					return make([]byte, (4<<20)+1), nil
+				default:
+					return nil, nil
+				}
+			})
+			if calls != 1 || (fault == "empty" && (err != nil || len(result) != 0)) ||
+				(fault != "empty" && (err == nil || result != nil)) || (fault == "native-error" && !errors.Is(err, original)) {
+				t.Fatal("native TUN changed its original error, bound or empty inventory", err)
+			}
+		})
+	}
+}

@@ -261,6 +261,31 @@ def main():
                 finally:
                     target.write_text(original)
                 print("Executed Darwin native decoding control rejected:", name)
+            target = mutant / "desktop_network_darwin_wire.go"
+            original = target.read_text()
+            inventory_controls = (
+                ("original-dump2-read", "read(syscall.NET_RT_DUMP2, 0)", "read(syscall.NET_RT_DUMP, 0)",
+                 "original native route inventory changed its ABI or retried"),
+                ("original-dump2-cache-proof",
+                 "object = desktopDarwinCaptureCacheObservation(object, uint32(header.Flags), uint32(header.ParentFlags), header.References, header.Rmx.Expire)",
+                 "// Deliberate defect: discard the original native cache observation.",
+                 "DUMP2 changed its original route or lost private native fields"),
+            )
+            for name, before, after, witness in inventory_controls:
+                if original.count(before) != 1:
+                    raise RuntimeError("Darwin inventory control boundary changed: " + name)
+                try:
+                    target.write_text(original.replace(before, after, 1))
+                    result = execute([go, "test", "-race", "-gcflags=all=-d=checkptr=2", "-v", "-count=1",
+                                      "-timeout=30s", ".", "-run", "^TestDarwinRouteDump2OriginalIdleCapture$/^4$"],
+                                     cwd=mutant, env=native_env, timeout=90, succeeds=False)
+                    marker = "--- FAIL: TestDarwinRouteDump2OriginalIdleCapture/4 "
+                    if result.returncode == 0 or marker not in result.stdout or witness not in result.stdout or "[build failed]" in result.stdout:
+                        print(result.stdout, end="")
+                        raise RuntimeError("Darwin inventory control did not reject its actual defect: " + name)
+                finally:
+                    target.write_text(original)
+                print("Executed Darwin native inventory control rejected:", name)
     print("Desktop captured network observer gate passed; native device transition acceptance remains separate.")
 
 

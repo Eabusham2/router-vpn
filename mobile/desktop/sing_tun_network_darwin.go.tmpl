@@ -18,25 +18,13 @@ func (t *NativeTun) routervpnNetworkInterface() (*net.Interface, uint64, error) 
 }
 
 func routervpnDarwinNetworkObjects() ([]DesktopNetworkObject, error) {
-	raw, err := syscall.RouteRIB(syscall.NET_RT_DUMP, 0)
-	if err != nil || len(raw) > 4<<20 {
-		return nil, errors.New("native Darwin route inventory is unavailable or unbounded")
-	}
-	messages, err := syscall.ParseRoutingMessage(raw)
+	return routervpnDarwinNetworkObjectsFrom(syscall.RouteRIB)
+}
+
+func routervpnDarwinNetworkObjectsFrom(read func(int, int) ([]byte, error)) ([]DesktopNetworkObject, error) {
+	objects, err := desktopDarwinReadRouteDump2(read)
 	if err != nil {
 		return nil, err
-	}
-	var objects []DesktopNetworkObject
-	for _, message := range messages {
-		route, ok := message.(*syscall.RouteMessage)
-		if !ok {
-			return nil, errors.New("native Darwin route dump contains another record type")
-		}
-		object, err := ParseDesktopDarwinNetworkObject(route)
-		if err != nil {
-			return nil, err
-		}
-		objects = append(objects, object)
 	}
 	filtered := make([]DesktopNetworkObject, 0, len(objects))
 	for _, object := range objects {
