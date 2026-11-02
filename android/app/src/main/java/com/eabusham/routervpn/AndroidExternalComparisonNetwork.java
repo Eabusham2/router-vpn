@@ -6,6 +6,7 @@ import android.net.LinkProperties;
 import android.net.Network;
 import android.net.NetworkCapabilities;
 import android.net.NetworkRequest;
+import android.os.Parcel;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -85,9 +86,20 @@ final class AndroidExternalComparisonNetwork implements AutoCloseable {
             if(caps==null)throw new IllegalStateException("A network changed during cohort capture.");
             if(caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN))continue;
             if(value==null||value.getInterfaceName()==null)throw new IllegalStateException("A physical network has incomplete link identity.");
-            result.links.put(network,new LinkProperties(value));result.transports.put(network,transport(caps));
+            result.links.put(network,copyLinkProperties(value));result.transports.put(network,transport(caps));
         }
         return result;
+    }
+    private static LinkProperties copyLinkProperties(LinkProperties value){
+        // The copy constructor is hidden from the public Android SDK. Parcel
+        // preserves the complete link snapshot without retaining mutable input.
+        Parcel parcel=Parcel.obtain();
+        try{
+            value.writeToParcel(parcel,0);parcel.setDataPosition(0);
+            LinkProperties copy=LinkProperties.CREATOR.createFromParcel(parcel);
+            if(!value.equals(copy))throw new IllegalStateException("The complete physical link identity could not be captured.");
+            return copy;
+        }finally{parcel.recycle();}
     }
     private static String transport(NetworkCapabilities caps){
         if(caps==null||caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN))return null;
