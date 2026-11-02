@@ -18,7 +18,24 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
-## Implementation reconciliation through 34f65cb8
+## Implementation reconciliation through 55d9f285
+
+The current published implementation cutoff is
+[55d9f285](https://github.com/Eabusham2/router-vpn/commit/55d9f285ff6bae4c9f2d50ba4960ecd7c35020d4).
+[The evidence record](CONTINUATION-EVIDENCE-2026-11-02.md) records this unit, Hysteria2 in `74bd942a`, and
+`1720180d`, `90ffcbd2`, `296461bd` and `c7b03676`. These changes extend the existing
+reconciled scope; they do not replace original sources, change defaults or
+create a smaller completion denominator.
+
+| Recovered scope | Current reconciliation |
+|---|---|
+| #112, #200–213, #337 and retained Linux ordinary external transitions | Direct Local Hysteria2 now joins the published SS/HTTP/HTTPS retained app/session/journal path for Start Layer Off and On-connect/Always protection. Password/TLS identity, the sole physical UDP destination, selected UDP DNS, HTTPS exit proof, captured MTU and original Router restoration remain bound to the same owner. Other external families, predecessors, multihop/Server/Compare, ordinary external Start Layers, unprotected admission and other platform integrations keep their own unfinished requirements. |
+| Complete connection state, selected policy and asynchronous ownership | Public Connect persistence and temporary Speed Lab restoration share the captured external owner. The installed inventory preserves all previous 310 cases and adds seven Hysteria2 cases, for 317. Wrong key/trust, DNS failure and cancellation must never report Connected or overwrite the original/replacement owner. The local absence of a genuine TUN leaves the new installed cases unexecuted. |
+| Real graph execution and proof integrity | Actual encrypted peers exposed two pinned Hysteria2 EOF/close-contract defects. The repaired transport preserves literal EOF and only the same stream's typed remote code-zero close; all other reset/authentication/cancellation failures stay errors. Normal public-proof validation, truncated-body rejection and joined cleanup remain intact. Final Box and normal/low-memory transport race tests pass; the six-case real kernel lifecycle evidence uses unchanged lifecycle source from before these transport repairs. |
+| Native build and fixture integrity | Shared launch-guard checks, Tor IPC observation time, exact routing-image staging and IPv6 veth readiness are repaired without changing production proof/routing acceptance. Five non-host transport targets compile; the local production-tag Linux AMD64 runtime bundle verifies against the 74bd942a feature source. The 55d9f285 network-cohort fixture additionally preserves exact-image/private-directory/namespace/deadline ownership and passes all eight actual network-event cases plus ten runner checks. The latest generated TUN CI alternates the MTU-rollback receipt failure between architectures at 296461bd and c7b03676; its cause remains under investigation. Compilation, runtime bundle verification, installed execution and application release publication stay separate. |
+| All original and later requirements | Original 356-item scope, C1–C7, later product/breakage, map-first, external-node and lifecycle corrections remain binding. Broader graph/platform/recovery gaps, full 317-case installed acceptance, macOS ownership, current exact-SHA packages/images/compose/publication, signing, deployment and physical/off-LAN checks remain separately accountable. No complete current release or all-device acceptance is claimed. |
+
+## Earlier implementation reconciliation through 34f65cb8
 
 Original user passages, the complete addendum and later corrections were
 recovered again from the available private source documents. Personal-context

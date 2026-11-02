@@ -5,11 +5,94 @@ This continues [November 1](CONTINUATION-EVIDENCE-2026-11-01.md) and preserves
 source recovery is complete for the recorded collection; continue the actual
 implementation without replacing the original scope with this status record.
 The independently read-back published source cutoff is
-[`34f65cb827bd20e8681bfc2e003d77d883a5848e`](https://github.com/Eabusham2/router-vpn/commit/34f65cb827bd20e8681bfc2e003d77d883a5848e).
+[`55d9f285ff6bae4c9f2d50ba4960ecd7c35020d4`](https://github.com/Eabusham2/router-vpn/commit/55d9f285ff6bae4c9f2d50ba4960ecd7c35020d4).
 Later working files are outside this cutoff. No complete current release,
 private deployment, signing or physical-device acceptance is established.
 
-## Latest implementation and verification — through 34f65cb8
+## Latest implementation and verification — through 55d9f285
+
+Six additional source units were committed directly to main and their remote
+identities verified. The cutoff tree is `e570e88b3337f01489e9601e8279a015068b42eb`;
+the Hysteria2 feature unit `74bd942a` has tree
+`c61a8392de78a17927b1a575151625a504c052db`. The earlier sections below preserve their
+own dated evidence; their missing-feature wording is historical where this
+section provides a newer result.
+
+| Commit | Implemented result and verification boundary |
+|---|---|
+| [1720180d](https://github.com/Eabusham2/router-vpn/commit/1720180d391447cc57f13b504436e4c39dc835ae) | Update the connection-launch source fixture for both retained native Start and direct command Start. AST checks require shared prelaunch guards, command publication and a post-publication guard in the same native ownership block. Seven malformed layouts are rejected, including relying on the separate OpenVPN guard or protecting only one native branch. Production cancellation checks are unchanged. |
+| [90ffcbd2](https://github.com/Eabusham2/router-vpn/commit/90ffcbd2c017bf459ea73143be2bdf0b488fadb9) | Give the synthetic Tor IPC proof and heartbeat one observation timestamp, removing a second-clock-read race. Add an explicit proof-after-heartbeat negative alongside wrong-source/front/nonce/replay/DNS cases. The runtime proof-age/order validator remains unchanged. |
+| [296461bd](https://github.com/Eabusham2/router-vpn/commit/296461bd017b6b3b322c92db167123aac4f7cff9) | Stage only the exact compiled routing fixture in a read/execute-only file and traversable owned temporary directory, so the fresh user namespace can reach it without opening the private compiler workspace. Recheck source and staged file identity, bytes, owner and permissions before and after execution; retain failure/cancellation cleanup and the existing process-group launcher. Replacements, symlinks, hardlinks, writable/foreign sources and corrupt copies remain rejected. |
+| [c7b03676](https://github.com/Eabusham2/router-vpn/commit/c7b036768182551f262c2c080f65859f2484bea0) | Require actual IPv6 addresses, successful DAD and all expected main/local routes on both fixture veths before running the native routing assertion. The bounded observation stays within the original child deadline. Missing routes/addresses, tentative/failed DAD and foreign interface evidence are rejected. Three actual non-root-to-sudo namespace repetitions and three root race repetitions passed. Production receipt source is unchanged. |
+| [74bd942a](https://github.com/Eabusham2/router-vpn/commit/74bd942a76c75719fcc62dc6a8c222941c55785a) | Carry retained Linux direct Local ordinary Hysteria2 through public Connect/Speed Lab, captured connected-UDP ownership, selected DNS, TLS/password identity, proof, MTU and exact original Router restoration. Admission remains bounded to Linux, no predecessor, Start Layer Off and On-connect/Always protection. Real encrypted testing exposed and repaired exact pinned client EOF and close semantics without changing public-proof validation. The full four-family Box suite, normal/low-memory transport races, four defect controls, five cross-target transport compilations and complete local Linux AMD64 runtime bundle pass. Seven installed scenarios are appended to all previous 310; installed TUN acceptance remains pending. |
+| [55d9f285](https://github.com/Eabusham2/router-vpn/commit/55d9f285ff6bae4c9f2d50ba4960ecd7c35020d4) | Reuse retained-image staging for the network-cohort native fixture while preserving the original private 0700 compiler directory, captured namespace, unshare/60-second deadline, process-group cleanup and strict eight-case verdict. The original exit 126 was reproduced as a real UID-1000 non-root owner through sudo and a user namespace. The same race binary passed all eight actual isolated network-event cases in 0.21 seconds after the fix; ten runner checks pass. No host network configuration changed. |
+
+### Hysteria2 source, real traffic and kernel evidence
+
+The transport repairs address two separately reproduced failures. A final
+native Read returned the complete TLS bytes with a wrapped EOF, preventing the
+normal TLS/HTTP reader from recognizing completion. A normal remote code-zero
+STOP_SENDING also made the first stream Close return an untyped error. The
+client now preserves only literal EOF from the two actual stream reads and
+maps only the same stream's typed remote code-zero close to the ordinary
+closed-connection result. Protocol framing/authentication errors, nonzero or
+local resets, the original reset cause, one Close, blocked-reader/writer join
+and the shared QUIC connection remain protected. Temporary diagnostic overlays
+were excluded from the published source and final native preparation.
+
+| Evidence layer | Verified observation | Remaining boundary |
+|---|---|---|
+| Final encrypted Box composition | Normal production tags and race pass all HTTP/HTTPS CONNECT, SS and Hysteria2 cases. Hysteria2 carries actual selected UDP DNS and certificate-checked HTTPS over one captured physical UDP destination. Wrong credentials, DNS, trust/IP, truncated responses, denied lower sockets, cancellation and MTU rollback/reproof retain their checks. Final captured run passed in 3.39 seconds. | OS permit identity and TUN creation are explicit fixture substitutes; this is not installed-TUN or physical-device acceptance. |
+| Actual Linux kernel lifecycle | Six namespace cases passed in 46.51 seconds, including the new Hysteria2 UDP succession/restoration case, real nft/guardian admission, forbidden-peer checks and retained protection. That run verified its 700-record source closure before and after execution. | This run preceded the two transport repairs and used identical lifecycle/family-admission source. It is preserved-source kernel evidence, not a rerun of the final prepared tree or an encrypted installed application test. |
+| Final transport/compiler checks | The unchanged pinned runner passes normal and low-memory race variants, including exact body/EOF, local/remote reset identity, first Close and joined blocked IO; four compiled defects fail as intended. Windows AMD64/ARM64, Darwin AMD64/ARM64 and Linux ARM64 transport test images compile. | Cross-compilation does not execute those five target systems or enable retained Hysteria2 on non-Linux hosts. |
+| Installed application inventory | All 310 earlier cases remain, followed by On-connect, Always, public Connect, cancellation, wrong key, wrong trust and DNS failure for Hysteria2. The 18-test verdict suite passes in 3.438 seconds, and the exact installed peer compiles under the runner's normal tags/race. | The local host has no genuine `/dev/net/tun`; zero of the seven new installed scenarios is locally accepted. All 317 remain mandatory in native CI. |
+| Final local runtime bundle | The normal production-tag Linux AMD64 link, verified PQ/Cronet/Tor payloads, unmodified runtime verifier and actual version/external-help commands pass. Complete final closures cover 2,125 installed-source records and 700 lifecycle records. | This is a local native runtime bundle. Current application packages, full exact-SHA release publication, signing, private deployment and physical devices retain separate gates. |
+
+The final local bundle was built from the `74bd942a` feature source, before
+the separate network-cohort runner fix. It has policy digest
+`738417a99c71d09b3795e1bab23c1be0a276ee13e30d624c27f8126c31e88602`
+and native receipt SHA-256
+`2f9328d0fd07cd78072c028bd321243afce6147b79ef4c9326225917681abb24`.
+Its prepared external source digest is
+`ef07c056ff365b8a388eb4acc51e0c48b175d6fec18a7720d77b8121fe454b95`.
+
+### Latest generated-TUN CI remains blocked
+
+| Exact source | AMD64 | ARM64 |
+|---|---|---|
+| [296461bd](https://github.com/Eabusham2/router-vpn/actions/runs/41392206605) | [All six cases passed](https://github.com/Eabusham2/router-vpn/actions/runs/41392206605/job/125105842531). | [MTU rollback failed](https://github.com/Eabusham2/router-vpn/actions/runs/41392206605/job/125105842722); the other five cases passed. |
+| [c7b03676](https://github.com/Eabusham2/router-vpn/actions/runs/41392708155) | [MTU rollback failed](https://github.com/Eabusham2/router-vpn/actions/runs/41392708155/job/125107374802); the other five cases passed. | [All six cases passed](https://github.com/Eabusham2/router-vpn/actions/runs/41392708155/job/125107375132). |
+
+Both failures report that the generated MTU owner omitted its exact current
+native routing receipt because that receipt was unavailable or malformed;
+the subsequent teardown EOF is secondary. Opposite architectures fail at the
+two checkpoints, so an architecture-specific explanation is not established.
+The cause remains under investigation. The check is mandatory, and no receipt
+validator or retry rule was relaxed. These six generated-TUN cases also do not
+substitute for the separate 317-case installed application inventory.
+
+### Current remaining implementation and acceptance work
+
+- Continue the full original requirement ledger, including additional retained
+  ordinary external families, predecessors/multihop/Server/Compare, ordinary
+  external Start Layers, unprotected admission and remaining recovery/platform
+  integration. The new direct Local family does not close those graph requirements.
+- Diagnose the current generated MTU routing-receipt failure, then execute all
+  required installed scenarios at the intended exact source. Preserve native
+  owner, route, policy, proof and original/replacement restoration checks.
+- Resolve remaining macOS installer image ownership and broader Windows/native
+  acceptance boundaries using their actual failures. Preserve the separate
+  Methods/interoperability, performance and source gaps in the full ledger.
+- Complete matching exact-SHA native application packages, ARM64 server images,
+  production compose and release publication. The older `745b3e41` release and
+  successful local runtime bundle do not establish this newer full release.
+- Complete physical-device networking/transitions/leaks, visual/accessibility,
+  signing/real upgrades, private provider/server checks, ASUS forwarding/JFFS,
+  deliberate exact-release deployment and post-deployment regression using the
+  actual authorized targets. No live router, AdGuard, Portainer or deployment
+  was changed by these source and isolated-test units.
+
+## Earlier implementation and verification — through 34f65cb8
 
 The continuation re-read the original user passages, the complete 312–356
 addendum and C1–C7, the later product/breakage request and map-first/external
@@ -300,7 +383,11 @@ own recorded checks. A fresh staging directory does not grant ownership of the
 fixed installed supervisor, state, socket and PF namespace. Signing,
 notarization, distribution and actual devices remain separate requirements.
 
-## Remaining implementation and acceptance work
+## Historical remaining implementation and acceptance work — earlier checkpoint
+
+The following list preserves the earlier checkpoint above. Current work is
+identified in the latest section; superseded refusal and test-count wording
+here must not be used as the present implementation state.
 
 - Desktop batch/history/UI and native event observation are published. Complete
   exact-SHA native/package/device acceptance and the retained Linux Router

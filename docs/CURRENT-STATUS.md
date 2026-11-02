@@ -6,7 +6,70 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 34f65cb8
+## Latest implementation continuation — through 55d9f285
+
+The independently verified published implementation cutoff is
+[`55d9f285ff6bae4c9f2d50ba4960ecd7c35020d4`](https://github.com/Eabusham2/router-vpn/commit/55d9f285ff6bae4c9f2d50ba4960ecd7c35020d4),
+with Git tree `e570e88b3337f01489e9601e8279a015068b42eb`.
+[The November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md) records the six
+new source units and separates their local, kernel, packaged and live boundaries.
+All original requirements and later corrections remain binding.
+
+- Retained Linux ordinary external Hysteria2 now uses public Connect and
+  temporary Speed Lab through the same captured session, journal and sole
+  native process owner as the previously published SS/HTTP/HTTPS support.
+  This addition covers direct Local execution, Start Layer Off and protected
+  On-connect/Always policies. Captured password/TLS identity, selected UDP DNS,
+  HTTPS public-exit proof, MTU and exact original Router restoration remain
+  required. The transport uses one captured physical UDP destination.
+- Real encrypted testing exposed two pinned Hysteria2 client defects: wrapping
+  literal EOF prevented the TLS/HTTP proof from reading complete response
+  bytes, and a normal same-stream remote code-zero stop caused the first
+  Close to report an untyped failure. The transport now preserves literal EOF
+  and only that typed already-closed condition. Protocol/authentication/reset
+  errors, one Close, write-deadline unblocking and shared QUIC ownership remain
+  intact. The normal public proof was not weakened.
+- The final complete four-family Box suite passes under race with production
+  tags, including actual UDP DNS/HTTPS, wrong credentials/trust/IP, truncated
+  response, cancellation and MTU rollback/reproof. Its OS permit identity and
+  TUN creation remain explicit fixture boundaries. The six-case real Linux
+  kernel succession gate passed with the same lifecycle/admission source
+  before the transport repairs; it is preserved-source evidence. Normal and
+  low-memory transport race tests, four defect controls and five cross-target
+  transport compilations pass. The complete local Linux AMD64 native runtime
+  bundle built from the `74bd942a` feature source passes its normal verifier
+  and actual version/external-help commands.
+- The installed inventory is **317**: all previous 310 cases remain, followed
+  by seven Hysteria2 cases for On-connect, Always, public Connect, cancellation,
+  wrong key, wrong TLS identity and selected-DNS failure. The exact peer image
+  compiles and all 18 verdict-runner checks pass. The local environment still
+  lacks a genuine `/dev/net/tun`, so none of the seven new installed cases has
+  local acceptance evidence. The full installed gate remains mandatory.
+- `1720180d` validates the shared guards for both retained and direct native
+  launches. `90ffcbd2` gives the Tor IPC fixture one proof/heartbeat observation
+  time while retaining a future-proof rejection. `296461bd` stages only the
+  exact routing fixture image across the owned namespace boundary. `c7b03676`
+  waits for actual IPv6 address/DAD and route readiness in the veth fixture;
+  production routing receipts and their acceptance checks remain unchanged.
+- `55d9f285` reuses retained-image staging for the Linux network cohort
+  fixture, preserving the private compiler workspace, captured namespace,
+  original 60-second deadline and strict eight-case verdict. The original
+  non-root-to-sudo-to-user-namespace path reproduced exit 126; the same race
+  image then passed all eight real network-event cases in 0.21 seconds.
+  Ten runner checks pass. No host network policy changed.
+- The generated six-case TUN gate is currently intermittent: at `296461bd`
+  AMD64 passed all six while ARM64 failed MTU rollback's current receipt; at
+  `c7b03676` ARM64 passed all six while AMD64 failed the same receipt check.
+  The cause remains unproved. This is an active native blocker, not evidence
+  of an inherently unsupported architecture or a reason to waive the check.
+- Other retained ordinary external families, predecessor/multihop/Server/Compare
+  compositions, ordinary external Start Layers, unprotected admission and
+  broader recovery/platform requirements remain separate work. Current exact-SHA
+  native application packages, server images, compose and full release publication
+  are not established. macOS installer ownership, signing, private deployment,
+  physical/off-LAN networking and visual/accessibility acceptance remain open.
+
+## Earlier implementation continuation — through 34f65cb8
 
 The latest independently verified implementation cutoff is
 [`34f65cb827bd20e8681bfc2e003d77d883a5848e`](https://github.com/Eabusham2/router-vpn/commit/34f65cb827bd20e8681bfc2e003d77d883a5848e).
