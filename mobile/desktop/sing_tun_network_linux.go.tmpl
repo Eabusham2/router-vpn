@@ -227,12 +227,14 @@ func (t *NativeTun) routervpnLinuxAdded(kind string, capture routerVPNLinuxRouti
 		}
 	}
 	valid := len(added) == 1
+	var observation *routerVPNLinuxRouteAdditionObservation
 	if kind == "route" {
 		owner, ownerErr := t.routervpnLinuxRouteOwner()
 		valid = ownerErr == nil && routervpnLinuxRouteAdditions(capture.owner, owner, before, added)
+		observation = &routerVPNLinuxRouteAdditionObservation{before: capture.owner, after: owner, ownerError: ownerErr != nil}
 	}
 	if !valid {
-		t.routervpnLinuxAdditionFailure(kind, errors.New("native Linux routing call has no unique owned addition"), added, removed)
+		t.routervpnLinuxAdditionFailure(kind, errors.New("native Linux routing call has no unique owned addition"), added, removed, observation)
 		return
 	}
 	for _, object := range before {
@@ -372,7 +374,7 @@ func routervpnLinuxRouteAdditions(before, after routerVPNLinuxRouteOwner, previo
 // Preserve the same sticky first failure. Record its bounded delta while the
 // original constructor still owns these observations; a later recreated TUN
 // cannot explain why this exact before/after pair was refused.
-func (t *NativeTun) routervpnLinuxAdditionFailure(kind string, failure error, added, removed []DesktopNetworkObject) {
+func (t *NativeTun) routervpnLinuxAdditionFailure(kind string, failure error, added, removed []DesktopNetworkObject, observation ...*routerVPNLinuxRouteAdditionObservation) {
 	t.routervpnNetwork.mu.Lock()
 	if t.routervpnNetwork.failure != nil {
 		t.routervpnNetwork.mu.Unlock()
@@ -381,6 +383,82 @@ func (t *NativeTun) routervpnLinuxAdditionFailure(kind string, failure error, ad
 	t.routervpnNetwork.failure = failure
 	t.routervpnNetwork.mu.Unlock()
 	routervpnLinuxMTUDiagnostic(os.Stderr, kind, t.routervpnOwnedIndex, added, removed)
+	if len(observation) == 1 && observation[0] != nil {
+		routervpnLinuxRouteOwnerDiagnostic(os.Stderr, *observation[0], added)
+	}
+}
+
+// Failure-only details of the same owner snapshots used by the admission
+// predicate. Never obtain a replacement snapshot to explain a retired TUN;
+// neither numeric diagnostics nor an identical later read grants authority.
+type routerVPNLinuxRouteAdditionObservation struct {
+	before, after routerVPNLinuxRouteOwner
+	ownerError    bool
+}
+
+func routervpnLinuxRouteOwnerDiagnostic(output io.Writer, observation routerVPNLinuxRouteAdditionObservation, added []DesktopNetworkObject) {
+	before, after := observation.before, observation.after
+	fmt.Fprintf(output, "NODE-MTU-DIAGNOSTIC owner readback_error=%t same_owner=%t index_before=%d index_after=%d mtu_before=%d mtu_after=%d flags_before=%d flags_after=%d name_equal=%t hardware_equal=%t configured_equal=%t configured_before=%d configured_after=%d addresses_before=%d addresses_after=%d\n",
+		observation.ownerError, !observation.ownerError && routervpnLinuxSameRouteOwner(before, after), before.index, after.index, before.mtu, after.mtu,
+		uint(before.flags), uint(after.flags), before.name == after.name, before.hardware == after.hardware, slices.Equal(before.configured, after.configured),
+		len(before.configured), len(after.configured), len(before.addresses), len(after.addresses))
+	for i := 0; i < min(8, max(len(before.addresses), len(after.addresses))); i++ {
+		var old, now routerVPNLinuxRouteAddress
+		oldPresent, nowPresent := i < len(before.addresses), i < len(after.addresses)
+		if oldPresent {
+			old = before.addresses[i]
+		}
+		if nowPresent {
+			now = after.addresses[i]
+		}
+		oldComparable, nowComparable := old, now
+		oldComparable.flags &^= syscall.IFA_F_TENTATIVE
+		nowComparable.flags &^= syscall.IFA_F_TENTATIVE
+		fmt.Fprintf(output, "NODE-MTU-DIAGNOSTIC address ordinal=%d before=%t after=%t equal_except_tentative=%t prefix_equal=%t selected_before=%t selected_after=%t ipv6=%t link_local=%t prefix_bits=%d flags_before=%d flags_after=%d scope_before=%d scope_after=%d preferred_equal=%t valid_equal=%t infinite_after=%t label_equal=%t peer_equal=%t broadcast_equal=%t label_empty=%t peer_empty=%t broadcast_empty=%t\n",
+			i, oldPresent, nowPresent, oldPresent && nowPresent && oldComparable == nowComparable, old.prefix == now.prefix,
+			slices.Contains(before.configured, old.prefix), slices.Contains(after.configured, now.prefix), now.prefix.Addr().Is6(), now.prefix.Addr().IsLinkLocalUnicast(), now.prefix.Bits(),
+			old.flags, now.flags, old.scope, now.scope, old.preferred == now.preferred, old.valid == now.valid,
+			uint64(now.preferred) == uint64(^uint32(0)) && uint64(now.valid) == uint64(^uint32(0)), old.label == now.label, old.peer == now.peer, old.broadcast == now.broadcast,
+			now.label == "", now.peer == "", now.broadcast == "")
+	}
+	for i, object := range added[:min(len(added), 8)] {
+		prefix, prefixErr := netip.ParsePrefix(object.Destination)
+		configured, addresses := 0, 0
+		if prefixErr == nil {
+			for _, selected := range after.configured {
+				if selected.Addr() == prefix.Addr() {
+					configured++
+				}
+			}
+			for _, current := range after.addresses {
+				if current.prefix.Addr() == prefix.Addr() {
+					addresses++
+				}
+			}
+		}
+		body, decodeErr := base64.StdEncoding.Strict().DecodeString(object.Native)
+		complete := decodeErr == nil && len(body) >= 12 && len(body) <= 8192 && object.Validate("linux") == nil
+		family, sourceBits, tos, protocol, scope, routeType := -1, -1, -1, -1, -1, -1
+		if complete {
+			family, sourceBits, tos, protocol, scope, routeType = int(body[0]), int(body[2]), int(body[3]), int(body[5]), int(body[6]), int(body[7])
+		}
+		// Attribute values may contain private addresses. Only bounded native
+		// attribute identifiers/lengths are emitted, never values or raw bytes.
+		var attributes []string
+		if complete {
+			for offset := 12; offset+4 <= len(body) && len(attributes) < 16; {
+				length := int(binary.LittleEndian.Uint16(body[offset:]))
+				if length < 4 || offset+length > len(body) {
+					break
+				}
+				attributes = append(attributes, fmt.Sprintf("%d:%d", binary.LittleEndian.Uint16(body[offset+2:]), length))
+				offset += (length + 3) &^ 3
+			}
+		}
+		fmt.Fprintf(output, "NODE-MTU-DIAGNOSTIC qualification ordinal=%d canonical_local=%t configured_matches=%d address_matches=%d link_local=%t prefix_bits=%d native_complete=%t native_family=%d source_bits=%d tos=%d protocol=%d scope=%d type=%d attributes=%v gateway_empty=%t luid_zero=%t mtu_zero=%t\n",
+			i, !observation.ownerError && routervpnLinuxKernelLocalAddressRoute(object, after), configured, addresses, prefix.Addr().IsLinkLocalUnicast(), prefix.Bits(), complete,
+			family, sourceBits, tos, protocol, scope, routeType, attributes, object.Gateway == "", object.LUID == 0, object.MTU == 0)
+	}
 }
 
 func routervpnLinuxMTUDiagnostic(output io.Writer, kind string, index int, added, removed []DesktopNetworkObject) {

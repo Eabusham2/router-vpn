@@ -74,6 +74,88 @@ func TestRouterVPNNativeLinuxRoutingFirstFailureDiagnostics(t *testing.T) {
 	}
 }
 
+func TestRouterVPNNativeLinuxRoutingOriginalOwnerDiagnostics(t *testing.T) {
+	before, after, explicit, local := nativeRoutingConcurrentFixture(t)
+	observation := routerVPNLinuxRouteAdditionObservation{before: before, after: after}
+	oldAddress, newAddress := before.addresses[0], after.addresses[0]
+	var output bytes.Buffer
+	routervpnLinuxRouteOwnerDiagnostic(&output, observation, []DesktopNetworkObject{explicit, local})
+	for _, expected := range []string{
+		"owner readback_error=false same_owner=true", "equal_except_tentative=true prefix_equal=true selected_before=true selected_after=true",
+		"qualification ordinal=1 canonical_local=true configured_matches=1 address_matches=1 link_local=false prefix_bits=128",
+		"native_complete=true native_family=10 source_bits=0 tos=0 protocol=2 scope=0 type=2 attributes=[1:20 4:8 6:8 15:8 20:5]",
+		"label_empty=true peer_empty=true broadcast_empty=true", "gateway_empty=true luid_zero=true mtu_zero=true",
+	} {
+		if !strings.Contains(output.String(), expected) {
+			t.Fatal("original owner qualification diagnostic is incomplete", expected, output.String())
+		}
+	}
+	if before.addresses[0] != oldAddress || after.addresses[0] != newAddress || !routervpnLinuxRouteAdditions(before, after, nil, []DesktopNetworkObject{explicit, local}) {
+		t.Fatal("diagnostic rewrote its original owner or admission")
+	}
+	for _, private := range []string{before.name, before.configured[0].String(), local.Destination, local.Native, explicit.Native} {
+		if strings.Contains(output.String(), private) {
+			t.Fatal("owner diagnostic disclosed private identity", private)
+		}
+	}
+	output.Reset()
+	private := "private-key-node-interface-and-native-error"
+	observation.before.name, observation.after.name = private, private
+	observation.before.hardware, observation.after.hardware = private, private
+	observation.before.addresses = append([]routerVPNLinuxRouteAddress(nil), before.addresses...)
+	observation.after.addresses = append([]routerVPNLinuxRouteAddress(nil), after.addresses...)
+	observation.before.addresses[0].label, observation.after.addresses[0].label = private, private
+	observation.before.addresses[0].peer, observation.after.addresses[0].peer = private, private
+	observation.before.addresses[0].broadcast, observation.after.addresses[0].broadcast = private, private
+	observation.ownerError = true
+	foreign := DesktopNetworkObject{Kind: private, Destination: private, Gateway: private, Native: private}
+	routervpnLinuxRouteOwnerDiagnostic(&output, observation, []DesktopNetworkObject{foreign})
+	if strings.Contains(output.String(), private) || !strings.Contains(output.String(), "readback_error=true same_owner=false") ||
+		!strings.Contains(output.String(), "canonical_local=false") || !strings.Contains(output.String(), "native_complete=false") ||
+		!strings.Contains(output.String(), "label_empty=false peer_empty=false broadcast_empty=false") || !strings.Contains(output.String(), "gateway_empty=false") {
+		t.Fatal("failed readback acquired a diagnostic identity or exposed raw private data", output.String())
+	}
+	output.Reset()
+	for len(observation.before.addresses) < 32 {
+		observation.before.addresses = append(observation.before.addresses, oldAddress)
+	}
+	for len(observation.after.addresses) < 32 {
+		observation.after.addresses = append(observation.after.addresses, newAddress)
+	}
+	many := make([]DesktopNetworkObject, 32)
+	for i := range many {
+		many[i] = local
+	}
+	routervpnLinuxRouteOwnerDiagnostic(&output, observation, many)
+	if strings.Count(output.String(), "NODE-MTU-DIAGNOSTIC address ") != 8 || strings.Count(output.String(), "NODE-MTU-DIAGNOSTIC qualification ") != 8 ||
+		strings.Count(output.String(), "\n") != 17 || output.Len() > 8192 {
+		t.Fatal("original-owner diagnostics exceeded their fixed bound", output.Len())
+	}
+	// Exercise the shipping first-failure path: keep the original error and
+	// ledger, and do not print a second observation supplied by a later owner.
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	originalStderr := os.Stderr
+	os.Stderr = writer
+	defer func() { os.Stderr = originalStderr; _ = writer.Close() }()
+	native := &NativeTun{routervpnOwnedIndex: before.index}
+	first := errors.New("native Linux routing call has no unique owned addition")
+	originalObservation := &routerVPNLinuxRouteAdditionObservation{before: before, after: after}
+	native.routervpnLinuxAdditionFailure("route", first, []DesktopNetworkObject{explicit, local}, nil, originalObservation)
+	native.routervpnLinuxAdditionFailure("route", errors.New(private), []DesktopNetworkObject{foreign}, nil, &observation)
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := io.ReadAll(reader)
+	if err != nil || native.routervpnNetwork.failure != first || len(native.routervpnNetwork.objects) != 0 || strings.Contains(string(raw), private) ||
+		strings.Count(string(raw), "NODE-MTU-DIAGNOSTIC owner ") != 1 || !strings.Contains(string(raw), "canonical_local=true") {
+		t.Fatal("shipping failure lost its original observation or accepted a replacement", err, string(raw))
+	}
+}
+
 func nativeRoutingRule(t *testing.T, family byte, priority, target, flags uint32, action byte) DesktopNetworkObject {
 	t.Helper()
 	body := []byte{family, 0, 0, 0, 0, 0, 0, action, 0, 0, 0, 0}
