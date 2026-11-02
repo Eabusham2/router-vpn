@@ -283,6 +283,7 @@ func (o *windowsObserver) Snapshot(ctx context.Context) (Snapshot, error) {
 		}
 		snapshot.Links = append(snapshot.Links, Link{Index: uint32(iface.Index), LUID: luid, Name: iface.Name, MTU: iface.MTU, Flags: uint32(iface.Flags), Hardware: iface.HardwareAddr.String()})
 	}
+	ipInterfaces := make(map[uint32][]desktopWindowsIPInterfaceShape)
 	for _, name := range []string{"GetIpForwardTable2", "GetUnicastIpAddressTable", "GetIpInterfaceTable"} {
 		pointer, count, err := o.table(name)
 		if err != nil {
@@ -315,6 +316,7 @@ func (o *windowsObserver) Snapshot(ctx context.Context) (Snapshot, error) {
 						link := &snapshot.Links[n]
 						if link.Index == row.Index && link.LUID == row.LUID {
 							link.Policy += fmt.Sprintf("%d:%d:%d:%d:%d;", row.Family, row.Metric, row.MTU, row.Connected, row.DisableDefault)
+							ipInterfaces[row.Index] = append(ipInterfaces[row.Index], desktopWindowsIPInterfaceShape{Family: row.Family, Index: row.Index, LUID: row.LUID, MTU: row.MTU})
 							matched = true
 						}
 					}
@@ -330,6 +332,11 @@ func (o *windowsObserver) Snapshot(ctx context.Context) (Snapshot, error) {
 		}
 	}
 	for i := range snapshot.Links {
+		link, err := desktopWindowsLinkMTU(snapshot.Links[i], ipInterfaces[snapshot.Links[i].Index])
+		if err != nil {
+			return snapshot, err
+		}
+		snapshot.Links[i] = link
 		parts := strings.Split(snapshot.Links[i].Policy, ";")
 		sort.Strings(parts)
 		snapshot.Links[i].Policy = strings.Join(parts, ";")

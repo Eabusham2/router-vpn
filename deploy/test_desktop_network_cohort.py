@@ -22,6 +22,9 @@ PARENTS = (
     "TestNetworkReceiptAndLinuxWireStrictIdentity",
     "TestNetworkReceiptMTUMatchesAddressFamily",
     "TestDarwinCloneRequiresExactCapturedParent",
+    "TestLinuxMulticastFIBIdentityRemainsAmbient",
+    "TestWindowsUnlimitedLoopbackMTURetainsNativeIdentity",
+    "TestLinuxOwnedGotoRuleTransitions",
 )
 
 
@@ -117,6 +120,30 @@ def main():
             finally:
                 target.write_text(original)
             print("Executed network negative control rejected:", name)
+        shape_controls = (
+            ("multicast-not-unicast", "desktop_network_wire.go", "family, bits = 128, 32", "family, bits = 4, 32",
+             "TestLinuxMulticastFIBIdentityRemainsAmbient", "128"),
+            ("goto-needs-exact-target", "desktop_network_wire.go", "binary.LittleEndian.Uint32(current[offset+4:]) == target.Priority", "true",
+             "TestLinuxOwnedGotoRuleTransitions", "2/wrong-target"),
+            ("loopback-needs-native-mtu", "desktop_network_windows_shape.go", "row.MTU != ^uint32(0)", "false",
+             "TestWindowsUnlimitedLoopbackMTURetainsNativeIdentity", "different-native-mtu"),
+        )
+        for name, filename, before, after, test, witness in shape_controls:
+            target = mutant / filename
+            original = target.read_text()
+            if original.count(before) != 1:
+                raise RuntimeError("network shape negative-control boundary changed: " + name)
+            try:
+                target.write_text(original.replace(before, after, 1))
+                result = execute([go, "test", "-race", "-v", "-count=1", "-timeout=60s", ".", "-run", "^" + test + "$"],
+                                 cwd=mutant, env=env, timeout=90, succeeds=False)
+                marker = "--- FAIL: " + test + "/" + witness + " "
+                if result.returncode == 0 or marker not in result.stdout or "[build failed]" in result.stdout:
+                    print(result.stdout, end="")
+                    raise RuntimeError("network shape control did not reject the actual defect: " + name)
+            finally:
+                target.write_text(original)
+            print("Executed network shape negative control rejected:", name)
     print("Desktop captured network observer gate passed; native device transition acceptance remains separate.")
 
 

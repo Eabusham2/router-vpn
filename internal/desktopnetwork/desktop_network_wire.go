@@ -1,9 +1,10 @@
 package desktopnetwork
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/binary"
-	"errors"
+	"fmt"
 	"net/netip"
 	"sort"
 )
@@ -12,7 +13,12 @@ import (
 // are also compiled on the other hosts so canonical receipts can be checked
 // without loading a platform library or consulting a mutable network.
 func ParseDesktopLinuxNetworkObject(kind string, body []byte) (DesktopNetworkObject, error) {
-	bad := errors.New("Linux routing notification is incomplete or ambiguous")
+	bad := fmt.Errorf("Linux routing notification is incomplete or ambiguous (kind=%s bytes=%d family=%d)", kind, len(body), func() byte {
+		if len(body) != 0 {
+			return body[0]
+		}
+		return 0
+	}())
 	if kind != "route" && kind != "rule" || len(body) < 12 || len(body) > 8192 {
 		return DesktopNetworkObject{}, bad
 	}
@@ -22,6 +28,10 @@ func ParseDesktopLinuxNetworkObject(kind string, body []byte) (DesktopNetworkObj
 		family, bits = 4, 32
 	case 10:
 		family, bits = 6, 128
+	case 128: // RTNL_FAMILY_IPMR: a distinct multicast FIB, not IPv4 ownership.
+		family, bits = 128, 32
+	case 129: // RTNL_FAMILY_IP6MR: a distinct multicast FIB, not IPv6 ownership.
+		family, bits = 129, 128
 	default:
 		return DesktopNetworkObject{}, bad
 	}
@@ -94,7 +104,7 @@ func ParseDesktopLinuxNetworkObject(kind string, body []byte) (DesktopNetworkObj
 			destination = attr.value
 		case kind == "route" && attr.kind == 5:
 			address, ok := netip.AddrFromSlice(attr.value)
-			if !ok || address.Is4() != (family == 4) {
+			if !ok || address.Is4() != (bits == 32) {
 				return DesktopNetworkObject{}, bad
 			}
 			o.Gateway = address.String()
@@ -108,7 +118,7 @@ func ParseDesktopLinuxNetworkObject(kind string, body []byte) (DesktopNetworkObj
 			destination = make([]byte, bits/8)
 		}
 		address, ok := netip.AddrFromSlice(destination)
-		if !ok || address.Is4() != (family == 4) {
+		if !ok || address.Is4() != (bits == 32) {
 			return DesktopNetworkObject{}, bad
 		}
 		prefix := netip.PrefixFrom(address, int(body[1]))
@@ -119,4 +129,36 @@ func ParseDesktopLinuxNetworkObject(kind string, body []byte) (DesktopNetworkObj
 	}
 	o.Native = base64.StdEncoding.EncodeToString(canonical)
 	return o, nil
+}
+
+// DesktopLinuxRuleResolvedBy recognizes only the kernel's resolution of one
+// otherwise byte-identical GOTO after its exact same-family NOP target exists.
+// The caller must separately prove both successful installs belong to its
+// original native TUN; this predicate carries no policy mutation authority.
+func DesktopLinuxRuleResolvedBy(before, after, target DesktopNetworkObject) bool {
+	if before.Kind != "rule" || after.Kind != "rule" || target.Kind != "rule" ||
+		before.Family != 4 && before.Family != 6 || after.Family != before.Family || target.Family != before.Family ||
+		before.Flags&4 == 0 || after.Flags&4 != 0 || before.Flags^after.Flags != 4 || target.Priority <= before.Priority ||
+		before.Validate("linux") != nil || after.Validate("linux") != nil || target.Validate("linux") != nil {
+		return false
+	}
+	old, _ := base64.StdEncoding.Strict().DecodeString(before.Native)
+	current, _ := base64.StdEncoding.Strict().DecodeString(after.Native)
+	to, _ := base64.StdEncoding.Strict().DecodeString(target.Native)
+	if len(old) < 12 || len(current) < 12 || len(to) < 12 || old[7] != 2 /* FR_ACT_GOTO */ || to[7] != 3 /* FR_ACT_NOP */ {
+		return false
+	}
+	binary.LittleEndian.PutUint32(old[8:12], after.Flags)
+	if !bytes.Equal(old, current) {
+		return false
+	}
+	for offset := 12; offset < len(current); {
+		length := int(binary.LittleEndian.Uint16(current[offset:]))
+		id := binary.LittleEndian.Uint16(current[offset+2:])
+		if id == 4 /* FRA_GOTO */ {
+			return length == 8 && binary.LittleEndian.Uint32(current[offset+4:]) == target.Priority
+		}
+		offset += (length + 3) &^ 3
+	}
+	return false
 }

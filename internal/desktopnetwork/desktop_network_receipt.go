@@ -38,7 +38,8 @@ func (o DesktopNetworkObject) Key() string {
 
 func (o DesktopNetworkObject) Validate(target string) error {
 	bad := errors.New("desktop network object lost its complete native identity")
-	if o.Kind != "route" && o.Kind != "rule" || o.Family != 4 && o.Family != 6 {
+	if o.Kind != "route" && o.Kind != "rule" || o.Family != 4 && o.Family != 6 &&
+		!(target == "linux" && (o.Family == 128 || o.Family == 129)) {
 		return bad
 	}
 	if target == "linux" {
@@ -106,7 +107,10 @@ func (r DesktopNetworkReceipt) Validate() error {
 	previous = ""
 	for _, object := range r.Objects {
 		key := object.Key()
-		if object.Validate(r.TargetOS) != nil || key <= previous ||
+		// Multicast FIBs are retained in the ambient snapshot but these native
+		// TUN constructors install only unicast IPv4/IPv6 policy. They cannot
+		// claim an ambient multicast rule as an owned transition.
+		if object.Validate(r.TargetOS) != nil || key <= previous || object.Family != 4 && object.Family != 6 ||
 			object.Kind == "route" && (object.Index != r.Index || object.LUID != r.LUID) ||
 			object.Kind == "rule" && (r.TargetOS != "linux" || object.Index != 0 || object.LUID != 0) {
 			return bad

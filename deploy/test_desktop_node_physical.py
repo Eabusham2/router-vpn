@@ -89,6 +89,10 @@ def checked_sources(source):
     for path in sorted((ROOT / "mobile/desktop").glob("*.go.tmpl")):
         if path.name.startswith(("node", "mtu", "external")) and path.name not in PREP.PT_TEMPLATES and path.name not in PREP.BOX_TEMPLATES and path.name not in PREP.PEER_TEMPLATES:
             copies["cmd/sing-box/routervpn_" + path.name.removesuffix(".tmpl")] = path.read_bytes()
+    for name in ('sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl'):
+        copies['routervpn-desktop-tun/routervpn_' + name.removesuffix('.tmpl')] = (ROOT / 'mobile/desktop' / name).read_bytes()
+    for name in ('desktop_network_receipt.go', 'desktop_network_wire.go', 'desktop_network_darwin_wire.go'):
+        copies['routervpn-desktop-tun/routervpn_' + name] = (ROOT / 'internal/desktopnetwork' / name).read_bytes().replace(b'package desktopnetwork\n', b'package tun\n', 1)
     for package in PREP.RELAY.PACKAGES:
         for path in sorted((ROOT / "internal" / package).glob("*.go")):
             if path.name.endswith("_test.go"):
@@ -593,6 +597,13 @@ def mutants(source, windows):
              'joined source leaked its partial retained endpoint', changed(lifecycle,
              'owner.retention = retention', 'if err == nil { owner.retention = retention }')),
         ))
+    if platform.system() == "Linux":
+        native_ledger = 'routervpn-desktop-tun/routervpn_sing_tun_network_linux.go'
+        result.append(('linux-routing-foreign-goto', native_ledger, 'github.com/sagernet/sing-tun',
+                       'TestRouterVPNNativeLinuxRoutingResolutionRejectsForeign', 'foreign-goto',
+                       'native delta changed its original-owner admission', changed(native_ledger,
+                       'if captured, ok := t.routervpnNetwork.objects[old.Key()]; !ok || captured != old {',
+                       'if captured, ok := t.routervpnNetwork.objects[old.Key()]; false && (!ok || captured != old) {')))
     return result
 
 
@@ -646,6 +657,8 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          tuple("TestNativePerformance" + suffix for suffix in ("NoIOUntilExplicitActivation", "StopsOnReplacementAndNetworkChange", "CannotUsePlaintextOrWrongNode", "DestinationCannotBeReplaced", "CapturedOptionsAndCancelledActivation", "CannotAdmitCompositeByTypeName"))),
     ]
     if platform.system() == "Linux":
+        suites.append(("native-routing-receipt", "github.com/sagernet/sing-tun", "^TestRouterVPNNativeLinuxRouting",
+                       ("TestRouterVPNNativeLinuxRoutingResolutionRejectsForeign", "TestRouterVPNNativeLinuxRoutingReceiptNamespace")))
         suites.append(("wireguard-layers", "./protocol/routervpnamnezia",
                        "^TestRouterVPNDesktopNodeWireGuard(Layers|LayerCapture|LayerCover|OuterCannotBypassFinal)$",
                        tuple("TestRouterVPNDesktopNodeWireGuard" + name for name in

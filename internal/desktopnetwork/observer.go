@@ -345,6 +345,13 @@ func eventOwnedBy(event Event, receipt *DesktopNetworkReceipt) bool {
 			if eventMatchesObject(event, object) {
 				return true
 			}
+			if runtime.GOOS == "linux" && event.Kind == "rule" && !event.Partial {
+				for _, target := range receipt.Objects {
+					if DesktopLinuxRuleResolvedBy(event.Object, object, target) {
+						return true
+					}
+				}
+			}
 			// Linux reports the same exact owned route with RTNH_F_LINKDOWN
 			// while its interface is being brought up or retired. This is only
 			// a transition classification, never snapshot/physical identity.
@@ -485,7 +492,7 @@ func project(snapshot Snapshot, receipt *DesktopNetworkReceipt) (Snapshot, strin
 	found := receipt == nil
 	for _, link := range snapshot.Links {
 		if link.Index == 0 || link.Name == "" || link.MTU <= 0 {
-			return Snapshot{}, "", errors.New("network snapshot contains an incomplete interface")
+			return Snapshot{}, "", fmt.Errorf("network snapshot contains an incomplete interface (index=%d luid=%d name_present=%t mtu=%d flags=%d)", link.Index, link.LUID, link.Name != "", link.MTU, link.Flags)
 		}
 		if _, exists := links[link.Index]; exists {
 			return Snapshot{}, "", errors.New("network snapshot repeats an interface identity")

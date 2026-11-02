@@ -5,6 +5,7 @@ package tun
 import (
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"net"
 	"syscall"
 )
@@ -56,7 +57,7 @@ func routervpnLinuxNetworkObjects(kind string) ([]DesktopNetworkObject, error) {
 func (t *NativeTun) routervpnLinuxBefore(kind string) []DesktopNetworkObject {
 	objects, err := routervpnLinuxNetworkObjects(kind)
 	if err != nil {
-		t.routervpnNetworkFailure(err)
+		t.routervpnNetworkFailure(fmt.Errorf("native Linux %s before inventory: %w", kind, err))
 		return nil
 	}
 	// A non-nil empty slice preserves a successful empty inventory.
@@ -68,7 +69,11 @@ func (t *NativeTun) routervpnLinuxBefore(kind string) []DesktopNetworkObject {
 
 func (t *NativeTun) routervpnLinuxAdded(kind string, before []DesktopNetworkObject) {
 	after, err := routervpnLinuxNetworkObjects(kind)
-	if err != nil || before == nil {
+	if err != nil {
+		t.routervpnNetworkFailure(fmt.Errorf("native Linux %s after inventory: %w", kind, err))
+		return
+	}
+	if before == nil {
 		t.routervpnNetworkFailure(errors.New("native Linux routing call has no complete before/after readback"))
 		return
 	}
@@ -85,9 +90,20 @@ func (t *NativeTun) routervpnLinuxAdded(kind string, before []DesktopNetworkObje
 			added = append(added, object)
 		}
 	}
+	var removed []DesktopNetworkObject
+	for _, object := range before {
+		if counts[object.Key()] != 0 {
+			removed = append(removed, object)
+		}
+	}
+	if kind == "rule" && len(removed) != 0 {
+		if t.routervpnLinuxResolvedRules(removed, added) {
+			return
+		}
+	}
 	for _, count := range counts {
 		if count != 0 {
-			t.routervpnNetworkFailure(errors.New("native Linux routing inventory changed during its own add"))
+			t.routervpnNetworkFailure(fmt.Errorf("native Linux routing inventory changed during its own add (kind=%s removed=%d added=%d)", kind, len(removed), len(added)))
 			return
 		}
 	}
@@ -102,6 +118,73 @@ func (t *NativeTun) routervpnLinuxAdded(kind string, before []DesktopNetworkObje
 		}
 	}
 	t.routervpnNetworkAdded(added[0])
+}
+
+// RuleAdd of our final NOP also resolves our earlier GOTO rules. Keep every
+// changed byte strict, require each prior rule in this exact TUN's ledger, and
+// admit one unique new target only. An unrelated/ambiguous delta still fails.
+func (t *NativeTun) routervpnLinuxResolvedRules(removed, added []DesktopNetworkObject) bool {
+	if len(removed) == 0 || len(added) != len(removed)+1 {
+		return false
+	}
+	t.routervpnNetwork.mu.Lock()
+	defer t.routervpnNetwork.mu.Unlock()
+	if t.routervpnNetwork.failure != nil {
+		return false
+	}
+	for _, old := range removed {
+		if captured, ok := t.routervpnNetwork.objects[old.Key()]; !ok || captured != old {
+			return false
+		}
+	}
+	var target DesktopNetworkObject
+	var replacements []DesktopNetworkObject
+	matches := 0
+	for candidate, to := range added {
+		if _, exists := t.routervpnNetwork.objects[to.Key()]; exists {
+			continue
+		}
+		used := map[int]bool{candidate: true}
+		current := make([]DesktopNetworkObject, len(removed))
+		valid := true
+		for i, old := range removed {
+			match := -1
+			for j, now := range added {
+				if !used[j] && DesktopLinuxRuleResolvedBy(old, now, to) {
+					if match != -1 {
+						valid = false
+						break
+					}
+					match = j
+				}
+			}
+			if !valid || match == -1 {
+				valid = false
+				break
+			}
+			used[match] = true
+			current[i] = added[match]
+		}
+		if valid && len(used) == len(added) {
+			matches++
+			target = to
+			replacements = current
+		}
+	}
+	if matches != 1 {
+		return false
+	}
+	for _, now := range replacements {
+		if _, exists := t.routervpnNetwork.objects[now.Key()]; exists {
+			return false
+		}
+	}
+	for i, old := range removed {
+		delete(t.routervpnNetwork.objects, old.Key())
+		t.routervpnNetwork.objects[replacements[i].Key()] = replacements[i]
+	}
+	t.routervpnNetwork.objects[target.Key()] = target
+	return true
 }
 
 func (t *NativeTun) routervpnNetworkObjects(receipt DesktopNetworkReceipt) ([]DesktopNetworkObject, error) {

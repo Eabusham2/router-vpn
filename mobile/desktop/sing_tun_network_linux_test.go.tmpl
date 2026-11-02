@@ -1,0 +1,285 @@
+//go:build linux
+
+package tun
+
+import (
+	"context"
+	"encoding/binary"
+	"fmt"
+	"net/netip"
+	"os"
+	"os/exec"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/sagernet/netlink"
+)
+
+func nativeRoutingRule(t *testing.T, family byte, priority, target, flags uint32, action byte) DesktopNetworkObject {
+	t.Helper()
+	body := []byte{family, 0, 0, 0, 0, 0, 0, action, 0, 0, 0, 0}
+	binary.LittleEndian.PutUint32(body[8:], flags)
+	for _, a := range []struct {
+		id    uint16
+		value uint32
+	}{{6, priority}, {15, 0}, {14, ^uint32(0)}} {
+		v := make([]byte, 8)
+		binary.LittleEndian.PutUint16(v, 8)
+		binary.LittleEndian.PutUint16(v[2:], a.id)
+		binary.LittleEndian.PutUint32(v[4:], a.value)
+		body = append(body, v...)
+	}
+	if target != 0 {
+		v := make([]byte, 8)
+		binary.LittleEndian.PutUint16(v, 8)
+		binary.LittleEndian.PutUint16(v[2:], 4)
+		binary.LittleEndian.PutUint32(v[4:], target)
+		body = append(body, v...)
+	}
+	o, err := ParseDesktopLinuxNetworkObject("rule", body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return o
+}
+
+func TestRouterVPNNativeLinuxRoutingResolutionRejectsForeign(t *testing.T) {
+	before := nativeRoutingRule(t, 2, 9001, 9010, 4, 2)
+	after := nativeRoutingRule(t, 2, 9001, 9010, 0, 2)
+	target := nativeRoutingRule(t, 2, 9010, 0, 0, 3)
+	for _, tc := range []struct {
+		name   string
+		modify func(*NativeTun, *[]DesktopNetworkObject, *[]DesktopNetworkObject)
+		valid  bool
+	}{
+		{"owned-complete", func(*NativeTun, *[]DesktopNetworkObject, *[]DesktopNetworkObject) {}, true},
+		{"target-first-order", func(_ *NativeTun, _ *[]DesktopNetworkObject, a *[]DesktopNetworkObject) {
+			(*a)[0], (*a)[1] = (*a)[1], (*a)[0]
+		}, true},
+		{"foreign-goto", func(n *NativeTun, _ *[]DesktopNetworkObject, _ *[]DesktopNetworkObject) {
+			delete(n.routervpnNetwork.objects, before.Key())
+		}, false},
+		{"wrong-captured-byte", func(n *NativeTun, _ *[]DesktopNetworkObject, _ *[]DesktopNetworkObject) {
+			n.routervpnNetwork.objects[before.Key()] = after
+		}, false},
+		{"wrong-target", func(_ *NativeTun, _ *[]DesktopNetworkObject, a *[]DesktopNetworkObject) {
+			(*a)[1] = nativeRoutingRule(t, 2, 9011, 0, 0, 3)
+		}, false},
+		{"wrong-family", func(_ *NativeTun, _ *[]DesktopNetworkObject, a *[]DesktopNetworkObject) {
+			(*a)[1] = nativeRoutingRule(t, 10, 9010, 0, 0, 3)
+		}, false},
+		{"wrong-action", func(_ *NativeTun, _ *[]DesktopNetworkObject, a *[]DesktopNetworkObject) {
+			(*a)[1] = nativeRoutingRule(t, 2, 9010, 0, 0, 1)
+		}, false},
+		{"wrong-flags", func(_ *NativeTun, _ *[]DesktopNetworkObject, a *[]DesktopNetworkObject) {
+			(*a)[0] = nativeRoutingRule(t, 2, 9001, 9010, 2, 2)
+		}, false},
+		{"extra-ambient-add", func(_ *NativeTun, _ *[]DesktopNetworkObject, a *[]DesktopNetworkObject) {
+			*a = append(*a, nativeRoutingRule(t, 2, 9020, 0, 0, 1))
+		}, false},
+		{"duplicate-target", func(_ *NativeTun, _ *[]DesktopNetworkObject, a *[]DesktopNetworkObject) { (*a)[0] = target }, false},
+		{"already-recorded-target", func(n *NativeTun, _ *[]DesktopNetworkObject, _ *[]DesktopNetworkObject) {
+			n.routervpnNetwork.objects[target.Key()] = target
+		}, false},
+		{"sticky-failure", func(n *NativeTun, _ *[]DesktopNetworkObject, _ *[]DesktopNetworkObject) {
+			n.routervpnNetwork.failure = fmt.Errorf("prior native witness lost")
+		}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			n := &NativeTun{}
+			n.routervpnNetwork.objects = map[string]DesktopNetworkObject{before.Key(): before}
+			r, a := []DesktopNetworkObject{before}, []DesktopNetworkObject{after, target}
+			tc.modify(n, &r, &a)
+			original := make(map[string]DesktopNetworkObject)
+			for k, v := range n.routervpnNetwork.objects {
+				original[k] = v
+			}
+			if actual := n.routervpnLinuxResolvedRules(r, a); actual != tc.valid {
+				t.Fatal("native delta changed its original-owner admission", actual)
+			}
+			if tc.valid {
+				if len(n.routervpnNetwork.objects) != 2 || n.routervpnNetwork.objects[after.Key()] != after || n.routervpnNetwork.objects[target.Key()] != target {
+					t.Fatal("resolved receipt lost actual final native bytes")
+				}
+				if n.routervpnLinuxResolvedRules(r, a) {
+					t.Fatal("same target resolution was replayed")
+				}
+			} else {
+				if len(original) != len(n.routervpnNetwork.objects) {
+					t.Fatal("rejected delta changed its original ledger")
+				}
+				for k, v := range original {
+					if n.routervpnNetwork.objects[k] != v {
+						t.Fatal("rejected delta changed retained bytes")
+					}
+				}
+			}
+		})
+	}
+}
+
+// The constructor boundary is explicitly modeled by an owned veth. The real
+// pinned configure/setRoute/setRules methods and receipt readback execute in a
+// fresh user/network namespace; this does not substitute for the actual TUN
+// constructor and protected source acceptance in the installed gate.
+func TestRouterVPNNativeLinuxRoutingReceiptNamespace(t *testing.T) {
+	const marker = "ROUTERVPN_NATIVE_ROUTING_RECEIPT_CHILD"
+	if os.Getenv(marker) != "1" {
+		image, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		network, err := os.Readlink("/proc/self/ns/net")
+		if err != nil {
+			t.Fatal(err)
+		}
+		user, err := os.Readlink("/proc/self/ns/user")
+		if err != nil {
+			t.Fatal(err)
+		}
+		netFile, err := os.Open("/proc/self/ns/net")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer netFile.Close()
+		userFile, err := os.Open("/proc/self/ns/user")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer userFile.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "/usr/bin/unshare", "--user", "--map-root-user", "--net", "--fork", image, "-test.v", "-test.run=^TestRouterVPNNativeLinuxRoutingReceiptNamespace$", "-test.timeout=15s")
+		cmd.ExtraFiles = []*os.File{netFile, userFile}
+		cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", marker + "=1", "ROUTERVPN_ROUTING_PARENT_NET=" + network, "ROUTERVPN_ROUTING_PARENT_USER=" + user}
+		output, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatal("isolated native routing receipt execution failed", err, string(output))
+		}
+		for _, leaf := range []string{"complete-native-install", "target-first-native-retirement"} {
+			if !strings.Contains(string(output), "--- PASS: TestRouterVPNNativeLinuxRoutingReceiptNamespace/"+leaf+" ") {
+				t.Fatal("native receipt case did not execute", leaf, string(output))
+			}
+		}
+		t.Log(string(output))
+		return
+	}
+	for i, kind := range []string{"net", "user"} {
+		fd := uintptr(3 + i)
+		file := os.NewFile(fd, "original-"+kind)
+		if file == nil {
+			t.Fatal("missing retained original namespace")
+		}
+		defer file.Close()
+		var fs syscall.Statfs_t
+		original, err := file.Stat()
+		current, currentErr := os.Stat("/proc/self/ns/" + kind)
+		name, nameErr := os.Readlink(fmt.Sprintf("/proc/self/fd/%d", fd))
+		if err != nil || currentErr != nil || nameErr != nil || syscall.Fstatfs(int(fd), &fs) != nil || fs.Type != 0x6e736673 || os.SameFile(original, current) || name != os.Getenv("ROUTERVPN_ROUTING_PARENT_"+strings.ToUpper(kind)) {
+			t.Fatal("fixture did not retain its original namespace handles across isolated creation", kind, err, currentErr, nameErr)
+		}
+	}
+	for _, retire := range []bool{false, true} {
+		name := "complete-native-install"
+		if retire {
+			name = "target-first-native-retirement"
+		}
+		t.Run(name, func(t *testing.T) {
+			const name, peer = "rvpn-receipt", "rvpn-receipt-p"
+			if _, err := netlink.LinkByName(name); err == nil {
+				t.Fatal("native fixture interface already exists")
+			}
+			v := &netlink.Veth{LinkAttrs: netlink.LinkAttrs{Name: name}, PeerName: peer}
+			if err := netlink.LinkAdd(v); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := netlink.LinkDel(v); err != nil {
+					t.Error(err)
+				}
+			}()
+			link, err := netlink.LinkByName(name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			other, err := netlink.LinkByName(peer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := netlink.LinkSetUp(other); err != nil {
+				t.Fatal(err)
+			}
+			n := &NativeTun{routervpnOwnedIndex: link.Attrs().Index, options: Options{Name: name, MTU: 1280, Inet4Address: []netip.Prefix{netip.MustParsePrefix("172.29.94.1/30")}, Inet6Address: []netip.Prefix{netip.MustParsePrefix("fd29:94::1/126")}, AutoRoute: true, StrictRoute: true, IPRoute2TableIndex: 2022, IPRoute2RuleIndex: 9000, Inet4RouteAddress: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}, Inet6RouteAddress: []netip.Prefix{netip.MustParsePrefix("::/0")}}}
+			if err := n.configure(link); err != nil {
+				t.Fatal(err)
+			}
+			if err := netlink.LinkSetUp(link); err != nil {
+				t.Fatal(err)
+			}
+			if err := n.setRoute(link); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := n.unsetRoute0(link); err != nil {
+					t.Error("owned routes failed to drain", err)
+				}
+			}()
+			if err := n.setRules(); err != nil {
+				t.Fatal(err)
+			}
+			defer func() {
+				if err := n.unsetRules(); err != nil {
+					t.Error("owned rules failed to drain", err)
+				}
+			}()
+			raw, err := n.RouterVPNDesktopNetworkReceipt()
+			if err != nil {
+				t.Fatal("actual native routing receipt", err)
+			}
+			r, err := ParseDesktopNetworkReceipt(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if r.Index != uint32(link.Attrs().Index) || r.Name != name || r.MTU != 1280 || len(r.Objects) < 10 {
+				t.Fatal("real native route/rule receipt lost complete ownership")
+			}
+			if !retire {
+				return
+			}
+			targets := 0
+			for _, rule := range n.rules() {
+				if rule.Priority == 9010 {
+					if err := netlink.RuleDel(rule); err != nil {
+						t.Fatal(err)
+					}
+					targets++
+				}
+			}
+			if targets != 2 {
+				t.Fatal("native fixture did not retire both original NOP targets", targets)
+			}
+			if _, err := n.RouterVPNDesktopNetworkReceipt(); err == nil {
+				t.Fatal("missing native target was accepted as a current receipt")
+			}
+			current, err := routervpnLinuxNetworkObjects("rule")
+			if err != nil {
+				t.Fatal(err)
+			}
+			unresolved := 0
+			for _, now := range current {
+				for _, old := range r.Objects {
+					for _, target := range r.Objects {
+						if DesktopLinuxRuleResolvedBy(now, old, target) {
+							unresolved++
+						}
+					}
+				}
+			}
+			if unresolved != 4 {
+				t.Fatal("target-first teardown lost its exact four original GOTO flag transitions", unresolved)
+			}
+		})
+	}
+}
