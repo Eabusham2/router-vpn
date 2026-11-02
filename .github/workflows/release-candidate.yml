@@ -472,7 +472,9 @@ jobs:
           python3 deploy/test_ios_provenance_order.py --native
       - name: Prepare exact pinned WireGuardKit
         working-directory: ios/RouterVPN
-        run: sh prepare-wireguard-kit.sh
+        run: |
+          sh prepare-wireguard-kit.sh
+          python3 ../../deploy/test_apple_amnezia_timer_preparation.py --kit "$PWD/.deps/wireguard-apple"
       - name: Prepare exact pinned Libbox before Xcode resolves the framework
         working-directory: ios/RouterVPN
         run: ./prepare-libbox.sh
@@ -489,6 +491,7 @@ jobs:
           test "$(git -C "$WG" rev-parse HEAD)" = '9d5ee60edefa95b933a738dd7cda671dd18021fc' || { echo "::error::WireGuardKit commit pin mismatch"; exit 1; }
           test "$(sed -n '1p' "$WG/Package.swift")" = '// swift-tools-version:5.5' || { echo "::error::WireGuardKit Package.swift toolchain contract changed"; exit 1; }
           test "$(cat .deps/wireguard-apple.pin)" = '9d5ee60edefa95b933a738dd7cda671dd18021fc' || { echo "::error::WireGuardKit recorded pin mismatch"; exit 1; }
+          python3 ../../deploy/prepare-apple-amnezia-timers.py "$WG" --verify
           test -s "$PWD/build/DerivedData/Build/Products/Release-iphoneos/libwg-go.a" || { echo "::error::libwg-go.a is missing"; exit 1; }
           test "$(plutil -extract RouterVPNSourceSHA raw -o - "$APP/Info.plist")" = "$GITHUB_SHA" || { echo "::error::iOS app source SHA mismatch"; exit 1; }
           test "$(plutil -extract RouterVPNSourceRepository raw -o - "$APP/Info.plist")" = 'Eabusham2/router-vpn' || { echo "::error::iOS app source repository mismatch"; exit 1; }

@@ -249,7 +249,9 @@ jobs:
           python3 deploy/test_ios_provenance_order.py --native
       - name: Prepare exact WireGuardKit checkout
         working-directory: ios/RouterVPN
-        run: sh prepare-wireguard-kit.sh
+        run: |
+          sh prepare-wireguard-kit.sh
+          python3 ../../deploy/test_apple_amnezia_timer_preparation.py --kit "$PWD/.deps/wireguard-apple"
       - name: Prepare exact Libbox XCFramework before Xcode dependency resolution
         working-directory: ios/RouterVPN
         run: ./prepare-libbox.sh
@@ -300,6 +302,7 @@ jobs:
           test "$(git -C "$WG" rev-parse HEAD)" = '9d5ee60edefa95b933a738dd7cda671dd18021fc'
           test "$(sed -n '1p' "$WG/Package.swift")" = '// swift-tools-version:5.5'
           test "$(cat .deps/wireguard-apple.pin)" = '9d5ee60edefa95b933a738dd7cda671dd18021fc'
+          python3 ../../deploy/prepare-apple-amnezia-timers.py "$WG" --verify
           grep -Fq '1.14.1+1ac1a339cb1223e9c70eae14c44411c75033c02d+go1.26.3+0.1.12+ios,iossimulator' .deps/Libbox.xcframework.pin
           test -s "$PWD/build/DerivedData/Build/Products/Release-iphoneos/libwg-go.a"
           test "$(plutil -extract RouterVPNSourceSHA raw -o - "$APP/Info.plist")" = "$GITHUB_SHA"

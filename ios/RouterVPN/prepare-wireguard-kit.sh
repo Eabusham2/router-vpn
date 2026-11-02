@@ -2,7 +2,7 @@
 set -eu
 
 PIN="9d5ee60edefa95b933a738dd7cda671dd18021fc"
-ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+ROOT="$(CDPATH= cd -P -- "$(dirname -- "$0")" && pwd -P)"
 DEPS="$ROOT/.deps"
 WG="$DEPS/wireguard-apple"
 REMOTE="https://github.com/amnezia-vpn/amneziawg-apple"
@@ -37,5 +37,7 @@ grep -Fq 'public var initPacketMagicHeader: String?' "$INTERFACE" || { echo "Pin
 grep -Fq 'github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20260814' "$GOMOD" || { echo "Pinned AmneziaWG Go backend changed" >&2; exit 1; }
 STATUS="$(git -C "$WG" status --porcelain)"
 [ -z "$STATUS" ] || { echo "Pinned AmneziaWG WireGuardKit checkout is unexpectedly modified:" >&2; printf '%s\n' "$STATUS" >&2; exit 1; }
+python3 "$ROOT/../../deploy/prepare-apple-amnezia-timers.py" "$WG"
+python3 "$ROOT/../../deploy/prepare-apple-amnezia-timers.py" "$WG" --test
 printf '%s\n' "$PIN" > "$DEPS/wireguard-apple.pin"
-echo "Prepared clean pinned Apple WireGuardKit/AmneziaWG engine $PIN."
+echo "Prepared clean pinned Apple WireGuardKit/AmneziaWG engine $PIN with its verified timer correction."

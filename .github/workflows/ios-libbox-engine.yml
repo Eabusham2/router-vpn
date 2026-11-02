@@ -5,6 +5,11 @@ on:
     branches: [main]
     paths:
       - 'ios/RouterVPN/prepare-libbox.sh'
+      - 'ios/RouterVPN/prepare-wireguard-kit.sh'
+      - 'deploy/prepare-apple-amnezia-timers.py'
+      - 'deploy/test_apple_amnezia_timer_preparation.py'
+      - 'deploy/prepare-amnezia-timers.py'
+      - 'mobile/amneziatimers/**'
       - 'ios/RouterVPN/test_libbox_build_contract.py'
       - 'ios/RouterVPN/test_libbox_link_contract.py'
       - 'ios/RouterVPN/project.yml'
@@ -13,6 +18,11 @@ on:
   pull_request:
     paths:
       - 'ios/RouterVPN/prepare-libbox.sh'
+      - 'ios/RouterVPN/prepare-wireguard-kit.sh'
+      - 'deploy/prepare-apple-amnezia-timers.py'
+      - 'deploy/test_apple_amnezia_timer_preparation.py'
+      - 'deploy/prepare-amnezia-timers.py'
+      - 'mobile/amneziatimers/**'
       - 'ios/RouterVPN/test_libbox_build_contract.py'
       - 'ios/RouterVPN/test_libbox_link_contract.py'
       - 'ios/RouterVPN/project.yml'
