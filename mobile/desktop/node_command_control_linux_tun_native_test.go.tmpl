@@ -325,7 +325,7 @@ func linuxChildTUNWaitReady(t *testing.T, ctx context.Context, owner *linuxChild
 }
 
 func linuxChildTUNMTUStatus(t *testing.T, ctx context.Context, owner *linuxChildControlParent, files *routerVPNExternalFiles,
-	request string) routerVPNNodeMTURecord {
+	request, phase string) routerVPNNodeMTURecord {
 	t.Helper()
 	invocation, bootstrap, process, done, root := owner.invocation, owner.bootstrap, owner.process, owner.done, files.root
 	directory, err := root.Stat(".")
@@ -378,7 +378,7 @@ func linuxChildTUNMTUStatus(t *testing.T, ctx context.Context, owner *linuxChild
 				}
 				receipt, err := desktopnetwork.ParseDesktopNetworkReceipt(record.NetworkReceipt)
 				if err != nil || receipt.TargetOS != "linux" || receipt.Index != uint32(record.Index) || receipt.Name != record.Interface || receipt.MTU != record.MTU {
-					t.Fatal("generated MTU owner omitted its exact current native routing receipt", err)
+					t.Fatalf("generated MTU owner omitted its exact current native routing receipt: phase=%s generation=%d reader=%d index=%d mtu=%d active=%v restored=%v receipt_bytes=%d error=%v", phase, record.Generation, record.Reader, record.Index, record.MTU, record.Active, record.Restored, len(record.NetworkReceipt), err)
 				}
 				route, rule := false, false
 				for _, object := range receipt.Objects {
@@ -418,7 +418,7 @@ func linuxChildTUNMTUStatus(t *testing.T, ctx context.Context, owner *linuxChild
 
 func linuxChildTUNMTURollback(t *testing.T, ctx context.Context, owner *linuxChildControlParent, files *routerVPNExternalFiles) int {
 	t.Helper()
-	status := linuxChildTUNMTUStatus(t, ctx, owner, files, "")
+	status := linuxChildTUNMTUStatus(t, ctx, owner, files, "", "initial")
 	original := status.MTU
 	lease := strings.Repeat("c", 32)
 	for step, action := range []string{"begin", "set", "rollback"} {
@@ -432,7 +432,7 @@ func linuxChildTUNMTURollback(t *testing.T, ctx context.Context, owner *linuxChi
 			t.Fatal(err)
 		}
 		previous := status
-		status = linuxChildTUNMTUStatus(t, ctx, owner, files, request)
+		status = linuxChildTUNMTUStatus(t, ctx, owner, files, request, action)
 		beforeNetwork, _ := desktopnetwork.ParseDesktopNetworkReceipt(previous.NetworkReceipt)
 		afterNetwork, _ := desktopnetwork.ParseDesktopNetworkReceipt(status.NetworkReceipt)
 		if action == "begin" && beforeNetwork.Incarnation != afterNetwork.Incarnation ||
