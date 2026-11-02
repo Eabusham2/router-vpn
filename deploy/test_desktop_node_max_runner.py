@@ -147,6 +147,7 @@ class MAXOutcomeChecks(unittest.TestCase):
 class ModeledRun:
     """Deterministic runner process model; never a native/crypto success claim."""
     def __init__(self, root, failure_kind=None):
+        root = root.resolve()
         self.root, self.failure_kind = root, failure_kind
         self.core, self.library, self.cache = (root / name for name in ('core', 'library', 'cache'))
         for directory in (self.core, self.library, self.cache):

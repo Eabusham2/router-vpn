@@ -29,7 +29,7 @@ class MAXNativeBoundaries(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='max-native-source-check-')
         self.addCleanup(self.temporary.cleanup)
-        self.work = Path(self.temporary.name)
+        self.work = Path(self.temporary.name).resolve()
         self.source = self.work / 'core'
         self.original = {}
         files = {

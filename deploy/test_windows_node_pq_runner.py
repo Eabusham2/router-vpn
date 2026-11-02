@@ -21,7 +21,7 @@ class NativePQScope(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix='windows-pq-overlay-')
         self.addCleanup(self.temporary.cleanup)
-        self.work = Path(self.temporary.name)
+        self.work = Path(self.temporary.name).resolve()
         self.source = self.work / 'core'
         files = {
             GATE.PREDICATE: 'internal/mobilemultihop/desktop_node_admission.go',
