@@ -3,7 +3,9 @@
 from pathlib import Path
 import importlib.util
 import io
+import stat
 import subprocess
+import tempfile
 import unittest
 from contextlib import redirect_stdout
 from unittest.mock import Mock, patch
@@ -21,11 +23,30 @@ def verdict():
 
 class NetworkNamespaceLauncher(unittest.TestCase):
     def setUp(self):
-        self.binary = Path("/original-private-work/network-native.test")
+        self.temporary = tempfile.TemporaryDirectory(prefix="network-private-source-")
+        self.addCleanup(self.temporary.cleanup)
+        self.work = Path(self.temporary.name)
+        self.binary = self.work / "network-native.test"
+        self.binary.write_bytes(b"exact compiled network fixture")
+        self.binary.chmod(0o755)
+        self.staged = []
         self.env = {"EXACT_COMPILER_ENV": "captured"}
         self.native = Mock()
         self.native.run.return_value = verdict()
         self.native.privilege_tool.return_value = "/usr/bin/sudo"
+
+        def observe(command, **options):
+            offset = 3 if options["sudo"] is not None else 0
+            image = Path(command[offset + 8])
+            self.staged.append(image)
+            self.assertNotEqual(image, self.binary)
+            self.assertEqual(image.read_bytes(), self.binary.read_bytes())
+            self.assertEqual(stat.S_IMODE(image.stat().st_mode), 0o555)
+            self.assertEqual(stat.S_IMODE(image.parent.stat().st_mode), 0o711)
+            self.assertEqual(stat.S_IMODE(self.work.stat().st_mode), 0o700)
+            return self.native.run.return_value
+
+        self.native.run.side_effect = observe
         self.platform = patch.object(RUNNER.sys, "platform", "linux")
         self.identity = patch.object(RUNNER.os, "readlink", return_value="net:[987654]")
         self.loader = patch.object(RUNNER, "namespace_runner", return_value=self.native)
@@ -42,9 +63,11 @@ class NetworkNamespaceLauncher(unittest.TestCase):
         self.native.run.assert_called_once_with(
             ["/usr/bin/sudo", "-n", "--", "/usr/bin/env", "ROUTERVPN_NATIVE_NETWORK_EVENTS=1",
              "ROUTERVPN_NETWORK_PARENT_NAMESPACE=net:[987654]", "/usr/bin/unshare", "--user",
-             "--map-root-user", "--net", "--fork", str(self.binary), "-test.v", "-test.timeout=45s",
+             "--map-root-user", "--net", "--fork", str(self.staged[0]), "-test.v", "-test.timeout=45s",
              "-test.run=^TestLinuxNativeNetworkCohortEvents$"],
             cwd=RUNNER.ROOT, env=self.env, timeout=60, sudo="/usr/bin/sudo")
+        self.assertFalse(self.staged[0].parent.exists())
+        self.assertTrue(self.binary.exists())
 
     def test_actual_root_does_not_add_sudo(self):
         self.native.privilege_tool.return_value = None
@@ -53,7 +76,8 @@ class NetworkNamespaceLauncher(unittest.TestCase):
         self.assertEqual(args[0][0], "/usr/bin/env")
         self.assertNotIn("sudo", " ".join(args[0]))
         self.assertIsNone(options["sudo"])
-        self.assertEqual(args[0][8], str(self.binary))
+        self.assertEqual(args[0][8], str(self.staged[0]))
+        self.assertFalse(self.staged[0].parent.exists())
 
     def test_missing_trusted_privilege_fails_before_execution(self):
         self.native.privilege_tool.side_effect = ValueError("no trusted native privilege")
@@ -94,6 +118,36 @@ class NetworkNamespaceLauncher(unittest.TestCase):
         with patch.object(RUNNER.sys, "platform", "win32"), self.assertRaisesRegex(RuntimeError, "native Linux"):
             RUNNER.linux_namespace_test(self.binary, self.env)
         self.native.privilege_tool.assert_not_called()
+        self.native.run.assert_not_called()
+
+    def test_changed_staged_image_cannot_turn_native_pass_into_success(self):
+        def replace_bytes(command, **options):
+            offset = 3 if options["sudo"] is not None else 0
+            staged = Path(command[offset + 8])
+            self.staged.append(staged)
+            staged.chmod(0o755)
+            staged.write_bytes(b"different executable returned fabricated PASS records")
+            staged.chmod(0o555)
+            return verdict()
+
+        self.native.run.side_effect = replace_bytes
+        with self.assertRaisesRegex(ValueError, "staged image"):
+            RUNNER.linux_namespace_test(self.binary, self.env)
+        self.native.run.assert_called_once()
+        self.assertFalse(self.staged[0].parent.exists())
+        self.assertEqual(stat.S_IMODE(self.work.stat().st_mode), 0o700)
+
+    def test_linked_or_non_executable_input_is_rejected_before_namespace(self):
+        original = self.binary.with_name("original.test")
+        self.binary.rename(original)
+        self.binary.symlink_to(original)
+        with self.assertRaisesRegex(ValueError, "owned regular"):
+            RUNNER.linux_namespace_test(self.binary, self.env)
+        self.binary.unlink()
+        original.rename(self.binary)
+        self.binary.chmod(0o600)
+        with self.assertRaisesRegex(ValueError, "owned executable"):
+            RUNNER.linux_namespace_test(self.binary, self.env)
         self.native.run.assert_not_called()
 
 

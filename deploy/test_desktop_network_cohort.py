@@ -57,6 +57,16 @@ def namespace_runner():
     return runner
 
 
+def namespace_fixture_image(binary):
+    # Use the same retained, read/execute-only image staging as the native
+    # routing receipt gate. The compiler workspace remains private: mapped
+    # root in a new user namespace cannot traverse another user's 0700 root.
+    spec = importlib.util.spec_from_file_location("desktop_network_fixture_image", ROOT / "deploy/test_desktop_node_physical.py")
+    images = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(images)
+    return images.routing_fixture_image(binary)
+
+
 def linux_namespace_test(binary, env):
     if sys.platform != "linux":
         raise RuntimeError("the network mutation fixture requires native Linux")
@@ -66,18 +76,19 @@ def linux_namespace_test(binary, env):
     runner = namespace_runner()
     sudo = runner.privilege_tool()
     parent = os.readlink("/proc/self/ns/net")
-    command = ["/usr/bin/env", "ROUTERVPN_NATIVE_NETWORK_EVENTS=1",
-               "ROUTERVPN_NETWORK_PARENT_NAMESPACE=" + parent,
-               "/usr/bin/unshare", "--user", "--map-root-user", "--net", "--fork", str(binary),
-               "-test.v", "-test.timeout=45s", "-test.run=^TestLinuxNativeNetworkCohortEvents$"]
-    if sudo is not None:
-        command = [sudo, "-n", "--", *command]
-    try:
-        output = runner.run(command, cwd=ROOT, env=env, timeout=60, sudo=sudo)
-    except subprocess.CalledProcessError as error:
-        output = error.output or b""
-        print(output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output, end="")
-        raise RuntimeError("isolated native network fixture failed") from error
+    with namespace_fixture_image(binary) as staged:
+        command = ["/usr/bin/env", "ROUTERVPN_NATIVE_NETWORK_EVENTS=1",
+                   "ROUTERVPN_NETWORK_PARENT_NAMESPACE=" + parent,
+                   "/usr/bin/unshare", "--user", "--map-root-user", "--net", "--fork", str(staged),
+                   "-test.v", "-test.timeout=45s", "-test.run=^TestLinuxNativeNetworkCohortEvents$"]
+        if sudo is not None:
+            command = [sudo, "-n", "--", *command]
+        try:
+            output = runner.run(command, cwd=ROOT, env=env, timeout=60, sudo=sudo)
+        except subprocess.CalledProcessError as error:
+            output = error.output or b""
+            print(output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output, end="")
+            raise RuntimeError("isolated native network fixture failed") from error
     parent = "TestLinuxNativeNetworkCohortEvents"
     require_pass(output, parent)
     for leaf in NATIVE_CASES:
