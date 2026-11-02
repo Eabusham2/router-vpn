@@ -131,6 +131,61 @@ class PacketPreparation(unittest.TestCase):
                 self.assertEqual({name: (self.target/name).read_bytes() for name in self.originals}, before)
         self.assert_cache_unchanged()
 
+    def test_exact_prior_authentication_upgrades_without_changing_owned_lifetimes(self):
+        plan = {'Require': [{'Path': PATCH.MODULE, 'Version': PATCH.VERSION}]}
+        def command(args, **kwargs):
+            return PATCH.CORE+'\n' if args[0] == 'git' else json.dumps(plan)
+        for name in PATCH.AUTH_FILES:
+            (self.target/name).write_bytes(self.originals[name])
+        preserved = {name: (self.target/name).read_bytes() for name in PATCH.PATCHES if name not in PATCH.AUTH_FILES}
+        with self.assertRaises(ValueError):
+            PATCH.verify_tree(self.target)
+        with mock.patch.object(PATCH.subprocess, 'check_output', side_effect=command), mock.patch.object(PATCH.subprocess, 'run'):
+            PATCH.prepare(self.root)
+            PATCH.prepare(self.root)
+        PATCH.verify_tree(self.target)
+        self.assertEqual({name: (self.target/name).read_bytes() for name in preserved}, preserved)
+        self.assert_cache_unchanged()
+
+    def test_authentication_upgrade_rejects_changed_or_aliased_source_before_writing(self):
+        plan = {'Require': [{'Path': PATCH.MODULE, 'Version': PATCH.VERSION}]}
+        def command(args, **kwargs):
+            return PATCH.CORE+'\n' if args[0] == 'git' else json.dumps(plan)
+        for fault in ('changed', 'symlink', 'hardlink'):
+            with self.subTest(fault=fault):
+                name = 'protocol/socks/handshake.go'
+                path = self.target/name
+                if path.exists() or path.is_symlink():
+                    path.unlink()
+                path.write_bytes(self.originals[name])
+                outside = self.root/('auth-'+fault)
+                outside.write_bytes(self.originals[name])
+                if fault == 'changed':
+                    path.write_bytes(self.originals[name]+b'\n// unowned authentication policy\n')
+                elif fault == 'symlink':
+                    path.unlink()
+                    try:
+                        path.symlink_to(outside)
+                    except OSError:
+                        path.write_bytes(self.originals[name])
+                        continue  # Covered on hosts with actual link privileges.
+                else:
+                    path.unlink()
+                    try:
+                        path.hardlink_to(outside)
+                    except OSError:
+                        path.write_bytes(self.originals[name])
+                        continue
+                before = {entry: (self.target/entry).read_bytes() for entry in self.originals}
+                with mock.patch.object(PATCH.subprocess, 'check_output', side_effect=command), mock.patch.object(PATCH.subprocess, 'run'), self.assertRaises(ValueError):
+                    PATCH.prepare(self.root)
+                self.assertEqual({entry: (self.target/entry).read_bytes() for entry in self.originals}, before)
+                self.assertEqual(outside.read_bytes(), self.originals[name])
+                path.unlink()
+                path.write_bytes(PATCH.transform(name, self.originals[name]))
+        PATCH.verify_tree(self.target)
+        self.assert_cache_unchanged()
+
     def test_missing_extra_reverted_and_unrelated_edits_are_rejected(self):
         cases = [('common/bufio/bind.go', self.originals['common/bufio/bind.go']),
                  ('common/bufio/bind_wait.go', self.originals['common/bufio/bind_wait.go']),

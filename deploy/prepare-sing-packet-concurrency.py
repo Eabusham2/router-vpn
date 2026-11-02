@@ -134,6 +134,20 @@ func (c *AssociatePacketConn) ReadFrom('''),
 }
 PATCHES.update(ASSOCIATION_FILES)
 
+# The client offers exactly one method. A peer cannot select another method
+# and silently discard captured credentials or request credentials not offered.
+# This is separate from the already published packet/control-lifetime group.
+AUTH_FILES = {
+    'protocol/socks/handshake.go': ('c6970ea3e56ec8bf49fda1c97fa1f86a4f8dbf23', (
+        ('\tif authResponse.Method == socks5.AuthTypeUsernamePassword {\n',
+         '\tif authResponse.Method != method {\n'
+         '\t\treturn socks5.Response{}, E.New("socks5: server selected an unoffered authentication method")\n'
+         '\t}\n'
+         '\tif authResponse.Method == socks5.AuthTypeUsernamePassword {\n'),
+    )),
+}
+PATCHES.update(AUTH_FILES)
+
 
 def git_blob(data):
     return hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
@@ -177,7 +191,7 @@ def verify_tree(directory, allow_packet_only=False):
         if total > MAX_BYTES or len(rows) >= 5000:
             raise ValueError('Prepared sing exceeds source bounds')
         data = path.read_bytes()
-        if allow_packet_only and relative in (BUFFER_FILES | ASSOCIATION_FILES) and git_blob(data) == PATCHES[relative][0]:
+        if allow_packet_only and relative in (BUFFER_FILES | ASSOCIATION_FILES | AUTH_FILES) and git_blob(data) == PATCHES[relative][0]:
             # A prior owned copy may predate either complete fix group. Only
             # exact pristine files may be upgraded, and only after every group
             # and the entire module reverse to the original pinned checksum.
@@ -190,10 +204,10 @@ def verify_tree(directory, allow_packet_only=False):
         rows.append((PREFIX + relative, hashlib.sha256(original).hexdigest()))
     if h1(rows) != SUM:
         raise ValueError('Prepared sing differs from its pinned module plus packet synchronization')
-    for group in (BUFFER_FILES, ASSOCIATION_FILES):
+    for group in (BUFFER_FILES, ASSOCIATION_FILES, AUTH_FILES):
         changed = set(upgrades).intersection(group)
         if changed and changed != set(group):
-            raise ValueError('Prepared sing has a partial UDP capacity or association policy')
+            raise ValueError('Prepared sing has a partial UDP capacity, association or authentication policy')
     return upgrades
 
 
@@ -261,7 +275,7 @@ def prepare(vendor):
             extract_verified(Path(info['Zip']), staged)
             staged.rename(target)
     subprocess.run(['go', 'mod', 'edit', '-replace=' + MODULE + '@' + VERSION + '=./' + COPY], cwd=vendor, check=True)
-    print('Prepared checksum-verified sing UDP endpoints, joined SOCKS control ownership and complete ciphertext buffers:', VERSION)
+    print('Prepared checksum-verified sing UDP endpoints, exact SOCKS authentication, joined control ownership and complete ciphertext buffers:', VERSION)
 
 
 def verify(vendor):
