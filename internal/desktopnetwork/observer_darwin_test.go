@@ -14,6 +14,51 @@ import (
 	"time"
 )
 
+func TestDarwinInterfaceReadbackBoundsAndNativeFields(t *testing.T) {
+	link, _ := darwinTestFrame(t, syscall.RTM_IFINFO)
+	binary.LittleEndian.PutUint32(link[8:12], 0)
+	binary.LittleEndian.PutUint16(link[12:14], 5)
+	link[16], link[18], link[19] = 1, 8, 6
+	binary.LittleEndian.PutUint32(link[24:28], 0)
+	address, _ := darwinTestFrame(t, syscall.RTM_NEWADDR)
+	binary.LittleEndian.PutUint16(address[12:14], 5)
+	wire := append(append([]byte(nil), link...), address...)
+	calls := 0
+	observed, err := darwinInterfaceReadback(5, func(facility, index int) ([]byte, error) {
+		calls++
+		if facility != syscall.NET_RT_IFLIST || index != 5 {
+			t.Fatal("Darwin diagnostic changed the captured native readback selector")
+		}
+		return wire, nil
+	})
+	want := desktopDarwinInterfaceReadback{Bytes: len(wire), Records: 2, Addresses: 1,
+		Shapes: []desktopDarwinInterfaceShape{{Index: 5, MTU: 0, Flags: 0, Type: 1, Physical: 8, AddressLength: 6}}}
+	if err != nil || calls != 1 || !reflect.DeepEqual(observed, want) {
+		t.Fatal("Darwin readback did not preserve the exact numeric native fields", observed, err)
+	}
+	clear(wire)
+	if !reflect.DeepEqual(observed, want) {
+		t.Fatal("Darwin readback retained the borrowed native buffer")
+	}
+	route, _ := darwinTestFrame(t, syscall.RTM_ADD)
+	for _, invalid := range [][]byte{link[:10], make([]byte, 64<<10+1), bytes.Repeat(address, 257), bytes.Repeat(link, 5), route} {
+		if _, err := darwinInterfaceReadback(5, func(int, int) ([]byte, error) { return invalid, nil }); err == nil {
+			t.Fatal("Darwin diagnostic accepted an incomplete or unbounded native readback")
+		}
+	}
+	if _, err := darwinInterfaceReadback(5, func(int, int) ([]byte, error) { return nil, syscall.EPERM }); err != syscall.EPERM {
+		t.Fatal("Darwin diagnostic hid a native readback error", err)
+	}
+	for _, index := range []uint32{0, 65536} {
+		if _, err := darwinInterfaceReadback(index, func(int, int) ([]byte, error) {
+			t.Fatal("invalid Darwin index became a whole-host readback")
+			return nil, nil
+		}); err == nil {
+			t.Fatal("invalid Darwin readback index was accepted")
+		}
+	}
+}
+
 func darwinTestFrame(t *testing.T, kind byte) ([]byte, syscall.RoutingMessage) {
 	t.Helper()
 	var header any

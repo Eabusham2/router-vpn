@@ -25,6 +25,7 @@ PARENTS = (
     "TestDarwinCloneRequiresExactCapturedParent",
     "TestLinuxMulticastFIBIdentityRemainsAmbient",
     "TestWindowsUnlimitedLoopbackMTURetainsNativeIdentity",
+    "TestDarwinIncompleteInterfaceReadbackNeverAdmitsOrReplacesCapture",
     "TestLinuxOwnedGotoRuleTransitions",
 )
 NATIVE_CASES = (
@@ -119,7 +120,8 @@ def main():
                        "TestDarwinNetworkMessageRejectsIncompleteHeaders",
                        "TestDarwinInformationalMessageFraming",
                        "TestDarwinNetworkReceiveNativeSocket",
-                       "TestDarwinNetworkReceiveLoopAndJoinedClose"):
+                       "TestDarwinNetworkReceiveLoopAndJoinedClose",
+                       "TestDarwinInterfaceReadbackBoundsAndNativeFields"):
             require_pass(base.stdout, parent)
     if sys.platform == "linux":
         require_pass(base.stdout, "TestLinuxRouteTableCompatibilityAndOwnedCarrierTransition")

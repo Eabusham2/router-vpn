@@ -308,7 +308,16 @@ func (o *darwinObserver) Snapshot(ctx context.Context) (Snapshot, error) {
 		return snapshot, err
 	}
 	for _, iface := range interfaces {
-		snapshot.Links = append(snapshot.Links, Link{Index: uint32(iface.Index), Name: iface.Name, MTU: iface.MTU, Flags: uint32(iface.Flags), Hardware: iface.HardwareAddr.String()})
+		link := Link{Index: uint32(iface.Index), Name: iface.Name, MTU: iface.MTU, Flags: uint32(iface.Flags), Hardware: iface.HardwareAddr.String()}
+		if link.MTU <= 0 {
+			return snapshot, desktopDarwinIncompleteInterface(link, func(index uint32) (desktopDarwinInterfaceReadback, error) {
+				if ctx.Err() != nil {
+					return desktopDarwinInterfaceReadback{}, ctx.Err()
+				}
+				return darwinInterfaceReadback(index, syscall.RouteRIB)
+			})
+		}
+		snapshot.Links = append(snapshot.Links, link)
 		addresses, err := iface.Addrs()
 		if err != nil {
 			return snapshot, err
@@ -341,6 +350,42 @@ func (o *darwinObserver) Snapshot(ctx context.Context) (Snapshot, error) {
 		snapshot.Objects = append(snapshot.Objects, object)
 	}
 	return snapshot, nil
+}
+
+func darwinInterfaceReadback(index uint32, read func(int, int) ([]byte, error)) (desktopDarwinInterfaceReadback, error) {
+	var observed desktopDarwinInterfaceReadback
+	if index == 0 || index > 65535 || read == nil {
+		return observed, errors.New("Darwin interface readback has no bounded captured index")
+	}
+	raw, err := read(syscall.NET_RT_IFLIST, int(index))
+	observed.Bytes = len(raw)
+	if err != nil {
+		return observed, err
+	}
+	if len(raw) > 64<<10 {
+		return observed, errors.New("Darwin interface readback exceeds its byte bound")
+	}
+	messages, err := darwinMessages(raw)
+	observed.Records = len(messages)
+	if err != nil || len(messages) > 256 {
+		return observed, errors.New("Darwin interface readback is unrecognized or unbounded")
+	}
+	for _, message := range messages {
+		switch value := message.(type) {
+		case *syscall.InterfaceMessage:
+			if len(observed.Shapes) == 4 {
+				return observed, errors.New("Darwin interface readback exceeds its interface bound")
+			}
+			observed.Shapes = append(observed.Shapes, desktopDarwinInterfaceShape{
+				Index: uint32(value.Header.Index), MTU: value.Header.Data.Mtu, Flags: uint32(value.Header.Flags),
+				Type: value.Header.Data.Type, Physical: value.Header.Data.Physical, AddressLength: value.Header.Data.Addrlen})
+		case *syscall.InterfaceAddrMessage:
+			observed.Addresses++
+		default:
+			return observed, errors.New("Darwin interface readback contains another record type")
+		}
+	}
+	return observed, nil
 }
 
 func (o *darwinObserver) Close() error {
