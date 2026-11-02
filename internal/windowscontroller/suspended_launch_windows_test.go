@@ -68,12 +68,20 @@ func fixtureSuspendedSetup(t *testing.T) (*nativeAPI, *Image, *Pipe) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { image.Close() })
+	t.Cleanup(func() {
+		if err := image.Close(); err != nil {
+			t.Error("suspended fixture image did not close after its child joined", err)
+		}
+	})
 	pipe, err := NewPipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { pipe.Close() })
+	t.Cleanup(func() {
+		if err := pipe.Close(); err != nil {
+			t.Error("suspended fixture pipe did not close after its child joined", err)
+		}
+	})
 	return api, image, pipe
 }
 
@@ -164,13 +172,181 @@ func fixtureGlobalRootImageLocked(api *nativeAPI, image *Image) (string, syscall
 	return path, held, nil
 }
 
+func fixtureProveSuspendedShellOwner(t *testing.T, label string, api *nativeAPI, image *Image, pipe *Pipe, process *Process, site *shellCreationSite, original TokenIdentity, cancelled bool, launchErr error) {
+	t.Helper()
+	if process == nil || (!cancelled && launchErr != nil) || (cancelled && !errors.Is(launchErr, context.Canceled)) {
+		t.Fatalf("%s did not return its exact actual suspended owner: launch=%v callback_count=%d", label, launchErr, site.calls.Load())
+	}
+	// Post-creation cancellation refuses admission; it does not erase an
+	// already observed successful creation callback. Pre-creation refusal has
+	// its separate native negative test and denied callback state.
+	if site.calls.Load() != 1 || site.result.Load() != 0 || site.denied.Load() || site.after.Load()&4 == 0 ||
+		site.after.Load()&site.before.Load() != site.before.Load() || site.prove() != nil {
+		t.Fatal(label+" lost its actual suspended creation proof", site.calls.Load(), site.result.Load())
+	}
+	thread, err := captureSuspendedShellThread(api, process)
+	if thread != 0 {
+		process.mu.Lock()
+		process.launchThread = thread
+		process.mu.Unlock()
+	}
+	if err != nil {
+		t.Fatal(label+" did not retain exactly its suspended initial thread", err)
+	}
+	if err := verifySuspendedShellImage(api, process, image); err != nil {
+		t.Fatal(label+" lost its exact captured kernel image", err)
+	}
+	child, err := process.Identity()
+	if err != nil || !child.Primary || !child.Elevated || !child.Administrator || child.SID != original.SID || child.SessionID != original.SessionID {
+		t.Fatal(label+" lost its actual elevated fixture identity", err)
+	}
+	childToken, err := fixtureFreshUACProcessIdentity(api, process)
+	if err != nil || !childToken.Primary || childToken.TokenID == 0 || childToken.SID != child.SID ||
+		childToken.AuthenticationID != child.AuthenticationID || childToken.Session != child.SessionID || !childToken.Elevated || !childToken.Admin {
+		t.Fatal(label+" did not capture its exact actual primary token", err)
+	}
+	handle, release, err := process.borrow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	granted, accessErr := fixtureShellGrantedAccess(api, handle)
+	release()
+	if accessErr != nil {
+		t.Fatal(label+" could not observe its granted process handle", accessErr)
+	}
+	fixtureNoSuspendedChildHello(t, pipe)
+	currentChild, childErr := process.Identity()
+	currentToken, tokenErr := fixtureFreshUACProcessIdentity(api, process)
+	caller, callerErr := CurrentIdentity()
+	if childErr != nil || tokenErr != nil || callerErr != nil || currentChild != child || currentToken != childToken || caller != original {
+		t.Fatal(label+" changed its retained child token or original caller before retirement", childErr, tokenErr, callerErr)
+	}
+	if err := retireSuspendedShell(process); err != nil {
+		t.Fatal(label+" did not join its exact suspended child", err)
+	}
+	t.Logf("%s accepted with exact native file/image/primary-token proof; creation suspension remained >=2, no child code ran, exact child terminated/joined. Captured process access=0x%x PROCESS_SUSPEND_RESUME=%t; cancelled-after-creation=%t. No interactive or cross-account UAC acceptance is established.", label, granted, granted&0x0800 != 0, cancelled)
+}
+
+func fixtureObserveGlobalRootSuspendedShell(t *testing.T, cancelled bool) bool {
+	t.Helper()
+	api, image, pipe := fixtureSuspendedSetup(t)
+	original, err := CurrentIdentity()
+	if err != nil || !original.Primary || !original.Elevated || !original.Administrator {
+		t.Fatal("GLOBALROOT probe requires its actual elevated fixture owner", err)
+	}
+	ctx, cancel := mustNativeContext(t)
+	site, err := newShellCreationSite(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer shellCreationRelease(&site.service)
+	var observed fixtureShellProbeObservation
+	process, launchErr := launchElevated(ctx, image, fixtureArguments("hold", pipe, fixtureExecutable(t)), api, func(info *shellExecuteInfo) (bool, error) {
+		path, held, err := fixtureGlobalRootImageLocked(api, image)
+		if err != nil {
+			observed.proofError = err
+			return false, err
+		}
+		observed.imageBefore = true
+		closeHeld := func(handle syscall.Handle) {
+			if handle == 0 {
+				return
+			}
+			if closeErr := syscall.CloseHandle(handle); closeErr != nil {
+				image.handles = append(image.handles, handle)
+				observed.closeError = errors.Join(observed.closeError, closeErr)
+			}
+		}
+		name, _ := syscall.UTF16PtrFromString(path)
+		info.File, info.Directory = name, nil
+		info.Mask |= 0x08000000
+		info.Instance = syscall.Handle(uintptr(unsafe.Pointer(&site.service)))
+		observed.calls++
+		ok, _, callErr := api.shellExecute.Call(uintptr(unsafe.Pointer(info)))
+		observed.succeeded, observed.rawError = ok != 0, callErr
+		observed.instance, observed.rawProcess = uint64(info.Instance), uint64(info.Process)
+		again, afterHeld, afterErr := fixtureGlobalRootImageLocked(api, image)
+		if afterErr == nil && again != path {
+			afterErr = errors.New("GLOBALROOT probe native file spelling changed after Shell")
+		}
+		observed.proofError = afterErr
+		observed.imageAfter = afterErr == nil
+		closeHeld(afterHeld)
+		closeHeld(held)
+		runtime.KeepAlive(name)
+		// A no-child result provides no cancellation-after-creation evidence.
+		if cancelled && info.Process != 0 && info.Process != syscall.InvalidHandle {
+			cancel()
+		}
+		return ok != 0 && observed.proofError == nil && observed.closeError == nil, errors.Join(callErr, observed.proofError, observed.closeError)
+	})
+	if process != nil {
+		fixtureSuspendedReturnedOwner(t, process)
+	}
+	observed.returnedProcess, observed.launchError = process != nil, launchErr
+	observed.callbackCount, observed.callbackResult = site.calls.Load(), site.result.Load()
+	observed.callbackBefore, observed.callbackAfter = site.before.Load(), site.after.Load()
+	observed.callbackDenied, observed.callerCancelled = site.denied.Load(), ctx.Err() != nil
+	caller, callerErr := CurrentIdentity()
+	if callerErr != nil || caller != original {
+		observed.proofError = errors.Join(observed.proofError, callerErr, errors.New("GLOBALROOT probe changed its original caller identity"))
+	}
+	if fixtureGlobalRootUnavailable(observed) {
+		fixtureNoSuspendedChildHello(t, pipe)
+		t.Log("GLOBALROOT capability=unavailable on this host: independently retained image proved before/after; exact native FALSE/ERROR_FILE_NOT_FOUND, hInstApp=2, hProcess=0 and no creation callback. No launch, cancellation-after-creation, fallback or product acceptance is established.")
+		return false
+	}
+	if observed.proofError != nil || observed.closeError != nil {
+		t.Fatal("GLOBALROOT probe failed its independent image proof or handle retirement", observed.proofError, observed.closeError)
+	}
+	if process == nil {
+		t.Fatalf("GLOBALROOT capability returned an unknown no-child outcome: native_ok=%t raw_error=%v instance=%d raw_process=%d native_calls=%d callbacks=%d launch=%v", observed.succeeded, observed.rawError, observed.instance, observed.rawProcess, observed.calls, observed.callbackCount, launchErr)
+	}
+	fixtureProveSuspendedShellOwner(t, "Retained GLOBALROOT Shell capability", api, image, pipe, process, site, original, cancelled, launchErr)
+	return true
+}
+
 func TestWindowsControllerGlobalRootSuspendedShellProbe(t *testing.T) {
+	var supported bool
+	t.Run("supported-or-exact-unavailable", func(t *testing.T) {
+		supported = fixtureObserveGlobalRootSuspendedShell(t, false)
+	})
+	if !supported {
+		return
+	}
+	t.Run("cancelled-after-creation", func(t *testing.T) {
+		if !fixtureObserveGlobalRootSuspendedShell(t, true) {
+			t.Fatal("previously supported GLOBALROOT spelling did not create the required cancellation owner")
+		}
+	})
+}
+
+// This positive is mandatory even when the exploratory GLOBALROOT spelling is
+// unavailable. It consumes the retained global/effective mapping used by the
+// shipping protected bootstrap, with the independent suspension site attached.
+// It never substitutes a reopened drive path or relaxes the production proof.
+func TestWindowsControllerFoundationProtectedGlobalSuspendedLaunch(t *testing.T) {
 	for _, cancelled := range []bool{false, true} {
 		t.Run(fmt.Sprintf("cancelled-after-creation=%t", cancelled), func(t *testing.T) {
 			api, image, pipe := fixtureSuspendedSetup(t)
 			original, err := CurrentIdentity()
 			if err != nil || !original.Primary || !original.Elevated || !original.Administrator {
-				t.Fatal("GLOBALROOT probe requires its actual elevated fixture owner", err)
+				t.Fatal("protected global suspended fixture requires its actual elevated owner", err)
+			}
+			capture, err := PinProtectedShellImage(image)
+			if capture != nil {
+				t.Cleanup(func() {
+					if err := capture.Close(); err != nil {
+						t.Error("protected global suspended capture did not retire after its child", err)
+					}
+				})
+			}
+			if err != nil || capture == nil {
+				t.Fatal("protected global suspended fixture lost its actual mapping/image capture", err)
+			}
+			namespace, err := protectedShellNative()
+			if err != nil {
+				t.Fatal(err)
 			}
 			ctx, cancel := mustNativeContext(t)
 			site, err := newShellCreationSite(ctx)
@@ -178,68 +354,40 @@ func TestWindowsControllerGlobalRootSuspendedShellProbe(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer shellCreationRelease(&site.service)
-			var instance syscall.Handle
-			process, launchErr := launchElevated(ctx, image, fixtureArguments("hold", pipe, fixtureExecutable(t)), api, func(info *shellExecuteInfo) (bool, error) {
-				path, held, err := fixtureGlobalRootImageLocked(api, image)
+			capture.mu.Lock()
+			var beforeErr, afterErr error
+			process, launchErr := launchElevated(ctx, capture.image, fixtureArguments("hold", pipe, fixtureExecutable(t)), api, func(info *shellExecuteInfo) (bool, error) {
+				beforeErr = capture.verifyLocked(api, namespace)
+				if beforeErr != nil {
+					return false, beforeErr
+				}
+				name, err := syscall.UTF16PtrFromString(capture.path)
 				if err != nil {
 					return false, err
 				}
-				name, _ := syscall.UTF16PtrFromString(path)
 				info.File, info.Directory = name, nil
 				info.Mask |= 0x08000000
 				info.Instance = syscall.Handle(uintptr(unsafe.Pointer(&site.service)))
 				ok, _, callErr := api.shellExecute.Call(uintptr(unsafe.Pointer(info)))
-				instance = info.Instance
-				if closeErr := syscall.CloseHandle(held); closeErr != nil {
-					image.handles = append(image.handles, held)
-					callErr, ok = errors.Join(callErr, closeErr), 0
-				}
+				afterErr = capture.verifyLocked(api, namespace)
 				runtime.KeepAlive(name)
-				if cancelled {
+				if cancelled && info.Process != 0 && info.Process != syscall.InvalidHandle {
 					cancel()
 				}
-				return ok != 0, callErr
+				return ok != 0 && afterErr == nil, errors.Join(callErr, afterErr)
 			})
+			captureErr := capture.verifyLocked(api, namespace)
+			capture.mu.Unlock()
 			if process != nil {
 				fixtureSuspendedReturnedOwner(t, process)
 			}
-			if process == nil || (!cancelled && launchErr != nil) || (cancelled && !errors.Is(launchErr, context.Canceled)) {
-				t.Fatalf("Shell did not admit the independently retained GLOBALROOT name: launch=%v instance=%d callback_count=%d; no production fallback or UAC acceptance", launchErr, instance, site.calls.Load())
+			if beforeErr != nil || afterErr != nil || captureErr != nil {
+				t.Fatal("protected global suspended launch changed its exact retained namespace/image owner", beforeErr, afterErr, captureErr)
 			}
-			if site.calls.Load() != 1 || site.result.Load() != 0 || site.after.Load()&4 == 0 || site.after.Load()&site.before.Load() != site.before.Load() ||
-				(!cancelled && site.prove() != nil) || (cancelled && site.prove() == nil) {
-				t.Fatal("GLOBALROOT Shell probe lost its actual suspended creation or cancellation", site.calls.Load(), site.result.Load())
+			fixtureProveSuspendedShellOwner(t, "Protected global Shell suspended launch", api, capture.image, pipe, process, site, original, cancelled, launchErr)
+			if err := capture.Verify(); err != nil {
+				t.Fatal("protected global capture changed before its joined retirement", err)
 			}
-			thread, err := captureSuspendedShellThread(api, process)
-			if thread != 0 {
-				process.mu.Lock()
-				process.launchThread = thread
-				process.mu.Unlock()
-			}
-			if err != nil {
-				t.Fatal("GLOBALROOT probe did not retain exactly its suspended initial thread", err)
-			}
-			if err := verifySuspendedShellImage(api, process, image); err != nil {
-				t.Fatal("GLOBALROOT probe lost its exact captured kernel image", err)
-			}
-			child, err := process.Identity()
-			if err != nil || !child.Primary || !child.Elevated || !child.Administrator || child.SID != original.SID || child.SessionID != original.SessionID {
-				t.Fatal("GLOBALROOT probe lost its actual elevated fixture identity", err)
-			}
-			handle, release, err := process.borrow()
-			if err != nil {
-				t.Fatal(err)
-			}
-			granted, accessErr := fixtureShellGrantedAccess(api, handle)
-			release()
-			if accessErr != nil {
-				t.Fatal("GLOBALROOT probe could not observe its granted process handle", accessErr)
-			}
-			fixtureNoSuspendedChildHello(t, pipe)
-			if err := retireSuspendedShell(process); err != nil {
-				t.Fatal("GLOBALROOT probe did not join its exact suspended child", err)
-			}
-			t.Logf("Retained GLOBALROOT Shell path accepted with exact native file/image/token proof; creation suspension remained >=2, no child code ran, exact child terminated/joined. Captured process access=0x%x PROCESS_SUSPEND_RESUME=%t; no thread-access, interactive UAC or cross-account acceptance is established.", granted, granted&0x0800 != 0)
 		})
 	}
 }

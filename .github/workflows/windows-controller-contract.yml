@@ -268,15 +268,25 @@ jobs:
           if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Explicit Medium constructor has no compiled exact-source binary' }
           & $binary '-test.run=^TestWindowsControllerFoundationConstructedPrimaryMediumWithoutLUA$' '-test.count=1' '-test.timeout=60s' '-test.v'
           if ($LASTEXITCODE -ne 0) { throw 'The unfiltered constructor was not rejected under the unchanged native authority checks; this is not UAC acceptance' }
-      - name: Probe retained GLOBALROOT Shell bootstrap without executing child code
+      - name: Prove protected-global suspension and classify the optional GLOBALROOT capability
         if: ${{ success() || failure() }}
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $binary = Join-Path $env:RUNNER_TEMP 'routervpn-shell-elevation.test.exe'
-          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'GLOBALROOT bootstrap probe has no compiled exact-source binary' }
+          if (-not (Test-Path -LiteralPath $binary -PathType Leaf)) { throw 'Protected-global suspension and GLOBALROOT capability have no compiled exact-source binary' }
+          & $binary '-test.run=^TestFixtureGlobalRoot' '-test.count=1' '-test.timeout=15s' '-test.v'
+          if ($LASTEXITCODE -ne 0) { throw 'GLOBALROOT exact-unavailable classifier did not reject mixed, partial-owner or cleanup failures' }
+          $suspendedOutput = @(& $binary '-test.run=^TestWindowsControllerFoundationProtectedGlobalSuspendedLaunch$' '-test.count=1' '-test.timeout=60s' '-test.v')
+          $suspendedExit = $LASTEXITCODE
+          $suspendedOutput | ForEach-Object { Write-Host $_ }
+          if ($suspendedExit -ne 0) { throw 'Mandatory protected-global suspended launch or owned cancellation failed' }
+          foreach ($outcome in @('false', 'true')) {
+            $receipt = '--- PASS: TestWindowsControllerFoundationProtectedGlobalSuspendedLaunch/cancelled-after-creation=' + $outcome + ' ('
+            if (-not ($suspendedOutput | Where-Object { $_.Contains($receipt) })) { throw 'Mandatory protected-global suspended outcome was not executed' }
+          }
           & $binary '-test.run=^TestWindowsControllerGlobalRootSuspendedShellProbe$' '-test.count=1' '-test.timeout=60s' '-test.v'
-          if ($LASTEXITCODE -ne 0) { throw 'Retained GLOBALROOT Shell bootstrap remains unproved; no production fallback or ordinary UAC acceptance' }
+          if ($LASTEXITCODE -ne 0) { throw 'GLOBALROOT capability returned an unknown, mixed, partial-child or unproved outcome' }
     # This short job exposes the exact failing launch immediately. The complete
     # race-instrumented foundation, all negative controls and shipping Session
     # composition remain required in the independent controller job below.

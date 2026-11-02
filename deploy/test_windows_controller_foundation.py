@@ -66,6 +66,11 @@ REQUIRED = (
     "TestWindowsControllerFoundationProtectedShellBootstrapToken",
     "TestWindowsControllerFoundationProtectedShellMediumLabelPolicy",
     "TestWindowsControllerFoundationConstructedPrimaryMediumWithoutLUA",
+    "TestWindowsControllerFoundationProtectedGlobalSuspendedLaunch",
+)
+PROTECTED_SUSPENDED_REQUIRED = (
+    "TestWindowsControllerFoundationProtectedGlobalSuspendedLaunch/cancelled-after-creation=false",
+    "TestWindowsControllerFoundationProtectedGlobalSuspendedLaunch/cancelled-after-creation=true",
 )
 # A real linked token belongs to a separate native fixture. Its exact test is
 # still mandatory in the independent UAC workflow step and fails when absent;
@@ -93,6 +98,7 @@ def sources():
                 "machine_directories_windows.go", "machine_directories_windows_test.go",
                 "fixture_windows_test.go", "foundation_windows_test.go", "capture_windows_test.go",
                 "suspended_launch_windows.go", "suspended_launch_windows_test.go",
+                "shell_probe_policy_test.go",
                 "suspended_access_windows_test.go",
                 "fresh_uac_policy_test.go", "fresh_uac_windows_test.go", "fresh_uac_consent_windows_test.go",
                 "fresh_uac_parent_windows_test.go",
@@ -264,7 +270,8 @@ def execute(go="go", *, env=None):
              "-test.timeout=120s", "-test.v"], cwd=ROOT, env=captured, timeout=135)
         print(output, end="" if output.endswith("\n") else "\n", flush=True)
         if (status or "--- SKIP:" in output or "DATA RACE" in output or
-                any("--- PASS: " + name + " (" not in output for name in REQUIRED)):
+                any("--- PASS: " + name + " (" not in output
+                    for name in (*REQUIRED, *PROTECTED_SUSPENDED_REQUIRED))):
             raise ValueError("Windows controller did not execute every native ownership boundary")
         if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
             raise ValueError("Windows controller test binary changed during execution")
@@ -287,7 +294,7 @@ def execute(go="go", *, env=None):
             print("Rejected production Windows controller mutant:", name, flush=True)
         if sources() != before:
             raise ValueError("Windows controller source changed during its native proof")
-    print(f"Windows controller foundation passed {len(REQUIRED)} actual process/IPC/lifetime/package-code cases and {len(mutants())} compiled production negative controls; launcher composition remains a separate gate.", flush=True)
+    print(f"Windows controller foundation passed {len(REQUIRED)} actual process/IPC/lifetime/package-code cases, both required protected-global suspended outcomes and {len(mutants())} compiled production negative controls; launcher composition remains a separate gate.", flush=True)
 
 
 if __name__ == "__main__":
