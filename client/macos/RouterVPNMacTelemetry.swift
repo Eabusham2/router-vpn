@@ -9,6 +9,7 @@ private var telemetryLiveLabelKey: UInt8 = 0
 private var telemetryHopLabelKey: UInt8 = 0
 private var telemetryForwardButtonKey: UInt8 = 0
 private var telemetryPerformanceControllerKey: UInt8 = 0
+private var telemetryExternalComparisonControllerKey: UInt8 = 0
 
 extension ProductWindowController {
     private func telemetryFind(_ id: String) -> NSView? {
@@ -113,8 +114,10 @@ extension ProductWindowController {
                 }
             DispatchQueue.main.async {
                 popup.removeAllItems()
-                popup.addItem(withTitle: "⚡ Fastest")
+                popup.addItem(withTitle: "⚡ Fastest Router · TCP")
                 popup.lastItem?.representedObject = "fastest"
+                popup.addItem(withTitle: "Compare external paths · 50 responses…")
+                popup.lastItem?.representedObject = "external-comparison"
                 var selectedIndex = 0
                 for p in routers {
                     let id = p["id"] as? String ?? ""; guard !id.isEmpty else { continue }
@@ -132,6 +135,7 @@ extension ProductWindowController {
 
     @objc private func unifiedFastConnectChanged(_ sender: NSPopUpButton) {
         let id = sender.selectedItem?.representedObject as? String ?? "fastest"
+        if id == "external-comparison" { openExternalComparison(); refreshUnifiedFastNodeMenu(); return }
         sender.isEnabled = false
         DispatchQueue.global(qos: .userInitiated).async { [weak self, weak sender] in
             guard let self else { return }
@@ -271,7 +275,18 @@ extension ProductWindowController {
         let hops = NSButton(title: "Routed hop speeds", target: self, action: #selector(telemetryHopSpeedPerformance(_:))); hops.bezelStyle = .rounded
         let mtu = NSButton(title: "Throughput + Auto MTU", target: self, action: #selector(telemetryMtuPerformance(_:))); mtu.bezelStyle = .rounded
         row.addArrangedSubview(live); row.addArrangedSubview(durable); row.addArrangedSubview(speed); row.addArrangedSubview(hops); row.addArrangedSubview(mtu); stack.addArrangedSubview(row)
+        let external = NSButton(title: "Compare external paths / connect fastest", target: self, action: #selector(openExternalComparison))
+        external.bezelStyle = .rounded; stack.addArrangedSubview(external)
         panel.contentView = stack; panel.center(); controller.showWindow(nil); panel.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func openExternalComparison() {
+        if let existing = objc_getAssociatedObject(self, &telemetryExternalComparisonControllerKey) as? RouterVPNMacExternalComparisonController, !existing.closed {
+            existing.showWindow(nil); existing.window?.makeKeyAndOrderFront(nil); return
+        }
+        let controller = RouterVPNMacExternalComparisonController(api: api, product: self)
+        objc_setAssociatedObject(self, &telemetryExternalComparisonControllerKey, controller, .OBJC_ASSOCIATION_RETAIN_NONATOMIC)
+        controller.window?.center(); controller.showWindow(nil); controller.window?.makeKeyAndOrderFront(nil)
     }
 
     private func telemetryResult(_ sender: NSButton) -> NSTextField? {
@@ -336,5 +351,201 @@ extension ProductWindowController {
         if view.identifier?.rawValue == id { return view }
         for child in view.subviews { if let found = telemetryWalk(child, id: id) { return found } }
         return nil
+    }
+}
+
+// This display parser contains no connection authority. Only a matching,
+// complete controller result may show a score or a committed winner.
+private enum RouterVPNExternalComparisonDisplay {
+    static func token(_ value: Any?, count: Int) -> String? {
+        guard let text = value as? String, text.count == count,
+              text.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else { return nil }
+        return text
+    }
+    static func matches(_ value: [String: Any], request: String, cohort: String) -> Bool {
+        token(value["request_id"], count: 32) == request && token(value["cohort_id"], count: 64) == cohort
+    }
+    static func score(_ row: [String: Any]) -> Double? {
+        guard row["status"] as? String == "complete", let b = row["benchmark"] as? [String: Any],
+              (b["schema"] as? NSNumber)?.intValue == 1,
+              b["measurement"] as? String == "routed-https-response-after-tls",
+              b["endpoint"] as? String == "https://speed.cloudflare.com/__down?bytes=1",
+              (b["attempts"] as? NSNumber)?.intValue == 50,
+              (b["failed"] as? NSNumber)?.intValue == 0,
+              let d = b["distribution"] as? [String: Any], (d["samples"] as? NSNumber)?.intValue == 50,
+              let value = (b["trimmed_mean_ms"] as? NSNumber)?.doubleValue, value.isFinite, value > 0 else { return nil }
+        return value
+    }
+    static func rows(_ values: [[String: Any]], historical: Bool) -> String {
+        var lines = [historical ? "Saved history — these values are not a current winner." : "50 routed HTTPS responses · 10% trimmed mean"]
+        for row in values {
+            let name = row["name"] as? String ?? row["id"] as? String ?? "External path"
+            let entry = row["entry_name"] as? String ?? row["entry_id"] as? String ?? ""
+            let route = entry.isEmpty ? "Direct saved path" : "Via \(entry)"
+            if let ms = score(row) {
+                let execution = row["execution"] as? String ?? ""
+                lines.append(String(format: "%@ · %@ · %@ · %.2f ms", name, route, execution.capitalized, ms))
+            } else {
+                let state = row["failure"] as? String ?? row["status"] as? String ?? "Not measured"
+                lines.append("\(name) · \(route) · \(state)")
+            }
+        }
+        return lines.joined(separator: "\n")
+    }
+    static func state(_ value: [String: Any]) -> String {
+        let stage = value["stage"] as? String ?? "Working"
+        let progress = value["progress"] as? String ?? ""
+        var text = stage.replacingOccurrences(of: "-", with: " ").capitalized
+        if !progress.isEmpty { text += " · \(progress)" }
+        if value["complete"] as? Bool == true {
+            if value["committed"] as? Bool == true { text += value["stage"] as? String == "connected" ? "\nThe freshly proved winner is connected and selected." : "\nThe winner selection was saved. Check the current connection status." }
+            else if value["restored"] as? Bool == true { text += "\nYour original connection state was restored." }
+            else { text += "\nRestoration is unresolved; check the main connection status." }
+            if value["drained"] as? Bool != true { text += "\nCleanup is pending. Retry Cancel." }
+        }
+        for key in ["failure", "warning"] { if let note = value[key] as? String, !note.isEmpty { text += "\n" + note } }
+        return text
+    }
+}
+
+private final class RouterVPNMacExternalComparisonController: NSWindowController, NSWindowDelegate {
+    private let api: ProductAPI
+    private weak var product: ProductWindowController?
+    private let status = NSTextField(wrappingLabelWithString: "Loading saved external paths…")
+    private let detail = NSTextView()
+    private let compare = NSButton(title: "Compare external paths", target: nil, action: nil)
+    private let fastest = NSButton(title: "Compare + connect fastest", target: nil, action: nil)
+    private let cancel = NSButton(title: "Cancel", target: nil, action: nil)
+    private var timer: Timer?
+    private var inflight = false
+    private var requestID = "", cohortID = ""
+    private var choice: Bool?
+    private var started = false, finished = true, cancelWanted = false, cancelAccepted = false, closeWanted = false
+    private(set) var closed = false
+    private var generation: UInt64 = 0
+    private var nextPoll = Date.distantPast
+
+    init(api: ProductAPI, product: ProductWindowController) {
+        self.api = api; self.product = product
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 820, height: 560), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
+        window.title = "Compare external paths"; window.minSize = NSSize(width: 640, height: 440)
+        super.init(window: window); window.delegate = self
+        let stack = NSStackView(); stack.orientation = .vertical; stack.spacing = 12
+        stack.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
+        let title = NSTextField(labelWithString: "Find the fastest saved external path")
+        title.font = .systemFont(ofSize: 22, weight: .bold); stack.addArrangedSubview(title)
+        let note = NSTextField(wrappingLabelWithString: "Each saved path uses its own entry, DNS and protection. Every valid path sends 50 HTTPS responses through its proved exit to the same Cloudflare endpoint. Timing starts after TLS; lowest 10% trimmed mean wins. Router TCP reachability is separate. Compare restores your original connection between trials; connecting the winner requires the explicit second action.")
+        note.textColor = .secondaryLabelColor; stack.addArrangedSubview(note)
+        stack.addArrangedSubview(status)
+        let scroll = NSScrollView(); scroll.hasVerticalScroller = true
+        detail.isEditable = false; detail.isSelectable = true; detail.font = .monospacedSystemFont(ofSize: 12, weight: .regular)
+        scroll.documentView = detail; detail.isVerticallyResizable = true; detail.autoresizingMask = [.width]
+        scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 240).isActive = true; stack.addArrangedSubview(scroll)
+        let row = NSStackView(); row.orientation = .horizontal; row.spacing = 8
+        for button in [compare, fastest, cancel] { button.target = self; button.bezelStyle = .rounded; row.addArrangedSubview(button) }
+        compare.action = #selector(comparePaths); fastest.action = #selector(connectFastest); cancel.action = #selector(cancelComparison)
+        stack.addArrangedSubview(row); window.contentView = stack
+        controls(); timer = Timer.scheduledTimer(withTimeInterval: 0.4, repeats: true) { [weak self] _ in self?.tick() }
+        send("offer", path: "/api/speed-lab/external-comparison")
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    deinit { timer?.invalidate() }
+    private func controls() {
+        compare.isEnabled = !inflight && (!started || finished)
+        fastest.isEnabled = compare.isEnabled
+        cancel.isEnabled = started && !finished
+    }
+    @objc private func comparePaths() { begin(false) }
+    @objc private func connectFastest() { begin(true) }
+    private func begin(_ connect: Bool) {
+        guard !closed, !inflight, !started || finished else { return }
+        generation &+= 1; choice = connect; requestID = ""; cohortID = ""
+        started = false; finished = true; cancelWanted = false; cancelAccepted = false
+        status.stringValue = "Capturing the current saved paths…"
+        send("offer", path: "/api/speed-lab/external-comparison")
+    }
+    @objc private func cancelComparison() {
+        guard started, !finished else { return }
+        cancelWanted = true; cancelAccepted = false
+        status.stringValue = "Cancelling this comparison; waiting for its workers and original-state restoration."
+        tick()
+    }
+    func windowShouldClose(_ sender: NSWindow) -> Bool {
+        if started && !finished { closeWanted = true; cancelComparison(); return false }
+        return true
+    }
+    func windowWillClose(_ notification: Notification) {
+        closed = true; generation &+= 1; timer?.invalidate(); timer = nil
+    }
+    private func tick() {
+        guard !closed, !inflight, started, !finished, Date() >= nextPoll else { return }
+        if cancelWanted && !cancelAccepted {
+            send("cancel", path: "/api/speed-lab/external-comparison/cancel", body: ["request_id": requestID, "cohort_id": cohortID])
+        } else {
+            send("poll", path: "/api/speed-lab/external-comparison?request_id=" + requestID)
+        }
+    }
+    private func send(_ phase: String, path: String, body: [String: Any]? = nil) {
+        guard !closed, !inflight else { return }
+        inflight = true; controls(); let captured = generation
+        let needsIdle = phase == "offer" && choice != nil
+        DispatchQueue.global(qos: .utility).async { [self] in
+            let outcome: Result<[String: Any], Error>
+            do {
+                if needsIdle { try product?.requireMutationIdle("comparing saved external paths") }
+                let data = try api.request(path, method: body == nil ? "GET" : "POST", body: body, timeout: 10)
+                guard let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw NSError(domain: "RouterVPNExternalComparison", code: 1) }
+                outcome = .success(value)
+            } catch { outcome = .failure(error) }
+            DispatchQueue.main.async { [self] in
+                guard !closed, generation == captured else { return }
+                inflight = false; nextPoll = Date().addingTimeInterval(0.6)
+                switch outcome {
+                case .success(let value): receive(value, phase: phase)
+                case .failure(let error):
+                    status.stringValue = "Comparison request failed: \(error.localizedDescription)"
+                    if started && !finished { cancelWanted = true; cancelAccepted = false; status.stringValue += "\nCancellation will be retried; cleanup is not confirmed." }
+                    else { choice = nil }
+                }
+                controls()
+            }
+        }
+    }
+    private func receive(_ value: [String: Any], phase: String) {
+        if phase == "offer" {
+            guard let request = RouterVPNExternalComparisonDisplay.token(value["request_id"], count: 32),
+                  let cohort = RouterVPNExternalComparisonDisplay.token(value["cohort_id"], count: 64),
+                  let candidates = value["candidates"] as? [[String: Any]], !candidates.isEmpty, candidates.count <= 128 else {
+                status.stringValue = "Saved external paths could not be captured. Refresh and try again."; choice = nil; return
+            }
+            requestID = request; cohortID = cohort
+            let history = (value["history"] as? [String: Any])?["rows"] as? [[String: Any]] ?? []
+            detail.string = candidates.map { row in
+                let name = row["name"] as? String ?? row["id"] as? String ?? "External path"
+                let entry = row["has_entry"] as? Bool == true ? row["entry_id"] as? String ?? "saved entry" : "Direct"
+                return "\(name) · \(entry) · \(row["protocol"] as? String ?? "")"
+            }.joined(separator: "\n") + (history.isEmpty ? "" : "\n\n" + RouterVPNExternalComparisonDisplay.rows(history, historical: true))
+            status.stringValue = "\(candidates.count) saved external paths. Choose Compare, or explicitly compare and connect the winner."
+            if let warning = value["warning"] as? String, !warning.isEmpty { status.stringValue += "\n" + warning }
+            if let connect = choice {
+                started = true; finished = false
+                send("start", path: "/api/speed-lab/external-comparison", body: ["request_id": requestID, "cohort_id": cohortID, "connect_fastest": connect])
+            }
+            return
+        }
+        guard RouterVPNExternalComparisonDisplay.matches(value, request: requestID, cohort: cohortID) else {
+            status.stringValue = "A response belongs to another comparison. This result was discarded; cancelling only the captured request."
+            cancelWanted = true; cancelAccepted = false; return
+        }
+        if phase == "cancel" { cancelAccepted = true }
+        status.stringValue = RouterVPNExternalComparisonDisplay.state(value)
+        detail.string = RouterVPNExternalComparisonDisplay.rows(value["rows"] as? [[String: Any]] ?? [], historical: false)
+        finished = value["complete"] as? Bool == true && value["drained"] as? Bool == true
+        if finished {
+            choice = nil; product?.refreshAll(); product?.refreshUnifiedChrome(); product?.refreshUnifiedFastNodeMenu()
+            if closeWanted { window?.performClose(nil) }
+        } else if value["complete"] as? Bool == true && value["drained"] as? Bool != true {
+            cancelWanted = true; cancelAccepted = false
+        }
     }
 }

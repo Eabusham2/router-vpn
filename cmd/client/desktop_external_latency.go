@@ -41,7 +41,14 @@ type desktopLatencySlot struct {
 	cancelled    map[string]desktopLatencyView
 }
 
-type desktopLatencySnapshot = desktopDNSSnapshot
+type desktopLatencySnapshot struct {
+	desktopDNSSnapshot
+	// Only the batch controller can borrow its existing temporary transaction.
+	// Public Retest never manufactures this authority or starts a second lease.
+	temporary *speedLabTemporaryOwner
+	path      speedLabPathIdentity
+	cohort    func() error
+}
 
 type desktopLatencyOperation struct {
 	mu          sync.Mutex
@@ -67,7 +74,8 @@ func (a *app) desktopLatencyFor() *desktopLatencySlot {
 // This public operation deliberately rejects temporary Speed Lab sessions;
 // later batch composition must borrow its own explicit transaction authority.
 func captureDesktopLatencySnapshot(a *app) (desktopLatencySnapshot, error) {
-	return captureDesktopDNSSnapshot(a)
+	snapshot, err := captureDesktopDNSSnapshot(a)
+	return desktopLatencySnapshot{desktopDNSSnapshot: snapshot}, err
 }
 
 func readDesktopLatencyRequest(w http.ResponseWriter, r *http.Request) (desktopLatencyRequest, error) {

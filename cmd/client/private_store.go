@@ -142,22 +142,35 @@ func atomicWritePrivateTargetUnchanged(path string, before os.FileInfo) error {
 }
 
 func atomicWritePrivate(path string, data []byte) error {
+	_, err := atomicWritePrivateChecked(path, data, nil)
+	return err
+}
+
+// A multi-step private transaction can retain its original file capability
+// through both preflight and the final rename. Return the identity of the
+// actual temporary file we published, not whichever path exists afterward.
+func atomicWritePrivateChecked(path string, data []byte, current func() error) (os.FileInfo, error) {
+	if current != nil {
+		if err := current(); err != nil {
+			return nil, err
+		}
+	}
 	if err := validatePrivateParent(path); err != nil {
-		return err
+		return nil, err
 	}
 	parent := filepath.Dir(path)
 	if err := hardenPrivateRegular(path); err != nil {
-		return err
+		return nil, err
 	}
 	var targetBefore os.FileInfo
 	if info, err := os.Lstat(path); err == nil {
 		targetBefore = info
 	} else if !os.IsNotExist(err) {
-		return err
+		return nil, err
 	}
 	tmp, err := os.CreateTemp(parent, "."+filepath.Base(path)+".tmp-*")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tmpPath := tmp.Name()
 	committed := false
@@ -168,25 +181,34 @@ func atomicWritePrivate(path string, data []byte) error {
 		}
 	}()
 	if err := tmp.Chmod(0o600); err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := tmp.Write(data); err != nil {
-		return err
+		return nil, err
 	}
 	if err := tmp.Sync(); err != nil {
-		return err
+		return nil, err
+	}
+	published, err := tmp.Stat()
+	if err != nil {
+		return nil, err
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return nil, err
 	}
 	if err := validatePrivateParent(path); err != nil {
-		return err
+		return nil, err
 	}
 	if err := atomicWritePrivateTargetUnchanged(path, targetBefore); err != nil {
-		return err
+		return nil, err
+	}
+	if current != nil {
+		if err := current(); err != nil {
+			return nil, err
+		}
 	}
 	if err := replacePrivateStoreFile(tmpPath, path); err != nil {
-		return err
+		return nil, err
 	}
 	committed = true
 	// Do not create a post-rename false failure edge. Directory fsync is useful
@@ -195,5 +217,5 @@ func atomicWritePrivate(path string, data []byte) error {
 		_ = dir.Sync()
 		_ = dir.Close()
 	}
-	return nil
+	return published, nil
 }

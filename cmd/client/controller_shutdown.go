@@ -130,6 +130,9 @@ func (a *app) drainControllerOwner() error {
 	if err := finishViaEntryCancellation(a); err != nil {
 		return err
 	}
+	if err := a.finishDesktopExternalComparisonCleanup(); err != nil {
+		return err
+	}
 	if err := a.retireNativeNodeForShutdown(); err != nil {
 		return err
 	}

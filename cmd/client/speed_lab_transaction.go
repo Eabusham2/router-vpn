@@ -23,15 +23,16 @@ import (
 // reconnect. HTTP cancellation retires only the test child; explicit Disconnect
 // cancels intent as well and therefore must never reconnect the previous VPN.
 type speedLabTemporaryOwner struct {
-	intent       context.Context
-	cancelIntent context.CancelFunc
-	test         context.Context
-	cancelTest   context.CancelFunc
-	current      context.Context // protected by app.mu
-	runtime      *exec.Cmd       // protected by app.mu
-	mutated      bool            // protected by app.mu
-	restored     bool            // protected by app.mu
-	network      string
+	intent        context.Context
+	cancelIntent  context.CancelFunc
+	test          context.Context
+	cancelTest    context.CancelFunc
+	current       context.Context // protected by app.mu
+	runtime       *exec.Cmd       // protected by app.mu
+	mutated       bool            // protected by app.mu
+	restored      bool            // protected by app.mu
+	network       string
+	cohortNetwork desktopExternalComparisonNetwork // app.mu; optional batch-only physical event owner
 }
 
 var speedLabTemporaryOwners sync.Map // map[*app]*speedLabTemporaryOwner
@@ -437,6 +438,13 @@ func (a *app) speedLabStopRuntime(hold bool) error {
 }
 
 func (a *app) speedLabSuspendPrevious(snapshot speedLabTemporarySnapshot, systemDirect bool) error {
+	return a.speedLabSuspendPreviousWith(snapshot, systemDirect, a.speedLabStopRuntime)
+}
+
+func (a *app) speedLabSuspendPreviousWith(snapshot speedLabTemporarySnapshot, systemDirect bool, stop func(bool) error) error {
+	if stop == nil {
+		return errors.New("temporary Speed Lab has no captured runtime stop operation")
+	}
 	if err := a.speedLabCheckOwner(snapshot.Owner); err != nil {
 		return err
 	}
@@ -448,7 +456,7 @@ func (a *app) speedLabSuspendPrevious(snapshot speedLabTemporarySnapshot, system
 	a.mu.Unlock()
 	// Choosing a system-direct test explicitly permits its temporary unprotected
 	// Internet path. Other temporary VPN transitions retain fail-closed policy.
-	return a.speedLabStopRuntime(!systemDirect)
+	return stop(!systemDirect)
 }
 
 func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (speedLabRestorePlan, error) {
@@ -627,6 +635,9 @@ type speedLabRestoreActions struct {
 	restart func(speedLabRestorePlan) error
 	persist func(common.RouterProfileStore) error
 	network func() string
+	// Optional batch continuation captures the terminal restored owner inside
+	// this operation, before its restoration context is cancelled on return.
+	restored func(*exec.Cmd, state) error
 }
 
 func (a *app) speedLabRestoreWith(snapshot speedLabTemporarySnapshot, actions speedLabRestoreActions) error {
@@ -670,10 +681,15 @@ func (a *app) speedLabRestoreWith(snapshot speedLabTemporarySnapshot, actions sp
 	}
 	if !snapshot.State.Connected || owner.intent.Err() != nil {
 		a.mu.Lock()
-		if a.speedLabOwnerCurrentLocked(owner) && a.cmd == nil {
+		st := a.state
+		settled := a.speedLabOwnerCurrentLocked(owner) && a.cmd == nil
+		if settled {
 			owner.restored = true
 		}
 		a.mu.Unlock()
+		if settled && actions.restored != nil {
+			return actions.restored(nil, st)
+		}
 		return nil
 	}
 	if owner.network == "" || actions.network() != owner.network {
@@ -735,10 +751,18 @@ func (a *app) speedLabRestoreWith(snapshot speedLabTemporarySnapshot, actions sp
 		return a.speedLabRestoreFailed(owner, "previous VPN could not be restored", errors.Join(err, cleanupErr))
 	}
 	a.mu.Lock()
-	if a.speedLabOwnerCurrentLocked(owner) && a.cmd == owner.runtime {
+	settled := a.speedLabOwnerCurrentLocked(owner) && a.cmd == owner.runtime
+	command, restoredState := a.cmd, a.state
+	if settled {
 		owner.restored = true
 	}
 	a.mu.Unlock()
+	if !settled {
+		return errors.New("Speed Lab restored owner changed before terminal capture")
+	}
+	if actions.restored != nil {
+		return actions.restored(command, restoredState)
+	}
 	return nil
 }
 

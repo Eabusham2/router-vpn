@@ -262,6 +262,9 @@ func (d *desktopTorComparisonDriver) OpenTarget(ctx context.Context, candidate r
 	if _, err := a.waitDesktopTorProof(ctx, launch); err != nil {
 		return session, err
 	}
+	if err := a.recordDesktopComparisonTransient(ctx, launch); err != nil {
+		return session, err
+	}
 	if err := check(); err != nil {
 		return session, err
 	}

@@ -69,7 +69,8 @@ function TickUnifiedMapAnimation{if($null -eq $script:UnifiedRoutePacket -or $nu
 $script:UnifiedTelemetrySync=$false
 $script:UnifiedForwardSync=$false
 function ApplyUnifiedFastestStore($Store){
- $Values=New-Object System.Collections.ArrayList;[void]$Values.Add([pscustomobject]@{id='fastest';display='⚡ Fastest'})
+ $Values=New-Object System.Collections.ArrayList;[void]$Values.Add([pscustomobject]@{id='fastest';display='⚡ Fastest Router · TCP'})
+ [void]$Values.Add([pscustomobject]@{id='external-comparison';display='External paths · 50 responses…'})
  $Routers=@($Store.profiles|Where-Object{(([string]$_.node_kind).ToLowerInvariant() -ne 'external')}|Sort-Object @{Expression={if([double]$_.latency_trimmed_mean_ms -gt 0){[double]$_.latency_trimmed_mean_ms}else{[double]::PositiveInfinity}}},name)
  foreach($P in $Routers){$Ms=[double]$P.latency_trimmed_mean_ms;$Label=if($Ms -gt 0){'{0}  {1:N1} ms'-f [string]$P.name,$Ms}else{[string]$P.name};[void]$Values.Add([pscustomobject]@{id=[string]$P.id;display=$Label})}
  $Preferred=[string]$Store.selected_id;$Known=@($Values|Where-Object{[string]$_.id -eq $Preferred}).Count -gt 0;if(-not $Preferred -or -not $Known){$Preferred='fastest'}
@@ -139,9 +140,95 @@ function ToggleUnifiedForwardingMaster{
  [void](StartUnifiedApiAsync 'Updating forwarding…' '/api/forwarding/master' 'PUT' @{enabled=$Want} 10 $Success {param($E)Log ('Forwarding master failed: '+$E)} {RefreshUnifiedTelemetry})
 }
 function RefreshUnifiedTelemetry{StartUnifiedTelemetryRefresh}
+function ExternalComparisonValue($Object,[string]$Name){
+ if($null-eq$Object){return $null};if($Object -is [System.Collections.IDictionary]){return $Object[$Name]};$P=$Object.PSObject.Properties[$Name];if($null-eq$P){return $null};return $P.Value
+}
+function ExternalComparisonToken($Value,[int]$Length){$Text=[string]$Value;return $Text.Length-eq$Length-and$Text-cmatch'\A[0-9a-f]+\z'}
+function ExternalComparisonMatches($Value,[string]$Request,[string]$Cohort){return (ExternalComparisonToken (ExternalComparisonValue $Value 'request_id') 32)-and(ExternalComparisonToken (ExternalComparisonValue $Value 'cohort_id') 64)-and([string](ExternalComparisonValue $Value 'request_id')-ceq$Request)-and([string](ExternalComparisonValue $Value 'cohort_id')-ceq$Cohort)}
+function ExternalComparisonScore($Row){
+ if([string](ExternalComparisonValue $Row 'status')-cne'complete'){return $null};$B=ExternalComparisonValue $Row 'benchmark';$D=ExternalComparisonValue $B 'distribution'
+ if($null-eq$B-or$null-eq$D-or([int](ExternalComparisonValue $B 'schema'))-ne1-or([string](ExternalComparisonValue $B 'measurement'))-cne'routed-https-response-after-tls'-or([string](ExternalComparisonValue $B 'endpoint'))-cne'https://speed.cloudflare.com/__down?bytes=1'-or([int](ExternalComparisonValue $B 'attempts'))-ne50-or([int](ExternalComparisonValue $B 'failed'))-ne0-or([int](ExternalComparisonValue $D 'samples'))-ne50){return $null}
+ try{$Score=[double](ExternalComparisonValue $B 'trimmed_mean_ms')}catch{return $null};if([double]::IsNaN($Score)-or[double]::IsInfinity($Score)-or$Score-le0){return $null};return $Score
+}
+function ExternalComparisonRows($Rows,[bool]$Historical){
+ $Lines=New-Object System.Collections.Generic.List[string];$Heading=if($Historical){'Saved history — these values are not a current winner.'}else{'50 routed HTTPS responses · 10% trimmed mean'};$Lines.Add($Heading)
+ foreach($Row in @($Rows)){
+  if($null-eq$Row){continue};$Name=[string](ExternalComparisonValue $Row 'name');if(-not$Name){$Name=[string](ExternalComparisonValue $Row 'id')};$Entry=[string](ExternalComparisonValue $Row 'entry_name');if(-not$Entry){$Entry=[string](ExternalComparisonValue $Row 'entry_id')};$Route=if($Entry){'Via '+$Entry}else{'Direct saved path'};$Score=ExternalComparisonScore $Row
+  if($null-ne$Score){$Lines.Add(('{0} · {1} · {2} · {3:N2} ms'-f$Name,$Route,[string](ExternalComparisonValue $Row 'execution'),$Score))}else{$State=[string](ExternalComparisonValue $Row 'failure');if(-not$State){$State=[string](ExternalComparisonValue $Row 'status')};$Lines.Add($Name+' · '+$Route+' · '+$State)}
+ }
+ return ($Lines-join"`n")
+}
+function ExternalComparisonState($Value){
+ $Text=([string](ExternalComparisonValue $Value 'stage')).Replace('-',' ');$Progress=[string](ExternalComparisonValue $Value 'progress');if($Progress){$Text+=' · '+$Progress}
+ if([bool](ExternalComparisonValue $Value 'complete')){if([bool](ExternalComparisonValue $Value 'committed')){if([string](ExternalComparisonValue $Value 'stage')-ceq'connected'){$Text+="`nThe freshly proved winner is connected and selected."}else{$Text+="`nThe winner selection was saved. Check the current connection status."}}elseif([bool](ExternalComparisonValue $Value 'restored')){$Text+="`nYour original connection state was restored."}else{$Text+="`nRestoration is unresolved; check the main connection status."};if(-not[bool](ExternalComparisonValue $Value 'drained')){$Text+="`nCleanup is pending. Retry Cancel."}}
+ foreach($Key in @('failure','warning')){$Note=[string](ExternalComparisonValue $Value $Key);if($Note){$Text+="`n"+$Note}};return $Text
+}
+function SetExternalComparisonControls($S){$Idle=$null-eq$S.Task-and(-not$S.Started-or$S.Finished);$S.Compare.IsEnabled=$Idle;$S.Fastest.IsEnabled=$Idle;$S.Cancel.IsEnabled=$S.Started-and-not$S.Finished}
+function StartExternalComparisonRequest($S,[string]$Phase,[string]$Path,$Body=$null){
+ if($S.Closed-or$null-ne$S.Task){return}
+ $S.Phase=$Phase;$S.Request=$null;$S.Cts=$null
+ try{
+  $Verb=if($null-eq$Body){[System.Net.Http.HttpMethod]::Get}else{[System.Net.Http.HttpMethod]::Post}
+  $S.Request=[System.Net.Http.HttpRequestMessage]::new($Verb,([string]$BaseUrl).TrimEnd('/')+$Path);Set-RouterVPNControllerRequestTimeout $S.Request 10000
+  if($null-ne$Body){$S.Request.Content=[System.Net.Http.StringContent]::new(($Body|ConvertTo-Json -Depth 6 -Compress),[System.Text.Encoding]::UTF8,'application/json')}
+  $S.Cts=[System.Threading.CancellationTokenSource]::new();$S.Cts.CancelAfter([TimeSpan]::FromSeconds(10));$S.Task=$S.Client.SendAsync($S.Request,$S.Cts.Token)
+ }catch{
+  if($null-ne$S.Request){$S.Request.Dispose()};if($null-ne$S.Cts){$S.Cts.Dispose()};$S.Request=$null;$S.Cts=$null;$S.Task=$null
+  $S.Status.Text='Comparison request failed: '+$_.Exception.Message;if($S.Started-and-not$S.Finished){$S.CancelWanted=$true;$S.CancelAccepted=$false};$S.Next=[DateTime]::UtcNow.AddSeconds(1)
+ }
+ SetExternalComparisonControls $S
+}
+function ReceiveExternalComparison($S,$Value,[string]$Phase){
+ if($Phase-ceq'offer'){
+  $Request=[string](ExternalComparisonValue $Value 'request_id');$Cohort=[string](ExternalComparisonValue $Value 'cohort_id');$Candidates=@((ExternalComparisonValue $Value 'candidates')|Where-Object{$null-ne$_})
+  if(-not(ExternalComparisonToken $Request 32)-or-not(ExternalComparisonToken $Cohort 64)-or$Candidates.Count-lt1-or$Candidates.Count-gt128){$S.Status.Text='Saved external paths could not be captured. Refresh and try again.';$S.Choice=$null;return}
+  $S.RequestID=$Request;$S.CohortID=$Cohort;$Lines=@();foreach($Row in $Candidates){$Entry=if([bool](ExternalComparisonValue $Row 'has_entry')){[string](ExternalComparisonValue $Row 'entry_id')}else{'Direct'};$Lines+=([string](ExternalComparisonValue $Row 'name')+' · '+$Entry+' · '+[string](ExternalComparisonValue $Row 'protocol'))};$S.Result.Text=$Lines-join"`n"
+  $History=ExternalComparisonValue (ExternalComparisonValue $Value 'history') 'rows';if(@($History).Count-gt0){$S.Result.Text+="`n`n"+(ExternalComparisonRows $History $true)}
+  $S.Status.Text=([string]$Candidates.Count)+' saved external paths. Compare, or explicitly compare and connect the winner.';$Warning=[string](ExternalComparisonValue $Value 'warning');if($Warning){$S.Status.Text+="`n"+$Warning}
+  if($null-ne$S.Choice-and-not$S.CloseWanted){$S.Started=$true;$S.Finished=$false;StartExternalComparisonRequest $S 'start' '/api/speed-lab/external-comparison' @{request_id=$S.RequestID;cohort_id=$S.CohortID;connect_fastest=[bool]$S.Choice}}
+  return
+ }
+ if(-not(ExternalComparisonMatches $Value $S.RequestID $S.CohortID)){$S.Status.Text='A response belongs to another comparison. Result discarded; cancelling only the captured request.';$S.CancelWanted=$true;$S.CancelAccepted=$false;return}
+ if($Phase-ceq'cancel'){$S.CancelAccepted=$true}
+ $S.Status.Text=ExternalComparisonState $Value;$S.Result.Text=ExternalComparisonRows (ExternalComparisonValue $Value 'rows') $false
+ $S.Finished=[bool](ExternalComparisonValue $Value 'complete')-and[bool](ExternalComparisonValue $Value 'drained')
+ if($S.Finished){$S.Choice=$null;RefreshProduct;RefreshUnifiedTelemetry}elseif([bool](ExternalComparisonValue $Value 'complete')){$S.CancelWanted=$true;$S.CancelAccepted=$false}
+}
+function TickExternalComparison($S){
+ if($S.Closed){return}
+ if($null-ne$S.Task-and$S.Task.IsCompleted){
+  $Value=$null;$Failure='';$Phase=$S.Phase;$Resp=$null
+  try{$Resp=$S.Task.GetAwaiter().GetResult();$Text=$Resp.Content.ReadAsStringAsync().GetAwaiter().GetResult();if(-not$Resp.IsSuccessStatusCode){throw ('HTTP '+[int]$Resp.StatusCode+' '+$Text)};$Value=$Text|ConvertFrom-Json}catch{$Failure=$_.Exception.Message}
+  finally{if($null-ne$Resp){$Resp.Dispose()};if($null-ne$S.Request){$S.Request.Dispose()};if($null-ne$S.Cts){$S.Cts.Dispose()};$S.Task=$null;$S.Request=$null;$S.Cts=$null}
+  $S.Next=[DateTime]::UtcNow.AddMilliseconds(650)
+  if($Failure){$S.Status.Text='Comparison request failed: '+$Failure;if($S.Started-and-not$S.Finished){$S.CancelWanted=$true;$S.CancelAccepted=$false;$S.Status.Text+="`nCancellation will be retried; cleanup is not confirmed."}else{$S.Choice=$null}}else{ReceiveExternalComparison $S $Value $Phase}
+ }
+ if($S.CloseWanted-and$null-eq$S.Task-and(-not$S.Started-or$S.Finished)){$S.AllowClose=$true;$S.Dialog.Close();return}
+ if($null-eq$S.Task-and$S.Started-and-not$S.Finished-and[DateTime]::UtcNow-ge$S.Next){
+  if($S.CancelWanted-and-not$S.CancelAccepted){StartExternalComparisonRequest $S 'cancel' '/api/speed-lab/external-comparison/cancel' @{request_id=$S.RequestID;cohort_id=$S.CohortID}}else{StartExternalComparisonRequest $S 'poll' ('/api/speed-lab/external-comparison?request_id='+$S.RequestID)}
+ }
+ SetExternalComparisonControls $S
+}
+function ShowExternalComparison{
+ if($null-ne(Get-Variable RouterVPNExternalComparison -Scope Script -ErrorAction SilentlyContinue)-and$null-ne$script:RouterVPNExternalComparison-and-not$script:RouterVPNExternalComparison.Closed){[void]$script:RouterVPNExternalComparison.Dialog.Activate();return}
+ [xml]$X=@"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Compare external paths" Width="850" Height="570" MinWidth="660" MinHeight="440" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Text="Find the fastest saved external path" FontSize="23" FontWeight="Bold"/><TextBlock Grid.Row="1" Margin="0,10" TextWrapping="Wrap" Foreground="#A8B6D5" Text="Each saved path keeps its own entry, DNS and protection. Every valid path sends 50 HTTPS responses through its proved exit to the same Cloudflare endpoint. Timing starts after TLS; lowest 10% trimmed mean wins. Router TCP reachability is separate. Compare restores your original connection between trials; connecting the winner requires the explicit second action."/><TextBlock Name="Status" Grid.Row="2" Margin="0,4,0,10" TextWrapping="Wrap" Text="Loading saved external paths…"/><TextBox Name="Result" Grid.Row="3" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" Background="#101A2B" Foreground="#E8ECF8" Padding="10"/><WrapPanel Grid.Row="4" Margin="0,12,0,0"><Button Name="Compare" Content="Compare external paths" Margin="4" Padding="10,6"/><Button Name="Fastest" Content="Compare + connect fastest" Margin="4" Padding="10,6"/><Button Name="Cancel" Content="Cancel" Margin="4" Padding="10,6"/><Button Name="Close" Content="Close" Margin="4" Padding="10,6"/></WrapPanel></Grid></Window>
+"@
+ $Reader=New-Object System.Xml.XmlNodeReader $X;$D=[Windows.Markup.XamlReader]::Load($Reader);$D.Owner=$Window
+ $S=@{Dialog=$D;Status=$D.FindName('Status');Result=$D.FindName('Result');Compare=$D.FindName('Compare');Fastest=$D.FindName('Fastest');Cancel=$D.FindName('Cancel');Client=(New-RouterVPNControllerClient -TimeoutMilliseconds 10000 -ResponseLimit 2097152);Task=$null;Request=$null;Cts=$null;Phase='';Choice=$null;RequestID='';CohortID='';Started=$false;Finished=$true;CancelWanted=$false;CancelAccepted=$false;CloseWanted=$false;AllowClose=$false;Closed=$false;Next=[DateTime]::UtcNow;Timer=(New-Object Windows.Threading.DispatcherTimer)}
+ $S.Client.Timeout=[System.Threading.Timeout]::InfiniteTimeSpan;$script:RouterVPNExternalComparison=$S
+ $Begin={param([bool]$Connect)if($null-ne$S.Task-or($S.Started-and-not$S.Finished)){return};try{Assert-RouterVPNMutationIdle 'comparing saved external paths'}catch{$S.Status.Text=$_.Exception.Message;return};$S.Choice=$Connect;$S.Started=$false;$S.Finished=$true;$S.CancelWanted=$false;$S.CancelAccepted=$false;$S.Status.Text='Capturing current saved paths…';StartExternalComparisonRequest $S 'offer' '/api/speed-lab/external-comparison'}.GetNewClosure()
+ $S.Compare.Add_Click({&$Begin $false}.GetNewClosure());$S.Fastest.Add_Click({&$Begin $true}.GetNewClosure())
+ $S.Cancel.Add_Click({$S.CancelWanted=$true;$S.CancelAccepted=$false;$S.Status.Text='Cancelling this comparison; waiting for workers and original-state restoration.';TickExternalComparison $S}.GetNewClosure())
+ $D.FindName('Close').Add_Click({$S.Dialog.Close()}.GetNewClosure())
+ $D.Add_Closing({param($sender,$e)if($S.AllowClose){return};if($null-ne$S.Task-or($S.Started-and-not$S.Finished)){$e.Cancel=$true;$S.CloseWanted=$true;$S.CancelWanted=$true;$S.CancelAccepted=$false;if(-not$S.Started-and$null-ne$S.Cts){$S.Cts.Cancel()};$S.Status.Text='Closing after this comparison drains and restoration finishes.'}}.GetNewClosure())
+ $D.Add_Closed({$S.Closed=$true;$S.Timer.Stop();if($null-ne$S.Cts){$S.Cts.Cancel();$S.Cts.Dispose()};if($null-ne$S.Request){$S.Request.Dispose()};$S.Client.Dispose()}.GetNewClosure())
+ $S.Timer.Interval=[TimeSpan]::FromMilliseconds(200);$S.Timer.Add_Tick({TickExternalComparison $S}.GetNewClosure());$S.Timer.Start();StartExternalComparisonRequest $S 'offer' '/api/speed-lab/external-comparison';$D.Show()
+}
+
 function ShowUnifiedPerformance{
  [xml]$PX=@"
-<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Router VPN Performance" Width="760" Height="470" MinWidth="600" MinHeight="380" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="20"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Text="Latency &amp; path performance" FontSize="23" FontWeight="Bold"/><TextBlock Grid.Row="1" Margin="0,8,0,12" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Live RTT uses the current private tunnel. Real path speed transfers authenticated bounded data to the active exit. Routed hop speed independently transfers to the selected entry and exit private agents through the active multihop graph; unreachable hops report their real error. Auto MTU is a separate optimizer."/><TextBox Name="Result" Grid.Row="2" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" Background="#101A2B" Foreground="#E8ECF8" Padding="10"/><WrapPanel Grid.Row="3" Margin="0,12,0,0"><Button Name="Live" Content="Live path RTT" Margin="4" Padding="11,6"/><Button Name="Durable" Content="50-sample selected node" Margin="4" Padding="11,6"/><Button Name="Speed" Content="Real path speed" Margin="4" Padding="11,6"/><Button Name="HopSpeed" Content="Routed hop speeds" Margin="4" Padding="11,6"/><Button Name="Mtu" Content="Throughput + Auto MTU" Margin="4" Padding="11,6"/><Button Name="Close" Content="Close" Margin="4" Padding="11,6"/></WrapPanel></Grid></Window>
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Router VPN Performance" Width="760" Height="470" MinWidth="600" MinHeight="380" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><Grid Margin="20"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Text="Latency &amp; path performance" FontSize="23" FontWeight="Bold"/><TextBlock Grid.Row="1" Margin="0,8,0,12" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Live RTT uses the current private tunnel. Real path speed transfers authenticated bounded data to the active exit. Routed hop speed independently transfers to the selected entry and exit private agents through the active multihop graph; unreachable hops report their real error. Auto MTU is a separate optimizer."/><TextBox Name="Result" Grid.Row="2" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" Background="#101A2B" Foreground="#E8ECF8" Padding="10"/><WrapPanel Grid.Row="3" Margin="0,12,0,0"><Button Name="Live" Content="Live path RTT" Margin="4" Padding="11,6"/><Button Name="Durable" Content="50-sample selected node" Margin="4" Padding="11,6"/><Button Name="Speed" Content="Real path speed" Margin="4" Padding="11,6"/><Button Name="HopSpeed" Content="Routed hop speeds" Margin="4" Padding="11,6"/><Button Name="Mtu" Content="Throughput + Auto MTU" Margin="4" Padding="11,6"/><Button Name="External" Content="Compare external / connect fastest" Margin="4" Padding="11,6"/><Button Name="Close" Content="Close" Margin="4" Padding="11,6"/></WrapPanel></Grid></Window>
 "@
  $Reader=New-Object System.Xml.XmlNodeReader $PX;$D=[Windows.Markup.XamlReader]::Load($Reader);$D.Owner=$Window;$Result=$D.FindName('Result');$D.Tag=$null
  $Buttons=@($D.FindName('Live'),$D.FindName('Durable'),$D.FindName('Speed'),$D.FindName('HopSpeed'),$D.FindName('Mtu'))
@@ -158,6 +245,7 @@ function ShowUnifiedPerformance{
  $D.FindName('Speed').Add_Click({&$RunPerf 'Testing real path speed…' '/api/connection/speed-test' @{bytes=8388608} 45 8 $false})
  $D.FindName('HopSpeed').Add_Click({try{$Entry=[string]$MultihopEntryCombo.SelectedValue;$Exit=[string]$MultihopExitCombo.SelectedValue;if(-not$Entry-or-not$Exit-or$Entry-eq$Exit){throw 'Choose different multihop entry and exit nodes first.'};&$RunPerf 'Testing routed hop speeds…' '/api/multihop/speed-test' @{entry_id=$Entry;exit_id=$Exit;bytes=4194304} 70 10 $false}catch{$Result.Text=$_.Exception.Message}})
  $D.FindName('Mtu').Add_Click({Show-RouterVPNMTUDialog -BaseUrl $BaseUrl -Owner $D})
+ $D.FindName('External').Add_Click({$D.Close();ShowExternalComparison})
  $D.FindName('Close').Add_Click({if([string]$D.Tag-eq'owned'-and(UnifiedAsyncBusy)){[void](CancelUnifiedApiAsync $false)};$D.Close()})
  [void]$D.ShowDialog()
 }
@@ -166,6 +254,7 @@ function ShowUnifiedPerformance{
  try{
   Assert-RouterVPNMutationIdle 'selecting a Router VPN node'
   if(UnifiedAsyncBusy){throw 'Another Router VPN action is still running.'}
+  if($ID-eq'external-comparison'){ShowExternalComparison;return}
   if($ID-eq'fastest'){
    [void](StartUnifiedApiAsync 'Selecting fastest node…' '/api/profile/fastest' 'POST' @{samples=5;select=$true} 40 {param($R)Log 'Selected the fastest measured Router VPN node.'} {param($E)Log ('Fastest selection failed: '+$E)} {RefreshProduct;RefreshUnifiedTelemetry})
   }else{
