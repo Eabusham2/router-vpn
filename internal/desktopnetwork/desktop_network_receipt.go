@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/netip"
 	"sort"
 	"strings"
@@ -156,21 +157,24 @@ func DesktopDarwinDerivedRoute(object DesktopNetworkObject, parents []DesktopNet
 	if object.Flags&wasCloned == 0 {
 		return false, nil
 	}
-	bad := errors.New("Darwin cloned route has no unique exact captured parent")
 	if object.Validate("darwin") != nil || object.Flags&host == 0 || object.Flags&forbidden != 0 {
-		return false, bad
+		return false, desktopDarwinCloneFailure("object-shape", object, parents, -1, 0)
 	}
 	destination, err := netip.ParsePrefix(object.Destination)
 	if err != nil || destination.Bits() != destination.Addr().BitLen() {
-		return false, bad
+		return false, desktopDarwinCloneFailure("host-prefix", object, parents, -1, 0)
 	}
 	best, count := -1, 0
-	// Scope and gateway semantics survive cloning. The cache-only HOST,
-	// WASCLONED and LLINFO flags and parent CLONING/PRCLONING/STATIC do not.
-	const copied = uint32(0x2 | 0x4000 | 0x8000 | 0x40000 | 0x1000000)
+	// Gateway and protocol semantics survive cloning. XNU RTM_RESOLVE derives
+	// interface scope from the original parent rather than copying that bit.
+	// The cache-only HOST/WASCLONED/LLINFO and parent CLONING/PRCLONING/STATIC
+	// flags are not equivalent. An unproved PROTO3 idle-cache change remains
+	// rejected: this capture has no native reference count or expiry proof.
+	const copied = uint32(0x2 | 0x4000 | 0x8000 | 0x40000)
 	for _, parent := range parents {
 		if parent.Flags&wasCloned != 0 || parent.Validate("darwin") != nil || parent.Family != object.Family || parent.Index != object.Index ||
-			parent.Gateway != object.Gateway || parent.Flags&copied != object.Flags&copied || parent.Flags&(0x8|0x10|0x20|0x1000) != 0 {
+			parent.Gateway != object.Gateway || parent.Flags&copied != object.Flags&copied || parent.Flags&(0x8|0x10|0x20|0x1000|0x8000000) != 0 ||
+			parent.Flags&(0x100|0x10000) == 0 || !desktopDarwinCloneScopeMatches(object, parent, destination.Addr()) {
 			continue
 		}
 		prefix, err := netip.ParsePrefix(parent.Destination)
@@ -184,7 +188,51 @@ func DesktopDarwinDerivedRoute(object DesktopNetworkObject, parents []DesktopNet
 		}
 	}
 	if count != 1 {
-		return false, bad
+		return false, desktopDarwinCloneFailure("unique-parent", object, parents, best, count)
 	}
 	return true, nil
+}
+
+// XNU route.c RTM_RESOLVE sets IFSCOPE for ordinary IPv4/IPv6 clones using
+// the parent's existing scope or its original interface. IPv4 link-local
+// clones instead clear IFSCOPE and acquire NOIFREF. Proxy parents are refused
+// by the caller, and the original interface index must still match exactly.
+// This compares the derived bits without rewriting any observed route bytes.
+func desktopDarwinCloneScopeMatches(object, parent DesktopNetworkObject, destination netip.Addr) bool {
+	const ifscope, noifref = uint32(0x1000000), uint32(0x2000)
+	expected := parent.Flags&(ifscope|noifref) | ifscope
+	if destination.Is4() && destination.IsLinkLocalUnicast() {
+		expected = noifref
+	}
+	return object.Flags&(ifscope|noifref) == expected
+}
+
+// Failure-only, bounded numeric readback. In particular, neither private
+// addresses/gateways nor arbitrary native/decoder errors enter this text.
+// Unsupported cache states keep their original failure; diagnostics do not
+// retry a snapshot, add a parent or authorize a routing mutation.
+func desktopDarwinCloneFailure(stage string, object DesktopNetworkObject, parents []DesktopNetworkObject, best, matches int) error {
+	const copied = uint32(0x2 | 0x4000 | 0x8000 | 0x40000)
+	destination, _ := netip.ParsePrefix(object.Destination)
+	rows := make([]string, 0, 8)
+	candidates := 0
+	for _, parent := range parents[:min(len(parents), 32768)] {
+		prefix, err := netip.ParsePrefix(parent.Destination)
+		if err != nil || parent.Validate("darwin") != nil || parent.Flags&0x20000 != 0 || parent.Family != object.Family ||
+			!destination.IsValid() || !prefix.Contains(destination.Addr()) {
+			continue
+		}
+		candidates++
+		if len(rows) == cap(rows) {
+			continue
+		}
+		rows = append(rows, fmt.Sprintf("{index=%d prefix=%d flags=%#x same_index=%t gateway_equal=%t copied_equal=%t proto3_equal=%t scope_equal=%t cloning=%t policy_safe=%t}",
+			parent.Index, prefix.Bits(), parent.Flags, parent.Index == object.Index, parent.Gateway == object.Gateway,
+			parent.Flags&copied == object.Flags&copied, parent.Flags&0x40000 == object.Flags&0x40000,
+			desktopDarwinCloneScopeMatches(object, parent, destination.Addr()), parent.Flags&(0x100|0x10000) != 0,
+			parent.Flags&(0x8|0x10|0x20|0x1000|0x8000000) == 0))
+	}
+	return fmt.Errorf("Darwin cloned route has no unique exact captured parent (reason=%s family=%d index=%d flags=%#x prefix=%d ipv4_link_local=%t mtu=%d priority=%d parents=%d best=%d matches=%d candidates=%d shown=%d inventory_truncated=%t rows=[%s])",
+		stage, object.Family, object.Index, object.Flags, destination.Bits(), destination.Addr().Is4() && destination.Addr().IsLinkLocalUnicast(), object.MTU, object.Priority, len(parents), best, matches,
+		candidates, len(rows), len(parents) > 32768, strings.Join(rows, ","))
 }

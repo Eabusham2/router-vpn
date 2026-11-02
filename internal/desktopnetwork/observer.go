@@ -176,13 +176,14 @@ func (t *Tracker) observe(event Event, err error) {
 		if t.current != nil {
 			parents = append(parents, t.current.Objects...)
 		}
-		if proved, err := DesktopDarwinDerivedRoute(event.Object, parents); proved && err == nil {
+		proved, derivedErr := DesktopDarwinDerivedRoute(event.Object, parents)
+		if proved && derivedErr == nil {
 			return
 		}
 		// A newly created native parent may not have reached proof yet. Keep
 		// the full event until that exact owner's receipt is supplied.
 		if !t.transition && !t.initializing {
-			t.failLocked(errors.New("Darwin route cache event has no captured parent"))
+			t.failLocked(fmt.Errorf("Darwin route cache event has no captured parent: %w", derivedErr))
 			return
 		}
 		if len(t.events) >= 8192 {
@@ -425,10 +426,11 @@ func (t *Tracker) End(ctx context.Context, current *DesktopNetworkReceipt) (resu
 					unique = append(unique, parent)
 				}
 			}
-			if proved, err := DesktopDarwinDerivedRoute(event.Object, unique); proved && err == nil {
+			proved, derivedErr := DesktopDarwinDerivedRoute(event.Object, unique)
+			if proved && derivedErr == nil {
 				continue
 			}
-			return t.failLocked(errors.New("Darwin transition route cache has no exact captured parent"))
+			return t.failLocked(fmt.Errorf("Darwin transition route cache has no exact captured parent: %w", derivedErr))
 		}
 		owned := event.Action != "add" && eventOwnedBy(event, t.old) || event.Action != "delete" && eventOwnedBy(event, current)
 		// NEWLINK is also the kernel update notification while an old TUN is

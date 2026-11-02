@@ -4,15 +4,110 @@ package desktopnetwork
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"net"
+	"net/netip"
 	"os"
 	"reflect"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
+
+func darwinCloneNativeObject(t *testing.T, object DesktopNetworkObject) (DesktopNetworkObject, []byte) {
+	t.Helper()
+	prefix, err := netip.ParsePrefix(object.Destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := func(value []byte) []byte {
+		if object.Family == 4 {
+			wire := make([]byte, syscall.SizeofSockaddrInet4)
+			wire[0], wire[1] = byte(len(wire)), syscall.AF_INET
+			copy(wire[4:8], value)
+			return wire
+		}
+		wire := make([]byte, syscall.SizeofSockaddrInet6)
+		wire[0], wire[1] = byte(len(wire)), syscall.AF_INET6
+		copy(wire[8:24], value)
+		return wire
+	}
+	data := address(prefix.Addr().AsSlice())
+	addrs := int32(syscall.RTA_DST)
+	if object.Gateway != "" {
+		gateway, err := netip.ParseAddr(object.Gateway)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = append(data, address(gateway.AsSlice())...)
+		addrs |= syscall.RTA_GATEWAY
+	}
+	if object.Flags&syscall.RTF_HOST == 0 {
+		data = append(data, address(net.CIDRMask(prefix.Bits(), prefix.Addr().BitLen()))...)
+		addrs |= syscall.RTA_NETMASK
+	}
+	header := syscall.RtMsghdr{Msglen: uint16(syscall.SizeofRtMsghdr + len(data)), Version: syscall.RTM_VERSION,
+		Type: syscall.RTM_GET, Index: uint16(object.Index), Addrs: addrs, Flags: int32(object.Flags) | syscall.RTF_UP | syscall.RTF_DONE,
+		Rmx: syscall.RtMetrics{Mtu: object.MTU, Hopcount: object.Priority}}
+	var wire bytes.Buffer
+	if err := binary.Write(&wire, binary.LittleEndian, header); err != nil {
+		t.Fatal(err)
+	}
+	wire.Write(data)
+	raw := wire.Bytes()
+	original := append([]byte(nil), raw...)
+	messages, err := darwinMessages(raw)
+	if err != nil || len(messages) != 1 {
+		t.Fatal("native clone fixture did not decode one complete route", err)
+	}
+	route, ok := messages[0].(*syscall.RouteMessage)
+	if !ok {
+		t.Fatal("native clone fixture changed its message type")
+	}
+	actual, err := ParseDesktopDarwinNetworkObject(route)
+	if err != nil || actual != object || !bytes.Equal(raw, original) {
+		t.Fatal("native clone decoding changed its original route identity", actual, err)
+	}
+	return actual, original
+}
+
+func TestDarwinCloneNativeScopeProjectionAndFailure(t *testing.T) {
+	for _, family := range []int{4, 6} {
+		t.Run(fmt.Sprint(family), func(t *testing.T) {
+			parent, clone := darwinCloneScopeFixture(family)
+			parent, parentWire := darwinCloneNativeObject(t, parent)
+			clone, cloneWire := darwinCloneNativeObject(t, clone)
+			originalParent, originalClone := parent, clone
+			snapshot := Snapshot{Links: []Link{{Index: parent.Index, Name: "captured-native-fixture", MTU: 1500}}, Objects: []DesktopNetworkObject{parent, clone}}
+			projected, key, err := project(snapshot, nil)
+			if err != nil || key == "" || len(projected.Objects) != 1 || projected.Objects[0] != parent ||
+				parent != originalParent || clone != originalClone || snapshot.Objects[0] != originalParent || snapshot.Objects[1] != originalClone ||
+				len(parentWire) == 0 || len(cloneWire) == 0 {
+				t.Fatal("native scope derivation lost its captured parent or changed bytes", err)
+			}
+			clone.Flags |= 0x40000 // Refcount/expiry are not present in this capture.
+			clone, _ = darwinCloneNativeObject(t, clone)
+			snapshot.Objects[1] = clone
+			if _, _, err := project(snapshot, nil); err == nil || !strings.Contains(err.Error(), "proto3_equal=false") || strings.Contains(err.Error(), clone.Gateway) {
+				t.Fatal("native unsupported cache state lost its private failure", err)
+			}
+			tracker := &Tracker{ctx: context.Background(), physical: Snapshot{Objects: []DesktopNetworkObject{parent}}}
+			tracker.observe(Event{Kind: "route", Action: "add", Index: clone.Index, Object: clone}, nil)
+			if tracker.failure == nil || !strings.Contains(tracker.failure.Error(), "proto3_equal=false") {
+				t.Fatal("native event discarded its original bounded failure")
+			}
+			failure := tracker.failure
+			tracker.observe(Event{Kind: "route", Action: "add", Index: originalClone.Index, Object: originalClone}, nil)
+			if tracker.failure != failure {
+				t.Fatal("later valid cache event replaced the original failure")
+			}
+		})
+	}
+}
 
 func TestDarwinUnusedInterfaceNativeReadbackComposition(t *testing.T) {
 	link := Link{Index: 31, Name: "captured-unused", MTU: 0}

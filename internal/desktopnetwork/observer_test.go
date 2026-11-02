@@ -495,7 +495,7 @@ func TestLinuxRouteTableCompatibilityAndOwnedCarrierTransition(t *testing.T) {
 
 func TestDarwinCloneRequiresExactCapturedParent(t *testing.T) {
 	parent := DesktopNetworkObject{Kind: "route", Family: 4, Index: 2, Destination: "0.0.0.0/0", Gateway: "192.0.2.1", Flags: 0x2 | 0x800 | 0x10000}
-	clone := DesktopNetworkObject{Kind: "route", Family: 4, Index: 2, Destination: "198.51.100.5/32", Gateway: "192.0.2.1", Flags: 0x2 | 0x4 | 0x20000}
+	clone := DesktopNetworkObject{Kind: "route", Family: 4, Index: 2, Destination: "198.51.100.5/32", Gateway: "192.0.2.1", Flags: 0x2 | 0x4 | 0x20000 | 0x1000000}
 	if derived, err := DesktopDarwinDerivedRoute(clone, []DesktopNetworkObject{parent}); !derived || err != nil {
 		t.Fatal("exact native parent was not recognized", err)
 	}
@@ -503,7 +503,7 @@ func TestDarwinCloneRequiresExactCapturedParent(t *testing.T) {
 		name    string
 		object  DesktopNetworkObject
 		parents []DesktopNetworkObject
-	}{{"missing-parent", clone, nil}, {"ambiguous-parent", clone, []DesktopNetworkObject{parent, parent}}, {"changed-gateway", func() DesktopNetworkObject { c := clone; c.Gateway = "192.0.2.99"; return c }(), []DesktopNetworkObject{parent}}, {"redirect", func() DesktopNetworkObject { c := clone; c.Flags |= 0x10; return c }(), []DesktopNetworkObject{parent}}, {"static", func() DesktopNetworkObject { c := clone; c.Flags |= 0x800; return c }(), []DesktopNetworkObject{parent}}, {"unmatched-prefix", clone, []DesktopNetworkObject{func() DesktopNetworkObject { p := parent; p.Destination = "203.0.113.0/24"; return p }()}}, {"other-interface", func() DesktopNetworkObject { c := clone; c.Index = 3; return c }(), []DesktopNetworkObject{parent}}, {"other-scope", func() DesktopNetworkObject { c := clone; c.Flags |= 0x1000000; return c }(), []DesktopNetworkObject{parent}}} {
+	}{{"missing-parent", clone, nil}, {"ambiguous-parent", clone, []DesktopNetworkObject{parent, parent}}, {"changed-gateway", func() DesktopNetworkObject { c := clone; c.Gateway = "192.0.2.99"; return c }(), []DesktopNetworkObject{parent}}, {"redirect", func() DesktopNetworkObject { c := clone; c.Flags |= 0x10; return c }(), []DesktopNetworkObject{parent}}, {"static", func() DesktopNetworkObject { c := clone; c.Flags |= 0x800; return c }(), []DesktopNetworkObject{parent}}, {"unmatched-prefix", clone, []DesktopNetworkObject{func() DesktopNetworkObject { p := parent; p.Destination = "203.0.113.0/24"; return p }()}}, {"other-interface", func() DesktopNetworkObject { c := clone; c.Index = 3; return c }(), []DesktopNetworkObject{parent}}, {"missing-derived-scope", func() DesktopNetworkObject { c := clone; c.Flags &^= 0x1000000; return c }(), []DesktopNetworkObject{parent}}} {
 		t.Run(tc.name, func(t *testing.T) {
 			if derived, err := DesktopDarwinDerivedRoute(tc.object, tc.parents); derived || err == nil {
 				t.Fatal("unproved route cache bypassed cohort invalidation")
