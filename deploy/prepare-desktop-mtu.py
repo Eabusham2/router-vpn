@@ -2,11 +2,42 @@
 """Prepare exclusive native desktop TUN creation in the pinned dependency."""
 from pathlib import Path
 import json
+import hashlib
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE = 'github.com/sagernet/sing-tun'
 VERSION = 'v0.9.3'
+
+# Exact v0.9.3 source, before the existing owned-interface and receipt transforms.
+# An occupied route belongs to its existing owner; an MTU successor is started
+# only after the original TUN has closed, so EEXIST cannot authorize takeover.
+DARWIN_SOURCE_SHA256 = '0676cdec64934d98461e87b625675f5b0d3d2281f3f4126005df5473f19bde61'
+DARWIN_ROUTE_TAKEOVER = b'''				if err != nil {
+					if errors.Is(err, unix.EEXIST) {
+						err = execRoute(unix.RTM_DELETE, false, 0, destination, gateway)
+						if err != nil {
+							return E.Cause(err, "remove existing route: ", destination)
+						}
+						err = execRoute(unix.RTM_ADD, t.options.InterfaceScope, interfaceIndex, destination, gateway)
+						if err != nil {
+							return E.Cause(err, "re-add route: ", destination)
+						}
+					} else {
+						return E.Cause(err, "add route: ", destination)
+					}
+				}'''
+DARWIN_ROUTE_REFUSAL = b'''				if err != nil {
+					return E.Cause(err, "add route: ", destination)
+				}'''
+
+
+def darwin_route_conflict_patch(raw):
+    if hashlib.sha256(raw).hexdigest() != DARWIN_SOURCE_SHA256:
+        raise ValueError('Pinned Darwin route source changed')
+    if raw.count(DARWIN_ROUTE_TAKEOVER) != 1 or raw.count(b'\t"errors"\n') != 1 or raw.count(b'errors.') != 1:
+        raise ValueError('Pinned Darwin EEXIST boundary changed')
+    return raw.replace(DARWIN_ROUTE_TAKEOVER, DARWIN_ROUTE_REFUSAL, 1).replace(b'\t"errors"\n', b'', 1)
 
 
 def network_receipt_patch(name, raw):
@@ -54,14 +85,47 @@ def network_receipt_patch(name, raw):
 \t}'''),
         ]
     else:
-        # Preserve the original route syscall and error handling exactly. The
-        # wrapper records only an acknowledged add with matching kernel data.
-        if raw.count(b'err = execRoute(') != 4:
+        # The conflict transform refuses an occupied route before this
+        # observational wrapper records successful, uniquely observed adds.
+        if raw.count(b'err = execRoute(') != 2:
             raise ValueError('Pinned Darwin route callers changed')
         raw = raw.replace(b'err = execRoute(', b'err = t.routervpnExecRoute(')
     for before, after in patches:
         if raw.count(before) != 1:
             raise ValueError('Pinned desktop routing receipt boundary changed: '+name)
+        raw = raw.replace(before, after)
+    return raw
+
+
+def darwin_owned_source(raw):
+    raw = darwin_route_conflict_patch(raw)
+    patches = [
+        (b'type NativeTun struct {', b'type NativeTun struct {\n\troutervpnOwnedIndex int'),
+        (b'\tnativeTun.readPoller = common.Must1(rawfile.NewPoller(nativeTun.stopFd.ReadFD, tunFd))', b'''\tif options.FileDescriptor == 0 {
+\t\tcurrent, err := net.InterfaceByName(options.Name)
+\t\tif err != nil {
+\t\t\tnativeTun.stopFd.Close()
+\t\t\t_ = nativeTun.tunFile.Close()
+\t\t\treturn nil, err
+\t\t}
+\t\tnativeTun.routervpnOwnedIndex = current.Index
+\t}
+\tnativeTun.readPoller = common.Must1(rawfile.NewPoller(nativeTun.stopFd.ReadFD, tunFd))'''),
+        (b'\tdefer flushDNSCache()', b'''\tif t.routervpnOwnedIndex != 0 {
+\t\tcurrent, err := net.InterfaceByName(t.options.Name)
+\t\tif err != nil || current.Index != t.routervpnOwnedIndex {
+\t\t\tt.stopFd.Stop()
+\t\t\tcloseErr := t.tunFile.Close()
+\t\t\tt.closePollers()
+\t\t\tt.stopFd.Close()
+\t\t\treturn E.Errors(E.New("native TUN identity retired before cleanup"), closeErr)
+\t\t}
+\t}
+\tdefer flushDNSCache()'''),
+    ]
+    for before, after in patches:
+        if raw.count(before) != 1:
+            raise ValueError('Pinned Darwin TUN ownership boundary changed')
         raw = raw.replace(before, after)
     return raw
 
@@ -117,34 +181,7 @@ def prepare(vendor):
                         raise ValueError('Pinned Linux TUN ownership boundary changed')
                     raw = raw.replace(before, after)
             if relative.as_posix() == 'tun_darwin.go':
-                patches = [
-                    (b'type NativeTun struct {', b'type NativeTun struct {\n\troutervpnOwnedIndex int'),
-                    (b'\tnativeTun.readPoller = common.Must1(rawfile.NewPoller(nativeTun.stopFd.ReadFD, tunFd))', b'''\tif options.FileDescriptor == 0 {
-\t\tcurrent, err := net.InterfaceByName(options.Name)
-\t\tif err != nil {
-\t\t\tnativeTun.stopFd.Close()
-\t\t\t_ = nativeTun.tunFile.Close()
-\t\t\treturn nil, err
-\t\t}
-\t\tnativeTun.routervpnOwnedIndex = current.Index
-\t}
-\tnativeTun.readPoller = common.Must1(rawfile.NewPoller(nativeTun.stopFd.ReadFD, tunFd))'''),
-                    (b'\tdefer flushDNSCache()', b'''\tif t.routervpnOwnedIndex != 0 {
-\t\tcurrent, err := net.InterfaceByName(t.options.Name)
-\t\tif err != nil || current.Index != t.routervpnOwnedIndex {
-\t\t\tt.stopFd.Stop()
-\t\t\tcloseErr := t.tunFile.Close()
-\t\t\tt.closePollers()
-\t\t\tt.stopFd.Close()
-\t\t\treturn E.Errors(E.New("native TUN identity retired before cleanup"), closeErr)
-\t\t}
-\t}
-\tdefer flushDNSCache()'''),
-                ]
-                for before, after in patches:
-                    if raw.count(before) != 1:
-                        raise ValueError('Pinned Darwin TUN ownership boundary changed')
-                    raw = raw.replace(before, after)
+                raw = darwin_owned_source(raw)
             if relative.as_posix() == 'tun_windows.go':
                 before = b'''\tif err != nil {
 \t\tif !errors.Is(err, os.ErrExist) {
@@ -192,7 +229,7 @@ def prepare(vendor):
         if target.is_symlink():
             raise ValueError('Linked native network receipt destination')
         target.write_bytes(raw.replace(b'package desktopnetwork\n', b'package tun\n', 1))
-    for name in ('sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl'):
+    for name in ('sing_tun_network.go.tmpl', 'sing_tun_network_linux.go.tmpl', 'sing_tun_network_linux_test.go.tmpl', 'sing_tun_network_windows.go.tmpl', 'sing_tun_network_darwin.go.tmpl', 'sing_tun_route_darwin_test.go.tmpl'):
         path = ROOT/'mobile/desktop'/name
         if path.is_symlink():
             raise ValueError('Linked native network receipt template')

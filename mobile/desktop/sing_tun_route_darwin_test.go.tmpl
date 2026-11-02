@@ -1,0 +1,286 @@
+//go:build darwin
+
+package tun
+
+import (
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
+	"syscall"
+	"testing"
+
+	"golang.org/x/sys/unix"
+)
+
+// These are real routing-socket operations on fixture-owned loopback host
+// routes. No TUN, default route, PF policy or resolver configuration is used.
+// In the conflict case the first route belongs to the fixture, not NativeTun.
+const routerVPNRouteConflictWitness = "Darwin route conflict took over an existing route"
+
+type routerVPNRouteFixtureRecord struct {
+	Destination string                `json:"destination"`
+	Gateway     string                `json:"gateway"`
+	Object      *DesktopNetworkObject `json:"object"`
+}
+
+func routerVPNRouteFixtureScope() (string, []byte, error) {
+	executable, err := os.Executable()
+	if err != nil || os.Geteuid() != 0 || filepath.Base(executable) != "route.test" {
+		return "", nil, errors.New("Darwin route fixture requires its protected original executable")
+	}
+	root := filepath.Dir(executable)
+	const prefix = "routervpn-darwin-route-"
+	if filepath.Dir(root) != "/opt" || !strings.HasPrefix(filepath.Base(root), prefix) {
+		return "", nil, errors.New("Darwin route fixture lost its original protected directory")
+	}
+	nonce, err := hex.DecodeString(strings.TrimPrefix(filepath.Base(root), prefix))
+	if err != nil || len(nonce) != 16 || hex.EncodeToString(nonce) != strings.TrimPrefix(filepath.Base(root), prefix) {
+		return "", nil, errors.New("Darwin route fixture has an invalid original scope")
+	}
+	for _, path := range []string{"/opt", root, executable} {
+		info, err := os.Lstat(path)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0022 != 0 {
+			return "", nil, errors.New("Darwin route fixture path is linked or writable by another owner")
+		}
+		native, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || native.Uid != 0 || path == executable && (!info.Mode().IsRegular() || native.Nlink != 1) || path != executable && !info.IsDir() {
+			return "", nil, errors.New("Darwin route fixture path lost native ownership")
+		}
+	}
+	return root, nonce, nil
+}
+
+func routerVPNRouteFixtureTuple(nonce []byte, family string, conflict bool) (netip.Prefix, netip.Addr) {
+	slot := byte(1)
+	if conflict {
+		slot = 2
+	}
+	if family == "ipv4" {
+		return netip.PrefixFrom(netip.AddrFrom4([4]byte{127, 79, nonce[0], nonce[1] ^ slot}), 32), netip.MustParseAddr("127.0.0.1")
+	}
+	var address [16]byte
+	copy(address[:], nonce)
+	address[0], address[1], address[15] = 0xfd, 0x79, address[15]^slot
+	return netip.PrefixFrom(netip.AddrFrom16(address), 128), netip.IPv6Loopback()
+}
+
+func routerVPNRouteFixtureObjects(destination netip.Prefix) ([]DesktopNetworkObject, error) {
+	objects, err := routervpnDarwinNetworkObjects()
+	if err != nil {
+		return nil, err
+	}
+	var found []DesktopNetworkObject
+	for _, object := range objects {
+		if object.Destination == destination.String() {
+			found = append(found, object)
+		}
+	}
+	return found, nil
+}
+
+func routerVPNRouteFixtureWrite(path string, record routerVPNRouteFixtureRecord, create bool) error {
+	flags := os.O_WRONLY | syscall.O_NOFOLLOW
+	if create {
+		flags |= os.O_CREATE | os.O_EXCL
+	}
+	file, err := os.OpenFile(path, flags, 0600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	named, err := os.Lstat(path)
+	if err != nil || !os.SameFile(opened, named) || !opened.Mode().IsRegular() || opened.Mode().Perm() != 0600 {
+		return errors.New("Darwin route fixture recovery record changed")
+	}
+	if err = file.Truncate(0); err != nil {
+		return err
+	}
+	if err = json.NewEncoder(file).Encode(record); err != nil {
+		return err
+	}
+	return file.Sync()
+}
+
+func routerVPNRouteFixtureCleanup(root string, nonce []byte) error {
+	for _, conflict := range []bool{false, true} {
+		for _, family := range []string{"ipv4", "ipv6"} {
+			path := filepath.Join(root, fmt.Sprintf("%s-%t.json", family, conflict))
+			file, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			var record routerVPNRouteFixtureRecord
+			decodeErr := json.NewDecoder(file).Decode(&record)
+			info, statErr := file.Stat()
+			file.Close()
+			native, ok := infoSysRouteFixture(info).(*syscall.Stat_t)
+			if decodeErr != nil || statErr != nil || !ok || native.Uid != 0 || native.Nlink != 1 || info.Mode().Perm() != 0600 {
+				return errors.New("Darwin route fixture recovery record is not original")
+			}
+			destination, gateway := routerVPNRouteFixtureTuple(nonce, family, conflict)
+			if record.Destination != destination.String() || record.Gateway != gateway.String() {
+				return errors.New("Darwin route fixture recovery tuple changed")
+			}
+			current, err := routerVPNRouteFixtureObjects(destination)
+			if err != nil {
+				return err
+			}
+			if len(current) != 0 {
+				if record.Object == nil || len(current) != 1 || current[0].Key() != record.Object.Key() {
+					return errors.New("Darwin route fixture will not remove an unproved or changed route")
+				}
+				if err = execRoute(unix.RTM_DELETE, false, 0, destination, gateway); err != nil {
+					return err
+				}
+				after, err := routerVPNRouteFixtureObjects(destination)
+				if err != nil || len(after) != 0 {
+					return errors.New("Darwin route fixture removal has no absence readback")
+				}
+			}
+			if err = os.Remove(path); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func infoSysRouteFixture(info os.FileInfo) any {
+	if info == nil {
+		return nil
+	}
+	return info.Sys()
+}
+
+func TestMain(m *testing.M) {
+	if len(os.Args) == 2 && os.Args[1] == "routervpn-darwin-route-cleanup" {
+		root, nonce, err := routerVPNRouteFixtureScope()
+		if err == nil {
+			err = routerVPNRouteFixtureCleanup(root, nonce)
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	os.Exit(m.Run())
+}
+
+func routerVPNRunDarwinRouteFixture(t *testing.T, conflict bool) {
+	t.Helper()
+	root, nonce, err := routerVPNRouteFixtureScope()
+	if err != nil {
+		t.Fatal(err)
+	}
+	loopback, err := net.InterfaceByName("lo0")
+	if err != nil || loopback.Index < 1 || loopback.Flags&net.FlagLoopback == 0 || loopback.Flags&net.FlagUp == 0 {
+		t.Fatal("Darwin route fixture lost the current loopback interface")
+	}
+	for _, family := range []string{"ipv4", "ipv6"} {
+		t.Run(family, func(t *testing.T) {
+			destination, gateway := routerVPNRouteFixtureTuple(nonce, family, conflict)
+			before, err := routerVPNRouteFixtureObjects(destination)
+			if err != nil || len(before) != 0 {
+				t.Fatal("Darwin route fixture destination is not independently empty", err)
+			}
+			path := filepath.Join(root, fmt.Sprintf("%s-%t.json", family, conflict))
+			record := routerVPNRouteFixtureRecord{Destination: destination.String(), Gateway: gateway.String()}
+			if err = routerVPNRouteFixtureWrite(path, record, true); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := routerVPNRouteFixtureCleanup(root, nonce); err != nil {
+					t.Error(err)
+				}
+			})
+			options := Options{Name: "lo0", AutoRoute: true, MTU: uint32(loopback.MTU)}
+			if family == "ipv4" {
+				options.Inet4Address = []netip.Prefix{netip.PrefixFrom(gateway, 32)}
+				options.Inet4RouteAddress = []netip.Prefix{destination}
+				options.Inet4Gateway = gateway
+			} else {
+				options.Inet6Address = []netip.Prefix{netip.PrefixFrom(gateway, 128)}
+				options.Inet6RouteAddress = []netip.Prefix{destination}
+				options.Inet6Gateway = gateway
+			}
+			candidate := &NativeTun{options: options, routervpnOwnedIndex: loopback.Index}
+			if conflict {
+				if err = execRoute(unix.RTM_ADD, false, 0, destination, gateway); err != nil {
+					t.Fatal("fixture original route add", err)
+				}
+				current, err := routerVPNRouteFixtureObjects(destination)
+				if err != nil || len(current) != 1 || current[0].Index != uint32(loopback.Index) || current[0].Gateway != gateway.String() {
+					t.Fatal("fixture original route has no unique exact readback", err)
+				}
+				record.Object = &current[0]
+				if err = routerVPNRouteFixtureWrite(path, record, false); err != nil {
+					t.Fatal(err)
+				}
+				err = candidate.setRoutes()
+				if !errors.Is(err, unix.EEXIST) {
+					t.Errorf("%s: expected original EEXIST, got %v", routerVPNRouteConflictWitness, err)
+				}
+				if candidate.routeSet || len(candidate.routervpnNetwork.objects) != 0 || candidate.routervpnNetwork.failure != nil {
+					t.Error("refused existing route acquired cleanup or receipt authority")
+				}
+				after, observed := routerVPNRouteFixtureObjects(destination)
+				if observed != nil || len(after) != 1 || after[0].Key() != record.Object.Key() {
+					t.Error("refused existing route did not retain its original native fields", observed)
+				}
+				// Even the unchanged normal cleanup entry must have no route
+				// authority after this failed construction.
+				if err = candidate.unsetRoutes(); err != nil {
+					t.Error(err)
+				}
+				after, observed = routerVPNRouteFixtureObjects(destination)
+				if observed != nil || len(after) != 1 || after[0].Key() != record.Object.Key() {
+					t.Error("failed route construction removed the original during cleanup", observed)
+				}
+			} else {
+				if err = candidate.setRoutes(); err != nil {
+					t.Fatal("native owned route add", err)
+				}
+				current, err := routerVPNRouteFixtureObjects(destination)
+				if err != nil || len(current) != 1 || current[0].Index != uint32(loopback.Index) || current[0].Gateway != gateway.String() {
+					t.Fatal("native owned route has no unique exact readback", err)
+				}
+				record.Object = &current[0]
+				if err = routerVPNRouteFixtureWrite(path, record, false); err != nil {
+					t.Fatal(err)
+				}
+				if !candidate.routeSet || candidate.routervpnNetwork.failure != nil || len(candidate.routervpnNetwork.objects) != 1 || !routervpnNetworkHasObject(current, candidate.routervpnNetwork.objects[current[0].Key()]) {
+					t.Fatal("native owned add lost its successful original receipt")
+				}
+				if err = candidate.unsetRoutes(); err != nil {
+					t.Fatal("native owned route cleanup", err)
+				}
+				after, err := routerVPNRouteFixtureObjects(destination)
+				if err != nil || len(after) != 0 {
+					t.Fatal("native owned route cleanup has no absence readback", err)
+				}
+			}
+		})
+	}
+}
+
+func TestRouterVPNDarwinRouteConflictPreservesExisting(t *testing.T) {
+	routerVPNRunDarwinRouteFixture(t, true)
+}
+
+func TestRouterVPNDarwinRouteOwnedAddAndRemove(t *testing.T) {
+	routerVPNRunDarwinRouteFixture(t, false)
+}

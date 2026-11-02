@@ -55,12 +55,19 @@ class NativeSocketUIDGate(unittest.TestCase):
             with self.subTest(failure=failure.__name__):
                 self.check_matching_hosts(openvpn_failure=failure)
 
-    def check_matching_hosts(self, node_failure=None, forwarder_failure=None, openvpn_failure=None):
+    def test_failed_or_timed_out_darwin_route_gate_cannot_reach_guardian_or_compilation(self):
+        for failure in (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            with self.subTest(failure=failure.__name__):
+                self.check_matching_hosts(darwin_route_failure=failure)
+
+    def check_matching_hosts(self, node_failure=None, forwarder_failure=None, openvpn_failure=None, darwin_route_failure=None):
         class CompilerBoundary(Exception):
             pass
 
-        for target in ('linux/amd64', 'linux/arm64', 'darwin/amd64', 'darwin/arm64',
-                       'windows/amd64', 'windows/arm64'):
+        targets = ('linux/amd64', 'linux/arm64', 'darwin/amd64', 'darwin/arm64', 'windows/amd64', 'windows/arm64')
+        if darwin_route_failure is not None:
+            targets = tuple(target for target in targets if target.startswith('darwin/'))
+        for target in targets:
             with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 source = root/'core'
@@ -71,6 +78,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                 node_errors = []
                 forwarder_errors = []
                 openvpn_errors = []
+                darwin_route_errors = []
 
                 def run(command, **kwargs):
                     args = [str(value) for value in command]
@@ -208,7 +216,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertEqual(args[2:], [str(source.resolve())])
                         self.assertEqual(kwargs['env']['GOOS'], system)
                         self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
-                        self.assertEqual(kwargs['timeout'], 1200 if system == 'windows' else 1800)
+                        self.assertEqual(kwargs['timeout'], 1800)
                         if node_failure is not None:
                             error = (node_failure(23, args, output=b'captured source gate failure')
                                      if node_failure is subprocess.CalledProcessError else
@@ -279,6 +287,26 @@ class NativeSocketUIDGate(unittest.TestCase):
                         self.assertIn('-L'+str(root/'pq'), shlex.split(kwargs['env']['CGO_LDFLAGS']))
                         self.assertLessEqual(kwargs['timeout'], 2400)
                         return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_route_runner.py'):
+                        self.assertEqual(system, 'darwin')
+                        self.assertEqual(args[2:], [])
+                        self.assertEqual(kwargs['cwd'], ROOT)
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertLessEqual(kwargs['timeout'], 60)
+                        return ''
+                    if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_route.py'):
+                        self.assertEqual(system, 'darwin')
+                        self.assertEqual(args[2:], [str(source.resolve()), '--mutations'])
+                        self.assertEqual(kwargs['env']['GOOS'], system)
+                        self.assertEqual(kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
+                        self.assertLessEqual(kwargs['timeout'], 900)
+                        if darwin_route_failure is not None:
+                            error = (darwin_route_failure(31, args, output=b'captured native route conflict failure')
+                                     if darwin_route_failure is subprocess.CalledProcessError else
+                                     darwin_route_failure(args, kwargs['timeout'], output=b'captured native route timeout'))
+                            darwin_route_errors.append(error)
+                            raise error
+                        return ''
                     if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_guardian.py'):
                         self.assertEqual(system, 'darwin')
                         self.assertEqual(args[2:], [str(source.resolve()), '--mutations'])
@@ -327,7 +355,7 @@ class NativeSocketUIDGate(unittest.TestCase):
                      patch.object(N.OPENVPN, 'prepare'), patch.object(N.BUFFERS, 'prepare'), \
                      patch.object(N.EXTERNAL, 'prepare'), patch.object(N.POLICY.AMNEZIA, 'verify'), \
                      patch.object(N, 'stage_cronet', side_effect=stage_cronet):
-                    expected_error = forwarder_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
+                    expected_error = darwin_route_failure or forwarder_failure or (node_failure if node_failure is not None and system in ('linux', 'windows') else
                                                           openvpn_failure if openvpn_failure is not None and system == 'linux' else CompilerBoundary)
                     with self.assertRaises(expected_error) as caught:
                         N.build(target, root/'output', source=source, xray=root/'xray', pq=root/'pq')
@@ -361,6 +389,14 @@ class NativeSocketUIDGate(unittest.TestCase):
                     checks = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_linux_external_openvpn_runner.py')]
                     self.assertEqual(len(checks), 1)
                     self.assertEqual(calls.index(gate[0]), calls.index(checks[0]) + 1)
+                    continue
+                if darwin_route_failure is not None:
+                    gate = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_route.py')]
+                    self.assertEqual(len(gate), 1)
+                    self.assertEqual(len(darwin_route_errors), 1)
+                    self.assertIs(caught.exception, darwin_route_errors[0], 'The original route gate failure was replaced')
+                    self.assertEqual(calls[-1], gate[0], 'Failed route ownership reached a later gate or compiler')
+                    self.assertFalse(any(len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_guardian.py') for args in calls))
                     continue
                 box = [args for args in calls if args[:2] == ['go', 'test'] and '.' in args and
                        '-run' in args and args[args.index('-run')+1] == '^TestRouterVPNDesktop(Tor|External)']
@@ -522,6 +558,16 @@ class NativeSocketUIDGate(unittest.TestCase):
                 darwin = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_guardian.py')]
                 self.assertEqual(len(darwin), 1 if system == 'darwin' else 0)
                 self.assertIn(ROOT/'deploy/test_desktop_darwin_guardian.py', N.inputs())
+                route_checks = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_route_runner.py')]
+                routes = [args for args in calls if len(args) > 1 and args[1] == str(ROOT/'deploy/test_desktop_darwin_route.py')]
+                self.assertEqual(len(route_checks), len(darwin))
+                self.assertEqual(len(routes), len(darwin))
+                if darwin:
+                    self.assertEqual(calls.index(routes[0]), calls.index(route_checks[0]) + 1)
+                    self.assertEqual(calls.index(darwin[0]), calls.index(routes[0]) + 1)
+                for dependency in ('deploy/test_desktop_darwin_route.py', 'deploy/test_desktop_darwin_route_runner.py',
+                                   'mobile/desktop/sing_tun_route_darwin_test.go.tmpl'):
+                    self.assertIn(ROOT/dependency, N.inputs())
                 physical = [args for args in calls if './routervpn/desktoppt' in args]
                 self.assertEqual(len(physical), 1)
                 self.assertIn('PhysicalFactory|PhysicalTunnel|LinuxPhysicalFactory', physical[0][physical[0].index('-run') + 1])

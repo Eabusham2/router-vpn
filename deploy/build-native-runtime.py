@@ -150,6 +150,8 @@ def inputs():
                              ROOT/'deploy/test_linux_node_lifecycle.py',
                              ROOT/'deploy/test_linux_node_lifecycle_runner.py',
                              ROOT/'deploy/test_desktop_darwin_guardian.py',
+                             ROOT/'deploy/test_desktop_darwin_route.py',
+                             ROOT/'deploy/test_desktop_darwin_route_runner.py',
                              ROOT/'deploy/test_linux_guardian_namespace.py',
                              ROOT/'deploy/test_linux_guardian_cleanup.py',
                              *sorted((ROOT/'mobile/rosenpass').glob('Cargo.*')),
@@ -656,6 +658,10 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None, t
                 run([sys.executable, ROOT/'deploy/test_linux_node_child_tun.py', source],
                     env=env, timeout=1500)
             if target.startswith('darwin/'):
+                run([sys.executable, ROOT/'deploy/test_desktop_darwin_route_runner.py'],
+                    cwd=ROOT, env=env, timeout=60)
+                run([sys.executable, ROOT/'deploy/test_desktop_darwin_route.py', source, '--mutations'],
+                    env=env, timeout=900)
                 run([sys.executable, ROOT/'deploy/test_desktop_darwin_guardian.py', source, '--mutations'],
                     env=env, timeout=1800)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
