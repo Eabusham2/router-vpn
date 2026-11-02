@@ -146,9 +146,20 @@ def windows_profile_controls() -> None:
                 "s.backend.read(ctx, &capture.target)", "s.backend.read(ctx, nil)",
                 "capture.removed, capture.absenceProved = true, true")
     go_function("cmd/client/desktop_node_protection_windows.go", "desktopOwnedNodeProtectionBackend",
+                "owner := windowsOwnedCapture.Load()",
+                "return desktopOwnedNodeProtectionBackendFor(owner)")
+    protection = go_function("cmd/client/desktop_node_protection_windows.go", "desktopOwnedNodeProtectionBackendFor",
+                "if owner == nil || owner.Alive() != nil",
+                "bootstrap: desktopNodeRecoveryBootstrap(owner)",
+                "read:      mobiletor.ReadDesktopWindowsProtectionExpectation",
+                "mobiletor.ReadDesktopWindowsPreparedProtection(ctx, target.Capture, target.Policy, target.BaselineSHA256)",
                 "mobiletor.NewDesktopWindowsProtectionReleaseTarget(ctx, target)",
+                "mobiletor.NewDesktopWindowsProtectionReleaseTargetWithBarrier(ctx, target, barrier)",
                 "mobiletor.NewDesktopWindowsProtectionRecoveryTarget(ctx, target)",
                 "mobiletor.NewDesktopWindowsProtectionRecoveryTargetWithBarrier(ctx, target, barrier)")
+    ordered(protection, "captured Windows protection backend",
+            "if owner == nil || owner.Alive() != nil", "return desktopNodeProtectionBackend{",
+            "bootstrap: desktopNodeRecoveryBootstrap(owner)")
     resume = go_function("cmd/client/profile_protection_owned.go", "resumeDesktopProtectionOff",
                          "a.nodeProtection != slot")
     ordered(resume, "resumeDesktopProtectionOff", "slot.applyOff(ctx, capture, current)",
