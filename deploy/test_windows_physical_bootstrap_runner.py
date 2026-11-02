@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Exercise bootstrap source ownership and explicit prospective overlay bounds."""
 from pathlib import Path
+import contextlib
 import importlib.util
+import io
 import json
 import shutil
 import tempfile
@@ -12,6 +14,35 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("windows_bootstrap_runner_test", ROOT / "deploy/test_windows_physical_bootstrap.py")
 GATE = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(GATE)
+spec = importlib.util.spec_from_file_location("windows_external_runner_test", ROOT / "deploy/test_windows_external_physical.py")
+EXTERNAL = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(EXTERNAL)
+
+
+class ExternalOutputBoundary(unittest.TestCase):
+    def report(self, status, output):
+        raw = io.BytesIO()
+        stream = io.TextIOWrapper(raw, encoding="cp1252", errors="strict", newline="\n")
+        self.addCleanup(stream.close)
+        with contextlib.redirect_stdout(stream):
+            EXTERNAL.report_baseline("command", ("NativeComposition",), status, output)
+        return raw.getvalue()
+
+    def test_redirected_cp1252_preserves_exact_utf8_native_output(self):
+        output = "native path \u2192 Caf\u00e9/\u6771\u4eac\n--- PASS: NativeComposition (0.01s)\n"
+        self.assertEqual(self.report(0, output), output.encode("utf-8"))
+
+    def test_encoding_never_turns_failed_or_incomplete_native_output_into_success(self):
+        success = "native path \u2192 selected exit\n--- PASS: NativeComposition (0.01s)\n"
+        for status, output in ((1, success), (0, "native path \u2192 selected exit\n"),
+                               (0, success + "--- SKIP: AnotherCase (0.01s)\n"),
+                               (0, success + "WARNING: DATA RACE\n")):
+            with self.subTest(status=status, output=output):
+                raw = io.BytesIO()
+                with io.TextIOWrapper(raw, encoding="cp1252", errors="strict", newline="\n") as stream:
+                    with contextlib.redirect_stdout(stream), self.assertRaisesRegex(ValueError, "did not prove its native composition"):
+                        EXTERNAL.report_baseline("command", ("NativeComposition",), status, output)
+                    self.assertEqual(raw.getvalue(), output.encode("utf-8"))
 
 
 class BootstrapOverlayBoundary(unittest.TestCase):

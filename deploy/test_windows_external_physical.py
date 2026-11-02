@@ -15,6 +15,7 @@ import importlib.util
 import json
 import os
 import platform
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -92,6 +93,17 @@ def mutants(source):
     )
 
 
+def report_baseline(name, required, status, output):
+    # Redirected Windows Python output can default to cp1252 while the native
+    # process emits UTF-8. Preserve its exact diagnostic before checking status.
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="strict")
+    print(output, end="" if output.endswith("\n") else "\n", flush=True)
+    if status or any("--- PASS: " + test + " (" not in output for test in required) or \
+            "--- SKIP:" in output or "DATA RACE" in output:
+        raise ValueError("Ordinary Windows " + name + " did not prove its native composition")
+
+
 def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=False):
     if prospective or platform.system() != "Windows":
         raise ValueError("Ordinary Windows composition requires its unmodified native host")
@@ -128,10 +140,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
             status, output = IDENTITY.run(
                 [binary, "-test.run=" + selection, "-test.count=1", "-test.timeout=120s", "-test.v"],
                 cwd=source, env=captured, timeout=135)
-            print(output, end="" if output.endswith("\n") else "\n", flush=True)
-            if status or any("--- PASS: " + test + " (" not in output for test in required) or \
-                    "--- SKIP:" in output or "DATA RACE" in output:
-                raise ValueError("Ordinary Windows " + name + " did not prove its native composition")
+            report_baseline(name, required, status, output)
             if hashlib.sha256(binary.read_bytes()).hexdigest() != digest:
                 raise ValueError("Ordinary Windows composition binary changed during execution")
         for label, relative, package, test, witness, replacement in mutants(source):
