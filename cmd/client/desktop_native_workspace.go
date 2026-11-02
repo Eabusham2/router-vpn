@@ -180,6 +180,8 @@ func desktopRuntimeOwnedFile(name string) bool {
 	case "sing-box.json", "source.json", "capture.json", "proof.json", "progress.json", "stop.json", "stopped.json", "native-multihop.process.json",
 		".proof.json.pending", ".progress.json.pending", ".stopped.json.pending", "mtu-request.json", "mtu-commit.json", "mtu-cancel.json", "mtu-status.json", ".mtu-status.json.pending",
 		"path-request.json", "path-cancel.json", "path-status.json", ".path-status.json.pending",
+		"dns-request.json", "dns-cancel.json", "dns-status.json", ".dns-status.json.pending",
+		"latency-request.json", "latency-cancel.json", "latency-status.json", ".latency-status.json.pending",
 		"node-source.json", "node-protection-transfer.json", "node-protection-retired.json", ".node-protection-retired.json.pending",
 		"node-physical-handoff-ready.json", ".node-physical-handoff-ready.json.pending", "node-physical-handoff-ack.json",
 		"node-ready.json", ".node-ready.json.pending",
