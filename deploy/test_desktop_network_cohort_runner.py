@@ -5,9 +5,11 @@ import importlib.util
 import io
 import stat
 import subprocess
+import sys
 import tempfile
+import types
 import unittest
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from unittest.mock import Mock, patch
 
 SPEC = importlib.util.spec_from_file_location("desktop_network_cohort_gate", Path(__file__).with_name("test_desktop_network_cohort.py"))
@@ -47,7 +49,7 @@ class NetworkNamespaceLauncher(unittest.TestCase):
             return self.native.run.return_value
 
         self.native.run.side_effect = observe
-        self.platform = patch.object(RUNNER.sys, "platform", "linux")
+        self.platform = patch.object(RUNNER, "sys", types.SimpleNamespace(platform="linux"))
         self.identity = patch.object(RUNNER.os, "readlink", return_value="net:[987654]")
         self.loader = patch.object(RUNNER, "namespace_runner", return_value=self.native)
         self.platform.start()
@@ -151,5 +153,126 @@ class NetworkNamespaceLauncher(unittest.TestCase):
         self.native.run.assert_not_called()
 
 
+class PortableNetworkNamespaceDispatch(unittest.TestCase):
+    """Exercise launcher composition without pretending this host has Linux DAC.
+
+    The retained executable's real inode/UID/mode and mutation controls remain
+    in NetworkNamespaceLauncher, executed on native Linux below. This boundary
+    double represents only that independently tested context manager; no
+    privilege, namespace or native network operation is performed here.
+    """
+
+    def setUp(self):
+        self.original = Path("original-network.test")
+        self.staged = Path("retained-network.test")
+        self.env = {"EXACT_COMPILER_ENV": "captured"}
+        self.native = Mock()
+        self.native.privilege_tool.return_value = "/usr/bin/sudo"
+        self.native.run.return_value = verdict()
+        self.entered = self.retired = 0
+        self.retirement_error = None
+
+        @contextmanager
+        def image(binary):
+            self.assertEqual(binary, self.original)
+            self.entered += 1
+            try:
+                yield self.staged
+            finally:
+                self.retired += 1
+                if self.retirement_error is not None:
+                    raise self.retirement_error
+
+        for replacement in (
+            patch.object(RUNNER, "sys", types.SimpleNamespace(platform="linux")),
+            patch.object(RUNNER.os, "readlink", return_value="net:[987654]"),
+            patch.object(RUNNER, "namespace_runner", return_value=self.native),
+            patch.object(RUNNER, "namespace_fixture_image", side_effect=image),
+        ):
+            replacement.start()
+            self.addCleanup(replacement.stop)
+
+    def invoke(self):
+        return RUNNER.linux_namespace_test(self.original, self.env)
+
+    def test_exact_captured_image_and_environment_reach_only_the_owned_runner(self):
+        for sudo in ("/usr/bin/sudo", None):
+            with self.subTest(sudo=sudo):
+                self.native.reset_mock()
+                self.native.privilege_tool.return_value = sudo
+                self.assertEqual(self.invoke(), verdict())
+                command = ["/usr/bin/env", "ROUTERVPN_NATIVE_NETWORK_EVENTS=1",
+                           "ROUTERVPN_NETWORK_PARENT_NAMESPACE=net:[987654]", "/usr/bin/unshare",
+                           "--user", "--map-root-user", "--net", "--fork", str(self.staged),
+                           "-test.v", "-test.timeout=45s", "-test.run=^TestLinuxNativeNetworkCohortEvents$"]
+                if sudo is not None:
+                    command = [sudo, "-n", "--", *command]
+                self.native.run.assert_called_once_with(command, cwd=RUNNER.ROOT,
+                    env=self.env, timeout=60, sudo=sudo)
+                self.assertEqual(self.entered, self.retired)
+
+    def test_native_host_guard_precedes_privilege_or_image_access(self):
+        for host in ("win32", "darwin", "freebsd"):
+            with self.subTest(host=host), patch.object(RUNNER, "sys", types.SimpleNamespace(platform=host)), \
+                 self.assertRaisesRegex(RuntimeError, "native Linux"):
+                self.invoke()
+        self.native.privilege_tool.assert_not_called()
+        self.native.run.assert_not_called()
+        self.assertEqual(self.entered, 0)
+
+    def test_privilege_and_image_failures_precede_native_execution(self):
+        self.native.privilege_tool.side_effect = ValueError("untrusted privilege")
+        with self.assertRaisesRegex(ValueError, "untrusted privilege"):
+            self.invoke()
+        self.assertEqual(self.entered, 0)
+        self.native.privilege_tool.side_effect = None
+        with patch.object(RUNNER, "namespace_fixture_image", side_effect=ValueError("original image changed")), \
+             self.assertRaisesRegex(ValueError, "original image changed"):
+            self.invoke()
+        self.native.run.assert_not_called()
+
+    def test_run_failure_timeout_and_image_retirement_failure_remain_failures(self):
+        for error, message in ((subprocess.CalledProcessError(7, ["unshare"], b"namespace denied"),
+                                "isolated native network fixture failed"),
+                               (RuntimeError("owned group did not join"), "did not join")):
+            with self.subTest(error=type(error).__name__):
+                self.native.run.reset_mock(side_effect=True)
+                self.native.run.side_effect = error
+                with redirect_stdout(io.StringIO()), self.assertRaisesRegex(RuntimeError, message):
+                    self.invoke()
+                self.native.run.assert_called_once()
+                self.assertEqual(self.entered, self.retired)
+        self.native.run.reset_mock(side_effect=True)
+        self.retirement_error = ValueError("staged image changed after execution")
+        with self.assertRaisesRegex(ValueError, "staged image changed"):
+            self.invoke()
+        self.native.run.assert_called_once()
+        self.assertEqual(self.entered, self.retired)
+
+    def test_missing_failed_or_skipped_native_verdict_never_passes(self):
+        lines = verdict().splitlines()
+        for index in range(len(lines)):
+            with self.subTest(missing=lines[index]):
+                self.native.run.return_value = "\n".join(lines[:index] + lines[index + 1:])
+                with self.assertRaisesRegex(RuntimeError, "omitted its executed case"):
+                    self.invoke()
+        for marker in ("--- FAIL:", "--- SKIP:"):
+            with self.subTest(marker=marker):
+                self.native.run.return_value = verdict() + "\n" + marker + " native case (0.01s)"
+                with self.assertRaisesRegex(RuntimeError, "failed or skipped"):
+                    self.invoke()
+        self.assertEqual(self.entered, self.retired)
+
+
+def load_tests(loader, _standard_tests, _pattern):
+    suite = loader.loadTestsFromTestCase(PortableNetworkNamespaceDispatch)
+    # Linux ownership/mode tests require real Linux filesystem semantics. A
+    # mocked sys.platform must not run POSIX geteuid/chmod checks on Windows or
+    # replace its native retained-handle/creation-time identity semantics.
+    if sys.platform == "linux":
+        suite.addTests(loader.loadTestsFromTestCase(NetworkNamespaceLauncher))
+    return suite
+
+
 if __name__ == "__main__":
-    unittest.main()
+    unittest.main(verbosity=2)
