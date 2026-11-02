@@ -93,18 +93,19 @@ func NewExternalProofRequest(parent context.Context, policy *ExternalPolicy, ses
 		}
 	}
 	if policy.capture.Execution == nil && policy.capture.Protocol == "openvpn" {
+		// Every ordinary OpenVPN proof belongs to one actual connected native
+		// transport generation. Optional provider response probes authorize
+		// comparison measurements; their absence cannot waive path ownership.
 		external, _ := policy.capture.Profile["external"].(map[string]any)
-		if _, mapped := external["openvpn_response_probes"]; mapped {
-			if _, ok := engine.(OpenVPNRemoteEngine); !ok {
-				cancel()
-				return nil, errors.New("native OpenVPN remote observation is required")
-			}
-			var err error
-			r.openvpnTransport, err = multihoprelay.ExternalTransport("openvpn", external)
-			if err != nil {
-				cancel()
-				return nil, err
-			}
+		if _, ok := engine.(OpenVPNRemoteEngine); !ok {
+			cancel()
+			return nil, errors.New("native OpenVPN remote observation is required")
+		}
+		var err error
+		r.openvpnTransport, err = multihoprelay.ExternalTransport("openvpn", external)
+		if err != nil {
+			cancel()
+			return nil, err
 		}
 	}
 	r.public = r.provePublic
