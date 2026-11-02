@@ -1,8 +1,10 @@
 FROM golang:1.25.12-bookworm AS go-build
 ARG AWG_GO_COMMIT=0527dfa47639714dd8f5c9ffbd9d40d19083f0ba
 RUN apt-get -o Acquire::Retries=5 update \
- && apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates curl gzip tar gcc libc6-dev \
+ && apt-get -o Acquire::Retries=5 install -y --no-install-recommends ca-certificates curl gzip tar gcc libc6-dev python3 \
  && rm -rf /var/lib/apt/lists/*
+COPY deploy/prepare-amnezia-timers.py deploy/prepare-server-amnezia-timers.py /opt/routervpn-build/deploy/
+COPY mobile/amneziatimers/timers_test.go.tmpl /opt/routervpn-build/mobile/amneziatimers/timers_test.go.tmpl
 WORKDIR /src/amneziawg-go
 RUN set -eux; \
     mkdir -p /out; \
@@ -18,8 +20,11 @@ RUN set -eux; \
       "https://github.com/amnezia-vpn/amneziawg-go/archive/${AWG_GO_COMMIT}.tar.gz"; \
     tar -xzf /tmp/amneziawg-go.tar.gz -C /src/amneziawg-go --strip-components=1; \
     rm -f /tmp/amneziawg-go.tar.gz; \
+    python3 /opt/routervpn-build/deploy/prepare-server-amnezia-timers.py /src/amneziawg-go --revision "${AWG_GO_COMMIT}"; \
     go mod download; \
     go mod verify; \
+    go test -race -count=1 -timeout=30s ./device -run '^TestRouterVPNAmneziaTimer'; \
+    python3 /opt/routervpn-build/deploy/prepare-server-amnezia-timers.py /src/amneziawg-go --revision "${AWG_GO_COMMIT}" --verify; \
     go build -ldflags '-linkmode external -extldflags "-fno-PIC -static"' -v -o /out/amneziawg-go .
 
 FROM debian:bookworm AS tools-build
