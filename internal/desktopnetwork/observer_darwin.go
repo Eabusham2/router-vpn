@@ -310,12 +310,15 @@ func (o *darwinObserver) Snapshot(ctx context.Context) (Snapshot, error) {
 	for _, iface := range interfaces {
 		link := Link{Index: uint32(iface.Index), Name: iface.Name, MTU: iface.MTU, Flags: uint32(iface.Flags), Hardware: iface.HardwareAddr.String()}
 		if link.MTU <= 0 {
-			return snapshot, desktopDarwinIncompleteInterface(link, func(index uint32) (desktopDarwinInterfaceReadback, error) {
+			link, err = desktopDarwinCaptureUnusedInterface(link, func(index uint32) (desktopDarwinInterfaceReadback, error) {
 				if ctx.Err() != nil {
 					return desktopDarwinInterfaceReadback{}, ctx.Err()
 				}
 				return darwinInterfaceReadback(index, syscall.RouteRIB)
 			})
+			if err != nil {
+				return snapshot, err
+			}
 		}
 		snapshot.Links = append(snapshot.Links, link)
 		addresses, err := iface.Addrs()
@@ -379,6 +382,11 @@ func darwinInterfaceReadback(index uint32, read func(int, int) ([]byte, error)) 
 			observed.Shapes = append(observed.Shapes, desktopDarwinInterfaceShape{
 				Index: uint32(value.Header.Index), MTU: value.Header.Data.Mtu, Flags: uint32(value.Header.Flags),
 				Type: value.Header.Data.Type, Physical: value.Header.Data.Physical, AddressLength: value.Header.Data.Addrlen})
+			if len(messages) == 1 && int(value.Header.Msglen) == len(raw) {
+				if identity, complete := desktopDarwinInterfaceLinkIdentity(uint32(value.Header.Addrs), value.Data); complete {
+					observed.identities = append(observed.identities, identity)
+				}
+			}
 		case *syscall.InterfaceAddrMessage:
 			observed.Addresses++
 		default:

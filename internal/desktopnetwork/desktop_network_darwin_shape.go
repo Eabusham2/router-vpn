@@ -7,7 +7,7 @@ import (
 	"syscall"
 )
 
-// Numeric readback only: it cannot replace the captured interface, supply a
+// Numeric shape alone cannot replace the captured interface, supply a
 // receipt or admit a snapshot. Names, hardware addresses and IPs never enter
 // this diagnostic record.
 type desktopDarwinInterfaceShape struct {
@@ -19,6 +19,9 @@ type desktopDarwinInterfaceShape struct {
 type desktopDarwinInterfaceReadback struct {
 	Bytes, Records, Addresses int
 	Shapes                    []desktopDarwinInterfaceShape
+	// Complete AF_LINK identities are private admission evidence. The
+	// diagnostic below intentionally prints only the numeric shape.
+	identities []desktopDarwinInterfaceIdentity
 }
 
 func desktopDarwinIncompleteInterface(link Link, read func(uint32) (desktopDarwinInterfaceReadback, error)) error {

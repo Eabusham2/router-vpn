@@ -14,6 +14,58 @@ import (
 	"time"
 )
 
+func TestDarwinUnusedInterfaceNativeReadbackComposition(t *testing.T) {
+	link := Link{Index: 31, Name: "captured-unused", MTU: 0}
+	for _, name := range []string{link.Name, "replacement"} {
+		payload := darwinUnusedTestPayload(uint16(link.Index), name, 1, nil)
+		header := syscall.IfMsghdr{Msglen: uint16(syscall.SizeofIfMsghdr + len(payload)), Version: syscall.RTM_VERSION,
+			Type: syscall.RTM_IFINFO, Index: uint16(link.Index), Addrs: syscall.RTA_IFP, Data: syscall.IfData{Type: 1}}
+		var wire bytes.Buffer
+		if err := binary.Write(&wire, binary.LittleEndian, header); err != nil {
+			t.Fatal(err)
+		}
+		wire.Write(payload)
+		calls := 0
+		actual, err := desktopDarwinCaptureUnusedInterface(link, func(index uint32) (desktopDarwinInterfaceReadback, error) {
+			return darwinInterfaceReadback(index, func(facility, selected int) ([]byte, error) {
+				calls++
+				if facility != syscall.NET_RT_IFLIST || selected != int(link.Index) {
+					t.Fatal("unused native link changed its exact query selector")
+				}
+				return wire.Bytes(), nil
+			})
+		})
+		if calls != 1 || (err == nil) != (name == link.Name) {
+			t.Fatal("native IFINFO and AF_LINK did not require the complete captured identity", err, calls)
+		}
+		if err == nil {
+			clear(wire.Bytes())
+			if actual.Name != link.Name || actual.MTU != 0 || !desktopDarwinUnusedInterfaceMatches(actual) {
+				t.Fatal("native unused interface lost its owned original bytes")
+			}
+		}
+	}
+	// The diagnostic decoder may ignore valid informational frames. They
+	// still prevent the stronger claim of one complete native IFINFO record.
+	payload := darwinUnusedTestPayload(uint16(link.Index), link.Name, 1, nil)
+	header := syscall.IfMsghdr{Msglen: uint16(syscall.SizeofIfMsghdr + len(payload)), Version: syscall.RTM_VERSION,
+		Type: syscall.RTM_IFINFO, Index: uint16(link.Index), Addrs: syscall.RTA_IFP, Data: syscall.IfData{Type: 1}}
+	var wire bytes.Buffer
+	if err := binary.Write(&wire, binary.LittleEndian, header); err != nil {
+		t.Fatal(err)
+	}
+	wire.Write(payload)
+	extra := make([]byte, syscall.SizeofRtMsghdr)
+	binary.LittleEndian.PutUint16(extra, uint16(len(extra)))
+	extra[2], extra[3] = syscall.RTM_VERSION, syscall.RTM_MISS
+	wire.Write(extra)
+	if _, err := desktopDarwinCaptureUnusedInterface(link, func(index uint32) (desktopDarwinInterfaceReadback, error) {
+		return darwinInterfaceReadback(index, func(int, int) ([]byte, error) { return wire.Bytes(), nil })
+	}); err == nil {
+		t.Fatal("extra native records became a complete one-interface observation")
+	}
+}
+
 func TestDarwinInterfaceReadbackBoundsAndNativeFields(t *testing.T) {
 	link, _ := darwinTestFrame(t, syscall.RTM_IFINFO)
 	binary.LittleEndian.PutUint32(link[8:12], 0)

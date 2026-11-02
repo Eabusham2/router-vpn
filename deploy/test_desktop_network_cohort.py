@@ -26,6 +26,11 @@ PARENTS = (
     "TestLinuxMulticastFIBIdentityRemainsAmbient",
     "TestWindowsUnlimitedLoopbackMTURetainsNativeIdentity",
     "TestDarwinIncompleteInterfaceReadbackNeverAdmitsOrReplacesCapture",
+    "TestDarwinInterfaceLinkIdentityWireBoundsAndOwnership",
+    "TestDarwinUnusedInterfaceCaptureRequiresCompleteNativeIdentity",
+    "TestDarwinUnusedInterfaceRetainsExactCohortIdentity",
+    "TestDarwinUnusedInterfaceCannotOwnOrCarryTraffic",
+    "TestDarwinUnusedInterfaceChangesStayLatched",
     "TestLinuxOwnedGotoRuleTransitions",
 )
 NATIVE_CASES = (
@@ -121,7 +126,8 @@ def main():
                        "TestDarwinInformationalMessageFraming",
                        "TestDarwinNetworkReceiveNativeSocket",
                        "TestDarwinNetworkReceiveLoopAndJoinedClose",
-                       "TestDarwinInterfaceReadbackBoundsAndNativeFields"):
+                       "TestDarwinInterfaceReadbackBoundsAndNativeFields",
+                       "TestDarwinUnusedInterfaceNativeReadbackComposition"):
             require_pass(base.stdout, parent)
     if sys.platform == "linux":
         require_pass(base.stdout, "TestLinuxRouteTableCompatibilityAndOwnedCarrierTransition")
@@ -182,6 +188,19 @@ def main():
              "TestLinuxOwnedGotoRuleTransitions", "2/wrong-target"),
             ("loopback-needs-native-mtu", "desktop_network_windows_shape.go", "row.MTU != ^uint32(0)", "false",
              "TestWindowsUnlimitedLoopbackMTURetainsNativeIdentity", "different-native-mtu"),
+            ("unused-link-needs-raw-flags", "desktop_network_darwin_unused.go", "shape.Flags != 0", "false",
+             "TestDarwinUnusedInterfaceCaptureRequiresCompleteNativeIdentity", "unmapped-native-flag"),
+            ("unused-link-needs-original-capture", "desktop_network_darwin_unused.go", "link == proof.original", "true",
+             "TestDarwinUnusedInterfaceRetainsExactCohortIdentity", "name"),
+            ("unused-link-needs-lossless-name", "desktop_network_darwin_unused.go", "!utf8.ValidString(link.Name)", "false && !utf8.ValidString(link.Name)",
+             "TestDarwinUnusedInterfaceCaptureRequiresCompleteNativeIdentity", "lossy-name-identity"),
+            ("unused-link-cannot-have-address", "observer.go", " || link.MTU <= 0 {", " {",
+             "TestDarwinUnusedInterfaceCannotOwnOrCarryTraffic", "ipv4-address"),
+            ("unused-link-cannot-have-route", "observer.go", "exists && link.MTU <= 0", "exists && false && link.MTU <= 0",
+             "TestDarwinUnusedInterfaceCannotOwnOrCarryTraffic", "route"),
+            ("unused-link-stays-in-cohort", "observer.go", "result.Links = append(result.Links, link)",
+             "if !unused { result.Links = append(result.Links, link) }",
+             "TestDarwinUnusedInterfaceRetainsExactCohortIdentity", "retained-original"),
         )
         for name, filename, before, after, test, witness in shape_controls:
             target = mutant / filename

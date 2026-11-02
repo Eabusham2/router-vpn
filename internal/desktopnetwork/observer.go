@@ -27,6 +27,9 @@ type Link struct {
 	Flags    uint32 `json:"flags"`
 	Hardware string `json:"hardware,omitempty"`
 	Policy   string `json:"policy,omitempty"`
+	// Only the Darwin native reader can supply this private observation. It
+	// retains an unused zero-MTU interface; it grants no routing ownership.
+	darwinUnused *desktopDarwinUnusedInterface
 }
 
 type Address struct {
@@ -491,7 +494,8 @@ func project(snapshot Snapshot, receipt *DesktopNetworkReceipt) (Snapshot, strin
 	links := make(map[uint32]Link)
 	found := receipt == nil
 	for _, link := range snapshot.Links {
-		if link.Index == 0 || link.Name == "" || link.MTU <= 0 {
+		unused := desktopDarwinUnusedInterfaceMatches(link)
+		if link.Index == 0 || link.Name == "" || link.MTU <= 0 && !unused || link.darwinUnused != nil && !unused {
 			return Snapshot{}, "", fmt.Errorf("network snapshot contains an incomplete interface (index=%d luid=%d name_present=%t mtu=%d flags=%d)", link.Index, link.LUID, link.Name != "", link.MTU, link.Flags)
 		}
 		if _, exists := links[link.Index]; exists {
@@ -499,7 +503,7 @@ func project(snapshot Snapshot, receipt *DesktopNetworkReceipt) (Snapshot, strin
 		}
 		links[link.Index] = link
 		if receipt != nil && link.Index == receipt.Index {
-			if found || link.Name != receipt.Name || link.LUID != receipt.LUID || link.MTU != receipt.MTU {
+			if unused || found || link.Name != receipt.Name || link.LUID != receipt.LUID || link.MTU != receipt.MTU {
 				return Snapshot{}, "", errors.New("native receipt differs from the observed original TUN")
 			}
 			found = true
@@ -513,7 +517,7 @@ func project(snapshot Snapshot, receipt *DesktopNetworkReceipt) (Snapshot, strin
 	seenAddresses, seenObjects := map[string]bool{}, map[string]int{}
 	for _, address := range snapshot.Addresses {
 		link, exists := links[address.Index]
-		if !exists || address.Prefix == "" || link.LUID != address.LUID {
+		if !exists || address.Prefix == "" || link.LUID != address.LUID || link.MTU <= 0 {
 			return Snapshot{}, "", errors.New("network address has no complete interface identity")
 		}
 		key := fmt.Sprintf("%d/%d/%s", address.Index, address.LUID, address.Prefix)
@@ -541,6 +545,11 @@ func project(snapshot Snapshot, receipt *DesktopNetworkReceipt) (Snapshot, strin
 		}
 	}
 	for _, object := range snapshot.Objects {
+		// Check every captured object before classifying a Darwin derived
+		// route. An unused link can never become an active or owned path.
+		if link, exists := links[object.Index]; exists && link.MTU <= 0 {
+			return Snapshot{}, "", errors.New("unused interface acquired a routing object")
+		}
 		if runtime.GOOS == "darwin" {
 			derived, err := DesktopDarwinDerivedRoute(object, snapshot.Objects)
 			if err != nil {
