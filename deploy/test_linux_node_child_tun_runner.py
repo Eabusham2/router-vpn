@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -266,21 +267,41 @@ class LinuxChildTUNDiagnostics(unittest.TestCase):
         start = native.index('func (t *NativeTun) routervpnLinuxAdditionFailure(')
         end = native.index('// RuleAdd of our final NOP', start)
         functions += '\n'+native[start:end]
+        # Keep the real observation/qualification closure. A replacement
+        # hand-written route shape would omit fields that reject forged proof.
+        start = native.index('type routerVPNLinuxRouteAddress struct')
+        end = native.index('func routervpnLinuxIPPrefix(', start)
+        functions += '\n'+native[start:end]
+        start = native.index('func routervpnLinuxSameRouteOwner(')
+        end = native.index('// Preserve the same sticky first failure.', start)
+        functions += '\n'+native[start:end]
+        native_tests = (ROOT/'mobile/desktop/sing_tun_network_linux_test.go.tmpl').read_text()
+        start = native_tests.index('func TestRouterVPNNativeLinuxRoutingOriginalOwnerDiagnostics(')
+        end = native_tests.index('func nativeRoutingRule(', start)
+        actual_owner_tests = native_tests[start:end]
+        start = native_tests.index('func nativeRoutingConcurrentFixture(')
+        end = native_tests.index('func TestRouterVPNNativeLinuxRoutingConcurrentAddressProof(', start)
+        actual_owner_tests += '\n'+native_tests[start:end]
         cases = '\n'.join('{' + json.dumps(prefix + ' private-key=secret-token') + ', ' + json.dumps(code) + '},'
                           for code, prefix in G.RECEIPT_DIAGNOSTIC_REASONS)
         with tempfile.TemporaryDirectory() as temporary:
             module = Path(temporary)
-            (module/'go.mod').write_text('module native-first-diagnostic\n\ngo 1.20\n')
+            language = re.search(r'^go ([0-9]+\.[0-9]+(?:\.[0-9]+)?)$', (ROOT/'go.mod').read_text(), re.MULTILINE)
+            self.assertIsNotNone(language)
+            (module/'go.mod').write_text('module native-first-diagnostic\n\ngo '+language.group(1)+'\n')
+            for name in ('desktop_network_receipt.go', 'desktop_network_wire.go'):
+                source = (ROOT/'internal/desktopnetwork'/name).read_text()
+                self.assertEqual(source.count('package desktopnetwork\n'), 1)
+                (module/name).write_text(source.replace('package desktopnetwork\n', 'package diagnostic\n', 1))
             (module/'diagnostic.go').write_text('''package diagnostic
-import ("fmt"; "io"; "os"; "runtime"; "strings"; "sync")
+import ("encoding/base64"; "encoding/binary"; "fmt"; "io"; "net"; "net/netip"; "os"; "runtime"; "slices"; "strings"; "sync"; "syscall")
 type routerVPNNodeMTURecord struct { Generation, Reader uint64; Index, MTU int; Session, Config, Path, Request string }
 type routerVPNNodeMTU struct { record routerVPNNodeMTURecord; networkReceiptDiagnosticReader uint64 }
-type DesktopNetworkObject struct { Kind, Destination, Gateway, Native string; Family int; Index, Table, Priority, Flags uint32 }
 type routerVPNNativeNetworkLedger struct { mu sync.Mutex; failure error; objects map[string]DesktopNetworkObject }
 type NativeTun struct { routervpnNetwork routerVPNNativeNetworkLedger; routervpnOwnedIndex int }
 '''+functions)
             (module/'diagnostic_test.go').write_text('''package diagnostic
-import ("bytes"; "errors"; "io"; "os"; "runtime"; "strings"; "testing")
+import ("bytes"; "encoding/base64"; "errors"; "fmt"; "io"; "net"; "net/netip"; "os"; "runtime"; "strings"; "syscall"; "testing")
 func TestReasonsRedactEveryKnownAndUnknownNativeError(t *testing.T) {
  for _, c := range []struct{message, want string}{
 '''+cases+'''
@@ -315,10 +336,31 @@ func TestActualNativeDeltaKeepsStickyFailureAndBounds(t *testing.T) {
  output.Reset();o.Kind="secret";o.Destination="secret";routervpnLinuxMTUDiagnostic(&output,"secret",8,[]DesktopNetworkObject{o},nil)
  if strings.Contains(output.String(),"secret")||!strings.Contains(output.String(),"kind=other"){t.Fatal("unknown field escaped the diagnostic vocabulary")}
 }
-''')
-            result = subprocess.run(['go', 'test', '-race', '-count=1', '-timeout=30s', '-mod=readonly', './...'],
+func TestActualOriginalOwnerRecordsReachStrictParser(t *testing.T) {
+ before,after,explicit,local:=nativeRoutingConcurrentFixture(t)
+ var output bytes.Buffer
+ routervpnLinuxRouteOwnerDiagnostic(&output,routerVPNLinuxRouteAdditionObservation{before:before,after:after},[]DesktopNetworkObject{explicit,local})
+ fmt.Print(output.String())
+}
+'''+actual_owner_tests)
+            result = subprocess.run(['go', 'test', '-v', '-race', '-count=1', '-timeout=30s', '-mod=readonly', './...'],
                                     cwd=module, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90)
             self.assertEqual(result.returncode, 0, result.stdout)
+            safe = G.receipt_diagnostic_output(result.stdout)
+            self.assertEqual(len(safe.splitlines()), 4, result.stdout)
+            self.assertIn('owner readback_error=false same_owner=true', safe)
+            self.assertIn('address ordinal=0', safe)
+            self.assertIn('qualification ordinal=1 canonical_local=true', safe)
+            self.assertIn('attributes=[1:20 4:8 6:8 15:8 20:5]', safe)
+            for row in safe.splitlines():
+                with self.subTest(row=row):
+                    self.assertEqual(G.receipt_diagnostic_output(row+' private-key=secret\n'), '')
+                    self.assertEqual(G.receipt_diagnostic_output(row), '')
+                    self.assertEqual(G.receipt_diagnostic_output(row.replace('false','secret').replace('true','secret')+'\n'), '')
+            route = safe.splitlines()[-1]
+            for attributes in ('[secret]', '['+' '.join(['1:4']*17)+']', '[1:secret]', '[655360:4]'):
+                replaced = re.sub(r'attributes=\[[^]]*\]', 'attributes='+attributes, route)
+                self.assertEqual(G.receipt_diagnostic_output(replaced+'\n'), '')
 
 
 if __name__ == '__main__':

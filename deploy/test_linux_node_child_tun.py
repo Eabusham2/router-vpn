@@ -174,10 +174,26 @@ RECEIPT_DIAGNOSTIC_PREFIX = 'NODE-MTU-DIAGNOSTIC '
 def receipt_diagnostic_output(output):
     text = output.decode('utf-8', errors='replace') if isinstance(output, bytes) else output or ''
     reasons = '|'.join(sorted({'reader-missing', 'unclassified', *(code for code, _ in RECEIPT_DIAGNOSTIC_REASONS)}))
+    boolean, integer = r'(?:true|false)', r'-?[0-9]+'
+    def fields(kind, specification):
+        return kind+' '+' '.join(key+'='+(boolean if shape == 'b' else integer)
+                                 for key, shape in (entry.split(':') for entry in specification.split()))
+    owner = fields('owner', 'readback_error:b same_owner:b index_before:i index_after:i mtu_before:i mtu_after:i '
+                   'flags_before:i flags_after:i name_equal:b hardware_equal:b configured_equal:b configured_before:i '
+                   'configured_after:i addresses_before:i addresses_after:i')
+    address = fields('address', 'ordinal:i before:b after:b equal_except_tentative:b prefix_equal:b selected_before:b '
+                     'selected_after:b ipv6:b link_local:b prefix_bits:i flags_before:i flags_after:i scope_before:i '
+                     'scope_after:i preferred_equal:b valid_equal:b infinite_after:b label_equal:b peer_equal:b '
+                     'broadcast_equal:b label_empty:b peer_empty:b broadcast_empty:b')
+    qualification = fields('qualification', 'ordinal:i canonical_local:b configured_matches:i address_matches:i '
+                           'link_local:b prefix_bits:i native_complete:b native_family:i source_bits:i tos:i protocol:i scope:i type:i')
+    qualification += (r' attributes=\[(?:[0-9]{1,5}:[0-9]{1,4}(?: [0-9]{1,5}:[0-9]{1,4}){0,15})?\] '
+                      'gateway_empty='+boolean+' luid_zero='+boolean+' mtu_zero='+boolean)
     patterns = (
         r'receipt reason=(' + reasons + r') generation=[0-9]+ reader=[0-9]+ index=[0-9]+ mtu=[0-9]+',
         r'delta kind=(route|rule|other) index=[0-9]+ added=[0-9]+ removed=[0-9]+',
         r'(added|removed) kind=(route|rule|other) family=[0-9]+ index=[0-9]+ table=[0-9]+ priority=[0-9]+ flags=[0-9]+ destination=(default4|default6|linklocal6|multicast6|other)',
+        owner, address, qualification,
     )
     result = []
     for line in text.splitlines(keepends=True):
