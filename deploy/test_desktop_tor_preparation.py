@@ -508,6 +508,21 @@ class DesktopPTPreparation(unittest.TestCase):
             PREP.prepare_desktop_pt(alias, GO)
         self.assertEqual(snapshot(self.vendor), before)
 
+    def test_registry_external_socks_and_node_order_is_repeatable(self):
+        original = ORIGINALS['include/registry.go'].decode()
+        generated = PREP.pt_registry_source(original)
+        exact = ('\troutervpndesktoppt.RegisterExternalPhysicalOutbound(registry)\n'
+                 '\troutervpndesktoppt.RegisterNodePhysicalOutbound(registry)\n'
+                 '\troutervpndesktoppt.RegisterExternalSOCKSOutbound(registry)')
+        self.assertEqual(generated.count(exact.encode()), 1)
+        for source in (original, generated.decode(), generated.decode().replace('\n', '\r\n')):
+            with self.subTest(reprepared=source != original):
+                self.assertEqual(PREP.pt_registry_source(source), generated)
+        swapped = exact.split('\n')
+        swapped[1], swapped[2] = swapped[2], swapped[1]
+        with self.assertRaisesRegex(ValueError, 'registration differs'):
+            PREP.pt_registry_source(generated.decode().replace(exact, '\n'.join(swapped)))
+
     def test_registry_rejects_duplicate_misplaced_or_wrong_owner_registration(self):
         target = self.vendor/'include/registry.go'
         generated = PREP.pt_registry_source(target.read_text()).decode()
@@ -538,6 +553,7 @@ class DesktopPTPreparation(unittest.TestCase):
             ORIGINALS['include/registry.go'].decode()+'\n// '+PREP.MODULE+'/protocol/routervpntor\n',
         ]
         for registration in (external_network, external_physical,
+                             '\troutervpndesktoppt.RegisterExternalSOCKSOutbound(registry)',
                              '\troutervpndesktoppt.RegisterNodeNetworkOwner(registry)',
                              '\troutervpndesktoppt.RegisterNodePhysicalOutbound(registry)'):
             forms.extend((

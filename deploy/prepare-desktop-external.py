@@ -332,8 +332,8 @@ def pt_registry_source(source):
             ('RegisterLocalTor', '\troutervpndesktoppt.RegisterServerTor(registry)', 'func OutboundRegistry() *outbound.Registry {'),
             ('RegisterPhysicalOutbound', '\troutervpndesktoppt.RegisterLocalTor(registry)', 'func OutboundRegistry() *outbound.Registry {'),
             ('RegisterExternalPhysicalOutbound', '\troutervpndesktoppt.RegisterPhysicalOutbound(registry)', 'func OutboundRegistry() *outbound.Registry {'),
-            ('RegisterExternalSOCKSOutbound', '\troutervpndesktoppt.RegisterExternalPhysicalOutbound(registry)', 'func OutboundRegistry() *outbound.Registry {'),
             ('RegisterNodePhysicalOutbound', '\troutervpndesktoppt.RegisterExternalPhysicalOutbound(registry)', 'func OutboundRegistry() *outbound.Registry {'),
+            ('RegisterExternalSOCKSOutbound', '\troutervpndesktoppt.RegisterNodePhysicalOutbound(registry)', 'func OutboundRegistry() *outbound.Registry {'),
             ('RegisterLocalTorDNS', '\ttransport.RegisterTCP(registry)', 'func DNSTransportRegistry() *dns.TransportRegistry {')):
         registered = '\troutervpndesktoppt.'+function+'(registry)'
         marker = 'routervpndesktoppt.'+function+'('
