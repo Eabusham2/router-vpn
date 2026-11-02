@@ -148,6 +148,9 @@ final class ProductConnectSurface extends Context {
 }
 final class LayeredVpnService {static Boolean lockdown;static Boolean currentLockdownState(){return lockdown;}}
 final class AndroidUnifiedNodeCatalog {static final class Item{final String id;Item(String id){this.id=id;}boolean isRouterVpn(){return false;}}}
+// Process-wide cancellation boundary only; the comparison suite executes its
+// actual native drain/restoration lifecycle.
+final class AndroidExternalNodeComparison {static boolean active;static int cancellations;static boolean cancelActiveOperation(){if(!active)return false;cancellations++;return true;}}
 final class AndroidViaEntryLatencyProbe {static boolean active;static int cancellations;static boolean cancelActiveOperation(){if(!active)return false;cancellations++;return true;}}
 '''
 
@@ -270,6 +273,13 @@ public final class ConnectionProfilesHarness {
   var path=f.store.currentExternalPath(exit);check(!path.direct()&&path.entry.id.equals(f.first.id)&&path.entryMode.equals("hysteria2")&&path.exit.id.equals(exit),"main Connect resolves exact loaded external path");
   ProductConnectSurface surface=new ProductConnectSurface(f);surface.pressConnect();check(surface.connection.starts==1&&!surface.connection.direct&&surface.connection.entry.id.equals(f.first.id)&&surface.connection.exit.id.equals(exit)&&surface.connection.mode.equals("hysteria2"),"shipping map Connect dispatches saved graph and exact credentials");
   AndroidViaEntryLatencyProbe.active=true;int canceled=AndroidViaEntryLatencyProbe.cancellations;ProductConnectSurface recreated=new ProductConnectSurface(f);recreated.pressConnect();AndroidViaEntryLatencyProbe.active=false;check(recreated.connection.starts==0&&AndroidViaEntryLatencyProbe.cancellations==canceled+1,"recreated map cancels only the owned candidate operation before any connection dispatch");
+  State beforeComparison=new State(f);int comparisons=AndroidExternalNodeComparison.cancellations,candidates=AndroidViaEntryLatencyProbe.cancellations;AndroidExternalNodeComparison.active=true;
+  try{
+   ProductConnectSurface recreatedComparison=new ProductConnectSurface(f);recreatedComparison.pressConnect();
+   check(recreatedComparison.connection.starts==0&&AndroidExternalNodeComparison.cancellations==comparisons+1,"recreated map must cancel the active external comparison before connection dispatch");
+   check(AndroidViaEntryLatencyProbe.cancellations==candidates,"external comparison cancellation reached the unrelated candidate operation");
+   beforeComparison.same(f,"external comparison cancellation preserves saved path and private sources");
+  }finally{AndroidExternalNodeComparison.active=false;}
   f.store.selectExternalPath(f.exits.get(exit),null,"wg");f.store.update(r.id,"Direct "+exit);check(f.store.list().size()==1&&f.store.list().get(0).name.equals("Direct "+exit),"Update preserves profile ID/count");f.otherSelection();f.store.load(r.id);check(f.store.currentExternalPath(exit).direct()&&!f.prefs.getBoolean("multihop_on",true),"direct Update/Load clears old hops");surface=new ProductConnectSurface(f);surface.pressConnect();check(surface.connection.starts==1&&surface.connection.direct&&surface.connection.entry==null&&surface.connection.exit.id.equals(exit),"shipping map Connect dispatches direct saved external path");f.store.delete(r.id);check(f.store.list().isEmpty(),"Delete external profile");
  }
  static void externalExecution(Path root)throws Exception{
