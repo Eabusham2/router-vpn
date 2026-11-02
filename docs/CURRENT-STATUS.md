@@ -1,12 +1,49 @@
 # Current implementation status
 
-Updated November 1, 2026 UTC. This file distinguishes published source,
+Updated November 2, 2026 UTC. This file distinguishes published source,
 local commits, unfinished integration and remaining delivery evidence. The
 binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through 2f62badb
+## Latest implementation continuation — through 6d6f4c15
+
+The independently verified published source cutoff is
+[`6d6f4c155654503057e40cd398a0cf3cbac28a81`](https://github.com/Eabusham2/router-vpn/commit/6d6f4c155654503057e40cd398a0cf3cbac28a81).
+[November 2 continuation evidence](CONTINUATION-EVIDENCE-2026-11-02.md)
+records complete On-connect release-intent recovery, retained Hysteria2/WG Start
+Layers, desktop native fifty-sample latency, the genuine Windows UAC fixture,
+the Swift 6.1 compiler repair and the Tor audit/Windows diagnostic follow-ups.
+
+- Desktop selected ordinary-external and Tor paths now have actual native
+  fifty-sample HTTPS measurement, cancellation, source/network/session proof
+  and joined cleanup. Actual encrypted traffic and negative controls pass.
+  All-node transactions, history and the three desktop UIs remain active work;
+  Windows/macOS Router Fastest still needs its original fifty-sample contract.
+- Linux Hysteria2 and WG now join SS with all three Start Layers. AWG2
+  Fast/Strong retain Off at this cutoff. The installed gate now requires 157
+  scenarios; its expanded native execution is not replaced by the successful
+  generated six-case TUN gate, which also passed both architectures at 5423bf92.
+  Complete same-boot On-connect release-intent recovery is published and
+  tested from isolated sources. Always/torn/foreign and legacy recovery remain.
+- The real Windows disposable-account fixture passed account ownership and
+  cleanup controls but failed native token validation before worker creation.
+  Exact diagnostics identify a linked impersonation token (type 2), with valid
+  ABI/TokenID and no API error. The primary-token requirement stays intact;
+  the supported native launch path still needs verification.
+  Genuine UAC, the independent GLOBALROOT probe and full native/MAX acceptance
+  remain unresolved. Existing production launch behavior was not changed.
+- Swift 6.1.2 reproduced the actual Apple callback compilation failure; the
+  explicit Sendable closure passes all 433 runner checks. Newer Swift also
+  passes 353 comparison checks and six compiled controls. Xcode/IPA acceptance
+  still requires its own completed run. The updated Tor ownership audit passes
+  42 focused tests and the full local release-orchestration audit. The repaired
+  map-first and release-blocker source workflows passed at their recorded SHAs.
+- macOS first/legacy inventory and Intel managed image capture remain open.
+  Current release publication, signing, deployment and physical acceptance
+  remain unproved. Stopped PQ work remains unpublished and excluded.
+
+## Earlier implementation continuation — through 2f62badb
 
 The independently verified published source cutoff is
 [`2f62badb9d9a74c8f93a8232f914ef63eb4f2d7f`](https://github.com/Eabusham2/router-vpn/commit/2f62badb9d9a74c8f93a8232f914ef63eb4f2d7f).
