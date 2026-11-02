@@ -18,7 +18,32 @@ Those capabilities remain unfinished requirements. A passing source audit,
 successful build or published release does not establish all-device or private
 deployment acceptance.
 
-## Implementation reconciliation through f103637f
+## Implementation reconciliation through bbd684f8
+
+Original requirement recovery remains complete for the recorded source
+collection. The latest published source cutoff is
+[`bbd684f8`](https://github.com/Eabusham2/router-vpn/commit/bbd684f860a4956e9f9d27d5c7c5d2faeeefb4c6);
+[the continuation evidence](CONTINUATION-EVIDENCE-2026-11-02.md)
+records the exact changes, tests and native CI. These updates refine evidence,
+not the original requirement denominator or acceptance criteria.
+
+| Recovered scope | Current reconciliation |
+|---|---|
+| #112, #200–213, #337 and retained Linux transitions | The generated protected-TUN gate now passes all six cases on both architectures at `9b53dbcf`; the earlier MTU routing-receipt failure is closed. `c318a79d` adds the distinct typed external native lifecycle, with real SS/HTTP/HTTPS namespace succession and retained-protection checks. The public app/session/journal transition remains unfinished. All 299 installed scenarios, broader graphs, Always/torn/legacy recovery and physical acceptance still need their own evidence. |
+| #141–148, #222–223, #335, measurements and durable state | Existing captured fifty-sample external comparisons remain published. `cc72da36` repairs cancellation during the durable Router benchmark's save lock; `7b2eabab` preserves a private target replaced during final save admission. Exact original/winner restoration and successful rename semantics remain intact. `0248dfb0` handles validated atomic status replacement within the original owner/deadline; `00063c98` repairs only canonical fixture roots. Quick Router samples, durable TCP metrics, routed HTTPS metrics and the two-probe score remain separate. |
+| Native observer and Windows launch evidence | Linux read-only observation and both generated TUN architectures pass at `9b53dbcf`. `bbd684f8` repairs the later namespace fixture launch without changing host policy or weakening native assertions. Actual Windows `49df6051` passes mandatory protected-global creation/cancellation and genuine Limited/normal runas Full lifetime checks. The exploratory GLOBALROOT no-child observation gives no launch authority. Full MAX, package composition, interactive/cross-account use and physical devices remain separate. |
+| All original and later requirements | Preserve every uncancelled requirement and its existing source/native/live evidence. Current release publication, signing, private deployment and full physical acceptance are not established. Native prerequisites, truthful refusal and green individual jobs are not universal product completion. Stopped unpublished PQ work remains preserved and excluded. |
+
+The actual `49df6051` installed/Portable Session gate additionally passes on
+the elevated fixture desktop; normal Medium-user and interactive/cross-account
+product acceptance remain distinct. The `bbd684f8` durable-state gate has a new
+Darwin watcher retirement/startup errno-11 failure. Its cause is not yet proved,
+and the gate remains required.
+
+## Earlier implementation reconciliation through f103637f
+
+The following table preserves its historical checkpoint. Current conclusions
+above supersede the old unresolved-failure wording without erasing its evidence.
 
 The original sources below have already been recovered. Continue their actual
 implementation and acceptance work without replacing their scope or repeating

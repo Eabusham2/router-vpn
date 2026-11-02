@@ -5,11 +5,72 @@ This continues [November 1](CONTINUATION-EVIDENCE-2026-11-01.md) and preserves
 source recovery is complete for the recorded collection; continue the actual
 implementation without replacing the original scope with this status record.
 The independently read-back published source cutoff is
-[`f103637f63235872ba2c144dd87135d6a1832615`](https://github.com/Eabusham2/router-vpn/commit/f103637f63235872ba2c144dd87135d6a1832615).
+[`bbd684f860a4956e9f9d27d5c7c5d2faeeefb4c6`](https://github.com/Eabusham2/router-vpn/commit/bbd684f860a4956e9f9d27d5c7c5d2faeeefb4c6).
 Later working files are outside this cutoff. No complete current release,
 private deployment, signing or physical-device acceptance is established.
 
-## Latest published source and native evidence — through f103637f
+## Latest published source and native evidence — through bbd684f8
+
+These changes extend the historical checkpoint below. Every commit was pushed
+with an expected-parent check and independently read back from `main`. Tests
+used isolated published-source projections; stopped unpublished PQ changes
+were excluded. A local compilation, native CI result and public application
+integration are reported separately.
+
+| Commit | Implemented result and executed verification |
+|---|---|
+| [`0248dfb0`](https://github.com/Eabusham2/router-vpn/commit/0248dfb0b00ccd5d4108387d160d44db3ccd5127) | MTU status reads may retry a fully validated atomic replacement while retaining the original invocation, process, workspace, deadline and operation checks. Immutable reads remain strict. Real Linux file-lease synchronization passed five groups/thirteen leaves under race; four compiled defects were rejected. Generated TUN/controller compilation passed. This establishes a reachable status-read race, not the cause of the older `795e6ef7` failure. |
+| [`00063c98`](https://github.com/Eabusham2/router-vpn/commit/00063c98b3b317e837f1979853605781f514eee5) | Canonicalize only fixture-owned temporary roots for the macOS comparison tests that encountered `/var` as a symlink. Actual aliased-root reproduction, repaired comparison/history cases and unchanged symlink rejection cases passed. No production private-path validation was relaxed; hosted macOS execution remains separate. |
+| [`cc72da36`](https://github.com/Eabusham2/router-vpn/commit/cc72da362c419e65014ecf043de8766e743f68e5) | Recheck durable Router benchmark cancellation after acquiring the application mutex, immediately before save admission. The test proves actual mutex contention after the required TCP handshakes. The old implementation returned success and changed RAM/disk after cancellation. Seven groups/fourteen leaves, twenty cancellation runs and three compiled old-behavior controls passed; the final test-only canonical-root change also passed through an actual temporary-directory alias. This is ordinary TCP measurement, not tunnel-path proof or cancellation of an already committed write. |
+| [`9b53dbcf`](https://github.com/Eabusham2/router-vpn/commit/9b53dbcf04843337d496c3b0b040f3f0c94d2aa2) | Preserve Linux multicast FIB families as ambient objects, corroborate the Windows unlimited loopback MTU against exact native interface rows, and recognize only an original TUN's GOTO resolution by its unique installed NOP target. Actual namespace route/rule installation and target-first retirement passed, with twelve delta cases and a compiled foreign-owner rejection. Eight real observer cases and seven compiled controls passed. All twenty-eight generated MTU groups passed with read-only inventory. The complete gate contains 693 source/runner records; 3,392 project and 3,610 native Go/module records were verified. Subsequent actual TUN CI passed both architectures as recorded below. |
+| [`49df6051`](https://github.com/Eabusham2/router-vpn/commit/49df605122af0ed73f31a743224a7cc88501875f) | Require actual protected-global Shell suspension and post-creation cancellation through the retained path used by the shipping bootstrap. The exploratory GLOBALROOT spelling may report only the exact independently proved no-child outcome as unavailable; unknown, mixed, partial-child, image and cleanup errors still fail. Two portable groups/thirty-six leaves and six compiled classifier controls passed; both complete Windows images compiled with pointer checking. All forty-two earlier native requirements and twenty-nine production controls remain. The actual Windows diagnostic job then passed both mandatory outcomes and genuine Limited/Full checks. No launch privilege or UAC policy changed. |
+| [`7b2eabab`](https://github.com/Eabusham2/router-vpn/commit/7b2eabab3cf7ee06c507b5f6b2d6d2c158748483) | Capture the private target's native file ID eagerly and validate the parent/target after the final ownership callback. The old source overwrote a replacement, accepted a newly appeared target or recreated a removed target. The repair preserves the other writer and the successful rename commit boundary. Final composition passed eight race groups/six leaves, ten runner checks and both complete Windows pointer-check builds; the wider history/cohort integration passed eleven groups/nine leaves. A compiled missing-check defect failed at its real filesystem assertion. Windows must execute all six cases and both final-check/lazy-ID defects. This does not turn pathname validation plus rename into a kernel-atomic compare-and-swap. |
+| [`c318a79d`](https://github.com/Eabusham2/router-vpn/commit/c318a79d830ee1c262c89fc7f381f1b804c6f115) | Share Linux native source/guardian admission and joined retirement between distinct sealed Router and external policies. An external graph retains its own DNS/exit proof and never receives a fabricated Router identity. Five actual namespace groups passed SS/HTTP/HTTPS Router → external → original succession, live forbidden-peer rejection, retained Always protection and refused/cancelled candidates. Both native command architectures compiled; all twelve earlier lifecycle defects still failed after the routing-driver merge. The thirteen non-driver files are identical to the actual native run. Final closure checks cover 696 native/gate and 7,897 Go/module inputs. This is the native prerequisite: public app/session/journal succession remains guarded and unfinished. |
+| [`bbd684f8`](https://github.com/Eabusham2/router-vpn/commit/bbd684f860a4956e9f9d27d5c7c5d2faeeefb4c6) | Use the existing trusted, owned process-group launcher only for the already compiled isolated network-event fixture. Keep compilation/read-only observation at the normal runner privilege; preserve the parent namespace check, empty initial inventory, all event assertions and joined timeout cleanup. Eight launcher/verdict checks and the complete local gate passed, including eight real namespace scenarios and seven compiled defects. The actual local root path passed; the hosted non-root invocation remains the next CI boundary. No host policy, sysctl or production observer was changed. |
+
+### Native results that supersede the earlier failures
+
+- At `9b53dbcf`, the [generated protected-TUN workflow](https://github.com/Eabusham2/router-vpn/actions/runs/41374140436)
+  passed all six cases on [AMD64](https://github.com/Eabusham2/router-vpn/actions/runs/41374140436/job/125050638702)
+  and [ARM64](https://github.com/Eabusham2/router-vpn/actions/runs/41374140436/job/125050639135).
+  MTU rollback and original TUN retirement passed on both. The earlier
+  `ce557096` routing-receipt failure is closed by this exact native evidence.
+- The [Linux observer job](https://github.com/Eabusham2/router-vpn/actions/runs/41374140680/job/125050641551)
+  passed actual read-only subscription, snapshot and joined close at that SHA.
+  Its later failure was namespace setup: the runner could not write `uid_map`.
+  The Windows and macOS matrix jobs were cancelled before their observer steps.
+  `bbd684f8` repairs the fixture launch; cancellation supplies no platform pass.
+- At `49df6051`, the [actual Windows diagnostic job](https://github.com/Eabusham2/router-vpn/actions/runs/41374288530/job/125051079990)
+  passed protected-global creation and cancellation with exact file/image and
+  primary-token proof, retained initial-thread suspension, no child code, and
+  termination/join. Genuine Limited/normal `runas` Full and retained-parent
+  lifetime/negative cases also passed. GLOBALROOT separately returned the exact
+  no-creation capability observation; it did not supply launch authority.
+- The [Windows installed/Portable Session gate at `49df6051`](https://github.com/Eabusham2/router-vpn/actions/runs/41374288530/job/125051080122)
+  also passed actual shipping controller, App/Tray pipe, exact-volume image,
+  cancellation, failed-join retention and retirement cases, including compiled
+  negative controls. The protected Shell product branch ran on the elevated
+  fixture desktop; this is separate from normal Medium-user, interactive
+  consent, cross-account or physical-device acceptance.
+- The [durable-state source gate at `bbd684f8`](https://github.com/Eabusham2/router-vpn/actions/runs/41374993550/job/125053176435)
+  failed the real watcher lifecycle fixture in `modes/test_darwin_owned_pf.py`:
+  release/Always retirement returned errno 11, followed by two startup failures.
+  Its resource/lifetime cause remains under investigation at this cutoff. This
+  is a distinct current failure; the earlier native successes do not waive it.
+- The full 299-case installed Linux gate, full Windows MAX admission,
+  macOS first/legacy inventory and Intel managed image capture, current
+  APK/Xcode/package gates, signing, private deployment and physical-device
+  acceptance remain distinct. This record does not establish a complete release.
+
+Keep the durable Router 50–200 TCP benchmark, quick Router Fastest selection,
+routed external fifty-sample HTTPS comparison and two-probe Local/Server score
+separate. A successful native lifecycle prerequisite does not complete the
+public retained Node-to-external connection, restoration or journal flow.
+
+## Earlier published source and native evidence — through f103637f
+
+This section preserves its historical observations. The newer source and
+exact native outcomes above supersede its unresolved-failure descriptions.
 
 The following units extend the earlier checkpoint below. Their publication was
 independently read back from `main`; no pending working file is included.

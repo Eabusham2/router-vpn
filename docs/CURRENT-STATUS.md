@@ -6,7 +6,54 @@ binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
-## Latest implementation continuation — through f103637f
+## Latest implementation continuation — through bbd684f8
+
+The independently verified published source cutoff is
+[`bbd684f860a4956e9f9d27d5c7c5d2faeeefb4c6`](https://github.com/Eabusham2/router-vpn/commit/bbd684f860a4956e9f9d27d5c7c5d2faeeefb4c6).
+[The November 2 evidence](CONTINUATION-EVIDENCE-2026-11-02.md)
+records each implementation, local/native boundary and historical failure.
+
+- The actual protected Linux TUN gate passes all six cases on AMD64 and ARM64
+  at `9b53dbcf`, including MTU rollback and original TUN retirement. Exact
+  owned GOTO/NOP resolution now preserves the real kernel receipt. Multicast
+  FIBs remain ambient; the Windows loopback MTU sentinel requires matching
+  native interface evidence. Linux read-only observation passes. `bbd684f8`
+  repairs the later hosted namespace setup failure; complete hosted observer
+  results on all three desktop systems remain required.
+- The Linux retained native lifecycle now accepts either a sealed Router
+  policy or a separately sealed ordinary external policy. Five real namespace
+  groups pass SS/HTTP/HTTPS succession/restoration, blocked bypass traffic and
+  refused/cancelled candidates. The public application/session/journal bridge
+  is still unfinished and guarded. Native prerequisite success does not close
+  that user-facing requirement or unsupported external families.
+- Windows `49df6051` passes actual protected-global suspended launch and
+  cancellation plus the genuine Limited/normal `runas` Full lifecycle. The
+  exploratory GLOBALROOT spelling reports its exact proved no-child result
+  separately. Shipping privileges, UAC policy and native rejection controls
+  remain intact. The actual installed/Portable Session gate also passes its
+  shipping controller, App/Tray, cancellation and retirement cases on an
+  elevated fixture desktop. Full MAX, normal Medium-user product operation,
+  interactive consent and cross-account acceptance remain separate.
+- Durable Router latency cancellation now rechecks after acquiring the save
+  lock. Private stores capture the original native file ID and recheck after
+  the final ownership callback, preserving replacement writers. Real local
+  race/filesystem regressions and Windows cross-compilation pass; the new
+  Windows filesystem cases remain mandatory in native CI. MTU status reads
+  handle validated atomic replacement within the original lifetime. The
+  macOS comparison fixture canonicalizes only its owned temporary roots.
+- All 299 installed Linux scenarios, broader graphs, Always/torn/legacy
+  recovery, macOS installer boundaries, final APK/Xcode packages, signing,
+  deployment and physical acceptance retain their own evidence requirements.
+  The current `bbd684f8` durable-state gate fails a Darwin watcher lifecycle
+  fixture with errno 11 during release/Always retirement and later startup;
+  its resource/lifetime cause is being investigated separately.
+  No complete current release is established. Stopped PQ work stays preserved,
+  unpublished and excluded from these tested source projections.
+
+## Earlier implementation continuation — through f103637f
+
+The observations in this section describe that historical checkpoint; the
+newer source and exact native outcomes above take precedence.
 
 The independently verified published source cutoff is
 [`f103637f63235872ba2c144dd87135d6a1832615`](https://github.com/Eabusham2/router-vpn/commit/f103637f63235872ba2c144dd87135d6a1832615).
