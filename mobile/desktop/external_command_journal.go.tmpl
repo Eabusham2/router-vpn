@@ -1,0 +1,116 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"os"
+	"runtime"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/spf13/pflag"
+)
+
+type routerVPNExternalJournalOptions struct {
+	ParentHandle                     uint64
+	ParentImage, Pipe, CaptureSHA256 string
+}
+
+type routerVPNExternalJournal interface {
+	authenticate(context.Context, *routerVPNExternalFiles) error
+	prepare(context.Context, *mobilemultihop.DesktopExternalPolicy, *mobiletor.DesktopProtectionTransferRecord) (context.Context, *routerVPNExternalAdmission, error)
+	close() error
+}
+
+// Every Windows physical or journal option enters the authenticated form,
+// including a former physical-source-only invocation. The all-empty legacy
+// form separately proves Off from the independently compiled original policy;
+// imported ready/ack records never provide an alternate protected admission.
+func routerVPNRunExternalCommand(parent context.Context, directory, session, source, config, transfer string,
+	linux routerVPNNodeLinuxParentOptions, journal routerVPNExternalJournalOptions) error {
+	if runtime.GOOS == "windows" && (source != "" || config != "" || transfer != "") || journal != (routerVPNExternalJournalOptions{}) {
+		if linux != (routerVPNNodeLinuxParentOptions{}) {
+			return routerVPNExternalFailure
+		}
+		return routerVPNRunExternalWithJournal(parent, directory, session, source, config, transfer, journal)
+	}
+	if runtime.GOOS == "windows" {
+		if linux != (routerVPNNodeLinuxParentOptions{}) {
+			return routerVPNExternalFailure
+		}
+		return routerVPNRunExternalUnprotected(parent, directory, session, routerVPNNewExternalNative)
+	}
+	if linux != (routerVPNNodeLinuxParentOptions{}) || config != "" || transfer != "" {
+		return routerVPNRunLinuxExternalControlled(parent, directory, session, source, config, transfer, linux)
+	}
+	return routerVPNRunExternal(parent, directory, session, source, routerVPNNewExternalNative)
+}
+
+func routerVPNRunExternalWithJournal(parent context.Context, directory, session, source, config, transfer string,
+	options routerVPNExternalJournalOptions) (failure error) {
+	if parent == nil || parent.Err() != nil || !routerVPNExternalSession.MatchString(session) ||
+		!routerVPNExternalSource.MatchString(source) || !routerVPNExternalSource.MatchString(config) || !routerVPNExternalSource.MatchString(transfer) {
+		return routerVPNExternalFailure
+	}
+	journal, err := routerVPNNewExternalJournal(parent, source, options)
+	if err != nil {
+		return err
+	}
+	if journal == nil {
+		return routerVPNExternalFailure
+	}
+	defer func() { failure = errors.Join(failure, journal.close()) }()
+	return routerVPNRunExternalCaptured(parent, directory, session, source, config, transfer, routerVPNNewExternalNative, journal)
+}
+
+// This route preserves the existing no-physical-option Windows contract only
+// for an independently compiled unprotected graph. It cannot consume staged
+// journal/transfer data or legacy file acknowledgements as socket authority.
+func routerVPNRunExternalUnprotected(parent context.Context, directory, session string, factory routerVPNExternalFactory) error {
+	return routerVPNRunExternalCapturedPolicy(parent, directory, session, "", "", "", factory, nil, true)
+}
+
+func routerVPNExternalUnprotectedPolicy(files *routerVPNExternalFiles, policy *mobilemultihop.ExternalPolicy) error {
+	if files == nil || files.root == nil || policy == nil {
+		return routerVPNExternalFailure
+	}
+	captured, err := policy.DesktopCapture()
+	if err != nil || captured.KillSwitchPolicy != "off" {
+		return routerVPNExternalFailure
+	}
+	for _, name := range []string{"physical-handoff-ready.json", "physical-handoff-ack.json", "external-journal-capture.json", "external-protection-transfer.json", "external-protection-retired.json"} {
+		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			return routerVPNExternalFailure
+		}
+	}
+	return nil
+}
+
+// Each captured option is one command-line input, not a last-writer-wins
+// setting. An explicitly supplied empty/zero option cannot disappear into an
+// all-absent Off invocation. Defaults remain absent until pflag calls Set.
+type routerVPNExternalOnceFlag struct {
+	pflag.Value
+	seen bool
+}
+
+func (value *routerVPNExternalOnceFlag) Set(raw string) error {
+	if value == nil || value.Value == nil || value.seen {
+		return errors.New("captured external option may be supplied only once")
+	}
+	value.seen = true
+	if err := value.Value.Set(raw); err != nil {
+		return err
+	}
+	if value.Value.Type() == "string" && value.Value.String() == "" ||
+		(value.Value.Type() == "int" || value.Value.Type() == "uint64") && value.Value.String() == "0" {
+		return errors.New("captured external option requires a nonempty nonzero value")
+	}
+	return nil
+}
+
+func routerVPNExternalOwnedFlags(flags *pflag.FlagSet) {
+	flags.VisitAll(func(flag *pflag.Flag) {
+		flag.Value = &routerVPNExternalOnceFlag{Value: flag.Value}
+	})
+}

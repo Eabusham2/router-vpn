@@ -154,6 +154,7 @@ func (a *app) externalProfileConnectWithRuntime(w http.ResponseWriter, r *http.R
 // Both interactive Connect and startup already hold one connection transaction.
 // A retained execution is internal Last-state evidence, never an HTTP override.
 func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfileConnectRequest, retained string, startup *startupPolicyCapture, driver externalConnectRuntime) {
+	operation := a.connectionOperationContextOrBackground()
 	if runtime.GOOS != "windows" && runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 		http.Error(w, "desktop external-node runtime is unavailable on this platform", http.StatusNotImplemented)
 		return
@@ -340,7 +341,7 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 	if native != nil {
 		prepare := driver.retained
 		if prepare == nil {
-			prepare = prepareDesktopRetainedExternal
+			prepare = prepareDesktopRetainedExternalForLaunch
 		}
 		nativeRetained, err = prepare(a, native)
 		if nativeRetained != nil {
@@ -349,7 +350,7 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 					cleanup, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 					defer cancel()
 					if closeErr := nativeRetained.Close(cleanup); closeErr != nil {
-						sessionTrackerFor(a).markRequestFailure("Linux external cleanup remains owned: " + closeErr.Error())
+						sessionTrackerFor(a).markRequestFailure("Native external cleanup remains owned: " + closeErr.Error())
 					}
 				}
 			}()
@@ -506,6 +507,11 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 			desktopNodeOwners.Store(a, native)
 		}
 		a.mu.Lock()
+		if nativeRetained != nil && (a.cmd != realCmd || a.checkCapturedConnectionOperationLocked(operation) != nil || a.connectionCancelIntent == operation) {
+			a.mu.Unlock()
+			http.Error(w, "retained external start cannot publish over a replaced request or runtime", http.StatusConflict)
+			return
+		}
 		a.cmd = realCmd
 		a.state.Mode = "external-node"
 		a.state.LogicalMode = "external-node"
@@ -597,7 +603,7 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	a.mu.Lock()
-	if a.cmd != startedCmd || startedCmd == nil {
+	if a.cmd != startedCmd || startedCmd == nil || a.checkCapturedConnectionOperationLocked(operation) != nil || a.connectionCancelIntent == operation {
 		a.mu.Unlock()
 		sessionTrackerFor(a).markRequestFailure("external-node runtime changed before result adoption")
 		http.Error(w, "external-node runtime changed before result adoption", http.StatusConflict)

@@ -373,6 +373,9 @@ func proveSelectedDNSWithLookup(parent context.Context, a *app, s observedConnec
 		result.Reason = selectionErr.Error()
 		return result
 	}
+	if proof, owned := proveDesktopWindowsExternalDNS(parent, a, s, runtimeID, selected); owned {
+		return proof
+	}
 	if proof, owned := proveDesktopLinuxNodeDNS(parent, a, s, runtimeID, selected); owned {
 		return proof
 	}

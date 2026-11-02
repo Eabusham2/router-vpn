@@ -692,6 +692,12 @@ func (prepared *speedLabExternalPreparation) releaseUnused() {
 	if prepared == nil || prepared.native == nil || prepared.native.command != nil && prepared.native.command.Process != nil {
 		return
 	}
+	if prepared.native.external != nil && prepared.native.external.windows != nil {
+		// The retained host owns these bytes as soon as it captures the launch,
+		// including partial startup or failed cleanup. Its real child is not the
+		// exec.Cmd descriptor, and only its joined retirement may clear them.
+		return
+	}
 	clear(prepared.native.config)
 	clear(prepared.native.metadata)
 	clear(prepared.native.external.source)
@@ -768,7 +774,9 @@ func (a *app) prepareSpeedLabExternalPathWithRuntime(q speedLabRequest, restored
 			return nil, errors.New("saved external Speed Lab restore receipt differs from the captured path")
 		}
 		native, err = compileSpeedLabExternalRestore(restored, exit)
-		if err == nil {
+		if err == nil && restored.windowsHost != nil {
+			err = preflightDesktopWindowsExternalRestore(a, native)
+		} else if err == nil {
 			var binary string
 			binary, err = verifyBundledNative(desktopAmneziaPackageRoot())
 			if err == nil {
@@ -799,6 +807,7 @@ func (a *app) prepareSpeedLabExternalPathWithRuntime(q speedLabRequest, restored
 }
 
 func (a *app) startSpeedLabExternalPathCaptured(q speedLabRequest, restored *speedLabExternalRestore) (result speedLabPath, failure error) {
+	operation := a.connectionOperationContextOrBackground()
 	prepared := q.preparedExternal
 	var err error
 	if prepared == nil || restored != nil {
@@ -839,7 +848,7 @@ func (a *app) startSpeedLabExternalPathCaptured(q speedLabRequest, restored *spe
 	var nativeRetained desktopExternalRetainedRuntime
 	retainedComplete := false
 	if native != nil {
-		nativeRetained, err = prepareDesktopRetainedExternal(a, native)
+		nativeRetained, err = prepareDesktopRetainedExternalForLaunch(a, native)
 		if nativeRetained != nil {
 			defer func() {
 				if !retainedComplete {
@@ -918,6 +927,10 @@ func (a *app) startSpeedLabExternalPathCaptured(q speedLabRequest, restored *spe
 		desktopNodeOwners.Store(a, native)
 	}
 	a.mu.Lock()
+	if nativeRetained != nil && (a.cmd != cmd || a.checkCapturedConnectionOperationLocked(operation) != nil || a.connectionCancelIntent == operation) {
+		a.mu.Unlock()
+		return speedLabPath{}, errors.New("temporary retained external start cannot publish over a replaced operation or runtime")
+	}
 	a.cmd = cmd
 	a.state.Mode = "external-node"
 	a.state.LogicalMode = "external-node"
@@ -969,6 +982,10 @@ func (a *app) startSpeedLabExternalPathCaptured(q speedLabRequest, restored *spe
 		}
 	}
 	a.mu.Lock()
+	if a.cmd != cmd || a.checkCapturedConnectionOperationLocked(operation) != nil || a.connectionCancelIntent == operation {
+		a.mu.Unlock()
+		return speedLabPath{}, errors.New("temporary external activation lost its current runtime before publication")
+	}
 	a.state.Connected = true
 	a.state.Phase = "connected"
 	a.mu.Unlock()

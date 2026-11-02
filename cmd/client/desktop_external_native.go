@@ -46,6 +46,8 @@ type desktopExternalRuntime struct {
 	physicalEgress                         []nativeopenvpn.LayerEgress
 	physical                               *mobilemultihop.DesktopExternalPolicy
 	retained                               desktopExternalRetainedRuntime
+	windowsHost                            *desktopWindowsExternalHost
+	windows                                *desktopWindowsExternalRuntime
 	mtu                                    *desktopMTUSession
 	direct                                 bool
 	started                                time.Time
@@ -97,12 +99,15 @@ type desktopExternalProgressRecord struct {
 // Exactly one goroutine reaps the wrapper. Startup, heartbeat monitoring and
 // Disconnect observe this same channel; none may race a second Cmd.Wait.
 func desktopExternalProcessDone(launch *desktopNodeLaunch) <-chan struct{} {
-	if launch == nil || launch.external == nil || launch.command == nil || launch.command.Process == nil {
+	if launch == nil || launch.external == nil || launch.command == nil {
 		return nil
 	}
 	owner := launch.external
 	if owner.retained != nil {
 		return owner.retained.ProcessDone()
+	}
+	if launch.command.Process == nil {
+		return nil
 	}
 	owner.waitOnce.Do(func() {
 		owner.waitDone = make(chan struct{})
@@ -292,6 +297,12 @@ func compileDesktopExternalGraphWithPredecessor(graph map[string]any, profile, e
 }
 
 func prepareDesktopExternalLaunch(a *app, profile, entry common.RouterProfile, exit standardExit, direct bool, restored string) (*desktopNodeLaunch, error) {
+	if host := a.desktopNodeConnectionHost(); host != nil && desktopOwnedNodeProtectionPolicy(profile) != "off" {
+		if !desktopWindowsExternalProfileEligible(profile, direct, restored) {
+			return nil, errors.New("this protected Windows external graph has no captured native controller successor; the previous path is retained")
+		}
+		return prepareDesktopWindowsExternalLaunch(a, host, profile, entry, exit, direct, restored)
+	}
 	binary, err := verifyBundledNative(desktopAmneziaPackageRoot())
 	if err != nil {
 		return nil, err
@@ -366,8 +377,12 @@ func validateDesktopExternalProof(raw []byte, owner *desktopExternalRuntime, now
 		return proof, bad
 	}
 	if proof.NetworkReceipt != "" {
+		target := runtime.GOOS
+		if owner != nil && owner.windows != nil && owner.windows.policy != nil {
+			target = owner.windows.policy.Metadata().TargetOS
+		}
 		network, err := desktopnetwork.ParseDesktopNetworkReceipt(proof.NetworkReceipt)
-		if err != nil || network.TargetOS != runtime.GOOS {
+		if err != nil || network.TargetOS != target {
 			return proof, bad
 		}
 	}
@@ -407,8 +422,15 @@ func (a *app) readDesktopExternalProof(launch *desktopNodeLaunch) (desktopExtern
 }
 
 func (a *app) readDesktopExternalProofRecord(launch *desktopNodeLaunch) (desktopExternalProof, error) {
-	if launch == nil || launch.external == nil || launch.command == nil || launch.command.Process == nil || !a.ownsConnectionRuntime(launch.command) {
+	if launch == nil || launch.external == nil || launch.command == nil || !a.ownsConnectionRuntime(launch.command) {
 		return desktopExternalProof{}, errors.New("external native process is no longer owned")
+	}
+	if launch.external.windows != nil {
+		if err := launch.external.windows.current(true); err != nil {
+			return desktopExternalProof{}, err
+		}
+	} else if launch.command.Process == nil {
+		return desktopExternalProof{}, errors.New("external native process has no actual original process")
 	}
 	owner := launch.external
 	if desktopExternalProcessExited(launch) {

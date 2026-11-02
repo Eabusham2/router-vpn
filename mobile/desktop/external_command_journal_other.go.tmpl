@@ -1,0 +1,9 @@
+//go:build !windows
+
+package main
+
+import "context"
+
+func routerVPNNewExternalJournal(context.Context, string, routerVPNExternalJournalOptions) (routerVPNExternalJournal, error) {
+	return nil, routerVPNExternalFailure
+}

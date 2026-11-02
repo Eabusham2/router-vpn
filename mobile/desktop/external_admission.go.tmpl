@@ -19,16 +19,65 @@ type ExternalPhysicalPrepared struct {
 type ExternalPhysicalAdmission func(context.Context, ExternalPhysicalPrepared) error
 type externalPhysicalAdmissionKey struct{}
 type externalPhysicalAdmissionOwner struct {
-	policy *mobilemultihop.DesktopExternalPolicy
-	admit  ExternalPhysicalAdmission
+	policy      *mobilemultihop.DesktopExternalPolicy
+	admit       ExternalPhysicalAdmission
+	predecessor *mobiletor.DesktopWindowsProtectionTarget
+	commit      mobiletor.DesktopWindowsProtectionCommitBarrier
 }
 
 func WithExternalPhysicalAdmission(ctx context.Context, policy *mobilemultihop.DesktopExternalPolicy, admit ExternalPhysicalAdmission) (context.Context, error) {
+	return withExternalPhysicalAdmission(ctx, policy, nil, nil, admit)
+}
+
+// The authenticated parent supplies this durable barrier for the exact sealed
+// external policy. A staged transfer record cannot construct the callback or
+// replace the original native predecessor capability.
+func WithExternalPhysicalJournalAdmission(ctx context.Context, policy *mobilemultihop.DesktopExternalPolicy,
+	predecessor *mobiletor.DesktopWindowsProtectionTarget, commit mobiletor.DesktopWindowsProtectionCommitBarrier,
+	admit ExternalPhysicalAdmission) (context.Context, error) {
+	if commit == nil || predecessor != nil && predecessor.Validate() != nil {
+		return nil, errors.New("ordinary external journal admission has no exact durable transaction")
+	}
+	var previous *mobiletor.DesktopWindowsProtectionTarget
+	if predecessor != nil {
+		copy := *predecessor
+		previous = &copy
+	}
+	return withExternalPhysicalAdmission(ctx, policy, previous, commit, admit)
+}
+
+func withExternalPhysicalAdmission(ctx context.Context, policy *mobilemultihop.DesktopExternalPolicy,
+	predecessor *mobiletor.DesktopWindowsProtectionTarget, commit mobiletor.DesktopWindowsProtectionCommitBarrier,
+	admit ExternalPhysicalAdmission) (context.Context, error) {
 	if ctx == nil || ctx.Err() != nil || policy == nil || policy.Validate() != nil || admit == nil ||
 		policy.Metadata().TargetOS != "windows" || ctx.Value(externalPhysicalAdmissionKey{}) != nil {
 		return nil, errors.New("ordinary physical handoff requires its unique captured native policy")
 	}
-	return context.WithValue(ctx, externalPhysicalAdmissionKey{}, &externalPhysicalAdmissionOwner{policy, admit}), nil
+	return context.WithValue(ctx, externalPhysicalAdmissionKey{}, &externalPhysicalAdmissionOwner{
+		policy: policy, admit: admit, predecessor: predecessor, commit: commit,
+	}), nil
+}
+
+func externalPhysicalCommitFor(ctx context.Context, policy *mobilemultihop.DesktopExternalPolicy) (mobiletor.DesktopWindowsProtectionCommitBarrier, error) {
+	if _, err := externalPhysicalAdmissionFor(ctx, policy); err != nil {
+		return nil, err
+	}
+	return ctx.Value(externalPhysicalAdmissionKey{}).(*externalPhysicalAdmissionOwner).commit, nil
+}
+
+func externalPhysicalPredecessorFor(ctx context.Context, policy *mobilemultihop.DesktopExternalPolicy) (*mobiletor.DesktopWindowsProtectionTarget, error) {
+	if _, err := externalPhysicalAdmissionFor(ctx, policy); err != nil {
+		return nil, err
+	}
+	owner := ctx.Value(externalPhysicalAdmissionKey{}).(*externalPhysicalAdmissionOwner)
+	if owner.predecessor == nil {
+		return nil, nil
+	}
+	captured := *owner.predecessor
+	if err := captured.Validate(); err != nil {
+		return nil, err
+	}
+	return &captured, nil
 }
 
 func externalPhysicalAdmissionFor(ctx context.Context, policy *mobilemultihop.DesktopExternalPolicy) (ExternalPhysicalAdmission, error) {

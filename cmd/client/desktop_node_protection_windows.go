@@ -11,6 +11,10 @@ import (
 
 func desktopOwnedNodeProtectionBackend() (desktopNodeProtectionBackend, error) {
 	owner := windowsOwnedCapture.Load()
+	return desktopOwnedNodeProtectionBackendFor(owner)
+}
+
+func desktopOwnedNodeProtectionBackendFor(owner *windowsOwnedController) (desktopNodeProtectionBackend, error) {
 	if owner == nil || owner.Alive() != nil {
 		return desktopNodeProtectionBackend{}, errors.New("native Router protection requires its authenticated Windows controller")
 	}

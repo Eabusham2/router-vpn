@@ -24,11 +24,15 @@ const desktopNodeProcessNativeFixture = "ROUTERVPN_NODE_PROCESS_NATIVE_FIXTURE"
 // witnesses entry into the exact copied process after the shipping native
 // creation/image/token/Job proof, without claiming to run a sing-box dataplane.
 func init() {
-	if os.Getenv(desktopNodeProcessNativeFixture) != "1" || len(os.Args) < 4 || os.Args[1] != "routervpn-node" {
+	if os.Getenv(desktopNodeProcessNativeFixture) != "1" || len(os.Args) < 4 || os.Args[1] != "routervpn-node" && os.Args[1] != "routervpn-external" {
 		return
 	}
 	directory := os.Args[3]
-	_, err := validateDesktopNodeProcessArguments(os.Args[1:], directory)
+	validate := validateDesktopNodeProcessArguments
+	if os.Args[1] == "routervpn-external" {
+		validate = validateDesktopExternalProcessArguments
+	}
+	_, err := validate(os.Args[1:], directory)
 	if err == nil {
 		current, currentErr := os.Getwd()
 		actual, actualErr := os.Stat(current)
@@ -80,12 +84,24 @@ func desktopNodeProcessNativeImage(t *testing.T) (string, *windowscontroller.Ima
 }
 
 func TestWindowsOwnedNodeProcessActualRetirement(t *testing.T) {
+	testWindowsOwnedProcessActualRetirement(t, "routervpn-node")
+}
+
+// This is actual process/image/token/Job evidence for the external argv. The
+// copied test image deliberately has no DNS/TUN/WFP implementation; the native
+// external command and inherited journal remain separate composition gates.
+func TestWindowsOwnedExternalChildActualRetirement(t *testing.T) {
+	testWindowsOwnedProcessActualRetirement(t, "routervpn-external")
+}
+
+func testWindowsOwnedProcessActualRetirement(t *testing.T, command string) {
+	t.Helper()
 	identity, err := windowscontroller.CurrentIdentity()
 	if err != nil || !identity.Primary || !identity.Elevated || !identity.Administrator {
 		t.Fatal("native Node process fixture requires its actual elevated primary token", err)
 	}
 	directory, image := desktopNodeProcessNativeImage(t)
-	arguments := []string{"routervpn-node", "--runtime-dir", directory, "--session", strings.Repeat("a", 32),
+	arguments := []string{command, "--runtime-dir", directory, "--session", strings.Repeat("a", 32),
 		"--config-sha256", strings.Repeat("b", 64), "--physical-source-sha256", strings.Repeat("c", 64),
 		"--physical-transfer-sha256", strings.Repeat("d", 64)}
 	var retired atomic.Bool
@@ -158,6 +174,20 @@ func TestWindowsOwnedNodeProcessActualRetirement(t *testing.T) {
 	}
 	if err := os.Rename(directory+".moved", directory); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestWindowsOwnedExternalProcessRequiresOriginalJournal(t *testing.T) {
+	directory, arguments := desktopNodeProcessArgumentsFixture(t)
+	arguments[0] = "routervpn-external"
+	for _, journal := range []*desktopNodeWindowsJournalProcess{nil, {}, {external: true}} {
+		owner, err := startDesktopProtectedProcessWithJournal(context.Background(), arguments, os.Environ(), directory, journal, true)
+		if err == nil || owner != nil {
+			t.Fatal("external native command ran without its original inherited journal/controller")
+		}
+	}
+	if _, err := os.Stat(filepath.Join(directory, "node-process-entered")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("rejected external command entered an uncaptured executable")
 	}
 }
 

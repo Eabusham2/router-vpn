@@ -634,19 +634,28 @@ func (a *app) guardDesktopOwnedNodeTransition(next *desktopNodeLaunch) error {
 	if err := a.guardDesktopLinuxNodeLegacyTransition(); err != nil {
 		return err
 	}
-	if a.retainedDesktopNodeProtection() && (next == nil || next.ownedNode == nil) {
+	typedExternal := next != nil && next.ownedNode == nil && next.external != nil && next.external.windows != nil &&
+		next.external.windows.app == a && next.external.windows.launch == next && desktopWindowsExternalEligible(next)
+	if a.retainedDesktopNodeProtection() && (next == nil || next.ownedNode == nil && !typedExternal) {
 		return errors.New("the selected path cannot yet inherit this captured native protection; disconnect the current on-connect path first")
 	}
-	if next == nil || next.ownedNode == nil {
+	if next == nil || next.ownedNode == nil && !typedExternal {
 		return nil
 	}
 	a.mu.Lock()
 	active := a.cmd != nil || a.state.Connected || a.state.Mode != "" && a.state.Mode != "off"
 	a.mu.Unlock()
+	_, externalExists := desktopExternalRetainedLaunches.Load(a)
 	if raw, exists := desktopNodeOwners.Load(a); exists {
 		prior, ok := raw.(*desktopNodeLaunch)
-		if !ok || prior == nil || prior.ownedNode == nil {
+		if !ok || prior == nil || prior.ownedNode == nil || externalExists {
 			return errors.New("native Router protection cannot adopt this legacy runtime; its captured cleanup must finish first")
+		}
+	} else if raw, exists := desktopExternalRetainedLaunches.Load(a); exists {
+		prior, ok := raw.(*desktopNodeLaunch)
+		if !ok || prior == nil || prior.ownedNode != nil || prior.external == nil || prior.external.windows == nil ||
+			prior.external.windows.app != a || prior.external.windows.launch != prior {
+			return errors.New("native protection cannot adopt another external lifecycle owner")
 		}
 	} else if active {
 		return errors.New("native Router protection cannot adopt an unrelated running mode")
@@ -787,23 +796,42 @@ func (a *app) guardDesktopOwnedNodeTemporary(request speedLabRequest, snapshot s
 	if !a.retainedDesktopNodeProtection() {
 		return nil
 	}
-	if snapshot.Plan.native == nil || snapshot.Plan.native.ownedNode == nil {
+	policy := ""
+	if snapshot.Plan.native != nil && snapshot.Plan.native.ownedNode != nil {
+		policy = snapshot.Plan.native.ownedNode.policy.Metadata().KillSwitchPolicy
+	} else if saved := snapshot.Plan.external; saved != nil && saved.windowsHost != nil && saved.windowsHost.app == a &&
+		saved.windowsHost.current() == nil && desktopWindowsExternalProfileEligible(saved.profile, saved.direct, saved.execution) {
+		policy = desktopOwnedNodeProtectionPolicy(saved.profile)
+	}
+	if policy == "" {
 		return errors.New("temporary testing must first resolve the retained native protection owner")
 	}
 	if strings.EqualFold(strings.TrimSpace(request.Topology), "system-direct") {
-		if snapshot.Plan.native.ownedNode.policy.Metadata().KillSwitchPolicy != "on-connect" {
+		if policy != "on-connect" {
 			return errors.New("the captured Always policy cannot become a system-direct temporary path")
 		}
 		return nil
 	}
 	switch strings.ToLower(strings.TrimSpace(request.Topology)) {
-	case "", "router", "direct":
+	case "", "router", "direct", "external":
 	default:
 		return errors.New("this temporary topology cannot yet inherit the captured native protection")
 	}
 	profile, err := a.previewSpeedLabTemporaryProfile(request.NodeID, request)
 	if err != nil {
 		return err
+	}
+	if profile.NodeKind == "external" {
+		a.mu.Lock()
+		profiles := cloneRouterProfileStore(a.profiles).Profiles
+		a.mu.Unlock()
+		_, _, direct, err := speedLabExternalEntry(profiles, profile, request)
+		execution, executionErr := externalExecutionChoice(profile, request.Execution, direct)
+		profile.MultihopExecution = execution
+		if err != nil || executionErr != nil || request.EntryMode != "" || !desktopWindowsExternalProfileEligible(profile, direct, "") {
+			return errors.Join(err, executionErr, errors.New("temporary external path has no captured Windows protection successor"))
+		}
+		return nil
 	}
 	mode := strings.ToLower(strings.TrimSpace(request.Mode))
 	if logical, exists := a.logicalModeByID(mode); exists {

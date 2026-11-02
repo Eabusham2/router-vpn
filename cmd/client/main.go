@@ -1256,7 +1256,7 @@ func (a *app) stopMode() error {
 }
 
 func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
-	nativeStop, err := a.captureDesktopNodeStop()
+	nativeStop, err := a.captureDesktopRetainedStop()
 	if err != nil {
 		return err
 	}

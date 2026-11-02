@@ -28,10 +28,12 @@ type desktopNodeProtectionBackend struct {
 type desktopNodeProtectionAttempt struct {
 	launch          *desktopNodeLaunch
 	policy          *mobilemultihop.DesktopNodePolicy
+	external        *mobilemultihop.DesktopExternalPolicy
 	transfer        mobiletor.DesktopProtectionTransferRecord
 	digest          string
 	prepared        *mobiletor.DesktopWindowsProtectionTarget
 	settlement      *windowsprotection.JournalRecord
+	initialJournal  *windowsprotection.JournalRecord // Exact settled head before an external child is entered.
 	profileRevision string
 }
 
@@ -64,8 +66,24 @@ func copyDesktopNodeProtectionTarget(target *mobiletor.DesktopWindowsProtectionT
 }
 
 func (s *desktopNodeProtectionSlot) begin(ctx context.Context, launch *desktopNodeLaunch, policy *mobilemultihop.DesktopNodePolicy) (*desktopNodeProtectionAttempt, error) {
-	if s == nil || ctx == nil || ctx.Err() != nil || launch == nil || policy == nil || policy.Validate() != nil {
-		return nil, errors.New("native protection transfer has no captured launch")
+	revision := ""
+	if launch != nil && launch.ownedNode != nil {
+		revision = launch.ownedNode.profileToken
+	}
+	return s.beginCaptured(ctx, launch, policy, nil, revision)
+}
+
+func (s *desktopNodeProtectionSlot) beginExternal(ctx context.Context, launch *desktopNodeLaunch, policy *mobilemultihop.DesktopExternalPolicy, revision string) (*desktopNodeProtectionAttempt, error) {
+	if launch == nil || launch.ownedNode != nil || launch.external == nil || launch.external.windows == nil || launch.external.windows.policy != policy || revision == "" {
+		return nil, errors.New("native external protection lost its original typed host")
+	}
+	return s.beginCaptured(ctx, launch, nil, policy, revision)
+}
+
+func (s *desktopNodeProtectionSlot) beginCaptured(ctx context.Context, launch *desktopNodeLaunch, node *mobilemultihop.DesktopNodePolicy, external *mobilemultihop.DesktopExternalPolicy, revision string) (*desktopNodeProtectionAttempt, error) {
+	selection, err := desktopProtectionSelectionFor(node, external)
+	if s == nil || ctx == nil || ctx.Err() != nil || launch == nil || err != nil {
+		return nil, errors.Join(err, errors.New("native protection transfer has no captured launch"))
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -79,16 +97,25 @@ func (s *desktopNodeProtectionSlot) begin(ctx context.Context, launch *desktopNo
 	if err := s.backend.read(ctx, expected); err != nil || ctx.Err() != nil {
 		return nil, errors.Join(err, ctx.Err())
 	}
-	meta := policy.Metadata()
 	transfer := mobiletor.DesktopProtectionTransferRecord{Schema: 1, Kind: "routervpn-windows-protection-transfer-v1",
-		SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy, Predecessor: expected}
+		SessionID: selection.session, SourceSHA256: selection.source, ConfigSHA256: selection.config, Policy: selection.policy, Predecessor: expected}
 	digest, err := mobiletor.DesktopProtectionTransferRecordSHA256(transfer)
 	if err != nil {
 		return nil, err
 	}
-	attempt := &desktopNodeProtectionAttempt{launch: launch, policy: policy, transfer: transfer, digest: digest}
-	if launch.ownedNode != nil {
-		attempt.profileRevision = launch.ownedNode.profileToken
+	attempt := &desktopNodeProtectionAttempt{launch: launch, policy: node, external: external, transfer: transfer, digest: digest, profileRevision: revision}
+	if external != nil && s.journal != nil {
+		selection, err := s.journal.Snapshot(ctx)
+		head := selection.Record
+		if err != nil || selection.Incomplete || head.Validate() != nil || head.Phase != "settled" || head.Committed.Engine != nil ||
+			(head.Committed.Target == nil) != (expected == nil) || expected != nil && *head.Committed.Target != *expected {
+			return nil, errors.Join(err, errors.New("native external transfer lost its exact joined journal predecessor"))
+		}
+		copy, err := copyDesktopNodeJournalRecord(head)
+		if err != nil {
+			return nil, err
+		}
+		attempt.initialJournal = &copy
 	}
 	if err := s.advanceGenerationLocked(); err != nil {
 		return nil, err
@@ -107,11 +134,11 @@ func (s *desktopNodeProtectionSlot) provePrepared(ctx context.Context, attempt *
 }
 
 func (s *desktopNodeProtectionSlot) provePreparedLocked(ctx context.Context, attempt *desktopNodeProtectionAttempt, target mobiletor.DesktopWindowsProtectionTarget, current func() bool) error {
-	if s.active != attempt || attempt.policy == nil || attempt.policy.Validate() != nil {
-		return errors.New("native protection handoff belongs to another attempt")
+	selection, err := attempt.selection()
+	if s.active != attempt || err != nil {
+		return errors.Join(err, errors.New("native protection handoff belongs to another attempt"))
 	}
-	meta := attempt.policy.Metadata()
-	if target.Capture.SessionID != meta.SessionID || target.Capture.SourceSHA256 != meta.SourceSHA256 || target.Policy != meta.KillSwitchPolicy ||
+	if target.Capture.SessionID != selection.session || target.Capture.SourceSHA256 != selection.source || target.Policy != selection.policy ||
 		attempt.prepared != nil && *attempt.prepared != target {
 		return errors.New("native protection handoff substituted its exact target")
 	}
@@ -131,8 +158,9 @@ func (s *desktopNodeProtectionSlot) finish(ctx context.Context, attempt *desktop
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active != attempt || record.Validate(attempt.transfer) != nil {
-		return errors.New("native protection retirement belongs to another attempt")
+	selection, selectionErr := attempt.selection()
+	if s.active != attempt || selectionErr != nil || record.Validate(attempt.transfer) != nil {
+		return errors.Join(selectionErr, errors.New("native protection retirement belongs to another attempt"))
 	}
 	target := copyDesktopNodeProtectionTarget(record.Target)
 	if attempt.prepared != nil && (target == nil || *target != *attempt.prepared) {
@@ -153,11 +181,10 @@ func (s *desktopNodeProtectionSlot) finish(ctx context.Context, attempt *desktop
 	if target == nil {
 		s.binding = desktopNodeProtectionBinding{}
 		s.profileRevision = ""
-	} else if target.Capture.SessionID == attempt.policy.Metadata().SessionID && target.Capture.SourceSHA256 == attempt.policy.Metadata().SourceSHA256 {
+	} else if target.Capture.SessionID == selection.session && target.Capture.SourceSHA256 == selection.source {
 		// A failed trial may return its unchanged predecessor. Only a proved
 		// successor acquires the new profile/source binding.
-		meta := attempt.policy.Metadata()
-		s.binding = desktopNodeProtectionBinding{ProfileID: meta.ProfileID, SourceSHA256: meta.SourceSHA256}
+		s.binding = desktopNodeProtectionBinding{ProfileID: selection.profileID, SourceSHA256: selection.source}
 		s.profileRevision = attempt.profileRevision
 	}
 	s.target, s.active, s.known = target, nil, true

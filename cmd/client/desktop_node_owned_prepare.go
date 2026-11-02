@@ -14,10 +14,12 @@ import (
 // native process. It does not acquire, adopt, or retire any protection target;
 // staging does that only after the preceding runtime has joined.
 type desktopOwnedNodePreparation struct {
-	packageRoot string
-	dataRoot    string
-	lifetime    context.Context
-	current     func() error
+	retainedController any // Private native capability; Windows consumers require the original concrete owner.
+	packageRoot        string
+	dataRoot           string
+	lifetime           context.Context
+	current            func() error
+	protectionBackend  func() (desktopNodeProtectionBackend, error) // Bound to the same captured native controller.
 }
 
 func prepareDesktopOwnedNodeLaunch(a *app, profile common.RouterProfile, mode string) (*desktopNodeLaunch, error) {

@@ -975,3 +975,229 @@ func TestRouterVPNExternalPhysicalTunnelLifecycleAndRetirement(t *testing.T) {
 		t.Fatal("late tunnel acknowledgement survived generation retirement")
 	}
 }
+
+func TestRouterVPNExternalPhysicalJournalAdmissionCapturesDurableBarrier(t *testing.T) {
+	policy := externalPhysicalPolicyFixture(t, "http-connect", "192.168.50.7", 8443, false, "windows")
+	meta := policy.Metadata()
+	predecessor := mobiletor.DesktopWindowsProtectionTarget{Capture: mobiletor.DesktopSocketCapture{
+		SessionID: strings.Repeat("b", 32), SourceSHA256: strings.Repeat("c", 64), NetworkID: strings.Repeat("d", 32)},
+		Policy: "always", BaselineSHA256: strings.Repeat("e", 64)}
+	original := predecessor
+	prepared := ExternalPhysicalPrepared{Capture: mobiletor.DesktopSocketCapture{
+		SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, NetworkID: strings.Repeat("1", 32)},
+		Policy: meta.KillSwitchPolicy, BaselineSHA256: strings.Repeat("2", 64)}
+	candidate := mobiletor.DesktopWindowsProtectionTarget{Capture: prepared.Capture, Policy: prepared.Policy, BaselineSHA256: prepared.BaselineSHA256}
+	admissions, commits := 0, 0
+	admit := func(ctx context.Context, actual ExternalPhysicalPrepared) error {
+		admissions++
+		if ctx.Err() != nil || actual != prepared {
+			return errors.New("fixture changed exact prepared external capture")
+		}
+		return nil
+	}
+	commit := func(ctx context.Context, actual mobiletor.DesktopWindowsProtectionCommit) error {
+		commits++
+		if ctx.Err() != nil || actual.Validate() != nil || actual.Action != "successor" || actual.Previous == nil || *actual.Previous != original || actual.Candidate == nil || *actual.Candidate != candidate {
+			return errors.New("fixture changed the retained durable transaction")
+		}
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	owned, err := WithExternalPhysicalJournalAdmission(ctx, policy, &predecessor, commit, admit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	predecessor.Capture.NetworkID = strings.Repeat("f", 32)
+	captured, err := externalPhysicalPredecessorFor(owned, policy)
+	if err != nil || captured == nil || *captured != original {
+		t.Fatal("journal retained caller-owned predecessor storage", err)
+	}
+	captured.Capture.NetworkID = strings.Repeat("f", 32)
+	captured, err = externalPhysicalPredecessorFor(owned, policy)
+	if err != nil || captured == nil || *captured != original {
+		t.Fatal("returned predecessor mutated native capture", err)
+	}
+	barrier, err := externalPhysicalCommitFor(owned, policy)
+	if err != nil || barrier == nil || barrier(owned, mobiletor.DesktopWindowsProtectionCommit{Action: "successor", Previous: captured, Candidate: &candidate}) != nil || commits != 1 {
+		t.Fatal("external journal lost its original durable commit callback", err)
+	}
+	if err := CompleteExternalPhysicalAdmission(owned, policy, prepared); err != nil || admissions != 1 {
+		t.Fatal("exact external admission was not retained", err)
+	}
+	for _, fault := range []string{"session", "source", "original-source", "network", "policy", "baseline"} {
+		t.Run(fault, func(t *testing.T) {
+			changed := prepared
+			switch fault {
+			case "session":
+				changed.Capture.SessionID = strings.Repeat("f", 32)
+			case "source":
+				changed.Capture.SourceSHA256 = strings.Repeat("f", 64)
+			case "original-source":
+				changed.Capture.SourceSHA256 = meta.OriginalSourceSHA256
+			case "network":
+				changed.Capture.NetworkID = "missing-native-capture"
+			case "policy":
+				changed.Policy = "on-connect"
+			case "baseline":
+				changed.BaselineSHA256 = "missing-native-baseline"
+			}
+			if CompleteExternalPhysicalAdmission(owned, policy, changed) == nil || admissions != 1 {
+				t.Fatal("changed prepared result reached durable admission")
+			}
+		})
+	}
+	foreign := externalPhysicalPolicyFixture(t, "http-connect", "192.168.50.7", 8443, false, "windows")
+	if _, err := externalPhysicalCommitFor(owned, foreign); err == nil {
+		t.Fatal("equal but foreign policy acquired original barrier")
+	}
+	if _, err := externalPhysicalPredecessorFor(owned, foreign); err == nil {
+		t.Fatal("equal but foreign policy acquired original predecessor")
+	}
+	if CompleteExternalPhysicalAdmission(owned, foreign, prepared) == nil || admissions != 1 {
+		t.Fatal("equal but foreign policy consumed original admission")
+	}
+	if _, err := WithExternalPhysicalJournalAdmission(owned, policy, &original, commit, admit); err == nil {
+		t.Fatal("journal capability was replaced in its owned context")
+	}
+	for _, fault := range []string{"nil-context", "cancelled-context", "nil-policy", "other-platform", "nil-barrier", "nil-admit", "invalid-predecessor"} {
+		t.Run(fault, func(t *testing.T) {
+			lifetime, selected, prior, barrier, callback := context.Context(context.Background()), policy, &original, mobiletor.DesktopWindowsProtectionCommitBarrier(commit), ExternalPhysicalAdmission(admit)
+			switch fault {
+			case "nil-context":
+				lifetime = nil
+			case "cancelled-context":
+				var stop context.CancelFunc
+				lifetime, stop = context.WithCancel(lifetime)
+				stop()
+			case "nil-policy":
+				selected = nil
+			case "other-platform":
+				selected = externalPhysicalPolicyFixture(t, "http-connect", "192.168.50.7", 8443, false, "linux")
+			case "nil-barrier":
+				barrier = nil
+			case "nil-admit":
+				callback = nil
+			case "invalid-predecessor":
+				invalid := original
+				invalid.BaselineSHA256 = "unproved"
+				prior = &invalid
+			}
+			if actual, err := WithExternalPhysicalJournalAdmission(lifetime, selected, prior, barrier, callback); err == nil || actual != nil {
+				t.Fatal("incomplete external journal created a native capability")
+			}
+		})
+	}
+	initial, err := WithExternalPhysicalJournalAdmission(context.Background(), policy, nil, commit, admit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prior, err := externalPhysicalPredecessorFor(initial, policy); err != nil || prior != nil {
+		t.Fatal("explicit initial expectation became arbitrary recovery", err)
+	}
+	cancel()
+	if _, err := externalPhysicalCommitFor(owned, policy); err == nil {
+		t.Fatal("cancelled journal acquired a durable commit")
+	}
+	if _, err := externalPhysicalPredecessorFor(owned, policy); err == nil {
+		t.Fatal("cancelled journal acquired a new predecessor")
+	}
+	if CompleteExternalPhysicalAdmission(owned, policy, prepared) == nil || admissions != 1 || commits != 1 {
+		t.Fatal("cancelled journal admitted a late result")
+	}
+}
+
+type externalPhysicalRetirementSource struct {
+	*physicalFactorySource
+	target    mobiletor.DesktopWindowsProtectionTarget
+	closeFail atomic.Bool
+	readErr   error
+	readCalls int
+}
+
+func (s *externalPhysicalRetirementSource) Close(ctx context.Context) error {
+	if s.closeFail.Load() {
+		return errors.New("fixture retained ordinary native handle")
+	}
+	return s.physicalFactorySource.Close(ctx)
+}
+func (s *externalPhysicalRetirementSource) RetainedProtectionOutcome(context.Context) (*mobiletor.DesktopWindowsProtectionTarget, error) {
+	s.readCalls++
+	if s.readErr != nil {
+		return nil, s.readErr
+	}
+	return &s.target, nil
+}
+
+func TestRouterVPNExternalPhysicalRetirementKeepsExactJoinedSource(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		t.Run(map[bool]string{false: "started", true: "partial-before-admission"}[partial], func(t *testing.T) {
+			policy := externalPhysicalPolicyFixture(t, "http-connect", "192.168.50.7", 8443, false, runtime.GOOS)
+			f := newExternalPhysicalFixture(t, policy)
+			source := &externalPhysicalRetirementSource{physicalFactorySource: &physicalFactorySource{desktopPhysicalPolicyFixture: newDesktopPhysicalPolicyFixture()},
+				target: mobiletor.DesktopWindowsProtectionTarget{Capture: f.network.brokerCapture(), Policy: "always", BaselineSHA256: strings.Repeat("a", 64)}}
+			// This explicit native-source model exercises the real preparation,
+			// factory and joined Close; it does not install or claim a WFP policy.
+			if err := f.network.PrepareExternalPhysicalBroker(policy, func(ctx context.Context, capture mobiletor.DesktopSocketCapture, current func() bool) (*mobiletor.DesktopSocketBroker, mobiletor.DesktopSocketSource, error) {
+				if partial {
+					return nil, source, errors.New("fixture failed after captured ordinary baseline construction")
+				}
+				broker, err := mobiletor.NewDesktopSocketBroker(ctx, capture, source, current)
+				return broker, source, err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if err := f.network.Start(adapter.StartStateInitialize); (err != nil) != partial {
+				t.Fatal("fixture entered another construction phase", err)
+			}
+			if _, _, err := f.network.RetainedPhysicalProtection(context.Background(), policy); err == nil || source.readCalls != 0 {
+				t.Fatal("unjoined ordinary source yielded a retirement result")
+			}
+			source.closeFail.Store(true)
+			if f.network.Close() == nil {
+				t.Fatal("fixture failed close unexpectedly joined")
+			}
+			if _, _, err := f.network.RetainedPhysicalProtection(context.Background(), policy); err == nil || source.readCalls != 0 {
+				t.Fatal("failed ordinary close yielded a retirement result")
+			}
+			source.closeFail.Store(false)
+			if err := f.network.Close(); err != nil {
+				t.Fatal(err)
+			}
+			actual, captured, err := f.network.RetainedPhysicalProtection(context.Background(), policy)
+			if err != nil || !captured || actual == nil || *actual != source.target || source.readCalls != 1 {
+				t.Fatal("joined ordinary source lost its exact outcome", err)
+			}
+			actual.Capture.NetworkID = strings.Repeat("e", 32)
+			if source.target.Capture != f.network.brokerCapture() {
+				t.Fatal("returned outcome mutated original native source")
+			}
+			foreign := externalPhysicalPolicyFixture(t, "http-connect", "192.168.50.7", 8443, false, runtime.GOOS)
+			if _, _, err := f.network.RetainedPhysicalProtection(context.Background(), foreign); err == nil || source.readCalls != 1 {
+				t.Fatal("foreign policy queried original retirement")
+			}
+			cancelled, cancel := context.WithCancel(context.Background())
+			cancel()
+			if _, _, err := f.network.RetainedPhysicalProtection(cancelled, policy); err == nil || source.readCalls != 1 {
+				t.Fatal("cancelled query reached original source")
+			}
+			source.readErr = errors.New("fixture retained baseline replaced")
+			if target, captured, err := f.network.RetainedPhysicalProtection(context.Background(), policy); err == nil || !captured || target != nil {
+				t.Fatal("failed outcome became an unchanged predecessor")
+			}
+			source.readErr = nil
+			source.target.Capture.NetworkID = strings.Repeat("e", 32)
+			if target, _, err := f.network.RetainedPhysicalProtection(context.Background(), policy); err == nil || target != nil {
+				t.Fatal("foreign network replaced original outcome")
+			}
+		})
+	}
+	policy := externalPhysicalPolicyFixture(t, "http-connect", "192.168.50.7", 8443, false, runtime.GOOS)
+	f := newExternalPhysicalFixture(t, policy)
+	if err := f.network.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if target, captured, err := f.network.RetainedPhysicalProtection(context.Background(), policy); err != nil || captured || target != nil {
+		t.Fatal("never-entered source fabricated native absence", err)
+	}
+}

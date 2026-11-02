@@ -198,6 +198,7 @@ func (a *app) restoreSpeedLabTorMTU(plan speedLabRestorePlan) error {
 }
 
 type speedLabExternalRestore struct {
+	windowsHost *desktopWindowsExternalHost
 	mtu         int
 	source      []byte
 	predecessor string
@@ -359,6 +360,16 @@ func compileSpeedLabExternalRestore(saved *speedLabExternalRestore, exit standar
 		return nil, err
 	}
 	launch.root, launch.external.network, launch.external.selection = saved.root, saved.network, saved.execution
+	if saved.windowsHost != nil {
+		if saved.windowsHost.current() != nil || saved.root != saved.windowsHost.capture.dataRoot || !desktopWindowsExternalEligible(launch) {
+			return nil, errors.New("saved external restore lost its original Windows controller or sealed Local graph")
+		}
+		launch.external.windowsHost = saved.windowsHost
+		if err := prepareDesktopExternalPhysical(launch, "windows"); err != nil || launch.external.physical == nil {
+			return nil, errors.Join(err, errors.New("saved external restore lost its typed physical policy"))
+		}
+		launch.configSHA256 = launch.external.physical.Metadata().ConfigSHA256
+	}
 	if saved.mtu != 0 {
 		launch.external.mtu = &desktopMTUSession{restoreMTU: saved.mtu}
 	}
@@ -554,7 +565,7 @@ func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (sp
 				}
 				captured := launch.external
 				captured.mu.Lock()
-				plan.external = &speedLabExternalRestore{source: append([]byte(nil), captured.source...), predecessor: captured.predecessor, profile: cloneRouterProfile(captured.profile), entry: cloneRouterProfile(captured.entry), direct: captured.direct, execution: proof.Execution, root: launch.root, network: captured.network}
+				plan.external = &speedLabExternalRestore{source: append([]byte(nil), captured.source...), predecessor: captured.predecessor, profile: cloneRouterProfile(captured.profile), entry: cloneRouterProfile(captured.entry), direct: captured.direct, execution: proof.Execution, root: launch.root, network: captured.network, windowsHost: captured.windowsHost}
 				captured.mu.Unlock()
 				plan.external.mtu, err = captureDesktopMTURestore(launch)
 				if err != nil {

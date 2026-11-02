@@ -30,7 +30,14 @@ func captureDesktopOwnedNodePreparation(a *app) (desktopOwnedNodePreparation, er
 		return empty, errors.New("native Router preparation changed its captured private profile root")
 	}
 	return desktopOwnedNodePreparation{
-		packageRoot: capture.packageRoot, dataRoot: capture.dataRoot, lifetime: capture.ctx,
+		retainedController: capture,
+		packageRoot:        capture.packageRoot, dataRoot: capture.dataRoot, lifetime: capture.ctx,
+		protectionBackend: func() (desktopNodeProtectionBackend, error) {
+			if err := currentDesktopNodeController(capture); err != nil {
+				return desktopNodeProtectionBackend{}, err
+			}
+			return desktopOwnedNodeProtectionBackendFor(capture)
+		},
 		current: func() error {
 			if err := currentDesktopNodeController(capture); err != nil {
 				return err

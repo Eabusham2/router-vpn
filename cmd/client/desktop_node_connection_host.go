@@ -20,10 +20,12 @@ import (
 // proof or restore a connection. The private per-app field lets composed tests
 // model only those native boundaries; it has no request or profile override.
 type desktopNodeConnectionHost struct {
-	capture func(*app) (desktopOwnedNodePreparation, error)
-	verify  func(context.Context, string) (string, error)
-	lookup  applexray.Lookup
-	start   func(context.Context, *app, *desktopNodeLaunch, []string, []string, string) (desktopNodeProcess, error)
+	capture           func(*app) (desktopOwnedNodePreparation, error)
+	verify            func(context.Context, string) (string, error)
+	lookup            applexray.Lookup
+	start             func(context.Context, *app, *desktopNodeLaunch, []string, []string, string) (desktopNodeProcess, error)
+	startExternal     func(context.Context, *app, *desktopNodeLaunch, []string, []string, string) (desktopNodeProcess, error)
+	externalPreflight desktopExternalPreflightCommand
 }
 
 func (a *app) desktopNodeConnectionHost() *desktopNodeConnectionHost {
@@ -45,7 +47,9 @@ func (a *app) desktopNodeConnectionHost() *desktopNodeConnectionHost {
 		lookup: func(ctx context.Context, name string) ([]netip.Addr, error) {
 			return net.DefaultResolver.LookupNetIP(ctx, "ip", name)
 		},
-		start: startDesktopOwnedNodeJournalProcess,
+		start:             startDesktopOwnedNodeJournalProcess,
+		startExternal:     startDesktopOwnedExternalJournalProcess,
+		externalPreflight: runDesktopExternalPreflightCommand,
 	}
 }
 

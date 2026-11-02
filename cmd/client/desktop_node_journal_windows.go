@@ -30,38 +30,121 @@ type desktopNodeWindowsJournalProcess struct {
 	closeGate  chan struct{}
 	outcome    windowsprotection.JournalRecord
 	joined     bool
+	slot       *desktopNodeProtectionSlot
+	attempt    *desktopNodeProtectionAttempt
+	current    func(bool) bool
+	external   bool
 }
 
 func startDesktopOwnedNodeJournalProcess(ctx context.Context, a *app, launch *desktopNodeLaunch,
-	arguments, environment []string, directory string) (_ desktopNodeProcess, failure error) {
-	if a == nil || launch == nil || launch.ownedNode == nil || launch.ownedNode.slot == nil || launch.ownedNode.attempt == nil ||
-		ctx == nil || ctx.Err() != nil || !a.desktopOwnedNodeCurrent(launch, false) {
+	arguments, environment []string, directory string) (desktopNodeProcess, error) {
+	return startDesktopProtectedJournalProcess(ctx, a, launch, arguments, environment, directory, false)
+}
+
+func startDesktopOwnedExternalJournalProcess(ctx context.Context, a *app, launch *desktopNodeLaunch,
+	arguments, environment []string, directory string) (desktopNodeProcess, error) {
+	return startDesktopProtectedJournalProcess(ctx, a, launch, arguments, environment, directory, true)
+}
+
+func startDesktopProtectedJournalProcess(ctx context.Context, a *app, launch *desktopNodeLaunch,
+	arguments, environment []string, directory string, external bool) (_ desktopNodeProcess, failure error) {
+	if a == nil || launch == nil || ctx == nil {
 		return nil, errors.New("native journal launch has no captured application attempt")
 	}
-	controller := windowsOwnedCapture.Load()
-	if err := currentDesktopNodeController(controller); err != nil {
-		return nil, err
+	var slot *desktopNodeProtectionSlot
+	var attempt *desktopNodeProtectionAttempt
+	var revision, captureName string
+	var current func(bool) bool
+	var owner *desktopNodeWindowsJournalProcess
+	if external {
+		if launch.ownedNode != nil || launch.external == nil || launch.external.windows == nil {
+			return nil, errors.New("native external journal lost its typed host")
+		}
+		owned := launch.external.windows
+		owned.mu.Lock()
+		slot, attempt = owned.slot, owned.attempt
+		owned.mu.Unlock()
+		revision, captureName = owned.profileToken, "external-journal-capture.json"
+		current = func(required bool) bool { return owned.current(required) == nil }
+		if attempt == nil || attempt.external != owned.policy || attempt.policy != nil {
+			return nil, errors.New("native external journal lost its exact policy selection")
+		}
+	} else {
+		if launch.ownedNode == nil || launch.external != nil {
+			return nil, errors.New("native Router journal lost its typed host")
+		}
+		owned := launch.ownedNode
+		slot, attempt, revision, captureName = owned.slot, owned.attempt, owned.profileToken, "node-journal-capture.json"
+		current = func(required bool) bool { return a.desktopOwnedNodeCurrent(launch, required) }
+		if attempt == nil || attempt.policy != owned.policy || attempt.external != nil {
+			return nil, errors.New("native Router journal lost its exact policy selection")
+		}
 	}
-	journal, captured, err := captureDesktopNodeJournal(ctx, controller, launch)
-	if err != nil {
-		return nil, err
+	if slot == nil || attempt == nil || attempt.launch != launch {
+		return nil, errors.New("native journal launch changed its original attempt")
 	}
-	owner := &desktopNodeWindowsJournalProcess{controller: controller, app: a, launch: launch, capture: captured, outcome: captured.Head, closeGate: make(chan struct{}, 1)}
-	owner.closeGate <- struct{}{}
+	if external {
+		// Once the app has entered this constructor, every failure returns a real
+		// retirement owner. Before a channel/child exists its only outcome is the
+		// exact settled head captured by beginExternal, never an inferred absence.
+		slot.mu.Lock()
+		if slot.active != attempt || attempt.initialJournal == nil {
+			slot.mu.Unlock()
+			return nil, errors.New("native external journal omitted its original settled checkpoint")
+		}
+		initial, initialErr := copyDesktopNodeJournalRecord(*attempt.initialJournal)
+		slot.mu.Unlock()
+		if initialErr != nil {
+			return nil, initialErr
+		}
+		owner = &desktopNodeWindowsJournalProcess{app: a, launch: launch, outcome: initial, closeGate: make(chan struct{}, 1), slot: slot, attempt: attempt, current: current, external: true}
+		owner.closeGate <- struct{}{}
+	}
 	defer func() {
-		if failure != nil {
+		if failure != nil && owner != nil {
 			retire, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			failure = errors.Join(failure, owner.Close(retire))
 		}
 	}()
-	current := func() error {
-		if !a.desktopOwnedNodeCurrent(launch, false) {
+	if ctx.Err() != nil || !current(false) {
+		err := errors.Join(ctx.Err(), errors.New("native journal launch changed its original attempt"))
+		if owner != nil {
+			return owner, err
+		}
+		return nil, err
+	}
+	var controller *windowsOwnedController
+	if external {
+		controller, _ = launch.external.windows.host.capture.retainedController.(*windowsOwnedController)
+	} else {
+		controller = windowsOwnedCapture.Load()
+	}
+	if err := currentDesktopNodeController(controller); err != nil {
+		if owner != nil {
+			return owner, err
+		}
+		return nil, err
+	}
+	journal, captured, err := captureDesktopProtectionJournal(ctx, controller, slot, attempt, revision)
+	if err != nil {
+		if owner != nil {
+			return owner, err
+		}
+		return nil, err
+	}
+	if owner == nil {
+		owner = &desktopNodeWindowsJournalProcess{app: a, launch: launch, closeGate: make(chan struct{}, 1), slot: slot, attempt: attempt, current: current}
+		owner.closeGate <- struct{}{}
+	}
+	owner.controller, owner.capture, owner.outcome = controller, captured, captured.Head
+	currentJournal := func() error {
+		if !current(false) {
 			return errors.New("native journal launch belongs to a replaced application attempt")
 		}
 		return currentDesktopNodeController(controller)
 	}
-	owner.server, err = windowsprotection.NewJournalCommitServer(ctx, journal, captured, current)
+	owner.server, err = windowsprotection.NewJournalCommitServer(ctx, journal, captured, currentJournal)
 	if err != nil {
 		return owner, err
 	}
@@ -69,12 +152,12 @@ func startDesktopOwnedNodeJournalProcess(ctx context.Context, a *app, launch *de
 	if err == nil {
 		sum := sha256.Sum256(raw)
 		owner.digest = hex.EncodeToString(sum[:])
-		err = writeDesktopRuntimeFile(launch, "node-journal-capture.json", raw, false)
+		err = writeDesktopRuntimeFile(launch, captureName, raw, false)
 	}
 	if err != nil {
 		return owner, err
 	}
-	process, err := startDesktopOwnedNodeProcessWithJournal(ctx, arguments, environment, directory, owner)
+	process, err := startDesktopProtectedProcessWithJournal(ctx, arguments, environment, directory, owner, external)
 	if process == nil {
 		return owner, err // Even validation before child creation retains the server.
 	}
@@ -84,13 +167,14 @@ func startDesktopOwnedNodeJournalProcess(ctx context.Context, a *app, launch *de
 // Startup initializes/reconciles the journal before slot.begin can capture its
 // predecessor. Launch only consumes that retained checked owner; it never
 // creates a store after selecting a nil expectation or adopts a decoded head.
-func captureDesktopNodeJournal(ctx context.Context, controller *windowsOwnedController, launch *desktopNodeLaunch) (*windowsprotection.ProtectionJournal, windowsprotection.JournalCommitCapture, error) {
+func captureDesktopProtectionJournal(ctx context.Context, controller *windowsOwnedController, slot *desktopNodeProtectionSlot, attempt *desktopNodeProtectionAttempt, revision string) (*windowsprotection.ProtectionJournal, windowsprotection.JournalCommitCapture, error) {
 	var empty windowsprotection.JournalCommitCapture
-	owned := launch.ownedNode
-	slot := owned.slot
+	if controller == nil || slot == nil || attempt == nil {
+		return nil, empty, errors.New("native journal has no original captured slot")
+	}
 	slot.mu.Lock()
 	defer slot.mu.Unlock()
-	if slot.active != owned.attempt || owned.attempt.profileRevision != owned.profileToken || len(controller.directories) != 1 || controller.parent == nil ||
+	if slot.active != attempt || attempt.profileRevision != revision || len(controller.directories) != 1 || controller.parent == nil ||
 		!windowsOwnedSamePath(controller.directories[0].Name(), controller.dataRoot) {
 		return nil, empty, errors.New("native journal lost its retained original Data directory")
 	}
@@ -109,9 +193,12 @@ func captureDesktopNodeJournal(ctx context.Context, controller *windowsOwnedCont
 		selection.Record.Sequence > math.MaxUint64-3 {
 		return nil, empty, errors.Join(err, errors.New("native journal requires checked recovery before another launch"))
 	}
-	meta := owned.policy.Metadata()
+	selected, selectedErr := attempt.selection()
+	if selectedErr != nil {
+		return nil, empty, selectedErr
+	}
 	captured := windowsprotection.JournalCommitCapture{Schema: windowsprotection.JournalCommitSchema, Kind: windowsprotection.JournalCommitCaptureKind,
-		Head: selection.Record, ProfileID: meta.ProfileID, ProfileRevision: owned.attempt.profileRevision, Transfer: owned.attempt.transfer}
+		Head: selection.Record, ProfileID: selected.profileID, ProfileRevision: attempt.profileRevision, Transfer: attempt.transfer}
 	if err := captured.Validate(); err != nil {
 		return nil, empty, err
 	}
@@ -161,9 +248,9 @@ func (owner *desktopNodeWindowsJournalProcess) AdmitProtection(ctx context.Conte
 	if err != nil || rememberErr != nil {
 		return errors.Join(err, rememberErr)
 	}
-	current := func() bool { return ctx.Err() == nil && owner.app.desktopOwnedNodeCurrent(owner.launch, true) }
+	current := func() bool { return ctx.Err() == nil && owner.current != nil && owner.current(true) }
 	record, err := owner.server.Admit(ctx, func(ctx context.Context, durable windowsprotection.JournalRecord) error {
-		return owner.launch.ownedNode.slot.captureJournalPrepared(ctx, owner.launch.ownedNode.attempt, durable, current)
+		return owner.slot.captureJournalPrepared(ctx, owner.attempt, durable, current)
 	})
 	return errors.Join(err, owner.remember(record))
 }

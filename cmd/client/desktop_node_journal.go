@@ -60,8 +60,9 @@ func (s *desktopNodeProtectionSlot) captureJournalPrepared(ctx context.Context, 
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.journal == nil || attempt.policy == nil || record.Committed.ProfileID != attempt.policy.Metadata().ProfileID {
-		return errors.New("native journal admission belongs to another application profile")
+	selected, selectedErr := attempt.selection()
+	if s.journal == nil || selectedErr != nil || record.Committed.ProfileID != selected.profileID {
+		return errors.Join(selectedErr, errors.New("native journal admission belongs to another application profile"))
 	}
 	selection, err := s.journal.Snapshot(ctx)
 	expected, encodeErr := windowsprotection.CanonicalJournalRecord(record)
@@ -87,8 +88,29 @@ func (s *desktopNodeProtectionSlot) settleJournalLocked(ctx context.Context, att
 		}
 		return s.writeJournalSettlementLocked(ctx, attempt)
 	}
-	process, ok := desktopOwnedNodeProcess(attempt.launch).(desktopNodeJournalAdmission)
+	process, ok := attempt.process().(desktopNodeJournalAdmission)
 	if !ok {
+		// Only an external launch that has not entered its native constructor
+		// can have no process/channel owner. Its previously captured settled
+		// head must still match byte-for-byte; absence of a later receipt is not
+		// evidence that an entered child failed to commit.
+		if attempt.external != nil && attempt.initialJournal != nil && attempt.launch != nil && attempt.launch.external != nil && attempt.launch.external.windows != nil {
+			owner := attempt.launch.external.windows
+			owner.mu.Lock()
+			unentered := owner.attempt == attempt && !owner.startEntered && owner.process == nil
+			owner.mu.Unlock()
+			captured := attempt.initialJournal
+			if unentered && captured.Phase == "settled" && captured.Committed.Engine == nil &&
+				(captured.Committed.Target == nil) == (target == nil) && (target == nil || *captured.Committed.Target == *target) {
+				selection, err := s.journal.Snapshot(ctx)
+				want, wantErr := windowsprotection.CanonicalJournalRecord(*captured)
+				got, gotErr := windowsprotection.CanonicalJournalRecord(selection.Record)
+				if err == nil && wantErr == nil && gotErr == nil && !selection.Incomplete && bytes.Equal(want, got) {
+					return ctx.Err()
+				}
+				return errors.Join(err, wantErr, gotErr, errors.New("unentered external launch changed its original journal head"))
+			}
+		}
 		return errors.New("native journal settlement lost its retained process channel")
 	}
 	last, err := process.JournalOutcome()
@@ -102,8 +124,12 @@ func (s *desktopNodeProtectionSlot) settleJournalLocked(ctx context.Context, att
 		return errors.Join(err, lastErr, headErr, errors.New("native journal settlement changed the captured child outcome"))
 	}
 	head := selection.Record
+	selected, selectedErr := attempt.selection()
+	if selectedErr != nil {
+		return selectedErr
+	}
 	if head.Phase == "intent" && (head.Intent.Action != "successor" || head.Intent.RequestID != attempt.transfer.SessionID ||
-		head.Intent.ProfileID != attempt.policy.Metadata().ProfileID) {
+		head.Intent.ProfileID != selected.profileID) {
 		return errors.New("native journal settlement belongs to another mutation")
 	}
 	states, err := windowsprotection.JournalRecoveryCandidates(head)
@@ -169,7 +195,7 @@ func (s *desktopNodeProtectionSlot) finishJournalWithoutReceipt(ctx context.Cont
 	if err := join(ctx); err != nil {
 		return err
 	}
-	process, ok := desktopOwnedNodeProcess(attempt.launch).(desktopNodeJournalAdmission)
+	process, ok := attempt.process().(desktopNodeJournalAdmission)
 	if !ok {
 		return errors.New("native journal retirement lost its checked process outcome")
 	}

@@ -209,3 +209,92 @@ func TestRouterVPNExternalPhysicalWindowsAdmissionCloseJoinsEnteredCallback(t *t
 		t.Fatal("native handoff cleanup did not join")
 	}
 }
+
+// The source outcome is the only modeled native BFE observation here. The
+// original Windows preparation, admission, cancellation and join all execute;
+// no later policy lookup may supply a predecessor after retirement.
+type externalWindowsRetirementSource struct {
+	*externalWindowsAdmissionSource
+	outcome *mobiletor.DesktopWindowsProtectionTarget
+	readErr error
+	reads   int
+}
+
+func (s *externalWindowsRetirementSource) RetainedProtectionOutcome(context.Context) (*mobiletor.DesktopWindowsProtectionTarget, error) {
+	s.reads++
+	return s.outcome, s.readErr
+}
+
+func TestRouterVPNExternalPhysicalWindowsRetirementKeepsOriginalPredecessor(t *testing.T) {
+	for _, fault := range []string{"initial-absent", "predecessor", "lost-predecessor", "different-predecessor", "failed-read", "invalid-result"} {
+		t.Run(fault, func(t *testing.T) {
+			f, _, base := externalWindowsAdmissionFixture(t)
+			original := mobiletor.DesktopWindowsProtectionTarget{Capture: mobiletor.DesktopSocketCapture{
+				SessionID: strings.Repeat("1", 32), SourceSHA256: strings.Repeat("2", 64), NetworkID: strings.Repeat("3", 32)},
+				Policy: "always", BaselineSHA256: strings.Repeat("4", 64)}
+			predecessor := original
+			var expected *mobiletor.DesktopWindowsProtectionTarget
+			if fault != "initial-absent" {
+				expected = &predecessor
+			}
+			var err error
+			f.network.ctx, err = WithExternalPhysicalJournalAdmission(f.network.ctx, f.policy, expected,
+				func(context.Context, mobiletor.DesktopWindowsProtectionCommit) error {
+					t.Error("partial native constructor reached a durable commit")
+					return errors.New("unexpected commit")
+				},
+				func(context.Context, ExternalPhysicalPrepared) error {
+					t.Error("partial native constructor reached socket admission")
+					return errors.New("unexpected admission")
+				})
+			if err != nil {
+				t.Fatal(err)
+			}
+			predecessor.Capture.NetworkID = strings.Repeat("e", 32)
+			source := &externalWindowsRetirementSource{externalWindowsAdmissionSource: base}
+			if expected != nil {
+				copy := original
+				source.outcome = &copy
+			}
+			switch fault {
+			case "lost-predecessor":
+				source.outcome = nil
+			case "different-predecessor":
+				source.outcome.Capture.NetworkID = strings.Repeat("e", 32)
+			case "failed-read":
+				source.readErr = errors.New("fixture original native expectation failed")
+			case "invalid-result":
+				source.outcome.BaselineSHA256 = "not-proved"
+			}
+			if err := f.network.prepareExternalPhysicalWindows(f.policy,
+				func(context.Context, mobiletor.DesktopSocketCapture, mobiletor.DesktopWindowsSocketOptions) (desktopWindowsPhysicalPolicy, error) {
+					return source, errors.New("fixture retained predecessor before successor construction")
+				}); err != nil {
+				t.Fatal(err)
+			}
+			if f.network.Start(adapter.StartStateInitialize) == nil || f.network.Current() || !source.cancelled.Load() {
+				t.Fatal("partial native constructor kept socket admission")
+			}
+			if _, _, err := f.network.RetainedPhysicalProtection(context.Background(), f.policy); err == nil || source.reads != 0 {
+				t.Fatal("unjoined predecessor was acquired after cancellation")
+			}
+			if err := f.network.Close(); err != nil || !source.closed.Load() {
+				t.Fatal("original predecessor source did not join", err)
+			}
+			actual, captured, err := f.network.RetainedPhysicalProtection(context.Background(), f.policy)
+			valid := fault == "initial-absent" || fault == "predecessor"
+			if captured != true || source.reads != 1 || (err == nil) != valid {
+				t.Fatal("retirement changed its exact original predecessor authority", err)
+			}
+			if fault == "initial-absent" && actual != nil || fault == "predecessor" && (actual == nil || *actual != original) || !valid && actual != nil {
+				t.Fatal("retirement returned substituted protection comparison data")
+			}
+			if actual != nil {
+				actual.Capture.NetworkID = strings.Repeat("f", 32)
+				if *source.outcome != original {
+					t.Fatal("returned predecessor changed native source storage")
+				}
+			}
+		})
+	}
+}

@@ -25,6 +25,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	SJ "github.com/sagernet/sing/common/json"
 	"github.com/sagernet/sing/service"
 	"github.com/spf13/cobra"
@@ -33,27 +34,32 @@ import (
 var routerVPNExternalSession = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var routerVPNExternalFailure = errors.New("captured desktop external runtime failed; private credentials were not logged")
 
-func init() {
+func init() { mainCommand.AddCommand(routerVPNNewExternalCommand()) }
+
+func routerVPNNewExternalCommand() *cobra.Command {
 	var directory, session, physicalSource, config, transfer string
 	var linux routerVPNNodeLinuxParentOptions
+	var journal routerVPNExternalJournalOptions
 	command := &cobra.Command{Use: "routervpn-external", Short: "Run one captured Router VPN external session", Args: cobra.NoArgs, SilenceUsage: true,
 		RunE: func(_ *cobra.Command, _ []string) error {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
-			if linux != (routerVPNNodeLinuxParentOptions{}) || config != "" || transfer != "" {
-				return routerVPNRunLinuxExternalControlled(ctx, directory, session, physicalSource, config, transfer, linux)
-			}
-			return routerVPNRunExternal(ctx, directory, session, physicalSource, routerVPNNewExternalNative)
+			return routerVPNRunExternalCommand(ctx, directory, session, physicalSource, config, transfer, linux, journal)
 		}}
 	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private session directory")
 	command.Flags().StringVar(&session, "session", "", "captured session identity")
 	command.Flags().StringVar(&physicalSource, "physical-source-sha256", "", "captured desktop physical source identity")
-	command.Flags().StringVar(&config, "config-sha256", "", "captured Linux external configuration identity")
-	command.Flags().StringVar(&transfer, "physical-transfer-sha256", "", "captured Linux external protection selection")
+	command.Flags().StringVar(&config, "config-sha256", "", "captured desktop external configuration identity")
+	command.Flags().StringVar(&transfer, "physical-transfer-sha256", "", "captured desktop external protection selection")
 	command.Flags().IntVar(&linux.ChannelFD, "linux-parent-channel", 0, "original inherited parent channel")
 	command.Flags().IntVar(&linux.DirectoryFD, "linux-parent-directory", 0, "original inherited parent directory")
 	command.Flags().StringVar(&linux.CaptureSHA256, "linux-parent-capture", "", "original inherited command capture")
-	mainCommand.AddCommand(command)
+	command.Flags().Uint64Var(&journal.ParentHandle, "journal-parent-handle", 0, "inherited original Windows controller handle")
+	command.Flags().StringVar(&journal.ParentImage, "journal-parent-image", "", "captured original Windows controller image")
+	command.Flags().StringVar(&journal.Pipe, "journal-pipe", "", "captured Windows protection journal channel")
+	command.Flags().StringVar(&journal.CaptureSHA256, "journal-capture-sha256", "", "captured Windows protection journal identity")
+	routerVPNExternalOwnedFlags(command.Flags())
+	return command
 }
 
 // A directory handle fixes the session workspace even if its parent pathname
@@ -214,12 +220,14 @@ type routerVPNExternalNative struct {
 	box          *box.Box
 	proof        *box.RouterVPNExternalProofRequest
 	physical     *mobilemultihop.DesktopExternalPolicy
+	preparation  *box.RouterVPNDesktopExternalPreparation
 	cancel       context.CancelFunc
 	source       string
 	capture      string
 	session      string
 	boxClosed    bool
 	boxCloseFail error
+	joined       bool
 	partial      []io.Closer
 	mtu          *routerVPNDesktopMTU
 	dns          *dnsmeasure.Service
@@ -300,7 +308,13 @@ func routerVPNNewExternalNativeWithPreparation(ctx context.Context, policy *mobi
 	native.box = instance
 	if physical != nil {
 		if prepare == nil {
-			prepare = func(instance *box.Box) error { return instance.RouterVPNDesktopExternalPreparePhysical(physical) }
+			prepare = func(instance *box.Box) error {
+				owner, err := instance.RouterVPNDesktopExternalPreparePhysicalOwned(physical)
+				if owner != nil {
+					native.preparation = owner
+				}
+				return err
+			}
 		}
 		if err := prepare(instance); err != nil {
 			return native, routerVPNExternalFailure
@@ -405,6 +419,7 @@ func (n *routerVPNExternalNative) Close() error {
 		if len(pending) != 0 {
 			return routerVPNExternalFailure
 		}
+		n.joined = true
 		return nil
 	}
 	if n.proof != nil {
@@ -419,7 +434,24 @@ func (n *routerVPNExternalNative) Close() error {
 		n.boxCloseFail = n.box.Close()
 		n.boxClosed = true
 	}
+	n.joined = n.boxCloseFail == nil
 	return n.boxCloseFail
+}
+
+func (n *routerVPNExternalNative) RetainedProtection(ctx context.Context) (*mobiletor.DesktopWindowsProtectionTarget, bool, error) {
+	if n == nil || ctx == nil || ctx.Err() != nil {
+		return nil, false, routerVPNExternalFailure
+	}
+	n.mu.Lock()
+	joined, preparation := n.joined, n.preparation
+	n.mu.Unlock()
+	if !joined {
+		return nil, false, routerVPNExternalFailure
+	}
+	if preparation == nil {
+		return nil, false, nil
+	}
+	return preparation.RetainedProtection(ctx)
 }
 
 type routerVPNExternalProofRecord struct {
@@ -461,7 +493,26 @@ func routerVPNExternalProgress(owner routerVPNExternalOwner) mobilemultihop.Prog
 // parent replaces the whole session on a network or profile generation change.
 // It may report Connected only after matching proof.json and this child owner.
 func routerVPNRunExternal(parent context.Context, directory, session, physicalSource string, factory routerVPNExternalFactory) (failure error) {
+	return routerVPNRunExternalCaptured(parent, directory, session, physicalSource, "", "", factory, nil)
+}
+
+// Protected public Windows commands supply their authenticated journal. The
+// private fixture form cannot select the independently guarded public Off path.
+func routerVPNRunExternalCaptured(parent context.Context, directory, session, physicalSource, physicalConfig, physicalTransfer string,
+	factory routerVPNExternalFactory, journal routerVPNExternalJournal) error {
+	return routerVPNRunExternalCapturedPolicy(parent, directory, session, physicalSource, physicalConfig, physicalTransfer, factory, journal, false)
+}
+
+func routerVPNRunExternalCapturedPolicy(parent context.Context, directory, session, physicalSource, physicalConfig, physicalTransfer string,
+	factory routerVPNExternalFactory, journal routerVPNExternalJournal, unprotected bool) (failure error) {
 	if parent == nil || parent.Err() != nil || !routerVPNExternalSession.MatchString(session) || factory == nil {
+		return routerVPNExternalFailure
+	}
+	if unprotected && (journal != nil || physicalSource != "" || physicalConfig != "" || physicalTransfer != "") {
+		return routerVPNExternalFailure
+	}
+	if journal == nil && (physicalConfig != "" || physicalTransfer != "") || journal != nil &&
+		(!routerVPNExternalSource.MatchString(physicalSource) || !routerVPNExternalSource.MatchString(physicalConfig) || !routerVPNExternalSource.MatchString(physicalTransfer)) {
 		return routerVPNExternalFailure
 	}
 	files, err := routerVPNOpenExternalFiles(directory)
@@ -469,6 +520,14 @@ func routerVPNRunExternal(parent context.Context, directory, session, physicalSo
 		return routerVPNExternalFailure
 	}
 	defer files.root.Close()
+	if journal != nil {
+		if err := journal.authenticate(parent, files); err != nil {
+			return err
+		}
+		if !files.current("external-protection-retired.json") {
+			return routerVPNExternalFailure
+		}
+	}
 	for _, name := range []string{"proof.json", "progress.json", "stopped.json", "mtu-status.json", "path-status.json", "dns-status.json", "latency-status.json"} {
 		if !files.current(name) {
 			return routerVPNExternalFailure
@@ -488,7 +547,12 @@ func routerVPNRunExternal(parent context.Context, directory, session, physicalSo
 		// to the same raw source/capture identity used by the shared compiler.
 		identity, _ := json.Marshal([]string{"routervpn-external-policy-v1", string(source), string(capture)})
 		digest := sha256.Sum256(identity)
-		_ = files.publish("stopped.json", map[string]any{"schema": 1, "session_id": session, "source_sha256": hex.EncodeToString(digest[:]), "closed": true})
+		if journal == nil && !unprotected {
+			_ = files.publish("stopped.json", map[string]any{"schema": 1, "session_id": session, "source_sha256": hex.EncodeToString(digest[:]), "closed": true})
+		}
+		return routerVPNExternalFailure
+	}
+	if unprotected && routerVPNExternalUnprotectedPolicy(files, policy) != nil {
 		return routerVPNExternalFailure
 	}
 	configDigest := sha256.Sum256([]byte(policy.Config()))
@@ -508,9 +572,35 @@ func routerVPNRunExternal(parent context.Context, directory, session, physicalSo
 		Closed bool `json:"closed"`
 	}{routerVPNExternalStop{Schema: 1, Session: session, SourceSHA256: policy.SourceSHA256()}, true}
 	physical, err := routerVPNExternalCommandPhysical(files, policy, session, physicalSource)
+	if err == nil && journal != nil && (physical == nil || physical.Metadata().TargetOS != "windows" || physical.Metadata().ConfigSHA256 != physicalConfig) {
+		err = routerVPNExternalFailure
+	}
 	if err != nil {
-		_ = files.publish("stopped.json", closed)
+		if journal == nil {
+			_ = files.publish("stopped.json", closed)
+		}
 		return routerVPNExternalFailure
+	}
+	var protectionTransfer *mobiletor.DesktopProtectionTransferRecord
+	if journal != nil {
+		protectionTransfer, err = routerVPNExternalCommandTransfer(files, physical, physicalTransfer)
+		if err != nil {
+			return routerVPNExternalFailure
+		}
+	}
+	retireProtection := func(owner routerVPNExternalOwner) error {
+		if journal == nil {
+			return nil
+		}
+		var retained routerVPNExternalProtectionOwner
+		if owner != nil {
+			var ok bool
+			retained, ok = owner.(routerVPNExternalProtectionOwner)
+			if !ok {
+				return routerVPNExternalFailure
+			}
+		}
+		return routerVPNRetireExternalProtection(files, physical, protectionTransfer, retained, routerVPNReadExternalProtectionExpected)
 	}
 	measurementSource, measurementConfig := policy.SourceSHA256(), configSHA
 	var physicalMetadata *mobilemultihop.DesktopExternalMetadata
@@ -524,11 +614,6 @@ func routerVPNRunExternal(parent context.Context, directory, session, physicalSo
 	if files.publish("progress.json", progress) != nil {
 		return routerVPNExternalFailure
 	}
-	if parent.Err() != nil || files.stopRequested(session, policy.SourceSHA256()) {
-		progress.Stage = "closed"
-		_ = files.publish("progress.json", progress)
-		return files.publish("stopped.json", closed)
-	}
 	// Parent cancellation is handled by the captured proof first. Canceling the
 	// Box context prematurely would prevent it deleting its authenticated lease.
 	ctx := globalCtx
@@ -536,9 +621,22 @@ func routerVPNRunExternal(parent context.Context, directory, session, physicalSo
 		ctx = context.Background()
 	}
 	ctx = context.WithoutCancel(ctx)
-	ctx, admission, err := routerVPNPrepareExternalAdmission(ctx, files, physical)
+	var admission *routerVPNExternalAdmission
+	if journal != nil {
+		ctx, admission, err = journal.prepare(ctx, physical, protectionTransfer)
+	} else {
+		ctx, admission, err = routerVPNPrepareExternalAdmission(ctx, files, physical)
+	}
+	if err == nil && journal != nil && (ctx == nil || admission == nil) {
+		err = routerVPNExternalFailure
+	}
 	if err != nil {
-		_ = files.publish("stopped.json", closed)
+		if admission != nil {
+			_ = admission.close()
+		}
+		if journal == nil {
+			_ = files.publish("stopped.json", closed)
+		}
 		return routerVPNExternalFailure
 	}
 	defer func() {
@@ -546,12 +644,25 @@ func routerVPNRunExternal(parent context.Context, directory, session, physicalSo
 			failure = routerVPNExternalFailure
 		}
 	}()
+	if parent.Err() != nil || files.stopRequested(session, policy.SourceSHA256()) {
+		if admission.close() != nil || retireProtection(nil) != nil {
+			progress.Stage = "cleanup-pending"
+			_ = files.publish("progress.json", progress)
+			return routerVPNExternalFailure
+		}
+		progress.Stage = "closed"
+		_ = files.publish("progress.json", progress)
+		return files.publish("stopped.json", closed)
+	}
 	owner, factoryErr := factory(ctx, policy, physical, string(source), string(capture), session)
 	if owner == nil {
 		// Factory errors with partial native ownership must return that owner.
 		// A nil owner means native parsing failed before any construction.
-		if admission.close() == nil {
+		if admission.close() == nil && retireProtection(nil) == nil {
 			_ = files.publish("stopped.json", closed)
+		} else {
+			progress.Stage = "cleanup-pending"
+			_ = files.publish("progress.json", progress)
 		}
 		return routerVPNExternalFailure
 	}
@@ -728,6 +839,11 @@ func routerVPNRunExternal(parent context.Context, directory, session, physicalSo
 		failure = routerVPNExternalFailure
 	}
 	if admission.close() != nil {
+		progress.Stage = "cleanup-pending"
+		_ = files.publish("progress.json", progress)
+		return routerVPNExternalFailure
+	}
+	if retireProtection(owner) != nil {
 		progress.Stage = "cleanup-pending"
 		_ = files.publish("progress.json", progress)
 		return routerVPNExternalFailure

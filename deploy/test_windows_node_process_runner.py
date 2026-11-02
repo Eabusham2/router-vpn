@@ -16,6 +16,26 @@ SPEC.loader.exec_module(GATE)
 
 
 class NodeProcessRunner(unittest.TestCase):
+    def test_external_process_and_retained_application_cases_are_mandatory(self):
+        self.assertIn("TestWindowsOwnedExternalChildActualRetirement", GATE.NATIVE_TESTS)
+        self.assertIn("TestWindowsOwnedExternalProcessRequiresOriginalJournal", GATE.NATIVE_TESTS)
+        for root in ("TestDesktopWindowsExternalPublicConnectAndDisconnect",
+                     "TestDesktopWindowsExternalRetirementRetriesExactOwner",
+                     "TestDesktopWindowsExternalInvalidProofCannotConnect",
+                     "TestDesktopWindowsExternalStagesBeforeStoppingPrevious",
+                     "TestDesktopWindowsExternalProtectionKeepsCapturedController",
+                     "TestDesktopWindowsExternalUnsupportedGraphPreservesPrevious",
+                     "TestDesktopWindowsExternalUnenteredRetirementRequiresOriginalJournal",
+                     "TestDesktopWindowsExternalDNSUsesOnlyOriginalNativeProof",
+                     "TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost"):
+            self.assertIn(root, GATE.SHARED_TESTS)
+        for policy in ("on-connect", "always"):
+            for protocol in ("shadowsocks", "http-connect", "https-connect"):
+                self.assertIn("TestDesktopWindowsExternalPublicConnectAndDisconnect/" + policy + "/" + protocol,
+                              GATE.EXPECTED)
+        self.assertIn("cmd/client/desktop_external_owned_test.go", GATE.REQUIRED_SOURCES)
+        self.assertEqual(len(GATE.EXPECTED), len(set(GATE.EXPECTED)))
+
     def test_complete_source_closure_includes_actual_adapter_and_embedded_command(self):
         records = GATE.sources()
         self.assertTrue(set(GATE.REQUIRED_SOURCES).issubset(records))

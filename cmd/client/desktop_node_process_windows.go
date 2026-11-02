@@ -31,15 +31,35 @@ func startDesktopOwnedNodeProcess(ctx context.Context, arguments, environment []
 }
 
 func startDesktopOwnedNodeProcessWithJournal(ctx context.Context, arguments, environment []string, directory string, journal *desktopNodeWindowsJournalProcess) (_ desktopNodeProcess, failure error) {
+	return startDesktopProtectedProcessWithJournal(ctx, arguments, environment, directory, journal, false)
+}
+
+func startDesktopProtectedProcessWithJournal(ctx context.Context, arguments, environment []string, directory string, journal *desktopNodeWindowsJournalProcess, external bool) (_ desktopNodeProcess, failure error) {
 	if ctx == nil {
 		return nil, errors.New("the direct Node engine requires its captured operation")
 	}
-	arguments, err := validateDesktopNodeProcessArguments(arguments, directory)
+	var err error
+	if external {
+		if journal == nil || !journal.external {
+			return nil, errors.New("native external process requires its inherited journal owner")
+		}
+		arguments, err = validateDesktopExternalProcessArguments(arguments, directory)
+	} else {
+		if journal != nil && journal.external {
+			return nil, errors.New("native Router process received an external journal")
+		}
+		arguments, err = validateDesktopNodeProcessArguments(arguments, directory)
+	}
 	if err != nil {
 		return nil, err
 	}
 	environment = append([]string(nil), environment...)
-	capture := windowsOwnedCapture.Load()
+	var capture *windowsOwnedController
+	if journal != nil {
+		capture = journal.controller
+	} else {
+		capture = windowsOwnedCapture.Load()
+	}
 	guard := func() error { return currentDesktopNodeController(capture) }
 	if err := guard(); err != nil {
 		return nil, err

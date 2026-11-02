@@ -1,0 +1,446 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	routervpndesktoppt "github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/spf13/cobra"
+)
+
+type externalJournalAuthenticationFixture struct {
+	calls   int
+	failure error
+}
+
+func (f *externalJournalAuthenticationFixture) authenticate(context.Context, *routerVPNExternalFiles) error {
+	f.calls++
+	return f.failure
+}
+func (f *externalJournalAuthenticationFixture) prepare(context.Context, *mobilemultihop.DesktopExternalPolicy, *mobiletor.DesktopProtectionTransferRecord) (context.Context, *routerVPNExternalAdmission, error) {
+	return nil, nil, errors.New("fixture unexpectedly reached native preparation")
+}
+
+func desktopExternalJournalUnprotectedWorkspace(t *testing.T, kill string) (string, string, *mobilemultihop.ExternalPolicy) {
+	t.Helper()
+	var capture map[string]any
+	if json.Unmarshal([]byte(desktopPhysicalCommandCapture), &capture) != nil {
+		t.Fatal("fixture original capture is invalid")
+	}
+	profile := capture["profile"].(map[string]any)
+	switch kill {
+	case "implicit-off":
+		delete(profile, "kill_switch_policy")
+		delete(profile, "kill_switch")
+	case "legacy-on-connect":
+		delete(profile, "kill_switch_policy")
+		profile["kill_switch"] = true
+	default:
+		profile["kill_switch_policy"] = kill
+		profile["kill_switch"] = kill != "off"
+	}
+	raw, err := json.Marshal(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobilemultihop.NewExternalPolicy(desktopPhysicalCommandSource, string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"source.json": desktopPhysicalCommandSource, "capture.json": string(raw), "sing-box.json": policy.Config()} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return directory, string(raw), policy
+}
+
+// The ordinary Off route owns the same compiled original graph and proof/stop
+// protocol. The native transport is the explicit existing command fixture;
+// no journal, WFP, TUN or provider execution is inferred from these cases.
+func TestRouterVPNDesktopExternalPhysicalCommandJournalLegacyUnprotectedPolicy(t *testing.T) {
+	for _, kill := range []string{"off", "implicit-off"} {
+		t.Run(kill, func(t *testing.T) {
+			directory, captured, original := desktopExternalJournalUnprotectedWorkspace(t, kill)
+			expected, err := original.DesktopCapture()
+			if err != nil || expected.KillSwitchPolicy != "off" || expected.SelectedDNS.Type != "tcp" || expected.SelectedDNS.Host != "192.168.50.53" || expected.SelectedDNS.Port != 5353 {
+				t.Fatal("fixture lost original selected DNS or Off policy", err)
+			}
+			owner := desktopExternalOwner(t, original, false)
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			joined := false
+			defer func() {
+				cancel()
+				if !joined {
+					_ = desktopExternalWait(t, done)
+				}
+			}()
+			var constructed atomic.Int32
+			go func() {
+				done <- routerVPNRunExternalUnprotected(ctx, directory, desktopExternalSession,
+					func(_ context.Context, selected *mobilemultihop.ExternalPolicy, physical *mobilemultihop.DesktopExternalPolicy, source, capture, session string) (routerVPNExternalOwner, error) {
+						constructed.Add(1)
+						if physical != nil || selected.SourceSHA256() != original.SourceSHA256() || selected.Config() != original.Config() || selected.Metadata() != original.Metadata() ||
+							source != desktopPhysicalCommandSource || capture != captured || session != desktopExternalSession {
+							return nil, errors.New("fixture Off route changed its exact original source or DNS")
+						}
+						return owner, nil
+					})
+			}()
+			var proof routerVPNExternalProofRecord
+			if json.Unmarshal(desktopExternalWaitFile(t, directory, "proof.json"), &proof) != nil || !proof.Healthy || !proof.DNSProven || proof.Physical != nil ||
+				proof.SourceSHA256 != expected.SourceSHA256 || proof.ConfigSHA256 != expected.ConfigSHA256 || proof.SessionID != desktopExternalSession || constructed.Load() != 1 {
+				t.Fatal("unprotected command changed its original source, DNS proof or graph identity")
+			}
+			desktopExternalStopFile(t, directory, desktopExternalSession, expected.SourceSHA256)
+			err = desktopExternalWait(t, done)
+			joined = true
+			if err != nil || owner.closes.Load() != 1 || owner.Healthy() {
+				t.Fatal("unprotected command did not join its original owner", err)
+			}
+			var stopped struct {
+				routerVPNExternalStop
+				Closed bool `json:"closed"`
+			}
+			if json.Unmarshal(desktopExternalWaitFile(t, directory, "stopped.json"), &stopped) != nil || !stopped.Closed || stopped.Session != desktopExternalSession || stopped.SourceSHA256 != expected.SourceSHA256 {
+				t.Fatal("unprotected stop lost its exact original policy")
+			}
+			for _, name := range []string{"physical-handoff-ready.json", "physical-handoff-ack.json", "external-journal-capture.json", "external-protection-transfer.json", "external-protection-retired.json"} {
+				if _, err := os.Lstat(filepath.Join(directory, name)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("unprotected command acquired protected authority", name, err)
+				}
+			}
+		})
+	}
+	for _, kill := range []string{"on-connect", "always", "legacy-on-connect"} {
+		t.Run(kill, func(t *testing.T) {
+			directory, _, _ := desktopExternalJournalUnprotectedWorkspace(t, kill)
+			constructed := 0
+			err := routerVPNRunExternalUnprotected(context.Background(), directory, desktopExternalSession,
+				func(context.Context, *mobilemultihop.ExternalPolicy, *mobilemultihop.DesktopExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
+					constructed++
+					return nil, errors.New("fixture protected route reached a constructor")
+				})
+			if err == nil || constructed != 0 {
+				t.Fatal("protected original policy bypassed inherited journal through empty flags", err, constructed)
+			}
+			for _, name := range []string{"progress.json", "stopped.json", "proof.json"} {
+				if _, err := os.Stat(filepath.Join(directory, name)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("rejected protected policy published native lifecycle authority", name, err)
+				}
+			}
+		})
+	}
+	for _, name := range []string{"physical-handoff-ready.json", "physical-handoff-ack.json", "external-journal-capture.json", "external-protection-transfer.json", "external-protection-retired.json"} {
+		t.Run(name, func(t *testing.T) {
+			directory, _, _ := desktopExternalJournalUnprotectedWorkspace(t, "off")
+			if err := os.WriteFile(filepath.Join(directory, name), []byte(`{"accepted":true}`), 0600); err != nil {
+				t.Fatal(err)
+			}
+			constructed := 0
+			err := routerVPNRunExternalUnprotected(context.Background(), directory, desktopExternalSession,
+				func(context.Context, *mobilemultihop.ExternalPolicy, *mobilemultihop.DesktopExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
+					constructed++
+					return nil, errors.New("fixture staged authority reached a constructor")
+				})
+			if err == nil || constructed != 0 {
+				t.Fatal("unprotected route consumed staged protected authority", name, err, constructed)
+			}
+		})
+	}
+}
+
+// Execute the exact constructor registered by production init through Cobra's
+// real parser/dispatcher. A fresh parent avoids mutating other command tests'
+// process-global sing-box flags; no parser or RunE callback is substituted.
+func desktopExternalExecuteCommand(t *testing.T, arguments []string) error {
+	t.Helper()
+	root := &cobra.Command{Use: "sing-box", SilenceUsage: true, SilenceErrors: true}
+	root.SetOut(io.Discard)
+	root.SetErr(io.Discard)
+	root.AddCommand(routerVPNNewExternalCommand())
+	root.SetArgs(append([]string{"routervpn-external"}, arguments...))
+	return root.Execute()
+}
+
+func TestRouterVPNDesktopExternalPhysicalCommandJournalParserOwnedFlags(t *testing.T) {
+	flags := []struct {
+		name, value string
+		numeric     bool
+	}{
+		{"runtime-dir", "", false}, {"session", desktopExternalSession, false},
+		{"physical-source-sha256", strings.Repeat("2", 64), false}, {"config-sha256", strings.Repeat("3", 64), false},
+		{"physical-transfer-sha256", strings.Repeat("4", 64), false},
+		{"linux-parent-channel", "7", true}, {"linux-parent-directory", "8", true}, {"linux-parent-capture", strings.Repeat("5", 64), false},
+		{"journal-parent-handle", "777", true}, {"journal-parent-image", "captured-controller.exe", false},
+		{"journal-pipe", "captured-journal", false}, {"journal-capture-sha256", strings.Repeat("6", 64), false},
+	}
+	for _, option := range flags {
+		for _, fault := range []string{"duplicate", "empty"} {
+			t.Run(option.name+"/"+fault, func(t *testing.T) {
+				directory, _, policy := desktopExternalJournalUnprotectedWorkspace(t, "off")
+				desktopExternalStopFile(t, directory, desktopExternalSession, policy.SourceSHA256())
+				arguments := []string{}
+				if option.name != "runtime-dir" {
+					arguments = append(arguments, "--runtime-dir", directory)
+				}
+				if option.name != "session" {
+					arguments = append(arguments, "--session", desktopExternalSession)
+				}
+				value := option.value
+				if option.name == "runtime-dir" {
+					value = directory
+				}
+				marker := "captured external option may be supplied only once"
+				if fault == "duplicate" {
+					arguments = append(arguments, "--"+option.name+"="+value, "--"+option.name, value)
+				} else {
+					value = ""
+					if option.numeric {
+						value = "0x0"
+					}
+					arguments = append(arguments, "--"+option.name+"="+value)
+					marker = "captured external option requires a nonempty nonzero value"
+				}
+				err := desktopExternalExecuteCommand(t, arguments)
+				if err == nil || !strings.Contains(err.Error(), marker) {
+					t.Fatal("duplicate or empty owned option reached the external dispatcher", option.name, fault, err)
+				}
+				for _, name := range []string{"proof.json", "progress.json", "stopped.json", "external-protection-retired.json"} {
+					if _, err := os.Stat(filepath.Join(directory, name)); !errors.Is(err, os.ErrNotExist) {
+						t.Fatal("Cobra option rejection read or published private lifecycle inputs", name, err)
+					}
+				}
+			})
+		}
+	}
+	for _, name := range []string{"help", "physical-preflight-help", "unknown", "positional", "mixed-platform"} {
+		t.Run(name, func(t *testing.T) {
+			directory, _, policy := desktopExternalJournalUnprotectedWorkspace(t, "off")
+			desktopExternalStopFile(t, directory, desktopExternalSession, policy.SourceSHA256())
+			arguments := []string{"--runtime-dir", directory, "--session", desktopExternalSession}
+			switch name {
+			case "help":
+				arguments = append(arguments, "--help")
+			case "physical-preflight-help":
+				arguments = []string{"--help", "--physical-source-sha256", strings.Repeat("2", 64)}
+			case "unknown":
+				arguments = append(arguments, "--foreign-external-owner=1")
+			case "positional":
+				arguments = append(arguments, "--", "another-command")
+			case "mixed-platform":
+				arguments = append(arguments, "--linux-parent-channel=7", "--journal-parent-handle=777")
+			}
+			err := desktopExternalExecuteCommand(t, arguments)
+			if (err == nil) != (name == "help" || name == "physical-preflight-help") {
+				t.Fatal("actual Cobra command changed help, positional or mixed-option behavior", name, err)
+			}
+			for _, filename := range []string{"proof.json", "progress.json", "stopped.json", "external-protection-retired.json"} {
+				if _, err := os.Stat(filepath.Join(directory, filename)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("non-runtime Cobra path touched private lifecycle input", name, filename, err)
+				}
+			}
+		})
+	}
+}
+func (*externalJournalAuthenticationFixture) close() error { return nil }
+
+func TestRouterVPNDesktopExternalPhysicalCommandJournalBeforePrivateInputs(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"source.json", "capture.json", "sing-box.json"} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte("invalid private inputs must remain unread"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := errors.New("fixture original parent was not authenticated")
+	journal := &externalJournalAuthenticationFixture{failure: want}
+	constructed := false
+	err := routerVPNRunExternalCaptured(context.Background(), directory, strings.Repeat("1", 32), strings.Repeat("2", 64), strings.Repeat("3", 64), strings.Repeat("4", 64),
+		func(context.Context, *mobilemultihop.ExternalPolicy, *mobilemultihop.DesktopExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
+			constructed = true
+			return nil, errors.New("fixture must not construct a graph")
+		}, journal)
+	if !errors.Is(err, want) || journal.calls != 1 || constructed {
+		t.Fatal("external private input preceded authenticated parent admission", err, journal.calls, constructed)
+	}
+	for _, name := range []string{"stopped.json", "progress.json", "external-protection-retired.json"} {
+		if _, err := os.Stat(filepath.Join(directory, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("unauthenticated command published native lifecycle authority", name, err)
+		}
+	}
+}
+
+func TestRouterVPNDesktopExternalPhysicalCommandJournalPublicRequiresCompleteCapture(t *testing.T) {
+	for _, fault := range []string{"missing", "handle-only", "image-only", "pipe-only", "capture-only", "missing-handle", "missing-image", "missing-pipe", "missing-capture", "missing-source", "missing-config", "missing-transfer", "mixed-platform", "unowned-parent"} {
+		t.Run(fault, func(t *testing.T) {
+			options := routerVPNExternalJournalOptions{ParentHandle: 777, ParentImage: "not-a-captured-parent.exe", Pipe: "not-a-captured-journal", CaptureSHA256: strings.Repeat("5", 64)}
+			source, config, transfer := strings.Repeat("2", 64), strings.Repeat("3", 64), strings.Repeat("4", 64)
+			switch fault {
+			case "missing":
+				options = routerVPNExternalJournalOptions{}
+			case "handle-only":
+				options = routerVPNExternalJournalOptions{ParentHandle: options.ParentHandle}
+			case "image-only":
+				options = routerVPNExternalJournalOptions{ParentImage: options.ParentImage}
+			case "pipe-only":
+				options = routerVPNExternalJournalOptions{Pipe: options.Pipe}
+			case "capture-only":
+				options = routerVPNExternalJournalOptions{CaptureSHA256: options.CaptureSHA256}
+			case "missing-handle":
+				options.ParentHandle = 0
+			case "missing-image":
+				options.ParentImage = ""
+			case "missing-pipe":
+				options.Pipe = ""
+			case "missing-capture":
+				options.CaptureSHA256 = ""
+			case "missing-source":
+				source = ""
+			case "missing-config":
+				config = ""
+			case "missing-transfer":
+				transfer = ""
+			}
+			directory := filepath.Join(t.TempDir(), "not-created")
+			var err error
+			if fault == "mixed-platform" {
+				err = routerVPNRunExternalCommand(context.Background(), directory, strings.Repeat("1", 32), source, config, transfer,
+					routerVPNNodeLinuxParentOptions{ChannelFD: 7}, options)
+			} else {
+				err = routerVPNRunExternalWithJournal(context.Background(), directory, strings.Repeat("1", 32), source, config, transfer, options)
+			}
+			if err == nil || errors.Is(err, os.ErrNotExist) {
+				t.Fatal("incomplete external inherited journal reached private file input", fault, err)
+			}
+		})
+	}
+}
+
+type externalJournalPartialCloser struct {
+	failure error
+	calls   int
+}
+
+func (f *externalJournalPartialCloser) Close() error { f.calls++; return f.failure }
+
+func TestRouterVPNDesktopExternalPhysicalCommandJournalPartialRetirementRequiresJoin(t *testing.T) {
+	partial := &externalJournalPartialCloser{failure: errors.New("fixture retained native constructor")}
+	owner := &routerVPNExternalNative{cancel: func() {}, partial: []io.Closer{partial}}
+	if _, _, err := owner.RetainedProtection(context.Background()); err == nil {
+		t.Fatal("unjoined external constructor claimed absence of protection")
+	}
+	if owner.Close() == nil {
+		t.Fatal("fixture partial constructor unexpectedly closed")
+	}
+	if _, _, err := owner.RetainedProtection(context.Background()); err == nil {
+		t.Fatal("failed partial cleanup claimed absence of protection")
+	}
+	partial.failure = nil
+	if err := owner.Close(); err != nil || partial.calls != 2 {
+		t.Fatal("original partial source was not retried and joined", err, partial.calls)
+	}
+	if target, captured, err := owner.RetainedProtection(context.Background()); err != nil || captured || target != nil {
+		t.Fatal("joined no-source constructor fabricated a native target", err)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := owner.RetainedProtection(cancelled); err == nil {
+		t.Fatal("cancelled retirement acquired a native outcome")
+	}
+}
+
+func TestRouterVPNDesktopExternalPhysicalCommandJournalAdmissionCloseJoinsCallback(t *testing.T) {
+	policy, _ := desktopExternalJournalTransferFixture(t)
+	meta := policy.Metadata()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	want := errors.New("fixture original native journal close failed")
+	var closeCalls atomic.Int32
+	admission := &routerVPNExternalAdmission{metadata: meta, joined: make(chan struct{}), retired: make(chan struct{}),
+		nativeAdmit: func(context.Context, routervpndesktoppt.ExternalPhysicalPrepared) error {
+			close(entered)
+			<-release
+			return nil
+		},
+		nativeClose: func() error { closeCalls.Add(1); return want }}
+	prepared := routervpndesktoppt.ExternalPhysicalPrepared{Capture: mobiletor.DesktopSocketCapture{
+		SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, NetworkID: strings.Repeat("6", 32)},
+		Policy: meta.KillSwitchPolicy, BaselineSHA256: strings.Repeat("7", 64)}
+	admitDone, closeDone := make(chan error, 1), make(chan error, 1)
+	admitJoined, closeStarted, closeJoined := false, false, false
+	defer func() {
+		unblock()
+		if !admitJoined {
+			select {
+			case <-admitDone:
+			case <-time.After(3 * time.Second):
+				t.Error("fixture admission did not join during cleanup")
+			}
+		}
+		if closeStarted && !closeJoined {
+			select {
+			case <-closeDone:
+			case <-time.After(3 * time.Second):
+				t.Error("fixture journal close did not join during cleanup")
+			}
+		} else if !closeStarted {
+			_ = admission.close()
+		}
+	}()
+	go func() { admitDone <- admission.admit(context.Background(), prepared) }()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("native journal admission did not enter")
+	}
+	closeStarted = true
+	go func() { closeDone <- admission.close() }()
+	deadline := time.Now().Add(3 * time.Second)
+	for admission.state.Load() != 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("native journal close did not retire admission")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	select {
+	case <-closeDone:
+		closeJoined = true
+		t.Fatal("native journal close returned before its entered callback joined")
+	default:
+	}
+	unblock()
+	err := <-admitDone
+	admitJoined = true
+	if err == nil || admission.admitted() {
+		t.Fatal("retired callback admitted a late native result", err)
+	}
+	err = <-closeDone
+	closeJoined = true
+	if !errors.Is(err, want) {
+		t.Fatal("native journal close erased its original cleanup failure", err)
+	}
+	if err := admission.close(); !errors.Is(err, want) || closeCalls.Load() != 1 {
+		t.Fatal("later native journal close changed joined ownership", err, closeCalls.Load())
+	}
+}

@@ -18,3 +18,7 @@ func startDesktopOwnedNodeProcess(context.Context, []string, []string, string) (
 func startDesktopOwnedNodeJournalProcess(context.Context, *app, *desktopNodeLaunch, []string, []string, string) (desktopNodeProcess, error) {
 	return nil, errors.New("the durable Node engine requires its Windows controller")
 }
+
+func startDesktopOwnedExternalJournalProcess(context.Context, *app, *desktopNodeLaunch, []string, []string, string) (desktopNodeProcess, error) {
+	return nil, errors.New("the durable ordinary external engine requires its Windows controller")
+}

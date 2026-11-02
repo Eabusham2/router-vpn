@@ -13,6 +13,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/sagernet/sing/common/json"
 )
 
@@ -20,14 +21,34 @@ import (
 // match this Box. The network service constructs its OS owner in Initialize,
 // before a TUN can change the physical routes. Preparation is not proof.
 func (s *Box) RouterVPNDesktopExternalPreparePhysical(policy *mobilemultihop.DesktopExternalPolicy) error {
+	_, err := s.RouterVPNDesktopExternalPreparePhysicalOwned(policy)
+	return err
+}
+
+// Capture this exact service before startup so partial failure and normal
+// teardown can query the same joined protection owner after Box cancellation.
+type RouterVPNDesktopExternalPreparation struct {
+	network *routervpndesktoppt.ExternalNetworkOwner
+	policy  *mobilemultihop.DesktopExternalPolicy
+}
+
+func (s *Box) RouterVPNDesktopExternalPreparePhysicalOwned(policy *mobilemultihop.DesktopExternalPolicy) (*RouterVPNDesktopExternalPreparation, error) {
 	if !routerVPNDesktopExternalPhysicalAvailable(policy) {
-		return errors.New("this native operating system has no admitted ordinary external socket factory")
+		return nil, errors.New("this native operating system has no admitted ordinary external socket factory")
 	}
 	_, _, network, err := s.routerVPNDesktopExternalPhysical(policy)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return network.PrepareExternalPhysicalPolicy(policy)
+	owner := &RouterVPNDesktopExternalPreparation{network: network, policy: policy}
+	return owner, network.PrepareExternalPhysicalPolicy(policy)
+}
+
+func (p *RouterVPNDesktopExternalPreparation) RetainedProtection(ctx context.Context) (*mobiletor.DesktopWindowsProtectionTarget, bool, error) {
+	if p == nil || p.network == nil || p.policy == nil {
+		return nil, false, errors.New("ordinary external preparation has no captured retirement owner")
+	}
+	return p.network.RetainedPhysicalProtection(ctx, p.policy)
 }
 
 func (s *Box) routerVPNDesktopExternalPhysical(policy *mobilemultihop.DesktopExternalPolicy) (option.Options, mobilemultihop.ExternalDesktopCapture, *routervpndesktoppt.ExternalNetworkOwner, error) {

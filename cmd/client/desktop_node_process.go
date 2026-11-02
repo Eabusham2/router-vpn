@@ -201,6 +201,22 @@ func validateDesktopNodeProcessArguments(arguments []string, directory string) (
 	return append([]string(nil), arguments...), nil
 }
 
+// The external command shares bounded public digest syntax, never Router
+// readiness or its optional MTU argument. This is not a generic CLI selector.
+func validateDesktopExternalProcessArguments(arguments []string, directory string) ([]string, error) {
+	if len(arguments) != 11 || arguments[0] != "routervpn-external" {
+		return nil, errors.New("native external process requires its exact captured command")
+	}
+	copied := append([]string(nil), arguments...)
+	copied[0] = "routervpn-node"
+	validated, err := validateDesktopNodeProcessArguments(copied, directory)
+	if err != nil {
+		return nil, err
+	}
+	validated[0] = "routervpn-external"
+	return validated, nil
+}
+
 func desktopNodeProcessHex(value string, size int) bool {
 	if len(value) != size*2 || strings.ToLower(value) != value {
 		return false

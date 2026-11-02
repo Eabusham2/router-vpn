@@ -5,6 +5,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import re
 import shutil
 import tempfile
 import unittest
@@ -43,6 +44,78 @@ class ExternalOutputBoundary(unittest.TestCase):
                     with contextlib.redirect_stdout(stream), self.assertRaisesRegex(ValueError, "did not prove its native composition"):
                         EXTERNAL.report_baseline("command", ("NativeComposition",), status, output)
                     self.assertEqual(raw.getvalue(), output.encode("utf-8"))
+
+
+class ExternalRetainedJournalInventory(unittest.TestCase):
+    def test_every_new_journal_root_is_mandatory(self):
+        expected_command = tuple("TestRouterVPNDesktopExternalPhysicalCommandJournal" + name for name in (
+            "BeforePrivateInputs", "PublicRequiresCompleteCapture", "WindowsHasNoFileFallback", "RetainedPipeline",
+            "PartialRetirementRequiresJoin", "AdmissionCloseJoinsCallback", "TransferInput", "RetirementReceipt",
+            "LegacyUnprotectedPolicy", "LegacyUnprotectedPublicStop", "ParserOwnedFlags"))
+        expected_factory = (
+            "TestRouterVPNExternalPhysicalJournalAdmissionCapturesDurableBarrier",
+            "TestRouterVPNExternalPhysicalRetirementKeepsExactJoinedSource",
+            "TestRouterVPNExternalPhysicalWindowsRetirementKeepsOriginalPredecessor",
+        )
+        self.assertEqual(EXTERNAL.JOURNAL_COMMAND_CASES, expected_command)
+        self.assertEqual(EXTERNAL.JOURNAL_FACTORY_CASES, expected_factory)
+        for required in (expected_command, expected_factory):
+            complete = "".join("--- PASS: " + name + " (0.01s)\n" for name in required)
+            with contextlib.redirect_stdout(io.StringIO()):
+                EXTERNAL.report_baseline("journal", required, 0, complete)
+            for name in required:
+                with self.subTest(missing=name), contextlib.redirect_stdout(io.StringIO()):
+                    incomplete = complete.replace("--- PASS: " + name + " (0.01s)\n", "")
+                    with self.assertRaisesRegex(ValueError, "did not prove its native composition"):
+                        EXTERNAL.report_baseline("journal", required, 0, incomplete)
+
+
+
+    def test_actual_dispatch_retains_journal_requirements_and_source_recheck(self):
+        with tempfile.TemporaryDirectory(prefix="windows-external-dispatch-") as temporary:
+            core = Path(temporary).resolve()
+            calls = []
+            observed = {}
+            names = set()
+            for path in (ROOT / "mobile/desktop").glob("*.go.tmpl"):
+                names.update(re.findall(r"^func (Test\w+)\(", path.read_text(), re.MULTILINE))
+
+            def run(command, **kwargs):
+                calls.append(tuple(str(value) for value in command))
+                self.assertEqual(kwargs["cwd"], core)
+                if str(command[0]) == "owned-go":
+                    self.assertIn("-mod=readonly", command)
+                    self.assertIn("-race", command)
+                    self.assertIn("-ldflags=-checklinkname=0", command)
+                    binary = Path(command[command.index("-o") + 1])
+                    binary.write_bytes(b"explicit native compiler model")
+                    return 0, ""
+                selection = next(str(value).removeprefix("-test.run=") for value in command if str(value).startswith("-test.run="))
+                output = "".join("--- PASS: " + name + " (0.01s)\n" for name in sorted(names) if re.search(selection, name))
+                return 0, output
+
+            actual_report = EXTERNAL.report_baseline
+            def report(name, required, status, output):
+                observed[name] = required
+                return actual_report(name, required, status, output)
+
+            # Only the external runner's source/compiler/OS boundaries are
+            # modeled. Its complete dispatch, mandatory verdict checks, image
+            # identity checks and final source recheck execute unchanged.
+            with patch.object(EXTERNAL.platform, "system", return_value="Windows"), \
+                 patch.object(EXTERNAL, "checked_sources", return_value=(core, {"original": "captured"})) as sources, \
+                 patch.object(EXTERNAL.IDENTITY, "selected_compiler", return_value=("owned-go", {}, "amd64")), \
+                 patch.object(EXTERNAL.IDENTITY, "run", side_effect=run), \
+                 patch.object(EXTERNAL, "mutants", return_value=()), \
+                 patch.object(EXTERNAL, "report_baseline", side_effect=report), \
+                 contextlib.redirect_stdout(io.StringIO()):
+                EXTERNAL.execute(core)
+            self.assertEqual(sources.call_count, 2)
+            self.assertEqual(set(observed), {"command", "box", "factory"})
+            self.assertTrue(set(EXTERNAL.JOURNAL_COMMAND_CASES).issubset(observed["command"]))
+            self.assertTrue(set(EXTERNAL.JOURNAL_FACTORY_CASES).issubset(observed["factory"]))
+            self.assertEqual(len(calls), 6)
+
 
 
 class BootstrapOverlayBoundary(unittest.TestCase):

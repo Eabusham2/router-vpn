@@ -1,0 +1,243 @@
+//go:build windows
+
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	routervpndesktoppt "github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+)
+
+// A complete original Off graph with a queued private stop makes an incorrect
+// option downgrade observable without constructing an engine or touching WFP.
+// Protected empty-flag input must separately fail its original policy check.
+func TestRouterVPNDesktopExternalPhysicalCommandJournalWindowsHasNoFileFallback(t *testing.T) {
+	for _, form := range []string{"protected-empty", "physical-only", "config-only", "transfer-only", "complete-physical-without-journal"} {
+		t.Run(form, func(t *testing.T) {
+			kill := "off"
+			if form == "protected-empty" {
+				kill = "always"
+			}
+			directory, _, policy := desktopExternalJournalUnprotectedWorkspace(t, kill)
+			desktopExternalStopFile(t, directory, desktopExternalSession, policy.SourceSHA256())
+			source, config, transfer := "", "", ""
+			if form == "physical-only" || form == "complete-physical-without-journal" {
+				source = strings.Repeat("2", 64)
+			}
+			if form == "config-only" || form == "complete-physical-without-journal" {
+				config = strings.Repeat("3", 64)
+			}
+			if form == "transfer-only" || form == "complete-physical-without-journal" {
+				transfer = strings.Repeat("4", 64)
+			}
+			err := routerVPNRunExternalCommand(context.Background(), directory, desktopExternalSession, source, config, transfer,
+				routerVPNNodeLinuxParentOptions{}, routerVPNExternalJournalOptions{})
+			if err == nil {
+				t.Fatal("public Windows external command read private files before inherited journal admission")
+			}
+			for _, name := range []string{"stopped.json", "progress.json", "physical-handoff-ready.json", "external-protection-retired.json"} {
+				if _, err := os.Stat(filepath.Join(directory, name)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("public Windows external command read private files before inherited journal admission", name, err)
+				}
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopExternalPhysicalCommandJournalLegacyUnprotectedPublicStop(t *testing.T) {
+	directory, _, policy := desktopExternalJournalUnprotectedWorkspace(t, "off")
+	desktopExternalStopFile(t, directory, desktopExternalSession, policy.SourceSHA256())
+	// Actual public dispatch preserves the all-empty compatibility form. The
+	// already queued original stop proves this without creating a TUN or WFP.
+	err := desktopExternalExecuteCommand(t, []string{"--runtime-dir", directory, "--session", desktopExternalSession})
+	if err != nil {
+		t.Fatal("public Windows Off command lost its source-empty contract", err)
+	}
+	var stopped struct {
+		routerVPNExternalStop
+		Closed bool `json:"closed"`
+	}
+	if json.Unmarshal(desktopExternalWaitFile(t, directory, "stopped.json"), &stopped) != nil || !stopped.Closed || stopped.Session != desktopExternalSession || stopped.SourceSHA256 != policy.SourceSHA256() {
+		t.Fatal("public Windows Off stop changed its exact original source")
+	}
+	for _, name := range []string{"proof.json", "physical-handoff-ready.json", "physical-handoff-ack.json", "external-protection-retired.json"} {
+		if _, err := os.Stat(filepath.Join(directory, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("already stopped Off request created native authority", name, err)
+		}
+	}
+}
+
+// This composes the actual command, typed compiler, original proof/stop and
+// derived retirement records. Native IPC and BFE readback are explicit models;
+// the separate Windows process/journal/WFP gates retain those obligations.
+type externalJournalCommandFixture struct {
+	metadata      mobilemultihop.DesktopExternalMetadata
+	expected      mobiletor.DesktopProtectionTransferRecord
+	authenticated bool
+	admissions    atomic.Int32
+	closes        atomic.Int32
+	closeErr      error
+}
+
+func (f *externalJournalCommandFixture) authenticate(ctx context.Context, files *routerVPNExternalFiles) error {
+	if ctx == nil || ctx.Err() != nil || files == nil || f.authenticated {
+		return errors.New("fixture changed original journal authentication")
+	}
+	f.authenticated = true
+	return nil
+}
+func (f *externalJournalCommandFixture) prepare(ctx context.Context, policy *mobilemultihop.DesktopExternalPolicy, transfer *mobiletor.DesktopProtectionTransferRecord) (context.Context, *routerVPNExternalAdmission, error) {
+	if !f.authenticated || policy == nil || policy.Metadata() != f.metadata || transfer == nil {
+		return nil, nil, errors.New("fixture changed typed external preparation")
+	}
+	actual, err := mobiletor.DesktopProtectionTransferRecordSHA256(*transfer)
+	wanted, wantErr := mobiletor.DesktopProtectionTransferRecordSHA256(f.expected)
+	if err != nil || wantErr != nil || actual != wanted {
+		return nil, nil, errors.New("fixture changed whole original transfer")
+	}
+	admission := &routerVPNExternalAdmission{metadata: policy.Metadata(), joined: make(chan struct{}), retired: make(chan struct{}), nativeClose: f.close}
+	admission.nativeAdmit = func(ctx context.Context, prepared routervpndesktoppt.ExternalPhysicalPrepared) error {
+		if ctx.Err() != nil || prepared.Capture.SourceSHA256 != f.metadata.SourceSHA256 || prepared.Capture.SessionID != f.metadata.SessionID || prepared.Policy != f.metadata.KillSwitchPolicy {
+			return errors.New("fixture changed exact native admission")
+		}
+		f.admissions.Add(1)
+		return nil
+	}
+	owned, err := routervpndesktoppt.WithExternalPhysicalJournalAdmission(ctx, policy, transfer.Predecessor,
+		func(context.Context, mobiletor.DesktopWindowsProtectionCommit) error { return nil }, admission.admit)
+	return owned, admission, err
+}
+func (f *externalJournalCommandFixture) close() error { f.closes.Add(1); return f.closeErr }
+
+type externalJournalCommandOwner struct {
+	*desktopExternalFixture
+	outcome *mobiletor.DesktopWindowsProtectionTarget
+	failure error
+	queries atomic.Int32
+}
+
+func (f *externalJournalCommandOwner) RetainedProtection(ctx context.Context) (*mobiletor.DesktopWindowsProtectionTarget, bool, error) {
+	f.queries.Add(1)
+	if ctx.Err() != nil || f.closes.Load() == 0 || f.healthy.Load() {
+		return nil, true, errors.New("fixture queried unjoined native owner")
+	}
+	return f.outcome, true, f.failure
+}
+
+func TestRouterVPNDesktopExternalPhysicalCommandJournalRetainedPipeline(t *testing.T) {
+	for _, fault := range []string{"always", "on-connect", "journal-close", "native-read", "foreign-outcome"} {
+		t.Run(fault, func(t *testing.T) {
+			source, capture := desktopPhysicalCommandSource, desktopPhysicalCommandCapture
+			if fault == "on-connect" {
+				capture = strings.Replace(capture, `"kill_switch_policy":"always"`, `"kill_switch_policy":"on-connect"`, 1)
+			}
+			original, err := mobilemultihop.NewExternalPolicy(source, capture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			physical, err := mobilemultihop.NewDesktopExternalPolicy(original, desktopExternalSession, "windows")
+			if err != nil {
+				t.Fatal(err)
+			}
+			meta := physical.Metadata()
+			transfer := mobiletor.DesktopProtectionTransferRecord{Schema: 1, Kind: "routervpn-windows-protection-transfer-v1", SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Policy: meta.KillSwitchPolicy}
+			raw, err := mobiletor.CanonicalDesktopProtectionTransferRecord(transfer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest, err := mobiletor.DesktopProtectionTransferRecordSHA256(transfer)
+			if err != nil {
+				t.Fatal(err)
+			}
+			directory := t.TempDir()
+			for name, body := range map[string][]byte{"source.json": []byte(source), "capture.json": []byte(capture), "sing-box.json": []byte(physical.Config()), "external-protection-transfer.json": raw} {
+				if err := os.WriteFile(filepath.Join(directory, name), body, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			journal := &externalJournalCommandFixture{metadata: meta, expected: transfer}
+			owner := &externalJournalCommandOwner{desktopExternalFixture: desktopExternalOwner(t, original, false)}
+			// Both policies retain the actual admitted successor for the parent
+			// handoff. On-connect deletion is the parent's separately journaled
+			// action; the child may not publish absence after admission.
+			owner.outcome = &mobiletor.DesktopWindowsProtectionTarget{Capture: mobiletor.DesktopSocketCapture{SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, NetworkID: strings.Repeat("b", 32)}, Policy: meta.KillSwitchPolicy, BaselineSHA256: strings.Repeat("c", 64)}
+			switch fault {
+			case "journal-close":
+				journal.closeErr = errors.New("fixture original channel remains owned")
+			case "native-read":
+				owner.failure = errors.New("fixture native retirement cannot be proved")
+			case "foreign-outcome":
+				owner.outcome.Capture.SourceSHA256 = strings.Repeat("e", 64)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			joined := false
+			defer func() {
+				cancel()
+				if !joined {
+					_ = desktopExternalWait(t, done)
+				}
+			}()
+			go func() {
+				done <- routerVPNRunExternalCaptured(ctx, directory, desktopExternalSession, meta.SourceSHA256, meta.ConfigSHA256, digest,
+					func(nativeCtx context.Context, selected *mobilemultihop.ExternalPolicy, derived *mobilemultihop.DesktopExternalPolicy, actualSource, actualCapture, session string) (routerVPNExternalOwner, error) {
+						if derived == nil || derived.OriginalPolicy() != selected || derived.Metadata() != meta || actualSource != source || actualCapture != capture || session != desktopExternalSession {
+							return nil, errors.New("fixture changed original native factory capture")
+						}
+						desktopPhysicalCommandFixtureAdmission(nativeCtx, derived, owner.desktopExternalFixture)
+						return owner, nil
+					}, journal)
+			}()
+			var proof routerVPNExternalProofRecord
+			if json.Unmarshal(desktopExternalWaitFile(t, directory, "proof.json"), &proof) != nil || proof.Physical == nil || *proof.Physical != meta || proof.SourceSHA256 != original.SourceSHA256() || proof.ConfigSHA256 != meta.OriginalConfigSHA256 || !proof.DNSProven || journal.admissions.Load() != 1 {
+				t.Fatal("journal command changed original proof or derived physical identity")
+			}
+			for _, name := range []string{"physical-handoff-ready.json", "physical-handoff-ack.json", "node-protection-retired.json"} {
+				if _, err := os.Stat(filepath.Join(directory, name)); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("retained journal command created legacy or Router authority", name, err)
+				}
+			}
+			desktopExternalStopFile(t, directory, desktopExternalSession, original.SourceSHA256())
+			err = desktopExternalWait(t, done)
+			joined = true
+			valid := fault == "always" || fault == "on-connect"
+			if (err == nil) != valid || owner.closes.Load() == 0 || owner.healthy.Load() || journal.closes.Load() != 1 {
+				t.Fatal("retained external command lost joined lifecycle", err)
+			}
+			if !valid {
+				for _, name := range []string{"stopped.json", "external-protection-retired.json"} {
+					if _, err := os.Stat(filepath.Join(directory, name)); !errors.Is(err, os.ErrNotExist) {
+						t.Fatal("failed native retirement published complete lifecycle authority", name, err)
+					}
+				}
+				var progress routerVPNExternalProgressRecord
+				if json.Unmarshal(desktopExternalWaitFile(t, directory, "progress.json"), &progress) != nil || progress.Stage != "cleanup-pending" {
+					t.Fatal("unproved retirement lost pending state")
+				}
+				return
+			}
+			if owner.queries.Load() != 1 {
+				t.Fatal("retirement did not query its exact joined owner")
+			}
+			receipt, err := mobiletor.ParseDesktopProtectionRetirementRecord(desktopExternalWaitFile(t, directory, "external-protection-retired.json"), transfer)
+			if err != nil || receipt.TransferSHA256 != digest || receipt.Target == nil || *receipt.Target != *owner.outcome {
+				t.Fatal("retirement receipt changed derived native source", err)
+			}
+			var stopped struct {
+				routerVPNExternalStop
+				Closed bool `json:"closed"`
+			}
+			if json.Unmarshal(desktopExternalWaitFile(t, directory, "stopped.json"), &stopped) != nil || !stopped.Closed || stopped.SourceSHA256 != original.SourceSHA256() || stopped.Session != desktopExternalSession {
+				t.Fatal("retained stopped record lost original external source")
+			}
+		})
+	}
+}

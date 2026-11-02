@@ -7,6 +7,8 @@ and joins its retained child Job before releasing image ancestry. The shared
 tests additionally exercise failed joins, concurrent cancellation and bounded
 command authority. This is not a complete authenticated-package launch or a
 sing-box dataplane test; those remain separate required composition gates.
+The external child case has the same process/image/Job evidence boundary;
+SS/HTTP/HTTPS application cases use explicit native process/BFE/DNS/TUN models.
 The application restart cases use real admission/settings/private-store code
 with explicit process/BFE/journal-I/O models. Native journal retirement/adoption
 and actual BFE observation are verified by their separate Windows gates.
@@ -40,6 +42,8 @@ NATIVE_TESTS = (
     "TestWindowsPrivateStoreWriteThroughFlags",
     "TestWindowsPrivateStoreRejectsInvalidReplacement",
     "TestPrivateStoreCheckedWriteRetainsOriginalTarget",
+    "TestWindowsOwnedExternalChildActualRetirement",
+    "TestWindowsOwnedExternalProcessRequiresOriginalJournal",
 )
 SHARED_TESTS = (
     "TestDesktopNodeProcessArguments",
@@ -129,6 +133,18 @@ SHARED_TESTS = (
     "TestDesktopNodePublicALLClosedGraphsKeepOriginalOwner",
     "TestDesktopNodePublicALLCancellationKeepsCapturedOperation",
     "TestSpeedLabFallbackReleaseRequiresCapturedTransaction",
+    "TestDesktopWindowsExternalPublicConnectAndDisconnect",
+    "TestDesktopWindowsExternalRetirementRetriesExactOwner",
+    "TestDesktopWindowsExternalInvalidProofCannotConnect",
+    "TestDesktopWindowsExternalStagesBeforeStoppingPrevious",
+    "TestDesktopWindowsExternalPolicyFamiliesStayDistinct",
+    "TestDesktopWindowsExternalOffUsesOriginalGenericPreparation",
+    "TestDesktopWindowsExternalProtectionKeepsCapturedController",
+    "TestDesktopWindowsExternalProcessArgumentsRemainExact",
+    "TestDesktopWindowsExternalUnsupportedGraphPreservesPrevious",
+    "TestDesktopWindowsExternalUnenteredRetirementRequiresOriginalJournal",
+    "TestDesktopWindowsExternalDNSUsesOnlyOriginalNativeProof",
+    "TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost",
 )
 REQUIRED = (*NATIVE_TESTS, *SHARED_TESTS)
 ARGUMENT_CASES = (
@@ -141,6 +157,20 @@ PUBLIC_MODES = ("wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsoc
                 "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "split", "max", "ss-v2ray")
 PUBLIC_LAYERS = ("off", "aes-256-gcm", "aes-256-gcm+xor-whitening")
 EXPECTED = (*REQUIRED, *(SHARED_TESTS[0] + "/" + case for case in ARGUMENT_CASES),
+            *("TestDesktopWindowsExternalPublicConnectAndDisconnect/" + policy + "/" + protocol
+              for policy in ("on-connect", "always") for protocol in ("shadowsocks", "http-connect", "https-connect")),
+            *("TestDesktopWindowsExternalRetirementRetriesExactOwner/" + fault
+              for fault in ("child-join", "journal-flush", "release", "foreign-receipt", "private-file")),
+            *("TestDesktopWindowsExternalInvalidProofCannotConnect/" + fault
+              for fault in ("router-proof", "physical-source", "physical-config", "foreign-session", "dns", "exit", "receipt", "dead-child", "cancel", "replacement")),
+            *("TestDesktopWindowsExternalOffUsesOriginalGenericPreparation/" + protocol
+              for protocol in ("wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn", "start-layer")),
+            *("TestDesktopWindowsExternalProcessArgumentsRemainExact/" + fault
+              for fault in ("router-command", "missing-transfer", "physical-mtu", "early-journal", "another-directory", "invalid-source")),
+            *("TestDesktopWindowsExternalUnenteredRetirementRequiresOriginalJournal/" + fault
+              for fault in ("unchanged", "journal-head", "kernel-target", "constructor-entered")),
+            *("TestDesktopWindowsExternalSpeedLabRestoresOriginalTypedHost/" + direction
+              for direction in ("router-external-router", "external-router-external", "external-router-original-host", "external-router-retired-controller")),
             *("TestDesktopNodeStartAssetsMAXKeepsEmbeddedOwner/" + mode + "/" + layer
               for mode in ("max-quic-wg", "max-quic-awg", "max-tls-wg", "max-tls-awg")
               for layer in PUBLIC_LAYERS),
@@ -179,6 +209,11 @@ REQUIRED_SOURCES = (
     "cmd/client/desktop_node_process_test.go",
     "cmd/client/desktop_node_process_windows.go",
     "cmd/client/desktop_node_process_windows_native_test.go",
+    "cmd/client/desktop_external_owned.go", "cmd/client/desktop_external_owned_stop.go",
+    "cmd/client/desktop_external_owned_dns.go", "cmd/client/desktop_external_owned_test.go",
+    "cmd/client/desktop_protection_selection.go", "cmd/client/desktop_external_native.go",
+    "cmd/client/desktop_node_owned_prepare_windows.go", "cmd/client/desktop_native_workspace.go",
+    "cmd/client/external_profile_connect.go", "cmd/client/dns_proof.go", "cmd/client/speed_lab_paths.go",
     "cmd/client/desktop_node_journal.go", "cmd/client/desktop_node_journal_test.go",
     "cmd/client/desktop_node_journal_windows.go",
     "cmd/client/desktop_node_journal_release.go", "cmd/client/desktop_node_journal_release_test.go",

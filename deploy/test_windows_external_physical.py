@@ -25,6 +25,16 @@ BOOT = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(BOOT)
 IDENTITY = BOOT.IDENTITY
 
+JOURNAL_COMMAND_CASES = tuple("TestRouterVPNDesktopExternalPhysicalCommandJournal" + name for name in (
+    "BeforePrivateInputs", "PublicRequiresCompleteCapture", "WindowsHasNoFileFallback", "RetainedPipeline",
+    "PartialRetirementRequiresJoin", "AdmissionCloseJoinsCallback", "TransferInput", "RetirementReceipt",
+            "LegacyUnprotectedPolicy", "LegacyUnprotectedPublicStop", "ParserOwnedFlags"))
+JOURNAL_FACTORY_CASES = (
+    "TestRouterVPNExternalPhysicalJournalAdmissionCapturesDurableBarrier",
+    "TestRouterVPNExternalPhysicalRetirementKeepsExactJoinedSource",
+    "TestRouterVPNExternalPhysicalWindowsRetirementKeepsOriginalPredecessor",
+)
+
 
 def checked_sources(source):
     source, records = BOOT.sources(source)
@@ -58,10 +68,31 @@ def mutants(source):
     command = (source / "cmd/sing-box/routervpn_external.go").read_text(encoding="utf-8")
     admission = (source / "cmd/sing-box/routervpn_external_command_admission.go").read_text(encoding="utf-8")
     factory = (source / "routervpn/desktoppt/external_physical_windows.go").read_text(encoding="utf-8")
+    dispatch = (source / "cmd/sing-box/routervpn_external_command_journal.go").read_text(encoding="utf-8")
     unjoined = IDENTITY.replace_once(admission,
         "\tif previous := a.state.Swap(2); previous != 2 {",
         "\tprevious := a.state.Swap(2)\n\tif previous == 2 { return nil }\n\tif previous != 2 {")
     return (
+        ("missing-inherited-parent", "cmd/sing-box/routervpn_external_command_journal.go", "./cmd/sing-box",
+         "TestRouterVPNDesktopExternalPhysicalCommandJournalWindowsHasNoFileFallback",
+         "public Windows external command read private files before inherited journal admission",
+         IDENTITY.replace_once(dispatch, 'if runtime.GOOS == "windows" && (source != "" || config != "" || transfer != "") || journal !=',
+                               'if false && runtime.GOOS == "windows" && (source != "" || config != "" || transfer != "") || journal !=')),
+        ("protected-empty-options", "cmd/sing-box/routervpn_external_command_journal.go", "./cmd/sing-box",
+         "TestRouterVPNDesktopExternalPhysicalCommandJournalLegacyUnprotectedPolicy",
+         "protected original policy bypassed inherited journal through empty flags",
+         IDENTITY.replace_once(dispatch, 'err != nil || captured.KillSwitchPolicy != "off"',
+                               'err != nil || false && captured.KillSwitchPolicy != "off"')),
+        ("duplicate-owned-command-option", "cmd/sing-box/routervpn_external.go", "./cmd/sing-box",
+         "TestRouterVPNDesktopExternalPhysicalCommandJournalParserOwnedFlags",
+         "duplicate or empty owned option reached the external dispatcher",
+         IDENTITY.replace_once(command, "\trouterVPNExternalOwnedFlags(command.Flags())",
+                               "\tif false { routerVPNExternalOwnedFlags(command.Flags()) }")),
+        ("private-input-before-authentication", "cmd/sing-box/routervpn_external.go", "./cmd/sing-box",
+         "TestRouterVPNDesktopExternalPhysicalCommandJournalBeforePrivateInputs",
+         "external private input preceded authenticated parent admission",
+         IDENTITY.replace_once(command, 'if err := journal.authenticate(parent, files); err != nil {',
+                               'if err := journal.authenticate(parent, files); false && err != nil {')),
         ("missing-native-handoff", "cmd/sing-box/routervpn_external.go", "./cmd/sing-box",
          "TestRouterVPNDesktopExternalPhysicalCommandAdmissionCannotSkipBarrier",
          "unacknowledged native handoff published a connected proof",
@@ -117,16 +148,16 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
          tuple("TestRouterVPNDesktopExternalPhysicalCommand" + name for name in
              ("RequiresExactDerivedInputs", "SeparatesProofAndMailboxIdentity", "RejectsRelabeledNetworkProof", "UsesActualPreparedNativeFactory",
               "AdmissionExactHandshake", "AdmissionRejectsForeignReplies", "AdmissionCancellationAndReplacement", "AdmissionCloseRetiresEnteredCallback", "AdmissionCannotSkipBarrier",
-              "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "AdmissionCleanupFailureCannotAcknowledgeStop"))),
+              "AdmissionClosePreservesFailure", "AdmissionEveryCloseJoins", "AdmissionCleanupFailureCannotAcknowledgeStop")) + JOURNAL_COMMAND_CASES),
         ("box", ".", "^TestRouterVPNDesktopExternalPhysical",
          tuple("TestRouterVPNDesktopExternalPhysical" + name for name in
              ("BoxRejectsChangedDerivedGraph", "BoxRequiresPreparedStartedOwner", "BoxRetainsExactPolicyAndDerivedIdentity",
               "BoxRejectsTUNReadbackAndBinding", "BoxCancelAndNetworkResetRetireExactOwner", "BoxMTUReadbackKeepsGuardAndDerivedPolicy", "Integration"))),
-        ("factory", "./routervpn/desktoppt", "^TestRouterVPNExternalPhysical(Windows|Admission)",
+        ("factory", "./routervpn/desktoppt", "^TestRouterVPNExternalPhysical(Windows|Admission|Journal|Retirement)",
          ("TestRouterVPNExternalPhysicalWindowsCapturesPolicyAndRetainsLateOwner",
           "TestRouterVPNExternalPhysicalWindowsAdmissionRetiresFailures",
           "TestRouterVPNExternalPhysicalWindowsAdmissionCloseJoinsEnteredCallback",
-          "TestRouterVPNExternalPhysicalAdmissionRetainsExactPolicy")),
+          "TestRouterVPNExternalPhysicalAdmissionRetainsExactPolicy") + JOURNAL_FACTORY_CASES),
     )
     with tempfile.TemporaryDirectory(prefix="routervpn-windows-external-") as directory:
         for name, package, selection, required in suites:
@@ -164,7 +195,7 @@ def execute(source, go="go", *, prospective=False, env=None, bootstrap_only=Fals
         raise ValueError("Ordinary Windows composition source changed during execution")
     print("Exact ordinary Windows command, generated factory, Box, HTTP/HTTPS CONNECT and Shadowsocks "
           "selected-DNS/exit proof and rejection suites passed. OS permits/TUN are explicit fixtures; "
-          "legacy protection handoff, production activation and device acceptance remain separate.", flush=True)
+          "the inherited journal and retirement controls passed with explicit models; actual native journal/WFP/TUN and device acceptance remain separate.", flush=True)
 
 
 if __name__ == "__main__":

@@ -31,13 +31,15 @@ type routerVPNExternalAdmissionRecord struct {
 }
 
 type routerVPNExternalAdmission struct {
-	files    *routerVPNExternalFiles
-	metadata mobilemultihop.DesktopExternalMetadata
-	state    atomic.Int32 // 0 prepared, 1 entered/joined callback, 2 retired
-	joined   chan struct{}
-	retired  chan struct{}
-	accepted atomic.Bool
-	closeErr error
+	files       *routerVPNExternalFiles
+	metadata    mobilemultihop.DesktopExternalMetadata
+	state       atomic.Int32 // 0 prepared, 1 entered/joined callback, 2 retired
+	joined      chan struct{}
+	retired     chan struct{}
+	accepted    atomic.Bool
+	closeErr    error
+	nativeAdmit func(context.Context, routervpndesktoppt.ExternalPhysicalPrepared) error
+	nativeClose func() error
 }
 
 func routerVPNPrepareExternalAdmission(ctx context.Context, files *routerVPNExternalFiles, policy *mobilemultihop.DesktopExternalPolicy) (context.Context, *routerVPNExternalAdmission, error) {
@@ -90,6 +92,13 @@ func (a *routerVPNExternalAdmission) admit(ctx context.Context, prepared routerv
 	digest, err := hex.DecodeString(prepared.BaselineSHA256)
 	if err != nil || len(digest) != 32 || hex.EncodeToString(digest) != prepared.BaselineSHA256 {
 		return routerVPNExternalFailure
+	}
+	if a.nativeAdmit != nil {
+		if err := a.nativeAdmit(ctx, prepared); err != nil || ctx.Err() != nil || a.state.Load() != 1 {
+			return errors.Join(err, ctx.Err(), routerVPNExternalFailure)
+		}
+		a.accepted.Store(true)
+		return nil
 	}
 	var nonce [32]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
@@ -150,7 +159,11 @@ func (a *routerVPNExternalAdmission) close() error {
 		if previous == 1 {
 			<-a.joined
 		}
-		a.closeErr = errors.Join(a.files.remove("physical-handoff-ready.json"), a.files.root.Close())
+		if a.nativeClose != nil {
+			a.closeErr = a.nativeClose()
+		} else {
+			a.closeErr = errors.Join(a.files.remove("physical-handoff-ready.json"), a.files.root.Close())
+		}
 		close(a.retired)
 	}
 	<-a.retired

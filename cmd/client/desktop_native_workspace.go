@@ -185,6 +185,7 @@ func desktopRuntimeOwnedFile(name string) bool {
 		"node-source.json", "node-protection-transfer.json", "node-protection-retired.json", ".node-protection-retired.json.pending",
 		"node-physical-handoff-ready.json", ".node-physical-handoff-ready.json.pending", "node-physical-handoff-ack.json",
 		"node-ready.json", ".node-ready.json.pending",
+		"external-journal-capture.json", "external-protection-transfer.json", "external-protection-retired.json", ".external-protection-retired.json.pending",
 		"node-mtu-request.json", "node-mtu-status.json", ".node-mtu-status.json.pending":
 		return true
 	}
@@ -202,6 +203,15 @@ func cleanupDesktopNodeLaunch(launch *desktopNodeLaunch) error {
 	defer launch.workspaceMu.Unlock()
 	if launch.ownedNode != nil && (launch.ownedNode.attempt != nil || launch.ownedNode.process != nil) && !launch.ownedNode.retired {
 		return errors.New("native workspace still owns a pending process or protection transfer")
+	}
+	if launch.external != nil && launch.external.windows != nil {
+		owner := launch.external.windows
+		owner.mu.Lock()
+		pending := (owner.attempt != nil || owner.process != nil || owner.startEntered) && !owner.retired
+		owner.mu.Unlock()
+		if pending {
+			return errors.New("native external workspace still owns its exact child or protection transfer")
+		}
 	}
 	if err := desktopExternalDirectoryCurrent(launch); err != nil {
 		return err

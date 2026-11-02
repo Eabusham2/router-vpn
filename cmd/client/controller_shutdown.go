@@ -133,6 +133,9 @@ func (a *app) drainControllerOwner() error {
 	if err := a.finishDesktopExternalComparisonCleanup(); err != nil {
 		return err
 	}
+	if err := a.retryDesktopWindowsExternalPreparations(); err != nil {
+		return err
+	}
 	if err := a.retireNativeNodeForShutdown(); err != nil {
 		return err
 	}
@@ -144,7 +147,7 @@ func (a *app) drainControllerOwner() error {
 		a.state.Mode != "" && a.state.Mode != "off" || a.state.RuntimeMode != "" ||
 		a.state.Phase != "" && a.state.Phase != "off"
 	a.mu.Unlock()
-	_, nativeOwned := desktopNodeOwners.Load(a)
+	_, nativeOwned := lookupDesktopNativeLaunch(a)
 	_, relayOwned := desktopRelays.Load(a)
 	_, mtuOwned := mtuLiveOwners.Load(a)
 	if !needsStop && !nativeOwned && !relayOwned && !mtuOwned && !a.retainedDesktopNodeProtection() {

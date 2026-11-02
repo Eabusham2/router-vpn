@@ -328,6 +328,55 @@ func (n *ExternalNetworkOwner) Close() error {
 	return nil
 }
 
+// This result belongs to the exact joined native source, including a source
+// returned by a failed constructor. A false captured result is not absence of
+// protection; the command must independently read its original expectation.
+func (n *ExternalNetworkOwner) RetainedPhysicalProtection(ctx context.Context, policy *mobilemultihop.DesktopExternalPolicy) (*mobiletor.DesktopWindowsProtectionTarget, bool, error) {
+	if n == nil || ctx == nil || ctx.Err() != nil || policy == nil || policy.Validate() != nil {
+		return nil, false, errors.New("ordinary external retirement lost its captured cleanup request")
+	}
+	meta := policy.Metadata()
+	n.mu.Lock()
+	valid := n.closed && n.retired && n.ctx != nil && !n.ready && !n.sockets && n.capture.SessionID == meta.SessionID && n.capture.SourceSHA256 == meta.SourceSHA256 &&
+		(n.policy == policy || n.policy == nil && n.factory == nil && n.preparing == nil)
+	source, capture, lifetime := n.source, n.brokerCapture(), n.ctx
+	n.mu.Unlock()
+	if !valid {
+		return nil, false, errors.New("ordinary external retirement is unjoined or belongs to another native policy")
+	}
+	if source == nil {
+		return nil, false, nil
+	}
+	reader, ok := source.(interface {
+		RetainedProtectionOutcome(context.Context) (*mobiletor.DesktopWindowsProtectionTarget, error)
+	})
+	if !ok {
+		return nil, true, errors.New("ordinary external source cannot attest its joined protection outcome")
+	}
+	target, err := reader.RetainedProtectionOutcome(ctx)
+	if err != nil || ctx.Err() != nil {
+		return nil, true, errors.Join(err, ctx.Err())
+	}
+	if target != nil && target.Validate() == nil && target.Capture == capture && target.Policy == meta.KillSwitchPolicy {
+		captured := *target
+		return &captured, true, nil
+	}
+	// Cancellation revokes admission but does not erase its original cleanup
+	// capability. Never look up a later selected policy or predecessor here.
+	owner, ok := lifetime.Value(externalPhysicalAdmissionKey{}).(*externalPhysicalAdmissionOwner)
+	if !ok || owner == nil || owner.policy != policy || owner.admit == nil {
+		return nil, true, errors.New("ordinary external retirement lost its original predecessor capability")
+	}
+	if target == nil && owner.predecessor == nil {
+		return nil, true, nil
+	}
+	if target == nil || target.Validate() != nil || owner.predecessor == nil || *target != *owner.predecessor {
+		return nil, true, errors.New("ordinary external retirement substituted its captured protection outcome")
+	}
+	captured := *target
+	return &captured, true, nil
+}
+
 func (n *ExternalNetworkOwner) BindPhysicalTunnel(ctx context.Context, name string, index uint32) error {
 	return n.changePhysicalTunnel(ctx, name, index, nil, false)
 }
